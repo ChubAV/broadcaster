@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ "Edit Schedule" if schedule else "New Schedule" }} - Broadcaster{% endblock %}
+{% block content %}
+<div class="max-w-2xl">
+    <h1 class="text-2xl font-bold text-gray-900 mb-6">{{ "Edit Schedule" if schedule else "Create New Schedule" }}</h1>
+
+    {% if error %}
+    <div class="mb-4 rounded-md bg-red-50 p-4 text-sm text-red-700">{{ error }}</div>
+    {% endif %}
+
+    <form method="POST" action="{{ '/schedules/' ~ schedule.id ~ '/edit' if schedule else '/schedules/new' }}" class="bg-white shadow rounded-lg p-6 space-y-6">
+        <!-- Ad selection -->
+        <div>
+            <label for="ad_id" class="block text-sm font-medium text-gray-900">Ad</label>
+            <select id="ad_id" name="ad_id" required class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+                <option value="">Select an ad...</option>
+                {% for ad in ads %}
+                <option value="{{ ad.id }}" {% if schedule and schedule.ad_id == ad.id %}selected{% endif %}>{{ ad.title }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <!-- Account selection -->
+        <div>
+            <label for="account_id" class="block text-sm font-medium text-gray-900">Account</label>
+            <select id="account_id" name="account_id" required class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+                <option value="">Select an account...</option>
+                {% for account in accounts %}
+                <option value="{{ account.id }}" {% if schedule and schedule.account_id == account.id %}selected{% endif %}>
+                    #{{ account.id }} - {% if account.type == 'tg_bot' %}Telegram Bot{% elif account.type == 'tg_user' %}Telegram User{% elif account.type == 'wa' %}WhatsApp{% else %}{{ account.type }}{% endif %} ({{ account.status }})
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <!-- Groups selection (checkboxes) -->
+        <div>
+            <label class="block text-sm font-medium text-gray-900 mb-2">Groups</label>
+            {% if groups %}
+            <div class="space-y-2 max-h-48 overflow-y-auto border rounded-md p-3">
+                {% for group in groups %}
+                <label class="flex items-center">
+                    <input type="checkbox" name="group_ids" value="{{ group.id }}" {% if schedule and group.id in schedule.group_ids %}checked{% endif %} class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600">
+                    <span class="ml-2 text-sm text-gray-700">{{ group.name }} ({{ group.messenger_type }})</span>
+                </label>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-sm text-gray-500">No groups available. Add groups from the Groups page first.</p>
+            {% endif %}
+        </div>
+
+        <!-- Days of week (checkboxes) -->
+        <div>
+            <label class="block text-sm font-medium text-gray-900 mb-2">Days of Week</label>
+            <div class="flex flex-wrap gap-3">
+                {% set day_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] %}
+                {% for i in range(7) %}
+                <label class="flex items-center bg-gray-50 rounded px-3 py-1.5">
+                    <input type="checkbox" name="days_of_week" value="{{ i }}" {% if schedule and i in schedule.days_of_week %}checked{% endif %} class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600">
+                    <span class="ml-2 text-sm text-gray-700">{{ day_names[i] }}</span>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Times of day -->
+        <div>
+            <label class="block text-sm font-medium text-gray-900 mb-2">Times of Day</label>
+            <div id="times-container" class="space-y-2">
+                {% if schedule and schedule.times_of_day %}
+                {% for t in schedule.times_of_day %}
+                <div class="flex items-center gap-2">
+                    <input type="time" name="times_of_day" value="{{ t }}" class="rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+                    <button type="button" onclick="this.parentElement.remove()" class="text-red-600 hover:text-red-800 text-sm">Remove</button>
+                </div>
+                {% endfor %}
+                {% else %}
+                <div class="flex items-center gap-2">
+                    <input type="time" name="times_of_day" value="09:00" class="rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+                    <button type="button" onclick="this.parentElement.remove()" class="text-red-600 hover:text-red-800 text-sm">Remove</button>
+                </div>
+                {% endif %}
+            </div>
+            <button type="button" onclick="addTimeInput()" class="mt-2 text-sm text-indigo-600 hover:text-indigo-500">+ Add time</button>
+        </div>
+
+        <div class="flex gap-3">
+            <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">{{ "Update" if schedule else "Create" }}</button>
+            <a href="/schedules" class="rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-gray-300 hover:bg-gray-50">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<script>
+function addTimeInput() {
+    const container = document.getElementById('times-container');
+    const div = document.createElement('div');
+    div.className = 'flex items-center gap-2';
+    div.innerHTML = '<input type="time" name="times_of_day" value="12:00" class="rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm"><button type="button" onclick="this.parentElement.remove()" class="text-red-600 hover:text-red-800 text-sm">Remove</button>';
+    container.appendChild(div);
+}
+</script>
+{% endblock %}

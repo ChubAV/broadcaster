@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Schedules - Broadcaster{% endblock %}
+{% block content %}
+<div class="flex justify-between items-center mb-6">
+    <h1 class="text-2xl font-bold text-gray-900">Schedules</h1>
+    <a href="/schedules/new" class="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Create Schedule</a>
+</div>
+
+{% if schedules %}
+<div class="bg-white shadow rounded-lg overflow-hidden">
+    <table class="min-w-full divide-y divide-gray-200">
+        <thead class="bg-gray-50">
+            <tr>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ad</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Groups</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Days</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Times</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Next Run</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-200">
+            {% for item in schedules %}
+            <tr>
+                <td class="px-6 py-4 text-sm font-medium text-gray-900">{{ item.ad_title }}</td>
+                <td class="px-6 py-4 text-sm text-gray-500">{{ item.schedule.group_ids|length }} groups</td>
+                <td class="px-6 py-4 text-sm text-gray-500">
+                    {% set day_names = {0: 'Mon', 1: 'Tue', 2: 'Wed', 3: 'Thu', 4: 'Fri', 5: 'Sat', 6: 'Sun'} %}
+                    {% for d in item.schedule.days_of_week %}{{ day_names.get(d, d) }}{% if not loop.last %}, {% endif %}{% endfor %}
+                </td>
+                <td class="px-6 py-4 text-sm text-gray-500">
+                    {% for t in item.schedule.times_of_day %}{{ t }}{% if not loop.last %}, {% endif %}{% endfor %}
+                </td>
+                <td class="px-6 py-4 text-sm text-gray-500">
+                    {{ item.schedule.next_run_at.strftime('%Y-%m-%d %H:%M') if item.schedule.next_run_at else '-' }}
+                </td>
+                <td class="px-6 py-4">
+                    <span class="inline-flex rounded-full px-2 text-xs font-semibold {% if item.schedule.is_active %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
+                        {{ "Active" if item.schedule.is_active else "Inactive" }}
+                    </span>
+                </td>
+                <td class="px-6 py-4 text-right text-sm space-x-2">
+                    <form method="POST" action="/schedules/{{ item.schedule.id }}/toggle" class="inline">
+                        <button type="submit" class="text-indigo-600 hover:text-indigo-900">{{ "Pause" if item.schedule.is_active else "Resume" }}</button>
+                    </form>
+                    <a href="/schedules/{{ item.schedule.id }}/edit" class="text-indigo-600 hover:text-indigo-900">Edit</a>
+                    <form method="POST" action="/schedules/{{ item.schedule.id }}/delete" class="inline">
+                        <button type="submit" class="text-red-600 hover:text-red-900" onclick="return confirm('Delete this schedule?')">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="bg-white shadow rounded-lg p-8 text-center">
+    <p class="text-gray-500 mb-4">No schedules yet. Create a schedule to start sending ads automatically.</p>
+    <a href="/schedules/new" class="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Create Schedule</a>
+</div>
+{% endif %}
+{% endblock %}

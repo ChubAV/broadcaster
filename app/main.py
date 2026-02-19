@@ -6,6 +6,7 @@ from app.routes.accounts import router as accounts_router
 from app.routes.groups import router as groups_router
 from app.routes.schedules import router as schedules_router
 from app.routes.history import router as history_router
+from app.routes.pages import router as pages_router
 
 
 def create_app() -> FastAPI:
@@ -17,6 +18,7 @@ def create_app() -> FastAPI:
     app.include_router(groups_router)
     app.include_router(schedules_router)
     app.include_router(history_router)
+    app.include_router(pages_router)
 
     @app.get("/health")
     async def health_check():
