@@ -26,6 +26,7 @@ from app.services.billing_service import get_user_plan, get_plan_limits, get_usa
 from app.messengers.telegram_user import (
     TelegramUserMessenger,
     start_auth,
+    resend_code,
     verify_code,
     verify_password as tg_verify_password,
     cleanup_auth_client,
@@ -528,6 +529,49 @@ async def accounts_connect_tg_user_verify_page(
             "phone_number": auth_session.phone_number,
             "needs_2fa": needs_2fa,
         },
+    )
+
+
+@router.post("/accounts/connect/tg_user/resend-code")
+async def accounts_connect_tg_user_resend_code(
+    request: Request,
+    session_id: int = Form(...),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    auth_session = await db.get(TelegramAuthSession, session_id)
+    if not auth_session or auth_session.user_id != user.id:
+        return RedirectResponse(url="/accounts", status_code=302)
+
+    try:
+        new_hash = await resend_code(
+            auth_session_id=auth_session.id,
+            phone=auth_session.phone_number,
+            phone_code_hash=auth_session.phone_code_hash,
+        )
+        auth_session.phone_code_hash = new_hash
+        await db.commit()
+    except Exception as e:
+        return templates.TemplateResponse(
+            "accounts/verify_tg_user.html",
+            {
+                "request": request,
+                "user": user,
+                "active_page": "accounts",
+                "session_id": session_id,
+                "phone_number": auth_session.phone_number,
+                "needs_2fa": False,
+                "error": f"Ошибка повторной отправки: {e}",
+            },
+        )
+
+    return RedirectResponse(
+        url=f"/accounts/connect/tg_user/verify?session_id={auth_session.id}",
+        status_code=302,
     )
 
 
