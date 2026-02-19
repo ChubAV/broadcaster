@@ -68,6 +68,33 @@ async def start_auth(
     return sent_code.phone_code_hash
 
 
+async def resend_code(
+    auth_session_id: int,
+    phone: str,
+    phone_code_hash: str,
+) -> str:
+    """Resend auth code via next method (usually SMS). Returns new phone_code_hash."""
+    entry = _auth_clients.get(auth_session_id)
+    if not entry:
+        raise RuntimeError("Сессия авторизации истекла. Начните заново.")
+
+    client, _ = entry
+
+    try:
+        logger.info("Resending code to %s (session=%s)", phone, auth_session_id)
+        sent_code = await client.resend_code(phone, phone_code_hash)
+        logger.info(
+            "resend_code result: type=%s, phone_code_hash=%s",
+            getattr(sent_code, "type", "unknown"),
+            sent_code.phone_code_hash,
+        )
+    except Exception as e:
+        logger.error("resend_code failed: %s", e)
+        raise
+
+    return sent_code.phone_code_hash
+
+
 async def verify_code(
     auth_session_id: int,
     phone: str,
