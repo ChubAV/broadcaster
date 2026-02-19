@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ "Редактирование объявления" if ad else "Новое объявление" }} - Broadcaster{% endblock %}
+{% block content %}
+<div class="max-w-2xl">
+    <h1 class="text-2xl font-bold text-gray-900 mb-6">{{ "Редактирование объявления" if ad else "Новое объявление" }}</h1>
+
+    {% if error %}
+    <div class="mb-4 rounded-md bg-red-50 p-4 text-sm text-red-700">{{ error }}</div>
+    {% endif %}
+
+    <form method="POST" action="{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}" class="bg-white shadow rounded-lg p-6 space-y-6">
+        <div>
+            <label for="title" class="block text-sm font-medium text-gray-900">Название</label>
+            <input id="title" name="title" type="text" required value="{{ ad.title if ad else '' }}" class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+        </div>
+        <div>
+            <label for="text" class="block text-sm font-medium text-gray-900">Текст</label>
+            <textarea id="text" name="text" rows="6" required class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">{{ ad.text if ad else '' }}</textarea>
+        </div>
+        <div>
+            <label for="images" class="block text-sm font-medium text-gray-900">Пути к изображениям (по одному на строку)</label>
+            <textarea id="images" name="images" rows="3" class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm" placeholder="напр. 1/image.png">{% if ad and ad.images %}{% for img in ad.images %}{{ img }}{% if not loop.last %}
+{% endif %}{% endfor %}{% endif %}</textarea>
+            <p class="mt-1 text-xs text-gray-500">Введите пути к изображениям из API загрузки, по одному на строку.</p>
+        </div>
+        {% if ad %}
+        <div class="flex items-center">
+            <input id="is_active" name="is_active" type="checkbox" {% if ad.is_active %}checked{% endif %} class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600">
+            <label for="is_active" class="ml-2 block text-sm text-gray-900">Активно</label>
+        </div>
+        {% endif %}
+        <div class="flex gap-3">
+            <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">{{ "Сохранить" if ad else "Создать" }}</button>
+            <a href="/ads" class="rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-gray-300 hover:bg-gray-50">Отмена</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

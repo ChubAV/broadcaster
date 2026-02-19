@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Подключение Telegram бота - Broadcaster{% endblock %}
+{% block content %}
+<div class="max-w-lg">
+    <h1 class="text-2xl font-bold text-gray-900 mb-6">Подключение Telegram бота</h1>
+
+    {% if error %}
+    <div class="mb-4 rounded-md bg-red-50 p-4 text-sm text-red-700">{{ error }}</div>
+    {% endif %}
+
+    <div class="bg-white shadow rounded-lg p-6">
+        <p class="text-sm text-gray-600 mb-4">
+            Вставьте токен вашего Telegram бота. Получить его можно у
+            <a href="https://t.me/BotFather" class="text-indigo-600 hover:text-indigo-500" target="_blank">@BotFather</a>.
+        </p>
+        <form method="POST" action="/accounts/connect/tg_bot" class="space-y-4">
+            <div>
+                <label for="credentials" class="block text-sm font-medium text-gray-900">Токен бота</label>
+                <input id="credentials" name="credentials" type="text" required placeholder="123456:ABC-DEF..." class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+            </div>
+            <div class="flex gap-3">
+                <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Подключить</button>
+                <a href="/accounts" class="rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-gray-300 hover:bg-gray-50">Отмена</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

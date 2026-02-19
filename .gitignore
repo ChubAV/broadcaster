@@ -1,10 +1,46 @@
-# Python-generated files
+# Python
 __pycache__/
 *.py[oc]
 build/
 dist/
 wheels/
 *.egg-info
-
-# Virtual environments
 .venv
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Type checking
+.mypy_cache/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Uploads (user-generated content)
+uploads/
+
+# Node.js (wa_bridge)
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
