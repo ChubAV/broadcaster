@@ -22,6 +22,7 @@ from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.services.billing_service import get_user_plan, get_plan_limits, get_usage, PLANS
+from app.messengers.telegram_user import TelegramUserMessenger
 
 router = APIRouter(tags=["pages"])
 
@@ -415,17 +416,22 @@ async def accounts_connect_tg_user_page(
 @router.post("/accounts/connect/tg_user")
 async def accounts_connect_tg_user_submit(
     request: Request,
-    credentials: str = Form(...),
+    session_string: str = Form(...),
+    api_id: str = Form(...),
+    api_hash: str = Form(...),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
+    import json
+
     account = MessengerAccount(
         user_id=user.id,
         type="tg_user",
-        credentials=credentials,
+        credentials=session_string,
+        session_data=json.dumps({"api_id": int(api_id), "api_hash": api_hash}),
         status="active",
     )
     db.add(account)
@@ -475,6 +481,63 @@ async def accounts_connect_wa_submit(
     return RedirectResponse(url="/accounts", status_code=302)
 
 
+@router.post("/accounts/{account_id}/sync-groups")
+async def accounts_sync_groups(
+    request: Request,
+    account_id: int,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    result = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.id == account_id,
+            MessengerAccount.user_id == user.id,
+        )
+    )
+    account = result.scalar_one_or_none()
+    if not account or account.type != "tg_user":
+        return RedirectResponse(url="/groups", status_code=302)
+
+    import json
+
+    meta = json.loads(account.session_data or "{}")
+    messenger = TelegramUserMessenger(
+        session_string=account.credentials,
+        api_id=meta.get("api_id", 0),
+        api_hash=meta.get("api_hash", ""),
+    )
+
+    tg_groups = await messenger.get_groups()
+
+    # Load existing groups for this account to skip duplicates
+    existing = await db.execute(
+        select(Group.group_external_id).where(
+            Group.account_id == account_id,
+            Group.user_id == user.id,
+        )
+    )
+    existing_ids = {row[0] for row in existing}
+
+    for g in tg_groups:
+        if g["id"] not in existing_ids:
+            db.add(
+                Group(
+                    user_id=user.id,
+                    account_id=account_id,
+                    messenger_type="tg_user",
+                    group_external_id=g["id"],
+                    name=g["name"],
+                )
+            )
+
+    await db.commit()
+    return RedirectResponse(url="/groups", status_code=302)
+
+
 @router.post("/accounts/{account_id}/delete")
 async def accounts_delete(
     request: Request,
@@ -516,12 +579,23 @@ async def groups_list(
         select(Group).where(Group.user_id == user.id).order_by(Group.id)
     )
     groups = result.scalars().all()
+
+    # Load tg_user accounts for sync buttons
+    accounts_result = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.user_id == user.id,
+            MessengerAccount.type == "tg_user",
+        )
+    )
+    tg_user_accounts = accounts_result.scalars().all()
+
     return templates.TemplateResponse(
         "groups/list.html",
         {
             "request": request,
             "user": user,
             "groups": groups,
+            "tg_user_accounts": tg_user_accounts,
             "active_page": "groups",
         },
     )
