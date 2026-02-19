@@ -59,14 +59,14 @@ async def test_list_history_with_data(client, auth_headers, db_session):
         schedule_id=schedule_id,
         ad_id=ad_id,
         group_id=group_id,
-        status="sent",
+        status="ok",
         sent_at=now - timedelta(hours=2),
     )
     log2 = SendLog(
         schedule_id=schedule_id,
         ad_id=ad_id,
         group_id=group_id,
-        status="failed",
+        status="fail",
         error_message="Connection timeout",
         sent_at=now - timedelta(hours=1),
     )
@@ -78,8 +78,8 @@ async def test_list_history_with_data(client, auth_headers, db_session):
     data = response.json()
     assert len(data) == 2
     # Should be ordered by sent_at DESC (most recent first)
-    assert data[0]["status"] == "failed"
-    assert data[1]["status"] == "sent"
+    assert data[0]["status"] == "fail"
+    assert data[1]["status"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -94,7 +94,7 @@ async def test_list_history_pagination(client, auth_headers, db_session):
             schedule_id=schedule_id,
             ad_id=ad_id,
             group_id=group_id,
-            status="sent",
+            status="ok",
             sent_at=now - timedelta(hours=5 - i),
         )
         db_session.add(log)
@@ -126,11 +126,11 @@ async def test_stats_endpoint(client, auth_headers, db_session):
     # Create some send logs within last 30 days
     logs = [
         SendLog(schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
-                status="sent", sent_at=now - timedelta(days=1)),
+                status="ok", sent_at=now - timedelta(days=1)),
         SendLog(schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
-                status="sent", sent_at=now - timedelta(days=2)),
+                status="ok", sent_at=now - timedelta(days=2)),
         SendLog(schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
-                status="failed", error_message="error",
+                status="fail", error_message="error",
                 sent_at=now - timedelta(days=3)),
     ]
     db_session.add_all(logs)
