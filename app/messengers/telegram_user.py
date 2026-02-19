@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 
 from pyrogram import Client
@@ -12,6 +13,8 @@ from pyrogram.errors import (
 )
 
 from app.messengers.base import BaseMessenger
+
+logger = logging.getLogger(__name__)
 
 # In-memory store for Pyrogram clients between auth steps.
 # Key: auth_session_id, Value: (Client, created_timestamp)
@@ -49,8 +52,15 @@ async def start_auth(
     await client.connect()
 
     try:
+        logger.info("Sending code to %s (api_id=%s)", phone, api_id)
         sent_code = await client.send_code(phone)
-    except Exception:
+        logger.info(
+            "send_code result: type=%s, phone_code_hash=%s",
+            getattr(sent_code, "type", "unknown"),
+            sent_code.phone_code_hash,
+        )
+    except Exception as e:
+        logger.error("send_code failed: %s", e)
         await client.disconnect()
         raise
 
