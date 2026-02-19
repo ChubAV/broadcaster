@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user_id, get_db
 from app.models.group import Group
+from app.services.billing_service import check_limit
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
 
@@ -34,6 +35,10 @@ async def create_group(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
+    allowed, reason = await check_limit(db, user_id, "create_group")
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
+
     group = Group(
         user_id=user_id,
         account_id=data.account_id,

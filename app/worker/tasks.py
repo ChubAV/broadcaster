@@ -13,6 +13,7 @@ from app.messengers.telegram_bot import TelegramBotMessenger
 from app.messengers.telegram_user import TelegramUserMessenger
 from app.messengers.whatsapp import WhatsAppMessenger
 from app.services.schedule_service import compute_next_run_at
+from app.services.billing_service import check_limit
 
 
 def get_messenger(account: MessengerAccount):
@@ -51,6 +52,21 @@ async def check_schedules_async(session: AsyncSession):
 
     tasks = []
     for schedule in schedules:
+        # Check send limit for the ad's user
+        ad = await session.get(Ad, schedule.ad_id)
+        if ad:
+            allowed, reason = await check_limit(session, ad.user_id, "send")
+            if not allowed:
+                # Update next_run_at even when skipping so we don't retry immediately
+                next_run = compute_next_run_at(
+                    days_of_week=schedule.days_of_week,
+                    times_of_day=schedule.times_of_day,
+                    tz_name="UTC",
+                    now=now,
+                )
+                schedule.next_run_at = next_run
+                continue  # skip this schedule
+
         for group_id in schedule.group_ids:
             tasks.append(
                 send_ad_to_group_async(
