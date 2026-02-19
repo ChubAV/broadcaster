@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Schedules - Broadcaster{% endblock %}
+{% block title %}Расписания - Broadcaster{% endblock %}
 {% block content %}
 <div class="flex justify-between items-center mb-6">
-    <h1 class="text-2xl font-bold text-gray-900">Schedules</h1>
-    <a href="/schedules/new" class="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Create Schedule</a>
+    <h1 class="text-2xl font-bold text-gray-900">Расписания</h1>
+    <a href="/schedules/new" class="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Создать расписание</a>
 </div>
 
 {% if schedules %}
@@ -11,22 +11,22 @@
     <table class="min-w-full divide-y divide-gray-200">
         <thead class="bg-gray-50">
             <tr>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ad</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Groups</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Days</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Times</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Next Run</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Объявление</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Группы</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дни</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Время</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Следующий запуск</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
+                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Действия</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-gray-200">
             {% for item in schedules %}
             <tr>
                 <td class="px-6 py-4 text-sm font-medium text-gray-900">{{ item.ad_title }}</td>
-                <td class="px-6 py-4 text-sm text-gray-500">{{ item.schedule.group_ids|length }} groups</td>
+                <td class="px-6 py-4 text-sm text-gray-500">{{ item.schedule.group_ids|length }} групп</td>
                 <td class="px-6 py-4 text-sm text-gray-500">
-                    {% set day_names = {0: 'Mon', 1: 'Tue', 2: 'Wed', 3: 'Thu', 4: 'Fri', 5: 'Sat', 6: 'Sun'} %}
+                    {% set day_names = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'} %}
                     {% for d in item.schedule.days_of_week %}{{ day_names.get(d, d) }}{% if not loop.last %}, {% endif %}{% endfor %}
                 </td>
                 <td class="px-6 py-4 text-sm text-gray-500">
@@ -37,16 +37,16 @@
                 </td>
                 <td class="px-6 py-4">
                     <span class="inline-flex rounded-full px-2 text-xs font-semibold {% if item.schedule.is_active %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
-                        {{ "Active" if item.schedule.is_active else "Inactive" }}
+                        {{ "Активно" if item.schedule.is_active else "Неактивно" }}
                     </span>
                 </td>
                 <td class="px-6 py-4 text-right text-sm space-x-2">
                     <form method="POST" action="/schedules/{{ item.schedule.id }}/toggle" class="inline">
-                        <button type="submit" class="text-indigo-600 hover:text-indigo-900">{{ "Pause" if item.schedule.is_active else "Resume" }}</button>
+                        <button type="submit" class="text-indigo-600 hover:text-indigo-900">{{ "Пауза" if item.schedule.is_active else "Возобновить" }}</button>
                     </form>
-                    <a href="/schedules/{{ item.schedule.id }}/edit" class="text-indigo-600 hover:text-indigo-900">Edit</a>
+                    <a href="/schedules/{{ item.schedule.id }}/edit" class="text-indigo-600 hover:text-indigo-900">Изменить</a>
                     <form method="POST" action="/schedules/{{ item.schedule.id }}/delete" class="inline">
-                        <button type="submit" class="text-red-600 hover:text-red-900" onclick="return confirm('Delete this schedule?')">Delete</button>
+                        <button type="submit" class="text-red-600 hover:text-red-900" onclick="return confirm('Удалить это расписание?')">Удалить</button>
                     </form>
                 </td>
             </tr>
@@ -56,8 +56,8 @@
 </div>
 {% else %}
 <div class="bg-white shadow rounded-lg p-8 text-center">
-    <p class="text-gray-500 mb-4">No schedules yet. Create a schedule to start sending ads automatically.</p>
-    <a href="/schedules/new" class="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Create Schedule</a>
+    <p class="text-gray-500 mb-4">Расписаний пока нет. Создайте расписание для автоматической отправки объявлений.</p>
+    <a href="/schedules/new" class="rounded-md bg-indigo-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Создать расписание</a>
 </div>
 {% endif %}
 {% endblock %}
