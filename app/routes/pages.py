@@ -65,7 +65,7 @@ async def login_submit(
     user = result.scalar_one_or_none()
     if not user or not verify_password(password, user.password_hash):
         return templates.TemplateResponse(
-            "auth/login.html", {"request": request, "error": "Invalid credentials"}
+            "auth/login.html", {"request": request, "error": "Неверный email или пароль"}
         )
     token = create_access_token(user.id, settings.secret_key)
     response = RedirectResponse(url="/dashboard", status_code=302)
@@ -91,7 +91,7 @@ async def register_submit(
     if existing.scalar_one_or_none():
         return templates.TemplateResponse(
             "auth/register.html",
-            {"request": request, "error": "Email already registered"},
+            {"request": request, "error": "Этот email уже зарегистрирован"},
         )
     user = User(email=email, password_hash=hash_password(password), name=name)
     db.add(user)

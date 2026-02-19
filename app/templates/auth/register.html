@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Register - Broadcaster{% endblock %}
+{% block title %}Регистрация - Broadcaster{% endblock %}
 {% block body %}
 <div class="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8">
     <div class="sm:mx-auto sm:w-full sm:max-w-sm">
         <h1 class="text-center text-2xl font-bold text-indigo-600">Broadcaster</h1>
-        <h2 class="mt-4 text-center text-xl font-bold text-gray-900">Create account</h2>
+        <h2 class="mt-4 text-center text-xl font-bold text-gray-900">Создать аккаунт</h2>
     </div>
     <div class="mt-8 sm:mx-auto sm:w-full sm:max-w-sm">
         {% if error %}
@@ -12,7 +12,7 @@
         {% endif %}
         <form method="POST" action="/register" class="space-y-6">
             <div>
-                <label for="name" class="block text-sm font-medium text-gray-900">Name</label>
+                <label for="name" class="block text-sm font-medium text-gray-900">Имя</label>
                 <input id="name" name="name" type="text" required class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
             </div>
             <div>
@@ -20,13 +20,13 @@
                 <input id="email" name="email" type="email" required class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
             </div>
             <div>
-                <label for="password" class="block text-sm font-medium text-gray-900">Password</label>
+                <label for="password" class="block text-sm font-medium text-gray-900">Пароль</label>
                 <input id="password" name="password" type="password" required class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
             </div>
-            <button type="submit" class="flex w-full justify-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Create account</button>
+            <button type="submit" class="flex w-full justify-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Создать аккаунт</button>
         </form>
         <p class="mt-4 text-center text-sm text-gray-500">
-            Already have an account? <a href="/login" class="text-indigo-600 hover:text-indigo-500">Sign in</a>
+            Уже есть аккаунт? <a href="/login" class="text-indigo-600 hover:text-indigo-500">Войти</a>
         </p>
     </div>
 </div>
