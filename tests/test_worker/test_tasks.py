@@ -70,6 +70,47 @@ async def test_get_messenger_tg_bot():
 
 
 @pytest.mark.asyncio
+async def test_get_messenger_tg_user_from_settings():
+    """get_messenger uses telegram_api_id/api_hash from settings when available."""
+    account = MessengerAccount(
+        type="tg_user",
+        credentials="session-string",
+        user_id=1,
+        status="active",
+    )
+    with patch("app.config.Settings") as MockSettings:
+        MockSettings.return_value.telegram_api_id = 12345
+        MockSettings.return_value.telegram_api_hash = "settings_hash"
+
+        m = get_messenger(account)
+
+    from app.messengers.telegram_user import TelegramUserMessenger
+    assert isinstance(m, TelegramUserMessenger)
+
+
+@pytest.mark.asyncio
+async def test_get_messenger_tg_user_fallback_session_data():
+    """get_messenger falls back to session_data when settings have no telegram creds."""
+    import json
+
+    account = MessengerAccount(
+        type="tg_user",
+        credentials="session-string",
+        session_data=json.dumps({"api_id": 99999, "api_hash": "legacy_hash"}),
+        user_id=1,
+        status="active",
+    )
+    with patch("app.config.Settings") as MockSettings:
+        MockSettings.return_value.telegram_api_id = 0
+        MockSettings.return_value.telegram_api_hash = ""
+
+        m = get_messenger(account)
+
+    from app.messengers.telegram_user import TelegramUserMessenger
+    assert isinstance(m, TelegramUserMessenger)
+
+
+@pytest.mark.asyncio
 async def test_send_ad_success(db_session):
     user, ad, account, group, schedule = await create_test_data(db_session)
 

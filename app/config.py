@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     max_image_size_mb: int = 5
     max_images_per_ad: int = 10
 
+    # Telegram API (shared app-level credentials)
+    telegram_api_id: int = 0
+    telegram_api_hash: str = ""
+
     # WA Bridge
     wa_bridge_url: str = "http://wa-bridge:3000"
 

@@ -21,15 +21,20 @@ def get_messenger(account: MessengerAccount):
     if account.type == "tg_bot":
         return TelegramBotMessenger(token=account.credentials)
     elif account.type == "tg_user":
-        # For userbot, credentials should contain session_string
-        # api_id and api_hash would come from config, but for simplicity
-        # we store them in session_data as JSON
-        import json
-        meta = json.loads(account.session_data or "{}")
+        from app.config import Settings
+        settings = Settings()
+        api_id = settings.telegram_api_id
+        api_hash = settings.telegram_api_hash
+        # Fallback to session_data for legacy accounts
+        if not api_id or not api_hash:
+            import json
+            meta = json.loads(account.session_data or "{}")
+            api_id = meta.get("api_id", 0)
+            api_hash = meta.get("api_hash", "")
         return TelegramUserMessenger(
             session_string=account.credentials,
-            api_id=meta.get("api_id", 0),
-            api_hash=meta.get("api_hash", ""),
+            api_id=api_id,
+            api_hash=api_hash,
         )
     elif account.type == "wa":
         from app.config import Settings

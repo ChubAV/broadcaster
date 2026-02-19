@@ -10,24 +10,15 @@
 
     <div class="bg-white shadow rounded-lg p-6">
         <p class="text-sm text-gray-600 mb-4">
-            Введите данные Telegram API и строку сессии для подключения в режиме юзербота.
-            Получить api_id и api_hash можно на <a href="https://my.telegram.org" target="_blank" class="text-indigo-600 hover:text-indigo-500">my.telegram.org</a>.
+            Введите номер телефона, привязанный к вашему Telegram аккаунту. На него будет отправлен код подтверждения.
         </p>
-        <form method="POST" action="/accounts/connect/tg_user" class="space-y-4">
+        <form method="POST" action="/accounts/connect/tg_user/send-code" class="space-y-4">
             <div>
-                <label for="api_id" class="block text-sm font-medium text-gray-900">API ID</label>
-                <input id="api_id" name="api_id" type="text" required placeholder="12345678" class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
-            </div>
-            <div>
-                <label for="api_hash" class="block text-sm font-medium text-gray-900">API Hash</label>
-                <input id="api_hash" name="api_hash" type="text" required placeholder="0123456789abcdef0123456789abcdef" class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
-            </div>
-            <div>
-                <label for="session_string" class="block text-sm font-medium text-gray-900">Строка сессии</label>
-                <input id="session_string" name="session_string" type="text" required placeholder="Строка сессии Pyrogram" class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+                <label for="phone_number" class="block text-sm font-medium text-gray-900">Номер телефона</label>
+                <input id="phone_number" name="phone_number" type="tel" required placeholder="+79001234567" class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
             </div>
             <div class="flex gap-3">
-                <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Подключить</button>
+                <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Отправить код</button>
                 <a href="/accounts" class="rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-gray-300 hover:bg-gray-50">Отмена</a>
             </div>
         </form>

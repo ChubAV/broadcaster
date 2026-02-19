@@ -1,6 +1,13 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from app.messengers.telegram_user import TelegramUserMessenger
+from app.messengers.telegram_user import (
+    TelegramUserMessenger,
+    start_auth,
+    verify_code,
+    verify_password,
+    cleanup_auth_client,
+    _auth_clients,
+)
 
 
 @pytest.fixture
@@ -88,3 +95,154 @@ async def test_check_connection_failure(messenger):
     messenger.client.get_me = AsyncMock(side_effect=Exception("Session expired"))
 
     assert await messenger.check_connection() is False
+
+
+# --- Auth functions tests ---
+
+
+@pytest.mark.asyncio
+async def test_start_auth_success():
+    with patch("app.messengers.telegram_user.Client") as MockClient:
+        mock_client = AsyncMock()
+        mock_sent_code = MagicMock()
+        mock_sent_code.phone_code_hash = "abc123hash"
+        mock_client.send_code = AsyncMock(return_value=mock_sent_code)
+        mock_client.connect = AsyncMock()
+        mock_client.disconnect = AsyncMock()
+        MockClient.return_value = mock_client
+
+        result = await start_auth(
+            auth_session_id=100,
+            phone="+79001234567",
+            api_id=12345,
+            api_hash="test_hash",
+        )
+
+    assert result == "abc123hash"
+    assert 100 in _auth_clients
+    # Cleanup
+    _auth_clients.pop(100, None)
+
+
+@pytest.mark.asyncio
+async def test_start_auth_error_disconnects():
+    with patch("app.messengers.telegram_user.Client") as MockClient:
+        mock_client = AsyncMock()
+        mock_client.connect = AsyncMock()
+        mock_client.disconnect = AsyncMock()
+        mock_client.send_code = AsyncMock(side_effect=Exception("Phone invalid"))
+        MockClient.return_value = mock_client
+
+        with pytest.raises(Exception, match="Phone invalid"):
+            await start_auth(
+                auth_session_id=101,
+                phone="+invalid",
+                api_id=12345,
+                api_hash="test_hash",
+            )
+
+    mock_client.disconnect.assert_called_once()
+    assert 101 not in _auth_clients
+
+
+@pytest.mark.asyncio
+async def test_verify_code_success():
+    mock_client = AsyncMock()
+    mock_client.sign_in = AsyncMock()
+    mock_client.export_session_string = AsyncMock(return_value="session_str_123")
+    mock_client.disconnect = AsyncMock()
+
+    import time
+    _auth_clients[200] = (mock_client, time.time())
+
+    result = await verify_code(
+        auth_session_id=200,
+        phone="+79001234567",
+        phone_code_hash="hash123",
+        code="12345",
+    )
+
+    assert result == "session_str_123"
+    assert 200 not in _auth_clients
+    mock_client.disconnect.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_verify_code_expired_session():
+    # No client in _auth_clients
+    with pytest.raises(RuntimeError, match="Сессия авторизации истекла"):
+        await verify_code(
+            auth_session_id=999,
+            phone="+79001234567",
+            phone_code_hash="hash",
+            code="12345",
+        )
+
+
+@pytest.mark.asyncio
+async def test_verify_code_needs_2fa():
+    from pyrogram.errors import SessionPasswordNeeded
+
+    mock_client = AsyncMock()
+    mock_client.sign_in = AsyncMock(side_effect=SessionPasswordNeeded())
+    mock_client.disconnect = AsyncMock()
+
+    import time
+    _auth_clients[201] = (mock_client, time.time())
+
+    with pytest.raises(SessionPasswordNeeded):
+        await verify_code(
+            auth_session_id=201,
+            phone="+79001234567",
+            phone_code_hash="hash123",
+            code="12345",
+        )
+
+    # Client should still be in store for 2FA step
+    assert 201 in _auth_clients
+    _auth_clients.pop(201, None)
+
+
+@pytest.mark.asyncio
+async def test_verify_password_success():
+    mock_client = AsyncMock()
+    mock_client.check_password = AsyncMock()
+    mock_client.export_session_string = AsyncMock(return_value="session_2fa_str")
+    mock_client.disconnect = AsyncMock()
+
+    import time
+    _auth_clients[300] = (mock_client, time.time())
+
+    result = await verify_password(
+        auth_session_id=300,
+        password="my2fapassword",
+    )
+
+    assert result == "session_2fa_str"
+    assert 300 not in _auth_clients
+
+
+@pytest.mark.asyncio
+async def test_verify_password_expired_session():
+    with pytest.raises(RuntimeError, match="Сессия авторизации истекла"):
+        await verify_password(
+            auth_session_id=999,
+            password="password",
+        )
+
+
+def test_cleanup_auth_client():
+    mock_client = AsyncMock()
+    mock_client.disconnect = AsyncMock()
+
+    import time
+    _auth_clients[400] = (mock_client, time.time())
+
+    cleanup_auth_client(400)
+
+    assert 400 not in _auth_clients
+
+
+def test_cleanup_auth_client_nonexistent():
+    # Should not raise
+    cleanup_auth_client(99999)

@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Подтверждение Telegram - Broadcaster{% endblock %}
+{% block content %}
+<div class="max-w-lg">
+    <h1 class="text-2xl font-bold text-gray-900 mb-6">Подтверждение Telegram</h1>
+
+    {% if error %}
+    <div class="mb-4 rounded-md bg-red-50 p-4 text-sm text-red-700">{{ error }}</div>
+    {% endif %}
+
+    <div class="bg-white shadow rounded-lg p-6">
+        {% if needs_2fa %}
+        <p class="text-sm text-gray-600 mb-4">
+            У вашего аккаунта включена двухфакторная аутентификация. Введите пароль.
+        </p>
+        <form method="POST" action="/accounts/connect/tg_user/verify" class="space-y-4">
+            <input type="hidden" name="session_id" value="{{ session_id }}">
+            <input type="hidden" name="step" value="2fa">
+            <div>
+                <label for="password" class="block text-sm font-medium text-gray-900">Пароль 2FA</label>
+                <input id="password" name="password" type="password" required placeholder="Пароль двухфакторной аутентификации" class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+            </div>
+            <div class="flex gap-3">
+                <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Подтвердить</button>
+                <a href="/accounts" class="rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-gray-300 hover:bg-gray-50">Отмена</a>
+            </div>
+        </form>
+        {% else %}
+        <p class="text-sm text-gray-600 mb-4">
+            Код подтверждения отправлен в Telegram на номер <strong>{{ phone_number }}</strong>. Введите его ниже.
+        </p>
+        <form method="POST" action="/accounts/connect/tg_user/verify" class="space-y-4">
+            <input type="hidden" name="session_id" value="{{ session_id }}">
+            <input type="hidden" name="step" value="code">
+            <div>
+                <label for="code" class="block text-sm font-medium text-gray-900">Код подтверждения</label>
+                <input id="code" name="code" type="text" required placeholder="12345" autocomplete="one-time-code" class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+            </div>
+            <div class="flex gap-3">
+                <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Подтвердить</button>
+                <a href="/accounts" class="rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-gray-300 hover:bg-gray-50">Отмена</a>
+            </div>
+        </form>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

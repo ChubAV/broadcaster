@@ -14,6 +14,8 @@ async def test_settings():
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         secret_key="test-secret-key",
+        telegram_api_id=12345,
+        telegram_api_hash="test_api_hash",
     )
 
 

@@ -21,8 +21,15 @@ from app.models.messenger_account import MessengerAccount
 from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
+from app.models.telegram_auth_session import TelegramAuthSession
 from app.services.billing_service import get_user_plan, get_plan_limits, get_usage, PLANS
-from app.messengers.telegram_user import TelegramUserMessenger
+from app.messengers.telegram_user import (
+    TelegramUserMessenger,
+    start_auth,
+    verify_code,
+    verify_password as tg_verify_password,
+    cleanup_auth_client,
+)
 
 router = APIRouter(tags=["pages"])
 
@@ -413,25 +420,204 @@ async def accounts_connect_tg_user_page(
     )
 
 
-@router.post("/accounts/connect/tg_user")
-async def accounts_connect_tg_user_submit(
+@router.post("/accounts/connect/tg_user/send-code")
+async def accounts_connect_tg_user_send_code(
     request: Request,
-    session_string: str = Form(...),
-    api_id: str = Form(...),
-    api_hash: str = Form(...),
+    phone_number: str = Form(...),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    import json
+
+    if not settings.telegram_api_id or not settings.telegram_api_hash:
+        return templates.TemplateResponse(
+            "accounts/connect_tg_user.html",
+            {
+                "request": request,
+                "user": user,
+                "active_page": "accounts",
+                "error": "Telegram API не настроен. Обратитесь к администратору.",
+            },
+        )
+
+    from datetime import timedelta
+
+    auth_session = TelegramAuthSession(
+        user_id=user.id,
+        phone_number=phone_number,
+        status="pending",
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+    db.add(auth_session)
+    await db.commit()
+    await db.refresh(auth_session)
+
+    try:
+        phone_code_hash = await start_auth(
+            auth_session_id=auth_session.id,
+            phone=phone_number,
+            api_id=settings.telegram_api_id,
+            api_hash=settings.telegram_api_hash,
+        )
+        auth_session.phone_code_hash = phone_code_hash
+        auth_session.status = "code_sent"
+        await db.commit()
+    except Exception as e:
+        auth_session.status = "error"
+        auth_session.error_message = str(e)
+        await db.commit()
+        return templates.TemplateResponse(
+            "accounts/connect_tg_user.html",
+            {
+                "request": request,
+                "user": user,
+                "active_page": "accounts",
+                "error": f"Ошибка отправки кода: {e}",
+            },
+        )
+
+    return RedirectResponse(
+        url=f"/accounts/connect/tg_user/verify?session_id={auth_session.id}",
+        status_code=302,
+    )
+
+
+@router.get("/accounts/connect/tg_user/verify", response_class=HTMLResponse)
+async def accounts_connect_tg_user_verify_page(
+    request: Request,
+    session_id: int = Query(...),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    auth_session = await db.get(TelegramAuthSession, session_id)
+    if not auth_session or auth_session.user_id != user.id:
+        return RedirectResponse(url="/accounts", status_code=302)
+
+    expires_at = auth_session.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        cleanup_auth_client(auth_session.id)
+        auth_session.status = "expired"
+        await db.commit()
+        return templates.TemplateResponse(
+            "accounts/connect_tg_user.html",
+            {
+                "request": request,
+                "user": user,
+                "active_page": "accounts",
+                "error": "Сессия авторизации истекла. Попробуйте снова.",
+            },
+        )
+
+    needs_2fa = auth_session.status == "needs_2fa"
+
+    return templates.TemplateResponse(
+        "accounts/verify_tg_user.html",
+        {
+            "request": request,
+            "user": user,
+            "active_page": "accounts",
+            "session_id": session_id,
+            "phone_number": auth_session.phone_number,
+            "needs_2fa": needs_2fa,
+        },
+    )
+
+
+@router.post("/accounts/connect/tg_user/verify")
+async def accounts_connect_tg_user_verify_submit(
+    request: Request,
+    session_id: int = Form(...),
+    step: str = Form(...),
+    code: str = Form(None),
+    password: str = Form(None),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    auth_session = await db.get(TelegramAuthSession, session_id)
+    if not auth_session or auth_session.user_id != user.id:
+        return RedirectResponse(url="/accounts", status_code=302)
+
+    expires_at = auth_session.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        cleanup_auth_client(auth_session.id)
+        auth_session.status = "expired"
+        await db.commit()
+        return templates.TemplateResponse(
+            "accounts/connect_tg_user.html",
+            {
+                "request": request,
+                "user": user,
+                "active_page": "accounts",
+                "error": "Сессия авторизации истекла. Попробуйте снова.",
+            },
+        )
+
+    try:
+        if step == "code":
+            from pyrogram.errors import SessionPasswordNeeded
+
+            try:
+                session_string = await verify_code(
+                    auth_session_id=auth_session.id,
+                    phone=auth_session.phone_number,
+                    phone_code_hash=auth_session.phone_code_hash,
+                    code=code,
+                )
+            except SessionPasswordNeeded:
+                auth_session.status = "needs_2fa"
+                await db.commit()
+                return RedirectResponse(
+                    url=f"/accounts/connect/tg_user/verify?session_id={auth_session.id}",
+                    status_code=302,
+                )
+        elif step == "2fa":
+            session_string = await tg_verify_password(
+                auth_session_id=auth_session.id,
+                password=password,
+            )
+        else:
+            return RedirectResponse(url="/accounts", status_code=302)
+
+    except Exception as e:
+        error_msg = str(e)
+        auth_session.error_message = error_msg
+        await db.commit()
+        needs_2fa = step == "2fa"
+        return templates.TemplateResponse(
+            "accounts/verify_tg_user.html",
+            {
+                "request": request,
+                "user": user,
+                "active_page": "accounts",
+                "session_id": session_id,
+                "phone_number": auth_session.phone_number,
+                "needs_2fa": needs_2fa,
+                "error": f"Ошибка: {error_msg}",
+            },
+        )
+
+    # Success: create MessengerAccount
+    auth_session.status = "completed"
+    await db.commit()
 
     account = MessengerAccount(
         user_id=user.id,
         type="tg_user",
         credentials=session_string,
-        session_data=json.dumps({"api_id": int(api_id), "api_hash": api_hash}),
         status="active",
     )
     db.add(account)
@@ -504,11 +690,17 @@ async def accounts_sync_groups(
 
     import json
 
-    meta = json.loads(account.session_data or "{}")
+    api_id = settings.telegram_api_id
+    api_hash = settings.telegram_api_hash
+    if not api_id or not api_hash:
+        meta = json.loads(account.session_data or "{}")
+        api_id = meta.get("api_id", 0)
+        api_hash = meta.get("api_hash", "")
+
     messenger = TelegramUserMessenger(
         session_string=account.credentials,
-        api_id=meta.get("api_id", 0),
-        api_hash=meta.get("api_hash", ""),
+        api_id=api_id,
+        api_hash=api_hash,
     )
 
     tg_groups = await messenger.get_groups()
