@@ -30,5 +30,4 @@ def create_celery_app() -> Celery:
     return app
 
 
-# Module-level instance for celery CLI
-# Only created when this module is actually imported with valid env
+celery = create_celery_app()
