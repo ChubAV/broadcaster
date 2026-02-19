@@ -21,6 +21,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
+from app.services.billing_service import get_user_plan, get_plan_limits, get_usage, PLANS
 
 router = APIRouter(tags=["pages"])
 
@@ -822,6 +823,37 @@ async def schedules_delete(
         await db.delete(schedule)
         await db.commit()
     return RedirectResponse(url="/schedules", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Billing page
+# ---------------------------------------------------------------------------
+
+
+@router.get("/billing", response_class=HTMLResponse)
+async def billing_page(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    plan = await get_user_plan(db, user.id)
+    limits = get_plan_limits(plan)
+    usage = await get_usage(db, user.id)
+    return templates.TemplateResponse(
+        "billing/plans.html",
+        {
+            "request": request,
+            "user": user,
+            "plan": plan,
+            "limits": limits,
+            "usage": usage,
+            "all_plans": PLANS,
+            "active_page": "billing",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

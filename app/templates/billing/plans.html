@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Billing - Broadcaster{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    <div>
+        <h1 class="text-2xl font-bold text-gray-900">Billing &amp; Plans</h1>
+        <p class="mt-1 text-sm text-gray-600">Manage your subscription and monitor usage.</p>
+    </div>
+
+    <!-- Current Plan -->
+    <div class="bg-white shadow rounded-lg p-6">
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Current Plan: <span class="text-indigo-600 capitalize">{{ plan }}</span></h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <!-- Ads usage -->
+            <div>
+                <div class="flex justify-between text-sm mb-1">
+                    <span class="text-gray-600">Ads</span>
+                    <span class="font-medium">{{ usage.ads_count }} / {{ limits.max_ads }}</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    {% set ads_pct = (usage.ads_count / limits.max_ads * 100) if limits.max_ads > 0 else 0 %}
+                    <div class="bg-indigo-600 h-2.5 rounded-full" style="width: {{ [ads_pct, 100] | min }}%"></div>
+                </div>
+            </div>
+
+            <!-- Groups usage -->
+            <div>
+                <div class="flex justify-between text-sm mb-1">
+                    <span class="text-gray-600">Groups</span>
+                    <span class="font-medium">{{ usage.groups_count }} / {{ limits.max_groups }}</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    {% set groups_pct = (usage.groups_count / limits.max_groups * 100) if limits.max_groups > 0 else 0 %}
+                    <div class="bg-indigo-600 h-2.5 rounded-full" style="width: {{ [groups_pct, 100] | min }}%"></div>
+                </div>
+            </div>
+
+            <!-- Sends today usage -->
+            <div>
+                <div class="flex justify-between text-sm mb-1">
+                    <span class="text-gray-600">Sends today</span>
+                    <span class="font-medium">{{ usage.sends_today }} / {{ limits.max_sends_per_day }}</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    {% set sends_pct = (usage.sends_today / limits.max_sends_per_day * 100) if limits.max_sends_per_day > 0 else 0 %}
+                    <div class="bg-indigo-600 h-2.5 rounded-full" style="width: {{ [sends_pct, 100] | min }}%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Available Plans -->
+    <div>
+        <h2 class="text-lg font-semibold text-gray-900 mb-4">Available Plans</h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {% for plan_name, plan_limits in all_plans.items() %}
+            <div class="bg-white shadow rounded-lg p-6 {% if plan_name == plan %}ring-2 ring-indigo-500{% endif %}">
+                <h3 class="text-lg font-bold capitalize {% if plan_name == plan %}text-indigo-600{% else %}text-gray-900{% endif %}">{{ plan_name }}</h3>
+                {% if plan_name == plan %}
+                <span class="inline-block mt-1 px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-800 rounded">Current</span>
+                {% endif %}
+                <ul class="mt-4 space-y-2 text-sm text-gray-600">
+                    <li>Up to <span class="font-medium text-gray-900">{{ plan_limits.max_ads }}</span> ads</li>
+                    <li>Up to <span class="font-medium text-gray-900">{{ plan_limits.max_groups }}</span> groups</li>
+                    <li>Up to <span class="font-medium text-gray-900">{{ plan_limits.max_sends_per_day }}</span> sends/day</li>
+                </ul>
+                {% if plan_name != plan %}
+                <button disabled class="mt-4 w-full px-4 py-2 bg-gray-300 text-gray-500 text-sm font-medium rounded cursor-not-allowed">
+                    Coming soon
+                </button>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
