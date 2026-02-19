@@ -39,8 +39,8 @@ async def get_stats(
     result = await db.execute(
         select(
             func.count(SendLog.id).label("total_sent"),
-            func.sum(case((SendLog.status == "sent", 1), else_=0)).label("success_count"),
-            func.sum(case((SendLog.status == "failed", 1), else_=0)).label("fail_count"),
+            func.sum(case((SendLog.status == "ok", 1), else_=0)).label("success_count"),
+            func.sum(case((SendLog.status == "fail", 1), else_=0)).label("fail_count"),
         )
         .join(Schedule, SendLog.schedule_id == Schedule.id)
         .join(Ad, Schedule.ad_id == Ad.id)
