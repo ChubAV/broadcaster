@@ -1,4 +1,10 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+
+from app.config import Settings
+from app.database import get_engine, get_session_factory
+from app.dependencies import init_db
 from app.routes.auth import router as auth_router
 from app.routes.ads import router as ads_router
 from app.routes.uploads import router as uploads_router
@@ -10,8 +16,18 @@ from app.routes.billing import router as billing_router
 from app.routes.pages import router as pages_router
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = Settings()
+    engine = get_engine(settings.database_url)
+    session_factory = get_session_factory(engine)
+    init_db(session_factory)
+    yield
+    await engine.dispose()
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="Broadcaster", version="0.1.0")
+    app = FastAPI(title="Broadcaster", version="0.1.0", lifespan=lifespan)
     app.include_router(auth_router)
     app.include_router(ads_router)
     app.include_router(uploads_router)
