@@ -200,8 +200,23 @@ app.get('/api/sessions/:id/groups', async (req, res) => {
     }
 });
 
-// No auto-initialization on startup - sessions are created on demand via POST /start
+// Restore sessions from volume on startup
+function restoreSessions() {
+    const authDir = './.wwebjs_auth';
+    if (!fs.existsSync(authDir)) return;
+
+    const dirs = fs.readdirSync(authDir).filter(d => d.startsWith('session-'));
+    for (const dir of dirs) {
+        const sessionId = dir.replace('session-', '');
+        console.log(`Restoring session ${sessionId} from volume...`);
+        createClient(sessionId);
+    }
+    if (dirs.length === 0) {
+        console.log('No sessions to restore');
+    }
+}
 
 app.listen(PORT, () => {
     console.log(`WA Bridge (multi-session) running on port ${PORT}`);
+    restoreSessions();
 });
