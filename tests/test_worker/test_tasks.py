@@ -82,10 +82,15 @@ async def test_get_messenger_tg_user_from_settings():
         MockSettings.return_value.telegram_api_id = 12345
         MockSettings.return_value.telegram_api_hash = "settings_hash"
 
-        m = get_messenger(account)
+        with patch("app.worker.tasks.TelegramUserMessenger") as MockMessenger:
+            m = get_messenger(account)
+            MockMessenger.assert_called_once_with(
+                session_string="session-string",
+                api_id=12345,
+                api_hash="settings_hash",
+            )
 
-    from app.messengers.telegram_user import TelegramUserMessenger
-    assert isinstance(m, TelegramUserMessenger)
+    assert m is MockMessenger.return_value
 
 
 @pytest.mark.asyncio
@@ -104,10 +109,15 @@ async def test_get_messenger_tg_user_fallback_session_data():
         MockSettings.return_value.telegram_api_id = 0
         MockSettings.return_value.telegram_api_hash = ""
 
-        m = get_messenger(account)
+        with patch("app.worker.tasks.TelegramUserMessenger") as MockMessenger:
+            m = get_messenger(account)
+            MockMessenger.assert_called_once_with(
+                session_string="session-string",
+                api_id=99999,
+                api_hash="legacy_hash",
+            )
 
-    from app.messengers.telegram_user import TelegramUserMessenger
-    assert isinstance(m, TelegramUserMessenger)
+    assert m is MockMessenger.return_value
 
 
 @pytest.mark.asyncio

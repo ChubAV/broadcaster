@@ -21,15 +21,15 @@ from app.models.messenger_account import MessengerAccount
 from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
-from app.models.telegram_auth_session import TelegramAuthSession
 from app.services.billing_service import get_user_plan, get_plan_limits, get_usage, PLANS
 from app.messengers.telegram_user import (
     TelegramUserMessenger,
-    start_auth,
-    resend_code,
-    verify_code,
-    verify_password as tg_verify_password,
-    cleanup_auth_client,
+    start_qr_auth,
+    get_qr_status,
+    refresh_qr,
+    submit_2fa,
+    complete_auth,
+    cleanup_qr_session,
 )
 
 router = APIRouter(tags=["pages"])
@@ -421,243 +421,116 @@ async def accounts_connect_tg_user_page(
     )
 
 
-@router.post("/accounts/connect/tg_user/send-code")
-async def accounts_connect_tg_user_send_code(
+@router.post("/accounts/connect/tg_user/start-qr")
+async def accounts_connect_tg_user_start_qr(
     request: Request,
-    phone_number: str = Form(...),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return {"error": "Не авторизован"}
 
     if not settings.telegram_api_id or not settings.telegram_api_hash:
-        return templates.TemplateResponse(
-            "accounts/connect_tg_user.html",
-            {
-                "request": request,
-                "user": user,
-                "active_page": "accounts",
-                "error": "Telegram API не настроен. Обратитесь к администратору.",
-            },
-        )
-
-    from datetime import timedelta
-
-    auth_session = TelegramAuthSession(
-        user_id=user.id,
-        phone_number=phone_number,
-        status="pending",
-        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
-    )
-    db.add(auth_session)
-    await db.commit()
-    await db.refresh(auth_session)
+        return {"error": "Telegram API не настроен. Обратитесь к администратору."}
 
     try:
-        phone_code_hash = await start_auth(
-            auth_session_id=auth_session.id,
-            phone=phone_number,
+        session_id, login_url = await start_qr_auth(
             api_id=settings.telegram_api_id,
             api_hash=settings.telegram_api_hash,
         )
-        auth_session.phone_code_hash = phone_code_hash
-        auth_session.status = "code_sent"
-        await db.commit()
     except Exception as e:
-        auth_session.status = "error"
-        auth_session.error_message = str(e)
-        await db.commit()
-        return templates.TemplateResponse(
-            "accounts/connect_tg_user.html",
-            {
-                "request": request,
-                "user": user,
-                "active_page": "accounts",
-                "error": f"Ошибка отправки кода: {e}",
-            },
-        )
+        return {"error": f"Ошибка запуска QR авторизации: {e}"}
 
-    return RedirectResponse(
-        url=f"/accounts/connect/tg_user/verify?session_id={auth_session.id}",
-        status_code=302,
-    )
+    # Generate QR code as base64 PNG
+    import qrcode
+    import io
+    import base64
+
+    img = qrcode.make(login_url)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    qr_base64 = base64.b64encode(buf.getvalue()).decode()
+
+    return {
+        "session_id": session_id,
+        "qr_image": f"data:image/png;base64,{qr_base64}",
+    }
 
 
-@router.get("/accounts/connect/tg_user/verify", response_class=HTMLResponse)
-async def accounts_connect_tg_user_verify_page(
+@router.get("/accounts/connect/tg_user/qr-status")
+async def accounts_connect_tg_user_qr_status(
     request: Request,
-    session_id: int = Query(...),
+    session_id: str = Query(...),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return {"status": "error", "error": "Не авторизован"}
 
-    auth_session = await db.get(TelegramAuthSession, session_id)
-    if not auth_session or auth_session.user_id != user.id:
-        return RedirectResponse(url="/accounts", status_code=302)
-
-    expires_at = auth_session.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
-        cleanup_auth_client(auth_session.id)
-        auth_session.status = "expired"
-        await db.commit()
-        return templates.TemplateResponse(
-            "accounts/connect_tg_user.html",
-            {
-                "request": request,
-                "user": user,
-                "active_page": "accounts",
-                "error": "Сессия авторизации истекла. Попробуйте снова.",
-            },
-        )
-
-    needs_2fa = auth_session.status == "needs_2fa"
-
-    return templates.TemplateResponse(
-        "accounts/verify_tg_user.html",
-        {
-            "request": request,
-            "user": user,
-            "active_page": "accounts",
-            "session_id": session_id,
-            "phone_number": auth_session.phone_number,
-            "needs_2fa": needs_2fa,
-        },
-    )
+    return get_qr_status(session_id)
 
 
-@router.post("/accounts/connect/tg_user/resend-code")
-async def accounts_connect_tg_user_resend_code(
+@router.post("/accounts/connect/tg_user/refresh-qr")
+async def accounts_connect_tg_user_refresh_qr(
     request: Request,
-    session_id: int = Form(...),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return {"error": "Не авторизован"}
 
-    auth_session = await db.get(TelegramAuthSession, session_id)
-    if not auth_session or auth_session.user_id != user.id:
-        return RedirectResponse(url="/accounts", status_code=302)
+    data = await request.json()
+    session_id = data.get("session_id")
+    if not session_id:
+        return {"error": "session_id required"}
+
+    new_url = await refresh_qr(session_id)
+    if not new_url:
+        return {"error": "Не удалось обновить QR. Начните заново."}
+
+    import qrcode
+    import io
+    import base64
+
+    img = qrcode.make(new_url)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    qr_base64 = base64.b64encode(buf.getvalue()).decode()
+
+    return {"qr_image": f"data:image/png;base64,{qr_base64}"}
+
+
+@router.post("/accounts/connect/tg_user/verify-2fa")
+async def accounts_connect_tg_user_verify_2fa(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return {"error": "Не авторизован"}
+
+    data = await request.json()
+    session_id = data.get("session_id")
+    password = data.get("password")
+
+    if not session_id or not password:
+        return {"error": "session_id и password обязательны"}
 
     try:
-        new_hash = await resend_code(
-            auth_session_id=auth_session.id,
-            phone=auth_session.phone_number,
-            phone_code_hash=auth_session.phone_code_hash,
-        )
-        auth_session.phone_code_hash = new_hash
-        await db.commit()
-    except Exception as e:
-        return templates.TemplateResponse(
-            "accounts/verify_tg_user.html",
-            {
-                "request": request,
-                "user": user,
-                "active_page": "accounts",
-                "session_id": session_id,
-                "phone_number": auth_session.phone_number,
-                "needs_2fa": False,
-                "error": f"Ошибка повторной отправки: {e}",
-            },
-        )
+        session_string = await submit_2fa(session_id, password)
+    except ValueError as e:
+        return {"error": str(e)}
+    except RuntimeError as e:
+        return {"error": str(e)}
 
-    return RedirectResponse(
-        url=f"/accounts/connect/tg_user/verify?session_id={auth_session.id}",
-        status_code=302,
-    )
+    # Clean up auth client
+    await complete_auth(session_id)
 
-
-@router.post("/accounts/connect/tg_user/verify")
-async def accounts_connect_tg_user_verify_submit(
-    request: Request,
-    session_id: int = Form(...),
-    step: str = Form(...),
-    code: str = Form(None),
-    password: str = Form(None),
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    user = await get_user_from_cookie(request, db, settings)
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-
-    auth_session = await db.get(TelegramAuthSession, session_id)
-    if not auth_session or auth_session.user_id != user.id:
-        return RedirectResponse(url="/accounts", status_code=302)
-
-    expires_at = auth_session.expires_at
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at < datetime.now(timezone.utc):
-        cleanup_auth_client(auth_session.id)
-        auth_session.status = "expired"
-        await db.commit()
-        return templates.TemplateResponse(
-            "accounts/connect_tg_user.html",
-            {
-                "request": request,
-                "user": user,
-                "active_page": "accounts",
-                "error": "Сессия авторизации истекла. Попробуйте снова.",
-            },
-        )
-
-    try:
-        if step == "code":
-            from pyrogram.errors import SessionPasswordNeeded
-
-            try:
-                session_string = await verify_code(
-                    auth_session_id=auth_session.id,
-                    phone=auth_session.phone_number,
-                    phone_code_hash=auth_session.phone_code_hash,
-                    code=code,
-                )
-            except SessionPasswordNeeded:
-                auth_session.status = "needs_2fa"
-                await db.commit()
-                return RedirectResponse(
-                    url=f"/accounts/connect/tg_user/verify?session_id={auth_session.id}",
-                    status_code=302,
-                )
-        elif step == "2fa":
-            session_string = await tg_verify_password(
-                auth_session_id=auth_session.id,
-                password=password,
-            )
-        else:
-            return RedirectResponse(url="/accounts", status_code=302)
-
-    except Exception as e:
-        error_msg = str(e)
-        auth_session.error_message = error_msg
-        await db.commit()
-        needs_2fa = step == "2fa"
-        return templates.TemplateResponse(
-            "accounts/verify_tg_user.html",
-            {
-                "request": request,
-                "user": user,
-                "active_page": "accounts",
-                "session_id": session_id,
-                "phone_number": auth_session.phone_number,
-                "needs_2fa": needs_2fa,
-                "error": f"Ошибка: {error_msg}",
-            },
-        )
-
-    # Success: create MessengerAccount
-    auth_session.status = "completed"
-    await db.commit()
-
+    # Create MessengerAccount
     account = MessengerAccount(
         user_id=user.id,
         type="tg_user",
@@ -666,7 +539,40 @@ async def accounts_connect_tg_user_verify_submit(
     )
     db.add(account)
     await db.commit()
-    return RedirectResponse(url="/accounts", status_code=302)
+
+    return {"status": "success"}
+
+
+@router.post("/accounts/connect/tg_user/complete")
+async def accounts_connect_tg_user_complete(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return {"error": "Не авторизован"}
+
+    data = await request.json()
+    session_id = data.get("session_id")
+    if not session_id:
+        return {"error": "session_id required"}
+
+    session_string = await complete_auth(session_id)
+    if not session_string:
+        return {"error": "Сессия не найдена или авторизация не завершена."}
+
+    # Create MessengerAccount
+    account = MessengerAccount(
+        user_id=user.id,
+        type="tg_user",
+        credentials=session_string,
+        status="active",
+    )
+    db.add(account)
+    await db.commit()
+
+    return {"status": "success"}
 
 
 @router.get("/accounts/connect/wa", response_class=HTMLResponse)
@@ -831,19 +737,10 @@ async def accounts_sync_groups(
         return RedirectResponse(url="/groups", status_code=302)
 
     if account.type == "tg_user":
-        import json
-
-        api_id = settings.telegram_api_id
-        api_hash = settings.telegram_api_hash
-        if not api_id or not api_hash:
-            meta = json.loads(account.session_data or "{}")
-            api_id = meta.get("api_id", 0)
-            api_hash = meta.get("api_hash", "")
-
         messenger = TelegramUserMessenger(
             session_string=account.credentials,
-            api_id=api_id,
-            api_hash=api_hash,
+            api_id=settings.telegram_api_id,
+            api_hash=settings.telegram_api_hash,
         )
         fetched_groups = await messenger.get_groups()
         messenger_type = "tg_user"

@@ -1,5 +1,3 @@
-import json
-
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -145,8 +143,8 @@ async def test_sync_groups_uses_settings_api_credentials(sync_setup):
 
 
 @pytest.mark.asyncio
-async def test_sync_groups_fallback_to_session_data(sync_setup):
-    """When settings have no telegram api credentials, fallback to session_data."""
+async def test_sync_groups_always_uses_settings_credentials(sync_setup):
+    """Sync groups always uses api_id/api_hash from settings, even when zero."""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -188,7 +186,6 @@ async def test_sync_groups_fallback_to_session_data(sync_setup):
                 user_id=user.id,
                 type="tg_user",
                 credentials="session-string",
-                session_data=json.dumps({"api_id": 99999, "api_hash": "legacy_hash"}),
                 status="active",
             )
             session.add(account)
@@ -205,8 +202,8 @@ async def test_sync_groups_fallback_to_session_data(sync_setup):
 
             MockMessenger.assert_called_once_with(
                 session_string="session-string",
-                api_id=99999,
-                api_hash="legacy_hash",
+                api_id=0,
+                api_hash="",
             )
 
     async with engine.begin() as conn:

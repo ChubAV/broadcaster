@@ -4,24 +4,207 @@
 <div class="max-w-lg">
     <h1 class="text-2xl font-bold text-gray-900 mb-6">Подключение Telegram аккаунта</h1>
 
-    {% if error %}
-    <div class="mb-4 rounded-md bg-red-50 p-4 text-sm text-red-700">{{ error }}</div>
-    {% endif %}
+    <div id="error-box" class="mb-4 rounded-md bg-red-50 p-4 text-sm text-red-700 hidden"></div>
 
     <div class="bg-white shadow rounded-lg p-6">
-        <p class="text-sm text-gray-600 mb-4">
-            Введите номер телефона, привязанный к вашему Telegram аккаунту. На него будет отправлен код подтверждения.
-        </p>
-        <form method="POST" action="/accounts/connect/tg_user/send-code" class="space-y-4">
-            <div>
-                <label for="phone_number" class="block text-sm font-medium text-gray-900">Номер телефона</label>
-                <input id="phone_number" name="phone_number" type="tel" required placeholder="+79001234567" class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
-            </div>
+        <!-- Initial state: start button -->
+        <div id="start-section">
+            <p class="text-sm text-gray-600 mb-4">
+                Нажмите кнопку, чтобы получить QR-код. Отсканируйте его в приложении Telegram (Настройки → Устройства → Подключить устройство).
+            </p>
             <div class="flex gap-3">
-                <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">Отправить код</button>
+                <button onclick="startQR()" id="start-btn" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                    Получить QR-код
+                </button>
                 <a href="/accounts" class="rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-gray-300 hover:bg-gray-50">Отмена</a>
             </div>
-        </form>
+        </div>
+
+        <!-- QR code display -->
+        <div id="qr-section" class="hidden text-center">
+            <img id="qr-image" src="" alt="QR-код" class="mx-auto mb-4" style="max-width: 256px;">
+            <p id="qr-status-text" class="text-sm text-yellow-600 mb-4">Ожидание сканирования...</p>
+            <button onclick="refreshQR()" id="refresh-btn" class="hidden rounded-md bg-gray-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-gray-500">
+                Обновить QR-код
+            </button>
+        </div>
+
+        <!-- 2FA section -->
+        <div id="2fa-section" class="hidden">
+            <p class="text-sm text-gray-600 mb-4">
+                У вашего аккаунта включена двухфакторная аутентификация. Введите пароль.
+            </p>
+            <div class="space-y-4">
+                <div>
+                    <label for="password" class="block text-sm font-medium text-gray-900">Пароль 2FA</label>
+                    <input id="password" type="password" required placeholder="Пароль двухфакторной аутентификации"
+                        class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+                </div>
+                <button onclick="submit2FA()" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+                    Подтвердить
+                </button>
+            </div>
+        </div>
+
+        <!-- Success section -->
+        <div id="success-section" class="hidden text-center">
+            <div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">
+                <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+            </div>
+            <p class="text-lg font-medium text-gray-900">Telegram аккаунт подключён!</p>
+            <a href="/accounts" class="mt-4 inline-block rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">К аккаунтам</a>
+        </div>
     </div>
 </div>
+
+<script>
+let currentSessionId = null;
+let pollInterval = null;
+
+function showError(msg) {
+    const box = document.getElementById('error-box');
+    box.textContent = msg;
+    box.classList.remove('hidden');
+}
+
+function hideError() {
+    document.getElementById('error-box').classList.add('hidden');
+}
+
+function showSection(name) {
+    ['start-section', 'qr-section', '2fa-section', 'success-section'].forEach(id => {
+        document.getElementById(id).classList.add('hidden');
+    });
+    document.getElementById(name + '-section').classList.remove('hidden');
+}
+
+async function startQR() {
+    hideError();
+    const btn = document.getElementById('start-btn');
+    btn.disabled = true;
+    btn.textContent = 'Загрузка...';
+
+    try {
+        const resp = await fetch('/accounts/connect/tg_user/start-qr', {method: 'POST'});
+        const data = await resp.json();
+        if (data.error) {
+            showError(data.error);
+            btn.disabled = false;
+            btn.textContent = 'Получить QR-код';
+            return;
+        }
+
+        currentSessionId = data.session_id;
+        document.getElementById('qr-image').src = data.qr_image;
+        showSection('qr');
+        startPolling();
+    } catch (e) {
+        showError('Ошибка сети: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = 'Получить QR-код';
+    }
+}
+
+function startPolling() {
+    if (pollInterval) clearInterval(pollInterval);
+    pollInterval = setInterval(checkStatus, 3000);
+}
+
+function stopPolling() {
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
+}
+
+async function checkStatus() {
+    if (!currentSessionId) return;
+
+    try {
+        const resp = await fetch(`/accounts/connect/tg_user/qr-status?session_id=${currentSessionId}`);
+        const data = await resp.json();
+
+        if (data.status === 'success') {
+            stopPolling();
+            // Complete the auth — create account
+            const completeResp = await fetch('/accounts/connect/tg_user/complete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({session_id: currentSessionId}),
+            });
+            const completeData = await completeResp.json();
+            if (completeData.error) {
+                showError(completeData.error);
+                return;
+            }
+            showSection('success');
+        } else if (data.status === 'needs_2fa') {
+            stopPolling();
+            showSection('2fa');
+        } else if (data.status === 'expired') {
+            stopPolling();
+            document.getElementById('qr-status-text').textContent = 'QR-код истёк.';
+            document.getElementById('refresh-btn').classList.remove('hidden');
+        } else if (data.status === 'error') {
+            stopPolling();
+            showError(data.error || 'Ошибка авторизации');
+        }
+        // else status === 'waiting' — keep polling
+    } catch (e) {
+        // Network error — keep trying
+    }
+}
+
+async function refreshQR() {
+    hideError();
+    document.getElementById('refresh-btn').classList.add('hidden');
+
+    try {
+        const resp = await fetch('/accounts/connect/tg_user/refresh-qr', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({session_id: currentSessionId}),
+        });
+        const data = await resp.json();
+        if (data.error) {
+            showError(data.error);
+            showSection('start');
+            return;
+        }
+
+        document.getElementById('qr-image').src = data.qr_image;
+        document.getElementById('qr-status-text').textContent = 'Ожидание сканирования...';
+        startPolling();
+    } catch (e) {
+        showError('Ошибка сети: ' + e.message);
+    }
+}
+
+async function submit2FA() {
+    hideError();
+    const password = document.getElementById('password').value;
+    if (!password) {
+        showError('Введите пароль');
+        return;
+    }
+
+    try {
+        const resp = await fetch('/accounts/connect/tg_user/verify-2fa', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({session_id: currentSessionId, password: password}),
+        });
+        const data = await resp.json();
+        if (data.error) {
+            showError(data.error);
+            return;
+        }
+        showSection('success');
+    } catch (e) {
+        showError('Ошибка сети: ' + e.message);
+    }
+}
+</script>
 {% endblock %}

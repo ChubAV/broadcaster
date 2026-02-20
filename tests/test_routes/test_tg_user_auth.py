@@ -1,6 +1,6 @@
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -10,12 +10,11 @@ from app.database import Base
 from app.dependencies import get_db, get_settings
 from app.main import create_app
 from app.models.messenger_account import MessengerAccount
-from app.models.telegram_auth_session import TelegramAuthSession
 
 
 @pytest_asyncio.fixture
 async def auth_setup():
-    """Full setup for tg_user auth flow tests."""
+    """Full setup for tg_user QR auth flow tests."""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -66,64 +65,34 @@ async def auth_setup():
 
 
 @pytest.mark.asyncio
-async def test_connect_tg_user_page_shows_phone_form(auth_setup):
+async def test_connect_tg_user_page_shows_qr_button(auth_setup):
     client, _ = auth_setup
     resp = await client.get("/accounts/connect/tg_user")
     assert resp.status_code == 200
-    assert "phone_number" in resp.text
-    assert "Отправить код" in resp.text
+    assert "QR" in resp.text
+    assert "start-btn" in resp.text
 
 
 @pytest.mark.asyncio
-async def test_send_code_success_redirects_to_verify(auth_setup):
-    client, session_factory = auth_setup
+async def test_start_qr_returns_session_and_image(auth_setup):
+    client, _ = auth_setup
 
-    with patch("app.routes.pages.start_auth", new_callable=AsyncMock) as mock_start:
-        mock_start.return_value = "test_code_hash"
+    with patch("app.routes.pages.start_qr_auth", new_callable=AsyncMock) as mock_start:
+        mock_start.return_value = ("test_session_id", "tg://login?token=abc123")
 
-        resp = await client.post(
-            "/accounts/connect/tg_user/send-code",
-            data={"phone_number": "+79001234567"},
-        )
+        resp = await client.post("/accounts/connect/tg_user/start-qr")
 
-    assert resp.status_code == 302
-    assert "/accounts/connect/tg_user/verify?session_id=" in resp.headers["location"]
-
-    # Verify auth session was created
-    async with session_factory() as session:
-        result = await session.execute(select(TelegramAuthSession))
-        auth_session = result.scalar_one()
-        assert auth_session.phone_number == "+79001234567"
-        assert auth_session.phone_code_hash == "test_code_hash"
-        assert auth_session.status == "code_sent"
+    data = resp.json()
+    assert "session_id" in data
+    assert data["session_id"] == "test_session_id"
+    assert "qr_image" in data
+    assert data["qr_image"].startswith("data:image/png;base64,")
 
 
 @pytest.mark.asyncio
-async def test_send_code_error_shows_error_on_form(auth_setup):
-    client, session_factory = auth_setup
-
-    with patch("app.routes.pages.start_auth", new_callable=AsyncMock) as mock_start:
-        mock_start.side_effect = Exception("Phone number invalid")
-
-        resp = await client.post(
-            "/accounts/connect/tg_user/send-code",
-            data={"phone_number": "+invalid"},
-        )
-
-    assert resp.status_code == 200
-    assert "Phone number invalid" in resp.text
-
-    # Verify auth session was created with error status
-    async with session_factory() as session:
-        result = await session.execute(select(TelegramAuthSession))
-        auth_session = result.scalar_one()
-        assert auth_session.status == "error"
-
-
-@pytest.mark.asyncio
-async def test_send_code_no_api_config_shows_error(auth_setup):
-    """When telegram_api_id is 0, should show error."""
-    client, session_factory = auth_setup
+async def test_start_qr_no_api_config_returns_error(auth_setup):
+    """When telegram_api_id is 0, should return error."""
+    client, _ = auth_setup
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
@@ -154,13 +123,11 @@ async def test_send_code_no_api_config_shows_error(auth_setup):
             "/register",
             data={"email": "noapi@test.com", "password": "pass123", "name": "No API"},
         )
-        resp = await c.post(
-            "/accounts/connect/tg_user/send-code",
-            data={"phone_number": "+79001234567"},
-        )
+        resp = await c.post("/accounts/connect/tg_user/start-qr")
 
-    assert resp.status_code == 200
-    assert "Telegram API не настроен" in resp.text
+    data = resp.json()
+    assert "error" in data
+    assert "Telegram API не настроен" in data["error"]
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -168,32 +135,60 @@ async def test_send_code_no_api_config_shows_error(auth_setup):
 
 
 @pytest.mark.asyncio
-async def test_verify_code_success_creates_account(auth_setup):
+async def test_start_qr_error_returns_error(auth_setup):
+    client, _ = auth_setup
+
+    with patch("app.routes.pages.start_qr_auth", new_callable=AsyncMock) as mock_start:
+        mock_start.side_effect = Exception("Connection failed")
+
+        resp = await client.post("/accounts/connect/tg_user/start-qr")
+
+    data = resp.json()
+    assert "error" in data
+    assert "Connection failed" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_qr_status_returns_status(auth_setup):
+    client, _ = auth_setup
+
+    with patch("app.routes.pages.get_qr_status") as mock_status:
+        mock_status.return_value = {"status": "waiting"}
+
+        resp = await client.get("/accounts/connect/tg_user/qr-status?session_id=test123")
+
+    data = resp.json()
+    assert data["status"] == "waiting"
+
+
+@pytest.mark.asyncio
+async def test_qr_status_success(auth_setup):
+    client, _ = auth_setup
+
+    with patch("app.routes.pages.get_qr_status") as mock_status:
+        mock_status.return_value = {"status": "success"}
+
+        resp = await client.get("/accounts/connect/tg_user/qr-status?session_id=test123")
+
+    data = resp.json()
+    assert data["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_complete_auth_creates_account(auth_setup):
     client, session_factory = auth_setup
 
-    # Step 1: send code
-    with patch("app.routes.pages.start_auth", new_callable=AsyncMock) as mock_start:
-        mock_start.return_value = "test_code_hash"
+    with patch("app.routes.pages.complete_auth", new_callable=AsyncMock) as mock_complete:
+        mock_complete.return_value = "exported_session_string"
 
         resp = await client.post(
-            "/accounts/connect/tg_user/send-code",
-            data={"phone_number": "+79001234567"},
+            "/accounts/connect/tg_user/complete",
+            content='{"session_id": "test_session_id"}',
+            headers={"Content-Type": "application/json"},
         )
 
-    location = resp.headers["location"]
-    session_id = location.split("session_id=")[1]
-
-    # Step 2: verify code
-    with patch("app.routes.pages.verify_code", new_callable=AsyncMock) as mock_verify:
-        mock_verify.return_value = "exported_session_string"
-
-        resp = await client.post(
-            "/accounts/connect/tg_user/verify",
-            data={"session_id": session_id, "step": "code", "code": "12345"},
-        )
-
-    assert resp.status_code == 302
-    assert resp.headers["location"] == "/accounts"
+    data = resp.json()
+    assert data["status"] == "success"
 
     # Verify account was created
     async with session_factory() as session:
@@ -203,152 +198,98 @@ async def test_verify_code_success_creates_account(auth_setup):
         assert account.credentials == "exported_session_string"
         assert account.status == "active"
 
-        # Auth session should be completed
-        auth_result = await session.execute(select(TelegramAuthSession))
-        auth_session = auth_result.scalar_one()
-        assert auth_session.status == "completed"
-
 
 @pytest.mark.asyncio
-async def test_verify_code_needs_2fa_redirects(auth_setup):
-    client, session_factory = auth_setup
+async def test_complete_auth_no_session_returns_error(auth_setup):
+    client, _ = auth_setup
 
-    # Step 1: send code
-    with patch("app.routes.pages.start_auth", new_callable=AsyncMock) as mock_start:
-        mock_start.return_value = "test_code_hash"
-
-        resp = await client.post(
-            "/accounts/connect/tg_user/send-code",
-            data={"phone_number": "+79001234567"},
-        )
-
-    location = resp.headers["location"]
-    session_id = location.split("session_id=")[1]
-
-    # Step 2: verify code raises SessionPasswordNeeded
-    from pyrogram.errors import SessionPasswordNeeded
-
-    with patch("app.routes.pages.verify_code", new_callable=AsyncMock) as mock_verify:
-        mock_verify.side_effect = SessionPasswordNeeded()
+    with patch("app.routes.pages.complete_auth", new_callable=AsyncMock) as mock_complete:
+        mock_complete.return_value = None
 
         resp = await client.post(
-            "/accounts/connect/tg_user/verify",
-            data={"session_id": session_id, "step": "code", "code": "12345"},
+            "/accounts/connect/tg_user/complete",
+            content='{"session_id": "nonexistent"}',
+            headers={"Content-Type": "application/json"},
         )
 
-    assert resp.status_code == 302
-    assert f"session_id={session_id}" in resp.headers["location"]
-
-    # Auth session should be needs_2fa
-    async with session_factory() as session:
-        auth_result = await session.execute(select(TelegramAuthSession))
-        auth_session = auth_result.scalar_one()
-        assert auth_session.status == "needs_2fa"
+    data = resp.json()
+    assert "error" in data
 
 
 @pytest.mark.asyncio
 async def test_verify_2fa_success_creates_account(auth_setup):
     client, session_factory = auth_setup
 
-    # Step 1: send code
-    with patch("app.routes.pages.start_auth", new_callable=AsyncMock) as mock_start:
-        mock_start.return_value = "test_code_hash"
+    with patch("app.routes.pages.submit_2fa", new_callable=AsyncMock) as mock_2fa:
+        mock_2fa.return_value = "session_string_2fa"
 
-        resp = await client.post(
-            "/accounts/connect/tg_user/send-code",
-            data={"phone_number": "+79001234567"},
-        )
+        with patch("app.routes.pages.complete_auth", new_callable=AsyncMock) as mock_complete:
+            mock_complete.return_value = "session_string_2fa"
 
-    location = resp.headers["location"]
-    session_id = location.split("session_id=")[1]
+            resp = await client.post(
+                "/accounts/connect/tg_user/verify-2fa",
+                content='{"session_id": "test_session", "password": "my2fapass"}',
+                headers={"Content-Type": "application/json"},
+            )
 
-    # Step 2: code → needs 2FA
-    from pyrogram.errors import SessionPasswordNeeded
-
-    with patch("app.routes.pages.verify_code", new_callable=AsyncMock) as mock_verify:
-        mock_verify.side_effect = SessionPasswordNeeded()
-        await client.post(
-            "/accounts/connect/tg_user/verify",
-            data={"session_id": session_id, "step": "code", "code": "12345"},
-        )
-
-    # Step 3: verify 2FA password
-    with patch("app.routes.pages.tg_verify_password", new_callable=AsyncMock) as mock_2fa:
-        mock_2fa.return_value = "exported_session_string_2fa"
-
-        resp = await client.post(
-            "/accounts/connect/tg_user/verify",
-            data={"session_id": session_id, "step": "2fa", "password": "my2fapass"},
-        )
-
-    assert resp.status_code == 302
-    assert resp.headers["location"] == "/accounts"
+    data = resp.json()
+    assert data["status"] == "success"
 
     async with session_factory() as session:
         result = await session.execute(select(MessengerAccount))
         account = result.scalar_one()
-        assert account.credentials == "exported_session_string_2fa"
+        assert account.credentials == "session_string_2fa"
+        assert account.status == "active"
 
 
 @pytest.mark.asyncio
-async def test_verify_wrong_code_shows_error(auth_setup):
-    client, session_factory = auth_setup
+async def test_verify_2fa_wrong_password_returns_error(auth_setup):
+    client, _ = auth_setup
 
-    # Step 1: send code
-    with patch("app.routes.pages.start_auth", new_callable=AsyncMock) as mock_start:
-        mock_start.return_value = "test_code_hash"
-
-        resp = await client.post(
-            "/accounts/connect/tg_user/send-code",
-            data={"phone_number": "+79001234567"},
-        )
-
-    location = resp.headers["location"]
-    session_id = location.split("session_id=")[1]
-
-    # Step 2: wrong code
-    with patch("app.routes.pages.verify_code", new_callable=AsyncMock) as mock_verify:
-        mock_verify.side_effect = Exception("The phone code you provided is invalid")
+    with patch("app.routes.pages.submit_2fa", new_callable=AsyncMock) as mock_2fa:
+        mock_2fa.side_effect = ValueError("Неверный пароль 2FA.")
 
         resp = await client.post(
-            "/accounts/connect/tg_user/verify",
-            data={"session_id": session_id, "step": "code", "code": "00000"},
+            "/accounts/connect/tg_user/verify-2fa",
+            content='{"session_id": "test_session", "password": "wrongpass"}',
+            headers={"Content-Type": "application/json"},
         )
 
-    assert resp.status_code == 200
-    assert "phone code you provided is invalid" in resp.text
-
-    # No account should be created
-    async with session_factory() as session:
-        result = await session.execute(select(MessengerAccount))
-        accounts = result.scalars().all()
-        assert len(accounts) == 0
+    data = resp.json()
+    assert "error" in data
+    assert "Неверный пароль" in data["error"]
 
 
 @pytest.mark.asyncio
-async def test_verify_page_shows_2fa_form_when_needed(auth_setup):
-    client, session_factory = auth_setup
+async def test_refresh_qr_returns_new_image(auth_setup):
+    client, _ = auth_setup
 
-    # Step 1: send code
-    with patch("app.routes.pages.start_auth", new_callable=AsyncMock) as mock_start:
-        mock_start.return_value = "test_code_hash"
+    with patch("app.routes.pages.refresh_qr", new_callable=AsyncMock) as mock_refresh:
+        mock_refresh.return_value = "tg://login?token=newtoken"
 
         resp = await client.post(
-            "/accounts/connect/tg_user/send-code",
-            data={"phone_number": "+79001234567"},
+            "/accounts/connect/tg_user/refresh-qr",
+            content='{"session_id": "test_session"}',
+            headers={"Content-Type": "application/json"},
         )
 
-    location = resp.headers["location"]
-    session_id = location.split("session_id=")[1]
+    data = resp.json()
+    assert "qr_image" in data
+    assert data["qr_image"].startswith("data:image/png;base64,")
 
-    # Mark session as needs_2fa
-    async with session_factory() as session:
-        auth_session = (await session.execute(select(TelegramAuthSession))).scalar_one()
-        auth_session.status = "needs_2fa"
-        await session.commit()
 
-    # GET verify page should show 2FA form
-    resp = await client.get(f"/accounts/connect/tg_user/verify?session_id={session_id}")
-    assert resp.status_code == 200
-    assert "password" in resp.text
-    assert "Пароль 2FA" in resp.text
+@pytest.mark.asyncio
+async def test_refresh_qr_failure_returns_error(auth_setup):
+    client, _ = auth_setup
+
+    with patch("app.routes.pages.refresh_qr", new_callable=AsyncMock) as mock_refresh:
+        mock_refresh.return_value = None
+
+        resp = await client.post(
+            "/accounts/connect/tg_user/refresh-qr",
+            content='{"session_id": "test_session"}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    data = resp.json()
+    assert "error" in data

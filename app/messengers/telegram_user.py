@@ -237,31 +237,3 @@ class TelegramUserMessenger(BaseMessenger):
             except Exception:
                 pass
 
-
-# ---------------------------------------------------------------------------
-# Backward-compatible aliases (used by pages.py until it is migrated)
-# ---------------------------------------------------------------------------
-
-async def start_auth(auth_session_id: int, phone: str, api_id: int, api_hash: str) -> str:
-    """Legacy stub -- will be removed after pages.py migration."""
-    raise NotImplementedError("Legacy phone-code auth removed; use QR auth flow.")
-
-
-async def resend_code(auth_session_id: int, phone: str, phone_code_hash: str) -> str:
-    """Legacy stub."""
-    raise NotImplementedError("Legacy phone-code auth removed; use QR auth flow.")
-
-
-async def verify_code(auth_session_id: int, phone: str, phone_code_hash: str, code: str) -> str:
-    """Legacy stub."""
-    raise NotImplementedError("Legacy phone-code auth removed; use QR auth flow.")
-
-
-async def verify_password(auth_session_id: int, password: str) -> str:
-    """Legacy stub."""
-    raise NotImplementedError("Legacy phone-code auth removed; use QR auth flow.")
-
-
-def cleanup_auth_client(auth_session_id: int) -> None:
-    """Legacy stub."""
-    pass
