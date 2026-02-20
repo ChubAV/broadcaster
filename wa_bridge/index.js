@@ -160,12 +160,15 @@ app.post('/api/sessions/:id/send', async (req, res) => {
     }
 
     try {
+        console.log(`[${sessionId}] Sending to group_id=${group_id}, text="${text.substring(0, 50)}...", image_path=${image_path || 'none'}`);
+        let result;
         if (image_path && fs.existsSync(image_path)) {
             const media = MessageMedia.fromFilePath(image_path);
-            await state.client.sendMessage(group_id, media, { caption: text });
+            result = await state.client.sendMessage(group_id, media, { caption: text });
         } else {
-            await state.client.sendMessage(group_id, text);
+            result = await state.client.sendMessage(group_id, text);
         }
+        console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
         res.json({ ok: true });
     } catch (error) {
         console.error(`[${sessionId}] Send error: ${error.message}`);
