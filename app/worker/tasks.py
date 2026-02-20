@@ -39,7 +39,7 @@ def get_messenger(account: MessengerAccount):
     elif account.type == "wa":
         from app.config import Settings
         settings = Settings()
-        return WhatsAppMessenger(bridge_url=settings.wa_bridge_url)
+        return WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=str(account.id))
     else:
         raise ValueError(f"Unknown account type: {account.type}")
 
