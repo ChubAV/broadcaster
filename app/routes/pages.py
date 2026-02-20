@@ -679,24 +679,55 @@ async def accounts_connect_wa_page(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
-    import httpx
+    from app.messengers.whatsapp import WhatsAppMessenger
+
+    # Check if user already has an active WA account
+    existing = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.user_id == user.id,
+            MessengerAccount.type == "wa",
+            MessengerAccount.status == "active",
+        )
+    )
+    if existing.scalar_one_or_none():
+        return RedirectResponse(url="/accounts", status_code=302)
+
+    # Clean up stale connecting accounts
+    stale = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.user_id == user.id,
+            MessengerAccount.type == "wa",
+            MessengerAccount.status == "connecting",
+        )
+    )
+    for old in stale.scalars().all():
+        await db.delete(old)
+    await db.commit()
+
+    # Create a pending WA account to get a session_id
+    account = MessengerAccount(
+        user_id=user.id,
+        type="wa",
+        credentials="pending",
+        status="connecting",
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+
+    session_id = str(account.id)
+    messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=session_id)
 
     qr_code = None
     connected = False
     error = None
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            status_resp = await client.get(f"{settings.wa_bridge_url}/api/status")
-            if status_resp.status_code == 200 and status_resp.json().get("connected"):
-                connected = True
-            else:
-                qr_resp = await client.get(f"{settings.wa_bridge_url}/api/qr")
-                if qr_resp.status_code == 200:
-                    data = qr_resp.json()
-                    qr_code = data.get("qr")
-    except httpx.ConnectError:
-        error = "WA Bridge недоступен. Убедитесь, что сервис запущен."
+        await messenger.start_session()
+        qr_data = await messenger.get_qr()
+        qr_code = qr_data.get("qr")
+        if qr_data.get("status") == "connected":
+            connected = True
     except Exception as e:
         error = f"Ошибка подключения к WA Bridge: {e}"
 
@@ -709,6 +740,7 @@ async def accounts_connect_wa_page(
             "qr_code": qr_code,
             "connected": connected,
             "error": error,
+            "account_id": account.id,
         },
     )
 
@@ -723,60 +755,56 @@ async def accounts_connect_wa_status(
     if not user:
         return HTMLResponse('<span class="text-sm text-red-600">Не авторизован</span>')
 
-    import httpx
+    from app.messengers.whatsapp import WhatsAppMessenger
+
+    # Find the pending/connecting WA account for this user
+    result = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.user_id == user.id,
+            MessengerAccount.type == "wa",
+            MessengerAccount.status == "connecting",
+        )
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        return HTMLResponse('<span class="text-sm text-red-600">Нет активной сессии подключения</span>')
+
+    session_id = str(account.id)
+    messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=session_id)
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            status_resp = await client.get(f"{settings.wa_bridge_url}/api/status")
-            if status_resp.status_code == 200 and status_resp.json().get("connected"):
-                # Check if WA account already exists for this user
-                existing = await db.execute(
-                    select(MessengerAccount).where(
-                        MessengerAccount.user_id == user.id,
-                        MessengerAccount.type == "wa",
-                        MessengerAccount.status == "active",
-                    )
-                )
-                if not existing.scalar_one_or_none():
-                    account = MessengerAccount(
-                        user_id=user.id,
-                        type="wa",
-                        credentials="whatsapp-web",
-                        status="active",
-                    )
-                    db.add(account)
-                    await db.commit()
+        is_connected = await messenger.check_connection()
+        if is_connected:
+            account.credentials = session_id
+            account.status = "active"
+            await db.commit()
 
-                return HTMLResponse(
-                    '<div class="text-center">'
-                    '<div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">'
-                    '<svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-                    '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>'
-                    '</svg></div>'
-                    '<p class="text-lg font-medium text-gray-900">WhatsApp подключён!</p>'
-                    '<a href="/accounts" class="mt-4 inline-block rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">К аккаунтам</a>'
-                    '</div>'
-                )
+            return HTMLResponse(
+                '<div class="text-center">'
+                '<div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">'
+                '<svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+                '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>'
+                '</svg></div>'
+                '<p class="text-lg font-medium text-gray-900">WhatsApp подключён!</p>'
+                '<a href="/accounts" class="mt-4 inline-block rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">К аккаунтам</a>'
+                '</div>'
+            )
 
-            # Not connected yet — return fresh QR
-            qr_resp = await client.get(f"{settings.wa_bridge_url}/api/qr")
-            if qr_resp.status_code == 200:
-                data = qr_resp.json()
-                qr = data.get("qr")
-                if qr:
-                    return HTMLResponse(
-                        f'<div class="text-center">'
-                        f'<div class="inline-block p-4 bg-white border rounded-lg">'
-                        f'<img src="{qr}" alt="WhatsApp QR-код" class="mx-auto" style="max-width: 256px;">'
-                        f'</div>'
-                        f'<p class="mt-2 text-sm text-yellow-600">Ожидание сканирования...</p>'
-                        f'</div>'
-                    )
+        # Not connected — get fresh QR
+        qr_data = await messenger.get_qr()
+        qr = qr_data.get("qr")
+        if qr:
+            return HTMLResponse(
+                f'<div class="text-center">'
+                f'<div class="inline-block p-4 bg-white border rounded-lg">'
+                f'<img src="{qr}" alt="WhatsApp QR-код" class="mx-auto" style="max-width: 256px;">'
+                f'</div>'
+                f'<p class="mt-2 text-sm text-yellow-600">Ожидание сканирования...</p>'
+                f'</div>'
+            )
 
-            return HTMLResponse('<span class="text-sm text-yellow-600">Ожидание QR-кода...</span>')
+        return HTMLResponse('<span class="text-sm text-yellow-600">Ожидание QR-кода...</span>')
 
-    except httpx.ConnectError:
-        return HTMLResponse('<span class="text-sm text-red-600">WA Bridge недоступен</span>')
     except Exception:
         return HTMLResponse('<span class="text-sm text-red-600">Ошибка соединения с WA Bridge</span>')
 
@@ -823,7 +851,7 @@ async def accounts_sync_groups(
     elif account.type == "wa":
         from app.messengers.whatsapp import WhatsAppMessenger
 
-        messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url)
+        messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=str(account.id))
         fetched_groups = await messenger.get_groups()
         messenger_type = "wa"
 
