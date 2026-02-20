@@ -2,6 +2,7 @@ const express = require('express');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(express.json());
@@ -13,12 +14,43 @@ const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || '300000'); // 5 
 const sessions = new Map();
 
 /**
+ * Remove stale Chromium lock files from session directory.
+ * These get left behind when the container restarts and prevent
+ * new browser instances from launching.
+ */
+function cleanStaleLocks(sessionId) {
+    const sessionDir = path.join('.wwebjs_auth', `session-${sessionId}`);
+    if (!fs.existsSync(sessionDir)) return;
+
+    const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+    const walkAndClean = (dir) => {
+        try {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    walkAndClean(fullPath);
+                } else if (lockFiles.includes(entry.name)) {
+                    fs.unlinkSync(fullPath);
+                    console.log(`[${sessionId}] Removed stale lock: ${fullPath}`);
+                }
+            }
+        } catch (err) {
+            // Ignore errors during cleanup
+        }
+    };
+    walkAndClean(sessionDir);
+}
+
+/**
  * Create a whatsapp-web.js Client for the given sessionId,
  * wire up event handlers, and call client.initialize().
  * Returns a Promise that resolves when the client is ready
  * or rejects on auth failure / timeout.
  */
 function createClient(sessionId) {
+    // Clean up stale Chromium lock files before launching
+    cleanStaleLocks(sessionId);
     const client = new Client({
         authStrategy: new LocalAuth({
             clientId: sessionId,
