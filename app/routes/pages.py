@@ -767,7 +767,7 @@ async def accounts_connect_wa_status(
                     return HTMLResponse(
                         f'<div class="text-center">'
                         f'<div class="inline-block p-4 bg-white border rounded-lg">'
-                        f'<img src="data:image/png;base64,{qr}" alt="WhatsApp QR-код" class="mx-auto" style="max-width: 256px;">'
+                        f'<img src="{qr}" alt="WhatsApp QR-код" class="mx-auto" style="max-width: 256px;">'
                         f'</div>'
                         f'<p class="mt-2 text-sm text-yellow-600">Ожидание сканирования...</p>'
                         f'</div>'

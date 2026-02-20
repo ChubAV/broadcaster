@@ -23,7 +23,7 @@
             <p class="text-sm text-gray-600 mb-4">Отсканируйте QR-код с помощью WhatsApp на вашем телефоне:</p>
             <div id="wa-status" hx-get="/accounts/connect/wa/status" hx-trigger="every 3s" hx-swap="innerHTML">
                 <div class="inline-block p-4 bg-white border rounded-lg">
-                    <img src="data:image/png;base64,{{ qr_code }}" alt="WhatsApp QR-код" class="mx-auto" style="max-width: 256px;">
+                    <img src="{{ qr_code }}" alt="WhatsApp QR-код" class="mx-auto" style="max-width: 256px;">
                 </div>
                 <p class="mt-2 text-sm text-yellow-600">Ожидание сканирования...</p>
             </div>
