@@ -14,6 +14,7 @@ from app.messengers.telegram_user import TelegramUserMessenger
 from app.messengers.whatsapp import WhatsAppMessenger
 from app.services.schedule_service import compute_next_run_at
 from app.services.billing_service import check_limit
+from celery import shared_task
 
 
 def get_messenger(account: MessengerAccount):
@@ -153,3 +154,19 @@ async def send_ad_to_group_async(
     )
     session.add(log)
     await session.commit()
+
+
+@shared_task(name="app.worker.tasks.check_schedules")
+def check_schedules():
+    """Celery task: check all due schedules and dispatch sends."""
+    from app.config import Settings
+    settings = Settings()
+    engine = get_engine(settings.database_url)
+    session_factory = get_session_factory(engine)
+
+    async def _run():
+        async with session_factory() as session:
+            await check_schedules_async(session)
+        await engine.dispose()
+
+    asyncio.run(_run())
