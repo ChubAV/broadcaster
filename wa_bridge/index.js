@@ -7,13 +7,16 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
+const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || '300000'); // 5 min default
 
-// Multi-session map: sessionId -> { client, qrCode, isConnected, initializing }
+// Multi-session map: sessionId -> { client, qrCode, isConnected, initializing, lastActivity }
 const sessions = new Map();
 
 /**
  * Create a whatsapp-web.js Client for the given sessionId,
  * wire up event handlers, and call client.initialize().
+ * Returns a Promise that resolves when the client is ready
+ * or rejects on auth failure / timeout.
  */
 function createClient(sessionId) {
     const client = new Client({
@@ -36,7 +39,26 @@ function createClient(sessionId) {
         qrCode: null,
         isConnected: false,
         initializing: true,
+        lastActivity: Date.now(),
+        readyPromise: null,
     };
+
+    // Create a promise that resolves when client is ready
+    state.readyPromise = new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            reject(new Error('Session initialization timeout (90s)'));
+        }, 90000);
+
+        client.on('ready', () => {
+            clearTimeout(timeout);
+            resolve();
+        });
+
+        client.on('auth_failure', (msg) => {
+            clearTimeout(timeout);
+            reject(new Error(`Auth failure: ${msg}`));
+        });
+    });
 
     client.on('qr', async (qr) => {
         state.qrCode = await qrcode.toDataURL(qr);
@@ -47,13 +69,14 @@ function createClient(sessionId) {
         state.isConnected = true;
         state.initializing = false;
         state.qrCode = null;
-        console.log(`[${sessionId}] WhatsApp client is ready`);
+        state.lastActivity = Date.now();
+        console.log(`[${sessionId}] Client ready`);
     });
 
     client.on('disconnected', (reason) => {
         state.isConnected = false;
         state.initializing = false;
-        console.log(`[${sessionId}] WhatsApp client disconnected: ${reason}`);
+        console.log(`[${sessionId}] Disconnected: ${reason}`);
     });
 
     client.on('auth_failure', (msg) => {
@@ -72,9 +95,81 @@ function createClient(sessionId) {
     return state;
 }
 
+/**
+ * Ensure a session is loaded and ready. If not loaded, start it
+ * from volume and wait for ready. Returns the state or null.
+ */
+async function ensureSession(sessionId) {
+    let state = sessions.get(sessionId);
+
+    // Already connected — just update activity
+    if (state && state.isConnected) {
+        state.lastActivity = Date.now();
+        return state;
+    }
+
+    // Currently initializing — wait for it
+    if (state && state.initializing) {
+        try {
+            await state.readyPromise;
+            state.lastActivity = Date.now();
+            return state;
+        } catch {
+            return null;
+        }
+    }
+
+    // Not loaded — check if session data exists in volume
+    const sessionDir = `./.wwebjs_auth/session-${sessionId}`;
+    if (!fs.existsSync(sessionDir)) {
+        return null; // No stored session, can't auto-start
+    }
+
+    // Load session from volume
+    console.log(`[${sessionId}] Loading session on demand...`);
+    state = createClient(sessionId);
+
+    try {
+        await state.readyPromise;
+        state.lastActivity = Date.now();
+        return state;
+    } catch (err) {
+        console.error(`[${sessionId}] Failed to load: ${err.message}`);
+        return null;
+    }
+}
+
+/**
+ * Destroy a session and free resources.
+ */
+async function destroySession(sessionId) {
+    const state = sessions.get(sessionId);
+    if (!state) return;
+
+    try {
+        await state.client.destroy();
+    } catch (err) {
+        console.error(`[${sessionId}] Error destroying: ${err.message}`);
+    }
+    sessions.delete(sessionId);
+    console.log(`[${sessionId}] Session unloaded`);
+}
+
+// ---- Idle timeout: unload sessions after inactivity ----
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [id, state] of sessions) {
+        if (state.isConnected && (now - state.lastActivity > IDLE_TIMEOUT_MS)) {
+            console.log(`[${id}] Idle for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s, unloading`);
+            destroySession(id);
+        }
+    }
+}, 60000); // Check every minute
+
 // ---- REST API endpoints ----
 
-// POST /api/sessions/:id/start - Create and initialize a session
+// POST /api/sessions/:id/start - Create and initialize a session (for QR flow)
 app.post('/api/sessions/:id/start', (req, res) => {
     const sessionId = req.params.id;
     const existing = sessions.get(sessionId);
@@ -86,8 +181,7 @@ app.post('/api/sessions/:id/start', (req, res) => {
         if (existing.initializing) {
             return res.json({ status: 'initializing' });
         }
-        // Session exists but is neither connected nor initializing (e.g. disconnected).
-        // Destroy old client and create a fresh one.
+        // Stale session — destroy and recreate
         existing.client.destroy().catch(() => {});
         sessions.delete(sessionId);
     }
@@ -99,19 +193,10 @@ app.post('/api/sessions/:id/start', (req, res) => {
 // DELETE /api/sessions/:id - Destroy a session
 app.delete('/api/sessions/:id', async (req, res) => {
     const sessionId = req.params.id;
-    const state = sessions.get(sessionId);
-
-    if (!state) {
-        return res.status(404).json({ error: 'Session not found' });
+    if (!sessions.has(sessionId)) {
+        return res.json({ ok: true });
     }
-
-    try {
-        await state.client.destroy();
-    } catch (err) {
-        console.error(`[${sessionId}] Error destroying client: ${err.message}`);
-    }
-
-    sessions.delete(sessionId);
+    await destroySession(sessionId);
     res.json({ ok: true });
 });
 
@@ -123,7 +208,6 @@ app.get('/api/sessions/:id/status', (req, res) => {
     if (!state) {
         return res.json({ connected: false, exists: false });
     }
-
     res.json({ connected: state.isConnected, exists: true });
 });
 
@@ -144,19 +228,19 @@ app.get('/api/sessions/:id/qr', (req, res) => {
     res.json({ status: 'pending', qr: state.qrCode });
 });
 
-// POST /api/sessions/:id/send - Send message to a group
+// POST /api/sessions/:id/send - Send message (auto-loads session if needed)
 app.post('/api/sessions/:id/send', async (req, res) => {
     const sessionId = req.params.id;
-    const state = sessions.get(sessionId);
-
-    if (!state || !state.isConnected) {
-        return res.status(503).json({ error: 'WhatsApp not connected' });
-    }
 
     const { group_id, text, image_path } = req.body;
-
     if (!group_id || !text) {
         return res.status(400).json({ error: 'group_id and text are required' });
+    }
+
+    // Auto-load session on demand
+    const state = await ensureSession(sessionId);
+    if (!state || !state.isConnected) {
+        return res.status(503).json({ error: 'WhatsApp session not available' });
     }
 
     try {
@@ -176,13 +260,13 @@ app.post('/api/sessions/:id/send', async (req, res) => {
     }
 });
 
-// GET /api/sessions/:id/groups - List groups for a session
+// GET /api/sessions/:id/groups - List groups (auto-loads session if needed)
 app.get('/api/sessions/:id/groups', async (req, res) => {
     const sessionId = req.params.id;
-    const state = sessions.get(sessionId);
 
+    const state = await ensureSession(sessionId);
     if (!state || !state.isConnected) {
-        return res.status(503).json({ error: 'WhatsApp not connected' });
+        return res.status(503).json({ error: 'WhatsApp session not available' });
     }
 
     try {
@@ -200,23 +284,8 @@ app.get('/api/sessions/:id/groups', async (req, res) => {
     }
 });
 
-// Restore sessions from volume on startup
-function restoreSessions() {
-    const authDir = './.wwebjs_auth';
-    if (!fs.existsSync(authDir)) return;
-
-    const dirs = fs.readdirSync(authDir).filter(d => d.startsWith('session-'));
-    for (const dir of dirs) {
-        const sessionId = dir.replace('session-', '');
-        console.log(`Restoring session ${sessionId} from volume...`);
-        createClient(sessionId);
-    }
-    if (dirs.length === 0) {
-        console.log('No sessions to restore');
-    }
-}
+// No auto-restore on startup — sessions are loaded on demand
 
 app.listen(PORT, () => {
-    console.log(`WA Bridge (multi-session) running on port ${PORT}`);
-    restoreSessions();
+    console.log(`WA Bridge (multi-session, idle timeout=${IDLE_TIMEOUT_MS / 1000}s) running on port ${PORT}`);
 });
