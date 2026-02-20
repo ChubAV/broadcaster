@@ -678,37 +678,107 @@ async def accounts_connect_wa_page(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
+
+    import httpx
+
+    qr_code = None
+    connected = False
+    error = None
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            status_resp = await client.get(f"{settings.wa_bridge_url}/api/status")
+            if status_resp.status_code == 200 and status_resp.json().get("connected"):
+                connected = True
+            else:
+                qr_resp = await client.get(f"{settings.wa_bridge_url}/api/qr")
+                if qr_resp.status_code == 200:
+                    data = qr_resp.json()
+                    qr_code = data.get("qr")
+    except httpx.ConnectError:
+        error = "WA Bridge недоступен. Убедитесь, что сервис запущен."
+    except Exception as e:
+        error = f"Ошибка подключения к WA Bridge: {e}"
+
     return templates.TemplateResponse(
         "accounts/connect_wa.html",
         {
             "request": request,
             "user": user,
             "active_page": "accounts",
-            "qr_code": None,
-            "connected": False,
+            "qr_code": qr_code,
+            "connected": connected,
+            "error": error,
         },
     )
 
 
-@router.post("/accounts/connect/wa")
-async def accounts_connect_wa_submit(
+@router.get("/accounts/connect/wa/status", response_class=HTMLResponse)
+async def accounts_connect_wa_status(
     request: Request,
-    credentials: str = Form(...),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
-    account = MessengerAccount(
-        user_id=user.id,
-        type="wa",
-        credentials=credentials,
-        status="active",
-    )
-    db.add(account)
-    await db.commit()
-    return RedirectResponse(url="/accounts", status_code=302)
+        return HTMLResponse('<span class="text-sm text-red-600">Не авторизован</span>')
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            status_resp = await client.get(f"{settings.wa_bridge_url}/api/status")
+            if status_resp.status_code == 200 and status_resp.json().get("connected"):
+                # Check if WA account already exists for this user
+                existing = await db.execute(
+                    select(MessengerAccount).where(
+                        MessengerAccount.user_id == user.id,
+                        MessengerAccount.type == "wa",
+                        MessengerAccount.status == "active",
+                    )
+                )
+                if not existing.scalar_one_or_none():
+                    account = MessengerAccount(
+                        user_id=user.id,
+                        type="wa",
+                        credentials="whatsapp-web",
+                        status="active",
+                    )
+                    db.add(account)
+                    await db.commit()
+
+                return HTMLResponse(
+                    '<div class="text-center">'
+                    '<div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">'
+                    '<svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+                    '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>'
+                    '</svg></div>'
+                    '<p class="text-lg font-medium text-gray-900">WhatsApp подключён!</p>'
+                    '<a href="/accounts" class="mt-4 inline-block rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">К аккаунтам</a>'
+                    '</div>'
+                )
+
+            # Not connected yet — return fresh QR
+            qr_resp = await client.get(f"{settings.wa_bridge_url}/api/qr")
+            if qr_resp.status_code == 200:
+                data = qr_resp.json()
+                qr = data.get("qr")
+                if qr:
+                    return HTMLResponse(
+                        f'<div class="text-center">'
+                        f'<div class="inline-block p-4 bg-white border rounded-lg">'
+                        f'<img src="{qr}" alt="WhatsApp QR-код" class="mx-auto" style="max-width: 256px;">'
+                        f'</div>'
+                        f'<p class="mt-2 text-sm text-yellow-600">Ожидание сканирования...</p>'
+                        f'</div>'
+                    )
+
+            return HTMLResponse('<span class="text-sm text-yellow-600">Ожидание QR-кода...</span>')
+
+    except httpx.ConnectError:
+        return HTMLResponse('<span class="text-sm text-red-600">WA Bridge недоступен</span>')
+    except Exception:
+        return HTMLResponse('<span class="text-sm text-red-600">Ошибка соединения с WA Bridge</span>')
 
 
 @router.post("/accounts/{account_id}/sync-groups")
@@ -729,25 +799,33 @@ async def accounts_sync_groups(
         )
     )
     account = result.scalar_one_or_none()
-    if not account or account.type != "tg_user":
+    if not account or account.type not in ("tg_user", "wa"):
         return RedirectResponse(url="/groups", status_code=302)
 
-    import json
+    if account.type == "tg_user":
+        import json
 
-    api_id = settings.telegram_api_id
-    api_hash = settings.telegram_api_hash
-    if not api_id or not api_hash:
-        meta = json.loads(account.session_data or "{}")
-        api_id = meta.get("api_id", 0)
-        api_hash = meta.get("api_hash", "")
+        api_id = settings.telegram_api_id
+        api_hash = settings.telegram_api_hash
+        if not api_id or not api_hash:
+            meta = json.loads(account.session_data or "{}")
+            api_id = meta.get("api_id", 0)
+            api_hash = meta.get("api_hash", "")
 
-    messenger = TelegramUserMessenger(
-        session_string=account.credentials,
-        api_id=api_id,
-        api_hash=api_hash,
-    )
+        messenger = TelegramUserMessenger(
+            session_string=account.credentials,
+            api_id=api_id,
+            api_hash=api_hash,
+        )
+        fetched_groups = await messenger.get_groups()
+        messenger_type = "tg_user"
 
-    tg_groups = await messenger.get_groups()
+    elif account.type == "wa":
+        from app.messengers.whatsapp import WhatsAppMessenger
+
+        messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url)
+        fetched_groups = await messenger.get_groups()
+        messenger_type = "wa"
 
     # Load existing groups for this account to skip duplicates
     existing = await db.execute(
@@ -758,13 +836,13 @@ async def accounts_sync_groups(
     )
     existing_ids = {row[0] for row in existing}
 
-    for g in tg_groups:
+    for g in fetched_groups:
         if g["id"] not in existing_ids:
             db.add(
                 Group(
                     user_id=user.id,
                     account_id=account_id,
-                    messenger_type="tg_user",
+                    messenger_type=messenger_type,
                     group_external_id=g["id"],
                     name=g["name"],
                 )
@@ -825,6 +903,16 @@ async def groups_list(
     )
     tg_user_accounts = accounts_result.scalars().all()
 
+    # Load WA accounts for sync buttons
+    wa_accounts_result = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.user_id == user.id,
+            MessengerAccount.type == "wa",
+            MessengerAccount.status == "active",
+        )
+    )
+    wa_accounts = wa_accounts_result.scalars().all()
+
     return templates.TemplateResponse(
         "groups/list.html",
         {
@@ -832,6 +920,7 @@ async def groups_list(
             "user": user,
             "groups": groups,
             "tg_user_accounts": tg_user_accounts,
+            "wa_accounts": wa_accounts,
             "active_page": "groups",
         },
     )
