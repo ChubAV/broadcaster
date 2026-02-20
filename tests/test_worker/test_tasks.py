@@ -94,14 +94,11 @@ async def test_get_messenger_tg_user_from_settings():
 
 
 @pytest.mark.asyncio
-async def test_get_messenger_tg_user_fallback_session_data():
-    """get_messenger falls back to session_data when settings have no telegram creds."""
-    import json
-
+async def test_get_messenger_tg_user_always_uses_settings():
+    """get_messenger always uses settings for api_id/api_hash (no legacy fallback)."""
     account = MessengerAccount(
         type="tg_user",
         credentials="session-string",
-        session_data=json.dumps({"api_id": 99999, "api_hash": "legacy_hash"}),
         user_id=1,
         status="active",
     )
@@ -113,8 +110,8 @@ async def test_get_messenger_tg_user_fallback_session_data():
             m = get_messenger(account)
             MockMessenger.assert_called_once_with(
                 session_string="session-string",
-                api_id=99999,
-                api_hash="legacy_hash",
+                api_id=0,
+                api_hash="",
             )
 
     assert m is MockMessenger.return_value
