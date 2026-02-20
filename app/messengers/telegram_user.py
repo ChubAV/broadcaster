@@ -1,203 +1,267 @@
 import asyncio
 import logging
 import time
+import uuid
+from dataclasses import dataclass, field
 
-from pyrogram import Client
-from pyrogram.errors import (
-    FloodWait,
-    PasswordHashInvalid,
-    PhoneCodeExpired,
-    PhoneCodeInvalid,
-    PhoneNumberInvalid,
-    SessionPasswordNeeded,
-)
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+from telethon.tl.types import Channel, Chat
 
 from app.messengers.base import BaseMessenger
 
 logger = logging.getLogger(__name__)
 
-# In-memory store for Pyrogram clients between auth steps.
-# Key: auth_session_id, Value: (Client, created_timestamp)
-_auth_clients: dict[int, tuple[Client, float]] = {}
+# ---------------------------------------------------------------------------
+# QR Auth in-memory state
+# ---------------------------------------------------------------------------
 
-AUTH_CLIENT_TTL = 600  # 10 minutes
+QR_SESSION_TTL = 300  # 5 minutes
 
 
-def _cleanup_expired_clients() -> None:
-    """Remove auth clients older than TTL."""
+@dataclass
+class QRAuthState:
+    client: TelegramClient
+    qr_login: object | None = None
+    status: str = "waiting"  # waiting | needs_2fa | success | error
+    session_string: str | None = None
+    error: str | None = None
+    created_at: float = field(default_factory=time.time)
+    _wait_task: asyncio.Task | None = field(default=None, repr=False)
+
+
+_qr_sessions: dict[str, QRAuthState] = {}
+
+
+def _cleanup_expired_sessions() -> None:
     now = time.time()
-    expired = [k for k, (_, ts) in _auth_clients.items() if now - ts > AUTH_CLIENT_TTL]
+    expired = [k for k, v in _qr_sessions.items() if now - v.created_at > QR_SESSION_TTL]
     for k in expired:
-        _auth_clients.pop(k, None)
+        state = _qr_sessions.pop(k, None)
+        if state and state._wait_task:
+            state._wait_task.cancel()
 
 
-async def start_auth(
-    auth_session_id: int,
-    phone: str,
-    api_id: int,
-    api_hash: str,
-) -> str:
-    """Send auth code to phone. Returns phone_code_hash.
+async def start_qr_auth(api_id: int, api_hash: str) -> tuple[str, str]:
+    """Start QR auth flow. Returns (session_id, login_url for QR)."""
+    _cleanup_expired_sessions()
 
-    Raises PhoneNumberInvalid, FloodWait, or generic Exception.
-    """
-    _cleanup_expired_clients()
-
-    client = Client(
-        name=f"auth_{auth_session_id}",
-        api_id=api_id,
-        api_hash=api_hash,
-        in_memory=True,
-    )
+    session_id = uuid.uuid4().hex[:16]
+    client = TelegramClient(StringSession(), api_id, api_hash)
     await client.connect()
 
     try:
-        logger.info("Sending code to %s (api_id=%s)", phone, api_id)
-        sent_code = await client.send_code(phone)
-        logger.info(
-            "send_code result: type=%s, phone_code_hash=%s",
-            getattr(sent_code, "type", "unknown"),
-            sent_code.phone_code_hash,
-        )
+        qr_login = await client.qr_login()
     except Exception as e:
-        logger.error("send_code failed: %s", e)
         await client.disconnect()
-        raise
+        raise RuntimeError(f"Failed to start QR login: {e}") from e
 
-    _auth_clients[auth_session_id] = (client, time.time())
-    return sent_code.phone_code_hash
+    state = QRAuthState(client=client, qr_login=qr_login)
+    _qr_sessions[session_id] = state
+
+    # Start background task to wait for scan
+    state._wait_task = asyncio.create_task(_wait_for_qr(session_id))
+
+    return session_id, qr_login.url
 
 
-async def resend_code(
-    auth_session_id: int,
-    phone: str,
-    phone_code_hash: str,
-) -> str:
-    """Resend auth code via next method (usually SMS). Returns new phone_code_hash."""
-    entry = _auth_clients.get(auth_session_id)
-    if not entry:
-        raise RuntimeError("Сессия авторизации истекла. Начните заново.")
-
-    client, _ = entry
+async def _wait_for_qr(session_id: str) -> None:
+    """Background task: wait for QR scan result."""
+    state = _qr_sessions.get(session_id)
+    if not state or not state.qr_login:
+        return
 
     try:
-        logger.info("Resending code to %s (session=%s)", phone, auth_session_id)
-        sent_code = await client.resend_code(phone, phone_code_hash)
-        logger.info(
-            "resend_code result: type=%s, phone_code_hash=%s",
-            getattr(sent_code, "type", "unknown"),
-            sent_code.phone_code_hash,
-        )
+        await state.qr_login.wait()
+        # Success — user scanned and authorized
+        state.session_string = state.client.session.save()
+        state.status = "success"
+    except asyncio.CancelledError:
+        pass
     except Exception as e:
-        logger.error("resend_code failed: %s", e)
-        raise
+        err_name = type(e).__name__
+        if "SessionPasswordNeeded" in err_name or "SessionPasswordNeededError" in err_name:
+            state.status = "needs_2fa"
+        else:
+            state.status = "error"
+            state.error = str(e)
+            logger.error("QR auth error for %s: %s", session_id, e)
 
-    return sent_code.phone_code_hash
+
+def get_qr_status(session_id: str) -> dict:
+    """Get current QR auth status."""
+    state = _qr_sessions.get(session_id)
+    if not state:
+        return {"status": "expired"}
+
+    if time.time() - state.created_at > QR_SESSION_TTL:
+        return {"status": "expired"}
+
+    result = {"status": state.status}
+    if state.error:
+        result["error"] = state.error
+    return result
 
 
-async def verify_code(
-    auth_session_id: int,
-    phone: str,
-    phone_code_hash: str,
-    code: str,
-) -> str:
-    """Verify SMS/Telegram code. Returns session_string.
-
-    Raises PhoneCodeInvalid, PhoneCodeExpired, SessionPasswordNeeded, or generic Exception.
-    """
-    entry = _auth_clients.get(auth_session_id)
-    if not entry:
-        raise RuntimeError("Сессия авторизации истекла. Начните заново.")
-
-    client, _ = entry
+async def refresh_qr(session_id: str) -> str | None:
+    """Recreate QR if expired. Returns new login_url or None."""
+    state = _qr_sessions.get(session_id)
+    if not state or not state.qr_login:
+        return None
 
     try:
-        await client.sign_in(phone, phone_code_hash, code)
-    except SessionPasswordNeeded:
-        raise
-    except Exception:
-        raise
+        await state.qr_login.recreate()
+        state.status = "waiting"
+        state.created_at = time.time()
 
-    session_string = await client.export_session_string()
-    await client.disconnect()
-    _auth_clients.pop(auth_session_id, None)
-    return session_string
+        # Restart wait task
+        if state._wait_task:
+            state._wait_task.cancel()
+        state._wait_task = asyncio.create_task(_wait_for_qr(session_id))
+
+        return state.qr_login.url
+    except Exception as e:
+        logger.error("Failed to refresh QR for %s: %s", session_id, e)
+        return None
 
 
-async def verify_password(
-    auth_session_id: int,
-    password: str,
-) -> str:
-    """Verify 2FA password. Returns session_string.
-
-    Raises PasswordHashInvalid or generic Exception.
-    """
-    entry = _auth_clients.get(auth_session_id)
-    if not entry:
+async def submit_2fa(session_id: str, password: str) -> str:
+    """Submit 2FA password. Returns session_string on success."""
+    state = _qr_sessions.get(session_id)
+    if not state:
         raise RuntimeError("Сессия авторизации истекла. Начните заново.")
 
-    client, _ = entry
+    from telethon.errors import PasswordHashInvalidError
 
-    await client.check_password(password)
+    try:
+        await state.client.sign_in(password=password)
+    except PasswordHashInvalidError:
+        raise ValueError("Неверный пароль 2FA.")
 
-    session_string = await client.export_session_string()
-    await client.disconnect()
-    _auth_clients.pop(auth_session_id, None)
+    state.session_string = state.client.session.save()
+    state.status = "success"
+    return state.session_string
+
+
+async def complete_auth(session_id: str) -> str | None:
+    """Get session string and clean up. Returns session_string or None."""
+    state = _qr_sessions.pop(session_id, None)
+    if not state:
+        return None
+
+    if state._wait_task:
+        state._wait_task.cancel()
+
+    session_string = state.session_string
+
+    try:
+        await state.client.disconnect()
+    except Exception:
+        pass
+
     return session_string
 
 
-def cleanup_auth_client(auth_session_id: int) -> None:
-    """Remove client from in-memory store."""
-    entry = _auth_clients.pop(auth_session_id, None)
-    if entry:
-        client, _ = entry
-        # Best-effort disconnect
+def cleanup_qr_session(session_id: str) -> None:
+    """Clean up a QR auth session."""
+    state = _qr_sessions.pop(session_id, None)
+    if state:
+        if state._wait_task:
+            state._wait_task.cancel()
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(client.disconnect())
+                loop.create_task(state.client.disconnect())
             else:
-                loop.run_until_complete(client.disconnect())
+                loop.run_until_complete(state.client.disconnect())
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Messenger adapter
+# ---------------------------------------------------------------------------
 
 
 class TelegramUserMessenger(BaseMessenger):
     def __init__(self, session_string: str, api_id: int, api_hash: str):
-        self.client = Client(
-            name="broadcaster_user",
-            api_id=api_id,
-            api_hash=api_hash,
-            session_string=session_string,
-            in_memory=True,
+        self.client = TelegramClient(
+            StringSession(session_string), api_id, api_hash
         )
 
     async def send_message(self, group_id: str, text: str, images: list[str] | None = None) -> dict:
         try:
-            async with self.client:
-                if images:
-                    await self.client.send_photo(chat_id=int(group_id), photo=images[0], caption=text)
-                else:
-                    await self.client.send_message(chat_id=int(group_id), text=text)
+            await self.client.connect()
+            if images:
+                await self.client.send_file(
+                    int(group_id), images[0], caption=text
+                )
+            else:
+                await self.client.send_message(int(group_id), text)
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+        finally:
+            try:
+                await self.client.disconnect()
+            except Exception:
+                pass
 
     async def get_groups(self) -> list[dict]:
         groups = []
         try:
-            async with self.client:
-                async for dialog in self.client.get_dialogs():
-                    if dialog.chat.type in ("group", "supergroup"):
-                        groups.append({"id": str(dialog.chat.id), "name": dialog.chat.title})
+            await self.client.connect()
+            dialogs = await self.client.get_dialogs()
+            for dialog in dialogs:
+                if dialog.is_group:
+                    groups.append({"id": str(dialog.id), "name": dialog.title})
         except Exception:
             pass
+        finally:
+            try:
+                await self.client.disconnect()
+            except Exception:
+                pass
         return groups
 
     async def check_connection(self) -> bool:
         try:
-            async with self.client:
-                await self.client.get_me()
+            await self.client.connect()
+            await self.client.get_me()
             return True
         except Exception:
             return False
+        finally:
+            try:
+                await self.client.disconnect()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases (used by pages.py until it is migrated)
+# ---------------------------------------------------------------------------
+
+async def start_auth(auth_session_id: int, phone: str, api_id: int, api_hash: str) -> str:
+    """Legacy stub -- will be removed after pages.py migration."""
+    raise NotImplementedError("Legacy phone-code auth removed; use QR auth flow.")
+
+
+async def resend_code(auth_session_id: int, phone: str, phone_code_hash: str) -> str:
+    """Legacy stub."""
+    raise NotImplementedError("Legacy phone-code auth removed; use QR auth flow.")
+
+
+async def verify_code(auth_session_id: int, phone: str, phone_code_hash: str, code: str) -> str:
+    """Legacy stub."""
+    raise NotImplementedError("Legacy phone-code auth removed; use QR auth flow.")
+
+
+async def verify_password(auth_session_id: int, password: str) -> str:
+    """Legacy stub."""
+    raise NotImplementedError("Legacy phone-code auth removed; use QR auth flow.")
+
+
+def cleanup_auth_client(auth_session_id: int) -> None:
+    """Legacy stub."""
+    pass
