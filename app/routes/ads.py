@@ -2,11 +2,10 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user_id, get_db
-from app.models.ad import Ad
+from app.repositories.ad import AdRepository
 from app.services.billing_service import check_limit
 
 router = APIRouter(prefix="/api/ads", tags=["ads"])
@@ -42,17 +41,15 @@ async def create_ad(
 ):
     allowed, reason = await check_limit(db, user_id, "create_ad")
     if not allowed:
-        raise HTTPException(status_code=403, detail=reason)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
 
-    ad = Ad(
+    repo = AdRepository(db)
+    ad = await repo.create(
         user_id=user_id,
         title=data.title,
         text=data.text,
         images=data.images,
     )
-    db.add(ad)
-    await db.commit()
-    await db.refresh(ad)
     return ad
 
 
@@ -61,10 +58,8 @@ async def list_ads(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Ad).where(Ad.user_id == user_id).order_by(Ad.id)
-    )
-    return result.scalars().all()
+    repo = AdRepository(db)
+    return await repo.list_by_user(user_id)
 
 
 @router.get("/{ad_id}", response_model=AdResponse)
@@ -73,10 +68,8 @@ async def get_ad(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Ad).where(Ad.id == ad_id, Ad.user_id == user_id)
-    )
-    ad = result.scalar_one_or_none()
+    repo = AdRepository(db)
+    ad = await repo.get_by_id_and_user(ad_id, user_id)
     if ad is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ad not found")
     return ad
@@ -89,19 +82,12 @@ async def update_ad(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Ad).where(Ad.id == ad_id, Ad.user_id == user_id)
-    )
-    ad = result.scalar_one_or_none()
+    repo = AdRepository(db)
+    ad = await repo.get_by_id_and_user(ad_id, user_id)
     if ad is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ad not found")
 
-    update_data = data.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(ad, field, value)
-
-    await db.commit()
-    await db.refresh(ad)
+    ad = await repo.update(ad, **data.model_dump(exclude_unset=True))
     return ad
 
 
@@ -111,12 +97,9 @@ async def delete_ad(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Ad).where(Ad.id == ad_id, Ad.user_id == user_id)
-    )
-    ad = result.scalar_one_or_none()
+    repo = AdRepository(db)
+    ad = await repo.get_by_id_and_user(ad_id, user_id)
     if ad is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ad not found")
 
-    await db.delete(ad)
-    await db.commit()
+    await repo.delete(ad)
