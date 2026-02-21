@@ -100,3 +100,29 @@ async def test_upload_unauthenticated(upload_client):
         files={"file": ("test.png", png_bytes, "image/png")},
     )
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_upload_image_with_cookie_auth(upload_client, upload_settings):
+    """Upload should work with cookie-based auth (used by web UI)."""
+    await upload_client.post("/api/auth/register", json={
+        "email": "cookie@test.com",
+        "password": "testpass123",
+        "name": "Cookie User",
+    })
+    resp = await upload_client.post("/api/auth/login", json={
+        "email": "cookie@test.com",
+        "password": "testpass123",
+    })
+    token = resp.json()["access_token"]
+    upload_client.cookies.set("access_token", token)
+
+    png_bytes = make_png_bytes()
+    response = await upload_client.post(
+        "/api/uploads/image",
+        files={"file": ("cookie_image.png", png_bytes, "image/png")},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "path" in data
+    assert "cookie_image.png" in data["path"]

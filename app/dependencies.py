@@ -1,5 +1,5 @@
 from typing import AsyncGenerator
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import Settings
@@ -27,12 +27,18 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def get_current_user_id(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     settings: Settings = Depends(get_settings),
 ) -> int:
-    if credentials is None:
+    token = None
+    if credentials is not None:
+        token = credentials.credentials
+    if token is None:
+        token = request.cookies.get("access_token")
+    if token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    payload = decode_access_token(credentials.credentials, settings.secret_key)
+    payload = decode_access_token(token, settings.secret_key)
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     return payload["sub"]
