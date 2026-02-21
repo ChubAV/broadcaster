@@ -8,13 +8,12 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - uploads:/app/uploads      
+      - ./uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # env_file: .env
 
   db:
     image: postgres:16-alpine
@@ -23,10 +22,8 @@ services:
       POSTGRES_DB: broadcaster
       POSTGRES_USER: broadcaster
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-broadcaster}
-    ports:
-      - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U broadcaster"]
       interval: 5s
@@ -36,53 +33,43 @@ services:
   redis:
     image: redis:7-alpine
     container_name: redis-broadcaster
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
+
   celery-worker:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: celery-worker-broadcaster      
+    container_name: celery-worker-broadcaster
     command: uv run celery -A app.worker.celery_app worker --loglevel=info
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # env_file: .env
     volumes:
-      - uploads:/app/uploads
+      - ./uploads:/app/uploads
 
   celery-beat:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: celery-beat-broadcaster  
+    container_name: celery-beat-broadcaster
     command: uv run celery -A app.worker.celery_app beat --loglevel=info
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # env_file: .env
 
   wa-bridge:
     build:
       context: ./wa_bridge
       dockerfile: Dockerfile
     container_name: wa-bridge-broadcaster
-    ports:
-      - "3000:3000"
     volumes:
-      - wa_session:/app/.wwebjs_auth
-      - uploads:/app/uploads
-
-volumes:
-  pgdata:
-  uploads:
-  wa_session:
+      - ./data/wa_session:/app/.wwebjs_auth
+      - ./uploads:/app/uploads
