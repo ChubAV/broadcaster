@@ -298,9 +298,13 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                 const result = await state.client.sendMessage(group_id, media, opts);
                 console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
             } else {
-                // Multiple images: send all images without captions via
-                // Promise.all so WhatsApp groups them as album, then text after
-                const sendPromises = validImages.map((imgPath) => {
+                // Multiple images: send all except last without caption,
+                // last image gets the caption
+                const allButLast = validImages.slice(0, -1);
+                const lastImage = validImages[validImages.length - 1];
+
+                // Send first images without caption
+                const sendPromises = allButLast.map((imgPath) => {
                     const media = MessageMedia.fromFilePath(imgPath);
                     return state.client.sendMessage(group_id, media);
                 });
@@ -308,10 +312,12 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                 results.forEach((result, i) => {
                     console.log(`[${sessionId}] sendMessage[${i}] result: id=${result?.id?._serialized}, ack=${result?.ack}`);
                 });
-                // Send text right after album so it stays close
-                if (caption) {
-                    await state.client.sendMessage(group_id, caption);
-                }
+
+                // Send last image with caption
+                const lastMedia = MessageMedia.fromFilePath(lastImage);
+                const opts = caption ? { caption } : {};
+                const lastResult = await state.client.sendMessage(group_id, lastMedia, opts);
+                console.log(`[${sessionId}] sendMessage[last] result: id=${lastResult?.id?._serialized}, ack=${lastResult?.ack}`);
             }
         } else {
             console.log(`[${sessionId}] Sending text to group_id=${group_id}, text="${caption.substring(0, 50)}"`);
