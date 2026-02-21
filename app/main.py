@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 logging.basicConfig(level=logging.INFO)
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.exceptions import NotFoundError, ForbiddenError, BillingLimitError, MessengerConnectionError
 from app.database import get_engine, get_session_factory
 from app.dependencies import init_db
@@ -25,7 +25,7 @@ from app.pages import router as pages_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    settings = Settings()
+    settings = get_settings()
     engine = get_engine(settings.database_url)
     session_factory = get_session_factory(engine)
     init_db(session_factory)
