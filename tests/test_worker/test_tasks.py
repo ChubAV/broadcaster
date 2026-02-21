@@ -124,8 +124,14 @@ async def test_send_ad_success(db_session):
     mock_messenger = AsyncMock()
     mock_messenger.send_message = AsyncMock(return_value={"ok": True})
 
-    with patch("app.worker.tasks.get_messenger", return_value=mock_messenger):
+    mock_settings = patch("app.config.Settings")
+    with patch("app.worker.tasks.get_messenger", return_value=mock_messenger), mock_settings as ms:
+        ms.return_value.upload_dir = "uploads"
         await send_ad_to_group_async(db_session, schedule.id, ad.id, group.id, account.id)
+
+    # Verify full paths were passed to messenger
+    call_kwargs = mock_messenger.send_message.call_args
+    assert call_kwargs.kwargs["images"] == ["uploads/img.jpg"]
 
     from sqlalchemy import select
     result = await db_session.execute(select(SendLog))
@@ -141,7 +147,9 @@ async def test_send_ad_failure(db_session):
     mock_messenger = AsyncMock()
     mock_messenger.send_message = AsyncMock(return_value={"ok": False, "error": "Rate limited"})
 
-    with patch("app.worker.tasks.get_messenger", return_value=mock_messenger):
+    mock_settings = patch("app.config.Settings")
+    with patch("app.worker.tasks.get_messenger", return_value=mock_messenger), mock_settings as ms:
+        ms.return_value.upload_dir = "uploads"
         await send_ad_to_group_async(db_session, schedule.id, ad.id, group.id, account.id)
 
     from sqlalchemy import select
@@ -170,7 +178,9 @@ async def test_check_schedules_dispatches(db_session):
     mock_messenger = AsyncMock()
     mock_messenger.send_message = AsyncMock(return_value={"ok": True})
 
-    with patch("app.worker.tasks.get_messenger", return_value=mock_messenger):
+    mock_settings = patch("app.config.Settings")
+    with patch("app.worker.tasks.get_messenger", return_value=mock_messenger), mock_settings as ms:
+        ms.return_value.upload_dir = "uploads"
         await check_schedules_async(db_session)
 
     # Should have created a send log
