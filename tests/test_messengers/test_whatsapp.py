@@ -69,7 +69,7 @@ async def test_send_message_with_multiple_images():
         assert last_call[1]["json"]["text"] == "Hello!"
         # 500ms delay between images (not after last)
         assert mock_sleep.call_count == 2
-        mock_sleep.assert_called_with(0.5)
+        mock_sleep.assert_called_with(0.2)
 
 
 @pytest.mark.asyncio

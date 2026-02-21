@@ -28,7 +28,7 @@ class WhatsAppMessenger(BaseMessenger):
                     if response.status_code != 200:
                         return {"ok": False, "error": response.text}
                     if not is_last:
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.2)
             elif images:
                 payload = {
                     "group_id": group_id,
