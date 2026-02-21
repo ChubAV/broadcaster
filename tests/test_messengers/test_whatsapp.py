@@ -47,7 +47,8 @@ async def test_send_message_with_multiple_images():
     mock_response = MagicMock()
     mock_response.status_code = 200
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient, \
+         patch("app.messengers.whatsapp.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
         MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
@@ -55,34 +56,43 @@ async def test_send_message_with_multiple_images():
 
         result = await messenger.send_message("group123", "Hello!", images=["img1.jpg", "img2.jpg", "img3.jpg"])
         assert result["ok"] is True
-        # Two requests: batch without caption + last image with caption
-        assert mock_client.post.call_count == 2
-        first_call = mock_client.post.call_args_list[0]
-        assert first_call[1]["json"]["image_paths"] == ["img1.jpg", "img2.jpg"]
-        assert first_call[1]["json"]["text"] == ""
-        second_call = mock_client.post.call_args_list[1]
-        assert second_call[1]["json"]["image_paths"] == ["img3.jpg"]
-        assert second_call[1]["json"]["text"] == "Hello!"
+        # Each image sent individually
+        assert mock_client.post.call_count == 3
+        # First two without caption
+        for i, img in enumerate(["img1.jpg", "img2.jpg"]):
+            call = mock_client.post.call_args_list[i]
+            assert call[1]["json"]["image_paths"] == [img]
+            assert call[1]["json"]["text"] == ""
+        # Last with caption
+        last_call = mock_client.post.call_args_list[2]
+        assert last_call[1]["json"]["image_paths"] == ["img3.jpg"]
+        assert last_call[1]["json"]["text"] == "Hello!"
+        # 500ms delay between images (not after last)
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_called_with(0.5)
 
 
 @pytest.mark.asyncio
-async def test_send_message_with_multiple_images_first_batch_fails():
+async def test_send_message_with_multiple_images_mid_failure():
     messenger = WhatsAppMessenger("http://wa-bridge:3000", session_id="42")
+    mock_ok = MagicMock()
+    mock_ok.status_code = 200
     mock_fail = MagicMock()
     mock_fail.status_code = 500
     mock_fail.text = "Bridge error"
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient, \
+         patch("app.messengers.whatsapp.asyncio.sleep", new_callable=AsyncMock):
         mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_fail)
+        mock_client.post = AsyncMock(side_effect=[mock_ok, mock_fail])
         MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await messenger.send_message("group123", "Hello!", images=["img1.jpg", "img2.jpg"])
+        result = await messenger.send_message("group123", "Hello!", images=["img1.jpg", "img2.jpg", "img3.jpg"])
         assert result["ok"] is False
         assert "Bridge error" in result["error"]
-        # Only one request — second not sent after failure
-        assert mock_client.post.call_count == 1
+        # Stopped after second image failed
+        assert mock_client.post.call_count == 2
 
 
 @pytest.mark.asyncio

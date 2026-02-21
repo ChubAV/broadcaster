@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 
 from app.messengers.base import BaseMessenger
@@ -14,24 +16,19 @@ class WhatsAppMessenger(BaseMessenger):
     async def send_message(self, group_id: str, text: str, images: list[str] | None = None) -> dict:
         async with httpx.AsyncClient() as client:
             if images and len(images) > 1:
-                # Send all images except the last one without caption
-                payload = {
-                    "group_id": group_id,
-                    "text": "",
-                    "image_paths": images[:-1],
-                }
-                response = await client.post(self._url("send"), json=payload)
-                if response.status_code != 200:
-                    return {"ok": False, "error": response.text}
-                # Send the last image with caption
-                payload = {
-                    "group_id": group_id,
-                    "text": text,
-                    "image_paths": [images[-1]],
-                }
-                response = await client.post(self._url("send"), json=payload)
-                if response.status_code != 200:
-                    return {"ok": False, "error": response.text}
+                # Send each image individually so WhatsApp groups them into an album
+                for i, image in enumerate(images):
+                    is_last = i == len(images) - 1
+                    payload = {
+                        "group_id": group_id,
+                        "text": text if is_last else "",
+                        "image_paths": [image],
+                    }
+                    response = await client.post(self._url("send"), json=payload)
+                    if response.status_code != 200:
+                        return {"ok": False, "error": response.text}
+                    if not is_last:
+                        await asyncio.sleep(0.5)
             elif images:
                 payload = {
                     "group_id": group_id,
