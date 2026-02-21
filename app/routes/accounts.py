@@ -2,11 +2,10 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user_id, get_db
-from app.models.messenger_account import MessengerAccount
+from app.repositories.account import AccountRepository
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
@@ -34,14 +33,12 @@ async def create_account(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    account = MessengerAccount(
+    repo = AccountRepository(db)
+    account = await repo.create(
         user_id=user_id,
         type=data.type,
         credentials=data.credentials,
     )
-    db.add(account)
-    await db.commit()
-    await db.refresh(account)
     return account
 
 
@@ -50,12 +47,8 @@ async def list_accounts(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(MessengerAccount)
-        .where(MessengerAccount.user_id == user_id)
-        .order_by(MessengerAccount.id)
-    )
-    return result.scalars().all()
+    repo = AccountRepository(db)
+    return await repo.list_by_user(user_id)
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -64,16 +57,12 @@ async def delete_account(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(MessengerAccount)
-        .where(MessengerAccount.id == account_id, MessengerAccount.user_id == user_id)
-    )
-    account = result.scalar_one_or_none()
+    repo = AccountRepository(db)
+    account = await repo.get_by_id_and_user(account_id, user_id)
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    await db.delete(account)
-    await db.commit()
+    await repo.delete(account)
 
 
 @router.get("/{account_id}/status", response_model=AccountStatusResponse)
@@ -82,11 +71,8 @@ async def get_account_status(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(MessengerAccount)
-        .where(MessengerAccount.id == account_id, MessengerAccount.user_id == user_id)
-    )
-    account = result.scalar_one_or_none()
+    repo = AccountRepository(db)
+    account = await repo.get_by_id_and_user(account_id, user_id)
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return account

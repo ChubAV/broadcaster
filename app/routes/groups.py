@@ -2,11 +2,10 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user_id, get_db
-from app.models.group import Group
+from app.repositories.group import GroupRepository
 from app.services.billing_service import check_limit
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
@@ -37,18 +36,16 @@ async def create_group(
 ):
     allowed, reason = await check_limit(db, user_id, "create_group")
     if not allowed:
-        raise HTTPException(status_code=403, detail=reason)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
 
-    group = Group(
+    repo = GroupRepository(db)
+    group = await repo.create(
         user_id=user_id,
         account_id=data.account_id,
         messenger_type=data.messenger_type,
         group_external_id=data.group_external_id,
         name=data.name,
     )
-    db.add(group)
-    await db.commit()
-    await db.refresh(group)
     return group
 
 
@@ -58,12 +55,8 @@ async def list_groups(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Group).where(Group.user_id == user_id)
-    if account_id is not None:
-        query = query.where(Group.account_id == account_id)
-    query = query.order_by(Group.id)
-    result = await db.execute(query)
-    return result.scalars().all()
+    repo = GroupRepository(db)
+    return await repo.list_by_user_filtered(user_id, account_id)
 
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -72,15 +65,12 @@ async def delete_group(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Group).where(Group.id == group_id, Group.user_id == user_id)
-    )
-    group = result.scalar_one_or_none()
+    repo = GroupRepository(db)
+    group = await repo.get_by_id_and_user(group_id, user_id)
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
 
-    await db.delete(group)
-    await db.commit()
+    await repo.delete(group)
 
 
 @router.patch("/{group_id}/toggle", response_model=GroupResponse)
@@ -89,14 +79,10 @@ async def toggle_group(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Group).where(Group.id == group_id, Group.user_id == user_id)
-    )
-    group = result.scalar_one_or_none()
+    repo = GroupRepository(db)
+    group = await repo.get_by_id_and_user(group_id, user_id)
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
 
-    group.is_active = not group.is_active
-    await db.commit()
-    await db.refresh(group)
+    group = await repo.update(group, is_active=not group.is_active)
     return group

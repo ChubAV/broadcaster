@@ -77,7 +77,7 @@ async def test_connect_tg_user_page_shows_qr_button(auth_setup):
 async def test_start_qr_returns_session_and_image(auth_setup):
     client, _ = auth_setup
 
-    with patch("app.routes.pages.start_qr_auth", new_callable=AsyncMock) as mock_start:
+    with patch("app.pages.accounts.start_qr_auth", new_callable=AsyncMock) as mock_start:
         mock_start.return_value = ("test_session_id", "tg://login?token=abc123")
 
         resp = await client.post("/accounts/connect/tg_user/start-qr")
@@ -138,7 +138,7 @@ async def test_start_qr_no_api_config_returns_error(auth_setup):
 async def test_start_qr_error_returns_error(auth_setup):
     client, _ = auth_setup
 
-    with patch("app.routes.pages.start_qr_auth", new_callable=AsyncMock) as mock_start:
+    with patch("app.pages.accounts.start_qr_auth", new_callable=AsyncMock) as mock_start:
         mock_start.side_effect = Exception("Connection failed")
 
         resp = await client.post("/accounts/connect/tg_user/start-qr")
@@ -152,7 +152,7 @@ async def test_start_qr_error_returns_error(auth_setup):
 async def test_qr_status_returns_status(auth_setup):
     client, _ = auth_setup
 
-    with patch("app.routes.pages.get_qr_status") as mock_status:
+    with patch("app.pages.accounts.get_qr_status") as mock_status:
         mock_status.return_value = {"status": "waiting"}
 
         resp = await client.get("/accounts/connect/tg_user/qr-status?session_id=test123")
@@ -165,7 +165,7 @@ async def test_qr_status_returns_status(auth_setup):
 async def test_qr_status_success(auth_setup):
     client, _ = auth_setup
 
-    with patch("app.routes.pages.get_qr_status") as mock_status:
+    with patch("app.pages.accounts.get_qr_status") as mock_status:
         mock_status.return_value = {"status": "success"}
 
         resp = await client.get("/accounts/connect/tg_user/qr-status?session_id=test123")
@@ -178,7 +178,7 @@ async def test_qr_status_success(auth_setup):
 async def test_complete_auth_creates_account(auth_setup):
     client, session_factory = auth_setup
 
-    with patch("app.routes.pages.complete_auth", new_callable=AsyncMock) as mock_complete:
+    with patch("app.pages.accounts.complete_auth", new_callable=AsyncMock) as mock_complete:
         mock_complete.return_value = "exported_session_string"
 
         resp = await client.post(
@@ -203,7 +203,7 @@ async def test_complete_auth_creates_account(auth_setup):
 async def test_complete_auth_no_session_returns_error(auth_setup):
     client, _ = auth_setup
 
-    with patch("app.routes.pages.complete_auth", new_callable=AsyncMock) as mock_complete:
+    with patch("app.pages.accounts.complete_auth", new_callable=AsyncMock) as mock_complete:
         mock_complete.return_value = None
 
         resp = await client.post(
@@ -220,10 +220,10 @@ async def test_complete_auth_no_session_returns_error(auth_setup):
 async def test_verify_2fa_success_creates_account(auth_setup):
     client, session_factory = auth_setup
 
-    with patch("app.routes.pages.submit_2fa", new_callable=AsyncMock) as mock_2fa:
+    with patch("app.pages.accounts.submit_2fa", new_callable=AsyncMock) as mock_2fa:
         mock_2fa.return_value = "session_string_2fa"
 
-        with patch("app.routes.pages.complete_auth", new_callable=AsyncMock) as mock_complete:
+        with patch("app.pages.accounts.complete_auth", new_callable=AsyncMock) as mock_complete:
             mock_complete.return_value = "session_string_2fa"
 
             resp = await client.post(
@@ -246,7 +246,7 @@ async def test_verify_2fa_success_creates_account(auth_setup):
 async def test_verify_2fa_wrong_password_returns_error(auth_setup):
     client, _ = auth_setup
 
-    with patch("app.routes.pages.submit_2fa", new_callable=AsyncMock) as mock_2fa:
+    with patch("app.pages.accounts.submit_2fa", new_callable=AsyncMock) as mock_2fa:
         mock_2fa.side_effect = ValueError("Неверный пароль 2FA.")
 
         resp = await client.post(
@@ -264,7 +264,7 @@ async def test_verify_2fa_wrong_password_returns_error(auth_setup):
 async def test_refresh_qr_returns_new_image(auth_setup):
     client, _ = auth_setup
 
-    with patch("app.routes.pages.refresh_qr", new_callable=AsyncMock) as mock_refresh:
+    with patch("app.pages.accounts.refresh_qr", new_callable=AsyncMock) as mock_refresh:
         mock_refresh.return_value = "tg://login?token=newtoken"
 
         resp = await client.post(
@@ -282,7 +282,7 @@ async def test_refresh_qr_returns_new_image(auth_setup):
 async def test_refresh_qr_failure_returns_error(auth_setup):
     client, _ = auth_setup
 
-    with patch("app.routes.pages.refresh_qr", new_callable=AsyncMock) as mock_refresh:
+    with patch("app.pages.accounts.refresh_qr", new_callable=AsyncMock) as mock_refresh:
         mock_refresh.return_value = None
 
         resp = await client.post(

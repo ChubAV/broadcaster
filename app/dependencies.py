@@ -2,7 +2,7 @@ from typing import AsyncGenerator
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.services.auth_service import decode_access_token
 
 security = HTTPBearer(auto_error=False)
@@ -13,10 +13,6 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 def init_db(session_factory: async_sessionmaker[AsyncSession]) -> None:
     global _session_factory
     _session_factory = session_factory
-
-
-def get_settings() -> Settings:
-    return Settings()
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
