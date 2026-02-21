@@ -113,8 +113,12 @@ async def test_full_flow(e2e_setup):
     mock_messenger = AsyncMock()
     mock_messenger.send_message = AsyncMock(return_value={"ok": True})
 
+    mock_settings = AsyncMock()
+    mock_settings.upload_dir = "uploads"
+
     async with session_factory() as session:
-        with patch("app.worker.tasks.get_messenger", return_value=mock_messenger):
+        with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
+             patch("app.worker.tasks.get_settings", return_value=mock_settings):
             await check_schedules_async(session)
 
     # 9. Verify send log was created

@@ -11,29 +11,11 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
-from app.messengers.telegram_user import TelegramUserMessenger
-from app.messengers.whatsapp import WhatsAppMessenger
+from app.config import get_settings
+from app.services.messenger_factory import create_messenger
 from app.services.schedule_service import compute_next_run_at
 from app.services.billing_service import check_limit
 from celery import shared_task
-
-
-def get_messenger(account: MessengerAccount):
-    """Factory: create messenger adapter based on account type."""
-    if account.type == "tg_user":
-        from app.config import Settings
-        settings = Settings()
-        return TelegramUserMessenger(
-            session_string=account.credentials,
-            api_id=settings.telegram_api_id,
-            api_hash=settings.telegram_api_hash,
-        )
-    elif account.type == "wa":
-        from app.config import Settings
-        settings = Settings()
-        return WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=str(account.id))
-    else:
-        raise ValueError(f"Unknown account type: {account.type}")
 
 
 async def check_schedules_async(session: AsyncSession):
@@ -131,12 +113,11 @@ async def send_ad_to_group_async(
     # Resolve image paths relative to upload_dir
     images = None
     if ad.images:
-        from app.config import Settings
-        upload_dir = Path(Settings().upload_dir).resolve()
+        upload_dir = Path(get_settings().upload_dir).resolve()
         images = [str(upload_dir / img) for img in ad.images]
 
     # Send via messenger adapter
-    messenger = get_messenger(account)
+    messenger = create_messenger(account, get_settings())
     result = await messenger.send_message(
         group_id=group.group_external_id,
         text=ad.text,
@@ -157,8 +138,7 @@ async def send_ad_to_group_async(
 @shared_task(name="app.worker.tasks.check_schedules")
 def check_schedules():
     """Celery task: check all due schedules and dispatch sends."""
-    from app.config import Settings
-    settings = Settings()
+    settings = get_settings()
     engine = get_engine(settings.database_url)
     session_factory = get_session_factory(engine)
 

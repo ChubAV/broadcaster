@@ -11,7 +11,8 @@ from app.models.messenger_account import MessengerAccount
 from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
-from app.worker.tasks import check_schedules_async, send_ad_to_group_async, get_messenger
+from app.worker.tasks import check_schedules_async, send_ad_to_group_async
+from app.services.messenger_factory import create_messenger
 
 
 @pytest_asyncio.fixture
@@ -63,49 +64,49 @@ async def create_test_data(session, schedule_active=True, account_status="active
 
 
 @pytest.mark.asyncio
-async def test_get_messenger_tg_user_from_settings():
-    """get_messenger uses telegram_api_id/api_hash from settings when available."""
+async def test_create_messenger_tg_user_from_settings():
+    """create_messenger uses telegram_api_id/api_hash from settings."""
     account = MessengerAccount(
         type="tg_user",
         credentials="session-string",
         user_id=1,
         status="active",
     )
-    with patch("app.config.Settings") as MockSettings:
-        MockSettings.return_value.telegram_api_id = 12345
-        MockSettings.return_value.telegram_api_hash = "settings_hash"
+    mock_settings = AsyncMock()
+    mock_settings.telegram_api_id = 12345
+    mock_settings.telegram_api_hash = "settings_hash"
 
-        with patch("app.worker.tasks.TelegramUserMessenger") as MockMessenger:
-            m = get_messenger(account)
-            MockMessenger.assert_called_once_with(
-                session_string="session-string",
-                api_id=12345,
-                api_hash="settings_hash",
-            )
+    with patch("app.services.messenger_factory.TelegramUserMessenger") as MockMessenger:
+        m = create_messenger(account, mock_settings)
+        MockMessenger.assert_called_once_with(
+            session_string="session-string",
+            api_id=12345,
+            api_hash="settings_hash",
+        )
 
     assert m is MockMessenger.return_value
 
 
 @pytest.mark.asyncio
-async def test_get_messenger_tg_user_always_uses_settings():
-    """get_messenger always uses settings for api_id/api_hash (no legacy fallback)."""
+async def test_create_messenger_tg_user_with_defaults():
+    """create_messenger passes settings values even when zero/empty."""
     account = MessengerAccount(
         type="tg_user",
         credentials="session-string",
         user_id=1,
         status="active",
     )
-    with patch("app.config.Settings") as MockSettings:
-        MockSettings.return_value.telegram_api_id = 0
-        MockSettings.return_value.telegram_api_hash = ""
+    mock_settings = AsyncMock()
+    mock_settings.telegram_api_id = 0
+    mock_settings.telegram_api_hash = ""
 
-        with patch("app.worker.tasks.TelegramUserMessenger") as MockMessenger:
-            m = get_messenger(account)
-            MockMessenger.assert_called_once_with(
-                session_string="session-string",
-                api_id=0,
-                api_hash="",
-            )
+    with patch("app.services.messenger_factory.TelegramUserMessenger") as MockMessenger:
+        m = create_messenger(account, mock_settings)
+        MockMessenger.assert_called_once_with(
+            session_string="session-string",
+            api_id=0,
+            api_hash="",
+        )
 
     assert m is MockMessenger.return_value
 
@@ -117,9 +118,11 @@ async def test_send_ad_success(db_session):
     mock_messenger = AsyncMock()
     mock_messenger.send_message = AsyncMock(return_value={"ok": True})
 
-    mock_settings = patch("app.config.Settings")
-    with patch("app.worker.tasks.get_messenger", return_value=mock_messenger), mock_settings as ms:
-        ms.return_value.upload_dir = "uploads"
+    mock_settings = AsyncMock()
+    mock_settings.upload_dir = "uploads"
+
+    with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
+         patch("app.worker.tasks.get_settings", return_value=mock_settings):
         await send_ad_to_group_async(db_session, schedule.id, ad.id, group.id, account.id)
 
     # Verify absolute paths were passed to messenger
@@ -143,9 +146,11 @@ async def test_send_ad_failure(db_session):
     mock_messenger = AsyncMock()
     mock_messenger.send_message = AsyncMock(return_value={"ok": False, "error": "Rate limited"})
 
-    mock_settings = patch("app.config.Settings")
-    with patch("app.worker.tasks.get_messenger", return_value=mock_messenger), mock_settings as ms:
-        ms.return_value.upload_dir = "uploads"
+    mock_settings = AsyncMock()
+    mock_settings.upload_dir = "uploads"
+
+    with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
+         patch("app.worker.tasks.get_settings", return_value=mock_settings):
         await send_ad_to_group_async(db_session, schedule.id, ad.id, group.id, account.id)
 
     from sqlalchemy import select
@@ -174,9 +179,11 @@ async def test_check_schedules_dispatches(db_session):
     mock_messenger = AsyncMock()
     mock_messenger.send_message = AsyncMock(return_value={"ok": True})
 
-    mock_settings = patch("app.config.Settings")
-    with patch("app.worker.tasks.get_messenger", return_value=mock_messenger), mock_settings as ms:
-        ms.return_value.upload_dir = "uploads"
+    mock_settings = AsyncMock()
+    mock_settings.upload_dir = "uploads"
+
+    with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
+         patch("app.worker.tasks.get_settings", return_value=mock_settings):
         await check_schedules_async(db_session)
 
     # Should have created a send log
