@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 import pytest
 
 
@@ -105,3 +107,79 @@ async def test_delete_ad(client, auth_headers):
 async def test_unauthenticated_request(client):
     response = await client.get("/api/ads")
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_create_ad_with_multiple_image_fields(client, auth_headers):
+    """Form sends multiple 'images' fields instead of newline-separated textarea."""
+    # Login via cookie
+    await client.post("/api/auth/register", json={
+        "email": "imgform@test.com", "password": "testpass123", "name": "Img User",
+    })
+    resp = await client.post("/api/auth/login", json={
+        "email": "imgform@test.com", "password": "testpass123",
+    })
+    token = resp.json()["access_token"]
+    client.cookies.set("access_token", token)
+
+    form_body = urlencode([
+        ("title", "Multi Image Ad"),
+        ("text", "Test text"),
+        ("images", "1/img1.jpg"),
+        ("images", "1/img2.jpg"),
+    ])
+    resp = await client.post("/ads/new",
+        content=form_body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+    # Verify the ad was created with images
+    resp = await client.get("/api/ads", headers={"Authorization": f"Bearer {token}"})
+    ads = resp.json()
+    assert len(ads) >= 1
+    ad = [a for a in ads if a["title"] == "Multi Image Ad"][0]
+    assert ad["images"] == ["1/img1.jpg", "1/img2.jpg"]
+
+
+@pytest.mark.asyncio
+async def test_update_ad_with_multiple_image_fields(client, auth_headers):
+    """Form sends multiple 'images' fields on update instead of newline-separated textarea."""
+    # Login via cookie
+    await client.post("/api/auth/register", json={
+        "email": "imgupdate@test.com", "password": "testpass123", "name": "Img Updater",
+    })
+    resp = await client.post("/api/auth/login", json={
+        "email": "imgupdate@test.com", "password": "testpass123",
+    })
+    token = resp.json()["access_token"]
+    client.cookies.set("access_token", token)
+
+    # Create ad via API
+    create_resp = await client.post("/api/ads", json={
+        "title": "Update Me", "text": "Old text", "images": ["old.jpg"],
+    }, headers={"Authorization": f"Bearer {token}"})
+    ad_id = create_resp.json()["id"]
+
+    # Update via form with multiple image fields
+    form_body = urlencode([
+        ("title", "Updated Ad"),
+        ("text", "New text"),
+        ("images", "2/new1.jpg"),
+        ("images", "2/new2.jpg"),
+        ("images", "2/new3.jpg"),
+        ("is_active", "on"),
+    ])
+    resp = await client.post(f"/ads/{ad_id}/edit",
+        content=form_body,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+    # Verify the ad was updated
+    resp = await client.get(f"/api/ads/{ad_id}", headers={"Authorization": f"Bearer {token}"})
+    ad = resp.json()
+    assert ad["title"] == "Updated Ad"
+    assert ad["images"] == ["2/new1.jpg", "2/new2.jpg", "2/new3.jpg"]

@@ -252,7 +252,6 @@ async def ads_create(
     request: Request,
     title: str = Form(...),
     text: str = Form(...),
-    images: str = Form(""),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -260,7 +259,8 @@ async def ads_create(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
-    image_list = [img.strip() for img in images.splitlines() if img.strip()]
+    form_data = await request.form()
+    image_list = [v for v in form_data.getlist("images") if v.strip()]
     ad = Ad(user_id=user.id, title=title, text=text, images=image_list)
     db.add(ad)
     await db.commit()
@@ -295,7 +295,6 @@ async def ads_update(
     ad_id: int,
     title: str = Form(...),
     text: str = Form(...),
-    images: str = Form(""),
     is_active: bool = Form(False),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -310,7 +309,8 @@ async def ads_update(
     if not ad:
         return RedirectResponse(url="/ads", status_code=302)
 
-    image_list = [img.strip() for img in images.splitlines() if img.strip()]
+    form_data = await request.form()
+    image_list = [v for v in form_data.getlist("images") if v.strip()]
     ad.title = title
     ad.text = text
     ad.images = image_list
