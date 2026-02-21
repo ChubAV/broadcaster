@@ -55,11 +55,45 @@ async def test_send_message_with_multiple_images():
 
         result = await messenger.send_message("group123", "Hello!", images=["img1.jpg", "img2.jpg"])
         assert result["ok"] is True
-        # Single request with all images batched
-        assert mock_client.post.call_count == 1
-        call_args = mock_client.post.call_args
-        assert call_args[1]["json"]["image_paths"] == ["img1.jpg", "img2.jpg"]
-        assert call_args[1]["json"]["text"] == "Hello!"
+        # Two requests: first image without caption, last with caption
+        assert mock_client.post.call_count == 2
+
+        first_call = mock_client.post.call_args_list[0]
+        assert first_call[1]["json"]["image_paths"] == ["img1.jpg"]
+        assert first_call[1]["json"]["text"] == ""
+
+        second_call = mock_client.post.call_args_list[1]
+        assert second_call[1]["json"]["image_paths"] == ["img2.jpg"]
+        assert second_call[1]["json"]["text"] == "Hello!"
+
+
+@pytest.mark.asyncio
+async def test_send_message_with_many_images_caption_on_last():
+    """When >2 images, first batch sent without text, last image sent with caption."""
+    messenger = WhatsAppMessenger("http://wa-bridge:3000", session_id="42")
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+
+    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        result = await messenger.send_message(
+            "group123", "Caption!", images=["img1.jpg", "img2.jpg", "img3.jpg"]
+        )
+        assert result["ok"] is True
+        # Two requests: first batch without caption, last image with caption
+        assert mock_client.post.call_count == 2
+
+        first_call = mock_client.post.call_args_list[0]
+        assert first_call[1]["json"]["image_paths"] == ["img1.jpg", "img2.jpg"]
+        assert first_call[1]["json"]["text"] == ""
+
+        second_call = mock_client.post.call_args_list[1]
+        assert second_call[1]["json"]["image_paths"] == ["img3.jpg"]
+        assert second_call[1]["json"]["text"] == "Caption!"
 
 
 @pytest.mark.asyncio
