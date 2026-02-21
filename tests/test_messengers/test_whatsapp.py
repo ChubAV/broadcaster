@@ -38,7 +38,7 @@ async def test_send_message_with_image():
         assert mock_client.post.call_count == 1
         call_args = mock_client.post.call_args
         assert call_args[0][0] == "http://wa-bridge:3000/api/sessions/42/send"
-        assert call_args[1]["json"]["image_path"] == "path/to/img.jpg"
+        assert call_args[1]["json"]["image_paths"] == ["path/to/img.jpg"]
 
 
 @pytest.mark.asyncio
@@ -55,12 +55,11 @@ async def test_send_message_with_multiple_images():
 
         result = await messenger.send_message("group123", "Hello!", images=["img1.jpg", "img2.jpg"])
         assert result["ok"] is True
-        assert mock_client.post.call_count == 2
-        # First call has text, second has empty text
-        first_call = mock_client.post.call_args_list[0]
-        assert first_call[1]["json"]["text"] == "Hello!"
-        second_call = mock_client.post.call_args_list[1]
-        assert second_call[1]["json"]["text"] == ""
+        # Single request with all images batched
+        assert mock_client.post.call_count == 1
+        call_args = mock_client.post.call_args
+        assert call_args[1]["json"]["image_paths"] == ["img1.jpg", "img2.jpg"]
+        assert call_args[1]["json"]["text"] == "Hello!"
 
 
 @pytest.mark.asyncio
