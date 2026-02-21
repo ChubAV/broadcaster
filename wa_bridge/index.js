@@ -291,12 +291,21 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                     const result = await state.client.sendMessage(group_id, caption);
                     console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
                 }
+            } else if (validImages.length === 1) {
+                // Single image: send with caption directly
+                const media = MessageMedia.fromFilePath(validImages[0]);
+                const opts = caption ? { caption } : {};
+                const result = await state.client.sendMessage(group_id, media, opts);
+                console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
             } else {
-                // Send all images rapidly so WhatsApp groups them as album
-                const sendPromises = validImages.map((imgPath, i) => {
+                // Multiple images: send text separately, then all images
+                // without captions via Promise.all so WhatsApp groups them as album
+                if (caption) {
+                    await state.client.sendMessage(group_id, caption);
+                }
+                const sendPromises = validImages.map((imgPath) => {
                     const media = MessageMedia.fromFilePath(imgPath);
-                    const opts = i === 0 && caption ? { caption } : {};
-                    return state.client.sendMessage(group_id, media, opts);
+                    return state.client.sendMessage(group_id, media);
                 });
                 const results = await Promise.all(sendPromises);
                 results.forEach((result, i) => {
