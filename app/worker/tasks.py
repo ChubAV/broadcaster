@@ -135,7 +135,7 @@ async def send_ad_to_group_async(
     images = None
     if ad.images:
         from app.config import Settings
-        upload_dir = Path(Settings().upload_dir)
+        upload_dir = Path(Settings().upload_dir).resolve()
         images = [str(upload_dir / img) for img in ad.images]
 
     # Send via messenger adapter
