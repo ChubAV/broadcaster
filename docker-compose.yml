@@ -48,6 +48,8 @@ services:
       redis:
         condition: service_healthy
     env_file: .env
+    volumes:
+      - uploads:/app/uploads
 
   celery-beat:
     build: .

@@ -11,6 +11,7 @@ services:
     command: uv run celery -A app.worker.celery_app worker --loglevel=debug
     volumes:
       - .:/app
+      - uploads:/app/uploads
 
   celery-beat:
     command: uv run celery -A app.worker.celery_app beat --loglevel=debug
