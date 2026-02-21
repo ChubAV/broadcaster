@@ -13,13 +13,23 @@ class WhatsAppMessenger(BaseMessenger):
 
     async def send_message(self, group_id: str, text: str, images: list[str] | None = None) -> dict:
         async with httpx.AsyncClient() as client:
-            payload = {"group_id": group_id, "text": text}
             if images:
-                payload["image_path"] = images[0]
-            response = await client.post(self._url("send"), json=payload)
-            if response.status_code == 200:
-                return {"ok": True}
-            return {"ok": False, "error": response.text}
+                # Send each image; first one gets the text caption
+                for i, img in enumerate(images):
+                    payload = {
+                        "group_id": group_id,
+                        "text": text if i == 0 else "",
+                        "image_path": img,
+                    }
+                    response = await client.post(self._url("send"), json=payload)
+                    if response.status_code != 200:
+                        return {"ok": False, "error": response.text}
+            else:
+                payload = {"group_id": group_id, "text": text}
+                response = await client.post(self._url("send"), json=payload)
+                if response.status_code != 200:
+                    return {"ok": False, "error": response.text}
+            return {"ok": True}
 
     async def get_groups(self) -> list[dict]:
         async with httpx.AsyncClient() as client:

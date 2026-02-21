@@ -28,6 +28,20 @@ async def test_send_message_with_image():
 
 
 @pytest.mark.asyncio
+async def test_send_message_with_multiple_images():
+    messenger = TelegramBotMessenger("123456789:ABCdefGHIjklMNOpqrSTUvwxYZ")
+    messenger.bot = AsyncMock()
+    messenger.bot.send_media_group = AsyncMock()
+
+    result = await messenger.send_message("-100123", "Hello!", images=["img1.jpg", "img2.jpg", "img3.jpg"])
+
+    assert result["ok"] is True
+    messenger.bot.send_media_group.assert_called_once()
+    media = messenger.bot.send_media_group.call_args.kwargs["media"]
+    assert len(media) == 3
+
+
+@pytest.mark.asyncio
 async def test_send_message_error():
     messenger = TelegramBotMessenger("123456789:ABCdefGHIjklMNOpqrSTUvwxYZ")
     messenger.bot = AsyncMock()

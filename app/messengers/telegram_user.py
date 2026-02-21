@@ -193,8 +193,9 @@ class TelegramUserMessenger(BaseMessenger):
         try:
             await self.client.connect()
             if images:
+                # send_file accepts a list — sends as album
                 await self.client.send_file(
-                    int(group_id), images[0], caption=text
+                    int(group_id), images, caption=text
                 )
             else:
                 await self.client.send_message(int(group_id), text)

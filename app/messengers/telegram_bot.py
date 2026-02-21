@@ -1,5 +1,5 @@
 from aiogram import Bot
-from aiogram.types import FSInputFile
+from aiogram.types import FSInputFile, InputMediaPhoto
 
 from app.messengers.base import BaseMessenger
 
@@ -10,11 +10,18 @@ class TelegramBotMessenger(BaseMessenger):
 
     async def send_message(self, group_id: str, text: str, images: list[str] | None = None) -> dict:
         try:
-            if images:
-                # Send first image with caption, rest as album
-                # Use InputFile for local files or just photo URL
+            if images and len(images) == 1:
                 photo = FSInputFile(images[0])
                 await self.bot.send_photo(chat_id=group_id, photo=photo, caption=text)
+            elif images:
+                media = [
+                    InputMediaPhoto(
+                        media=FSInputFile(img),
+                        caption=text if i == 0 else None,
+                    )
+                    for i, img in enumerate(images)
+                ]
+                await self.bot.send_media_group(chat_id=group_id, media=media)
             else:
                 await self.bot.send_message(chat_id=group_id, text=text)
             return {"ok": True}

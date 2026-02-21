@@ -48,6 +48,16 @@ async def test_send_message_with_image(messenger):
 
 
 @pytest.mark.asyncio
+async def test_send_message_with_multiple_images(messenger):
+    messenger.client.send_file = AsyncMock()
+    imgs = ["img1.jpg", "img2.jpg", "img3.jpg"]
+    result = await messenger.send_message("-100123", "Hello!", images=imgs)
+    assert result["ok"] is True
+    call_args = messenger.client.send_file.call_args
+    assert call_args[0][1] == imgs  # full list passed to send_file
+
+
+@pytest.mark.asyncio
 async def test_send_message_error(messenger):
     messenger.client.send_message = AsyncMock(side_effect=Exception("Flood wait"))
     result = await messenger.send_message("-100123", "Hello!")
