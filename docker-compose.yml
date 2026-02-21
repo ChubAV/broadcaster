@@ -1,24 +1,30 @@
 services:
   web:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     command: uv run uvicorn main:app --host 0.0.0.0 --port 8000
+    container_name: web-broadcaster
     ports:
       - "8000:8000"
+    volumes:
+      - uploads:/app/uploads      
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    env_file: .env
-    volumes:
-      - uploads:/app/uploads
+    # env_file: .env
 
   db:
     image: postgres:16-alpine
+    container_name: db-broadcaster
     environment:
       POSTGRES_DB: broadcaster
       POSTGRES_USER: broadcaster
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-broadcaster}
+    ports:
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -29,36 +35,49 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: redis-broadcaster
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
-
   celery-worker:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celery-worker-broadcaster      
     command: uv run celery -A app.worker.celery_app worker --loglevel=info
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    env_file: .env
+    # env_file: .env
     volumes:
       - uploads:/app/uploads
 
   celery-beat:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celery-beat-broadcaster  
     command: uv run celery -A app.worker.celery_app beat --loglevel=info
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    env_file: .env
+    # env_file: .env
 
   wa-bridge:
-    build: ./wa_bridge
+    build:
+      context: ./wa_bridge
+      dockerfile: Dockerfile
+    container_name: wa-bridge-broadcaster
+    ports:
+      - "3000:3000"
     volumes:
       - wa_session:/app/.wwebjs_auth
       - uploads:/app/uploads
