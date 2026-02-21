@@ -42,8 +42,7 @@
                 <td class="px-6 py-4 text-sm font-medium text-gray-900">{{ group.name }}</td>
                 <td class="px-6 py-4 text-sm text-gray-500">#{{ group.account_id }}</td>
                 <td class="px-6 py-4 text-sm text-gray-500">
-                    {% if group.messenger_type == 'tg_bot' %}Telegram бот
-                    {% elif group.messenger_type == 'tg_user' %}Telegram аккаунт
+                    {% if group.messenger_type == 'tg_user' %}Telegram аккаунт
                     {% elif group.messenger_type == 'wa' %}WhatsApp
                     {% else %}{{ group.messenger_type }}{% endif %}
                 </td>

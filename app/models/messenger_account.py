@@ -13,7 +13,7 @@ class MessengerAccount(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE")
     )
-    type: Mapped[str] = mapped_column(String(20))  # tg_bot, tg_user, wa
+    type: Mapped[str] = mapped_column(String(20))  # tg_user, wa
     credentials: Mapped[str] = mapped_column(Text)
     session_data: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="disconnected")

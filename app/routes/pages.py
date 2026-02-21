@@ -370,42 +370,6 @@ async def accounts_list(
     )
 
 
-@router.get("/accounts/connect/tg_bot", response_class=HTMLResponse)
-async def accounts_connect_tg_bot_page(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    user = await get_user_from_cookie(request, db, settings)
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-    return templates.TemplateResponse(
-        "accounts/connect_tg_bot.html",
-        {"request": request, "user": user, "active_page": "accounts"},
-    )
-
-
-@router.post("/accounts/connect/tg_bot")
-async def accounts_connect_tg_bot_submit(
-    request: Request,
-    credentials: str = Form(...),
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    user = await get_user_from_cookie(request, db, settings)
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-    account = MessengerAccount(
-        user_id=user.id,
-        type="tg_bot",
-        credentials=credentials,
-        status="active",
-    )
-    db.add(account)
-    await db.commit()
-    return RedirectResponse(url="/accounts", status_code=302)
-
-
 @router.get("/accounts/connect/tg_user", response_class=HTMLResponse)
 async def accounts_connect_tg_user_page(
     request: Request,

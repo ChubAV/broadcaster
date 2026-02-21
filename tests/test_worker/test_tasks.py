@@ -34,7 +34,7 @@ async def create_test_data(session, schedule_active=True, account_status="active
     await session.commit()
 
     ad = Ad(user_id=user.id, title="Test Ad", text="Buy this!", images=["img.jpg"])
-    account = MessengerAccount(user_id=user.id, type="tg_bot", credentials="fake-token", status=account_status)
+    account = MessengerAccount(user_id=user.id, type="tg_user", credentials="fake-token", status=account_status)
     session.add_all([ad, account])
     await session.commit()
 
@@ -60,14 +60,6 @@ async def create_test_data(session, schedule_active=True, account_status="active
 
     return user, ad, account, group, schedule
 
-
-@pytest.mark.asyncio
-async def test_get_messenger_tg_bot():
-    account = MessengerAccount(type="tg_bot", credentials="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
-                               user_id=1, status="active")
-    m = get_messenger(account)
-    from app.messengers.telegram_bot import TelegramBotMessenger
-    assert isinstance(m, TelegramBotMessenger)
 
 
 @pytest.mark.asyncio

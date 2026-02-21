@@ -11,7 +11,6 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
-from app.messengers.telegram_bot import TelegramBotMessenger
 from app.messengers.telegram_user import TelegramUserMessenger
 from app.messengers.whatsapp import WhatsAppMessenger
 from app.services.schedule_service import compute_next_run_at
@@ -21,9 +20,7 @@ from celery import shared_task
 
 def get_messenger(account: MessengerAccount):
     """Factory: create messenger adapter based on account type."""
-    if account.type == "tg_bot":
-        return TelegramBotMessenger(token=account.credentials)
-    elif account.type == "tg_user":
+    if account.type == "tg_user":
         from app.config import Settings
         settings = Settings()
         return TelegramUserMessenger(

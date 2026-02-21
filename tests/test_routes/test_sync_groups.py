@@ -269,31 +269,3 @@ async def test_sync_groups_skips_existing(sync_setup):
         assert groups[1].group_external_id == "-100333"
 
 
-@pytest.mark.asyncio
-async def test_sync_groups_wrong_account_type_redirects(sync_setup):
-    client, session_factory = sync_setup
-    await _login(client)
-
-    # Create a tg_bot account (not tg_user)
-    async with session_factory() as session:
-        from app.models.user import User
-
-        user = (await session.execute(select(User))).scalar_one()
-        account = MessengerAccount(
-            user_id=user.id,
-            type="tg_bot",
-            credentials="bot-token",
-            status="active",
-        )
-        session.add(account)
-        await session.commit()
-        account_id = account.id
-
-    resp = await client.post(f"/accounts/{account_id}/sync-groups")
-    # Should redirect to /groups without creating anything
-    assert resp.status_code == 200
-
-    async with session_factory() as session:
-        result = await session.execute(select(Group))
-        groups = result.scalars().all()
-        assert len(groups) == 0

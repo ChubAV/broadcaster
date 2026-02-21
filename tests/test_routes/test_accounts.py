@@ -4,12 +4,12 @@ import pytest
 @pytest.mark.asyncio
 async def test_create_account(client, auth_headers):
     response = await client.post("/api/accounts", json={
-        "type": "tg_bot",
+        "type": "tg_user",
         "credentials": "bot-token-123",
     }, headers=auth_headers)
     assert response.status_code == 201
     data = response.json()
-    assert data["type"] == "tg_bot"
+    assert data["type"] == "tg_user"
     assert data["status"] == "disconnected"
     assert "id" in data
     assert "created_at" in data
@@ -21,7 +21,7 @@ async def test_create_account(client, auth_headers):
 @pytest.mark.asyncio
 async def test_list_accounts(client, auth_headers):
     await client.post("/api/accounts", json={
-        "type": "tg_bot",
+        "type": "tg_user",
         "credentials": "bot-token-1",
     }, headers=auth_headers)
     await client.post("/api/accounts", json={
@@ -33,7 +33,7 @@ async def test_list_accounts(client, auth_headers):
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 2
-    assert data[0]["type"] == "tg_bot"
+    assert data[0]["type"] == "tg_user"
     assert data[1]["type"] == "wa"
     # credentials must NOT be exposed in list
     for account in data:
@@ -60,7 +60,7 @@ async def test_delete_account(client, auth_headers):
 @pytest.mark.asyncio
 async def test_get_account_status(client, auth_headers):
     create_resp = await client.post("/api/accounts", json={
-        "type": "tg_bot",
+        "type": "tg_user",
         "credentials": "bot-token-status",
     }, headers=auth_headers)
     account_id = create_resp.json()["id"]

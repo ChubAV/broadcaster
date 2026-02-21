@@ -10,7 +10,7 @@ async def setup_ad_and_account(client, auth_headers):
     ad_id = ad_resp.json()["id"]
 
     account_resp = await client.post("/api/accounts", json={
-        "type": "tg_bot",
+        "type": "tg_user",
         "credentials": "bot-token-sched",
     }, headers=auth_headers)
     account_id = account_resp.json()["id"]

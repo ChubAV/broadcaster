@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
 
 class CreateAccountRequest(BaseModel):
-    type: str  # tg_bot, tg_user, wa
+    type: str  # tg_user, wa
     credentials: str
 
 

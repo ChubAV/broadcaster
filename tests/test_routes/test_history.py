@@ -15,14 +15,14 @@ async def setup_dependencies(client, auth_headers, db_session):
     ad_id = ad_resp.json()["id"]
 
     account_resp = await client.post("/api/accounts", json={
-        "type": "tg_bot",
+        "type": "tg_user",
         "credentials": "bot-token-hist",
     }, headers=auth_headers)
     account_id = account_resp.json()["id"]
 
     group_resp = await client.post("/api/groups", json={
         "account_id": account_id,
-        "messenger_type": "tg_bot",
+        "messenger_type": "tg_user",
         "group_external_id": "ext-hist-1",
         "name": "History Group",
     }, headers=auth_headers)

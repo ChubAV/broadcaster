@@ -27,7 +27,7 @@
                 <option value="">Выберите аккаунт...</option>
                 {% for account in accounts %}
                 <option value="{{ account.id }}" {% if schedule and schedule.account_id == account.id %}selected{% endif %}>
-                    #{{ account.id }} - {% if account.type == 'tg_bot' %}Telegram бот{% elif account.type == 'tg_user' %}Telegram аккаунт{% elif account.type == 'wa' %}WhatsApp{% else %}{{ account.type }}{% endif %} ({{ account.status }})
+                    #{{ account.id }} - {% if account.type == 'tg_user' %}Telegram аккаунт{% elif account.type == 'wa' %}WhatsApp{% else %}{{ account.type }}{% endif %} ({{ account.status }})
                 </option>
                 {% endfor %}
             </select>

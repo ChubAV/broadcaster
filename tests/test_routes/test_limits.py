@@ -22,7 +22,7 @@ async def test_create_group_over_limit(client, auth_headers):
     """Free plan allows 5 groups. Creating 6th should be rejected."""
     # Create an account first
     resp = await client.post("/api/accounts", headers=auth_headers, json={
-        "type": "tg_bot", "credentials": "bot-token-123"
+        "type": "tg_user", "credentials": "bot-token-123"
     })
     assert resp.status_code == 201
     account_id = resp.json()["id"]

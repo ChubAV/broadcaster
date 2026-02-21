@@ -16,7 +16,7 @@ async def test_create_messenger_account(db_session):
 
     account = MessengerAccount(
         user_id=user.id,
-        type="tg_bot",
+        type="tg_user",
         credentials='{"token": "abc123"}',
         session_data=None,
         status="connected",
@@ -27,7 +27,7 @@ async def test_create_messenger_account(db_session):
 
     assert account.id is not None
     assert account.user_id == user.id
-    assert account.type == "tg_bot"
+    assert account.type == "tg_user"
     assert account.credentials == '{"token": "abc123"}'
     assert account.session_data is None
     assert account.status == "connected"

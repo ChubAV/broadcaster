@@ -20,7 +20,7 @@ async def test_create_schedule(db_session):
 
     account = MessengerAccount(
         user_id=user.id,
-        type="tg_bot",
+        type="tg_user",
         credentials='{"token": "bot_token"}',
     )
     db_session.add(account)
@@ -75,7 +75,7 @@ async def test_schedule_default_values(db_session):
 
     account = MessengerAccount(
         user_id=user.id,
-        type="tg_bot",
+        type="tg_user",
         credentials='{"token": "token"}',
     )
     db_session.add(account)

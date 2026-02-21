@@ -74,7 +74,7 @@ async def test_full_flow(e2e_setup):
 
     # 4. Connect messenger account
     resp = await client.post("/api/accounts", headers=headers, json={
-        "type": "tg_bot", "credentials": "123456:ABC-token"
+        "type": "tg_user", "credentials": "123456:ABC-token"
     })
     assert resp.status_code == 201
     account_id = resp.json()["id"]

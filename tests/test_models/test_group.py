@@ -17,7 +17,7 @@ async def test_create_group(db_session):
 
     account = MessengerAccount(
         user_id=user.id,
-        type="tg_bot",
+        type="tg_user",
         credentials='{"token": "bot_token"}',
     )
     db_session.add(account)
@@ -27,7 +27,7 @@ async def test_create_group(db_session):
     group = Group(
         user_id=user.id,
         account_id=account.id,
-        messenger_type="tg_bot",
+        messenger_type="tg_user",
         group_external_id="-1001234567890",
         name="My Telegram Group",
         is_active=True,
@@ -39,7 +39,7 @@ async def test_create_group(db_session):
     assert group.id is not None
     assert group.user_id == user.id
     assert group.account_id == account.id
-    assert group.messenger_type == "tg_bot"
+    assert group.messenger_type == "tg_user"
     assert group.group_external_id == "-1001234567890"
     assert group.name == "My Telegram Group"
     assert group.is_active is True

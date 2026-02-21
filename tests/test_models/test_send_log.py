@@ -21,7 +21,7 @@ async def test_create_send_log(db_session):
 
     account = MessengerAccount(
         user_id=user.id,
-        type="tg_bot",
+        type="tg_user",
         credentials='{"token": "bot_token"}',
     )
     db_session.add(account)
@@ -40,7 +40,7 @@ async def test_create_send_log(db_session):
     group = Group(
         user_id=user.id,
         account_id=account.id,
-        messenger_type="tg_bot",
+        messenger_type="tg_user",
         group_external_id="-100999",
         name="Log Group",
     )
@@ -93,7 +93,7 @@ async def test_send_log_with_error(db_session):
 
     account = MessengerAccount(
         user_id=user.id,
-        type="tg_bot",
+        type="tg_user",
         credentials='{"token": "bot_token"}',
     )
     db_session.add(account)
@@ -112,7 +112,7 @@ async def test_send_log_with_error(db_session):
     group = Group(
         user_id=user.id,
         account_id=account.id,
-        messenger_type="tg_bot",
+        messenger_type="tg_user",
         group_external_id="-100888",
         name="Error Group",
     )
