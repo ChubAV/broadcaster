@@ -7,8 +7,6 @@ services:
     container_name: web-broadcaster
     ports:
       - "8000:8000"
-    volumes:
-      - ./uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -22,8 +20,6 @@ services:
       POSTGRES_DB: broadcaster
       POSTGRES_USER: broadcaster
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-broadcaster}
-    volumes:
-      - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U broadcaster"]
       interval: 5s
@@ -50,8 +46,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./uploads:/app/uploads
 
   celery-beat:
     build:
@@ -70,6 +64,3 @@ services:
       context: ./wa_bridge
       dockerfile: Dockerfile
     container_name: wa-bridge-broadcaster
-    volumes:
-      - ./data/wa_session:/app/.wwebjs_auth
-      - ./uploads:/app/uploads
