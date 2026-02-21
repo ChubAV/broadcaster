@@ -18,10 +18,18 @@
             <textarea id="text" name="text" rows="6" required class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">{{ ad.text if ad else '' }}</textarea>
         </div>
         <div>
-            <label for="images" class="block text-sm font-medium text-gray-900">Пути к изображениям (по одному на строку)</label>
-            <textarea id="images" name="images" rows="3" class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm" placeholder="напр. 1/image.png">{% if ad and ad.images %}{% for img in ad.images %}{{ img }}{% if not loop.last %}
-{% endif %}{% endfor %}{% endif %}</textarea>
-            <p class="mt-1 text-xs text-gray-500">Введите пути к изображениям из API загрузки, по одному на строку.</p>
+            <label class="block text-sm font-medium text-gray-900 mb-2">Изображения</label>
+            <div id="drop-zone" class="mt-2 border-2 border-dashed border-gray-300 rounded-lg p-8 text-center cursor-pointer transition-colors hover:border-gray-400">
+                <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0 0 22.5 18.75V5.25A2.25 2.25 0 0 0 20.25 3H3.75A2.25 2.25 0 0 0 1.5 5.25v13.5A2.25 2.25 0 0 0 3.75 21Z" />
+                </svg>
+                <p class="mt-2 text-sm text-gray-600">Перетащите изображения сюда</p>
+                <button type="button" id="pick-btn" class="mt-3 rounded-md bg-white px-3 py-1.5 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-gray-300 hover:bg-gray-50">Выбрать файлы</button>
+                <p class="mt-2 text-xs text-gray-500">PNG, JPG, GIF, WebP. Макс. 10 изображений.</p>
+            </div>
+            <input type="file" id="file-input" multiple accept="image/*" class="hidden">
+            <div id="image-list" class="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-4"></div>
+            <div id="upload-errors"></div>
         </div>
         {% if ad %}
         <div class="flex items-center">
@@ -35,4 +43,163 @@
         </div>
     </form>
 </div>
+
+<script>
+(function() {
+    const MAX_IMAGES = 10;
+    const imagePaths = [];
+
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const pickBtn = document.getElementById('pick-btn');
+    const imageList = document.getElementById('image-list');
+    const uploadErrors = document.getElementById('upload-errors');
+
+    // Load existing images when editing
+    {% if ad and ad.images %}
+    {% for img in ad.images %}
+    imagePaths.push("{{ img }}");
+    {% endfor %}
+    {% endif %}
+
+    renderImages();
+
+    // Click handlers
+    pickBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        fileInput.click();
+    });
+
+    dropZone.addEventListener('click', function() {
+        fileInput.click();
+    });
+
+    fileInput.addEventListener('change', function() {
+        handleFiles(fileInput.files);
+        fileInput.value = '';
+    });
+
+    // Drag-and-drop handlers
+    dropZone.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        dropZone.classList.add('border-indigo-500', 'bg-indigo-50');
+    });
+
+    dropZone.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        dropZone.classList.remove('border-indigo-500', 'bg-indigo-50');
+    });
+
+    dropZone.addEventListener('drop', function(e) {
+        e.preventDefault();
+        dropZone.classList.remove('border-indigo-500', 'bg-indigo-50');
+        handleFiles(e.dataTransfer.files);
+    });
+
+    function handleFiles(files) {
+        const fileArray = Array.from(files);
+        const remaining = MAX_IMAGES - imagePaths.length;
+
+        if (fileArray.length > remaining) {
+            showError('Можно загрузить не более ' + MAX_IMAGES + ' изображений. Осталось мест: ' + remaining + '.');
+            return;
+        }
+
+        for (const file of fileArray) {
+            if (!file.type.startsWith('image/')) {
+                showError('Файл "' + file.name + '" не является изображением.');
+                continue;
+            }
+            uploadFile(file);
+        }
+    }
+
+    function uploadFile(file) {
+        // Show spinning placeholder
+        const placeholder = document.createElement('div');
+        placeholder.className = 'relative aspect-square rounded-lg bg-gray-100 flex items-center justify-center';
+        placeholder.innerHTML = '<svg class="animate-spin h-8 w-8 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>';
+        imageList.appendChild(placeholder);
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        fetch('/api/uploads/image', {
+            method: 'POST',
+            body: formData,
+            credentials: 'include'
+        })
+        .then(function(response) {
+            if (!response.ok) {
+                return response.json().then(function(data) {
+                    throw new Error(data.detail || 'Ошибка загрузки');
+                });
+            }
+            return response.json();
+        })
+        .then(function(data) {
+            placeholder.remove();
+            imagePaths.push(data.path);
+            renderImages();
+        })
+        .catch(function(err) {
+            placeholder.remove();
+            showError('Ошибка загрузки "' + file.name + '": ' + err.message);
+        });
+    }
+
+    function renderImages() {
+        imageList.innerHTML = '';
+
+        if (imagePaths.length === 0) {
+            const emptyInput = document.createElement('input');
+            emptyInput.type = 'hidden';
+            emptyInput.name = 'images';
+            emptyInput.value = '';
+            imageList.appendChild(emptyInput);
+            return;
+        }
+
+        imagePaths.forEach(function(path, index) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'group relative aspect-square rounded-lg overflow-hidden bg-gray-100 ring-1 ring-gray-200';
+
+            const img = document.createElement('img');
+            img.src = '/uploads/' + path;
+            img.alt = 'Изображение';
+            img.className = 'h-full w-full object-cover';
+
+            const hiddenInput = document.createElement('input');
+            hiddenInput.type = 'hidden';
+            hiddenInput.name = 'images';
+            hiddenInput.value = path;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'absolute top-1 right-1 hidden group-hover:flex items-center justify-center h-6 w-6 rounded-full bg-red-600 text-white shadow-sm hover:bg-red-700';
+            removeBtn.innerHTML = '<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>';
+            removeBtn.addEventListener('click', function() {
+                imagePaths.splice(index, 1);
+                renderImages();
+            });
+
+            wrapper.appendChild(img);
+            wrapper.appendChild(hiddenInput);
+            wrapper.appendChild(removeBtn);
+            imageList.appendChild(wrapper);
+        });
+    }
+
+    function showError(message) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'mt-2 rounded-md bg-red-50 p-3 text-sm text-red-700';
+        errorDiv.textContent = message;
+        uploadErrors.appendChild(errorDiv);
+
+        setTimeout(function() {
+            errorDiv.remove();
+        }, 5000);
+    }
+})();
+</script>
 {% endblock %}
