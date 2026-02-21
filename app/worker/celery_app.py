@@ -3,8 +3,8 @@ from celery import Celery
 
 def create_celery_app() -> Celery:
     """Create Celery app. Reads config from environment."""
-    from app.config import Settings
-    settings = Settings()
+    from app.config import get_settings
+    settings = get_settings()
 
     app = Celery(
         "broadcaster",
