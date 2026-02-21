@@ -53,13 +53,36 @@ async def test_send_message_with_multiple_images():
         MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
         MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
 
-        result = await messenger.send_message("group123", "Hello!", images=["img1.jpg", "img2.jpg"])
+        result = await messenger.send_message("group123", "Hello!", images=["img1.jpg", "img2.jpg", "img3.jpg"])
         assert result["ok"] is True
-        # Single request with all images batched
+        # Two requests: batch without caption + last image with caption
+        assert mock_client.post.call_count == 2
+        first_call = mock_client.post.call_args_list[0]
+        assert first_call[1]["json"]["image_paths"] == ["img1.jpg", "img2.jpg"]
+        assert first_call[1]["json"]["text"] == ""
+        second_call = mock_client.post.call_args_list[1]
+        assert second_call[1]["json"]["image_paths"] == ["img3.jpg"]
+        assert second_call[1]["json"]["text"] == "Hello!"
+
+
+@pytest.mark.asyncio
+async def test_send_message_with_multiple_images_first_batch_fails():
+    messenger = WhatsAppMessenger("http://wa-bridge:3000", session_id="42")
+    mock_fail = MagicMock()
+    mock_fail.status_code = 500
+    mock_fail.text = "Bridge error"
+
+    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_fail)
+        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        result = await messenger.send_message("group123", "Hello!", images=["img1.jpg", "img2.jpg"])
+        assert result["ok"] is False
+        assert "Bridge error" in result["error"]
+        # Only one request — second not sent after failure
         assert mock_client.post.call_count == 1
-        call_args = mock_client.post.call_args
-        assert call_args[1]["json"]["image_paths"] == ["img1.jpg", "img2.jpg"]
-        assert call_args[1]["json"]["text"] == "Hello!"
 
 
 @pytest.mark.asyncio
