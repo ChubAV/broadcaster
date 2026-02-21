@@ -20,7 +20,7 @@ async def upload_settings(tmp_path):
 
 @pytest_asyncio.fixture
 async def upload_client(db_session, upload_settings):
-    app = create_app()
+    app = create_app(settings=upload_settings)
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_settings] = lambda: upload_settings
     transport = ASGITransport(app=app)
@@ -126,3 +126,20 @@ async def test_upload_image_with_cookie_auth(upload_client, upload_settings):
     data = response.json()
     assert "path" in data
     assert "cookie_image.png" in data["path"]
+
+
+@pytest.mark.asyncio
+async def test_uploaded_image_is_served(upload_client, upload_auth_headers, upload_settings):
+    """Uploaded images should be accessible via /uploads/ URL."""
+    png_bytes = make_png_bytes()
+
+    resp = await upload_client.post(
+        "/api/uploads/image",
+        files={"file": ("serve_test.png", png_bytes, "image/png")},
+        headers=upload_auth_headers,
+    )
+    path = resp.json()["path"]
+
+    resp = await upload_client.get(f"/uploads/{path}")
+    assert resp.status_code == 200
+    assert resp.content == png_bytes

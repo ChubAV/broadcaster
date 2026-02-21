@@ -1,7 +1,9 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,7 +31,7 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
-def create_app() -> FastAPI:
+def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Broadcaster", version="0.1.0", lifespan=lifespan)
     app.include_router(auth_router)
     app.include_router(ads_router)
@@ -40,6 +42,12 @@ def create_app() -> FastAPI:
     app.include_router(history_router)
     app.include_router(billing_router)
     app.include_router(pages_router)
+
+    # Serve uploaded files
+    upload_dir = settings.upload_dir if settings else "uploads"
+    upload_path = Path(upload_dir)
+    upload_path.mkdir(parents=True, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=str(upload_path)), name="uploads")
 
     @app.get("/health")
     async def health_check():
