@@ -2,12 +2,14 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request as FastAPIRequest
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 logging.basicConfig(level=logging.INFO)
 
 from app.config import Settings
+from app.exceptions import NotFoundError, ForbiddenError, BillingLimitError, MessengerConnectionError
 from app.database import get_engine, get_session_factory
 from app.dependencies import init_db
 from app.routes.auth import router as auth_router
@@ -42,6 +44,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(history_router)
     app.include_router(billing_router)
     app.include_router(pages_router)
+
+    @app.exception_handler(NotFoundError)
+    async def not_found_handler(request: FastAPIRequest, exc: NotFoundError):
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(ForbiddenError)
+    async def forbidden_handler(request: FastAPIRequest, exc: ForbiddenError):
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+    @app.exception_handler(BillingLimitError)
+    async def billing_limit_handler(request: FastAPIRequest, exc: BillingLimitError):
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+    @app.exception_handler(MessengerConnectionError)
+    async def messenger_error_handler(request: FastAPIRequest, exc: MessengerConnectionError):
+        return JSONResponse(status_code=502, content={"detail": str(exc)})
 
     # Serve uploaded files
     upload_dir = settings.upload_dir if settings else "uploads"
