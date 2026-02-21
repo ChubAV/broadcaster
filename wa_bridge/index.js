@@ -298,26 +298,18 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                 const result = await state.client.sendMessage(group_id, media, opts);
                 console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
             } else {
-                // Multiple images: send all except last without caption,
-                // last image gets the caption
-                const allButLast = validImages.slice(0, -1);
-                const lastImage = validImages[validImages.length - 1];
-
-                // Send first images without caption
-                const sendPromises = allButLast.map((imgPath) => {
+                // Multiple images: send all at once via Promise.all
+                // Last image gets the caption
+                const sendPromises = validImages.map((imgPath, i) => {
                     const media = MessageMedia.fromFilePath(imgPath);
-                    return state.client.sendMessage(group_id, media);
+                    const isLast = i === validImages.length - 1;
+                    const opts = isLast && caption ? { caption } : {};
+                    return state.client.sendMessage(group_id, media, opts);
                 });
                 const results = await Promise.all(sendPromises);
                 results.forEach((result, i) => {
                     console.log(`[${sessionId}] sendMessage[${i}] result: id=${result?.id?._serialized}, ack=${result?.ack}`);
                 });
-
-                // Send last image with caption
-                const lastMedia = MessageMedia.fromFilePath(lastImage);
-                const opts = caption ? { caption } : {};
-                const lastResult = await state.client.sendMessage(group_id, lastMedia, opts);
-                console.log(`[${sessionId}] sendMessage[last] result: id=${lastResult?.id?._serialized}, ack=${lastResult?.ack}`);
             }
         } else {
             console.log(`[${sessionId}] Sending text to group_id=${group_id}, text="${caption.substring(0, 50)}"`);
