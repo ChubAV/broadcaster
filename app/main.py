@@ -20,7 +20,7 @@ from app.routes.groups import router as groups_router
 from app.routes.schedules import router as schedules_router
 from app.routes.history import router as history_router
 from app.routes.billing import router as billing_router
-from app.routes.pages import router as pages_router
+from app.pages import router as pages_router
 
 
 @asynccontextmanager

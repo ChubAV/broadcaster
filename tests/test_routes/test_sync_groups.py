@@ -86,7 +86,7 @@ async def test_sync_groups_creates_groups(sync_setup):
     ]
 
     with patch(
-        "app.routes.pages.TelegramUserMessenger"
+        "app.pages.accounts.TelegramUserMessenger"
     ) as MockMessenger:
         instance = MockMessenger.return_value
         instance.get_groups = AsyncMock(return_value=mock_groups)
@@ -128,7 +128,7 @@ async def test_sync_groups_uses_settings_api_credentials(sync_setup):
         account_id = account.id
 
     with patch(
-        "app.routes.pages.TelegramUserMessenger"
+        "app.pages.accounts.TelegramUserMessenger"
     ) as MockMessenger:
         instance = MockMessenger.return_value
         instance.get_groups = AsyncMock(return_value=[])
@@ -193,7 +193,7 @@ async def test_sync_groups_always_uses_settings_credentials(sync_setup):
             account_id = account.id
 
         with patch(
-            "app.routes.pages.TelegramUserMessenger"
+            "app.pages.accounts.TelegramUserMessenger"
         ) as MockMessenger:
             instance = MockMessenger.return_value
             instance.get_groups = AsyncMock(return_value=[])
@@ -247,7 +247,7 @@ async def test_sync_groups_skips_existing(sync_setup):
     ]
 
     with patch(
-        "app.routes.pages.TelegramUserMessenger"
+        "app.pages.accounts.TelegramUserMessenger"
     ) as MockMessenger:
         instance = MockMessenger.return_value
         instance.get_groups = AsyncMock(return_value=mock_groups)
