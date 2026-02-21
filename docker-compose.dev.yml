@@ -22,4 +22,5 @@ services:
     volumes:
       - ./wa_bridge:/app
       - wa_session:/app/.wwebjs_auth
+      - uploads:/app/uploads
       - /app/node_modules

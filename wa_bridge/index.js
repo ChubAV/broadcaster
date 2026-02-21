@@ -265,8 +265,8 @@ app.post('/api/sessions/:id/send', async (req, res) => {
     const sessionId = req.params.id;
 
     const { group_id, text, image_path } = req.body;
-    if (!group_id || !text) {
-        return res.status(400).json({ error: 'group_id and text are required' });
+    if (!group_id || (!text && !image_path)) {
+        return res.status(400).json({ error: 'group_id and text or image_path are required' });
     }
 
     // Auto-load session on demand
@@ -276,13 +276,14 @@ app.post('/api/sessions/:id/send', async (req, res) => {
     }
 
     try {
-        console.log(`[${sessionId}] Sending to group_id=${group_id}, text="${text.substring(0, 50)}...", image_path=${image_path || 'none'}`);
+        const caption = text || '';
+        console.log(`[${sessionId}] Sending to group_id=${group_id}, text="${caption.substring(0, 50)}", image_path=${image_path || 'none'}`);
         let result;
         if (image_path && fs.existsSync(image_path)) {
             const media = MessageMedia.fromFilePath(image_path);
-            result = await state.client.sendMessage(group_id, media, { caption: text });
+            result = await state.client.sendMessage(group_id, media, { caption: caption || undefined });
         } else {
-            result = await state.client.sendMessage(group_id, text);
+            result = await state.client.sendMessage(group_id, caption);
         }
         console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
         res.json({ ok: true });

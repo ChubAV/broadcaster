@@ -67,6 +67,7 @@ services:
       - "3000:3000"
     volumes:
       - wa_session:/app/.wwebjs_auth
+      - uploads:/app/uploads
 
 volumes:
   pgdata:
