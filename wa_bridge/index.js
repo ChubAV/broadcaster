@@ -298,11 +298,8 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                 const result = await state.client.sendMessage(group_id, media, opts);
                 console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
             } else {
-                // Multiple images: send text separately, then all images
-                // without captions via Promise.all so WhatsApp groups them as album
-                if (caption) {
-                    await state.client.sendMessage(group_id, caption);
-                }
+                // Multiple images: send all images without captions via
+                // Promise.all so WhatsApp groups them as album, then text after
                 const sendPromises = validImages.map((imgPath) => {
                     const media = MessageMedia.fromFilePath(imgPath);
                     return state.client.sendMessage(group_id, media);
@@ -311,6 +308,10 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                 results.forEach((result, i) => {
                     console.log(`[${sessionId}] sendMessage[${i}] result: id=${result?.id?._serialized}, ack=${result?.ack}`);
                 });
+                // Send text right after album so it stays close
+                if (caption) {
+                    await state.client.sendMessage(group_id, caption);
+                }
             }
         } else {
             console.log(`[${sessionId}] Sending text to group_id=${group_id}, text="${caption.substring(0, 50)}"`);
