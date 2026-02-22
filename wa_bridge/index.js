@@ -124,8 +124,20 @@ async function ensureSession(sessionId) {
         }
     }
 
-    // Not loaded — check if session exists in MongoDB
-    const sessionExists = await store.sessionExists({ session: `RemoteAuth-${sessionId}` });
+    // Clean up stale in-memory state if present
+    if (state) {
+        try { await state.client.destroy(); } catch (_) {}
+        sessions.delete(sessionId);
+    }
+
+    // Check if session exists in MongoDB
+    let sessionExists;
+    try {
+        sessionExists = await store.sessionExists({ session: `RemoteAuth-${sessionId}` });
+    } catch (err) {
+        console.error(`[${sessionId}] MongoDB lookup failed: ${err.message}`);
+        return null;
+    }
     if (!sessionExists) {
         return null;
     }
@@ -332,6 +344,13 @@ app.get('/api/sessions/:id/groups', async (req, res) => {
 async function main() {
     await mongoose.connect(MONGODB_URI);
     console.log('Connected to MongoDB');
+
+    mongoose.connection.on('error', (err) => {
+        console.error('MongoDB connection error:', err.message);
+    });
+    mongoose.connection.on('disconnected', () => {
+        console.warn('MongoDB disconnected');
+    });
 
     store = new MongoStore({ mongoose });
 
