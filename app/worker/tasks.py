@@ -26,12 +26,15 @@ async def dispatch_send_tasks(
     tasks_to_dispatch: list[dict],
 ) -> None:
     """Dispatch individual Celery tasks for each send. Groups WA tasks by session."""
+    from app.worker.wa_consumer import register_wa_queue
+
     for task_info in tasks_to_dispatch:
         account_id = task_info["account_id"]
         args = [task_info["ad_id"], task_info["group_id"], task_info["account_id"], task_info["schedule_id"]]
 
         if task_info["type"] == "wa":
             queue_name = f"whatsapp.session.{account_id}"
+            await register_wa_queue(queue_name)
             send_whatsapp_message.apply_async(args=args, queue=queue_name)
         else:
             send_telegram_message.apply_async(args=args, queue="telegram")
