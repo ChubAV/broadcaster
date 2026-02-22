@@ -14,6 +14,7 @@ const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || '300000');
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/whatsapp_sessions';
 
 const sessions = new Map();
+const loadingPromises = new Map(); // Prevents duplicate session loading
 let store; // MongoStore instance, initialized on startup
 
 /**
@@ -103,30 +104,14 @@ function createClient(sessionId) {
 }
 
 /**
- * Ensure a session is loaded and ready. If not loaded, check MongoDB
- * and start it on demand. Returns the state or null.
+ * Load a session from MongoDB. Called only from ensureSession
+ * under the loadingPromises lock.
  */
-async function ensureSession(sessionId) {
-    let state = sessions.get(sessionId);
-
-    if (state && state.isConnected) {
-        state.lastActivity = Date.now();
-        return state;
-    }
-
-    if (state && state.initializing) {
-        try {
-            await state.readyPromise;
-            state.lastActivity = Date.now();
-            return state;
-        } catch {
-            return null;
-        }
-    }
-
+async function loadSessionFromMongo(sessionId) {
     // Clean up stale in-memory state if present
-    if (state) {
-        try { await state.client.destroy(); } catch (_) {}
+    const stale = sessions.get(sessionId);
+    if (stale) {
+        try { await stale.client.destroy(); } catch (_) {}
         sessions.delete(sessionId);
     }
 
@@ -146,7 +131,7 @@ async function ensureSession(sessionId) {
     }
 
     console.log(`[${sessionId}] Loading session from MongoDB on demand...`);
-    state = createClient(sessionId);
+    const state = createClient(sessionId);
 
     try {
         await state.readyPromise;
@@ -155,6 +140,44 @@ async function ensureSession(sessionId) {
     } catch (err) {
         console.error(`[${sessionId}] Failed to load: ${err.message}`);
         return null;
+    }
+}
+
+/**
+ * Ensure a session is loaded and ready. If not loaded, check MongoDB
+ * and start it on demand. Returns the state or null.
+ * Uses loadingPromises to prevent duplicate Chromium instances for the same session.
+ */
+async function ensureSession(sessionId) {
+    let state = sessions.get(sessionId);
+
+    if (state && state.isConnected) {
+        state.lastActivity = Date.now();
+        return state;
+    }
+
+    if (state && state.initializing) {
+        try {
+            await state.readyPromise;
+            state.lastActivity = Date.now();
+            return state;
+        } catch {
+            return null;
+        }
+    }
+
+    // If another request is already loading this session, wait for it
+    if (loadingPromises.has(sessionId)) {
+        return loadingPromises.get(sessionId);
+    }
+
+    const loadPromise = loadSessionFromMongo(sessionId);
+    loadingPromises.set(sessionId, loadPromise);
+
+    try {
+        return await loadPromise;
+    } finally {
+        loadingPromises.delete(sessionId);
     }
 }
 
