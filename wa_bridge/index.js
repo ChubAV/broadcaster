@@ -131,9 +131,12 @@ async function ensureSession(sessionId) {
     }
 
     // Check if session exists in MongoDB
+    // RemoteAuth stores sessions with dataPath prefix (e.g. /app/.wwebjs_auth/RemoteAuth-{id})
+    // so we search collections by suffix instead of exact name
     let sessionExists;
     try {
-        sessionExists = await store.sessionExists({ session: `RemoteAuth-${sessionId}` });
+        const collections = await mongoose.connection.db.listCollections().toArray();
+        sessionExists = collections.some(c => c.name.endsWith(`RemoteAuth-${sessionId}.files`));
     } catch (err) {
         console.error(`[${sessionId}] MongoDB lookup failed: ${err.message}`);
         return null;
