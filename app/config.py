@@ -18,7 +18,6 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60 * 24  # 24 hours
 
     # File uploads
-    upload_dir: str = "uploads"
     max_image_size_mb: int = 5
     max_images_per_ad: int = 10
 

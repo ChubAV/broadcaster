@@ -114,7 +114,6 @@ async def test_full_flow(e2e_setup):
     mock_messenger.send_message = AsyncMock(return_value={"ok": True})
 
     mock_settings = AsyncMock()
-    mock_settings.upload_dir = "uploads"
 
     async with session_factory() as session:
         with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
