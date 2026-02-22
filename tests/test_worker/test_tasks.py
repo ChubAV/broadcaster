@@ -1,6 +1,5 @@
 import pytest
 import pytest_asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -119,18 +118,17 @@ async def test_send_ad_success(db_session):
     mock_messenger.send_message = AsyncMock(return_value={"ok": True})
 
     mock_settings = AsyncMock()
-    mock_settings.upload_dir = "uploads"
+    mock_settings.s3_public_url = "https://cdn.example.com/bucket"
 
     with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
          patch("app.worker.tasks.get_settings", return_value=mock_settings):
         await send_ad_to_group_async(db_session, schedule.id, ad.id, group.id, account.id)
 
-    # Verify absolute paths were passed to messenger
+    # Verify S3 URLs were passed to messenger
     call_kwargs = mock_messenger.send_message.call_args
     sent_images = call_kwargs.kwargs["images"]
     assert len(sent_images) == 1
-    assert sent_images[0].endswith("/uploads/img.jpg")
-    assert Path(sent_images[0]).is_absolute()
+    assert sent_images[0] == "https://cdn.example.com/bucket/img.jpg"
 
     from sqlalchemy import select
     result = await db_session.execute(select(SendLog))
@@ -147,7 +145,7 @@ async def test_send_ad_failure(db_session):
     mock_messenger.send_message = AsyncMock(return_value={"ok": False, "error": "Rate limited"})
 
     mock_settings = AsyncMock()
-    mock_settings.upload_dir = "uploads"
+    mock_settings.s3_public_url = "https://cdn.example.com/bucket"
 
     with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
          patch("app.worker.tasks.get_settings", return_value=mock_settings):
@@ -180,7 +178,7 @@ async def test_check_schedules_dispatches(db_session):
     mock_messenger.send_message = AsyncMock(return_value={"ok": True})
 
     mock_settings = AsyncMock()
-    mock_settings.upload_dir = "uploads"
+    mock_settings.s3_public_url = "https://cdn.example.com/bucket"
 
     with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
          patch("app.worker.tasks.get_settings", return_value=mock_settings):

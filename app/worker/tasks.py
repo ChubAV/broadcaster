@@ -1,6 +1,5 @@
 import asyncio
 from datetime import datetime, timezone
-from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,11 +109,12 @@ async def send_ad_to_group_async(
         await session.commit()
         return
 
-    # Resolve image paths relative to upload_dir
+    # Build S3 URLs for images
     images = None
     if ad.images:
-        upload_dir = Path(get_settings().upload_dir).resolve()
-        images = [str(upload_dir / img) for img in ad.images]
+        from app.services.s3 import get_image_url
+        s3_public_url = get_settings().s3_public_url
+        images = [get_image_url(img, s3_public_url) for img in ad.images]
 
     # Send via messenger adapter
     messenger = create_messenger(account, get_settings())
