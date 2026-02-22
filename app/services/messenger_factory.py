@@ -1,7 +1,7 @@
 from app.config import Settings
 from app.messengers.base import BaseMessenger
 from app.messengers.telegram_user import TelegramUserMessenger
-from app.messengers.whatsapp import WhatsAppMessenger
+from app.messengers.whatsapp import WhatsAppMessenger, get_bridge_url
 from app.models.messenger_account import MessengerAccount
 
 
@@ -14,8 +14,9 @@ def create_messenger(account: MessengerAccount, settings: Settings) -> BaseMesse
             api_hash=settings.telegram_api_hash,
         )
     elif account.type == "wa":
+        bridge_url = get_bridge_url(account.id, settings.wa_bridge_urls)
         return WhatsAppMessenger(
-            bridge_url=settings.wa_bridge_url,
+            bridge_url=bridge_url,
             session_id=str(account.id),
         )
     else:
