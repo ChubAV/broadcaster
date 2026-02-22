@@ -56,9 +56,11 @@ async def test_send_message_with_image(messenger):
         )
     assert result["ok"] is True
     messenger.client.send_file.assert_called_once()
-    # Verify bytes were passed, not URLs
+    # Verify BytesIO with filename was passed
     sent_files = messenger.client.send_file.call_args[0][1]
-    assert sent_files == [b"fake-image-bytes"]
+    assert len(sent_files) == 1
+    assert sent_files[0].name == "img.jpg"
+    assert sent_files[0].read() == b"fake-image-bytes"
 
 
 @pytest.mark.asyncio
@@ -81,7 +83,12 @@ async def test_send_message_with_multiple_images(messenger):
         result = await messenger.send_message("-100123", "Hello!", images=imgs)
     assert result["ok"] is True
     call_args = messenger.client.send_file.call_args
-    assert len(call_args[0][1]) == 3  # 3 images downloaded as bytes
+    sent_files = call_args[0][1]
+    assert len(sent_files) == 3
+    # Each file should be a BytesIO with correct filename
+    assert sent_files[0].name == "img1.jpg"
+    assert sent_files[1].name == "img2.jpg"
+    assert sent_files[2].name == "img3.jpg"
 
 
 @pytest.mark.asyncio

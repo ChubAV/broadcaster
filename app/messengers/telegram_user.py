@@ -194,15 +194,22 @@ class TelegramUserMessenger(BaseMessenger):
         try:
             await self.client.connect()
             if images:
-                # Download images from URLs and send as bytes
+                # Download images from URLs and send as in-memory files
+                import io
+                from pathlib import PurePosixPath
                 files = []
                 async with httpx.AsyncClient() as http:
                     for url in images:
                         resp = await http.get(url)
                         resp.raise_for_status()
-                        files.append(resp.content)
+                        # Extract filename from URL to preserve extension
+                        filename = PurePosixPath(url.split("?")[0]).name or "image.jpg"
+                        buf = io.BytesIO(resp.content)
+                        buf.name = filename
+                        files.append(buf)
                 await self.client.send_file(
-                    int(group_id), files, caption=text
+                    int(group_id), files, caption=text,
+                    force_document=False,
                 )
             else:
                 await self.client.send_message(int(group_id), text)
