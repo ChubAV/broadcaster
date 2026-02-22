@@ -1,6 +1,6 @@
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from datetime import datetime, timezone, timedelta
@@ -11,7 +11,7 @@ from app.config import Settings
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
-from app.worker.tasks import check_schedules_async
+from app.worker.tasks import check_schedules_async, _send_message
 from sqlalchemy import select
 
 
@@ -40,7 +40,7 @@ async def e2e_setup():
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, session_factory
+        yield client, session_factory, engine
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -49,7 +49,7 @@ async def e2e_setup():
 
 @pytest.mark.asyncio
 async def test_full_flow(e2e_setup):
-    client, session_factory = e2e_setup
+    client, session_factory, engine = e2e_setup
 
     # 1. Register
     resp = await client.post("/api/auth/register", json={
@@ -109,32 +109,54 @@ async def test_full_flow(e2e_setup):
         sched.next_run_at = datetime.now(timezone.utc) - timedelta(minutes=1)
         await session.commit()
 
-    # 8. Run check_schedules with mocked messenger
+    # 8. Run check_schedules — it now dispatches Celery tasks instead of sending directly.
+    #    We capture the dispatched args and then call _send_message directly to simulate
+    #    what the Celery worker would do.
+    dispatched_args = []
+    mock_tg = MagicMock()
+    mock_tg.apply_async = lambda *a, **kw: dispatched_args.append(a[0] if a else kw.get("args"))
+
+    async with session_factory() as session:
+        with patch("app.worker.tasks.send_telegram_message", mock_tg), \
+             patch("app.worker.tasks.send_whatsapp_message", MagicMock()), \
+             patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
+            await check_schedules_async(session)
+
+    # Verify dispatch happened
+    assert len(dispatched_args) == 1
+    send_args = dispatched_args[0]  # [ad_id, group_id, account_id, schedule_id]
+
+    # 9. Simulate the Celery worker executing the dispatched task
     mock_messenger = AsyncMock()
     mock_messenger.send_message = AsyncMock(return_value={"ok": True})
 
     mock_settings = AsyncMock()
+    mock_settings.s3_public_url = ""
+    mock_settings.database_url = "sqlite+aiosqlite:///:memory:"
 
-    async with session_factory() as session:
-        with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
-             patch("app.worker.tasks.get_settings", return_value=mock_settings):
-            await check_schedules_async(session)
+    # Use a mock engine so dispose() is a no-op (real engine disposal kills in-memory SQLite)
+    mock_engine = AsyncMock()
+    with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
+         patch("app.worker.tasks.get_settings", return_value=mock_settings), \
+         patch("app.worker.tasks.get_engine", return_value=mock_engine), \
+         patch("app.worker.tasks.get_session_factory", return_value=session_factory):
+        await _send_message(*send_args)
 
-    # 9. Verify send log was created
+    # 10. Verify send log was created
     async with session_factory() as session:
         result = await session.execute(select(SendLog))
         logs = result.scalars().all()
         assert len(logs) == 1
         assert logs[0].status == "ok"
 
-    # 10. Check history endpoint
+    # 11. Check history endpoint
     resp = await client.get("/api/history", headers=headers)
     assert resp.status_code == 200
     history = resp.json()
     assert len(history) == 1
     assert history[0]["status"] == "ok"
 
-    # 11. Check stats
+    # 12. Check stats
     resp = await client.get("/api/history/stats", headers=headers)
     assert resp.status_code == 200
     stats = resp.json()
