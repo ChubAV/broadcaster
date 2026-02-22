@@ -367,6 +367,18 @@ app.get('/api/sessions/:id/groups', async (req, res) => {
 
 // No auto-restore on startup — sessions are loaded on demand
 
+// GET /health - Health check for Docker
+app.get('/health', (req, res) => {
+    const sessionCount = sessions.size;
+    const loadingCount = loadingPromises.size;
+    res.json({
+        status: 'ok',
+        sessions: sessionCount,
+        loading: loadingCount,
+        uptime: process.uptime(),
+    });
+});
+
 async function main() {
     // Ensure dataPath directory exists for RemoteAuth session extraction
     fs.mkdirSync('.wwebjs_auth', { recursive: true });
