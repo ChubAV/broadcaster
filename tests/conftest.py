@@ -16,6 +16,7 @@ async def test_settings():
         secret_key="test-secret-key",
         telegram_api_id=12345,
         telegram_api_hash="test_api_hash",
+        wa_bridge_urls=["http://localhost:3000"],
     )
 
 

@@ -35,7 +35,7 @@ def test_create_whatsapp_messenger():
     settings = Settings(
         database_url="sqlite:///:memory:",
         secret_key="test",
-        wa_bridge_url="http://localhost:3000",
+        wa_bridge_urls=["http://localhost:3000"],
     )
     messenger = create_messenger(account, settings)
     assert isinstance(messenger, WhatsAppMessenger)
