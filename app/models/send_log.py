@@ -22,5 +22,5 @@ class SendLog(Base):
     status: Mapped[str] = mapped_column(String(20))
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     sent_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), server_default=func.now(), index=True
     )

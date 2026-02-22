@@ -11,7 +11,7 @@ class Group(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE")
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     account_id: Mapped[int] = mapped_column(
         ForeignKey("messenger_accounts.id", ondelete="CASCADE")
