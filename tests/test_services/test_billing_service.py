@@ -6,6 +6,7 @@ from app.models.subscription import Subscription
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
+from app.models.send_log import SendLog
 from app.services.billing_service import get_plan_limits, get_user_plan, get_usage, check_limit, PLANS
 
 
@@ -71,3 +72,51 @@ async def test_check_limit_exceeded(db_session):
     allowed, reason = await check_limit(db_session, user.id, "create_ad")
     assert allowed is False
     assert "limit reached" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_check_send_limit_ignores_failed(db_session):
+    """Failed sends should NOT count toward the daily send limit."""
+    user = User(email="t@t.com", password_hash="h", name="T")
+    db_session.add(user)
+    await db_session.commit()
+
+    ad = Ad(user_id=user.id, title="Ad", text="text", images=[])
+    account = MessengerAccount(user_id=user.id, type="wa", status="active", credentials="{}")
+    db_session.add_all([ad, account])
+    await db_session.commit()
+
+    group = Group(user_id=user.id, account_id=account.id, name="G", group_external_id="ext1", messenger_type="wa")
+    db_session.add(group)
+    await db_session.commit()
+
+    from app.models.schedule import Schedule
+    schedule = Schedule(
+        ad_id=ad.id, account_id=account.id,
+        group_ids=[group.id], days_of_week=[0, 1, 2, 3, 4, 5, 6], times_of_day=["12:00"],
+    )
+    db_session.add(schedule)
+    await db_session.commit()
+
+    # Add 10 failed send logs (should NOT block)
+    for i in range(10):
+        db_session.add(SendLog(
+            schedule_id=schedule.id, ad_id=ad.id, group_id=group.id,
+            status="fail", error_message="Chromium error",
+        ))
+    await db_session.commit()
+
+    allowed, reason = await check_limit(db_session, user.id, "send")
+    assert allowed is True
+
+    # Now add 10 successful send logs (should block on free plan)
+    for i in range(10):
+        db_session.add(SendLog(
+            schedule_id=schedule.id, ad_id=ad.id, group_id=group.id,
+            status="ok",
+        ))
+    await db_session.commit()
+
+    allowed, reason = await check_limit(db_session, user.id, "send")
+    assert allowed is False
+    assert "send limit" in reason.lower()
