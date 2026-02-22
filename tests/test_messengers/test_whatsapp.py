@@ -9,11 +9,10 @@ async def test_send_message_success():
     mock_response = MagicMock()
     mock_response.status_code = 200
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         result = await messenger.send_message("group123", "Hello!")
         assert result["ok"] is True
@@ -27,11 +26,10 @@ async def test_send_message_with_image():
     mock_response = MagicMock()
     mock_response.status_code = 200
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         result = await messenger.send_message("group123", "Hello!", images=["path/to/img.jpg"])
         assert result["ok"] is True
@@ -47,11 +45,10 @@ async def test_send_message_with_multiple_images():
     mock_response = MagicMock()
     mock_response.status_code = 200
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         result = await messenger.send_message("group123", "Hello!", images=["img1.jpg", "img2.jpg"])
         assert result["ok"] is True
@@ -69,11 +66,10 @@ async def test_send_message_failure():
     mock_response.status_code = 500
     mock_response.text = "Internal error"
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         result = await messenger.send_message("group123", "Hello!")
         assert result["ok"] is False
@@ -90,11 +86,10 @@ async def test_get_groups_success():
         {"id": "group2", "name": "Another Group"},
     ]
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         groups = await messenger.get_groups()
         assert len(groups) == 2
@@ -109,11 +104,10 @@ async def test_get_groups_failure():
     mock_response = MagicMock()
     mock_response.status_code = 500
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         groups = await messenger.get_groups()
         assert groups == []
@@ -126,11 +120,10 @@ async def test_check_connection_connected():
     mock_response.status_code = 200
     mock_response.json.return_value = {"connected": True}
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         assert await messenger.check_connection() is True
         call_args = mock_client.get.call_args
@@ -144,11 +137,10 @@ async def test_check_connection_disconnected():
     mock_response.status_code = 200
     mock_response.json.return_value = {"connected": False}
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         assert await messenger.check_connection() is False
 
@@ -157,11 +149,10 @@ async def test_check_connection_disconnected():
 async def test_check_connection_bridge_down():
     messenger = WhatsAppMessenger("http://wa-bridge:3000", session_id="42")
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(side_effect=Exception("Connection refused"))
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         assert await messenger.check_connection() is False
 
@@ -172,11 +163,10 @@ async def test_start_session():
     mock_response = MagicMock()
     mock_response.status_code = 200
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(return_value=mock_response)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         result = await messenger.start_session()
         assert result is True
@@ -190,11 +180,10 @@ async def test_destroy_session():
     mock_response = MagicMock()
     mock_response.status_code = 200
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.delete = AsyncMock(return_value=mock_response)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         result = await messenger.destroy_session()
         assert result is True
@@ -209,11 +198,10 @@ async def test_get_qr():
     mock_response.status_code = 200
     mock_response.json.return_value = {"status": "qr", "qr": "data:image/png;base64,abc123"}
 
-    with patch("app.messengers.whatsapp.httpx.AsyncClient") as MockClient:
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
         mock_client.get = AsyncMock(return_value=mock_response)
-        MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        MockClient.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_get_client.return_value = mock_client
 
         result = await messenger.get_qr()
         assert result["status"] == "qr"
