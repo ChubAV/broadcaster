@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000
+    command: sh -c "uv run alembic upgrade head && uv run uvicorn main:app --host 0.0.0.0 --port 8000"
     container_name: web-broadcaster
     ports:
       - "8000:8000"
@@ -23,8 +23,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-broadcaster}
     ports:
       - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U broadcaster"]
       interval: 5s
@@ -73,8 +71,6 @@ services:
     container_name: mongo-broadcaster
     ports:
       - "27017:27017"
-    volumes:
-      - mongodata:/data/db
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 5s
@@ -93,7 +89,3 @@ services:
         condition: service_healthy
     environment:
       - MONGODB_URI=mongodb://mongo:27017/whatsapp_sessions
-
-volumes:
-  pgdata:
-  mongodata:
