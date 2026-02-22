@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -16,6 +16,11 @@ class Schedule(Base):
     account_id: Mapped[int] = mapped_column(
         ForeignKey("messenger_accounts.id", ondelete="CASCADE")
     )
+
+    # Relationships for eager loading
+    ad = relationship("Ad", lazy="raise")
+    account = relationship("MessengerAccount", lazy="raise")
+
     group_ids: Mapped[list] = mapped_column(JSON, default=list)
     days_of_week: Mapped[list] = mapped_column(JSON, default=list)
     times_of_day: Mapped[list] = mapped_column(JSON, default=list)
