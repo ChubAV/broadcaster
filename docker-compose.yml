@@ -68,6 +68,19 @@ services:
         condition: service_healthy
     env_file: .env
 
+  mongo:
+    image: mongo:7
+    container_name: mongo-broadcaster
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   wa-bridge:
     build:
       context: ./wa_bridge
@@ -75,9 +88,12 @@ services:
     container_name: wa-bridge-broadcaster
     ports:
       - "3000:3000"
-    volumes:
-      - wa_session:/app/.wwebjs_auth
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/whatsapp_sessions
 
 volumes:
   pgdata:
-  wa_session:
+  mongodata:

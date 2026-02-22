@@ -19,5 +19,4 @@ services:
   wa-bridge:
     volumes:
       - ./wa_bridge:/app
-      - wa_session:/app/.wwebjs_auth
       - /app/node_modules

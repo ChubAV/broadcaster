@@ -1,61 +1,33 @@
 const express = require('express');
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { Client, RemoteAuth, MessageMedia } = require('whatsapp-web.js');
+const { MongoStore } = require('wwebjs-mongo');
+const mongoose = require('mongoose');
 const qrcode = require('qrcode');
 const fs = require('fs');
-const path = require('path');
 const axios = require('axios');
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || '300000'); // 5 min default
+const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || '300000');
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/whatsapp_sessions';
 
-// Multi-session map: sessionId -> { client, qrCode, isConnected, initializing, lastActivity }
 const sessions = new Map();
-
-/**
- * Remove stale Chromium lock files from session directory.
- * These get left behind when the container restarts and prevent
- * new browser instances from launching.
- */
-function cleanStaleLocks(sessionId) {
-    const sessionDir = path.join('.wwebjs_auth', `session-${sessionId}`);
-    if (!fs.existsSync(sessionDir)) return;
-
-    const lockFiles = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
-    const walkAndClean = (dir) => {
-        try {
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            for (const entry of entries) {
-                const fullPath = path.join(dir, entry.name);
-                if (entry.isDirectory()) {
-                    walkAndClean(fullPath);
-                } else if (lockFiles.includes(entry.name)) {
-                    fs.unlinkSync(fullPath);
-                    console.log(`[${sessionId}] Removed stale lock: ${fullPath}`);
-                }
-            }
-        } catch (err) {
-            // Ignore errors during cleanup
-        }
-    };
-    walkAndClean(sessionDir);
-}
+const loadingPromises = new Map(); // Prevents duplicate session loading
+let store; // MongoStore instance, initialized on startup
 
 /**
  * Create a whatsapp-web.js Client for the given sessionId,
  * wire up event handlers, and call client.initialize().
- * Returns a Promise that resolves when the client is ready
- * or rejects on auth failure / timeout.
+ * Returns the state object.
  */
 function createClient(sessionId) {
-    // Clean up stale Chromium lock files before launching
-    cleanStaleLocks(sessionId);
     const client = new Client({
-        authStrategy: new LocalAuth({
+        authStrategy: new RemoteAuth({
+            store,
             clientId: sessionId,
-            dataPath: './.wwebjs_auth',
+            backupSyncIntervalMs: 60000, // First backup ~1 min after connection
         }),
         puppeteer: {
             headless: true,
@@ -76,7 +48,6 @@ function createClient(sessionId) {
         readyPromise: null,
     };
 
-    // Create a promise that resolves when client is ready
     state.readyPromise = new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
             reject(new Error('Session initialization timeout (90s)'));
@@ -106,6 +77,10 @@ function createClient(sessionId) {
         console.log(`[${sessionId}] Client ready`);
     });
 
+    client.on('remote_session_saved', () => {
+        console.log(`[${sessionId}] Session saved to MongoDB`);
+    });
+
     client.on('disconnected', (reason) => {
         state.isConnected = false;
         state.initializing = false;
@@ -129,19 +104,58 @@ function createClient(sessionId) {
 }
 
 /**
- * Ensure a session is loaded and ready. If not loaded, start it
- * from volume and wait for ready. Returns the state or null.
+ * Load a session from MongoDB. Called only from ensureSession
+ * under the loadingPromises lock.
+ */
+async function loadSessionFromMongo(sessionId) {
+    // Clean up stale in-memory state if present
+    const stale = sessions.get(sessionId);
+    if (stale) {
+        try { await stale.client.destroy(); } catch (_) {}
+        sessions.delete(sessionId);
+    }
+
+    // Check if session exists in MongoDB
+    // RemoteAuth stores sessions with dataPath prefix (e.g. /app/.wwebjs_auth/RemoteAuth-{id})
+    // so we search collections by suffix instead of exact name
+    let sessionExists;
+    try {
+        const collections = await mongoose.connection.db.listCollections().toArray();
+        sessionExists = collections.some(c => c.name.endsWith(`RemoteAuth-${sessionId}.files`));
+    } catch (err) {
+        console.error(`[${sessionId}] MongoDB lookup failed: ${err.message}`);
+        return null;
+    }
+    if (!sessionExists) {
+        return null;
+    }
+
+    console.log(`[${sessionId}] Loading session from MongoDB on demand...`);
+    const state = createClient(sessionId);
+
+    try {
+        await state.readyPromise;
+        state.lastActivity = Date.now();
+        return state;
+    } catch (err) {
+        console.error(`[${sessionId}] Failed to load: ${err.message}`);
+        return null;
+    }
+}
+
+/**
+ * Ensure a session is loaded and ready. If not loaded, check MongoDB
+ * and start it on demand. Returns the state or null.
+ * Uses loadingPromises to prevent duplicate Chromium instances for the same session.
  */
 async function ensureSession(sessionId) {
     let state = sessions.get(sessionId);
 
-    // Already connected — just update activity
     if (state && state.isConnected) {
         state.lastActivity = Date.now();
         return state;
     }
 
-    // Currently initializing — wait for it
     if (state && state.initializing) {
         try {
             await state.readyPromise;
@@ -152,23 +166,18 @@ async function ensureSession(sessionId) {
         }
     }
 
-    // Not loaded — check if session data exists in volume
-    const sessionDir = `./.wwebjs_auth/session-${sessionId}`;
-    if (!fs.existsSync(sessionDir)) {
-        return null; // No stored session, can't auto-start
+    // If another request is already loading this session, wait for it
+    if (loadingPromises.has(sessionId)) {
+        return loadingPromises.get(sessionId);
     }
 
-    // Load session from volume
-    console.log(`[${sessionId}] Loading session on demand...`);
-    state = createClient(sessionId);
+    const loadPromise = loadSessionFromMongo(sessionId);
+    loadingPromises.set(sessionId, loadPromise);
 
     try {
-        await state.readyPromise;
-        state.lastActivity = Date.now();
-        return state;
-    } catch (err) {
-        console.error(`[${sessionId}] Failed to load: ${err.message}`);
-        return null;
+        return await loadPromise;
+    } finally {
+        loadingPromises.delete(sessionId);
     }
 }
 
@@ -358,6 +367,66 @@ app.get('/api/sessions/:id/groups', async (req, res) => {
 
 // No auto-restore on startup — sessions are loaded on demand
 
-app.listen(PORT, () => {
-    console.log(`WA Bridge (multi-session, idle timeout=${IDLE_TIMEOUT_MS / 1000}s) running on port ${PORT}`);
+async function main() {
+    // Ensure dataPath directory exists for RemoteAuth session extraction
+    fs.mkdirSync('.wwebjs_auth', { recursive: true });
+
+    await mongoose.connect(MONGODB_URI);
+    console.log('Connected to MongoDB');
+
+    mongoose.connection.on('error', (err) => {
+        console.error('MongoDB connection error:', err.message);
+    });
+    mongoose.connection.on('disconnected', () => {
+        console.warn('MongoDB disconnected');
+    });
+
+    const rawStore = new MongoStore({ mongoose });
+
+    // RemoteAuth bug: save() uses full dataPath (e.g. "/app/.wwebjs_auth/RemoteAuth-14")
+    // but sessionExists()/extract() use short name (e.g. "RemoteAuth-14").
+    // This wrapper resolves the short name to the actual collection name.
+    async function resolveSessionName(shortName) {
+        const exactExists = await rawStore.sessionExists({ session: shortName });
+        if (exactExists) return shortName;
+
+        const collections = await mongoose.connection.db.listCollections().toArray();
+        const match = collections.find(c => c.name.endsWith(`${shortName}.files`));
+        if (match) {
+            return match.name.slice('whatsapp-'.length, -'.files'.length);
+        }
+        return shortName;
+    }
+
+    store = {
+        sessionExists: async (opts) => {
+            const resolved = await resolveSessionName(opts.session);
+            const result = await rawStore.sessionExists({ session: resolved });
+            console.log(`[store] sessionExists("${opts.session}" -> "${resolved}") = ${result}`);
+            return result;
+        },
+        save: async (opts) => {
+            console.log(`[store] save("${opts.session}")`);
+            return rawStore.save(opts);
+        },
+        extract: async (opts) => {
+            const resolved = await resolveSessionName(opts.session);
+            console.log(`[store] extract("${opts.session}" -> "${resolved}")`);
+            return rawStore.extract({ ...opts, session: resolved });
+        },
+        delete: async (opts) => {
+            const resolved = await resolveSessionName(opts.session);
+            console.log(`[store] delete("${opts.session}" -> "${resolved}")`);
+            return rawStore.delete({ ...opts, session: resolved });
+        },
+    };
+
+    app.listen(PORT, () => {
+        console.log(`WA Bridge (RemoteAuth/MongoDB, idle timeout=${IDLE_TIMEOUT_MS / 1000}s) running on port ${PORT}`);
+    });
+}
+
+main().catch((err) => {
+    console.error('Failed to start:', err);
+    process.exit(1);
 });
