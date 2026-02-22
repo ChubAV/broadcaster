@@ -70,6 +70,8 @@ async def check_schedules_async(session: AsyncSession):
     )
     schedules = result.unique().scalars().all()
 
+    logger.info("check_schedules: now=%s, found %d due schedules", now.isoformat(), len(schedules))
+
     if not schedules:
         return
 
@@ -81,6 +83,13 @@ async def check_schedules_async(session: AsyncSession):
         account = schedule.account
 
         if not ad or not account or account.status != "active":
+            logger.info(
+                "Schedule %d skipped: ad=%s, account=%s, account_status=%s",
+                schedule.id,
+                ad.id if ad else None,
+                account.id if account else None,
+                account.status if account else "N/A",
+            )
             schedule.next_run_at = compute_next_run_at(
                 days_of_week=schedule.days_of_week,
                 times_of_day=schedule.times_of_day,
@@ -96,7 +105,7 @@ async def check_schedules_async(session: AsyncSession):
 
         allowed, reason = checked_users[user_id]
         if not allowed:
-            logger.info("User %d skipped: %s", user_id, reason)
+            logger.info("Schedule %d skipped (billing): user %d — %s", schedule.id, user_id, reason)
             schedule.next_run_at = compute_next_run_at(
                 days_of_week=schedule.days_of_week,
                 times_of_day=schedule.times_of_day,
@@ -104,6 +113,12 @@ async def check_schedules_async(session: AsyncSession):
                 now=now,
             )
             continue
+
+        groups_count = len(schedule.group_ids) if schedule.group_ids else 0
+        logger.info(
+            "Schedule %d: ad=%d, account=%d (%s), groups=%d",
+            schedule.id, ad.id, account.id, account.type, groups_count,
+        )
 
         for group_id in schedule.group_ids:
             tasks_to_dispatch.append({
@@ -128,6 +143,8 @@ async def check_schedules_async(session: AsyncSession):
     if tasks_to_dispatch:
         await dispatch_send_tasks(tasks_to_dispatch)
         logger.info("Dispatched %d send tasks", len(tasks_to_dispatch))
+    else:
+        logger.info("No tasks to dispatch (all schedules skipped)")
 
 
 async def _send_message(ad_id: int, group_id: int, account_id: int, schedule_id: int):
