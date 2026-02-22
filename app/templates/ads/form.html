@@ -46,6 +46,7 @@
 
 <script>
 (function() {
+    const IMAGE_BASE_URL = '{{ get_image_url("_") }}'.replace('/_', '');
     const MAX_IMAGES = 10;
     const imagePaths = [];
 
@@ -165,7 +166,7 @@
             wrapper.className = 'group relative aspect-square rounded-lg overflow-hidden bg-gray-100 ring-1 ring-gray-200';
 
             const img = document.createElement('img');
-            img.src = '/uploads/' + path;
+            img.src = IMAGE_BASE_URL + '/' + path;
             img.alt = 'Изображение';
             img.className = 'h-full w-full object-cover';
 
