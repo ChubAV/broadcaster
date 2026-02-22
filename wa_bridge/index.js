@@ -26,7 +26,7 @@ function createClient(sessionId) {
         authStrategy: new RemoteAuth({
             store,
             clientId: sessionId,
-            backupSyncIntervalMs: 300000,
+            backupSyncIntervalMs: 60000, // First backup ~1 min after connection
         }),
         puppeteer: {
             headless: true,
