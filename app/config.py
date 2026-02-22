@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     max_image_size_mb: int = 5
     max_images_per_ad: int = 10
 
+    # S3 storage
+    s3_endpoint_url: str = ""
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_bucket_name: str = "broadcaster"
+    s3_region: str = ""
+    s3_public_url: str = ""  # public base URL for serving images
+
     # Telegram API (shared app-level credentials)
     telegram_api_id: int = 0
     telegram_api_hash: str = ""
