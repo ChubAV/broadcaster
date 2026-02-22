@@ -25,19 +25,34 @@ logger = logging.getLogger(__name__)
 async def dispatch_send_tasks(
     tasks_to_dispatch: list[dict],
 ) -> None:
-    """Dispatch individual Celery tasks for each send. Groups WA tasks by session."""
-    from app.worker.wa_consumer import register_wa_queue
+    """Dispatch individual Celery tasks for each send.
+
+    WA tasks are grouped by session_id and dispatched together so they
+    appear consecutively in the FIFO queue — the bridge keeps the Chromium
+    session loaded while processing the batch.
+    """
+    from collections import defaultdict
+
+    # Group WA tasks by session for affinity ordering
+    wa_by_session: dict[int, list[dict]] = defaultdict(list)
+    tg_tasks: list[dict] = []
 
     for task_info in tasks_to_dispatch:
-        account_id = task_info["account_id"]
-        args = [task_info["ad_id"], task_info["group_id"], task_info["account_id"], task_info["schedule_id"]]
-
         if task_info["type"] == "wa":
-            queue_name = f"whatsapp.session.{account_id}"
-            await register_wa_queue(queue_name)
-            send_whatsapp_message.apply_async(args=args, queue=queue_name)
+            wa_by_session[task_info["account_id"]].append(task_info)
         else:
-            send_telegram_message.apply_async(args=args, queue="telegram")
+            tg_tasks.append(task_info)
+
+    # Dispatch TG tasks
+    for task_info in tg_tasks:
+        args = [task_info["ad_id"], task_info["group_id"], task_info["account_id"], task_info["schedule_id"]]
+        send_telegram_message.apply_async(args=args, queue="telegram")
+
+    # Dispatch WA tasks grouped by session (FIFO ordering = session affinity)
+    for session_id, session_tasks in wa_by_session.items():
+        for task_info in session_tasks:
+            args = [task_info["ad_id"], task_info["group_id"], task_info["account_id"], task_info["schedule_id"]]
+            send_whatsapp_message.apply_async(args=args, queue="whatsapp")
 
 
 async def check_schedules_async(session: AsyncSession):

@@ -287,7 +287,7 @@ async def test_check_schedules_dispatches_wa_to_session_queue(db_session):
         await check_schedules_async(db_session)
 
     assert len(dispatched) == 1
-    assert dispatched[0] == ("wa", f"whatsapp.session.{account.id}")
+    assert dispatched[0] == ("wa", "whatsapp")
 
 
 @pytest.mark.asyncio
