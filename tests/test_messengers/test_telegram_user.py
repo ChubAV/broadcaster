@@ -42,19 +42,46 @@ async def test_send_text_message(messenger):
 @pytest.mark.asyncio
 async def test_send_message_with_image(messenger):
     messenger.client.send_file = AsyncMock()
-    result = await messenger.send_message("-100123", "Hello!", images=["path/to/img.jpg"])
+    mock_response = MagicMock()
+    mock_response.content = b"fake-image-bytes"
+    mock_response.raise_for_status = MagicMock()
+    mock_http = AsyncMock()
+    mock_http.get = AsyncMock(return_value=mock_response)
+    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_http.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.messengers.telegram_user.httpx.AsyncClient", return_value=mock_http):
+        result = await messenger.send_message(
+            "-100123", "Hello!", images=["https://cdn.example.com/bucket/img.jpg"]
+        )
     assert result["ok"] is True
     messenger.client.send_file.assert_called_once()
+    # Verify bytes were passed, not URLs
+    sent_files = messenger.client.send_file.call_args[0][1]
+    assert sent_files == [b"fake-image-bytes"]
 
 
 @pytest.mark.asyncio
 async def test_send_message_with_multiple_images(messenger):
     messenger.client.send_file = AsyncMock()
-    imgs = ["img1.jpg", "img2.jpg", "img3.jpg"]
-    result = await messenger.send_message("-100123", "Hello!", images=imgs)
+    mock_response = MagicMock()
+    mock_response.content = b"fake-image-bytes"
+    mock_response.raise_for_status = MagicMock()
+    mock_http = AsyncMock()
+    mock_http.get = AsyncMock(return_value=mock_response)
+    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_http.__aexit__ = AsyncMock(return_value=False)
+
+    imgs = [
+        "https://cdn.example.com/bucket/img1.jpg",
+        "https://cdn.example.com/bucket/img2.jpg",
+        "https://cdn.example.com/bucket/img3.jpg",
+    ]
+    with patch("app.messengers.telegram_user.httpx.AsyncClient", return_value=mock_http):
+        result = await messenger.send_message("-100123", "Hello!", images=imgs)
     assert result["ok"] is True
     call_args = messenger.client.send_file.call_args
-    assert call_args[0][1] == imgs  # full list passed to send_file
+    assert len(call_args[0][1]) == 3  # 3 images downloaded as bytes
 
 
 @pytest.mark.asyncio

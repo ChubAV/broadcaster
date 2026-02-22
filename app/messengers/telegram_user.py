@@ -4,6 +4,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+import httpx
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.types import Channel, Chat
@@ -193,9 +194,15 @@ class TelegramUserMessenger(BaseMessenger):
         try:
             await self.client.connect()
             if images:
-                # send_file accepts a list — sends as album
+                # Download images from URLs and send as bytes
+                files = []
+                async with httpx.AsyncClient() as http:
+                    for url in images:
+                        resp = await http.get(url)
+                        resp.raise_for_status()
+                        files.append(resp.content)
                 await self.client.send_file(
-                    int(group_id), images, caption=text
+                    int(group_id), files, caption=text
                 )
             else:
                 await self.client.send_message(int(group_id), text)
