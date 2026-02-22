@@ -64,7 +64,7 @@ async def test_send_message_failure():
     messenger = WhatsAppMessenger("http://wa-bridge:3000", session_id="42")
     mock_response = MagicMock()
     mock_response.status_code = 500
-    mock_response.text = "Internal error"
+    mock_response.json.return_value = {"error": "Internal error"}
 
     with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
         mock_client = AsyncMock()
@@ -73,6 +73,7 @@ async def test_send_message_failure():
 
         result = await messenger.send_message("group123", "Hello!")
         assert result["ok"] is False
+        assert "500" in result["error"]
         assert "Internal error" in result["error"]
 
 

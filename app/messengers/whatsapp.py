@@ -39,10 +39,20 @@ class WhatsAppMessenger(BaseMessenger):
                 payload["image_urls"] = images
             response = await client.post(self._url("send"), json=payload)
             if response.status_code != 200:
-                return {"ok": False, "error": response.text}
+                # Try to extract error message from JSON response
+                error_msg = ""
+                try:
+                    body = response.json()
+                    error_msg = body.get("error", "")
+                except Exception:
+                    error_msg = response.text
+                return {
+                    "ok": False,
+                    "error": f"[HTTP {response.status_code}] {error_msg}" if error_msg else f"[HTTP {response.status_code}] empty response",
+                }
             return {"ok": True}
         except httpx.HTTPError as e:
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": f"[Connection] {type(e).__name__}: {e}"}
 
     async def get_groups(self) -> list[dict]:
         client = get_http_client()
