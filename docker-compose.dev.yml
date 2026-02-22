@@ -3,7 +3,6 @@ services:
     command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     volumes:
       - .:/app
-      - uploads:/app/uploads
     environment:
       - DEBUG=true
 
@@ -11,7 +10,6 @@ services:
     command: uv run celery -A app.worker.celery_app worker --loglevel=debug
     volumes:
       - .:/app
-      - uploads:/app/uploads
 
   celery-beat:
     command: uv run celery -A app.worker.celery_app beat --loglevel=debug
@@ -22,5 +20,4 @@ services:
     volumes:
       - ./wa_bridge:/app
       - wa_session:/app/.wwebjs_auth
-      - uploads:/app/uploads
       - /app/node_modules

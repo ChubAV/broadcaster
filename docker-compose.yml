@@ -7,8 +7,6 @@ services:
     container_name: web-broadcaster
     ports:
       - "8000:8000"
-    volumes:
-      - uploads:/app/uploads      
     depends_on:
       db:
         condition: service_healthy
@@ -56,8 +54,6 @@ services:
       redis:
         condition: service_healthy
     env_file: .env
-    volumes:
-      - uploads:/app/uploads
 
   celery-beat:
     build:
@@ -81,9 +77,7 @@ services:
       - "3000:3000"
     volumes:
       - wa_session:/app/.wwebjs_auth
-      - uploads:/app/uploads
 
 volumes:
   pgdata:
-  uploads:
   wa_session:
