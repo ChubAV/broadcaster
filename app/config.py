@@ -33,8 +33,17 @@ class Settings(BaseSettings):
     telegram_api_id: int = 0
     telegram_api_hash: str = ""
 
-    # WA Bridge
-    wa_bridge_url: str = "http://wa-bridge:3000"
+    # WA Bridge — list of bridge URLs for horizontal scaling
+    wa_bridge_urls: list[str] = ["http://wa-bridge:3000"]
+
+    # Celery scaling
+    celery_beat_interval: int = 30  # seconds
+    billing_cache_ttl: int = 60  # seconds
+
+    @property
+    def wa_bridge_url(self) -> str:
+        """Backward-compatible: returns first bridge URL."""
+        return self.wa_bridge_urls[0]
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
