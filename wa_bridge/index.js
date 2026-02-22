@@ -345,6 +345,9 @@ app.get('/api/sessions/:id/groups', async (req, res) => {
 // No auto-restore on startup — sessions are loaded on demand
 
 async function main() {
+    // Ensure dataPath directory exists for RemoteAuth session extraction
+    fs.mkdirSync('.wwebjs_auth', { recursive: true });
+
     await mongoose.connect(MONGODB_URI);
     console.log('Connected to MongoDB');
 
