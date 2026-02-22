@@ -17,7 +17,7 @@ class WhatsAppMessenger(BaseMessenger):
                 payload = {
                     "group_id": group_id,
                     "text": text,
-                    "image_paths": images,
+                    "image_urls": images,
                 }
                 response = await client.post(self._url("send"), json=payload)
                 if response.status_code != 200:

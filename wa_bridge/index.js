@@ -3,6 +3,7 @@ const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 
 const app = express();
 app.use(express.json());
@@ -264,11 +265,12 @@ app.get('/api/sessions/:id/qr', (req, res) => {
 app.post('/api/sessions/:id/send', async (req, res) => {
     const sessionId = req.params.id;
 
-    const { group_id, text, image_path, image_paths } = req.body;
-    // Support both single image_path and batch image_paths
-    const images = image_paths || (image_path ? [image_path] : []);
+    const { group_id, text, image_paths, image_urls } = req.body;
+    // Support both URL-based (S3) and legacy local paths
+    const images = image_urls || image_paths || [];
+    const isUrlMode = !!image_urls;
     if (!group_id || (!text && images.length === 0)) {
-        return res.status(400).json({ error: 'group_id and text or image_path(s) are required' });
+        return res.status(400).json({ error: 'group_id and text or images are required' });
     }
 
     // Auto-load session on demand
@@ -281,34 +283,38 @@ app.post('/api/sessions/:id/send', async (req, res) => {
         const caption = text || '';
 
         if (images.length > 0) {
-            // Filter to existing files
-            const validImages = images.filter(p => fs.existsSync(p));
-            console.log(`[${sessionId}] Sending ${validImages.length} image(s) to group_id=${group_id}, text="${caption.substring(0, 50)}"`);
+            // Load media from URLs or local paths
+            const mediaItems = [];
+            for (const img of images) {
+                if (isUrlMode || img.startsWith('http://') || img.startsWith('https://')) {
+                    const response = await axios.get(img, { responseType: 'arraybuffer' });
+                    const mime = response.headers['content-type'] || 'image/jpeg';
+                    const base64 = Buffer.from(response.data).toString('base64');
+                    mediaItems.push(new MessageMedia(mime, base64));
+                } else if (fs.existsSync(img)) {
+                    mediaItems.push(MessageMedia.fromFilePath(img));
+                }
+            }
 
-            if (validImages.length === 0) {
-                // No valid images, send text only
+            console.log(`[${sessionId}] Sending ${mediaItems.length} image(s) to group_id=${group_id}, text="${caption.substring(0, 50)}"`);
+
+            if (mediaItems.length === 0) {
                 if (caption) {
                     const result = await state.client.sendMessage(group_id, caption);
                     console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
                 }
-            } else if (validImages.length === 1) {
-                // Single image: send with caption directly
-                const media = MessageMedia.fromFilePath(validImages[0]);
+            } else if (mediaItems.length === 1) {
                 const opts = caption ? { caption } : {};
-                const result = await state.client.sendMessage(group_id, media, opts);
+                const result = await state.client.sendMessage(group_id, mediaItems[0], opts);
                 console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
             } else {
-                // Multiple images: send all images without captions via
-                // Promise.all so WhatsApp groups them as album, then text after
-                const sendPromises = validImages.map((imgPath) => {
-                    const media = MessageMedia.fromFilePath(imgPath);
+                const sendPromises = mediaItems.map((media) => {
                     return state.client.sendMessage(group_id, media);
                 });
                 const results = await Promise.all(sendPromises);
                 results.forEach((result, i) => {
                     console.log(`[${sessionId}] sendMessage[${i}] result: id=${result?.id?._serialized}, ack=${result?.ack}`);
                 });
-                // Send text right after album so it stays close
                 if (caption) {
                     await state.client.sendMessage(group_id, caption);
                 }
