@@ -1,8 +1,9 @@
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy import select
 from app.database import Base
 from app.models.user import User
 from app.models.ad import Ad
@@ -10,7 +11,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
-from app.worker.tasks import check_schedules_async, send_ad_to_group_async
+from app.worker.tasks import check_schedules_async, _send_message
 from app.services.messenger_factory import create_messenger
 
 
@@ -27,14 +28,27 @@ async def db_session():
     await engine.dispose()
 
 
-async def create_test_data(session, schedule_active=True, account_status="active", next_run_at=None):
+@pytest_asyncio.fixture
+async def db_engine_and_factory():
+    """Provide engine + session factory for _send_message tests."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    yield engine, factory
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+
+
+async def create_test_data(session, schedule_active=True, account_status="active", next_run_at=None, account_type="tg_user"):
     """Helper to create user + ad + account + group + schedule."""
     user = User(email="t@t.com", password_hash="h", name="T")
     session.add(user)
     await session.commit()
 
     ad = Ad(user_id=user.id, title="Test Ad", text="Buy this!", images=["img.jpg"])
-    account = MessengerAccount(user_id=user.id, type="tg_user", credentials="fake-token", status=account_status)
+    account = MessengerAccount(user_id=user.id, type=account_type, credentials="fake-token", status=account_status)
     session.add_all([ad, account])
     await session.commit()
 
@@ -59,7 +73,6 @@ async def create_test_data(session, schedule_active=True, account_status="active
     await session.commit()
 
     return user, ad, account, group, schedule
-
 
 
 @pytest.mark.asyncio
@@ -111,18 +124,27 @@ async def test_create_messenger_tg_user_with_defaults():
 
 
 @pytest.mark.asyncio
-async def test_send_ad_success(db_session):
-    user, ad, account, group, schedule = await create_test_data(db_session)
+async def test_send_message_success(db_engine_and_factory):
+    """_send_message creates an 'ok' SendLog on success."""
+    engine, factory = db_engine_and_factory
+
+    async with factory() as session:
+        user, ad, account, group, schedule = await create_test_data(session)
 
     mock_messenger = AsyncMock()
     mock_messenger.send_message = AsyncMock(return_value={"ok": True})
 
     mock_settings = AsyncMock()
     mock_settings.s3_public_url = "https://cdn.example.com/bucket"
+    mock_settings.database_url = "sqlite+aiosqlite:///:memory:"
 
+    # Use a mock engine so dispose() is a no-op (real engine disposal kills in-memory SQLite)
+    mock_engine = AsyncMock()
     with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
-         patch("app.worker.tasks.get_settings", return_value=mock_settings):
-        await send_ad_to_group_async(db_session, schedule.id, ad.id, group.id, account.id)
+         patch("app.worker.tasks.get_settings", return_value=mock_settings), \
+         patch("app.worker.tasks.get_engine", return_value=mock_engine), \
+         patch("app.worker.tasks.get_session_factory", return_value=factory):
+        await _send_message(ad.id, group.id, account.id, schedule.id)
 
     # Verify S3 URLs were passed to messenger
     call_kwargs = mock_messenger.send_message.call_args
@@ -130,66 +152,83 @@ async def test_send_ad_success(db_session):
     assert len(sent_images) == 1
     assert sent_images[0] == "https://cdn.example.com/bucket/img.jpg"
 
-    from sqlalchemy import select
-    result = await db_session.execute(select(SendLog))
-    log = result.scalar_one()
-    assert log.status == "ok"
-    assert log.error_message is None
+    async with factory() as session:
+        result = await session.execute(select(SendLog))
+        log = result.scalar_one()
+        assert log.status == "ok"
+        assert log.error_message is None
 
 
 @pytest.mark.asyncio
-async def test_send_ad_failure(db_session):
-    user, ad, account, group, schedule = await create_test_data(db_session)
+async def test_send_message_failure(db_engine_and_factory):
+    """_send_message creates a 'fail' SendLog and raises on failure."""
+    engine, factory = db_engine_and_factory
+
+    async with factory() as session:
+        user, ad, account, group, schedule = await create_test_data(session)
 
     mock_messenger = AsyncMock()
     mock_messenger.send_message = AsyncMock(return_value={"ok": False, "error": "Rate limited"})
 
     mock_settings = AsyncMock()
     mock_settings.s3_public_url = "https://cdn.example.com/bucket"
+    mock_settings.database_url = "sqlite+aiosqlite:///:memory:"
 
+    mock_engine = AsyncMock()
     with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
-         patch("app.worker.tasks.get_settings", return_value=mock_settings):
-        await send_ad_to_group_async(db_session, schedule.id, ad.id, group.id, account.id)
+         patch("app.worker.tasks.get_settings", return_value=mock_settings), \
+         patch("app.worker.tasks.get_engine", return_value=mock_engine), \
+         patch("app.worker.tasks.get_session_factory", return_value=factory):
+        with pytest.raises(Exception, match="Send failed"):
+            await _send_message(ad.id, group.id, account.id, schedule.id)
 
-    from sqlalchemy import select
-    result = await db_session.execute(select(SendLog))
-    log = result.scalar_one()
-    assert log.status == "fail"
-    assert "Rate limited" in log.error_message
+    async with factory() as session:
+        result = await session.execute(select(SendLog))
+        log = result.scalar_one()
+        assert log.status == "fail"
+        assert "Rate limited" in log.error_message
 
 
 @pytest.mark.asyncio
-async def test_send_ad_account_disconnected(db_session):
-    user, ad, account, group, schedule = await create_test_data(db_session, account_status="disconnected")
+async def test_send_message_account_disconnected(db_engine_and_factory):
+    """_send_message logs 'account_disconnected' for inactive accounts."""
+    engine, factory = db_engine_and_factory
 
-    await send_ad_to_group_async(db_session, schedule.id, ad.id, group.id, account.id)
+    async with factory() as session:
+        user, ad, account, group, schedule = await create_test_data(session, account_status="disconnected")
 
-    from sqlalchemy import select
-    result = await db_session.execute(select(SendLog))
-    log = result.scalar_one()
-    assert log.status == "account_disconnected"
+    mock_settings = AsyncMock()
+    mock_settings.database_url = "sqlite+aiosqlite:///:memory:"
+
+    mock_engine = AsyncMock()
+    with patch("app.worker.tasks.get_settings", return_value=mock_settings), \
+         patch("app.worker.tasks.get_engine", return_value=mock_engine), \
+         patch("app.worker.tasks.get_session_factory", return_value=factory):
+        await _send_message(ad.id, group.id, account.id, schedule.id)
+
+    async with factory() as session:
+        result = await session.execute(select(SendLog))
+        log = result.scalar_one()
+        assert log.status == "account_disconnected"
 
 
 @pytest.mark.asyncio
 async def test_check_schedules_dispatches(db_session):
+    """check_schedules_async dispatches Celery tasks for due schedules."""
     user, ad, account, group, schedule = await create_test_data(db_session)
 
-    mock_messenger = AsyncMock()
-    mock_messenger.send_message = AsyncMock(return_value={"ok": True})
+    dispatched = []
+    mock_tg = MagicMock()
+    mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
-    mock_settings = AsyncMock()
-    mock_settings.s3_public_url = "https://cdn.example.com/bucket"
-
-    with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
-         patch("app.worker.tasks.get_settings", return_value=mock_settings):
+    with patch("app.worker.tasks.send_telegram_message", mock_tg), \
+         patch("app.worker.tasks.send_whatsapp_message", MagicMock()), \
+         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
         await check_schedules_async(db_session)
 
-    # Should have created a send log
-    from sqlalchemy import select
-    result = await db_session.execute(select(SendLog))
-    logs = result.scalars().all()
-    assert len(logs) == 1
-    assert logs[0].status == "ok"
+    # Should have dispatched one task to telegram queue
+    assert len(dispatched) == 1
+    assert dispatched[0] == ("tg", "telegram")
 
     # next_run_at should be updated
     await db_session.refresh(schedule)
@@ -204,12 +243,16 @@ async def test_check_schedules_dispatches(db_session):
 async def test_check_schedules_skips_inactive(db_session):
     user, ad, account, group, schedule = await create_test_data(db_session, schedule_active=False)
 
-    await check_schedules_async(db_session)
+    dispatched = []
+    mock_tg = MagicMock()
+    mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
-    from sqlalchemy import select
-    result = await db_session.execute(select(SendLog))
-    logs = result.scalars().all()
-    assert len(logs) == 0
+    with patch("app.worker.tasks.send_telegram_message", mock_tg), \
+         patch("app.worker.tasks.send_whatsapp_message", MagicMock()), \
+         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
+        await check_schedules_async(db_session)
+
+    assert len(dispatched) == 0
 
 
 @pytest.mark.asyncio
@@ -217,9 +260,59 @@ async def test_check_schedules_skips_future(db_session):
     future = datetime.now(timezone.utc) + timedelta(hours=1)
     user, ad, account, group, schedule = await create_test_data(db_session, next_run_at=future)
 
-    await check_schedules_async(db_session)
+    dispatched = []
+    mock_tg = MagicMock()
+    mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
-    from sqlalchemy import select
-    result = await db_session.execute(select(SendLog))
-    logs = result.scalars().all()
-    assert len(logs) == 0
+    with patch("app.worker.tasks.send_telegram_message", mock_tg), \
+         patch("app.worker.tasks.send_whatsapp_message", MagicMock()), \
+         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
+        await check_schedules_async(db_session)
+
+    assert len(dispatched) == 0
+
+
+@pytest.mark.asyncio
+async def test_check_schedules_dispatches_wa_to_session_queue(db_session):
+    """WhatsApp schedules dispatch to per-session queues."""
+    user, ad, account, group, schedule = await create_test_data(db_session, account_type="wa")
+
+    dispatched = []
+    mock_wa = MagicMock()
+    mock_wa.apply_async = lambda *a, **kw: dispatched.append(("wa", kw.get("queue")))
+
+    with patch("app.worker.tasks.send_whatsapp_message", mock_wa), \
+         patch("app.worker.tasks.send_telegram_message", MagicMock()), \
+         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
+        await check_schedules_async(db_session)
+
+    assert len(dispatched) == 1
+    assert dispatched[0] == ("wa", f"whatsapp.session.{account.id}")
+
+
+@pytest.mark.asyncio
+async def test_check_schedules_skips_billing_limited(db_session):
+    """Schedules for billing-limited users are skipped but next_run_at is updated."""
+    user, ad, account, group, schedule = await create_test_data(db_session)
+    old_next_run = schedule.next_run_at
+
+    dispatched = []
+    mock_tg = MagicMock()
+    mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
+
+    with patch("app.worker.tasks.send_telegram_message", mock_tg), \
+         patch("app.worker.tasks.send_whatsapp_message", MagicMock()), \
+         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(False, "limit reached"))):
+        await check_schedules_async(db_session)
+
+    # No tasks dispatched
+    assert len(dispatched) == 0
+
+    # But next_run_at should still be updated
+    await db_session.refresh(schedule)
+    next_run = schedule.next_run_at
+    if next_run.tzinfo is None:
+        next_run = next_run.replace(tzinfo=timezone.utc)
+    if old_next_run.tzinfo is None:
+        old_next_run = old_next_run.replace(tzinfo=timezone.utc)
+    assert next_run > old_next_run

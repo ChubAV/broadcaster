@@ -19,12 +19,18 @@ def create_celery_app() -> Celery:
         timezone="UTC",
         enable_utc=True,
         imports=["app.worker.tasks"],
+        task_default_queue="default",
+        task_create_missing_queues=True,
+        task_routes={
+            "app.worker.tasks.send_telegram_message": {"queue": "telegram"},
+        },
         beat_schedule={
-            "check-schedules-every-minute": {
+            "check-schedules": {
                 "task": "app.worker.tasks.check_schedules",
-                "schedule": 60.0,
+                "schedule": float(settings.celery_beat_interval),
             },
         },
+        worker_prefetch_multiplier=1,
     )
 
     return app
