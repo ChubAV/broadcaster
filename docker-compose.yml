@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000
+    command: sh -c "uv run alembic upgrade head && uv run uvicorn main:app --host 0.0.0.0 --port 8000"
     container_name: web-broadcaster
     ports:
       - "8000:8000"
