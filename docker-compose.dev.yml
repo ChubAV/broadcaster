@@ -6,8 +6,22 @@ services:
     environment:
       - DEBUG=true
 
-  celery-worker:
-    command: uv run celery -A app.worker.celery_app worker --loglevel=debug
+  celery-worker-telegram:
+    command: uv run celery -A app.worker.celery_app worker --loglevel=debug --queues=telegram --concurrency=2
+    volumes:
+      - .:/app
+    deploy:
+      replicas: 1
+
+  celery-worker-whatsapp:
+    command: uv run celery -A app.worker.celery_app worker --loglevel=debug --queues=whatsapp --concurrency=1
+    volumes:
+      - .:/app
+    deploy:
+      replicas: 1
+
+  celery-worker-default:
+    command: uv run celery -A app.worker.celery_app worker --loglevel=debug --queues=default --concurrency=1
     volumes:
       - .:/app
 
@@ -16,7 +30,13 @@ services:
     volumes:
       - .:/app
 
-  wa-bridge:
+  wa-bridge-1:
     volumes:
       - ./wa_bridge:/app
       - /app/node_modules
+
+  wa-bridge-2:
+    profiles: ["full"]
+
+  wa-bridge-3:
+    profiles: ["full"]
