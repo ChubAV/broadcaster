@@ -356,10 +356,27 @@ async function main() {
     });
 
     const rawStore = new MongoStore({ mongoose });
+
+    // RemoteAuth bug: save() uses full dataPath (e.g. "/app/.wwebjs_auth/RemoteAuth-14")
+    // but sessionExists()/extract() use short name (e.g. "RemoteAuth-14").
+    // This wrapper resolves the short name to the actual collection name.
+    async function resolveSessionName(shortName) {
+        const exactExists = await rawStore.sessionExists({ session: shortName });
+        if (exactExists) return shortName;
+
+        const collections = await mongoose.connection.db.listCollections().toArray();
+        const match = collections.find(c => c.name.endsWith(`${shortName}.files`));
+        if (match) {
+            return match.name.slice('whatsapp-'.length, -'.files'.length);
+        }
+        return shortName;
+    }
+
     store = {
         sessionExists: async (opts) => {
-            const result = await rawStore.sessionExists(opts);
-            console.log(`[store] sessionExists("${opts.session}") = ${result}`);
+            const resolved = await resolveSessionName(opts.session);
+            const result = await rawStore.sessionExists({ session: resolved });
+            console.log(`[store] sessionExists("${opts.session}" -> "${resolved}") = ${result}`);
             return result;
         },
         save: async (opts) => {
@@ -367,12 +384,14 @@ async function main() {
             return rawStore.save(opts);
         },
         extract: async (opts) => {
-            console.log(`[store] extract("${opts.session}", path="${opts.path}")`);
-            return rawStore.extract(opts);
+            const resolved = await resolveSessionName(opts.session);
+            console.log(`[store] extract("${opts.session}" -> "${resolved}")`);
+            return rawStore.extract({ ...opts, session: resolved });
         },
         delete: async (opts) => {
-            console.log(`[store] delete("${opts.session}")`);
-            return rawStore.delete(opts);
+            const resolved = await resolveSessionName(opts.session);
+            console.log(`[store] delete("${opts.session}" -> "${resolved}")`);
+            return rawStore.delete({ ...opts, session: resolved });
         },
     };
 
