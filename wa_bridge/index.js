@@ -355,7 +355,26 @@ async function main() {
         console.warn('MongoDB disconnected');
     });
 
-    store = new MongoStore({ mongoose });
+    const rawStore = new MongoStore({ mongoose });
+    store = {
+        sessionExists: async (opts) => {
+            const result = await rawStore.sessionExists(opts);
+            console.log(`[store] sessionExists("${opts.session}") = ${result}`);
+            return result;
+        },
+        save: async (opts) => {
+            console.log(`[store] save("${opts.session}")`);
+            return rawStore.save(opts);
+        },
+        extract: async (opts) => {
+            console.log(`[store] extract("${opts.session}", path="${opts.path}")`);
+            return rawStore.extract(opts);
+        },
+        delete: async (opts) => {
+            console.log(`[store] delete("${opts.session}")`);
+            return rawStore.delete(opts);
+        },
+    };
 
     app.listen(PORT, () => {
         console.log(`WA Bridge (RemoteAuth/MongoDB, idle timeout=${IDLE_TIMEOUT_MS / 1000}s) running on port ${PORT}`);
