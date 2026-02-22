@@ -14,6 +14,7 @@ from app.config import get_settings
 from app.services.messenger_factory import create_messenger
 from app.services.schedule_service import compute_next_run_at
 from app.services.billing_service import check_limit
+from app.services.s3 import get_image_url
 from celery import shared_task
 
 
@@ -112,7 +113,6 @@ async def send_ad_to_group_async(
     # Build S3 URLs for images
     images = None
     if ad.images:
-        from app.services.s3 import get_image_url
         s3_public_url = get_settings().s3_public_url
         images = [get_image_url(img, s3_public_url) for img in ad.images]
 

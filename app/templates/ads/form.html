@@ -46,7 +46,7 @@
 
 <script>
 (function() {
-    const IMAGE_BASE_URL = '{{ get_image_url("_") }}'.replace('/_', '');
+    const IMAGE_BASE_URL = '{{ s3_public_url() }}';
     const MAX_IMAGES = 10;
     const imagePaths = [];
 

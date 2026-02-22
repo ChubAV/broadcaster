@@ -9,7 +9,7 @@ from app.main import create_app
 
 
 @pytest_asyncio.fixture
-async def upload_settings(tmp_path):
+async def upload_settings():
     return Settings(
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://localhost:6379/0",

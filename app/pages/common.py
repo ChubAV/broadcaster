@@ -14,6 +14,7 @@ templates = Jinja2Templates(directory=str(_templates_dir))
 
 # Register get_image_url as Jinja2 global so templates can use {{ get_image_url(key) }}
 templates.env.globals["get_image_url"] = lambda key: get_image_url(key, get_settings().s3_public_url)
+templates.env.globals["s3_public_url"] = lambda: get_settings().s3_public_url
 
 
 async def get_user_from_cookie(

@@ -36,15 +36,21 @@ async def upload_image(
     key = f"{user_id}/{filename}"
 
     # Upload to S3
-    await upload_file_to_s3(
-        content=content,
-        key=key,
-        content_type=file.content_type,
-        endpoint_url=settings.s3_endpoint_url,
-        access_key=settings.s3_access_key,
-        secret_key=settings.s3_secret_key,
-        bucket=settings.s3_bucket_name,
-        region=settings.s3_region,
-    )
+    try:
+        await upload_file_to_s3(
+            content=content,
+            key=key,
+            content_type=file.content_type,
+            endpoint_url=settings.s3_endpoint_url,
+            access_key=settings.s3_access_key,
+            secret_key=settings.s3_secret_key,
+            bucket=settings.s3_bucket_name,
+            region=settings.s3_region,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to upload image to storage",
+        )
 
     return {"path": key}
