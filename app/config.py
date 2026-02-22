@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     telegram_api_hash: str = ""
 
     # WA Bridge — list of bridge URLs for horizontal scaling
-    wa_bridge_urls: list[str] = ["http://wa-bridge:3000"]
+    wa_bridge_urls: list[str] = ["http://wa-bridge-1:3000", "http://wa-bridge-2:3000", "http://wa-bridge-3:3000"]
 
     # Celery scaling
     celery_beat_interval: int = 30  # seconds
