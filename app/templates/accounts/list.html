@@ -1,44 +1,44 @@
 {% extends "base.html" %}
 {% block title %}Аккаунты - Broadcaster{% endblock %}
 {% block content %}
-<div class="flex justify-between items-center mb-6">
-    <h1 class="text-2xl font-bold text-gray-900">Аккаунты мессенджеров</h1>
-    <div class="flex gap-2">
-        <a href="/accounts/connect/tg_user" class="rounded-md bg-violet-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-500">Подключить TG аккаунт</a>
-        <a href="/accounts/connect/wa" class="rounded-md bg-green-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-500">Подключить WhatsApp</a>
+<div class="flex flex-wrap justify-between items-center gap-4 mb-6">
+    <h1 class="text-2xl font-bold tracking-tight text-slate-900">Аккаунты мессенджеров</h1>
+    <div class="flex gap-2 flex-wrap">
+        <a href="/accounts/connect/tg_user" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200">Подключить TG аккаунт</a>
+        <a href="/accounts/connect/wa" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-all duration-200">Подключить WhatsApp</a>
     </div>
 </div>
 
 {% if accounts %}
-<div class="bg-white shadow rounded-lg overflow-hidden">
-    <table class="min-w-full divide-y divide-gray-200">
-        <thead class="bg-gray-50">
+<div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
+    <table class="min-w-full divide-y divide-slate-200">
+        <thead class="bg-slate-50/80">
             <tr>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Тип</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Создано</th>
-                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Действия</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">ID</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Тип</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Статус</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Создано</th>
+                <th class="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Действия</th>
             </tr>
         </thead>
-        <tbody class="divide-y divide-gray-200">
+        <tbody class="divide-y divide-slate-200">
             {% for account in accounts %}
-            <tr>
-                <td class="px-6 py-4 text-sm text-gray-900">{{ account.id }}</td>
-                <td class="px-6 py-4 text-sm text-gray-900">
+            <tr class="hover:bg-slate-50/80 transition-colors duration-150">
+                <td class="px-6 py-4 text-sm text-slate-900">{{ account.id }}</td>
+                <td class="px-6 py-4 text-sm text-slate-900">
                     {% if account.type == 'tg_user' %}Telegram аккаунт
                     {% elif account.type == 'wa' %}WhatsApp
                     {% else %}{{ account.type }}{% endif %}
                 </td>
                 <td class="px-6 py-4">
-                    <span class="inline-flex rounded-full px-2 text-xs font-semibold {% if account.status == 'active' %}bg-green-100 text-green-800{% elif account.status == 'disconnected' %}bg-red-100 text-red-800{% else %}bg-yellow-100 text-yellow-800{% endif %}">
+                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if account.status == 'active' %}bg-emerald-100 text-emerald-800{% elif account.status == 'disconnected' %}bg-red-100 text-red-800{% else %}bg-amber-100 text-amber-800{% endif %}">
                         {{ account.status }}
                     </span>
                 </td>
-                <td class="px-6 py-4 text-sm text-gray-500">{{ account.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td class="px-6 py-4 text-sm text-slate-500">{{ account.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
                 <td class="px-6 py-4 text-right text-sm">
                     <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
-                        <button type="submit" class="text-red-600 hover:text-red-900" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
+                        <button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
                     </form>
                 </td>
             </tr>
@@ -47,8 +47,8 @@
     </table>
 </div>
 {% else %}
-<div class="bg-white shadow rounded-lg p-8 text-center">
-    <p class="text-gray-500 mb-4">Аккаунты ещё не подключены. Подключите аккаунт мессенджера, чтобы начать.</p>
+<div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-8 text-center">
+    <p class="text-slate-500 mb-4">Аккаунты ещё не подключены. Подключите аккаунт мессенджера, чтобы начать.</p>
 </div>
 {% endif %}
 {% endblock %}

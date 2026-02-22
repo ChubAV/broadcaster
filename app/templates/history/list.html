@@ -1,39 +1,39 @@
 {% extends "base.html" %}
 {% block title %}История - Broadcaster{% endblock %}
 {% block content %}
-<div class="flex justify-between items-center mb-6">
-    <h1 class="text-2xl font-bold text-gray-900">История отправок</h1>
+<div class="flex flex-wrap justify-between items-center gap-4 mb-6">
+    <h1 class="text-2xl font-bold tracking-tight text-slate-900">История отправок</h1>
     <div class="flex gap-2">
-        <a href="/history" class="rounded-md px-3 py-1.5 text-sm font-medium {% if not status_filter %}bg-indigo-600 text-white{% else %}bg-white text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50{% endif %}">Все</a>
-        <a href="/history?status=sent" class="rounded-md px-3 py-1.5 text-sm font-medium {% if status_filter == 'sent' %}bg-green-600 text-white{% else %}bg-white text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50{% endif %}">Отправлено</a>
-        <a href="/history?status=failed" class="rounded-md px-3 py-1.5 text-sm font-medium {% if status_filter == 'failed' %}bg-red-600 text-white{% else %}bg-white text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50{% endif %}">Ошибки</a>
+        <a href="/history" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if not status_filter %}bg-primary-600 text-white shadow-sm hover:bg-primary-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Все</a>
+        <a href="/history?status=sent" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if status_filter == 'sent' %}bg-emerald-600 text-white shadow-sm hover:bg-emerald-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Отправлено</a>
+        <a href="/history?status=failed" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if status_filter == 'failed' %}bg-red-600 text-white shadow-sm hover:bg-red-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Ошибки</a>
     </div>
 </div>
 
 {% if logs %}
-<div class="bg-white shadow rounded-lg overflow-hidden">
-    <table class="min-w-full divide-y divide-gray-200">
-        <thead class="bg-gray-50">
+<div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
+    <table class="min-w-full divide-y divide-slate-200">
+        <thead class="bg-slate-50/80">
             <tr>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Объявление</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Группа</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Ошибка</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Время отправки</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Объявление</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Группа</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Статус</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Ошибка</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Время отправки</th>
             </tr>
         </thead>
-        <tbody class="divide-y divide-gray-200">
+        <tbody class="divide-y divide-slate-200">
             {% for log in logs %}
-            <tr>
-                <td class="px-6 py-4 text-sm font-medium text-gray-900">{{ log.ad_title }}</td>
-                <td class="px-6 py-4 text-sm text-gray-500">{{ log.group_name }}</td>
+            <tr class="hover:bg-slate-50/80 transition-colors duration-150">
+                <td class="px-6 py-4 text-sm font-medium text-slate-900">{{ log.ad_title }}</td>
+                <td class="px-6 py-4 text-sm text-slate-500">{{ log.group_name }}</td>
                 <td class="px-6 py-4">
-                    <span class="inline-flex rounded-full px-2 text-xs font-semibold {% if log.status == 'sent' %}bg-green-100 text-green-800{% else %}bg-red-100 text-red-800{% endif %}">
+                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if log.status == 'sent' %}bg-emerald-100 text-emerald-800{% else %}bg-red-100 text-red-800{% endif %}">
                         {{ log.status }}
                     </span>
                 </td>
-                <td class="px-6 py-4 text-sm text-gray-500 max-w-xs truncate">{{ log.error_message or '-' }}</td>
-                <td class="px-6 py-4 text-sm text-gray-500">{{ log.sent_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                <td class="px-6 py-4 text-sm text-slate-500 max-w-xs truncate">{{ log.error_message or '-' }}</td>
+                <td class="px-6 py-4 text-sm text-slate-500">{{ log.sent_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
             </tr>
             {% endfor %}
         </tbody>
@@ -41,22 +41,22 @@
 </div>
 
 <!-- Pagination -->
-<div class="mt-4 flex justify-between items-center">
-    <div class="text-sm text-gray-500">
+<div class="mt-4 flex flex-wrap justify-between items-center gap-4">
+    <div class="text-sm text-slate-500">
         Показано {{ offset + 1 }} — {{ offset + logs|length }} из результатов
     </div>
     <div class="flex gap-2">
         {% if offset > 0 %}
-        <a href="/history?offset={{ offset - page_size }}{% if status_filter %}&status={{ status_filter }}{% endif %}" class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50">Назад</a>
+        <a href="/history?offset={{ offset - page_size }}{% if status_filter %}&status={{ status_filter }}{% endif %}" class="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50 transition-colors">Назад</a>
         {% endif %}
         {% if has_next %}
-        <a href="/history?offset={{ offset + page_size }}{% if status_filter %}&status={{ status_filter }}{% endif %}" class="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50">Далее</a>
+        <a href="/history?offset={{ offset + page_size }}{% if status_filter %}&status={{ status_filter }}{% endif %}" class="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50 transition-colors">Далее</a>
         {% endif %}
     </div>
 </div>
 {% else %}
-<div class="bg-white shadow rounded-lg p-8 text-center">
-    <p class="text-gray-500">Истории отправок пока нет.</p>
+<div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-8 text-center">
+    <p class="text-slate-500">Истории отправок пока нет.</p>
 </div>
 {% endif %}
 {% endblock %}

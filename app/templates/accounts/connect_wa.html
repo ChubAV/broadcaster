@@ -2,44 +2,44 @@
 {% block title %}Подключение WhatsApp - Broadcaster{% endblock %}
 {% block content %}
 <div class="max-w-lg">
-    <h1 class="text-2xl font-bold text-gray-900 mb-6">Подключение WhatsApp</h1>
+    <h1 class="text-2xl font-bold tracking-tight text-slate-900 mb-6">Подключение WhatsApp</h1>
 
     {% if error %}
-    <div class="mb-4 rounded-md bg-red-50 p-4 text-sm text-red-700">{{ error }}</div>
+    <div class="mb-4 rounded-xl bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-100 animate-fade-in">{{ error }}</div>
     {% endif %}
 
-    <div class="bg-white shadow rounded-lg p-6">
+    <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
         {% if connected %}
         <div class="text-center">
-            <div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">
-                <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+            <div class="inline-flex items-center justify-center w-16 h-16 bg-emerald-100 rounded-full mb-4">
+                <svg class="w-8 h-8 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
             </div>
-            <p class="text-lg font-medium text-gray-900">WhatsApp подключён</p>
-            <p class="mt-2 text-sm text-gray-500">Ваш аккаунт WhatsApp готов к использованию.</p>
-            <a href="/accounts" class="mt-4 inline-block rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">К аккаунтам</a>
+            <p class="text-lg font-semibold text-slate-900">WhatsApp подключён</p>
+            <p class="mt-2 text-sm text-slate-500">Ваш аккаунт WhatsApp готов к использованию.</p>
+            <a href="/accounts" class="mt-4 inline-block rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 transition-colors">К аккаунтам</a>
         </div>
         {% elif qr_code %}
         <div class="text-center">
-            <p class="text-sm text-gray-600 mb-4">Отсканируйте QR-код с помощью WhatsApp на вашем телефоне:</p>
+            <p class="text-sm text-slate-600 mb-4">Отсканируйте QR-код с помощью WhatsApp на вашем телефоне:</p>
             <div id="wa-status" hx-get="/accounts/connect/wa/status" hx-trigger="every 3s" hx-swap="innerHTML">
-                <div class="inline-block p-4 bg-white border rounded-lg">
-                    <img src="{{ qr_code }}" alt="WhatsApp QR-код" class="mx-auto" style="max-width: 256px;">
+                <div class="inline-block p-4 bg-white rounded-xl border border-slate-200">
+                    <img src="{{ qr_code }}" alt="WhatsApp QR-код" class="mx-auto rounded-lg" style="max-width: 256px;">
                 </div>
-                <p class="mt-2 text-sm text-yellow-600">Ожидание сканирования...</p>
+                <p class="mt-2 text-sm text-amber-600">Ожидание сканирования...</p>
             </div>
         </div>
         {% else %}
         <div class="text-center">
-            <p class="text-sm text-gray-500 mb-4">Загрузка QR-кода...</p>
+            <p class="text-sm text-slate-500 mb-4">Загрузка QR-кода...</p>
             <div id="wa-status" hx-get="/accounts/connect/wa/status" hx-trigger="every 3s" hx-swap="innerHTML">
-                <span class="text-sm text-yellow-600">Ожидание QR-кода от WA Bridge...</span>
+                <span class="text-sm text-amber-600">Ожидание QR-кода от WA Bridge...</span>
             </div>
         </div>
         {% endif %}
     </div>
 
     <div class="mt-4">
-        <a href="/accounts" class="text-sm text-gray-600 hover:text-gray-900">← Назад к аккаунтам</a>
+        <a href="/accounts" class="text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors">← Назад к аккаунтам</a>
     </div>
 </div>
 {% endblock %}

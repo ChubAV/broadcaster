@@ -1,20 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Группы - Broadcaster{% endblock %}
 {% block content %}
-<div class="flex justify-between items-center mb-6">
-    <h1 class="text-2xl font-bold text-gray-900">Группы</h1>
+<div class="flex flex-wrap justify-between items-center gap-4 mb-6">
+    <h1 class="text-2xl font-bold tracking-tight text-slate-900">Группы</h1>
     {% if tg_user_accounts or wa_accounts %}
     <div class="flex gap-2 flex-wrap">
         {% for account in tg_user_accounts %}
         <form method="POST" action="/accounts/{{ account.id }}/sync-groups">
-            <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">
+            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200">
                 TG #{{ account.id }}
             </button>
         </form>
         {% endfor %}
         {% for account in wa_accounts %}
         <form method="POST" action="/accounts/{{ account.id }}/sync-groups">
-            <button type="submit" class="rounded-md bg-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-500">
+            <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-all duration-200">
                 WA #{{ account.id }}
             </button>
         </form>
@@ -24,40 +24,40 @@
 </div>
 
 {% if groups %}
-<div class="bg-white shadow rounded-lg overflow-hidden">
-    <table class="min-w-full divide-y divide-gray-200">
-        <thead class="bg-gray-50">
+<div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
+    <table class="min-w-full divide-y divide-slate-200">
+        <thead class="bg-slate-50/80">
             <tr>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Название</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Аккаунт</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Тип</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Внешний ID</th>
-                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
-                <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Действия</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Название</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Аккаунт</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Тип</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Внешний ID</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Статус</th>
+                <th class="px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Действия</th>
             </tr>
         </thead>
-        <tbody class="divide-y divide-gray-200">
+        <tbody class="divide-y divide-slate-200">
             {% for group in groups %}
-            <tr>
-                <td class="px-6 py-4 text-sm font-medium text-gray-900">{{ group.name }}</td>
-                <td class="px-6 py-4 text-sm text-gray-500">#{{ group.account_id }}</td>
-                <td class="px-6 py-4 text-sm text-gray-500">
+            <tr class="hover:bg-slate-50/80 transition-colors duration-150">
+                <td class="px-6 py-4 text-sm font-medium text-slate-900">{{ group.name }}</td>
+                <td class="px-6 py-4 text-sm text-slate-500">#{{ group.account_id }}</td>
+                <td class="px-6 py-4 text-sm text-slate-500">
                     {% if group.messenger_type == 'tg_user' %}Telegram аккаунт
                     {% elif group.messenger_type == 'wa' %}WhatsApp
                     {% else %}{{ group.messenger_type }}{% endif %}
                 </td>
-                <td class="px-6 py-4 text-sm text-gray-500">{{ group.group_external_id }}</td>
+                <td class="px-6 py-4 text-sm text-slate-500">{{ group.group_external_id }}</td>
                 <td class="px-6 py-4">
-                    <span class="inline-flex rounded-full px-2 text-xs font-semibold {% if group.is_active %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
+                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if group.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
                         {{ "Активна" if group.is_active else "Неактивна" }}
                     </span>
                 </td>
                 <td class="px-6 py-4 text-right text-sm space-x-2">
                     <form method="POST" action="/groups/{{ group.id }}/toggle" class="inline">
-                        <button type="submit" class="text-indigo-600 hover:text-indigo-900">{{ "Деактивировать" if group.is_active else "Активировать" }}</button>
+                        <button type="submit" class="font-medium text-primary-600 hover:text-primary-700 transition-colors">{{ "Деактивировать" if group.is_active else "Активировать" }}</button>
                     </form>
                     <form method="POST" action="/groups/{{ group.id }}/delete" class="inline">
-                        <button type="submit" class="text-red-600 hover:text-red-900" onclick="return confirm('Удалить эту группу?')">Удалить</button>
+                        <button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить эту группу?')">Удалить</button>
                     </form>
                 </td>
             </tr>
@@ -66,8 +66,8 @@
     </table>
 </div>
 {% else %}
-<div class="bg-white shadow rounded-lg p-8 text-center">
-    <p class="text-gray-500">Групп пока нет. Группы синхронизируются из подключённых аккаунтов мессенджеров.</p>
+<div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-8 text-center">
+    <p class="text-slate-500">Групп пока нет. Группы синхронизируются из подключённых аккаунтов мессенджеров.</p>
 </div>
 {% endif %}
 {% endblock %}

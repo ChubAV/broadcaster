@@ -2,17 +2,17 @@
 {% block title %}{{ "Редактирование расписания" if schedule else "Новое расписание" }} - Broadcaster{% endblock %}
 {% block content %}
 <div class="max-w-2xl">
-    <h1 class="text-2xl font-bold text-gray-900 mb-6">{{ "Редактирование расписания" if schedule else "Новое расписание" }}</h1>
+    <h1 class="text-2xl font-bold tracking-tight text-slate-900 mb-6">{{ "Редактирование расписания" if schedule else "Новое расписание" }}</h1>
 
     {% if error %}
-    <div class="mb-4 rounded-md bg-red-50 p-4 text-sm text-red-700">{{ error }}</div>
+    <div class="mb-4 rounded-xl bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-100 animate-fade-in">{{ error }}</div>
     {% endif %}
 
-    <form method="POST" action="{{ '/schedules/' ~ schedule.id ~ '/edit' if schedule else '/schedules/new' }}" class="bg-white shadow rounded-lg p-6 space-y-6">
+    <form method="POST" action="{{ '/schedules/' ~ schedule.id ~ '/edit' if schedule else '/schedules/new' }}" class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6 space-y-6">
         <!-- Ad selection -->
         <div>
-            <label for="ad_id" class="block text-sm font-medium text-gray-900">Объявление</label>
-            <select id="ad_id" name="ad_id" required class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+            <label for="ad_id" class="block text-sm font-medium text-slate-900">Объявление</label>
+            <select id="ad_id" name="ad_id" required class="mt-2 block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 transition-shadow sm:text-sm">
                 <option value="">Выберите объявление...</option>
                 {% for ad in ads %}
                 <option value="{{ ad.id }}" {% if schedule and schedule.ad_id == ad.id %}selected{% endif %}>{{ ad.title }}</option>
@@ -22,8 +22,8 @@
 
         <!-- Account selection -->
         <div>
-            <label for="account_id" class="block text-sm font-medium text-gray-900">Аккаунт</label>
-            <select id="account_id" name="account_id" required class="mt-2 block w-full rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
+            <label for="account_id" class="block text-sm font-medium text-slate-900">Аккаунт</label>
+            <select id="account_id" name="account_id" required class="mt-2 block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 transition-shadow sm:text-sm">
                 <option value="">Выберите аккаунт...</option>
                 {% for account in accounts %}
                 <option value="{{ account.id }}" {% if schedule and schedule.account_id == account.id %}selected{% endif %}>
@@ -35,30 +35,30 @@
 
         <!-- Groups selection (checkboxes) -->
         <div>
-            <label class="block text-sm font-medium text-gray-900 mb-2">Группы</label>
+            <label class="block text-sm font-medium text-slate-900 mb-2">Группы</label>
             {% if groups %}
-            <div class="space-y-2 max-h-48 overflow-y-auto border rounded-md p-3">
+            <div class="space-y-2 max-h-48 overflow-y-auto rounded-lg border border-slate-200 p-3 bg-slate-50/50">
                 {% for group in groups %}
-                <label class="flex items-center">
-                    <input type="checkbox" name="group_ids" value="{{ group.id }}" {% if schedule and group.id in schedule.group_ids %}checked{% endif %} class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600">
-                    <span class="ml-2 text-sm text-gray-700">{{ group.name }} ({{ group.messenger_type }})</span>
+                <label class="flex items-center rounded-lg px-2 py-1.5 hover:bg-white/80 transition-colors">
+                    <input type="checkbox" name="group_ids" value="{{ group.id }}" {% if schedule and group.id in schedule.group_ids %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                    <span class="ml-2 text-sm text-slate-700">{{ group.name }} ({{ group.messenger_type }})</span>
                 </label>
                 {% endfor %}
             </div>
             {% else %}
-            <p class="text-sm text-gray-500">Нет доступных групп. Сначала добавьте группы на странице Группы.</p>
+            <p class="text-sm text-slate-500">Нет доступных групп. Сначала добавьте группы на странице Группы.</p>
             {% endif %}
         </div>
 
         <!-- Days of week (checkboxes) -->
         <div>
-            <label class="block text-sm font-medium text-gray-900 mb-2">Дни недели</label>
+            <label class="block text-sm font-medium text-slate-900 mb-2">Дни недели</label>
             <div class="flex flex-wrap gap-3">
                 {% set day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'] %}
                 {% for i in range(7) %}
-                <label class="flex items-center bg-gray-50 rounded px-3 py-1.5">
-                    <input type="checkbox" name="days_of_week" value="{{ i }}" {% if schedule and i in schedule.days_of_week %}checked{% endif %} class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600">
-                    <span class="ml-2 text-sm text-gray-700">{{ day_names[i] }}</span>
+                <label class="flex items-center rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200/80 hover:ring-slate-300 transition-all">
+                    <input type="checkbox" name="days_of_week" value="{{ i }}" {% if schedule and i in schedule.days_of_week %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
+                    <span class="ml-2 text-sm text-slate-700">{{ day_names[i] }}</span>
                 </label>
                 {% endfor %}
             </div>
@@ -66,28 +66,28 @@
 
         <!-- Times of day -->
         <div>
-            <label class="block text-sm font-medium text-gray-900 mb-2">Время отправки</label>
+            <label class="block text-sm font-medium text-slate-900 mb-2">Время отправки</label>
             <div id="times-container" class="space-y-2">
                 {% if schedule and schedule.times_of_day %}
                 {% for t in schedule.times_of_day %}
                 <div class="flex items-center gap-2">
-                    <input type="time" name="times_of_day" value="{{ t }}" class="rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
-                    <button type="button" onclick="this.parentElement.remove()" class="text-red-600 hover:text-red-800 text-sm">Удалить</button>
+                    <input type="time" name="times_of_day" value="{{ t }}" class="rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 sm:text-sm">
+                    <button type="button" onclick="this.parentElement.remove()" class="text-sm font-medium text-red-600 hover:text-red-700 transition-colors">Удалить</button>
                 </div>
                 {% endfor %}
                 {% else %}
                 <div class="flex items-center gap-2">
-                    <input type="time" name="times_of_day" value="09:00" class="rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm">
-                    <button type="button" onclick="this.parentElement.remove()" class="text-red-600 hover:text-red-800 text-sm">Удалить</button>
+                    <input type="time" name="times_of_day" value="09:00" class="rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 sm:text-sm">
+                    <button type="button" onclick="this.parentElement.remove()" class="text-sm font-medium text-red-600 hover:text-red-700 transition-colors">Удалить</button>
                 </div>
                 {% endif %}
             </div>
-            <button type="button" onclick="addTimeInput()" class="mt-2 text-sm text-indigo-600 hover:text-indigo-500">+ Добавить время</button>
+            <button type="button" onclick="addTimeInput()" class="mt-2 text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors">+ Добавить время</button>
         </div>
 
         <div class="flex gap-3">
-            <button type="submit" class="rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">{{ "Сохранить" if schedule else "Создать" }}</button>
-            <a href="/schedules" class="rounded-md bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-gray-300 hover:bg-gray-50">Отмена</a>
+            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200">{{ "Сохранить" if schedule else "Создать" }}</button>
+            <a href="/schedules" class="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-slate-900 ring-1 ring-slate-300 hover:bg-slate-50 transition-colors">Отмена</a>
         </div>
     </form>
 </div>
@@ -97,7 +97,7 @@ function addTimeInput() {
     const container = document.getElementById('times-container');
     const div = document.createElement('div');
     div.className = 'flex items-center gap-2';
-    div.innerHTML = '<input type="time" name="times_of_day" value="12:00" class="rounded-md border-0 py-1.5 px-3 text-gray-900 shadow-sm ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-600 sm:text-sm"><button type="button" onclick="this.parentElement.remove()" class="text-red-600 hover:text-red-800 text-sm">Удалить</button>';
+    div.innerHTML = '<input type="time" name="times_of_day" value="12:00" class="rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 sm:text-sm"><button type="button" onclick="this.parentElement.remove()" class="text-sm font-medium text-red-600 hover:text-red-700 transition-colors">Удалить</button>';
     container.appendChild(div);
 }
 </script>
