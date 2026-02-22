@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: sh -c "uv run alembic upgrade head && uv run uvicorn main:app --host 0.0.0.0 --port 8000"
+    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000
     container_name: web-broadcaster
     ports:
       - "8000:8000"
@@ -41,13 +41,13 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-  
-  celery-worker:
+
+  celery-beat:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: celery-worker-broadcaster      
-    command: uv run celery -A app.worker.celery_app worker --loglevel=info
+    container_name: celery-beat-broadcaster
+    command: uv run celery -A app.worker.celery_app beat --loglevel=info
     depends_on:
       db:
         condition: service_healthy
@@ -55,15 +55,56 @@ services:
         condition: service_healthy
     env_file: .env
 
-  celery-beat:
+  celery-worker-telegram:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: celery-beat-broadcaster  
-    command: uv run celery -A app.worker.celery_app beat --loglevel=info
+    command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=telegram --concurrency=4
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    deploy:
+      replicas: 2
+
+  celery-worker-whatsapp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=whatsapp --concurrency=2
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    deploy:
+      replicas: 2
+
+  celery-worker-default:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celery-worker-default-broadcaster
+    command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=default --concurrency=2
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flower-broadcaster
+    command: uv run celery -A app.worker.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
       redis:
         condition: service_healthy
     env_file: .env
@@ -81,18 +122,68 @@ services:
       timeout: 5s
       retries: 5
 
-  wa-bridge:
+  wa-bridge-1:
     build:
       context: ./wa_bridge
       dockerfile: Dockerfile
-    container_name: wa-bridge-broadcaster
-    ports:
-      - "3000:3000"
+    container_name: wa-bridge-1-broadcaster
     depends_on:
       mongo:
         condition: service_healthy
     environment:
       - MONGODB_URI=mongodb://mongo:27017/whatsapp_sessions
+      - PORT=3000
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  wa-bridge-2:
+    build:
+      context: ./wa_bridge
+      dockerfile: Dockerfile
+    container_name: wa-bridge-2-broadcaster
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/whatsapp_sessions
+      - PORT=3000
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  wa-bridge-3:
+    build:
+      context: ./wa_bridge
+      dockerfile: Dockerfile
+    container_name: wa-bridge-3-broadcaster
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/whatsapp_sessions
+      - PORT=3000
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
 
 volumes:
   pgdata:
