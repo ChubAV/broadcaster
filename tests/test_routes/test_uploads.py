@@ -1,7 +1,7 @@
 import pytest
 import pytest_asyncio
+from unittest.mock import AsyncMock, patch
 from httpx import AsyncClient, ASGITransport
-from pathlib import Path
 
 from app.config import Settings
 from app.dependencies import get_db, get_settings
@@ -14,7 +14,11 @@ async def upload_settings(tmp_path):
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         secret_key="test-secret-key",
-        upload_dir=str(tmp_path / "uploads"),
+        s3_endpoint_url="https://s3.example.com",
+        s3_access_key="AKID",
+        s3_secret_key="SECRET",
+        s3_bucket_name="test-bucket",
+        s3_public_url="https://cdn.example.com/test-bucket",
     )
 
 
@@ -64,8 +68,11 @@ def make_png_bytes():
 
 
 @pytest.mark.asyncio
-async def test_upload_valid_image(upload_client, upload_auth_headers, upload_settings):
+@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+async def test_upload_valid_image(mock_s3, upload_client, upload_auth_headers):
+    mock_s3.return_value = "1/abc_test_image.png"
     png_bytes = make_png_bytes()
+
     response = await upload_client.post(
         "/api/uploads/image",
         files={"file": ("test_image.png", png_bytes, "image/png")},
@@ -76,10 +83,12 @@ async def test_upload_valid_image(upload_client, upload_auth_headers, upload_set
     assert "path" in data
     assert "test_image.png" in data["path"]
 
-    # Verify file was actually written to disk
-    full_path = Path(upload_settings.upload_dir) / data["path"]
-    assert full_path.exists()
-    assert full_path.read_bytes() == png_bytes
+    # Verify S3 was called
+    mock_s3.assert_called_once()
+    call_kwargs = mock_s3.call_args.kwargs
+    assert call_kwargs["content"] == png_bytes
+    assert call_kwargs["content_type"] == "image/png"
+    assert call_kwargs["bucket"] == "test-bucket"
 
 
 @pytest.mark.asyncio
@@ -103,8 +112,10 @@ async def test_upload_unauthenticated(upload_client):
 
 
 @pytest.mark.asyncio
-async def test_upload_image_with_cookie_auth(upload_client, upload_settings):
+@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+async def test_upload_image_with_cookie_auth(mock_s3, upload_client):
     """Upload should work with cookie-based auth (used by web UI)."""
+    mock_s3.return_value = "1/abc_cookie_image.png"
     await upload_client.post("/api/auth/register", json={
         "email": "cookie@test.com",
         "password": "testpass123",
@@ -126,20 +137,3 @@ async def test_upload_image_with_cookie_auth(upload_client, upload_settings):
     data = response.json()
     assert "path" in data
     assert "cookie_image.png" in data["path"]
-
-
-@pytest.mark.asyncio
-async def test_uploaded_image_is_served(upload_client, upload_auth_headers, upload_settings):
-    """Uploaded images should be accessible via /uploads/ URL."""
-    png_bytes = make_png_bytes()
-
-    resp = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("serve_test.png", png_bytes, "image/png")},
-        headers=upload_auth_headers,
-    )
-    path = resp.json()["path"]
-
-    resp = await upload_client.get(f"/uploads/{path}")
-    assert resp.status_code == 200
-    assert resp.content == png_bytes
