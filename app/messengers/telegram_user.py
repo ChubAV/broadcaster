@@ -1,5 +1,5 @@
 import asyncio
-import logging
+import structlog
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -11,7 +11,7 @@ from telethon.tl.types import Channel, Chat
 
 from app.messengers.base import BaseMessenger
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # QR Auth in-memory state
@@ -189,6 +189,7 @@ class TelegramUserMessenger(BaseMessenger):
         self.client = TelegramClient(
             StringSession(session_string), api_id, api_hash
         )
+        self.log = logger.bind(messenger="telegram")
 
     async def send_message(self, group_id: str, text: str, images: list[str] | None = None) -> dict:
         try:
@@ -215,6 +216,7 @@ class TelegramUserMessenger(BaseMessenger):
                 await self.client.send_message(int(group_id), text)
             return {"ok": True}
         except Exception as e:
+            self.log.error("send_message_error", group_id=group_id, error=str(e), exc_info=True)
             return {"ok": False, "error": str(e)}
         finally:
             try:
@@ -230,8 +232,8 @@ class TelegramUserMessenger(BaseMessenger):
             for dialog in dialogs:
                 if dialog.is_group:
                     groups.append({"id": str(dialog.id), "name": dialog.title})
-        except Exception:
-            pass
+        except Exception as e:
+            self.log.error("get_groups_error", error=str(e), exc_info=True)
         finally:
             try:
                 await self.client.disconnect()
@@ -244,7 +246,8 @@ class TelegramUserMessenger(BaseMessenger):
             await self.client.connect()
             await self.client.get_me()
             return True
-        except Exception:
+        except Exception as e:
+            self.log.warning("check_connection_failed", error=str(e))
             return False
         finally:
             try:
