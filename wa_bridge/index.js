@@ -6,6 +6,23 @@ const qrcode = require('qrcode');
 const fs = require('fs');
 const axios = require('axios');
 
+// Prevent process crash from Puppeteer/wwebjs internal errors.
+// When WhatsApp Web navigates mid-operation, Puppeteer's CallbackRegistry
+// rejects pending CDP callbacks outside the sendMessage promise chain.
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[process] Unhandled rejection:', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+    // ProtocolError from Puppeteer context destruction is recoverable — don't crash.
+    if (err?.name === 'ProtocolError' || err?.message?.includes('Execution context was destroyed')) {
+        console.error('[process] Caught Puppeteer ProtocolError (non-fatal):', err.message);
+        return;
+    }
+    // For truly unexpected errors, log and exit.
+    console.error('[process] Uncaught exception (fatal):', err);
+    process.exit(1);
+});
+
 const app = express();
 app.use(express.json());
 
@@ -357,6 +374,14 @@ app.post('/api/sessions/:id/send', async (req, res) => {
         res.json({ ok: true });
     } catch (error) {
         console.error(`[${sessionId}] Send error: ${error.message}`);
+        // If Chromium context was destroyed, mark session as disconnected
+        // so ensureSession reloads it on next request.
+        if (error?.name === 'ProtocolError' || error?.message?.includes('context was destroyed')) {
+            state.isConnected = false;
+            try { await state.client.destroy(); } catch (_) {}
+            sessions.delete(sessionId);
+            console.log(`[${sessionId}] Session evicted after ProtocolError`);
+        }
         res.status(500).json({ error: error.message });
     }
 });
