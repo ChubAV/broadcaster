@@ -1,6 +1,9 @@
 #!/bin/bash
 # Первоначальное получение SSL-сертификата Let's Encrypt
-# Запустить один раз перед первым docker compose up
+#
+# Nginx автоматически стартует в HTTP-режиме если сертификата нет.
+# Этот скрипт запускает certbot для получения первого сертификата,
+# затем перезапускает nginx с полным HTTPS-конфигом.
 
 set -e
 
@@ -16,33 +19,18 @@ COMPOSE_FILE="docker-compose.prod.yml"
 
 echo "==> Получение сертификата для: $DOMAIN"
 
-# 1. Создаём временный nginx конфиг только для HTTP (без SSL)
-echo "==> Запуск nginx в HTTP-режиме для ACME challenge..."
+# 1. Убедимся что DOMAIN в .env
+if ! grep -q "^DOMAIN=" .env 2>/dev/null; then
+    echo "DOMAIN=$DOMAIN" >> .env
+    echo "==> Добавлен DOMAIN=$DOMAIN в .env"
+fi
 
-cat > nginx/nginx-init.conf <<CONF
-server {
-    listen 80;
-    server_name $DOMAIN;
+# 2. Запускаем nginx (стартует в HTTP-режиме — сертификата ещё нет)
+echo "==> Запуск nginx в HTTP-режиме..."
+docker compose -f $COMPOSE_FILE up -d nginx
+sleep 3
 
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
-
-    location / {
-        return 200 'waiting for certificate';
-        add_header Content-Type text/plain;
-    }
-}
-CONF
-
-# 2. Запускаем nginx с временным конфигом
-docker compose -f $COMPOSE_FILE run -d --name nginx-init \
-    -p 80:80 \
-    -v "$(pwd)/nginx/nginx-init.conf:/etc/nginx/conf.d/default.conf:ro" \
-    -v "broadcaster_certbot-webroot:/var/www/certbot" \
-    nginx:alpine
-
-# 3. Получаем сертификат
+# 3. Получаем сертификат через certbot
 echo "==> Запуск certbot..."
 
 EMAIL_ARG=""
@@ -52,25 +40,19 @@ else
     EMAIL_ARG="--register-unsafely-without-email"
 fi
 
-docker run --rm \
-    -v "broadcaster_certbot-webroot:/var/www/certbot" \
-    -v "broadcaster_certbot-certs:/etc/letsencrypt" \
-    certbot/certbot certonly \
+docker compose -f $COMPOSE_FILE run --rm certbot \
+    certbot certonly \
     --webroot -w /var/www/certbot \
     $EMAIL_ARG \
     -d "$DOMAIN" \
     --agree-tos \
     --non-interactive
 
-# 4. Убираем временный контейнер и конфиг
-echo "==> Очистка..."
-docker stop nginx-init && docker rm nginx-init
-rm nginx/nginx-init.conf
+# 4. Перезапускаем nginx — теперь подхватит HTTPS-конфиг
+echo "==> Перезапуск nginx с SSL..."
+docker compose -f $COMPOSE_FILE restart nginx
 
 echo ""
-echo "==> Сертификат получен!"
-echo "==> Добавьте в .env:"
-echo "    DOMAIN=$DOMAIN"
-echo ""
-echo "==> Запускайте:"
+echo "==> Готово! Сертификат получен, HTTPS активен."
+echo "==> Запустите остальные сервисы:"
 echo "    docker compose -f $COMPOSE_FILE up -d"
