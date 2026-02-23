@@ -114,6 +114,7 @@ function createClient(sessionId) {
                 '--disable-dev-shm-usage',
                 '--disable-accelerated-2d-canvas',
                 '--disable-gpu',
+                '--single-process',
             ],
         },
     });
@@ -125,6 +126,7 @@ function createClient(sessionId) {
         initializing: true,
         lastActivity: Date.now(),
         readyPromise: null,
+        initFailed: false,
     };
 
     state.readyPromise = new Promise((resolve, reject) => {
@@ -141,6 +143,12 @@ function createClient(sessionId) {
             clearTimeout(timeout);
             reject(new Error(`Auth failure: ${msg}`));
         });
+
+        // Reject immediately when initialize() fails — don't wait 90s
+        state._rejectReady = (err) => {
+            clearTimeout(timeout);
+            reject(err);
+        };
     });
 
     client.on('qr', async (qr) => {
@@ -176,7 +184,13 @@ function createClient(sessionId) {
 
     client.initialize().catch((err) => {
         state.initializing = false;
+        state.initFailed = true;
         console.error(`[${sessionId}] Failed to initialize: ${err.message}`);
+        // Reject readyPromise immediately so we don't wait 90s for nothing
+        if (state._rejectReady) {
+            state._rejectReady(err);
+            state._rejectReady = null;
+        }
     });
 
     return state;
@@ -185,6 +199,8 @@ function createClient(sessionId) {
 /**
  * Load a session from MongoDB. Called only from ensureSession
  * under the loadingPromises lock.
+ * Retries initialization once before giving up.
+ * On persistent failure, deletes corrupted session from MongoDB.
  */
 async function loadSessionFromMongo(sessionId) {
     // Clean up stale in-memory state if present
@@ -209,20 +225,64 @@ async function loadSessionFromMongo(sessionId) {
         return null;
     }
 
-    console.log(`[${sessionId}] Loading session from MongoDB on demand...`);
-    const state = createClient(sessionId);
+    // Diagnose: check extracted session directory
+    const sessionDir = `.wwebjs_auth/RemoteAuth-${sessionId}`;
+    const maxAttempts = 2;
 
-    try {
-        await state.readyPromise;
-        // After "ready" fires, WhatsApp Web may still be navigating internally.
-        // Poll client.getState() to verify the execution context is actually usable.
-        await waitForStableContext(sessionId, state.client);
-        state.lastActivity = Date.now();
-        return state;
-    } catch (err) {
-        console.error(`[${sessionId}] Failed to load: ${err.message}`);
-        return null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        console.log(`[${sessionId}] Loading session from MongoDB (attempt ${attempt}/${maxAttempts})...`);
+
+        // Clean up previous failed attempt
+        if (sessions.has(sessionId)) {
+            try { await sessions.get(sessionId).client.destroy(); } catch (_) {}
+            sessions.delete(sessionId);
+        }
+
+        const state = createClient(sessionId);
+
+        try {
+            await state.readyPromise;
+            // After "ready" fires, WhatsApp Web may still be navigating internally.
+            // Poll client.getState() to verify the execution context is actually usable.
+            await waitForStableContext(sessionId, state.client);
+            state.lastActivity = Date.now();
+            return state;
+        } catch (err) {
+            console.error(`[${sessionId}] Failed to load (attempt ${attempt}/${maxAttempts}): ${err.message}`);
+            try { await state.client.destroy(); } catch (_) {}
+            sessions.delete(sessionId);
+
+            // Log diagnostic info about extracted session
+            try {
+                const dirExists = fs.existsSync(sessionDir);
+                const files = dirExists ? fs.readdirSync(sessionDir) : [];
+                console.log(`[${sessionId}] Session dir "${sessionDir}": exists=${dirExists}, files=${files.length} [${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}]`);
+            } catch (diagErr) {
+                console.log(`[${sessionId}] Session dir diagnostic failed: ${diagErr.message}`);
+            }
+
+            if (attempt < maxAttempts) {
+                console.log(`[${sessionId}] Retrying in 5s...`);
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+        }
     }
+
+    // All attempts failed — session data is likely corrupted
+    console.error(`[${sessionId}] Session restore failed after ${maxAttempts} attempts, deleting corrupted session from MongoDB`);
+    try {
+        await store.delete({ session: `RemoteAuth-${sessionId}` });
+        console.log(`[${sessionId}] Corrupted session deleted from MongoDB. User needs to re-scan QR.`);
+    } catch (delErr) {
+        console.error(`[${sessionId}] Failed to delete corrupted session: ${delErr.message}`);
+    }
+
+    // Clean up extracted files
+    try {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+    } catch (_) {}
+
+    return null;
 }
 
 /**
