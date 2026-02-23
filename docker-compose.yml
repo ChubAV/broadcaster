@@ -1,8 +1,46 @@
+x-app-base: &app-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: broadcaster-app
+  environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      SECRET_KEY: ${SECRET_KEY}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      WA_BRIDGE_URLS: ${WA_BRIDGE_URLS}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      S3_REGION: ${S3_REGION}
+      S3_PUBLIC_URL: ${S3_PUBLIC_URL}
+  env_file: .env
+
+x-wa-bridge-base: &wa-bridge-base
+  build:
+    context: ./wa_bridge
+    dockerfile: Dockerfile
+  depends_on:
+    mongo:
+      condition: service_healthy
+  environment:
+    MONGODB_URI: ${MONGODB_URI}
+    PORT: 3000
+  healthcheck:
+    test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
+    interval: 10s
+    timeout: 5s
+    retries: 3
+  deploy:
+    resources:
+      limits:
+        memory: 2G
+
 services:
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *app-base
     entrypoint: ["./entrypoint.sh"]
     command: uv run uvicorn main:app --host 0.0.0.0 --port 8000
     container_name: web-broadcaster
@@ -13,7 +51,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    env_file: .env
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -21,6 +58,62 @@ services:
       retries: 10
       start_period: 15s
 
+  celery-beat:
+    <<: *app-base
+    container_name: celery-beat-broadcaster
+    command: uv run celery -A app.worker.celery_app beat --loglevel=info
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-worker-telegram:
+    <<: *app-base
+    command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=telegram --concurrency=4
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+
+  celery-worker-whatsapp:
+    <<: *app-base
+    command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=whatsapp --concurrency=2
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+
+  celery-worker-default:
+    <<: *app-base
+    container_name: celery-worker-default-broadcaster
+    command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=default --concurrency=2
+    depends_on:
+      web:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+# Мосты к Whatsapp
+  wa-bridge-1:
+    <<: *wa-bridge-base
+    container_name: wa-bridge-1-broadcaster
+
+  wa-bridge-2:
+    <<: *wa-bridge-base
+    container_name: wa-bridge-2-broadcaster
+
+  wa-bridge-3:
+    <<: *wa-bridge-base
+    container_name: wa-bridge-3-broadcaster
+
+# Базы данных
   db:
     image: postgres:16-alpine
     container_name: db-broadcaster
@@ -49,73 +142,6 @@ services:
       timeout: 5s
       retries: 5
 
-  celery-beat:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: celery-beat-broadcaster
-    command: uv run celery -A app.worker.celery_app beat --loglevel=info
-    depends_on:
-      web:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    env_file: .env
-
-  celery-worker-telegram:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=telegram --concurrency=4
-    depends_on:
-      web:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    env_file: .env
-    deploy:
-      replicas: 2
-
-  celery-worker-whatsapp:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=whatsapp --concurrency=2
-    depends_on:
-      web:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    env_file: .env
-    deploy:
-      replicas: 2
-
-  celery-worker-default:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: celery-worker-default-broadcaster
-    command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=default --concurrency=2
-    depends_on:
-      web:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    env_file: .env
-
-  flower:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: flower-broadcaster
-    command: uv run celery -A app.worker.celery_app flower --port=5555
-    ports:
-      - "5555:5555"
-    depends_on:
-      redis:
-        condition: service_healthy
-    env_file: .env
-
   mongo:
     image: mongo:7
     container_name: mongo-broadcaster
@@ -129,68 +155,16 @@ services:
       timeout: 5s
       retries: 5
 
-  wa-bridge-1:
-    build:
-      context: ./wa_bridge
-      dockerfile: Dockerfile
-    container_name: wa-bridge-1-broadcaster
+# Служебные сервисы
+  flower:
+    <<: *app-base
+    container_name: flower-broadcaster
+    command: uv run celery -A app.worker.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
     depends_on:
-      mongo:
+      redis:
         condition: service_healthy
-    environment:
-      - MONGODB_URI=mongodb://mongo:27017/whatsapp_sessions
-      - PORT=3000
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-
-  wa-bridge-2:
-    build:
-      context: ./wa_bridge
-      dockerfile: Dockerfile
-    container_name: wa-bridge-2-broadcaster
-    depends_on:
-      mongo:
-        condition: service_healthy
-    environment:
-      - MONGODB_URI=mongodb://mongo:27017/whatsapp_sessions
-      - PORT=3000
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-
-  wa-bridge-3:
-    build:
-      context: ./wa_bridge
-      dockerfile: Dockerfile
-    container_name: wa-bridge-3-broadcaster
-    depends_on:
-      mongo:
-        condition: service_healthy
-    environment:
-      - MONGODB_URI=mongodb://mongo:27017/whatsapp_sessions
-      - PORT=3000
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    deploy:
-      resources:
-        limits:
-          memory: 2G
 
 volumes:
   pgdata:
