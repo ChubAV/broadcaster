@@ -29,7 +29,7 @@ async def auth_setup():
         telegram_api_id=12345,
         telegram_api_hash="test_api_hash",
     )
-    app = create_app()
+    app = create_app(settings=settings)
 
     async def override_db():
         async with session_factory() as session:
@@ -106,7 +106,7 @@ async def test_start_qr_no_api_config_returns_error(auth_setup):
         telegram_api_id=0,
         telegram_api_hash="",
     )
-    app = create_app()
+    app = create_app(settings=settings_no_api)
 
     async def override_db():
         async with sf() as session:

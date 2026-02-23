@@ -30,7 +30,7 @@ async def sync_setup():
         telegram_api_id=12345,
         telegram_api_hash="test_api_hash",
     )
-    app = create_app()
+    app = create_app(settings=settings)
 
     async def override_db():
         async with session_factory() as session:
@@ -160,7 +160,7 @@ async def test_sync_groups_always_uses_settings_credentials(sync_setup):
         telegram_api_id=0,
         telegram_api_hash="",
     )
-    app = create_app()
+    app = create_app(settings=settings)
 
     async def override_db():
         async with session_factory() as session:

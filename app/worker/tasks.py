@@ -1,5 +1,5 @@
 import asyncio
-import logging
+import structlog
 from datetime import datetime, timezone
 
 from celery import shared_task
@@ -19,7 +19,7 @@ from app.services.messenger_factory import create_messenger
 from app.services.s3 import get_image_url
 from app.services.schedule_service import compute_next_run_at
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 async def dispatch_send_tasks(
@@ -70,7 +70,7 @@ async def check_schedules_async(session: AsyncSession):
     )
     schedules = result.unique().scalars().all()
 
-    logger.info("check_schedules: now=%s, found %d due schedules", now.isoformat(), len(schedules))
+    logger.info("check_schedules_found", now=now.isoformat(), due_count=len(schedules))
 
     if not schedules:
         return
@@ -83,13 +83,7 @@ async def check_schedules_async(session: AsyncSession):
         account = schedule.account
 
         if not ad or not account or account.status != "active":
-            logger.info(
-                "Schedule %d skipped: ad=%s, account=%s, account_status=%s",
-                schedule.id,
-                ad.id if ad else None,
-                account.id if account else None,
-                account.status if account else "N/A",
-            )
+            logger.info("schedule_skipped", schedule_id=schedule.id, reason="missing_entity", ad_id=ad.id if ad else None, account_id=account.id if account else None, account_status=account.status if account else "N/A")
             schedule.next_run_at = compute_next_run_at(
                 days_of_week=schedule.days_of_week,
                 times_of_day=schedule.times_of_day,
@@ -105,7 +99,7 @@ async def check_schedules_async(session: AsyncSession):
 
         allowed, reason = checked_users[user_id]
         if not allowed:
-            logger.info("Schedule %d skipped (billing): user %d — %s", schedule.id, user_id, reason)
+            logger.info("schedule_skipped_billing", schedule_id=schedule.id, user_id=user_id, reason=reason)
             schedule.next_run_at = compute_next_run_at(
                 days_of_week=schedule.days_of_week,
                 times_of_day=schedule.times_of_day,
@@ -115,10 +109,7 @@ async def check_schedules_async(session: AsyncSession):
             continue
 
         groups_count = len(schedule.group_ids) if schedule.group_ids else 0
-        logger.info(
-            "Schedule %d: ad=%d, account=%d (%s), groups=%d",
-            schedule.id, ad.id, account.id, account.type, groups_count,
-        )
+        logger.info("schedule_dispatching", schedule_id=schedule.id, ad_id=ad.id, account_id=account.id, account_type=account.type, groups_count=groups_count)
 
         for group_id in schedule.group_ids:
             tasks_to_dispatch.append({
@@ -142,13 +133,14 @@ async def check_schedules_async(session: AsyncSession):
     # Dispatch all send tasks
     if tasks_to_dispatch:
         await dispatch_send_tasks(tasks_to_dispatch)
-        logger.info("Dispatched %d send tasks", len(tasks_to_dispatch))
+        logger.info("send_tasks_dispatched", count=len(tasks_to_dispatch))
     else:
-        logger.info("No tasks to dispatch (all schedules skipped)")
+        logger.info("no_tasks_to_dispatch")
 
 
 async def _send_message(ad_id: int, group_id: int, account_id: int, schedule_id: int):
     """Shared send logic for both Telegram and WhatsApp tasks."""
+    log = logger.bind(ad_id=ad_id, group_id=group_id, account_id=account_id, schedule_id=schedule_id)
     settings = get_settings()
     engine = get_engine(settings.database_url)
     session_factory = get_session_factory(engine)
@@ -159,21 +151,23 @@ async def _send_message(ad_id: int, group_id: int, account_id: int, schedule_id:
         account = await session.get(MessengerAccount, account_id)
 
         if not ad or not group or not account:
-            log = SendLog(
+            log.warning("send_skipped", reason="missing_record", ad=bool(ad), group=bool(group), account=bool(account))
+            log_entry = SendLog(
                 schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
                 status="fail", error_message="Missing ad, group, or account",
             )
-            session.add(log)
+            session.add(log_entry)
             await session.commit()
             return
 
         if account.status != "active":
-            log = SendLog(
+            log.warning("send_skipped", reason="account_disconnected", account_status=account.status)
+            log_entry = SendLog(
                 schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
                 status="account_disconnected",
                 error_message=f"Account {account.id} is {account.status}",
             )
-            session.add(log)
+            session.add(log_entry)
             await session.commit()
             return
 
@@ -182,25 +176,54 @@ async def _send_message(ad_id: int, group_id: int, account_id: int, schedule_id:
             s3_public_url = settings.s3_public_url
             images = [get_image_url(img, s3_public_url) for img in ad.images]
 
-        messenger = create_messenger(account, settings)
+        try:
+            messenger = create_messenger(account, settings)
+        except ValueError as e:
+            log.error("create_messenger_error", error=str(e), account_type=account.type)
+            log_entry = SendLog(
+                schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
+                status="fail", error_message=str(e),
+            )
+            session.add(log_entry)
+            await session.commit()
+            return
+
         result = await messenger.send_message(
             group_id=group.group_external_id,
             text=ad.text,
             images=images,
         )
 
-        log = SendLog(
+        log_entry = SendLog(
             schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
             status="ok" if result["ok"] else "fail",
             error_message=result.get("error"),
         )
-        session.add(log)
+        session.add(log_entry)
         await session.commit()
 
         if not result["ok"]:
+            log.error("send_failed", error=result.get("error"))
             raise Exception(f"Send failed: {result.get('error')}")
 
+        log.info("send_ok")
+
     await engine.dispose()
+
+
+def _on_send_failure(self, exc, task_id, args, kwargs, einfo):
+    """Log when all retries are exhausted."""
+    ad_id, group_id, account_id, schedule_id = args
+    logger.error(
+        "send_task_final_failure",
+        task_id=task_id,
+        ad_id=ad_id,
+        group_id=group_id,
+        account_id=account_id,
+        schedule_id=schedule_id,
+        error=str(exc),
+        exc_info=True,
+    )
 
 
 @shared_task(
@@ -217,6 +240,9 @@ def send_telegram_message(self, ad_id, group_id, account_id, schedule_id):
     asyncio.run(_send_message(ad_id, group_id, account_id, schedule_id))
 
 
+send_telegram_message.on_failure = _on_send_failure
+
+
 @shared_task(
     name="app.worker.tasks.send_whatsapp_message",
     bind=True,
@@ -231,6 +257,9 @@ def send_whatsapp_message(self, ad_id, group_id, account_id, schedule_id):
     asyncio.run(_send_message(ad_id, group_id, account_id, schedule_id))
 
 
+send_whatsapp_message.on_failure = _on_send_failure
+
+
 @shared_task(name="app.worker.tasks.check_schedules")
 def check_schedules():
     """Celery task: check all due schedules and dispatch individual send tasks."""
@@ -239,8 +268,13 @@ def check_schedules():
     session_factory = get_session_factory(engine)
 
     async def _run():
-        async with session_factory() as session:
-            await check_schedules_async(session)
-        await engine.dispose()
+        try:
+            async with session_factory() as session:
+                await check_schedules_async(session)
+        except Exception as e:
+            logger.error("check_schedules_error", error=str(e), exc_info=True)
+            raise
+        finally:
+            await engine.dispose()
 
     asyncio.run(_run())

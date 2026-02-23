@@ -209,3 +209,39 @@ async def test_get_qr():
         assert result["qr"] == "data:image/png;base64,abc123"
         call_args = mock_client.get.call_args
         assert call_args[0][0] == "http://wa-bridge:3000/api/sessions/42/qr"
+
+
+@pytest.mark.asyncio
+async def test_send_message_logs_error_on_http_failure(caplog):
+    """send_message logs error when HTTP call fails."""
+    import logging
+    messenger = WhatsAppMessenger("http://wa-bridge:3000", session_id="42")
+
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(side_effect=Exception("Connection refused"))
+        mock_get_client.return_value = mock_client
+
+        with caplog.at_level(logging.ERROR, logger="app.messengers.whatsapp"):
+            result = await messenger.send_message("group123", "Hello!")
+
+    assert result["ok"] is False
+    assert any("send_message_error" in r.message or "Connection refused" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_get_groups_logs_error_on_failure(caplog):
+    """get_groups logs error when HTTP call fails."""
+    import logging
+    messenger = WhatsAppMessenger("http://wa-bridge:3000", session_id="42")
+
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=Exception("Timeout"))
+        mock_get_client.return_value = mock_client
+
+        with caplog.at_level(logging.ERROR, logger="app.messengers.whatsapp"):
+            groups = await messenger.get_groups()
+
+    assert groups == []
+    assert any("get_groups_error" in r.message or "Timeout" in r.message for r in caplog.records)

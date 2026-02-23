@@ -1,6 +1,9 @@
 import httpx
+import structlog
 
 from app.messengers.base import BaseMessenger
+
+logger = structlog.get_logger(__name__)
 
 
 def get_bridge_url(session_id: int, bridge_urls: list[str]) -> str:
@@ -27,6 +30,7 @@ class WhatsAppMessenger(BaseMessenger):
     def __init__(self, bridge_url: str, session_id: str):
         self.bridge_url = bridge_url.rstrip("/")
         self.session_id = session_id
+        self.log = logger.bind(messenger="whatsapp", session_id=session_id)
 
     def _url(self, path: str) -> str:
         return f"{self.bridge_url}/api/sessions/{self.session_id}/{path}"
@@ -39,20 +43,21 @@ class WhatsAppMessenger(BaseMessenger):
                 payload["image_urls"] = images
             response = await client.post(self._url("send"), json=payload)
             if response.status_code != 200:
-                # Try to extract error message from JSON response
                 error_msg = ""
                 try:
                     body = response.json()
                     error_msg = body.get("error", "")
                 except Exception:
                     error_msg = response.text
-                return {
-                    "ok": False,
-                    "error": f"[HTTP {response.status_code}] {error_msg}" if error_msg else f"[HTTP {response.status_code}] empty response",
-                }
+                error = f"[HTTP {response.status_code}] {error_msg}" if error_msg else f"[HTTP {response.status_code}] empty response"
+                self.log.error("send_message_error", group_id=group_id, http_status=response.status_code, error=error)
+                return {"ok": False, "error": error}
+            self.log.debug("send_message_ok", group_id=group_id)
             return {"ok": True}
-        except httpx.HTTPError as e:
-            return {"ok": False, "error": f"[Connection] {type(e).__name__}: {e}"}
+        except Exception as e:
+            error = f"[Connection] {type(e).__name__}: {e}"
+            self.log.error("send_message_error", group_id=group_id, error=error, exc_info=True)
+            return {"ok": False, "error": error}
 
     async def get_groups(self) -> list[dict]:
         client = get_http_client()
@@ -60,8 +65,10 @@ class WhatsAppMessenger(BaseMessenger):
             response = await client.get(self._url("groups"))
             if response.status_code == 200:
                 return response.json()
+            self.log.error("get_groups_error", http_status=response.status_code)
             return []
-        except httpx.HTTPError:
+        except Exception as e:
+            self.log.error("get_groups_error", error=str(e), exc_info=True)
             return []
 
     async def check_connection(self) -> bool:
@@ -69,7 +76,8 @@ class WhatsAppMessenger(BaseMessenger):
         try:
             response = await client.get(self._url("status"))
             return response.status_code == 200 and response.json().get("connected", False)
-        except Exception:
+        except Exception as e:
+            self.log.warning("check_connection_failed", error=str(e))
             return False
 
     async def start_session(self) -> bool:
@@ -77,7 +85,8 @@ class WhatsAppMessenger(BaseMessenger):
         try:
             response = await client.post(self._url("start"), timeout=30)
             return response.status_code == 200
-        except Exception:
+        except Exception as e:
+            self.log.error("start_session_error", error=str(e), exc_info=True)
             return False
 
     async def destroy_session(self) -> bool:
@@ -87,7 +96,8 @@ class WhatsAppMessenger(BaseMessenger):
                 f"{self.bridge_url}/api/sessions/{self.session_id}"
             )
             return response.status_code == 200
-        except Exception:
+        except Exception as e:
+            self.log.error("destroy_session_error", error=str(e), exc_info=True)
             return False
 
     async def get_qr(self) -> dict:
@@ -96,6 +106,8 @@ class WhatsAppMessenger(BaseMessenger):
             response = await client.get(self._url("qr"))
             if response.status_code == 200:
                 return response.json()
+            self.log.warning("get_qr_error", http_status=response.status_code)
             return {"status": "error", "qr": None}
-        except Exception:
+        except Exception as e:
+            self.log.error("get_qr_error", error=str(e), exc_info=True)
             return {"status": "error", "qr": None}

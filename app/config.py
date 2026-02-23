@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     app_name: str = "Broadcaster"
     debug: bool = False
 
+    # Logging
+    log_level: str = "INFO"
+    log_format: str = "json"  # "json" or "console"
+
     # Database
     database_url: str
 

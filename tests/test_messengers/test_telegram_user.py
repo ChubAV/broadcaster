@@ -196,3 +196,29 @@ def test_cleanup_qr_session():
 
 def test_cleanup_qr_session_nonexistent():
     cleanup_qr_session("does_not_exist")  # Should not raise
+
+
+@pytest.mark.asyncio
+async def test_get_groups_logs_error_on_failure(messenger, caplog):
+    """get_groups logs error when Telegram API fails."""
+    import logging
+    messenger.client.get_dialogs = AsyncMock(side_effect=Exception("Session expired"))
+
+    with caplog.at_level(logging.ERROR, logger="app.messengers.telegram_user"):
+        groups = await messenger.get_groups()
+
+    assert groups == []
+    assert any("get_groups_error" in r.message or "Session expired" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_check_connection_logs_warning_on_failure(messenger, caplog):
+    """check_connection logs warning when check fails."""
+    import logging
+    messenger.client.get_me = AsyncMock(side_effect=Exception("Auth key expired"))
+
+    with caplog.at_level(logging.WARNING, logger="app.messengers.telegram_user"):
+        result = await messenger.check_connection()
+
+    assert result is False
+    assert any("check_connection_failed" in r.message or "Auth key expired" in r.message for r in caplog.records)
