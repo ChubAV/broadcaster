@@ -37,7 +37,7 @@ async def db_session():
 
 @pytest_asyncio.fixture
 async def client(db_session, test_settings):
-    app = create_app()
+    app = create_app(settings=test_settings)
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_settings] = lambda: test_settings
     transport = ASGITransport(app=app)

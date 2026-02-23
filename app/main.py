@@ -1,15 +1,15 @@
-import logging
+import structlog
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 
-logging.basicConfig(level=logging.INFO)
-
+from app.logging_config import setup_logging
 from app.config import Settings, get_settings
 from app.exceptions import NotFoundError, ForbiddenError, BillingLimitError, MessengerConnectionError
 from app.database import get_engine, get_session_factory
 from app.dependencies import init_db
+from app.middleware import RequestIdMiddleware
 from app.routes.auth import router as auth_router
 from app.routes.ads import router as ads_router
 from app.routes.uploads import router as uploads_router
@@ -19,6 +19,8 @@ from app.routes.schedules import router as schedules_router
 from app.routes.history import router as history_router
 from app.routes.billing import router as billing_router
 from app.pages import router as pages_router
+
+logger = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
@@ -32,7 +34,12 @@ async def lifespan(app: FastAPI):
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
+    if settings is None:
+        settings = get_settings()
+    setup_logging(log_level=settings.log_level, log_format=settings.log_format)
+
     app = FastAPI(title="Broadcaster", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(RequestIdMiddleware)
     app.include_router(auth_router)
     app.include_router(ads_router)
     app.include_router(uploads_router)
@@ -45,19 +52,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(NotFoundError)
     async def not_found_handler(request: FastAPIRequest, exc: NotFoundError):
+        logger.warning("not_found", error=str(exc))
         return JSONResponse(status_code=404, content={"detail": str(exc)})
 
     @app.exception_handler(ForbiddenError)
     async def forbidden_handler(request: FastAPIRequest, exc: ForbiddenError):
+        logger.warning("forbidden", error=str(exc))
         return JSONResponse(status_code=403, content={"detail": str(exc)})
 
     @app.exception_handler(BillingLimitError)
     async def billing_limit_handler(request: FastAPIRequest, exc: BillingLimitError):
+        logger.warning("billing_limit", error=str(exc))
         return JSONResponse(status_code=403, content={"detail": str(exc)})
 
     @app.exception_handler(MessengerConnectionError)
     async def messenger_error_handler(request: FastAPIRequest, exc: MessengerConnectionError):
+        logger.error("messenger_connection_error", error=str(exc))
         return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+    @app.exception_handler(Exception)
+    async def generic_error_handler(request: FastAPIRequest, exc: Exception):
+        logger.error(
+            "unhandled_exception",
+            error=str(exc),
+            exc_type=type(exc).__name__,
+            exc_info=exc,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        )
 
     @app.get("/health")
     async def health_check():

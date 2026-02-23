@@ -29,7 +29,7 @@ async def e2e_setup():
         secret_key="test-secret",
     )
 
-    app = create_app()
+    app = create_app(settings=settings)
 
     async def override_db():
         async with session_factory() as session:
