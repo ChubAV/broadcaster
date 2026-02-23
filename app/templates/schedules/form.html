@@ -85,6 +85,16 @@
             <button type="button" onclick="addTimeInput()" class="mt-2 text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors">+ Добавить время</button>
         </div>
 
+        <!-- Часовой пояс -->
+        <div>
+            <label for="timezone" class="block text-sm font-medium text-slate-900 mb-2">Часовой пояс</label>
+            <select id="timezone" name="timezone" class="block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 transition-shadow sm:text-sm">
+                {% for tz_value, tz_label in timezone_choices %}
+                <option value="{{ tz_value }}" {% if schedule and schedule.timezone == tz_value %}selected{% elif not schedule and tz_value == 'Europe/Moscow' %}selected{% endif %}>{{ tz_label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
         <div class="flex gap-3">
             <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200">{{ "Сохранить" if schedule else "Создать" }}</button>
             <a href="/schedules" class="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-slate-900 ring-1 ring-slate-300 hover:bg-slate-50 transition-colors">Отмена</a>
