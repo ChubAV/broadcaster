@@ -211,7 +211,7 @@ async def _send_message(ad_id: int, group_id: int, account_id: int, schedule_id:
     await engine.dispose()
 
 
-def _on_send_failure(self, exc, task_id, args, kwargs, einfo):
+def _on_send_failure(exc, task_id, args, kwargs, einfo):
     """Log when all retries are exhausted."""
     ad_id, group_id, account_id, schedule_id = args
     logger.error(

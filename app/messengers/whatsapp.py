@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 import structlog
 
@@ -11,18 +13,25 @@ def get_bridge_url(session_id: int, bridge_urls: list[str]) -> str:
     return bridge_urls[session_id % len(bridge_urls)]
 
 
-# Module-level shared HTTP client (created lazily)
+# Module-level shared HTTP client (created lazily, recreated on event loop change)
 _http_client: httpx.AsyncClient | None = None
+_http_client_loop: asyncio.AbstractEventLoop | None = None
 
 
 def get_http_client() -> httpx.AsyncClient:
-    """Get or create shared httpx client with connection pooling."""
-    global _http_client
-    if _http_client is None or _http_client.is_closed:
+    """Get or create shared httpx client with connection pooling.
+
+    Recreates the client when the event loop changes (e.g. between
+    asyncio.run() calls in Celery worker retries).
+    """
+    global _http_client, _http_client_loop
+    current_loop = asyncio.get_running_loop()
+    if _http_client is None or _http_client.is_closed or _http_client_loop is not current_loop:
         _http_client = httpx.AsyncClient(
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
             timeout=httpx.Timeout(60.0, connect=10.0),
         )
+        _http_client_loop = current_loop
     return _http_client
 
 
