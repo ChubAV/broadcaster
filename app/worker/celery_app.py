@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.signals import worker_init
 
 
 def create_celery_app() -> Celery:
@@ -37,3 +38,12 @@ def create_celery_app() -> Celery:
 
 
 celery = create_celery_app()
+
+
+@worker_init.connect
+def setup_worker_logging(**kwargs):
+    """Initialize structlog when Celery worker starts."""
+    from app.config import get_settings
+    from app.logging_config import setup_logging
+    settings = get_settings()
+    setup_logging(log_level=settings.log_level, log_format=settings.log_format)
