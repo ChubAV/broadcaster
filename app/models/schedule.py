@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -24,6 +24,7 @@ class Schedule(Base):
     group_ids: Mapped[list] = mapped_column(JSON, default=list)
     days_of_week: Mapped[list] = mapped_column(JSON, default=list)
     times_of_day: Mapped[list] = mapped_column(JSON, default=list)
+    timezone: Mapped[str] = mapped_column(String(50), default="UTC", server_default="UTC")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     next_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
