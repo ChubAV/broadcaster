@@ -40,7 +40,7 @@ else
     EMAIL_ARG="--register-unsafely-without-email"
 fi
 
-docker compose -f $COMPOSE_FILE run --rm certbot \
+docker compose -f $COMPOSE_FILE run --rm --entrypoint "" certbot \
     certbot certonly \
     --webroot -w /var/www/certbot \
     $EMAIL_ARG \
