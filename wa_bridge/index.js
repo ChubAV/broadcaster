@@ -14,7 +14,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 process.on('uncaughtException', (err) => {
     // ProtocolError from Puppeteer context destruction is recoverable — don't crash.
-    if (err?.name === 'ProtocolError' || err?.message?.includes('Execution context was destroyed')) {
+    if (err?.name === 'ProtocolError' || err?.message?.includes('context was destroyed') || err?.message?.includes('Execution context')) {
         console.error('[process] Caught Puppeteer ProtocolError (non-fatal):', err.message);
         return;
     }
@@ -34,6 +34,25 @@ const sessions = new Map();
 const loadingPromises = new Map(); // Prevents duplicate session loading
 const sendLocks = new Map(); // Per-session send serialization
 let store; // MongoStore instance, initialized on startup
+
+/**
+ * Check if an error is a Puppeteer execution-context destruction.
+ */
+function isContextError(err) {
+    return err?.name === 'ProtocolError' || err?.message?.includes('context was destroyed');
+}
+
+/**
+ * Evict a broken session so ensureSession reloads it from MongoDB.
+ */
+async function evictSession(sessionId) {
+    const state = sessions.get(sessionId);
+    if (!state) return;
+    state.isConnected = false;
+    try { await state.client.destroy(); } catch (_) {}
+    sessions.delete(sessionId);
+    console.log(`[${sessionId}] Session evicted after ProtocolError`);
+}
 
 /**
  * Serialize async work per session so only one send runs at a time.
@@ -374,13 +393,8 @@ app.post('/api/sessions/:id/send', async (req, res) => {
         res.json({ ok: true });
     } catch (error) {
         console.error(`[${sessionId}] Send error: ${error.message}`);
-        // If Chromium context was destroyed, mark session as disconnected
-        // so ensureSession reloads it on next request.
-        if (error?.name === 'ProtocolError' || error?.message?.includes('context was destroyed')) {
-            state.isConnected = false;
-            try { await state.client.destroy(); } catch (_) {}
-            sessions.delete(sessionId);
-            console.log(`[${sessionId}] Session evicted after ProtocolError`);
+        if (isContextError(error)) {
+            await evictSession(sessionId);
         }
         res.status(500).json({ error: error.message });
     }
@@ -390,23 +404,31 @@ app.post('/api/sessions/:id/send', async (req, res) => {
 app.get('/api/sessions/:id/groups', async (req, res) => {
     const sessionId = req.params.id;
 
-    const state = await ensureSession(sessionId);
-    if (!state || !state.isConnected) {
-        return res.status(503).json({ error: 'WhatsApp session not available' });
-    }
+    // Retry once: if first attempt hits ProtocolError, evict session,
+    // reload from MongoDB, and try again.
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const state = await ensureSession(sessionId);
+        if (!state || !state.isConnected) {
+            return res.status(503).json({ error: 'WhatsApp session not available' });
+        }
 
-    try {
-        const chats = await state.client.getChats();
-        const groups = chats
-            .filter((chat) => chat.isGroup)
-            .map((chat) => ({
-                id: chat.id._serialized,
-                name: chat.name,
-            }));
-        res.json(groups);
-    } catch (error) {
-        console.error(`[${sessionId}] Groups error: ${error.message}`);
-        res.status(500).json({ error: error.message });
+        try {
+            const chats = await state.client.getChats();
+            const groups = chats
+                .filter((chat) => chat.isGroup)
+                .map((chat) => ({
+                    id: chat.id._serialized,
+                    name: chat.name,
+                }));
+            return res.json(groups);
+        } catch (error) {
+            console.error(`[${sessionId}] Groups error (attempt ${attempt + 1}): ${error.message}`);
+            if (isContextError(error) && attempt === 0) {
+                await evictSession(sessionId);
+                continue; // retry with fresh session
+            }
+            return res.status(500).json({ error: error.message });
+        }
     }
 });
 
