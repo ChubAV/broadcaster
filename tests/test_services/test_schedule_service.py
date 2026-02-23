@@ -84,3 +84,33 @@ def test_multiple_times_same_day_picks_earliest_future():
     assert result is not None
     # 09:00 is past, so earliest future is 11:00
     assert result == datetime(2026, 2, 16, 11, 0, tzinfo=timezone.utc)
+
+
+def test_next_run_with_moscow_timezone():
+    """Times interpreted in Moscow timezone are converted to UTC."""
+    # It's Monday 10:00 UTC (= 13:00 MSK), schedule for Mon at 14:00 MSK
+    now = datetime(2026, 2, 16, 10, 0, tzinfo=timezone.utc)  # Monday
+    result = compute_next_run_at(
+        days_of_week=[0],  # Monday
+        times_of_day=["14:00"],
+        tz_name="Europe/Moscow",
+        now=now,
+    )
+    assert result is not None
+    # 14:00 MSK = 11:00 UTC
+    assert result == datetime(2026, 2, 16, 11, 0, tzinfo=timezone.utc)
+
+
+def test_next_run_moscow_time_already_passed():
+    """When Moscow time has passed but UTC hasn't, it should still be future."""
+    # It's Monday 08:00 UTC (= 11:00 MSK), schedule for Mon at 10:00 MSK
+    now = datetime(2026, 2, 16, 8, 0, tzinfo=timezone.utc)  # Monday
+    result = compute_next_run_at(
+        days_of_week=[0],  # Monday
+        times_of_day=["10:00"],
+        tz_name="Europe/Moscow",
+        now=now,
+    )
+    # 10:00 MSK = 07:00 UTC, which is < 08:00 UTC, so it should wrap to next week
+    assert result is not None
+    assert result == datetime(2026, 2, 23, 7, 0, tzinfo=timezone.utc)
