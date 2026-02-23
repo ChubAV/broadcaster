@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    entrypoint: ["./entrypoint.sh"]
     command: uv run uvicorn main:app --host 0.0.0.0 --port 8000
     container_name: web-broadcaster
     ports:
@@ -13,6 +14,12 @@ services:
       redis:
         condition: service_healthy
     env_file: .env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   db:
     image: postgres:16-alpine
@@ -49,7 +56,7 @@ services:
     container_name: celery-beat-broadcaster
     command: uv run celery -A app.worker.celery_app beat --loglevel=info
     depends_on:
-      db:
+      web:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -61,7 +68,7 @@ services:
       dockerfile: Dockerfile
     command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=telegram --concurrency=4
     depends_on:
-      db:
+      web:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -75,7 +82,7 @@ services:
       dockerfile: Dockerfile
     command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=whatsapp --concurrency=2
     depends_on:
-      db:
+      web:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -90,7 +97,7 @@ services:
     container_name: celery-worker-default-broadcaster
     command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=default --concurrency=2
     depends_on:
-      db:
+      web:
         condition: service_healthy
       redis:
         condition: service_healthy
