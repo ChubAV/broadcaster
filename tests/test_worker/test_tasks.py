@@ -316,3 +316,28 @@ async def test_check_schedules_skips_billing_limited(db_session):
     if old_next_run.tzinfo is None:
         old_next_run = old_next_run.replace(tzinfo=timezone.utc)
     assert next_run > old_next_run
+
+
+@pytest.mark.asyncio
+async def test_check_schedules_uses_schedule_timezone(db_session):
+    """Worker uses schedule.timezone for next_run_at computation."""
+    user, ad, account, group, schedule = await create_test_data(db_session)
+
+    # Set timezone to Moscow
+    schedule.timezone = "Europe/Moscow"
+    await db_session.commit()
+
+    dispatched = []
+    mock_tg = MagicMock()
+    mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
+
+    with patch("app.worker.tasks.send_telegram_message", mock_tg), \
+         patch("app.worker.tasks.send_whatsapp_message", MagicMock()), \
+         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
+        await check_schedules_async(db_session)
+
+    assert len(dispatched) == 1
+
+    # Verify next_run_at was recomputed — it should exist and be in the future
+    await db_session.refresh(schedule)
+    assert schedule.next_run_at is not None

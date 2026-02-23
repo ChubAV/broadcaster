@@ -87,7 +87,7 @@ async def check_schedules_async(session: AsyncSession):
             schedule.next_run_at = compute_next_run_at(
                 days_of_week=schedule.days_of_week,
                 times_of_day=schedule.times_of_day,
-                tz_name="UTC",
+                tz_name=schedule.timezone,
                 now=now,
             )
             continue
@@ -103,7 +103,7 @@ async def check_schedules_async(session: AsyncSession):
             schedule.next_run_at = compute_next_run_at(
                 days_of_week=schedule.days_of_week,
                 times_of_day=schedule.times_of_day,
-                tz_name="UTC",
+                tz_name=schedule.timezone,
                 now=now,
             )
             continue
@@ -123,7 +123,7 @@ async def check_schedules_async(session: AsyncSession):
         schedule.next_run_at = compute_next_run_at(
             days_of_week=schedule.days_of_week,
             times_of_day=schedule.times_of_day,
-            tz_name="UTC",
+            tz_name=schedule.timezone,
             now=now,
         )
 
