@@ -22,9 +22,6 @@ x-wa-bridge-base: &wa-bridge-base
   build:
     context: ./wa_bridge
     dockerfile: Dockerfile
-  depends_on:
-    mongo:
-      condition: service_healthy
   environment:
     MONGODB_URI: ${MONGODB_URI}
     PORT: 3000
@@ -69,9 +66,6 @@ services:
       web:
         condition: service_healthy
 
-    deploy:
-      replicas: 2
-
   celery-worker-whatsapp:
     <<: *app-base
     command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=whatsapp --concurrency=2
@@ -79,8 +73,6 @@ services:
       web:
         condition: service_healthy
 
-    deploy:
-      replicas: 2
   celery-worker-default:
     <<: *app-base
     container_name: celery-worker-default-broadcaster
