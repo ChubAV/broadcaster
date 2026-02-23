@@ -1,9 +1,9 @@
-import logging
+import structlog
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class TelegramPool:
@@ -39,9 +39,14 @@ class TelegramPool:
             except Exception:
                 pass
 
-        client = await self._create_client(session_string, api_id, api_hash)
+        try:
+            client = await self._create_client(session_string, api_id, api_hash)
+        except Exception as e:
+            logger.error("telegram_pool_connect_error", account_id=account_id, error=str(e), exc_info=True)
+            raise
+
         self._clients[account_id] = client
-        logger.info("Telegram pool: connected account %d", account_id)
+        logger.info("telegram_pool_connected", account_id=account_id)
         return client
 
     async def disconnect_all(self):
@@ -49,10 +54,10 @@ class TelegramPool:
         for account_id, client in self._clients.items():
             try:
                 await client.disconnect()
-                logger.info("Telegram pool: disconnected account %d", account_id)
+                logger.info("telegram_pool_disconnected", account_id=account_id)
             except Exception as e:
                 logger.warning(
-                    "Telegram pool: error disconnecting %d: %s", account_id, e
+                    "telegram_pool_disconnect_error", account_id=account_id, error=str(e)
                 )
         self._clients.clear()
 
