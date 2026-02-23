@@ -36,13 +36,45 @@ x-wa-bridge-base: &wa-bridge-base
         memory: 2G
 
 services:
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-broadcaster
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - certbot-webroot:/var/www/certbot:ro
+      - certbot-certs:/etc/letsencrypt:ro
+    environment:
+      DOMAIN: ${DOMAIN}
+    command: /bin/sh -c "envsubst '$$DOMAIN' < /etc/nginx/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  certbot:
+    image: certbot/certbot
+    container_name: certbot-broadcaster
+    volumes:
+      - certbot-webroot:/var/www/certbot
+      - certbot-certs:/etc/letsencrypt
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'"
+    restart: unless-stopped
+
   web:
     <<: *app-base
     entrypoint: ["./entrypoint.sh"]
     command: uv run uvicorn main:app --host 0.0.0.0 --port 8000
     container_name: web-broadcaster
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -86,4 +118,6 @@ services:
     <<: *wa-bridge-base
     container_name: wa-bridge-1-broadcaster
 
-
+volumes:
+  certbot-webroot:
+  certbot-certs:
