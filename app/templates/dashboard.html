@@ -38,12 +38,13 @@
     </div>
     <div class="px-4 py-5 sm:p-6">
         {% if recent_sends %}
+        <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200">
             <thead><tr>
                 <th class="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Объявление</th>
                 <th class="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Группа</th>
                 <th class="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Статус</th>
-                <th class="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Время</th>
+                <th class="hidden sm:table-cell px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Время</th>
             </tr></thead>
             <tbody class="divide-y divide-slate-200">
                 {% for log in recent_sends %}
@@ -55,11 +56,12 @@
                             {{ log.status }}
                         </span>
                     </td>
-                    <td class="px-3 py-2 text-sm text-slate-500">{{ log.sent_at }}</td>
+                    <td class="hidden sm:table-cell px-3 py-2 text-sm text-slate-500">{{ log.sent_at }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
+        </div>
         {% else %}
         <p class="text-slate-500 text-sm">Отправок пока нет.</p>
         {% endif %}
