@@ -189,6 +189,10 @@ async function loadSessionFromMongo(sessionId) {
 
     try {
         await state.readyPromise;
+        // After "ready" fires, WhatsApp Web may still be navigating internally.
+        // Wait a few seconds for the page to stabilize before allowing operations.
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        console.log(`[${sessionId}] Post-ready stabilization complete`);
         state.lastActivity = Date.now();
         return state;
     } catch (err) {
@@ -336,67 +340,79 @@ app.post('/api/sessions/:id/send', async (req, res) => {
         return res.status(400).json({ error: 'group_id and text or images are required' });
     }
 
-    // Auto-load session on demand (outside lock — loading has its own lock)
-    const state = await ensureSession(sessionId);
-    if (!state || !state.isConnected) {
-        return res.status(503).json({ error: 'WhatsApp session not available' });
+    // Pre-load media outside the retry loop — no need to re-download on retry
+    const caption = text || '';
+    let mediaItems = [];
+    if (images.length > 0) {
+        try {
+            for (const img of images) {
+                if (isUrlMode || img.startsWith('http://') || img.startsWith('https://')) {
+                    const response = await axios.get(img, { responseType: 'arraybuffer' });
+                    const mime = response.headers['content-type'] || 'image/jpeg';
+                    const base64 = Buffer.from(response.data).toString('base64');
+                    mediaItems.push(new MessageMedia(mime, base64));
+                } else if (fs.existsSync(img)) {
+                    mediaItems.push(MessageMedia.fromFilePath(img));
+                }
+            }
+        } catch (error) {
+            console.error(`[${sessionId}] Media download error: ${error.message}`);
+            return res.status(500).json({ error: `Media download failed: ${error.message}` });
+        }
     }
 
-    // Serialize sends per session to avoid "Execution context was destroyed"
-    try {
-        await withSessionLock(sessionId, async () => {
-            const caption = text || '';
-
-            if (images.length > 0) {
-                // Load media from URLs or local paths
-                const mediaItems = [];
-                for (const img of images) {
-                    if (isUrlMode || img.startsWith('http://') || img.startsWith('https://')) {
-                        const response = await axios.get(img, { responseType: 'arraybuffer' });
-                        const mime = response.headers['content-type'] || 'image/jpeg';
-                        const base64 = Buffer.from(response.data).toString('base64');
-                        mediaItems.push(new MessageMedia(mime, base64));
-                    } else if (fs.existsSync(img)) {
-                        mediaItems.push(MessageMedia.fromFilePath(img));
-                    }
-                }
-
-                console.log(`[${sessionId}] Sending ${mediaItems.length} image(s) to group_id=${group_id}, text="${caption.substring(0, 50)}"`);
-
-                if (mediaItems.length === 0) {
-                    if (caption) {
-                        const result = await state.client.sendMessage(group_id, caption);
-                        console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
-                    }
-                } else if (mediaItems.length === 1) {
-                    const opts = caption ? { caption } : {};
-                    const result = await state.client.sendMessage(group_id, mediaItems[0], opts);
-                    console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
-                } else {
-                    // Send images sequentially to avoid Chromium context conflicts
-                    for (let i = 0; i < mediaItems.length; i++) {
-                        const result = await state.client.sendMessage(group_id, mediaItems[i]);
-                        console.log(`[${sessionId}] sendMessage[${i}] result: id=${result?.id?._serialized}, ack=${result?.ack}`);
-                    }
-                    if (caption) {
-                        await state.client.sendMessage(group_id, caption);
-                    }
-                }
-            } else {
-                console.log(`[${sessionId}] Sending text to group_id=${group_id}, text="${caption.substring(0, 50)}"`);
-                const result = await state.client.sendMessage(group_id, caption);
-                console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
-            }
-        });
-
-        state.lastActivity = Date.now();
-        res.json({ ok: true });
-    } catch (error) {
-        console.error(`[${sessionId}] Send error: ${error.message}`);
-        if (isContextError(error)) {
-            await evictSession(sessionId);
+    // Retry once: if first attempt hits ProtocolError, evict session,
+    // reload from MongoDB (with stabilization delay), and try again.
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const state = await ensureSession(sessionId);
+        if (!state || !state.isConnected) {
+            return res.status(503).json({ error: 'WhatsApp session not available' });
         }
-        res.status(500).json({ error: error.message });
+
+        try {
+            await withSessionLock(sessionId, async () => {
+                if (mediaItems.length > 0) {
+                    console.log(`[${sessionId}] Sending ${mediaItems.length} image(s) to group_id=${group_id}, text="${caption.substring(0, 50)}" (attempt ${attempt + 1})`);
+
+                    if (mediaItems.length === 0) {
+                        if (caption) {
+                            const result = await state.client.sendMessage(group_id, caption);
+                            console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
+                        }
+                    } else if (mediaItems.length === 1) {
+                        const opts = caption ? { caption } : {};
+                        const result = await state.client.sendMessage(group_id, mediaItems[0], opts);
+                        console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
+                    } else {
+                        // Send images sequentially to avoid Chromium context conflicts
+                        for (let i = 0; i < mediaItems.length; i++) {
+                            const result = await state.client.sendMessage(group_id, mediaItems[i]);
+                            console.log(`[${sessionId}] sendMessage[${i}] result: id=${result?.id?._serialized}, ack=${result?.ack}`);
+                        }
+                        if (caption) {
+                            await state.client.sendMessage(group_id, caption);
+                        }
+                    }
+                } else {
+                    console.log(`[${sessionId}] Sending text to group_id=${group_id}, text="${caption.substring(0, 50)}" (attempt ${attempt + 1})`);
+                    const result = await state.client.sendMessage(group_id, caption);
+                    console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
+                }
+            });
+
+            state.lastActivity = Date.now();
+            return res.json({ ok: true });
+        } catch (error) {
+            console.error(`[${sessionId}] Send error (attempt ${attempt + 1}): ${error.message}`);
+            if (isContextError(error) && attempt === 0) {
+                await evictSession(sessionId);
+                continue; // retry with fresh session (will go through stabilization delay)
+            }
+            if (isContextError(error)) {
+                await evictSession(sessionId);
+            }
+            return res.status(500).json({ error: error.message });
+        }
     }
 });
 
