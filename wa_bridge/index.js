@@ -105,12 +105,15 @@ function createClient(sessionId) {
             clientId: sessionId,
             backupSyncIntervalMs: 60000, // First backup ~1 min after connection
         }),
+        webVersionCache: { type: 'none' }, // Avoid stale cached WA Web causing injection issues
         puppeteer: {
             headless: true,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
             ],
         },
     });
