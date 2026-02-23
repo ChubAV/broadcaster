@@ -1,12 +1,12 @@
 import json
-import logging
+import structlog
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.billing_service import check_limit
 from app.config import get_settings
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 _redis_client = None
 
