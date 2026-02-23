@@ -1,9 +1,10 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.constants import VALID_TIMEZONES
 from app.dependencies import get_current_user_id, get_db
 from app.repositories.ad import AdRepository
 from app.repositories.schedule import ScheduleRepository
@@ -18,12 +19,28 @@ class CreateScheduleRequest(BaseModel):
     group_ids: list[int] = []
     days_of_week: list[int] = []
     times_of_day: list[str] = []
+    timezone: str = "UTC"
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str) -> str:
+        if v not in VALID_TIMEZONES:
+            raise ValueError(f"Invalid timezone: {v}")
+        return v
 
 
 class UpdateScheduleRequest(BaseModel):
     group_ids: list[int] | None = None
     days_of_week: list[int] | None = None
     times_of_day: list[str] | None = None
+    timezone: str | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: str | None) -> str | None:
+        if v is not None and v not in VALID_TIMEZONES:
+            raise ValueError(f"Invalid timezone: {v}")
+        return v
 
 
 class ScheduleResponse(BaseModel):
@@ -33,6 +50,7 @@ class ScheduleResponse(BaseModel):
     group_ids: list
     days_of_week: list
     times_of_day: list
+    timezone: str
     is_active: bool
     next_run_at: datetime | None
     created_at: datetime
@@ -55,7 +73,7 @@ async def create_schedule(
     next_run = compute_next_run_at(
         days_of_week=data.days_of_week,
         times_of_day=data.times_of_day,
-        tz_name="UTC",
+        tz_name=data.timezone,
     )
 
     schedule_repo = ScheduleRepository(db)
@@ -65,6 +83,7 @@ async def create_schedule(
         group_ids=data.group_ids,
         days_of_week=data.days_of_week,
         times_of_day=data.times_of_day,
+        timezone=data.timezone,
         next_run_at=next_run,
     )
     return schedule
@@ -102,7 +121,7 @@ async def update_schedule(
     schedule.next_run_at = compute_next_run_at(
         days_of_week=schedule.days_of_week,
         times_of_day=schedule.times_of_day,
-        tz_name="UTC",
+        tz_name=schedule.timezone,
     )
 
     await db.commit()
@@ -147,7 +166,7 @@ async def toggle_schedule(
         schedule.next_run_at = compute_next_run_at(
             days_of_week=schedule.days_of_week,
             times_of_day=schedule.times_of_day,
-            tz_name="UTC",
+            tz_name=schedule.timezone,
         )
     else:
         schedule.next_run_at = None

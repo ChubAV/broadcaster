@@ -1,9 +1,12 @@
+from zoneinfo import ZoneInfo
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.constants import TIMEZONE_CHOICES, VALID_TIMEZONES
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
 from app.models.group import Group
@@ -34,6 +37,15 @@ async def schedules_list(
     schedules = [
         {"schedule": r.Schedule, "ad_title": r.ad_title} for r in result
     ]
+    for item in schedules:
+        sched = item["schedule"]
+        if sched.next_run_at and sched.timezone:
+            tz = ZoneInfo(sched.timezone)
+            item["next_run_local"] = sched.next_run_at.astimezone(tz)
+            item["tz_label"] = sched.timezone.split("/")[-1]
+        else:
+            item["next_run_local"] = sched.next_run_at
+            item["tz_label"] = ""
     return templates.TemplateResponse(
         "schedules/list.html",
         {
@@ -80,6 +92,7 @@ async def schedules_new(
             "ads": ads,
             "accounts": accounts,
             "groups": groups,
+            "timezone_choices": TIMEZONE_CHOICES,
             "active_page": "schedules",
         },
     )
@@ -102,8 +115,12 @@ async def schedules_create(
     days_of_week = [int(d) for d in form_data.getlist("days_of_week")]
     times_of_day = [t for t in form_data.getlist("times_of_day") if t]
 
+    tz = form_data.get("timezone", "UTC")
+    if tz not in VALID_TIMEZONES:
+        tz = "UTC"
+
     next_run = compute_next_run_at(
-        days_of_week=days_of_week, times_of_day=times_of_day, tz_name="UTC"
+        days_of_week=days_of_week, times_of_day=times_of_day, tz_name=tz
     )
 
     schedule = Schedule(
@@ -112,6 +129,7 @@ async def schedules_create(
         group_ids=group_ids,
         days_of_week=days_of_week,
         times_of_day=times_of_day,
+        timezone=tz,
         next_run_at=next_run,
     )
     db.add(schedule)
@@ -164,6 +182,7 @@ async def schedules_edit(
             "ads": ads,
             "accounts": accounts,
             "groups": groups,
+            "timezone_choices": TIMEZONE_CHOICES,
             "active_page": "schedules",
         },
     )
@@ -196,13 +215,18 @@ async def schedules_update(
     days_of_week = [int(d) for d in form_data.getlist("days_of_week")]
     times_of_day = [t for t in form_data.getlist("times_of_day") if t]
 
+    tz = form_data.get("timezone", schedule.timezone)
+    if tz not in VALID_TIMEZONES:
+        tz = schedule.timezone
+
     schedule.ad_id = ad_id
     schedule.account_id = account_id
     schedule.group_ids = group_ids
     schedule.days_of_week = days_of_week
     schedule.times_of_day = times_of_day
+    schedule.timezone = tz
     schedule.next_run_at = compute_next_run_at(
-        days_of_week=days_of_week, times_of_day=times_of_day, tz_name="UTC"
+        days_of_week=days_of_week, times_of_day=times_of_day, tz_name=tz
     )
     await db.commit()
     return RedirectResponse(url="/schedules", status_code=302)
@@ -231,7 +255,7 @@ async def schedules_toggle(
             schedule.next_run_at = compute_next_run_at(
                 days_of_week=schedule.days_of_week,
                 times_of_day=schedule.times_of_day,
-                tz_name="UTC",
+                tz_name=schedule.timezone,
             )
         else:
             schedule.next_run_at = None

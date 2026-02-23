@@ -104,3 +104,55 @@ async def test_schedule_default_values(db_session):
     assert schedule.times_of_day == []
     assert schedule.is_active is True
     assert schedule.next_run_at is None
+
+
+@pytest.mark.asyncio
+async def test_schedule_timezone_default(db_session):
+    """Schedule.timezone defaults to 'UTC'."""
+    user = User(email="tz@example.com", password_hash="h", name="TZ User")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    account = MessengerAccount(user_id=user.id, type="tg_user", credentials="tok")
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
+
+    ad = Ad(user_id=user.id, title="TZ Ad", text="text")
+    db_session.add(ad)
+    await db_session.commit()
+    await db_session.refresh(ad)
+
+    schedule = Schedule(ad_id=ad.id, account_id=account.id)
+    db_session.add(schedule)
+    await db_session.commit()
+    await db_session.refresh(schedule)
+
+    assert schedule.timezone == "UTC"
+
+
+@pytest.mark.asyncio
+async def test_schedule_timezone_custom(db_session):
+    """Schedule.timezone can be set to a custom value."""
+    user = User(email="tz2@example.com", password_hash="h", name="TZ2")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    account = MessengerAccount(user_id=user.id, type="tg_user", credentials="tok")
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
+
+    ad = Ad(user_id=user.id, title="TZ2 Ad", text="text")
+    db_session.add(ad)
+    await db_session.commit()
+    await db_session.refresh(ad)
+
+    schedule = Schedule(ad_id=ad.id, account_id=account.id, timezone="Europe/Moscow")
+    db_session.add(schedule)
+    await db_session.commit()
+    await db_session.refresh(schedule)
+
+    assert schedule.timezone == "Europe/Moscow"
