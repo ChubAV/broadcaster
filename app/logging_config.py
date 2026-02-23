@@ -54,3 +54,4 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
     # Quiet noisy loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("celery").setLevel(logging.WARNING)
+    logging.getLogger("telethon").setLevel(logging.WARNING)

@@ -86,7 +86,7 @@ async def _wait_for_qr(session_id: str) -> None:
         else:
             state.status = "error"
             state.error = str(e)
-            logger.error("QR auth error for %s: %s", session_id, e)
+            logger.error("qr_auth_error", session_id=session_id, error=str(e), exc_info=True)
 
 
 def get_qr_status(session_id: str) -> dict:
@@ -122,7 +122,7 @@ async def refresh_qr(session_id: str) -> str | None:
 
         return state.qr_login.url
     except Exception as e:
-        logger.error("Failed to refresh QR for %s: %s", session_id, e)
+        logger.error("qr_refresh_error", session_id=session_id, error=str(e))
         return None
 
 

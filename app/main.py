@@ -76,7 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "unhandled_exception",
             error=str(exc),
             exc_type=type(exc).__name__,
-            exc_info=exc,
+            exc_info=True,
         )
         return JSONResponse(
             status_code=500,

@@ -20,7 +20,7 @@ def _get_redis():
             settings = get_settings()
             _redis_client = redis.asyncio.from_url(settings.redis_url)
         except Exception:
-            logger.warning("Redis not available for billing cache")
+            logger.warning("billing_cache_redis_unavailable")
             return None
     return _redis_client
 
@@ -39,8 +39,8 @@ async def check_limit_cached(
             if cached:
                 data = json.loads(cached)
                 return data["allowed"], data["reason"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("billing_cache_read_error", cache_key=cache_key, error=str(e))
 
     allowed, reason = await check_limit(db, user_id, action)
 
@@ -51,7 +51,7 @@ async def check_limit_cached(
                 ttl,
                 json.dumps({"allowed": allowed, "reason": reason}),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("billing_cache_write_error", cache_key=cache_key, error=str(e))
 
     return allowed, reason
