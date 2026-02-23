@@ -55,6 +55,28 @@ async function evictSession(sessionId) {
 }
 
 /**
+ * After "ready" fires, WhatsApp Web may still be navigating internally
+ * (especially when restoring a session from MongoDB backup).
+ * Poll client.getState() to verify the Puppeteer execution context is
+ * actually usable before allowing operations.
+ */
+async function waitForStableContext(sessionId, client, maxAttempts = 12, intervalMs = 5000) {
+    for (let i = 0; i < maxAttempts; i++) {
+        try {
+            const state = await client.getState();
+            console.log(`[${sessionId}] Context stable (state=${state}, attempt ${i + 1})`);
+            return;
+        } catch (err) {
+            console.log(`[${sessionId}] Context not ready (attempt ${i + 1}/${maxAttempts}): ${err.message}`);
+            if (i < maxAttempts - 1) {
+                await new Promise(resolve => setTimeout(resolve, intervalMs));
+            }
+        }
+    }
+    console.warn(`[${sessionId}] Context did not stabilize after ${maxAttempts} attempts, proceeding anyway`);
+}
+
+/**
  * Serialize async work per session so only one send runs at a time.
  * Prevents "Execution context was destroyed" Chromium errors.
  */
@@ -190,9 +212,8 @@ async function loadSessionFromMongo(sessionId) {
     try {
         await state.readyPromise;
         // After "ready" fires, WhatsApp Web may still be navigating internally.
-        // Wait a few seconds for the page to stabilize before allowing operations.
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        console.log(`[${sessionId}] Post-ready stabilization complete`);
+        // Poll client.getState() to verify the execution context is actually usable.
+        await waitForStableContext(sessionId, state.client);
         state.lastActivity = Date.now();
         return state;
     } catch (err) {
