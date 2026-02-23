@@ -142,6 +142,59 @@ async def test_toggle_schedule(client, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_create_schedule_with_timezone(client, auth_headers):
+    ad_id, account_id = await setup_ad_and_account(client, auth_headers)
+
+    response = await client.post("/api/schedules", json={
+        "ad_id": ad_id,
+        "account_id": account_id,
+        "group_ids": [1],
+        "days_of_week": [0, 1, 2, 3, 4],
+        "times_of_day": ["09:00"],
+        "timezone": "Europe/Moscow",
+    }, headers=auth_headers)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["timezone"] == "Europe/Moscow"
+    assert data["next_run_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_update_schedule_timezone(client, auth_headers):
+    ad_id, account_id = await setup_ad_and_account(client, auth_headers)
+
+    create_resp = await client.post("/api/schedules", json={
+        "ad_id": ad_id,
+        "account_id": account_id,
+        "group_ids": [1],
+        "days_of_week": [0],
+        "times_of_day": ["09:00"],
+    }, headers=auth_headers)
+    schedule_id = create_resp.json()["id"]
+
+    response = await client.put(f"/api/schedules/{schedule_id}", json={
+        "timezone": "Asia/Vladivostok",
+    }, headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json()["timezone"] == "Asia/Vladivostok"
+
+
+@pytest.mark.asyncio
+async def test_create_schedule_invalid_timezone(client, auth_headers):
+    ad_id, account_id = await setup_ad_and_account(client, auth_headers)
+
+    response = await client.post("/api/schedules", json={
+        "ad_id": ad_id,
+        "account_id": account_id,
+        "group_ids": [1],
+        "days_of_week": [0],
+        "times_of_day": ["09:00"],
+        "timezone": "Not/A/Timezone",
+    }, headers=auth_headers)
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_unauthenticated_request(client):
     response = await client.get("/api/schedules")
     assert response.status_code == 401

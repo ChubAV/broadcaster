@@ -6,7 +6,11 @@ TIMEZONE_CHOICES: list[tuple[str, str]] = [
     ("Asia/Novosibirsk", "Новосибирск (UTC+6)"),
     ("Asia/Krasnoyarsk", "Красноярск (UTC+7)"),
     ("Asia/Irkutsk", "Иркутск (UTC+8)"),
+    ("Asia/Yakutsk", "Якутск (UTC+9)"),
     ("Asia/Vladivostok", "Владивосток (UTC+10)"),
+    ("Asia/Magadan", "Магадан (UTC+11)"),
     ("Asia/Kamchatka", "Камчатка (UTC+12)"),
     ("UTC", "UTC"),
 ]
+
+VALID_TIMEZONES: set[str] = {tz[0] for tz in TIMEZONE_CHOICES}

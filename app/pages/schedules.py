@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.constants import TIMEZONE_CHOICES
+from app.constants import TIMEZONE_CHOICES, VALID_TIMEZONES
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
 from app.models.group import Group
@@ -116,6 +116,8 @@ async def schedules_create(
     times_of_day = [t for t in form_data.getlist("times_of_day") if t]
 
     tz = form_data.get("timezone", "UTC")
+    if tz not in VALID_TIMEZONES:
+        tz = "UTC"
 
     next_run = compute_next_run_at(
         days_of_week=days_of_week, times_of_day=times_of_day, tz_name=tz
@@ -214,6 +216,8 @@ async def schedules_update(
     times_of_day = [t for t in form_data.getlist("times_of_day") if t]
 
     tz = form_data.get("timezone", schedule.timezone)
+    if tz not in VALID_TIMEZONES:
+        tz = schedule.timezone
 
     schedule.ad_id = ad_id
     schedule.account_id = account_id

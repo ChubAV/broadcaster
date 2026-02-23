@@ -1,4 +1,4 @@
-from app.constants import TIMEZONE_CHOICES
+from app.constants import TIMEZONE_CHOICES, VALID_TIMEZONES
 
 
 def test_timezone_choices_is_list_of_tuples():
@@ -22,3 +22,11 @@ def test_all_timezone_names_are_valid():
     from zoneinfo import ZoneInfo
     for iana_name, _label in TIMEZONE_CHOICES:
         ZoneInfo(iana_name)  # raises if invalid
+
+
+def test_valid_timezones_matches_choices():
+    assert VALID_TIMEZONES == {tz[0] for tz in TIMEZONE_CHOICES}
+
+
+def test_invalid_timezone_not_in_set():
+    assert "Not/A/Timezone" not in VALID_TIMEZONES
