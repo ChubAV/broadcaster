@@ -121,7 +121,7 @@ async function createSocket(sessionId, phoneNumber) {
         logger,
         markOnlineOnConnect: false,
         generateHighQualityLinkPreview: false,
-        shouldIgnoreJid: () => true,
+        shouldIgnoreJid: (jid) => jid.endsWith('@g.us'),
         shouldSyncHistoryMessage: () => false,
     };
     if (waVersion) {
