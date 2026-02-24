@@ -11,6 +11,17 @@ server {
         root /var/www/certbot;
     }
 
+    # Sync-groups can take minutes for accounts with many WhatsApp groups
+    location ~ ^/accounts/\d+/sync-groups$ {
+        proxy_pass http://web_backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_read_timeout 600s;
+    }
+
     location / {
         proxy_pass http://web_backend;
         proxy_set_header Host $host;

@@ -71,7 +71,7 @@ class WhatsAppMessenger(BaseMessenger):
     async def get_groups(self) -> list[dict]:
         client = get_http_client()
         try:
-            response = await client.get(self._url("groups"))
+            response = await client.get(self._url("groups"), timeout=600.0)
             if response.status_code == 200:
                 return response.json()
             self.log.error("get_groups_error", http_status=response.status_code)
