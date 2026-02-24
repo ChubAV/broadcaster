@@ -7,7 +7,7 @@ class Base(DeclarativeBase):
 
 
 def get_engine(database_url: str):
-    return create_async_engine(database_url, echo=False)
+    return create_async_engine(database_url, echo=False, pool_pre_ping=True)
 
 
 def get_session_factory(engine) -> async_sessionmaker[AsyncSession]:
