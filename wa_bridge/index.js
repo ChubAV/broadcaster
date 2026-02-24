@@ -111,23 +111,12 @@ async function createSocket(sessionId, phoneNumber) {
 
     const sock = makeWASocket(socketConfig);
 
-    // If phone number provided, use pairing code instead of QR
-    if (phoneNumber && !authState.creds.registered) {
-        try {
-            const code = await sock.requestPairingCode(phoneNumber);
-            console.log(`[${sessionId}] Pairing code: ${code}`);
-            // Store pairing code in session state (set below)
-            sock._pairingCode = code;
-        } catch (err) {
-            console.error(`[${sessionId}] Failed to request pairing code: ${err.message}`);
-        }
-    }
-
     const sessionState = {
         sock,
         saveCreds,
         qrCode: null,
-        pairingCode: sock._pairingCode || null,
+        pairingCode: null,
+        phoneNumber: (phoneNumber && !authState.creds.registered) ? phoneNumber : null,
         isConnected: false,
         initializing: true,
         lastActivity: Date.now(),
@@ -154,6 +143,19 @@ async function createSocket(sessionId, phoneNumber) {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
+            // If phone number provided, request pairing code instead of QR
+            if (sessionState.phoneNumber && !sessionState.pairingCode) {
+                try {
+                    const code = await sock.requestPairingCode(sessionState.phoneNumber);
+                    sessionState.pairingCode = code;
+                    sessionState.phoneNumber = null; // Don't request again
+                    console.log(`[${sessionId}] Pairing code: ${code}`);
+                    return; // Skip QR generation
+                } catch (err) {
+                    console.error(`[${sessionId}] Failed to request pairing code: ${err.message}`);
+                    // Fall through to QR as fallback
+                }
+            }
             sessionState.qrCode = await qrcode.toDataURL(qr);
             console.log(`[${sessionId}] QR code generated`);
         }
