@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 
 import httpx
 from telethon import TelegramClient
+from telethon.errors import (
+    ChatSendMediaForbiddenError,
+    ChatWriteForbiddenError,
+    UserBannedInChannelError,
+)
 from telethon.sessions import StringSession
 from telethon.tl.types import Channel, Chat
 
@@ -208,13 +213,23 @@ class TelegramUserMessenger(BaseMessenger):
                         buf = io.BytesIO(resp.content)
                         buf.name = filename
                         files.append(buf)
-                await self.client.send_file(
-                    int(group_id), files, caption=text,
-                    force_document=False,
-                )
+                try:
+                    await self.client.send_file(
+                        int(group_id), files, caption=text,
+                        force_document=False,
+                    )
+                except ChatSendMediaForbiddenError:
+                    self.log.warning(
+                        "send_media_forbidden_fallback_text",
+                        group_id=group_id,
+                    )
+                    await self.client.send_message(int(group_id), text)
             else:
                 await self.client.send_message(int(group_id), text)
             return {"ok": True}
+        except (ChatWriteForbiddenError, UserBannedInChannelError) as e:
+            self.log.warning("send_forbidden", group_id=group_id, error=str(e))
+            return {"ok": False, "error": str(e), "no_retry": True}
         except Exception as e:
             self.log.error("send_message_error", group_id=group_id, error=str(e), exc_info=True)
             return {"ok": False, "error": str(e)}

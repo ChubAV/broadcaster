@@ -203,8 +203,12 @@ async def _send_message(ad_id: int, group_id: int, account_id: int, schedule_id:
         await session.commit()
 
         if not result["ok"]:
-            log.error("send_failed", error=result.get("error"))
-            raise Exception(f"Send failed: {result.get('error')}")
+            error = result.get("error")
+            if result.get("no_retry"):
+                log.warning("send_forbidden_no_retry", error=error)
+            else:
+                log.error("send_failed", error=error)
+                raise Exception(f"Send failed: {error}")
 
         log.info("send_ok")
 
