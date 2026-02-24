@@ -8,6 +8,7 @@ from app.pages.groups import router as groups_router
 from app.pages.schedules import router as schedules_router
 from app.pages.billing import router as billing_router
 from app.pages.history import router as history_router
+from app.pages.admin import router as admin_router
 
 router = APIRouter()
 router.include_router(auth_router)
@@ -18,3 +19,4 @@ router.include_router(groups_router)
 router.include_router(schedules_router)
 router.include_router(billing_router)
 router.include_router(history_router)
+router.include_router(admin_router)
