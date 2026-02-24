@@ -107,6 +107,59 @@ function deleteSessionFiles(sessionId) {
 }
 
 /**
+ * Background group sync with retries after connection is established.
+ * Waits, then fetches groups with exponential backoff.
+ */
+async function startGroupSync(sessionId) {
+    const INITIAL_DELAY = 30000;  // 30s — let Baileys finish internal sync
+    const RETRY_DELAYS = [30000, 60000, 120000];  // 30s, 60s, 120s retries
+    const MAX_ATTEMPTS = RETRY_DELAYS.length + 1;  // 4 total (1 initial + 3 retries)
+
+    const state = sessions.get(sessionId);
+    if (!state) return;
+
+    state.syncState = 'syncing';
+    console.log(`[${sessionId}] Starting group sync (waiting ${INITIAL_DELAY / 1000}s)...`);
+
+    await new Promise(r => setTimeout(r, INITIAL_DELAY));
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        const currentState = sessions.get(sessionId);
+        if (!currentState || !currentState.isConnected) {
+            console.log(`[${sessionId}] Session gone or disconnected during sync, aborting`);
+            return;
+        }
+
+        try {
+            console.log(`[${sessionId}] Fetching groups (attempt ${attempt + 1}/${MAX_ATTEMPTS})...`);
+            const groupsObj = await currentState.sock.groupFetchAllParticipating();
+            const groups = Object.entries(groupsObj).map(([jid, metadata]) => ({
+                id: jid,
+                name: metadata.subject,
+            }));
+            currentState.syncState = 'ready';
+            currentState.groups = groups;
+            console.log(`[${sessionId}] Group sync complete: ${groups.length} groups`);
+            return;
+        } catch (err) {
+            console.error(`[${sessionId}] Group fetch failed (attempt ${attempt + 1}/${MAX_ATTEMPTS}): ${err.message}`);
+            if (attempt < RETRY_DELAYS.length) {
+                const delay = RETRY_DELAYS[attempt];
+                console.log(`[${sessionId}] Retrying group fetch in ${delay / 1000}s...`);
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+    }
+
+    // All attempts failed
+    const finalState = sessions.get(sessionId);
+    if (finalState) {
+        finalState.syncState = 'failed';
+        console.log(`[${sessionId}] Group sync failed after ${MAX_ATTEMPTS} attempts`);
+    }
+}
+
+/**
  * Create a Baileys socket for the given sessionId.
  * Returns the state object stored in sessions Map.
  */
@@ -139,19 +192,21 @@ async function createSocket(sessionId) {
         readyResolve: null,
         readyReject: null,
         readyPromise: null,
+        syncState: null,    // null | 'syncing' | 'ready' | 'failed'
+        groups: null,       // Array of {id, name} when synced
     };
 
     sessionState.readyPromise = new Promise((resolve, reject) => {
         sessionState.readyResolve = resolve;
         sessionState.readyReject = reject;
 
-        // Timeout after 120s — clean up socket to stop QR generation
+        // Timeout after 600s — clean up socket to stop QR generation
         sessionState._readyTimeout = setTimeout(() => {
             sessionState.initializing = false;
             try { sock.end(); } catch (_) {}
             sessions.delete(sessionId);
-            reject(new Error('Session initialization timeout (120s)'));
-        }, 120000);
+            reject(new Error('Session initialization timeout (600s)'));
+        }, 600000);
     });
 
     // Save credentials on every update
@@ -178,6 +233,13 @@ async function createSocket(sessionId) {
                 sessionState.readyReject = null;
             }
             console.log(`[${sessionId}] Connected`);
+
+            // Start background group sync (don't await — runs in background)
+            if (!sessionState.syncState || sessionState.syncState === 'failed') {
+                startGroupSync(sessionId).catch(err => {
+                    console.error(`[${sessionId}] Group sync error: ${err.message}`);
+                });
+            }
         }
 
         if (connection === 'close') {
@@ -345,6 +407,9 @@ async function destroySession(sessionId) {
 setInterval(() => {
     const now = Date.now();
     for (const [id, state] of sessions) {
+        if (state.syncState === 'syncing') {
+            continue; // Don't unload sessions that are syncing
+        }
         if (state.isConnected && (now - state.lastActivity > IDLE_TIMEOUT_MS)) {
             console.log(`[${id}] Idle for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s, unloading`);
             unloadSession(id);
