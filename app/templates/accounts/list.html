@@ -24,6 +24,41 @@
         </thead>
         <tbody class="divide-y divide-slate-200">
             {% for account in accounts %}
+            {% if account.status == 'syncing' and account.type == 'wa' %}
+            <tr id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML" class="hover:bg-slate-50/80 transition-colors duration-150">
+                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{{ account.id }}</td>
+                <td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>
+                <td class="px-3 sm:px-6 py-4">
+                    <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-amber-100 text-amber-800">
+                        <svg class="animate-spin -ml-0.5 mr-1.5 h-3 w-3 text-amber-600" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                        </svg>
+                        Синхронизация...
+                    </span>
+                    <span class="ml-2 text-xs text-slate-500">Загружаем группы из WhatsApp. Это может занять несколько минут.</span>
+                </td>
+                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ account.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td class="px-3 sm:px-6 py-4 text-right text-sm text-slate-400">Подождите...</td>
+            </tr>
+            {% elif account.status == 'sync_failed' and account.type == 'wa' %}
+            <tr class="hover:bg-slate-50/80 transition-colors duration-150">
+                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{{ account.id }}</td>
+                <td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>
+                <td class="px-3 sm:px-6 py-4">
+                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-red-100 text-red-800">Ошибка синхронизации</span>
+                </td>
+                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ account.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td class="px-3 sm:px-6 py-4 text-right text-sm">
+                    <form method="POST" action="/accounts/{{ account.id }}/retry-sync" class="inline">
+                        <button type="submit" class="font-medium text-amber-600 hover:text-amber-700 transition-colors mr-3">Повторить</button>
+                    </form>
+                    <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
+                        <button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
+                    </form>
+                </td>
+            </tr>
+            {% else %}
             <tr class="hover:bg-slate-50/80 transition-colors duration-150">
                 <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{{ account.id }}</td>
                 <td class="px-3 sm:px-6 py-4 text-sm text-slate-900">
@@ -43,6 +78,7 @@
                     </form>
                 </td>
             </tr>
+            {% endif %}
             {% endfor %}
         </tbody>
     </table>
