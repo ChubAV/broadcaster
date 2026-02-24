@@ -221,23 +221,23 @@ async def accounts_connect_wa_page(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
-    # Check if user already has an active WA account
+    # Check if user already has an active or syncing WA account
     existing = await db.execute(
         select(MessengerAccount).where(
             MessengerAccount.user_id == user.id,
             MessengerAccount.type == "wa",
-            MessengerAccount.status == "active",
+            MessengerAccount.status.in_(["active", "syncing"]),
         )
     )
     if existing.scalar_one_or_none():
         return RedirectResponse(url="/accounts", status_code=302)
 
-    # Clean up stale connecting accounts
+    # Clean up stale connecting/failed accounts
     stale = await db.execute(
         select(MessengerAccount).where(
             MessengerAccount.user_id == user.id,
             MessengerAccount.type == "wa",
-            MessengerAccount.status == "connecting",
+            MessengerAccount.status.in_(["connecting", "sync_failed"]),
         )
     )
     for old in stale.scalars().all():
@@ -316,17 +316,18 @@ async def accounts_connect_wa_status(
         is_connected = await messenger.check_connection()
         if is_connected:
             account.credentials = session_id
-            account.status = "active"
+            account.status = "syncing"
             await db.commit()
 
             return HTMLResponse(
                 '<div class="text-center">'
-                '<div class="inline-flex items-center justify-center w-16 h-16 bg-green-100 rounded-full mb-4">'
-                '<svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+                '<div class="inline-flex items-center justify-center w-16 h-16 bg-emerald-100 rounded-full mb-4">'
+                '<svg class="w-8 h-8 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
                 '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>'
                 '</svg></div>'
                 '<p class="text-lg font-medium text-gray-900">WhatsApp подключён!</p>'
-                '<a href="/accounts" class="mt-4 inline-block rounded-md bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500">К аккаунтам</a>'
+                '<p class="mt-2 text-sm text-slate-500">Начинаем синхронизацию групп...</p>'
+                '<script>setTimeout(() => window.location.href = "/accounts", 2000);</script>'
                 '</div>'
             )
 
@@ -348,6 +349,161 @@ async def accounts_connect_wa_status(
 
     except Exception:
         return HTMLResponse('<span class="text-sm text-red-600">Ошибка соединения с WA Bridge</span>')
+
+
+@router.get("/accounts/{account_id}/sync-status", response_class=HTMLResponse)
+async def accounts_sync_status(
+    request: Request,
+    account_id: int,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """HTMX polling endpoint: check group sync progress and auto-save groups."""
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return HTMLResponse('<span class="text-sm text-red-600">Не авторизован</span>')
+
+    result = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.id == account_id,
+            MessengerAccount.user_id == user.id,
+        )
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        return HTMLResponse('<span class="text-sm text-red-600">Аккаунт не найден</span>')
+
+    # Only poll for syncing accounts
+    if account.status != "syncing":
+        return HTMLResponse("")
+
+    session_id = str(account.id)
+    messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=session_id)
+
+    try:
+        sync_data = await messenger.get_sync_status()
+        state = sync_data.get("state")
+
+        if state == "ready":
+            # Save groups to DB
+            groups = sync_data.get("groups") or []
+            existing = await db.execute(
+                select(Group.group_external_id).where(
+                    Group.account_id == account_id,
+                    Group.user_id == user.id,
+                )
+            )
+            existing_ids = {row[0] for row in existing}
+
+            for g in groups:
+                if g["id"] not in existing_ids:
+                    db.add(
+                        Group(
+                            user_id=user.id,
+                            account_id=account_id,
+                            messenger_type="wa",
+                            group_external_id=g["id"],
+                            name=g["name"],
+                        )
+                    )
+
+            account.status = "active"
+            await db.commit()
+
+            group_count = len(groups)
+            return HTMLResponse(
+                f'<tr id="account-row-{account_id}" class="hover:bg-slate-50/80 transition-colors duration-150">'
+                f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account.id}</td>'
+                f'<td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>'
+                f'<td class="px-3 sm:px-6 py-4">'
+                f'<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-100 text-emerald-800">active</span>'
+                f'<span class="ml-2 text-xs text-slate-500">Загружено {group_count} групп</span>'
+                f'</td>'
+                f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{account.created_at.strftime("%Y-%m-%d %H:%M")}</td>'
+                f'<td class="px-3 sm:px-6 py-4 text-right text-sm">'
+                f'<form method="POST" action="/accounts/{account.id}/delete" class="inline">'
+                f'<button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm(\'Удалить этот аккаунт?\')">Удалить</button>'
+                f'</form></td></tr>'
+            )
+
+        if state == "failed":
+            account.status = "sync_failed"
+            await db.commit()
+
+            return HTMLResponse(
+                f'<tr id="account-row-{account_id}" class="hover:bg-slate-50/80 transition-colors duration-150">'
+                f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account.id}</td>'
+                f'<td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>'
+                f'<td class="px-3 sm:px-6 py-4">'
+                f'<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-red-100 text-red-800">Ошибка синхронизации</span>'
+                f'</td>'
+                f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{account.created_at.strftime("%Y-%m-%d %H:%M")}</td>'
+                f'<td class="px-3 sm:px-6 py-4 text-right text-sm">'
+                f'<form method="POST" action="/accounts/{account.id}/retry-sync" class="inline">'
+                f'<button type="submit" class="font-medium text-amber-600 hover:text-amber-700 transition-colors mr-3">Повторить</button>'
+                f'</form>'
+                f'<form method="POST" action="/accounts/{account.id}/delete" class="inline">'
+                f'<button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm(\'Удалить этот аккаунт?\')">Удалить</button>'
+                f'</form></td></tr>'
+            )
+
+        # Still syncing — return spinner row (HTMX will keep polling)
+        return HTMLResponse(
+            f'<tr id="account-row-{account_id}" hx-get="/accounts/{account_id}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML"'
+            f' class="hover:bg-slate-50/80 transition-colors duration-150">'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account.id}</td>'
+            f'<td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>'
+            f'<td class="px-3 sm:px-6 py-4">'
+            f'<span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-amber-100 text-amber-800">'
+            f'<svg class="animate-spin -ml-0.5 mr-1.5 h-3 w-3 text-amber-600" fill="none" viewBox="0 0 24 24">'
+            f'<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>'
+            f'<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>'
+            f'Синхронизация...</span>'
+            f'<span class="ml-2 text-xs text-slate-500">Загружаем группы из WhatsApp...</span>'
+            f'</td>'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{account.created_at.strftime("%Y-%m-%d %H:%M")}</td>'
+            f'<td class="px-3 sm:px-6 py-4 text-right text-sm text-slate-400">Подождите...</td></tr>'
+        )
+
+    except Exception:
+        return HTMLResponse(
+            f'<tr id="account-row-{account_id}" hx-get="/accounts/{account_id}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML"'
+            f' class="hover:bg-slate-50/80 transition-colors duration-150">'
+            f'<td colspan="5" class="px-3 sm:px-6 py-4 text-sm text-amber-600">Проверяем статус синхронизации...</td></tr>'
+        )
+
+
+@router.post("/accounts/{account_id}/retry-sync")
+async def accounts_retry_sync(
+    request: Request,
+    account_id: int,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Retry failed group sync."""
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    result = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.id == account_id,
+            MessengerAccount.user_id == user.id,
+            MessengerAccount.type == "wa",
+        )
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        return RedirectResponse(url="/accounts", status_code=302)
+
+    session_id = str(account.id)
+    messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=session_id)
+    await messenger.retry_sync()
+
+    account.status = "syncing"
+    await db.commit()
+
+    return RedirectResponse(url="/accounts", status_code=302)
 
 
 @router.post("/accounts/{account_id}/sync-groups")
