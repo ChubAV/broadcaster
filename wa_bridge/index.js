@@ -29,6 +29,7 @@ let waVersion = null;
 const sessions = new Map();
 const loadingPromises = new Map();
 const sendLocks = new Map();
+const groupLocks = new Map();
 
 // Per-session rate limiting
 const rateLimiters = new Map();
@@ -64,6 +65,22 @@ function withSessionLock(sessionId, fn) {
     next.finally(() => {
         if (sendLocks.get(sessionId) === next) {
             sendLocks.delete(sessionId);
+        }
+    });
+    return next;
+}
+
+/**
+ * Serialize sends per group so messages from different sessions
+ * don't interleave in the same chat.
+ */
+function withGroupLock(groupId, fn) {
+    const prev = groupLocks.get(groupId) || Promise.resolve();
+    const next = prev.then(fn, fn);
+    groupLocks.set(groupId, next);
+    next.finally(() => {
+        if (groupLocks.get(groupId) === next) {
+            groupLocks.delete(groupId);
         }
     });
     return next;
@@ -443,57 +460,60 @@ app.post('/api/sessions/:id/send', async (req, res) => {
     }
 
     try {
-        await withSessionLock(sessionId, async () => {
-            // Anti-ban: simulate typing
-            try {
-                await state.sock.sendPresenceUpdate('composing', group_id);
-                const typingDelay = 1500 + Math.random() * 2500;
-                await new Promise(r => setTimeout(r, typingDelay));
-                await state.sock.sendPresenceUpdate('paused', group_id);
-            } catch (err) {
-                // Presence update failure is non-critical
-                console.log(`[${sessionId}] Presence update failed (non-critical): ${err.message}`);
-            }
-
-            if (images.length > 0) {
-                console.log(`[${sessionId}] Sending ${images.length} image(s) to ${group_id}, text="${caption.substring(0, 50)}"`);
-
-                // Download and send images
-                for (let i = 0; i < images.length; i++) {
-                    const img = images[i];
-                    let buffer;
-                    let mimetype = 'image/jpeg';
-
-                    if (img.startsWith('http://') || img.startsWith('https://')) {
-                        const response = await axios.get(img, { responseType: 'arraybuffer', timeout: 30000 });
-                        mimetype = response.headers['content-type'] || 'image/jpeg';
-                        buffer = Buffer.from(response.data);
-                    } else if (fs.existsSync(img)) {
-                        buffer = fs.readFileSync(img);
-                    } else {
-                        console.warn(`[${sessionId}] Image not found: ${img}`);
-                        continue;
-                    }
-
-                    const msgOptions = { image: buffer, mimetype };
-                    // Single image: attach caption directly
-                    if (images.length === 1 && caption) {
-                        msgOptions.caption = caption;
-                    }
-
-                    const result = await state.sock.sendMessage(group_id, msgOptions);
-                    console.log(`[${sessionId}] sendMessage[${i}] result: id=${result?.key?.id}`);
+        // Group lock prevents interleaving when multiple sessions send to the same chat
+        await withGroupLock(group_id, async () => {
+            await withSessionLock(sessionId, async () => {
+                // Anti-ban: simulate typing
+                try {
+                    await state.sock.sendPresenceUpdate('composing', group_id);
+                    const typingDelay = 1500 + Math.random() * 2500;
+                    await new Promise(r => setTimeout(r, typingDelay));
+                    await state.sock.sendPresenceUpdate('paused', group_id);
+                } catch (err) {
+                    // Presence update failure is non-critical
+                    console.log(`[${sessionId}] Presence update failed (non-critical): ${err.message}`);
                 }
 
-                // Multiple images: send caption as separate text
-                if (images.length > 1 && caption) {
-                    await state.sock.sendMessage(group_id, { text: caption });
+                if (images.length > 0) {
+                    console.log(`[${sessionId}] Sending ${images.length} image(s) to ${group_id}, text="${caption.substring(0, 50)}"`);
+
+                    // Download and send images
+                    for (let i = 0; i < images.length; i++) {
+                        const img = images[i];
+                        let buffer;
+                        let mimetype = 'image/jpeg';
+
+                        if (img.startsWith('http://') || img.startsWith('https://')) {
+                            const response = await axios.get(img, { responseType: 'arraybuffer', timeout: 30000 });
+                            mimetype = response.headers['content-type'] || 'image/jpeg';
+                            buffer = Buffer.from(response.data);
+                        } else if (fs.existsSync(img)) {
+                            buffer = fs.readFileSync(img);
+                        } else {
+                            console.warn(`[${sessionId}] Image not found: ${img}`);
+                            continue;
+                        }
+
+                        const msgOptions = { image: buffer, mimetype };
+                        // Single image: attach caption directly
+                        if (images.length === 1 && caption) {
+                            msgOptions.caption = caption;
+                        }
+
+                        const result = await state.sock.sendMessage(group_id, msgOptions);
+                        console.log(`[${sessionId}] sendMessage[${i}] result: id=${result?.key?.id}`);
+                    }
+
+                    // Multiple images: send caption as separate text
+                    if (images.length > 1 && caption) {
+                        await state.sock.sendMessage(group_id, { text: caption });
+                    }
+                } else {
+                    console.log(`[${sessionId}] Sending text to ${group_id}, text="${caption.substring(0, 50)}"`);
+                    const result = await state.sock.sendMessage(group_id, { text: caption });
+                    console.log(`[${sessionId}] sendMessage result: id=${result?.key?.id}`);
                 }
-            } else {
-                console.log(`[${sessionId}] Sending text to ${group_id}, text="${caption.substring(0, 50)}"`);
-                const result = await state.sock.sendMessage(group_id, { text: caption });
-                console.log(`[${sessionId}] sendMessage result: id=${result?.key?.id}`);
-            }
+            });
         });
 
         state.lastActivity = Date.now();
