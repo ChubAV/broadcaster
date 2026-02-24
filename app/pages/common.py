@@ -28,4 +28,6 @@ async def get_user_from_cookie(
     if not payload:
         return None
     user = await db.get(User, payload["sub"])
+    if user and user.is_blocked:
+        return None
     return user
