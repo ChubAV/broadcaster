@@ -27,8 +27,13 @@ async def get_user_plan(db: AsyncSession, user_id: int) -> str:
         .limit(1)
     )
     sub = result.scalar_one_or_none()
-    if sub and sub.expires_at > datetime.now(timezone.utc):
-        return sub.plan
+    if sub:
+        now = datetime.now(timezone.utc)
+        expires = sub.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires > now:
+            return sub.plan
     return "free"
 
 
@@ -73,3 +78,30 @@ async def check_limit(db: AsyncSession, user_id: int, action: str) -> tuple[bool
     if action == "send" and usage["sends_today"] >= limits["max_sends_per_day"]:
         return False, f"Daily send limit reached ({limits['max_sends_per_day']} on {plan} plan)"
     return True, ""
+
+
+async def set_user_plan(
+    db: AsyncSession, user_id: int, plan: str, expires_at: datetime
+) -> Subscription:
+    """Set user plan. Deactivates any existing active subscription first."""
+    # Deactivate existing active subscriptions
+    result = await db.execute(
+        select(Subscription).where(
+            Subscription.user_id == user_id,
+            Subscription.is_active == True,  # noqa: E712
+        )
+    )
+    for sub in result.scalars().all():
+        sub.is_active = False
+
+    # Create new subscription
+    new_sub = Subscription(
+        user_id=user_id,
+        plan=plan,
+        expires_at=expires_at,
+        is_active=True,
+    )
+    db.add(new_sub)
+    await db.commit()
+    await db.refresh(new_sub)
+    return new_sub
