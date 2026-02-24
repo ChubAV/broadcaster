@@ -115,6 +115,7 @@ function createClient(sessionId) {
         webVersionCache: { type: 'none' }, // Avoid stale cached WA Web causing injection issues
         puppeteer: {
             headless: true,
+            protocolTimeout: 600000, // 10 min — getChats() can be slow with many groups
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
