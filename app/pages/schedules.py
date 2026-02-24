@@ -13,7 +13,7 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.services.schedule_service import compute_next_run_at
-from app.pages.common import get_user_from_cookie, templates
+from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
 
@@ -51,6 +51,7 @@ async def schedules_list(
         {
             "request": request,
             "user": user,
+            "is_admin": check_is_admin(user, settings),
             "schedules": schedules,
             "active_page": "schedules",
         },
@@ -88,6 +89,7 @@ async def schedules_new(
         {
             "request": request,
             "user": user,
+            "is_admin": check_is_admin(user, settings),
             "schedule": None,
             "ads": ads,
             "accounts": accounts,
@@ -178,6 +180,7 @@ async def schedules_edit(
         {
             "request": request,
             "user": user,
+            "is_admin": check_is_admin(user, settings),
             "schedule": schedule,
             "ads": ads,
             "accounts": accounts,

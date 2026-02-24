@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
-from app.pages.common import get_user_from_cookie, templates
+from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
 
@@ -26,7 +26,7 @@ async def ads_list(
     ads = result.scalars().all()
     return templates.TemplateResponse(
         "ads/list.html",
-        {"request": request, "user": user, "ads": ads, "active_page": "ads"},
+        {"request": request, "user": user, "is_admin": check_is_admin(user, settings), "ads": ads, "active_page": "ads"},
     )
 
 
@@ -41,7 +41,7 @@ async def ads_new(
         return RedirectResponse(url="/login", status_code=302)
     return templates.TemplateResponse(
         "ads/form.html",
-        {"request": request, "user": user, "ad": None, "active_page": "ads"},
+        {"request": request, "user": user, "is_admin": check_is_admin(user, settings), "ad": None, "active_page": "ads"},
     )
 
 
@@ -83,7 +83,7 @@ async def ads_edit(
         return RedirectResponse(url="/ads", status_code=302)
     return templates.TemplateResponse(
         "ads/form.html",
-        {"request": request, "user": user, "ad": ad, "active_page": "ads"},
+        {"request": request, "user": user, "is_admin": check_is_admin(user, settings), "ad": ad, "active_page": "ads"},
     )
 
 

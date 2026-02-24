@@ -11,7 +11,7 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
-from app.pages.common import get_user_from_cookie, templates
+from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
 
@@ -93,6 +93,7 @@ async def dashboard(
         {
             "request": request,
             "user": user,
+            "is_admin": check_is_admin(user, settings),
             "stats": stats,
             "recent_sends": recent_sends,
             "active_page": "dashboard",

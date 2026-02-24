@@ -8,7 +8,7 @@ from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.send_log import SendLog
-from app.pages.common import get_user_from_cookie, templates
+from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
 
@@ -63,6 +63,7 @@ async def history_list(
         {
             "request": request,
             "user": user,
+            "is_admin": check_is_admin(user, settings),
             "logs": logs,
             "status_filter": status,
             "offset": offset,
