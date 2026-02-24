@@ -23,8 +23,10 @@ x-wa-bridge-base: &wa-bridge-base
     context: ./wa_bridge
     dockerfile: Dockerfile
   environment:
-    MONGODB_URI: ${MONGODB_URI}
     PORT: 3000
+    IDLE_TIMEOUT_MS: ${IDLE_TIMEOUT_MS:-300000}
+  volumes:
+    - wa_sessions:/app/sessions
   healthcheck:
     test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
     interval: 10s
@@ -33,7 +35,7 @@ x-wa-bridge-base: &wa-bridge-base
   deploy:
     resources:
       limits:
-        memory: 2G
+        memory: 512M
 
 services:
   nginx:
@@ -125,11 +127,13 @@ services:
       web:
         condition: service_healthy
 
-# Мосты к Whatsapp
-  wa-bridge-1:
+# Мост к Whatsapp
+  wa-bridge:
     <<: *wa-bridge-base
-    container_name: wa-bridge-1-broadcaster
+    container_name: wa-bridge-broadcaster
+    restart: unless-stopped
 
 volumes:
   certbot-webroot:
   certbot-certs:
+  wa_sessions:
