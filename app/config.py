@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     celery_beat_interval: int = 30  # seconds
     billing_cache_ttl: int = 60  # seconds
 
+    # Admin
+    admin_email: str = ""
+
     @property
     def wa_bridge_url(self) -> str:
         """Backward-compatible: returns first bridge URL."""
