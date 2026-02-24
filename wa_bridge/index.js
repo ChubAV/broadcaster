@@ -123,7 +123,6 @@ async function createSocket(sessionId, phoneNumber) {
         generateHighQualityLinkPreview: false,
         shouldIgnoreJid: () => true,
         shouldSyncHistoryMessage: () => false,
-        emitOwnEvents: false,
     };
     if (waVersion) {
         socketConfig.version = waVersion;
