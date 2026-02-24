@@ -1,5 +1,5 @@
 const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
 const axios = require('axios');
 const fs = require('fs');
@@ -21,6 +21,9 @@ const RATE_LIMIT_PER_MINUTE = 8;
 
 // Silent logger for Baileys (it uses pino internally)
 const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'warn' });
+
+// Cached WA Web version (fetched once at startup)
+let waVersion = null;
 
 // In-memory session state
 const sessions = new Map();
@@ -90,23 +93,41 @@ function deleteSessionFiles(sessionId) {
  * Create a Baileys socket for the given sessionId.
  * Returns the state object stored in sessions Map.
  */
-async function createSocket(sessionId) {
+async function createSocket(sessionId, phoneNumber) {
     const sessionDir = path.join(SESSIONS_DIR, String(sessionId));
     const { state: authState, saveCreds } = await useMultiFileAuthState(sessionDir);
 
-    const sock = makeWASocket({
+    const socketConfig = {
         auth: authState,
         printQRInTerminal: false,
         browser: Browsers.ubuntu('Broadcaster'),
         logger,
         markOnlineOnConnect: false,
         generateHighQualityLinkPreview: false,
-    });
+    };
+    if (waVersion) {
+        socketConfig.version = waVersion;
+    }
+
+    const sock = makeWASocket(socketConfig);
+
+    // If phone number provided, use pairing code instead of QR
+    if (phoneNumber && !authState.creds.registered) {
+        try {
+            const code = await sock.requestPairingCode(phoneNumber);
+            console.log(`[${sessionId}] Pairing code: ${code}`);
+            // Store pairing code in session state (set below)
+            sock._pairingCode = code;
+        } catch (err) {
+            console.error(`[${sessionId}] Failed to request pairing code: ${err.message}`);
+        }
+    }
 
     const sessionState = {
         sock,
         saveCreds,
         qrCode: null,
+        pairingCode: sock._pairingCode || null,
         isConnected: false,
         initializing: true,
         lastActivity: Date.now(),
@@ -317,9 +338,11 @@ setInterval(() => {
 
 // ---- REST API endpoints ----
 
-// POST /api/sessions/:id/start - Create and initialize a session (for QR flow)
+// POST /api/sessions/:id/start - Create and initialize a session (QR or pairing code)
+// Body: { phone_number?: "79991234567" } — if provided, uses pairing code instead of QR
 app.post('/api/sessions/:id/start', async (req, res) => {
     const sessionId = req.params.id;
+    const phoneNumber = req.body.phone_number || null;
 
     const existing = sessions.get(sessionId);
     if (existing) {
@@ -327,7 +350,7 @@ app.post('/api/sessions/:id/start', async (req, res) => {
             return res.json({ status: 'connected' });
         }
         if (existing.initializing) {
-            return res.json({ status: 'initializing' });
+            return res.json({ status: 'initializing', pairing_code: existing.pairingCode || null });
         }
         // Stale session — clean up
         try { existing.sock.end(); } catch (_) {}
@@ -335,12 +358,12 @@ app.post('/api/sessions/:id/start', async (req, res) => {
     }
 
     try {
-        const state = await createSocket(sessionId);
-        // Don't await readyPromise (caller polls for QR), but catch rejection
+        const state = await createSocket(sessionId, phoneNumber);
+        // Don't await readyPromise (caller polls for QR/status), but catch rejection
         state.readyPromise.catch((err) => {
             console.log(`[${sessionId}] Session init failed: ${err.message}`);
         });
-        res.json({ status: 'initializing' });
+        res.json({ status: 'initializing', pairing_code: state.pairingCode || null });
     } catch (err) {
         console.error(`[${sessionId}] Failed to start: ${err.message}`);
         res.status(500).json({ error: err.message });
@@ -367,21 +390,24 @@ app.get('/api/sessions/:id/status', (req, res) => {
     res.json({ connected: state.isConnected, exists: true });
 });
 
-// GET /api/sessions/:id/qr - Get QR code for authentication
+// GET /api/sessions/:id/qr - Get QR code or pairing code for authentication
 app.get('/api/sessions/:id/qr', (req, res) => {
     const sessionId = req.params.id;
     const state = sessions.get(sessionId);
 
     if (!state) {
-        return res.json({ status: 'not_found', qr: null });
+        return res.json({ status: 'not_found', qr: null, pairing_code: null });
     }
     if (state.isConnected) {
-        return res.json({ status: 'connected', qr: null });
+        return res.json({ status: 'connected', qr: null, pairing_code: null });
+    }
+    if (state.pairingCode) {
+        return res.json({ status: 'pairing', qr: null, pairing_code: state.pairingCode });
     }
     if (!state.qrCode) {
-        return res.json({ status: 'waiting', qr: null });
+        return res.json({ status: 'waiting', qr: null, pairing_code: null });
     }
-    res.json({ status: 'pending', qr: state.qrCode });
+    res.json({ status: 'pending', qr: state.qrCode, pairing_code: null });
 });
 
 // POST /api/sessions/:id/send - Send message (auto-loads session if needed)
@@ -503,6 +529,16 @@ app.get('/health', (req, res) => {
 
 // ---- Start server ----
 
-app.listen(PORT, () => {
-    console.log(`WA Bridge (Baileys, idle timeout=${IDLE_TIMEOUT_MS / 1000}s) running on port ${PORT}`);
-});
+(async () => {
+    try {
+        const { version, isLatest } = await fetchLatestBaileysVersion();
+        waVersion = version;
+        console.log(`WA Web version: ${version.join('.')}${isLatest ? '' : ' (not latest)'}`);
+    } catch (err) {
+        console.warn(`Failed to fetch WA version, using default: ${err.message}`);
+    }
+
+    app.listen(PORT, () => {
+        console.log(`WA Bridge (Baileys, idle timeout=${IDLE_TIMEOUT_MS / 1000}s) running on port ${PORT}`);
+    });
+})();

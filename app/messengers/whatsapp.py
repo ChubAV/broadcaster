@@ -89,14 +89,19 @@ class WhatsAppMessenger(BaseMessenger):
             self.log.warning("check_connection_failed", error=str(e))
             return False
 
-    async def start_session(self) -> bool:
+    async def start_session(self, phone_number: str | None = None) -> dict:
         client = get_http_client()
         try:
-            response = await client.post(self._url("start"), timeout=30)
-            return response.status_code == 200
+            payload = {}
+            if phone_number:
+                payload["phone_number"] = phone_number
+            response = await client.post(self._url("start"), json=payload, timeout=30)
+            if response.status_code == 200:
+                return response.json()
+            return {"status": "error"}
         except Exception as e:
             self.log.error("start_session_error", error=str(e), exc_info=True)
-            return False
+            return {"status": "error"}
 
     async def destroy_session(self) -> bool:
         client = get_http_client()
@@ -116,7 +121,7 @@ class WhatsAppMessenger(BaseMessenger):
             if response.status_code == 200:
                 return response.json()
             self.log.warning("get_qr_error", http_status=response.status_code)
-            return {"status": "error", "qr": None}
+            return {"status": "error", "qr": None, "pairing_code": None}
         except Exception as e:
             self.log.error("get_qr_error", error=str(e), exc_info=True)
-            return {"status": "error", "qr": None}
+            return {"status": "error", "qr": None, "pairing_code": None}
