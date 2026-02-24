@@ -122,6 +122,7 @@ async function createSocket(sessionId, phoneNumber) {
         markOnlineOnConnect: false,
         generateHighQualityLinkPreview: false,
         shouldIgnoreJid: (jid) => jid.endsWith('@g.us'),
+        shouldSyncHistoryMessage: () => false,
     };
     if (waVersion) {
         socketConfig.version = waVersion;
@@ -148,13 +149,13 @@ async function createSocket(sessionId, phoneNumber) {
         sessionState.readyResolve = resolve;
         sessionState.readyReject = reject;
 
-        // Timeout after 60s — clean up socket to stop QR generation
+        // Timeout after 120s — clean up socket to stop QR generation
         sessionState._readyTimeout = setTimeout(() => {
             sessionState.initializing = false;
             try { sock.end(); } catch (_) {}
             sessions.delete(sessionId);
-            reject(new Error('Session initialization timeout (60s)'));
-        }, 60000);
+            reject(new Error('Session initialization timeout (120s)'));
+        }, 120000);
     });
 
     // Save credentials on every update
