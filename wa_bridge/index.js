@@ -158,18 +158,19 @@ async function createSocket(sessionId) {
             const reason = DisconnectReason[statusCode] || statusCode || 'unknown';
             console.log(`[${sessionId}] Disconnected: ${reason} (${statusCode})`);
 
-            if (statusCode === DisconnectReason.loggedOut) {
-                // User logged out — clean up
+            // Unrecoverable errors: loggedOut (401), 405, 403 — clean up and require fresh QR
+            const unrecoverable = [DisconnectReason.loggedOut, 405, 403];
+            if (unrecoverable.includes(statusCode)) {
                 sessionState.initializing = false;
                 clearTimeout(sessionState._readyTimeout);
                 if (sessionState.readyReject) {
-                    sessionState.readyReject(new Error('Logged out'));
+                    sessionState.readyReject(new Error(`Session terminated: ${reason} (${statusCode})`));
                     sessionState.readyResolve = null;
                     sessionState.readyReject = null;
                 }
                 sessions.delete(sessionId);
                 deleteSessionFiles(sessionId);
-                console.log(`[${sessionId}] Logged out, session cleaned up`);
+                console.log(`[${sessionId}] Unrecoverable disconnect (${statusCode}), session cleaned up`);
             } else if (sessionState.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                 // Auto-reconnect with exponential backoff
                 sessionState.reconnectAttempts++;
