@@ -195,6 +195,8 @@ async function createSocket(sessionId, phoneNumber) {
             } else if (sessionState.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                 // Auto-reconnect with exponential backoff
                 sessionState.reconnectAttempts++;
+                sessionState.initializing = false;
+                clearTimeout(sessionState._readyTimeout);
                 const backoff = Math.min(1000 * Math.pow(2, sessionState.reconnectAttempts - 1), 30000);
                 console.log(`[${sessionId}] Reconnecting in ${backoff}ms (attempt ${sessionState.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
 
@@ -202,7 +204,7 @@ async function createSocket(sessionId, phoneNumber) {
                     try {
                         // If someone else already reconnected, skip
                         const current = sessions.get(sessionId);
-                        if (current && (current.isConnected || current.initializing)) {
+                        if (current && current.isConnected) {
                             return;
                         }
                         sessions.delete(sessionId);
