@@ -18,6 +18,13 @@ process.on('uncaughtException', (err) => {
         console.error('[process] Caught Puppeteer ProtocolError (non-fatal):', err.message);
         return;
     }
+    // MongoDB GridFS errors during session restore are recoverable.
+    // The extract() failure will propagate through readyPromise rejection,
+    // and loadSessionFromMongo() retry logic will delete the corrupted session.
+    if (err?.name === 'MongoGridFSChunkError' || err?.message?.includes('ChunkIsMissing') || err?.message?.includes('GridFS')) {
+        console.error('[process] Caught MongoDB GridFS error (non-fatal):', err.message);
+        return;
+    }
     // For truly unexpected errors, log and exit.
     console.error('[process] Uncaught exception (fatal):', err);
     process.exit(1);
@@ -561,6 +568,7 @@ async function main() {
     });
 
     const rawStore = new MongoStore({ mongoose });
+    const saveLocks = new Map(); // Serialize saves per session to prevent GridFS corruption
 
     // RemoteAuth bug: save() uses full dataPath (e.g. "/app/.wwebjs_auth/RemoteAuth-14")
     // but sessionExists()/extract() use short name (e.g. "RemoteAuth-14").
@@ -585,13 +593,31 @@ async function main() {
             return result;
         },
         save: async (opts) => {
-            console.log(`[store] save("${opts.session}")`);
-            return rawStore.save(opts);
+            // Serialize saves per session: concurrent GridFS writes corrupt chunks
+            // (chunks from different versions get interleaved → ChunkIsMissing on read)
+            const key = opts.session;
+            const prev = saveLocks.get(key) || Promise.resolve();
+            const current = prev.then(async () => {
+                console.log(`[store] save("${opts.session}")`);
+                return rawStore.save(opts);
+            }).catch((err) => {
+                console.error(`[store] save error for "${opts.session}": ${err.message}`);
+            });
+            saveLocks.set(key, current);
+            current.finally(() => {
+                if (saveLocks.get(key) === current) saveLocks.delete(key);
+            });
+            return current;
         },
         extract: async (opts) => {
             const resolved = await resolveSessionName(opts.session);
             console.log(`[store] extract("${opts.session}" -> "${resolved}")`);
-            return rawStore.extract({ ...opts, session: resolved });
+            try {
+                return await rawStore.extract({ ...opts, session: resolved });
+            } catch (err) {
+                console.error(`[store] extract failed for "${opts.session}": ${err.message}`);
+                throw err;
+            }
         },
         delete: async (opts) => {
             const resolved = await resolveSessionName(opts.session);
