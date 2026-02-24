@@ -20,7 +20,7 @@ from app.messengers.telegram_user import (
     complete_auth,
 )
 from app.messengers.whatsapp import WhatsAppMessenger
-from app.pages.common import get_user_from_cookie, templates
+from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
 
@@ -53,6 +53,7 @@ async def accounts_list(
         {
             "request": request,
             "user": user,
+            "is_admin": check_is_admin(user, settings),
             "accounts": accounts,
             "active_page": "accounts",
         },
@@ -70,7 +71,7 @@ async def accounts_connect_tg_user_page(
         return RedirectResponse(url="/login", status_code=302)
     return templates.TemplateResponse(
         "accounts/connect_tg_user.html",
-        {"request": request, "user": user, "active_page": "accounts"},
+        {"request": request, "user": user, "is_admin": check_is_admin(user, settings), "active_page": "accounts"},
     )
 
 
@@ -274,6 +275,7 @@ async def accounts_connect_wa_page(
         {
             "request": request,
             "user": user,
+            "is_admin": check_is_admin(user, settings),
             "active_page": "accounts",
             "qr_code": qr_code,
             "connected": connected,

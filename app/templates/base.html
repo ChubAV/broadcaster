@@ -54,6 +54,9 @@
                             <a href="/schedules" class="inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if active_page == 'schedules' %}bg-primary-50 text-primary-700{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900{% endif %}">Расписания</a>
                             <a href="/history" class="inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if active_page == 'history' %}bg-primary-50 text-primary-700{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900{% endif %}">История</a>
                             <a href="/billing" class="inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if active_page == 'billing' %}bg-primary-50 text-primary-700{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900{% endif %}">Тарифы</a>
+                            {% if is_admin %}
+                            <a href="/admin" class="inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if active_page == 'admin' %}bg-primary-50 text-primary-700{% else %}text-slate-600 hover:bg-slate-100 hover:text-slate-900{% endif %}">Админ</a>
+                            {% endif %}
                         </div>
                     </div>
 
@@ -72,6 +75,9 @@
                                     <a href="/schedules" class="block rounded-lg px-3 py-2 text-sm font-medium {% if active_page == 'schedules' %}bg-primary-50 text-primary-700{% else %}text-slate-700 hover:bg-slate-100{% endif %}">Расписания</a>
                                     <a href="/history" class="block rounded-lg px-3 py-2 text-sm font-medium {% if active_page == 'history' %}bg-primary-50 text-primary-700{% else %}text-slate-700 hover:bg-slate-100{% endif %}">История</a>
                                     <a href="/billing" class="block rounded-lg px-3 py-2 text-sm font-medium {% if active_page == 'billing' %}bg-primary-50 text-primary-700{% else %}text-slate-700 hover:bg-slate-100{% endif %}">Тарифы</a>
+                                    {% if is_admin %}
+                                    <a href="/admin" class="block rounded-lg px-3 py-2 text-sm font-medium {% if active_page == 'admin' %}bg-primary-50 text-primary-700{% else %}text-slate-700 hover:bg-slate-100{% endif %}">Админ</a>
+                                    {% endif %}
                                 </div>
                             </div>
                         </div>

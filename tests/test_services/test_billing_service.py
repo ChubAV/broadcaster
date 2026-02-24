@@ -7,7 +7,8 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
-from app.services.billing_service import get_plan_limits, get_user_plan, get_usage, check_limit, PLANS
+from app.services.billing_service import get_plan_limits, get_user_plan, get_usage, check_limit, set_user_plan, PLANS
+from app.services.auth_service import hash_password
 
 
 def test_get_plan_limits():
@@ -120,3 +121,30 @@ async def test_check_send_limit_ignores_failed(db_session):
     allowed, reason = await check_limit(db_session, user.id, "send")
     assert allowed is False
     assert "send limit" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_set_user_plan_creates_subscription(db_session):
+    user = User(email="u@test.com", password_hash=hash_password("p"), name="U")
+    db_session.add(user)
+    await db_session.commit()
+
+    expires = datetime.now(timezone.utc) + timedelta(days=30)
+    await set_user_plan(db_session, user.id, "pro", expires)
+
+    plan = await get_user_plan(db_session, user.id)
+    assert plan == "pro"
+
+
+@pytest.mark.asyncio
+async def test_set_user_plan_deactivates_old(db_session):
+    user = User(email="u@test.com", password_hash=hash_password("p"), name="U")
+    db_session.add(user)
+    await db_session.commit()
+
+    expires = datetime.now(timezone.utc) + timedelta(days=30)
+    await set_user_plan(db_session, user.id, "basic", expires)
+    await set_user_plan(db_session, user.id, "pro", expires)
+
+    plan = await get_user_plan(db_session, user.id)
+    assert plan == "pro"

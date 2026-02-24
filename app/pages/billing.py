@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.services.billing_service import get_user_plan, get_plan_limits, get_usage, PLANS
-from app.pages.common import get_user_from_cookie, templates
+from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
 
@@ -27,6 +27,7 @@ async def billing_page(
         {
             "request": request,
             "user": user,
+            "is_admin": check_is_admin(user, settings),
             "plan": plan,
             "limits": limits,
             "usage": usage,

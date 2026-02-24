@@ -28,4 +28,13 @@ async def get_user_from_cookie(
     if not payload:
         return None
     user = await db.get(User, payload["sub"])
+    if user and user.is_blocked:
+        return None
     return user
+
+
+def check_is_admin(user: User | None, settings: Settings) -> bool:
+    """Check if user is admin."""
+    if not user or not settings.admin_email:
+        return False
+    return user.email == settings.admin_email

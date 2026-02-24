@@ -51,5 +51,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db), settings
     user = await repo.get_by_email(data.email)
     if not user or not verify_password(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    if user.is_blocked:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is blocked")
     token = create_access_token(user.id, settings.secret_key, settings.access_token_expire_minutes)
     return TokenResponse(access_token=token)

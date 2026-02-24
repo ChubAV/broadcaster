@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Админ-панель - Broadcaster{% endblock %}
+{% block content %}
+<div class="space-y-8">
+    <div>
+        <h1 class="text-2xl font-bold tracking-tight text-slate-900">Админ-панель</h1>
+        <p class="mt-1 text-sm text-slate-600">Общая статистика платформы.</p>
+    </div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
+            <p class="text-sm font-medium text-slate-600">Пользователей</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900">{{ stats.total_users }}</p>
+        </div>
+        <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
+            <p class="text-sm font-medium text-slate-600">Аккаунтов (активных)</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900">{{ stats.active_accounts }} <span class="text-base font-normal text-slate-500">/ {{ stats.total_accounts }}</span></p>
+        </div>
+        <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
+            <p class="text-sm font-medium text-slate-600">Отправок сегодня</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900">{{ stats.sends_today }}</p>
+        </div>
+        <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
+            <p class="text-sm font-medium text-slate-600">Активных подписок</p>
+            <p class="mt-2 text-3xl font-bold text-slate-900">{{ stats.active_subscriptions }}</p>
+        </div>
+    </div>
+
+    <div>
+        <a href="/admin/users" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 transition-colors">
+            Управление пользователями
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+        </a>
+    </div>
+</div>
+{% endblock %}
