@@ -1,97 +1,59 @@
 const express = require('express');
-const { Client, RemoteAuth, MessageMedia } = require('whatsapp-web.js');
-const { MongoStore } = require('wwebjs-mongo');
-const mongoose = require('mongoose');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode');
-const fs = require('fs');
 const axios = require('axios');
-
-// Prevent process crash from Puppeteer/wwebjs internal errors.
-// When WhatsApp Web navigates mid-operation, Puppeteer's CallbackRegistry
-// rejects pending CDP callbacks outside the sendMessage promise chain.
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('[process] Unhandled rejection:', reason?.message || reason);
-});
-process.on('uncaughtException', (err) => {
-    // ProtocolError from Puppeteer context destruction is recoverable — don't crash.
-    if (err?.name === 'ProtocolError' || err?.message?.includes('context was destroyed') || err?.message?.includes('Execution context')) {
-        console.error('[process] Caught Puppeteer ProtocolError (non-fatal):', err.message);
-        return;
-    }
-    // MongoDB GridFS errors during session restore are recoverable.
-    // The extract() failure will propagate through readyPromise rejection,
-    // and loadSessionFromMongo() retry logic will delete the corrupted session.
-    if (err?.name === 'MongoGridFSChunkError' || err?.message?.includes('ChunkIsMissing') || err?.message?.includes('GridFS')) {
-        console.error('[process] Caught MongoDB GridFS error (non-fatal):', err.message);
-        return;
-    }
-    // For truly unexpected errors, log and exit.
-    console.error('[process] Uncaught exception (fatal):', err);
-    process.exit(1);
-});
+const fs = require('fs');
+const path = require('path');
+const pino = require('pino');
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || '300000');
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/whatsapp_sessions';
+const SESSIONS_DIR = process.env.SESSIONS_DIR || './sessions';
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RATE_LIMIT_PER_MINUTE = 8;
 
+// Silent logger for Baileys (it uses pino internally)
+const logger = pino({ level: 'silent' });
+
+// In-memory session state
 const sessions = new Map();
-const loadingPromises = new Map(); // Prevents duplicate session loading
-const sendLocks = new Map(); // Per-session send serialization
-let store; // MongoStore instance, initialized on startup
+const loadingPromises = new Map();
+const sendLocks = new Map();
+
+// Per-session rate limiting
+const rateLimiters = new Map();
+
+// Ensure sessions directory exists
+fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
 /**
- * Check if an error is a Puppeteer execution-context destruction.
+ * Simple rate limiter: max N messages per minute per session.
  */
-function isContextError(err) {
-    return err?.name === 'ProtocolError' || err?.message?.includes('context was destroyed');
-}
-
-/**
- * Evict a broken session so ensureSession reloads it from MongoDB.
- */
-async function evictSession(sessionId) {
-    const state = sessions.get(sessionId);
-    if (!state) return;
-    state.isConnected = false;
-    try { await state.client.destroy(); } catch (_) {}
-    sessions.delete(sessionId);
-    console.log(`[${sessionId}] Session evicted after ProtocolError`);
-}
-
-/**
- * After "ready" fires, WhatsApp Web may still be navigating internally
- * (especially when restoring a session from MongoDB backup).
- * Poll client.getState() to verify the Puppeteer execution context is
- * actually usable before allowing operations.
- */
-async function waitForStableContext(sessionId, client, maxAttempts = 12, intervalMs = 5000) {
-    for (let i = 0; i < maxAttempts; i++) {
-        try {
-            const state = await client.getState();
-            console.log(`[${sessionId}] Context stable (state=${state}, attempt ${i + 1})`);
-            return;
-        } catch (err) {
-            console.log(`[${sessionId}] Context not ready (attempt ${i + 1}/${maxAttempts}): ${err.message}`);
-            if (i < maxAttempts - 1) {
-                await new Promise(resolve => setTimeout(resolve, intervalMs));
-            }
-        }
+function checkRateLimit(sessionId) {
+    let limiter = rateLimiters.get(sessionId);
+    if (!limiter) {
+        limiter = { timestamps: [] };
+        rateLimiters.set(sessionId, limiter);
     }
-    console.warn(`[${sessionId}] Context did not stabilize after ${maxAttempts} attempts, proceeding anyway`);
+    const now = Date.now();
+    limiter.timestamps = limiter.timestamps.filter(t => now - t < 60000);
+    if (limiter.timestamps.length >= RATE_LIMIT_PER_MINUTE) {
+        return false;
+    }
+    limiter.timestamps.push(now);
+    return true;
 }
 
 /**
  * Serialize async work per session so only one send runs at a time.
- * Prevents "Execution context was destroyed" Chromium errors.
  */
 function withSessionLock(sessionId, fn) {
     const prev = sendLocks.get(sessionId) || Promise.resolve();
-    const next = prev.then(fn, fn); // run fn regardless of previous result
+    const next = prev.then(fn, fn);
     sendLocks.set(sessionId, next);
-    // Clean up when chain settles to avoid memory leak
     next.finally(() => {
         if (sendLocks.get(sessionId) === next) {
             sendLocks.delete(sessionId);
@@ -101,202 +63,147 @@ function withSessionLock(sessionId, fn) {
 }
 
 /**
- * Create a whatsapp-web.js Client for the given sessionId,
- * wire up event handlers, and call client.initialize().
- * Returns the state object.
+ * Check if session auth files exist on disk.
  */
-function createClient(sessionId) {
-    const client = new Client({
-        authStrategy: new RemoteAuth({
-            store,
-            clientId: sessionId,
-            backupSyncIntervalMs: 60000, // First backup ~1 min after connection
-        }),
-        webVersionCache: { type: 'none' }, // Avoid stale cached WA Web causing injection issues
-        puppeteer: {
-            headless: true,
-            protocolTimeout: 600000, // 10 min — getChats() can be slow with many groups
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--disable-gpu',
-                '--single-process',
-            ],
-        },
+function sessionExistsOnDisk(sessionId) {
+    const sessionDir = path.join(SESSIONS_DIR, String(sessionId));
+    const credsFile = path.join(sessionDir, 'creds.json');
+    return fs.existsSync(credsFile);
+}
+
+/**
+ * Delete session files from disk.
+ */
+function deleteSessionFiles(sessionId) {
+    const sessionDir = path.join(SESSIONS_DIR, String(sessionId));
+    if (fs.existsSync(sessionDir)) {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+        console.log(`[${sessionId}] Session files deleted`);
+    }
+}
+
+/**
+ * Create a Baileys socket for the given sessionId.
+ * Returns the state object stored in sessions Map.
+ */
+async function createSocket(sessionId) {
+    const sessionDir = path.join(SESSIONS_DIR, String(sessionId));
+    const { state: authState, saveCreds } = await useMultiFileAuthState(sessionDir);
+
+    const sock = makeWASocket({
+        auth: authState,
+        printQRInTerminal: false,
+        browser: Browsers.ubuntu('Broadcaster'),
+        logger,
+        markOnlineOnConnect: false,
+        generateHighQualityLinkPreview: false,
     });
 
-    const state = {
-        client,
+    const sessionState = {
+        sock,
+        saveCreds,
         qrCode: null,
         isConnected: false,
         initializing: true,
         lastActivity: Date.now(),
+        reconnectAttempts: 0,
+        readyResolve: null,
+        readyReject: null,
         readyPromise: null,
-        initFailed: false,
     };
 
-    state.readyPromise = new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-            reject(new Error('Session initialization timeout (90s)'));
-        }, 90000);
+    sessionState.readyPromise = new Promise((resolve, reject) => {
+        sessionState.readyResolve = resolve;
+        sessionState.readyReject = reject;
 
-        client.on('ready', () => {
-            clearTimeout(timeout);
-            resolve();
-        });
-
-        client.on('auth_failure', (msg) => {
-            clearTimeout(timeout);
-            reject(new Error(`Auth failure: ${msg}`));
-        });
-
-        // Reject immediately when initialize() fails — don't wait 90s
-        state._rejectReady = (err) => {
-            clearTimeout(timeout);
-            reject(err);
-        };
+        // Timeout after 60s
+        sessionState._readyTimeout = setTimeout(() => {
+            reject(new Error('Session initialization timeout (60s)'));
+        }, 60000);
     });
 
-    client.on('qr', async (qr) => {
-        state.qrCode = await qrcode.toDataURL(qr);
-        console.log(`[${sessionId}] QR code generated`);
-    });
+    // Save credentials on every update
+    sock.ev.on('creds.update', saveCreds);
 
-    client.on('ready', () => {
-        state.isConnected = true;
-        state.initializing = false;
-        state.qrCode = null;
-        state.lastActivity = Date.now();
-        console.log(`[${sessionId}] Client ready`);
-    });
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
 
-    client.on('remote_session_saved', () => {
-        console.log(`[${sessionId}] Session saved to MongoDB`);
-    });
+        if (qr) {
+            sessionState.qrCode = await qrcode.toDataURL(qr);
+            console.log(`[${sessionId}] QR code generated`);
+        }
 
-    client.on('disconnected', (reason) => {
-        state.isConnected = false;
-        state.initializing = false;
-        console.log(`[${sessionId}] Disconnected: ${reason}`);
-    });
+        if (connection === 'open') {
+            sessionState.isConnected = true;
+            sessionState.initializing = false;
+            sessionState.qrCode = null;
+            sessionState.lastActivity = Date.now();
+            sessionState.reconnectAttempts = 0;
+            clearTimeout(sessionState._readyTimeout);
+            if (sessionState.readyResolve) {
+                sessionState.readyResolve();
+                sessionState.readyResolve = null;
+                sessionState.readyReject = null;
+            }
+            console.log(`[${sessionId}] Connected`);
+        }
 
-    client.on('auth_failure', (msg) => {
-        state.isConnected = false;
-        state.initializing = false;
-        console.log(`[${sessionId}] Auth failure: ${msg}`);
-    });
+        if (connection === 'close') {
+            sessionState.isConnected = false;
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const reason = DisconnectReason[statusCode] || statusCode || 'unknown';
+            console.log(`[${sessionId}] Disconnected: ${reason} (${statusCode})`);
 
-    sessions.set(sessionId, state);
+            if (statusCode === DisconnectReason.loggedOut) {
+                // User logged out — clean up
+                sessionState.initializing = false;
+                clearTimeout(sessionState._readyTimeout);
+                if (sessionState.readyReject) {
+                    sessionState.readyReject(new Error('Logged out'));
+                    sessionState.readyResolve = null;
+                    sessionState.readyReject = null;
+                }
+                sessions.delete(sessionId);
+                deleteSessionFiles(sessionId);
+                console.log(`[${sessionId}] Logged out, session cleaned up`);
+            } else if (sessionState.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+                // Auto-reconnect with exponential backoff
+                sessionState.reconnectAttempts++;
+                const backoff = Math.min(1000 * Math.pow(2, sessionState.reconnectAttempts - 1), 30000);
+                console.log(`[${sessionId}] Reconnecting in ${backoff}ms (attempt ${sessionState.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
 
-    client.initialize().catch((err) => {
-        state.initializing = false;
-        state.initFailed = true;
-        console.error(`[${sessionId}] Failed to initialize: ${err.message}`);
-        // Reject readyPromise immediately so we don't wait 90s for nothing
-        if (state._rejectReady) {
-            state._rejectReady(err);
-            state._rejectReady = null;
+                setTimeout(async () => {
+                    try {
+                        sessions.delete(sessionId);
+                        const newState = await createSocket(sessionId);
+                        // Preserve reconnect counter
+                        newState.reconnectAttempts = sessionState.reconnectAttempts;
+                        sessions.set(sessionId, newState);
+                    } catch (err) {
+                        console.error(`[${sessionId}] Reconnect failed: ${err.message}`);
+                    }
+                }, backoff);
+            } else {
+                sessionState.initializing = false;
+                clearTimeout(sessionState._readyTimeout);
+                if (sessionState.readyReject) {
+                    sessionState.readyReject(new Error(`Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached`));
+                    sessionState.readyResolve = null;
+                    sessionState.readyReject = null;
+                }
+                sessions.delete(sessionId);
+                console.log(`[${sessionId}] Max reconnect attempts reached, giving up`);
+            }
         }
     });
 
-    return state;
+    sessions.set(sessionId, sessionState);
+    return sessionState;
 }
 
 /**
- * Load a session from MongoDB. Called only from ensureSession
- * under the loadingPromises lock.
- * Retries initialization once before giving up.
- * On persistent failure, deletes corrupted session from MongoDB.
- */
-async function loadSessionFromMongo(sessionId) {
-    // Clean up stale in-memory state if present
-    const stale = sessions.get(sessionId);
-    if (stale) {
-        try { await stale.client.destroy(); } catch (_) {}
-        sessions.delete(sessionId);
-    }
-
-    // Check if session exists in MongoDB
-    // RemoteAuth stores sessions with dataPath prefix (e.g. /app/.wwebjs_auth/RemoteAuth-{id})
-    // so we search collections by suffix instead of exact name
-    let sessionExists;
-    try {
-        const collections = await mongoose.connection.db.listCollections().toArray();
-        sessionExists = collections.some(c => c.name.endsWith(`RemoteAuth-${sessionId}.files`));
-    } catch (err) {
-        console.error(`[${sessionId}] MongoDB lookup failed: ${err.message}`);
-        return null;
-    }
-    if (!sessionExists) {
-        return null;
-    }
-
-    // Diagnose: check extracted session directory
-    const sessionDir = `.wwebjs_auth/RemoteAuth-${sessionId}`;
-    const maxAttempts = 2;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        console.log(`[${sessionId}] Loading session from MongoDB (attempt ${attempt}/${maxAttempts})...`);
-
-        // Clean up previous failed attempt
-        if (sessions.has(sessionId)) {
-            try { await sessions.get(sessionId).client.destroy(); } catch (_) {}
-            sessions.delete(sessionId);
-        }
-
-        const state = createClient(sessionId);
-
-        try {
-            await state.readyPromise;
-            // After "ready" fires, WhatsApp Web may still be navigating internally.
-            // Poll client.getState() to verify the execution context is actually usable.
-            await waitForStableContext(sessionId, state.client);
-            state.lastActivity = Date.now();
-            return state;
-        } catch (err) {
-            console.error(`[${sessionId}] Failed to load (attempt ${attempt}/${maxAttempts}): ${err.message}`);
-            try { await state.client.destroy(); } catch (_) {}
-            sessions.delete(sessionId);
-
-            // Log diagnostic info about extracted session
-            try {
-                const dirExists = fs.existsSync(sessionDir);
-                const files = dirExists ? fs.readdirSync(sessionDir) : [];
-                console.log(`[${sessionId}] Session dir "${sessionDir}": exists=${dirExists}, files=${files.length} [${files.slice(0, 5).join(', ')}${files.length > 5 ? '...' : ''}]`);
-            } catch (diagErr) {
-                console.log(`[${sessionId}] Session dir diagnostic failed: ${diagErr.message}`);
-            }
-
-            if (attempt < maxAttempts) {
-                console.log(`[${sessionId}] Retrying in 5s...`);
-                await new Promise(resolve => setTimeout(resolve, 5000));
-            }
-        }
-    }
-
-    // All attempts failed — session data is likely corrupted
-    console.error(`[${sessionId}] Session restore failed after ${maxAttempts} attempts, deleting corrupted session from MongoDB`);
-    try {
-        await store.delete({ session: `RemoteAuth-${sessionId}` });
-        console.log(`[${sessionId}] Corrupted session deleted from MongoDB. User needs to re-scan QR.`);
-    } catch (delErr) {
-        console.error(`[${sessionId}] Failed to delete corrupted session: ${delErr.message}`);
-    }
-
-    // Clean up extracted files
-    try {
-        fs.rmSync(sessionDir, { recursive: true, force: true });
-    } catch (_) {}
-
-    return null;
-}
-
-/**
- * Ensure a session is loaded and ready. If not loaded, check MongoDB
- * and start it on demand. Returns the state or null.
- * Uses loadingPromises to prevent duplicate Chromium instances for the same session.
+ * Ensure a session is loaded and ready.
+ * If not in memory but exists on disk, load it.
  */
 async function ensureSession(sessionId) {
     let state = sessions.get(sessionId);
@@ -316,14 +223,32 @@ async function ensureSession(sessionId) {
         }
     }
 
-    // If another request is already loading this session, wait for it
+    // Check if session exists on disk
+    if (!sessionExistsOnDisk(sessionId)) {
+        return null;
+    }
+
+    // Prevent duplicate loading
     if (loadingPromises.has(sessionId)) {
         return loadingPromises.get(sessionId);
     }
 
-    const loadPromise = loadSessionFromMongo(sessionId);
-    loadingPromises.set(sessionId, loadPromise);
+    const loadPromise = (async () => {
+        console.log(`[${sessionId}] Loading session from disk...`);
+        try {
+            const state = await createSocket(sessionId);
+            await state.readyPromise;
+            state.lastActivity = Date.now();
+            console.log(`[${sessionId}] Session loaded successfully`);
+            return state;
+        } catch (err) {
+            console.error(`[${sessionId}] Failed to load session: ${err.message}`);
+            sessions.delete(sessionId);
+            return null;
+        }
+    })();
 
+    loadingPromises.set(sessionId, loadPromise);
     try {
         return await loadPromise;
     } finally {
@@ -332,19 +257,37 @@ async function ensureSession(sessionId) {
 }
 
 /**
- * Destroy a session and free resources.
+ * Gracefully close a session (keep files on disk).
  */
-async function destroySession(sessionId) {
+async function unloadSession(sessionId) {
     const state = sessions.get(sessionId);
     if (!state) return;
 
     try {
-        await state.client.destroy();
+        state.sock.end();
     } catch (err) {
-        console.error(`[${sessionId}] Error destroying: ${err.message}`);
+        console.error(`[${sessionId}] Error closing socket: ${err.message}`);
     }
     sessions.delete(sessionId);
     console.log(`[${sessionId}] Session unloaded`);
+}
+
+/**
+ * Destroy a session completely (logout + delete files).
+ */
+async function destroySession(sessionId) {
+    const state = sessions.get(sessionId);
+    if (state) {
+        try {
+            await state.sock.logout();
+        } catch (err) {
+            console.error(`[${sessionId}] Error during logout: ${err.message}`);
+            try { state.sock.end(); } catch (_) {}
+        }
+        sessions.delete(sessionId);
+    }
+    deleteSessionFiles(sessionId);
+    console.log(`[${sessionId}] Session destroyed`);
 }
 
 // ---- Idle timeout: unload sessions after inactivity ----
@@ -354,18 +297,18 @@ setInterval(() => {
     for (const [id, state] of sessions) {
         if (state.isConnected && (now - state.lastActivity > IDLE_TIMEOUT_MS)) {
             console.log(`[${id}] Idle for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s, unloading`);
-            destroySession(id);
+            unloadSession(id);
         }
     }
-}, 60000); // Check every minute
+}, 60000);
 
 // ---- REST API endpoints ----
 
 // POST /api/sessions/:id/start - Create and initialize a session (for QR flow)
-app.post('/api/sessions/:id/start', (req, res) => {
+app.post('/api/sessions/:id/start', async (req, res) => {
     const sessionId = req.params.id;
-    const existing = sessions.get(sessionId);
 
+    const existing = sessions.get(sessionId);
     if (existing) {
         if (existing.isConnected) {
             return res.json({ status: 'connected' });
@@ -373,21 +316,23 @@ app.post('/api/sessions/:id/start', (req, res) => {
         if (existing.initializing) {
             return res.json({ status: 'initializing' });
         }
-        // Stale session — destroy and recreate
-        existing.client.destroy().catch(() => {});
+        // Stale session — clean up
+        try { existing.sock.end(); } catch (_) {}
         sessions.delete(sessionId);
     }
 
-    createClient(sessionId);
-    res.json({ status: 'initializing' });
+    try {
+        await createSocket(sessionId);
+        res.json({ status: 'initializing' });
+    } catch (err) {
+        console.error(`[${sessionId}] Failed to start: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // DELETE /api/sessions/:id - Destroy a session
 app.delete('/api/sessions/:id', async (req, res) => {
     const sessionId = req.params.id;
-    if (!sessions.has(sessionId)) {
-        return res.json({ ok: true });
-    }
     await destroySession(sessionId);
     res.json({ ok: true });
 });
@@ -398,7 +343,9 @@ app.get('/api/sessions/:id/status', (req, res) => {
     const state = sessions.get(sessionId);
 
     if (!state) {
-        return res.json({ connected: false, exists: false });
+        // Check if session files exist (session may be unloaded but restorable)
+        const exists = sessionExistsOnDisk(sessionId);
+        return res.json({ connected: false, exists });
     }
     res.json({ connected: state.isConnected, exists: true });
 });
@@ -423,88 +370,83 @@ app.get('/api/sessions/:id/qr', (req, res) => {
 // POST /api/sessions/:id/send - Send message (auto-loads session if needed)
 app.post('/api/sessions/:id/send', async (req, res) => {
     const sessionId = req.params.id;
-
     const { group_id, text, image_paths, image_urls } = req.body;
-    // Support both URL-based (S3) and legacy local paths
     const images = image_urls || image_paths || [];
-    const isUrlMode = !!image_urls;
+    const caption = text || '';
+
     if (!group_id || (!text && images.length === 0)) {
         return res.status(400).json({ error: 'group_id and text or images are required' });
     }
 
-    // Pre-load media outside the retry loop — no need to re-download on retry
-    const caption = text || '';
-    let mediaItems = [];
-    if (images.length > 0) {
-        try {
-            for (const img of images) {
-                if (isUrlMode || img.startsWith('http://') || img.startsWith('https://')) {
-                    const response = await axios.get(img, { responseType: 'arraybuffer' });
-                    const mime = response.headers['content-type'] || 'image/jpeg';
-                    const base64 = Buffer.from(response.data).toString('base64');
-                    mediaItems.push(new MessageMedia(mime, base64));
-                } else if (fs.existsSync(img)) {
-                    mediaItems.push(MessageMedia.fromFilePath(img));
-                }
-            }
-        } catch (error) {
-            console.error(`[${sessionId}] Media download error: ${error.message}`);
-            return res.status(500).json({ error: `Media download failed: ${error.message}` });
-        }
+    // Rate limiting
+    if (!checkRateLimit(sessionId)) {
+        return res.status(429).json({ error: 'Rate limit exceeded (max 8 messages/minute)' });
     }
 
-    // Retry once: if first attempt hits ProtocolError, evict session,
-    // reload from MongoDB (with stabilization delay), and try again.
-    for (let attempt = 0; attempt < 2; attempt++) {
-        const state = await ensureSession(sessionId);
-        if (!state || !state.isConnected) {
-            return res.status(503).json({ error: 'WhatsApp session not available' });
-        }
+    const state = await ensureSession(sessionId);
+    if (!state || !state.isConnected) {
+        return res.status(503).json({ error: 'WhatsApp session not available' });
+    }
 
-        try {
-            await withSessionLock(sessionId, async () => {
-                if (mediaItems.length > 0) {
-                    console.log(`[${sessionId}] Sending ${mediaItems.length} image(s) to group_id=${group_id}, text="${caption.substring(0, 50)}" (attempt ${attempt + 1})`);
+    try {
+        await withSessionLock(sessionId, async () => {
+            // Anti-ban: simulate typing
+            try {
+                await state.sock.sendPresenceUpdate('composing', group_id);
+                const typingDelay = 1500 + Math.random() * 2500;
+                await new Promise(r => setTimeout(r, typingDelay));
+                await state.sock.sendPresenceUpdate('paused', group_id);
+            } catch (err) {
+                // Presence update failure is non-critical
+                console.log(`[${sessionId}] Presence update failed (non-critical): ${err.message}`);
+            }
 
-                    if (mediaItems.length === 0) {
-                        if (caption) {
-                            const result = await state.client.sendMessage(group_id, caption);
-                            console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
-                        }
-                    } else if (mediaItems.length === 1) {
-                        const opts = caption ? { caption } : {};
-                        const result = await state.client.sendMessage(group_id, mediaItems[0], opts);
-                        console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
+            if (images.length > 0) {
+                console.log(`[${sessionId}] Sending ${images.length} image(s) to ${group_id}, text="${caption.substring(0, 50)}"`);
+
+                // Download and send images
+                for (let i = 0; i < images.length; i++) {
+                    const img = images[i];
+                    let buffer;
+                    let mimetype = 'image/jpeg';
+
+                    if (img.startsWith('http://') || img.startsWith('https://')) {
+                        const response = await axios.get(img, { responseType: 'arraybuffer' });
+                        mimetype = response.headers['content-type'] || 'image/jpeg';
+                        buffer = Buffer.from(response.data);
+                    } else if (fs.existsSync(img)) {
+                        buffer = fs.readFileSync(img);
                     } else {
-                        // Send images sequentially to avoid Chromium context conflicts
-                        for (let i = 0; i < mediaItems.length; i++) {
-                            const result = await state.client.sendMessage(group_id, mediaItems[i]);
-                            console.log(`[${sessionId}] sendMessage[${i}] result: id=${result?.id?._serialized}, ack=${result?.ack}`);
-                        }
-                        if (caption) {
-                            await state.client.sendMessage(group_id, caption);
-                        }
+                        console.warn(`[${sessionId}] Image not found: ${img}`);
+                        continue;
                     }
-                } else {
-                    console.log(`[${sessionId}] Sending text to group_id=${group_id}, text="${caption.substring(0, 50)}" (attempt ${attempt + 1})`);
-                    const result = await state.client.sendMessage(group_id, caption);
-                    console.log(`[${sessionId}] sendMessage result: id=${result?.id?._serialized}, ack=${result?.ack}`);
-                }
-            });
 
-            state.lastActivity = Date.now();
-            return res.json({ ok: true });
-        } catch (error) {
-            console.error(`[${sessionId}] Send error (attempt ${attempt + 1}): ${error.message}`);
-            if (isContextError(error) && attempt === 0) {
-                await evictSession(sessionId);
-                continue; // retry with fresh session (will go through stabilization delay)
+                    const msgOptions = { image: buffer, mimetype };
+                    // Single image: attach caption directly
+                    if (images.length === 1 && caption) {
+                        msgOptions.caption = caption;
+                    }
+
+                    const result = await state.sock.sendMessage(group_id, msgOptions);
+                    console.log(`[${sessionId}] sendMessage[${i}] result: id=${result?.key?.id}`);
+                }
+
+                // Multiple images: send caption as separate text
+                if (images.length > 1 && caption) {
+                    await state.sock.sendMessage(group_id, { text: caption });
+                }
+            } else {
+                console.log(`[${sessionId}] Sending text to ${group_id}, text="${caption.substring(0, 50)}"`);
+                const result = await state.sock.sendMessage(group_id, { text: caption });
+                console.log(`[${sessionId}] sendMessage result: id=${result?.key?.id}`);
             }
-            if (isContextError(error)) {
-                await evictSession(sessionId);
-            }
-            return res.status(500).json({ error: error.message });
-        }
+        });
+
+        state.lastActivity = Date.now();
+        return res.json({ ok: true });
+    } catch (error) {
+        console.error(`[${sessionId}] Send error: ${error.message}`);
+        return res.status(500).json({ error: error.message });
     }
 });
 
@@ -512,37 +454,25 @@ app.post('/api/sessions/:id/send', async (req, res) => {
 app.get('/api/sessions/:id/groups', async (req, res) => {
     const sessionId = req.params.id;
 
-    // Retry once: if first attempt hits ProtocolError, evict session,
-    // reload from MongoDB, and try again.
-    for (let attempt = 0; attempt < 2; attempt++) {
-        const state = await ensureSession(sessionId);
-        if (!state || !state.isConnected) {
-            return res.status(503).json({ error: 'WhatsApp session not available' });
-        }
+    const state = await ensureSession(sessionId);
+    if (!state || !state.isConnected) {
+        return res.status(503).json({ error: 'WhatsApp session not available' });
+    }
 
-        try {
-            const chats = await state.client.getChats();
-            const groups = chats
-                .filter((chat) => chat.isGroup)
-                .map((chat) => ({
-                    id: chat.id._serialized,
-                    name: chat.name,
-                }));
-            return res.json(groups);
-        } catch (error) {
-            console.error(`[${sessionId}] Groups error (attempt ${attempt + 1}): ${error.message}`);
-            if (isContextError(error) && attempt === 0) {
-                await evictSession(sessionId);
-                continue; // retry with fresh session
-            }
-            return res.status(500).json({ error: error.message });
-        }
+    try {
+        const groupsObj = await state.sock.groupFetchAllParticipating();
+        const groups = Object.entries(groupsObj).map(([jid, metadata]) => ({
+            id: jid,
+            name: metadata.subject,
+        }));
+        return res.json(groups);
+    } catch (error) {
+        console.error(`[${sessionId}] Groups error: ${error.message}`);
+        return res.status(500).json({ error: error.message });
     }
 });
 
-// No auto-restore on startup — sessions are loaded on demand
-
-// GET /health - Health check for Docker
+// GET /health - Health check
 app.get('/health', (req, res) => {
     const sessionCount = sessions.size;
     const loadingCount = loadingPromises.size;
@@ -554,85 +484,8 @@ app.get('/health', (req, res) => {
     });
 });
 
-async function main() {
-    // Ensure dataPath directory exists for RemoteAuth session extraction
-    fs.mkdirSync('.wwebjs_auth', { recursive: true });
+// ---- Start server ----
 
-    await mongoose.connect(MONGODB_URI);
-    console.log('Connected to MongoDB');
-
-    mongoose.connection.on('error', (err) => {
-        console.error('MongoDB connection error:', err.message);
-    });
-    mongoose.connection.on('disconnected', () => {
-        console.warn('MongoDB disconnected');
-    });
-
-    const rawStore = new MongoStore({ mongoose });
-    const saveLocks = new Map(); // Serialize saves per session to prevent GridFS corruption
-
-    // RemoteAuth bug: save() uses full dataPath (e.g. "/app/.wwebjs_auth/RemoteAuth-14")
-    // but sessionExists()/extract() use short name (e.g. "RemoteAuth-14").
-    // This wrapper resolves the short name to the actual collection name.
-    async function resolveSessionName(shortName) {
-        const exactExists = await rawStore.sessionExists({ session: shortName });
-        if (exactExists) return shortName;
-
-        const collections = await mongoose.connection.db.listCollections().toArray();
-        const match = collections.find(c => c.name.endsWith(`${shortName}.files`));
-        if (match) {
-            return match.name.slice('whatsapp-'.length, -'.files'.length);
-        }
-        return shortName;
-    }
-
-    store = {
-        sessionExists: async (opts) => {
-            const resolved = await resolveSessionName(opts.session);
-            const result = await rawStore.sessionExists({ session: resolved });
-            console.log(`[store] sessionExists("${opts.session}" -> "${resolved}") = ${result}`);
-            return result;
-        },
-        save: async (opts) => {
-            // Serialize saves per session: concurrent GridFS writes corrupt chunks
-            // (chunks from different versions get interleaved → ChunkIsMissing on read)
-            const key = opts.session;
-            const prev = saveLocks.get(key) || Promise.resolve();
-            const current = prev.then(async () => {
-                console.log(`[store] save("${opts.session}")`);
-                return rawStore.save(opts);
-            }).catch((err) => {
-                console.error(`[store] save error for "${opts.session}": ${err.message}`);
-            });
-            saveLocks.set(key, current);
-            current.finally(() => {
-                if (saveLocks.get(key) === current) saveLocks.delete(key);
-            });
-            return current;
-        },
-        extract: async (opts) => {
-            const resolved = await resolveSessionName(opts.session);
-            console.log(`[store] extract("${opts.session}" -> "${resolved}")`);
-            try {
-                return await rawStore.extract({ ...opts, session: resolved });
-            } catch (err) {
-                console.error(`[store] extract failed for "${opts.session}": ${err.message}`);
-                throw err;
-            }
-        },
-        delete: async (opts) => {
-            const resolved = await resolveSessionName(opts.session);
-            console.log(`[store] delete("${opts.session}" -> "${resolved}")`);
-            return rawStore.delete({ ...opts, session: resolved });
-        },
-    };
-
-    app.listen(PORT, () => {
-        console.log(`WA Bridge (RemoteAuth/MongoDB, idle timeout=${IDLE_TIMEOUT_MS / 1000}s) running on port ${PORT}`);
-    });
-}
-
-main().catch((err) => {
-    console.error('Failed to start:', err);
-    process.exit(1);
+app.listen(PORT, () => {
+    console.log(`WA Bridge (Baileys, idle timeout=${IDLE_TIMEOUT_MS / 1000}s) running on port ${PORT}`);
 });
