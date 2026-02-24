@@ -181,6 +181,11 @@ async function createSocket(sessionId, phoneNumber) {
             const reason = DisconnectReason[statusCode] || statusCode || 'unknown';
             console.log(`[${sessionId}] Disconnected: ${reason} (${statusCode})`);
 
+            // Intentional close (idle unload, destroy) — do not reconnect
+            if (sessionState.intentionalClose) {
+                return;
+            }
+
             // Unrecoverable errors: loggedOut (401), 405, 403 — clean up and require fresh QR
             const unrecoverable = [DisconnectReason.loggedOut, 405, 403];
             if (unrecoverable.includes(statusCode)) {
@@ -299,6 +304,7 @@ async function unloadSession(sessionId) {
     const state = sessions.get(sessionId);
     if (!state) return;
 
+    state.intentionalClose = true;
     try {
         state.sock.end();
     } catch (err) {
@@ -315,6 +321,7 @@ async function unloadSession(sessionId) {
 async function destroySession(sessionId) {
     const state = sessions.get(sessionId);
     if (state) {
+        state.intentionalClose = true;
         try {
             await state.sock.logout();
         } catch (err) {
