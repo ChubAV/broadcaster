@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import io
 
@@ -216,7 +217,7 @@ async def accounts_connect_wa_page(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    """Step 1: Show phone number form for pairing code."""
+    """Start QR-based WA connection (default flow)."""
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
@@ -244,6 +245,33 @@ async def accounts_connect_wa_page(
         await db.delete(old)
     await db.commit()
 
+    # Create a pending WA account to get a session_id
+    account = MessengerAccount(
+        user_id=user.id,
+        type="wa",
+        credentials="pending",
+        status="connecting",
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+
+    session_id = str(account.id)
+    messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=session_id)
+
+    qr_code = None
+    connected = False
+    error = None
+
+    try:
+        await messenger.start_session()
+        qr_data = await messenger.get_qr()
+        qr_code = qr_data.get("qr")
+        if qr_data.get("status") == "connected":
+            connected = True
+    except Exception as e:
+        error = f"Ошибка подключения к WA Bridge: {e}"
+
     return templates.TemplateResponse(
         "accounts/connect_wa.html",
         {
@@ -251,7 +279,11 @@ async def accounts_connect_wa_page(
             "user": user,
             "is_admin": check_is_admin(user, settings),
             "active_page": "accounts",
-            "step": "phone_form",
+            "step": "qr",
+            "qr_code": qr_code,
+            "connected": connected,
+            "error": error,
+            "account_id": account.id,
         },
     )
 
@@ -262,7 +294,7 @@ async def accounts_connect_wa_start(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    """Step 2: Start session with phone number, show pairing code."""
+    """Start pairing code connection (alternative flow)."""
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
@@ -273,17 +305,7 @@ async def accounts_connect_wa_start(
     phone_number = "".join(c for c in phone_number if c.isdigit())
 
     if not phone_number or len(phone_number) < 10:
-        return templates.TemplateResponse(
-            "accounts/connect_wa.html",
-            {
-                "request": request,
-                "user": user,
-                "is_admin": check_is_admin(user, settings),
-                "active_page": "accounts",
-                "step": "phone_form",
-                "error": "Введите корректный номер телефона с кодом страны",
-            },
-        )
+        return RedirectResponse(url="/accounts/connect/wa", status_code=302)
 
     # Clean up stale connecting accounts
     stale = await db.execute(
@@ -317,7 +339,13 @@ async def accounts_connect_wa_start(
 
     try:
         result = await messenger.start_session(phone_number=phone_number)
-        pairing_code = result.get("pairing_code")
+        # Pairing code comes async via /qr polling, wait a moment
+        if not result.get("pairing_code"):
+            await asyncio.sleep(3)
+            qr_data = await messenger.get_qr()
+            pairing_code = qr_data.get("pairing_code")
+        else:
+            pairing_code = result.get("pairing_code")
         if result.get("status") == "connected":
             connected = True
     except Exception as e:
@@ -335,6 +363,29 @@ async def accounts_connect_wa_start(
             "connected": connected,
             "error": error,
             "account_id": account.id,
+        },
+    )
+
+
+@router.get("/accounts/connect/wa/phone", response_class=HTMLResponse)
+async def accounts_connect_wa_phone(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Show phone number form for pairing code (alternative to QR)."""
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    return templates.TemplateResponse(
+        "accounts/connect_wa.html",
+        {
+            "request": request,
+            "user": user,
+            "is_admin": check_is_admin(user, settings),
+            "active_page": "accounts",
+            "step": "phone_form",
         },
     )
 
