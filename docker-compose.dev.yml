@@ -30,13 +30,11 @@ services:
     volumes:
       - .:/app
 
-  wa-bridge-1:
+  wa-bridge:
     volumes:
       - ./wa_bridge:/app
       - /app/node_modules
+      - wa_sessions_dev:/app/sessions
 
-  wa-bridge-2:
-    profiles: ["full"]
-
-  wa-bridge-3:
-    profiles: ["full"]
+volumes:
+  wa_sessions_dev:

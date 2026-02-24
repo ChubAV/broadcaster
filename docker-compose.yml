@@ -22,12 +22,11 @@ x-wa-bridge-base: &wa-bridge-base
   build:
     context: ./wa_bridge
     dockerfile: Dockerfile
-  depends_on:
-    mongo:
-      condition: service_healthy
   environment:
-    MONGODB_URI: ${MONGODB_URI}
     PORT: 3000
+    IDLE_TIMEOUT_MS: ${IDLE_TIMEOUT_MS:-300000}
+  volumes:
+    - wa_sessions:/app/sessions
   healthcheck:
     test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
     interval: 10s
@@ -36,7 +35,7 @@ x-wa-bridge-base: &wa-bridge-base
   deploy:
     resources:
       limits:
-        memory: 2G
+        memory: 512M
 
 services:
   web:
@@ -100,18 +99,10 @@ services:
       redis:
         condition: service_healthy
 
-# Мосты к Whatsapp
-  wa-bridge-1:
+# Мост к Whatsapp
+  wa-bridge:
     <<: *wa-bridge-base
-    container_name: wa-bridge-1-broadcaster
-
-  wa-bridge-2:
-    <<: *wa-bridge-base
-    container_name: wa-bridge-2-broadcaster
-
-  wa-bridge-3:
-    <<: *wa-bridge-base
-    container_name: wa-bridge-3-broadcaster
+    container_name: wa-bridge-broadcaster
 
 # Базы данных
   db:
@@ -142,19 +133,6 @@ services:
       timeout: 5s
       retries: 5
 
-  mongo:
-    image: mongo:7
-    container_name: mongo-broadcaster
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongodata:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
 # Служебные сервисы
   flower:
     <<: *app-base
@@ -168,4 +146,4 @@ services:
 
 volumes:
   pgdata:
-  mongodata:
+  wa_sessions:
