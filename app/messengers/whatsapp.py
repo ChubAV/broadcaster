@@ -89,6 +89,33 @@ class WhatsAppMessenger(BaseMessenger):
             self.log.warning("check_connection_failed", error=str(e))
             return False
 
+    async def get_sync_status(self) -> dict:
+        """Get group sync status from bridge.
+        Returns: {"state": "syncing"|"ready"|"failed"|"none"|"not_found", "groups": [...] | None}
+        """
+        client = get_http_client()
+        try:
+            response = await client.get(self._url("sync-status"))
+            if response.status_code == 200:
+                return response.json()
+            self.log.warning("get_sync_status_error", http_status=response.status_code)
+            return {"state": "error", "groups": None}
+        except Exception as e:
+            self.log.error("get_sync_status_error", error=str(e), exc_info=True)
+            return {"state": "error", "groups": None}
+
+    async def retry_sync(self) -> dict:
+        """Trigger retry of failed group sync."""
+        client = get_http_client()
+        try:
+            response = await client.post(self._url("retry-sync"), json={})
+            if response.status_code == 200:
+                return response.json()
+            return {"status": "error"}
+        except Exception as e:
+            self.log.error("retry_sync_error", error=str(e), exc_info=True)
+            return {"status": "error"}
+
     async def start_session(self) -> dict:
         client = get_http_client()
         try:
