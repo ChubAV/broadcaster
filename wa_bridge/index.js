@@ -6,6 +6,10 @@ const fs = require('fs');
 const path = require('path');
 const pino = require('pino');
 
+process.on('unhandledRejection', (reason) => {
+    console.error('[process] Unhandled rejection:', reason?.message || reason);
+});
+
 const app = express();
 app.use(express.json());
 
@@ -16,7 +20,7 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 const RATE_LIMIT_PER_MINUTE = 8;
 
 // Silent logger for Baileys (it uses pino internally)
-const logger = pino({ level: 'silent' });
+const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'warn' });
 
 // In-memory session state
 const sessions = new Map();
@@ -174,13 +178,19 @@ async function createSocket(sessionId) {
 
                 setTimeout(async () => {
                     try {
+                        // If someone else already reconnected, skip
+                        const current = sessions.get(sessionId);
+                        if (current && (current.isConnected || current.initializing)) {
+                            return;
+                        }
                         sessions.delete(sessionId);
                         const newState = await createSocket(sessionId);
-                        // Preserve reconnect counter
                         newState.reconnectAttempts = sessionState.reconnectAttempts;
                         sessions.set(sessionId, newState);
+                        await newState.readyPromise;
                     } catch (err) {
                         console.error(`[${sessionId}] Reconnect failed: ${err.message}`);
+                        sessions.delete(sessionId);
                     }
                 }, backoff);
             } else {
@@ -268,6 +278,7 @@ async function unloadSession(sessionId) {
     } catch (err) {
         console.error(`[${sessionId}] Error closing socket: ${err.message}`);
     }
+    rateLimiters.delete(sessionId);
     sessions.delete(sessionId);
     console.log(`[${sessionId}] Session unloaded`);
 }
@@ -286,6 +297,7 @@ async function destroySession(sessionId) {
         }
         sessions.delete(sessionId);
     }
+    rateLimiters.delete(sessionId);
     deleteSessionFiles(sessionId);
     console.log(`[${sessionId}] Session destroyed`);
 }
@@ -322,7 +334,11 @@ app.post('/api/sessions/:id/start', async (req, res) => {
     }
 
     try {
-        await createSocket(sessionId);
+        const state = await createSocket(sessionId);
+        // Don't await readyPromise (caller polls for QR), but catch rejection
+        state.readyPromise.catch((err) => {
+            console.log(`[${sessionId}] Session init failed: ${err.message}`);
+        });
         res.json({ status: 'initializing' });
     } catch (err) {
         console.error(`[${sessionId}] Failed to start: ${err.message}`);
@@ -411,7 +427,7 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                     let mimetype = 'image/jpeg';
 
                     if (img.startsWith('http://') || img.startsWith('https://')) {
-                        const response = await axios.get(img, { responseType: 'arraybuffer' });
+                        const response = await axios.get(img, { responseType: 'arraybuffer', timeout: 30000 });
                         mimetype = response.headers['content-type'] || 'image/jpeg';
                         buffer = Buffer.from(response.data);
                     } else if (fs.existsSync(img)) {
