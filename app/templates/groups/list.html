@@ -52,6 +52,11 @@
                     <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if group.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
                         {{ "Активна" if group.is_active else "Неактивна" }}
                     </span>
+                    {% if group.last_error %}
+                    <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 mt-1" title="{{ group.last_error }}">
+                        Ошибка {{ group.error_at.strftime('%d.%m %H:%M') if group.error_at else '' }}
+                    </span>
+                    {% endif %}
                 </td>
                 <td class="px-3 sm:px-6 py-4 text-right text-sm space-x-2">
                     <form method="POST" action="/groups/{{ group.id }}/toggle" class="inline">

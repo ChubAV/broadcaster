@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 import httpx
 from telethon import TelegramClient
 from telethon.errors import (
-    ChatSendMediaForbiddenError,
     ChatWriteForbiddenError,
+    ForbiddenError,
     UserBannedInChannelError,
 )
 from telethon.sessions import StringSession
@@ -218,7 +218,7 @@ class TelegramUserMessenger(BaseMessenger):
                         int(group_id), files, caption=text,
                         force_document=False,
                     )
-                except ChatSendMediaForbiddenError:
+                except ForbiddenError:
                     self.log.warning(
                         "send_media_forbidden_fallback_text",
                         group_id=group_id,
@@ -227,7 +227,7 @@ class TelegramUserMessenger(BaseMessenger):
             else:
                 await self.client.send_message(int(group_id), text)
             return {"ok": True}
-        except (ChatWriteForbiddenError, UserBannedInChannelError) as e:
+        except (ChatWriteForbiddenError, UserBannedInChannelError, ForbiddenError) as e:
             self.log.warning("send_forbidden", group_id=group_id, error=str(e))
             return {"ok": False, "error": str(e), "no_retry": True}
         except Exception as e:
