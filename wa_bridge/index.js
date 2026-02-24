@@ -110,7 +110,7 @@ function deleteSessionFiles(sessionId) {
  * Create a Baileys socket for the given sessionId.
  * Returns the state object stored in sessions Map.
  */
-async function createSocket(sessionId, phoneNumber) {
+async function createSocket(sessionId) {
     const sessionDir = path.join(SESSIONS_DIR, String(sessionId));
     const { state: authState, saveCreds } = await useMultiFileAuthState(sessionDir);
 
@@ -132,8 +132,6 @@ async function createSocket(sessionId, phoneNumber) {
         sock,
         saveCreds,
         qrCode: null,
-        pairingCode: null,
-        phoneNumber: (phoneNumber && !authState.creds.registered) ? phoneNumber : null,
         isConnected: false,
         initializing: true,
         lastActivity: Date.now(),
@@ -163,19 +161,6 @@ async function createSocket(sessionId, phoneNumber) {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            // If phone number provided, request pairing code instead of QR
-            if (sessionState.phoneNumber && !sessionState.pairingCode) {
-                try {
-                    const code = await sock.requestPairingCode(sessionState.phoneNumber);
-                    sessionState.pairingCode = code;
-                    sessionState.phoneNumber = null; // Don't request again
-                    console.log(`[${sessionId}] Pairing code: ${code}`);
-                    return; // Skip QR generation
-                } catch (err) {
-                    console.error(`[${sessionId}] Failed to request pairing code: ${err.message}`);
-                    // Fall through to QR as fallback
-                }
-            }
             sessionState.qrCode = await qrcode.toDataURL(qr);
             console.log(`[${sessionId}] QR code generated`);
         }
@@ -369,11 +354,9 @@ setInterval(() => {
 
 // ---- REST API endpoints ----
 
-// POST /api/sessions/:id/start - Create and initialize a session (QR or pairing code)
-// Body: { phone_number?: "79991234567" } — if provided, uses pairing code instead of QR
+// POST /api/sessions/:id/start - Create and initialize a session (QR code)
 app.post('/api/sessions/:id/start', async (req, res) => {
     const sessionId = req.params.id;
-    const phoneNumber = req.body.phone_number || null;
 
     const existing = sessions.get(sessionId);
     if (existing) {
@@ -381,7 +364,7 @@ app.post('/api/sessions/:id/start', async (req, res) => {
             return res.json({ status: 'connected' });
         }
         if (existing.initializing) {
-            return res.json({ status: 'initializing', pairing_code: existing.pairingCode || null });
+            return res.json({ status: 'initializing' });
         }
         // Stale session — clean up
         try { existing.sock.end(); } catch (_) {}
@@ -389,12 +372,12 @@ app.post('/api/sessions/:id/start', async (req, res) => {
     }
 
     try {
-        const state = await createSocket(sessionId, phoneNumber);
+        const state = await createSocket(sessionId);
         // Don't await readyPromise (caller polls for QR/status), but catch rejection
         state.readyPromise.catch((err) => {
             console.log(`[${sessionId}] Session init failed: ${err.message}`);
         });
-        res.json({ status: 'initializing', pairing_code: state.pairingCode || null });
+        res.json({ status: 'initializing' });
     } catch (err) {
         console.error(`[${sessionId}] Failed to start: ${err.message}`);
         res.status(500).json({ error: err.message });
@@ -421,24 +404,21 @@ app.get('/api/sessions/:id/status', (req, res) => {
     res.json({ connected: state.isConnected, exists: true });
 });
 
-// GET /api/sessions/:id/qr - Get QR code or pairing code for authentication
+// GET /api/sessions/:id/qr - Get QR code for authentication
 app.get('/api/sessions/:id/qr', (req, res) => {
     const sessionId = req.params.id;
     const state = sessions.get(sessionId);
 
     if (!state) {
-        return res.json({ status: 'not_found', qr: null, pairing_code: null });
+        return res.json({ status: 'not_found', qr: null });
     }
     if (state.isConnected) {
-        return res.json({ status: 'connected', qr: null, pairing_code: null });
-    }
-    if (state.pairingCode) {
-        return res.json({ status: 'pairing', qr: null, pairing_code: state.pairingCode });
+        return res.json({ status: 'connected', qr: null });
     }
     if (!state.qrCode) {
-        return res.json({ status: 'waiting', qr: null, pairing_code: null });
+        return res.json({ status: 'waiting', qr: null });
     }
-    res.json({ status: 'pending', qr: state.qrCode, pairing_code: null });
+    res.json({ status: 'pending', qr: state.qrCode });
 });
 
 // POST /api/sessions/:id/send - Send message (auto-loads session if needed)

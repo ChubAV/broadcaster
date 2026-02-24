@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import io
 
@@ -288,108 +287,6 @@ async def accounts_connect_wa_page(
     )
 
 
-@router.post("/accounts/connect/wa", response_class=HTMLResponse)
-async def accounts_connect_wa_start(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    """Start pairing code connection (alternative flow)."""
-    user = await get_user_from_cookie(request, db, settings)
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-
-    form = await request.form()
-    phone_number = form.get("phone_number", "").strip()
-    # Strip + and any non-digit chars
-    phone_number = "".join(c for c in phone_number if c.isdigit())
-
-    if not phone_number or len(phone_number) < 10:
-        return RedirectResponse(url="/accounts/connect/wa", status_code=302)
-
-    # Clean up stale connecting accounts
-    stale = await db.execute(
-        select(MessengerAccount).where(
-            MessengerAccount.user_id == user.id,
-            MessengerAccount.type == "wa",
-            MessengerAccount.status == "connecting",
-        )
-    )
-    for old in stale.scalars().all():
-        await db.delete(old)
-    await db.commit()
-
-    # Create a pending WA account to get a session_id
-    account = MessengerAccount(
-        user_id=user.id,
-        type="wa",
-        credentials="pending",
-        status="connecting",
-    )
-    db.add(account)
-    await db.commit()
-    await db.refresh(account)
-
-    session_id = str(account.id)
-    messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=session_id)
-
-    pairing_code = None
-    connected = False
-    error = None
-
-    try:
-        result = await messenger.start_session(phone_number=phone_number)
-        # Pairing code comes async via /qr polling, wait a moment
-        if not result.get("pairing_code"):
-            await asyncio.sleep(3)
-            qr_data = await messenger.get_qr()
-            pairing_code = qr_data.get("pairing_code")
-        else:
-            pairing_code = result.get("pairing_code")
-        if result.get("status") == "connected":
-            connected = True
-    except Exception as e:
-        error = f"Ошибка подключения к WA Bridge: {e}"
-
-    return templates.TemplateResponse(
-        "accounts/connect_wa.html",
-        {
-            "request": request,
-            "user": user,
-            "is_admin": check_is_admin(user, settings),
-            "active_page": "accounts",
-            "step": "pairing",
-            "pairing_code": pairing_code,
-            "connected": connected,
-            "error": error,
-            "account_id": account.id,
-        },
-    )
-
-
-@router.get("/accounts/connect/wa/phone", response_class=HTMLResponse)
-async def accounts_connect_wa_phone(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    """Show phone number form for pairing code (alternative to QR)."""
-    user = await get_user_from_cookie(request, db, settings)
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-
-    return templates.TemplateResponse(
-        "accounts/connect_wa.html",
-        {
-            "request": request,
-            "user": user,
-            "is_admin": check_is_admin(user, settings),
-            "active_page": "accounts",
-            "step": "phone_form",
-        },
-    )
-
-
 @router.get("/accounts/connect/wa/status", response_class=HTMLResponse)
 async def accounts_connect_wa_status(
     request: Request,
@@ -433,19 +330,10 @@ async def accounts_connect_wa_status(
                 '</div>'
             )
 
-        # Not connected — get fresh status
+        # Not connected — get fresh QR
         qr_data = await messenger.get_qr()
-        pairing_code = qr_data.get("pairing_code")
         qr = qr_data.get("qr")
 
-        if pairing_code:
-            formatted = f"{pairing_code[:4]}-{pairing_code[4:]}"
-            return HTMLResponse(
-                f'<div class="inline-block px-8 py-4 bg-slate-50 rounded-xl border border-slate-200">'
-                f'<span class="text-3xl font-mono font-bold tracking-[0.3em] text-slate-900">{formatted}</span>'
-                f'</div>'
-                f'<p class="mt-3 text-sm text-amber-600">Ожидание подтверждения...</p>'
-            )
         if qr:
             return HTMLResponse(
                 f'<div class="text-center">'
