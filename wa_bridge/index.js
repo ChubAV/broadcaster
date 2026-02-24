@@ -462,11 +462,14 @@ app.get('/api/sessions/:id/status', (req, res) => {
     const state = sessions.get(sessionId);
 
     if (!state) {
-        // Check if session files exist (session may be unloaded but restorable)
         const exists = sessionExistsOnDisk(sessionId);
-        return res.json({ connected: false, exists });
+        return res.json({ connected: false, exists, syncState: null });
     }
-    res.json({ connected: state.isConnected, exists: true });
+    res.json({
+        connected: state.isConnected,
+        exists: true,
+        syncState: state.syncState,
+    });
 });
 
 // GET /api/sessions/:id/qr - Get QR code for authentication
@@ -484,6 +487,47 @@ app.get('/api/sessions/:id/qr', (req, res) => {
         return res.json({ status: 'waiting', qr: null });
     }
     res.json({ status: 'pending', qr: state.qrCode });
+});
+
+// GET /api/sessions/:id/sync-status - Group sync status
+app.get('/api/sessions/:id/sync-status', (req, res) => {
+    const sessionId = req.params.id;
+    const state = sessions.get(sessionId);
+
+    if (!state) {
+        if (sessionExistsOnDisk(sessionId)) {
+            return res.json({ state: 'unknown', groups: null });
+        }
+        return res.json({ state: 'not_found', groups: null });
+    }
+
+    return res.json({
+        state: state.syncState || 'none',
+        groups: state.groups,
+    });
+});
+
+// POST /api/sessions/:id/retry-sync - Retry failed group sync
+app.post('/api/sessions/:id/retry-sync', (req, res) => {
+    const sessionId = req.params.id;
+    const state = sessions.get(sessionId);
+
+    if (!state || !state.isConnected) {
+        return res.status(404).json({ error: 'Session not connected' });
+    }
+
+    if (state.syncState === 'syncing') {
+        return res.json({ status: 'already_syncing' });
+    }
+
+    // Reset and retry
+    state.syncState = null;
+    state.groups = null;
+    startGroupSync(sessionId).catch(err => {
+        console.error(`[${sessionId}] Retry group sync error: ${err.message}`);
+    });
+
+    res.json({ status: 'sync_started' });
 });
 
 // POST /api/sessions/:id/send - Send message (auto-loads session if needed)
