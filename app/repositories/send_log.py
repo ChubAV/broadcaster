@@ -3,9 +3,6 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, func, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.ad import Ad
-from app.models.group import Group
-from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.repositories.base import BaseRepository
 
@@ -22,9 +19,7 @@ class SendLogRepository(BaseRepository[SendLog]):
                 func.sum(case((SendLog.status == "ok", 1), else_=0)).label("success_count"),
                 func.sum(case((SendLog.status == "fail", 1), else_=0)).label("fail_count"),
             )
-            .join(Schedule, SendLog.schedule_id == Schedule.id)
-            .join(Ad, Schedule.ad_id == Ad.id)
-            .where(Ad.user_id == user_id, SendLog.sent_at >= cutoff)
+            .where(SendLog.user_id == user_id, SendLog.sent_at >= cutoff)
         )
         row = result.one()
         return {
@@ -42,9 +37,7 @@ class SendLogRepository(BaseRepository[SendLog]):
     ) -> list[SendLog]:
         query = (
             select(SendLog)
-            .join(Schedule, SendLog.schedule_id == Schedule.id)
-            .join(Ad, Schedule.ad_id == Ad.id)
-            .where(Ad.user_id == user_id)
+            .where(SendLog.user_id == user_id)
         )
         if status_filter:
             query = query.where(SendLog.status == status_filter)
@@ -60,14 +53,8 @@ class SendLogRepository(BaseRepository[SendLog]):
         status_filter: str | None = None,
     ) -> list[dict]:
         query = (
-            select(
-                SendLog,
-                Ad.title.label("ad_title"),
-                Group.name.label("group_name"),
-            )
-            .join(Ad, SendLog.ad_id == Ad.id)
-            .join(Group, SendLog.group_id == Group.id)
-            .where(Ad.user_id == user_id)
+            select(SendLog)
+            .where(SendLog.user_id == user_id)
         )
         if status_filter:
             query = query.where(SendLog.status == status_filter)
@@ -75,11 +62,11 @@ class SendLogRepository(BaseRepository[SendLog]):
         result = await self.session.execute(query)
         return [
             {
-                "ad_title": r.ad_title,
-                "group_name": r.group_name,
-                "status": r.SendLog.status,
-                "error_message": r.SendLog.error_message,
-                "sent_at": r.SendLog.sent_at,
+                "ad_title": log.ad_title or "—",
+                "group_name": log.group_name or "—",
+                "status": log.status,
+                "error_message": log.error_message,
+                "sent_at": log.sent_at,
             }
-            for r in result
+            for log in result.scalars()
         ]

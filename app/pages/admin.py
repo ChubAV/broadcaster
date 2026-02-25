@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -184,6 +184,78 @@ async def admin_user_detail(
             "groups_count": groups_count,
             "active_sub": active_sub,
             "all_plans": PLANS,
+        },
+    )
+
+
+@router.get("/users/{user_id}/history", response_class=HTMLResponse)
+async def admin_user_history(
+    request: Request,
+    user_id: int,
+    status: str | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    target_user = await db.get(User, user_id)
+    if not target_user:
+        return RedirectResponse(url="/admin/users", status_code=302)
+
+    page_size = 50
+
+    query = select(SendLog).where(SendLog.user_id == user_id)
+    if status:
+        query = query.where(SendLog.status == status)
+    query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(page_size + 1)
+
+    result = await db.execute(query)
+    rows = list(result.scalars().all())
+
+    has_next = len(rows) > page_size
+    rows = rows[:page_size]
+
+    return templates.TemplateResponse(
+        "admin/user_history.html",
+        {
+            "request": request,
+            "user": admin,
+            "is_admin": True,
+            "active_page": "admin",
+            "target_user": target_user,
+            "logs": rows,
+            "status_filter": status,
+            "offset": offset,
+            "page_size": page_size,
+            "has_next": has_next,
+        },
+    )
+
+
+@router.get("/users/{user_id}/history/{log_id}", response_class=HTMLResponse)
+async def admin_user_history_detail(
+    request: Request,
+    user_id: int,
+    log_id: int,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    target_user = await db.get(User, user_id)
+    if not target_user:
+        return RedirectResponse(url="/admin/users", status_code=302)
+
+    log = await db.get(SendLog, log_id)
+    if not log or log.user_id != user_id:
+        return RedirectResponse(url=f"/admin/users/{user_id}/history", status_code=302)
+
+    return templates.TemplateResponse(
+        "admin/user_history_detail.html",
+        {
+            "request": request,
+            "user": admin,
+            "is_admin": True,
+            "active_page": "admin",
+            "target_user": target_user,
+            "log": log,
         },
     )
 

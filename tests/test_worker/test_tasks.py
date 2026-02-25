@@ -157,6 +157,9 @@ async def test_send_message_success(db_engine_and_factory):
         log = result.scalar_one()
         assert log.status == "ok"
         assert log.error_message is None
+        assert log.user_id == user.id
+        assert log.ad_title == "Test Ad"
+        assert log.group_name == "Sales"
 
 
 @pytest.mark.asyncio
@@ -187,6 +190,9 @@ async def test_send_message_failure(db_engine_and_factory):
         log = result.scalar_one()
         assert log.status == "fail"
         assert "Rate limited" in log.error_message
+        assert log.user_id == user.id
+        assert log.ad_title == "Test Ad"
+        assert log.group_name == "Sales"
 
 
 @pytest.mark.asyncio

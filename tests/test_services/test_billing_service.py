@@ -102,6 +102,7 @@ async def test_check_send_limit_ignores_failed(db_session):
     # Add 10 failed send logs (should NOT block)
     for i in range(10):
         db_session.add(SendLog(
+            user_id=user.id,
             schedule_id=schedule.id, ad_id=ad.id, group_id=group.id,
             status="fail", error_message="Chromium error",
         ))
@@ -113,6 +114,7 @@ async def test_check_send_limit_ignores_failed(db_session):
     # Now add 10 successful send logs (should block on free plan)
     for i in range(10):
         db_session.add(SendLog(
+            user_id=user.id,
             schedule_id=schedule.id, ad_id=ad.id, group_id=group.id,
             status="ok",
         ))

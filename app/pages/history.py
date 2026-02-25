@@ -5,12 +5,37 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.dependencies import get_db, get_settings
-from app.models.ad import Ad
-from app.models.group import Group
 from app.models.send_log import SendLog
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
+
+
+@router.get("/history/{log_id}", response_class=HTMLResponse)
+async def history_detail(
+    request: Request,
+    log_id: int,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    log = await db.get(SendLog, log_id)
+    if not log or log.user_id != user.id:
+        return RedirectResponse(url="/history", status_code=302)
+
+    return templates.TemplateResponse(
+        "history/detail.html",
+        {
+            "request": request,
+            "user": user,
+            "is_admin": check_is_admin(user, settings),
+            "log": log,
+            "active_page": "history",
+        },
+    )
 
 
 @router.get("/history", response_class=HTMLResponse)
@@ -28,32 +53,27 @@ async def history_list(
     page_size = 50
 
     query = (
-        select(
-            SendLog,
-            Ad.title.label("ad_title"),
-            Group.name.label("group_name"),
-        )
-        .join(Ad, SendLog.ad_id == Ad.id)
-        .join(Group, SendLog.group_id == Group.id)
-        .where(Ad.user_id == user.id)
+        select(SendLog)
+        .where(SendLog.user_id == user.id)
     )
     if status:
         query = query.where(SendLog.status == status)
     query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(page_size + 1)
 
     result = await db.execute(query)
-    rows = list(result)
+    rows = list(result.scalars().all())
 
     has_next = len(rows) > page_size
     rows = rows[:page_size]
 
     logs = [
         {
-            "ad_title": r.ad_title,
-            "group_name": r.group_name,
-            "status": r.SendLog.status,
-            "error_message": r.SendLog.error_message,
-            "sent_at": r.SendLog.sent_at,
+            "id": r.id,
+            "ad_title": r.ad_title or "—",
+            "group_name": r.group_name or "—",
+            "status": r.status,
+            "error_message": r.error_message,
+            "sent_at": r.sent_at,
         }
         for r in rows
     ]

@@ -60,9 +60,15 @@ async def test_create_send_log(db_session):
     await db_session.refresh(schedule)
 
     send_log = SendLog(
+        user_id=user.id,
         schedule_id=schedule.id,
         ad_id=ad.id,
         group_id=group.id,
+        ad_title=ad.title,
+        ad_text=ad.text,
+        ad_images=[],
+        group_name=group.name,
+        messenger_type=account.type,
         status="sent",
         error_message=None,
     )
@@ -71,12 +77,17 @@ async def test_create_send_log(db_session):
     await db_session.refresh(send_log)
 
     assert send_log.id is not None
+    assert send_log.user_id == user.id
     assert send_log.schedule_id == schedule.id
     assert send_log.ad_id == ad.id
     assert send_log.group_id == group.id
     assert send_log.status == "sent"
     assert send_log.error_message is None
     assert send_log.sent_at is not None
+    assert send_log.ad_title == "Logged Ad"
+    assert send_log.ad_text == "Ad text for logging"
+    assert send_log.group_name == "Log Group"
+    assert send_log.messenger_type == "tg_user"
 
 
 @pytest.mark.asyncio
@@ -129,9 +140,15 @@ async def test_send_log_with_error(db_session):
     await db_session.refresh(schedule)
 
     send_log = SendLog(
+        user_id=user.id,
         schedule_id=schedule.id,
         ad_id=ad.id,
         group_id=group.id,
+        ad_title=ad.title,
+        ad_text=ad.text,
+        ad_images=[],
+        group_name=group.name,
+        messenger_type=account.type,
         status="failed",
         error_message="Connection timeout: could not reach Telegram API",
     )
@@ -139,5 +156,8 @@ async def test_send_log_with_error(db_session):
     await db_session.commit()
     await db_session.refresh(send_log)
 
+    assert send_log.user_id == user.id
     assert send_log.status == "failed"
     assert send_log.error_message == "Connection timeout: could not reach Telegram API"
+    assert send_log.ad_title == "Error Ad"
+    assert send_log.group_name == "Error Group"

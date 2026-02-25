@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}История {{ target_user.name }} - Админ{% endblock %}
+{% block content %}
+<div class="mb-6">
+    <a href="/admin/users/{{ target_user.id }}" class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-slate-700 transition-colors">
+        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        {{ target_user.name }}
+    </a>
+</div>
+
+<div class="flex flex-wrap justify-between items-center gap-4 mb-6">
+    <h1 class="text-2xl font-bold tracking-tight text-slate-900">История отправок — {{ target_user.name }}</h1>
+    <div class="flex gap-2">
+        <a href="/admin/users/{{ target_user.id }}/history" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if not status_filter %}bg-primary-600 text-white shadow-sm hover:bg-primary-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Все</a>
+        <a href="/admin/users/{{ target_user.id }}/history?status=ok" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if status_filter == 'ok' %}bg-emerald-600 text-white shadow-sm hover:bg-emerald-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Отправлено</a>
+        <a href="/admin/users/{{ target_user.id }}/history?status=fail" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if status_filter == 'fail' %}bg-red-600 text-white shadow-sm hover:bg-red-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Ошибки</a>
+    </div>
+</div>
+
+{% if logs %}
+<div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
+    <div class="overflow-x-auto">
+    <table class="min-w-full divide-y divide-slate-200">
+        <thead class="bg-slate-50/80">
+            <tr>
+                <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Объявление</th>
+                <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Группа</th>
+                <th class="hidden sm:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Мессенджер</th>
+                <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Статус</th>
+                <th class="hidden md:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Ошибка</th>
+                <th class="hidden sm:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Время</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-200">
+            {% for log in logs %}
+            <tr class="hover:bg-slate-50/80 transition-colors duration-150 cursor-pointer" onclick="window.location='/admin/users/{{ target_user.id }}/history/{{ log.id }}'">
+                <td class="px-3 sm:px-6 py-4 text-sm font-medium text-primary-600">{{ log.ad_title or '—' }}</td>
+                <td class="px-3 sm:px-6 py-4 text-sm text-slate-500">{{ log.group_name or '—' }}</td>
+                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">
+                    {% if log.messenger_type == 'tg_user' %}Telegram{% elif log.messenger_type == 'wa' %}WhatsApp{% else %}{{ log.messenger_type or '—' }}{% endif %}
+                </td>
+                <td class="px-3 sm:px-6 py-4">
+                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold
+                        {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800
+                        {% elif log.status == 'account_disconnected' %}bg-amber-100 text-amber-800
+                        {% else %}bg-red-100 text-red-800{% endif %}">
+                        {% if log.status == 'ok' %}ok{% elif log.status == 'account_disconnected' %}disconnected{% else %}{{ log.status }}{% endif %}
+                    </span>
+                </td>
+                <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500 max-w-xs truncate">{{ log.error_message or '-' }}</td>
+                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(log.sent_at, user, '%Y-%m-%d %H:%M:%S') }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</div>
+
+<!-- Pagination -->
+<div class="mt-4 flex flex-wrap justify-between items-center gap-4">
+    <div class="text-sm text-slate-500">
+        Показано {{ offset + 1 }} — {{ offset + logs|length }}
+    </div>
+    <div class="flex gap-2">
+        {% if offset > 0 %}
+        <a href="/admin/users/{{ target_user.id }}/history?offset={{ offset - page_size }}{% if status_filter %}&status={{ status_filter }}{% endif %}" class="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50 transition-colors">Назад</a>
+        {% endif %}
+        {% if has_next %}
+        <a href="/admin/users/{{ target_user.id }}/history?offset={{ offset + page_size }}{% if status_filter %}&status={{ status_filter }}{% endif %}" class="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50 transition-colors">Далее</a>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+<div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-8 text-center">
+    <p class="text-slate-500">Истории отправок нет.</p>
+</div>
+{% endif %}
+{% endblock %}

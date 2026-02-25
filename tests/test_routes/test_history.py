@@ -1,6 +1,8 @@
 import pytest
 from datetime import datetime, timezone, timedelta
 
+from sqlalchemy import select
+from app.models.user import User
 from app.models.send_log import SendLog
 from app.models.schedule import Schedule
 from app.models.group import Group
@@ -53,9 +55,13 @@ async def test_list_history_with_data(client, auth_headers, db_session):
         client, auth_headers, db_session
     )
 
+    result = await db_session.execute(select(User))
+    user = result.scalar_one()
+
     # Insert send logs directly into DB
     now = datetime.now(timezone.utc)
     log1 = SendLog(
+        user_id=user.id,
         schedule_id=schedule_id,
         ad_id=ad_id,
         group_id=group_id,
@@ -63,6 +69,7 @@ async def test_list_history_with_data(client, auth_headers, db_session):
         sent_at=now - timedelta(hours=2),
     )
     log2 = SendLog(
+        user_id=user.id,
         schedule_id=schedule_id,
         ad_id=ad_id,
         group_id=group_id,
@@ -88,9 +95,13 @@ async def test_list_history_pagination(client, auth_headers, db_session):
         client, auth_headers, db_session
     )
 
+    result = await db_session.execute(select(User))
+    user = result.scalar_one()
+
     now = datetime.now(timezone.utc)
     for i in range(5):
         log = SendLog(
+            user_id=user.id,
             schedule_id=schedule_id,
             ad_id=ad_id,
             group_id=group_id,
@@ -122,14 +133,17 @@ async def test_stats_endpoint(client, auth_headers, db_session):
         client, auth_headers, db_session
     )
 
+    result = await db_session.execute(select(User))
+    user = result.scalar_one()
+
     now = datetime.now(timezone.utc)
     # Create some send logs within last 30 days
     logs = [
-        SendLog(schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
+        SendLog(user_id=user.id, schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
                 status="ok", sent_at=now - timedelta(days=1)),
-        SendLog(schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
+        SendLog(user_id=user.id, schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
                 status="ok", sent_at=now - timedelta(days=2)),
-        SendLog(schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
+        SendLog(user_id=user.id, schedule_id=schedule_id, ad_id=ad_id, group_id=group_id,
                 status="fail", error_message="error",
                 sent_at=now - timedelta(days=3)),
     ]
