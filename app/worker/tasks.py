@@ -261,7 +261,7 @@ send_telegram_message.on_failure = _on_send_failure
     retry_backoff=3,
     retry_backoff_max=30,
     max_retries=3,
-    rate_limit="30/m",
+    rate_limit="7/m",
 )
 def send_whatsapp_message(self, ad_id, group_id, account_id, schedule_id):
     """Send a single WhatsApp message. Auto-retries with backoff."""
