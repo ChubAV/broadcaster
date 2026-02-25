@@ -50,9 +50,8 @@ async def get_usage(db: AsyncSession, user_id: int) -> dict:
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     sends_today = (await db.execute(
         select(func.count(SendLog.id))
-        .join(Ad, SendLog.ad_id == Ad.id)
         .where(
-            Ad.user_id == user_id,
+            SendLog.user_id == user_id,
             SendLog.sent_at >= today_start,
             SendLog.status == "ok",
         )

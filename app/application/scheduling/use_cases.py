@@ -123,9 +123,16 @@ async def send_message_once(
 
     if not ad or not group or not account:
         log_entry = SendLog(
+            user_id=ad.user_id if ad else 0,
             schedule_id=schedule_id,
             ad_id=ad_id,
             group_id=group_id,
+            ad_title=ad.title if ad else None,
+            ad_text=ad.text if ad else None,
+            ad_images=ad.images if ad else None,
+            group_name=group.name if group else None,
+            account_name=account.type if account else None,
+            messenger_type=account.type if account else None,
             status="fail",
             error_message="Missing ad, group, or account",
         )
@@ -135,9 +142,16 @@ async def send_message_once(
 
     if account.status != "active":
         log_entry = SendLog(
+            user_id=ad.user_id,
             schedule_id=schedule_id,
             ad_id=ad_id,
             group_id=group_id,
+            ad_title=ad.title,
+            ad_text=ad.text,
+            ad_images=ad.images,
+            group_name=group.name,
+            account_name=account.type,
+            messenger_type=account.type,
             status="account_disconnected",
             error_message=f"Account {account.id} is {account.status}",
         )
@@ -157,9 +171,16 @@ async def send_message_once(
     except ValueError as e:
         # Некорректная конфигурация мессенджера — считаем невосстанавливаемой ошибкой.
         log_entry = SendLog(
+            user_id=ad.user_id,
             schedule_id=schedule_id,
             ad_id=ad_id,
             group_id=group_id,
+            ad_title=ad.title,
+            ad_text=ad.text,
+            ad_images=ad.images,
+            group_name=group.name,
+            account_name=account.type,
+            messenger_type=account.type,
             status="fail",
             error_message=str(e),
         )
@@ -174,9 +195,16 @@ async def send_message_once(
     )
 
     log_entry = SendLog(
+        user_id=ad.user_id,
         schedule_id=schedule_id,
         ad_id=ad_id,
         group_id=group_id,
+        ad_title=ad.title,
+        ad_text=ad.text,
+        ad_images=ad.images,
+        group_name=group.name,
+        account_name=account.type,
+        messenger_type=account.type,
         status="ok" if result.get("ok") else "fail",
         error_message=result.get("error"),
     )
