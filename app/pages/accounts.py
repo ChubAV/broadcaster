@@ -320,8 +320,8 @@ async def accounts_connect_wa_status(
             await db.commit()
 
             # Dispatch background Celery task to poll bridge and save groups
-            from app.worker.tasks import sync_wa_groups
-            sync_wa_groups.delay(account.id)
+            from app.worker.celery_app import celery
+            celery.send_task("app.worker.tasks.sync_wa_groups", args=[account.id])
 
             return HTMLResponse(
                 '<div class="text-center">'
@@ -476,8 +476,8 @@ async def accounts_retry_sync(
     await db.commit()
 
     # Dispatch background Celery task to poll bridge and save groups
-    from app.worker.tasks import sync_wa_groups
-    sync_wa_groups.delay(account.id)
+    from app.worker.celery_app import celery
+    celery.send_task("app.worker.tasks.sync_wa_groups", args=[account.id])
 
     return RedirectResponse(url="/accounts", status_code=302)
 

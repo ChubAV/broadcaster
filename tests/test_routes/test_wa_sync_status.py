@@ -1,6 +1,8 @@
+import sys
+
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -176,8 +178,7 @@ async def test_retry_sync_resets_status(sync_setup):
         instance = MockMessenger.return_value
         instance.retry_sync = AsyncMock(return_value={"status": "ok"})
 
-        with patch("app.worker.tasks.sync_wa_groups") as mock_task:
-            mock_task.delay = lambda *a: None
+        with patch.dict(sys.modules, {"app.worker.celery_app": MagicMock()}):
             resp = await client.post(f"/accounts/{account_id}/retry-sync")
 
     assert resp.status_code == 200  # followed redirect to /accounts
