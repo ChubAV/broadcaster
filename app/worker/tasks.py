@@ -337,7 +337,7 @@ async def _sync_wa_groups_async(account_id: int):
                                     account_id=account_id,
                                     messenger_type="wa",
                                     group_external_id=g["id"],
-                                    name=g["name"],
+                                    name=g.get("name") or g["id"],
                                 )
                             )
                             new_count += 1

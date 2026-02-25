@@ -135,7 +135,7 @@ async function startGroupSync(sessionId) {
             const groupsObj = await currentState.sock.groupFetchAllParticipating();
             const groups = Object.entries(groupsObj).map(([jid, metadata]) => ({
                 id: jid,
-                name: metadata.subject,
+                name: metadata.subject || jid,
             }));
             currentState.syncState = 'ready';
             currentState.groups = groups;
@@ -646,7 +646,7 @@ app.get('/api/sessions/:id/groups', async (req, res) => {
         const groupsObj = await state.sock.groupFetchAllParticipating();
         const groups = Object.entries(groupsObj).map(([jid, metadata]) => ({
             id: jid,
-            name: metadata.subject,
+            name: metadata.subject || jid,
         }));
         return res.json(groups);
     } catch (error) {

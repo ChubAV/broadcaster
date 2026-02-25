@@ -540,7 +540,7 @@ async def accounts_sync_groups(
                     account_id=account_id,
                     messenger_type=messenger_type,
                     group_external_id=g["id"],
-                    name=g["name"],
+                    name=g.get("name") or g["id"],
                 )
             )
 
