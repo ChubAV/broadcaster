@@ -85,6 +85,16 @@
         {% endif %}
     </div>
 
+    <!-- History Link -->
+    <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
+        <div class="flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-slate-900">История отправок</h2>
+            <a href="/admin/users/{{ target_user.id }}/history" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-500 transition-colors">
+                Смотреть историю
+            </a>
+        </div>
+    </div>
+
     <!-- Plan Management -->
     <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
         <h2 class="text-lg font-semibold text-slate-900 mb-4">Управление тарифом</h2>

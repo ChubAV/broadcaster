@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Отправка #{{ log.id }} — {{ target_user.name }} - Админ{% endblock %}
+{% block content %}
+<div class="mb-6">
+    <a href="/admin/users/{{ target_user.id }}/history" class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-slate-700 transition-colors">
+        <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        История {{ target_user.name }}
+    </a>
+</div>
+
+<div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
+    <!-- Header -->
+    <div class="px-6 py-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+        <div>
+            <h1 class="text-xl font-bold text-slate-900">Отправка #{{ log.id }}</h1>
+            <p class="text-sm text-slate-500 mt-1">Пользователь: <a href="/admin/users/{{ target_user.id }}" class="text-primary-600 hover:text-primary-700">{{ target_user.name }}</a> ({{ target_user.email }})</p>
+        </div>
+        <span class="inline-flex rounded-full px-3 py-1 text-sm font-semibold
+            {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800
+            {% elif log.status == 'account_disconnected' %}bg-amber-100 text-amber-800
+            {% else %}bg-red-100 text-red-800{% endif %}">
+            {% if log.status == 'ok' %}Отправлено
+            {% elif log.status == 'account_disconnected' %}Аккаунт отключён
+            {% elif log.status == 'fail' %}Ошибка
+            {% else %}{{ log.status }}{% endif %}
+        </span>
+    </div>
+
+    <div class="divide-y divide-slate-100">
+        <!-- Время -->
+        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+            <span class="text-sm font-medium text-slate-500 sm:w-40 shrink-0">Время отправки</span>
+            <span class="text-sm text-slate-900">{{ format_datetime_for_user(log.sent_at, user, '%Y-%m-%d %H:%M:%S') }}</span>
+        </div>
+
+        <!-- Мессенджер -->
+        {% if log.messenger_type %}
+        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+            <span class="text-sm font-medium text-slate-500 sm:w-40 shrink-0">Мессенджер</span>
+            <span class="text-sm text-slate-900">
+                {% if log.messenger_type == 'tg_user' %}Telegram
+                {% elif log.messenger_type == 'wa' %}WhatsApp
+                {% else %}{{ log.messenger_type }}{% endif %}
+            </span>
+        </div>
+        {% endif %}
+
+        <!-- Группа -->
+        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+            <span class="text-sm font-medium text-slate-500 sm:w-40 shrink-0">Группа</span>
+            <span class="text-sm text-slate-900">{{ log.group_name or '—' }}</span>
+        </div>
+
+        <!-- Ошибка -->
+        {% if log.error_message %}
+        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-4">
+            <span class="text-sm font-medium text-slate-500 sm:w-40 shrink-0">Ошибка</span>
+            <span class="text-sm text-red-700 bg-red-50 rounded-lg px-3 py-2">{{ log.error_message }}</span>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Объявление -->
+<div class="mt-6 bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
+    <div class="px-6 py-4 border-b border-slate-200">
+        <h2 class="text-lg font-semibold text-slate-900">Объявление</h2>
+    </div>
+    <div class="divide-y divide-slate-100">
+        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+            <span class="text-sm font-medium text-slate-500 sm:w-40 shrink-0">Название</span>
+            <span class="text-sm text-slate-900">{{ log.ad_title or '—' }}</span>
+        </div>
+
+        {% if log.ad_text %}
+        <div class="px-6 py-4 flex flex-col gap-2">
+            <span class="text-sm font-medium text-slate-500">Текст</span>
+            <div class="text-sm text-slate-900 whitespace-pre-wrap bg-slate-50 rounded-lg p-4 max-h-64 overflow-y-auto">{{ log.ad_text }}</div>
+        </div>
+        {% endif %}
+
+        {% if log.ad_images %}
+        <div class="px-6 py-4 flex flex-col gap-2">
+            <span class="text-sm font-medium text-slate-500">Изображения ({{ log.ad_images|length }})</span>
+            <div class="flex flex-wrap gap-3">
+                {% for img in log.ad_images %}
+                <a href="{{ get_image_url(img) }}" target="_blank" class="block">
+                    <img src="{{ get_image_url(img) }}" alt="Изображение" class="h-24 w-24 object-cover rounded-lg border border-slate-200 hover:ring-2 hover:ring-primary-400 transition-all">
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
