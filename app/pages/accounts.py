@@ -426,7 +426,7 @@ async def accounts_sync_status(
                 f'</form></td></tr>'
             )
 
-        if state == "failed":
+        if state in ("failed", "not_found", "unknown"):
             account.status = "sync_failed"
             await db.commit()
 

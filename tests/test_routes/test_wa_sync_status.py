@@ -229,3 +229,42 @@ async def test_retry_sync_resets_status(sync_setup):
         )
         account = result.scalar_one()
         assert account.status == "syncing"
+
+
+@pytest.mark.asyncio
+async def test_sync_status_unknown_sets_sync_failed(sync_setup):
+    """When bridge returns unknown (session unloaded, reload failed), set sync_failed."""
+    client, session_factory = sync_setup
+    await _login(client)
+
+    async with session_factory() as session:
+        from app.models.user import User
+
+        user = (await session.execute(select(User))).scalar_one()
+        account = MessengerAccount(
+            user_id=user.id,
+            type="wa",
+            credentials="wa-session",
+            status="syncing",
+        )
+        session.add(account)
+        await session.commit()
+        account_id = account.id
+
+    with patch("app.pages.accounts.WhatsAppMessenger") as MockMessenger:
+        instance = MockMessenger.return_value
+        instance.get_sync_status = AsyncMock(
+            return_value={"state": "unknown", "groups": None}
+        )
+
+        resp = await client.get(f"/accounts/{account_id}/sync-status")
+
+    assert resp.status_code == 200
+    assert "Ошибка синхронизации" in resp.text
+
+    async with session_factory() as session:
+        result = await session.execute(
+            select(MessengerAccount).where(MessengerAccount.id == account_id)
+        )
+        account = result.scalar_one()
+        assert account.status == "sync_failed"

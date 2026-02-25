@@ -490,15 +490,32 @@ app.get('/api/sessions/:id/qr', (req, res) => {
 });
 
 // GET /api/sessions/:id/sync-status - Group sync status
-app.get('/api/sessions/:id/sync-status', (req, res) => {
+app.get('/api/sessions/:id/sync-status', async (req, res) => {
     const sessionId = req.params.id;
-    const state = sessions.get(sessionId);
+    let state = sessions.get(sessionId);
 
     if (!state) {
         if (sessionExistsOnDisk(sessionId)) {
-            return res.json({ state: 'unknown', groups: null });
+            // Session was unloaded (idle timeout) — reload and re-sync
+            console.log(`[${sessionId}] Session on disk but not loaded, reloading for sync...`);
+            try {
+                state = await ensureSession(sessionId);
+                if (state && state.isConnected && (!state.syncState || state.syncState === 'failed')) {
+                    startGroupSync(sessionId).catch(err => {
+                        console.error(`[${sessionId}] Re-sync error: ${err.message}`);
+                    });
+                    return res.json({ state: 'syncing', groups: null });
+                }
+            } catch (err) {
+                console.error(`[${sessionId}] Failed to reload session: ${err.message}`);
+            }
+            // If reload failed or not connected
+            if (!state || !state.isConnected) {
+                return res.json({ state: 'unknown', groups: null });
+            }
+        } else {
+            return res.json({ state: 'not_found', groups: null });
         }
-        return res.json({ state: 'not_found', groups: null });
     }
 
     return res.json({
