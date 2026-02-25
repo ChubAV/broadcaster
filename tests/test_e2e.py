@@ -148,6 +148,7 @@ async def test_full_flow(e2e_setup):
         logs = result.scalars().all()
         assert len(logs) == 1
         assert logs[0].status == "ok"
+        assert logs[0].ad_title is not None
 
     # 11. Check history endpoint
     resp = await client.get("/api/history", headers=headers)
