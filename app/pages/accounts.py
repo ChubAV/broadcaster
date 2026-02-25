@@ -351,7 +351,9 @@ async def accounts_connect_wa_status(
 
         return HTMLResponse('<span class="text-sm text-amber-600">Ожидание...</span>')
 
-    except Exception:
+    except Exception as e:
+        import structlog
+        structlog.get_logger().error("wa_connect_status_error", error=str(e), exc_info=True)
         return HTMLResponse('<span class="text-sm text-red-600">Ошибка соединения с WA Bridge</span>')
 
 
