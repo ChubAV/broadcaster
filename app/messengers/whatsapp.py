@@ -116,16 +116,17 @@ class WhatsAppMessenger(BaseMessenger):
             self.log.error("retry_sync_error", error=str(e), exc_info=True)
             return {"status": "error"}
 
-    async def start_session(self) -> dict:
+    async def start_session(self) -> bool:
         client = get_http_client()
         try:
             response = await client.post(self._url("start"), json={}, timeout=30)
             if response.status_code == 200:
-                return response.json()
-            return {"status": "error"}
+                return True
+            self.log.warning("start_session_error", http_status=response.status_code)
+            return False
         except Exception as e:
             self.log.error("start_session_error", error=str(e), exc_info=True)
-            return {"status": "error"}
+            return False
 
     async def destroy_session(self) -> bool:
         client = get_http_client()

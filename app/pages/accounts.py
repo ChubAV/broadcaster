@@ -11,6 +11,10 @@ from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
+from app.application.accounts.use_cases import (
+    delete_account,
+    get_sync_status_view,
+)
 from app.messengers.telegram_user import (
     TelegramUserMessenger,
     start_qr_auth,
@@ -42,19 +46,19 @@ async def accounts_list(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    result = await db.execute(
-        select(MessengerAccount)
-        .where(MessengerAccount.user_id == user.id)
-        .order_by(MessengerAccount.id)
-    )
-    accounts = result.scalars().all()
     return templates.TemplateResponse(
         "accounts/list.html",
         {
             "request": request,
             "user": user,
             "is_admin": check_is_admin(user, settings),
-            "accounts": accounts,
+            "accounts": (
+                await db.execute(
+                    select(MessengerAccount)
+                    .where(MessengerAccount.user_id == user.id)
+                    .order_by(MessengerAccount.id)
+                )
+            ).scalars().all(),
             "active_page": "accounts",
         },
     )
@@ -369,66 +373,51 @@ async def accounts_sync_status(
     if not user:
         return HTMLResponse('<span class="text-sm text-red-600">Не авторизован</span>')
 
-    # Re-read account to get latest status (Celery task may have updated it)
-    result = await db.execute(
-        select(MessengerAccount).where(
-            MessengerAccount.id == account_id,
-            MessengerAccount.user_id == user.id,
-        )
-    )
-    account = result.scalar_one_or_none()
-    if not account:
+    # Используем application-слой для чтения актуального статуса.
+    view = await get_sync_status_view(db, user.id, account_id)
+    if view is None:
         return HTMLResponse('<span class="text-sm text-red-600">Аккаунт не найден</span>')
 
-    if account.status == "active":
-        # Count groups for this account
-        group_result = await db.execute(
-            select(Group.id).where(
-                Group.account_id == account_id,
-                Group.user_id == user.id,
-            )
-        )
-        group_count = len(group_result.all())
-
+    if view.status == "active":
         return HTMLResponse(
             f'<tr id="account-row-{account_id}" class="hover:bg-slate-50/80 transition-colors duration-150">'
-            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account.id}</td>'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account_id}</td>'
             f'<td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>'
             f'<td class="px-3 sm:px-6 py-4">'
             f'<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-100 text-emerald-800">active</span>'
-            f'<span class="ml-2 text-xs text-slate-500">Загружено {group_count} групп</span>'
+            f'<span class="ml-2 text-xs text-slate-500">Загружено {view.group_count or 0} групп</span>'
             f'</td>'
-            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{account.created_at.strftime("%Y-%m-%d %H:%M")}</td>'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500"></td>'
             f'<td class="px-3 sm:px-6 py-4 text-right text-sm">'
-            f'<form method="POST" action="/accounts/{account.id}/delete" class="inline">'
+            f'<form method="POST" action="/accounts/{account_id}/delete" class="inline">'
             f'<button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm(\'Удалить этот аккаунт?\')">Удалить</button>'
             f'</form></td></tr>'
         )
 
-    if account.status == "sync_failed":
+    if view.status == "sync_failed":
         return HTMLResponse(
             f'<tr id="account-row-{account_id}" class="hover:bg-slate-50/80 transition-colors duration-150">'
-            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account.id}</td>'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account_id}</td>'
             f'<td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>'
             f'<td class="px-3 sm:px-6 py-4">'
             f'<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-red-100 text-red-800">Ошибка синхронизации</span>'
             f'</td>'
-            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{account.created_at.strftime("%Y-%m-%d %H:%M")}</td>'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500"></td>'
             f'<td class="px-3 sm:px-6 py-4 text-right text-sm">'
-            f'<form method="POST" action="/accounts/{account.id}/retry-sync" class="inline">'
+            f'<form method="POST" action="/accounts/{account_id}/retry-sync" class="inline">'
             f'<button type="submit" class="font-medium text-amber-600 hover:text-amber-700 transition-colors mr-3">Повторить</button>'
             f'</form>'
-            f'<form method="POST" action="/accounts/{account.id}/delete" class="inline">'
+            f'<form method="POST" action="/accounts/{account_id}/delete" class="inline">'
             f'<button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm(\'Удалить этот аккаунт?\')">Удалить</button>'
             f'</form></td></tr>'
         )
 
     # Still syncing — return spinner row (HTMX will keep polling)
-    if account.status == "syncing":
+    if view.status == "syncing":
         return HTMLResponse(
             f'<tr id="account-row-{account_id}" hx-get="/accounts/{account_id}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML"'
             f' class="hover:bg-slate-50/80 transition-colors duration-150">'
-            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account.id}</td>'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account_id}</td>'
             f'<td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>'
             f'<td class="px-3 sm:px-6 py-4">'
             f'<span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-amber-100 text-amber-800">'
@@ -438,9 +427,9 @@ async def accounts_sync_status(
             f'Синхронизация...</span>'
             f'<span class="ml-2 text-xs text-slate-500">Загружаем группы из WhatsApp...</span>'
             f'</td>'
-            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{account.created_at.strftime("%Y-%m-%d %H:%M")}</td>'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500"></td>'
             f'<td class="px-3 sm:px-6 py-4 text-right text-sm">'
-            f'<form method="POST" action="/accounts/{account.id}/delete" class="inline">'
+            f'<form method="POST" action="/accounts/{account_id}/delete" class="inline">'
             f'<button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm(\'Удалить этот аккаунт?\')">Удалить</button>'
             f'</form></td></tr>'
         )
@@ -558,14 +547,5 @@ async def accounts_delete(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    result = await db.execute(
-        select(MessengerAccount).where(
-            MessengerAccount.id == account_id,
-            MessengerAccount.user_id == user.id,
-        )
-    )
-    account = result.scalar_one_or_none()
-    if account:
-        await db.delete(account)
-        await db.commit()
+    await delete_account(db, user.id, account_id)
     return RedirectResponse(url="/accounts", status_code=302)

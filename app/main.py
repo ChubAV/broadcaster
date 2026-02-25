@@ -9,6 +9,7 @@ from app.config import Settings, get_settings
 from app.exceptions import NotFoundError, ForbiddenError, BillingLimitError, MessengerConnectionError
 from app.database import get_engine, get_session_factory
 from app.dependencies import init_db
+from app.infrastructure.uow import create_uow_factory
 from app.middleware import RequestIdMiddleware
 from app.routes.auth import router as auth_router
 from app.routes.ads import router as ads_router
@@ -29,6 +30,8 @@ async def lifespan(app: FastAPI):
     engine = get_engine(settings.database_url)
     session_factory = get_session_factory(engine)
     init_db(session_factory)
+    # Подготавливаем фабрику UoW для использования в application-слое.
+    app.state.uow_factory = create_uow_factory(session_factory)
     yield
     await engine.dispose()
 
