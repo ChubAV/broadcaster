@@ -38,7 +38,7 @@
                     </span>
                     <span class="ml-2 text-xs text-slate-500">Загружаем группы из WhatsApp. Это может занять несколько минут.</span>
                 </td>
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ account.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(account.created_at, user, '%Y-%m-%d %H:%M') }}</td>
                 <td class="px-3 sm:px-6 py-4 text-right text-sm">
                     <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
                         <button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
@@ -52,7 +52,7 @@
                 <td class="px-3 sm:px-6 py-4">
                     <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-red-100 text-red-800">Ошибка синхронизации</span>
                 </td>
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ account.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(account.created_at, user, '%Y-%m-%d %H:%M') }}</td>
                 <td class="px-3 sm:px-6 py-4 text-right text-sm">
                     <form method="POST" action="/accounts/{{ account.id }}/retry-sync" class="inline">
                         <button type="submit" class="font-medium text-amber-600 hover:text-amber-700 transition-colors mr-3">Повторить</button>
@@ -75,7 +75,7 @@
                         {{ account.status }}
                     </span>
                 </td>
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ account.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(account.created_at, user, '%Y-%m-%d %H:%M') }}</td>
                 <td class="px-3 sm:px-6 py-4 text-right text-sm">
                     <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
                         <button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>

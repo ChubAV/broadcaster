@@ -1,4 +1,6 @@
 from pathlib import Path
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
@@ -15,6 +17,37 @@ templates = Jinja2Templates(directory=str(_templates_dir))
 # Register get_image_url as Jinja2 global so templates can use {{ get_image_url(key) }}
 templates.env.globals["get_image_url"] = lambda key: get_image_url(key, get_settings().s3_public_url)
 templates.env.globals["s3_public_url"] = lambda: get_settings().s3_public_url
+
+
+def _get_timezone_for_user(user: User | None) -> ZoneInfo:
+    """Return ZoneInfo for user's timezone or UTC as fallback."""
+    tz_name = "UTC"
+    if user and getattr(user, "timezone", None):
+        try:
+            tz_name = user.timezone
+            return ZoneInfo(tz_name)
+        except Exception:
+            tz_name = "UTC"
+    return ZoneInfo(tz_name)
+
+
+def format_datetime_for_user(
+    value: datetime | None,
+    user: User | None,
+    fmt: str = "%Y-%m-%d %H:%M",
+) -> str:
+    """Format datetime in user's timezone for display."""
+    if value is None:
+        return ""
+    # Если дата без tzinfo — считаем, что она в UTC
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    tz = _get_timezone_for_user(user)
+    local = value.astimezone(tz)
+    return local.strftime(fmt)
+
+
+templates.env.globals["format_datetime_for_user"] = format_datetime_for_user
 
 
 async def get_user_from_cookie(

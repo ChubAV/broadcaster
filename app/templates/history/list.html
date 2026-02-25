@@ -34,7 +34,7 @@
                     </span>
                 </td>
                 <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500 max-w-xs truncate">{{ log.error_message or '-' }}</td>
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ log.sent_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(log.sent_at, user, '%Y-%m-%d %H:%M:%S') }}</td>
             </tr>
             {% endfor %}
         </tbody>

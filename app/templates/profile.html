@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto py-8">
+  <h1 class="text-2xl font-bold text-slate-900 mb-6">Настройки профиля</h1>
+
+  <form method="post" class="space-y-6">
+    <div>
+      <label for="timezone" class="block text-sm font-medium text-slate-900 mb-2">Часовой пояс</label>
+      <select id="timezone" name="timezone" class="block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 transition-shadow sm:text-sm">
+        {% for tz_value, tz_label in timezone_choices %}
+        <option value="{{ tz_value }}" {% if user.timezone == tz_value %}selected{% endif %}>{{ tz_label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    {% if error %}
+    <p class="text-sm text-red-600">{{ error }}</p>
+    {% endif %}
+
+    <div class="flex justify-end">
+      <button type="submit" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg shadow-sm text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
+        Сохранить
+      </button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+

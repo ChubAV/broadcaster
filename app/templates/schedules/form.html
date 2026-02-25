@@ -92,7 +92,15 @@
             <label for="timezone" class="block text-sm font-medium text-slate-900 mb-2">Часовой пояс</label>
             <select id="timezone" name="timezone" class="block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 transition-shadow sm:text-sm">
                 {% for tz_value, tz_label in timezone_choices %}
-                <option value="{{ tz_value }}" {% if schedule and schedule.timezone == tz_value %}selected{% elif not schedule and tz_value == 'Europe/Moscow' %}selected{% endif %}>{{ tz_label }}</option>
+                <option value="{{ tz_value }}"
+                    {% if schedule and schedule.timezone == tz_value %}
+                        selected
+                    {% elif not schedule and default_timezone and tz_value == default_timezone %}
+                        selected
+                    {% elif not schedule and not default_timezone and tz_value == 'Europe/Moscow' %}
+                        selected
+                    {% endif %}
+                >{{ tz_label }}</option>
                 {% endfor %}
             </select>
         </div>

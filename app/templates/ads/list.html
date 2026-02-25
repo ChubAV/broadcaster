@@ -31,7 +31,7 @@
                         {{ "Активно" if ad.is_active else "Неактивно" }}
                     </span>
                 </td>
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ ad.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(ad.created_at, user, '%Y-%m-%d %H:%M') }}</td>
                 <td class="px-3 sm:px-6 py-4 text-right text-sm space-x-2">
                     <a href="/ads/{{ ad.id }}/edit" class="font-medium text-primary-600 hover:text-primary-700 transition-colors">Изменить</a>
                     <form method="POST" action="/ads/{{ ad.id }}/delete" class="inline">

@@ -97,3 +97,42 @@ async def groups_delete(
         await db.delete(group)
         await db.commit()
     return RedirectResponse(url="/groups", status_code=302)
+
+
+@router.post("/groups/bulk")
+async def groups_bulk(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    form = await request.form()
+    action = form.get("action")
+    group_ids = form.getlist("group_ids")
+
+    if not group_ids or action not in {"deactivate", "delete"}:
+        return RedirectResponse(url="/groups", status_code=302)
+
+    try:
+        ids = [int(gid) for gid in group_ids]
+    except ValueError:
+        return RedirectResponse(url="/groups", status_code=302)
+
+    result = await db.execute(
+        select(Group).where(Group.user_id == user.id, Group.id.in_(ids))
+    )
+    groups = result.scalars().all()
+
+    if action == "deactivate":
+        for group in groups:
+            group.is_active = False
+        await db.commit()
+    elif action == "delete":
+        for group in groups:
+            await db.delete(group)
+        await db.commit()
+
+    return RedirectResponse(url="/groups", status_code=302)

@@ -37,14 +37,18 @@ async def schedules_list(
     schedules = [
         {"schedule": r.Schedule, "ad_title": r.ad_title} for r in result
     ]
+
+    # Отображаем время следующего запуска в часовом поясе пользователя
+    tz_name = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
+    tz = ZoneInfo(tz_name)
+
     for item in schedules:
         sched = item["schedule"]
-        if sched.next_run_at and sched.timezone:
-            tz = ZoneInfo(sched.timezone)
+        if sched.next_run_at:
             item["next_run_local"] = sched.next_run_at.astimezone(tz)
-            item["tz_label"] = sched.timezone.split("/")[-1]
+            item["tz_label"] = tz_name.split("/")[-1] if "/" in tz_name else tz_name
         else:
-            item["next_run_local"] = sched.next_run_at
+            item["next_run_local"] = None
             item["tz_label"] = ""
     return templates.TemplateResponse(
         "schedules/list.html",
@@ -84,6 +88,10 @@ async def schedules_new(
         )
     ).scalars().all()
 
+    default_timezone = None
+    if user.timezone in VALID_TIMEZONES:
+        default_timezone = user.timezone
+
     return templates.TemplateResponse(
         "schedules/form.html",
         {
@@ -95,6 +103,7 @@ async def schedules_new(
             "accounts": accounts,
             "groups": groups,
             "timezone_choices": TIMEZONE_CHOICES,
+            "default_timezone": default_timezone,
             "active_page": "schedules",
         },
     )

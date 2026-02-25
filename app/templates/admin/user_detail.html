@@ -31,7 +31,7 @@
             </div>
             <div>
                 <p class="text-slate-500">Регистрация</p>
-                <p class="font-medium text-slate-900">{{ target_user.created_at.strftime('%d.%m.%Y %H:%M') }}</p>
+                <p class="font-medium text-slate-900">{{ format_datetime_for_user(target_user.created_at, user, '%d.%m.%Y %H:%M') }}</p>
             </div>
             <div>
                 <p class="text-slate-500">Часовой пояс</p>
@@ -91,7 +91,7 @@
         {% if active_sub %}
         <p class="text-sm text-slate-600 mb-4">
             Текущая подписка: <strong class="capitalize">{{ plan }}</strong>,
-            истекает: <strong>{{ active_sub.expires_at.strftime('%d.%m.%Y %H:%M') }}</strong>
+            истекает: <strong>{{ format_datetime_for_user(active_sub.expires_at, user, '%d.%m.%Y %H:%M') }}</strong>
         </p>
         {% else %}
         <p class="text-sm text-slate-600 mb-4">Нет активной подписки (план: free)</p>

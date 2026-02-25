@@ -50,7 +50,7 @@
                         <span class="inline-block px-2.5 py-0.5 text-xs font-semibold bg-green-100 text-green-800 rounded-full">Активен</span>
                         {% endif %}
                     </td>
-                    <td class="px-6 py-4 text-sm text-slate-600">{{ item.user.created_at.strftime('%d.%m.%Y') }}</td>
+                    <td class="px-6 py-4 text-sm text-slate-600">{{ format_datetime_for_user(item.user.created_at, user, '%d.%m.%Y') }}</td>
                     <td class="px-6 py-4 text-right">
                         <a href="/admin/users/{{ item.user.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700">Подробнее</a>
                     </td>
