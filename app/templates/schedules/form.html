@@ -45,6 +45,7 @@
                 </label>
                 {% endfor %}
             </div>
+            <p id="select-account-hint" class="text-sm text-slate-500 hidden">Сначала выберите аккаунт.</p>
             <p id="no-groups-for-account" class="text-sm text-slate-500 hidden">Нет групп для выбранного аккаунта.</p>
             {% else %}
             <p class="text-sm text-slate-500">Нет доступных групп. Сначала добавьте группы на странице Группы.</p>
@@ -119,9 +120,22 @@ function filterGroupsByAccount() {
     const noGroupsMsg = document.getElementById('no-groups-for-account');
     if (!container) return;
 
+    var hintMsg = document.getElementById('select-account-hint');
+    if (!accountId) {
+        container.classList.add('hidden');
+        groups.forEach(function(label) {
+            label.querySelector('input[type="checkbox"]').checked = false;
+        });
+        if (noGroupsMsg) noGroupsMsg.classList.add('hidden');
+        if (hintMsg) hintMsg.classList.remove('hidden');
+        return;
+    }
+    if (hintMsg) hintMsg.classList.add('hidden');
+
+    container.classList.remove('hidden');
     let visibleCount = 0;
     groups.forEach(function(label) {
-        if (!accountId || label.dataset.accountId === accountId) {
+        if (label.dataset.accountId === accountId) {
             label.style.display = '';
             visibleCount++;
         } else {
@@ -130,9 +144,8 @@ function filterGroupsByAccount() {
         }
     });
 
-    container.classList.toggle('hidden', visibleCount === 0 && accountId);
     if (noGroupsMsg) {
-        noGroupsMsg.classList.toggle('hidden', visibleCount > 0 || !accountId);
+        noGroupsMsg.classList.toggle('hidden', visibleCount > 0);
     }
 }
 
