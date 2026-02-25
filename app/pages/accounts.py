@@ -501,6 +501,9 @@ async def accounts_sync_groups(
     if not account or account.type not in ("tg_user", "wa"):
         return RedirectResponse(url="/groups", status_code=302)
 
+    if account.status == "syncing":
+        return RedirectResponse(url="/groups", status_code=302)
+
     if account.type == "tg_user":
         messenger = TelegramUserMessenger(
             session_string=account.credentials,
@@ -558,6 +561,8 @@ async def accounts_delete(
     )
     account = result.scalar_one_or_none()
     if account:
+        if account.status == "syncing":
+            return RedirectResponse(url="/accounts", status_code=302)
         await db.delete(account)
         await db.commit()
     return RedirectResponse(url="/accounts", status_code=302)

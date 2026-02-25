@@ -218,3 +218,70 @@ async def test_sync_status_empty_for_other_statuses(sync_setup):
 
     assert resp.status_code == 200
     assert resp.text.strip() == ""
+
+
+@pytest.mark.asyncio
+async def test_delete_blocked_while_syncing(sync_setup):
+    """Cannot delete account while status=syncing."""
+    client, session_factory = sync_setup
+    await _login(client)
+
+    async with session_factory() as session:
+        from app.models.user import User
+
+        user = (await session.execute(select(User))).scalar_one()
+        account = MessengerAccount(
+            user_id=user.id,
+            type="wa",
+            credentials="wa-session",
+            status="syncing",
+        )
+        session.add(account)
+        await session.commit()
+        account_id = account.id
+
+    resp = await client.post(f"/accounts/{account_id}/delete")
+
+    assert resp.status_code == 200  # followed redirect to /accounts
+
+    # Account should still exist
+    async with session_factory() as session:
+        result = await session.execute(
+            select(MessengerAccount).where(MessengerAccount.id == account_id)
+        )
+        account = result.scalar_one_or_none()
+        assert account is not None
+        assert account.status == "syncing"
+
+
+@pytest.mark.asyncio
+async def test_sync_groups_blocked_while_syncing(sync_setup):
+    """Cannot manually sync groups while account status=syncing."""
+    client, session_factory = sync_setup
+    await _login(client)
+
+    async with session_factory() as session:
+        from app.models.user import User
+
+        user = (await session.execute(select(User))).scalar_one()
+        account = MessengerAccount(
+            user_id=user.id,
+            type="wa",
+            credentials="wa-session",
+            status="syncing",
+        )
+        session.add(account)
+        await session.commit()
+        account_id = account.id
+
+    resp = await client.post(f"/accounts/{account_id}/sync-groups")
+
+    assert resp.status_code == 200  # followed redirect to /groups
+
+    # No groups should have been created
+    async with session_factory() as session:
+        result = await session.execute(
+            select(Group).where(Group.account_id == account_id)
+        )
+        groups = result.scalars().all()
+        assert len(groups) == 0
