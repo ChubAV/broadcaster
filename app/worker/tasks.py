@@ -289,3 +289,104 @@ def check_schedules():
             await engine.dispose()
 
     asyncio.run(_run())
+
+
+async def _sync_wa_groups_async(account_id: int):
+    """Poll bridge for group sync completion, save groups to DB."""
+    log = logger.bind(account_id=account_id)
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    session_factory = get_session_factory(engine)
+
+    from app.messengers.whatsapp import WhatsAppMessenger, get_bridge_url
+
+    POLL_INTERVAL = 15  # seconds
+    MAX_POLLS = 40  # 40 * 15s = 10 minutes max
+
+    try:
+        bridge_url = get_bridge_url(account_id, settings.wa_bridge_urls)
+        messenger = WhatsAppMessenger(bridge_url=bridge_url, session_id=str(account_id))
+
+        for attempt in range(MAX_POLLS):
+            sync_data = await messenger.get_sync_status()
+            state = sync_data.get("state")
+            log.debug("sync_poll", attempt=attempt + 1, state=state)
+
+            if state == "ready":
+                groups = sync_data.get("groups") or []
+                async with session_factory() as session:
+                    account = await session.get(MessengerAccount, account_id)
+                    if not account or account.status != "syncing":
+                        log.info("sync_skipped", reason="account_not_syncing", status=account.status if account else None)
+                        return
+
+                    existing = await session.execute(
+                        select(Group.group_external_id).where(
+                            Group.account_id == account_id,
+                            Group.user_id == account.user_id,
+                        )
+                    )
+                    existing_ids = {row[0] for row in existing}
+
+                    new_count = 0
+                    for g in groups:
+                        if g["id"] not in existing_ids:
+                            session.add(
+                                Group(
+                                    user_id=account.user_id,
+                                    account_id=account_id,
+                                    messenger_type="wa",
+                                    group_external_id=g["id"],
+                                    name=g["name"],
+                                )
+                            )
+                            new_count += 1
+
+                    account.status = "active"
+                    await session.commit()
+                    log.info("sync_complete", total_groups=len(groups), new_groups=new_count)
+                return
+
+            if state in ("failed", "not_found", "unknown"):
+                async with session_factory() as session:
+                    account = await session.get(MessengerAccount, account_id)
+                    if account and account.status == "syncing":
+                        account.status = "sync_failed"
+                        await session.commit()
+                log.warning("sync_failed", state=state)
+                return
+
+            # Still syncing — wait and poll again
+            await asyncio.sleep(POLL_INTERVAL)
+
+        # Timeout — max polls reached
+        async with session_factory() as session:
+            account = await session.get(MessengerAccount, account_id)
+            if account and account.status == "syncing":
+                account.status = "sync_failed"
+                await session.commit()
+        log.warning("sync_timeout", max_polls=MAX_POLLS)
+
+    except Exception as e:
+        log.error("sync_wa_groups_error", error=str(e), exc_info=True)
+        try:
+            async with session_factory() as session:
+                account = await session.get(MessengerAccount, account_id)
+                if account and account.status == "syncing":
+                    account.status = "sync_failed"
+                    await session.commit()
+        except Exception:
+            pass
+        raise
+    finally:
+        await engine.dispose()
+
+
+@shared_task(
+    name="app.worker.tasks.sync_wa_groups",
+    bind=True,
+    max_retries=1,
+)
+def sync_wa_groups(self, account_id: int):
+    """Background task: poll bridge until group sync completes, save to DB."""
+    asyncio.run(_sync_wa_groups_async(account_id))

@@ -61,7 +61,7 @@ async def _login(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_sync_status_returns_syncing_html(sync_setup):
-    """When bridge reports state='syncing', endpoint returns HTML with spinner text."""
+    """Account with status=syncing returns spinner HTML."""
     client, session_factory = sync_setup
     await _login(client)
 
@@ -79,22 +79,15 @@ async def test_sync_status_returns_syncing_html(sync_setup):
         await session.commit()
         account_id = account.id
 
-    with patch("app.pages.accounts.WhatsAppMessenger") as MockMessenger:
-        instance = MockMessenger.return_value
-        instance.get_sync_status = AsyncMock(
-            return_value={"state": "syncing", "groups": None}
-        )
-
-        resp = await client.get(f"/accounts/{account_id}/sync-status")
+    resp = await client.get(f"/accounts/{account_id}/sync-status")
 
     assert resp.status_code == 200
-    html = resp.text
-    assert "Синхронизация..." in html
+    assert "Синхронизация..." in resp.text
 
 
 @pytest.mark.asyncio
-async def test_sync_status_ready_saves_groups(sync_setup):
-    """When bridge reports state='ready' with groups, groups are saved and account becomes active."""
+async def test_sync_status_active_shows_groups(sync_setup):
+    """Account with status=active returns active row with group count."""
     client, session_factory = sync_setup
     await _login(client)
 
@@ -106,53 +99,35 @@ async def test_sync_status_ready_saves_groups(sync_setup):
             user_id=user.id,
             type="wa",
             credentials="wa-session",
-            status="syncing",
+            status="active",
         )
         session.add(account)
+        await session.flush()
+
+        # Add some groups
+        for i in range(3):
+            session.add(
+                Group(
+                    user_id=user.id,
+                    account_id=account.id,
+                    messenger_type="wa",
+                    group_external_id=f"group{i}@g.us",
+                    name=f"Group {i}",
+                )
+            )
         await session.commit()
         account_id = account.id
 
-    mock_groups = [
-        {"id": "120363001@g.us", "name": "WA Group Alpha"},
-        {"id": "120363002@g.us", "name": "WA Group Beta"},
-    ]
-
-    with patch("app.pages.accounts.WhatsAppMessenger") as MockMessenger:
-        instance = MockMessenger.return_value
-        instance.get_sync_status = AsyncMock(
-            return_value={"state": "ready", "groups": mock_groups}
-        )
-
-        resp = await client.get(f"/accounts/{account_id}/sync-status")
+    resp = await client.get(f"/accounts/{account_id}/sync-status")
 
     assert resp.status_code == 200
-    html = resp.text
-    assert "active" in html
-
-    # Verify groups saved in DB
-    async with session_factory() as session:
-        result = await session.execute(
-            select(Group).where(Group.account_id == account_id).order_by(Group.id)
-        )
-        groups = result.scalars().all()
-        assert len(groups) == 2
-        assert groups[0].name == "WA Group Alpha"
-        assert groups[0].group_external_id == "120363001@g.us"
-        assert groups[1].name == "WA Group Beta"
-        assert groups[1].group_external_id == "120363002@g.us"
-
-    # Verify account status changed to active
-    async with session_factory() as session:
-        result = await session.execute(
-            select(MessengerAccount).where(MessengerAccount.id == account_id)
-        )
-        account = result.scalar_one()
-        assert account.status == "active"
+    assert "active" in resp.text
+    assert "Загружено 3 групп" in resp.text
 
 
 @pytest.mark.asyncio
-async def test_sync_status_failed_sets_sync_failed(sync_setup):
-    """When bridge reports state='failed', account status becomes sync_failed."""
+async def test_sync_status_failed_shows_error(sync_setup):
+    """Account with status=sync_failed returns error row with retry button."""
     client, session_factory = sync_setup
     await _login(client)
 
@@ -164,31 +139,17 @@ async def test_sync_status_failed_sets_sync_failed(sync_setup):
             user_id=user.id,
             type="wa",
             credentials="wa-session",
-            status="syncing",
+            status="sync_failed",
         )
         session.add(account)
         await session.commit()
         account_id = account.id
 
-    with patch("app.pages.accounts.WhatsAppMessenger") as MockMessenger:
-        instance = MockMessenger.return_value
-        instance.get_sync_status = AsyncMock(
-            return_value={"state": "failed", "groups": None}
-        )
-
-        resp = await client.get(f"/accounts/{account_id}/sync-status")
+    resp = await client.get(f"/accounts/{account_id}/sync-status")
 
     assert resp.status_code == 200
-    html = resp.text
-    assert "Ошибка синхронизации" in html
-
-    # Verify account status changed to sync_failed
-    async with session_factory() as session:
-        result = await session.execute(
-            select(MessengerAccount).where(MessengerAccount.id == account_id)
-        )
-        account = result.scalar_one()
-        assert account.status == "sync_failed"
+    assert "Ошибка синхронизации" in resp.text
+    assert "retry-sync" in resp.text
 
 
 @pytest.mark.asyncio
@@ -215,7 +176,9 @@ async def test_retry_sync_resets_status(sync_setup):
         instance = MockMessenger.return_value
         instance.retry_sync = AsyncMock(return_value={"status": "ok"})
 
-        resp = await client.post(f"/accounts/{account_id}/retry-sync")
+        with patch("app.worker.tasks.sync_wa_groups") as mock_task:
+            mock_task.delay = lambda *a: None
+            resp = await client.post(f"/accounts/{account_id}/retry-sync")
 
     assert resp.status_code == 200  # followed redirect to /accounts
 
@@ -232,8 +195,8 @@ async def test_retry_sync_resets_status(sync_setup):
 
 
 @pytest.mark.asyncio
-async def test_sync_status_unknown_sets_sync_failed(sync_setup):
-    """When bridge returns unknown (session unloaded, reload failed), set sync_failed."""
+async def test_sync_status_empty_for_other_statuses(sync_setup):
+    """Account with status other than syncing/active/sync_failed returns empty."""
     client, session_factory = sync_setup
     await _login(client)
 
@@ -245,26 +208,13 @@ async def test_sync_status_unknown_sets_sync_failed(sync_setup):
             user_id=user.id,
             type="wa",
             credentials="wa-session",
-            status="syncing",
+            status="disconnected",
         )
         session.add(account)
         await session.commit()
         account_id = account.id
 
-    with patch("app.pages.accounts.WhatsAppMessenger") as MockMessenger:
-        instance = MockMessenger.return_value
-        instance.get_sync_status = AsyncMock(
-            return_value={"state": "unknown", "groups": None}
-        )
-
-        resp = await client.get(f"/accounts/{account_id}/sync-status")
+    resp = await client.get(f"/accounts/{account_id}/sync-status")
 
     assert resp.status_code == 200
-    assert "Ошибка синхронизации" in resp.text
-
-    async with session_factory() as session:
-        result = await session.execute(
-            select(MessengerAccount).where(MessengerAccount.id == account_id)
-        )
-        account = result.scalar_one()
-        assert account.status == "sync_failed"
+    assert resp.text.strip() == ""

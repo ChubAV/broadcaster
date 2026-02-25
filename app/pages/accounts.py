@@ -319,6 +319,10 @@ async def accounts_connect_wa_status(
             account.status = "syncing"
             await db.commit()
 
+            # Dispatch background Celery task to poll bridge and save groups
+            from app.worker.tasks import sync_wa_groups
+            sync_wa_groups.delay(account.id)
+
             return HTMLResponse(
                 '<div class="text-center">'
                 '<div class="inline-flex items-center justify-center w-16 h-16 bg-emerald-100 rounded-full mb-4">'
@@ -358,11 +362,12 @@ async def accounts_sync_status(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    """HTMX polling endpoint: check group sync progress and auto-save groups."""
+    """HTMX polling endpoint: reads account status from DB (Celery task updates it)."""
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return HTMLResponse('<span class="text-sm text-red-600">Не авторизован</span>')
 
+    # Re-read account to get latest status (Celery task may have updated it)
     result = await db.execute(
         select(MessengerAccount).where(
             MessengerAccount.id == account_id,
@@ -373,81 +378,51 @@ async def accounts_sync_status(
     if not account:
         return HTMLResponse('<span class="text-sm text-red-600">Аккаунт не найден</span>')
 
-    # Only poll for syncing accounts
-    if account.status != "syncing":
-        return HTMLResponse("")
-
-    session_id = str(account.id)
-    messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=session_id)
-
-    try:
-        sync_data = await messenger.get_sync_status()
-        state = sync_data.get("state")
-
-        if state == "ready":
-            # Save groups to DB
-            groups = sync_data.get("groups") or []
-            existing = await db.execute(
-                select(Group.group_external_id).where(
-                    Group.account_id == account_id,
-                    Group.user_id == user.id,
-                )
+    if account.status == "active":
+        # Count groups for this account
+        group_result = await db.execute(
+            select(Group.id).where(
+                Group.account_id == account_id,
+                Group.user_id == user.id,
             )
-            existing_ids = {row[0] for row in existing}
+        )
+        group_count = len(group_result.all())
 
-            for g in groups:
-                if g["id"] not in existing_ids:
-                    db.add(
-                        Group(
-                            user_id=user.id,
-                            account_id=account_id,
-                            messenger_type="wa",
-                            group_external_id=g["id"],
-                            name=g["name"],
-                        )
-                    )
+        return HTMLResponse(
+            f'<tr id="account-row-{account_id}" class="hover:bg-slate-50/80 transition-colors duration-150">'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account.id}</td>'
+            f'<td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>'
+            f'<td class="px-3 sm:px-6 py-4">'
+            f'<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-100 text-emerald-800">active</span>'
+            f'<span class="ml-2 text-xs text-slate-500">Загружено {group_count} групп</span>'
+            f'</td>'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{account.created_at.strftime("%Y-%m-%d %H:%M")}</td>'
+            f'<td class="px-3 sm:px-6 py-4 text-right text-sm">'
+            f'<form method="POST" action="/accounts/{account.id}/delete" class="inline">'
+            f'<button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm(\'Удалить этот аккаунт?\')">Удалить</button>'
+            f'</form></td></tr>'
+        )
 
-            account.status = "active"
-            await db.commit()
+    if account.status == "sync_failed":
+        return HTMLResponse(
+            f'<tr id="account-row-{account_id}" class="hover:bg-slate-50/80 transition-colors duration-150">'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account.id}</td>'
+            f'<td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>'
+            f'<td class="px-3 sm:px-6 py-4">'
+            f'<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-red-100 text-red-800">Ошибка синхронизации</span>'
+            f'</td>'
+            f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{account.created_at.strftime("%Y-%m-%d %H:%M")}</td>'
+            f'<td class="px-3 sm:px-6 py-4 text-right text-sm">'
+            f'<form method="POST" action="/accounts/{account.id}/retry-sync" class="inline">'
+            f'<button type="submit" class="font-medium text-amber-600 hover:text-amber-700 transition-colors mr-3">Повторить</button>'
+            f'</form>'
+            f'<form method="POST" action="/accounts/{account.id}/delete" class="inline">'
+            f'<button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm(\'Удалить этот аккаунт?\')">Удалить</button>'
+            f'</form></td></tr>'
+        )
 
-            group_count = len(groups)
-            return HTMLResponse(
-                f'<tr id="account-row-{account_id}" class="hover:bg-slate-50/80 transition-colors duration-150">'
-                f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account.id}</td>'
-                f'<td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>'
-                f'<td class="px-3 sm:px-6 py-4">'
-                f'<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-100 text-emerald-800">active</span>'
-                f'<span class="ml-2 text-xs text-slate-500">Загружено {group_count} групп</span>'
-                f'</td>'
-                f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{account.created_at.strftime("%Y-%m-%d %H:%M")}</td>'
-                f'<td class="px-3 sm:px-6 py-4 text-right text-sm">'
-                f'<form method="POST" action="/accounts/{account.id}/delete" class="inline">'
-                f'<button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm(\'Удалить этот аккаунт?\')">Удалить</button>'
-                f'</form></td></tr>'
-            )
-
-        if state in ("failed", "not_found", "unknown"):
-            account.status = "sync_failed"
-            await db.commit()
-
-            return HTMLResponse(
-                f'<tr id="account-row-{account_id}" class="hover:bg-slate-50/80 transition-colors duration-150">'
-                f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{account.id}</td>'
-                f'<td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>'
-                f'<td class="px-3 sm:px-6 py-4">'
-                f'<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-red-100 text-red-800">Ошибка синхронизации</span>'
-                f'</td>'
-                f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{account.created_at.strftime("%Y-%m-%d %H:%M")}</td>'
-                f'<td class="px-3 sm:px-6 py-4 text-right text-sm">'
-                f'<form method="POST" action="/accounts/{account.id}/retry-sync" class="inline">'
-                f'<button type="submit" class="font-medium text-amber-600 hover:text-amber-700 transition-colors mr-3">Повторить</button>'
-                f'</form>'
-                f'<form method="POST" action="/accounts/{account.id}/delete" class="inline">'
-                f'<button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm(\'Удалить этот аккаунт?\')">Удалить</button>'
-                f'</form></td></tr>'
-            )
-
-        # Still syncing — return spinner row (HTMX will keep polling)
+    # Still syncing — return spinner row (HTMX will keep polling)
+    if account.status == "syncing":
         return HTMLResponse(
             f'<tr id="account-row-{account_id}" hx-get="/accounts/{account_id}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML"'
             f' class="hover:bg-slate-50/80 transition-colors duration-150">'
@@ -465,12 +440,7 @@ async def accounts_sync_status(
             f'<td class="px-3 sm:px-6 py-4 text-right text-sm text-slate-400">Подождите...</td></tr>'
         )
 
-    except Exception:
-        return HTMLResponse(
-            f'<tr id="account-row-{account_id}" hx-get="/accounts/{account_id}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML"'
-            f' class="hover:bg-slate-50/80 transition-colors duration-150">'
-            f'<td colspan="5" class="px-3 sm:px-6 py-4 text-sm text-amber-600">Проверяем статус синхронизации...</td></tr>'
-        )
+    return HTMLResponse("")
 
 
 @router.post("/accounts/{account_id}/retry-sync")
@@ -502,6 +472,10 @@ async def accounts_retry_sync(
 
     account.status = "syncing"
     await db.commit()
+
+    # Dispatch background Celery task to poll bridge and save groups
+    from app.worker.tasks import sync_wa_groups
+    sync_wa_groups.delay(account.id)
 
     return RedirectResponse(url="/accounts", status_code=302)
 
