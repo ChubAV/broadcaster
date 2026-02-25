@@ -37,14 +37,15 @@
         <div>
             <label class="block text-sm font-medium text-slate-900 mb-2">Группы</label>
             {% if groups %}
-            <div class="space-y-2 max-h-48 overflow-y-auto rounded-lg border border-slate-200 p-3 bg-slate-50/50">
+            <div id="groups-container" class="space-y-2 max-h-48 overflow-y-auto rounded-lg border border-slate-200 p-3 bg-slate-50/50">
                 {% for group in groups %}
-                <label class="flex items-center rounded-lg px-2 py-1.5 hover:bg-white/80 transition-colors">
+                <label class="group-item flex items-center rounded-lg px-2 py-1.5 hover:bg-white/80 transition-colors" data-account-id="{{ group.account_id }}">
                     <input type="checkbox" name="group_ids" value="{{ group.id }}" {% if schedule and group.id in schedule.group_ids %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
                     <span class="ml-2 text-sm text-slate-700">{{ group.name }} ({{ group.messenger_type }})</span>
                 </label>
                 {% endfor %}
             </div>
+            <p id="no-groups-for-account" class="text-sm text-slate-500 hidden">Нет групп для выбранного аккаунта.</p>
             {% else %}
             <p class="text-sm text-slate-500">Нет доступных групп. Сначала добавьте группы на странице Группы.</p>
             {% endif %}
@@ -110,5 +111,32 @@ function addTimeInput() {
     div.innerHTML = '<input type="time" name="times_of_day" value="12:00" class="rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 sm:text-sm"><button type="button" onclick="this.parentElement.remove()" class="text-sm font-medium text-red-600 hover:text-red-700 transition-colors">Удалить</button>';
     container.appendChild(div);
 }
+
+function filterGroupsByAccount() {
+    const accountId = document.getElementById('account_id').value;
+    const groups = document.querySelectorAll('.group-item');
+    const container = document.getElementById('groups-container');
+    const noGroupsMsg = document.getElementById('no-groups-for-account');
+    if (!container) return;
+
+    let visibleCount = 0;
+    groups.forEach(function(label) {
+        if (!accountId || label.dataset.accountId === accountId) {
+            label.style.display = '';
+            visibleCount++;
+        } else {
+            label.style.display = 'none';
+            label.querySelector('input[type="checkbox"]').checked = false;
+        }
+    });
+
+    container.classList.toggle('hidden', visibleCount === 0 && accountId);
+    if (noGroupsMsg) {
+        noGroupsMsg.classList.toggle('hidden', visibleCount > 0 || !accountId);
+    }
+}
+
+document.getElementById('account_id').addEventListener('change', filterGroupsByAccount);
+document.addEventListener('DOMContentLoaded', filterGroupsByAccount);
 </script>
 {% endblock %}

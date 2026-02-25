@@ -117,6 +117,19 @@ async def schedules_create(
     days_of_week = [int(d) for d in form_data.getlist("days_of_week")]
     times_of_day = [t for t in form_data.getlist("times_of_day") if t]
 
+    # Validate that all groups belong to the selected account
+    if group_ids:
+        valid_groups = (
+            await db.execute(
+                select(Group.id).where(
+                    Group.id.in_(group_ids),
+                    Group.account_id == account_id,
+                    Group.user_id == user.id,
+                )
+            )
+        ).scalars().all()
+        group_ids = [gid for gid in group_ids if gid in valid_groups]
+
     tz = form_data.get("timezone", "UTC")
     if tz not in VALID_TIMEZONES:
         tz = "UTC"
@@ -217,6 +230,19 @@ async def schedules_update(
     group_ids = [int(g) for g in form_data.getlist("group_ids")]
     days_of_week = [int(d) for d in form_data.getlist("days_of_week")]
     times_of_day = [t for t in form_data.getlist("times_of_day") if t]
+
+    # Validate that all groups belong to the selected account
+    if group_ids:
+        valid_groups = (
+            await db.execute(
+                select(Group.id).where(
+                    Group.id.in_(group_ids),
+                    Group.account_id == account_id,
+                    Group.user_id == user.id,
+                )
+            )
+        ).scalars().all()
+        group_ids = [gid for gid in group_ids if gid in valid_groups]
 
     tz = form_data.get("timezone", schedule.timezone)
     if tz not in VALID_TIMEZONES:
