@@ -439,7 +439,10 @@ async def accounts_sync_status(
             f'<span class="ml-2 text-xs text-slate-500">Загружаем группы из WhatsApp...</span>'
             f'</td>'
             f'<td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{account.created_at.strftime("%Y-%m-%d %H:%M")}</td>'
-            f'<td class="px-3 sm:px-6 py-4 text-right text-sm text-slate-400">Подождите...</td></tr>'
+            f'<td class="px-3 sm:px-6 py-4 text-right text-sm">'
+            f'<form method="POST" action="/accounts/{account.id}/delete" class="inline">'
+            f'<button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm(\'Удалить этот аккаунт?\')">Удалить</button>'
+            f'</form></td></tr>'
         )
 
     return HTMLResponse("")
@@ -563,8 +566,6 @@ async def accounts_delete(
     )
     account = result.scalar_one_or_none()
     if account:
-        if account.status == "syncing":
-            return RedirectResponse(url="/accounts", status_code=302)
         await db.delete(account)
         await db.commit()
     return RedirectResponse(url="/accounts", status_code=302)

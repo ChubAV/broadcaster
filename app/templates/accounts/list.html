@@ -39,7 +39,11 @@
                     <span class="ml-2 text-xs text-slate-500">Загружаем группы из WhatsApp. Это может занять несколько минут.</span>
                 </td>
                 <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ account.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                <td class="px-3 sm:px-6 py-4 text-right text-sm text-slate-400">Подождите...</td>
+                <td class="px-3 sm:px-6 py-4 text-right text-sm">
+                    <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
+                        <button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
+                    </form>
+                </td>
             </tr>
             {% elif account.status == 'sync_failed' and account.type == 'wa' %}
             <tr class="hover:bg-slate-50/80 transition-colors duration-150">

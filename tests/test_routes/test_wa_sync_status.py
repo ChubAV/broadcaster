@@ -222,8 +222,8 @@ async def test_sync_status_empty_for_other_statuses(sync_setup):
 
 
 @pytest.mark.asyncio
-async def test_delete_blocked_while_syncing(sync_setup):
-    """Cannot delete account while status=syncing."""
+async def test_delete_allowed_while_syncing(sync_setup):
+    """Can delete account even while status=syncing."""
     client, session_factory = sync_setup
     await _login(client)
 
@@ -245,14 +245,13 @@ async def test_delete_blocked_while_syncing(sync_setup):
 
     assert resp.status_code == 200  # followed redirect to /accounts
 
-    # Account should still exist
+    # Account should be deleted
     async with session_factory() as session:
         result = await session.execute(
             select(MessengerAccount).where(MessengerAccount.id == account_id)
         )
         account = result.scalar_one_or_none()
-        assert account is not None
-        assert account.status == "syncing"
+        assert account is None
 
 
 @pytest.mark.asyncio
