@@ -20,7 +20,6 @@ class SendLog(Base):
     ad_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     ad_images: Mapped[list | None] = mapped_column(JSON, nullable=True)
     group_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    account_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     messenger_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     status: Mapped[str] = mapped_column(String(20))

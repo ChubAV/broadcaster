@@ -25,7 +25,6 @@ def upgrade() -> None:
     op.add_column("send_logs", sa.Column("ad_text", sa.Text(), nullable=True))
     op.add_column("send_logs", sa.Column("ad_images", sa.JSON(), nullable=True))
     op.add_column("send_logs", sa.Column("group_name", sa.String(255), nullable=True))
-    op.add_column("send_logs", sa.Column("account_name", sa.String(255), nullable=True))
     op.add_column("send_logs", sa.Column("messenger_type", sa.String(20), nullable=True))
 
     # Backfill existing records from related tables
@@ -36,12 +35,10 @@ def upgrade() -> None:
             ad_text = ads.text,
             ad_images = ads.images,
             group_name = groups.name,
-            account_name = messenger_accounts.type,
             messenger_type = groups.messenger_type
-        FROM ads, groups, messenger_accounts
+        FROM ads, groups
         WHERE send_logs.ad_id = ads.id
           AND send_logs.group_id = groups.id
-          AND groups.account_id = messenger_accounts.id
     """)
 
     # Set user_id=0 for any orphaned records that couldn't be backfilled
@@ -88,7 +85,6 @@ def downgrade() -> None:
     # Drop new columns
     op.drop_index("ix_send_logs_user_id", "send_logs")
     op.drop_column("send_logs", "messenger_type")
-    op.drop_column("send_logs", "account_name")
     op.drop_column("send_logs", "group_name")
     op.drop_column("send_logs", "ad_images")
     op.drop_column("send_logs", "ad_text")

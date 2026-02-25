@@ -17,8 +17,8 @@ class SendLogResponse(BaseModel):
     group_id: int | None
     ad_title: str | None = None
     ad_text: str | None = None
+    ad_images: list | None = None
     group_name: str | None = None
-    account_name: str | None = None
     messenger_type: str | None = None
     status: str
     error_message: str | None

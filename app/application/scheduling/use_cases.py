@@ -131,7 +131,7 @@ async def send_message_once(
             ad_text=ad.text if ad else None,
             ad_images=ad.images if ad else None,
             group_name=group.name if group else None,
-            account_name=account.type if account else None,
+
             messenger_type=account.type if account else None,
             status="fail",
             error_message="Missing ad, group, or account",
@@ -150,7 +150,7 @@ async def send_message_once(
             ad_text=ad.text,
             ad_images=ad.images,
             group_name=group.name,
-            account_name=account.type,
+
             messenger_type=account.type,
             status="account_disconnected",
             error_message=f"Account {account.id} is {account.status}",
@@ -179,7 +179,7 @@ async def send_message_once(
             ad_text=ad.text,
             ad_images=ad.images,
             group_name=group.name,
-            account_name=account.type,
+
             messenger_type=account.type,
             status="fail",
             error_message=str(e),
@@ -203,7 +203,6 @@ async def send_message_once(
         ad_text=ad.text,
         ad_images=ad.images,
         group_name=group.name,
-        account_name=account.type,
         messenger_type=account.type,
         status="ok" if result.get("ok") else "fail",
         error_message=result.get("error"),

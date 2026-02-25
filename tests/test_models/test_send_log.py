@@ -68,7 +68,6 @@ async def test_create_send_log(db_session):
         ad_text=ad.text,
         ad_images=[],
         group_name=group.name,
-        account_name=account.type,
         messenger_type=account.type,
         status="sent",
         error_message=None,
@@ -88,7 +87,6 @@ async def test_create_send_log(db_session):
     assert send_log.ad_title == "Logged Ad"
     assert send_log.ad_text == "Ad text for logging"
     assert send_log.group_name == "Log Group"
-    assert send_log.account_name == "tg_user"
     assert send_log.messenger_type == "tg_user"
 
 
@@ -150,7 +148,6 @@ async def test_send_log_with_error(db_session):
         ad_text=ad.text,
         ad_images=[],
         group_name=group.name,
-        account_name=account.type,
         messenger_type=account.type,
         status="failed",
         error_message="Connection timeout: could not reach Telegram API",
