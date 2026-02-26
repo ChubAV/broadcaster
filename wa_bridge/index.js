@@ -550,9 +550,10 @@ app.post('/api/sessions/:id/retry-sync', (req, res) => {
 // POST /api/sessions/:id/send - Send message (auto-loads session if needed)
 app.post('/api/sessions/:id/send', async (req, res) => {
     const sessionId = req.params.id;
-    const { group_id, text, image_paths, image_urls } = req.body;
+    const { group_id, text, image_paths, image_urls, trace_id } = req.body;
     const images = image_urls || image_paths || [];
     const caption = text || '';
+    const logPrefix = trace_id ? `[${sessionId}][${trace_id}]` : `[${sessionId}]`;
 
     if (!group_id || (!text && images.length === 0)) {
         return res.status(400).json({ error: 'group_id and text or images are required' });
@@ -580,11 +581,11 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                     await state.sock.sendPresenceUpdate('paused', group_id);
                 } catch (err) {
                     // Presence update failure is non-critical
-                    console.log(`[${sessionId}] Presence update failed (non-critical): ${err.message}`);
+                    console.log(`${logPrefix} Presence update failed (non-critical): ${err.message}`);
                 }
 
                 if (images.length > 0) {
-                    console.log(`[${sessionId}] Sending ${images.length} image(s) to ${group_id}, text="${caption.substring(0, 50)}"`);
+                    console.log(`${logPrefix} Sending ${images.length} image(s) to ${group_id}, text="${caption.substring(0, 50)}"`);
 
                     // Download and send images
                     for (let i = 0; i < images.length; i++) {
@@ -599,7 +600,7 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                         } else if (fs.existsSync(img)) {
                             buffer = fs.readFileSync(img);
                         } else {
-                            console.warn(`[${sessionId}] Image not found: ${img}`);
+                            console.warn(`${logPrefix} Image not found: ${img}`);
                             continue;
                         }
 
@@ -610,7 +611,7 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                         }
 
                         const result = await state.sock.sendMessage(group_id, msgOptions);
-                        console.log(`[${sessionId}] sendMessage[${i}] result: id=${result?.key?.id}`);
+                        console.log(`${logPrefix} sendMessage[${i}] result: id=${result?.key?.id}`);
                     }
 
                     // Multiple images: send caption as separate text
@@ -618,25 +619,25 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                         await state.sock.sendMessage(group_id, { text: caption });
                     }
                 } else {
-                    console.log(`[${sessionId}] Sending text to ${group_id}, text="${caption.substring(0, 50)}"`);
+                    console.log(`${logPrefix} Sending text to ${group_id}, text="${caption.substring(0, 50)}"`);
                     const result = await state.sock.sendMessage(group_id, { text: caption });
-                    console.log(`[${sessionId}] sendMessage result: id=${result?.key?.id}`);
+                    console.log(`${logPrefix} sendMessage result: id=${result?.key?.id}`);
                 }
             });
         });
 
         state.lastActivity = Date.now();
-        return res.json({ ok: true });
+        return res.json({ ok: true, trace_id: trace_id || null });
     } catch (error) {
         // Detect WhatsApp rate-limit error (per-chat cooldown)
         const rateLimitMatch = error.message?.match(/wait of (\d+) seconds? is required/i);
         if (rateLimitMatch) {
             const retryAfter = parseInt(rateLimitMatch[1], 10);
-            console.warn(`[${sessionId}] WhatsApp rate-limited for group ${group_id}: wait ${retryAfter}s`);
-            return res.status(429).json({ error: error.message, retry_after: retryAfter });
+            console.warn(`${logPrefix} WhatsApp rate-limited for group ${group_id}: wait ${retryAfter}s`);
+            return res.status(429).json({ error: error.message, retry_after: retryAfter, trace_id: trace_id || null });
         }
-        console.error(`[${sessionId}] Send error: ${error.message}`);
-        return res.status(500).json({ error: error.message });
+        console.error(`${logPrefix} Send error: ${error.message}`);
+        return res.status(500).json({ error: error.message, trace_id: trace_id || null });
     }
 });
 

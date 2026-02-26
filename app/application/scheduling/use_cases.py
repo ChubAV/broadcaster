@@ -112,6 +112,7 @@ async def send_message_once(
     schedule_id: int,
     messenger_factory: Any,
     settings: Any,
+    task_id: str | None = None,
 ) -> None:
     """Общая доменная логика отправки одного сообщения.
 
@@ -131,8 +132,8 @@ async def send_message_once(
             ad_text=ad.text if ad else None,
             ad_images=ad.images if ad else None,
             group_name=group.name if group else None,
-
             messenger_type=account.type if account else None,
+            task_id=task_id,
             status="fail",
             error_message="Missing ad, group, or account",
         )
@@ -150,8 +151,8 @@ async def send_message_once(
             ad_text=ad.text,
             ad_images=ad.images,
             group_name=group.name,
-
             messenger_type=account.type,
+            task_id=task_id,
             status="account_disconnected",
             error_message=f"Account {account.id} is {account.status}",
         )
@@ -179,8 +180,8 @@ async def send_message_once(
             ad_text=ad.text,
             ad_images=ad.images,
             group_name=group.name,
-
             messenger_type=account.type,
+            task_id=task_id,
             status="fail",
             error_message=str(e),
         )
@@ -204,6 +205,7 @@ async def send_message_once(
         ad_images=ad.images,
         group_name=group.name,
         messenger_type=account.type,
+        task_id=task_id,
         status="ok" if result.get("ok") else "fail",
         error_message=result.get("error"),
     )

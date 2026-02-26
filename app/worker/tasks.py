@@ -1,5 +1,6 @@
 import asyncio
 import structlog
+import structlog.contextvars
 from datetime import datetime, timezone
 
 from celery import shared_task
@@ -86,7 +87,7 @@ async def check_schedules_async(session: AsyncSession):
         logger.info("no_tasks_to_dispatch")
 
 
-async def _send_message(ad_id: int, group_id: int, account_id: int, schedule_id: int):
+async def _send_message(ad_id: int, group_id: int, account_id: int, schedule_id: int, task_id: str | None = None):
     """Shared send logic for both Telegram and WhatsApp tasks."""
     log = logger.bind(ad_id=ad_id, group_id=group_id, account_id=account_id, schedule_id=schedule_id)
     settings = get_settings()
@@ -103,6 +104,7 @@ async def _send_message(ad_id: int, group_id: int, account_id: int, schedule_id:
                 schedule_id=schedule_id,
                 messenger_factory=create_messenger,
                 settings=settings,
+                task_id=task_id,
             )
             log.info("send_ok")
         except Exception as e:
@@ -138,13 +140,18 @@ def _on_send_failure(exc, task_id, args, kwargs, einfo):
 )
 def send_telegram_message(self, ad_id, group_id, account_id, schedule_id):
     """Send a single Telegram message. Auto-retries with backoff."""
+    task_id = self.request.id
     logger.info(
         "celery_task_start",
         task_name=self.name,
-        task_id=self.request.id,
+        task_id=task_id,
         queue=getattr(self.request, "delivery_info", {}).get("routing_key"),
     )
-    asyncio.run(_send_message(ad_id, group_id, account_id, schedule_id))
+    structlog.contextvars.bind_contextvars(task_id=task_id)
+    try:
+        asyncio.run(_send_message(ad_id, group_id, account_id, schedule_id, task_id=task_id))
+    finally:
+        structlog.contextvars.unbind_contextvars("task_id")
 
 
 send_telegram_message.on_failure = _on_send_failure
@@ -161,13 +168,18 @@ send_telegram_message.on_failure = _on_send_failure
 )
 def send_whatsapp_message(self, ad_id, group_id, account_id, schedule_id):
     """Send a single WhatsApp message. Auto-retries with backoff."""
+    task_id = self.request.id
     logger.info(
         "celery_task_start",
         task_name=self.name,
-        task_id=self.request.id,
+        task_id=task_id,
         queue=getattr(self.request, "delivery_info", {}).get("routing_key"),
     )
-    asyncio.run(_send_message(ad_id, group_id, account_id, schedule_id))
+    structlog.contextvars.bind_contextvars(task_id=task_id)
+    try:
+        asyncio.run(_send_message(ad_id, group_id, account_id, schedule_id, task_id=task_id))
+    finally:
+        structlog.contextvars.unbind_contextvars("task_id")
 
 
 send_whatsapp_message.on_failure = _on_send_failure

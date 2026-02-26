@@ -2,6 +2,7 @@ import asyncio
 
 import httpx
 import structlog
+import structlog.contextvars
 
 from app.messengers.base import BaseMessenger
 
@@ -50,6 +51,9 @@ class WhatsAppMessenger(BaseMessenger):
             payload = {"group_id": group_id, "text": text}
             if images:
                 payload["image_urls"] = images
+            trace_id = structlog.contextvars.get_contextvars().get("task_id")
+            if trace_id:
+                payload["trace_id"] = trace_id
             response = await client.post(self._url("send"), json=payload)
             if response.status_code != 200:
                 error_msg = ""

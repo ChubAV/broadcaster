@@ -22,6 +22,8 @@ class SendLog(Base):
     group_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     messenger_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    task_id: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+
     status: Mapped[str] = mapped_column(String(20))
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     sent_at: Mapped[datetime] = mapped_column(
