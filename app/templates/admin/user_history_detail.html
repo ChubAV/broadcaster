@@ -48,7 +48,7 @@
         <!-- Группа -->
         <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
             <span class="text-sm font-medium text-slate-500 sm:w-40 shrink-0">Группа</span>
-            <span class="text-sm text-slate-900">{{ log.group_name or '—' }}</span>
+            <span class="text-sm text-slate-900">{{ log.group_name or '—' }}{% if log.group_id %} <code class="text-xs font-mono text-slate-400">#{{ log.group_id }}</code>{% endif %}</span>
         </div>
 
         <!-- Task ID -->
