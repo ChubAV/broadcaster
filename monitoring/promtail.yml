@@ -31,5 +31,5 @@ scrape_configs:
                   msg: msg
             - labels:
                 level:
-            - label_drop:
+            - labeldrop:
                 - filename
