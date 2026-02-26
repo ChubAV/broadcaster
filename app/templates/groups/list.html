@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "includes/messenger_icon.html" import messenger_icon %}
 {% block title %}Группы - Broadcaster{% endblock %}
 {% block content %}
 <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
@@ -73,10 +74,10 @@
                     </td>
                     <td class="px-3 sm:px-6 py-4 text-sm font-medium text-slate-900">{{ group.name }}</td>
                     <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">#{{ group.account_id }}</td>
-                    <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">
-                        {% if group.messenger_type == 'tg_user' %}Telegram аккаунт
-                        {% elif group.messenger_type == 'wa' %}WhatsApp
-                        {% else %}{{ group.messenger_type }}{% endif %}
+                    <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm">
+                        {% if group.messenger_type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram') }}
+                        {% elif group.messenger_type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp') }}
+                        {% else %}<span class="text-slate-500">{{ group.messenger_type }}</span>{% endif %}
                     </td>
                     <td class="hidden lg:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ group.group_external_id }}</td>
                     <td class="px-3 sm:px-6 py-4">

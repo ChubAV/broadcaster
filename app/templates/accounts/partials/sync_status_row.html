@@ -1,0 +1,33 @@
+{% from "includes/messenger_icon.html" import messenger_icon %}
+<tr id="account-row-{{ account_id }}"{% if status == 'syncing' %} hx-get="/accounts/{{ account_id }}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML"{% endif %} class="hover:bg-slate-50/80 transition-colors duration-150">
+    <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{{ account_id }}</td>
+    <td class="px-3 sm:px-6 py-4 text-sm">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp') }}</td>
+    <td class="px-3 sm:px-6 py-4">
+        {% if status == 'active' %}
+        <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-100 text-emerald-800">active</span>
+        <span class="ml-2 text-xs text-slate-500">Загружено {{ group_count or 0 }} групп</span>
+        {% elif status == 'sync_failed' %}
+        <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-red-100 text-red-800">Ошибка синхронизации</span>
+        {% elif status == 'syncing' %}
+        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-amber-100 text-amber-800">
+            <svg class="animate-spin -ml-0.5 mr-1.5 h-3 w-3 text-amber-600" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            Синхронизация...
+        </span>
+        <span class="ml-2 text-xs text-slate-500">Загружаем группы из WhatsApp...</span>
+        {% endif %}
+    </td>
+    <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500"></td>
+    <td class="px-3 sm:px-6 py-4 text-right text-sm">
+        {% if status == 'sync_failed' %}
+        <form method="POST" action="/accounts/{{ account_id }}/retry-sync" class="inline">
+            <button type="submit" class="font-medium text-amber-600 hover:text-amber-700 transition-colors mr-3">Повторить</button>
+        </form>
+        {% endif %}
+        <form method="POST" action="/accounts/{{ account_id }}/delete" class="inline">
+            <button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
+        </form>
+    </td>
+</tr>

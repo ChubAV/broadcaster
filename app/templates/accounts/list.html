@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "includes/messenger_icon.html" import messenger_icon %}
 {% block title %}Аккаунты - Broadcaster{% endblock %}
 {% block content %}
 <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
@@ -27,7 +28,7 @@
             {% if account.status == 'syncing' and account.type == 'wa' %}
             <tr id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML" class="hover:bg-slate-50/80 transition-colors duration-150">
                 <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{{ account.id }}</td>
-                <td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>
+                <td class="px-3 sm:px-6 py-4 text-sm">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp') }}</td>
                 <td class="px-3 sm:px-6 py-4">
                     <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-amber-100 text-amber-800">
                         <svg class="animate-spin -ml-0.5 mr-1.5 h-3 w-3 text-amber-600" fill="none" viewBox="0 0 24 24">
@@ -48,7 +49,7 @@
             {% elif account.status == 'sync_failed' and account.type == 'wa' %}
             <tr class="hover:bg-slate-50/80 transition-colors duration-150">
                 <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{{ account.id }}</td>
-                <td class="px-3 sm:px-6 py-4 text-sm text-slate-900">WhatsApp</td>
+                <td class="px-3 sm:px-6 py-4 text-sm">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp') }}</td>
                 <td class="px-3 sm:px-6 py-4">
                     <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-red-100 text-red-800">Ошибка синхронизации</span>
                 </td>
@@ -65,10 +66,10 @@
             {% else %}
             <tr class="hover:bg-slate-50/80 transition-colors duration-150">
                 <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{{ account.id }}</td>
-                <td class="px-3 sm:px-6 py-4 text-sm text-slate-900">
-                    {% if account.type == 'tg_user' %}Telegram аккаунт
-                    {% elif account.type == 'wa' %}WhatsApp
-                    {% else %}{{ account.type }}{% endif %}
+                <td class="px-3 sm:px-6 py-4 text-sm">
+                    {% if account.type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram') }}
+                    {% elif account.type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp') }}
+                    {% else %}<span class="text-slate-500">{{ account.type }}</span>{% endif %}
                 </td>
                 <td class="px-3 sm:px-6 py-4">
                     <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if account.status == 'active' %}bg-emerald-100 text-emerald-800{% elif account.status == 'disconnected' %}bg-red-100 text-red-800{% else %}bg-amber-100 text-amber-800{% endif %}">
