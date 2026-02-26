@@ -23,9 +23,6 @@ test-cov:
 dev:
     docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 
-# Start Docker prod environment
-prod:
-    docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 # Stop all Docker containers
 down:
@@ -71,10 +68,26 @@ monitoring-down:
 logs *args:
     docker compose logs -f {{ args }}
 
-# Clean stale group IDs from schedules (dry-run by default)
-cleanup-schedules *args:
-    uv run python scripts/cleanup_schedules.py {{ args }}
+# Start Docker prod environment
+prod-start:
+    docker compose -f docker-compose.prod.yml up -d
+
+# Stop Docker prod environment
+prod-stop:
+    docker compose -f docker-compose.prod.yml down
+
+# Stop Docker prod environment
+prod-hard-restart:
+    docker compose -f docker-compose.prod.yml down && \\
+    docker compose -f docker-compose.prod.yml up -d
 
 # Clean stale group IDs in prod Docker (dry-run by default)
 prod-cleanup-schedules *args:
-    docker compose -f docker-compose.yml -f docker-compose.prod.yml exec web uv run python scripts/cleanup_schedules.py {{ args }}
+    docker compose -f docker-compose.prod.yml exec web uv run python scripts/cleanup_schedules.py {{ args }}
+
+# Stop Docker prod environment
+prod-deploy:
+    git pull && \\
+    docker compose -f docker-compose.prod.yml build --no-cache && \\
+    docker compose -f docker-compose.prod.yml down \\
+    && docker compose -f docker-compose.prod.yml up -d
