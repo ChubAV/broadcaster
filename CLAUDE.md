@@ -21,6 +21,9 @@ Broadcaster is a SaaS platform for scheduling and sending product ads to messeng
 - **Celery beat**: `uv run celery -A app.worker.celery_app beat --loglevel=info`
 - **Add dependency**: `uv add <package>`
 - **Sync environment**: `uv sync`
+- **Monitoring stack**: `docker compose -f docker-compose.monitoring.yml up -d`
+- **Prometheus UI**: http://localhost:9090
+- **Grafana UI**: http://localhost:3001 (admin/admin)
 
 ## Architecture
 
