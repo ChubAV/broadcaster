@@ -24,6 +24,8 @@ Broadcaster is a SaaS platform for scheduling and sending product ads to messeng
 - **Monitoring stack**: `docker compose -f docker-compose.monitoring.yml up -d`
 - **Prometheus UI**: http://localhost:9090
 - **Grafana UI**: http://localhost:3001 (admin/admin)
+- **Loki API**: http://localhost:3100/ready
+- **Grafana Explore**: Loki datasource → `{container_name=~".*broadcaster.*"}` для просмотра логов
 
 ## Architecture
 

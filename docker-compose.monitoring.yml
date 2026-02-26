@@ -9,6 +9,27 @@ services:
       - "9090:9090"
     restart: unless-stopped
 
+  loki:
+    image: grafana/loki:latest
+    container_name: loki-broadcaster
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/config.yaml
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail-broadcaster
+    volumes:
+      - ./monitoring/promtail.yml:/etc/promtail/config.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yaml
+    depends_on:
+      - loki
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:latest
     container_name: grafana-broadcaster
@@ -23,11 +44,13 @@ services:
       - "3000"
     depends_on:
       - prometheus
+      - loki
     restart: unless-stopped
 
 volumes:
   prometheus_data:
   grafana_data:
+  loki_data:
 
 networks:
   default:

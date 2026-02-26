@@ -6,8 +6,14 @@ const fs = require('fs');
 const path = require('path');
 const pino = require('pino');
 
+// App logger — structured JSON to stdout
+const log = pino({ level: process.env.LOG_LEVEL || 'info' });
+
+// Silent logger for Baileys internals
+const baileysLogger = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'warn' });
+
 process.on('unhandledRejection', (reason) => {
-    console.error('[process] Unhandled rejection:', reason?.message || reason);
+    log.error({ err: reason?.message || String(reason) }, 'unhandled_rejection');
 });
 
 const app = express();
@@ -18,9 +24,6 @@ const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || '300000');
 const SESSIONS_DIR = process.env.SESSIONS_DIR || './sessions';
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RATE_LIMIT_PER_MINUTE = 8;
-
-// Silent logger for Baileys (it uses pino internally)
-const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'warn' });
 
 // Cached WA Web version (fetched once at startup)
 let waVersion = null;
@@ -102,7 +105,7 @@ function deleteSessionFiles(sessionId) {
     const sessionDir = path.join(SESSIONS_DIR, String(sessionId));
     if (fs.existsSync(sessionDir)) {
         fs.rmSync(sessionDir, { recursive: true, force: true });
-        console.log(`[${sessionId}] Session files deleted`);
+        log.info({ sessionId }, 'session_files_deleted');
     }
 }
 
@@ -119,19 +122,19 @@ async function startGroupSync(sessionId) {
     if (!state) return;
 
     state.syncState = 'syncing';
-    console.log(`[${sessionId}] Starting group sync (waiting ${INITIAL_DELAY / 1000}s)...`);
+    log.info({ sessionId, delaySec: INITIAL_DELAY / 1000 }, 'group_sync_start');
 
     await new Promise(r => setTimeout(r, INITIAL_DELAY));
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         const currentState = sessions.get(sessionId);
         if (!currentState || !currentState.isConnected) {
-            console.log(`[${sessionId}] Session gone or disconnected during sync, aborting`);
+            log.info({ sessionId }, 'group_sync_aborted');
             return;
         }
 
         try {
-            console.log(`[${sessionId}] Fetching groups (attempt ${attempt + 1}/${MAX_ATTEMPTS})...`);
+            log.info({ sessionId, attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS }, 'group_fetch_attempt');
             const groupsObj = await currentState.sock.groupFetchAllParticipating();
             const groups = Object.entries(groupsObj).map(([jid, metadata]) => ({
                 id: jid,
@@ -139,13 +142,13 @@ async function startGroupSync(sessionId) {
             }));
             currentState.syncState = 'ready';
             currentState.groups = groups;
-            console.log(`[${sessionId}] Group sync complete: ${groups.length} groups`);
+            log.info({ sessionId, count: groups.length }, 'group_sync_complete');
             return;
         } catch (err) {
-            console.error(`[${sessionId}] Group fetch failed (attempt ${attempt + 1}/${MAX_ATTEMPTS}): ${err.message}`);
+            log.error({ sessionId, attempt: attempt + 1, maxAttempts: MAX_ATTEMPTS, err: err.message }, 'group_fetch_failed');
             if (attempt < RETRY_DELAYS.length) {
                 const delay = RETRY_DELAYS[attempt];
-                console.log(`[${sessionId}] Retrying group fetch in ${delay / 1000}s...`);
+                log.info({ sessionId, delaySec: delay / 1000 }, 'group_fetch_retry');
                 await new Promise(r => setTimeout(r, delay));
             }
         }
@@ -155,7 +158,7 @@ async function startGroupSync(sessionId) {
     const finalState = sessions.get(sessionId);
     if (finalState) {
         finalState.syncState = 'failed';
-        console.log(`[${sessionId}] Group sync failed after ${MAX_ATTEMPTS} attempts`);
+        log.warn({ sessionId, attempts: MAX_ATTEMPTS }, 'group_sync_exhausted');
     }
 }
 
@@ -171,7 +174,7 @@ async function createSocket(sessionId) {
         auth: authState,
         printQRInTerminal: false,
         browser: Browsers.ubuntu('Broadcaster'),
-        logger,
+        logger: baileysLogger,
         markOnlineOnConnect: false,
         generateHighQualityLinkPreview: false,
     };
@@ -217,7 +220,7 @@ async function createSocket(sessionId) {
 
         if (qr) {
             sessionState.qrCode = await qrcode.toDataURL(qr);
-            console.log(`[${sessionId}] QR code generated`);
+            log.info({ sessionId }, 'qr_generated');
         }
 
         if (connection === 'open') {
@@ -232,12 +235,12 @@ async function createSocket(sessionId) {
                 sessionState.readyResolve = null;
                 sessionState.readyReject = null;
             }
-            console.log(`[${sessionId}] Connected`);
+            log.info({ sessionId }, 'connected');
 
             // Start background group sync (don't await — runs in background)
             if (!sessionState.syncState || sessionState.syncState === 'failed') {
                 startGroupSync(sessionId).catch(err => {
-                    console.error(`[${sessionId}] Group sync error: ${err.message}`);
+                    log.error({ sessionId, err: err.message }, 'group_sync_error');
                 });
             }
         }
@@ -246,7 +249,7 @@ async function createSocket(sessionId) {
             sessionState.isConnected = false;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const reason = DisconnectReason[statusCode] || statusCode || 'unknown';
-            console.log(`[${sessionId}] Disconnected: ${reason} (${statusCode})`);
+            log.info({ sessionId, reason, statusCode }, 'disconnected');
 
             // Intentional close (idle unload, destroy) — do not reconnect
             if (sessionState.intentionalClose) {
@@ -265,14 +268,14 @@ async function createSocket(sessionId) {
                 }
                 sessions.delete(sessionId);
                 deleteSessionFiles(sessionId);
-                console.log(`[${sessionId}] Unrecoverable disconnect (${statusCode}), session cleaned up`);
+                log.warn({ sessionId, statusCode }, 'unrecoverable_disconnect');
             } else if (sessionState.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                 // Auto-reconnect with exponential backoff
                 sessionState.reconnectAttempts++;
                 sessionState.initializing = false;
                 clearTimeout(sessionState._readyTimeout);
                 const backoff = Math.min(1000 * Math.pow(2, sessionState.reconnectAttempts - 1), 30000);
-                console.log(`[${sessionId}] Reconnecting in ${backoff}ms (attempt ${sessionState.reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
+                log.info({ sessionId, backoffMs: backoff, attempt: sessionState.reconnectAttempts, maxAttempts: MAX_RECONNECT_ATTEMPTS }, 'reconnecting');
 
                 setTimeout(async () => {
                     try {
@@ -287,7 +290,7 @@ async function createSocket(sessionId) {
                         sessions.set(sessionId, newState);
                         await newState.readyPromise;
                     } catch (err) {
-                        console.error(`[${sessionId}] Reconnect failed: ${err.message}`);
+                        log.error({ sessionId, err: err.message }, 'reconnect_failed');
                         sessions.delete(sessionId);
                     }
                 }, backoff);
@@ -300,7 +303,7 @@ async function createSocket(sessionId) {
                     sessionState.readyReject = null;
                 }
                 sessions.delete(sessionId);
-                console.log(`[${sessionId}] Max reconnect attempts reached, giving up`);
+                log.warn({ sessionId, maxAttempts: MAX_RECONNECT_ATTEMPTS }, 'max_reconnect_reached');
             }
         }
     });
@@ -342,15 +345,15 @@ async function ensureSession(sessionId) {
     }
 
     const loadPromise = (async () => {
-        console.log(`[${sessionId}] Loading session from disk...`);
+        log.info({ sessionId }, 'session_loading');
         try {
             const state = await createSocket(sessionId);
             await state.readyPromise;
             state.lastActivity = Date.now();
-            console.log(`[${sessionId}] Session loaded successfully`);
+            log.info({ sessionId }, 'session_loaded');
             return state;
         } catch (err) {
-            console.error(`[${sessionId}] Failed to load session: ${err.message}`);
+            log.error({ sessionId, err: err.message }, 'session_load_failed');
             sessions.delete(sessionId);
             return null;
         }
@@ -375,11 +378,11 @@ async function unloadSession(sessionId) {
     try {
         state.sock.end();
     } catch (err) {
-        console.error(`[${sessionId}] Error closing socket: ${err.message}`);
+        log.error({ sessionId, err: err.message }, 'socket_close_error');
     }
     rateLimiters.delete(sessionId);
     sessions.delete(sessionId);
-    console.log(`[${sessionId}] Session unloaded`);
+    log.info({ sessionId }, 'session_unloaded');
 }
 
 /**
@@ -392,14 +395,14 @@ async function destroySession(sessionId) {
         try {
             await state.sock.logout();
         } catch (err) {
-            console.error(`[${sessionId}] Error during logout: ${err.message}`);
+            log.error({ sessionId, err: err.message }, 'logout_error');
             try { state.sock.end(); } catch (_) {}
         }
         sessions.delete(sessionId);
     }
     rateLimiters.delete(sessionId);
     deleteSessionFiles(sessionId);
-    console.log(`[${sessionId}] Session destroyed`);
+    log.info({ sessionId }, 'session_destroyed');
 }
 
 // ---- Idle timeout: unload sessions after inactivity ----
@@ -411,7 +414,7 @@ setInterval(() => {
             continue; // Don't unload sessions that are syncing
         }
         if (state.isConnected && (now - state.lastActivity > IDLE_TIMEOUT_MS)) {
-            console.log(`[${id}] Idle for ${Math.round(IDLE_TIMEOUT_MS / 1000)}s, unloading`);
+            log.info({ sessionId: id, idleTimeoutSec: Math.round(IDLE_TIMEOUT_MS / 1000) }, 'idle_unload');
             unloadSession(id);
         }
     }
@@ -440,11 +443,11 @@ app.post('/api/sessions/:id/start', async (req, res) => {
         const state = await createSocket(sessionId);
         // Don't await readyPromise (caller polls for QR/status), but catch rejection
         state.readyPromise.catch((err) => {
-            console.log(`[${sessionId}] Session init failed: ${err.message}`);
+            log.warn({ sessionId, err: err.message }, 'session_init_failed');
         });
         res.json({ status: 'initializing' });
     } catch (err) {
-        console.error(`[${sessionId}] Failed to start: ${err.message}`);
+        log.error({ sessionId, err: err.message }, 'session_start_failed');
         res.status(500).json({ error: err.message });
     }
 });
@@ -497,17 +500,17 @@ app.get('/api/sessions/:id/sync-status', async (req, res) => {
     if (!state) {
         if (sessionExistsOnDisk(sessionId)) {
             // Session was unloaded (idle timeout) — reload and re-sync
-            console.log(`[${sessionId}] Session on disk but not loaded, reloading for sync...`);
+            log.info({ sessionId }, 'session_reloading');
             try {
                 state = await ensureSession(sessionId);
                 if (state && state.isConnected && (!state.syncState || state.syncState === 'failed')) {
                     startGroupSync(sessionId).catch(err => {
-                        console.error(`[${sessionId}] Re-sync error: ${err.message}`);
+                        log.error({ sessionId, err: err.message }, 'resync_error');
                     });
                     return res.json({ state: 'syncing', groups: null });
                 }
             } catch (err) {
-                console.error(`[${sessionId}] Failed to reload session: ${err.message}`);
+                log.error({ sessionId, err: err.message }, 'session_reload_failed');
             }
             // If reload failed or not connected
             if (!state || !state.isConnected) {
@@ -541,7 +544,7 @@ app.post('/api/sessions/:id/retry-sync', (req, res) => {
     state.syncState = null;
     state.groups = null;
     startGroupSync(sessionId).catch(err => {
-        console.error(`[${sessionId}] Retry group sync error: ${err.message}`);
+        log.error({ sessionId, err: err.message }, 'retry_sync_error');
     });
 
     res.json({ status: 'sync_started' });
@@ -553,7 +556,7 @@ app.post('/api/sessions/:id/send', async (req, res) => {
     const { group_id, text, image_paths, image_urls, trace_id } = req.body;
     const images = image_urls || image_paths || [];
     const caption = text || '';
-    const logPrefix = trace_id ? `[${sessionId}][${trace_id}]` : `[${sessionId}]`;
+    const taskId = trace_id || null;
 
     if (!group_id || (!text && images.length === 0)) {
         return res.status(400).json({ error: 'group_id and text or images are required' });
@@ -581,11 +584,11 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                     await state.sock.sendPresenceUpdate('paused', group_id);
                 } catch (err) {
                     // Presence update failure is non-critical
-                    console.log(`${logPrefix} Presence update failed (non-critical): ${err.message}`);
+                    log.warn({ sessionId, taskId, groupId: group_id, err: err.message }, 'presence_update_failed');
                 }
 
                 if (images.length > 0) {
-                    console.log(`${logPrefix} Sending ${images.length} image(s) to ${group_id}, text="${caption.substring(0, 50)}"`);
+                    log.info({ sessionId, taskId, groupId: group_id, imageCount: images.length, caption: caption.substring(0, 50) }, 'sending_images');
 
                     // Download and send images
                     for (let i = 0; i < images.length; i++) {
@@ -600,7 +603,7 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                         } else if (fs.existsSync(img)) {
                             buffer = fs.readFileSync(img);
                         } else {
-                            console.warn(`${logPrefix} Image not found: ${img}`);
+                            log.warn({ sessionId, taskId, path: img }, 'image_not_found');
                             continue;
                         }
 
@@ -611,7 +614,7 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                         }
 
                         const result = await state.sock.sendMessage(group_id, msgOptions);
-                        console.log(`${logPrefix} sendMessage[${i}] result: id=${result?.key?.id}`);
+                        log.info({ sessionId, taskId, index: i, messageId: result?.key?.id }, 'send_result');
                     }
 
                     // Multiple images: send caption as separate text
@@ -619,15 +622,15 @@ app.post('/api/sessions/:id/send', async (req, res) => {
                         await state.sock.sendMessage(group_id, { text: caption });
                     }
                 } else {
-                    console.log(`${logPrefix} Sending text to ${group_id}, text="${caption.substring(0, 50)}"`);
+                    log.info({ sessionId, taskId, groupId: group_id, caption: caption.substring(0, 50) }, 'sending_text');
                     const result = await state.sock.sendMessage(group_id, { text: caption });
-                    console.log(`${logPrefix} sendMessage result: id=${result?.key?.id}`);
+                    log.info({ sessionId, taskId, messageId: result?.key?.id }, 'send_result');
                 }
             });
         });
 
         state.lastActivity = Date.now();
-        return res.json({ ok: true, trace_id: trace_id || null });
+        return res.json({ ok: true, trace_id: taskId });
     } catch (error) {
         const errMsg = error.message || String(error);
 
@@ -635,18 +638,18 @@ app.post('/api/sessions/:id/send', async (req, res) => {
         const rateLimitMatch = errMsg.match(/wait of (\d+) seconds? is required/i);
         if (rateLimitMatch) {
             const retryAfter = parseInt(rateLimitMatch[1], 10);
-            console.warn(`${logPrefix} WhatsApp rate-limited for group ${group_id}: wait ${retryAfter}s`);
-            return res.status(429).json({ error: errMsg, retry_after: retryAfter, trace_id: trace_id || null });
+            log.warn({ sessionId, taskId, groupId: group_id, retryAfter }, 'wa_rate_limited');
+            return res.status(429).json({ error: errMsg, retry_after: retryAfter, trace_id: taskId });
         }
 
         // Detect "forbidden" — account kicked/banned from group, no point retrying
         if (/^forbidden$/i.test(errMsg)) {
-            console.warn(`${logPrefix} Forbidden for group ${group_id} (kicked/banned)`);
-            return res.status(403).json({ error: errMsg, trace_id: trace_id || null });
+            log.warn({ sessionId, taskId, groupId: group_id }, 'wa_forbidden');
+            return res.status(403).json({ error: errMsg, trace_id: taskId });
         }
 
-        console.error(`${logPrefix} Send error: ${errMsg}`);
-        return res.status(500).json({ error: errMsg, trace_id: trace_id || null });
+        log.error({ sessionId, taskId, groupId: group_id, err: errMsg }, 'send_error');
+        return res.status(500).json({ error: errMsg, trace_id: taskId });
     }
 });
 
@@ -667,7 +670,7 @@ app.get('/api/sessions/:id/groups', async (req, res) => {
         }));
         return res.json(groups);
     } catch (error) {
-        console.error(`[${sessionId}] Groups error: ${error.message}`);
+        log.error({ sessionId, err: error.message }, 'groups_error');
         return res.status(500).json({ error: error.message });
     }
 });
@@ -690,12 +693,12 @@ app.get('/health', (req, res) => {
     try {
         const { version, isLatest } = await fetchLatestBaileysVersion();
         waVersion = version;
-        console.log(`WA Web version: ${version.join('.')}${isLatest ? '' : ' (not latest)'}`);
+        log.info({ version: version.join('.'), isLatest }, 'wa_version');
     } catch (err) {
-        console.warn(`Failed to fetch WA version, using default: ${err.message}`);
+        log.warn({ err: err.message }, 'wa_version_fetch_failed');
     }
 
     app.listen(PORT, () => {
-        console.log(`WA Bridge (Baileys, idle timeout=${IDLE_TIMEOUT_MS / 1000}s) running on port ${PORT}`);
+        log.info({ port: PORT, idleTimeoutSec: IDLE_TIMEOUT_MS / 1000 }, 'server_started');
     });
 })();
