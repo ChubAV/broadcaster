@@ -28,7 +28,7 @@
                 <option value="">Выберите аккаунт...</option>
                 {% for account in accounts %}
                 <option value="{{ account.id }}" {% if schedule and schedule.account_id == account.id %}selected{% endif %}>
-                    #{{ account.id }} - {% if account.type == 'tg_user' %}TG{% elif account.type == 'wa' %}WA{% else %}{{ account.type }}{% endif %} ({{ account.status }})
+                    #{{ account.id }} - {% if account.type == 'tg_user' %}Telegram аккаунт{% elif account.type == 'wa' %}WhatsApp{% else %}{{ account.type }}{% endif %} ({{ account.status }})
                 </option>
                 {% endfor %}
             </select>
@@ -42,7 +42,7 @@
                 {% for group in groups %}
                 <label class="group-item flex items-center rounded-lg px-2 py-1.5 hover:bg-white/80 transition-colors" data-account-id="{{ group.account_id }}">
                     <input type="checkbox" name="group_ids" value="{{ group.id }}" {% if schedule and group.id in schedule.group_ids %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
-                    <span class="ml-2 inline-flex items-center gap-1.5 text-sm text-slate-700">{{ messenger_icon(group.messenger_type, size='h-4 w-4', title=group.messenger_type) }}{{ group.name }}</span>
+                    <span class="ml-2 inline-flex items-center gap-1.5 text-sm text-slate-700">{{ messenger_icon(group.messenger_type, size='h-4 w-4', title=group.messenger_type, show_label=true) }}{{ group.name }}</span>
                 </label>
                 {% endfor %}
             </div>

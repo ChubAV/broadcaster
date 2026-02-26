@@ -75,8 +75,8 @@
                     <td class="px-3 sm:px-6 py-4 text-sm font-medium text-slate-900">{{ group.name }}</td>
                     <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">#{{ group.account_id }}</td>
                     <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm">
-                        {% if group.messenger_type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram') }}
-                        {% elif group.messenger_type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp') }}
+                        {% if group.messenger_type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram', show_label=true) }}
+                        {% elif group.messenger_type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}
                         {% else %}<span class="text-slate-500">{{ group.messenger_type }}</span>{% endif %}
                     </td>
                     <td class="hidden lg:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ group.group_external_id }}</td>

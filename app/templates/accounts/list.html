@@ -67,8 +67,8 @@
             <tr class="hover:bg-slate-50/80 transition-colors duration-150">
                 <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{{ account.id }}</td>
                 <td class="px-3 sm:px-6 py-4 text-sm">
-                    {% if account.type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram') }}
-                    {% elif account.type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp') }}
+                    {% if account.type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram', show_label=true) }}
+                    {% elif account.type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}
                     {% else %}<span class="text-slate-500">{{ account.type }}</span>{% endif %}
                 </td>
                 <td class="px-3 sm:px-6 py-4">
