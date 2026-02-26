@@ -78,7 +78,7 @@ prod-stop:
 
 # Stop Docker prod environment
 prod-hard-restart:
-    docker compose -f docker-compose.prod.yml down && \\
+    docker compose -f docker-compose.prod.yml down && \
     docker compose -f docker-compose.prod.yml up -d
 
 # Clean stale group IDs in prod Docker (dry-run by default)
@@ -87,7 +87,7 @@ prod-cleanup-schedules *args:
 
 # Stop Docker prod environment
 prod-deploy:
-    git pull && \\
-    docker compose -f docker-compose.prod.yml build --no-cache && \\
-    docker compose -f docker-compose.prod.yml down \\
+    git pull && \
+    docker compose -f docker-compose.prod.yml build --no-cache && \
+    docker compose -f docker-compose.prod.yml down \
     && docker compose -f docker-compose.prod.yml up -d
