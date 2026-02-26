@@ -37,3 +37,17 @@ class ScheduleRepository(BaseRepository[Schedule]):
             )
         )
         return list(result.scalars().all())
+
+    async def remove_group_ids(self, user_id: int, deleted_group_ids: set[int]) -> None:
+        """Remove deleted group IDs from all user's schedules."""
+        result = await self.session.execute(
+            select(Schedule)
+            .join(Ad, Schedule.ad_id == Ad.id)
+            .where(Ad.user_id == user_id)
+        )
+        for schedule in result.scalars():
+            if not schedule.group_ids:
+                continue
+            new_ids = [gid for gid in schedule.group_ids if gid not in deleted_group_ids]
+            if len(new_ids) != len(schedule.group_ids):
+                schedule.group_ids = new_ids

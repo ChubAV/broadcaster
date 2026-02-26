@@ -138,6 +138,58 @@ async def test_toggle_group(client, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_delete_group_removes_from_schedule_group_ids(client, auth_headers, db_session):
+    """Deleting a group should remove its ID from schedule.group_ids."""
+    from app.models.schedule import Schedule
+
+    account_id = await create_account(client, auth_headers)
+
+    # Create an ad
+    ad_resp = await client.post("/api/ads", json={
+        "title": "Test Ad",
+        "text": "Test text",
+    }, headers=auth_headers)
+    ad_id = ad_resp.json()["id"]
+
+    # Create two groups
+    g1_resp = await client.post("/api/groups", json={
+        "account_id": account_id,
+        "messenger_type": "tg_user",
+        "group_external_id": "ext-1",
+        "name": "Group 1",
+    }, headers=auth_headers)
+    g1_id = g1_resp.json()["id"]
+
+    g2_resp = await client.post("/api/groups", json={
+        "account_id": account_id,
+        "messenger_type": "tg_user",
+        "group_external_id": "ext-2",
+        "name": "Group 2",
+    }, headers=auth_headers)
+    g2_id = g2_resp.json()["id"]
+
+    # Create a schedule referencing both groups
+    sched_resp = await client.post("/api/schedules", json={
+        "ad_id": ad_id,
+        "account_id": account_id,
+        "group_ids": [g1_id, g2_id],
+        "days_of_week": [0],
+        "times_of_day": ["10:00"],
+    }, headers=auth_headers)
+    schedule_id = sched_resp.json()["id"]
+
+    # Delete group 1
+    del_resp = await client.delete(f"/api/groups/{g1_id}", headers=auth_headers)
+    assert del_resp.status_code == 204
+
+    # Verify schedule.group_ids no longer contains deleted group
+    db_session.expire_all()
+    schedule = await db_session.get(Schedule, schedule_id)
+    assert g1_id not in schedule.group_ids
+    assert g2_id in schedule.group_ids
+
+
+@pytest.mark.asyncio
 async def test_unauthenticated_request(client):
     response = await client.get("/api/groups")
     assert response.status_code == 401

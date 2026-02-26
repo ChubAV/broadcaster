@@ -8,6 +8,7 @@ from app.dependencies import get_db, get_settings
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.repositories.schedule import ScheduleRepository
 
 router = APIRouter(tags=["pages"])
 
@@ -94,6 +95,8 @@ async def groups_delete(
     )
     group = result.scalar_one_or_none()
     if group:
+        schedule_repo = ScheduleRepository(db)
+        await schedule_repo.remove_group_ids(user.id, {group.id})
         await db.delete(group)
         await db.commit()
     return RedirectResponse(url="/groups", status_code=302)
@@ -131,6 +134,8 @@ async def groups_bulk(
             group.is_active = False
         await db.commit()
     elif action == "delete":
+        schedule_repo = ScheduleRepository(db)
+        await schedule_repo.remove_group_ids(user.id, {g.id for g in groups})
         for group in groups:
             await db.delete(group)
         await db.commit()

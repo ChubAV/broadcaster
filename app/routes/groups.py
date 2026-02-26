@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user_id, get_db
 from app.repositories.group import GroupRepository
+from app.repositories.schedule import ScheduleRepository
 from app.services.billing_service import check_limit
 
 router = APIRouter(prefix="/api/groups", tags=["groups"])
@@ -70,6 +71,8 @@ async def delete_group(
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
 
+    schedule_repo = ScheduleRepository(db)
+    await schedule_repo.remove_group_ids(user_id, {group.id})
     await repo.delete(group)
 
 
