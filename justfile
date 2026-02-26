@@ -70,3 +70,11 @@ monitoring-down:
 # Show Docker logs (follow)
 logs *args:
     docker compose logs -f {{ args }}
+
+# Clean stale group IDs from schedules (dry-run by default)
+cleanup-schedules *args:
+    uv run python scripts/cleanup_schedules.py {{ args }}
+
+# Clean stale group IDs in prod Docker (dry-run by default)
+prod-cleanup-schedules *args:
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml exec web uv run python scripts/cleanup_schedules.py {{ args }}
