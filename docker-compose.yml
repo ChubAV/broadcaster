@@ -147,3 +147,7 @@ services:
 volumes:
   pgdata:
   wa_sessions:
+
+networks:
+  default:
+    name: broadcaster

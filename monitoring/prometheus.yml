@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "broadcaster-web"
+    static_configs:
+      - targets: ["web-broadcaster:8000"]
+
+  - job_name: "broadcaster-flower"
+    static_configs:
+      - targets: ["flower-broadcaster:5555"]

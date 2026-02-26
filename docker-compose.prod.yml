@@ -133,7 +133,22 @@ services:
     container_name: wa-bridge-broadcaster
     restart: unless-stopped
 
+  flower:
+    <<: *app-base
+    container_name: flower-broadcaster
+    command: uv run celery -A app.worker.celery_app flower --port=5555
+    expose:
+      - "5555"
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   certbot-webroot:
   certbot-certs:
   wa_sessions:
+
+networks:
+  default:
+    name: broadcaster
