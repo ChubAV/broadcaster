@@ -56,16 +56,16 @@ add *packages:
     uv add {{ packages }}
 
 # Start monitoring stack (Prometheus + Grafana + Loki)
-monitoring:
+monitoring-start:
     docker compose -f docker-compose.monitoring.yml up -d
 
 # Stop monitoring stack
 monitoring-down:
     docker compose -f docker-compose.monitoring.yml down
 
-# Show Docker logs (follow)
-logs *args:
-    docker compose logs -f {{ args }}
+# Restart monitoring stack
+monitoring-restart:
+    docker compose -f docker-compose.monitoring.yml restart
 
 # Start Docker prod environment
 prod-start:
@@ -75,22 +75,37 @@ prod-start:
 prod-stop:
     docker compose -f docker-compose.prod.yml down
 
-# Stop Docker prod environment
+# Restart Docker prod environment
+prod-restart:
+    docker compose -f docker-compose.prod.yml restart
+
+# Hard restart Docker prod environment (stop and start)
 prod-hard-restart:
-    docker compose -f docker-compose.prod.yml down && docker compose -f docker-compose.prod.yml up -d
+    docker compose -f docker-compose.prod.yml down && \
+    docker compose -f docker-compose.prod.yml up -d
 
 # Clean stale group IDs in prod Docker (dry-run by default)
 prod-cleanup-schedules *args:
     docker compose -f docker-compose.prod.yml exec web uv run python scripts/cleanup_schedules.py {{ args }}
 
-# Hard deploy to prod environment
+# Hard deploy to prod environment (build --no-cache and deploy)
 prod-hard-deploy:
-    git pull && docker compose -f docker-compose.prod.yml build --no-cache && docker compose -f docker-compose.prod.yml down && docker compose -f docker-compose.prod.yml up -d
+    git pull && \
+    docker compose -f docker-compose.prod.yml build --no-cache && \
+    docker compose -f docker-compose.prod.yml down && \
+    docker compose -f docker-compose.prod.yml up -d
 
-# soft deploy to prod environment
+# Soft deploy to prod environment (build and deploy)
 prod-deploy:
-    git pull && docker compose -f docker-compose.prod.yml build && docker compose -f docker-compose.prod.yml down && docker compose -f docker-compose.prod.yml up -d
+    git pull && \
+    docker compose -f docker-compose.prod.yml build && \
+    docker compose -f docker-compose.prod.yml down && \
+    docker compose -f docker-compose.prod.yml up -d
 
-# soft deploy to prod environment
+# Build Docker image for prod environment
 prod-build:
     docker compose -f docker-compose.prod.yml build
+
+# Show Docker logs (follow)
+prod-logs *args:
+    docker compose -f docker-compose.prod.yml logs -f {{ args }}
