@@ -27,6 +27,7 @@
                 <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Группа</th>
                 <th class="hidden sm:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Мессенджер</th>
                 <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Статус</th>
+                <th class="hidden lg:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Task ID</th>
                 <th class="hidden md:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Ошибка</th>
                 <th class="hidden sm:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Время</th>
             </tr>
@@ -47,6 +48,7 @@
                         {% if log.status == 'ok' %}ok{% elif log.status == 'account_disconnected' %}disconnected{% else %}{{ log.status }}{% endif %}
                     </span>
                 </td>
+                <td class="hidden lg:table-cell px-3 sm:px-6 py-4 text-xs font-mono text-slate-500 max-w-xs truncate">{{ log.task_id or '-' }}</td>
                 <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500 max-w-xs truncate">{{ log.error_message or '-' }}</td>
                 <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(log.sent_at, user, '%Y-%m-%d %H:%M:%S') }}</td>
             </tr>
