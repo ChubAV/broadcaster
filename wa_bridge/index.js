@@ -629,15 +629,24 @@ app.post('/api/sessions/:id/send', async (req, res) => {
         state.lastActivity = Date.now();
         return res.json({ ok: true, trace_id: trace_id || null });
     } catch (error) {
+        const errMsg = error.message || String(error);
+
         // Detect WhatsApp rate-limit error (per-chat cooldown)
-        const rateLimitMatch = error.message?.match(/wait of (\d+) seconds? is required/i);
+        const rateLimitMatch = errMsg.match(/wait of (\d+) seconds? is required/i);
         if (rateLimitMatch) {
             const retryAfter = parseInt(rateLimitMatch[1], 10);
             console.warn(`${logPrefix} WhatsApp rate-limited for group ${group_id}: wait ${retryAfter}s`);
-            return res.status(429).json({ error: error.message, retry_after: retryAfter, trace_id: trace_id || null });
+            return res.status(429).json({ error: errMsg, retry_after: retryAfter, trace_id: trace_id || null });
         }
-        console.error(`${logPrefix} Send error: ${error.message}`);
-        return res.status(500).json({ error: error.message, trace_id: trace_id || null });
+
+        // Detect "forbidden" — account kicked/banned from group, no point retrying
+        if (/^forbidden$/i.test(errMsg)) {
+            console.warn(`${logPrefix} Forbidden for group ${group_id} (kicked/banned)`);
+            return res.status(403).json({ error: errMsg, trace_id: trace_id || null });
+        }
+
+        console.error(`${logPrefix} Send error: ${errMsg}`);
+        return res.status(500).json({ error: errMsg, trace_id: trace_id || null });
     }
 });
 
