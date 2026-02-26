@@ -1,7 +1,6 @@
 # Broadcaster — command runner
 # https://github.com/casey/just
 
-set dotenv-load
 
 # List available recipes
 default:
