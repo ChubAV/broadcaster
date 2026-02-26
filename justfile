@@ -84,6 +84,14 @@ prod-hard-restart:
 prod-cleanup-schedules *args:
     docker compose -f docker-compose.prod.yml exec web uv run python scripts/cleanup_schedules.py {{ args }}
 
-# Stop Docker prod environment
-prod-deploy:
+# Hard deploy to prod environment
+prod-hard-deploy:
     git pull && docker compose -f docker-compose.prod.yml build --no-cache && docker compose -f docker-compose.prod.yml down && docker compose -f docker-compose.prod.yml up -d
+
+# soft deploy to prod environment
+prod-deploy:
+    git pull && docker compose -f docker-compose.prod.yml build && docker compose -f docker-compose.prod.yml down && docker compose -f docker-compose.prod.yml up -d
+
+# soft deploy to prod environment
+prod-build:
+    docker compose -f docker-compose.prod.yml build
