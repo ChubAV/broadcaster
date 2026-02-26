@@ -236,7 +236,7 @@ class TelegramUserMessenger(BaseMessenger):
             return {"ok": False, "error": str(e), "no_retry": True}
         except Exception as e:
             self.log.error("send_message_error", group_id=group_id, error=str(e), exc_info=True)
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": str(e), "no_retry": True}
         finally:
             try:
                 await self.client.disconnect()

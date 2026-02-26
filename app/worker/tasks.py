@@ -132,10 +132,6 @@ def _on_send_failure(exc, task_id, args, kwargs, einfo):
 @shared_task(
     name="app.worker.tasks.send_telegram_message",
     bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=3,
-    retry_backoff_max=30,
-    max_retries=3,
     rate_limit="20/m",
 )
 def send_telegram_message(self, ad_id, group_id, account_id, schedule_id):
