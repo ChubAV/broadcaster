@@ -94,3 +94,15 @@ async def test_update_business_metrics(db_session):
     assert MESSAGES_SENT.labels(messenger="tg", status="sent")._value.get() == 3
     assert MESSAGES_SENT.labels(messenger="tg", status="failed")._value.get() == 1
     assert MESSAGES_SENT.labels(messenger="wa", status="sent")._value.get() == 2
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint(client):
+    resp = await client.get("/metrics")
+    assert resp.status_code == 200
+    body = resp.text
+    # instrumentator default metrics
+    assert "http_request" in body
+    # our custom gauges
+    assert "broadcaster_active_schedules" in body
+    assert "broadcaster_active_users" in body

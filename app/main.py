@@ -1,8 +1,11 @@
+import asyncio
+
 import structlog
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request as FastAPIRequest
 from fastapi.responses import JSONResponse
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.logging_config import setup_logging
 from app.config import Settings, get_settings
@@ -30,9 +33,23 @@ async def lifespan(app: FastAPI):
     engine = get_engine(settings.database_url)
     session_factory = get_session_factory(engine)
     init_db(session_factory)
-    # Подготавливаем фабрику UoW для использования в application-слое.
     app.state.uow_factory = create_uow_factory(session_factory)
+
+    # Start background business metrics updater
+    from app.metrics import update_business_metrics
+
+    async def _metrics_loop():
+        while True:
+            try:
+                async with session_factory() as session:
+                    await update_business_metrics(session)
+            except Exception:
+                logger.warning("metrics_update_failed", exc_info=True)
+            await asyncio.sleep(30)
+
+    metrics_task = asyncio.create_task(_metrics_loop())
     yield
+    metrics_task.cancel()
     await engine.dispose()
 
 
@@ -43,6 +60,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Broadcaster", version="0.1.0", lifespan=lifespan)
     app.add_middleware(RequestIdMiddleware)
+    Instrumentator(
+        excluded_handlers=["/health", "/metrics"],
+    ).instrument(app).expose(app, endpoint="/metrics")
     app.include_router(auth_router)
     app.include_router(ads_router)
     app.include_router(uploads_router)
