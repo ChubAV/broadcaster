@@ -9,6 +9,7 @@ from telethon import TelegramClient
 from telethon.errors import (
     ChatWriteForbiddenError,
     ForbiddenError,
+    SlowModeWaitError,
     UserBannedInChannelError,
 )
 from telethon.sessions import StringSession
@@ -227,6 +228,9 @@ class TelegramUserMessenger(BaseMessenger):
             else:
                 await self.client.send_message(int(group_id), text)
             return {"ok": True}
+        except SlowModeWaitError as e:
+            self.log.warning("send_slow_mode", group_id=group_id, wait_seconds=e.seconds, error=str(e))
+            return {"ok": False, "error": str(e), "no_retry": True}
         except (ChatWriteForbiddenError, UserBannedInChannelError, ForbiddenError) as e:
             self.log.warning("send_forbidden", group_id=group_id, error=str(e))
             return {"ok": False, "error": str(e), "no_retry": True}
