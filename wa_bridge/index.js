@@ -628,6 +628,13 @@ app.post('/api/sessions/:id/send', async (req, res) => {
         state.lastActivity = Date.now();
         return res.json({ ok: true });
     } catch (error) {
+        // Detect WhatsApp rate-limit error (per-chat cooldown)
+        const rateLimitMatch = error.message?.match(/wait of (\d+) seconds? is required/i);
+        if (rateLimitMatch) {
+            const retryAfter = parseInt(rateLimitMatch[1], 10);
+            console.warn(`[${sessionId}] WhatsApp rate-limited for group ${group_id}: wait ${retryAfter}s`);
+            return res.status(429).json({ error: error.message, retry_after: retryAfter });
+        }
         console.error(`[${sessionId}] Send error: ${error.message}`);
         return res.status(500).json({ error: error.message });
     }

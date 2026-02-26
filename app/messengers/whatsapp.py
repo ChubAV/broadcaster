@@ -60,6 +60,9 @@ class WhatsAppMessenger(BaseMessenger):
                     error_msg = response.text
                 error = f"[HTTP {response.status_code}] {error_msg}" if error_msg else f"[HTTP {response.status_code}] empty response"
                 self.log.error("send_message_error", group_id=group_id, http_status=response.status_code, error=error)
+                # WhatsApp rate-limit (429) — no point retrying, wait required
+                if response.status_code == 429:
+                    return {"ok": False, "error": error, "no_retry": True}
                 return {"ok": False, "error": error}
             self.log.debug("send_message_ok", group_id=group_id)
             return {"ok": True}
