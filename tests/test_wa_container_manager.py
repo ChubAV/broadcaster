@@ -10,6 +10,7 @@ from app.services.wa_container_manager import (
     list_worker_containers,
     start_container,
     stop_container,
+    wait_for_container_ready,
 )
 
 
@@ -203,3 +204,46 @@ def test_get_container_endpoint_not_found(mock_docker):
 
     result = get_container_endpoint(123)
     assert result is None
+
+
+@patch("app.services.wa_container_manager.time.sleep")
+@patch("app.services.wa_container_manager.httpx.get")
+def test_wait_for_container_ready_success(mock_get, mock_sleep):
+    """Container responds to /health immediately."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_get.return_value = mock_response
+
+    result = wait_for_container_ready(123, timeout=5.0, interval=0.1)
+    assert result is True
+    mock_get.assert_called_once()
+
+
+@patch("app.services.wa_container_manager.time.sleep")
+@patch("app.services.wa_container_manager.time.monotonic")
+@patch("app.services.wa_container_manager.httpx.get")
+def test_wait_for_container_ready_timeout(mock_get, mock_monotonic, mock_sleep):
+    """Container never responds — times out."""
+    import httpx
+    mock_get.side_effect = httpx.ConnectError("refused")
+    # First call sets deadline, second call is past timeout
+    mock_monotonic.side_effect = [0.0, 31.0]
+
+    result = wait_for_container_ready(123, timeout=30.0)
+    assert result is False
+
+
+@patch("app.services.wa_container_manager.time.sleep")
+@patch("app.services.wa_container_manager.time.monotonic")
+@patch("app.services.wa_container_manager.httpx.get")
+def test_wait_for_container_ready_retries_then_succeeds(mock_get, mock_monotonic, mock_sleep):
+    """Container fails twice, then responds."""
+    import httpx
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_get.side_effect = [httpx.ConnectError("refused"), httpx.ConnectError("refused"), mock_response]
+    mock_monotonic.side_effect = [0.0, 1.0, 2.0, 3.0]
+
+    result = wait_for_container_ready(123, timeout=10.0, interval=1.0)
+    assert result is True
+    assert mock_get.call_count == 3

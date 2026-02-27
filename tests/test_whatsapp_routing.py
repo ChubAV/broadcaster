@@ -44,15 +44,18 @@ class TestEnsureWaContainer:
         result = ensure_wa_container(10)
         assert result == "http://wa-worker-10:3000"
 
+    @patch("app.services.wa_container_manager.wait_for_container_ready")
     @patch("app.services.wa_container_manager.start_container")
     @patch("app.messengers.whatsapp.get_wa_endpoint")
-    def test_starts_container_when_not_registered(self, mock_get_endpoint, mock_start):
+    def test_starts_container_when_not_registered(self, mock_get_endpoint, mock_start, mock_wait):
         mock_get_endpoint.return_value = None
         mock_start.return_value = "http://wa-worker-10:3000"
+        mock_wait.return_value = True
 
         result = ensure_wa_container(10)
         assert result == "http://wa-worker-10:3000"
         mock_start.assert_called_once_with(10)
+        mock_wait.assert_called_once_with(10)
 
     @patch("app.services.wa_container_manager.start_container")
     @patch("app.messengers.whatsapp.get_wa_endpoint")

@@ -23,12 +23,15 @@ def get_wa_endpoint(account_id: int) -> str | None:
 
 
 def ensure_wa_container(account_id: int) -> str | None:
-    """Start wa-worker container if not running, return endpoint."""
-    from app.services.wa_container_manager import start_container
+    """Start wa-worker container if not running, wait for it to be ready, return endpoint."""
+    from app.services.wa_container_manager import start_container, wait_for_container_ready
     endpoint = get_wa_endpoint(account_id)
     if endpoint:
         return endpoint
-    return start_container(account_id)
+    endpoint = start_container(account_id)
+    if endpoint and wait_for_container_ready(account_id):
+        return endpoint
+    return endpoint
 
 
 # Module-level shared HTTP client (created lazily, recreated on event loop change)

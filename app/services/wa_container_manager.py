@@ -1,3 +1,6 @@
+import time
+
+import httpx
 import structlog
 import docker
 from docker.errors import NotFound, APIError
@@ -138,3 +141,30 @@ def get_container_endpoint(account_id: int) -> str | None:
 
 def _container_endpoint(container_name: str) -> str:
     return f"http://{container_name}:{DEFAULT_PORT}"
+
+
+def wait_for_container_ready(
+    account_id: int,
+    *,
+    timeout: float = 30.0,
+    interval: float = 1.0,
+) -> bool:
+    """Poll container /health endpoint until it responds or timeout."""
+    endpoint = _container_endpoint(get_container_name(account_id))
+    url = f"{endpoint}/health"
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        try:
+            resp = httpx.get(url, timeout=3.0)
+            if resp.status_code == 200:
+                logger.info("container_ready", account_id=account_id)
+                return True
+        except httpx.ConnectError:
+            pass
+        except Exception as e:
+            logger.debug("container_health_check_failed", account_id=account_id, error=str(e))
+        time.sleep(interval)
+
+    logger.warning("container_ready_timeout", account_id=account_id, timeout=timeout)
+    return False
