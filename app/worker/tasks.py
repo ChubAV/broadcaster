@@ -310,3 +310,120 @@ async def _sync_wa_groups_async(account_id: int):
 def sync_wa_groups(self, account_id: int):
     """Background task: poll bridge until group sync completes, save to DB."""
     asyncio.run(_sync_wa_groups_async(account_id))
+
+
+@shared_task(name="app.worker.tasks.manage_wa_containers")
+def manage_wa_containers():
+    """Check Redis queues and start/cleanup wa-worker containers."""
+    import redis as redis_lib
+    from app.services.wa_container_manager import (
+        start_container,
+        cleanup_exited_containers,
+    )
+
+    settings = get_settings()
+    r = redis_lib.from_url(settings.redis_url)
+
+    try:
+        active_accounts = r.smembers("wa:active_accounts")
+
+        for raw_id in active_accounts:
+            account_id = int(raw_id)
+            queue_key = f"wa:queue:{account_id}"
+            queue_len = r.llen(queue_key)
+
+            if queue_len > 0:
+                endpoint = start_container(account_id)
+                if endpoint:
+                    r.set(f"wa:endpoint:{account_id}", endpoint, ex=420)
+                    logger.info("container_ensured", account_id=account_id, queue_len=queue_len)
+            else:
+                r.srem("wa:active_accounts", account_id)
+                r.delete(f"wa:endpoint:{account_id}")
+
+        cleanup_exited_containers()
+
+    except Exception as e:
+        logger.error("manage_wa_containers_error", error=str(e), exc_info=True)
+    finally:
+        r.close()
+
+
+@shared_task(name="app.worker.tasks.process_wa_results")
+def process_wa_results():
+    """Read send results from Redis and write SendLog entries to DB."""
+    import json
+    import redis as redis_lib
+
+    settings = get_settings()
+    r = redis_lib.from_url(settings.redis_url)
+
+    try:
+        results = []
+        for _ in range(100):
+            raw = r.lpop("wa:results")
+            if not raw:
+                break
+            try:
+                results.append(json.loads(raw))
+            except json.JSONDecodeError as e:
+                logger.error("result_parse_error", raw=str(raw)[:200], error=str(e))
+
+        if not results:
+            return
+
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        loop.run_until_complete(_process_results_async(results))
+
+    except Exception as e:
+        logger.error("process_wa_results_error", error=str(e), exc_info=True)
+    finally:
+        r.close()
+
+
+async def _process_results_async(results: list[dict]):
+    """Write batch of results to database."""
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    session_factory = get_session_factory(engine)
+
+    async with session_factory() as session:
+        for result in results:
+            try:
+                send_log = SendLog(
+                    user_id=result["user_id"],
+                    schedule_id=result.get("schedule_id"),
+                    ad_id=result.get("ad_id"),
+                    group_id=result.get("group_id"),
+                    task_id=result.get("task_id"),
+                    status=result["status"],
+                    error_message=result.get("error_message"),
+                    messenger_type="wa",
+                    ad_title=result.get("ad_title"),
+                    ad_text=result.get("ad_text"),
+                    ad_images=result.get("ad_images"),
+                    group_name=result.get("group_name"),
+                )
+                session.add(send_log)
+
+                group_id = result.get("group_id")
+                if group_id:
+                    group = await session.get(Group, group_id)
+                    if group:
+                        if result.get("no_retry"):
+                            group.last_error = result.get("error_message")
+                            group.error_at = datetime.now(timezone.utc)
+                        elif result["status"] == "ok":
+                            group.last_error = None
+                            group.error_at = None
+
+            except Exception as e:
+                logger.error("result_write_error", task_id=result.get("task_id"), error=str(e))
+
+        await session.commit()
+        logger.info("results_processed", count=len(results))
+
+    await engine.dispose()
