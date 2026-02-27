@@ -495,30 +495,6 @@ async function sendMessage(task) {
 
 let consumerRunning = false;
 let lastTaskTime = Date.now(); // Track last task for idle shutdown
-let idleShutdownTimer = null;
-
-function resetIdleTimer() {
-    lastTaskTime = Date.now();
-    if (idleShutdownTimer) {
-        clearTimeout(idleShutdownTimer);
-        idleShutdownTimer = null;
-    }
-}
-
-function scheduleIdleShutdown() {
-    if (idleShutdownTimer) return;
-    idleShutdownTimer = setTimeout(() => {
-        const elapsed = (Date.now() - lastTaskTime) / 1000;
-        if (elapsed >= IDLE_SHUTDOWN_SEC) {
-            log.info({ accountId: ACCOUNT_ID, idleSec: Math.round(elapsed) }, 'idle_shutdown');
-            gracefulShutdown('idle');
-        } else {
-            // Re-schedule for remaining time
-            idleShutdownTimer = null;
-            scheduleIdleShutdown();
-        }
-    }, Math.max(1000, (IDLE_SHUTDOWN_SEC - (Date.now() - lastTaskTime) / 1000) * 1000));
-}
 
 async function publishResult(task, status, errorMessage = null, noRetry = false) {
     const result = {
@@ -578,8 +554,6 @@ async function processTask(task) {
     try {
         await sendMessage(task);
         await publishResult(task, 'ok');
-        // Update heartbeat
-        await redis.set(HEARTBEAT_KEY, Date.now().toString());
     } catch (err) {
         const errMsg = err.message || String(err);
         log.error({ accountId: ACCOUNT_ID, taskId: task_id, err: errMsg, retry: retryCount }, 'task_send_failed');
@@ -619,8 +593,6 @@ async function startConsumer() {
     consumerRunning = true;
     log.info({ accountId: ACCOUNT_ID, queue: QUEUE_KEY }, 'consumer_started');
 
-    scheduleIdleShutdown();
-
     while (consumerRunning) {
         try {
             const result = await redisSub.blpop(QUEUE_KEY, BLPOP_TIMEOUT);
@@ -637,7 +609,7 @@ async function startConsumer() {
             }
 
             const [, rawTask] = result; // [key, value]
-            resetIdleTimer();
+            lastTaskTime = Date.now();
 
             let task;
             try {
@@ -649,9 +621,9 @@ async function startConsumer() {
 
             // Check if task has a delay (retry scheduling)
             if (task._delay_until && Date.now() < task._delay_until) {
-                const waitMs = task._delay_until - Date.now();
-                log.info({ accountId: ACCOUNT_ID, taskId: task.task_id, waitMs }, 'task_delay_wait');
-                await new Promise(r => setTimeout(r, waitMs));
+                // Not ready yet — re-enqueue at tail and continue
+                await redis.rpush(QUEUE_KEY, rawTask);
+                continue;
             }
 
             await processTask(task);
@@ -679,12 +651,6 @@ async function gracefulShutdown(reason = 'unknown') {
     consumerRunning = false;
 
     log.info({ accountId: ACCOUNT_ID, reason }, 'shutdown_start');
-
-    // Clear idle timer
-    if (idleShutdownTimer) {
-        clearTimeout(idleShutdownTimer);
-        idleShutdownTimer = null;
-    }
 
     // Clean up Redis keys
     try {
