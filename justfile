@@ -109,3 +109,16 @@ prod-build:
 # Show Docker logs (follow)
 prod-logs *args:
     docker compose -f docker-compose.prod.yml logs -f {{ args }}
+
+# Build wa-worker Docker image
+wa-worker-build:
+    docker build -t broadcaster-wa-worker:latest ./wa_worker
+
+# List running wa-worker containers
+wa-workers:
+    docker ps --filter "label=broadcaster.role=wa-worker" --format "table {{{{.Names}}\t{{{{.Status}}\t{{{{.Ports}}"
+
+# Stop all wa-worker containers
+wa-workers-stop:
+    docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop
+    docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm
