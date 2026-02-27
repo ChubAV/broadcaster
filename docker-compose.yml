@@ -26,6 +26,8 @@ services:
     container_name: web-broadcaster
     ports:
       - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       db:
         condition: service_healthy
