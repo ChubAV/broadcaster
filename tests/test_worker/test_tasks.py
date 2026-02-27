@@ -228,7 +228,6 @@ async def test_check_schedules_dispatches(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.send_whatsapp_message", MagicMock()), \
          patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
         await check_schedules_async(db_session)
 
@@ -254,7 +253,6 @@ async def test_check_schedules_skips_inactive(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.send_whatsapp_message", MagicMock()), \
          patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
         await check_schedules_async(db_session)
 
@@ -271,29 +269,10 @@ async def test_check_schedules_skips_future(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.send_whatsapp_message", MagicMock()), \
          patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
         await check_schedules_async(db_session)
 
     assert len(dispatched) == 0
-
-
-@pytest.mark.asyncio
-async def test_check_schedules_dispatches_wa_to_session_queue(db_session):
-    """WhatsApp schedules dispatch to per-session queues."""
-    user, ad, account, group, schedule = await create_test_data(db_session, account_type="wa")
-
-    dispatched = []
-    mock_wa = MagicMock()
-    mock_wa.apply_async = lambda *a, **kw: dispatched.append(("wa", kw.get("queue")))
-
-    with patch("app.worker.tasks.send_whatsapp_message", mock_wa), \
-         patch("app.worker.tasks.send_telegram_message", MagicMock()), \
-         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
-        await check_schedules_async(db_session)
-
-    assert len(dispatched) == 1
-    assert dispatched[0] == ("wa", "whatsapp")
 
 
 @pytest.mark.asyncio
@@ -307,7 +286,6 @@ async def test_check_schedules_skips_billing_limited(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.send_whatsapp_message", MagicMock()), \
          patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(False, "limit reached"))):
         await check_schedules_async(db_session)
 
@@ -338,7 +316,6 @@ async def test_check_schedules_uses_schedule_timezone(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.send_whatsapp_message", MagicMock()), \
          patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
         await check_schedules_async(db_session)
 

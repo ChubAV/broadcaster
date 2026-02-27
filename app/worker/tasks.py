@@ -170,39 +170,6 @@ def send_telegram_message(self, ad_id, group_id, account_id, schedule_id):
 send_telegram_message.on_failure = _on_send_failure
 
 
-_WA_RETRY_DELAYS = [60, 180, 300]  # 1 min, 3 min, 5 min
-
-
-@shared_task(
-    name="app.worker.tasks.send_whatsapp_message",
-    bind=True,
-    max_retries=3,
-    rate_limit="7/m",
-)
-def send_whatsapp_message(self, ad_id, group_id, account_id, schedule_id):
-    """Send a single WhatsApp message. Retries with delays: 1m, 3m, 5m."""
-    task_id = self.request.id
-    logger.info(
-        "celery_task_start",
-        task_name=self.name,
-        task_id=task_id,
-        queue=getattr(self.request, "delivery_info", {}).get("routing_key"),
-    )
-    structlog.contextvars.bind_contextvars(task_id=task_id)
-    try:
-        asyncio.run(_send_message(ad_id, group_id, account_id, schedule_id, task_id=task_id))
-    except Exception as exc:
-        retry_num = self.request.retries
-        countdown = _WA_RETRY_DELAYS[retry_num] if retry_num < len(_WA_RETRY_DELAYS) else _WA_RETRY_DELAYS[-1]
-        logger.warning("wa_task_retry", retry=retry_num + 1, countdown=countdown, error=str(exc))
-        raise self.retry(exc=exc, countdown=countdown)
-    finally:
-        structlog.contextvars.unbind_contextvars("task_id")
-
-
-send_whatsapp_message.on_failure = _on_send_failure
-
-
 @shared_task(name="app.worker.tasks.check_schedules", bind=True)
 def check_schedules(self):
     """Celery task: check all due schedules and dispatch individual send tasks."""
