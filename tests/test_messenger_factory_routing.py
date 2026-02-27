@@ -2,36 +2,33 @@ import pytest
 from unittest.mock import MagicMock
 
 from app.services.messenger_factory import create_messenger
+from app.messengers.whatsapp import WhatsAppMessenger
 
 
-def test_create_whatsapp_messenger_uses_routing():
-    """WhatsApp messenger gets bridge URL based on account.id % len(bridges)."""
+def test_create_whatsapp_messenger_uses_session_id():
+    """WhatsApp messenger is created with session_id=str(account.id), no bridge_url."""
     account = MagicMock()
     account.type = "wa"
     account.id = 5
     account.credentials = ""
 
     settings = MagicMock()
-    settings.wa_bridge_urls = [
-        "http://bridge-0:3000",
-        "http://bridge-1:3000",
-        "http://bridge-2:3000",
-    ]
 
     messenger = create_messenger(account, settings)
-    # id=5 % 3 = 2 → bridge-2
-    assert messenger.bridge_url == "http://bridge-2:3000"
+    assert isinstance(messenger, WhatsAppMessenger)
     assert messenger.session_id == "5"
+    assert messenger._bridge_url is None
 
 
-def test_create_whatsapp_single_bridge():
-    """With a single bridge, all sessions go to it."""
+def test_create_whatsapp_single_account():
+    """Each WA account gets its own messenger with matching session_id."""
     account = MagicMock()
     account.type = "wa"
     account.id = 42
 
     settings = MagicMock()
-    settings.wa_bridge_urls = ["http://bridge:3000"]
 
     messenger = create_messenger(account, settings)
-    assert messenger.bridge_url == "http://bridge:3000"
+    assert isinstance(messenger, WhatsAppMessenger)
+    assert messenger.session_id == "42"
+    assert messenger._bridge_url is None

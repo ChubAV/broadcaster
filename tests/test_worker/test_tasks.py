@@ -227,8 +227,12 @@ async def test_check_schedules_dispatches(db_session):
     mock_tg = MagicMock()
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
+    mock_dispatch_settings = MagicMock()
+    mock_dispatch_settings.redis_url = "redis://localhost:6379/0"
+
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
+         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))), \
+         patch("app.worker.tasks.get_settings", return_value=mock_dispatch_settings):
         await check_schedules_async(db_session)
 
     # Should have dispatched one task to telegram queue
@@ -315,8 +319,12 @@ async def test_check_schedules_uses_schedule_timezone(db_session):
     mock_tg = MagicMock()
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
+    mock_dispatch_settings = MagicMock()
+    mock_dispatch_settings.redis_url = "redis://localhost:6379/0"
+
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
+         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))), \
+         patch("app.worker.tasks.get_settings", return_value=mock_dispatch_settings):
         await check_schedules_async(db_session)
 
     assert len(dispatched) == 1

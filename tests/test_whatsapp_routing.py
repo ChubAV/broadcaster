@@ -8,7 +8,7 @@ from app.messengers.whatsapp import get_wa_endpoint, ensure_wa_container, WhatsA
 class TestGetWaEndpoint:
     """Tests for Redis-based endpoint lookup."""
 
-    @patch("app.messengers.whatsapp.get_settings")
+    @patch("app.config.get_settings")
     @patch("redis.from_url")
     def test_returns_endpoint_when_registered(self, mock_from_url, mock_settings):
         mock_settings.return_value.redis_url = "redis://localhost:6379/0"
@@ -21,7 +21,7 @@ class TestGetWaEndpoint:
         mock_redis.get.assert_called_once_with("wa:endpoint:42")
         mock_redis.close.assert_called_once()
 
-    @patch("app.messengers.whatsapp.get_settings")
+    @patch("app.config.get_settings")
     @patch("redis.from_url")
     def test_returns_none_when_not_registered(self, mock_from_url, mock_settings):
         mock_settings.return_value.redis_url = "redis://localhost:6379/0"
@@ -44,7 +44,7 @@ class TestEnsureWaContainer:
         result = ensure_wa_container(10)
         assert result == "http://wa-worker-10:3000"
 
-    @patch("app.messengers.whatsapp.start_container")
+    @patch("app.services.wa_container_manager.start_container")
     @patch("app.messengers.whatsapp.get_wa_endpoint")
     def test_starts_container_when_not_registered(self, mock_get_endpoint, mock_start):
         mock_get_endpoint.return_value = None
@@ -54,7 +54,7 @@ class TestEnsureWaContainer:
         assert result == "http://wa-worker-10:3000"
         mock_start.assert_called_once_with(10)
 
-    @patch("app.messengers.whatsapp.start_container")
+    @patch("app.services.wa_container_manager.start_container")
     @patch("app.messengers.whatsapp.get_wa_endpoint")
     def test_returns_none_when_start_fails(self, mock_get_endpoint, mock_start):
         mock_get_endpoint.return_value = None
