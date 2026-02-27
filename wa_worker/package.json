@@ -1,0 +1,17 @@
+{
+  "name": "wa-worker",
+  "version": "1.0.0",
+  "description": "WhatsApp per-account worker with Redis queue",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.21",
+    "axios": "^1.7.0",
+    "express": "^4.18.0",
+    "ioredis": "^5.4.0",
+    "pino": "^9.0.0",
+    "qrcode": "^1.5.0"
+  }
+}
