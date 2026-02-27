@@ -23,6 +23,13 @@ class DispatchTask:
     group_id: int
     account_id: int
     schedule_id: int
+    # WA-specific fields (populated for type="wa")
+    user_id: int | None = None
+    ad_text: str | None = None
+    ad_title: str | None = None
+    ad_images: list[str] | None = None
+    group_external_id: str | None = None
+    group_name: str | None = None
 
 
 async def collect_due_schedules(
@@ -82,15 +89,24 @@ async def collect_due_schedules(
             continue
 
         for group_id in schedule.group_ids or []:
-            tasks_to_dispatch.append(
-                DispatchTask(
-                    type=account.type,
-                    ad_id=schedule.ad_id,
-                    group_id=group_id,
-                    account_id=schedule.account_id,
-                    schedule_id=schedule.id,
-                )
+            task = DispatchTask(
+                type=account.type,
+                ad_id=schedule.ad_id,
+                group_id=group_id,
+                account_id=schedule.account_id,
+                schedule_id=schedule.id,
             )
+            # Populate WA-specific fields for Redis per-account queues
+            if account.type == "wa":
+                group = await session.get(Group, group_id)
+                if group:
+                    task.user_id = ad.user_id
+                    task.ad_text = ad.text
+                    task.ad_title = ad.title
+                    task.ad_images = ad.images
+                    task.group_external_id = group.group_external_id
+                    task.group_name = group.name
+            tasks_to_dispatch.append(task)
 
         schedule.next_run_at = compute_next_run_at(
             days_of_week=schedule.days_of_week,

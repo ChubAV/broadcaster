@@ -28,37 +28,64 @@ from app.application.scheduling.use_cases import (
 logger = structlog.get_logger(__name__)
 
 
-async def dispatch_send_tasks(
-    tasks_to_dispatch: list[dict],
-) -> None:
-    """Dispatch individual Celery tasks for each send.
+async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
+    """Dispatch tasks: Telegram to Celery queue, WhatsApp to Redis per-account queues."""
+    import json
+    import redis as redis_lib
+    from uuid import uuid4
 
-    WA tasks are grouped by session_id and dispatched together so they
-    appear consecutively in the FIFO queue — the bridge keeps the Chromium
-    session loaded while processing the batch.
-    """
-    from collections import defaultdict
+    settings = get_settings()
 
-    # Group WA tasks by session for affinity ordering
-    wa_by_session: dict[int, list[dict]] = defaultdict(list)
-    tg_tasks: list[dict] = []
+    tg_tasks: list[DispatchTask] = []
+    wa_tasks_by_account: dict[int, list[DispatchTask]] = {}
 
-    for task_info in tasks_to_dispatch:
-        if task_info["type"] == "wa":
-            wa_by_session[task_info["account_id"]].append(task_info)
-        else:
-            tg_tasks.append(task_info)
+    for task in tasks_to_dispatch:
+        if task.type == "tg_user":
+            tg_tasks.append(task)
+        elif task.type == "wa":
+            wa_tasks_by_account.setdefault(task.account_id, []).append(task)
 
-    # Dispatch TG tasks
-    for task_info in tg_tasks:
-        args = [task_info["ad_id"], task_info["group_id"], task_info["account_id"], task_info["schedule_id"]]
-        send_telegram_message.apply_async(args=args, queue="telegram")
+    # Dispatch Telegram tasks via Celery (unchanged)
+    for task in tg_tasks:
+        send_telegram_message.apply_async(
+            args=[task.ad_id, task.group_id, task.account_id, task.schedule_id],
+            queue="telegram",
+        )
 
-    # Dispatch WA tasks grouped by session (FIFO ordering = session affinity)
-    for session_id, session_tasks in wa_by_session.items():
-        for task_info in session_tasks:
-            args = [task_info["ad_id"], task_info["group_id"], task_info["account_id"], task_info["schedule_id"]]
-            send_whatsapp_message.apply_async(args=args, queue="whatsapp")
+    # Dispatch WhatsApp tasks to Redis per-account queues
+    if wa_tasks_by_account:
+        r = redis_lib.from_url(settings.redis_url)
+        try:
+            pipe = r.pipeline()
+            for account_id, tasks in wa_tasks_by_account.items():
+                queue_key = f"wa:queue:{account_id}"
+                for task in tasks:
+                    payload = json.dumps({
+                        "task_id": str(uuid4()),
+                        "ad_id": task.ad_id,
+                        "group_id": task.group_id,
+                        "account_id": task.account_id,
+                        "schedule_id": task.schedule_id,
+                        "user_id": task.user_id,
+                        "ad_text": task.ad_text,
+                        "ad_title": task.ad_title,
+                        "ad_images": task.ad_images,
+                        "group_external_id": task.group_external_id,
+                        "group_name": task.group_name,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    pipe.rpush(queue_key, payload)
+                pipe.sadd("wa:active_accounts", account_id)
+            pipe.execute()
+            logger.info("wa_tasks_dispatched",
+                       account_count=len(wa_tasks_by_account),
+                       total_tasks=sum(len(t) for t in wa_tasks_by_account.values()))
+        finally:
+            r.close()
+
+    total = len(tg_tasks) + sum(len(t) for t in wa_tasks_by_account.values())
+    logger.info("send_tasks_dispatched", total=total, tg=len(tg_tasks),
+               wa=sum(len(t) for t in wa_tasks_by_account.values()))
 
 
 async def check_schedules_async(session: AsyncSession):
@@ -71,17 +98,7 @@ async def check_schedules_async(session: AsyncSession):
     )
     logger.info("check_schedules_found", now=now.isoformat(), due_count=len(tasks))
     if tasks:
-        payloads = [
-            {
-                "type": task.type,
-                "ad_id": task.ad_id,
-                "group_id": task.group_id,
-                "account_id": task.account_id,
-                "schedule_id": task.schedule_id,
-            }
-            for task in tasks
-        ]
-        await dispatch_send_tasks(payloads)
+        await dispatch_send_tasks(tasks)
         logger.info("send_tasks_dispatched", count=len(tasks))
     else:
         logger.info("no_tasks_to_dispatch")
@@ -218,14 +235,13 @@ async def _sync_wa_groups_async(account_id: int):
     engine = get_engine(settings.database_url)
     session_factory = get_session_factory(engine)
 
-    from app.messengers.whatsapp import WhatsAppMessenger, get_bridge_url
+    from app.messengers.whatsapp import WhatsAppMessenger
 
     POLL_INTERVAL = 15  # seconds
     MAX_POLLS = 40  # 40 * 15s = 10 minutes max
 
     try:
-        bridge_url = get_bridge_url(account_id, settings.wa_bridge_urls)
-        messenger = WhatsAppMessenger(bridge_url=bridge_url, session_id=str(account_id))
+        messenger = WhatsAppMessenger(session_id=str(account_id))
 
         for attempt in range(MAX_POLLS):
             sync_data = await messenger.get_sync_status()

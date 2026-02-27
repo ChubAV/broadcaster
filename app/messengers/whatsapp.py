@@ -9,9 +9,26 @@ from app.messengers.base import BaseMessenger
 logger = structlog.get_logger(__name__)
 
 
-def get_bridge_url(session_id: int, bridge_urls: list[str]) -> str:
-    """Consistent routing: same session always goes to same bridge."""
-    return bridge_urls[session_id % len(bridge_urls)]
+def get_wa_endpoint(account_id: int) -> str | None:
+    """Get the HTTP endpoint for a wa-worker container from Redis."""
+    import redis as redis_lib
+    from app.config import get_settings
+    settings = get_settings()
+    r = redis_lib.from_url(settings.redis_url)
+    try:
+        endpoint = r.get(f"wa:endpoint:{account_id}")
+        return endpoint.decode() if endpoint else None
+    finally:
+        r.close()
+
+
+def ensure_wa_container(account_id: int) -> str | None:
+    """Start wa-worker container if not running, return endpoint."""
+    from app.services.wa_container_manager import start_container
+    endpoint = get_wa_endpoint(account_id)
+    if endpoint:
+        return endpoint
+    return start_container(account_id)
 
 
 # Module-level shared HTTP client (created lazily, recreated on event loop change)
@@ -37,10 +54,19 @@ def get_http_client() -> httpx.AsyncClient:
 
 
 class WhatsAppMessenger(BaseMessenger):
-    def __init__(self, bridge_url: str, session_id: str):
-        self.bridge_url = bridge_url.rstrip("/")
+    def __init__(self, bridge_url: str | None = None, session_id: str = ""):
         self.session_id = session_id
+        self._bridge_url = bridge_url.rstrip("/") if bridge_url else None
         self.log = logger.bind(messenger="whatsapp", session_id=session_id)
+
+    @property
+    def bridge_url(self) -> str:
+        if self._bridge_url:
+            return self._bridge_url
+        endpoint = ensure_wa_container(int(self.session_id))
+        if not endpoint:
+            raise RuntimeError(f"Cannot start wa-worker for account {self.session_id}")
+        return endpoint.rstrip("/")
 
     def _url(self, path: str) -> str:
         return f"{self.bridge_url}/api/sessions/{self.session_id}/{path}"
