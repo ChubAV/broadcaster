@@ -42,6 +42,7 @@ async def schedules_partial(
     request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -62,8 +63,9 @@ async def schedules_partial(
     rows = list(result)
     has_next = len(rows) > limit
     schedules = _build_schedule_items(rows[:limit], user, tz)
+    template = "schedules/partial_cards.html" if layout == "cards" else "schedules/partial_rows.html"
     return templates.TemplateResponse(
-        "schedules/partial_rows.html",
+        template,
         {
             "request": request,
             "user": user,

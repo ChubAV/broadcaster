@@ -3,14 +3,58 @@
 {% from "includes/icons.html" import icon_pause, icon_play, icon_edit, icon_delete %}
 {% block title %}Расписания - Broadcaster{% endblock %}
 {% block content %}
-<div class="flex flex-wrap justify-between items-center gap-4 mb-6">
-    <h1 class="text-2xl font-bold tracking-tight text-slate-900">Расписания</h1>
-    <a href="/schedules/new" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200">Создать расписание</a>
+<div class="flex flex-col sm:flex-row sm:flex-wrap sm:justify-between sm:items-center gap-3 sm:gap-4 mb-4 sm:mb-6">
+    <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Расписания</h1>
+    <a href="/schedules/new" class="rounded-lg bg-primary-600 px-3 py-2 sm:px-4 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200 text-center touch-manipulation">Создать расписание</a>
 </div>
 
 {% if schedules %}
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    <div class="overflow-x-auto">
+    {# Mobile: карточки вместо таблицы #}
+    {% set day_names = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'} %}
+    <ul id="schedules-cards-list" class="sm:hidden divide-y divide-slate-100">
+        {% for item in schedules %}
+        <li class="flex items-start gap-3 p-4 bg-white">
+            <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium text-slate-900 truncate" title="{{ item.ad_title }}">{{ item.ad_title }}</p>
+                <div class="flex flex-wrap items-center gap-2 mt-1.5">
+                    <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-semibold {% if item.schedule.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
+                        {{ "Активно" if item.schedule.is_active else "Неактивно" }}
+                    </span>
+                    {% if item.messenger_type %}
+                    <span class="inline-flex items-center" title="{{ 'Telegram' if item.messenger_type == 'tg_user' else 'WhatsApp' if item.messenger_type == 'wa' else item.messenger_type }}">{{ messenger_icon(item.messenger_type, size='h-4 w-4', show_label=false) }}</span>
+                    {% endif %}
+                    <span class="text-xs text-slate-500">{{ item.schedule.group_ids|length }} групп</span>
+                </div>
+                <div class="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-xs text-slate-500">
+                    <span>{% for d in item.schedule.days_of_week %}{{ day_names.get(d, d) }}{% if not loop.last %}, {% endif %}{% endfor %}</span>
+                    <span>{% for t in item.schedule.times_of_day %}{{ t }}{% if not loop.last %}, {% endif %}{% endfor %}</span>
+                </div>
+                {% if item.next_run_local %}
+                <p class="text-xs text-slate-400 mt-0.5">След. запуск: {{ item.next_run_local.strftime('%d.%m %H:%M') }}</p>
+                {% endif %}
+            </div>
+            <div class="flex shrink-0 items-center gap-0.5">
+                <form method="POST" action="/schedules/{{ item.schedule.id }}/toggle" class="inline">
+                    <button type="submit" class="p-2.5 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors touch-manipulation" title="{{ 'Пауза' if item.schedule.is_active else 'Возобновить' }}" aria-label="{{ 'Пауза' if item.schedule.is_active else 'Возобновить' }}">
+                        {% if item.schedule.is_active %}{{ icon_pause() }}{% else %}{{ icon_play() }}{% endif %}
+                    </button>
+                </form>
+                <a href="/schedules/{{ item.schedule.id }}/edit" class="p-2.5 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors touch-manipulation" title="Изменить" aria-label="Изменить">{{ icon_edit() }}</a>
+                <form method="POST" action="/schedules/{{ item.schedule.id }}/delete" class="inline">
+                    <button type="submit" class="p-2.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors touch-manipulation" title="Удалить" aria-label="Удалить" onclick="return confirm('Удалить это расписание?')">{{ icon_delete() }}</button>
+                </form>
+            </div>
+        </li>
+        {% endfor %}
+        {% if has_next %}
+        <li hx-get="/schedules/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="p-4 text-center text-slate-500 text-sm">
+            Загрузка...
+        </li>
+        {% endif %}
+    </ul>
+    {# Desktop: таблица #}
+    <div class="hidden sm:block overflow-x-auto">
     <table class="min-w-full divide-y divide-slate-200">
         <thead class="bg-slate-50/80">
             <tr>
@@ -53,13 +97,13 @@
                 <td class="px-3 sm:px-6 py-4 text-right">
                     <div class="inline-flex items-center gap-1">
                         <form method="POST" action="/schedules/{{ item.schedule.id }}/toggle" class="inline">
-                            <button type="submit" class="p-1.5 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors" title="{{ 'Пауза' if item.schedule.is_active else 'Возобновить' }}">
+                            <button type="submit" class="p-1.5 sm:p-2 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors" title="{{ 'Пауза' if item.schedule.is_active else 'Возобновить' }}">
                                 {% if item.schedule.is_active %}{{ icon_pause() }}{% else %}{{ icon_play() }}{% endif %}
                             </button>
                         </form>
-                        <a href="/schedules/{{ item.schedule.id }}/edit" class="p-1.5 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors" title="Изменить">{{ icon_edit() }}</a>
+                        <a href="/schedules/{{ item.schedule.id }}/edit" class="p-1.5 sm:p-2 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors" title="Изменить">{{ icon_edit() }}</a>
                         <form method="POST" action="/schedules/{{ item.schedule.id }}/delete" class="inline">
-                            <button type="submit" class="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors" title="Удалить" onclick="return confirm('Удалить это расписание?')">{{ icon_delete() }}</button>
+                            <button type="submit" class="p-1.5 sm:p-2 rounded-lg text-red-600 hover:bg-red-50 transition-colors" title="Удалить" onclick="return confirm('Удалить это расписание?')">{{ icon_delete() }}</button>
                         </form>
                     </div>
                 </td>
@@ -75,9 +119,9 @@
     </div>
 </div>
 {% else %}
-<div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-8 text-center">
+<div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6 sm:p-8 text-center">
     <p class="text-slate-500 mb-4">Расписаний пока нет. Создайте расписание для автоматической отправки объявлений.</p>
-    <a href="/schedules/new" class="inline-flex rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200">Создать расписание</a>
+    <a href="/schedules/new" class="inline-flex rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200 touch-manipulation">Создать расписание</a>
 </div>
 {% endif %}
 {% endblock %}
