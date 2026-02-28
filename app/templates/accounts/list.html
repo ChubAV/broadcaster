@@ -87,10 +87,6 @@
             <tr hx-get="/accounts/partial?offset={{ next_offset }}&limit=30" hx-trigger="revealed" hx-swap="outerHTML" class="htmx-indicator">
                 <td colspan="5" class="px-3 sm:px-6 py-8 text-center text-slate-500 text-sm">Загрузка...</td>
             </tr>
-            {% else %}
-            <tr class="load-more-done">
-                <td colspan="5" class="px-3 sm:px-6 py-4 text-center text-slate-500 text-sm">Показаны все</td>
-            </tr>
             {% endif %}
         </tbody>
     </table>
