@@ -1,5 +1,12 @@
 import pytest
-from app.services.auth_service import hash_password, verify_password, create_access_token, decode_access_token
+from app.services.auth_service import (
+    hash_password,
+    verify_password,
+    create_access_token,
+    decode_access_token,
+    create_verification_token,
+    decode_verification_token,
+)
 
 
 def test_hash_and_verify_password():
@@ -17,4 +24,29 @@ def test_create_and_decode_token():
 
 def test_decode_invalid_token():
     payload = decode_access_token("invalid-token", secret_key="test-secret")
+    assert payload is None
+
+
+def test_create_and_decode_verification_token():
+    token = create_verification_token(
+        email="user@test.com", secret_key="test-secret"
+    )
+    payload = decode_verification_token(token, secret_key="test-secret")
+    assert payload is not None
+    assert payload["email"] == "user@test.com"
+    assert payload["verified"] is False
+
+
+def test_create_and_decode_verified_token():
+    token = create_verification_token(
+        email="user@test.com", secret_key="test-secret", verified=True
+    )
+    payload = decode_verification_token(token, secret_key="test-secret")
+    assert payload is not None
+    assert payload["email"] == "user@test.com"
+    assert payload["verified"] is True
+
+
+def test_decode_verification_token_invalid():
+    payload = decode_verification_token("bad-token", secret_key="test-secret")
     assert payload is None
