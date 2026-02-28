@@ -1,6 +1,5 @@
 import pytest
 import re
-from unittest.mock import patch, MagicMock
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -25,13 +24,11 @@ async def test_send_code_creates_verification_and_shows_verify(
     client: AsyncClient, db_session: AsyncSession
 ):
     """Step 1: POST /register/send-code creates code in DB and shows verify page."""
-    with patch("app.pages.auth.send_verification_email_task") as mock_task:
-        mock_task.delay = MagicMock()
-        response = await client.post(
-            "/register/send-code",
-            data={"email": "newuser@test.com"},
-            follow_redirects=False,
-        )
+    response = await client.post(
+        "/register/send-code",
+        data={"email": "newuser@test.com"},
+        follow_redirects=False,
+    )
 
     assert response.status_code == 200
     html = response.text
@@ -72,10 +69,8 @@ async def test_verify_code_correct(
     client: AsyncClient, db_session: AsyncSession, test_settings
 ):
     """Step 2: POST /register/verify with correct code shows complete form."""
-    with patch("app.pages.auth.send_verification_email_task") as mock_task:
-        mock_task.delay = MagicMock()
-        response = await client.post(
-            "/register/send-code",
+    response = await client.post(
+        "/register/send-code",
             data={"email": "verify@test.com"},
         )
 
@@ -107,10 +102,8 @@ async def test_verify_code_wrong(
     client: AsyncClient, db_session: AsyncSession, test_settings
 ):
     """Step 2: POST /register/verify with wrong code shows error."""
-    with patch("app.pages.auth.send_verification_email_task") as mock_task:
-        mock_task.delay = MagicMock()
-        response = await client.post(
-            "/register/send-code",
+    response = await client.post(
+        "/register/send-code",
             data={"email": "wrong@test.com"},
         )
 
@@ -132,10 +125,8 @@ async def test_complete_registration_creates_user(
     client: AsyncClient, db_session: AsyncSession, test_settings
 ):
     """Step 3: POST /register/complete with valid verified token creates user."""
-    with patch("app.pages.auth.send_verification_email_task") as mock_task:
-        mock_task.delay = MagicMock()
-        response = await client.post(
-            "/register/send-code",
+    response = await client.post(
+        "/register/send-code",
             data={"email": "complete@test.com"},
         )
 

@@ -1,4 +1,5 @@
 import random
+import structlog
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -17,8 +18,10 @@ from app.services.auth_service import (
     create_verification_token,
     decode_verification_token,
 )
+from app.services.email_service import send_verification_email
 from app.pages.common import templates
-from app.worker.tasks import send_verification_email_task
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["pages"])
 
@@ -106,8 +109,23 @@ async def register_send_code(
     db.add(verification)
     await db.commit()
 
-    # Send email via Celery
-    send_verification_email_task.delay(email, code)
+    # Send email directly (async)
+    try:
+        if settings.smtp_host:
+            await send_verification_email(
+                to_email=email,
+                code=code,
+                smtp_host=settings.smtp_host,
+                smtp_port=settings.smtp_port,
+                smtp_user=settings.smtp_user,
+                smtp_password=settings.smtp_password,
+                smtp_from=settings.smtp_from,
+                smtp_use_tls=settings.smtp_use_tls,
+            )
+        else:
+            logger.warning("smtp_not_configured", email=email)
+    except Exception as e:
+        logger.error("verification_email_send_failed", email=email, error=str(e))
 
     # Create token and show verify page
     token = create_verification_token(email, settings.secret_key)
@@ -233,7 +251,22 @@ async def register_resend_code(
     db.add(verification)
     await db.commit()
 
-    send_verification_email_task.delay(email, code)
+    try:
+        if settings.smtp_host:
+            await send_verification_email(
+                to_email=email,
+                code=code,
+                smtp_host=settings.smtp_host,
+                smtp_port=settings.smtp_port,
+                smtp_user=settings.smtp_user,
+                smtp_password=settings.smtp_password,
+                smtp_from=settings.smtp_from,
+                smtp_use_tls=settings.smtp_use_tls,
+            )
+        else:
+            logger.warning("smtp_not_configured", email=email)
+    except Exception as e:
+        logger.error("verification_email_send_failed", email=email, error=str(e))
 
     new_token = create_verification_token(email, settings.secret_key)
     return templates.TemplateResponse(
