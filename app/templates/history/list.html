@@ -2,18 +2,42 @@
 {% from "includes/messenger_icon.html" import messenger_icon %}
 {% block title %}История - Broadcaster{% endblock %}
 {% block content %}
-<div class="flex flex-wrap justify-between items-center gap-4 mb-6">
-    <h1 class="text-2xl font-bold tracking-tight text-slate-900">История отправок</h1>
-    <div class="flex gap-2">
-        <a href="/history" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if not status_filter %}bg-primary-600 text-white shadow-sm hover:bg-primary-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Все</a>
-        <a href="/history?status=ok" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if status_filter == 'ok' %}bg-emerald-600 text-white shadow-sm hover:bg-emerald-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Отправлено</a>
-        <a href="/history?status=fail" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if status_filter == 'fail' %}bg-red-600 text-white shadow-sm hover:bg-red-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Ошибки</a>
+<div class="flex flex-col sm:flex-row sm:flex-wrap sm:justify-between sm:items-center gap-3 sm:gap-4 mb-4 sm:mb-6">
+    <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">История отправок</h1>
+    <div class="flex gap-2 flex-wrap">
+        <a href="/history" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 touch-manipulation {% if not status_filter %}bg-primary-600 text-white shadow-sm hover:bg-primary-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Все</a>
+        <a href="/history?status=ok" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 touch-manipulation {% if status_filter == 'ok' %}bg-emerald-600 text-white shadow-sm hover:bg-emerald-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Отправлено</a>
+        <a href="/history?status=fail" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 touch-manipulation {% if status_filter == 'fail' %}bg-red-600 text-white shadow-sm hover:bg-red-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Ошибки</a>
     </div>
 </div>
 
 {% if logs %}
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    <div class="overflow-x-auto">
+    {# Mobile: карточки вместо таблицы #}
+    <ul id="history-cards-list" class="sm:hidden divide-y divide-slate-100">
+        {% for log in logs %}
+        <li class="flex items-start gap-3 p-4 bg-white cursor-pointer hover:bg-slate-50/80 transition-colors active:bg-slate-100" onclick="window.location='/history/{{ log.id }}'">
+            <div class="flex-1 min-w-0">
+                <a href="/history/{{ log.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 truncate block" onclick="event.stopPropagation()">{{ log.ad_title }}</a>
+                <p class="text-xs text-slate-500 truncate mt-0.5" title="{{ log.group_name }}">{{ log.group_name }}</p>
+                <div class="flex flex-wrap items-center gap-2 mt-1.5">
+                    <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-semibold {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800{% elif log.status == 'fail' %}bg-red-100 text-red-800{% else %}bg-slate-100 text-slate-800{% endif %}">{{ (log.status or '')|upper }}</span>
+                    {% if log.messenger_type %}
+                    <span class="inline-flex items-center" title="{{ 'Telegram' if log.messenger_type == 'tg_user' else 'WhatsApp' if log.messenger_type == 'wa' else log.messenger_type }}">{{ messenger_icon(log.messenger_type, size='h-4 w-4', show_label=false) }}</span>
+                    {% endif %}
+                    <span class="text-xs text-slate-400">{{ format_datetime_for_user(log.sent_at, user, '%d.%m %H:%M') }}</span>
+                </div>
+            </div>
+        </li>
+        {% endfor %}
+        {% if has_next %}
+        <li hx-get="/history/partial?offset={{ next_offset }}&limit=30&layout=cards{% if status_filter %}&status={{ status_filter }}{% endif %}" hx-trigger="revealed" hx-swap="outerHTML" class="p-4 text-center text-slate-500 text-sm">
+            Загрузка...
+        </li>
+        {% endif %}
+    </ul>
+    {# Desktop: таблица #}
+    <div class="hidden sm:block overflow-x-auto">
     <table class="min-w-full divide-y divide-slate-200">
         <thead class="bg-slate-50/80">
             <tr>
@@ -54,7 +78,7 @@
     </div>
 </div>
 {% else %}
-<div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-8 text-center">
+<div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6 sm:p-8 text-center">
     <p class="text-slate-500">Истории отправок пока нет.</p>
 </div>
 {% endif %}

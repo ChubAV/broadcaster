@@ -18,6 +18,7 @@ async def history_partial(
     status: str | None = Query(default=None),
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -43,8 +44,9 @@ async def history_partial(
         }
         for r in rows[:limit]
     ]
+    template = "history/partial_cards.html" if layout == "cards" else "history/partial_rows.html"
     return templates.TemplateResponse(
-        "history/partial_rows.html",
+        template,
         {
             "request": request,
             "user": user,
