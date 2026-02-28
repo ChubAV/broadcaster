@@ -72,6 +72,7 @@ async def history_list(
             "ad_title": r.ad_title or "—",
             "group_name": r.group_name or "—",
             "status": r.status,
+            "messenger_type": r.messenger_type,
             "error_message": r.error_message,
             "sent_at": r.sent_at,
         }

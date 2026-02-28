@@ -1,12 +1,13 @@
 {% extends "base.html" %}
+{% from "includes/messenger_icon.html" import messenger_icon %}
 {% block title %}История - Broadcaster{% endblock %}
 {% block content %}
 <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
     <h1 class="text-2xl font-bold tracking-tight text-slate-900">История отправок</h1>
     <div class="flex gap-2">
         <a href="/history" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if not status_filter %}bg-primary-600 text-white shadow-sm hover:bg-primary-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Все</a>
-        <a href="/history?status=sent" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if status_filter == 'sent' %}bg-emerald-600 text-white shadow-sm hover:bg-emerald-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Отправлено</a>
-        <a href="/history?status=failed" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if status_filter == 'failed' %}bg-red-600 text-white shadow-sm hover:bg-red-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Ошибки</a>
+        <a href="/history?status=ok" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if status_filter == 'ok' %}bg-emerald-600 text-white shadow-sm hover:bg-emerald-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Отправлено</a>
+        <a href="/history?status=fail" class="rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 {% if status_filter == 'fail' %}bg-red-600 text-white shadow-sm hover:bg-red-500{% else %}bg-white text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50{% endif %}">Ошибки</a>
     </div>
 </div>
 
@@ -18,6 +19,7 @@
             <tr>
                 <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Объявление</th>
                 <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Группа</th>
+                <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider w-10" title="Тип мессенджера">Тип</th>
                 <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Статус</th>
                 <th class="hidden md:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Ошибка</th>
                 <th class="hidden sm:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Время отправки</th>
@@ -29,8 +31,13 @@
                 <td class="px-3 sm:px-6 py-4 text-sm font-medium text-primary-600 hover:text-primary-700">{{ log.ad_title }}</td>
                 <td class="px-3 sm:px-6 py-4 text-sm text-slate-500">{{ log.group_name }}</td>
                 <td class="px-3 sm:px-6 py-4">
-                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if log.status == 'sent' %}bg-emerald-100 text-emerald-800{% else %}bg-red-100 text-red-800{% endif %}">
-                        {{ log.status }}
+                    {% if log.messenger_type %}
+                    <span class="inline-flex items-center" title="{{ 'Telegram' if log.messenger_type == 'tg_user' else 'WhatsApp' if log.messenger_type == 'wa' else log.messenger_type }}">{{ messenger_icon(log.messenger_type, size='h-5 w-5', show_label=false) }}</span>
+                    {% else %}—{% endif %}
+                </td>
+                <td class="px-3 sm:px-6 py-4">
+                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800{% elif log.status == 'fail' %}bg-red-100 text-red-800{% else %}bg-slate-100 text-slate-800{% endif %}">
+                        {{ (log.status or '')|upper }}
                     </span>
                 </td>
                 <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500 max-w-xs truncate">{{ log.error_message or '-' }}</td>
