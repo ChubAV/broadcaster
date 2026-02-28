@@ -355,11 +355,11 @@ def process_wa_results():
         if not results:
             return
 
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        loop.run_until_complete(_process_results_async(results))
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_process_results_async(results))
+        finally:
+            loop.close()
 
     except Exception as e:
         logger.error("process_wa_results_error", error=str(e), exc_info=True)
