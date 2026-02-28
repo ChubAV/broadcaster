@@ -57,6 +57,7 @@ def start_container(account_id: int) -> str | None:
                 "RATE_LIMIT_PER_MINUTE": "8",
                 "IDLE_SHUTDOWN_SEC": "300",
                 "PORT": str(DEFAULT_PORT),
+                "LOG_LEVEL": "info",
             },
             volumes={
                 SESSIONS_VOLUME: {"bind": "/app/sessions", "mode": "rw"},
@@ -69,6 +70,10 @@ def start_container(account_id: int) -> str | None:
                 "broadcaster.account_id": str(account_id),
             },
             hostname=name,
+            log_config=docker.types.LogConfig(
+                type="json-file",
+                config={"max-size": "10m", "max-file": "3"},
+            ),
         )
         logger.info("container_started", account_id=account_id, container_id=container.short_id)
         return _container_endpoint(name)
