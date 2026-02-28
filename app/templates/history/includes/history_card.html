@@ -71,13 +71,11 @@
             <p class="text-sm text-red-800 break-words line-clamp-2">{{ log.error_message }}</p>
         </div>
         {% endif %}
-    </div>
-
-    {# Правая боковая панель #}
-    <div class="flex sm:flex-col sm:border-l border-t sm:border-t-0 border-slate-200 p-2 gap-1 items-center justify-center">
-        <a href="/history/{{ log.id }}" class="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 transition-colors" title="Подробнее">
-            Подробнее
-            {{ icon_arrow_right(size='h-4 w-4') }}
-        </a>
+        <div class="mt-4 pt-4 border-t border-slate-200">
+            <a href="/history/{{ log.id }}" class="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 transition-colors" title="Подробнее">
+                Подробнее
+                {{ icon_arrow_right(size='h-4 w-4') }}
+            </a>
+        </div>
     </div>
 </li>
