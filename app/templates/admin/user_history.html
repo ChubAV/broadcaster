@@ -21,7 +21,39 @@
 
 {% if logs %}
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    <div class="overflow-x-auto">
+    {# Mobile: карточки #}
+    <ul class="sm:hidden space-y-4 p-4">
+        {% for log in logs %}
+        <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm cursor-pointer" onclick="window.location='/admin/users/{{ target_user.id }}/history/{{ log.id }}'">
+            <div class="flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs font-medium text-slate-500 mb-0.5">Объявление</p>
+                    <p class="text-base font-semibold text-primary-600 truncate">{{ log.ad_title or '—' }}</p>
+                    <p class="text-xs font-medium text-slate-500 mt-3 mb-0.5">Группа</p>
+                    <p class="text-sm text-slate-700 truncate">{{ log.group_name or '—' }}</p>
+                </div>
+                <div class="flex shrink-0 flex-col items-end gap-1">
+                    {% if log.messenger_type %}<span class="inline-flex items-center" title="{{ 'Telegram' if log.messenger_type == 'tg_user' else 'WhatsApp' if log.messenger_type == 'wa' else log.messenger_type }}">{{ messenger_icon(log.messenger_type, size='h-5 w-5', show_label=false) }}</span>{% endif %}
+                    <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold
+                        {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800
+                        {% elif log.status == 'account_disconnected' %}bg-amber-100 text-amber-800
+                        {% else %}bg-red-100 text-red-800{% endif %}">
+                        {% if log.status == 'ok' %}ok{% elif log.status == 'account_disconnected' %}disconnected{% else %}{{ log.status }}{% endif %}
+                    </span>
+                </div>
+            </div>
+            <p class="text-sm text-slate-500 mt-3">{{ format_datetime_for_user(log.sent_at, user, '%Y-%m-%d %H:%M:%S') }}</p>
+            {% if log.error_message %}
+            <div class="mt-3 rounded-lg bg-red-50 border border-red-100 p-3">
+                <p class="text-xs font-medium text-red-600 mb-0.5">Ошибка</p>
+                <p class="text-sm text-red-800 break-words">{{ log.error_message }}</p>
+            </div>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+    {# Desktop: таблица #}
+    <div class="hidden sm:block overflow-x-auto">
     <table class="min-w-full divide-y divide-slate-200">
         <thead class="bg-slate-50/80">
             <tr>

@@ -9,7 +9,40 @@
 
 {% if ads %}
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    <div class="overflow-x-auto">
+    {# Mobile: крупные информативные карточки #}
+    <ul id="ads-cards-list" class="sm:hidden space-y-4 p-4 sm:p-0">
+        {% for ad in ads %}
+        <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex items-start gap-4">
+            <div class="flex-1 min-w-0">
+                <p class="text-xs font-medium text-slate-500 mb-0.5">Название</p>
+                <p class="text-base font-semibold text-slate-900 truncate" title="{{ ad.title }}">{{ ad.title }}</p>
+                <p class="text-xs font-medium text-slate-500 mt-3 mb-0.5">Текст</p>
+                <p class="text-sm text-slate-700">{{ ad.text[:120] }}{% if ad.text|length > 120 %}...{% endif %}</p>
+                <div class="flex flex-wrap items-center gap-2 mt-3">
+                    <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold {% if ad.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
+                        {{ "Активно" if ad.is_active else "Неактивно" }}
+                    </span>
+                    <span class="text-sm text-slate-600">{{ ad.images|length }} фото</span>
+                </div>
+                <p class="text-xs font-medium text-slate-500 mt-3 mb-0.5">Создано</p>
+                <p class="text-sm text-slate-700">{{ format_datetime_for_user(ad.created_at, user, '%Y-%m-%d %H:%M') }}</p>
+            </div>
+            <div class="flex shrink-0 items-center gap-0.5">
+                <a href="/ads/{{ ad.id }}/edit" class="p-2.5 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors touch-manipulation" title="Изменить">{{ icon_edit() }}</a>
+                <form method="POST" action="/ads/{{ ad.id }}/delete" class="inline">
+                    <button type="submit" class="p-2.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors touch-manipulation" title="Удалить" onclick="return confirm('Удалить это объявление?')">{{ icon_delete() }}</button>
+                </form>
+            </div>
+        </li>
+        {% endfor %}
+        {% if has_next %}
+        <li hx-get="/ads/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="p-5 text-center text-slate-500 text-sm">
+            Загрузка...
+        </li>
+        {% endif %}
+    </ul>
+    {# Desktop: таблица #}
+    <div class="hidden sm:block overflow-x-auto">
     <table class="min-w-full divide-y divide-slate-200">
         <thead class="bg-slate-50/80">
             <tr>

@@ -123,7 +123,7 @@ async def test_sync_status_active_shows_groups(sync_setup):
     resp = await client.get(f"/accounts/{account_id}/sync-status")
 
     assert resp.status_code == 200
-    assert "active" in resp.text
+    assert "Активно" in resp.text
     assert "Загружено 3 групп" in resp.text
 
 

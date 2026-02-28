@@ -17,6 +17,7 @@ async def ads_partial(
     request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    layout: str = Query("table"),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -29,8 +30,9 @@ async def ads_partial(
     rows = list(result.scalars().all())
     has_next = len(rows) > limit
     ads = rows[:limit]
+    template = "ads/partial_cards.html" if layout == "cards" else "ads/partial_rows.html"
     return templates.TemplateResponse(
-        "ads/partial_rows.html",
+        template,
         {
             "request": request,
             "user": user,

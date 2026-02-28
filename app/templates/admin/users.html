@@ -15,6 +15,39 @@
     </div>
 
     <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
+        {# Mobile: карточки #}
+        <ul class="sm:hidden space-y-4 p-4">
+            {% for item in users %}
+            <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-3 mb-3">
+                            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">{{ item.user.name[0]|upper }}</span>
+                            <div class="min-w-0">
+                                <p class="text-base font-semibold text-slate-900 truncate">{{ item.user.name }}</p>
+                                <p class="text-xs text-slate-500 truncate">{{ item.user.email }}</p>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <span class="inline-block px-2.5 py-0.5 text-xs font-semibold rounded-full
+                                {% if item.plan == 'pro' %}bg-purple-100 text-purple-800
+                                {% elif item.plan == 'basic' %}bg-blue-100 text-blue-800
+                                {% else %}bg-slate-100 text-slate-700{% endif %}">{{ item.plan }}</span>
+                            {% if item.user.is_blocked %}
+                            <span class="inline-block px-2.5 py-0.5 text-xs font-semibold bg-red-100 text-red-800 rounded-full">Заблокирован</span>
+                            {% else %}
+                            <span class="inline-block px-2.5 py-0.5 text-xs font-semibold bg-green-100 text-green-800 rounded-full">Активен</span>
+                            {% endif %}
+                        </div>
+                        <p class="text-xs text-slate-500 mt-3">Регистрация: {{ format_datetime_for_user(item.user.created_at, user, '%d.%m.%Y') }}</p>
+                    </div>
+                    <a href="/admin/users/{{ item.user.id }}" class="shrink-0 text-sm font-medium text-primary-600 hover:text-primary-700">Подробнее</a>
+                </div>
+            </li>
+            {% endfor %}
+        </ul>
+        {# Desktop: таблица #}
+        <div class="hidden sm:block overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200">
             <thead class="bg-slate-50">
                 <tr>
@@ -58,6 +91,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
     </div>
 </div>
 {% endblock %}

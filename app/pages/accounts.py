@@ -43,6 +43,7 @@ async def accounts_partial(
     request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    layout: str = Query("table"),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -59,8 +60,9 @@ async def accounts_partial(
     rows = list(result.scalars().all())
     has_next = len(rows) > limit
     accounts = rows[:limit]
+    template = "accounts/partial_cards.html" if layout == "cards" else "accounts/partial_rows.html"
     return templates.TemplateResponse(
-        "accounts/partial_rows.html",
+        template,
         {
             "request": request,
             "user": user,
@@ -404,6 +406,7 @@ async def accounts_connect_wa_status(
 async def accounts_sync_status(
     request: Request,
     account_id: int,
+    layout: str = Query("table"),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -418,7 +421,8 @@ async def accounts_sync_status(
         return HTMLResponse('<span class="text-sm text-red-600">Аккаунт не найден</span>')
 
     if view.status in ("active", "sync_failed", "syncing"):
-        html = templates.env.get_template("accounts/partials/sync_status_row.html").render(
+        template_name = "accounts/partials/sync_status_card.html" if layout == "cards" else "accounts/partials/sync_status_row.html"
+        html = templates.env.get_template(template_name).render(
             account_id=account_id,
             status=view.status,
             group_count=view.group_count,
