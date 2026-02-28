@@ -2,7 +2,5 @@
 {% include "history/includes/history_card.html" %}
 {% endfor %}
 {% if has_next %}
-<li hx-get="/admin/users/{{ target_user.id }}/history/partial?offset={{ next_offset }}&limit=30{% if status_filter %}&status={{ status_filter }}{% endif %}{% if filter_messenger %}&messenger={{ filter_messenger }}{% endif %}{% if filter_account_id is not none %}&account_id={{ filter_account_id }}{% endif %}{% if filter_period %}&period={{ filter_period }}{% endif %}" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full p-5 text-center text-slate-500 text-sm">
-    Загрузка...
-</li>
+<div hx-get="/admin/users/{{ target_user.id }}/history/partial?offset={{ next_offset }}&limit=30&layout=cards{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="py-4 text-center text-sm text-gray-400">Загрузка...</div>
 {% endif %}

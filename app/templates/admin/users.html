@@ -1,50 +1,35 @@
 {% extends "base.html" %}
-{% block title %}Пользователи - Админ{% endblock %}
+{% block title %}Пользователи — Broadcaster{% endblock %}
 {% block content %}
-<div class="space-y-6">
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-            <h1 class="text-2xl font-bold tracking-tight text-slate-900">Пользователи</h1>
-            <p class="mt-1 text-sm text-slate-600">Всего: {{ users|length }}</p>
-        </div>
-        <form method="get" action="/admin/users" class="flex gap-2">
-            <input type="text" name="q" value="{{ search_query }}" placeholder="Поиск по email или имени..."
-                   class="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-200 w-64">
-            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors">Найти</button>
-        </form>
-    </div>
 
-    <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-        <ul class="grid grid-cols-1 gap-4 p-4">
-            {% for item in users %}
-            <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div class="flex items-start justify-between gap-3">
-                    <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-3 mb-3">
-                            <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-sm font-semibold">{{ item.user.name[0]|upper }}</span>
-                            <div class="min-w-0">
-                                <p class="text-base font-semibold text-slate-900 truncate">{{ item.user.name }}</p>
-                                <p class="text-xs text-slate-500 truncate">{{ item.user.email }}</p>
-                            </div>
-                        </div>
-                        <div class="flex flex-wrap gap-2">
-                            <span class="inline-block px-2.5 py-0.5 text-xs font-semibold rounded-full
-                                {% if item.plan == 'pro' %}bg-purple-100 text-purple-800
-                                {% elif item.plan == 'basic' %}bg-blue-100 text-blue-800
-                                {% else %}bg-slate-100 text-slate-700{% endif %}">{{ item.plan }}</span>
-                            {% if item.user.is_blocked %}
-                            <span class="inline-block px-2.5 py-0.5 text-xs font-semibold bg-red-100 text-red-800 rounded-full">Заблокирован</span>
-                            {% else %}
-                            <span class="inline-block px-2.5 py-0.5 text-xs font-semibold bg-green-100 text-green-800 rounded-full">Активен</span>
-                            {% endif %}
-                        </div>
-                        <p class="text-xs text-slate-500 mt-3">Регистрация: {{ format_datetime_for_user(item.user.created_at, user, '%d.%m.%Y') }}</p>
-                    </div>
-                    <a href="/admin/users/{{ item.user.id }}" class="shrink-0 text-sm font-medium text-primary-600 hover:text-primary-700">Подробнее</a>
-                </div>
-            </li>
-            {% endfor %}
-        </ul>
-    </div>
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-lg font-semibold text-gray-900">Пользователи</h1>
+  <form method="get" action="/admin/users" class="flex items-center gap-2">
+    <input type="text" name="q" value="{{ search_query or '' }}" placeholder="Поиск..." class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none w-48">
+    <button type="submit" class="bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">Найти</button>
+  </form>
 </div>
+
+{% if users %}
+<div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+  {% for item in users %}
+  <a href="/admin/users/{{ item.user.id }}" class="flex items-center gap-4 px-4 py-3 hover:bg-gray-50 transition-colors">
+    <div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-sm font-medium text-indigo-700 shrink-0">
+      {{ item.user.name[0]|upper if item.user.name else '?' }}
+    </div>
+    <div class="flex-1 min-w-0">
+      <p class="text-sm font-medium text-gray-900 truncate">{{ item.user.name }}</p>
+      <p class="text-xs text-gray-500 truncate">{{ item.user.email }}</p>
+    </div>
+    <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 shrink-0">{{ item.plan|capitalize }}</span>
+    {% if item.user.is_blocked %}
+    <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 shrink-0">Заблокирован</span>
+    {% endif %}
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<p class="text-sm text-gray-500 text-center py-8">Пользователи не найдены</p>
+{% endif %}
+
 {% endblock %}

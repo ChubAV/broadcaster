@@ -1,37 +1,30 @@
 {% extends "base.html" %}
-{% from "includes/icons.html" import icon_arrow_right %}
-{% block title %}Админ-панель - Broadcaster{% endblock %}
+{% block title %}Админ — Broadcaster{% endblock %}
 {% block content %}
-<div class="space-y-8">
-    <div>
-        <h1 class="text-2xl font-bold tracking-tight text-slate-900">Админ-панель</h1>
-        <p class="mt-1 text-sm text-slate-600">Общая статистика платформы.</p>
-    </div>
 
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
-            <p class="text-sm font-medium text-slate-600">Пользователей</p>
-            <p class="mt-2 text-3xl font-bold text-slate-900">{{ stats.total_users }}</p>
-        </div>
-        <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
-            <p class="text-sm font-medium text-slate-600">Аккаунтов (активных)</p>
-            <p class="mt-2 text-3xl font-bold text-slate-900">{{ stats.active_accounts }} <span class="text-base font-normal text-slate-500">/ {{ stats.total_accounts }}</span></p>
-        </div>
-        <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
-            <p class="text-sm font-medium text-slate-600">Отправок сегодня</p>
-            <p class="mt-2 text-3xl font-bold text-slate-900">{{ stats.sends_today }}</p>
-        </div>
-        <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
-            <p class="text-sm font-medium text-slate-600">Активных подписок</p>
-            <p class="mt-2 text-3xl font-bold text-slate-900">{{ stats.active_subscriptions }}</p>
-        </div>
-    </div>
+<h1 class="text-lg font-semibold text-gray-900 mb-6">Администрирование</h1>
 
-    <div>
-        <a href="/admin/users" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 transition-colors">
-            Управление пользователями
-            {{ icon_arrow_right() }}
-        </a>
-    </div>
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+  <div class="bg-white rounded-lg border border-gray-200 p-5">
+    <p class="text-2xl font-semibold text-gray-900">{{ stats.total_users }}</p>
+    <p class="text-sm text-gray-500 mt-1">Пользователи</p>
+  </div>
+  <div class="bg-white rounded-lg border border-gray-200 p-5">
+    <p class="text-2xl font-semibold text-gray-900">{{ stats.total_accounts }}</p>
+    <p class="text-sm text-gray-500 mt-1">Аккаунты</p>
+  </div>
+  <div class="bg-white rounded-lg border border-gray-200 p-5">
+    <p class="text-2xl font-semibold text-gray-900">{{ stats.active_accounts }}</p>
+    <p class="text-sm text-gray-500 mt-1">Активные акк.</p>
+  </div>
+  <div class="bg-white rounded-lg border border-gray-200 p-5">
+    <p class="text-2xl font-semibold text-gray-900">{{ stats.sends_today }}</p>
+    <p class="text-sm text-gray-500 mt-1">Отправлено</p>
+  </div>
 </div>
+
+<div class="mt-6">
+  <a href="/admin/users" class="text-sm text-indigo-600 hover:text-indigo-700 font-medium">Управление пользователями →</a>
+</div>
+
 {% endblock %}

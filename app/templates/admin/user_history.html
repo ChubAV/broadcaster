@@ -1,89 +1,66 @@
 {% extends "base.html" %}
-{% from "includes/icons.html" import icon_filter %}
-{% from "includes/icons.html" import icon_back %}
-{% block title %}История {{ target_user.name }} - Админ{% endblock %}
+{% block title %}История {{ target_user.name }} — Broadcaster{% endblock %}
 {% block content %}
-<div class="mb-6">
-    <a href="/admin/users/{{ target_user.id }}" class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-slate-700 transition-colors">
-        <span class="mr-1">{{ icon_back() }}</span>
-        {{ target_user.name }}
-    </a>
-</div>
+{% from "includes/icons.html" import icon_back, icon_filter %}
 
-<div class="flex flex-col sm:flex-row sm:flex-wrap sm:justify-between sm:items-center gap-3 sm:gap-4 mb-4">
-    <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">История отправок — {{ target_user.name }}</h1>
-</div>
+<a href="/admin/users/{{ target_user.id }}" class="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-4">
+  {{ icon_back() }} {{ target_user.name }}
+</a>
 
-<div class="mb-4 sm:mb-6" x-data="{ filterOpen: false }">
-    <div class="sm:hidden mb-2">
-        <button type="button" @click="filterOpen = !filterOpen" class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 transition-colors touch-manipulation" :class="filterOpen && 'ring-2 ring-primary-500 border-primary-500'" :aria-expanded="filterOpen" aria-label="Фильтры">
-            {{ icon_filter(size='h-5 w-5') }}
-            <span>Фильтры</span>
-        </button>
-    </div>
-    <form method="GET" action="/admin/users/{{ target_user.id }}/history" class="p-3 sm:p-4 bg-white rounded-xl shadow-card border border-slate-200/80" :class="filterOpen ? 'block' : 'hidden sm:block'">
-        <div class="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-3">
-            <div class="grid grid-cols-2 sm:flex sm:flex-wrap sm:gap-3 gap-x-3 gap-y-2">
-                <div class="sm:w-auto">
-                    <label for="filter_status" class="block text-xs font-medium text-slate-600 mb-1">Статус</label>
-                    <select id="filter_status" name="status" class="w-full sm:w-auto min-w-0 rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500 py-2">
-                        <option value="">Все</option>
-                        <option value="ok" {% if status_filter == 'ok' %}selected{% endif %}>Отправлено</option>
-                        <option value="fail" {% if status_filter == 'fail' %}selected{% endif %}>Ошибки</option>
-                    </select>
-                </div>
-                <div class="sm:w-auto">
-                    <label for="filter_messenger" class="block text-xs font-medium text-slate-600 mb-1">Мессенджер</label>
-                    <select id="filter_messenger" name="messenger" class="w-full sm:w-auto min-w-0 rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500 py-2">
-                        <option value="">Все</option>
-                        <option value="tg_user" {% if filter_messenger == 'tg_user' %}selected{% endif %}>Telegram</option>
-                        <option value="wa" {% if filter_messenger == 'wa' %}selected{% endif %}>WhatsApp</option>
-                    </select>
-                </div>
-                {% if all_accounts %}
-                <div class="sm:w-auto">
-                    <label for="filter_account" class="block text-xs font-medium text-slate-600 mb-1">Аккаунт</label>
-                    <select id="filter_account" name="account_id" class="w-full sm:w-auto min-w-0 rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500 py-2">
-                        <option value="">Все</option>
-                        {% for acc in all_accounts %}
-                        <option value="{{ acc.id }}" {% if filter_account_id == acc.id %}selected{% endif %}>{{ acc.type }} #{{ acc.id }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                {% endif %}
-                <div class="sm:w-auto">
-                    <label for="filter_period" class="block text-xs font-medium text-slate-600 mb-1">Период</label>
-                    <select id="filter_period" name="period" class="w-full sm:w-auto min-w-0 rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500 py-2">
-                        <option value="">Все время</option>
-                        <option value="7d" {% if filter_period == '7d' %}selected{% endif %}>7 дней</option>
-                        <option value="30d" {% if filter_period == '30d' %}selected{% endif %}>30 дней</option>
-                    </select>
-                </div>
-            </div>
-            <div class="flex gap-2">
-                <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-500 min-h-[2.5rem]">Применить</button>
-                <a href="/admin/users/{{ target_user.id }}/history" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 min-h-[2.5rem] inline-flex items-center">Сбросить</a>
-            </div>
-        </div>
-    </form>
-</div>
+<h1 class="text-lg font-semibold text-gray-900 mb-6">История отправок — {{ target_user.name }}</h1>
 
-{% if logs %}
-<div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    <ul id="history-cards-list" class="grid grid-cols-1 gap-4 p-4">
-        {% for log in logs %}
-        {% include "history/includes/history_card.html" %}
+<!-- Filters -->
+<div x-data="{ filterOpen: false }" class="mb-4">
+  <button @click="filterOpen = !filterOpen" class="sm:hidden inline-flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 mb-2">
+    {{ icon_filter('h-4 w-4') }} Фильтры
+  </button>
+  <form method="get" action="/admin/users/{{ target_user.id }}/history" :class="filterOpen ? 'block' : 'hidden sm:block'">
+    <div class="flex flex-col sm:flex-row gap-2">
+      <select name="status" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
+        <option value="">Все статусы</option>
+        <option value="ok" {{ 'selected' if status_filter == 'ok' }}>Успешные</option>
+        <option value="fail" {{ 'selected' if status_filter == 'fail' }}>Ошибки</option>
+      </select>
+      <select name="messenger" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
+        <option value="">Все мессенджеры</option>
+        <option value="tg_user" {{ 'selected' if filter_messenger == 'tg_user' }}>Telegram</option>
+        <option value="wa" {{ 'selected' if filter_messenger == 'wa' }}>WhatsApp</option>
+      </select>
+      {% if all_accounts %}
+      <select name="account_id" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
+        <option value="">Все аккаунты</option>
+        {% for acc in all_accounts %}
+        <option value="{{ acc.id }}" {{ 'selected' if filter_account_id == acc.id }}>{{ acc.type }} #{{ acc.id }}</option>
         {% endfor %}
-        {% if has_next %}
-        <li hx-get="/admin/users/{{ target_user.id }}/history/partial?offset={{ next_offset }}&limit=30{% if status_filter %}&status={{ status_filter }}{% endif %}{% if filter_messenger %}&messenger={{ filter_messenger }}{% endif %}{% if filter_account_id is not none %}&account_id={{ filter_account_id }}{% endif %}{% if filter_period %}&period={{ filter_period }}{% endif %}" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full p-5 text-center text-slate-500 text-sm">
-            Загрузка...
-        </li>
-        {% endif %}
-    </ul>
+      </select>
+      {% endif %}
+      <select name="period" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
+        <option value="7d" {{ 'selected' if filter_period == '7d' }}>7 дней</option>
+        <option value="30d" {{ 'selected' if filter_period == '30d' }}>30 дней</option>
+        <option value="" {{ 'selected' if not filter_period }}>Все время</option>
+      </select>
+      <div class="flex gap-2">
+        <button type="submit" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">Применить</button>
+        <a href="/admin/users/{{ target_user.id }}/history" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">Сбросить</a>
+      </div>
+    </div>
+  </form>
 </div>
+
+<!-- History list -->
+{% if logs %}
+<div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+  {% for log in logs %}
+  {% include "history/includes/history_card.html" %}
+  {% endfor %}
+</div>
+{% if has_next %}
+<div hx-get="/admin/users/{{ target_user.id }}/history/partial?offset={{ next_offset }}&limit=30&layout=cards{{ filter_params|urlencode if filter_params is string else '' }}{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="py-4 text-center text-sm text-gray-400">Загрузка...</div>
+{% endif %}
 {% else %}
-<div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6 sm:p-8 text-center">
-    <p class="text-slate-500">Истории отправок нет.</p>
+<div class="text-center py-12">
+  <p class="text-sm text-gray-500">Нет записей</p>
 </div>
 {% endif %}
+
 {% endblock %}

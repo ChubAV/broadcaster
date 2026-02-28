@@ -1,154 +1,106 @@
 {% extends "base.html" %}
-{% block title %}{{ target_user.name }} - Админ{% endblock %}
+{% block title %}{{ target_user.name }} — Broadcaster{% endblock %}
 {% block content %}
-<div class="space-y-8">
-    <div class="flex items-center gap-4">
-        <a href="/admin/users" class="text-sm text-slate-500 hover:text-slate-700">&larr; К списку</a>
-    </div>
+{% from "includes/icons.html" import icon_back %}
+{% from "includes/messenger_icon.html" import messenger_icon %}
 
-    <!-- User Info -->
-    <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
-        <div class="flex items-center justify-between">
-            <div class="flex items-center gap-4">
-                <span class="flex h-12 w-12 items-center justify-center rounded-full bg-primary-100 text-primary-700 text-lg font-bold">{{ target_user.name[0]|upper }}</span>
-                <div>
-                    <h1 class="text-xl font-bold text-slate-900">{{ target_user.name }}</h1>
-                    <p class="text-sm text-slate-500">{{ target_user.email }}</p>
-                </div>
-            </div>
-            <div class="flex items-center gap-2">
-                {% if target_user.is_blocked %}
-                <span class="px-3 py-1 text-sm font-semibold bg-red-100 text-red-800 rounded-full">Заблокирован</span>
-                {% else %}
-                <span class="px-3 py-1 text-sm font-semibold bg-green-100 text-green-800 rounded-full">Активен</span>
-                {% endif %}
-            </div>
-        </div>
-        <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-            <div>
-                <p class="text-slate-500">ID</p>
-                <p class="font-medium text-slate-900">{{ target_user.id }}</p>
-            </div>
-            <div>
-                <p class="text-slate-500">Регистрация</p>
-                <p class="font-medium text-slate-900">{{ format_datetime_for_user(target_user.created_at, user, '%d.%m.%Y %H:%M') }}</p>
-            </div>
-            <div>
-                <p class="text-slate-500">Часовой пояс</p>
-                <p class="font-medium text-slate-900">{{ target_user.timezone }}</p>
-            </div>
-            <div>
-                <p class="text-slate-500">Текущий план</p>
-                <p class="font-medium text-slate-900 capitalize">{{ plan }}</p>
-            </div>
-        </div>
-    </div>
+<div class="max-w-3xl mx-auto">
+  <a href="/admin/users" class="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-4">
+    {{ icon_back() }} Назад к пользователям
+  </a>
 
-    <!-- Usage Stats -->
-    <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
-        <h2 class="text-lg font-semibold text-slate-900 mb-4">Использование</h2>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div class="text-center p-4 bg-slate-50 rounded-lg">
-                <p class="text-2xl font-bold text-slate-900">{{ usage.ads_count }}</p>
-                <p class="text-sm text-slate-600">Объявлений</p>
-            </div>
-            <div class="text-center p-4 bg-slate-50 rounded-lg">
-                <p class="text-2xl font-bold text-slate-900">{{ usage.groups_count }}</p>
-                <p class="text-sm text-slate-600">Групп</p>
-            </div>
-            <div class="text-center p-4 bg-slate-50 rounded-lg">
-                <p class="text-2xl font-bold text-slate-900">{{ usage.sends_today }}</p>
-                <p class="text-sm text-slate-600">Отправок сегодня</p>
-            </div>
-        </div>
+  <!-- User info -->
+  <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
+    <div class="flex items-center gap-4 mb-4">
+      <div class="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center text-lg font-medium text-indigo-700">
+        {{ target_user.name[0]|upper if target_user.name else '?' }}
+      </div>
+      <div>
+        <h1 class="text-lg font-semibold text-gray-900">{{ target_user.name }}</h1>
+        <p class="text-sm text-gray-500">{{ target_user.email }}</p>
+      </div>
     </div>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+      <div>
+        <span class="text-gray-500">Тариф</span>
+        <p class="text-gray-900 font-medium mt-0.5">{{ plan|capitalize }}</p>
+      </div>
+      <div>
+        <span class="text-gray-500">Объявления</span>
+        <p class="text-gray-900 font-medium mt-0.5">{{ ads_count }}</p>
+      </div>
+      <div>
+        <span class="text-gray-500">Группы</span>
+        <p class="text-gray-900 font-medium mt-0.5">{{ groups_count }}</p>
+      </div>
+      <div>
+        <span class="text-gray-500">Регистрация</span>
+        <p class="text-gray-900 font-medium mt-0.5">{{ target_user.created_at.strftime('%d.%m.%Y') }}</p>
+      </div>
+    </div>
+  </div>
 
-    <!-- Accounts -->
-    <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
-        <h2 class="text-lg font-semibold text-slate-900 mb-4">Аккаунты ({{ accounts|length }})</h2>
-        {% if accounts %}
-        <div class="space-y-2">
-            {% for acc in accounts %}
-            <div class="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                <div class="flex items-center gap-3">
-                    <span class="text-sm font-medium text-slate-900">{{ acc.type }}</span>
-                    <span class="text-xs text-slate-500">ID: {{ acc.id }}</span>
-                </div>
-                <span class="px-2 py-0.5 text-xs font-medium rounded-full
-                    {% if acc.status == 'active' %}bg-green-100 text-green-800
-                    {% else %}bg-slate-100 text-slate-600{% endif %}">{{ acc.status }}</span>
-            </div>
-            {% endfor %}
-        </div>
+  <!-- Accounts -->
+  {% if accounts %}
+  <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
+    <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">Аккаунты</h2>
+    <div class="space-y-2">
+      {% for acc in accounts %}
+      <div class="flex items-center gap-3 text-sm">
+        {{ messenger_icon(acc.type, size='h-4 w-4', show_label=false) }}
+        <span class="text-gray-900">{{ acc.type }} #{{ acc.id }}</span>
+        {% if acc.status == 'active' %}
+        <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Активен</span>
         {% else %}
-        <p class="text-sm text-slate-500">Нет аккаунтов</p>
+        <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">{{ acc.status }}</span>
         {% endif %}
+      </div>
+      {% endfor %}
     </div>
+  </div>
+  {% endif %}
 
-    <!-- History Link -->
-    <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
-        <div class="flex items-center justify-between">
-            <h2 class="text-lg font-semibold text-slate-900">История отправок</h2>
-            <a href="/admin/users/{{ target_user.id }}/history" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-500 transition-colors">
-                Смотреть историю
-            </a>
-        </div>
-    </div>
+  <!-- History link -->
+  <div class="mb-6">
+    <a href="/admin/users/{{ target_user.id }}/history" class="text-sm text-indigo-600 hover:text-indigo-700 font-medium">История отправок →</a>
+  </div>
 
-    <!-- Plan Management -->
-    <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
-        <h2 class="text-lg font-semibold text-slate-900 mb-4">Управление тарифом</h2>
-        {% if active_sub %}
-        <p class="text-sm text-slate-600 mb-4">
-            Текущая подписка: <strong class="capitalize">{{ plan }}</strong>,
-            истекает: <strong>{{ format_datetime_for_user(active_sub.expires_at, user, '%d.%m.%Y %H:%M') }}</strong>
-        </p>
+  <!-- Plan management -->
+  <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
+    <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">Управление тарифом</h2>
+    <form method="post" action="/admin/users/{{ target_user.id }}/plan" class="flex flex-col sm:flex-row items-start sm:items-end gap-3">
+      <div>
+        <label for="plan" class="block text-sm font-medium text-gray-700 mb-1.5">Тариф</label>
+        <select name="plan" id="plan" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none">
+          {% for p in all_plans %}
+          <option value="{{ p }}" {{ 'selected' if p == plan }}>{{ p|capitalize }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="expires_days" class="block text-sm font-medium text-gray-700 mb-1.5">Дней</label>
+        <input type="number" name="expires_days" id="expires_days" value="30" min="1" class="w-24 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none">
+      </div>
+      <button type="submit" class="bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">Назначить</button>
+    </form>
+  </div>
+
+  <!-- Admin actions -->
+  <div class="bg-white rounded-lg border border-gray-200 p-6">
+    <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">Действия</h2>
+    <div class="flex items-center gap-3">
+      <form method="post" action="/admin/users/{{ target_user.id }}/block">
+        {% if target_user.is_blocked %}
+        <button type="submit" class="bg-white border border-gray-300 text-gray-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">Разблокировать</button>
         {% else %}
-        <p class="text-sm text-slate-600 mb-4">Нет активной подписки (план: free)</p>
+        <button type="submit" class="bg-amber-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-amber-700 transition-colors">Заблокировать</button>
         {% endif %}
-        <form method="post" action="/admin/users/{{ target_user.id }}/plan" class="flex flex-wrap items-end gap-4">
-            <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">План</label>
-                <select name="plan" class="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-200">
-                    {% for plan_name in all_plans %}
-                    <option value="{{ plan_name }}" {% if plan_name == plan %}selected{% endif %}>{{ plan_name }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div>
-                <label class="block text-sm font-medium text-slate-700 mb-1">Срок (дней)</label>
-                <input type="number" name="expires_days" value="30" min="1" max="365"
-                       class="rounded-lg border border-slate-300 px-3 py-2 text-sm w-24 focus:border-primary-500 focus:ring-2 focus:ring-primary-200">
-            </div>
-            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 transition-colors">
-                Назначить
-            </button>
-        </form>
+      </form>
+      <form method="post" action="/admin/users/{{ target_user.id }}/delete" onsubmit="return confirm('Удалить пользователя {{ target_user.name }}? Это действие необратимо.')">
+        <button type="submit" class="bg-red-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-red-700 transition-colors">Удалить</button>
+      </form>
     </div>
-
-    <!-- Actions -->
-    <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6">
-        <h2 class="text-lg font-semibold text-slate-900 mb-4">Действия</h2>
-        <div class="flex flex-wrap gap-3">
-            <form method="post" action="/admin/users/{{ target_user.id }}/block">
-                {% if target_user.is_blocked %}
-                <button type="submit" class="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 transition-colors">
-                    Разблокировать
-                </button>
-                {% else %}
-                <button type="submit" class="rounded-lg bg-yellow-600 px-4 py-2 text-sm font-medium text-white hover:bg-yellow-700 transition-colors"
-                        onclick="return confirm('Заблокировать пользователя {{ target_user.name }}?')">
-                    Заблокировать
-                </button>
-                {% endif %}
-            </form>
-            <form method="post" action="/admin/users/{{ target_user.id }}/delete">
-                <button type="submit" class="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition-colors"
-                        onclick="return confirm('УДАЛИТЬ пользователя {{ target_user.name }}? Это действие необратимо!')">
-                    Удалить
-                </button>
-            </form>
-        </div>
-    </div>
+  </div>
 </div>
+
 {% endblock %}
