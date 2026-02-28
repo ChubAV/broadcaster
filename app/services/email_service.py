@@ -24,11 +24,18 @@ async def send_verification_email(
         f"Если вы не запрашивали этот код, проигнорируйте это письмо."
     )
 
+    # use_tls=True → implicit SSL (port 465)
+    # start_tls=True → STARTTLS (port 587)
+    use_tls = smtp_use_tls and smtp_port == 465
+    start_tls = smtp_use_tls and smtp_port != 465
+
     await aiosmtplib.send(
         msg,
         hostname=smtp_host,
         port=smtp_port,
         username=smtp_user,
         password=smtp_password,
-        use_tls=smtp_use_tls,
+        use_tls=use_tls,
+        start_tls=start_tls,
+        timeout=10,
     )
