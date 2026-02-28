@@ -297,7 +297,7 @@ async def register_complete(
     settings: Settings = Depends(get_settings),
 ):
     payload = decode_verification_token(token, settings.secret_key)
-    if not payload or not payload.get("verified"):
+    if not payload or not payload.get("verified") or payload.get("purpose") != "email_verification":
         return templates.TemplateResponse(
             "auth/register.html",
             {"request": request, "error": "Ссылка устарела. Начните регистрацию заново."},

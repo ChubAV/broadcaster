@@ -50,3 +50,27 @@ def test_create_and_decode_verified_token():
 def test_decode_verification_token_invalid():
     payload = decode_verification_token("bad-token", secret_key="test-secret")
     assert payload is None
+
+
+def test_create_password_reset_token():
+    token = create_verification_token("user@test.com", "secret", purpose="password_reset")
+    payload = decode_verification_token(token, "secret")
+    assert payload is not None
+    assert payload["email"] == "user@test.com"
+    assert payload["purpose"] == "password_reset"
+    assert payload["verified"] is False
+
+
+def test_decode_password_reset_token_verified():
+    token = create_verification_token("user@test.com", "secret", purpose="password_reset", verified=True)
+    payload = decode_verification_token(token, "secret")
+    assert payload is not None
+    assert payload["verified"] is True
+    assert payload["purpose"] == "password_reset"
+
+
+def test_registration_token_still_works():
+    token = create_verification_token("user@test.com", "secret")
+    payload = decode_verification_token(token, "secret")
+    assert payload is not None
+    assert payload["purpose"] == "email_verification"
