@@ -376,10 +376,18 @@ async def _process_results_async(results: list[dict]):
     async with session_factory() as session:
         for result in results:
             try:
+                # Use original S3 keys from Ad, not full URLs from wa-worker
+                ad_images = result.get("ad_images")
+                ad_id = result.get("ad_id")
+                if ad_id:
+                    ad = await session.get(Ad, ad_id)
+                    if ad and ad.images:
+                        ad_images = ad.images
+
                 send_log = SendLog(
                     user_id=result["user_id"],
                     schedule_id=result.get("schedule_id"),
-                    ad_id=result.get("ad_id"),
+                    ad_id=ad_id,
                     group_id=result.get("group_id"),
                     task_id=result.get("task_id"),
                     status=result["status"],
@@ -387,7 +395,7 @@ async def _process_results_async(results: list[dict]):
                     messenger_type="wa",
                     ad_title=result.get("ad_title"),
                     ad_text=result.get("ad_text"),
-                    ad_images=result.get("ad_images"),
+                    ad_images=ad_images,
                     group_name=result.get("group_name"),
                 )
                 session.add(send_log)
