@@ -1,99 +1,144 @@
 {% extends "base.html" %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
-{% from "includes/icons.html" import icon_spinner_small %}
-{% block title %}Аккаунты - Broadcaster{% endblock %}
+{% from "includes/icons.html" import icon_spinner_small, icon_delete, icon_refresh %}
+{% block title %}Аккаунты — Broadcaster{% endblock %}
 {% block content %}
-<div class="flex flex-wrap justify-between items-center gap-4 mb-6">
-    <h1 class="text-2xl font-bold tracking-tight text-slate-900">Аккаунты мессенджеров</h1>
-    <div class="flex gap-2 flex-wrap">
-        <a href="/accounts/connect/tg_user" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200">Подключить TG аккаунт</a>
-        <a href="/accounts/connect/wa" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-all duration-200">Подключить WhatsApp</a>
-    </div>
+
+<!-- Header -->
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-lg font-semibold text-gray-900">Аккаунты</h1>
+  <div class="flex items-center gap-2">
+    <a href="/accounts/connect/tg_user" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">
+      <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      Подключить Telegram
+    </a>
+    <a href="/accounts/connect/wa" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
+      <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      Подключить WhatsApp
+    </a>
+  </div>
 </div>
 
+<!-- Account cards -->
 {% if accounts %}
-<div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    <ul id="accounts-cards-list" class="grid grid-cols-1 gap-4 p-4">
-        {% for account in accounts %}
-        {% if account.status == 'syncing' and account.type == 'wa' %}
-        <li id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status?layout=cards" hx-trigger="every 5s" hx-swap="outerHTML" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div class="flex items-start justify-between gap-3">
-                <div class="flex-1 min-w-0">
-                    <p class="text-xs font-medium text-slate-500 mb-0.5">Тип</p>
-                    <span class="inline-flex items-center">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}</span>
-                    <p class="text-xs font-medium text-slate-500 mt-3 mb-0.5">Статус</p>
-                    <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold bg-amber-100 text-amber-800">
-                        <span class="text-amber-600">{{ icon_spinner_small() }}</span>
-                        Синхронизация...
-                    </span>
-                    <p class="text-xs text-slate-500 mt-1">Загружаем группы из WhatsApp. Это может занять несколько минут.</p>
-                </div>
-            </div>
-            <div class="mt-4">
-                <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="text-sm font-medium text-red-600 hover:text-red-700" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
-                </form>
-            </div>
-        </li>
-        {% elif account.status == 'sync_failed' and account.type == 'wa' %}
-        <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div class="flex items-start justify-between gap-3">
-                <div class="flex-1 min-w-0">
-                    <p class="text-xs font-medium text-slate-500 mb-0.5">Тип</p>
-                <span class="inline-flex items-center">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}</span>
-                <p class="text-xs font-medium text-slate-500 mt-3 mb-0.5">Статус</p>
-                <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold bg-red-100 text-red-800">Ошибка синхронизации</span>
-                    <p class="text-xs font-medium text-slate-500 mt-3 mb-0.5">Создано</p>
-                    <p class="text-sm text-slate-700">{{ format_datetime_for_user(account.created_at, user, '%Y-%m-%d %H:%M') }}</p>
-                </div>
-            </div>
-            <div class="mt-4 flex gap-3">
-                <form method="POST" action="/accounts/{{ account.id }}/retry-sync" class="inline">
-                    <button type="submit" class="text-sm font-medium text-amber-600 hover:text-amber-700">Повторить</button>
-                </form>
-                <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="text-sm font-medium text-red-600 hover:text-red-700" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
-                </form>
-            </div>
-        </li>
-        {% else %}
-        {% set stats = account_stats.get(account.id, {}) %}
-        <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex items-start justify-between gap-4">
-            <div class="flex-1 min-w-0">
-                <div class="flex flex-wrap items-center gap-3">
-                    {% if account.type == 'tg_user' %}<span class="inline-flex items-center gap-1.5">{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram', show_label=true) }}</span>
-                    {% elif account.type == 'wa' %}<span class="inline-flex items-center gap-1.5">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}</span>
-                    {% else %}<span class="text-slate-600 font-medium">{{ account.type }}</span>{% endif %}
-                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if account.status == 'active' %}bg-emerald-100 text-emerald-800{% elif account.status == 'disconnected' %}bg-red-100 text-red-800{% else %}bg-amber-100 text-amber-800{% endif %}">
-                        {{ "Активно" if account.status == 'active' else account.status }}
-                    </span>
-                </div>
-                <div class="mt-4 flex flex-wrap gap-2">
-                    <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('groups_count', 0) }} групп</span>
-                    <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('schedules_count', 0) }} расписаний</span>
-                    <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }} отправок</span>
-                    {% if stats.get('last_sent_at') %}<span class="inline-flex items-center rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800" title="Последняя отправка">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>{% endif %}
-                </div>
-                <p class="mt-3 text-xs text-slate-400">Подключён {{ format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M') }}</p>
-            </div>
-            <div class="flex shrink-0 self-start">
-                <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
-                    <button type="submit" class="text-sm font-medium text-red-600 hover:text-red-700" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
-                </form>
-            </div>
-        </li>
-        {% endif %}
-        {% endfor %}
-        {% if has_next %}
-        <li hx-get="/accounts/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full p-5 text-center text-slate-500 text-sm">
-            Загрузка...
-        </li>
-        {% endif %}
-    </ul>
+<div id="accounts-cards-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+  {% for account in accounts %}
+
+  {% if account.status == 'syncing' and account.type == 'wa' %}
+  {# Syncing WA account — polls for status #}
+  <div id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status?layout=cards" hx-trigger="every 5s" hx-swap="outerHTML" class="bg-white rounded-lg border border-gray-200 p-5">
+    <div class="flex items-center gap-2 mb-3">
+      {{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}
+    </div>
+    <div class="mb-3">
+      <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+        {{ icon_spinner_small() }}
+        Синхронизация...
+      </span>
+    </div>
+    <p class="text-xs text-gray-500 mb-4">Загружаем группы из WhatsApp. Это может занять несколько минут.</p>
+    <div class="pt-3 border-t border-gray-100">
+      <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
+        <button type="submit" class="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">
+          {{ icon_delete(size='h-4 w-4') }}
+          Удалить
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {% elif account.status == 'sync_failed' and account.type == 'wa' %}
+  {# Failed sync WA account #}
+  <div class="bg-white rounded-lg border border-gray-200 p-5">
+    <div class="flex items-center gap-2 mb-3">
+      {{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}
+    </div>
+    <div class="mb-3">
+      <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">Ошибка синхронизации</span>
+    </div>
+    <p class="text-xs text-gray-500 mb-4">Создано {{ format_datetime_for_user(account.created_at, user, '%Y-%m-%d %H:%M') }}</p>
+    <div class="pt-3 border-t border-gray-100 flex items-center gap-3">
+      <form method="POST" action="/accounts/{{ account.id }}/retry-sync" class="inline">
+        <button type="submit" class="inline-flex items-center gap-1 text-sm text-amber-600 hover:text-amber-700 font-medium transition-colors">
+          {{ icon_refresh(size='h-4 w-4') }}
+          Повторить
+        </button>
+      </form>
+      <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
+        <button type="submit" class="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">
+          {{ icon_delete(size='h-4 w-4') }}
+          Удалить
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {% else %}
+  {# Normal account card #}
+  {% set stats = account_stats.get(account.id, {}) %}
+  <div class="bg-white rounded-lg border border-gray-200 p-5">
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2">
+        {% if account.type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram', show_label=true) }}
+        {% elif account.type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}
+        {% else %}<span class="text-sm text-gray-600 font-medium">{{ account.type }}</span>{% endif %}
+      </div>
+      <span class="{% if account.status == 'active' %}inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700{% elif account.status == 'disconnected' %}inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600{% else %}inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700{% endif %}">
+        {{ "Активно" if account.status == 'active' else ("Отключён" if account.status == 'disconnected' else account.status) }}
+      </span>
+    </div>
+    <div class="space-y-2 mb-3">
+      <div class="flex items-center justify-between text-sm">
+        <span class="text-gray-500">Групп</span>
+        <span class="text-gray-900 font-medium">{{ stats.get('groups_count', 0) }}</span>
+      </div>
+      <div class="flex items-center justify-between text-sm">
+        <span class="text-gray-500">Расписаний</span>
+        <span class="text-gray-900 font-medium">{{ stats.get('schedules_count', 0) }}</span>
+      </div>
+      <div class="flex items-center justify-between text-sm">
+        <span class="text-gray-500">Успешность</span>
+        <span class="text-gray-900 font-medium">
+          {% if stats.get('send_attempts', 0) > 0 %}
+            {{ ((stats.get('send_success', 0) / stats.get('send_attempts', 1)) * 100) | round(0) | int }}%
+            <span class="text-gray-400 text-xs">({{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }})</span>
+          {% else %}
+            --
+          {% endif %}
+        </span>
+      </div>
+      {% if stats.get('last_sent_at') %}
+      <div class="flex items-center justify-between text-sm">
+        <span class="text-gray-500">Последняя отправка</span>
+        <span class="text-gray-900 font-medium">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>
+      </div>
+      {% endif %}
+    </div>
+    <p class="text-xs text-gray-400 mb-3">Подключён {{ format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M') }}</p>
+    <div class="pt-3 border-t border-gray-100">
+      <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
+        <button type="submit" class="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">
+          {{ icon_delete(size='h-4 w-4') }}
+          Удалить
+        </button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  {% endfor %}
+
+  {% if has_next %}
+  <div hx-get="/accounts/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full py-4 text-center text-sm text-gray-400">
+    Загрузка...
+  </div>
+  {% endif %}
 </div>
 {% else %}
-<div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-8 text-center">
-    <p class="text-slate-500 mb-4">Аккаунты ещё не подключены. Подключите аккаунт мессенджера, чтобы начать.</p>
+<div class="text-center py-12">
+  <p class="text-sm text-gray-500">Аккаунты ещё не подключены</p>
+  <a href="/accounts/connect/tg_user" class="text-sm text-indigo-600 hover:text-indigo-700 font-medium mt-2 inline-block">Подключить первый аккаунт</a>
 </div>
 {% endif %}
+
 {% endblock %}
