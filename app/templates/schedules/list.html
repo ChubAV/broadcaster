@@ -10,9 +10,8 @@
 
 {% if schedules %}
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    {# Mobile: крупные информативные карточки #}
     {% set day_names = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'} %}
-    <ul id="schedules-cards-list" class="sm:hidden space-y-4 p-4 sm:p-0">
+    <ul id="schedules-cards-list" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 p-4">
         {% for item in schedules %}
         <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex items-start gap-4">
             <div class="flex-1 min-w-0">
@@ -56,75 +55,11 @@
         </li>
         {% endfor %}
         {% if has_next %}
-        <li hx-get="/schedules/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="p-5 text-center text-slate-500 text-sm">
+        <li hx-get="/schedules/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full p-5 text-center text-slate-500 text-sm">
             Загрузка...
         </li>
         {% endif %}
     </ul>
-    {# Desktop: таблица #}
-    <div class="hidden sm:block overflow-x-auto">
-    <table class="min-w-full divide-y divide-slate-200">
-        <thead class="bg-slate-50/80">
-            <tr>
-                <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Объявление</th>
-                <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider w-10" title="Тип аккаунта">Тип</th>
-                <th class="hidden sm:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Группы</th>
-                <th class="hidden md:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Дни</th>
-                <th class="hidden md:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Время</th>
-                <th class="hidden lg:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Следующий запуск</th>
-                <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Статус</th>
-                <th class="px-3 sm:px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Действия</th>
-            </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-200" id="schedules-tbody">
-            {% for item in schedules %}
-            <tr class="hover:bg-slate-50/80 transition-colors duration-150">
-                <td class="px-3 sm:px-6 py-4 text-sm font-medium text-slate-900">{{ item.ad_title }}</td>
-                <td class="px-3 sm:px-6 py-4">
-                    {% if item.messenger_type %}
-                    <span class="inline-flex items-center" title="{{ 'Telegram' if item.messenger_type == 'tg_user' else 'WhatsApp' if item.messenger_type == 'wa' else item.messenger_type }}">{{ messenger_icon(item.messenger_type, size='h-5 w-5', show_label=false) }}</span>
-                    {% else %}—{% endif %}
-                </td>
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ item.schedule.group_ids|length }} групп</td>
-                <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">
-                    {% set day_names = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'} %}
-                    {% for d in item.schedule.days_of_week %}{{ day_names.get(d, d) }}{% if not loop.last %}, {% endif %}{% endfor %}
-                </td>
-                <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">
-                    {% for t in item.schedule.times_of_day %}{{ t }}{% if not loop.last %}, {% endif %}{% endfor %}
-                </td>
-                <td class="hidden lg:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">
-                    {{ item.next_run_local.strftime('%Y-%m-%d %H:%M') if item.next_run_local else '-' }}
-                    {% if item.tz_label %}<span class="text-slate-400 text-xs ml-1">({{ item.tz_label }})</span>{% endif %}
-                </td>
-                <td class="px-3 sm:px-6 py-4">
-                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if item.schedule.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
-                        {{ "Активно" if item.schedule.is_active else "Неактивно" }}
-                    </span>
-                </td>
-                <td class="px-3 sm:px-6 py-4 text-right">
-                    <div class="inline-flex items-center gap-1">
-                        <form method="POST" action="/schedules/{{ item.schedule.id }}/toggle" class="inline">
-                            <button type="submit" class="p-1.5 sm:p-2 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors" title="{{ 'Пауза' if item.schedule.is_active else 'Возобновить' }}">
-                                {% if item.schedule.is_active %}{{ icon_pause() }}{% else %}{{ icon_play() }}{% endif %}
-                            </button>
-                        </form>
-                        <a href="/schedules/{{ item.schedule.id }}/edit" class="p-1.5 sm:p-2 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors" title="Изменить">{{ icon_edit() }}</a>
-                        <form method="POST" action="/schedules/{{ item.schedule.id }}/delete" class="inline">
-                            <button type="submit" class="p-1.5 sm:p-2 rounded-lg text-red-600 hover:bg-red-50 transition-colors" title="Удалить" onclick="return confirm('Удалить это расписание?')">{{ icon_delete() }}</button>
-                        </form>
-                    </div>
-                </td>
-            </tr>
-            {% endfor %}
-            {% if has_next %}
-            <tr hx-get="/schedules/partial?offset={{ next_offset }}&limit=30" hx-trigger="revealed" hx-swap="outerHTML" class="htmx-indicator">
-                <td colspan="8" class="px-3 sm:px-6 py-8 text-center text-slate-500 text-sm">Загрузка...</td>
-            </tr>
-            {% endif %}
-        </tbody>
-    </table>
-    </div>
 </div>
 {% else %}
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6 sm:p-8 text-center">

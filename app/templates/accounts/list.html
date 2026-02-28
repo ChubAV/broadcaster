@@ -13,8 +13,7 @@
 
 {% if accounts %}
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    {# Mobile: крупные информативные карточки #}
-    <ul id="accounts-cards-list" class="sm:hidden space-y-4 p-4 sm:p-0">
+    <ul id="accounts-cards-list" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 p-4">
         {% for account in accounts %}
         {% if account.status == 'syncing' and account.type == 'wa' %}
         <li id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status?layout=cards" hx-trigger="every 5s" hx-swap="outerHTML" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -80,90 +79,11 @@
         {% endif %}
         {% endfor %}
         {% if has_next %}
-        <li hx-get="/accounts/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="p-5 text-center text-slate-500 text-sm">
+        <li hx-get="/accounts/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full p-5 text-center text-slate-500 text-sm">
             Загрузка...
         </li>
         {% endif %}
     </ul>
-    {# Desktop: таблица #}
-    <div class="hidden sm:block overflow-x-auto">
-    <table class="min-w-full divide-y divide-slate-200">
-        <thead class="bg-slate-50/80">
-            <tr>
-                <th class="hidden sm:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">ID</th>
-                <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Тип</th>
-                <th class="px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Статус</th>
-                <th class="hidden sm:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Создано</th>
-                <th class="px-3 sm:px-6 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Действия</th>
-            </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-200" id="accounts-tbody">
-            {% for account in accounts %}
-            {% if account.status == 'syncing' and account.type == 'wa' %}
-            <tr id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML" class="hover:bg-slate-50/80 transition-colors duration-150">
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{{ account.id }}</td>
-                <td class="px-3 sm:px-6 py-4 text-sm">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp') }}</td>
-                <td class="px-3 sm:px-6 py-4">
-                    <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-amber-100 text-amber-800">
-                        <span class="text-amber-600">{{ icon_spinner_small() }}</span>
-                        Синхронизация...
-                    </span>
-                    <span class="ml-2 text-xs text-slate-500">Загружаем группы из WhatsApp. Это может занять несколько минут.</span>
-                </td>
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(account.created_at, user, '%Y-%m-%d %H:%M') }}</td>
-                <td class="px-3 sm:px-6 py-4 text-right text-sm">
-                    <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
-                        <button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
-                    </form>
-                </td>
-            </tr>
-            {% elif account.status == 'sync_failed' and account.type == 'wa' %}
-            <tr class="hover:bg-slate-50/80 transition-colors duration-150">
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{{ account.id }}</td>
-                <td class="px-3 sm:px-6 py-4 text-sm">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp') }}</td>
-                <td class="px-3 sm:px-6 py-4">
-                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-red-100 text-red-800">Ошибка синхронизации</span>
-                </td>
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(account.created_at, user, '%Y-%m-%d %H:%M') }}</td>
-                <td class="px-3 sm:px-6 py-4 text-right text-sm">
-                    <form method="POST" action="/accounts/{{ account.id }}/retry-sync" class="inline">
-                        <button type="submit" class="font-medium text-amber-600 hover:text-amber-700 transition-colors mr-3">Повторить</button>
-                    </form>
-                    <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
-                        <button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
-                    </form>
-                </td>
-            </tr>
-            {% else %}
-            <tr class="hover:bg-slate-50/80 transition-colors duration-150">
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-900">{{ account.id }}</td>
-                <td class="px-3 sm:px-6 py-4 text-sm">
-                    {% if account.type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram', show_label=true) }}
-                    {% elif account.type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}
-                    {% else %}<span class="text-slate-500">{{ account.type }}</span>{% endif %}
-                </td>
-                <td class="px-3 sm:px-6 py-4">
-                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if account.status == 'active' %}bg-emerald-100 text-emerald-800{% elif account.status == 'disconnected' %}bg-red-100 text-red-800{% else %}bg-amber-100 text-amber-800{% endif %}">
-                        {{ "Активно" if account.status == 'active' else account.status }}
-                    </span>
-                </td>
-                <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(account.created_at, user, '%Y-%m-%d %H:%M') }}</td>
-                <td class="px-3 sm:px-6 py-4 text-right text-sm">
-                    <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
-                        <button type="submit" class="font-medium text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
-                    </form>
-                </td>
-            </tr>
-            {% endif %}
-            {% endfor %}
-            {% if has_next %}
-            <tr hx-get="/accounts/partial?offset={{ next_offset }}&limit=30" hx-trigger="revealed" hx-swap="outerHTML" class="htmx-indicator">
-                <td colspan="5" class="px-3 sm:px-6 py-8 text-center text-slate-500 text-sm">Загрузка...</td>
-            </tr>
-            {% endif %}
-        </tbody>
-    </table>
-    </div>
 </div>
 {% else %}
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-8 text-center">

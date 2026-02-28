@@ -65,7 +65,7 @@
 {% endif %}
 {% endfor %}
 {% if has_next %}
-<li hx-get="/accounts/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="p-5 text-center text-slate-500 text-sm">
+<li hx-get="/accounts/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full p-5 text-center text-slate-500 text-sm">
     Загрузка...
 </li>
 {% endif %}
