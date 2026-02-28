@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
-{% from "includes/icons.html" import icon_deactivate, icon_delete, icon_pause, icon_play %}
+{% from "includes/icons.html" import icon_deactivate, icon_delete, icon_filter, icon_pause, icon_play %}
 {% block title %}Группы - Broadcaster{% endblock %}
 {% block content %}
 <div class="flex flex-col sm:flex-row sm:flex-wrap sm:justify-between sm:items-center gap-3 sm:gap-4 mb-4 sm:mb-6">
@@ -26,7 +26,15 @@
 </div>
 
 {% if all_accounts or groups %}
-<form method="GET" action="/groups" class="mb-4 p-3 sm:p-4 bg-white rounded-xl shadow-card border border-slate-200/80">
+<div class="mb-4" x-data="{ filterOpen: false }">
+    {# Кнопка фильтра — только на mobile #}
+    <div class="sm:hidden mb-2">
+        <button type="button" @click="filterOpen = !filterOpen" class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 transition-colors touch-manipulation" :class="filterOpen && 'ring-2 ring-primary-500 border-primary-500'" :aria-expanded="filterOpen" aria-label="Фильтры">
+            {{ icon_filter(size='h-5 w-5') }}
+            <span>Фильтры</span>
+        </button>
+    </div>
+    <form method="GET" action="/groups" class="p-3 sm:p-4 bg-white rounded-xl shadow-card border border-slate-200/80" :class="filterOpen ? 'block' : 'hidden sm:block'">
     <div class="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-3">
         <div class="grid grid-cols-2 sm:flex sm:flex-wrap sm:gap-3 gap-x-3 gap-y-2">
             <div class="sm:w-auto">
@@ -65,6 +73,7 @@
         </div>
     </div>
 </form>
+</div>
 {% endif %}
 
 {% if groups %}
