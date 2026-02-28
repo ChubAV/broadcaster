@@ -26,6 +26,30 @@
     </div>
 
     <div class="divide-y divide-slate-100">
+        <!-- Task ID -->
+        {% if log.task_id %}
+        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+            <span class="text-sm font-medium text-slate-500 sm:w-40 shrink-0">Task ID</span>
+            <span class="text-sm text-slate-900 font-mono">{{ log.task_id }}</span>
+        </div>
+        {% endif %}
+
+        <!-- Номер аккаунта -->
+        {% if group %}
+        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+            <span class="text-sm font-medium text-slate-500 sm:w-40 shrink-0">Номер аккаунта</span>
+            <span class="text-sm text-slate-900">{{ group.account_id }}</span>
+        </div>
+        {% endif %}
+
+        <!-- Внешний ID группы -->
+        {% if group %}
+        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
+            <span class="text-sm font-medium text-slate-500 sm:w-40 shrink-0">Внешний ID группы</span>
+            <span class="text-sm text-slate-900 font-mono">{{ group.group_external_id }}</span>
+        </div>
+        {% endif %}
+
         <!-- Время -->
         <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-4">
             <span class="text-sm font-medium text-slate-500 sm:w-40 shrink-0">Время отправки</span>

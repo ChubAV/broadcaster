@@ -137,6 +137,8 @@ async def history_detail(
     if not log or log.user_id != user.id:
         return RedirectResponse(url="/history", status_code=302)
 
+    group = await db.get(Group, log.group_id) if log.group_id else None
+
     return templates.TemplateResponse(
         "history/detail.html",
         {
@@ -144,6 +146,7 @@ async def history_detail(
             "user": user,
             "is_admin": check_is_admin(user, settings),
             "log": log,
+            "group": group,
             "active_page": "history",
         },
     )
