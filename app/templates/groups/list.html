@@ -1,199 +1,167 @@
 {% extends "base.html" %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
-{% from "includes/icons.html" import icon_deactivate, icon_delete, icon_filter, icon_pause, icon_play %}
-{% block title %}Группы - Broadcaster{% endblock %}
+{% from "includes/icons.html" import icon_pause, icon_play, icon_delete, icon_filter %}
+{% block title %}Группы — Broadcaster{% endblock %}
 {% block content %}
-<div class="flex flex-col sm:flex-row sm:flex-wrap sm:justify-between sm:items-center gap-3 sm:gap-4 mb-4 sm:mb-6">
-    <h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">Группы</h1>
-    {% if tg_user_accounts or wa_accounts %}
-    <div class="flex gap-2 flex-wrap">
-        {% for account in tg_user_accounts %}
-        <form method="POST" action="/accounts/{{ account.id }}/sync-groups" class="inline">
-            <button type="submit" class="rounded-lg bg-primary-600 px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200">
-                TG #{{ account.id }}
-            </button>
-        </form>
-        {% endfor %}
-        {% for account in wa_accounts %}
-        <form method="POST" action="/accounts/{{ account.id }}/sync-groups" class="inline">
-            <button type="submit" class="rounded-lg bg-emerald-600 px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-semibold text-white shadow-sm hover:bg-emerald-500 focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 transition-all duration-200">
-                WA #{{ account.id }}
-            </button>
-        </form>
-        {% endfor %}
-    </div>
-    {% endif %}
+
+<!-- Header -->
+<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+  <h1 class="text-lg font-semibold text-gray-900">Группы</h1>
+  {% if tg_user_accounts or wa_accounts %}
+  <div class="flex items-center gap-2">
+    {% for acc in tg_user_accounts %}
+    <form method="post" action="/accounts/{{ acc.id }}/sync-groups">
+      <button type="submit" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
+        {{ messenger_icon(acc.type, size='h-4 w-4', show_label=false) }} Синхр.
+      </button>
+    </form>
+    {% endfor %}
+    {% for acc in wa_accounts %}
+    <form method="post" action="/accounts/{{ acc.id }}/sync-groups">
+      <button type="submit" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
+        {{ messenger_icon(acc.type, size='h-4 w-4', show_label=false) }} Синхр.
+      </button>
+    </form>
+    {% endfor %}
+  </div>
+  {% endif %}
 </div>
 
+<!-- Filters -->
 {% if all_accounts or groups %}
-<div class="mb-4" x-data="{ filterOpen: false }">
-    {# Кнопка фильтра — только на mobile #}
-    <div class="sm:hidden mb-2">
-        <button type="button" @click="filterOpen = !filterOpen" class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 transition-colors touch-manipulation" :class="filterOpen && 'ring-2 ring-primary-500 border-primary-500'" :aria-expanded="filterOpen" aria-label="Фильтры">
-            {{ icon_filter(size='h-5 w-5') }}
-            <span>Фильтры</span>
-        </button>
+<div x-data="{ filterOpen: false }" class="mb-4">
+  <button @click="filterOpen = !filterOpen" class="sm:hidden inline-flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 mb-2">
+    {{ icon_filter('h-4 w-4') }}
+    Фильтры
+  </button>
+  <form method="get" action="/groups" :class="filterOpen ? 'block' : 'hidden sm:block'">
+    <div class="flex flex-col sm:flex-row gap-2">
+      <select name="account_id" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
+        <option value="">Все аккаунты</option>
+        {% for acc in all_accounts %}
+        <option value="{{ acc.id }}" {{ 'selected' if filter_account_id == acc.id }}>{{ acc.type }} #{{ acc.id }}</option>
+        {% endfor %}
+      </select>
+      <select name="messenger_type" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
+        <option value="">Все мессенджеры</option>
+        <option value="tg_user" {{ 'selected' if filter_messenger_type == 'tg_user' }}>Telegram</option>
+        <option value="wa" {{ 'selected' if filter_messenger_type == 'wa' }}>WhatsApp</option>
+      </select>
+      <select name="is_active" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
+        <option value="">Все статусы</option>
+        <option value="1" {{ 'selected' if filter_is_active == true }}>Активные</option>
+        <option value="0" {{ 'selected' if filter_is_active == false }}>Неактивные</option>
+      </select>
+      <input type="text" name="search" value="{{ filter_search or '' }}" placeholder="Поиск..." class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
+      <div class="flex gap-2">
+        <button type="submit" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">Применить</button>
+        <a href="/groups" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">Сбросить</a>
+      </div>
     </div>
-    <form method="GET" action="/groups" class="p-3 sm:p-4 bg-white rounded-xl shadow-card border border-slate-200/80" :class="filterOpen ? 'block' : 'hidden sm:block'">
-    <div class="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-3">
-        <div class="grid grid-cols-2 sm:flex sm:flex-wrap sm:gap-3 gap-x-3 gap-y-2">
-            <div class="sm:w-auto">
-                <label for="filter_account" class="block text-xs font-medium text-slate-600 mb-1">Аккаунт</label>
-                <select id="filter_account" name="account_id" class="w-full sm:w-auto min-w-0 rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500 py-2">
-                    <option value="">Все</option>
-                    {% for acc in all_accounts %}
-                    <option value="{{ acc.id }}" {% if filter_account_id == acc.id %}selected{% endif %}>{{ acc.type }} #{{ acc.id }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="sm:w-auto">
-                <label for="filter_messenger" class="block text-xs font-medium text-slate-600 mb-1">Мессенджер</label>
-                <select id="filter_messenger" name="messenger_type" class="w-full sm:w-auto min-w-0 rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500 py-2">
-                    <option value="">Все</option>
-                    <option value="tg_user" {% if filter_messenger_type == 'tg_user' %}selected{% endif %}>Telegram</option>
-                    <option value="wa" {% if filter_messenger_type == 'wa' %}selected{% endif %}>WhatsApp</option>
-                </select>
-            </div>
-            <div class="sm:w-auto">
-                <label for="filter_status" class="block text-xs font-medium text-slate-600 mb-1">Статус</label>
-                <select id="filter_status" name="is_active" class="w-full sm:w-auto min-w-0 rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500 py-2">
-                    <option value="">Все</option>
-                    <option value="1" {% if filter_is_active == true %}selected{% endif %}>Активные</option>
-                    <option value="0" {% if filter_is_active == false %}selected{% endif %}>Неактивные</option>
-                </select>
-            </div>
-        </div>
-        <div class="sm:flex-1 min-w-0">
-            <label for="filter_search" class="block text-xs font-medium text-slate-600 mb-1">Поиск по названию</label>
-            <input type="text" id="filter_search" name="search" value="{{ filter_search }}" placeholder="Название..." class="w-full sm:w-48 rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500 py-2">
-        </div>
-        <div class="flex gap-2">
-            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-500 min-h-[2.5rem]">Применить</button>
-            <a href="/groups" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 min-h-[2.5rem] inline-flex items-center">Сбросить</a>
-        </div>
-    </div>
-</form>
+  </form>
 </div>
 {% endif %}
 
+<!-- Bulk actions -->
 {% if groups %}
-<div class="space-y-3">
-    <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-        <div class="px-3 sm:px-6 py-3 border-b border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-2 sm:gap-3">
-            <div class="flex flex-wrap items-center gap-2 sm:gap-3 text-xs sm:text-sm text-slate-600">
-                <span class="inline-flex items-center gap-1.5">
-                    <span class="text-amber-500 shrink-0">{{ icon_deactivate() }}</span>
-                    <button type="button" onclick="submitBulkGroups('deactivate')" class="inline-flex items-center gap-1 rounded-md px-2 py-1.5 sm:px-1.5 sm:py-1 hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300 touch-manipulation">
-                        <span>Деактивировать</span>
-                    </button>
-                </span>
-                <span class="inline-flex items-center gap-1.5">
-                    <span class="text-slate-500 shrink-0">{{ icon_delete() }}</span>
-                    <button type="button" onclick="if (confirm('Удалить выбранные группы?')) submitBulkGroups('delete')" class="inline-flex items-center gap-1 rounded-md px-2 py-1.5 sm:px-1.5 sm:py-1 hover:bg-red-50 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-200 touch-manipulation">
-                        <span>Удалить</span>
-                    </button>
-                </span>
-            </div>
-            <p class="text-xs text-slate-500 flex items-center gap-2">
-                <span>Отметьте группы и примените действие.</span>
-                <button type="button" id="select-all-groups" class="text-primary-600 hover:text-primary-700 font-medium touch-manipulation">
-                    Выбрать все
-                </button>
-            </p>
-        </div>
-        <ul id="groups-cards-list" class="grid grid-cols-1 gap-4 p-4">
-            {% for group in groups %}
-            {% set stats = group_stats.get(group.id, {}) %}
-            {% set acc = accounts_by_id.get(group.account_id, {}) %}
-            <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex flex-col gap-4">
-                <div class="flex items-start gap-4">
-                    <input type="checkbox" name="group_ids" value="{{ group.id }}" class="mt-1 shrink-0 rounded border-slate-300 text-primary-600 focus:ring-primary-500 js-group-checkbox h-5 w-5">
-                    <div class="flex-1 min-w-0">
-                        <p class="text-base font-semibold text-slate-900 break-words" title="{{ group.name }}">{{ group.name }}</p>
-                        <div class="flex flex-wrap items-center gap-2 mt-2">
-                            <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if group.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
-                                {{ "Активна" if group.is_active else "Неактивна" }}
-                            </span>
-                            {% if group.messenger_type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', show_label=false) }}
-                            {% elif group.messenger_type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', show_label=false) }}{% endif %}
-                            <a href="/accounts" class="inline-flex items-center rounded-lg bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200" title="Аккаунт">
-                                {% if acc.get('type') == 'tg_user' %}TG{% elif acc.get('type') == 'wa' %}WA{% else %}{{ acc.get('type', '') }}{% endif %} #{{ acc.get('id', group.account_id) }}
-                            </a>
-                        </div>
-                        <div class="mt-3 flex flex-wrap gap-2">
-                            <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('schedules_count', 0) }} расписаний</span>
-                            <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }} отправок</span>
-                            {% if stats.get('last_sent_at') %}<span class="inline-flex items-center rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800" title="Последняя отправка">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>{% endif %}
-                        </div>
-                        {% if group.last_error %}
-                        <p class="text-xs text-amber-600 mt-2 truncate" title="{{ group.last_error }}">Ошибка {{ format_datetime_for_user(group.error_at, user, '%d.%m %H:%M') if group.error_at else '' }}</p>
-                        {% endif %}
-                    </div>
-                </div>
-                <div class="flex justify-end items-center gap-0.5 border-t border-slate-100 pt-3 -mx-1">
-                    <form method="POST" action="/groups/{{ group.id }}/toggle" class="inline">
-                        <button type="submit" class="p-2.5 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors touch-manipulation" title="{{ 'Деактивировать' if group.is_active else 'Активировать' }}" aria-label="{{ 'Деактивировать' if group.is_active else 'Активировать' }}">
-                            {% if group.is_active %}{{ icon_pause() }}{% else %}{{ icon_play() }}{% endif %}
-                        </button>
-                    </form>
-                    <form method="POST" action="/groups/{{ group.id }}/delete" class="inline">
-                        <button type="submit" class="p-2.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors touch-manipulation" title="Удалить" aria-label="Удалить" onclick="return confirm('Удалить эту группу?')">
-                            {{ icon_delete() }}
-                        </button>
-                    </form>
-                </div>
-            </li>
-            {% endfor %}
-            {% if has_next %}
-            <li hx-get="/groups/partial?offset={{ next_offset }}&limit=30&layout=cards{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full p-5 text-center text-slate-500 text-sm">
-                Загрузка...
-            </li>
-            {% endif %}
-        </ul>
-    </div>
-</div>
-<script>
-    (function () {
-        const selectAll = document.getElementById('select-all-groups');
-        if (selectAll) {
-            const checkboxes = document.querySelectorAll('.js-group-checkbox');
-            selectAll.addEventListener('click', function () {
-                var all = checkboxes.length && Array.from(checkboxes).every(function (c) { return c.checked; });
-                checkboxes.forEach(function (cb) { cb.checked = !all; });
-                this.textContent = all ? 'Выбрать все' : 'Снять выбор';
-            });
-        }
-    })();
-    function submitBulkGroups(action) {
-        const checked = document.querySelectorAll('.js-group-checkbox:checked');
-        if (!checked.length) {
-            return;
-        }
-        const form = document.createElement('form');
-        form.method = 'POST';
-        form.action = '/groups/bulk';
-
-        const actionInput = document.createElement('input');
-        actionInput.type = 'hidden';
-        actionInput.name = 'action';
-        actionInput.value = action;
-        form.appendChild(actionInput);
-
-        checked.forEach(function (cb) {
-            const input = document.createElement('input');
-            input.type = 'hidden';
-            input.name = 'group_ids';
-            input.value = cb.value;
-            form.appendChild(input);
-        });
-
-        document.body.appendChild(form);
-        form.submit();
-    }
-</script>
-{% else %}
-<div class="bg-white rounded-xl shadow-card border border-slate-200/80 p-8 text-center">
-    <p class="text-slate-500">Групп пока нет. Группы синхронизируются из подключённых аккаунтов мессенджеров.</p>
+<div class="flex items-center gap-3 mb-4">
+  <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+    <input type="checkbox" id="select-all-checkbox" onchange="selectAllGroups()" class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+    Выбрать все
+  </label>
+  <div class="flex gap-2">
+    <button type="button" onclick="submitBulkGroups('deactivate')" class="text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg px-2.5 py-1.5 transition-colors">Деактивировать</button>
+    <button type="button" onclick="submitBulkGroups('delete')" class="text-sm text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg px-2.5 py-1.5 transition-colors">Удалить</button>
+  </div>
 </div>
 {% endif %}
+
+<!-- Groups list -->
+{% if groups %}
+<div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+  {% for group in groups %}
+  {% set stats = group_stats.get(group.id, {}) %}
+  <div class="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors">
+    <!-- Checkbox -->
+    <input type="checkbox" class="group-checkbox h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" value="{{ group.id }}">
+    <!-- Content -->
+    <div class="flex-1 min-w-0">
+      <div class="flex items-center gap-2">
+        <p class="text-sm font-medium text-gray-900 truncate">{{ group.name }}</p>
+        {{ messenger_icon(group.messenger_type, size='h-3.5 w-3.5', show_label=false) }}
+      </div>
+      <div class="flex items-center gap-3 mt-0.5">
+        <span class="text-xs text-gray-400">{{ stats.get('schedules_count', 0) }} распис.</span>
+        {% if stats.get('send_attempts', 0) > 0 %}
+        <span class="text-xs text-gray-400">{{ ((stats.get('send_success', 0) / stats.get('send_attempts', 1)) * 100)|round|int }}% успех</span>
+        {% endif %}
+        {% if stats.get('last_sent_at') %}
+        <span class="text-xs text-gray-400">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>
+        {% endif %}
+      </div>
+      {% if group.last_error %}
+      <p class="text-xs text-red-500 mt-1 truncate" title="{{ group.last_error }}">{{ group.last_error }}</p>
+      {% endif %}
+    </div>
+    <!-- Status -->
+    {% if group.is_active %}
+    <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 shrink-0">Активна</span>
+    {% else %}
+    <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 shrink-0">Пауза</span>
+    {% endif %}
+    <!-- Actions -->
+    <div class="flex items-center gap-1 shrink-0">
+      {% if group.is_active %}
+      <form method="post" action="/groups/{{ group.id }}/toggle">
+        <button type="submit" class="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Приостановить">{{ icon_pause('h-4 w-4') }}</button>
+      </form>
+      {% else %}
+      <form method="post" action="/groups/{{ group.id }}/toggle">
+        <button type="submit" class="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Возобновить">{{ icon_play('h-4 w-4') }}</button>
+      </form>
+      {% endif %}
+      <form method="post" action="/groups/{{ group.id }}/delete" onsubmit="return confirm('Удалить группу?')">
+        <button type="submit" class="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg p-2 transition-colors" title="Удалить">{{ icon_delete('h-4 w-4') }}</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% if has_next %}
+<div hx-get="/groups/partial?offset={{ next_offset }}&limit=30&layout=cards{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="py-4 text-center text-sm text-gray-400">Загрузка...</div>
+{% endif %}
+{% else %}
+<div class="text-center py-12">
+  <p class="text-sm text-gray-500">Нет групп</p>
+  <p class="text-xs text-gray-400 mt-1">Группы синхронизируются из подключённых аккаунтов мессенджеров</p>
+</div>
+{% endif %}
+
+<script>
+function selectAllGroups() {
+    const checked = document.getElementById('select-all-checkbox').checked;
+    document.querySelectorAll('.group-checkbox').forEach(cb => cb.checked = checked);
+}
+function submitBulkGroups(action) {
+    const ids = Array.from(document.querySelectorAll('.group-checkbox:checked')).map(cb => cb.value);
+    if (ids.length === 0) { alert('Выберите группы'); return; }
+    if (action === 'delete' && !confirm('Удалить выбранные группы?')) return;
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/groups/bulk';
+    const actionInput = document.createElement('input');
+    actionInput.type = 'hidden';
+    actionInput.name = 'action';
+    actionInput.value = action;
+    form.appendChild(actionInput);
+    ids.forEach(id => {
+        const input = document.createElement('input');
+        input.type = 'hidden'; input.name = 'group_ids'; input.value = id;
+        form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    form.submit();
+}
+</script>
+
 {% endblock %}
