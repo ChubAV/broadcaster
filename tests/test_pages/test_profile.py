@@ -36,7 +36,7 @@ async def test_profile_get_renders_form_for_authenticated_user(
     response = await client.get("/profile")
     assert response.status_code == 200
     html = response.text
-    assert "Настройки профиля" in html
+    assert "Профиль" in html
     assert 'name="timezone"' in html
     # Текущая таймзона должна быть выбрана
     assert '<option value="Europe/Moscow" selected' in html
