@@ -103,7 +103,13 @@ async def collect_due_schedules(
                     task.user_id = ad.user_id
                     task.ad_text = ad.text
                     task.ad_title = ad.title
-                    task.ad_images = ad.images
+                    if ad.images:
+                        from app.services.s3 import get_image_url
+                        from app.config import get_settings
+                        s3_public_url = get_settings().s3_public_url
+                        task.ad_images = [get_image_url(img, s3_public_url) for img in ad.images]
+                    else:
+                        task.ad_images = ad.images
                     task.group_external_id = group.group_external_id
                     task.group_name = group.name
             tasks_to_dispatch.append(task)
