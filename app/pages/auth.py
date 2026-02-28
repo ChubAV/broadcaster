@@ -82,6 +82,7 @@ async def register_send_code(
     result = await db.execute(
         select(EmailVerificationCode)
         .where(EmailVerificationCode.email == email)
+        .where(EmailVerificationCode.purpose == "registration")
         .order_by(EmailVerificationCode.created_at.desc())
         .limit(1)
     )
@@ -104,6 +105,7 @@ async def register_send_code(
     verification = EmailVerificationCode(
         email=email,
         code=code,
+        purpose="registration",
         expires_at=now + timedelta(minutes=CODE_TTL_MINUTES),
     )
     db.add(verification)
@@ -160,6 +162,7 @@ async def register_verify(
         select(EmailVerificationCode)
         .where(
             EmailVerificationCode.email == email,
+            EmailVerificationCode.purpose == "registration",
             EmailVerificationCode.verified_at.is_(None),
             EmailVerificationCode.expires_at > now,
             EmailVerificationCode.attempts < CODE_MAX_ATTEMPTS,
@@ -225,6 +228,7 @@ async def register_resend_code(
     result = await db.execute(
         select(EmailVerificationCode)
         .where(EmailVerificationCode.email == email)
+        .where(EmailVerificationCode.purpose == "registration")
         .order_by(EmailVerificationCode.created_at.desc())
         .limit(1)
     )
@@ -246,6 +250,7 @@ async def register_resend_code(
     verification = EmailVerificationCode(
         email=email,
         code=code,
+        purpose="registration",
         expires_at=now + timedelta(minutes=CODE_TTL_MINUTES),
     )
     db.add(verification)

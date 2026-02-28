@@ -12,6 +12,7 @@ class EmailVerificationCode(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), index=True)
     code: Mapped[str] = mapped_column(String(6))
+    purpose: Mapped[str] = mapped_column(String(20), default="registration")
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
