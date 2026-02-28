@@ -14,7 +14,7 @@ WA_WORKER_IMAGE = "broadcaster-wa-worker:latest"
 CONTAINER_PREFIX = "wa-worker-"
 CONTAINER_LABEL = "broadcaster.role=wa-worker"
 NETWORK_NAME = "broadcaster"
-SESSIONS_VOLUME = "wa_sessions"
+SESSIONS_VOLUME = "broadcaster_wa_sessions"
 MEMORY_LIMIT = "256m"
 DEFAULT_PORT = 3000
 
