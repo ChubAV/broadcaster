@@ -83,6 +83,7 @@ async def dashboard(
             "ad_title": r.ad_title,
             "group_name": r.group_name,
             "status": r.SendLog.status,
+            "messenger_type": r.SendLog.messenger_type,
             "sent_at": r.SendLog.sent_at,
         }
         for r in recent_result
