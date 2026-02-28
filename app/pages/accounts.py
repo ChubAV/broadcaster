@@ -4,13 +4,15 @@ import io
 import qrcode
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
+from app.models.schedule import Schedule
+from app.models.send_log import SendLog
 from app.application.accounts.use_cases import (
     delete_account,
     get_sync_status_view,
@@ -28,6 +30,67 @@ from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
+
+
+async def _get_account_stats(
+    db: AsyncSession, user_id: int, account_ids: list[int]
+) -> dict[int, dict]:
+    """Возвращает статистику по аккаунтам: группы, попытки, успехи, расписания, последняя отправка."""
+    if not account_ids:
+        return {}
+
+    # groups_count
+    groups_r = await db.execute(
+        select(Group.account_id, func.count(Group.id).label("cnt"))
+        .where(Group.account_id.in_(account_ids), Group.user_id == user_id)
+        .group_by(Group.account_id)
+    )
+    groups_map = {r.account_id: r.cnt for r in groups_r}
+
+    # schedules_count
+    sched_r = await db.execute(
+        select(Schedule.account_id, func.count(Schedule.id).label("cnt"))
+        .where(Schedule.account_id.in_(account_ids))
+        .group_by(Schedule.account_id)
+    )
+    sched_map = {r.account_id: r.cnt for r in sched_r}
+
+    # send_attempts, send_success, last_sent_at (через Group -> account_id)
+    send_sub = (
+        select(
+            Group.account_id,
+            func.count(SendLog.id).label("attempts"),
+            func.sum(case((SendLog.status == "ok", 1), else_=0)).label("success"),
+            func.max(SendLog.sent_at).label("last_sent"),
+        )
+        .join(SendLog, SendLog.group_id == Group.id)
+        .where(
+            Group.account_id.in_(account_ids),
+            Group.user_id == user_id,
+            SendLog.user_id == user_id,
+        )
+        .group_by(Group.account_id)
+    )
+    send_result = await db.execute(send_sub)
+    send_map = {}
+    for r in send_result:
+        send_map[r.account_id] = {
+            "attempts": r.attempts or 0,
+            "success": int(r.success or 0),
+            "last_sent_at": r.last_sent,
+        }
+
+    # Собираем итог
+    result = {}
+    for aid in account_ids:
+        result[aid] = {
+            "groups_count": groups_map.get(aid, 0),
+            "schedules_count": sched_map.get(aid, 0),
+            "send_attempts": send_map.get(aid, {}).get("attempts", 0),
+            "send_success": send_map.get(aid, {}).get("success", 0),
+            "last_sent_at": send_map.get(aid, {}).get("last_sent_at"),
+        }
+    return result
 
 
 def _generate_qr_base64(data: str) -> str:
@@ -60,6 +123,9 @@ async def accounts_partial(
     rows = list(result.scalars().all())
     has_next = len(rows) > limit
     accounts = rows[:limit]
+    account_stats = await _get_account_stats(
+        db, user.id, [a.id for a in accounts]
+    )
     template = "accounts/partial_cards.html" if layout == "cards" else "accounts/partial_rows.html"
     return templates.TemplateResponse(
         template,
@@ -67,6 +133,7 @@ async def accounts_partial(
             "request": request,
             "user": user,
             "accounts": accounts,
+            "account_stats": account_stats,
             "has_next": has_next,
             "next_offset": offset + limit,
         },
@@ -91,6 +158,9 @@ async def accounts_list(
     rows = list(result.scalars().all())
     has_next = len(rows) > PAGE_SIZE
     accounts = rows[:PAGE_SIZE]
+    account_stats = await _get_account_stats(
+        db, user.id, [a.id for a in accounts]
+    )
     return templates.TemplateResponse(
         "accounts/list.html",
         {
@@ -98,6 +168,7 @@ async def accounts_list(
             "user": user,
             "is_admin": check_is_admin(user, settings),
             "accounts": accounts,
+            "account_stats": account_stats,
             "has_next": has_next,
             "next_offset": PAGE_SIZE,
             "active_page": "accounts",
@@ -421,11 +492,15 @@ async def accounts_sync_status(
         return HTMLResponse('<span class="text-sm text-red-600">Аккаунт не найден</span>')
 
     if view.status in ("active", "sync_failed", "syncing"):
+        stats_map = await _get_account_stats(db, user.id, [account_id]) if view.status == "active" else {}
+        stats = stats_map.get(account_id, {}) if view.status == "active" else {}
         template_name = "accounts/partials/sync_status_card.html" if layout == "cards" else "accounts/partials/sync_status_row.html"
         html = templates.env.get_template(template_name).render(
             account_id=account_id,
             status=view.status,
             group_count=view.group_count,
+            user=user,
+            stats=stats,
         )
         return HTMLResponse(html)
 
