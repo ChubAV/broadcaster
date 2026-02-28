@@ -42,7 +42,7 @@
 </tr>
 {% endfor %}
 {% if has_next %}
-<tr hx-get="/groups/partial?offset={{ next_offset }}&limit=30" hx-trigger="revealed" hx-swap="outerHTML" class="htmx-indicator">
+<tr hx-get="/groups/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="htmx-indicator">
     <td colspan="7" class="px-3 sm:px-6 py-8 text-center text-slate-500 text-sm">Загрузка...</td>
 </tr>
 {% else %}

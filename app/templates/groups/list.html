@@ -25,6 +25,46 @@
     {% endif %}
 </div>
 
+{% if all_accounts or groups %}
+<form method="GET" action="/groups" class="mb-4 p-4 bg-white rounded-xl shadow-card border border-slate-200/80">
+    <div class="flex flex-wrap items-end gap-3">
+        <div>
+            <label for="filter_account" class="block text-xs font-medium text-slate-600 mb-1">Аккаунт</label>
+            <select id="filter_account" name="account_id" class="rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500">
+                <option value="">Все</option>
+                {% for acc in all_accounts %}
+                <option value="{{ acc.id }}" {% if filter_account_id == acc.id %}selected{% endif %}>{{ acc.type }} #{{ acc.id }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label for="filter_messenger" class="block text-xs font-medium text-slate-600 mb-1">Мессенджер</label>
+            <select id="filter_messenger" name="messenger_type" class="rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500">
+                <option value="">Все</option>
+                <option value="tg_user" {% if filter_messenger_type == 'tg_user' %}selected{% endif %}>Telegram</option>
+                <option value="wa" {% if filter_messenger_type == 'wa' %}selected{% endif %}>WhatsApp</option>
+            </select>
+        </div>
+        <div>
+            <label for="filter_status" class="block text-xs font-medium text-slate-600 mb-1">Статус</label>
+            <select id="filter_status" name="is_active" class="rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500">
+                <option value="">Все</option>
+                <option value="1" {% if filter_is_active == true %}selected{% endif %}>Активные</option>
+                <option value="0" {% if filter_is_active == false %}selected{% endif %}>Неактивные</option>
+            </select>
+        </div>
+        <div>
+            <label for="filter_search" class="block text-xs font-medium text-slate-600 mb-1">Поиск по названию</label>
+            <input type="text" id="filter_search" name="search" value="{{ filter_search }}" placeholder="Название..." class="rounded-lg border-slate-300 text-sm focus:ring-primary-500 focus:border-primary-500 w-40 sm:w-48">
+        </div>
+        <div class="flex gap-2">
+            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-500">Применить</button>
+            <a href="/groups" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Сбросить</a>
+        </div>
+    </div>
+</form>
+{% endif %}
+
 {% if groups %}
 <div class="space-y-3">
     <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
@@ -105,7 +145,7 @@
                 </tr>
                 {% endfor %}
                 {% if has_next %}
-                <tr hx-get="/groups/partial?offset={{ next_offset }}&limit=30" hx-trigger="revealed" hx-swap="outerHTML" class="htmx-indicator">
+                <tr hx-get="/groups/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="htmx-indicator">
                     <td colspan="7" class="px-3 sm:px-6 py-8 text-center text-slate-500 text-sm">Загрузка...</td>
                 </tr>
                 {% endif %}

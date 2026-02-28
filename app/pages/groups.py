@@ -14,20 +14,50 @@ router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
 
 
+def _filter_params(account_id, messenger_type, is_active, search) -> dict:
+    params = {}
+    if account_id is not None:
+        params["account_id"] = account_id
+    if messenger_type:
+        params["messenger_type"] = messenger_type
+    if is_active is not None:
+        params["is_active"] = "1" if is_active else "0"
+    if search and search.strip():
+        params["search"] = search.strip()
+    return params
+
+
+def _build_groups_query(Group, user_id, account_id, messenger_type, is_active, search):
+    q = select(Group).where(Group.user_id == user_id)
+    if account_id is not None:
+        q = q.where(Group.account_id == account_id)
+    if messenger_type:
+        q = q.where(Group.messenger_type == messenger_type)
+    if is_active is not None:
+        q = q.where(Group.is_active == is_active)
+    if search and search.strip():
+        pattern = f"%{search.strip()}%"
+        q = q.where(Group.name.ilike(pattern))
+    return q.order_by(Group.id)
+
+
 @router.get("/groups/partial", response_class=HTMLResponse)
 async def groups_partial(
     request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    account_id: int | None = Query(None),
+    messenger_type: str | None = Query(None),
+    is_active: bool | None = Query(None),
+    search: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    result = await db.execute(
-        select(Group).where(Group.user_id == user.id).order_by(Group.id).offset(offset).limit(limit + 1)
-    )
+    q = _build_groups_query(Group, user.id, account_id, messenger_type, is_active, search)
+    result = await db.execute(q.offset(offset).limit(limit + 1))
     rows = list(result.scalars().all())
     has_next = len(rows) > limit
     groups = rows[:limit]
@@ -39,6 +69,7 @@ async def groups_partial(
             "groups": groups,
             "has_next": has_next,
             "next_offset": offset + limit,
+            "filter_params": _filter_params(account_id, messenger_type, is_active, search),
         },
     )
 
@@ -46,37 +77,31 @@ async def groups_partial(
 @router.get("/groups", response_class=HTMLResponse)
 async def groups_list(
     request: Request,
+    account_id: int | None = Query(None),
+    messenger_type: str | None = Query(None),
+    is_active: bool | None = Query(None),
+    search: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    result = await db.execute(
-        select(Group).where(Group.user_id == user.id).order_by(Group.id).limit(PAGE_SIZE + 1)
-    )
+    q = _build_groups_query(Group, user.id, account_id, messenger_type, is_active, search)
+    result = await db.execute(q.limit(PAGE_SIZE + 1))
     rows = list(result.scalars().all())
     has_next = len(rows) > PAGE_SIZE
     groups = rows[:PAGE_SIZE]
 
-    # Load tg_user accounts for sync buttons
+    # Load all accounts for filters and sync buttons
     accounts_result = await db.execute(
-        select(MessengerAccount).where(
-            MessengerAccount.user_id == user.id,
-            MessengerAccount.type == "tg_user",
-        )
+        select(MessengerAccount).where(MessengerAccount.user_id == user.id)
     )
-    tg_user_accounts = accounts_result.scalars().all()
+    all_accounts = accounts_result.scalars().all()
+    tg_user_accounts = [a for a in all_accounts if a.type == "tg_user"]
+    wa_accounts = [a for a in all_accounts if a.type == "wa" and a.status == "active"]
 
-    # Load WA accounts for sync buttons
-    wa_accounts_result = await db.execute(
-        select(MessengerAccount).where(
-            MessengerAccount.user_id == user.id,
-            MessengerAccount.type == "wa",
-            MessengerAccount.status == "active",
-        )
-    )
-    wa_accounts = wa_accounts_result.scalars().all()
+    filter_params = _filter_params(account_id, messenger_type, is_active, search) or {}
 
     return templates.TemplateResponse(
         "groups/list.html",
@@ -87,9 +112,15 @@ async def groups_list(
             "groups": groups,
             "tg_user_accounts": tg_user_accounts,
             "wa_accounts": wa_accounts,
+            "all_accounts": all_accounts,
             "has_next": has_next,
             "next_offset": PAGE_SIZE,
             "active_page": "groups",
+            "filter_params": filter_params,
+            "filter_account_id": account_id,
+            "filter_messenger_type": messenger_type,
+            "filter_is_active": is_active,
+            "filter_search": search or "",
         },
     )
 
