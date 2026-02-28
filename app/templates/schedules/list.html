@@ -53,13 +53,13 @@
                 <td class="px-3 sm:px-6 py-4 text-right">
                     <div class="inline-flex items-center gap-1">
                         <form method="POST" action="/schedules/{{ item.schedule.id }}/toggle" class="inline">
-                            <button type="submit" class="p-1.5 rounded-lg text-slate-500 hover:text-primary-600 hover:bg-primary-50 transition-colors" title="{{ 'Пауза' if item.schedule.is_active else 'Возобновить' }}">
+                            <button type="submit" class="p-1.5 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors" title="{{ 'Пауза' if item.schedule.is_active else 'Возобновить' }}">
                                 {% if item.schedule.is_active %}{{ icon_pause() }}{% else %}{{ icon_play() }}{% endif %}
                             </button>
                         </form>
-                        <a href="/schedules/{{ item.schedule.id }}/edit" class="p-1.5 rounded-lg text-slate-500 hover:text-primary-600 hover:bg-primary-50 transition-colors" title="Изменить">{{ icon_edit() }}</a>
+                        <a href="/schedules/{{ item.schedule.id }}/edit" class="p-1.5 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors" title="Изменить">{{ icon_edit() }}</a>
                         <form method="POST" action="/schedules/{{ item.schedule.id }}/delete" class="inline">
-                            <button type="submit" class="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors" title="Удалить" onclick="return confirm('Удалить это расписание?')">{{ icon_delete() }}</button>
+                            <button type="submit" class="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors" title="Удалить" onclick="return confirm('Удалить это расписание?')">{{ icon_delete() }}</button>
                         </form>
                     </div>
                 </td>
