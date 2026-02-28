@@ -70,24 +70,28 @@ async def dashboard(
 
     # Recent sends (last 10)
     recent_query = (
-        select(SendLog, Ad.title.label("ad_title"), Group.name.label("group_name"))
-        .join(Ad, SendLog.ad_id == Ad.id)
-        .join(Group, SendLog.group_id == Group.id)
-        .where(Ad.user_id == user.id)
+        select(SendLog, Group)
+        .outerjoin(Group, SendLog.group_id == Group.id)
+        .where(SendLog.user_id == user.id)
         .order_by(SendLog.sent_at.desc())
         .limit(10)
     )
     recent_result = await db.execute(recent_query)
     recent_sends = [
         {
-            "ad_title": r.ad_title,
-            "group_name": r.group_name,
-            "status": r.SendLog.status,
-            "messenger_type": r.SendLog.messenger_type,
-            "sent_at": r.SendLog.sent_at,
-            "error_message": r.SendLog.error_message,
+            "id": r.id,
+            "ad_title": r.ad_title or "—",
+            "ad_text": r.ad_text or "",
+            "group_name": r.group_name or "—",
+            "group_external_id": group.group_external_id if group else None,
+            "account_id": group.account_id if group else None,
+            "task_id": r.task_id,
+            "status": r.status,
+            "messenger_type": r.messenger_type,
+            "error_message": r.error_message,
+            "sent_at": r.sent_at,
         }
-        for r in recent_result
+        for r, group in recent_result
     ]
 
     return templates.TemplateResponse(
