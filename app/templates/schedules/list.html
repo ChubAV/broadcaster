@@ -11,7 +11,7 @@
 {% if schedules %}
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
     {% set day_names = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'} %}
-    <ul id="schedules-cards-list" class="grid grid-cols-1 gap-4 p-4">
+    <ul id="schedules-cards-list" class="grid grid-cols-1 gap-4 p-4 place-items-center">
         {% for item in schedules %}
         <li class="max-w-[650px] rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex items-start gap-4">
             <div class="flex-1 min-w-0">
@@ -55,7 +55,7 @@
         </li>
         {% endfor %}
         {% if has_next %}
-        <li hx-get="/schedules/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full p-5 text-center text-slate-500 text-sm">
+        <li hx-get="/schedules/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full w-full max-w-[650px] p-5 text-center text-slate-500 text-sm">
             Загрузка...
         </li>
         {% endif %}
