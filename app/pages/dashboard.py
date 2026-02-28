@@ -85,6 +85,7 @@ async def dashboard(
             "status": r.SendLog.status,
             "messenger_type": r.SendLog.messenger_type,
             "sent_at": r.SendLog.sent_at,
+            "error_message": r.SendLog.error_message,
         }
         for r in recent_result
     ]

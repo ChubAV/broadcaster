@@ -16,11 +16,11 @@
     {# Mobile: крупные информативные карточки #}
     <ul id="history-cards-list" class="sm:hidden space-y-4 p-4 sm:p-0">
         {% for log in logs %}
-        <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm cursor-pointer hover:bg-slate-50/80 hover:border-slate-300 transition-colors active:bg-slate-100" onclick="window.location='/history/{{ log.id }}'">
+        <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div class="flex items-start justify-between gap-3">
                 <div class="flex-1 min-w-0">
                     <p class="text-xs font-medium text-slate-500 mb-0.5">Объявление</p>
-                    <a href="/history/{{ log.id }}" class="text-base font-semibold text-primary-600 hover:text-primary-700 truncate block" onclick="event.stopPropagation()">{{ log.ad_title }}</a>
+                    <a href="/history/{{ log.id }}" class="text-base font-semibold text-primary-600 hover:text-primary-700 hover:underline truncate block">{{ log.ad_title }}</a>
                     <p class="text-xs font-medium text-slate-500 mt-3 mb-0.5">Группа</p>
                     <p class="text-sm text-slate-700 truncate" title="{{ log.group_name }}">{{ log.group_name }}</p>
                 </div>
