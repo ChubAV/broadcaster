@@ -2,7 +2,5 @@
 {% include "ads/includes/ad_card.html" %}
 {% endfor %}
 {% if has_next %}
-<li hx-get="/ads/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full p-5 text-center text-slate-500 text-sm">
-    Загрузка...
-</li>
+<div hx-get="/ads/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="py-4 text-center text-sm text-gray-400">Загрузка...</div>
 {% endif %}

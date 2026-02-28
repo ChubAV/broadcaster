@@ -1,206 +1,110 @@
 {% extends "base.html" %}
-{% block title %}{{ "Редактирование объявления" if ad else "Новое объявление" }} - Broadcaster{% endblock %}
+{% block title %}{{ 'Редактировать' if ad else 'Создать' }} объявление — Broadcaster{% endblock %}
 {% block content %}
-<div class="max-w-2xl">
-    <h1 class="text-2xl font-bold tracking-tight text-slate-900 mb-6">{{ "Редактирование объявления" if ad else "Новое объявление" }}</h1>
 
-    {% if error %}
-    <div class="mb-4 rounded-xl bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-100 animate-fade-in">{{ error }}</div>
+<div class="max-w-2xl mx-auto">
+  <h1 class="text-lg font-semibold text-gray-900 mb-6">{{ 'Редактировать объявление' if ad else 'Новое объявление' }}</h1>
+
+  <form method="post" action="{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}" id="ad-form" class="space-y-6">
+    <!-- Title -->
+    <div>
+      <label for="title" class="block text-sm font-medium text-gray-700 mb-1.5">Заголовок</label>
+      <input type="text" name="title" id="title" required value="{{ ad.title if ad else '' }}"
+        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors"
+        placeholder="Название объявления">
+    </div>
+
+    <!-- Text -->
+    <div>
+      <label for="text" class="block text-sm font-medium text-gray-700 mb-1.5">Текст</label>
+      <textarea name="text" id="text" rows="6" required
+        class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors resize-y"
+        placeholder="Текст объявления">{{ ad.text if ad else '' }}</textarea>
+    </div>
+
+    <!-- Images section -->
+    <div>
+      <label class="block text-sm font-medium text-gray-700 mb-1.5">Изображения</label>
+      <!-- Drop zone -->
+      <div id="drop-zone" class="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-indigo-400 transition-colors cursor-pointer" onclick="document.getElementById('file-input').click()">
+        <svg class="mx-auto h-8 w-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        <p class="text-sm text-gray-500 mt-2">Перетащите изображения сюда или нажмите</p>
+        <p class="text-xs text-gray-400 mt-1">Максимум 10 изображений</p>
+      </div>
+      <input type="file" id="file-input" accept="image/*" multiple class="hidden" onchange="handleFiles(this.files)">
+      <!-- Image preview grid -->
+      <div id="image-preview" class="grid grid-cols-3 gap-3 mt-3"></div>
+      <!-- Hidden inputs for image paths -->
+      <div id="image-inputs"></div>
+    </div>
+
+    <!-- Active checkbox (edit only) -->
+    {% if ad %}
+    <div class="flex items-center gap-2">
+      <input type="checkbox" name="is_active" id="is_active" value="true" {{ 'checked' if ad.is_active else '' }}
+        class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+      <label for="is_active" class="text-sm text-gray-700">Активно</label>
+    </div>
     {% endif %}
 
-    <form method="POST" action="{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}" class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6 space-y-6">
-        <div>
-            <label for="title" class="block text-sm font-medium text-slate-900">Название</label>
-            <input id="title" name="title" type="text" required value="{{ ad.title if ad else '' }}" class="mt-2 block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 transition-shadow sm:text-sm">
-        </div>
-        <div>
-            <label for="text" class="block text-sm font-medium text-slate-900">Текст</label>
-            <textarea id="text" name="text" rows="6" required class="mt-2 block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 transition-shadow sm:text-sm">{{ ad.text if ad else '' }}</textarea>
-        </div>
-        <div>
-            <label class="block text-sm font-medium text-slate-900 mb-2">Изображения</label>
-            <div id="drop-zone" class="mt-2 border-2 border-dashed border-slate-300 rounded-xl p-8 text-center cursor-pointer transition-all duration-200 hover:border-primary-400 hover:bg-primary-50/50">
-                <svg class="mx-auto h-12 w-12 text-slate-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0 0 22.5 18.75V5.25A2.25 2.25 0 0 0 20.25 3H3.75A2.25 2.25 0 0 0 1.5 5.25v13.5A2.25 2.25 0 0 0 3.75 21Z" />
-                </svg>
-                <p class="mt-2 text-sm text-slate-600">Перетащите изображения сюда</p>
-                <button type="button" id="pick-btn" class="mt-3 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-300 hover:bg-slate-50 transition-colors">Выбрать файлы</button>
-                <p class="mt-2 text-xs text-slate-500">PNG, JPG, GIF, WebP. Макс. 10 изображений.</p>
-            </div>
-            <input type="file" id="file-input" multiple accept="image/*" class="hidden">
-            <div id="image-list" class="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-4"></div>
-            <div id="upload-errors"></div>
-        </div>
-        {% if ad %}
-        <div class="flex items-center">
-            <input id="is_active" name="is_active" type="checkbox" {% if ad.is_active %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
-            <label for="is_active" class="ml-2 block text-sm text-slate-900">Активно</label>
-        </div>
-        {% endif %}
-        <div class="flex gap-3">
-            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200">{{ "Сохранить" if ad else "Создать" }}</button>
-            <a href="/ads" class="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-slate-900 ring-1 ring-slate-300 hover:bg-slate-50 transition-colors">Отмена</a>
-        </div>
-    </form>
+    <!-- Buttons -->
+    <div class="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+      <a href="/ads" class="text-sm font-medium text-gray-600 hover:text-gray-800 px-3 py-2">Отмена</a>
+      <button type="submit" class="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">Сохранить</button>
+    </div>
+  </form>
 </div>
 
+<!-- IMPORTANT: Keep the existing JavaScript for image management -->
 <script>
-(function() {
-    const IMAGE_BASE_URL = '{{ s3_public_url() }}';
-    const MAX_IMAGES = 10;
-    const imagePaths = [];
+const IMAGE_BASE_URL = '{{ s3_public_url() }}';
+let imagePaths = {{ (ad.images | tojson) if ad and ad.images else '[]' }};
 
-    const dropZone = document.getElementById('drop-zone');
-    const fileInput = document.getElementById('file-input');
-    const pickBtn = document.getElementById('pick-btn');
-    const imageList = document.getElementById('image-list');
-    const uploadErrors = document.getElementById('upload-errors');
+function renderImages() {
+    const preview = document.getElementById('image-preview');
+    const inputs = document.getElementById('image-inputs');
+    preview.innerHTML = '';
+    inputs.innerHTML = '';
+    imagePaths.forEach((path, i) => {
+        const url = path.startsWith('http') ? path : IMAGE_BASE_URL + '/' + path;
+        preview.innerHTML += `<div class="relative group">
+            <img src="${url}" class="w-full aspect-square object-cover rounded-lg bg-gray-100">
+            <button type="button" onclick="removeImage(${i})" class="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>`;
+        inputs.innerHTML += `<input type="hidden" name="images" value="${path}">`;
+    });
+}
 
-    // Load existing images when editing
-    {% if ad and ad.images %}
-    {% for img in ad.images %}
-    imagePaths.push("{{ img }}");
-    {% endfor %}
-    {% endif %}
-
+function removeImage(index) {
+    imagePaths.splice(index, 1);
     renderImages();
+}
 
-    // Click handlers
-    pickBtn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        fileInput.click();
-    });
+async function uploadFile(file) {
+    if (imagePaths.length >= 10) { alert('Максимум 10 изображений'); return; }
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+        const resp = await fetch('/api/uploads/image', { method: 'POST', body: formData });
+        const data = await resp.json();
+        if (data.path) { imagePaths.push(data.path); renderImages(); }
+    } catch (e) { console.error('Upload failed:', e); }
+}
 
-    dropZone.addEventListener('click', function() {
-        fileInput.click();
-    });
+function handleFiles(files) {
+    Array.from(files).forEach(f => uploadFile(f));
+}
 
-    fileInput.addEventListener('change', function() {
-        handleFiles(fileInput.files);
-        fileInput.value = '';
-    });
+// Drag and drop
+const dropZone = document.getElementById('drop-zone');
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('border-indigo-400', 'bg-indigo-50'); });
+dropZone.addEventListener('dragleave', e => { e.preventDefault(); dropZone.classList.remove('border-indigo-400', 'bg-indigo-50'); });
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('border-indigo-400', 'bg-indigo-50'); handleFiles(e.dataTransfer.files); });
 
-    // Drag-and-drop handlers
-    dropZone.addEventListener('dragover', function(e) {
-        e.preventDefault();
-        dropZone.classList.add('border-primary-500', 'bg-primary-50');
-    });
-
-    dropZone.addEventListener('dragleave', function(e) {
-        e.preventDefault();
-        dropZone.classList.remove('border-primary-500', 'bg-primary-50');
-    });
-
-    dropZone.addEventListener('drop', function(e) {
-        e.preventDefault();
-        dropZone.classList.remove('border-primary-500', 'bg-primary-50');
-        handleFiles(e.dataTransfer.files);
-    });
-
-    function handleFiles(files) {
-        const fileArray = Array.from(files);
-        const remaining = MAX_IMAGES - imagePaths.length;
-
-        if (fileArray.length > remaining) {
-            showError('Можно загрузить не более ' + MAX_IMAGES + ' изображений. Осталось мест: ' + remaining + '.');
-            return;
-        }
-
-        for (const file of fileArray) {
-            if (!file.type.startsWith('image/')) {
-                showError('Файл "' + file.name + '" не является изображением.');
-                continue;
-            }
-            uploadFile(file);
-        }
-    }
-
-    function uploadFile(file) {
-        // Show spinning placeholder
-        const placeholder = document.createElement('div');
-        placeholder.className = 'relative aspect-square rounded-lg bg-slate-100 flex items-center justify-center';
-        placeholder.innerHTML = '<svg class="animate-spin h-8 w-8 text-primary-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>';
-        imageList.appendChild(placeholder);
-
-        const formData = new FormData();
-        formData.append('file', file);
-
-        fetch('/api/uploads/image', {
-            method: 'POST',
-            body: formData,
-            credentials: 'include'
-        })
-        .then(function(response) {
-            if (!response.ok) {
-                return response.json().then(function(data) {
-                    throw new Error(data.detail || 'Ошибка загрузки');
-                });
-            }
-            return response.json();
-        })
-        .then(function(data) {
-            placeholder.remove();
-            imagePaths.push(data.path);
-            renderImages();
-        })
-        .catch(function(err) {
-            placeholder.remove();
-            showError('Ошибка загрузки "' + file.name + '": ' + err.message);
-        });
-    }
-
-    function renderImages() {
-        imageList.innerHTML = '';
-
-        if (imagePaths.length === 0) {
-            const emptyInput = document.createElement('input');
-            emptyInput.type = 'hidden';
-            emptyInput.name = 'images';
-            emptyInput.value = '';
-            imageList.appendChild(emptyInput);
-            return;
-        }
-
-        imagePaths.forEach(function(path, index) {
-            const wrapper = document.createElement('div');
-            wrapper.className = 'group relative aspect-square rounded-lg overflow-hidden bg-slate-100 ring-1 ring-slate-200';
-
-            const img = document.createElement('img');
-            img.src = IMAGE_BASE_URL + '/' + path;
-            img.alt = 'Изображение';
-            img.className = 'h-full w-full object-cover';
-
-            const hiddenInput = document.createElement('input');
-            hiddenInput.type = 'hidden';
-            hiddenInput.name = 'images';
-            hiddenInput.value = path;
-
-            const removeBtn = document.createElement('button');
-            removeBtn.type = 'button';
-            removeBtn.className = 'absolute top-1 right-1 hidden group-hover:flex items-center justify-center h-6 w-6 rounded-full bg-red-600 text-white shadow-sm hover:bg-red-700';
-            removeBtn.innerHTML = '<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>';
-            removeBtn.addEventListener('click', function() {
-                imagePaths.splice(index, 1);
-                renderImages();
-            });
-
-            wrapper.appendChild(img);
-            wrapper.appendChild(hiddenInput);
-            wrapper.appendChild(removeBtn);
-            imageList.appendChild(wrapper);
-        });
-    }
-
-    function showError(message) {
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'mt-2 rounded-xl bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-100';
-        errorDiv.textContent = message;
-        uploadErrors.appendChild(errorDiv);
-
-        setTimeout(function() {
-            errorDiv.remove();
-        }, 5000);
-    }
-})();
+// Initial render
+renderImages();
 </script>
+
 {% endblock %}
