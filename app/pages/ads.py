@@ -1,15 +1,41 @@
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
+from app.models.schedule import Schedule
+from app.models.send_log import SendLog
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
+
+
+async def _enrich_ads_with_stats(db: AsyncSession, ads: list[Ad]) -> None:
+    """Добавляет sends_count и schedules_count к каждому объявлению."""
+    if not ads:
+        return
+    ad_ids = [a.id for a in ads]
+    # Успешные отправки по ad_id
+    sends_result = await db.execute(
+        select(SendLog.ad_id, func.count().label("cnt"))
+        .where(SendLog.ad_id.in_(ad_ids), SendLog.status == "ok")
+        .group_by(SendLog.ad_id)
+    )
+    sends_map = {r.ad_id: r.cnt for r in sends_result.all()}
+    # Расписания по ad_id
+    sched_result = await db.execute(
+        select(Schedule.ad_id, func.count().label("cnt"))
+        .where(Schedule.ad_id.in_(ad_ids))
+        .group_by(Schedule.ad_id)
+    )
+    sched_map = {r.ad_id: r.cnt for r in sched_result.all()}
+    for ad in ads:
+        ad.sends_count = sends_map.get(ad.id, 0) or 0
+        ad.schedules_count = sched_map.get(ad.id, 0) or 0
 
 
 @router.get("/ads/partial", response_class=HTMLResponse)
@@ -30,6 +56,7 @@ async def ads_partial(
     rows = list(result.scalars().all())
     has_next = len(rows) > limit
     ads = rows[:limit]
+    await _enrich_ads_with_stats(db, ads)
     template = "ads/partial_cards.html" if layout == "cards" else "ads/partial_rows.html"
     return templates.TemplateResponse(
         template,
@@ -58,6 +85,7 @@ async def ads_list(
     rows = list(result.scalars().all())
     has_next = len(rows) > PAGE_SIZE
     ads = rows[:PAGE_SIZE]
+    await _enrich_ads_with_stats(db, ads)
     return templates.TemplateResponse(
         "ads/list.html",
         {

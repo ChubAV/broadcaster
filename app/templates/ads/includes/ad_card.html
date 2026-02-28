@@ -47,6 +47,8 @@
                 {{ "Активно" if ad.is_active else "Неактивно" }}
             </span>
             <span class="text-xs text-slate-500">{{ format_datetime_for_user(ad.created_at, user, '%d.%m.%Y') }}</span>
+            <span class="text-xs text-slate-600" title="Успешных отправок">📤 {{ ad.sends_count|default(0) }}</span>
+            <span class="text-xs text-slate-600" title="Расписаний">📅 {{ ad.schedules_count|default(0) }}</span>
         </div>
         {# Продавец / автор #}
         <div class="flex items-center gap-2 mt-3">
