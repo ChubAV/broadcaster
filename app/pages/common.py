@@ -15,7 +15,17 @@ _templates_dir = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_templates_dir))
 
 # Register get_image_url as Jinja2 global so templates can use {{ get_image_url(key) }}
+def _resolve_image_url(key: str) -> str:
+    """Return key as-is if it's already a full URL, else build S3 URL."""
+    if not key:
+        return ""
+    if key.startswith("http://") or key.startswith("https://"):
+        return key
+    return get_image_url(key, get_settings().s3_public_url)
+
+
 templates.env.globals["get_image_url"] = lambda key: get_image_url(key, get_settings().s3_public_url)
+templates.env.globals["resolve_image_url"] = _resolve_image_url
 templates.env.globals["s3_public_url"] = lambda: get_settings().s3_public_url
 
 

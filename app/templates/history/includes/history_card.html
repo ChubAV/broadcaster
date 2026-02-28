@@ -1,0 +1,70 @@
+{# Карточка отправки в стиле объявления (Avito-like) #}
+{% from "includes/messenger_icon.html" import messenger_icon %}
+{% from "includes/icons.html" import icon_arrow_right %}
+<li class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col sm:flex-row cursor-pointer hover:ring-2 hover:ring-primary-500/50 transition-all" x-data="{ currentImage: 0 }" onclick="window.location='/history/{{ log.id }}'">
+    {# Секция изображений #}
+    <div class="sm:w-[280px] sm:min-w-[280px] flex-shrink-0 bg-slate-100">
+        {% if log.ad_images %}
+        <div class="relative aspect-[4/3]">
+            {% for img in log.ad_images %}
+            <img src="{{ resolve_image_url(img) }}" alt="{{ log.ad_title }}" class="absolute inset-0 w-full h-full object-cover transition-opacity duration-200"
+                 :class="{ 'opacity-100 z-10': currentImage === {{ loop.index0 }}, 'opacity-0': currentImage !== {{ loop.index0 }}}">
+            {% endfor %}
+            <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-3 py-2 flex items-center justify-between z-20">
+                <span class="text-white text-sm font-medium">{{ log.ad_images|length }} фото</span>
+                <div class="flex gap-1">
+                    {% for _ in log.ad_images %}
+                    <span class="w-1.5 h-1.5 rounded-full transition-colors" :class="currentImage === {{ loop.index0 }} ? 'bg-white' : 'bg-white/50'"></span>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        <div class="flex gap-1 p-2 overflow-x-auto">
+            {% for img in log.ad_images[:4] %}
+            <button type="button" @click.stop="currentImage = {{ loop.index0 }}" class="flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-colors"
+                    :class="currentImage === {{ loop.index0 }} ? 'border-primary-500 ring-1 ring-primary-500' : 'border-transparent hover:border-slate-300'">
+                <img src="{{ resolve_image_url(img) }}" alt="" class="w-full h-full object-cover">
+            </button>
+            {% endfor %}
+            {% if log.ad_images|length > 4 %}
+            <div class="flex-shrink-0 w-14 h-14 rounded-lg bg-slate-200 flex items-center justify-center text-sm font-semibold text-slate-600">+{{ log.ad_images|length - 4 }}</div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="aspect-[4/3] flex items-center justify-center text-slate-400">
+            <svg class="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0 0 22.5 18.75V5.25A2.25 2.25 0 0 0 20.25 3H3.75A2.25 2.25 0 0 0 1.5 5.25v13.5A2.25 2.25 0 0 0 3.75 21Z"/></svg>
+        </div>
+        {% endif %}
+    </div>
+
+    {# Центральная секция #}
+    <div class="flex-1 min-w-0 p-4 sm:p-5 flex flex-col">
+        <h3 class="text-lg font-semibold text-slate-900 truncate" title="{{ log.ad_title }}">{{ log.ad_title }}</h3>
+        {% if log.ad_text %}
+        <p class="mt-1 text-sm text-slate-600 line-clamp-2">{{ log.ad_text[:200] }}{% if log.ad_text|length > 200 %}...{% endif %}</p>
+        {% endif %}
+        <p class="mt-2 text-sm text-slate-500">
+            <span class="font-medium">Группа:</span> <span class="truncate" title="{{ log.group_name }}">{{ log.group_name }}</span>
+        </p>
+        <div class="flex flex-wrap items-center gap-2 mt-3">
+            <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800{% elif log.status == 'fail' %}bg-red-100 text-red-800{% elif log.status == 'account_disconnected' %}bg-amber-100 text-amber-800{% else %}bg-slate-100 text-slate-800{% endif %}">
+                {{ "Отправлено" if log.status == 'ok' else "Ошибка" if log.status == 'fail' else "Аккаунт отключён" if log.status == 'account_disconnected' else (log.status or '')|upper }}
+            </span>
+            {% if log.messenger_type %}
+            <span class="inline-flex items-center" title="{{ 'Telegram' if log.messenger_type == 'tg_user' else 'WhatsApp' if log.messenger_type == 'wa' else log.messenger_type }}">{{ messenger_icon(log.messenger_type, size='h-5 w-5', show_label=false) }}</span>
+            {% endif %}
+            <span class="text-xs text-slate-500">{{ format_datetime_for_user(log.sent_at, user, '%d.%m.%Y %H:%M') }}</span>
+        </div>
+        {% if log.error_message %}
+        <div class="mt-3 rounded-lg bg-red-50 border border-red-100 p-3">
+            <p class="text-xs font-medium text-red-600 mb-0.5">Ошибка</p>
+            <p class="text-sm text-red-800 break-words line-clamp-2">{{ log.error_message }}</p>
+        </div>
+        {% endif %}
+    </div>
+
+    {# Правая боковая панель #}
+    <div class="flex sm:flex-col sm:border-l border-t sm:border-t-0 border-slate-200 p-2 gap-1 items-center justify-center">
+        <a href="/history/{{ log.id }}" class="p-2.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-primary-600 transition-colors" title="Подробнее">{{ icon_arrow_right(size='h-6 w-6') }}</a>
+    </div>
+</li>

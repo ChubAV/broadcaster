@@ -36,6 +36,8 @@ async def history_partial(
         {
             "id": r.id,
             "ad_title": r.ad_title or "—",
+            "ad_text": r.ad_text or "",
+            "ad_images": r.ad_images or [],
             "group_name": r.group_name or "—",
             "status": r.status,
             "messenger_type": r.messenger_type,
@@ -110,6 +112,8 @@ async def history_list(
         {
             "id": r.id,
             "ad_title": r.ad_title or "—",
+            "ad_text": r.ad_text or "",
+            "ad_images": r.ad_images or [],
             "group_name": r.group_name or "—",
             "status": r.status,
             "messenger_type": r.messenger_type,

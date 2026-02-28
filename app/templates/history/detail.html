@@ -79,8 +79,8 @@
             <span class="text-sm font-medium text-slate-500">Изображения ({{ log.ad_images|length }})</span>
             <div class="flex flex-wrap gap-3">
                 {% for img in log.ad_images %}
-                <a href="{{ get_image_url(img) }}" target="_blank" class="block">
-                    <img src="{{ get_image_url(img) }}" alt="Изображение" class="h-24 w-24 object-cover rounded-lg border border-slate-200 hover:ring-2 hover:ring-primary-400 transition-all">
+                <a href="{{ resolve_image_url(img) }}" target="_blank" class="block">
+                    <img src="{{ resolve_image_url(img) }}" alt="Изображение" class="h-24 w-24 object-cover rounded-lg border border-slate-200 hover:ring-2 hover:ring-primary-400 transition-all">
                 </a>
                 {% endfor %}
             </div>
