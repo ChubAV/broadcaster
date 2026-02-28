@@ -112,11 +112,6 @@
     </div>
     {% endblock %}
 
-    <!-- View Transitions: включаем для HTMX-свопов (при использовании hx-get/hx-swap) -->
-    <script>
-        if (typeof htmx !== 'undefined' && document.startViewTransition) {
-            htmx.config.globalViewTransitions = true;
-        }
-    </script>
+    <!-- View Transitions отключены: при infinite scroll (hx-trigger="revealed") вызывали мерцание и рывки скролла -->
 </body>
 </html>
