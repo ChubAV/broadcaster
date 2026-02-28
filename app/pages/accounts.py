@@ -260,7 +260,7 @@ async def accounts_connect_wa_page(
     await db.refresh(account)
 
     session_id = str(account.id)
-    messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=session_id)
+    messenger = WhatsAppMessenger(session_id=session_id)
 
     qr_code = None
     connected = False
@@ -314,7 +314,7 @@ async def accounts_connect_wa_status(
         return HTMLResponse('<span class="text-sm text-red-600">Нет активной сессии подключения</span>')
 
     session_id = str(account.id)
-    messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=session_id)
+    messenger = WhatsAppMessenger(session_id=session_id)
 
     try:
         is_connected = await messenger.check_connection()
@@ -413,7 +413,7 @@ async def accounts_retry_sync(
         return RedirectResponse(url="/accounts", status_code=302)
 
     session_id = str(account.id)
-    messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=session_id)
+    messenger = WhatsAppMessenger(session_id=session_id)
     await messenger.retry_sync()
 
     account.status = "syncing"
@@ -460,7 +460,7 @@ async def accounts_sync_groups(
         messenger_type = "tg_user"
 
     elif account.type == "wa":
-        messenger = WhatsAppMessenger(bridge_url=settings.wa_bridge_url, session_id=str(account.id))
+        messenger = WhatsAppMessenger(session_id=str(account.id))
         fetched_groups = await messenger.get_groups()
         messenger_type = "wa"
 

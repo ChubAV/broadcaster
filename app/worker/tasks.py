@@ -28,37 +28,72 @@ from app.application.scheduling.use_cases import (
 logger = structlog.get_logger(__name__)
 
 
-async def dispatch_send_tasks(
-    tasks_to_dispatch: list[dict],
-) -> None:
-    """Dispatch individual Celery tasks for each send.
+async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
+    """Dispatch tasks: Telegram to Celery queue, WhatsApp to Redis per-account queues."""
+    import json
+    import redis as redis_lib
+    from uuid import uuid4
 
-    WA tasks are grouped by session_id and dispatched together so they
-    appear consecutively in the FIFO queue — the bridge keeps the Chromium
-    session loaded while processing the batch.
-    """
-    from collections import defaultdict
+    settings = get_settings()
 
-    # Group WA tasks by session for affinity ordering
-    wa_by_session: dict[int, list[dict]] = defaultdict(list)
-    tg_tasks: list[dict] = []
+    tg_tasks: list[DispatchTask] = []
+    wa_tasks_by_account: dict[int, list[DispatchTask]] = {}
 
-    for task_info in tasks_to_dispatch:
-        if task_info["type"] == "wa":
-            wa_by_session[task_info["account_id"]].append(task_info)
-        else:
-            tg_tasks.append(task_info)
+    for task in tasks_to_dispatch:
+        if task.type == "tg_user":
+            tg_tasks.append(task)
+        elif task.type == "wa":
+            wa_tasks_by_account.setdefault(task.account_id, []).append(task)
 
-    # Dispatch TG tasks
-    for task_info in tg_tasks:
-        args = [task_info["ad_id"], task_info["group_id"], task_info["account_id"], task_info["schedule_id"]]
-        send_telegram_message.apply_async(args=args, queue="telegram")
+    # Dispatch Telegram tasks via Celery (unchanged)
+    for task in tg_tasks:
+        send_telegram_message.apply_async(
+            args=[task.ad_id, task.group_id, task.account_id, task.schedule_id],
+            queue="telegram",
+        )
 
-    # Dispatch WA tasks grouped by session (FIFO ordering = session affinity)
-    for session_id, session_tasks in wa_by_session.items():
-        for task_info in session_tasks:
-            args = [task_info["ad_id"], task_info["group_id"], task_info["account_id"], task_info["schedule_id"]]
-            send_whatsapp_message.apply_async(args=args, queue="whatsapp")
+    # Dispatch WhatsApp tasks to Redis per-account queues
+    if wa_tasks_by_account:
+        r = redis_lib.from_url(settings.redis_url)
+        try:
+            pipe = r.pipeline()
+            for account_id, tasks in wa_tasks_by_account.items():
+                queue_key = f"wa:queue:{account_id}"
+                for task in tasks:
+                    task_id = str(uuid4())
+                    logger.info("wa_task_created",
+                               task_id=task_id,
+                               ad_id=task.ad_id,
+                               group_id=task.group_id,
+                               account_id=task.account_id,
+                               schedule_id=task.schedule_id,
+                               group_name=task.group_name)
+                    payload = json.dumps({
+                        "task_id": task_id,
+                        "ad_id": task.ad_id,
+                        "group_id": task.group_id,
+                        "account_id": task.account_id,
+                        "schedule_id": task.schedule_id,
+                        "user_id": task.user_id,
+                        "ad_text": task.ad_text,
+                        "ad_title": task.ad_title,
+                        "ad_images": task.ad_images,
+                        "group_external_id": task.group_external_id,
+                        "group_name": task.group_name,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    pipe.rpush(queue_key, payload)
+                pipe.sadd("wa:active_accounts", account_id)
+            pipe.execute()
+            logger.info("wa_tasks_dispatched",
+                       account_count=len(wa_tasks_by_account),
+                       total_tasks=sum(len(t) for t in wa_tasks_by_account.values()))
+        finally:
+            r.close()
+
+    total = len(tg_tasks) + sum(len(t) for t in wa_tasks_by_account.values())
+    logger.info("send_tasks_dispatched", total=total, tg=len(tg_tasks),
+               wa=sum(len(t) for t in wa_tasks_by_account.values()))
 
 
 async def check_schedules_async(session: AsyncSession):
@@ -71,17 +106,7 @@ async def check_schedules_async(session: AsyncSession):
     )
     logger.info("check_schedules_found", now=now.isoformat(), due_count=len(tasks))
     if tasks:
-        payloads = [
-            {
-                "type": task.type,
-                "ad_id": task.ad_id,
-                "group_id": task.group_id,
-                "account_id": task.account_id,
-                "schedule_id": task.schedule_id,
-            }
-            for task in tasks
-        ]
-        await dispatch_send_tasks(payloads)
+        await dispatch_send_tasks(tasks)
         logger.info("send_tasks_dispatched", count=len(tasks))
     else:
         logger.info("no_tasks_to_dispatch")
@@ -153,39 +178,6 @@ def send_telegram_message(self, ad_id, group_id, account_id, schedule_id):
 send_telegram_message.on_failure = _on_send_failure
 
 
-_WA_RETRY_DELAYS = [60, 180, 300]  # 1 min, 3 min, 5 min
-
-
-@shared_task(
-    name="app.worker.tasks.send_whatsapp_message",
-    bind=True,
-    max_retries=3,
-    rate_limit="7/m",
-)
-def send_whatsapp_message(self, ad_id, group_id, account_id, schedule_id):
-    """Send a single WhatsApp message. Retries with delays: 1m, 3m, 5m."""
-    task_id = self.request.id
-    logger.info(
-        "celery_task_start",
-        task_name=self.name,
-        task_id=task_id,
-        queue=getattr(self.request, "delivery_info", {}).get("routing_key"),
-    )
-    structlog.contextvars.bind_contextvars(task_id=task_id)
-    try:
-        asyncio.run(_send_message(ad_id, group_id, account_id, schedule_id, task_id=task_id))
-    except Exception as exc:
-        retry_num = self.request.retries
-        countdown = _WA_RETRY_DELAYS[retry_num] if retry_num < len(_WA_RETRY_DELAYS) else _WA_RETRY_DELAYS[-1]
-        logger.warning("wa_task_retry", retry=retry_num + 1, countdown=countdown, error=str(exc))
-        raise self.retry(exc=exc, countdown=countdown)
-    finally:
-        structlog.contextvars.unbind_contextvars("task_id")
-
-
-send_whatsapp_message.on_failure = _on_send_failure
-
-
 @shared_task(name="app.worker.tasks.check_schedules", bind=True)
 def check_schedules(self):
     """Celery task: check all due schedules and dispatch individual send tasks."""
@@ -218,14 +210,13 @@ async def _sync_wa_groups_async(account_id: int):
     engine = get_engine(settings.database_url)
     session_factory = get_session_factory(engine)
 
-    from app.messengers.whatsapp import WhatsAppMessenger, get_bridge_url
+    from app.messengers.whatsapp import WhatsAppMessenger
 
     POLL_INTERVAL = 15  # seconds
     MAX_POLLS = 40  # 40 * 15s = 10 minutes max
 
     try:
-        bridge_url = get_bridge_url(account_id, settings.wa_bridge_urls)
-        messenger = WhatsAppMessenger(bridge_url=bridge_url, session_id=str(account_id))
+        messenger = WhatsAppMessenger(session_id=str(account_id))
 
         for attempt in range(MAX_POLLS):
             sync_data = await messenger.get_sync_status()
@@ -310,3 +301,137 @@ async def _sync_wa_groups_async(account_id: int):
 def sync_wa_groups(self, account_id: int):
     """Background task: poll bridge until group sync completes, save to DB."""
     asyncio.run(_sync_wa_groups_async(account_id))
+
+
+@shared_task(name="app.worker.tasks.manage_wa_containers")
+def manage_wa_containers():
+    """Check Redis queues and start/cleanup wa-worker containers."""
+    import redis as redis_lib
+    from app.services.wa_container_manager import (
+        start_container,
+        cleanup_exited_containers,
+    )
+
+    settings = get_settings()
+    r = redis_lib.from_url(settings.redis_url)
+
+    try:
+        active_accounts = r.smembers("wa:active_accounts")
+
+        for raw_id in active_accounts:
+            account_id = int(raw_id)
+            queue_key = f"wa:queue:{account_id}"
+            queue_len = r.llen(queue_key)
+
+            if queue_len > 0:
+                endpoint = start_container(account_id)
+                if endpoint:
+                    r.set(f"wa:endpoint:{account_id}", endpoint, ex=420)
+                    logger.info("container_ensured", account_id=account_id, queue_len=queue_len)
+            else:
+                r.srem("wa:active_accounts", account_id)
+                r.delete(f"wa:endpoint:{account_id}")
+
+        cleanup_exited_containers()
+
+    except Exception as e:
+        logger.error("manage_wa_containers_error", error=str(e), exc_info=True)
+    finally:
+        r.close()
+
+
+@shared_task(name="app.worker.tasks.process_wa_results")
+def process_wa_results():
+    """Read send results from Redis and write SendLog entries to DB."""
+    import json
+    import redis as redis_lib
+
+    settings = get_settings()
+    r = redis_lib.from_url(settings.redis_url)
+
+    try:
+        results = []
+        for _ in range(100):
+            raw = r.lpop("wa:results")
+            if not raw:
+                break
+            try:
+                results.append(json.loads(raw))
+            except json.JSONDecodeError as e:
+                logger.error("result_parse_error", raw=str(raw)[:200], error=str(e))
+
+        if not results:
+            return
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_process_results_async(results))
+        finally:
+            loop.close()
+
+    except Exception as e:
+        logger.error("process_wa_results_error", error=str(e), exc_info=True)
+    finally:
+        r.close()
+
+
+async def _process_results_async(results: list[dict]):
+    """Write batch of results to database."""
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    session_factory = get_session_factory(engine)
+
+    async with session_factory() as session:
+        for result in results:
+            try:
+                # Use original S3 keys from Ad, not full URLs from wa-worker
+                ad_images = result.get("ad_images")
+                ad_id = result.get("ad_id")
+                if ad_id:
+                    ad = await session.get(Ad, ad_id)
+                    if ad and ad.images:
+                        ad_images = ad.images
+
+                send_log = SendLog(
+                    user_id=result["user_id"],
+                    schedule_id=result.get("schedule_id"),
+                    ad_id=ad_id,
+                    group_id=result.get("group_id"),
+                    task_id=result.get("task_id"),
+                    status=result["status"],
+                    error_message=result.get("error_message"),
+                    messenger_type="wa",
+                    ad_title=result.get("ad_title"),
+                    ad_text=result.get("ad_text"),
+                    ad_images=ad_images,
+                    group_name=result.get("group_name"),
+                )
+                session.add(send_log)
+
+                group_id = result.get("group_id")
+                if group_id:
+                    group = await session.get(Group, group_id)
+                    if group:
+                        if result.get("no_retry"):
+                            group.last_error = result.get("error_message")
+                            group.error_at = datetime.now(timezone.utc)
+                        elif result["status"] == "ok":
+                            group.last_error = None
+                            group.error_at = None
+
+            except Exception as e:
+                logger.error("result_write_error", task_id=result.get("task_id"), error=str(e))
+                continue
+
+            logger.info("wa_result_recorded",
+                       task_id=result.get("task_id"),
+                       status=result["status"],
+                       ad_id=result.get("ad_id"),
+                       group_id=result.get("group_id"),
+                       account_id=result.get("account_id"),
+                       error_message=result.get("error_message"))
+
+        await session.commit()
+        logger.info("results_processed", count=len(results))
+
+    await engine.dispose()

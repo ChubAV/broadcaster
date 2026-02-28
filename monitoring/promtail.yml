@@ -22,10 +22,16 @@ scrape_configs:
         target_label: compose_project
       - source_labels: ['__meta_docker_compose_service']
         target_label: compose_service
+      # wa-worker labels (containers created via Docker API, not compose)
+      - source_labels: ['__meta_docker_container_label_broadcaster_role']
+        target_label: broadcaster_role
+      - source_labels: ['__meta_docker_container_label_broadcaster_account_id']
+        target_label: account_id
 
     pipeline_stages:
       - docker: {}
 
+      # Compose services (Python structlog — level is a string)
       - match:
           selector: '{compose_project=~".+"}'
           stages:
@@ -34,5 +40,20 @@ scrape_configs:
                   level: level
                   event: event
                   msg: msg
+            - labels:
+                level:
+
+      # wa-worker containers (Pino — level is numeric)
+      - match:
+          selector: '{broadcaster_role="wa-worker"}'
+          stages:
+            - json:
+                expressions:
+                  level: level
+                  msg: msg
+                  accountId: accountId
+            - template:
+                source: level
+                template: '{{ if eq .Value "10" }}trace{{ else if eq .Value "20" }}debug{{ else if eq .Value "30" }}info{{ else if eq .Value "40" }}warn{{ else if eq .Value "50" }}error{{ else if eq .Value "60" }}fatal{{ else }}{{ .Value }}{{ end }}'
             - labels:
                 level:

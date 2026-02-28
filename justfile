@@ -71,8 +71,10 @@ monitoring-restart:
 prod-start:
     docker compose -f docker-compose.prod.yml up -d
 
-# Stop Docker prod environment
+# Stop Docker prod environment (including wa-worker containers)
 prod-stop:
+    docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop
+    docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm
     docker compose -f docker-compose.prod.yml down
 
 # Restart Docker prod environment
@@ -81,6 +83,8 @@ prod-restart:
 
 # Hard restart Docker prod environment (stop and start)
 prod-hard-restart:
+    docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop && \
+    docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm; \
     docker compose -f docker-compose.prod.yml down && \
     docker compose -f docker-compose.prod.yml up -d
 
@@ -92,6 +96,8 @@ prod-cleanup-schedules *args:
 prod-hard-deploy:
     git pull && \
     docker compose -f docker-compose.prod.yml build --no-cache && \
+    docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop && \
+    docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm; \
     docker compose -f docker-compose.prod.yml down && \
     docker compose -f docker-compose.prod.yml up -d
 
@@ -99,6 +105,8 @@ prod-hard-deploy:
 prod-deploy:
     git pull && \
     docker compose -f docker-compose.prod.yml build && \
+    docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop && \
+    docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm; \
     docker compose -f docker-compose.prod.yml down && \
     docker compose -f docker-compose.prod.yml up -d
 
@@ -109,3 +117,16 @@ prod-build:
 # Show Docker logs (follow)
 prod-logs *args:
     docker compose -f docker-compose.prod.yml logs -f {{ args }}
+
+# Build wa-worker Docker image
+wa-worker-build:
+    docker build -t broadcaster-wa-worker:latest ./wa_worker
+
+# List running wa-worker containers
+wa-workers:
+    docker ps --filter "label=broadcaster.role=wa-worker" --format "table {{{{.Names}}\t{{{{.Status}}\t{{{{.Ports}}"
+
+# Stop all wa-worker containers
+wa-workers-stop:
+    docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop
+    docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm

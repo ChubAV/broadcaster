@@ -24,6 +24,11 @@ Project uses [just](https://github.com/casey/just) as a command runner. Run `jus
 - **Alembic migration**: `just migrate "description"`
 - **Alembic upgrade**: `just upgrade`
 
+### WA Worker
+- **Build image**: `just wa-worker-build`
+- **List workers**: `just wa-workers`
+- **Stop all workers**: `just wa-workers-stop`
+
 ### Docker
 - **Docker dev**: `just dev`
 - **Docker stop**: `just down`
@@ -50,14 +55,15 @@ Project uses [just](https://github.com/casey/just) as a command runner. Run `jus
 - `app/pages/` -- Server-rendered HTML pages (auth, dashboard, ads, accounts, groups, schedules, history, billing, admin, profile)
 - `app/models/` -- SQLAlchemy ORM models (User, Ad, Group, MessengerAccount, Schedule, SendLog, Subscription, TelegramAuthSession)
 - `app/repositories/` -- Data access layer: generic `BaseRepository[T]` + domain repositories
-- `app/services/` -- Business logic (auth, billing, billing_cache, schedule, messenger_factory, s3)
-- `app/messengers/` -- Messenger adapters (Telegram userbot via Telethon, Telegram pool, WhatsApp via Baileys bridge)
-- `app/worker/` -- Celery app and async tasks (schedule checker, send dispatcher, WA consumer)
+- `app/services/` -- Business logic (auth, billing, billing_cache, schedule, messenger_factory, s3, wa_container_manager)
+- `app/messengers/` -- Messenger adapters (Telegram userbot via Telethon, Telegram pool, WhatsApp via dynamic wa-worker containers)
+- `app/worker/` -- Celery app and async tasks (schedule checker, send dispatcher, WA container manager, WA result processor)
 - `app/application/` -- DDD use cases (accounts, scheduling)
 - `app/domain/` -- Domain repository interfaces
 - `app/infrastructure/` -- Unit of Work implementation
 - `app/templates/` -- Jinja2 HTML templates (21 files across 8 subdirectories)
-- `wa_bridge/` -- WhatsApp bridge: Node.js + Express + Baileys (pure WebSocket, no Chromium)
+- `wa_bridge/` -- WhatsApp bridge: Node.js + Express + Baileys (legacy, used for reference)
+- `wa_worker/` -- Per-account WhatsApp worker: Node.js + Baileys + Redis queue consumer (one container per account)
 - `monitoring/` -- Prometheus, Loki, Promtail, Grafana configs and dashboards
 - `nginx/` -- Nginx reverse proxy configs (HTTP and HTTPS templates)
 - `scripts/` -- Maintenance scripts (cleanup_schedules)

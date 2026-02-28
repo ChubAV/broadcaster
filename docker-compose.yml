@@ -18,25 +18,6 @@ x-app-base: &app-base
       S3_PUBLIC_URL: ${S3_PUBLIC_URL}
   env_file: .env
 
-x-wa-bridge-base: &wa-bridge-base
-  build:
-    context: ./wa_bridge
-    dockerfile: Dockerfile
-  environment:
-    PORT: 3000
-    IDLE_TIMEOUT_MS: ${IDLE_TIMEOUT_MS:-300000}
-  volumes:
-    - wa_sessions:/app/sessions
-  healthcheck:
-    test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/health"]
-    interval: 10s
-    timeout: 5s
-    retries: 3
-  deploy:
-    resources:
-      limits:
-        memory: 512M
-
 services:
   web:
     <<: *app-base
@@ -45,6 +26,8 @@ services:
     container_name: web-broadcaster
     ports:
       - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       db:
         condition: service_healthy
@@ -78,31 +61,17 @@ services:
     deploy:
       replicas: 2
 
-  celery-worker-whatsapp:
-    <<: *app-base
-    command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=whatsapp --concurrency=2
-    depends_on:
-      web:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    deploy:
-      replicas: 2
-
   celery-worker-default:
     <<: *app-base
     container_name: celery-worker-default-broadcaster
     command: uv run celery -A app.worker.celery_app worker --loglevel=info --queues=default --concurrency=2
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       web:
         condition: service_healthy
       redis:
         condition: service_healthy
-
-# Мост к Whatsapp
-  wa-bridge:
-    <<: *wa-bridge-base
-    container_name: wa-bridge-broadcaster
 
 # Базы данных
   db:

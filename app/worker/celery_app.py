@@ -30,6 +30,14 @@ def create_celery_app() -> Celery:
                 "task": "app.worker.tasks.check_schedules",
                 "schedule": float(settings.celery_beat_interval),
             },
+            "manage-wa-containers": {
+                "task": "app.worker.tasks.manage_wa_containers",
+                "schedule": 15.0,
+            },
+            "process-wa-results": {
+                "task": "app.worker.tasks.process_wa_results",
+                "schedule": 5.0,
+            },
         },
         worker_prefetch_multiplier=1,
     )
