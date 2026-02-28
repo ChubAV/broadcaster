@@ -2,51 +2,72 @@
 {% from "includes/messenger_icon.html" import messenger_icon %}
 {% block title %}Панель - Broadcaster{% endblock %}
 {% block content %}
-<h1 class="text-2xl font-bold tracking-tight text-slate-900 mb-6">Панель управления</h1>
+<h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 mb-4 sm:mb-6">Панель управления</h1>
 
-<!-- Stats cards -->
-<div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+<!-- Stats cards: 2x2 на mobile, 4 в ряд на desktop -->
+<div class="grid grid-cols-2 gap-3 sm:gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-6 sm:mb-8">
     <div class="group bg-white overflow-hidden rounded-xl shadow-card border border-slate-200/80 hover:shadow-card-hover hover:border-primary-200/60 transition-all duration-200">
-        <div class="p-5">
-            <div class="text-sm font-medium text-slate-500">Активные объявления</div>
-            <div class="mt-1 text-3xl font-semibold text-slate-900">{{ stats.active_ads }}</div>
+        <div class="p-3 sm:p-5">
+            <div class="text-xs sm:text-sm font-medium text-slate-500 truncate">Активные объявления</div>
+            <div class="mt-0.5 sm:mt-1 text-2xl sm:text-3xl font-semibold text-slate-900">{{ stats.active_ads }}</div>
         </div>
     </div>
     <div class="group bg-white overflow-hidden rounded-xl shadow-card border border-slate-200/80 hover:shadow-card-hover hover:border-primary-200/60 transition-all duration-200">
-        <div class="p-5">
-            <div class="text-sm font-medium text-slate-500">Подключённые аккаунты</div>
-            <div class="mt-1 text-3xl font-semibold text-slate-900">{{ stats.active_accounts }}</div>
+        <div class="p-3 sm:p-5">
+            <div class="text-xs sm:text-sm font-medium text-slate-500 truncate">Подключённые аккаунты</div>
+            <div class="mt-0.5 sm:mt-1 text-2xl sm:text-3xl font-semibold text-slate-900">{{ stats.active_accounts }}</div>
         </div>
     </div>
     <div class="group bg-white overflow-hidden rounded-xl shadow-card border border-slate-200/80 hover:shadow-card-hover hover:border-primary-200/60 transition-all duration-200">
-        <div class="p-5">
-            <div class="text-sm font-medium text-slate-500">Активные группы</div>
-            <div class="mt-1 text-3xl font-semibold text-slate-900">{{ stats.active_groups }}</div>
+        <div class="p-3 sm:p-5">
+            <div class="text-xs sm:text-sm font-medium text-slate-500 truncate">Активные группы</div>
+            <div class="mt-0.5 sm:mt-1 text-2xl sm:text-3xl font-semibold text-slate-900">{{ stats.active_groups }}</div>
         </div>
     </div>
     <div class="group bg-white overflow-hidden rounded-xl shadow-card border border-slate-200/80 hover:shadow-card-hover hover:border-primary-200/60 transition-all duration-200">
-        <div class="p-5">
-            <div class="text-sm font-medium text-slate-500">Отправлено сегодня</div>
-            <div class="mt-1 text-3xl font-semibold text-slate-900">{{ stats.sent_today }}</div>
+        <div class="p-3 sm:p-5">
+            <div class="text-xs sm:text-sm font-medium text-slate-500 truncate">Отправлено сегодня</div>
+            <div class="mt-0.5 sm:mt-1 text-2xl sm:text-3xl font-semibold text-slate-900">{{ stats.sent_today }}</div>
         </div>
     </div>
 </div>
 
 <!-- Recent sends -->
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    <div class="px-4 py-5 sm:px-6 border-b border-slate-200/80">
-        <h3 class="text-lg font-semibold text-slate-900">Последние отправки</h3>
+    <div class="px-3 py-4 sm:px-6 sm:py-5 border-b border-slate-200/80">
+        <h3 class="text-base sm:text-lg font-semibold text-slate-900">Последние отправки</h3>
     </div>
-    <div class="px-4 py-5 sm:p-6">
+    <div class="px-3 py-4 sm:px-6 sm:py-6">
         {% if recent_sends %}
-        <div class="overflow-x-auto">
+        {# Mobile: карточки вместо таблицы — без горизонтального скролла #}
+        <ul class="sm:hidden space-y-3 divide-y divide-slate-100 first:pt-0">
+            {% for log in recent_sends %}
+            <li class="pt-3 first:pt-0">
+                <div class="flex items-start gap-3">
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-medium text-slate-900 truncate" title="{{ log.ad_title }}">{{ log.ad_title }}</p>
+                        <p class="text-xs text-slate-500 truncate mt-0.5" title="{{ log.group_name }}">{{ log.group_name }}</p>
+                    </div>
+                    <div class="flex shrink-0 items-center gap-2">
+                        {% if log.messenger_type %}
+                        <span class="inline-flex items-center" title="{{ 'Telegram' if log.messenger_type == 'tg_user' else 'WhatsApp' if log.messenger_type == 'wa' else log.messenger_type }}">{{ messenger_icon(log.messenger_type, size='h-5 w-5', show_label=false) }}</span>
+                        {% endif %}
+                        <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-semibold {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800{% elif log.status == 'fail' %}bg-red-100 text-red-800{% else %}bg-slate-100 text-slate-800{% endif %}">{{ (log.status or '')|upper }}</span>
+                    </div>
+                </div>
+                <p class="text-xs text-slate-400 mt-1">{{ format_datetime_for_user(log.sent_at, user, '%d.%m %H:%M') }}</p>
+            </li>
+            {% endfor %}
+        </ul>
+        {# Desktop: таблица #}
+        <div class="hidden sm:block overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200">
             <thead><tr>
                 <th class="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Объявление</th>
                 <th class="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Группа</th>
                 <th class="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider w-10" title="Тип мессенджера">Тип</th>
                 <th class="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Статус</th>
-                <th class="hidden sm:table-cell px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Время</th>
+                <th class="px-3 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Время</th>
             </tr></thead>
             <tbody class="divide-y divide-slate-200">
                 {% for log in recent_sends %}
@@ -63,7 +84,7 @@
                             {{ (log.status or '')|upper }}
                         </span>
                     </td>
-                    <td class="hidden sm:table-cell px-3 py-2 text-sm text-slate-500">{{ format_datetime_for_user(log.sent_at, user, '%Y-%m-%d %H:%M:%S') }}</td>
+                    <td class="px-3 py-2 text-sm text-slate-500">{{ format_datetime_for_user(log.sent_at, user, '%Y-%m-%d %H:%M:%S') }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
