@@ -435,3 +435,26 @@ async def _process_results_async(results: list[dict]):
         logger.info("results_processed", count=len(results))
 
     await engine.dispose()
+
+
+@shared_task(name="app.worker.tasks.send_verification_email")
+def send_verification_email_task(email: str, code: str):
+    """Send verification code email in background."""
+    from app.services.email_service import send_verification_email
+
+    settings = get_settings()
+    if not settings.smtp_host:
+        logger.warning("smtp_not_configured", email=email)
+        return
+
+    asyncio.run(send_verification_email(
+        to_email=email,
+        code=code,
+        smtp_host=settings.smtp_host,
+        smtp_port=settings.smtp_port,
+        smtp_user=settings.smtp_user,
+        smtp_password=settings.smtp_password,
+        smtp_from=settings.smtp_from,
+        smtp_use_tls=settings.smtp_use_tls,
+    ))
+    logger.info("verification_email_sent", email=email)
