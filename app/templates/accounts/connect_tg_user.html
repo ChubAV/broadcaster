@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "includes/icons.html" import icon_check %}
 {% block title %}Подключение Telegram аккаунта - Broadcaster{% endblock %}
 {% block content %}
 <div class="max-w-lg">
@@ -48,10 +49,8 @@
 
         <!-- Success section -->
         <div id="success-section" class="hidden text-center">
-            <div class="inline-flex items-center justify-center w-16 h-16 bg-emerald-100 rounded-full mb-4">
-                <svg class="w-8 h-8 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
-                </svg>
+            <div class="inline-flex items-center justify-center w-16 h-16 bg-emerald-100 rounded-full mb-4 text-emerald-600">
+                {{ icon_check(size='h-8 w-8') }}
             </div>
             <p class="text-lg font-semibold text-slate-900">Telegram аккаунт подключён!</p>
             <a href="/accounts" class="mt-4 inline-block rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 transition-colors">К аккаунтам</a>

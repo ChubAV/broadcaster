@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
+{% from "includes/icons.html" import icon_spinner_small %}
 {% block title %}Аккаунты - Broadcaster{% endblock %}
 {% block content %}
 <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
@@ -31,10 +32,7 @@
                 <td class="px-3 sm:px-6 py-4 text-sm">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp') }}</td>
                 <td class="px-3 sm:px-6 py-4">
                     <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold bg-amber-100 text-amber-800">
-                        <svg class="animate-spin -ml-0.5 mr-1.5 h-3 w-3 text-amber-600" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                        </svg>
+                        <span class="text-amber-600">{{ icon_spinner_small() }}</span>
                         Синхронизация...
                     </span>
                     <span class="ml-2 text-xs text-slate-500">Загружаем группы из WhatsApp. Это может занять несколько минут.</span>

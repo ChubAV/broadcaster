@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
+{% from "includes/icons.html" import icon_deactivate, icon_delete, icon_pause, icon_play %}
 {% block title %}Группы - Broadcaster{% endblock %}
 {% block content %}
 <div class="flex flex-wrap justify-between items-center gap-4 mb-6">
@@ -30,18 +31,13 @@
         <div class="px-3 sm:px-6 py-2.5 border-b border-slate-200 bg-slate-50/70 flex flex-wrap items-center justify-between gap-3">
             <div class="flex flex-wrap items-center gap-3 text-xs sm:text-sm text-slate-600">
                 <span class="inline-flex items-center gap-1">
-                    <svg class="h-4 w-4 text-amber-500" viewBox="0 0 20 20" fill="currentColor">
-                        <path d="M8.5 3a.5.5 0 0 0-.5.5v6.379l-2.44-2.44a.5.5 0 1 0-.707.707l3.397 3.397a.75.75 0 0 0 1.06 0l3.397-3.397a.5.5 0 1 0-.707-.707L10 9.879V3.5a.5.5 0 0 0-.5-.5h-1z" />
-                        <path d="M4 11.75A2.75 2.75 0 0 1 6.75 9h6.5A2.75 2.75 0 0 1 16 11.75v2.5A2.75 2.75 0 0 1 13.25 17h-6.5A2.75 2.75 0 0 1 4 14.25v-2.5z" />
-                    </svg>
+                    <span class="text-amber-500">{{ icon_deactivate() }}</span>
                     <button type="button" onclick="submitBulkGroups('deactivate')" class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-300">
                         <span>Деактивировать</span>
                     </button>
                 </span>
                 <span class="inline-flex items-center gap-1">
-                    <svg class="h-4 w-4 text-slate-500" viewBox="0 0 20 20" fill="currentColor">
-                        <path d="M8 2a1 1 0 0 0-1 1H4.5a.5.5 0 0 0 0 1H5v10.5A2.5 2.5 0 0 0 7.5 17h5A2.5 2.5 0 0 0 15 14.5V4h.5a.5.5 0 0 0 0-1H13a1 1 0 0 0-1-1H8zm1 2h2v-.5h-2V4zM8.75 6a.75.75 0 0 0-.75.75v6.5a.75.75 0 0 0 1.5 0v-6.5A.75.75 0 0 0 8.75 6zm3.5 0A.75.75 0 0 0 11.5 6.75v6.5a.75.75 0 0 0 1.5 0v-6.5A.75.75 0 0 0 12.25 6z" />
-                    </svg>
+                    <span class="text-slate-500">{{ icon_delete() }}</span>
                     <button type="button" onclick="if (confirm('Удалить выбранные группы?')) submitBulkGroups('delete')" class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-red-50 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-red-200">
                         <span>Удалить</span>
                     </button>
@@ -90,32 +86,18 @@
                         </span>
                         {% endif %}
                     </td>
-                    <td class="w-24 px-3 sm:px-4 py-4 text-center text-sm">
-                        <div class="inline-flex items-center justify-center gap-2">
-                            <form method="POST" action="/groups/{{ group.id }}/toggle">
-                                <button
-                                    type="submit"
-                                    class="inline-flex items-center justify-center rounded-full p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-                                    title="{{ 'Деактивировать' if group.is_active else 'Активировать' }}"
-                                >
+                    <td class="w-24 px-3 sm:px-4 py-4 text-center">
+                        <div class="inline-flex items-center justify-center gap-1">
+                            <form method="POST" action="/groups/{{ group.id }}/toggle" class="inline">
+                                <button type="submit" class="p-1.5 rounded-lg text-slate-500 hover:text-primary-600 hover:bg-primary-50 transition-colors" title="{{ 'Деактивировать' if group.is_active else 'Активировать' }}">
                                     <span class="sr-only">{{ "Деактивировать" if group.is_active else "Активировать" }}</span>
-                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" aria-hidden="true">
-                                        <rect x="3" y="7" width="14" height="6" rx="3" stroke-width="1.5" />
-                                        <circle cx="{{ 13 if group.is_active else 7 }}" cy="10" r="2" fill="currentColor" stroke="none" />
-                                    </svg>
+                                    {% if group.is_active %}{{ icon_pause() }}{% else %}{{ icon_play() }}{% endif %}
                                 </button>
                             </form>
-                            <form method="POST" action="/groups/{{ group.id }}/delete">
-                                <button
-                                    type="submit"
-                                    class="inline-flex items-center justify-center rounded-full p-2 text-red-500 hover:text-red-600 hover:bg-red-50 transition-colors"
-                                    onclick="return confirm('Удалить эту группу?')"
-                                    title="Удалить"
-                                >
+                            <form method="POST" action="/groups/{{ group.id }}/delete" class="inline">
+                                <button type="submit" class="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors" title="Удалить" onclick="return confirm('Удалить эту группу?')">
                                     <span class="sr-only">Удалить</span>
-                                    <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                        <path d="M8 2a1 1 0 0 0-1 1H4.5a.5.5 0 0 0 0 1H5v10.5A2.5 2.5 0 0 0 7.5 17h5A2.5 2.5 0 0 0 15 14.5V4h.5a.5.5 0 0 0 0-1H13a1 1 0 0 0-1-1H8zm1 2h2v-.5h-2V4zM8.75 6a.75.75 0 0 0-.75.75v6.5a.75.75 0 0 0 1.5 0v-6.5A.75.75 0 0 0 8.75 6zm3.5 0A.75.75 0 0 0 12.25 6v6.5a.75.75 0 0 0 1.5 0v-6.5A.75.75 0 0 0 12.25 6z" />
-                                    </svg>
+                                    {{ icon_delete() }}
                                 </button>
                             </form>
                         </div>
