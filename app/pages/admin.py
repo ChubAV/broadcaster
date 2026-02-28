@@ -221,7 +221,7 @@ async def admin_user_history(
     query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(page_size + 1)
 
     result = await db.execute(query)
-    rows = list(result.scalars().all())
+    rows = list(result.all())
 
     has_next = len(rows) > page_size
     rows = rows[:page_size]
