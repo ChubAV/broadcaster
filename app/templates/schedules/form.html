@@ -36,7 +36,16 @@
 
         <!-- Groups selection (checkboxes) -->
         <div>
-            <label class="block text-sm font-medium text-slate-900 mb-2">Группы</label>
+            <div class="flex items-center justify-between mb-2">
+                <label class="block text-sm font-medium text-slate-900">Группы</label>
+                {% if groups %}
+                <div class="flex gap-2">
+                    <button type="button" id="groups-select-all" class="text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors">Выбрать все</button>
+                    <span class="text-slate-300">|</span>
+                    <button type="button" id="groups-deselect-all" class="text-sm font-medium text-slate-600 hover:text-slate-700 transition-colors">Снять все</button>
+                </div>
+                {% endif %}
+            </div>
             {% if groups %}
             <div id="groups-container" class="space-y-2 max-h-48 overflow-y-auto rounded-lg border border-slate-200 p-3 bg-slate-50/50">
                 {% for group in groups %}
@@ -158,7 +167,32 @@ function filterGroupsByAccount() {
     }
 }
 
+function selectAllGroups() {
+    const accountId = document.getElementById('account_id').value;
+    if (!accountId) return;
+    document.querySelectorAll('.group-item').forEach(function(label) {
+        if (label.dataset.accountId === accountId) {
+            label.querySelector('input[type="checkbox"]').checked = true;
+        }
+    });
+}
+
+function deselectAllGroups() {
+    const accountId = document.getElementById('account_id').value;
+    if (!accountId) return;
+    document.querySelectorAll('.group-item').forEach(function(label) {
+        if (label.dataset.accountId === accountId) {
+            label.querySelector('input[type="checkbox"]').checked = false;
+        }
+    });
+}
+
 document.getElementById('account_id').addEventListener('change', filterGroupsByAccount);
 document.addEventListener('DOMContentLoaded', filterGroupsByAccount);
+
+const selectAllBtn = document.getElementById('groups-select-all');
+const deselectAllBtn = document.getElementById('groups-deselect-all');
+if (selectAllBtn) selectAllBtn.addEventListener('click', selectAllGroups);
+if (deselectAllBtn) deselectAllBtn.addEventListener('click', deselectAllGroups);
 </script>
 {% endblock %}
