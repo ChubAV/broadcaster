@@ -1,7 +1,7 @@
 {# Карточка отправки в стиле объявления (Avito-like) #}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 {% from "includes/icons.html" import icon_arrow_right %}
-<li class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col sm:flex-row cursor-pointer hover:ring-2 hover:ring-primary-500/50 transition-all" x-data="{ currentImage: 0 }" onclick="window.location='/history/{{ log.id }}'">
+<li class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col sm:flex-row" x-data="{ currentImage: 0 }">
     {# Секция изображений #}
     <div class="sm:w-[280px] sm:min-w-[280px] flex-shrink-0 bg-slate-100">
         {% if log.ad_images %}
@@ -45,7 +45,14 @@
         {% endif %}
         <p class="mt-2 text-sm text-slate-500">
             <span class="font-medium">Группа:</span> <span class="truncate" title="{{ log.group_name }}">{{ log.group_name }}</span>
+            {% if log.group_external_id %}<code class="ml-1 text-xs font-mono text-slate-400" title="Внешний ID группы">{{ log.group_external_id }}</code>{% endif %}
         </p>
+        {% if log.task_id or log.account_id is not none %}
+        <div class="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+            {% if log.task_id %}<span title="Task ID"><code class="font-mono bg-slate-100 px-1.5 py-0.5 rounded">{{ log.task_id }}</code></span>{% endif %}
+            {% if log.account_id is not none %}<span title="ID аккаунта">Аккаунт <code class="font-mono bg-slate-100 px-1.5 py-0.5 rounded">#{{ log.account_id }}</code></span>{% endif %}
+        </div>
+        {% endif %}
         <div class="mt-2 inline-flex items-center gap-2 rounded-lg bg-primary-50 px-3 py-2">
             <svg class="h-5 w-5 text-primary-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
             <span class="text-sm font-semibold text-primary-800">{{ format_datetime_for_user(log.sent_at, user, '%d.%m.%Y %H:%M') }}</span>
@@ -68,6 +75,9 @@
 
     {# Правая боковая панель #}
     <div class="flex sm:flex-col sm:border-l border-t sm:border-t-0 border-slate-200 p-2 gap-1 items-center justify-center">
-        <a href="/history/{{ log.id }}" class="p-2.5 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-primary-600 transition-colors" title="Подробнее">{{ icon_arrow_right(size='h-6 w-6') }}</a>
+        <a href="/history/{{ log.id }}" class="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 transition-colors" title="Подробнее">
+            Подробнее
+            {{ icon_arrow_right(size='h-4 w-4') }}
+        </a>
     </div>
 </li>
