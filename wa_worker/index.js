@@ -634,8 +634,17 @@ async function startConsumer() {
         } catch (err) {
             if (!consumerRunning) break;
             log.error({ accountId: ACCOUNT_ID, err: err.message }, 'consumer_loop_error');
-            // Brief pause before retrying loop
-            await new Promise(r => setTimeout(r, 2000));
+
+            // Check idle even on errors (e.g. Redis down after docker compose down)
+            const idleSec = (Date.now() - lastTaskTime) / 1000;
+            if (idleSec >= IDLE_SHUTDOWN_SEC) {
+                log.info({ accountId: ACCOUNT_ID, idleSec: Math.round(idleSec) }, 'idle_shutdown_on_error');
+                gracefulShutdown('idle');
+                return;
+            }
+
+            // Pause before retrying (longer than normal to avoid log spam)
+            await new Promise(r => setTimeout(r, 5000));
         }
     }
 }
