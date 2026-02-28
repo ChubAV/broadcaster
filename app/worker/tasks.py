@@ -60,8 +60,16 @@ async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
             for account_id, tasks in wa_tasks_by_account.items():
                 queue_key = f"wa:queue:{account_id}"
                 for task in tasks:
+                    task_id = str(uuid4())
+                    logger.info("wa_task_created",
+                               task_id=task_id,
+                               ad_id=task.ad_id,
+                               group_id=task.group_id,
+                               account_id=task.account_id,
+                               schedule_id=task.schedule_id,
+                               group_name=task.group_name)
                     payload = json.dumps({
-                        "task_id": str(uuid4()),
+                        "task_id": task_id,
                         "ad_id": task.ad_id,
                         "group_id": task.group_id,
                         "account_id": task.account_id,
@@ -413,6 +421,15 @@ async def _process_results_async(results: list[dict]):
 
             except Exception as e:
                 logger.error("result_write_error", task_id=result.get("task_id"), error=str(e))
+                continue
+
+            logger.info("wa_result_recorded",
+                       task_id=result.get("task_id"),
+                       status=result["status"],
+                       ad_id=result.get("ad_id"),
+                       group_id=result.get("group_id"),
+                       account_id=result.get("account_id"),
+                       error_message=result.get("error_message"))
 
         await session.commit()
         logger.info("results_processed", count=len(results))
