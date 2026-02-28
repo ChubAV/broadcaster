@@ -1,51 +1,42 @@
 {% extends "base.html" %}
-{% block title %}Панель - Broadcaster{% endblock %}
+{% block title %}Панель — Broadcaster{% endblock %}
 {% block content %}
-<h1 class="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 mb-4 sm:mb-6">Панель управления</h1>
 
-<!-- Stats cards: 2x2 на mobile, 4 в ряд на desktop -->
-<div class="grid grid-cols-2 gap-3 sm:gap-5 sm:grid-cols-2 lg:grid-cols-4 mb-6 sm:mb-8">
-    <div class="group bg-white overflow-hidden rounded-xl shadow-card border border-slate-200/80 hover:shadow-card-hover hover:border-primary-200/60 transition-all duration-200">
-        <div class="p-3 sm:p-5">
-            <div class="text-xs sm:text-sm font-medium text-slate-500 truncate">Активные объявления</div>
-            <div class="mt-0.5 sm:mt-1 text-2xl sm:text-3xl font-semibold text-slate-900">{{ stats.active_ads }}</div>
-        </div>
-    </div>
-    <div class="group bg-white overflow-hidden rounded-xl shadow-card border border-slate-200/80 hover:shadow-card-hover hover:border-primary-200/60 transition-all duration-200">
-        <div class="p-3 sm:p-5">
-            <div class="text-xs sm:text-sm font-medium text-slate-500 truncate">Подключённые аккаунты</div>
-            <div class="mt-0.5 sm:mt-1 text-2xl sm:text-3xl font-semibold text-slate-900">{{ stats.active_accounts }}</div>
-        </div>
-    </div>
-    <div class="group bg-white overflow-hidden rounded-xl shadow-card border border-slate-200/80 hover:shadow-card-hover hover:border-primary-200/60 transition-all duration-200">
-        <div class="p-3 sm:p-5">
-            <div class="text-xs sm:text-sm font-medium text-slate-500 truncate">Активные группы</div>
-            <div class="mt-0.5 sm:mt-1 text-2xl sm:text-3xl font-semibold text-slate-900">{{ stats.active_groups }}</div>
-        </div>
-    </div>
-    <div class="group bg-white overflow-hidden rounded-xl shadow-card border border-slate-200/80 hover:shadow-card-hover hover:border-primary-200/60 transition-all duration-200">
-        <div class="p-3 sm:p-5">
-            <div class="text-xs sm:text-sm font-medium text-slate-500 truncate">Отправлено сегодня</div>
-            <div class="mt-0.5 sm:mt-1 text-2xl sm:text-3xl font-semibold text-slate-900">{{ stats.sent_today }}</div>
-        </div>
-    </div>
+<!-- Page title -->
+<h1 class="text-lg font-semibold text-gray-900">Панель управления</h1>
+
+<!-- Stat cards: grid 2 cols on mobile, 4 cols on lg -->
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+  <div class="bg-white rounded-lg border border-gray-200 p-5">
+    <p class="text-2xl font-semibold text-gray-900">{{ stats.active_ads }}</p>
+    <p class="text-sm text-gray-500 mt-1">Объявления</p>
+  </div>
+  <div class="bg-white rounded-lg border border-gray-200 p-5">
+    <p class="text-2xl font-semibold text-gray-900">{{ stats.active_accounts }}</p>
+    <p class="text-sm text-gray-500 mt-1">Аккаунты</p>
+  </div>
+  <div class="bg-white rounded-lg border border-gray-200 p-5">
+    <p class="text-2xl font-semibold text-gray-900">{{ stats.active_groups }}</p>
+    <p class="text-sm text-gray-500 mt-1">Группы</p>
+  </div>
+  <div class="bg-white rounded-lg border border-gray-200 p-5">
+    <p class="text-2xl font-semibold text-gray-900">{{ stats.sent_today }}</p>
+    <p class="text-sm text-gray-500 mt-1">Отправлено</p>
+  </div>
 </div>
 
-<!-- Recent sends -->
-<div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    <div class="px-3 py-4 sm:px-6 sm:py-5 border-b border-slate-200/80">
-        <h3 class="text-base sm:text-lg font-semibold text-slate-900">Последние отправки</h3>
-    </div>
-    <div class="p-4 sm:p-6">
-        {% if recent_sends %}
-        <ul class="grid grid-cols-1 gap-4">
-            {% for log in recent_sends %}
-            {% include "dashboard/includes/recent_send_card.html" %}
-            {% endfor %}
-        </ul>
-        {% else %}
-        <p class="text-slate-500 text-sm">Отправок пока нет.</p>
-        {% endif %}
-    </div>
+<!-- Recent sends section -->
+<div class="mt-8">
+  <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider">Последние отправки</h2>
+  {% if recent_sends %}
+  <div class="bg-white rounded-lg border border-gray-200 mt-3 divide-y divide-gray-100">
+    {% for log in recent_sends %}
+    {% include "dashboard/includes/recent_send_card.html" %}
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="text-sm text-gray-500 mt-3">Нет отправок</p>
+  {% endif %}
 </div>
+
 {% endblock %}
