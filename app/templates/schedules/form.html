@@ -51,7 +51,7 @@
                 {% for group in groups %}
                 <label class="group-item flex items-center rounded-lg px-2 py-1.5 hover:bg-white/80 transition-colors" data-account-id="{{ group.account_id }}">
                     <input type="checkbox" name="group_ids" value="{{ group.id }}" {% if schedule and group.id in schedule.group_ids %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
-                    <span class="ml-2 inline-flex items-center gap-1.5 text-sm text-slate-700">{{ messenger_icon(group.messenger_type, size='h-4 w-4', title=group.messenger_type, show_label=true) }}{{ group.name }}</span>
+                    <span class="ml-2 inline-flex items-center gap-1.5 text-sm text-slate-700">{{ messenger_icon(group.messenger_type, size='h-4 w-4', title=group.messenger_type, show_label=false) }}{{ group.name }}</span>
                 </label>
                 {% endfor %}
             </div>
@@ -64,8 +64,15 @@
 
         <!-- Days of week (checkboxes) -->
         <div>
-            <label class="block text-sm font-medium text-slate-900 mb-2">Дни недели</label>
-            <div class="flex flex-wrap gap-3">
+            <div class="flex items-center justify-between mb-2">
+                <label class="block text-sm font-medium text-slate-900">Дни недели</label>
+                <div class="flex gap-2">
+                    <button type="button" id="days-select-all" class="text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors">Выбрать все</button>
+                    <span class="text-slate-300">|</span>
+                    <button type="button" id="days-deselect-all" class="text-sm font-medium text-slate-600 hover:text-slate-700 transition-colors">Снять все</button>
+                </div>
+            </div>
+            <div id="days-of-week-container" class="flex flex-wrap gap-3">
                 {% set day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'] %}
                 {% for i in range(7) %}
                 <label class="flex items-center rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200/80 hover:ring-slate-300 transition-all">
@@ -187,6 +194,14 @@ function deselectAllGroups() {
     });
 }
 
+function selectAllDays() {
+    document.querySelectorAll('input[name="days_of_week"]').forEach(function(cb) { cb.checked = true; });
+}
+
+function deselectAllDays() {
+    document.querySelectorAll('input[name="days_of_week"]').forEach(function(cb) { cb.checked = false; });
+}
+
 document.getElementById('account_id').addEventListener('change', filterGroupsByAccount);
 document.addEventListener('DOMContentLoaded', filterGroupsByAccount);
 
@@ -194,5 +209,10 @@ const selectAllBtn = document.getElementById('groups-select-all');
 const deselectAllBtn = document.getElementById('groups-deselect-all');
 if (selectAllBtn) selectAllBtn.addEventListener('click', selectAllGroups);
 if (deselectAllBtn) deselectAllBtn.addEventListener('click', deselectAllGroups);
+
+const daysSelectAllBtn = document.getElementById('days-select-all');
+const daysDeselectAllBtn = document.getElementById('days-deselect-all');
+if (daysSelectAllBtn) daysSelectAllBtn.addEventListener('click', selectAllDays);
+if (daysDeselectAllBtn) daysDeselectAllBtn.addEventListener('click', deselectAllDays);
 </script>
 {% endblock %}
