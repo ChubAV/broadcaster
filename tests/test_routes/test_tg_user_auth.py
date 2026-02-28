@@ -46,10 +46,10 @@ async def auth_setup():
         async with AsyncClient(
             transport=transport, base_url="http://test", follow_redirects=True
         ) as reg_client:
-            await reg_client.post(
-                "/register",
-                data={"email": "tgauth@test.com", "password": "pass123", "name": "TG User"},
-            )
+            await reg_client.post("/api/auth/register", json={
+                "email": "tgauth@test.com", "password": "pass123", "name": "TG User",
+            })
+            await reg_client.post("/login", data={"email": "tgauth@test.com", "password": "pass123"})
             # Get the cookie
             cookies = reg_client.cookies
 
@@ -119,10 +119,10 @@ async def test_start_qr_no_api_config_returns_error(auth_setup):
     async with AsyncClient(
         transport=transport, base_url="http://test", follow_redirects=True
     ) as c:
-        await c.post(
-            "/register",
-            data={"email": "noapi@test.com", "password": "pass123", "name": "No API"},
-        )
+        await c.post("/api/auth/register", json={
+            "email": "noapi@test.com", "password": "pass123", "name": "No API",
+        })
+        await c.post("/login", data={"email": "noapi@test.com", "password": "pass123"})
         resp = await c.post("/accounts/connect/tg_user/start-qr")
 
     data = resp.json()

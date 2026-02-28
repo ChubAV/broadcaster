@@ -51,11 +51,11 @@ async def sync_setup():
 
 
 async def _login(client: AsyncClient) -> None:
-    """Register and login via page forms, storing cookie on the client."""
-    await client.post(
-        "/register",
-        data={"email": "sync@test.com", "password": "pass123", "name": "Sync User"},
-    )
+    """Register and login via API + page forms, storing cookie on the client."""
+    await client.post("/api/auth/register", json={
+        "email": "sync@test.com", "password": "pass123", "name": "Sync User",
+    })
+    await client.post("/login", data={"email": "sync@test.com", "password": "pass123"})
 
 
 @pytest.mark.asyncio
@@ -173,10 +173,10 @@ async def test_sync_groups_always_uses_settings_credentials(sync_setup):
     async with AsyncClient(
         transport=transport, base_url="http://test", follow_redirects=True
     ) as client:
-        await client.post(
-            "/register",
-            data={"email": "fallback@test.com", "password": "pass123", "name": "Fallback User"},
-        )
+        await client.post("/api/auth/register", json={
+            "email": "fallback@test.com", "password": "pass123", "name": "Fallback User",
+        })
+        await client.post("/login", data={"email": "fallback@test.com", "password": "pass123"})
 
         async with session_factory() as session:
             from app.models.user import User

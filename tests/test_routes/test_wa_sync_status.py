@@ -54,11 +54,11 @@ async def sync_setup():
 
 
 async def _login(client: AsyncClient) -> None:
-    """Register and login via page forms, storing cookie on the client."""
-    await client.post(
-        "/register",
-        data={"email": "wasync@test.com", "password": "pass123", "name": "WA Sync User"},
-    )
+    """Register and login via API + page forms, storing cookie on the client."""
+    await client.post("/api/auth/register", json={
+        "email": "wasync@test.com", "password": "pass123", "name": "WA Sync User",
+    })
+    await client.post("/login", data={"email": "wasync@test.com", "password": "pass123"})
 
 
 @pytest.mark.asyncio

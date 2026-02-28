@@ -44,14 +44,10 @@ async def test_bulk_deactivate_and_delete():
         transport=transport, base_url="http://test", follow_redirects=True
     ) as client:
         # Register and login to get cookie-based session
-        await client.post(
-            "/register",
-            data={
-                "email": "bulk@test.com",
-                "password": "pass123",
-                "name": "Bulk User",
-            },
-        )
+        await client.post("/api/auth/register", json={
+            "email": "bulk@test.com", "password": "pass123", "name": "Bulk User",
+        })
+        await client.post("/login", data={"email": "bulk@test.com", "password": "pass123"})
 
         # Prepare data in DB
         async with session_factory() as session:
