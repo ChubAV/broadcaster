@@ -29,13 +29,15 @@ async def schedules_list(
         return RedirectResponse(url="/login", status_code=302)
 
     result = await db.execute(
-        select(Schedule, Ad.title.label("ad_title"))
+        select(Schedule, Ad.title.label("ad_title"), MessengerAccount.type.label("messenger_type"))
         .join(Ad, Schedule.ad_id == Ad.id)
+        .join(MessengerAccount, Schedule.account_id == MessengerAccount.id)
         .where(Ad.user_id == user.id)
         .order_by(Schedule.id)
     )
     schedules = [
-        {"schedule": r.Schedule, "ad_title": r.ad_title} for r in result
+        {"schedule": r.Schedule, "ad_title": r.ad_title, "messenger_type": r.messenger_type}
+        for r in result
     ]
 
     # Отображаем время следующего запуска в часовом поясе пользователя
