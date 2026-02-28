@@ -1,6 +1,5 @@
 {# Карточка отправки без изображений (для dashboard) #}
 {% from "includes/messenger_icon.html" import messenger_icon %}
-{% from "includes/icons.html" import icon_arrow_right %}
 <li class="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden p-4 sm:p-5 flex flex-col">
     <div class="inline-flex items-center gap-2 rounded-lg bg-primary-50 px-3 py-2 w-fit">
         <svg class="h-5 w-5 text-primary-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -34,10 +33,4 @@
         <p class="text-sm text-red-800 break-words line-clamp-2">{{ log.error_message }}</p>
     </div>
     {% endif %}
-    <div class="mt-4 pt-4 border-t border-slate-200">
-        <a href="/history/{{ log.id }}" class="inline-flex items-center gap-1.5 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 transition-colors" title="Подробнее">
-            Подробнее
-            {{ icon_arrow_right(size='h-4 w-4') }}
-        </a>
-    </div>
 </li>
