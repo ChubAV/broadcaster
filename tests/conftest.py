@@ -18,6 +18,11 @@ async def test_settings():
         telegram_api_hash="test_api_hash",
         wa_bridge_urls=["http://localhost:3000"],
         admin_email="admin@test.com",
+        smtp_host="",
+        smtp_port=587,
+        smtp_user="",
+        smtp_password="",
+        smtp_from="noreply@test.com",
     )
 
 

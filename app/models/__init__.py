@@ -6,6 +6,7 @@ from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.telegram_auth_session import TelegramAuthSession
+from app.models.email_verification import EmailVerificationCode
 
 __all__ = [
     "User",
@@ -16,4 +17,5 @@ __all__ = [
     "Schedule",
     "SendLog",
     "TelegramAuthSession",
+    "EmailVerificationCode",
 ]

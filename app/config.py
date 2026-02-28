@@ -47,6 +47,14 @@ class Settings(BaseSettings):
     # Admin
     admin_email: str = ""
 
+    # SMTP (email verification)
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_use_tls: bool = True
+
     @property
     def wa_bridge_url(self) -> str:
         """Backward-compatible: returns first bridge URL."""
