@@ -14,6 +14,25 @@ router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
 
 
+def _parse_filter_account_id(v: str | None) -> int | None:
+    if not v or not v.strip():
+        return None
+    try:
+        return int(v)
+    except ValueError:
+        return None
+
+
+def _parse_filter_is_active(v: str | None) -> bool | None:
+    if not v or not v.strip():
+        return None
+    if v in ("1", "true", "yes"):
+        return True
+    if v in ("0", "false", "no"):
+        return False
+    return None
+
+
 def _filter_params(account_id, messenger_type, is_active, search) -> dict:
     params = {}
     if account_id is not None:
@@ -46,9 +65,9 @@ async def groups_partial(
     request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
-    account_id: int | None = Query(None),
+    account_id: str | None = Query(None),
     messenger_type: str | None = Query(None),
-    is_active: bool | None = Query(None),
+    is_active: str | None = Query(None),
     search: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -56,7 +75,9 @@ async def groups_partial(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    q = _build_groups_query(Group, user.id, account_id, messenger_type, is_active, search)
+    account_id_int = _parse_filter_account_id(account_id)
+    is_active_bool = _parse_filter_is_active(is_active)
+    q = _build_groups_query(Group, user.id, account_id_int, messenger_type, is_active_bool, search)
     result = await db.execute(q.offset(offset).limit(limit + 1))
     rows = list(result.scalars().all())
     has_next = len(rows) > limit
@@ -69,7 +90,7 @@ async def groups_partial(
             "groups": groups,
             "has_next": has_next,
             "next_offset": offset + limit,
-            "filter_params": _filter_params(account_id, messenger_type, is_active, search),
+            "filter_params": _filter_params(account_id_int, messenger_type, is_active_bool, search),
         },
     )
 
@@ -77,9 +98,9 @@ async def groups_partial(
 @router.get("/groups", response_class=HTMLResponse)
 async def groups_list(
     request: Request,
-    account_id: int | None = Query(None),
+    account_id: str | None = Query(None),
     messenger_type: str | None = Query(None),
-    is_active: bool | None = Query(None),
+    is_active: str | None = Query(None),
     search: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -87,7 +108,9 @@ async def groups_list(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    q = _build_groups_query(Group, user.id, account_id, messenger_type, is_active, search)
+    account_id_int = _parse_filter_account_id(account_id)
+    is_active_bool = _parse_filter_is_active(is_active)
+    q = _build_groups_query(Group, user.id, account_id_int, messenger_type, is_active_bool, search)
     result = await db.execute(q.limit(PAGE_SIZE + 1))
     rows = list(result.scalars().all())
     has_next = len(rows) > PAGE_SIZE
@@ -101,7 +124,7 @@ async def groups_list(
     tg_user_accounts = [a for a in all_accounts if a.type == "tg_user"]
     wa_accounts = [a for a in all_accounts if a.type == "wa" and a.status == "active"]
 
-    filter_params = _filter_params(account_id, messenger_type, is_active, search) or {}
+    filter_params = _filter_params(account_id_int, messenger_type, is_active_bool, search) or {}
 
     return templates.TemplateResponse(
         "groups/list.html",
@@ -117,9 +140,9 @@ async def groups_list(
             "next_offset": PAGE_SIZE,
             "active_page": "groups",
             "filter_params": filter_params,
-            "filter_account_id": account_id,
+            "filter_account_id": account_id_int,
             "filter_messenger_type": messenger_type,
-            "filter_is_active": is_active,
+            "filter_is_active": is_active_bool,
             "filter_search": search or "",
         },
     )
