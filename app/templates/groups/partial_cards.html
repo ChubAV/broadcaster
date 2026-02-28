@@ -3,30 +3,32 @@
 {% for group in groups %}
 {% set stats = group_stats.get(group.id, {}) %}
 {% set acc = accounts_by_id.get(group.account_id, {}) %}
-<li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex items-start gap-4">
-    <input type="checkbox" name="group_ids" value="{{ group.id }}" class="mt-1 shrink-0 rounded border-slate-300 text-primary-600 focus:ring-primary-500 js-group-checkbox h-5 w-5">
-    <div class="flex-1 min-w-0">
-        <div class="flex flex-wrap items-center gap-3">
-            <p class="text-base font-semibold text-slate-900 truncate" title="{{ group.name }}">{{ group.name }}</p>
-            <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if group.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
-                {{ "Активна" if group.is_active else "Неактивна" }}
-            </span>
-            {% if group.messenger_type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', show_label=false) }}
-            {% elif group.messenger_type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', show_label=false) }}{% endif %}
-            <a href="/accounts" class="inline-flex items-center rounded-lg bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200" title="Аккаунт">
-                {% if acc.get('type') == 'tg_user' %}TG{% elif acc.get('type') == 'wa' %}WA{% else %}{{ acc.get('type', '') }}{% endif %} #{{ acc.get('id', group.account_id) }}
-            </a>
+<li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex flex-col gap-4">
+    <div class="flex items-start gap-4">
+        <input type="checkbox" name="group_ids" value="{{ group.id }}" class="mt-1 shrink-0 rounded border-slate-300 text-primary-600 focus:ring-primary-500 js-group-checkbox h-5 w-5">
+        <div class="flex-1 min-w-0">
+            <p class="text-base font-semibold text-slate-900 break-words" title="{{ group.name }}">{{ group.name }}</p>
+            <div class="flex flex-wrap items-center gap-2 mt-2">
+                <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if group.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
+                    {{ "Активна" if group.is_active else "Неактивна" }}
+                </span>
+                {% if group.messenger_type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', show_label=false) }}
+                {% elif group.messenger_type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', show_label=false) }}{% endif %}
+                <a href="/accounts" class="inline-flex items-center rounded-lg bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-200" title="Аккаунт">
+                    {% if acc.get('type') == 'tg_user' %}TG{% elif acc.get('type') == 'wa' %}WA{% else %}{{ acc.get('type', '') }}{% endif %} #{{ acc.get('id', group.account_id) }}
+                </a>
+            </div>
+            <div class="mt-3 flex flex-wrap gap-2">
+                <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('schedules_count', 0) }} расписаний</span>
+                <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }} отправок</span>
+                {% if stats.get('last_sent_at') %}<span class="inline-flex items-center rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800" title="Последняя отправка">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>{% endif %}
+            </div>
+            {% if group.last_error %}
+            <p class="text-xs text-amber-600 mt-2 truncate" title="{{ group.last_error }}">Ошибка {{ format_datetime_for_user(group.error_at, user, '%d.%m %H:%M') if group.error_at else '' }}</p>
+            {% endif %}
         </div>
-        <div class="mt-4 flex flex-wrap gap-2">
-            <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('schedules_count', 0) }} расписаний</span>
-            <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }} отправок</span>
-            {% if stats.get('last_sent_at') %}<span class="inline-flex items-center rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800" title="Последняя отправка">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>{% endif %}
-        </div>
-        {% if group.last_error %}
-        <p class="text-xs text-amber-600 mt-2 truncate" title="{{ group.last_error }}">Ошибка {{ format_datetime_for_user(group.error_at, user, '%d.%m %H:%M') if group.error_at else '' }}</p>
-        {% endif %}
     </div>
-    <div class="flex shrink-0 items-center gap-0.5">
+    <div class="flex justify-end items-center gap-0.5 border-t border-slate-100 pt-3 -mx-1">
         <form method="POST" action="/groups/{{ group.id }}/toggle" class="inline">
             <button type="submit" class="p-2.5 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors touch-manipulation" title="{{ 'Деактивировать' if group.is_active else 'Активировать' }}" aria-label="{{ 'Деактивировать' if group.is_active else 'Активировать' }}">
                 {% if group.is_active %}{{ icon_pause() }}{% else %}{{ icon_play() }}{% endif %}
