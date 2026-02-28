@@ -1,151 +1,129 @@
 {% extends "base.html" %}
-{% from "includes/messenger_icon.html" import messenger_icon %}
-{% block title %}{{ "Редактирование расписания" if schedule else "Новое расписание" }} - Broadcaster{% endblock %}
+{% block title %}{{ 'Редактировать' if schedule else 'Создать' }} расписание — Broadcaster{% endblock %}
 {% block content %}
-<div class="max-w-2xl">
-    <h1 class="text-2xl font-bold tracking-tight text-slate-900 mb-6">{{ "Редактирование расписания" if schedule else "Новое расписание" }}</h1>
 
-    {% if error %}
-    <div class="mb-4 rounded-xl bg-red-50 p-4 text-sm text-red-700 ring-1 ring-red-100 animate-fade-in">{{ error }}</div>
-    {% endif %}
+<div class="max-w-2xl mx-auto">
+  <h1 class="text-lg font-semibold text-gray-900 mb-6">{{ 'Редактировать расписание' if schedule else 'Новое расписание' }}</h1>
 
-    <form method="POST" action="{{ '/schedules/' ~ schedule.id ~ '/edit' if schedule else '/schedules/new' }}" class="bg-white rounded-xl shadow-card border border-slate-200/80 p-6 space-y-6">
-        <!-- Ad selection -->
-        <div>
-            <label for="ad_id" class="block text-sm font-medium text-slate-900">Объявление</label>
-            <select id="ad_id" name="ad_id" required class="mt-2 block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 transition-shadow sm:text-sm">
-                <option value="">Выберите объявление...</option>
-                {% for ad in ads %}
-                <option value="{{ ad.id }}" {% if schedule and schedule.ad_id == ad.id %}selected{% endif %}>{{ ad.title }}</option>
-                {% endfor %}
-            </select>
+  {% if error %}
+  <div class="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">{{ error }}</div>
+  {% endif %}
+
+  <form method="post" action="{{ '/schedules/' ~ schedule.id ~ '/edit' if schedule else '/schedules/new' }}" class="space-y-6">
+    <!-- Ad select -->
+    <div>
+      <label for="ad_id" class="block text-sm font-medium text-gray-700 mb-1.5">Объявление</label>
+      <select name="ad_id" id="ad_id" required class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
+        <option value="">Выберите объявление</option>
+        {% for ad in ads %}
+        <option value="{{ ad.id }}" {{ 'selected' if schedule and schedule.ad_id == ad.id }}>{{ ad.title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Account select -->
+    <div>
+      <label for="account_id" class="block text-sm font-medium text-gray-700 mb-1.5">Аккаунт</label>
+      <select name="account_id" id="account_id" required class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
+        <option value="">Выберите аккаунт</option>
+        {% for acc in accounts %}
+        <option value="{{ acc.id }}" data-type="{{ acc.type }}" {{ 'selected' if schedule and schedule.account_id == acc.id }}>{{ acc.type }} #{{ acc.id }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Groups checkboxes (filtered by account) -->
+    <div>
+      <label class="block text-sm font-medium text-gray-700 mb-1.5">Группы</label>
+      <div class="flex items-center gap-2 mb-2">
+        <button type="button" onclick="selectAllGroups()" class="text-xs text-indigo-600 hover:text-indigo-700">Выбрать все</button>
+        <span class="text-gray-300">|</span>
+        <button type="button" onclick="deselectAllGroups()" class="text-xs text-gray-500 hover:text-gray-700">Снять все</button>
+      </div>
+      <div id="groups-container" class="max-h-60 overflow-y-auto border border-gray-200 rounded-lg p-3 space-y-2">
+        {% for group in groups %}
+        <label class="flex items-center gap-2 group-item cursor-pointer" data-account-id="{{ group.account_id }}">
+          <input type="checkbox" name="group_ids" value="{{ group.id }}" class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            {{ 'checked' if schedule and group.id in schedule.group_ids }}>
+          <span class="text-sm text-gray-700">{{ group.name }}</span>
+        </label>
+        {% endfor %}
+      </div>
+      <p id="select-account-hint" class="text-sm text-gray-500 mt-1.5 hidden">Сначала выберите аккаунт.</p>
+      <p id="no-groups-for-account" class="text-sm text-gray-500 mt-1.5 hidden">Нет групп для выбранного аккаунта.</p>
+    </div>
+
+    <!-- Days of week -->
+    <div>
+      <label class="block text-sm font-medium text-gray-700 mb-1.5">Дни недели</label>
+      <div class="flex items-center gap-2 mb-2">
+        <button type="button" onclick="selectAllDays()" class="text-xs text-indigo-600 hover:text-indigo-700">Все</button>
+        <span class="text-gray-300">|</span>
+        <button type="button" onclick="deselectAllDays()" class="text-xs text-gray-500 hover:text-gray-700">Снять</button>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        {% set day_names = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'} %}
+        {% for i in range(7) %}
+        <label class="flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" name="days_of_week" value="{{ i }}" class="day-checkbox h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            {{ 'checked' if schedule and i in schedule.days_of_week }}>
+          <span class="text-sm text-gray-700">{{ day_names[i] }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Times of day -->
+    <div>
+      <label class="block text-sm font-medium text-gray-700 mb-1.5">Время отправки</label>
+      <div id="times-container" class="space-y-2">
+        {% if schedule and schedule.times_of_day %}
+        {% for time in schedule.times_of_day %}
+        <div class="flex items-center gap-2">
+          <input type="time" name="times_of_day" value="{{ time }}" required class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none">
+          {% if not loop.first %}
+          <button type="button" onclick="this.parentElement.remove()" class="text-gray-400 hover:text-red-500 p-1">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+          {% endif %}
         </div>
-
-        <!-- Account selection -->
-        <div>
-            <label for="account_id" class="block text-sm font-medium text-slate-900">Аккаунт</label>
-            <select id="account_id" name="account_id" required class="mt-2 block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 transition-shadow sm:text-sm">
-                <option value="">Выберите аккаунт...</option>
-                {% for account in accounts %}
-                <option value="{{ account.id }}" {% if schedule and schedule.account_id == account.id %}selected{% endif %}>
-                    #{{ account.id }} - {% if account.type == 'tg_user' %}Telegram аккаунт{% elif account.type == 'wa' %}WhatsApp{% else %}{{ account.type }}{% endif %} ({{ account.status }})
-                </option>
-                {% endfor %}
-            </select>
+        {% endfor %}
+        {% else %}
+        <div class="flex items-center gap-2">
+          <input type="time" name="times_of_day" value="09:00" required class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none">
         </div>
+        {% endif %}
+      </div>
+      <button type="button" onclick="addTimeInput()" class="mt-2 text-sm text-indigo-600 hover:text-indigo-700 font-medium">+ Добавить время</button>
+    </div>
 
-        <!-- Groups selection (checkboxes) -->
-        <div>
-            <div class="flex items-center justify-between mb-2">
-                <label class="block text-sm font-medium text-slate-900">Группы</label>
-                {% if groups %}
-                <div class="flex gap-2">
-                    <button type="button" id="groups-select-all" class="text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors">Выбрать все</button>
-                    <span class="text-slate-300">|</span>
-                    <button type="button" id="groups-deselect-all" class="text-sm font-medium text-slate-600 hover:text-slate-700 transition-colors">Снять все</button>
-                </div>
-                {% endif %}
-            </div>
-            {% if groups %}
-            <div id="groups-container" class="space-y-2 max-h-48 overflow-y-auto rounded-lg border border-slate-200 p-3 bg-slate-50/50">
-                {% for group in groups %}
-                <label class="group-item flex items-center rounded-lg px-2 py-1.5 hover:bg-white/80 transition-colors" data-account-id="{{ group.account_id }}">
-                    <input type="checkbox" name="group_ids" value="{{ group.id }}" {% if schedule and group.id in schedule.group_ids %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
-                    <span class="ml-2 inline-flex items-center gap-1.5 text-sm text-slate-700">{{ messenger_icon(group.messenger_type, size='h-4 w-4', title=group.messenger_type, show_label=false) }}{{ group.name }}</span>
-                </label>
-                {% endfor %}
-            </div>
-            <p id="select-account-hint" class="text-sm text-slate-500 hidden">Сначала выберите аккаунт.</p>
-            <p id="no-groups-for-account" class="text-sm text-slate-500 hidden">Нет групп для выбранного аккаунта.</p>
-            {% else %}
-            <p class="text-sm text-slate-500">Нет доступных групп. Сначала добавьте группы на странице Группы.</p>
-            {% endif %}
-        </div>
+    <!-- Timezone -->
+    <div>
+      <label for="timezone" class="block text-sm font-medium text-gray-700 mb-1.5">Часовой пояс</label>
+      <select name="timezone" id="timezone" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
+        {% for value, label in timezone_choices %}
+        <option value="{{ value }}" {{ 'selected' if (schedule and schedule.timezone == value) or (not schedule and default_timezone == value) }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
 
-        <!-- Days of week (checkboxes) -->
-        <div>
-            <div class="flex items-center justify-between mb-2">
-                <label class="block text-sm font-medium text-slate-900">Дни недели</label>
-                <div class="flex gap-2">
-                    <button type="button" id="days-select-all" class="text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors">Выбрать все</button>
-                    <span class="text-slate-300">|</span>
-                    <button type="button" id="days-deselect-all" class="text-sm font-medium text-slate-600 hover:text-slate-700 transition-colors">Снять все</button>
-                </div>
-            </div>
-            <div id="days-of-week-container" class="flex flex-wrap gap-3">
-                {% set day_names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'] %}
-                {% for i in range(7) %}
-                <label class="flex items-center rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200/80 hover:ring-slate-300 transition-all">
-                    <input type="checkbox" name="days_of_week" value="{{ i }}" {% if schedule and i in schedule.days_of_week %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500">
-                    <span class="ml-2 text-sm text-slate-700">{{ day_names[i] }}</span>
-                </label>
-                {% endfor %}
-            </div>
-        </div>
-
-        <!-- Times of day -->
-        <div>
-            <label class="block text-sm font-medium text-slate-900 mb-2">Время отправки</label>
-            <div id="times-container" class="space-y-2">
-                {% if schedule and schedule.times_of_day %}
-                {% for t in schedule.times_of_day %}
-                <div class="flex items-center gap-2">
-                    <input type="time" name="times_of_day" value="{{ t }}" class="rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 sm:text-sm">
-                    <button type="button" onclick="this.parentElement.remove()" class="text-sm font-medium text-red-600 hover:text-red-700 transition-colors">Удалить</button>
-                </div>
-                {% endfor %}
-                {% else %}
-                <div class="flex items-center gap-2">
-                    <input type="time" name="times_of_day" value="09:00" class="rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 sm:text-sm">
-                    <button type="button" onclick="this.parentElement.remove()" class="text-sm font-medium text-red-600 hover:text-red-700 transition-colors">Удалить</button>
-                </div>
-                {% endif %}
-            </div>
-            <button type="button" onclick="addTimeInput()" class="mt-2 text-sm font-medium text-primary-600 hover:text-primary-700 transition-colors">+ Добавить время</button>
-        </div>
-
-        <!-- Часовой пояс -->
-        <div>
-            <label for="timezone" class="block text-sm font-medium text-slate-900 mb-2">Часовой пояс</label>
-            <select id="timezone" name="timezone" class="block w-full rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 transition-shadow sm:text-sm">
-                {% for tz_value, tz_label in timezone_choices %}
-                <option value="{{ tz_value }}"
-                    {% if schedule and schedule.timezone == tz_value %}
-                        selected
-                    {% elif not schedule and default_timezone and tz_value == default_timezone %}
-                        selected
-                    {% elif not schedule and not default_timezone and tz_value == 'Europe/Moscow' %}
-                        selected
-                    {% endif %}
-                >{{ tz_label }}</option>
-                {% endfor %}
-            </select>
-        </div>
-
-        <div class="flex gap-3">
-            <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-all duration-200">{{ "Сохранить" if schedule else "Создать" }}</button>
-            <a href="/schedules" class="rounded-lg bg-white px-4 py-2 text-sm font-semibold text-slate-900 ring-1 ring-slate-300 hover:bg-slate-50 transition-colors">Отмена</a>
-        </div>
-    </form>
+    <!-- Buttons -->
+    <div class="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+      <a href="/schedules" class="text-sm font-medium text-gray-600 hover:text-gray-800 px-3 py-2">Отмена</a>
+      <button type="submit" class="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">Сохранить</button>
+    </div>
+  </form>
 </div>
 
 <script>
-function addTimeInput() {
-    const container = document.getElementById('times-container');
-    const div = document.createElement('div');
-    div.className = 'flex items-center gap-2';
-    div.innerHTML = '<input type="time" name="times_of_day" value="12:00" class="rounded-lg border-0 py-2 px-3 text-slate-900 shadow-sm ring-1 ring-slate-300 focus:ring-2 focus:ring-primary-500 sm:text-sm"><button type="button" onclick="this.parentElement.remove()" class="text-sm font-medium text-red-600 hover:text-red-700 transition-colors">Удалить</button>';
-    container.appendChild(div);
-}
-
 function filterGroupsByAccount() {
     const accountId = document.getElementById('account_id').value;
     const groups = document.querySelectorAll('.group-item');
     const container = document.getElementById('groups-container');
     const noGroupsMsg = document.getElementById('no-groups-for-account');
+    const hintMsg = document.getElementById('select-account-hint');
     if (!container) return;
 
-    var hintMsg = document.getElementById('select-account-hint');
     if (!accountId) {
         container.classList.add('hidden');
         groups.forEach(function(label) {
@@ -158,7 +136,7 @@ function filterGroupsByAccount() {
     if (hintMsg) hintMsg.classList.add('hidden');
 
     container.classList.remove('hidden');
-    let visibleCount = 0;
+    var visibleCount = 0;
     groups.forEach(function(label) {
         if (label.dataset.accountId === accountId) {
             label.style.display = '';
@@ -173,9 +151,8 @@ function filterGroupsByAccount() {
         noGroupsMsg.classList.toggle('hidden', visibleCount > 0);
     }
 }
-
 function selectAllGroups() {
-    const accountId = document.getElementById('account_id').value;
+    var accountId = document.getElementById('account_id').value;
     if (!accountId) return;
     document.querySelectorAll('.group-item').forEach(function(label) {
         if (label.dataset.accountId === accountId) {
@@ -183,9 +160,8 @@ function selectAllGroups() {
         }
     });
 }
-
 function deselectAllGroups() {
-    const accountId = document.getElementById('account_id').value;
+    var accountId = document.getElementById('account_id').value;
     if (!accountId) return;
     document.querySelectorAll('.group-item').forEach(function(label) {
         if (label.dataset.accountId === accountId) {
@@ -193,26 +169,21 @@ function deselectAllGroups() {
         }
     });
 }
-
 function selectAllDays() {
-    document.querySelectorAll('input[name="days_of_week"]').forEach(function(cb) { cb.checked = true; });
+    document.querySelectorAll('.day-checkbox').forEach(function(cb) { cb.checked = true; });
 }
-
 function deselectAllDays() {
-    document.querySelectorAll('input[name="days_of_week"]').forEach(function(cb) { cb.checked = false; });
+    document.querySelectorAll('.day-checkbox').forEach(function(cb) { cb.checked = false; });
 }
-
+function addTimeInput() {
+    var container = document.getElementById('times-container');
+    var div = document.createElement('div');
+    div.className = 'flex items-center gap-2';
+    div.innerHTML = '<input type="time" name="times_of_day" required class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"><button type="button" onclick="this.parentElement.remove()" class="text-gray-400 hover:text-red-500 p-1"><svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
+    container.appendChild(div);
+}
 document.getElementById('account_id').addEventListener('change', filterGroupsByAccount);
 document.addEventListener('DOMContentLoaded', filterGroupsByAccount);
-
-const selectAllBtn = document.getElementById('groups-select-all');
-const deselectAllBtn = document.getElementById('groups-deselect-all');
-if (selectAllBtn) selectAllBtn.addEventListener('click', selectAllGroups);
-if (deselectAllBtn) deselectAllBtn.addEventListener('click', deselectAllGroups);
-
-const daysSelectAllBtn = document.getElementById('days-select-all');
-const daysDeselectAllBtn = document.getElementById('days-deselect-all');
-if (daysSelectAllBtn) daysSelectAllBtn.addEventListener('click', selectAllDays);
-if (daysDeselectAllBtn) daysDeselectAllBtn.addEventListener('click', deselectAllDays);
 </script>
+
 {% endblock %}
