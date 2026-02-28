@@ -69,6 +69,7 @@ async def groups_partial(
     messenger_type: str | None = Query(None),
     is_active: str | None = Query(None),
     search: str | None = Query(None),
+    layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -82,8 +83,9 @@ async def groups_partial(
     rows = list(result.scalars().all())
     has_next = len(rows) > limit
     groups = rows[:limit]
+    template = "groups/partial_cards.html" if layout == "cards" else "groups/partial_rows.html"
     return templates.TemplateResponse(
-        "groups/partial_rows.html",
+        template,
         {
             "request": request,
             "user": user,
