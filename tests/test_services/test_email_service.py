@@ -20,7 +20,7 @@ async def test_send_verification_email_calls_smtp():
         )
         mock_send.assert_called_once()
         call_kwargs = mock_send.call_args
-        message = call_kwargs.kwargs.get("message") or call_kwargs.args[0]
+        message = call_kwargs.args[0]
         assert "123456" in str(message)
         assert message["To"] == "user@example.com"
         assert message["From"] == "noreply@test.com"

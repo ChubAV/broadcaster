@@ -25,7 +25,7 @@ async def send_verification_email(
     )
 
     await aiosmtplib.send(
-        message=msg,
+        msg,
         hostname=smtp_host,
         port=smtp_port,
         username=smtp_user,
