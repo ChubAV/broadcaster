@@ -1,6 +1,6 @@
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,62 @@ from app.services.schedule_service import compute_next_run_at
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
+PAGE_SIZE = 30
+
+
+def _build_schedule_items(result, user, tz):
+    """Build schedule items with next_run_local from raw query result."""
+    items = [
+        {"schedule": r.Schedule, "ad_title": r.ad_title, "messenger_type": r.messenger_type}
+        for r in result
+    ]
+    tz_name = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
+    for item in items:
+        sched = item["schedule"]
+        if sched.next_run_at:
+            item["next_run_local"] = sched.next_run_at.astimezone(tz)
+            item["tz_label"] = tz_name.split("/")[-1] if "/" in tz_name else tz_name
+        else:
+            item["next_run_local"] = None
+            item["tz_label"] = ""
+    return items
+
+
+@router.get("/schedules/partial", response_class=HTMLResponse)
+async def schedules_partial(
+    request: Request,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    tz_name = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
+    tz = ZoneInfo(tz_name)
+    result = await db.execute(
+        select(Schedule, Ad.title.label("ad_title"), MessengerAccount.type.label("messenger_type"))
+        .join(Ad, Schedule.ad_id == Ad.id)
+        .join(MessengerAccount, Schedule.account_id == MessengerAccount.id)
+        .where(Ad.user_id == user.id)
+        .order_by(Schedule.id)
+        .offset(offset)
+        .limit(limit + 1)
+    )
+    rows = list(result)
+    has_next = len(rows) > limit
+    schedules = _build_schedule_items(rows[:limit], user, tz)
+    return templates.TemplateResponse(
+        "schedules/partial_rows.html",
+        {
+            "request": request,
+            "user": user,
+            "schedules": schedules,
+            "has_next": has_next,
+            "next_offset": offset + limit,
+        },
+    )
 
 
 @router.get("/schedules", response_class=HTMLResponse)
@@ -27,31 +83,19 @@ async def schedules_list(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-
+    tz_name = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
+    tz = ZoneInfo(tz_name)
     result = await db.execute(
         select(Schedule, Ad.title.label("ad_title"), MessengerAccount.type.label("messenger_type"))
         .join(Ad, Schedule.ad_id == Ad.id)
         .join(MessengerAccount, Schedule.account_id == MessengerAccount.id)
         .where(Ad.user_id == user.id)
         .order_by(Schedule.id)
+        .limit(PAGE_SIZE + 1)
     )
-    schedules = [
-        {"schedule": r.Schedule, "ad_title": r.ad_title, "messenger_type": r.messenger_type}
-        for r in result
-    ]
-
-    # Отображаем время следующего запуска в часовом поясе пользователя
-    tz_name = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
-    tz = ZoneInfo(tz_name)
-
-    for item in schedules:
-        sched = item["schedule"]
-        if sched.next_run_at:
-            item["next_run_local"] = sched.next_run_at.astimezone(tz)
-            item["tz_label"] = tz_name.split("/")[-1] if "/" in tz_name else tz_name
-        else:
-            item["next_run_local"] = None
-            item["tz_label"] = ""
+    rows = list(result)
+    has_next = len(rows) > PAGE_SIZE
+    schedules = _build_schedule_items(rows[:PAGE_SIZE], user, tz)
     return templates.TemplateResponse(
         "schedules/list.html",
         {
@@ -59,6 +103,8 @@ async def schedules_list(
             "user": user,
             "is_admin": check_is_admin(user, settings),
             "schedules": schedules,
+            "has_next": has_next,
+            "next_offset": PAGE_SIZE,
             "active_page": "schedules",
         },
     )

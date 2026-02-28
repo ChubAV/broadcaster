@@ -1,0 +1,31 @@
+{% from "includes/icons.html" import icon_edit, icon_delete %}
+{% for ad in ads %}
+<tr class="hover:bg-slate-50/80 transition-colors duration-150">
+    <td class="px-3 sm:px-6 py-4 text-sm font-medium text-slate-900">{{ ad.title }}</td>
+    <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500 max-w-xs truncate">{{ ad.text[:80] }}{% if ad.text|length > 80 %}...{% endif %}</td>
+    <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ ad.images|length }}</td>
+    <td class="px-3 sm:px-6 py-4">
+        <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if ad.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
+            {{ "Активно" if ad.is_active else "Неактивно" }}
+        </span>
+    </td>
+    <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(ad.created_at, user, '%Y-%m-%d %H:%M') }}</td>
+    <td class="px-3 sm:px-6 py-4 text-right">
+        <div class="inline-flex items-center gap-1">
+            <a href="/ads/{{ ad.id }}/edit" class="p-1.5 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors" title="Изменить">{{ icon_edit() }}</a>
+            <form method="POST" action="/ads/{{ ad.id }}/delete" class="inline">
+                <button type="submit" class="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors" title="Удалить" onclick="return confirm('Удалить это объявление?')">{{ icon_delete() }}</button>
+            </form>
+        </div>
+    </td>
+</tr>
+{% endfor %}
+{% if has_next %}
+<tr hx-get="/ads/partial?offset={{ next_offset }}&limit=30" hx-trigger="revealed" hx-swap="outerHTML" class="htmx-indicator">
+    <td colspan="6" class="px-3 sm:px-6 py-8 text-center text-slate-500 text-sm">Загрузка...</td>
+</tr>
+{% else %}
+<tr class="load-more-done">
+    <td colspan="6" class="px-3 sm:px-6 py-4 text-center text-slate-500 text-sm">Показаны все</td>
+</tr>
+{% endif %}

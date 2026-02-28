@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +11,36 @@ from app.pages.common import check_is_admin, get_user_from_cookie, templates
 from app.repositories.schedule import ScheduleRepository
 
 router = APIRouter(tags=["pages"])
+PAGE_SIZE = 30
+
+
+@router.get("/groups/partial", response_class=HTMLResponse)
+async def groups_partial(
+    request: Request,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    result = await db.execute(
+        select(Group).where(Group.user_id == user.id).order_by(Group.id).offset(offset).limit(limit + 1)
+    )
+    rows = list(result.scalars().all())
+    has_next = len(rows) > limit
+    groups = rows[:limit]
+    return templates.TemplateResponse(
+        "groups/partial_rows.html",
+        {
+            "request": request,
+            "user": user,
+            "groups": groups,
+            "has_next": has_next,
+            "next_offset": offset + limit,
+        },
+    )
 
 
 @router.get("/groups", response_class=HTMLResponse)
@@ -23,9 +53,11 @@ async def groups_list(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
     result = await db.execute(
-        select(Group).where(Group.user_id == user.id).order_by(Group.id)
+        select(Group).where(Group.user_id == user.id).order_by(Group.id).limit(PAGE_SIZE + 1)
     )
-    groups = result.scalars().all()
+    rows = list(result.scalars().all())
+    has_next = len(rows) > PAGE_SIZE
+    groups = rows[:PAGE_SIZE]
 
     # Load tg_user accounts for sync buttons
     accounts_result = await db.execute(
@@ -55,6 +87,8 @@ async def groups_list(
             "groups": groups,
             "tg_user_accounts": tg_user_accounts,
             "wa_accounts": wa_accounts,
+            "has_next": has_next,
+            "next_offset": PAGE_SIZE,
             "active_page": "groups",
         },
     )

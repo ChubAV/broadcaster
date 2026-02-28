@@ -1,0 +1,28 @@
+{% from "includes/messenger_icon.html" import messenger_icon %}
+{% for log in logs %}
+<tr class="hover:bg-slate-50/80 transition-colors duration-150 cursor-pointer" onclick="window.location='/history/{{ log.id }}'">
+    <td class="px-3 sm:px-6 py-4 text-sm font-medium text-primary-600 hover:text-primary-700">{{ log.ad_title }}</td>
+    <td class="px-3 sm:px-6 py-4 text-sm text-slate-500">{{ log.group_name }}</td>
+    <td class="px-3 sm:px-6 py-4">
+        {% if log.messenger_type %}
+        <span class="inline-flex items-center" title="{{ 'Telegram' if log.messenger_type == 'tg_user' else 'WhatsApp' if log.messenger_type == 'wa' else log.messenger_type }}">{{ messenger_icon(log.messenger_type, size='h-5 w-5', show_label=false) }}</span>
+        {% else %}—{% endif %}
+    </td>
+    <td class="px-3 sm:px-6 py-4">
+        <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800{% elif log.status == 'fail' %}bg-red-100 text-red-800{% else %}bg-slate-100 text-slate-800{% endif %}">
+            {{ (log.status or '')|upper }}
+        </span>
+    </td>
+    <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500 max-w-xs truncate">{{ log.error_message or '-' }}</td>
+    <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(log.sent_at, user, '%Y-%m-%d %H:%M:%S') }}</td>
+</tr>
+{% endfor %}
+{% if has_next %}
+<tr hx-get="/history/partial?offset={{ next_offset }}&limit=30{% if status_filter %}&status={{ status_filter }}{% endif %}" hx-trigger="revealed" hx-swap="outerHTML" class="htmx-indicator">
+    <td colspan="6" class="px-3 sm:px-6 py-8 text-center text-slate-500 text-sm">Загрузка...</td>
+</tr>
+{% else %}
+<tr class="load-more-done">
+    <td colspan="6" class="px-3 sm:px-6 py-4 text-center text-slate-500 text-sm">Показаны все</td>
+</tr>
+{% endif %}

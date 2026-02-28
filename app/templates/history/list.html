@@ -25,7 +25,7 @@
                 <th class="hidden sm:table-cell px-3 sm:px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Время отправки</th>
             </tr>
         </thead>
-        <tbody class="divide-y divide-slate-200">
+        <tbody class="divide-y divide-slate-200" id="history-tbody">
             {% for log in logs %}
             <tr class="hover:bg-slate-50/80 transition-colors duration-150 cursor-pointer" onclick="window.location='/history/{{ log.id }}'">
                 <td class="px-3 sm:px-6 py-4 text-sm font-medium text-primary-600 hover:text-primary-700">{{ log.ad_title }}</td>
@@ -44,23 +44,17 @@
                 <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ format_datetime_for_user(log.sent_at, user, '%Y-%m-%d %H:%M:%S') }}</td>
             </tr>
             {% endfor %}
+            {% if has_next %}
+            <tr hx-get="/history/partial?offset={{ next_offset }}&limit=30{% if status_filter %}&status={{ status_filter }}{% endif %}" hx-trigger="revealed" hx-swap="outerHTML" class="htmx-indicator">
+                <td colspan="6" class="px-3 sm:px-6 py-8 text-center text-slate-500 text-sm">Загрузка...</td>
+            </tr>
+            {% else %}
+            <tr class="load-more-done">
+                <td colspan="6" class="px-3 sm:px-6 py-4 text-center text-slate-500 text-sm">Показаны все</td>
+            </tr>
+            {% endif %}
         </tbody>
     </table>
-    </div>
-</div>
-
-<!-- Pagination -->
-<div class="mt-4 flex flex-wrap justify-between items-center gap-4">
-    <div class="text-sm text-slate-500">
-        Показано {{ offset + 1 }} — {{ offset + logs|length }} из результатов
-    </div>
-    <div class="flex gap-2">
-        {% if offset > 0 %}
-        <a href="/history?offset={{ offset - page_size }}{% if status_filter %}&status={{ status_filter }}{% endif %}" class="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50 transition-colors">Назад</a>
-        {% endif %}
-        {% if has_next %}
-        <a href="/history?offset={{ offset + page_size }}{% if status_filter %}&status={{ status_filter }}{% endif %}" class="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-300 hover:bg-slate-50 transition-colors">Далее</a>
-        {% endif %}
     </div>
 </div>
 {% else %}

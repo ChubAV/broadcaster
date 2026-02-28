@@ -1,0 +1,52 @@
+{% from "includes/messenger_icon.html" import messenger_icon %}
+{% from "includes/icons.html" import icon_pause, icon_play, icon_delete %}
+{% for group in groups %}
+<tr class="hover:bg-slate-50/80 transition-colors duration-150">
+    <td class="px-3 sm:px-4 py-4">
+        <input type="checkbox" name="group_ids" value="{{ group.id }}" class="rounded border-slate-300 text-primary-600 focus:ring-primary-500 js-group-checkbox">
+    </td>
+    <td class="px-3 sm:px-6 py-4 text-sm font-medium text-slate-900">{{ group.name }}</td>
+    <td class="hidden sm:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">#{{ group.account_id }}</td>
+    <td class="hidden md:table-cell px-3 sm:px-6 py-4 text-sm">
+        {% if group.messenger_type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram', show_label=true) }}
+        {% elif group.messenger_type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}
+        {% else %}<span class="text-slate-500">{{ group.messenger_type }}</span>{% endif %}
+    </td>
+    <td class="hidden lg:table-cell px-3 sm:px-6 py-4 text-sm text-slate-500">{{ group.group_external_id }}</td>
+    <td class="px-3 sm:px-6 py-4">
+        <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if group.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
+            {{ "Активна" if group.is_active else "Неактивна" }}
+        </span>
+        {% if group.last_error %}
+        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 mt-1" title="{{ group.last_error }}">
+            Ошибка {{ format_datetime_for_user(group.error_at, user, '%d.%m %H:%M') if group.error_at else '' }}
+        </span>
+        {% endif %}
+    </td>
+    <td class="w-24 px-3 sm:px-4 py-4 text-center">
+        <div class="inline-flex items-center justify-center gap-1">
+            <form method="POST" action="/groups/{{ group.id }}/toggle" class="inline">
+                <button type="submit" class="p-1.5 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors" title="{{ 'Деактивировать' if group.is_active else 'Активировать' }}">
+                    <span class="sr-only">{{ "Деактивировать" if group.is_active else "Активировать" }}</span>
+                    {% if group.is_active %}{{ icon_pause() }}{% else %}{{ icon_play() }}{% endif %}
+                </button>
+            </form>
+            <form method="POST" action="/groups/{{ group.id }}/delete" class="inline">
+                <button type="submit" class="p-1.5 rounded-lg text-red-600 hover:bg-red-50 transition-colors" title="Удалить" onclick="return confirm('Удалить эту группу?')">
+                    <span class="sr-only">Удалить</span>
+                    {{ icon_delete() }}
+                </button>
+            </form>
+        </div>
+    </td>
+</tr>
+{% endfor %}
+{% if has_next %}
+<tr hx-get="/groups/partial?offset={{ next_offset }}&limit=30" hx-trigger="revealed" hx-swap="outerHTML" class="htmx-indicator">
+    <td colspan="7" class="px-3 sm:px-6 py-8 text-center text-slate-500 text-sm">Загрузка...</td>
+</tr>
+{% else %}
+<tr class="load-more-done">
+    <td colspan="7" class="px-3 sm:px-6 py-4 text-center text-slate-500 text-sm">Показаны все</td>
+</tr>
+{% endif %}

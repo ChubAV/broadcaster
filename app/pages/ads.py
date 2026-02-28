@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,36 @@ from app.models.ad import Ad
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
+PAGE_SIZE = 30
+
+
+@router.get("/ads/partial", response_class=HTMLResponse)
+async def ads_partial(
+    request: Request,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    result = await db.execute(
+        select(Ad).where(Ad.user_id == user.id).order_by(Ad.created_at.desc()).offset(offset).limit(limit + 1)
+    )
+    rows = list(result.scalars().all())
+    has_next = len(rows) > limit
+    ads = rows[:limit]
+    return templates.TemplateResponse(
+        "ads/partial_rows.html",
+        {
+            "request": request,
+            "user": user,
+            "ads": ads,
+            "has_next": has_next,
+            "next_offset": offset + limit,
+        },
+    )
 
 
 @router.get("/ads", response_class=HTMLResponse)
@@ -21,12 +51,22 @@ async def ads_list(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
     result = await db.execute(
-        select(Ad).where(Ad.user_id == user.id).order_by(Ad.created_at.desc())
+        select(Ad).where(Ad.user_id == user.id).order_by(Ad.created_at.desc()).limit(PAGE_SIZE + 1)
     )
-    ads = result.scalars().all()
+    rows = list(result.scalars().all())
+    has_next = len(rows) > PAGE_SIZE
+    ads = rows[:PAGE_SIZE]
     return templates.TemplateResponse(
         "ads/list.html",
-        {"request": request, "user": user, "is_admin": check_is_admin(user, settings), "ads": ads, "active_page": "ads"},
+        {
+            "request": request,
+            "user": user,
+            "is_admin": check_is_admin(user, settings),
+            "ads": ads,
+            "has_next": has_next,
+            "next_offset": PAGE_SIZE,
+            "active_page": "ads",
+        },
     )
 
 

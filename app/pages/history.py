@@ -9,6 +9,51 @@ from app.models.send_log import SendLog
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
+PAGE_SIZE = 30
+
+
+@router.get("/history/partial", response_class=HTMLResponse)
+async def history_partial(
+    request: Request,
+    status: str | None = Query(default=None),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    query = select(SendLog).where(SendLog.user_id == user.id)
+    if status:
+        query = query.where(SendLog.status == status)
+    query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(limit + 1)
+    result = await db.execute(query)
+    rows = list(result.scalars().all())
+    has_next = len(rows) > limit
+    logs = [
+        {
+            "id": r.id,
+            "ad_title": r.ad_title or "—",
+            "group_name": r.group_name or "—",
+            "status": r.status,
+            "messenger_type": r.messenger_type,
+            "error_message": r.error_message,
+            "sent_at": r.sent_at,
+        }
+        for r in rows[:limit]
+    ]
+    return templates.TemplateResponse(
+        "history/partial_rows.html",
+        {
+            "request": request,
+            "user": user,
+            "logs": logs,
+            "has_next": has_next,
+            "next_offset": offset + limit,
+            "status_filter": status,
+        },
+    )
 
 
 @router.get("/history/{log_id}", response_class=HTMLResponse)
@@ -50,21 +95,14 @@ async def history_list(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
-    page_size = 50
-
-    query = (
-        select(SendLog)
-        .where(SendLog.user_id == user.id)
-    )
+    query = select(SendLog).where(SendLog.user_id == user.id)
     if status:
         query = query.where(SendLog.status == status)
-    query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(page_size + 1)
-
+    query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(PAGE_SIZE + 1)
     result = await db.execute(query)
     rows = list(result.scalars().all())
-
-    has_next = len(rows) > page_size
-    rows = rows[:page_size]
+    has_next = len(rows) > PAGE_SIZE
+    rows = rows[:PAGE_SIZE]
 
     logs = [
         {
@@ -88,8 +126,9 @@ async def history_list(
             "logs": logs,
             "status_filter": status,
             "offset": offset,
-            "page_size": page_size,
+            "page_size": PAGE_SIZE,
             "has_next": has_next,
+            "next_offset": offset + len(logs),
             "active_page": "history",
         },
     )

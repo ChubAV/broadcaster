@@ -27,6 +27,7 @@ from app.messengers.whatsapp import WhatsAppMessenger
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
+PAGE_SIZE = 30
 
 
 def _generate_qr_base64(data: str) -> str:
@@ -35,6 +36,39 @@ def _generate_qr_base64(data: str) -> str:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+
+
+@router.get("/accounts/partial", response_class=HTMLResponse)
+async def accounts_partial(
+    request: Request,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    result = await db.execute(
+        select(MessengerAccount)
+        .where(MessengerAccount.user_id == user.id)
+        .order_by(MessengerAccount.id)
+        .offset(offset)
+        .limit(limit + 1)
+    )
+    rows = list(result.scalars().all())
+    has_next = len(rows) > limit
+    accounts = rows[:limit]
+    return templates.TemplateResponse(
+        "accounts/partial_rows.html",
+        {
+            "request": request,
+            "user": user,
+            "accounts": accounts,
+            "has_next": has_next,
+            "next_offset": offset + limit,
+        },
+    )
 
 
 @router.get("/accounts", response_class=HTMLResponse)
@@ -46,19 +80,24 @@ async def accounts_list(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
+    result = await db.execute(
+        select(MessengerAccount)
+        .where(MessengerAccount.user_id == user.id)
+        .order_by(MessengerAccount.id)
+        .limit(PAGE_SIZE + 1)
+    )
+    rows = list(result.scalars().all())
+    has_next = len(rows) > PAGE_SIZE
+    accounts = rows[:PAGE_SIZE]
     return templates.TemplateResponse(
         "accounts/list.html",
         {
             "request": request,
             "user": user,
             "is_admin": check_is_admin(user, settings),
-            "accounts": (
-                await db.execute(
-                    select(MessengerAccount)
-                    .where(MessengerAccount.user_id == user.id)
-                    .order_by(MessengerAccount.id)
-                )
-            ).scalars().all(),
+            "accounts": accounts,
+            "has_next": has_next,
+            "next_offset": PAGE_SIZE,
             "active_page": "accounts",
         },
     )
