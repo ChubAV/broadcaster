@@ -39,23 +39,25 @@
     </div>
     <div class="px-3 py-4 sm:px-6 sm:py-6">
         {% if recent_sends %}
-        {# Mobile: карточки вместо таблицы — без горизонтального скролла #}
-        <ul class="sm:hidden space-y-3 divide-y divide-slate-100 first:pt-0">
+        {# Mobile: крупные информативные карточки #}
+        <ul class="sm:hidden space-y-4">
             {% for log in recent_sends %}
-            <li class="pt-3 first:pt-0">
-                <div class="flex items-start gap-3">
+            <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="flex items-start justify-between gap-3">
                     <div class="flex-1 min-w-0">
-                        <p class="text-sm font-medium text-slate-900 truncate" title="{{ log.ad_title }}">{{ log.ad_title }}</p>
-                        <p class="text-xs text-slate-500 truncate mt-0.5" title="{{ log.group_name }}">{{ log.group_name }}</p>
+                        <p class="text-xs font-medium text-slate-500 mb-0.5">Объявление</p>
+                        <p class="text-base font-semibold text-slate-900 truncate" title="{{ log.ad_title }}">{{ log.ad_title }}</p>
+                        <p class="text-xs font-medium text-slate-500 mt-3 mb-0.5">Группа</p>
+                        <p class="text-sm text-slate-700 truncate" title="{{ log.group_name }}">{{ log.group_name }}</p>
                     </div>
-                    <div class="flex shrink-0 items-center gap-2">
+                    <div class="flex shrink-0 flex-col items-end gap-1">
                         {% if log.messenger_type %}
-                        <span class="inline-flex items-center" title="{{ 'Telegram' if log.messenger_type == 'tg_user' else 'WhatsApp' if log.messenger_type == 'wa' else log.messenger_type }}">{{ messenger_icon(log.messenger_type, size='h-5 w-5', show_label=false) }}</span>
+                        <span class="inline-flex items-center" title="{{ 'Telegram' if log.messenger_type == 'tg_user' else 'WhatsApp' if log.messenger_type == 'wa' else log.messenger_type }}">{{ messenger_icon(log.messenger_type, size='h-6 w-6', show_label=false) }}</span>
                         {% endif %}
-                        <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-semibold {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800{% elif log.status == 'fail' %}bg-red-100 text-red-800{% else %}bg-slate-100 text-slate-800{% endif %}">{{ (log.status or '')|upper }}</span>
+                        <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800{% elif log.status == 'fail' %}bg-red-100 text-red-800{% else %}bg-slate-100 text-slate-800{% endif %}">{{ (log.status or '')|upper }}</span>
                     </div>
                 </div>
-                <p class="text-xs text-slate-400 mt-1">{{ format_datetime_for_user(log.sent_at, user, '%d.%m %H:%M') }}</p>
+                <p class="text-sm text-slate-500 mt-3">{{ format_datetime_for_user(log.sent_at, user, '%d.%m.%Y %H:%M') }}</p>
             </li>
             {% endfor %}
         </ul>

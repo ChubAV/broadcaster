@@ -101,22 +101,23 @@
                 </button>
             </p>
         </div>
-        {# Mobile: карточки вместо таблицы #}
-        <ul id="groups-cards-list" class="sm:hidden divide-y divide-slate-100">
+        {# Mobile: крупные информативные карточки #}
+        <ul id="groups-cards-list" class="sm:hidden space-y-4 p-4 sm:p-0">
             {% for group in groups %}
-            <li class="flex items-center gap-3 p-4 bg-white">
-                <input type="checkbox" name="group_ids" value="{{ group.id }}" class="shrink-0 rounded border-slate-300 text-primary-600 focus:ring-primary-500 js-group-checkbox">
+            <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex items-start gap-4">
+                <input type="checkbox" name="group_ids" value="{{ group.id }}" class="mt-1 shrink-0 rounded border-slate-300 text-primary-600 focus:ring-primary-500 js-group-checkbox h-5 w-5">
                 <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-slate-900 truncate" title="{{ group.name }}">{{ group.name }}</p>
-                    <div class="flex flex-wrap items-center gap-2 mt-1">
-                        <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-semibold {% if group.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
+                    <p class="text-xs font-medium text-slate-500 mb-0.5">Название</p>
+                    <p class="text-base font-semibold text-slate-900" title="{{ group.name }}">{{ group.name }}</p>
+                    <div class="flex flex-wrap items-center gap-2 mt-3">
+                        <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold {% if group.is_active %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-700{% endif %}">
                             {{ "Активна" if group.is_active else "Неактивна" }}
                         </span>
-                        {% if group.messenger_type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-4 w-4', show_label=false) }}
-                        {% elif group.messenger_type == 'wa' %}{{ messenger_icon('wa', size='h-4 w-4', show_label=false) }}{% endif %}
+                        {% if group.messenger_type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', show_label=false) }}
+                        {% elif group.messenger_type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', show_label=false) }}{% endif %}
                     </div>
                     {% if group.last_error %}
-                    <p class="text-xs text-amber-600 mt-1 truncate" title="{{ group.last_error }}">Ошибка {{ format_datetime_for_user(group.error_at, user, '%d.%m %H:%M') if group.error_at else '' }}</p>
+                    <p class="text-xs text-amber-600 mt-2 truncate" title="{{ group.last_error }}">Ошибка {{ format_datetime_for_user(group.error_at, user, '%d.%m %H:%M') if group.error_at else '' }}</p>
                     {% endif %}
                 </div>
                 <div class="flex shrink-0 items-center gap-0.5">
@@ -134,7 +135,7 @@
             </li>
             {% endfor %}
             {% if has_next %}
-            <li hx-get="/groups/partial?offset={{ next_offset }}&limit=30&layout=cards{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="p-4 text-center text-slate-500 text-sm">
+            <li hx-get="/groups/partial?offset={{ next_offset }}&limit=30&layout=cards{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="p-5 text-center text-slate-500 text-sm">
                 Загрузка...
             </li>
             {% endif %}

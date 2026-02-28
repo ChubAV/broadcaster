@@ -13,25 +13,29 @@
 
 {% if logs %}
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    {# Mobile: карточки вместо таблицы #}
-    <ul id="history-cards-list" class="sm:hidden divide-y divide-slate-100">
+    {# Mobile: крупные информативные карточки #}
+    <ul id="history-cards-list" class="sm:hidden space-y-4 p-4 sm:p-0">
         {% for log in logs %}
-        <li class="flex items-start gap-3 p-4 bg-white cursor-pointer hover:bg-slate-50/80 transition-colors active:bg-slate-100" onclick="window.location='/history/{{ log.id }}'">
-            <div class="flex-1 min-w-0">
-                <a href="/history/{{ log.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 truncate block" onclick="event.stopPropagation()">{{ log.ad_title }}</a>
-                <p class="text-xs text-slate-500 truncate mt-0.5" title="{{ log.group_name }}">{{ log.group_name }}</p>
-                <div class="flex flex-wrap items-center gap-2 mt-1.5">
-                    <span class="inline-flex rounded-full px-2 py-0.5 text-xs font-semibold {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800{% elif log.status == 'fail' %}bg-red-100 text-red-800{% else %}bg-slate-100 text-slate-800{% endif %}">{{ (log.status or '')|upper }}</span>
+        <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm cursor-pointer hover:bg-slate-50/80 hover:border-slate-300 transition-colors active:bg-slate-100" onclick="window.location='/history/{{ log.id }}'">
+            <div class="flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs font-medium text-slate-500 mb-0.5">Объявление</p>
+                    <a href="/history/{{ log.id }}" class="text-base font-semibold text-primary-600 hover:text-primary-700 truncate block" onclick="event.stopPropagation()">{{ log.ad_title }}</a>
+                    <p class="text-xs font-medium text-slate-500 mt-3 mb-0.5">Группа</p>
+                    <p class="text-sm text-slate-700 truncate" title="{{ log.group_name }}">{{ log.group_name }}</p>
+                </div>
+                <div class="flex shrink-0 flex-col items-end gap-1">
                     {% if log.messenger_type %}
-                    <span class="inline-flex items-center" title="{{ 'Telegram' if log.messenger_type == 'tg_user' else 'WhatsApp' if log.messenger_type == 'wa' else log.messenger_type }}">{{ messenger_icon(log.messenger_type, size='h-4 w-4', show_label=false) }}</span>
+                    <span class="inline-flex items-center" title="{{ 'Telegram' if log.messenger_type == 'tg_user' else 'WhatsApp' if log.messenger_type == 'wa' else log.messenger_type }}">{{ messenger_icon(log.messenger_type, size='h-6 w-6', show_label=false) }}</span>
                     {% endif %}
-                    <span class="text-xs text-slate-400">{{ format_datetime_for_user(log.sent_at, user, '%d.%m %H:%M') }}</span>
+                    <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold {% if log.status == 'ok' %}bg-emerald-100 text-emerald-800{% elif log.status == 'fail' %}bg-red-100 text-red-800{% else %}bg-slate-100 text-slate-800{% endif %}">{{ (log.status or '')|upper }}</span>
                 </div>
             </div>
+            <p class="text-sm text-slate-500 mt-3">{{ format_datetime_for_user(log.sent_at, user, '%d.%m.%Y %H:%M') }}</p>
         </li>
         {% endfor %}
         {% if has_next %}
-        <li hx-get="/history/partial?offset={{ next_offset }}&limit=30&layout=cards{% if status_filter %}&status={{ status_filter }}{% endif %}" hx-trigger="revealed" hx-swap="outerHTML" class="p-4 text-center text-slate-500 text-sm">
+        <li hx-get="/history/partial?offset={{ next_offset }}&limit=30&layout=cards{% if status_filter %}&status={{ status_filter }}{% endif %}" hx-trigger="revealed" hx-swap="outerHTML" class="p-5 text-center text-slate-500 text-sm">
             Загрузка...
         </li>
         {% endif %}
