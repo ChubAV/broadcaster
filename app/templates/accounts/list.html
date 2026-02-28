@@ -13,7 +13,7 @@
 
 {% if accounts %}
 <div class="bg-white rounded-xl shadow-card border border-slate-200/80 overflow-hidden">
-    <ul id="accounts-cards-list" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 p-4">
+    <ul id="accounts-cards-list" class="grid grid-cols-1 gap-4 p-4">
         {% for account in accounts %}
         {% if account.status == 'syncing' and account.type == 'wa' %}
         <li id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status?layout=cards" hx-trigger="every 5s" hx-swap="outerHTML" class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
