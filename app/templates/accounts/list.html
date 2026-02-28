@@ -58,27 +58,25 @@
         </li>
         {% else %}
         {% set stats = account_stats.get(account.id, {}) %}
-        <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex items-start gap-4">
+        <li class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm flex items-start justify-between gap-4">
             <div class="flex-1 min-w-0">
-                <p class="text-xs font-medium text-slate-500 mb-0.5">Тип</p>
-                {% if account.type == 'tg_user' %}<span class="inline-flex items-center">{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram', show_label=true) }}</span>
-                {% elif account.type == 'wa' %}<span class="inline-flex items-center">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}</span>
-                {% else %}<span class="text-slate-500">{{ account.type }}</span>{% endif %}
-                <p class="text-xs font-medium text-slate-500 mt-3 mb-0.5">Статус</p>
-                <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold {% if account.status == 'active' %}bg-emerald-100 text-emerald-800{% elif account.status == 'disconnected' %}bg-red-100 text-red-800{% else %}bg-amber-100 text-amber-800{% endif %}">
-                    {{ "Активно" if account.status == 'active' else account.status }}
-                </span>
-                <div class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                    <span class="text-slate-500">Групп:</span><span class="text-slate-700 font-medium">{{ stats.get('groups_count', 0) }}</span>
-                    <span class="text-slate-500">Попыток:</span><span class="text-slate-700 font-medium">{{ stats.get('send_attempts', 0) }}</span>
-                    <span class="text-slate-500">Успешно:</span><span class="text-slate-700 font-medium">{{ stats.get('send_success', 0) }}</span>
-                    <span class="text-slate-500">Расписаний:</span><span class="text-slate-700 font-medium">{{ stats.get('schedules_count', 0) }}</span>
-                    <span class="text-slate-500">Посл. отправка:</span><span class="text-slate-700">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') if stats.get('last_sent_at') else '—' }}</span>
+                <div class="flex flex-wrap items-center gap-3">
+                    {% if account.type == 'tg_user' %}<span class="inline-flex items-center gap-1.5">{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram', show_label=true) }}</span>
+                    {% elif account.type == 'wa' %}<span class="inline-flex items-center gap-1.5">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}</span>
+                    {% else %}<span class="text-slate-600 font-medium">{{ account.type }}</span>{% endif %}
+                    <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold {% if account.status == 'active' %}bg-emerald-100 text-emerald-800{% elif account.status == 'disconnected' %}bg-red-100 text-red-800{% else %}bg-amber-100 text-amber-800{% endif %}">
+                        {{ "Активно" if account.status == 'active' else account.status }}
+                    </span>
                 </div>
-                <p class="text-xs font-medium text-slate-500 mt-2 mb-0.5">Создано</p>
-                <p class="text-sm text-slate-700">{{ format_datetime_for_user(account.created_at, user, '%Y-%m-%d %H:%M') }}</p>
+                <div class="mt-4 flex flex-wrap gap-2">
+                    <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('groups_count', 0) }} групп</span>
+                    <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('schedules_count', 0) }} расписаний</span>
+                    <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }} отправок</span>
+                    {% if stats.get('last_sent_at') %}<span class="inline-flex items-center rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800" title="Последняя отправка">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>{% endif %}
+                </div>
+                <p class="mt-3 text-xs text-slate-400">Подключён {{ format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M') }}</p>
             </div>
-            <div class="flex shrink-0">
+            <div class="flex shrink-0 self-start">
                 <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
                     <button type="submit" class="text-sm font-medium text-red-600 hover:text-red-700" onclick="return confirm('Удалить этот аккаунт?')">Удалить</button>
                 </form>

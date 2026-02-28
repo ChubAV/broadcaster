@@ -7,13 +7,12 @@
             <span class="inline-flex items-center">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}</span>
             <p class="text-xs font-medium text-slate-500 mt-3 mb-0.5">Статус</p>
             {% if status == 'active' %}
-            <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold bg-emerald-100 text-emerald-800">Активно</span>
-            <div class="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                <span class="text-slate-500">Групп:</span><span class="text-slate-700 font-medium">{{ stats.get('groups_count', group_count or 0) }}</span>
-                <span class="text-slate-500">Попыток:</span><span class="text-slate-700 font-medium">{{ stats.get('send_attempts', 0) }}</span>
-                <span class="text-slate-500">Успешно:</span><span class="text-slate-700 font-medium">{{ stats.get('send_success', 0) }}</span>
-                <span class="text-slate-500">Расписаний:</span><span class="text-slate-700 font-medium">{{ stats.get('schedules_count', 0) }}</span>
-                <span class="text-slate-500">Посл. отправка:</span><span class="text-slate-700">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') if stats.get('last_sent_at') else '—' }}</span>
+            <span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold bg-emerald-100 text-emerald-800">Активно</span>
+            <div class="mt-4 flex flex-wrap gap-2">
+                <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('groups_count', group_count or 0) }} групп</span>
+                <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('schedules_count', 0) }} расписаний</span>
+                <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-medium text-slate-700">{{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }} отправок</span>
+                {% if stats.get('last_sent_at') %}<span class="inline-flex items-center rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-800">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>{% endif %}
             </div>
             {% elif status == 'sync_failed' %}
             <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-semibold bg-red-100 text-red-800">Ошибка синхронизации</span>
