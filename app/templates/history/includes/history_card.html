@@ -7,7 +7,18 @@
     <p class="text-sm lg:text-base font-medium text-gray-900 truncate">{{ log.ad_title }}</p>
     <div class="flex items-center gap-2 mt-0.5">
       <span class="text-xs lg:text-sm text-gray-500 truncate">→ {{ log.group_name }}</span>
+      {% if log.group_external_id %}
+      <span class="text-xs text-gray-400 shrink-0">#{{ log.group_external_id }}</span>
+      {% endif %}
       {{ messenger_icon(log.messenger_type, size='h-3.5 w-3.5 lg:h-4 lg:w-4', show_label=false) }}
+    </div>
+    <div class="flex items-center gap-3 mt-0.5">
+      {% if log.account_id %}
+      <span class="text-xs lg:text-sm text-gray-400">Акк #{{ log.account_id }}</span>
+      {% endif %}
+      {% if log.task_id %}
+      <span class="text-xs lg:text-sm text-gray-400 font-mono truncate">{{ log.task_id }}</span>
+      {% endif %}
     </div>
     {% if log.status == 'fail' and log.error_message %}
     <p class="text-xs lg:text-sm text-red-500 mt-0.5 truncate">{{ log.error_message }}</p>
