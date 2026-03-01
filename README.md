@@ -14,6 +14,8 @@ SaaS-платформа для планирования и отправки ре
 - **Админ-панель** -- управление пользователями и подписками
 - **Мониторинг** -- Prometheus метрики + Grafana дашборды + Loki логи
 - **Поддержка таймзон** -- индивидуальная таймзона в профиле пользователя
+- **Email-верификация** -- подтверждение email при регистрации (SMTP)
+- **Сброс пароля** -- восстановление доступа через код на email
 - **JWT-аутентификация** -- регистрация и вход
 - **Web UI** -- серверный рендеринг на Jinja2
 
@@ -133,6 +135,9 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 | `just prod-deploy` | Деплой (build + deploy) |
 | `just prod-hard-deploy` | Деплой с --no-cache |
 | `just prod-logs [svc]` | Логи prod-сервисов |
+| `just wa-worker-build` | Собрать образ wa-worker |
+| `just wa-workers` | Список WA-контейнеров |
+| `just wa-workers-stop` | Остановить все WA-контейнеры |
 | `just monitoring-start` | Запустить стек мониторинга |
 | `just monitoring-down` | Остановить мониторинг |
 
@@ -158,7 +163,8 @@ broadcaster/
 │   │   ├── schedule.py
 │   │   ├── send_log.py
 │   │   ├── subscription.py
-│   │   └── telegram_auth_session.py
+│   │   ├── telegram_auth_session.py
+│   │   └── email_verification.py
 │   ├── repositories/          # Data access layer
 │   │   ├── base.py            # Generic BaseRepository[T]
 │   │   ├── user.py
@@ -194,7 +200,9 @@ broadcaster/
 │   │   ├── billing_cache.py   # Billing cache layer
 │   │   ├── schedule_service.py # Next-run computation
 │   │   ├── messenger_factory.py # Messenger adapter factory
-│   │   └── s3.py              # S3/MinIO image storage
+│   │   ├── s3.py              # S3/MinIO image storage
+│   │   ├── wa_container_manager.py # WA per-account container lifecycle
+│   │   └── email_service.py   # Email sending (SMTP)
 │   ├── messengers/            # Messenger adapters
 │   │   ├── base.py            # Abstract base class
 │   │   ├── telegram_user.py   # Telegram userbot (Telethon)
@@ -209,10 +217,13 @@ broadcaster/
 │   │   └── uow.py            # Unit of Work
 │   ├── worker/                # Celery tasks
 │   │   ├── celery_app.py      # Celery configuration
-│   │   ├── tasks.py           # Schedule checker and send tasks
-│   │   └── wa_consumer.py     # WhatsApp webhook consumer
-│   └── templates/             # Jinja2 HTML templates (21 files)
-├── wa_bridge/                 # WhatsApp bridge (Node.js + Baileys)
+│   │   └── tasks.py           # Schedule checker and send tasks
+│   └── templates/             # Jinja2 HTML templates (45 files)
+├── wa_worker/                 # Per-account WhatsApp worker (Node.js + Baileys + Redis)
+│   ├── index.js               # Baileys + Redis queue consumer
+│   ├── Dockerfile
+│   └── package.json
+├── wa_bridge/                 # WhatsApp bridge (legacy, for reference)
 │   ├── index.js               # Express server with Baileys integration
 │   ├── Dockerfile
 │   └── package.json
@@ -226,8 +237,8 @@ broadcaster/
 │   └── nginx-http.conf.template
 ├── scripts/
 │   └── cleanup_schedules.py   # Schedule maintenance script
-├── tests/                     # pytest suite (52 files)
-├── docker-compose.yml         # Base stack (web, celery, redis, db, wa-bridge)
+├── tests/                     # pytest suite (56 files)
+├── docker-compose.yml         # Base stack (web, celery, redis, db, flower)
 ├── docker-compose.dev.yml     # Dev overrides (hot-reload, debug)
 ├── docker-compose.prod.yml    # Production (+ nginx, certbot)
 ├── docker-compose.monitoring.yml # Prometheus + Grafana + Loki
@@ -242,10 +253,8 @@ broadcaster/
 ### Base stack (`docker-compose.yml`)
 - **web** -- FastAPI app (port 8000)
 - **celery-worker-telegram** -- Celery workers для Telegram (2 replicas)
-- **celery-worker-whatsapp** -- Celery workers для WhatsApp (2 replicas)
-- **celery-worker-default** -- Celery worker для общих задач
+- **celery-worker-default** -- Celery worker для общих задач (WA container management)
 - **celery-beat** -- Celery Beat scheduler
-- **wa-bridge** -- WhatsApp Baileys bridge (port 3000, 512MB)
 - **db** -- PostgreSQL 16
 - **redis** -- Redis
 - **flower** -- Celery monitoring (port 5555)
@@ -277,8 +286,8 @@ Adds: **nginx** (80/443), **certbot** (Let's Encrypt SSL)
 | POST | `/api/schedules/{id}/toggle` | Переключение активности |
 | GET | `/api/history` | История отправок |
 | GET | `/api/history/stats` | Статистика |
+| GET | `/api/billing/plan` | Текущий план, лимиты и использование |
 | GET | `/api/billing/plans` | Тарифные планы |
-| GET | `/api/billing/usage` | Текущее использование и лимиты |
 | POST | `/api/uploads/image` | Загрузка изображения |
 | GET | `/health` | Health check |
 | GET | `/metrics` | Prometheus metrics |
