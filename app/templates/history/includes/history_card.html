@@ -10,18 +10,20 @@
       <div class="flex items-center gap-2 mt-0.5 min-w-0">
         {{ messenger_icon(log.messenger_type, size='h-3.5 w-3.5 lg:h-4 lg:w-4', show_label=false) }}
         <span class="text-xs lg:text-sm text-gray-500 truncate">→ {{ log.group_name }}</span>
-        {% if log.group_external_id %}
-        <span class="text-xs text-gray-400 shrink-0">#{{ log.group_external_id }}</span>
-        {% endif %}
       </div>
-      <div class="flex items-center gap-3 mt-0.5 min-w-0">
+      <div class="flex items-center gap-3 mt-0.5 min-w-0 overflow-hidden">
         {% if log.account_id %}
-        <span class="text-xs lg:text-sm text-gray-400">Акк #{{ log.account_id }}</span>
+        <span class="text-xs lg:text-sm text-gray-400 shrink-0">Акк #{{ log.account_id }}</span>
         {% endif %}
-        {% if log.task_id %}
-        <span class="text-xs lg:text-sm text-gray-400 font-mono truncate">{{ log.task_id }}</span>
+        {% if log.group_external_id %}
+        <span class="text-xs text-gray-400 truncate">#{{ log.group_external_id }}</span>
         {% endif %}
       </div>
+      {% if log.task_id %}
+      <div class="mt-0.5 min-w-0 overflow-hidden">
+        <span class="text-xs lg:text-sm text-gray-400 font-mono truncate block">{{ log.task_id }}</span>
+      </div>
+      {% endif %}
       {% if log.status == 'fail' and log.error_message %}
       <p class="text-xs lg:text-sm text-red-500 mt-0.5 truncate">{{ log.error_message }}</p>
       {% endif %}
