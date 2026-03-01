@@ -198,7 +198,7 @@ async def start_group_sync():
             groups = []
             chats = session.client.chats or []
             for chat in chats:
-                if getattr(chat, "type", None) == ChatType.GROUP or getattr(chat, "chat_type", None) == "group":
+                if getattr(chat, "type", None) == ChatType.CHAT or getattr(chat, "chat_type", None) == "CHAT":
                     groups.append({
                         "id": str(getattr(chat, "chat_id", getattr(chat, "id", ""))),
                         "name": getattr(chat, "title", getattr(chat, "name", "")),
@@ -212,7 +212,7 @@ async def start_group_sync():
                     if not result:
                         break
                     for chat in result:
-                        if getattr(chat, "type", None) == ChatType.GROUP or getattr(chat, "chat_type", None) == "group":
+                        if getattr(chat, "type", None) == ChatType.CHAT or getattr(chat, "chat_type", None) == "CHAT":
                             chat_id = str(getattr(chat, "chat_id", getattr(chat, "id", "")))
                             if not any(g["id"] == chat_id for g in groups):
                                 groups.append({
@@ -264,7 +264,7 @@ async def create_client(phone: str) -> SessionState:
         phone=phone,
         work_dir=work_dir,
         headers=UserAgentPayload(device_type="WEB"),
-        reconnect=False,
+        reconnect=True,
     )
     state.client = client
 
@@ -819,7 +819,7 @@ async def get_groups(session_id: str):
         groups = []
         chats = session.client.chats or []
         for chat in chats:
-            if getattr(chat, "type", None) == ChatType.GROUP or getattr(chat, "chat_type", None) == "group":
+            if getattr(chat, "type", None) == ChatType.CHAT or getattr(chat, "chat_type", None) == "CHAT":
                 groups.append({
                     "id": str(getattr(chat, "chat_id", getattr(chat, "id", ""))),
                     "name": getattr(chat, "title", getattr(chat, "name", "")),
