@@ -283,8 +283,10 @@ async def _sync_wa_groups_async(account_id: int):
                     existing_ids = {row[0] for row in existing}
 
                     new_count = 0
+                    seen = set(existing_ids)
                     for g in groups:
-                        if g["id"] not in existing_ids:
+                        if g["id"] not in seen:
+                            seen.add(g["id"])
                             session.add(
                                 Group(
                                     user_id=account.user_id,
@@ -383,8 +385,10 @@ async def _sync_max_groups_async(account_id: int):
                     existing_ids = {row[0] for row in existing}
 
                     new_count = 0
+                    seen = set(existing_ids)
                     for g in groups:
-                        if g["id"] not in existing_ids:
+                        if g["id"] not in seen:
+                            seen.add(g["id"])
                             session.add(
                                 Group(
                                     user_id=account.user_id,

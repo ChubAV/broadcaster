@@ -791,8 +791,10 @@ async def accounts_sync_groups(
     )
     existing_ids = {row[0] for row in existing}
 
+    seen = set(existing_ids)
     for g in fetched_groups:
-        if g["id"] not in existing_ids:
+        if g["id"] not in seen:
+            seen.add(g["id"])
             db.add(
                 Group(
                     user_id=user.id,

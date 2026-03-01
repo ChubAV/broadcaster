@@ -232,15 +232,17 @@ async def start_group_sync():
                 ACCOUNT_ID, attempt + 1, MAX_ATTEMPTS,
             )
 
-            # Fetch all chats and filter for groups
-            groups = []
+            # Fetch all chats and filter for groups (deduplicate by id)
+            groups = {}
             chats = session.client.chats or []
             for chat in chats:
                 if getattr(chat, "type", None) == ChatType.CHAT or getattr(chat, "chat_type", None) == "CHAT":
-                    groups.append({
-                        "id": str(getattr(chat, "chat_id", getattr(chat, "id", ""))),
-                        "name": getattr(chat, "title", getattr(chat, "name", "")),
-                    })
+                    chat_id = str(getattr(chat, "chat_id", getattr(chat, "id", "")))
+                    if chat_id not in groups:
+                        groups[chat_id] = {
+                            "id": chat_id,
+                            "name": getattr(chat, "title", getattr(chat, "name", "")),
+                        }
 
             # If client supports paginated fetch, try to get more
             try:
@@ -252,11 +254,11 @@ async def start_group_sync():
                     for chat in result:
                         if getattr(chat, "type", None) == ChatType.CHAT or getattr(chat, "chat_type", None) == "CHAT":
                             chat_id = str(getattr(chat, "chat_id", getattr(chat, "id", "")))
-                            if not any(g["id"] == chat_id for g in groups):
-                                groups.append({
+                            if chat_id not in groups:
+                                groups[chat_id] = {
                                     "id": chat_id,
                                     "name": getattr(chat, "title", getattr(chat, "name", "")),
-                                })
+                                }
                     # Use the oldest chat as marker for next page
                     if result:
                         marker = result[-1]
@@ -264,6 +266,8 @@ async def start_group_sync():
                         break
             except Exception as e:
                 log.debug("paginated_fetch_not_available: %s", e)
+
+            groups = list(groups.values())
 
             session.sync_state = "ready"
             session.groups = groups
@@ -878,17 +882,19 @@ async def get_groups(session_id: str):
     if session.groups is not None:
         return session.groups
 
-    # Try to fetch groups on-demand
+    # Try to fetch groups on-demand (deduplicate by id)
     try:
-        groups = []
+        groups = {}
         chats = session.client.chats or []
         for chat in chats:
             if getattr(chat, "type", None) == ChatType.CHAT or getattr(chat, "chat_type", None) == "CHAT":
-                groups.append({
-                    "id": str(getattr(chat, "chat_id", getattr(chat, "id", ""))),
-                    "name": getattr(chat, "title", getattr(chat, "name", "")),
-                })
-        return groups
+                chat_id = str(getattr(chat, "chat_id", getattr(chat, "id", "")))
+                if chat_id not in groups:
+                    groups[chat_id] = {
+                        "id": chat_id,
+                        "name": getattr(chat, "title", getattr(chat, "name", "")),
+                    }
+        return list(groups.values())
     except Exception as e:
         log.error("groups_error account_id=%s error=%s", ACCOUNT_ID, str(e))
         return JSONResponse(status_code=500, content={"error": str(e)})
