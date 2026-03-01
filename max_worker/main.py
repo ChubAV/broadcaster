@@ -158,6 +158,21 @@ def session_exists_on_disk() -> bool:
     return d.exists() and any(d.iterdir())
 
 
+def save_phone_to_disk(phone: str):
+    """Persist phone number alongside session files for container restarts."""
+    d = session_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "phone.txt").write_text(phone.strip())
+
+
+def load_phone_from_disk() -> str:
+    """Read previously saved phone number from session directory."""
+    f = session_dir() / "phone.txt"
+    if f.exists():
+        return f.read_text().strip()
+    return ""
+
+
 def delete_session_files():
     d = session_dir()
     if d.exists():
@@ -259,6 +274,9 @@ async def create_client(phone: str) -> SessionState:
     state = SessionState()
     state.phone = phone
     state.initializing = True
+
+    # Persist phone for container restarts (when PHONE env var is not set)
+    save_phone_to_disk(phone)
 
     client = MaxClient(
         phone=phone,
@@ -673,11 +691,12 @@ async def lifespan(app: FastAPI):
     # Start heartbeat loop
     heartbeat_task = asyncio.create_task(heartbeat_loop())
 
-    # Auto-load session if it exists on disk and PHONE is set
-    if session_exists_on_disk() and PHONE:
+    # Auto-load session if it exists on disk
+    phone = PHONE or load_phone_from_disk()
+    if session_exists_on_disk() and phone:
         log.info("session_autoloading account_id=%s", ACCOUNT_ID)
         try:
-            await create_client(PHONE)
+            await create_client(phone)
         except Exception as e:
             log.error("session_autoload_failed account_id=%s error=%s", ACCOUNT_ID, str(e))
 
