@@ -3,7 +3,7 @@
 
 <tr id="account-row-{{ account_id }}"{% if status == 'syncing' %} hx-get="/accounts/{{ account_id }}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML"{% endif %} class="hover:bg-gray-50 transition-colors">
   <td class="hidden sm:table-cell px-4 py-3 text-sm text-gray-500">{{ account_id }}</td>
-  <td class="px-4 py-3 text-sm">{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}</td>
+  <td class="px-4 py-3 text-sm">{{ messenger_icon(messenger_type|default('wa'), size='h-5 w-5', show_label=true) }}</td>
   <td class="px-4 py-3">
     {% if status == 'active' %}
     <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Активно</span>
@@ -15,7 +15,7 @@
       {{ icon_spinner_small() }}
       Синхронизация...
     </span>
-    <span class="ml-2 text-xs text-gray-500">Загружаем группы из WhatsApp...</span>
+    <span class="ml-2 text-xs text-gray-500">Загружаем группы из {{ 'WhatsApp' if messenger_type|default('wa') == 'wa' else 'MAX' if messenger_type|default('wa') == 'max' else messenger_type|default('wa') }}...</span>
     {% endif %}
   </td>
   <td class="hidden sm:table-cell px-4 py-3 text-sm text-gray-500"></td>

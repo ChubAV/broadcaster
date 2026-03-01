@@ -16,4 +16,5 @@ class AccountInfo:
 class SyncStatusView:
     status: str
     group_count: int | None = None
+    messenger_type: str | None = None
 

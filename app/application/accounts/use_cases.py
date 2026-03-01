@@ -58,15 +58,15 @@ async def get_sync_status_view(session: AsyncSession, user_id: int, account_id: 
             )
         )
         group_count = len(group_result.all())
-        return SyncStatusView(status="active", group_count=group_count)
+        return SyncStatusView(status="active", group_count=group_count, messenger_type=account.type)
 
     if account.status == "sync_failed":
-        return SyncStatusView(status="sync_failed")
+        return SyncStatusView(status="sync_failed", messenger_type=account.type)
 
     if account.status == "syncing":
-        return SyncStatusView(status="syncing")
+        return SyncStatusView(status="syncing", messenger_type=account.type)
 
-    return SyncStatusView(status="other")
+    return SyncStatusView(status="other", messenger_type=account.type)
 
 
 async def delete_account(session: AsyncSession, user_id: int, account_id: int) -> bool:

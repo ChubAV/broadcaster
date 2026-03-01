@@ -25,6 +25,7 @@ from app.messengers.telegram_user import (
     submit_2fa,
     complete_auth,
 )
+from app.messengers.max import MaxMessenger
 from app.messengers.whatsapp import WhatsAppMessenger
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
@@ -473,6 +474,192 @@ async def accounts_connect_wa_status(
         return HTMLResponse('<span class="text-sm text-red-600">Ошибка соединения с WA Bridge</span>')
 
 
+@router.get("/accounts/connect/max", response_class=HTMLResponse)
+async def accounts_connect_max_page(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Show phone input form for MAX connection."""
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    # Check if user already has an active or syncing MAX account
+    existing = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.user_id == user.id,
+            MessengerAccount.type == "max",
+            MessengerAccount.status.in_(["active", "syncing"]),
+        )
+    )
+    if existing.scalar_one_or_none():
+        return RedirectResponse(url="/accounts", status_code=302)
+
+    # Clean up stale connecting/failed accounts
+    stale = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.user_id == user.id,
+            MessengerAccount.type == "max",
+            MessengerAccount.status.in_(["connecting", "sync_failed"]),
+        )
+    )
+    for old in stale.scalars().all():
+        await db.delete(old)
+    await db.commit()
+
+    return templates.TemplateResponse(
+        "accounts/connect_max.html",
+        {
+            "request": request,
+            "user": user,
+            "is_admin": check_is_admin(user, settings),
+            "active_page": "accounts",
+            "step": "phone",
+        },
+    )
+
+
+@router.post("/accounts/connect/max/start", response_class=HTMLResponse)
+async def accounts_connect_max_start(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Receive phone, create account, start session, show QR."""
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    form = await request.form()
+    phone = (form.get("phone") or "").strip()
+
+    if not phone:
+        return templates.TemplateResponse(
+            "accounts/connect_max.html",
+            {
+                "request": request,
+                "user": user,
+                "is_admin": check_is_admin(user, settings),
+                "active_page": "accounts",
+                "step": "phone",
+                "error": "Введите номер телефона",
+            },
+        )
+
+    # Create a pending MAX account
+    account = MessengerAccount(
+        user_id=user.id,
+        type="max",
+        credentials=phone,
+        status="connecting",
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+
+    session_id = str(account.id)
+    messenger = MaxMessenger(session_id=session_id)
+
+    qr_code = None
+    error = None
+
+    try:
+        await messenger.start_session(phone=phone)
+        import asyncio
+        await asyncio.sleep(5)
+        qr_data = await messenger.get_qr()
+        qr_code = qr_data.get("qr")
+    except Exception as e:
+        error = f"Ошибка подключения к MAX: {e}"
+
+    return templates.TemplateResponse(
+        "accounts/connect_max.html",
+        {
+            "request": request,
+            "user": user,
+            "is_admin": check_is_admin(user, settings),
+            "active_page": "accounts",
+            "step": "qr",
+            "qr_code": qr_code,
+            "connected": False,
+            "error": error,
+            "account_id": account.id,
+        },
+    )
+
+
+@router.get("/accounts/connect/max/status", response_class=HTMLResponse)
+async def accounts_connect_max_status(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """HTMX polling endpoint for MAX connection status."""
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return HTMLResponse('<span class="text-sm text-red-600">Не авторизован</span>')
+
+    # Find the pending/connecting MAX account for this user
+    result = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.user_id == user.id,
+            MessengerAccount.type == "max",
+            MessengerAccount.status == "connecting",
+        )
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        return HTMLResponse('<span class="text-sm text-red-600">Нет активной сессии подключения</span>')
+
+    session_id = str(account.id)
+    messenger = MaxMessenger(session_id=session_id)
+
+    try:
+        is_connected = await messenger.check_connection()
+        if is_connected:
+            account.credentials = session_id
+            account.status = "syncing"
+            await db.commit()
+
+            # Dispatch background Celery task to sync groups
+            from app.worker.celery_app import celery
+            celery.send_task("app.worker.tasks.sync_max_groups", args=[account.id])
+
+            return HTMLResponse(
+                '<div class="text-center">'
+                '<div class="inline-flex items-center justify-center w-16 h-16 bg-violet-100 rounded-full mb-4">'
+                '<svg class="w-8 h-8 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+                '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>'
+                '</svg></div>'
+                '<p class="text-lg font-medium text-gray-900">MAX подключён!</p>'
+                '<p class="mt-2 text-sm text-slate-500">Начинаем синхронизацию групп...</p>'
+                '<script>setTimeout(() => window.location.href = "/accounts", 2000);</script>'
+                '</div>'
+            )
+
+        # Not connected — get fresh QR
+        qr_data = await messenger.get_qr()
+        qr = qr_data.get("qr")
+
+        if qr:
+            return HTMLResponse(
+                f'<div class="text-center">'
+                f'<div class="inline-block p-4 bg-white border rounded-lg">'
+                f'<img src="{qr}" alt="MAX QR-код" class="mx-auto" style="max-width: 256px;">'
+                f'</div>'
+                f'<p class="mt-2 text-sm text-yellow-600">Ожидание сканирования...</p>'
+                f'</div>'
+            )
+
+        return HTMLResponse('<span class="text-sm text-amber-600">Ожидание...</span>')
+
+    except Exception as e:
+        import structlog
+        structlog.get_logger().error("max_connect_status_error", error=str(e), exc_info=True)
+        return HTMLResponse('<span class="text-sm text-red-600">Ошибка соединения с MAX</span>')
+
+
 @router.get("/accounts/{account_id}/sync-status", response_class=HTMLResponse)
 async def accounts_sync_status(
     request: Request,
@@ -499,6 +686,7 @@ async def accounts_sync_status(
             account_id=account_id,
             status=view.status,
             group_count=view.group_count,
+            messenger_type=view.messenger_type,
             user=user,
             stats=stats,
         )
@@ -523,7 +711,7 @@ async def accounts_retry_sync(
         select(MessengerAccount).where(
             MessengerAccount.id == account_id,
             MessengerAccount.user_id == user.id,
-            MessengerAccount.type == "wa",
+            MessengerAccount.type.in_(["wa", "max"]),
         )
     )
     account = result.scalar_one_or_none()
@@ -531,7 +719,10 @@ async def accounts_retry_sync(
         return RedirectResponse(url="/accounts", status_code=302)
 
     session_id = str(account.id)
-    messenger = WhatsAppMessenger(session_id=session_id)
+    if account.type == "max":
+        messenger = MaxMessenger(session_id=session_id)
+    else:
+        messenger = WhatsAppMessenger(session_id=session_id)
     await messenger.retry_sync()
 
     account.status = "syncing"
@@ -539,7 +730,8 @@ async def accounts_retry_sync(
 
     # Dispatch background Celery task to poll bridge and save groups
     from app.worker.celery_app import celery
-    celery.send_task("app.worker.tasks.sync_wa_groups", args=[account.id])
+    task_name = "app.worker.tasks.sync_max_groups" if account.type == "max" else "app.worker.tasks.sync_wa_groups"
+    celery.send_task(task_name, args=[account.id])
 
     return RedirectResponse(url="/accounts", status_code=302)
 
@@ -562,7 +754,7 @@ async def accounts_sync_groups(
         )
     )
     account = result.scalar_one_or_none()
-    if not account or account.type not in ("tg_user", "wa"):
+    if not account or account.type not in ("tg_user", "wa", "max"):
         return RedirectResponse(url="/groups", status_code=302)
 
     if account.status == "syncing":
@@ -581,6 +773,11 @@ async def accounts_sync_groups(
         messenger = WhatsAppMessenger(session_id=str(account.id))
         fetched_groups = await messenger.get_groups()
         messenger_type = "wa"
+
+    elif account.type == "max":
+        messenger = MaxMessenger(session_id=str(account.id))
+        fetched_groups = await messenger.get_groups()
+        messenger_type = "max"
 
     # Load existing groups for this account to skip duplicates
     existing = await db.execute(

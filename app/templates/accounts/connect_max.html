@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "includes/icons.html" import icon_check %}
+{% block title %}Подключение MAX — Broadcaster{% endblock %}
+{% block content %}
+
+<div class="max-w-md mx-auto">
+  {% if error %}
+  <div class="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">{{ error }}</div>
+  {% endif %}
+
+  <div class="bg-white rounded-lg border border-gray-200 p-6">
+    {% if connected %}
+    <!-- Success state -->
+    <div class="text-center py-4">
+      <div class="inline-flex items-center justify-center w-12 h-12 bg-violet-50 rounded-full mb-3 text-violet-600">
+        {{ icon_check(size='h-6 w-6') }}
+      </div>
+      <p class="text-lg font-semibold text-gray-900 mb-1">MAX подключён</p>
+      <p class="text-sm text-gray-500 mb-4">Ваш аккаунт MAX готов к использованию.</p>
+      <a href="/accounts" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">К аккаунтам</a>
+    </div>
+
+    {% elif step == "phone" %}
+    <!-- Phone input step -->
+    <div class="text-center">
+      <h1 class="text-lg font-semibold text-gray-900 mb-1">Подключение MAX</h1>
+      <p class="text-sm text-gray-500 mb-5">Введите номер телефона, привязанный к вашему аккаунту MAX</p>
+      <form method="POST" action="/accounts/connect/max/start" class="space-y-4">
+        <div>
+          <input type="tel" name="phone" placeholder="+7 999 123-45-67" required
+                 class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors">
+        </div>
+        <button type="submit" class="w-full inline-flex items-center justify-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2.5 text-sm font-medium hover:bg-indigo-700 transition-colors">
+          Продолжить
+        </button>
+      </form>
+    </div>
+
+    {% elif step == "qr" and qr_code %}
+    <!-- QR code display with polling -->
+    <div class="text-center">
+      <h1 class="text-lg font-semibold text-gray-900 mb-1">Подключение MAX</h1>
+      <p class="text-sm text-gray-500 mb-5">Отсканируйте QR-код в приложении MAX</p>
+      <div id="max-status" hx-get="/accounts/connect/max/status" hx-trigger="every 3s" hx-swap="innerHTML">
+        <div class="inline-block p-3 bg-gray-50 rounded-lg border border-gray-200">
+          <img src="{{ qr_code }}" alt="MAX QR-код" class="mx-auto rounded" style="max-width: 256px;">
+        </div>
+        <p class="mt-3 text-sm text-amber-600">Ожидание сканирования...</p>
+      </div>
+    </div>
+
+    {% elif step == "qr" %}
+    <!-- Waiting for QR code -->
+    <div class="text-center">
+      <h1 class="text-lg font-semibold text-gray-900 mb-1">Подключение MAX</h1>
+      <p class="text-sm text-gray-500 mb-5">Загрузка QR-кода...</p>
+      <div id="max-status" hx-get="/accounts/connect/max/status" hx-trigger="every 3s" hx-swap="innerHTML">
+        <span class="text-sm text-amber-600">Ожидание QR-кода...</span>
+      </div>
+    </div>
+
+    {% else %}
+    <!-- Default waiting state -->
+    <div class="text-center">
+      <h1 class="text-lg font-semibold text-gray-900 mb-1">Подключение MAX</h1>
+      <span class="text-sm text-amber-600">Ожидание...</span>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="mt-4 text-center">
+    <a href="/accounts" class="text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors">&larr; Назад к аккаунтам</a>
+  </div>
+</div>
+
+{% endblock %}
