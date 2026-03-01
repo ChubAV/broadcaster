@@ -59,13 +59,29 @@ RESULTS_KEY = "max:results"
 HEARTBEAT_KEY = f"max:heartbeat:{ACCOUNT_ID}"
 ENDPOINT_KEY = f"max:endpoint:{ACCOUNT_ID}"
 
-# Logging
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
+# Logging — JSON format for Promtail/Loki collection
+class _JsonFormatter(logging.Formatter):
+    def format(self, record):
+        obj = {
+            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc)
+                        .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+            "level": record.levelname.lower(),
+            "logger": record.name,
+            "msg": record.getMessage(),
+            "account_id": ACCOUNT_ID,
+        }
+        if record.exc_info and record.exc_info[0]:
+            obj["exception"] = self.formatException(record.exc_info)
+        return json.dumps(obj, ensure_ascii=False)
+
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(_JsonFormatter())
+logging.root.handlers = [_handler]
+logging.root.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
 log = logging.getLogger("max_worker")
+
+# Suppress noisy uvicorn access logs
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 # Ensure sessions directory exists
 Path(SESSIONS_DIR).mkdir(parents=True, exist_ok=True)
@@ -371,9 +387,9 @@ async def send_message(task: dict):
     if session and not session.is_connected and session.initializing:
         log.info("waiting_for_session account_id=%s task_id=%s", ACCOUNT_ID, task_id)
         try:
-            await asyncio.wait_for(session.ready_event.wait(), timeout=30.0)
+            await asyncio.wait_for(session.ready_event.wait(), timeout=60.0)
         except asyncio.TimeoutError:
-            raise RuntimeError("MAX session not available (timeout waiting for connect)")
+            raise RuntimeError("MAX session connect timeout")
 
     if not session or not session.is_connected or not session.client:
         raise RuntimeError("MAX session not available")
@@ -510,7 +526,8 @@ def is_no_retry_error(err_msg: str) -> bool:
     err_lower = err_msg.lower()
     if "forbidden" in err_lower:
         return True
-    if "session not available" in err_lower:
+    # "session not available" is permanent, but "timeout waiting" is transient
+    if "session not available" in err_lower and "timeout" not in err_lower:
         return True
     if "not a member" in err_lower:
         return True
