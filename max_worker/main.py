@@ -40,7 +40,7 @@ if not ACCOUNT_ID:
 PORT = int(os.environ.get("PORT", "3000"))
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 SESSIONS_DIR = os.environ.get("SESSIONS_DIR", "./sessions")
-IDLE_SHUTDOWN_SEC = int(os.environ.get("IDLE_SHUTDOWN_SEC", "0"))
+IDLE_SHUTDOWN_SEC = int(os.environ.get("IDLE_SHUTDOWN_SEC", "300"))
 RATE_LIMIT_PER_MINUTE = int(os.environ.get("RATE_LIMIT_PER_MINUTE", "8"))
 PHONE = os.environ.get("PHONE", "")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()

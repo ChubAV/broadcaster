@@ -51,6 +51,7 @@ def start_container(account_id: int, phone: str = "") -> str | None:
             "ACCOUNT_ID": str(account_id),
             "REDIS_URL": settings.redis_url,
             "RATE_LIMIT_PER_MINUTE": "8",
+            "IDLE_SHUTDOWN_SEC": "300",
             "PORT": str(DEFAULT_PORT),
             "LOG_LEVEL": "info",
         }
@@ -67,7 +68,7 @@ def start_container(account_id: int, phone: str = "") -> str | None:
             },
             network=NETWORK_NAME,
             mem_limit=MEMORY_LIMIT,
-            restart_policy={"Name": "unless-stopped"},
+            restart_policy={"Name": "on-failure", "MaximumRetryCount": 3},
             labels={
                 "broadcaster.role": "max-worker",
                 "broadcaster.account_id": str(account_id),
