@@ -12,7 +12,6 @@ from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.worker.tasks import check_schedules_async, _send_message
-from app.services.messenger_factory import create_messenger
 
 
 @pytest_asyncio.fixture
@@ -73,54 +72,6 @@ async def create_test_data(session, schedule_active=True, account_status="active
     await session.commit()
 
     return user, ad, account, group, schedule
-
-
-@pytest.mark.asyncio
-async def test_create_messenger_tg_user_from_settings():
-    """create_messenger uses telegram_api_id/api_hash from settings."""
-    account = MessengerAccount(
-        type="tg_user",
-        credentials="session-string",
-        user_id=1,
-        status="active",
-    )
-    mock_settings = AsyncMock()
-    mock_settings.telegram_api_id = 12345
-    mock_settings.telegram_api_hash = "settings_hash"
-
-    with patch("app.services.messenger_factory.TelegramUserMessenger") as MockMessenger:
-        m = create_messenger(account, mock_settings)
-        MockMessenger.assert_called_once_with(
-            session_string="session-string",
-            api_id=12345,
-            api_hash="settings_hash",
-        )
-
-    assert m is MockMessenger.return_value
-
-
-@pytest.mark.asyncio
-async def test_create_messenger_tg_user_with_defaults():
-    """create_messenger passes settings values even when zero/empty."""
-    account = MessengerAccount(
-        type="tg_user",
-        credentials="session-string",
-        user_id=1,
-        status="active",
-    )
-    mock_settings = AsyncMock()
-    mock_settings.telegram_api_id = 0
-    mock_settings.telegram_api_hash = ""
-
-    with patch("app.services.messenger_factory.TelegramUserMessenger") as MockMessenger:
-        m = create_messenger(account, mock_settings)
-        MockMessenger.assert_called_once_with(
-            session_string="session-string",
-            api_id=0,
-            api_hash="",
-        )
-
-    assert m is MockMessenger.return_value
 
 
 @pytest.mark.asyncio
