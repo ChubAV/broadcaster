@@ -1,38 +1,42 @@
 {% from "includes/messenger_icon.html" import messenger_icon %}
 {% from "includes/icons.html" import icon_eye %}
-<div class="flex items-center gap-4 lg:gap-5 px-4 lg:px-6 py-3 lg:py-4">
-  <!-- Time -->
-  <span class="text-xs lg:text-sm text-gray-400 w-24 lg:w-32 shrink-0">{{ format_datetime_for_user(log.sent_at, user, '%d.%m %H:%M') }}</span>
-  <!-- Content -->
-  <div class="flex-1 min-w-0">
-    <p class="text-sm lg:text-base font-medium text-gray-900 truncate">{{ log.ad_title }}</p>
-    <div class="flex items-center gap-2 mt-0.5">
-      <span class="text-xs lg:text-sm text-gray-500 truncate">→ {{ log.group_name }}</span>
-      {% if log.group_external_id %}
-      <span class="text-xs text-gray-400 shrink-0">#{{ log.group_external_id }}</span>
+<div class="px-4 lg:px-6 py-3 lg:py-4">
+  <div class="flex items-center gap-4 lg:gap-5">
+    <!-- Time -->
+    <span class="text-xs lg:text-sm text-gray-400 w-24 lg:w-32 shrink-0">{{ format_datetime_for_user(log.sent_at, user, '%d.%m %H:%M') }}</span>
+    <!-- Content -->
+    <div class="flex-1 min-w-0">
+      <p class="text-sm lg:text-base font-medium text-gray-900 truncate">{{ log.ad_title }}</p>
+      <div class="flex items-center gap-2 mt-0.5">
+        <span class="text-xs lg:text-sm text-gray-500 truncate">→ {{ log.group_name }}</span>
+        {% if log.group_external_id %}
+        <span class="text-xs text-gray-400 shrink-0">#{{ log.group_external_id }}</span>
+        {% endif %}
+        {{ messenger_icon(log.messenger_type, size='h-3.5 w-3.5 lg:h-4 lg:w-4', show_label=false) }}
+      </div>
+      <div class="flex items-center gap-3 mt-0.5">
+        {% if log.account_id %}
+        <span class="text-xs lg:text-sm text-gray-400">Акк #{{ log.account_id }}</span>
+        {% endif %}
+        {% if log.task_id %}
+        <span class="text-xs lg:text-sm text-gray-400 font-mono truncate">{{ log.task_id }}</span>
+        {% endif %}
+      </div>
+      {% if log.status == 'fail' and log.error_message %}
+      <p class="text-xs lg:text-sm text-red-500 mt-0.5 truncate">{{ log.error_message }}</p>
       {% endif %}
-      {{ messenger_icon(log.messenger_type, size='h-3.5 w-3.5 lg:h-4 lg:w-4', show_label=false) }}
     </div>
-    <div class="flex items-center gap-3 mt-0.5">
-      {% if log.account_id %}
-      <span class="text-xs lg:text-sm text-gray-400">Акк #{{ log.account_id }}</span>
-      {% endif %}
-      {% if log.task_id %}
-      <span class="text-xs lg:text-sm text-gray-400 font-mono truncate">{{ log.task_id }}</span>
-      {% endif %}
-    </div>
-    {% if log.status == 'fail' and log.error_message %}
-    <p class="text-xs lg:text-sm text-red-500 mt-0.5 truncate">{{ log.error_message }}</p>
+    <!-- Status -->
+    {% if log.status == 'ok' %}
+    <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-emerald-700 shrink-0">OK</span>
+    {% elif log.status == 'fail' %}
+    <span class="inline-flex items-center rounded-full bg-red-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-red-700 shrink-0">Ошибка</span>
+    {% elif log.status == 'account_disconnected' %}
+    <span class="inline-flex items-center rounded-full bg-amber-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-amber-700 shrink-0">Отключён</span>
     {% endif %}
   </div>
-  <!-- Status -->
-  {% if log.status == 'ok' %}
-  <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-emerald-700 shrink-0">OK</span>
-  {% elif log.status == 'fail' %}
-  <span class="inline-flex items-center rounded-full bg-red-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-red-700 shrink-0">Ошибка</span>
-  {% elif log.status == 'account_disconnected' %}
-  <span class="inline-flex items-center rounded-full bg-amber-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-amber-700 shrink-0">Отключён</span>
-  {% endif %}
-  <!-- View detail -->
-  <a href="{{ detail_base_path|default('/history') }}/{{ log.id }}" class="text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg p-2 transition-colors shrink-0" title="Подробнее">{{ icon_eye('h-4 w-4 lg:h-5 lg:w-5') }}</a>
+  <!-- Actions -->
+  <div class="flex items-center gap-1 mt-3 pt-3 border-t border-gray-100">
+    <a href="{{ detail_base_path|default('/history') }}/{{ log.id }}" class="text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg p-2 transition-colors" title="Подробнее">{{ icon_eye('h-4 w-4 lg:h-5 lg:w-5') }}</a>
+  </div>
 </div>

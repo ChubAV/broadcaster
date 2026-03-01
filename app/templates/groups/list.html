@@ -81,36 +81,38 @@
 <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
   {% for group in groups %}
   {% set stats = group_stats.get(group.id, {}) %}
-  <div class="flex items-center gap-3 lg:gap-4 px-4 lg:px-6 py-3 lg:py-4 hover:bg-gray-50 transition-colors">
-    <!-- Checkbox -->
-    <input type="checkbox" class="group-checkbox h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" value="{{ group.id }}">
-    <!-- Content -->
-    <div class="flex-1 min-w-0">
-      <div class="flex items-center gap-2">
-        <p class="text-sm lg:text-base font-medium text-gray-900 truncate">{{ group.name }}</p>
-        {{ messenger_icon(group.messenger_type, size='h-3.5 w-3.5 lg:h-4 lg:w-4', show_label=false) }}
-      </div>
-      <div class="flex items-center gap-3 mt-0.5">
-        <span class="text-xs lg:text-sm text-gray-400">{{ stats.get('schedules_count', 0) }} распис.</span>
-        {% if stats.get('send_attempts', 0) > 0 %}
-        <span class="text-xs lg:text-sm text-gray-400">{{ ((stats.get('send_success', 0) / stats.get('send_attempts', 1)) * 100)|round|int }}% успех ({{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }})</span>
+  <div class="px-4 lg:px-6 py-3 lg:py-4 hover:bg-gray-50 transition-colors">
+    <div class="flex items-center gap-3 lg:gap-4">
+      <!-- Checkbox -->
+      <input type="checkbox" class="group-checkbox h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" value="{{ group.id }}">
+      <!-- Content -->
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2">
+          <p class="text-sm lg:text-base font-medium text-gray-900 truncate">{{ group.name }}</p>
+          {{ messenger_icon(group.messenger_type, size='h-3.5 w-3.5 lg:h-4 lg:w-4', show_label=false) }}
+        </div>
+        <div class="flex items-center gap-3 mt-0.5">
+          <span class="text-xs lg:text-sm text-gray-400">{{ stats.get('schedules_count', 0) }} распис.</span>
+          {% if stats.get('send_attempts', 0) > 0 %}
+          <span class="text-xs lg:text-sm text-gray-400">{{ ((stats.get('send_success', 0) / stats.get('send_attempts', 1)) * 100)|round|int }}% успех ({{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }})</span>
+          {% endif %}
+          {% if stats.get('last_sent_at') %}
+          <span class="text-xs lg:text-sm text-gray-400">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>
+          {% endif %}
+        </div>
+        {% if group.last_error %}
+        <p class="text-xs lg:text-sm text-red-500 mt-1 truncate" title="{{ group.last_error }}">{{ group.last_error }}</p>
         {% endif %}
-        {% if stats.get('last_sent_at') %}
-        <span class="text-xs lg:text-sm text-gray-400">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>
-        {% endif %}
       </div>
-      {% if group.last_error %}
-      <p class="text-xs lg:text-sm text-red-500 mt-1 truncate" title="{{ group.last_error }}">{{ group.last_error }}</p>
+      <!-- Status -->
+      {% if group.is_active %}
+      <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-emerald-700 shrink-0">Активна</span>
+      {% else %}
+      <span class="inline-flex items-center rounded-full bg-gray-100 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-gray-600 shrink-0">Пауза</span>
       {% endif %}
     </div>
-    <!-- Status -->
-    {% if group.is_active %}
-    <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-emerald-700 shrink-0">Активна</span>
-    {% else %}
-    <span class="inline-flex items-center rounded-full bg-gray-100 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-gray-600 shrink-0">Пауза</span>
-    {% endif %}
     <!-- Actions -->
-    <div class="flex items-center gap-1 shrink-0">
+    <div class="flex items-center gap-1 mt-3 pt-3 border-t border-gray-100">
       {% if group.is_active %}
       <form method="post" action="/groups/{{ group.id }}/toggle">
         <button type="submit" class="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Приостановить">{{ icon_pause('h-4 w-4 lg:h-5 lg:w-5') }}</button>
