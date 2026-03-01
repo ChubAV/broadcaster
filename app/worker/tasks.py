@@ -38,12 +38,15 @@ async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
 
     tg_tasks: list[DispatchTask] = []
     wa_tasks_by_account: dict[int, list[DispatchTask]] = {}
+    max_tasks_by_account: dict[int, list[DispatchTask]] = {}
 
     for task in tasks_to_dispatch:
         if task.type == "tg_user":
             tg_tasks.append(task)
         elif task.type == "wa":
             wa_tasks_by_account.setdefault(task.account_id, []).append(task)
+        elif task.type == "max":
+            max_tasks_by_account.setdefault(task.account_id, []).append(task)
 
     # Dispatch Telegram tasks via Celery (unchanged)
     for task in tg_tasks:
@@ -91,9 +94,49 @@ async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
         finally:
             r.close()
 
-    total = len(tg_tasks) + sum(len(t) for t in wa_tasks_by_account.values())
+    # Dispatch MAX tasks to Redis per-account queues
+    if max_tasks_by_account:
+        r = redis_lib.from_url(settings.redis_url)
+        try:
+            pipe = r.pipeline()
+            for account_id, tasks in max_tasks_by_account.items():
+                queue_key = f"max:queue:{account_id}"
+                for task in tasks:
+                    task_id = str(uuid4())
+                    logger.info("max_task_created",
+                               task_id=task_id,
+                               ad_id=task.ad_id,
+                               group_id=task.group_id,
+                               account_id=task.account_id,
+                               schedule_id=task.schedule_id,
+                               group_name=task.group_name)
+                    payload = json.dumps({
+                        "task_id": task_id,
+                        "ad_id": task.ad_id,
+                        "group_id": task.group_id,
+                        "account_id": task.account_id,
+                        "schedule_id": task.schedule_id,
+                        "user_id": task.user_id,
+                        "ad_text": task.ad_text,
+                        "ad_title": task.ad_title,
+                        "ad_images": task.ad_images,
+                        "group_external_id": task.group_external_id,
+                        "group_name": task.group_name,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    pipe.rpush(queue_key, payload)
+                pipe.sadd("max:active_accounts", account_id)
+            pipe.execute()
+            logger.info("max_tasks_dispatched",
+                       account_count=len(max_tasks_by_account),
+                       total_tasks=sum(len(t) for t in max_tasks_by_account.values()))
+        finally:
+            r.close()
+
+    total = len(tg_tasks) + sum(len(t) for t in wa_tasks_by_account.values()) + sum(len(t) for t in max_tasks_by_account.values())
     logger.info("send_tasks_dispatched", total=total, tg=len(tg_tasks),
-               wa=sum(len(t) for t in wa_tasks_by_account.values()))
+               wa=sum(len(t) for t in wa_tasks_by_account.values()),
+               max=sum(len(t) for t in max_tasks_by_account.values()))
 
 
 async def check_schedules_async(session: AsyncSession):
@@ -303,6 +346,106 @@ def sync_wa_groups(self, account_id: int):
     asyncio.run(_sync_wa_groups_async(account_id))
 
 
+async def _sync_max_groups_async(account_id: int):
+    """Poll MAX worker for group sync completion, save groups to DB."""
+    log = logger.bind(account_id=account_id)
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    session_factory = get_session_factory(engine)
+
+    from app.messengers.max import MaxMessenger
+
+    POLL_INTERVAL = 15  # seconds
+    MAX_POLLS = 40  # 40 * 15s = 10 minutes max
+
+    try:
+        messenger = MaxMessenger(session_id=str(account_id))
+
+        for attempt in range(MAX_POLLS):
+            sync_data = await messenger.get_sync_status()
+            state = sync_data.get("state")
+            log.debug("sync_poll", attempt=attempt + 1, state=state)
+
+            if state == "ready":
+                groups = sync_data.get("groups") or []
+                async with session_factory() as session:
+                    account = await session.get(MessengerAccount, account_id)
+                    if not account or account.status != "syncing":
+                        log.info("sync_skipped", reason="account_not_syncing", status=account.status if account else None)
+                        return
+
+                    existing = await session.execute(
+                        select(Group.group_external_id).where(
+                            Group.account_id == account_id,
+                            Group.user_id == account.user_id,
+                        )
+                    )
+                    existing_ids = {row[0] for row in existing}
+
+                    new_count = 0
+                    for g in groups:
+                        if g["id"] not in existing_ids:
+                            session.add(
+                                Group(
+                                    user_id=account.user_id,
+                                    account_id=account_id,
+                                    messenger_type="max",
+                                    group_external_id=g["id"],
+                                    name=g.get("name") or g["id"],
+                                )
+                            )
+                            new_count += 1
+
+                    account.status = "active"
+                    await session.commit()
+                    log.info("sync_complete", total_groups=len(groups), new_groups=new_count)
+                return
+
+            if state in ("failed", "not_found", "unknown"):
+                async with session_factory() as session:
+                    account = await session.get(MessengerAccount, account_id)
+                    if account and account.status == "syncing":
+                        account.status = "sync_failed"
+                        await session.commit()
+                log.warning("sync_failed", state=state)
+                return
+
+            # Still syncing — wait and poll again
+            await asyncio.sleep(POLL_INTERVAL)
+
+        # Timeout — max polls reached
+        async with session_factory() as session:
+            account = await session.get(MessengerAccount, account_id)
+            if account and account.status == "syncing":
+                account.status = "sync_failed"
+                await session.commit()
+        log.warning("sync_timeout", max_polls=MAX_POLLS)
+
+    except Exception as e:
+        log.error("sync_max_groups_error", error=str(e), exc_info=True)
+        try:
+            async with session_factory() as session:
+                account = await session.get(MessengerAccount, account_id)
+                if account and account.status == "syncing":
+                    account.status = "sync_failed"
+                    await session.commit()
+        except Exception:
+            pass
+        raise
+    finally:
+        await engine.dispose()
+
+
+@shared_task(
+    name="app.worker.tasks.sync_max_groups",
+    bind=True,
+    max_retries=1,
+)
+def sync_max_groups(self, account_id: int):
+    """Background task: poll MAX worker until group sync completes, save to DB."""
+    asyncio.run(_sync_max_groups_async(account_id))
+
+
 @shared_task(name="app.worker.tasks.manage_wa_containers")
 def manage_wa_containers():
     """Check Redis queues and start/cleanup wa-worker containers."""
@@ -336,6 +479,43 @@ def manage_wa_containers():
 
     except Exception as e:
         logger.error("manage_wa_containers_error", error=str(e), exc_info=True)
+    finally:
+        r.close()
+
+
+@shared_task(name="app.worker.tasks.manage_max_containers")
+def manage_max_containers():
+    """Check Redis queues and start/cleanup max-worker containers."""
+    import redis as redis_lib
+    from app.services.max_container_manager import (
+        start_container,
+        cleanup_exited_containers,
+    )
+
+    settings = get_settings()
+    r = redis_lib.from_url(settings.redis_url)
+
+    try:
+        active_accounts = r.smembers("max:active_accounts")
+
+        for raw_id in active_accounts:
+            account_id = int(raw_id)
+            queue_key = f"max:queue:{account_id}"
+            queue_len = r.llen(queue_key)
+
+            if queue_len > 0:
+                endpoint = start_container(account_id)
+                if endpoint:
+                    r.set(f"max:endpoint:{account_id}", endpoint, ex=420)
+                    logger.info("container_ensured", account_id=account_id, queue_len=queue_len)
+            else:
+                r.srem("max:active_accounts", account_id)
+                r.delete(f"max:endpoint:{account_id}")
+
+        cleanup_exited_containers()
+
+    except Exception as e:
+        logger.error("manage_max_containers_error", error=str(e), exc_info=True)
     finally:
         r.close()
 
@@ -424,6 +604,103 @@ async def _process_results_async(results: list[dict]):
                 continue
 
             logger.info("wa_result_recorded",
+                       task_id=result.get("task_id"),
+                       status=result["status"],
+                       ad_id=result.get("ad_id"),
+                       group_id=result.get("group_id"),
+                       account_id=result.get("account_id"),
+                       error_message=result.get("error_message"))
+
+        await session.commit()
+        logger.info("results_processed", count=len(results))
+
+    await engine.dispose()
+
+
+@shared_task(name="app.worker.tasks.process_max_results")
+def process_max_results():
+    """Read send results from Redis and write SendLog entries to DB."""
+    import json
+    import redis as redis_lib
+
+    settings = get_settings()
+    r = redis_lib.from_url(settings.redis_url)
+
+    try:
+        results = []
+        for _ in range(100):
+            raw = r.lpop("max:results")
+            if not raw:
+                break
+            try:
+                results.append(json.loads(raw))
+            except json.JSONDecodeError as e:
+                logger.error("result_parse_error", raw=str(raw)[:200], error=str(e))
+
+        if not results:
+            return
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_process_max_results_async(results))
+        finally:
+            loop.close()
+
+    except Exception as e:
+        logger.error("process_max_results_error", error=str(e), exc_info=True)
+    finally:
+        r.close()
+
+
+async def _process_max_results_async(results: list[dict]):
+    """Write batch of MAX results to database."""
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    session_factory = get_session_factory(engine)
+
+    async with session_factory() as session:
+        for result in results:
+            try:
+                # Use original S3 keys from Ad, not full URLs from max-worker
+                ad_images = result.get("ad_images")
+                ad_id = result.get("ad_id")
+                if ad_id:
+                    ad = await session.get(Ad, ad_id)
+                    if ad and ad.images:
+                        ad_images = ad.images
+
+                send_log = SendLog(
+                    user_id=result["user_id"],
+                    schedule_id=result.get("schedule_id"),
+                    ad_id=ad_id,
+                    group_id=result.get("group_id"),
+                    task_id=result.get("task_id"),
+                    status=result["status"],
+                    error_message=result.get("error_message"),
+                    messenger_type="max",
+                    ad_title=result.get("ad_title"),
+                    ad_text=result.get("ad_text"),
+                    ad_images=ad_images,
+                    group_name=result.get("group_name"),
+                )
+                session.add(send_log)
+
+                group_id = result.get("group_id")
+                if group_id:
+                    group = await session.get(Group, group_id)
+                    if group:
+                        if result.get("no_retry"):
+                            group.last_error = result.get("error_message")
+                            group.error_at = datetime.now(timezone.utc)
+                        elif result["status"] == "ok":
+                            group.last_error = None
+                            group.error_at = None
+
+            except Exception as e:
+                logger.error("result_write_error", task_id=result.get("task_id"), error=str(e))
+                continue
+
+            logger.info("max_result_recorded",
                        task_id=result.get("task_id"),
                        status=result["status"],
                        ad_id=result.get("ad_id"),

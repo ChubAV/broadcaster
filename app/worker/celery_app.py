@@ -38,6 +38,14 @@ def create_celery_app() -> Celery:
                 "task": "app.worker.tasks.process_wa_results",
                 "schedule": 5.0,
             },
+            "manage-max-containers": {
+                "task": "app.worker.tasks.manage_max_containers",
+                "schedule": 15.0,
+            },
+            "process-max-results": {
+                "task": "app.worker.tasks.process_max_results",
+                "schedule": 5.0,
+            },
         },
         worker_prefetch_multiplier=1,
     )
