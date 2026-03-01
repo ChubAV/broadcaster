@@ -268,11 +268,13 @@ async def create_client(phone: str) -> SessionState:
     )
     state.client = client
 
-    @client.on_qr
-    async def on_qr(qr_data):
-        """Called when QR code is generated for authentication."""
-        state.qr_code = qr_data
-        log.info("qr_generated account_id=%s", ACCOUNT_ID)
+    # Override _print_qr to capture QR link for web UI
+    # (pymax prints QR to terminal by default — we intercept it)
+    def capture_qr(qr_link: str):
+        state.qr_code = qr_link
+        log.info("qr_captured account_id=%s", ACCOUNT_ID)
+
+    client._print_qr = capture_qr
 
     @client.on_start
     async def on_start():
@@ -288,12 +290,6 @@ async def create_client(phone: str) -> SessionState:
         # Start background group sync
         if not state.sync_state or state.sync_state == "failed":
             asyncio.create_task(_safe_group_sync())
-
-    @client.on_close
-    async def on_close():
-        """Called when connection is closed."""
-        state.is_connected = False
-        log.info("disconnected account_id=%s", ACCOUNT_ID)
 
     session = state
 

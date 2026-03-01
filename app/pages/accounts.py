@@ -569,7 +569,9 @@ async def accounts_connect_max_start(
         import asyncio
         await asyncio.sleep(5)
         qr_data = await messenger.get_qr()
-        qr_code = qr_data.get("qr")
+        qr_link = qr_data.get("qr")
+        if qr_link:
+            qr_code = _generate_qr_base64(qr_link)
     except Exception as e:
         error = f"Ошибка подключения к MAX: {e}"
 
@@ -640,13 +642,14 @@ async def accounts_connect_max_status(
 
         # Not connected — get fresh QR
         qr_data = await messenger.get_qr()
-        qr = qr_data.get("qr")
+        qr_link = qr_data.get("qr")
 
-        if qr:
+        if qr_link:
+            qr_img = _generate_qr_base64(qr_link)
             return HTMLResponse(
                 f'<div class="text-center">'
                 f'<div class="inline-block p-4 bg-white border rounded-lg">'
-                f'<img src="{qr}" alt="MAX QR-код" class="mx-auto" style="max-width: 256px;">'
+                f'<img src="{qr_img}" alt="MAX QR-код" class="mx-auto" style="max-width: 256px;">'
                 f'</div>'
                 f'<p class="mt-2 text-sm text-yellow-600">Ожидание сканирования...</p>'
                 f'</div>'
