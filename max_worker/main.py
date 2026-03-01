@@ -40,7 +40,7 @@ if not ACCOUNT_ID:
 PORT = int(os.environ.get("PORT", "3000"))
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 SESSIONS_DIR = os.environ.get("SESSIONS_DIR", "./sessions")
-IDLE_SHUTDOWN_SEC = int(os.environ.get("IDLE_SHUTDOWN_SEC", "300"))
+IDLE_SHUTDOWN_SEC = int(os.environ.get("IDLE_SHUTDOWN_SEC", "0"))
 RATE_LIMIT_PER_MINUTE = int(os.environ.get("RATE_LIMIT_PER_MINUTE", "8"))
 PHONE = os.environ.get("PHONE", "")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -364,6 +364,14 @@ async def send_message(task: dict):
     images = task.get("ad_images") or task.get("image_urls") or []
     task_id = task.get("task_id", "unknown")
 
+    # Wait for session if it's still initializing (e.g. autoload at startup)
+    if session and not session.is_connected and session.initializing:
+        log.info("waiting_for_session account_id=%s task_id=%s", ACCOUNT_ID, task_id)
+        try:
+            await asyncio.wait_for(session.ready_event.wait(), timeout=30.0)
+        except asyncio.TimeoutError:
+            raise RuntimeError("MAX session not available (timeout waiting for connect)")
+
     if not session or not session.is_connected or not session.client:
         raise RuntimeError("MAX session not available")
 
@@ -560,11 +568,12 @@ async def start_consumer():
 
             if result is None:
                 # BLPOP returned None — timeout, check idle
-                idle_sec = time.time() - last_task_time
-                if idle_sec >= IDLE_SHUTDOWN_SEC:
-                    log.info("idle_shutdown account_id=%s idle_sec=%d", ACCOUNT_ID, int(idle_sec))
-                    await graceful_shutdown("idle")
-                    return
+                if IDLE_SHUTDOWN_SEC > 0:
+                    idle_sec = time.time() - last_task_time
+                    if idle_sec >= IDLE_SHUTDOWN_SEC:
+                        log.info("idle_shutdown account_id=%s idle_sec=%d", ACCOUNT_ID, int(idle_sec))
+                        await graceful_shutdown("idle")
+                        return
                 continue
 
             _, raw_task = result  # (key, value)
@@ -597,11 +606,12 @@ async def start_consumer():
             log.error("consumer_loop_error account_id=%s error=%s", ACCOUNT_ID, str(e))
 
             # Check idle even on errors
-            idle_sec = time.time() - last_task_time
-            if idle_sec >= IDLE_SHUTDOWN_SEC:
-                log.info("idle_shutdown_on_error account_id=%s idle_sec=%d", ACCOUNT_ID, int(idle_sec))
-                await graceful_shutdown("idle")
-                return
+            if IDLE_SHUTDOWN_SEC > 0:
+                idle_sec = time.time() - last_task_time
+                if idle_sec >= IDLE_SHUTDOWN_SEC:
+                    log.info("idle_shutdown_on_error account_id=%s idle_sec=%d", ACCOUNT_ID, int(idle_sec))
+                    await graceful_shutdown("idle")
+                    return
 
             # Pause before retrying
             await asyncio.sleep(5)
