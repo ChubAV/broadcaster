@@ -139,6 +139,7 @@ class SessionState:
         self.phone: str = ""
         self.ready_event: asyncio.Event = asyncio.Event()
         self.error: str | None = None
+        self.connected_at: float = 0.0  # timestamp when session connected
 
 
 session: SessionState | None = None
@@ -301,6 +302,7 @@ async def create_client(phone: str) -> SessionState:
         state.initializing = False
         state.qr_code = None
         state.last_activity = time.time()
+        state.connected_at = time.time()
         state.error = None
         state.ready_event.set()
         log.info("connected account_id=%s", ACCOUNT_ID)
@@ -359,7 +361,8 @@ async def send_message(task: dict):
     """Send a message to a MAX group."""
     global session
 
-    group_id = task.get("group_external_id") or task.get("group_id")
+    raw_group_id = task.get("group_external_id") or task.get("group_id")
+    group_id = int(raw_group_id) if raw_group_id else None
     text = task.get("ad_text", "")
     images = task.get("ad_images") or task.get("image_urls") or []
     task_id = task.get("task_id", "unknown")
@@ -374,6 +377,15 @@ async def send_message(task: dict):
 
     if not session or not session.is_connected or not session.client:
         raise RuntimeError("MAX session not available")
+
+    # Grace period after fresh connection — MAX server needs time before uploads work
+    STARTUP_GRACE_SEC = 10
+    if session.connected_at:
+        elapsed = time.time() - session.connected_at
+        if elapsed < STARTUP_GRACE_SEC:
+            wait = STARTUP_GRACE_SEC - elapsed
+            log.info("startup_grace_wait account_id=%s task_id=%s wait=%.1f", ACCOUNT_ID, task_id, wait)
+            await asyncio.sleep(wait)
 
     async with _send_lock:
         # Anti-ban: simulate composing delay
