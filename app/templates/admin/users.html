@@ -3,27 +3,28 @@
 {% block content %}
 
 <div class="flex items-center justify-between mb-6">
-  <h1 class="text-lg font-semibold text-gray-900">Пользователи</h1>
+  <h1 class="text-lg lg:text-xl font-semibold text-gray-900">Пользователи</h1>
   <form method="get" action="/admin/users" class="flex items-center gap-2">
-    <input type="text" name="q" value="{{ search_query or '' }}" placeholder="Поиск..." class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none w-48">
-    <button type="submit" class="bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">Найти</button>
+    <input type="text" name="q" value="{{ search_query or '' }}" placeholder="Поиск..." class="rounded-lg border border-gray-300 px-3 py-2 text-sm lg:text-base text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none w-48 lg:w-64">
+    <button type="submit" class="bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm lg:text-base font-medium hover:bg-indigo-700 transition-colors">Найти</button>
   </form>
 </div>
 
 {% if users %}
 <div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
   {% for item in users %}
-  <a href="/admin/users/{{ item.user.id }}" class="flex items-center gap-4 px-4 py-3 hover:bg-gray-50 transition-colors">
-    <div class="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-sm font-medium text-indigo-700 shrink-0">
+  <a href="/admin/users/{{ item.user.id }}" class="flex items-center gap-4 lg:gap-5 px-4 lg:px-6 py-3 lg:py-4 hover:bg-gray-50 transition-colors">
+    <div class="w-8 h-8 lg:w-10 lg:h-10 rounded-full bg-indigo-100 flex items-center justify-center text-sm lg:text-base font-medium text-indigo-700 shrink-0">
       {{ item.user.name[0]|upper if item.user.name else '?' }}
     </div>
     <div class="flex-1 min-w-0">
-      <p class="text-sm font-medium text-gray-900 truncate">{{ item.user.name }}</p>
-      <p class="text-xs text-gray-500 truncate">{{ item.user.email }}</p>
+      <p class="text-sm lg:text-base font-medium text-gray-900 truncate">{{ item.user.name }}</p>
+      <p class="text-xs lg:text-sm text-gray-500 truncate">{{ item.user.email }}</p>
     </div>
-    <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 shrink-0">{{ item.plan|capitalize }}</span>
+    <span class="hidden lg:inline text-sm text-gray-400 shrink-0">{{ item.user.created_at.strftime('%d.%m.%Y') if item.user.created_at }}</span>
+    <span class="inline-flex items-center rounded-full bg-gray-100 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-gray-600 shrink-0">{{ item.plan|capitalize }}</span>
     {% if item.user.is_blocked %}
-    <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 shrink-0">Заблокирован</span>
+    <span class="inline-flex items-center rounded-full bg-red-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-red-700 shrink-0">Заблокирован</span>
     {% endif %}
   </a>
   {% endfor %}

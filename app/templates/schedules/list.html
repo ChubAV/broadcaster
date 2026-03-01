@@ -4,11 +4,10 @@
 {% from "includes/messenger_icon.html" import messenger_icon %}
 {% from "includes/icons.html" import icon_pause, icon_play, icon_edit, icon_delete %}
 
-<div class="max-w-3xl mx-auto">
   <!-- Header -->
   <div class="flex items-center justify-between mb-6">
-    <h1 class="text-lg font-semibold text-gray-900">Расписания</h1>
-    <a href="/schedules/new" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">
+    <h1 class="text-lg lg:text-xl font-semibold text-gray-900">Расписания</h1>
+    <a href="/schedules/new" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm lg:text-base font-medium hover:bg-indigo-700 transition-colors">
       <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
       Создать
     </a>
@@ -17,28 +16,28 @@
   {% set day_names = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'} %}
 
   {% if schedules %}
-  <div class="space-y-3">
+  <div class="space-y-3 lg:space-y-4">
     {% for item in schedules %}
     {% set s = item.schedule %}
-    <div class="bg-white rounded-lg border border-gray-200 p-4">
+    <div class="bg-white rounded-lg border border-gray-200 p-4 lg:p-5">
       <!-- Top: ad title + status -->
       <div class="flex items-center justify-between mb-2">
-        <p class="text-sm font-medium text-gray-900">{{ item.ad_title }}</p>
+        <p class="text-sm lg:text-base font-medium text-gray-900">{{ item.ad_title }}</p>
         {% if s.is_active %}
-        <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Активно</span>
+        <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-emerald-700">Активно</span>
         {% else %}
-        <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">Пауза</span>
+        <span class="inline-flex items-center rounded-full bg-gray-100 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-gray-600">Пауза</span>
         {% endif %}
       </div>
       <!-- Info: messenger, groups, days, times -->
-      <div class="text-xs text-gray-500 space-y-1">
+      <div class="text-xs lg:text-sm text-gray-500 space-y-1.5">
         <div class="flex items-center gap-2">
-          {{ messenger_icon(item.messenger_type, size='h-3.5 w-3.5', show_label=false) }}
+          {{ messenger_icon(item.messenger_type, size='h-3.5 w-3.5 lg:h-4 lg:w-4', show_label=false) }}
           <span>{{ s.group_ids|length }} групп</span>
         </div>
-        <div class="flex items-center gap-1.5">
+        <div class="flex items-center gap-1.5 lg:gap-2">
           {% for d in s.days_of_week|sort %}
-          <span class="inline-flex items-center justify-center w-7 h-6 rounded bg-gray-100 text-xs font-medium text-gray-700">{{ day_names[d] }}</span>
+          <span class="inline-flex items-center justify-center w-7 lg:w-8 h-6 lg:h-7 rounded bg-gray-100 text-xs lg:text-sm font-medium text-gray-700">{{ day_names[d] }}</span>
           {% endfor %}
         </div>
         <div>{{ s.times_of_day|join(', ') }}</div>
@@ -50,16 +49,16 @@
       <div class="flex items-center gap-1 mt-3 pt-3 border-t border-gray-100">
         {% if s.is_active %}
         <form method="post" action="/schedules/{{ s.id }}/toggle">
-          <button type="submit" class="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Приостановить">{{ icon_pause('h-4 w-4') }}</button>
+          <button type="submit" class="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Приостановить">{{ icon_pause('h-4 w-4 lg:h-5 lg:w-5') }}</button>
         </form>
         {% else %}
         <form method="post" action="/schedules/{{ s.id }}/toggle">
-          <button type="submit" class="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Возобновить">{{ icon_play('h-4 w-4') }}</button>
+          <button type="submit" class="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Возобновить">{{ icon_play('h-4 w-4 lg:h-5 lg:w-5') }}</button>
         </form>
         {% endif %}
-        <a href="/schedules/{{ s.id }}/edit" class="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Редактировать">{{ icon_edit('h-4 w-4') }}</a>
+        <a href="/schedules/{{ s.id }}/edit" class="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Редактировать">{{ icon_edit('h-4 w-4 lg:h-5 lg:w-5') }}</a>
         <form method="post" action="/schedules/{{ s.id }}/delete" onsubmit="return confirm('Удалить расписание?')">
-          <button type="submit" class="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg p-2 transition-colors" title="Удалить">{{ icon_delete('h-4 w-4') }}</button>
+          <button type="submit" class="text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg p-2 transition-colors" title="Удалить">{{ icon_delete('h-4 w-4 lg:h-5 lg:w-5') }}</button>
         </form>
       </div>
     </div>

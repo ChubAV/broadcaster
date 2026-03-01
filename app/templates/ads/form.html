@@ -2,8 +2,8 @@
 {% block title %}{{ 'Редактировать' if ad else 'Создать' }} объявление — Broadcaster{% endblock %}
 {% block content %}
 
-<div class="max-w-2xl mx-auto">
-  <h1 class="text-lg font-semibold text-gray-900 mb-6">{{ 'Редактировать объявление' if ad else 'Новое объявление' }}</h1>
+<div class="max-w-2xl">
+  <h1 class="text-lg lg:text-xl font-semibold text-gray-900 mb-6">{{ 'Редактировать объявление' if ad else 'Новое объявление' }}</h1>
 
   <form method="post" action="{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}" id="ad-form" class="space-y-6">
     <!-- Title -->

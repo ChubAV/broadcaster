@@ -2,13 +2,13 @@
 {% block title %}Тарифы — Broadcaster{% endblock %}
 {% block content %}
 
-<h1 class="text-lg font-semibold text-gray-900 mb-6">Тарифы</h1>
+<h1 class="text-lg lg:text-xl font-semibold text-gray-900 mb-6">Тарифы</h1>
 
 <!-- Current plan -->
-<div class="bg-white rounded-lg border border-gray-200 p-6 mb-8">
+<div class="bg-white rounded-lg border border-gray-200 p-6 lg:p-8 mb-8">
   <div class="flex items-center gap-2 mb-4">
-    <h2 class="text-sm font-medium text-gray-900">Текущий тариф:</h2>
-    <span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-indigo-700">{{ plan|capitalize }}</span>
+    <h2 class="text-sm lg:text-base font-medium text-gray-900">Текущий тариф:</h2>
+    <span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-indigo-700">{{ plan|capitalize }}</span>
   </div>
 
   <div class="space-y-4">

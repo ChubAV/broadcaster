@@ -1,24 +1,24 @@
 {% from "includes/messenger_icon.html" import messenger_icon %}
-<a href="{{ detail_base_path|default('/history') }}/{{ log.id }}" class="flex items-center gap-4 px-4 py-3 hover:bg-gray-50 transition-colors">
+<a href="{{ detail_base_path|default('/history') }}/{{ log.id }}" class="flex items-center gap-4 lg:gap-5 px-4 lg:px-6 py-3 lg:py-4 hover:bg-gray-50 transition-colors">
   <!-- Time -->
-  <span class="text-xs text-gray-400 w-24 shrink-0">{{ format_datetime_for_user(log.sent_at, user, '%d.%m %H:%M') }}</span>
+  <span class="text-xs lg:text-sm text-gray-400 w-24 lg:w-32 shrink-0">{{ format_datetime_for_user(log.sent_at, user, '%d.%m %H:%M') }}</span>
   <!-- Content -->
   <div class="flex-1 min-w-0">
-    <p class="text-sm font-medium text-gray-900 truncate">{{ log.ad_title }}</p>
+    <p class="text-sm lg:text-base font-medium text-gray-900 truncate">{{ log.ad_title }}</p>
     <div class="flex items-center gap-2 mt-0.5">
-      <span class="text-xs text-gray-500 truncate">→ {{ log.group_name }}</span>
-      {{ messenger_icon(log.messenger_type, size='h-3.5 w-3.5', show_label=false) }}
+      <span class="text-xs lg:text-sm text-gray-500 truncate">→ {{ log.group_name }}</span>
+      {{ messenger_icon(log.messenger_type, size='h-3.5 w-3.5 lg:h-4 lg:w-4', show_label=false) }}
     </div>
     {% if log.status == 'fail' and log.error_message %}
-    <p class="text-xs text-red-500 mt-0.5 truncate">{{ log.error_message }}</p>
+    <p class="text-xs lg:text-sm text-red-500 mt-0.5 truncate">{{ log.error_message }}</p>
     {% endif %}
   </div>
   <!-- Status -->
   {% if log.status == 'ok' %}
-  <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 shrink-0">OK</span>
+  <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-emerald-700 shrink-0">OK</span>
   {% elif log.status == 'fail' %}
-  <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 shrink-0">Ошибка</span>
+  <span class="inline-flex items-center rounded-full bg-red-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-red-700 shrink-0">Ошибка</span>
   {% elif log.status == 'account_disconnected' %}
-  <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 shrink-0">Отключён</span>
+  <span class="inline-flex items-center rounded-full bg-amber-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-amber-700 shrink-0">Отключён</span>
   {% endif %}
 </a>

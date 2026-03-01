@@ -3,31 +3,31 @@
 {% block content %}
 
 <!-- Page title -->
-<h1 class="text-lg font-semibold text-gray-900">Панель управления</h1>
+<h1 class="text-lg lg:text-xl font-semibold text-gray-900">Панель управления</h1>
 
 <!-- Stat cards: grid 2 cols on mobile, 4 cols on lg -->
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
-  <div class="bg-white rounded-lg border border-gray-200 p-5">
-    <p class="text-2xl font-semibold text-gray-900">{{ stats.active_ads }}</p>
-    <p class="text-sm text-gray-500 mt-1">Объявления</p>
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-5 mt-6">
+  <div class="bg-white rounded-lg border border-gray-200 p-5 lg:p-6">
+    <p class="text-2xl lg:text-3xl font-semibold text-gray-900">{{ stats.active_ads }}</p>
+    <p class="text-sm lg:text-base text-gray-500 mt-1">Объявления</p>
   </div>
-  <div class="bg-white rounded-lg border border-gray-200 p-5">
-    <p class="text-2xl font-semibold text-gray-900">{{ stats.active_accounts }}</p>
-    <p class="text-sm text-gray-500 mt-1">Аккаунты</p>
+  <div class="bg-white rounded-lg border border-gray-200 p-5 lg:p-6">
+    <p class="text-2xl lg:text-3xl font-semibold text-gray-900">{{ stats.active_accounts }}</p>
+    <p class="text-sm lg:text-base text-gray-500 mt-1">Аккаунты</p>
   </div>
-  <div class="bg-white rounded-lg border border-gray-200 p-5">
-    <p class="text-2xl font-semibold text-gray-900">{{ stats.active_groups }}</p>
-    <p class="text-sm text-gray-500 mt-1">Группы</p>
+  <div class="bg-white rounded-lg border border-gray-200 p-5 lg:p-6">
+    <p class="text-2xl lg:text-3xl font-semibold text-gray-900">{{ stats.active_groups }}</p>
+    <p class="text-sm lg:text-base text-gray-500 mt-1">Группы</p>
   </div>
-  <div class="bg-white rounded-lg border border-gray-200 p-5">
-    <p class="text-2xl font-semibold text-gray-900">{{ stats.sent_today }}</p>
-    <p class="text-sm text-gray-500 mt-1">Отправлено</p>
+  <div class="bg-white rounded-lg border border-gray-200 p-5 lg:p-6">
+    <p class="text-2xl lg:text-3xl font-semibold text-gray-900">{{ stats.sent_today }}</p>
+    <p class="text-sm lg:text-base text-gray-500 mt-1">Отправлено</p>
   </div>
 </div>
 
 <!-- Recent sends section -->
 <div class="mt-8">
-  <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider">Последние отправки</h2>
+  <h2 class="text-sm lg:text-base font-medium text-gray-500 uppercase tracking-wider">Последние отправки</h2>
   {% if recent_sends %}
   <div class="bg-white rounded-lg border border-gray-200 mt-3 divide-y divide-gray-100">
     {% for log in recent_sends %}

@@ -6,7 +6,7 @@
 
 <!-- Header -->
 <div class="flex items-center justify-between mb-6">
-  <h1 class="text-lg font-semibold text-gray-900">Аккаунты</h1>
+  <h1 class="text-lg lg:text-xl font-semibold text-gray-900">Аккаунты</h1>
   <div class="flex items-center gap-2">
     <a href="/accounts/connect/tg_user" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">
       <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
@@ -21,7 +21,7 @@
 
 <!-- Account cards -->
 {% if accounts %}
-<div id="accounts-cards-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+<div id="accounts-cards-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-5">
   {% for account in accounts %}
 
   {% if account.status == 'syncing' and account.type == 'wa' %}
