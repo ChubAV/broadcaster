@@ -80,8 +80,14 @@ logging.root.handlers = [_handler]
 logging.root.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
 log = logging.getLogger("max_worker")
 
-# Suppress noisy uvicorn access logs
+# Force all loggers through our JSON formatter (no duplicate plain-text lines)
+for _ln in ("uvicorn", "uvicorn.access", "uvicorn.error", "pymax", "pymax.core"):
+    _l = logging.getLogger(_ln)
+    _l.handlers.clear()
+    _l.propagate = True
+# Suppress noisy loggers
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Ensure sessions directory exists
 Path(SESSIONS_DIR).mkdir(parents=True, exist_ok=True)
