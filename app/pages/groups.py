@@ -193,6 +193,7 @@ async def groups_list(
     all_accounts = accounts_result.scalars().all()
     tg_user_accounts = [a for a in all_accounts if a.type == "tg_user"]
     wa_accounts = [a for a in all_accounts if a.type == "wa" and a.status == "active"]
+    max_accounts = [a for a in all_accounts if a.type == "max" and a.status == "active"]
 
     group_stats = await _get_group_stats(db, user.id, [g.id for g in groups])
     accounts_by_id = _accounts_by_id(all_accounts)
@@ -210,6 +211,7 @@ async def groups_list(
             "accounts_by_id": accounts_by_id,
             "tg_user_accounts": tg_user_accounts,
             "wa_accounts": wa_accounts,
+            "max_accounts": max_accounts,
             "all_accounts": all_accounts,
             "has_next": has_next,
             "next_offset": PAGE_SIZE,

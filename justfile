@@ -71,10 +71,12 @@ monitoring-restart:
 prod-start:
     docker compose -f docker-compose.prod.yml up -d
 
-# Stop Docker prod environment (including wa-worker containers)
+# Stop Docker prod environment (including wa-worker and max-worker containers)
 prod-stop:
     docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop
     docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm
+    docker ps -q --filter "label=broadcaster.role=max-worker" | xargs -r docker stop
+    docker ps -aq --filter "label=broadcaster.role=max-worker" | xargs -r docker rm
     docker compose -f docker-compose.prod.yml down
 
 # Restart Docker prod environment
@@ -85,6 +87,8 @@ prod-restart:
 prod-hard-restart:
     docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop && \
     docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm; \
+    docker ps -q --filter "label=broadcaster.role=max-worker" | xargs -r docker stop && \
+    docker ps -aq --filter "label=broadcaster.role=max-worker" | xargs -r docker rm; \
     docker compose -f docker-compose.prod.yml down && \
     docker compose -f docker-compose.prod.yml up -d
 
@@ -98,6 +102,8 @@ prod-hard-deploy:
     docker compose -f docker-compose.prod.yml build --no-cache && \
     docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop && \
     docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm; \
+    docker ps -q --filter "label=broadcaster.role=max-worker" | xargs -r docker stop && \
+    docker ps -aq --filter "label=broadcaster.role=max-worker" | xargs -r docker rm; \
     docker compose -f docker-compose.prod.yml down && \
     docker compose -f docker-compose.prod.yml up -d
 
@@ -107,6 +113,8 @@ prod-deploy:
     docker compose -f docker-compose.prod.yml build && \
     docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop && \
     docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm; \
+    docker ps -q --filter "label=broadcaster.role=max-worker" | xargs -r docker stop && \
+    docker ps -aq --filter "label=broadcaster.role=max-worker" | xargs -r docker rm; \
     docker compose -f docker-compose.prod.yml down && \
     docker compose -f docker-compose.prod.yml up -d
 
@@ -130,3 +138,16 @@ wa-workers:
 wa-workers-stop:
     docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop
     docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm
+
+# Build max-worker Docker image
+max-worker-build:
+    docker build -t broadcaster-max-worker:latest ./max_worker
+
+# List running max-worker containers
+max-workers:
+    docker ps --filter "label=broadcaster.role=max-worker" --format "table {{{{.Names}}\t{{{{.Status}}\t{{{{.Ports}}"
+
+# Stop all max-worker containers
+max-workers-stop:
+    docker ps -q --filter "label=broadcaster.role=max-worker" | xargs -r docker stop
+    docker ps -aq --filter "label=broadcaster.role=max-worker" | xargs -r docker rm
