@@ -50,7 +50,7 @@ BLPOP_TIMEOUT = 5  # seconds — short so we can check idle timer frequently
 HEARTBEAT_INTERVAL_SEC = 30
 
 # Retry delays for failed task sends (seconds)
-RETRY_DELAYS = [60, 180, 300]
+RETRY_DELAYS = [15, 60, 180]
 MAX_RETRIES = len(RETRY_DELAYS)
 
 # Redis key patterns
