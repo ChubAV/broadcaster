@@ -313,6 +313,13 @@ async def create_client(phone: str) -> SessionState:
     )
     state.client = client
 
+    # pymax adds its own handlers during __init__; clear them so all output
+    # goes through our root JSON formatter (no duplicate plain-text lines)
+    for _name in ("pymax", "pymax.core"):
+        _lg = logging.getLogger(_name)
+        _lg.handlers.clear()
+        _lg.propagate = True
+
     # Override _print_qr to capture QR link for web UI
     # (pymax prints QR to terminal by default — we intercept it)
     def capture_qr(qr_link: str):
@@ -1015,4 +1022,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=PORT,
         log_level=LOG_LEVEL.lower(),
+        log_config=None,  # prevent uvicorn from overriding our JSON logging
     )
