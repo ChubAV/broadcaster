@@ -547,16 +547,28 @@ async def accounts_connect_max_start(
             },
         )
 
-    # Create a pending MAX account
-    account = MessengerAccount(
-        user_id=user.id,
-        type="max",
-        credentials=phone,
-        status="connecting",
+    # Reuse existing "connecting" MAX account or create a new one
+    result = await db.execute(
+        select(MessengerAccount).where(
+            MessengerAccount.user_id == user.id,
+            MessengerAccount.type == "max",
+            MessengerAccount.status == "connecting",
+        )
     )
-    db.add(account)
-    await db.commit()
-    await db.refresh(account)
+    account = result.scalars().first()
+    if account:
+        account.credentials = phone
+        await db.commit()
+    else:
+        account = MessengerAccount(
+            user_id=user.id,
+            type="max",
+            credentials=phone,
+            status="connecting",
+        )
+        db.add(account)
+        await db.commit()
+        await db.refresh(account)
 
     session_id = str(account.id)
     messenger = MaxMessenger(session_id=session_id)

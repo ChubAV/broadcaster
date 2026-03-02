@@ -82,6 +82,10 @@ def start_container(account_id: int, phone: str = "") -> str | None:
         logger.info("container_started", account_id=account_id, container_id=container.short_id)
         return _container_endpoint(name)
     except APIError as e:
+        # 409 Conflict = container with this name was created by a concurrent request
+        if e.status_code == 409:
+            logger.info("container_conflict_reusing", account_id=account_id)
+            return _container_endpoint(name)
         logger.error("container_start_failed", account_id=account_id, error=str(e))
         return None
 

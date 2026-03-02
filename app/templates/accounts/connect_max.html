@@ -25,12 +25,13 @@
     <div class="text-center">
       <h1 class="text-lg font-semibold text-gray-900 mb-1">Подключение MAX</h1>
       <p class="text-sm text-gray-500 mb-5">Введите номер телефона, привязанный к вашему аккаунту MAX</p>
-      <form method="POST" action="/accounts/connect/max/start" class="space-y-4">
+      <form method="POST" action="/accounts/connect/max/start" class="space-y-4"
+            onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;b.textContent='Подключение…';">
         <div>
           <input type="tel" name="phone" placeholder="+7 999 123-45-67" required
                  class="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors">
         </div>
-        <button type="submit" class="w-full inline-flex items-center justify-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2.5 text-sm font-medium hover:bg-indigo-700 transition-colors">
+        <button type="submit" class="w-full inline-flex items-center justify-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2.5 text-sm font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
           Продолжить
         </button>
       </form>
