@@ -125,6 +125,18 @@ class WhatsAppMessenger(BaseMessenger):
             self.log.warning("check_connection_failed", error=str(e))
             return False
 
+    async def get_group_details(self, group_external_id: str) -> dict | None:
+        client = get_http_client()
+        try:
+            response = await client.get(self._url(f"group-info/{group_external_id}"))
+            if response.status_code == 200:
+                return response.json()
+            self.log.warning("get_group_details_error", group_id=group_external_id, http_status=response.status_code)
+            return None
+        except Exception as e:
+            self.log.error("get_group_details_error", group_id=group_external_id, error=str(e), exc_info=True)
+            return None
+
     async def get_sync_status(self) -> dict:
         """Get group sync status from bridge.
         Returns: {"state": "syncing"|"ready"|"failed"|"none"|"not_found", "groups": [...] | None}

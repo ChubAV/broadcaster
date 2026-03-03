@@ -10,6 +10,7 @@ from app.models.email_verification import EmailVerificationCode
 from app.models.message_balance import MessageBalance
 from app.models.balance_transaction import BalanceTransaction
 from app.models.payment import Payment
+from app.models.group_info import GroupInfo
 
 __all__ = [
     "User",
@@ -24,4 +25,5 @@ __all__ = [
     "MessageBalance",
     "BalanceTransaction",
     "Payment",
+    "GroupInfo",
 ]

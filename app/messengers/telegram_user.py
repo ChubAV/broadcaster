@@ -13,7 +13,8 @@ from telethon.errors import (
     UserBannedInChannelError,
 )
 from telethon.sessions import StringSession
-from telethon.tl.types import Channel, Chat
+from telethon.tl.functions.channels import GetParticipantsRequest
+from telethon.tl.types import Channel, ChannelParticipantsAdmins, Chat
 
 from app.messengers.base import BaseMessenger
 
@@ -268,6 +269,57 @@ class TelegramUserMessenger(BaseMessenger):
         except Exception as e:
             self.log.warning("check_connection_failed", error=str(e))
             return False
+        finally:
+            try:
+                await self.client.disconnect()
+            except Exception:
+                pass
+
+    async def get_group_details(self, group_external_id: str) -> dict | None:
+        try:
+            await self.client.connect()
+            entity = await self.client.get_entity(int(group_external_id))
+
+            if not isinstance(entity, (Channel, Chat)):
+                return None
+
+            result = {
+                "name": getattr(entity, "title", None) or str(group_external_id),
+                "member_count": getattr(entity, "participants_count", None),
+                "admins": [],
+                "raw": {
+                    "id": entity.id,
+                    "title": getattr(entity, "title", None),
+                    "username": getattr(entity, "username", None),
+                    "participants_count": getattr(entity, "participants_count", None),
+                },
+            }
+
+            # Try to fetch admins (works for supergroups/channels)
+            if isinstance(entity, Channel):
+                try:
+                    admins_result = await self.client(
+                        GetParticipantsRequest(
+                            channel=entity,
+                            filter=ChannelParticipantsAdmins(),
+                            offset=0,
+                            limit=100,
+                            hash=0,
+                        )
+                    )
+                    for user in admins_result.users:
+                        result["admins"].append({
+                            "id": str(user.id),
+                            "name": f"{user.first_name or ''} {user.last_name or ''}".strip(),
+                            "username": user.username,
+                        })
+                except Exception as e:
+                    self.log.debug("get_admins_failed", group_id=group_external_id, error=str(e))
+
+            return result
+        except Exception as e:
+            self.log.error("get_group_details_error", group_id=group_external_id, error=str(e), exc_info=True)
+            return None
         finally:
             try:
                 await self.client.disconnect()

@@ -868,6 +868,48 @@ app.get('/api/sessions/:id/groups', async (req, res) => {
     }
 });
 
+// GET /api/sessions/:id/group-info/:jid — Get group details
+app.get('/api/sessions/:id/group-info/:jid', async (req, res) => {
+    const sessionId = req.params.id;
+    const jid = req.params.jid;
+
+    if (String(sessionId) !== String(ACCOUNT_ID)) {
+        return res.status(403).json({ error: `This worker manages account ${ACCOUNT_ID} only` });
+    }
+
+    const state = await ensureSession();
+    if (!state || !state.isConnected) {
+        return res.status(503).json({ error: 'WhatsApp session not available' });
+    }
+
+    try {
+        const metadata = await state.sock.groupMetadata(jid);
+        const admins = (metadata.participants || [])
+            .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
+            .map(p => ({
+                id: p.id,
+                name: p.notify || '',
+                phone: p.id.replace('@s.whatsapp.net', ''),
+                admin: p.admin,
+            }));
+        return res.json({
+            name: metadata.subject || jid,
+            member_count: (metadata.participants || []).length,
+            admins,
+            raw: {
+                subject: metadata.subject,
+                desc: metadata.desc,
+                owner: metadata.owner,
+                creation: metadata.creation,
+                size: metadata.size,
+            },
+        });
+    } catch (error) {
+        log.error({ accountId: ACCOUNT_ID, jid, err: error.message }, 'group_info_error');
+        return res.status(500).json({ error: error.message });
+    }
+});
+
 // GET /health — Health check
 app.get('/health', (req, res) => {
     res.json({

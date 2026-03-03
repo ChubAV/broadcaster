@@ -16,3 +16,7 @@ class BaseMessenger(ABC):
     async def check_connection(self) -> bool:
         """Check if account is connected and working."""
         pass
+
+    async def get_group_details(self, group_external_id: str) -> dict | None:
+        """Get detailed info about a group. Returns dict with name, member_count, admins, raw or None."""
+        return None

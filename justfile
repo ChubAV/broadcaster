@@ -147,6 +147,10 @@ max-worker-build:
 max-workers:
     docker ps --filter "label=broadcaster.role=max-worker" --format "table {{{{.Names}}\t{{{{.Status}}\t{{{{.Ports}}"
 
+# Collect group info from messengers (dry-run by default)
+collect-group-info *args:
+    uv run python scripts/collect_group_info.py {{ args }}
+
 # Stop all max-worker containers
 max-workers-stop:
     docker ps -q --filter "label=broadcaster.role=max-worker" | xargs -r docker stop
