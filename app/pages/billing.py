@@ -21,7 +21,7 @@ async def billing_page(
         return RedirectResponse(url="/login", status_code=302)
     balance_info = await get_balance_info(db, user.id)
     transactions = await get_transaction_history(db, user.id, limit=20)
-    packages = settings.parsed_message_packages
+    packages = settings.parsed_message_packages if settings.yookassa_enabled else []
     return templates.TemplateResponse(
         "billing/balance.html",
         {
@@ -31,6 +31,7 @@ async def billing_page(
             "balance_info": balance_info,
             "transactions": transactions,
             "packages": packages,
+            "payments_enabled": settings.yookassa_enabled,
             "active_page": "billing",
         },
     )

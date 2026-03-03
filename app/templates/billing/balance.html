@@ -21,7 +21,7 @@
   </div>
 </div>
 
-{% if not balance_info.is_unlimited %}
+{% if payments_enabled and not balance_info.is_unlimited %}
 <!-- Packages -->
 <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">Пополнить баланс</h2>
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
@@ -38,6 +38,10 @@
     </button>
   </div>
   {% endfor %}
+</div>
+{% elif not payments_enabled and not balance_info.is_unlimited %}
+<div class="bg-gray-50 rounded-lg border border-gray-200 p-6 mb-8 text-center text-sm text-gray-500">
+  Пополнение баланса доступно через администратора
 </div>
 {% endif %}
 
@@ -88,6 +92,7 @@
   {% endif %}
 </div>
 
+{% if payments_enabled %}
 <script>
 async function purchasePackage(index) {
   try {
@@ -110,5 +115,6 @@ async function purchasePackage(index) {
   }
 }
 </script>
+{% endif %}
 
 {% endblock %}

@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     message_packages: str = '[{"name":"100 сообщений","count":100,"price":"149.00"},{"name":"500 сообщений","count":500,"price":"599.00"},{"name":"1000 сообщений","count":1000,"price":"999.00"}]'
 
     # YooKassa
+    yookassa_enabled: bool = True
     yookassa_shop_id: str = ""
     yookassa_secret_key: str = ""
     yookassa_return_url: str = ""

@@ -49,6 +49,8 @@ async def purchase_package(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    if not settings.yookassa_enabled:
+        raise HTTPException(status_code=403, detail="Payments are disabled")
     packages = settings.parsed_message_packages
     if data.package_index < 0 or data.package_index >= len(packages):
         raise HTTPException(status_code=400, detail="Invalid package index")
@@ -68,7 +70,10 @@ async def purchase_package(
 async def yookassa_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ):
+    if not settings.yookassa_enabled:
+        raise HTTPException(status_code=403, detail="Payments are disabled")
     try:
         body = await request.json()
         event = body.get("event", "")
