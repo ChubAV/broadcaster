@@ -7,6 +7,9 @@ from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.telegram_auth_session import TelegramAuthSession
 from app.models.email_verification import EmailVerificationCode
+from app.models.message_balance import MessageBalance
+from app.models.balance_transaction import BalanceTransaction
+from app.models.payment import Payment
 
 __all__ = [
     "User",
@@ -18,4 +21,7 @@ __all__ = [
     "SendLog",
     "TelegramAuthSession",
     "EmailVerificationCode",
+    "MessageBalance",
+    "BalanceTransaction",
+    "Payment",
 ]

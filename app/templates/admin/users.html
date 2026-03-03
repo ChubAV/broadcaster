@@ -22,7 +22,7 @@
       <p class="text-xs lg:text-sm text-gray-500 truncate">{{ item.user.email }}</p>
     </div>
     <span class="hidden lg:inline text-sm text-gray-400 shrink-0">{{ item.user.created_at.strftime('%d.%m.%Y') if item.user.created_at }}</span>
-    <span class="inline-flex items-center rounded-full bg-gray-100 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-gray-600 shrink-0">{{ item.plan|capitalize }}</span>
+    <span class="inline-flex items-center rounded-full bg-indigo-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-indigo-700 shrink-0">{{ item.balance }} сообщ.</span>
     {% if item.user.is_blocked %}
     <span class="inline-flex items-center rounded-full bg-red-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-red-700 shrink-0">Заблокирован</span>
     {% endif %}

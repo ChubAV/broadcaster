@@ -3,7 +3,7 @@ import structlog
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.billing_service import check_limit
+from app.services.billing_service import check_balance
 from app.config import get_settings
 
 logger = structlog.get_logger(__name__)
@@ -25,11 +25,14 @@ def _get_redis():
     return _redis_client
 
 
-async def check_limit_cached(
+async def check_balance_cached(
     db: AsyncSession, user_id: int, action: str
 ) -> tuple[bool, str]:
-    """check_limit with Redis cache. Falls back to DB on cache miss/error."""
-    cache_key = f"billing:{user_id}:{action}"
+    """check_balance with Redis cache. For action != 'send', always allows."""
+    if action != "send":
+        return True, ""
+
+    cache_key = f"balance:{user_id}"
     ttl = get_settings().billing_cache_ttl
 
     r = _get_redis()
@@ -42,7 +45,7 @@ async def check_limit_cached(
         except Exception as e:
             logger.debug("billing_cache_read_error", cache_key=cache_key, error=str(e))
 
-    allowed, reason = await check_limit(db, user_id, action)
+    allowed, reason = await check_balance(db, user_id)
 
     if r:
         try:
@@ -55,3 +58,13 @@ async def check_limit_cached(
             logger.debug("billing_cache_write_error", cache_key=cache_key, error=str(e))
 
     return allowed, reason
+
+
+async def invalidate_balance_cache(user_id: int) -> None:
+    """Invalidate balance cache after deduction/top-up."""
+    r = _get_redis()
+    if r:
+        try:
+            await r.delete(f"balance:{user_id}")
+        except Exception as e:
+            logger.debug("billing_cache_invalidate_error", user_id=user_id, error=str(e))

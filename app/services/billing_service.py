@@ -1,106 +1,158 @@
-from datetime import datetime, timezone, timedelta
-from sqlalchemy import select, func
+from datetime import datetime, timezone
+
+import structlog
+from sqlalchemy import select, update, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.subscription import Subscription
-from app.models.ad import Ad
-from app.models.group import Group
-from app.models.send_log import SendLog
+from app.models.message_balance import MessageBalance
+from app.models.balance_transaction import BalanceTransaction
 
-PLANS = {
-    "free": {"max_ads": 3, "max_groups": 5, "max_sends_per_day": 10},
-    "basic": {"max_ads": 20, "max_groups": 50, "max_sends_per_day": 200},
-    "pro": {"max_ads": 100, "max_groups": 500, "max_sends_per_day": 2000},
-}
+logger = structlog.get_logger()
 
 
-def get_plan_limits(plan: str) -> dict:
-    return PLANS.get(plan, PLANS["free"])
-
-
-async def get_user_plan(db: AsyncSession, user_id: int) -> str:
-    """Get active plan for user. Returns 'free' if no active subscription."""
+async def get_or_create_balance(db: AsyncSession, user_id: int) -> MessageBalance:
     result = await db.execute(
-        select(Subscription)
-        .where(Subscription.user_id == user_id, Subscription.is_active == True)
-        .order_by(Subscription.created_at.desc())
-        .limit(1)
+        select(MessageBalance).where(MessageBalance.user_id == user_id)
     )
-    sub = result.scalar_one_or_none()
-    if sub:
-        now = datetime.now(timezone.utc)
-        expires = sub.expires_at
-        if expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
-        if expires > now:
-            return sub.plan
-    return "free"
+    balance = result.scalar_one_or_none()
+    if balance is None:
+        balance = MessageBalance(user_id=user_id, balance=0)
+        db.add(balance)
+        await db.flush()
+    return balance
 
 
-async def get_usage(db: AsyncSession, user_id: int) -> dict:
-    """Get current usage stats for a user."""
-    ads_count = (await db.execute(
-        select(func.count(Ad.id)).where(Ad.user_id == user_id)
-    )).scalar() or 0
-
-    groups_count = (await db.execute(
-        select(func.count(Group.id)).where(Group.user_id == user_id)
-    )).scalar() or 0
-
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    sends_today = (await db.execute(
-        select(func.count(SendLog.id))
-        .where(
-            SendLog.user_id == user_id,
-            SendLog.sent_at >= today_start,
-            SendLog.status == "ok",
-        )
-    )).scalar() or 0
-
-    return {
-        "ads_count": ads_count,
-        "groups_count": groups_count,
-        "sends_today": sends_today,
-    }
+async def get_balance(db: AsyncSession, user_id: int) -> int:
+    bal = await get_or_create_balance(db, user_id)
+    return bal.balance
 
 
-async def check_limit(db: AsyncSession, user_id: int, action: str) -> tuple[bool, str]:
-    """Check if user can perform action. Returns (allowed, reason)."""
-    plan = await get_user_plan(db, user_id)
-    limits = get_plan_limits(plan)
-    usage = await get_usage(db, user_id)
-
-    if action == "create_ad" and usage["ads_count"] >= limits["max_ads"]:
-        return False, f"Ad limit reached ({limits['max_ads']} on {plan} plan)"
-    if action == "create_group" and usage["groups_count"] >= limits["max_groups"]:
-        return False, f"Group limit reached ({limits['max_groups']} on {plan} plan)"
-    if action == "send" and usage["sends_today"] >= limits["max_sends_per_day"]:
-        return False, f"Daily send limit reached ({limits['max_sends_per_day']} on {plan} plan)"
+async def check_balance(db: AsyncSession, user_id: int) -> tuple[bool, str]:
+    balance = await get_balance(db, user_id)
+    if balance <= 0:
+        return False, "Баланс сообщений исчерпан. Пополните баланс для продолжения отправки."
     return True, ""
 
 
-async def set_user_plan(
-    db: AsyncSession, user_id: int, plan: str, expires_at: datetime
-) -> Subscription:
-    """Set user plan. Deactivates any existing active subscription first."""
-    # Deactivate existing active subscriptions
+async def deduct_message(db: AsyncSession, user_id: int) -> bool:
+    """Atomically deduct 1 message. Returns True if deducted, False if insufficient."""
     result = await db.execute(
-        select(Subscription).where(
-            Subscription.user_id == user_id,
-            Subscription.is_active == True,  # noqa: E712
-        )
+        update(MessageBalance)
+        .where(MessageBalance.user_id == user_id, MessageBalance.balance > 0)
+        .values(balance=MessageBalance.balance - 1)
+        .returning(MessageBalance.balance)
     )
-    for sub in result.scalars().all():
-        sub.is_active = False
+    row = result.first()
+    if row is None:
+        return False
 
-    # Create new subscription
-    new_sub = Subscription(
+    new_balance = row[0]
+    tx = BalanceTransaction(
         user_id=user_id,
-        plan=plan,
-        expires_at=expires_at,
-        is_active=True,
+        amount=-1,
+        balance_after=new_balance,
+        type="send_deduction",
     )
-    db.add(new_sub)
-    await db.commit()
-    await db.refresh(new_sub)
-    return new_sub
+    db.add(tx)
+    return True
+
+
+async def add_messages(
+    db: AsyncSession,
+    user_id: int,
+    amount: int,
+    type: str,
+    description: str | None = None,
+    payment_id: str | None = None,
+) -> int:
+    """Add messages to balance. Returns new balance."""
+    bal = await get_or_create_balance(db, user_id)
+    bal.balance += amount
+    await db.flush()
+
+    tx = BalanceTransaction(
+        user_id=user_id,
+        amount=amount,
+        balance_after=bal.balance,
+        type=type,
+        description=description,
+        payment_id=payment_id,
+    )
+    db.add(tx)
+    await db.flush()
+    return bal.balance
+
+
+async def reset_free_monthly(db: AsyncSession, user_id: int, free_limit: int) -> bool:
+    """Reset free monthly messages for a single user. Returns True if reset."""
+    bal = await get_or_create_balance(db, user_id)
+    now = datetime.now(timezone.utc)
+
+    if bal.free_balance_reset_at is not None:
+        reset_at = bal.free_balance_reset_at
+        if reset_at.tzinfo is None:
+            reset_at = reset_at.replace(tzinfo=timezone.utc)
+        if reset_at.month == now.month and reset_at.year == now.year:
+            return False
+
+    bal.balance += free_limit
+    bal.free_balance_reset_at = now
+    await db.flush()
+
+    tx = BalanceTransaction(
+        user_id=user_id,
+        amount=free_limit,
+        balance_after=bal.balance,
+        type="free_monthly",
+        description=f"Ежемесячное начисление {free_limit} бесплатных сообщений",
+    )
+    db.add(tx)
+    return True
+
+
+async def reset_all_free_monthly(db: AsyncSession, free_limit: int) -> int:
+    """Reset free monthly for all users. Returns count of users reset."""
+    now = datetime.now(timezone.utc)
+    from app.models.user import User
+
+    result = await db.execute(select(User.id))
+    user_ids = [row[0] for row in result.all()]
+
+    count = 0
+    for uid in user_ids:
+        if await reset_free_monthly(db, uid, free_limit):
+            count += 1
+    return count
+
+
+async def get_balance_info(db: AsyncSession, user_id: int) -> dict:
+    bal = await get_or_create_balance(db, user_id)
+    return {
+        "balance": bal.balance,
+        "free_balance_reset_at": bal.free_balance_reset_at.isoformat() if bal.free_balance_reset_at else None,
+    }
+
+
+async def get_transaction_history(
+    db: AsyncSession, user_id: int, limit: int = 50, offset: int = 0
+) -> list[dict]:
+    result = await db.execute(
+        select(BalanceTransaction)
+        .where(BalanceTransaction.user_id == user_id)
+        .order_by(BalanceTransaction.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    txs = result.scalars().all()
+    return [
+        {
+            "id": tx.id,
+            "amount": tx.amount,
+            "balance_after": tx.balance_after,
+            "type": tx.type,
+            "description": tx.description,
+            "payment_id": tx.payment_id,
+            "created_at": tx.created_at.isoformat() if tx.created_at else None,
+        }
+        for tx in txs
+    ]

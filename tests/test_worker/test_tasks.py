@@ -182,7 +182,7 @@ async def test_check_schedules_dispatches(db_session):
     mock_dispatch_settings.redis_url = "redis://localhost:6379/0"
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))), \
+         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))), \
          patch("app.worker.tasks.get_settings", return_value=mock_dispatch_settings):
         await check_schedules_async(db_session)
 
@@ -208,7 +208,7 @@ async def test_check_schedules_skips_inactive(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
+         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))):
         await check_schedules_async(db_session)
 
     assert len(dispatched) == 0
@@ -224,7 +224,7 @@ async def test_check_schedules_skips_future(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))):
+         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))):
         await check_schedules_async(db_session)
 
     assert len(dispatched) == 0
@@ -241,7 +241,7 @@ async def test_check_schedules_skips_billing_limited(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(False, "limit reached"))):
+         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(False, "limit reached"))):
         await check_schedules_async(db_session)
 
     # No tasks dispatched
@@ -274,7 +274,7 @@ async def test_check_schedules_uses_schedule_timezone(db_session):
     mock_dispatch_settings.redis_url = "redis://localhost:6379/0"
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))), \
+         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))), \
          patch("app.worker.tasks.get_settings", return_value=mock_dispatch_settings):
         await check_schedules_async(db_session)
 

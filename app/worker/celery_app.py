@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_init
 
 
@@ -45,6 +46,10 @@ def create_celery_app() -> Celery:
             "process-max-results": {
                 "task": "app.worker.tasks.process_max_results",
                 "schedule": 5.0,
+            },
+            "reset-free-monthly-balance": {
+                "task": "app.worker.tasks.reset_free_monthly_balance",
+                "schedule": crontab(hour=0, minute=5),
             },
         },
         worker_prefetch_multiplier=1,

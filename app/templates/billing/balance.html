@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Баланс — Broadcaster{% endblock %}
+{% block content %}
+
+<h1 class="text-lg lg:text-xl font-semibold text-gray-900 mb-6">Баланс сообщений</h1>
+
+<!-- Current balance -->
+<div class="bg-white rounded-lg border border-gray-200 p-6 lg:p-8 mb-8">
+  <div class="text-center">
+    <div class="text-5xl font-bold text-indigo-600 mb-2">{{ balance_info.balance }}</div>
+    <div class="text-sm text-gray-500">сообщений на балансе</div>
+    {% if balance_info.free_balance_reset_at %}
+    <div class="text-xs text-gray-400 mt-2">Последнее бесплатное начисление: {{ balance_info.free_balance_reset_at[:10] }}</div>
+    {% endif %}
+    <div class="text-xs text-gray-400 mt-1">Каждый месяц начисляется 10 бесплатных сообщений</div>
+  </div>
+</div>
+
+<!-- Packages -->
+<h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">Пополнить баланс</h2>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+  {% for pkg in packages %}
+  <div class="bg-white rounded-lg border border-gray-200 p-6 text-center">
+    <h3 class="text-base font-semibold text-gray-900">{{ pkg.name }}</h3>
+    <div class="text-3xl font-bold text-gray-900 mt-2">{{ pkg.price }} &#8381;</div>
+    <div class="text-sm text-gray-500 mt-1">{{ pkg.count }} сообщений</div>
+    <button
+      onclick="purchasePackage({{ loop.index0 }})"
+      class="mt-4 w-full inline-flex justify-center items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 transition-colors"
+    >
+      Купить
+    </button>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Transaction history -->
+<h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">История операций</h2>
+<div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+  {% if transactions %}
+  <div class="overflow-x-auto">
+    <table class="min-w-full divide-y divide-gray-200">
+      <thead class="bg-gray-50">
+        <tr>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Тип</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Кол-во</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Баланс</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Описание</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-200">
+        {% for tx in transactions %}
+        <tr>
+          <td class="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">{{ tx.created_at[:16] if tx.created_at else '' }}</td>
+          <td class="px-4 py-3 text-sm whitespace-nowrap">
+            {% if tx.type == 'purchase' %}
+            <span class="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">Покупка</span>
+            {% elif tx.type == 'free_monthly' %}
+            <span class="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">Бесплатные</span>
+            {% elif tx.type == 'admin_adjustment' %}
+            <span class="inline-flex items-center rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700">Админ</span>
+            {% elif tx.type == 'send_deduction' %}
+            <span class="inline-flex items-center rounded-full bg-orange-50 px-2 py-0.5 text-xs font-medium text-orange-700">Отправка</span>
+            {% else %}
+            <span class="text-gray-500">{{ tx.type }}</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 text-sm text-right whitespace-nowrap {{ 'text-green-600' if tx.amount > 0 else 'text-red-600' }}">
+            {{ '+' if tx.amount > 0 else '' }}{{ tx.amount }}
+          </td>
+          <td class="px-4 py-3 text-sm text-right text-gray-900 whitespace-nowrap">{{ tx.balance_after }}</td>
+          <td class="px-4 py-3 text-sm text-gray-500">{{ tx.description or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="p-8 text-center text-sm text-gray-500">Нет операций</div>
+  {% endif %}
+</div>
+
+<script>
+async function purchasePackage(index) {
+  try {
+    const resp = await fetch('/api/billing/purchase', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({package_index: index})
+    });
+    if (!resp.ok) {
+      const data = await resp.json();
+      alert(data.detail || 'Ошибка при создании платежа');
+      return;
+    }
+    const data = await resp.json();
+    if (data.confirmation_url) {
+      window.location.href = data.confirmation_url;
+    }
+  } catch (e) {
+    alert('Ошибка: ' + e.message);
+  }
+}
+</script>
+
+{% endblock %}

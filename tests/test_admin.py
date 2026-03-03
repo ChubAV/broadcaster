@@ -106,8 +106,8 @@ async def test_admin_set_plan(client: AsyncClient, db_session):
     target = result.scalar_one()
 
     resp = await client.post(
-        f"/admin/users/{target.id}/plan",
-        data={"plan": "pro", "expires_days": "30"},
+        f"/admin/users/{target.id}/balance",
+        data={"amount": "100", "description": "Test top-up"},
         headers=admin_headers,
         follow_redirects=False,
     )

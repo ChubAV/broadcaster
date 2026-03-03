@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -17,15 +17,15 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
-from app.models.subscription import Subscription
+from app.models.message_balance import MessageBalance
 from app.pages.common import templates
 from app.repositories.user import UserRepository
 from app.services.billing_service import (
-    PLANS,
-    get_user_plan,
-    get_usage,
-    set_user_plan,
+    get_balance,
+    get_balance_info,
+    add_messages,
 )
+from app.services.billing_cache import invalidate_balance_cache
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -63,12 +63,9 @@ async def admin_dashboard(
         )
     ).scalar() or 0
 
-    active_subs = (
+    total_balance = (
         await db.execute(
-            select(func.count(Subscription.id)).where(
-                Subscription.is_active == True,  # noqa: E712
-                Subscription.expires_at > datetime.now(timezone.utc),
-            )
+            select(func.coalesce(func.sum(MessageBalance.balance), 0))
         )
     ).scalar() or 0
 
@@ -84,7 +81,7 @@ async def admin_dashboard(
                 "total_accounts": total_accounts,
                 "active_accounts": total_active_accounts,
                 "sends_today": sends_today,
-                "active_subscriptions": active_subs,
+                "total_balance": total_balance,
             },
         },
     )
@@ -104,11 +101,10 @@ async def admin_users(
     else:
         users = await user_repo.get_all_users()
 
-    # Get plan for each user
     user_data = []
     for u in users:
-        plan = await get_user_plan(db, u.id)
-        user_data.append({"user": u, "plan": plan})
+        balance = await get_balance(db, u.id)
+        user_data.append({"user": u, "balance": balance})
 
     return templates.TemplateResponse(
         "admin/users.html",
@@ -135,10 +131,8 @@ async def admin_user_detail(
     if not target_user:
         return RedirectResponse(url="/admin/users", status_code=302)
 
-    plan = await get_user_plan(db, target_user.id)
-    usage = await get_usage(db, target_user.id)
+    balance_info = await get_balance_info(db, target_user.id)
 
-    # Get user's accounts
     accounts_result = await db.execute(
         select(MessengerAccount).where(
             MessengerAccount.user_id == target_user.id
@@ -146,14 +140,12 @@ async def admin_user_detail(
     )
     accounts = list(accounts_result.scalars().all())
 
-    # Get user's ads count
     ads_count = (
         await db.execute(
             select(func.count(Ad.id)).where(Ad.user_id == target_user.id)
         )
     ).scalar() or 0
 
-    # Get user's groups count
     groups_count = (
         await db.execute(
             select(func.count(Group.id)).where(
@@ -161,18 +153,6 @@ async def admin_user_detail(
             )
         )
     ).scalar() or 0
-
-    # Get active subscription details
-    sub_result = await db.execute(
-        select(Subscription)
-        .where(
-            Subscription.user_id == target_user.id,
-            Subscription.is_active == True,  # noqa: E712
-        )
-        .order_by(Subscription.created_at.desc())
-        .limit(1)
-    )
-    active_sub = sub_result.scalar_one_or_none()
 
     return templates.TemplateResponse(
         "admin/user_detail.html",
@@ -182,13 +162,10 @@ async def admin_user_detail(
             "is_admin": True,
             "active_page": "admin",
             "target_user": target_user,
-            "plan": plan,
-            "usage": usage,
+            "balance_info": balance_info,
             "accounts": accounts,
             "ads_count": ads_count,
             "groups_count": groups_count,
-            "active_sub": active_sub,
-            "all_plans": PLANS,
         },
     )
 
@@ -369,12 +346,12 @@ async def admin_user_history_detail(
     )
 
 
-@router.post("/users/{user_id}/plan")
-async def admin_set_plan(
+@router.post("/users/{user_id}/balance")
+async def admin_add_balance(
     request: Request,
     user_id: int,
-    plan: str = Form(...),
-    expires_days: int = Form(30),
+    amount: int = Form(...),
+    description: str = Form(""),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -382,8 +359,15 @@ async def admin_set_plan(
     if not target_user:
         return RedirectResponse(url="/admin/users", status_code=302)
 
-    expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days)
-    await set_user_plan(db, user_id, plan, expires_at)
+    await add_messages(
+        db,
+        user_id,
+        amount,
+        type="admin_adjustment",
+        description=description or f"Пополнение администратором ({admin.email})",
+    )
+    await db.commit()
+    await invalidate_balance_cache(user_id)
 
     return RedirectResponse(
         url=f"/admin/users/{user_id}", status_code=302

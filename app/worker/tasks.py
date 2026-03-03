@@ -15,7 +15,8 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
-from app.services.billing_cache import check_limit_cached
+from app.services.billing_cache import check_balance_cached, invalidate_balance_cache
+from app.services.billing_service import deduct_message
 from app.services.messenger_factory import create_messenger
 from app.services.s3 import get_image_url
 from app.services.schedule_service import compute_next_run_at
@@ -145,7 +146,7 @@ async def check_schedules_async(session: AsyncSession):
     tasks: list[DispatchTask] = await collect_due_schedules(
         session,
         now=now,
-        check_limit=check_limit_cached,
+        check_limit=check_balance_cached,
     )
     logger.info("check_schedules_found", now=now.isoformat(), due_count=len(tasks))
     if tasks:
@@ -592,6 +593,10 @@ async def _process_results_async(results: list[dict]):
                 )
                 session.add(send_log)
 
+                if result["status"] == "ok" and result.get("user_id"):
+                    await deduct_message(session, result["user_id"])
+                    await invalidate_balance_cache(result["user_id"])
+
                 group_id = result.get("group_id")
                 if group_id:
                     group = await session.get(Group, group_id)
@@ -689,6 +694,10 @@ async def _process_max_results_async(results: list[dict]):
                 )
                 session.add(send_log)
 
+                if result["status"] == "ok" and result.get("user_id"):
+                    await deduct_message(session, result["user_id"])
+                    await invalidate_balance_cache(result["user_id"])
+
                 group_id = result.get("group_id")
                 if group_id:
                     group = await session.get(Group, group_id)
@@ -716,6 +725,30 @@ async def _process_max_results_async(results: list[dict]):
         logger.info("results_processed", count=len(results))
 
     await engine.dispose()
+
+
+@shared_task(name="app.worker.tasks.reset_free_monthly_balance")
+def reset_free_monthly_balance():
+    """Reset free monthly messages for all users."""
+    from app.services.billing_service import reset_all_free_monthly
+
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    session_factory = get_session_factory(engine)
+
+    async def _run():
+        try:
+            async with session_factory() as session:
+                count = await reset_all_free_monthly(session, settings.free_monthly_messages)
+                await session.commit()
+                logger.info("free_monthly_reset_complete", users_reset=count)
+        except Exception as e:
+            logger.error("free_monthly_reset_error", error=str(e), exc_info=True)
+            raise
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
 
 
 @shared_task(name="app.worker.tasks.send_verification_email")

@@ -121,7 +121,7 @@ async def test_full_flow(e2e_setup):
 
     async with session_factory() as session:
         with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-             patch("app.worker.tasks.check_limit_cached", AsyncMock(return_value=(True, ""))), \
+             patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))), \
              patch("app.worker.tasks.get_settings", return_value=mock_dispatch_settings):
             await check_schedules_async(session)
 

@@ -217,6 +217,7 @@ async def send_message_once(
         images=images,
     )
 
+    status = "ok" if result.get("ok") else "fail"
     log_entry = SendLog(
         user_id=ad.user_id,
         schedule_id=schedule_id,
@@ -228,10 +229,17 @@ async def send_message_once(
         group_name=group.name,
         messenger_type=account.type,
         task_id=task_id,
-        status="ok" if result.get("ok") else "fail",
+        status=status,
         error_message=result.get("error"),
     )
     session.add(log_entry)
+
+    if status == "ok":
+        from app.services.billing_service import deduct_message
+        from app.services.billing_cache import invalidate_balance_cache
+        await deduct_message(session, ad.user_id)
+        await invalidate_balance_cache(ad.user_id)
+
     await session.commit()
 
     # Ошибка с флагом no_retry помечает группу, но не выбрасывает исключение.

@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_current_user_id, get_db
 from app.repositories.ad import AdRepository
-from app.services.billing_service import check_limit
 
 router = APIRouter(prefix="/api/ads", tags=["ads"])
 
@@ -39,10 +38,6 @@ async def create_ad(
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    allowed, reason = await check_limit(db, user_id, "create_ad")
-    if not allowed:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
-
     repo = AdRepository(db)
     ad = await repo.create(
         user_id=user_id,
