@@ -13,6 +13,7 @@
         {{ messenger_icon(group.messenger_type, size='h-3.5 w-3.5', show_label=false) }}
       </div>
       <div class="flex items-center gap-3 mt-0.5">
+        <span class="text-xs text-gray-400 font-mono">{{ group.group_external_id }}</span>
         <span class="text-xs text-gray-400">{{ stats.get('schedules_count', 0) }} распис.</span>
         {% if stats.get('send_attempts', 0) > 0 %}
         <span class="text-xs text-gray-400">{{ ((stats.get('send_success', 0) / stats.get('send_attempts', 1)) * 100)|round|int }}% успех</span>

@@ -116,6 +116,7 @@ services:
 volumes:
   pgdata:
   wa_sessions:
+  max_sessions:
 
 networks:
   default:

@@ -120,6 +120,7 @@ volumes:
   certbot-webroot:
   certbot-certs:
   wa_sessions:
+  max_sessions:
 
 networks:
   default:

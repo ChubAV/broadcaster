@@ -7,7 +7,7 @@
 <!-- Header -->
 <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
   <h1 class="text-lg lg:text-xl font-semibold text-gray-900">Группы</h1>
-  {% if tg_user_accounts or wa_accounts %}
+  {% if tg_user_accounts or wa_accounts or max_accounts %}
   <div class="flex items-center gap-2">
     {% for acc in tg_user_accounts %}
     <form method="post" action="/accounts/{{ acc.id }}/sync-groups">
@@ -17,6 +17,13 @@
     </form>
     {% endfor %}
     {% for acc in wa_accounts %}
+    <form method="post" action="/accounts/{{ acc.id }}/sync-groups">
+      <button type="submit" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
+        {{ messenger_icon(acc.type, size='h-4 w-4', show_label=false) }} Синхр.
+      </button>
+    </form>
+    {% endfor %}
+    {% for acc in max_accounts %}
     <form method="post" action="/accounts/{{ acc.id }}/sync-groups">
       <button type="submit" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
         {{ messenger_icon(acc.type, size='h-4 w-4', show_label=false) }} Синхр.
@@ -46,6 +53,7 @@
         <option value="">Все мессенджеры</option>
         <option value="tg_user" {{ 'selected' if filter_messenger_type == 'tg_user' }}>Telegram</option>
         <option value="wa" {{ 'selected' if filter_messenger_type == 'wa' }}>WhatsApp</option>
+        <option value="max" {{ 'selected' if filter_messenger_type == 'max' }}>MAX</option>
       </select>
       <select name="is_active" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
         <option value="">Все статусы</option>
@@ -92,6 +100,7 @@
           {{ messenger_icon(group.messenger_type, size='h-3.5 w-3.5 lg:h-4 lg:w-4', show_label=false) }}
         </div>
         <div class="flex items-center gap-3 mt-0.5">
+          <span class="text-xs lg:text-sm text-gray-400 font-mono">{{ group.group_external_id }}</span>
           <span class="text-xs lg:text-sm text-gray-400">{{ stats.get('schedules_count', 0) }} распис.</span>
           {% if stats.get('send_attempts', 0) > 0 %}
           <span class="text-xs lg:text-sm text-gray-400">{{ ((stats.get('send_success', 0) / stats.get('send_attempts', 1)) * 100)|round|int }}% успех ({{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }})</span>

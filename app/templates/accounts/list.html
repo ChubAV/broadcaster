@@ -16,6 +16,10 @@
       <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
       Подключить WhatsApp
     </a>
+    <a href="/accounts/connect/max" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
+      <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      Подключить MAX
+    </a>
   </div>
 </div>
 
@@ -37,6 +41,29 @@
       </span>
     </div>
     <p class="text-xs text-gray-500 mb-4">Загружаем группы из WhatsApp. Это может занять несколько минут.</p>
+    <div class="pt-3 border-t border-gray-100">
+      <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
+        <button type="submit" class="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">
+          {{ icon_delete(size='h-4 w-4') }}
+          <span class="hidden lg:inline">Удалить</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  {% elif account.status == 'syncing' and account.type == 'max' %}
+  {# Syncing MAX account — polls for status #}
+  <div id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status?layout=cards" hx-trigger="every 5s" hx-swap="outerHTML" class="bg-white rounded-lg border border-gray-200 p-5">
+    <div class="flex items-center gap-2 mb-3">
+      {{ messenger_icon('max', size='h-5 w-5', title='MAX', show_label=true) }}
+    </div>
+    <div class="mb-3">
+      <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+        {{ icon_spinner_small() }}
+        Синхронизация...
+      </span>
+    </div>
+    <p class="text-xs text-gray-500 mb-4">Загружаем группы из MAX. Это может занять несколько минут.</p>
     <div class="pt-3 border-t border-gray-100">
       <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
         <button type="submit" class="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">
@@ -73,6 +100,32 @@
     </div>
   </div>
 
+  {% elif account.status == 'sync_failed' and account.type == 'max' %}
+  {# Failed sync MAX account #}
+  <div class="bg-white rounded-lg border border-gray-200 p-5">
+    <div class="flex items-center gap-2 mb-3">
+      {{ messenger_icon('max', size='h-5 w-5', title='MAX', show_label=true) }}
+    </div>
+    <div class="mb-3">
+      <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">Ошибка синхронизации</span>
+    </div>
+    <p class="text-xs text-gray-500 mb-4">Создано {{ format_datetime_for_user(account.created_at, user, '%Y-%m-%d %H:%M') }}</p>
+    <div class="pt-3 border-t border-gray-100 flex items-center gap-3">
+      <form method="POST" action="/accounts/{{ account.id }}/retry-sync" class="inline">
+        <button type="submit" class="inline-flex items-center gap-1 text-sm text-amber-600 hover:text-amber-700 font-medium transition-colors">
+          {{ icon_refresh(size='h-4 w-4') }}
+          <span class="hidden lg:inline">Повторить</span>
+        </button>
+      </form>
+      <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
+        <button type="submit" class="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">
+          {{ icon_delete(size='h-4 w-4') }}
+          <span class="hidden lg:inline">Удалить</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
   {% else %}
   {# Normal account card #}
   {% set stats = account_stats.get(account.id, {}) %}
@@ -81,6 +134,7 @@
       <div class="flex items-center gap-2">
         {% if account.type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram', show_label=true) }}
         {% elif account.type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}
+        {% elif account.type == 'max' %}{{ messenger_icon('max', size='h-5 w-5', title='MAX', show_label=true) }}
         {% else %}<span class="text-sm text-gray-600 font-medium">{{ account.type }}</span>{% endif %}
       </div>
       <span class="{% if account.status == 'active' %}inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700{% elif account.status == 'disconnected' %}inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600{% else %}inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700{% endif %}">

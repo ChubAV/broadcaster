@@ -97,7 +97,7 @@ async def collect_due_schedules(
                 schedule_id=schedule.id,
             )
             # Populate WA-specific fields for Redis per-account queues
-            if account.type == "wa":
+            if account.type in ("wa", "max"):
                 group = await session.get(Group, group_id)
                 if group:
                     task.user_id = ad.user_id
