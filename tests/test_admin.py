@@ -190,6 +190,59 @@ async def test_admin_delete_user(client: AsyncClient, db_session):
 
 
 @pytest.mark.asyncio
+async def test_admin_toggle_unlimited(client: AsyncClient, db_session):
+    """Admin can toggle unlimited status for a user."""
+    await client.post("/api/auth/register", json={
+        "email": "admin@test.com",
+        "password": "adminpass123",
+        "name": "Admin",
+    })
+    resp = await client.post("/api/auth/login", json={
+        "email": "admin@test.com",
+        "password": "adminpass123",
+    })
+    admin_token = resp.json()["access_token"]
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+    await client.post("/api/auth/register", json={
+        "email": "user@test.com",
+        "password": "userpass123",
+        "name": "User",
+    })
+
+    from app.models.user import User
+    from app.models.message_balance import MessageBalance
+    from sqlalchemy import select
+    result = await db_session.execute(select(User).where(User.email == "user@test.com"))
+    target = result.scalar_one()
+
+    # Toggle on
+    resp = await client.post(
+        f"/admin/users/{target.id}/unlimited",
+        headers=admin_headers,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+    bal_result = await db_session.execute(
+        select(MessageBalance).where(MessageBalance.user_id == target.id)
+    )
+    bal = bal_result.scalar_one()
+    assert bal.is_unlimited is True
+
+    # Toggle off
+    resp = await client.post(
+        f"/admin/users/{target.id}/unlimited",
+        headers=admin_headers,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+
+    await db_session.refresh(bal)
+    assert bal.is_unlimited is False
+
+
+@pytest.mark.asyncio
 async def test_blocked_user_cannot_login(client: AsyncClient, db_session):
     """Blocked user gets rejected on login."""
     from app.models.user import User

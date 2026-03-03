@@ -28,14 +28,19 @@ async def get_balance(db: AsyncSession, user_id: int) -> int:
 
 
 async def check_balance(db: AsyncSession, user_id: int) -> tuple[bool, str]:
-    balance = await get_balance(db, user_id)
-    if balance <= 0:
+    bal = await get_or_create_balance(db, user_id)
+    if bal.is_unlimited:
+        return True, ""
+    if bal.balance <= 0:
         return False, "Баланс сообщений исчерпан. Пополните баланс для продолжения отправки."
     return True, ""
 
 
 async def deduct_message(db: AsyncSession, user_id: int) -> bool:
     """Atomically deduct 1 message. Returns True if deducted, False if insufficient."""
+    bal = await get_or_create_balance(db, user_id)
+    if bal.is_unlimited:
+        return True
     result = await db.execute(
         update(MessageBalance)
         .where(MessageBalance.user_id == user_id, MessageBalance.balance > 0)
@@ -129,6 +134,7 @@ async def get_balance_info(db: AsyncSession, user_id: int) -> dict:
     bal = await get_or_create_balance(db, user_id)
     return {
         "balance": bal.balance,
+        "is_unlimited": bal.is_unlimited,
         "free_balance_reset_at": bal.free_balance_reset_at.isoformat() if bal.free_balance_reset_at else None,
     }
 

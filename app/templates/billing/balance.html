@@ -7,15 +7,21 @@
 <!-- Current balance -->
 <div class="bg-white rounded-lg border border-gray-200 p-6 lg:p-8 mb-8">
   <div class="text-center">
+    {% if balance_info.is_unlimited %}
+    <div class="text-5xl font-bold text-amber-600 mb-2">Безлимит</div>
+    <div class="text-sm text-gray-500">безлимитная отправка сообщений</div>
+    {% else %}
     <div class="text-5xl font-bold text-indigo-600 mb-2">{{ balance_info.balance }}</div>
     <div class="text-sm text-gray-500">сообщений на балансе</div>
     {% if balance_info.free_balance_reset_at %}
     <div class="text-xs text-gray-400 mt-2">Последнее бесплатное начисление: {{ balance_info.free_balance_reset_at[:10] }}</div>
     {% endif %}
     <div class="text-xs text-gray-400 mt-1">Каждый месяц начисляется 10 бесплатных сообщений</div>
+    {% endif %}
   </div>
 </div>
 
+{% if not balance_info.is_unlimited %}
 <!-- Packages -->
 <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">Пополнить баланс</h2>
 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
@@ -33,6 +39,7 @@
   </div>
   {% endfor %}
 </div>
+{% endif %}
 
 <!-- Transaction history -->
 <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">История операций</h2>

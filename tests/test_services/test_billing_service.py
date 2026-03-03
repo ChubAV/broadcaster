@@ -122,6 +122,51 @@ async def test_get_balance_info(db_session):
 
 
 @pytest.mark.asyncio
+async def test_check_balance_unlimited(db_session):
+    """Unlimited user always passes balance check even with 0 balance."""
+    user = User(email="t@t.com", password_hash="h", name="T")
+    db_session.add(user)
+    await db_session.commit()
+    bal = await get_or_create_balance(db_session, user.id)
+    bal.is_unlimited = True
+    await db_session.commit()
+
+    allowed, reason = await check_balance(db_session, user.id)
+    assert allowed is True
+    assert reason == ""
+
+
+@pytest.mark.asyncio
+async def test_deduct_message_unlimited(db_session):
+    """Unlimited user: deduct returns True without changing balance."""
+    user = User(email="t@t.com", password_hash="h", name="T")
+    db_session.add(user)
+    await db_session.commit()
+    bal = await get_or_create_balance(db_session, user.id)
+    bal.is_unlimited = True
+    await db_session.commit()
+
+    result = await deduct_message(db_session, user.id)
+    assert result is True
+    # Balance unchanged (still 0)
+    assert await get_balance(db_session, user.id) == 0
+
+
+@pytest.mark.asyncio
+async def test_get_balance_info_unlimited(db_session):
+    """get_balance_info includes is_unlimited flag."""
+    user = User(email="t@t.com", password_hash="h", name="T")
+    db_session.add(user)
+    await db_session.commit()
+    bal = await get_or_create_balance(db_session, user.id)
+    bal.is_unlimited = True
+    await db_session.commit()
+
+    info = await get_balance_info(db_session, user.id)
+    assert info["is_unlimited"] is True
+
+
+@pytest.mark.asyncio
 async def test_get_transaction_history(db_session):
     user = User(email="t@t.com", password_hash="h", name="T")
     db_session.add(user)

@@ -23,7 +23,11 @@
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
       <div>
         <span class="text-gray-500">Баланс</span>
+        {% if balance_info.is_unlimited %}
+        <p class="text-amber-600 font-bold text-lg mt-0.5">Безлимит</p>
+        {% else %}
         <p class="text-indigo-600 font-bold text-lg mt-0.5">{{ balance_info.balance }}</p>
+        {% endif %}
       </div>
       <div>
         <span class="text-gray-500">Объявления</span>
@@ -85,6 +89,13 @@
   <div class="bg-white rounded-lg border border-gray-200 p-6">
     <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">Действия</h2>
     <div class="flex items-center gap-3">
+      <form method="post" action="/admin/users/{{ target_user.id }}/unlimited">
+        {% if balance_info.is_unlimited %}
+        <button type="submit" class="bg-amber-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-amber-700 transition-colors">Безлимит выкл</button>
+        {% else %}
+        <button type="submit" class="bg-white border border-amber-300 text-amber-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-amber-50 transition-colors">Безлимит вкл</button>
+        {% endif %}
+      </form>
       <form method="post" action="/admin/users/{{ target_user.id }}/block">
         {% if target_user.is_blocked %}
         <button type="submit" class="bg-white border border-gray-300 text-gray-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">Разблокировать</button>

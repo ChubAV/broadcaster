@@ -23,6 +23,7 @@ from app.repositories.user import UserRepository
 from app.services.billing_service import (
     get_balance,
     get_balance_info,
+    get_or_create_balance,
     add_messages,
 )
 from app.services.billing_cache import invalidate_balance_cache
@@ -103,8 +104,8 @@ async def admin_users(
 
     user_data = []
     for u in users:
-        balance = await get_balance(db, u.id)
-        user_data.append({"user": u, "balance": balance})
+        bal = await get_or_create_balance(db, u.id)
+        user_data.append({"user": u, "balance": bal.balance, "is_unlimited": bal.is_unlimited})
 
     return templates.TemplateResponse(
         "admin/users.html",
@@ -366,6 +367,27 @@ async def admin_add_balance(
         type="admin_adjustment",
         description=description or f"Пополнение администратором ({admin.email})",
     )
+    await db.commit()
+    await invalidate_balance_cache(user_id)
+
+    return RedirectResponse(
+        url=f"/admin/users/{user_id}", status_code=302
+    )
+
+
+@router.post("/users/{user_id}/unlimited")
+async def admin_toggle_unlimited(
+    request: Request,
+    user_id: int,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    target_user = await db.get(User, user_id)
+    if not target_user:
+        return RedirectResponse(url="/admin/users", status_code=302)
+
+    bal = await get_or_create_balance(db, user_id)
+    bal.is_unlimited = not bal.is_unlimited
     await db.commit()
     await invalidate_balance_cache(user_id)
 
