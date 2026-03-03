@@ -886,12 +886,20 @@ app.get('/api/sessions/:id/group-info/:jid', async (req, res) => {
         const metadata = await state.sock.groupMetadata(jid);
         const admins = (metadata.participants || [])
             .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
-            .map(p => ({
-                id: p.id,
-                name: p.notify || '',
-                phone: p.id.replace('@s.whatsapp.net', ''),
-                admin: p.admin,
-            }));
+            .map(p => {
+                let phone = null;
+                if (p.id.endsWith('@s.whatsapp.net')) {
+                    phone = p.id.replace('@s.whatsapp.net', '');
+                } else if (p.phoneNumber) {
+                    phone = p.phoneNumber;
+                }
+                return {
+                    id: p.id,
+                    name: p.notify || '',
+                    phone,
+                    admin: p.admin,
+                };
+            });
         return res.json({
             name: metadata.subject || jid,
             member_count: (metadata.participants || []).length,
