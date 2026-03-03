@@ -8,6 +8,8 @@ Usage:
     uv run python scripts/collect_group_info.py --apply            # write to DB
     uv run python scripts/collect_group_info.py --apply --force    # update existing
     uv run python scripts/collect_group_info.py --user-id 5        # only for user 5
+    uv run python scripts/collect_group_info.py --type wa          # only WhatsApp groups
+    uv run python scripts/collect_group_info.py --type tg_user     # only Telegram groups
 """
 
 import argparse
@@ -27,7 +29,7 @@ from app.repositories.group_info import GroupInfoRepository
 from app.services.messenger_factory import create_messenger
 
 
-async def main(apply: bool, force: bool, user_id: int | None = None) -> None:
+async def main(apply: bool, force: bool, user_id: int | None = None, messenger_type_filter: str | None = None) -> None:
     settings = get_settings()
     engine = get_engine(settings.database_url)
     session_factory = get_session_factory(engine)
@@ -48,6 +50,9 @@ async def main(apply: bool, force: bool, user_id: int | None = None) -> None:
         if user_id:
             query = query.where(Group.user_id == user_id)
             print(f"Filtering by user_id={user_id}")
+        if messenger_type_filter:
+            query = query.where(Group.messenger_type == messenger_type_filter)
+            print(f"Filtering by messenger_type={messenger_type_filter}")
         result = await session.execute(query)
         group_rows = list(result.all())
         print(f"Distinct groups in DB: {len(group_rows)}")
@@ -153,5 +158,6 @@ if __name__ == "__main__":
     parser.add_argument("--apply", action="store_true", help="Write to DB (default is dry-run)")
     parser.add_argument("--force", action="store_true", help="Update existing records")
     parser.add_argument("--user-id", type=int, default=None, help="Collect only for specific user")
+    parser.add_argument("--type", dest="messenger_type", default=None, help="Messenger type filter (e.g. wa, tg_user)")
     args = parser.parse_args()
-    asyncio.run(main(apply=args.apply, force=args.force, user_id=args.user_id))
+    asyncio.run(main(apply=args.apply, force=args.force, user_id=args.user_id, messenger_type_filter=args.messenger_type))
