@@ -4,7 +4,7 @@ SaaS-платформа для планирования и отправки ре
 
 ## Features
 
-- **Multi-messenger** -- Telegram userbot (Telethon) и WhatsApp (Baileys, чистый WebSocket)
+- **Multi-messenger** -- Telegram userbot (Telethon), WhatsApp (Baileys, чистый WebSocket) и MAX messenger (pymax worker)
 - **Управление объявлениями** -- создание, редактирование, загрузка изображений (S3/MinIO)
 - **Управление группами** -- подключение и синхронизация групп мессенджеров
 - **Планировщик** -- гибкое расписание по дням недели и времени с автоматическим расчётом следующего запуска
@@ -29,6 +29,7 @@ SaaS-платформа для планирования и отправки ре
 - **Jinja2** -- серверные HTML-шаблоны
 - **Docker Compose** -- оркестрация (dev / prod / monitoring стеки)
 - **WhatsApp Bridge** -- Node.js + Express + Baileys (чистый WebSocket, без Chromium)
+- **MAX Worker** -- отдельный Python/FastAPI worker на базе pymax для мессенджера MAX
 - **Telethon** -- Telegram userbot с QR-авторизацией
 - **S3/MinIO** -- хранилище изображений
 - **Prometheus + Grafana + Loki** -- мониторинг и логирование
@@ -49,6 +50,13 @@ SaaS-платформа для планирования и отправки ре
    SECRET_KEY=change-me-to-a-random-string
    TELEGRAM_API_ID=...
    TELEGRAM_API_HASH=...
+   WA_BRIDGE_URLS=["http://wa-bridge:3000"]
+   S3_ENDPOINT_URL=https://s3.your-provider.com
+   S3_ACCESS_KEY=your-access-key
+   S3_SECRET_KEY=your-secret-key
+   S3_BUCKET_NAME=broadcaster
+   S3_PUBLIC_URL=https://s3.your-provider.com/broadcaster
+   # см. .env.example для полного списка переменных (YooKassa, логирование и т.п.)
    ```
 
 3. Запустить все сервисы:
@@ -87,6 +95,15 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up
    DATABASE_URL=postgresql+asyncpg://broadcaster:broadcaster@localhost:5432/broadcaster
    REDIS_URL=redis://localhost:6379/0
    SECRET_KEY=dev-secret-key
+   TELEGRAM_API_ID=...
+   TELEGRAM_API_HASH=...
+   WA_BRIDGE_URLS=["http://wa-bridge:3000"]
+   S3_ENDPOINT_URL=https://s3.your-provider.com
+   S3_ACCESS_KEY=your-access-key
+   S3_SECRET_KEY=your-secret-key
+   S3_BUCKET_NAME=broadcaster
+   S3_PUBLIC_URL=https://s3.your-provider.com/broadcaster
+   # см. .env.example для полного списка переменных (YooKassa, логирование и т.п.)
    ```
 
 5. Применить миграции:
@@ -118,28 +135,38 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up
 
 | Command | Description |
 |---------|-------------|
-| `just run` | Dev-сервер с hot-reload |
-| `just test` | Запуск тестов |
-| `just test-cov` | Тесты с покрытием |
-| `just dev` | Docker dev-окружение |
-| `just down` | Остановить Docker-контейнеры |
+| `just run` | Dev-сервер (uvicorn, hot-reload) |
+| `just test` | Запуск тестов (pytest) |
+| `just test-cov` | Тесты с покрытием (pytest + coverage) |
+| `just dev` | Docker dev-окружение (web + workers) |
+| `just down` | Остановить dev Docker-окружение |
 | `just migrate "msg"` | Создать Alembic-миграцию |
 | `just upgrade` | Применить миграции |
-| `just worker` | Celery worker |
-| `just beat` | Celery beat |
-| `just celery` | Worker + beat вместе |
+| `just worker` | Локальный Celery worker |
+| `just beat` | Локальный Celery beat |
+| `just celery` | Worker + beat в одном процессе |
 | `just sync` | Синхронизировать uv-окружение |
-| `just add <pkg>` | Добавить зависимость |
-| `just prod-start` | Запустить prod |
-| `just prod-stop` | Остановить prod |
-| `just prod-deploy` | Деплой (build + deploy) |
-| `just prod-hard-deploy` | Деплой с --no-cache |
+| `just add <pkg>` | Добавить Python-зависимость через uv |
+| `just monitoring-start` | Запустить стек мониторинга |
+| `just monitoring-down` | Остановить стек мониторинга |
+| `just monitoring-restart` | Перезапустить стек мониторинга |
+| `just prod-start` | Запустить prod Docker-стек |
+| `just prod-stop` | Остановить prod и все WA/MAX воркеры |
+| `just prod-restart` | Перезапустить prod стек |
+| `just prod-hard-restart` | Полный рестарт prod (down + up) |
+| `just prod-cleanup-schedules [args]` | Очистка/диагностика расписаний в prod (`scripts/cleanup_schedules.py`) |
+| `just prod-deploy` | Мягкий деплой prod (build + up) |
+| `just prod-hard-deploy` | Жёсткий деплой prod (build --no-cache) |
+| `just prod-build` | Сборка prod-образов |
 | `just prod-logs [svc]` | Логи prod-сервисов |
 | `just wa-worker-build` | Собрать образ wa-worker |
 | `just wa-workers` | Список WA-контейнеров |
 | `just wa-workers-stop` | Остановить все WA-контейнеры |
-| `just monitoring-start` | Запустить стек мониторинга |
-| `just monitoring-down` | Остановить мониторинг |
+| `just max-worker-build` | Собрать образ max-worker |
+| `just max-workers` | Список MAX-контейнеров |
+| `just max-workers-stop` | Остановить все MAX-контейнеры |
+| `just collect-group-info [args]` | Сбор метаданных групп локально (`scripts/collect_group_info.py`) |
+| `just prod-collect-group-info [args]` | Сбор метаданных групп в prod |
 
 ## Project Structure
 
@@ -219,6 +246,10 @@ broadcaster/
 │   │   ├── celery_app.py      # Celery configuration
 │   │   └── tasks.py           # Schedule checker and send tasks
 │   └── templates/             # Jinja2 HTML templates (45 files)
+├── max_worker/                # Per-account MAX messenger worker (Python + FastAPI + pymax)
+│   ├── main.py
+│   ├── Dockerfile
+│   └── requirements.txt
 ├── wa_worker/                 # Per-account WhatsApp worker (Node.js + Baileys + Redis)
 │   ├── index.js               # Baileys + Redis queue consumer
 │   ├── Dockerfile
@@ -236,7 +267,8 @@ broadcaster/
 │   ├── nginx.conf.template    # HTTPS template
 │   └── nginx-http.conf.template
 ├── scripts/
-│   └── cleanup_schedules.py   # Schedule maintenance script
+│   ├── cleanup_schedules.py   # Schedule maintenance script
+│   └── collect_group_info.py  # Сбор и кэширование метаданных групп
 ├── tests/                     # pytest suite (56 files)
 ├── docker-compose.yml         # Base stack (web, celery, redis, db, flower)
 ├── docker-compose.dev.yml     # Dev overrides (hot-reload, debug)
@@ -258,6 +290,8 @@ broadcaster/
 - **db** -- PostgreSQL 16
 - **redis** -- Redis
 - **flower** -- Celery monitoring (port 5555)
+
+Отдельно от основного стека динамически поднимаются per-account контейнеры `wa-worker` и `max-worker`, которыми управляет приложение через Docker API и Redis-очереди.
 
 ### Production (`docker-compose.prod.yml`)
 Adds: **nginx** (80/443), **certbot** (Let's Encrypt SSL)
