@@ -4,15 +4,15 @@
 // publishes results, self-shuts down after idle timeout.
 // ============================================================
 
-const express = require('express');
-const { default: makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode');
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-const pino = require('pino');
-const Redis = require('ioredis');
-const os = require('os');
+import express from 'express';
+import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } from '@whiskeysockets/baileys';
+import qrcode from 'qrcode';
+import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
+import pino from 'pino';
+import Redis from 'ioredis';
+import os from 'os';
 
 // ---- 1. Config (env vars) ----
 
@@ -299,7 +299,7 @@ async function createSocket() {
             }
 
             // Unrecoverable errors
-            const unrecoverable = [DisconnectReason.loggedOut, 405, 403];
+            const unrecoverable = [DisconnectReason.loggedOut, DisconnectReason.forbidden, 405];
             if (unrecoverable.includes(statusCode)) {
                 sessionState.initializing = false;
                 clearTimeout(sessionState._readyTimeout);
@@ -888,13 +888,15 @@ app.get('/api/sessions/:id/group-info/:jid', async (req, res) => {
             .filter(p => p.admin === 'admin' || p.admin === 'superadmin')
             .map(p => {
                 let phone = null;
-                if (p.id.endsWith('@s.whatsapp.net')) {
+                // v7 LID: id may be LID (@lid), phone in phoneNumber field
+                if (p.phoneNumber) {
+                    phone = p.phoneNumber.replace(/@s\.whatsapp\.net$/, '');
+                } else if (p.id.endsWith('@s.whatsapp.net')) {
                     phone = p.id.replace('@s.whatsapp.net', '');
-                } else if (p.phoneNumber) {
-                    phone = p.phoneNumber;
                 }
                 return {
                     id: p.id,
+                    lid: p.lid || null,
                     name: p.notify || '',
                     phone,
                     admin: p.admin,
@@ -908,8 +910,11 @@ app.get('/api/sessions/:id/group-info/:jid', async (req, res) => {
                 subject: metadata.subject,
                 desc: metadata.desc,
                 owner: metadata.owner,
+                ownerPn: metadata.ownerPn || null,
+                addressingMode: metadata.addressingMode || null,
                 creation: metadata.creation,
                 size: metadata.size,
+                isCommunity: metadata.isCommunity || false,
             },
         });
     } catch (error) {
