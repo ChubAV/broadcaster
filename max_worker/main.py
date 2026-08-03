@@ -11,6 +11,7 @@ import os
 import random
 import signal
 import socket
+import sqlite3
 import sys
 import tempfile
 import time
@@ -25,9 +26,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from pymax import MaxClient, Photo
-from pymax.payloads import UserAgentPayload
-from pymax.static.enum import ChatType
+from pymax import ExtraConfig, Photo, WebClient
+from pymax.types.domain.enums import ChatType
 
 
 # ---- 1. Config (env vars) ----
@@ -48,6 +48,7 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 MAX_RECONNECT_ATTEMPTS = 5
 BLPOP_TIMEOUT = 5  # seconds — short so we can check idle timer frequently
 HEARTBEAT_INTERVAL_SEC = 30
+SESSION_NAME = "session.db"
 
 # Retry delays for failed task sends (seconds)
 RETRY_DELAYS = [15, 60, 180]
@@ -150,7 +151,7 @@ _send_lock = asyncio.Lock()
 
 class SessionState:
     def __init__(self):
-        self.client: MaxClient | None = None
+        self.client: WebClient | None = None
         self.qr_code: str | None = None
         self.is_connected: bool = False
         self.initializing: bool = False
@@ -176,9 +177,71 @@ def session_dir() -> Path:
     return Path(SESSIONS_DIR) / str(ACCOUNT_ID)
 
 
+def session_db_path() -> Path:
+    return session_dir() / SESSION_NAME
+
+
 def session_exists_on_disk() -> bool:
-    d = session_dir()
-    return d.exists() and any(d.iterdir())
+    """Return whether the account's PyMax session database exists.
+
+    Phone metadata and unrelated files are intentionally not session indicators.
+    """
+    return session_db_path().is_file()
+
+
+def _read_session_compatibility() -> tuple[bool, tuple[str, str] | None]:
+    """Read session metadata without modifying the mounted SQLite database.
+
+    The first result means a usable PyMax 2.x ``sessions`` row is present.  The
+    optional pair is a legacy 1.x ``auth`` credential pair that PyMax can promote
+    through its public ``ExtraConfig`` API.  Invalid files are simply treated as
+    unauthenticated so the normal QR flow remains available.
+    """
+    database = session_db_path()
+    if not database.is_file() or database.stat().st_size == 0:
+        return False, None
+
+    try:
+        connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
+        try:
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = ?", ("table",)
+                )
+            }
+            if "sessions" in tables:
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(sessions)")
+                }
+                if {"token", "device_id", "phone"} <= columns:
+                    row = connection.execute(
+                        "SELECT token, device_id FROM sessions "
+                        "WHERE token <> ? AND device_id <> ? LIMIT 1",
+                        ("", ""),
+                    ).fetchone()
+                    if row:
+                        return True, None
+            if "auth" in tables:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(auth)")}
+                if {"token", "device_id"} <= columns:
+                    row = connection.execute(
+                        "SELECT token, device_id FROM auth "
+                        "WHERE token <> ? AND device_id <> ? LIMIT 1",
+                        ("", ""),
+                    ).fetchone()
+                    if row:
+                        return False, (str(row[0]), str(row[1]))
+        finally:
+            connection.close()
+    except (OSError, sqlite3.Error):
+        pass
+    return False, None
+
+
+def has_reusable_session() -> bool:
+    v2_session, legacy_credentials = _read_session_compatibility()
+    return v2_session or legacy_credentials is not None
 
 
 def save_phone_to_disk(phone: str):
@@ -232,40 +295,17 @@ async def start_group_sync():
                 ACCOUNT_ID, attempt + 1, MAX_ATTEMPTS,
             )
 
-            # Fetch all chats and filter for groups (deduplicate by id)
-            groups = {}
-            chats = session.client.chats or []
-            for chat in chats:
-                if getattr(chat, "type", None) == ChatType.CHAT or getattr(chat, "chat_type", None) == "CHAT":
-                    chat_id = str(getattr(chat, "chat_id", getattr(chat, "id", "")))
-                    if chat_id not in groups:
-                        groups[chat_id] = {
-                            "id": chat_id,
-                            "name": getattr(chat, "title", getattr(chat, "name", "")),
-                        }
-
-            # If client supports paginated fetch, try to get more
-            try:
-                marker = None
-                while True:
-                    result = await session.client.fetch_chats(marker=marker)
-                    if not result:
-                        break
-                    for chat in result:
-                        if getattr(chat, "type", None) == ChatType.CHAT or getattr(chat, "chat_type", None) == "CHAT":
-                            chat_id = str(getattr(chat, "chat_id", getattr(chat, "id", "")))
-                            if chat_id not in groups:
-                                groups[chat_id] = {
-                                    "id": chat_id,
-                                    "name": getattr(chat, "title", getattr(chat, "name", "")),
-                                }
-                    # Use the oldest chat as marker for next page
-                    if result:
-                        marker = result[-1]
-                    else:
-                        break
-            except Exception as e:
-                log.debug("paginated_fetch_not_available: %s", e)
+            groups = _group_records(session.client.chats or [])
+            marker: int | None = None
+            while True:
+                result = await session.client.fetch_chats(marker=marker)
+                if not result:
+                    break
+                groups.update(_group_records(result))
+                next_marker = _next_chat_marker(result, marker)
+                if next_marker is None:
+                    break
+                marker = next_marker
 
             groups = list(groups.values())
 
@@ -291,8 +331,49 @@ async def start_group_sync():
 
 # ---- 8. Create pymax client ----
 
-async def create_client(phone: str) -> SessionState:
-    """Create a MaxClient, wire up event handlers, and start it."""
+class WorkerQrProvider:
+    """Capture a QR link for the authenticated worker API without logging it."""
+
+    def __init__(self, state: SessionState):
+        self.state = state
+
+    async def show_qr(self, qr_url: str) -> None:
+        self.state.qr_code = qr_url
+        log.info("qr_captured account_id=%s", ACCOUNT_ID)
+
+
+def _group_records(chats) -> dict[str, dict]:
+    groups: dict[str, dict] = {}
+    for chat in chats:
+        if getattr(chat, "type", None) != ChatType.CHAT:
+            continue
+        chat_id = str(getattr(chat, "id", ""))
+        if chat_id:
+            groups[chat_id] = {"id": chat_id, "name": str(getattr(chat, "title", ""))}
+    return groups
+
+
+def _next_chat_marker(chats, marker: int | None) -> int | None:
+    """Return the next strictly decreasing chat-page marker, if one exists."""
+    timestamps: list[int] = []
+    for chat in chats:
+        try:
+            timestamp = int(getattr(chat, "last_event_time", None))
+        except (TypeError, ValueError):
+            continue
+        if timestamp > 0:
+            timestamps.append(timestamp)
+
+    if not timestamps:
+        return None
+    next_marker = min(timestamps) - 1
+    if next_marker < 0 or (marker is not None and next_marker >= marker):
+        return None
+    return next_marker
+
+
+async def create_client(phone: str = "") -> SessionState:
+    """Create a WebClient, wire up event handlers, and start it."""
     global session
 
     work_dir = str(session_dir())
@@ -302,14 +383,19 @@ async def create_client(phone: str) -> SessionState:
     state.phone = phone
     state.initializing = True
 
-    # Persist phone for container restarts (when PHONE env var is not set)
-    save_phone_to_disk(phone)
+    # Phone remains Broadcaster metadata; QR-authenticated WebClient does not use it.
+    if phone:
+        save_phone_to_disk(phone)
 
-    client = MaxClient(
-        phone=phone,
+    _, legacy_credentials = _read_session_compatibility()
+    config_kwargs = {"reconnect": True, "log_level": LOG_LEVEL}
+    if legacy_credentials:
+        config_kwargs.update(token=legacy_credentials[0], device_id=legacy_credentials[1])
+    client = WebClient(
+        session_name=SESSION_NAME,
         work_dir=work_dir,
-        headers=UserAgentPayload(device_type="WEB"),
-        reconnect=True,
+        extra_config=ExtraConfig(**config_kwargs),
+        qr_provider=WorkerQrProvider(state),
     )
     state.client = client
 
@@ -320,16 +406,8 @@ async def create_client(phone: str) -> SessionState:
         _lg.handlers.clear()
         _lg.propagate = True
 
-    # Override _print_qr to capture QR link for web UI
-    # (pymax prints QR to terminal by default — we intercept it)
-    def capture_qr(qr_link: str):
-        state.qr_code = qr_link
-        log.info("qr_captured account_id=%s", ACCOUNT_ID)
-
-    client._print_qr = capture_qr
-
-    @client.on_start
-    async def on_start():
+    @client.on_start()
+    async def on_start(connected_client):
         """Called when client is fully connected and ready."""
         state.is_connected = True
         state.initializing = False
@@ -342,6 +420,7 @@ async def create_client(phone: str) -> SessionState:
 
         # Start background group sync
         if not state.sync_state or state.sync_state == "failed":
+            state.sync_state = "ready"
             asyncio.create_task(_safe_group_sync())
 
     session = state
@@ -352,8 +431,8 @@ async def create_client(phone: str) -> SessionState:
     return state
 
 
-async def _run_client(client: MaxClient, state: SessionState):
-    """Run the MaxClient.start() in background, handle errors."""
+async def _run_client(client: WebClient, state: SessionState):
+    """Run WebClient.start() in the background and capture startup failures."""
     try:
         await client.start()
     except Exception as e:
@@ -749,7 +828,7 @@ async def lifespan(app: FastAPI):
 
     # Auto-load session if it exists on disk
     phone = PHONE or load_phone_from_disk()
-    if session_exists_on_disk() and phone:
+    if has_reusable_session():
         log.info("session_autoloading account_id=%s", ACCOUNT_ID)
         try:
             await create_client(phone)
@@ -891,17 +970,7 @@ async def get_groups(session_id: str):
 
     # Try to fetch groups on-demand (deduplicate by id)
     try:
-        groups = {}
-        chats = session.client.chats or []
-        for chat in chats:
-            if getattr(chat, "type", None) == ChatType.CHAT or getattr(chat, "chat_type", None) == "CHAT":
-                chat_id = str(getattr(chat, "chat_id", getattr(chat, "id", "")))
-                if chat_id not in groups:
-                    groups[chat_id] = {
-                        "id": chat_id,
-                        "name": getattr(chat, "title", getattr(chat, "name", "")),
-                    }
-        return list(groups.values())
+        return list(_group_records(session.client.chats or []).values())
     except Exception as e:
         log.error("groups_error account_id=%s error=%s", ACCOUNT_ID, str(e))
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -916,10 +985,10 @@ async def get_sync_status(session_id: str):
         )
 
     if not session:
-        if session_exists_on_disk() and PHONE:
+        if has_reusable_session():
             log.info("session_reloading account_id=%s", ACCOUNT_ID)
             try:
-                state = await create_client(PHONE)
+                state = await create_client(PHONE or load_phone_from_disk())
                 # Wait briefly for connection
                 try:
                     await asyncio.wait_for(state.ready_event.wait(), timeout=10.0)
