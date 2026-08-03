@@ -54,6 +54,46 @@ async def test_dispatch_wa_to_redis_queues():
     assert len(sadd_calls) == 2  # once for account 5, once for account 7
 
     mock_pipe.execute.assert_called_once()
+
+
+def test_manage_max_containers_uses_heartbeat_aware_assurance_for_pending_work():
+    from app.worker.tasks import manage_max_containers
+
+    redis = MagicMock()
+    redis.smembers.return_value = {"7"}
+    redis.llen.return_value = 1
+    settings = MagicMock(redis_url="redis://localhost:6379/0")
+
+    with patch("app.worker.tasks.get_settings", return_value=settings), patch(
+        "redis.from_url", return_value=redis
+    ), patch(
+        "app.services.max_container_manager.ensure_container_for_pending_work",
+        return_value="http://max-worker-7:3000",
+    ) as ensure, patch("app.services.max_container_manager.cleanup_exited_containers"):
+        manage_max_containers()
+
+    ensure.assert_called_once_with(7, redis)
+    redis.set.assert_called_once_with("max:endpoint:7", "http://max-worker-7:3000", ex=420)
+
+
+def test_manage_max_containers_does_not_restart_empty_queue():
+    from app.worker.tasks import manage_max_containers
+
+    redis = MagicMock()
+    redis.smembers.return_value = {"7"}
+    redis.llen.return_value = 0
+    settings = MagicMock(redis_url="redis://localhost:6379/0")
+
+    with patch("app.worker.tasks.get_settings", return_value=settings), patch(
+        "redis.from_url", return_value=redis
+    ), patch("app.services.max_container_manager.ensure_container_for_pending_work") as ensure, patch(
+        "app.services.max_container_manager.cleanup_exited_containers"
+    ):
+        manage_max_containers()
+
+    ensure.assert_not_called()
+    redis.srem.assert_called_once_with("max:active_accounts", 7)
+    redis.delete.assert_called_once_with("max:endpoint:7")
     mock_redis.close.assert_called_once()
 
 
