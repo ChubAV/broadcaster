@@ -513,6 +513,8 @@ def manage_max_containers():
                 if endpoint:
                     r.set(f"max:endpoint:{account_id}", endpoint, ex=420)
                     logger.info("container_ensured", account_id=account_id, queue_len=queue_len)
+                else:
+                    r.delete(f"max:endpoint:{account_id}")
             else:
                 r.srem("max:active_accounts", account_id)
                 r.delete(f"max:endpoint:{account_id}")
