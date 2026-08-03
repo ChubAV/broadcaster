@@ -98,6 +98,24 @@ def test_manage_max_containers_does_not_restart_empty_queue():
     redis.close.assert_called_once()
 
 
+def test_manage_max_containers_clears_endpoint_when_replacement_is_unsafe():
+    from app.worker.tasks import manage_max_containers
+
+    redis = MagicMock()
+    redis.smembers.return_value = {"7"}
+    redis.llen.return_value = 1
+    settings = MagicMock(redis_url="redis://localhost:6379/0")
+
+    with patch("app.worker.tasks.get_settings", return_value=settings), patch(
+        "redis.from_url", return_value=redis
+    ), patch(
+        "app.services.max_container_manager.ensure_container_for_pending_work", return_value=None
+    ), patch("app.services.max_container_manager.cleanup_exited_containers"):
+        manage_max_containers()
+
+    redis.delete.assert_called_once_with("max:endpoint:7")
+
+
 @pytest.mark.asyncio
 async def test_dispatch_telegram_to_telegram_queue():
     """Telegram tasks are dispatched to the 'telegram' queue."""
