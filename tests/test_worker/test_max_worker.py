@@ -7,7 +7,7 @@ import sqlite3
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -186,6 +186,87 @@ async def test_graceful_shutdown_closes_client_and_keeps_session(worker, monkeyp
     assert database.exists()
     assert worker.redis_cmd is None
     assert worker.redis_blpop is None
+
+
+@pytest.mark.asyncio
+async def test_connect_redis_gives_blpop_a_socket_deadline_after_its_poll(worker, monkeypatch):
+    command_client = SimpleNamespace(ping=AsyncMock())
+    blocking_client = SimpleNamespace(ping=AsyncMock())
+    from_url = MagicMock(side_effect=[command_client, blocking_client])
+    monkeypatch.setattr(worker.aioredis, "from_url", from_url)
+
+    await worker.connect_redis()
+
+    command_options = from_url.call_args_list[0].kwargs
+    blocking_options = from_url.call_args_list[1].kwargs
+    assert command_options["socket_timeout"] == worker.REDIS_COMMAND_TIMEOUT
+    assert blocking_options["socket_timeout"] > worker.BLPOP_TIMEOUT
+    assert blocking_options["socket_timeout"] == worker.BLPOP_SOCKET_TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_consumer_idle_blpop_does_not_take_failure_retry_sleep(worker, monkeypatch):
+    async def idle_once(*args, **kwargs):
+        worker.consumer_running = False
+        return None
+
+    worker.redis_blpop = SimpleNamespace(blpop=idle_once)
+    worker.IDLE_SHUTDOWN_SEC = 0
+    sleep = AsyncMock()
+    monkeypatch.setattr(worker.asyncio, "sleep", sleep)
+
+    await worker.start_consumer()
+
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_writer_sets_expiry(worker):
+    worker.redis_cmd = SimpleNamespace(set=AsyncMock())
+
+    await worker.write_heartbeat()
+
+    worker.redis_cmd.set.assert_awaited_once()
+    key, timestamp = worker.redis_cmd.set.await_args.args
+    assert key == worker.HEARTBEAT_KEY
+    assert timestamp.isdigit()
+    assert worker.redis_cmd.set.await_args.kwargs == {"ex": worker.HEARTBEAT_TTL_SEC}
+
+
+@pytest.mark.asyncio
+async def test_graceful_shutdown_abandons_hanging_client_close_and_exits(worker, monkeypatch):
+    async def never_finishes():
+        await asyncio.Event().wait()
+
+    client = SimpleNamespace(close=never_finishes)
+    worker.session = SimpleNamespace(client=client, intentional_close=False)
+    worker.redis_cmd = SimpleNamespace(delete=AsyncMock(), aclose=AsyncMock())
+    worker.redis_blpop = SimpleNamespace(aclose=AsyncMock())
+    worker.CLIENT_CLOSE_TIMEOUT_SEC = 0.01
+    exit_process = MagicMock()
+    monkeypatch.setattr(worker.os, "_exit", exit_process)
+
+    await worker.graceful_shutdown("test_hanging_close")
+
+    assert worker.session is None
+    assert worker.redis_cmd is None
+    assert worker.redis_blpop is None
+    exit_process.assert_called_once_with(0)
+
+
+@pytest.mark.parametrize(
+    ("raw_url", "expected"),
+    [
+        ("redis://user:password@redis.internal:6380/2", "redis://redis.internal:6380/2"),
+        ("not a redis url", worker_safe_fallback := "<redacted redis url>"),
+    ],
+)
+def test_redacts_redis_url_credentials_and_fails_closed(worker, raw_url, expected):
+    rendered = worker.render_redis_url_for_log(raw_url)
+
+    assert rendered == expected
+    assert "user" not in rendered
+    assert "password" not in rendered
 
 
 def group(chat_id, title, timestamp, chat_type=None):
