@@ -18,6 +18,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import redis.asyncio as aioredis
@@ -47,7 +48,11 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 MAX_RECONNECT_ATTEMPTS = 5
 BLPOP_TIMEOUT = 5  # seconds — short so we can check idle timer frequently
+REDIS_COMMAND_TIMEOUT = BLPOP_TIMEOUT
+BLPOP_SOCKET_TIMEOUT = BLPOP_TIMEOUT + 1
 HEARTBEAT_INTERVAL_SEC = 30
+HEARTBEAT_TTL_SEC = HEARTBEAT_INTERVAL_SEC * 3
+CLIENT_CLOSE_TIMEOUT_SEC = 5
 SESSION_NAME = "session.db"
 
 # Retry delays for failed task sends (seconds)
@@ -100,10 +105,30 @@ redis_cmd: aioredis.Redis | None = None  # Command connection — for SET, RPUSH
 redis_blpop: aioredis.Redis | None = None  # Blocking connection — dedicated to BLPOP
 
 
+def render_redis_url_for_log(redis_url: str) -> str:
+    """Preserve a Redis endpoint for diagnostics without exposing credentials."""
+    fallback = "<redacted redis url>"
+    try:
+        parsed = urlsplit(redis_url)
+        if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+            return fallback
+        host = parsed.hostname
+        if ":" in host:
+            host = f"[{host}]"
+        netloc = f"{host}:{parsed.port}" if parsed.port is not None else host
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, ""))
+    except (TypeError, ValueError):
+        return fallback
+
+
 async def connect_redis():
     global redis_cmd, redis_blpop
-    redis_cmd = aioredis.from_url(REDIS_URL, decode_responses=True)
-    redis_blpop = aioredis.from_url(REDIS_URL, decode_responses=True)
+    redis_cmd = aioredis.from_url(
+        REDIS_URL, decode_responses=True, socket_timeout=REDIS_COMMAND_TIMEOUT
+    )
+    redis_blpop = aioredis.from_url(
+        REDIS_URL, decode_responses=True, socket_timeout=BLPOP_SOCKET_TIMEOUT
+    )
     # Verify connections
     await redis_cmd.ping()
     await redis_blpop.ping()
@@ -721,7 +746,7 @@ async def start_consumer():
 
             # Update heartbeat after each task
             try:
-                await redis_cmd.set(HEARTBEAT_KEY, str(int(time.time() * 1000)))
+                await write_heartbeat()
             except Exception:
                 pass
 
@@ -744,12 +769,21 @@ async def start_consumer():
 
 # ---- 14. Heartbeat ----
 
+async def write_heartbeat():
+    """Refresh the worker liveness record before its authoritative TTL expires."""
+    if redis_cmd:
+        await redis_cmd.set(
+            HEARTBEAT_KEY,
+            str(int(time.time() * 1000)),
+            ex=HEARTBEAT_TTL_SEC,
+        )
+
+
 async def heartbeat_loop():
     """Send heartbeat to Redis every HEARTBEAT_INTERVAL_SEC."""
     while not shutting_down:
         try:
-            if redis_cmd:
-                await redis_cmd.set(HEARTBEAT_KEY, str(int(time.time() * 1000)))
+            await write_heartbeat()
         except Exception as e:
             log.error("heartbeat_error error=%s", str(e))
         await asyncio.sleep(HEARTBEAT_INTERVAL_SEC)
@@ -775,13 +809,25 @@ async def graceful_shutdown(reason: str = "unknown"):
     except Exception as e:
         log.error("redis_cleanup_error account_id=%s error=%s", ACCOUNT_ID, str(e))
 
-    # Close pymax client (keep session files on disk)
-    if session and session.client:
-        session.intentional_close = True
-        try:
-            await session.client.close()
-        except Exception as e:
-            log.error("client_close_error account_id=%s error=%s", ACCOUNT_ID, str(e))
+    # Close PyMax client within a fixed budget; keep session files on disk.
+    current_session = session
+    try:
+        if current_session and current_session.client:
+            current_session.intentional_close = True
+            try:
+                await asyncio.wait_for(
+                    current_session.client.close(), timeout=CLIENT_CLOSE_TIMEOUT_SEC
+                )
+                log.info("client_close_complete account_id=%s", ACCOUNT_ID)
+            except TimeoutError:
+                log.warning(
+                    "client_close_timeout account_id=%s timeout_sec=%s",
+                    ACCOUNT_ID,
+                    CLIENT_CLOSE_TIMEOUT_SEC,
+                )
+            except Exception as e:
+                log.error("client_close_error account_id=%s error=%s", ACCOUNT_ID, str(e))
+    finally:
         session = None
 
     # Close Redis connections
@@ -821,7 +867,7 @@ async def lifespan(app: FastAPI):
     log.info("endpoint_registered endpoint=%s key=%s", endpoint, ENDPOINT_KEY)
 
     # Set initial heartbeat
-    await redis_cmd.set(HEARTBEAT_KEY, str(int(time.time() * 1000)))
+    await write_heartbeat()
 
     # Start heartbeat loop
     heartbeat_task = asyncio.create_task(heartbeat_loop())
@@ -1084,7 +1130,7 @@ _start_time = time.time()
 if __name__ == "__main__":
     log.info(
         "worker_starting account_id=%s port=%d redis_url=%s idle_shutdown_sec=%d",
-        ACCOUNT_ID, PORT, REDIS_URL, IDLE_SHUTDOWN_SEC,
+        ACCOUNT_ID, PORT, render_redis_url_for_log(REDIS_URL), IDLE_SHUTDOWN_SEC,
     )
     uvicorn.run(
         app,
