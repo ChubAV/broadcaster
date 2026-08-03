@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-08-03)
 Phase: None of 6 active (all retrospective baseline phases complete)
 Plan: None — no historical plan artifacts are being inferred
 Status: Baseline complete; awaiting user-defined work and a new milestone scope
-Last activity: 2026-08-03 - Completed quick task 260803-l8h: обновить версию Baileys до v7.0.0-rc14
+Last activity: 2026-08-03 - Completed quick task 260803-pb6: переделать работу с MAX под последнюю версию библиотеки maxapi-python
 
 Progress: [██████████] 100% baseline requirement coverage
 
@@ -65,6 +65,7 @@ No execution blocker. New work requires the user to define a milestone and activ
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260803-l8h | обновить версию Baileys до v7.0.0-rc14 | 2026-08-03 | c9c2721 | [260803-l8h-baileys-v7-0-0-rc14](./quick/260803-l8h-baileys-v7-0-0-rc14/) |
+| 260803-pb6 | переделать работу с MAX под последнюю версию библиотеки maxapi-python | 2026-08-03 | 0879a75 | [260803-pb6-max-maxapi-python](./quick/260803-pb6-max-maxapi-python/) |
 
 ## Deferred Items
 
