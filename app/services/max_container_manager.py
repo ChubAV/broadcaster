@@ -17,6 +17,7 @@ NETWORK_NAME = "broadcaster"
 SESSIONS_VOLUME = "broadcaster_max_sessions"
 MEMORY_LIMIT = "256m"
 DEFAULT_PORT = 3000
+MAX_HEARTBEAT_STALE_SEC = 90
 
 
 def _get_docker_client():
@@ -150,6 +151,40 @@ def get_container_endpoint(account_id: int) -> str | None:
         return None
     except NotFound:
         return None
+
+
+def _has_fresh_heartbeat(heartbeat: object) -> bool:
+    """Accept only recent worker heartbeat timestamps in milliseconds."""
+    try:
+        heartbeat_ms = int(heartbeat)
+    except (TypeError, ValueError):
+        return False
+
+    age_ms = int(time.time() * 1000) - heartbeat_ms
+    return 0 <= age_ms <= MAX_HEARTBEAT_STALE_SEC * 1000
+
+
+def ensure_container_for_pending_work(account_id: int, redis_client) -> str | None:
+    """Return a live worker endpoint, replacing a heartbeat-dead running worker."""
+    client = _get_docker_client()
+    name = get_container_name(account_id)
+    try:
+        container = client.containers.get(name)
+    except NotFound:
+        return start_container(account_id)
+
+    if container.status != "running":
+        return start_container(account_id)
+
+    heartbeat = redis_client.get(f"max:heartbeat:{account_id}")
+    if _has_fresh_heartbeat(heartbeat):
+        return _container_endpoint(name)
+
+    logger.warning("container_heartbeat_stale", account_id=account_id)
+    if not stop_container(account_id):
+        logger.error("container_replacement_aborted", account_id=account_id)
+        return None
+    return start_container(account_id)
 
 
 def _container_endpoint(container_name: str) -> str:

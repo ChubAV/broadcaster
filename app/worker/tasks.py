@@ -493,7 +493,7 @@ def manage_max_containers():
     """Check Redis queues and start/cleanup max-worker containers."""
     import redis as redis_lib
     from app.services.max_container_manager import (
-        start_container,
+        ensure_container_for_pending_work,
         cleanup_exited_containers,
     )
 
@@ -509,7 +509,7 @@ def manage_max_containers():
             queue_len = r.llen(queue_key)
 
             if queue_len > 0:
-                endpoint = start_container(account_id)
+                endpoint = ensure_container_for_pending_work(account_id, r)
                 if endpoint:
                     r.set(f"max:endpoint:{account_id}", endpoint, ex=420)
                     logger.info("container_ensured", account_id=account_id, queue_len=queue_len)

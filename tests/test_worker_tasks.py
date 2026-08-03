@@ -54,6 +54,7 @@ async def test_dispatch_wa_to_redis_queues():
     assert len(sadd_calls) == 2  # once for account 5, once for account 7
 
     mock_pipe.execute.assert_called_once()
+    mock_redis.close.assert_called_once()
 
 
 def test_manage_max_containers_uses_heartbeat_aware_assurance_for_pending_work():
@@ -94,7 +95,7 @@ def test_manage_max_containers_does_not_restart_empty_queue():
     ensure.assert_not_called()
     redis.srem.assert_called_once_with("max:active_accounts", 7)
     redis.delete.assert_called_once_with("max:endpoint:7")
-    mock_redis.close.assert_called_once()
+    redis.close.assert_called_once()
 
 
 @pytest.mark.asyncio
