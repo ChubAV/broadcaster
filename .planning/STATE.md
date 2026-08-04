@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-08-03)
 Phase: None of 6 active (all retrospective baseline phases complete)
 Plan: None — no historical plan artifacts are being inferred
 Status: Baseline complete; awaiting user-defined work and a new milestone scope
-Last activity: 2026-08-03 - Completed quick task 260803-rqt: Исправить зависание MAX worker: Redis BLPOP timeout, корректный shutdown, heartbeat health-check контейнера и маскирование REDIS_URL
+Last activity: 2026-08-04 - Completed quick task 260804-8wh: исправить проблемы контейнеров MAX: ложные Redis BLPOP timeout, падение синхронизации групп на CONTACT без contactId и утечку Redis credentials в логах
 
 Progress: [██████████] 100% baseline requirement coverage
 
@@ -67,6 +67,7 @@ No execution blocker. New work requires the user to define a milestone and activ
 | 260803-l8h | обновить версию Baileys до v7.0.0-rc14 | 2026-08-03 | c9c2721 | [260803-l8h-baileys-v7-0-0-rc14](./quick/260803-l8h-baileys-v7-0-0-rc14/) |
 | 260803-pb6 | переделать работу с MAX под последнюю версию библиотеки maxapi-python | 2026-08-03 | 0879a75 | [260803-pb6-max-maxapi-python](./quick/260803-pb6-max-maxapi-python/) |
 | 260803-rqt | Исправить зависание MAX worker: Redis BLPOP timeout, корректный shutdown, heartbeat health-check контейнера и маскирование REDIS_URL | 2026-08-03 | 3f3b175 | [260803-rqt-max-worker-redis-blpop-timeout-shutdown-](./quick/260803-rqt-max-worker-redis-blpop-timeout-shutdown-/) |
+| 260804-8wh | исправить проблемы контейнеров MAX: ложные Redis BLPOP timeout, падение синхронизации групп на CONTACT без contactId и утечку Redis credentials в логах | 2026-08-04 | 61c4121 | [260804-8wh-max-redis-blpop-timeout-contact-contacti](./quick/260804-8wh-max-redis-blpop-timeout-contact-contacti/) |
 
 ## Deferred Items
 
