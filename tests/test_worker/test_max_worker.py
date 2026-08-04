@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import inspect
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,35 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+
+
+def incomplete_contact_chat_payload(*, contact_id: int | None = None) -> dict:
+    attachment = {"_type": "CONTACT"}
+    if contact_id is not None:
+        attachment["contactId"] = contact_id
+    return {
+        "id": 1,
+        "type": "CHAT",
+        "status": "ACTIVE",
+        "owner": 2,
+        "title": "CONTACT group",
+        "lastEventTime": 100,
+        "lastMessage": {
+            "id": 9,
+            "time": 100,
+            "type": "USER",
+            "attaches": [attachment],
+        },
+    }
+
+
+def incomplete_contact_login_payload() -> dict:
+    return {
+        "profile": {"contact": {"id": 42}},
+        "chats": [incomplete_contact_chat_payload()],
+        "messages": {},
+        "contacts": [],
+    }
 
 
 class FakeExtraConfig:
@@ -90,6 +120,60 @@ def test_pymax_2_3_1_contract():
         assert symbol is not None
     parameters = inspect.signature(WebClient).parameters
     assert {"session_name", "work_dir", "extra_config", "qr_provider"} <= set(parameters)
+
+
+def test_unmodified_pymax_rejects_contact_without_contact_id():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from pymax.types.domain.chat import Chat; "
+            "Chat.model_validate({'id': 1, 'type': 'CHAT', 'status': 'ACTIVE', "
+            "'owner': 2, 'lastMessage': {'id': 9, 'time': 100, 'type': 'USER', "
+            "'attaches': [{'_type': 'CONTACT'}]}})",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "contactId" in result.stderr
+
+
+def test_contact_compatibility_accepts_raw_chat_and_login_payloads_idempotently():
+    from pymax.types.domain.attachments import ContactAttachment
+    from pymax.types.domain.chat import Chat
+    from pymax.types.domain.login import LoginResponse
+
+    from max_worker.pymax_compat import apply_contact_attachment_compatibility
+
+    assert apply_contact_attachment_compatibility() is True
+    assert apply_contact_attachment_compatibility() is False
+
+    chat = Chat.model_validate(incomplete_contact_chat_payload())
+    login = LoginResponse.model_validate(incomplete_contact_login_payload())
+
+    assert isinstance(chat.last_message.attaches[0], ContactAttachment)
+    assert chat.last_message.attaches[0].contact_id is None
+    assert login.chats[0].last_message.attaches[0].contact_id is None
+
+
+def test_contact_compatibility_preserves_ids_and_other_attachment_validation():
+    from pydantic import ValidationError
+    from pymax.types.domain.chat import Chat
+
+    from max_worker.pymax_compat import apply_contact_attachment_compatibility
+
+    apply_contact_attachment_compatibility()
+    identified_contact = Chat.model_validate(incomplete_contact_chat_payload(contact_id=7))
+
+    assert identified_contact.last_message.attaches[0].contact_id == 7
+
+    malformed_photo = incomplete_contact_chat_payload()
+    malformed_photo["lastMessage"]["attaches"] = [{"_type": "PHOTO"}]
+    with pytest.raises(ValidationError):
+        Chat.model_validate(malformed_photo)
 
 
 @pytest.mark.asyncio
@@ -295,6 +379,25 @@ async def test_group_sync_merges_cache_and_paginated_groups(worker, monkeypatch)
     assert state.groups == [{"id": "1", "name": "Duplicate"}, {"id": "2", "name": "Paged"}]
     assert client.fetch_chats.await_args_list[0].kwargs == {"marker": None}
     assert client.fetch_chats.await_args_list[1].kwargs == {"marker": 599}
+
+
+@pytest.mark.asyncio
+async def test_group_sync_accepts_pymax_chat_with_incomplete_contact(worker, monkeypatch):
+    from pymax.types.domain.chat import Chat
+
+    clients = install_fake_client(monkeypatch, worker)
+    state = await worker.create_client("")
+    client = clients[0]
+    state.is_connected = True
+    contact_chat = Chat.model_validate(incomplete_contact_chat_payload())
+    client.chats = [contact_chat]
+    client.fetch_chats.side_effect = [[contact_chat], []]
+    monkeypatch.setattr(worker.asyncio, "sleep", AsyncMock())
+
+    await worker.start_group_sync()
+
+    assert state.sync_state == "ready"
+    assert state.groups == [{"id": "1", "name": "CONTACT group"}]
 
 
 @pytest.mark.asyncio
