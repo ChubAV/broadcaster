@@ -368,7 +368,7 @@ async def test_health_and_startup_diagnostics_identify_build_without_redis_crede
     rendered = " ".join(str(value) for call in log_info.call_args_list for value in call.args)
     assert "operator" not in rendered
     assert "secret" not in rendered
-    assert "redis.internal" not in rendered
+    assert "redis://redis.internal:6380/2" in rendered
     assert any("build_revision" in str(call.args[0]) for call in log_info.call_args_list)
 
 
