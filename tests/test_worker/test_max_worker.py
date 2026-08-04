@@ -353,6 +353,25 @@ def test_redacts_redis_url_credentials_and_fails_closed(worker, raw_url, expecte
     assert "password" not in rendered
 
 
+@pytest.mark.asyncio
+async def test_health_and_startup_diagnostics_identify_build_without_redis_credentials(worker, monkeypatch):
+    worker.MAX_WORKER_BUILD_REVISION = "abc123"
+    worker.REDIS_URL = "redis://operator:secret@redis.internal:6380/2"
+    log_info = MagicMock()
+    monkeypatch.setattr(worker.log, "info", log_info)
+
+    health = await worker.health()
+    worker.log_startup()
+
+    assert health["build_revision"] == "abc123"
+    assert health["pymax_version"] == "2.3.1"
+    rendered = " ".join(str(value) for call in log_info.call_args_list for value in call.args)
+    assert "operator" not in rendered
+    assert "secret" not in rendered
+    assert "redis.internal" not in rendered
+    assert any("build_revision" in str(call.args[0]) for call in log_info.call_args_list)
+
+
 def group(chat_id, title, timestamp, chat_type=None):
     from pymax.types.domain.enums import ChatType
 
