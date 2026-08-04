@@ -15,7 +15,7 @@ def dry_run(recipe: str) -> str:
         text=True,
         check=True,
     )
-    return result.stdout
+    return result.stdout + result.stderr
 
 
 def assert_max_build_precedes_worker_teardown(output: str):
