@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
+import pymax
 import redis.asyncio as aioredis
 import uvicorn
 from fastapi import FastAPI
@@ -50,6 +51,7 @@ IDLE_SHUTDOWN_SEC = int(os.environ.get("IDLE_SHUTDOWN_SEC", "300"))
 RATE_LIMIT_PER_MINUTE = int(os.environ.get("RATE_LIMIT_PER_MINUTE", "8"))
 PHONE = os.environ.get("PHONE", "")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+MAX_WORKER_BUILD_REVISION = os.environ.get("MAX_WORKER_BUILD_REVISION", "unknown")
 
 MAX_RECONNECT_ATTEMPTS = 5
 BLPOP_TIMEOUT = 5  # seconds — short so we can check idle timer frequently
@@ -920,6 +922,8 @@ async def health():
         "account_id": ACCOUNT_ID,
         "connected": session.is_connected if session else False,
         "syncState": session.sync_state if session else None,
+        "build_revision": MAX_WORKER_BUILD_REVISION,
+        "pymax_version": pymax.__version__,
         "uptime_sec": int(time.time() - _start_time),
         "idle_sec": int(time.time() - last_task_time),
     }
@@ -1135,11 +1139,23 @@ signal.signal(signal.SIGINT, _handle_signal)
 
 _start_time = time.time()
 
-if __name__ == "__main__":
+
+def log_startup() -> None:
+    """Emit safe runtime identity metadata for deployment diagnostics."""
     log.info(
-        "worker_starting account_id=%s port=%d redis_url=%s idle_shutdown_sec=%d",
-        ACCOUNT_ID, PORT, render_redis_url_for_log(REDIS_URL), IDLE_SHUTDOWN_SEC,
+        "worker_starting account_id=%s port=%d redis_url=%s idle_shutdown_sec=%d "
+        "build_revision=%s pymax_version=%s",
+        ACCOUNT_ID,
+        PORT,
+        render_redis_url_for_log(REDIS_URL),
+        IDLE_SHUTDOWN_SEC,
+        MAX_WORKER_BUILD_REVISION,
+        pymax.__version__,
     )
+
+
+if __name__ == "__main__":
+    log_startup()
     uvicorn.run(
         app,
         host="0.0.0.0",

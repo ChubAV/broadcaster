@@ -100,6 +100,7 @@ prod-cleanup-schedules *args:
 prod-hard-deploy:
     git pull && \
     docker compose -f docker-compose.prod.yml build --no-cache && \
+    just max-worker-build --no-cache && \
     docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop && \
     docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm; \
     docker ps -q --filter "label=broadcaster.role=max-worker" | xargs -r docker stop && \
@@ -111,6 +112,7 @@ prod-hard-deploy:
 prod-deploy:
     git pull && \
     docker compose -f docker-compose.prod.yml build && \
+    just max-worker-build && \
     docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop && \
     docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm; \
     docker ps -q --filter "label=broadcaster.role=max-worker" | xargs -r docker stop && \
@@ -120,7 +122,8 @@ prod-deploy:
 
 # Build Docker image for prod environment
 prod-build:
-    docker compose -f docker-compose.prod.yml build
+    docker compose -f docker-compose.prod.yml build && \
+    just max-worker-build
 
 # Show Docker logs (follow)
 prod-logs *args:
@@ -140,8 +143,8 @@ wa-workers-stop:
     docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm
 
 # Build max-worker Docker image
-max-worker-build:
-    docker build -t broadcaster-max-worker:latest ./max_worker
+max-worker-build *args:
+    docker build {{ args }} --build-arg MAX_WORKER_BUILD_REVISION="$(git rev-parse HEAD)" -t broadcaster-max-worker:latest ./max_worker
 
 # List running max-worker containers
 max-workers:
