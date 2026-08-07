@@ -3,6 +3,8 @@
 import asyncio
 import importlib
 import inspect
+import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -12,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def incomplete_contact_chat_payload(*, contact_id: int | None = None) -> dict:
@@ -24,6 +28,37 @@ def incomplete_contact_chat_payload(*, contact_id: int | None = None) -> dict:
         "status": "ACTIVE",
         "owner": 2,
         "title": "CONTACT group",
+        "lastEventTime": 100,
+        "lastMessage": {
+            "id": 9,
+            "time": 100,
+            "type": "USER",
+            "attaches": [attachment],
+        },
+    }
+
+
+def incomplete_sticker_chat_payload(*, set_id: int | None = None) -> dict:
+    """A STICKER attachment as MAX actually emits it — every field except ``setId``."""
+    attachment = {
+        "authorType": "USER",
+        "_type": "STICKER",
+        "url": "https://st.max.ru/sticker/1.png",
+        "stickerId": 54954683,
+        "width": 170,
+        "time": 1754954683,
+        "stickerType": "STATIC",
+        "audio": False,
+        "height": 170,
+    }
+    if set_id is not None:
+        attachment["setId"] = set_id
+    return {
+        "id": 1,
+        "type": "CHAT",
+        "status": "ACTIVE",
+        "owner": 2,
+        "title": "STICKER group",
         "lastEventTime": 100,
         "lastMessage": {
             "id": 9,
@@ -174,6 +209,125 @@ def test_contact_compatibility_preserves_ids_and_other_attachment_validation():
     malformed_photo["lastMessage"]["attaches"] = [{"_type": "PHOTO"}]
     with pytest.raises(ValidationError):
         Chat.model_validate(malformed_photo)
+
+
+def test_unmodified_pymax_rejects_sticker_without_set_id():
+    """Pristine PyMax 2.3.1 is the reason group sync dies — reproduce it in a clean interpreter."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import json, sys; "
+            "from pymax.types.domain.chat import Chat; "
+            "Chat.model_validate(json.loads(sys.argv[1]))",
+            json.dumps(incomplete_sticker_chat_payload()),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "setId" in result.stderr
+
+
+def test_sticker_compatibility_parses_chat_in_a_clean_interpreter():
+    """Order-independent proof: the shim alone makes a setId-less STICKER chat parse."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import json, sys; "
+            "from max_worker.pymax_compat import apply_sticker_attachment_compatibility; "
+            "assert apply_sticker_attachment_compatibility() is True; "
+            "from pymax.types.domain.chat import Chat; "
+            "chat = Chat.model_validate(json.loads(sys.argv[1])); "
+            "assert chat.last_message.attaches[0].set_id is None; "
+            "assert chat.last_message.attaches[0].sticker_id == 54954683",
+            json.dumps(incomplete_sticker_chat_payload()),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(REPO_ROOT),
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_sticker_compatibility_accepts_raw_chat_and_login_payloads_idempotently():
+    from pymax.types.domain.attachments import StickerAttachment
+    from pymax.types.domain.chat import Chat
+    from pymax.types.domain.login import LoginResponse
+
+    from max_worker.pymax_compat import apply_sticker_attachment_compatibility
+
+    assert apply_sticker_attachment_compatibility() is True
+    assert apply_sticker_attachment_compatibility() is False
+
+    chat = Chat.model_validate(incomplete_sticker_chat_payload())
+    login_payload = incomplete_contact_login_payload()
+    login_payload["chats"] = [incomplete_sticker_chat_payload()]
+    login = LoginResponse.model_validate(login_payload)
+
+    assert isinstance(chat.last_message.attaches[0], StickerAttachment)
+    assert chat.last_message.attaches[0].set_id is None
+    assert login.chats[0].last_message.attaches[0].set_id is None
+
+
+def test_sticker_compatibility_preserves_set_ids_and_other_sticker_validation():
+    from pydantic import ValidationError
+    from pymax.types.domain.chat import Chat
+
+    from max_worker.pymax_compat import apply_sticker_attachment_compatibility
+
+    apply_sticker_attachment_compatibility()
+
+    for set_id in (0, 1, 54954683):
+        identified = Chat.model_validate(incomplete_sticker_chat_payload(set_id=set_id))
+        assert identified.last_message.attaches[0].set_id == set_id
+
+    # The seam is exactly one field wide: every other required STICKER field still validates.
+    for dropped in ("url", "stickerId", "width", "time", "stickerType", "audio", "height"):
+        malformed = incomplete_sticker_chat_payload(set_id=1)
+        del malformed["lastMessage"]["attaches"][0][dropped]
+        with pytest.raises(ValidationError):
+            Chat.model_validate(malformed)
+
+
+def test_worker_applies_sticker_compatibility_on_import(tmp_path):
+    """Importing the worker must relax STICKER before any client exists, and say so in the log.
+
+    Runs in a clean interpreter: in-process the shim may already have been applied by an
+    earlier test, which would make the module-level flag ``False`` and the assertion vacuous.
+    """
+    env = {
+        **os.environ,
+        "ACCOUNT_ID": "42",
+        "SESSIONS_DIR": str(tmp_path / "sessions"),
+        "PYTHONPATH": str(REPO_ROOT),
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import json, sys; "
+            "import max_worker.main as worker; "
+            "assert worker.STICKER_ATTACHMENT_COMPATIBILITY_APPLIED is True; "
+            "from pymax.types.domain.chat import Chat; "
+            "chat = Chat.model_validate(json.loads(sys.argv[1])); "
+            "assert chat.last_message.attaches[0].set_id is None",
+            json.dumps(incomplete_sticker_chat_payload()),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        cwd=str(REPO_ROOT),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "pymax_sticker_attachment_compatibility_applied" in result.stdout
 
 
 @pytest.mark.asyncio
@@ -417,6 +571,30 @@ async def test_group_sync_accepts_pymax_chat_with_incomplete_contact(worker, mon
 
     assert state.sync_state == "ready"
     assert state.groups == [{"id": "1", "name": "CONTACT group"}]
+
+
+@pytest.mark.asyncio
+async def test_group_sync_accepts_pymax_chat_with_set_id_less_sticker(worker, monkeypatch):
+    """Issue #34: one setId-less STICKER killed every group_fetch_attempt for the account.
+
+    This is the prod failure at its own altitude — parsing the fetched chat and running it
+    all the way through ``start_group_sync`` — not just the model in isolation.
+    """
+    from pymax.types.domain.chat import Chat
+
+    clients = install_fake_client(monkeypatch, worker)
+    state = await worker.create_client("")
+    client = clients[0]
+    state.is_connected = True
+    sticker_chat = Chat.model_validate(incomplete_sticker_chat_payload())
+    client.chats = [sticker_chat]
+    client.fetch_chats.side_effect = [[sticker_chat], []]
+    monkeypatch.setattr(worker.asyncio, "sleep", AsyncMock())
+
+    await worker.start_group_sync()
+
+    assert state.sync_state == "ready"
+    assert state.groups == [{"id": "1", "name": "STICKER group"}]
 
 
 @pytest.mark.asyncio

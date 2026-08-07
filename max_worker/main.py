@@ -31,10 +31,14 @@ from pydantic import BaseModel
 from pymax import ExtraConfig, Photo, WebClient
 from pymax.types.domain.enums import ChatType
 
-from max_worker.pymax_compat import apply_contact_attachment_compatibility
+from max_worker.pymax_compat import (
+    apply_contact_attachment_compatibility,
+    apply_sticker_attachment_compatibility,
+)
 
 
 CONTACT_ATTACHMENT_COMPATIBILITY_APPLIED = apply_contact_attachment_compatibility()
+STICKER_ATTACHMENT_COMPATIBILITY_APPLIED = apply_sticker_attachment_compatibility()
 
 
 # ---- 1. Config (env vars) ----
@@ -95,6 +99,8 @@ log = logging.getLogger("max_worker")
 
 if CONTACT_ATTACHMENT_COMPATIBILITY_APPLIED:
     log.info("pymax_contact_attachment_compatibility_applied")
+if STICKER_ATTACHMENT_COMPATIBILITY_APPLIED:
+    log.info("pymax_sticker_attachment_compatibility_applied")
 
 # Force all loggers through our JSON formatter (no duplicate plain-text lines)
 for _ln in ("uvicorn", "uvicorn.access", "uvicorn.error", "pymax", "pymax.core"):
