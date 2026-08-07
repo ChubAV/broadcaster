@@ -116,13 +116,25 @@ SQL-удалений.
 **Результат прогона:** на чистом дереве HEAD — `389 passed, 0 failed`
 (полный `pytest tests/`).
 
-> Примечание: прогон в текущем рабочем каталоге даёт 26 падений
-> (`test_config_s3`, `test_e2e`, `test_sync_groups`, `test_tg_user_auth`,
-> `test_uploads`, `test_wa_sync_status`, `test_whatsapp_routing`,
-> `test_groups_bulk`). Они вызваны **посторонними незакоммиченными
-> изменениями** в рабочем дереве (`app/messengers/whatsapp.py` и др.), не
-> относящимися к issue #35. Проверено сравнением: на чистом `16e413e`
-> (до задачи) и на чистом `HEAD` эти же файлы дают `40 passed`.
+> Примечание: прогон в рабочем каталоге разработчика даёт 26 падений, ни одно
+> из которых не относится к issue #35. Разбивка (проверена экспериментально):
+>
+> - **25 падений + 2 ошибки** (`test_config_s3`, `test_e2e`, `test_groups_bulk`,
+>   `test_sync_groups`, `test_tg_user_auth`, `test_uploads`, `test_wa_sync_status`)
+>   вызваны локальным файлом **`.env`** (gitignored), который `Settings`
+>   подхватывает в тестах: например `test_s3_settings_defaults` ожидает
+>   `s3_endpoint_url == ""`, а получает прод-значение из `.env`. Воспроизведено
+>   на чистом `HEAD` без единого изменения — достаточно симлинка на `.env`.
+>   Это инфраструктурный дефект тестов (нужен `env_file=None` или
+>   `monkeypatch`-изоляция в `conftest.py`), а не регрессия.
+> - **1 падение** — `test_whatsapp_routing::TestEnsureWaContainer::test_returns_existing_endpoint`,
+>   вызвано незакоммиченной правкой `app/messengers/whatsapp.py` (тест патчит
+>   только `get_wa_endpoint`, а новый контракт `ensure_wa_container` вызывает
+>   ещё `get_container_endpoint` и `wait_for_container_ready` — тест реально
+>   поднимает Docker-контейнер и падает по таймауту). К issue #35 отношения не
+>   имеет.
+>
+> На чистом `HEAD` без `.env` — `389 passed, 0 failed`.
 
 ## Развёртывание
 
