@@ -55,3 +55,10 @@ def test_max_worker_build_propagates_git_revision_and_dockerfile_exposes_it():
     assert "ARG MAX_WORKER_BUILD_REVISION=unknown" in dockerfile
     assert "org.opencontainers.image.revision" in dockerfile
     assert "MAX_WORKER_BUILD_REVISION" in dockerfile
+
+
+def test_max_worker_image_preserves_package_layout_for_module_entrypoint():
+    dockerfile = (ROOT / "max_worker" / "Dockerfile").read_text()
+
+    assert "COPY . ./max_worker" in dockerfile
+    assert 'CMD ["python", "-m", "max_worker.main"]' in dockerfile

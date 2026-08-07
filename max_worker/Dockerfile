@@ -9,8 +9,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY . ./max_worker
 
 EXPOSE 3000
 
-CMD ["python", "main.py"]
+CMD ["python", "-m", "max_worker.main"]
