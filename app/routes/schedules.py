@@ -46,7 +46,9 @@ class UpdateScheduleRequest(BaseModel):
 class ScheduleResponse(BaseModel):
     id: int
     ad_id: int
-    account_id: int
+    # None, если аккаунт был удалён и расписание отвязано (issue #35).
+    # CreateScheduleRequest.account_id остаётся обязательным.
+    account_id: int | None
     group_ids: list
     days_of_week: list
     times_of_day: list

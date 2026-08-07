@@ -54,7 +54,9 @@ async def schedules_partial(
     result = await db.execute(
         select(Schedule, Ad.title.label("ad_title"), MessengerAccount.type.label("messenger_type"))
         .join(Ad, Schedule.ad_id == Ad.id)
-        .join(MessengerAccount, Schedule.account_id == MessengerAccount.id)
+        # outer join: расписание с удалённым аккаунтом (account_id IS NULL)
+        # должно остаться видимым (issue #35)
+        .join(MessengerAccount, Schedule.account_id == MessengerAccount.id, isouter=True)
         .where(Ad.user_id == user.id)
         .order_by(Schedule.id)
         .offset(offset)
@@ -90,7 +92,9 @@ async def schedules_list(
     result = await db.execute(
         select(Schedule, Ad.title.label("ad_title"), MessengerAccount.type.label("messenger_type"))
         .join(Ad, Schedule.ad_id == Ad.id)
-        .join(MessengerAccount, Schedule.account_id == MessengerAccount.id)
+        # outer join: расписание с удалённым аккаунтом (account_id IS NULL)
+        # должно остаться видимым (issue #35)
+        .join(MessengerAccount, Schedule.account_id == MessengerAccount.id, isouter=True)
         .where(Ad.user_id == user.id)
         .order_by(Schedule.id)
         .limit(PAGE_SIZE + 1)
