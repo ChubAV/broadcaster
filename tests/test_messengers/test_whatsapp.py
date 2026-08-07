@@ -1,6 +1,44 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from app.messengers.whatsapp import WhatsAppMessenger
+from app.messengers.whatsapp import WhatsAppMessenger, ensure_wa_container
+
+
+@patch("app.services.wa_container_manager.wait_for_container_ready")
+@patch("app.services.wa_container_manager.start_container")
+@patch("app.services.wa_container_manager.get_container_endpoint")
+@patch("app.messengers.whatsapp.get_wa_endpoint")
+def test_ensure_wa_container_replaces_stale_cached_endpoint(
+    mock_get_wa_endpoint,
+    mock_get_container_endpoint,
+    mock_start_container,
+    mock_wait_for_ready,
+):
+    mock_get_wa_endpoint.return_value = "http://wa-worker-42:3000"
+    mock_get_container_endpoint.return_value = None
+    mock_start_container.return_value = "http://wa-worker-42:3000"
+    mock_wait_for_ready.return_value = True
+
+    assert ensure_wa_container(42) == "http://wa-worker-42:3000"
+    mock_start_container.assert_called_once_with(42)
+    mock_wait_for_ready.assert_called_once_with(42)
+
+
+@patch("app.services.wa_container_manager.wait_for_container_ready")
+@patch("app.services.wa_container_manager.start_container")
+@patch("app.services.wa_container_manager.get_container_endpoint")
+@patch("app.messengers.whatsapp.get_wa_endpoint")
+def test_ensure_wa_container_returns_none_when_worker_never_becomes_ready(
+    mock_get_wa_endpoint,
+    mock_get_container_endpoint,
+    mock_start_container,
+    mock_wait_for_ready,
+):
+    mock_get_wa_endpoint.return_value = None
+    mock_get_container_endpoint.return_value = None
+    mock_start_container.return_value = "http://wa-worker-42:3000"
+    mock_wait_for_ready.return_value = False
+
+    assert ensure_wa_container(42) is None
 
 
 @pytest.mark.asyncio

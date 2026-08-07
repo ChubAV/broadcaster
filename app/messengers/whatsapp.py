@@ -24,14 +24,23 @@ def get_wa_endpoint(account_id: int) -> str | None:
 
 def ensure_wa_container(account_id: int) -> str | None:
     """Start wa-worker container if not running, wait for it to be ready, return endpoint."""
-    from app.services.wa_container_manager import start_container, wait_for_container_ready
-    endpoint = get_wa_endpoint(account_id)
-    if endpoint:
-        return endpoint
+    from app.services.wa_container_manager import (
+        get_container_endpoint,
+        start_container,
+        wait_for_container_ready,
+    )
+
+    # Redis may retain an endpoint after a worker container has disappeared.
+    # Only trust it while Docker confirms that the container is still running.
+    cached_endpoint = get_wa_endpoint(account_id)
+    running_endpoint = get_container_endpoint(account_id)
+    if cached_endpoint and running_endpoint and wait_for_container_ready(account_id):
+        return running_endpoint
+
     endpoint = start_container(account_id)
     if endpoint and wait_for_container_ready(account_id):
         return endpoint
-    return endpoint
+    return None
 
 
 # Module-level shared HTTP client (created lazily, recreated on event loop change)

@@ -37,12 +37,22 @@ class TestGetWaEndpoint:
 class TestEnsureWaContainer:
     """Tests for ensure_wa_container with start-on-demand."""
 
+    @patch("app.services.wa_container_manager.start_container")
+    @patch("app.services.wa_container_manager.wait_for_container_ready")
+    @patch("app.services.wa_container_manager.get_container_endpoint")
     @patch("app.messengers.whatsapp.get_wa_endpoint")
-    def test_returns_existing_endpoint(self, mock_get_endpoint):
+    def test_returns_existing_endpoint(
+        self, mock_get_endpoint, mock_get_container_endpoint, mock_wait, mock_start
+    ):
+        # Кеш в Redis сам по себе не считается достоверным: эндпоинт возвращается
+        # только когда Docker подтверждает, что контейнер жив и готов.
         mock_get_endpoint.return_value = "http://wa-worker-10:3000"
+        mock_get_container_endpoint.return_value = "http://wa-worker-10:3000"
+        mock_wait.return_value = True
 
         result = ensure_wa_container(10)
         assert result == "http://wa-worker-10:3000"
+        mock_start.assert_not_called()
 
     @patch("app.services.wa_container_manager.wait_for_container_ready")
     @patch("app.services.wa_container_manager.start_container")
