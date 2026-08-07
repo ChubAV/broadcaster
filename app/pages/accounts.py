@@ -15,6 +15,7 @@ from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.application.accounts.use_cases import (
     delete_account,
+    detach_schedules_from_account,
     get_sync_status_view,
 )
 from app.messengers.telegram_user import (
@@ -358,6 +359,8 @@ async def accounts_connect_wa_page(
         )
     )
     for old in stale.scalars().all():
+        # issue #35: расписания сохраняются и приостанавливаются, а не удаляются
+        await detach_schedules_from_account(db, old.id)
         await db.delete(old)
     await db.commit()
 
@@ -505,6 +508,8 @@ async def accounts_connect_max_page(
         )
     )
     for old in stale.scalars().all():
+        # issue #35: расписания сохраняются и приостанавливаются, а не удаляются
+        await detach_schedules_from_account(db, old.id)
         await db.delete(old)
     await db.commit()
 

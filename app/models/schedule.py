@@ -13,8 +13,10 @@ class Schedule(Base):
     ad_id: Mapped[int] = mapped_column(
         ForeignKey("ads.id", ondelete="CASCADE")
     )
-    account_id: Mapped[int] = mapped_column(
-        ForeignKey("messenger_accounts.id", ondelete="CASCADE")
+    # Nullable: при удалении messenger-аккаунта расписание сохраняется и
+    # отвязывается (issue #35), а не удаляется каскадом.
+    account_id: Mapped[int | None] = mapped_column(
+        ForeignKey("messenger_accounts.id", ondelete="SET NULL"), nullable=True
     )
 
     # Relationships for eager loading

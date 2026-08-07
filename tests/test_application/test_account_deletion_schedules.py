@@ -205,11 +205,12 @@ async def test_detach_helper_does_not_commit(
     user = await _get_user(db_session)
     _, account, schedule = await _seed(db_session, user)
     schedule_id = schedule.id
+    account_id = account.id
 
-    await detach_schedules_from_account(db_session, account.id)
+    await detach_schedules_from_account(db_session, account_id)
     await db_session.rollback()
 
     reloaded = await _reload_schedule(db_session, schedule_id)
     assert reloaded is not None
-    assert reloaded.account_id == account.id
+    assert reloaded.account_id == account_id
     assert reloaded.is_active is True

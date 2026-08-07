@@ -3,13 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.unit_of_work import AbstractUnitOfWork
 from app.application.accounts.dto import AccountInfo, SyncStatusView
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
+from app.models.schedule import Schedule
 
 
 @dataclass(slots=True)
@@ -69,6 +70,28 @@ async def get_sync_status_view(session: AsyncSession, user_id: int, account_id: 
     return SyncStatusView(status="other", messenger_type=account.type)
 
 
+async def detach_schedules_from_account(session: AsyncSession, account_id: int) -> int:
+    """Отвязывает расписания от удаляемого messenger-аккаунта.
+
+    Расписания НЕ удаляются вместе с аккаунтом (issue #35): они сохраняются,
+    переводятся в статус «приостановлено» (is_active=False, next_run_at=None)
+    и отвязываются от аккаунта (account_id=None). Пользователь может привязать
+    новый аккаунт на форме редактирования и возобновить расписание.
+
+    Не коммитит: транзакцией владеет вызывающая сторона, чтобы отвязка и
+    удаление аккаунта попали в одну транзакцию.
+
+    Возвращает количество отвязанных расписаний.
+    """
+    result = await session.execute(
+        update(Schedule)
+        .where(Schedule.account_id == account_id)
+        .values(is_active=False, next_run_at=None, account_id=None)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount or 0
+
+
 async def delete_account(session: AsyncSession, user_id: int, account_id: int) -> bool:
     result = await session.execute(
         select(MessengerAccount).where(
@@ -79,6 +102,7 @@ async def delete_account(session: AsyncSession, user_id: int, account_id: int) -
     account = result.scalar_one_or_none()
     if not account:
         return False
+    await detach_schedules_from_account(session, account.id)
     await session.delete(account)
     await session.commit()
     return True

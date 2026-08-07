@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.accounts.use_cases import detach_schedules_from_account
 from app.dependencies import get_current_user_id, get_db
 from app.repositories.account import AccountRepository
 
@@ -62,6 +63,9 @@ async def delete_account(
     if account is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
+    # issue #35: расписания сохраняются и приостанавливаются, а не удаляются.
+    # repo.delete коммитит, поэтому отвязка и удаление попадают в одну транзакцию.
+    await detach_schedules_from_account(db, account.id)
     await repo.delete(account)
 
 
