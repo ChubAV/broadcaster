@@ -161,6 +161,14 @@ async def toggle_schedule(
             detail="Schedule not found",
         )
 
+    # issue #35: отвязанное расписание нельзя возобновить — оно никогда ничего
+    # не отправит. Постановка на паузу активного расписания не блокируется.
+    if not schedule.is_active and schedule.account_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Сначала привяжите аккаунт мессенджера к расписанию",
+        )
+
     schedule.is_active = not schedule.is_active
 
     if schedule.is_active:

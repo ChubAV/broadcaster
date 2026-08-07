@@ -341,7 +341,14 @@ async def schedules_toggle(
         .where(Schedule.id == schedule_id, Ad.user_id == user.id)
     )
     schedule = result.scalar_one_or_none()
-    if schedule:
+    # issue #35: отвязанное расписание нельзя возобновить, пока пользователь не
+    # привяжет аккаунт на форме редактирования. Пауза активного не блокируется.
+    resume_blocked = (
+        schedule is not None
+        and not schedule.is_active
+        and schedule.account_id is None
+    )
+    if schedule and not resume_blocked:
         schedule.is_active = not schedule.is_active
         if schedule.is_active:
             schedule.next_run_at = compute_next_run_at(
