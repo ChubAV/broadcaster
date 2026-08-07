@@ -45,3 +45,12 @@ data/
 # Celery
 celerybeat-schedule
 celerybeat.pid
+
+# AI tooling (locally installed, reinstallable via npx — see .planning/ for tracked artifacts)
+.claude/
+.codex/
+AGENTS.md
+
+# graphify knowledge graph (generated, ~59MB — rebuild with `graphify update .`)
+graphify-out/
+**/graphify-out/
