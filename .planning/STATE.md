@@ -1,12 +1,16 @@
 ---
-gsd_state_version: '1.0'
-status: baseline_complete
+gsd_state_version: 1.0
+milestone: v2.0
+milestone_name: Redesign
+status: planning
+last_updated: "2026-08-08T19:03:36.514Z"
+last_activity: 2026-08-08
 progress:
-  total_phases: 6
-  completed_phases: 6
+  total_phases: 0
+  completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 100
+  percent: 0
 ---
 
 # Project State
@@ -20,16 +24,15 @@ See: .planning/PROJECT.md (updated 2026-08-03)
 
 ## Current Position
 
-Phase: None of 6 active (all retrospective baseline phases complete)
-Plan: None — no historical plan artifacts are being inferred
-Status: Baseline complete; awaiting user-defined work and a new milestone scope
-Last activity: 2026-08-07 - Completed quick task 260807-pq7: issue 35: при удалении аккаунта мессенджера расписания не удаляются, а переходят в статус приостановлено
-
-Progress: [██████████] 100% baseline requirement coverage
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-08-08 — Milestone v2.0 started
 
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 0 (historical plans were not reconstructed)
 - Average duration: N/A
 - Total execution time: N/A
@@ -41,6 +44,7 @@ Progress: [██████████] 100% baseline requirement coverage
 | Retrospective baseline | No plan artifacts | N/A | N/A |
 
 **Recent Trend:**
+
 - No execution trend recorded; this roadmap documents pre-existing implementation.
 
 ## Accumulated Context
