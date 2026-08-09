@@ -25,9 +25,25 @@
 
 {# Ячейка. Либо text параметром, либо блочный вызов
    {% call cell(grow=true) %}…{% endcall %} — во втором случае разметку пишет
-   вызывающий шаблон и она не проходит через параметр строкой. #}
-{% macro cell(text=None, grow=false, mono=false, muted=false, area=None, title=None) -%}
+   вызывающий шаблон и она не проходит через параметр строкой.
+
+   label — подпись колонки, живущая внутри ячейки. Нужна потому, что на 860px
+   шапка колонок скрывается ([data-rowhead] { display: none }), и число в ячейке
+   остаётся без смысла. Правило [data-cell-label] уже лежит в app.css; макрос
+   только эмитит атрибут, и пишет его БЕЗ значения — правило селектирует по
+   наличию атрибута.
+
+   Контракт подписи: она ДУБЛИРУЕТ название колонки из rowhead, а не придумывает
+   своё. Вызывающий шаблон обязан брать её из того же списка колонок, которым он
+   вызывает rowhead — иначе шапка и подписи разъедутся, и это будет видно только
+   на телефоне.
+
+   Параметр стоит последним, чтобы позиционные вызовы не сдвинулись, и проходит
+   обычным экранированным выводом: макрос не место, через которое в разметку
+   попадает готовый HTML. #}
+{% macro cell(text=None, grow=false, mono=false, muted=false, area=None, title=None, label=None) -%}
 <span class="cell{% if mono %} cell--mono{% endif %}{% if muted %} cell--muted{% endif %}"{% if grow %} data-grow{% endif %}{% if area %} data-area="{{ area }}"{% endif %}{% if title %} title="{{ title }}"{% endif %}>
+{%- if label %}<span data-cell-label>{{ label }}</span>{% endif %}
 {%- if text is not none %}{{ text }}{% elif caller is defined %}{{ caller() }}{% endif -%}
 </span>
 {%- endmacro %}
