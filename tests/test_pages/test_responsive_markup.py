@@ -2980,3 +2980,96 @@ async def test_rowhead_titles_are_covered_by_labels(
         f"{page.template}: подписи, которых нет в шапке колонок — шапка и "
         f"подписи разъехались: {sorted(labels - header)}"
     )
+
+
+# =============================================================================
+# План 13, Задача 2: вторая половина сетки подтверждений — обход по ВЫДАЧЕ
+# =============================================================================
+#
+# Обход по исходникам (tests/test_templates/test_components.py) находит шаблоны
+# без GET-роута, но НЕ видит разметку, собранную строкой в обработчике. Дыра
+# ровно этого класса у фазы уже находилась: разметку ответов опроса пришлось
+# выносить в партиал. По одной половине требование не закрывается.
+
+# Тот же признак, что и в обходе по исходникам: точка перед именем допускается
+# (window.confirm), символ слова — нет (confirm_label= диалогом не является).
+RENDERED_DIALOG_RE = re.compile(r"(?<!\w)confirm\s*\(")
+
+# Адреса раздела, включая порции бесконечной прокрутки и ответ опроса статуса —
+# единственную разметку, собираемую обработчиком.
+DIALOG_SWEEP_URLS = (
+    "/dashboard",
+    "/accounts",
+    "/accounts/partial?offset=0&limit=30",
+    "/ads",
+    "/ads/partial?offset=0&limit=30",
+    "/schedules",
+    "/schedules/partial?offset=0&limit=30",
+    "/groups",
+    "/groups/partial?offset=0&limit=30",
+    "/history",
+    "/billing",
+    "/profile",
+)
+
+DIALOG_SWEEP_ADMIN_URLS = (
+    "/admin/users",
+    "/admin/groups-info",
+)
+
+
+@pytest.mark.asyncio
+async def test_no_rendered_page_calls_browser_dialog(
+    client: AsyncClient,
+    auth_headers: dict,
+    test_settings,
+    db_session: AsyncSession,
+):
+    """Ни одна выдача раздела не содержит вызова системного диалога.
+
+    Отдельно проходится ответ опроса статуса аккаунта: его разметки нет на
+    первичной отрисовке страницы, и вернувшийся туда диалог не увидел бы ни
+    один обход по списочным адресам.
+    """
+    account = await _seed_account(db_session, type_="max")
+    for seed in ("ads", "schedules", "groups", "dashboard", "billing"):
+        await _seed_rowhead_page(db_session, seed)
+    await _seed_group_info(db_session)
+
+    await client.post(
+        "/login",
+        data={"email": "testuser@test.com", "password": "testpass123"},
+        follow_redirects=False,
+    )
+
+    offenders = {}
+    urls = [*DIALOG_SWEEP_URLS, f"/accounts/{account.id}/sync-status"]
+    for url in urls:
+        response = await client.get(url)
+        assert response.status_code == 200, f"{url} вернул {response.status_code}"
+        if RENDERED_DIALOG_RE.search(response.text):
+            offenders[url] = len(RENDERED_DIALOG_RE.findall(response.text))
+
+    await client.post(
+        "/api/auth/register",
+        json={
+            "email": test_settings.admin_email,
+            "password": "testpass123",
+            "name": "Admin User",
+        },
+    )
+    await client.post(
+        "/login",
+        data={"email": test_settings.admin_email, "password": "testpass123"},
+        follow_redirects=False,
+    )
+    for url in DIALOG_SWEEP_ADMIN_URLS:
+        response = await client.get(url)
+        assert response.status_code == 200, f"{url} вернул {response.status_code}"
+        if RENDERED_DIALOG_RE.search(response.text):
+            offenders[url] = len(RENDERED_DIALOG_RE.findall(response.text))
+
+    assert not offenders, (
+        "системный диалог браузера вернулся в ОТРЕНДЕРЕННУЮ страницу — обход по "
+        f"исходникам такую разметку не видит: {offenders}"
+    )
