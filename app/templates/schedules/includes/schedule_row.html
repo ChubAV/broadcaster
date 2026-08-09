@@ -18,6 +18,7 @@
 {% from "components/badge.html" import badge %}
 {% from "components/toggle.html" import toggle %}
 {% from "components/button.html" import button, link_button %}
+{% from "components/modal.html" import modal %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 
 {% set SCHEDULE_COLS = 'minmax(180px,2.2fr) 128px minmax(110px,1fr) 104px 152px 96px 210px' %}
@@ -38,15 +39,24 @@
       объявления в Плане 03). У отвязанного расписания (issue #35) типа нет —
       ветка «неизвестный мессенджер» несёт utility-классы, поэтому она не
       вызывается вовсе. -#}
-  {%- call cell(muted=true, title='Групп в расписании') %}
+  {#- Подпись колонки берётся ЭЛЕМЕНТОМ SCHEDULE_COLUMNS по индексу, а не
+      переписанной строкой: список уже единственный источник шапки, и подписи
+      обязаны идти из него же (UI-06). Подписи нет у колонки 0 — она несёт
+      название объявления и уже является заголовком строки, — и у колонки 6, у
+      которой названия нет вовсе. Подпись ДОБАВЛЕНА к признакам ячейки
+      (моноширинность, приглушённость, область сетки, подсказка), а не
+      поставлена вместо них. -#}
+  {%- call cell(muted=true, title='Групп в расписании', label=SCHEDULE_COLUMNS[1]) %}
     {%- if item.messenger_type %}{{ messenger_icon(item.messenger_type, size='avatar', show_label=false) }}{% endif -%}
     <span>{{ s.group_ids|length }} групп</span>
   {%- endcall %}
-  {{- cell(text=day_labels|join(' ') if day_labels else '—', mono=true, muted=true, title='Дни недели') }}
-  {{- cell(text=s.times_of_day|join(', ') if s.times_of_day else '—', mono=true, muted=true) }}
+  {{- cell(text=day_labels|join(' ') if day_labels else '—', mono=true, muted=true, title='Дни недели',
+           label=SCHEDULE_COLUMNS[2]) }}
+  {{- cell(text=s.times_of_day|join(', ') if s.times_of_day else '—', mono=true, muted=true,
+           label=SCHEDULE_COLUMNS[3]) }}
   {{- cell(text=(format_datetime_for_user(item.next_run_local, user, '%d.%m %H:%M') ~ (' ' ~ item.tz_label if item.tz_label else '')) if item.next_run_local else '—',
-           mono=true, muted=true, area='meta') }}
-  {%- call cell() %}
+           mono=true, muted=true, area='meta', label=SCHEDULE_COLUMNS[4]) }}
+  {%- call cell(label=SCHEDULE_COLUMNS[5]) %}
     {%- if s.is_active %}{{ badge('Активно', 'success') }}{% else %}{{ badge('Пауза', 'neutral') }}{% endif -%}
   {%- endcall %}
   {%- call cell() %}
@@ -60,9 +70,28 @@
     </form>
     {{- link_button('Изменить', '/schedules/' ~ s.id ~ '/edit', variant='ghost', icon='pencil',
                     title='Редактировать расписание') -}}
-    <form method="post" action="/schedules/{{ s.id }}/delete" onsubmit="return confirm('Удалить расписание?')">
+    {#- Перехват отправки навешен на САМУ форму, а не заменил её кнопкой
+        type="button": без Alpine перехват не навешивается, и форма уходит POST-ом
+        на прежний маршрут — ровно как до правки (WR-04, T-12-04). -#}
+    <form method="post" action="/schedules/{{ s.id }}/delete"
+          x-data x-on:submit.prevent="$dispatch('modal-open-schedule-del-{{ s.id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить расписание') -}}
     </form>
   {%- endcall %}
 {{ row_close() }}
+{#- Панель подтверждения стоит РЯДОМ со строкой, а не внутри неё: панель
+    позиционируется фиксированно, а внутри сетки строки она стала бы её колонкой
+    (схема Задачи 1 повторена дословно).
+    Отвязанное расписание (issue #35, у записи нет типа мессенджера) обслуживается
+    ТОЙ ЖЕ панелью: поясняющий текст берётся из названия объявления, которое есть
+    всегда, поэтому отдельной ветки под этот случай не заводится.
+    method="post" передаётся явно, хотя совпадает с умолчанием макроса: маршрут и
+    метод удаления — контракт с обработчиком, и он обязан читаться грепом по
+    этому файлу, а не только по отрендеренной странице. -#}
+{{ modal(id='schedule-del-' ~ s.id,
+         title='Удалить расписание?',
+         action='/schedules/' ~ s.id ~ '/delete',
+         confirm_label='Удалить',
+         method="post",
+         body=item.ad_title) }}
 {%- endmacro %}
