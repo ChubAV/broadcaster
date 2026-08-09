@@ -1,151 +1,80 @@
 {% extends "base.html" %}
-{% from "includes/messenger_icon.html" import messenger_icon %}
-{% from "includes/icons.html" import icon_pause, icon_play, icon_delete, icon_filter %}
+{% from "components/button.html" import button, link_button %}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/table.html" import rowhead %}
+{% from "components/empty_state.html" import empty_state %}
+{% from "components/field.html" import field, select_field %}
+{% from "components/filters.html" import filters %}
+{% from "components/toggle.html" import toggle %}
+{% from "groups/includes/group_row.html" import group_row, GROUP_COLS, GROUP_COLUMNS %}
+
 {% block title %}Группы — Broadcaster{% endblock %}
+
+{# Контракт «страница → шелл» (План 01): заголовок раздела и его действия
+   рендерит шапка шелла. Кнопки синхронизации — POST-формы на прежние
+   маршруты. #}
+{% block page_title %}Группы{% endblock %}
+{% block page_actions %}
+{% for acc in tg_user_accounts + wa_accounts + max_accounts %}
+<form method="post" action="/accounts/{{ acc.id }}/sync-groups">
+  {{- button('Синхр.', variant='ghost', icon='refresh', title='Синхронизировать группы: ' ~ acc.type ~ ' #' ~ acc.id) -}}
+</form>
+{% endfor %}
+{% endblock %}
+
 {% block content %}
 
-<!-- Header -->
-<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
-  <h1 class="text-lg lg:text-xl font-semibold text-gray-900">Группы</h1>
-  {% if tg_user_accounts or wa_accounts or max_accounts %}
-  <div class="flex items-center gap-2">
-    {% for acc in tg_user_accounts %}
-    <form method="post" action="/accounts/{{ acc.id }}/sync-groups">
-      <button type="submit" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
-        {{ messenger_icon(acc.type, size='h-4 w-4', show_label=false) }} Синхр.
-      </button>
-    </form>
-    {% endfor %}
-    {% for acc in wa_accounts %}
-    <form method="post" action="/accounts/{{ acc.id }}/sync-groups">
-      <button type="submit" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
-        {{ messenger_icon(acc.type, size='h-4 w-4', show_label=false) }} Синхр.
-      </button>
-    </form>
-    {% endfor %}
-    {% for acc in max_accounts %}
-    <form method="post" action="/accounts/{{ acc.id }}/sync-groups">
-      <button type="submit" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
-        {{ messenger_icon(acc.type, size='h-4 w-4', show_label=false) }} Синхр.
-      </button>
-    </form>
-    {% endfor %}
-  </div>
-  {% endif %}
-</div>
-
-<!-- Filters -->
 {% if all_accounts or groups %}
-<div x-data="{ filterOpen: false }" class="mb-4">
-  <button @click="filterOpen = !filterOpen" class="sm:hidden inline-flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900 mb-2">
-    {{ icon_filter('h-4 w-4') }}
-    Фильтры
-  </button>
-  <form method="get" action="/groups" :class="filterOpen ? 'block' : 'hidden sm:block'">
-    <div class="flex flex-col sm:flex-row gap-2">
-      <select name="account_id" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
-        <option value="">Все аккаунты</option>
-        {% for acc in all_accounts %}
-        <option value="{{ acc.id }}" {{ 'selected' if filter_account_id == acc.id }}>{{ acc.type }} #{{ acc.id }}</option>
-        {% endfor %}
-      </select>
-      <select name="messenger_type" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
-        <option value="">Все мессенджеры</option>
-        <option value="tg_user" {{ 'selected' if filter_messenger_type == 'tg_user' }}>Telegram</option>
-        <option value="wa" {{ 'selected' if filter_messenger_type == 'wa' }}>WhatsApp</option>
-        <option value="max" {{ 'selected' if filter_messenger_type == 'max' }}>MAX</option>
-      </select>
-      <select name="is_active" class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
-        <option value="">Все статусы</option>
-        <option value="1" {{ 'selected' if filter_is_active == true }}>Активные</option>
-        <option value="0" {{ 'selected' if filter_is_active == false }}>Неактивные</option>
-      </select>
-      <input type="text" name="search" value="{{ filter_search or '' }}" placeholder="Поиск..." class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
-      <div class="flex gap-2">
-        <button type="submit" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">Применить</button>
-        <a href="/groups" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">Сбросить</a>
-      </div>
-    </div>
-  </form>
-</div>
+{# Значения фильтров вычисляются здесь и приходят в макросы параметрами:
+   внутри макроса request недоступен. #}
+{% set account_options = [('', 'Все аккаунты')] %}
+{% for acc in all_accounts %}{% set _ = account_options.append((acc.id, acc.type ~ ' #' ~ acc.id)) %}{% endfor %}
+{% set is_active_selected = none if filter_is_active is none else ('1' if filter_is_active else '0') %}
+{% call filters('groups-filters', action='/groups') %}
+  {{ select_field(name="account_id", label='Аккаунт', options=account_options,
+                  selected=filter_account_id, id='filter-account-id') }}
+  {{ select_field(name="messenger_type", label='Мессенджер',
+                  options=[('', 'Все мессенджеры'), ('tg_user', 'Telegram'), ('wa', 'WhatsApp'), ('max', 'MAX')],
+                  selected=filter_messenger_type, id='filter-messenger-type') }}
+  {{ select_field(name="is_active", label='Статус',
+                  options=[('', 'Все статусы'), ('1', 'Активные'), ('0', 'Неактивные')],
+                  selected=is_active_selected, id='filter-is-active') }}
+  {{ field(name="search", label='Поиск', value=filter_search or '', placeholder='Название группы',
+           id='filter-search') }}
+  {{ button('Применить', variant='primary') }}
+  {{ link_button('Сбросить', '/groups', variant='ghost') }}
+{% endcall %}
 {% endif %}
 
-<!-- Bulk actions -->
 {% if groups %}
-<div class="flex items-center gap-3 mb-4">
-  <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
-    <input type="checkbox" id="select-all-checkbox" onchange="selectAllGroups()" class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
-    Выбрать все
-  </label>
-  <div class="flex gap-2">
-    <button type="button" onclick="submitBulkGroups('deactivate')" class="text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg px-2.5 py-1.5 transition-colors">Деактивировать</button>
-    <button type="button" onclick="submitBulkGroups('delete')" class="text-sm text-red-600 hover:text-red-700 hover:bg-red-50 rounded-lg px-2.5 py-1.5 transition-colors">Удалить</button>
-  </div>
+{# Массовые действия. Разметку тумблера не дублируем: событие change всплывает
+   от чекбокса к обёртке, поэтому обработчик висит на ней, а макрос toggle
+   вызывается как есть. #}
+<div>
+  <span x-data x-on:change="selectAllGroups()">
+    {{- toggle(name='select_all', id='select-all-checkbox', label='Выбрать все') -}}
+  </span>
+  <button class="btn btn--ghost" type="button" onclick="submitBulkGroups('deactivate')"><span class="btn__label">Деактивировать</span></button>
+  <button class="btn btn--danger" type="button" onclick="submitBulkGroups('delete')"><span class="btn__label">Удалить</span></button>
 </div>
-{% endif %}
 
-<!-- Groups list -->
-{% if groups %}
-<div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
-  {% for group in groups %}
-  {% set stats = group_stats.get(group.id, {}) %}
-  <div class="px-4 lg:px-6 py-3 lg:py-4 hover:bg-gray-50 transition-colors">
-    <div class="flex items-center gap-3 lg:gap-4">
-      <!-- Checkbox -->
-      <input type="checkbox" class="group-checkbox h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" value="{{ group.id }}">
-      <!-- Content -->
-      <div class="flex-1 min-w-0">
-        <div class="flex items-center gap-2">
-          <p class="text-sm lg:text-base font-medium text-gray-900 truncate">{{ group.name }}</p>
-          {{ messenger_icon(group.messenger_type, size='h-3.5 w-3.5 lg:h-4 lg:w-4', show_label=false) }}
-        </div>
-        <div class="flex items-center gap-3 mt-0.5">
-          <span class="text-xs lg:text-sm text-gray-400 font-mono">{{ group.group_external_id }}</span>
-          <span class="text-xs lg:text-sm text-gray-400">{{ stats.get('schedules_count', 0) }} распис.</span>
-          {% if stats.get('send_attempts', 0) > 0 %}
-          <span class="text-xs lg:text-sm text-gray-400">{{ ((stats.get('send_success', 0) / stats.get('send_attempts', 1)) * 100)|round|int }}% успех ({{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }})</span>
-          {% endif %}
-          {% if stats.get('last_sent_at') %}
-          <span class="text-xs lg:text-sm text-gray-400">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>
-          {% endif %}
-        </div>
-        {% if group.last_error %}
-        <p class="text-xs lg:text-sm text-red-500 mt-1 truncate" title="{{ group.last_error }}">{{ group.last_error }}</p>
-        {% endif %}
-      </div>
-      <!-- Status -->
-      {% if group.is_active %}
-      <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-emerald-700 shrink-0">Активна</span>
-      {% else %}
-      <span class="inline-flex items-center rounded-full bg-gray-100 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-gray-600 shrink-0">Пауза</span>
-      {% endif %}
-    </div>
-    <!-- Actions -->
-    <div class="flex items-center gap-1 lg:gap-2 mt-3 pt-3 border-t border-gray-100">
-      {% if group.is_active %}
-      <form method="post" action="/groups/{{ group.id }}/toggle">
-        <button type="submit" class="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Приостановить">{{ icon_pause('h-4 w-4 lg:h-5 lg:w-5') }}<span class="hidden lg:inline text-sm">Приостановить</span></button>
-      </form>
-      {% else %}
-      <form method="post" action="/groups/{{ group.id }}/toggle">
-        <button type="submit" class="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Возобновить">{{ icon_play('h-4 w-4 lg:h-5 lg:w-5') }}<span class="hidden lg:inline text-sm">Возобновить</span></button>
-      </form>
-      {% endif %}
-      <form method="post" action="/groups/{{ group.id }}/delete" onsubmit="return confirm('Удалить группу?')">
-        <button type="submit" class="inline-flex items-center gap-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg p-2 transition-colors" title="Удалить">{{ icon_delete('h-4 w-4 lg:h-5 lg:w-5') }}<span class="hidden lg:inline text-sm">Удалить</span></button>
-      </form>
-    </div>
-  </div>
-  {% endfor %}
+{{ card_open() }}
+  {{ rowhead(columns=GROUP_COLUMNS, cols=GROUP_COLS) }}
+  {# Инварианты бесконечной прокрутки (ломает переверстка, а не логика):
+     - сентинел остаётся ПОСЛЕДНИМ элементом внутри ТОГО ЖЕ контейнера, что и
+       строки: он заменяет сам себя и подтягивает следующий;
+     - разметка сентинела здесь и в partial_cards.html ИДЕНТИЧНА;
+     - цикл проброса фильтров переносится ДОСЛОВНО вместе с приведением к
+       строке и экранированием для URL: потерянный фильтр не роняет страницу,
+       а молча подмешивает чужие строки к отфильтрованным (T-04-01). #}
+  {% for group in groups %}{{ group_row(group, group_stats.get(group.id, {}), user) }}{% endfor %}
   {% if has_next %}
-  <div hx-get="/groups/partial?offset={{ next_offset }}&limit=30&layout=cards{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="py-4 text-center text-sm text-gray-400">Загрузка...</div>
+  <div hx-get="/groups/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
   {% endif %}
-</div>
+{{ card_close() }}
 {% else %}
-<div class="text-center py-12">
-  <p class="text-sm text-gray-500">Нет групп</p>
-  <p class="text-xs text-gray-400 mt-1">Группы синхронизируются из подключённых аккаунтов мессенджеров</p>
-</div>
+{{ empty_state('Нет групп',
+               hint='Группы синхронизируются из подключённых аккаунтов мессенджеров') }}
 {% endif %}
 
 <script>

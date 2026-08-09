@@ -1,55 +1,7 @@
-{% from "includes/messenger_icon.html" import messenger_icon %}
-{% from "includes/icons.html" import icon_pause, icon_play, icon_delete %}
-{% for group in groups %}
-{% set stats = group_stats.get(group.id, {}) %}
-<div class="px-4 py-3 hover:bg-gray-50 transition-colors">
-  <div class="flex items-center gap-3">
-    <!-- Checkbox -->
-    <input type="checkbox" class="group-checkbox h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" value="{{ group.id }}">
-    <!-- Content -->
-    <div class="flex-1 min-w-0">
-      <div class="flex items-center gap-2">
-        <p class="text-sm font-medium text-gray-900 truncate">{{ group.name }}</p>
-        {{ messenger_icon(group.messenger_type, size='h-3.5 w-3.5', show_label=false) }}
-      </div>
-      <div class="flex items-center gap-3 mt-0.5">
-        <span class="text-xs text-gray-400 font-mono">{{ group.group_external_id }}</span>
-        <span class="text-xs text-gray-400">{{ stats.get('schedules_count', 0) }} распис.</span>
-        {% if stats.get('send_attempts', 0) > 0 %}
-        <span class="text-xs text-gray-400">{{ ((stats.get('send_success', 0) / stats.get('send_attempts', 1)) * 100)|round|int }}% успех</span>
-        {% endif %}
-        {% if stats.get('last_sent_at') %}
-        <span class="text-xs text-gray-400">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>
-        {% endif %}
-      </div>
-      {% if group.last_error %}
-      <p class="text-xs text-red-500 mt-1 truncate" title="{{ group.last_error }}">{{ group.last_error }}</p>
-      {% endif %}
-    </div>
-    <!-- Status -->
-    {% if group.is_active %}
-    <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 shrink-0">Активна</span>
-    {% else %}
-    <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 shrink-0">Пауза</span>
-    {% endif %}
-  </div>
-  <!-- Actions -->
-  <div class="flex items-center gap-1 lg:gap-2 mt-3 pt-3 border-t border-gray-100">
-    {% if group.is_active %}
-    <form method="post" action="/groups/{{ group.id }}/toggle">
-      <button type="submit" class="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Приостановить">{{ icon_pause('h-4 w-4') }}<span class="hidden lg:inline text-sm">Приостановить</span></button>
-    </form>
-    {% else %}
-    <form method="post" action="/groups/{{ group.id }}/toggle">
-      <button type="submit" class="inline-flex items-center gap-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-2 transition-colors" title="Возобновить">{{ icon_play('h-4 w-4') }}<span class="hidden lg:inline text-sm">Возобновить</span></button>
-    </form>
-    {% endif %}
-    <form method="post" action="/groups/{{ group.id }}/delete" onsubmit="return confirm('Удалить группу?')">
-      <button type="submit" class="inline-flex items-center gap-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg p-2 transition-colors" title="Удалить">{{ icon_delete('h-4 w-4') }}<span class="hidden lg:inline text-sm">Удалить</span></button>
-    </form>
-  </div>
-</div>
-{% endfor %}
+{% from "groups/includes/group_row.html" import group_row %}
+{% for group in groups %}{{ group_row(group, group_stats.get(group.id, {}), user) }}{% endfor %}
+{# Сентинел ИДЕНТИЧЕН тому, что в list.html, вместе с циклом проброса фильтров:
+   правится один — синхронно правится второй (T-04-01). #}
 {% if has_next %}
-<div hx-get="/groups/partial?offset={{ next_offset }}&limit=30&layout=cards{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="py-4 text-center text-sm text-gray-400">Загрузка...</div>
+<div hx-get="/groups/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
 {% endif %}

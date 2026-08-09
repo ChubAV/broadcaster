@@ -1,0 +1,66 @@
+{# Строка группы — по эталону ads/includes/ad_card.html (План 03).
+
+   Это МАКРОС: импортированные шаблоны Jinja контекста вызывающего не получают,
+   поэтому `group`, `stats` и `user` — явные параметры. Ошибка в имени
+   параметра проявится не исключением, а пустой строкой, поэтому отрисовка
+   реальных данных закреплена тестом test_groups_card_renders_data.
+
+   GROUP_COLS — единственный источник раскладки колонок раздела: его же
+   импортирует list.html для заголовка колонок, а partial_cards.html — для
+   строк.
+
+   Название группы приходит из внешнего мессенджера и приложением не
+   контролируется (T-04-02): оно выводится обычным экранированным выводом, ни
+   один макрос не принимает готовую разметку.
+
+   Импорт: {% from "groups/includes/group_row.html" import group_row, GROUP_COLS %} #}
+
+{% from "components/table.html" import row_open, row_close, cell %}
+{% from "components/badge.html" import badge %}
+{% from "components/toggle.html" import toggle %}
+{% from "components/button.html" import button %}
+{% from "includes/messenger_icon.html" import messenger_icon %}
+
+{% set GROUP_COLS = '28px minmax(180px,2.4fr) minmax(110px,1.2fr) 104px 96px 128px 96px 168px' %}
+{% set GROUP_COLUMNS = ['', 'Группа', 'Идентификатор', 'Расписаний', 'Успех', 'Отправлено', 'Статус', ''] %}
+
+{% macro group_row(group, stats=None, user=None, cols=GROUP_COLS) -%}
+{%- set st = stats or {} -%}
+{%- set attempts = st.get('send_attempts', 0) -%}
+{{ row_open(cols=cols, id='group-row-' ~ group.id) }}
+  {%- call cell() %}
+    {#- Класс group-checkbox — зацепка массовых действий, сохранена дословно. -#}
+    <input class="group-checkbox" type="checkbox" value="{{ group.id }}">
+  {%- endcall %}
+  {%- call cell(grow=true, title=group.name) %}
+    {{- messenger_icon(group.messenger_type, size='avatar', show_label=false) -}}
+    <span data-grow>{{ group.name }}</span>
+  {%- endcall %}
+  {{- cell(text=group.group_external_id, mono=true, muted=true) }}
+  {{- cell(text=st.get('schedules_count', 0), mono=true, muted=true, title='Расписаний с этой группой') }}
+  {{- cell(text=(((st.get('send_success', 0) / attempts) * 100)|round|int ~ '%') if attempts > 0 else '—',
+           mono=true, muted=true,
+           title=(st.get('send_success', 0)|string ~ ' из ' ~ attempts|string) if attempts > 0 else 'Отправок не было') }}
+  {{- cell(text=format_datetime_for_user(st.get('last_sent_at'), user, '%d.%m %H:%M') if st.get('last_sent_at') else '—',
+           mono=true, muted=true, area='meta') }}
+  {%- call cell() %}
+    {%- if group.is_active %}{{ badge('Активна', 'success') }}{% else %}{{ badge('Пауза', 'neutral') }}{% endif -%}
+    {#- Последняя ошибка не теряется при перевёрстке: раздел меняет вид, а не
+        состав показанных данных. Полный текст — в подсказке. -#}
+    {%- if group.last_error %}{{ badge('Ошибка', 'danger', title=group.last_error) }}{% endif -%}
+  {%- endcall %}
+  {%- call cell() %}
+    {#- «Новый вид, старые действия»: маршрут, метод и серверная проверка
+        владельца не тронуты. Событие change всплывает от чекбокса к форме,
+        поэтому обработчик висит на форме, а макрос toggle остаётся без
+        собственных атрибутов событий. -#}
+    <form method="post" action="/groups/{{ group.id }}/toggle" x-data x-on:change="$el.submit()">
+      {{- toggle(name='is_active', checked=group.is_active, id='group-toggle-' ~ group.id,
+                 title='Приостановить' if group.is_active else 'Возобновить') -}}
+    </form>
+    <form method="post" action="/groups/{{ group.id }}/delete" onsubmit="return confirm('Удалить группу?')">
+      {{- button('Удалить', variant='ghost', icon='trash', title='Удалить группу') -}}
+    </form>
+  {%- endcall %}
+{{ row_close() }}
+{%- endmacro %}

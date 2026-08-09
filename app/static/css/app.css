@@ -828,6 +828,31 @@ a:hover { color: var(--accent-link-hover); }
   .progress__bar, .toggle__knob { animation: none !important; transition: none !important; }
 }
 
+/* Сворачиваемый блок фильтров (План 04) -----------------------------------
+   Единственный оставшийся сценарий Alpine после D-12, применяемый в трёх
+   разделах. Свёрнутость выражена классами и медиазапросом, а НЕ привязкой
+   класса к состоянию Alpine: разметка приходит с сервера уже в правильном
+   состоянии, поэтому блок не мигает до инициализации скрипта. Alpine
+   добавляет только .filters--open.
+   Раскладка полей опирается на существующие .field и .btn — новых классов
+   под элементы формы не вводится. */
+.filters { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.filters__toggle { display: none; align-self: flex-start; }
+.filters__form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 9px; }
+.filters__form .field { flex: 1 1 168px; min-width: 0; }
+.filters__form .btn { flex: none; }
+
+/* Свёрнут на всех ширинах — для разделов, где фильтры вторичны. */
+.filters--collapsed > .filters__toggle { display: inline-flex; }
+.filters--collapsed > .filters__form { display: none; }
+.filters--collapsed.filters--open > .filters__form { display: flex; }
+
+@media (max-width: 860px) {
+  .filters > .filters__toggle { display: inline-flex; }
+  .filters > .filters__form { display: none; }
+  .filters--open > .filters__form { display: flex; }
+}
+
 /* Модальное подтверждение (D-18) ------------------------------------------
    Прецедента в макете нет: единственный position:fixed там — нижние табы.
    Компонент спроектирован с нуля на тех же токенах. Показом управляет Alpine
