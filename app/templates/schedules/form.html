@@ -1,121 +1,111 @@
 {% extends "base.html" %}
+{% from "components/alert.html" import alert %}
+{% from "components/button.html" import button, link_button %}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/field.html" import select_field %}
+{% from "components/toggle.html" import toggle %}
+
 {% block title %}{{ 'Редактировать' if schedule else 'Создать' }} расписание — Broadcaster{% endblock %}
+
+{# Заголовок раздела рендерит шапка шелла: собственный <h1> задвоился бы. #}
+{% block page_title %}{{ 'Редактировать расписание' if schedule else 'Новое расписание' }}{% endblock %}
+
 {% block content %}
+{% if error %}{{ alert(error) }}{% endif %}
 
-<div class="max-w-2xl">
-  <h1 class="text-lg lg:text-xl font-semibold text-gray-900 mb-6">{{ 'Редактировать расписание' if schedule else 'Новое расписание' }}</h1>
+{% set day_names = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'} %}
+{% set ad_options = [('', 'Выберите объявление')] %}
+{% for ad in ads %}{% set _ = ad_options.append((ad.id, ad.title)) %}{% endfor %}
+{% set account_options = [('', 'Выберите аккаунт')] %}
+{% for acc in accounts %}{% set _ = account_options.append((acc.id, acc.type ~ ' #' ~ acc.id)) %}{% endfor %}
 
-  {% if error %}
-  <div class="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">{{ error }}</div>
-  {% endif %}
+{# Инварианты формы: атрибуты name, method и action перенесены ДОСЛОВНО.
+   Обработчик читает form_data.getlist('group_ids' / 'days_of_week' /
+   'times_of_day') и Form(...) по ad_id / account_id — расхождение здесь не
+   уронит форму, а молча перестанет сохранять расписание. #}
+<form method="post" action="{{ '/schedules/' ~ schedule.id ~ '/edit' if schedule else '/schedules/new' }}">
+{{ card_open() }}
 
-  <form method="post" action="{{ '/schedules/' ~ schedule.id ~ '/edit' if schedule else '/schedules/new' }}" class="space-y-6">
-    <!-- Ad select -->
+  {{ select_field(name="ad_id", label='Объявление', options=ad_options,
+                  selected=schedule.ad_id if schedule else none, required=true) }}
+
+  {{ select_field(name="account_id", label='Аккаунт', options=account_options,
+                  selected=schedule.account_id if schedule else none, required=true) }}
+
+  {# Группы. Видимостью управляет filterGroupsByAccount: показываются только
+     группы выбранного аккаунта. Обёртка .group-item с data-account-id —
+     единственная зацепка скрипта, поэтому она сохранена как есть. #}
+  <div class="field">
+    <span class="field__label">Группы</span>
     <div>
-      <label for="ad_id" class="block text-sm font-medium text-gray-700 mb-1.5">Объявление</label>
-      <select name="ad_id" id="ad_id" required class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
-        <option value="">Выберите объявление</option>
-        {% for ad in ads %}
-        <option value="{{ ad.id }}" {{ 'selected' if schedule and schedule.ad_id == ad.id }}>{{ ad.title }}</option>
-        {% endfor %}
-      </select>
+      <button class="btn btn--ghost" type="button" onclick="selectAllGroups()"><span class="btn__label">Выбрать все</span></button>
+      <button class="btn btn--ghost" type="button" onclick="deselectAllGroups()"><span class="btn__label">Снять все</span></button>
     </div>
-
-    <!-- Account select -->
-    <div>
-      <label for="account_id" class="block text-sm font-medium text-gray-700 mb-1.5">Аккаунт</label>
-      <select name="account_id" id="account_id" required class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
-        <option value="">Выберите аккаунт</option>
-        {% for acc in accounts %}
-        <option value="{{ acc.id }}" data-type="{{ acc.type }}" {{ 'selected' if schedule and schedule.account_id == acc.id }}>{{ acc.type }} #{{ acc.id }}</option>
-        {% endfor %}
-      </select>
+    <div class="field" id="groups-container">
+      {% for group in groups %}
+      <div class="group-item" data-account-id="{{ group.account_id }}">
+        {{ toggle(name="group_ids", value=group.id, label=group.name, id='group-' ~ group.id,
+                  checked=(true if schedule and group.id in schedule.group_ids else false)) }}
+      </div>
+      {% endfor %}
     </div>
+    <span class="field__hint" id="select-account-hint" hidden>Сначала выберите аккаунт.</span>
+    <span class="field__hint" id="no-groups-for-account" hidden>Нет групп для выбранного аккаунта.</span>
+  </div>
 
-    <!-- Groups checkboxes (filtered by account) -->
+  <div class="field">
+    <span class="field__label">Дни недели</span>
     <div>
-      <label class="block text-sm font-medium text-gray-700 mb-1.5">Группы</label>
-      <div class="flex items-center gap-2 mb-2">
-        <button type="button" onclick="selectAllGroups()" class="text-xs text-indigo-600 hover:text-indigo-700">Выбрать все</button>
-        <span class="text-gray-300">|</span>
-        <button type="button" onclick="deselectAllGroups()" class="text-xs text-gray-500 hover:text-gray-700">Снять все</button>
-      </div>
-      <div id="groups-container" class="max-h-60 overflow-y-auto border border-gray-200 rounded-lg p-3 space-y-2">
-        {% for group in groups %}
-        <label class="flex items-center gap-2 group-item cursor-pointer" data-account-id="{{ group.account_id }}">
-          <input type="checkbox" name="group_ids" value="{{ group.id }}" class="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-            {{ 'checked' if schedule and group.id in schedule.group_ids }}>
-          <span class="text-sm text-gray-700">{{ group.name }}</span>
-        </label>
-        {% endfor %}
-      </div>
-      <p id="select-account-hint" class="text-sm text-gray-500 mt-1.5 hidden">Сначала выберите аккаунт.</p>
-      <p id="no-groups-for-account" class="text-sm text-gray-500 mt-1.5 hidden">Нет групп для выбранного аккаунта.</p>
+      <button class="btn btn--ghost" type="button" onclick="selectAllDays()"><span class="btn__label">Все</span></button>
+      <button class="btn btn--ghost" type="button" onclick="deselectAllDays()"><span class="btn__label">Снять</span></button>
     </div>
+    {% for i in range(7) %}
+    {{ toggle(name="days_of_week", value=i, label=day_names[i], id='day-' ~ i,
+              checked=(true if schedule and i in schedule.days_of_week else false)) }}
+    {% endfor %}
+  </div>
 
-    <!-- Days of week -->
-    <div>
-      <label class="block text-sm font-medium text-gray-700 mb-1.5">Дни недели</label>
-      <div class="flex items-center gap-2 mb-2">
-        <button type="button" onclick="selectAllDays()" class="text-xs text-indigo-600 hover:text-indigo-700">Все</button>
-        <span class="text-gray-300">|</span>
-        <button type="button" onclick="deselectAllDays()" class="text-xs text-gray-500 hover:text-gray-700">Снять</button>
-      </div>
-      <div class="flex flex-wrap gap-2">
-        {% set day_names = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'} %}
-        {% for i in range(7) %}
-        <label class="flex items-center gap-1.5 cursor-pointer">
-          <input type="checkbox" name="days_of_week" value="{{ i }}" class="day-checkbox h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-            {{ 'checked' if schedule and i in schedule.days_of_week }}>
-          <span class="text-sm text-gray-700">{{ day_names[i] }}</span>
-        </label>
-        {% endfor %}
-      </div>
-    </div>
-
-    <!-- Times of day -->
-    <div>
-      <label class="block text-sm font-medium text-gray-700 mb-1.5">Время отправки</label>
-      <div id="times-container" class="space-y-2">
-        {% if schedule and schedule.times_of_day %}
-        {% for time in schedule.times_of_day %}
-        <div class="flex items-center gap-2">
-          <input type="time" name="times_of_day" value="{{ time }}" required class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none">
-          {% if not loop.first %}
-          <button type="button" onclick="this.parentElement.remove()" class="text-gray-400 hover:text-red-500 p-1">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-          </button>
-          {% endif %}
-        </div>
-        {% endfor %}
-        {% else %}
-        <div class="flex items-center gap-2">
-          <input type="time" name="times_of_day" value="09:00" required class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none">
-        </div>
+  <div class="field">
+    <span class="field__label">Время отправки</span>
+    <div class="field" id="times-container">
+      {% if schedule and schedule.times_of_day %}
+      {% for time in schedule.times_of_day %}
+      <div>
+        <input class="field__input" type="time" name="times_of_day" value="{{ time }}" required>
+        {% if not loop.first %}
+        <button class="btn btn--ghost" type="button" onclick="this.parentElement.remove()"><span class="btn__label">Убрать</span></button>
         {% endif %}
       </div>
-      <button type="button" onclick="addTimeInput()" class="mt-2 text-sm text-indigo-600 hover:text-indigo-700 font-medium">+ Добавить время</button>
+      {% endfor %}
+      {% else %}
+      <div>
+        <input class="field__input" type="time" name="times_of_day" value="09:00" required>
+      </div>
+      {% endif %}
     </div>
-
-    <!-- Timezone -->
     <div>
-      <label for="timezone" class="block text-sm font-medium text-gray-700 mb-1.5">Часовой пояс</label>
-      <select name="timezone" id="timezone" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none transition-colors">
-        {% for value, label in timezone_choices %}
-        <option value="{{ value }}" {{ 'selected' if (schedule and schedule.timezone == value) or (not schedule and default_timezone == value) }}>{{ label }}</option>
-        {% endfor %}
-      </select>
+      <button class="btn btn--ghost" type="button" onclick="addTimeInput()"><span class="btn__label">Добавить время</span></button>
     </div>
+  </div>
 
-    <!-- Buttons -->
-    <div class="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-      <a href="/schedules" class="text-sm font-medium text-gray-600 hover:text-gray-800 px-3 py-2">Отмена</a>
-      <button type="submit" class="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">Сохранить</button>
-    </div>
-  </form>
-</div>
+  {{ select_field(name="timezone", label='Часовой пояс', options=timezone_choices,
+                  selected=schedule.timezone if schedule else default_timezone) }}
+
+  {# Кнопки формы — без собственного класса: .btn уже inline-flex, а нового
+     класса раскладки в app.css вводить нельзя (файл закрыт с Плана 03). #}
+  <div>
+    {{ button('Сохранить', variant='primary') }}
+    {{ link_button('Отмена', '/schedules', variant='ghost') }}
+  </div>
+
+{{ card_close() }}
+</form>
 
 <script>
+// Скрытие сделано без utility-классов: у контейнера групп есть собственное
+// правило display (.field), поэтому атрибут hidden его не перебил бы —
+// контейнер прячется инлайн-стилем, а подсказки без правила display —
+// штатным атрибутом hidden.
 function filterGroupsByAccount() {
     const accountId = document.getElementById('account_id').value;
     const groups = document.querySelectorAll('.group-item');
@@ -125,61 +115,60 @@ function filterGroupsByAccount() {
     if (!container) return;
 
     if (!accountId) {
-        container.classList.add('hidden');
-        groups.forEach(function(label) {
-            label.querySelector('input[type="checkbox"]').checked = false;
+        container.style.display = 'none';
+        groups.forEach(function(item) {
+            item.querySelector('input[type="checkbox"]').checked = false;
         });
-        if (noGroupsMsg) noGroupsMsg.classList.add('hidden');
-        if (hintMsg) hintMsg.classList.remove('hidden');
+        if (noGroupsMsg) noGroupsMsg.hidden = true;
+        if (hintMsg) hintMsg.hidden = false;
         return;
     }
-    if (hintMsg) hintMsg.classList.add('hidden');
+    if (hintMsg) hintMsg.hidden = true;
 
-    container.classList.remove('hidden');
+    container.style.display = '';
     var visibleCount = 0;
-    groups.forEach(function(label) {
-        if (label.dataset.accountId === accountId) {
-            label.style.display = '';
+    groups.forEach(function(item) {
+        if (item.dataset.accountId === accountId) {
+            item.style.display = '';
             visibleCount++;
         } else {
-            label.style.display = 'none';
-            label.querySelector('input[type="checkbox"]').checked = false;
+            item.style.display = 'none';
+            item.querySelector('input[type="checkbox"]').checked = false;
         }
     });
 
     if (noGroupsMsg) {
-        noGroupsMsg.classList.toggle('hidden', visibleCount > 0);
+        noGroupsMsg.hidden = visibleCount > 0;
     }
 }
 function selectAllGroups() {
     var accountId = document.getElementById('account_id').value;
     if (!accountId) return;
-    document.querySelectorAll('.group-item').forEach(function(label) {
-        if (label.dataset.accountId === accountId) {
-            label.querySelector('input[type="checkbox"]').checked = true;
+    document.querySelectorAll('.group-item').forEach(function(item) {
+        if (item.dataset.accountId === accountId) {
+            item.querySelector('input[type="checkbox"]').checked = true;
         }
     });
 }
 function deselectAllGroups() {
     var accountId = document.getElementById('account_id').value;
     if (!accountId) return;
-    document.querySelectorAll('.group-item').forEach(function(label) {
-        if (label.dataset.accountId === accountId) {
-            label.querySelector('input[type="checkbox"]').checked = false;
+    document.querySelectorAll('.group-item').forEach(function(item) {
+        if (item.dataset.accountId === accountId) {
+            item.querySelector('input[type="checkbox"]').checked = false;
         }
     });
 }
 function selectAllDays() {
-    document.querySelectorAll('.day-checkbox').forEach(function(cb) { cb.checked = true; });
+    document.querySelectorAll('input[name="days_of_week"]').forEach(function(cb) { cb.checked = true; });
 }
 function deselectAllDays() {
-    document.querySelectorAll('.day-checkbox').forEach(function(cb) { cb.checked = false; });
+    document.querySelectorAll('input[name="days_of_week"]').forEach(function(cb) { cb.checked = false; });
 }
 function addTimeInput() {
     var container = document.getElementById('times-container');
     var div = document.createElement('div');
-    div.className = 'flex items-center gap-2';
-    div.innerHTML = '<input type="time" name="times_of_day" required class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none"><button type="button" onclick="this.parentElement.remove()" class="text-gray-400 hover:text-red-500 p-1"><svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>';
+    div.innerHTML = '<input class="field__input" type="time" name="times_of_day" required><button class="btn btn--ghost" type="button" onclick="this.parentElement.remove()"><span class="btn__label">Убрать</span></button>';
     container.appendChild(div);
 }
 document.getElementById('account_id').addEventListener('change', filterGroupsByAccount);
