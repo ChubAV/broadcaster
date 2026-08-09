@@ -47,13 +47,18 @@
       <a data-grow href="/admin/users/{{ item.user.id }}">{{ item.user.name }}</a>
       {{- mono(item.user.email) -}}
     {%- endcall %}
+    {#- Подпись колонки берётся ЭЛЕМЕНТОМ USER_COLUMNS по индексу, а не
+        переписанной строкой: список уже единственный источник шапки (UI-06).
+        Подписи нет у колонки 0 — она несёт имя самого пользователя.
+        Подпись НЕ является новым полем: она дублирует название, уже показанное
+        в шапке, поэтому запрет на расширение состава данных не нарушен. -#}
     {{- cell(text=item.user.created_at.strftime('%d.%m.%Y') if item.user.created_at else '—',
-             mono=true, muted=true, title='Регистрация') }}
-    {%- call cell() %}
+             mono=true, muted=true, title='Регистрация', label=USER_COLUMNS[1]) }}
+    {%- call cell(label=USER_COLUMNS[2]) %}
       {%- if item.is_unlimited %}{{ badge('Безлимит', 'warning') }}
       {%- else %}{{ badge(item.balance ~ ' сообщ.', 'info') }}{% endif -%}
     {%- endcall %}
-    {%- call cell() %}
+    {%- call cell(label=USER_COLUMNS[3]) %}
       {%- if item.user.is_blocked %}{{ badge('Заблокирован', 'danger') }}
       {%- else %}{{ mono('—') }}{% endif -%}
     {%- endcall %}

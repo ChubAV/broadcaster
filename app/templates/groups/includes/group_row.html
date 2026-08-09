@@ -19,6 +19,7 @@
 {% from "components/badge.html" import badge %}
 {% from "components/toggle.html" import toggle %}
 {% from "components/button.html" import button %}
+{% from "components/modal.html" import modal %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 
 {% set GROUP_COLS = '28px minmax(180px,2.4fr) minmax(110px,1.2fr) 104px 96px 128px 96px 168px' %}
@@ -36,14 +37,22 @@
     {{- messenger_icon(group.messenger_type, size='avatar', show_label=false) -}}
     <span data-grow>{{ group.name }}</span>
   {%- endcall %}
-  {{- cell(text=group.group_external_id, mono=true, muted=true) }}
-  {{- cell(text=st.get('schedules_count', 0), mono=true, muted=true, title='Расписаний с этой группой') }}
+  {#- Подпись колонки берётся ЭЛЕМЕНТОМ GROUP_COLUMNS по индексу, а не
+      переписанной строкой: список уже единственный источник шапки, и подписи
+      обязаны идти из него же — иначе шапке и подписям есть на чём разъехаться,
+      и увидит это только пользователь на телефоне (UI-06). Подписи нет у
+      колонки 1 — она несёт название самой группы и уже является заголовком
+      строки, — и у колонок 0 и 7, у которых названия нет вовсе. -#}
+  {{- cell(text=group.group_external_id, mono=true, muted=true, label=GROUP_COLUMNS[2]) }}
+  {{- cell(text=st.get('schedules_count', 0), mono=true, muted=true, title='Расписаний с этой группой',
+           label=GROUP_COLUMNS[3]) }}
   {{- cell(text=(((st.get('send_success', 0) / attempts) * 100)|round|int ~ '%') if attempts > 0 else '—',
            mono=true, muted=true,
-           title=(st.get('send_success', 0)|string ~ ' из ' ~ attempts|string) if attempts > 0 else 'Отправок не было') }}
+           title=(st.get('send_success', 0)|string ~ ' из ' ~ attempts|string) if attempts > 0 else 'Отправок не было',
+           label=GROUP_COLUMNS[4]) }}
   {{- cell(text=format_datetime_for_user(st.get('last_sent_at'), user, '%d.%m %H:%M') if st.get('last_sent_at') else '—',
-           mono=true, muted=true, area='meta') }}
-  {%- call cell() %}
+           mono=true, muted=true, area='meta', label=GROUP_COLUMNS[5]) }}
+  {%- call cell(label=GROUP_COLUMNS[6]) %}
     {%- if group.is_active %}{{ badge('Активна', 'success') }}{% else %}{{ badge('Пауза', 'neutral') }}{% endif -%}
     {#- Последняя ошибка не теряется при перевёрстке: раздел меняет вид, а не
         состав показанных данных. Полный текст — в подсказке. -#}
@@ -58,9 +67,28 @@
       {{- toggle(name='is_active', checked=group.is_active, id='group-toggle-' ~ group.id,
                  title='Приостановить' if group.is_active else 'Возобновить') -}}
     </form>
-    <form method="post" action="/groups/{{ group.id }}/delete" onsubmit="return confirm('Удалить группу?')">
+    {#- Перехват отправки навешен на САМУ форму, а не заменил её кнопкой-триггером
+        вне формы: без Alpine перехват не навешивается, и форма уходит POST-ом на
+        прежний маршрут — ровно как до правки (WR-04, T-12-04). -#}
+    <form method="post" action="/groups/{{ group.id }}/delete"
+          x-data x-on:submit.prevent="$dispatch('modal-open-group-del-{{ group.id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить группу') -}}
     </form>
   {%- endcall %}
 {{ row_close() }}
+{#- Панель подтверждения стоит РЯДОМ со строкой, а не внутри неё: панель
+    позиционируется фиксированно, а внутри сетки строки она стала бы её колонкой
+    (эталон — ads/includes/ad_card.html, схема — accounts/list.html Плана 11).
+    Название группы приходит из внешнего мессенджера и приложением не
+    контролируется (T-12-02): оно уходит в body параметром макроса и выводится
+    обычным экранированным выводом.
+    method="post" передаётся явно, хотя совпадает с умолчанием макроса: маршрут и
+    метод удаления — контракт с обработчиком, и он обязан читаться грепом по
+    этому файлу, а не только по отрендеренной странице. -#}
+{{ modal(id='group-del-' ~ group.id,
+         title='Удалить группу?',
+         action='/groups/' ~ group.id ~ '/delete',
+         confirm_label='Удалить',
+         method="post",
+         body=group.name) }}
 {%- endmacro %}

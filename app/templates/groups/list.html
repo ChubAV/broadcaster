@@ -5,6 +5,7 @@
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/field.html" import field, select_field %}
 {% from "components/filters.html" import filters %}
+{% from "components/modal.html" import modal %}
 {% from "components/toggle.html" import toggle %}
 {% from "groups/includes/group_row.html" import group_row, GROUP_COLS, GROUP_COLUMNS %}
 
@@ -58,6 +59,31 @@
   <button class="btn btn--danger" type="button" onclick="submitBulkGroups('delete')"><span class="btn__label">Удалить</span></button>
 </div>
 
+{#- Панель подтверждения массового удаления. Вызывается БЛОЧНО: подтверждается
+    не одна сущность по идентификатору в маршруте, а НАБОР, приходящий полями
+    формы, и слот Плана 09 кладёт эти поля ВНУТРЬ формы панели.
+
+    Почему набор фиксируется скрытыми полями, а не перечитывается отметками в
+    момент отправки: подтверждение обязано относиться ровно к тому набору,
+    который будет удалён. При повторном чтении между вопросом и удалением
+    остаётся щель, и человек подтверждает число, которое может не совпасть с
+    тем, что уйдёт на сервер (T-12-01).
+
+    Класс modal__text у поясняющего абзаца — класс самой панели: счётчик обязан
+    стоять ВНУТРИ текста вопроса, а собственных классов раздел не заводит.
+
+    Адрес массового действия записан двойными кавычками намеренно: маршрут —
+    контракт с обработчиком и обязан читаться грепом по этому файлу. -#}
+{% call modal(id='groups-bulk-del',
+              title='Удалить выбранные группы?',
+              action="/groups/bulk",
+              confirm_label='Удалить',
+              method="post") %}
+  <p class="modal__text">Групп к удалению: <span id="groups-bulk-del-count">0</span>. Действие необратимо.</p>
+  <input type="hidden" name="action" value="delete">
+  <span id="groups-bulk-del-ids"></span>
+{% endcall %}
+
 {{ card_open() }}
   {{ rowhead(columns=GROUP_COLUMNS, cols=GROUP_COLS) }}
   {# Инварианты бесконечной прокрутки (ломает переверстка, а не логика):
@@ -83,9 +109,30 @@ function selectAllGroups() {
     document.querySelectorAll('.group-checkbox').forEach(cb => cb.checked = checked);
 }
 function submitBulkGroups(action) {
+    // Набор отметок читается РОВНО один раз: это и есть снимок, к которому
+    // относится и вопрос, и отправка.
     const ids = Array.from(document.querySelectorAll('.group-checkbox:checked')).map(cb => cb.value);
+    // Сообщение о пустом выборе остаётся системным уведомлением: это не
+    // подтверждение разрушительного действия, а ответ на нажатие без выбора.
     if (ids.length === 0) { alert('Выберите группы'); return; }
-    if (action === 'delete' && !confirm('Удалить выбранные группы?')) return;
+    if (action === 'delete') {
+        // Снимок кладётся в форму панели ОДНИМ движением: скрытые поля и число
+        // в вопросе пишутся ДО открытия панели, и отправляется именно эта форма.
+        // Узлы создаются и заполняются присваиванием свойств, а не собираются
+        // разметкой строкой (T-12-07).
+        const box = document.getElementById('groups-bulk-del-ids');
+        box.textContent = '';
+        ids.forEach(id => {
+            const input = document.createElement('input');
+            input.type = 'hidden'; input.name = 'group_ids'; input.value = id;
+            box.appendChild(input);
+        });
+        document.getElementById('groups-bulk-del-count').textContent = ids.length;
+        window.dispatchEvent(new CustomEvent('modal-open-groups-bulk-del'));
+        return;
+    }
+    // Деактивация подтверждения не имела и не получает: подтверждают
+    // разрушительное, а не обратимое.
     const form = document.createElement('form');
     form.method = 'POST';
     form.action = '/groups/bulk';

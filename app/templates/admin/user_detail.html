@@ -90,7 +90,11 @@
         {%- endif -%}
         <span data-grow>{{ acc.type }} #{{ acc.id }}</span>
       {%- endcall %}
-      {%- call cell() %}
+      {#- Подпись берётся ЭЛЕМЕНТОМ ACC_COLUMNS по индексу. Подпись здесь ровно
+          одна, и это не недоработка: колонок в таблице две, а первая несёт
+          название самого аккаунта. Подпись дублирует название из шапки и новым
+          полем не является — состав персональных данных не расширяется. -#}
+      {%- call cell(label=ACC_COLUMNS[1]) %}
         {%- if acc.status == 'active' %}{{ badge('Активен', 'success') }}
         {%- else %}{{ badge(acc.status, 'neutral') }}{% endif -%}
       {%- endcall %}
@@ -121,9 +125,15 @@
       </form>
       {#- Подтверждение удаления — модалка Плана 02 вместо браузерного диалога:
           начальный фокус стоит на «Отмене», поэтому по Enter удаление не
-          срабатывает. Маршрут и метод формы прежние. -#}
-      <button type="button" class="btn btn--danger"
-              x-data x-on:click="$dispatch('modal-open-user-del-{{ target_user.id }}')"><span class="btn__label">Удалить</span></button>
+          срабатывает. Маршрут и метод формы прежние.
+          Триггер — НАСТОЯЩАЯ форма, а не кнопка-триггер вне формы (План 12,
+          WR-04): кнопка вне формы не делает без Alpine ничего, а форма панели
+          остаётся скрытой навсегда, и на карточке не остаётся ни одного пути
+          удалить пользователя. Имя события и идентификатор панели не менялись. -#}
+      <form method="post" action="/admin/users/{{ target_user.id }}/delete"
+            x-data x-on:submit.prevent="$dispatch('modal-open-user-del-{{ target_user.id }}')">
+        <button type="submit" class="btn btn--danger"><span class="btn__label">Удалить</span></button>
+      </form>
     </div>
   {{ card_close() }}
 

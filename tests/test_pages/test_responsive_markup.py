@@ -1891,3 +1891,543 @@ def test_every_page_template_extends_a_shell():
             missing.append(str(rel))
 
     assert not missing, f"шаблоны разделов без наследования шелла: {missing}"
+
+
+# --- План 12, Задача 1: раздел «Группы» -------------------------------------
+#
+# Два последних места системного диалога раздела: удаление ОДНОЙ группы в строке
+# и массовое удаление НАБОРА. Второе не сводится к «замене диалога»: между
+# вопросом и отправкой лежит клиентский код, и от того, одним ли снимком берутся
+# число в вопросе и отправляемые идентификаторы, зависит, соответствует ли
+# подтверждение происходящему (T-12-01).
+
+# Подпись получает каждая колонка GROUP_COLUMNS с непустым названием, КРОМЕ
+# 'Группа' — она несёт название самой сущности и уже является заголовком строки.
+GROUP_CELL_LABELS = (
+    "Идентификатор",
+    "Расписаний",
+    "Успех",
+    "Отправлено",
+    "Статус",
+)
+
+SCRIPT_RE = re.compile(r"<script>(.*?)</script>", re.S)
+
+
+def _template_source(rel: str) -> str:
+    return (TEMPLATES_DIR / rel).read_text(encoding="utf-8")
+
+
+def _delete_forms_for(html: str, action: str) -> list[str]:
+    """Все формы с данным адресом удаления ЦЕЛИКОМ (открывающий тег + тело)."""
+    return re.findall(rf'<form[^>]*action="{re.escape(action)}"[^>]*>.*?</form>', html, re.S)
+
+
+def _labels_in(html: str) -> set[str]:
+    return {value for value in CELL_LABEL_RE.findall(html) if value}
+
+
+def _header_in(html: str) -> set[str]:
+    head = ROWHEAD_RE.search(html)
+    assert head, "шапка колонок раздела не найдена"
+    return {name for name in re.findall(r"<span>([^<]*)</span>", head.group(1)) if name}
+
+
+@pytest.mark.asyncio
+async def test_groups_delete_uses_modal(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Удаление группы подтверждается панелью дизайн-системы, а не диалогом ОС.
+
+    Тот же жест разрушения обязан выглядеть одинаково во всех разделах (SC-3):
+    после Плана 11 «Аккаунты» показывают панель, а «Группы» показывали бы
+    системный диалог.
+    """
+    group = await _seed_group(db_session)
+
+    html = (await authed_client.get("/groups")).text
+
+    assert 'role="dialog"' in html, "панель подтверждения не отрисована"
+    assert 'class="modal"' in html
+    assert f"modal-open-group-del-{group.id}" in html, (
+        "форма удаления не открывает панель подтверждения"
+    )
+    assert html.count(f'id="group-del-{group.id}"') == 1, (
+        "панель подтверждения группы не единственная"
+    )
+    assert "Отмена" in html, "у панели нет отказа от удаления"
+    assert "confirm(" not in html, "системный диалог браузера остался"
+    assert "onsubmit" not in html, "старый перехват отправки остался"
+
+
+@pytest.mark.asyncio
+async def test_groups_delete_form_degrades_without_alpine(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-12-04: без Alpine форма удаления группы отправляется напрямую.
+
+    Панель — УСИЛЕНИЕ поверх настоящей формы. Кнопка type="button" вместо формы
+    оставила бы раздел без единственного пути удалить группу, когда скрипт не
+    доехал: снять признак сокрытия с панели умеет только Alpine (WR-04).
+    """
+    group = await _seed_group(db_session)
+
+    html = (await authed_client.get("/groups")).text
+
+    forms = _delete_forms_for(html, f"/groups/{group.id}/delete")
+    assert forms, "форма удаления исчезла из разметки"
+
+    row_forms = [f for f in forms if "modal__form" not in f]
+    assert row_forms, "форма удаления осталась только внутри панели подтверждения"
+    for form in row_forms:
+        assert re.search(r'method="post"', form, re.I), (
+            f"форма удаления потеряла метод: {form[:200]}"
+        )
+        assert 'type="submit"' in form, (
+            f"кнопка удаления перестала отправлять форму: {form[:200]}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_groups_bulk_delete_uses_modal(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Массовое удаление подтверждается панелью с собственной формой набора.
+
+    Подтверждается НЕ одна сущность по идентификатору в маршруте, а НАБОР,
+    приходящий полями формы: поэтому скрытое поле действия, контейнер под
+    идентификаторы и счётчик лежат ВНУТРИ формы панели (слот Плана 09).
+    """
+    await _seed_group(db_session)
+
+    html = (await authed_client.get("/groups")).text
+
+    assert html.count('id="groups-bulk-del"') == 1, "панель массового удаления не одна"
+
+    form = re.search(
+        r'<form class="modal__form"[^>]*action="/groups/bulk"[^>]*>(.*?)</form>',
+        html,
+        re.S,
+    )
+    assert form, "форма панели массового удаления потеряла адрес массового действия"
+    body = form.group(1)
+
+    assert re.search(r'name="action"[^>]*value="delete"', body), (
+        "в форме панели нет скрытого поля действия со значением удаления"
+    )
+    assert 'id="groups-bulk-del-ids"' in body, (
+        "в форме панели нет контейнера под идентификаторы выбранных групп"
+    )
+    assert 'id="groups-bulk-del-count"' in body, (
+        "в форме панели нет элемента под число выбранных групп"
+    )
+    assert 'type="submit"' in body, "кнопка подтверждения не отправляет форму панели"
+
+    assert "confirm(" not in html, "системный диалог массового удаления остался"
+
+
+def test_groups_bulk_modal_confirms_exact_set():
+    """T-12-01: вопрос и отправка относятся к ОДНОМУ снимку набора.
+
+    Проверка идёт по исходнику, а не по выдаче: щель между вопросом и удалением
+    — свойство ПОРЯДКА операций в клиентском коде, и в отрендеренной разметке её
+    не видно. Если идентификаторы читаются заново в момент отправки, человек
+    подтверждает число, которое может не совпасть с тем, что уйдёт на сервер, и
+    узнаёт об этом по пропавшим группам.
+    """
+    script = SCRIPT_RE.search(_template_source("groups/list.html"))
+    assert script, "клиентский код раздела не найден"
+    source = script.group(1)
+
+    assert source.count(".group-checkbox:checked") == 1, (
+        "набор отметок читается больше одного раза — между вопросом и отправкой "
+        "появилась щель, в которой набор может измениться"
+    )
+
+    read = source.index(".group-checkbox:checked")
+    ids_written = source.index("groups-bulk-del-ids")
+    count_written = source.index("groups-bulk-del-count")
+    dispatch = source.index("modal-open-groups-bulk-del")
+
+    assert read < ids_written < dispatch, (
+        "идентификаторы попадают в форму панели не ДО открытия вопроса"
+    )
+    assert read < count_written < dispatch, (
+        "число выбранных групп пишется в вопрос не ДО его открытия"
+    )
+
+    assert "createElement" in source and "textContent" in source, (
+        "скрытые поля собираются не узлами, а разметкой строкой (T-12-07)"
+    )
+    assert "innerHTML" not in source, (
+        "разметка скрытых полей собирается конкатенацией строк (T-12-07)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_groups_cell_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Каждая ячейка строки группы несёт название своей колонки.
+
+    На 860px шапка колонок скрывается, и строка «ext-4242 · 0 · — · —»
+    превращается в набор символов без смысла.
+    """
+    groups = [
+        await _seed_group(db_session, name=f"Группа {i}") for i in range(2)
+    ]
+
+    html = (await authed_client.get("/groups")).text
+
+    for label in GROUP_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(groups), (
+            f"подпись {label!r} проставлена не во всех строках"
+        )
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header - labels == {"Группа"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Группа'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_groups_partial_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Порция бесконечной прокрутки несёт те же подписи, что и первая страница.
+
+    Правка живёт в МАКРОСЕ строки, поэтому закрывает обе поверхности разом;
+    тест доказывает это, а не проверяет второй файл на всякий случай.
+    """
+    groups = [
+        await _seed_group(db_session, name=f"Группа {i}") for i in range(2)
+    ]
+
+    response = await authed_client.get("/groups/partial?offset=0&limit=30")
+    assert response.status_code == 200
+    html = response.text
+
+    for label in GROUP_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(groups), (
+            f"подпись {label!r} потеряна в порции бесконечной прокрутки"
+        )
+
+
+# --- План 12, Задача 2: раздел «Расписания» ---------------------------------
+#
+# Схема Задачи 1 повторяется дословно: форма остаётся формой, перехват отправки
+# навешивается на неё, панель ставится соседним элементом строки. Правка живёт в
+# МАКРОСЕ, поэтому list.html и partial_cards.html не правятся вовсе.
+
+# Подпись получает каждая колонка SCHEDULE_COLUMNS с непустым названием, КРОМЕ
+# 'Объявление' — она несёт название сущности и уже является заголовком строки.
+SCHEDULE_CELL_LABELS = (
+    "Группы",
+    "Дни",
+    "Время",
+    "Следующий запуск",
+    "Статус",
+)
+
+
+@pytest.mark.asyncio
+async def test_schedules_delete_uses_modal(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Удаление расписания подтверждается панелью дизайн-системы (SC-3)."""
+    schedule = await _seed_schedule(db_session)
+
+    html = (await authed_client.get("/schedules")).text
+
+    assert 'role="dialog"' in html, "панель подтверждения не отрисована"
+    assert 'class="modal"' in html
+    assert f"modal-open-schedule-del-{schedule.id}" in html, (
+        "форма удаления не открывает панель подтверждения"
+    )
+    assert html.count(f'id="schedule-del-{schedule.id}"') == 1, (
+        "панель подтверждения расписания не единственная"
+    )
+    assert "Отмена" in html, "у панели нет отказа от удаления"
+    assert "confirm(" not in html, "системный диалог браузера остался"
+    assert "onsubmit" not in html, "старый перехват отправки остался"
+
+
+@pytest.mark.asyncio
+async def test_schedules_delete_form_degrades_without_alpine(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-12-04: без Alpine форма удаления расписания отправляется напрямую."""
+    schedule = await _seed_schedule(db_session)
+
+    html = (await authed_client.get("/schedules")).text
+
+    forms = _delete_forms_for(html, f"/schedules/{schedule.id}/delete")
+    assert forms, "форма удаления исчезла из разметки"
+
+    row_forms = [f for f in forms if "modal__form" not in f]
+    assert row_forms, "форма удаления осталась только внутри панели подтверждения"
+    for form in row_forms:
+        assert re.search(r'method="post"', form, re.I), (
+            f"форма удаления потеряла метод: {form[:200]}"
+        )
+        assert 'type="submit"' in form, (
+            f"кнопка удаления перестала отправлять форму: {form[:200]}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_schedules_cell_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Каждая ячейка строки расписания несёт название своей колонки."""
+    schedules = [
+        await _seed_schedule(db_session, ad_title=f"Объявление {i}") for i in range(2)
+    ]
+
+    html = (await authed_client.get("/schedules")).text
+
+    for label in SCHEDULE_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(schedules), (
+            f"подпись {label!r} проставлена не во всех строках"
+        )
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header - labels == {"Объявление"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Объявление'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedules_partial_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Порция бесконечной прокрутки несёт те же подписи, что и первая страница."""
+    schedules = [
+        await _seed_schedule(db_session, ad_title=f"Объявление {i}") for i in range(2)
+    ]
+
+    response = await authed_client.get("/schedules/partial?offset=0&limit=30")
+    assert response.status_code == 200
+    html = response.text
+
+    for label in SCHEDULE_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(schedules), (
+            f"подпись {label!r} потеряна в порции бесконечной прокрутки"
+        )
+
+
+def test_schedules_row_keeps_grid_area_marker():
+    """Признак области сетки не потерян: подпись добавлена К нему, а не вместо.
+
+    Медиазапрос раздела опирается на признак области у ячейки следующего
+    запуска. Потеря признака не роняет страницу — она молча ломает раскладку
+    строки на узкой ширине, и увидит это только пользователь на телефоне.
+    """
+    source = _template_source("schedules/includes/schedule_row.html")
+
+    assert source.count("area='meta'") == 1, (
+        "ячейка следующего запуска потеряла признак области сетки"
+    )
+
+
+# --- План 12, Задача 3, часть 1: два прежних подтверждения к общему механизму -
+#
+# Планы 03 и 08 поставили панель подтверждения кнопкой type="button", а настоящую
+# форму спрятали ВНУТРЬ панели. Без Alpine кнопка не делает ничего, а форма
+# остаётся скрытой навсегда: на странице не остаётся ни одного пути удаления
+# (WR-04). Одиннадцать мест, поставленных Планами 11-12, деградируют; эти два —
+# нет. Один механизм подтверждения означает один механизм, а не два похожих.
+
+
+@pytest.mark.asyncio
+async def test_ads_delete_form_degrades_without_alpine(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-12-04: на странице объявлений есть настоящая форма удаления.
+
+    Кнопка type="button" рядом с формой, лежащей внутри скрытой панели, — это
+    не подтверждение, а единственная точка отказа: снять признак сокрытия с
+    панели умеет только Alpine.
+    """
+    ad = await _seed_ad(db_session)
+
+    html = (await authed_client.get("/ads")).text
+
+    forms = _delete_forms_for(html, f"/ads/{ad.id}/delete")
+    assert forms, "форма удаления объявления исчезла из разметки"
+
+    row_forms = [f for f in forms if "modal__form" not in f]
+    assert row_forms, (
+        "форма удаления объявления существует только внутри панели подтверждения — "
+        "без Alpine удалить объявление нечем (WR-04)"
+    )
+    for form in row_forms:
+        assert re.search(r'method="post"', form, re.I), (
+            f"форма удаления потеряла метод: {form[:200]}"
+        )
+        assert 'type="submit"' in form, (
+            f"кнопка удаления перестала отправлять форму: {form[:200]}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_admin_user_delete_form_degrades_without_alpine(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """T-12-04: на карточке пользователя есть настоящая форма удаления."""
+    user = await _user(db_session)
+
+    html = (await admin_client.get(f"/admin/users/{user.id}")).text
+
+    forms = _delete_forms_for(html, f"/admin/users/{user.id}/delete")
+    assert forms, "форма удаления пользователя исчезла из разметки"
+
+    row_forms = [f for f in forms if "modal__form" not in f]
+    assert row_forms, (
+        "форма удаления пользователя существует только внутри панели подтверждения — "
+        "без Alpine удалить пользователя нечем (WR-04)"
+    )
+    for form in row_forms:
+        assert re.search(r'method="post"', form, re.I), (
+            f"форма удаления потеряла метод: {form[:200]}"
+        )
+        assert 'type="submit"' in form, (
+            f"кнопка удаления перестала отправлять форму: {form[:200]}"
+        )
+
+
+# --- План 12, Задача 3, часть 2: подписи колонок в оставшихся четырёх шаблонах -
+#
+# Уточнение к списку семи шаблонов из 01-VERIFICATION.md: он называет списочные
+# страницы, но в разделах объявлений и на дашборде ячейки живут в МАКРОСЕ строки.
+# Правка макроса закрывает и страницу, и её партиал прокрутки одновременно, а в
+# админке ячейки лежат в самих страницах — там правятся страницы.
+
+AD_CELL_LABELS = ("Текст", "Отправок", "Расписаний", "Создано", "Статус")
+RECENT_CELL_LABELS = ("Время", "Группа", "Статус")
+ADMIN_USER_CELL_LABELS = ("Регистрация", "Баланс", "Статус")
+
+
+@pytest.mark.asyncio
+async def test_ads_cell_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка объявления несёт подписи и на странице, и в порции прокрутки."""
+    ads = [await _seed_ad(db_session, title=f"Объявление {i}") for i in range(2)]
+
+    html = (await authed_client.get("/ads")).text
+
+    for label in AD_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(ads), (
+            f"подпись {label!r} проставлена не во всех строках"
+        )
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header - labels == {"Объявление"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Объявление'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+    response = await authed_client.get("/ads/partial?offset=0&limit=30")
+    assert response.status_code == 200
+    for label in AD_CELL_LABELS:
+        assert response.text.count(f"<span data-cell-label>{label}</span>") == len(ads), (
+            f"подпись {label!r} потеряна в порции бесконечной прокрутки"
+        )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_cell_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка недавней отправки на дашборде несёт названия своих колонок."""
+    logs = [
+        await _seed_send_log(db_session, ad_title=f"Отправка {i}") for i in range(2)
+    ]
+
+    html = (await authed_client.get("/dashboard")).text
+
+    for label in RECENT_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(logs), (
+            f"подпись {label!r} проставлена не во всех строках"
+        )
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header - labels == {"Объявление"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Объявление'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_users_cell_labels_present(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка пользователя в админке несёт названия своих колонок.
+
+    Подпись колонки НЕ является новым полем: она дублирует название, уже
+    показанное в шапке. Состав персональных данных не расширяется (T-12-06).
+    """
+    html = (await admin_client.get("/admin/users")).text
+
+    for label in ADMIN_USER_CELL_LABELS:
+        assert f"<span data-cell-label>{label}</span>" in html, (
+            f"подпись {label!r} потеряна в строке пользователя"
+        )
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header - labels == {"Пользователь"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Пользователь'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_user_detail_cell_labels_present(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Список аккаунтов в карточке пользователя несёт название колонки статуса.
+
+    Подпись здесь ровно одна, и это не недоработка: колонок в таблице две, а
+    первая несёт название самой сущности.
+    """
+    user = await _user(db_session)
+    await _seed_account(db_session, type_="max")
+
+    html = (await admin_client.get(f"/admin/users/{user.id}")).text
+
+    assert "<span data-cell-label>Статус</span>" in html, (
+        "подпись статуса потеряна в списке аккаунтов карточки"
+    )
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header - labels == {"Аккаунт"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Аккаунт'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
