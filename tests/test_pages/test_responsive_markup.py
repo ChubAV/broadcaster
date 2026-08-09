@@ -1274,6 +1274,56 @@ TAILWIND_TOKENS = (
 CLASS_ATTR_RE = re.compile(r'class="([^"]*)"')
 
 
+def utility_markers_in(value: str) -> set[str]:
+    """Признаки удалённого фреймворка в одном значении class="…"."""
+    return {token for token in TAILWIND_TOKENS if token in value}
+
+
+# Семейства классов, которые список признаков Плана 08 НЕ ловил. Именно из-за
+# них сплошной обход прошёл мимо app/templates/includes/icons.html: ни один из
+# 40 токенов не совпадал с классами анимации, прозрачности и размеров, которые
+# в этом файле стояли.
+MISSED_FAMILIES = {
+    "бесконечное вращение": "animate-spin h-8 w-8",
+    "прозрачность с числовым суффиксом": "opacity-25",
+    "отрицательный отступ с префиксом направления": "-ml-0.5",
+    "дробный отступ": "mr-1.5",
+    "размерные классы высоты и ширины": "h-3 w-3",
+}
+
+# Значения class="…" собственной дизайн-системы. Ни одно не имеет права быть
+# опознано как признак удалённого фреймворка: молча расширенный токен, который
+# ловит свои же классы, заставил бы ослабить тест целиком.
+OWN_DESIGN_SYSTEM_CLASSES = (
+    "cell cell--mono cell--muted",
+    "btn btn--ghost",
+    "btn btn--danger",
+    "msg__glyph msg__glyph--tg {{ size }}",
+    "msg msg--plain",
+    "modal__panel",
+    "modal__actions",
+    "badge badge--success",
+    "card__head",
+    "empty__hint",
+    "avatar",
+    "mono",
+)
+
+
+def test_utility_markers_catch_the_families_that_were_missed():
+    """Список признаков ловит те семейства, из-за которых промах случился.
+
+    Тест синтетический намеренно: реальный нарушитель (includes/icons.html)
+    удаляется в этой же задаче, и после удаления проверять расширение списка
+    станет не на чем. Этот тест — единственное, что держит свойство дальше.
+    """
+    for family, sample in MISSED_FAMILIES.items():
+        assert utility_markers_in(sample), f"семейство не опознано: {family} ({sample!r})"
+
+    for value in OWN_DESIGN_SYSTEM_CLASSES:
+        assert not utility_markers_in(value), f"свой класс опознан как чужой: {value!r}"
+
+
 def test_no_utility_classes_anywhere():
     """Ни ОДИН шаблон проекта не содержит utility-классов (D-06, UI-06).
 
