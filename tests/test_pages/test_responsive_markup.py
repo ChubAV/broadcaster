@@ -99,3 +99,27 @@ async def test_ads_delete_uses_modal(authed_client: AsyncClient, db_session: Asy
     # Браузерный диалог подтверждения больше не используется
     assert "onsubmit" not in html
     assert "confirm(" not in html
+
+
+@pytest.mark.asyncio
+async def test_ads_delete_route_unchanged(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Модалка меняет способ подтверждения — не маршрут, не метод, не права.
+
+    T-03-02: серверная проверка владельца обязана остаться на месте, иначе
+    новая кнопка удаления открыла бы чужие объявления.
+    """
+    own = await _seed_ad(db_session, title="Своё объявление")
+    foreign = Ad(user_id=own.user_id + 1000, title="Чужое", text="Чужой текст", images=[])
+    db_session.add(foreign)
+    await db_session.commit()
+    await db_session.refresh(foreign)
+
+    response = await authed_client.post(f"/ads/{own.id}/delete", follow_redirects=False)
+    assert response.status_code == 302
+    assert (await db_session.get(Ad, own.id)) is None
+
+    response = await authed_client.post(f"/ads/{foreign.id}/delete", follow_redirects=False)
+    assert response.status_code == 302
+    assert (await db_session.get(Ad, foreign.id)) is not None
