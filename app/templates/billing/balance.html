@@ -1,95 +1,123 @@
 {% extends "base.html" %}
-{% block title %}Баланс — Broadcaster{% endblock %}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/table.html" import rowhead, row_open, row_close, cell %}
+{% from "components/badge.html" import badge %}
+{% from "components/empty_state.html" import empty_state %}
+{% from "components/mono.html" import mono %}
+{% from "components/progress.html" import progress %}
+
+{% block title %}Тарифы — Broadcaster{% endblock %}
+
+{# Контракт «страница → шелл» (План 01): заголовок раздела рендерит шапка. #}
+{% block page_title %}Тарифы{% endblock %}
+{% block page_subtitle %}Баланс сообщений и история операций{% endblock %}
+
 {% block content %}
 
-<h1 class="text-lg lg:text-xl font-semibold text-gray-900 mb-6">Баланс сообщений</h1>
+{#- Квота приходит из живого контекста шелла (get_shell_context, План 01), а не
+    из нового запроса: тот же самый показатель, тот же самый источник, что и у
+    виджета в сайдбаре. На ширине ≤860px сайдбар скрыт медиазапросом, поэтому
+    на разделе «Тарифы» это ЕДИНСТВЕННОЕ место, где мобильный пользователь
+    видит свой тариф. Внутри блока content переменные шелла из base.html
+    недоступны (Jinja не передаёт контекст вложенного блока), поэтому
+    request.state.shell читается здесь заново. -#}
+{% set quota = request.state.shell.get('quota', {}) if request.state.shell else {} %}
 
-<!-- Current balance -->
-<div class="bg-white rounded-lg border border-gray-200 p-6 lg:p-8 mb-8">
-  <div class="text-center">
+{#- Раскладка ЕДИНСТВЕННЫХ табличных данных проекта. Элементов таблицы в
+    макете нет вообще: и списки, и табличные данные построены на сетке.
+    Поэтому история операций собрана на тех же примитивах
+    data-rowhead / data-row / data-grow, что и все списки разделов — адаптив на
+    860px приходит бесплатно, без второй вёрстки и без JS. Фазы 5 и 6 строят
+    табличные представления этим же способом. -#}
+{% set TX_COLS = 'minmax(132px,1fr) 128px 92px 100px minmax(160px,2fr)' %}
+{% set TX_COLUMNS = ['Дата', 'Тип', 'Кол-во', 'Баланс', 'Описание'] %}
+{#- Маппинг «тип операции → подпись и вариант бейджа» живёт в вызывающем
+    шаблоне: единого enum статусов в проекте нет (контракт Плана 02). -#}
+{% set TX_LABELS = {
+  'purchase': ('Покупка', 'success'),
+  'free_monthly': ('Бесплатные', 'info'),
+  'admin_adjustment': ('Админ', 'neutral'),
+  'send_deduction': ('Отправка', 'warning'),
+} %}
+
+<div data-stack>
+
+  <div data-metrics>
+    {{ card_open() }}
+      {{ mono('Текущий тариф', 'muted', upper=true) }}
+      <span data-metric-value>{{ quota.get('plan', 'free')|capitalize }}</span>
+    {{ card_close() }}
+    {{ card_open() }}
+      {{ mono('Баланс сообщений', 'muted', upper=true) }}
+      <span data-metric-value>{% if balance_info.is_unlimited %}∞{% else %}{{ balance_info.balance }}{% endif %}</span>
+    {{ card_close() }}
+  </div>
+
+  {{ card_open(title='Потребление') }}
     {% if balance_info.is_unlimited %}
-    <div class="text-5xl font-bold text-amber-600 mb-2">Безлимит</div>
-    <div class="text-sm text-gray-500">безлимитная отправка сообщений</div>
+      {{ badge('Безлимит', 'warning') }}
+      {{ mono('безлимитная отправка сообщений') }}
     {% else %}
-    <div class="text-5xl font-bold text-indigo-600 mb-2">{{ balance_info.balance }}</div>
-    <div class="text-sm text-gray-500">сообщений на балансе</div>
-    {% if balance_info.free_balance_reset_at %}
-    <div class="text-xs text-gray-400 mt-2">Последнее бесплатное начисление: {{ balance_info.free_balance_reset_at[:10] }}</div>
+      {#- Тот же макрос, что и у виджета квоты в сайдбаре: показатель один,
+          компонент должен быть один. Ограничение диапазона 0..100 макрос
+          делает сам. -#}
+      {{ progress(quota.get('percent', 0),
+                  label='Израсходовано ' ~ quota.get('used', 0) ~ ' из ' ~ quota.get('limit', 0)) }}
+      {% if balance_info.free_balance_reset_at %}
+      {{ mono('Последнее бесплатное начисление: ' ~ balance_info.free_balance_reset_at[:10]) }}
+      {% endif %}
+      {{ mono('Каждый месяц начисляется 10 бесплатных сообщений') }}
     {% endif %}
-    <div class="text-xs text-gray-400 mt-1">Каждый месяц начисляется 10 бесплатных сообщений</div>
-    {% endif %}
-  </div>
-</div>
+  {{ card_close() }}
 
-{% if payments_enabled and not balance_info.is_unlimited %}
-<!-- Packages -->
-<h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">Пополнить баланс</h2>
-<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-  {% for pkg in packages %}
-  <div class="bg-white rounded-lg border border-gray-200 p-6 text-center">
-    <h3 class="text-base font-semibold text-gray-900">{{ pkg.name }}</h3>
-    <div class="text-3xl font-bold text-gray-900 mt-2">{{ pkg.price }} &#8381;</div>
-    <div class="text-sm text-gray-500 mt-1">{{ pkg.count }} сообщений</div>
-    <button
-      onclick="purchasePackage({{ loop.index0 }})"
-      class="mt-4 w-full inline-flex justify-center items-center rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 transition-colors"
-    >
-      Купить
-    </button>
+  {% if payments_enabled and not balance_info.is_unlimited %}
+  <div data-metrics>
+    {% for pkg in packages %}
+    {{ card_open() }}
+      {{ mono(pkg.name, 'muted', upper=true) }}
+      <span data-metric-value>{{ pkg.price }} &#8381;</span>
+      {{ mono(pkg.count ~ ' сообщений') }}
+      {#- Кнопкой управляет скрипт страницы, а макрос button не принимает
+          обработчика события — собрана на его классах вручную (прецедент
+          Плана 06). Контракт с purchasePackage сохранён дословно. -#}
+      <button class="btn btn--primary" type="button" onclick="purchasePackage({{ loop.index0 }})"><span class="btn__label">Купить</span></button>
+    {{ card_close() }}
+    {% endfor %}
   </div>
-  {% endfor %}
-</div>
-{% elif not payments_enabled and not balance_info.is_unlimited %}
-<div class="bg-gray-50 rounded-lg border border-gray-200 p-6 mb-8 text-center text-sm text-gray-500">
-  Пополнение баланса доступно через администратора
-</div>
-{% endif %}
-
-<!-- Transaction history -->
-<h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">История операций</h2>
-<div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
-  {% if transactions %}
-  <div class="overflow-x-auto">
-    <table class="min-w-full divide-y divide-gray-200">
-      <thead class="bg-gray-50">
-        <tr>
-          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата</th>
-          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Тип</th>
-          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Кол-во</th>
-          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Баланс</th>
-          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Описание</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-gray-200">
-        {% for tx in transactions %}
-        <tr>
-          <td class="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">{{ tx.created_at[:16] if tx.created_at else '' }}</td>
-          <td class="px-4 py-3 text-sm whitespace-nowrap">
-            {% if tx.type == 'purchase' %}
-            <span class="inline-flex items-center rounded-full bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">Покупка</span>
-            {% elif tx.type == 'free_monthly' %}
-            <span class="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">Бесплатные</span>
-            {% elif tx.type == 'admin_adjustment' %}
-            <span class="inline-flex items-center rounded-full bg-purple-50 px-2 py-0.5 text-xs font-medium text-purple-700">Админ</span>
-            {% elif tx.type == 'send_deduction' %}
-            <span class="inline-flex items-center rounded-full bg-orange-50 px-2 py-0.5 text-xs font-medium text-orange-700">Отправка</span>
-            {% else %}
-            <span class="text-gray-500">{{ tx.type }}</span>
-            {% endif %}
-          </td>
-          <td class="px-4 py-3 text-sm text-right whitespace-nowrap {{ 'text-green-600' if tx.amount > 0 else 'text-red-600' }}">
-            {{ '+' if tx.amount > 0 else '' }}{{ tx.amount }}
-          </td>
-          <td class="px-4 py-3 text-sm text-right text-gray-900 whitespace-nowrap">{{ tx.balance_after }}</td>
-          <td class="px-4 py-3 text-sm text-gray-500">{{ tx.description or '' }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="p-8 text-center text-sm text-gray-500">Нет операций</div>
+  {% elif not payments_enabled and not balance_info.is_unlimited %}
+  {{ empty_state('Пополнение баланса доступно через администратора') }}
   {% endif %}
+
+  {% if transactions %}
+  {{ card_open(title='История операций') }}
+    {{ rowhead(columns=TX_COLUMNS, cols=TX_COLS) }}
+    {% for tx in transactions %}
+    {%- set tx_label = TX_LABELS.get(tx.type) -%}
+    {{ row_open(cols=TX_COLS) }}
+      {{- cell(text=tx.created_at[:16] if tx.created_at else '', mono=true, muted=true) }}
+      {%- call cell() %}
+        {%- if tx_label %}{{ badge(tx_label[0], tx_label[1]) }}{% else %}{{ mono(tx.type) }}{% endif -%}
+      {%- endcall %}
+      {#- Подпись колонки едет вместе со значением: на 860px шапка колонок
+          скрывается, и без подписи число теряет смысл. Атрибут общий, не
+          принадлежит разделу. -#}
+      {%- call cell() %}
+        <span data-cell-label>Кол-во</span>
+        {{- mono(('+' if tx.amount > 0 else '') ~ tx.amount, 'ok' if tx.amount > 0 else 'danger') -}}
+      {%- endcall %}
+      {%- call cell() %}
+        <span data-cell-label>Баланс</span>
+        {{- mono(tx.balance_after, 'bright') -}}
+      {%- endcall %}
+      {{- cell(text=tx.description or '', grow=true) }}
+    {{ row_close() }}
+    {% endfor %}
+  {{ card_close() }}
+  {% else %}
+  {{ empty_state('Операций пока нет',
+                 hint='Здесь появятся начисления, покупки и списания сообщений') }}
+  {% endif %}
+
 </div>
 
 {% if payments_enabled %}
