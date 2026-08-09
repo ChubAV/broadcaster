@@ -1052,3 +1052,36 @@ a:hover { color: var(--accent-link-hover); }
   [data-hrow] { transition: none !important; }
   [data-hrow]:hover { transform: none !important; }
 }
+
+/* --------------------------------------------------------------------------
+   6. Мастера подключения каналов (План 06).
+
+   Дополнение файла санкционировано планом: шаг мастера и блок QR-кода — это
+   единственные элементы раздела, для которых в библиотеке компонентов макроса
+   нет. Всё остальное на экранах подключения собрано из card / field / button /
+   alert / badge. Значения — токены раздела 1; новых цветов, радиусов и кеглей
+   не вводится.
+   -------------------------------------------------------------------------- */
+
+/* Шаг мастера. Мастера пошаговые, и на экране Telegram шаги переключаются
+   скриптом через hidden — поэтому шаг обязан быть отдельным блоком, а не
+   строкой внутри карточки. */
+.connect-step { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
+.connect-step[hidden] { display: none; }
+.connect-step--center { align-items: center; text-align: center; }
+.connect-step > .field, .connect-step > form { align-self: stretch; }
+.connect-step__text { margin: 0; font-size: var(--fs-md); color: var(--text-secondary); }
+.connect-step__actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.connect-step__form { display: flex; flex-direction: column; gap: 14px; align-items: stretch; }
+
+/* Блок QR-кода. Ширина ограничена самим изображением: QR обязан остаться
+   квадратным и достаточно крупным для сканирования телефоном. */
+.connect-qr {
+  align-self: center; margin: 0 auto; width: max-content; max-width: 100%;
+  padding: 12px; border-radius: var(--r-xl);
+  background: var(--surface-input); border: 1px solid var(--border);
+}
+.connect-qr img { display: block; width: 256px; max-width: 100%; height: auto; border-radius: var(--r-md); }
+
+/* Колонка мастера: узкая центральная страница вместо сетки раздела. */
+.connect-shell { display: flex; flex-direction: column; gap: 14px; max-width: 460px; margin: 0 auto; }

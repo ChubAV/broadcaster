@@ -1,109 +1,94 @@
+{% from "components/button.html" import button %}
+{% from "components/table.html" import row_open, row_close, cell %}
+{% from "components/badge.html" import badge %}
+{% from "components/mono.html" import mono %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
-{% from "includes/icons.html" import icon_spinner_small, icon_delete, icon_refresh %}
+
+{# Следующая порция строк раздела «Аккаунты». Разметка строки и сентинела
+   ИДЕНТИЧНА list.html: правится одна — синхронно правится вторая. Три значения
+   ниже повторяют объявленные в list.html и в partials/sync_status_card.html. #}
+{% set ACCOUNT_COLS = 'minmax(150px,2fr) 84px 112px 116px 140px 148px 148px 116px' %}
+{% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
+
 {% for account in accounts %}
-
-{% if account.status == 'syncing' and account.type == 'wa' %}
-<div id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status?layout=cards" hx-trigger="every 5s" hx-swap="outerHTML" class="bg-white rounded-lg border border-gray-200 p-5">
-  <div class="flex items-center gap-2 mb-3">
-    {{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}
-  </div>
-  <div class="mb-3">
-    <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
-      {{ icon_spinner_small() }}
-      Синхронизация...
-    </span>
-  </div>
-  <p class="text-xs text-gray-500 mb-4">Загружаем группы из WhatsApp. Это может занять несколько минут.</p>
-  <div class="pt-3 border-t border-gray-100">
-    <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
-      <button type="submit" class="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">
-        {{ icon_delete(size='h-4 w-4') }}
-        Удалить
-      </button>
+{%- set stats = account_stats.get(account.id, {}) -%}
+{%- set attempts = stats.get('send_attempts', 0) -%}
+{%- set label = MESSENGER_LABELS.get(account.type, account.type) -%}
+{% if account.status == 'syncing' %}
+{#- ЯКОРЬ ПОДМЕНЫ. Идентификатор account-row-<id> и запрос обновления статуса
+    стоят на ОДНОМ элементе, и этот элемент заменяется целиком. Перенос
+    идентификатора на обёртку или на дочерний элемент рвёт подмену молча:
+    строка перестанет обновляться, а страница останется исправной с виду.
+    Запрос висит ТОЛЬКО на синхронизирующейся строке: у остальных статусов
+    замене неоткуда взяться, а опрос на каждой строке превратился бы в
+    бесконечный поток запросов с каждой открытой вкладки (T-06-01). -#}
+<div data-row id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML" style="--cols: {{ ACCOUNT_COLS }}">
+  {%- call cell(grow=true) %}
+    {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
+    <span data-grow>{{ label }}</span>{{ mono('#' ~ account.id) }}
+  {%- endcall %}
+  {{- cell(text='—', mono=true, muted=true) }}
+  {{- cell(text='—', mono=true, muted=true) }}
+  {{- cell(text='—', mono=true, muted=true) }}
+  {{- cell(text='—', mono=true, muted=true) }}
+  {{- cell(text='—', mono=true, muted=true) }}
+  {%- call cell() %}
+    {{- badge('Синхронизация...', 'warning', title='Загружаем группы из ' ~ label ~ '. Это может занять несколько минут.') -}}
+  {%- endcall %}
+  {%- call cell() %}
+    <form method="POST" action="/accounts/{{ account.id }}/delete" onsubmit="return confirm('Удалить этот аккаунт?')">
+      {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
-  </div>
+  {%- endcall %}
 </div>
-
-{% elif account.status == 'sync_failed' and account.type == 'wa' %}
-<div class="bg-white rounded-lg border border-gray-200 p-5">
-  <div class="flex items-center gap-2 mb-3">
-    {{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}
-  </div>
-  <div class="mb-3">
-    <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">Ошибка синхронизации</span>
-  </div>
-  <p class="text-xs text-gray-500 mb-4">Создано {{ format_datetime_for_user(account.created_at, user, '%Y-%m-%d %H:%M') }}</p>
-  <div class="pt-3 border-t border-gray-100 flex items-center gap-3">
-    <form method="POST" action="/accounts/{{ account.id }}/retry-sync" class="inline">
-      <button type="submit" class="inline-flex items-center gap-1 text-sm text-amber-600 hover:text-amber-700 font-medium transition-colors">
-        {{ icon_refresh(size='h-4 w-4') }}
-        Повторить
-      </button>
+{% elif account.status == 'sync_failed' %}
+{{ row_open(cols=ACCOUNT_COLS) }}
+  {%- call cell(grow=true) %}
+    {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
+    <span data-grow>{{ label }}</span>{{ mono('#' ~ account.id) }}
+  {%- endcall %}
+  {{- cell(text='—', mono=true, muted=true) }}
+  {{- cell(text='—', mono=true, muted=true) }}
+  {{- cell(text='—', mono=true, muted=true) }}
+  {{- cell(text='—', mono=true, muted=true) }}
+  {{- cell(text=format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M'), mono=true, muted=true) }}
+  {%- call cell() %}{{ badge('Ошибка синхронизации', 'danger') }}{% endcall %}
+  {%- call cell() %}
+    <form method="POST" action="/accounts/{{ account.id }}/retry-sync">
+      {{- button('Повторить', variant='ghost', icon='refresh', title='Повторить синхронизацию') -}}
     </form>
-    <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
-      <button type="submit" class="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">
-        {{ icon_delete(size='h-4 w-4') }}
-        Удалить
-      </button>
+    <form method="POST" action="/accounts/{{ account.id }}/delete" onsubmit="return confirm('Удалить этот аккаунт?')">
+      {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
-  </div>
-</div>
-
+  {%- endcall %}
+{{ row_close() }}
 {% else %}
-{% set stats = account_stats.get(account.id, {}) %}
-<div class="bg-white rounded-lg border border-gray-200 p-5">
-  <div class="flex items-center justify-between mb-3">
-    <div class="flex items-center gap-2">
-      {% if account.type == 'tg_user' %}{{ messenger_icon('tg_user', size='h-5 w-5', title='Telegram', show_label=true) }}
-      {% elif account.type == 'wa' %}{{ messenger_icon('wa', size='h-5 w-5', title='WhatsApp', show_label=true) }}
-      {% else %}<span class="text-sm text-gray-600 font-medium">{{ account.type }}</span>{% endif %}
-    </div>
-    <span class="{% if account.status == 'active' %}inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700{% elif account.status == 'disconnected' %}inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600{% else %}inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700{% endif %}">
-      {{ "Активно" if account.status == 'active' else ("Отключён" if account.status == 'disconnected' else account.status) }}
-    </span>
-  </div>
-  <div class="space-y-2 mb-3">
-    <div class="flex items-center justify-between text-sm">
-      <span class="text-gray-500">Групп</span>
-      <span class="text-gray-900 font-medium">{{ stats.get('groups_count', 0) }}</span>
-    </div>
-    <div class="flex items-center justify-between text-sm">
-      <span class="text-gray-500">Расписаний</span>
-      <span class="text-gray-900 font-medium">{{ stats.get('schedules_count', 0) }}</span>
-    </div>
-    <div class="flex items-center justify-between text-sm">
-      <span class="text-gray-500">Успешность</span>
-      <span class="text-gray-900 font-medium">
-        {% if stats.get('send_attempts', 0) > 0 %}
-          {{ ((stats.get('send_success', 0) / stats.get('send_attempts', 1)) * 100) | round(0) | int }}%
-          <span class="text-gray-400 text-xs">({{ stats.get('send_success', 0) }}/{{ stats.get('send_attempts', 0) }})</span>
-        {% else %}
-          --
-        {% endif %}
-      </span>
-    </div>
-    {% if stats.get('last_sent_at') %}
-    <div class="flex items-center justify-between text-sm">
-      <span class="text-gray-500">Последняя отправка</span>
-      <span class="text-gray-900 font-medium">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') }}</span>
-    </div>
-    {% endif %}
-  </div>
-  <p class="text-xs text-gray-400 mb-3">Подключён {{ format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M') }}</p>
-  <div class="pt-3 border-t border-gray-100">
-    <form method="POST" action="/accounts/{{ account.id }}/delete" class="inline">
-      <button type="submit" class="inline-flex items-center gap-1 text-sm text-red-600 hover:text-red-700 transition-colors" onclick="return confirm('Удалить этот аккаунт?')">
-        {{ icon_delete(size='h-4 w-4') }}
-        Удалить
-      </button>
+{{ row_open(cols=ACCOUNT_COLS) }}
+  {%- call cell(grow=true) %}
+    {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
+    <span data-grow>{{ label }}</span>{{ mono('#' ~ account.id) }}
+  {%- endcall %}
+  {{- cell(text=stats.get('groups_count', 0), mono=true, muted=true, title='Групп') }}
+  {{- cell(text=stats.get('schedules_count', 0), mono=true, muted=true, title='Расписаний') }}
+  {{- cell(text=(((stats.get('send_success', 0) / attempts) * 100)|round|int ~ '%') if attempts > 0 else '—',
+           mono=true, muted=true,
+           title=(stats.get('send_success', 0)|string ~ ' из ' ~ attempts|string) if attempts > 0 else 'Отправок не было') }}
+  {{- cell(text=format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') if stats.get('last_sent_at') else '—',
+           mono=true, muted=true) }}
+  {{- cell(text=format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M'), mono=true, muted=true) }}
+  {%- call cell() %}
+    {%- if account.status == 'active' %}{{ badge('Активно', 'success') }}
+    {%- elif account.status == 'disconnected' %}{{ badge('Отключён', 'neutral') }}
+    {%- else %}{{ badge(account.status, 'warning') }}{% endif -%}
+  {%- endcall %}
+  {%- call cell() %}
+    <form method="POST" action="/accounts/{{ account.id }}/delete" onsubmit="return confirm('Удалить этот аккаунт?')">
+      {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
-  </div>
-</div>
+  {%- endcall %}
+{{ row_close() }}
 {% endif %}
-
 {% endfor %}
 {% if has_next %}
-<div hx-get="/accounts/partial?offset={{ next_offset }}&limit=30&layout=cards" hx-trigger="revealed" hx-swap="outerHTML" class="col-span-full py-4 text-center text-sm text-gray-400">
-  Загрузка...
-</div>
+<div hx-get="/accounts/partial?offset={{ next_offset }}&limit=30" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
 {% endif %}

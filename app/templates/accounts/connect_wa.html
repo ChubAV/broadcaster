@@ -1,60 +1,57 @@
 {% extends "base.html" %}
-{% from "includes/icons.html" import icon_check %}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/button.html" import link_button %}
+{% from "components/badge.html" import badge %}
+{% from "components/alert.html" import alert %}
+
 {% block title %}Подключение WhatsApp — Broadcaster{% endblock %}
+
+{# Контракт «страница → шелл»: заголовок мастера и возврат к списку живут в
+   шапке шелла, собственного заголовка у страницы нет. #}
+{% block page_title %}Подключение WhatsApp{% endblock %}
+{% block page_actions %}{{ link_button('К аккаунтам', '/accounts', variant='ghost') }}{% endblock %}
+
 {% block content %}
+<div class="connect-shell">
+  {% if error %}{{ alert(error) }}{% endif %}
 
-<div class="max-w-md mx-auto">
-  {% if error %}
-  <div class="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">{{ error }}</div>
+  {{ card_open() }}
+  {% if connected %}
+  <div class="connect-step connect-step--center">
+    {{ badge('Подключено', 'success') }}
+    <p class="connect-step__text">Ваш аккаунт WhatsApp готов к использованию.</p>
+    {{ link_button('К аккаунтам', '/accounts') }}
+  </div>
+
+  {% elif step == "qr" and qr_code %}
+  <div class="connect-step connect-step--center">
+    <p class="connect-step__text">Отсканируйте QR-код в WhatsApp: Связанные устройства &rarr; Привязка устройства</p>
+    {#- ЯКОРЬ ЗАМЕНЫ. Идентификатор wa-status и запрос статуса подключения стоят
+        на ОДНОМ элементе: ответ заменяет его СОДЕРЖИМОЕ. Перенос идентификатора
+        на соседний или дочерний элемент рвёт обновление молча — экран замрёт на
+        первом QR-коде, а страница останется исправной с виду. Опрос объявлен в
+        этом файле дважды: здесь и в ветке ожидания QR-кода ниже. -#}
+    <div id="wa-status" hx-get="/accounts/connect/wa/status" hx-trigger="every 3s" hx-swap="innerHTML">
+      {#- QR-код показывается ровно здесь и ровно столько, сколько открыт экран:
+          в постоянные хранилища и в атрибуты он не переносится (T-06-02). -#}
+      <div class="connect-qr"><img src="{{ qr_code }}" alt="WhatsApp QR-код"></div>
+      <p class="connect-step__text">Ожидание сканирования...</p>
+    </div>
+  </div>
+
+  {% elif step == "qr" %}
+  <div class="connect-step connect-step--center">
+    <p class="connect-step__text">Загрузка QR-кода...</p>
+    <div id="wa-status" hx-get="/accounts/connect/wa/status" hx-trigger="every 3s" hx-swap="innerHTML">
+      <p class="connect-step__text">Ожидание QR-кода от WA Bridge...</p>
+    </div>
+  </div>
+
+  {% else %}
+  <div class="connect-step connect-step--center">
+    <p class="connect-step__text">Ожидание...</p>
+  </div>
   {% endif %}
-
-  <div class="bg-white rounded-lg border border-gray-200 p-6">
-    {% if connected %}
-    <!-- Success state -->
-    <div class="text-center py-4">
-      <div class="inline-flex items-center justify-center w-12 h-12 bg-emerald-50 rounded-full mb-3 text-emerald-600">
-        {{ icon_check(size='h-6 w-6') }}
-      </div>
-      <p class="text-lg font-semibold text-gray-900 mb-1">WhatsApp подключён</p>
-      <p class="text-sm text-gray-500 mb-4">Ваш аккаунт WhatsApp готов к использованию.</p>
-      <a href="/accounts" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">К аккаунтам</a>
-    </div>
-
-    {% elif step == "qr" and qr_code %}
-    <!-- QR code display with polling -->
-    <div class="text-center">
-      <h1 class="text-lg font-semibold text-gray-900 mb-1">Подключение WhatsApp</h1>
-      <p class="text-sm text-gray-500 mb-5">Отсканируйте QR-код в WhatsApp: Связанные устройства &rarr; Привязка устройства</p>
-      <div id="wa-status" hx-get="/accounts/connect/wa/status" hx-trigger="every 3s" hx-swap="innerHTML">
-        <div class="inline-block p-3 bg-gray-50 rounded-lg border border-gray-200">
-          <img src="{{ qr_code }}" alt="WhatsApp QR-код" class="mx-auto rounded" style="max-width: 256px;">
-        </div>
-        <p class="mt-3 text-sm text-amber-600">Ожидание сканирования...</p>
-      </div>
-    </div>
-
-    {% elif step == "qr" %}
-    <!-- Waiting for QR code -->
-    <div class="text-center">
-      <h1 class="text-lg font-semibold text-gray-900 mb-1">Подключение WhatsApp</h1>
-      <p class="text-sm text-gray-500 mb-5">Загрузка QR-кода...</p>
-      <div id="wa-status" hx-get="/accounts/connect/wa/status" hx-trigger="every 3s" hx-swap="innerHTML">
-        <span class="text-sm text-amber-600">Ожидание QR-кода от WA Bridge...</span>
-      </div>
-    </div>
-
-    {% else %}
-    <!-- Default waiting state -->
-    <div class="text-center">
-      <h1 class="text-lg font-semibold text-gray-900 mb-1">Подключение WhatsApp</h1>
-      <span class="text-sm text-amber-600">Ожидание...</span>
-    </div>
-    {% endif %}
-  </div>
-
-  <div class="mt-4 text-center">
-    <a href="/accounts" class="text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors">&larr; Назад к аккаунтам</a>
-  </div>
+  {{ card_close() }}
 </div>
-
 {% endblock %}
