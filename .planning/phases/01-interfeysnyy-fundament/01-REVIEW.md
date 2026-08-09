@@ -1,8 +1,8 @@
 ---
 phase: 01-interfeysnyy-fundament
-reviewed: 2026-08-09T00:00:00Z
+reviewed: 2026-08-09T20:56:10Z
 depth: standard
-files_reviewed: 76
+files_reviewed: 78
 files_reviewed_list:
   - app/main.py
   - app/pages/__init__.py
@@ -12,6 +12,7 @@ files_reviewed_list:
   - app/pages/groups.py
   - app/pages/history.py
   - app/pages/schedules.py
+  - app/routes/uploads.py
   - app/static/css/app.css
   - app/templates/accounts/connect_max.html
   - app/templates/accounts/connect_tg_user.html
@@ -76,157 +77,442 @@ files_reviewed_list:
   - tests/test_pages/test_responsive_markup.py
   - tests/test_pages/test_shell.py
   - tests/test_routes/test_schedules_profile_timezone.py
+  - tests/test_routes/test_uploads.py
   - tests/test_routes/test_wa_sync_status.py
   - tests/test_templates/__init__.py
+  - tests/test_templates/test_ads_form_security.py
   - tests/test_templates/test_components.py
 findings:
-  critical: 1
-  warning: 9
-  info: 8
-  total: 18
+  critical: 2
+  warning: 10
+  info: 9
+  total: 21
 status: issues_found
 ---
 
 # Phase 01: Code Review Report
 
-**Reviewed:** 2026-08-09
+**Reviewed:** 2026-08-09T20:56:10Z
 **Depth:** standard
-**Files Reviewed:** 76
+**Files Reviewed:** 78
 **Status:** issues_found
 
 ## Summary
 
-Reviewed the full UI-framework replacement: shell (`base.html`, `auth_base.html`), the Jinja macro component library, every migrated page template, the four touched page routers, the new `load_shell_context` router dependency, `app.css`, and the new test suites.
+Phase 01 migrated 45 templates onto `base.html` + a shared component library, added a
+confirm-modal component, and closed the CR-01 stored-XSS finding from the previous review.
+The component library itself is in good shape: **no `|safe`, no `{% autoescape false %}`, no
+`Markup(`, and no string-concatenated markup exists anywhere under `app/templates/`,
+`app/pages/`, or `app/routes/`** (verified by grep). All 45 templates compile cleanly under a
+`FileSystemLoader` sweep. Every macro takes text/number/boolean parameters and emits escaped
+output; block-call slots (`cell`, `filters`, `modal`) keep caller markup in the caller.
 
-Things that were verified to actually hold (not merely asserted by the implementation's own comments):
+### CR-01 closure: verified, holds
 
-- **Autoescape is on** (`templates.env.autoescape is True`) and the extracted `connect_status.html` QR macro genuinely escapes bridge-supplied input — I rendered `qr('" onerror=alert(1) x="', 'WA')` and got `src="&#34; onerror=alert(1) x=&#34;"`. The f-string escaping bug the phase claims to have fixed is fixed.
-- **No CDN references** anywhere in `app/templates/` or `app/static/css/app.css`; fonts, htmx and Alpine are all local.
-- **Macro contracts match call sites.** I built a signature registry from all 54 loadable macros and cross-checked every call site in `app/templates/**/*.html` for unknown keyword arguments. Zero real mismatches (the 6 reported hits are false positives from URL literals like `'&q=' ~ q` inside `link_button(...)`).
-- **Authorization holds.** Every admin route uses `Depends(require_admin)`; `get_sync_status_view`, `delete_account`, and all list/detail queries are scoped by `user_id`; `history_detail` and `admin_user_history_detail` both verify `log.user_id`. No IDOR found.
-- The 119 new tests pass.
+I traced the fix rather than assuming it. **CR-01 is genuinely closed.** Evidence:
 
-The findings below are what survived that. The one Critical is a stored-XSS sink that was carried forward verbatim into a rewritten file — it is not newly written code, but it is live code in a file this phase submitted, in the *one* template with zero HTTP-level test coverage.
+1. `app/routes/uploads.py:21-38` — `safe_filename()` splits on `[\\/]` and keeps only the last
+   segment, substitutes every character outside `[A-Za-z0-9._-]` with `_`, truncates *after*
+   substitution, and falls back to a non-empty `"upload"`. The key is
+   `f"{user_id}/{uuid4().hex}_{safe}"` (`uploads.py:66-67`), so the object key contains exactly
+   one `/` and always begins with the caller's own `user_id` prefix. `..` survives the character
+   filter but can never form a lone path segment because it is always prefixed by
+   `{uuid4().hex}_`. Traversal, quote injection, angle brackets and NUL are all closed.
+2. `app/templates/ads/form.html:56-91` — the preview is built with `createElement` +
+   `replaceChildren` and populated by property assignment (`img.src`, `img.alt`,
+   `label.textContent`, `hidden.value`) with the remove handler attached via `addEventListener`.
+   There is no `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, or
+   markup-building template literal in the file.
+3. `ads/form.html:54` seeds `imagePaths` through `| tojson`, which escapes `<`, `>`, `&`, `'`
+   to `\uXXXX`, so a stored `</script>` cannot terminate the script element.
+4. Every server-side rendering of `Ad.images` goes through an autoescaped attribute:
+   `ads/includes/ad_card.html:28` (`get_image_url`), `history/detail.html:80-81` and
+   `admin/user_history_detail.html:91-92` (`resolve_image_url`). `resolve_image_url`
+   (`app/pages/common.py:27-33`) returns a value verbatim only when it starts with `http://` or
+   `https://`, so no `javascript:` or `data:` scheme can reach an `href`.
 
-Two items named in the phase context as already-tracked (the `get_settings()` bypass in `app/pages/common.py` template globals, and `billing/plans.html` having no route) are **not** re-reported here.
+Delete-confirmation panels also check out: **12 of the 13 panels are triggered by a real
+`<form method="post" action="/…/delete">` carrying `x-on:submit.prevent`**, so the page degrades
+to a plain POST when Alpine is unavailable (`ads/includes/ad_card.html:54`,
+`groups/includes/group_row.html:73`, `schedules/includes/schedule_row.html:76`,
+`accounts/list.html:72,93,119`, `accounts/partial_cards.html:46,67,93`,
+`accounts/partials/sync_status_card.html:64,80,95`, `admin/user_detail.html:133`). The bulk
+group delete is the one exception (see WR-04). I also verified the bulk snapshot logic in
+`groups/list.html:111-133` and found **no TOCTOU or set-mismatch bug**: the checkbox set is read
+exactly once, materialised into hidden inputs inside the modal's own form before the open event
+is dispatched, and the counter is written from the same array; the injected inputs carry no
+`.group-checkbox` class so they cannot re-enter the query, and `type=hidden` keeps them out of
+the focus trap's `offsetParent !== null` filter.
+
+**However, the review is not clean.** Two BLOCKERs remain, both in the files this phase touched:
+a cross-tenant authorization gap in `app/pages/schedules.py` that lets one user schedule another
+user's ad (exfiltrating its content and charging the victim's balance), and a second,
+un-closed injection vector in `app/routes/uploads.py` — the phase normalised the *filename* but
+left the *Content-Type* fully client-controlled, so an `image/svg+xml` payload is stored and then
+linked with `<a href … target="_blank">` from two shipped templates. Ten warnings follow,
+several of which concern the durability of the CR-01 fix itself (WR-02 and WR-03: the ads editor
+has zero HTTP-level coverage, and its only security test greps template source text).
+
+---
 
 ## Critical Issues
 
-### CR-01: Stored XSS — unescaped image path interpolated into `innerHTML`
+### CR-01: Schedule create/update accept `ad_id` and `account_id` with no ownership check — cross-tenant ad exfiltration and billing charged to the victim
 
-**File:** `app/templates/ads/form.html:55-62`
+**File:** `app/pages/schedules.py:166-215` (create), `app/pages/schedules.py:270-324` (update)
 
-**Issue:** `renderImages()` builds DOM with template literals and `innerHTML`, interpolating `path` and `url` with no escaping:
-
-```js
-const url = path.startsWith('http') ? path : IMAGE_BASE_URL + '/' + path;
-preview.innerHTML += `<span class="cell">
-    <img class="avatar" src="${url}" alt="">
-    ...`;
-inputs.innerHTML += `<input type="hidden" name="images" value="${path}">`;
-```
-
-`path` is an S3 object key produced by `app/routes/uploads.py:34-35`:
+**Issue:**
+`ad_id` and `account_id` arrive as `Form(...)` values and are written straight into the
+`Schedule` row. Only `group_ids` is validated for ownership:
 
 ```python
-filename = f"{uuid4().hex}_{file.filename}"
-key = f"{user_id}/{filename}"
-return {"path": key}
+# schedules.py:184-194 — group_ids IS validated
+if group_ids:
+    valid_groups = (await db.execute(
+        select(Group.id).where(
+            Group.id.in_(group_ids),
+            Group.account_id == account_id,
+            Group.user_id == user.id,        # <-- ownership enforced here
+        ))).scalars().all()
+    group_ids = [gid for gid in group_ids if gid in valid_groups]
+...
+# schedules.py:204-213 — ad_id / account_id are NOT validated
+schedule = Schedule(ad_id=ad_id, account_id=account_id, group_ids=group_ids, ...)
 ```
 
-`file.filename` is the attacker-supplied multipart filename and is **not sanitized at all**. Uploading a file named `x" onerror="fetch('/admin/users')` yields `src="https://cdn/1/<hex>_x" onerror="fetch('/admin/users')" alt="">` — the `src` is broken, so `onerror` fires. The key is persisted in `Ad.images` (JSON), so the payload re-executes on every subsequent visit to `/ads/{id}/edit`. This is stored, not reflected.
+`schedules_update` repeats the defect at lines 314-315 (`schedule.ad_id = ad_id`,
+`schedule.account_id = account_id`) — the schedule row itself is ownership-scoped by the
+`join(Ad).where(Ad.user_id == user.id)` lookup at 283-287, but the *new* `ad_id` written into it
+is not.
 
-Escaping does *not* save this: `{{ (ad.images | tojson) }}` on line 48 is safe (Jinja's `tojson` is HTML-safe), but the values then flow into `innerHTML` client-side, well past any server-side escaping. The rest of the codebase renders these keys through `{{ get_image_url(...) }}`, which *is* escaped — this file is the sole sink.
+Nothing downstream re-checks. `collect_due_schedules`
+(`app/application/scheduling/use_cases.py:48-79`) selects due schedules and derives
+`user_id = ad.user_id`; `send_message_once` (same file, 143-183) loads the ad, group and account
+by id independently and never asserts they share an owner.
 
-Note: the same unsanitized `file.filename` also allows `../` in the S3 key, letting a user write objects outside their own `{user_id}/` prefix. `app/routes/uploads.py` is outside this phase's file scope, but the fix belongs in both places.
+Concrete exploit, all steps available to any registered user A:
 
-Carried forward verbatim from the pre-phase template (`git show 44f0134:app/templates/ads/form.html`), i.e. not newly introduced — but it is live in a submitted file, and see WR-06: this template has no HTTP-level test at all.
+1. A posts `/schedules/new` with `ad_id` = victim B's ad id, `account_id` = A's own active
+   account, `group_ids` = A's own groups. The `group_ids` filter passes (they really are A's
+   groups on A's account), so nothing is stripped.
+2. The scheduler dispatches: `ad` is B's ad, `account` is A's account with status `active`.
+3. `send_message_once` sends **B's ad title, text and images into A's group** — a direct read of
+   another tenant's content, including the S3 image keys.
+4. The `SendLog` is written with `user_id=ad.user_id`, i.e. **B is billed** for the send and the
+   send appears in B's history and in the admin's view of B.
 
-**Fix:** Build the nodes instead of concatenating markup, and sanitize the key server-side.
+Ad ids are small sequential integers, so enumeration is trivial.
 
-```js
-function renderImages() {
-    const preview = document.getElementById('image-preview');
-    const inputs = document.getElementById('image-inputs');
-    preview.replaceChildren();
-    inputs.replaceChildren();
-    imagePaths.forEach((path, i) => {
-        const url = path.startsWith('http') ? path : IMAGE_BASE_URL + '/' + path;
+**Fix:** validate both foreign keys against the caller before constructing/mutating the row, in
+both handlers:
 
-        const wrap = document.createElement('span');
-        wrap.className = 'cell';
-        const img = document.createElement('img');
-        img.className = 'avatar';
-        img.src = url;              // property assignment, never parsed as markup
-        img.alt = '';
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn--ghost';
-        btn.addEventListener('click', () => removeImage(i));
-        const lbl = document.createElement('span');
-        lbl.className = 'btn__label';
-        lbl.textContent = 'Убрать';
-        btn.appendChild(lbl);
-        wrap.append(img, btn);
-        preview.appendChild(wrap);
+```python
+ad = (await db.execute(
+    select(Ad).where(Ad.id == ad_id, Ad.user_id == user.id)
+)).scalar_one_or_none()
+account = (await db.execute(
+    select(MessengerAccount).where(
+        MessengerAccount.id == account_id,
+        MessengerAccount.user_id == user.id,
+    )
+)).scalar_one_or_none()
+if not ad or not account:
+    return RedirectResponse(url="/schedules", status_code=302)
+```
 
-        const hidden = document.createElement('input');
-        hidden.type = 'hidden';
-        hidden.name = 'images';
-        hidden.value = path;        // property assignment, no attribute injection
-        inputs.appendChild(hidden);
-    });
+Then use `ad.id` / `account.id`. Add a defence-in-depth assertion in
+`send_message_once` as well — refuse to send when
+`ad.user_id != group.user_id or ad.user_id != account.user_id`, and log it — so an equivalent
+gap in any future writer cannot become a silent cross-tenant send.
+
+---
+
+### CR-02: Upload endpoint trusts the client `Content-Type`; `image/svg+xml` is stored and then linked with `<a href target="_blank">`
+
+**File:** `app/routes/uploads.py:48-52`, `app/routes/uploads.py:71-80`; sinks at
+`app/templates/history/detail.html:80-81` and `app/templates/admin/user_history_detail.html:91-92`
+
+**Issue:**
+The only content check is a prefix test on the *client-supplied* multipart header, and that same
+unvalidated string is then written to the object as its stored `ContentType`:
+
+```python
+# uploads.py:48-52
+if not file.content_type or not file.content_type.startswith("image/"):
+    raise HTTPException(400, "File must be an image")
+...
+# uploads.py:71-80 -> app/services/s3.py:35 -> put_object(ContentType=content_type)
+await upload_file_to_s3(content=content, key=key, content_type=file.content_type, ...)
+```
+
+The file bytes are never sniffed. `image/svg+xml` passes the prefix test, and
+`safe_filename()` happily preserves a `.svg` extension (`.` and letters are in the allowlist).
+The object is therefore served from `s3_public_url` as an active SVG document.
+
+This is not confined to `<img>` rendering. Two shipped templates wrap the image in a link that
+navigates the browser directly to the object:
+
+```jinja
+{# history/detail.html:80-81 and admin/user_history_detail.html:91-92 #}
+<a href="{{ resolve_image_url(img) }}" target="_blank" rel="noopener">
+  <img src="{{ resolve_image_url(img) }}" alt="">
+</a>
+```
+
+Following that link executes the SVG's `<script>` on the storage origin, with the victim's
+cookies for that origin. The second of those two templates is the **admin** send-detail page, so
+the click can be induced on a privileged operator. If `s3_public_url` is served from the
+application's own registrable domain (a CDN path or an S3 gateway behind the same nginx — both
+normal for this deployment), this is stored XSS against the application. If it is a genuinely
+separate origin, the blast radius is that origin plus a credible phishing surface — still not
+acceptable for user-uploaded content.
+
+Combined with WR-01 (arbitrary `images` values accepted at ad save time), the attacker does not
+even need the upload endpoint to place the key.
+
+**Fix:** allowlist the type, sniff the bytes, and never echo the client header to storage:
+
+```python
+ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+_MAGIC = {
+    b"\x89PNG\r\n\x1a\n": "image/png",
+    b"\xff\xd8\xff":      "image/jpeg",
+    b"GIF87a":            "image/gif",
+    b"GIF89a":            "image/gif",
 }
+
+if file.content_type not in ALLOWED_IMAGE_TYPES:
+    raise HTTPException(400, "Unsupported image type")
+
+content = await file.read()
+sniffed = next((t for sig, t in _MAGIC.items() if content.startswith(sig)), None)
+if sniffed is None and not (content[:4] == b"RIFF" and content[8:12] == b"WEBP"):
+    raise HTTPException(400, "File content is not a supported image")
+detected = sniffed or "image/webp"
+if detected != file.content_type:
+    raise HTTPException(400, "Declared type does not match file content")
 ```
 
-And in `app/routes/uploads.py`, stop trusting the client filename:
+Pass `detected` (not `file.content_type`) to `upload_file_to_s3`, and set
+`ContentDisposition="attachment"` plus `X-Content-Type-Options: nosniff` on the bucket/CDN as
+defence in depth.
 
-```python
-from pathlib import PurePosixPath
-import re
-
-raw = PurePosixPath(file.filename or "").name          # strips any path components
-safe = re.sub(r"[^A-Za-z0-9._-]", "_", raw)[:100] or "image"
-key = f"{user_id}/{uuid4().hex}_{safe}"
-```
+---
 
 ## Warnings
 
-### WR-01: `load_shell_context` runs 5 discarded DB queries on every pages-router request, including the 3s/5s pollers
+### WR-01: Ad save accepts arbitrary `images` strings — no validation that the key belongs to the caller
 
-**File:** `app/pages/__init__.py:20-40`
+**File:** `app/pages/ads.py:133-135`, `app/pages/ads.py:183-187`
 
-**Issue:** The dependency is attached to the *router*, so it executes for every route under `app.pages` — not just full pages. Each execution does `get_user_from_cookie` (1 `User` fetch) plus `get_shell_context` (a 5-subquery counts statement, a `Subscription` query, a `MessageBalance` query, and a `BalanceTransaction` sum) = 5 round-trips.
+**Issue:** Both handlers do `image_list = [v for v in form_data.getlist("images") if v.strip()]`
+and persist it verbatim. Nothing checks that each value is a key under `{user.id}/`, that it
+came from `/api/uploads/image` at all, that it is not an absolute external URL, or that the list
+is bounded (the 10-image cap in `ads/form.html:99` is client-side only). Consequences:
 
-The templates that never read `request.state.shell` are exactly the high-frequency ones:
+- `resolve_image_url` returns `http(s)` values verbatim, so an ad author can plant
+  `https://attacker.example/px.gif`. It is loaded **automatically** as `<img src>` in
+  `admin/user_history_detail.html:92` and `history/detail.html:81`, leaking the viewing admin's
+  IP and User-Agent, and the accompanying `<a href>` is a click-through phishing surface.
+- A user can reference another tenant's S3 key (`{other_user_id}/{uuid}_name.png`) and have the
+  app render and *send* it. The uuid makes this unguessable in isolation, but CR-01 above hands
+  out exactly those keys.
+- All 10 upload-cap and MIME guarantees earned by `uploads.py` are bypassable by posting the
+  form directly.
 
-- `/accounts/connect/wa/status` and `/accounts/connect/max/status` — polled `every 3s` (`connect_wa.html:34,45`, `connect_max.html:47,58`); these render `connect_status.html` macros, which take no context at all.
-- `/accounts/{id}/sync-status` — polled `every 5s` (`accounts/list.html:50`); renders `sync_status_card.html` via `env.get_template(...).render(...)`, which never touches `request`.
-- All five `*_partial_cards.html` infinite-scroll partials.
-- Every POST handler (`/ads/{id}/delete`, `/groups/bulk`, `/logout`, …), which do a full shell read before their write and then redirect.
-
-One user with a connect wizard open costs 100 wasted queries/minute. Handlers additionally call `get_user_from_cookie` a second time, so the cookie is decoded and the user re-fetched twice per request.
-
-**Fix:** Move the dependency onto only the routers that render the shell, or make it lazy and cache the user on `request.state`:
+**Fix:** validate on save.
 
 ```python
-async def load_shell_context(request, db=Depends(get_db), settings=Depends(get_settings)) -> None:
-    # Fragments and form posts never render the shell.
-    if request.method != "GET" or request.headers.get("hx-request") == "true":
-        request.state.shell = {}
-        return
-    user = await get_user_from_cookie(request, db, settings)
-    request.state.user = user           # let handlers reuse it instead of re-reading
-    request.state.shell = await get_shell_context(db, user)
+_KEY_RE = re.compile(r"^\d+/[0-9a-f]{32}_[A-Za-z0-9._-]{1,100}$")
+
+def _own_image_keys(values: list[str], user_id: int) -> list[str]:
+    out = []
+    for v in values:
+        v = v.strip()
+        if _KEY_RE.fullmatch(v) and v.split("/", 1)[0] == str(user_id):
+            out.append(v)
+    return out[:10]
+
+image_list = _own_image_keys(form_data.getlist("images"), user.id)
 ```
 
-(and have `base.html` keep its existing `request.state.shell or {}` guard).
+### WR-02: Template globals bypass dependency injection — the ads editor 500s and has no HTTP-level test coverage
 
-### WR-02: Admin pager builds query strings without URL-encoding — parameter injection
+**File:** `app/pages/common.py:36-38`
 
-**File:** `app/templates/admin/groups_info.html:88-95`
+**Issue:**
 
-**Issue:** Unlike every other paginated section in this phase (which uses `{{ v|string|urlencode }}`), the groups-info pager concatenates raw values:
+```python
+templates.env.globals["get_image_url"]   = lambda key: get_image_url(key, get_settings().s3_public_url)
+templates.env.globals["resolve_image_url"] = _resolve_image_url          # also calls get_settings()
+templates.env.globals["s3_public_url"]   = lambda: get_settings().s3_public_url
+```
+
+`get_settings` here is `app.config.get_settings`, which is `@lru_cache`-decorated and constructs
+`Settings()` straight from the process environment. It is *not* the `app.dependencies` symbol
+that `conftest.py:48` overrides, and it ignores the `settings` argument threaded through
+`create_app(settings=...)` (`app/main.py:62-64`). So:
+
+- In production, `create_app(settings=custom)` silently does not apply to any image URL, and the
+  first call freezes whatever env was present at that moment.
+- In tests, `/ads/new` and `/ads/{id}/edit` — which call `s3_public_url()` unconditionally at
+  `ads/form.html:53` — return 500 in a clean checkout. The phase acknowledges this in
+  `tests/test_templates/test_ads_form_security.py:1-17` as "WR-06 … deferred to Phase 2".
+
+The consequence that matters for this review: **the single template that carried the CR-01
+stored-XSS is the one template with no rendering test at all.** It is absent from
+`DIALOG_SWEEP_URLS` (`test_responsive_markup.py:3000-3013`) and from `ROWHEAD_PAGES`, so no
+sweep in the suite ever renders it.
+
+**Fix:** make the globals take the resolved settings from the request instead of a module-level
+cache — e.g. register them per-app in `create_app` with the injected `settings` bound:
+
+```python
+def register_template_globals(settings: Settings) -> None:
+    templates.env.globals["get_image_url"]     = lambda key: get_image_url(key, settings.s3_public_url)
+    templates.env.globals["resolve_image_url"] = lambda key: _resolve_image_url(key, settings.s3_public_url)
+    templates.env.globals["s3_public_url"]     = lambda: settings.s3_public_url
+```
+
+Call it from `create_app`. Then add `/ads/new` and `/ads/{id}/edit` to the rendered-page sweeps.
+
+### WR-03: The CR-01 regression test asserts on template *source text*, not on behaviour
+
+**File:** `tests/test_templates/test_ads_form_security.py:52-98`
+
+**Issue:** Every assertion in this module is a substring grep over
+`app/templates/ads/form.html` read from disk:
+
+```python
+offenders = [sink for sink in MARKUP_SINKS if sink in body]   # "innerHTML" in body
+assert body.count("createElement") >= 3
+assert "addEventListener" in body
+```
+
+The property this is meant to protect — "attacker-controlled text never reaches a markup
+parser" — is not what is being measured. This suite stays green if a sink is reintroduced in an
+imported macro, in `app/static/js/`, in a sibling template, or in a handler that builds markup in
+Python (exactly the class of hole the phase itself had to fix by moving the connect-status markup
+out of `app/pages/accounts.py` into a partial). It also stays green if `createElement` is used
+but the value is later assigned to `.innerHTML`.
+
+**Fix:** keep the source greps as a cheap tripwire but *widen* them to the union of the template
+and its imports (the resolver in `test_responsive_markup.py:_union_sources` already does this for
+cell labels), and add a real behavioural assertion once WR-02 unblocks rendering:
+
+```python
+@pytest.mark.asyncio
+async def test_ad_edit_does_not_reflect_hostile_image_key(authed_client, db_session):
+    ad = await _seed_ad(db_session, images=['1/deadbeef_x" onerror="alert(1).png'])
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+    assert 'onerror="alert(1)' not in html
+    assert "\\u0022" in html or "&#34;" in html   # value arrived escaped, in JSON or attribute
+```
+
+### WR-04: Bulk group delete is the only delete path that does not degrade, and fails silently
+
+**File:** `app/templates/groups/list.html:58-59`, `app/templates/groups/list.html:118-132`
+
+**Issue:** The two bulk buttons are plain `<button type="button" onclick="…">` with no enclosing
+form, and the delete branch ends in
+`window.dispatchEvent(new CustomEvent('modal-open-groups-bulk-del'))`. Alpine is loaded with
+`defer` (`base.html:13`); if it fails to load or is blocked while the inline script still runs,
+the event has no listener, the panel stays hidden by `[x-cloak] { display: none !important; }`
+(`app.css:445`), and the user gets **no feedback whatsoever** — the button is simply dead. Every
+other delete on the site was deliberately reworked to survive this exact case (see the rationale
+comments at `ad_card.html:48-53` and `group_row.html:70-72`); bulk delete was not.
+
+**Fix:** at minimum, fail loudly. Guard on Alpine's presence and fall back to the existing
+form-построение path used by the `deactivate` branch:
+
+```js
+if (action === 'delete') {
+    if (!window.Alpine) {
+        // No confirmation layer available — do not delete silently, and do not
+        // delete without a confirmation either.
+        alert('Подтверждение недоступно: перезагрузите страницу.');
+        return;
+    }
+    ...
+}
+```
+
+Better: render the bulk controls inside a real `<form method="post" action="/groups/bulk">` with
+a `name="action" value="delete"` submit button and the checkboxes named `group_ids`, then hang
+`x-on:submit.prevent` on that form — identical to the per-row pattern, and it degrades.
+
+### WR-05: The sync-status swap silently drops the "Подключён" date
+
+**File:** `app/templates/accounts/partials/sync_status_card.html:61` vs
+`app/templates/accounts/list.html:112` and `app/templates/accounts/partial_cards.html:86`
+
+**Issue:** The three files are documented as rendering the same row and are held in sync by
+`test_accounts_three_files_*`. They are not identical in the `active` branch. List and partial
+render the real connection date:
+
+```jinja
+{{- cell(text=format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M'),
+         mono=true, muted=true, label=ACCOUNT_COLUMNS[5]) }}
+```
+
+The swap card renders a placeholder:
+
+```jinja
+{{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[5]) }}
+```
+
+So the moment a syncing account finishes and the 5-second poll swaps its row in, the "Подключён"
+column goes from a real timestamp to `—` and stays that way until a full page reload. That is
+data disappearing from the page as a side effect of a status refresh, and it is not covered by
+the sync tests (they compare column *names* and label sets, not values).
+
+**Fix:** pass the account's `created_at` into the render call in `accounts_sync_status`
+(`app/pages/accounts.py:683-690`) and render it in the `active` branch, so the swapped row is a
+faithful replacement.
+
+### WR-06: Telegram connect endpoints accept a client-supplied `session_id` with no owner binding
+
+**File:** `app/pages/accounts.py:235-246`, `249-268`, `271-308`, `311-340`
+
+**Issue:** `qr-status`, `refresh-qr`, `verify-2fa` and `complete` all authenticate the caller and
+then use whatever `session_id` the caller supplies against the process-global `_qr_sessions`
+map, with no check that the session was started by that user:
+
+```python
+session_string = await complete_auth(session_id)     # accounts.py:326
+...
+account = MessengerAccount(user_id=user.id, type="tg_user",
+                           credentials=session_string, status="active")   # 331-336
+```
+
+Any authenticated user who learns another user's in-flight `session_id` mints a
+`MessengerAccount` under **their own** `user_id` holding the **victim's** Telegram session
+string — i.e. full takeover of the victim's Telegram account. `verify-2fa` is worse still: it
+lets an arbitrary caller submit 2FA passwords against someone else's login attempt.
+
+The id is `uuid.uuid4().hex[:16]` (`app/messengers/telegram_user.py:57`) — 64 bits, not
+brute-forceable, so this is a missing-authorization defect rather than an open door. But the
+binding costs nothing and the value ends up in a URL query string (`connect_tg_user.html:140`),
+where it is exposed to referrers, proxy logs and browser history.
+
+**Fix:** record the owner when the session is created and check it on every use:
+
+```python
+# telegram_user.py — store owner alongside the client
+_qr_sessions[session_id] = QRAuthState(client=client, qr_login=qr_login, user_id=user_id)
+
+# accounts.py — every handler
+if not owns_qr_session(session_id, user.id):
+    raise HTTPException(status_code=404, detail="Сессия не найдена")
+```
+
+Also move `session_id` out of the query string into the POST body for `qr-status`.
+
+### WR-07: Admin groups-info pager builds query strings by raw concatenation without `urlencode`
+
+**File:** `app/templates/admin/groups_info.html:87-96`
+
+**Issue:**
 
 ```jinja
 {{ link_button('Далее', '/admin/groups-info?offset=' ~ (offset + page_size)
@@ -234,287 +520,198 @@ async def load_shell_context(request, db=Depends(get_db), settings=Depends(get_s
                variant='ghost', icon='arrow-right') }}
 ```
 
-Rendered with `q = "a&messenger=wa&offset=999"` this produces:
+`q` and `messenger` are user-supplied query parameters echoed back into a URL with no
+`|urlencode`. Autoescaping prevents attribute breakout, but a `q` containing `&`, `=` or `#`
+injects or truncates parameters in the app's own pager link — the search silently changes or is
+lost on page 2. Every other filter-forwarding site in the phase gets this right and uses
+`{{ v|string|urlencode }}` (`groups/list.html:98`, `groups/partial_cards.html:6`,
+`history/list.html:49`, `history/partial_cards.html:6`, `admin/user_history.html:63`,
+`admin/history_partial_cards.html:7`); this one file is the outlier.
 
-```
-/admin/groups-info?offset=30&amp;q=a&amp;messenger=wa&amp;offset=999
-```
+**Fix:** `~ ('&q=' ~ q|string|urlencode if q else '')` and the same for `messenger`.
 
-which the browser decodes into four parameters. A search term containing `&`, `#`, or `+` silently overrides `offset`/`messenger` or truncates the query. Not an XSS (autoescape still applies to the attribute), but pagination breaks and filters change under the user without any signal.
+### WR-08: Connect endpoints return HTTP 200 with an `{"error": …}` body for auth failures
 
-**Fix:**
+**File:** `app/pages/accounts.py:216`, `244`, `257`, `279`, `319`
 
-```jinja
-{% set page_qs = ('&q=' ~ q|urlencode if q else '') ~ ('&messenger=' ~ messenger|urlencode if messenger else '') %}
-{{ link_button('Далее', '/admin/groups-info?offset=' ~ (offset + page_size) ~ page_qs,
-               variant='ghost', icon='arrow-right') }}
-```
+**Issue:** `return {"error": "Не авторизован"}` yields `200 OK`. Every one of these is a
+JSON API called by `fetch()` from `connect_tg_user.html`. An unauthenticated request is
+indistinguishable from a successful one to any monitoring, proxy, rate limiter or test that keys
+off status codes, and the client only notices because it happens to inspect `data.error`.
+`upload_image` in the same phase gets this right (401 via `Depends(get_current_user_id)`).
 
-Apply the same to the "Назад" link on line 88.
+**Fix:** `raise HTTPException(status_code=401, detail="Не авторизован")`, and let the existing
+`showError(data.detail)` path in the template surface it (the client already reads `data.error`;
+normalise on `detail` or keep both).
 
-### WR-03: Polling swap drops the "Подключён" column — the row loses data it had before the swap
+### WR-09: No CSRF protection on any state-changing POST; SameSite=Lax is the only defence
 
-**File:** `app/templates/accounts/partials/sync_status_card.html:34-49`
+**File:** all delete/toggle/bulk routes — `app/pages/ads.py:193`, `app/pages/groups.py:248,270`,
+`app/pages/schedules.py:327,365`, `app/pages/accounts.py:807`; cookie set at
+`app/pages/auth.py:55,329`
 
-**Issue:** The file's own header comment states the block "заменяет строку аккаунта ЦЕЛИКОМ… обязан быть строкой той же раскладки". The column *count* matches, but the sixth column's *content* does not. `accounts/list.html:103` renders the connection date there:
+**Issue:** Every destructive route authenticates purely from the `access_token` cookie and
+carries no CSRF token, nonce, `Origin`/`Referer` check or custom-header requirement. The only
+thing standing between an attacker's page and
+`POST /accounts/{id}/delete` is `samesite="lax"` on the cookie. That is load-bearing but thin:
+it depends on browser version, it does not survive a future switch to `samesite="none"` (which a
+cross-origin embed or a payment redirect flow could motivate), and the cookie is additionally set
+**without `secure=True`**, so it is transmitted over plaintext HTTP if the app is ever reached
+that way.
 
-```jinja
-{{- cell(text=format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M'), mono=true, muted=true) }}
-```
+I am flagging this as a WARNING rather than a BLOCKER because Lax genuinely does block the
+top-level cross-site form POST today, and the gap predates this phase. But the phase's whole
+premise is that these delete routes are now the primary destructive surface behind a
+confirmation UI, which makes it the right moment to close it.
 
-while the `status == 'active'` branch of the swap card renders a placeholder (line 43):
+**Fix:** add `secure=True` to both `set_cookie` calls, and add a double-submit CSRF token: issue
+a random token in a readable cookie at login, emit it as a hidden field from the `modal()` macro
+and every other state-changing form, and verify it in a shared dependency on all POST page
+routes.
 
-```jinja
-{{- cell(text='—', mono=true, muted=true) }}
-```
+### WR-10: Toggle controls have no submit path without Alpine
 
-I rendered the macro to confirm: the active row comes back with `…title="2 из 4">50%</span><span class="cell cell--mono cell--muted">—</span><span class="cell cell--mono cell--muted">—</span>…`. So when a sync completes and htmx swaps the row via `hx-swap="outerHTML"`, the account's connection date visibly disappears under the "Подключён" header and stays gone until a full page reload. No test covers this column.
+**File:** `app/templates/groups/includes/group_row.html:66-69`,
+`app/templates/schedules/includes/schedule_row.html:67-70`
 
-**Fix:** Pass the account's `created_at` through the view and render it, so the swapped row is genuinely identical to the list row.
-
-```python
-# app/application/accounts/dto.py — add created_at to SyncStatusView
-# app/application/accounts/use_cases.py::get_sync_status_view — populate it
-# app/pages/accounts.py::accounts_sync_status
-html = templates.env.get_template("accounts/partials/sync_status_card.html").render(
-    account_id=account_id, status=view.status, group_count=view.group_count,
-    messenger_type=view.messenger_type, created_at=view.created_at, user=user, stats=stats,
-)
-```
-
-```jinja
-{{- cell(text=format_datetime_for_user(created_at, user, '%d.%m.%Y %H:%M') if created_at else '—',
-         mono=true, muted=true) }}
-```
-
-### WR-04: Destructive actions became entirely Alpine-dependent with no fallback
-
-**File:** `app/templates/ads/includes/ad_card.html:42-56`, `app/templates/admin/user_detail.html:125-136`, `app/templates/components/modal.html:28`
-
-**Issue:** The delete trigger is now `<button type="button" x-data x-on:click="$dispatch('modal-open-…')">`, and the actual `<form method="post" action="/ads/{id}/delete">` lives inside `.modal`, which carries `x-cloak`. `app.css:445` enforces `[x-cloak] { display: none !important; }`, and only Alpine removes that attribute. If `alpine.min.js` fails to load — blocked, corrupted cache, CSP change, JS error earlier in the page — the button does nothing *and* the form is permanently invisible. There is no other delete path on the page.
-
-The previous markup degraded correctly (`git show 44f0134:app/templates/ads/includes/ad_card.html:34`):
-
-```html
-<form method="post" action="/ads/{{ ad.id }}/delete" onsubmit="return confirm('Удалить объявление?')">
-  <button type="submit" …>
-```
-
-with JS unavailable the `onsubmit` is simply ignored and the form still submits. The same regression applies to the group/schedule toggles (`group_row.html:57`, `schedule_row.html:57`), which rely on `x-data x-on:change="$el.submit()"`.
-
-**Fix:** Keep the modal as the enhancement, not the mechanism — render a real submit button inside a `<noscript>`-style fallback, or make the trigger itself the submit button of the real form and have Alpine `.prevent` it only once initialized:
+**Issue:**
 
 ```jinja
-<form method="post" action="/ads/{{ ad.id }}/delete"
-      x-data x-on:submit.prevent="$dispatch('modal-open-ad-del-{{ ad.id }}')">
-  {{- button('Удалить', variant='ghost', icon='trash', title='Удалить объявление') -}}
+<form method="post" action="/groups/{{ group.id }}/toggle" x-data x-on:change="$el.submit()">
+  {{- toggle(name='is_active', checked=group.is_active, ...) -}}
 </form>
 ```
 
-Without Alpine the form posts directly; with Alpine the post is intercepted and the modal opens.
+The form contains only a checkbox — no submit button. With Alpine unavailable, flipping the
+toggle changes nothing and there is no way to submit the form, so pausing/resuming a group or a
+schedule becomes impossible. This is precisely the failure mode the phase eliminated for delete
+(`WR-04`/`T-12-04` in the code comments), and the same reasoning applies here; the toggles were
+simply not revisited.
 
-### WR-05: The "no utility classes" rendered-output tests use a 5-token marker list that misses the classes actually removed
-
-**File:** `tests/test_pages/test_responsive_markup.py:34`
-
-**Issue:**
-
-```python
-UTILITY_MARKERS = ("bg-white", "text-gray", "rounded-lg", "border-gray", "lg:")
-```
-
-This list drives 12 rendered-output assertions (`test_list_page_no_utility_classes`, `test_dashboard_no_utility_classes`, `test_billing_no_utility_classes`, `test_admin_no_utility_classes`, `test_admin_history_no_utility_classes`, …). The broad `TAILWIND_TOKENS` list (line 1251, 40+ tokens) is used *only* by `test_no_utility_classes_anywhere`, which reads template **source files** and only inside literal `class="…"` attributes.
-
-Consequence: utility classes that arrive from anywhere other than a literal `class="…"` in a `.html` file — Python handler strings, `{{ }}`-built class values, third-party fragments — are checked only against the weak 5-token list. Concretely, the exact strings this phase removed from `app/pages/accounts.py` (`class="text-sm text-red-600"`, `class="text-sm text-amber-600"`) match **none** of the five markers. Had only those fragments been left behind, every rendered-output test would still be green.
-
-**Fix:** Point the rendered-output assertions at the same broad list:
-
-```python
-UTILITY_MARKERS = TAILWIND_TOKENS   # single source of truth; move TAILWIND_TOKENS above line 34
-```
-
-and keep the source-level sweep as an additional check.
-
-### WR-06: `ads/form.html` has zero HTTP-level coverage — including the XSS sink
-
-**File:** `tests/test_pages/test_shell.py:105-111`, `tests/test_pages/test_responsive_markup.py:36-50`
-
-**Issue:** The route list documents its own hole:
-
-```python
-# ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ ОБХОДА. /ads/new в тестовой среде отдаёт 500 и в обход не включён.
-```
-
-`/ads/{id}/edit` renders the same template and 500s for the same reason, and is not in any test either. So `test_all_pages_render_new_shell`, which its own docstring calls "тест, доказывающий требование ЦЕЛИКОМ", proves it for 12 of 14 user-facing GET pages. The uncovered template is the largest JS block in the phase and the location of CR-01.
-
-The underlying `get_settings()` bypass is already tracked in `deferred-items.md` and is not re-reported. The **coverage gap it leaves** is separate and is not tracked: nothing will notice if `ads/form.html` starts 500-ing in production, or if `handleFiles`/`renderImages` breaks.
-
-**Fix:** Override the global for the test client so the page is reachable, then add `/ads/new` and `/ads/{id}/edit` to `SHELL_ROUTES`:
-
-```python
-# tests/conftest.py, in the client fixture
-from app.pages.common import templates
-templates.env.globals["s3_public_url"] = lambda: "http://s3.test"
-templates.env.globals["get_image_url"] = lambda key: f"http://s3.test/{key}"
-templates.env.globals["resolve_image_url"] = lambda key: key if str(key).startswith("http") else f"http://s3.test/{key}"
-```
-
-Add an escaping regression test alongside CR-01's fix:
-
-```python
-async def test_ads_form_escapes_image_path(authed_client, db_session):
-    ad = await _seed_ad(db_session)
-    ad.images = ['1/abc_x" onerror="alert(1)']
-    await db_session.commit()
-    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
-    assert 'onerror="alert(1)' not in html
-```
-
-### WR-07: `_get_group_stats` reads every schedule of every tenant
-
-**File:** `app/pages/groups.py:51`
-
-**Issue:**
-
-```python
-sched_r = await db.execute(select(Schedule.group_ids))
-```
-
-No `WHERE` clause at all. Every render of `/groups` and `/groups/partial` loads the `group_ids` JSON of all schedules in the database, then filters in Python. Two problems: the query grows with total tenants rather than with the requesting user's data, and correctness depends on group PKs never colliding across tenants — if any schedule row ever carries a stale or wrong `group_ids` entry, one tenant's schedule count silently leaks into another tenant's UI. Every sibling query in this file is scoped by `user_id`; this one is the exception.
-
-Pre-existing (this phase changed only the `layout` parameter in this file), but it is the only unscoped tenant query in the reviewed set.
-
-**Fix:** Scope through the owning `Ad`:
-
-```python
-sched_r = await db.execute(
-    select(Schedule.group_ids)
-    .join(Ad, Schedule.ad_id == Ad.id)
-    .where(Ad.user_id == user_id)
-)
-```
-
-### WR-08: Billing history renders raw ISO timestamps in UTC, bypassing the project's own date global
-
-**File:** `app/templates/billing/balance.html:67,97`
-
-**Issue:**
+**Fix:** include a submit control that is visually hidden but reachable without JS, and let
+Alpine keep the change-to-submit shortcut:
 
 ```jinja
-{{- cell(text=tx.created_at[:16] if tx.created_at else '', mono=true, muted=true) }}
-{{ mono('Последнее бесплатное начисление: ' ~ balance_info.free_balance_reset_at[:10]) }}
+<form method="post" action="/groups/{{ group.id }}/toggle" x-data x-on:change="$el.submit()">
+  {{- toggle(...) -}}
+  <button class="btn btn--ghost" type="submit" x-cloak>{# visible only без Alpine #}
+    <span class="btn__label">Применить</span>
+  </button>
+</form>
 ```
 
-`get_transaction_history` returns `created_at` as `.isoformat()` (`app/services/billing_service.py:161`), so slicing to 16 characters displays `2026-08-09T10:03` — with a literal `T` — in UTC. Every other list in this phase uses `format_datetime_for_user(..., user, ...)` and shows the user's own timezone (`ad_card.html:36`, `history_card.html:39`, `group_row.html:44`, `schedule_row.html:47`). A user in `Europe/Moscow` sees their sends at 13:03 in History and the matching charge at 10:03 in Billing.
+(`[x-cloak]` is already `display:none !important`, and Alpine strips the attribute on init — so
+the fallback button shows only when Alpine never runs, which is exactly the intent.)
 
-Carried over verbatim from the pre-phase table, but this phase's stated goal was one consistent presentation layer and it left this section behind.
-
-**Fix:** Return real datetimes from the service and use the existing global:
-
-```python
-# app/services/billing_service.py
-"created_at": tx.created_at,   # drop .isoformat()
-"free_balance_reset_at": bal.free_balance_reset_at,
-```
-
-```jinja
-{{- cell(text=format_datetime_for_user(tx.created_at, user, '%d.%m.%Y %H:%M'), mono=true, muted=true) }}
-{{ mono('Последнее бесплатное начисление: ' ~ format_datetime_for_user(balance_info.free_balance_reset_at, user, '%d.%m.%Y')) }}
-```
-
-Check `app/routes/billing.py` for JSON consumers of these keys before changing the service return type.
-
-### WR-09: The shell hand-rolls the avatar the component library exists to provide
-
-**File:** `app/templates/base.html:69`
-
-**Issue:**
-
-```jinja
-<span class="avatar">{{ user.name[0]|upper if user.name else '?' }}</span>
-```
-
-`components/avatar.html` implements exactly this, with `|trim` handling (a name of `"  Иван"` renders a blank initial here but `И` through the macro) and a `--avatar-size` hook. `profile.html:22` and `admin/user_detail.html:50` both use the macro; the shell is the one place that duplicates it. Any future change to the avatar (fallback glyph, size token, title attribute) will be applied in the macro and silently miss the sidebar — which is the single most-rendered avatar in the app.
-
-**Fix:**
-
-```jinja
-{% from "components/avatar.html" import avatar %}
-...
-{{ avatar(user.name) }}
-```
+---
 
 ## Info
 
-### IN-01: Duplicate SVG gradient IDs when more than one MAX icon renders
+### IN-01: Divergent "is this an absolute URL" tests
 
-**File:** `app/templates/includes/messenger_icon.html:30-36`
-**Issue:** The MAX branch hardcodes `id="mx-a"` … `id="mx-d"` inside the macro body. A user with two MAX accounts renders duplicate element IDs on `/accounts` (invalid HTML); every `url(#mx-c)` resolves to the first definition. Harmless today because all instances are identical, but it breaks the moment the gradients become parameterised, and it trips HTML validators.
-**Fix:** Suffix the IDs with a unique token — e.g. add a `uid` parameter (`messenger_icon(type, uid=account.id)`) and emit `id="mx-a-{{ uid }}"` / `url(#mx-a-{{ uid }})`.
+**File:** `app/templates/ads/form.html:62` vs `app/pages/common.py:31`
 
-### IN-02: `group_count` parameter of the sync-status card is dead
+`path.startsWith('http')` (client) accepts `httpfoo://…`; `key.startswith("http://") or
+key.startswith("https://")` (server) does not. The same stored value can therefore be treated as
+absolute in the editor and relative in the list. Align on the stricter server test.
 
-**File:** `app/templates/accounts/partials/sync_status_card.html:35`
-**Issue:** `cell(text=stats.get('groups_count', group_count or 0), …)` — `stats` is only non-empty when `status == 'active'`, and `_get_account_stats` always populates `groups_count` (defaulting to `0`, `app/pages/accounts.py:101`). The fallback can never fire, and `group_count` is unused in the other two branches, so `app/pages/accounts.py:686` passes a value that is always discarded.
-**Fix:** Either drop `group_count` from the render call and the macro, or make it the single source and stop passing `stats['groups_count']`.
+### IN-02: HTML escaper used for a JavaScript string literal
 
-### IN-03: Empty response on unknown status deletes the account row from the DOM
+**File:** `app/templates/ads/form.html:53`
 
-**File:** `app/pages/accounts.py:693`
-**Issue:** `return HTMLResponse("")` combined with the row's `hx-swap="outerHTML"` removes the row entirely. Reachable only if a `syncing` account transitions to a status outside `active`/`sync_failed`/`syncing` (the Celery tasks in `app/worker/tasks.py:302-435` only produce the first two, so this is currently unreachable) — but there is no comment saying so, and the failure mode is a row silently vanishing.
-**Fix:** Return the row unchanged, without polling attributes, instead of an empty body — or add a comment stating the branch is defensive and unreachable.
+`const IMAGE_BASE_URL = '{{ s3_public_url() }}';` relies on Jinja's *HTML* autoescaping inside a
+`<script>` element, where entities are not decoded. The value is operator-controlled config, so
+there is no injection today, and `</script>` is neutralised because `<` becomes `&lt;`. But a
+quote in the setting would render as a literal `&#39;` and corrupt the URL, and this is the same
+escaper/context mismatch class as CR-01. Prefer `{{ s3_public_url() | tojson }}` (no surrounding
+quotes), which is correct in JS context.
 
-### IN-04: Raw `&` instead of `&amp;` in infinite-scroll sentinel URLs
+### IN-03: `modal()` interpolates its `id` into an attribute *name*
 
-**File:** `app/templates/ads/list.html:28`, `accounts/list.html:121`, `groups/list.html:72`, `history/list.html:49`, `schedules/list.html:28`, and the matching `*_partial_cards.html`
-**Issue:** `hx-get="/ads/partial?offset={{ next_offset }}&limit=30"` — the literal `&` is template text, so Jinja does not escape it. Browsers tolerate `&limit=` because the named-reference lookup fails, but this is invalid HTML and will break if a future parameter name ever collides with an entity name (`&amp`, `&lt`, `&copy`…).
-**Fix:** Write `&amp;limit=30` in all ten sentinels.
+**File:** `app/templates/components/modal.html:60`
 
-### IN-05: `data-quota-expires` emits a Python datetime repr
+`x-on:modal-open-{{ id }}.window="show()"` places `id` inside an attribute name, where Jinja's
+escaping does not apply — a space or quote in `id` would produce attribute injection. All seven
+call sites pass `'<prefix>-' ~ <int>`, so it is safe today. Add a guard in the macro
+(`{% if id is not match('^[a-z0-9-]+$') %}{{ raise(...) }}{% endif %}`, or normalise via a filter)
+so a future caller with a slug from user data cannot silently break the pattern.
 
-**File:** `app/templates/base.html:57`
-**Issue:** `data-quota-expires="{{ quota.get('expires_at') }}"` stringifies a `datetime` via `str()`, producing `2026-09-08 10:03:00+00:00` — a space separator, not the ISO `T`, so `new Date(...)` parsing is implementation-defined and `Date.parse` is unreliable in Safari.
-**Fix:** `data-quota-expires="{{ quota.get('expires_at').isoformat() }}"` (guarded by the existing `{% if %}`).
+### IN-04: Dead default argument in the sync swap card
 
-### IN-06: Dead CSS — `[data-editor]` media query and `.animate-fade-in`
+**File:** `app/templates/accounts/partials/sync_status_card.html:52`
 
-**File:** `app/static/css/app.css:446-447, 463-466`
-**Issue:** `[data-editor]` and `[data-editor-side]` appear in no template or handler, and neither attribute can be produced by any macro — the entire `@media (max-width: 900px)` block is unreachable. Likewise `.animate-fade-in` and its `@keyframes fade-in` have no consumer (the class is referenced only by the reduced-motion rule on line 634, which is itself then dead). Both were transplanted from the mock-up.
-**Fix:** Delete lines 446-447 and 463-466, and drop `.animate-fade-in` from the reduced-motion selector list on line 634. (`.field__input--center`, `.progress--ok/--warn/--danger`, `.mono--accent/--warn` and `.msg--plain` are *not* dead — they are reachable through macro variant parameters.)
+`stats.get('groups_count', group_count or 0)` — `_get_account_stats`
+(`app/pages/accounts.py:99-106`) always populates `groups_count`, so the `group_count or 0`
+fallback is unreachable whenever `stats` is non-empty, and `stats` is empty only for
+non-`active` statuses where this branch does not run. Drop the parameter or the default.
 
-### IN-07: `_get_timezone_for_user` has a redundant assignment and a misleading control flow
+### IN-05: Convoluted timezone resolution
 
 **File:** `app/pages/common.py:90-99`
-**Issue:**
+
 ```python
 tz_name = "UTC"
 if user and getattr(user, "timezone", None):
     try:
-        tz_name = user.timezone
+        tz_name = user.timezone      # cannot raise
         return ZoneInfo(tz_name)
     except Exception:
         tz_name = "UTC"
 return ZoneInfo(tz_name)
 ```
-The `tz_name = user.timezone` assignment is pointless (the value is only used on the very next line), the `except` branch re-assigns a variable that already held `"UTC"`, and there are two `return ZoneInfo(...)` sites for one decision. Behaviour is correct; the shape invites a wrong edit.
-**Fix:**
-```python
-def _get_timezone_for_user(user: User | None) -> ZoneInfo:
-    name = getattr(user, "timezone", None) if user else None
-    try:
-        return ZoneInfo(name) if name else ZoneInfo("UTC")
-    except Exception:
-        return ZoneInfo("UTC")
-```
 
-### IN-08: `assert "data-row" in html` is also satisfied by `data-rowhead`
+The assignment inside `try` cannot fail, and `tz_name` is reassigned only to be re-read on the
+fall-through. Simplify to a single `try: return ZoneInfo(user.timezone) except Exception: return
+ZoneInfo("UTC")`. Also, `app/pages/schedules.py:28,53,90` validates timezones against
+`VALID_TIMEZONES` instead — two different fallback strategies for the same concept.
 
-**File:** `tests/test_pages/test_responsive_markup.py:225, 759, 863, 942`
-**Issue:** `data-rowhead` contains `data-row` as a substring, so `test_list_page_has_responsive_primitives` and friends pass whenever the column header renders — even if zero data rows do. The seeded fixtures happen to guarantee rows, so the tests are green for the right reason today, but the assertion does not express what the docstring claims ("списочная страница собрана на примитивах").
-**Fix:** `assert "<div data-row " in html` or `assert re.search(r'data-row\b(?!head)', html)`.
+### IN-06: JWT decoded and the user row fetched twice per page request
+
+**File:** `app/pages/__init__.py:36-37` and every handler in `app/pages/*.py`
+
+`load_shell_context` runs `get_user_from_cookie` as a router-level dependency, and then each
+handler calls `get_user_from_cookie` again. Every page request therefore decodes the JWT twice
+and issues two `SELECT … FROM users` round-trips. The shell context (six scalar subqueries plus
+two more selects) is also computed for HTMX partial endpoints — `/ads/partial`,
+`/groups/partial`, `/history/partial`, `/accounts/{id}/sync-status` — whose templates never read
+it, so the 5-second sync poll pays for it on every tick. Have `load_shell_context` stash the user
+on `request.state` and have handlers read it, and skip shell computation for `*/partial` and
+`sync-status` routes.
+
+### IN-07: Possibly-unbound locals in the group sync handler
+
+**File:** `app/pages/accounts.py:761-778`
+
+`fetched_groups` and `messenger_type` are assigned only inside `if/elif/elif` branches. The guard
+at line 755 (`account.type not in ("tg_user", "wa", "max")`) makes this correct today, but the
+correctness lives 15 lines away from the use and static analysers will flag it. Add a final
+`else: return RedirectResponse(url="/groups", status_code=302)` so the invariant is local.
+
+### IN-08: `_qr_sessions` is process-local module state
+
+**File:** `app/messengers/telegram_user.py:57,68` (used from `app/pages/accounts.py:235-340`)
+
+The Telegram QR flow stores in-flight sessions in a module-level dict. With more than one uvicorn
+worker (or more than one container behind nginx), `start-qr` and the subsequent `qr-status` /
+`complete` calls can land on different processes, and the flow fails intermittently with
+"Сессия не найдена". Move the session map into Redis, or pin the flow with a sticky cookie.
+
+### IN-09: Two pages still leave columns unlabelled on narrow screens
+
+**File:** `app/templates/billing/balance.html:97-99,112`, `app/templates/admin/groups_info.html:65-67,76-77`
+
+Both bypass the `cell(label=…)` contract and hand-write `<span data-cell-label>` for some
+columns only, so "Тип"/"Описание" (billing) and "Канал"/"Обновлено" (groups-info) lose their
+names at ≤860px where `[data-rowhead] { display: none }` applies. `groups_info.html:76` uses
+`title='Обновлено'` (a tooltip) where `label=INFO_COLUMNS[4]` was intended.
+
+**This is already tracked** — `tests/test_responsive_markup.py:2793-2814` declares both as
+explicit `unlabelled` sets with a note routing them to `/gsd-verify-work` (T-13-09), and the
+comment is careful to call them observations rather than an accepted baseline. Recording here
+only so the item is not lost; no new action beyond honouring that hand-off.
 
 ---
 
-_Reviewed: 2026-08-09_
+_Reviewed: 2026-08-09T20:56:10Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
