@@ -822,3 +822,84 @@ async def test_billing_plans_template_is_migrated():
     assert "{% block page_title %}" in source
     assert "components/progress.html" in source
     assert "components/card.html" in source
+
+
+# --- План 07: админ-панель ---------------------------------------------------
+#
+# Перевёрстка меняет ТОЛЬКО оформление. Проверка прав живёт в обработчиках
+# (require_admin) и в шаблон не переезжает; состав показываемых персональных
+# данных не расширяется. Оба утверждения — поведенческие: страница админки
+# отдаёт 200 и выглядит исправной независимо от того, сломана проверка или нет.
+
+
+@pytest.mark.asyncio
+async def test_admin_pages_use_row_primitives(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Список пользователей собран на строке-таблице, а не на своей вёрстке."""
+    response = await admin_client.get("/admin/users")
+    assert response.status_code == 200
+    html = response.text
+    assert "data-row" in html
+    assert "data-rowhead" in html
+
+
+@pytest.mark.asyncio
+async def test_admin_no_utility_classes(admin_client: AsyncClient):
+    for url in ("/admin", "/admin/users"):
+        response = await admin_client.get(url)
+        assert response.status_code == 200, url
+        for marker in UTILITY_MARKERS:
+            assert marker not in response.text, f"{url}: {marker}"
+
+
+@pytest.mark.asyncio
+async def test_admin_users_renders_data(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка пользователя отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+
+    Порядок фикстур важен: authed_client регистрирует обычного пользователя,
+    admin_client затем перелогинивает того же клиента администратором — в
+    списке оказываются оба.
+    """
+    response = await admin_client.get("/admin/users")
+    assert response.status_code == 200
+    html = response.text
+
+    user = await _user(db_session)
+    assert user.email in html, "адрес пользователя не отрисован"
+    assert user.name in html, "имя пользователя не отрисовано"
+    assert f"/admin/users/{user.id}" in html, "ссылка на карточку пользователя потеряна"
+
+
+@pytest.mark.asyncio
+async def test_admin_users_shows_no_extra_personal_data(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """T-07-02: перевёрстка — не повод показать больше персональных данных.
+
+    Набор полей в списке зафиксирован: имя, адрес, дата регистрации, баланс и
+    признак блокировки. Хеш пароля не был виден и не должен появиться —
+    ни одно утверждение выше такого расширения не заметит.
+    """
+    html = (await admin_client.get("/admin/users")).text
+
+    user = await _user(db_session)
+    assert user.password_hash not in html, "в списке пользователей появился хеш пароля"
+    assert "password_hash" not in html
+
+
+@pytest.mark.asyncio
+async def test_admin_denied_for_regular_user(authed_client: AsyncClient):
+    """T-07-01: обычный пользователь не получает содержимого админ-панели.
+
+    Проверка прав остаётся в обработчиках; перевёрстка её не ослабляет.
+    Утверждение идёт и по статусу, и по телу: отказ, отданный со страницей
+    админки внутри, отказом не является.
+    """
+    for url in ("/admin", "/admin/users", "/admin/groups-info"):
+        response = await authed_client.get(url, follow_redirects=False)
+        assert response.status_code != 200, url
+        assert "Администрирование" not in response.text, url
+        assert "data-rowhead" not in response.text, url
