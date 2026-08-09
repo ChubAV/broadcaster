@@ -1,6 +1,7 @@
 """Wave 0: покрытие UI-01, UI-02, UI-03, UI-06 для нового шелла (План 01-01)."""
 
 import re
+from pathlib import Path
 
 import pytest
 from httpx import AsyncClient
@@ -15,8 +16,6 @@ async def test_app_css_served(client: AsyncClient):
     body = response.text
     assert ":root" in body
     assert "--accent" in body
-    # @font-face появляется только в Задаче 3 — здесь его быть не должно
-    assert "@font-face" not in body
 
 
 @pytest.mark.asyncio
@@ -26,6 +25,33 @@ async def test_static_js_served(client: AsyncClient):
         assert response.status_code == 200, path
         # Вендоренные рантаймы: htmx ~47.7 КБ, Alpine ~43.4 КБ
         assert len(response.content) > 10_000, path
+
+
+# --- D-04 / D-17: шрифты со своего домена -----------------------------------
+
+@pytest.mark.asyncio
+async def test_fonts_served(client: AsyncClient):
+    fonts_dir = Path(__file__).resolve().parents[2] / "app" / "static" / "fonts"
+    files = sorted(fonts_dir.glob("*.woff2"))
+    assert len(files) >= 18
+    for path in files:
+        response = await client.get(f"/static/fonts/{path.name}")
+        assert response.status_code == 200, path.name
+        assert response.content[:4] == b"wOF2", path.name
+
+
+@pytest.mark.asyncio
+async def test_app_css_declares_fonts(client: AsyncClient):
+    body = (await client.get("/static/css/app.css")).text
+    assert "@font-face" in body
+    # Основная текстовая гарнитура обязана содержать кириллицу (D-17)
+    assert "IBM Plex Sans" in body
+    assert "IBM Plex Mono" in body
+    for token in ("--font-sans", "--font-mono", "--font-display"):
+        assert token in body, token
+    # Внешних шрифтовых запросов не осталось
+    assert "fonts.googleapis.com" not in body
+    assert "fonts.gstatic.com" not in body
 
 
 # --- UI-02: новый шелл на странице ------------------------------------------
