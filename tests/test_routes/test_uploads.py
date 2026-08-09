@@ -1,3 +1,5 @@
+import re
+
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, patch
@@ -6,6 +8,7 @@ from httpx import AsyncClient, ASGITransport
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.main import create_app
+from app.routes.uploads import safe_filename
 
 
 @pytest_asyncio.fixture
@@ -65,6 +68,78 @@ def make_png_bytes():
     idat = chunk(b"IDAT", zlib.compress(raw_data))
     iend = chunk(b"IEND", b"")
     return signature + ihdr + idat + iend
+
+
+# --- CR-01: нормализация клиентского имени файла ------------------------------
+#
+# Клиентское имя файла в составном запросе полностью подконтрольно отправителю и
+# участвует в построении ключа объекта хранилища. Без нормализации сегменты пути
+# в имени выводят ключ за префикс пользователя, то есть в чужую область того же
+# хранилища. Функция проверяется напрямую, без HTTP: у неё определённые вход и
+# выход, и классы входов проверяются каждый отдельно.
+
+SAFE_FILENAME_CHARS = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def test_safe_filename_keeps_plain_name():
+    assert safe_filename("test_image.png") == "test_image.png"
+    assert safe_filename("photo-01.JPEG") == "photo-01.JPEG"
+
+
+def test_safe_filename_strips_path_components():
+    result = safe_filename("../../etc/passwd.png")
+
+    assert "/" not in result
+    assert "\\" not in result
+    assert result == "passwd.png"
+    assert safe_filename("..\\..\\windows\\evil.png") == "evil.png"
+    assert "/" not in safe_filename("/absolute/path/img.png")
+
+
+def test_safe_filename_drops_quotes_and_spaces():
+    result = safe_filename('x" onerror="alert(1)<img>.png')
+
+    assert SAFE_FILENAME_CHARS.match(result), result
+    assert '"' not in result
+    assert " " not in result
+    assert "<" not in result
+    assert ">" not in result
+
+
+def test_safe_filename_falls_back_on_empty():
+    assert safe_filename("") != ""
+    assert safe_filename(None) != ""
+    # Имя, от которого после нормализации не остаётся ни одного звена пути.
+    assert safe_filename("../") != ""
+
+
+def test_safe_filename_truncates():
+    result = safe_filename("a" * 300 + ".png")
+
+    assert len(result) <= 100
+    assert SAFE_FILENAME_CHARS.match(result), result
+
+
+@pytest.mark.asyncio
+@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+async def test_upload_key_stays_inside_user_prefix(
+    mock_s3, upload_client, upload_auth_headers
+):
+    """Ключ объекта не выходит за префикс пользователя ни при каком имени файла."""
+    png_bytes = make_png_bytes()
+    hostile = '../../evil x" onerror="alert(1)>.png'
+
+    response = await upload_client.post(
+        "/api/uploads/image",
+        files={"file": (hostile, png_bytes, "image/png")},
+        headers=upload_auth_headers,
+    )
+
+    assert response.status_code == 200
+    key = response.json()["path"]
+    assert re.fullmatch(r"\d+/[0-9a-f]{32}_[A-Za-z0-9._-]+", key), key
+    # Ключ, ушедший в хранилище, — тот же самый, что вернулся клиенту.
+    assert mock_s3.call_args.kwargs["key"] == key
 
 
 @pytest.mark.asyncio
