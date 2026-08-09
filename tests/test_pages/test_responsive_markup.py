@@ -978,3 +978,102 @@ async def test_admin_groups_info_escapes_external_name(
     html = (await admin_client.get("/admin/groups-info")).text
     assert '<img src=x' not in html, "название группы отрисовано как разметка"
     assert "&lt;img src=x" in html, "экранированного вывода названия нет"
+
+
+# --- План 08, Задача 1: детальные страницы админки ---------------------------
+#
+# Обе страницы адресуются по path-параметру и в общий параметризованный обход
+# смоук-теста не попадают: их покрытие — только эти точечные тесты.
+
+
+@pytest.mark.asyncio
+async def test_admin_user_detail_renders_data(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Карточка пользователя отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+
+    Главный класс ошибок фазы: сборка страницы из макросов теряет неявный
+    контекст, страница остаётся валидной и отдаёт 200, а значения пропадают.
+    Утверждение на статус ответа такую поломку не ловит.
+    """
+    user = await _user(db_session)
+
+    response = await admin_client.get(f"/admin/users/{user.id}")
+    assert response.status_code == 200
+    html = response.text
+
+    assert user.email in html, "адрес пользователя не отрисован"
+    assert user.name in html, "имя пользователя не отрисовано"
+    # Ссылка на историю отправок — единственный переход со страницы
+    assert f"/admin/users/{user.id}/history" in html, "ссылка на историю потеряна"
+    # Действия сохраняются на прежних маршрутах: новых не добавляется, старые
+    # не теряются (блокировка и вход под пользователем — Фаза 6, ADMIN-04/05).
+    for action in ("/balance", "/unlimited", "/block", "/delete"):
+        assert f"/admin/users/{user.id}{action}" in html, action
+
+
+@pytest.mark.asyncio
+async def test_admin_group_info_detail_renders_data(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Деталь справочника групп отрисовывает реальные данные."""
+    item = await _seed_group_info(db_session, name="Уникальная деталь справочника")
+
+    response = await admin_client.get(f"/admin/groups-info/{item.id}")
+    assert response.status_code == 200
+    html = response.text
+
+    assert "Уникальная деталь справочника" in html, "название группы не отрисовано"
+    assert "-100777" in html, "внешний идентификатор не отрисован"
+    assert "Админ группы" in html, "контакт администратора не отрисован"
+
+
+@pytest.mark.asyncio
+async def test_admin_detail_pages_no_utility_classes(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    user = await _user(db_session)
+    item = await _seed_group_info(db_session)
+
+    for url in (f"/admin/users/{user.id}", f"/admin/groups-info/{item.id}"):
+        response = await admin_client.get(url)
+        assert response.status_code == 200, url
+        for marker in UTILITY_MARKERS:
+            assert marker not in response.text, f"{url}: {marker}"
+
+
+@pytest.mark.asyncio
+async def test_admin_detail_denied_for_regular_user(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-08-01: обычный пользователь не получает содержимого детальных страниц.
+
+    Проверка прав живёт в обработчиках (require_admin) и в шаблон не
+    переезжает. Утверждение идёт и по статусу, и по телу: отказ, отданный с
+    отрендеренной страницей внутри, отказом не является.
+    """
+    user = await _user(db_session)
+    item = await _seed_group_info(db_session)
+
+    for url in (f"/admin/users/{user.id}", f"/admin/groups-info/{item.id}"):
+        response = await authed_client.get(url, follow_redirects=False)
+        assert response.status_code != 200, url
+        assert user.email not in response.text, url
+        assert "Справочная группа" not in response.text, url
+
+
+@pytest.mark.asyncio
+async def test_admin_user_detail_shows_no_extra_personal_data(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """T-08-02: перевёрстка — не основание показать больше персональных данных.
+
+    Набор полей карточки зафиксирован: имя, адрес, баланс, счётчики объявлений
+    и групп, дата регистрации. Хеша пароля не было и не должно появиться —
+    ни одно утверждение выше такого расширения не заметит.
+    """
+    user = await _user(db_session)
+
+    html = (await admin_client.get(f"/admin/users/{user.id}")).text
+    assert user.password_hash not in html, "в карточке появился хеш пароля"
+    assert "password_hash" not in html
