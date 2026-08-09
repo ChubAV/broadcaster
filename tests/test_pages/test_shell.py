@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 from httpx import AsyncClient
@@ -65,21 +66,184 @@ async def test_profile_renders_new_shell(authed_client: AsyncClient):
         assert marker in html, marker
 
 
+# --- План 08: сплошной обход фазы -------------------------------------------
+#
+# Итоговое покрытие UI-01…UI-03. Список адресов — §Smoke-test routes из
+# 01-VALIDATION.md: все страницы БЕЗ path-параметров. Адреса с параметрами
+# покрываются точечно тестами Планов 05-08 и в общий обход не тянутся.
+
+# Полные страницы обычного пользователя: отдают шелл целиком.
+SHELL_ROUTES = (
+    "/dashboard",
+    "/ads",
+    "/accounts",
+    "/accounts/connect/tg_user",
+    "/accounts/connect/wa",
+    "/accounts/connect/max",
+    "/groups",
+    "/schedules",
+    "/schedules/new",
+    "/history",
+    "/billing",
+    "/profile",
+)
+
+# Страницы админ-панели: тот же шелл, но нужен admin_client.
+ADMIN_SHELL_ROUTES = ("/admin", "/admin/users", "/admin/groups-info")
+
+# Партиалы бесконечной прокрутки: это ФРАГМЕНТЫ, а не страницы — шелла у них
+# нет по построению, поэтому data-shell с них не спрашивается. Но внешних
+# ссылок и utility-классов в них быть не должно наравне со страницами.
+PARTIAL_ROUTES = (
+    "/ads/partial",
+    "/accounts/partial",
+    "/groups/partial",
+    "/schedules/partial",
+    "/history/partial",
+)
+
+# ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ ОБХОДА. /ads/new в тестовой среде отдаёт 500 и в обход
+# не включён. Причина — не вёрстка: глобал шаблонов s3_public_url в
+# app/pages/common.py:38 вызывает get_settings() в обход подмены зависимостей,
+# и Settings() собирается заново из окружения. Без .env обязательные поля
+# отсутствуют — ValidationError. Дефект существует на базовом коммите фазы,
+# перевёрсткой не внесён и лежит вне файлов Плана 08; записан в
+# deferred-items.md. Сама страница мигрирована Планом 03 и в бою рендерится.
+
+EXTERNAL_HOSTS = (
+    "cdn.tailwindcss.com",
+    "fonts.googleapis.com",
+    "fonts.gstatic.com",
+    "unpkg.com",
+    "cdn.jsdelivr.net",
+    "cdnjs.cloudflare.com",
+    "ajax.googleapis.com",
+)
+
+# Ссылки на подключаемые ресурсы: <script src> и <link href>
+ASSET_REF_RE = re.compile(r'<(?:script|link)\b[^>]*?(?:src|href)="([^"]+)"', re.I)
+
+
+def _assert_no_external_assets(html: str, label: str, own_host: str = "test") -> None:
+    """Ни один подключаемый ресурс не уходит за пределы своего домена.
+
+    Проверка идёт не только по списку известных хостов: любой script/link,
+    указывающий на ЧУЖОЙ домен, — это внешний запрос, даже если хост нам
+    сегодня незнаком (T-08-04).
+
+    url_for('static', …) в Starlette отдаёт абсолютный адрес со своим хостом,
+    поэтому «абсолютный» само по себе нарушением не является — нарушением
+    является ЧУЖОЙ хост. Протокол-относительные (//host/…) считаются внешними
+    всегда: собственных ссылок такого вида в проекте нет.
+    """
+    for host in EXTERNAL_HOSTS:
+        assert host not in html, f"{label}: {host}"
+    for ref in ASSET_REF_RE.findall(html):
+        netloc = urlsplit(ref).netloc
+        assert netloc in ("", own_host), f"{label}: сторонний ресурс {ref}"
+
+
 @pytest.mark.asyncio
-async def test_no_external_cdn(authed_client: AsyncClient):
-    html = (await authed_client.get("/profile")).text
-    for host in ("cdn.tailwindcss.com", "fonts.googleapis.com", "unpkg.com"):
-        assert host not in html, host
+@pytest.mark.parametrize("route", SHELL_ROUTES)
+async def test_all_pages_render_new_shell(authed_client: AsyncClient, route: str):
+    """Ни одна страница не осталась на старом layout (D-06, UI-02).
+
+    Это тест, доказывающий требование ЦЕЛИКОМ, а не по одному разделу:
+    пропущенный шаблон виден только сплошным обходом.
+    """
+    response = await authed_client.get(route)
+    assert response.status_code == 200, route
+    html = response.text
+    assert "data-shell" in html, route
+    assert "data-nav" in html, route
+    assert "data-tabs" in html, route
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ADMIN_SHELL_ROUTES)
+async def test_admin_pages_render_new_shell(admin_client: AsyncClient, route: str):
+    response = await admin_client.get(route)
+    assert response.status_code == 200, route
+    assert "data-shell" in response.text, route
+
+
+@pytest.mark.asyncio
+async def test_root_route_lands_in_shell(authed_client: AsyncClient):
+    """Корень — перенаправление, а не страница: обход идёт по его цели."""
+    response = await authed_client.get("/", follow_redirects=True)
+    assert response.status_code == 200
+    assert "data-shell" in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", PARTIAL_ROUTES)
+async def test_partials_render_without_shell(authed_client: AsyncClient, route: str):
+    """Партиал — фрагмент подмены: шелла в нём быть НЕ должно.
+
+    Партиал, притащивший шелл целиком, вставит вторую копию навигации в
+    середину списка. Утверждение на статус ответа этого не поймает.
+    """
+    response = await authed_client.get(route)
+    assert response.status_code == 200, route
+    assert "data-shell" not in response.text, route
+
+
+@pytest.mark.asyncio
+async def test_no_external_cdn(
+    authed_client: AsyncClient, admin_client: AsyncClient, client: AsyncClient
+):
+    """Ни одна выдача проекта не тянет сторонний скрипт, стиль или шрифт.
+
+    После фазы приложение загружает только свои ресурсы — это же закрывает
+    весь класс supply-chain-риска (T-08-04).
+    """
+    for route in ADMIN_SHELL_ROUTES:
+        _assert_no_external_assets((await admin_client.get(route)).text, route)
+    for route in AUTH_GET_ROUTES:
+        _assert_no_external_assets((await client.get(route)).text, route)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", SHELL_ROUTES + PARTIAL_ROUTES)
+async def test_no_external_cdn_on_user_pages(authed_client: AsyncClient, route: str):
+    response = await authed_client.get(route)
+    assert response.status_code == 200, route
+    _assert_no_external_assets(response.text, route)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", SHELL_ROUTES)
+async def test_static_links_versioned(authed_client: AsyncClient, route: str):
+    """Ссылки на статику несут параметр версии (T-08-05).
+
+    На выкате у части пользователей в кэше лежит страница, тянувшая ассеты с
+    внешних CDN. Без параметра версии они получат смесь старого и нового.
+    Хешей в именах файлов нет и не будет — build-шаг запрещён D-02.
+    """
+    html = (await authed_client.get(route)).text
+
+    static_refs = [r for r in ASSET_REF_RE.findall(html) if "/static/" in r]
+    assert static_refs, f"{route}: ссылок на статику не найдено"
+    for ref in static_refs:
+        assert re.search(r"\?v=\S+", ref), f"{route}: ссылка без версии — {ref}"
+
+    # Общий стиль подключён и версионирован на каждой странице
+    assert any("app.css" in r for r in static_refs), route
 
 
 # --- UI-03: навигация -------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_active_nav_highlight(authed_client: AsyncClient):
-    html = (await authed_client.get("/profile")).text
-    # Ровно один активный пункт на странице: сайдбар помечает is-active,
-    # нижние табы — только aria-current
-    assert html.count("is-active") == 1
+@pytest.mark.parametrize("route", SHELL_ROUTES)
+async def test_active_nav_highlight(authed_client: AsyncClient, route: str):
+    """Текущий раздел подсвечен РОВНО один раз на каждой странице шелла.
+
+    Ноль совпадений — пользователь не понимает, где он. Два и больше —
+    подсвечены несколько разделов сразу, что не лучше.
+    """
+    html = (await authed_client.get(route)).text
+    # Сайдбар помечает пункт is-active; нижние табы — только aria-current
+    assert html.count("is-active") == 1, route
 
 
 @pytest.mark.asyncio

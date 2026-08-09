@@ -1237,3 +1237,144 @@ async def test_admin_history_denied_for_regular_user(
         response = await authed_client.get(url, follow_redirects=False)
         assert response.status_code != 200, url
         assert "Закрытая отправка" not in response.text, url
+
+
+# --- План 08, Задача 3: сплошная проверка фазы -------------------------------
+#
+# Это не миграция, а ГАРАНТИЯ, что пропущенных файлов нет. Тесты ниже —
+# единственные, которые доказывают D-06 («ни один экран не остался на старой
+# вёрстке») целиком, а не по одному разделу.
+
+# Признаки удалённого utility-фреймворка. Список закрывает то, что реально
+# встречалось в этой кодовой базе: палитра, кегли, начертания, раскладка,
+# рамки и адаптивные префиксы.
+TAILWIND_TOKENS = (
+    # палитра фона и текста
+    "bg-white", "bg-gray", "bg-slate", "bg-emerald", "bg-indigo", "bg-amber",
+    "bg-red", "bg-blue", "bg-green", "bg-violet", "bg-purple", "bg-yellow",
+    "text-gray", "text-slate", "text-emerald", "text-indigo", "text-amber",
+    "text-red", "text-blue", "text-violet", "text-yellow", "text-white",
+    # кегли и начертания
+    "text-xs", "text-sm", "text-base", "text-lg", "text-xl", "text-2xl",
+    "font-medium", "font-semibold", "font-bold",
+    # раскладка
+    "inline-flex", "inline-block", "items-center", "justify-center",
+    "flex-col", "flex-1", "shrink-0", "space-y-", "space-x-", "divide-",
+    # рамки, радиусы, тени
+    "rounded-lg", "rounded-full", "border-gray", "border-slate", "shadow-sm",
+    # утилиты текста
+    "truncate", "whitespace-pre-line",
+    # адаптивные префиксы
+    "sm:", "md:", "lg:", "xl:",
+)
+
+# Проверка идёт ТОЛЬКО по значениям class="…". Иначе тест падает на
+# упоминаниях классов в комментариях («.btn уже inline-flex»), то есть на
+# документации, а не на разметке.
+CLASS_ATTR_RE = re.compile(r'class="([^"]*)"')
+
+
+def test_no_utility_classes_anywhere():
+    """Ни ОДИН шаблон проекта не содержит utility-классов (D-06, UI-06).
+
+    Единственный тест, доказывающий требование целиком. Обходит все файлы
+    app/templates/**/*.html: пропущенный шаблон виден только сплошным обходом,
+    а не проверкой отдельных разделов — он отдаёт 200 и выглядит исправным.
+    """
+    offenders: dict[str, set[str]] = {}
+    for path in sorted(TEMPLATES_DIR.rglob("*.html")):
+        source = path.read_text(encoding="utf-8")
+        found = {
+            token
+            for value in CLASS_ATTR_RE.findall(source)
+            for token in TAILWIND_TOKENS
+            if token in value
+        }
+        if found:
+            offenders[str(path.relative_to(TEMPLATES_DIR))] = found
+
+    assert not offenders, f"utility-классы остались в шаблонах: {offenders}"
+
+
+def test_no_utility_classes_in_python_handlers():
+    """Разметка ответов не собирается строками в обработчиках.
+
+    HTML-фрагменты опроса статуса подключения жили в app/pages/accounts.py и
+    несли utility-классы: Tailwind удалён Планом 01, поэтому они приходили в
+    #wa-status / #max-status без оформления. Обход шаблонов их не видел —
+    они не шаблоны.
+    """
+    pages_dir = TEMPLATES_DIR.parent / "pages"
+    offenders: dict[str, set[str]] = {}
+    for path in sorted(pages_dir.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        found = {
+            token
+            for value in CLASS_ATTR_RE.findall(source)
+            for token in TAILWIND_TOKENS
+            if token in value
+        }
+        if found:
+            offenders[str(path.relative_to(pages_dir))] = found
+
+    assert not offenders, f"utility-классы остались в обработчиках: {offenders}"
+
+
+def test_template_inventory():
+    """Инвентаризация шаблонов сходится.
+
+    Парной вёрстки «строки/карточки» не осталось (D-15): файлов строчной
+    компоновки нет ни одного. Элементов таблицы в проекте нет тоже — табличные
+    данные строятся примитивами строки (решение Плана 07).
+    """
+    templates = sorted(TEMPLATES_DIR.rglob("*.html"))
+    assert templates, "шаблоны не найдены — проверь путь"
+
+    # Парная вёрстка удалена Планом 03: ни одного файла строчной компоновки
+    rows_layout = [p.name for p in templates if p.name.endswith("_rows.html")]
+    assert not rows_layout, f"файлы строчной компоновки остались: {rows_layout}"
+
+    # Элементов таблицы в проекте не осталось ни одного
+    table_markers = ("<table", "<td", "<th ", "<thead", "<tbody")
+    with_tables = {
+        str(p.relative_to(TEMPLATES_DIR))
+        for p in templates
+        if any(m in p.read_text(encoding="utf-8") for m in table_markers)
+    }
+    assert not with_tables, f"элементы таблицы остались: {with_tables}"
+
+    # Библиотека компонентов Плана 02 на месте целиком (12 макросов + filters)
+    components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
+    assert len(components) == 13, [p.name for p in components]
+
+    # Два шелла проекта: основной и auth
+    assert (TEMPLATES_DIR / "base.html").exists()
+    assert (TEMPLATES_DIR / "auth_base.html").exists()
+
+
+def test_every_page_template_extends_a_shell():
+    """Каждый шаблон РАЗДЕЛА наследует шелл (D-06, UI-02).
+
+    Обход по HTTP видит только страницы с GET-роутом. Этот тест закрывает
+    оставшееся: шаблон, потерявший extends, отрисуется «голой» разметкой без
+    единого стиля, а страницы без роута (четыре экрана авторизации из POST)
+    обход по GET не достаёт вовсе.
+
+    Не наследуют шелл по построению: сами шеллы, библиотека компонентов,
+    партиалы подмены и включаемые фрагменты.
+    """
+    exempt_dirs = {"components", "includes", "partials"}
+    exempt_names = {"base.html", "auth_base.html"}
+
+    missing = []
+    for path in sorted(TEMPLATES_DIR.rglob("*.html")):
+        rel = path.relative_to(TEMPLATES_DIR)
+        if rel.name in exempt_names or exempt_dirs & set(rel.parts):
+            continue
+        # Партиалы подмены и включаемые карточки шелл не наследуют
+        if "partial" in rel.name or rel.name.startswith("_"):
+            continue
+        if "{% extends" not in path.read_text(encoding="utf-8"):
+            missing.append(str(rel))
+
+    assert not missing, f"шаблоны разделов без наследования шелла: {missing}"
