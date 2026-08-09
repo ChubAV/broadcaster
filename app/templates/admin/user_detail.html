@@ -1,113 +1,138 @@
 {% extends "base.html" %}
-{% block title %}{{ target_user.name }} — Broadcaster{% endblock %}
-{% block content %}
-{% from "includes/icons.html" import icon_back %}
+{% from "components/avatar.html" import avatar %}
+{% from "components/badge.html" import badge %}
+{% from "components/button.html" import button, link_button %}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/field.html" import field %}
+{% from "components/modal.html" import modal %}
+{% from "components/mono.html" import mono %}
+{% from "components/table.html" import rowhead, row_open, row_close, cell %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 
-<div class="max-w-4xl">
-  <a href="/admin/users" class="inline-flex items-center gap-1.5 text-sm lg:text-base text-gray-500 hover:text-gray-700 mb-4">
-    {{ icon_back() }} Назад к пользователям
-  </a>
+{% block title %}{{ target_user.name }} — Broadcaster{% endblock %}
 
-  <!-- User info -->
-  <div class="bg-white rounded-lg border border-gray-200 p-6 lg:p-8 mb-6">
-    <div class="flex items-center gap-4 mb-4">
-      <div class="w-12 h-12 lg:w-14 lg:h-14 rounded-full bg-indigo-100 flex items-center justify-center text-lg lg:text-xl font-medium text-indigo-700">
-        {{ target_user.name[0]|upper if target_user.name else '?' }}
-      </div>
-      <div>
-        <h1 class="text-lg lg:text-xl font-semibold text-gray-900">{{ target_user.name }}</h1>
-        <p class="text-sm lg:text-base text-gray-500">{{ target_user.email }}</p>
+{# Контракт «страница → шелл» (План 01): имя пользователя рендерит шапка шелла,
+   собственного заголовка первого уровня у страницы нет — он бы задвоился.
+   Адрес выводится в теле один раз, в блоке личности. #}
+{% block page_title %}{{ target_user.name }}{% endblock %}
+{% block page_subtitle %}Карточка пользователя{% endblock %}
+{% block page_actions %}
+{{ link_button('К пользователям', '/admin/users', variant='ghost') }}
+{{ link_button('История отправок', '/admin/users/' ~ target_user.id ~ '/history',
+               variant='ghost', icon='arrow-right') }}
+{% endblock %}
+
+{% block content %}
+
+{#- СОСТАВ ПОКАЗЫВАЕМЫХ ПЕРСОНАЛЬНЫХ ДАННЫХ НЕ РАСШИРЯЕТСЯ (T-08-02). Карточка
+    показывает ровно то же, что и до перевёрстки: имя, адрес, баланс, число
+    объявлений, число групп, дату регистрации, список аккаунтов и признак
+    блокировки. Перевёрстка — не основание показать в админке больше, чем
+    показывается сейчас. Закреплено тестом
+    test_admin_user_detail_shows_no_extra_personal_data.
+
+    ПРОВЕРКА ПРАВ ОСТАЁТСЯ В ОБРАБОТЧИКЕ (require_admin, T-08-01) и в шаблон не
+    переезжает. Блокировка/разблокировка и вход под пользователем — Фаза 6
+    (ADMIN-04, ADMIN-05); существующие действия сохранены на прежних маршрутах
+    и прежними методами, новых не добавлено. -#}
+
+{#- Раскладка списка аккаунтов приходит параметром cols в пользовательское
+    свойство --cols. Примитивы строки (data-rowhead / data-row / data-grow)
+    рендерят макросы table.html — в исходнике файла их литералов нет, они
+    появляются в отрендеренной выдаче (урок Плана 07). -#}
+{% set ACC_COLS = 'minmax(180px,2.4fr) 132px' %}
+{% set ACC_COLUMNS = ['Аккаунт', 'Статус'] %}
+
+<div data-stack>
+
+  {{ card_open() }}
+    <div data-identity>
+      {{ avatar(target_user.name, size=44) }}
+      <div data-identity-meta>
+        {{- mono(target_user.email, 'bright') -}}
+        {%- if target_user.is_blocked %}{{ badge('Заблокирован', 'danger') }}{% endif -%}
       </div>
     </div>
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-      <div>
-        <span class="text-gray-500">Баланс</span>
-        {% if balance_info.is_unlimited %}
-        <p class="text-amber-600 font-bold text-lg mt-0.5">Безлимит</p>
-        {% else %}
-        <p class="text-indigo-600 font-bold text-lg mt-0.5">{{ balance_info.balance }}</p>
-        {% endif %}
-      </div>
-      <div>
-        <span class="text-gray-500">Объявления</span>
-        <p class="text-gray-900 font-medium mt-0.5">{{ ads_count }}</p>
-      </div>
-      <div>
-        <span class="text-gray-500">Группы</span>
-        <p class="text-gray-900 font-medium mt-0.5">{{ groups_count }}</p>
-      </div>
-      <div>
-        <span class="text-gray-500">Регистрация</span>
-        <p class="text-gray-900 font-medium mt-0.5">{{ target_user.created_at.strftime('%d.%m.%Y') }}</p>
-      </div>
+    <div data-metrics>
+      {{ card_open() }}
+        {{ mono('Баланс', 'muted', upper=true) }}
+        {%- if balance_info.is_unlimited -%}
+          <span data-metric-value>∞</span>{{ badge('Безлимит', 'warning') }}
+        {%- else -%}
+          <span data-metric-value>{{ balance_info.balance }}</span>
+        {%- endif -%}
+      {{ card_close() }}
+      {{ card_open() }}
+        {{ mono('Объявления', 'muted', upper=true) }}
+        <span data-metric-value>{{ ads_count }}</span>
+      {{ card_close() }}
+      {{ card_open() }}
+        {{ mono('Группы', 'muted', upper=true) }}
+        <span data-metric-value>{{ groups_count }}</span>
+      {{ card_close() }}
+      {{ card_open() }}
+        {{ mono('Регистрация', 'muted', upper=true) }}
+        {{ mono(target_user.created_at.strftime('%d.%m.%Y') if target_user.created_at else '—', 'bright') }}
+      {{ card_close() }}
     </div>
-  </div>
+  {{ card_close() }}
 
-  <!-- Accounts -->
   {% if accounts %}
-  <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
-    <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">Аккаунты</h2>
-    <div class="space-y-2">
-      {% for acc in accounts %}
-      <div class="flex items-center gap-3 text-sm">
-        {{ messenger_icon(acc.type, size='h-4 w-4', show_label=false) }}
-        <span class="text-gray-900">{{ acc.type }} #{{ acc.id }}</span>
-        {% if acc.status == 'active' %}
-        <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Активен</span>
-        {% else %}
-        <span class="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">{{ acc.status }}</span>
-        {% endif %}
-      </div>
-      {% endfor %}
-    </div>
-  </div>
+  {{ card_open(title='Аккаунты') }}
+    {{ rowhead(columns=ACC_COLUMNS, cols=ACC_COLS) }}
+    {% for acc in accounts %}
+    {{ row_open(cols=ACC_COLS) }}
+      {%- call cell(grow=true) %}
+        {#- Ветка «неизвестный мессенджер» вызывается только на известных
+            типах: у остальных остаётся текстовая подпись. -#}
+        {%- if acc.type in ('tg_user', 'wa', 'max') -%}
+          {{ messenger_icon(acc.type, size='avatar', show_label=false) }}
+        {%- endif -%}
+        <span data-grow>{{ acc.type }} #{{ acc.id }}</span>
+      {%- endcall %}
+      {%- call cell() %}
+        {%- if acc.status == 'active' %}{{ badge('Активен', 'success') }}
+        {%- else %}{{ badge(acc.status, 'neutral') }}{% endif -%}
+      {%- endcall %}
+    {{ row_close() }}
+    {% endfor %}
+  {{ card_close() }}
   {% endif %}
 
-  <!-- History link -->
-  <div class="mb-6">
-    <a href="/admin/users/{{ target_user.id }}/history" class="text-sm text-indigo-600 hover:text-indigo-700 font-medium">История отправок →</a>
-  </div>
-
-  <!-- Balance management -->
-  <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
-    <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">Пополнить баланс</h2>
-    <form method="post" action="/admin/users/{{ target_user.id }}/balance" class="flex flex-col sm:flex-row items-start sm:items-end gap-3">
-      <div>
-        <label for="amount" class="block text-sm font-medium text-gray-700 mb-1.5">Кол-во сообщений</label>
-        <input type="number" name="amount" id="amount" value="100" min="1" class="w-32 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none">
-      </div>
-      <div class="flex-1">
-        <label for="description" class="block text-sm font-medium text-gray-700 mb-1.5">Описание</label>
-        <input type="text" name="description" id="description" placeholder="Причина пополнения" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none">
-      </div>
-      <button type="submit" class="bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">Пополнить</button>
+  {{ card_open(title='Пополнить баланс') }}
+    <form method="post" action="/admin/users/{{ target_user.id }}/balance" data-form>
+      {{ field(name="amount", label='Кол-во сообщений', type='number', value='100',
+               min=1, id='balance-amount') }}
+      {{ field(name="description", label='Описание', placeholder='Причина пополнения',
+               id='balance-description') }}
+      {{ button('Пополнить') }}
     </form>
-  </div>
+  {{ card_close() }}
 
-  <!-- Admin actions -->
-  <div class="bg-white rounded-lg border border-gray-200 p-6">
-    <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">Действия</h2>
-    <div class="flex items-center gap-3">
+  {{ card_open(title='Действия') }}
+    <div data-actions>
       <form method="post" action="/admin/users/{{ target_user.id }}/unlimited">
-        {% if balance_info.is_unlimited %}
-        <button type="submit" class="bg-amber-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-amber-700 transition-colors">Безлимит выкл</button>
-        {% else %}
-        <button type="submit" class="bg-white border border-amber-300 text-amber-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-amber-50 transition-colors">Безлимит вкл</button>
-        {% endif %}
+        {%- if balance_info.is_unlimited %}{{ button('Безлимит выкл', variant='ghost') }}
+        {%- else %}{{ button('Безлимит вкл', variant='ghost') }}{% endif -%}
       </form>
       <form method="post" action="/admin/users/{{ target_user.id }}/block">
-        {% if target_user.is_blocked %}
-        <button type="submit" class="bg-white border border-gray-300 text-gray-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">Разблокировать</button>
-        {% else %}
-        <button type="submit" class="bg-amber-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-amber-700 transition-colors">Заблокировать</button>
-        {% endif %}
+        {%- if target_user.is_blocked %}{{ button('Разблокировать', variant='ghost') }}
+        {%- else %}{{ button('Заблокировать', variant='ghost') }}{% endif -%}
       </form>
-      <form method="post" action="/admin/users/{{ target_user.id }}/delete" onsubmit="return confirm('Удалить пользователя {{ target_user.name }}? Это действие необратимо.')">
-        <button type="submit" class="bg-red-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-red-700 transition-colors">Удалить</button>
-      </form>
+      {#- Подтверждение удаления — модалка Плана 02 вместо браузерного диалога:
+          начальный фокус стоит на «Отмене», поэтому по Enter удаление не
+          срабатывает. Маршрут и метод формы прежние. -#}
+      <button type="button" class="btn btn--danger"
+              x-data x-on:click="$dispatch('modal-open-user-del-{{ target_user.id }}')"><span class="btn__label">Удалить</span></button>
     </div>
-  </div>
+  {{ card_close() }}
+
 </div>
+
+{{ modal(id='user-del-' ~ target_user.id,
+         title='Удалить пользователя?',
+         body='Пользователь ' ~ target_user.name ~ ' и все его данные будут удалены. Действие необратимо.',
+         action='/admin/users/' ~ target_user.id ~ '/delete',
+         confirm_label='Удалить') }}
 
 {% endblock %}

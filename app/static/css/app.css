@@ -1043,6 +1043,35 @@ a:hover { color: var(--accent-link-hover); }
 [data-form] { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
 [data-form] > .field { align-self: stretch; }
 
+/* QR-код мастера подключения: ответ опроса /accounts/connect/{wa,max}/status.
+   Разметка приехала из app/pages/accounts.py, где собиралась конкатенацией
+   строк с utility-классами удалённого фреймворка. */
+[data-qr] { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+[data-qr] img {
+  width: 100%; max-width: 256px; height: auto;
+  padding: 14px; background: #fff;
+  border: 1px solid var(--border-input); border-radius: var(--r-xl);
+}
+
+/* Иконка мессенджера (includes/messenger_icon.html). Последний носитель
+   utility-классов удалённого фреймворка в проекте: до Плана 08 его ветка else
+   отдавала text-gray-500, а сами svg — text-blue-500 / text-emerald-600.
+   Цвета взяты токенами статусов, новых захардкоженных значений нет. */
+.msg { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.msg__glyph { flex: none; }
+.msg__glyph--tg { color: var(--info); }
+.msg__glyph--wa { color: var(--ok); }
+.msg__label { font-size: var(--fs-sm); color: var(--text-secondary); }
+.msg--plain {
+  font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: .08em; color: var(--text-muted);
+}
+
+/* Горизонтальный ряд действий: несколько независимых форм в одной строке.
+   Общий примитив, НЕ привязанный к разделу: каждое действие остаётся
+   отдельной формой со своим маршрутом и методом. */
+[data-actions] { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+
 /* Блок пользователя на странице профиля */
 [data-identity] { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
 [data-identity-meta] { display: flex; flex-direction: column; gap: 3px; min-width: 0; }

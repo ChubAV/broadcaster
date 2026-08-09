@@ -1,76 +1,100 @@
 {% extends "base.html" %}
+{% from "components/avatar.html" import avatar %}
+{% from "components/badge.html" import badge %}
+{% from "components/button.html" import link_button %}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/mono.html" import mono %}
+{% from "components/table.html" import row_open, row_close, cell %}
+{% from "includes/messenger_icon.html" import messenger_icon %}
+
 {% block title %}{{ item.name }} — Справочник групп{% endblock %}
+
+{# Контракт «страница → шелл» (План 01): название группы рендерит шапка шелла,
+   собственного заголовка первого уровня у страницы нет. Видимая подпись
+   раздела «Справочник групп» не переименовывается — на неё утверждает
+   существующее покрытие. #}
+{% block page_title %}{{ item.name }}{% endblock %}
+{% block page_subtitle %}Справочник групп{% endblock %}
+{% block page_actions %}
+{{ link_button('К справочнику', '/admin/groups-info', variant='ghost') }}
+{% endblock %}
+
 {% block content %}
 
-<div class="mb-6">
-  <a href="/admin/groups-info" class="text-sm text-indigo-600 hover:text-indigo-700">&larr; Справочник групп</a>
-</div>
+{#- Ветка else макроса messenger_icon несёт utility-класс удалённого
+    фреймворка, поэтому иконка вызывается только для известных каналов, а
+    подпись берётся отсюда (прецедент Плана 06 и списка справочника). -#}
+{% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
 
-<div class="bg-white rounded-lg border border-gray-200 p-5 lg:p-6 mb-6">
-  <div class="flex items-center gap-3 mb-4">
-    <div class="w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium
-                {% if item.messenger_type == 'tg_user' %}bg-blue-100 text-blue-700
-                {% elif item.messenger_type == 'wa' %}bg-green-100 text-green-700
-                {% else %}bg-purple-100 text-purple-700{% endif %}">
-      {% if item.messenger_type == 'tg_user' %}TG
-      {% elif item.messenger_type == 'wa' %}WA
-      {% else %}MX{% endif %}
-    </div>
-    <div>
-      <h1 class="text-lg lg:text-xl font-semibold text-gray-900">{{ item.name }}</h1>
-      <p class="text-sm text-gray-500">{{ item.messenger_type }} &middot; {{ item.external_id }}</p>
-    </div>
-  </div>
+{#- Раскладка «подпись → значение» строки контакта администратора. Приходит
+    параметром cols в пользовательское свойство --cols: собственного класса
+    под эту страницу не заводится. -#}
+{% set ADMIN_COLS = 'minmax(160px,1.6fr) minmax(0,2fr)' %}
 
-  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-    <div>
-      <p class="text-xs text-gray-500">Участников</p>
-      <p class="text-lg font-semibold text-gray-900">{{ item.member_count if item.member_count is not none else '—' }}</p>
-    </div>
-    <div>
-      <p class="text-xs text-gray-500">Администраторов</p>
-      <p class="text-lg font-semibold text-gray-900">{{ item.admin_contacts|length if item.admin_contacts else '—' }}</p>
-    </div>
-    <div>
-      <p class="text-xs text-gray-500">Создано</p>
-      <p class="text-sm text-gray-900">{{ item.created_at.strftime('%d.%m.%Y %H:%M') if item.created_at else '—' }}</p>
-    </div>
-    <div>
-      <p class="text-xs text-gray-500">Обновлено</p>
-      <p class="text-sm text-gray-900">{{ item.updated_at.strftime('%d.%m.%Y %H:%M') if item.updated_at else '—' }}</p>
-    </div>
-  </div>
-</div>
+{#- НАЗВАНИЕ ГРУППЫ И КОНТАКТЫ АДМИНИСТРАТОРОВ ПРИХОДЯТ ИЗ ВНЕШНЕГО
+    МЕССЕНДЖЕРА и приложением не контролируются. Они выводятся ТОЛЬКО штатным
+    экранированием Jinja2: макросам передаётся текст, а не разметка. -#}
 
-{% if item.admin_contacts %}
-<div class="bg-white rounded-lg border border-gray-200 p-5 lg:p-6 mb-6">
-  <h2 class="text-base font-semibold text-gray-900 mb-3">Администраторы</h2>
-  <div class="divide-y divide-gray-100">
+<div data-stack>
+
+  {{ card_open() }}
+    <div data-identity>
+      {%- if item.messenger_type in MESSENGER_LABELS -%}
+        {{ messenger_icon(item.messenger_type, size='avatar', show_label=false) }}
+      {%- endif -%}
+      <div data-identity-meta>
+        {{- mono(item.external_id, 'bright') -}}
+        {{- badge(MESSENGER_LABELS.get(item.messenger_type, item.messenger_type), 'info') -}}
+      </div>
+    </div>
+    <div data-metrics>
+      {{ card_open() }}
+        {{ mono('Участников', 'muted', upper=true) }}
+        <span data-metric-value>{{ item.member_count if item.member_count is not none else '—' }}</span>
+      {{ card_close() }}
+      {{ card_open() }}
+        {{ mono('Администраторов', 'muted', upper=true) }}
+        <span data-metric-value>{{ item.admin_contacts|length if item.admin_contacts else '—' }}</span>
+      {{ card_close() }}
+      {{ card_open() }}
+        {{ mono('Создано', 'muted', upper=true) }}
+        {{ mono(item.created_at.strftime('%d.%m.%Y %H:%M') if item.created_at else '—', 'bright') }}
+      {{ card_close() }}
+      {{ card_open() }}
+        {{ mono('Обновлено', 'muted', upper=true) }}
+        {{ mono(item.updated_at.strftime('%d.%m.%Y %H:%M') if item.updated_at else '—', 'bright') }}
+      {{ card_close() }}
+    </div>
+  {{ card_close() }}
+
+  {% if item.admin_contacts %}
+  {{ card_open(title='Администраторы') }}
     {% for admin in item.admin_contacts %}
-    <div class="flex items-center gap-3 py-2">
-      <div class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-medium text-gray-600 shrink-0">
-        {{ admin.get('name', '?')[0]|upper if admin.get('name') else '?' }}
-      </div>
-      <div class="flex-1 min-w-0">
-        <p class="text-sm font-medium text-gray-900 truncate">{{ admin.get('name', '—') }}</p>
-        <p class="text-xs text-gray-500 truncate">
-          ID: {{ admin.get('id', '—') }}
-          {% if admin.get('username') %} &middot; @{{ admin.username }}{% endif %}
-          {% if admin.get('phone') %} &middot; {{ admin.phone }}{% endif %}
-          {% if admin.get('admin') %} &middot; {{ admin.admin }}{% endif %}
-        </p>
-      </div>
-    </div>
+    {{ row_open(cols=ADMIN_COLS) }}
+      {%- call cell(grow=true) %}
+        {{- avatar(admin.get('name')) -}}
+        <span data-grow>{{ admin.get('name', '—') }}</span>
+      {%- endcall %}
+      {%- call cell(mono=true, muted=true) %}
+        <span data-cell-label>Контакт</span>
+        {{- 'ID: ' ~ admin.get('id', '—') -}}
+        {%- if admin.get('username') %} &middot; @{{ admin.get('username') }}{% endif -%}
+        {%- if admin.get('phone') %} &middot; {{ admin.get('phone') }}{% endif -%}
+        {%- if admin.get('admin') %} &middot; {{ admin.get('admin') }}{% endif -%}
+      {%- endcall %}
+    {{ row_close() }}
     {% endfor %}
-  </div>
-</div>
-{% endif %}
+  {{ card_close() }}
+  {% endif %}
 
-{% if item.raw_metadata %}
-<div class="bg-white rounded-lg border border-gray-200 p-5 lg:p-6">
-  <h2 class="text-base font-semibold text-gray-900 mb-3">Raw Metadata</h2>
-  <pre class="bg-gray-50 rounded-lg p-4 text-xs text-gray-700 overflow-x-auto">{{ item.raw_metadata | tojson(indent=2) }}</pre>
+  {% if item.raw_metadata %}
+  {#- Сырые метаданные выводятся целиком, без усечения: это отладочный срез
+      ответа мессенджера. Длинные строки переносит правило [data-longtext]. -#}
+  {{ card_open(title='Сырые метаданные') }}
+    <span data-longtext="mono">{{ item.raw_metadata | tojson(indent=2) }}</span>
+  {{ card_close() }}
+  {% endif %}
+
 </div>
-{% endif %}
 
 {% endblock %}

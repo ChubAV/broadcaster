@@ -978,3 +978,403 @@ async def test_admin_groups_info_escapes_external_name(
     html = (await admin_client.get("/admin/groups-info")).text
     assert '<img src=x' not in html, "название группы отрисовано как разметка"
     assert "&lt;img src=x" in html, "экранированного вывода названия нет"
+
+
+# --- План 08, Задача 1: детальные страницы админки ---------------------------
+#
+# Обе страницы адресуются по path-параметру и в общий параметризованный обход
+# смоук-теста не попадают: их покрытие — только эти точечные тесты.
+
+
+@pytest.mark.asyncio
+async def test_admin_user_detail_renders_data(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Карточка пользователя отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+
+    Главный класс ошибок фазы: сборка страницы из макросов теряет неявный
+    контекст, страница остаётся валидной и отдаёт 200, а значения пропадают.
+    Утверждение на статус ответа такую поломку не ловит.
+    """
+    user = await _user(db_session)
+
+    response = await admin_client.get(f"/admin/users/{user.id}")
+    assert response.status_code == 200
+    html = response.text
+
+    assert user.email in html, "адрес пользователя не отрисован"
+    assert user.name in html, "имя пользователя не отрисовано"
+    # Ссылка на историю отправок — единственный переход со страницы
+    assert f"/admin/users/{user.id}/history" in html, "ссылка на историю потеряна"
+    # Действия сохраняются на прежних маршрутах: новых не добавляется, старые
+    # не теряются (блокировка и вход под пользователем — Фаза 6, ADMIN-04/05).
+    for action in ("/balance", "/unlimited", "/block", "/delete"):
+        assert f"/admin/users/{user.id}{action}" in html, action
+
+
+@pytest.mark.asyncio
+async def test_admin_group_info_detail_renders_data(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Деталь справочника групп отрисовывает реальные данные."""
+    item = await _seed_group_info(db_session, name="Уникальная деталь справочника")
+
+    response = await admin_client.get(f"/admin/groups-info/{item.id}")
+    assert response.status_code == 200
+    html = response.text
+
+    assert "Уникальная деталь справочника" in html, "название группы не отрисовано"
+    assert "-100777" in html, "внешний идентификатор не отрисован"
+    assert "Админ группы" in html, "контакт администратора не отрисован"
+
+
+@pytest.mark.asyncio
+async def test_admin_detail_pages_no_utility_classes(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    user = await _user(db_session)
+    item = await _seed_group_info(db_session)
+
+    for url in (f"/admin/users/{user.id}", f"/admin/groups-info/{item.id}"):
+        response = await admin_client.get(url)
+        assert response.status_code == 200, url
+        for marker in UTILITY_MARKERS:
+            assert marker not in response.text, f"{url}: {marker}"
+
+
+@pytest.mark.asyncio
+async def test_admin_detail_denied_for_regular_user(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-08-01: обычный пользователь не получает содержимого детальных страниц.
+
+    Проверка прав живёт в обработчиках (require_admin) и в шаблон не
+    переезжает. Утверждение идёт и по статусу, и по телу: отказ, отданный с
+    отрендеренной страницей внутри, отказом не является.
+    """
+    user = await _user(db_session)
+    item = await _seed_group_info(db_session)
+
+    for url in (f"/admin/users/{user.id}", f"/admin/groups-info/{item.id}"):
+        response = await authed_client.get(url, follow_redirects=False)
+        assert response.status_code != 200, url
+        assert user.email not in response.text, url
+        assert "Справочная группа" not in response.text, url
+
+
+@pytest.mark.asyncio
+async def test_admin_user_detail_shows_no_extra_personal_data(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """T-08-02: перевёрстка — не основание показать больше персональных данных.
+
+    Набор полей карточки зафиксирован: имя, адрес, баланс, счётчики объявлений
+    и групп, дата регистрации. Хеша пароля не было и не должно появиться —
+    ни одно утверждение выше такого расширения не заметит.
+    """
+    user = await _user(db_session)
+
+    html = (await admin_client.get(f"/admin/users/{user.id}")).text
+    assert user.password_hash not in html, "в карточке появился хеш пароля"
+    assert "password_hash" not in html
+
+
+# --- План 08, Задача 2: история пользователя в админке -----------------------
+#
+# Последние два HTMX-взаимодействия описи из 27. Тип данных тот же, что и в
+# пользовательской истории, поэтому и примитив обязан быть тот же: data-hrow.
+
+
+async def _seed_admin_history(db_session: AsyncSession, count: int = 61) -> User:
+    """Наполняет историю пользователя так, чтобы вторая страница существовала."""
+    user = await _user(db_session)
+    db_session.add_all(
+        [
+            SendLog(
+                user_id=user.id,
+                ad_title=f"Админ-отправка {i}",
+                ad_text="Текст",
+                ad_images=[],
+                group_name=f"Админ-группа {i}",
+                messenger_type="wa",
+                status="ok",
+            )
+            for i in range(count)
+        ]
+    )
+    await db_session.commit()
+    return user
+
+
+@pytest.mark.asyncio
+async def test_admin_user_history_uses_hrow_primitive(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Запись истории в админке собрана на том же примитиве, что и у пользователя.
+
+    Это тот же тип данных, и выглядеть он обязан одинаково: примитив data-hrow
+    и блок метаданных, размеченный атрибутом data-area="meta" — опора
+    медиазапроса 1080px.
+    """
+    user = await _seed_admin_history(db_session, count=3)
+
+    response = await admin_client.get(f"/admin/users/{user.id}/history")
+    assert response.status_code == 200
+    html = response.text
+    assert "data-hrow" in html
+    assert 'data-area="meta"' in html
+    # Фильтры собраны общим макросом, а не локальным сценарием
+    assert 'class="filters' in html, "блок фильтров не собран общим макросом"
+    # Записи отрисовывают реальные данные, а не пустоту
+    assert "Админ-отправка 0" in html
+    assert "Админ-группа 0" in html
+
+
+@pytest.mark.asyncio
+async def test_admin_user_history_infinite_scroll(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Последняя живая цепочка прокрутки фазы обязана довести до второй страницы.
+
+    Сентинел заменяет сам себя и обязан нести смещение СТРОГО больше
+    запрошенного — иначе прокрутка зациклится на одной и той же выдаче, а
+    страница продолжит выглядеть исправной.
+    """
+    user = await _seed_admin_history(db_session)
+
+    response = await admin_client.get(
+        f"/admin/users/{user.id}/history/partial?offset=30&limit=30&status=ok&period=30d"
+    )
+    assert response.status_code == 200
+
+    urls = re.findall(r'hx-get="([^"]*/partial\?[^"]*)"', response.text)
+    assert urls, "сентинел бесконечной прокрутки не найден"
+    sentinel = urls[-1]
+    assert "status=ok" in sentinel, sentinel
+    assert "period=30d" in sentinel, sentinel
+    # Параметр компоновки убран вместе с парной вёрсткой (D-15)
+    assert "layout=cards" not in sentinel, sentinel
+    offset = re.search(r"offset=(\d+)", sentinel)
+    assert offset and int(offset.group(1)) > 30, sentinel
+    # Записи партиала не пустые
+    assert "Админ-отправка" in response.text
+
+
+@pytest.mark.asyncio
+async def test_admin_history_no_utility_classes(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    user = await _seed_admin_history(db_session, count=3)
+    log = await _seed_send_log(
+        db_session, status="fail", error_message="ECONNRESET", ad_title="Сбойная отправка"
+    )
+
+    urls = (
+        f"/admin/users/{user.id}/history",
+        f"/admin/users/{user.id}/history/partial?offset=0&limit=30",
+        f"/admin/users/{user.id}/history/{log.id}",
+    )
+    for url in urls:
+        response = await admin_client.get(url)
+        assert response.status_code == 200, url
+        for marker in UTILITY_MARKERS:
+            assert marker not in response.text, f"{url}: {marker}"
+
+
+@pytest.mark.asyncio
+async def test_admin_history_detail_shows_error_text(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Текст ошибки выводится ЦЕЛИКОМ, как и в пользовательской детали (T-08-03).
+
+    Строка приходит из внешнего мессенджера, приложением не контролируется и
+    выводится только штатным экранированием. Усечения многоточием нет.
+    """
+    user = await _user(db_session)
+    long_error = (
+        "PeerFloodError: Too many requests to join the group chat -420; "
+        "retry after 86400 seconds (account temporarily restricted by Telegram)"
+    )
+    log = await _seed_send_log(
+        db_session, status="fail", error_message=long_error, ad_title="Неудачная админ-отправка"
+    )
+
+    response = await admin_client.get(f"/admin/users/{user.id}/history/{log.id}")
+    assert response.status_code == 200
+    html = response.text
+    assert long_error in html, "текст ошибки усечён или отсутствует"
+    assert "truncate" not in html
+
+
+@pytest.mark.asyncio
+async def test_admin_history_escapes_error_text(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """T-08-03: текст ошибки — недоверенная строка из внешнего мессенджера."""
+    user = await _user(db_session)
+    log = await _seed_send_log(
+        db_session, status="fail", error_message='<img src=x onerror="alert(1)">'
+    )
+
+    html = (await admin_client.get(f"/admin/users/{user.id}/history/{log.id}")).text
+    assert "<img src=x" not in html, "текст ошибки отрисован как разметка"
+    assert "&lt;img src=x" in html, "экранированного вывода ошибки нет"
+
+
+@pytest.mark.asyncio
+async def test_admin_history_denied_for_regular_user(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-08-01: история чужого пользователя недоступна обычному пользователю."""
+    user = await _user(db_session)
+    log = await _seed_send_log(db_session, ad_title="Закрытая отправка")
+
+    for url in (
+        f"/admin/users/{user.id}/history",
+        f"/admin/users/{user.id}/history/partial?offset=0&limit=30",
+        f"/admin/users/{user.id}/history/{log.id}",
+    ):
+        response = await authed_client.get(url, follow_redirects=False)
+        assert response.status_code != 200, url
+        assert "Закрытая отправка" not in response.text, url
+
+
+# --- План 08, Задача 3: сплошная проверка фазы -------------------------------
+#
+# Это не миграция, а ГАРАНТИЯ, что пропущенных файлов нет. Тесты ниже —
+# единственные, которые доказывают D-06 («ни один экран не остался на старой
+# вёрстке») целиком, а не по одному разделу.
+
+# Признаки удалённого utility-фреймворка. Список закрывает то, что реально
+# встречалось в этой кодовой базе: палитра, кегли, начертания, раскладка,
+# рамки и адаптивные префиксы.
+TAILWIND_TOKENS = (
+    # палитра фона и текста
+    "bg-white", "bg-gray", "bg-slate", "bg-emerald", "bg-indigo", "bg-amber",
+    "bg-red", "bg-blue", "bg-green", "bg-violet", "bg-purple", "bg-yellow",
+    "text-gray", "text-slate", "text-emerald", "text-indigo", "text-amber",
+    "text-red", "text-blue", "text-violet", "text-yellow", "text-white",
+    # кегли и начертания
+    "text-xs", "text-sm", "text-base", "text-lg", "text-xl", "text-2xl",
+    "font-medium", "font-semibold", "font-bold",
+    # раскладка
+    "inline-flex", "inline-block", "items-center", "justify-center",
+    "flex-col", "flex-1", "shrink-0", "space-y-", "space-x-", "divide-",
+    # рамки, радиусы, тени
+    "rounded-lg", "rounded-full", "border-gray", "border-slate", "shadow-sm",
+    # утилиты текста
+    "truncate", "whitespace-pre-line",
+    # адаптивные префиксы
+    "sm:", "md:", "lg:", "xl:",
+)
+
+# Проверка идёт ТОЛЬКО по значениям class="…". Иначе тест падает на
+# упоминаниях классов в комментариях («.btn уже inline-flex»), то есть на
+# документации, а не на разметке.
+CLASS_ATTR_RE = re.compile(r'class="([^"]*)"')
+
+
+def test_no_utility_classes_anywhere():
+    """Ни ОДИН шаблон проекта не содержит utility-классов (D-06, UI-06).
+
+    Единственный тест, доказывающий требование целиком. Обходит все файлы
+    app/templates/**/*.html: пропущенный шаблон виден только сплошным обходом,
+    а не проверкой отдельных разделов — он отдаёт 200 и выглядит исправным.
+    """
+    offenders: dict[str, set[str]] = {}
+    for path in sorted(TEMPLATES_DIR.rglob("*.html")):
+        source = path.read_text(encoding="utf-8")
+        found = {
+            token
+            for value in CLASS_ATTR_RE.findall(source)
+            for token in TAILWIND_TOKENS
+            if token in value
+        }
+        if found:
+            offenders[str(path.relative_to(TEMPLATES_DIR))] = found
+
+    assert not offenders, f"utility-классы остались в шаблонах: {offenders}"
+
+
+def test_no_utility_classes_in_python_handlers():
+    """Разметка ответов не собирается строками в обработчиках.
+
+    HTML-фрагменты опроса статуса подключения жили в app/pages/accounts.py и
+    несли utility-классы: Tailwind удалён Планом 01, поэтому они приходили в
+    #wa-status / #max-status без оформления. Обход шаблонов их не видел —
+    они не шаблоны.
+    """
+    pages_dir = TEMPLATES_DIR.parent / "pages"
+    offenders: dict[str, set[str]] = {}
+    for path in sorted(pages_dir.rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        found = {
+            token
+            for value in CLASS_ATTR_RE.findall(source)
+            for token in TAILWIND_TOKENS
+            if token in value
+        }
+        if found:
+            offenders[str(path.relative_to(pages_dir))] = found
+
+    assert not offenders, f"utility-классы остались в обработчиках: {offenders}"
+
+
+def test_template_inventory():
+    """Инвентаризация шаблонов сходится.
+
+    Парной вёрстки «строки/карточки» не осталось (D-15): файлов строчной
+    компоновки нет ни одного. Элементов таблицы в проекте нет тоже — табличные
+    данные строятся примитивами строки (решение Плана 07).
+    """
+    templates = sorted(TEMPLATES_DIR.rglob("*.html"))
+    assert templates, "шаблоны не найдены — проверь путь"
+
+    # Парная вёрстка удалена Планом 03: ни одного файла строчной компоновки
+    rows_layout = [p.name for p in templates if p.name.endswith("_rows.html")]
+    assert not rows_layout, f"файлы строчной компоновки остались: {rows_layout}"
+
+    # Элементов таблицы в проекте не осталось ни одного
+    table_markers = ("<table", "<td", "<th ", "<thead", "<tbody")
+    with_tables = {
+        str(p.relative_to(TEMPLATES_DIR))
+        for p in templates
+        if any(m in p.read_text(encoding="utf-8") for m in table_markers)
+    }
+    assert not with_tables, f"элементы таблицы остались: {with_tables}"
+
+    # Библиотека компонентов Плана 02 на месте целиком (12 макросов + filters)
+    components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
+    assert len(components) == 13, [p.name for p in components]
+
+    # Два шелла проекта: основной и auth
+    assert (TEMPLATES_DIR / "base.html").exists()
+    assert (TEMPLATES_DIR / "auth_base.html").exists()
+
+
+def test_every_page_template_extends_a_shell():
+    """Каждый шаблон РАЗДЕЛА наследует шелл (D-06, UI-02).
+
+    Обход по HTTP видит только страницы с GET-роутом. Этот тест закрывает
+    оставшееся: шаблон, потерявший extends, отрисуется «голой» разметкой без
+    единого стиля, а страницы без роута (четыре экрана авторизации из POST)
+    обход по GET не достаёт вовсе.
+
+    Не наследуют шелл по построению: сами шеллы, библиотека компонентов,
+    партиалы подмены и включаемые фрагменты.
+    """
+    exempt_dirs = {"components", "includes", "partials"}
+    exempt_names = {"base.html", "auth_base.html"}
+
+    missing = []
+    for path in sorted(TEMPLATES_DIR.rglob("*.html")):
+        rel = path.relative_to(TEMPLATES_DIR)
+        if rel.name in exempt_names or exempt_dirs & set(rel.parts):
+            continue
+        # Партиалы подмены и включаемые карточки шелл не наследуют
+        if "partial" in rel.name or rel.name.startswith("_"):
+            continue
+        if "{% extends" not in path.read_text(encoding="utf-8"):
+            missing.append(str(rel))
+
+    assert not missing, f"шаблоны разделов без наследования шелла: {missing}"

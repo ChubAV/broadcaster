@@ -30,6 +30,18 @@ from app.messengers.max import MaxMessenger
 from app.messengers.whatsapp import WhatsAppMessenger
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
+# Разметка ответов опроса статуса подключения живёт в шаблоне, а не в строках
+# обработчика (План 08). До этого она собиралась конкатенацией и несла
+# utility-классы удалённого фреймворка, а адрес QR-кода от внешнего моста
+# подставлялся в src без экранирования.
+_CONNECT_STATUS = "accounts/partials/connect_status.html"
+
+
+def _connect_status(macro: str, *args) -> HTMLResponse:
+    """Рендерит макрос ответа опроса подключения через окружение Jinja2."""
+    module = templates.env.get_template(_CONNECT_STATUS).module
+    return HTMLResponse(str(getattr(module, macro)(*args)))
+
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
 
@@ -415,7 +427,7 @@ async def accounts_connect_wa_status(
 ):
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return HTMLResponse('<span class="text-sm text-red-600">Не авторизован</span>')
+        return _connect_status("notice", "Не авторизован")
 
     # Find the pending/connecting WA account for this user
     result = await db.execute(
@@ -427,7 +439,7 @@ async def accounts_connect_wa_status(
     )
     account = result.scalar_one_or_none()
     if not account:
-        return HTMLResponse('<span class="text-sm text-red-600">Нет активной сессии подключения</span>')
+        return _connect_status("notice", "Нет активной сессии подключения")
 
     session_id = str(account.id)
     messenger = WhatsAppMessenger(session_id=session_id)
@@ -443,38 +455,21 @@ async def accounts_connect_wa_status(
             from app.worker.celery_app import celery
             celery.send_task("app.worker.tasks.sync_wa_groups", args=[account.id])
 
-            return HTMLResponse(
-                '<div class="text-center">'
-                '<div class="inline-flex items-center justify-center w-16 h-16 bg-emerald-100 rounded-full mb-4">'
-                '<svg class="w-8 h-8 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-                '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>'
-                '</svg></div>'
-                '<p class="text-lg font-medium text-gray-900">WhatsApp подключён!</p>'
-                '<p class="mt-2 text-sm text-slate-500">Начинаем синхронизацию групп...</p>'
-                '<script>setTimeout(() => window.location.href = "/accounts", 2000);</script>'
-                '</div>'
-            )
+            return _connect_status("connected", "WhatsApp")
 
         # Not connected — get fresh QR
         qr_data = await messenger.get_qr()
         qr = qr_data.get("qr")
 
         if qr:
-            return HTMLResponse(
-                f'<div class="text-center">'
-                f'<div class="inline-block p-4 bg-white border rounded-lg">'
-                f'<img src="{qr}" alt="WhatsApp QR-код" class="mx-auto" style="max-width: 256px;">'
-                f'</div>'
-                f'<p class="mt-2 text-sm text-yellow-600">Ожидание сканирования...</p>'
-                f'</div>'
-            )
+            return _connect_status("qr", qr, "WhatsApp")
 
-        return HTMLResponse('<span class="text-sm text-amber-600">Ожидание...</span>')
+        return _connect_status("notice", "Ожидание...", "warning")
 
     except Exception as e:
         import structlog
         structlog.get_logger().error("wa_connect_status_error", error=str(e), exc_info=True)
-        return HTMLResponse('<span class="text-sm text-red-600">Ошибка соединения с WA Bridge</span>')
+        return _connect_status("notice", "Ошибка соединения с WA Bridge")
 
 
 @router.get("/accounts/connect/max", response_class=HTMLResponse)
@@ -617,7 +612,7 @@ async def accounts_connect_max_status(
     """HTMX polling endpoint for MAX connection status."""
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return HTMLResponse('<span class="text-sm text-red-600">Не авторизован</span>')
+        return _connect_status("notice", "Не авторизован")
 
     # Find the pending/connecting MAX account for this user
     result = await db.execute(
@@ -629,7 +624,7 @@ async def accounts_connect_max_status(
     )
     account = result.scalar_one_or_none()
     if not account:
-        return HTMLResponse('<span class="text-sm text-red-600">Нет активной сессии подключения</span>')
+        return _connect_status("notice", "Нет активной сессии подключения")
 
     session_id = str(account.id)
     messenger = MaxMessenger(session_id=session_id)
@@ -645,17 +640,7 @@ async def accounts_connect_max_status(
             from app.worker.celery_app import celery
             celery.send_task("app.worker.tasks.sync_max_groups", args=[account.id])
 
-            return HTMLResponse(
-                '<div class="text-center">'
-                '<div class="inline-flex items-center justify-center w-16 h-16 bg-violet-100 rounded-full mb-4">'
-                '<svg class="w-8 h-8 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-                '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>'
-                '</svg></div>'
-                '<p class="text-lg font-medium text-gray-900">MAX подключён!</p>'
-                '<p class="mt-2 text-sm text-slate-500">Начинаем синхронизацию групп...</p>'
-                '<script>setTimeout(() => window.location.href = "/accounts", 2000);</script>'
-                '</div>'
-            )
+            return _connect_status("connected", "MAX")
 
         # Not connected — get fresh QR
         qr_data = await messenger.get_qr()
@@ -663,21 +648,14 @@ async def accounts_connect_max_status(
 
         if qr_link:
             qr_img = _generate_qr_base64(qr_link)
-            return HTMLResponse(
-                f'<div class="text-center">'
-                f'<div class="inline-block p-4 bg-white border rounded-lg">'
-                f'<img src="{qr_img}" alt="MAX QR-код" class="mx-auto" style="max-width: 256px;">'
-                f'</div>'
-                f'<p class="mt-2 text-sm text-yellow-600">Ожидание сканирования...</p>'
-                f'</div>'
-            )
+            return _connect_status("qr", qr_img, "MAX")
 
-        return HTMLResponse('<span class="text-sm text-amber-600">Ожидание...</span>')
+        return _connect_status("notice", "Ожидание...", "warning")
 
     except Exception as e:
         import structlog
         structlog.get_logger().error("max_connect_status_error", error=str(e), exc_info=True)
-        return HTMLResponse('<span class="text-sm text-red-600">Ошибка соединения с MAX</span>')
+        return _connect_status("notice", "Ошибка соединения с MAX")
 
 
 @router.get("/accounts/{account_id}/sync-status", response_class=HTMLResponse)
@@ -692,12 +670,12 @@ async def accounts_sync_status(
     """HTMX polling endpoint: reads account status from DB (Celery task updates it)."""
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return HTMLResponse('<span class="text-sm text-red-600">Не авторизован</span>')
+        return _connect_status("notice", "Не авторизован")
 
     # Используем application-слой для чтения актуального статуса.
     view = await get_sync_status_view(db, user.id, account_id)
     if view is None:
-        return HTMLResponse('<span class="text-sm text-red-600">Аккаунт не найден</span>')
+        return _connect_status("notice", "Аккаунт не найден")
 
     if view.status in ("active", "sync_failed", "syncing"):
         stats_map = await _get_account_stats(db, user.id, [account_id]) if view.status == "active" else {}
