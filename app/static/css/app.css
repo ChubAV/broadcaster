@@ -1043,6 +1043,11 @@ a:hover { color: var(--accent-link-hover); }
 [data-form] { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
 [data-form] > .field { align-self: stretch; }
 
+/* Горизонтальный ряд действий: несколько независимых форм в одной строке.
+   Общий примитив, НЕ привязанный к разделу: каждое действие остаётся
+   отдельной формой со своим маршрутом и методом. */
+[data-actions] { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+
 /* Блок пользователя на странице профиля */
 [data-identity] { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
 [data-identity-meta] { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
