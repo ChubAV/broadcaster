@@ -170,6 +170,26 @@ async def _seed_subscription(db: AsyncSession, plan: str = "business") -> Subscr
     return sub
 
 
+async def _seed_group_info(
+    db: AsyncSession,
+    name: str = "Справочная группа",
+    messenger_type: str = "tg_user",
+    external_id: str = "-100777",
+) -> GroupInfo:
+    item = GroupInfo(
+        messenger_type=messenger_type,
+        external_id=external_id,
+        name=name,
+        member_count=128,
+        admin_contacts=[{"id": "1", "name": "Админ группы", "username": "chief"}],
+        raw_metadata={},
+    )
+    db.add(item)
+    await db.commit()
+    await db.refresh(item)
+    return item
+
+
 async def _seed_section(db: AsyncSession, section: str) -> None:
     """Наполняет раздел так, чтобы списочная страница не была пустой.
 
@@ -845,8 +865,12 @@ async def test_admin_pages_use_row_primitives(
 
 
 @pytest.mark.asyncio
-async def test_admin_no_utility_classes(admin_client: AsyncClient):
-    for url in ("/admin", "/admin/users"):
+async def test_admin_no_utility_classes(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    await _seed_group_info(db_session)
+
+    for url in ("/admin", "/admin/users", "/admin/groups-info"):
         response = await admin_client.get(url)
         assert response.status_code == 200, url
         for marker in UTILITY_MARKERS:
@@ -903,3 +927,54 @@ async def test_admin_denied_for_regular_user(authed_client: AsyncClient):
         assert response.status_code != 200, url
         assert "Администрирование" not in response.text, url
         assert "data-rowhead" not in response.text, url
+
+
+@pytest.mark.asyncio
+async def test_admin_groups_info_uses_row_primitives(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Справочник групп собран на строке-таблице, а не на своей вёрстке."""
+    await _seed_group_info(db_session)
+
+    response = await admin_client.get("/admin/groups-info")
+    assert response.status_code == 200
+    html = response.text
+    assert "data-row" in html
+    assert "data-rowhead" in html
+
+
+@pytest.mark.asyncio
+async def test_admin_groups_info_renders_data(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка справочника отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+
+    Видимая подпись раздела зафиксирована существующим покрытием
+    (tests/test_pages/test_admin_groups_info.py) и переименованию не подлежит:
+    переименования D-11 касаются пунктов основной навигации, а не заголовков
+    внутри админки.
+    """
+    item = await _seed_group_info(db_session, name="Уникальное имя справочника")
+
+    html = (await admin_client.get("/admin/groups-info")).text
+    assert "Справочник групп" in html, "видимая подпись раздела потеряна"
+    assert "Уникальное имя справочника" in html, "название группы не отрисовано"
+    assert "-100777" in html, "внешний идентификатор не отрисован"
+    assert f"/admin/groups-info/{item.id}" in html, "ссылка на карточку потеряна"
+
+
+@pytest.mark.asyncio
+async def test_admin_groups_info_escapes_external_name(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """T-07-03: название группы приходит из внешнего мессенджера.
+
+    Это недоверенная строка: приложение её не контролирует и проверить не
+    может. Она обязана выводиться штатным экранированием — макросам передаётся
+    текст, а не разметка.
+    """
+    await _seed_group_info(db_session, name='<img src=x onerror="alert(1)">')
+
+    html = (await admin_client.get("/admin/groups-info")).text
+    assert '<img src=x' not in html, "название группы отрисовано как разметка"
+    assert "&lt;img src=x" in html, "экранированного вывода названия нет"
