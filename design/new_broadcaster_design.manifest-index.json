@@ -1,0 +1,128 @@
+[
+  {
+    "id": "b462adb2-4862-4445-ba86-bd097f139d8c",
+    "mime": "text/javascript",
+    "compressed": true,
+    "bytes": 25612
+  },
+  {
+    "id": "8848ab95-c2a2-4a70-a6d6-9336119efde9",
+    "mime": "text/javascript",
+    "compressed": true,
+    "bytes": 5712
+  },
+  {
+    "id": "3535c57b-cb5f-4317-afc0-872cf8fdb18d",
+    "mime": "text/javascript",
+    "compressed": true,
+    "bytes": 58224
+  },
+  {
+    "id": "9e83fb24-23a9-4c0f-bc18-b5c49de88f1c",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 5800
+  },
+  {
+    "id": "d25f1646-152e-4921-80c2-00a598cda815",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 7304
+  },
+  {
+    "id": "fb175be2-a1fb-4065-9123-480e00b9d3de",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 5336
+  },
+  {
+    "id": "3a2f629a-64ec-469b-9e0d-e83d8297ac72",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 11816
+  },
+  {
+    "id": "232e2d84-8309-4df2-b9fe-caf349e34375",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 13404
+  },
+  {
+    "id": "f9e60748-30e7-42d6-b721-b35b61d4ba12",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 5784
+  },
+  {
+    "id": "e5926161-5c8c-411c-ba97-bee4450b40b0",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 7336
+  },
+  {
+    "id": "b3640223-a95a-433e-9981-4b7d1e780539",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 5384
+  },
+  {
+    "id": "08bf227f-0808-4a96-947e-24c7fe671d95",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 11800
+  },
+  {
+    "id": "3f03d51e-d40f-4105-99ae-fdf6ca6c65f8",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 13416
+  },
+  {
+    "id": "24528839-37c3-42bf-8d33-4aea06c79faa",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 5760
+  },
+  {
+    "id": "269a849a-860a-4d51-8540-099b6da56e63",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 7400
+  },
+  {
+    "id": "e6ba62cd-88e5-40c8-a3c4-269fba7690af",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 5488
+  },
+  {
+    "id": "f80f9d1e-6290-4831-a43a-a8d270cda973",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 11948
+  },
+  {
+    "id": "78a4b3fd-06a9-4cf4-ac7b-1c10331f7169",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 13496
+  },
+  {
+    "id": "c2911ada-0064-4645-81c9-a993e2876522",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 9032
+  },
+  {
+    "id": "de8cfa5c-ba5d-4608-9a1e-c7f9ec7f7ead",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 25232
+  },
+  {
+    "id": "095240b9-29c4-4acb-9e30-5bfcca03a820",
+    "mime": "font/woff2",
+    "compressed": false,
+    "bytes": 29760
+  }
+]

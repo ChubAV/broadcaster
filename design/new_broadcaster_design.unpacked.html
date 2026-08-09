@@ -1,0 +1,2121 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="b462adb2-4862-4445-ba86-bd097f139d8c"></script>
+</head>
+<body>
+
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<style>/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("9e83fb24-23a9-4c0f-bc18-b5c49de88f1c") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("d25f1646-152e-4921-80c2-00a598cda815") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fb175be2-a1fb-4065-9123-480e00b9d3de") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("3a2f629a-64ec-469b-9e0d-e83d8297ac72") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("232e2d84-8309-4df2-b9fe-caf349e34375") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("f9e60748-30e7-42d6-b721-b35b61d4ba12") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("e5926161-5c8c-411c-ba97-bee4450b40b0") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("b3640223-a95a-433e-9981-4b7d1e780539") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("08bf227f-0808-4a96-947e-24c7fe671d95") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("3f03d51e-d40f-4105-99ae-fdf6ca6c65f8") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* cyrillic-ext */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("24528839-37c3-42bf-8d33-4aea06c79faa") format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+/* cyrillic */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("269a849a-860a-4d51-8540-099b6da56e63") format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("e6ba62cd-88e5-40c8-a3c4-269fba7690af") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("f80f9d1e-6290-4831-a43a-a8d270cda973") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("78a4b3fd-06a9-4cf4-ac7b-1c10331f7169") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("c2911ada-0064-4645-81c9-a993e2876522") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("de8cfa5c-ba5d-4608-9a1e-c7f9ec7f7ead") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("095240b9-29c4-4acb-9e30-5bfcca03a820") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("c2911ada-0064-4645-81c9-a993e2876522") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("de8cfa5c-ba5d-4608-9a1e-c7f9ec7f7ead") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("095240b9-29c4-4acb-9e30-5bfcca03a820") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("c2911ada-0064-4645-81c9-a993e2876522") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("de8cfa5c-ba5d-4608-9a1e-c7f9ec7f7ead") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("095240b9-29c4-4acb-9e30-5bfcca03a820") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* vietnamese */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("c2911ada-0064-4645-81c9-a993e2876522") format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+/* latin-ext */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("de8cfa5c-ba5d-4608-9a1e-c7f9ec7f7ead") format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+/* latin */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("095240b9-29c4-4acb-9e30-5bfcca03a820") format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+</style>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #08080b; }
+  a { color: oklch(0.78 0.16 310); text-decoration: none; }
+  a:hover { color: oklch(0.87 0.11 310); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #24242c; border-radius: 8px; border: 3px solid #08080b; }
+  ::-webkit-scrollbar-track { background: #08080b; }
+  @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.8); } }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+  @keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+  @keyframes orbit { to { transform: rotate(360deg); } }
+  @keyframes sweep { 0% { transform: translateX(-120%); } 100% { transform: translateX(420%); } }
+  @media (max-width: 1080px) {
+    [data-hrow] { grid-template-columns: minmax(0,1fr) !important;
+      grid-template-areas: 'head' 'body' 'meta' 'err' !important; row-gap: 11px !important; }
+    [data-hrow] > [style*="grid-area:meta"] { border-left: none !important; padding-left: 0 !important;
+      padding-top: 11px !important; border-top: 1px solid #17171f !important;
+      justify-content: flex-start !important; flex-wrap: wrap !important; }
+  }
+  @media (max-width: 900px) {
+    [data-editor] { grid-template-columns: minmax(0,1fr) !important; }
+    [data-editor-side] { position: static !important; }
+  }
+  @media (max-width: 860px) {
+    [data-shell] { grid-template-columns: minmax(0,1fr) !important; }
+    [data-side] { position: static !important; height: auto !important; flex-direction: row !important;
+      align-items: center !important; gap: 14px !important; padding: 12px 14px !important;
+      border-right: none !important; border-bottom: 1px solid #18181f !important; overflow: visible !important; }
+    [data-nav] { display: none !important; }
+    [data-quota], [data-user] { display: none !important; }
+    [data-tabs] { display: flex !important; }
+    [data-head] { padding: 14px 16px !important; }
+    [data-body] { padding: 18px 16px 90px !important; }
+    [data-row] { display: flex !important; flex-wrap: wrap !important; gap: 8px 12px !important; padding: 14px 16px !important; }
+    [data-row] > * { flex: none !important; }
+    [data-row] > [data-grow] { flex: 1 1 100% !important; }
+    [data-hrow] { grid-template-columns: minmax(0,1fr) !important;
+      grid-template-areas: 'head' 'body' 'meta' 'err' !important; row-gap: 11px !important; }
+    [data-hrow] > [style*="grid-area:meta"] { border-left: none !important; padding-left: 0 !important;
+      padding-top: 11px !important; border-top: 1px solid #17171f !important; justify-content: flex-start !important; }
+    [data-rowhead] { display: none !important; }
+  }
+</style>
+</helmet>
+
+<div data-shell="" style="display:grid;grid-template-columns:262px minmax(0,1fr);min-height:100vh;background:#08080b;color:#eeeef2;font-family:'Space Grotesk',system-ui,sans-serif;-webkit-font-smoothing:antialiased">
+
+  <aside data-side="" style="position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:24px;padding:24px 16px;background:#0b0b10;border-right:1px solid #18181f;overflow:auto">
+    <div style="display:flex;align-items:center;gap:11px;padding:0 8px">
+      <div style="position:relative;width:34px;height:34px;border-radius:11px;background:oklch(0.72 0.19 310);display:grid;place-items:center;flex:none">
+        <div style="width:10px;height:10px;border-radius:50%;background:#0b0b10"></div>
+        <div style="position:absolute;inset:-5px;border-radius:16px;border:1px solid rgba(196,132,252,.4);border-top-color:transparent;animation:orbit 4.5s linear infinite"></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:1px">
+        <span style="font-size:16px;font-weight:600;letter-spacing:-.02em">Broadcaster</span>
+        
+      </div>
+    </div>
+
+    <nav data-nav="" style="display:flex;flex-direction:column;gap:2px">
+      <sc-for list="{{ nav }}" as="item" hint-placeholder-count="8">
+        <button sc-camel-on-click="{{ item.go }}" style="all:unset;cursor:pointer;display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:11px;font-size:14px;font-weight:500;transition:background .16s ease,color .16s ease;background:{{ item.bg }};color:{{ item.fg }}" style-hover="background:#15151d">
+          <span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ item.dot }}"></span>
+          <span style="flex:1">{{ item.label }}</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5f5f6e">{{ item.count }}</span>
+        </button>
+      </sc-for>
+      <div style="height:1px;background:#18181f;margin:10px 12px 8px"></div>
+      <button sc-camel-on-click="{{ goAdmin }}" style="all:unset;cursor:pointer;display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:11px;font-size:14px;font-weight:500;transition:background .16s ease,color .16s ease;background:{{ adminNavBg }};color:{{ adminNavFg }}" style-hover="background:#15151d">
+        <span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ adminNavDot }}"></span>
+        <span style="flex:1">Админ-панель</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;color:#5f5f6e">SYS</span>
+      </button>
+    </nav>
+
+    <div data-quota="" style="margin-top:auto;display:flex;flex-direction:column;gap:11px;padding:14px;border-radius:14px;background:#0f0f16;border:1px solid #1c1c25">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-size:13px;font-weight:600">Тариф Basic</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#7a7a88">{{ quotaLabel }}</span>
+      </div>
+      <div style="height:5px;border-radius:99px;background:#1c1c25;overflow:hidden">
+        <div style="height:100%;border-radius:99px;background:oklch(0.72 0.19 310);transform-origin:left;animation:grow .8s cubic-bezier(.2,.8,.2,1);width:{{ quotaPct }}"></div>
+      </div>
+      <a href="#" style="font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.06em">ПОВЫСИТЬ ЛИМИТЫ →</a>
+    </div>
+
+    <div data-user="" style="display:flex;align-items:center;gap:10px;padding:0 4px">
+      <div style="width:30px;height:30px;border-radius:50%;background:#1e1e28;display:grid;place-items:center;font-size:12px;font-weight:600;color:#9a9aaa;flex:none">АЧ</div>
+      <div style="display:flex;flex-direction:column;line-height:1.35;min-width:0">
+        <span style="font-size:13px">Алексей Чуб</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#6a6a78">Europe/Moscow</span>
+      </div>
+    </div>
+  </aside>
+
+  <div data-tabs="" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:20;gap:4px;padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:rgba(11,11,16,.94);backdrop-filter:blur(14px);border-top:1px solid #18181f;overflow-x:auto">
+    <sc-for list="{{ nav }}" as="item" hint-placeholder-count="8">
+      <button sc-camel-on-click="{{ item.go }}" style="all:unset;cursor:pointer;flex:none;padding:9px 13px;border-radius:10px;font-size:12.5px;font-weight:500;white-space:nowrap;background:{{ item.bg }};color:{{ item.fg }}">{{ item.label }}</button>
+    </sc-for>
+  </div>
+
+  <main style="display:flex;flex-direction:column;min-width:0">
+    <header data-head="" style="position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:18px 32px;background:rgba(8,8,11,.85);backdrop-filter:blur(14px);border-bottom:1px solid #16161e">
+      <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
+        <h1 style="margin:0;font-size:22px;font-weight:600;letter-spacing:-.025em">{{ title }}</h1>
+        <p style="margin:0;font-size:13px;color:#7a7a88">{{ subtitle }}</p>
+      </div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 13px;border-radius:99px;background:#0f0f16;border:1px solid #1c1c25">
+          <span style="width:7px;height:7px;border-radius:50%;background:oklch(0.75 0.17 150);animation:pulse 1.6s ease-in-out infinite"></span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8a8a98">воркеров онлайн · 5</span>
+        </div>
+        <div style="padding:8px 13px;border-radius:99px;background:#0f0f16;border:1px solid #1c1c25;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8a8a98">{{ clock }}</div>
+        <sc-if value="{{ showCta }}" hint-placeholder-val="{{ false }}">
+          <button sc-camel-on-click="{{ ctaGo }}" style="all:unset;cursor:pointer;display:flex;align-items:center;gap:7px;padding:9px 16px;border-radius:99px;background:oklch(0.79 0.14 305);color:#0a0a0d;font-size:13px;font-weight:600;transition:filter .16s ease" style-hover="filter:brightness(1.08)">
+            <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>
+            {{ cta }}
+          </button>
+        </sc-if>
+      </div>
+    </header>
+
+    <div data-body="" style="padding:26px 32px 60px">
+
+      <sc-if value="{{ isDash }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;flex-direction:column;gap:22px;animation:rise .32s ease both">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:13px">
+            <sc-for list="{{ stats }}" as="s" hint-placeholder-count="4">
+              <div style="position:relative;overflow:hidden;padding:19px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;transition:border-color .2s ease,transform .2s ease" style-hover="border-color:#2e2e3a;transform:translateY(-2px)">
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.13em;color:#6a6a78">{{ s.label }}</div>
+                <div style="margin-top:10px;display:flex;align-items:baseline;gap:8px">
+                  <span style="font-size:32px;font-weight:600;letter-spacing:-.03em;font-variant-numeric:tabular-nums">{{ s.value }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ s.deltaColor }}">{{ s.delta }}</span>
+                </div>
+                <div style="margin-top:12px;display:flex;align-items:flex-end;gap:3px;height:26px">
+                  <sc-for list="{{ s.spark }}" as="b" hint-placeholder-count="12">
+                    <div style="flex:1;border-radius:2px;background:{{ b.color }};height:{{ b.h }}"></div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:13px">
+            <section style="padding:20px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+                <h2 style="margin:0;font-size:15px;font-weight:600">Ближайшие отправки</h2>
+                <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78"><br></span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <sc-for list="{{ upcoming }}" as="u" hint-placeholder-count="5">
+                  <div style="display:flex;align-items:center;gap:13px;padding:11px 10px;border-radius:11px;transition:background .16s ease" style-hover="background:#14141b">
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#eeeef2;width:46px;flex:none">{{ u.time }}</span>
+                    <span style="width:3px;height:26px;border-radius:2px;flex:none;background:{{ u.color }}"></span>
+                    <div style="display:flex;flex-direction:column;min-width:0;flex:1">
+                      <span style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ u.ad }}</span>
+                      <span style="font-size:11.5px;color:#7a7a88">{{ u.groups }}</span>
+                    </div>
+                    <span style="display:inline-flex;align-items:center;gap:5px;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;padding:4px 8px 4px 6px;border-radius:6px;flex:none;color:{{ u.color }};background:{{ u.bg }}">
+                      <sc-if value="{{ u.isTG }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M22 3 1.6 11.2c-.9.4-.9 1.1.1 1.4l5.2 1.6 2 6.1c.2.7.6.8 1.1.3l2.9-2.7 5.3 3.9c.9.5 1.5.2 1.7-.9L23.4 4.3c.3-1.3-.4-1.8-1.4-1.3ZM8 13.6l11.2-7c.5-.3 1-.2.6.2l-9.4 8.5-.4 4L8 13.6Z"></path></svg></sc-if>
+                      <sc-if value="{{ u.isWA }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 2a8 8 0 1 1-4.1 14.8l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 0 1 12 4Zm-3.4 4.3c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.7 2.8 4.3 3.8 2.1.8 2.6.7 3 .6.5 0 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3l-1.9-.9c-.3-.1-.5-.1-.6.1l-.8 1c-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.8-.7-1.4-1.6-1.6-1.9-.1-.3 0-.4.1-.5l.4-.5c.2-.2.2-.3.3-.5V10l-.9-2c-.2-.5-.4-.5-.6-.5h-.6Z"></path></svg></sc-if>
+                      <sc-if value="{{ u.isMAX }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 1.6a10.4 10.4 0 0 1 0 20.8c-2.1 0-4-.6-5.6-1.6l-3.2 1.1c-.8.3-1.5-.4-1.2-1.2l1.1-3.2A10.3 10.3 0 0 1 1.6 12 10.4 10.4 0 0 1 12 1.6Zm0 5.9a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"></path></svg></sc-if>
+                      {{ u.mess }}
+                    </span>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+
+            <section style="padding:20px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23">
+              <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+                <h2 style="margin:0;font-size:15px;font-weight:600">Живая лента</h2>
+                <span style="display:flex;align-items:center;gap:6px;margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">
+                  <span style="width:6px;height:6px;border-radius:50%;background:oklch(0.75 0.17 150);animation:pulse 1.4s ease-in-out infinite"></span>real-time
+                </span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <sc-for list="{{ feed }}" as="f" hint-placeholder-count="6">
+                  <div style="display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:10px;animation:rise .3s ease both">
+                    <span style="width:7px;height:7px;border-radius:50%;flex:none;background:{{ f.color }}"></span>
+                    <span style="font-size:13px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ f.text }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5f5f6e;flex:none">{{ f.ago }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </div>
+
+          <section style="padding:20px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px">
+              <h2 style="margin:0;font-size:15px;font-weight:600">Активность за неделю</h2>
+              <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">отправок в час</span>
+            </div>
+            <div style="display:flex;align-items:flex-end;gap:4px;height:120px">
+              <sc-for list="{{ chart }}" as="c" hint-placeholder-count="28">
+                <div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%">
+                  <div style="border-radius:3px;transition:background .18s ease;background:{{ c.color }};height:{{ c.h }}" style-hover="background:oklch(0.82 0.16 310)"></div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:10px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#5f5f6e">
+              <span>ПН</span><span>ВТ</span><span>СР</span><span>ЧТ</span><span>ПТ</span><span>СБ</span><span>ВС</span>
+            </div>
+          </section>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isAds }}" hint-placeholder-val="{{ false }}">
+       <div style="display:flex;flex-direction:column;gap:13px;animation:rise .32s ease both">
+        <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:13px 14px;border-radius:14px;background:#0e0e14;border:1px solid #1a1a23">
+          <div style="display:flex;align-items:center;gap:9px;flex:1;min-width:220px;padding:9px 13px;border-radius:11px;background:#12121a;border:1px solid #1e1e28">
+            <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="#5f5f6e" stroke-width="2" style="flex:none"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+            <input value="{{ adQuery }}" sc-camel-on-change="{{ onAdQuery }}" placeholder="Поиск по названию и тексту объявления" style="all:unset;flex:1;min-width:0;font-family:'Space Grotesk',sans-serif;font-size:13px;color:#eeeef2">
+            <sc-if value="{{ adQueryDirty }}" hint-placeholder-val="{{ false }}">
+              <button sc-camel-on-click="{{ resetAdQuery }}" title="Сбросить поиск" style="all:unset;cursor:pointer;flex:none;width:18px;height:18px;border-radius:50%;border:1px solid #2a2a34;display:grid;place-items:center;font-size:11px;line-height:1;color:#6a6a78;transition:background .16s ease,color .16s ease" style-hover="background:#1e1e28;color:#eeeef2">×</button>
+            </sc-if>
+          </div>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">{{ adsCount }}</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:13px">
+          <sc-for list="{{ ads }}" as="a" hint-placeholder-count="6">
+            <article style="display:flex;flex-direction:column;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;overflow:hidden;transition:border-color .2s ease,transform .2s ease" style-hover="border-color:#2e2e3a;transform:translateY(-3px)">
+              <div style="position:relative;height:124px;background:repeating-linear-gradient(135deg,#141420 0 8px,#0f0f18 8px 16px);display:grid;place-items:center;overflow:hidden">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:#4e4e5c">IMAGE · S3</span>
+                <div style="position:absolute;top:0;bottom:0;width:44px;background:linear-gradient(90deg,transparent,rgba(196,132,252,.07),transparent);animation:sweep 3.4s linear infinite"></div>
+              </div>
+              <div style="padding:16px;display:flex;flex-direction:column;gap:10px;flex:1">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span style="width:7px;height:7px;border-radius:50%;background:{{ a.color }}"></span>
+                  <span style="font-size:14px;font-weight:600;letter-spacing:-.01em">{{ a.title }}</span>
+                  <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:{{ a.color }}">{{ a.status }}</span>
+                </div>
+                <p style="margin:0;font-size:12.5px;line-height:1.55;color:#8a8a98;text-wrap:pretty">{{ a.body }}</p>
+                <div style="margin-top:auto;display:flex;align-items:center;gap:8px;padding-top:12px;border-top:1px solid #17171f;flex-wrap:wrap">
+                  <span style="display:inline-flex;align-items:center;gap:4px;flex:none">
+                    <sc-for list="{{ a.channels }}" as="ch" hint-placeholder-count="2">
+                      <span title="{{ ch.title }}" style="display:inline-flex;align-items:center;gap:4px;padding:3px 7px 3px 5px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.06em;color:{{ ch.color }};background:{{ ch.bg }}">
+                        <sc-if value="{{ ch.isTG }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M22 3 1.6 11.2c-.9.4-.9 1.1.1 1.4l5.2 1.6 2 6.1c.2.7.6.8 1.1.3l2.9-2.7 5.3 3.9c.9.5 1.5.2 1.7-.9L23.4 4.3c.3-1.3-.4-1.8-1.4-1.3ZM8 13.6l11.2-7c.5-.3 1-.2.6.2l-9.4 8.5-.4 4L8 13.6Z"></path></svg></sc-if>
+                        <sc-if value="{{ ch.isWA }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 2a8 8 0 1 1-4.1 14.8l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 0 1 12 4Zm-3.4 4.3c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.7 2.8 4.3 3.8 2.1.8 2.6.7 3 .6.5 0 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3l-1.9-.9c-.3-.1-.5-.1-.6.1l-.8 1c-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.8-.7-1.4-1.6-1.6-1.9-.1-.3 0-.4.1-.5l.4-.5c.2-.2.2-.3.3-.5V10l-.9-2c-.2-.5-.4-.5-.6-.5h-.6Z"></path></svg></sc-if>
+                        <sc-if value="{{ ch.isMAX }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 1.6a10.4 10.4 0 0 1 0 20.8c-2.1 0-4-.6-5.6-1.6l-3.2 1.1c-.8.3-1.5-.4-1.2-1.2l1.1-3.2A10.3 10.3 0 0 1 1.6 12 10.4 10.4 0 0 1 12 1.6Zm0 5.9a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"></path></svg></sc-if>
+                        {{ ch.count }}
+                      </span>
+                    </sc-for>
+                  </span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">{{ a.meta }}</span>
+                  <button sc-camel-on-click="{{ a.edit }}" style="all:unset;cursor:pointer;margin-left:auto;font-size:12px;color:#8a8a98;padding:5px 11px;border-radius:8px;transition:background .16s ease,color .16s ease" style-hover="background:#1a1a23;color:#eeeef2">Изменить</button>
+                </div>
+              </div>
+            </article>
+          </sc-for>
+          <sc-if value="{{ adsEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="grid-column:1/-1;padding:48px 20px;text-align:center;display:flex;flex-direction:column;gap:10px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23">
+              <span style="font-size:14px;color:#8a8a98">Объявления не найдены</span>
+              <button sc-camel-on-click="{{ resetAdQuery }}" style="all:unset;cursor:pointer;align-self:center;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:#6a6a78;transition:color .16s ease" style-hover="color:#eeeef2">СБРОСИТЬ ПОИСК</button>
+            </div>
+          </sc-if>
+        </div>
+       </div>
+      </sc-if>
+
+      <sc-if value="{{ isEditor }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:minmax(0,1.35fr) minmax(300px,.85fr);gap:13px;align-items:start;animation:rise .32s ease both" data-editor="">
+
+          <div style="display:flex;flex-direction:column;gap:13px;min-width:0">
+            <section style="padding:22px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:16px">
+              <div style="display:flex;align-items:center;gap:10px">
+                <h2 style="margin:0;font-size:15px;font-weight:600">Содержание</h2>
+                <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">{{ ed.idLabel }}</span>
+              </div>
+
+              <label style="display:flex;flex-direction:column;gap:7px">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">НАЗВАНИЕ</span>
+                <input value="{{ ed.title }}" sc-camel-on-change="{{ ed.onTitle }}" placeholder="Например: Скидки на курсы Python" style="all:unset;padding:12px 13px;border-radius:11px;background:#12121a;border:1px solid #1e1e28;font-family:'Space Grotesk',sans-serif;font-size:14px;color:#eeeef2;transition:border-color .16s ease" style-focus="border-color:rgba(196,132,252,.5)">
+              </label>
+
+              <label style="display:flex;flex-direction:column;gap:7px">
+                <span style="display:flex;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">ТЕКСТ<span style="margin-left:auto;color:{{ ed.lenColor }}">{{ ed.lenLabel }}</span></span>
+                <textarea value="{{ ed.body }}" sc-camel-on-change="{{ ed.onBody }}" rows="7" placeholder="Текст, который увидят участники групп" style="all:unset;padding:12px 13px;border-radius:11px;background:#12121a;border:1px solid #1e1e28;font-family:'Space Grotesk',sans-serif;font-size:13.5px;line-height:1.6;color:#eeeef2;white-space:pre-wrap;transition:border-color .16s ease" style-focus="border-color:rgba(196,132,252,.5)"></textarea>
+              </label>
+
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">ВЛОЖЕНИЯ</span>
+                <div style="display:flex;gap:9px;flex-wrap:wrap">
+                  <sc-for list="{{ ed.media }}" as="m" hint-placeholder-count="2">
+                    <div style="position:relative;width:86px;height:86px;border-radius:12px;background:repeating-linear-gradient(135deg,#141420 0 8px,#0f0f18 8px 16px);border:1px solid #1e1e28;display:grid;place-items:center">
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#4e4e5c">{{ m.label }}</span>
+                      <button sc-camel-on-click="{{ m.remove }}" style="all:unset;cursor:pointer;position:absolute;top:5px;right:5px;width:18px;height:18px;border-radius:50%;background:#08080b;border:1px solid #2a2a34;display:grid;place-items:center;font-size:11px;color:#8a8a98;transition:color .16s ease" style-hover="color:#eeeef2">×</button>
+                    </div>
+                  </sc-for>
+                  <button sc-camel-on-click="{{ ed.addMedia }}" style="all:unset;cursor:pointer;width:86px;height:86px;border-radius:12px;border:1px dashed #2a2a34;display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#6a6a78;transition:border-color .16s ease,color .16s ease" style-hover="border-color:rgba(196,132,252,.5);color:#eeeef2">+ ФАЙЛ</button>
+                </div>
+              </div>
+            </section>
+
+            <section style="padding:22px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:14px">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <h2 style="margin:0;font-size:15px;font-weight:600">Расписания</h2>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">{{ ed.schedsLabel }}</span>
+                <button sc-camel-on-click="{{ ed.addSched }}" style="all:unset;cursor:pointer;margin-left:auto;display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border-radius:10px;border:1px dashed #2a2a34;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.08em;color:#8a8a98;transition:border-color .16s ease,color .16s ease" style-hover="border-color:rgba(196,132,252,.5);color:#eeeef2">+ РАСПИСАНИЕ</button>
+              </div>
+
+              <sc-if value="{{ ed.draftNote }}" hint-placeholder-val="{{ false }}">
+                <span style="font-size:12.5px;line-height:1.55;color:#7a7a88">Расписания сохранятся вместе с объявлением: сначала создастся объявление, затем привяжутся расписания.</span>
+              </sc-if>
+
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <sc-for list="{{ ed.scheds }}" as="sc" hint-placeholder-count="1">
+                  <div style="border-radius:13px;background:#12121a;border:1px solid #1e1e28;overflow:hidden">
+
+                    <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap;padding:13px 14px">
+                      <span style="display:inline-flex;color:{{ sc.color }};flex:none">
+                        <sc-if value="{{ sc.isTG }}" hint-placeholder-val="{{ true }}"><svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M22 3 1.6 11.2c-.9.4-.9 1.1.1 1.4l5.2 1.6 2 6.1c.2.7.6.8 1.1.3l2.9-2.7 5.3 3.9c.9.5 1.5.2 1.7-.9L23.4 4.3c.3-1.3-.4-1.8-1.4-1.3ZM8 13.6l11.2-7c.5-.3 1-.2.6.2l-9.4 8.5-.4 4L8 13.6Z"></path></svg></sc-if>
+                        <sc-if value="{{ sc.isWA }}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 2a8 8 0 1 1-4.1 14.8l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 0 1 12 4Zm-3.4 4.3c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.7 2.8 4.3 3.8 2.1.8 2.6.7 3 .6.5 0 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3l-1.9-.9c-.3-.1-.5-.1-.6.1l-.8 1c-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.8-.7-1.4-1.6-1.6-1.9-.1-.3 0-.4.1-.5l.4-.5c.2-.2.2-.3.3-.5V10l-.9-2c-.2-.5-.4-.5-.6-.5h-.6Z"></path></svg></sc-if>
+                        <sc-if value="{{ sc.isMAX }}" hint-placeholder-val="{{ false }}"><svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 1.6a10.4 10.4 0 0 1 0 20.8c-2.1 0-4-.6-5.6-1.6l-3.2 1.1c-.8.3-1.5-.4-1.2-1.2l1.1-3.2A10.3 10.3 0 0 1 1.6 12 10.4 10.4 0 0 1 12 1.6Zm0 5.9a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"></path></svg></sc-if>
+                      </span>
+                      <span style="font-size:13.5px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ sc.accName }}</span>
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#8a8a98">{{ sc.daysLabel }}</span>
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#eeeef2">{{ sc.timesLabel }}</span>
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#5f5f6e">{{ sc.groupsCount }}</span>
+                      <sc-if value="{{ sc.isDraft }}" hint-placeholder-val="{{ false }}">
+                        <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;padding:4px 8px;border-radius:6px;color:oklch(0.82 0.16 85);background:rgba(251,191,36,.12)">ЧЕРНОВИК</span>
+                      </sc-if>
+                      <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+                        <button sc-camel-on-click="{{ sc.toggleOpen }}" style="all:unset;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.08em;color:#6a6a78;transition:color .16s ease" style-hover="color:#eeeef2">{{ sc.openLabel }}</button>
+                        <button sc-camel-on-click="{{ sc.toggleActive }}" title="{{ sc.statusLabel }}" style="all:unset;cursor:pointer;width:38px;height:22px;border-radius:99px;padding:3px;transition:background .2s ease;background:{{ sc.trackBg }}">
+                          <span style="display:block;width:16px;height:16px;border-radius:50%;background:#0b0b10;transition:transform .2s cubic-bezier(.2,.8,.2,1);transform:{{ sc.knob }}"></span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <sc-if value="{{ sc.open }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;flex-direction:column;gap:16px;padding:16px 14px 15px;border-top:1px solid #1c1c25;background:#0f0f16;animation:rise .22s ease both">
+
+                        <div style="display:flex;flex-direction:column;gap:9px">
+                          <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">АККАУНТ</span>
+                          <div style="display:flex;gap:8px;flex-wrap:wrap">
+                            <sc-for list="{{ sc.accounts }}" as="ac" hint-placeholder-count="5">
+                              <button sc-camel-on-click="{{ ac.pick }}" style="all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:9px;padding:9px 13px 9px 11px;border-radius:11px;transition:background .16s ease,border-color .16s ease;background:{{ ac.bg }};border:1px solid {{ ac.bd }}">
+                                <span style="display:inline-flex;color:{{ ac.color }};flex:none">
+                                  <sc-if value="{{ ac.isTG }}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M22 3 1.6 11.2c-.9.4-.9 1.1.1 1.4l5.2 1.6 2 6.1c.2.7.6.8 1.1.3l2.9-2.7 5.3 3.9c.9.5 1.5.2 1.7-.9L23.4 4.3c.3-1.3-.4-1.8-1.4-1.3ZM8 13.6l11.2-7c.5-.3 1-.2.6.2l-9.4 8.5-.4 4L8 13.6Z"></path></svg></sc-if>
+                                  <sc-if value="{{ ac.isWA }}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 2a8 8 0 1 1-4.1 14.8l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 0 1 12 4Zm-3.4 4.3c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.7 2.8 4.3 3.8 2.1.8 2.6.7 3 .6.5 0 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3l-1.9-.9c-.3-.1-.5-.1-.6.1l-.8 1c-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.8-.7-1.4-1.6-1.6-1.9-.1-.3 0-.4.1-.5l.4-.5c.2-.2.2-.3.3-.5V10l-.9-2c-.2-.5-.4-.5-.6-.5h-.6Z"></path></svg></sc-if>
+                                  <sc-if value="{{ ac.isMAX }}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 1.6a10.4 10.4 0 0 1 0 20.8c-2.1 0-4-.6-5.6-1.6l-3.2 1.1c-.8.3-1.5-.4-1.2-1.2l1.1-3.2A10.3 10.3 0 0 1 1.6 12 10.4 10.4 0 0 1 12 1.6Zm0 5.9a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"></path></svg></sc-if>
+                                </span>
+                                <span style="display:flex;flex-direction:column;gap:2px">
+                                  <span style="font-size:12.5px;color:{{ ac.fg }}">{{ ac.name }}</span>
+                                  <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#5f5f6e">{{ ac.phone }}</span>
+                                </span>
+                              </button>
+                            </sc-for>
+                          </div>
+                        </div>
+
+                        <div style="display:flex;flex-direction:column;gap:2px">
+                          <div style="display:flex;align-items:center;gap:10px;padding-bottom:9px;border-bottom:1px solid #17171f">
+                            <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">ГРУППЫ · {{ sc.groupsLabel }}</span>
+                            <button sc-camel-on-click="{{ sc.toggleAllGroups }}" style="all:unset;cursor:pointer;margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.08em;color:#6a6a78;transition:color .16s ease" style-hover="color:#eeeef2">{{ sc.allLabel }}</button>
+                          </div>
+                          <sc-for list="{{ sc.groups }}" as="g" hint-placeholder-count="3">
+                            <button sc-camel-on-click="{{ g.toggle }}" style="all:unset;cursor:pointer;display:flex;align-items:center;gap:11px;padding:9px 8px;border-radius:10px;transition:background .16s ease" style-hover="background:#14141b">
+                              <span style="width:17px;height:17px;border-radius:6px;flex:none;display:grid;place-items:center;font-size:10px;color:#0a0a0d;background:{{ g.boxBg }};border:1px solid {{ g.boxBd }}">{{ g.check }}</span>
+                              <span style="font-size:13px;color:{{ g.fg }};min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ g.name }}</span>
+                              <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5f5f6e;flex:none">{{ g.members }}</span>
+                            </button>
+                          </sc-for>
+                          <sc-if value="{{ sc.groupsEmpty }}" hint-placeholder-val="{{ false }}">
+                            <span style="padding:14px 8px;font-size:12.5px;color:#6a6a78">У выбранного аккаунта нет подключённых групп</span>
+                          </sc-if>
+                        </div>
+
+                        <div style="display:flex;flex-direction:column;gap:11px">
+                          <div style="display:flex;align-items:center;gap:10px">
+                            <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">ДНИ И ВРЕМЯ</span>
+                            <div style="margin-left:auto;display:flex;gap:9px">
+                              <button sc-camel-on-click="{{ sc.weekdays }}" style="all:unset;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.08em;color:#6a6a78;transition:color .16s ease" style-hover="color:#eeeef2">БУДНИ</button>
+                              <button sc-camel-on-click="{{ sc.everyday }}" style="all:unset;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.08em;color:#6a6a78;transition:color .16s ease" style-hover="color:#eeeef2">КАЖДЫЙ ДЕНЬ</button>
+                            </div>
+                          </div>
+                          <div style="display:flex;gap:6px;flex-wrap:wrap">
+                            <sc-for list="{{ sc.days }}" as="d" hint-placeholder-count="7">
+                              <button sc-camel-on-click="{{ d.toggle }}" style="all:unset;cursor:pointer;display:grid;place-items:center;width:44px;height:34px;border-radius:10px;font-family:'IBM Plex Mono',monospace;font-size:11px;transition:background .16s ease,border-color .16s ease;color:{{ d.fg }};background:{{ d.bg }};border:1px solid {{ d.bd }}">{{ d.label }}</button>
+                            </sc-for>
+                          </div>
+                          <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+                            <sc-for list="{{ sc.times }}" as="tm" hint-placeholder-count="1">
+                              <span style="display:inline-flex;align-items:center;gap:8px;padding:7px 10px 7px 12px;border-radius:10px;background:#12121a;border:1px solid #1e1e28">
+                                <input type="time" value="{{ tm.label }}" sc-camel-on-change="{{ tm.onChange }}" style="all:unset;width:62px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#eeeef2;cursor:text">
+                                <button sc-camel-on-click="{{ tm.remove }}" style="all:unset;cursor:pointer;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-size:11px;color:#6a6a78;transition:color .16s ease" style-hover="color:#eeeef2">×</button>
+                              </span>
+                            </sc-for>
+                            <button sc-camel-on-click="{{ sc.addTime }}" style="all:unset;cursor:pointer;padding:8px 13px;border-radius:10px;border:1px dashed #2a2a34;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#6a6a78;transition:border-color .16s ease,color .16s ease" style-hover="border-color:rgba(196,132,252,.5);color:#eeeef2">+ ВРЕМЯ</button>
+                          </div>
+                        </div>
+
+                        <div style="display:flex;align-items:center;gap:12px;padding-top:13px;border-top:1px solid #17171f">
+                          <sc-if value="{{ sc.incomplete }}" hint-placeholder-val="{{ false }}">
+                            <span style="font-size:12.5px;color:oklch(0.82 0.16 85)">Заполните группы, дни и время</span>
+                          </sc-if>
+                          <button sc-camel-on-click="{{ sc.remove }}" style="all:unset;cursor:pointer;margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.08em;color:#6a6a78;transition:color .16s ease" style-hover="color:oklch(0.68 0.19 25)">УДАЛИТЬ РАСПИСАНИЕ</button>
+                        </div>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-for>
+
+                <sc-if value="{{ ed.schedsEmpty }}" hint-placeholder-val="{{ true }}">
+                  <div style="padding:24px 16px;border-radius:13px;border:1px dashed #23232d;display:flex;flex-direction:column;gap:9px;align-items:center">
+                    <span style="font-size:13px;color:#8a8a98">Расписаний пока нет — объявление не будет отправляться</span>
+                    <button sc-camel-on-click="{{ ed.addSched }}" style="all:unset;cursor:pointer;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.08em;color:#8a8a98;transition:color .16s ease" style-hover="color:#eeeef2">+ ДОБАВИТЬ ПЕРВОЕ</button>
+                  </div>
+                </sc-if>
+              </div>
+            </section>
+          </div>
+
+          <div style="position:sticky;top:96px;display:flex;flex-direction:column;gap:13px" data-editor-side="">
+            <section style="padding:22px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:14px">
+              <div style="display:flex;align-items:center;gap:10px">
+                <h2 style="margin:0;font-size:15px;font-weight:600">Предпросмотр</h2>
+                <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:{{ ed.previewColor }}">{{ ed.previewChannel }}</span>
+              </div>
+              <div style="padding:16px;border-radius:14px;background:#12121a;border:1px solid #1e1e28;display:flex;flex-direction:column;gap:11px">
+                <sc-if value="{{ ed.hasMedia }}" hint-placeholder-val="{{ true }}">
+                  <div style="height:118px;border-radius:11px;background:repeating-linear-gradient(135deg,#171724 0 8px,#12121c 8px 16px);display:grid;place-items:center;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4e4e5c">IMAGE · S3</div>
+                </sc-if>
+                <span style="font-size:13.5px;font-weight:600">{{ ed.previewTitle }}</span>
+                <span style="font-size:13px;line-height:1.6;color:#a8a8b6;white-space:pre-wrap;text-wrap:pretty">{{ ed.previewBody }}</span>
+                <span style="align-self:flex-end;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#5f5f6e">{{ clock }}</span>
+              </div>
+            </section>
+
+            <section style="padding:20px 22px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:11px">
+              <sc-for list="{{ ed.summary }}" as="s" hint-placeholder-count="4">
+                <div style="display:flex;align-items:baseline;gap:10px;font-size:13px">
+                  <span style="color:#7a7a88">{{ s.k }}</span>
+                  <span style="flex:1;height:1px;background:#17171f"></span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:{{ s.color }}">{{ s.v }}</span>
+                </div>
+              </sc-for>
+            </section>
+
+            <div style="display:flex;gap:9px;flex-wrap:wrap">
+              <button sc-camel-on-click="{{ ed.save }}" style="all:unset;cursor:pointer;flex:1;min-width:130px;text-align:center;padding:12px;border-radius:12px;background:oklch(0.72 0.19 310);color:#0a0a0d;font-size:13px;font-weight:600;transition:filter .16s ease" style-hover="filter:brightness(1.12)">{{ ed.saveLabel }}</button>
+              <button sc-camel-on-click="{{ ed.cancel }}" style="all:unset;cursor:pointer;padding:12px 18px;border-radius:12px;border:1px solid #24242e;font-size:13px;color:#9a9aa8;transition:background .16s ease,color .16s ease" style-hover="background:#1a1a23;color:#eeeef2">Отмена</button>
+            </div>
+            <sc-if value="{{ ed.isEdit }}" hint-placeholder-val="{{ false }}">
+              <button style="all:unset;cursor:pointer;align-self:flex-start;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:#6a6a78;transition:color .16s ease" style-hover="color:oklch(0.68 0.19 25)">УДАЛИТЬ ОБЪЯВЛЕНИЕ</button>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isGroups }}" hint-placeholder-val="{{ false }}">
+        <div style="border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;overflow:hidden;animation:rise .32s ease both">
+          <div data-rowhead="" style="display:grid;grid-template-columns:minmax(180px,2.4fr) 1fr 1fr 92px;gap:14px;padding:13px 20px;border-bottom:1px solid #1a1a23;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">
+            <span>ГРУППА</span><span>МЕССЕНДЖЕР</span><span>УЧАСТНИКИ</span><span>АКТИВНА</span>
+          </div>
+          <sc-for list="{{ groups }}" as="g" hint-placeholder-count="8">
+            <div data-row="" style="display:grid;grid-template-columns:minmax(180px,2.4fr) 1fr 1fr 92px;gap:14px;align-items:center;padding:14px 20px;border-bottom:1px solid #14141b;transition:background .16s ease" style-hover="background:#12121a">
+              <div data-grow="" style="display:flex;align-items:center;gap:11px;min-width:0">
+                <span style="width:28px;height:28px;border-radius:9px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:600;color:{{ g.color }};background:{{ g.bg }}">{{ g.initials }}</span>
+                <span style="font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ g.name }}</span>
+              </div>
+              <span style="display:inline-flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:{{ g.color }}">
+                <sc-if value="{{ g.isTG }}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M22 3 1.6 11.2c-.9.4-.9 1.1.1 1.4l5.2 1.6 2 6.1c.2.7.6.8 1.1.3l2.9-2.7 5.3 3.9c.9.5 1.5.2 1.7-.9L23.4 4.3c.3-1.3-.4-1.8-1.4-1.3ZM8 13.6l11.2-7c.5-.3 1-.2.6.2l-9.4 8.5-.4 4L8 13.6Z"></path></svg></sc-if>
+                <sc-if value="{{ g.isWA }}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 2a8 8 0 1 1-4.1 14.8l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 0 1 12 4Zm-3.4 4.3c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.7 2.8 4.3 3.8 2.1.8 2.6.7 3 .6.5 0 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3l-1.9-.9c-.3-.1-.5-.1-.6.1l-.8 1c-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.8-.7-1.4-1.6-1.6-1.9-.1-.3 0-.4.1-.5l.4-.5c.2-.2.2-.3.3-.5V10l-.9-2c-.2-.5-.4-.5-.6-.5h-.6Z"></path></svg></sc-if>
+                <sc-if value="{{ g.isMAX }}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 1.6a10.4 10.4 0 0 1 0 20.8c-2.1 0-4-.6-5.6-1.6l-3.2 1.1c-.8.3-1.5-.4-1.2-1.2l1.1-3.2A10.3 10.3 0 0 1 1.6 12 10.4 10.4 0 0 1 12 1.6Zm0 5.9a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"></path></svg></sc-if>
+                {{ g.mess }}
+              </span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#8a8a98;font-variant-numeric:tabular-nums">{{ g.members }}</span>
+              <button sc-camel-on-click="{{ g.toggle }}" style="all:unset;cursor:pointer;width:38px;height:22px;border-radius:99px;padding:3px;transition:background .2s ease;background:{{ g.trackBg }}">
+                <span style="display:block;width:16px;height:16px;border-radius:50%;background:#0b0b10;transition:transform .2s cubic-bezier(.2,.8,.2,1);transform:{{ g.knob }}"></span>
+              </button>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isSched }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:13px;animation:rise .32s ease both">
+          <span style="font-size:12.5px;color:#7a7a88">Сводный список: здесь можно включить или поставить на паузу. Создание и настройка расписаний — на странице объявления.</span>
+
+          <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:13px 14px;border-radius:14px;background:#0e0e14;border:1px solid #1a1a23">
+            <div style="display:flex;align-items:center;gap:9px;flex:1;min-width:220px;padding:9px 13px;border-radius:11px;background:#12121a;border:1px solid #1e1e28">
+              <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="#5f5f6e" stroke-width="2" style="flex:none"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+              <input value="{{ schedQuery }}" sc-camel-on-change="{{ onSchedQuery }}" placeholder="Поиск по объявлению и времени запуска" style="all:unset;flex:1;min-width:0;font-size:13px;color:#eeeef2">
+              <sc-if value="{{ schedQueryDirty }}" hint-placeholder-val="{{ false }}">
+                <button sc-camel-on-click="{{ resetSchedQuery }}" title="Сбросить поиск" style="all:unset;cursor:pointer;flex:none;width:18px;height:18px;border-radius:50%;border:1px solid #2a2a34;display:grid;place-items:center;font-size:11px;line-height:1;color:#6a6a78;transition:color .16s ease" style-hover="color:#eeeef2">×</button>
+              </sc-if>
+            </div>
+            <sc-for list="{{ schedFilterGroups }}" as="fg" hint-placeholder-count="2">
+              <div style="display:flex;align-items:center;gap:4px;padding:3px;border-radius:11px;background:#12121a;border:1px solid #1e1e28">
+                <sc-for list="{{ fg.options }}" as="o" hint-placeholder-count="3">
+                  <button sc-camel-on-click="{{ o.pick }}" style="all:unset;cursor:pointer;padding:7px 11px;border-radius:8px;font-size:12.5px;transition:background .16s ease,color .16s ease;background:{{ o.bg }};color:{{ o.fg }}" style-hover="color:#eeeef2">{{ o.label }}</button>
+                </sc-for>
+              </div>
+            </sc-for>
+            <sc-if value="{{ schedFiltersDirty }}" hint-placeholder-val="{{ false }}">
+              <button sc-camel-on-click="{{ resetSchedFilters }}" style="all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:7px;padding:0 4px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:#6a6a78;transition:color .16s ease" style-hover="color:#eeeef2">
+                <span style="width:16px;height:16px;border-radius:50%;border:1px solid #2a2a34;display:grid;place-items:center;font-size:10px;line-height:1">×</span>
+                СБРОСИТЬ
+              </button>
+            </sc-if>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78;padding:0 4px">
+            <span>{{ schedCount }}</span>
+            <span style="flex:1;height:1px;background:#16161e"></span>
+          </div>
+          <sc-for list="{{ schedules }}" as="s" hint-placeholder-count="4">
+            <section style="padding:19px 20px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:15px;transition:border-color .2s ease" style-hover="border-color:#2e2e3a">
+              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <span style="width:8px;height:8px;border-radius:50%;background:{{ s.color }}"></span>
+                <span style="font-size:15px;font-weight:600;letter-spacing:-.015em">{{ s.ad }}</span>
+                <span style="display:inline-flex;align-items:center;gap:5px;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;padding:4px 9px 4px 7px;border-radius:6px;color:{{ s.color }};background:{{ s.bg }}">
+                  <sc-if value="{{ s.isTG }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M22 3 1.6 11.2c-.9.4-.9 1.1.1 1.4l5.2 1.6 2 6.1c.2.7.6.8 1.1.3l2.9-2.7 5.3 3.9c.9.5 1.5.2 1.7-.9L23.4 4.3c.3-1.3-.4-1.8-1.4-1.3ZM8 13.6l11.2-7c.5-.3 1-.2.6.2l-9.4 8.5-.4 4L8 13.6Z"></path></svg></sc-if>
+                  <sc-if value="{{ s.isWA }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 2a8 8 0 1 1-4.1 14.8l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 0 1 12 4Zm-3.4 4.3c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.7 2.8 4.3 3.8 2.1.8 2.6.7 3 .6.5 0 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3l-1.9-.9c-.3-.1-.5-.1-.6.1l-.8 1c-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.8-.7-1.4-1.6-1.6-1.9-.1-.3 0-.4.1-.5l.4-.5c.2-.2.2-.3.3-.5V10l-.9-2c-.2-.5-.4-.5-.6-.5h-.6Z"></path></svg></sc-if>
+                  <sc-if value="{{ s.isMAX }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 1.6a10.4 10.4 0 0 1 0 20.8c-2.1 0-4-.6-5.6-1.6l-3.2 1.1c-.8.3-1.5-.4-1.2-1.2l1.1-3.2A10.3 10.3 0 0 1 1.6 12 10.4 10.4 0 0 1 12 1.6Zm0 5.9a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"></path></svg></sc-if>
+                  {{ s.mess }}
+                </span>
+                <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#7a7a88">след. запуск {{ s.next }}</span>
+                <button sc-camel-on-click="{{ s.toggle }}" style="all:unset;cursor:pointer;width:38px;height:22px;border-radius:99px;padding:3px;transition:background .2s ease;background:{{ s.trackBg }}">
+                  <span style="display:block;width:16px;height:16px;border-radius:50%;background:#0b0b10;transition:transform .2s cubic-bezier(.2,.8,.2,1);transform:{{ s.knob }}"></span>
+                </button>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <sc-for list="{{ s.days }}" as="d" hint-placeholder-count="7">
+                  <span style="display:grid;place-items:center;width:38px;height:32px;border-radius:9px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ d.fg }};background:{{ d.bg }};border:1px solid {{ d.bd }}">{{ d.label }}</span>
+                </sc-for>
+                <span style="margin-left:6px;display:flex;align-items:center;gap:7px;padding:0 12px;border-radius:9px;background:#12121a;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#9a9aa8">{{ s.times }}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <div style="flex:1;height:4px;border-radius:99px;background:#1a1a23;overflow:hidden">
+                  <div style="height:100%;border-radius:99px;transform-origin:left;animation:grow .8s cubic-bezier(.2,.8,.2,1);background:{{ s.color }};width:{{ s.pct }}"></div>
+                </div>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">{{ s.progress }}</span>
+              </div>
+            </section>
+          </sc-for>
+          <sc-if value="{{ schedEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:48px 20px;text-align:center;display:flex;flex-direction:column;gap:10px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23">
+              <span style="font-size:14px;color:#8a8a98">Расписания не найдены</span>
+              <button sc-camel-on-click="{{ resetSchedFilters }}" style="all:unset;cursor:pointer;align-self:center;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:#6a6a78;transition:color .16s ease" style-hover="color:#eeeef2">СБРОСИТЬ ФИЛЬТРЫ</button>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isHistory }}" hint-placeholder-val="{{ false }}">
+       <div style="display:flex;flex-direction:column;gap:13px;animation:rise .32s ease both">
+
+        <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:13px 14px;border-radius:14px;background:#0e0e14;border:1px solid #1a1a23">
+          <sc-for list="{{ filterGroups }}" as="fg" hint-placeholder-count="3">
+            <div style="display:flex;align-items:center;gap:4px;padding:3px;border-radius:11px;background:#12121a;border:1px solid #1e1e28">
+              <sc-for list="{{ fg.options }}" as="o" hint-placeholder-count="4">
+                <button sc-camel-on-click="{{ o.pick }}" style="all:unset;cursor:pointer;padding:7px 11px;border-radius:8px;font-size:12.5px;transition:background .16s ease,color .16s ease;background:{{ o.bg }};color:{{ o.fg }}" style-hover="color:#eeeef2">{{ o.label }}</button>
+              </sc-for>
+            </div>
+          </sc-for>
+          <sc-if value="{{ filtersDirty }}" hint-placeholder-val="{{ false }}">
+            <button sc-camel-on-click="{{ resetFilters }}" style="all:unset;cursor:pointer;margin-left:auto;display:inline-flex;align-items:center;gap:7px;padding:0 4px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:#6a6a78;transition:color .16s ease" style-hover="color:#eeeef2">
+              <span style="width:16px;height:16px;border-radius:50%;border:1px solid #2a2a34;display:grid;place-items:center;font-size:10px;line-height:1">×</span>
+              СБРОСИТЬ
+            </button>
+          </sc-if>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78;padding:0 4px">
+          <span>{{ historyCount }}</span>
+          <span style="flex:1;height:1px;background:#16161e"></span>
+          <a href="#">ЭКСПОРТ CSV →</a>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <sc-for list="{{ history }}" as="h" hint-placeholder-count="10">
+            <article data-hrow="" style="display:grid;grid-template-columns:minmax(0,1fr) max-content;grid-template-areas:'head meta' 'body meta' 'err err';column-gap:22px;row-gap:10px;padding:14px 18px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;border-left:2px solid {{ h.color }};transition:border-color .2s ease,transform .2s ease" style-hover="transform:translateY(-2px)">
+              <div style="grid-area:head;display:flex;align-items:center;gap:9px;flex-wrap:wrap;min-width:0">
+                <span style="display:inline-flex;align-items:center;gap:5px;font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.06em;padding:4px 8px 4px 6px;border-radius:6px;flex:none;color:{{ h.messColor }};background:{{ h.messBg }}">
+                  <sc-if value="{{ h.isTG }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M22 3 1.6 11.2c-.9.4-.9 1.1.1 1.4l5.2 1.6 2 6.1c.2.7.6.8 1.1.3l2.9-2.7 5.3 3.9c.9.5 1.5.2 1.7-.9L23.4 4.3c.3-1.3-.4-1.8-1.4-1.3ZM8 13.6l11.2-7c.5-.3 1-.2.6.2l-9.4 8.5-.4 4L8 13.6Z"></path></svg></sc-if>
+                <sc-if value="{{ h.isWA }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 2a8 8 0 1 1-4.1 14.8l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 0 1 12 4Zm-3.4 4.3c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.7 2.8 4.3 3.8 2.1.8 2.6.7 3 .6.5 0 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3l-1.9-.9c-.3-.1-.5-.1-.6.1l-.8 1c-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.8-.7-1.4-1.6-1.6-1.9-.1-.3 0-.4.1-.5l.4-.5c.2-.2.2-.3.3-.5V10l-.9-2c-.2-.5-.4-.5-.6-.5h-.6Z"></path></svg></sc-if>
+                <sc-if value="{{ h.isMAX }}" hint-placeholder-val="{{ false }}"><svg width="11" height="11" sc-camel-view-box="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 1.6a10.4 10.4 0 0 1 0 20.8c-2.1 0-4-.6-5.6-1.6l-3.2 1.1c-.8.3-1.5-.4-1.2-1.2l1.1-3.2A10.3 10.3 0 0 1 1.6 12 10.4 10.4 0 0 1 12 1.6Zm0 5.9a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"></path></svg></sc-if>
+                  {{ h.mess }}
+                </span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#7a7a88">{{ h.time }}</span>
+                <span style="display:inline-flex;align-items:center;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ h.color }}">
+                  <span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ h.color }}"></span>{{ h.status }}
+                </span>
+              </div>
+
+              <div style="grid-area:body;display:flex;align-items:baseline;gap:10px;min-width:0">
+                <span style="font-size:14px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ h.ad }}</span>
+                <span style="font-size:12.5px;color:#8a8a98;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none;max-width:45%">{{ h.group }}</span>
+              </div>
+
+              <sc-if value="{{ h.hasError }}" hint-placeholder-val="{{ false }}">
+                <div style="grid-area:err;display:flex;flex-direction:column;gap:6px;padding:11px 12px;border-radius:11px;background:#131319">
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.12em;color:{{ h.color }}">ТЕКСТ ОШИБКИ</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.55;color:#a8a8b6;word-break:break-word">{{ h.error }}</span>
+                </div>
+              </sc-if>
+
+              <div style="grid-area:meta;display:flex;align-items:center;gap:9px;justify-content:flex-end;padding-left:22px;border-left:1px solid #17171f">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.12em;color:#5f5f6e;flex:none">UUID</span>
+                <span title="{{ h.id }}" style="flex:none;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:-.01em;color:#9a9aa8;white-space:nowrap;user-select:all;cursor:text">{{ h.id }}</span>
+                <button sc-camel-on-click="{{ h.copy }}" style="all:unset;cursor:pointer;flex:none;padding:5px 10px;border-radius:8px;border:1px solid #24242e;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#8a8a98;transition:background .16s ease,color .16s ease" style-hover="background:#1a1a23;color:#eeeef2">{{ h.copyLabel }}</button>
+              </div>
+            </article>
+          </sc-for>
+          <sc-if value="{{ historyEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="grid-column:1/-1;padding:48px 20px;text-align:center;display:flex;flex-direction:column;gap:6px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23">
+              <span style="font-size:14px;color:#8a8a98">Ничего не найдено</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#5f5f6e">измените фильтры или период</span>
+            </div>
+          </sc-if>
+        </div>
+       </div>
+      </sc-if>
+
+      <sc-if value="{{ isAccounts }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:13px;animation:rise .32s ease both">
+          <sc-for list="{{ accounts }}" as="ac" hint-placeholder-count="5">
+            <article style="padding:20px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:15px;transition:border-color .2s ease,transform .2s ease" style-hover="border-color:#2e2e3a;transform:translateY(-3px)">
+              <div style="display:flex;align-items:center;gap:12px">
+                <span style="width:40px;height:40px;border-radius:13px;display:grid;place-items:center;flex:none;color:{{ ac.color }};background:{{ ac.bg }}">
+                  <sc-if value="{{ ac.isTG }}" hint-placeholder-val="{{ false }}"><svg width="19" height="19" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M22 3 1.6 11.2c-.9.4-.9 1.1.1 1.4l5.2 1.6 2 6.1c.2.7.6.8 1.1.3l2.9-2.7 5.3 3.9c.9.5 1.5.2 1.7-.9L23.4 4.3c.3-1.3-.4-1.8-1.4-1.3ZM8 13.6l11.2-7c.5-.3 1-.2.6.2l-9.4 8.5-.4 4L8 13.6Z"></path></svg></sc-if>
+                  <sc-if value="{{ ac.isWA }}" hint-placeholder-val="{{ false }}"><svg width="19" height="19" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 2a8 8 0 1 1-4.1 14.8l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 0 1 12 4Zm-3.4 4.3c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.7 2.8 4.3 3.8 2.1.8 2.6.7 3 .6.5 0 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3l-1.9-.9c-.3-.1-.5-.1-.6.1l-.8 1c-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.8-.7-1.4-1.6-1.6-1.9-.1-.3 0-.4.1-.5l.4-.5c.2-.2.2-.3.3-.5V10l-.9-2c-.2-.5-.4-.5-.6-.5h-.6Z"></path></svg></sc-if>
+                  <sc-if value="{{ ac.isMAX }}" hint-placeholder-val="{{ false }}"><svg width="19" height="19" sc-camel-view-box="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 1.6a10.4 10.4 0 0 1 0 20.8c-2.1 0-4-.6-5.6-1.6l-3.2 1.1c-.8.3-1.5-.4-1.2-1.2l1.1-3.2A10.3 10.3 0 0 1 1.6 12 10.4 10.4 0 0 1 12 1.6Zm0 5.9a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"></path></svg></sc-if>
+                </span>
+                <div style="display:flex;flex-direction:column;min-width:0">
+                  <span style="font-size:14px;font-weight:600">{{ ac.name }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">{{ ac.phone }}</span>
+                </div>
+                <span style="margin-left:auto;width:9px;height:9px;border-radius:50%;flex:none;background:{{ ac.color }};animation:{{ ac.anim }}"></span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#7a7a88">
+                <div style="display:flex;justify-content:space-between"><span>статус</span><span style="color:{{ ac.color }}">{{ ac.status }}</span></div>
+                <div style="display:flex;justify-content:space-between"><span>групп</span><span style="color:#9a9aa8">{{ ac.groups }}</span></div>
+              </div>
+              <div style="display:flex;gap:8px">
+                <button sc-camel-on-click="{{ ac.open }}" style="all:unset;cursor:pointer;flex:1;text-align:center;padding:9px;border-radius:10px;background:#1a1a23;font-size:12.5px;color:#eeeef2;transition:background .16s ease" style-hover="background:#22222c">Настроить группы</button>
+                <button style="all:unset;cursor:pointer;padding:9px 13px;border-radius:10px;border:1px solid #24242e;font-size:12.5px;color:#9a9aa8;transition:background .16s ease,color .16s ease" style-hover="background:#1a1a23;color:#eeeef2">{{ ac.action }}</button>
+              </div>
+            </article>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isAccount }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:13px;animation:rise .32s ease both">
+
+          <section style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:20px 22px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23">
+            <span style="width:46px;height:46px;border-radius:14px;display:grid;place-items:center;flex:none;color:{{ acc.color }};background:{{ acc.bg }}">
+              <sc-if value="{{ acc.isTG }}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M22 3 1.6 11.2c-.9.4-.9 1.1.1 1.4l5.2 1.6 2 6.1c.2.7.6.8 1.1.3l2.9-2.7 5.3 3.9c.9.5 1.5.2 1.7-.9L23.4 4.3c.3-1.3-.4-1.8-1.4-1.3ZM8 13.6l11.2-7c.5-.3 1-.2.6.2l-9.4 8.5-.4 4L8 13.6Z"></path></svg></sc-if>
+              <sc-if value="{{ acc.isWA }}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 2a8 8 0 1 1-4.1 14.8l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 0 1 12 4Zm-3.4 4.3c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.7 2.8 4.3 3.8 2.1.8 2.6.7 3 .6.5 0 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3l-1.9-.9c-.3-.1-.5-.1-.6.1l-.8 1c-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.8-.7-1.4-1.6-1.6-1.9-.1-.3 0-.4.1-.5l.4-.5c.2-.2.2-.3.3-.5V10l-.9-2c-.2-.5-.4-.5-.6-.5h-.6Z"></path></svg></sc-if>
+              <sc-if value="{{ acc.isMAX }}" hint-placeholder-val="{{ false }}"><svg width="22" height="22" sc-camel-view-box="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 1.6a10.4 10.4 0 0 1 0 20.8c-2.1 0-4-.6-5.6-1.6l-3.2 1.1c-.8.3-1.5-.4-1.2-1.2l1.1-3.2A10.3 10.3 0 0 1 1.6 12 10.4 10.4 0 0 1 12 1.6Zm0 5.9a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"></path></svg></sc-if>
+            </span>
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
+              <span style="font-size:17px;font-weight:600;letter-spacing:-.02em">{{ acc.name }}</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#6a6a78">{{ acc.phone }} · последняя синхронизация {{ acc.lastSync }}</span>
+            </div>
+            <span style="display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:99px;background:#12121a;border:1px solid #1e1e28;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ acc.color }}">
+              <span style="width:7px;height:7px;border-radius:50%;background:{{ acc.color }}"></span>{{ acc.status }}
+            </span>
+            <div style="margin-left:auto;display:flex;gap:9px;flex-wrap:wrap">
+              <button sc-camel-on-click="{{ acc.syncAll }}" style="all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:11px;background:oklch(0.72 0.19 310);color:#0a0a0d;font-size:13px;font-weight:600;transition:filter .16s ease" style-hover="filter:brightness(1.12)">
+                <span style="display:inline-block;animation:{{ acc.syncAnim }}">↻</span>{{ acc.syncLabel }}
+              </button>
+              <button sc-camel-on-click="{{ acc.back }}" style="all:unset;cursor:pointer;padding:10px 15px;border-radius:11px;border:1px solid #24242e;font-size:13px;color:#9a9aa8;transition:background .16s ease,color .16s ease" style-hover="background:#1a1a23;color:#eeeef2">К аккаунтам</button>
+            </div>
+          </section>
+
+          <div style="display:flex;align-items:center;gap:10px;padding:0 4px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">
+            <span>{{ acc.groupsLabel }}</span>
+            <span style="flex:1;height:1px;background:#16161e"></span>
+            <span>ВЫКЛЮЧЕННЫЕ ГРУППЫ ПРОПУСКАЮТСЯ ПРИ РАССЫЛКЕ</span>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:9px">
+            <sc-for list="{{ acc.groups }}" as="g" hint-placeholder-count="6">
+              <article style="display:flex;align-items:center;gap:15px;flex-wrap:wrap;padding:14px 18px;border-radius:14px;background:#0e0e14;border:1px solid #1a1a23;transition:border-color .2s ease;opacity:{{ g.opacity }}" style-hover="border-color:#2e2e3a">
+                <span style="width:32px;height:32px;border-radius:10px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:600;color:{{ g.color }};background:{{ g.bg }}">{{ g.initials }}</span>
+                <div style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1">
+                  <span style="font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ g.name }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">{{ g.sub }}</span>
+                </div>
+                <span style="display:inline-flex;align-items:center;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ g.syncColor }};flex:none">
+                  <span style="width:6px;height:6px;border-radius:50%;background:{{ g.syncColor }};animation:{{ g.syncAnim }}"></span>{{ g.syncText }}
+                </span>
+                <div style="display:flex;align-items:center;gap:8px;flex:none">
+                  <button sc-camel-on-click="{{ g.sync }}" title="Синхронизировать заново" style="all:unset;cursor:pointer;width:34px;height:34px;border-radius:10px;border:1px solid #24242e;display:grid;place-items:center;font-size:14px;color:#8a8a98;transition:background .16s ease,color .16s ease" style-hover="background:#1a1a23;color:#eeeef2"><span style="display:inline-block;animation:{{ g.spin }}">↻</span></button>
+                  <button sc-camel-on-click="{{ g.remove }}" title="Удалить группу" style="all:unset;cursor:pointer;width:34px;height:34px;border-radius:10px;border:1px solid #24242e;display:grid;place-items:center;font-size:14px;color:#8a8a98;transition:background .16s ease,color .16s ease,border-color .16s ease" style-hover="background:rgba(248,113,113,.1);color:oklch(0.68 0.19 25);border-color:rgba(248,113,113,.35)">×</button>
+                  <button sc-camel-on-click="{{ g.toggle }}" title="Включить или отключить" style="all:unset;cursor:pointer;width:38px;height:22px;border-radius:99px;padding:3px;margin-left:4px;transition:background .2s ease;background:{{ g.trackBg }}">
+                    <span style="display:block;width:16px;height:16px;border-radius:50%;background:#0b0b10;transition:transform .2s cubic-bezier(.2,.8,.2,1);transform:{{ g.knob }}"></span>
+                  </button>
+                </div>
+              </article>
+            </sc-for>
+            <sc-if value="{{ acc.empty }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:48px 20px;text-align:center;display:flex;flex-direction:column;gap:6px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23">
+                <span style="font-size:14px;color:#8a8a98">Все группы удалены</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#5f5f6e">запустите синхронизацию, чтобы подтянуть чаты заново</span>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isBilling }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:13px;animation:rise .32s ease both">
+          <sc-for list="{{ plans }}" as="p" hint-placeholder-count="3">
+            <article style="position:relative;overflow:hidden;padding:24px;border-radius:18px;background:#0e0e14;display:flex;flex-direction:column;gap:18px;transition:transform .2s ease;border:1px solid {{ p.bd }}" style-hover="transform:translateY(-4px)">
+              <div style="display:flex;align-items:baseline;gap:10px">
+                <span style="font-size:17px;font-weight:600">{{ p.name }}</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:{{ p.tagFg }}">{{ p.tag }}</span>
+              </div>
+              <div style="display:flex;align-items:baseline;gap:6px">
+                <span style="font-size:38px;font-weight:600;letter-spacing:-.035em">{{ p.price }}</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#6a6a78">{{ p.period }}</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <sc-for list="{{ p.limits }}" as="l" hint-placeholder-count="4">
+                  <div style="display:flex;justify-content:space-between;font-size:13px;color:#8a8a98">
+                    <span>{{ l.k }}</span><span style="font-family:'IBM Plex Mono',monospace;color:#eeeef2">{{ l.v }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <button style="all:unset;cursor:pointer;text-align:center;padding:11px;border-radius:11px;font-size:13px;font-weight:600;transition:filter .16s ease;color:{{ p.btnFg }};background:{{ p.btnBg }};border:1px solid {{ p.btnBd }}" style-hover="filter:brightness(1.15)">{{ p.cta }}</button>
+            </article>
+          </sc-for>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isProfile }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:13px;animation:rise .32s ease both">
+          <section style="padding:22px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:18px">
+            <h2 style="margin:0;font-size:15px;font-weight:600">Аккаунт</h2>
+            <div style="display:flex;align-items:center;gap:14px">
+              <div style="width:56px;height:56px;border-radius:50%;background:#1e1e28;display:grid;place-items:center;font-size:18px;font-weight:600;color:#9a9aaa">АЧ</div>
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <span style="font-size:15px;font-weight:600">Алексей Чуб</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#7a7a88">a.chub@example.com</span>
+                <span style="display:inline-flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:oklch(0.75 0.17 150)"><span style="width:6px;height:6px;border-radius:50%;background:oklch(0.75 0.17 150)"></span>email подтверждён</span>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <label style="display:flex;flex-direction:column;gap:6px">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">ТАЙМЗОНА</span>
+                <div style="padding:11px 13px;border-radius:11px;background:#12121a;border:1px solid #1e1e28;font-size:13px">Europe/Moscow (UTC+3)</div>
+              </label>
+              <label style="display:flex;flex-direction:column;gap:6px">
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">ПАРОЛЬ</span>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <div style="flex:1;padding:11px 13px;border-radius:11px;background:#12121a;border:1px solid #1e1e28;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#6a6a78">••••••••••</div>
+                  <button style="all:unset;cursor:pointer;padding:11px 15px;border-radius:11px;border:1px solid #24242e;font-size:12.5px;color:#9a9aa8;transition:background .16s ease,color .16s ease" style-hover="background:#1a1a23;color:#eeeef2">Сменить</button>
+                </div>
+              </label>
+            </div>
+          </section>
+
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isAdmin }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:15px;animation:rise .32s ease both">
+
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:4px;padding:3px;border-radius:11px;background:#12121a;border:1px solid #1e1e28">
+              <sc-for list="{{ admin.tabs }}" as="tb" hint-placeholder-count="6">
+                <button sc-camel-on-click="{{ tb.go }}" style="all:unset;cursor:pointer;padding:8px 13px;border-radius:8px;font-size:13px;transition:background .16s ease,color .16s ease;background:{{ tb.bg }};color:{{ tb.fg }}" style-hover="color:#eeeef2">{{ tb.label }}</button>
+              </sc-for>
+            </div>
+            <span style="margin-left:auto;display:inline-flex;align-items:center;gap:7px;padding:7px 12px;border-radius:99px;background:rgba(196,132,252,.10);border:1px solid rgba(196,132,252,.3);font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.1em;color:oklch(0.79 0.14 305)">СЛУЖЕБНЫЙ РЕЖИМ</span>
+          </div>
+
+          <sc-if value="{{ impersonating }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:13px 16px;border-radius:14px;background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.3)">
+              <span style="font-size:13.5px;color:#eeeef2">Вы работаете от имени пользователя {{ impersonating }}</span>
+              <button sc-camel-on-click="{{ stopImpersonate }}" style="all:unset;cursor:pointer;margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.08em;color:#8a8a98;transition:color .16s ease" style-hover="color:#eeeef2">ВЕРНУТЬСЯ В АДМИНА</button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ admin.isOver }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;flex-direction:column;gap:13px">
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:13px">
+                <sc-for list="{{ admin.stats }}" as="st" hint-placeholder-count="4">
+                  <section style="padding:18px 20px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:9px">
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.12em;color:#6a6a78">{{ st.label }}</span>
+                    <span style="font-size:28px;font-weight:600;letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:{{ st.color }}">{{ st.value }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#7a7a88">{{ st.sub }}</span>
+                  </section>
+                </sc-for>
+              </div>
+
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:13px">
+                <section style="padding:20px 22px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:14px">
+                  <h2 style="margin:0;font-size:15px;font-weight:600">Инциденты</h2>
+                  <sc-for list="{{ admin.incidents }}" as="inc" hint-placeholder-count="4">
+                    <div style="display:flex;align-items:baseline;gap:11px;padding-bottom:11px;border-bottom:1px solid #16161e">
+                      <span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ inc.color }}"></span>
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#7a7a88;flex:none">{{ inc.time }}</span>
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5f5f6e;flex:none">{{ inc.source }}</span>
+                      <span style="font-size:13px;color:#c8c8d4;min-width:0">{{ inc.text }}</span>
+                    </div>
+                  </sc-for>
+                </section>
+
+                <section style="padding:20px 22px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:15px">
+                  <h2 style="margin:0;font-size:15px;font-weight:600">Очередь по каналам</h2>
+                  <sc-for list="{{ admin.queueLoad }}" as="q" hint-placeholder-count="3">
+                    <div style="display:flex;flex-direction:column;gap:8px">
+                      <div style="display:flex;align-items:baseline;gap:10px">
+                        <span style="font-size:13.5px;color:{{ q.color }}">{{ q.name }}</span>
+                        <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#eeeef2">{{ q.count }}</span>
+                        <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">{{ q.pct }}</span>
+                      </div>
+                      <div style="height:5px;border-radius:99px;background:#1a1a23;overflow:hidden">
+                        <div style="height:100%;border-radius:99px;transform-origin:left;animation:grow .8s cubic-bezier(.2,.8,.2,1);background:{{ q.color }};width:{{ q.pct }}"></div>
+                      </div>
+                    </div>
+                  </sc-for>
+                </section>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ admin.isUsers }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:13px">
+              <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:13px 14px;border-radius:14px;background:#0e0e14;border:1px solid #1a1a23">
+                <div style="display:flex;align-items:center;gap:9px;flex:1;min-width:220px;padding:9px 13px;border-radius:11px;background:#12121a;border:1px solid #1e1e28">
+                  <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="#5f5f6e" stroke-width="2" style="flex:none"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+                  <input value="{{ admin.userQuery }}" sc-camel-on-change="{{ admin.onUserQuery }}" placeholder="Поиск по имени или email" style="all:unset;flex:1;min-width:0;font-size:13px;color:#eeeef2">
+                </div>
+                <sc-for list="{{ admin.userFilters }}" as="fg" hint-placeholder-count="2">
+                  <div style="display:flex;align-items:center;gap:4px;padding:3px;border-radius:11px;background:#12121a;border:1px solid #1e1e28">
+                    <sc-for list="{{ fg.options }}" as="o" hint-placeholder-count="4">
+                      <button sc-camel-on-click="{{ o.pick }}" style="all:unset;cursor:pointer;padding:7px 11px;border-radius:8px;font-size:12.5px;transition:background .16s ease,color .16s ease;background:{{ o.bg }};color:{{ o.fg }}" style-hover="color:#eeeef2">{{ o.label }}</button>
+                    </sc-for>
+                  </div>
+                </sc-for>
+                <sc-if value="{{ admin.usersDirty }}" hint-placeholder-val="{{ false }}">
+                  <button sc-camel-on-click="{{ admin.resetUsers }}" style="all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:7px;padding:0 4px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;color:#6a6a78;transition:color .16s ease" style-hover="color:#eeeef2">
+                    <span style="width:16px;height:16px;border-radius:50%;border:1px solid #2a2a34;display:grid;place-items:center;font-size:10px;line-height:1">×</span>
+                    СБРОСИТЬ
+                  </button>
+                </sc-if>
+              </div>
+
+              <div style="display:flex;align-items:center;gap:10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78;padding:0 4px">
+                <span>{{ admin.usersCount }}</span>
+                <span style="flex:1;height:1px;background:#16161e"></span>
+              </div>
+
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <sc-for list="{{ admin.users }}" as="u" hint-placeholder-count="6">
+                  <section style="border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;overflow:hidden">
+                    <div style="display:flex;align-items:center;gap:13px;flex-wrap:wrap;padding:15px 18px">
+                      <span style="width:32px;height:32px;border-radius:10px;flex:none;display:grid;place-items:center;font-size:12px;font-weight:600;color:#9a9aaa;background:#16161e">{{ u.initials }}</span>
+                      <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
+                        <span style="font-size:14px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ u.name }}</span>
+                        <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">{{ u.email }}</span>
+                      </div>
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.08em;padding:5px 10px;border-radius:7px;color:{{ u.planFg }};background:{{ u.planBg }}">{{ u.plan }}</span>
+                      <div style="display:flex;flex-direction:column;gap:6px;width:150px;flex:none">
+                        <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8a8a98">{{ u.usage }}</span>
+                        <div style="height:4px;border-radius:99px;background:#1a1a23;overflow:hidden">
+                          <div style="height:100%;border-radius:99px;background:{{ u.usageColor }};width:{{ u.usagePct }}"></div>
+                        </div>
+                      </div>
+                      <span style="display:inline-flex;align-items:center;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ u.color }}">
+                        <span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ u.color }}"></span>{{ u.status }}
+                      </span>
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5f5f6e">с {{ u.since }}</span>
+                      <button sc-camel-on-click="{{ u.toggleOpen }}" style="all:unset;cursor:pointer;margin-left:auto;padding:7px 13px;border-radius:9px;border:1px solid #24242e;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.08em;color:#8a8a98;transition:background .16s ease,color .16s ease" style-hover="background:#1a1a23;color:#eeeef2">{{ u.openLabel }}</button>
+                    </div>
+
+                    <sc-if value="{{ u.open }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;flex-wrap:wrap;gap:22px;align-items:flex-end;padding:16px 18px;border-top:1px solid #1c1c25;background:#0f0f16;animation:rise .22s ease both">
+                        <div style="display:flex;flex-direction:column;gap:8px">
+                          <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">ТАРИФ</span>
+                          <div style="display:flex;align-items:center;gap:4px;padding:3px;border-radius:11px;background:#12121a;border:1px solid #1e1e28">
+                            <sc-for list="{{ u.plans }}" as="p" hint-placeholder-count="3">
+                              <button sc-camel-on-click="{{ p.pick }}" style="all:unset;cursor:pointer;padding:7px 13px;border-radius:8px;font-size:12.5px;transition:background .16s ease,color .16s ease;background:{{ p.bg }};color:{{ p.fg }}" style-hover="color:#eeeef2">{{ p.label }}</button>
+                            </sc-for>
+                          </div>
+                        </div>
+
+                        <div style="display:flex;flex-direction:column;gap:8px">
+                          <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">ЛИМИТЫ И ПОДПИСКА</span>
+                          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                            <button sc-camel-on-click="{{ u.addBonus }}" style="all:unset;cursor:pointer;padding:9px 13px;border-radius:10px;border:1px dashed #2a2a34;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8a8a98;transition:border-color .16s ease,color .16s ease" style-hover="border-color:rgba(196,132,252,.5);color:#eeeef2">+1000 ОТПРАВОК</button>
+                            <button sc-camel-on-click="{{ u.extend }}" style="all:unset;cursor:pointer;padding:9px 13px;border-radius:10px;border:1px dashed #2a2a34;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8a8a98;transition:border-color .16s ease,color .16s ease" style-hover="border-color:rgba(196,132,252,.5);color:#eeeef2">+30 ДНЕЙ</button>
+                            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:oklch(0.79 0.14 305)">{{ u.bonusLabel }}</span>
+                            <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#7a7a88">{{ u.extendLabel }}</span>
+                          </div>
+                        </div>
+
+                        <div style="display:flex;gap:9px;flex-wrap:wrap;margin-left:auto">
+                          <button sc-camel-on-click="{{ u.impersonate }}" style="all:unset;cursor:pointer;padding:10px 15px;border-radius:10px;border:1px solid #24242e;font-size:12.5px;color:#c8c8d4;transition:background .16s ease" style-hover="background:#1a1a23">Зайти под пользователем</button>
+                          <button sc-camel-on-click="{{ u.toggleBlock }}" style="all:unset;cursor:pointer;padding:10px 15px;border-radius:10px;border:1px solid #24242e;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.08em;transition:background .16s ease;color:{{ u.blockColor }}" style-hover="background:#1a1a23">{{ u.blockLabel }}</button>
+                        </div>
+                      </div>
+                    </sc-if>
+                  </section>
+                </sc-for>
+                <sc-if value="{{ admin.usersEmpty }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:48px 20px;text-align:center;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;font-size:14px;color:#8a8a98">Пользователи не найдены</div>
+                </sc-if>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ admin.isWorkers }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <sc-for list="{{ admin.workers }}" as="w" hint-placeholder-count="6">
+                <section style="border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;overflow:hidden">
+                  <div style="display:flex;align-items:center;gap:13px;flex-wrap:wrap;padding:15px 18px">
+                    <span style="display:inline-flex;color:{{ w.color }};flex:none">
+                      <sc-if value="{{ w.isTG }}" hint-placeholder-val="{{ true }}"><svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M22 3 1.6 11.2c-.9.4-.9 1.1.1 1.4l5.2 1.6 2 6.1c.2.7.6.8 1.1.3l2.9-2.7 5.3 3.9c.9.5 1.5.2 1.7-.9L23.4 4.3c.3-1.3-.4-1.8-1.4-1.3ZM8 13.6l11.2-7c.5-.3 1-.2.6.2l-9.4 8.5-.4 4L8 13.6Z"></path></svg></sc-if>
+                      <sc-if value="{{ w.isWA }}" hint-placeholder-val="{{ false }}"><svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 2a8 8 0 1 1-4.1 14.8l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 0 1 12 4Zm-3.4 4.3c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.7 2.8 4.3 3.8 2.1.8 2.6.7 3 .6.5 0 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3l-1.9-.9c-.3-.1-.5-.1-.6.1l-.8 1c-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.8-.7-1.4-1.6-1.6-1.9-.1-.3 0-.4.1-.5l.4-.5c.2-.2.2-.3.3-.5V10l-.9-2c-.2-.5-.4-.5-.6-.5h-.6Z"></path></svg></sc-if>
+                      <sc-if value="{{ w.isMAX }}" hint-placeholder-val="{{ false }}"><svg width="15" height="15" sc-camel-view-box="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 1.6a10.4 10.4 0 0 1 0 20.8c-2.1 0-4-.6-5.6-1.6l-3.2 1.1c-.8.3-1.5-.4-1.2-1.2l1.1-3.2A10.3 10.3 0 0 1 1.6 12 10.4 10.4 0 0 1 12 1.6Zm0 5.9a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"></path></svg></sc-if>
+                    </span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:#eeeef2">{{ w.id }}</span>
+                    <span style="font-size:13px;color:#8a8a98">{{ w.owner }}</span>
+                    <span style="display:inline-flex;align-items:center;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ w.statusColor }}">
+                      <span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ w.statusColor }};animation:{{ w.anim }}"></span>{{ w.status }}
+                    </span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">uptime {{ w.uptime }}</span>
+                    <sc-if value="{{ w.hasErr }}" hint-placeholder-val="{{ false }}">
+                      <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:oklch(0.7 0.19 25);min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ w.err }}</span>
+                    </sc-if>
+                    <button sc-camel-on-click="{{ w.toggleLog }}" style="all:unset;cursor:pointer;margin-left:auto;padding:7px 13px;border-radius:9px;border:1px solid #24242e;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.08em;color:#8a8a98;transition:background .16s ease,color .16s ease" style-hover="background:#1a1a23;color:#eeeef2">{{ w.openLabel }}</button>
+                  </div>
+                  <sc-if value="{{ w.open }}" hint-placeholder-val="{{ false }}">
+                    <div style="padding:14px 18px 16px;border-top:1px solid #1c1c25;background:#0a0a0f;display:flex;flex-direction:column;gap:5px">
+                      <div style="display:flex;align-items:center;gap:9px;padding-bottom:8px">
+                        <span style="width:6px;height:6px;border-radius:50%;background:oklch(0.75 0.17 150);animation:pulse 1.6s ease-in-out infinite"></span>
+                        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:.12em;color:#6a6a78">ЖИВОЙ ПОТОК · {{ w.id }}</span>
+                      </div>
+                      <sc-for list="{{ w.stream }}" as="ln" hint-placeholder-count="10">
+                        <div style="display:flex;align-items:baseline;gap:11px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.7">
+                          <span style="color:#4e4e5c;flex:none">{{ ln.time }}</span>
+                          <span style="flex:none;width:46px;color:{{ ln.color }}">{{ ln.level }}</span>
+                          <span style="color:#a8a8b6;min-width:0;word-break:break-word">{{ ln.text }}</span>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </section>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ admin.isQueue }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <sc-for list="{{ admin.queue }}" as="q" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;gap:13px;flex-wrap:wrap;padding:14px 18px;border-radius:14px;background:#0e0e14;border:1px solid #1a1a23;border-left:2px solid {{ q.statusColor }}">
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5f5f6e;flex:none">task_{{ q.id }}</span>
+                  <span style="display:inline-flex;color:{{ q.color }};flex:none">
+                    <sc-if value="{{ q.isTG }}" hint-placeholder-val="{{ true }}"><svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M22 3 1.6 11.2c-.9.4-.9 1.1.1 1.4l5.2 1.6 2 6.1c.2.7.6.8 1.1.3l2.9-2.7 5.3 3.9c.9.5 1.5.2 1.7-.9L23.4 4.3c.3-1.3-.4-1.8-1.4-1.3ZM8 13.6l11.2-7c.5-.3 1-.2.6.2l-9.4 8.5-.4 4L8 13.6Z"></path></svg></sc-if>
+                    <sc-if value="{{ q.isWA }}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 2a8 8 0 1 1-4.1 14.8l-.3-.2-2.9.8.8-2.8-.2-.3A8 8 0 0 1 12 4Zm-3.4 4.3c-.2 0-.5.1-.7.4-.3.3-.9.9-.9 2.1s.9 2.4 1 2.6c.1.2 1.7 2.8 4.3 3.8 2.1.8 2.6.7 3 .6.5 0 1.5-.6 1.7-1.2.2-.6.2-1.1.2-1.2-.1-.1-.3-.2-.5-.3l-1.9-.9c-.3-.1-.5-.1-.6.1l-.8 1c-.2.2-.3.2-.6.1-.3-.2-1.2-.5-2.3-1.4-.8-.7-1.4-1.6-1.6-1.9-.1-.3 0-.4.1-.5l.4-.5c.2-.2.2-.3.3-.5V10l-.9-2c-.2-.5-.4-.5-.6-.5h-.6Z"></path></svg></sc-if>
+                    <sc-if value="{{ q.isMAX }}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" sc-camel-view-box="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 1.6a10.4 10.4 0 0 1 0 20.8c-2.1 0-4-.6-5.6-1.6l-3.2 1.1c-.8.3-1.5-.4-1.2-1.2l1.1-3.2A10.3 10.3 0 0 1 1.6 12 10.4 10.4 0 0 1 12 1.6Zm0 5.9a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9Z"></path></svg></sc-if>
+                  </span>
+                  <span style="font-size:13.5px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ q.ad }}</span>
+                  <span style="font-size:12.5px;color:#8a8a98">{{ q.user }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ q.statusColor }}">{{ q.status }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78">{{ q.next }}</span>
+                  <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5f5f6e">retry {{ q.retries }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ admin.isLogs }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:13px">
+              <div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:13px 14px;border-radius:14px;background:#0e0e14;border:1px solid #1a1a23">
+                <div style="display:flex;align-items:center;gap:9px;flex:1;min-width:220px;padding:9px 13px;border-radius:11px;background:#12121a;border:1px solid #1e1e28">
+                  <svg width="14" height="14" sc-camel-view-box="0 0 24 24" fill="none" stroke="#5f5f6e" stroke-width="2" style="flex:none"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+                  <input value="{{ admin.logQuery }}" sc-camel-on-change="{{ admin.onLogQuery }}" placeholder="Поиск по источнику и тексту" style="all:unset;flex:1;min-width:0;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#eeeef2">
+                </div>
+                <div style="display:flex;align-items:center;gap:4px;padding:3px;border-radius:11px;background:#12121a;border:1px solid #1e1e28">
+                  <sc-for list="{{ admin.logLevels }}" as="o" hint-placeholder-count="4">
+                    <button sc-camel-on-click="{{ o.pick }}" style="all:unset;cursor:pointer;padding:7px 11px;border-radius:8px;font-size:12.5px;transition:background .16s ease,color .16s ease;background:{{ o.bg }};color:{{ o.fg }}" style-hover="color:#eeeef2">{{ o.label }}</button>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <sc-for list="{{ admin.logs }}" as="l" hint-placeholder-count="8">
+                  <div style="display:flex;align-items:baseline;gap:12px;padding:12px 16px;border-radius:12px;background:#0e0e14;border:1px solid #1a1a23">
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#5f5f6e;flex:none">{{ l.time }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;padding:4px 8px;border-radius:6px;flex:none;color:{{ l.color }};background:{{ l.bg }}">{{ l.level }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#7a7a88;flex:none">{{ l.source }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#a8a8b6;min-width:0;word-break:break-word">{{ l.text }}</span>
+                  </div>
+                </sc-for>
+                <sc-if value="{{ admin.logsEmpty }}" hint-placeholder-val="{{ false }}">
+                  <div style="padding:48px 20px;text-align:center;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;font-size:14px;color:#8a8a98">Записи не найдены</div>
+                </sc-if>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ admin.isPay }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:13px">
+              <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:13px">
+                <section style="padding:18px 20px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:8px">
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.12em;color:#6a6a78">MRR</span>
+                  <span style="font-size:26px;font-weight:600;letter-spacing:-.03em">{{ admin.mrr }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:oklch(0.75 0.17 150)">{{ admin.mrrDelta }}</span>
+                </section>
+                <section style="padding:18px 20px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:8px">
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.12em;color:#6a6a78">ARPU</span>
+                  <span style="font-size:26px;font-weight:600;letter-spacing:-.03em">{{ admin.arpu }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#7a7a88">на платящего</span>
+                </section>
+                <section style="padding:18px 20px;border-radius:16px;background:#0e0e14;border:1px solid #1a1a23;display:flex;flex-direction:column;gap:8px">
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.12em;color:#6a6a78">ОТТОК</span>
+                  <span style="font-size:26px;font-weight:600;letter-spacing:-.03em">{{ admin.churn }}</span>
+                  <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#7a7a88">за месяц</span>
+                </section>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <sc-for list="{{ admin.payments }}" as="p" hint-placeholder-count="5">
+                  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:14px 18px;border-radius:14px;background:#0e0e14;border:1px solid #1a1a23">
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6a6a78;flex:none">{{ p.date }}</span>
+                    <span style="font-size:13.5px;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.user }}</span>
+                    <span style="font-size:12.5px;color:#8a8a98">{{ p.what }}</span>
+                    <span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:13px;color:#eeeef2;font-variant-numeric:tabular-nums">{{ p.sum }}</span>
+                    <span style="display:inline-flex;align-items:center;gap:7px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ p.color }}">
+                      <span style="width:6px;height:6px;border-radius:50%;flex:none;background:{{ p.color }}"></span>{{ p.status }}
+                    </span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+    </div>
+  </main>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script="">
+const A = "oklch(0.72 0.19 310)";
+const GREEN = "oklch(0.75 0.17 150)";
+const AMBER = "oklch(0.80 0.15 85)";
+const RED = "oklch(0.68 0.19 25)";
+const BLUE = "oklch(0.72 0.16 250)";
+
+const MESS = {
+  TG: { color: BLUE, bg: "rgba(96,165,250,.12)", isTG: true, isWA: false, isMAX: false },
+  WA: { color: GREEN, bg: "rgba(74,222,128,.12)", isTG: false, isWA: true, isMAX: false },
+  MAX: { color: A, bg: "rgba(196,132,252,.12)", isTG: false, isWA: false, isMAX: true },
+};
+
+const MESS_BY_AD = {
+  "Скидки на курсы Python": "TG",
+  "Вакансия: backend-разработчик": "TG",
+  "Курсы английского онлайн": "TG",
+  "Аренда 2-к, Хамовники": "WA",
+  "Вечерний дайджест": "WA",
+  "Доставка обедов в офис": "MAX",
+};
+
+const FEED_POOL = [
+  ["Отправлено в «Барахолка СПб»", GREEN],
+  ["WA-воркер #3 переподключён", AMBER],
+  ["Отправлено в «Работа Москва»", GREEN],
+  ["Новое расписание активировано", A],
+  ["Отправлено в «IT вакансии»", GREEN],
+  ["Группа синхронизирована · MAX", BLUE],
+  ["Flood-wait 40s · Telegram", AMBER],
+  ["Отправлено в «Аренда квартир»", GREEN],
+  ["Объявление обновлено", A],
+  ["Ошибка доставки · чат недоступен", RED],
+];
+
+class Component extends DCLogic {
+  state = {
+    screen: "dash",
+    t: 0,
+    groupsOn: [true, true, false, true, true, true, false, true],
+    schedOn: [true, true, false, true],
+    prefsOn: [true, true, false, true],
+    feedSeed: 0,
+    query: "",
+    filters: { status: "all", mess: "all", period: "today" },
+    copied: null,
+    adQuery: "",
+    schedQuery: "",
+    adminTab: "over",
+    adminUserQuery: "",
+    adminUserFilters: { plan: "all", status: "all" },
+    adminPlans: {},
+    adminBlocked: {},
+    adminBonus: {},
+    adminExtended: {},
+    adminOpenUser: null,
+    adminLogWorker: null,
+    adminLogQuery: "",
+    adminLogLevel: "all",
+    impersonating: null,
+    schedFilters: { state: "all", mess: "all" },
+    editing: null,
+    ed: null,
+    account: null,
+    acctGroups: [],
+    syncingAll: false,
+  };
+
+  openEditor(ad) {
+    this.setState({
+      screen: "editor",
+      editing: ad ? ad.title : null,
+      ed: {
+        title: ad ? ad.title : "",
+        body: ad ? ad.body : "",
+        media: ad ? ["photo_01.jpg"] : [],
+        channels: ad ? [MESS_BY_AD[ad.title] || "TG"] : ["TG"],
+        groups: ad ? [0, 2] : [],
+        days: [0, 1, 2, 3, 4],
+        times: ["10:00", "18:00"],
+        scheds: ad
+          ? [{ account: 0, groups: [0, 2], days: [0, 1, 2, 3, 4], times: ["10:00", "18:00"], active: true, saved: true }]
+          : [],
+        schedOpen: null,
+      },
+    });
+  }
+  plural(n, one, few, many) {
+    const m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return n + " " + one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return n + " " + few;
+    return n + " " + many;
+  }
+  setSchedAt(i, patch) {
+    this.setState(s => ({ ed: { ...s.ed, scheds: s.ed.scheds.map((x, j) => (j === i ? { ...x, ...patch } : x)) } }));
+  }
+  toggleSchedIn(i, key, v) {
+    this.setState(s => ({
+      ed: {
+        ...s.ed,
+        scheds: s.ed.scheds.map((x, j) => {
+          if (j !== i) return x;
+          const arr = x[key];
+          return { ...x, [key]: arr.includes(v) ? arr.filter(y => y !== v) : arr.concat(v) };
+        }),
+      },
+    }));
+  }
+  addSched() {
+    this.setState(s => ({
+      ed: {
+        ...s.ed,
+        scheds: s.ed.scheds.concat({ account: 0, groups: [], days: [0, 1, 2, 3, 4], times: ["10:00"], active: true, saved: false }),
+        schedOpen: s.ed.scheds.length,
+      },
+    }));
+  }
+  removeSched(i) {
+    this.setState(s => ({ ed: { ...s.ed, scheds: s.ed.scheds.filter((_, j) => j !== i), schedOpen: null } }));
+  }
+  openAccount(a) {
+    this.setState({
+      screen: "account",
+      account: a,
+      acctGroups: [
+        ["Барахолка СПб", "БС", "12 480", "2 мин назад", true],
+        ["Работа Москва", "РМ", "34 210", "2 мин назад", true],
+        ["IT вакансии · Junior", "IT", "8 940", "2 мин назад", true],
+        ["Куплю-продам Казань", "КК", "5 610", "18 ч назад", false],
+        ["Фриланс биржа", "ФБ", "3 780", "18 ч назад", true],
+        ["Отдам даром СПб", "ОД", "960", "3 дня назад", false],
+      ].map(([name, initials, members, sync, on]) => ({ name, initials, members, sync, on, syncing: false })),
+      syncingAll: false,
+    });
+  }
+  setAcctGroup(i, patch) {
+    this.setState(s => ({ acctGroups: s.acctGroups.map((g, j) => (j === i ? { ...g, ...patch } : g)) }));
+  }
+  setEd(patch) { this.setState(s => ({ ed: { ...s.ed, ...patch } })); }
+  toggleIn(key, v) {
+    this.setState(s => {
+      const arr = s.ed[key];
+      return { ed: { ...s.ed, [key]: arr.includes(v) ? arr.filter(x => x !== v) : arr.concat(v) } };
+    });
+  }
+
+  componentDidMount() {
+    this.timer = setInterval(() => this.setState(s => ({ t: s.t + 1 })), 1000);
+    this.feedTimer = setInterval(() => this.setState(s => ({ feedSeed: s.feedSeed + 1 })), 3800);
+  }
+  componentWillUnmount() { clearInterval(this.timer); clearInterval(this.feedTimer); }
+
+  toggleAt(key, i) {
+    this.setState(s => { const a = s[key].slice(); a[i] = !a[i]; return { [key]: a }; });
+  }
+
+  sw(on) {
+    return {
+      trackBg: on ? A : "#24242e",
+      knob: on ? "translateX(16px)" : "translateX(0)",
+    };
+  }
+
+  renderVals() {
+    const scr = this.state.screen;
+    const t = this.state.t;
+    const nav = [
+      ["dash", "Дашборд", "12"], ["accounts", "Аккаунты", "5"],
+      ["ads", "Объявления", "6"], ["sched", "Расписания", "4"], ["history", "История", "1.2k"],
+      ["billing", "Тарифы", ""], ["profile", "Профиль", ""],
+    ].map(([id, label, count]) => ({
+      label, count,
+      bg: scr === id ? "#16161f" : "transparent",
+      fg: scr === id ? "#eeeef2" : "#8a8a98",
+      dot: scr === id ? A : "#2a2a34",
+      go: () => this.setState({ screen: id }),
+    }));
+
+    const heads = {
+      dash: ["Дашборд", "Обзор рассылок за последние 7 дней", "Создать объявление"],
+      ads: ["Объявления", "6 из 15 по тарифу Basic", "Новое объявление"],
+      groups: ["Группы", "24 подключённых чата в трёх мессенджерах", "Подключить группу"],
+      sched: ["Расписания", "4 активных сценария рассылки", "Новое расписание"],
+      history: ["История отправок", "Журнал со снапшотами контента", "Экспорт CSV"],
+      accounts: ["Аккаунты мессенджеров", "Per-account воркеры и статус сессий", "Подключить аккаунт"],
+      billing: ["Тарифы", "Лимиты на объявления, группы и отправки", "История платежей"],
+      profile: ["Профиль", "Личные данные и таймзона", "Сохранить"],
+      admin: ["Администрирование", "Служебный раздел · только для операторов сервиса", ""],
+      account: [this.state.account ? this.state.account.name : "Аккаунт",
+        "Группы аккаунта: включение, удаление и повторная синхронизация", "Добавить группу"],
+      editor: [this.state.editing ? "Редактирование объявления" : "Новое объявление",
+        this.state.editing || "Черновик · сохраняется автоматически", "К списку объявлений"],
+    };
+    const [title, subtitle, cta] = heads[scr];
+
+    const d = new Date(Date.now() + t * 0);
+    const clock = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) + " MSK";
+
+    const spark = (seed, color) =>
+      Array.from({ length: 14 }, (_, i) => ({
+        h: (24 + ((Math.sin(i * 1.7 + seed) + 1) * 34)).toFixed(0) + "%",
+        color: i > 10 ? color : "#22222c",
+      }));
+
+    const sent = 1284 + (t % 7);
+    const stats = [
+      { label: "ОТПРАВЛЕНО СЕГОДНЯ", value: sent.toLocaleString("ru-RU"), delta: "+18%", deltaColor: GREEN, spark: spark(0, A) },
+      { label: "УСПЕШНОСТЬ", value: "97,4%", delta: "+0,6", deltaColor: GREEN, spark: spark(2, GREEN) },
+      { label: "В ОЧЕРЕДИ", value: String(42 - (t % 9)), delta: "", deltaColor: "#6a6a78", spark: spark(4, AMBER) },
+      { label: "ОШИБОК ЗА СУТКИ", value: "31", delta: "−12", deltaColor: GREEN, spark: spark(6, RED) },
+    ];
+
+    const upcoming = [
+      ["10:00", "Скидки на курсы Python", "8 групп · Telegram", "TG"],
+      ["10:30", "Аренда 2-к, Хамовники", "3 группы · WhatsApp", "WA"],
+      ["12:00", "Вакансия: backend-разработчик", "11 групп · Telegram", "TG"],
+      ["14:15", "Доставка обедов в офис", "5 групп · MAX", "MAX"],
+      ["18:00", "Вечерний дайджест барахолки", "6 групп · WhatsApp", "WA"],
+    ].map(([time, ad, groups, m]) => ({ time, ad, groups, mess: m, ...MESS[m] }));
+
+    const off = this.state.feedSeed;
+    const feed = Array.from({ length: 6 }, (_, i) => {
+      const [text, color] = FEED_POOL[(off + i) % FEED_POOL.length];
+      return { text, color, ago: i === 0 ? "сейчас" : i * 14 + " сек" };
+    });
+
+    const chart = Array.from({ length: 28 }, (_, i) => {
+      const v = (Math.sin(i * 0.55) + 1) / 2 * 0.7 + (i % 4 === 0 ? 0.22 : 0.06);
+      return { h: Math.min(100, v * 100).toFixed(0) + "%", color: i >= 24 ? A : "#1f1f2a" };
+    });
+
+    const ads = [
+      ["Скидки на курсы Python", "Обучение с нуля до junior за 6 месяцев. Помощь с трудоустройством, рассрочка без переплат.", "обновлено 2 ч назад", "активно", GREEN, [["TG", 8]]],
+      ["Аренда 2-к, Хамовники", "Тихий двор, 5 минут до метро, мебель и техника. Только длительный срок, без комиссии.", "обновлено вчера", "активно", GREEN, [["WA", 3], ["MAX", 2]]],
+      ["Вакансия: backend-разработчик", "Python/FastAPI, удалёнка, вилка 250–350к. Асинхронный стек, команда из 12 человек.", "обновлено 3 дня назад", "активно", GREEN, [["TG", 11], ["WA", 4], ["MAX", 3]]],
+      ["Доставка обедов в офис", "От 20 порций, доставим к 13:00. Меню на неделю вперёд, оплата по счёту.", "черновик", "черновик", "#7a7a88", [["MAX", 5]]],
+      ["Вечерний дайджест барахолки", "Подборка объявлений дня. Только проверенные продавцы и актуальные цены.", "на паузе", "пауза", AMBER, [["WA", 6], ["TG", 2]]],
+      ["Курсы английского онлайн", "Разговорные группы до 6 человек, преподаватели-носители, первое занятие бесплатно.", "обновлено 5 дней назад", "активно", GREEN, [["TG", 4]]],
+    ].map(([title, body, meta, status, color, chans]) => ({
+      title, body, status, color,
+      meta: chans.reduce((n, c) => n + c[1], 0) + " групп",
+      channels: chans.map(([m, count]) => ({
+        ...MESS[m], count, title: m + " · " + count + " групп",
+      })),
+      edit: () => this.openEditor({ title, body }),
+    }));
+
+    const aq = this.state.adQuery.trim().toLowerCase();
+    const adsFiltered = aq
+      ? ads.filter(a => (a.title + " " + a.body + " " + a.meta).toLowerCase().includes(aq))
+      : ads;
+
+    const groups = [
+      ["Барахолка СПб", "БС", "TG", "12 480"], ["Работа Москва", "РМ", "TG", "34 210"],
+      ["IT вакансии · Junior", "IT", "TG", "8 940"], ["Аренда квартир МСК", "АК", "WA", "1 120"],
+      ["Отдам даром СПб", "ОД", "WA", "960"], ["Мамы Хамовники", "МХ", "MAX", "2 340"],
+      ["Куплю-продам Казань", "КК", "TG", "5 610"], ["Фриланс биржа", "ФБ", "MAX", "3 780"],
+    ].map(([name, initials, m, members], i) => ({
+      name, initials, members, mess: m, ...MESS[m],
+      ...this.sw(this.state.groupsOn[i]),
+      toggle: () => this.toggleAt("groupsOn", i),
+    }));
+
+    const DAYS = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"];
+
+    const ACCOUNT_ROWS = [
+      ["Основной Telegram", "TG", "+7 916 ••• 42 18"], ["Резервный Telegram", "TG", "+7 903 ••• 77 05"],
+      ["WhatsApp Бизнес", "WA", "+7 925 ••• 31 90"], ["WhatsApp Личный", "WA", "+7 999 ••• 08 44"],
+      ["MAX аккаунт", "MAX", "+7 916 ••• 42 18"],
+    ];
+
+    const GROUP_ROWS = [
+      ["Барахолка СПб", "TG", "12 480"], ["Работа Москва", "TG", "34 210"],
+      ["IT вакансии · Junior", "TG", "8 940"], ["Аренда квартир МСК", "WA", "1 120"],
+      ["Отдам даром СПб", "WA", "960"], ["Мамы Хамовники", "MAX", "2 340"],
+      ["Куплю-продам Казань", "TG", "5 610"], ["Фриланс биржа", "MAX", "3 780"],
+    ];
+
+    let ed = null;
+    const e = this.state.ed;
+    if (e) {
+      const allOn = e.groups.length === GROUP_ROWS.length;
+      const reach = e.groups.reduce((n, i) => n + parseInt(GROUP_ROWS[i][2].replace(/\s/g, ""), 10), 0);
+      const primary = e.channels[0] || "TG";
+      ed = {
+        title: e.title, body: e.body,
+        idLabel: this.state.editing ? "ad_" + (e.title.length * 7 + 1024) : "новый черновик",
+        isEdit: !!this.state.editing,
+        saveLabel: this.state.editing ? "Сохранить" : "Создать объявление",
+        onTitle: ev => this.setEd({ title: ev.target.value }),
+        onBody: ev => this.setEd({ body: ev.target.value }),
+        lenLabel: e.body.length + " / 4096",
+        lenColor: e.body.length > 4096 ? RED : "#6a6a78",
+        media: e.media.map((label, i) => ({ label, remove: () => this.setEd({ media: e.media.filter((_, j) => j !== i) }) })),
+        hasMedia: e.media.length > 0,
+        addMedia: () => this.setEd({ media: e.media.concat("photo_0" + (e.media.length + 1) + ".jpg") }),
+        channels: ["TG", "WA", "MAX"].map(c => {
+          const on = e.channels.includes(c);
+          return {
+            label: c, ...MESS[c],
+            fg: on ? MESS[c].color : "#7a7a88",
+            bg: on ? MESS[c].bg : "#12121a",
+            bd: on ? MESS[c].color : "#1e1e28",
+            toggle: () => this.toggleIn("channels", c),
+          };
+        }),
+        groups: GROUP_ROWS.map(([name, m, members], i) => {
+          const on = e.groups.includes(i);
+          return {
+            name, members, ...MESS[m],
+            check: on ? "✓" : "",
+            boxBg: on ? A : "transparent",
+            boxBd: on ? A : "#2a2a34",
+            fg: on ? "#eeeef2" : "#8a8a98",
+            toggle: () => this.toggleIn("groups", i),
+          };
+        }),
+        groupsLabel: e.groups.length + " из " + GROUP_ROWS.length,
+        allLabel: allOn ? "СНЯТЬ ВСЕ" : "ВЫБРАТЬ ВСЕ",
+        toggleAllGroups: () => this.setEd({ groups: allOn ? [] : GROUP_ROWS.map((_, i) => i) }),
+        days: DAYS.map((label, i) => {
+          const on = e.days.includes(i);
+          return {
+            label,
+            fg: on ? "#eeeef2" : "#5f5f6e",
+            bg: on ? "rgba(196,132,252,.14)" : "#12121a",
+            bd: on ? "rgba(196,132,252,.35)" : "#1c1c25",
+            toggle: () => this.toggleIn("days", i),
+          };
+        }),
+        times: e.times.map((label, i) => ({ label, remove: () => this.setEd({ times: e.times.filter((_, j) => j !== i) }) })),
+        addTime: () => this.setEd({ times: e.times.concat(String(9 + e.times.length).padStart(2, "0") + ":30") }),
+        previewTitle: e.title || "Название объявления",
+        previewBody: e.body || "Текст объявления появится здесь по мере набора.",
+        previewChannel: primary,
+        previewColor: MESS[primary].color,
+        scheds: (e.scheds || []).map((sc, si) => {
+          const accMess = ACCOUNT_ROWS[sc.account][1];
+          const pool = GROUP_ROWS.map((g, i) => [g, i]).filter(([g]) => g[1] === accMess);
+          const allOn = pool.length > 0 && pool.every(([, i]) => sc.groups.includes(i));
+          const open = e.schedOpen === si;
+          const sorted = sc.times.slice().sort();
+          return {
+            open, ...MESS[accMess],
+            accName: ACCOUNT_ROWS[sc.account][0],
+            daysLabel: sc.days.length === 7 ? "каждый день"
+              : sc.days.length === 5 && sc.days.every(d => d < 5) ? "будни"
+              : sc.days.length ? sc.days.slice().sort().map(d => DAYS[d]).join(" ") : "дни не выбраны",
+            timesLabel: sorted.length ? sorted.join(" · ") : "время не задано",
+            groupsCount: sc.groups.length ? this.plural(sc.groups.length, "группа", "группы", "групп") : "группы не выбраны",
+            incomplete: !sc.groups.length || !sc.days.length || !sc.times.length,
+            isDraft: !sc.saved,
+            statusLabel: sc.active ? "активно" : "на паузе",
+            statusColor: sc.active ? GREEN : "#6a6a78",
+            toggleOpen: () => this.setEd({ schedOpen: open ? null : si }),
+            openLabel: open ? "СВЕРНУТЬ" : "НАСТРОИТЬ",
+            remove: () => this.removeSched(si),
+            ...this.sw(sc.active),
+            toggleActive: () => this.setSchedAt(si, { active: !sc.active }),
+            accounts: ACCOUNT_ROWS.map(([name, m, phone], i) => {
+              const on = sc.account === i;
+              return {
+                name, phone, ...MESS[m],
+                fg: on ? "#eeeef2" : "#8a8a98",
+                bg: on ? "rgba(196,132,252,.10)" : "#12121a",
+                bd: on ? "rgba(196,132,252,.45)" : "#1e1e28",
+                pick: () => this.setSchedAt(si, { account: i, groups: [] }),
+              };
+            }),
+            groups: pool.map(([[name, m, members], i]) => {
+              const on = sc.groups.includes(i);
+              return {
+                name, members, ...MESS[m],
+                check: on ? "✓" : "",
+                boxBg: on ? A : "transparent",
+                boxBd: on ? A : "#2a2a34",
+                fg: on ? "#eeeef2" : "#8a8a98",
+                toggle: () => this.toggleSchedIn(si, "groups", i),
+              };
+            }),
+            groupsEmpty: pool.length === 0,
+            groupsLabel: sc.groups.length + " из " + pool.length,
+            allLabel: allOn ? "СНЯТЬ ВСЕ" : "ВЫБРАТЬ ВСЕ",
+            toggleAllGroups: () => this.setSchedAt(si, { groups: allOn ? [] : pool.map(([, i]) => i) }),
+            days: DAYS.map((label, i) => {
+              const on = sc.days.includes(i);
+              return {
+                label,
+                fg: on ? "#eeeef2" : "#5f5f6e",
+                bg: on ? "rgba(196,132,252,.14)" : "#12121a",
+                bd: on ? "rgba(196,132,252,.35)" : "#1c1c25",
+                toggle: () => this.toggleSchedIn(si, "days", i),
+              };
+            }),
+            weekdays: () => this.setSchedAt(si, { days: [0, 1, 2, 3, 4] }),
+            everyday: () => this.setSchedAt(si, { days: [0, 1, 2, 3, 4, 5, 6] }),
+            times: sc.times.map((label, i) => ({
+              label,
+              onChange: ev => this.setSchedAt(si, { times: sc.times.map((x, j) => (j === i ? ev.target.value : x)) }),
+              remove: () => this.setSchedAt(si, { times: sc.times.filter((_, j) => j !== i) }),
+            })),
+            addTime: () => this.setSchedAt(si, { times: sc.times.concat(String(9 + sc.times.length).padStart(2, "0") + ":30") }),
+          };
+        }),
+        schedsEmpty: (e.scheds || []).length === 0,
+        schedsLabel: this.plural((e.scheds || []).length, "расписание", "расписания", "расписаний"),
+        addSched: () => this.addSched(),
+        draftNote: !this.state.editing && (e.scheds || []).length > 0,
+        summary: [
+          { k: "Символов в тексте", v: e.body.length || "—", color: "#eeeef2" },
+          { k: "Расписаний", v: (e.scheds || []).length || "—", color: "#eeeef2" },
+          { k: "Вложений", v: e.media.length || "—", color: "#eeeef2" },
+          { k: "Статус", v: this.state.editing ? "черновик" : "новый", color: A },
+        ],
+        save: () => this.setState({ screen: "ads", ed: null, editing: null }),
+        cancel: () => this.setState({ screen: "ads", ed: null, editing: null }),
+      };
+    }
+    const schedules = [
+      ["Скидки на курсы Python", "TG", [0, 1, 2, 3, 4], "10:00 · 18:00", "завтра 10:00", "62%", "23 из 37 отправок"],
+      ["Аренда 2-к, Хамовники", "WA", [0, 2, 4], "10:30", "сегодня 10:30", "40%", "8 из 20 отправок"],
+      ["Доставка обедов в офис", "MAX", [0, 1, 2, 3, 4], "12:00 · 14:15", "на паузе", "15%", "3 из 20 отправок"],
+      ["Вечерний дайджест", "WA", [5, 6], "18:00", "суббота 18:00", "85%", "17 из 20 отправок"],
+    ].map(([ad, m, days, times, next, pct, progress], i) => ({
+      ad, times, next, pct, progress, mess: m, ...MESS[m],
+      days: DAYS.map((label, di) => ({
+        label,
+        fg: days.includes(di) ? "#eeeef2" : "#5f5f6e",
+        bg: days.includes(di) ? "rgba(196,132,252,.14)" : "#12121a",
+        bd: days.includes(di) ? "rgba(196,132,252,.35)" : "#1c1c25",
+      })),
+      on: !!this.state.schedOn[i],
+      ...this.sw(this.state.schedOn[i]),
+      toggle: () => this.toggleAt("schedOn", i),
+    }));
+
+    const sq = this.state.schedQuery.trim().toLowerCase();
+    const sf = this.state.schedFilters;
+    const schedulesFiltered = schedules.filter(s =>
+      (!sq || (s.ad + " " + s.times + " " + s.next).toLowerCase().includes(sq)) &&
+      (sf.mess === "all" || s.mess === sf.mess) &&
+      (sf.state === "all" || (sf.state === "on" ? s.on : !s.on))
+    );
+    const mkSchedGroup = (key, opts) => ({
+      options: opts.map(([val, label]) => ({
+        label,
+        bg: sf[key] === val ? "#1e1e2a" : "transparent",
+        fg: sf[key] === val ? "#eeeef2" : "#7a7a88",
+        pick: () => this.setState(s => ({ schedFilters: { ...s.schedFilters, [key]: val } })),
+      })),
+    });
+    const schedFilterGroups = [
+      mkSchedGroup("state", [["all", "Все"], ["on", "Активные"], ["off", "На паузе"]]),
+      mkSchedGroup("mess", [["all", "Все каналы"], ["TG", "TG"], ["WA", "WA"], ["MAX", "MAX"]]),
+    ];
+
+    const history = [
+      ["09:00:14", "9f3a91c2-04b7-4e21-8d6a-1c7f2b45e908", "Скидки на курсы Python", "Барахолка СПб", "доставлено", GREEN, ""],
+      ["09:00:09", "c1e84d77-2f90-4a3b-b512-6ad0e9f4c331", "Скидки на курсы Python", "IT вакансии · Junior", "доставлено", GREEN, ""],
+      ["08:47:52", "b7d15a03-8c44-4f19-9e7d-30ab61c8d5f2", "Вакансия: backend-разработчик", "Работа Москва", "доставлено", GREEN, ""],
+      ["08:47:31", "6ac2f180-51d3-4bb6-a09c-7e2145d3fa66", "Вакансия: backend-разработчик", "Фриланс биржа", "flood-wait 40s", AMBER,
+        "telethon.errors.FloodWaitError: A wait of 40 seconds is required (caused by SendMessageRequest). Задача возвращена в очередь, retry #2 из 5."],
+      ["08:30:02", "fd433e0a-9b27-4c85-8f31-2d6c07be9147", "Аренда 2-к, Хамовники", "Аренда квартир МСК", "доставлено", GREEN, ""],
+      ["08:15:44", "1a07c6d5-4e83-4d02-97ba-5f18e0a2c7b4", "Вечерний дайджест", "Отдам даром СПб", "чат недоступен", RED,
+        "telethon.errors.ChannelPrivateError: The channel specified is private and you lack permission to access it. Группа отключена от рассылки до повторной проверки."],
+      ["08:00:11", "8e5d92f4-63c1-4a77-b8e5-04d9271fc6a3", "Курсы английского онлайн", "Куплю-продам Казань", "доставлено", GREEN, ""],
+      ["07:45:38", "dc4be215-7a09-4f6c-91d3-8b52e4a0763d", "Доставка обедов в офис", "Мамы Хамовники", "доставлено", GREEN, ""],
+      ["07:30:20", "0f7534ab-2c68-4e91-85df-96a1b307ce42", "Скидки на курсы Python", "Работа Москва", "доставлено", GREEN, ""],
+      ["07:12:05", "3a10d8e6-45f2-4b30-a7c9-6104de85b2f7", "Аренда 2-к, Хамовники", "Отдам даром СПб", "отклонено спам-фильтром", RED,
+        "wa_worker.errors.MessageRejected: message flagged as spam by provider (code 471). Аккаунт WhatsApp Личный переведён в режим прогрева на 6 часов."],
+    ].map(([time, id, ad, group, status, color, error]) => ({
+      time, id, ad, group, status, color, error, hasError: !!error,
+      mess: MESS_BY_AD[ad] || "TG",
+      messColor: MESS[MESS_BY_AD[ad] || "TG"].color,
+      messBg: MESS[MESS_BY_AD[ad] || "TG"].bg,
+      isTG: MESS[MESS_BY_AD[ad] || "TG"].isTG,
+      isWA: MESS[MESS_BY_AD[ad] || "TG"].isWA,
+      isMAX: MESS[MESS_BY_AD[ad] || "TG"].isMAX,
+      ok: color === GREEN,
+      copyLabel: this.state.copied === id ? "скопирован" : "копировать",
+      copy: () => {
+        if (navigator.clipboard) navigator.clipboard.writeText(id);
+        this.setState({ copied: id });
+        setTimeout(() => this.setState(s => (s.copied === id ? { copied: null } : null)), 1600);
+      },
+    }));
+
+    const f = this.state.filters;
+    const filtered = history.filter(h =>
+      (f.status === "all" || (f.status === "ok" ? h.ok : !h.ok)) &&
+      (f.mess === "all" || h.mess === f.mess)
+    );
+
+    const mkGroup = (key, opts) => ({
+      options: opts.map(([val, label]) => ({
+        label,
+        bg: f[key] === val ? "#1e1e2a" : "transparent",
+        fg: f[key] === val ? "#eeeef2" : "#7a7a88",
+        pick: () => this.setState(s => ({ filters: { ...s.filters, [key]: val } })),
+      })),
+    });
+    const filterGroups = [
+      mkGroup("status", [["all", "Все"], ["ok", "Доставлено"], ["err", "С ошибкой"]]),
+      mkGroup("mess", [["all", "Все каналы"], ["TG", "TG"], ["WA", "WA"], ["MAX", "MAX"]]),
+      mkGroup("period", [["today", "Сегодня"], ["7d", "7 дней"], ["30d", "30 дней"]]),
+    ];
+
+    const accounts = [
+      ["Основной Telegram", "TG", "+7 916 ••• 42 18", "онлайн", "telethon-pool-1", "14", "Отключить"],
+      ["Резервный Telegram", "TG", "+7 903 ••• 77 05", "онлайн", "telethon-pool-2", "6", "Отключить"],
+      ["WhatsApp Бизнес", "WA", "+7 925 ••• 31 90", "онлайн", "wa-worker-a19", "3", "Отключить"],
+      ["WhatsApp Личный", "WA", "+7 999 ••• 08 44", "переподключение", "wa-worker-b02", "1", "Показать QR"],
+      ["MAX аккаунт", "MAX", "+7 916 ••• 42 18", "онлайн", "max-worker-c07", "2", "Отключить"],
+    ].map(([name, m, phone, status, container, groups, action]) => ({
+      name, phone, status, container, groups, action, tag: m, ...MESS[m],
+      color: status === "онлайн" ? MESS[m].color : AMBER,
+      anim: status === "онлайн" ? "none" : "pulse 1.4s ease-in-out infinite",
+      open: () => this.openAccount({ name, phone, status, mess: m, color: status === "онлайн" ? MESS[m].color : AMBER, bg: MESS[m].bg, ...MESS[m] }),
+    }));
+
+    const ag = this.state.acctGroups;
+    const A0 = this.state.account;
+    const acc = A0 ? {
+      ...A0,
+      color: A0.status === "онлайн" ? MESS[A0.mess].color : AMBER,
+      lastSync: this.state.syncingAll ? "идёт сейчас" : "12 минут назад",
+      syncLabel: this.state.syncingAll ? "Синхронизация…" : "Синхронизировать всё",
+      syncAnim: this.state.syncingAll ? "orbit 1s linear infinite" : "none",
+      syncAll: () => {
+        this.setState({ syncingAll: true, acctGroups: ag.map(g => ({ ...g, syncing: true })) });
+        setTimeout(() => this.setState(s => ({
+          syncingAll: false,
+          acctGroups: s.acctGroups.map(g => ({ ...g, syncing: false, sync: "только что" })),
+        })), 1600);
+      },
+      back: () => this.setState({ screen: "accounts", account: null }),
+      groupsLabel: ag.filter(g => g.on).length + " активных из " + ag.length + " групп",
+      empty: ag.length === 0,
+      groups: ag.map((g, i) => ({
+        name: g.name, initials: g.initials,
+        ...MESS[A0.mess],
+        sub: g.members + " участников",
+        opacity: g.on ? "1" : ".55",
+        syncText: g.syncing ? "синхронизация" : g.sync,
+        syncColor: g.syncing ? A : (g.sync.includes("дня") ? AMBER : "#6a6a78"),
+        syncAnim: g.syncing ? "pulse 1.2s ease-in-out infinite" : "none",
+        spin: g.syncing ? "orbit 1s linear infinite" : "none",
+        sync: () => {
+          this.setAcctGroup(i, { syncing: true });
+          setTimeout(() => this.setAcctGroup(i, { syncing: false, sync: "только что" }), 1400);
+        },
+        remove: () => this.setState(s => ({ acctGroups: s.acctGroups.filter((_, j) => j !== i) })),
+        toggle: () => this.setAcctGroup(i, { on: !g.on }),
+        ...this.sw(g.on),
+      })),
+    } : null;
+
+    const plans = [
+      { name: "Free", tag: "", price: "0 ₽", period: "/ мес", bd: "#1a1a23", tagFg: "#6a6a78",
+        limits: [["Объявлений", "3"], ["Групп", "5"], ["Отправок в месяц", "300"], ["Аккаунтов", "1"]],
+        cta: "Текущий на старте", btnBg: "transparent", btnFg: "#8a8a98", btnBd: "#24242e" },
+      { name: "Basic", tag: "ВАШ ПЛАН", price: "1 490 ₽", period: "/ мес", bd: "rgba(196,132,252,.45)", tagFg: A,
+        limits: [["Объявлений", "15"], ["Групп", "30"], ["Отправок в месяц", "5 000"], ["Аккаунтов", "5"]],
+        cta: "Продлить", btnBg: A, btnFg: "#0a0a0d", btnBd: A },
+      { name: "Pro", tag: "БЕЗ ЛИМИТОВ", price: "4 900 ₽", period: "/ мес", bd: "#1a1a23", tagFg: GREEN,
+        limits: [["Объявлений", "∞"], ["Групп", "∞"], ["Отправок в месяц", "50 000"], ["Аккаунтов", "20"]],
+        cta: "Перейти на Pro", btnBg: "transparent", btnFg: "#eeeef2", btnBd: "#2e2e3a" },
+    ].map(p => ({ ...p, limits: p.limits.map(([k, v]) => ({ k, v })) }));
+
+    const prefs = [
+      ["Ошибки отправки", "письмо при сбое доставки"],
+      ["Отключение аккаунта", "если сессия мессенджера упала"],
+      ["Еженедельный отчёт", "сводка по понедельникам"],
+      ["Лимиты тарифа", "предупреждение при 80% квоты"],
+    ].map(([label, hint], i) => ({
+      label, hint, ...this.sw(this.state.prefsOn[i]),
+      toggle: () => this.toggleAt("prefsOn", i),
+    }));
+
+    const at = this.state.adminTab;
+    const adminTabs = [
+      ["over", "Обзор"], ["users", "Пользователи"], ["workers", "Воркеры"],
+      ["queue", "Очередь"], ["logs", "Логи"], ["pay", "Платежи"],
+    ].map(([id, label]) => ({
+      label,
+      bg: at === id ? "#1e1e2a" : "transparent",
+      fg: at === id ? "#eeeef2" : "#7a7a88",
+      go: () => this.setState({ adminTab: id }),
+    }));
+
+    const adminStats = [
+      { label: "ПОЛЬЗОВАТЕЛЕЙ", value: "1 284", sub: "+34 за неделю", color: "#eeeef2" },
+      { label: "ПЛАТЯЩИХ", value: "417", sub: "MRR 621 000 ₽", color: GREEN },
+      { label: "ЗАДАЧ В ОЧЕРЕДИ", value: String(842 - (t % 17)), sub: "лаг 12 с", color: AMBER },
+      { label: "ОШИБОК ЗА ЧАС", value: "63", sub: "flood-wait 41", color: RED },
+    ];
+
+    const incidents = [
+      ["11:42", "wa-worker-b02", "Сессия отвалилась, требуется QR", RED],
+      ["11:20", "telethon-pool-3", "FloodWait 300s, очередь придержана", AMBER],
+      ["10:58", "billing", "3 неудачных списания подряд", AMBER],
+      ["09:31", "max-worker-c07", "Восстановлен после рестарта", GREEN],
+    ].map(([time, source, text, color]) => ({ time, source, text, color }));
+
+    const queueLoad = [
+      ["Telegram", "TG", "512", "61%"], ["WhatsApp", "WA", "246", "29%"], ["MAX", "MAX", "84", "10%"],
+    ].map(([name, m, count, pct]) => ({ name, count, pct, ...MESS[m] }));
+
+    const USERS = [
+      ["Алексей Чуб", "chub@example.com", "Basic", 1284, 5000, "активен", "12.03.2026", "5"],
+      ["Марина Соколова", "sokolova@studio.ru", "Pro", 18420, 50000, "активен", "04.11.2025", "12"],
+      ["Иван Петров", "ivan.petrov@mail.ru", "Free", 297, 300, "лимит", "28.07.2026", "1"],
+      ["ООО «Дельта»", "ops@delta-group.ru", "Pro", 41200, 50000, "активен", "19.01.2026", "20"],
+      ["Сергей Кузнецов", "kuznetsov@gmail.com", "Basic", 640, 5000, "заблокирован", "02.05.2026", "3"],
+      ["Ольга Райт", "olga@right.agency", "Basic", 4980, 5000, "активен", "23.06.2026", "4"],
+      ["Дмитрий Лан", "lan@lan.dev", "Free", 88, 300, "активен", "01.08.2026", "1"],
+      ["Кристина Мор", "mor@shop-krd.ru", "Pro", 9310, 50000, "активен", "15.02.2026", "9"],
+    ];
+    const uq = this.state.adminUserQuery.trim().toLowerCase();
+    const au = this.state.adminUserFilters;
+    const adminUsers = USERS.map(([name, email, plan0, used, quota, status0, since, accs], i) => {
+      const plan = this.state.adminPlans[email] || plan0;
+      const blocked = this.state.adminBlocked[email] !== undefined ? this.state.adminBlocked[email] : status0 === "заблокирован";
+      const bonus = this.state.adminBonus[email] || 0;
+      const PLAN_QUOTA = { Free: 300, Basic: 5000, Pro: 50000 };
+      const total = (PLAN_QUOTA[plan] || quota) + bonus;
+      const status = blocked ? "заблокирован" : used >= total ? "лимит" : "активен";
+      const color = blocked ? RED : status === "лимит" ? AMBER : GREEN;
+      const open = this.state.adminOpenUser === email;
+      return {
+        name, email, plan, since, accs, status, color, open, blocked,
+        initials: name.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase(),
+        usage: used.toLocaleString("ru-RU") + " / " + total.toLocaleString("ru-RU"),
+        usagePct: Math.min(100, Math.round((used / total) * 100)) + "%",
+        usageColor: used / total > 0.9 ? AMBER : A,
+        bonusLabel: bonus ? "+" + bonus.toLocaleString("ru-RU") + " бонусных" : "",
+        planBg: plan === "Pro" ? "rgba(74,222,128,.12)" : plan === "Basic" ? "rgba(196,132,252,.12)" : "#16161e",
+        planFg: plan === "Pro" ? GREEN : plan === "Basic" ? A : "#8a8a98",
+        toggleOpen: () => this.setState(s => ({ adminOpenUser: s.adminOpenUser === email ? null : email })),
+        openLabel: open ? "СВЕРНУТЬ" : "УПРАВЛЕНИЕ",
+        blockLabel: blocked ? "РАЗБЛОКИРОВАТЬ" : "ЗАБЛОКИРОВАТЬ",
+        blockColor: blocked ? GREEN : RED,
+        toggleBlock: () => this.setState(s => ({ adminBlocked: { ...s.adminBlocked, [email]: !blocked } })),
+        plans: ["Free", "Basic", "Pro"].map(p => ({
+          label: p,
+          bg: p === plan ? "#1e1e2a" : "transparent",
+          fg: p === plan ? "#eeeef2" : "#7a7a88",
+          pick: () => this.setState(s => ({ adminPlans: { ...s.adminPlans, [email]: p } })),
+        })),
+        addBonus: () => this.setState(s => ({ adminBonus: { ...s.adminBonus, [email]: (s.adminBonus[email] || 0) + 1000 } })),
+        extend: () => this.setState(s => ({ adminExtended: { ...s.adminExtended, [email]: (s.adminExtended[email] || 0) + 30 } })),
+        extendLabel: this.state.adminExtended[email] ? "продлено на " + this.state.adminExtended[email] + " дн." : "",
+        impersonate: () => this.setState({ impersonating: name }),
+      };
+    }).filter(u =>
+      (!uq || (u.name + " " + u.email).toLowerCase().includes(uq)) &&
+      (au.plan === "all" || u.plan === au.plan) &&
+      (au.status === "all" || u.status === au.status)
+    );
+    const mkAdminGroup = (key, opts) => ({
+      options: opts.map(([val, label]) => ({
+        label,
+        bg: au[key] === val ? "#1e1e2a" : "transparent",
+        fg: au[key] === val ? "#eeeef2" : "#7a7a88",
+        pick: () => this.setState(s => ({ adminUserFilters: { ...s.adminUserFilters, [key]: val } })),
+      })),
+    });
+    const adminUserFilters = [
+      mkAdminGroup("plan", [["all", "Все тарифы"], ["Free", "Free"], ["Basic", "Basic"], ["Pro", "Pro"]]),
+      mkAdminGroup("status", [["all", "Все"], ["активен", "Активные"], ["лимит", "Лимит"], ["заблокирован", "Блок"]]),
+    ];
+
+    const WORKERS = [
+      ["telethon-pool-1", "TG", "Алексей Чуб", "онлайн", "18 д 4 ч", "—"],
+      ["telethon-pool-2", "TG", "Алексей Чуб", "онлайн", "18 д 4 ч", "—"],
+      ["telethon-pool-3", "TG", "ООО «Дельта»", "деградация", "2 ч 11 м", "FloodWait 300s"],
+      ["wa-worker-a19", "WA", "Марина Соколова", "онлайн", "6 д 9 ч", "—"],
+      ["wa-worker-b02", "WA", "Алексей Чуб", "офлайн", "—", "Session closed, QR required"],
+      ["max-worker-c07", "MAX", "Кристина Мор", "онлайн", "3 ч 02 м", "—"],
+    ];
+    const adminWorkers = WORKERS.map(([id, m, owner, status, uptime, err]) => ({
+      id, owner, status, uptime, err, hasErr: err !== "—", ...MESS[m],
+      statusColor: status === "онлайн" ? GREEN : status === "деградация" ? AMBER : RED,
+      anim: status === "онлайн" ? "none" : "pulse 1.4s ease-in-out infinite",
+      open: this.state.adminLogWorker === id,
+      openLabel: this.state.adminLogWorker === id ? "СКРЫТЬ ЛОГ" : "ЖИВОЙ ЛОГ",
+      toggleLog: () => this.setState(s => ({ adminLogWorker: s.adminLogWorker === id ? null : id })),
+      stream: Array.from({ length: 10 }, (_, k) => {
+        const n = t - (9 - k);
+        const kinds = [
+          ["INFO", "#8a8a98", "task picked up · ad_1042 → group 118392"],
+          ["INFO", "#8a8a98", "message sent · 214 ms"],
+          ["WARN", AMBER, "rate limit close · sleeping 4s"],
+          ["INFO", "#8a8a98", "heartbeat ok · queue 12"],
+          ["ERROR", RED, "SendMessageRequest failed · retry #2"],
+        ];
+        const kind = kinds[(n + id.length) % kinds.length];
+        const time = new Date(Date.now() - (9 - k) * 1000).toLocaleTimeString("ru-RU", { hour12: false });
+        return { time, level: kind[0], color: kind[1], text: kind[2], key: id + n };
+      }),
+    }));
+
+    const adminQueue = [
+      ["8f21", "Алексей Чуб", "Скидки на курсы Python", "TG", "в работе", "—", "0"],
+      ["8f22", "ООО «Дельта»", "Вакансия: backend-разработчик", "TG", "ожидает", "через 40 с", "2"],
+      ["8f23", "Марина Соколова", "Вечерний дайджест", "WA", "ожидает", "через 3 м", "0"],
+      ["8f24", "Кристина Мор", "Доставка обедов в офис", "MAX", "ретрай", "через 12 м", "4"],
+      ["8f25", "Ольга Райт", "Курсы английского онлайн", "WA", "ошибка", "остановлено", "5"],
+    ].map(([id, user, ad, m, status, next, retries]) => ({
+      id, user, ad, status, next, retries, ...MESS[m],
+      statusColor: status === "ошибка" ? RED : status === "ретрай" ? AMBER : status === "в работе" ? GREEN : "#8a8a98",
+    }));
+
+    const LOGS = [
+      ["11:42:07", "ERROR", "wa-worker-b02", "SessionClosedError: session terminated by provider"],
+      ["11:41:55", "WARN", "telethon-pool-3", "FloodWaitError: wait 300s (SendMessageRequest)"],
+      ["11:40:12", "INFO", "scheduler", "dispatched 128 tasks for window 11:40"],
+      ["11:38:44", "ERROR", "billing", "payment declined · user ops@delta-group.ru · card expired"],
+      ["11:36:02", "INFO", "api", "POST /announcements 201 · 84 ms"],
+      ["11:35:19", "WARN", "max-worker-c07", "slow response 2.4s from provider"],
+      ["11:33:50", "INFO", "scheduler", "schedule 412 paused by user"],
+      ["11:30:41", "ERROR", "telethon-pool-3", "ChannelPrivateError: group 118392 unavailable"],
+    ];
+    const lq = this.state.adminLogQuery.trim().toLowerCase();
+    const ll = this.state.adminLogLevel;
+    const adminLogs = LOGS.map(([time, level, source, text]) => ({
+      time, level, source, text,
+      color: level === "ERROR" ? RED : level === "WARN" ? AMBER : "#6a6a78",
+      bg: level === "ERROR" ? "rgba(248,113,113,.10)" : level === "WARN" ? "rgba(251,191,36,.10)" : "#16161e",
+    })).filter(l =>
+      (ll === "all" || l.level === ll) &&
+      (!lq || (l.source + " " + l.text).toLowerCase().includes(lq))
+    );
+    const adminLogLevels = [["all", "Все"], ["ERROR", "Ошибки"], ["WARN", "Предупреждения"], ["INFO", "Инфо"]].map(([val, label]) => ({
+      label,
+      bg: ll === val ? "#1e1e2a" : "transparent",
+      fg: ll === val ? "#eeeef2" : "#7a7a88",
+      pick: () => this.setState({ adminLogLevel: val }),
+    }));
+
+    const adminPayments = [
+      ["08.08.2026", "Марина Соколова", "Pro · продление", "4 900 ₽", "проведён", GREEN],
+      ["08.08.2026", "Дмитрий Лан", "Basic · первый платёж", "1 490 ₽", "проведён", GREEN],
+      ["07.08.2026", "ООО «Дельта»", "Pro · продление", "4 900 ₽", "проведён", GREEN],
+      ["07.08.2026", "Иван Петров", "Basic · переход", "1 490 ₽", "отклонён", RED],
+      ["06.08.2026", "Ольга Райт", "Basic · продление", "1 490 ₽", "проведён", GREEN],
+    ].map(([date, user, what, sum, status, color]) => ({ date, user, what, sum, status, color }));
+
+    const admin = {
+      tabs: adminTabs,
+      isOver: at === "over", isUsers: at === "users", isWorkers: at === "workers",
+      isQueue: at === "queue", isLogs: at === "logs", isPay: at === "pay",
+      stats: adminStats, incidents, queueLoad,
+      users: adminUsers, userFilters: adminUserFilters,
+      userQuery: this.state.adminUserQuery,
+      onUserQuery: e => this.setState({ adminUserQuery: e.target.value }),
+      usersEmpty: adminUsers.length === 0,
+      usersCount: adminUsers.length + " из " + USERS.length + " · всего в системе 1 284",
+      resetUsers: () => this.setState({ adminUserQuery: "", adminUserFilters: { plan: "all", status: "all" } }),
+      usersDirty: uq.length > 0 || au.plan !== "all" || au.status !== "all",
+      workers: adminWorkers,
+      queue: adminQueue,
+      logs: adminLogs, logLevels: adminLogLevels,
+      logQuery: this.state.adminLogQuery,
+      onLogQuery: e => this.setState({ adminLogQuery: e.target.value }),
+      logsEmpty: adminLogs.length === 0,
+      payments: adminPayments,
+      mrr: "621 000 ₽", mrrDelta: "+4,2% к июлю", arpu: "1 489 ₽", churn: "2,1%",
+    };
+    const impersonating = this.state.impersonating;
+
+    return {
+      nav, title, subtitle, cta, clock, admin, impersonating,
+      stopImpersonate: () => this.setState({ impersonating: null }),
+      isAdmin: scr === "admin",
+      goAdmin: () => this.setState({ screen: "admin" }),
+      adminNavBg: scr === "admin" ? "#1c1523" : "transparent",
+      adminNavFg: scr === "admin" ? "#eeeef2" : "#8a8a98",
+      adminNavDot: scr === "admin" ? A : "#3a2a44",
+      showCta: scr === "ads",
+      quotaLabel: "1 284 / 5 000", quotaPct: "26%",
+      isDash: scr === "dash", isAds: scr === "ads", isGroups: scr === "groups",
+      isSched: scr === "sched", isHistory: scr === "history", isAccounts: scr === "accounts",
+      isBilling: scr === "billing", isProfile: scr === "profile",
+      isEditor: scr === "editor", ed,
+      isAccount: scr === "account", acc,
+      ctaGo: () => {
+        if (scr === "ads") this.openEditor(null);
+        else if (scr === "editor") this.setState({ screen: "ads", ed: null, editing: null });
+      },
+      ads: adsFiltered,
+      adQuery: this.state.adQuery,
+      onAdQuery: e => this.setState({ adQuery: e.target.value }),
+      adQueryDirty: aq.length > 0,
+      resetAdQuery: () => this.setState({ adQuery: "" }),
+      adsEmpty: adsFiltered.length === 0,
+      adsCount: adsFiltered.length + " из " + ads.length,
+      stats, upcoming, feed, chart, groups, accounts, plans, prefs,
+      schedules: schedulesFiltered, schedFilterGroups,
+      schedQuery: this.state.schedQuery,
+      onSchedQuery: e => this.setState({ schedQuery: e.target.value }),
+      schedQueryDirty: sq.length > 0,
+      resetSchedQuery: () => this.setState({ schedQuery: "" }),
+      schedFiltersDirty: sq.length > 0 || sf.state !== "all" || sf.mess !== "all",
+      resetSchedFilters: () => this.setState({ schedQuery: "", schedFilters: { state: "all", mess: "all" } }),
+      schedEmpty: schedulesFiltered.length === 0,
+      schedCount: schedulesFiltered.length + " из " + schedules.length,
+      history: filtered, filterGroups,
+      resetFilters: () => this.setState({ filters: { status: "all", mess: "all", period: "today" } }),
+      filtersDirty: f.status !== "all" || f.mess !== "all" || f.period !== "today",
+      historyEmpty: filtered.length === 0,
+      historyCount: filtered.length + " из " + history.length + " записей",
+    };
+  }
+}
+
+</script>
+
+
+</body></html>
