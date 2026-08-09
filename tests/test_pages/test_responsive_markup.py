@@ -31,11 +31,12 @@ SECTION_URLS = {
     "schedules": "/schedules",
     "groups": "/groups",
     "history": "/history",
+    "accounts": "/accounts",
 }
 
 # Разделы на примитиве строки-таблицы data-row. История сюда НЕ входит: у неё
 # собственный примитив data-hrow, перестраивающийся раньше остальных (1080px).
-MIGRATED_SECTIONS = ["ads", "schedules", "groups"]
+MIGRATED_SECTIONS = ["ads", "schedules", "groups", "accounts"]
 
 # Все разделы, переведённые на дизайн-систему, независимо от примитива.
 # Планы 06-08 дописывают свои сюда.
@@ -142,6 +143,11 @@ async def _seed_section(db: AsyncSession, section: str) -> None:
         await _seed_group(db)
     elif section == "history":
         await _seed_send_log(db)
+    elif section == "accounts":
+        # Тип MAX намеренно: у WA-аккаунта со статусом active экран подключения
+        # WhatsApp редиректит, а тесты раздела ходят и туда (см. Плана 03
+        # test_swap_anchors_present).
+        await _seed_account(db, type_="max")
     else:  # pragma: no cover — защита от опечатки в параметризации
         raise AssertionError(f"неизвестный раздел: {section}")
 
@@ -556,6 +562,101 @@ async def test_profile_no_utility_classes(authed_client: AsyncClient):
     assert response.status_code == 200
     for marker in UTILITY_MARKERS:
         assert marker not in response.text, marker
+
+
+# --- План 06: раздел «Аккаунты» --------------------------------------------
+
+@pytest.mark.asyncio
+async def test_accounts_card_renders_data(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка аккаунта отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+
+    У аккаунта нет поля с именем: его «имя» на экране — это канал и номер,
+    то есть подпись мессенджера и идентификатор. Если разметка потеряет данные
+    аккаунта, страница всё равно вернёт 200 — поэтому утверждения идут по
+    содержимому, а не по статусу.
+    """
+    account = await _seed_account(db_session, type_="max")
+
+    response = await authed_client.get("/accounts")
+    assert response.status_code == 200
+    html = response.text
+    assert "MAX" in html, "подпись канала не отрисована"
+    assert f"#{account.id}" in html, "идентификатор аккаунта не отрисован"
+    assert f"/accounts/{account.id}/delete" in html, "действие удаления потеряно"
+
+
+@pytest.mark.asyncio
+async def test_accounts_polling_only_on_syncing_row(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-06-01: запрос статуса висит ТОЛЬКО на синхронизирующейся строке.
+
+    Соблазн при переверстке — вынести запрос на каждую строку «ради
+    единообразия разметки». Тогда каждая открытая вкладка каждого пользователя
+    начнёт дёргать сервер раз в 5 секунд по каждому аккаунту, включая давно
+    подключённые. Страница при этом выглядит исправной, поэтому проверка
+    поведенческая: у не синхронизирующегося аккаунта запроса статуса быть
+    не должно.
+    """
+    active = await _seed_account(db_session, type_="max")
+
+    html = (await authed_client.get("/accounts")).text
+    assert f"/accounts/{active.id}/sync-status" not in html, (
+        "у не синхронизирующегося аккаунта появился опрос статуса"
+    )
+
+    user = await _user(db_session)
+    syncing = MessengerAccount(
+        user_id=user.id, type="max", credentials="session", status="syncing"
+    )
+    db_session.add(syncing)
+    await db_session.commit()
+    await db_session.refresh(syncing)
+
+    html = (await authed_client.get("/accounts")).text
+    assert re.search(rf'id="account-row-{syncing.id}"[^>]*hx-get="', html), (
+        "якорь синхронизирующейся строки потерял запрос обновления"
+    )
+    assert f"/accounts/{active.id}/sync-status" not in html
+
+
+@pytest.mark.asyncio
+async def test_accounts_connect_pages_no_utility_classes(
+    authed_client: AsyncClient,
+):
+    """Мастера подключения — те же три экрана раздела, что и список.
+
+    Экран Telegram доступен GET-ом всегда; экраны WhatsApp и MAX на первом шаге
+    тоже (редирект включается лишь при уже подключённом аккаунте).
+    """
+    for url in (
+        "/accounts/connect/tg_user",
+        "/accounts/connect/max",
+    ):
+        response = await authed_client.get(url)
+        assert response.status_code == 200, url
+        for marker in UTILITY_MARKERS:
+            assert marker not in response.text, f"{url}: {marker}"
+
+
+@pytest.mark.asyncio
+async def test_accounts_connect_max_form_contract(
+    authed_client: AsyncClient,
+):
+    """T-06-03: форма мастера MAX сохраняет метод, маршрут и имя поля.
+
+    Потеря атрибута name не роняет страницу — она молча делает подключение
+    аккаунта невозможным, а экран продолжает отдавать 200.
+    """
+    html = (await authed_client.get("/accounts/connect/max")).text
+
+    assert 'name="phone"' in html
+    assert 'action="/accounts/connect/max/start"' in html
+    assert re.search(r'<form[^>]*method="POST"[^>]*action="/accounts/connect/max/start"'
+                     r'|<form[^>]*action="/accounts/connect/max/start"[^>]*method="POST"',
+                     html), "форма подключения MAX потеряла маршрут или метод"
 
 
 @pytest.mark.asyncio
