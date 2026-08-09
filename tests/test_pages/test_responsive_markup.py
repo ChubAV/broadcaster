@@ -2116,3 +2116,125 @@ async def test_groups_partial_labels_present(
         assert html.count(f"<span data-cell-label>{label}</span>") == len(groups), (
             f"подпись {label!r} потеряна в порции бесконечной прокрутки"
         )
+
+
+# --- План 12, Задача 2: раздел «Расписания» ---------------------------------
+#
+# Схема Задачи 1 повторяется дословно: форма остаётся формой, перехват отправки
+# навешивается на неё, панель ставится соседним элементом строки. Правка живёт в
+# МАКРОСЕ, поэтому list.html и partial_cards.html не правятся вовсе.
+
+# Подпись получает каждая колонка SCHEDULE_COLUMNS с непустым названием, КРОМЕ
+# 'Объявление' — она несёт название сущности и уже является заголовком строки.
+SCHEDULE_CELL_LABELS = (
+    "Группы",
+    "Дни",
+    "Время",
+    "Следующий запуск",
+    "Статус",
+)
+
+
+@pytest.mark.asyncio
+async def test_schedules_delete_uses_modal(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Удаление расписания подтверждается панелью дизайн-системы (SC-3)."""
+    schedule = await _seed_schedule(db_session)
+
+    html = (await authed_client.get("/schedules")).text
+
+    assert 'role="dialog"' in html, "панель подтверждения не отрисована"
+    assert 'class="modal"' in html
+    assert f"modal-open-schedule-del-{schedule.id}" in html, (
+        "форма удаления не открывает панель подтверждения"
+    )
+    assert html.count(f'id="schedule-del-{schedule.id}"') == 1, (
+        "панель подтверждения расписания не единственная"
+    )
+    assert "Отмена" in html, "у панели нет отказа от удаления"
+    assert "confirm(" not in html, "системный диалог браузера остался"
+    assert "onsubmit" not in html, "старый перехват отправки остался"
+
+
+@pytest.mark.asyncio
+async def test_schedules_delete_form_degrades_without_alpine(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-12-04: без Alpine форма удаления расписания отправляется напрямую."""
+    schedule = await _seed_schedule(db_session)
+
+    html = (await authed_client.get("/schedules")).text
+
+    forms = _delete_forms_for(html, f"/schedules/{schedule.id}/delete")
+    assert forms, "форма удаления исчезла из разметки"
+
+    row_forms = [f for f in forms if "modal__form" not in f]
+    assert row_forms, "форма удаления осталась только внутри панели подтверждения"
+    for form in row_forms:
+        assert re.search(r'method="post"', form, re.I), (
+            f"форма удаления потеряла метод: {form[:200]}"
+        )
+        assert 'type="submit"' in form, (
+            f"кнопка удаления перестала отправлять форму: {form[:200]}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_schedules_cell_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Каждая ячейка строки расписания несёт название своей колонки."""
+    schedules = [
+        await _seed_schedule(db_session, ad_title=f"Объявление {i}") for i in range(2)
+    ]
+
+    html = (await authed_client.get("/schedules")).text
+
+    for label in SCHEDULE_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(schedules), (
+            f"подпись {label!r} проставлена не во всех строках"
+        )
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header - labels == {"Объявление"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Объявление'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedules_partial_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Порция бесконечной прокрутки несёт те же подписи, что и первая страница."""
+    schedules = [
+        await _seed_schedule(db_session, ad_title=f"Объявление {i}") for i in range(2)
+    ]
+
+    response = await authed_client.get("/schedules/partial?offset=0&limit=30")
+    assert response.status_code == 200
+    html = response.text
+
+    for label in SCHEDULE_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(schedules), (
+            f"подпись {label!r} потеряна в порции бесконечной прокрутки"
+        )
+
+
+def test_schedules_row_keeps_grid_area_marker():
+    """Признак области сетки не потерян: подпись добавлена К нему, а не вместо.
+
+    Медиазапрос раздела опирается на признак области у ячейки следующего
+    запуска. Потеря признака не роняет страницу — она молча ломает раскладку
+    строки на узкой ширине, и увидит это только пользователь на телефоне.
+    """
+    source = _template_source("schedules/includes/schedule_row.html")
+
+    assert source.count("area='meta'") == 1, (
+        "ячейка следующего запуска потеряла признак области сетки"
+    )
