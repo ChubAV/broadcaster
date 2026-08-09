@@ -5,6 +5,7 @@
 {% from "components/badge.html" import badge %}
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/mono.html" import mono %}
+{% from "components/modal.html" import modal %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 
 {% block title %}Аккаунты — Broadcaster{% endblock %}
@@ -61,7 +62,7 @@
       {{- badge('Синхронизация...', 'warning', title='Загружаем группы из ' ~ label ~ '. Это может занять несколько минут.') -}}
     {%- endcall %}
     {%- call cell() %}
-      <form method="POST" action="/accounts/{{ account.id }}/delete" onsubmit="return confirm('Удалить этот аккаунт?')">
+      <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
         {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
       </form>
     {%- endcall %}
@@ -82,7 +83,7 @@
       <form method="POST" action="/accounts/{{ account.id }}/retry-sync">
         {{- button('Повторить', variant='ghost', icon='refresh', title='Повторить синхронизацию') -}}
       </form>
-      <form method="POST" action="/accounts/{{ account.id }}/delete" onsubmit="return confirm('Удалить этот аккаунт?')">
+      <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
         {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
       </form>
     {%- endcall %}
@@ -107,12 +108,27 @@
       {%- else %}{{ badge(account.status, 'warning') }}{% endif -%}
     {%- endcall %}
     {%- call cell() %}
-      <form method="POST" action="/accounts/{{ account.id }}/delete" onsubmit="return confirm('Удалить этот аккаунт?')">
+      <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
         {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
       </form>
     {%- endcall %}
   {{ row_close() }}
   {% endif %}
+  {#- Панель подтверждения стоит РЯДОМ со строкой, а не внутри неё: панель
+      позиционируется фиксированно, а внутри сетки строки она стала бы её
+      колонкой (эталон — ads/includes/ad_card.html).
+      Панель ОДНА на аккаунт и общая для всех трёх веток статуса: её разметка от
+      статуса не зависит, а две панели с одним идентификатором открывались бы
+      одним событием, и Tab уходил бы в невидимую копию (T-11-04).
+      method="post" передаётся явно, хотя совпадает с умолчанием макроса:
+      маршрут и метод удаления — контракт с обработчиком, и он обязан читаться
+      грепом по этому файлу, а не только по отрендеренной странице. -#}
+  {{ modal(id='acc-del-' ~ account.id,
+           title='Удалить аккаунт?',
+           action='/accounts/' ~ account.id ~ '/delete',
+           confirm_label='Удалить',
+           method="post",
+           body=label ~ ' #' ~ account.id) }}
   {% endfor %}
   {# Сентинел бесконечной прокрутки: последний элемент ВНУТРИ того же
      контейнера, что и строки, неявная цель подмены, разметка идентична

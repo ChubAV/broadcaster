@@ -13,7 +13,19 @@
 
    Блок заменяет строку аккаунта ЦЕЛИКОМ (hx-swap="outerHTML"), поэтому он сам
    обязан быть строкой той же раскладки: значение ACCOUNT_COLS повторяет
-   объявленное в accounts/list.html и accounts/partial_cards.html. #}
+   объявленное в accounts/list.html и accounts/partial_cards.html.
+
+   СОЗНАТЕЛЬНАЯ АСИММЕТРИЯ С ДВУМЯ СОСЕДЯМИ. Этот файл НЕ эмитит панель
+   подтверждения удаления — только форму с перехватом отправки, ссылающимся на
+   тот же идентификатор acc-del-<id>. Панель эмитят list.html и
+   partial_cards.html, и лежит она ВНЕ заменяемого элемента, поэтому подмену
+   переживает. Эмить панель ещё и здесь значило бы получить после первого же
+   опроса две панели с одинаковым идентификатором: событие открывало бы обе, а
+   Tab уходил бы в невидимую копию (T-11-04). Обратная ошибка — поставить панель
+   ВНУТРЬ строки — сделала бы её присутствие обязательным во всех трёх файлах и
+   молча потеряла бы кнопку удаления в момент подмены. Расхождение закреплено
+   тестом test_accounts_three_files_dispatch_same_modal_event: панель обязана
+   присутствовать в двух файлах и отсутствовать здесь. #}
 
 {% from "components/button.html" import button %}
 {% from "components/table.html" import cell %}
@@ -43,7 +55,7 @@
   {{- cell(text='—', mono=true, muted=true) }}
   {%- call cell() %}{{ badge('Активно', 'success') }}{% endcall %}
   {%- call cell() %}
-    <form method="POST" action="/accounts/{{ account_id }}/delete" onsubmit="return confirm('Удалить этот аккаунт?')">
+    <form method="POST" action="/accounts/{{ account_id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account_id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
   {%- endcall %}
@@ -59,7 +71,7 @@
     <form method="POST" action="/accounts/{{ account_id }}/retry-sync">
       {{- button('Повторить', variant='ghost', icon='refresh', title='Повторить синхронизацию') -}}
     </form>
-    <form method="POST" action="/accounts/{{ account_id }}/delete" onsubmit="return confirm('Удалить этот аккаунт?')">
+    <form method="POST" action="/accounts/{{ account_id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account_id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
   {%- endcall %}
@@ -74,7 +86,7 @@
     {{- badge('Синхронизация...', 'warning', title='Загружаем группы из ' ~ label ~ '. Это может занять несколько минут.') -}}
   {%- endcall %}
   {%- call cell() %}
-    <form method="POST" action="/accounts/{{ account_id }}/delete" onsubmit="return confirm('Удалить этот аккаунт?')">
+    <form method="POST" action="/accounts/{{ account_id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account_id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
   {%- endcall %}
