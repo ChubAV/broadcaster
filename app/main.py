@@ -2,9 +2,11 @@ import asyncio
 
 import structlog
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request as FastAPIRequest
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.logging_config import setup_logging
@@ -25,6 +27,10 @@ from app.routes.billing import router as billing_router
 from app.pages import router as pages_router
 
 logger = structlog.get_logger(__name__)
+
+# Каталог отдаётся целиком, поэтому монтируется только app/static и никогда
+# app/ — иначе наружу уходит исходный код (T-01-01).
+_static_dir = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
@@ -60,6 +66,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Broadcaster", version="0.1.0", lifespan=lifespan)
     app.add_middleware(RequestIdMiddleware)
+    # name="static" обязателен — именно он включает url_for('static', path=...)
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
     Instrumentator(
         excluded_handlers=["/health", "/metrics"],
     ).instrument(app).expose(app, endpoint="/metrics")

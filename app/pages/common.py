@@ -4,14 +4,23 @@ from zoneinfo import ZoneInfo
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.models.ad import Ad
+from app.models.balance_transaction import BalanceTransaction
+from app.models.message_balance import MessageBalance
+from app.models.messenger_account import MessengerAccount
+from app.models.schedule import Schedule
+from app.models.send_log import SendLog
+from app.models.subscription import Subscription
 from app.models.user import User
 from app.services.auth_service import decode_access_token
 from app.services.s3 import get_image_url
 
 _templates_dir = Path(__file__).resolve().parent.parent / "templates"
+_static_dir = Path(__file__).resolve().parent.parent / "static"
 templates = Jinja2Templates(directory=str(_templates_dir))
 
 # Register get_image_url as Jinja2 global so templates can use {{ get_image_url(key) }}
@@ -27,6 +36,55 @@ def _resolve_image_url(key: str) -> str:
 templates.env.globals["get_image_url"] = lambda key: get_image_url(key, get_settings().s3_public_url)
 templates.env.globals["resolve_image_url"] = _resolve_image_url
 templates.env.globals["s3_public_url"] = lambda: get_settings().s3_public_url
+
+
+def _compute_asset_version() -> str:
+    """Return a cache-busting suffix for /static links.
+
+    Хешей в именах файлов нет и build-шаг запрещён (D-02), поэтому версия
+    берётся от времени изменения app.css и считается один раз при импорте.
+    """
+    try:
+        return str(int((_static_dir / "css" / "app.css").stat().st_mtime))
+    except OSError:
+        return "dev"
+
+
+templates.env.globals["asset_version"] = _compute_asset_version()
+
+
+# Состав навигации по D-11. Список выписан ОДИН раз и используется и в
+# боковом меню (data-nav), и в нижних табах (data-tabs) — иначе переименования
+# пришлось бы править в трёх местах, как было в старом шелле.
+# «Группы» сохраняются до Фазы 3: экран групп аккаунта появится только там,
+# и без пункта работающий раздел стал бы недостижим.
+NAV_ITEMS: list[dict] = [
+    {"key": "dashboard", "label": "Дашборд", "href": "/dashboard", "count_key": None},
+    {"key": "accounts", "label": "Аккаунты", "href": "/accounts", "count_key": "accounts"},
+    {"key": "groups", "label": "Группы", "href": "/groups", "count_key": None},
+    {"key": "ads", "label": "Объявления", "href": "/ads", "count_key": "ads"},
+    {"key": "schedules", "label": "Расписания", "href": "/schedules", "count_key": "schedules"},
+    {"key": "history", "label": "История", "href": "/history", "count_key": "history"},
+    {"key": "billing", "label": "Тарифы", "href": "/billing", "count_key": None},
+    {"key": "profile", "label": "Профиль", "href": "/profile", "count_key": None},
+]
+
+ADMIN_NAV_ITEM: dict = {"key": "admin", "label": "Админ-панель", "href": "/admin", "tag": "SYS"}
+
+
+def nav_label(active_page: str | None) -> str:
+    """Return the visible section name for an active_page key."""
+    for item in NAV_ITEMS:
+        if item["key"] == active_page:
+            return item["label"]
+    if active_page == ADMIN_NAV_ITEM["key"]:
+        return ADMIN_NAV_ITEM["label"]
+    return "Broadcaster"
+
+
+templates.env.globals["nav_items"] = NAV_ITEMS
+templates.env.globals["admin_nav_item"] = ADMIN_NAV_ITEM
+templates.env.globals["nav_label"] = nav_label
 
 
 def _get_timezone_for_user(user: User | None) -> ZoneInfo:
@@ -81,3 +139,111 @@ def check_is_admin(user: User | None, settings: Settings) -> bool:
     if not user or not settings.admin_email:
         return False
     return user.email == settings.admin_email
+
+
+async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
+    """Collect live shell data: nav counts, plan quota and messenger sessions.
+
+    Публичный контракт живых данных шелла (D-09/D-19). Фаза 4 (DASH-05) и
+    Фаза 6 переиспользуют его, а не пишут своё чтение.
+
+    Ключи sessions_online / sessions_total измеряют состояние СЕССИИ
+    мессенджера (MessengerAccount.status в БД), а не состояние
+    Docker-контейнера. Перечисление контейнеров воркеров здесь не
+    вызывается ни при каких условиях: это синхронный Docker SDK, он
+    блокирует event loop на рендере каждой страницы, а в тестах сокет
+    Docker недоступен.
+    """
+    if user is None:
+        return {}
+
+    # Один round-trip на все шесть счётчиков: скалярные подзапросы без FROM.
+    counts = (
+        await db.execute(
+            select(
+                select(func.count())
+                .select_from(Ad)
+                .where(Ad.user_id == user.id)
+                .scalar_subquery()
+                .label("ads"),
+                select(func.count())
+                .select_from(MessengerAccount)
+                .where(MessengerAccount.user_id == user.id)
+                .scalar_subquery()
+                .label("accounts"),
+                # У Schedule нет user_id — принадлежность идёт через Ad,
+                # как во всех запросах app/pages/schedules.py.
+                select(func.count())
+                .select_from(Schedule)
+                .join(Ad, Schedule.ad_id == Ad.id)
+                .where(Ad.user_id == user.id)
+                .scalar_subquery()
+                .label("schedules"),
+                select(func.count())
+                .select_from(SendLog)
+                .where(SendLog.user_id == user.id)
+                .scalar_subquery()
+                .label("history"),
+                select(func.count())
+                .select_from(MessengerAccount)
+                .where(
+                    MessengerAccount.user_id == user.id,
+                    MessengerAccount.status == "active",
+                )
+                .scalar_subquery()
+                .label("sessions_online"),
+            )
+        )
+    ).one()
+
+    subscription = (
+        await db.execute(
+            select(Subscription)
+            .where(Subscription.user_id == user.id, Subscription.is_active.is_(True))
+            .order_by(Subscription.expires_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    # Чтение без записи: get_or_create_balance создаёт строку и делает flush,
+    # а рендер страницы не должен ничего писать в БД.
+    balance = (
+        await db.execute(select(MessageBalance).where(MessageBalance.user_id == user.id))
+    ).scalar_one_or_none()
+    remaining = max(balance.balance, 0) if balance else 0
+    is_unlimited = bool(balance.is_unlimited) if balance else False
+    period_start = balance.free_balance_reset_at if balance else None
+
+    # Израсходовано за текущий период — по журналу списаний, а не оценкой.
+    used_stmt = select(func.coalesce(func.sum(-BalanceTransaction.amount), 0)).where(
+        BalanceTransaction.user_id == user.id,
+        BalanceTransaction.amount < 0,
+    )
+    if period_start is not None:
+        used_stmt = used_stmt.where(BalanceTransaction.created_at >= period_start)
+    used = int(await db.scalar(used_stmt) or 0)
+
+    if is_unlimited:
+        limit = 0
+        percent = 0
+    else:
+        limit = used + remaining
+        percent = min(100, round(used * 100 / limit)) if limit > 0 else 0
+
+    return {
+        "nav_counts": {
+            "ads": counts.ads,
+            "accounts": counts.accounts,
+            "schedules": counts.schedules,
+            "history": counts.history,
+        },
+        "quota": {
+            "plan": subscription.plan if subscription else "free",
+            "used": used,
+            "limit": limit,
+            "percent": percent,
+            "expires_at": subscription.expires_at if subscription else None,
+        },
+        "sessions_online": counts.sessions_online,
+        "sessions_total": counts.accounts,
+    }
