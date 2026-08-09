@@ -878,6 +878,128 @@ async def test_accounts_delete_route_unchanged(
     assert (await db_session.get(MessengerAccount, foreign.id)) is not None
 
 
+# --- План 11: подписи колонок в ячейках раздела «Аккаунты» (SC-5) -----------
+#
+# На 860px шапка колонок скрывается ([data-rowhead] { display: none }), и строка
+# «12 · 3 · 87% · 09.08 14:22 · —» превращается в набор символов без смысла.
+# Подпись живёт ВНУТРИ ячейки и проявляется ровно там, где шапка исчезла.
+# Атрибут подсказки её не заменяет: на касании подсказки нет.
+
+# Подпись получает каждая колонка с непустым названием, КРОМЕ первой — она несёт
+# название самого аккаунта и уже является заголовком карточки.
+ACCOUNT_CELL_LABELS = (
+    "Групп",
+    "Расписаний",
+    "Успешность",
+    "Последняя отправка",
+    "Подключён",
+    "Статус",
+)
+
+CELL_LABEL_RE = re.compile(r"<span data-cell-label>([^<]*)</span>")
+ROWHEAD_RE = re.compile(r"<div data-rowhead[^>]*>(.*?)</div>", re.S)
+
+
+async def _seed_all_account_branches(db: AsyncSession) -> list[MessengerAccount]:
+    """По одному аккаунту на каждую из трёх веток статуса раздела."""
+    return [
+        await _seed_account_with_status(db, status)
+        for status in ("active", "sync_failed", "syncing")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_accounts_cell_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Каждая ячейка списочной страницы несёт название своей колонки.
+
+    Счёт по числу веток статуса, а не проверка «встречается хотя бы раз»:
+    пропущенная ветка иначе прошла бы незамеченной — на широкой ширине подпись
+    скрыта, и увидел бы её отсутствие только пользователь на телефоне.
+    """
+    accounts = await _seed_all_account_branches(db_session)
+
+    html = (await authed_client.get("/accounts")).text
+
+    for label in ACCOUNT_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(accounts), (
+            f"подпись {label!r} проставлена не во всех ветках статуса"
+        )
+
+
+@pytest.mark.asyncio
+async def test_accounts_partial_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Порция бесконечной прокрутки несёт те же подписи, что и первая страница.
+
+    Строки после первой прокрутки приходят ДРУГИМ файлом; расхождение видно
+    только тому, кто долистал.
+    """
+    accounts = await _seed_all_account_branches(db_session)
+
+    response = await authed_client.get("/accounts/partial?offset=0&limit=30")
+    assert response.status_code == 200
+    html = response.text
+
+    for label in ACCOUNT_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(accounts), (
+            f"подпись {label!r} потеряна в порции бесконечной прокрутки"
+        )
+
+
+@pytest.mark.asyncio
+async def test_accounts_sync_card_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Блок подмены по опросу статуса несёт подписи во ВСЕХ трёх состояниях.
+
+    Самая опасная из трёх поверхностей: её разметки нет на первичной отрисовке,
+    поэтому потеря подписи здесь проявится только после первого опроса.
+    """
+    for status in ("active", "sync_failed", "syncing"):
+        account = await _seed_account_with_status(db_session, status)
+
+        response = await authed_client.get(f"/accounts/{account.id}/sync-status")
+        assert response.status_code == 200, status
+        html = response.text
+
+        for label in ACCOUNT_CELL_LABELS:
+            assert f"<span data-cell-label>{label}</span>" in html, (
+                f"{status}: подпись {label!r} потеряна в блоке подмены"
+            )
+
+
+@pytest.mark.asyncio
+async def test_accounts_labels_come_from_column_list(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Подписи и шапка колонок — один список, а не два независимых.
+
+    Переписанная вручную подпись разъедется с шапкой при первом же
+    переименовании колонки, и увидит это только пользователь на телефоне.
+    """
+    await _seed_all_account_branches(db_session)
+
+    html = (await authed_client.get("/accounts")).text
+
+    head = ROWHEAD_RE.search(html)
+    assert head, "шапка колонок раздела не найдена"
+    header = {name for name in re.findall(r"<span>([^<]*)</span>", head.group(1)) if name}
+    assert header, "шапка колонок пуста"
+
+    labels = {value for value in CELL_LABEL_RE.findall(html) if value}
+
+    assert header - labels == {"Аккаунт"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Аккаунт'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_profile_form_contract(authed_client: AsyncClient):
     """Форма профиля сохраняет метод, маршрут и все прежние имена полей.
