@@ -6,9 +6,15 @@
 {% from "includes/messenger_icon.html" import messenger_icon %}
 
 {# Следующая порция строк раздела «Аккаунты». Разметка строки и сентинела
-   ИДЕНТИЧНА list.html: правится одна — синхронно правится вторая. Три значения
-   ниже повторяют объявленные в list.html и в partials/sync_status_card.html. #}
+   ИДЕНТИЧНА list.html: правится одна — синхронно правится вторая. Значения
+   ниже повторяют объявленные в list.html и в partials/sync_status_card.html.
+
+   ACCOUNT_COLUMNS шапку здесь не рисует — порция приходит без шапки, — но нужен
+   как источник ПОДПИСЕЙ внутри ячеек: подпись обязана дословно повторять
+   название колонки из шапки первой страницы, иначе долиставший до второй порции
+   пользователь увидит на телефоне другие слова. #}
 {% set ACCOUNT_COLS = 'minmax(150px,2fr) 84px 112px 116px 140px 148px 148px 116px' %}
+{% set ACCOUNT_COLUMNS = ['Аккаунт', 'Групп', 'Расписаний', 'Успешность', 'Последняя отправка', 'Подключён', 'Статус', ''] %}
 {% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
 
 {% for account in accounts %}
@@ -28,12 +34,12 @@
     {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
     <span data-grow>{{ label }}</span>{{ mono('#' ~ account.id) }}
   {%- endcall %}
-  {{- cell(text='—', mono=true, muted=true) }}
-  {{- cell(text='—', mono=true, muted=true) }}
-  {{- cell(text='—', mono=true, muted=true) }}
-  {{- cell(text='—', mono=true, muted=true) }}
-  {{- cell(text='—', mono=true, muted=true) }}
-  {%- call cell() %}
+  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[1]) }}
+  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[2]) }}
+  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[3]) }}
+  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[4]) }}
+  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[5]) }}
+  {%- call cell(label=ACCOUNT_COLUMNS[6]) %}
     {{- badge('Синхронизация...', 'warning', title='Загружаем группы из ' ~ label ~ '. Это может занять несколько минут.') -}}
   {%- endcall %}
   {%- call cell() %}
@@ -48,12 +54,12 @@
     {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
     <span data-grow>{{ label }}</span>{{ mono('#' ~ account.id) }}
   {%- endcall %}
-  {{- cell(text='—', mono=true, muted=true) }}
-  {{- cell(text='—', mono=true, muted=true) }}
-  {{- cell(text='—', mono=true, muted=true) }}
-  {{- cell(text='—', mono=true, muted=true) }}
-  {{- cell(text=format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M'), mono=true, muted=true) }}
-  {%- call cell() %}{{ badge('Ошибка синхронизации', 'danger') }}{% endcall %}
+  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[1]) }}
+  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[2]) }}
+  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[3]) }}
+  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[4]) }}
+  {{- cell(text=format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M'), mono=true, muted=true, label=ACCOUNT_COLUMNS[5]) }}
+  {%- call cell(label=ACCOUNT_COLUMNS[6]) %}{{ badge('Ошибка синхронизации', 'danger') }}{% endcall %}
   {%- call cell() %}
     <form method="POST" action="/accounts/{{ account.id }}/retry-sync">
       {{- button('Повторить', variant='ghost', icon='refresh', title='Повторить синхронизацию') -}}
@@ -69,15 +75,16 @@
     {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
     <span data-grow>{{ label }}</span>{{ mono('#' ~ account.id) }}
   {%- endcall %}
-  {{- cell(text=stats.get('groups_count', 0), mono=true, muted=true, title='Групп') }}
-  {{- cell(text=stats.get('schedules_count', 0), mono=true, muted=true, title='Расписаний') }}
+  {{- cell(text=stats.get('groups_count', 0), mono=true, muted=true, title='Групп', label=ACCOUNT_COLUMNS[1]) }}
+  {{- cell(text=stats.get('schedules_count', 0), mono=true, muted=true, title='Расписаний', label=ACCOUNT_COLUMNS[2]) }}
   {{- cell(text=(((stats.get('send_success', 0) / attempts) * 100)|round|int ~ '%') if attempts > 0 else '—',
            mono=true, muted=true,
-           title=(stats.get('send_success', 0)|string ~ ' из ' ~ attempts|string) if attempts > 0 else 'Отправок не было') }}
+           title=(stats.get('send_success', 0)|string ~ ' из ' ~ attempts|string) if attempts > 0 else 'Отправок не было',
+           label=ACCOUNT_COLUMNS[3]) }}
   {{- cell(text=format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') if stats.get('last_sent_at') else '—',
-           mono=true, muted=true) }}
-  {{- cell(text=format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M'), mono=true, muted=true) }}
-  {%- call cell() %}
+           mono=true, muted=true, label=ACCOUNT_COLUMNS[4]) }}
+  {{- cell(text=format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M'), mono=true, muted=true, label=ACCOUNT_COLUMNS[5]) }}
+  {%- call cell(label=ACCOUNT_COLUMNS[6]) %}
     {%- if account.status == 'active' %}{{ badge('Активно', 'success') }}
     {%- elif account.status == 'disconnected' %}{{ badge('Отключён', 'neutral') }}
     {%- else %}{{ badge(account.status, 'warning') }}{% endif -%}
