@@ -1044,7 +1044,7 @@ a:hover { color: var(--accent-link-hover); }
 [data-form] > .field { align-self: stretch; }
 
 /* Блок пользователя на странице профиля */
-[data-identity] { display: flex; align-items: center; gap: 14px; }
+[data-identity] { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
 [data-identity-meta] { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 [data-identity-name] { font-size: var(--fs-xl); font-weight: 600; }
 
