@@ -827,3 +827,34 @@ a:hover { color: var(--accent-link-hover); }
 @media (prefers-reduced-motion: reduce) {
   .progress__bar, .toggle__knob { animation: none !important; transition: none !important; }
 }
+
+/* Модальное подтверждение (D-18) ------------------------------------------
+   Прецедента в макете нет: единственный position:fixed там — нижние табы.
+   Компонент спроектирован с нуля на тех же токенах. Показом управляет Alpine
+   через x-show; до его инициализации окно скрыто правилом [x-cloak]. */
+.modal {
+  position: fixed; inset: 0; z-index: 60;
+  display: grid; place-items: center; padding: 20px;
+}
+.modal__overlay {
+  position: absolute; inset: 0;
+  background: rgba(8, 8, 11, .72); backdrop-filter: blur(6px);
+}
+.modal__panel {
+  position: relative; z-index: 1;
+  width: min(420px, 100%);
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 22px; border-radius: var(--r-2xl);
+  background: var(--surface); border: 1px solid var(--border);
+  box-shadow: 0 24px 60px rgba(8, 8, 11, .6);
+  animation: rise .2s ease both;
+}
+.modal__panel:focus { outline: none; }
+.modal__title { margin: 0; font-size: var(--fs-xl); font-weight: 600; letter-spacing: -.015em; }
+.modal__form { display: flex; flex-direction: column; gap: 14px; }
+.modal__text { margin: 0; font-size: var(--fs-md); line-height: 1.55; color: var(--text-secondary); }
+.modal__actions { display: flex; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .modal__panel { animation: none !important; }
+}

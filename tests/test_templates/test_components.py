@@ -262,6 +262,62 @@ def test_table_macros_emit_responsive_primitives():
     assert "</div>" in render("components/table.html", "row_close")
 
 
+# --- modal (D-18) ------------------------------------------------------------
+
+MODAL_ARGS = dict(
+    id="del-1",
+    title="Удалить объявление?",
+    action="/ads/1/delete",
+    confirm_label="Удалить",
+)
+
+
+def test_modal_renders_form_action():
+    """Модалка заменяет браузерный диалог, но НЕ форму: маршрут и метод прежние."""
+    out = render("components/modal.html", "modal", **MODAL_ARGS)
+    assert "<form" in out
+    form = out[out.index("<form") : out.index(">", out.index("<form"))]
+    assert 'method="post"' in form
+    assert 'action="/ads/1/delete"' in form
+    assert "Удалить" in out
+
+
+def test_modal_has_dialog_semantics():
+    out = render("components/modal.html", "modal", **MODAL_ARGS)
+    assert 'role="dialog"' in out
+    assert 'aria-modal="true"' in out
+    assert "aria-labelledby" in out
+
+
+def test_modal_cancel_present():
+    """Отмена не должна быть труднее подтверждения и не должна быть submit."""
+    out = render("components/modal.html", "modal", **MODAL_ARGS)
+    assert "Отмена" in out
+    cancel_at = out.index("Отмена")
+    cancel_tag_start = out.rindex("<button", 0, cancel_at)
+    cancel_tag = out[cancel_tag_start : out.index(">", cancel_tag_start)]
+    assert 'type="button"' in cancel_tag
+    assert 'type="submit"' not in cancel_tag
+
+
+def test_modal_escapes_title():
+    out = render(
+        "components/modal.html",
+        "modal",
+        id="x",
+        title="<b>Удалить</b>",
+        action="/x/delete",
+        confirm_label="Удалить",
+    )
+    assert "<b>Удалить</b>" not in out
+    assert "&lt;b&gt;" in out
+
+
+def test_modal_does_not_reuse_browser_dialog():
+    body = (TEMPLATES_DIR / "components" / "modal.html").read_text(encoding="utf-8")
+    assert "confirm(" not in body
+
+
 # --- инварианты библиотеки ---------------------------------------------------
 
 COMPONENT_CALLS = [
@@ -283,6 +339,7 @@ COMPONENT_CALLS = [
     ("components/mono.html", "mono", ("TEXT",), {}),
     ("components/avatar.html", "avatar", ("Имя",), {}),
     ("components/alert.html", "alert", ("Сообщение",), {}),
+    ("components/modal.html", "modal", (), MODAL_ARGS),
 ]
 
 

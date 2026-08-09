@@ -1,0 +1,54 @@
+{# Модальное подтверждение (D-18). Прецедента нет ни в приложении, ни в макете:
+   во всём макете ноль модалок и ноль оверлеев, а подтверждения в приложении
+   сегодня сделаны браузерным диалогом. Компонент спроектирован с нуля.
+
+   Что окно ЗАМЕНЯЕТ: только браузерный диалог. Форма остаётся прежней —
+   тот же маршрут, тот же метод, те же права. Это узкое названное исключение
+   из правила «новый вид, старые действия», а не новая возможность.
+
+   Открытие — событием окна, поэтому кнопка-триггер может стоять где угодно:
+
+     <button type="button"
+             x-data
+             x-on:click="$dispatch('modal-open-del-{{ ad.id }}')">Удалить</button>
+     {{ modal(id='del-' ~ ad.id, title='Удалить объявление?',
+              action='/ads/' ~ ad.id ~ '/delete', confirm_label='Удалить') }}
+
+   Доступность: role="dialog" + aria-modal, ловушка фокуса внутри панели,
+   закрытие по Esc и по клику на оверлей, возврат фокуса на элемент, который
+   окно открыл. Начальный фокус ставится на ОТМЕНУ: подтверждение удаления не
+   должно срабатывать по Enter, а отмена не должна быть труднее подтверждения.
+
+   Импорт: {% from "components/modal.html" import modal %} #}
+
+{# Значения по умолчанию записаны двойными кавычками намеренно: метод формы
+   должен быть виден в файле дословно как method="post" — модалка не имеет
+   права незаметно съехать на GET. #}
+{% macro modal(id, title, action, confirm_label, body=None, cancel_label="Отмена", confirm_variant="danger", method="post") -%}
+<div class="modal" id="{{ id }}" x-cloak
+     x-data="{
+       open: false,
+       opener: null,
+       show() { this.opener = document.activeElement; this.open = true; this.$nextTick(() => this.$refs.cancel.focus()); },
+       hide() { if (!this.open) return; this.open = false; const back = this.opener; this.opener = null; if (back && back.focus) this.$nextTick(() => back.focus()); },
+       items() { return Array.from(this.$refs.panel.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])')).filter(el => el.offsetParent !== null); },
+       trap(e) { const f = this.items(); if (!f.length) return; const last = f.length - 1; const i = f.indexOf(document.activeElement); let next; if (e.shiftKey) { next = (i === 0 || i === -1) ? f[last] : f[i - 1]; } else { next = (i === -1 || i === last) ? f[0] : f[i + 1]; } next.focus(); }
+     }"
+     x-show="open"
+     x-on:modal-open-{{ id }}.window="show()"
+     x-on:keydown.escape.window="hide()"
+     x-on:keydown.tab.prevent="trap($event)"
+     role="dialog" aria-modal="true" aria-labelledby="{{ id }}-title">
+  <div class="modal__overlay" x-on:click="hide()"></div>
+  <div class="modal__panel" x-ref="panel" tabindex="-1">
+    <h2 class="modal__title" id="{{ id }}-title">{{ title }}</h2>
+    <form class="modal__form" method="{{ method }}" action="{{ action }}">
+      {%- if body %}<p class="modal__text">{{ body }}</p>{% endif %}
+      <div class="modal__actions">
+        <button class="btn btn--ghost" type="button" x-ref="cancel" x-on:click="hide()"><span class="btn__label">{{ cancel_label }}</span></button>
+        <button class="btn btn--{{ confirm_variant }}" type="submit"><span class="btn__label">{{ confirm_label }}</span></button>
+      </div>
+    </form>
+  </div>
+</div>
+{%- endmacro %}
