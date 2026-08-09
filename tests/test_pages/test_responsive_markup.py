@@ -20,15 +20,26 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
+from app.models.send_log import SendLog
 from app.models.user import User
 
 # Признаки utility-фреймворка: разметка разделов от них избавлена (D-06).
 UTILITY_MARKERS = ("bg-white", "text-gray", "rounded-lg", "border-gray", "lg:")
 
-SECTION_URLS = {"ads": "/ads", "schedules": "/schedules", "groups": "/groups"}
+SECTION_URLS = {
+    "ads": "/ads",
+    "schedules": "/schedules",
+    "groups": "/groups",
+    "history": "/history",
+}
 
-# Разделы, мигрированные на дизайн-систему. Планы 05-08 дописывают свои сюда.
+# Разделы на примитиве строки-таблицы data-row. История сюда НЕ входит: у неё
+# собственный примитив data-hrow, перестраивающийся раньше остальных (1080px).
 MIGRATED_SECTIONS = ["ads", "schedules", "groups"]
+
+# Все разделы, переведённые на дизайн-систему, независимо от примитива.
+# Планы 06-08 дописывают свои сюда.
+CLEAN_SECTIONS = MIGRATED_SECTIONS + ["history"]
 
 
 async def _user(db: AsyncSession) -> User:
@@ -92,6 +103,31 @@ async def _seed_group(db: AsyncSession, name: str = "Группа выходно
     return group
 
 
+async def _seed_send_log(
+    db: AsyncSession,
+    ad_title: str = "Отправка объявления",
+    status: str = "ok",
+    error_message: str | None = None,
+    group_name: str = "Группа отправки",
+) -> SendLog:
+    user = await _user(db)
+    log = SendLog(
+        user_id=user.id,
+        ad_title=ad_title,
+        ad_text="Текст отправленного объявления",
+        ad_images=[],
+        group_name=group_name,
+        messenger_type="wa",
+        task_id="task-9f3c1d",
+        status=status,
+        error_message=error_message,
+    )
+    db.add(log)
+    await db.commit()
+    await db.refresh(log)
+    return log
+
+
 async def _seed_section(db: AsyncSession, section: str) -> None:
     """Наполняет раздел так, чтобы списочная страница не была пустой.
 
@@ -104,6 +140,8 @@ async def _seed_section(db: AsyncSession, section: str) -> None:
         await _seed_schedule(db)
     elif section == "groups":
         await _seed_group(db)
+    elif section == "history":
+        await _seed_send_log(db)
     else:  # pragma: no cover — защита от опечатки в параметризации
         raise AssertionError(f"неизвестный раздел: {section}")
 
@@ -121,7 +159,7 @@ async def test_list_page_has_responsive_primitives(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("section", MIGRATED_SECTIONS)
+@pytest.mark.parametrize("section", CLEAN_SECTIONS)
 async def test_list_page_no_utility_classes(
     authed_client: AsyncClient, db_session: AsyncSession, section: str
 ):
@@ -357,3 +395,179 @@ async def test_ads_delete_route_unchanged(
     response = await authed_client.post(f"/ads/{foreign.id}/delete", follow_redirects=False)
     assert response.status_code == 302
     assert (await db_session.get(Ad, foreign.id)) is not None
+
+
+# --- План 05: раздел «История» на собственном примитиве data-hrow -----------
+
+@pytest.mark.asyncio
+async def test_history_uses_hrow_primitive(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Запись истории собрана на data-hrow, а не на строке-таблице data-row.
+
+    История — единственный раздел с собственным адаптивным примитивом: он
+    перестраивается раньше остальных, на 1080px, и его медиазапрос уже лежит в
+    app.css со времён Плана 01.
+    """
+    await _seed_send_log(db_session)
+
+    html = (await authed_client.get("/history")).text
+    assert "data-hrow" in html
+
+
+@pytest.mark.asyncio
+async def test_history_meta_marked_by_attribute(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Блок метаданных размечен атрибутом, на который опирается медиазапрос.
+
+    В макете это правило завязано на подстроку инлайн-стиля дочернего элемента
+    и при переезде на классы молча перестаёт совпадать: на узкой ширине блок
+    остался бы с левой границей и левым отступом вместо верхней границы.
+    План 01 перевёл селектор на data-area — здесь появляется его опора.
+    """
+    await _seed_send_log(db_session)
+
+    html = (await authed_client.get("/history")).text
+    assert 'data-area="meta"' in html
+
+
+@pytest.mark.asyncio
+async def test_history_card_renders_data(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Запись истории отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+
+    Перевод include в макрос теряет неявный контекст вызывающего шаблона:
+    страница останется валидной и вернёт 200, а записи будут пустыми.
+    """
+    log = await _seed_send_log(
+        db_session, ad_title="Уникальный заголовок отправки", group_name="Уникальная группа"
+    )
+
+    response = await authed_client.get("/history")
+    assert response.status_code == 200
+    html = response.text
+    assert "Уникальный заголовок отправки" in html
+    assert "Уникальная группа" in html
+    assert "task-9f3c1d" in html
+    assert f"/history/{log.id}" in html
+
+
+@pytest.mark.asyncio
+async def test_history_filters_survive_pagination(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Фильтр истории обязан доехать до ВТОРОЙ страницы выдачи.
+
+    Потерянный фильтр не роняет страницу — он молча подмешивает чужие записи к
+    отфильтрованным, и список продолжает выглядеть исправным.
+    """
+    user = await _user(db_session)
+    db_session.add_all(
+        [
+            SendLog(
+                user_id=user.id,
+                ad_title=f"Отправка {i}",
+                ad_text="Текст",
+                ad_images=[],
+                group_name=f"Группа {i}",
+                messenger_type="wa",
+                status="ok",
+            )
+            for i in range(61)
+        ]
+    )
+    await db_session.commit()
+
+    response = await authed_client.get(
+        "/history/partial?offset=30&limit=30&status=ok&period=30d"
+    )
+    assert response.status_code == 200
+
+    urls = re.findall(r'hx-get="([^"]*/partial\?[^"]*)"', response.text)
+    assert urls, "сентинел бесконечной прокрутки не найден"
+    sentinel = urls[-1]
+    assert "status=ok" in sentinel, sentinel
+    assert "period=30d" in sentinel, sentinel
+    offset = re.search(r"offset=(\d+)", sentinel)
+    assert offset and int(offset.group(1)) > 30, sentinel
+
+
+@pytest.mark.asyncio
+async def test_history_detail_shows_error_text(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Текст ошибки виден ЦЕЛИКОМ — это единственное объяснение неудачи.
+
+    Сообщение приходит из внешнего мессенджера, приложением не контролируется и
+    выводится только через экранирование Jinja2 (T-05-01). Сокращать его нельзя:
+    по нему пользователь понимает, почему реклама не ушла.
+    """
+    long_error = (
+        "PeerFloodError: Too many requests to join the group chat -420; "
+        "retry after 86400 seconds (account temporarily restricted by Telegram)"
+    )
+    log = await _seed_send_log(
+        db_session, status="fail", error_message=long_error, ad_title="Неудачная отправка"
+    )
+
+    response = await authed_client.get(f"/history/{log.id}")
+    assert response.status_code == 200
+    html = response.text
+    assert long_error in html, "текст ошибки усечён или отсутствует"
+    assert "truncate" not in html
+
+
+@pytest.mark.asyncio
+async def test_history_detail_renders_for_successful_send(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парный тест: без него предыдущий зеленел бы на одной лишь ветке ошибки."""
+    log = await _seed_send_log(db_session, ad_title="Успешная отправка")
+
+    response = await authed_client.get(f"/history/{log.id}")
+    assert response.status_code == 200
+    html = response.text
+    assert "Успешная отправка" in html
+    for marker in UTILITY_MARKERS:
+        assert marker not in html, marker
+
+
+# --- План 05: дашборд и профиль --------------------------------------------
+
+@pytest.mark.asyncio
+async def test_dashboard_no_utility_classes(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    await _seed_send_log(db_session, ad_title="Отправка дашборда")
+
+    response = await authed_client.get("/dashboard")
+    assert response.status_code == 200
+    html = response.text
+    assert "Отправка дашборда" in html, "карточка недавней отправки отрисовалась пустой"
+    for marker in UTILITY_MARKERS:
+        assert marker not in html, marker
+
+
+@pytest.mark.asyncio
+async def test_profile_no_utility_classes(authed_client: AsyncClient):
+    response = await authed_client.get("/profile")
+    assert response.status_code == 200
+    for marker in UTILITY_MARKERS:
+        assert marker not in response.text, marker
+
+
+@pytest.mark.asyncio
+async def test_profile_form_contract(authed_client: AsyncClient):
+    """Форма профиля сохраняет метод, маршрут и все прежние имена полей.
+
+    Потеря атрибута name не роняет страницу — она молча ломает сохранение
+    настроек (T-05-04).
+    """
+    html = (await authed_client.get("/profile")).text
+
+    assert 'method="post"' in html
+    assert 'action="/profile"' in html
+    assert 'name="timezone"' in html
+    assert "Профиль" in html
