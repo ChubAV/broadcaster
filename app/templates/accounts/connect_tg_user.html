@@ -1,95 +1,104 @@
 {% extends "base.html" %}
-{% from "includes/icons.html" import icon_check %}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/button.html" import link_button %}
+{% from "components/badge.html" import badge %}
+{% from "components/field.html" import field %}
+
 {% block title %}Подключение Telegram — Broadcaster{% endblock %}
+
+{% block page_title %}Подключение Telegram{% endblock %}
+{% block page_actions %}{{ link_button('К аккаунтам', '/accounts', variant='ghost') }}{% endblock %}
+
 {% block content %}
+<div class="connect-shell">
+  {#- Блок ошибки собран на классах макроса alert: сам макрос принимает готовое
+      сообщение, а здесь текст подставляет скрипт по ответу сервера. -#}
+  <div id="error-box" class="alert alert--error" role="alert" hidden></div>
 
-<div class="max-w-md mx-auto">
-  <!-- Error box -->
-  <div id="error-box" class="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 hidden"></div>
-
-  <div class="bg-white rounded-lg border border-gray-200 p-6">
-    <!-- Start section -->
-    <div id="start-section">
-      <h1 class="text-lg font-semibold text-gray-900 mb-1">Подключение Telegram</h1>
-      <p class="text-sm text-gray-500 mb-5">
-        Нажмите кнопку, чтобы получить QR-код. Отсканируйте его в приложении Telegram (Настройки &rarr; Устройства &rarr; Подключить устройство).
-      </p>
-      <div class="flex items-center gap-3">
-        <button onclick="startQR()" id="start-btn" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">
-          Начать подключение
-        </button>
-        <a href="/accounts" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">Отмена</a>
-      </div>
-    </div>
-
-    <!-- QR code section -->
-    <div id="qr-section" class="hidden text-center">
-      <img id="qr-image" src="" alt="QR-код" class="mx-auto mb-4 rounded-lg" style="max-width: 256px;">
-      <p id="qr-status-text" class="text-sm text-amber-600 mb-4">Ожидание сканирования...</p>
-      <div class="flex items-center justify-center gap-3">
-        <button onclick="refreshQR()" id="refresh-btn" class="hidden inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">
-          Обновить QR-код
-        </button>
-        <a href="/accounts" class="inline-flex items-center gap-1.5 bg-white border border-gray-300 text-gray-700 rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-gray-50 transition-colors">Отмена</a>
-      </div>
-    </div>
-
-    <!-- 2FA section -->
-    <div id="2fa-section" class="hidden">
-      <h2 class="text-lg font-semibold text-gray-900 mb-1">Двухфакторная аутентификация</h2>
-      <p class="text-sm text-gray-500 mb-5">
-        У вашего аккаунта включена двухфакторная аутентификация. Введите пароль.
-      </p>
-      <div class="space-y-4">
-        <div>
-          <label for="password" class="block text-sm font-medium text-gray-700 mb-1">Пароль 2FA</label>
-          <input id="password" type="password" required placeholder="Пароль двухфакторной аутентификации"
-            class="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors">
-        </div>
-        <button onclick="submit2FA()" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">
-          Подтвердить
-        </button>
-      </div>
-    </div>
-
-    <!-- Success section -->
-    <div id="success-section" class="hidden text-center py-4">
-      <div class="inline-flex items-center justify-center w-12 h-12 bg-emerald-50 rounded-full mb-3 text-emerald-600">
-        {{ icon_check(size='h-6 w-6') }}
-      </div>
-      <p class="text-lg font-semibold text-gray-900 mb-1">Подключено!</p>
-      <p class="text-sm text-gray-500 mb-4">Telegram аккаунт успешно подключён.</p>
-      <a href="/accounts" class="inline-flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-3.5 py-2 text-sm font-medium hover:bg-indigo-700 transition-colors">К аккаунтам</a>
+  {{ card_open() }}
+  {#- Шаги мастера переключает скрипт, поэтому каждый шаг — отдельный блок с
+      собственным идентификатором. Скрытие делает АТРИБУТ hidden, а не класс:
+      класса скрытия удалённого фреймворка в проекте больше нет, и опора на
+      него оставила бы все четыре шага видимыми одновременно. -#}
+  <div class="connect-step" id="start-section">
+    <p class="connect-step__text">
+      Нажмите кнопку, чтобы получить QR-код. Отсканируйте его в приложении Telegram
+      (Настройки &rarr; Устройства &rarr; Подключить устройство).
+    </p>
+    <div class="connect-step__actions">
+      {#- Кнопки этого экрана управляются скриптом по идентификатору, поэтому
+          собраны на классах макроса button, а не его вызовом: макрос не
+          принимает ни id, ни обработчик события. -#}
+      <button class="btn btn--primary" type="button" id="start-btn" onclick="startQR()"><span class="btn__label">Начать подключение</span></button>
+      {{ link_button('Отмена', '/accounts', variant='ghost') }}
     </div>
   </div>
+
+  <div class="connect-step connect-step--center" id="qr-section" hidden>
+    {#- QR-код показывается ровно здесь и ровно столько, сколько открыт экран:
+        ни в хранилища, ни в атрибуты, ни в заголовок страницы он не
+        переносится (T-06-02). -#}
+    <div class="connect-qr"><img id="qr-image" src="" alt="QR-код"></div>
+    <p class="connect-step__text" id="qr-status-text">Ожидание сканирования...</p>
+    <div class="connect-step__actions">
+      <button class="btn btn--ghost" type="button" id="refresh-btn" onclick="refreshQR()" hidden><span class="btn__label">Обновить QR-код</span></button>
+      {{ link_button('Отмена', '/accounts', variant='ghost') }}
+    </div>
+  </div>
+
+  <div class="connect-step" id="2fa-section" hidden>
+    <p class="connect-step__text">
+      У вашего аккаунта включена двухфакторная аутентификация. Введите пароль.
+    </p>
+    {#- Пароль двухфакторной защиты живёт только в этом поле: он не переносится
+        в элементы, переживающие перезагрузку страницы, и не дублируется в
+        атрибуты (T-06-02). -#}
+    {{ field(name="password", label='Пароль 2FA', type='password', id='password', required=true,
+             placeholder='Пароль двухфакторной аутентификации', autocomplete='off') }}
+    <div class="connect-step__actions">
+      <button class="btn btn--primary" type="button" onclick="submit2FA()"><span class="btn__label">Подтвердить</span></button>
+    </div>
+  </div>
+
+  <div class="connect-step connect-step--center" id="success-section" hidden>
+    {{ badge('Подключено', 'success') }}
+    <p class="connect-step__text">Telegram аккаунт успешно подключён.</p>
+    {{ link_button('К аккаунтам', '/accounts') }}
+  </div>
+  {{ card_close() }}
 </div>
 
 <script>
 let currentSessionId = null;
 let pollInterval = null;
 
+function setBtnLabel(btn, text) {
+    const label = btn.querySelector('.btn__label');
+    if (label) { label.textContent = text; } else { btn.textContent = text; }
+}
+
 function showError(msg) {
     const box = document.getElementById('error-box');
     box.textContent = msg;
-    box.classList.remove('hidden');
+    box.hidden = false;
 }
 
 function hideError() {
-    document.getElementById('error-box').classList.add('hidden');
+    document.getElementById('error-box').hidden = true;
 }
 
 function showSection(name) {
     ['start-section', 'qr-section', '2fa-section', 'success-section'].forEach(id => {
-        document.getElementById(id).classList.add('hidden');
+        document.getElementById(id).hidden = true;
     });
-    document.getElementById(name + '-section').classList.remove('hidden');
+    document.getElementById(name + '-section').hidden = false;
 }
 
 async function startQR() {
     hideError();
     const btn = document.getElementById('start-btn');
     btn.disabled = true;
-    btn.textContent = 'Загрузка...';
+    setBtnLabel(btn, 'Загрузка...');
 
     try {
         const resp = await fetch('/accounts/connect/tg_user/start-qr', {method: 'POST'});
@@ -97,7 +106,7 @@ async function startQR() {
         if (data.error) {
             showError(data.error);
             btn.disabled = false;
-            btn.textContent = 'Начать подключение';
+            setBtnLabel(btn, 'Начать подключение');
             return;
         }
 
@@ -108,7 +117,7 @@ async function startQR() {
     } catch (e) {
         showError('Ошибка сети: ' + e.message);
         btn.disabled = false;
-        btn.textContent = 'Начать подключение';
+        setBtnLabel(btn, 'Начать подключение');
     }
 }
 
@@ -151,7 +160,7 @@ async function checkStatus() {
         } else if (data.status === 'expired') {
             stopPolling();
             document.getElementById('qr-status-text').textContent = 'QR-код истёк.';
-            document.getElementById('refresh-btn').classList.remove('hidden');
+            document.getElementById('refresh-btn').hidden = false;
         } else if (data.status === 'error') {
             stopPolling();
             showError(data.error || 'Ошибка авторизации');
@@ -164,7 +173,7 @@ async function checkStatus() {
 
 async function refreshQR() {
     hideError();
-    document.getElementById('refresh-btn').classList.add('hidden');
+    document.getElementById('refresh-btn').hidden = true;
 
     try {
         const resp = await fetch('/accounts/connect/tg_user/refresh-qr', {
