@@ -262,6 +262,77 @@ def test_table_macros_emit_responsive_primitives():
     assert "</div>" in render("components/table.html", "row_close")
 
 
+# --- подпись колонки внутри ячейки (UI-06, План 09) --------------------------
+#
+# Правило [data-cell-label] в app.css существует с Плана 07, но эмитить атрибут
+# было нечем: у макроса cell не было параметра подписи. На 860px шапка колонок
+# скрывается ([data-rowhead] { display: none }), и число в ячейке остаётся без
+# смысла — подпись возвращает его.
+
+
+def test_cell_label_emitted():
+    """Подпись выводится ПЕРЕД значением и внутри того же элемента ячейки.
+
+    Порядок обязателен: на узкой ширине ячейка читается слева направо, и
+    обратный порядок дал бы «42 Групп» вместо «Групп 42».
+    """
+    out = render("components/table.html", "cell", "42", label="Групп")
+
+    assert "data-cell-label" in out
+    assert out.index("Групп") < out.index("42")
+
+    # оба внутри одного элемента ячейки: подпись стоит после открывающего тега
+    # ячейки, значение — до её закрывающего тега
+    cell_open_end = out.index(">")
+    assert out.index("data-cell-label") > cell_open_end
+    assert out.rstrip().endswith("</span>")
+    assert out.index("42") < out.rindex("</span>")
+
+
+def test_cell_without_label_emits_no_span():
+    """Без подписи вывод макроса не меняется ни одним символом."""
+    out = render("components/table.html", "cell", "42")
+
+    assert "data-cell-label" not in out
+    assert out == '<span class="cell">42</span>'
+
+
+def test_cell_label_is_escaped():
+    """Подпись — обычный экранированный вывод: макрос не место для готового HTML."""
+    out = render("components/table.html", "cell", "42", label="<b>x</b>")
+
+    assert "<b>x</b>" not in out
+    assert "&lt;b&gt;" in out
+
+
+def test_cell_label_composes_with_all_flags():
+    out = render(
+        "components/table.html",
+        "cell",
+        "42",
+        label="Групп",
+        mono=True,
+        muted=True,
+        area="meta",
+        title="Групп",
+    )
+
+    for token in ("cell--mono", "cell--muted", 'data-area="meta"', 'title="Групп"', "data-cell-label"):
+        assert token in out, token
+
+
+def test_cell_label_in_block_call():
+    """Блочный вызов: подпись стоит перед содержимым caller()."""
+    out = ENV.from_string(
+        "{% from 'components/table.html' import cell %}"
+        "{% call cell(label='Успех') %}<em>готово</em>{% endcall %}"
+    ).render()
+
+    assert "data-cell-label" in out
+    assert "<em>готово</em>" in out
+    assert out.index("Успех") < out.index("готово")
+
+
 # --- modal (D-18) ------------------------------------------------------------
 
 MODAL_ARGS = dict(
