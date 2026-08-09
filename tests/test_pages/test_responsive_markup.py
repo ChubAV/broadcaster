@@ -2238,3 +2238,196 @@ def test_schedules_row_keeps_grid_area_marker():
     assert source.count("area='meta'") == 1, (
         "ячейка следующего запуска потеряла признак области сетки"
     )
+
+
+# --- План 12, Задача 3, часть 1: два прежних подтверждения к общему механизму -
+#
+# Планы 03 и 08 поставили панель подтверждения кнопкой type="button", а настоящую
+# форму спрятали ВНУТРЬ панели. Без Alpine кнопка не делает ничего, а форма
+# остаётся скрытой навсегда: на странице не остаётся ни одного пути удаления
+# (WR-04). Одиннадцать мест, поставленных Планами 11-12, деградируют; эти два —
+# нет. Один механизм подтверждения означает один механизм, а не два похожих.
+
+
+@pytest.mark.asyncio
+async def test_ads_delete_form_degrades_without_alpine(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-12-04: на странице объявлений есть настоящая форма удаления.
+
+    Кнопка type="button" рядом с формой, лежащей внутри скрытой панели, — это
+    не подтверждение, а единственная точка отказа: снять признак сокрытия с
+    панели умеет только Alpine.
+    """
+    ad = await _seed_ad(db_session)
+
+    html = (await authed_client.get("/ads")).text
+
+    forms = _delete_forms_for(html, f"/ads/{ad.id}/delete")
+    assert forms, "форма удаления объявления исчезла из разметки"
+
+    row_forms = [f for f in forms if "modal__form" not in f]
+    assert row_forms, (
+        "форма удаления объявления существует только внутри панели подтверждения — "
+        "без Alpine удалить объявление нечем (WR-04)"
+    )
+    for form in row_forms:
+        assert re.search(r'method="post"', form, re.I), (
+            f"форма удаления потеряла метод: {form[:200]}"
+        )
+        assert 'type="submit"' in form, (
+            f"кнопка удаления перестала отправлять форму: {form[:200]}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_admin_user_delete_form_degrades_without_alpine(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """T-12-04: на карточке пользователя есть настоящая форма удаления."""
+    user = await _user(db_session)
+
+    html = (await admin_client.get(f"/admin/users/{user.id}")).text
+
+    forms = _delete_forms_for(html, f"/admin/users/{user.id}/delete")
+    assert forms, "форма удаления пользователя исчезла из разметки"
+
+    row_forms = [f for f in forms if "modal__form" not in f]
+    assert row_forms, (
+        "форма удаления пользователя существует только внутри панели подтверждения — "
+        "без Alpine удалить пользователя нечем (WR-04)"
+    )
+    for form in row_forms:
+        assert re.search(r'method="post"', form, re.I), (
+            f"форма удаления потеряла метод: {form[:200]}"
+        )
+        assert 'type="submit"' in form, (
+            f"кнопка удаления перестала отправлять форму: {form[:200]}"
+        )
+
+
+# --- План 12, Задача 3, часть 2: подписи колонок в оставшихся четырёх шаблонах -
+#
+# Уточнение к списку семи шаблонов из 01-VERIFICATION.md: он называет списочные
+# страницы, но в разделах объявлений и на дашборде ячейки живут в МАКРОСЕ строки.
+# Правка макроса закрывает и страницу, и её партиал прокрутки одновременно, а в
+# админке ячейки лежат в самих страницах — там правятся страницы.
+
+AD_CELL_LABELS = ("Текст", "Отправок", "Расписаний", "Создано", "Статус")
+RECENT_CELL_LABELS = ("Время", "Группа", "Статус")
+ADMIN_USER_CELL_LABELS = ("Регистрация", "Баланс", "Статус")
+
+
+@pytest.mark.asyncio
+async def test_ads_cell_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка объявления несёт подписи и на странице, и в порции прокрутки."""
+    ads = [await _seed_ad(db_session, title=f"Объявление {i}") for i in range(2)]
+
+    html = (await authed_client.get("/ads")).text
+
+    for label in AD_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(ads), (
+            f"подпись {label!r} проставлена не во всех строках"
+        )
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header - labels == {"Объявление"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Объявление'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+    response = await authed_client.get("/ads/partial?offset=0&limit=30")
+    assert response.status_code == 200
+    for label in AD_CELL_LABELS:
+        assert response.text.count(f"<span data-cell-label>{label}</span>") == len(ads), (
+            f"подпись {label!r} потеряна в порции бесконечной прокрутки"
+        )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_cell_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка недавней отправки на дашборде несёт названия своих колонок."""
+    logs = [
+        await _seed_send_log(db_session, ad_title=f"Отправка {i}") for i in range(2)
+    ]
+
+    html = (await authed_client.get("/dashboard")).text
+
+    for label in RECENT_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(logs), (
+            f"подпись {label!r} проставлена не во всех строках"
+        )
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header - labels == {"Объявление"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Объявление'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_users_cell_labels_present(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка пользователя в админке несёт названия своих колонок.
+
+    Подпись колонки НЕ является новым полем: она дублирует название, уже
+    показанное в шапке. Состав персональных данных не расширяется (T-12-06).
+    """
+    html = (await admin_client.get("/admin/users")).text
+
+    for label in ADMIN_USER_CELL_LABELS:
+        assert f"<span data-cell-label>{label}</span>" in html, (
+            f"подпись {label!r} потеряна в строке пользователя"
+        )
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header - labels == {"Пользователь"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Пользователь'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_user_detail_cell_labels_present(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Список аккаунтов в карточке пользователя несёт название колонки статуса.
+
+    Подпись здесь ровно одна, и это не недоработка: колонок в таблице две, а
+    первая несёт название самой сущности.
+    """
+    user = await _user(db_session)
+    await _seed_account(db_session, type_="max")
+
+    html = (await admin_client.get(f"/admin/users/{user.id}")).text
+
+    assert "<span data-cell-label>Статус</span>" in html, (
+        "подпись статуса потеряна в списке аккаунтов карточки"
+    )
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header - labels == {"Аккаунт"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Аккаунт'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
