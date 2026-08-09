@@ -1,0 +1,68 @@
+{# Строка расписания — по эталону ads/includes/ad_card.html (План 03).
+
+   Это МАКРОС, а не include: импортированные шаблоны Jinja контекста
+   вызывающего не получают, поэтому `item` и `user` — явные параметры. Ошибка в
+   имени параметра проявится не исключением, а пустой строкой, поэтому
+   отрисовка реальных данных закреплена тестом test_schedules_card_renders_data.
+
+   SCHEDULE_COLS — единственный источник раскладки колонок раздела: его же
+   импортирует list.html для заголовка колонок, а partial_cards.html — для
+   строк. Разъехаться шапке и строкам не на чем.
+
+   `user` приходит параметром: format_datetime_for_user — глобал окружения, но
+   его второй аргумент (пользователь с таймзоной) — данные запроса.
+
+   Импорт: {% from "schedules/includes/schedule_row.html" import schedule_row, SCHEDULE_COLS %} #}
+
+{% from "components/table.html" import row_open, row_close, cell %}
+{% from "components/badge.html" import badge %}
+{% from "components/toggle.html" import toggle %}
+{% from "components/button.html" import button, link_button %}
+{% from "includes/messenger_icon.html" import messenger_icon %}
+
+{% set SCHEDULE_COLS = 'minmax(180px,2.2fr) 128px minmax(110px,1fr) 104px 152px 96px 210px' %}
+{% set SCHEDULE_COLUMNS = ['Объявление', 'Группы', 'Дни', 'Время', 'Следующий запуск', 'Статус', ''] %}
+{% set DAY_NAMES = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'} %}
+
+{% macro schedule_row(item, user=None, cols=SCHEDULE_COLS) -%}
+{%- set s = item.schedule -%}
+{%- set day_labels = [] -%}
+{%- for d in s.days_of_week|sort %}{% set _ = day_labels.append(DAY_NAMES.get(d, d)) %}{% endfor -%}
+{{ row_open(cols=cols, id='schedule-row-' ~ s.id) }}
+  {%- call cell(grow=true, title=item.ad_title) %}
+    <span data-grow>{{ item.ad_title }}</span>
+  {%- endcall %}
+  {#- Иконка мессенджера — существующий макрос, переиспользуется как есть.
+      Размер приходит классом .avatar: собственного класса под иконку в app.css
+      нет, а файл закрыт для дописывания (тот же приём, что у миниатюры
+      объявления в Плане 03). У отвязанного расписания (issue #35) типа нет —
+      ветка «неизвестный мессенджер» несёт utility-классы, поэтому она не
+      вызывается вовсе. -#}
+  {%- call cell(muted=true, title='Групп в расписании') %}
+    {%- if item.messenger_type %}{{ messenger_icon(item.messenger_type, size='avatar', show_label=false) }}{% endif -%}
+    <span>{{ s.group_ids|length }} групп</span>
+  {%- endcall %}
+  {{- cell(text=day_labels|join(' ') if day_labels else '—', mono=true, muted=true, title='Дни недели') }}
+  {{- cell(text=s.times_of_day|join(', ') if s.times_of_day else '—', mono=true, muted=true) }}
+  {{- cell(text=(format_datetime_for_user(item.next_run_local, user, '%d.%m %H:%M') ~ (' ' ~ item.tz_label if item.tz_label else '')) if item.next_run_local else '—',
+           mono=true, muted=true, area='meta') }}
+  {%- call cell() %}
+    {%- if s.is_active %}{{ badge('Активно', 'success') }}{% else %}{{ badge('Пауза', 'neutral') }}{% endif -%}
+  {%- endcall %}
+  {%- call cell() %}
+    {#- «Новый вид, старые действия»: маршрут, метод и серверные проверки
+        владельца не тронуты — сменился только элемент управления. Событие
+        change всплывает от чекбокса к форме, поэтому обработчик висит на
+        форме, а макрос toggle остаётся без собственных атрибутов событий. -#}
+    <form method="post" action="/schedules/{{ s.id }}/toggle" x-data x-on:change="$el.submit()">
+      {{- toggle(name='is_active', checked=s.is_active, id='schedule-toggle-' ~ s.id,
+                 title='Приостановить' if s.is_active else 'Возобновить') -}}
+    </form>
+    {{- link_button('Изменить', '/schedules/' ~ s.id ~ '/edit', variant='ghost', icon='pencil',
+                    title='Редактировать расписание') -}}
+    <form method="post" action="/schedules/{{ s.id }}/delete" onsubmit="return confirm('Удалить расписание?')">
+      {{- button('Удалить', variant='ghost', icon='trash', title='Удалить расписание') -}}
+    </form>
+  {%- endcall %}
+{{ row_close() }}
+{%- endmacro %}
