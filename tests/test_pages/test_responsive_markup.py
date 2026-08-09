@@ -1077,3 +1077,163 @@ async def test_admin_user_detail_shows_no_extra_personal_data(
     html = (await admin_client.get(f"/admin/users/{user.id}")).text
     assert user.password_hash not in html, "в карточке появился хеш пароля"
     assert "password_hash" not in html
+
+
+# --- План 08, Задача 2: история пользователя в админке -----------------------
+#
+# Последние два HTMX-взаимодействия описи из 27. Тип данных тот же, что и в
+# пользовательской истории, поэтому и примитив обязан быть тот же: data-hrow.
+
+
+async def _seed_admin_history(db_session: AsyncSession, count: int = 61) -> User:
+    """Наполняет историю пользователя так, чтобы вторая страница существовала."""
+    user = await _user(db_session)
+    db_session.add_all(
+        [
+            SendLog(
+                user_id=user.id,
+                ad_title=f"Админ-отправка {i}",
+                ad_text="Текст",
+                ad_images=[],
+                group_name=f"Админ-группа {i}",
+                messenger_type="wa",
+                status="ok",
+            )
+            for i in range(count)
+        ]
+    )
+    await db_session.commit()
+    return user
+
+
+@pytest.mark.asyncio
+async def test_admin_user_history_uses_hrow_primitive(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Запись истории в админке собрана на том же примитиве, что и у пользователя.
+
+    Это тот же тип данных, и выглядеть он обязан одинаково: примитив data-hrow
+    и блок метаданных, размеченный атрибутом data-area="meta" — опора
+    медиазапроса 1080px.
+    """
+    user = await _seed_admin_history(db_session, count=3)
+
+    response = await admin_client.get(f"/admin/users/{user.id}/history")
+    assert response.status_code == 200
+    html = response.text
+    assert "data-hrow" in html
+    assert 'data-area="meta"' in html
+    # Фильтры собраны общим макросом, а не локальным сценарием
+    assert 'class="filters' in html, "блок фильтров не собран общим макросом"
+    # Записи отрисовывают реальные данные, а не пустоту
+    assert "Админ-отправка 0" in html
+    assert "Админ-группа 0" in html
+
+
+@pytest.mark.asyncio
+async def test_admin_user_history_infinite_scroll(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Последняя живая цепочка прокрутки фазы обязана довести до второй страницы.
+
+    Сентинел заменяет сам себя и обязан нести смещение СТРОГО больше
+    запрошенного — иначе прокрутка зациклится на одной и той же выдаче, а
+    страница продолжит выглядеть исправной.
+    """
+    user = await _seed_admin_history(db_session)
+
+    response = await admin_client.get(
+        f"/admin/users/{user.id}/history/partial?offset=30&limit=30&status=ok&period=30d"
+    )
+    assert response.status_code == 200
+
+    urls = re.findall(r'hx-get="([^"]*/partial\?[^"]*)"', response.text)
+    assert urls, "сентинел бесконечной прокрутки не найден"
+    sentinel = urls[-1]
+    assert "status=ok" in sentinel, sentinel
+    assert "period=30d" in sentinel, sentinel
+    # Параметр компоновки убран вместе с парной вёрсткой (D-15)
+    assert "layout=cards" not in sentinel, sentinel
+    offset = re.search(r"offset=(\d+)", sentinel)
+    assert offset and int(offset.group(1)) > 30, sentinel
+    # Записи партиала не пустые
+    assert "Админ-отправка" in response.text
+
+
+@pytest.mark.asyncio
+async def test_admin_history_no_utility_classes(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    user = await _seed_admin_history(db_session, count=3)
+    log = await _seed_send_log(
+        db_session, status="fail", error_message="ECONNRESET", ad_title="Сбойная отправка"
+    )
+
+    urls = (
+        f"/admin/users/{user.id}/history",
+        f"/admin/users/{user.id}/history/partial?offset=0&limit=30",
+        f"/admin/users/{user.id}/history/{log.id}",
+    )
+    for url in urls:
+        response = await admin_client.get(url)
+        assert response.status_code == 200, url
+        for marker in UTILITY_MARKERS:
+            assert marker not in response.text, f"{url}: {marker}"
+
+
+@pytest.mark.asyncio
+async def test_admin_history_detail_shows_error_text(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Текст ошибки выводится ЦЕЛИКОМ, как и в пользовательской детали (T-08-03).
+
+    Строка приходит из внешнего мессенджера, приложением не контролируется и
+    выводится только штатным экранированием. Усечения многоточием нет.
+    """
+    user = await _user(db_session)
+    long_error = (
+        "PeerFloodError: Too many requests to join the group chat -420; "
+        "retry after 86400 seconds (account temporarily restricted by Telegram)"
+    )
+    log = await _seed_send_log(
+        db_session, status="fail", error_message=long_error, ad_title="Неудачная админ-отправка"
+    )
+
+    response = await admin_client.get(f"/admin/users/{user.id}/history/{log.id}")
+    assert response.status_code == 200
+    html = response.text
+    assert long_error in html, "текст ошибки усечён или отсутствует"
+    assert "truncate" not in html
+
+
+@pytest.mark.asyncio
+async def test_admin_history_escapes_error_text(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """T-08-03: текст ошибки — недоверенная строка из внешнего мессенджера."""
+    user = await _user(db_session)
+    log = await _seed_send_log(
+        db_session, status="fail", error_message='<img src=x onerror="alert(1)">'
+    )
+
+    html = (await admin_client.get(f"/admin/users/{user.id}/history/{log.id}")).text
+    assert "<img src=x" not in html, "текст ошибки отрисован как разметка"
+    assert "&lt;img src=x" in html, "экранированного вывода ошибки нет"
+
+
+@pytest.mark.asyncio
+async def test_admin_history_denied_for_regular_user(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-08-01: история чужого пользователя недоступна обычному пользователю."""
+    user = await _user(db_session)
+    log = await _seed_send_log(db_session, ad_title="Закрытая отправка")
+
+    for url in (
+        f"/admin/users/{user.id}/history",
+        f"/admin/users/{user.id}/history/partial?offset=0&limit=30",
+        f"/admin/users/{user.id}/history/{log.id}",
+    ):
+        response = await authed_client.get(url, follow_redirects=False)
+        assert response.status_code != 200, url
+        assert "Закрытая отправка" not in response.text, url
