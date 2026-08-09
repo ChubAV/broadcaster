@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ad import Ad
+from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
@@ -24,10 +25,10 @@ from app.models.user import User
 # Признаки utility-фреймворка: разметка разделов от них избавлена (D-06).
 UTILITY_MARKERS = ("bg-white", "text-gray", "rounded-lg", "border-gray", "lg:")
 
-SECTION_URLS = {"ads": "/ads", "schedules": "/schedules"}
+SECTION_URLS = {"ads": "/ads", "schedules": "/schedules", "groups": "/groups"}
 
 # Разделы, мигрированные на дизайн-систему. Планы 05-08 дописывают свои сюда.
-MIGRATED_SECTIONS = ["ads", "schedules"]
+MIGRATED_SECTIONS = ["ads", "schedules", "groups"]
 
 
 async def _user(db: AsyncSession) -> User:
@@ -75,6 +76,22 @@ async def _seed_schedule(
     return schedule
 
 
+async def _seed_group(db: AsyncSession, name: str = "Группа выходного дня") -> Group:
+    user = await _user(db)
+    account = await _seed_account(db)
+    group = Group(
+        user_id=user.id,
+        account_id=account.id,
+        messenger_type="wa",
+        group_external_id="ext-4242",
+        name=name,
+    )
+    db.add(group)
+    await db.commit()
+    await db.refresh(group)
+    return group
+
+
 async def _seed_section(db: AsyncSession, section: str) -> None:
     """Наполняет раздел так, чтобы списочная страница не была пустой.
 
@@ -85,6 +102,8 @@ async def _seed_section(db: AsyncSession, section: str) -> None:
         await _seed_ad(db)
     elif section == "schedules":
         await _seed_schedule(db)
+    elif section == "groups":
+        await _seed_group(db)
     else:  # pragma: no cover — защита от опечатки в параметризации
         raise AssertionError(f"неизвестный раздел: {section}")
 
@@ -182,6 +201,110 @@ async def test_schedules_toggle_route_unchanged(
 
     response = await authed_client.post(
         f"/schedules/{foreign.id}/toggle", follow_redirects=False
+    )
+    assert response.status_code == 302
+    await db_session.refresh(foreign)
+    assert foreign.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_groups_card_renders_data(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка группы отрисовывает РЕАЛЬНЫЕ данные, а не пустоту."""
+    group = await _seed_group(db_session, name="Уникальное имя группы")
+
+    response = await authed_client.get("/groups")
+    assert response.status_code == 200
+    html = response.text
+    assert "Уникальное имя группы" in html
+    assert "ext-4242" in html
+    assert f"/groups/{group.id}/toggle" in html
+
+
+@pytest.mark.asyncio
+async def test_groups_filters_survive_pagination(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-04-01: фильтр обязан доехать до ВТОРОЙ страницы выдачи.
+
+    Потерянный фильтр не роняет страницу — он молча подмешивает чужие строки к
+    отфильтрованным, и список продолжает выглядеть исправным.
+    """
+    user = await _user(db_session)
+    account = await _seed_account(db_session)
+    db_session.add_all(
+        [
+            Group(
+                user_id=user.id,
+                account_id=account.id,
+                messenger_type="wa",
+                group_external_id=f"ext-{i}",
+                name=f"Группа {i}",
+            )
+            for i in range(61)
+        ]
+    )
+    await db_session.commit()
+
+    response = await authed_client.get(
+        "/groups/partial?offset=30&limit=30&messenger_type=wa&is_active=1"
+    )
+    assert response.status_code == 200
+
+    urls = re.findall(r'hx-get="([^"]*/partial\?[^"]*)"', response.text)
+    assert urls, "сентинел бесконечной прокрутки не найден"
+    sentinel = urls[-1]
+    assert "messenger_type=wa" in sentinel, sentinel
+    assert "is_active=1" in sentinel, sentinel
+    offset = re.search(r"offset=(\d+)", sentinel)
+    assert offset and int(offset.group(1)) > 30, sentinel
+
+
+@pytest.mark.asyncio
+async def test_groups_filters_block_collapsible(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Блок фильтров собран из общего макроса и свёрнут разметкой, а не Alpine.
+
+    Свёрнутое состояние приходит с сервера классами, поэтому на мобильной
+    ширине блок не мигает до инициализации Alpine.
+    """
+    await _seed_group(db_session)
+
+    html = (await authed_client.get("/groups")).text
+    assert 'class="filters' in html
+    assert "filters__toggle" in html
+    assert 'action="/groups"' in html
+
+
+@pytest.mark.asyncio
+async def test_groups_toggle_route_unchanged(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-04-03: тумблер группы меняет вид, а не маршрут и не права."""
+    own = await _seed_group(db_session, name="Своя группа")
+    foreign = Group(
+        user_id=own.user_id + 1000,
+        account_id=own.account_id,
+        messenger_type="wa",
+        group_external_id="ext-foreign",
+        name="Чужая группа",
+    )
+    db_session.add(foreign)
+    await db_session.commit()
+    await db_session.refresh(foreign)
+    assert own.is_active is True and foreign.is_active is True
+
+    response = await authed_client.post(
+        f"/groups/{own.id}/toggle", follow_redirects=False
+    )
+    assert response.status_code == 302
+    await db_session.refresh(own)
+    assert own.is_active is False
+
+    response = await authed_client.post(
+        f"/groups/{foreign.id}/toggle", follow_redirects=False
     )
     assert response.status_code == 302
     await db_session.refresh(foreign)
