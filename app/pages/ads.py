@@ -43,7 +43,11 @@ async def ads_partial(
     request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
-    layout: str = Query("table"),
+    # D-15: параметр компоновки принимается и игнорируется. Строчная вёрстка
+    # удалена как недостижимая, но у пользователей есть открытые вкладки, чьи
+    # сентинелы всё ещё несут этот параметр в URL — удаление его из сигнатуры
+    # превратило бы их подгрузку в ошибку валидации.
+    layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -57,9 +61,8 @@ async def ads_partial(
     has_next = len(rows) > limit
     ads = rows[:limit]
     await _enrich_ads_with_stats(db, ads)
-    template = "ads/partial_cards.html" if layout == "cards" else "ads/partial_rows.html"
     return templates.TemplateResponse(
-        template,
+        "ads/partial_cards.html",
         {
             "request": request,
             "user": user,

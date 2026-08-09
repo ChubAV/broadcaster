@@ -108,7 +108,8 @@ async def accounts_partial(
     request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
-    layout: str = Query("table"),
+    # D-15: параметр компоновки принимается и игнорируется — см. app/pages/ads.py
+    layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -128,9 +129,8 @@ async def accounts_partial(
     account_stats = await _get_account_stats(
         db, user.id, [a.id for a in accounts]
     )
-    template = "accounts/partial_cards.html" if layout == "cards" else "accounts/partial_rows.html"
     return templates.TemplateResponse(
-        template,
+        "accounts/partial_cards.html",
         {
             "request": request,
             "user": user,
@@ -684,7 +684,8 @@ async def accounts_connect_max_status(
 async def accounts_sync_status(
     request: Request,
     account_id: int,
-    layout: str = Query("table"),
+    # D-15: параметр компоновки принимается и игнорируется — см. app/pages/ads.py
+    layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -701,8 +702,7 @@ async def accounts_sync_status(
     if view.status in ("active", "sync_failed", "syncing"):
         stats_map = await _get_account_stats(db, user.id, [account_id]) if view.status == "active" else {}
         stats = stats_map.get(account_id, {}) if view.status == "active" else {}
-        template_name = "accounts/partials/sync_status_card.html" if layout == "cards" else "accounts/partials/sync_status_row.html"
-        html = templates.env.get_template(template_name).render(
+        html = templates.env.get_template("accounts/partials/sync_status_card.html").render(
             account_id=account_id,
             status=view.status,
             group_count=view.group_count,

@@ -68,6 +68,7 @@ async def history_partial(
     period: str | None = Query(default=None),
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    # D-15: параметр компоновки принимается и игнорируется — см. app/pages/ads.py
     layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -104,9 +105,8 @@ async def history_partial(
         for r, group in rows[:limit]
     ]
     filter_params = _history_filter_params(status, messenger, account_id_int, period)
-    template = "history/partial_cards.html" if layout == "cards" else "history/partial_rows.html"
     return templates.TemplateResponse(
-        template,
+        "history/partial_cards.html",
         {
             "request": request,
             "user": user,

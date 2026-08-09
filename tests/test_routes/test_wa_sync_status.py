@@ -1,3 +1,4 @@
+import re
 import sys
 
 import pytest
@@ -124,7 +125,10 @@ async def test_sync_status_active_shows_groups(sync_setup):
 
     assert resp.status_code == 200
     assert "Активно" in resp.text
-    assert "Загружено 3 групп" in resp.text
+    # D-15: недостижимая строчная вёрстка удалена, ответ всегда карточный.
+    # Формулировка «Загружено 3 групп» жила только в удалённом sync_status_row.html;
+    # карточка показывает подпись и число соседними элементами.
+    assert re.search(r"Групп</span>\s*<span[^>]*>\s*3\s*</span>", resp.text), resp.text
 
 
 @pytest.mark.asyncio

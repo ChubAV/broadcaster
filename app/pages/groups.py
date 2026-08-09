@@ -127,6 +127,7 @@ async def groups_partial(
     messenger_type: str | None = Query(None),
     is_active: str | None = Query(None),
     search: str | None = Query(None),
+    # D-15: параметр компоновки принимается и игнорируется — см. app/pages/ads.py
     layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -149,9 +150,8 @@ async def groups_partial(
     )
     accounts_by_id = _accounts_by_id(accounts_r.scalars().all())
 
-    template = "groups/partial_cards.html" if layout == "cards" else "groups/partial_rows.html"
     return templates.TemplateResponse(
-        template,
+        "groups/partial_cards.html",
         {
             "request": request,
             "user": user,

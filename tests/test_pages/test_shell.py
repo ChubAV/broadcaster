@@ -183,6 +183,25 @@ async def test_auth_pages_use_component_library(client: AsyncClient):
     assert 'class="btn btn--primary' in html
 
 
+# --- Контракт «страница → шелл» на мигрированном разделе (План 03) ----------
+
+@pytest.mark.asyncio
+async def test_ads_head_contract(authed_client: AsyncClient):
+    """Заголовок и CTA раздела живут в шапке шелла, а не в теле страницы.
+
+    Собственный заголовок страницы удалён — иначе он бы задвоился с шапкой.
+    """
+    html = (await authed_client.get("/ads")).text
+
+    head = re.search(r"<header data-head>(.*?)</header>", html, re.S)
+    assert head, "шапка шелла не отрисована"
+    assert "Объявления" in head.group(1)
+    assert 'href="/ads/new"' in head.group(1)
+
+    # Заголовок первого уровня на странице ровно один — тот, что в шапке
+    assert html.count("<h1") == 1
+
+
 @pytest.mark.asyncio
 async def test_auth_pages_drop_utility_classes(client: AsyncClient):
     for route in AUTH_GET_ROUTES:
