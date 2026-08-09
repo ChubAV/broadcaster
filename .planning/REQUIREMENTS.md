@@ -197,17 +197,53 @@
 
 ### v2.0 Traceability
 
-Заполняется при создании roadmap v2.0.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| — | — | Pending roadmap |
+| UI-01 | Phase 1 | Pending |
+| UI-02 | Phase 1 | Pending |
+| UI-03 | Phase 1 | Pending |
+| UI-04 | Phase 1 | Pending |
+| UI-05 | Phase 1 | Pending |
+| UI-06 | Phase 1 | Pending |
+| ADS-04 | Phase 2 | Pending |
+| ADS-05 | Phase 2 | Pending |
+| ADS-06 | Phase 2 | Pending |
+| ADS-07 | Phase 2 | Pending |
+| ADS-08 | Phase 2 | Pending |
+| SCH-04 | Phase 2 | Pending |
+| SCH-05 | Phase 2 | Pending |
+| GRP-04 | Phase 3 | Pending |
+| GRP-05 | Phase 3 | Pending |
+| GRP-06 | Phase 3 | Pending |
+| GRP-07 | Phase 3 | Pending |
+| GRP-08 | Phase 3 | Pending |
+| DASH-01 | Phase 4 | Pending |
+| DASH-02 | Phase 4 | Pending |
+| DASH-03 | Phase 4 | Pending |
+| DASH-04 | Phase 4 | Pending |
+| DASH-05 | Phase 4 | Pending |
+| HIST-01 | Phase 4 | Pending |
+| HIST-02 | Phase 4 | Pending |
+| HIST-03 | Phase 4 | Pending |
+| HIST-04 | Phase 4 | Pending |
+| BILL-05 | Phase 5 | Pending |
+| BILL-06 | Phase 5 | Pending |
+| BILL-07 | Phase 5 | Pending |
+| ADMIN-03 | Phase 6 | Pending |
+| ADMIN-04 | Phase 6 | Pending |
+| ADMIN-05 | Phase 6 | Pending |
+| ADMIN-06 | Phase 6 | Pending |
+| ADMIN-07 | Phase 6 | Pending |
+| ADMIN-08 | Phase 6 | Pending |
+| ADMIN-09 | Phase 6 | Pending |
+| ADMIN-10 | Phase 6 | Pending |
+| ADMIN-11 | Phase 6 | Pending |
 
 **Coverage (v2.0):**
-- v2.0 requirements: 38 total
-- Mapped to phases: 0
-- Unmapped: 38 ⚠️
+- v2.0 requirements: 39 total
+- Mapped to phases: 39
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-08-03*
-*Last updated: 2026-08-09 after defining milestone v2.0 Redesign requirements*
+*Last updated: 2026-08-09 after creating the v2.0 Redesign roadmap (v2.0 traceability filled; count corrected from 38 to 39 — the stated total did not match the listed REQ-IDs, no requirement was added or removed)*

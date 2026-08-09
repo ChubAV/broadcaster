@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
 status: planning
-last_updated: "2026-08-08T19:03:36.514Z"
-last_activity: 2026-08-08
+last_updated: "2026-08-09T00:00:00.000Z"
+last_activity: 2026-08-09
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,23 +17,25 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-03)
+See: .planning/PROJECT.md (updated 2026-08-08)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** No active phase — the implemented v1 baseline is fully documented.
+**Current focus:** Phase 1 — Интерфейсный фундамент (дизайн-система, новый шелл и навигация из макета).
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-08-08 — Milestone v2.0 started
+Phase: 1 of 6 (Интерфейсный фундамент)
+Plan: — (phase not planned yet)
+Status: Ready to plan
+Last activity: 2026-08-09 — Roadmap v2.0 создан, нумерация фаз начата заново с 1
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0 (historical plans were not reconstructed)
+- Total plans completed: 0 (milestone v2.0 только начат)
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -41,11 +43,11 @@ Last activity: 2026-08-08 — Milestone v2.0 started
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| Retrospective baseline | No plan artifacts | N/A | N/A |
+| 1. Интерфейсный фундамент | Not planned | N/A | N/A |
 
 **Recent Trend:**
 
-- No execution trend recorded; this roadmap documents pre-existing implementation.
+- Тренда пока нет: v1 был ретроспективной документацией без plan-артефактов, v2.0 — первый milestone, исполняемый через GSD.
 
 ## Accumulated Context
 
@@ -53,16 +55,21 @@ Last activity: 2026-08-08 — Milestone v2.0 started
 
 Decisions are logged in PROJECT.md Key Decisions table.
 
-- The roadmap is a retrospective record of the existing v1 system, not authorization for future implementation.
-- Reliability, security, and other recommendations in research/SUMMARY.md remain future-only until the user defines new scope.
+- Milestone v2.0: редизайн реализуется на Jinja2 + точечных HTMX/Alpine, без SPA.
+- Milestone v2.0: настройка расписаний переезжает в редактор объявления; список расписаний становится сводным с включением и паузой.
+- Milestone v2.0: адаптивность — критерий приёмки каждой фазы, а не отдельная фаза.
+- Roadmap v2.0: нумерация фаз перезапущена с 1 (`--reset-phase-numbers`), так как фазы v1 были ретроспективной документацией уже отгруженной системы.
 
 ### Pending Todos
 
-None. No active milestone scope has been defined.
+None.
 
 ### Blockers/Concerns
 
-No execution blocker. New work requires the user to define a milestone and active requirements.
+- Счётчик в REQUIREMENTS.md указывал 38 требований v2.0, фактических REQ-ID — 39. Счётчики исправлены на 39; смысловых требований не добавлялось и не удалялось.
+- Фаза 1 — жёсткая зависимость всех остальных фаз: пока новый шелл и компоненты не готовы, остальные фазы планировать можно, а исполнять нет.
+- ADS-04 (черновик объявления) требует миграции схемы: поля `status` у `Ad` сейчас нет.
+- Brownfield-риск: система живая и покрыта тестами; протоколы отправки Telegram, WhatsApp и MAX трогать нельзя.
 
 ### Quick Tasks Completed
 
@@ -78,10 +85,12 @@ No execution blocker. New work requires the user to define a milestone and activ
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| Future scope | Reliability and hardening suggestions in research/SUMMARY.md | Not active; requires separate milestone decision | 2026-08-03 |
+| v2.1 | Email-уведомления NOTIF-01..04 | Отложено, вне roadmap v2.0 | 2026-08-08 |
+| v2.1 | Прогрев аккаунтов и автопауза WARM-01..02 | Отложено, вне roadmap v2.0 | 2026-08-08 |
+| Future scope | Reliability and hardening suggestions в research/SUMMARY.md (v1-era) | Не активно; требует отдельного решения по milestone | 2026-08-03 |
 
 ## Session Continuity
 
-Last session: 2026-08-03
-Stopped at: Completed retrospective v1 baseline documentation; no active phase or current milestone scope exists.
+Last session: 2026-08-09
+Stopped at: Создан roadmap v2.0 Redesign — 6 фаз, 39 требований распределены, traceability заполнена.
 Resume file: None

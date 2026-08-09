@@ -1,110 +1,146 @@
-# Roadmap: Broadcaster
+# Roadmap: Broadcaster — v2.0 Redesign
 
 ## Overview
 
-This retrospective roadmap records the implemented v1 baseline as six complete, vertical user capabilities. It is a current-state map, not a plan for new work: all listed requirements are already delivered, and no future reliability, hardening, or expansion work is included.
+Broadcaster — действующая, работающая и покрытая тестами SaaS-платформа. Milestone v2.0 не строит новую систему: он заменяет интерфейс всех существующих разделов на дизайн из макета `new_broadcaster_design.html` и вместе с этим меняет модель взаимодействия для расписаний, групп, истории и админки. Путь milestone идёт от общего фундамента интерфейса к вертикальным срезам пользовательской ценности: сначала дизайн-система и новый шелл на реальных страницах, затем редактор объявления со встроенной настройкой расписаний и сводный список расписаний, затем управление группами на уровне аккаунта, затем оперативная видимость (дашборд и история), тарифы и, наконец, расширенная админ-панель.
+
+**Канонический источник дизайна:** `new_broadcaster_design.html` в корне репозитория — bundled-страница, чья разметка разворачивается в полноценный HTML-документ с новым шеллом, токенами и layout'ами каждого раздела. Все фазы сверяются с ним.
+
+**Жёсткие рамки milestone:**
+- Brownfield: каждый перечисленный раздел уже существует и работает; v2.0 меняет интерфейс и модель взаимодействия, а не саму функцию.
+- Стек зафиксирован: Python 3.12, FastAPI, SQLAlchemy async, PostgreSQL, Celery/Redis, серверный Jinja2 с точечными HTMX/Alpine. SPA исключён.
+- Протоколы отправки Telegram, WhatsApp и MAX не затрагиваются.
+- Адаптивность — сквозной критерий приёмки каждой фазы, а не отдельная фаза. UI-06 фиксирует адаптивные примитивы в Фазе 1; каждая последующая фаза проверяет свои разделы на мобильных ширинах.
+- Единственная действительно новая сущность состояния — `Ad.status` (черновик): поля статуса у `Ad` сейчас нет, поэтому ADS-04 требует миграции схемы. Остальное уже поддержано моделями: `Ad.images` — JSON-список, `Group.is_active` существует, `Schedule` привязан к `ad_id` и хранит группы/дни/время/таймзону, `SendLog` хранит `task_id`, `error_message` и снапшоты, `User.is_blocked` существует.
 
 ## Phases
 
 **Phase Numbering:**
-- Integer phases (1, 2, 3): retrospective baseline capabilities.
-- Decimal phases (2.1, 2.2): reserved for any future approved insertions.
+- Integer phases (1, 2, 3): плановая работа milestone v2.0. Нумерация начата заново с 1 — фазы v1 были ретроспективной документацией уже отгруженной системы, а не выполненными GSD-фазами (архив: `.planning/milestones/v1.0-ROADMAP.md`).
+- Decimal phases (2.1, 2.2): срочные вставки после планирования (помечаются INSERTED), исполняются между целыми в числовом порядке.
 
-- [x] **Phase 1: Secure Access & Scheduling Profile** - Users can establish and recover authenticated access with a personal scheduling timezone.
-- [x] **Phase 2: Advertisement Library** - Users can manage reusable advertising content and its images.
-- [x] **Phase 3: Messenger Accounts & Group Targeting** - Users can connect supported messengers and select synchronized groups.
-- [x] **Phase 4: Scheduled Multi-Messenger Delivery** - Users can schedule advertisements and see their automated delivery outcomes.
-- [x] **Phase 5: Subscription & Message Balance** - Users can understand and fund the usage controls that govern the service.
-- [x] **Phase 6: Administration & Operations** - Administrators and operators can manage the service and observe its operation.
+- [ ] **Phase 1: Интерфейсный фундамент** - Дизайн-система, новый шелл и навигация из макета на всех реальных страницах приложения.
+- [ ] **Phase 2: Объявления и расписания** - Редактор объявления с черновиком, вложениями, предпросмотром и встроенной настройкой расписаний плюс сводный список расписаний.
+- [ ] **Phase 3: Группы аккаунта** - Экран групп конкретного messenger-аккаунта с включением, удалением, ручным добавлением и повторной синхронизацией.
+- [ ] **Phase 4: Дашборд и история** - Оперативная видимость: метрики за сутки, ближайшие отправки, живая лента, heatmap, воркеры онлайн, фильтры/экспорт/повтор в истории.
+- [ ] **Phase 5: Тарифы** - Продление подписки, лимиты по четырём осям и история платежей.
+- [ ] **Phase 6: Админ-панель** - Подразделы Обзор, Пользователи, Воркеры, Очередь, Логи, Платежи, вход под пользователем, блокировка и инциденты.
 
 ## Phase Details
 
-### Phase 1: Secure Access & Scheduling Profile
-**Goal**: Users can securely access their account and set the timezone used for their schedules.
-**Mode:** mvp
-**Depends on**: Nothing (retrospective baseline entry point)
-**Requirements**: AUTH-01, AUTH-02, AUTH-03, PROF-01
+### Phase 1: Интерфейсный фундамент
+**Goal**: Всё приложение отрисовывается через новый шелл и единую дизайн-систему из макета, а последующие фазы получают готовый набор переиспользуемых компонентов и адаптивных примитивов.
+**Depends on**: Nothing (first phase)
+**Requirements**: UI-01, UI-02, UI-03, UI-04, UI-05, UI-06
 **Success Criteria** (what must be TRUE):
-  1. A user can register with an email and password, then confirm that email with a code.
-  2. A user can sign in and retain an authenticated session.
-  3. A user who has forgotten a password can reset it using a code sent by email.
-  4. A user can choose the timezone applied when their schedules are evaluated.
-**Plans**: Baseline complete (retrospective; no plan artifacts)
+  1. Каждая существующая страница приложения (дашборд, объявления, аккаунты, группы, расписания, история, тарифы, админка, профиль, авторизация) открывается в новом шелле `base.html` из макета — ни одна страница не осталась на старом layout'е.
+  2. Пользователь на любой странице видит единую навигацию по разделам, и текущий раздел в ней подсвечен.
+  3. Кнопки, поля, таблицы, карточки, бейджи статусов, модальные окна и пустые состояния выглядят одинаково во всех разделах, потому что отрисовываются из одного набора Jinja2-компонентов, а не из скопированной разметки.
+  4. Как минимум одно взаимодействие на переведённой странице обновляет интерфейс на месте через HTMX/Alpine, без полной перезагрузки страницы.
+  5. Каждая переведённая страница пригодна к использованию на мобильных ширинах: табличные данные переключаются на карточное представление из адаптивных примитивов дизайн-системы.
+**Canonical ref**: `new_broadcaster_design.html` (шелл, токены, навигация, компоненты)
+**Plans**: TBD
 **UI hint**: yes
 
-### Phase 2: Advertisement Library
-**Goal**: Authenticated users can create and maintain the reusable advertisement content they will send.
-**Mode:** mvp
+### Phase 2: Объявления и расписания
+**Goal**: Пользователь ведёт объявление и его расписания целиком из редактора объявления, а сводный список расписаний становится местом обзора и управления состоянием.
 **Depends on**: Phase 1
-**Requirements**: ADS-01, ADS-02, ADS-03
+**Requirements**: ADS-04, ADS-05, ADS-06, ADS-07, ADS-08, SCH-04, SCH-05
 **Success Criteria** (what must be TRUE):
-  1. A user can create and edit their advertising announcements.
-  2. A user can attach an image stored in the S3-compatible media store to an announcement.
-  3. A user can browse and delete only their own announcements.
-**Plans**: Baseline complete (retrospective; no plan artifacts)
+  1. Пользователь может сохранить объявление как черновик, его правки во время редактирования сохраняются автоматически без нажатия «Сохранить», и черновик визуально отличается от опубликованного объявления в списке.
+  2. Пользователь может прикрепить к объявлению несколько вложений, удалить любое из них и увидеть предпросмотр объявления ровно в том виде, в каком оно уйдёт в группы.
+  3. Пользователь может создать, изменить и удалить расписание объявления (группы, дни, время) прямо в редакторе объявления — и ни в один момент выката этой фазы пользователь не остаётся без возможности создать расписание.
+  4. Сводный список расписаний показывает каждое расписание с объявлением, каналами, группами, днями и временем, и позволяет включить или поставить расписание на паузу прямо из списка, не покидая его.
+  5. Редактор объявления и список расписаний пригодны к использованию на мобильных ширинах.
+**Canonical ref**: `new_broadcaster_design.html` (разделы «Объявления» и «Расписания»)
+**Notes**: ADS-04 требует миграции схемы — поля `status` у `Ad` сейчас нет. ADS-07/ADS-08 и SCH-04/SCH-05 связаны: настройка расписаний переезжает в редактор объявления, а список расписаний становится read-mostly, поэтому переезд и урезание списка планируются как один согласованный переход. Модель `Schedule` уже привязана к `ad_id`, так что изменение затрагивает интерфейс, а не схему расписаний.
+**Plans**: TBD
 **UI hint**: yes
 
-### Phase 3: Messenger Accounts & Group Targeting
-**Goal**: Users can connect supported messenger accounts and choose the synchronized groups that will receive advertisements.
-**Mode:** mvp
+### Phase 3: Группы аккаунта
+**Goal**: Пользователь управляет составом групп на уровне конкретного messenger-аккаунта, а не только выбирает их при настройке рассылки.
+**Depends on**: Phase 1, Phase 2
+**Requirements**: GRP-04, GRP-05, GRP-06, GRP-07, GRP-08
+**Success Criteria** (what must be TRUE):
+  1. Пользователь может открыть экран групп конкретного messenger-аккаунта и видит на нём только группы этого аккаунта.
+  2. Пользователь может включить или отключить отдельную группу, и это сразу отражается на том, какие группы доступны при настройке расписаний объявления.
+  3. Пользователь может удалить группу из списка аккаунта и добавить группу аккаунта вручную.
+  4. Пользователь может повторно синхронизировать группы аккаунта и увидеть результат синхронизации (что найдено, что изменилось, что не удалось) не покидая экран.
+  5. Экран групп аккаунта пригоден к использованию на мобильных ширинах.
+**Canonical ref**: `new_broadcaster_design.html` (разделы «Аккаунты» и «Группы»)
+**Notes**: `Group.is_active` уже существует; протоколы синхронизации Telegram/WhatsApp/MAX не меняются — фаза меняет экран и операции над списком.
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 4: Дашборд и история
+**Goal**: Пользователь видит, что происходит с его рассылками прямо сейчас и что произошло раньше, и может действовать по неудачным отправкам.
+**Depends on**: Phase 1, Phase 2
+**Requirements**: DASH-01, DASH-02, DASH-03, DASH-04, DASH-05, HIST-01, HIST-02, HIST-03, HIST-04
+**Success Criteria** (what must be TRUE):
+  1. Пользователь, открывший дашборд, видит метрики отправок за последние сутки, список ближайших запланированных отправок и то, какие воркеры его аккаунтов сейчас онлайн.
+  2. Пользователь видит живую ленту последних событий отправки, которая обновляется без перезагрузки страницы, и heatmap активности отправок за неделю.
+  3. Пользователь может отфильтровать историю по каналу, статусу и периоду и выгрузить именно отфильтрованный результат в файл экспорта.
+  4. Пользователь может прочитать текст ошибки неуспешной отправки, скопировать его одним действием и повторить отправку прямо из записи истории.
+  5. Дашборд и история пригодны к использованию на мобильных ширинах.
+**Canonical ref**: `new_broadcaster_design.html` (разделы «Дашборд» и «История»)
+**Notes**: Дашборд и история читают одни и те же данные (`SendLog`, `Schedule.next_run_at`, состояние контейнеров аккаунтов), поэтому агрегации считаются один раз и переиспользуются обоими разделами. HIST-04 повторяет отправку через существующий механизм диспетчеризации — протоколы отправки не трогаются.
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 5: Тарифы
+**Goal**: Пользователь понимает, сколько ресурса тарифа он израсходовал, за что платил и может продлить подписку не выходя из раздела.
 **Depends on**: Phase 1
-**Requirements**: ACCT-01, ACCT-02, ACCT-03, ACCT-04, GRP-01, GRP-02, GRP-03
+**Requirements**: BILL-05, BILL-06, BILL-07
 **Success Criteria** (what must be TRUE):
-  1. A user can connect Telegram, WhatsApp, or MAX accounts through their respective supported account flows.
-  2. A user can see an owned account's connection state and disconnect it when needed.
-  3. A user can synchronize the groups available to a connected messenger account and see diagnostics from the synchronization.
-  4. A user can browse and select the synchronized groups to use as advertising destinations.
-**Plans**: Baseline complete (retrospective; no plan artifacts)
+  1. Пользователь может продлить текущую подписку из раздела тарифов и сразу увидеть обновлённый срок действия.
+  2. Пользователь видит потребление и остаток по всем четырём осям лимитов своего тарифа.
+  3. Пользователь видит историю своих платежей с датой, суммой и статусом каждой операции.
+  4. Раздел тарифов пригоден к использованию на мобильных ширинах.
+**Canonical ref**: `new_broadcaster_design.html` (раздел «Тарифы»)
+**Notes**: Модели `Subscription`, `Payment`, `MessageBalance` и сервис лимитов уже существуют — фаза меняет представление и добавляет операцию продления.
+**Plans**: TBD
 **UI hint**: yes
 
-### Phase 4: Scheduled Multi-Messenger Delivery
-**Goal**: Users can schedule an advertisement to selected groups and inspect the outcome of automated delivery across supported messengers.
-**Mode:** mvp
-**Depends on**: Phase 2, Phase 3
-**Requirements**: SCH-01, SCH-02, SCH-03, SEND-01, SEND-02, SEND-03, SEND-04
+### Phase 6: Админ-панель
+**Goal**: Администратор ведёт поддержку и эксплуатацию сервиса из одной админ-панели с подразделами вместо разрозненных админ-страниц.
+**Depends on**: Phase 1, Phase 4
+**Requirements**: ADMIN-03, ADMIN-04, ADMIN-05, ADMIN-06, ADMIN-07, ADMIN-08, ADMIN-09, ADMIN-10, ADMIN-11
 **Success Criteria** (what must be TRUE):
-  1. A user can create a schedule that links one advertisement to chosen messenger groups.
-  2. A user can set recurring send days and times in their own timezone, and can enable, disable, edit, or delete the schedule.
-  3. When a schedule becomes due, the system queues and sends the advertisement to its Telegram, WhatsApp, and MAX group destinations through the appropriate adapters or workers.
-  4. A user can view each delivery's resulting status in history, including the advertisement and recipient snapshots captured at send time.
-**Plans**: Baseline complete (retrospective; no plan artifacts)
-**UI hint**: yes
-
-### Phase 5: Subscription & Message Balance
-**Goal**: Users can select and fund the service capacity available for their advertising workflow.
-**Mode:** mvp
-**Depends on**: Phase 1, Phase 2, Phase 3, Phase 4
-**Requirements**: BILL-01, BILL-02, BILL-03, BILL-04
-**Success Criteria** (what must be TRUE):
-  1. A user can view the Free, Basic, and Pro plans alongside their current subscription.
-  2. The service applies the subscription's available limits to advertisements, groups, and platform usage.
-  3. A user can add message credit through the integrated payment flow.
-  4. The service records the message-balance deductions and related balance operations.
-**Plans**: Baseline complete (retrospective; no plan artifacts)
-**UI hint**: yes
-
-### Phase 6: Administration & Operations
-**Goal**: Administrators can support the service and operators can observe its application and delivery infrastructure.
-**Mode:** mvp
-**Depends on**: Phase 3, Phase 4, Phase 5
-**Requirements**: ADMIN-01, ADMIN-02, OPS-01, OPS-02, OPS-03
-**Success Criteria** (what must be TRUE):
-  1. An administrator can view users and manage their account states and subscriptions.
-  2. An administrator can inspect delivery history and the group information collected by the service.
-  3. An operator can inspect application and background-process metrics in Prometheus and Grafana, and investigate centralized logs in Loki.
-  4. An operator can run the system in development or production using the provided Docker Compose and Nginx deployment configurations.
-**Plans**: Baseline complete (retrospective; no plan artifacts)
+  1. Администратор переключается между подразделами «Обзор», «Пользователи», «Воркеры», «Очередь», «Логи» и «Платежи» внутри одной админ-панели, и «Обзор» показывает ключевые показатели сервиса.
+  2. Администратор может найти пользователя поиском и фильтрами, заблокировать и разблокировать его.
+  3. Администратор может войти под пользователем и вернуться в свою учётную запись, не теряя админ-доступ.
+  4. Администратор видит состояние контейнеров по каналам в «Воркерах», состояние очереди задач по каналам в «Очереди» и логи приложения и воркеров в «Логах».
+  5. Администратор видит сводку платёжных операций в «Платежах» и текущие инциденты сервиса; все подразделы админ-панели пригодны к использованию на мобильных ширинах.
+**Canonical ref**: `new_broadcaster_design.html` (раздел «Админка» и её подразделы)
+**Notes**: `User.is_blocked` уже существует. «Воркеры» переиспользуют то же чтение состояния контейнеров, что и DASH-05 из Фазы 4. Prometheus/Grafana/Loki остаются внешними инструментами эксплуатации — админ-подразделы дают операционный срез внутри продукта, а не заменяют их.
+**Plans**: TBD
 **UI hint**: yes
 
 ## Progress
 
-**Execution Order:** Historical baseline capabilities are recorded in dependency order: 1 → 2 → 3 → 4 → 5 → 6.
+**Execution Order:** Фазы исполняются в числовом порядке: 1 → 2 → 3 → 4 → 5 → 6. Фаза 1 — жёсткая зависимость всех остальных.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Secure Access & Scheduling Profile | Baseline (no plans) | Complete | 2026-08-03 |
-| 2. Advertisement Library | Baseline (no plans) | Complete | 2026-08-03 |
-| 3. Messenger Accounts & Group Targeting | Baseline (no plans) | Complete | 2026-08-03 |
-| 4. Scheduled Multi-Messenger Delivery | Baseline (no plans) | Complete | 2026-08-03 |
-| 5. Subscription & Message Balance | Baseline (no plans) | Complete | 2026-08-03 |
-| 6. Administration & Operations | Baseline (no plans) | Complete | 2026-08-03 |
+| 1. Интерфейсный фундамент | 0/TBD | Not started | - |
+| 2. Объявления и расписания | 0/TBD | Not started | - |
+| 3. Группы аккаунта | 0/TBD | Not started | - |
+| 4. Дашборд и история | 0/TBD | Not started | - |
+| 5. Тарифы | 0/TBD | Not started | - |
+| 6. Админ-панель | 0/TBD | Not started | - |
+
+## Coverage
+
+Все 39 требований v2.0 распределены ровно по одной фазе; неохваченных нет.
+
+| Phase | Requirements | Count |
+|-------|--------------|-------|
+| 1. Интерфейсный фундамент | UI-01, UI-02, UI-03, UI-04, UI-05, UI-06 | 6 |
+| 2. Объявления и расписания | ADS-04, ADS-05, ADS-06, ADS-07, ADS-08, SCH-04, SCH-05 | 7 |
+| 3. Группы аккаунта | GRP-04, GRP-05, GRP-06, GRP-07, GRP-08 | 5 |
+| 4. Дашборд и история | DASH-01, DASH-02, DASH-03, DASH-04, DASH-05, HIST-01, HIST-02, HIST-03, HIST-04 | 9 |
+| 5. Тарифы | BILL-05, BILL-06, BILL-07 | 3 |
+| 6. Админ-панель | ADMIN-03, ADMIN-04, ADMIN-05, ADMIN-06, ADMIN-07, ADMIN-08, ADMIN-09, ADMIN-10, ADMIN-11 | 9 |
+| **Итого** | | **39** |
+
+**Не входит в этот roadmap:** требования v1 (уже отгружены, ретроспектива в `.planning/milestones/v1.0-ROADMAP.md`) и требования v2.1 (NOTIF-01..04, WARM-01..02 — отложены явным решением).
