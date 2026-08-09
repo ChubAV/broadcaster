@@ -4,15 +4,15 @@ milestone: v2.0
 milestone_name: Redesign
 current_phase: 1
 current_phase_name: Интерфейсный фундамент
-status: planning
+status: executing
 stopped_at: Phase 1 context gathered
-last_updated: "2026-08-09T06:10:32.370Z"
+last_updated: "2026-08-09T07:31:33.890Z"
 last_activity: 2026-08-09
 last_activity_desc: Roadmap v2.0 создан, нумерация фаз начата заново с 1
 progress:
   total_phases: 6
   completed_phases: 0
-  total_plans: 0
+  total_plans: 8
   completed_plans: 0
   percent: 0
 ---
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-08)
 
 Phase: 1 of 6 (Интерфейсный фундамент)
 Plan: — (phase not planned yet)
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-08-09 — Roadmap v2.0 создан, нумерация фаз начата заново с 1
 
 Progress: [░░░░░░░░░░] 0%
