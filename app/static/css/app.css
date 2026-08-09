@@ -449,11 +449,12 @@ a:hover { color: var(--accent-link-hover); }
 @media (max-width: 1080px) {
   [data-hrow] { grid-template-columns: minmax(0, 1fr) !important;
     grid-template-areas: 'head' 'body' 'meta' 'err' !important; row-gap: 11px !important; }
-  /* Единственное отступление от дословного переноса: в макете селектор
-     завязан на подстроку инлайн-стиля дочернего элемента
-     ([style*="grid-area:meta"]) и молча перестаёт совпадать при переезде
-     на классы. Имя data-area фиксируется здесь — План 05 размечает
-     историю по нему. */
+  /* Единственное отступление от дословного переноса: в макете селектор был
+     завязан на подстроку инлайн-стиля дочернего элемента (искал в атрибуте
+     style фрагмент с именем области сетки) и молча перестал бы совпадать при
+     переезде на классы. Здесь он переведён на атрибут data-area — План 05
+     размечает историю по нему. Селекторов по подстроке инлайн-стиля в этом
+     файле нет и появиться не должно. */
   [data-hrow] > [data-area="meta"] { border-left: none !important; padding-left: 0 !important;
     padding-top: 11px !important; border-top: 1px solid var(--border-muted) !important;
     justify-content: flex-start !important; flex-wrap: wrap !important; }
@@ -926,4 +927,127 @@ a:hover { color: var(--accent-link-hover); }
 .auth-foot {
   margin: 6px 0 0; text-align: center;
   font-size: var(--fs-md); color: var(--text-tertiary);
+}
+
+/* --------------------------------------------------------------------------
+   5. Разделы «История», «Дашборд» и «Профиль» (План 05).
+
+   Дополнение файла санкционировано планом: медиазапросы 1080px и 860px из
+   раздела 2 уже перестраивают [data-hrow] и его блок [data-area="meta"], но
+   БАЗОВЫХ правил этого примитива в файле не было — перестраивать было нечего.
+   Все значения выражены токенами раздела 1; ни одного нового захардкоженного
+   цвета, радиуса или кегля.
+   -------------------------------------------------------------------------- */
+
+/* Колонка записей истории. Сентинел бесконечной прокрутки — последний элемент
+   ЭТОГО контейнера. */
+[data-hlist] { display: flex; flex-direction: column; gap: 10px; }
+
+/* Запись истории — собственный адаптивный примитив раздела: он схлопывается в
+   одну колонку раньше строк-таблиц, на 1080px. */
+[data-hrow] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-areas: 'head meta' 'body meta' 'err err';
+  column-gap: 22px; row-gap: 10px;
+  padding: 14px 18px;
+  border-radius: var(--r-2xl);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-control);
+  transition: border-color .2s ease, transform .2s ease;
+}
+[data-hrow]:hover { transform: translateY(-2px); }
+
+/* Цветной левый акцент по статусу отправки. В макете он приходил инлайн-стилем
+   с подставленным цветом; здесь — атрибут, потому что селекторов по подстроке
+   инлайн-стиля в этом файле не осталось и появиться не должно. */
+[data-hrow][data-status="ok"] { border-left-color: var(--ok); }
+[data-hrow][data-status="fail"] { border-left-color: var(--danger); }
+[data-hrow][data-status="account_disconnected"] { border-left-color: var(--warn); }
+
+[data-hrow] > [data-area="head"] {
+  grid-area: head; display: flex; align-items: center; gap: 9px;
+  flex-wrap: wrap; min-width: 0;
+}
+[data-hrow] > [data-area="body"] {
+  grid-area: body; display: flex; align-items: baseline; gap: 10px;
+  min-width: 0; font-size: var(--fs-lg);
+}
+[data-hrow] > [data-area="err"] {
+  grid-area: err; display: flex; flex-direction: column; gap: 6px;
+  padding: 11px 12px; border-radius: var(--r-lg); background: var(--surface-input);
+}
+/* Опора исправленного медиазапроса 1080px: на узкой ширине левая граница здесь
+   сменяется верхней. Правило-приёмник лежит в разделе 2 и правится только
+   вместе с этим. */
+[data-hrow] > [data-area="meta"] {
+  grid-area: meta; display: flex; align-items: center; gap: 9px;
+  justify-content: flex-end; padding-left: 22px;
+  border-left: 1px solid var(--border-muted);
+}
+
+/* Иконка мессенджера приходит из includes/messenger_icon.html без собственных
+   размеров: раньше их задавал класс удалённого фреймворка. Задаём здесь, чтобы
+   не возвращать такой класс в разметку. */
+[data-hrow] [data-area="head"] svg { width: 13px; height: 13px; flex: none; }
+[data-hrow] [data-area="body"] > [data-grow] {
+  font-weight: 600; letter-spacing: -.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+[data-hrow] [data-area="body"] > [data-secondary] {
+  flex: none; max-width: 45%;
+  font-size: var(--fs-sm); color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Текст, который обязан читаться ЦЕЛИКОМ: сообщение об ошибке отправки и
+   снимок текста объявления. Ни усечения, ни многоточия, ни скрытия за
+   раскрытием — по тексту ошибки пользователь понимает, почему его реклама не
+   ушла. Длинные строки переносятся, а не обрезаются. */
+[data-longtext] {
+  display: block; margin: 0;
+  font-size: var(--fs-md); line-height: 1.6; color: var(--text-secondary);
+  white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+}
+[data-longtext="mono"] {
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  color: var(--text-bright);
+}
+
+/* Миниатюры изображений объявления на странице детали отправки */
+[data-thumbs] {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px;
+}
+[data-thumbs] img {
+  display: block; width: 100%; aspect-ratio: 1; object-fit: cover;
+  border-radius: var(--r-md); background: var(--surface-input);
+}
+
+/* Плитки дашборда — ТОЛЬКО каркас в объёме сегодняшних данных. Спарклайны,
+   heatmap, живая лента и ближайшие отправки принадлежат Фазе 4
+   (DASH-01…DASH-05) и здесь сознательно отсутствуют. */
+[data-metrics] {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 13px;
+}
+[data-metric-value] {
+  display: block; margin-top: 10px;
+  font-size: var(--fs-h3); font-weight: 600; letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Вертикальная стопка панелей страницы (дашборд, профиль) */
+[data-stack] { display: flex; flex-direction: column; gap: 22px; }
+/* Вертикальная стопка полей формы */
+[data-form] { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
+[data-form] > .field { align-self: stretch; }
+
+/* Блок пользователя на странице профиля */
+[data-identity] { display: flex; align-items: center; gap: 14px; }
+[data-identity-meta] { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+[data-identity-name] { font-size: var(--fs-xl); font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-hrow] { transition: none !important; }
+  [data-hrow]:hover { transform: none !important; }
 }
