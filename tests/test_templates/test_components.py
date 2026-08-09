@@ -389,6 +389,76 @@ def test_modal_does_not_reuse_browser_dialog():
     assert "confirm(" not in body
 
 
+# --- слот полей формы внутри модалки (UI-04, План 09) ------------------------
+#
+# Массовое удаление групп — единственное подтверждение в проекте, где удаляется
+# не одна сущность по идентификатору в маршруте, а НАБОР, приходящий полями
+# формы (app/pages/groups.py: form.get("action") + form.getlist("group_ids")).
+# Без слота такое подтверждение пришлось бы собирать отдельной разметкой в обход
+# библиотеки.
+
+HIDDEN_FIELD = '<input type="hidden" name="action" value="delete">'
+
+
+def _modal_block(fields: str = HIDDEN_FIELD, body: str | None = None) -> str:
+    """Отрендерить модалку блочным вызовом с произвольными полями формы."""
+    body_arg = f", body={body!r}" if body is not None else ""
+    return ENV.from_string(
+        "{% from 'components/modal.html' import modal %}"
+        "{% call modal(id='del-bulk', title='Удалить выбранные группы?',"
+        " action='/groups/bulk', confirm_label='Удалить'" + body_arg + ") %}"
+        + fields
+        + "{% endcall %}"
+    ).render()
+
+
+def test_modal_accepts_block_fields():
+    """Поля слота попадают ВНУТРЬ формы, а не рядом с ней."""
+    out = _modal_block()
+
+    assert 'name="action"' in out
+    assert out.index("<form") < out.index('name="action"') < out.index("</form>")
+
+
+def test_modal_block_fields_do_not_replace_actions():
+    """Слот аддитивен: кнопки на месте, отмена по-прежнему не submit."""
+    out = _modal_block()
+
+    assert "modal__actions" in out
+    assert 'x-ref="cancel"' in out
+    assert "Отмена" in out
+    assert "Удалить" in out
+
+    # отмена остаётся ПЕРВОЙ в порядке обхода: подтверждение не должно
+    # срабатывать по Enter раньше, чем пользователь увидит вопрос
+    assert out.index('x-ref="cancel"') < out.index('type="submit"')
+
+    cancel_at = out.index("Отмена")
+    cancel_tag_start = out.rindex("<button", 0, cancel_at)
+    cancel_tag = out[cancel_tag_start : out.index(">", cancel_tag_start)]
+    assert 'type="button"' in cancel_tag
+    assert 'type="submit"' not in cancel_tag
+
+
+def test_modal_body_and_block_coexist():
+    """Параметр body и блочное содержимое не конфликтуют — выводятся оба."""
+    out = _modal_block(body="Выбрано групп: 3")
+
+    assert "Выбрано групп: 3" in out
+    assert 'name="action"' in out
+    assert out.index("Выбрано групп: 3") < out.index('name="action"')
+
+
+def test_modal_block_call_keeps_method_and_action():
+    """Маршрут и метод при блочном вызове те же: незаметный съезд на GET сделал
+    бы удаление доступным по ссылке."""
+    out = _modal_block()
+
+    form = out[out.index("<form") : out.index(">", out.index("<form"))]
+    assert 'method="post"' in form
+    assert 'action="/groups/bulk"' in form
+
+
 # --- инварианты библиотеки ---------------------------------------------------
 
 COMPONENT_CALLS = [
