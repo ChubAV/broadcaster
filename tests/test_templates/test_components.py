@@ -9,7 +9,9 @@
 равно вернёт 200. Прямой рендер с пустым контекстом ловит это сразу.
 """
 
+import re
 from pathlib import Path
+from typing import NamedTuple
 
 from app.pages.common import templates
 
@@ -523,3 +525,372 @@ def test_no_unsafe_escaping():
             if marker in body:
                 offenders.append(f"{path.relative_to(TEMPLATES_DIR)}: {marker}")
     assert not offenders, offenders
+
+
+# =============================================================================
+# План 13, Задача 2: страховочная сетка подтверждений (UI-04, SC-3)
+# =============================================================================
+#
+# Gap 1 из 01-VERIFICATION.md: подтверждения удаления были сделаны системным
+# диалогом браузера. Планы 09-12 перевели все четырнадцать мест на панель
+# дизайн-системы. Обратный ход прост и незаметен: следующая фаза добавит раздел
+# с удалением и подтвердит его диалогом, всё отдаст 200, и увидит это только
+# пользователь. Эта сетка ловит и возврат диалога, и потерю места подтверждения.
+
+MODAL_COMPONENT = "components/modal.html"
+
+# Вызов системного диалога ПОДТВЕРЖДЕНИЯ. Точка перед именем допускается
+# (window.confirm), символ слова — нет: confirm_label= и confirm_variant= —
+# параметры макроса панели, а не диалог.
+BROWSER_DIALOG_RE = re.compile(r"(?<!\w)confirm\s*\(")
+
+# Единственный оставшийся в проекте ВСТРОЕННЫЙ обработчик отправки формы. Это
+# НЕ диалог подтверждения: он отключает кнопку и меняет её подпись, то есть
+# защищает от двойной отправки. В границу Gap 1 не входит, и файл не принадлежит
+# ни одному плану набора 09-13 — правка нарушила бы контракт распараллеливания.
+#
+# Двусторонняя инвентаризация ниже — то, что делает сужение запрета до диалогов
+# ПОДТВЕРЖДЕНИЯ усилением, а не поблажкой: новый встроенный обработчик где
+# угодно краснеет, даже если диалога в нём нет (T-13-07).
+INLINE_SUBMIT_HANDLER = "onsubmit"
+KNOWN_SUBMIT_HANDLER_FILES = frozenset({"accounts/connect_max.html"})
+INLINE_SUBMIT_HANDLER_RE = re.compile(rf'{INLINE_SUBMIT_HANDLER}\s*=\s*"([^"]*)"')
+
+# Массовые действия списка групп — единственное место, где кнопка действия НЕ
+# обёрнута формой. Решение Плана 12: массовое действие и ДО правки существовало
+# только при работающем скрипте, поэтому новых тупиков без JS правка не создала.
+#
+# Предикат исключения — «кнопка без формы, ВЫЗЫВАЮЩАЯ функцию массового
+# действия», а НЕ «намерение удаления»: из двух кнопок намерение удаления несёт
+# одна, и счёт по намерению дал бы единицу вместо двух. Более широкий предикат
+# выбран сознательно — он краснеет и в тот день, когда кнопка деактивации
+# превратится в удаление.
+BULK_ACTION_FUNCTION = "submitBulkGroups"
+BULK_ACTION_FILES = frozenset({"groups/list.html"})
+BULK_ACTION_BUTTONS = 2
+
+FORM_RE = re.compile(r"<form\b[^>]*>.*?</form>", re.S)
+FORM_METHOD_RE = re.compile(r'method\s*=\s*"([^"]*)"')
+BUTTON_TAG_RE = re.compile(r"<button\b[^>]*>")
+MODAL_EVENT_PREFIX = "modal-open-"
+MODAL_EVENT_RE = re.compile(rf"{MODAL_EVENT_PREFIX}([a-z-]*)")
+
+# Кнопка отправки внутри формы. Второй носитель — вызов макроса button: у него
+# type='submit' ПО УМОЛЧАНИЮ, и это доказывается один раз отдельным
+# утверждением в test_every_row_delete_site_keeps_a_real_form, а не
+# принимается на веру.
+SUBMIT_BUTTON_MARKERS = ('type="submit"', "button(")
+
+
+class RowDeleteSite(NamedTuple):
+    """Шаблон со строчным удалением ОДНОЙ сущности и образец адреса удаления.
+
+    forms — ОЖИДАЕМОЕ число форм удаления, а не порог «хотя бы одна»: у трёх
+    файлов раздела «Аккаунты» их по три (по одной на ветку статуса), и порог
+    растворил бы потерю одной ветки.
+    """
+
+    template: str
+    action_pattern: str
+    forms: int
+
+
+# СЕМЬ шаблонов, ТРИНАДЦАТЬ мест. Семь, а не пять: два файла раздела
+# «Аккаунты» помимо списочной страницы — порция бесконечной прокрутки и блок
+# подмены по опросу статуса — несут по три места каждый. План 11 присутствие
+# формы утверждает ТОЛЬКО для accounts/list.html, поэтому для шести мест из
+# тринадцати этот перечень — единственное покрытие (T-13-06).
+#
+# Самая опасная поверхность из семи — accounts/partials/sync_status_card.html:
+# это цель подмены по hx-swap="outerHTML", и на первичной отрисовке страницы её
+# разметки нет вовсе. Потеря формы там проявится только после первого опроса
+# статуса, то есть ни один дымовой проход её не увидит (WR-04).
+ROW_DELETE_SITES = (
+    RowDeleteSite("accounts/list.html", r"/accounts/[^\"]+/delete", 3),
+    RowDeleteSite("accounts/partial_cards.html", r"/accounts/[^\"]+/delete", 3),
+    RowDeleteSite(
+        "accounts/partials/sync_status_card.html", r"/accounts/[^\"]+/delete", 3
+    ),
+    RowDeleteSite("groups/includes/group_row.html", r"/groups/[^\"]+/delete", 1),
+    RowDeleteSite(
+        "schedules/includes/schedule_row.html", r"/schedules/[^\"]+/delete", 1
+    ),
+    RowDeleteSite("ads/includes/ad_card.html", r"/ads/[^\"]+/delete", 1),
+    RowDeleteSite("admin/user_detail.html", r"/admin/users/[^\"]+/delete", 1),
+)
+
+ROW_DELETE_PLACES = 13
+
+# Три счёта инвентаризации. Третий обязателен: файл подмены статуса панель
+# сознательно НЕ импортирует (асимметрия Плана 11), поэтому счёт по импортёрам
+# физически не может дойти до четырнадцати мест.
+MODAL_IMPORTERS = 8
+MODAL_EVENT_NAMES = 6
+MODAL_PLACES = 14
+
+
+# --- разборщики исходников ---------------------------------------------------
+
+
+def _all_templates() -> list[tuple[str, str]]:
+    """Все шаблоны проекта парами «путь относительно app/templates — исходник»."""
+    return [
+        (path.relative_to(TEMPLATES_DIR).as_posix(), path.read_text(encoding="utf-8"))
+        for path in sorted(TEMPLATES_DIR.rglob("*.html"))
+    ]
+
+
+def _template_source(rel: str) -> str:
+    return (TEMPLATES_DIR / rel).read_text(encoding="utf-8")
+
+
+def _macro_calls(source: str, macro_name: str) -> int:
+    """Число ВЫЗОВОВ макроса. Объявление вызовом не считается.
+
+    Наивный поиск по имени нашёл бы объявление в самом компоненте и объявил бы
+    библиотеку своим же потребителем.
+    """
+    calls = 0
+    for match in re.finditer(rf"(?<![\w.]){re.escape(macro_name)}\s*\(", source):
+        if source[: match.start()].rstrip().endswith("macro"):
+            continue
+        calls += 1
+    return calls
+
+
+def _form_spans(source: str) -> list[tuple[int, int]]:
+    return [(m.start(), m.end()) for m in FORM_RE.finditer(source)]
+
+
+def _delete_forms_in(source: str, action_pattern: str) -> list[str]:
+    """Формы удаления ЦЕЛИКОМ: открывающий тег с методом POST и адресом.
+
+    Регистр метода НЕ учитывается: в трёх файлах раздела «Аккаунты» он написан
+    заглавными, в строках групп, расписаний и объявлений — строчными. Сравнение
+    с учётом регистра покраснело бы на разнице регистра, а не на потере формы.
+    """
+    forms = []
+    for form in FORM_RE.findall(source):
+        opening = form[: form.index(">") + 1]
+        method = FORM_METHOD_RE.search(opening)
+        if not method or method.group(1).lower() != "post":
+            continue
+        if not re.search(rf'action="{action_pattern}"', opening):
+            continue
+        forms.append(form)
+    return forms
+
+
+def _formless_bulk_buttons(source: str) -> list[str]:
+    """Кнопки, вызывающие функцию массового действия и НЕ обёрнутые формой."""
+    spans = _form_spans(source)
+    return [
+        match.group(0)
+        for match in BUTTON_TAG_RE.finditer(source)
+        if BULK_ACTION_FUNCTION in match.group(0)
+        and not any(start <= match.start() < end for start, end in spans)
+    ]
+
+
+def test_no_template_calls_browser_dialog():
+    """Ни один шаблон проекта не вызывает системный диалог ПОДТВЕРЖДЕНИЯ.
+
+    Исключений нет ни одного, включая саму панель: components/modal.html
+    дополнительно закрыт test_modal_does_not_reuse_browser_dialog.
+    """
+    offenders = {
+        rel: len(BROWSER_DIALOG_RE.findall(source))
+        for rel, source in _all_templates()
+        if BROWSER_DIALOG_RE.search(source)
+    }
+    assert not offenders, (
+        "системный диалог браузера вернулся в шаблоны — подтверждение обязано "
+        f"открывать панель дизайн-системы: {offenders}"
+    )
+
+
+def test_only_known_non_dialog_submit_handlers_remain():
+    """Двусторонняя инвентаризация единственного встроенного обработчика.
+
+    Это компенсация за сужение запрета выше до диалогов ПОДТВЕРЖДЕНИЯ. Новый
+    встроенный обработчик отправки в любом файле краснеет здесь, даже если
+    диалога в нём нет.
+    """
+    found = {
+        rel for rel, source in _all_templates() if INLINE_SUBMIT_HANDLER in source
+    }
+    assert found == set(KNOWN_SUBMIT_HANDLER_FILES), (
+        "множество шаблонов со встроенным обработчиком отправки разошлось с "
+        f"названным перечнем: новые {sorted(found - KNOWN_SUBMIT_HANDLER_FILES)}; "
+        f"исчезнувшие {sorted(KNOWN_SUBMIT_HANDLER_FILES - found)}"
+    )
+
+    for rel in sorted(KNOWN_SUBMIT_HANDLER_FILES):
+        source = _template_source(rel)
+        handlers = INLINE_SUBMIT_HANDLER_RE.findall(source)
+        assert handlers, f"{rel}: обработчик отправки не разобран"
+        for handler in handlers:
+            assert not BROWSER_DIALOG_RE.search(handler), (
+                f"{rel}: встроенный обработчик стал диалогом подтверждения — "
+                f"это уже не защита от двойной отправки: {handler!r}"
+            )
+            # Положительное утверждение о том, ЧЕМ этот обработчик является.
+            assert "disabled" in handler, (
+                f"{rel}: обработчик перестал быть защитой от двойной отправки — "
+                f"кнопка больше не отключается: {handler!r}"
+            )
+
+
+def test_every_modal_site_has_cancel_and_escape():
+    """Свойства панели доказываются ОДИН раз и наследуются всеми местами.
+
+    Отказ с начальным фокусом, закрытие по Esc и перехват обхода по Tab живут в
+    макросе. Сетка утверждает их по разметке макроса и отдельно — что каждое
+    место применения вызывает именно этот макрос, а не собирает свою панель.
+    Копия панели в обход библиотеки краснеет.
+    """
+    out = render("components/modal.html", "modal", **MODAL_ARGS)
+    assert 'x-ref="cancel"' in out, "начальный фокус на отказе потерян"
+    assert MODAL_ARGS["confirm_label"] in out
+    assert "Отмена" in out, "кнопка отказа исчезла"
+    assert "keydown.escape" in out, "закрытие по Esc потеряно"
+    assert "keydown.tab" in out, "перехват обхода по Tab потерян"
+
+    consumers = {
+        rel
+        for rel, source in _all_templates()
+        if MODAL_COMPONENT in source and rel != MODAL_COMPONENT
+    }
+    assert consumers, "потребителей панели не найдено — проверь разрешитель"
+
+    silent = {rel for rel in consumers if not _macro_calls(_template_source(rel), "modal")}
+    assert not silent, (
+        "шаблоны импортируют панель, но макрос не вызывают — панель собрана в "
+        f"обход библиотеки и проверенных свойств не наследует: {sorted(silent)}"
+    )
+
+
+def test_every_row_delete_site_keeps_a_real_form():
+    """В каждом из ТРИНАДЦАТИ мест удаления стоит настоящая форма (WR-04).
+
+    Панель — УСИЛЕНИЕ поверх формы, а не замена ей: без Alpine перехват не
+    навешивается, и форма уходит на прежний маршрут прежним методом. Кнопка
+    вместо формы оставила бы раздел без единственного пути удалить сущность.
+    """
+    # Второй носитель кнопки отправки доказывается здесь же: у макроса button
+    # type='submit' по умолчанию, и это не принимается на веру.
+    assert 'type="submit"' in render("components/button.html", "button", "Удалить")
+
+    assert sum(site.forms for site in ROW_DELETE_SITES) == ROW_DELETE_PLACES, (
+        "перечень строчных удалений разошёлся с числом мест"
+    )
+
+    offenders = {}
+    for site in ROW_DELETE_SITES:
+        source = _template_source(site.template)
+        forms = _delete_forms_in(source, site.action_pattern)
+        if len(forms) != site.forms:
+            offenders[site.template] = (
+                f"форм удаления {len(forms)}, ожидалось {site.forms} "
+                f"(образец адреса {site.action_pattern})"
+            )
+            continue
+        formless = [
+            index
+            for index, form in enumerate(forms)
+            if not any(marker in form for marker in SUBMIT_BUTTON_MARKERS)
+        ]
+        if formless:
+            offenders[site.template] = (
+                f"формы без кнопки отправки внутри: {formless}"
+            )
+
+    assert not offenders, (
+        "место подтверждения удаления потеряло настоящую форму — без Alpine "
+        "удалить сущность станет нечем: "
+        + "; ".join(f"{rel} -> {why}" for rel, why in sorted(offenders.items()))
+    )
+
+
+def test_bulk_actions_are_the_only_formless_delete_triggers():
+    """Единственное исключение названо ПОЛОЖИТЕЛЬНЫМ утверждением.
+
+    Предикат — «кнопка, не обёрнутая формой, вызывающая функцию массового
+    действия», а НЕ «намерение удаления»: из двух кнопок намерение удаления
+    несёт одна, и счёт по намерению дал бы единицу вместо двух.
+
+    Тест работает в обе стороны: новая кнопка массового действия без формы в
+    любом другом файле краснеет, и исчезновение кнопок из списка групп — тоже.
+    """
+    counts = {
+        rel: len(_formless_bulk_buttons(source))
+        for rel, source in _all_templates()
+        if _formless_bulk_buttons(source)
+    }
+    assert set(counts) == set(BULK_ACTION_FILES), (
+        "кнопки массового действия вне формы разошлись с названным перечнем: "
+        f"новые {sorted(set(counts) - BULK_ACTION_FILES)}; "
+        f"исчезнувшие {sorted(BULK_ACTION_FILES - set(counts))}"
+    )
+    for rel in sorted(BULK_ACTION_FILES):
+        assert counts[rel] == BULK_ACTION_BUTTONS, (
+            f"{rel}: кнопок массового действия без формы {counts[rel]}, "
+            f"ожидалось {BULK_ACTION_BUTTONS}"
+        )
+
+
+def test_modal_cancel_is_not_a_delete_trigger():
+    """Кнопка отказа панели — второе названное исключение.
+
+    По контракту Плана 09 она НЕ кнопка отправки, иначе отмена стала бы труднее
+    подтверждения. Утверждение существует, чтобы предыдущий тест не пришлось
+    однажды «слегка ослабить» из-за неё.
+    """
+    out = render("components/modal.html", "modal", **MODAL_ARGS)
+    cancel_at = out.index("Отмена")
+    cancel_tag = out[out.rindex("<button", 0, cancel_at) : cancel_at]
+
+    assert 'type="button"' in cancel_tag
+    assert 'type="submit"' not in cancel_tag
+    assert "delete" not in cancel_tag, (
+        "кнопка отказа понесла адрес удаления — отмена перестала быть отменой: "
+        f"{cancel_tag!r}"
+    )
+    assert "formaction" not in cancel_tag
+
+
+def test_modal_site_inventory():
+    """Инвентаризация мест подтверждения сходится ТРЕМЯ счётами.
+
+    Счёт по импортёрам до четырнадцати дойти не может в принципе: файл подмены
+    статуса панель сознательно не импортирует. Поэтому третий счёт — ПРЯМОЙ:
+    сумма вхождений имени события открытия по всем шаблонам, КРОМЕ самого
+    компонента. Компонент исключён потому, что имя стоит у него в слушателе
+    макроса и в примере из шапки файла — два вхождения, которые местами
+    применения не являются.
+    """
+    templates_ = _all_templates()
+
+    importers = {rel for rel, source in templates_ if MODAL_COMPONENT in source}
+    assert len(importers) == MODAL_IMPORTERS, (
+        f"импортёров панели {len(importers)}, ожидалось {MODAL_IMPORTERS} "
+        f"(семь потребителей плюс сам компонент): {sorted(importers)}"
+    )
+
+    names = set()
+    places = 0
+    for rel, source in templates_:
+        if rel == MODAL_COMPONENT:
+            continue
+        found = MODAL_EVENT_RE.findall(source)
+        names.update(found)
+        places += len(found)
+
+    assert len(names) == MODAL_EVENT_NAMES, (
+        f"различных имён события открытия {len(names)}, ожидалось "
+        f"{MODAL_EVENT_NAMES}: {sorted(names)}"
+    )
+    assert places == MODAL_PLACES, (
+        f"мест подтверждения {places}, ожидалось {MODAL_PLACES} — место молча "
+        "исчезло или появилось незаявленное"
+    )
