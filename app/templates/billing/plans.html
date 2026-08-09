@@ -1,75 +1,59 @@
 {% extends "base.html" %}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/badge.html" import badge %}
+{% from "components/mono.html" import mono %}
+{% from "components/progress.html" import progress %}
+{% from "components/button.html" import link_button %}
+
 {% block title %}Тарифы — Broadcaster{% endblock %}
+
+{# Контракт «страница → шелл» (План 01): заголовок раздела рендерит шапка. #}
+{% block page_title %}Тарифы{% endblock %}
+{% block page_subtitle %}Текущий тариф и потребление по лимитам{% endblock %}
+
+{#- ВНИМАНИЕ. У этого шаблона нет обработчика: ни один маршрут проекта его не
+    рендерит, и переменных plan / usage / limits / all_plans нет ни в одном
+    контексте (раздел «Тарифы» по адресу /billing показывает billing/balance.html).
+    Шаблон мигрирован «как есть», в том виде и объёме, в каком он существует
+    сегодня; подключение раздела тарифов к живым данным, продление подписки и
+    четыре оси лимитов — Фаза 5 (BILL-05…BILL-07). Поведенческой проверки у
+    файла нет, поэтому его покрывает проверка исходника
+    test_billing_plans_template_is_migrated. Подробности — в 01-07-SUMMARY.md. -#}
+
 {% block content %}
 
-<h1 class="text-lg lg:text-xl font-semibold text-gray-900 mb-6">Тарифы</h1>
+{#- Деление на лимит вынесено в условие: у тарифа с нулевым лимитом исходная
+    разметка падала на делении на ноль. Ограничение диапазона 0..100 макрос
+    progress делает сам. -#}
+{% set usage_axes = [
+  ('Объявления', usage.ads_count, limits.max_ads),
+  ('Группы', usage.groups_count, limits.max_groups),
+  ('Отправок в день', usage.sends_today, limits.max_sends_per_day),
+] %}
 
-<!-- Current plan -->
-<div class="bg-white rounded-lg border border-gray-200 p-6 lg:p-8 mb-8">
-  <div class="flex items-center gap-2 mb-4">
-    <h2 class="text-sm lg:text-base font-medium text-gray-900">Текущий тариф:</h2>
-    <span class="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-indigo-700">{{ plan|capitalize }}</span>
+<div data-stack>
+
+  {{ card_open(title='Текущий тариф') }}
+    {{ badge(plan|capitalize, 'info') }}
+    {% for label, used, limit in usage_axes %}
+    {{ progress((used * 100 / limit) if limit else 0,
+                label=label ~ ' — ' ~ used ~ ' / ' ~ limit) }}
+    {% endfor %}
+  {{ card_close() }}
+
+  <div data-metrics>
+    {% for plan_name, plan_limits in all_plans.items() %}
+    {{ card_open(title=plan_name|capitalize) }}
+      {% if plan_name == plan %}{{ badge('Текущий', 'success') }}{% endif %}
+      {{ mono(plan_limits.max_ads ~ ' объявлений') }}
+      {{ mono(plan_limits.max_groups ~ ' групп') }}
+      {{ mono(plan_limits.max_sends_per_day ~ ' отправок/день') }}
+    {{ card_close() }}
+    {% endfor %}
   </div>
 
-  <div class="space-y-4">
-    <!-- Ads usage -->
-    <div>
-      <div class="flex items-center justify-between text-sm mb-1">
-        <span class="text-gray-600">Объявления</span>
-        <span class="text-gray-900 font-medium">{{ usage.ads_count }} / {{ limits.max_ads }}</span>
-      </div>
-      <div class="bg-gray-200 rounded-full h-2">
-        <div class="bg-indigo-600 rounded-full h-2 transition-all" style="width: {{ [usage.ads_count / limits.max_ads * 100, 100] | min }}%"></div>
-      </div>
-    </div>
-    <!-- Groups usage -->
-    <div>
-      <div class="flex items-center justify-between text-sm mb-1">
-        <span class="text-gray-600">Группы</span>
-        <span class="text-gray-900 font-medium">{{ usage.groups_count }} / {{ limits.max_groups }}</span>
-      </div>
-      <div class="bg-gray-200 rounded-full h-2">
-        <div class="bg-indigo-600 rounded-full h-2 transition-all" style="width: {{ [usage.groups_count / limits.max_groups * 100, 100] | min }}%"></div>
-      </div>
-    </div>
-    <!-- Daily sends usage -->
-    <div>
-      <div class="flex items-center justify-between text-sm mb-1">
-        <span class="text-gray-600">Отправок в день</span>
-        <span class="text-gray-900 font-medium">{{ usage.sends_today }} / {{ limits.max_sends_per_day }}</span>
-      </div>
-      <div class="bg-gray-200 rounded-full h-2">
-        <div class="bg-indigo-600 rounded-full h-2 transition-all" style="width: {{ [usage.sends_today / limits.max_sends_per_day * 100, 100] | min }}%"></div>
-      </div>
-    </div>
-  </div>
-</div>
+  {{ link_button('К балансу и истории операций', '/billing', variant='ghost', icon='arrow-right') }}
 
-<!-- Available plans -->
-<h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-4">Доступные тарифы</h2>
-<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-  {% for plan_name, plan_limits in all_plans.items() %}
-  <div class="bg-white rounded-lg border {{ 'border-indigo-600 ring-1 ring-indigo-600' if plan_name == plan else 'border-gray-200' }} p-6">
-    <h3 class="text-base font-semibold text-gray-900">{{ plan_name|capitalize }}</h3>
-    {% if plan_name == plan %}
-    <span class="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 mt-2">Текущий</span>
-    {% endif %}
-    <ul class="mt-4 space-y-2 text-sm text-gray-600">
-      <li class="flex items-center gap-2">
-        <svg class="h-4 w-4 text-emerald-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-        {{ plan_limits.max_ads }} объявлений
-      </li>
-      <li class="flex items-center gap-2">
-        <svg class="h-4 w-4 text-emerald-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-        {{ plan_limits.max_groups }} групп
-      </li>
-      <li class="flex items-center gap-2">
-        <svg class="h-4 w-4 text-emerald-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-        {{ plan_limits.max_sends_per_day }} отправок/день
-      </li>
-    </ul>
-  </div>
-  {% endfor %}
 </div>
 
 {% endblock %}
