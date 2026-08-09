@@ -1,0 +1,20 @@
+{# Карточка-панель (D-13, D-14). Парные макросы-обёртки: содержимое пишется
+   между вызовами обычной разметкой вызывающего шаблона, а не передаётся
+   строкой — так инвариант экранирования остаётся целым.
+   Импорт: {% from "components/card.html" import card_open, card_close %} #}
+
+{% macro card_open(title=None, subtitle=None, extra_class=None, id=None) -%}
+<section class="card{% if extra_class %} {{ extra_class }}{% endif %}"{% if id %} id="{{ id }}"{% endif %}>
+{%- if title or subtitle %}
+  <header class="card__head">
+    {%- if title %}<h2 class="card__title">{{ title }}</h2>{% endif -%}
+    {%- if subtitle %}<p class="card__subtitle">{{ subtitle }}</p>{% endif -%}
+  </header>
+{%- endif %}
+  <div class="card__body">
+{%- endmacro %}
+
+{% macro card_close() -%}
+  </div>
+</section>
+{%- endmacro %}

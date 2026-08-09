@@ -1,0 +1,15 @@
+{# Тумблер по knob-паттерну макета (D-13, D-14).
+   Настоящий checkbox внутри label: состояние читается формой и скринридером,
+   а не имитируется атрибутом.
+   Импорт: {% from "components/toggle.html" import toggle %} #}
+
+{% macro toggle(name, checked=false, label=None, value='1', disabled=false, id=None, title=None) -%}
+{%- set toggle_id = id or name -%}
+<label class="toggle" for="{{ toggle_id }}"{% if title %} title="{{ title }}"{% endif %}>
+  <input class="toggle__input" type="checkbox" name="{{ name }}" id="{{ toggle_id }}" value="{{ value }}"
+    {%- if disabled %} disabled{% endif %}
+    {%- if checked %} checked{% endif %}>
+  <span class="toggle__track" aria-hidden="true"><span class="toggle__knob"></span></span>
+  {%- if label %}<span class="toggle__label">{{ label }}</span>{% endif -%}
+</label>
+{%- endmacro %}

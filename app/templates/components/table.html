@@ -1,0 +1,33 @@
+{# Адаптивная строка-таблица (D-13, D-14, UI-06).
+   Обёртки над примитивами data-rowhead / data-row / data-grow, базовые правила
+   которых лежат в app.css, а поведение на узких экранах — в медиазапросах
+   Плана 01. Планы разделов эти макросы только ВЫЗЫВАЮТ и своих классов не
+   добавляют.
+
+   cols — CSS-значение grid-template-columns, приходит текстом и попадает в
+   пользовательское свойство --cols; так у каждого раздела своя раскладка без
+   новых классов.
+   Импорт: {% from "components/table.html" import rowhead, row_open, row_close, cell %} #}
+
+{% macro rowhead(columns=None, cols=None) -%}
+<div data-rowhead{% if cols %} style="--cols: {{ cols }}"{% endif %}>
+{%- for column in columns or [] %}<span>{{ column }}</span>{% endfor -%}
+</div>
+{%- endmacro %}
+
+{% macro row_open(cols=None, extra_class=None, id=None) -%}
+<div data-row{% if extra_class %} class="{{ extra_class }}"{% endif %}{% if id %} id="{{ id }}"{% endif %}{% if cols %} style="--cols: {{ cols }}"{% endif %}>
+{%- endmacro %}
+
+{% macro row_close() -%}
+</div>
+{%- endmacro %}
+
+{# Ячейка. Либо text параметром, либо блочный вызов
+   {% call cell(grow=true) %}…{% endcall %} — во втором случае разметку пишет
+   вызывающий шаблон и она не проходит через параметр строкой. #}
+{% macro cell(text=None, grow=false, mono=false, muted=false, area=None, title=None) -%}
+<span class="cell{% if mono %} cell--mono{% endif %}{% if muted %} cell--muted{% endif %}"{% if grow %} data-grow{% endif %}{% if area %} data-area="{{ area }}"{% endif %}{% if title %} title="{{ title }}"{% endif %}>
+{%- if text is not none %}{{ text }}{% elif caller is defined %}{{ caller() }}{% endif -%}
+</span>
+{%- endmacro %}

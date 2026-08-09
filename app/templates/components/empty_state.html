@@ -1,0 +1,10 @@
+{# Пустое состояние (D-13, D-14) — «Объявления не найдены» и её родня.
+   Импорт: {% from "components/empty_state.html" import empty_state %} #}
+
+{% macro empty_state(title, hint=None, action_label=None, action_href=None) -%}
+<div class="empty">
+  <span class="empty__title">{{ title }}</span>
+  {%- if hint %}<span class="empty__hint">{{ hint }}</span>{% endif -%}
+  {%- if action_label and action_href %}<a class="btn btn--primary empty__action" href="{{ action_href }}"><span class="btn__label">{{ action_label }}</span></a>{% endif -%}
+</div>
+{%- endmacro %}

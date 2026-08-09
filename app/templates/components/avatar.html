@@ -1,0 +1,7 @@
+{# Аватар-инициал 30x30 (D-13, D-14). При пустом имени — «?».
+   Импорт: {% from "components/avatar.html" import avatar %} #}
+
+{% macro avatar(name, size=30, title=None) -%}
+{%- set clean = (name|string|trim) if name else '' -%}
+<span class="avatar" style="--avatar-size: {{ size|int }}px"{% if title %} title="{{ title }}"{% endif %}>{{ clean[0]|upper if clean else '?' }}</span>
+{%- endmacro %}

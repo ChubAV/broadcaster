@@ -7,6 +7,10 @@
      1. :root — токены, выведенные из частотной таблицы инлайн-стилей макета
      2. Дословный перенос базового блока макета: keyframes и три медиазапроса
      3. Стили шелла на атрибутах data-* из анатомии макета
+     4. Библиотека компонентов (План 02) — семантические классы макросов
+
+   Разделы 1-3 принадлежат Плану 01, раздел 4 — Плану 02. Дальше файл только
+   потребляется: планы разделов классы не добавляют, а используют.
    ========================================================================== */
 
 /* --------------------------------------------------------------------------
@@ -566,8 +570,12 @@ a:hover { color: var(--accent-link-hover); }
 
 /* Блок пользователя */
 [data-user] { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
+/* Размер задаётся пользовательским свойством --avatar-size, которое ставит
+   макрос components/avatar.html. Шелл вызывает класс без свойства и получает
+   макетные 30px из фолбэка. */
 .avatar {
-  width: 30px; height: 30px; border-radius: var(--r-circle);
+  width: var(--avatar-size, 30px); height: var(--avatar-size, 30px);
+  border-radius: var(--r-circle);
   background: var(--border-input); display: grid; place-items: center;
   font-size: var(--fs-sm); font-weight: 600; color: #9a9aaa; flex: none;
 }
@@ -623,4 +631,199 @@ a:hover { color: var(--accent-link-hover); }
 
 @media (prefers-reduced-motion: reduce) {
   .brand-mark::after, .quota-fill, .session-dot.is-online, .animate-fade-in { animation: none !important; }
+}
+
+/* --------------------------------------------------------------------------
+   4. Библиотека компонентов (План 02, D-13/D-14).
+   Семантические классы для макросов app/templates/components/*.html.
+   Все цвета, радиусы и кегли — только через токены раздела 1: новых
+   захардкоженных значений здесь нет. Состояния наведения и фокуса выражены
+   настоящими псевдоклассами — псевдо-атрибуты состояний из макета браузер
+   игнорирует.
+   Начиная с Плана 03 этот файл только потребляется: планы разделов классы не
+   добавляют, а используют.
+   -------------------------------------------------------------------------- */
+
+/* Кнопки ------------------------------------------------------------------ */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 9px 16px; border-radius: var(--r-pill); border: 1px solid transparent;
+  font-family: var(--font-sans); font-size: var(--fs-md); font-weight: 600;
+  line-height: 1; cursor: pointer; white-space: nowrap;
+  transition: filter .16s ease, background .16s ease, color .16s ease, border-color .16s ease;
+}
+.btn__icon { flex: none; }
+.btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.btn--block { width: 100%; }
+
+.btn--primary { background: var(--accent-cta); color: var(--text-on-accent); }
+.btn--primary:hover { filter: brightness(1.08); color: var(--text-on-accent); }
+
+.btn--ghost {
+  background: var(--surface-pill); border-color: var(--border-control);
+  color: var(--text-bright); font-weight: 500;
+}
+.btn--ghost:hover { background: var(--border-input); color: var(--text); }
+
+.btn--danger {
+  background: transparent; border-color: var(--border-control-strong);
+  color: var(--danger); font-weight: 500;
+}
+.btn--danger:hover { background: var(--surface-input); color: var(--danger); }
+
+/* Поля -------------------------------------------------------------------- */
+.field { display: flex; flex-direction: column; gap: 7px; }
+.field__label {
+  font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted);
+}
+.field__input {
+  padding: 12px 13px; border-radius: var(--r-lg);
+  background: var(--surface-input); border: 1px solid var(--border-input);
+  font-family: var(--font-sans); font-size: var(--fs-lg); color: var(--text);
+  transition: border-color .16s ease;
+}
+.field__input::placeholder { color: var(--text-dim); }
+.field__input:hover { border-color: var(--border-control); }
+.field__input:focus { outline: none; border-color: var(--focus-ring); }
+.field__input[disabled] { opacity: .5; cursor: not-allowed; }
+.field__input--area { line-height: 1.6; resize: vertical; white-space: pre-wrap; }
+.field__input--select { appearance: none; cursor: pointer; }
+.field__input--center {
+  text-align: center; font-family: var(--font-mono);
+  font-size: var(--fs-2xl); letter-spacing: .35em;
+}
+.field__hint { font-size: var(--fs-sm); color: var(--text-muted); }
+.field__error { font-size: var(--fs-sm); color: var(--danger); }
+.field--invalid > .field__input { border-color: var(--danger); }
+
+/* Карточка-панель --------------------------------------------------------- */
+.card {
+  display: block; border-radius: var(--r-2xl);
+  background: var(--surface); border: 1px solid var(--border);
+  overflow: hidden;
+}
+.card__head {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 15px 20px; border-bottom: 1px solid var(--border-muted);
+}
+.card__title { margin: 0; font-size: var(--fs-xl); font-weight: 600; letter-spacing: -.015em; }
+.card__subtitle { margin: 0; font-size: var(--fs-md); color: var(--text-tertiary); }
+.card__body { padding: 18px 20px; }
+
+/* Бейдж-пилюля ------------------------------------------------------------ */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 9px; border-radius: var(--r-xs);
+  font-size: var(--fs-xs); font-weight: 500; line-height: 1.3;
+  border: 1px solid transparent; flex: none; white-space: nowrap;
+}
+.badge--mono { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .08em; }
+.badge--success { color: var(--ok); background: color-mix(in oklab, var(--ok) 12%, transparent); }
+.badge--warning { color: var(--warn); background: color-mix(in oklab, var(--warn) 12%, transparent); }
+.badge--danger  { color: var(--danger); background: color-mix(in oklab, var(--danger) 12%, transparent); }
+.badge--info    { color: var(--info); background: color-mix(in oklab, var(--info) 12%, transparent); }
+.badge--neutral { color: var(--text-secondary); background: var(--surface-pill); border-color: var(--border-pill); }
+
+/* Пустое состояние -------------------------------------------------------- */
+.empty {
+  grid-column: 1 / -1;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 48px 20px; text-align: center;
+  border-radius: var(--r-2xl); background: var(--surface); border: 1px solid var(--border);
+}
+.empty__title { font-size: var(--fs-lg); color: var(--text-secondary); }
+.empty__hint { font-size: var(--fs-md); color: var(--text-muted); }
+.empty__action { margin-top: 4px; }
+
+/* Тумблер (knob-паттерн макета) ------------------------------------------- */
+.toggle { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; }
+.toggle__input {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+.toggle__track {
+  display: block; width: 38px; height: 22px; padding: 3px; flex: none;
+  border-radius: var(--r-pill); background: var(--border-control);
+  transition: background .2s ease;
+}
+.toggle__knob {
+  display: block; width: 16px; height: 16px; border-radius: var(--r-circle);
+  background: var(--surface-side);
+  transition: transform .2s cubic-bezier(.2, .8, .2, 1);
+  transform: translateX(0);
+}
+.toggle__input:checked + .toggle__track { background: var(--accent); }
+.toggle__input:checked + .toggle__track > .toggle__knob { transform: translateX(16px); }
+.toggle__input:focus-visible + .toggle__track { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.toggle__input[disabled] + .toggle__track { opacity: .45; cursor: not-allowed; }
+.toggle__label { font-size: var(--fs-md); color: var(--text-secondary); }
+
+/* Прогресс-бар ------------------------------------------------------------ */
+.progress { display: flex; flex-direction: column; gap: 7px; }
+.progress__label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-tertiary); }
+.progress__track {
+  height: 5px; border-radius: var(--r-pill);
+  background: var(--border-pill); overflow: hidden;
+}
+.progress__bar {
+  height: 100%; border-radius: var(--r-pill); background: var(--accent);
+  transform-origin: left; animation: grow .8s cubic-bezier(.2, .8, .2, 1);
+}
+.progress--ok .progress__bar { background: var(--ok); }
+.progress--warn .progress__bar { background: var(--warn); }
+.progress--danger .progress__bar { background: var(--danger); }
+
+/* Mono-метка -------------------------------------------------------------- */
+.mono { font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: .06em; }
+.mono--upper { text-transform: uppercase; letter-spacing: .12em; }
+.mono--muted { color: var(--text-muted); }
+.mono--bright { color: var(--text); }
+.mono--accent { color: var(--accent-link); }
+.mono--ok { color: var(--ok); }
+.mono--warn { color: var(--warn); }
+.mono--danger { color: var(--danger); }
+
+/* Сообщения --------------------------------------------------------------- */
+.alert {
+  padding: 11px 14px; border-radius: var(--r-lg);
+  font-size: var(--fs-md); line-height: 1.5;
+  border: 1px solid transparent;
+}
+.alert--error   { color: var(--danger); background: color-mix(in oklab, var(--danger) 10%, transparent); border-color: color-mix(in oklab, var(--danger) 28%, transparent); }
+.alert--success { color: var(--ok); background: color-mix(in oklab, var(--ok) 10%, transparent); border-color: color-mix(in oklab, var(--ok) 28%, transparent); }
+.alert--warning { color: var(--warn); background: color-mix(in oklab, var(--warn) 10%, transparent); border-color: color-mix(in oklab, var(--warn) 28%, transparent); }
+.alert--info    { color: var(--info); background: color-mix(in oklab, var(--info) 10%, transparent); border-color: color-mix(in oklab, var(--info) 28%, transparent); }
+
+/* Адаптивные примитивы строки-таблицы (UI-06) -----------------------------
+   Базовые, НЕ медиазапросные правила: поведение на узких экранах уже описано
+   медиазапросами раздела 2. Раскладка колонок приходит из --cols, которое
+   ставит макрос components/table.html — так у каждого раздела своя сетка без
+   новых классов. */
+[data-rowhead] {
+  display: grid; grid-template-columns: var(--cols, minmax(0, 1fr));
+  gap: 14px; padding: 13px 20px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted);
+}
+[data-row] {
+  display: grid; grid-template-columns: var(--cols, minmax(0, 1fr));
+  gap: 14px; align-items: center; padding: 14px 20px;
+  border-bottom: 1px solid var(--border-hair);
+  transition: background .16s ease;
+}
+[data-row]:hover { background: var(--surface-input); }
+[data-row]:last-child { border-bottom: none; }
+[data-grow] { min-width: 0; }
+.cell {
+  display: flex; align-items: center; gap: 9px; min-width: 0;
+  font-size: var(--fs-md); overflow: hidden; text-overflow: ellipsis;
+}
+.cell--mono { font-family: var(--font-mono); font-size: var(--fs-xs); }
+.cell--muted { color: var(--text-tertiary); }
+
+@media (prefers-reduced-motion: reduce) {
+  .progress__bar, .toggle__knob { animation: none !important; transition: none !important; }
 }

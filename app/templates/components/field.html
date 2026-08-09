@@ -1,0 +1,68 @@
+{# Поля форм (D-13, D-14). Сигнатура покрывает все поля 7 экранов авторизации:
+   type, name, id, required, autocomplete, placeholder, label, value, а также
+   maxlength / minlength / pattern / inputmode кода подтверждения.
+   Все параметры — текст, числа и булевы; готовая разметка не принимается.
+   Импорт: {% from "components/field.html" import field %} #}
+
+{% macro field(name, label=None, type='text', value='', required=false, placeholder=None, autocomplete=None, id=None, hint=None, error=None, maxlength=None, minlength=None, pattern=None, inputmode=None, align=None, disabled=false, readonly=false, step=None, min=None, max=None) -%}
+{%- set field_id = id or name -%}
+<label class="field{% if error %} field--invalid{% endif %}" for="{{ field_id }}">
+  {%- if label %}<span class="field__label">{{ label }}</span>{% endif -%}
+  <input class="field__input{% if align %} field__input--{{ align }}{% endif %}" type="{{ type }}" name="{{ name }}" id="{{ field_id }}" value="{{ value if value is not none else '' }}"
+    {%- if placeholder %} placeholder="{{ placeholder }}"{% endif %}
+    {%- if autocomplete %} autocomplete="{{ autocomplete }}"{% endif %}
+    {%- if maxlength is not none %} maxlength="{{ maxlength }}"{% endif %}
+    {%- if minlength is not none %} minlength="{{ minlength }}"{% endif %}
+    {%- if pattern %} pattern="{{ pattern }}"{% endif %}
+    {%- if inputmode %} inputmode="{{ inputmode }}"{% endif %}
+    {%- if step is not none %} step="{{ step }}"{% endif %}
+    {%- if min is not none %} min="{{ min }}"{% endif %}
+    {%- if max is not none %} max="{{ max }}"{% endif %}
+    {%- if error %} aria-invalid="true"{% endif %}
+    {%- if readonly %} readonly{% endif %}
+    {%- if disabled %} disabled{% endif %}
+    {%- if required %} required{% endif %}>
+  {%- if hint %}<span class="field__hint">{{ hint }}</span>{% endif -%}
+  {%- if error %}<span class="field__error">{{ error }}</span>{% endif -%}
+</label>
+{%- endmacro %}
+
+{% macro textarea_field(name, label=None, value='', rows=6, required=false, placeholder=None, id=None, hint=None, error=None, maxlength=None, disabled=false) -%}
+{%- set field_id = id or name -%}
+<label class="field{% if error %} field--invalid{% endif %}" for="{{ field_id }}">
+  {%- if label %}<span class="field__label">{{ label }}</span>{% endif -%}
+  <textarea class="field__input field__input--area" name="{{ name }}" id="{{ field_id }}" rows="{{ rows }}"
+    {%- if placeholder %} placeholder="{{ placeholder }}"{% endif %}
+    {%- if maxlength is not none %} maxlength="{{ maxlength }}"{% endif %}
+    {%- if error %} aria-invalid="true"{% endif %}
+    {%- if disabled %} disabled{% endif %}
+    {%- if required %} required{% endif %}>{{ value if value is not none else '' }}</textarea>
+  {%- if hint %}<span class="field__hint">{{ hint }}</span>{% endif -%}
+  {%- if error %}<span class="field__error">{{ error }}</span>{% endif -%}
+</label>
+{%- endmacro %}
+
+{# options — список пар (value, label) либо простых значений.
+   Порядок атрибутов <option value="X" selected> зафиксирован: существующие
+   тесты проекта проверяют именно эту подстроку. #}
+{% macro select_field(name, label=None, options=None, selected=None, id=None, required=false, hint=None, error=None, disabled=false) -%}
+{%- set field_id = id or name -%}
+<label class="field{% if error %} field--invalid{% endif %}" for="{{ field_id }}">
+  {%- if label %}<span class="field__label">{{ label }}</span>{% endif -%}
+  <select class="field__input field__input--select" name="{{ name }}" id="{{ field_id }}"
+    {%- if error %} aria-invalid="true"{% endif %}
+    {%- if disabled %} disabled{% endif %}
+    {%- if required %} required{% endif %}>
+    {%- for option in options or [] -%}
+      {%- if option is string or option is number -%}
+        {%- set opt_value = option -%}{%- set opt_label = option -%}
+      {%- else -%}
+        {%- set opt_value = option[0] -%}{%- set opt_label = option[1] -%}
+      {%- endif -%}
+      <option value="{{ opt_value }}"{% if selected is not none and opt_value == selected %} selected{% endif %}>{{ opt_label }}</option>
+    {%- endfor -%}
+  </select>
+  {%- if hint %}<span class="field__hint">{{ hint }}</span>{% endif -%}
+  {%- if error %}<span class="field__error">{{ error }}</span>{% endif -%}
+</label>
+{%- endmacro %}

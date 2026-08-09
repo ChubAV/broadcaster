@@ -1,0 +1,22 @@
+{# Кнопки библиотеки компонентов (D-13, D-14).
+   variant: primary | ghost | danger. icon — ИМЯ иконки (текст), а не разметка:
+   готовые HTML-строки макросам не передаются, иначе рушится экранирование.
+   Импорт: {% from "components/button.html" import button, link_button %} #}
+
+{% macro btn_icon(name) -%}
+{%- if name == 'plus' -%}<svg class="btn__icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+{%- elif name == 'trash' -%}<svg class="btn__icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13"/></svg>
+{%- elif name == 'check' -%}<svg class="btn__icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
+{%- elif name == 'arrow-right' -%}<svg class="btn__icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+{%- elif name == 'pencil' -%}<svg class="btn__icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M4 20h4L20 8l-4-4L4 16v4z"/></svg>
+{%- elif name == 'refresh' -%}<svg class="btn__icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M4 9a8 8 0 0113.6-3.6L20 8M20 15a8 8 0 01-13.6 3.6L4 16M20 4v4h-4M4 20v-4h4"/></svg>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro button(label, variant='primary', type='submit', name=None, value=None, icon=None, disabled=false, title=None, extra_class=None) -%}
+<button class="btn btn--{{ variant }}{% if extra_class %} {{ extra_class }}{% endif %}" type="{{ type }}"{% if name %} name="{{ name }}"{% endif %}{% if value is not none %} value="{{ value }}"{% endif %}{% if title %} title="{{ title }}"{% endif %}{% if disabled %} disabled{% endif %}>{% if icon %}{{ btn_icon(icon) }}{% endif %}<span class="btn__label">{{ label }}</span></button>
+{%- endmacro %}
+
+{% macro link_button(label, href, variant='primary', icon=None, title=None, extra_class=None) -%}
+<a class="btn btn--{{ variant }}{% if extra_class %} {{ extra_class }}{% endif %}" href="{{ href }}"{% if title %} title="{{ title }}"{% endif %}>{% if icon %}{{ btn_icon(icon) }}{% endif %}<span class="btn__label">{{ label }}</span></a>
+{%- endmacro %}

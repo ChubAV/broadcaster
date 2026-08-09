@@ -17,13 +17,18 @@ ENV = templates.env
 TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
 
 
-def macro(path: str, name: str):
-    """Вернуть макрос ``name`` из шаблона ``path``, отрендеренного с пустым контекстом."""
-    return getattr(ENV.get_template(path).module, name)
+def macro(path: str, macro_name: str, /):
+    """Вернуть макрос ``macro_name`` из шаблона ``path`` с пустым контекстом."""
+    return getattr(ENV.get_template(path).module, macro_name)
 
 
-def render(path: str, name: str, *args, **kwargs) -> str:
-    return str(macro(path, name)(*args, **kwargs))
+def render(path: str, macro_name: str, /, *args, **kwargs) -> str:
+    """Отрендерить макрос.
+
+    Параметры помечены positional-only: у макросов библиотеки есть собственный
+    параметр ``name``, и без этого он бы конфликтовал с параметром хелпера.
+    """
+    return str(macro(path, macro_name)(*args, **kwargs))
 
 
 # --- badge -------------------------------------------------------------------
