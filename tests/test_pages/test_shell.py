@@ -125,3 +125,67 @@ async def test_shell_live_data(authed_client: AsyncClient):
 async def test_mobile_tabs_present(authed_client: AsyncClient):
     html = (await authed_client.get("/profile")).text
     assert "data-tabs" in html
+
+
+# --- D-08: auth-шелл без сайдбара (План 02) ---------------------------------
+
+AUTH_GET_ROUTES = ("/login", "/register", "/forgot-password")
+
+
+@pytest.mark.asyncio
+async def test_auth_shell(client: AsyncClient):
+    """7 экранов авторизации живут во ВТОРОМ шелле: ни сайдбара, ни навигации.
+
+    До Плана 02 они переопределяли {% block body %}, чтобы обойти {% if user %}
+    основного шелла. Теперь у них собственный шелл на тех же токенах.
+    """
+    for route in AUTH_GET_ROUTES:
+        response = await client.get(route)
+        assert response.status_code == 200, route
+        html = response.text
+        assert "data-auth-shell" in html, route
+        assert "data-side" not in html, route
+        assert "data-nav" not in html, route
+        assert "data-tabs" not in html, route
+
+
+@pytest.mark.asyncio
+async def test_auth_pages_no_external_cdn(client: AsyncClient):
+    for route in AUTH_GET_ROUTES:
+        html = (await client.get(route)).text
+        for host in (
+            "fonts.googleapis.com",
+            "fonts.gstatic.com",
+            "cdn.tailwindcss.com",
+            "unpkg.com",
+            "cdn.jsdelivr.net",
+            "cdnjs.cloudflare.com",
+        ):
+            assert host not in html, f"{route}: {host}"
+
+
+@pytest.mark.asyncio
+async def test_login_form_contract(client: AsyncClient):
+    """Атрибуты формы входа — контракт с обработчиком: они читаются дословно."""
+    html = (await client.get("/login")).text
+    assert 'method="post"' in html
+    assert 'action="/login"' in html
+    assert 'name="email"' in html
+    assert 'name="password"' in html
+    assert 'type="password"' in html
+
+
+@pytest.mark.asyncio
+async def test_auth_pages_use_component_library(client: AsyncClient):
+    """Auth-экраны собраны из библиотеки, а не из скопированной разметки."""
+    html = (await client.get("/login")).text
+    assert 'class="field__input' in html
+    assert 'class="btn btn--primary' in html
+
+
+@pytest.mark.asyncio
+async def test_auth_pages_drop_utility_classes(client: AsyncClient):
+    for route in AUTH_GET_ROUTES:
+        html = (await client.get(route)).text
+        for utility in ("bg-gray", "text-gray", "rounded-lg", "border-gray"):
+            assert utility not in html, f"{route}: {utility}"

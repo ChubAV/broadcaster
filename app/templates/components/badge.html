@@ -1,0 +1,10 @@
+{# Бейдж-пилюля (D-13, D-14). variant — ЯВНЫЙ параметр:
+   единого enum статусов в проекте нет, один и тот же литерал в разных разделах
+   значит разное, поэтому маппинг «строка домена → вариант» остаётся в
+   вызывающем шаблоне.
+   variant: success | warning | danger | neutral | info
+   Импорт: {% from "components/badge.html" import badge %} #}
+
+{% macro badge(label, variant='neutral', mono=true, title=None) -%}
+<span class="badge badge--{{ variant }}{% if mono %} badge--mono{% endif %}"{% if title %} title="{{ title }}"{% endif %}>{{ label }}</span>
+{%- endmacro %}

@@ -1,0 +1,11 @@
+{# Сообщение об ошибке или успехе (D-13, D-14) — извлечено из блока, который
+   был скопирован во все 7 экранов авторизации.
+   Важно: макрос НЕ читает request из контекста. Значение вроде
+   request.query_params.get('reset') вычисляется в вызывающем шаблоне и
+   приходит параметром.
+   variant: error | success | warning | info
+   Импорт: {% from "components/alert.html" import alert %} #}
+
+{% macro alert(message, variant='error') -%}
+<div class="alert alert--{{ variant }}" role="{{ 'alert' if variant == 'error' else 'status' }}">{{ message }}</div>
+{%- endmacro %}

@@ -1,0 +1,16 @@
+{# Прогресс-бар (D-13, D-14) — используется виджетом квоты и сводками.
+   percent ограничивается диапазоном 0..100 внутри макроса: вызывающий шаблон
+   не обязан помнить про переполнение.
+   variant: accent | ok | warn | danger
+   Импорт: {% from "components/progress.html" import progress %} #}
+
+{% macro progress(percent, label=None, variant='accent') -%}
+{%- set raw = percent|int -%}
+{%- set pct = 0 if raw < 0 else (100 if raw > 100 else raw) -%}
+<div class="progress progress--{{ variant }}">
+  {%- if label %}<span class="progress__label">{{ label }}</span>{% endif %}
+  <div class="progress__track" role="progressbar" aria-valuenow="{{ pct }}" aria-valuemin="0" aria-valuemax="100">
+    <div class="progress__bar" style="width: {{ pct }}%"></div>
+  </div>
+</div>
+{%- endmacro %}

@@ -1,0 +1,7 @@
+{# Mono-метка (D-13, D-14) — 65 применений в макете: коды, счётчики, подписи
+   колонок. variant: muted | bright | accent | ok | warn | danger
+   Импорт: {% from "components/mono.html" import mono %} #}
+
+{% macro mono(text, variant='muted', upper=false, title=None) -%}
+<span class="mono mono--{{ variant }}{% if upper %} mono--upper{% endif %}"{% if title %} title="{{ title }}"{% endif %}>{{ text }}</span>
+{%- endmacro %}
