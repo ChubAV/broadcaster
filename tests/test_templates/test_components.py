@@ -629,6 +629,69 @@ MODAL_EVENT_NAMES = 6
 MODAL_PLACES = 14
 
 
+# --- разборщики исходников ---------------------------------------------------
+
+
+def _all_templates() -> list[tuple[str, str]]:
+    """Все шаблоны проекта парами «путь относительно app/templates — исходник»."""
+    return [
+        (path.relative_to(TEMPLATES_DIR).as_posix(), path.read_text(encoding="utf-8"))
+        for path in sorted(TEMPLATES_DIR.rglob("*.html"))
+    ]
+
+
+def _template_source(rel: str) -> str:
+    return (TEMPLATES_DIR / rel).read_text(encoding="utf-8")
+
+
+def _macro_calls(source: str, macro_name: str) -> int:
+    """Число ВЫЗОВОВ макроса. Объявление вызовом не считается.
+
+    Наивный поиск по имени нашёл бы объявление в самом компоненте и объявил бы
+    библиотеку своим же потребителем.
+    """
+    calls = 0
+    for match in re.finditer(rf"(?<![\w.]){re.escape(macro_name)}\s*\(", source):
+        if source[: match.start()].rstrip().endswith("macro"):
+            continue
+        calls += 1
+    return calls
+
+
+def _form_spans(source: str) -> list[tuple[int, int]]:
+    return [(m.start(), m.end()) for m in FORM_RE.finditer(source)]
+
+
+def _delete_forms_in(source: str, action_pattern: str) -> list[str]:
+    """Формы удаления ЦЕЛИКОМ: открывающий тег с методом POST и адресом.
+
+    Регистр метода НЕ учитывается: в трёх файлах раздела «Аккаунты» он написан
+    заглавными, в строках групп, расписаний и объявлений — строчными. Сравнение
+    с учётом регистра покраснело бы на разнице регистра, а не на потере формы.
+    """
+    forms = []
+    for form in FORM_RE.findall(source):
+        opening = form[: form.index(">") + 1]
+        method = FORM_METHOD_RE.search(opening)
+        if not method or method.group(1).lower() != "post":
+            continue
+        if not re.search(rf'action="{action_pattern}"', opening):
+            continue
+        forms.append(form)
+    return forms
+
+
+def _formless_bulk_buttons(source: str) -> list[str]:
+    """Кнопки, вызывающие функцию массового действия и НЕ обёрнутые формой."""
+    spans = _form_spans(source)
+    return [
+        match.group(0)
+        for match in BUTTON_TAG_RE.finditer(source)
+        if BULK_ACTION_FUNCTION in match.group(0)
+        and not any(start <= match.start() < end for start, end in spans)
+    ]
+
+
 def test_no_template_calls_browser_dialog():
     """Ни один шаблон проекта не вызывает системный диалог ПОДТВЕРЖДЕНИЯ.
 
