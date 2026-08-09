@@ -14,6 +14,7 @@ import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 from httpx import AsyncClient
@@ -2430,4 +2431,423 @@ async def test_admin_user_detail_cell_labels_present(
     )
     assert labels - header == set(), (
         f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+
+# =============================================================================
+# План 13, Задача 1: страховочная сетка подписей ячеек (UI-06, SC-5)
+# =============================================================================
+#
+# Gap 2 из 01-VERIFICATION.md требует буквально: «каждый шаблон с data-rowhead
+# несёт data-cell-label». Дословно это невыполнимо в двух местах сразу:
+#
+#   * литерал data-rowhead после Плана 09 эмитит МАКРОС rowhead, и в шаблонах
+#     разделов его нет вовсе — поэтому обход идёт по ВЫЗОВУ макроса;
+#   * литерал data-cell-label живёт в том же components/table.html, который
+#     КАЖДЫЙ шаблон с шапкой импортирует. Проверка «признак есть где-то в
+#     объединении с импортами» была бы зелёной на полностью НЕПОДПИСАННОЙ новой
+#     таблице: признак пришёл бы из библиотеки. Такая сетка гарантирует ноль, а
+#     читается как гарантия (T-13-02).
+#
+# Поэтому признак переопределён на ФОРМУ ВЫЗОВА в шаблоне РАЗДЕЛА, а файл
+# библиотеки из объединения ИСКЛЮЧЁН. Это усиление требования, а не подмена:
+# дословная проверка была бы зелёной на неподписанной новой таблице.
+
+# Файл библиотеки. Исключается по ДВУМ причинам сразу:
+#   1) он не потребитель — макросы rowhead / row_open / cell в нём ОБЪЯВЛЕНЫ, а
+#      не вызваны, и наивный поиск по имени нашёл бы десятый файл там, где
+#      потребителей девять;
+#   2) признак подписи живёт именно здесь — и литералом атрибута, и ключевым
+#      аргументом в сигнатуре макроса, — поэтому его исходник не имеет права
+#      попадать в объединение как источник признака.
+TABLE_COMPONENT = "components/table.html"
+
+# Разрешение импортов — ОДИН уровень. Сознательное ограничение: в четырёх
+# разделах шапку эмитит списочная страница, а ячейки — макрос строки из
+# соседнего файла (ads, schedules, groups, dashboard). Обход, который смотрит
+# только в файл с шапкой, объявил бы эти четыре раздела нарушителями, хотя
+# подписи стоят. Цепочек длиннее одного уровня в проекте нет.
+TEMPLATE_IMPORT_RE = re.compile(r"""\{%-?\s*(?:from|import)\s+["']([^"']+)["']""")
+
+# Ключевой аргумент подписи. Левая граница проверяется НЕ через \b: перед словом
+# не должно быть ни символа слова (show_label=, confirm_label=, cancel_label=,
+# action_label=), ни дефиса (aria-label=). Утверждение, проходящее по чужому
+# вхождению, гарантирует ноль и врёт про единицу (IN-08).
+LABEL_KWARG_RE = re.compile(r"(?<![\w-])label\s*=")
+
+# Атрибут подписи, написанный в шаблоне ВРУЧНУЮ — второй законный носитель:
+# billing/balance.html и admin/groups_info.html эмитят подписи так с планов,
+# предшествовавших набору 09-13.
+CELL_LABEL_ATTR = "data-cell-label"
+
+# Написанный вручную открывающий тег строки. Отрицательный просмотр вперёд
+# отсекает data-rowhead: подстрока data-row внутри него — ровно тот промах,
+# который разбирает IN-08. Второе условие обязательно для
+# accounts/partials/sync_status_card.html: он собирает открывающий тег сам и
+# макрос row_open не вызывает.
+MANUAL_ROW_ATTR_RE = re.compile(r"data-row(?![\w-])")
+
+
+# --- синтетические исходники: проверяют САМ разрешитель, а не проект ---------
+
+SYNTHETIC_LIBRARY_IMPORT_NO_LABELS = (
+    '{% from "components/table.html" import rowhead, row_open, row_close, cell %}\n'
+    "{{ rowhead(columns=['Раз', 'Два'], cols='1fr 1fr') }}\n"
+    "{{ row_open(cols='1fr 1fr') }}\n"
+    "{{- cell(text='значение') }}\n"
+    "{{- cell(text='ещё одно') }}\n"
+    "{{ row_close() }}\n"
+)
+
+SYNTHETIC_FOREIGN_LABEL_KWARGS = {
+    "макрос поля": "{{ field(name='search', label='Поиск', placeholder='Название') }}",
+    "макрос тумблера": (
+        "{{ toggle(name='select_all', id='select-all-checkbox', label='Выбрать все') }}"
+    ),
+    "макрос полосы прогресса": (
+        "{{ progress(percent=40, label='Израсходовано 4 из 10') }}"
+    ),
+    "иконка мессенджера": (
+        "{{ messenger_icon(group.messenger_type, size='avatar', show_label=false) }}"
+    ),
+}
+
+SYNTHETIC_NESTED_PARENS_WITH_LABEL = (
+    "{{- cell(text=(ad.sends_count or 0), mono=true, muted=true, "
+    "title='Успешных отправок', label=AD_COLUMNS[2]) }}"
+)
+
+SYNTHETIC_NESTED_PARENS_WITHOUT_LABEL = (
+    "{{- cell(text=(ad.sends_count or 0), mono=true, muted=true, "
+    "title='Успешных отправок') }}"
+)
+
+
+def test_cell_label_marker_excludes_the_component_library():
+    """Импорт библиотеки признаком подписи НЕ является.
+
+    Тест против вырождения. Без исключения components/table.html из объединения
+    обход зелёный на чём угодно: литерал атрибута и ключевой аргумент подписи
+    живут в компоненте, а компонент импортирует каждый шаблон с шапкой.
+    """
+    library = _resolve_template(TABLE_COMPONENT)
+    assert library is not None, "файл библиотеки не найден — проверь путь"
+    # Библиотека признак НЕСЁТ. Именно поэтому её нельзя пускать в объединение.
+    assert CELL_LABEL_ATTR in library
+    assert "label=None" in library
+
+    union = _union_sources(SYNTHETIC_LIBRARY_IMPORT_NO_LABELS)
+    assert TABLE_COMPONENT not in union, (
+        "файл библиотеки попал в объединение — сетка выродилась: признак придёт "
+        "из компонента за любой шаблон, который его импортирует (T-13-02). "
+        f"состав объединения: {sorted(union)}"
+    )
+    assert not _has_cell_label_marker_in_union(SYNTHETIC_LIBRARY_IMPORT_NO_LABELS), (
+        "шаблон, который ТОЛЬКО импортирует библиотеку и вызывает ячейку без "
+        "подписи, признан подписанным — обход гарантирует ноль, а читается как "
+        "гарантия"
+    )
+
+
+def test_cell_label_marker_ignores_foreign_label_kwargs():
+    """Ключевое слово подписи принадлежит ещё четырём макросам.
+
+    Поле фильтра, тумблер, полоса прогресса и составной аргумент отключения
+    подписи у иконки мессенджера. Новая неподписанная таблица в любом таком
+    файле прошла бы обход по голому слову.
+    """
+    passing = {
+        name: source
+        for name, source in SYNTHETIC_FOREIGN_LABEL_KWARGS.items()
+        if _has_cell_label_marker(source)
+    }
+    assert not passing, (
+        "признак подписи прошёл по ЧУЖОМУ ключевому аргументу — "
+        f"утверждение сильнее, чем есть: {sorted(passing)}"
+    )
+
+
+def test_cell_label_marker_survives_nested_parens():
+    """Разбор аргументов доходит до ПАРНОЙ закрывающей скобки, а не до первой.
+
+    В строке объявления есть вызов ячейки, у которого внутри списка аргументов
+    стоит выражение в круглых скобках. «До первой закрывающей» теряет хвост
+    вместе с подписью — и теряет молча.
+    """
+    (arglist,) = _macro_call_arglists(SYNTHETIC_NESTED_PARENS_WITH_LABEL, "cell")
+    assert arglist.rstrip().endswith("label=AD_COLUMNS[2]"), (
+        "разбор аргументов оборвался на вложенной скобке — подпись потеряна "
+        f"молча: {arglist!r}"
+    )
+    assert _has_cell_label_marker(SYNTHETIC_NESTED_PARENS_WITH_LABEL)
+    assert not _has_cell_label_marker(SYNTHETIC_NESTED_PARENS_WITHOUT_LABEL), (
+        "вызов с аргументом подсказки вместо подписи признан подписанным"
+    )
+
+
+# --- перечни, закрепляющие область действия сетки ---------------------------
+
+# Шаблоны с шапкой колонок, у которых нет собственного GET-роута. Перечень
+# существует, чтобы такой файл был НАЗВАН, а не выпал из сверки молча. Сегодня
+# он пуст: все девять шаблонов с шапкой достижимы по адресу.
+ROWHEAD_TEMPLATES_WITHOUT_ROUTE: frozenset[str] = frozenset()
+
+# Шаблоны, которые рисуют СТРОКУ, но шапку не вызывают. Обход по шапке их не
+# видит, и утверждать обратное нельзя. Каждый закрыт названным классом причины,
+# чтобы новый безымянный файл этого класса краснел, а не растворялся.
+ROW_TEMPLATES_WITHOUT_HEADER = {
+    # Класс 1: макрос строки, потребляемый шаблоном с шапкой. Его исходник уже
+    # входит в объединение своего списочного шаблона — подписи проверяются там.
+    "ads/includes/ad_card.html": "макрос строки внутри объединения ads/list.html",
+    "groups/includes/group_row.html": (
+        "макрос строки внутри объединения groups/list.html"
+    ),
+    "schedules/includes/schedule_row.html": (
+        "макрос строки внутри объединения schedules/list.html"
+    ),
+    "dashboard/includes/recent_send_card.html": (
+        "макрос строки внутри объединения dashboard.html"
+    ),
+    # Класс 2: зеркала строки раздела «Аккаунты». Закрыты тестом синхронности
+    # Плана 11 — test_accounts_three_files_label_the_same_columns считает
+    # подписи Counter'ом, то есть краснеет и на потере подписи в одной ветке.
+    "accounts/partial_cards.html": "зеркало строки раздела, тест синхронности Плана 11",
+    "accounts/partials/sync_status_card.html": (
+        "зеркало строки раздела, тест синхронности Плана 11; открывающий тег "
+        "написан вручную, макрос row_open не вызывается"
+    ),
+    # Класс 3: страницы-карточки без шапки колонок вовсе. На 860px нечему
+    # скрываться, значит и компенсировать подписью нечего.
+    "admin/group_info_detail.html": "страница-карточка, шапки колонок нет вовсе",
+    "admin/user_history_detail.html": "страница-карточка, шапки колонок нет вовсе",
+    "history/detail.html": "страница-карточка, шапки колонок нет вовсе",
+}
+
+
+class RowheadPage(NamedTuple):
+    """Вход таблицы параметризации: одна страница с шапкой колонок.
+
+    unlabelled — ОЖИДАЕМАЯ разность «названия колонок шапки минус подписи»,
+    объявленная явно, а не выведенная. Это и делает сетку строгой: новая колонка
+    без подписи увеличивает разность и роняет тест.
+    """
+
+    template: str
+    url: str
+    admin: bool
+    seed: str
+    unlabelled: frozenset[str]
+    note: str = ""
+
+
+ROWHEAD_PAGES = (
+    RowheadPage(
+        "accounts/list.html", "/accounts", False, "accounts", frozenset({"Аккаунт"})
+    ),
+    RowheadPage("ads/list.html", "/ads", False, "ads", frozenset({"Объявление"})),
+    RowheadPage(
+        "schedules/list.html", "/schedules", False, "schedules",
+        frozenset({"Объявление"}),
+    ),
+    RowheadPage("groups/list.html", "/groups", False, "groups", frozenset({"Группа"})),
+    RowheadPage(
+        "dashboard.html", "/dashboard", False, "dashboard", frozenset({"Объявление"})
+    ),
+    RowheadPage(
+        "admin/users.html", "/admin/users", True, "admin_users",
+        frozenset({"Пользователь"}),
+    ),
+    RowheadPage(
+        "admin/user_detail.html", "/admin/users/{user_id}", True, "admin_user_detail",
+        frozenset({"Аккаунт"}),
+    ),
+    # НАБЛЮДЕНИЕ, а НЕ принятая базовая линия. История операций эмитила подписи
+    # ДО набора планов 09-13, причём атрибутом вручную, и покрыла две колонки из
+    # четырёх. 01-VERIFICATION.md пробелом это не считает и относит страницу к
+    # применившим примитив, поэтому дописывать подписи здесь нельзя — работа вне
+    # закрываемого пробела. Но пользовательская правда SC-5 «понятно, что каждое
+    # значение означает» на этой странице остаётся частично ложной: «Тип» и
+    # «Описание» на 860px остаются без названия. Передано в /gsd-verify-work
+    # (T-13-09). Формулировка «принято как базовая линия» запрещена.
+    RowheadPage(
+        "billing/balance.html", "/billing", False, "billing",
+        frozenset({"Дата", "Тип", "Описание"}),
+        note="НАБЛЮДЕНИЕ для /gsd-verify-work: «Тип» и «Описание» не подписаны "
+        "помимо колонки даты; НЕ принятая базовая линия",
+    ),
+    # НАБЛЮДЕНИЕ, а НЕ принятая базовая линия — та же история, что у тарифов:
+    # «Канал» и «Обновлено» на 860px остаются без названия (T-13-09).
+    RowheadPage(
+        "admin/groups_info.html", "/admin/groups-info", True, "admin_groups_info",
+        frozenset({"Группа", "Канал", "Обновлено"}),
+        note="НАБЛЮДЕНИЕ для /gsd-verify-work: «Канал» и «Обновлено» не подписаны "
+        "помимо колонки названия; НЕ принятая базовая линия",
+    ),
+)
+
+
+async def _seed_rowhead_page(db: AsyncSession, seed: str) -> None:
+    """Наполняет страницу так, чтобы шапка и хотя бы одна строка отрисовались.
+
+    Пустая страница рисует empty_state: и шапки, и подписей на ней нет, и
+    сравнение разностей зазеленело бы вакуумно.
+    """
+    if seed == "accounts":
+        await _seed_account(db, type_="max")
+    elif seed == "ads":
+        await _seed_ad(db)
+    elif seed == "schedules":
+        await _seed_schedule(db)
+    elif seed == "groups":
+        await _seed_group(db)
+    elif seed == "dashboard":
+        await _seed_send_log(db)
+    elif seed == "admin_users":
+        pass  # обычный пользователь и админ зарегистрированы фикстурами
+    elif seed == "admin_user_detail":
+        await _seed_account(db, type_="max")
+    elif seed == "billing":
+        await _seed_transaction(db)
+    elif seed == "admin_groups_info":
+        await _seed_group_info(db)
+    else:  # pragma: no cover — защита от опечатки в таблице параметризации
+        raise AssertionError(f"неизвестное наполнение: {seed}")
+
+
+def test_every_rowhead_template_has_cell_labels():
+    """Каждый шаблон, вызывающий шапку колонок, несёт признак подписи ячейки.
+
+    Признак ищется в ОБЪЕДИНЕНИИ «свой исходник + импорты на один уровень»,
+    из которого ИСКЛЮЧЁН components/table.html. Исключение — единственное, что
+    отделяет работающую сетку от декоративной (T-13-02).
+    """
+    templates = _templates_calling_macro("rowhead")
+    assert templates, "шаблоны с шапкой колонок не найдены — проверь разрешитель"
+
+    offenders = {}
+    for rel in sorted(templates):
+        source = _resolve_template(rel)
+        assert source is not None, rel
+        if not _has_cell_label_marker_in_union(source):
+            offenders[rel] = sorted(_union_sources(source))
+
+    assert not offenders, (
+        "шаблоны с шапкой колонок БЕЗ подписей ячеек — на 860px шапка "
+        "скрывается, и значения остаются без названий. Искали: вызов cell(...) "
+        f"с ключевым аргументом label= ЛИБО атрибут {CELL_LABEL_ATTR}, "
+        f"написанный вручную; в объединении БЕЗ {TABLE_COMPONENT}. "
+        + "; ".join(f"{rel} -> объединение {union}" for rel, union in offenders.items())
+    )
+
+
+def test_rowhead_pages_all_have_a_parametrization_entry():
+    """Множество шаблонов с шапкой = таблица параметризации + перечень без роута.
+
+    Новый шаблон с шапкой роняет тест на отсутствии входа, а не проходит по
+    умолчанию: сетка нужна для тех таблиц, которых ещё нет.
+    """
+    found = _templates_calling_macro("rowhead")
+    declared = {page.template for page in ROWHEAD_PAGES} | set(
+        ROWHEAD_TEMPLATES_WITHOUT_ROUTE
+    )
+
+    assert TABLE_COMPONENT not in found, (
+        f"{TABLE_COMPONENT} попал в потребители: ОБЪЯВЛЕНИЕ макроса принято за "
+        "вызов — счёт не сойдётся ни здесь, ни в объединении"
+    )
+    assert found == declared, (
+        "шаблоны с шапкой колонок разошлись с таблицей параметризации: "
+        f"без входа в таблице {sorted(found - declared)}; "
+        f"в таблице, но шапку не вызывают {sorted(declared - found)}"
+    )
+    assert len(declared) == 9, (
+        f"ожидалось девять шаблонов с шапкой колонок, объявлено {len(declared)}: "
+        f"{sorted(declared)}"
+    )
+
+
+def test_row_templates_without_header_are_accounted_for():
+    """Шаблоны, рисующие строку БЕЗ шапки, названы поимённо с классом причины.
+
+    Обход по шапке их не видит. Перечень закрепляется утверждением, чтобы новый
+    файл того же класса краснел, а не растворялся в прозе.
+    """
+    found = _row_drawing_templates() - _templates_calling_macro("rowhead")
+    declared = set(ROW_TEMPLATES_WITHOUT_HEADER)
+
+    assert found == declared, (
+        "шаблоны строки без шапки колонок разошлись с объявленным перечнем: "
+        f"не названы {sorted(found - declared)}; "
+        f"названы, но строку не рисуют {sorted(declared - found)}"
+    )
+    assert len(declared) == 9, (
+        f"ожидалось девять таких шаблонов, объявлено {len(declared)}"
+    )
+    # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
+    # макрос row_open он не вызывает. Без второго условия разрешителя он выпал
+    # бы, и инвентаризация из девяти файлов не сошлась бы.
+    swap = _resolve_template("accounts/partials/sync_status_card.html")
+    assert swap is not None
+    assert not _macro_call_arglists(swap, "row_open")
+    assert MANUAL_ROW_ATTR_RE.search(swap)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page", ROWHEAD_PAGES, ids=lambda page: page.template)
+async def test_rowhead_titles_are_covered_by_labels(
+    page: RowheadPage,
+    client: AsyncClient,
+    auth_headers: dict,
+    test_settings,
+    db_session: AsyncSession,
+):
+    """Разность «названия колонок минус подписи» равна ОБЪЯВЛЕННОМУ множеству.
+
+    Порог «минимум одна подпись» и полное покрытие названий — разные
+    утверждения: в карточке пользователя колонок две, а подпись одна, и это не
+    недоработка. Поэтому ожидаемая разность объявлена явно по одному входу на
+    страницу — новая колонка без подписи увеличивает разность и роняет тест.
+    """
+    await _seed_rowhead_page(db_session, page.seed)
+    user = await _user(db_session)
+
+    if page.admin:
+        await client.post(
+            "/api/auth/register",
+            json={
+                "email": test_settings.admin_email,
+                "password": "testpass123",
+                "name": "Admin User",
+            },
+        )
+        email = test_settings.admin_email
+    else:
+        email = "testuser@test.com"
+    await client.post(
+        "/login",
+        data={"email": email, "password": "testpass123"},
+        follow_redirects=False,
+    )
+
+    response = await client.get(page.url.format(user_id=user.id))
+    assert response.status_code == 200, (
+        f"{page.template}: страница {page.url} вернула {response.status_code}"
+    )
+    html = response.text
+
+    header = _header_in(html)
+    labels = _labels_in(html)
+    assert header, f"{page.template}: шапка колонок пуста — сравнивать нечего"
+
+    unlabelled = header - labels
+    assert unlabelled == set(page.unlabelled), (
+        f"{page.template}: без подписи остались {sorted(unlabelled)}, "
+        f"а объявлено {sorted(page.unlabelled)}. "
+        f"Лишние без подписи: {sorted(unlabelled - page.unlabelled)}; "
+        f"неожиданно подписанные: {sorted(page.unlabelled - unlabelled)}. "
+        f"{page.note}"
+    )
+    assert labels - header == set(), (
+        f"{page.template}: подписи, которых нет в шапке колонок — шапка и "
+        f"подписи разъехались: {sorted(labels - header)}"
     )
