@@ -44,7 +44,7 @@ Broadcaster — действующая, работающая и покрытая
   5. Каждая переведённая страница пригодна к использованию на мобильных ширинах: табличные данные переключаются на карточное представление из адаптивных примитивов дизайн-системы.
 
 **Canonical ref**: `new_broadcaster_design.html` (шелл, токены, навигация, компоненты)
-**Plans**: 4/8 plans executed
+**Plans**: 5/8 plans executed
 Plans:
 **Wave 1**
 
@@ -64,7 +64,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 01-05-PLAN.md — «История» с примитивом data-hrow, «Дашборд» и «Профиль»
+- [x] 01-05-PLAN.md — «История» с примитивом data-hrow, «Дашборд» и «Профиль»
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -179,7 +179,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Интерфейсный фундамент | 4/8 | In Progress|  |
+| 1. Интерфейсный фундамент | 5/8 | In Progress|  |
 | 2. Объявления и расписания | 0/TBD | Not started | - |
 | 3. Группы аккаунта | 0/TBD | Not started | - |
 | 4. Дашборд и история | 0/TBD | Not started | - |
