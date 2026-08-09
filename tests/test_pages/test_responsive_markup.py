@@ -9,7 +9,9 @@
 Утверждения на статус ответа такую поломку не ловят.
 """
 
+import ast
 import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -1662,6 +1664,173 @@ def test_no_utility_classes_in_python_handlers():
             offenders[str(path.relative_to(pages_dir))] = found
 
     assert not offenders, f"utility-классы остались в обработчиках: {offenders}"
+
+
+# --- План 11: страховочная сетка синхронности трёх файлов «Аккаунтов» -------
+#
+# Сетка на уровне ИСХОДНИКОВ, а не отрендеренной страницы. Причина: файл подмены
+# рендерится обработчиком напрямую через окружение, своего адреса в обходе
+# страниц у него нет, а расхождение проявляется только в момент подмены и только
+# визуально. Именно так уже терялась колонка даты подключения (WR-03) — тестов на
+# это не было ни одного.
+
+ACCOUNTS_SECTION_FILES = (
+    "accounts/list.html",
+    "accounts/partial_cards.html",
+    "accounts/partials/sync_status_card.html",
+)
+
+# Файлы, ЭМИТЯЩИЕ панель подтверждения, и единственный, который её не эмитит.
+ACCOUNTS_PANEL_FILES = ("accounts/list.html", "accounts/partial_cards.html")
+ACCOUNTS_SWAP_FILE = "accounts/partials/sync_status_card.html"
+
+ACCOUNTS_MODAL_EVENT = "modal-open-acc-del-"
+
+# Подпись берётся ИНДЕКСОМ из списка колонок. Отрицательный просмотр назад
+# отсекает confirm_label=, action_label= и show_label= — это не подписи ячеек.
+LABEL_BY_INDEX_RE = re.compile(r"(?<!\w)label=ACCOUNT_COLUMNS\[(\d+)\]")
+LABEL_LITERAL_RE = re.compile(r"""(?<!\w)label=(['"])([^'"]*)\1""")
+
+
+def _accounts_sources() -> dict[str, str]:
+    """Исходники трёх файлов раздела. Порядок фиксирован: list.html — эталон."""
+    return {
+        rel: (TEMPLATES_DIR / rel).read_text(encoding="utf-8")
+        for rel in ACCOUNTS_SECTION_FILES
+    }
+
+
+def _declaration(source: str, name: str) -> str | None:
+    """Правая часть объявления {% set NAME = … %} дословно, как в файле."""
+    match = re.search(rf"\{{%-?\s*set {name} = (.+?)\s*-?%\}}", source)
+    return match.group(1) if match else None
+
+
+def test_accounts_three_files_declare_same_columns():
+    """Раскладка колонок и список колонок совпадают в трёх файлах ПОСИМВОЛЬНО.
+
+    Три файла рисуют одну и ту же строку. Разъехавшаяся раскладка не роняет
+    страницу: строка после подмены просто встанет по другим колонкам, и увидит
+    это только тот, кто дождался опроса.
+    """
+    sources = _accounts_sources()
+
+    for name in ("ACCOUNT_COLS", "ACCOUNT_COLUMNS"):
+        declared = {rel: _declaration(src, name) for rel, src in sources.items()}
+
+        missing = sorted(rel for rel, value in declared.items() if value is None)
+        assert not missing, f"{name} не объявлен в: {missing}"
+
+        reference_file, reference = next(iter(declared.items()))
+        divergent = {rel: v for rel, v in declared.items() if v != reference}
+        assert not divergent, (
+            f"{name} в {reference_file} объявлен как {reference}, но отстали: "
+            + "; ".join(f"{rel} -> {value}" for rel, value in sorted(divergent.items()))
+        )
+
+
+def test_accounts_three_files_have_no_browser_dialog():
+    """Ни один из трёх файлов не вызывает системный диалог подтверждения (SC-3).
+
+    Обход по HTTP этого не закрывает: разметки файла подмены нет на первичной
+    отрисовке, и оставшийся там confirm() проявился бы только после опроса.
+    """
+    sources = _accounts_sources()
+
+    offenders = {
+        rel: src.count("confirm(") for rel, src in sources.items() if "confirm(" in src
+    }
+    assert not offenders, f"системный диалог браузера остался в: {offenders}"
+
+    intercepts = {
+        rel: src.count("onsubmit") for rel, src in sources.items() if "onsubmit" in src
+    }
+    assert not intercepts, f"старый перехват отправки остался в: {intercepts}"
+
+
+def test_accounts_three_files_dispatch_same_modal_event():
+    """Все три файла открывают ОДНУ панель, но эмитят её только два из них.
+
+    Асимметрия сознательная и закреплена отдельным утверждением: панель лежит
+    ВНЕ заменяемого элемента, поэтому файл подмены её не эмитит. Появись она там
+    — после первого же опроса в документе оказалось бы две панели с одинаковым
+    идентификатором, событие открывало бы обе, а Tab уходил бы в невидимую
+    копию (T-11-04).
+    """
+    sources = _accounts_sources()
+
+    counts = {rel: src.count(ACCOUNTS_MODAL_EVENT) for rel, src in sources.items()}
+    silent = sorted(rel for rel, count in counts.items() if not count)
+    assert not silent, f"файлы, не открывающие панель подтверждения: {silent}"
+
+    reference_file, reference = next(iter(counts.items()))
+    divergent = {rel: count for rel, count in counts.items() if count != reference}
+    assert not divergent, (
+        f"в {reference_file} мест подтверждения {reference}, но отстали: "
+        + "; ".join(f"{rel} -> {count}" for rel, count in sorted(divergent.items()))
+    )
+
+    for rel in ACCOUNTS_PANEL_FILES:
+        assert "components/modal.html" in sources[rel], (
+            f"{rel}: панель подтверждения перестала эмититься — открывать станет нечего"
+        )
+    assert "components/modal.html" not in sources[ACCOUNTS_SWAP_FILE], (
+        f"{ACCOUNTS_SWAP_FILE}: файл подмены начал эмитить панель — после первого "
+        "опроса их станет две с одним идентификатором (T-11-04)"
+    )
+
+
+def test_accounts_three_files_label_the_same_columns():
+    """Подписи ячеек в трёх файлах совпадают по составу И ПО ЧИСЛУ вхождений.
+
+    Подпись, вписанная строкой на месте, разъедется с шапкой при первом же
+    переименовании колонки, и увидит это только пользователь на телефоне: на
+    широкой ширине подпись скрыта.
+
+    Счёт вхождений, а не множество значений: в каждом файле три ветки статуса, и
+    подпись, потерянная в ОДНОЙ из них, множество не меняет — две оставшиеся
+    ветки его удержат. Именно так и теряется подпись на практике: правят одну
+    ветку, а расходится весь раздел.
+    """
+    sources = _accounts_sources()
+
+    hardcoded = {
+        rel: sorted({m.group(2) for m in LABEL_LITERAL_RE.finditer(src)})
+        for rel, src in sources.items()
+    }
+    hardcoded = {rel: values for rel, values in hardcoded.items() if values}
+    assert not hardcoded, (
+        "подписи вписаны строкой вместо элемента списка колонок — шапке и "
+        f"подписям есть на чём разъехаться: {hardcoded}"
+    )
+
+    labels: dict[str, Counter[str]] = {}
+    for rel, src in sources.items():
+        declared = _declaration(src, "ACCOUNT_COLUMNS")
+        assert declared, f"{rel}: список колонок не объявлен"
+        columns = ast.literal_eval(declared)
+        labels[rel] = Counter(
+            columns[int(i)] for i in LABEL_BY_INDEX_RE.findall(src)
+        )
+
+    reference_file, reference = next(iter(labels.items()))
+    assert reference, f"{reference_file}: подписей нет ни одной"
+
+    divergent = {}
+    for rel, counted in labels.items():
+        if counted == reference:
+            continue
+        divergent[rel] = sorted(
+            f"{name}: {counted.get(name, 0)} вместо {reference.get(name, 0)}"
+            for name in set(counted) | set(reference)
+            if counted.get(name, 0) != reference.get(name, 0)
+        )
+    assert not divergent, (
+        f"подписи в {reference_file} — {sorted(reference.items())}, но отстали: "
+        + "; ".join(
+            f"{rel} -> {diff}" for rel, diff in sorted(divergent.items())
+        )
+    )
 
 
 def test_template_inventory():
