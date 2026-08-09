@@ -4,9 +4,10 @@ slug: interfeysnyy-fundament
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
 # audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-08-09
+planner_filled: 2026-08-09
 ---
 
 # Phase 1 — Validation Strategy
@@ -49,7 +50,30 @@ httpOnly cookie (`request.cookies.get("access_token")`, `app/pages/common.py:67`
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| _filled by planner_ | | | | | | | | | ⬜ pending |
+| 01-01-T1 | 01 | 1 | UI-01 | T-01-04 | Worker read never touches Docker SDK from the request path | checkpoint | _decision gate — no automated check_ | n/a | ⬜ pending |
+| 01-01-T2 | 01 | 1 | UI-01, UI-02, UI-03, UI-06 | T-01-01, T-01-02, T-01-04 | StaticFiles only; admin nav stays behind the permission check; no blocking Docker call | integration | `uv run pytest tests/test_pages/test_shell.py -x -q` | ❌ W0 → created here | ⬜ pending |
+| 01-01-T3 | 01 | 1 | UI-01 | T-01-05 | Fonts self-hosted; no third-party font request remains | integration | `uv run pytest tests/test_pages/test_shell.py -x -q` | ✅ after T2 | ⬜ pending |
+| 01-02-T1 | 02 | 2 | UI-01, UI-04 | T-02-01 | Macros take text/number/bool only; escaping invariant intact | unit | `uv run pytest tests/test_templates/test_components.py -x -q` | ❌ W0 → created here | ⬜ pending |
+| 01-02-T2 | 02 | 2 | UI-04 | T-02-04 | Modal replaces the confirm dialog, not the POST form | unit | `uv run pytest tests/test_templates/test_components.py -x -q` | ✅ after T1 | ⬜ pending |
+| 01-02-T3 | 02 | 2 | UI-02, UI-04 | T-02-02, T-02-03 | Form `name`/`method`/`action` preserved; auth shell renders no nav | integration | `uv run pytest tests/test_pages/test_registration.py tests/test_pages/test_password_reset.py -q` | ✅ | ⬜ pending |
+| 01-03-T1 | 03 | 3 | UI-05 | T-03-03 | Polling self-terminates; paired test prevents vacuous green | integration | `uv run pytest tests/test_pages/test_htmx_preserved.py -x -q` | ❌ W0 → created here | ⬜ pending |
+| 01-03-T2 | 03 | 3 | UI-05, UI-06 | T-03-04 | Branch collapsed before file deletion; layout param stays accepted | integration | `uv run pytest tests/test_pages/test_htmx_preserved.py -x -q` | ✅ after T1 | ⬜ pending |
+| 01-03-T3 | 03 | 3 | UI-04, UI-05, UI-06 | T-03-01, T-03-02 | Delete route/method unchanged; ad title escaped | integration | `uv run pytest tests/test_pages/test_responsive_markup.py -x -q` | ❌ W0 → created here | ⬜ pending |
+| 01-04-T1 | 04 | 4 | UI-04, UI-05, UI-06 | T-04-03, T-04-04 | Toggle routes unchanged; owner filter untouched | integration | `uv run pytest tests/test_pages/test_responsive_markup.py -x -q` | ✅ | ⬜ pending |
+| 01-04-T2 | 04 | 4 | UI-04 | T-04-03 | Schedule form field contract preserved | integration | `uv run pytest tests/test_pages/ -q` | ✅ | ⬜ pending |
+| 01-04-T3 | 04 | 4 | UI-04, UI-05, UI-06 | T-04-01, T-04-02 | Filter loop carried verbatim; group names escaped | integration | `uv run pytest tests/test_pages/test_htmx_preserved.py -x -q` | ✅ | ⬜ pending |
+| 01-05-T1 | 05 | 5 | UI-05, UI-06 | T-05-03 | Filter params escaped into the sentinel URL | integration | `uv run pytest tests/test_pages/test_responsive_markup.py -x -q` | ✅ | ⬜ pending |
+| 01-05-T2 | 05 | 5 | UI-04 | T-05-01, T-05-02 | Error text shown in full under autoescape; owner check intact | integration | `uv run pytest tests/test_pages/ -q` | ✅ | ⬜ pending |
+| 01-05-T3 | 05 | 5 | UI-02, UI-04 | T-05-04 | Profile form contract preserved | integration | `uv run pytest tests/test_pages/test_profile.py -x -q` | ✅ | ⬜ pending |
+| 01-06-T1 | 06 | 6 | UI-04, UI-05, UI-06 | T-06-04, T-06-05 | Swap anchor stays on the request-bearing element | integration | `uv run pytest tests/test_pages/test_htmx_preserved.py -x -q` | ✅ | ⬜ pending |
+| 01-06-T2 | 06 | 6 | UI-05 | T-06-01 | Conditional HTMX attributes preserved — polling still stops | integration | `uv run pytest tests/test_pages/test_htmx_preserved.py -x -q` | ✅ | ⬜ pending |
+| 01-06-T3 | 06 | 6 | UI-04, UI-05 | T-06-02, T-06-03 | Connect-wizard field contract and secret exposure unchanged | integration | `uv run pytest tests/test_pages/ -q` | ✅ | ⬜ pending |
+| 01-07-T1 | 07 | 7 | UI-04, UI-06 | T-07-04 | Billing owner filter untouched; table → row primitives | integration | `uv run pytest tests/test_pages/test_responsive_markup.py -x -q` | ✅ | ⬜ pending |
+| 01-07-T2 | 07 | 7 | UI-04, UI-06 | T-07-01, T-07-02 | Admin permission check not weakened; PII columns unchanged | integration | `uv run pytest tests/test_pages/test_responsive_markup.py -x -q` | ✅ | ⬜ pending |
+| 01-07-T3 | 07 | 7 | UI-04, UI-06 | T-07-03 | External group names escaped | integration | `uv run pytest tests/test_pages/test_responsive_markup.py -x -q` | ✅ | ⬜ pending |
+| 01-08-T1 | 08 | 8 | UI-04, UI-06 | T-08-01, T-08-02 | Admin detail pages denied to regular users; PII set unchanged | integration | `uv run pytest tests/test_pages/test_responsive_markup.py -x -q` | ✅ | ⬜ pending |
+| 01-08-T2 | 08 | 8 | UI-04, UI-05, UI-06 | T-08-03 | Last live scroll chain intact; error text escaped | integration | `uv run pytest tests/test_pages/test_htmx_preserved.py -x -q` | ✅ | ⬜ pending |
+| 01-08-T3 | 08 | 8 | UI-01…UI-06 | T-08-04, T-08-05 | No external CDN anywhere; static links versioned | integration | `just test` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
