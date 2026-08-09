@@ -65,3 +65,38 @@ async def auth_headers(client):
     })
     token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest_asyncio.fixture
+async def authed_client(client, auth_headers):
+    """Client with the httpOnly access_token cookie of a regular user.
+
+    Page routes read the cookie, not the Bearer header — auth_headers alone
+    does not authorize a page request.
+    """
+    await client.post(
+        "/login",
+        data={"email": "testuser@test.com", "password": "testpass123"},
+        follow_redirects=False,
+    )
+    return client
+
+
+@pytest_asyncio.fixture
+async def admin_client(client, test_settings):
+    """Client with the httpOnly access_token cookie of the admin user.
+
+    check_is_admin compares user.email to settings.admin_email, so the user
+    must be registered with exactly that address.
+    """
+    await client.post("/api/auth/register", json={
+        "email": test_settings.admin_email,
+        "password": "testpass123",
+        "name": "Admin User",
+    })
+    await client.post(
+        "/login",
+        data={"email": test_settings.admin_email, "password": "testpass123"},
+        follow_redirects=False,
+    )
+    return client

@@ -1,0 +1,626 @@
+/* ==========================================================================
+   Broadcaster v2.0 — базовая таблица стилей.
+   Единственная рукописная таблица стилей проекта. Build-шага нет (D-02),
+   Tailwind удалён (D-01), тема только тёмная (D-10).
+
+   Части файла (порядок обязателен):
+     1. :root — токены, выведенные из частотной таблицы инлайн-стилей макета
+     2. Дословный перенос базового блока макета: keyframes и три медиазапроса
+     3. Стили шелла на атрибутах data-* из анатомии макета
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   1. Токены
+   В макете нет ни одного :root, ни одной CSS-переменной и ни одного class=.
+   Значения выведены по частотности из 490 инлайн-стилей
+   (см. 01-RESEARCH.md §Design Token Extraction).
+   -------------------------------------------------------------------------- */
+:root {
+  /* Поверхности */
+  --bg: #08080b;
+  --surface-side: #0b0b10;
+  --surface: #0e0e14;
+  --surface-pill: #0f0f16;
+  --surface-input: #12121a;
+
+  /* Границы — от самой слабой к самой сильной */
+  --border-hair: #14141b;
+  --border-soft: #16161e;
+  --border-muted: #17171f;
+  --border-side: #18181f;
+  --border: #1a1a23;
+  --border-pill: #1c1c25;
+  --border-input: #1e1e28;
+  --border-control: #24242e;
+  --border-control-strong: #2a2a34;
+  --border-dashed: #2e2e3a;
+
+  /* Текст */
+  --text: #eeeef2;
+  --text-bright: #a8a8b6;
+  --text-secondary: #8a8a98;
+  --text-tertiary: #7a7a88;
+  --text-muted: #6a6a78;
+  --text-faint: #5f5f6e;
+  --text-dim: #4e4e5c;
+  --text-on-accent: #0a0a0d;
+
+  /* Акцент */
+  --accent: oklch(0.72 0.19 310);
+  --accent-cta: oklch(0.79 0.14 305);
+  --accent-link: oklch(0.78 0.16 310);
+  --accent-link-hover: oklch(0.87 0.11 310);
+  --focus-ring: rgba(196, 132, 252, .5);
+
+  /* Статусы */
+  --ok: oklch(0.75 0.17 150);
+  --warn: oklch(0.82 0.16 85);
+  --danger: oklch(0.68 0.19 25);
+  --info: oklch(0.72 0.16 250);
+
+  /* Радиусы */
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 11px;
+  --r-xl: 14px;
+  --r-2xl: 16px;
+  --r-pill: 99px;
+  --r-circle: 50%;
+
+  /* Кегли. Дробные ступени макета (9.5/10.5/11.5/12.5/13.5px) сглажены
+     до целых — сознательное допущение A5. */
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 14px;
+  --fs-xl: 15px;
+  --fs-2xl: 16px;
+  --fs-h1: 22px;
+  --fs-h2: 26px;
+  --fs-h3: 32px;
+
+  /* Гарнитуры (D-04, D-17). Основная текстовая — IBM Plex Sans, потому что
+     у Space Grotesk в макете объявлены только latin, latin-ext и vietnamese:
+     кириллического файла в манифесте физически нет, и весь русский текст
+     молча ушёл бы в системный фолбэк. Space Grotesk остаётся только для
+     логотипа и латинских акцентов. */
+  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: 'Space Grotesk', 'IBM Plex Sans', system-ui, sans-serif;
+}
+
+/* --------------------------------------------------------------------------
+   1a. Гарнитуры — self-host (D-04). Внешних шрифтовых запросов нет.
+   Одно правило на (гарнитура, вес, подмножество) — структура обеих исходных
+   таблиц перенесена дословно.
+   -------------------------------------------------------------------------- */
+
+/* IBM Plex Sans — Основная текстовая гарнитура (D-17). Кириллические подмножества
+   догружены отдельно: в манифесте макета их физически нет. */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-sans-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* IBM Plex Mono — Mono-метки, счётчики и статусы. Извлечён из манифеста макета. */
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-400-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-400-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-400-vietnamese.woff2') format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-400-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-400-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-500-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-500-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-500-vietnamese.woff2') format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-500-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-500-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-600-cyrillic-ext.woff2') format('woff2');
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-600-cyrillic.woff2') format('woff2');
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-600-vietnamese.woff2') format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-600-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/ibm-plex-mono-600-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Space Grotesk — Только логотип и латинские акценты (--font-display): в макете
+   объявлены лишь latin, latin-ext и vietnamese — кириллицы нет. */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-vietnamese.woff2') format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-vietnamese.woff2') format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-vietnamese.woff2') format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-vietnamese.woff2') format('woff2');
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../fonts/space-grotesk-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* --------------------------------------------------------------------------
+   2. Дословный перенос из макета.
+   Блок базовых стилей, пять @keyframes и три медиазапроса — самая ценная
+   часть макета, переносится без переосмысления.
+   -------------------------------------------------------------------------- */
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); }
+a { color: var(--accent-link); text-decoration: none; }
+a:hover { color: var(--accent-link-hover); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #24242c; border-radius: 8px; border: 3px solid var(--bg); }
+::-webkit-scrollbar-track { background: var(--bg); }
+
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.8); } }
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes orbit { to { transform: rotate(360deg); } }
+@keyframes sweep { 0% { transform: translateX(-120%); } 100% { transform: translateX(420%); } }
+
+/* Перенесено из base.html:25-29. Без [x-cloak] свёрнутые Alpine-блоки
+   фильтров мигают при загрузке страницы. */
+[x-cloak] { display: none !important; }
+@keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fade-in { animation: fade-in 0.2s ease-out; }
+
+@media (max-width: 1080px) {
+  [data-hrow] { grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-areas: 'head' 'body' 'meta' 'err' !important; row-gap: 11px !important; }
+  /* Единственное отступление от дословного переноса: в макете селектор
+     завязан на подстроку инлайн-стиля дочернего элемента
+     ([style*="grid-area:meta"]) и молча перестаёт совпадать при переезде
+     на классы. Имя data-area фиксируется здесь — План 05 размечает
+     историю по нему. */
+  [data-hrow] > [data-area="meta"] { border-left: none !important; padding-left: 0 !important;
+    padding-top: 11px !important; border-top: 1px solid var(--border-muted) !important;
+    justify-content: flex-start !important; flex-wrap: wrap !important; }
+}
+
+@media (max-width: 900px) {
+  [data-editor] { grid-template-columns: minmax(0, 1fr) !important; }
+  [data-editor-side] { position: static !important; }
+}
+
+@media (max-width: 860px) {
+  [data-shell] { grid-template-columns: minmax(0, 1fr) !important; }
+  [data-side] { position: static !important; height: auto !important; flex-direction: row !important;
+    align-items: center !important; gap: 14px !important; padding: 12px 14px !important;
+    border-right: none !important; border-bottom: 1px solid var(--border-side) !important;
+    overflow: visible !important; }
+  [data-nav] { display: none !important; }
+  [data-quota], [data-user] { display: none !important; }
+  [data-tabs] { display: flex !important; }
+  [data-head] { padding: 14px 16px !important; }
+  [data-body] { padding: 18px 16px 90px !important; }
+  [data-row] { display: flex !important; flex-wrap: wrap !important; gap: 8px 12px !important; padding: 14px 16px !important; }
+  [data-row] > * { flex: none !important; }
+  [data-row] > [data-grow] { flex: 1 1 100% !important; }
+  [data-hrow] { grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-areas: 'head' 'body' 'meta' 'err' !important; row-gap: 11px !important; }
+  [data-hrow] > [data-area="meta"] { border-left: none !important; padding-left: 0 !important;
+    padding-top: 11px !important; border-top: 1px solid var(--border-muted) !important;
+    justify-content: flex-start !important; }
+  [data-rowhead] { display: none !important; }
+}
+
+/* --------------------------------------------------------------------------
+   3. Шелл.
+   Атрибуты data-* взяты из анатомии макета (строки 304-381 распакованного
+   документа). 58 псевдо-атрибутов наведения и 2 псевдо-атрибута фокуса в
+   макете — выдумка конструктора, браузер их игнорирует; здесь они стали
+   настоящими :hover / :focus-visible.
+   -------------------------------------------------------------------------- */
+[data-shell] {
+  display: grid;
+  grid-template-columns: 262px minmax(0, 1fr);
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+[data-side] {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px 16px;
+  background: var(--surface-side);
+  border-right: 1px solid var(--border-side);
+  overflow: auto;
+}
+
+/* Логотип */
+.brand { display: flex; align-items: center; gap: 11px; padding: 0 8px; color: var(--text); }
+.brand:hover { color: var(--text); }
+.brand-mark {
+  position: relative; width: 34px; height: 34px; border-radius: var(--r-lg);
+  background: var(--accent); display: grid; place-items: center; flex: none;
+}
+.brand-mark::before {
+  content: ""; width: 10px; height: 10px; border-radius: var(--r-circle); background: var(--surface-side);
+}
+.brand-mark::after {
+  content: ""; position: absolute; inset: -5px; border-radius: var(--r-2xl);
+  border: 1px solid rgba(196, 132, 252, .4); border-top-color: transparent;
+  animation: orbit 4.5s linear infinite;
+}
+.brand-name { font-family: var(--font-display); font-size: var(--fs-2xl); font-weight: 600; letter-spacing: -.02em; }
+
+/* Навигация */
+[data-nav] { display: flex; flex-direction: column; gap: 2px; }
+.nav-item {
+  display: flex; align-items: center; gap: 11px;
+  padding: 10px 12px; border-radius: var(--r-lg);
+  font-size: var(--fs-lg); font-weight: 500;
+  color: var(--text-secondary); background: transparent;
+  transition: background .16s ease, color .16s ease;
+}
+.nav-item:hover { background: #15151d; color: var(--text); }
+.nav-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.nav-item.is-active { background: #15151d; color: var(--text); }
+.nav-dot { width: 6px; height: 6px; border-radius: var(--r-circle); flex: none; background: var(--border-control-strong); }
+.nav-item.is-active .nav-dot { background: var(--accent); }
+.nav-label { flex: 1; min-width: 0; }
+.nav-count { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-faint); }
+.nav-tag { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .1em; color: var(--text-faint); }
+.nav-sep { height: 1px; background: var(--border-side); margin: 10px 12px 8px; }
+
+/* Виджет квоты */
+[data-quota] {
+  margin-top: auto; display: flex; flex-direction: column; gap: 11px;
+  padding: 14px; border-radius: var(--r-xl);
+  background: var(--surface-pill); border: 1px solid var(--border-pill);
+}
+.quota-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.quota-plan { font-size: var(--fs-md); font-weight: 600; }
+.quota-label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-tertiary); }
+.quota-track { height: 5px; border-radius: var(--r-pill); background: var(--border-pill); overflow: hidden; }
+.quota-fill {
+  height: 100%; border-radius: var(--r-pill); background: var(--accent);
+  transform-origin: left; animation: grow .8s cubic-bezier(.2, .8, .2, 1);
+}
+.quota-link { font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: .06em; }
+
+/* Блок пользователя */
+[data-user] { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
+.avatar {
+  width: 30px; height: 30px; border-radius: var(--r-circle);
+  background: var(--border-input); display: grid; place-items: center;
+  font-size: var(--fs-sm); font-weight: 600; color: #9a9aaa; flex: none;
+}
+.user-meta { display: flex; flex-direction: column; line-height: 1.35; min-width: 0; }
+.user-name { font-size: var(--fs-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.user-tz { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--text-muted); }
+.user-logout { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .06em; }
+
+/* Нижние табы — мобильная навигация (D-12: бургера и слайд-овера нет) */
+[data-tabs] {
+  display: none;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+  gap: 4px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+  background: rgba(11, 11, 16, .94); backdrop-filter: blur(14px);
+  border-top: 1px solid var(--border-side); overflow-x: auto;
+}
+.tab-item {
+  flex: none; padding: 9px 13px; border-radius: var(--r-md);
+  font-size: var(--fs-sm); font-weight: 500; white-space: nowrap;
+  color: var(--text-secondary); background: transparent;
+}
+.tab-item:hover { color: var(--text); }
+.tab-item[aria-current="page"] { background: #15151d; color: var(--text); }
+
+/* Шапка раздела */
+[data-main] { display: flex; flex-direction: column; min-width: 0; }
+[data-head] {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 18px 32px;
+  background: rgba(8, 8, 11, .85); backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border-soft);
+}
+.head-titles { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.head-title { margin: 0; font-size: var(--fs-h1); font-weight: 600; letter-spacing: -.025em; }
+.head-subtitle { margin: 0; font-size: var(--fs-md); color: var(--text-tertiary); }
+.head-subtitle:empty { display: none; }
+.head-actions { margin-left: auto; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+
+/* Индикатор сессий мессенджеров (D-19). Источник — MessengerAccount.status
+   из БД; это состояние сессии, а не состояние Docker-контейнера. */
+.session-pill {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 13px; border-radius: var(--r-pill);
+  background: var(--surface-pill); border: 1px solid var(--border-pill);
+}
+.session-dot { width: 7px; height: 7px; border-radius: var(--r-circle); background: var(--text-dim); }
+.session-dot.is-online { background: var(--ok); animation: pulse 1.6s ease-in-out infinite; }
+.session-label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); }
+
+/* Контент */
+[data-body] { padding: 26px 32px 60px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .brand-mark::after, .quota-fill, .session-dot.is-online, .animate-fade-in { animation: none !important; }
+}

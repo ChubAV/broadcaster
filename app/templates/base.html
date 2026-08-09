@@ -1,220 +1,123 @@
 <!DOCTYPE html>
-<html lang="ru" class="h-full">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#4f46e5">
+    <meta name="theme-color" content="#08080b">
+    <meta name="color-scheme" content="dark">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>{% block title %}Broadcaster{% endblock %}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] }
-                }
-            }
-        }
-    </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <script defer src="https://unpkg.com/alpinejs@3.13.3/dist/cdn.min.js"></script>
-    <style>
-        [x-cloak] { display: none !important; }
-        @keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
-        .animate-fade-in { animation: fade-in 0.2s ease-out; }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/app.css') }}?v={{ asset_version }}">
+    <script src="{{ url_for('static', path='/js/htmx.min.js') }}?v={{ asset_version }}"></script>
+    <script defer src="{{ url_for('static', path='/js/alpine.min.js') }}?v={{ asset_version }}"></script>
 </head>
-<body class="h-full bg-gray-50 font-sans antialiased">
+<body>
     {% block body %}
     {% if user %}
-    <div class="min-h-full" x-data="{ sidebarOpen: false }">
+    {% set shell = request.state.shell or {} %}
+    {% set nav_counts = shell.get('nav_counts', {}) %}
+    {% set quota = shell.get('quota', {}) %}
+    {% set sessions_online = shell.get('sessions_online', 0) %}
+    {% set sessions_total = shell.get('sessions_total', 0) %}
+    <div data-shell>
 
-        {# ===== Desktop sidebar (lg+) ===== #}
-        <aside class="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:w-60 lg:flex-col bg-white border-r border-gray-200 z-40">
-            {# Logo header #}
-            <div class="flex h-14 items-center px-5 border-b border-gray-200">
-                <a href="/dashboard" class="text-lg font-bold tracking-tight text-gray-900">Broadcaster</a>
-            </div>
+        {# ===== Сайдбар ===== #}
+        <aside data-side>
+            <a class="brand" href="/dashboard">
+                <span class="brand-mark"></span>
+                <span class="brand-name">Broadcaster</span>
+            </a>
 
-            {# Navigation links #}
-            <nav class="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-                <a href="/dashboard" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'dashboard' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
-                    Панель
+            {# Состав меню задан один раз в app/pages/common.py::NAV_ITEMS
+               и обходится циклом и здесь, и в нижних табах. #}
+            <nav data-nav>
+                {% for item in nav_items %}
+                <a class="nav-item{% if active_page == item.key %} is-active{% endif %}"
+                   href="{{ item.href }}"{% if active_page == item.key %} aria-current="page"{% endif %}>
+                    <span class="nav-dot"></span>
+                    <span class="nav-label">{{ item.label }}</span>
+                    {% if item.count_key %}<span class="nav-count">{{ nav_counts.get(item.count_key, 0) }}</span>{% endif %}
                 </a>
-                <a href="/ads" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'ads' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg>
-                    Объявления
-                </a>
-                <a href="/accounts" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'accounts' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    Аккаунты
-                </a>
-                <a href="/groups" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'groups' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-                    Группы
-                </a>
-                <a href="/schedules" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'schedules' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                    Расписания
-                </a>
-                <a href="/history" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'history' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    История
-                </a>
-                <a href="/billing" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'billing' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-                    Баланс
-                </a>
+                {% endfor %}
                 {% if is_admin %}
-                <a href="/admin" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'admin' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                    Админ
+                <span class="nav-sep"></span>
+                <a class="nav-item{% if active_page == admin_nav_item.key %} is-active{% endif %}"
+                   href="{{ admin_nav_item.href }}"{% if active_page == admin_nav_item.key %} aria-current="page"{% endif %}>
+                    <span class="nav-dot"></span>
+                    <span class="nav-label">{{ admin_nav_item.label }}</span>
+                    <span class="nav-tag">{{ admin_nav_item.tag }}</span>
                 </a>
                 {% endif %}
             </nav>
 
-            {# User section at bottom #}
-            <div class="border-t border-gray-200 px-3 py-4">
-                <div class="flex items-center gap-3 px-3 mb-3">
-                    <span class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 text-sm font-semibold shrink-0">{{ user.name[0]|upper if user.name else '?' }}</span>
-                    <span class="truncate text-sm font-medium text-gray-900">{{ user.name }}</span>
+            {# Виджет квоты тарифа — живые данные из request.state.shell #}
+            <div data-quota
+                 data-quota-percent="{{ quota.get('percent', 0) }}"
+                 {% if quota.get('expires_at') %}data-quota-expires="{{ quota.get('expires_at') }}"{% endif %}>
+                <div class="quota-head">
+                    <span class="quota-plan">Тариф {{ quota.get('plan', 'free')|capitalize }}</span>
+                    <span class="quota-label">{% if quota.get('limit', 0) > 0 %}{{ quota.get('used', 0) }} / {{ quota.get('limit', 0) }}{% else %}∞{% endif %}</span>
                 </div>
-                <a href="/profile" class="block rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">Профиль</a>
-                <a href="/logout" class="block rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">Выйти</a>
+                <div class="quota-track">
+                    <div class="quota-fill" style="width: {{ quota.get('percent', 0) }}%"></div>
+                </div>
+                <a class="quota-link" href="/billing">ПОВЫСИТЬ ЛИМИТЫ →</a>
+            </div>
+
+            <div data-user>
+                <span class="avatar">{{ user.name[0]|upper if user.name else '?' }}</span>
+                <span class="user-meta">
+                    <span class="user-name">{{ user.name }}</span>
+                    <span class="user-tz">{{ user.timezone }}</span>
+                </span>
+                <a class="user-logout" href="/logout">ВЫЙТИ</a>
             </div>
         </aside>
 
-        {# ===== Mobile top header (<lg) ===== #}
-        <header class="fixed inset-x-0 top-0 z-40 flex h-14 items-center justify-between bg-white border-b border-gray-200 px-4 lg:hidden">
-            {# Hamburger #}
-            <button type="button" @click="sidebarOpen = true" class="rounded-lg p-1.5 text-gray-600 hover:bg-gray-100 transition-colors" aria-label="Открыть меню">
-                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
-            </button>
-            {# Logo center #}
-            <a href="/dashboard" class="text-lg font-bold tracking-tight text-gray-900">Broadcaster</a>
-            {# Avatar right #}
-            <a href="/profile" class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 text-sm font-semibold">{{ user.name[0]|upper if user.name else '?' }}</a>
-        </header>
-
-        {# ===== Mobile slide-over menu ===== #}
-        <div x-show="sidebarOpen" x-cloak class="relative z-50 lg:hidden">
-            {# Overlay #}
-            <div
-                x-show="sidebarOpen"
-                x-transition:enter="transition ease-out duration-200"
-                x-transition:enter-start="opacity-0"
-                x-transition:enter-end="opacity-100"
-                x-transition:leave="transition ease-in duration-150"
-                x-transition:leave-start="opacity-100"
-                x-transition:leave-end="opacity-0"
-                class="fixed inset-0 bg-black/20"
-                @click="sidebarOpen = false"
-            ></div>
-
-            {# Panel #}
-            <div
-                x-show="sidebarOpen"
-                x-transition:enter="transition ease-out duration-200"
-                x-transition:enter-start="-translate-x-full"
-                x-transition:enter-end="translate-x-0"
-                x-transition:leave="transition ease-in duration-150"
-                x-transition:leave-start="translate-x-0"
-                x-transition:leave-end="-translate-x-full"
-                class="fixed inset-y-0 left-0 w-72 bg-white shadow-xl flex flex-col"
-            >
-                {# Slide-over header #}
-                <div class="flex h-14 items-center justify-between px-5 border-b border-gray-200">
-                    <span class="text-lg font-bold tracking-tight text-gray-900">Broadcaster</span>
-                    <button type="button" @click="sidebarOpen = false" class="rounded-lg p-1.5 text-gray-600 hover:bg-gray-100 transition-colors" aria-label="Закрыть меню">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                    </button>
-                </div>
-
-                {# Navigation links #}
-                <nav class="flex-1 overflow-y-auto px-3 py-4 space-y-1">
-                    <a href="/dashboard" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'dashboard' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
-                        Панель
-                    </a>
-                    <a href="/ads" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'ads' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg>
-                        Объявления
-                    </a>
-                    <a href="/accounts" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'accounts' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0zm6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        Аккаунты
-                    </a>
-                    <a href="/groups" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'groups' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-                        Группы
-                    </a>
-                    <a href="/schedules" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'schedules' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                        Расписания
-                    </a>
-                    <a href="/history" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'history' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        История
-                    </a>
-                    <a href="/billing" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'billing' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-                        Баланс
-                    </a>
-                    {% if is_admin %}
-                    <a href="/admin" class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors {% if active_page == 'admin' %}bg-gray-100 text-gray-900 font-medium{% else %}text-gray-600 hover:bg-gray-50 hover:text-gray-900{% endif %}">
-                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                        Админ
-                    </a>
-                    {% endif %}
-                </nav>
-
-                {# User section at bottom #}
-                <div class="border-t border-gray-200 px-3 py-4">
-                    <div class="flex items-center gap-3 px-3 mb-3">
-                        <span class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 text-sm font-semibold shrink-0">{{ user.name[0]|upper if user.name else '?' }}</span>
-                        <span class="truncate text-sm font-medium text-gray-900">{{ user.name }}</span>
-                    </div>
-                    <a href="/profile" class="block rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">Профиль</a>
-                    <a href="/logout" class="block rounded-lg px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors">Выйти</a>
-                </div>
-            </div>
-        </div>
-
-        {# ===== Mobile bottom tab bar (<lg) ===== #}
-        <nav class="fixed inset-x-0 bottom-0 z-40 flex h-14 items-center justify-around bg-white border-t border-gray-200 lg:hidden">
-            <a href="/dashboard" class="flex flex-col items-center justify-center gap-0.5 px-2 py-1 text-xs {% if active_page == 'dashboard' %}text-indigo-600 font-medium{% else %}text-gray-500{% endif %}">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
-                Панель
-            </a>
-            <a href="/ads" class="flex flex-col items-center justify-center gap-0.5 px-2 py-1 text-xs {% if active_page == 'ads' %}text-indigo-600 font-medium{% else %}text-gray-500{% endif %}">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5.882V19.24a1.76 1.76 0 01-3.417.592l-2.147-6.15M18 13a3 3 0 100-6M5.436 13.683A4.001 4.001 0 017 6h1.832c4.1 0 7.625-1.234 9.168-3v14c-1.543-1.766-5.067-3-9.168-3H7a3.988 3.988 0 01-1.564-.317z"/></svg>
-                Объявл.
-            </a>
-            <a href="/groups" class="flex flex-col items-center justify-center gap-0.5 px-2 py-1 text-xs {% if active_page == 'groups' %}text-indigo-600 font-medium{% else %}text-gray-500{% endif %}">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
-                Группы
-            </a>
-            <a href="/schedules" class="flex flex-col items-center justify-center gap-0.5 px-2 py-1 text-xs {% if active_page == 'schedules' %}text-indigo-600 font-medium{% else %}text-gray-500{% endif %}">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                Распис.
-            </a>
-            <a href="/history" class="flex flex-col items-center justify-center gap-0.5 px-2 py-1 text-xs {% if active_page == 'history' %}text-indigo-600 font-medium{% else %}text-gray-500{% endif %}">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                История
-            </a>
+        {# ===== Нижние табы: мобильная навигация (D-12).
+               Бургер и слайд-овер удалены целиком — показом управляет
+               медиазапрос 860px, состояния открыто/закрыто нет, JS не нужен.
+               Активный таб помечается только aria-current: признак is-active
+               остаётся уникальным для сайдбара. ===== #}
+        <nav data-tabs>
+            {% for item in nav_items %}
+            <a class="tab-item" href="{{ item.href }}"{% if active_page == item.key %} aria-current="page"{% endif %}>{{ item.label }}</a>
+            {% endfor %}
+            {% if is_admin %}
+            <a class="tab-item" href="{{ admin_nav_item.href }}"{% if active_page == admin_nav_item.key %} aria-current="page"{% endif %}>{{ admin_nav_item.label }}</a>
+            {% endif %}
+            <a class="tab-item" href="/logout">Выйти</a>
         </nav>
 
-        {# ===== Main content area ===== #}
-        <main class="lg:ml-60 pt-14 pb-16 lg:pt-0 lg:pb-0">
-            <div class="px-4 py-5 lg:px-8 lg:py-6">
+        {# ===== Основная область ===== #}
+        <div data-main>
+            {# Контракт «страница → шелл»: заголовок, подзаголовок и CTA раздела
+               задаются блоками, поэтому ни один из 26 обработчиков не правится.
+               Блок title для <title> остаётся отдельным и не смешивается. #}
+            <header data-head>
+                <div class="head-titles">
+                    <h1 class="head-title">{% block page_title %}{{ nav_label(active_page) }}{% endblock %}</h1>
+                    <p class="head-subtitle">{% block page_subtitle %}{% endblock %}</p>
+                </div>
+                <div class="head-actions">
+                    {# Индикатор сессий мессенджеров (D-19): источник —
+                       MessengerAccount.status из БД. Подпись человекочитаемая,
+                       имена контракта — в терминах сессий. #}
+                    <div class="session-pill" data-sessions
+                         data-sessions-online="{{ sessions_online }}"
+                         data-sessions-total="{{ sessions_total }}">
+                        <span class="session-dot{% if sessions_online > 0 %} is-online{% endif %}"></span>
+                        <span class="session-label">воркеров онлайн · {{ sessions_online }}</span>
+                    </div>
+                    {% block page_actions %}{% endblock %}
+                </div>
+            </header>
+
+            <div data-body>
                 {% block content %}{% endblock %}
             </div>
-        </main>
+        </div>
 
     </div>
     {% endif %}

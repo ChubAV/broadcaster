@@ -29,7 +29,9 @@ async def test_new_schedule_form_uses_user_timezone_by_default(
     assert resp.status_code == 200
     html = resp.text
 
-    # В форме должен быть выбран timezone пользователя
-    assert '<option value="Europe/Moscow"' in html
-    assert 'selected' in html.split('Europe/Moscow')[1]
+    # В форме должен быть выбран timezone пользователя.
+    # Проверяем сам <option>, а не «что идёт после первого вхождения строки»:
+    # шелл показывает таймзону пользователя в блоке data-user, поэтому
+    # позиционная проверка ловила бы разметку шелла, а не поле формы.
+    assert '<option value="Europe/Moscow" selected' in html
 
