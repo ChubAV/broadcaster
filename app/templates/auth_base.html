@@ -1,0 +1,40 @@
+{# Второй шелл проекта — экраны авторизации (D-08).
+
+   Почему отдельный шелл, а не блок в base.html: макет эти экраны не покрывает
+   (во всём распакованном документе одно вхождение слова «ПАРОЛЬ», и то это
+   метка поля в разделе «Профиль»). Придумана только КОМПОНОВКА — визуальный
+   язык взят из тех же токенов Плана 01.
+
+   До Плана 02 семь экранов наследовали основной шелл и переопределяли блок
+   тела, чтобы обойти его проверку {% if user %}. Здесь костыль снят.
+
+   Блоки: title (для <title>), auth_subtitle, content.
+   Сайдбара, навигации и нижних табов тут нет и быть не должно. #}
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#08080b">
+    <meta name="color-scheme" content="dark">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>{% block title %}Broadcaster{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/app.css') }}?v={{ asset_version }}">
+    <script src="{{ url_for('static', path='/js/htmx.min.js') }}?v={{ asset_version }}"></script>
+    <script defer src="{{ url_for('static', path='/js/alpine.min.js') }}?v={{ asset_version }}"></script>
+</head>
+<body>
+    <main data-auth-shell>
+        <section class="auth-card">
+            <div class="auth-brand">
+                <span class="auth-brand__mark"></span>
+                <span class="auth-brand__name">Broadcaster</span>
+            </div>
+            <p class="auth-subtitle">{% block auth_subtitle %}{% endblock %}</p>
+
+            {% block content %}{% endblock %}
+        </section>
+    </main>
+</body>
+</html>

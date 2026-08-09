@@ -858,3 +858,47 @@ a:hover { color: var(--accent-link-hover); }
 @media (prefers-reduced-motion: reduce) {
   .modal__panel { animation: none !important; }
 }
+
+/* Auth-шелл (D-08) --------------------------------------------------------
+   Компоновка придумана: макет экраны авторизации не покрывает. Визуальный
+   язык — те же токены, что и у основного шелла. Сайдбара, навигации и
+   нижних табов здесь нет. */
+[data-auth-shell] {
+  min-height: 100vh;
+  display: grid; place-items: center;
+  padding: 32px 16px;
+  font-family: var(--font-sans); color: var(--text);
+}
+.auth-card {
+  width: min(380px, 100%);
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 28px 24px 26px;
+  border-radius: var(--r-2xl);
+  background: var(--surface); border: 1px solid var(--border);
+  animation: rise .32s ease both;
+}
+.auth-brand { display: flex; align-items: center; justify-content: center; gap: 9px; }
+.auth-brand__mark {
+  width: 22px; height: 22px; border-radius: var(--r-sm); flex: none;
+  background: var(--accent);
+}
+.auth-brand__name {
+  font-family: var(--font-display); font-size: var(--fs-2xl);
+  font-weight: 700; letter-spacing: -.02em;
+}
+.auth-subtitle {
+  margin: 0; text-align: center;
+  font-size: var(--fs-md); color: var(--text-tertiary);
+}
+.auth-subtitle:empty { display: none; }
+.auth-note {
+  margin: 0; font-size: var(--fs-md); line-height: 1.55; color: var(--text-secondary);
+}
+.auth-note strong { color: var(--text); font-weight: 600; }
+.auth-form { display: flex; flex-direction: column; gap: 14px; margin: 4px 0 0; }
+.auth-form--secondary { margin-top: 0; }
+.auth-form__row { display: flex; justify-content: flex-end; font-size: var(--fs-md); }
+.auth-foot {
+  margin: 6px 0 0; text-align: center;
+  font-size: var(--fs-md); color: var(--text-tertiary);
+}
