@@ -430,8 +430,8 @@ None — внешняя конфигурация не требуется.
 - `grep -rn '<table\|<td\|<th ' app/templates/` → 0.
 - `grep -c '<table' app/templates/billing/balance.html` → 0; `grep -c '<td'` → 0.
 - `grep -rc 'bg-white\|text-gray\|rounded-lg\|border-gray\|divide-\|lg:'` по пяти шаблонам → 0 совпадений.
-- `grep -c 'block page_title'` → 1 в каждом из пяти шаблонов; импорты из `components/`: 7 в `balance.html`, 6 в `plans.html`, 3 в `dashboard.html`, 9 в `users.html`, 9 в `groups_info.html`.
-- `grep -c 'messenger_icon' app/templates/admin/groups_info.html` → 2 (импорт + вызов).
+- `grep -c 'block page_title'` → 1 в каждом из пяти шаблонов; импорты из `components/`: 6 в `balance.html`, 5 в `plans.html`, 3 в `dashboard.html`, 9 в `users.html`, 8 в `groups_info.html`.
+- `grep -c 'messenger_icon' app/templates/admin/groups_info.html` → 3 (импорт, комментарий, вызов).
 - Внешних ссылок (`http://` / `https://` / `cdn`) в изменённых шаблонах → 0.
 - Новых классов, привязанных к разделу, в `app.css` не добавлено: только атрибутные `[data-cell-label]` и `[data-pager]` / `[data-pager-actions]`.
 - `uv run pytest tests/ -q` → **496 passed** (было 482; +14).
