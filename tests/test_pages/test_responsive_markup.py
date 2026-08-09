@@ -10,6 +10,8 @@
 """
 
 import re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from httpx import AsyncClient
@@ -17,11 +19,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ad import Ad
+from app.models.balance_transaction import BalanceTransaction
 from app.models.group import Group
+from app.models.group_info import GroupInfo
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
+from app.models.subscription import Subscription
 from app.models.user import User
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
 
 # Признаки utility-фреймворка: разметка разделов от них избавлена (D-06).
 UTILITY_MARKERS = ("bg-white", "text-gray", "rounded-lg", "border-gray", "lg:")
@@ -127,6 +134,40 @@ async def _seed_send_log(
     await db.commit()
     await db.refresh(log)
     return log
+
+
+async def _seed_transaction(
+    db: AsyncSession,
+    amount: int = 25,
+    type_: str = "purchase",
+    description: str = "Пакет «Старт»",
+) -> BalanceTransaction:
+    user = await _user(db)
+    tx = BalanceTransaction(
+        user_id=user.id,
+        amount=amount,
+        balance_after=100 + amount,
+        type=type_,
+        description=description,
+    )
+    db.add(tx)
+    await db.commit()
+    await db.refresh(tx)
+    return tx
+
+
+async def _seed_subscription(db: AsyncSession, plan: str = "business") -> Subscription:
+    user = await _user(db)
+    sub = Subscription(
+        user_id=user.id,
+        plan=plan,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        is_active=True,
+    )
+    db.add(sub)
+    await db.commit()
+    await db.refresh(sub)
+    return sub
 
 
 async def _seed_section(db: AsyncSession, section: str) -> None:
@@ -672,3 +713,112 @@ async def test_profile_form_contract(authed_client: AsyncClient):
     assert 'action="/profile"' in html
     assert 'name="timezone"' in html
     assert "Профиль" in html
+
+
+# --- План 07: раздел «Тарифы» ----------------------------------------------
+#
+# Здесь исчезает ЕДИНСТВЕННАЯ таблица проекта. Табличные данные баланса
+# переведены на те же примитивы data-rowhead / data-row / data-grow, что и все
+# списки: адаптив на 860px приходит бесплатно, второй вёрстки и JS не нужно.
+# Фазы 5 и 6 строят табличные представления тем же способом.
+
+# Элементы таблицы, которых в проекте после Плана 07 быть не должно.
+TABLE_MARKERS = ("<table", "<thead", "<tbody", "<tr", "<td", "<th ", "<th>")
+
+
+@pytest.mark.asyncio
+async def test_billing_uses_row_primitives(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """История операций собрана на строке-таблице, а не на своей вёрстке."""
+    await _seed_transaction(db_session)
+
+    response = await authed_client.get("/billing")
+    assert response.status_code == 200
+    html = response.text
+    assert "data-row" in html
+    assert "data-rowhead" in html
+
+
+@pytest.mark.asyncio
+async def test_billing_no_table_markup(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """В макете нет ни одного элемента таблицы — и в проекте не остаётся.
+
+    Элемент таблицы не перестраивается медиазапросом строки-таблицы: он либо
+    уезжает в горизонтальную прокрутку, либо сжимает колонки до нечитаемости.
+    Проверка идёт по ОТРЕНДЕРЕННОЙ выдаче, а не по файлу: таблица могла бы
+    приехать из включаемого шаблона.
+    """
+    await _seed_transaction(db_session)
+
+    html = (await authed_client.get("/billing")).text
+    for marker in TABLE_MARKERS:
+        assert marker not in html, marker
+
+
+@pytest.mark.asyncio
+async def test_billing_no_utility_classes(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    await _seed_transaction(db_session)
+
+    html = (await authed_client.get("/billing")).text
+    for marker in UTILITY_MARKERS:
+        assert marker not in html, marker
+
+
+@pytest.mark.asyncio
+async def test_billing_renders_transaction_data(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка операции отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+
+    Перевод таблицы на макросы теряет неявный контекст: страница останется
+    валидной и вернёт 200, а строки будут пустыми.
+    """
+    await _seed_transaction(
+        db_session, amount=25, description="Уникальное описание операции"
+    )
+
+    html = (await authed_client.get("/billing")).text
+    assert "Уникальное описание операции" in html
+    assert "+25" in html, "знак и величина операции не отрисованы"
+    assert "125" in html, "баланс после операции не отрисован"
+    assert "Покупка" in html, "тип операции не расшифрован"
+
+
+@pytest.mark.asyncio
+async def test_billing_shows_current_plan(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Раздел тарифов показывает НАЗВАНИЕ ТЕКУЩЕГО тарифа пользователя.
+
+    Тариф приходит из живого контекста шелла (get_shell_context), а не из
+    константы в разметке: подписка с другим названием обязана изменить выдачу.
+    """
+    await _seed_subscription(db_session, plan="business")
+
+    html = (await authed_client.get("/billing")).text
+    assert "Business" in html, "название текущего тарифа не отрисовано"
+
+
+@pytest.mark.asyncio
+async def test_billing_plans_template_is_migrated():
+    """`billing/plans.html` мигрирован, хотя маршрута у него нет.
+
+    Шаблон не рендерится ни одним обработчиком (см. SUMMARY Плана 07):
+    поведенческой проверки для него не существует, поэтому здесь — проверка
+    исходника. Она ловит ровно то, ради чего шаблон правился: возврат
+    utility-классов и отказ от компонентов.
+    """
+    source = (TEMPLATES_DIR / "billing" / "plans.html").read_text(encoding="utf-8")
+
+    for marker in UTILITY_MARKERS:
+        assert marker not in source, marker
+    for marker in TABLE_MARKERS:
+        assert marker not in source, marker
+    assert "{% block page_title %}" in source
+    assert "components/progress.html" in source
+    assert "components/card.html" in source
