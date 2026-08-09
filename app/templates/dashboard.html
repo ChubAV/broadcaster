@@ -1,42 +1,52 @@
 {% extends "base.html" %}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/empty_state.html" import empty_state %}
+{% from "components/mono.html" import mono %}
+{% from "components/table.html" import rowhead %}
+{% from "dashboard/includes/recent_send_card.html" import recent_send_card, RECENT_COLS, RECENT_COLUMNS %}
+
 {% block title %}Панель — Broadcaster{% endblock %}
+
+{# Контракт «страница → шелл» (План 01): заголовок раздела рендерит шапка. #}
+{% block page_title %}Панель управления{% endblock %}
+
 {% block content %}
+{#- ДАШБОРД ЗДЕСЬ — ТОЛЬКО КАРКАС в объёме сегодняшних данных. Метрики за
+    сутки с динамикой, ближайшие отправки, живая лента, heatmap активности и
+    индикатор воркеров на самом дашборде относятся к Фазе 4
+    (DASH-01…DASH-05) и здесь сознательно не делаются. Спарклайны и
+    heatmap-ячейки как компоненты тоже не создаются — они принадлежат Фазе 4.
+    Это граница, зафиксированная ROADMAP, а не сокращение объёма Фазы 1. -#}
+<div data-stack>
 
-<!-- Page title -->
-<h1 class="text-lg lg:text-xl font-semibold text-gray-900">Панель управления</h1>
+  <div data-metrics>
+    {{ card_open() }}
+      {{ mono('Объявления', 'muted', upper=true) }}
+      <span data-metric-value>{{ stats.active_ads }}</span>
+    {{ card_close() }}
+    {{ card_open() }}
+      {{ mono('Аккаунты', 'muted', upper=true) }}
+      <span data-metric-value>{{ stats.active_accounts }}</span>
+    {{ card_close() }}
+    {{ card_open() }}
+      {{ mono('Группы', 'muted', upper=true) }}
+      <span data-metric-value>{{ stats.active_groups }}</span>
+    {{ card_close() }}
+    {{ card_open() }}
+      {{ mono('Отправлено сегодня', 'muted', upper=true) }}
+      <span data-metric-value>{{ stats.sent_today }}</span>
+    {{ card_close() }}
+  </div>
 
-<!-- Stat cards: grid 2 cols on mobile, 4 cols on lg -->
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-5 mt-6">
-  <div class="bg-white rounded-lg border border-gray-200 p-5 lg:p-6">
-    <p class="text-2xl lg:text-3xl font-semibold text-gray-900">{{ stats.active_ads }}</p>
-    <p class="text-sm lg:text-base text-gray-500 mt-1">Объявления</p>
-  </div>
-  <div class="bg-white rounded-lg border border-gray-200 p-5 lg:p-6">
-    <p class="text-2xl lg:text-3xl font-semibold text-gray-900">{{ stats.active_accounts }}</p>
-    <p class="text-sm lg:text-base text-gray-500 mt-1">Аккаунты</p>
-  </div>
-  <div class="bg-white rounded-lg border border-gray-200 p-5 lg:p-6">
-    <p class="text-2xl lg:text-3xl font-semibold text-gray-900">{{ stats.active_groups }}</p>
-    <p class="text-sm lg:text-base text-gray-500 mt-1">Группы</p>
-  </div>
-  <div class="bg-white rounded-lg border border-gray-200 p-5 lg:p-6">
-    <p class="text-2xl lg:text-3xl font-semibold text-gray-900">{{ stats.sent_today }}</p>
-    <p class="text-sm lg:text-base text-gray-500 mt-1">Отправлено</p>
-  </div>
-</div>
-
-<!-- Recent sends section -->
-<div class="mt-8">
-  <h2 class="text-sm lg:text-base font-medium text-gray-500 uppercase tracking-wider">Последние отправки</h2>
   {% if recent_sends %}
-  <div class="bg-white rounded-lg border border-gray-200 mt-3 divide-y divide-gray-100">
-    {% for log in recent_sends %}
-    {% include "dashboard/includes/recent_send_card.html" %}
-    {% endfor %}
-  </div>
+  {{ card_open(title='Последние отправки') }}
+    {{ rowhead(columns=RECENT_COLUMNS, cols=RECENT_COLS) }}
+    {% for log in recent_sends %}{{ recent_send_card(log, user) }}{% endfor %}
+  {{ card_close() }}
   {% else %}
-  <p class="text-sm text-gray-500 mt-3">Нет отправок</p>
+  {{ empty_state('Отправок пока нет',
+                 hint='Здесь появятся последние отправки по вашим расписаниям') }}
   {% endif %}
-</div>
 
+</div>
 {% endblock %}

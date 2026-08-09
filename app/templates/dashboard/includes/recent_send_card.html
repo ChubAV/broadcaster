@@ -1,20 +1,43 @@
+{# Строка недавней отправки на дашборде.
+
+   Это МАКРОС, а не include: импортированные шаблоны Jinja контекста
+   вызывающего не получают, поэтому `log` и `user` — явные параметры. Ошибка в
+   имени параметра проявится не исключением, а ПУСТОЙ строкой при статусе 200,
+   поэтому отрисовка реальных данных закреплена тестом
+   test_dashboard_no_utility_classes.
+
+   RECENT_COLS — единственный источник раскладки колонок: его же импортирует
+   dashboard.html для шапки колонок.
+
+   Импорт:
+   {% from "dashboard/includes/recent_send_card.html" import recent_send_card, RECENT_COLS %} #}
+
+{% from "components/badge.html" import badge %}
+{% from "components/table.html" import row_open, row_close, cell %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
-<div class="flex items-center gap-4 lg:gap-5 px-4 lg:px-6 py-3 lg:py-4 hover:bg-gray-50 transition-colors">
-  <!-- Time -->
-  <span class="text-xs lg:text-sm text-gray-400 w-12 lg:w-16 shrink-0">{{ format_datetime_for_user(log.sent_at, user, '%H:%M') }}</span>
-  <!-- Ad title + group -->
-  <div class="flex-1 min-w-0">
-    <p class="text-sm lg:text-base font-medium text-gray-900 truncate">{{ log.ad_title }}</p>
-    <p class="text-xs lg:text-sm text-gray-500 truncate">→ {{ log.group_name }}</p>
-  </div>
-  <!-- Messenger icon -->
-  <span class="shrink-0">{{ messenger_icon(log.messenger_type, size='h-4 w-4 lg:h-5 lg:w-5', show_label=false) }}</span>
-  <!-- Status badge -->
-  {% if log.status == 'ok' %}
-  <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-emerald-700">OK</span>
-  {% elif log.status == 'fail' %}
-  <span class="inline-flex items-center rounded-full bg-red-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-red-700">Ошибка</span>
-  {% elif log.status == 'account_disconnected' %}
-  <span class="inline-flex items-center rounded-full bg-amber-50 px-2 lg:px-2.5 py-0.5 lg:py-1 text-xs lg:text-sm font-medium text-amber-700">Отключён</span>
-  {% endif %}
-</div>
+
+{% set RECENT_COLS = '64px minmax(160px,2.2fr) minmax(0,1.4fr) 44px 104px' %}
+{% set RECENT_COLUMNS = ['Время', 'Объявление', 'Группа', '', 'Статус'] %}
+
+{% macro recent_send_card(log, user=None, cols=RECENT_COLS) -%}
+{{ row_open(cols=cols, id='recent-send-' ~ log.id) }}
+  {{- cell(text=format_datetime_for_user(log.sent_at, user, '%H:%M'), mono=true, muted=true) -}}
+  {%- call cell(grow=true, title=log.ad_title) -%}
+    <span data-grow>{{ log.ad_title }}</span>
+  {%- endcall -%}
+  {{- cell(text=log.group_name, muted=true, title=log.group_name, area='meta') -}}
+  {%- call cell() -%}
+    {#- Ветка «неизвестный мессенджер» несёт utility-класс: вызов ограничен
+        известными типами. -#}
+    {%- if log.messenger_type in ('tg_user', 'wa', 'max') -%}
+      {{ messenger_icon(log.messenger_type, size='avatar', show_label=false) }}
+    {%- endif -%}
+  {%- endcall -%}
+  {%- call cell() -%}
+    {%- if log.status == 'ok' -%}{{ badge('OK', 'success') }}
+    {%- elif log.status == 'fail' -%}{{ badge('Ошибка', 'danger') }}
+    {%- elif log.status == 'account_disconnected' -%}{{ badge('Отключён', 'warning') }}
+    {%- else -%}{{ badge(log.status, 'neutral') }}{%- endif -%}
+  {%- endcall %}
+{{ row_close() }}
+{%- endmacro %}
