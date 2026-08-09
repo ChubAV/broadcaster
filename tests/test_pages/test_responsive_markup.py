@@ -9,7 +9,9 @@
 Утверждения на статус ответа такую поломку не ловят.
 """
 
+import ast
 import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -720,6 +722,286 @@ async def test_accounts_connect_max_form_contract(
                      html), "форма подключения MAX потеряла маршрут или метод"
 
 
+# --- План 11: подтверждение удаления аккаунта панелью дизайн-системы (SC-3) --
+#
+# Раздел «Аккаунты» рисуется ТРЕМЯ файлами (list.html, partial_cards.html,
+# partials/sync_status_card.html), и в каждом по три ветки статуса — девять мест
+# подтверждения удаления. Тесты ниже проверяют все три поверхности: списочную
+# страницу, порцию бесконечной прокрутки и блок подмены по опросу статуса.
+
+
+async def _seed_account_with_status(
+    db: AsyncSession, status: str, type_: str = "max"
+) -> MessengerAccount:
+    """Аккаунт в произвольном статусе: _seed_account умеет только active."""
+    user = await _user(db)
+    account = MessengerAccount(
+        user_id=user.id, type=type_, credentials="session", status=status
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+def _delete_forms(html: str, account_id: int) -> list[str]:
+    """Все формы удаления аккаунта в разметке, ЦЕЛИКОМ (открывающий тег + тело)."""
+    return re.findall(
+        rf'<form[^>]*action="/accounts/{account_id}/delete"[^>]*>.*?</form>',
+        html,
+        re.S,
+    )
+
+
+@pytest.mark.asyncio
+async def test_accounts_delete_uses_modal(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Подтверждение удаления аккаунта — панель дизайн-системы, не диалог ОС.
+
+    До этого плана пользователь видел спроектированную модалку при удалении
+    объявления и системный диалог браузера при удалении аккаунта — один и тот же
+    жест разрушения выглядел по-разному в двух разделах (SC-3).
+    """
+    account = await _seed_account(db_session, type_="max")
+
+    html = (await authed_client.get("/accounts")).text
+
+    assert 'role="dialog"' in html, "панель подтверждения не отрисована"
+    assert 'class="modal"' in html
+    assert f"modal-open-acc-del-{account.id}" in html, (
+        "форма удаления не открывает панель подтверждения"
+    )
+    assert "Отмена" in html, "у панели нет отказа от удаления"
+    assert "confirm(" not in html, "системный диалог браузера остался"
+    assert "onsubmit" not in html, "старый перехват отправки остался"
+
+
+@pytest.mark.asyncio
+async def test_accounts_delete_form_degrades_without_alpine(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-11-02: без Alpine форма отправляется напрямую — как до правки.
+
+    Панель подтверждения — УСИЛЕНИЕ поверх формы, а не единственный путь.
+    Кнопка type="button" вместо формы лишила бы раздел единственного способа
+    отключить аккаунт, когда скрипт не доехал: снять признак сокрытия с панели
+    умеет только Alpine (WR-04).
+    """
+    account = await _seed_account(db_session, type_="max")
+
+    html = (await authed_client.get("/accounts")).text
+
+    forms = _delete_forms(html, account.id)
+    assert forms, "форма удаления исчезла из разметки"
+
+    row_forms = [f for f in forms if "modal__form" not in f]
+    assert row_forms, "форма удаления осталась только внутри панели подтверждения"
+    for form in row_forms:
+        assert 'method="POST"' in form, f"форма удаления потеряла метод: {form[:200]}"
+        assert 'type="submit"' in form, (
+            f"кнопка подтверждения перестала отправлять форму: {form[:200]}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_accounts_modal_unique_per_account(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-11-04: на странице РОВНО одна панель на аккаунт.
+
+    Две панели с одним идентификатором открывались бы одним событием, и Tab
+    уходил бы в невидимую копию.
+    """
+    first = await _seed_account(db_session, type_="max")
+    second = await _seed_account(db_session, type_="wa")
+
+    html = (await authed_client.get("/accounts")).text
+
+    for account in (first, second):
+        assert html.count(f'id="acc-del-{account.id}"') == 1, (
+            f"панель подтверждения аккаунта {account.id} не единственная"
+        )
+
+
+@pytest.mark.asyncio
+async def test_accounts_swap_card_dispatches_same_modal(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-11-04 с другой стороны: блок подмены панель НЕ приносит.
+
+    Заменяется РОВНО строка (hx-swap="outerHTML" стоит на ней), панель лежит
+    вне заменяемого элемента и подмену переживает. Если бы файл подмены тоже
+    эмитил панель, после первого же опроса их стало бы две.
+    """
+    for status in ("syncing", "sync_failed", "active"):
+        account = await _seed_account_with_status(db_session, status)
+
+        response = await authed_client.get(f"/accounts/{account.id}/sync-status")
+        assert response.status_code == 200, status
+        html = response.text
+
+        assert f"modal-open-acc-del-{account.id}" in html, (
+            f"{status}: подменённая строка не открывает панель подтверждения"
+        )
+        assert 'role="dialog"' not in html, f"{status}: подмена принесла вторую панель"
+        assert 'class="modal"' not in html, f"{status}: подмена принесла вторую панель"
+        assert "confirm(" not in html, f"{status}: системный диалог браузера остался"
+        assert "onsubmit" not in html, f"{status}: старый перехват отправки остался"
+
+
+@pytest.mark.asyncio
+async def test_accounts_delete_route_unchanged(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-11-01: заменяется диалог, а не действие.
+
+    Маршрут, метод и серверная проверка владельца те же: новая кнопка удаления
+    не имеет права открыть чужой аккаунт.
+    """
+    own = await _seed_account(db_session, type_="max")
+    foreign = MessengerAccount(
+        user_id=own.user_id + 1000, type="wa", credentials="session", status="active"
+    )
+    db_session.add(foreign)
+    await db_session.commit()
+    await db_session.refresh(foreign)
+
+    response = await authed_client.post(
+        f"/accounts/{own.id}/delete", follow_redirects=False
+    )
+    assert response.status_code == 302
+    assert (await db_session.get(MessengerAccount, own.id)) is None
+
+    response = await authed_client.post(
+        f"/accounts/{foreign.id}/delete", follow_redirects=False
+    )
+    assert response.status_code == 302
+    assert (await db_session.get(MessengerAccount, foreign.id)) is not None
+
+
+# --- План 11: подписи колонок в ячейках раздела «Аккаунты» (SC-5) -----------
+#
+# На 860px шапка колонок скрывается ([data-rowhead] { display: none }), и строка
+# «12 · 3 · 87% · 09.08 14:22 · —» превращается в набор символов без смысла.
+# Подпись живёт ВНУТРИ ячейки и проявляется ровно там, где шапка исчезла.
+# Атрибут подсказки её не заменяет: на касании подсказки нет.
+
+# Подпись получает каждая колонка с непустым названием, КРОМЕ первой — она несёт
+# название самого аккаунта и уже является заголовком карточки.
+ACCOUNT_CELL_LABELS = (
+    "Групп",
+    "Расписаний",
+    "Успешность",
+    "Последняя отправка",
+    "Подключён",
+    "Статус",
+)
+
+CELL_LABEL_RE = re.compile(r"<span data-cell-label>([^<]*)</span>")
+ROWHEAD_RE = re.compile(r"<div data-rowhead[^>]*>(.*?)</div>", re.S)
+
+
+async def _seed_all_account_branches(db: AsyncSession) -> list[MessengerAccount]:
+    """По одному аккаунту на каждую из трёх веток статуса раздела."""
+    return [
+        await _seed_account_with_status(db, status)
+        for status in ("active", "sync_failed", "syncing")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_accounts_cell_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Каждая ячейка списочной страницы несёт название своей колонки.
+
+    Счёт по числу веток статуса, а не проверка «встречается хотя бы раз»:
+    пропущенная ветка иначе прошла бы незамеченной — на широкой ширине подпись
+    скрыта, и увидел бы её отсутствие только пользователь на телефоне.
+    """
+    accounts = await _seed_all_account_branches(db_session)
+
+    html = (await authed_client.get("/accounts")).text
+
+    for label in ACCOUNT_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(accounts), (
+            f"подпись {label!r} проставлена не во всех ветках статуса"
+        )
+
+
+@pytest.mark.asyncio
+async def test_accounts_partial_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Порция бесконечной прокрутки несёт те же подписи, что и первая страница.
+
+    Строки после первой прокрутки приходят ДРУГИМ файлом; расхождение видно
+    только тому, кто долистал.
+    """
+    accounts = await _seed_all_account_branches(db_session)
+
+    response = await authed_client.get("/accounts/partial?offset=0&limit=30")
+    assert response.status_code == 200
+    html = response.text
+
+    for label in ACCOUNT_CELL_LABELS:
+        assert html.count(f"<span data-cell-label>{label}</span>") == len(accounts), (
+            f"подпись {label!r} потеряна в порции бесконечной прокрутки"
+        )
+
+
+@pytest.mark.asyncio
+async def test_accounts_sync_card_labels_present(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Блок подмены по опросу статуса несёт подписи во ВСЕХ трёх состояниях.
+
+    Самая опасная из трёх поверхностей: её разметки нет на первичной отрисовке,
+    поэтому потеря подписи здесь проявится только после первого опроса.
+    """
+    for status in ("active", "sync_failed", "syncing"):
+        account = await _seed_account_with_status(db_session, status)
+
+        response = await authed_client.get(f"/accounts/{account.id}/sync-status")
+        assert response.status_code == 200, status
+        html = response.text
+
+        for label in ACCOUNT_CELL_LABELS:
+            assert f"<span data-cell-label>{label}</span>" in html, (
+                f"{status}: подпись {label!r} потеряна в блоке подмены"
+            )
+
+
+@pytest.mark.asyncio
+async def test_accounts_labels_come_from_column_list(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Подписи и шапка колонок — один список, а не два независимых.
+
+    Переписанная вручную подпись разъедется с шапкой при первом же
+    переименовании колонки, и увидит это только пользователь на телефоне.
+    """
+    await _seed_all_account_branches(db_session)
+
+    html = (await authed_client.get("/accounts")).text
+
+    head = ROWHEAD_RE.search(html)
+    assert head, "шапка колонок раздела не найдена"
+    header = {name for name in re.findall(r"<span>([^<]*)</span>", head.group(1)) if name}
+    assert header, "шапка колонок пуста"
+
+    labels = {value for value in CELL_LABEL_RE.findall(html) if value}
+
+    assert header - labels == {"Аккаунт"}, (
+        "подписи разошлись с шапкой колонок: без подписи остались "
+        f"{sorted(header - labels - {'Аккаунт'})}"
+    )
+    assert labels - header == set(), (
+        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_profile_form_contract(authed_client: AsyncClient):
     """Форма профиля сохраняет метод, маршрут и все прежние имена полей.
@@ -1382,6 +1664,173 @@ def test_no_utility_classes_in_python_handlers():
             offenders[str(path.relative_to(pages_dir))] = found
 
     assert not offenders, f"utility-классы остались в обработчиках: {offenders}"
+
+
+# --- План 11: страховочная сетка синхронности трёх файлов «Аккаунтов» -------
+#
+# Сетка на уровне ИСХОДНИКОВ, а не отрендеренной страницы. Причина: файл подмены
+# рендерится обработчиком напрямую через окружение, своего адреса в обходе
+# страниц у него нет, а расхождение проявляется только в момент подмены и только
+# визуально. Именно так уже терялась колонка даты подключения (WR-03) — тестов на
+# это не было ни одного.
+
+ACCOUNTS_SECTION_FILES = (
+    "accounts/list.html",
+    "accounts/partial_cards.html",
+    "accounts/partials/sync_status_card.html",
+)
+
+# Файлы, ЭМИТЯЩИЕ панель подтверждения, и единственный, который её не эмитит.
+ACCOUNTS_PANEL_FILES = ("accounts/list.html", "accounts/partial_cards.html")
+ACCOUNTS_SWAP_FILE = "accounts/partials/sync_status_card.html"
+
+ACCOUNTS_MODAL_EVENT = "modal-open-acc-del-"
+
+# Подпись берётся ИНДЕКСОМ из списка колонок. Отрицательный просмотр назад
+# отсекает confirm_label=, action_label= и show_label= — это не подписи ячеек.
+LABEL_BY_INDEX_RE = re.compile(r"(?<!\w)label=ACCOUNT_COLUMNS\[(\d+)\]")
+LABEL_LITERAL_RE = re.compile(r"""(?<!\w)label=(['"])([^'"]*)\1""")
+
+
+def _accounts_sources() -> dict[str, str]:
+    """Исходники трёх файлов раздела. Порядок фиксирован: list.html — эталон."""
+    return {
+        rel: (TEMPLATES_DIR / rel).read_text(encoding="utf-8")
+        for rel in ACCOUNTS_SECTION_FILES
+    }
+
+
+def _declaration(source: str, name: str) -> str | None:
+    """Правая часть объявления {% set NAME = … %} дословно, как в файле."""
+    match = re.search(rf"\{{%-?\s*set {name} = (.+?)\s*-?%\}}", source)
+    return match.group(1) if match else None
+
+
+def test_accounts_three_files_declare_same_columns():
+    """Раскладка колонок и список колонок совпадают в трёх файлах ПОСИМВОЛЬНО.
+
+    Три файла рисуют одну и ту же строку. Разъехавшаяся раскладка не роняет
+    страницу: строка после подмены просто встанет по другим колонкам, и увидит
+    это только тот, кто дождался опроса.
+    """
+    sources = _accounts_sources()
+
+    for name in ("ACCOUNT_COLS", "ACCOUNT_COLUMNS"):
+        declared = {rel: _declaration(src, name) for rel, src in sources.items()}
+
+        missing = sorted(rel for rel, value in declared.items() if value is None)
+        assert not missing, f"{name} не объявлен в: {missing}"
+
+        reference_file, reference = next(iter(declared.items()))
+        divergent = {rel: v for rel, v in declared.items() if v != reference}
+        assert not divergent, (
+            f"{name} в {reference_file} объявлен как {reference}, но отстали: "
+            + "; ".join(f"{rel} -> {value}" for rel, value in sorted(divergent.items()))
+        )
+
+
+def test_accounts_three_files_have_no_browser_dialog():
+    """Ни один из трёх файлов не вызывает системный диалог подтверждения (SC-3).
+
+    Обход по HTTP этого не закрывает: разметки файла подмены нет на первичной
+    отрисовке, и оставшийся там confirm() проявился бы только после опроса.
+    """
+    sources = _accounts_sources()
+
+    offenders = {
+        rel: src.count("confirm(") for rel, src in sources.items() if "confirm(" in src
+    }
+    assert not offenders, f"системный диалог браузера остался в: {offenders}"
+
+    intercepts = {
+        rel: src.count("onsubmit") for rel, src in sources.items() if "onsubmit" in src
+    }
+    assert not intercepts, f"старый перехват отправки остался в: {intercepts}"
+
+
+def test_accounts_three_files_dispatch_same_modal_event():
+    """Все три файла открывают ОДНУ панель, но эмитят её только два из них.
+
+    Асимметрия сознательная и закреплена отдельным утверждением: панель лежит
+    ВНЕ заменяемого элемента, поэтому файл подмены её не эмитит. Появись она там
+    — после первого же опроса в документе оказалось бы две панели с одинаковым
+    идентификатором, событие открывало бы обе, а Tab уходил бы в невидимую
+    копию (T-11-04).
+    """
+    sources = _accounts_sources()
+
+    counts = {rel: src.count(ACCOUNTS_MODAL_EVENT) for rel, src in sources.items()}
+    silent = sorted(rel for rel, count in counts.items() if not count)
+    assert not silent, f"файлы, не открывающие панель подтверждения: {silent}"
+
+    reference_file, reference = next(iter(counts.items()))
+    divergent = {rel: count for rel, count in counts.items() if count != reference}
+    assert not divergent, (
+        f"в {reference_file} мест подтверждения {reference}, но отстали: "
+        + "; ".join(f"{rel} -> {count}" for rel, count in sorted(divergent.items()))
+    )
+
+    for rel in ACCOUNTS_PANEL_FILES:
+        assert "components/modal.html" in sources[rel], (
+            f"{rel}: панель подтверждения перестала эмититься — открывать станет нечего"
+        )
+    assert "components/modal.html" not in sources[ACCOUNTS_SWAP_FILE], (
+        f"{ACCOUNTS_SWAP_FILE}: файл подмены начал эмитить панель — после первого "
+        "опроса их станет две с одним идентификатором (T-11-04)"
+    )
+
+
+def test_accounts_three_files_label_the_same_columns():
+    """Подписи ячеек в трёх файлах совпадают по составу И ПО ЧИСЛУ вхождений.
+
+    Подпись, вписанная строкой на месте, разъедется с шапкой при первом же
+    переименовании колонки, и увидит это только пользователь на телефоне: на
+    широкой ширине подпись скрыта.
+
+    Счёт вхождений, а не множество значений: в каждом файле три ветки статуса, и
+    подпись, потерянная в ОДНОЙ из них, множество не меняет — две оставшиеся
+    ветки его удержат. Именно так и теряется подпись на практике: правят одну
+    ветку, а расходится весь раздел.
+    """
+    sources = _accounts_sources()
+
+    hardcoded = {
+        rel: sorted({m.group(2) for m in LABEL_LITERAL_RE.finditer(src)})
+        for rel, src in sources.items()
+    }
+    hardcoded = {rel: values for rel, values in hardcoded.items() if values}
+    assert not hardcoded, (
+        "подписи вписаны строкой вместо элемента списка колонок — шапке и "
+        f"подписям есть на чём разъехаться: {hardcoded}"
+    )
+
+    labels: dict[str, Counter[str]] = {}
+    for rel, src in sources.items():
+        declared = _declaration(src, "ACCOUNT_COLUMNS")
+        assert declared, f"{rel}: список колонок не объявлен"
+        columns = ast.literal_eval(declared)
+        labels[rel] = Counter(
+            columns[int(i)] for i in LABEL_BY_INDEX_RE.findall(src)
+        )
+
+    reference_file, reference = next(iter(labels.items()))
+    assert reference, f"{reference_file}: подписей нет ни одной"
+
+    divergent = {}
+    for rel, counted in labels.items():
+        if counted == reference:
+            continue
+        divergent[rel] = sorted(
+            f"{name}: {counted.get(name, 0)} вместо {reference.get(name, 0)}"
+            for name in set(counted) | set(reference)
+            if counted.get(name, 0) != reference.get(name, 0)
+        )
+    assert not divergent, (
+        f"подписи в {reference_file} — {sorted(reference.items())}, но отстали: "
+        + "; ".join(
+            f"{rel} -> {diff}" for rel, diff in sorted(divergent.items())
+        )
+    )
 
 
 def test_template_inventory():
