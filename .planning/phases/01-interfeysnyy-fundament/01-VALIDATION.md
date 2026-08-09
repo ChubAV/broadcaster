@@ -53,7 +53,7 @@ httpOnly cookie (`request.cookies.get("access_token")`, `app/pages/common.py:67`
 | 01-01-T1 | 01 | 1 | UI-01 | T-01-04 | Worker read never touches Docker SDK from the request path | checkpoint | _decision gate — no automated check_ | n/a | ⬜ pending |
 | 01-01-T2 | 01 | 1 | UI-01, UI-02, UI-03, UI-06 | T-01-01, T-01-02, T-01-04 | StaticFiles only; admin nav stays behind the permission check; no blocking Docker call | integration | `uv run pytest tests/test_pages/test_shell.py -x -q` | ❌ W0 → created here | ⬜ pending |
 | 01-01-T3 | 01 | 1 | UI-01 | T-01-05 | Fonts self-hosted; no third-party font request remains | integration | `uv run pytest tests/test_pages/test_shell.py -x -q` | ✅ after T2 | ⬜ pending |
-| 01-02-T1 | 02 | 2 | UI-01, UI-04 | T-02-01 | Macros take text/number/bool only; escaping invariant intact | unit | `uv run pytest tests/test_templates/test_components.py -x -q` | ❌ W0 → created here | ⬜ pending |
+| 01-02-T1 | 02 | 2 | UI-01, UI-04, UI-06 | T-02-01 | Macros take text/number/bool only; escaping invariant intact | unit | `uv run pytest tests/test_templates/test_components.py -x -q` | ❌ W0 → created here | ⬜ pending |
 | 01-02-T2 | 02 | 2 | UI-04 | T-02-04 | Modal replaces the confirm dialog, not the POST form | unit | `uv run pytest tests/test_templates/test_components.py -x -q` | ✅ after T1 | ⬜ pending |
 | 01-02-T3 | 02 | 2 | UI-02, UI-04 | T-02-02, T-02-03 | Form `name`/`method`/`action` preserved; auth shell renders no nav | integration | `uv run pytest tests/test_pages/test_registration.py tests/test_pages/test_password_reset.py -q` | ✅ | ⬜ pending |
 | 01-03-T1 | 03 | 3 | UI-05 | T-03-03 | Polling self-terminates; paired test prevents vacuous green | integration | `uv run pytest tests/test_pages/test_htmx_preserved.py -x -q` | ❌ W0 → created here | ⬜ pending |
@@ -64,7 +64,7 @@ httpOnly cookie (`request.cookies.get("access_token")`, `app/pages/common.py:67`
 | 01-04-T3 | 04 | 4 | UI-04, UI-05, UI-06 | T-04-01, T-04-02 | Filter loop carried verbatim; group names escaped | integration | `uv run pytest tests/test_pages/test_htmx_preserved.py -x -q` | ✅ | ⬜ pending |
 | 01-05-T1 | 05 | 5 | UI-05, UI-06 | T-05-03 | Filter params escaped into the sentinel URL | integration | `uv run pytest tests/test_pages/test_responsive_markup.py -x -q` | ✅ | ⬜ pending |
 | 01-05-T2 | 05 | 5 | UI-04 | T-05-01, T-05-02 | Error text shown in full under autoescape; owner check intact | integration | `uv run pytest tests/test_pages/ -q` | ✅ | ⬜ pending |
-| 01-05-T3 | 05 | 5 | UI-02, UI-04 | T-05-04 | Profile form contract preserved | integration | `uv run pytest tests/test_pages/test_profile.py -x -q` | ✅ | ⬜ pending |
+| 01-05-T3 | 05 | 5 | UI-04 | T-05-04 | Profile form contract preserved | integration | `uv run pytest tests/test_pages/test_profile.py -x -q` | ✅ | ⬜ pending |
 | 01-06-T1 | 06 | 6 | UI-04, UI-05, UI-06 | T-06-04, T-06-05 | Swap anchor stays on the request-bearing element | integration | `uv run pytest tests/test_pages/test_htmx_preserved.py -x -q` | ✅ | ⬜ pending |
 | 01-06-T2 | 06 | 6 | UI-05 | T-06-01 | Conditional HTMX attributes preserved — polling still stops | integration | `uv run pytest tests/test_pages/test_htmx_preserved.py -x -q` | ✅ | ⬜ pending |
 | 01-06-T3 | 06 | 6 | UI-04, UI-05 | T-06-02, T-06-03 | Connect-wizard field contract and secret exposure unchanged | integration | `uv run pytest tests/test_pages/ -q` | ✅ | ⬜ pending |
