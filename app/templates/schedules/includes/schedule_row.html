@@ -70,9 +70,9 @@
     </form>
     {{- link_button('Изменить', '/schedules/' ~ s.id ~ '/edit', variant='ghost', icon='pencil',
                     title='Редактировать расписание') -}}
-    {#- Перехват отправки навешен на САМУ форму, а не заменил её кнопкой
-        type="button": без Alpine перехват не навешивается, и форма уходит POST-ом
-        на прежний маршрут — ровно как до правки (WR-04, T-12-04). -#}
+    {#- Перехват отправки навешен на САМУ форму, а не заменил её кнопкой-триггером
+        вне формы: без Alpine перехват не навешивается, и форма уходит POST-ом на
+        прежний маршрут — ровно как до правки (WR-04, T-12-04). -#}
     <form method="post" action="/schedules/{{ s.id }}/delete"
           x-data x-on:submit.prevent="$dispatch('modal-open-schedule-del-{{ s.id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить расписание') -}}

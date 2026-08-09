@@ -29,18 +29,32 @@
     <span data-grow>{{ ad.title }}</span>
   {%- endcall %}
   {#- Выдержка текста сохранена из прежней карточки: раздел меняет вид,
-      а не состав показанных данных. -#}
-  {{- cell(text=ad.text[:80] ~ ('…' if ad.text|length > 80 else ''), muted=true, title=ad.text[:200]) }}
-  {{- cell(text=(ad.sends_count or 0), mono=true, muted=true, title='Успешных отправок') }}
-  {{- cell(text=(ad.schedules_count or 0), mono=true, muted=true, title='Расписаний') }}
-  {{- cell(text=format_datetime_for_user(ad.created_at, user, '%d.%m.%Y'), mono=true, muted=true, area='meta') }}
-  {%- call cell() %}
+      а не состав показанных данных.
+      Подпись колонки берётся ЭЛЕМЕНТОМ AD_COLUMNS по индексу, а не переписанной
+      строкой: список уже единственный источник шапки (UI-06). Подписи нет у
+      колонки 0 — она несёт название объявления и уже является заголовком
+      строки, — и у колонки 6, у которой названия нет вовсе. -#}
+  {{- cell(text=ad.text[:80] ~ ('…' if ad.text|length > 80 else ''), muted=true, title=ad.text[:200],
+           label=AD_COLUMNS[1]) }}
+  {{- cell(text=(ad.sends_count or 0), mono=true, muted=true, title='Успешных отправок', label=AD_COLUMNS[2]) }}
+  {{- cell(text=(ad.schedules_count or 0), mono=true, muted=true, title='Расписаний', label=AD_COLUMNS[3]) }}
+  {{- cell(text=format_datetime_for_user(ad.created_at, user, '%d.%m.%Y'), mono=true, muted=true, area='meta',
+           label=AD_COLUMNS[4]) }}
+  {%- call cell(label=AD_COLUMNS[5]) %}
     {%- if ad.is_active %}{{ badge('Активно', 'success') }}{% else %}{{ badge('Пауза', 'neutral') }}{% endif -%}
   {%- endcall %}
   {%- call cell() %}
     <a class="btn btn--ghost" href="/ads/{{ ad.id }}/edit" title="Редактировать объявление"><span class="btn__label">Изменить</span></a>
-    <button class="btn btn--ghost" type="button" title="Удалить объявление"
-            x-data x-on:click="$dispatch('modal-open-ad-del-{{ ad.id }}')"><span class="btn__label">Удалить</span></button>
+    {#- Триггер панели — НАСТОЯЩАЯ форма, а не кнопка-триггер вне формы
+        (План 12, WR-04). Кнопка вне формы не делает без Alpine ничего, а форма
+        внутри панели остаётся скрытой навсегда: на странице не оставалось ни
+        одного пути удалить объявление. Перехват отправки навешен на саму форму,
+        поэтому без Alpine она уходит POST-ом на прежний маршрут. Имя события и
+        идентификатор панели не менялись — сменился только триггер. -#}
+    <form method="post" action="/ads/{{ ad.id }}/delete"
+          x-data x-on:submit.prevent="$dispatch('modal-open-ad-del-{{ ad.id }}')">
+      <button class="btn btn--ghost" type="submit" title="Удалить объявление"><span class="btn__label">Удалить</span></button>
+    </form>
   {%- endcall %}
 {{ row_close() }}
 {#- Модалка стоит рядом со строкой, а не внутри неё: панель позиционируется

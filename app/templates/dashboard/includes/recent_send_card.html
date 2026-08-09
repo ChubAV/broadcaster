@@ -21,11 +21,16 @@
 
 {% macro recent_send_card(log, user=None, cols=RECENT_COLS) -%}
 {{ row_open(cols=cols, id='recent-send-' ~ log.id) }}
-  {{- cell(text=format_datetime_for_user(log.sent_at, user, '%H:%M'), mono=true, muted=true) -}}
+  {#- Подпись колонки берётся ЭЛЕМЕНТОМ RECENT_COLUMNS по индексу, а не
+      переписанной строкой: список уже единственный источник шапки (UI-06).
+      Подписи нет у колонки 1 — она несёт название объявления и уже является
+      заголовком строки, — и у колонки 3, у которой названия нет вовсе. -#}
+  {{- cell(text=format_datetime_for_user(log.sent_at, user, '%H:%M'), mono=true, muted=true,
+           label=RECENT_COLUMNS[0]) -}}
   {%- call cell(grow=true, title=log.ad_title) -%}
     <span data-grow>{{ log.ad_title }}</span>
   {%- endcall -%}
-  {{- cell(text=log.group_name, muted=true, title=log.group_name, area='meta') -}}
+  {{- cell(text=log.group_name, muted=true, title=log.group_name, area='meta', label=RECENT_COLUMNS[2]) -}}
   {%- call cell() -%}
     {#- Ветка «неизвестный мессенджер» несёт utility-класс: вызов ограничен
         известными типами. -#}
@@ -33,7 +38,7 @@
       {{ messenger_icon(log.messenger_type, size='avatar', show_label=false) }}
     {%- endif -%}
   {%- endcall -%}
-  {%- call cell() -%}
+  {%- call cell(label=RECENT_COLUMNS[4]) -%}
     {%- if log.status == 'ok' -%}{{ badge('OK', 'success') }}
     {%- elif log.status == 'fail' -%}{{ badge('Ошибка', 'danger') }}
     {%- elif log.status == 'account_disconnected' -%}{{ badge('Отключён', 'warning') }}
