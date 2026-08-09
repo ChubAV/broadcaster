@@ -1268,10 +1268,80 @@ TAILWIND_TOKENS = (
     "sm:", "md:", "lg:", "xl:",
 )
 
+# Семейства с числовым суффиксом: подстрокой их не выразить, поэтому они заданы
+# выражениями. Список выше эти семейства не ловил, и ровно из-за этого сплошной
+# обход Плана 08 прошёл мимо мёртвого набора иконок в каталоге includes
+# (удалён Планом 09).
+TAILWIND_PATTERNS = (
+    # бесконечное вращение
+    re.compile(r"\banimate-spin\b"),
+    # прозрачность с числовым суффиксом: opacity-25, opacity-75
+    re.compile(r"\bopacity-\d+\b"),
+    # отрицательный отступ с префиксом направления: -ml-0.5, -mt-2
+    re.compile(r"(?:^|\s)-[mp][trblxy]?-\d"),
+    # дробный отступ: mr-1.5, px-2.5
+    re.compile(r"\b[mp][trblxy]?-\d+\.\d+\b"),
+    # размерные классы высоты и ширины: h-4 w-4, h-8 w-8
+    re.compile(r"\b[hw]-\d+(?:\.\d+)?\b"),
+)
+
 # Проверка идёт ТОЛЬКО по значениям class="…". Иначе тест падает на
 # упоминаниях классов в комментариях («.btn уже inline-flex»), то есть на
 # документации, а не на разметке.
 CLASS_ATTR_RE = re.compile(r'class="([^"]*)"')
+
+
+def utility_markers_in(value: str) -> set[str]:
+    """Признаки удалённого фреймворка в одном значении class="…"."""
+    found = {token for token in TAILWIND_TOKENS if token in value}
+    found |= {match.group(0).strip() for rx in TAILWIND_PATTERNS if (match := rx.search(value))}
+    return found
+
+
+# Семейства классов, которые список признаков Плана 08 НЕ ловил. Именно из-за
+# них сплошной обход прошёл мимо мёртвого набора иконок в каталоге includes:
+# ни один из 40 токенов не совпадал с классами анимации, прозрачности и
+# размеров, которые в том файле стояли.
+MISSED_FAMILIES = {
+    "бесконечное вращение": "animate-spin h-8 w-8",
+    "прозрачность с числовым суффиксом": "opacity-25",
+    "отрицательный отступ с префиксом направления": "-ml-0.5",
+    "дробный отступ": "mr-1.5",
+    "размерные классы высоты и ширины": "h-3 w-3",
+}
+
+# Значения class="…" собственной дизайн-системы. Ни одно не имеет права быть
+# опознано как признак удалённого фреймворка: молча расширенный токен, который
+# ловит свои же классы, заставил бы ослабить тест целиком.
+OWN_DESIGN_SYSTEM_CLASSES = (
+    "cell cell--mono cell--muted",
+    "btn btn--ghost",
+    "btn btn--danger",
+    "msg__glyph msg__glyph--tg {{ size }}",
+    "msg msg--plain",
+    "modal__panel",
+    "modal__actions",
+    "badge badge--success",
+    "card__head",
+    "empty__hint",
+    "avatar",
+    "mono",
+)
+
+
+def test_utility_markers_catch_the_families_that_were_missed():
+    """Список признаков ловит те семейства, из-за которых промах случился.
+
+    Тест синтетический намеренно: реальный нарушитель — мёртвый набор иконок в
+    каталоге includes — удаляется в этой же задаче, и после удаления проверять
+    расширение списка станет не на чем. Этот тест — единственное, что держит
+    свойство дальше.
+    """
+    for family, sample in MISSED_FAMILIES.items():
+        assert utility_markers_in(sample), f"семейство не опознано: {family} ({sample!r})"
+
+    for value in OWN_DESIGN_SYSTEM_CLASSES:
+        assert not utility_markers_in(value), f"свой класс опознан как чужой: {value!r}"
 
 
 def test_no_utility_classes_anywhere():
@@ -1284,12 +1354,9 @@ def test_no_utility_classes_anywhere():
     offenders: dict[str, set[str]] = {}
     for path in sorted(TEMPLATES_DIR.rglob("*.html")):
         source = path.read_text(encoding="utf-8")
-        found = {
-            token
-            for value in CLASS_ATTR_RE.findall(source)
-            for token in TAILWIND_TOKENS
-            if token in value
-        }
+        found: set[str] = set()
+        for value in CLASS_ATTR_RE.findall(source):
+            found |= utility_markers_in(value)
         if found:
             offenders[str(path.relative_to(TEMPLATES_DIR))] = found
 
@@ -1308,12 +1375,9 @@ def test_no_utility_classes_in_python_handlers():
     offenders: dict[str, set[str]] = {}
     for path in sorted(pages_dir.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
-        found = {
-            token
-            for value in CLASS_ATTR_RE.findall(source)
-            for token in TAILWIND_TOKENS
-            if token in value
-        }
+        found: set[str] = set()
+        for value in CLASS_ATTR_RE.findall(source):
+            found |= utility_markers_in(value)
         if found:
             offenders[str(path.relative_to(pages_dir))] = found
 
