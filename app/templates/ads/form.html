@@ -42,7 +42,13 @@
   </form>
 {{ card_close() }}
 
-<!-- IMPORTANT: Keep the existing JavaScript for image management -->
+<!-- IMPORTANT: предпросмотр изображений обязан собираться УЗЛАМИ DOM.
+     Ключ объекта приходит из имени файла, которое полностью подконтрольно
+     отправителю, и хранится в Ad.images — то есть выполнялся бы при каждом
+     открытии редактирования (CR-01, хранимый вектор). Серверное экранирование
+     сюда не доезжает: `tojson` на строке ниже безопасен, но значения после
+     этого уходят в клиентский код, где строка разбиралась бы парсером разметки
+     заново. Присвоенное свойство узла парсером разметки не разбирается никогда. -->
 <script>
 const IMAGE_BASE_URL = '{{ s3_public_url() }}';
 let imagePaths = {{ (ad.images | tojson) if ad and ad.images else '[]' }};
@@ -50,15 +56,37 @@ let imagePaths = {{ (ad.images | tojson) if ad and ad.images else '[]' }};
 function renderImages() {
     const preview = document.getElementById('image-preview');
     const inputs = document.getElementById('image-inputs');
-    preview.innerHTML = '';
-    inputs.innerHTML = '';
+    preview.replaceChildren();
+    inputs.replaceChildren();
     imagePaths.forEach((path, i) => {
         const url = path.startsWith('http') ? path : IMAGE_BASE_URL + '/' + path;
-        preview.innerHTML += `<span class="cell">
-            <img class="avatar" src="${url}" alt="">
-            <button type="button" class="btn btn--ghost" onclick="removeImage(${i})"><span class="btn__label">Убрать</span></button>
-        </span>`;
-        inputs.innerHTML += `<input type="hidden" name="images" value="${path}">`;
+
+        const wrap = document.createElement('span');
+        wrap.className = 'cell';
+
+        const img = document.createElement('img');
+        img.className = 'avatar';
+        img.src = url;
+        img.alt = '';
+
+        const label = document.createElement('span');
+        label.className = 'btn__label';
+        label.textContent = 'Убрать';
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn--ghost';
+        btn.addEventListener('click', () => removeImage(i));
+        btn.appendChild(label);
+
+        wrap.append(img, btn);
+        preview.appendChild(wrap);
+
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'images';
+        hidden.value = path;
+        inputs.appendChild(hidden);
     });
 }
 
