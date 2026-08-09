@@ -720,6 +720,164 @@ async def test_accounts_connect_max_form_contract(
                      html), "форма подключения MAX потеряла маршрут или метод"
 
 
+# --- План 11: подтверждение удаления аккаунта панелью дизайн-системы (SC-3) --
+#
+# Раздел «Аккаунты» рисуется ТРЕМЯ файлами (list.html, partial_cards.html,
+# partials/sync_status_card.html), и в каждом по три ветки статуса — девять мест
+# подтверждения удаления. Тесты ниже проверяют все три поверхности: списочную
+# страницу, порцию бесконечной прокрутки и блок подмены по опросу статуса.
+
+
+async def _seed_account_with_status(
+    db: AsyncSession, status: str, type_: str = "max"
+) -> MessengerAccount:
+    """Аккаунт в произвольном статусе: _seed_account умеет только active."""
+    user = await _user(db)
+    account = MessengerAccount(
+        user_id=user.id, type=type_, credentials="session", status=status
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+def _delete_forms(html: str, account_id: int) -> list[str]:
+    """Все формы удаления аккаунта в разметке, ЦЕЛИКОМ (открывающий тег + тело)."""
+    return re.findall(
+        rf'<form[^>]*action="/accounts/{account_id}/delete"[^>]*>.*?</form>',
+        html,
+        re.S,
+    )
+
+
+@pytest.mark.asyncio
+async def test_accounts_delete_uses_modal(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Подтверждение удаления аккаунта — панель дизайн-системы, не диалог ОС.
+
+    До этого плана пользователь видел спроектированную модалку при удалении
+    объявления и системный диалог браузера при удалении аккаунта — один и тот же
+    жест разрушения выглядел по-разному в двух разделах (SC-3).
+    """
+    account = await _seed_account(db_session, type_="max")
+
+    html = (await authed_client.get("/accounts")).text
+
+    assert 'role="dialog"' in html, "панель подтверждения не отрисована"
+    assert 'class="modal"' in html
+    assert f"modal-open-acc-del-{account.id}" in html, (
+        "форма удаления не открывает панель подтверждения"
+    )
+    assert "Отмена" in html, "у панели нет отказа от удаления"
+    assert "confirm(" not in html, "системный диалог браузера остался"
+    assert "onsubmit" not in html, "старый перехват отправки остался"
+
+
+@pytest.mark.asyncio
+async def test_accounts_delete_form_degrades_without_alpine(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-11-02: без Alpine форма отправляется напрямую — как до правки.
+
+    Панель подтверждения — УСИЛЕНИЕ поверх формы, а не единственный путь.
+    Кнопка type="button" вместо формы лишила бы раздел единственного способа
+    отключить аккаунт, когда скрипт не доехал: снять признак сокрытия с панели
+    умеет только Alpine (WR-04).
+    """
+    account = await _seed_account(db_session, type_="max")
+
+    html = (await authed_client.get("/accounts")).text
+
+    forms = _delete_forms(html, account.id)
+    assert forms, "форма удаления исчезла из разметки"
+
+    row_forms = [f for f in forms if "modal__form" not in f]
+    assert row_forms, "форма удаления осталась только внутри панели подтверждения"
+    for form in row_forms:
+        assert 'method="POST"' in form, f"форма удаления потеряла метод: {form[:200]}"
+        assert 'type="submit"' in form, (
+            f"кнопка подтверждения перестала отправлять форму: {form[:200]}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_accounts_modal_unique_per_account(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-11-04: на странице РОВНО одна панель на аккаунт.
+
+    Две панели с одним идентификатором открывались бы одним событием, и Tab
+    уходил бы в невидимую копию.
+    """
+    first = await _seed_account(db_session, type_="max")
+    second = await _seed_account(db_session, type_="wa")
+
+    html = (await authed_client.get("/accounts")).text
+
+    for account in (first, second):
+        assert html.count(f'id="acc-del-{account.id}"') == 1, (
+            f"панель подтверждения аккаунта {account.id} не единственная"
+        )
+
+
+@pytest.mark.asyncio
+async def test_accounts_swap_card_dispatches_same_modal(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-11-04 с другой стороны: блок подмены панель НЕ приносит.
+
+    Заменяется РОВНО строка (hx-swap="outerHTML" стоит на ней), панель лежит
+    вне заменяемого элемента и подмену переживает. Если бы файл подмены тоже
+    эмитил панель, после первого же опроса их стало бы две.
+    """
+    for status in ("syncing", "sync_failed", "active"):
+        account = await _seed_account_with_status(db_session, status)
+
+        response = await authed_client.get(f"/accounts/{account.id}/sync-status")
+        assert response.status_code == 200, status
+        html = response.text
+
+        assert f"modal-open-acc-del-{account.id}" in html, (
+            f"{status}: подменённая строка не открывает панель подтверждения"
+        )
+        assert 'role="dialog"' not in html, f"{status}: подмена принесла вторую панель"
+        assert 'class="modal"' not in html, f"{status}: подмена принесла вторую панель"
+        assert "confirm(" not in html, f"{status}: системный диалог браузера остался"
+        assert "onsubmit" not in html, f"{status}: старый перехват отправки остался"
+
+
+@pytest.mark.asyncio
+async def test_accounts_delete_route_unchanged(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-11-01: заменяется диалог, а не действие.
+
+    Маршрут, метод и серверная проверка владельца те же: новая кнопка удаления
+    не имеет права открыть чужой аккаунт.
+    """
+    own = await _seed_account(db_session, type_="max")
+    foreign = MessengerAccount(
+        user_id=own.user_id + 1000, type="wa", credentials="session", status="active"
+    )
+    db_session.add(foreign)
+    await db_session.commit()
+    await db_session.refresh(foreign)
+
+    response = await authed_client.post(
+        f"/accounts/{own.id}/delete", follow_redirects=False
+    )
+    assert response.status_code == 302
+    assert (await db_session.get(MessengerAccount, own.id)) is None
+
+    response = await authed_client.post(
+        f"/accounts/{foreign.id}/delete", follow_redirects=False
+    )
+    assert response.status_code == 302
+    assert (await db_session.get(MessengerAccount, foreign.id)) is not None
+
+
 @pytest.mark.asyncio
 async def test_profile_form_contract(authed_client: AsyncClient):
     """Форма профиля сохраняет метод, маршрут и все прежние имена полей.
