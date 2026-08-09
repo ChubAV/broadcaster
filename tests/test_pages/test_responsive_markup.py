@@ -2488,6 +2488,135 @@ CELL_LABEL_ATTR = "data-cell-label"
 MANUAL_ROW_ATTR_RE = re.compile(r"data-row(?![\w-])")
 
 
+# --- разрешитель признака ----------------------------------------------------
+
+
+def _resolve_template(rel: str) -> str | None:
+    """Исходник шаблона по пути относительно app/templates, либо None."""
+    path = TEMPLATES_DIR / rel
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
+def _macro_call_arglists(source: str, macro_name: str) -> list[str]:
+    """Списки аргументов всех ВЫЗОВОВ макроса ``macro_name`` в исходнике.
+
+    Разбор идёт от места вызова вперёд СО СЧЁТЧИКОМ СКОБОК до парной
+    закрывающей. Регулярное выражение «до первой закрывающей» ломается на
+    ``cell(text=(ad.sends_count or 0), …, label=AD_COLUMNS[2])`` и теряет
+    подпись молча.
+
+    ОБЪЯВЛЕНИЕ макроса вызовом не считается: ``{% macro cell(…, label=None) %}``
+    несёт ключевой аргумент подписи в СИГНАТУРЕ, и наивный поиск по имени
+    объявил бы библиотеку подписанной — ровно тот класс ошибки, который
+    разбирает IN-08.
+    """
+    arglists: list[str] = []
+    for match in re.finditer(rf"(?<![\w.]){re.escape(macro_name)}\s*\(", source):
+        if source[: match.start()].rstrip().endswith("macro"):
+            continue
+        depth = 0
+        start = match.end()
+        for index in range(match.end() - 1, len(source)):
+            char = source[index]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    arglists.append(source[start:index])
+                    break
+        else:  # pragma: no cover — незакрытая скобка в шаблоне
+            arglists.append(source[start:])
+    return arglists
+
+
+def _has_cell_label_marker(source: str) -> bool:
+    """Признак подписи ячейки в ОДНОМ исходнике шаблона раздела.
+
+    Ровно два законных носителя:
+      * вызов макроса ``cell``, в списке аргументов которого стоит ключевой
+        аргумент ``label=`` — так подпись приходит после Плана 09;
+      * атрибут ``data-cell-label``, написанный в шаблоне ВРУЧНУЮ — так подписи
+        стоят в billing/balance.html и admin/groups_info.html с прежних планов.
+
+    Голое слово ``label`` признаком НЕ является: оно принадлежит также макросам
+    field / textarea_field / select_field, toggle, progress и составному
+    аргументу ``show_label=`` у messenger_icon. Ограничение списком аргументов
+    ВЫЗОВА ячейки отсекает первые, проверка левой границы — второй.
+    """
+    if CELL_LABEL_ATTR in source:
+        return True
+    return any(
+        LABEL_KWARG_RE.search(arglist)
+        for arglist in _macro_call_arglists(source, "cell")
+    )
+
+
+def _union_sources(source: str, resolve=_resolve_template) -> dict[str, str]:
+    """Объединение: свой исходник + импорты на ОДИН уровень, МИНУС библиотека.
+
+    Исключение components/table.html — одна строка кода и единственное, что
+    отделяет работающую сетку от декоративной (T-13-02). Без него признак
+    приходит из компонента за любой шаблон, который компонент импортирует, и
+    обход зелёный на полностью неподписанной новой таблице.
+    """
+    union = {"<сам шаблон>": source}
+    for rel in TEMPLATE_IMPORT_RE.findall(source):
+        if rel == TABLE_COMPONENT:
+            continue
+        resolved = resolve(rel)
+        if resolved is not None:
+            union[rel] = resolved
+    return union
+
+
+def _has_cell_label_marker_in_union(source: str, resolve=_resolve_template) -> bool:
+    return any(
+        _has_cell_label_marker(src)
+        for src in _union_sources(source, resolve).values()
+    )
+
+
+def _project_templates() -> list[tuple[str, str]]:
+    """Все шаблоны проекта парами «путь относительно app/templates — исходник».
+
+    Файл библиотеки исключён целиком: он не потребитель примитивов, он их
+    объявляет.
+    """
+    result = []
+    for path in sorted(TEMPLATES_DIR.rglob("*.html")):
+        rel = path.relative_to(TEMPLATES_DIR).as_posix()
+        if rel == TABLE_COMPONENT:
+            continue
+        result.append((rel, path.read_text(encoding="utf-8")))
+    return result
+
+
+def _templates_calling_macro(macro_name: str) -> set[str]:
+    """Шаблоны, ВЫЗЫВАЮЩИЕ макрос примитива строки."""
+    return {
+        rel
+        for rel, source in _project_templates()
+        if _macro_call_arglists(source, macro_name)
+    }
+
+
+def _row_drawing_templates() -> set[str]:
+    """Шаблоны, рисующие строку: вызов row_open ЛИБО ручной атрибут строки.
+
+    Второе условие обязательно: accounts/partials/sync_status_card.html
+    собирает открывающий тег сам и макрос не вызывает — без него
+    инвентаризация из девяти файлов не сойдётся.
+    """
+    return {
+        rel
+        for rel, source in _project_templates()
+        if _macro_call_arglists(source, "row_open") or MANUAL_ROW_ATTR_RE.search(source)
+    }
+
+
 # --- синтетические исходники: проверяют САМ разрешитель, а не проект ---------
 
 SYNTHETIC_LIBRARY_IMPORT_NO_LABELS = (
