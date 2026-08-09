@@ -316,6 +316,13 @@ None — внешняя конфигурация не требуется.
 
 **Что учесть Фазам 4 и 6:** контракт называется `sessions_online` / `sessions_total`. Настоящий контейнерный показатель, если он понадобится, добавляется **рядом** новым ключом и не переиспользует эти имена.
 
+## Self-Check: PASSED
+
+- Все 11 заявленных файлов существуют на диске (`app/static/.gitkeep`, `app/static/css/app.css`, `app/static/js/htmx.min.js`, `app/static/js/alpine.min.js`, `tests/test_pages/test_shell.py`, `app/main.py`, `app/pages/common.py`, `app/pages/__init__.py`, `app/templates/base.html`, `tests/conftest.py`, сам SUMMARY).
+- Все 4 заявленных коммита присутствуют в истории: `b2c73fd`, `150ea44`, `d6f3e66`, `5d36334`.
+- `ls app/static/fonts/*.woff2 | wc -l` → 22 (критерий ≥18).
+- `uv run pytest tests/ -q` → 405 passed.
+
 ---
 *Phase: 01-interfeysnyy-fundament*
 *Completed: 2026-08-09*
