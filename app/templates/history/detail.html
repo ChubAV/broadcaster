@@ -1,74 +1,89 @@
 {% extends "base.html" %}
-{% block title %}Детали отправки — Broadcaster{% endblock %}
-{% block content %}
+{% from "components/badge.html" import badge %}
+{% from "components/button.html" import link_button %}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/mono.html" import mono %}
+{% from "components/table.html" import row_open, row_close, cell %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
-{% from "includes/icons.html" import icon_back %}
 
-<div class="max-w-3xl">
-  <!-- Back link -->
-  <a href="/history" class="inline-flex items-center gap-1.5 text-sm lg:text-base text-gray-500 hover:text-gray-700 mb-4">
-    {{ icon_back() }} Назад к истории
-  </a>
+{# Раскладка «подпись → значение». Приходит параметром cols в пользовательское
+   свойство --cols: собственного класса под эту страницу не заводится. #}
+{% set DETAIL_COLS = 'minmax(120px, 180px) minmax(0, 1fr)' %}
 
-  <div class="bg-white rounded-lg border border-gray-200 p-6 lg:p-8">
-    <h1 class="text-lg lg:text-xl font-semibold text-gray-900 mb-4">Детали отправки</h1>
+{% block title %}Детали отправки — Broadcaster{% endblock %}
 
-    <!-- Detail grid -->
-    <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 lg:gap-y-4 text-sm lg:text-base">
-      <div>
-        <dt class="text-gray-500">Статус</dt>
-        <dd class="mt-0.5">
-          {% if log.status == 'ok' %}
-          <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Успешно</span>
-          {% elif log.status == 'fail' %}
-          <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700">Ошибка</span>
-          {% elif log.status == 'account_disconnected' %}
-          <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">Аккаунт отключён</span>
-          {% endif %}
-        </dd>
-      </div>
-      <div>
-        <dt class="text-gray-500">Время</dt>
-        <dd class="mt-0.5 text-gray-900">{{ format_datetime_for_user(log.sent_at, user, '%d.%m.%Y %H:%M:%S') }}</dd>
-      </div>
-      <div>
-        <dt class="text-gray-500">Мессенджер</dt>
-        <dd class="mt-0.5">{{ messenger_icon(log.messenger_type, size='h-4 w-4') }}</dd>
-      </div>
-      {% if log.task_id %}
-      <div>
-        <dt class="text-gray-500">ID задачи</dt>
-        <dd class="mt-0.5 text-gray-900 font-mono text-xs">{{ log.task_id }}</dd>
-      </div>
-      {% endif %}
-      <div>
-        <dt class="text-gray-500">Группа</dt>
-        <dd class="mt-0.5 text-gray-900">{{ log.group_name }}{% if group %} <span class="text-gray-400">({{ group.group_external_id }})</span>{% endif %}</dd>
-      </div>
-      {% if log.error_message %}
-      <div class="sm:col-span-2">
-        <dt class="text-gray-500">Ошибка</dt>
-        <dd class="mt-0.5 text-red-600 text-xs">{{ log.error_message }}</dd>
-      </div>
-      {% endif %}
-    </dl>
+{# Контракт «страница → шелл» (План 01): заголовок и действие раздела рендерит
+   шапка шелла. Повтор отправки и копирование ошибки одним действием — Фаза 4
+   (HIST-04); правило этой фазы — «новый вид, старые действия». #}
+{% block page_title %}Детали отправки{% endblock %}
+{% block page_actions %}{{ link_button('К истории', '/history', variant='ghost') }}{% endblock %}
 
-    <!-- Ad section -->
-    <div class="mt-6 pt-6 border-t border-gray-200">
-      <h2 class="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">Объявление</h2>
-      <p class="text-sm font-medium text-gray-900">{{ log.ad_title }}</p>
-      <p class="text-sm text-gray-600 mt-1 whitespace-pre-line">{{ log.ad_text }}</p>
-      {% if log.ad_images %}
-      <div class="grid grid-cols-3 gap-2 mt-3">
-        {% for img in log.ad_images %}
-        <a href="{{ resolve_image_url(img) }}" target="_blank">
-          <img src="{{ resolve_image_url(img) }}" alt="" class="w-full aspect-square object-cover rounded-lg bg-gray-100">
-        </a>
-        {% endfor %}
-      </div>
-      {% endif %}
+{% block content %}
+<div data-stack>
+
+  {{ card_open(title='Отправка') }}
+    {{ row_open(cols=DETAIL_COLS) }}
+      {{- cell(text='Статус', mono=true, muted=true) -}}
+      {%- call cell() -%}
+        {%- if log.status == 'ok' -%}{{ badge('Успешно', 'success') }}
+        {%- elif log.status == 'fail' -%}{{ badge('Ошибка', 'danger') }}
+        {%- elif log.status == 'account_disconnected' -%}{{ badge('Аккаунт отключён', 'warning') }}
+        {%- else -%}{{ badge(log.status, 'neutral') }}{%- endif -%}
+      {%- endcall %}
+    {{ row_close() }}
+    {{ row_open(cols=DETAIL_COLS) }}
+      {{- cell(text='Время', mono=true, muted=true) -}}
+      {{- cell(text=format_datetime_for_user(log.sent_at, user, '%d.%m.%Y %H:%M:%S'), mono=true) -}}
+    {{ row_close() }}
+    {{ row_open(cols=DETAIL_COLS) }}
+      {{- cell(text='Мессенджер', mono=true, muted=true) -}}
+      {%- call cell() -%}
+        {#- Ветка «неизвестный мессенджер» несёт utility-класс: вызов ограничен
+            известными типами, у остальных остаётся текстовая подпись. -#}
+        {%- if log.messenger_type in ('tg_user', 'wa', 'max') -%}
+          {{ messenger_icon(log.messenger_type, size='avatar', show_label=false) }}
+        {%- endif -%}
+        {{ mono(log.messenger_type or '—', 'bright') }}
+      {%- endcall %}
+    {{ row_close() }}
+    {% if log.task_id %}
+    {{ row_open(cols=DETAIL_COLS) }}
+      {{- cell(text='ID задачи', mono=true, muted=true) -}}
+      {{- cell(text=log.task_id, mono=true, title=log.task_id) -}}
+    {{ row_close() }}
+    {% endif %}
+    {{ row_open(cols=DETAIL_COLS) }}
+      {{- cell(text='Группа', mono=true, muted=true) -}}
+      {%- call cell(grow=true) -%}
+        <span data-grow>{{ log.group_name }}</span>
+        {%- if group %}{{ mono(group.group_external_id, 'muted') }}{% endif -%}
+      {%- endcall %}
+    {{ row_close() }}
+  {{ card_close() }}
+
+  {% if log.error_message %}
+  {#- ТЕКСТ ОШИБКИ ВЫВОДИТСЯ ЦЕЛИКОМ. Ни усечения, ни многоточия, ни скрытия за
+      раскрытием: это единственное, по чему пользователь понимает, почему его
+      реклама не ушла. Строка приходит из внешнего мессенджера и приложением не
+      контролируется (T-05-01) — выводится только через штатное экранирование
+      Jinja2, длинные строки переносятся правилом [data-longtext]. -#}
+  {{ card_open(title='Текст ошибки') }}
+    <span data-longtext="mono">{{ log.error_message }}</span>
+  {{ card_close() }}
+  {% endif %}
+
+  {{ card_open(title='Объявление', subtitle=log.ad_title) }}
+    <span data-longtext>{{ log.ad_text }}</span>
+    {% if log.ad_images %}
+    <div data-thumbs>
+      {% for img in log.ad_images %}
+      <a href="{{ resolve_image_url(img) }}" target="_blank" rel="noopener">
+        <img src="{{ resolve_image_url(img) }}" alt="">
+      </a>
+      {% endfor %}
     </div>
-  </div>
-</div>
+    {% endif %}
+  {{ card_close() }}
 
+</div>
 {% endblock %}
