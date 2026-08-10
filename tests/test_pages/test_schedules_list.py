@@ -159,7 +159,9 @@ def _fake_schedule(group_ids: list[int]) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_group_names_are_resolved_for_the_owner(db_session: AsyncSession):
+async def test_group_names_are_resolved_for_the_owner(
+    auth_headers: dict, db_session: AsyncSession
+):
     """Карточка получает ИМЕНА своих групп, а не только их число (SCH-04)."""
     user = await _user(db_session)
     account = await _seed_account(db_session)
@@ -173,7 +175,9 @@ async def test_group_names_are_resolved_for_the_owner(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_foreign_group_name_never_becomes_a_card_value(db_session: AsyncSession):
+async def test_foreign_group_name_never_becomes_a_card_value(
+    auth_headers: dict, db_session: AsyncSession
+):
     """T-02-34: идентификаторы групп приходят массивом внутри расписания.
 
     Без ограничения по владельцу имя ЧУЖОЙ группы попало бы в карточку — своё
@@ -195,7 +199,7 @@ async def test_foreign_group_name_never_becomes_a_card_value(db_session: AsyncSe
 
 @pytest.mark.asyncio
 async def test_group_names_query_is_skipped_when_there_is_nothing_to_resolve(
-    db_session: AsyncSession,
+    auth_headers: dict, db_session: AsyncSession
 ):
     """Расписание без групп не порождает запроса вовсе."""
     user = await _user(db_session)
@@ -243,7 +247,14 @@ async def test_summary_page_resolves_group_names_in_one_query(
 async def test_missing_group_does_not_break_the_page(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Удалённая или недоступная группа не роняет страницу."""
+    """Удалённая или недоступная группа не роняет страницу.
+
+    Что на её месте НЕ появляется пустое имя — утверждает
+    test_unresolved_group_id_does_not_become_an_empty_name на слое данных, а
+    отрисовку оставшегося имени — test_summary_card_renders_group_names на слое
+    разметки. Здесь проверяется только то, что страница переживает
+    идентификатор без группы.
+    """
     ad = await _seed_ad(db_session, title="Объявление с потерянной группой")
     account = await _seed_account(db_session)
     group = await _seed_group(db_session, account, "Единственная живая группа")
@@ -252,7 +263,6 @@ async def test_missing_group_does_not_break_the_page(
     response = await authed_client.get("/schedules")
 
     assert response.status_code == 200
-    assert "Единственная живая группа" in response.text
 
 
 # --- Задача 1: состав элемента строки ----------------------------------------
