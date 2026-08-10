@@ -5,6 +5,7 @@
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/modal.html" import modal %}
 {% from "components/mono.html" import mono %}
+{% from "ads/includes/sched_card.html" import sched_card, sched_count_label %}
 
 {% block title %}{{ 'Редактировать' if ad else 'Создать' }} объявление — Broadcaster{% endblock %}
 
@@ -112,25 +113,63 @@
     </form>
 
     {# Секция расписаний стоит СОСЕДОМ формы объявления, а не внутри неё:
-       вложенные формы браузер молча отбрасывает, и в плане 02-05, который
-       принесёт сюда карточки расписаний со своими формами, их кнопки
-       перестали бы работать — и с JavaScript, и без него.
+       вложенные формы браузер молча отбрасывает, и кнопки карточек расписаний
+       перестали бы работать — и с JavaScript, и без него. Позиция закреплена
+       тестом test_editor_schedule_section_is_a_sibling_of_the_ad_form, а
+       отсутствие вложенности — test_editor_markup_has_no_nested_forms:
+       симптом поломки — молчащая кнопка, а не ошибка.
 
-       Здесь только каркас секции: карточки расписаний, дни, времена и группы
-       приходят планом 02-05. #}
+       Ни списка групп, ни числа времён, ни числа расписаний секция НЕ
+       ограничивает: внутреннего скролла, кнопки «показать ещё» и потолка в
+       этой фазе не вводится (UI-SPEC §Interaction Contract). Секция растёт. #}
     {{ card_open('Расписания') }}
-      {%- if ad and editor.schedules_count %}
-        {%- set n = editor.schedules_count -%}
-        {%- set n10 = n % 10 -%}
-        {%- set n100 = n % 100 -%}
-        {{ mono(n ~ (' расписание' if n10 == 1 and n100 != 11
-                     else (' расписания' if n10 in [2, 3, 4] and n100 not in [12, 13, 14]
-                           else ' расписаний')), variant='muted', upper=true) }}
-        {{ link_button('+ РАСПИСАНИЕ', '/schedules/new?ad_id=' ~ ad.id, variant='ghost', icon='plus') }}
+      {%- if ad %}
+        {%- if not editor.accounts %}
+        {# Ни одного подключённого аккаунта: подсказка с путём восстановления,
+           а не пустая полоса чипсов (UI-SPEC E4 empty). #}
+        {{ empty_state('Сначала подключите аккаунт мессенджера',
+                       hint='Без аккаунта расписание отправлять некуда',
+                       action_label='Подключить аккаунт', action_href='/accounts') }}
+        {%- endif %}
+
+        {%- if editor.schedules %}
+        {# Счётчик считает ВСЕ расписания, а не только активные: иначе число
+           противоречило бы видимым карточкам (UI-SPEC E8 partial). #}
+        {{ mono(sched_count_label(editor.schedules_count), variant='muted', upper=true) }}
+        <div data-sched-list>
+          {%- for s in editor.schedules %}
+          {{ sched_card(s, ad, editor.accounts, editor.groups, user,
+                        expanded=(s.id == editor.expanded_schedule_id)) }}
+          {%- endfor %}
+        </div>
+        {%- else %}
+        {{ empty_state('Расписаний пока нет — объявление не будет отправляться') }}
+        {%- endif %}
+
+        {%- if editor.accounts %}
+        {# Добавление — НАСТОЯЩАЯ форма, а не ссылка на отдельную страницу:
+           расписание создаётся тем же обработчиком, что и раньше, и признак
+           возврата оставляет пользователя в редакторе. Без JavaScript путь тот
+           же самый. #}
+        <form method="post" action="/schedules/new">
+          <input type="hidden" name="ad_id" value="{{ ad.id }}">
+          <input type="hidden" name="return_to" value="editor">
+          {%- if editor.accounts | length == 1 %}
+          {# Единственный аккаунт выбран заранее: выбор из одного варианта —
+             лишний шаг. При нескольких не выбран ни один, и расписание
+             остаётся не заполненным до выбора (UI-SPEC E4 zero-one-many). #}
+          <input type="hidden" name="account_id" value="{{ editor.accounts[0].id }}">
+          {%- endif %}
+          {{ button(('+ РАСПИСАНИЕ' if editor.schedules else '+ ДОБАВИТЬ ПЕРВОЕ'),
+                    variant='ghost', icon='plus') }}
+        </form>
+        {%- endif %}
       {%- else %}
+        {# На /ads/new записи ещё нет (D-03), и привязать расписание не к чему:
+           действие добавления здесь было бы обещанием, которое некому
+           исполнить. #}
         {{ empty_state('Расписаний пока нет — объявление не будет отправляться',
-                       action_label='+ ДОБАВИТЬ ПЕРВОЕ',
-                       action_href=('/schedules/new?ad_id=' ~ ad.id) if ad else '/schedules/new') }}
+                       hint='Расписание добавляется после первого сохранения объявления') }}
       {%- endif %}
     {{ card_close() }}
   </div>

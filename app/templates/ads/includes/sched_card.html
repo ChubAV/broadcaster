@@ -1,0 +1,225 @@
+{# Карточка расписания в редакторе объявления (ADS-07, ADS-08, D-07, D-08).
+
+   Это МАКРОС, а не include: импортированные шаблоны Jinja контекста
+   вызывающего не получают, поэтому `s`, `accounts`, `groups`, `user` и
+   `expanded` — явные параметры. Ошибка в имени параметра проявится не
+   исключением, а ПУСТОЙ карточкой, поэтому отрисовка реальных данных закреплена
+   тестом tests/test_pages/test_editor_schedules.py::test_editor_card_renders_data.
+
+   КАРТА ДНЕЙ НЕ ОБЪЯВЛЯЕТСЯ ЗАНОВО: DAY_NAMES импортируется из
+   schedules/includes/schedule_row.html — второй источник тех же семи строк
+   разъехался бы с первым при первом же переименовании.
+
+   ФОРМЫ. Карточка живёт СОСЕДОМ формы объявления (см. ads/form.html) и несёт
+   собственные формы: сохранение (/schedules/{id}/edit), переключение
+   (/schedules/{id}/toggle) и удаление (/schedules/{id}/delete). Вложенных форм
+   в карточке нет — браузер молча отбрасывает внутреннюю, и кнопки перестали бы
+   работать и с JavaScript, и без него.
+
+   ПРОГРЕССИВНОЕ УЛУЧШЕНИЕ. Ни один путь карточки не требует ни Alpine, ни htmx:
+   дни, группы и аккаунты — настоящие флажки и радиокнопки за подписями;
+   пресеты дней, групповое действие, добавление и убирание времени — ИМЕНОВАННЫЕ
+   кнопки отправки (образец — `remove_image` в ads/form.html), которые
+   обрабатывает сервер; разворачивание карточки — ссылка на редактор с
+   параметром выбранного расписания.
+
+   Перехват тумблера висит на ФОРМЕ (событие change всплывает от флажка), а
+   перехват удаления — на САМОЙ форме удаления, а не на кнопке-триггере вне её:
+   без Alpine форма уходит обычным POST-ом на прежний маршрут (образец —
+   schedules/includes/schedule_row.html:62-96).
+
+   Полосы прогресса отправок в карточке НЕТ и быть не может (D-17): источника
+   данных для процента в схеме не существует.
+
+   Импорт: {% from "ads/includes/sched_card.html" import sched_card, sched_count_label %} #}
+
+{% from "components/badge.html" import badge %}
+{% from "components/button.html" import button %}
+{% from "components/modal.html" import modal %}
+{% from "components/toggle.html" import toggle %}
+{% from "components/empty_state.html" import empty_state %}
+{% from "includes/messenger_icon.html" import messenger_icon %}
+{% from "schedules/includes/schedule_row.html" import DAY_NAMES %}
+
+{# Склонение подписи секции — ФУНКЦИЯ от числа по русским правилам (1 / 2-4 /
+   5+), а не формат «{n} расписаний»: «1 расписаний» — заметный дефект
+   копирайтинга, и UI-SPEC требует именно склонения. #}
+{% macro sched_count_label(n) -%}
+{%- set n10 = n % 10 -%}
+{%- set n100 = n % 100 -%}
+{{- n }} {{ 'расписание' if n10 == 1 and n100 != 11
+             else ('расписания' if n10 in [2, 3, 4] and n100 not in [12, 13, 14]
+                   else 'расписаний') -}}
+{%- endmacro %}
+
+{# Подпись аккаунта. Собственного имени у аккаунта в схеме нет: его «имя» на
+   экране — канал и номер, ровно как в разделе «Аккаунты». #}
+{% macro account_label(account) -%}
+{{- {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'}.get(account.type, account.type) }} #{{ account.id -}}
+{%- endmacro %}
+
+{% macro sched_card(s, ad, accounts, groups, user, expanded=false) -%}
+{%- set account = (accounts | selectattr('id', 'equalto', s.account_id) | list | first) if s.account_id else none -%}
+{%- set account_groups = groups | selectattr('account_id', 'equalto', s.account_id) | list if s.account_id else [] -%}
+{%- set chosen = s.group_ids or [] -%}
+{%- set day_labels = [] -%}
+{%- for d in s.days_of_week|sort %}{% set _ = day_labels.append(DAY_NAMES.get(d, d)) %}{% endfor -%}
+{#- Неполнота ОДНА и та же на сервере и в разметке: аккаунт, хотя бы одна
+    группа, хотя бы один день и хотя бы одно время (D-08). Второе определение
+    разъехалось бы с серверным, и пользователь видел бы бейдж на расписании,
+    которое сервер считает полным. -#}
+{%- set complete = s.account_id and chosen and s.days_of_week and s.times_of_day -%}
+{#- Части подтверждения удаления: только ЗАПОЛНЕННЫЕ, соединённые разделителем.
+    Пустые сегменты между разделителями («· · ·») недопустимы (UI-SPEC E12). -#}
+{%- set parts = [] -%}
+{%- if account %}{% set _ = parts.append(account_label(account) | trim) %}{% endif -%}
+{%- if chosen %}{% set _ = parts.append(chosen | length ~ ' групп') %}{% endif -%}
+{%- if day_labels %}{% set _ = parts.append(day_labels | join(' ')) %}{% endif -%}
+{%- if s.times_of_day %}{% set _ = parts.append(s.times_of_day | join(', ')) %}{% endif -%}
+<article data-sched-card id="sched-{{ s.id }}">
+  <header class="sched-card__head">
+    <span class="sched-card__sum">
+      {%- if account %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
+      <span title="{{ parts | join(' · ') if parts else 'Не заполнено' }}">{{ parts | join(' · ') if parts else 'Не заполнено' }}</span>
+    </span>
+    {%- if not complete %}{{ badge('Не заполнено', 'warning') }}{% endif %}
+    {#- Событие change всплывает от флажка к форме, поэтому перехват висит на
+        ФОРМЕ, а макрос тумблера остаётся без собственных атрибутов событий:
+        маршрут переживает выключенный Alpine (SCH-05). -#}
+    <form method="post" action="/schedules/{{ s.id }}/toggle" x-data x-on:change="$el.submit()">
+      <input type="hidden" name="return_to" value="editor">
+      {{- toggle(name='is_active', checked=s.is_active, id='sched-toggle-' ~ s.id,
+                 disabled=(not complete),
+                 title=('Включить нельзя: выберите аккаунт, хотя бы одну группу, день и время.'
+                        if not complete else ('Приостановить' if s.is_active else 'Возобновить'))) -}}
+    </form>
+    {#- Разворачивание без JavaScript — ССЫЛКА на редактор с параметром
+        выбранного расписания: сервер рендерит эту карточку развёрнутой,
+        остальные свёрнутыми. Разметка в обоих случаях одна и та же. -#}
+    <a class="sched-card__expand"
+       href="{{ '/ads/' ~ ad.id ~ '/edit' if expanded else '/ads/' ~ ad.id ~ '/edit?sched=' ~ s.id ~ '#sched-' ~ s.id }}"
+       >{{ 'СВЕРНУТЬ' if expanded else 'РАЗВЕРНУТЬ' }}</a>
+  </header>
+
+  {%- if expanded %}
+  <div class="sched-card__body">
+    {%- if not complete %}
+    <p class="sched-card__hint">Заполните группы, дни и время</p>
+    {%- endif %}
+    {# Форма сохранения расписания. Имена полей — ЖЁСТКИЙ контракт с
+       app/pages/schedules.py: ad_id, account_id, group_ids, days_of_week,
+       times_of_day, timezone. Расхождение здесь не уронит страницу — оно молча
+       перестанет сохранять расписание. #}
+    <form method="post" action="/schedules/{{ s.id }}/edit">
+      <input type="hidden" name="ad_id" value="{{ ad.id }}">
+      <input type="hidden" name="return_to" value="editor">
+      {# Таймзона приходит из профиля и ЗДЕСЬ НЕ ВЫБИРАЕТСЯ: одно расписание с
+         таймзоной, отличной от профиля, сделало бы «след. запуск» в сводке
+         необъяснимым. Подпись только для чтения. #}
+      <input type="hidden" name="timezone" value="{{ s.timezone }}">
+
+      <div class="sched-card__block">
+        <span class="field__label">Аккаунт</span>
+        {%- if accounts %}
+        <div class="chip-set">
+          {%- for acc in accounts %}
+          <label class="chip" title="{{ account_label(acc) | trim }}">
+            <input class="chip__input" type="radio" name="account_id" value="{{ acc.id }}"
+                   {% if acc.id == s.account_id %}checked{% endif %}>
+            {{ messenger_icon(acc.type, size='avatar', show_label=false) }}
+            <span class="chip__label">{{ account_label(acc) | trim }}</span>
+          </label>
+          {%- endfor %}
+        </div>
+        {%- else %}
+        {{ empty_state('Сначала подключите аккаунт мессенджера',
+                       hint='Без аккаунта расписание отправлять некуда',
+                       action_label='Подключить аккаунт', action_href='/accounts') }}
+        {%- endif %}
+      </div>
+
+      <div class="sched-card__block">
+        <span class="field__label">ГРУППЫ · выбрано {{ chosen | length }} из {{ account_groups | length }}</span>
+        {%- if not s.account_id %}
+        <span class="field__hint">Сначала выберите аккаунт</span>
+        {%- elif not account_groups %}
+        <span class="field__hint">У выбранного аккаунта нет подключённых групп</span>
+        {%- else %}
+        <div class="group-pick">
+          {%- for group in account_groups %}
+          <label class="group-pick__row" title="{{ group.name }}">
+            <input class="group-pick__box" type="checkbox" name="group_ids" value="{{ group.id }}"
+                   {% if group.id in chosen %}checked{% endif %}>
+            <span class="group-pick__name">{{ group.name }}</span>
+            <span class="group-pick__count">{{ group.group_external_id }}</span>
+          </label>
+          {%- endfor %}
+        </div>
+        <div class="sched-card__actions">
+          {{ button('ВЫБРАТЬ ВСЕ', variant='ghost', name='groups_preset', value='all') }}
+          {{ button('СНЯТЬ ВСЕ', variant='ghost', name='groups_preset', value='none') }}
+        </div>
+        {%- endif %}
+      </div>
+
+      <div class="sched-card__block">
+        <span class="field__label">ДНИ И ВРЕМЯ</span>
+        <div class="day-grid">
+          {%- for d in range(7) %}
+          <label class="chip" title="{{ DAY_NAMES[d] }}">
+            <input class="chip__input" type="checkbox" name="days_of_week" value="{{ d }}"
+                   {% if d in s.days_of_week %}checked{% endif %}>
+            <span class="chip__label">{{ DAY_NAMES[d] }}</span>
+          </label>
+          {%- endfor %}
+        </div>
+        <div class="sched-card__actions">
+          {{ button('БУДНИ', variant='ghost', name='days_preset', value='workdays') }}
+          {{ button('КАЖДЫЙ ДЕНЬ', variant='ghost', name='days_preset', value='everyday') }}
+        </div>
+        <div class="time-set">
+          {%- for t in s.times_of_day %}
+          <span class="time-pill">
+            <input class="time-pill__input" type="time" name="times_of_day" value="{{ t }}">
+            {#- Именованная кнопка ОТПРАВКИ, а не кнопка со скриптом: без Alpine
+                и без htmx она уходит POST-ом, и сервер убирает ровно это
+                время (образец — `remove_image` в ads/form.html). -#}
+            <button class="time-pill__remove" type="submit" name="remove_time" value="{{ t }}"
+                    aria-label="Убрать время" title="Убрать время">×</button>
+          </span>
+          {%- endfor %}
+          {{ button('+ ВРЕМЯ', variant='ghost', name='add_time', value='1', icon='plus') }}
+        </div>
+        <span class="sched-card__tz">Время по {{ s.timezone }}</span>
+      </div>
+
+      <div class="sched-card__actions">
+        {{ button('СОХРАНИТЬ РАСПИСАНИЕ', variant='primary', name='save_schedule', value='1', icon='check') }}
+      </div>
+    </form>
+
+    {#- Форма удаления — СОСЕД формы сохранения, а не её потомок. Перехват висит
+        на самой форме: без Alpine она уходит POST-ом на прежний маршрут. -#}
+    <form method="post" action="/schedules/{{ s.id }}/delete"
+          x-data x-on:submit.prevent="$dispatch('modal-open-sched-del-{{ s.id }}')">
+      <input type="hidden" name="return_to" value="editor">
+      {{ button('УДАЛИТЬ РАСПИСАНИЕ', variant='danger', icon='trash') }}
+    </form>
+  </div>
+  {%- endif %}
+</article>
+{#- Панель подтверждения стоит РЯДОМ с карточкой, а не внутри неё: панель
+    позиционируется фиксированно, а внутри карточки она стала бы её блоком.
+    Тело перечисляет только ЗАПОЛНЕННЫЕ части и экранируется Jinja — разметка в
+    названии аккаунта или группы рендерится текстом, а не элементами. -#}
+{% call modal(id='sched-del-' ~ s.id,
+              title='Удалить расписание?',
+              action='/schedules/' ~ s.id ~ '/delete',
+              confirm_label='Удалить',
+              method="post",
+              body=parts | join(' · ') if parts else 'Не заполнено') %}
+  {#- Блочный вызов — штатный слот скрытых полей макроса: без признака возврата
+      подтверждённое удаление увело бы пользователя на сводный список. -#}
+  <input type="hidden" name="return_to" value="editor">
+{% endcall %}
+{%- endmacro %}

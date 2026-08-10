@@ -3131,3 +3131,86 @@ async def test_ads_editor_action_bar_wraps_delete_to_its_own_row(
     bar = html.index("data-actions")
     delete_form = html.index(f'action="/ads/{ad.id}/delete"')
     assert bar < delete_form, "удаление оказалось в одном ряду с первичной кнопкой"
+
+
+# --- План 02-05: секция расписаний в редакторе ------------------------------
+#
+# Карточка расписания собрана на примитивах второй половины раздела 8. Все её
+# контейнеры — ПЕРЕНОСЯЩИЕСЯ: горизонтального скролла и обрезки не появляется
+# ни на одной ширине (UI-SPEC §Responsive Contract).
+
+APP_CSS = Path(__file__).resolve().parents[2] / "app" / "static" / "css" / "app.css"
+
+
+async def _seed_editor_schedule(db: AsyncSession) -> tuple[Ad, Schedule]:
+    """Объявление с расписанием, аккаунтом и группой — под редактор, не список."""
+    user = await _user(db)
+    ad = await _seed_ad(db, title="Объявление секции расписаний")
+    account = await _seed_account(db, type_="tg_user")
+    group = Group(
+        user_id=user.id,
+        account_id=account.id,
+        messenger_type="tg_user",
+        group_external_id="ext-sched",
+        name="Группа секции расписаний",
+    )
+    db.add(group)
+    await db.commit()
+    await db.refresh(group)
+    schedule = Schedule(
+        ad_id=ad.id,
+        account_id=account.id,
+        group_ids=[group.id],
+        days_of_week=[0, 2, 4],
+        times_of_day=["09:30"],
+        timezone="UTC",
+    )
+    db.add(schedule)
+    await db.commit()
+    await db.refresh(schedule)
+    return ad, schedule
+
+
+@pytest.mark.asyncio
+async def test_ads_editor_schedule_section_uses_section_8_primitives(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Секция расписаний размечена примитивами раздела, а не своей вёрсткой."""
+    ad, schedule = await _seed_editor_schedule(db_session)
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    assert "data-sched-list" in html
+    assert "data-sched-card" in html
+    assert "chip-set" in html, "полоса аккаунтов размечена не примитивом раздела"
+    assert "day-grid" in html, "сетка дней размечена не примитивом раздела"
+    assert "time-pill" in html, "таблетка времени размечена не примитивом раздела"
+    assert "group-pick" in html, "выбор групп размечен не примитивом раздела"
+
+
+@pytest.mark.asyncio
+async def test_ads_editor_schedule_section_no_utility_classes(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    ad, schedule = await _seed_editor_schedule(db_session)
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+    for marker in UTILITY_MARKERS:
+        assert marker not in html, marker
+
+
+def test_editor_collapses_to_one_column_and_shrinks_day_cells():
+    """Одноколоночная раскладка на ≤900px и ячейка дня 40px на ≤400px.
+
+    Оба правила — CSS, поведенческой проверки для них не существует: страница
+    отдаёт 200 одинаково и с ними, и без них, а увидел бы разницу только
+    пользователь на телефоне.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    assert "[data-editor] { grid-template-columns: minmax(0, 1fr) !important; }" in css
+    assert "[data-editor-side] { position: static !important; }" in css
+    assert ".day-grid .chip { width: 40px; }" in css
+    # Полосы прогресса внутри карточки расписания нет и быть не может (D-17).
+    assert ".sched-card__progress" not in css
+    assert "[data-sched-card] .progress" not in css

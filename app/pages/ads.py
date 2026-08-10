@@ -9,6 +9,7 @@ from app.config import Settings
 from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED, AD_STATUSES
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
+from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
@@ -178,17 +179,26 @@ async def ads_list(
 
 
 async def _editor_context(
-    db: AsyncSession, ad: Ad | None, settings: Settings
+    db: AsyncSession,
+    ad: Ad | None,
+    settings: Settings,
+    user=None,
+    selected_schedule_id: int | None = None,
 ) -> dict:
-    """Данные правой колонки редактора: сводка и подпись канала предпросмотра.
+    """Данные правой колонки редактора, секции расписаний и предпросмотра.
 
-    Один запрос на всё: число расписаний, ближайший запуск и набор каналов, в
-    которые объявление уйдёт по настроенным расписаниям (D-11 — вид единый, но
-    подпись называет каналы честно).
+    Число расписаний, ближайший запуск и набор каналов, в которые объявление
+    уйдёт по настроенным расписаниям (D-11 — вид единый, но подпись называет
+    каналы честно), плюс всё, что нужно карточке расписания: сами расписания,
+    аккаунты пользователя и его активные группы.
+
+    Второго источника тех же чисел не заводится: план 02-05 ДОПОЛНЯЕТ эту
+    функцию, а не пишет своё чтение рядом.
     """
     channels: list[str] = []
     schedules_count = 0
     next_run_at = None
+    schedules: list[Schedule] = []
 
     if ad is not None:
         rows = (
@@ -208,6 +218,54 @@ async def _editor_context(
             if label and label not in channels:
                 channels.append(label)
 
+        # Порядок карточек — порядок создания: перестановка расписаний между
+        # перезагрузками сделала бы «ту же карточку» невозможно найти.
+        schedules = list(
+            (
+                await db.execute(
+                    select(Schedule)
+                    .where(Schedule.ad_id == ad.id)
+                    .order_by(Schedule.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    accounts: list[MessengerAccount] = []
+    groups: list[Group] = []
+    if user is not None:
+        accounts = list(
+            (
+                await db.execute(
+                    select(MessengerAccount)
+                    .where(MessengerAccount.user_id == user.id)
+                    .order_by(MessengerAccount.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        groups = list(
+            (
+                await db.execute(
+                    select(Group)
+                    .where(Group.user_id == user.id, Group.is_active == True)  # noqa: E712
+                    .order_by(Group.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    # Развёрнута ОДНА карточка. Без выбора развёрнута только что добавленная —
+    # её идентификатор приходит параметром запроса из редиректа обработчика
+    # создания; при многих расписаниях это спасает от стены открытых форм
+    # (UI-SPEC E7 zero-one-many).
+    expanded_id = selected_schedule_id
+    if expanded_id is not None and expanded_id not in {s.id for s in schedules}:
+        expanded_id = None
+
     # Порог предупреждения счётчика зависит от НАЛИЧИЯ вложений, а не один на
     # все случаи: с вложениями текст уходит подписью к медиа, и его предел
     # существенно ниже. Один порог на оба случая либо пугал бы там, где всё в
@@ -217,6 +275,10 @@ async def _editor_context(
         "channels": channels,
         "schedules_count": schedules_count,
         "next_run_at": next_run_at,
+        "schedules": schedules,
+        "accounts": accounts,
+        "groups": groups,
+        "expanded_schedule_id": expanded_id,
         "text_limit": TEXT_LIMIT,
         "text_warn_at": CAPTION_LIMIT if has_images else int(TEXT_LIMIT * TEXT_WARN_RATIO),
         "caption_limit": CAPTION_LIMIT,
@@ -245,7 +307,7 @@ async def _autosave_response(
         {
             "user": user,
             "ad": ad,
-            "editor": await _editor_context(db, ad, settings),
+            "editor": await _editor_context(db, ad, settings, user),
             "autosave_error": error,
         },
     )
@@ -371,7 +433,7 @@ async def ads_new(
             "user": user,
             "is_admin": check_is_admin(user, settings),
             "ad": None,
-            "editor": await _editor_context(db, None, settings),
+            "editor": await _editor_context(db, None, settings, user),
             "active_page": "ads",
         },
     )
@@ -401,6 +463,11 @@ async def ads_create(
 async def ads_edit(
     request: Request,
     ad_id: int,
+    # Какая карточка расписания отрендерена развёрнутой. Это базовый путь
+    # разворачивания без JavaScript (UI-SPEC §Interaction Contract): ссылка на
+    # редактор с этим параметром, сервер рендерит указанную карточку
+    # развёрнутой, остальные — свёрнутыми.
+    sched: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -420,7 +487,7 @@ async def ads_edit(
             "user": user,
             "is_admin": check_is_admin(user, settings),
             "ad": ad,
-            "editor": await _editor_context(db, ad, settings),
+            "editor": await _editor_context(db, ad, settings, user, sched),
             "active_page": "ads",
         },
     )
