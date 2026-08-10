@@ -1,3 +1,4 @@
+import re
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -17,6 +18,121 @@ from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
+
+# Признак «пришло из редактора объявления». Это ПРИЗНАК, а не адрес: значение
+# поля формы подконтрольно отправителю, и подстановка его в редирект как есть
+# была бы открытым редиректом (T-02-23) — страница увела бы пользователя на
+# чужой домен сразу после успешного сохранения. Адрес строит сервер сам, из
+# идентификатора объявления УЖЕ ПРОВЕРЕННОЙ на владение записи.
+RETURN_TO_EDITOR = "editor"
+
+# Формат значения времени: два числа через двоеточие в допустимых диапазонах.
+# Проверка стоит ДО вызова compute_next_run_at, который разбирает строку
+# `int(parts[0])` / `parts[1]` без всякой защиты: любое значение не этого
+# формата давало 500 на прямом POST мимо браузера (T-02-24, Pitfall 9).
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+# Время, которым заполняется только что добавленная таблетка. Пустое значение
+# хранить нельзя: обработчик отбрасывает пустые строки, и «+ ВРЕМЯ» без JS не
+# оставлял бы после себя ничего видимого.
+DEFAULT_TIME = "09:00"
+
+
+def _clean_times(values: list[str]) -> list[str]:
+    """Оставить только значения формата ЧЧ:ММ, сохранив порядок."""
+    return [v for v in values if _TIME_RE.match(v.strip())]
+
+
+def _clean_ints(values: list[str], low: int | None = None, high: int | None = None) -> list[int]:
+    """Привести к числам, отбросив непреобразуемые и вышедшие из диапазона.
+
+    Отбрасывание, а не отказ: список идентификаторов групп и дней приходит
+    повторяющимися полями формы, и одно испорченное значение не повод потерять
+    остальные. Без этой фильтрации `int(g)` бросал ValueError на любой строке —
+    то есть 500 вместо валидации (T-02-25).
+    """
+    cleaned: list[int] = []
+    for value in values:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            continue
+        if low is not None and number < low:
+            continue
+        if high is not None and number > high:
+            continue
+        cleaned.append(number)
+    return cleaned
+
+
+def _is_complete(
+    account_id: int | None,
+    group_ids: list[int],
+    days_of_week: list[int],
+    times_of_day: list[str],
+) -> bool:
+    """D-08: заполнено ли расписание настолько, чтобы его можно было включить.
+
+    Одно определение на все четыре обработчика и на разметку карточки
+    (app/templates/ads/includes/sched_card.html): второе разъехалось бы с
+    первым, и пользователь видел бы бейдж «Не заполнено» на расписании, которое
+    сервер считает полным.
+    """
+    return bool(account_id and group_ids and days_of_week and times_of_day)
+
+
+def _editor_redirect(form_data, ad_id: int | None, schedule_id: int | None = None):
+    """Куда вернуть пользователя после правки расписания.
+
+    Признак происхождения читается из формы, но АДРЕС строится здесь: из
+    `ad_id`, взятого из записи, владение которой уже подтверждено запросом.
+    Значение поля в адрес не попадает ни при каких условиях (T-02-23).
+
+    Без признака поведение прежнее — сводный список: сводная страница
+    продолжает работать ровно так, как работала.
+    """
+    if form_data.get("return_to") == RETURN_TO_EDITOR and ad_id is not None:
+        url = f"/ads/{ad_id}/edit"
+        if schedule_id is not None:
+            url += f"?sched={schedule_id}#sched-{schedule_id}"
+        return RedirectResponse(url=url, status_code=302)
+    return RedirectResponse(url="/schedules", status_code=302)
+
+
+def _apply_named_actions(
+    form_data,
+    group_ids: list[int],
+    days_of_week: list[int],
+    times_of_day: list[str],
+    available_group_ids: list[int],
+) -> tuple[list[int], list[int], list[str]]:
+    """Пресеты дней, групповое действие и работа со временами — БЕЗ JavaScript.
+
+    Каждый элемент управления карточки — ИМЕНОВАННАЯ кнопка отправки (образец —
+    `remove_image` в редакторе объявления). Обработка на сервере означает, что
+    базовый путь и улучшенный — один и тот же код: разойтись им негде, и
+    отключённый Alpine не превращает кнопку в молчаливую заглушку.
+    """
+    days_preset = form_data.get("days_preset")
+    if days_preset == "workdays":
+        days_of_week = [0, 1, 2, 3, 4]
+    elif days_preset == "everyday":
+        days_of_week = [0, 1, 2, 3, 4, 5, 6]
+
+    groups_preset = form_data.get("groups_preset")
+    if groups_preset == "all":
+        group_ids = list(available_group_ids)
+    elif groups_preset == "none":
+        group_ids = []
+
+    removed = form_data.get("remove_time")
+    if removed and removed in times_of_day:
+        # Ровно ОДНО вхождение: порядок остальных времён сохраняется.
+        times_of_day.remove(removed)
+    if "add_time" in form_data:
+        times_of_day = times_of_day + [DEFAULT_TIME]
+
+    return group_ids, days_of_week, times_of_day
 
 
 async def _owns_ad_and_account(
@@ -201,11 +317,37 @@ async def schedules_new(
     )
 
 
+async def _groups_of_account(
+    db: AsyncSession, user_id: int, account_id: int | None
+) -> list[int]:
+    """Идентификаторы групп, принадлежащих пользователю И этому аккаунту."""
+    if account_id is None:
+        return []
+    return list(
+        (
+            await db.execute(
+                select(Group.id).where(
+                    Group.account_id == account_id,
+                    Group.user_id == user_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
 @router.post("/schedules/new")
 async def schedules_create(
     request: Request,
     ad_id: int = Form(...),
-    account_id: int = Form(...),
+    # Аккаунт НЕОБЯЗАТЕЛЕН. При нескольких подключённых аккаунтах ни один не
+    # выбран заранее (UI-SPEC E4 zero-one-many), поэтому «+ РАСПИСАНИЕ» в
+    # редакторе создаёт расписание БЕЗ аккаунта; отказ формы на этом месте
+    # лишил бы пользователя единственного способа добавить карточку. Схема это
+    # уже допускает: account_id nullable с ON DELETE SET NULL (issue #35), и
+    # расписание без аккаунта по D-08 сохраняется выключенным.
+    account_id: int | None = Form(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -218,33 +360,40 @@ async def schedules_create(
     # `user_id`, поэтому пришедшие формой `ad_id` и `account_id` задают не только
     # содержание рассылки, но и её владельца: без запроса пользователь ставит
     # рассылку на чужое объявление и отправляет её через чужую сессию (CR-01).
+    #
+    # Признак происхождения на эту проверку не влияет НИКАК: он подконтролен
+    # отправителю ровно так же, как ad_id и account_id (T-02-26).
     if not await _owns_ad_and_account(db, user.id, ad_id, account_id):
         return RedirectResponse(url="/schedules", status_code=302)
 
     form_data = await request.form()
-    group_ids = [int(g) for g in form_data.getlist("group_ids")]
-    days_of_week = [int(d) for d in form_data.getlist("days_of_week")]
-    times_of_day = [t for t in form_data.getlist("times_of_day") if t]
+    # Фильтрация ДО приведения типов и ДО вычисления следующего запуска:
+    # клиентским данным в этой фазе не верят (D-13).
+    group_ids = _clean_ints(form_data.getlist("group_ids"))
+    days_of_week = _clean_ints(form_data.getlist("days_of_week"), low=0, high=6)
+    times_of_day = _clean_times(form_data.getlist("times_of_day"))
 
-    # Validate that all groups belong to the selected account
-    if group_ids:
-        valid_groups = (
-            await db.execute(
-                select(Group.id).where(
-                    Group.id.in_(group_ids),
-                    Group.account_id == account_id,
-                    Group.user_id == user.id,
-                )
-            )
-        ).scalars().all()
-        group_ids = [gid for gid in group_ids if gid in valid_groups]
+    available = await _groups_of_account(db, user.id, account_id)
+    group_ids, days_of_week, times_of_day = _apply_named_actions(
+        form_data, group_ids, days_of_week, times_of_day, available
+    )
+    # Группы обязаны принадлежать выбранному аккаунту: расписание не может нести
+    # группы другого аккаунта. Несоответствующие отбрасываются, и если по итогам
+    # список пуст — расписание сохраняется выключенным (D-08), а не молча
+    # активным с нулём групп (Pitfall 8).
+    group_ids = [gid for gid in group_ids if gid in available]
 
     tz = form_data.get("timezone", "UTC")
     if tz not in VALID_TIMEZONES:
         tz = "UTC"
 
-    next_run = compute_next_run_at(
-        days_of_week=days_of_week, times_of_day=times_of_day, tz_name=tz
+    complete = _is_complete(account_id, group_ids, days_of_week, times_of_day)
+    next_run = (
+        compute_next_run_at(
+            days_of_week=days_of_week, times_of_day=times_of_day, tz_name=tz
+        )
+        if complete
+        else None
     )
 
     schedule = Schedule(
@@ -254,11 +403,13 @@ async def schedules_create(
         days_of_week=days_of_week,
         times_of_day=times_of_day,
         timezone=tz,
+        is_active=complete,
         next_run_at=next_run,
     )
     db.add(schedule)
     await db.commit()
-    return RedirectResponse(url="/schedules", status_code=302)
+    await db.refresh(schedule)
+    return _editor_redirect(form_data, ad_id, schedule.id)
 
 
 @router.get("/schedules/{schedule_id}/edit", response_class=HTMLResponse)
@@ -321,7 +472,9 @@ async def schedules_update(
     request: Request,
     schedule_id: int,
     ad_id: int = Form(...),
-    account_id: int = Form(...),
+    # Необязательность — по той же причине, что и на создании: снятый выбор
+    # аккаунта это законное неполное состояние, а не отказ формы.
+    account_id: int | None = Form(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -346,22 +499,17 @@ async def schedules_update(
         return RedirectResponse(url="/schedules", status_code=302)
 
     form_data = await request.form()
-    group_ids = [int(g) for g in form_data.getlist("group_ids")]
-    days_of_week = [int(d) for d in form_data.getlist("days_of_week")]
-    times_of_day = [t for t in form_data.getlist("times_of_day") if t]
+    group_ids = _clean_ints(form_data.getlist("group_ids"))
+    days_of_week = _clean_ints(form_data.getlist("days_of_week"), low=0, high=6)
+    times_of_day = _clean_times(form_data.getlist("times_of_day"))
 
-    # Validate that all groups belong to the selected account
-    if group_ids:
-        valid_groups = (
-            await db.execute(
-                select(Group.id).where(
-                    Group.id.in_(group_ids),
-                    Group.account_id == account_id,
-                    Group.user_id == user.id,
-                )
-            )
-        ).scalars().all()
-        group_ids = [gid for gid in group_ids if gid in valid_groups]
+    available = await _groups_of_account(db, user.id, account_id)
+    group_ids, days_of_week, times_of_day = _apply_named_actions(
+        form_data, group_ids, days_of_week, times_of_day, available
+    )
+    # Смена аккаунта очищает ранее выбранные группы: расписание не может нести
+    # группы другого аккаунта.
+    group_ids = [gid for gid in group_ids if gid in available]
 
     tz = form_data.get("timezone", schedule.timezone)
     if tz not in VALID_TIMEZONES:
@@ -373,11 +521,22 @@ async def schedules_update(
     schedule.days_of_week = days_of_week
     schedule.times_of_day = times_of_day
     schedule.timezone = tz
-    schedule.next_run_at = compute_next_run_at(
-        days_of_week=days_of_week, times_of_day=times_of_day, tz_name=tz
-    )
+    # Неполное расписание выключается ВСЕГДА (D-08). Полное — сохраняет своё
+    # состояние: правка не имеет права снимать паузу, поставленную вручную,
+    # иначе тумблер переставал бы что-либо значить.
+    if not _is_complete(account_id, group_ids, days_of_week, times_of_day):
+        schedule.is_active = False
+        schedule.next_run_at = None
+    else:
+        schedule.next_run_at = (
+            compute_next_run_at(
+                days_of_week=days_of_week, times_of_day=times_of_day, tz_name=tz
+            )
+            if schedule.is_active
+            else None
+        )
     await db.commit()
-    return RedirectResponse(url="/schedules", status_code=302)
+    return _editor_redirect(form_data, ad_id, schedule_id)
 
 
 @router.post("/schedules/{schedule_id}/toggle")
@@ -397,12 +556,18 @@ async def schedules_toggle(
         .where(Schedule.id == schedule_id, Ad.user_id == user.id)
     )
     schedule = result.scalar_one_or_none()
-    # issue #35: отвязанное расписание нельзя возобновить, пока пользователь не
-    # привяжет аккаунт на форме редактирования. Пауза активного не блокируется.
-    resume_blocked = (
-        schedule is not None
-        and not schedule.is_active
-        and schedule.account_id is None
+    # issue #35 и D-08: НЕПОЛНОЕ расписание нельзя возобновить, пока пользователь
+    # не дозаполнит его в редакторе объявления. Отвязанное после удаления
+    # аккаунта — частный случай той же неполноты. Пауза активного не
+    # блокируется: право поставить на паузу не зависит от заполненности.
+    #
+    # Тумблер неполного расписания размечен недоступным, но разметка — не точка
+    # принуждения: прямой POST на этот маршрут обязан получить тот же отказ.
+    resume_blocked = schedule is not None and not schedule.is_active and not _is_complete(
+        schedule.account_id,
+        schedule.group_ids or [],
+        schedule.days_of_week or [],
+        schedule.times_of_day or [],
     )
     if schedule and not resume_blocked:
         schedule.is_active = not schedule.is_active
@@ -415,7 +580,10 @@ async def schedules_toggle(
         else:
             schedule.next_run_at = None
         await db.commit()
-    return RedirectResponse(url="/schedules", status_code=302)
+    form_data = await request.form()
+    return _editor_redirect(
+        form_data, schedule.ad_id if schedule else None, schedule_id
+    )
 
 
 @router.post("/schedules/{schedule_id}/delete")
@@ -435,7 +603,12 @@ async def schedules_delete(
         .where(Schedule.id == schedule_id, Ad.user_id == user.id)
     )
     schedule = result.scalar_one_or_none()
+    # Идентификатор объявления снимается ДО удаления: после него читать его уже
+    # не с чего, а адрес возврата строится именно из него.
+    ad_id = schedule.ad_id if schedule else None
     if schedule:
         await db.delete(schedule)
         await db.commit()
-    return RedirectResponse(url="/schedules", status_code=302)
+    form_data = await request.form()
+    # Параметра выбранного расписания в адресе нет: разворачивать больше нечего.
+    return _editor_redirect(form_data, ad_id)
