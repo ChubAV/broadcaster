@@ -1157,12 +1157,14 @@ a:hover { color: var(--accent-link-hover); }
    раздела 4 нет. Всё остальное на экране собрано из card / field / button /
    badge / modal / empty_state и переиспользуется БЕЗ изменений.
 
-   Здесь лежит половина раздела, относящаяся к РЕДАКТОРУ (План 02-04). Карточка
-   расписания приходит планом 02-05, сводный список — планом 02-07.
+   Первая половина раздела относится к РЕДАКТОРУ (План 02-04), вторая — к
+   КАРТОЧКЕ РАСПИСАНИЯ в редакторе (План 02-05). Сводный список расписаний
+   приходит планом 02-07.
 
    Значения — токены раздела 1: ни одного нового цвета, радиуса или кегля.
    Фиксированные размеры кратны четырём: плитка вложения 88, миниатюра
-   предпросмотра 120.
+   предпросмотра 120, ячейка дня 44×36 (40×36 на ≤400px), таблетка времени 36,
+   чипс аккаунта 44, строка выбора группы 40.
    -------------------------------------------------------------------------- */
 
 /* Сетка редактора. Переопределения на ≤900px уже лежат в разделе 2 со времён
@@ -1308,6 +1310,168 @@ a:hover { color: var(--accent-link-hover); }
   white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
 }
 .preview__time { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+
+/* Карточка расписания в редакторе (План 02-05) ----------------------------- */
+/* Полосы прогресса внутри карточки расписания НЕТ и быть не может (D-17): в
+   макете она показывает выдуманный процент, источника данных для которого в
+   схеме не существует. Селектора под неё в этом разделе не появляется. */
+[data-sched-list] { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+[data-sched-card] {
+  display: flex; flex-direction: column; min-width: 0;
+  border-radius: var(--r-xl);
+  background: var(--surface-pill); border: 1px solid var(--border-input);
+}
+
+/* Шапка — СТРОКА, которая не переносится на вторую строку: сводка обрезается
+   многоточием, а тумблер и элемент разворачивания сохраняют свои позиции
+   (UI-SPEC E7 overflow). Высота строки ≥40px — это и есть компенсация
+   унаследованной дорожки тумблера высотой 22px: областью нажатия является вся
+   подпись, а не дорожка. */
+.sched-card__head {
+  display: flex; align-items: center; gap: 12px;
+  min-width: 0; min-height: 40px; padding: 12px 16px;
+}
+/* Сводка забирает всё свободное место и обрезается ПЕРВОЙ. min-width: 0 —
+   обязателен: без него flex-элемент не сжимается ниже своего содержимого и
+   выталкивает тумблер из шапки. */
+.sched-card__sum {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--fs-lg); color: var(--text-secondary);
+}
+.sched-card__sum > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sched-card__head > .toggle,
+.sched-card__head > form,
+.sched-card__head > .badge,
+.sched-card__head > .sched-card__expand { flex: none; }
+/* Строка тумблера в шапке — цель касания высотой не меньше 40px. */
+.sched-card__head .toggle { min-height: 40px; }
+
+.sched-card__expand {
+  display: inline-flex; align-items: center; min-height: 36px; padding: 0 8px;
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  letter-spacing: .08em; color: var(--text-muted); text-decoration: none;
+}
+.sched-card__expand:hover { color: var(--text); }
+.sched-card__expand:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* Тело развёрнутой карточки: внутренний отступ 24, промежутки между
+   подблоками 16 (UI-SPEC §Spacing Scale). */
+.sched-card__body {
+  display: flex; flex-direction: column; gap: 16px;
+  min-width: 0; padding: 24px; border-top: 1px solid var(--border-hair);
+}
+.sched-card__block { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.sched-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sched-card__tz { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+.sched-card__hint { font-size: var(--fs-lg); color: var(--warn); }
+
+/* Один примитив в трёх размерах ------------------------------------------- */
+/* .chip обслуживает чипсы аккаунтов, ячейки дней и таблетки времени. Отдельных
+   классов под каждое не заводится: три набора правил, отличающихся только
+   размером, разъехались бы при первой же правке состояния «выбрано».
+   Полоса ПЕРЕНОСИТСЯ на любой ширине — горизонтального скролла и обрезки не
+   появляется нигде (UI-SPEC §Responsive Contract). */
+.chip-set { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+
+.chip {
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-width: 0; max-width: 100%; height: 44px; padding: 0 12px;
+  border-radius: var(--r-lg);
+  background: var(--surface-input); border: 1px solid var(--border-input);
+  color: var(--text-secondary); font-size: var(--fs-lg);
+  cursor: pointer;
+}
+.chip:hover { color: var(--text); border-color: var(--border-control-strong); }
+/* Настоящий input, визуально скрытый ЗА подписью: состояние читается формой и
+   программой чтения с экрана, работает с клавиатуры и уходит без JavaScript.
+   Не display:none — скрытый так элемент выпадает из обхода по Tab. */
+.chip__input {
+  position: absolute; width: 1px; height: 1px; margin: 0;
+  opacity: 0; pointer-events: none;
+}
+.chip__label {
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.chip:has(.chip__input:checked), .chip--on {
+  color: var(--text); border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+}
+.chip:has(.chip__input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.chip:has(.chip__input:disabled) { opacity: .45; cursor: not-allowed; }
+
+/* Сетка дней: семь ячеек 44×36, переносящихся на узкой ширине. */
+.day-grid { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.day-grid .chip {
+  width: 44px; height: 36px; padding: 0;
+  font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: .04em;
+}
+
+/* Таблетка времени: поле ввода времени плюс кнопка убирания. */
+.time-set { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.time-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 36px; padding: 0 4px 0 8px;
+  border-radius: var(--r-lg);
+  background: var(--surface-input); border: 1px solid var(--border-input);
+}
+.time-pill__input {
+  height: 28px; padding: 0; border: 0; background: transparent;
+  color: var(--text); font-family: var(--font-mono); font-size: var(--fs-xs);
+}
+.time-pill__input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* 28×28 — минимальная сторона внутри таблетки высотой 36; сама таблетка
+   остаётся целью касания. */
+.time-pill__remove {
+  width: 28px; height: 28px; padding: 0; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: var(--r-sm); background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-mono); font-size: var(--fs-lg); line-height: 1;
+  cursor: pointer;
+}
+.time-pill__remove:hover { color: var(--danger); }
+.time-pill__remove:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+
+/* Выбор групп: строки-флажки высотой 40 ------------------------------------ */
+/* Внутреннего скролла и кнопки «показать ещё» здесь НЕТ (UI-SPEC E5 overflow):
+   спрятанная группа не была бы выбрана, и рассылка тихо ушла бы не туда. */
+.group-pick { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.group-pick__row {
+  position: relative;
+  display: flex; align-items: center; gap: 8px;
+  min-height: 40px; min-width: 0; padding: 0 8px;
+  border-radius: var(--r-md);
+  background: var(--surface-input); border: 1px solid var(--border-input);
+  cursor: pointer;
+}
+.group-pick__row:hover { border-color: var(--border-control-strong); }
+.group-pick__box {
+  flex: none; width: 18px; height: 18px; margin: 0;
+  accent-color: var(--accent); cursor: pointer;
+}
+.group-pick__box:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* Имя группы приходит из внешнего мессенджера и не ограничено ничем: без
+   min-width: 0 оно вытолкнуло бы счётчик за пределы строки. */
+.group-pick__name {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--fs-lg); color: var(--text-secondary);
+}
+.group-pick__count {
+  flex: none;
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted);
+}
+
+@media (max-width: 400px) {
+  /* Ячейка дня 44 → 40: семь ячеек по 44 с промежутками 8 не помещаются в
+     320px, и сетка переносилась бы на две строки уже на первом дне. */
+  .day-grid .chip { width: 40px; }
+}
 
 /* Сводка «ключ — значение» ------------------------------------------------- */
 /* .kv — СТРОКА. Направляющая черта забирает свободное место, поэтому длинное
