@@ -233,3 +233,107 @@ async def test_page_update_accepts_own_ad_and_account(
     ).scalar_one()
     assert stored.ad_id == other_own_ad
     assert stored.times_of_day == ["18:30"]
+
+
+# --- План 02-05: путь из редактора не обходит проверки владения (T-02-26) -----
+#
+# Новый путь приходит на ТЕ ЖЕ маршруты с тем же набором идентификаторов —
+# добавляется только признак происхождения. Соблазн ветки «пришло из редактора,
+# значит своё» здесь и закрывается: признак подконтролен отправителю ровно так
+# же, как ad_id и account_id, и доверия не несёт.
+
+
+def _editor_form(ad_id: int, account_id: int) -> str:
+    return urlencode(
+        [
+            ("ad_id", str(ad_id)),
+            ("account_id", str(account_id)),
+            ("days_of_week", "2"),
+            ("times_of_day", "18:30"),
+            ("timezone", "UTC"),
+            ("return_to", "editor"),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_editor_path_rejects_foreign_ad(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, stranger: User
+):
+    foreign_ad = await _seed_ad(db_session, stranger.id, "Чужое объявление")
+    own_account = await _seed_account(db_session, owner.id)
+
+    response = await authed_client.post(
+        "/schedules/new",
+        content=_editor_form(foreign_ad, own_account),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert await _schedules(db_session) == []
+    # Отказ уводит на сводный список: адрес редактора чужого объявления
+    # построить не из чего — запись владением не подтверждена.
+    assert response.headers["location"] == "/schedules"
+
+
+@pytest.mark.asyncio
+async def test_editor_path_rejects_foreign_account(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, stranger: User
+):
+    own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
+    foreign_account = await _seed_account(db_session, stranger.id)
+
+    response = await authed_client.post(
+        "/schedules/new",
+        content=_editor_form(own_ad, foreign_account),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert await _schedules(db_session) == []
+
+
+@pytest.mark.asyncio
+async def test_editor_path_rejects_swapping_in_a_foreign_ad(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, stranger: User
+):
+    own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
+    own_account = await _seed_account(db_session, owner.id)
+    schedule_id = await _seed_schedule(db_session, own_ad, own_account)
+    foreign_ad = await _seed_ad(db_session, stranger.id, "Чужое объявление")
+
+    response = await authed_client.post(
+        f"/schedules/{schedule_id}/edit",
+        content=_editor_form(foreign_ad, own_account),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    db_session.expire_all()
+    stored = (
+        await db_session.execute(select(Schedule).where(Schedule.id == schedule_id))
+    ).scalar_one()
+    assert stored.ad_id == own_ad
+
+
+@pytest.mark.asyncio
+async def test_editor_path_cannot_delete_a_foreign_schedule(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, stranger: User
+):
+    foreign_ad = await _seed_ad(db_session, stranger.id, "Чужое объявление")
+    foreign_account = await _seed_account(db_session, stranger.id)
+    foreign_schedule = await _seed_schedule(db_session, foreign_ad, foreign_account)
+
+    response = await authed_client.post(
+        f"/schedules/{foreign_schedule}/delete",
+        content=urlencode([("return_to", "editor")]),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/schedules"
+    assert len(await _schedules(db_session)) == 1
