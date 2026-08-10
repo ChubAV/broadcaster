@@ -198,3 +198,63 @@ async def test_create_schedule_invalid_timezone(client, auth_headers):
 async def test_unauthenticated_request(client):
     response = await client.get("/api/schedules")
     assert response.status_code == 401
+
+
+# --- CR-01 / D-20: владение аккаунтом на JSON-входе ----------------------------
+#
+# Владение объявлением здесь проверялось с самого начала, владение аккаунтом —
+# нет. Асимметрия и есть находка: чужой `account_id` принимался, и рассылка
+# уходила бы через чужую подключённую сессию мессенджера.
+
+
+@pytest.mark.asyncio
+async def test_create_schedule_rejects_foreign_account(
+    client, auth_headers, db_session
+):
+    from sqlalchemy import select
+
+    from app.models.messenger_account import MessengerAccount
+    from app.models.schedule import Schedule
+    from app.models.user import User
+
+    ad_id, _ = await setup_ad_and_account(client, auth_headers)
+
+    stranger = User(email="stranger@test.com", password_hash="x", name="Stranger")
+    db_session.add(stranger)
+    await db_session.commit()
+    await db_session.refresh(stranger)
+    foreign_account = MessengerAccount(
+        user_id=stranger.id, type="tg_user", credentials="creds"
+    )
+    db_session.add(foreign_account)
+    await db_session.commit()
+    await db_session.refresh(foreign_account)
+    foreign_account_id = foreign_account.id
+
+    response = await client.post("/api/schedules", json={
+        "ad_id": ad_id,
+        "account_id": foreign_account_id,
+        "group_ids": [1],
+        "days_of_week": [0],
+        "times_of_day": ["09:00"],
+    }, headers=auth_headers)
+
+    assert response.status_code == 404
+    db_session.expire_all()
+    stored = (await db_session.execute(select(Schedule))).scalars().all()
+    assert list(stored) == []
+
+
+@pytest.mark.asyncio
+async def test_create_schedule_rejects_nonexistent_account(client, auth_headers):
+    ad_id, _ = await setup_ad_and_account(client, auth_headers)
+
+    response = await client.post("/api/schedules", json={
+        "ad_id": ad_id,
+        "account_id": 999999,
+        "group_ids": [1],
+        "days_of_week": [0],
+        "times_of_day": ["09:00"],
+    }, headers=auth_headers)
+
+    assert response.status_code == 404

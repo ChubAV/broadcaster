@@ -19,6 +19,41 @@ router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
 
 
+async def _owns_ad_and_account(
+    db: AsyncSession, user_id: int, ad_id: int, account_id: int | None
+) -> bool:
+    """Проверить владение объявлением и аккаунтом мессенджера запросом.
+
+    Владение проверяется запросом со связкой по `user_id`, а не выборкой строки
+    с последующим сравнением: так «нет такой строки» и «строка чужая» дают один
+    и тот же исход, и ветку невозможно забыть.
+
+    `account_id` в схеме nullable с `ON DELETE SET NULL` (issue #35): пустое
+    значение — законное состояние отвязанного расписания, поэтому проверка
+    владения применяется только к непустому значению.
+    """
+    own_ad = (
+        await db.execute(
+            select(Ad.id).where(Ad.id == ad_id, Ad.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if own_ad is None:
+        return False
+
+    if account_id is None:
+        return True
+
+    own_account = (
+        await db.execute(
+            select(MessengerAccount.id).where(
+                MessengerAccount.id == account_id,
+                MessengerAccount.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    return own_account is not None
+
+
 def _build_schedule_items(result, user, tz):
     """Build schedule items with next_run_local from raw query result."""
     items = [
@@ -175,6 +210,14 @@ async def schedules_create(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
+    # Владение объявлением и аккаунтом проверяется запросом, а не последующим
+    # `if`, — по образцу проверки групп ниже. `Schedule` не имеет собственного
+    # `user_id`, поэтому пришедшие формой `ad_id` и `account_id` задают не только
+    # содержание рассылки, но и её владельца: без запроса пользователь ставит
+    # рассылку на чужое объявление и отправляет её через чужую сессию (CR-01).
+    if not await _owns_ad_and_account(db, user.id, ad_id, account_id):
+        return RedirectResponse(url="/schedules", status_code=302)
+
     form_data = await request.form()
     group_ids = [int(g) for g in form_data.getlist("group_ids")]
     days_of_week = [int(d) for d in form_data.getlist("days_of_week")]
@@ -287,6 +330,13 @@ async def schedules_update(
     )
     schedule = result.scalar_one_or_none()
     if not schedule:
+        return RedirectResponse(url="/schedules", status_code=302)
+
+    # Владение самим расписанием проверено выше, но `ad_id` и `account_id`
+    # приходят формой заново: без этой проверки своё расписание переставляется на
+    # чужое объявление и чужой аккаунт (CR-01). Проверка стоит до первой записи
+    # в модель, иначе отказ оставил бы запись частично изменённой.
+    if not await _owns_ad_and_account(db, user.id, ad_id, account_id):
         return RedirectResponse(url="/schedules", status_code=302)
 
     form_data = await request.form()

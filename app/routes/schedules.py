@@ -2,10 +2,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import VALID_TIMEZONES
 from app.dependencies import get_current_user_id, get_db
+from app.models.messenger_account import MessengerAccount
 from app.repositories.ad import AdRepository
 from app.repositories.schedule import ScheduleRepository
 from app.services.schedule_service import compute_next_run_at
@@ -70,6 +72,25 @@ async def create_schedule(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Ad not found",
+        )
+
+    # Владение объявлением проверялось здесь с самого начала, владение аккаунтом
+    # — нет; асимметрия и была находкой CR-01/D-20: чужой `account_id`
+    # принимался, и рассылка ушла бы через чужую подключённую сессию мессенджера.
+    # Форма проверки — та же, что строкой выше: чужой идентификатор неотличим от
+    # несуществующего и даёт 404, не подтверждая существование чужой записи.
+    account = (
+        await db.execute(
+            select(MessengerAccount.id).where(
+                MessengerAccount.id == data.account_id,
+                MessengerAccount.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Account not found",
         )
 
     next_run = compute_next_run_at(
