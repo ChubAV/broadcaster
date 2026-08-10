@@ -66,7 +66,16 @@ services:
   web:
     <<: *app-base
     entrypoint: ["./entrypoint.sh"]
-    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000
+    # --forwarded-allow-ips обязателен. ProxyHeadersMiddleware у uvicorn включён
+    # по умолчанию, но доверяет только 127.0.0.1, а nginx — отдельный контейнер и
+    # приходит с адреса docker-сети broadcaster. Без флага X-Forwarded-Proto: https
+    # молча отбрасывается, scope["scheme"] остаётся http, и url_for('static', …)
+    # выдаёт http://-ссылки на HTTPS-странице (Mixed Content).
+    # Значение "*", а не CIDR: подсеть bridge-сети docker назначает динамически,
+    # зашитый диапазон однажды разойдётся с реальностью и молча вернёт тот же баг.
+    # Это безопасно, потому что порт 8000 наружу не публикуется (expose, не ports)
+    # и единственный вход в контейнер — nginx.
+    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --forwarded-allow-ips=*
     container_name: web-broadcaster
     expose:
       - "8000"
