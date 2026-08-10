@@ -5,16 +5,16 @@ milestone_name: Redesign
 current_phase: 2
 current_phase_name: Объявления и расписания
 status: Phase 01 shipped — pushed to origin/master (no PR)
-stopped_at: Phase 2 context gathered
-last_updated: "2026-08-10T05:42:52.963Z"
+stopped_at: Phase 2 UI-SPEC approved
+last_updated: "2026-08-10T07:37:20.869Z"
 last_activity: 2026-08-10
+last_activity_desc: Phase 01 complete, transitioned to Phase 2
 progress:
   total_phases: 6
   completed_phases: 1
-  total_plans: 13
+  total_plans: 20
   completed_plans: 13
   percent: 17
-last_activity_desc: Phase 01 complete, transitioned to Phase 2
 ---
 
 # Project State
@@ -31,7 +31,7 @@ See: .planning/PROJECT.md (updated 2026-08-10)
 Phase: 2 — Объявления и расписания
 Plan: Not started
 Status: Phase 01 shipped — pushed to origin/master (no PR)
-Last activity: 2026-08-10
+Last activity: 2026-08-10 — Phase 2 planning complete
 
 Progress: [████████████████████] 13/13 plans (100%) — Phase 1 of 6 complete (17% фаз milestone v2.0)
 
@@ -103,6 +103,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-10T05:42:52.929Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-obyavleniya-i-raspisaniya/02-CONTEXT.md
+Last session: 2026-08-10T06:02:53.672Z
+Stopped at: Phase 2 UI-SPEC approved
+Resume file: .planning/phases/02-obyavleniya-i-raspisaniya/02-UI-SPEC.md
