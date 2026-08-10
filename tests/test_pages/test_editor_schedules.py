@@ -19,6 +19,7 @@ tests/test_pages/test_editor_schedules.py -q` завершается с кодо
   (T-02-24, T-02-25).
 """
 
+import re
 from urllib.parse import urlencode
 
 import pytest
@@ -663,6 +664,242 @@ async def test_malformed_time_on_update_does_not_crash(
 
 
 # --- Старый путь не тронут ----------------------------------------------------
+
+
+# --- Секция расписаний в разметке редактора (Задача 3) ------------------------
+
+
+FORM_OPEN_RE = re.compile(r"<form\b", re.I)
+FORM_CLOSE_RE = re.compile(r"</form\s*>", re.I)
+
+
+def _max_form_nesting(html: str) -> int:
+    """Наибольшая глубина вложенности форм в разметке.
+
+    Вложенную форму браузер молча ОТБРАСЫВАЕТ: симптом — неработающие кнопки на
+    карточках расписаний, а не ошибка. Проверка идёт по отрендеренной выдаче, а
+    не по файлу: форма могла бы приехать из макроса.
+    """
+    depth = 0
+    peak = 0
+    for match in re.finditer(r"<form\b|</form\s*>", html, re.I):
+        if match.group(0).startswith("</"):
+            depth = max(0, depth - 1)
+        else:
+            depth += 1
+            peak = max(peak, depth)
+    return peak
+
+
+@pytest.mark.asyncio
+async def test_editor_without_schedules_names_the_consequence(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Пустое состояние называет ПОСЛЕДСТВИЕ, а не только отсутствие."""
+    ad = await _seed_ad(db_session, owner.id)
+    await _seed_account(db_session, owner.id)
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert "Расписаний пока нет — объявление не будет отправляться" in html
+    assert "+ ДОБАВИТЬ ПЕРВОЕ" in html
+
+
+@pytest.mark.asyncio
+async def test_editor_card_renders_data(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Карточка-макрос отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+
+    Импортированным макросам Jinja контекст вызывающего не передаёт: ошибка в
+    имени параметра оставит страницу валидной, отдаст 200 и нарисует пустую
+    карточку. Утверждение на статус ответа такую поломку не ловит.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    group = await _seed_group(db_session, owner.id, account.id, "Уникальная группа карточки")
+    schedule = await _seed_schedule(
+        db_session,
+        ad.id,
+        account.id,
+        group_ids=[group.id],
+        days=[0, 2],
+        times=["09:30", "18:45"],
+    )
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    assert f"Telegram #{account.id}" in html, "подпись аккаунта не отрисована"
+    assert "09:30" in html and "18:45" in html, "времена не отрисованы"
+    assert "Уникальная группа карточки" in html, "имя группы не отрисовано"
+    assert f"/schedules/{schedule.id}/edit" in html
+    assert f"/schedules/{schedule.id}/toggle" in html
+
+
+@pytest.mark.asyncio
+async def test_editor_markup_has_no_nested_forms(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Ни одна форма не открыта внутри другой — ни в одном состоянии секции."""
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    group = await _seed_group(db_session, owner.id, account.id)
+    schedule = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[group.id]
+    )
+
+    for url in (
+        "/ads/new",
+        f"/ads/{ad.id}/edit",
+        f"/ads/{ad.id}/edit?sched={schedule.id}",
+    ):
+        html = (await authed_client.get(url)).text
+        assert _max_form_nesting(html) == 1, f"{url}: в разметке есть вложенные формы"
+
+
+@pytest.mark.asyncio
+async def test_schedule_delete_is_a_real_form(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Деградация без Alpine: удаление остаётся настоящей формой с POST."""
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    assert re.search(
+        rf'<form[^>]*method="post"[^>]*action="/schedules/{schedule.id}/delete"'
+        rf'|<form[^>]*action="/schedules/{schedule.id}/delete"[^>]*method="post"',
+        html,
+    ), "путь удаления расписания перестал быть настоящей формой"
+    assert "confirm(" not in html
+    assert "onsubmit" not in html
+
+
+@pytest.mark.asyncio
+async def test_selected_schedule_is_the_expanded_one(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Параметр выбранного расписания разворачивает ИМЕННО эту карточку.
+
+    Развёрнута одновременно одна: при многих расписаниях иначе получилась бы
+    стена одновременно открытых форм.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    first = await _seed_schedule(db_session, ad.id, account.id)
+    second = await _seed_schedule(db_session, ad.id, account.id, times=["21:00"])
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={second.id}")).text
+
+    assert f'action="/schedules/{second.id}/edit"' in html, (
+        "выбранная карточка не развёрнута: формы сохранения в разметке нет"
+    )
+    assert f'action="/schedules/{first.id}/edit"' not in html, (
+        "невыбранная карточка тоже развёрнута"
+    )
+
+    collapsed = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+    assert f'action="/schedules/{first.id}/edit"' not in collapsed
+    assert f'action="/schedules/{second.id}/edit"' not in collapsed
+
+
+@pytest.mark.asyncio
+async def test_user_without_accounts_is_offered_to_connect_one(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Ни одного аккаунта — подсказка со ссылкой в раздел, а не пустая полоса."""
+    ad = await _seed_ad(db_session, owner.id)
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert "Сначала подключите аккаунт мессенджера" in html
+    assert "Без аккаунта расписание отправлять некуда" in html
+    assert 'href="/accounts"' in html
+
+
+@pytest.mark.asyncio
+async def test_account_without_groups_says_so(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Аккаунт без групп — названная причина, а не пустой блок."""
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    assert "У выбранного аккаунта нет подключённых групп" in html
+    # Тумблер неполного расписания недоступен (D-08)
+    assert "disabled" in html.split(f"/schedules/{schedule.id}/toggle")[1][:400]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "count,expected",
+    [(1, "1 расписание"), (3, "3 расписания"), (5, "5 расписаний")],
+)
+async def test_section_caption_is_declined(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    count: int,
+    expected: str,
+):
+    """«1 расписаний» — заметный дефект копирайтинга; подпись СКЛОНЯЕТСЯ."""
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    for _ in range(count):
+        await _seed_schedule(db_session, ad.id, account.id)
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert expected in html, f"подпись секции не склонена для {count}"
+
+
+@pytest.mark.asyncio
+async def test_add_schedule_form_preselects_a_single_account(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Единственный аккаунт выбран заранее; при нескольких — ни один.
+
+    Заставлять выбирать из одного варианта — лишний шаг; выбирать за
+    пользователя из нескольких — решать за него, куда уйдёт рассылка.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    only = await _seed_account(db_session, owner.id)
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+    add_form = html[html.index('action="/schedules/new"'):]
+    add_form = add_form[: add_form.index("</form>")]
+    assert f'name="account_id" value="{only.id}"' in add_form
+
+    await _seed_account(db_session, owner.id, type_="wa")
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+    add_form = html[html.index('action="/schedules/new"'):]
+    add_form = add_form[: add_form.index("</form>")]
+    assert 'name="account_id"' not in add_form
+
+
+@pytest.mark.asyncio
+async def test_editor_schedule_section_is_a_sibling_of_the_ad_form(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Секция расписаний стоит ПОСЛЕ закрытия формы объявления.
+
+    Проверка позиционная, а не «нет вложенных форм»: последнее верно и тогда,
+    когда секция уехала выше формы и потеряла свой порядок чтения на узкой
+    ширине (D-14, порядок разметки — порядок чтения).
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    await _seed_account(db_session, owner.id)
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    ad_form_close = html.index("</form>", html.index('id="ad-form"'))
+    section = html.index('action="/schedules/new"')
+    assert ad_form_close < section, "секция расписаний оказалась внутри формы объявления"
 
 
 @pytest.mark.asyncio
