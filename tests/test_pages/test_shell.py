@@ -76,6 +76,7 @@ async def test_profile_renders_new_shell(authed_client: AsyncClient):
 SHELL_ROUTES = (
     "/dashboard",
     "/ads",
+    "/ads/new",
     "/accounts",
     "/accounts/connect/tg_user",
     "/accounts/connect/wa",
@@ -102,13 +103,17 @@ PARTIAL_ROUTES = (
     "/history/partial",
 )
 
-# ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ ОБХОДА. /ads/new в тестовой среде отдаёт 500 и в обход
-# не включён. Причина — не вёрстка: глобал шаблонов s3_public_url в
-# app/pages/common.py:38 вызывает get_settings() в обход подмены зависимостей,
-# и Settings() собирается заново из окружения. Без .env обязательные поля
-# отсутствуют — ValidationError. Дефект существует на базовом коммите фазы,
-# перевёрсткой не внесён и лежит вне файлов Плана 08; записан в
-# deferred-items.md. Сама страница мигрирована Планом 03 и в бою рендерится.
+# ОГРАНИЧЕНИЕ ОБХОДА СНЯТО (Фаза 2, план 02-01). Раньше /ads/new в тестовой
+# среде отдавал 500 и в обход не включался: глобал шаблонов s3_public_url
+# вызывал get_settings() в обход подмены зависимостей, Settings() собирался
+# заново из окружения, и без .env обязательные поля отсутствовали —
+# ValidationError. Глобалы изображений теперь привязываются к настройкам
+# приложения через bind_image_url_globals в create_app (D-21), поэтому
+# страница вернулась в SHELL_ROUTES наравне с остальными.
+#
+# Адрес /schedules/new остаётся в обходе до плана 02-06, который сносит
+# отдельные страницы расписаний; путь создания расписания в любом коммите
+# фазы держит tests/test_pages/test_schedule_creation_path_exists.py (SC-3).
 
 EXTERNAL_HOSTS = (
     "cdn.tailwindcss.com",

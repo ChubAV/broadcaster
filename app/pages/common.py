@@ -7,7 +7,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.models.ad import Ad
 from app.models.balance_transaction import BalanceTransaction
 from app.models.message_balance import MessageBalance
@@ -23,19 +23,53 @@ _templates_dir = Path(__file__).resolve().parent.parent / "templates"
 _static_dir = Path(__file__).resolve().parent.parent / "static"
 templates = Jinja2Templates(directory=str(_templates_dir))
 
-# Register get_image_url as Jinja2 global so templates can use {{ get_image_url(key) }}
-def _resolve_image_url(key: str) -> str:
+# Глобалы изображений привязываются к настройкам ПРИЛОЖЕНИЯ, а не к окружению
+# процесса (D-21). Раньше все три вызывали get_settings() — то есть собирали
+# Settings() из `.env` рабочего каталога в обход create_app(settings=...) и
+# dependency_overrides. Следствий было два: базовый URL приезжал из окружения
+# мимо подменённых настроек, а без файла `.env` рендер /ads/new падал
+# ValidationError на обязательных полях (T-02-02).
+#
+# Почему не параметрическая инъекция по образцу format_datetime_for_user.
+# ad_card — это МАКРОС (app/templates/ads/includes/ad_card.html:25), а
+# импортированным макросам Jinja контекст вызывающего не передаёт. Передача
+# базового URL параметром потребовала бы менять сигнатуру макроса и все его
+# вызовы в ads/list.html и ads/partial_cards.html, то есть трогать разметку
+# списка ради починки настроек. Привязка на уровне create_app чинит ровно
+# заявленный дефект и не касается ни одного шаблона.
+#
+# ОГРАНИЧЕНИЕ: templates — модульный синглтон, общий на процесс, поэтому
+# привязка глобальна и последний create_app выигрывает. Для одного приложения
+# на процесс (бой) и для теста, создающего своё приложение в фикстуре, этого
+# достаточно. Разведение окружений Jinja по приложениям — архитектурная
+# правка, выходящая за границы этого плана.
+def _resolve_image_url(key: str, s3_public_url: str) -> str:
     """Return key as-is if it's already a full URL, else build S3 URL."""
     if not key:
         return ""
     if key.startswith("http://") or key.startswith("https://"):
         return key
-    return get_image_url(key, get_settings().s3_public_url)
+    return get_image_url(key, s3_public_url)
 
 
-templates.env.globals["get_image_url"] = lambda key: get_image_url(key, get_settings().s3_public_url)
-templates.env.globals["resolve_image_url"] = _resolve_image_url
-templates.env.globals["s3_public_url"] = lambda: get_settings().s3_public_url
+def _bind_image_url_globals(s3_public_url: str) -> None:
+    """Register the three image globals closed over an explicit base URL."""
+    templates.env.globals["get_image_url"] = lambda key: get_image_url(key, s3_public_url)
+    templates.env.globals["resolve_image_url"] = lambda key: _resolve_image_url(key, s3_public_url)
+    templates.env.globals["s3_public_url"] = lambda: s3_public_url
+
+
+def bind_image_url_globals(settings: Settings) -> None:
+    """Bind image template globals to the settings the app actually owns.
+
+    Вызывается из create_app (app/main.py) сразу после разрешения settings.
+    """
+    _bind_image_url_globals(settings.s3_public_url)
+
+
+# Безопасный дефолт на импорте: имена существуют с пустым базовым URL, и НИ
+# ОДНОГО конструирования Settings на импорте модуля не происходит.
+_bind_image_url_globals("")
 
 
 def _compute_asset_version() -> str:
