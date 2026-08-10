@@ -1237,6 +1237,10 @@ a:hover { color: var(--accent-link-hover); }
 }
 .media-tile--add:hover { color: var(--text); border-color: var(--border-control-strong); }
 .media-tile--add:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* На лимите плитка добавления скрывается, а не удаляется. Правило нужно явно:
+   у признака hidden правило браузера слабее классового, и без этой строки
+   `display: flex` выше пересилил бы его. */
+.media-tile--add[hidden] { display: none; }
 
 /* Счётчик длины текста ----------------------------------------------------- */
 /* Приглушённый в нормальном диапазоне — счётчик не акцентный элемент. */

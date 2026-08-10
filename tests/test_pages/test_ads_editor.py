@@ -550,7 +550,9 @@ async def test_editor_shows_only_add_tile_without_attachments(
     html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
 
     assert "media-tile--add" in html
-    assert "media-tile__remove" not in html
+    # Именно РАЗМЕТКА: имя класса встречается ещё и в узловой сборке плиток,
+    # которая живёт в этом же файле и никуда не выносится.
+    assert 'class="media-tile__remove"' not in html
 
 
 @pytest.mark.asyncio
