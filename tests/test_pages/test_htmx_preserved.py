@@ -179,6 +179,11 @@ async def test_infinite_scroll_chain(
     [
         ("groups", "messenger_type=wa", "messenger_type=wa"),
         ("history", "status=ok", "status=ok"),
+        # Расписания получили полосу фильтров планом 02-07. Раздел дописан сюда
+        # в тот же заход: фильтр, потерянный сентинелом, не роняет страницу —
+        # он молча подмешивает неотфильтрованные расписания к отфильтрованным
+        # на второй странице выдачи, и увидеть это можно только прокруткой.
+        ("schedules", "state=active", "state=active"),
     ],
 )
 async def test_infinite_scroll_keeps_filters(

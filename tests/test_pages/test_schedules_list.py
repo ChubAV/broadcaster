@@ -337,3 +337,345 @@ def test_unknown_filter_value_falls_back_to_all(value):
 def test_known_filter_value_survives(value):
     """Парный тест: без него предыдущий зеленел бы на функции, всегда пустой."""
     assert _clean_choice(value, ("tg_user", "wa", "max")) == value
+
+
+# =============================================================================
+# Задача 3: разметка сводного списка (SCH-04, SCH-05)
+# =============================================================================
+#
+# Утверждения на РЕАЛЬНЫЕ строки и адреса маршрутов, а не только на код ответа:
+# ошибка в имени параметра макроса оставит страницу валидной, а карточку —
+# пустой (образец — test_ads_card_renders_data).
+
+
+@pytest.mark.asyncio
+async def test_summary_card_renders_group_names(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """SCH-04: карточка показывает объявление, канал, ИМЕНА групп, дни и время.
+
+    Имена, а не только число: SCH-04 и критерий приёмки 4 перечисляют группы
+    наравне с объявлением, каналом, днями и временем, то есть требуют
+    содержания.
+    """
+    ad = await _seed_ad(db_session, title="Летняя распродажа курсов")
+    account = await _seed_account(db_session, type_="wa")
+    group = await _seed_group(db_session, account, "Барахолка Северного района")
+    schedule = await _seed_schedule(
+        db_session, ad, account, group_ids=[group.id], days=[0, 4], times=["09:30"]
+    )
+
+    html = (await authed_client.get("/schedules")).text
+
+    assert "Летняя распродажа курсов" in html
+    assert "Барахолка Северного района" in html, "имя группы не дошло до карточки"
+    assert "09:30" in html
+    assert 'aria-label="WhatsApp"' in html, "иконка канала не отрисована"
+    assert "Пн" in html and "Пт" in html, "дни расписания не отрисованы"
+    assert f"/schedules/{schedule.id}/toggle" in html
+    assert f"/ads/{ad.id}/edit?sched={schedule.id}" in html
+
+
+@pytest.mark.asyncio
+async def test_summary_card_folds_the_remainder_into_a_count(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Имена первых нескольких групп плюс остаток числом — карточка не растёт."""
+    ad = await _seed_ad(db_session, title="Объявление многих групп")
+    account = await _seed_account(db_session)
+    groups = [
+        await _seed_group(db_session, account, f"Группа номер {i}")
+        for i in range(SUMMARY_GROUP_NAMES + 2)
+    ]
+    await _seed_schedule(
+        db_session, ad, account, group_ids=[g.id for g in groups]
+    )
+
+    html = (await authed_client.get("/schedules")).text
+
+    assert "Группа номер 0" in html
+    assert "и ещё 2" in html, "остаток групп не свёрнут в число"
+    assert groups[-1].name not in html, (
+        "карточка перечислила все группы — предел показа не действует"
+    )
+
+
+@pytest.mark.asyncio
+async def test_draft_ad_schedule_is_marked_and_promises_no_sends(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E13 `partial`: черновик виден и в бейдже, и в ячейке запуска."""
+    ad = await _seed_ad(
+        db_session, title="Черновик со расписанием", status=AD_STATUS_DRAFT
+    )
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа черновика")
+    await _seed_schedule(db_session, ad, account, group_ids=[group.id])
+
+    html = (await authed_client.get("/schedules")).text
+
+    assert "Объявление в черновике" in html
+    assert "отправок не будет" in html
+
+
+@pytest.mark.asyncio
+async def test_published_ad_schedule_carries_no_draft_marker(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парный тест: без него предыдущий зеленел бы на безусловном бейдже."""
+    ad = await _seed_ad(db_session, title="Опубликованное объявление")
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа публикации")
+    await _seed_schedule(db_session, ad, account, group_ids=[group.id])
+
+    html = (await authed_client.get("/schedules")).text
+
+    assert "Объявление в черновике" not in html
+    assert "отправок не будет" not in html
+
+
+# --- Два пустых состояния и полоса фильтров ----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_state_without_schedules_points_at_the_ads(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Расписаний нет вовсе: подсказка называет МЕСТО создания (D-14)."""
+    html = (await authed_client.get("/schedules")).text
+
+    assert "Расписаний пока нет" in html
+    assert "Расписания создаются в редакторе объявления" in html
+    assert 'href="/ads"' in html
+    assert "Расписания не найдены" not in html, "показано не то пустое состояние"
+
+
+@pytest.mark.asyncio
+async def test_empty_state_with_no_matches_offers_to_reset_the_filters(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Фильтр ничего не нашёл: единственное осмысленное действие — сброс."""
+    ad = await _seed_ad(db_session, title="Объявление с расписанием")
+    account = await _seed_account(db_session, type_="wa")
+    await _seed_schedule(db_session, ad, account)
+
+    html = (await authed_client.get("/schedules?channel=tg_user")).text
+
+    assert "Расписания не найдены" in html
+    assert "СБРОСИТЬ ФИЛЬТРЫ" in html
+    assert "Расписаний пока нет" not in html, (
+        "нулевой результат отбора неотличим от отсутствия расписаний"
+    )
+
+
+@pytest.mark.asyncio
+async def test_filter_bar_renders_when_the_list_is_empty(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E14 `empty`: снять фильтр можно и с пустого списка.
+
+    Полоса, спрятанная вместе со списком, оставила бы пользователя, который
+    отфильтровал всё до нуля, без способа вернуться.
+    """
+    ad = await _seed_ad(db_session, title="Единственное объявление")
+    account = await _seed_account(db_session, type_="wa")
+    await _seed_schedule(db_session, ad, account)
+
+    html = (await authed_client.get("/schedules?channel=tg_user")).text
+
+    assert 'id="schedules-filters"' in html, "полоса фильтров исчезла вместе со списком"
+    assert 'name="channel"' in html and 'name="state"' in html
+    assert "Поиск по объявлению и времени запуска" in html
+    assert "Сбросить" in html
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    [
+        "channel=unknown",
+        "state=%3Cscript%3E",
+        "channel=&state=&search=",
+        "channel=wa&state=nonsense",
+    ],
+)
+async def test_unknown_filter_value_does_not_break_the_page(
+    authed_client: AsyncClient, db_session: AsyncSession, query: str
+):
+    """T-02-35: значение из строки запроса не роняет страницу."""
+    ad = await _seed_ad(db_session, title="Объявление устойчивости")
+    account = await _seed_account(db_session, type_="wa")
+    await _seed_schedule(db_session, ad, account)
+
+    response = await authed_client.get(f"/schedules?{query}")
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_hostile_search_term_is_rendered_as_text(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-02-36: поисковый термин возвращается пользователю в поле полосы фильтров.
+
+    Автоэкранирование Jinja обязано оставить его текстом; разметка, собранная
+    из термина, была бы исполняемой на origin приложения.
+    """
+    term = '<script>alert(1)</script>'
+
+    response = await authed_client.get("/schedules", params={"search": term})
+
+    assert response.status_code == 200
+    assert term not in response.text, "поисковый термин вернулся разметкой"
+    assert "&lt;script&gt;" in response.text or "&#34;" in response.text
+
+
+# --- Склонение счётчика найденных --------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "count,expected",
+    [(1, "1 расписание"), (3, "3 расписания"), (5, "5 расписаний")],
+)
+async def test_result_count_is_declined(
+    authed_client: AsyncClient, db_session: AsyncSession, count: int, expected: str
+):
+    """«1 расписаний» — заметный дефект копирайтинга (UI-SPEC E13 zero-one-many)."""
+    ad = await _seed_ad(db_session, title="Объявление счётчика")
+    account = await _seed_account(db_session)
+    for _ in range(count):
+        await _seed_schedule(db_session, ad, account)
+
+    html = (await authed_client.get("/schedules")).text
+
+    assert expected in html
+
+
+# --- Фильтрация и поиск отбирают, а не украшают -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_channel_filter_narrows_the_list(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Полоса фильтров ОТБИРАЕТ: иначе она украшение, а не орган управления."""
+    ad = await _seed_ad(db_session, title="Объявление обоих каналов")
+    wa = await _seed_account(db_session, type_="wa")
+    tg = await _seed_account(db_session, type_="tg_user")
+    wa_group = await _seed_group(db_session, wa, "Группа ватсапа")
+    tg_group = await _seed_group(db_session, tg, "Группа телеграма")
+    await _seed_schedule(db_session, ad, wa, group_ids=[wa_group.id])
+    await _seed_schedule(db_session, ad, tg, group_ids=[tg_group.id])
+
+    html = (await authed_client.get("/schedules?channel=wa")).text
+
+    assert "Группа ватсапа" in html
+    assert "Группа телеграма" not in html
+
+
+@pytest.mark.asyncio
+async def test_state_filter_narrows_the_list(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Вторая ось отбора: активные и поставленные на паузу."""
+    ad = await _seed_ad(db_session, title="Объявление двух состояний")
+    account = await _seed_account(db_session)
+    live = await _seed_group(db_session, account, "Группа активного")
+    paused = await _seed_group(db_session, account, "Группа на паузе")
+    await _seed_schedule(db_session, ad, account, group_ids=[live.id], is_active=True)
+    await _seed_schedule(
+        db_session, ad, account, group_ids=[paused.id], is_active=False
+    )
+
+    active_html = (await authed_client.get("/schedules?state=active")).text
+    paused_html = (await authed_client.get("/schedules?state=paused")).text
+
+    assert "Группа активного" in active_html and "Группа на паузе" not in active_html
+    assert "Группа на паузе" in paused_html and "Группа активного" not in paused_html
+
+
+@pytest.mark.asyncio
+async def test_search_matches_the_ad_title_and_the_launch_time(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Плейсхолдер обещает обе оси поиска — обещание проверяется обеими."""
+    morning_ad = await _seed_ad(db_session, title="Утренняя рассылка")
+    evening_ad = await _seed_ad(db_session, title="Вечерняя рассылка")
+    account = await _seed_account(db_session)
+    await _seed_schedule(db_session, morning_ad, account, times=["07:15"])
+    await _seed_schedule(db_session, evening_ad, account, times=["21:45"])
+
+    by_title = (await authed_client.get("/schedules?search=Утренняя")).text
+    by_time = (await authed_client.get("/schedules?search=21:45")).text
+
+    assert "Утренняя рассылка" in by_title and "Вечерняя рассылка" not in by_title
+    assert "Вечерняя рассылка" in by_time and "Утренняя рассылка" not in by_time
+
+
+# --- Переключение: свои права и честное состояние -----------------------------
+
+
+@pytest.mark.asyncio
+async def test_toggle_from_the_list_leaves_a_foreign_schedule_alone(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-02-37: перевёрстка сменила орган управления, а не права.
+
+    Проверка владения живёт на маршруте и разметкой не подкрепляется: прямой
+    POST мимо страницы обязан получить тот же отказ.
+    """
+    own_ad = await _seed_ad(db_session, title="Своё объявление")
+    account = await _seed_account(db_session)
+    own = await _seed_schedule(db_session, own_ad, account)
+
+    user = await _user(db_session)
+    foreign_ad = Ad(
+        user_id=user.id + 1000, title="Чужое", text="Чужой текст", images=[]
+    )
+    db_session.add(foreign_ad)
+    await db_session.commit()
+    await db_session.refresh(foreign_ad)
+    foreign = await _seed_schedule(db_session, foreign_ad, account)
+
+    response = await authed_client.post(
+        f"/schedules/{own.id}/toggle", follow_redirects=False
+    )
+    assert response.status_code == 302
+    await db_session.refresh(own)
+    assert own.is_active is False
+
+    response = await authed_client.post(
+        f"/schedules/{foreign.id}/toggle", follow_redirects=False
+    )
+    assert response.status_code == 302
+    await db_session.refresh(foreign)
+    assert foreign.is_active is True, "чужое расписание переключилось из списка"
+
+
+@pytest.mark.asyncio
+async def test_refused_toggle_leaves_the_card_in_its_previous_state(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Тумблер никогда не показывает состояние, которого сервер не принял.
+
+    Состояние приходит СЕРВЕРОМ на каждой отрисовке, поэтому отклонённое
+    возобновление неполного расписания (D-08) не оставляет включённого вида.
+    """
+    ad = await _seed_ad(db_session, title="Неполное расписание")
+    schedule = await _seed_schedule(db_session, ad, account=None, is_active=False)
+
+    response = await authed_client.post(
+        f"/schedules/{schedule.id}/toggle", follow_redirects=False
+    )
+    assert response.status_code == 302
+    await db_session.refresh(schedule)
+    assert schedule.is_active is False, "сервер принял возобновление неполного"
+
+    html = (await authed_client.get("/schedules")).text
+    toggle = html[
+        html.index(f'id="schedule-toggle-{schedule.id}"') :
+    ].split(">", 1)[0]
+    assert "checked" not in toggle, "тумблер показывает непринятое состояние"
+    assert "disabled" in toggle, "тумблер неполного расписания доступен к нажатию"
+    assert "Пауза" in html
