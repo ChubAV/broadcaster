@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import AD_STATUS_PUBLISHED
 from app.models.ad import Ad
+from app.models.messenger_account import MessengerAccount
 from app.models.user import User
 
 # Маршруты, создающие расписание. Пополняется планом 02-05, если новый путь
@@ -56,6 +57,30 @@ async def _seed_ad(db: AsyncSession) -> Ad:
     return ad
 
 
+async def _seed_account(db: AsyncSession) -> MessengerAccount:
+    """Подключённый аккаунт мессенджера — ПРЕДУСЛОВИЕ обоих путей создания.
+
+    Добавлено планом 02-06 по той же причине, по которой объявление обязано быть
+    опубликованным: иначе сетка проверяет не тот путь, который проверяет.
+    Редактор объявления предлагает «+ ДОБАВИТЬ ПЕРВОЕ» только пользователю с
+    подключённым аккаунтом (D10 плана 02-05: без аккаунта на этом месте стоит
+    подсказка «Сначала подключите аккаунт мессенджера» со ссылкой на /accounts).
+    Без посева аккаунта сетка спрашивала бы у нового пути форму, которой у него
+    по контракту нет, и краснела бы на исправном приложении.
+
+    Дизъюнкция от этого не ослабевает: обе ветки проверяются на ОДНОМ и том же
+    пользователе, и сетка по-прежнему краснеет, если исчезнут обе.
+    """
+    user = (
+        await db.execute(select(User).where(User.email == "testuser@test.com"))
+    ).scalar_one()
+    account = MessengerAccount(user_id=user.id, type="tg_user", credentials="creds")
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
 async def _legacy_page_available(client: AsyncClient) -> bool:
     """Старый путь: отдельная страница `/schedules/new` отвечает 200."""
     response = await client.get("/schedules/new", follow_redirects=False)
@@ -81,6 +106,7 @@ async def test_schedule_creation_path_exists(
 ):
     """Хотя бы один рабочий путь создания расписания доступен пользователю."""
     ad = await _seed_ad(db_session)
+    await _seed_account(db_session)
 
     legacy = await _legacy_page_available(authed_client)
     in_editor = await _editor_offers_schedule_form(authed_client, ad.id)

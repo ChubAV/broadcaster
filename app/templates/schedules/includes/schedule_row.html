@@ -29,6 +29,22 @@
 {%- set s = item.schedule -%}
 {%- set day_labels = [] -%}
 {%- for d in s.days_of_week|sort %}{% set _ = day_labels.append(DAY_NAMES.get(d, d)) %}{% endfor -%}
+{#- Неполнота — ТО ЖЕ определение, что у `_is_complete` в app/pages/schedules.py и
+    у карточки редактора: аккаунт, хотя бы одна группа, день и время (D-08).
+    Возобновление неполного расписания сервер отклоняет, поэтому тумблер здесь
+    размечен недоступным — иначе пользователь щёлкал бы по нему и не получал
+    ничего, ни изменения, ни объяснения. Пауза АКТИВНОГО не блокируется никогда:
+    условие повторяет серверное `resume_blocked` буквально. -#}
+{%- set complete = s.account_id and s.group_ids and s.days_of_week and s.times_of_day -%}
+{%- set resume_blocked = not s.is_active and not complete -%}
+{#- Путь восстановления называет ПРОБЛЕМУ и СЛЕДУЮЩИЙ ШАГ (образец — соседний
+    случай из UI-SPEC §Error states). Шаг ведёт в редактор объявления: отдельной
+    формы расписания больше не существует (D-14), и отсылка к ней оставила бы
+    пользователя с заблокированным тумблером и без места, куда идти (issue #35,
+    SCH-05). -#}
+{%- set blocked_hint = ('Возобновить нельзя: аккаунт удалён. Откройте объявление и выберите аккаунт в редакторе.'
+                        if not s.account_id
+                        else 'Возобновить нельзя: расписание не заполнено. Откройте объявление и дозаполните его в редакторе.') -%}
 {{ row_open(cols=cols, id='schedule-row-' ~ s.id) }}
   {%- call cell(grow=true, title=item.ad_title) %}
     <span data-grow>{{ item.ad_title }}</span>
@@ -66,10 +82,18 @@
         форме, а макрос toggle остаётся без собственных атрибутов событий. -#}
     <form method="post" action="/schedules/{{ s.id }}/toggle" x-data x-on:change="$el.submit()">
       {{- toggle(name='is_active', checked=s.is_active, id='schedule-toggle-' ~ s.id,
-                 title='Приостановить' if s.is_active else 'Возобновить') -}}
+                 disabled=resume_blocked,
+                 title=(blocked_hint if resume_blocked
+                        else ('Приостановить' if s.is_active else 'Возобновить'))) -}}
     </form>
-    {{- link_button('Изменить', '/schedules/' ~ s.id ~ '/edit', variant='ghost', icon='pencil',
-                    title='Редактировать расписание') -}}
+    {#- Действие строки ведёт В РЕДАКТОР ОБЪЯВЛЕНИЯ, к этому самому расписанию:
+        параметр выбранного расписания разворачивает нужную карточку, якорь
+        доводит до неё прокруткой (план 02-05). Отдельной страницы редактирования
+        расписания больше нет (D-14). -#}
+    {{- link_button('Открыть объявление',
+                    '/ads/' ~ s.ad_id ~ '/edit?sched=' ~ s.id ~ '#sched-' ~ s.id,
+                    variant='ghost', icon='pencil',
+                    title='Открыть объявление и настроить расписание') -}}
     {#- Перехват отправки навешен на САМУ форму, а не заменил её кнопкой-триггером
         вне формы: без Alpine перехват не навешивается, и форма уходит POST-ом на
         прежний маршрут — ровно как до правки (WR-04, T-12-04). -#}
