@@ -468,7 +468,7 @@ REFACTOR-коммитов нет: после GREEN чистить было не�
 **Готово для плана 02-06 (снос старых страниц, вторая половина D-16):**
 - **Предусловие 02-06 выполнено:** `uv run pytest tests/test_pages/test_editor_schedules.py -q` — 30 passed. Новый путь настройки расписаний работает целиком.
 - `SCHEDULE_CREATE_ACTIONS` в `tests/test_pages/test_schedule_creation_path_exists.py` править НЕ нужно: путь из редактора уходит на тот же `POST /schedules/new`, и сетка уже видит его формой в редакторе.
-- Что именно снимает 02-06: `GET /schedules/new`, `POST /schedules/new`… — нет, **только GET-страницы** `/schedules/new` и `/schedules/{id}/edit` вместе с `app/templates/schedules/form.html`. Обработчики `POST /schedules/new` и `POST /schedules/{id}/edit` остаются: на них ходит карточка редактора.
+- **Что именно снимает 02-06 — только GET-страницы** `/schedules/new` и `/schedules/{id}/edit` вместе с `app/templates/schedules/form.html`. Обработчики `POST /schedules/new` и `POST /schedules/{id}/edit` обязаны остаться: на них ходит карточка редактора. Снос POST-маршрутов оборвал бы новый путь ровно в тот момент, когда старый уже удалён.
 - `schedules/includes/schedule_row.html` тронуть придётся аккуратно: `DAY_NAMES` из него импортирует карточка редактора. Файл целиком уходит только в плане 02-07 вместе с перевёрсткой сводного списка — до тех пор карта дней живёт там.
 
 **Готово для плана 02-07 (сводный список):**
