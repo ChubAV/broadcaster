@@ -2,44 +2,44 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
-current_phase: 01
-current_phase_name: interfeysnyy-fundament
-status: executing
-stopped_at: Phase 1 context gathered
-last_updated: "2026-08-09T17:03:43.447Z"
-last_activity: 2026-08-09
-last_activity_desc: Roadmap v2.0 создан, нумерация фаз начата заново с 1
+current_phase: 2
+current_phase_name: Объявления и расписания
+status: planning
+stopped_at: Phase 1 complete, ready to plan Phase 2
+last_updated: "2026-08-10T05:04:13.759Z"
+last_activity: 2026-08-10
+last_activity_desc: Phase 01 complete, transitioned to Phase 2
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 13
-  completed_plans: 8
-  percent: 0
+  completed_plans: 13
+  percent: 17
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-08)
+See: .planning/PROJECT.md (updated 2026-08-10)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 01 — interfeysnyy-fundament
+**Current focus:** Phase 2 — Объявления и расписания
 
 ## Current Position
 
-Phase: 01 (interfeysnyy-fundament) — EXECUTING
-Plan: 1 of 13
-Status: Executing Phase 01
-Last activity: 2026-08-09 — Phase 01 execution started
+Phase: 2 — Объявления и расписания
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-10 — Phase 01 complete, transitioned to Phase 2
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [████████████████████] 13/13 plans (100%) — Phase 1 of 6 complete (17% фаз milestone v2.0)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0 (milestone v2.0 только начат)
+- Total plans completed: 13 (milestone v2.0 только начат)
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -47,7 +47,7 @@ Progress: [░░░░░░░░░░] 0%
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 1. Интерфейсный фундамент | Not planned | N/A | N/A |
+| 1. Интерфейсный фундамент | 13/13 | - | - |
 
 **Recent Trend:**
 
@@ -63,6 +63,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - Milestone v2.0: настройка расписаний переезжает в редактор объявления; список расписаний становится сводным с включением и паузой.
 - Milestone v2.0: адаптивность — критерий приёмки каждой фазы, а не отдельная фаза.
 - Roadmap v2.0: нумерация фаз перезапущена с 1 (`--reset-phase-numbers`), так как фазы v1 были ретроспективной документацией уже отгруженной системы.
+- Phase 1: htmx и Alpine вендорены файлами, Tailwind удалён — внешних ресурсов в проекте 0, build-шаг не вводится.
+- Phase 1: браузерный `confirm()` заменён собственной панелью подтверждения с настоящей формой POST в 13 местах — путь удаления сохраняется без Alpine.
+- Phase 1: CR-01, CR-02 и WR-01/T-10-04 отнесены в Фазу 2 (решение UAT 2026-08-10); T-10-04 принята как риск R-01 в `01-SECURITY.md`.
 
 ### Pending Todos
 
@@ -71,7 +74,8 @@ None.
 ### Blockers/Concerns
 
 - Счётчик в REQUIREMENTS.md указывал 38 требований v2.0, фактических REQ-ID — 39. Счётчики исправлены на 39; смысловых требований не добавлялось и не удалялось.
-- Фаза 1 — жёсткая зависимость всех остальных фаз: пока новый шелл и компоненты не готовы, остальные фазы планировать можно, а исполнять нет.
+- ⚠️ [Phase 1] Гейт код-ревью открыт: `01-REVIEW.md` — `status: issues_found`, `critical: 2`. CR-01 (владение `ad_id`/`account_id` в `app/pages/schedules.py:204-213,314-315`), CR-02 (клиентский Content-Type в `app/routes/uploads.py:48-52`) и WR-01/T-10-04 (владение ключом изображения в `app/pages/ads.py:133-135,183-187`) перенесены в Фазу 2. **Ship блокируется до починки.**
+- ⚠️ [Phase 1] `/ads/new` и `/ads/{id}/edit` не рендерятся ни одним тестом суиты — глобал `s3_public_url` в `app/pages/common.py:38` собирает `Settings()` в обход подмены зависимостей. Дефект на базовом коммите фазы, не внесён перевёрсткой; развилка ADS-07.
 - ADS-04 (черновик объявления) требует миграции схемы: поля `status` у `Ad` сейчас нет.
 - Brownfield-риск: система живая и покрыта тестами; протоколы отправки Telegram, WhatsApp и MAX трогать нельзя.
 
@@ -92,9 +96,13 @@ None.
 | v2.1 | Email-уведомления NOTIF-01..04 | Отложено, вне roadmap v2.0 | 2026-08-08 |
 | v2.1 | Прогрев аккаунтов и автопауза WARM-01..02 | Отложено, вне roadmap v2.0 | 2026-08-08 |
 | Future scope | Reliability and hardening suggestions в research/SUMMARY.md (v1-era) | Не активно; требует отдельного решения по milestone | 2026-08-03 |
+| Phase 2 | CR-01 — владение `ad_id`/`account_id` при постановке в расписание | Решение UAT: чинить в Фазе 2 | 2026-08-10 |
+| Phase 2 | CR-02 — клиентский Content-Type при загрузке, SVG на origin хранилища | Решение UAT: чинить в Фазе 2 | 2026-08-10 |
+| Phase 2 | WR-01 / T-10-04 — владение ключом изображения при сохранении объявления | Принята как риск R-01 в `01-SECURITY.md`; чинить в Фазе 2 | 2026-08-10 |
+| Phase 5 | `billing/plans.html` не подключён ни к одному маршруту | Решение о маршруте или переносе содержимого — за Фазой 5 | 2026-08-09 |
 
 ## Session Continuity
 
-Last session: 2026-08-09T06:10:32.351Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-interfeysnyy-fundament/01-CONTEXT.md
+Last session: 2026-08-10
+Stopped at: Phase 1 complete, ready to plan Phase 2
+Resume file: None

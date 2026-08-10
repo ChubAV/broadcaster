@@ -49,16 +49,22 @@ expected: |
             то есть SVG исполняется на origin хранилища.
   Решение: чинить в этой фазе, вынести в отдельную задачу или отнести в Фазу 2.
 why_human: Гейт код-ревью открыт (`status: issues_found`, `critical: 2`). Цели этой фазы находки не блокируют — приложение отрисовывается через новый шелл и дизайн-систему независимо от них, — но ship блокируют. Решение продуктовое, не техническое.
-result: skipped
-reason: "Deferred follow-up: выносим в Фазу 2"
+result: pass
+decision: "выносим в Фазу 2"
+note: |
+  Решение принято — это и есть ожидаемый исход теста. CR-01 и CR-02 не чинятся в
+  Фазе 01; перенесены в Фазу 2. Записано в `deferred-items.md` и в
+  `01-SECURITY.md` (раздел «Deferred to Phase 2»). Гейт код-ревью
+  (`01-REVIEW.md`, `status: issues_found`, `critical: 2`) остаётся открытым и
+  блокирует ship до починки.
 
 ## Summary
 
 total: 6
-passed: 5
+passed: 6
 issues: 0
 pending: 0
-skipped: 1
+skipped: 0
 blocked: 0
 
 ## Gaps
