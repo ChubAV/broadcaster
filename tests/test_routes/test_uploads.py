@@ -14,6 +14,7 @@ from app.routes.uploads import safe_filename
 @pytest_asyncio.fixture
 async def upload_settings():
     return Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         secret_key="test-secret-key",
