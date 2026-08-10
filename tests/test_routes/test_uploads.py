@@ -8,7 +8,7 @@ from httpx import AsyncClient, ASGITransport
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.main import create_app
-from app.routes.uploads import safe_filename
+from app.routes.uploads import safe_filename, sniff_image
 
 
 @pytest_asyncio.fixture
@@ -69,6 +69,33 @@ def make_png_bytes():
     idat = chunk(b"IDAT", zlib.compress(raw_data))
     iend = chunk(b"IEND", b"")
     return signature + ihdr + idat + iend
+
+
+def make_jpeg_bytes():
+    """Минимальные байты, начинающиеся с сигнатуры JPEG (SOI + APP0)."""
+    return b"\xff\xd8\xff\xe0" + b"\x00\x10JFIF\x00" + b"\x00" * 16
+
+
+def make_gif_bytes(version: bytes = b"89a"):
+    """Минимальные байты GIF заданной версии (``87a`` или ``89a``)."""
+    return b"GIF" + version + b"\x01\x00\x01\x00\x00\x00\x00" + b"\x00" * 8
+
+
+def make_webp_bytes():
+    """Байты WebP: ``RIFF``, четыре байта размера, затем ``WEBP``.
+
+    Байты 4..8 — длина файла; они произвольны и намеренно НЕ нулевые, чтобы
+    проверка не могла случайно опереться на них вместо метки формата.
+    """
+    return b"RIFF" + b"\x24\x00\x00\x00" + b"WEBP" + b"VP8 " + b"\x00" * 16
+
+
+# Вектор CR-02: SVG — тоже «изображение», но исполняемое. Отданный браузеру с
+# origin хранилища, он выполняет свой скрипт в его контексте.
+SVG_BYTES = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">'
+    b"<script>alert(1)</script></svg>"
+)
 
 
 # --- CR-01: нормализация клиентского имени файла ------------------------------
@@ -213,3 +240,122 @@ async def test_upload_image_with_cookie_auth(mock_s3, upload_client):
     data = response.json()
     assert "path" in data
     assert "cookie_image.png" in data["path"]
+
+
+# --- CR-02: тип изображения определяется по содержимому ------------------------
+#
+# Заголовок типа в составном запросе подконтролен отправителю ровно так же, как
+# имя файла: он тип ОБЪЯВЛЯЕТ, но не доказывает. SVG, принятый под видом PNG,
+# исполняет свой скрипт на origin хранилища — это и есть вектор CR-02. Поэтому
+# тип берётся из первых байтов содержимого, а присланный заголовок игнорируется.
+
+
+@pytest.mark.parametrize(
+    "make_bytes,expected",
+    [
+        (make_png_bytes, "image/png"),
+        (make_jpeg_bytes, "image/jpeg"),
+        (lambda: make_gif_bytes(b"87a"), "image/gif"),
+        (lambda: make_gif_bytes(b"89a"), "image/gif"),
+        (make_webp_bytes, "image/webp"),
+    ],
+)
+def test_sniff_image_recognises_supported_formats(make_bytes, expected):
+    assert sniff_image(make_bytes()) == expected
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        SVG_BYTES,
+        b"<?xml version='1.0'?><svg xmlns='http://www.w3.org/2000/svg'/>",
+        b"hello world",
+        b"",
+        b"%PDF-1.4\n%\xe2\xe3\xcf\xd3",
+        b"GIF88a" + b"\x00" * 16,  # похоже на GIF, но версия не та
+        b"RIFF" + b"\x24\x00\x00\x00" + b"WAVE" + b"\x00" * 16,  # RIFF, но не WebP
+        b"RIFF",  # обрывок: длины и метки формата нет вовсе
+    ],
+)
+def test_sniff_image_rejects_non_images(content):
+    assert sniff_image(content) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_bytes,expected",
+    [
+        (make_png_bytes, "image/png"),
+        (make_jpeg_bytes, "image/jpeg"),
+        (lambda: make_gif_bytes(b"87a"), "image/gif"),
+        (lambda: make_gif_bytes(b"89a"), "image/gif"),
+        (make_webp_bytes, "image/webp"),
+    ],
+)
+@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+async def test_upload_accepts_each_supported_format(
+    mock_s3, make_bytes, expected, upload_client, upload_auth_headers
+):
+    """Каждый из четырёх поддерживаемых форматов принимается по содержимому."""
+    response = await upload_client.post(
+        "/api/uploads/image",
+        # Заголовок типа заведомо неверный: приём должен опираться на содержимое.
+        files={"file": ("payload.bin", make_bytes(), "application/octet-stream")},
+        headers=upload_auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert mock_s3.call_args.kwargs["content_type"] == expected
+
+
+@pytest.mark.asyncio
+@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+async def test_upload_rejects_svg_declared_as_png(
+    mock_s3, upload_client, upload_auth_headers
+):
+    """CR-02: SVG с заголовком ``image/png`` отклоняется и в хранилище не уходит."""
+    response = await upload_client.post(
+        "/api/uploads/image",
+        files={"file": ("logo.png", SVG_BYTES, "image/png")},
+        headers=upload_auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert "JPEG" in response.json()["detail"]
+    mock_s3.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+async def test_upload_rejects_non_image_declared_as_image(
+    mock_s3, upload_client, upload_auth_headers
+):
+    """Произвольные байты не проходят ни под каким заголовком типа."""
+    response = await upload_client.post(
+        "/api/uploads/image",
+        files={"file": ("payload.jpg", b"not an image at all", "image/jpeg")},
+        headers=upload_auth_headers,
+    )
+
+    assert response.status_code == 400
+    mock_s3.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+async def test_upload_stores_sniffed_content_type_not_client_header(
+    mock_s3, upload_client, upload_auth_headers
+):
+    """В хранилище уходит распознанный тип, а не присланный клиентом.
+
+    Иначе объект лёг бы в S3 с подконтрольным отправителю ``Content-Type`` и
+    отдавался бы браузеру с ним же — вектор CR-02 сохранился бы на выдаче.
+    """
+    response = await upload_client.post(
+        "/api/uploads/image",
+        files={"file": ("real.png", make_png_bytes(), "image/svg+xml")},
+        headers=upload_auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert mock_s3.call_args.kwargs["content_type"] == "image/png"
