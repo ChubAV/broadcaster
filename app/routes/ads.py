@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -24,7 +25,14 @@ class UpdateAdRequest(BaseModel):
     title: str | None = None
     text: str | None = None
     images: list[str] | None = None
-    is_active: bool | None = None
+    # Тип — замкнутое множество, а не str (T-02-11). update_ad присваивает поля
+    # напрямую из model_dump(exclude_unset=True), поэтому схема — единственное
+    # место, где произвольную строку можно остановить: записанная, она не
+    # отфильтровалась бы ни как черновик, ни как опубликованное, и объявление
+    # выпало бы разом и из списка к отправке, и из выбора на странице
+    # расписаний. Литералы дублируют app.constants сознательно: Literal требует
+    # константного выражения на этапе объявления класса.
+    status: Literal["draft", "published"] | None = None
 
 
 class AdResponse(BaseModel):
@@ -32,7 +40,7 @@ class AdResponse(BaseModel):
     title: str
     text: str
     images: list
-    is_active: bool
+    status: str
     created_at: datetime
 
 

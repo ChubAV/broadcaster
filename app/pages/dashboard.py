@@ -6,6 +6,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.constants import AD_STATUS_PUBLISHED
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
 from app.models.group import Group
@@ -30,7 +31,7 @@ async def dashboard(
     ads_count = (
         await db.execute(
             select(func.count(Ad.id)).where(
-                Ad.user_id == user.id, Ad.is_active == True  # noqa: E712
+                Ad.user_id == user.id, Ad.status == AD_STATUS_PUBLISHED
             )
         )
     ).scalar() or 0

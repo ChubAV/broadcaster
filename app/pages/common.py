@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
 from app.models.ad import Ad
 from app.models.balance_transaction import BalanceTransaction
 from app.models.message_balance import MessageBalance
@@ -85,6 +86,18 @@ def _compute_asset_version() -> str:
 
 
 templates.env.globals["asset_version"] = _compute_asset_version()
+
+
+# Состояние объявления доезжает до шаблонов ГЛОБАЛОМ, по образцу nav_items.
+# Карточка объявления — макрос (app/templates/ads/includes/ad_card.html:25), а
+# импортированным макросам Jinja контекст вызывающего не передаёт: параметром
+# значение пришлось бы протащить через сигнатуру макроса и оба его вызова.
+# Литерал, выписанный в шаблоне вручную, лишил бы app/constants.py статуса
+# единственного источника — разъехавшись с моделью, он показывал бы
+# «Опубликовано» тому, что планировщик не отправляет.
+# Конструирования Settings здесь не происходит: значения — модульные константы.
+templates.env.globals["AD_STATUS_DRAFT"] = AD_STATUS_DRAFT
+templates.env.globals["AD_STATUS_PUBLISHED"] = AD_STATUS_PUBLISHED
 
 
 # Состав навигации по D-11. Список выписан ОДИН раз и используется и в

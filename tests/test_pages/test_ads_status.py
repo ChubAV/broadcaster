@@ -195,6 +195,24 @@ async def test_api_ads_update_rejects_unknown_status(
     assert check.json()["status"] == AD_STATUS_PUBLISHED
 
 
+def test_api_literal_matches_constants():
+    """Literal в схеме и AD_STATUSES не имеют права разъехаться.
+
+    `Literal` требует константного выражения на этапе объявления класса,
+    поэтому значения там выписаны заново, а не импортированы. Разъехавшись, они
+    дали бы 422 на легальном значении или пропустили бы нелегальное.
+    """
+    from typing import get_args
+
+    from app.constants import AD_STATUSES
+    from app.routes.ads import UpdateAdRequest
+
+    annotation = UpdateAdRequest.model_fields["status"].annotation
+    literal_values = {v for arg in get_args(annotation) for v in get_args(arg)}
+
+    assert literal_values == AD_STATUSES
+
+
 @pytest.mark.asyncio
 async def test_schedules_new_page_alive(
     authed_client: AsyncClient, db_session: AsyncSession

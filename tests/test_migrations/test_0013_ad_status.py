@@ -176,5 +176,5 @@ def test_revision_chain_has_single_head():
     script = ScriptDirectory.from_config(Config(str(ALEMBIC_INI)))
     heads = script.get_heads()
 
-    assert heads == ("0013",), heads
+    assert list(heads) == ["0013"], heads
     assert script.get_revision("0013").down_revision == "0012"

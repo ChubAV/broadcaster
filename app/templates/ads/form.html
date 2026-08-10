@@ -2,7 +2,6 @@
 {% from "components/button.html" import button, link_button %}
 {% from "components/card.html" import card_open, card_close %}
 {% from "components/field.html" import field, textarea_field %}
-{% from "components/toggle.html" import toggle %}
 
 {% block title %}{{ 'Редактировать' if ad else 'Создать' }} объявление — Broadcaster{% endblock %}
 
@@ -12,8 +11,13 @@
 {% block content %}
 {# Фаза 2 переделает этот экран под черновики и вложения (D-06): здесь он
    переносится на макросы целиком, потому что без Tailwind старая разметка
-   осталась бы без стилей. Контракт с обработчиком — имена полей title, text,
-   images и is_active — сохранён дословно. #}
+   осталась бы без стилей. Контракт с обработчиком — имена полей title, text и
+   images.
+
+   Переключателя состояния на форме нет: по D-04 в макете редактора только
+   «Сохранить» и «Отмена». Обработчик принимает поле status необязательным и
+   при его отсутствии состояние не трогает — сохранение текста не публикует
+   черновик. Управление состоянием заводит план 02-04. #}
 {{ card_open() }}
   <form class="auth-form" method="post" action="{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}" id="ad-form">
     {{ field(name="title", label='Заголовок', value=(ad.title if ad else ''), required=true, placeholder='Название объявления') }}
@@ -30,10 +34,6 @@
     <input class="field__input" type="file" id="file-input" accept="image/*" multiple hidden onchange="handleFiles(this.files)">
     <div id="image-preview" class="modal__actions"></div>
     <div id="image-inputs"></div>
-
-    {% if ad %}
-    {{ toggle(name="is_active", checked=ad.is_active, label='Активно', value='true') }}
-    {% endif %}
 
     <div class="modal__actions">
       {{ link_button('Отмена', '/ads', variant='ghost') }}

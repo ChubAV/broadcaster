@@ -40,8 +40,15 @@
   {{- cell(text=(ad.schedules_count or 0), mono=true, muted=true, title='Расписаний', label=AD_COLUMNS[3]) }}
   {{- cell(text=format_datetime_for_user(ad.created_at, user, '%d.%m.%Y'), mono=true, muted=true, area='meta',
            label=AD_COLUMNS[4]) }}
+  {#- Состояние объявления (UI-SPEC E15). Условие проверяет ОПУБЛИКОВАННОСТЬ, а
+      не черновик: нераспознанное значение обязано падать в «Черновик» —
+      безопасный дефолт, потому что черновик не отправляется. Проверка на
+      черновик оставила бы неизвестному значению бейдж «Опубликовано», то есть
+      обещание рассылки, которой планировщик не сделает. AD_STATUS_PUBLISHED —
+      глобал окружения из app/constants.py (app/pages/common.py), единственный
+      источник значения на весь проект. -#}
   {%- call cell(label=AD_COLUMNS[5]) %}
-    {%- if ad.is_active %}{{ badge('Активно', 'success') }}{% else %}{{ badge('Пауза', 'neutral') }}{% endif -%}
+    {%- if ad.status == AD_STATUS_PUBLISHED %}{{ badge('Опубликовано', 'success') }}{% else %}{{ badge('Черновик', 'warning') }}{% endif -%}
   {%- endcall %}
   {%- call cell() %}
     <a class="btn btn--ghost" href="/ads/{{ ad.id }}/edit" title="Редактировать объявление"><span class="btn__label">Изменить</span></a>
