@@ -495,3 +495,187 @@ async def test_explicit_save_publishes_autosave_does_not(
     )
 
     assert (await _only_ad(db_session, owner_id)).status == AD_STATUS_PUBLISHED
+
+
+# --- План 02-04, Задача 3: разметка редактора --------------------------------
+#
+# Утверждения на РЕНДЕР, а не на исходник шаблона: контракт с обработчиком и
+# порядок чтения проверяются там, где их видит браузер. Проверки исходного
+# текста живут в tests/test_templates/test_ads_form_security.py и говорят о
+# другом — о СПОСОБЕ сборки клиентской разметки.
+
+
+@pytest.mark.asyncio
+async def test_editor_has_two_column_containers(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Редактор собран на сетке раздела 8, а не на своей вёрстке."""
+    ad = await _seed_ad(db_session, title="Объявление с сеткой")
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert "data-editor" in html
+    assert "data-editor-side" in html
+
+
+@pytest.mark.asyncio
+async def test_editor_form_carries_autosave_and_stays_a_real_form(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Автосохранение — УСИЛЕНИЕ поверх настоящей формы, а не замена ей.
+
+    Потеря `method`/`action` не роняет страницу: она молча лишает пользователя
+    без JavaScript единственного способа сохранить объявление (D-09).
+    """
+    ad = await _seed_ad(db_session, title="Объявление с автосохранением")
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert 'id="ad-form"' in html
+    assert 'method="post"' in html
+    assert f'action="/ads/{ad.id}/edit"' in html
+    assert f'hx-post="/ads/{ad.id}/edit"' in html
+    assert "delay:2s" in html, "дебаунс автосохранения потерян"
+    assert 'hx-sync="this:replace"' in html, "отмена устаревшего запроса потеряна"
+    assert 'hx-swap="none"' in html, "форма стала целью подмены — каретка потеряется"
+
+
+@pytest.mark.asyncio
+async def test_editor_shows_only_add_tile_without_attachments(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """0 вложений — только плитка добавления, не пустая рамка (UI-SPEC E3)."""
+    ad = await _seed_ad(db_session, title="Без вложений", images=[])
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert "media-tile--add" in html
+    assert "media-tile__remove" not in html
+
+
+@pytest.mark.asyncio
+async def test_editor_hides_add_tile_at_the_limit(
+    authed_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """На лимите плитка добавления скрыта — она удобство, а не точка принуждения."""
+    owner_id = (await _user(db_session)).id
+    keys = [
+        image_key(owner_id, f"p{i}.jpg")
+        for i in range(test_settings.max_images_per_ad)
+    ]
+    ad = await _seed_ad(db_session, title="Полный комплект", images=keys)
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert "media-tile--add" in html, "плитка добавления удалена, а не скрыта"
+    assert "media-tile--add hidden" in html or "media-tile--add\" hidden" in html
+
+
+@pytest.mark.asyncio
+async def test_attachment_remove_is_a_named_submit_inside_the_form(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Путь убирания вложения переживает отсутствие Alpine и htmx.
+
+    Кнопка `type="button"` вместо именованной кнопки отправки лишила бы
+    пользователя без скрипта единственного способа убрать вложение.
+    """
+    owner_id = (await _user(db_session)).id
+    ad = await _seed_ad(
+        db_session, title="С вложением", images=[image_key(owner_id, "p0.jpg")]
+    )
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert 'name="remove_image"' in html
+    assert 'aria-label="Убрать вложение"' in html
+    assert 'type="submit"' in html
+
+
+@pytest.mark.asyncio
+async def test_editor_delete_form_degrades_without_alpine(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Удаление объявления — настоящая форма, перехват навешен на неё саму."""
+    ad = await _seed_ad(db_session, title="Удаляемое объявление")
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert f'action="/ads/{ad.id}/delete"' in html
+    assert f"modal-open-ad-del-{ad.id}" in html
+    assert 'role="dialog"' in html
+
+
+@pytest.mark.asyncio
+async def test_editor_markup_order_is_the_reading_order(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """На ≤900px колонки схлопываются и порядок разметки становится порядком чтения.
+
+    Поэтому предпросмотр обязан стоять ПОСЛЕ составителя: иначе на телефоне
+    пользователь читает результат раньше, чем видит, где его набирать.
+
+    Позиции берутся по подписи РАЗДЕЛА (`card__title`), а не по слову: слово
+    «Расписания» есть и в боковом меню шелла, которое стоит выше по разметке.
+    """
+    ad = await _seed_ad(db_session, title="Порядок разметки")
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    content = html.index('card__title">Содержание<')
+    schedules = html.index('card__title">Расписания<')
+    preview = html.index('card__title">Предпросмотр<')
+
+    assert content < schedules < preview
+
+
+@pytest.mark.asyncio
+async def test_editor_renders_preview_summary_and_indicator_anchors(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Якоря внеполосной подмены есть на первичной отрисовке.
+
+    Без них ответ автосохранения приходит в никуда: страница остаётся живой, а
+    предпросмотр молча перестаёт обновляться.
+    """
+    ad = await _seed_ad(db_session, title="Якоря подмены")
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert 'id="ad-preview"' in html
+    assert 'id="ad-summary"' in html
+    assert 'id="autosave-indicator"' in html
+
+
+@pytest.mark.asyncio
+async def test_editor_schedules_section_is_outside_the_ad_form(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Секция расписаний — СОСЕД формы объявления, а не её содержимое.
+
+    Вложенные формы браузер молча отбрасывает: в плане 02-05 кнопки карточек
+    расписаний перестали бы работать и с JavaScript, и без него.
+    """
+    ad = await _seed_ad(db_session, title="Место под расписания")
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    form_start = html.index('id="ad-form"')
+    form_end = html.index("</form>", form_start)
+    schedules = html.index('card__title">Расписания<')
+
+    assert schedules > form_end, "секция расписаний оказалась внутри формы объявления"
+
+
+@pytest.mark.asyncio
+async def test_editor_counter_is_server_rendered(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Счётчик длины приходит с сервера и не блокирует сохранение."""
+    ad = await _seed_ad(db_session, title="Счётчик")
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert 'id="text-counter"' in html
+    assert "4096" in html, "предел длины не отрисован"
+    assert "maxlength" not in html, "счётчик не имеет права обрезать текст"
