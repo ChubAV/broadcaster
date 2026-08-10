@@ -3073,3 +3073,61 @@ async def test_no_rendered_page_calls_browser_dialog(
         "системный диалог браузера вернулся в ОТРЕНДЕРЕННУЮ страницу — обход по "
         f"исходникам такую разметку не видит: {offenders}"
     )
+
+
+# --- План 02-04: редактор объявления ----------------------------------------
+#
+# Редактор — первый экран фазы 2 и единственный экран проекта с двухколоночной
+# сеткой. Он собран на примитивах раздела 8 app.css и на макросах Фазы 1;
+# собственной вёрстки и utility-классов в нём быть не должно.
+
+
+@pytest.mark.asyncio
+async def test_ads_editor_no_utility_classes(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Обе страницы редактора избавлены от классов удалённого фреймворка."""
+    ad = await _seed_ad(db_session, title="Объявление редактора")
+
+    for url in ("/ads/new", f"/ads/{ad.id}/edit"):
+        response = await authed_client.get(url)
+        assert response.status_code == 200, url
+        for marker in UTILITY_MARKERS:
+            assert marker not in response.text, f"{url}: {marker}"
+
+
+@pytest.mark.asyncio
+async def test_ads_editor_uses_grid_primitives(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Сетка редактора и липкая колонка размечены атрибутами раздела 8.
+
+    Медиазапрос ≤900px опирается ровно на эти атрибуты: без них колонки не
+    схлопнутся на телефоне, а страница продолжит отдавать 200.
+    """
+    ad = await _seed_ad(db_session, title="Сетка редактора")
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    assert "data-editor" in html
+    assert "data-editor-side" in html
+    assert "data-media" in html, "полоса вложений размечена не примитивом раздела"
+
+
+@pytest.mark.asyncio
+async def test_ads_editor_action_bar_wraps_delete_to_its_own_row(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка действий и разрушительное действие — РАЗНЫЕ блоки разметки.
+
+    На 400px «Сохранить»/«Отмена» переносятся вместе, а удаление стоит отдельным
+    рядом ниже: перенос внутрь одного ряда поставил бы удаление рядом с
+    первичной кнопкой.
+    """
+    ad = await _seed_ad(db_session, title="Строка действий")
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    bar = html.index("data-actions")
+    delete_form = html.index(f'action="/ads/{ad.id}/delete"')
+    assert bar < delete_form, "удаление оказалось в одном ряду с первичной кнопкой"

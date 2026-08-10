@@ -1147,3 +1147,193 @@ a:hover { color: var(--accent-link-hover); }
     letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted);
   }
 }
+
+/* --------------------------------------------------------------------------
+   8. Редактор объявления и сводный список расписаний (Фаза 2).
+
+   Дополнение файла санкционировано планом: редактор объявления — единственный
+   экран проекта с двухколоночной сеткой, полосой вложений, серверным
+   предпросмотром и блоком «ключ — значение»; макросов под них в библиотеке
+   раздела 4 нет. Всё остальное на экране собрано из card / field / button /
+   badge / modal / empty_state и переиспользуется БЕЗ изменений.
+
+   Здесь лежит половина раздела, относящаяся к РЕДАКТОРУ (План 02-04). Карточка
+   расписания приходит планом 02-05, сводный список — планом 02-07.
+
+   Значения — токены раздела 1: ни одного нового цвета, радиуса или кегля.
+   Фиксированные размеры кратны четырём: плитка вложения 88, миниатюра
+   предпросмотра 120.
+   -------------------------------------------------------------------------- */
+
+/* Сетка редактора. Переопределения на ≤900px уже лежат в разделе 2 со времён
+   Плана 01-01 — перестраивать было что, а базового правила в файле не было.
+   Здесь появляется только оно; медиазапрос НЕ дублируется. */
+[data-editor] {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, .85fr);
+  gap: 16px;
+  align-items: start;
+  animation: rise .28s cubic-bezier(.2, .8, .2, 1);
+}
+
+/* Правая колонка: липкая, пока хватает ширины. `position: static` на ≤900px
+   тоже уже лежит в разделе 2. */
+[data-editor-side] {
+  position: sticky; top: 96px;
+  display: flex; flex-direction: column; gap: 16px;
+  min-width: 0;
+}
+
+/* Левая колонка — общий примитив стопки, но с шагом сетки редактора (16), а не
+   с шагом стопки страницы (22): между колонками и внутри колонок расстояние
+   обязано совпадать, иначе сетка визуально «съезжает». */
+[data-editor] > [data-stack] { gap: 16px; }
+
+/* Шапка карточки внутри редактора — СТРОКА: подпись раздела слева, индикатор
+   автосохранения у правого края. Макрос card не форкается и не
+   перестилизуется — правило действует только внутри сетки редактора и только
+   на раскладку шапки. На узкой ширине индикатор переносится на вторую строку
+   (flex-wrap), а не выталкивает подпись раздела и не обрезается. */
+[data-editor] .card__head {
+  flex-direction: row; align-items: center; justify-content: space-between;
+  gap: 8px; flex-wrap: wrap;
+}
+
+/* Полоса вложений ---------------------------------------------------------- */
+[data-media] { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+
+.media-tile {
+  position: relative; width: 88px; height: 88px; flex: none;
+  border-radius: var(--r-lg); overflow: hidden;
+  background: var(--surface-input); border: 1px solid var(--border-input);
+}
+.media-tile img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+/* Имя файла на плитке НЕ рендерится — оно живёт в подсказке. Имя подконтрольно
+   отправителю: вынесенное в раскладку, длинное или враждебное имя ломало бы
+   полосу вложений. */
+.media-tile__remove {
+  position: absolute; top: 0; right: 0;
+  width: 36px; height: 36px; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-bottom-left-radius: var(--r-lg);
+  background: color-mix(in oklab, var(--bg) 72%, transparent);
+  color: var(--text-secondary);
+  font-family: var(--font-mono); font-size: var(--fs-lg); line-height: 1;
+  cursor: pointer;
+}
+/* 36×36, а не «крестик по размеру глифа»: минимальная цель касания раздела —
+   36px по меньшей стороне, и исключение из неё в проекте ровно одно
+   (унаследованный тумблер 22px, обёрнутый в строку ≥40px). */
+.media-tile__remove:hover { color: var(--danger); }
+.media-tile__remove:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+
+.media-tile--add {
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px dashed var(--border-dashed);
+  color: var(--text-muted);
+  font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: .08em; cursor: pointer;
+}
+.media-tile--add:hover { color: var(--text); border-color: var(--border-control-strong); }
+.media-tile--add:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* На лимите плитка добавления скрывается, а не удаляется. Правило нужно явно:
+   у признака hidden правило браузера слабее классового, и без этой строки
+   `display: flex` выше пересилил бы его. */
+.media-tile--add[hidden] { display: none; }
+
+/* Счётчик длины текста ----------------------------------------------------- */
+/* Приглушённый в нормальном диапазоне — счётчик не акцентный элемент. */
+.counter {
+  align-self: flex-end;
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  letter-spacing: .06em; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.counter--warn { color: var(--warn); }
+.counter--over { color: var(--danger); }
+
+/* Индикатор автосохранения ------------------------------------------------- */
+/* Состояние «идёт запрос» выражено классом, который htmx вешает на инициатора
+   запроса САМ (.htmx-request на форме объявления): собственного таймера и
+   собственного состояния в JavaScript нет (D-05), рассинхрон невозможен. */
+.autosave {
+  min-width: 0; text-align: right;
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  letter-spacing: .06em; color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.autosave--busy, #ad-form.htmx-request .autosave { color: var(--text-secondary); }
+.autosave--error { color: var(--danger); }
+
+.autosave__busy, .autosave__error { display: none; }
+#ad-form.htmx-request .autosave__idle { display: none; }
+#ad-form.htmx-request .autosave__busy { display: inline; }
+.autosave--error .autosave__idle { display: none; }
+.autosave--error .autosave__error { display: inline; }
+
+/* Предпросмотр ------------------------------------------------------------- */
+.preview { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* Заголовок объявления — подпись ПАНЕЛИ, а не часть сообщения: он стоит вне
+   рамки и в тело предпросмотра не входит (см. ads/includes/preview.html). */
+.preview__title {
+  margin: 0; min-width: 0;
+  font-size: var(--fs-xl); font-weight: 600; letter-spacing: -.015em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.preview__frame {
+  display: flex; flex-direction: column; gap: 12px; min-width: 0;
+  padding: 12px; border-radius: var(--r-xl);
+  background: var(--surface-input); border: 1px solid var(--border-input);
+}
+
+/* Переносящийся ряд миниатюр в порядке отправки — порядок списка ключей
+   объявления. Ряд, а не одна картинка со счётчиком: ADS-06 требует показать
+   ВСЁ, что уйдёт. */
+.preview__media { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.preview__media img {
+  display: block; height: 120px; width: auto; max-width: 100%;
+  object-fit: cover; border-radius: var(--r-md); background: var(--surface-pill);
+}
+
+/* Кегль и межстрочный совпадают с .field__input--area ДОСЛОВНО: предпросмотр
+   обязан переносить строки так же, как поле ввода, иначе он показывает не то,
+   что уйдёт (ADS-06). Переносы — pre-wrap + anywhere: неразрывная ссылка иначе
+   расширила бы липкую колонку. */
+.preview__text {
+  margin: 0; min-width: 0;
+  font-size: var(--fs-lg); line-height: 1.6; color: var(--text-secondary);
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+}
+.preview__time { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted); }
+
+/* Сводка «ключ — значение» ------------------------------------------------- */
+/* .kv — СТРОКА. Направляющая черта забирает свободное место, поэтому длинное
+   значение переносится на следующую строку под своей подписью, а не
+   выталкивает подпись из строки. */
+.kv { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.kv + .kv { margin-top: 8px; }
+.kv__k {
+  flex: none; font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted);
+}
+.kv__rule {
+  flex: 1 1 24px; min-width: 24px; height: 1px;
+  border-bottom: 1px dashed var(--border-control);
+}
+.kv__v {
+  flex: none; max-width: 100%; min-width: 0;
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-bright);
+  overflow-wrap: anywhere;
+}
+/* Цвет состояния приходит существующими модификаторами mono-метки: новых имён
+   классов под то же самое не заводится. Двойной селектор — из-за порядка
+   файла: одиночный .mono--warn проиграл бы .kv__v, объявленному ниже. */
+.kv__v.mono--warn { color: var(--warn); }
+.kv__v.mono--ok { color: var(--ok); }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-editor] { animation: none !important; }
+}
