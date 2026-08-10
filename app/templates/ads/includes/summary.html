@@ -1,0 +1,46 @@
+{# Сводка объявления — блок «ключ — значение» с направляющей чертой.
+
+   Это INCLUDE, а не макрос: фрагмент рендерится собственным ответом сервера
+   (ads/includes/autosave_response.html) и получает контекст запроса целиком.
+
+   ВСЕ значения генерируемые — слово состояния, два счётчика и отформатированная
+   дата. Пользовательский текст в блок не попадает вовсе, поэтому у него нет
+   пути неограниченного роста.
+
+   AD_STATUS_PUBLISHED — глобал окружения из app/constants.py: условие проверяет
+   ОПУБЛИКОВАННОСТЬ, а не черновик, чтобы нераспознанное значение падало в
+   «Черновик» — безопасный дефолт, потому что черновик не отправляется
+   (тот же приём, что в ads/includes/ad_card.html).
+
+   Дата — только через format_datetime_for_user: это единственный способ
+   показать время в таймзоне пользователя.
+
+   Контекст: `ad` (может быть None), `user`, `editor` (словарь из app/pages/ads.py). #}
+<div class="kv">
+  <span class="kv__k">Статус</span>
+  <span class="kv__rule"></span>
+  {%- if ad and ad.status == AD_STATUS_PUBLISHED %}
+  <span class="kv__v mono--ok">Опубликовано</span>
+  {%- else %}
+  <span class="kv__v mono--warn">Черновик</span>
+  {%- endif %}
+</div>
+<div class="kv">
+  <span class="kv__k">Вложения</span>
+  <span class="kv__rule"></span>
+  <span class="kv__v">{{ ad.images|length if ad and ad.images else 0 }}</span>
+</div>
+<div class="kv">
+  <span class="kv__k">Расписания</span>
+  <span class="kv__rule"></span>
+  <span class="kv__v">{{ editor.schedules_count if editor else 0 }}</span>
+</div>
+<div class="kv">
+  <span class="kv__k">Ближайший запуск</span>
+  <span class="kv__rule"></span>
+  {%- if editor and editor.next_run_at %}
+  <span class="kv__v">{{ format_datetime_for_user(editor.next_run_at, user, '%d.%m %H:%M') }}</span>
+  {%- else %}
+  <span class="kv__v">отправок не будет</span>
+  {%- endif %}
+</div>
