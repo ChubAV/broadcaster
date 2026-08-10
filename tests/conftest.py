@@ -11,6 +11,9 @@ from app.main import create_app
 @pytest_asyncio.fixture
 async def test_settings():
     return Settings(
+        # .env разработчика не должен протекать в тесты: без этого фикстура
+        # наследует боевые SMTP/S3-параметры рабочего каталога.
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         secret_key="test-secret-key",

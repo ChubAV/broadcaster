@@ -6,6 +6,7 @@ from app.main import create_app
 
 def _test_settings() -> Settings:
     return Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         secret_key="test-secret-key",
         telegram_api_id=12345,

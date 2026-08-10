@@ -3,6 +3,7 @@ from app.config import Settings
 
 def test_settings_defaults():
     s = Settings(
+        _env_file=None,
         database_url="postgresql+asyncpg://u:p@localhost/db",
         redis_url="redis://localhost:6379/0",
         secret_key="test-secret",
@@ -16,6 +17,7 @@ def test_log_level_default():
     """LOG_LEVEL defaults to INFO."""
     from app.config import Settings
     s = Settings(
+        _env_file=None,
         database_url="sqlite:///:memory:",
         secret_key="test",
     )
@@ -29,7 +31,10 @@ def test_log_level_override():
     os.environ["LOG_LEVEL"] = "DEBUG"
     os.environ["LOG_FORMAT"] = "console"
     from app.config import Settings
+    # _env_file=None отключает чтение файла .env, но НЕ переменные окружения —
+    # именно их этот тест и проверяет.
     s = Settings(
+        _env_file=None,
         database_url="sqlite:///:memory:",
         secret_key="test",
     )

@@ -23,6 +23,7 @@ async def auth_setup():
         engine, class_=AsyncSession, expire_on_commit=False
     )
     settings = Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         secret_key="test-secret",
@@ -100,6 +101,7 @@ async def test_start_qr_no_api_config_returns_error(auth_setup):
 
     sf = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     settings_no_api = Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         secret_key="test-secret",

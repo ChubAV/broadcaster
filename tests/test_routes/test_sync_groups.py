@@ -24,6 +24,7 @@ async def sync_setup():
         engine, class_=AsyncSession, expire_on_commit=False
     )
     settings = Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         secret_key="test-secret",
@@ -154,6 +155,7 @@ async def test_sync_groups_always_uses_settings_credentials(sync_setup):
     )
     # Settings with no telegram_api_id
     settings = Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         secret_key="test-secret",
