@@ -10,6 +10,13 @@
    снимает колонку; забытый читатель падает не пустой ячейкой, а 500-й — на
    `/api/ads` ошибкой схемы Pydantic, на остальных ошибкой SQL. Утверждения на
    код ответа здесь и есть проверка того, что не забыт ни один.
+
+   **План 02-06 снял двух читателей из этого списка.** Отдельные страницы
+   `/schedules/new` и `/schedules/{id}/edit` удалены (D-14): расписание
+   настраивается в редакторе объявления. Читателем состояния объявления на этом
+   месте стал сам редактор `/ads/{id}/edit` — он и проверяется ниже. Тесты
+   переведены на него, а не удалены: вопрос «переживает ли настройка расписаний
+   снятие колонки» остался, сменилось только место, где на него отвечают.
 """
 
 import pytest
@@ -49,7 +56,7 @@ async def _seed_ad(
     return ad
 
 
-async def _seed_schedule(db: AsyncSession, ad: Ad) -> Schedule:
+async def _seed_account(db: AsyncSession) -> MessengerAccount:
     user = await _user(db)
     account = MessengerAccount(
         user_id=user.id, type="tg_user", credentials="sess", status="active"
@@ -57,6 +64,11 @@ async def _seed_schedule(db: AsyncSession, ad: Ad) -> Schedule:
     db.add(account)
     await db.commit()
     await db.refresh(account)
+    return account
+
+
+async def _seed_schedule(db: AsyncSession, ad: Ad) -> Schedule:
+    account = await _seed_account(db)
 
     schedule = Schedule(
         ad_id=ad.id,
@@ -214,41 +226,72 @@ def test_api_literal_matches_constants():
 
 
 @pytest.mark.asyncio
-async def test_schedules_new_page_alive(
+async def test_schedule_creation_reader_alive_in_the_editor(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """SC-3: старый путь создания расписания переживает миграцию."""
-    await _seed_ad(db_session, status=AD_STATUS_PUBLISHED)
+    """SC-3: путь СОЗДАНИЯ расписания переживает миграцию.
 
-    response = await authed_client.get("/schedules/new", follow_redirects=False)
+    До плана 02-06 читателем был `GET /schedules/new`; страница снята (D-14), и
+    тот же вопрос теперь задаётся редактору объявления — единственному месту,
+    где расписание создаётся. Утверждение не ослаблено, а усилено: проверяется
+    не только код ответа, но и наличие самой формы создания, потому что живая
+    страница без формы была бы ровно тем отказом, который SC-3 запрещает.
+    """
+    ad = await _seed_ad(db_session, status=AD_STATUS_PUBLISHED)
+    # Аккаунт мессенджера — предусловие формы добавления в редакторе (D10 плана
+    # 02-05): без него на её месте стоит подсказка «Сначала подключите аккаунт».
+    await _seed_account(db_session)
+
+    response = await authed_client.get(f"/ads/{ad.id}/edit", follow_redirects=False)
 
     assert response.status_code == 200
+    assert 'action="/schedules/new"' in response.text
 
 
 @pytest.mark.asyncio
-async def test_schedules_edit_page_alive(
+async def test_schedule_editing_reader_alive_in_the_editor(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
+    """То же для пути ИЗМЕНЕНИЯ: читателем стала карточка в редакторе.
+
+    `GET /schedules/{id}/edit` снят; развёрнутая карточка расписания живёт в
+    редакторе объявления и сохраняется на `POST /schedules/{id}/edit`.
+    """
     ad = await _seed_ad(db_session, status=AD_STATUS_PUBLISHED)
     schedule = await _seed_schedule(db_session, ad)
 
     response = await authed_client.get(
-        f"/schedules/{schedule.id}/edit", follow_redirects=False
+        f"/ads/{ad.id}/edit?sched={schedule.id}", follow_redirects=False
     )
 
     assert response.status_code == 200
+    html = response.text
+    # Карточка развёрнута и несёт СВОИ данные, а не пустую разметку.
+    assert f'action="/schedules/{schedule.id}/edit"' in html
+    assert "09:00" in html
 
 
 @pytest.mark.asyncio
-async def test_schedules_new_does_not_offer_draft_ads(
+async def test_editor_of_a_draft_ad_says_there_will_be_no_sends(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Черновик не предлагается к выбору: расписание на него не сработает."""
-    await _seed_ad(db_session, status=AD_STATUS_PUBLISHED, title="Опубликованное")
-    await _seed_ad(db_session, status=AD_STATUS_DRAFT, title="Черновиковое")
+    """Черновику не обещается рассылка ТАМ, где настраивается расписание.
 
-    response = await authed_client.get("/schedules/new", follow_redirects=False)
+    До плана 02-06 то же обещание проверялось иначе: страница `/schedules/new`
+    предлагала выбрать объявление, и черновики в этот список не попадали.
+    Выбора объявления больше нет — расписание принадлежит тому объявлению, чей
+    редактор открыт, — поэтому вопрос «не обещаем ли мы рассылку черновику»
+    задаётся редактору: он обязан назвать состояние черновиком и сказать, что
+    отправок не будет (D-01/D-02, UI-SPEC §Status vocabulary).
+    """
+    draft = await _seed_ad(db_session, status=AD_STATUS_DRAFT, title="Черновиковое")
+    published = await _seed_ad(
+        db_session, status=AD_STATUS_PUBLISHED, title="Опубликованное"
+    )
 
-    assert response.status_code == 200
-    assert "Опубликованное" in response.text
-    assert "Черновиковое" not in response.text
+    draft_html = (await authed_client.get(f"/ads/{draft.id}/edit")).text
+    assert DRAFT_BADGE in draft_html
+    assert "отправок не будет" in draft_html
+
+    published_html = (await authed_client.get(f"/ads/{published.id}/edit")).text
+    assert PUBLISHED_BADGE in published_html

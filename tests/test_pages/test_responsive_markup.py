@@ -273,7 +273,12 @@ async def test_schedules_card_renders_data(
     html = response.text
     assert "Расписание летней акции" in html
     assert "09:30" in html
-    assert f"/schedules/{schedule.id}/edit" in html
+    # Действие строки ведёт В РЕДАКТОР ОБЪЯВЛЕНИЯ к ЭТОМУ расписанию: параметр
+    # выбранного расписания разворачивает нужную карточку (план 02-05).
+    # До плана 02-06 здесь стоял адрес отдельной страницы редактирования
+    # расписания; страница снята (D-14), поведение — переход к настройке именно
+    # этого расписания — осталось прежним и проверяется на новом адресе.
+    assert f"/ads/{schedule.ad_id}/edit?sched={schedule.id}" in html
     assert f"/schedules/{schedule.id}/toggle" in html
 
 

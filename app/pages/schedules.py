@@ -344,9 +344,17 @@ async def schedules_create(
     # активным с нулём групп (Pitfall 8).
     group_ids = [gid for gid in group_ids if gid in available]
 
-    tz = form_data.get("timezone", "UTC")
+    # Умолчание — ТАЙМЗОНА ПРОФИЛЯ, а не литерал UTC. Снятая форма расписания
+    # подставляла её в селект сама (`default_timezone`), а карточка редактора
+    # таймзону не спрашивает вовсе: по UI-SPEC это подпись «Время по {tz из
+    # профиля}» только для чтения, и поля `timezone` в форме добавления нет.
+    # С литералом UTC расписание после переезда молча создавалось бы в чужом
+    # часовом поясе, а подпись обещала бы пользовательский — расхождение,
+    # которое видно только по неотправленной вовремя рассылке.
+    profile_tz = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
+    tz = form_data.get("timezone", profile_tz)
     if tz not in VALID_TIMEZONES:
-        tz = "UTC"
+        tz = profile_tz
 
     complete = _is_complete(account_id, group_ids, days_of_week, times_of_day)
     next_run = (
