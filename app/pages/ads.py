@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Form, Query, Request
+import re
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +14,57 @@ from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
+
+# Список ключей вложений приходит скрытыми полями формы (и телом JSON на
+# API-входе) и полностью управляем клиентом: он ключ ОБЪЯВЛЯЕТ, но не доказывает
+# ни его формы, ни принадлежности отправителю. Без проверки объявление
+# сохраняется с ключом из чужого префикса того же хранилища, и чужое изображение
+# начинает отдаваться в карточке, истории и админке (WR-01 / T-10-04).
+#
+# Форма ключа — источник правды `app/routes/uploads.py`: `{user_id}/{32 hex}_{имя}`,
+# где `uuid4().hex` даёт ровно 32 шестнадцатеричных символа, а `safe_filename`
+# сводит имя к `[A-Za-z0-9._-]` длиной до 100.
+_IMAGE_KEY_PATTERN = re.compile(r"^(\d+)/[0-9a-f]{32}_[A-Za-z0-9._-]{1,100}$")
+
+INACCESSIBLE_IMAGE_MESSAGE = (
+    "Одно из вложений недоступно. Обновите страницу и добавьте изображение заново."
+)
+
+
+def own_image_keys(values: list[str], user_id: int, max_images: int) -> list[str]:
+    """Проверить, что каждый ключ вложения принадлежит вызывающему.
+
+    Возвращает список в исходном порядке загрузки. Поднимает ``HTTPException``
+    с кодом 400, если значение не соответствует форме ключа, лежит вне префикса
+    вызывающего или если вложений больше ``max_images``.
+
+    Отказ, а не молчаливое отбрасывание значения: отбрасывание превратило бы
+    попытку подмены в «успешное сохранение без картинки» и скрыло бы её от
+    пользователя, оставив в БД тихо расходящееся с формой состояние.
+
+    Отказ оформлен ``HTTPException`` на обоих слоях сознательно. Страничный слой
+    в этом проекте отвечает редиректами, но редирект здесь означал бы потерю
+    данных без объяснения: пользователь увидел бы список объявлений и не узнал,
+    что сохранение не состоялось. Ошибка по данным — не навигация.
+    """
+    if len(values) > max_images:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Объявление не сохранено: вложений больше {max_images}. "
+                "Удалите лишние и нажмите «Сохранить»."
+            ),
+        )
+
+    for value in values:
+        match = _IMAGE_KEY_PATTERN.match(value)
+        if match is None or int(match.group(1)) != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=INACCESSIBLE_IMAGE_MESSAGE,
+            )
+
+    return list(values)
 
 
 async def _enrich_ads_with_stats(db: AsyncSession, ads: list[Ad]) -> None:
@@ -131,7 +184,11 @@ async def ads_create(
         return RedirectResponse(url="/login", status_code=302)
 
     form_data = await request.form()
-    image_list = [v for v in form_data.getlist("images") if v.strip()]
+    image_list = own_image_keys(
+        [v for v in form_data.getlist("images") if v.strip()],
+        user.id,
+        settings.max_images_per_ad,
+    )
     ad = Ad(user_id=user.id, title=title, text=text, images=image_list)
     db.add(ad)
     await db.commit()
@@ -181,7 +238,13 @@ async def ads_update(
         return RedirectResponse(url="/ads", status_code=302)
 
     form_data = await request.form()
-    image_list = [v for v in form_data.getlist("images") if v.strip()]
+    # Проверка до первой записи в модель: иначе отказ оставил бы объявление
+    # частично изменённым (заголовок новый, вложения старые).
+    image_list = own_image_keys(
+        [v for v in form_data.getlist("images") if v.strip()],
+        user.id,
+        settings.max_images_per_ad,
+    )
     ad.title = title
     ad.text = text
     ad.images = image_list

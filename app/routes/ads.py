@@ -4,7 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_current_user_id, get_db
+from app.config import Settings
+from app.dependencies import get_current_user_id, get_db, get_settings
+# Правило ключа вложения живёт в одном месте на оба слоя: разъехавшись, они
+# оставили бы JSON-вход открытым для ровно того же WR-01, что закрыт на форме.
+from app.pages.ads import own_image_keys
 from app.repositories.ad import AdRepository
 
 router = APIRouter(prefix="/api/ads", tags=["ads"])
@@ -37,13 +41,14 @@ async def create_ad(
     data: CreateAdRequest,
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ):
     repo = AdRepository(db)
     ad = await repo.create(
         user_id=user_id,
         title=data.title,
         text=data.text,
-        images=data.images,
+        images=own_image_keys(data.images, user_id, settings.max_images_per_ad),
     )
     return ad
 
@@ -76,13 +81,23 @@ async def update_ad(
     data: UpdateAdRequest,
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ):
     repo = AdRepository(db)
     ad = await repo.get_by_id_and_user(ad_id, user_id)
     if ad is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ad not found")
 
-    ad = await repo.update(ad, **data.model_dump(exclude_unset=True))
+    fields = data.model_dump(exclude_unset=True)
+    # Отсутствие ключа `images` (не передан) и переданный пустой список — разные
+    # намерения; `exclude_unset` их уже различает, и проверка это различие
+    # сохраняет, иначе правка одного заголовка обнуляла бы вложения.
+    if fields.get("images") is not None:
+        fields["images"] = own_image_keys(
+            fields["images"], user_id, settings.max_images_per_ad
+        )
+
+    ad = await repo.update(ad, **fields)
     return ad
 
 
