@@ -87,18 +87,35 @@ async def test_schedules_partial_shows_detached_schedule(
 
 
 @pytest.mark.asyncio
-async def test_schedules_edit_page_renders_for_detached_schedule(
+async def test_editor_renders_the_detached_schedule(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
+    """Отвязанное расписание открывается на настройку и не даёт выбрать аккаунт.
+
+    До плана 02-06 то же проверялось на `/schedules/{id}/edit`; отдельная
+    страница снята (D-14), и настройка живёт в редакторе объявления. Проверяемое
+    поведение то же: запись не теряется, её карточка открывается, а аккаунт
+    выбрать не из чего — единственный был удалён (issue #35).
+    """
     schedule_id = await _seed_detached_schedule(client, auth_headers)
     await _login(client)
 
-    response = await client.get(f"/schedules/{schedule_id}/edit")
+    db_session.expire_all()
+    ad_id = (
+        await db_session.execute(select(Schedule).where(Schedule.id == schedule_id))
+    ).scalar_one().ad_id
+
+    response = await client.get(f"/ads/{ad_id}/edit?sched={schedule_id}")
     assert response.status_code == 200
     html = response.text
-    assert 'name="account_id"' in html
-    # Ни один вариант аккаунта не может быть выбран: аккаунт удалён
-    assert "selected" not in html.split('name="account_id"')[1].split("</select>")[0]
+    # Карточка развёрнута: её собственная форма сохранения на месте.
+    assert f'action="/schedules/{schedule_id}/edit"' in html
+    # Аккаунт выбрать НЕ ИЗ ЧЕГО, и вместо пустой полосы чипсов названа причина
+    # и следующий шаг.
+    assert 'name="account_id"' not in html
+    assert "Сначала подключите аккаунт мессенджера" in html
+    # Без аккаунта расписание неполно и включиться не может (D-08, SCH-05).
+    assert "Не заполнено" in html
 
 
 @pytest.mark.asyncio

@@ -167,6 +167,9 @@ async def test_toggle_works_again_after_reattaching_account(
 
     new_account_id = await _create_account(client, auth_headers)
 
+    # Аккаунт привязывается заново ИЗ РЕДАКТОРА ОБЪЯВЛЕНИЯ: отдельной формы
+    # расписания больше нет (D-14, план 02-06). Обработчик тот же самый, к нему
+    # добавлен признак происхождения — ровно то, что шлёт карточка редактора.
     edit = await client.post(
         f"/schedules/{schedule_id}/edit",
         data={
@@ -175,10 +178,14 @@ async def test_toggle_works_again_after_reattaching_account(
             "days_of_week": ["0", "1", "2", "3", "4", "5", "6"],
             "times_of_day": ["09:00"],
             "timezone": "UTC",
+            "return_to": "editor",
         },
         follow_redirects=False,
     )
     assert edit.status_code == 302
+    # Пользователь остаётся в редакторе, у той же карточки — а не уезжает на
+    # снесённую страницу расписания.
+    assert edit.headers["location"].startswith(f"/ads/{ad_id}/edit")
 
     row = await _reload(db_session, schedule_id)
     assert row.account_id == new_account_id

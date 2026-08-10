@@ -11,7 +11,11 @@
    рендерит шапка шелла. Собственного заголовка у страницы нет — он бы
    задвоился. #}
 {% block page_title %}Расписания{% endblock %}
-{% block page_actions %}{{ link_button('Создать', '/schedules/new', icon='plus') }}{% endblock %}
+{#- Действия «Создать» у сводного списка БОЛЬШЕ НЕТ (D-14): расписание создаётся
+    в редакторе объявления, и кнопка вела бы на снесённую страницу. Вместо неё —
+    приглушённый переход к объявлениям (UI-SPEC §Copywriting Contract, строка
+    «Summary list head action»). -#}
+{% block page_actions %}{{ link_button('К объявлениям', '/ads', variant='ghost', icon='arrow-right', title='Расписание создаётся в редакторе объявления') }}{% endblock %}
 
 {% block content %}
 {% if schedules %}
@@ -29,9 +33,12 @@
   {% endif %}
 {{ card_close() }}
 {% else %}
-{{ empty_state('Нет расписаний',
-               hint='Создайте расписание, чтобы объявление уходило в группы по графику',
-               action_label='Создать первое расписание',
-               action_href='/schedules/new') }}
+{#- Копия — из UI-SPEC §Empty states, строка «Summary list — user has no
+    schedules at all». Подсказка называет МЕСТО создания, потому что на самом
+    сводном списке создать расписание больше нельзя (D-14). -#}
+{{ empty_state('Расписаний пока нет',
+               hint='Расписания создаются в редакторе объявления',
+               action_label='К объявлениям',
+               action_href='/ads') }}
 {% endif %}
 {% endblock %}

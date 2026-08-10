@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.constants import AD_STATUS_PUBLISHED, TIMEZONE_CHOICES, VALID_TIMEZONES
+from app.constants import VALID_TIMEZONES
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
 from app.models.group import Group
@@ -267,54 +267,15 @@ async def schedules_list(
     )
 
 
-@router.get("/schedules/new", response_class=HTMLResponse)
-async def schedules_new(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    user = await get_user_from_cookie(request, db, settings)
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-
-    ads = (
-        await db.execute(
-            # Черновики к выбору не предлагаются: расписание на черновик по
-            # D-01 не сработает, и предложить его значило бы пообещать
-            # пользователю рассылку, которой не будет.
-            select(Ad).where(Ad.user_id == user.id, Ad.status == AD_STATUS_PUBLISHED)
-        )
-    ).scalars().all()
-    accounts = (
-        await db.execute(
-            select(MessengerAccount).where(MessengerAccount.user_id == user.id)
-        )
-    ).scalars().all()
-    groups = (
-        await db.execute(
-            select(Group).where(Group.user_id == user.id, Group.is_active == True)  # noqa: E712
-        )
-    ).scalars().all()
-
-    default_timezone = None
-    if user.timezone in VALID_TIMEZONES:
-        default_timezone = user.timezone
-
-    return templates.TemplateResponse(
-        "schedules/form.html",
-        {
-            "request": request,
-            "user": user,
-            "is_admin": check_is_admin(user, settings),
-            "schedule": None,
-            "ads": ads,
-            "accounts": accounts,
-            "groups": groups,
-            "timezone_choices": TIMEZONE_CHOICES,
-            "default_timezone": default_timezone,
-            "active_page": "schedules",
-        },
-    )
+# D-14, D-16: ОТДЕЛЬНЫХ СТРАНИЦ создания и редактирования расписания больше нет.
+# `GET /schedules/new` и `GET /schedules/{id}/edit` вместе с шаблоном
+# `schedules/form.html` сняты планом 02-06: расписание настраивается ровно одним
+# способом — в редакторе объявления (`/ads/{id}/edit`), где карточка
+# `ads/includes/sched_card.html` несёт собственные формы.
+#
+# ОБРАБОТЧИКИ ФОРМ ОСТАЛИСЬ. `POST /schedules/new` и `POST /schedules/{id}/edit`
+# ниже обслуживают именно карточку редактора — снос POST-маршрутов оборвал бы
+# новый путь ровно в тот момент, когда старый уже удалён (SC-3).
 
 
 async def _groups_of_account(
@@ -383,9 +344,17 @@ async def schedules_create(
     # активным с нулём групп (Pitfall 8).
     group_ids = [gid for gid in group_ids if gid in available]
 
-    tz = form_data.get("timezone", "UTC")
+    # Умолчание — ТАЙМЗОНА ПРОФИЛЯ, а не литерал UTC. Снятая форма расписания
+    # подставляла её в селект сама (`default_timezone`), а карточка редактора
+    # таймзону не спрашивает вовсе: по UI-SPEC это подпись «Время по {tz из
+    # профиля}» только для чтения, и поля `timezone` в форме добавления нет.
+    # С литералом UTC расписание после переезда молча создавалось бы в чужом
+    # часовом поясе, а подпись обещала бы пользовательский — расхождение,
+    # которое видно только по неотправленной вовремя рассылке.
+    profile_tz = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
+    tz = form_data.get("timezone", profile_tz)
     if tz not in VALID_TIMEZONES:
-        tz = "UTC"
+        tz = profile_tz
 
     complete = _is_complete(account_id, group_ids, days_of_week, times_of_day)
     next_run = (
@@ -410,61 +379,6 @@ async def schedules_create(
     await db.commit()
     await db.refresh(schedule)
     return _editor_redirect(form_data, ad_id, schedule.id)
-
-
-@router.get("/schedules/{schedule_id}/edit", response_class=HTMLResponse)
-async def schedules_edit(
-    request: Request,
-    schedule_id: int,
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    user = await get_user_from_cookie(request, db, settings)
-    if not user:
-        return RedirectResponse(url="/login", status_code=302)
-
-    result = await db.execute(
-        select(Schedule)
-        .join(Ad, Schedule.ad_id == Ad.id)
-        .where(Schedule.id == schedule_id, Ad.user_id == user.id)
-    )
-    schedule = result.scalar_one_or_none()
-    if not schedule:
-        return RedirectResponse(url="/schedules", status_code=302)
-
-    ads = (
-        await db.execute(
-            # Черновики к выбору не предлагаются: расписание на черновик по
-            # D-01 не сработает, и предложить его значило бы пообещать
-            # пользователю рассылку, которой не будет.
-            select(Ad).where(Ad.user_id == user.id, Ad.status == AD_STATUS_PUBLISHED)
-        )
-    ).scalars().all()
-    accounts = (
-        await db.execute(
-            select(MessengerAccount).where(MessengerAccount.user_id == user.id)
-        )
-    ).scalars().all()
-    groups = (
-        await db.execute(
-            select(Group).where(Group.user_id == user.id, Group.is_active == True)  # noqa: E712
-        )
-    ).scalars().all()
-
-    return templates.TemplateResponse(
-        "schedules/form.html",
-        {
-            "request": request,
-            "user": user,
-            "is_admin": check_is_admin(user, settings),
-            "schedule": schedule,
-            "ads": ads,
-            "accounts": accounts,
-            "groups": groups,
-            "timezone_choices": TIMEZONE_CHOICES,
-            "active_page": "schedules",
-        },
-    )
 
 
 @router.post("/schedules/{schedule_id}/edit")

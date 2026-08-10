@@ -6,6 +6,12 @@ from urllib.parse import urlsplit
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.constants import AD_STATUS_PUBLISHED
+from app.models.ad import Ad
+from app.models.user import User
 
 
 # --- UI-01: своя статика вместо CDN -----------------------------------------
@@ -83,7 +89,6 @@ SHELL_ROUTES = (
     "/accounts/connect/max",
     "/groups",
     "/schedules",
-    "/schedules/new",
     "/history",
     "/billing",
     "/profile",
@@ -111,9 +116,14 @@ PARTIAL_ROUTES = (
 # приложения через bind_image_url_globals в create_app (D-21), поэтому
 # страница вернулась в SHELL_ROUTES наравне с остальными.
 #
-# Адрес /schedules/new остаётся в обходе до плана 02-06, который сносит
-# отдельные страницы расписаний; путь создания расписания в любом коммите
-# фазы держит tests/test_pages/test_schedule_creation_path_exists.py (SC-3).
+# АДРЕС /schedules/new ИЗ ОБХОДА УБРАН планом 02-06: отдельные страницы
+# расписаний сняты (D-14). Страницей настройки расписаний стал редактор
+# объявления, но у него есть path-параметр, и в этот перечень он по построению
+# не входит — «все страницы БЕЗ path-параметров». Чтобы четыре проверки обхода
+# (шелл, отсутствие сторонних ресурсов, версионирование статики, единственная
+# подсветка навигации) не потерялись вместе с адресом, редактор проверяется
+# отдельным тестом test_ad_editor_page_gets_the_full_shell_treatment ниже.
+# `/ads/new` — тот же редактор в режиме создания — в перечне остаётся.
 
 EXTERNAL_HOSTS = (
     "cdn.tailwindcss.com",
@@ -248,6 +258,48 @@ async def test_active_nav_highlight(authed_client: AsyncClient, route: str):
     """
     html = (await authed_client.get(route)).text
     # Сайдбар помечает пункт is-active; нижние табы — только aria-current
+    assert html.count("is-active") == 1, route
+
+
+@pytest.mark.asyncio
+async def test_ad_editor_page_gets_the_full_shell_treatment(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Редактор объявления — страница настройки расписаний (D-14, план 02-06).
+
+    Заменяет вклад снятого `/schedules/new` в сплошной обход. Адрес несёт
+    path-параметр и потому в SHELL_ROUTES не входит; все четыре утверждения
+    обхода воспроизведены здесь на одной странице, а не потеряны вместе с ней.
+    """
+    user = (
+        await db_session.execute(select(User).where(User.email == "testuser@test.com"))
+    ).scalar_one()
+    ad = Ad(
+        user_id=user.id, title="Объявление обхода", text="Текст", images=[],
+        status=AD_STATUS_PUBLISHED,
+    )
+    db_session.add(ad)
+    await db_session.commit()
+    await db_session.refresh(ad)
+
+    route = f"/ads/{ad.id}/edit"
+    response = await authed_client.get(route)
+    assert response.status_code == 200, route
+    html = response.text
+
+    # 1. Шелл целиком
+    assert "data-shell" in html, route
+    assert "data-nav" in html, route
+    assert "data-tabs" in html, route
+    # 2. Ни одного стороннего ресурса
+    _assert_no_external_assets(html, route)
+    # 3. Статика версионирована
+    static_refs = [r for r in ASSET_REF_RE.findall(html) if "/static/" in r]
+    assert static_refs, f"{route}: ссылок на статику не найдено"
+    for ref in static_refs:
+        assert re.search(r"\?v=\S+", ref), f"{route}: ссылка без версии — {ref}"
+    assert any("app.css" in r for r in static_refs), route
+    # 4. Подсвечен ровно один раздел
     assert html.count("is-active") == 1, route
 
 
