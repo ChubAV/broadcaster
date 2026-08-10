@@ -1498,6 +1498,68 @@ a:hover { color: var(--accent-link-hover); }
 .kv__v.mono--warn { color: var(--warn); }
 .kv__v.mono--ok { color: var(--ok); }
 
+/* Карточка сводного списка расписаний (План 02-07) ------------------------- */
+/* Контейнер [data-sched-list] объявлен ВЫШЕ и переиспользуется как есть:
+   промежуток между карточками 16 одинаков в редакторе и в сводном списке, и
+   второе объявление того же имени разъехалось бы с первым.
+
+   Полосы прогресса отправок здесь нет и быть не может (D-17) — ровно по той же
+   причине, что и в карточке редактора: процента в данных не существует. */
+
+/* Вводный абзац сводного списка и счётчик найденных. Ритм 24 между абзацем,
+   полосой фильтров и списком — шаг xl из UI-SPEC §Spacing Scale. */
+.sched-lead {
+  margin: 0 0 24px; min-width: 0;
+  font-size: var(--fs-lg); line-height: 1.6; color: var(--text-secondary);
+}
+.sched-count { margin: 0 0 16px; min-width: 0; }
+
+.sched-item {
+  display: flex; flex-direction: column; gap: 12px; min-width: 0;
+  padding: 16px; border-radius: var(--r-xl);
+  background: var(--surface); border: 1px solid var(--border-input);
+}
+
+/* Шапка карточки — СТРОКА, которая не переносится: заголовок обрезается
+   первым, а тумблер и переход в редактор сохраняют свои позиции при любой
+   длине названия объявления (UI-SPEC E13 long-text). Бейджи вынесены строкой
+   ниже именно поэтому: «Объявление в черновике» длиннее, чем остаток строки на
+   320px, и в шапке он вытолкнул бы органы управления.
+   Высота ≥40px — компенсация унаследованной дорожки тумблера в 22px: областью
+   нажатия является вся подпись, а не дорожка. */
+.sched-item__head {
+  display: flex; align-items: center; gap: 12px;
+  min-width: 0; min-height: 40px;
+}
+.sched-item__head > .msg,
+.sched-item__head > form,
+.sched-item__head > .btn { flex: none; }
+.sched-item__head .toggle { min-height: 40px; }
+
+/* min-width: 0 обязателен: без него flex-элемент не сжимается ниже своего
+   содержимого, и длинное название вытолкнуло бы тумблер из шапки вместо того,
+   чтобы обрезаться. Полное значение живёт в подсказке. */
+.sched-item__title {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--fs-xl); font-weight: 600; letter-spacing: -.015em;
+}
+
+.sched-item__tags { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+
+/* Ячейка дня сводного списка 40×32 — тот же примитив .chip, что в редакторе,
+   только меньше и БЕЗ курсора указателя: здесь день показывается, а не
+   выбирается. */
+.sched-item__days { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.sched-item__days .chip {
+  width: 40px; height: 32px; padding: 0; cursor: default;
+  font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: .04em;
+}
+
+/* Строки «ключ — значение» приходят существующим примитивом .kv: собственные
+   правила под то же самое не заводятся, а вертикальный ритм задаёт .kv + .kv. */
+.sched-item__meta { display: flex; flex-direction: column; min-width: 0; }
+
 @media (prefers-reduced-motion: reduce) {
   [data-editor] { animation: none !important; }
 }

@@ -3,11 +3,11 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.constants import VALID_TIMEZONES
+from app.constants import AD_STATUS_DRAFT, VALID_TIMEZONES
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
 from app.models.group import Group
@@ -36,6 +36,96 @@ _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 # хранить нельзя: обработчик отбрасывает пустые строки, и «+ ВРЕМЯ» без JS не
 # оставлял бы после себя ничего видимого.
 DEFAULT_TIME = "09:00"
+
+# Сколько имён групп показывает карточка сводного списка, прежде чем остаток
+# сворачивается в «и ещё K». SCH-04 и критерий 4 перечисляют группы наравне с
+# объявлением, каналом, днями и временем — то есть требуют СОДЕРЖАНИЯ, а не
+# количества; предел существует, чтобы карточка не росла неограниченно.
+SUMMARY_GROUP_NAMES = 3
+
+# Оси фильтрации сводного списка (UI-SPEC §Copywriting Contract, E14). Значения
+# канала — те же, что у `MessengerAccount.type`; значения состояния описывают
+# `Schedule.is_active`. Перечни объявлены здесь, а не в шаблоне: неизвестное
+# значение обязано отсекаться СЕРВЕРОМ, разметка точкой принуждения не является.
+CHANNEL_FILTER_VALUES = ("tg_user", "wa", "max")
+STATE_FILTER_VALUES = ("active", "paused")
+
+
+def _clean_choice(value: str | None, allowed) -> str:
+    """Неизвестное или испорченное значение фильтра → вариант «Все».
+
+    Пустая строка означает «не фильтровать по этой оси». Отказ страницы был бы
+    здесь неверным исходом: значение приходит строкой запроса, то есть из
+    ссылки, закладки или чужого сообщения, и уронить на нём страницу — это
+    отказ в обслуживании по подконтрольному отправителю значению (T-02-35).
+    """
+    if not value:
+        return ""
+    value = value.strip()
+    return value if value in allowed else ""
+
+
+def _filter_params(channel: str, state: str, search: str) -> dict:
+    """Действующие фильтры для URL сентинела бесконечной прокрутки.
+
+    Потерянный здесь фильтр не роняет страницу — он молча подмешивает
+    неотфильтрованные расписания к отфильтрованным на второй странице выдачи.
+    """
+    params = {}
+    if channel:
+        params["channel"] = channel
+    if state:
+        params["state"] = state
+    if search:
+        params["search"] = search
+    return params
+
+
+async def _time_matching_ids(db: AsyncSession, user_id: int, term: str) -> list[int]:
+    """Расписания, у которых искомое встречается во ВРЕМЕНИ запуска.
+
+    Времена лежат JSON-массивом, и переносимого предиката «подстрока внутри
+    элемента массива» у проекта нет: `app/pages/groups.py` по той же причине
+    считает расписания по группам в Python. Запрос ОДИН и выполняется только
+    при непустом поиске — по числу расписаний страницы он не растёт.
+    """
+    rows = await db.execute(
+        select(Schedule.id, Schedule.times_of_day)
+        .join(Ad, Schedule.ad_id == Ad.id)
+        .where(Ad.user_id == user_id)
+    )
+    needle = term.lower()
+    return [
+        row.id
+        for row in rows
+        if any(needle in (t or "").lower() for t in (row.times_of_day or []))
+    ]
+
+
+async def _group_names_for(db: AsyncSession, user_id: int, schedules) -> dict[int, str]:
+    """Отображение «идентификатор группы → имя» для ВСЕЙ страницы одним запросом.
+
+    Запрос обязан ограничиваться группами пользователя. Расписание хранит
+    идентификаторы групп массивом и своего `user_id` не имеет: без связки по
+    владельцу достаточно сохранить своё расписание с чужим идентификатором,
+    чтобы имя чужой группы отрисовалось в карточке (T-02-34).
+
+    Запросов НА РАСПИСАНИЕ не делается — образец обогащения одним
+    сгруппированным запросом стоит в `app/pages/ads.py:_enrich_ads_with_stats`
+    (T-02-38).
+    """
+    ids = {
+        gid
+        for schedule in schedules
+        for gid in (schedule.group_ids or [])
+        if isinstance(gid, int)
+    }
+    if not ids:
+        return {}
+    rows = await db.execute(
+        select(Group.id, Group.name).where(Group.id.in_(ids), Group.user_id == user_id)
+    )
+    return {row.id: row.name for row in rows}
 
 
 def _clean_times(values: list[str]) -> list[str]:
@@ -170,15 +260,84 @@ async def _owns_ad_and_account(
     return own_account is not None
 
 
-def _build_schedule_items(result, user, tz):
-    """Build schedule items with next_run_local from raw query result."""
+def _summary_query(user_id: int):
+    """Общий каркас выдачи сводного списка: соединения и связка по владельцу."""
+    return (
+        select(
+            Schedule,
+            Ad.title.label("ad_title"),
+            Ad.status.label("ad_status"),
+            MessengerAccount.type.label("messenger_type"),
+        )
+        .join(Ad, Schedule.ad_id == Ad.id)
+        # outer join: расписание с удалённым аккаунтом (account_id IS NULL)
+        # должно остаться видимым (issue #35)
+        .join(MessengerAccount, Schedule.account_id == MessengerAccount.id, isouter=True)
+        .where(Ad.user_id == user_id)
+    )
+
+
+def _summary_count_query(user_id: int):
+    """Тот же набор строк, но счётчиком: подпись «{n} расписаний» считает ВСЕ
+    найденные, а не только попавшие на первую страницу выдачи."""
+    return (
+        select(func.count())
+        .select_from(Schedule)
+        .join(Ad, Schedule.ad_id == Ad.id)
+        .join(MessengerAccount, Schedule.account_id == MessengerAccount.id, isouter=True)
+        .where(Ad.user_id == user_id)
+    )
+
+
+def _apply_filters(query, channel: str, state: str, search: str, time_ids: list[int]):
+    """Три оси фильтрации, одинаковые для страницы, счётчика и порции прокрутки.
+
+    Один набор условий на три запроса: разъехавшись, счётчик показывал бы одно
+    число, а список — другой набор карточек.
+    """
+    if channel:
+        query = query.where(MessengerAccount.type == channel)
+    if state:
+        query = query.where(Schedule.is_active.is_(state == "active"))
+    if search:
+        pattern = f"%{search}%"
+        query = query.where(
+            or_(Ad.title.ilike(pattern), Schedule.id.in_(time_ids))
+        )
+    return query
+
+
+def _build_schedule_items(result, user, tz, group_names=None):
+    """Build schedule items with next_run_local from raw query result.
+
+    `group_names` — отображение, полученное ОДНИМ запросом на страницу.
+    Идентификатор, которому имени не нашлось (группа удалена или отвязана), в
+    имена не превращается и не рендерится пустой строкой; остаток «и ещё K»
+    считается по РАЗРЕШЁННЫМ именам, иначе карточка обещала бы группы, показать
+    которые нечем.
+    """
+    names = group_names or {}
     items = [
-        {"schedule": r.Schedule, "ad_title": r.ad_title, "messenger_type": r.messenger_type}
+        {
+            "schedule": r.Schedule,
+            "ad_title": r.ad_title,
+            "messenger_type": r.messenger_type,
+            # Сравнение с КОНСТАНТОЙ, а не со строковым литералом: значение
+            # состояния объявления живёт в app/constants.py единственным
+            # источником на весь проект (D-02).
+            "is_draft": r.ad_status == AD_STATUS_DRAFT,
+        }
         for r in result
     ]
     tz_name = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
     for item in items:
         sched = item["schedule"]
+        resolved = [
+            names[gid] for gid in (sched.group_ids or []) if gid in names
+        ]
+        item["group_names"] = resolved[:SUMMARY_GROUP_NAMES]
+        item["group_extra"] = max(len(resolved) - SUMMARY_GROUP_NAMES, 0)
+        item["group_total"] = len(resolved)
         if sched.next_run_at:
             item["next_run_local"] = sched.next_run_at.astimezone(tz)
             item["tz_label"] = tz_name.split("/")[-1] if "/" in tz_name else tz_name
@@ -193,6 +352,9 @@ async def schedules_partial(
     request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    channel: str | None = Query(None),
+    state: str | None = Query(None),
+    search: str | None = Query(None),
     # D-15: параметр компоновки принимается и игнорируется — см. app/pages/ads.py
     layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -203,20 +365,21 @@ async def schedules_partial(
         return RedirectResponse(url="/login", status_code=302)
     tz_name = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
     tz = ZoneInfo(tz_name)
+
+    channel = _clean_choice(channel, CHANNEL_FILTER_VALUES)
+    state = _clean_choice(state, STATE_FILTER_VALUES)
+    search = (search or "").strip()
+    time_ids = await _time_matching_ids(db, user.id, search) if search else []
+
+    query = _apply_filters(_summary_query(user.id), channel, state, search, time_ids)
     result = await db.execute(
-        select(Schedule, Ad.title.label("ad_title"), MessengerAccount.type.label("messenger_type"))
-        .join(Ad, Schedule.ad_id == Ad.id)
-        # outer join: расписание с удалённым аккаунтом (account_id IS NULL)
-        # должно остаться видимым (issue #35)
-        .join(MessengerAccount, Schedule.account_id == MessengerAccount.id, isouter=True)
-        .where(Ad.user_id == user.id)
-        .order_by(Schedule.id)
-        .offset(offset)
-        .limit(limit + 1)
+        query.order_by(Schedule.id).offset(offset).limit(limit + 1)
     )
     rows = list(result)
     has_next = len(rows) > limit
-    schedules = _build_schedule_items(rows[:limit], user, tz)
+    page = rows[:limit]
+    group_names = await _group_names_for(db, user.id, [r.Schedule for r in page])
+    schedules = _build_schedule_items(page, user, tz, group_names)
     return templates.TemplateResponse(
         "schedules/partial_cards.html",
         {
@@ -225,6 +388,7 @@ async def schedules_partial(
             "schedules": schedules,
             "has_next": has_next,
             "next_offset": offset + limit,
+            "filter_params": _filter_params(channel, state, search),
         },
     )
 
@@ -232,6 +396,9 @@ async def schedules_partial(
 @router.get("/schedules", response_class=HTMLResponse)
 async def schedules_list(
     request: Request,
+    channel: str | None = Query(None),
+    state: str | None = Query(None),
+    search: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -240,19 +407,33 @@ async def schedules_list(
         return RedirectResponse(url="/login", status_code=302)
     tz_name = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
     tz = ZoneInfo(tz_name)
+
+    channel = _clean_choice(channel, CHANNEL_FILTER_VALUES)
+    state = _clean_choice(state, STATE_FILTER_VALUES)
+    search = (search or "").strip()
+    time_ids = await _time_matching_ids(db, user.id, search) if search else []
+    # Признак «фильтр применён» различает ДВА пустых состояния: «расписаний нет
+    # вовсе» и «фильтр ничего не нашёл» (UI-SPEC E13 `empty`). Второго запроса
+    # для этого не нужно: набор фильтров сам отвечает на вопрос.
+    filters_active = bool(channel or state or search)
+
     result = await db.execute(
-        select(Schedule, Ad.title.label("ad_title"), MessengerAccount.type.label("messenger_type"))
-        .join(Ad, Schedule.ad_id == Ad.id)
-        # outer join: расписание с удалённым аккаунтом (account_id IS NULL)
-        # должно остаться видимым (issue #35)
-        .join(MessengerAccount, Schedule.account_id == MessengerAccount.id, isouter=True)
-        .where(Ad.user_id == user.id)
+        _apply_filters(_summary_query(user.id), channel, state, search, time_ids)
         .order_by(Schedule.id)
         .limit(PAGE_SIZE + 1)
     )
     rows = list(result)
     has_next = len(rows) > PAGE_SIZE
-    schedules = _build_schedule_items(rows[:PAGE_SIZE], user, tz)
+    page = rows[:PAGE_SIZE]
+    group_names = await _group_names_for(db, user.id, [r.Schedule for r in page])
+    schedules = _build_schedule_items(page, user, tz, group_names)
+    total = (
+        await db.execute(
+            _apply_filters(
+                _summary_count_query(user.id), channel, state, search, time_ids
+            )
+        )
+    ).scalar_one()
     return templates.TemplateResponse(
         "schedules/list.html",
         {
@@ -263,6 +444,12 @@ async def schedules_list(
             "has_next": has_next,
             "next_offset": PAGE_SIZE,
             "active_page": "schedules",
+            "total": total,
+            "filters_active": filters_active,
+            "filter_channel": channel,
+            "filter_state": state,
+            "filter_search": search,
+            "filter_params": _filter_params(channel, state, search),
         },
     )
 
