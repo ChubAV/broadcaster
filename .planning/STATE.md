@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Redesign
 current_phase: 2
 current_phase_name: Объявления и расписания
-status: planning
+status: Phase 01 shipped — pushed to origin/master (no PR)
 stopped_at: Phase 1 complete, ready to plan Phase 2
-last_updated: "2026-08-10T05:04:13.759Z"
+last_updated: "2026-08-10T05:11:58.649Z"
 last_activity: 2026-08-10
-last_activity_desc: Phase 01 complete, transitioned to Phase 2
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 13
   completed_plans: 13
   percent: 17
+last_activity_desc: Phase 01 complete, transitioned to Phase 2
 ---
 
 # Project State
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-08-10)
 
 Phase: 2 — Объявления и расписания
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-10 — Phase 01 complete, transitioned to Phase 2
+Status: Phase 01 shipped — pushed to origin/master (no PR)
+Last activity: 2026-08-10
 
 Progress: [████████████████████] 13/13 plans (100%) — Phase 1 of 6 complete (17% фаз milestone v2.0)
 
@@ -74,7 +74,7 @@ None.
 ### Blockers/Concerns
 
 - Счётчик в REQUIREMENTS.md указывал 38 требований v2.0, фактических REQ-ID — 39. Счётчики исправлены на 39; смысловых требований не добавлялось и не удалялось.
-- ⚠️ [Phase 1] Гейт код-ревью открыт: `01-REVIEW.md` — `status: issues_found`, `critical: 2`. CR-01 (владение `ad_id`/`account_id` в `app/pages/schedules.py:204-213,314-315`), CR-02 (клиентский Content-Type в `app/routes/uploads.py:48-52`) и WR-01/T-10-04 (владение ключом изображения в `app/pages/ads.py:133-135,183-187`) перенесены в Фазу 2. **Ship блокируется до починки.**
+- ⚠️ [Phase 1] Гейт код-ревью открыт: `01-REVIEW.md` — `status: issues_found`, `critical: 2`. CR-01 (владение `ad_id`/`account_id` в `app/pages/schedules.py:204-213,314-315`), CR-02 (клиентский Content-Type в `app/routes/uploads.py:48-52`) и WR-01/T-10-04 (владение ключом изображения в `app/pages/ads.py:133-135,183-187`) перенесены в Фазу 2. Фаза 01 отгружена с этими находками открытыми (решение 2026-08-10): ship-гейты GSD — security (`threats_open: 0`) и broken-windows (`open_count: 0`) — оба прошли, код-ревью ship-гейтом не является. **Починить в Фазе 2 до релиза.**
 - ⚠️ [Phase 1] `/ads/new` и `/ads/{id}/edit` не рендерятся ни одним тестом суиты — глобал `s3_public_url` в `app/pages/common.py:38` собирает `Settings()` в обход подмены зависимостей. Дефект на базовом коммите фазы, не внесён перевёрсткой; развилка ADS-07.
 - ADS-04 (черновик объявления) требует миграции схемы: поля `status` у `Ad` сейчас нет.
 - Brownfield-риск: система живая и покрыта тестами; протоколы отправки Telegram, WhatsApp и MAX трогать нельзя.
