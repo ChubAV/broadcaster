@@ -1,34 +1,43 @@
-{# Строка расписания — по эталону ads/includes/ad_card.html (План 03).
+{# Карточка расписания СВОДНОГО СПИСКА (SCH-04, SCH-05).
 
    Это МАКРОС, а не include: импортированные шаблоны Jinja контекста
    вызывающего не получают, поэтому `item` и `user` — явные параметры. Ошибка в
-   имени параметра проявится не исключением, а пустой строкой, поэтому
-   отрисовка реальных данных закреплена тестом test_schedules_card_renders_data.
+   имени параметра проявится не исключением, а ПУСТОЙ карточкой, поэтому
+   отрисовка реальных данных закреплена тестами
+   tests/test_pages/test_schedules_list.py::test_summary_card_renders_group_names
+   и tests/test_pages/test_responsive_markup.py::test_schedules_card_renders_data.
 
-   SCHEDULE_COLS — единственный источник раскладки колонок раздела: его же
-   импортирует list.html для заголовка колонок, а partial_cards.html — для
-   строк. Разъехаться шапке и строкам не на чем.
+   КАРТОЧКА, А НЕ СТРОКА ТАБЛИЦЫ (План 02-07). Объявления раскладки колонок,
+   вызов шапки колонок и импорт табличных примитивов строки и ячейки отсюда
+   УШЛИ: сводный список карточный на всех ширинах (UI-SPEC §Responsive
+   Contract), и подписи ячеек ему не нужны — каждое значение называет себя само
+   строкой «ключ — значение».
+
+   УДАЛЕНИЯ ЗДЕСЬ НЕТ (D-18, ADS-08). Расписание удаляется только в редакторе
+   объявления, где видно, что именно исчезнет. Сводный список — место обзора и
+   переключения состояния, а не разрушительных действий.
+
+   ПОЛОСЫ ПРОГРЕССА ЗДЕСЬ НЕТ (D-17): в макете она показывает выдуманный
+   процент, источника которого в данных не существует.
+
+   DAY_NAMES ОБЪЯВЛЕНА ЗДЕСЬ и импортируется карточкой редактора
+   (ads/includes/sched_card.html). Второе объявление тех же семи строк
+   разъехалось бы с первым при первом же переименовании.
 
    `user` приходит параметром: format_datetime_for_user — глобал окружения, но
    его второй аргумент (пользователь с таймзоной) — данные запроса.
 
-   Импорт: {% from "schedules/includes/schedule_row.html" import schedule_row, SCHEDULE_COLS %} #}
+   Импорт: {% from "schedules/includes/schedule_row.html" import schedule_row %} #}
 
-{% from "components/table.html" import row_open, row_close, cell %}
 {% from "components/badge.html" import badge %}
+{% from "components/button.html" import link_button %}
 {% from "components/toggle.html" import toggle %}
-{% from "components/button.html" import button, link_button %}
-{% from "components/modal.html" import modal %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 
-{% set SCHEDULE_COLS = 'minmax(180px,2.2fr) 128px minmax(110px,1fr) 104px 152px 96px 210px' %}
-{% set SCHEDULE_COLUMNS = ['Объявление', 'Группы', 'Дни', 'Время', 'Следующий запуск', 'Статус', ''] %}
 {% set DAY_NAMES = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'} %}
 
-{% macro schedule_row(item, user=None, cols=SCHEDULE_COLS) -%}
+{% macro schedule_row(item, user=None) -%}
 {%- set s = item.schedule -%}
-{%- set day_labels = [] -%}
-{%- for d in s.days_of_week|sort %}{% set _ = day_labels.append(DAY_NAMES.get(d, d)) %}{% endfor -%}
 {#- Неполнота — ТО ЖЕ определение, что у `_is_complete` в app/pages/schedules.py и
     у карточки редактора: аккаунт, хотя бы одна группа, день и время (D-08).
     Возобновление неполного расписания сервер отклоняет, поэтому тумблер здесь
@@ -45,48 +54,37 @@
 {%- set blocked_hint = ('Возобновить нельзя: аккаунт удалён. Откройте объявление и выберите аккаунт в редакторе.'
                         if not s.account_id
                         else 'Возобновить нельзя: расписание не заполнено. Откройте объявление и дозаполните его в редакторе.') -%}
-{{ row_open(cols=cols, id='schedule-row-' ~ s.id) }}
-  {%- call cell(grow=true, title=item.ad_title) %}
-    <span data-grow>{{ item.ad_title }}</span>
-  {%- endcall %}
-  {#- Иконка мессенджера — существующий макрос, переиспользуется как есть.
-      Размер приходит классом .avatar: собственного класса под иконку в app.css
-      нет, а файл закрыт для дописывания (тот же приём, что у миниатюры
-      объявления в Плане 03). У отвязанного расписания (issue #35) типа нет —
-      ветка «неизвестный мессенджер» несёт utility-классы, поэтому она не
-      вызывается вовсе. -#}
-  {#- Подпись колонки берётся ЭЛЕМЕНТОМ SCHEDULE_COLUMNS по индексу, а не
-      переписанной строкой: список уже единственный источник шапки, и подписи
-      обязаны идти из него же (UI-06). Подписи нет у колонки 0 — она несёт
-      название объявления и уже является заголовком строки, — и у колонки 6, у
-      которой названия нет вовсе. Подпись ДОБАВЛЕНА к признакам ячейки
-      (моноширинность, приглушённость, область сетки, подсказка), а не
-      поставлена вместо них. -#}
-  {%- call cell(muted=true, title='Групп в расписании', label=SCHEDULE_COLUMNS[1]) %}
+{#- Имена групп разрешены обработчиком ОДНИМ запросом на страницу и только
+    среди групп владельца (T-02-34, T-02-38). Идентификатор без имени сюда не
+    доходит вовсе, поэтому пустых значений в перечислении не бывает; случай
+    «ни одно имя не разрешилось» назван словами, а не пустотой. -#}
+{%- set groups_text = (item.group_names | join(', ') ~ (' и ещё ' ~ item.group_extra if item.group_extra else ''))
+                      if item.group_names
+                      else ('группы недоступны' if s.group_ids else '—') -%}
+<article class="sched-item" id="schedule-row-{{ s.id }}">
+  <header class="sched-item__head">
+    {#- Иконка мессенджера — существующий макрос, переиспользуется как есть.
+        У отвязанного расписания (issue #35) типа нет, и ветка «неизвестный
+        мессенджер» несёт utility-классы — поэтому она не вызывается вовсе. -#}
     {%- if item.messenger_type %}{{ messenger_icon(item.messenger_type, size='avatar', show_label=false) }}{% endif -%}
-    <span>{{ s.group_ids|length }} групп</span>
-  {%- endcall %}
-  {{- cell(text=day_labels|join(' ') if day_labels else '—', mono=true, muted=true, title='Дни недели',
-           label=SCHEDULE_COLUMNS[2]) }}
-  {{- cell(text=s.times_of_day|join(', ') if s.times_of_day else '—', mono=true, muted=true,
-           label=SCHEDULE_COLUMNS[3]) }}
-  {{- cell(text=(format_datetime_for_user(item.next_run_local, user, '%d.%m %H:%M') ~ (' ' ~ item.tz_label if item.tz_label else '')) if item.next_run_local else '—',
-           mono=true, muted=true, area='meta', label=SCHEDULE_COLUMNS[4]) }}
-  {%- call cell(label=SCHEDULE_COLUMNS[5]) %}
-    {%- if s.is_active %}{{ badge('Активно', 'success') }}{% else %}{{ badge('Пауза', 'neutral') }}{% endif -%}
-  {%- endcall %}
-  {%- call cell() %}
+    {#- Полное название живёт в подсказке: в строке оно обрезается многоточием,
+        чтобы тумблер и переход в редактор сохранили свои позиции при любой
+        длине (UI-SPEC E13 long-text). -#}
+    <span class="sched-item__title" title="{{ item.ad_title }}">{{ item.ad_title }}</span>
     {#- «Новый вид, старые действия»: маршрут, метод и серверные проверки
         владельца не тронуты — сменился только элемент управления. Событие
         change всплывает от чекбокса к форме, поэтому обработчик висит на
-        форме, а макрос toggle остаётся без собственных атрибутов событий. -#}
+        форме, а макрос toggle остаётся без собственных атрибутов событий и
+        работает при выключенном Alpine.
+        Состояние тумблера приходит СЕРВЕРОМ: отказ переключения возвращает
+        страницу с прежним состоянием, и показать непринятое тумблеру нечем. -#}
     <form method="post" action="/schedules/{{ s.id }}/toggle" x-data x-on:change="$el.submit()">
       {{- toggle(name='is_active', checked=s.is_active, id='schedule-toggle-' ~ s.id,
                  disabled=resume_blocked,
                  title=(blocked_hint if resume_blocked
                         else ('Приостановить' if s.is_active else 'Возобновить'))) -}}
     </form>
-    {#- Действие строки ведёт В РЕДАКТОР ОБЪЯВЛЕНИЯ, к этому самому расписанию:
+    {#- Действие карточки ведёт В РЕДАКТОР ОБЪЯВЛЕНИЯ, к этому самому расписанию:
         параметр выбранного расписания разворачивает нужную карточку, якорь
         доводит до неё прокруткой (план 02-05). Отдельной страницы редактирования
         расписания больше нет (D-14). -#}
@@ -94,28 +92,47 @@
                     '/ads/' ~ s.ad_id ~ '/edit?sched=' ~ s.id ~ '#sched-' ~ s.id,
                     variant='ghost', icon='pencil',
                     title='Открыть объявление и настроить расписание') -}}
-    {#- Перехват отправки навешен на САМУ форму, а не заменил её кнопкой-триггером
-        вне формы: без Alpine перехват не навешивается, и форма уходит POST-ом на
-        прежний маршрут — ровно как до правки (WR-04, T-12-04). -#}
-    <form method="post" action="/schedules/{{ s.id }}/delete"
-          x-data x-on:submit.prevent="$dispatch('modal-open-schedule-del-{{ s.id }}')">
-      {{- button('Удалить', variant='ghost', icon='trash', title='Удалить расписание') -}}
-    </form>
-  {%- endcall %}
-{{ row_close() }}
-{#- Панель подтверждения стоит РЯДОМ со строкой, а не внутри неё: панель
-    позиционируется фиксированно, а внутри сетки строки она стала бы её колонкой
-    (схема Задачи 1 повторена дословно).
-    Отвязанное расписание (issue #35, у записи нет типа мессенджера) обслуживается
-    ТОЙ ЖЕ панелью: поясняющий текст берётся из названия объявления, которое есть
-    всегда, поэтому отдельной ветки под этот случай не заводится.
-    method="post" передаётся явно, хотя совпадает с умолчанием макроса: маршрут и
-    метод удаления — контракт с обработчиком, и он обязан читаться грепом по
-    этому файлу, а не только по отрендеренной странице. -#}
-{{ modal(id='schedule-del-' ~ s.id,
-         title='Удалить расписание?',
-         action='/schedules/' ~ s.id ~ '/delete',
-         confirm_label='Удалить',
-         method="post",
-         body=item.ad_title) }}
+  </header>
+
+  {#- Состояние никогда не несёт один только цвет: каждый бейдж — слово. -#}
+  <div class="sched-item__tags">
+    {%- if s.is_active %}{{ badge('Активно', 'success') }}{% else %}{{ badge('Пауза', 'neutral') }}{% endif -%}
+    {%- if item.is_draft %}{{ badge('Объявление в черновике', 'warning') }}{% endif -%}
+    {%- if not complete %}{{ badge('Не заполнено', 'warning') }}{% endif -%}
+  </div>
+
+  {#- Дни ПОКАЗЫВАЮТСЯ, а не выбираются: тот же примитив .chip, что в редакторе,
+      размером 40×32 и без органов ввода внутри. -#}
+  <div class="sched-item__days">
+    {%- for d in range(7) %}
+    <span class="chip{% if d in s.days_of_week %} chip--on{% endif %}" title="{{ DAY_NAMES[d] }}">{{ DAY_NAMES[d] }}</span>
+    {%- endfor %}
+  </div>
+
+  <div class="sched-item__meta">
+    <div class="kv">
+      <span class="kv__k">Группы</span>
+      <span class="kv__v" title="{{ groups_text }}">{{ groups_text }}</span>
+    </div>
+    <div class="kv">
+      <span class="kv__k">Время</span>
+      <span class="kv__v">{{ s.times_of_day|join(', ') if s.times_of_day else '—' }}</span>
+    </div>
+    <div class="kv">
+      <span class="kv__k">След. запуск</span>
+      {#- Расписание объявления-черновика не отправится никогда: домен черновики
+          к отправке не подбирает (D-01). Ячейка называет это прямо, а не
+          показывает вычисленное время, которого не будет (UI-SPEC E13). -#}
+      <span class="kv__v">
+        {%- if item.is_draft -%}
+        отправок не будет
+        {%- elif item.next_run_local -%}
+        {{ format_datetime_for_user(item.next_run_local, user, '%d.%m %H:%M') }}{{ ' ' ~ item.tz_label if item.tz_label else '' }}
+        {%- else -%}
+        —
+        {%- endif -%}
+      </span>
+    </div>
+  </div>
+</article>
 {%- endmacro %}

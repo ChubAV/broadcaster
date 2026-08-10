@@ -1,9 +1,14 @@
 {% extends "base.html" %}
-{% from "components/button.html" import link_button %}
-{% from "components/card.html" import card_open, card_close %}
-{% from "components/table.html" import rowhead %}
+{% from "components/button.html" import button, link_button %}
 {% from "components/empty_state.html" import empty_state %}
-{% from "schedules/includes/schedule_row.html" import schedule_row, SCHEDULE_COLS, SCHEDULE_COLUMNS %}
+{% from "components/field.html" import field, select_field %}
+{% from "components/filters.html" import filters %}
+{% from "components/mono.html" import mono %}
+{% from "schedules/includes/schedule_row.html" import schedule_row %}
+{#- Склонение счётчика приходит ОТТУДА, где оно уже объявлено (План 02-05):
+    второе правило русских числительных разъехалось бы с первым, и «1
+    расписаний» появилось бы ровно в одном из двух мест. -#}
+{% from "ads/includes/sched_card.html" import sched_count_label %}
 
 {% block title %}Расписания — Broadcaster{% endblock %}
 
@@ -18,24 +23,55 @@
 {% block page_actions %}{{ link_button('К объявлениям', '/ads', variant='ghost', icon='arrow-right', title='Расписание создаётся в редакторе объявления') }}{% endblock %}
 
 {% block content %}
+{#- Переезд объясняется ПОЛЬЗОВАТЕЛЮ, а не только в истории коммитов: страница,
+    с которой исчезло создание, обязана сказать, куда оно делось. -#}
+<p class="sched-lead">Сводный список: здесь можно включить или поставить на паузу. Создание и настройка расписаний — на странице объявления.</p>
+
+{#- Полоса фильтров рендерится ВСЕГДА, в том числе при пустом списке (UI-SPEC
+    E14 `empty`): пользователь, отфильтровавший всё до нуля, обязан иметь
+    возможность снять фильтр, который к этому привёл. Макрос переиспользуется
+    без изменений и без перестилизации — он сворачивается на узких ширинах сам. -#}
+{% call filters('schedules-filters', action='/schedules') %}
+  {{ select_field(name="channel", label='Канал',
+                  options=[('', 'Все'), ('tg_user', 'Telegram'), ('wa', 'WhatsApp'), ('max', 'MAX')],
+                  selected=filter_channel or '', id='filter-channel') }}
+  {{ select_field(name="state", label='Статус',
+                  options=[('', 'Все'), ('active', 'Активные'), ('paused', 'На паузе')],
+                  selected=filter_state or '', id='filter-state') }}
+  {{ field(name="search", label='Поиск', value=filter_search or '',
+           placeholder='Поиск по объявлению и времени запуска', id='filter-search') }}
+  {{ button('Применить', variant='primary') }}
+  {{ link_button('Сбросить', '/schedules', variant='ghost') }}
+{% endcall %}
+
 {% if schedules %}
-{{ card_open() }}
-  {{ rowhead(columns=SCHEDULE_COLUMNS, cols=SCHEDULE_COLS) }}
-  {# Инварианты бесконечной прокрутки (ломает переверстка, а не логика):
-     - сентинел остаётся ПОСЛЕДНИМ элементом внутри ТОГО ЖЕ контейнера, что и
-       строки: он заменяет сам себя и подтягивает следующий;
-     - разметка сентинела здесь и в partial_cards.html ИДЕНТИЧНА — правится
-       один, синхронно правится второй;
-     - цель подмены неявная (сам сентинел), явной цели в проекте нет нигде. #}
-  {% for item in schedules %}{{ schedule_row(item, user) }}{% endfor %}
-  {% if has_next %}
-  <div hx-get="/schedules/partial?offset={{ next_offset }}&limit=30" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
-  {% endif %}
-{{ card_close() }}
+<p class="sched-count">{{ mono(sched_count_label(total) | trim) }}</p>
+{# Инварианты бесконечной прокрутки (ломает переверстка, а не логика):
+   - сентинел остаётся ПОСЛЕДНИМ элементом внутри ТОГО ЖЕ контейнера, что и
+     карточки: он заменяет сам себя и подтягивает следующий;
+   - разметка сентинела здесь и в partial_cards.html ИДЕНТИЧНА ПОБАЙТОВО,
+     включая отступ строки — правится один, синхронно правится второй;
+   - цель подмены неявная (сам сентинел), явной цели в проекте нет нигде;
+   - цикл проброса фильтров перенесён ДОСЛОВНО вместе с приведением к строке и
+     экранированием для URL: потерянный фильтр не роняет страницу, а молча
+     подмешивает неотфильтрованные расписания к отфильтрованным. #}
+<div data-sched-list>
+{% for item in schedules %}{{ schedule_row(item, user) }}{% endfor %}
+{% if has_next %}
+<div hx-get="/schedules/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
+{% endif %}
+</div>
+{% elif filters_active %}
+{#- ДВА пустых состояния, и они различаются (UI-SPEC E13 `empty`). Это —
+    «фильтр ничего не нашёл»: единственное осмысленное действие здесь снять
+    фильтр, а не идти создавать ещё одно расписание. -#}
+{{ empty_state('Расписания не найдены',
+               hint='Измените условия отбора или сбросьте фильтры',
+               action_label='СБРОСИТЬ ФИЛЬТРЫ',
+               action_href='/schedules') }}
 {% else %}
-{#- Копия — из UI-SPEC §Empty states, строка «Summary list — user has no
-    schedules at all». Подсказка называет МЕСТО создания, потому что на самом
-    сводном списке создать расписание больше нельзя (D-14). -#}
+{#- Второе: расписаний нет ВОВСЕ. Подсказка называет МЕСТО создания, потому что
+    на самом сводном списке создать расписание больше нельзя (D-14). -#}
 {{ empty_state('Расписаний пока нет',
                hint='Расписания создаются в редакторе объявления',
                action_label='К объявлениям',

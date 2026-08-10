@@ -46,11 +46,16 @@ SECTION_URLS = {
 
 # Разделы на примитиве строки-таблицы data-row. История сюда НЕ входит: у неё
 # собственный примитив data-hrow, перестраивающийся раньше остальных (1080px).
-MIGRATED_SECTIONS = ["ads", "schedules", "groups", "accounts"]
+#
+# Расписания вышли отсюда планом 02-07: сводный список стал КАРТОЧНЫМ на всех
+# ширинах (UI-SPEC §Responsive Contract), и таблично-строчная обработка ячеек с
+# подписями ему не нужна. Раздел не выпал из проверок — его собственный
+# примитив закреплён test_schedules_summary_list_is_card_based ниже.
+MIGRATED_SECTIONS = ["ads", "groups", "accounts"]
 
 # Все разделы, переведённые на дизайн-систему, независимо от примитива.
 # Планы 06-08 дописывают свои сюда.
-CLEAN_SECTIONS = MIGRATED_SECTIONS + ["history"]
+CLEAN_SECTIONS = MIGRATED_SECTIONS + ["history", "schedules"]
 
 
 async def _user(db: AsyncSession) -> User:
@@ -280,6 +285,29 @@ async def test_schedules_card_renders_data(
     # этого расписания — осталось прежним и проверяется на новом адресе.
     assert f"/ads/{schedule.ad_id}/edit?sched={schedule.id}" in html
     assert f"/schedules/{schedule.id}/toggle" in html
+
+
+@pytest.mark.asyncio
+async def test_schedules_summary_list_is_card_based(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Замена вклада раздела в обход по data-row (План 02-07).
+
+    Сводный список карточный на ВСЕХ ширинах, поэтому примитив строки-таблицы
+    ему не подходит. Утверждение положительное: у списка есть СВОЙ примитив, а
+    не «нет старого». Без него раздел просто выпал бы из проверок вместе со
+    строкой параметризации.
+    """
+    await _seed_schedule(db_session, ad_title="Карточное расписание")
+
+    html = (await authed_client.get("/schedules")).text
+
+    assert "data-sched-list" in html, "контейнер карточек сводного списка исчез"
+    assert 'class="sched-item"' in html, "карточка расписания исчезла из разметки"
+    assert "data-row" not in html, (
+        "сводный список вернулся к строке-таблице — на 860px её колонки "
+        "скрываются, а подписей ячеек у карточек нет"
+    )
 
 
 @pytest.mark.asyncio
@@ -2124,53 +2152,75 @@ async def test_groups_partial_labels_present(
         )
 
 
-# --- План 12, Задача 2: раздел «Расписания» ---------------------------------
+# --- План 12, Задача 2 → План 02-07: раздел «Расписания» ---------------------
 #
-# Схема Задачи 1 повторяется дословно: форма остаётся формой, перехват отправки
-# навешивается на неё, панель ставится соседним элементом строки. Правка живёт в
-# МАКРОСЕ, поэтому list.html и partial_cards.html не правятся вовсе.
+# Схема Задачи 1 Плана 12 повторялась дословно, пока сводный список был
+# таблицей: форма удаления оставалась формой, перехват отправки навешивался на
+# неё, панель стояла соседним элементом строки.
+#
+# План 02-07 перевернул раздел: удаления в сводном списке БОЛЬШЕ НЕТ (D-18), а
+# строка стала карточкой. Оба обещания переехали, а не исчезли — ниже они
+# утверждаются на своих новых местах:
+#   * подтверждение удаления расписания — в редакторе объявления;
+#   * понятность каждого значения на узкой ширине — строками «ключ — значение»
+#     внутри карточки вместо подписей ячеек скрывающейся шапки.
 
-# Подпись получает каждая колонка SCHEDULE_COLUMNS с непустым названием, КРОМЕ
-# 'Объявление' — она несёт название сущности и уже является заголовком строки.
-SCHEDULE_CELL_LABELS = (
+# Каждое значение карточки названо СВОИМ ключом. Это замена SCHEDULE_CELL_LABELS:
+# подписи ячеек компенсировали шапку колонок, скрывающуюся на 860px; у карточки
+# шапки нет вовсе, и ключ стоит рядом со значением на любой ширине.
+SCHEDULE_CARD_KEYS = (
     "Группы",
-    "Дни",
     "Время",
-    "Следующий запуск",
-    "Статус",
+    "След. запуск",
 )
 
 
 @pytest.mark.asyncio
-async def test_schedules_delete_uses_modal(
+async def test_schedules_summary_list_offers_no_deletion(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Удаление расписания подтверждается панелью дизайн-системы (SC-3)."""
+    """D-18: удаление расписания живёт ТОЛЬКО в редакторе объявления.
+
+    Прежде сводный список предлагал удаление строкой. Утверждение не снято, а
+    инвертировано: место, где не видно, что именно исчезнет, разрушительного
+    действия не предлагает.
+    """
     schedule = await _seed_schedule(db_session)
 
     html = (await authed_client.get("/schedules")).text
 
-    assert 'role="dialog"' in html, "панель подтверждения не отрисована"
-    assert 'class="modal"' in html
-    assert f"modal-open-schedule-del-{schedule.id}" in html, (
-        "форма удаления не открывает панель подтверждения"
+    assert f"/schedules/{schedule.id}/delete" not in html, (
+        "удаление вернулось в сводный список — оно живёт только в редакторе (D-18)"
     )
-    assert html.count(f'id="schedule-del-{schedule.id}"') == 1, (
-        "панель подтверждения расписания не единственная"
-    )
-    assert "Отмена" in html, "у панели нет отказа от удаления"
+    assert f"modal-open-schedule-del-{schedule.id}" not in html
     assert "confirm(" not in html, "системный диалог браузера остался"
     assert "onsubmit" not in html, "старый перехват отправки остался"
 
 
 @pytest.mark.asyncio
-async def test_schedules_delete_form_degrades_without_alpine(
+async def test_schedule_delete_uses_modal_and_a_real_form_in_the_editor(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """T-12-04: без Alpine форма удаления расписания отправляется напрямую."""
+    """Оба прежних обещания раздела — на своём новом месте (SC-3, T-12-04).
+
+    Подтверждение панелью дизайн-системы И настоящая форма под ним: без Alpine
+    перехват не навешивается, и форма уходит POST-ом на прежний маршрут. Прежде
+    это проверялось на строке сводного списка; после переезда удаления (D-18)
+    единственное такое место — карточка редактора.
+    """
     schedule = await _seed_schedule(db_session)
 
-    html = (await authed_client.get("/schedules")).text
+    html = (await authed_client.get(f"/ads/{schedule.ad_id}/edit?sched={schedule.id}")).text
+
+    assert 'role="dialog"' in html, "панель подтверждения не отрисована"
+    assert 'class="modal"' in html
+    assert f"modal-open-sched-del-{schedule.id}" in html, (
+        "форма удаления не открывает панель подтверждения"
+    )
+    assert html.count(f'id="sched-del-{schedule.id}"') == 1, (
+        "панель подтверждения расписания не единственная"
+    )
+    assert "Отмена" in html, "у панели нет отказа от удаления"
 
     forms = _delete_forms_for(html, f"/schedules/{schedule.id}/delete")
     assert forms, "форма удаления исчезла из разметки"
@@ -2187,37 +2237,35 @@ async def test_schedules_delete_form_degrades_without_alpine(
 
 
 @pytest.mark.asyncio
-async def test_schedules_cell_labels_present(
+async def test_schedules_card_names_each_value(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Каждая ячейка строки расписания несёт название своей колонки."""
+    """Каждое значение карточки расписания названо своим ключом (SC-5)."""
     schedules = [
         await _seed_schedule(db_session, ad_title=f"Объявление {i}") for i in range(2)
     ]
 
     html = (await authed_client.get("/schedules")).text
 
-    for label in SCHEDULE_CELL_LABELS:
-        assert html.count(f"<span data-cell-label>{label}</span>") == len(schedules), (
-            f"подпись {label!r} проставлена не во всех строках"
+    for key in SCHEDULE_CARD_KEYS:
+        assert html.count(f'<span class="kv__k">{key}</span>') == len(schedules), (
+            f"ключ {key!r} проставлен не во всех карточках"
         )
-
-    header = _header_in(html)
-    labels = _labels_in(html)
-    assert header - labels == {"Объявление"}, (
-        "подписи разошлись с шапкой колонок: без подписи остались "
-        f"{sorted(header - labels - {'Объявление'})}"
-    )
-    assert labels - header == set(), (
-        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
+    assert "<span data-cell-label>" not in html, (
+        "подпись ячейки таблицы вернулась в карточный список — у него нет "
+        "шапки колонок, которую она компенсирует"
     )
 
 
 @pytest.mark.asyncio
-async def test_schedules_partial_labels_present(
+async def test_schedules_partial_names_each_value(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Порция бесконечной прокрутки несёт те же подписи, что и первая страница."""
+    """Порция бесконечной прокрутки несёт те же ключи, что и первая страница.
+
+    Правка живёт в МАКРОСЕ карточки, поэтому закрывает обе поверхности разом;
+    тест доказывает это, а не проверяет второй файл на всякий случай.
+    """
     schedules = [
         await _seed_schedule(db_session, ad_title=f"Объявление {i}") for i in range(2)
     ]
@@ -2226,23 +2274,33 @@ async def test_schedules_partial_labels_present(
     assert response.status_code == 200
     html = response.text
 
-    for label in SCHEDULE_CELL_LABELS:
-        assert html.count(f"<span data-cell-label>{label}</span>") == len(schedules), (
-            f"подпись {label!r} потеряна в порции бесконечной прокрутки"
+    for key in SCHEDULE_CARD_KEYS:
+        assert html.count(f'<span class="kv__k">{key}</span>') == len(schedules), (
+            f"ключ {key!r} потерян в порции бесконечной прокрутки"
         )
 
 
-def test_schedules_row_keeps_grid_area_marker():
-    """Признак области сетки не потерян: подпись добавлена К нему, а не вместо.
+def test_schedules_card_title_truncates_instead_of_pushing_controls():
+    """Заголовок обрезается, а не выталкивает тумблер и переход в редактор.
 
-    Медиазапрос раздела опирается на признак области у ячейки следующего
-    запуска. Потеря признака не роняет страницу — она молча ломает раскладку
-    строки на узкой ширине, и увидит это только пользователь на телефоне.
+    Замена признаку области сетки, на который опиралась строка-таблица: у
+    карточки медиазапроса раздела нет, а молча ломается здесь другое — без
+    min-width: 0 flex-элемент не сжимается ниже своего содержимого, и длинное
+    название объявления выдавливает органы управления из шапки. Страница при
+    этом отдаёт 200, и увидит поломку только пользователь на телефоне.
     """
-    source = _template_source("schedules/includes/schedule_row.html")
+    css = (
+        Path(__file__).resolve().parents[2] / "app" / "static" / "css" / "app.css"
+    ).read_text(encoding="utf-8")
+    rule = css[css.index(".sched-item__title {") : css.index(".sched-item__tags")]
 
-    assert source.count("area='meta'") == 1, (
-        "ячейка следующего запуска потеряла признак области сетки"
+    assert "min-width: 0" in rule, "заголовок карточки перестал сжиматься"
+    assert "text-overflow: ellipsis" in rule, "заголовок карточки перестал обрезаться"
+    assert "white-space: nowrap" in rule, "заголовок карточки перестал быть однострочным"
+
+    source = _template_source("schedules/includes/schedule_row.html")
+    assert 'title="{{ item.ad_title }}"' in source, (
+        "полное название объявления пропало из подсказки — обрезка стала потерей"
     )
 
 
@@ -2736,9 +2794,9 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     "groups/includes/group_row.html": (
         "макрос строки внутри объединения groups/list.html"
     ),
-    "schedules/includes/schedule_row.html": (
-        "макрос строки внутри объединения schedules/list.html"
-    ),
+    # schedules/includes/schedule_row.html ВЫШЕЛ из перечня планом 02-07: он
+    # больше не рисует строку вовсе — сводный список стал карточным, и ни
+    # вызова примитива строки, ни написанного вручную признака в нём нет.
     "dashboard/includes/recent_send_card.html": (
         "макрос строки внутри объединения dashboard.html"
     ),
@@ -2779,10 +2837,11 @@ ROWHEAD_PAGES = (
         "accounts/list.html", "/accounts", False, "accounts", frozenset({"Аккаунт"})
     ),
     RowheadPage("ads/list.html", "/ads", False, "ads", frozenset({"Объявление"})),
-    RowheadPage(
-        "schedules/list.html", "/schedules", False, "schedules",
-        frozenset({"Объявление"}),
-    ),
+    # schedules/list.html ВЫШЕЛ из таблицы планом 02-07: шапку колонок он больше
+    # не вызывает — сводный список карточный, и компенсировать скрывающуюся на
+    # 860px шапку ему нечем, потому что шапки нет. Обещание «понятно, что
+    # означает каждое значение» переехало в
+    # test_schedules_card_names_each_value.
     RowheadPage("groups/list.html", "/groups", False, "groups", frozenset({"Группа"})),
     RowheadPage(
         "dashboard.html", "/dashboard", False, "dashboard", frozenset({"Объявление"})
@@ -2894,8 +2953,8 @@ def test_rowhead_pages_all_have_a_parametrization_entry():
         f"без входа в таблице {sorted(found - declared)}; "
         f"в таблице, но шапку не вызывают {sorted(declared - found)}"
     )
-    assert len(declared) == 9, (
-        f"ожидалось девять шаблонов с шапкой колонок, объявлено {len(declared)}: "
+    assert len(declared) == 8, (
+        f"ожидалось восемь шаблонов с шапкой колонок, объявлено {len(declared)}: "
         f"{sorted(declared)}"
     )
 
@@ -2914,8 +2973,8 @@ def test_row_templates_without_header_are_accounted_for():
         f"не названы {sorted(found - declared)}; "
         f"названы, но строку не рисуют {sorted(declared - found)}"
     )
-    assert len(declared) == 9, (
-        f"ожидалось девять таких шаблонов, объявлено {len(declared)}"
+    assert len(declared) == 8, (
+        f"ожидалось восемь таких шаблонов, объявлено {len(declared)}"
     )
     # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
     # макрос row_open он не вызывает. Без второго условия разрешителя он выпал
