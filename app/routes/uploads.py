@@ -18,6 +18,55 @@ MAX_FILENAME_LENGTH = 100
 FALLBACK_FILENAME = "upload"
 
 
+# Заголовок типа из составного запроса подконтролен отправителю ровно так же, как
+# имя файла: он тип ОБЪЯВЛЯЕТ, но не доказывает. SVG, принятый под видом PNG,
+# отдаётся браузеру с origin хранилища и исполняет свой скрипт в его контексте —
+# это вектор CR-02. Поэтому тип определяется по первым байтам содержимого, а
+# присланный заголовок не используется нигде, включая запись в хранилище.
+#
+# Проверка написана руками намеренно, без библиотеки: `python-magic` тянет
+# системный `libmagic` в Docker-образ; `imghdr` удалён из stdlib в Python 3.13;
+# `Pillow` присутствует лишь транзитивно через `qrcode[pil]`, а `Image.open()` на
+# недоверенном файле добавил бы вектор decompression bomb ровно тому эндпоинту,
+# который здесь чинится.
+_IMAGE_SIGNATURES: tuple[tuple[bytes, str], ...] = (
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+# WebP — единственный из четырёх, чья метка формата стоит не в начале: сперва
+# `RIFF`, затем четыре байта размера файла (произвольные), и только потом `WEBP`.
+_RIFF_MAGIC = b"RIFF"
+_WEBP_MAGIC = b"WEBP"
+
+UNSUPPORTED_IMAGE_MESSAGE = (
+    "Не удалось загрузить: подойдут только изображения JPEG, PNG, WebP или GIF. "
+    "Выберите другой файл."
+)
+
+
+def sniff_image(content: bytes) -> str | None:
+    """Определить MIME-тип изображения по первым байтам содержимого.
+
+    Возвращает тип для JPEG, PNG, GIF (обеих версий) и WebP либо ``None`` для
+    всего остального. Список закрыт: распознаются ровно те четыре формата,
+    которые названы в тексте отказа.
+
+    SVG в список не входит осознанно — это XML-документ, способный нести скрипт,
+    и именно он является вектором CR-02.
+    """
+    for signature, mime in _IMAGE_SIGNATURES:
+        if content.startswith(signature):
+            return mime
+
+    if content[:4] == _RIFF_MAGIC and content[8:12] == _WEBP_MAGIC:
+        return "image/webp"
+
+    return None
+
+
 def safe_filename(filename: str | None) -> str:
     """Свести клиентское имя файла к безопасному звену ключа объекта.
 
@@ -44,15 +93,19 @@ async def upload_image(
     user_id: int = Depends(get_current_user_id),
     settings: Settings = Depends(get_settings),
 ):
-    # Validate file is an image
-    if not file.content_type or not file.content_type.startswith("image/"):
+    # Read file content, then validate the type by its first bytes. Чтение
+    # поднято выше проверки типа намеренно: тип берётся из содержимого, а не из
+    # присланного клиентом заголовка (CR-02).
+    content = await file.read()
+
+    content_type = sniff_image(content)
+    if content_type is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File must be an image",
+            detail=UNSUPPORTED_IMAGE_MESSAGE,
         )
 
-    # Read file content and validate size
-    content = await file.read()
+    # Validate size
     max_bytes = settings.max_image_size_mb * 1024 * 1024
     if len(content) > max_bytes:
         raise HTTPException(
@@ -71,7 +124,10 @@ async def upload_image(
         await upload_file_to_s3(
             content=content,
             key=key,
-            content_type=file.content_type,
+            # Распознанный тип, а не присланный клиентом: иначе объект лёг бы в
+            # хранилище с подконтрольным отправителю Content-Type и отдавался бы
+            # браузеру с ним же — вектор CR-02 пережил бы проверку на входе.
+            content_type=content_type,
             endpoint_url=settings.s3_endpoint_url,
             access_key=settings.s3_access_key,
             secret_key=settings.s3_secret_key,
