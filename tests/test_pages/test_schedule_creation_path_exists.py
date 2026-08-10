@@ -25,6 +25,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.constants import AD_STATUS_PUBLISHED
 from app.models.ad import Ad
 from app.models.user import User
 
@@ -44,7 +45,10 @@ async def _seed_ad(db: AsyncSession) -> Ad:
         title="Объявление для проверки SC-3",
         text="Текст объявления",
         images=[],
-        is_active=True,
+        # Объявление обязано быть опубликованным: страница /schedules/new
+        # предлагает к выбору только такие, и на черновике сетка зазеленела бы
+        # вакуумно — форма без единого объявления.
+        status=AD_STATUS_PUBLISHED,
     )
     db.add(ad)
     await db.commit()

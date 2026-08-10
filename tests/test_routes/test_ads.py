@@ -41,7 +41,9 @@ async def test_create_ad(client, auth_headers, auth_user_id):
     assert data["title"] == "Test Ad"
     assert data["text"] == "This is a test advertisement"
     assert data["images"] == images
-    assert data["is_active"] is True
+    # D-02: созданное объявление опубликовано; черновиком оно становится только
+    # явным действием пользователя.
+    assert data["status"] == "published"
     assert "id" in data
     assert "created_at" in data
 
@@ -105,13 +107,13 @@ async def test_update_ad(client, auth_headers):
     response = await client.put(f"/api/ads/{ad_id}", json={
         "title": "New Title",
         "text": "New text",
-        "is_active": False,
+        "status": "draft",
     }, headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["title"] == "New Title"
     assert data["text"] == "New text"
-    assert data["is_active"] is False
+    assert data["status"] == "draft"
 
 
 @pytest.mark.asyncio
@@ -198,7 +200,6 @@ async def test_update_ad_with_multiple_image_fields(client, auth_headers):
         ("title", "Updated Ad"),
         ("text", "New text"),
         *[("images", key) for key in new_keys],
-        ("is_active", "on"),
     ])
     resp = await client.post(f"/ads/{ad_id}/edit",
         content=form_body,

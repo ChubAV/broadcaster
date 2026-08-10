@@ -8,12 +8,25 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
+from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.services.schedule_service import compute_next_run_at
+
+
+def effective_ad_status(ad: Ad) -> str:
+    """Состояние объявления с безопасным дефолтом.
+
+    Всё, кроме опубликованного, считается черновиком — тот же безопасный
+    дефолт, что и в карточке списка (UI-SPEC E15). Сторона отказа выбрана не
+    симметрично: показать пользователю лишний бейдж «Черновик» — мелкая
+    неточность, а отправить объявление с нераспознанным состоянием — рассылка
+    в чужие группы, которую нельзя отозвать.
+    """
+    return AD_STATUS_PUBLISHED if ad.status == AD_STATUS_PUBLISHED else AD_STATUS_DRAFT
 
 
 @dataclass(slots=True)
@@ -65,7 +78,23 @@ async def collect_due_schedules(
         ad = schedule.ad
         account = schedule.account
 
-        if not ad or not account or account.status != "active":
+        # D-01: расписание объявления-черновика к отправке не выбирается.
+        #
+        # Условие стоит В ЭТОЙ ВЕТКЕ, а не в WHERE запроса выше, и это не
+        # стилистический выбор. Фильтр в WHERE тоже не создал бы задачи, но
+        # оставил бы next_run_at в прошлом — и в момент публикации черновика
+        # расписание выстрелило бы всеми накопленными пропущенными слотами
+        # сразу, тихой рассылкой задним числом в чужие группы (T-02-12).
+        # Ветка же пересчитывает next_run_at и продолжает цикл.
+        #
+        # schedule.ad уже загружен joinedload выше — дополнительного запроса
+        # проверка не стоит.
+        if (
+            not ad
+            or not account
+            or account.status != "active"
+            or effective_ad_status(ad) == AD_STATUS_DRAFT
+        ):
             schedule.next_run_at = compute_next_run_at(
                 days_of_week=schedule.days_of_week,
                 times_of_day=schedule.times_of_day,
@@ -158,6 +187,33 @@ async def send_message_once(
             task_id=task_id,
             status="fail",
             error_message="Missing ad, group, or account",
+        )
+        session.add(log_entry)
+        await session.commit()
+        return
+
+    # Защита в глубину, а не замена ветке в collect_due_schedules (T-02-13):
+    # задача может долететь до воркера уже после того, как объявление вернули
+    # в черновик, — между подбором расписаний и отправкой проходит очередь.
+    #
+    # Статус записи "fail", а не новое слово: журнал отправок читают четыре
+    # шаблона, и незнакомое значение отрисовалось бы там сырой латиницей.
+    # Отправки не было, поэтому "fail" здесь честен, а причина названа в тексте
+    # ошибки.
+    if effective_ad_status(ad) == AD_STATUS_DRAFT:
+        log_entry = SendLog(
+            user_id=ad.user_id,
+            schedule_id=schedule_id,
+            ad_id=ad_id,
+            group_id=group_id,
+            ad_title=ad.title,
+            ad_text=ad.text,
+            ad_images=ad.images,
+            group_name=group.name,
+            messenger_type=account.type,
+            task_id=task_id,
+            status="fail",
+            error_message=f"Ad {ad_id} is a draft",
         )
         session.add(log_entry)
         await session.commit()

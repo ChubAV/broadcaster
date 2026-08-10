@@ -51,11 +51,9 @@ async def _seed_ad(db_session: AsyncSession, user_id: int, images: list[str]) ->
     return ad
 
 
-def _form(images: list[str], title: str = "Объявление", is_active: bool = False):
+def _form(images: list[str], title: str = "Объявление"):
     fields = [("title", title), ("text", "Текст объявления")]
     fields += [("images", value) for value in images]
-    if is_active:
-        fields.append(("is_active", "on"))
     return urlencode(fields)
 
 

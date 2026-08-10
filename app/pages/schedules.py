@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.constants import TIMEZONE_CHOICES, VALID_TIMEZONES
+from app.constants import AD_STATUS_PUBLISHED, TIMEZONE_CHOICES, VALID_TIMEZONES
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
 from app.models.group import Group
@@ -163,7 +163,10 @@ async def schedules_new(
 
     ads = (
         await db.execute(
-            select(Ad).where(Ad.user_id == user.id, Ad.is_active == True)  # noqa: E712
+            # Черновики к выбору не предлагаются: расписание на черновик по
+            # D-01 не сработает, и предложить его значило бы пообещать
+            # пользователю рассылку, которой не будет.
+            select(Ad).where(Ad.user_id == user.id, Ad.status == AD_STATUS_PUBLISHED)
         )
     ).scalars().all()
     accounts = (
@@ -280,7 +283,10 @@ async def schedules_edit(
 
     ads = (
         await db.execute(
-            select(Ad).where(Ad.user_id == user.id, Ad.is_active == True)  # noqa: E712
+            # Черновики к выбору не предлагаются: расписание на черновик по
+            # D-01 не сработает, и предложить его значило бы пообещать
+            # пользователю рассылку, которой не будет.
+            select(Ad).where(Ad.user_id == user.id, Ad.status == AD_STATUS_PUBLISHED)
         )
     ).scalars().all()
     accounts = (

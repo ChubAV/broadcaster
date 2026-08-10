@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.constants import AD_STATUSES
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
 from app.models.schedule import Schedule
@@ -223,7 +224,11 @@ async def ads_update(
     ad_id: int,
     title: str = Form(...),
     text: str = Form(...),
-    is_active: bool = Form(False),
+    # D-04: в макете редактора только «Сохранить» и «Отмена», отдельного
+    # переключателя публикации нет — поэтому поле необязательное. Полная
+    # переработка обработчика — задача плана 02-04; здесь ровно столько, чтобы
+    # он работал с новым полем.
+    status: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -248,7 +253,12 @@ async def ads_update(
     ad.title = title
     ad.text = text
     ad.images = image_list
-    ad.is_active = is_active
+    # Поле не пришло — состояние не трогаем: сохранение текста не должно молча
+    # публиковать черновик. Значение вне словаря отбрасывается по той же
+    # причине, что и на JSON-входе (T-02-11): записанная произвольная строка не
+    # отфильтровалась бы ни как черновик, ни как опубликованное.
+    if status in AD_STATUSES:
+        ad.status = status
     await db.commit()
     return RedirectResponse(url="/ads", status_code=302)
 
