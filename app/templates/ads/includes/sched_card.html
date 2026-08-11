@@ -61,9 +61,11 @@
 {% macro sched_card(s, ad, accounts, groups, user, expanded=false) -%}
 {%- set account = (accounts | selectattr('id', 'equalto', s.account_id) | list | first) if s.account_id else none -%}
 {%- set account_groups = groups | selectattr('account_id', 'equalto', s.account_id) | list if s.account_id else [] -%}
+{#- `or []` — вторая линия CR-03: строка, испорченная до отказа на входе
+    (None вместо списка), не должна выключать экран владельца. -#}
 {%- set chosen = s.group_ids or [] -%}
 {%- set day_labels = [] -%}
-{%- for d in s.days_of_week|sort %}{% set _ = day_labels.append(DAY_NAMES.get(d, d)) %}{% endfor -%}
+{%- for d in (s.days_of_week or [])|sort %}{% set _ = day_labels.append(DAY_NAMES.get(d, d)) %}{% endfor -%}
 {#- Неполнота ОДНА и та же на сервере и в разметке: аккаунт, хотя бы одна
     группа, хотя бы один день и хотя бы одно время (D-08). Второе определение
     разъехалось бы с серверным, и пользователь видел бы бейдж на расписании,
@@ -168,7 +170,7 @@
           {%- for d in range(7) %}
           <label class="chip" title="{{ DAY_NAMES[d] }}">
             <input class="chip__input" type="checkbox" name="days_of_week" value="{{ d }}"
-                   {% if d in s.days_of_week %}checked{% endif %}>
+                   {% if d in (s.days_of_week or []) %}checked{% endif %}>
             <span class="chip__label">{{ DAY_NAMES[d] }}</span>
           </label>
           {%- endfor %}
@@ -178,7 +180,7 @@
           {{ button('КАЖДЫЙ ДЕНЬ', variant='ghost', name='days_preset', value='everyday') }}
         </div>
         <div class="time-set">
-          {%- for t in s.times_of_day %}
+          {%- for t in (s.times_of_day or []) %}
           <span class="time-pill">
             <input class="time-pill__input" type="time" name="times_of_day" value="{{ t }}">
             {#- Именованная кнопка ОТПРАВКИ, а не кнопка со скриптом: без Alpine
