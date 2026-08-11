@@ -85,12 +85,28 @@ async def test_api_delete_account_preserves_and_pauses_schedule(
     )
     account_id = account_resp.json()["id"]
 
+    # РЕАЛЬНАЯ группа этого аккаунта: JSON-вход расписаний сводит `group_ids` к
+    # группам владельца И выбранного аккаунта, и выдуманный идентификатор даёт
+    # 404 (план 02-09, CR-02). Проверяемое здесь — судьба расписания при
+    # удалении аккаунта — от состава групп не зависит.
+    group_resp = await client.post(
+        "/api/groups",
+        json={
+            "account_id": account_id,
+            "messenger_type": "tg_user",
+            "group_external_id": "-1001000000035",
+            "name": "Группа для #35",
+        },
+        headers=auth_headers,
+    )
+    group_id = group_resp.json()["id"]
+
     sched_resp = await client.post(
         "/api/schedules",
         json={
             "ad_id": ad_id,
             "account_id": account_id,
-            "group_ids": [1],
+            "group_ids": [group_id],
             "days_of_week": [0, 1, 2, 3, 4, 5, 6],
             "times_of_day": ["09:00"],
         },
