@@ -402,15 +402,22 @@ def make_oversized_png_bytes(size: int) -> bytes:
 _NO_SIZE_ARGUMENT = object()
 
 
-def test_fastapi_upload_file_is_the_starlette_class():
-    """Обёртка чтения ниже накладывается на ТОТ класс, что придёт в обработчик.
+def test_read_measurement_targets_the_class_the_handler_receives():
+    """Обёртка чтения накладывается на ТОТ класс, что приходит в обработчик.
 
-    `fastapi.UploadFile` в установленной версии — реэкспорт
-    `starlette.datastructures.UploadFile`. Разойдись они, подмена метода легла
-    бы на класс, которого обработчик не видит, и измерение объёма чтения
-    показывало бы пустоту вместо дефекта.
+    `fastapi.UploadFile` в установленной версии — НЕ тот же класс, а подкласс
+    `starlette.datastructures.UploadFile`, и он переопределяет ``read``,
+    передавая размер в базовый метод ЯВНО. Приди в обработчик экземпляр
+    подкласса, вызов ``await file.read()`` без аргумента дошёл бы до обёртки уже
+    с ``size=-1``, и утверждение «обработчик не читал без ограничения размера»
+    перестало бы что-либо измерять, оставшись зелёным при полностью
+    забуференном теле.
+
+    Поэтому обёртка кладётся на БАЗОВЫЙ класс — его метод в конечном счёте
+    вызывают оба, — а то, что в обработчик приходит именно базовый, не
+    предполагается, а измеряется в ``test_oversized_upload_is_not_buffered_whole``.
     """
-    assert FastAPIUploadFile is StarletteUploadFile
+    assert issubclass(FastAPIUploadFile, StarletteUploadFile)
 
 
 @pytest.fixture
@@ -418,18 +425,19 @@ def recorded_reads(monkeypatch):
     """Записывать каждое чтение загруженного файла.
 
     Для каждого вызова запоминается запрошенный размер порции (``None`` —
-    аргумента не было вовсе) и число фактически возвращённых байтов.
+    аргумента не было вовсе), число фактически возвращённых байтов и класс
+    объекта, у которого вызвали чтение.
     """
-    calls: list[tuple[int | None, int]] = []
+    calls: list[tuple[int | None, int, type]] = []
     original = StarletteUploadFile.read
 
     async def recording_read(self, size=_NO_SIZE_ARGUMENT):
         if size is _NO_SIZE_ARGUMENT:
             chunk = await original(self)
-            calls.append((None, len(chunk)))
+            calls.append((None, len(chunk), type(self)))
         else:
             chunk = await original(self, size)
-            calls.append((size, len(chunk)))
+            calls.append((size, len(chunk), type(self)))
         return chunk
 
     monkeypatch.setattr(StarletteUploadFile, "read", recording_read)
@@ -456,12 +464,18 @@ async def test_oversized_upload_is_not_buffered_whole(
     mock_s3.assert_not_called()
 
     assert recorded_reads, "обработчик не прочитал ни байта — измерять нечего"
-    requested = [size for size, _ in recorded_reads]
+    # «Аргумента не было» различимо только у базового класса: подкласс FastAPI
+    # передаёт размер в базовый метод явно. Факт измеряется, а не предполагается.
+    assert {cls for _, _, cls in recorded_reads} == {StarletteUploadFile}, (
+        "чтение пришло не от того класса, на который наложена обёртка — "
+        "различить «без аргумента» и «read(-1)» больше нельзя"
+    )
+    requested = [size for size, _, _ in recorded_reads]
     assert None not in requested, (
         "обработчик запросил содержимое БЕЗ ограничения размера: всё тело "
         f"оказалось в памяти (запрошенные размеры: {requested})"
     )
-    total = sum(length for _, length in recorded_reads)
+    total = sum(length for _, length, _ in recorded_reads)
     # Одна порция сверх предела неизбежна: превышение обнаруживается ровно тем
     # блоком, который его создал. Больше одной означает, что чтение не прервалось.
     assert total <= max_bytes + max(requested), (

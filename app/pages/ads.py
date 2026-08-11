@@ -1,5 +1,3 @@
-import re
-
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
@@ -14,6 +12,10 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
+# Форма ключа вложения и правило владения им живут в НЕЙТРАЛЬНОМ модуле: от него
+# зависят оба слоя, а он — ни от одного из них (WR-04). Прежние имена остаются
+# доступными здесь, поэтому точки вызова в этом файле не переписываются.
+from app.services.image_keys import own_image_keys
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
@@ -37,21 +39,6 @@ CAPTION_LIMIT = 1024
 # предпросмотр называет канал ТЕКСТОМ, а не иконкой (D-11: вид единый).
 MESSENGER_LABELS = {"tg_user": "Telegram", "wa": "WhatsApp", "max": "MAX"}
 
-# Список ключей вложений приходит скрытыми полями формы (и телом JSON на
-# API-входе) и полностью управляем клиентом: он ключ ОБЪЯВЛЯЕТ, но не доказывает
-# ни его формы, ни принадлежности отправителю. Без проверки объявление
-# сохраняется с ключом из чужого префикса того же хранилища, и чужое изображение
-# начинает отдаваться в карточке, истории и админке (WR-01 / T-10-04).
-#
-# Форма ключа — источник правды `app/routes/uploads.py`: `{user_id}/{32 hex}_{имя}`,
-# где `uuid4().hex` даёт ровно 32 шестнадцатеричных символа, а `safe_filename`
-# сводит имя к `[A-Za-z0-9._-]` длиной до 100.
-_IMAGE_KEY_PATTERN = re.compile(r"^(\d+)/[0-9a-f]{32}_[A-Za-z0-9._-]{1,100}$")
-
-INACCESSIBLE_IMAGE_MESSAGE = (
-    "Одно из вложений недоступно. Обновите страницу и добавьте изображение заново."
-)
-
 # Один текст на два случая — «нет такой записи» и «запись чужая» (T-02G-02).
 # Разные тексты подтвердили бы существование чужого объявления по одному лишь
 # перебору идентификаторов.
@@ -67,42 +54,6 @@ SCHEDULE_ERROR_MESSAGE = (
     "Аккаунт или объявление недоступны. Обновите страницу и попробуйте снова."
 )
 SCHEDULE_ERROR_REASONS = ("account", "missing")
-
-
-def own_image_keys(values: list[str], user_id: int, max_images: int) -> list[str]:
-    """Проверить, что каждый ключ вложения принадлежит вызывающему.
-
-    Возвращает список в исходном порядке загрузки. Поднимает ``HTTPException``
-    с кодом 400, если значение не соответствует форме ключа, лежит вне префикса
-    вызывающего или если вложений больше ``max_images``.
-
-    Отказ, а не молчаливое отбрасывание значения: отбрасывание превратило бы
-    попытку подмены в «успешное сохранение без картинки» и скрыло бы её от
-    пользователя, оставив в БД тихо расходящееся с формой состояние.
-
-    Отказ оформлен ``HTTPException`` на обоих слоях сознательно. Страничный слой
-    в этом проекте отвечает редиректами, но редирект здесь означал бы потерю
-    данных без объяснения: пользователь увидел бы список объявлений и не узнал,
-    что сохранение не состоялось. Ошибка по данным — не навигация.
-    """
-    if len(values) > max_images:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Объявление не сохранено: вложений больше {max_images}. "
-                "Удалите лишние и нажмите «Сохранить»."
-            ),
-        )
-
-    for value in values:
-        match = _IMAGE_KEY_PATTERN.match(value)
-        if match is None or int(match.group(1)) != user_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=INACCESSIBLE_IMAGE_MESSAGE,
-            )
-
-    return list(values)
 
 
 async def _enrich_ads_with_stats(db: AsyncSession, ads: list[Ad]) -> None:

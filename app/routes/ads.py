@@ -9,8 +9,11 @@ from app.config import Settings
 from app.dependencies import get_current_user_id, get_db, get_settings
 # Правило ключа вложения живёт в одном месте на оба слоя: разъехавшись, они
 # оставили бы JSON-вход открытым для ровно того же WR-01, что закрыт на форме.
-from app.pages.ads import own_image_keys
+# Место это — НЕЙТРАЛЬНЫЙ модуль, а не страничный слой: импорт оттуда затягивал
+# в граф импорта JSON-API окружение Jinja, глобалы изображений и шесть модулей
+# моделей и стоял в одном импорте от цикла (WR-04).
 from app.repositories.ad import AdRepository
+from app.services.image_keys import own_image_keys
 
 router = APIRouter(prefix="/api/ads", tags=["ads"])
 
