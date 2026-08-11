@@ -105,6 +105,18 @@
               <input type="hidden" name="images" value="{{ key }}">
               {%- endfor %}
             </div>
+            {# Идентификатор объявления — цель внеполосной подмены из
+               ads/includes/autosave_response.html. На /ads/new поле рендерится
+               ПУСТЫМ: записи ещё нет (D-03), и первое автосохранение обязано
+               уйти путём создания. Ответ первого сохранения подменяет это поле
+               идентификатором созданного черновика, и каждое следующее
+               автосохранение уходит на ТОТ ЖЕ адрес /ads/new, но уже путём
+               обновления — адрес формы не переписывается никогда.
+
+               Поле стоит СНАРУЖИ #image-inputs намеренно: renderImages()
+               вызывает imageInputs.replaceChildren(), и внутри блока вложений
+               идентификатор стирался бы при первой же перерисовке плиток. #}
+            <input type="hidden" id="ad-id-field" name="ad_id" value="{{ ad.id if ad else '' }}">
             <input class="field__input" type="file" id="file-input" accept="image/*" multiple hidden>
             <div id="upload-error"></div>
           </div>
