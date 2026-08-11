@@ -2,7 +2,14 @@ import pytest
 
 
 async def setup_ad_and_account(client, auth_headers):
-    """Helper to create an ad and account for schedule tests."""
+    """Объявление, аккаунт и ТРИ РЕАЛЬНЫЕ группы этого аккаунта.
+
+    Группы настоящие, а не выдуманные значения вида `[1, 2, 3]`: расписание,
+    сохранённое с идентификатором группы, которой нет или которая чужая, — это
+    межарендная дыра (02-REVIEW.md, CR-02), а тест на выдуманных значениях её
+    закреплял бы. Ожидания тестов от этого не меняются: меняются только данные,
+    на которых они выполняются.
+    """
     ad_resp = await client.post("/api/ads", json={
         "title": "Schedule Ad",
         "text": "Ad for scheduling",
@@ -15,17 +22,27 @@ async def setup_ad_and_account(client, auth_headers):
     }, headers=auth_headers)
     account_id = account_resp.json()["id"]
 
-    return ad_id, account_id
+    group_ids = []
+    for index in range(3):
+        group_resp = await client.post("/api/groups", json={
+            "account_id": account_id,
+            "messenger_type": "tg_user",
+            "group_external_id": f"-100100000000{index}",
+            "name": f"Группа {index + 1}",
+        }, headers=auth_headers)
+        group_ids.append(group_resp.json()["id"])
+
+    return ad_id, account_id, group_ids
 
 
 @pytest.mark.asyncio
 async def test_create_schedule(client, auth_headers):
-    ad_id, account_id = await setup_ad_and_account(client, auth_headers)
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
 
     response = await client.post("/api/schedules", json={
         "ad_id": ad_id,
         "account_id": account_id,
-        "group_ids": [1, 2, 3],
+        "group_ids": group_ids,
         "days_of_week": [0, 2, 4],
         "times_of_day": ["09:00", "18:00"],
     }, headers=auth_headers)
@@ -33,7 +50,7 @@ async def test_create_schedule(client, auth_headers):
     data = response.json()
     assert data["ad_id"] == ad_id
     assert data["account_id"] == account_id
-    assert data["group_ids"] == [1, 2, 3]
+    assert data["group_ids"] == group_ids
     assert data["days_of_week"] == [0, 2, 4]
     assert data["times_of_day"] == ["09:00", "18:00"]
     assert data["is_active"] is True
@@ -44,19 +61,19 @@ async def test_create_schedule(client, auth_headers):
 
 @pytest.mark.asyncio
 async def test_list_schedules(client, auth_headers):
-    ad_id, account_id = await setup_ad_and_account(client, auth_headers)
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
 
     await client.post("/api/schedules", json={
         "ad_id": ad_id,
         "account_id": account_id,
-        "group_ids": [1],
+        "group_ids": group_ids[:1],
         "days_of_week": [0],
         "times_of_day": ["09:00"],
     }, headers=auth_headers)
     await client.post("/api/schedules", json={
         "ad_id": ad_id,
         "account_id": account_id,
-        "group_ids": [2],
+        "group_ids": group_ids[1:2],
         "days_of_week": [1],
         "times_of_day": ["10:00"],
     }, headers=auth_headers)
@@ -69,25 +86,25 @@ async def test_list_schedules(client, auth_headers):
 
 @pytest.mark.asyncio
 async def test_update_schedule(client, auth_headers):
-    ad_id, account_id = await setup_ad_and_account(client, auth_headers)
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
 
     create_resp = await client.post("/api/schedules", json={
         "ad_id": ad_id,
         "account_id": account_id,
-        "group_ids": [1],
+        "group_ids": group_ids[:1],
         "days_of_week": [0],
         "times_of_day": ["09:00"],
     }, headers=auth_headers)
     schedule_id = create_resp.json()["id"]
 
     response = await client.put(f"/api/schedules/{schedule_id}", json={
-        "group_ids": [1, 2, 3],
+        "group_ids": group_ids,
         "days_of_week": [0, 1, 2],
         "times_of_day": ["10:00", "15:00"],
     }, headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
-    assert data["group_ids"] == [1, 2, 3]
+    assert data["group_ids"] == group_ids
     assert data["days_of_week"] == [0, 1, 2]
     assert data["times_of_day"] == ["10:00", "15:00"]
     assert data["next_run_at"] is not None
@@ -95,12 +112,12 @@ async def test_update_schedule(client, auth_headers):
 
 @pytest.mark.asyncio
 async def test_delete_schedule(client, auth_headers):
-    ad_id, account_id = await setup_ad_and_account(client, auth_headers)
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
 
     create_resp = await client.post("/api/schedules", json={
         "ad_id": ad_id,
         "account_id": account_id,
-        "group_ids": [1],
+        "group_ids": group_ids[:1],
         "days_of_week": [0],
         "times_of_day": ["09:00"],
     }, headers=auth_headers)
@@ -116,12 +133,12 @@ async def test_delete_schedule(client, auth_headers):
 
 @pytest.mark.asyncio
 async def test_toggle_schedule(client, auth_headers):
-    ad_id, account_id = await setup_ad_and_account(client, auth_headers)
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
 
     create_resp = await client.post("/api/schedules", json={
         "ad_id": ad_id,
         "account_id": account_id,
-        "group_ids": [1],
+        "group_ids": group_ids[:1],
         "days_of_week": [0],
         "times_of_day": ["09:00"],
     }, headers=auth_headers)
@@ -143,12 +160,12 @@ async def test_toggle_schedule(client, auth_headers):
 
 @pytest.mark.asyncio
 async def test_create_schedule_with_timezone(client, auth_headers):
-    ad_id, account_id = await setup_ad_and_account(client, auth_headers)
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
 
     response = await client.post("/api/schedules", json={
         "ad_id": ad_id,
         "account_id": account_id,
-        "group_ids": [1],
+        "group_ids": group_ids[:1],
         "days_of_week": [0, 1, 2, 3, 4],
         "times_of_day": ["09:00"],
         "timezone": "Europe/Moscow",
@@ -161,12 +178,12 @@ async def test_create_schedule_with_timezone(client, auth_headers):
 
 @pytest.mark.asyncio
 async def test_update_schedule_timezone(client, auth_headers):
-    ad_id, account_id = await setup_ad_and_account(client, auth_headers)
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
 
     create_resp = await client.post("/api/schedules", json={
         "ad_id": ad_id,
         "account_id": account_id,
-        "group_ids": [1],
+        "group_ids": group_ids[:1],
         "days_of_week": [0],
         "times_of_day": ["09:00"],
     }, headers=auth_headers)
@@ -181,12 +198,12 @@ async def test_update_schedule_timezone(client, auth_headers):
 
 @pytest.mark.asyncio
 async def test_create_schedule_invalid_timezone(client, auth_headers):
-    ad_id, account_id = await setup_ad_and_account(client, auth_headers)
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
 
     response = await client.post("/api/schedules", json={
         "ad_id": ad_id,
         "account_id": account_id,
-        "group_ids": [1],
+        "group_ids": group_ids[:1],
         "days_of_week": [0],
         "times_of_day": ["09:00"],
         "timezone": "Not/A/Timezone",
@@ -217,7 +234,7 @@ async def test_create_schedule_rejects_foreign_account(
     from app.models.schedule import Schedule
     from app.models.user import User
 
-    ad_id, _ = await setup_ad_and_account(client, auth_headers)
+    ad_id, _, group_ids = await setup_ad_and_account(client, auth_headers)
 
     stranger = User(email="stranger@test.com", password_hash="x", name="Stranger")
     db_session.add(stranger)
@@ -234,7 +251,7 @@ async def test_create_schedule_rejects_foreign_account(
     response = await client.post("/api/schedules", json={
         "ad_id": ad_id,
         "account_id": foreign_account_id,
-        "group_ids": [1],
+        "group_ids": group_ids[:1],
         "days_of_week": [0],
         "times_of_day": ["09:00"],
     }, headers=auth_headers)
@@ -247,12 +264,12 @@ async def test_create_schedule_rejects_foreign_account(
 
 @pytest.mark.asyncio
 async def test_create_schedule_rejects_nonexistent_account(client, auth_headers):
-    ad_id, _ = await setup_ad_and_account(client, auth_headers)
+    ad_id, _, group_ids = await setup_ad_and_account(client, auth_headers)
 
     response = await client.post("/api/schedules", json={
         "ad_id": ad_id,
         "account_id": 999999,
-        "group_ids": [1],
+        "group_ids": group_ids[:1],
         "days_of_week": [0],
         "times_of_day": ["09:00"],
     }, headers=auth_headers)

@@ -10,6 +10,7 @@ from app.dependencies import get_current_user_id, get_db
 from app.models.messenger_account import MessengerAccount
 from app.repositories.ad import AdRepository
 from app.repositories.schedule import ScheduleRepository
+from app.services.schedule_rules import is_schedule_complete, owned_group_ids
 from app.services.schedule_service import compute_next_run_at
 
 router = APIRouter(prefix="/api/schedules", tags=["schedules"])
@@ -93,6 +94,20 @@ async def create_schedule(
             detail="Account not found",
         )
 
+    # Владение ГРУППАМИ — третья сторона того же треугольника, и до этого плана
+    # её здесь не было вовсе (CR-02, T-02G-06). `Schedule` не имеет своего
+    # `user_id`, а `group_ids` хранятся массивом: ниже по потоку
+    # `collect_due_schedules` итерирует их как есть, `send_message_once`
+    # резолвит группу по первичному ключу, и владельца не перепроверяет никто.
+    # Чужой идентификатор, принятый здесь, доезжает до `SendLog` со СВОИМ
+    # `user_id`. Проверка стоит ДО расчёта следующего запуска и ДО записи.
+    owned = await owned_group_ids(db, user_id, data.account_id, data.group_ids)
+    if set(data.group_ids) - owned:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Group not found",
+        )
+
     next_run = compute_next_run_at(
         days_of_week=data.days_of_week,
         times_of_day=data.times_of_day,
@@ -137,15 +152,45 @@ async def update_schedule(
         )
 
     update_data = data.model_dump(exclude_unset=True)
+    # Проверка ровно тогда, когда поле ПРИСУТСТВУЕТ в патче: отсутствующий ключ
+    # означает «не трогать», и отказ на нём превратил бы частичное обновление в
+    # обязательную передачу всего состава групп. Аккаунт на update не меняется
+    # (`UpdateScheduleRequest` его не содержит), поэтому группы сверяются с
+    # аккаунтом уже сохранённой записи. Проверка стоит до первой записи в
+    # модель, иначе отказ оставил бы запись частично изменённой.
+    if "group_ids" in update_data:
+        requested = update_data["group_ids"] or []
+        owned = await owned_group_ids(db, user_id, schedule.account_id, requested)
+        if set(requested) - owned:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Group not found",
+            )
+
     for field, value in update_data.items():
         setattr(schedule, field, value)
 
-    # Recompute next_run_at
-    schedule.next_run_at = compute_next_run_at(
-        days_of_week=schedule.days_of_week,
-        times_of_day=schedule.times_of_day,
-        tz_name=schedule.timezone,
-    )
+    # Пересчёт зеркалит страничный слой (`app/pages/schedules.py`): неполное
+    # расписание выключается всегда (D-08); полное активное — пересчитывается;
+    # полное, но приостановленное, времени ближайшего запуска НЕ несёт.
+    # Безусловный пересчёт, стоявший здесь раньше, рекламировал в сводке
+    # редактора отправку, которой не будет (WR-06, T-02G-09).
+    if not is_schedule_complete(
+        schedule.account_id,
+        schedule.group_ids or [],
+        schedule.days_of_week or [],
+        schedule.times_of_day or [],
+    ):
+        schedule.is_active = False
+        schedule.next_run_at = None
+    elif schedule.is_active:
+        schedule.next_run_at = compute_next_run_at(
+            days_of_week=schedule.days_of_week,
+            times_of_day=schedule.times_of_day,
+            tz_name=schedule.timezone,
+        )
+    else:
+        schedule.next_run_at = None
 
     await db.commit()
     await db.refresh(schedule)
@@ -182,12 +227,29 @@ async def toggle_schedule(
             detail="Schedule not found",
         )
 
-    # issue #35: отвязанное расписание нельзя возобновить — оно никогда ничего
-    # не отправит. Постановка на паузу активного расписания не блокируется.
-    if not schedule.is_active and schedule.account_id is None:
+    # D-08: НЕПОЛНОЕ расписание нельзя возобновить — отправить ему нечего и
+    # некуда. Прежнее правило issue #35 («нет аккаунта — нельзя возобновить»)
+    # ПОГЛОЩЕНО этим: `is_schedule_complete` требует непустой `account_id`, и
+    # отвязанное расписание стало его частным случаем. Двух текстов сообщения
+    # одновременно быть не может, поэтому оставлен один — общий; регрессия
+    # issue #35 (`tests/test_routes/test_schedules_toggle_detached.py`)
+    # проверяет коды ответа, а не формулировку, и поглощение её не задевает.
+    #
+    # Определение полноты — то же самое, что у страничного тумблера: до этого
+    # плана здесь стояло своё, и одно и то же расписание страница включать
+    # отказывалась, а JSON-API включал (WR-05, T-02G-08).
+    #
+    # Постановка на паузу активного расписания не блокируется: право поставить
+    # на паузу не зависит от заполненности.
+    if not schedule.is_active and not is_schedule_complete(
+        schedule.account_id,
+        schedule.group_ids or [],
+        schedule.days_of_week or [],
+        schedule.times_of_day or [],
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Сначала привяжите аккаунт мессенджера к расписанию",
+            detail="Сначала дозаполните расписание в редакторе объявления",
         )
 
     schedule.is_active = not schedule.is_active

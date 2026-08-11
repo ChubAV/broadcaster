@@ -93,6 +93,27 @@ async def _schedules(db_session: AsyncSession) -> list[Schedule]:
     return list((await db_session.execute(select(Schedule))).scalars().all())
 
 
+def _assert_returned_to_editor(response, ad_id: int) -> None:
+    """Отказ при ПОДТВЕРЖДЁННО своём объявлении возвращает в его редактор.
+
+    Ошибка по данным — не навигация: пользователь остаётся там, где набирал
+    группы, дни и времена, и получает объяснение (WR-07). Адрес строится
+    сервером из подтверждённой записи, поэтому проверяется он целиком.
+    """
+    location = response.headers["location"]
+    assert location.startswith(f"/ads/{ad_id}/edit")
+    assert "sched_error" in location
+
+
+def _assert_indistinguishable_refusal(response) -> None:
+    """Чужое или отсутствующее объявление — прежний молчаливый редирект.
+
+    Различимое поведение подтверждало бы существование чужой записи перебором
+    идентификаторов, поэтому здесь ни адреса редактора, ни признака ошибки.
+    """
+    assert response.headers["location"] == "/schedules"
+
+
 # --- Создание -----------------------------------------------------------------
 
 
@@ -113,6 +134,7 @@ async def test_page_create_rejects_foreign_ad(
 
     assert response.status_code == 302
     assert await _schedules(db_session) == []
+    _assert_indistinguishable_refusal(response)
 
 
 @pytest.mark.asyncio
@@ -123,6 +145,10 @@ async def test_page_create_rejects_foreign_account(
 
     Это тяжелее подмены объявления: рассылка ушла бы через чужую подключённую
     сессию мессенджера и списалась бы с чужого баланса.
+
+    Объявление при этом СВОЁ, поэтому отказ возвращает в его редактор с
+    объяснением, а не уводит на сводный список молча (WR-07). Сам отказ не
+    ослаблен ни на йоту: строки `schedules` по-прежнему не появляется.
     """
     own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
     foreign_account = await _seed_account(db_session, stranger.id)
@@ -136,6 +162,7 @@ async def test_page_create_rejects_foreign_account(
 
     assert response.status_code == 302
     assert await _schedules(db_session) == []
+    _assert_returned_to_editor(response, own_ad)
 
 
 @pytest.mark.asyncio
@@ -179,6 +206,7 @@ async def test_page_update_rejects_swapping_in_foreign_ad(
     )
 
     assert response.status_code == 302
+    _assert_indistinguishable_refusal(response)
     db_session.expire_all()
     stored = (
         await db_session.execute(select(Schedule).where(Schedule.id == schedule_id))
@@ -190,6 +218,7 @@ async def test_page_update_rejects_swapping_in_foreign_ad(
 async def test_page_update_rejects_swapping_in_foreign_account(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User, stranger: User
 ):
+    """Объявление своё, аккаунт чужой: отказ остаётся отказом, но объясняется."""
     own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
     own_account = await _seed_account(db_session, owner.id)
     schedule_id = await _seed_schedule(db_session, own_ad, own_account)
@@ -203,6 +232,7 @@ async def test_page_update_rejects_swapping_in_foreign_account(
     )
 
     assert response.status_code == 302
+    _assert_returned_to_editor(response, own_ad)
     db_session.expire_all()
     stored = (
         await db_session.execute(select(Schedule).where(Schedule.id == schedule_id))
@@ -274,13 +304,19 @@ async def test_editor_path_rejects_foreign_ad(
     assert await _schedules(db_session) == []
     # Отказ уводит на сводный список: адрес редактора чужого объявления
     # построить не из чего — запись владением не подтверждена.
-    assert response.headers["location"] == "/schedules"
+    _assert_indistinguishable_refusal(response)
 
 
 @pytest.mark.asyncio
 async def test_editor_path_rejects_foreign_account(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User, stranger: User
 ):
+    """Объявление своё — пользователь возвращается в его редактор с признаком.
+
+    Признак происхождения на РЕШЕНИЕ по-прежнему не влияет: расписание не
+    создаётся. Меняется только форма отказа, и только там, где объявление
+    подтверждено своим.
+    """
     own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
     foreign_account = await _seed_account(db_session, stranger.id)
 
@@ -293,6 +329,7 @@ async def test_editor_path_rejects_foreign_account(
 
     assert response.status_code == 302
     assert await _schedules(db_session) == []
+    _assert_returned_to_editor(response, own_ad)
 
 
 @pytest.mark.asyncio
@@ -312,6 +349,7 @@ async def test_editor_path_rejects_swapping_in_a_foreign_ad(
     )
 
     assert response.status_code == 302
+    _assert_indistinguishable_refusal(response)
     db_session.expire_all()
     stored = (
         await db_session.execute(select(Schedule).where(Schedule.id == schedule_id))
@@ -337,3 +375,118 @@ async def test_editor_path_cannot_delete_a_foreign_schedule(
     assert response.status_code == 302
     assert response.headers["location"] == "/schedules"
     assert len(await _schedules(db_session)) == 1
+
+
+# --- План 02-09: отказ по данным перестаёт быть навигацией (WR-07) ------------
+
+
+SCHEDULE_ERROR_TEXT = (
+    "Аккаунт или объявление недоступны. Обновите страницу и попробуйте снова."
+)
+
+
+@pytest.mark.asyncio
+async def test_editor_shows_the_refusal_message_in_the_schedules_section(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Формулировка контракта UI-SPEC (E4 `error`) видна и стоит ГДЕ надо.
+
+    Сообщение живёт в секции расписаний, то есть ПОСЛЕ закрытия элемента
+    `<form id="ad-form">`: внутри него оно было бы вложенной формой ровно тогда,
+    когда его поставили бы неаккуратно, и браузер молча отключил бы кнопки
+    карточек расписаний.
+    """
+    own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
+
+    response = await authed_client.get(f"/ads/{own_ad}/edit?sched_error=account")
+
+    assert response.status_code == 200
+    body = response.text
+    assert SCHEDULE_ERROR_TEXT in body
+
+    form_open = body.index('<form id="ad-form"')
+    form_close = body.index("</form>", form_open)
+    assert body.index(SCHEDULE_ERROR_TEXT) > form_close
+
+
+@pytest.mark.asyncio
+async def test_editor_without_the_flag_shows_no_refusal_message(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
+
+    response = await authed_client.get(f"/ads/{own_ad}/edit")
+
+    assert response.status_code == 200
+    assert SCHEDULE_ERROR_TEXT not in response.text
+
+
+@pytest.mark.asyncio
+async def test_editor_never_prints_the_query_value_itself(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Признак ВЫБИРАЕТ серверный текст, а не является им.
+
+    Приняв значение текстом, страница печатала бы произвольное сообщение от
+    имени приложения по одной лишь ссылке с чужого сайта. Неизвестный признак
+    не выбирает ничего — и страницу при этом не роняет: значение приходит
+    строкой запроса, то есть из ссылки, закладки или чужого сообщения.
+    """
+    own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
+
+    response = await authed_client.get(
+        f"/ads/{own_ad}/edit?sched_error=Ваш+аккаунт+заблокирован"
+    )
+
+    assert response.status_code == 200
+    assert "заблокирован" not in response.text
+    assert SCHEDULE_ERROR_TEXT not in response.text
+
+
+@pytest.mark.asyncio
+async def test_update_of_a_missing_schedule_returns_to_the_own_editor(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Записи нет — правки всё равно не исчезают молча.
+
+    Объявление подтверждено своим, поэтому пользователь возвращается в его
+    редактор. О чужих расписаниях это не сообщает ничего: тот же ответ приходит
+    и на несуществующий идентификатор, и на чужой.
+    """
+    own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
+    own_account = await _seed_account(db_session, owner.id)
+
+    response = await authed_client.post(
+        "/schedules/999999/edit",
+        content=_form(own_ad, own_account),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    _assert_returned_to_editor(response, own_ad)
+    assert await _schedules(db_session) == []
+
+
+@pytest.mark.asyncio
+async def test_update_of_a_foreign_schedule_with_a_foreign_ad_stays_silent(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, stranger: User
+):
+    foreign_ad = await _seed_ad(db_session, stranger.id, "Чужое объявление")
+    foreign_account = await _seed_account(db_session, stranger.id)
+    foreign_schedule = await _seed_schedule(db_session, foreign_ad, foreign_account)
+
+    response = await authed_client.post(
+        f"/schedules/{foreign_schedule}/edit",
+        content=_form(foreign_ad, foreign_account),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    _assert_indistinguishable_refusal(response)
+    db_session.expire_all()
+    stored = (
+        await db_session.execute(select(Schedule).where(Schedule.id == foreign_schedule))
+    ).scalar_one()
+    assert stored.times_of_day == ["09:00"]

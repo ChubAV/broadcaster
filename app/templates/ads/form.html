@@ -3,6 +3,7 @@
 {% from "components/card.html" import card_open, card_close %}
 {% from "components/field.html" import field, textarea_field %}
 {% from "components/empty_state.html" import empty_state %}
+{% from "components/alert.html" import alert %}
 {% from "components/modal.html" import modal %}
 {% from "components/mono.html" import mono %}
 {% from "ads/includes/sched_card.html" import sched_card, sched_count_label %}
@@ -135,6 +136,19 @@
        ограничивает: внутреннего скролла, кнопки «показать ещё» и потолка в
        этой фазе не вводится (UI-SPEC §Interaction Contract). Секция растёт. #}
     {{ card_open('Расписания') }}
+      {#- Отказ обработчика расписания, вернувший пользователя СЮДА (WR-07).
+          Текст приходит из app/pages/ads.py константой: значение строки запроса
+          лишь выбирает его и в разметку не попадает.
+
+          Макрос `alert` берётся готовый — это тот же компонент, которым
+          сообщают об ошибке семь экранов авторизации. Вызов НЕ вводит ни формы,
+          ни поля формы: секция расписаний стоит СОСЕДОМ <form id="ad-form">, и
+          вложенная форма молча отключила бы кнопки карточек (это удерживают
+          test_editor_schedule_section_is_a_sibling_of_the_ad_form и
+          test_editor_markup_has_no_nested_forms). -#}
+      {%- if sched_error %}
+      {{ alert(sched_error) }}
+      {%- endif %}
       {%- if ad %}
         {%- if not editor.accounts %}
         {# Ни одного подключённого аккаунта: подсказка с путём восстановления,

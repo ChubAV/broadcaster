@@ -13,8 +13,14 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
+from app.services.schedule_rules import is_schedule_complete
 from app.services.schedule_service import compute_next_run_at
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
+
+# Определение полноты живёт в НЕЙТРАЛЬНОМ модуле, от которого зависят и этот
+# слой, и JSON-API: определение одно на оба входа (D-08, WR-05). Локальное имя
+# сохранено, чтобы четыре страничных обработчика читались как прежде.
+_is_complete = is_schedule_complete
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
@@ -25,6 +31,22 @@ PAGE_SIZE = 30
 # чужой домен сразу после успешного сохранения. Адрес строит сервер сам, из
 # идентификатора объявления УЖЕ ПРОВЕРЕННОЙ на владение записи.
 RETURN_TO_EDITOR = "editor"
+
+# Исход проверки владения. Их ТРИ, а не два, потому что отказ по аккаунту и
+# отказ по объявлению — разные события: в первом объявление ПОДТВЕРЖДЕНО своим,
+# и вернуть пользователя в его редактор с объяснением можно, ничего о чужих
+# записях не сообщив; во втором доверять нечему, и любое различимое поведение
+# подтверждало бы существование чужой записи перебором идентификаторов.
+OWNERSHIP_OK = "ok"
+OWNERSHIP_AD_DENIED = "ad"
+OWNERSHIP_ACCOUNT_DENIED = "account"
+
+# Признак отказа в строке запроса редактора. Это ПРИЗНАК, а не текст: сам текст
+# живёт константой на стороне сервера (`app/pages/ads.py`), иначе ссылка с
+# чужого сайта печатала бы в редакторе произвольное сообщение от имени
+# приложения. Причина та же, по которой `return_to` — признак, а не адрес.
+SCHED_ERROR_ACCOUNT = "account"
+SCHED_ERROR_MISSING = "missing"
 
 # Формат значения времени: два числа через двоеточие в допустимых диапазонах.
 # Проверка стоит ДО вызова compute_next_run_at, который разбирает строку
@@ -129,8 +151,16 @@ async def _group_names_for(db: AsyncSession, user_id: int, schedules) -> dict[in
 
 
 def _clean_times(values: list[str]) -> list[str]:
-    """Оставить только значения формата ЧЧ:ММ, сохранив порядок."""
-    return [v for v in values if _TIME_RE.match(v.strip())]
+    """Оставить только значения формата ЧЧ:ММ, сохранив порядок.
+
+    Тип значения проверяется ДО строковых операций. Многочастный запрос вправе
+    прислать часть `times_of_day` файлом, и тогда `getlist` отдаёт `UploadFile`,
+    у которого нет `.strip()`: получался 500 вместо валидации (WR-03, T-02G-10).
+    Образец защиты — соседний `_clean_ints`, перехватывающий (TypeError,
+    ValueError); отбрасывание, а не отказ, по той же причине: одно испорченное
+    значение не повод потерять остальные.
+    """
+    return [v for v in values if isinstance(v, str) and _TIME_RE.match(v.strip())]
 
 
 def _clean_ints(values: list[str], low: int | None = None, high: int | None = None) -> list[int]:
@@ -153,22 +183,6 @@ def _clean_ints(values: list[str], low: int | None = None, high: int | None = No
             continue
         cleaned.append(number)
     return cleaned
-
-
-def _is_complete(
-    account_id: int | None,
-    group_ids: list[int],
-    days_of_week: list[int],
-    times_of_day: list[str],
-) -> bool:
-    """D-08: заполнено ли расписание настолько, чтобы его можно было включить.
-
-    Одно определение на все четыре обработчика и на разметку карточки
-    (app/templates/ads/includes/sched_card.html): второе разъехалось бы с
-    первым, и пользователь видел бы бейдж «Не заполнено» на расписании, которое
-    сервер считает полным.
-    """
-    return bool(account_id and group_ids and days_of_week and times_of_day)
 
 
 def _editor_redirect(form_data, ad_id: int | None, schedule_id: int | None = None):
@@ -225,29 +239,41 @@ def _apply_named_actions(
     return group_ids, days_of_week, times_of_day
 
 
-async def _owns_ad_and_account(
-    db: AsyncSession, user_id: int, ad_id: int, account_id: int | None
-) -> bool:
-    """Проверить владение объявлением и аккаунтом мессенджера запросом.
+async def _owns_ad(db: AsyncSession, user_id: int, ad_id: int) -> bool:
+    """Подтверждено ли владение объявлением ОДНИМ запросом со связкой.
 
-    Владение проверяется запросом со связкой по `user_id`, а не выборкой строки
-    с последующим сравнением: так «нет такой строки» и «строка чужая» дают один
-    и тот же исход, и ветку невозможно забыть.
+    Владение проверяется запросом, а не выборкой строки с последующим
+    сравнением: так «нет такой строки» и «строка чужая» дают один и тот же
+    исход, и ветку невозможно забыть.
+    """
+    return (
+        await db.execute(
+            select(Ad.id).where(Ad.id == ad_id, Ad.user_id == user_id)
+        )
+    ).scalar_one_or_none() is not None
+
+
+async def _ownership_verdict(
+    db: AsyncSession, user_id: int, ad_id: int, account_id: int | None
+) -> str:
+    """Владение объявлением и аккаунтом мессенджера — с РАЗЛИЧИМЫМ исходом.
+
+    Возвращает `OWNERSHIP_OK`, `OWNERSHIP_AD_DENIED` или
+    `OWNERSHIP_ACCOUNT_DENIED`. Различие нужно не проверке (она в обоих случаях
+    запрещает запись), а ОТВЕТУ: отказ по аккаунту при своём объявлении можно
+    объяснить прямо в редакторе, не потеряв набранные пользователем группы, дни
+    и времена (WR-07). Различить эти два случая наружу безопасно ровно потому,
+    что во втором адрес строится из ПОДТВЕРЖДЁННОЙ своей записи.
 
     `account_id` в схеме nullable с `ON DELETE SET NULL` (issue #35): пустое
     значение — законное состояние отвязанного расписания, поэтому проверка
     владения применяется только к непустому значению.
     """
-    own_ad = (
-        await db.execute(
-            select(Ad.id).where(Ad.id == ad_id, Ad.user_id == user_id)
-        )
-    ).scalar_one_or_none()
-    if own_ad is None:
-        return False
+    if not await _owns_ad(db, user_id, ad_id):
+        return OWNERSHIP_AD_DENIED
 
     if account_id is None:
-        return True
+        return OWNERSHIP_OK
 
     own_account = (
         await db.execute(
@@ -257,7 +283,19 @@ async def _owns_ad_and_account(
             )
         )
     ).scalar_one_or_none()
-    return own_account is not None
+    return OWNERSHIP_OK if own_account is not None else OWNERSHIP_ACCOUNT_DENIED
+
+
+def _editor_error_redirect(ad_id: int, reason: str) -> RedirectResponse:
+    """Вернуть пользователя В РЕДАКТОР своего объявления с признаком отказа.
+
+    Адрес строится из `ad_id` ПОДТВЕРЖДЁННОЙ записи — тем же способом, что и в
+    `_editor_redirect`: значение поля формы в адрес не попадает ни при каких
+    условиях (T-02-23). Признак — из перечня выше, не из тела запроса.
+    """
+    return RedirectResponse(
+        url=f"/ads/{ad_id}/edit?sched_error={reason}", status_code=302
+    )
 
 
 def _summary_query(user_id: int):
@@ -511,8 +549,17 @@ async def schedules_create(
     #
     # Признак происхождения на эту проверку не влияет НИКАК: он подконтролен
     # отправителю ровно так же, как ad_id и account_id (T-02-26).
-    if not await _owns_ad_and_account(db, user.id, ad_id, account_id):
+    #
+    # Различаются только ОТВЕТЫ. Чужое или отсутствующее объявление — прежний
+    # молчаливый редирект: доверять нечему, и адрес редактора построить не из
+    # чего. Своё объявление при недоступном аккаунте — возврат в этот самый
+    # редактор с объяснением: отказ по данным не имеет права быть навигацией,
+    # уносящей набранные группы, дни и времена без единого слова (WR-07).
+    verdict = await _ownership_verdict(db, user.id, ad_id, account_id)
+    if verdict == OWNERSHIP_AD_DENIED:
         return RedirectResponse(url="/schedules", status_code=302)
+    if verdict == OWNERSHIP_ACCOUNT_DENIED:
+        return _editor_error_redirect(ad_id, SCHED_ERROR_ACCOUNT)
 
     form_data = await request.form()
     # Фильтрация ДО приведения типов и ДО вычисления следующего запуска:
@@ -590,14 +637,23 @@ async def schedules_update(
     )
     schedule = result.scalar_one_or_none()
     if not schedule:
+        # Записи нет ЛИБО она чужая — исход один, различить их отсюда нельзя и
+        # не нужно. Но если объявление из тела подтверждено своим, пользователя
+        # можно вернуть в ЕГО редактор с объяснением: о чужих записях это не
+        # сообщает ничего, а правки перестают исчезать молча (WR-07).
+        if await _owns_ad(db, user.id, ad_id):
+            return _editor_error_redirect(ad_id, SCHED_ERROR_MISSING)
         return RedirectResponse(url="/schedules", status_code=302)
 
     # Владение самим расписанием проверено выше, но `ad_id` и `account_id`
     # приходят формой заново: без этой проверки своё расписание переставляется на
     # чужое объявление и чужой аккаунт (CR-01). Проверка стоит до первой записи
     # в модель, иначе отказ оставил бы запись частично изменённой.
-    if not await _owns_ad_and_account(db, user.id, ad_id, account_id):
+    verdict = await _ownership_verdict(db, user.id, ad_id, account_id)
+    if verdict == OWNERSHIP_AD_DENIED:
         return RedirectResponse(url="/schedules", status_code=302)
+    if verdict == OWNERSHIP_ACCOUNT_DENIED:
+        return _editor_error_redirect(ad_id, SCHED_ERROR_ACCOUNT)
 
     form_data = await request.form()
     group_ids = _clean_ints(form_data.getlist("group_ids"))
