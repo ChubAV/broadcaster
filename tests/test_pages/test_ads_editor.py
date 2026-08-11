@@ -477,6 +477,65 @@ async def test_creation_path_keeps_text_and_attachment_in_one_ad(
 
 
 @pytest.mark.asyncio
+async def test_save_during_autosave_overlap_lands_in_one_published_ad(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """CR-04, SC-1/SC-2: «Сохранить» поверх летящего автосохранения — одна запись.
+
+    Тест закрепляет семантику ОЧЕРЕДИ (`hx-sync="this:queue last"`): поставленный
+    в очередь запрос сериализуется из живой формы ПОСЛЕ обработки ответа первого,
+    когда внеполосная подмена уже вписала идентификатор созданного черновика в
+    #ad-id-field, — поэтому он несёт этот идентификатор и уходит путём
+    обновления. Прежняя стратегия отмены выбрасывала ответ вместе с
+    идентификатором: заменяющий запрос сериализовался с ПУСТЫМ скрытым полем,
+    уходил в ветку создания, и на руках оставались сирота-черновик с ранним
+    текстом плюс опубликованный дубль — молчаливая потеря работы, запрещённая
+    планом 02-08.
+    """
+    owner_id = (await _user(db_session)).id
+
+    # (1) Автосохранение в полёте: путь создания, скрытое поле ещё пустое.
+    first = await authed_client.post(
+        "/ads/new",
+        content=form_body(title="Черновик", text="текст до нажатия"),
+        headers=HX_HEADERS,
+        follow_redirects=False,
+    )
+    assert first.status_code == 200
+
+    # (2) Идентификатор извлекается из ТЕЛА ответа — из внеполосного блока
+    # #ad-id-field (autosave_response.html): ровно так браузер подменяет поле
+    # ДО того, как очередь переиздаст следующий запрос.
+    ad_id = _ad_id_from(first.text)
+    assert ad_id, "ответ автосохранения не назвал созданную запись"
+
+    # (3) Поставленный в очередь запрос — сериализация ЖИВОЙ формы после
+    # подмены: явное «Сохранить» с текстом на момент нажатия и двумя ключами
+    # вложений (путь requestSave() после загрузки — тот же триггер той же
+    # формы, SC-2).
+    keys = [image_key(owner_id, "p0.jpg"), image_key(owner_id, "p1.jpg")]
+    second = await authed_client.post(
+        "/ads/new",
+        content=form_body(
+            title="Черновик",
+            text="текст на момент нажатия",
+            images=keys,
+            extra=[("ad_id", ad_id), ("save", "1")],
+        ),
+        headers=HX_HEADERS,
+        follow_redirects=False,
+    )
+    assert second.status_code == 200
+
+    # (4) РОВНО одна строка ads: published, текст и вложения ВТОРОЙ
+    # сериализации, порядок ключей сохранён.
+    stored = await _only_ad(db_session, owner_id)
+    assert stored.status == AD_STATUS_PUBLISHED
+    assert stored.text == "текст на момент нажатия"
+    assert stored.images == keys
+
+
+@pytest.mark.asyncio
 async def test_body_ad_id_from_another_user_is_refused(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
@@ -970,7 +1029,10 @@ async def test_editor_form_carries_autosave_and_stays_a_real_form(
     assert f'action="/ads/{ad.id}/edit"' in html
     assert f'hx-post="/ads/{ad.id}/edit"' in html
     assert "delay:2s" in html, "дебаунс автосохранения потерян"
-    assert 'hx-sync="this:replace"' in html, "отмена устаревшего запроса потеряна"
+    assert 'hx-sync="this:queue last"' in html, (
+        "наложение встаёт в очередь — отмена выбрасывала ответ с идентификатором (CR-04)"
+    )
+    assert "this:replace" not in html, "стратегия отмены вернулась — CR-04"
     assert 'hx-swap="none"' in html, "форма стала целью подмены — каретка потеряется"
 
 
