@@ -229,6 +229,154 @@ async def test_ads_update_rejects_more_attachments_than_limit(
 # --- Лимит читается из настроек, а не из литерала ------------------------------
 
 
+# --- WR-01: форма ключа сопоставляется ТОЧНО ----------------------------------
+#
+# Образец был заякорен `^…$` и сопоставлялся методом `match`. Якорь `$` в Python
+# совпадает и НЕПОСРЕДСТВЕННО ПЕРЕД завершающим переводом строки, поэтому
+# значение `"{user_id}/{32 hex}_a.png\n"` проходило проверку владения и ложилось
+# в `Ad.images` дословно — оттуда оно попадает в адрес изображения, в карточку,
+# в историю и в адаптеры мессенджеров. Отдельно от этого префикс нормализовался
+# через `int()`, поэтому `007/…` принимался за `7/…`, то есть за ключ, которого
+# маршрут загрузки выдать не мог.
+#
+# Ни один из двух случаев не пересекает границу арендатора сам по себе, но оба
+# ломают объявленный инвариант: ключ — ровно то значение, которое загрузка
+# выдала ЭТОМУ вызывающему.
+#
+# Проверяется на ВСЕХ ЧЕТЫРЁХ входах записи `Ad.images`. Правило одно, и
+# разъехавшись, входы оставили бы дыру ровно там, где её не проверяли.
+
+ENTRANCES = ("page-create", "page-update", "api-create", "api-update")
+
+
+async def _write_images(
+    entrance: str,
+    authed_client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+    owner: User,
+    values: list[str],
+) -> tuple[int, list[str] | None, list[str] | None]:
+    """Подать список ключей в один из четырёх входов записи ``Ad.images``.
+
+    Возвращает тройку: код ответа, список ключей объявления ПОСЛЕ запроса
+    (``None``, если объявления нет вовсе) и то, каким этот список обязан
+    остаться при отказе. На входах создания отказ означает «записи не
+    появилось», на входах обновления — «посеянный список не тронут».
+    """
+    # Идентификатор снимается СРАЗУ и дальше используется вместо живого объекта:
+    # `expire_all()` ниже сбрасывает загруженные атрибуты, и обращение к
+    # `owner.id` после него ушло бы в ленивую подгрузку вне greenlet-а. Красная
+    # фаза, падающая по инфраструктурной причине, не отличает «мой тест
+    # воспроизвёл дефект» от «сломалось что-то постороннее».
+    owner_id = owner.id
+    seeded = [image_key(owner_id, "seeded.jpg")]
+
+    if entrance == "page-create":
+        response = await authed_client.post(
+            "/ads/new",
+            content=_form(values),
+            headers=FORM_HEADERS,
+            follow_redirects=False,
+        )
+        unchanged = None
+    elif entrance == "page-update":
+        ad_id = (await _seed_ad(db_session, owner_id, seeded)).id
+        response = await authed_client.post(
+            f"/ads/{ad_id}/edit",
+            content=_form(values),
+            headers=FORM_HEADERS,
+            follow_redirects=False,
+        )
+        unchanged = seeded
+    elif entrance == "api-create":
+        response = await authed_client.post(
+            "/api/ads",
+            json={"title": "Объявление", "text": "Текст", "images": values},
+            headers=auth_headers,
+        )
+        unchanged = None
+    elif entrance == "api-update":
+        ad_id = (await _seed_ad(db_session, owner_id, seeded)).id
+        response = await authed_client.put(
+            f"/api/ads/{ad_id}",
+            json={"images": values},
+            headers=auth_headers,
+        )
+        unchanged = seeded
+    else:  # pragma: no cover - защита от опечатки в параметризации
+        raise AssertionError(f"неизвестный вход записи: {entrance}")
+
+    db_session.expire_all()
+    ads = await _ads_of(db_session, owner_id)
+    stored = ads[0].images if ads else None
+    return response.status_code, stored, unchanged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrance", ENTRANCES)
+async def test_key_with_trailing_newline_is_refused(
+    entrance: str,
+    authed_client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Ключ с завершающим переводом строки — не тот ключ, что выдала загрузка."""
+    hostile = image_key(owner.id, "a.png") + "\n"
+
+    code, stored, unchanged = await _write_images(
+        entrance, authed_client, auth_headers, db_session, owner, [hostile]
+    )
+
+    assert code == 400
+    assert stored == unchanged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrance", ENTRANCES)
+async def test_key_with_leading_zero_prefix_is_refused(
+    entrance: str,
+    authed_client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Префикс сравнивается как строка: `007/…` — не `7/…`."""
+    hostile = "0" + image_key(owner.id, "a.png")
+
+    code, stored, unchanged = await _write_images(
+        entrance, authed_client, auth_headers, db_session, owner, [hostile]
+    )
+
+    assert code == 400
+    assert stored == unchanged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entrance", ENTRANCES)
+async def test_own_key_is_accepted_on_every_entrance(
+    entrance: str,
+    authed_client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Ужесточение формы не имеет права отказать по всему классу.
+
+    Страж: зелен и до правки, и после. Без него отказ «на любой ключ» выглядел
+    бы закрытием WR-01, хотя означал бы, что вложения перестали работать вовсе.
+    """
+    value = image_key(owner.id, "a.png")
+
+    code, stored, _ = await _write_images(
+        entrance, authed_client, auth_headers, db_session, owner, [value]
+    )
+
+    assert code in (200, 201, 302), code
+    assert stored == [value]
+
+
 @pytest.mark.asyncio
 async def test_limit_comes_from_settings_not_a_literal(
     client: AsyncClient, db_session: AsyncSession, test_settings

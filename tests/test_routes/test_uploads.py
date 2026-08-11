@@ -3,7 +3,9 @@ import re
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, patch
+from fastapi import UploadFile as FastAPIUploadFile
 from httpx import AsyncClient, ASGITransport
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.config import Settings
 from app.dependencies import get_db, get_settings
@@ -359,3 +361,148 @@ async def test_upload_stores_sniffed_content_type_not_client_header(
 
     assert response.status_code == 200
     assert mock_s3.call_args.kwargs["content_type"] == "image/png"
+
+
+# --- WR-02: предел размера ограничивает ПРИНИМАЕМОЕ, а не только сохраняемое ---
+#
+# Предел применялся ПОСЛЕ того, как всё тело уже прочитано в память одним
+# `await file.read()` без аргумента. `max_image_size_mb` поэтому ограничивал то,
+# что СОХРАНЯЕТСЯ, а не то, что ПРИНИМАЕТСЯ: любой аутентифицированный клиент
+# заставлял ASGI-воркер удерживать в памяти тело произвольного размера, и путь
+# отказа платил ту же цену.
+#
+# Утверждать один лишь код 400 на превышении бесполезно — он возвращается и на
+# дефектном коде. Измеряется поэтому ОБЪЁМ ЧТЕНИЯ.
+
+
+@pytest_asyncio.fixture
+async def oversize_settings(upload_settings):
+    """Настройки загрузки с пределом размера 1 МБ.
+
+    Тот же объект, что получает приложение и обработчик: `upload_client` и
+    `upload_auth_headers` зависят от той же фикстуры. Дефолтные 5 МБ заставили
+    бы держать в тесте лишние мегабайты; предел берётся из настроек, а не из
+    литерала, поэтому понизить его достаточно здесь.
+    """
+    upload_settings.max_image_size_mb = 1
+    return upload_settings
+
+
+def make_oversized_png_bytes(size: int) -> bytes:
+    """Тело заданного размера, начинающееся с сигнатуры PNG.
+
+    Сигнатура обязательна: на дефектном коде распознавание типа стоит ВЫШЕ
+    проверки размера, и без неё тест померил бы отказ по типу, а не по размеру.
+    """
+    signature = b"\x89PNG\r\n\x1a\n"
+    return signature + b"\x00" * (size - len(signature))
+
+
+# Аргумента размера не было вовсе — это не то же самое, что явный `read(-1)`.
+_NO_SIZE_ARGUMENT = object()
+
+
+def test_read_measurement_targets_the_class_the_handler_receives():
+    """Обёртка чтения накладывается на ТОТ класс, что приходит в обработчик.
+
+    `fastapi.UploadFile` в установленной версии — НЕ тот же класс, а подкласс
+    `starlette.datastructures.UploadFile`, и он переопределяет ``read``,
+    передавая размер в базовый метод ЯВНО. Приди в обработчик экземпляр
+    подкласса, вызов ``await file.read()`` без аргумента дошёл бы до обёртки уже
+    с ``size=-1``, и утверждение «обработчик не читал без ограничения размера»
+    перестало бы что-либо измерять, оставшись зелёным при полностью
+    забуференном теле.
+
+    Поэтому обёртка кладётся на БАЗОВЫЙ класс — его метод в конечном счёте
+    вызывают оба, — а то, что в обработчик приходит именно базовый, не
+    предполагается, а измеряется в ``test_oversized_upload_is_not_buffered_whole``.
+    """
+    assert issubclass(FastAPIUploadFile, StarletteUploadFile)
+
+
+@pytest.fixture
+def recorded_reads(monkeypatch):
+    """Записывать каждое чтение загруженного файла.
+
+    Для каждого вызова запоминается запрошенный размер порции (``None`` —
+    аргумента не было вовсе), число фактически возвращённых байтов и класс
+    объекта, у которого вызвали чтение.
+    """
+    calls: list[tuple[int | None, int, type]] = []
+    original = StarletteUploadFile.read
+
+    async def recording_read(self, size=_NO_SIZE_ARGUMENT):
+        if size is _NO_SIZE_ARGUMENT:
+            chunk = await original(self)
+            calls.append((None, len(chunk), type(self)))
+        else:
+            chunk = await original(self, size)
+            calls.append((size, len(chunk), type(self)))
+        return chunk
+
+    monkeypatch.setattr(StarletteUploadFile, "read", recording_read)
+    return calls
+
+
+@pytest.mark.asyncio
+@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+async def test_oversized_upload_is_not_buffered_whole(
+    mock_s3, oversize_settings, upload_client, upload_auth_headers, recorded_reads
+):
+    """Превышение предела ПРЕРЫВАЕТ чтение, а не проверяется после него."""
+    max_bytes = oversize_settings.max_image_size_mb * 1024 * 1024
+    body = make_oversized_png_bytes(3 * 1024 * 1024)
+
+    response = await upload_client.post(
+        "/api/uploads/image",
+        files={"file": ("big.png", body, "image/png")},
+        headers=upload_auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert "File size exceeds" in response.json()["detail"]
+    mock_s3.assert_not_called()
+
+    assert recorded_reads, "обработчик не прочитал ни байта — измерять нечего"
+    # «Аргумента не было» различимо только у базового класса: подкласс FastAPI
+    # передаёт размер в базовый метод явно. Факт измеряется, а не предполагается.
+    assert {cls for _, _, cls in recorded_reads} == {StarletteUploadFile}, (
+        "чтение пришло не от того класса, на который наложена обёртка — "
+        "различить «без аргумента» и «read(-1)» больше нельзя"
+    )
+    requested = [size for size, _, _ in recorded_reads]
+    assert None not in requested, (
+        "обработчик запросил содержимое БЕЗ ограничения размера: всё тело "
+        f"оказалось в памяти (запрошенные размеры: {requested})"
+    )
+    total = sum(length for _, length, _ in recorded_reads)
+    # Одна порция сверх предела неизбежна: превышение обнаруживается ровно тем
+    # блоком, который его создал. Больше одной означает, что чтение не прервалось.
+    assert total <= max_bytes + max(requested), (
+        f"прочитано {total} байт при пределе {max_bytes}: чтение не прервалось"
+    )
+
+
+@pytest.mark.asyncio
+@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+async def test_oversized_upload_is_refused_with_size_message(
+    mock_s3, oversize_settings, upload_client, upload_auth_headers
+):
+    """Страж формулировки: текст и код отказа по размеру не меняются.
+
+    Зелен и до правки, и после: он закрепляет ответ, а не воспроизводит дефект.
+    Дефект — в объёме чтения, и его меряет тест выше.
+    """
+    body = make_oversized_png_bytes(3 * 1024 * 1024)
+
+    response = await upload_client.post(
+        "/api/uploads/image",
+        files={"file": ("big.png", body, "image/png")},
+        headers=upload_auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        f"File size exceeds {oversize_settings.max_image_size_mb}MB limit"
+    )
+    mock_s3.assert_not_called()

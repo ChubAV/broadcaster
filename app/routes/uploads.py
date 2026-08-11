@@ -17,6 +17,11 @@ _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 MAX_FILENAME_LENGTH = 100
 FALLBACK_FILENAME = "upload"
 
+# Размер порции чтения тела. Одна порция — то, на что предел размера может быть
+# превышен, прежде чем чтение прервётся: превышение обнаруживает ровно тот блок,
+# который его создал.
+UPLOAD_CHUNK_SIZE = 64 * 1024
+
 
 # Заголовок типа из составного запроса подконтролен отправителю ровно так же, как
 # имя файла: он тип ОБЪЯВЛЯЕТ, но не доказывает. SVG, принятый под видом PNG,
@@ -93,24 +98,44 @@ async def upload_image(
     user_id: int = Depends(get_current_user_id),
     settings: Settings = Depends(get_settings),
 ):
-    # Read file content, then validate the type by its first bytes. Чтение
-    # поднято выше проверки типа намеренно: тип берётся из содержимого, а не из
-    # присланного клиентом заголовка (CR-02).
-    content = await file.read()
+    # Чтение ПОРЦИЯМИ с накоплением, а не `await file.read()` без аргумента.
+    # Единовременное чтение материализовало бы всё тело до того, как предел
+    # вообще проверен: `max_image_size_mb` тогда ограничивает то, что
+    # СОХРАНЯЕТСЯ, а не то, что ПРИНИМАЕТСЯ, и любой аутентифицированный клиент
+    # заставляет ASGI-воркер удерживать в памяти тело произвольного размера
+    # (WR-02). Путь отказа платил ту же цену: распознавание типа стояло выше
+    # проверки размера и уже успевало получить всё тело.
+    max_bytes = settings.max_image_size_mb * 1024 * 1024
+    chunks: list[bytes] = []
+    received = 0
+    while True:
+        chunk = await file.read(UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+        received += len(chunk)
+        if received > max_bytes:
+            # Прерывание на первом же превышении: остаток тела не читается, и
+            # собранные порции не склеиваются вовсе.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File size exceeds {settings.max_image_size_mb}MB limit",
+            )
+        chunks.append(chunk)
 
+    content = b"".join(chunks)
+
+    # Тип берётся из содержимого, а не из присланного клиентом заголовка
+    # (CR-02). Проверка стоит теперь НИЖЕ предела размера, и это неизбежно: при
+    # потоковом чтении предел срабатывает раньше, чем содержимое целиком
+    # доступно для распознавания. Следствие наблюдаемо и намеренно — тело,
+    # которое одновременно превышает предел и не является изображением, получает
+    # отказ по размеру, а не по типу. Оба отказа — код 400, ни один вход не
+    # становится мягче.
     content_type = sniff_image(content)
     if content_type is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=UNSUPPORTED_IMAGE_MESSAGE,
-        )
-
-    # Validate size
-    max_bytes = settings.max_image_size_mb * 1024 * 1024
-    if len(content) > max_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"File size exceeds {settings.max_image_size_mb}MB limit",
         )
 
     # Generate unique key. Формат ключа прежний — идентификатор пользователя,
