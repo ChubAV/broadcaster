@@ -72,6 +72,45 @@ async def _user(db: AsyncSession) -> User:
     ).scalar_one()
 
 
+async def _stranger(db: AsyncSession) -> User:
+    """Второй пользователь — владелец «чужого» объявления.
+
+    Форма посева взята из tests/test_pages/test_schedule_ownership.py: чужая
+    запись обязана принадлежать НАСТОЯЩЕМУ пользователю, иначе отказ мог бы
+    объясняться отсутствием владельца, а не проверкой владения.
+    """
+    user = User(email="stranger@test.com", password_hash="x", name="Stranger")
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+def _attr_value(html: str, anchor: str, attr: str) -> str:
+    """Значение атрибута элемента, опознанного по подстроке `anchor`.
+
+    Разбор строкой — тот же приём, что уже применяют этот файл и
+    tests/test_pages/test_responsive_markup.py: новой зависимости разбора HTML
+    ради одного скрытого поля не заводится. Отсутствие элемента или атрибута
+    поднимает ValueError — то есть тест падает, а не молча меряет пустоту.
+    """
+    start = html.index(anchor)
+    opened = html.index(f'{attr}="', start) + len(attr) + 2
+    return html[opened : html.index('"', opened)]
+
+
+def _ad_id_from(html: str) -> str:
+    """Идентификатор объявления, который СЕРВЕР вернул в ответе автосохранения.
+
+    Значение приезжает внеполосно скрытым полем `#ad-id-field` и подменяет то
+    же поле внутри никогда не перерисовываемой формы. Тест обязан брать
+    следующий адрес и следующий идентификатор ИЗ ОТВЕТА, а не назначать их
+    рукой: назначенный рукой идентификатор проверяет замысел теста, а не
+    контракт, который получает браузер (02-REVIEW.md, IN-06).
+    """
+    return _attr_value(html, 'id="ad-id-field"', "value")
+
+
 async def _seed_ad(
     db: AsyncSession,
     title: str = "Осенний завоз",
@@ -325,12 +364,31 @@ async def test_plain_post_without_htmx_redirects(
     assert response.status_code == 302
 
 
+# --- План 02-08, CR-01: повторное автосохранение адресуется в ту же запись ---
+#
+# Прежний тест этого места (`test_repeated_autosave_updates_the_same_ad`) слал
+# второй запрос на `/ads/{id}/edit` — на адрес, который форма НЕ несёт и на
+# который браузер не уходит: `hx-post` неизменяем, а `hx-swap="none"` гарантирует,
+# что форма никогда не перерисуется. Тест утверждал переписывание адреса, которого
+# никто не выполняет, и был зелёным ровно тогда, когда пользователь терял правки
+# (02-REVIEW.md, IN-06). Он удалён; ниже адрес второго запроса берётся из ответа.
+
+
 @pytest.mark.asyncio
-async def test_repeated_autosave_updates_the_same_ad(
+async def test_repeated_autosave_posts_to_the_url_the_form_carries(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Повторное автосохранение обновляет первую запись, а не плодит вторую."""
+    """Второе автосохранение на АДРЕС ФОРМЫ обновляет первый черновик.
+
+    Ключевое отличие от удалённого теста: адрес второго запроса не назначается,
+    а сверяется с атрибутом `hx-post`, который сервер отдал в разметке формы.
+    Пока эти два адреса совпадают, тест меряет то же, что делает браузер.
+    """
     owner_id = (await _user(db_session)).id
+
+    page = await authed_client.get("/ads/new")
+    assert page.status_code == 200
+    assert _attr_value(page.text, 'id="ad-form"', "hx-post") == "/ads/new"
 
     first = await authed_client.post(
         "/ads/new",
@@ -339,18 +397,121 @@ async def test_repeated_autosave_updates_the_same_ad(
         follow_redirects=False,
     )
     assert first.status_code == 200
-    ad_id = (await _only_ad(db_session, owner_id)).id
+    ad_id = _ad_id_from(first.text)
+    assert ad_id, "ответ автосохранения не назвал созданную запись"
 
     second = await authed_client.post(
-        f"/ads/{ad_id}/edit",
-        content=form_body(title="Второй вариант", text="Текст"),
+        "/ads/new",
+        content=form_body(
+            title="Второй вариант", text="Текст", extra=[("ad_id", ad_id)]
+        ),
         headers=HX_HEADERS,
         follow_redirects=False,
     )
 
     assert second.status_code == 200
     assert await _ads_count(db_session, owner_id) == 1
-    assert (await _only_ad(db_session, owner_id)).title == "Второй вариант"
+    stored = await _only_ad(db_session, owner_id)
+    assert stored.title == "Второй вариант"
+    assert stored.status == AD_STATUS_DRAFT, "автосохранение изменило состояние"
+
+
+@pytest.mark.asyncio
+async def test_creation_path_keeps_text_and_attachment_in_one_ad(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ADS-05, SC-2: текст и вложение с пути СОЗДАНИЯ лежат в ОДНОМ объявлении.
+
+    Загрузка файла поднимает событие `change`, htmx уходит на тот же `/ads/new`,
+    и до этого плана вложение приезжало во ВТОРУЮ запись — набранный текст
+    оставался в первой.
+    """
+    owner_id = (await _user(db_session)).id
+
+    first = await authed_client.post(
+        "/ads/new",
+        content=form_body(title="Черновик с вложением", text="Набранный текст"),
+        headers=HX_HEADERS,
+        follow_redirects=False,
+    )
+    assert first.status_code == 200
+    ad_id = _ad_id_from(first.text)
+    key = image_key(owner_id, "photo.jpg")
+
+    second = await authed_client.post(
+        "/ads/new",
+        content=form_body(
+            title="Черновик с вложением",
+            text="Набранный текст",
+            images=[key],
+            extra=[("ad_id", ad_id)],
+        ),
+        headers=HX_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert second.status_code == 200
+    assert await _ads_count(db_session, owner_id) == 1
+    stored = await _only_ad(db_session, owner_id)
+    assert stored.text == "Набранный текст"
+    assert stored.images == [key]
+
+
+@pytest.mark.asyncio
+async def test_body_ad_id_from_another_user_is_refused(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-02G-01: идентификатор из ТЕЛА запроса не открывает чужую запись.
+
+    Этот план вводит в тело `/ads/new` новый идентификатор объекта, то есть
+    расширяет границу доверия. Неподтверждённое владение обязано давать отказ —
+    ни записи в чужую строку, ни создания нового черновика взамен.
+    """
+    owner_id = (await _user(db_session)).id
+    # Идентификаторы снимаются СРАЗУ: каждый последующий commit сбрасывает
+    # загруженные атрибуты, и обращение к ним из синхронного кода теста ушло бы
+    # в ленивую подгрузку вне greenlet-а.
+    stranger_id = (await _stranger(db_session)).id
+    foreign_id = (
+        await _seed_ad(db_session, title="Чужое объявление", user_id=stranger_id)
+    ).id
+    before = await _ads_count(db_session, owner_id)
+
+    await authed_client.post(
+        "/ads/new",
+        content=form_body(
+            title="Захват", text="Захват", extra=[("ad_id", str(foreign_id))]
+        ),
+        headers=HX_HEADERS,
+        follow_redirects=False,
+    )
+
+    db_session.expire_all()
+    stored = (
+        await db_session.execute(select(Ad).where(Ad.id == foreign_id))
+    ).scalar_one()
+    assert stored.title == "Чужое объявление"
+    assert await _ads_count(db_session, stranger_id) == 1
+    assert await _ads_count(db_session, owner_id) == before
+
+
+@pytest.mark.asyncio
+async def test_plain_post_without_htmx_still_redirects(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-09: базовый путь БЕЗ JavaScript на `/ads/new` по-прежнему отвечает 302.
+
+    Регрессия к задаче 2: маршрутизация тела запроса на обновление не имеет
+    права превратить обычную отправку формы в фрагмент.
+    """
+    response = await authed_client.post(
+        "/ads/new",
+        content=form_body(title="Без JavaScript", text="Текст"),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
 
 
 @pytest.mark.asyncio
@@ -403,6 +564,72 @@ async def test_preview_never_shows_rejected_attachments(
     stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
     assert stored.images == [kept]
     assert stored.title == "С вложением"
+
+
+@pytest.mark.asyncio
+async def test_preview_lists_every_attachment_in_send_order(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ADS-06, UI-SPEC E9 `zero-one-many`: предпросмотр показывает ВСЕ вложения.
+
+    Макет рисует ровно один медиаблок, раскладка 2…10 вложений им не задана.
+    Дефолт контракта — переносящаяся строка миниатюр в порядке отправки, то есть
+    в порядке `Ad.images`. Порядок проверяется ПОЗИЦИЯМИ подстрок, а не целым
+    блоком разметки: разметка миниатюры может измениться, порядок — нет.
+    """
+    owner_id = (await _user(db_session)).id
+    keys = [image_key(owner_id, f"p{i}.jpg") for i in range(3)]
+    ad_id = (await _seed_ad(db_session, title="Три вложения", images=keys)).id
+
+    response = await authed_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(title="Три вложения", text="Текст", images=keys),
+        headers=HX_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    # index() поднимает ValueError на отсутствующем ключе: «показаны все три» и
+    # «показаны в этом порядке» проверяются одним выражением.
+    positions = [html.index(key) for key in keys]
+    assert positions == sorted(positions), "порядок миниатюр разошёлся с Ad.images"
+    db_session.expire_all()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
+    assert stored.images == keys
+
+
+@pytest.mark.asyncio
+async def test_removing_an_absent_key_changes_nothing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ADS-05: повторное «убрать вложение» на уже убранный ключ — без эффекта.
+
+    Кнопка убирания живёт в форме автосохранения, и повторная отправка того же
+    тела реальна: дебаунс мог отправить запрос дважды. Отбрасывание «лишнего»
+    ключа или ошибка здесь одинаково испортили бы список.
+    """
+    owner_id = (await _user(db_session)).id
+    keys = [image_key(owner_id, f"p{i}.jpg") for i in range(2)]
+    absent = image_key(owner_id, "already-gone.jpg")
+    ad_id = (await _seed_ad(db_session, title="Два вложения", images=keys)).id
+
+    response = await authed_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(
+            title="Два вложения",
+            text="Текст",
+            images=keys,
+            extra=[("remove_image", absent)],
+        ),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    db_session.expire_all()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
+    assert stored.images == keys
 
 
 @pytest.mark.asyncio

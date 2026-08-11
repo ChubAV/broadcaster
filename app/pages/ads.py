@@ -52,6 +52,11 @@ INACCESSIBLE_IMAGE_MESSAGE = (
     "Одно из вложений недоступно. Обновите страницу и добавьте изображение заново."
 )
 
+# Один текст на два случая — «нет такой записи» и «запись чужая» (T-02G-02).
+# Разные тексты подтвердили бы существование чужого объявления по одному лишь
+# перебору идентификаторов.
+INACCESSIBLE_AD_MESSAGE = "Объявление недоступно. Обновите страницу и попробуйте снова."
+
 
 def own_image_keys(values: list[str], user_id: int, max_images: int) -> list[str]:
     """Проверить, что каждый ключ вложения принадлежит вызывающему.
@@ -448,14 +453,66 @@ async def ads_create(
     # автосохранение вовсе.
     title: str = Form(""),
     text: str = Form(""),
+    # Скрытое поле #ad-id-field: пустое до первого сохранения, дальше несёт
+    # идентификатор созданного черновика, который ответ автосохранения подменил
+    # внеполосно. Тип строковый, а не int: пустое значение приходит на КАЖДОМ
+    # первом сохранении, и объявленный int дал бы 422 вместо создания записи.
+    ad_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Создание черновика И его последующие автосохранения — один адрес.
+
+    Форма несёт неизменяемый ``hx-post="/ads/new"`` и ``hx-swap="none"``: адрес
+    следующего запроса не переписывается ничем, поэтому маршрутизация «создать
+    или обновить» живёт ЗДЕСЬ, а не в браузере (CR-01). Клиентское переписывание
+    ``hx-post`` оставило бы вторую строку ``ads`` создаваемой любым запросом в
+    обход страницы — защита обязана быть серверной.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
+
+    # Путь СОЗДАНИЯ (D-03): поля нет, оно пустое или состоит из пробелов.
+    if ad_id is None or not ad_id.strip():
+        return await _save_from_editor(
+            request, db, settings, user, None, title=title, text=text
+        )
+
+    # Владение подтверждается ОДНИМ запросом с обоими условиями — той же формой,
+    # что применяет ads_update: «нет такой записи» и «запись чужая» обязаны
+    # давать один исход, и ветку невозможно забыть (T-02G-01, T-02G-02).
+    # Нечисловое значение неотличимо от несуществующего идентификатора.
+    ad = None
+    try:
+        requested_id = int(ad_id)
+    except ValueError:
+        requested_id = None
+    if requested_id is not None:
+        ad = (
+            await db.execute(
+                select(Ad).where(Ad.id == requested_id, Ad.user_id == user.id)
+            )
+        ).scalar_one_or_none()
+
+    # Отказ стоит ДО любой записи в модель: иначе неподтверждённый идентификатор
+    # успевал бы изменить объект в сессии.
+    if ad is None:
+        if request.headers.get("HX-Request") is not None:
+            # Ответ несёт ad=None, то есть внеполосно ОБНУЛЯЕТ #ad-id-field:
+            # идентификатор, которым владеть не удалось, не должен уехать в
+            # следующий запрос ещё раз. Записи при этом не создаётся — иначе
+            # подстановка чужого идентификатора порождала бы черновики.
+            return await _autosave_response(
+                request, db, settings, user, None, error=INACCESSIBLE_AD_MESSAGE
+            )
+        return RedirectResponse(url="/ads", status_code=302)
+
+    # Путь ОБНОВЛЕНИЯ. _save_from_editor различает создание и обновление по
+    # аргументу ad и ставит HX-Push-Url только при создании — на втором и
+    # последующих запросах заголовок не нужен, адрес в браузере уже верный.
     return await _save_from_editor(
-        request, db, settings, user, None, title=title, text=text
+        request, db, settings, user, ad, title=title, text=text
     )
 
 
@@ -503,6 +560,15 @@ async def ads_update(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Обновление по адресу маршрута. Поле `ad_id` из ТЕЛА здесь игнорируется.
+
+    Форма редактора несёт скрытое `ad_id` на любом своём адресе, и параметра с
+    таким именем в сигнатуре нет НАМЕРЕННО: адрес объявления тут задаёт путь
+    маршрута, и тело не должно уметь перенаправить обновление на другую запись.
+    Приняв его, обработчик получил бы второе определение «какую запись менять» —
+    ровно та развилка, из-за которой разъехались два определения полноты
+    расписания (WR-05).
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
