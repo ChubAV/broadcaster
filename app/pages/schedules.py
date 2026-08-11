@@ -13,8 +13,14 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
+from app.services.schedule_rules import is_schedule_complete
 from app.services.schedule_service import compute_next_run_at
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
+
+# Определение полноты живёт в НЕЙТРАЛЬНОМ модуле, от которого зависят и этот
+# слой, и JSON-API: определение одно на оба входа (D-08, WR-05). Локальное имя
+# сохранено, чтобы четыре страничных обработчика читались как прежде.
+_is_complete = is_schedule_complete
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
@@ -129,8 +135,16 @@ async def _group_names_for(db: AsyncSession, user_id: int, schedules) -> dict[in
 
 
 def _clean_times(values: list[str]) -> list[str]:
-    """Оставить только значения формата ЧЧ:ММ, сохранив порядок."""
-    return [v for v in values if _TIME_RE.match(v.strip())]
+    """Оставить только значения формата ЧЧ:ММ, сохранив порядок.
+
+    Тип значения проверяется ДО строковых операций. Многочастный запрос вправе
+    прислать часть `times_of_day` файлом, и тогда `getlist` отдаёт `UploadFile`,
+    у которого нет `.strip()`: получался 500 вместо валидации (WR-03, T-02G-10).
+    Образец защиты — соседний `_clean_ints`, перехватывающий (TypeError,
+    ValueError); отбрасывание, а не отказ, по той же причине: одно испорченное
+    значение не повод потерять остальные.
+    """
+    return [v for v in values if isinstance(v, str) and _TIME_RE.match(v.strip())]
 
 
 def _clean_ints(values: list[str], low: int | None = None, high: int | None = None) -> list[int]:
@@ -153,22 +167,6 @@ def _clean_ints(values: list[str], low: int | None = None, high: int | None = No
             continue
         cleaned.append(number)
     return cleaned
-
-
-def _is_complete(
-    account_id: int | None,
-    group_ids: list[int],
-    days_of_week: list[int],
-    times_of_day: list[str],
-) -> bool:
-    """D-08: заполнено ли расписание настолько, чтобы его можно было включить.
-
-    Одно определение на все четыре обработчика и на разметку карточки
-    (app/templates/ads/includes/sched_card.html): второе разъехалось бы с
-    первым, и пользователь видел бы бейдж «Не заполнено» на расписании, которое
-    сервер считает полным.
-    """
-    return bool(account_id and group_ids and days_of_week and times_of_day)
 
 
 def _editor_redirect(form_data, ad_id: int | None, schedule_id: int | None = None):
