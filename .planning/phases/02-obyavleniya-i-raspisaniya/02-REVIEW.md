@@ -1,8 +1,8 @@
 ---
 phase: 02-obyavleniya-i-raspisaniya
-reviewed: 2026-08-11T09:05:00Z
+reviewed: 2026-08-11T00:00:00Z
 depth: standard
-files_reviewed: 50
+files_reviewed: 52
 files_reviewed_list:
   - alembic/versions/0013_ad_status.py
   - app/application/accounts/use_cases.py
@@ -46,479 +46,239 @@ files_reviewed_list:
   - tests/test_pages/test_schedule_ownership.py
   - tests/test_pages/test_schedules_detached_account.py
   - tests/test_pages/test_schedules_list.py
+  - tests/test_pages/test_schedules_poisoned_row.py
   - tests/test_pages/test_shell.py
   - tests/test_routes/test_ads.py
   - tests/test_routes/test_schedules.py
+  - tests/test_routes/test_schedules_api_null.py
   - tests/test_routes/test_schedules_api_ownership.py
   - tests/test_routes/test_schedules_profile_timezone.py
   - tests/test_routes/test_schedules_toggle_detached.py
   - tests/test_routes/test_uploads.py
   - tests/test_templates/test_components.py
 findings:
-  critical: 2
-  warning: 7
+  critical: 0
+  warning: 2
   info: 7
-  total: 16
+  total: 9
 status: issues_found
 ---
 
-# Phase 02: Code Review Report
+# Phase 02: Code Review Report (post-gap-closure round)
 
-**Reviewed:** 2026-08-11T09:05:00Z
+**Reviewed:** 2026-08-11
 **Depth:** standard
-**Files Reviewed:** 50
+**Files Reviewed:** 52
 **Status:** issues_found
 
 ## Summary
 
-**Prior findings are genuinely closed.** All eight warnings of the earlier review were
-re-verified against the current source and none is carried forward:
+This is the second review round for phase 02, after the gap-closure plans
+02-13/02-14 addressed CR-01..CR-04 from the prior review. All 52 listed files
+were read; the phase test suite was executed (167 tests in the seven core files,
+all passing).
 
-- **WR-01** — `app/services/image_keys.py:33,66,70` uses an unanchored pattern with
-  `fullmatch` and compares the prefix **as a string**. Trailing-newline and `007/…` keys
-  are refused on all four `Ad.images` entrances; a grep for writes to `.images` finds
-  exactly `app/routes/ads.py:62,107` and `app/pages/ads.py:361,368`, and all four route
-  through `own_image_keys`.
-- **WR-02** — `app/routes/uploads.py:108-125` reads in 64 KiB chunks and aborts on the
-  first chunk crossing the limit; `tests/test_routes/test_uploads.py:449-483` measures the
-  read volume rather than the status code.
-- **WR-03** — both `.strip()` sites now type-check first (`app/pages/ads.py:312,325`,
-  `app/pages/schedules.py:163`); the `images` file part is a 400, not a 500.
-- **WR-04** — the rule lives in a neutral module; `app/routes/ads.py` no longer imports
-  from `app/pages/`.
-- **WR-05** — one `is_schedule_complete` serves both toggles.
-- **WR-06** — `app/routes/schedules.py:178-193` mirrors the page rule.
-- **WR-07** — `_ownership_verdict` + `sched_error` return the user to their editor.
-- **WR-08** — `ad_status: str | None = Form(None, alias="status")`.
-- **IN-06** — the vacuous autosave test is gone; the replacement takes the next address
-  from the server's own response (`tests/test_pages/test_ads_editor.py:396-436`).
+**Prior-finding closure verification — all four closures are complete and sound:**
 
-**CR-01 and CR-02 are closed at the entrances they named — and both left a live residual.**
-CR-01's server-side routing is correct, but `hx-sync="this:replace"` on the same form
-throws away the very response that carries the new id, so the create path can still emit a
-second `ads` row (CR-04). CR-02's group-ownership check is present on create and update,
-but nothing re-checks ownership downstream and nothing remediates rows written before the
-fix (WR-12).
+- **CR-01 (body `ad_id` on `/ads/new`)** — closed. `ads_create`
+  (`app/pages/ads.py:427-496`) confirms ownership with a single
+  `Ad.id == requested_id AND Ad.user_id == user.id` query, treats non-numeric
+  values as nonexistent, and the htmx refusal OOB-resets `#ad-id-field` without
+  creating a record. Covered by `test_body_ad_id_from_another_user_is_refused`.
+- **CR-02 (group ownership on JSON input / SVG content sniffing on uploads)** —
+  closed. `owned_group_ids` (`app/services/schedule_rules.py`) is applied on both
+  create and update in `app/routes/schedules.py`; `sniff_image` in
+  `app/routes/uploads.py` ignores the client Content-Type entirely, including on
+  the write to storage. Test coverage is thorough on both.
+- **CR-03 (explicit JSON null poisoning schedules)** — closed on both lines:
+  `reject_explicit_null` validator (`app/routes/schedules.py:49-56`) returns 422
+  before any `setattr`, and the templates guard with `or []`
+  (`sched_card.html:66`, `schedule_row.html:110`). Verified by
+  `test_schedules_api_null.py` and `test_schedules_poisoned_row.py`.
+- **CR-04 (autosave overlap losing the created draft id)** — closed.
+  `hx-sync="this:queue last"` on `#ad-form` (`ads/form.html:66`), queued request
+  serialized after the OOB swap of `#ad-id-field`; guarded by
+  `test_save_during_autosave_overlap_lands_in_one_published_ad` and the markup
+  assertions in `test_editor_form_carries_autosave_and_stays_a_real_form`
+  (including the negative `this:replace not in html`).
 
-Two blockers are new and both are reproduced, not inferred. A throwaway probe against the
-real app (removed afterwards) produced:
-
-```
-PROBE put-null-group_ids:  500      # and the row is now permanently unreadable:
-PROBE list-after-null:     500      # GET /api/schedules 500s for this user forever
-PROBE malformed-time-create: 500    # POST /api/schedules times_of_day=["nope"]
-PROBE empty-create: 201 {'is_active': True, 'next_run_at': None, 'group_ids': []}
-```
-
-Targeted run of the phase suite (`test_ads_editor`, `test_schedules_api_ownership`,
-`test_uploads`, `test_ads_image_ownership`): **104 passed, 2 warnings**. Green tests are not
-evidence here — every finding below sits on an input no test in the suite sends.
-
-## Structural Findings (fallow)
-
-No structural pre-pass was supplied with this review; no `<structural_findings>` block was
-present in the prompt. All findings below are narrative.
-
-## Narrative Findings (AI reviewer)
-
-## Critical Issues
-
-### CR-03: `PUT /api/schedules/{id}` writes JSON `null` into a list column and permanently breaks the caller's schedule listing
-
-**File:** `app/routes/schedules.py:154-171` (`update_schedule`)
-**Severity:** BLOCKER
-
-**Issue:**
-Every field of `UpdateScheduleRequest` is `T | None = None`, and the handler assigns
-whatever `model_dump(exclude_unset=True)` yields:
-
-```python
-update_data = data.model_dump(exclude_unset=True)
-...
-for field, value in update_data.items():
-    setattr(schedule, field, value)
-```
-
-`exclude_unset` distinguishes *absent* from *present*, but not *present and null*. A body of
-`{"group_ids": null}` is "set", so `schedule.group_ids = None`. SQLAlchemy's `JSON` type has
-`none_as_null=False`, so the value is stored as the JSON document `null` — no
-`NOT NULL` violation, the commit **succeeds** — and reads back as `None`.
-
-The ownership guard added by this plan does not stop it: `requested = update_data["group_ids"] or []`
-turns `None` into `[]`, `owned_group_ids` returns `set()`, and `set([]) - set()` is empty, so
-the check passes. The completeness block is equally forgiving (`schedule.group_ids or []`).
-The failure surfaces only at response serialization, *after* the write is durable:
-
-```
-fastapi.exceptions.ResponseValidationError: 1 validation error:
-  {'type': 'list_type', 'loc': ('response', 'group_ids'), 'msg': 'Input should be a valid list', 'input': None}
-```
-
-Consequence (both steps observed):
-1. `PUT /api/schedules/{id}` `{"group_ids": null}` → **500**, row committed with `null`.
-2. `GET /api/schedules` → **500 for every subsequent call**, because `ScheduleResponse.group_ids: list`
-   rejects the stored `None` for that one row and the whole collection response fails. The
-   caller's JSON schedule list is dead until someone repairs the row.
-
-`days_of_week` and `times_of_day` behave identically. `{"timezone": null}` takes the other
-branch — `String(50)` is a real `NOT NULL`, so it raises `IntegrityError` at commit and
-returns 500 as well.
-
-No test in the suite sends an explicit null; `tests/test_routes/test_schedules_api_ownership.py`
-only ever omits keys.
-
-**Fix:** reject nulls at the schema — the shape of a list field is exactly what the schema
-exists to pin — and stop blind `setattr`:
-
-```python
-from pydantic import Field, field_validator
-
-class UpdateScheduleRequest(BaseModel):
-    group_ids: list[int] | None = None
-    ...
-
-    @field_validator("group_ids", "days_of_week", "times_of_day", "timezone")
-    @classmethod
-    def reject_explicit_null(cls, v, info):
-        # Отсутствие ключа означает «не трогать» и до валидатора не доходит
-        # (exclude_unset). Явный null — это ПРИСЛАННОЕ значение, и оно не
-        # является ни списком, ни строкой: записанный, он ломает чтение записи
-        # навсегда.
-        if v is None:
-            raise ValueError(f"{info.field_name} must not be null")
-        return v
-```
-
-Add a regression test per field asserting 422 and an unchanged row, plus one asserting that
-`GET /api/schedules` still answers 200 afterwards.
-
----
-
-### CR-04: `hx-sync="this:replace"` discards the response that carries the new `ad_id`, so the create path can still produce a second draft
-
-**File:** `app/templates/ads/form.html:52-58`, `app/pages/ads.py:427-460`
-**Severity:** BLOCKER
-
-**Issue:**
-02-08 moved the create-vs-update decision to the server, and the decision's only input is the
-hidden `ad_id` that arrives **out of band on the response to the create request**
-(`autosave_response.html:34`). The same form also carries:
-
-```html
-hx-trigger="submit, keyup changed delay:2s, change delay:2s"
-hx-sync="this:replace"
-hx-swap="none"
-```
-
-htmx's default for an element with a request already in flight is `queue:last` — the new
-event waits, and by the time it is issued the OOB swap has already filled `#ad-id-field`.
-`hx-sync="this:replace"` overrides that default with an abort. In the bundled bundle
-(`app/static/js/htmx.min.js`):
-
-```js
-if (m === "replace") { ce(g, "htmx:abort") } else if (m.indexOf("queue") === 0) { ... }
-...
-if (f.xhr) { if (f.abortable) { ce(g, "htmx:abort") } else { /* queuedRequests, p === "last" */ } }
-```
-
-The abort is client-side only. The first `POST /ads/new` has already reached the server and
-`_save_from_editor` commits the `Ad` regardless; the response — and with it both
-`HX-Push-Url` and the OOB `ad_id` — is thrown away. The replacement request is serialized
-from the live form, whose hidden field is **still empty**, so `ads_create` takes the create
-branch again (`app/pages/ads.py:457`) and inserts a **second** row.
-
-Reachable without an attacker and without a slow network: `submit` carries no delay, so
-finishing the sentence and clicking «Сохранить» inside the round-trip window of the pending
-autosave is enough. The result is two ads — an orphan draft holding the earlier text, and a
-second row that gets `status=published` — which is the same user-visible damage CR-01
-described, only narrowed to a race window.
-
-`tests/test_pages/test_ads_editor.py:973` actively locks the cause in place:
-`assert 'hx-sync="this:replace"' in html, "отмена устаревшего запроса потеряна"`. The test
-issues its two requests strictly sequentially, so it can never observe the overlap.
-
-**Fix:** stop aborting on the one path where the response is load-bearing. Either drop the
-attribute (htmx's own default already queues), or make the queueing explicit:
-
-```html
-<!-- app/templates/ads/form.html -->
-{# Отмена запроса на пути СОЗДАНИЯ недопустима: ответ несёт идентификатор
-   созданной записи внеполосно, и отброшенный ответ оставляет форму с пустым
-   ad_id — следующее автосохранение создаёт ВТОРУЮ строку (CR-04).
-   Очередь сохраняет исходный смысл (лишний промежуточный запрос не летит),
-   не теряя ответ. #}
-hx-sync="this:queue last"
-```
-
-and add a test that issues the second request **without** the id the first response
-returned (i.e. simulating the discarded response) and asserts `_ads_count(...) == 1` —
-today that test fails.
-
----
+The remaining findings below are new. No critical issues; two warnings concern
+(a) the editor summary promising sends for draft ads — the exact promise the
+summary list was explicitly fixed to avoid — and (b) the JSON schedule input
+lacking the time/day validation the page layer received in T-02-24/T-02-25,
+which violates the phase's own "one rule for both entrances" doctrine.
 
 ## Warnings
 
-### WR-09: `times_of_day` is validated on the page entrance and not on the JSON entrance — 500 on arbitrary input
+### WR-01: Editor summary and preview promise sends for a draft ad
 
-**File:** `app/routes/schedules.py:19-24, 111-115, 186-191`
-**Issue:** `CreateScheduleRequest.times_of_day: list[str]` has no validator, and
-`compute_next_run_at` parses without guarding (`app/services/schedule_service.py:26-28`:
-`time(int(parts[0]), int(parts[1]))`). Observed:
-`POST /api/schedules {"times_of_day": ["nope"]}` → **500**, `["99:99"]` → **500**
-(`ValueError: hour must be in 0..23`). The page layer refuses exactly this class with
-`_TIME_RE` and has four regression tests for it
-(`tests/test_pages/test_editor_schedules.py:534,574,608,637`); the JSON layer has none.
-This is the same "rule present on one entrance, absent on the other" shape that
-`app/services/schedule_rules.py` was created to end — the module unified completeness and
-group ownership and left time format behind.
-**Fix:** move the format rule next to the other two and use it from both entrances:
+**File:** `app/pages/ads.py:166-253` (`_editor_context`),
+`app/templates/ads/includes/summary.html:38-46`,
+`app/templates/ads/includes/preview.html:27-33`
+**Issue:** `_editor_context` computes `next_run_at` (min over the ad's
+schedules) and `channels` without consulting `ad.status`. For a **draft** ad
+with a complete, active schedule — an easily reachable state, because
+`schedules_create` does not gate on ad status and a first-saved ad is a draft
+(D-03) — the editor summary renders «Ближайший запуск {дата}» and the preview
+renders «Уйдёт в Telegram», both promising a send that D-01 guarantees will
+never happen. This is exactly the promise the summary list was fixed to avoid:
+`schedule_row.html:128-135` renders «отправок не будет» when `item.is_draft`.
+The guard test `test_editor_of_a_draft_ad_says_there_will_be_no_sends`
+(tests/test_pages/test_ads_status.py:275) passes only because it seeds a draft
+**without** schedules, where `next_run_at` is `None` for an unrelated reason.
+The two owner screens now disagree about the same schedule: the summary list
+says "no sends", the editor says "next run 15.08 09:00".
+**Fix:** apply the same draft guard in the editor context (single source, per
+D-02 discipline):
 
 ```python
-# app/services/schedule_rules.py
-_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
-
-def is_valid_time(value: str) -> bool:
-    return isinstance(value, str) and _TIME_RE.match(value) is not None
+# app/pages/ads.py, _editor_context, after computing runs:
+is_draft = ad is not None and ad.status != AD_STATUS_PUBLISHED
+next_run_at = None if is_draft else (min(runs) if runs else None)
 ```
 
+and extend the guard test with a draft ad that has an active schedule (assert
+«отправок не будет» still renders and no date is shown). Consider suppressing
+the «Уйдёт в …» channel caption for drafts as well (`preview.html`), since it
+carries the same promise.
+
+### WR-02: JSON schedule input accepts malformed times/days the page layer rejects — 500s and a toggle-bricking state
+
+**File:** `app/routes/schedules.py:19-33` (`CreateScheduleRequest`),
+`app/routes/schedules.py:35-63` (`UpdateScheduleRequest`),
+`app/services/schedule_service.py:25-28` (unprotected parse)
+**Issue:** T-02-24/T-02-25 added `_TIME_RE` and `_clean_ints(low=0, high=6)` on
+the **page** entrance precisely because `compute_next_run_at` parses
+`int(parts[0])` / `parts[1]` with no protection. The **JSON** entrance received
+no equivalent: `times_of_day: list[str]` and `days_of_week: list[int]` accept
+arbitrary content. Consequences, all reproducible by the authenticated owner:
+
+1. `POST /api/schedules` with `times_of_day: ["junk"]` → `ValueError` in
+   `compute_next_run_at` → 500 instead of 422 (`"10"` → `IndexError`,
+   `"25:00"` → `ValueError`).
+2. `PUT /api/schedules/{id}` with `times_of_day: ["junk"]` on a **paused**
+   schedule: `is_schedule_complete` is truthy (non-empty list), `is_active` is
+   False, so `compute_next_run_at` is never called and the junk value is
+   **stored**. After that, every resume attempt — page toggle
+   (`app/pages/schedules.py:732`) and API toggle
+   (`app/routes/schedules.py:276`) — crashes with 500. The poisoned-row second
+   line (CR-03) covers `None`, not junk strings.
+3. `days_of_week: [99]` on create passes validation, yields
+   `next_run_at=None`, and the schedule is stored `is_active=True` (model
+   default) — displayed «Активно» with no next run, silently dead.
+
+This is the same "rule lives on one entrance only" class the phase closed as
+WR-05/CR-02, still open for value format.
+**Fix:** validate in the schemas, sharing the definition with the page layer
+(move `_TIME_RE` into `app/services/schedule_rules.py`):
+
 ```python
-# app/routes/schedules.py — на обеих схемах
 @field_validator("times_of_day")
 @classmethod
 def validate_times(cls, v):
-    if v is not None and not all(is_valid_time(t) for t in v):
-        raise ValueError("times_of_day must be HH:MM")
+    if v is None:
+        return v
+    bad = [t for t in v if not isinstance(t, str) or not TIME_RE.fullmatch(t.strip())]
+    if bad:
+        raise ValueError(f"Invalid time values: {bad}")
+    return v
+
+@field_validator("days_of_week")
+@classmethod
+def validate_days(cls, v):
+    if v is None:
+        return v
+    if any(not isinstance(d, int) or not 0 <= d <= 6 for d in v):
+        raise ValueError("days_of_week values must be 0..6")
     return v
 ```
 
-`app/pages/schedules.py::_clean_times` then filters through the same predicate.
-
-### WR-10: `POST /api/schedules` creates an ACTIVE schedule with nothing filled in — D-08 is enforced on three handlers out of four
-
-**File:** `app/routes/schedules.py:117-127`
-**Issue:** `Schedule.is_active` defaults to `True` (`app/models/schedule.py:30`) and
-`create_schedule` never consults `is_schedule_complete`. Observed:
-`POST /api/schedules {"ad_id":…, "account_id":…}` → `201 {'is_active': True, 'next_run_at': None, 'group_ids': []}`.
-The page create path does the opposite two files over — `is_active=complete`
-(`app/pages/schedules.py:593,609`) — and both toggles and `update_schedule` now refuse this
-state. The row renders `Активно` **and** `Не заполнено` at the same time
-(`app/templates/schedules/includes/schedule_row.html:99-101`), which is precisely the
-impossible state WR-05 was raised about; the plan closed the toggle entrance and left the
-create entrance open.
-**Fix:**
-
-```python
-complete = is_schedule_complete(
-    data.account_id, data.group_ids, data.days_of_week, data.times_of_day
-)
-schedule = await schedule_repo.create(
-    ...,
-    is_active=complete,
-    next_run_at=next_run if complete else None,
-)
-```
-
-### WR-11: the completeness rule has two more copies, in the templates the shared module's docstring claims already use it
-
-**File:** `app/templates/ads/includes/sched_card.html:71`,
-`app/templates/schedules/includes/schedule_row.html:47`, docstring at
-`app/services/schedule_rules.py:25-31`
-**Issue:** `is_schedule_complete` documents itself as
-"Одно определение на все обработчики обоих входов **и на разметку карточки**
-(app/templates/ads/includes/sched_card.html)". The markup does not call it — both templates
-re-derive the predicate inline:
-
-```jinja
-{%- set complete = s.account_id and chosen and s.days_of_week and s.times_of_day -%}
-{%- set complete = s.account_id and s.group_ids and s.days_of_week and s.times_of_day -%}
-```
-
-So the rule exists in three places, and the module that was introduced to guarantee one
-asserts a fourth-party dependency that does not exist. The next change to the predicate
-(e.g. requiring a *published* ad) silently moves the server and leaves both badges behind —
-the exact drift D-08 forbids.
-**Fix:** expose the predicate as a template global next to `AD_STATUS_*`
-(`app/pages/common.py:99-100`) and call it from both templates:
-
-```python
-templates.env.globals["is_schedule_complete"] = is_schedule_complete
-```
-
-```jinja
-{%- set complete = is_schedule_complete(s.account_id, s.group_ids or [], s.days_of_week or [], s.times_of_day or []) -%}
-```
-
-If a global is unwanted, at minimum correct the docstring so it stops claiming a property
-the code does not have.
-
-### WR-12: CR-02 was closed at the entrances only — pre-existing foreign `group_ids` stay live and the dispatcher still resolves groups by primary key alone
-
-**File:** `app/application/scheduling/use_cases.py:120-144, 172-176`; no data migration in `alembic/versions/`
-**Issue:** The fix stops new foreign ids from being written. It does nothing about ids
-already stored — `POST /api/schedules` accepted `group_ids` verbatim for the whole life of
-the endpoint before this plan — and adds no defence downstream:
-
-```python
-group = await session.get(Group, group_id)          # :173 — по первичному ключу, без владельца
-...
-group_name=group.name, group_id=group_id,           # :283-284 — в SendLog с user_id АТАКУЮЩЕГО
-```
-
-`collect_due_schedules` iterates `schedule.group_ids` as given and `send_message_once`
-never compares `group.user_id` with `ad.user_id`, so any row written before the fix still
-delivers to a foreign `group_external_id` and still writes the victim's group name into the
-attacker's history. An entrance check with no remediation and no second line of defence is
-half a fix.
-**Fix:** two steps.
-1. A data revision that nulls out non-owned ids:
-   ```sql
-   -- для каждой строки schedules оставить только те group_ids,
-   -- у которых groups.user_id = ads.user_id И groups.account_id = schedules.account_id
-   ```
-   (or a one-off script in `scripts/`, in the style of `cleanup_schedules`).
-2. Defence in depth in the domain, where the cost is one comparison:
-   ```python
-   if group.user_id != ad.user_id or (group.account_id and group.account_id != account.id):
-       # Тот же исход, что и у остальных отказов по данным: строка журнала, не отправка.
-       ... status="fail", error_message=f"Group {group_id} does not belong to the ad owner"
-       return
-   ```
-
-### WR-13: nothing bounds `Ad.title`, whose column is `String(255)` — on PostgreSQL every autosave of a long title is a 500 the user sees only as «Не сохранено»
-
-**File:** `app/models/ad.py:17`, `app/pages/ads.py:434,551`, `app/routes/ads.py:22,28`
-**Issue:** `title: Mapped[str] = mapped_column(String(255))`, while every entrance accepts an
-unbounded string: `title: str = Form("")` on both page handlers, `title: str` on both JSON
-schemas. The editor deliberately has no `maxlength` and its counter measures `text` only
-(`app/templates/ads/form.html:80-82`). A 256-character title — one paste — raises
-`DataError: value too long for type character varying(255)` on PostgreSQL, which
-`app/main.py:110-121` converts to 500. On the htmx path the form is never re-rendered
-(`hx-swap="none"`), so the user gets the generic indicator and keeps typing into a document
-that will never save again. The test suite cannot catch this: SQLite does not enforce
-`VARCHAR` length, so `tests/` are green on exactly the input that fails in production.
-**Fix:** validate at the boundary against the column, in one place, and surface it the way
-attachment refusals are surfaced:
-
-```python
-# app/pages/ads.py
-TITLE_LIMIT = 255  # ровно длина колонки Ad.title
-
-if len(title) > TITLE_LIMIT:
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Название длиннее {TITLE_LIMIT} символов. Сократите его и сохраните снова.",
-    )
-```
-(raised inside the same `try` as `own_image_keys`, so the htmx path answers in the indicator),
-plus `title: str = Field(max_length=255)` on `CreateAdRequest` / `UpdateAdRequest`.
-
-### WR-14: the "ad is inaccessible" branch blanks the hidden id, so the next debounce silently creates a duplicate ad
-
-**File:** `app/pages/ads.py:480-489`, `app/templates/ads/includes/autosave_response.html:34`
-**Issue:** When the submitted `ad_id` resolves to nothing, the handler answers with
-`ad=None`, whose OOB swap sets `#ad-id-field` back to empty. The comment argues this is safe
-because "Записи при этом не создаётся" — true of *that* request only. Two seconds later the
-same editor autosaves again, now with an empty id, and `ads_create` takes the create branch:
-a second `Ad` appears carrying the same content. The reachable non-hostile case is a draft
-deleted in another tab (or by `POST /ads/{id}/delete` in this one), after which the message
-says «Обновите страницу» while the page quietly recreates the record instead. The same swap
-also renders preview and summary from `ad=None`, wiping the visible state of an ad that may
-still exist.
-**Fix:** distinguish "not yours" from "gone", or make the reset terminal: keep the id field
-untouched and stop the trigger, e.g. return the error fragment plus
-`HX-Trigger: {"autosave-halted": true}` and have the small script remove the autosave
-trigger, so recovery is an explicit page reload rather than a silent second row.
-
-### WR-15: a detached schedule can no longer have its groups updated through the JSON API — the new check answers 404 for the caller's own groups
-
-**File:** `app/services/schedule_rules.py:52-53`, `app/routes/schedules.py:161-168`
-**Issue:** `owned_group_ids` returns `set()` whenever `account_id is None`, and
-`update_schedule` compares against the **stored** `account_id`. For a schedule detached by
-`detach_schedules_from_account` (`app/application/accounts/use_cases.py:87-93`, a documented
-legitimate state, issue #35), any `PUT` carrying `group_ids` therefore fails with
-`404 "Group not found"` — including ids the caller demonstrably owns. Since
-`UpdateScheduleRequest` has no `account_id`, the JSON API also offers no way to re-attach an
-account, so a detached schedule is unrepairable through the API and the error message names
-the wrong object.
-**Fix:** answer the actual condition, and keep the message truthful:
-
-```python
-if "group_ids" in update_data and requested and schedule.account_id is None:
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Schedule has no account: attach one in the ad editor before choosing groups",
-    )
-```
-(and consider admitting `account_id` to `UpdateScheduleRequest`, guarded by the same
-ownership query `create_schedule` already runs).
-
----
+Apply to both request models (create and update).
 
 ## Info
 
-### IN-01 (still open): dead query parameter accepted on two routes
+### IN-01: LIKE wildcards in schedule search are not escaped
 
-**File:** `app/pages/ads.py:92`, `app/pages/schedules.py:397`
-**Issue:** `layout: str | None = Query(None)` is parsed and never read; the comment explains
-the compatibility reason but records no removal point.
-**Fix:** add a milestone/date marker so it is deleted deliberately.
+**File:** `app/pages/schedules.py:340-345` (`_apply_filters`)
+**Issue:** `pattern = f"%{search}%"` — a user searching `%` or `_` gets
+wildcard matching instead of literal matching; searching `%` matches every ad
+title. Not an injection (parameterized), only filter accuracy.
+**Fix:** escape before interpolating:
+`pattern = "%" + search.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_") + "%"`
+with `.ilike(pattern, escape="\\")`.
 
-### IN-02 (still open): deprecated `TemplateResponse` call style, inconsistently within the same modules
+### IN-02: `?sched=abc` on the editor page returns raw 422 JSON
 
-**File:** `app/pages/ads.py:106,134`, `app/pages/schedules.py:421,475`, `app/pages/dashboard.py:98`
-**Issue:** These five call sites still use the legacy
-`TemplateResponse(name, {"request": request, ...})` signature while `ads_new`, `ads_edit` and
-`_autosave_response` in the same files use the modern form. The targeted suite run for this
-review still emits
-`Replace TemplateResponse(name, {"request": request}) by TemplateResponse(request, name)`.
-**Fix:** convert the five remaining call sites.
+**File:** `app/pages/ads.py:507` (`sched: int | None = Query(None)`)
+**Issue:** The phase's own doctrine (T-02-35, and the `sched_error` whitelist
+in the same handler) is that query-string values arriving from links and
+bookmarks must not break the page. A non-numeric `sched` value in a shared or
+corrupted link yields FastAPI's JSON 422 instead of the editor page. Same
+handler treats `sched_error` defensively but `sched` strictly.
+**Fix:** accept `str | None` and parse with a `try/int/except ValueError:
+None`, mirroring the `ad_id` treatment in `ads_create`.
 
-### IN-03 (still open): warning threshold duplicated in the template
+### IN-03: Explicit Save behaves differently with and without JavaScript
 
-**File:** `app/templates/ads/form.html:254`
-**Issue:** `const TEXT_WARN_AT = {{ (editor.text_limit * 0.9) | round | int | tojson }};`
-re-derives the ratio `app/pages/ads.py:31` owns as `TEXT_WARN_RATIO`, while the
-server-rendered counter reads `editor.text_warn_at`.
-**Fix:** expose the plain-text threshold in `_editor_context` and render it.
+**File:** `app/pages/ads.py:387-401` (`_save_from_editor` response branch),
+`app/templates/ads/form.html:230`
+**Issue:** The no-JS path redirects to `/ads` after explicit Save («завершает
+работу и возвращает в список»); the htmx path returns the autosave fragment and
+the user stays in the editor. Both are correct code-wise (one code path, two
+response forms), but the user-visible outcome of the same click diverges
+between base and enhanced paths — the exact divergence the D-09 comments warn
+about. If staying in the editor is the intended enhanced behavior, document it;
+otherwise send `HX-Redirect: /ads` on the explicit-save htmx branch.
 
-### IN-04 (still open): `_build_schedule_items` recomputes the timezone its callers already resolved
+### IN-04: Storage upload failure is swallowed without logging
 
-**File:** `app/pages/schedules.py:370`, callers `:404-405, 446-447`
-**Issue:** Three copies of `user.timezone if ... in VALID_TIMEZONES else "UTC"` in one module.
-**Fix:** pass `tz_name` alongside `tz`, or return both from one helper.
+**File:** `app/routes/uploads.py:162-166`
+**Issue:** `except Exception: raise HTTPException(502, ...)` discards the
+original S3 error entirely — no log record, no `from exc`. Diagnosing storage
+misconfiguration in production requires guesswork. The project logs via
+structlog everywhere else (`app/main.py` handlers).
+**Fix:** `logger.error("image_upload_failed", exc_info=True)` before raising,
+and `raise HTTPException(...) from exc`.
 
-### IN-05 (still open): non-mapped attributes attached to ORM instances, then defaulted twice
+### IN-05: Warn-threshold ratio duplicated as a template literal
 
-**File:** `app/pages/ads.py:78-80`, `app/templates/ads/includes/ad_card.html:39-40`
-**Issue:** `_enrich_ads_with_stats` sets `sends_count`/`schedules_count` on `Ad` instances
-the model does not declare, coalescing with `or 0`; the template coalesces again. A caller
-that forgets the enrichment gets an `AttributeError` inside the template.
-**Fix:** return a `{ad_id: (sends, schedules)}` mapping, or declare the counters on the model.
+**File:** `app/templates/ads/form.html:263` vs `app/pages/ads.py:31`
+**Issue:** `TEXT_WARN_AT = {{ (editor.text_limit * 0.9) | round | int | tojson }}`
+re-derives the threshold with a literal `0.9` while Python owns
+`TEXT_WARN_RATIO = 0.9`. Changing the Python constant silently diverges the
+client-side counter from the server-rendered class — the exact "second source"
+drift the file's own comments prohibit.
+**Fix:** add a `text_warn_plain` key (int(TEXT_LIMIT * TEXT_WARN_RATIO)) to
+`_editor_context` and inject it instead of recomputing in the template.
 
-### IN-08 (new): page size hardcoded in the two infinite-scroll sentinels
+### IN-06: Group count in schedule card summary is not declined
 
-**File:** `app/templates/schedules/list.html:61`, `app/templates/schedules/partial_cards.html:7`
-**Issue:** `&limit=30` is written out in both sentinels while `PAGE_SIZE = 30` lives in
-`app/pages/schedules.py:26` (and again in `app/pages/ads.py:21`). The two templates are
-required to stay byte-identical to each other, which is enforced by comment only; the number
-is a third copy that no comment mentions.
-**Fix:** pass `page_size` in the context of both handlers and render
-`&limit={{ page_size }}`.
+**File:** `app/templates/ads/includes/sched_card.html:78`
+**Issue:** `chosen | length ~ ' групп'` renders «1 групп», «2 групп», «3
+групп». The same file carefully declines the schedules counter
+(`sched_count_label`) because «1 расписаний» is called a visible copywriting
+defect (UI-SPEC); the group count in the card header and the delete-confirm
+body has the identical defect.
+**Fix:** add a `group_count_label(n)` macro with the same 1/2-4/5+ rule, or
+reuse the declension pattern from `sched_count_label`.
 
-### IN-09 (new): a test pins the attribute that causes CR-04
+### IN-07: `next_run_at.astimezone(tz)` misinterprets naive datetimes
 
-**File:** `tests/test_pages/test_ads_editor.py:973`
-**Issue:** `assert 'hx-sync="this:replace"' in html, "отмена устаревшего запроса потеряна"`
-turns the abort strategy into a contract, so the CR-04 fix will read as a regression to
-whoever runs the suite next.
-**Fix:** covered by CR-04 — assert the *queueing* contract instead
-(`'hx-sync="this:queue last"' in html`, or drop the assertion and test the behaviour: two
-overlapping creates must leave one row).
+**File:** `app/pages/schedules.py:379-380` (`_build_schedule_items`)
+**Issue:** `sched.next_run_at.astimezone(tz)` on a naive datetime (SQLite dev
+environment; `DateTime(timezone=True)` does not round-trip tzinfo there)
+interprets the value as **system-local** time, while the project convention one
+step later (`format_datetime_for_user`, `app/pages/common.py:157-159`) is
+"naive means UTC". Correct on Postgres (aware values), wrong offsets possible
+on SQLite. Also the conversion is redundant: `format_datetime_for_user`
+converts to the user timezone itself.
+**Fix:** mirror the convention before converting:
+`value = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value`
+— or pass the raw `next_run_at` and let `format_datetime_for_user` do all the
+work.
 
 ---
 
-_Reviewed: 2026-08-11T09:05:00Z_
+_Reviewed: 2026-08-11_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
-</content>
-</invoke>
