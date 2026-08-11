@@ -2,44 +2,44 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
-current_phase: 02
-current_phase_name: obyavleniya-i-raspisaniya
-status: verifying
-stopped_at: Phase 02 re-verification human_needed — awaiting UAT (/gsd-verify-work 2)
-last_updated: "2026-08-11T14:46:08Z"
+current_phase: 3
+current_phase_name: Группы аккаунта
+status: planning
+stopped_at: Phase 02 complete (UAT 6/6, security threats_open 0) — ready to plan Phase 3
+last_updated: "2026-08-11T18:28:57.870Z"
 last_activity: 2026-08-11
-last_activity_desc: Phase 02 re-verification — human_needed (4/5, автогейты зелёные)
+last_activity_desc: Phase 02 complete — UAT 6/6 passed, SECURITY.md verified, transitioned to Phase 3
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 28
-  completed_plans: 25
-  percent: 17
+  completed_plans: 28
+  percent: 33
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-10)
+See: .planning/PROJECT.md (updated 2026-08-11)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 02 — obyavleniya-i-raspisaniya
+**Current focus:** Phase 3 — Группы аккаунта
 
 ## Current Position
 
-Phase: 02 (obyavleniya-i-raspisaniya) — VERIFYING (human_needed)
-Plan: 15 of 15 — все планы исполнены
-Status: Re-verification после второго gap-раунда: все автопроверки зелёные, 6 пунктов ручной проверки в 02-UAT.md; далее /gsd-verify-work 2 и /gsd-secure-phase 02
-Last activity: 2026-08-11 — Phase 02 re-verification — human_needed (4/5)
+Phase: 3 — Группы аккаунта
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-11 — Phase 02 complete, transitioned to Phase 3
 
-Progress: [████████████████████] 13/13 plans (100%) — Phase 1 of 6 complete (17% фаз milestone v2.0)
+Progress: [████████████████████] 28/28 plans (100%) — Phases 1–2 of 6 complete (33% фаз milestone v2.0)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 13 (milestone v2.0 только начат)
+- Total plans completed: 28 (milestone v2.0)
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -48,6 +48,7 @@ Progress: [████████████████████] 13/13 p
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1. Интерфейсный фундамент | 13/13 | - | - |
+| 2. Объявления и расписания | 15/15 | - | - |
 
 **Recent Trend:**
 
@@ -65,7 +66,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - Roadmap v2.0: нумерация фаз перезапущена с 1 (`--reset-phase-numbers`), так как фазы v1 были ретроспективной документацией уже отгруженной системы.
 - Phase 1: htmx и Alpine вендорены файлами, Tailwind удалён — внешних ресурсов в проекте 0, build-шаг не вводится.
 - Phase 1: браузерный `confirm()` заменён собственной панелью подтверждения с настоящей формой POST в 13 местах — путь удаления сохраняется без Alpine.
-- Phase 1: CR-01, CR-02 и WR-01/T-10-04 отнесены в Фазу 2 (решение UAT 2026-08-10); T-10-04 принята как риск R-01 в `01-SECURITY.md`.
+- Phase 2: долги Фазы 1 (CR-01, CR-02, WR-01/T-10-04) закрыты планом 02-02 — владение `ad_id`/`account_id`, сигнатурная проверка типа загрузки, владение ключом изображения.
+- Phase 2: черновик объявления — колонка `ads.status` (миграция `0013`), планировщик пропускает черновики; выкат `0013` на целевую базу — решение владельца.
+- Phase 2: автосохранение — create-or-update по `ad_id` на сервере + очередь `this:queue last` на форме; наложение с «Сохранить» удержано именованной регрессией.
+- Phase 2: счётчик длины предупреждает (1024 с вложениями / 3686 без), но не блокирует сохранение и не режет текст.
 
 ### Pending Todos
 
@@ -73,10 +77,7 @@ None.
 
 ### Blockers/Concerns
 
-- Счётчик в REQUIREMENTS.md указывал 38 требований v2.0, фактических REQ-ID — 39. Счётчики исправлены на 39; смысловых требований не добавлялось и не удалялось.
-- ⚠️ [Phase 1] Гейт код-ревью открыт: `01-REVIEW.md` — `status: issues_found`, `critical: 2`. CR-01 (владение `ad_id`/`account_id` в `app/pages/schedules.py:204-213,314-315`), CR-02 (клиентский Content-Type в `app/routes/uploads.py:48-52`) и WR-01/T-10-04 (владение ключом изображения в `app/pages/ads.py:133-135,183-187`) перенесены в Фазу 2. Фаза 01 отгружена с этими находками открытыми (решение 2026-08-10): ship-гейты GSD — security (`threats_open: 0`) и broken-windows (`open_count: 0`) — оба прошли, код-ревью ship-гейтом не является. **Починить в Фазе 2 до релиза.**
-- ⚠️ [Phase 1] `/ads/new` и `/ads/{id}/edit` не рендерятся ни одним тестом суиты — глобал `s3_public_url` в `app/pages/common.py:38` собирает `Settings()` в обход подмены зависимостей. Дефект на базовом коммите фазы, не внесён перевёрсткой; развилка ADS-07.
-- ADS-04 (черновик объявления) требует миграции схемы: поля `status` у `Ad` сейчас нет.
+- ⚠️ [Phase 2] Целевая база остаётся на ревизии `0012` — колонки `ads.status` в живой схеме нет. Выкат `0013` — решение владельца (guard по `hostname`/`port`/`dbname` и дамп `ads` отработаны в 02-12); до выката черновики не наблюдаемы в проде.
 - Brownfield-риск: система живая и покрыта тестами; протоколы отправки Telegram, WhatsApp и MAX трогать нельзя.
 
 ### Quick Tasks Completed
@@ -96,13 +97,13 @@ None.
 | v2.1 | Email-уведомления NOTIF-01..04 | Отложено, вне roadmap v2.0 | 2026-08-08 |
 | v2.1 | Прогрев аккаунтов и автопауза WARM-01..02 | Отложено, вне roadmap v2.0 | 2026-08-08 |
 | Future scope | Reliability and hardening suggestions в research/SUMMARY.md (v1-era) | Не активно; требует отдельного решения по milestone | 2026-08-03 |
-| Phase 2 | CR-01 — владение `ad_id`/`account_id` при постановке в расписание | Решение UAT: чинить в Фазе 2 | 2026-08-10 |
-| Phase 2 | CR-02 — клиентский Content-Type при загрузке, SVG на origin хранилища | Решение UAT: чинить в Фазе 2 | 2026-08-10 |
-| Phase 2 | WR-01 / T-10-04 — владение ключом изображения при сохранении объявления | Принята как риск R-01 в `01-SECURITY.md`; чинить в Фазе 2 | 2026-08-10 |
+| Phase 2 | CR-01 — владение `ad_id`/`account_id` при постановке в расписание | ✓ Закрыто планом 02-02 (2026-08-11) | 2026-08-10 |
+| Phase 2 | CR-02 — клиентский Content-Type при загрузке, SVG на origin хранилища | ✓ Закрыто планом 02-02 (2026-08-11) | 2026-08-10 |
+| Phase 2 | WR-01 / T-10-04 — владение ключом изображения при сохранении объявления | ✓ Закрыто планом 02-02 (2026-08-11) | 2026-08-10 |
 | Phase 5 | `billing/plans.html` не подключён ни к одному маршруту | Решение о маршруте или переносе содержимого — за Фазой 5 | 2026-08-09 |
 
 ## Session Continuity
 
-Last session: 2026-08-11T14:46:08Z
-Stopped at: Phase 02 verification complete (human_needed) — awaiting UAT
-Resume file: .planning/phases/02-obyavleniya-i-raspisaniya/02-UAT.md
+Last session: 2026-08-11T18:30:00Z
+Stopped at: Phase 02 complete, ready to plan Phase 3
+Resume file: None
