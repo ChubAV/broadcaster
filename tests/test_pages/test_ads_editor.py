@@ -27,6 +27,7 @@ from app.dependencies import get_db, get_settings
 from app.main import create_app
 from app.models.ad import Ad
 from app.models.user import User
+from app.pages.ads import CAPTION_LIMIT, TEXT_LIMIT, TEXT_WARN_RATIO
 
 # Форма ключа вложения — источник правды `app/routes/uploads.py`:
 # `{user_id}/{32 hex}_{имя}`. Свой ключ строится тем же способом, что в
@@ -97,6 +98,24 @@ def _attr_value(html: str, anchor: str, attr: str) -> str:
     start = html.index(anchor)
     opened = html.index(f'{attr}="', start) + len(attr) + 2
     return html[opened : html.index('"', opened)]
+
+
+def _counter_class(html: str) -> str:
+    """Значение `class` у счётчика длины — и только у него.
+
+    Утверждать наличие подстроки `counter--warn` во всей странице бесполезно:
+    те же имена классов встречаются в узловой сборке счётчика, которая живёт в
+    том же файле шаблона. Такая проверка зелена при ЛЮБОМ пороге и меряет
+    наличие скрипта, а не выбор порога.
+
+    Атрибут стоит ПЕРЕД `id`, поэтому элемент отыскивается назад от якоря.
+    Отсутствие элемента или атрибута поднимает ValueError — тест падает, а не
+    молча меряет пустоту.
+    """
+    anchor = html.index('id="text-counter"')
+    element = html[html.rindex("<span", 0, anchor) : anchor]
+    opened = element.index('class="') + len('class="')
+    return element[opened : element.index('"', opened)]
 
 
 def _ad_id_from(html: str) -> str:
@@ -724,6 +743,161 @@ async def test_multipart_file_part_in_images_is_refused(
     db_session.expire_all()
     stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
     assert stored.images == keys
+
+
+# --- План 02-10: стражи, красной фазы не имеющие -----------------------------
+#
+# Три теста ниже воспроизведением дефекта НЕ являются и за него не выдаются.
+#
+# Контракт провода поля `status` закрепляет поведение, которое переименование
+# параметра с алиасом по построению не меняет: тест зелен и до правки, и после,
+# красным он не станет ни при каком порядке написания. Граница лимита вложений и
+# порог счётчика закрепляют поведение, на текущем коде уже верное; они
+# дописываются потому, что фаза их не закрепила, а не потому, что что-то сломано.
+
+
+@pytest.mark.asyncio
+async def test_status_field_keeps_its_wire_name(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Переименование параметра не меняет контракт провода (WR-08).
+
+    Поле продолжает приходить под именем `status` и меняет состояние объявления
+    только на значение из словаря состояний. Приняв тело с произвольной строкой,
+    обработчик записал бы состояние, которое не отфильтровалось бы ни как
+    черновик, ни как опубликованное.
+    """
+    owner_id = (await _user(db_session)).id
+    ad_id = (await _seed_ad(db_session, title="Состояние с провода")).id
+
+    known = await authed_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(
+            title="Состояние с провода",
+            text="Текст",
+            extra=[("status", AD_STATUS_PUBLISHED)],
+        ),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert known.status_code == 302
+    assert (await _only_ad(db_session, owner_id)).status == AD_STATUS_PUBLISHED
+
+    unknown = await authed_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(
+            title="Состояние с провода", text="Текст", extra=[("status", "смешное")]
+        ),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert unknown.status_code == 302
+    assert (await _only_ad(db_session, owner_id)).status == AD_STATUS_PUBLISHED
+
+
+@pytest.mark.asyncio
+async def test_attachment_limit_is_a_closed_boundary(
+    authed_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """ADS-05: ровно лимит проходит, лимит плюс один — отказ без изменений.
+
+    Значение берётся из настроек, а не из литерала: захардкоженная десятка
+    прошла бы мимо смысла проверки при любой другой конфигурации.
+    """
+    limit = test_settings.max_images_per_ad
+    owner_id = (await _user(db_session)).id
+    exactly = [image_key(owner_id, f"p{i}.jpg") for i in range(limit)]
+    ad_id = (await _seed_ad(db_session, title="Граница лимита")).id
+
+    at_limit = await authed_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(title="Граница лимита", text="Текст", images=exactly),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert at_limit.status_code == 302
+    db_session.expire_all()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
+    assert stored.images == exactly
+
+    over = await authed_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(
+            title="Через границу",
+            text="Текст",
+            images=exactly + [image_key(owner_id, "one-too-many.jpg")],
+        ),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert over.status_code == 400
+    db_session.expire_all()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
+    assert stored.images == exactly
+    assert stored.title == "Граница лимита"
+
+
+@pytest.mark.asyncio
+async def test_counter_threshold_follows_the_presence_of_attachments(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E1 `overflow`: порог предупреждения выбирается по вложениям.
+
+    С вложениями текст уходит ПОДПИСЬЮ К МЕДИА, и его предел существенно ниже
+    (1024 против 4096). Один порог на оба случая либо пугал бы там, где всё в
+    порядке, либо молчал бы перед гарантированной MediaCaptionTooLongError.
+
+    Порог проверяется через разметку, где его видит пользователь: класс
+    предупреждения на счётчике. Текст длиной 1500 символов лежит МЕЖДУ двумя
+    порогами — выше `CAPTION_LIMIT` (1024) и ниже девяти десятых `TEXT_LIMIT`
+    (3686), поэтому одно и то же значение обязано предупреждать при вложениях и
+    молчать без них.
+    """
+    owner_id = (await _user(db_session)).id
+    between = "я" * 1500
+    assert CAPTION_LIMIT < len(between) < int(TEXT_LIMIT * TEXT_WARN_RATIO)
+
+    with_images = await _seed_ad(
+        db_session, title="С вложением", images=[image_key(owner_id, "p0.jpg")]
+    )
+    with_images_id = with_images.id
+    without_images_id = (
+        await _seed_ad(db_session, title="Без вложений", images=[])
+    ).id
+
+    # Текст в базу — тем же путём, которым его туда кладёт пользователь.
+    for ad_id, images in ((with_images_id, [image_key(owner_id, "p0.jpg")]), (without_images_id, [])):
+        saved = await authed_client.post(
+            f"/ads/{ad_id}/edit",
+            content=form_body(title="Длинный текст", text=between, images=images),
+            headers=FORM_HEADERS,
+            follow_redirects=False,
+        )
+        # Ни один порог не блокирует сохранение и не обрезает текст.
+        assert saved.status_code == 302
+        db_session.expire_all()
+        stored = (
+            await db_session.execute(select(Ad).where(Ad.id == ad_id))
+        ).scalar_one()
+        assert len(stored.text) == len(between), "текст обрезан на сохранении"
+
+    warned = (await authed_client.get(f"/ads/{with_images_id}/edit")).text
+    silent = (await authed_client.get(f"/ads/{without_images_id}/edit")).text
+
+    assert "counter--warn" in _counter_class(warned), (
+        "порог подписи к медиа не применён"
+    )
+    assert "counter--over" not in _counter_class(warned), (
+        "предел текста не превышен — состояние «over» неверно"
+    )
+    assert "counter--warn" not in _counter_class(silent), (
+        "без вложений порог должен быть выше — предупреждать нечему"
+    )
+    assert "maxlength" not in warned, "счётчик не имеет права обрезать текст"
 
 
 @pytest.mark.asyncio

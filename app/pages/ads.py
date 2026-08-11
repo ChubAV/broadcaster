@@ -15,7 +15,7 @@ from app.pages.common import check_is_admin, get_user_from_cookie, templates
 # Форма ключа вложения и правило владения им живут в НЕЙТРАЛЬНОМ модуле: от него
 # зависят оба слоя, а он — ни от одного из них (WR-04). Прежние имена остаются
 # доступными здесь, поэтому точки вызова в этом файле не переписываются.
-from app.services.image_keys import own_image_keys
+from app.services.image_keys import INACCESSIBLE_IMAGE_MESSAGE, own_image_keys
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
@@ -308,9 +308,27 @@ async def _save_from_editor(
 
     # Проверка ДО первой записи в модель: иначе отказ оставил бы объявление
     # частично изменённым (заголовок новый, вложения старые).
+    raw_images = form_data.getlist("images")
+    string_images = [value for value in raw_images if isinstance(value, str)]
     try:
+        # Значение поля вложений обязано быть строкой. Многочастный запрос, в
+        # котором `images` приходит ФАЙЛОВОЙ частью, даёт объект загруженного
+        # файла, у которого строковой операции нет, и общий обработчик
+        # превращает AttributeError в ответ 500 (WR-03). Соседняя `_clean_ints`
+        # того же слоя уже защищается от этого класса ввода — защита приводится
+        # к единому виду.
+        #
+        # Отказ, а не отбрасывание: молча выброшенная файловая часть сохранила
+        # бы объявление БЕЗ вложений, то есть превратила бы кривой запрос в
+        # «успешное сохранение без картинки». Ровно та причина, по которой
+        # `own_image_keys` отказывает, а не отбрасывает.
+        if len(string_images) != len(raw_images):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=INACCESSIBLE_IMAGE_MESSAGE,
+            )
         image_list = own_image_keys(
-            [v for v in form_data.getlist("images") if v.strip()],
+            [v for v in string_images if v.strip()],
             user.id,
             settings.max_images_per_ad,
         )
@@ -532,7 +550,13 @@ async def ads_update(
     ad_id: int,
     title: str = Form(""),
     text: str = Form(""),
-    status: str | None = Form(None),
+    # Имя параметра — НЕ `status`: модуль ответов FastAPI импортирован в этот
+    # файл под тем же именем, и параметр формы затенял бы его на всё тело
+    # функции. Любое будущее обращение к `status.HTTP_*` внутри обработчика
+    # разрешалось бы тогда в присланную клиентом строку и падало бы
+    # AttributeError на запросе, а не на импорте (WR-08). Имя НА ПРОВОДЕ
+    # сохраняется алиасом: контракт формы не меняется.
+    ad_status: str | None = Form(None, alias="status"),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -557,7 +581,7 @@ async def ads_update(
     if not ad:
         return RedirectResponse(url="/ads", status_code=302)
     return await _save_from_editor(
-        request, db, settings, user, ad, title=title, text=text, status_value=status
+        request, db, settings, user, ad, title=title, text=text, status_value=ad_status
     )
 
 
