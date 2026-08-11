@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Redesign
 current_phase: 3
 current_phase_name: Группы аккаунта
-status: planning
+status: "Phase 02 shipped — PR #37"
 stopped_at: Phase 02 complete (UAT 6/6, security threats_open 0) — ready to plan Phase 3
-last_updated: "2026-08-11T18:28:57.870Z"
+last_updated: "2026-08-11T18:44:57.970Z"
 last_activity: 2026-08-11
-last_activity_desc: Phase 02 complete — UAT 6/6 passed, SECURITY.md verified, transitioned to Phase 3
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 28
   completed_plans: 28
   percent: 33
+last_activity_desc: Phase 02 complete — UAT 6/6 passed, SECURITY.md verified, transitioned to Phase 3
 ---
 
 # Project State
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-08-11)
 
 Phase: 3 — Группы аккаунта
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-11 — Phase 02 complete, transitioned to Phase 3
+Status: Phase 02 shipped — PR #37
+Last activity: 2026-08-11
 
 Progress: [████████████████████] 28/28 plans (100%) — Phases 1–2 of 6 complete (33% фаз milestone v2.0)
 
