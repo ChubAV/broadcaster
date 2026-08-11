@@ -38,6 +38,23 @@ class UpdateScheduleRequest(BaseModel):
     times_of_day: list[str] | None = None
     timezone: str | None = None
 
+    # CR-03: явный null — 422 ДО какой-либо записи в модель. `exclude_unset`
+    # отличает отсутствующий ключ от присланного, но не присланный-и-пустой:
+    # тело {"group_ids": null} считалось присланным, None доезжал до setattr, и
+    # в JSON-колонку ложился документ `null` — запись, которую невозможно
+    # прочитать обратно (ScheduleResponse требует list/str), то есть 500 на
+    # каждом последующем чтении списка. Валидаторы pydantic не запускаются на
+    # значениях по умолчанию, поэтому None здесь означает ровно присланный
+    # null — отсутствующий ключ по-прежнему означает «не трогать» (D-15).
+    @field_validator("group_ids", "days_of_week", "times_of_day", "timezone")
+    @classmethod
+    def reject_explicit_null(cls, v):
+        if v is None:
+            raise ValueError(
+                "Явный null не принимается: чтобы не трогать поле, опустите ключ"
+            )
+        return v
+
     @field_validator("timezone")
     @classmethod
     def validate_timezone(cls, v: str | None) -> str | None:

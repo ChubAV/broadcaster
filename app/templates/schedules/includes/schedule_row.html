@@ -102,10 +102,12 @@
   </div>
 
   {#- Дни ПОКАЗЫВАЮТСЯ, а не выбираются: тот же примитив .chip, что в редакторе,
-      размером 40×32 и без органов ввода внутри. -#}
+      размером 40×32 и без органов ввода внутри.
+      `or []` — вторая линия CR-03: строка, испорченная до отказа на входе
+      (None вместо списка), не должна выключать экран владельца. -#}
   <div class="sched-item__days">
     {%- for d in range(7) %}
-    <span class="chip{% if d in s.days_of_week %} chip--on{% endif %}" title="{{ DAY_NAMES[d] }}">{{ DAY_NAMES[d] }}</span>
+    <span class="chip{% if d in (s.days_of_week or []) %} chip--on{% endif %}" title="{{ DAY_NAMES[d] }}">{{ DAY_NAMES[d] }}</span>
     {%- endfor %}
   </div>
 
