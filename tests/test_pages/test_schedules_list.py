@@ -31,6 +31,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
 from app.pages.schedules import (
+    PAGE_SIZE,
     SUMMARY_GROUP_NAMES,
     _build_schedule_items,
     _clean_choice,
@@ -41,6 +42,11 @@ from app.pages.schedules import (
 # прийти в кавычках (groups — зарезервированное слово в части диалектов),
 # поэтому сравнение идёт регулярным выражением, а не подстрокой.
 GROUPS_QUERY_RE = re.compile(r'FROM\s+"?groups"?', re.I)
+
+# Явная сортировка сводного списка в ВЫПОЛНЕННОМ операторе. Проверяется именно
+# оператор, а не исходник: совпадение порядка карточек с порядком посева зелено
+# и без ORDER BY, потому что SQLite и так отдаёт строки в порядке rowid.
+SCHEDULES_ORDER_RE = re.compile(r'ORDER BY\s+"?schedules"?\.id', re.I)
 
 
 async def _user(db: AsyncSession) -> User:
@@ -679,3 +685,193 @@ async def test_refused_toggle_leaves_the_card_in_its_previous_state(
     assert "checked" not in toggle, "тумблер показывает непринятое состояние"
     assert "disabled" in toggle, "тумблер неполного расписания доступен к нажатию"
     assert "Пауза" in html
+
+
+# =============================================================================
+# План 02-11: грани сводного списка, оставшиеся без утверждения
+# =============================================================================
+#
+# Отчёт верификации признал SCH-04 и SCH-05 выполненными, но три грани списка
+# ничем не удерживались: различимость двух ОДИНАКОВЫХ расписаний, различие двух
+# пустых состояний одним утверждением и СТАБИЛЬНОСТЬ порядка карточек. Порядок
+# задан явной сортировкой (`app/pages/schedules.py` — `.order_by(Schedule.id)` в
+# `schedules_list` и в `schedules_partial`), поэтому тесты ниже ЗАКРЕПЛЯЮТ уже
+# существующее свойство. Незакреплённое, оно исчезает при первой же правке
+# запроса — и исчезает молча: страница остаётся валидной, а порция прокрутки
+# начинает дублировать и пропускать карточки.
+
+
+def _card_ids(html: str) -> list[int]:
+    """Идентификаторы расписаний в ПОРЯДКЕ отрисовки карточек.
+
+    Якорь — `id` элемента карточки из `schedules/includes/schedule_row.html`.
+    Утверждать порядок по именам групп или заголовкам объявлений нельзя: у
+    одинаковых расписаний они совпадают, а различить нужно именно карточки.
+    """
+    return [int(value) for value in re.findall(r'id="schedule-row-(\d+)"', html)]
+
+
+@pytest.mark.asyncio
+async def test_two_identical_schedules_render_as_two_cards(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """SCH-04: два неразличимых по данным расписания — две карточки, не одна.
+
+    Совпадают объявление, аккаунт, группа, дни и времена: различает их только
+    идентификатор. Схлопывание таких расписаний в одну карточку (группировкой,
+    `DISTINCT` или отбором по ключу шаблона) спрятало бы от пользователя
+    вторую отправку, которая при этом реально произойдёт. Счётчик найденных
+    обязан считать обе — иначе подпись и список разъедутся.
+    """
+    ad = await _seed_ad(db_session, title="Объявление-двойник")
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Общая группа двойников")
+    first = await _seed_schedule(
+        db_session, ad, account, group_ids=[group.id], days=[0, 2], times=["09:30"]
+    )
+    second = await _seed_schedule(
+        db_session, ad, account, group_ids=[group.id], days=[0, 2], times=["09:30"]
+    )
+
+    html = (await authed_client.get("/schedules")).text
+
+    assert _card_ids(html) == [first.id, second.id], (
+        "одинаковые расписания схлопнулись в одну карточку"
+    )
+    assert "2 расписания" in html, "счётчик найденных не посчитал оба расписания"
+
+
+@pytest.mark.asyncio
+async def test_two_empty_states_differ(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E13/E14 `empty`: ноль расписаний и ноль совпадений — не одно и то же.
+
+    Соседние тесты проверяют каждое состояние по отдельности и остались бы
+    зелёными, даже если бы оба текста совпали. Здесь утверждается именно
+    РАЗЛИЧИЕ: пользователю, отфильтровавшему всё до нуля, нельзя предлагать
+    идти создавать расписание — у него их достаточно, ему нужен сброс фильтра.
+    Полоса фильтров рендерится в обоих случаях, иначе снять фильтр нечем.
+    """
+    empty = (await authed_client.get("/schedules")).text
+
+    ad = await _seed_ad(db_session, title="Объявление единственного канала")
+    account = await _seed_account(db_session, type_="wa")
+    await _seed_schedule(db_session, ad, account)
+    no_matches = (await authed_client.get("/schedules?channel=tg_user")).text
+
+    assert "Расписаний пока нет" in empty
+    assert "Расписания не найдены" not in empty
+
+    assert "Расписания не найдены" in no_matches
+    assert "Расписаний пока нет" not in no_matches, (
+        "нулевой результат отбора неотличим от отсутствия расписаний"
+    )
+
+    assert not _card_ids(empty) and not _card_ids(no_matches)
+    for html in (empty, no_matches):
+        assert 'id="schedules-filters"' in html, (
+            "полоса фильтров исчезла вместе со списком — снять фильтр нечем"
+        )
+
+
+@pytest.mark.asyncio
+async def test_card_order_is_stable_across_reloads_and_pages(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Порядок задан явно и стабилен: порция прокрутки не дублирует и не теряет.
+
+    Без ЯВНОЙ сортировки порядок строк — свойство плана запроса, а не контракта.
+    Стоит ему поплыть между двумя запросами, и бесконечная прокрутка,
+    работающая смещением, покажет одну карточку дважды, а другую не покажет
+    вовсе: смещение 30 отсчитывается уже по ДРУГОЙ последовательности.
+    Расписания посеяны неразличимыми по данным намеренно — тогда единственное,
+    что может задавать порядок, это сортировка по идентификатору.
+    """
+    ad = await _seed_ad(db_session, title="Объявление длинного списка")
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа длинного списка")
+    seeded = [
+        (
+            await _seed_schedule(
+                db_session, ad, account, group_ids=[group.id], times=["09:30"]
+            )
+        ).id
+        for _ in range(PAGE_SIZE + 5)
+    ]
+
+    with _statement_log(db_session) as page_statements:
+        first_page = _card_ids((await authed_client.get("/schedules")).text)
+    with _statement_log(db_session) as chunk_statements:
+        chunk = _card_ids(
+            (
+                await authed_client.get(
+                    f"/schedules/partial?offset={PAGE_SIZE}&limit={PAGE_SIZE}"
+                )
+            ).text
+        )
+
+    # Совпадение порядка с посевом само по себе доказывает мало: без ORDER BY
+    # SQLite всё равно вернул бы строки в порядке rowid, и утверждение было бы
+    # зелено на запросе, порядок которого не задан вовсе. Поэтому явная
+    # сортировка утверждается КАК СВОЙСТВО ВЫПОЛНЕННОГО ЗАПРОСА — на обоих
+    # входах, потому что расходятся они именно попарно.
+    for label, statements in (("страница", page_statements), ("порция", chunk_statements)):
+        assert [s for s in statements if SCHEDULES_ORDER_RE.search(s)], (
+            f"{label} сводного списка выполнена запросом без явной сортировки — "
+            "порядок карточек стал свойством плана запроса, а не контракта"
+        )
+
+    assert first_page == seeded[:PAGE_SIZE], "первая страница отдана не по порядку"
+    assert chunk == seeded[PAGE_SIZE:], "порция прокрутки продолжила не с того места"
+
+    combined = first_page + chunk
+    assert len(combined) == len(set(combined)), (
+        "карточка попала и на страницу, и в порцию прокрутки"
+    )
+    assert sorted(combined) == sorted(seeded), "порция и страница вместе неполны"
+
+    assert _card_ids((await authed_client.get("/schedules")).text) == first_page, (
+        "повторный запрос той же страницы дал другой порядок карточек"
+    )
+
+
+@pytest.mark.asyncio
+async def test_toggling_does_not_move_the_card(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """SCH-05: переключение меняет состояние расписания, а не его место в списке.
+
+    Список отсортирован по идентификатору, а не по состоянию или по времени
+    изменения, поэтому поставленная на паузу карточка обязана остаться там же.
+    Сортировка, зависящая от `is_active`, превратила бы каждое нажатие в прыжок
+    списка под курсором: пользователь, останавливающий несколько расписаний
+    подряд, нажимал бы вслепую.
+    """
+    ad = await _seed_ad(db_session, title="Объявление трёх расписаний")
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа трёх расписаний")
+    schedules = [
+        await _seed_schedule(
+            db_session, ad, account, group_ids=[group.id], times=[f"0{i}:30"]
+        )
+        for i in range(3)
+    ]
+    middle = schedules[1]
+
+    before = _card_ids((await authed_client.get("/schedules")).text)
+
+    response = await authed_client.post(
+        f"/schedules/{middle.id}/toggle", follow_redirects=False
+    )
+    assert response.status_code == 302
+    await db_session.refresh(middle)
+    assert middle.is_active is False, "переключение не изменило состояние"
+
+    after_html = (await authed_client.get("/schedules")).text
+
+    assert _card_ids(after_html) == before, "переключение сдвинуло карточку в списке"
+    toggle = after_html[
+        after_html.index(f'id="schedule-toggle-{middle.id}"') :
+    ].split(">", 1)[0]
+    assert "checked" not in toggle, "тумблер показывает состояние, которого нет в базе"
