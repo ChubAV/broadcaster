@@ -693,6 +693,39 @@ async def test_foreign_ad_is_not_autosavable(
     assert stored.title == "Чужое объявление"
 
 
+# --- План 02-10, WR-03: файловая часть в поле вложений -----------------------
+
+
+@pytest.mark.asyncio
+async def test_multipart_file_part_in_images_is_refused(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Файловая часть в поле `images` — отказ по данным, а не ошибка 500.
+
+    Чтение списка ключей вызывает строковую операцию у каждого значения
+    `form_data.getlist("images")`. Многочастный запрос, в котором поле `images`
+    приходит ФАЙЛОВОЙ частью, даёт объект загруженного файла, у которого такой
+    операции нет, — и общий обработчик `app/main.py` превращает `AttributeError`
+    в 500. Соседняя вспомогательная функция того же слоя уже защищается от
+    этого класса ввода; защита приводится к единому виду.
+    """
+    owner_id = (await _user(db_session)).id
+    keys = [image_key(owner_id, "p0.jpg")]
+    ad_id = (await _seed_ad(db_session, title="С вложением", images=keys)).id
+
+    response = await authed_client.post(
+        f"/ads/{ad_id}/edit",
+        data={"title": "С вложением", "text": "Текст"},
+        files={"images": ("payload.bin", b"\x00\x01\x02", "application/octet-stream")},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    db_session.expire_all()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
+    assert stored.images == keys
+
+
 @pytest.mark.asyncio
 async def test_explicit_save_publishes_autosave_does_not(
     authed_client: AsyncClient, db_session: AsyncSession
