@@ -567,6 +567,72 @@ async def test_preview_never_shows_rejected_attachments(
 
 
 @pytest.mark.asyncio
+async def test_preview_lists_every_attachment_in_send_order(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ADS-06, UI-SPEC E9 `zero-one-many`: предпросмотр показывает ВСЕ вложения.
+
+    Макет рисует ровно один медиаблок, раскладка 2…10 вложений им не задана.
+    Дефолт контракта — переносящаяся строка миниатюр в порядке отправки, то есть
+    в порядке `Ad.images`. Порядок проверяется ПОЗИЦИЯМИ подстрок, а не целым
+    блоком разметки: разметка миниатюры может измениться, порядок — нет.
+    """
+    owner_id = (await _user(db_session)).id
+    keys = [image_key(owner_id, f"p{i}.jpg") for i in range(3)]
+    ad_id = (await _seed_ad(db_session, title="Три вложения", images=keys)).id
+
+    response = await authed_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(title="Три вложения", text="Текст", images=keys),
+        headers=HX_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    # index() поднимает ValueError на отсутствующем ключе: «показаны все три» и
+    # «показаны в этом порядке» проверяются одним выражением.
+    positions = [html.index(key) for key in keys]
+    assert positions == sorted(positions), "порядок миниатюр разошёлся с Ad.images"
+    db_session.expire_all()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
+    assert stored.images == keys
+
+
+@pytest.mark.asyncio
+async def test_removing_an_absent_key_changes_nothing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ADS-05: повторное «убрать вложение» на уже убранный ключ — без эффекта.
+
+    Кнопка убирания живёт в форме автосохранения, и повторная отправка того же
+    тела реальна: дебаунс мог отправить запрос дважды. Отбрасывание «лишнего»
+    ключа или ошибка здесь одинаково испортили бы список.
+    """
+    owner_id = (await _user(db_session)).id
+    keys = [image_key(owner_id, f"p{i}.jpg") for i in range(2)]
+    absent = image_key(owner_id, "already-gone.jpg")
+    ad_id = (await _seed_ad(db_session, title="Два вложения", images=keys)).id
+
+    response = await authed_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(
+            title="Два вложения",
+            text="Текст",
+            images=keys,
+            extra=[("remove_image", absent)],
+        ),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    db_session.expire_all()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
+    assert stored.images == keys
+
+
+@pytest.mark.asyncio
 async def test_remove_image_drops_one_key_and_keeps_order(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
