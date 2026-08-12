@@ -49,7 +49,11 @@
     <span data-grow>{{ label }}</span>{{ mono('#' ~ account_id) }}
   {%- endcall %}
   {% if status == 'active' %}
-  {{- cell(text=stats.get('groups_count', group_count or 0), mono=true, muted=true, title='Групп', label=ACCOUNT_COLUMNS[1]) }}
+  {#- Число групп приходит ТОЛЬКО из stats — тем же путём, что и в двух соседних
+      файлах строки. Прежний запасной вариант (`group_count` из SyncStatusView)
+      был недостижим: обработчик кладёт `groups_count` для каждого запрошенного
+      аккаунта, — и стоил отдельного запроса на каждый ответ опроса. -#}
+  {{- cell(text=stats.get('groups_count', 0), mono=true, muted=true, title='Групп', label=ACCOUNT_COLUMNS[1]) }}
   {{- cell(text=stats.get('schedules_count', 0), mono=true, muted=true, title='Расписаний', label=ACCOUNT_COLUMNS[2]) }}
   {%- set attempts = stats.get('send_attempts', 0) -%}
   {{- cell(text=(((stats.get('send_success', 0) / attempts) * 100)|round|int ~ '%') if attempts > 0 else '—',

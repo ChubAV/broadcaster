@@ -690,7 +690,6 @@ async def accounts_sync_status(
         html = templates.env.get_template("accounts/partials/sync_status_card.html").render(
             account_id=account_id,
             status=view.status,
-            group_count=view.group_count,
             messenger_type=view.messenger_type,
             user=user,
             stats=stats,
