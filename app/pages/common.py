@@ -192,6 +192,44 @@ def plural_ru(count: int, one: str, few: str, many: str) -> str:
 templates.env.globals["plural_ru"] = plural_ru
 
 
+def time_ago_for_user(value: datetime | None, user: User | None) -> str:
+    """Return a short Russian «N назад» string for a past moment.
+
+    Шапка экрана групп обязана читаться «последняя синхронизация 2 часа назад»
+    (UI-SPEC §Header card). Абсолютное форматирование
+    (`format_datetime_for_user`) для этого не годится, а клиентских часов в
+    проекте нет и заводить их не за чем: таймзона пользователя уже решена
+    хелперами этого модуля, поэтому разница считается на сервере.
+
+    Пустое значение отдаёт ПУСТУЮ строку, а не «0 минут назад»: «синхронизация
+    ещё не выполнялась» — отдельная ветка разметки, и выдуманный ноль подменил
+    бы её правдоподобной ложью (Pitfall 2).
+
+    Момент из будущего (часы сервера и базы разошлись) читается «только что»:
+    отрицательная разница напечатала бы «-1 минуту назад».
+    """
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    tz = _get_timezone_for_user(user)
+    seconds = int((datetime.now(tz) - value.astimezone(tz)).total_seconds())
+
+    minutes = seconds // 60
+    if minutes < 1:
+        return "только что"
+    if minutes < 60:
+        return f"{minutes} {plural_ru(minutes, 'минуту', 'минуты', 'минут')} назад"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} {plural_ru(hours, 'час', 'часа', 'часов')} назад"
+    days = hours // 24
+    return f"{days} {plural_ru(days, 'день', 'дня', 'дней')} назад"
+
+
+templates.env.globals["time_ago_for_user"] = time_ago_for_user
+
+
 async def get_user_from_cookie(
     request: Request, db: AsyncSession, settings: Settings
 ) -> User | None:

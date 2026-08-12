@@ -1,10 +1,12 @@
 {% extends "base.html" %}
+{% from "components/badge.html" import badge %}
 {% from "components/button.html" import button, link_button %}
 {% from "components/card.html" import card_open, card_close %}
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/field.html" import field %}
 {% from "components/filters.html" import filters %}
 {% from "components/mono.html" import mono %}
+{% from "includes/messenger_icon.html" import messenger_icon %}
 {% from "account_groups/includes/group_row.html" import group_row %}
 
 {% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
@@ -12,18 +14,55 @@
 
 {% block title %}{{ account_label }} — группы аккаунта — Broadcaster{% endblock %}
 
-{# Контракт «страница → шелл» (План 01-01): заголовок раздела и его действия
-   рендерит шапка шелла, собственного заголовка у страницы нет.
+{# Контракт «страница → шелл» (План 01-01): заголовок раздела рендерит шапка
+   шелла, собственного заголовка у страницы нет.
 
-   Действие «Синхронизировать всё» из UI-SPEC приходит планом 03-06 вместе с
-   результатом синка. #}
+   Действия экрана живут в КАРТОЧКЕ АККАУНТА ниже, а не в блоке page_actions:
+   так их рисует макет (строки 906–920), и так «К аккаунтам» стоит рядом с тем
+   аккаунтом, к которому относится. Дублировать ссылку в шапке шелла нельзя —
+   одно действие на экране обязано быть в одном месте. Кнопка «Синхронизировать
+   всё» встанет в ту же карточку планом 03-06. #}
 {% block page_title %}{{ account_label }}{% endblock %}
 {% block page_subtitle %}Группы аккаунта: включение, удаление и повторная синхронизация{% endblock %}
-{% block page_actions %}
-{{ link_button('К аккаунтам', '/accounts', variant='ghost') }}
-{% endblock %}
 
 {% block content %}
+
+{#- Шапка аккаунта. Mono-строка идентичности ЧЕСТНА в каждой ветке: незаполненное
+    время последнего синка читается словами, а не выдуманным «0 минут назад»
+    (UI-SPEC E1 empty, Pitfall 2).
+
+    Телефона в строке нет и быть не может: колонки телефона у аккаунта не
+    существует, а `credentials` для Telegram хранит СТРОКУ СЕССИИ, для WhatsApp
+    — идентификатор сессии. Вывод этого поля в разметку означал бы утечку
+    сессии мессенджера, поэтому сегмент отсутствует вместе со своим
+    разделителем — ровно ветка `partial` контракта E1, а не упущение. -#}
+{% if account.status == 'syncing' %}
+{% set identity_line = 'синхронизация идёт сейчас' %}
+{% elif account.last_synced_at %}
+{% set identity_line = 'последняя синхронизация ' ~ time_ago_for_user(account.last_synced_at, user) %}
+{% else %}
+{% set identity_line = 'синхронизация ещё не выполнялась' %}
+{% endif %}
+<div data-acct-head>
+  {%- if account.type in MESSENGER_LABELS %}
+  <span class="acct-head__plate">{{ messenger_icon(account.type, size='avatar', show_label=false) }}</span>
+  {%- endif %}
+  <div class="acct-head__id">
+    <h2 class="acct-head__name">{{ account_label }}</h2>
+    {{ mono(identity_line) }}
+  </div>
+  {#- Словарь статусов — тот же, что на экране «Аккаунты»: свой словарь
+      разъехался бы с ним при первом же переименовании. Для статусов вне трёх
+      известных бейдж не рендерится вовсе: выдуманная подпись сообщала бы о
+      состоянии, которого экран аккаунтов не знает. -#}
+  {%- if account.status == 'active' %}{{ badge('Активно', 'success') }}
+  {%- elif account.status == 'syncing' %}{{ badge('Синхронизация...', 'warning') }}
+  {%- elif account.status == 'sync_failed' %}{{ badge('Ошибка синхронизации', 'danger') }}
+  {%- endif %}
+  <div class="acct-head__actions">
+    {{- link_button('К аккаунтам', '/accounts', variant='ghost') -}}
+  </div>
+</div>
 
 {#- Строка поиска. Экран показывает чаты ОДНОГО аккаунта, и у Telegram их
     бывают сотни: без поиска список непригоден (D-03). Фильтров по мессенджеру
@@ -75,11 +114,26 @@
   </div>
 {{ card_close() }}
 {% else %}
-{#- Две ветки пустого состояния («Групп пока нет» до первого синка и «Все группы
-    удалены» после него) различает `last_synced_at`; третью — «Группы не
-    найдены» — строка поиска. Ветвление приходит задачей 3 этого плана. -#}
+{#- ТРИ РАЗЛИЧИМЫХ ПУСТЫХ СОСТОЯНИЯ (UI-SPEC E4 empty). Одно общее «Групп нет»
+    называло бы одним словом три разных положения дел, и в двух из трёх
+    следующий шаг пользователя был бы другим:
+    - поиск ничего не нашёл — сбросить фильтр (список аккаунта не пуст);
+    - синхронизация была, групп нет — все удалены, синк вернёт их (D-10);
+    - синхронизации не было — запустить первую.
+    Различаются по строке поиска и по `last_synced_at`; порядок веток именно
+    такой, потому что поиск может обнулить выдачу и при заполненном списке. -#}
+{% if filter_search %}
+{{ empty_state('Группы не найдены',
+               hint='Измените строку поиска или сбросьте фильтр',
+               action_label='Сбросить',
+               action_href='/accounts/' ~ account_id ~ '/groups') }}
+{% elif account.last_synced_at %}
+{{ empty_state('Все группы удалены',
+               hint='Запустите синхронизацию, чтобы подтянуть чаты заново') }}
+{% else %}
 {{ empty_state('Групп пока нет',
                hint='Нажмите «Синхронизировать всё», чтобы подтянуть чаты аккаунта') }}
+{% endif %}
 {% endif %}
 
 {% endblock %}

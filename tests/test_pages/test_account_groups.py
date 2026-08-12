@@ -19,6 +19,7 @@
 """
 
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -1170,3 +1171,218 @@ async def test_delete_trigger_is_a_real_post_form(
     opening = form_match.group(0)
     assert 'method="post"' in opening.lower(), "форма удаления не POST"
     assert "x-on:submit" in opening, "перехват отправки навешен не на саму форму"
+
+
+# =============================================================================
+# План 03-05, Задача 3: шапка аккаунта, пустые состояния и секция стилей
+# =============================================================================
+#
+# Экран собирается в тот вид, что описан макетом и UI-SPEC. Проверяется то, что
+# отдаёт 200 и при этом врёт: шапка с выдуманным «0 минут назад» вместо честного
+# «синхронизация ещё не выполнялась», одно пустое состояние вместо трёх
+# различимых, линейка «0 активных из 0 групп» на пустом экране.
+
+STATIC_DIR = Path(__file__).resolve().parents[2] / "app" / "static"
+
+# Признаки utility-фреймворка: разметка разделов от них избавлена (D-06).
+UTILITY_MARKERS = ("bg-white", "text-gray", "rounded-lg", "border-gray", "lg:")
+
+
+async def _seed_synced_account(
+    db: AsyncSession, hours_ago: int = 2, status: str = "active"
+) -> MessengerAccount:
+    """Аккаунт с заполненным временем последнего синка."""
+    user = await _user(db)
+    account = MessengerAccount(
+        user_id=user.id,
+        type="wa",
+        credentials="session",
+        status=status,
+        last_synced_at=datetime.now(timezone.utc) - timedelta(hours=hours_ago),
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+# --- Шапка аккаунта ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_header_says_the_sync_never_ran(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E1 empty: незаполненное время синка читается словами.
+
+    Выдуманное «0 минут назад» выглядело бы как успешная синхронизация,
+    которой не было (Pitfall 2: код обязан пережить NULL).
+    """
+    account = await _seed_account(db_session)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "data-acct-head" in html, "карточка аккаунта не отрисована"
+    assert "синхронизация ещё не выполнялась" in html
+    assert "назад" not in html
+
+
+@pytest.mark.asyncio
+async def test_header_shows_the_relative_time_of_the_last_sync(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парный тест: при заполненном времени шапка показывает «N назад»."""
+    account = await _seed_synced_account(db_session, hours_ago=2)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "последняя синхронизация 2 часа назад" in html
+    assert "синхронизация ещё не выполнялась" not in html
+
+
+@pytest.mark.asyncio
+async def test_header_says_the_sync_is_in_flight(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E1 loading: во время синка строка идентичности говорит об этом."""
+    account = await _seed_synced_account(db_session, status="syncing")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "синхронизация идёт сейчас" in html
+    assert "Синхронизация..." in html, "бейдж статуса разошёлся со словарём аккаунтов"
+
+
+@pytest.mark.asyncio
+async def test_header_never_renders_the_account_credentials(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """`credentials` — строка сессии мессенджера, а не телефон.
+
+    Сегмент телефона в строке идентичности отсутствует именно поэтому: поля
+    телефона у аккаунта нет, а вывод `credentials` был бы утечкой сессии.
+    """
+    user = await _user(db_session)
+    account = MessengerAccount(
+        user_id=user.id,
+        type="tg_user",
+        credentials="1BQANOTEuMTA4LjU2LjE0MFsecretSessionString",
+        status="active",
+    )
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert account.credentials not in html, "строка сессии аккаунта попала в разметку"
+
+
+# --- Три пустых состояния ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_state_before_the_first_sync(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Синхронизации не было и групп нет — предлагается первая синхронизация."""
+    account = await _seed_account(db_session)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Групп пока нет" in html
+    assert "Все группы удалены" not in html
+
+
+@pytest.mark.asyncio
+async def test_empty_state_after_all_groups_were_deleted(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Синхронизация была, групп нет — их удалили, и синк вернёт их (D-10)."""
+    account = await _seed_synced_account(db_session)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Все группы удалены" in html
+    assert "Групп пока нет" not in html
+
+
+@pytest.mark.asyncio
+async def test_empty_state_when_the_search_matched_nothing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Поиск ничего не нашёл — состояние своё, и у него есть сброс.
+
+    Без отдельной ветки пользователь читал бы «Групп пока нет» при непустом
+    списке аккаунта и не понимал бы, что список просто отфильтрован.
+    """
+    account = await _seed_synced_account(db_session)
+    await _seed_group(db_session, account, "Барахолка Северного района")
+
+    html = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": "ничего такого"}
+        )
+    ).text
+
+    assert "Группы не найдены" in html
+    assert "Все группы удалены" not in html
+    assert "Групп пока нет" not in html
+    assert f'href="/accounts/{account.id}/groups"' in html, "действия сброса нет"
+    assert "filters__toggle" in html, "строка поиска исчезла при пустой выдаче"
+
+
+@pytest.mark.asyncio
+async def test_zero_groups_render_no_counter_line(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E3 empty: «0 активных из 0 групп» — не сообщение.
+
+    Сообщение при нуле несёт пустое состояние; линейка не рендерится вовсе.
+    """
+    account = await _seed_account(db_session)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "count-rule" not in html
+    assert "ВЫКЛЮЧЕННЫЕ ГРУППЫ ПРОПУСКАЮТСЯ ПРИ РАССЫЛКЕ" not in html
+
+
+# --- Разметка и стили --------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_screen_has_no_utility_classes(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Экран собран на дизайн-системе, а не на классах удалённого фреймворка."""
+    account = await _seed_synced_account(db_session)
+    await _seed_group(db_session, account, "Группа проверки классов")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    for marker in UTILITY_MARKERS:
+        assert marker not in html, marker
+
+
+def test_screen_has_its_own_css_section():
+    """У экрана есть собственная секция стилей.
+
+    Проверка по исходнику, а не по выдаче: таблица стилей отдаётся статикой и
+    в HTML страницы не попадает, поэтому поведенческой проверки для неё не
+    существует. Ловится ровно то, ради чего секция заводилась: разметка,
+    оставшаяся без правил раскладки, выглядит «почти прилично» и молча теряет
+    и колонку имени, и приглушение выключенной строки.
+    """
+    css = (STATIC_DIR / "css" / "app.css").read_text(encoding="utf-8")
+
+    for selector in (
+        "[data-acct-head]",
+        ".count-rule",
+        "[data-group-list]",
+        "[data-group-row]",
+        ".group-row__name",
+        ".group-row--off",
+        ".group-row__mark",
+    ):
+        assert selector in css, f"в таблице стилей нет правил для {selector}"
