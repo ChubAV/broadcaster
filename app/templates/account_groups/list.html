@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% from "components/button.html" import link_button %}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/empty_state.html" import empty_state %}
+{% from "account_groups/includes/group_row.html" import group_row %}
+
+{% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
+{% set account_label = MESSENGER_LABELS.get(account.type, account.type) ~ ' #' ~ account.id %}
+
+{% block title %}{{ account_label }} — группы аккаунта — Broadcaster{% endblock %}
+
+{# Контракт «страница → шелл» (План 01-01): заголовок раздела и его действия
+   рендерит шапка шелла, собственного заголовка у страницы нет.
+
+   Действие «Синхронизировать всё» из UI-SPEC приходит планом 03-06 вместе с
+   результатом синка: этот план доказывает срез «маршрут → владение → выборка →
+   шаблон → форма → БД», а не собирает шапку экрана целиком. #}
+{% block page_title %}{{ account_label }}{% endblock %}
+{% block page_subtitle %}Группы аккаунта: включение, удаление и повторная синхронизация{% endblock %}
+{% block page_actions %}
+{{ link_button('К аккаунтам', '/accounts', variant='ghost') }}
+{% endblock %}
+
+{% block content %}
+
+{% if groups %}
+{{ card_open() }}
+  <div data-group-list>
+    {% for group in groups %}{{ group_row(group, account.id) }}{% endfor %}
+  </div>
+{{ card_close() }}
+{% else %}
+{#- Две ветки пустого состояния («Групп пока нет» до первого синка и «Все группы
+    удалены» после него) различает `last_synced_at`, а его колонка приходит
+    миграцией плана 03-04. До неё рендерится одна ветка — та, что называет
+    следующий шаг пользователю, у которого групп ещё не было. -#}
+{{ empty_state('Групп пока нет',
+               hint='Нажмите «Синхронизировать всё», чтобы подтянуть чаты аккаунта') }}
+{% endif %}
+
+{% endblock %}
