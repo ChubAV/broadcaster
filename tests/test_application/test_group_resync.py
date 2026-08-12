@@ -1,0 +1,468 @@
+"""Полная переинвентаризация состава групп аккаунта: D-10, D-11, D-12.
+
+Файл — спецификация `app/application/accounts/group_resync.py`, единственной
+реализации логики синка. До этой фазы блок синка был скопирован в трёх местах
+(страничный TG-обработчик и две Celery-таски) с посимвольными расхождениями,
+поэтому тесты стоят на хелпере, а не на трёх вызывающих: расхождение WA- и
+MAX-путей ловится здесь один раз, а не тремя почти одинаковыми наборами.
+
+Ключевое утверждение файла — НЕ «новые группы добавились», а
+`test_missing_group_is_marked_not_deleted` вместе с
+`test_resync_does_not_touch_is_active`. Обе проверки закрывают прохибицию
+D-11: синхронизация НЕ ДОЛЖНА удалять данные пользователя и НЕ ДОЛЖНА
+перетирать его выбор. Группа, которую мессенджер больше не вернул, помечается
+временем пропажи и остаётся в списке — удаление остаётся решением
+пользователя, а выключенная группа после синка обязана остаться выключенной.
+Разница видна только на второй проверке: реализация «удалить пропавшие» тоже
+прошла бы тест на счётчики, но молча стёрла бы группы, временно не отданные
+мессенджером при сбое на его стороне.
+
+`test_foreign_group_with_same_external_id_untouched` закрывает T-03-06:
+внешний идентификатор уникален внутри мессенджера, но не внутри нашей базы, и
+выборка существующих групп обязана скоупиться и по аккаунту, и по владельцу.
+"""
+
+import json
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.application.accounts.dto import GroupResyncResult
+from app.application.accounts.group_resync import (
+    apply_group_resync,
+    parse_sync_result,
+    record_sync_failure,
+)
+from app.database import Base
+from app.models.group import Group
+from app.models.messenger_account import MessengerAccount
+from app.models.user import User
+
+
+class _Db:
+    """Собственный движок: хелпер не коммитит, транзакцией правит тест."""
+
+    def __init__(self):
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+
+    async def __aenter__(self) -> AsyncSession:
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(
+            self.engine, class_=AsyncSession, expire_on_commit=False
+        )
+        self.session = factory()
+        return self.session
+
+    async def __aexit__(self, *exc):
+        await self.session.close()
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        await self.engine.dispose()
+
+
+async def _seed_account(
+    session: AsyncSession, email: str = "resync@test.com", type_: str = "wa"
+) -> MessengerAccount:
+    user = User(email=email, password_hash="x", name="U")
+    session.add(user)
+    await session.commit()
+
+    account = MessengerAccount(
+        user_id=user.id, type=type_, credentials="cred", status="syncing"
+    )
+    session.add(account)
+    await session.commit()
+    return account
+
+
+async def _add_group(
+    session: AsyncSession,
+    account: MessengerAccount,
+    external_id: str,
+    name: str,
+    *,
+    is_active: bool = True,
+    missing_since: datetime | None = None,
+) -> Group:
+    group = Group(
+        user_id=account.user_id,
+        account_id=account.id,
+        messenger_type=account.type,
+        group_external_id=external_id,
+        name=name,
+        is_active=is_active,
+        missing_since=missing_since,
+    )
+    session.add(group)
+    await session.commit()
+    return group
+
+
+async def _groups(session: AsyncSession, account: MessengerAccount) -> list[Group]:
+    result = await session.execute(
+        select(Group)
+        .where(Group.account_id == account.id)
+        .order_by(Group.group_external_id)
+    )
+    return list(result.scalars().all())
+
+
+def _fetched(*pairs: tuple[str, str]) -> list[dict]:
+    """Ответ мессенджера в том же виде, что отдают get_groups/get_sync_status."""
+    return [{"id": external_id, "name": name} for external_id, name in pairs]
+
+
+THREE = _fetched(("g1", "One"), ("g2", "Two"), ("g3", "Three"))
+
+
+@pytest.mark.asyncio
+async def test_new_groups_are_created_enabled():
+    """Пустая база + три пришедшие группы: created=3, все включены."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+
+        result = await apply_group_resync(
+            session, account, THREE, messenger_type="wa"
+        )
+        await session.commit()
+
+        assert isinstance(result, GroupResyncResult)
+        assert (result.found, result.created, result.renamed, result.missing) == (
+            3,
+            3,
+            0,
+            0,
+        )
+        assert result.error is None
+        groups = await _groups(session, account)
+        assert [g.group_external_id for g in groups] == ["g1", "g2", "g3"]
+        assert all(g.is_active is True for g in groups)
+        assert all(g.missing_since is None for g in groups)
+
+
+@pytest.mark.asyncio
+async def test_renamed_group_updates_name():
+    """Тот же external_id с другим именем: renamed=1, имя обновлено."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+        await _add_group(session, account, "g1", "Старое имя")
+
+        result = await apply_group_resync(
+            session, account, _fetched(("g1", "Новое имя")), messenger_type="wa"
+        )
+        await session.commit()
+
+        assert (result.created, result.renamed, result.missing) == (0, 1, 0)
+        groups = await _groups(session, account)
+        assert len(groups) == 1
+        assert groups[0].name == "Новое имя"
+
+
+@pytest.mark.asyncio
+async def test_unchanged_group_is_not_counted_as_renamed():
+    """Тот же external_id с тем же именем: ни создания, ни переименования."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+        await _add_group(session, account, "g1", "Имя")
+
+        result = await apply_group_resync(
+            session, account, _fetched(("g1", "Имя")), messenger_type="wa"
+        )
+        await session.commit()
+
+        assert (result.found, result.created, result.renamed, result.missing) == (
+            1,
+            0,
+            0,
+            0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_missing_group_is_marked_not_deleted():
+    """Группа, не вернувшаяся из мессенджера, помечается и остаётся (D-11)."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+        await _add_group(session, account, "g1", "Останется")
+
+        result = await apply_group_resync(
+            session, account, _fetched(("g2", "Новая")), messenger_type="wa"
+        )
+        await session.commit()
+
+        assert (result.created, result.missing) == (1, 1)
+        groups = await _groups(session, account)
+        assert [g.group_external_id for g in groups] == ["g1", "g2"]
+        gone = groups[0]
+        assert gone.missing_since is not None
+        assert gone.name == "Останется"
+
+
+@pytest.mark.asyncio
+async def test_returned_group_loses_missing_mark():
+    """Вернувшаяся группа теряет пометку: missing_since снимается в None."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+        await _add_group(
+            session,
+            account,
+            "g1",
+            "Имя",
+            missing_since=datetime.now(timezone.utc) - timedelta(days=2),
+        )
+
+        result = await apply_group_resync(
+            session, account, _fetched(("g1", "Имя")), messenger_type="wa"
+        )
+        await session.commit()
+
+        assert result.missing == 0
+        groups = await _groups(session, account)
+        assert groups[0].missing_since is None
+
+
+@pytest.mark.asyncio
+async def test_resync_does_not_touch_is_active():
+    """Выключенная группа остаётся выключенной — и придя, и не придя.
+
+    Прохибиция D-11 в чистом виде: пользовательский выбор синхронизацией не
+    перетирается. Обе ветки в одном тесте намеренно — расхождение между ними
+    и есть тот дефект, который тест ловит.
+    """
+    async with _Db() as session:
+        account = await _seed_account(session)
+        await _add_group(session, account, "g1", "Пришла", is_active=False)
+        await _add_group(session, account, "g2", "Не пришла", is_active=False)
+
+        result = await apply_group_resync(
+            session, account, _fetched(("g1", "Пришла")), messenger_type="wa"
+        )
+        await session.commit()
+
+        assert result.missing == 1
+        groups = await _groups(session, account)
+        came, gone = groups[0], groups[1]
+        assert came.is_active is False
+        assert came.missing_since is None
+        assert gone.is_active is False
+        assert gone.missing_since is not None
+
+
+@pytest.mark.asyncio
+async def test_second_identical_resync_is_idempotent():
+    """Повторный вызов с тем же ответом не создаёт дублей и не считает лишнего."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+
+        await apply_group_resync(session, account, THREE, messenger_type="wa")
+        await session.commit()
+
+        second = await apply_group_resync(
+            session, account, THREE, messenger_type="wa"
+        )
+        await session.commit()
+
+        assert (second.found, second.created, second.renamed, second.missing) == (
+            3,
+            0,
+            0,
+            0,
+        )
+        assert len(await _groups(session, account)) == 3
+
+
+@pytest.mark.asyncio
+async def test_empty_response_marks_all_and_deletes_none():
+    """Пустой ответ помечает ВСЕ группы и не удаляет ни одной."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+        await apply_group_resync(session, account, THREE, messenger_type="wa")
+        await session.commit()
+
+        result = await apply_group_resync(session, account, [], messenger_type="wa")
+        await session.commit()
+
+        assert (result.found, result.created, result.renamed, result.missing) == (
+            0,
+            0,
+            0,
+            3,
+        )
+        groups = await _groups(session, account)
+        assert len(groups) == 3
+        assert all(g.missing_since is not None for g in groups)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_ids_in_response_create_one_row():
+    """Дубли одного external_id внутри ответа схлопываются в одну строку."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+
+        result = await apply_group_resync(
+            session,
+            account,
+            _fetched(("g1", "Первое"), ("g1", "Второе")),
+            messenger_type="wa",
+        )
+        await session.commit()
+
+        assert result.created == 1
+        groups = await _groups(session, account)
+        assert len(groups) == 1
+
+
+@pytest.mark.asyncio
+async def test_manually_deleted_group_returns_as_new():
+    """D-10: удалённая пользователем группа возвращается новой и включённой."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+        # Удаляемая группа несёт состояние, отличимое от состояния новой:
+        # выключена и помечена пропавшей. Именно оно и служит уликой — вернись
+        # старая строка, эти значения приехали бы вместе с ней.
+        group = await _add_group(
+            session,
+            account,
+            "g1",
+            "Имя",
+            is_active=False,
+            missing_since=datetime.now(timezone.utc),
+        )
+        await session.delete(group)
+        await session.commit()
+
+        result = await apply_group_resync(
+            session, account, _fetched(("g1", "Имя")), messenger_type="wa"
+        )
+        await session.commit()
+
+        assert result.created == 1
+        groups = await _groups(session, account)
+        assert len(groups) == 1
+        revived = groups[0]
+        # Строка создана заново, со значениями по умолчанию (D-10): включена и
+        # без пометки. Сравнение id уликой служить НЕ может — SQLite переиспользует
+        # rowid удалённой строки, и равенство id говорило бы о движке, а не о нас.
+        assert revived.is_active is True
+        assert revived.missing_since is None
+        assert result.renamed == 0
+
+
+@pytest.mark.asyncio
+async def test_foreign_group_with_same_external_id_untouched():
+    """T-03-06: чужая группа с тем же external_id не обновляется и не считается."""
+    async with _Db() as session:
+        mine = await _seed_account(session, email="mine@test.com")
+        theirs = await _seed_account(session, email="theirs@test.com")
+        foreign = await _add_group(session, theirs, "g1", "Чужое имя")
+
+        result = await apply_group_resync(
+            session, mine, _fetched(("g1", "Моё имя")), messenger_type="wa"
+        )
+        await session.commit()
+
+        # Для моего аккаунта это НОВАЯ группа, а не переименование чужой.
+        assert (result.created, result.renamed, result.missing) == (1, 0, 0)
+        assert len(await _groups(session, mine)) == 1
+        foreign_now = (
+            await session.execute(select(Group).where(Group.id == foreign.id))
+        ).scalar_one()
+        assert foreign_now.name == "Чужое имя"
+        assert foreign_now.missing_since is None
+
+
+@pytest.mark.asyncio
+async def test_result_is_written_onto_account():
+    """D-12: время и результат синка сохраняются на аккаунте в разбираемом виде."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+        before = datetime.now(timezone.utc)
+
+        await apply_group_resync(session, account, THREE, messenger_type="wa")
+        await session.commit()
+
+        assert account.last_synced_at is not None
+        assert account.last_synced_at.tzinfo is not None
+        assert account.last_synced_at >= before
+        payload = json.loads(account.last_sync_result)
+        assert payload == {
+            "found": 3,
+            "new": 3,
+            "renamed": 0,
+            "missing": 0,
+            "error": None,
+        }
+
+
+@pytest.mark.asyncio
+async def test_record_sync_failure_writes_error_with_zero_counters():
+    """Ошибка синка пишется той же формой: счётчики нулевые, error — текст."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+
+        await record_sync_failure(session, account, "мессенджер не ответил")
+        await session.commit()
+
+        assert account.last_synced_at is not None
+        payload = json.loads(account.last_sync_result)
+        assert payload == {
+            "found": 0,
+            "new": 0,
+            "renamed": 0,
+            "missing": 0,
+            "error": "мессенджер не ответил",
+        }
+
+
+@pytest.mark.asyncio
+async def test_helper_does_not_commit():
+    """Транзакцией правит вызывающий: страница и Celery-таска ведут её по-разному."""
+    async with _Db() as session:
+        account = await _seed_account(session)
+        # id снимается ДО отката: откат обесценивает загруженные атрибуты, и
+        # обращение к account.id после него полезло бы в базу за перезагрузкой.
+        account_id = account.id
+
+        await apply_group_resync(session, account, THREE, messenger_type="wa")
+
+        assert session.in_transaction()
+        await session.rollback()
+
+        rows = await session.execute(
+            select(Group).where(Group.account_id == account_id)
+        )
+        assert list(rows.scalars().all()) == []
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param(None, id="none"),
+        pytest.param("", id="empty"),
+        pytest.param("{не json", id="broken-json"),
+        pytest.param("[1, 2, 3]", id="not-a-dict"),
+        pytest.param('"строка"', id="scalar"),
+    ],
+)
+def test_parse_sync_result_degrades_to_none(raw):
+    """Мусор в колонке даёт None, а не исключение.
+
+    Плашка результата обязана деградировать в ОТСУТСТВИЕ плашки, а не в
+    стек-трейс на экране групп (T-03-08): значение пишется только кодом, но
+    пережить чужую запись и обрыв на полуслове обязано.
+    """
+    assert parse_sync_result(raw) is None
+
+
+def test_parse_sync_result_reads_valid_payload():
+    payload = '{"found": 5, "new": 2, "renamed": 1, "missing": 0, "error": null}'
+    assert parse_sync_result(payload) == {
+        "found": 5,
+        "new": 2,
+        "renamed": 1,
+        "missing": 0,
+        "error": None,
+    }
