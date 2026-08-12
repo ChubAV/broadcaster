@@ -265,20 +265,52 @@ def check_schedules(self):
     asyncio.run(_run())
 
 
-async def _sync_wa_groups_async(account_id: int):
-    """Poll bridge for group sync completion, save groups to DB."""
+# --- Фоновая синхронизация состава групп: ОДНА реализация на два канала -------
+#
+# WA и MAX опрашивают своих воркеров одинаково: `get_sync_status()` до состояния
+# `ready`, применение состава общим `apply_group_resync`, три ветки исхода
+# (готово / отказ моста / таймаут) и общий обработчик исключения. Раньше это
+# было двумя посимвольными копиями, различавшимися классом адаптера, литералом
+# `messenger_type` и текстами логов, — то есть ровно тем дефектом, ради
+# устранения которого заведён `group_resync` («однажды поправят две из трёх»),
+# только уровнем выше.
+#
+# Различия каналов вынесены в ДВА значения: тип и фабрика адаптера. Имена
+# событий лога выводятся из типа, а не передаются отдельно, — иначе появился бы
+# третий параметр, который можно рассогласовать с первыми двумя.
+
+POLL_INTERVAL = 15  # секунд между опросами воркера
+MAX_POLLS = 40  # 40 * 15s = 10 минут максимум
+
+
+def _wa_messenger(account_id: int):
+    """Адаптер WA. Импорт локальный — модуль тянет docker-клиент."""
+    from app.messengers.whatsapp import WhatsAppMessenger
+
+    return WhatsAppMessenger(session_id=str(account_id))
+
+
+def _max_messenger(account_id: int):
+    """Адаптер MAX. Импорт локальный по той же причине."""
+    from app.messengers.max import MaxMessenger
+
+    return MaxMessenger(session_id=str(account_id))
+
+
+async def _sync_groups_async(account_id: int, *, messenger_type: str, messenger_factory):
+    """Опрашивает воркера до завершения синка и записывает состав групп.
+
+    `messenger_type` — и литерал переинвентаризации, и корень имён событий лога
+    (`sync_wa_groups_error` / `sync_max_groups_error`): одно значение вместо
+    двух рассогласуемых.
+    """
     log = logger.bind(account_id=account_id)
     settings = get_settings()
     engine = get_engine(settings.database_url)
     session_factory = get_session_factory(engine)
 
-    from app.messengers.whatsapp import WhatsAppMessenger
-
-    POLL_INTERVAL = 15  # seconds
-    MAX_POLLS = 40  # 40 * 15s = 10 minutes max
-
     try:
-        messenger = WhatsAppMessenger(session_id=str(account_id))
+        messenger = messenger_factory(account_id)
 
         for attempt in range(MAX_POLLS):
             sync_data = await messenger.get_sync_status()
@@ -294,10 +326,10 @@ async def _sync_wa_groups_async(account_id: int):
                         return
 
                     # Состав групп считает единственная реализация
-                    # переинвентаризации — та же, что у MAX-пути и у
-                    # страничного TG-обработчика (D-10, D-11, D-12).
+                    # переинвентаризации — та же, что у страничного
+                    # TG-обработчика (D-10, D-11, D-12).
                     result = await apply_group_resync(
-                        session, account, groups, messenger_type="wa"
+                        session, account, groups, messenger_type=messenger_type
                     )
 
                     account.status = "active"
@@ -345,7 +377,7 @@ async def _sync_wa_groups_async(account_id: int):
         log.warning("sync_timeout", max_polls=MAX_POLLS)
 
     except Exception as e:
-        log.error("sync_wa_groups_error", error=str(e), exc_info=True)
+        log.error(f"sync_{messenger_type}_groups_error", error=str(e), exc_info=True)
         try:
             async with session_factory() as session:
                 account = await session.get(MessengerAccount, account_id)
@@ -367,6 +399,20 @@ async def _sync_wa_groups_async(account_id: int):
         await engine.dispose()
 
 
+async def _sync_wa_groups_async(account_id: int):
+    """WA-обёртка общей реализации."""
+    await _sync_groups_async(
+        account_id, messenger_type="wa", messenger_factory=_wa_messenger
+    )
+
+
+async def _sync_max_groups_async(account_id: int):
+    """MAX-обёртка общей реализации."""
+    await _sync_groups_async(
+        account_id, messenger_type="max", messenger_factory=_max_messenger
+    )
+
+
 @shared_task(
     name="app.worker.tasks.sync_wa_groups",
     bind=True,
@@ -375,100 +421,6 @@ async def _sync_wa_groups_async(account_id: int):
 def sync_wa_groups(self, account_id: int):
     """Background task: poll bridge until group sync completes, save to DB."""
     asyncio.run(_sync_wa_groups_async(account_id))
-
-
-async def _sync_max_groups_async(account_id: int):
-    """Poll MAX worker for group sync completion, save groups to DB."""
-    log = logger.bind(account_id=account_id)
-    settings = get_settings()
-    engine = get_engine(settings.database_url)
-    session_factory = get_session_factory(engine)
-
-    from app.messengers.max import MaxMessenger
-
-    POLL_INTERVAL = 15  # seconds
-    MAX_POLLS = 40  # 40 * 15s = 10 minutes max
-
-    try:
-        messenger = MaxMessenger(session_id=str(account_id))
-
-        for attempt in range(MAX_POLLS):
-            sync_data = await messenger.get_sync_status()
-            state = sync_data.get("state")
-            log.debug("sync_poll", attempt=attempt + 1, state=state)
-
-            if state == "ready":
-                groups = sync_data.get("groups") or []
-                async with session_factory() as session:
-                    account = await session.get(MessengerAccount, account_id)
-                    if not account or account.status != "syncing":
-                        log.info("sync_skipped", reason="account_not_syncing", status=account.status if account else None)
-                        return
-
-                    # Тот же хелпер, что у WA-пути: расхождение двух копий —
-                    # ровно то, ради устранения чего он и заведён.
-                    result = await apply_group_resync(
-                        session, account, groups, messenger_type="max"
-                    )
-
-                    account.status = "active"
-                    await session.commit()
-                    if result.error:
-                        # См. WA-путь выше: `ready` без состава — не успех.
-                        log.warning("sync_response_rejected", reason=result.error)
-                    else:
-                        log.info(
-                            "sync_complete",
-                            total_groups=len(groups),
-                            new_groups=result.created,
-                            renamed_groups=result.renamed,
-                            missing_groups=result.missing,
-                        )
-                return
-
-            if state in ("failed", "not_found", "unknown"):
-                async with session_factory() as session:
-                    account = await session.get(MessengerAccount, account_id)
-                    if account and account.status == "syncing":
-                        await record_sync_failure(
-                            session, account, _bridge_failure_message(state)
-                        )
-                        account.status = "sync_failed"
-                        await session.commit()
-                log.warning("sync_failed", state=state)
-                return
-
-            # Still syncing — wait and poll again
-            await asyncio.sleep(POLL_INTERVAL)
-
-        # Timeout — max polls reached
-        async with session_factory() as session:
-            account = await session.get(MessengerAccount, account_id)
-            if account and account.status == "syncing":
-                await record_sync_failure(
-                    session, account, _sync_timeout_message(POLL_INTERVAL, MAX_POLLS)
-                )
-                account.status = "sync_failed"
-                await session.commit()
-        log.warning("sync_timeout", max_polls=MAX_POLLS)
-
-    except Exception as e:
-        log.error("sync_max_groups_error", error=str(e), exc_info=True)
-        try:
-            async with session_factory() as session:
-                account = await session.get(MessengerAccount, account_id)
-                if account and account.status == "syncing":
-                    # См. WA-путь выше: пользователю — свой текст, исходный — в лог.
-                    await record_sync_failure(
-                        session, account, UNEXPECTED_FAILURE_MESSAGE
-                    )
-                    account.status = "sync_failed"
-                    await session.commit()
-        except Exception:
-            pass
-        raise
-    finally:
-        await engine.dispose()
 
 
 @shared_task(
