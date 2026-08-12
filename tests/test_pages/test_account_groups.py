@@ -1701,3 +1701,263 @@ async def test_plashka_of_a_running_sync_keeps_the_previous_summary(
 
     assert "найдено 11, новых 4, обновлено имён 0" in html
     assert "синхронизация идёт сейчас" in html
+
+
+# =============================================================================
+# План 03-06, Задача 2: самоостанавливающийся опрос статуса фоновой синхронизации
+# =============================================================================
+#
+# Синхронизация WA и MAX уходит в Celery, и её завершение экрану приходится
+# ДОБИРАТЬ. Опрос обязан быть самоостанавливающимся: команды «стоп» у него нет,
+# он прекращается тем, что очередной ответ приходит БЕЗ атрибутов запроса и
+# триггера. Вынести атрибуты из-под условия по статусу — значит превратить экран
+# в вечный поток запросов каждые пять секунд на каждой открытой вкладке каждого
+# пользователя (T-03-26).
+#
+# Поэтому тесты идут ПАРАМИ: присутствие опроса при выполнении и его отсутствие
+# при остальных статусах. Одиночный тест присутствия зеленел бы и у вечного
+# опроса; одиночный тест отсутствия зеленел бы на пустом ответе.
+
+SYNC_BLOCK_ATTR = "data-acct-sync"
+# Триггер именно ОПРОСА. Сентинел бесконечной прокрутки несёт hx-trigger со
+# значением "revealed", и утверждение про голое имя атрибута ловило бы его тоже.
+POLL_TRIGGER = 'hx-trigger="every'
+
+
+def _sync_block(html: str) -> str:
+    """Подменяемый блок статуса целиком, от его `<div` до парного `</div>`.
+
+    Утверждение «плашка и панель подтверждения лежат ВНЕ подменяемого блока»
+    подстрочным поиском по всей странице недоказуемо: и то и другое есть на
+    странице в обоих случаях. Различает только извлечение по парным тегам.
+    """
+    anchor = html.index(SYNC_BLOCK_ATTR)
+    start = html.rindex("<div", 0, anchor)
+    depth = 0
+    for match in re.finditer(r"<div\b|</div>", html[start:]):
+        depth += 1 if match.group(0) == "<div" else -1
+        if depth == 0:
+            return html[start : start + match.end()]
+    raise AssertionError("блок статуса синхронизации не закрыт")
+
+
+# --- Опрос на странице: пара «продолжается / не начинается» -------------------
+
+
+@pytest.mark.asyncio
+async def test_page_polls_while_the_sync_is_running(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Статус выполнения — единственный, в котором страница объявляет опрос."""
+    account = await _seed_account_with_result(db_session, None, status="syncing")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    block = _sync_block(html)
+    assert f'hx-get="/accounts/{account.id}/groups/sync-status"' in block
+    assert POLL_TRIGGER in block
+    assert 'hx-swap="outerHTML"' in block
+    assert "Синхронизация выполняется" in block
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,expected_badge",
+    [("active", "Активно"), ("sync_failed", "Ошибка синхронизации")],
+)
+async def test_page_declares_no_poll_outside_the_running_state(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    status: str,
+    expected_badge: str,
+):
+    """Парный тест: вне выполнения атрибутов опроса на странице нет вовсе.
+
+    Без него предыдущий зеленел бы и у опроса, объявленного безусловно, — то
+    есть у вечного (T-03-26).
+
+    Начинается тест с ПОЛОЖИТЕЛЬНОГО утверждения — блок отрисован и несёт бейдж
+    своего статуса. Без него «опроса нет» выполнялось бы и на странице, где
+    блока нет вовсе, то есть тест зеленел бы, ничего не проверяя.
+    """
+    account = await _seed_account_with_result(db_session, None, status=status)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    block = _sync_block(html)
+    assert expected_badge in block, "блок статуса не отрисован или потерял бейдж"
+
+    assert POLL_TRIGGER not in html, "страница опрашивает сервер вне синхронизации"
+    assert "/groups/sync-status" not in html
+    assert "Синхронизация выполняется" not in html
+
+
+# --- Вход статуса: пара «продолжает / останавливает» --------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_keeps_polling_while_syncing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Ответ входа при выполнении несёт атрибуты — опрос продолжается."""
+    account = await _seed_account_with_result(db_session, None, status="syncing")
+
+    response = await authed_client.get(f"/accounts/{account.id}/groups/sync-status")
+
+    assert response.status_code == 200
+    assert POLL_TRIGGER in response.text
+    assert f'hx-get="/accounts/{account.id}/groups/sync-status"' in response.text
+    assert SYNC_BLOCK_ATTR in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["active", "sync_failed"])
+async def test_status_endpoint_stops_the_poll_when_the_sync_ends(
+    authed_client: AsyncClient, db_session: AsyncSession, status: str
+):
+    """ЭТО И ЕСТЬ МЕХАНИЗМ ОСТАНОВКИ: ответ приходит без атрибутов опроса.
+
+    Аккаунт, перешедший в завершённое состояние, отдаёт разметку статуса — но
+    уже без запроса и триггера, поэтому следующего запроса не случится.
+    """
+    account = await _seed_account_with_result(db_session, None, status=status)
+
+    response = await authed_client.get(f"/accounts/{account.id}/groups/sync-status")
+
+    assert response.status_code == 200
+    assert SYNC_BLOCK_ATTR in response.text, "разметка статуса не отдана вовсе"
+    assert POLL_TRIGGER not in response.text
+    assert "hx-get" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_of_a_foreign_account_leaks_nothing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-03-25: вход опрашивается автоматически, и владение проверяется В НЁМ.
+
+    Чужой `account_id` не отдаёт ни бейджа статуса этого аккаунта, ни блока
+    вовсе: иначе опрос по перебору идентификаторов сообщал бы, какие аккаунты
+    заняты и в каком они состоянии.
+    """
+    other = await _seed_foreign_user(db_session)
+    foreign = MessengerAccount(
+        user_id=other.id, type="wa", credentials="session", status="syncing"
+    )
+    db_session.add(foreign)
+    await db_session.commit()
+    await db_session.refresh(foreign)
+
+    response = await authed_client.get(f"/accounts/{foreign.id}/groups/sync-status")
+
+    # Утверждается КОНКРЕТНЫЙ ответ, а не только отсутствие разметки: код 404
+    # несуществующего маршрута удовлетворял бы «разметки нет» и зеленил бы тест
+    # ДО того, как вход вообще появится.
+    assert response.status_code == 200
+    assert response.text.strip() == ""
+    assert SYNC_BLOCK_ATTR not in response.text
+    assert "Синхронизация..." not in response.text
+    assert POLL_TRIGGER not in response.text
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_without_session_leaks_nothing(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """Без cookie-сессии разметки статуса не выдаётся.
+
+    Пустой ответ здесь ещё и ОСТАНАВЛИВАЕТ опрос вкладки, у которой истекла
+    сессия: перенаправление на страницу входа вернуло бы в блок целую страницу
+    логина, а опрос продолжился бы.
+    """
+    account = await _seed_account_with_result(db_session, None, status="syncing")
+
+    response = await client.get(f"/accounts/{account.id}/groups/sync-status")
+
+    assert response.status_code == 200
+    assert response.text.strip() == ""
+    assert SYNC_BLOCK_ATTR not in response.text
+    assert POLL_TRIGGER not in response.text
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_accepts_the_layout_param(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-15: параметр компоновки принимается и игнорируется.
+
+    У открытых вкладок адреса опроса могут нести прежний параметр — оба вида
+    запроса обязаны отвечать одинаково.
+    """
+    account = await _seed_account_with_result(db_session, None, status="syncing")
+
+    without = await authed_client.get(f"/accounts/{account.id}/groups/sync-status")
+    legacy = await authed_client.get(
+        f"/accounts/{account.id}/groups/sync-status?layout=cards"
+    )
+
+    assert without.status_code == 200
+    assert legacy.status_code == 200
+    assert legacy.text == without.text
+
+
+# --- Состав подменяемого блока ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_confirm_panel_never_lives_inside_the_polled_block(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Панель подтверждения внутри подменяемого блока задваивалась бы (T-11-04).
+
+    Элемент, заменяемый целиком, приносит с каждым ответом свои дочерние блоки:
+    после первого же опроса на странице оказались бы две панели с одинаковым
+    идентификатором — событие открывало бы обе, а Tab уходил бы в невидимую
+    копию.
+    """
+    account = await _seed_account_with_result(db_session, None, status="syncing")
+    group = await _seed_group(db_session, account, "Барахолка Северного района")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    block = _sync_block(html)
+    assert f"group-del-{group.id}" not in block, (
+        "панель подтверждения удаления оказалась внутри подменяемого блока"
+    )
+    assert f"group-del-{group.id}" in html, "панель исчезла со страницы вовсе"
+
+
+@pytest.mark.asyncio
+async def test_result_plashka_never_lives_inside_the_polled_block(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Плашка внутри подменяемого блока исчезла бы после первого опроса."""
+    account = await _seed_account_with_result(
+        db_session, _summary(found=6, new=1, renamed=0), status="syncing"
+    )
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    block = _sync_block(html)
+    assert "data-sync-plashka" not in block
+    assert "Синхронизация завершена" not in block
+    assert "Синхронизация завершена" in html, "плашка исчезла со страницы вовсе"
+
+
+@pytest.mark.asyncio
+async def test_polled_block_is_declared_exactly_once():
+    """Опрос объявлен в ОДНОМ месте: два объявления гонялись бы друг с другом.
+
+    Проверка по исходнику, а не по выдаче: второе объявление, лежащее в ветке
+    другого статуса, ни одним запросом не поймается — оно проявится только у
+    пользователя, дошедшего до этой ветки.
+    """
+    source = (
+        TEMPLATES_DIR / "account_groups" / "partials" / "sync_result.html"
+    ).read_text(encoding="utf-8")
+
+    assert source.count("hx-trigger") == 1, "объявлений опроса не одно"
+    assert source.count("hx-get") == 1
+    assert "syncing" in source, "объявление опроса не обусловлено статусом"
+    assert "group-del-" not in source, "панель подтверждения попала в блок подмены"
+    assert "aria-live" in source, "завершение синхронизации не будет объявлено"
