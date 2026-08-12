@@ -70,7 +70,11 @@ async def _seed_account(db: AsyncSession, user_id: int, type_: str = "tg_user") 
 
 
 async def _seed_group(
-    db: AsyncSession, user_id: int, account_id: int, name: str = "Группа расписания"
+    db: AsyncSession,
+    user_id: int,
+    account_id: int,
+    name: str = "Группа расписания",
+    is_active: bool = True,
 ) -> Group:
     group = Group(
         user_id=user_id,
@@ -78,11 +82,26 @@ async def _seed_group(
         messenger_type="tg_user",
         group_external_id=f"ext-{name}",
         name=name,
+        is_active=is_active,
     )
     db.add(group)
     await db.commit()
     await db.refresh(group)
     return group
+
+
+async def _stranger(db: AsyncSession) -> User:
+    """Второй пользователь — владелец «чужой» группы.
+
+    Форма посева взята из tests/test_pages/test_ads_editor.py: чужая запись
+    обязана принадлежать НАСТОЯЩЕМУ пользователю, иначе отсутствие группы в
+    выдаче объяснялось бы отсутствием владельца, а не скоупом выборки.
+    """
+    user = User(email="stranger@test.com", password_hash="x", name="Stranger")
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
 
 
 async def _seed_schedule(
@@ -925,3 +944,289 @@ async def test_summary_list_keeps_working(
     # метод GET на нём больше не обслуживается.
     legacy_form = await authed_client.get("/schedules/new")
     assert legacy_form.status_code == 405
+
+
+# --- D-07: выключенные группы в списке выбора редактора ------------------------
+#
+# С D-05 выключенная группа перестаёт получать рассылку. Выборка редактора брала
+# только активные группы, и выбранная-но-выключенная группа ИСЧЕЗАЛА из карточки:
+# пользователь не мог ни узнать, почему группа молчит, ни снять её выбор, а
+# подпись «выбрано N из M» начинала врать (RESEARCH Pitfall 6).
+#
+# Правило ровно одно и о двух половинах: выключенная группа видна ТОЛЬКО если она
+# уже выбрана в расписании ЭТОГО объявления; невыбранные выключенные список не
+# захламляют.
+
+# Строка списка выбора целиком: разбор строкой — тот же приём, что уже применяют
+# этот файл и tests/test_pages/test_responsive_markup.py. Отдельной зависимости
+# разбора HTML ради четырёх утверждений не заводится.
+GROUP_ROW_RE = re.compile(r'<label class="group-pick__row".*?</label>', re.S)
+GROUP_COUNTER_RE = re.compile(r"выбрано (\d+) из (\d+)")
+OFF_MARK = "отключена"
+# ВИДИМАЯ подпись, а не любое вхождение слова: то же слово стоит внутри
+# пояснения («Группа отключена и пропускается при рассылке»), и счёт по голой
+# подстроке мерил бы два вхождения на одну пометку.
+OFF_MARK_CAPTION = ">отключена<"
+
+
+def _group_rows(html: str) -> list[str]:
+    return GROUP_ROW_RE.findall(html)
+
+
+def _row_of(html: str, group_id: int) -> str:
+    """Строка выбора конкретной группы. Отсутствие — падение, а не пустая строка."""
+    for row in _group_rows(html):
+        if f'value="{group_id}"' in row:
+            return row
+    raise AssertionError(f"строки группы {group_id} в списке выбора нет")
+
+
+@pytest.mark.asyncio
+async def test_disabled_group_chosen_in_the_schedule_stays_visible(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Выключенная группа, уже выбранная в расписании, из карточки не исчезает."""
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    off = await _seed_group(
+        db_session, owner.id, account.id, "Выключенная выбранная группа", is_active=False
+    )
+    schedule = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[off.id]
+    )
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    assert "Выключенная выбранная группа" in html, (
+        "выбранная выключенная группа пропала из списка выбора"
+    )
+    assert "checked" in _row_of(html, off.id), "выбор с группы снялся сам"
+
+
+@pytest.mark.asyncio
+async def test_disabled_group_not_chosen_is_absent_from_the_picker(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Невыбранная выключенная группа список выбора не захламляет.
+
+    Парный тест к предыдущему: без него выборка могла бы отдавать ВСЕ группы
+    подряд и оба утверждения о видимости проходили бы разом.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    active = await _seed_group(db_session, owner.id, account.id, "Активная группа списка")
+    await _seed_group(
+        db_session, owner.id, account.id, "Выключенная невыбранная группа", is_active=False
+    )
+    schedule = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[active.id]
+    )
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    assert "Активная группа списка" in html
+    assert "Выключенная невыбранная группа" not in html, (
+        "невыбранная выключенная группа попала в список выбора"
+    )
+
+
+@pytest.mark.asyncio
+async def test_active_group_is_present_regardless_of_schedules(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Активная группа видна и тогда, когда ни в одном расписании не выбрана."""
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    active = await _seed_group(db_session, owner.id, account.id, "Активная невыбранная")
+    schedule = await _seed_schedule(db_session, ad.id, account.id, group_ids=[])
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    assert "Активная невыбранная" in html
+    assert "checked" not in _row_of(html, active.id)
+
+
+@pytest.mark.asyncio
+async def test_disabled_group_chosen_in_another_ad_is_absent_here(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Множество выбранных строится из расписаний ИМЕННО ЭТОГО объявления.
+
+    Иначе выключенная группа, выбранная где-то в другом объявлении, всплывала бы
+    в списке выбора всех объявлений сразу.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    other_ad = await _seed_ad(db_session, owner.id, title="Второе объявление")
+    account = await _seed_account(db_session, owner.id)
+    off = await _seed_group(
+        db_session, owner.id, account.id, "Выключенная чужого объявления", is_active=False
+    )
+    await _seed_schedule(db_session, other_ad.id, account.id, group_ids=[off.id])
+    schedule = await _seed_schedule(db_session, ad.id, account.id, group_ids=[])
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    assert "Выключенная чужого объявления" not in html
+
+
+@pytest.mark.asyncio
+async def test_group_of_another_user_never_reaches_the_editor(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """T-03-11: расширение выборки на выключенные не снимает скоуп по владельцу.
+
+    Идентификатор чужой группы подставлен в СВОЁ расписание — то есть клиентское
+    значение прошло весь путь до множества выбранных. Выборка обязана остаться
+    ограниченной владельцем: чужое имя в карточку не попадает.
+    """
+    stranger = await _stranger(db_session)
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    foreign = await _seed_group(
+        db_session, stranger.id, account.id, "Группа постороннего", is_active=False
+    )
+    schedule = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[foreign.id]
+    )
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    assert "Группа постороннего" not in html, "чужая группа попала в список выбора"
+
+
+@pytest.mark.asyncio
+async def test_editor_without_disabled_selections_renders_the_same_group_set(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Обычный случай — нулевой диф: набор строк ровно тот же, что и до правки."""
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    first = await _seed_group(db_session, owner.id, account.id, "Первая активная")
+    second = await _seed_group(db_session, owner.id, account.id, "Вторая активная")
+    schedule = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[first.id]
+    )
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    rows = _group_rows(html)
+    assert len(rows) == 2, "набор строк списка выбора изменился в обычном случае"
+    assert "Первая активная" in html and "Вторая активная" in html
+    assert OFF_MARK not in html, "пометка появилась там, где выключенных групп нет"
+    assert "checked" in _row_of(html, first.id)
+    assert "checked" not in _row_of(html, second.id)
+
+
+# --- D-07: пометка «отключена» и согласованный счётчик -------------------------
+
+
+@pytest.mark.asyncio
+async def test_disabled_chosen_row_is_marked_as_off(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Пользователь видит ПРИЧИНУ молчания группы прямо в строке выбора.
+
+    Без пометки выключенная группа выглядит в карточке ровно как работающая, и
+    единственным наблюдаемым следствием D-05 остаётся отсутствие отправок.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    off = await _seed_group(
+        db_session, owner.id, account.id, "Помеченная выключенная", is_active=False
+    )
+    active = await _seed_group(db_session, owner.id, account.id, "Обычная активная")
+    schedule = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[off.id, active.id]
+    )
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    off_row = _row_of(html, off.id)
+    assert off_row.count(OFF_MARK_CAPTION) == 1, "пометки нет или она задвоена"
+    assert "Группа отключена и пропускается при рассылке" in off_row, (
+        "у пометки нет пояснения"
+    )
+    assert OFF_MARK not in _row_of(html, active.id), (
+        "активная группа помечена отключённой"
+    )
+
+
+@pytest.mark.asyncio
+async def test_disabled_chosen_checkbox_stays_operable(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Снять выбор с выключенной группы обязано быть возможно.
+
+    Недоступный флажок запер бы группу в расписании навсегда: убрать её было бы
+    нечем, а отправок она уже не получает.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    off = await _seed_group(
+        db_session, owner.id, account.id, "Выключенная снимаемая", is_active=False
+    )
+    schedule = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[off.id]
+    )
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    off_row = _row_of(html, off.id)
+    assert "checked" in off_row
+    assert "disabled" not in off_row, "флажок выключенной группы стал недоступен"
+
+    # Разметка — не точка принуждения: снятие обязано доехать до хранилища.
+    await authed_client.post(
+        f"/schedules/{schedule.id}/edit",
+        content=_form(
+            [
+                ("ad_id", str(ad.id)),
+                ("account_id", str(account.id)),
+                ("days_of_week", "1"),
+                ("times_of_day", "09:00"),
+                ("timezone", "UTC"),
+                ("return_to", "editor"),
+            ]
+        ),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert (await _reload(db_session, schedule.id)).group_ids == []
+
+
+@pytest.mark.asyncio
+async def test_group_counter_agrees_with_the_rendered_rows(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """«выбрано N из M» считает ВИДИМЫЙ набор, а не хранимый список.
+
+    Пока выключенные-выбранные группы выпадали из выборки, знаменатель считал
+    одно, а числитель — другое, и подпись противоречила списку перед глазами
+    (RESEARCH Pitfall 6).
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    off = await _seed_group(
+        db_session, owner.id, account.id, "Счётная выключенная", is_active=False
+    )
+    chosen_active = await _seed_group(
+        db_session, owner.id, account.id, "Счётная выбранная"
+    )
+    await _seed_group(db_session, owner.id, account.id, "Счётная невыбранная")
+    schedule = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[off.id, chosen_active.id]
+    )
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    rows = _group_rows(html)
+    counter = GROUP_COUNTER_RE.search(html)
+    assert counter is not None, "подписи «выбрано N из M» в карточке нет"
+    chosen_shown = int(counter.group(1))
+    total_shown = int(counter.group(2))
+
+    assert total_shown == len(rows) == 3, "знаменатель разошёлся с видимым списком"
+    assert chosen_shown == sum("checked" in row for row in rows) == 2, (
+        "числитель разошёлся с отмеченными строками"
+    )
