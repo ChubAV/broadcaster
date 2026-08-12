@@ -549,9 +549,42 @@ async def test_sync_failure_is_recorded_not_swallowed(sync_setup):
     assert resp.headers["location"] == f"/accounts/{account_id}/groups"
 
     last_synced_at, result = await _account_result(session_factory, account_id)
-    assert last_synced_at is not None
+    # Провал не переставляет время последнего синка: аккаунт, у которого синк
+    # не удавался ни разу, обязан остаться «синхронизация ещё не выполнялась».
+    assert last_synced_at is None
     assert result is not None
     assert "сессия Telegram протухла" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_failed_first_sync_leaves_the_screen_saying_groups_not_fetched_yet(
+    sync_setup,
+):
+    """Провал первого синка не превращает пустой экран в «Все группы удалены».
+
+    Ветка пустого состояния различает «синк был, групп нет» и «синка не было»
+    по `last_synced_at`. Пока провал переставлял эту колонку, аккаунт, у
+    которого синхронизация не удавалась НИ РАЗУ, а групп никогда не было,
+    получал утверждение об удалении — и следующий шаг пользователю
+    предлагался неверный.
+    """
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        MockMessenger.return_value.get_groups = AsyncMock(
+            side_effect=RuntimeError("мост не ответил")
+        )
+        await client.post(f"/accounts/{account_id}/sync-groups")
+
+    html = (await client.get(f"/accounts/{account_id}/groups")).text
+    assert "Все группы удалены" not in html
+    assert "Групп пока нет" in html
+    # Шапка тоже обязана остаться честной — «только что» здесь было бы ложью
+    # рядом с красной плашкой «Синхронизация не удалась».
+    assert "синхронизация ещё не выполнялась" in html
+    assert "Синхронизация не удалась" in html
 
 
 @pytest.mark.asyncio

@@ -470,7 +470,6 @@ async def test_record_sync_failure_writes_error_with_zero_counters():
         await record_sync_failure(session, account, "мессенджер не ответил")
         await session.commit()
 
-        assert account.last_synced_at is not None
         payload = json.loads(account.last_sync_result)
         assert payload == {
             "found": 0,
@@ -479,6 +478,39 @@ async def test_record_sync_failure_writes_error_with_zero_counters():
             "missing": 0,
             "error": "мессенджер не ответил",
         }
+
+
+@pytest.mark.asyncio
+async def test_record_sync_failure_does_not_move_last_synced_at():
+    """Провал не переставляет `last_synced_at`: синхронизация не состоялась.
+
+    Колонка означает «синк состоялся», и оба потребителя читают её так. Пока
+    провал её переставлял, экран сообщал два противоречащих факта разом
+    («последняя синхронизация только что» + красная плашка «не удалась»), а
+    аккаунт, у которого синк не удавался НИ РАЗУ и групп никогда не было,
+    получал пустое состояние «Все группы удалены».
+    """
+    async with _Db() as session:
+        # Свежий аккаунт: синхронизации не было ни одной.
+        account = await _seed_account(session)
+        assert account.last_synced_at is None
+
+        await record_sync_failure(session, account, "мост не ответил")
+        await session.commit()
+
+        assert account.last_synced_at is None
+
+        # А удавшийся синк её ставит — иначе тест зеленел бы и на реализации,
+        # которая не пишет колонку вовсе.
+        await apply_group_resync(session, account, THREE, messenger_type="wa")
+        await session.commit()
+        succeeded_at = account.last_synced_at
+        assert succeeded_at is not None
+
+        # И следующий провал не сдвигает время последнего УДАВШЕГОСЯ синка.
+        await record_sync_failure(session, account, "мост снова не ответил")
+        await session.commit()
+        assert account.last_synced_at == succeeded_at
 
 
 @pytest.mark.asyncio

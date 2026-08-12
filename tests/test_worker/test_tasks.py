@@ -503,7 +503,10 @@ async def test_background_sync_failed_state_records_error(
 
     status, last_synced_at, result = await _account_state(factory, account_id)
     assert status == "sync_failed"
-    assert last_synced_at is not None
+    # Провал не переставляет `last_synced_at`: колонка означает «синк
+    # состоялся», и шапка экрана групп обязана называть последний УДАВШИЙСЯ
+    # синк. Время попытки несёт сама сводка.
+    assert last_synced_at is None
     assert result is not None
     assert result["error"]
 
@@ -529,7 +532,7 @@ async def test_background_sync_timeout_records_error(
 
     status, last_synced_at, result = await _account_state(factory, account_id)
     assert status == "sync_failed"
-    assert last_synced_at is not None
+    assert last_synced_at is None
     assert result is not None
     assert result["error"]
 
