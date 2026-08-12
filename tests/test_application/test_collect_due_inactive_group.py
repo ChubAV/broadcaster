@@ -189,7 +189,7 @@ async def test_enabling_the_group_resumes_dispatch(account_type: str):
     потому что состав расписания выключением не менялся (D-05).
     """
     async with _Db() as session:
-        _, (group,) = await _seed(
+        schedule, (group,) = await _seed(
             session, account_type=account_type, group_flags=[False]
         )
 
@@ -200,7 +200,13 @@ async def test_enabling_the_group_resumes_dispatch(account_type: str):
             == []
         )
 
+        # Первый сбор УЖЕ сдвинул next_run_at в будущее — расписание живо, и это
+        # ровно то, что утверждает test_next_run_at_moves_forward_when_every_
+        # group_is_off. Поэтому перед вторым сбором расписание возвращается в
+        # просроченное состояние: иначе второй вызов не выбрал бы его вовсе, и
+        # тест зеленел бы (или краснел) по причине, к пропуску не относящейся.
         group.is_active = True
+        schedule.next_run_at = datetime.now(timezone.utc) - timedelta(days=1)
         await session.commit()
 
         tasks = await collect_due_schedules(

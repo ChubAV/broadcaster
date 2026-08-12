@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
@@ -15,6 +16,8 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.services.schedule_service import compute_next_run_at
+
+logger = structlog.get_logger(__name__)
 
 
 def effective_ad_status(ad: Ad) -> str:
@@ -118,6 +121,40 @@ async def collect_due_schedules(
             continue
 
         for group_id in schedule.group_ids or []:
+            group = await session.get(Group, group_id)
+
+            # D-05: выключенная группа задач отправки не получает.
+            #
+            # Условие стоит В ЭТОМ ЦИКЛЕ, а не в WHERE выборки расписаний выше,
+            # и это не стилистический выбор. Состав групп расписания хранится
+            # JSON-списком в самом расписании (`Schedule.group_ids`), поэтому
+            # фильтра по составу групп в том WHERE не построить вовсе. Но даже
+            # будь он возможен, он был бы неверен: выключение группы НЕ меняет
+            # состав расписания — тумблер обратим (D-08), и включение группы
+            # обязано немедленно возобновить рассылку. Пропускается ГРУППА, а не
+            # расписание: расчёт next_run_at ниже не трогается, иначе включение
+            # группы выстрелило бы всеми накопленными пропущенными слотами.
+            #
+            # Пропуск ТИХИЙ: записи в SendLog здесь не создаётся и нового
+            # статуса журнала не вводится (D-06) — история отражает реальные
+            # попытки отправки, а не намерения. Единственный след — событие
+            # structlog ниже.
+            #
+            # Объект группы поднят ВЫШЕ ветвления по account.type: до правки он
+            # запрашивался только в ветке WA/MAX, и условие, оставленное внутри
+            # неё, пропустило бы Telegram. Ветка ниже переиспользует уже
+            # полученный объект.
+            #
+            # Парный тестовый файл tests/test_application/
+            # test_collect_due_inactive_group.py — спецификация этого места.
+            if group and not group.is_active:
+                logger.info(
+                    "group_skipped_inactive",
+                    group_id=group_id,
+                    schedule_id=schedule.id,
+                )
+                continue
+
             task = DispatchTask(
                 type=account.type,
                 ad_id=schedule.ad_id,
@@ -127,7 +164,6 @@ async def collect_due_schedules(
             )
             # Populate WA-specific fields for Redis per-account queues
             if account.type in ("wa", "max"):
-                group = await session.get(Group, group_id)
                 if group:
                     task.user_id = ad.user_id
                     task.ad_text = ad.text
