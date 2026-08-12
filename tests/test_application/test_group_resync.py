@@ -408,12 +408,14 @@ async def test_scalar_items_are_skipped_without_losing_the_rest():
 
 
 @pytest.mark.asyncio
-async def test_overlong_name_and_id_are_trimmed_to_the_column():
-    """Имя и идентификатор обрезаются по границе колонки (обе String(255)).
+async def test_overlong_name_is_trimmed_to_the_column():
+    """ИМЯ обрезается по границе колонки (String(255)).
 
     Класс дефекта, который зелёная суита поймать не может: на SQLite длина не
     проверяется вовсе, а на PostgreSQL строка длиннее 255 роняет commit с
-    DataError — то есть ломается только прод.
+    DataError — то есть ломается только прод. Для имени обрезка — верная
+    реакция: цена ошибки косметическая, и синк целого аккаунта из-за одного
+    длинного названия падать не должен.
     """
     async with _Db() as session:
         account = await _seed_account(session)
@@ -421,7 +423,7 @@ async def test_overlong_name_and_id_are_trimmed_to_the_column():
         result = await apply_group_resync(
             session,
             account,
-            [{"id": "i" * 5000, "name": "и" * 5000}],
+            [{"id": "g1", "name": "и" * 5000}],
             messenger_type="wa",
         )
         await session.commit()
@@ -429,21 +431,77 @@ async def test_overlong_name_and_id_are_trimmed_to_the_column():
         assert result.created == 1
         group = (await _groups(session, account))[0]
         assert len(group.name) == 255
-        assert len(group.group_external_id) == 255
+        assert group.group_external_id == "g1"
 
 
 @pytest.mark.asyncio
-async def test_nameless_group_falls_back_to_the_trimmed_id():
-    """Пустое имя подменяется идентификатором — и он тоже обрезан.
+async def test_overlong_external_id_skips_the_group_instead_of_trimming_it():
+    """КЛЮЧ МАРШРУТИЗАЦИИ не обрезается — группа пропускается целиком.
 
-    Ветка `name or external_id` существовала и раньше, но обрезки в ней не
-    было: длинный идентификатор уезжал в колонку имени в полную длину.
+    Обрезанный `group_external_id` не «читается хуже», он не адресует ничего:
+    он уходит в мессенджер при каждой отправке
+    (`use_cases.send_message_once`: `group_id=group.group_external_id`).
+    Обрезка создала бы строку-призрак — видимую, выбираемую в расписании и
+    молча проваливающую каждую отправку. Пропуск одной группы честнее.
+
+    Соседняя годная группа обязана уцелеть: мусорный ЭЛЕМЕНТ не роняет весь
+    синк.
+    """
+    async with _Db() as session:
+        account = await _seed_account(session)
+
+        result = await apply_group_resync(
+            session,
+            account,
+            [{"id": "i" * 5000, "name": "Слишком длинный ключ"}, {"id": "g2", "name": "Годная"}],
+            messenger_type="wa",
+        )
+        await session.commit()
+
+        assert result.error is None, "один негодный элемент не роняет весь синк"
+        assert (result.found, result.created) == (1, 1)
+        assert [g.group_external_id for g in await _groups(session, account)] == ["g2"]
+
+
+@pytest.mark.asyncio
+async def test_two_overlong_ids_sharing_a_prefix_do_not_collapse_into_one():
+    """Обрезка схлопнула бы разные ключи в один и нарушила уникальность.
+
+    Два разных длинных идентификатора с одинаковым 255-символьным префиксом
+    после обрезки становились одной строкой и упирались в
+    `uq_groups_account_external` — то есть роняли синк ВСЕГО аккаунта
+    IntegrityError-ом. Пропуск таких элементов снимает и этот путь.
+    """
+    async with _Db() as session:
+        account = await _seed_account(session)
+
+        result = await apply_group_resync(
+            session,
+            account,
+            [
+                {"id": "i" * 300 + "-a", "name": "Первая"},
+                {"id": "i" * 300 + "-b", "name": "Вторая"},
+            ],
+            messenger_type="wa",
+        )
+        await session.commit()
+
+        assert (result.found, result.created) == (0, 0)
+        assert await _groups(session, account) == []
+
+
+@pytest.mark.asyncio
+async def test_nameless_group_falls_back_to_the_id():
+    """Пустое имя подменяется идентификатором.
+
+    Идентификатор здесь ровно на границе колонки: он проходит, а значит и
+    подставленное из него имя укладывается в свою колонку без обрезки.
     """
     async with _Db() as session:
         account = await _seed_account(session)
 
         await apply_group_resync(
-            session, account, [{"id": "i" * 5000, "name": ""}], messenger_type="wa"
+            session, account, [{"id": "i" * 255, "name": ""}], messenger_type="wa"
         )
         await session.commit()
 
