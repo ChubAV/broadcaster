@@ -52,13 +52,23 @@ CONSTRAINT_NAME = "uq_groups_account_external"
 # той же таблице поддерживают оба диалекта.
 
 # 1. Выключенность переносится на выжившую строку — до удаления дублей.
+#
+# `is_active` — колонка типа Boolean, и на PostgreSQL это НАСТОЯЩИЙ boolean, а
+# не 0/1, как на SQLite. Поэтому здесь нельзя ни `MIN(g.is_active)` (агрегата
+# `min(boolean)` в PostgreSQL просто нет — запрос падает), ни `SET is_active = 0`
+# (целочисленный литерал в boolean-колонку PostgreSQL не принимает). Тестовая
+# суита идёт по SQLite и оба этих дефекта пропускает, а боевая база —
+# PostgreSQL, и ревизия оборвалась бы прямо на деплое. Отсюда `CASE` вместо
+# агрегата по boolean и ключевое слово `false` вместо нуля: оба понимают и
+# SQLite, и PostgreSQL.
 _MERGE_IS_ACTIVE = sa.text(
     """
-    UPDATE groups SET is_active = 0
+    UPDATE groups SET is_active = false
     WHERE id IN (
         SELECT MIN(g.id) FROM groups AS g
         GROUP BY g.account_id, g.group_external_id
-        HAVING COUNT(*) > 1 AND MIN(g.is_active) = 0
+        HAVING COUNT(*) > 1
+           AND MIN(CASE WHEN g.is_active THEN 1 ELSE 0 END) = 0
     )
     """
 )
