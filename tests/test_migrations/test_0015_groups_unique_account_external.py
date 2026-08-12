@@ -17,6 +17,7 @@
 следующем пополнении истории.
 """
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -29,6 +30,11 @@ ALEMBIC_INI = REPO_ROOT / "alembic.ini"
 
 # Таблица в том виде, в каком её застаёт ревизия 0015: `missing_since` уже
 # добавлена ревизией 0014, уникального ограничения ещё нет.
+#
+# `schedules` здесь ОБЯЗАТЕЛЬНА, а не декоративна: ревизия переписывает ссылки
+# на удаляемые дубли в `schedules.group_ids`, и без таблицы шаг переписывания
+# не с чем было бы сверить. Колонки перечислены ровно те, что ревизия читает и
+# пишет, плюс NOT NULL-минимум для вставки.
 SCHEMA_AT_0014 = """
 CREATE TABLE groups (
     id INTEGER NOT NULL PRIMARY KEY,
@@ -43,6 +49,19 @@ CREATE TABLE groups (
     missing_since DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+
+CREATE TABLE schedules (
+    id INTEGER NOT NULL PRIMARY KEY,
+    ad_id INTEGER NOT NULL,
+    account_id INTEGER,
+    group_ids JSON,
+    days_of_week JSON,
+    times_of_day JSON,
+    timezone VARCHAR(50) DEFAULT 'UTC' NOT NULL,
+    is_active BOOLEAN DEFAULT 1 NOT NULL,
+    next_run_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
 """
 
 INSERT_GROUP = (
@@ -50,6 +69,10 @@ INSERT_GROUP = (
     "(id, user_id, account_id, messenger_type, group_external_id, name, "
     " is_active, missing_since) "
     "VALUES (?, ?, ?, 'wa', ?, ?, ?, ?)"
+)
+
+INSERT_SCHEDULE = (
+    "INSERT INTO schedules (id, ad_id, account_id, group_ids) VALUES (?, 1, 1, ?)"
 )
 
 
@@ -62,7 +85,7 @@ def _rows(db_path: Path, sql: str, *params):
         conn.close()
 
 
-def _make_db(tmp_path: Path, monkeypatch, groups) -> tuple[Config, Path]:
+def _make_db(tmp_path: Path, monkeypatch, groups, schedules=()) -> tuple[Config, Path]:
     """База со схемой 0014, переданными строками и штампом 0014."""
     db_path = tmp_path / "migration.db"
 
@@ -70,6 +93,7 @@ def _make_db(tmp_path: Path, monkeypatch, groups) -> tuple[Config, Path]:
     try:
         conn.executescript(SCHEMA_AT_0014)
         conn.executemany(INSERT_GROUP, groups)
+        conn.executemany(INSERT_SCHEDULE, schedules)
         conn.commit()
     finally:
         conn.close()
@@ -166,6 +190,69 @@ def test_duplicate_rows_are_merged_not_just_deleted(tmp_path, monkeypatch):
 
     untouched = rows[4]
     assert (untouched["is_active"], untouched["missing_since"]) == (1, None)
+
+
+def test_schedule_reference_to_a_dropped_duplicate_is_remapped(tmp_path, monkeypatch):
+    """Ссылка расписания на удаляемый дубль переезжает на выжившую строку.
+
+    Оправдание «расписание ссылается на первую строку» закрывает только те
+    расписания, что появились ДО дубля. Расписание, созданное или
+    отредактированное ПОСЛЕ, выбирало из списка, где видны ОБЕ строки, и вполне
+    могло выбрать ту, что ревизия удаляет. Оставленный идентификатор не роняет
+    отправку — он делает её тихо неполной: WA/MAX получают адресата `null`, а
+    Telegram пишет в журнал «Missing ad, group, or account».
+    """
+    config, db_path = _make_db(
+        tmp_path,
+        monkeypatch,
+        [
+            (1, 1, 1, "g1", "Первая", 1, None),
+            (2, 1, 1, "g1", "Она же", 1, None),
+            (3, 1, 1, "g2", "Другая", 1, None),
+        ],
+        schedules=[
+            # Ссылается ТОЛЬКО на дубль — он и удаляется.
+            (10, "[2, 3]"),
+            # Ссылается на ОБЕ строки одной группы: после перевода они обязаны
+            # схлопнуться, иначе в один чат уйдут два сообщения.
+            (11, "[1, 2]"),
+            # Дублей не касается — не трогается вовсе.
+            (12, "[3]"),
+        ],
+    )
+
+    command.upgrade(config, "0015")
+
+    schedules = {
+        row["id"]: json.loads(row["group_ids"])
+        for row in _rows(db_path, "SELECT id, group_ids FROM schedules")
+    }
+
+    assert schedules[10] == [1, 3], "висячий идентификатор переведён на выжившего"
+    assert schedules[11] == [1], (
+        "выбор обеих строк одной группы схлопывается: две отправки в один чат "
+        "и есть исходный дефект"
+    )
+    assert schedules[12] == [3], "расписание без дублей ревизия не переписывает"
+
+
+def test_schedule_group_ids_survive_when_there_are_no_duplicates(tmp_path, monkeypatch):
+    """Без дублей шаг переписывания не трогает ни одного расписания.
+
+    Промах в условии выхода переписал бы `group_ids` каждой базы, где ревизия
+    вообще применялась, — то есть каждой.
+    """
+    config, db_path = _make_db(
+        tmp_path,
+        monkeypatch,
+        [(1, 1, 1, "g1", "Одна", 1, None)],
+        schedules=[(10, "[1, 1, 7]")],
+    )
+
+    command.upgrade(config, "0015")
+
+    rows = _rows(db_path, "SELECT group_ids FROM schedules WHERE id = 10")
+    assert json.loads(rows[0]["group_ids"]) == [1, 1, 7]
 
 
 def test_group_without_duplicates_keeps_its_disabled_state(tmp_path, monkeypatch):

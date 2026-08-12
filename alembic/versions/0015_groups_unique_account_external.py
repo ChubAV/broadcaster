@@ -16,8 +16,17 @@
 выбраны так, чтобы не потерять ни одного пользовательского решения:
 
 - выживает строка с НАИМЕНЬШИМ id. Она появилась первой, и именно на неё
-  ссылаются расписания, созданные до появления дубля (`schedules.group_ids`
-  хранится JSON-ом, и переписать эти ссылки ревизия не может);
+  ссылаются расписания, созданные до появления дубля. Расписания, созданные
+  или отредактированные ПОСЛЕ появления дубля, могли выбрать и строку с
+  бОльшим id — обе были видны на экране и обе выбирались, — поэтому ссылки на
+  удаляемые строки ревизия ПЕРЕПИСЫВАЕТ на выжившую (`_remap_schedule_group_ids`
+  ниже) ДО удаления. Иначе в `schedules.group_ids` осталась бы висячая ссылка,
+  а висячая ссылка ведёт себя молча: WA/MAX получают адресата `null`, а
+  Telegram — журнальную запись «Missing ad, group, or account». Ровно этот
+  инвариант держит и маршрут удаления группы
+  (`app/pages/account_groups.py`: «оставленный в `Schedule.group_ids`
+  идентификатор удалённой строки не роняет отправку, он делает её тихо
+  неполной»);
 - выживает ВЫКЛЮЧЕННОСТЬ: если хотя бы одна из строк группы была выключена,
   выключенной остаётся и выжившая. Направление выбрано в сторону
   НЕотправки — ошибка «не отправили в чат, куда хотели» исправляется одним
@@ -38,6 +47,8 @@ Downgrade снимает ровно это ограничение. Удалён�
 Revision ID: 0015
 Revises: 0014
 """
+import json
+
 from alembic import op
 import sqlalchemy as sa
 
@@ -96,7 +107,91 @@ _MERGE_MISSING_SINCE = sa.text(
     """
 )
 
-# 3. И только теперь — снятие лишних строк.
+# 3. Соответствие «удаляемая строка -> выжившая» для переписывания ссылок.
+_DUPLICATE_MAP = sa.text(
+    """
+    SELECT d.id AS dead, s.keep AS keep
+    FROM groups AS d
+    JOIN (
+        SELECT account_id, group_external_id, MIN(id) AS keep
+        FROM groups
+        GROUP BY account_id, group_external_id
+        HAVING COUNT(*) > 1
+    ) AS s
+      ON s.account_id = d.account_id
+     AND s.group_external_id = d.group_external_id
+    WHERE d.id <> s.keep
+    """
+)
+
+_SELECT_SCHEDULE_GROUP_IDS = sa.text(
+    "SELECT id, group_ids FROM schedules WHERE group_ids IS NOT NULL"
+)
+
+# Параметр объявлен типом JSON, а не голой строкой: сериализацию берёт на себя
+# диалект. На SQLite колонка — TEXT и значение уходит строкой, на PostgreSQL —
+# настоящий `json`, куда текстовый литерал без приведения типа не принимается.
+_UPDATE_SCHEDULE_GROUP_IDS = sa.text(
+    "UPDATE schedules SET group_ids = :group_ids WHERE id = :schedule_id"
+).bindparams(
+    sa.bindparam("group_ids", type_=sa.JSON()),
+    sa.bindparam("schedule_id", type_=sa.Integer()),
+)
+
+
+def _remap_schedule_group_ids(connection) -> None:
+    """Переводит ссылки расписаний с удаляемых дублей на выжившую строку.
+
+    Вызывается ДО `_DROP_DUPLICATES`: после удаления соответствие уже не
+    построить, а оставленный в JSON идентификатор несуществующей строки не
+    роняет отправку — он делает её ТИХО неполной (см. докстринг модуля).
+
+    `schedules.group_ids` — JSON-список, и агрегата по его элементам нет ни в
+    одном из двух диалектов, поэтому перевод идёт построчно на стороне Python.
+    Порядок сохраняется, а дубликаты, возникшие ПОСЛЕ перевода (расписание
+    выбрало обе строки одной группы), схлопываются: иначе одна группа получила
+    бы два сообщения — ровно тот дефект, ради устранения которого ревизия и
+    написана.
+
+    Элементы, не являющиеся целыми, проходят насквозь: значение колонки пишет
+    только наш код, но ревизия не имеет права упасть на мусоре в чужой базе.
+    """
+    mapping = {row.dead: row.keep for row in connection.execute(_DUPLICATE_MAP)}
+    if not mapping:
+        return
+
+    for row in connection.execute(_SELECT_SCHEDULE_GROUP_IDS).fetchall():
+        raw = row.group_ids
+        # На SQLite колонка отдаётся строкой, на PostgreSQL asyncpg-кодек
+        # SQLAlchemy уже вернул список — принимаются оба вида.
+        if isinstance(raw, (str, bytes)):
+            try:
+                ids = json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+        else:
+            ids = raw
+        if not isinstance(ids, list):
+            continue
+
+        moved: list = []
+        seen: set = set()
+        for group_id in ids:
+            new_id = mapping.get(group_id, group_id) if isinstance(group_id, int) else group_id
+            if isinstance(new_id, int):
+                if new_id in seen:
+                    continue
+                seen.add(new_id)
+            moved.append(new_id)
+
+        if moved != ids:
+            connection.execute(
+                _UPDATE_SCHEDULE_GROUP_IDS,
+                {"group_ids": moved, "schedule_id": row.id},
+            )
+
+
+# 4. И только теперь — снятие лишних строк.
 _DROP_DUPLICATES = sa.text(
     """
     DELETE FROM groups
@@ -112,6 +207,7 @@ def upgrade():
     connection = op.get_bind()
     connection.execute(_MERGE_IS_ACTIVE)
     connection.execute(_MERGE_MISSING_SINCE)
+    _remap_schedule_group_ids(connection)
     connection.execute(_DROP_DUPLICATES)
 
     with op.batch_alter_table("groups") as batch_op:
