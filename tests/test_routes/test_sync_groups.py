@@ -599,6 +599,66 @@ async def test_failed_first_sync_leaves_the_screen_saying_groups_not_fetched_yet
 
 
 @pytest.mark.asyncio
+async def test_constraint_conflict_becomes_a_summary_not_a_json_five_hundred(
+    sync_setup,
+):
+    """Гонка двойного нажатия заканчивается плашкой, а не сырым JSON-ом.
+
+    Комментарий обработчика объявляет размен осознанным: «гонка заканчивается
+    IntegrityError на коммите одного из двух запросов». Но пока коммит стоял вне
+    `except`, исключение уходило в `generic_error_handler`, и пользователь,
+    отправивший обычную HTML-форму, получал `{"detail": "Internal server
+    error"}`. Хуже того, на аккаунт не ложилось НИЧЕГО — у отказа не оставалось
+    следа в UI.
+
+    Гонка воспроизводится подменой переинвентаризации: фейк добавляет вторую
+    строку на ту же пару `(account_id, group_external_id)` — ровно то, что
+    сделал бы параллельный запрос, прочитавший тот же состав.
+    """
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+    await _add_group(session_factory, account_id, "-100", "Уже записана")
+
+    async def _fake_resync(session, account, fetched, **kwargs):
+        session.add(
+            Group(
+                user_id=account.user_id,
+                account_id=account.id,
+                messenger_type=account.type,
+                group_external_id="-100",
+                name="Она же, второй раз",
+            )
+        )
+        return None
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger, \
+         patch("app.pages.accounts.apply_group_resync", side_effect=_fake_resync):
+        MockMessenger.return_value.get_groups = AsyncMock(
+            return_value=[{"id": "-100", "name": "Уже записана"}]
+        )
+        resp = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+
+    assert resp.status_code == 302, "конфликт ограничения обязан вернуть редирект"
+    assert resp.headers["location"] == f"/accounts/{account_id}/groups"
+
+    _, result = await _account_result(session_factory, account_id)
+    assert result is not None, "у отказа не осталось следа на аккаунте"
+    assert "Синхронизация уже выполнялась" in result["error"]
+    # Детали схемы и значения параметров на экран не уезжают (T-03-17).
+    assert "INSERT" not in result["error"] and "UNIQUE" not in result["error"]
+
+    # Вторая строка не записана: откат обязателен, иначе дубль пережил бы отказ.
+    async with session_factory() as session:
+        rows = (
+            await session.execute(select(Group).where(Group.account_id == account_id))
+        ).scalars().all()
+        assert len(rows) == 1
+
+
+@pytest.mark.asyncio
 async def test_bridge_failure_reaches_the_account_through_the_real_adapter(sync_setup):
     """Отказ моста доезжает до сводки через НАСТОЯЩИЙ класс адаптера.
 

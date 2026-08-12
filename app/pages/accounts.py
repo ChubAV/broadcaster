@@ -5,6 +5,7 @@ import qrcode
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import case, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -861,7 +862,35 @@ async def accounts_sync_groups(
     # та же, что у обеих фоновых задач (D-10, D-11, D-12). Транзакцией
     # по-прежнему управляет обработчик: хелпер не коммитит.
     await apply_group_resync(db, account, fetched_groups, messenger_type=messenger_type)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Сработало ограничение уровня схемы (uq_groups_account_external): состав
+        # групп этого аккаунта уже записал параллельный запрос — та самая гонка
+        # двойного нажатия, ради которой ограничение и заведено (см. комментарий
+        # к guard выше). До этой ветки исключение уходило в generic_error_handler,
+        # и пользователь, отправивший обычную HTML-форму, получал `{"detail":
+        # "Internal server error"}` — сырой JSON вместо страницы, причём на
+        # аккаунт не ложилось НИЧЕГО: у отказа не оставалось следа в UI. Это
+        # противоречило правилу, объявленному широким except выше: «отказ обязан
+        # лечь сводкой на аккаунт, а не пятисоткой».
+        #
+        # Откат обязателен: после IntegrityError сессия непригодна ни для чего,
+        # кроме rollback, — и объект аккаунта после него приходится получать
+        # заново.
+        await db.rollback()
+        import structlog
+        # В событие идут только собственные значения обработчика: после отката
+        # атрибуты `account` просрочены, и обращение к ним потянуло бы ленивую
+        # догрузку вне greenlet-контекста — то есть новое исключение внутри
+        # обработчика исключения.
+        structlog.get_logger().warning("sync_groups_conflict", account_id=account_id)
+        account = await db.get(MessengerAccount, account_id)
+        if account:
+            await record_sync_failure(
+                db, account, "Синхронизация уже выполнялась — откройте экран заново"
+            )
+            await db.commit()
     return RedirectResponse(url=account_groups_url, status_code=302)
 
 
