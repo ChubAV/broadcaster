@@ -51,6 +51,23 @@ def _sentinels(html: str) -> list[str]:
     return SENTINEL_RE.findall(html)
 
 
+def _row_html(html: str, group_id: int) -> str:
+    """Разметка ОДНОЙ строки списка целиком, от её `<div` до парного `</div>`.
+
+    Нужна для утверждения «панель подтверждения лежит ВНЕ строки»: подстрочный
+    поиск по всей странице такого различить не может — идентификатор панели
+    есть на странице в обоих случаях.
+    """
+    anchor = html.index(f'id="group-row-{group_id}"')
+    start = html.rindex("<div", 0, anchor)
+    depth = 0
+    for match in re.finditer(r"<div\b|</div>", html[start:]):
+        depth += 1 if match.group(0) == "<div" else -1
+        if depth == 0:
+            return html[start : start + match.end()]
+    raise AssertionError(f"строка группы {group_id} не закрыта")
+
+
 async def _user(db: AsyncSession) -> User:
     return (
         await db.execute(select(User).where(User.email == "testuser@test.com"))
@@ -840,3 +857,316 @@ async def test_sentinel_markup_is_identical_in_both_templates():
     assert page_sentinel == partial_sentinel, (
         "разметка сентинела разошлась между страницей и порцией прокрутки"
     )
+
+
+# =============================================================================
+# План 03-05, Задача 2: удаление группы с панелью подтверждения (GRP-06)
+# =============================================================================
+#
+# Удаление — единственное необратимое действие экрана, и у него два следствия,
+# о которых пользователь обязан знать ДО нажатия: группа уходит из всех
+# расписаний, а следующая синхронизация вернёт её как новую (D-10).
+#
+# Ключевое свойство маршрута — ТОЧНОСТЬ: удаляется ровно одна строка, из
+# расписаний уходит ровно один идентификатор, соседние остаются. Ошибка здесь
+# не роняет страницу — она молча вычищает из расписаний чужую группу, и увидит
+# это только тот, у кого перестала уходить рассылка.
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_the_group_and_redirects(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """GRP-06: своя группа удаляется, ответ — PRG-редирект на экран аккаунта."""
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа на удаление")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == f"/accounts/{account.id}/groups"
+    assert (await db_session.get(Group, group.id)) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_cleans_the_group_out_of_schedules(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Идентификатор удалённой группы исчезает из `group_ids` расписаний.
+
+    Осиротевший идентификатор не роняет отправку — он делает её тихо неполной:
+    расписание продолжает считаться настроенным на группу, которой уже нет.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа расписания")
+    schedule = await _seed_schedule(db_session, account, [group.id])
+
+    await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    db_session.expunge_all()
+    refreshed = await db_session.get(Schedule, schedule.id)
+    assert group.id not in (refreshed.group_ids or []), (
+        "идентификатор удалённой группы остался в расписании"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_keeps_the_neighbour_ids_in_the_same_schedule(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парный тест: чистка снимает РОВНО один идентификатор.
+
+    Без него предыдущий тест зеленел бы и на обработчике, обнуляющем состав
+    расписания целиком.
+    """
+    account = await _seed_account(db_session)
+    target = await _seed_group(db_session, account, "Удаляемая группа")
+    neighbour = await _seed_group(db_session, account, "Соседняя группа")
+    schedule = await _seed_schedule(db_session, account, [target.id, neighbour.id])
+
+    await authed_client.post(
+        f"/accounts/{account.id}/groups/{target.id}/delete", follow_redirects=False
+    )
+
+    db_session.expunge_all()
+    refreshed = await db_session.get(Schedule, schedule.id)
+    assert refreshed.group_ids == [neighbour.id], (
+        "чистка расписания задела соседний идентификатор"
+    )
+    assert (await db_session.get(Group, neighbour.id)) is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_spares_the_same_named_group_of_another_account(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Одноимённая группа соседнего аккаунта того же пользователя остаётся.
+
+    Мессенджеры отдают имена чатов без гарантии уникальности: удаление по имени
+    вместо идентификатора снесло бы обе.
+    """
+    first = await _seed_account(db_session, type_="wa")
+    second = await _seed_account(db_session, type_="tg_user")
+    target = await _seed_group(db_session, first, "Одинаковое имя")
+    twin = await _seed_group(db_session, second, "Одинаковое имя")
+
+    await authed_client.post(
+        f"/accounts/{first.id}/groups/{target.id}/delete", follow_redirects=False
+    )
+
+    assert (await db_session.get(Group, target.id)) is None
+    assert (await db_session.get(Group, twin.id)) is not None, (
+        "удаление снесло одноимённую группу соседнего аккаунта"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_does_not_trust_the_account_id_from_the_url(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-03-20: тройной WHERE — своя группа, но чужой для неё аккаунт в адресе."""
+    first = await _seed_account(db_session, type_="wa")
+    second = await _seed_account(db_session, type_="tg_user")
+    group_of_second = await _seed_group(db_session, second, "Группа второго аккаунта")
+
+    response = await authed_client.post(
+        f"/accounts/{first.id}/groups/{group_of_second.id}/delete",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert (await db_session.get(Group, group_of_second.id)) is not None, (
+        "группа удалена через адрес чужого для неё аккаунта"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_leaves_a_foreign_group_alone(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-03-20: чужая группа не удаляется прямым POST мимо страницы."""
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Чужая группа удаления", user_id=foreign_user.id
+    )
+
+    response = await authed_client.post(
+        f"/accounts/{foreign_account.id}/groups/{foreign_group.id}/delete",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert (await db_session.get(Group, foreign_group.id)) is not None
+
+
+@pytest.mark.asyncio
+async def test_repeated_delete_is_harmless(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Повтор запроса на уже удалённой группе — редирект, а не ошибка.
+
+    Кнопка «назад» и повторная отправка формы приводят сюда штатно; ответ
+    неотличим от успешного, поэтому по нему нельзя узнать, существовала ли
+    группа вообще.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа двойного удаления")
+
+    first = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+    second = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert first.status_code == 302
+    assert second.status_code == 302
+    assert second.headers["location"] == f"/accounts/{account.id}/groups"
+
+
+@pytest.mark.asyncio
+async def test_delete_of_a_group_in_no_schedule_works(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Группа вне расписаний удаляется штатно — чистка просто ничего не находит."""
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа вне расписаний")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert (await db_session.get(Group, group.id)) is None
+
+
+@pytest.mark.asyncio
+async def test_remaining_rows_keep_the_id_order_after_delete(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """После удаления порядок оставшихся строк остаётся возрастающим."""
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, ["Яблоко", "Смородина", "Абрикос", "Вишня"]
+    )
+
+    await authed_client.post(
+        f"/accounts/{account.id}/groups/{seeded[1].id}/delete", follow_redirects=False
+    )
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    expected = [seeded[0].id, seeded[2].id, seeded[3].id]
+    assert _row_ids(html) == expected, "порядок строк после удаления изменился"
+
+
+@pytest.mark.asyncio
+async def test_delete_without_session_goes_to_login(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict
+):
+    """Разрушительный вход тоже закрыт аутентификацией."""
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа без сессии")
+
+    response = await client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/login"
+    assert (await db_session.get(Group, group.id)) is not None
+
+
+# --- Панель подтверждения ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_confirm_panel_names_the_group_and_both_consequences(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC §Destructive confirmation: тело панели называет ОБА следствия.
+
+    Второе следствие (D-10: синк вернёт группу как новую) обязано быть сказано
+    ДО удаления, а не обнаружено после.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Барахолка Северного района")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Удалить группу?" in html
+    assert "Барахолка Северного района" in html
+    assert "группа исчезнет из всех расписаний" in html
+    assert "следующая синхронизация вернёт её как новую" in html
+
+
+@pytest.mark.asyncio
+async def test_confirm_panel_is_unique_per_group(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-11-04 в родном изводе: панелей ровно одна на группу.
+
+    Две панели с одним идентификатором открывались бы одним событием, и обход
+    по Tab уходил бы в невидимую копию.
+    """
+    account = await _seed_account(db_session)
+    first = await _seed_group(db_session, account, "Первая группа")
+    second = await _seed_group(db_session, account, "Вторая группа")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    for group in (first, second):
+        assert html.count(f'id="group-del-{group.id}"') == 1, (
+            f"панель подтверждения группы {group.id} не единственная"
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirm_panel_lives_outside_the_row(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Панель стоит РЯДОМ со строкой, а не внутри неё.
+
+    Панель позиционируется фиксированно, а внутри строки-карточки стала бы её
+    колонкой; кроме того, панель обязана жить вне любого заменяемого блока
+    (урок Фазы 1).
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа с панелью")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert f'id="group-del-{group.id}"' in html, "панель подтверждения не отрисована"
+    assert f'id="group-del-{group.id}"' not in _row_html(html, group.id), (
+        "панель подтверждения оказалась ВНУТРИ строки списка"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_trigger_is_a_real_post_form(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-09: без Alpine форма-триггер уходит настоящим POST-ом на тот же маршрут.
+
+    Кнопка-триггер вне формы оставила бы экран без единственного способа
+    удалить группу, когда скрипт не доехал.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа деградации удаления")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    row = _row_html(html, group.id)
+    form_match = re.search(
+        r'<form[^>]*action="/accounts/%d/groups/%d/delete"[^>]*>'
+        % (account.id, group.id),
+        row,
+    )
+    assert form_match, "триггер удаления не обёрнут формой на маршрут удаления"
+    opening = form_match.group(0)
+    assert 'method="post"' in opening.lower(), "форма удаления не POST"
+    assert "x-on:submit" in opening, "перехват отправки навешен не на саму форму"
