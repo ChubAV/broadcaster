@@ -63,8 +63,14 @@ async def _seed_account(
     return account
 
 
-async def _seed_section(db: AsyncSession, section: str) -> None:
-    """Наполняет раздел так, чтобы вторая страница выдачи имела продолжение."""
+async def _seed_section(db: AsyncSession, section: str) -> str:
+    """Наполняет раздел и возвращает ПРЕФИКС его адресов.
+
+    Префикс, а не голое имя раздела: адрес экрана групп аккаунта содержит
+    идентификатор аккаунта, созданного здесь же (план 03-08), и собрать его
+    из имени раздела вызывающий не может. Для остальных разделов префикс —
+    по-прежнему `/{раздел}`.
+    """
     user = await _user(db)
     if section == "ads":
         db.add_all(
@@ -82,8 +88,13 @@ async def _seed_section(db: AsyncSession, section: str) -> None:
                 for i in range(SEED_ROWS)
             ]
         )
-    elif section == "groups":
+    elif section == "account_groups":
         account = await _seed_account(db, user.id)
+        # Имена ЛАТИНСКИЕ намеренно: строка поиска уходит в адрес сентинела
+        # урлкодированной, и кириллический образец пришлось бы сверять с
+        # процентными последовательностями — тест краснел бы на кодировке, а не
+        # на потерянном фильтре. Само урлкодирование проверяется отдельно
+        # (test_sentinel_carries_the_search_urlencoded, план 03-05).
         db.add_all(
             [
                 Group(
@@ -91,11 +102,13 @@ async def _seed_section(db: AsyncSession, section: str) -> None:
                     account_id=account.id,
                     messenger_type="wa",
                     group_external_id=f"ext-{i}",
-                    name=f"Группа {i}",
+                    name=f"Chat {i}",
                 )
                 for i in range(SEED_ROWS)
             ]
         )
+        await db.commit()
+        return f"/accounts/{account.id}/groups"
     elif section == "schedules":
         ad = Ad(user_id=user.id, title="Объявление расписаний", text="Текст", images=[])
         db.add(ad)
@@ -131,6 +144,7 @@ async def _seed_section(db: AsyncSession, section: str) -> None:
     else:  # pragma: no cover — защита от опечатки в параметризации
         raise AssertionError(f"неизвестный раздел: {section}")
     await db.commit()
+    return f"/{section}"
 
 
 def _sentinel_urls(html: str) -> list[str]:
@@ -154,7 +168,9 @@ def _sentinel_offset(html: str) -> int:
 # --- UI-05: цепочка бесконечной прокрутки -----------------------------------
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("section", ["ads", "groups", "schedules", "history", "accounts"])
+@pytest.mark.parametrize(
+    "section", ["ads", "account_groups", "schedules", "history", "accounts"]
+)
 async def test_infinite_scroll_chain(
     authed_client: AsyncClient, db_session: AsyncSession, section: str
 ):
@@ -163,10 +179,10 @@ async def test_infinite_scroll_chain(
     Проверяется именно вторая страница: разрыв цепочки невидим на первом экране,
     а на малом объёме тестовых данных прокрутки может не быть вовсе.
     """
-    await _seed_section(db_session, section)
+    base = await _seed_section(db_session, section)
 
     response = await authed_client.get(
-        f"/{section}/partial?offset={PAGE}&limit={PAGE}&layout=cards"
+        f"{base}/partial?offset={PAGE}&limit={PAGE}&layout=cards"
     )
     assert response.status_code == 200, section
 
@@ -177,7 +193,11 @@ async def test_infinite_scroll_chain(
 @pytest.mark.parametrize(
     "section,query,expected",
     [
-        ("groups", "messenger_type=wa", "messenger_type=wa"),
+        # У экрана групп аккаунта фильтров по мессенджеру и по активности НЕТ
+        # (D-03): мессенджер задан аккаунтом из адреса, а тумблер — состояние
+        # строки, а не измерение списка. Единственный фильтр экрана — строка
+        # поиска, и именно она обязана доехать до второй страницы выдачи.
+        ("account_groups", "search=Chat", "search=Chat"),
         ("history", "status=ok", "status=ok"),
         # Расписания получили полосу фильтров планом 02-07. Раздел дописан сюда
         # в тот же заход: фильтр, потерянный сентинелом, не роняет страницу —
@@ -194,10 +214,10 @@ async def test_infinite_scroll_keeps_filters(
     expected: str,
 ):
     """Вторая страница выдачи не теряет фильтрацию: фильтр едет в URL сентинела."""
-    await _seed_section(db_session, section)
+    base = await _seed_section(db_session, section)
 
     response = await authed_client.get(
-        f"/{section}/partial?offset={PAGE}&limit={PAGE}&layout=cards&{query}"
+        f"{base}/partial?offset={PAGE}&limit={PAGE}&layout=cards&{query}"
     )
     assert response.status_code == 200, section
 
@@ -357,7 +377,9 @@ async def test_swap_anchors_present(authed_client: AsyncClient, db_session: Asyn
 # --- D-15: запрос партиала без параметра компоновки -------------------------
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("section", ["ads", "groups", "schedules", "history", "accounts"])
+@pytest.mark.parametrize(
+    "section", ["ads", "account_groups", "schedules", "history", "accounts"]
+)
 async def test_partial_without_layout_param_ok(
     authed_client: AsyncClient, db_session: AsyncSession, section: str
 ):
@@ -367,12 +389,12 @@ async def test_partial_without_layout_param_ok(
     поэтому и запрос без параметра компоновки, и запрос с ним обязаны
     возвращать 200.
     """
-    await _seed_section(db_session, section)
+    base = await _seed_section(db_session, section)
 
-    without = await authed_client.get(f"/{section}/partial?offset=0&limit={PAGE}")
+    without = await authed_client.get(f"{base}/partial?offset=0&limit={PAGE}")
     assert without.status_code == 200, section
 
     legacy = await authed_client.get(
-        f"/{section}/partial?offset=0&limit={PAGE}&layout=cards"
+        f"{base}/partial?offset=0&limit={PAGE}&layout=cards"
     )
     assert legacy.status_code == 200, section

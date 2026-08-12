@@ -36,10 +36,13 @@ TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
 # Признаки utility-фреймворка: разметка разделов от них избавлена (D-06).
 UTILITY_MARKERS = ("bg-white", "text-gray", "rounded-lg", "border-gray", "lg:")
 
+# Адрес экрана групп аккаунта несёт ИДЕНТИФИКАТОР АККАУНТА, поэтому он записан
+# образцом, а конкретный адрес возвращает ветка посева: аккаунт создаётся вместе
+# с группой, и его идентификатор известен только там (план 03-08).
 SECTION_URLS = {
     "ads": "/ads",
     "schedules": "/schedules",
-    "groups": "/groups",
+    "account_groups": "/accounts/{account_id}/groups",
     "history": "/history",
     "accounts": "/accounts",
 }
@@ -51,11 +54,17 @@ SECTION_URLS = {
 # ширинах (UI-SPEC §Responsive Contract), и таблично-строчная обработка ячеек с
 # подписями ему не нужна. Раздел не выпал из проверок — его собственный
 # примитив закреплён test_schedules_summary_list_is_card_based ниже.
-MIGRATED_SECTIONS = ["ads", "groups", "accounts"]
+#
+# Глобальный раздел «Группы» вышел отсюда планом 03-08 вместе со сносом самого
+# раздела (D-01). Его замена — экран групп аккаунта — тоже КАРТОЧНАЯ на всех
+# ширинах (03-05), поэтому в перечень строк-таблиц она не попадает; её
+# собственный примитив закреплён test_account_groups_list_is_card_based по той
+# же схеме, что у расписаний.
+MIGRATED_SECTIONS = ["ads", "accounts"]
 
 # Все разделы, переведённые на дизайн-систему, независимо от примитива.
 # Планы 06-08 дописывают свои сюда.
-CLEAN_SECTIONS = MIGRATED_SECTIONS + ["history", "schedules"]
+CLEAN_SECTIONS = MIGRATED_SECTIONS + ["history", "schedules", "account_groups"]
 
 
 async def _user(db: AsyncSession) -> User:
@@ -103,9 +112,20 @@ async def _seed_schedule(
     return schedule
 
 
-async def _seed_group(db: AsyncSession, name: str = "Группа выходного дня") -> Group:
+async def _seed_group(
+    db: AsyncSession,
+    name: str = "Группа выходного дня",
+    account: MessengerAccount | None = None,
+) -> Group:
+    """Группа на переданном аккаунте; без аккаунта — на своём новом.
+
+    Параметр аккаунта добавлен планом 03-08: экран групп аккаунта адресуется
+    идентификатором аккаунта, и посев обязан вернуть группу ИМЕННО на том
+    аккаунте, чей адрес откроет тест. Своя ветка посева на каждый вызов
+    оставила бы страницу пустой — рядом с аккаунтом из адреса групп бы не было.
+    """
     user = await _user(db)
-    account = await _seed_account(db)
+    account = account or await _seed_account(db)
     group = Group(
         user_id=user.id,
         account_id=account.id,
@@ -117,6 +137,13 @@ async def _seed_group(db: AsyncSession, name: str = "Группа выходно
     await db.commit()
     await db.refresh(group)
     return group
+
+
+async def _seed_account_groups_screen(db: AsyncSession) -> str:
+    """Аккаунт с одной группой; возвращает адрес его экрана групп."""
+    account = await _seed_account(db)
+    await _seed_group(db, account=account)
+    return SECTION_URLS["account_groups"].format(account_id=account.id)
 
 
 async def _seed_send_log(
@@ -198,18 +225,22 @@ async def _seed_group_info(
     return item
 
 
-async def _seed_section(db: AsyncSession, section: str) -> None:
-    """Наполняет раздел так, чтобы списочная страница не была пустой.
+async def _seed_section(db: AsyncSession, section: str) -> str:
+    """Наполняет раздел и возвращает АДРЕС его списочной страницы.
 
     Пустая страница рисует empty_state и не содержит ни одной строки — тест на
     примитивы зазеленел бы вакуумно.
+
+    Адрес возвращается, а не читается вызывающим из SECTION_URLS: у экрана
+    групп аккаунта он содержит идентификатор аккаунта, созданного здесь же
+    (план 03-08). Для остальных разделов это тот же адрес, что и в таблице.
     """
     if section == "ads":
         await _seed_ad(db)
     elif section == "schedules":
         await _seed_schedule(db)
-    elif section == "groups":
-        await _seed_group(db)
+    elif section == "account_groups":
+        return await _seed_account_groups_screen(db)
     elif section == "history":
         await _seed_send_log(db)
     elif section == "accounts":
@@ -219,6 +250,7 @@ async def _seed_section(db: AsyncSession, section: str) -> None:
         await _seed_account(db, type_="max")
     else:  # pragma: no cover — защита от опечатки в параметризации
         raise AssertionError(f"неизвестный раздел: {section}")
+    return SECTION_URLS[section]
 
 
 @pytest.mark.asyncio
@@ -227,9 +259,9 @@ async def test_list_page_has_responsive_primitives(
     authed_client: AsyncClient, db_session: AsyncSession, section: str
 ):
     """Списочная страница собрана на примитивах, а не на своей вёрстке."""
-    await _seed_section(db_session, section)
+    url = await _seed_section(db_session, section)
 
-    html = (await authed_client.get(SECTION_URLS[section])).text
+    html = (await authed_client.get(url)).text
     assert "data-row" in html, section
 
 
@@ -238,9 +270,9 @@ async def test_list_page_has_responsive_primitives(
 async def test_list_page_no_utility_classes(
     authed_client: AsyncClient, db_session: AsyncSession, section: str
 ):
-    await _seed_section(db_session, section)
+    url = await _seed_section(db_session, section)
 
-    html = (await authed_client.get(SECTION_URLS[section])).text
+    html = (await authed_client.get(url)).text
     for marker in UTILITY_MARKERS:
         assert marker not in html, f"{section}: {marker}"
 
@@ -348,108 +380,62 @@ async def test_schedules_toggle_route_unchanged(
     assert foreign.is_active is True
 
 
+# --- План 03-08: вклад экрана групп аккаунта вместо снесённого раздела -------
+#
+# Глобальный раздел «Группы» снесён (D-01). Его вклад в этот файл не удалён, а
+# ПЕРЕЕХАЛ на экран групп аккаунта — с одной названной потерей: фильтры по
+# мессенджеру и по активности на новом экране не существуют вовсе (D-03),
+# поэтому «фильтр доезжает до второй страницы» проверяется на строке ПОИСКА —
+# единственном фильтре экрана — и живёт в tests/test_pages/test_htmx_preserved.py
+# вместе с остальными проверками цепочки прокрутки.
+#
+# Отрисовка реальных данных строкой, владение при переключении и удаление с
+# чисткой расписаний переехали не сюда, а в tests/test_pages/test_account_groups.py
+# (планы 03-01 и 03-05): там они проверяются подробнее, чем проверялись здесь.
+
+
 @pytest.mark.asyncio
-async def test_groups_card_renders_data(
+async def test_account_groups_list_is_card_based(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Строка группы отрисовывает РЕАЛЬНЫЕ данные, а не пустоту."""
-    group = await _seed_group(db_session, name="Уникальное имя группы")
+    """Замена вклада снесённого раздела в обход по data-row (план 03-08).
 
-    response = await authed_client.get("/groups")
-    assert response.status_code == 200
-    html = response.text
-    assert "Уникальное имя группы" in html
-    assert "ext-4242" in html
-    assert f"/groups/{group.id}/toggle" in html
-
-
-@pytest.mark.asyncio
-async def test_groups_filters_survive_pagination(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """T-04-01: фильтр обязан доехать до ВТОРОЙ страницы выдачи.
-
-    Потерянный фильтр не роняет страницу — он молча подмешивает чужие строки к
-    отфильтрованным, и список продолжает выглядеть исправным.
+    Экран групп аккаунта — список КАРТОЧЕК на всех ширинах, поэтому примитив
+    строки-таблицы ему не подходит: на 860px её колонки скрываются, а подписей
+    ячеек у карточки нет. Утверждение положительное — у списка есть СВОЙ
+    примитив, а не «нет старого»: без него раздел просто выпал бы из проверок
+    вместе со строкой параметризации.
     """
-    user = await _user(db_session)
-    account = await _seed_account(db_session)
-    db_session.add_all(
-        [
-            Group(
-                user_id=user.id,
-                account_id=account.id,
-                messenger_type="wa",
-                group_external_id=f"ext-{i}",
-                name=f"Группа {i}",
-            )
-            for i in range(61)
-        ]
-    )
-    await db_session.commit()
+    url = await _seed_account_groups_screen(db_session)
 
-    response = await authed_client.get(
-        "/groups/partial?offset=30&limit=30&messenger_type=wa&is_active=1"
-    )
-    assert response.status_code == 200
+    html = (await authed_client.get(url)).text
 
-    urls = re.findall(r'hx-get="([^"]*/partial\?[^"]*)"', response.text)
-    assert urls, "сентинел бесконечной прокрутки не найден"
-    sentinel = urls[-1]
-    assert "messenger_type=wa" in sentinel, sentinel
-    assert "is_active=1" in sentinel, sentinel
-    offset = re.search(r"offset=(\d+)", sentinel)
-    assert offset and int(offset.group(1)) > 30, sentinel
+    assert "data-group-list" in html, "контейнер карточек экрана исчез"
+    assert "data-group-row" in html, "карточка группы исчезла из разметки"
+    assert "data-row" not in html, (
+        "экран вернулся к строке-таблице — на 860px её колонки скрываются, а "
+        "подписей ячеек у карточек нет"
+    )
 
 
 @pytest.mark.asyncio
-async def test_groups_filters_block_collapsible(
+async def test_account_groups_filters_block_collapsible(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
     """Блок фильтров собран из общего макроса и свёрнут разметкой, а не Alpine.
 
     Свёрнутое состояние приходит с сервера классами, поэтому на мобильной
-    ширине блок не мигает до инициализации Alpine.
+    ширине блок не мигает до инициализации Alpine. Утверждение переехало со
+    снесённого раздела: полоса та же, макрос тот же, изменился только адрес
+    отправки — у экрана он несёт идентификатор аккаунта.
     """
-    await _seed_group(db_session)
+    account = await _seed_account(db_session)
+    await _seed_group(db_session, account=account)
 
-    html = (await authed_client.get("/groups")).text
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
     assert 'class="filters' in html
     assert "filters__toggle" in html
-    assert 'action="/groups"' in html
-
-
-@pytest.mark.asyncio
-async def test_groups_toggle_route_unchanged(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """T-04-03: тумблер группы меняет вид, а не маршрут и не права."""
-    own = await _seed_group(db_session, name="Своя группа")
-    foreign = Group(
-        user_id=own.user_id + 1000,
-        account_id=own.account_id,
-        messenger_type="wa",
-        group_external_id="ext-foreign",
-        name="Чужая группа",
-    )
-    db_session.add(foreign)
-    await db_session.commit()
-    await db_session.refresh(foreign)
-    assert own.is_active is True and foreign.is_active is True
-
-    response = await authed_client.post(
-        f"/groups/{own.id}/toggle", follow_redirects=False
-    )
-    assert response.status_code == 302
-    await db_session.refresh(own)
-    assert own.is_active is False
-
-    response = await authed_client.post(
-        f"/groups/{foreign.id}/toggle", follow_redirects=False
-    )
-    assert response.status_code == 302
-    await db_session.refresh(foreign)
-    assert foreign.is_active is True
+    assert f'action="/accounts/{account.id}/groups"' in html
 
 
 @pytest.mark.asyncio
@@ -1927,26 +1913,25 @@ def test_every_page_template_extends_a_shell():
     assert not missing, f"шаблоны разделов без наследования шелла: {missing}"
 
 
-# --- План 12, Задача 1: раздел «Группы» -------------------------------------
+# --- План 12, Задача 1 → План 03-08: раздел «Группы» -------------------------
 #
-# Два последних места системного диалога раздела: удаление ОДНОЙ группы в строке
-# и массовое удаление НАБОРА. Второе не сводится к «замене диалога»: между
-# вопросом и отправкой лежит клиентский код, и от того, одним ли снимком берутся
-# число в вопросе и отправляемые идентификаторы, зависит, соответствует ли
-# подтверждение происходящему (T-12-01).
-
-# Подпись получает каждая колонка GROUP_COLUMNS с непустым названием, КРОМЕ
-# 'Группа' — она несёт название самой сущности и уже является заголовком строки.
-GROUP_CELL_LABELS = (
-    "Идентификатор",
-    "Расписаний",
-    "Успех",
-    "Отправлено",
-    "Статус",
-)
-
-SCRIPT_RE = re.compile(r"<script>(.*?)</script>", re.S)
-
+# Здесь стояли два последних места системного диалога раздела: удаление ОДНОЙ
+# группы в строке и массовое удаление НАБОРА.
+#
+# План 03-08 снёс раздел целиком (D-01), и судьба этих утверждений разная:
+#   * подтверждение удаления ОДНОЙ группы переехало на экран групп аккаунта и
+#     проверяется подробнее прежнего — test_confirm_panel_names_the_group_and_
+#     both_consequences, test_confirm_panel_is_unique_per_group,
+#     test_confirm_panel_lives_outside_the_row и test_delete_trigger_is_a_real_
+#     post_form в tests/test_pages/test_account_groups.py; присутствие настоящей
+#     формы в этом месте закреплено ещё и перечнем ROW_DELETE_SITES
+#     (tests/test_templates/test_components.py);
+#   * массовое удаление НАБОРА исчезло вместе с возможностью (D-03): у экрана
+#     групп аккаунта массовых операций нет, поэтому и щели между вопросом и
+#     отправкой (T-12-01) взяться неоткуда — проверять больше нечего;
+#   * подписи ячеек компенсировали шапку колонок, скрывающуюся на 860px. У
+#     карточной строки нового экрана шапки нет вовсе, поэтому компенсировать
+#     нечего — то же решение, что у сводного списка расписаний (план 02-07).
 
 def _template_source(rel: str) -> str:
     return (TEMPLATES_DIR / rel).read_text(encoding="utf-8")
@@ -1968,188 +1953,33 @@ def _header_in(html: str) -> set[str]:
 
 
 @pytest.mark.asyncio
-async def test_groups_delete_uses_modal(
+async def test_account_groups_row_names_each_value(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Удаление группы подтверждается панелью дизайн-системы, а не диалогом ОС.
+    """Замена подписей ячеек снесённого раздела (план 03-08).
 
-    Тот же жест разрушения обязан выглядеть одинаково во всех разделах (SC-3):
-    после Плана 11 «Аккаунты» показывают панель, а «Группы» показывали бы
-    системный диалог.
+    У карточной строки шапки колонок нет, значит и скрывать на 860px нечего —
+    но пользовательская правда SC-5 «понятно, что означает каждое значение»
+    обязана выполняться на любой ширине. У карточки она выполняется тем, что
+    каждое значение названо СВОИМ СЛОВОМ прямо в строке, а не позицией в
+    колонке: «в N расписаниях» / «не в расписаниях» и пометка «не найдена при
+    синке». Утверждение положительное — иначе экран выпал бы из проверок вместе
+    с удалёнными подписями.
     """
-    group = await _seed_group(db_session)
+    account = await _seed_account(db_session)
+    await _seed_group(db_session, name="Группа с названными значениями", account=account)
 
-    html = (await authed_client.get("/groups")).text
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
 
-    assert 'role="dialog"' in html, "панель подтверждения не отрисована"
-    assert 'class="modal"' in html
-    assert f"modal-open-group-del-{group.id}" in html, (
-        "форма удаления не открывает панель подтверждения"
+    assert "Группа с названными значениями" in html, "строка отрисовалась пустой"
+    assert "не в расписаниях" in html, (
+        "значение «сколько расписаний» осталось без названия — на карточке его "
+        "нечем объяснить, шапки колонок у экрана нет"
     )
-    assert html.count(f'id="group-del-{group.id}"') == 1, (
-        "панель подтверждения группы не единственная"
+    assert "data-cell-label" not in html, (
+        "на карточном экране появились подписи ячеек скрывающейся шапки — "
+        "компенсировать нечего, шапки колонок нет"
     )
-    assert "Отмена" in html, "у панели нет отказа от удаления"
-    assert "confirm(" not in html, "системный диалог браузера остался"
-    assert "onsubmit" not in html, "старый перехват отправки остался"
-
-
-@pytest.mark.asyncio
-async def test_groups_delete_form_degrades_without_alpine(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """T-12-04: без Alpine форма удаления группы отправляется напрямую.
-
-    Панель — УСИЛЕНИЕ поверх настоящей формы. Кнопка type="button" вместо формы
-    оставила бы раздел без единственного пути удалить группу, когда скрипт не
-    доехал: снять признак сокрытия с панели умеет только Alpine (WR-04).
-    """
-    group = await _seed_group(db_session)
-
-    html = (await authed_client.get("/groups")).text
-
-    forms = _delete_forms_for(html, f"/groups/{group.id}/delete")
-    assert forms, "форма удаления исчезла из разметки"
-
-    row_forms = [f for f in forms if "modal__form" not in f]
-    assert row_forms, "форма удаления осталась только внутри панели подтверждения"
-    for form in row_forms:
-        assert re.search(r'method="post"', form, re.I), (
-            f"форма удаления потеряла метод: {form[:200]}"
-        )
-        assert 'type="submit"' in form, (
-            f"кнопка удаления перестала отправлять форму: {form[:200]}"
-        )
-
-
-@pytest.mark.asyncio
-async def test_groups_bulk_delete_uses_modal(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Массовое удаление подтверждается панелью с собственной формой набора.
-
-    Подтверждается НЕ одна сущность по идентификатору в маршруте, а НАБОР,
-    приходящий полями формы: поэтому скрытое поле действия, контейнер под
-    идентификаторы и счётчик лежат ВНУТРИ формы панели (слот Плана 09).
-    """
-    await _seed_group(db_session)
-
-    html = (await authed_client.get("/groups")).text
-
-    assert html.count('id="groups-bulk-del"') == 1, "панель массового удаления не одна"
-
-    form = re.search(
-        r'<form class="modal__form"[^>]*action="/groups/bulk"[^>]*>(.*?)</form>',
-        html,
-        re.S,
-    )
-    assert form, "форма панели массового удаления потеряла адрес массового действия"
-    body = form.group(1)
-
-    assert re.search(r'name="action"[^>]*value="delete"', body), (
-        "в форме панели нет скрытого поля действия со значением удаления"
-    )
-    assert 'id="groups-bulk-del-ids"' in body, (
-        "в форме панели нет контейнера под идентификаторы выбранных групп"
-    )
-    assert 'id="groups-bulk-del-count"' in body, (
-        "в форме панели нет элемента под число выбранных групп"
-    )
-    assert 'type="submit"' in body, "кнопка подтверждения не отправляет форму панели"
-
-    assert "confirm(" not in html, "системный диалог массового удаления остался"
-
-
-def test_groups_bulk_modal_confirms_exact_set():
-    """T-12-01: вопрос и отправка относятся к ОДНОМУ снимку набора.
-
-    Проверка идёт по исходнику, а не по выдаче: щель между вопросом и удалением
-    — свойство ПОРЯДКА операций в клиентском коде, и в отрендеренной разметке её
-    не видно. Если идентификаторы читаются заново в момент отправки, человек
-    подтверждает число, которое может не совпасть с тем, что уйдёт на сервер, и
-    узнаёт об этом по пропавшим группам.
-    """
-    script = SCRIPT_RE.search(_template_source("groups/list.html"))
-    assert script, "клиентский код раздела не найден"
-    source = script.group(1)
-
-    assert source.count(".group-checkbox:checked") == 1, (
-        "набор отметок читается больше одного раза — между вопросом и отправкой "
-        "появилась щель, в которой набор может измениться"
-    )
-
-    read = source.index(".group-checkbox:checked")
-    ids_written = source.index("groups-bulk-del-ids")
-    count_written = source.index("groups-bulk-del-count")
-    dispatch = source.index("modal-open-groups-bulk-del")
-
-    assert read < ids_written < dispatch, (
-        "идентификаторы попадают в форму панели не ДО открытия вопроса"
-    )
-    assert read < count_written < dispatch, (
-        "число выбранных групп пишется в вопрос не ДО его открытия"
-    )
-
-    assert "createElement" in source and "textContent" in source, (
-        "скрытые поля собираются не узлами, а разметкой строкой (T-12-07)"
-    )
-    assert "innerHTML" not in source, (
-        "разметка скрытых полей собирается конкатенацией строк (T-12-07)"
-    )
-
-
-@pytest.mark.asyncio
-async def test_groups_cell_labels_present(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Каждая ячейка строки группы несёт название своей колонки.
-
-    На 860px шапка колонок скрывается, и строка «ext-4242 · 0 · — · —»
-    превращается в набор символов без смысла.
-    """
-    groups = [
-        await _seed_group(db_session, name=f"Группа {i}") for i in range(2)
-    ]
-
-    html = (await authed_client.get("/groups")).text
-
-    for label in GROUP_CELL_LABELS:
-        assert html.count(f"<span data-cell-label>{label}</span>") == len(groups), (
-            f"подпись {label!r} проставлена не во всех строках"
-        )
-
-    header = _header_in(html)
-    labels = _labels_in(html)
-    assert header - labels == {"Группа"}, (
-        "подписи разошлись с шапкой колонок: без подписи остались "
-        f"{sorted(header - labels - {'Группа'})}"
-    )
-    assert labels - header == set(), (
-        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_groups_partial_labels_present(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Порция бесконечной прокрутки несёт те же подписи, что и первая страница.
-
-    Правка живёт в МАКРОСЕ строки, поэтому закрывает обе поверхности разом;
-    тест доказывает это, а не проверяет второй файл на всякий случай.
-    """
-    groups = [
-        await _seed_group(db_session, name=f"Группа {i}") for i in range(2)
-    ]
-
-    response = await authed_client.get("/groups/partial?offset=0&limit=30")
-    assert response.status_code == 200
-    html = response.text
-
-    for label in GROUP_CELL_LABELS:
-        assert html.count(f"<span data-cell-label>{label}</span>") == len(groups), (
-            f"подпись {label!r} потеряна в порции бесконечной прокрутки"
-        )
 
 
 # --- План 12, Задача 2 → План 02-07: раздел «Расписания» ---------------------
@@ -2791,9 +2621,10 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     # Класс 1: макрос строки, потребляемый шаблоном с шапкой. Его исходник уже
     # входит в объединение своего списочного шаблона — подписи проверяются там.
     "ads/includes/ad_card.html": "макрос строки внутри объединения ads/list.html",
-    "groups/includes/group_row.html": (
-        "макрос строки внутри объединения groups/list.html"
-    ),
+    # groups/includes/group_row.html ВЫШЕЛ из перечня планом 03-08 вместе с
+    # самим шаблоном: глобальный раздел снесён (D-01). Строка группы на экране
+    # аккаунта его место не занимает — она КАРТОЧНАЯ и примитив строки-таблицы
+    # не рисует вовсе, поэтому в обход по строкам не попадает по построению.
     # schedules/includes/schedule_row.html ВЫШЕЛ из перечня планом 02-07: он
     # больше не рисует строку вовсе — сводный список стал карточным, и ни
     # вызова примитива строки, ни написанного вручную признака в нём нет.
@@ -2842,7 +2673,12 @@ ROWHEAD_PAGES = (
     # 860px шапку ему нечем, потому что шапки нет. Обещание «понятно, что
     # означает каждое значение» переехало в
     # test_schedules_card_names_each_value.
-    RowheadPage("groups/list.html", "/groups", False, "groups", frozenset({"Группа"})),
+    #
+    # groups/list.html ВЫШЕЛ из таблицы планом 03-08 вместе с самим шаблоном:
+    # глобальный раздел снесён (D-01). Замены в таблице у него нет и быть не
+    # может — экран групп аккаунта шапки колонок не вызывает, потому что список
+    # у него карточный; обещание «понятно, что означает каждое значение»
+    # переехало в test_account_groups_row_names_each_value.
     RowheadPage(
         "dashboard.html", "/dashboard", False, "dashboard", frozenset({"Объявление"})
     ),
@@ -2891,8 +2727,6 @@ async def _seed_rowhead_page(db: AsyncSession, seed: str) -> None:
         await _seed_ad(db)
     elif seed == "schedules":
         await _seed_schedule(db)
-    elif seed == "groups":
-        await _seed_group(db)
     elif seed == "dashboard":
         await _seed_send_log(db)
     elif seed == "admin_users":
@@ -2953,8 +2787,11 @@ def test_rowhead_pages_all_have_a_parametrization_entry():
         f"без входа в таблице {sorted(found - declared)}; "
         f"в таблице, но шапку не вызывают {sorted(declared - found)}"
     )
-    assert len(declared) == 8, (
-        f"ожидалось восемь шаблонов с шапкой колонок, объявлено {len(declared)}: "
+    # Восемь → СЕМЬ: план 03-08 снёс groups/list.html вместе с разделом (D-01).
+    # Уменьшение объявленного числа — признание СОЗНАТЕЛЬНОГО снятия; молчаливое
+    # исчезновение шаблона с шапкой по-прежнему краснеет.
+    assert len(declared) == 7, (
+        f"ожидалось семь шаблонов с шапкой колонок, объявлено {len(declared)}: "
         f"{sorted(declared)}"
     )
 
@@ -2973,8 +2810,10 @@ def test_row_templates_without_header_are_accounted_for():
         f"не названы {sorted(found - declared)}; "
         f"названы, но строку не рисуют {sorted(declared - found)}"
     )
-    assert len(declared) == 8, (
-        f"ожидалось восемь таких шаблонов, объявлено {len(declared)}"
+    # Восемь → СЕМЬ по той же причине: макрос строки снесённого раздела удалён
+    # планом 03-08 вместе с его списочной страницей.
+    assert len(declared) == 7, (
+        f"ожидалось семь таких шаблонов, объявлено {len(declared)}"
     )
     # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
     # макрос row_open он не вызывает. Без второго условия разрешителя он выпал
@@ -3069,8 +2908,10 @@ DIALOG_SWEEP_URLS = (
     "/ads/partial?offset=0&limit=30",
     "/schedules",
     "/schedules/partial?offset=0&limit=30",
-    "/groups",
-    "/groups/partial?offset=0&limit=30",
+    # Адреса снесённого раздела «Группы» ушли отсюда планом 03-08: обход требует
+    # 200, а по ним стоит заглушка-перенаправление. Его место занял экран групп
+    # аккаунта — он адресуется идентификатором и потому дописывается к обходу в
+    # самом тесте, как и ответ опроса статуса аккаунта.
     "/history",
     "/billing",
     "/profile",
@@ -3096,9 +2937,17 @@ async def test_no_rendered_page_calls_browser_dialog(
     один обход по списочным адресам.
     """
     account = await _seed_account(db_session, type_="max")
-    for seed in ("ads", "schedules", "groups", "dashboard", "billing"):
+    for seed in ("ads", "schedules", "dashboard", "billing"):
         await _seed_rowhead_page(db_session, seed)
     await _seed_group_info(db_session)
+    # Экран групп аккаунта адресуется идентификатором и в статический перечень
+    # по построению не входит; в обход он попадает вместе со своей порцией
+    # прокрутки — тем же приёмом, что ответ опроса статуса аккаунта.
+    await _seed_group(db_session, account=account)
+    account_groups_urls = (
+        f"/accounts/{account.id}/groups",
+        f"/accounts/{account.id}/groups/partial?offset=0&limit=30",
+    )
 
     await client.post(
         "/login",
@@ -3107,7 +2956,11 @@ async def test_no_rendered_page_calls_browser_dialog(
     )
 
     offenders = {}
-    urls = [*DIALOG_SWEEP_URLS, f"/accounts/{account.id}/sync-status"]
+    urls = [
+        *DIALOG_SWEEP_URLS,
+        f"/accounts/{account.id}/sync-status",
+        *account_groups_urls,
+    ]
     for url in urls:
         response = await client.get(url)
         assert response.status_code == 200, f"{url} вернул {response.status_code}"
