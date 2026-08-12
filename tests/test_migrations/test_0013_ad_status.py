@@ -14,7 +14,13 @@
 **Тест синхронный.** `alembic/env.py` в online-режиме вызывает `asyncio.run`;
 внутри уже работающего цикла pytest-asyncio это упало бы RuntimeError.
 
-**Почему стартовая точка — 0012, а не `base`.** Прогон `upgrade head` от нуля
+**Почему целевая точка — `0013`, а не `head`.** Файл проверяет ОДНУ ревизию, и
+`head` этим именем перестал быть в тот момент, когда появилась 0014: прогон до
+`head` потащил бы в фикстуру чужие ревизии, которым нужны таблицы, здесь не
+созданные (фикстура строит только таблицу объявлений). Явное имя ревизии
+делает файл нечувствительным к продолжению истории миграций.
+
+**Почему стартовая точка — 0012, а не `base`.** Прогон `upgrade` от нуля
 на SQLite не доходит до 0013: ревизия 0005 вызывает `op.drop_constraint`, а
 Alembic на SQLite поднимает на нём `NotImplementedError` («No support for ALTER
 of constraints in SQLite dialect»). Это свойство ЧУЖИХ ревизий, к 0013
@@ -99,7 +105,7 @@ def db_at_0012(tmp_path: Path, monkeypatch) -> tuple[Config, Path]:
 def test_upgrade_adds_status_column_not_null(db_at_0012):
     config, db_path = db_at_0012
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0013")
 
     columns = _columns(db_path)
     assert "status" in columns
@@ -114,7 +120,7 @@ def test_upgrade_publishes_rows_that_existed_before(db_at_0012):
     """
     config, db_path = db_at_0012
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0013")
 
     assert _scalar(db_path, "SELECT status FROM ads WHERE id = 1") == "published"
 
@@ -122,7 +128,7 @@ def test_upgrade_publishes_rows_that_existed_before(db_at_0012):
 def test_upgrade_drops_legacy_activity_column(db_at_0012):
     config, db_path = db_at_0012
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0013")
 
     assert "is_active" not in _columns(db_path)
 
@@ -130,7 +136,7 @@ def test_upgrade_drops_legacy_activity_column(db_at_0012):
 def test_upgrade_creates_status_index(db_at_0012):
     config, db_path = db_at_0012
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0013")
 
     assert (
         _scalar(
@@ -151,7 +157,7 @@ def test_downgrade_restores_legacy_column_and_removes_status(db_at_0012):
     тест фиксирует именно такое поведение, чтобы потеря не выглядела дефектом.
     """
     config, db_path = db_at_0012
-    command.upgrade(config, "head")
+    command.upgrade(config, "0013")
 
     command.downgrade(config, "-1")
 
@@ -170,11 +176,18 @@ def test_downgrade_restores_legacy_column_and_removes_status(db_at_0012):
 
 
 def test_revision_chain_has_single_head():
-    """Ветвления ревизий не возникло: 0013 продолжает 0012."""
+    """Ветвления ревизий не возникло: история остаётся одной линией.
+
+    Утверждение — «голова ОДНА», а не «голова называется 0013». Имя головы
+    меняется с каждой новой ревизией и потому свойством истории не является;
+    ветвление же ломает `alembic upgrade head` для всех сразу, и ловить нужно
+    именно его. Продолжение линии этим файлом проверяется в его собственной
+    точке: 0013 продолжает 0012.
+    """
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ALEMBIC_INI)))
     heads = script.get_heads()
 
-    assert list(heads) == ["0013"], heads
+    assert len(heads) == 1, heads
     assert script.get_revision("0013").down_revision == "0012"
