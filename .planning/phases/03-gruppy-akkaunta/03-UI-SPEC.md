@@ -55,13 +55,12 @@ created: 2026-08-12
 
 ## Spacing Scale
 
-Declared values for **all new Phase 3 markup** (multiples of 4 only). Consistent with the Phase 2 contract:
+Declared values for **all new Phase 3 markup**. Primary scale is the standard 8-point set (4, 8, 16, 24, 32, 48, 64) — only the steps this phase uses are listed. The Phase 2 `md` 12px step is **not** part of the primary scale; it survives only as documented Exception 4 below.
 
 | Token | Value | Usage in this phase |
 |-------|-------|---------------------|
 | xs | 4px | Gap between a status dot and its caption, inline gaps inside mono captions |
 | sm | 8px | Gap between group rows; gap between the per-row controls («×», toggle); gap between the header action buttons |
-| md | 12px | Vertical gap between the header card, sync-result block, counter line and the list; gaps inside the header identity column |
 | lg | 16px | Group-row padding (`16px`); gap between the avatar, the name column and the controls inside a row; header card internal gaps |
 | xl | 24px | Page-level rhythm between the page head and the screen body |
 | 3xl | 48px | Empty-state padding — inherited from the shipped `.empty` class, not re-declared |
@@ -81,7 +80,8 @@ Declared values for **all new Phase 3 markup** (multiples of 4 only). Consistent
 1. **Phase 1 macros keep their mockup-literal values** — `.card` (18/20), `.toggle` (38×22 track), `.empty` (48/20), `.badge` (4/9), `.filters`. Reused unchanged, not restyled (same exception as the approved Phase 2 contract).
 2. **Toggle track is 22px tall.** Mitigation: the toggle is wrapped in a `<label class="toggle">` whose hit area spans the full 36px-plus control zone of the row. No bare 22px hit target ships.
 3. **Status dots are 8px** decorative circles (mockup 6–7px, rounded up to the scale). Non-interactive.
-4. Mockup values 9/13/14/15px gaps are rounded to the nearest scale step (9→8, 13→12, 14→16, 15→16) — the established Phase 1/2 precedent.
+4. **12px intermediate step** — used only for the vertical gap between the header card, the sync-result block, the counter line and the list, and for gaps inside the header identity column. Justification: inherited from the approved Phase 2 contract (its `md` step, `02-UI-SPEC.md` line 61, same usage class — vertical rhythm inside one screen section); mockup value 13px rounds down to it. It is deliberately kept out of the primary scale and must not spread to any other usage in this phase.
+5. Remaining mockup gap values 9/14/15px are rounded to the nearest primary-scale step (9→8, 14→16, 15→16); the 13px gaps round down to the 12px exception above — the established Phase 1/2 precedent.
 
 ---
 
