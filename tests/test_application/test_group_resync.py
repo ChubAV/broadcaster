@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.application.accounts.dto import GroupResyncResult
 from app.application.accounts.group_resync import (
     EMPTY_RESPONSE_MESSAGE,
+    MALFORMED_RESPONSE_MESSAGE,
     apply_group_resync,
     parse_sync_result,
     record_sync_failure,
@@ -358,6 +359,96 @@ async def test_allow_full_wipe_puts_the_decision_on_the_caller():
         groups = await _groups(session, account)
         assert len(groups) == 3, "снятый предохранитель всё равно не удаляет строк"
         assert all(g.missing_since is not None for g in groups)
+
+
+@pytest.mark.asyncio
+async def test_object_instead_of_list_is_refused_not_crashed():
+    """Мост отдал JSON-объект — это отказ синка, а не AttributeError.
+
+    `response.json()` не валидируется, и на `{"error": "..."}` цикл шёл бы по
+    СТРОКОВЫМ ключам, а `str.get` давал бы AttributeError — пятисотку через
+    generic_error_handler вместо внятной плашки.
+    """
+    async with _Db() as session:
+        account = await _seed_account(session)
+        await _add_group(session, account, "g1", "Живая")
+
+        result = await apply_group_resync(
+            session, account, {"error": "boom"}, messenger_type="wa"
+        )
+        await session.commit()
+
+        assert result.error == MALFORMED_RESPONSE_MESSAGE
+        assert (result.found, result.created, result.missing) == (0, 0, 0)
+        assert (await _groups(session, account))[0].missing_since is None
+        assert account.last_synced_at is None
+
+
+@pytest.mark.asyncio
+async def test_scalar_items_are_skipped_without_losing_the_rest():
+    """Мусорный ЭЛЕМЕНТ стоит пропуска одной группы, а не всего синка.
+
+    Ошибся отдельный чат, а не мост, поэтому отказ целиком здесь был бы
+    несоразмерен: остальные группы аккаунта обязаны доехать.
+    """
+    async with _Db() as session:
+        account = await _seed_account(session)
+
+        result = await apply_group_resync(
+            session,
+            account,
+            [1, None, "g1", {"id": "g2", "name": "Настоящая"}, []],
+            messenger_type="wa",
+        )
+        await session.commit()
+
+        assert result.error is None
+        assert (result.found, result.created) == (1, 1)
+        assert [g.group_external_id for g in await _groups(session, account)] == ["g2"]
+
+
+@pytest.mark.asyncio
+async def test_overlong_name_and_id_are_trimmed_to_the_column():
+    """Имя и идентификатор обрезаются по границе колонки (обе String(255)).
+
+    Класс дефекта, который зелёная суита поймать не может: на SQLite длина не
+    проверяется вовсе, а на PostgreSQL строка длиннее 255 роняет commit с
+    DataError — то есть ломается только прод.
+    """
+    async with _Db() as session:
+        account = await _seed_account(session)
+
+        result = await apply_group_resync(
+            session,
+            account,
+            [{"id": "i" * 5000, "name": "и" * 5000}],
+            messenger_type="wa",
+        )
+        await session.commit()
+
+        assert result.created == 1
+        group = (await _groups(session, account))[0]
+        assert len(group.name) == 255
+        assert len(group.group_external_id) == 255
+
+
+@pytest.mark.asyncio
+async def test_nameless_group_falls_back_to_the_trimmed_id():
+    """Пустое имя подменяется идентификатором — и он тоже обрезан.
+
+    Ветка `name or external_id` существовала и раньше, но обрезки в ней не
+    было: длинный идентификатор уезжал в колонку имени в полную длину.
+    """
+    async with _Db() as session:
+        account = await _seed_account(session)
+
+        await apply_group_resync(
+            session, account, [{"id": "i" * 5000, "name": ""}], messenger_type="wa"
+        )
+        await session.commit()
+
+        group = (await _groups(session, account))[0]
+        assert group.name == "i" * 255
 
 
 @pytest.mark.asyncio

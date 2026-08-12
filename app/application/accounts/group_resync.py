@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,11 +72,28 @@ EMPTY_RESPONSE_MESSAGE = (
     "мессенджер вернул пустой состав групп — пометки не ставились"
 )
 
+MALFORMED_RESPONSE_MESSAGE = (
+    "мессенджер вернул состав групп не списком — синхронизация не выполнена"
+)
+
+# Границы колонок `groups.group_external_id` и `groups.name` (обе String(255)).
+# Числа продублированы здесь намеренно: обрезка обязана происходить ДО того,
+# как значение попадёт в сессию, а модель на этом уровне не читается — хелпер
+# знает про недоверенность входа, а не про DDL.
+#
+# Почему обрезка, а не отказ: на SQLite (вся тестовая суита) длина не
+# проверяется вовсе, а на PostgreSQL (прод) строка длиннее 255 роняет commit
+# с DataError — то есть класс дефекта, который ни один зелёный тест поймать не
+# может. Обрезанное имя чата читается хуже полного, но синхронизация целого
+# аккаунта из-за одного длинного названия падать не должна.
+_EXTERNAL_ID_MAX = 255
+_NAME_MAX = 255
+
 
 async def apply_group_resync(
     session: AsyncSession,
     account: MessengerAccount,
-    fetched: Iterable[Mapping[str, Any]],
+    fetched: Sequence[Mapping[str, Any]],
     *,
     messenger_type: str,
     allow_full_wipe: bool = False,
@@ -86,7 +103,14 @@ async def apply_group_resync(
     `fetched` — последовательность словарей `{"id": ..., "name": ...}` ровно
     того формата, что уже отдают `messenger.get_groups()` и поле `groups`
     ответа `get_sync_status()`. Содержимое НЕДОВЕРЕННОЕ: и идентификатор, и имя
-    приходят из внешней системы.
+    приходят из внешней системы — и с этой недоверенностью здесь ЧТО-ТО
+    ДЕЛАЕТСЯ, а не только объявляется. Форма всего ответа проверяется, мусорные
+    элементы пропускаются, идентификатор и имя обрезаются по границе колонки.
+
+    Аннотация — `Sequence`, а не `Iterable`, намеренно: проверка формы отвергает
+    всё, что не список и не кортеж, и это ровно то, что передают все три
+    вызывающих. Генератор сюда передать нельзя — состав групп приходит
+    материализованным из `response.json()`.
 
     `allow_full_wipe` снимает предохранитель вырожденного ответа (см. ниже).
     По умолчанию он взведён, и ни один существующий вызывающий его не снимает:
@@ -96,6 +120,20 @@ async def apply_group_resync(
 
     Не коммитит. Возвращает счётчики и записывает их на аккаунт.
     """
+    # ФОРМА ВСЕГО ОТВЕТА. Недоверенность входа объявлена докстрингом, но до
+    # этой проверки ни разу не проверялась: `response.json()` моста мог отдать
+    # JSON-объект (`{"error": "..."}`), и цикл ниже пошёл бы по СТРОКОВЫМ
+    # ключам, а `str.get` дал бы AttributeError — то есть пятисотку через
+    # generic_error_handler вместо внятной плашки. Отказ здесь называет
+    # причину той же формой, что и любой другой отказ синка.
+    if not isinstance(fetched, (list, tuple)):
+        result = GroupResyncResult(
+            found=0, created=0, renamed=0, missing=0, error=MALFORMED_RESPONSE_MESSAGE
+        )
+        # `last_synced_at` не трогается: синхронизация не состоялась.
+        account.last_sync_result = _encode_result(result)
+        return result
+
     # Двойной скоуп (T-03-06): внешний идентификатор уникален внутри
     # мессенджера, но не внутри нашей базы — у другого пользователя может
     # лежать группа с тем же group_external_id. Условие по владельцу здесь
@@ -116,17 +154,24 @@ async def apply_group_resync(
     seen: set[str] = set()
 
     for item in fetched:
+        # Мусорный ЭЛЕМЕНТ не роняет весь синк: массив скаляров (`[1, 2, 3]`)
+        # или подмешанный null стоят пропуска одной группы, а не потери всей
+        # переинвентаризации аккаунта. Отказ целиком оставлен только форме
+        # ответа выше — там ошибся мост, а не отдельный чат.
+        if not isinstance(item, Mapping):
+            continue
         external_id = item.get("id")
         if external_id is None:
             continue
-        external_id = str(external_id)
+        external_id = str(external_id)[:_EXTERNAL_ID_MAX]
         if external_id in seen:
             # Дубли внутри одного ответа мессенджера схлопываются: вторая
             # запись про ту же группу не должна порождать вторую строку.
             continue
         seen.add(external_id)
 
-        name = item.get("name") or external_id
+        raw_name = item.get("name")
+        name = (str(raw_name) if raw_name else external_id)[:_NAME_MAX]
         group = existing.get(external_id)
 
         if group is None:
