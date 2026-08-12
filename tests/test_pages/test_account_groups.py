@@ -469,6 +469,18 @@ async def test_toggle_is_a_real_post_form(
     assert 'method="post"' in opening.lower(), "форма тумблера не POST"
     assert "x-on:change" in opening, "перехват отправки навешен не на саму форму"
 
+    # Перехвата на форме для базового пути НЕДОСТАТОЧНО, и прежняя редакция
+    # теста этого не ловила: форма, внутри которой один лишь чекбокс, без JS не
+    # отправляется никак — неявной отправки по Enter спецификация для неё не
+    # предусматривает. Проверяется наличие элемента, который отправляет форму
+    # САМ, а не через Alpine.
+    body = html[form_match.end():]
+    body = body[: body.index("</form>")]
+    assert re.search(r'<button[^>]*type="submit"', body), (
+        "в форме тумблера нет элемента, отправляющего её без JS: "
+        "при неподнявшемся Alpine группу нельзя ни включить, ни выключить"
+    )
+
 
 @pytest.mark.asyncio
 async def test_accounts_screen_links_to_the_account_groups(
