@@ -4,22 +4,17 @@ import structlog.contextvars
 from datetime import datetime, timezone
 
 from celery import shared_task
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
 
 from app.config import get_settings
 from app.database import get_engine, get_session_factory
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
-from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.services.billing_cache import check_balance_cached, invalidate_balance_cache
 from app.services.billing_service import deduct_message
 from app.services.messenger_factory import create_messenger
-from app.services.s3 import get_image_url
-from app.services.schedule_service import compute_next_run_at
 from app.application.accounts.group_resync import (
     UNEXPECTED_FAILURE_MESSAGE,
     apply_group_resync,
