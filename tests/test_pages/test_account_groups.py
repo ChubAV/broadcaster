@@ -1578,6 +1578,47 @@ async def test_success_plashka_shows_the_missing_segment_when_nonzero(
 
 
 @pytest.mark.asyncio
+async def test_plashka_with_missing_groups_is_not_painted_as_success(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Массовая пропажа групп не имеет права выглядеть зелёной плашкой успеха.
+
+    Ветвление плашки было бинарным — есть `error` или нет, — поэтому сводка
+    «найдено 0, новых 0, обновлено имён 0, не найдено 42» красилась зелёным:
+    сообщение об исчезновении ВСЕХ групп аккаунта в тоне «всё хорошо».
+    Красный тут тоже неверен — синк состоялся, повторять его незачем.
+    """
+    account = await _seed_account_with_result(
+        db_session, _summary(found=0, new=0, renamed=0, missing=42)
+    )
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "не найдено 42" in html
+    assert "alert--warning" in html
+    assert "alert--success" not in html
+
+
+@pytest.mark.asyncio
+async def test_plashka_stays_success_while_nothing_went_missing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парный к предыдущему: без пропаж плашка остаётся зелёной.
+
+    Без этой стороны предупреждающий тон мог бы стоять всегда, и цвет перестал
+    бы что-либо различать.
+    """
+    account = await _seed_account_with_result(
+        db_session, _summary(found=9, new=2, renamed=1, missing=0)
+    )
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "alert--success" in html
+    assert "alert--warning" not in html
+
+
+@pytest.mark.asyncio
 async def test_plashka_renders_exactly_once(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
