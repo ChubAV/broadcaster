@@ -11,7 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import AD_STATUS_PUBLISHED
 from app.models.ad import Ad
+from app.models.messenger_account import MessengerAccount
 from app.models.user import User
+from tests.conftest import seed_group
 
 
 # --- UI-01: своя статика вместо CDN -----------------------------------------
@@ -301,6 +303,57 @@ async def test_ad_editor_page_gets_the_full_shell_treatment(
     assert any("app.css" in r for r in static_refs), route
     # 4. Подсвечен ровно один раздел
     assert html.count("is-active") == 1, route
+
+
+@pytest.mark.asyncio
+async def test_account_groups_page_gets_the_full_shell_treatment(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Экран групп аккаунта — замена вклада снесённого раздела в обход (03-08).
+
+    Адрес несёт path-параметр и в SHELL_ROUTES по построению не входит — то же
+    решение, что у редактора объявления взамен снятого `/schedules/new`. Все
+    четыре утверждения обхода воспроизведены здесь на одной странице, а не
+    потеряны вместе со строкой перечня.
+    """
+    user = (
+        await db_session.execute(select(User).where(User.email == "testuser@test.com"))
+    ).scalar_one()
+    account = MessengerAccount(
+        user_id=user.id, type="wa", credentials="session", status="active"
+    )
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
+    await seed_group(db_session, account.id, name="Группа обхода")
+
+    route = f"/accounts/{account.id}/groups"
+    response = await authed_client.get(route)
+    assert response.status_code == 200, route
+    html = response.text
+
+    # 1. Шелл целиком
+    assert "data-shell" in html, route
+    assert "data-nav" in html, route
+    assert "data-tabs" in html, route
+    # 2. Ни одного стороннего ресурса
+    _assert_no_external_assets(html, route)
+    # 3. Статика версионирована
+    static_refs = [r for r in ASSET_REF_RE.findall(html) if "/static/" in r]
+    assert static_refs, f"{route}: ссылок на статику не найдено"
+    for ref in static_refs:
+        assert re.search(r"\?v=\S+", ref), f"{route}: ссылка без версии — {ref}"
+    assert any("app.css" in r for r in static_refs), route
+    # 4. Подсвечен ровно один раздел — «Аккаунты», внутри которых живёт экран
+    assert html.count("is-active") == 1, route
+
+    # Порция прокрутки экрана — ФРАГМЕНТ: шелла в ней быть не должно. Это
+    # замена вклада `/groups/partial` в PARTIAL_ROUTES: адрес порции тоже несёт
+    # идентификатор аккаунта и в статический перечень не входит.
+    partial = await authed_client.get(f"{route}/partial?offset=0&limit=30")
+    assert partial.status_code == 200
+    assert "data-shell" not in partial.text
+    _assert_no_external_assets(partial.text, f"{route}/partial")
 
 
 @pytest.mark.asyncio
