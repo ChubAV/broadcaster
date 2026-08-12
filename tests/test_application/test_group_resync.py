@@ -588,6 +588,38 @@ async def test_foreign_group_with_same_external_id_untouched():
 
 
 @pytest.mark.asyncio
+async def test_row_with_a_diverged_user_id_is_updated_not_inserted_again():
+    """Скоуп поиска совпадает со скоупом `uq_groups_account_external`.
+
+    Ограничение скоупится ТОЛЬКО `account_id`. Пока словарь существующих строк
+    строился ещё и по `user_id`, строка с разошедшимся владельцем (миграция
+    данных, ручная правка) в него не попадала: хелпер считал группу новой,
+    вставлял вторую строку на ту же пару и упирался в ограничение — то есть
+    защитное условие превращало безобидное расхождение в отказ синхронизации
+    ВСЕГО аккаунта.
+    """
+    async with _Db() as session:
+        account = await _seed_account(session)
+        stray = await _add_group(session, account, "g1", "Старое имя")
+        # Расхождение владельца ровно того вида, что оставляет ручная правка.
+        stray.user_id = account.user_id + 1000
+        await session.commit()
+
+        result = await apply_group_resync(
+            session, account, _fetched(("g1", "Новое имя")), messenger_type="wa"
+        )
+        await session.commit()
+
+        assert (result.created, result.renamed) == (0, 1), (
+            "строка с чужим user_id принята за новую — коммит упрётся в "
+            "уникальное ограничение и уронит синк всего аккаунта"
+        )
+        rows = await _groups(session, account)
+        assert len(rows) == 1
+        assert rows[0].name == "Новое имя"
+
+
+@pytest.mark.asyncio
 async def test_result_is_written_onto_account():
     """D-12: время и результат синка сохраняются на аккаунте в разбираемом виде."""
     async with _Db() as session:
