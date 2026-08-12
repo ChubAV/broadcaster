@@ -32,6 +32,13 @@ router = APIRouter(tags=["pages"])
 # перечень, который придётся поддерживать ради страницы, которой нет.
 @router.get("/groups")
 @router.get("/groups/{deep_link:path}")
-async def groups_retired(deep_link: str = "") -> RedirectResponse:
+async def groups_retired(
+    # ПАРАМЕТР НЕ ЧИТАЕТСЯ И НЕ ДОЛЖЕН — перенаправление безусловно (T-03-35).
+    # Он объявлен ТОЛЬКО чтобы FastAPI принял путевой параметр `{deep_link:path}`
+    # второго декоратора: без него регистрация маршрута падает. Значение по
+    # умолчанию нужно первому декоратору, у которого этого сегмента нет вовсе.
+    # Снять аргумент по подсказке линтера «неиспользуемый» — сломать маршрут.
+    deep_link: str = "",  # noqa: ARG001
+) -> RedirectResponse:
     """Старый адрес раздела ведёт на экран аккаунтов."""
     return RedirectResponse(url="/accounts", status_code=302)
