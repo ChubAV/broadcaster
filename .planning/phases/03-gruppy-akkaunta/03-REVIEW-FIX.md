@@ -1,294 +1,238 @@
 ---
 phase: 03-gruppy-akkaunta
-fixed_at: 2026-08-12T00:00:00Z
+fixed_at: 2026-08-12T20:55:00Z
 review_path: .planning/phases/03-gruppy-akkaunta/03-REVIEW.md
 iteration: 1
-findings_in_scope: 7
-fixed: 7
+findings_in_scope: 15
+fixed: 15
 skipped: 0
 status: all_fixed
 ---
 
-# Phase 3: Code Review Fix Report
+# Phase 03: Code Review Fix Report
 
 **Fixed at:** 2026-08-12
 **Source review:** `.planning/phases/03-gruppy-akkaunta/03-REVIEW.md`
 **Iteration:** 1
+**Scope:** all (Critical + Warning + Info)
 
 **Summary:**
-- Findings in scope: 7 (CR-01, CR-02, WR-01 … WR-05)
-- Fixed: 7
+- Findings in scope: 15 (1 critical, 5 warning, 9 info)
+- Fixed: 15
 - Skipped: 0
-- Out of scope (untouched): IN-01 … IN-08
 
-## Verification
-
-**Где прогонялись гейты:** правки делались и коммитились в изолированном
-git-worktree (`.claude/worktrees/rf-03-…`), а pytest запускался интерпретатором
-основного чекаута (`/source/broadcaster/.venv/bin/python -m pytest`) с рабочим
-каталогом внутри worktree. У worktree нет собственного `.venv`, поэтому
-окружение зависимостей — то же самое, что в основном чекауте; воспроизвести
-цифры после сноса worktree можно из `master` тем же интерпретатором.
-
-| Прогон | Результат |
-|---|---|
-| Базовая линия (после CR-01, до остальных правок) | 1052 passed |
-| Полная суита на итоговом дереве | **1069 passed, 0 failed** (12:06) |
-
-Каждая правка дополнительно проверялась целевым подмножеством перед своим
-коммитом. Прирост +17 тестов — новые проверки, перечисленные ниже.
-
-**Гейты, которые НЕ прогонялись:** линтера в окружении нет (`ruff` не
-установлен — это отдельно отмечено в IN-01), миграция 0015 прогонялась только
-round-trip'ом на SQLite; на PostgreSQL она не выкатывалась.
+**Verification:** правки применялись и коммитились в изолированном git-worktree
+(`.claude/worktrees/rf-03-…`, ветка `gsd-reviewfix/03-…`), затем ветка
+fast-forward-ом переносилась на `master`. Тесты гонялись ТАМ ЖЕ, интерпретатором
+основного checkout-а (`/source/broadcaster/.venv/bin/python -m pytest`) — в
+worktree нет собственного `.venv`. Полная суита после последней правки: **1083
+passed** (11 мин 51 с). Числа воспроизводимы из основного checkout-а после
+fast-forward: worktree отличался от него только исходниками, среда была общая.
 
 ## Fixed Issues
 
-### CR-01: Ветка записи отказа синхронизации недостижима
+### CR-01: Ревизия 0015 удаляет строки `groups`, но не переписывает ссылки на них в `schedules.group_ids`
 
-**Files modified:** `app/messengers/base.py`, `app/messengers/whatsapp.py`,
-`app/messengers/max.py`, `app/messengers/telegram_user.py`,
-`app/pages/accounts.py`, `tests/test_messengers/test_whatsapp.py`,
-`tests/test_messengers/test_max.py`, `tests/test_messengers/test_telegram_user.py`,
-`tests/test_routes/test_sync_groups.py`
-**Commit:** `c6a1634`
+**Files modified:** `alembic/versions/0015_groups_unique_account_external.py`, `tests/test_migrations/test_0015_groups_unique_account_external.py`
+**Commit:** `96affc3`
+**Applied fix:** перед `_DROP_DUPLICATES` добавлен шаг `_remap_schedule_group_ids`:
+строит соответствие «удаляемый дубль → выживший» (`_DUPLICATE_MAP`), построчно
+переводит `schedules.group_ids` и схлопывает дубликаты, возникшие после перевода
+(расписание, выбравшее ОБЕ строки одной группы, не должно слать в чат дважды).
+Параметр UPDATE объявлен `sa.JSON()` bindparam-ом — сериализацию берёт диалект,
+поэтому шаг работает и на SQLite (TEXT), и на PostgreSQL (`json`, куда текстовый
+литерал без приведения не принимается); чтение принимает и строку, и уже
+десериализованный список. Не-целые элементы проходят насквозь — ревизия не имеет
+права упасть на мусоре в чужой базе. Докстринг ревизии переписан: оправдание
+«переписать эти ссылки ревизия не может» заменено на описание инварианта.
+Тестовая схема 0014 дополнена таблицей `schedules`, добавлены
+`test_schedule_reference_to_a_dropped_duplicate_is_remapped` (висячая ссылка
+переезжает; выбор обеих строк схлопывается; расписание без дублей не трогается) и
+`test_schedule_group_ids_survive_when_there_are_no_duplicates` (без дублей шаг не
+переписывает ничего).
 
-**Applied fix:** Заведён `MessengerFetchError` в `app/messengers/base.py` —
-общий дом для всех трёх адаптеров (в REVIEW.md класс предлагался внутри
-`whatsapp.py`; общий модуль выбран, чтобы `max.py` и `telegram_user.py` не
-импортировали друг у друга). Все три `get_groups()` перестали глушить отказ:
-не-200 и обрыв соединения поднимают исключение, пустой список означает ровно
-«групп нет». У Telethon `raise` поставлен внутри `except` перед `finally`,
-поэтому сессия по-прежнему закрывается на пути отказа (закреплено
-`assert_awaited` на `disconnect`).
+### WR-01: Задача отправки создаётся для группы, строки которой больше нет
 
-**Отклонение от текста REVIEW.md:** широкий `except Exception` в
-`accounts_sync_groups` СОХРАНЁН и стоит ПОСЛЕ узкого `except
-MessengerFetchError`, а не заменён им. Причина: `RuntimeError("Cannot start
-wa-worker")` поднимается свойством `bridge_url` ДО запроса за составом групп и
-`MessengerFetchError`'ом не является; сузив блок, мы вернули бы на экран
-стек-трейс там, где раньше была красная плашка. Узкая ветка нужна для
-отдельного лог-события и точного сообщения, широкая — как страховка.
+**Files modified:** `app/application/scheduling/use_cases.py`, `tests/test_application/test_collect_due_inactive_group.py`
+**Commit:** `afdfbbc`
+**Applied fix:** `if group is None: continue` вынесено ОТДЕЛЬНОЙ веткой перед
+проверкой включённости, с `logger.warning("group_skipped_missing", …)` —
+«группы нет» и «группа выключена» различимы в логе, и уровень разный (висячая
+ссылка — расхождение данных, а не решение пользователя). Избыточное `if group:`
+внутри ветки `wa`/`max` снято: второе определение «группа есть» разъехалось бы с
+первым. Добавлены три теста (все три канала: задача не создаётся; соседняя живая
+группа шлёт дальше; в `SendLog` ничего не пишется).
 
-**Проверено перед сменой контракта:** единственные потребители `get_groups()` в
-приложении — три ветки `app/pages/accounts.py`; `app/messengers/base.py` —
-абстракция, `max_worker/main.py:1022` — HTTP-эндпоинт самого воркера, не
-вызывающий. Celery-таски состав групп берут из `get_sync_status()`, а не из
-`get_groups()`.
+### WR-02: Текст произвольного исключения уезжает в пользовательскую плашку
 
-**Тесты:** все три адаптерных теста переведены на `pytest.raises` и вызывают
-НАСТОЯЩИЙ класс с подменённым HTTP-слоем (`patch("…get_http_client")`), как
-требовал review. Добавлены парные тесты «пустой ответ 200 — не ошибка» (иначе
-исключение могло бы поехать и на валидной пустоте). Добавлен страничный
-`test_bridge_failure_reaches_the_account_through_the_real_adapter`: живой
-`WhatsAppMessenger` + подменённые `ensure_wa_container` и HTTP-клиент,
-проверяет, что 502 от моста ложится на аккаунт ошибкой И не помечает ни одной
-группы.
+**Files modified:** `app/application/accounts/group_resync.py`, `app/pages/accounts.py`, `app/worker/tasks.py`, `tests/test_routes/test_sync_groups.py`
+**Commit:** `f9a1b3d`
+**Applied fix:** заведена константа `UNEXPECTED_FAILURE_MESSAGE` рядом с
+`EMPTY_RESPONSE_MESSAGE`/`MALFORMED_RESPONSE_MESSAGE`; все три широких обработчика
+(`accounts.py` и оба фоновых пути в `tasks.py`) пишут на аккаунт её вместо
+`str(e) or e.__class__.__name__`. Исходный текст остаётся в логе с
+`exc_info=True`. Узкие ветки (`MessengerFetchError`, состояние моста, таймаут)
+сохранили свои тексты — они формируются нами.
+`test_sync_failure_is_recorded_not_swallowed` переписан: теперь утверждает и
+«отказ не потерян», и «детали исключения на экран не уехали». Ветку узкого
+исключения по-прежнему держит
+`test_bridge_failure_reaches_the_account_through_the_real_adapter` (`"502" in
+result["error"]`).
 
----
+### WR-03: Карточка редактора запрещает ПОСТАВИТЬ НА ПАУЗУ активное неполное расписание
 
-### CR-02: Пустой ответ мессенджера принимается за авторитетную опись
+**Files modified:** `app/templates/ads/includes/sched_card.html`, `tests/test_pages/test_editor_schedules.py`
+**Commit:** `2e90f28`
+**Applied fix:** введено `resume_blocked = not s.is_active and not complete` —
+буквально то же выражение, что в `schedules/includes/schedule_row.html` и в
+обработчике `app/pages/schedules.py`; `disabled` и подпись тумблера переведены на
+него, текст исправлен на «Возобновить нельзя: …». Существующий тест пустого
+аккаунта пересеян выключенным расписанием (недоступность относится именно к
+возобновлению), добавлен
+`test_active_incomplete_schedule_can_still_be_paused_from_the_editor`.
 
-**Files modified:** `app/application/accounts/group_resync.py`,
-`app/worker/tasks.py`, `tests/test_application/test_group_resync.py`,
-`tests/test_routes/test_sync_groups.py`
-**Commit:** `8de235f`
+### WR-04: `IntegrityError` на новом ограничении не обработан — вместо плашки JSON-пятисотка
 
-**Applied fix:** В `apply_group_resync` добавлен предохранитель `if existing and
-not seen and not allow_full_wipe` — ровно как предложено в REVIEW.md. Результат
-с `error=EMPTY_RESPONSE_MESSAGE` записывается на аккаунт той же формой
-`last_sync_result`, поэтому существующая ветка красной плашки его уже рисует.
-`last_synced_at` не переставляется (согласовано с WR-02). Флаг
-`allow_full_wipe=False` по умолчанию; ни один вызывающий его не снимает.
+**Files modified:** `app/pages/accounts.py`, `tests/test_routes/test_sync_groups.py`
+**Commit:** `7717564`
+**Applied fix:** `await db.commit()` обёрнут в `try/except IntegrityError`:
+откат, событие `sync_groups_conflict`, повторное получение аккаунта и
+`record_sync_failure(…, "Синхронизация уже выполнялась — откройте экран заново")`.
+В событие лога идут только собственные значения обработчика — после отката
+атрибуты `account` просрочены, и обращение к `account.type` тянуло бы ленивую
+догрузку вне greenlet-контекста, то есть новое исключение внутри обработчика
+исключения (это и произошло на первом прогоне теста). Добавлен
+`test_constraint_conflict_becomes_a_summary_not_a_json_five_hundred`: редирект
+вместо 500, след на аккаунте, отсутствие SQL в тексте, откат второй строки.
 
-Предохранитель безопасно стоит ПОСЛЕ основного цикла: `created`/`renamed`
-растут только после `seen.add`, поэтому пустой `seen` гарантирует, что сессия
-ещё не тронута и откатывать нечего (это выписано комментарием в коде).
+**Требует внимания человека:** ветка воспроизводится в тесте подменой
+`apply_group_resync`, а не настоящей гонкой двух POST-ов — реальный параллельный
+сценарий на PostgreSQL тестом не покрыт.
 
-**Сверх текста REVIEW.md:** обе Celery-таски теперь логируют отклонённый ответ
-отдельным событием `sync_response_rejected` вместо `sync_complete` — иначе в
-логе вырожденный ответ выглядел бы успешным синком.
+### WR-05: Внешний идентификатор группы молча обрезается до 255 символов
 
-**Тесты:** `test_empty_response_marks_all_and_deletes_none` закреплял ровно
-дефектное поведение и переписан в
-`test_empty_response_marks_nothing_and_deletes_none`. Добавлены
-`test_empty_response_on_empty_account_is_a_normal_zero_sync` (предохранитель не
-бьёт по новому аккаунту без групп) и
-`test_allow_full_wipe_puts_the_decision_on_the_caller`. Страничный
-`test_sync_marks_missing_group_but_keeps_it` перестроен так, чтобы проверять
-пометку через НЕпустой ответ, и рядом добавлен
-`test_sync_refuses_to_mark_everything_on_an_empty_response`.
+**Files modified:** `app/application/accounts/group_resync.py`, `tests/test_application/test_group_resync.py`
+**Commit:** `00df236`
+**Applied fix:** обрезка `group_external_id` заменена на пропуск ЭЛЕМЕНТА —
+той же реакцией, что уже применяется к любому другому негодному элементу ответа.
+Обрезка `name` оставлена как есть (цена ошибки косметическая); комментарий у
+`_EXTERNAL_ID_MAX` теперь объясняет, почему реакции разные. Старый тест разделён:
+`test_overlong_name_is_trimmed_to_the_column`,
+`test_overlong_external_id_skips_the_group_instead_of_trimming_it` (соседняя
+годная группа уцелела), `test_two_overlong_ids_sharing_a_prefix_do_not_collapse_into_one`
+(побочный путь к `IntegrityError`), `test_nameless_group_falls_back_to_the_id`
+(идентификатор ровно на границе колонки).
 
----
+### IN-01: Мёртвые импорты в `app/worker/tasks.py`
 
-### WR-01: Тумблер группы не работает без JavaScript
+**Files modified:** `app/worker/tasks.py`
+**Commit:** `ca00e33`
+**Applied fix:** удалены `select`, `joinedload`, `Schedule`, `get_image_url`,
+`compute_next_run_at`. Проверено, что ни один тест не патчит эти имена через
+`app.worker.tasks.*`.
 
-**Files modified:** `app/templates/account_groups/includes/group_row.html`,
-`app/static/css/app.css`, `tests/test_pages/test_account_groups.py`
-**Commit:** `ea0f412`
+### IN-02: `record_sync_failure` объявлена `async`, но ничего не ожидает
 
-**Applied fix:** В форму тумблера добавлена настоящая submit-кнопка, обёрнутая
-в `<span x-init="$el.remove()">`. Выбран второй вариант из REVIEW.md, а не
-`<noscript>`: `<noscript>` в проекте не используется вовсе И, что важнее, он
-закрывает только выключенный JS — а реальный сценарий из формулировки находки
-(«не навесится Alpine») означает JS включён, Alpine не загрузился. `x-init`
-закрывает оба.
+**Files modified:** `app/application/accounts/group_resync.py`
+**Commit:** `4b1e48a`
+**Applied fix:** выбран вариант «оставить `async`, но сказать это явно».
+В докстринг добавлен раздел, называющий причину (симметрия с
+`apply_group_resync`, шесть точек вызова в трёх модулях, первая же будущая
+правка с запросом вернула бы `async` обратно) и объявляющий сигнатуру
+стабильной.
 
-Добавлено одно CSS-правило (`display: inline-flex` на форме тумблера): без него
-резервная кнопка вставала бы ПОД тумблер и ломала высоту строки-карточки — при
-живом Alpine правило не проявляется, потому что кнопки уже нет.
+### IN-03: Заглушка `/groups` объявляет параметр, которым не пользуется
 
-**Тесты:** `test_toggle_is_a_real_post_form` проверял только открывающий тег
-формы и потому дефект не ловил; теперь он разбирает тело формы и требует
-наличия элемента с `type="submit"`.
+**Files modified:** `app/pages/groups.py`
+**Commit:** `994723f`
+**Applied fix:** параметр сохранён, причина названа комментарием прямо в
+сигнатуре (нужен, чтобы FastAPI принял `{deep_link:path}`; снятие ломает
+маршрут), добавлен `# noqa: ARG001`.
 
----
+### IN-04: «Все группы удалены» показывается аккаунту, у которого групп никогда не было
 
-### WR-02: Неудавшийся синк переставляет `last_synced_at`
+**Files modified:** `app/templates/account_groups/list.html`, `tests/test_pages/test_account_groups.py`
+**Commit:** `8e7eded`
+**Applied fix:** ветка пустого состояния различается не только по
+`last_synced_at`, но и по сводке: удавшийся синк с `found == 0 and new == 0 and
+missing == 0` означает «групп нет». Сводка с `error` в счёт не идёт — при отказе
+счётчики нулевые по построению, и принимать их за «групп никогда не было»
+значило бы вернуть ту же ложь с другой стороны. Добавлены парные тесты: аккаунт
+без чатов читает «Групп пока нет»; сводка с `missing > 0` по-прежнему даёт «Все
+группы удалены».
 
-**Files modified:** `app/application/accounts/group_resync.py`,
-`tests/test_application/test_group_resync.py`,
-`tests/test_routes/test_sync_groups.py`, `tests/test_worker/test_tasks.py`
-**Commit:** `a3a454e`
+### IN-05: `SyncStatusView.group_count` считается запросом и никогда не используется
 
-**Applied fix:** Строка `account.last_synced_at = _utcnow()` убрана из
-`record_sync_failure`, докстринг объясняет почему через обоих потребителей
-колонки. Шаблон `list.html` править не потребовалось: ветка `{% elif
-account.last_synced_at %}` становится корректной сама, как только колонку
-перестаёт портить провал.
+**Files modified:** `app/application/accounts/dto.py`, `app/application/accounts/use_cases.py`, `app/pages/accounts.py`, `app/templates/accounts/partials/sync_status_card.html`
+**Commit:** `83f7af9`
+**Applied fix:** поле убрано из `SyncStatusView`, вместе с ним снят `SELECT
+Group.id …` в `get_sync_status_view` (выполнялся на каждый ответ опроса, то есть
+раз в 5 секунд на вкладку) и неиспользуемый импорт `Group`; из обработчика убран
+`group_count=…`, шаблон читает `stats.get('groups_count', 0)`. Поведение
+идентично: `_get_account_stats` кладёт `groups_count` для КАЖДОГО запрошенного
+аккаунта, а в ветках `syncing`/`sync_failed` число не печатается вовсе.
 
-**Тесты:** добавлен
-`test_record_sync_failure_does_not_move_last_synced_at`, который проверяет обе
-стороны — провал не ставит колонку на свежем аккаунте И не сдвигает её после
-удавшегося синка (без второй половины тест зеленел бы и на реализации, которая
-не пишет колонку вовсе). Добавлен страничный
-`test_failed_first_sync_leaves_the_screen_saying_groups_not_fetched_yet` на
-текст экрана («Групп пока нет», а не «Все группы удалены»), как и просил
-review. Четыре ассерта `last_synced_at is not None` в `test_tasks.py`
-инвертированы — они закрепляли исправляемое поведение.
+### IN-06: `_sync_wa_groups_async` и `_sync_max_groups_async` — посимвольные копии
 
----
+**Files modified:** `app/worker/tasks.py`
+**Commit:** `31ed3dd`
+**Applied fix:** введён `_sync_groups_async(account_id, *, messenger_type,
+messenger_factory)` с общим телом (опрос, три ветки исхода, таймаут, обработчик
+исключения) и две трёхстрочные обёртки `_sync_wa_groups_async` /
+`_sync_max_groups_async`, сохранившие прежние имена — параметризованные тесты
+`SYNC_PATHS` продолжают импортировать именно их. Имена событий лога выводятся из
+`messenger_type` (`sync_wa_groups_error` / `sync_max_groups_error`), а не
+передаются третьим рассогласуемым параметром. Фабрики адаптеров вынесены в
+`_wa_messenger` / `_max_messenger` с локальными импортами — тесты патчат
+`app.messengers.*` и продолжают работать. `POLL_INTERVAL`/`MAX_POLLS` подняты на
+уровень модуля.
 
-### WR-03: Guard `status == "syncing"` не закрывает гонку двойного нажатия
+### IN-07: У слота `caller` в `components/modal.html` нет ни одного продуктового потребителя
 
-**Files modified:** `app/models/group.py`, `app/pages/accounts.py`,
-`alembic/versions/0015_groups_unique_account_external.py`,
-`tests/test_migrations/test_0015_groups_unique_account_external.py`,
-`tests/test_migrations/test_0014_sync_result_columns.py`,
-`tests/test_pages/test_account_groups.py`
-**Commit:** `cd4714b`
+**Files modified:** `app/templates/components/modal.html`
+**Commit:** `20262c4`
+**Applied fix:** докстринг исправлен — утверждение «ПОТРЕБИТЕЛЯ у слота сегодня
+нет ни одного» заменено на названного потребителя (`ads/includes/sched_card.html`
+кладёт в слот скрытое `return_to`) и на вывод «слот не удаляется: снятие сломало
+бы живой путь, а не убрало бы мёртвый код».
 
-**Applied fix, часть 1 (сделано как предложено):** `UniqueConstraint("account_id",
-"group_external_id", name="uq_groups_account_external")` на модели + ревизия
-0015 с дедупликацией существующих строк в ней же. Ограничение создаётся через
-`batch_alter_table` — на SQLite (вся тестовая суита) именованное UNIQUE иначе
-не добавляется. Правила слияния дублей выбраны так, чтобы не потерять ни одного
-пользовательского решения: выживает строка с наименьшим id (на неё ссылаются
-расписания, созданные до появления дубля — `schedules.group_ids` хранится
-JSON-ом и переписан ревизией быть не может), выживает выключенность (ошибка
-выбирается в сторону НЕотправки — «не отправили» чинится одним нажатием,
-«отправили в выключенный чат» необратимо) и самая ранняя `missing_since`.
-Попутно снимается IN-07.
+### IN-08: `ADD CONSTRAINT` ревизии 0015 берёт исключительную блокировку
 
-**Applied fix, часть 2 — выбран второй из двух разрешённых вариантов.** REVIEW.md
-допускал «либо честно занимать статус, либо убрать ложное утверждение из
-комментария». Занимать статус здесь НЕЛЬЗЯ: запрос, умерший между «занял» и
-«освободил», оставил бы аккаунт в `syncing` навсегда — фоновой задачи, которая
-его вычистит, на страничном пути нет, а guard тогда заблокировал бы синк
-окончательно. Это хуже исходного дефекта. Комментарий переписан на правду и
-называет настоящую защиту (ограничение схемы) и настоящее следствие гонки
-(IntegrityError на коммите одного из двух запросов вместо двух строк).
+**Files modified:** `alembic/versions/0015_groups_unique_account_external.py`
+**Commit:** `695a189`
+**Applied fix:** выбран вариант «назвать размен в докстринге». Добавлен раздел:
+дисциплина 0014 нарушена осознанно, `ACCESS EXCLUSIVE` назван прямо, размен
+принят по размеру таблицы, и объяснено, почему `CREATE UNIQUE INDEX
+CONCURRENTLY` не может стоять в ЭТОЙ ревизии (индекс строился бы по несхлопнутым
+данным, и ревизия должна быть без транзакции) — разделение на две ревизии
+объявлено готовым следующим шагом.
 
-**Тесты:** новый файл round-trip ревизии 0015 (6 тестов), ключевой из них —
-`test_duplicate_rows_are_merged_not_just_deleted`: ревизия единственный раз во
-всём проекте удаляет строки `groups`, поэтому проверяется КАЖДОЕ правило
-слияния по отдельности, плюс `test_same_external_id_in_another_account_survives`
-(T-03-06) и `test_group_without_duplicates_keeps_its_disabled_state` (промах в
-`HAVING COUNT(*) > 1` выключил бы группы, которых дефект не касался).
+### IN-09: Проверка владения в `apply_group_resync` шире ограничения схемы
 
-**Побочные правки, потребовавшиеся из-за ограничения:**
-- фикстура `_seed_group` в `test_account_groups.py` выводила
-  `group_external_id` из ИМЕНИ, поэтому тест про две одноимённые группы создавал
-  две строки с одинаковым внешним идентификатором — состояние, которого он не
-  имел в виду. Идентификатор теперь берётся из счётчика;
-- `test_revision_0014_continues_0013` утверждал «0014 — голова истории»; с
-  появлением 0015 это перестало быть верно. Утверждение заменено на «история не
-  разветвилась» — то, что файл и имел в виду (его собственный докстринг это
-  предсказывал).
-
----
-
-### WR-04: Ответ мессенджера объявлен недоверенным, но не проверяется
-
-**Files modified:** `app/application/accounts/group_resync.py`,
-`tests/test_application/test_group_resync.py`
-**Commit:** `d2f71a3`
-
-**Applied fix:** Три проверки на входе хелпера, как предложено: форма всего
-ответа, пропуск не-`Mapping` элементов, обрезка `external_id` и `name` по 255.
-Аннотация `fetched` сменена с `Iterable` на `Sequence`.
-
-**Отклонение от текста REVIEW.md:** на не-список хелпер НЕ поднимает
-`ValueError`, а возвращает `GroupResyncResult(error=MALFORMED_RESPONSE_MESSAGE)`.
-`ValueError` дал бы ту же пятисотку через `generic_error_handler`, от которой
-находка и защищает, — сменился бы только тип исключения. Возврат результата
-кладёт причину на аккаунт той же формой, что и любой отказ синка, и пользователь
-видит красную плашку. Мусорные ЭЛЕМЕНТЫ при этом пропускаются, а не роняют весь
-синк: там ошибся отдельный чат, а не мост.
-
-**Тесты:** ровно три случая, названные в review, плюс четвёртый —
-`test_object_instead_of_list_is_refused_not_crashed` (`{"error": "..."}`),
-`test_scalar_items_are_skipped_without_losing_the_rest` (`[1, 2, 3]` вперемешку
-с валидной группой), `test_overlong_name_and_id_are_trimmed_to_the_column` (имя
-и id по 5000 символов) и `test_nameless_group_falls_back_to_the_trimmed_id`
-(ветка `name or external_id` тоже обязана обрезать).
-
----
-
-### WR-05: Массовая пропажа групп отображается зелёной плашкой успеха
-
-**Files modified:** `app/templates/account_groups/list.html`,
-`tests/test_pages/test_account_groups.py`
-**Commit:** `9b852b2`
-
-**Applied fix:** Вариант плашки выбирается по содержимому сводки:
-`'warning' if missing > 0 else 'success'`. Класс `alert--warning` в
-`app/static/css/app.css:797` уже существовал — новых стилей не понадобилось.
-Красный сознательно не используется: синк состоялся, повторять его незачем.
-
-**Тесты:** `test_plashka_with_missing_groups_is_not_painted_as_success` и парный
-`test_plashka_stays_success_while_nothing_went_missing` — без второй стороны
-предупреждающий тон мог бы стоять всегда, и цвет перестал бы что-либо различать.
+**Files modified:** `app/application/accounts/group_resync.py`, `tests/test_application/test_group_resync.py`
+**Commit:** `fb14859`
+**Applied fix:** снято условие `Group.user_id == account.user_id` — скоуп поиска
+существующих строк теперь совпадает со скоупом `uq_groups_account_external`
+(только `account_id`). Изоляция T-03-06 сохранена: чужая группа висит на чужом
+аккаунте, что закреплено существующим
+`test_foreign_group_with_same_external_id_untouched`. Добавлен
+`test_row_with_a_diverged_user_id_is_updated_not_inserted_again` — тот самый
+случай, который прежде превращал безобидное расхождение в отказ синка всего
+аккаунта.
 
 ## Skipped Issues
 
-Пропущенных находок нет.
+Нет — все 15 находок применены.
 
-## Требует человеческой проверки
+## Notes
 
-Автоматическая верификация (перечитывание файла + зелёная суита) подтверждает
-синтаксис и отсутствие регрессий, но не семантику. Две правки меняют
-ПОВЕДЕНИЕ, а не только форму, и их стоит подтвердить глазами:
-
-1. **CR-02 — порог предохранителя.** Условие `existing and not seen` отклоняет
-   любой ответ, не содержащий ни одной ранее известной группы. Побочное
-   следствие: пользователь, который действительно вышел из всех чатов сразу,
-   получит красную плашку вместо пометок и должен будет удалить группы вручную.
-   Это осознанный размен, но он затрагивает живой сценарий.
-2. **WR-03 — ревизия 0015 удаляет строки.** Единственное место во всём проекте,
-   где миграция удаляет данные из `groups`. Правила слияния (наименьший id,
-   выключенность, самая ранняя пометка) проверены тестом на SQLite, но на
-   продовой PostgreSQL ревизия не прогонялась, а целевая база по STATE.md стоит
-   на 0012 — выкат будет прыжком 0012 → 0015. **Перед выкатом стоит снять
-   слепок таблицы `groups` и посчитать
-   `SELECT account_id, group_external_id, COUNT(*) FROM groups GROUP BY 1,2
-   HAVING COUNT(*) > 1`** — если дублей нет, ревизия сведётся к добавлению
-   ограничения.
-
-Отдельно: с WR-03 гонка двойного нажатия заканчивается `IntegrityError` на
-коммите, то есть пятисоткой. Это лучше молчаливого дубля, но обработчиком не
-перехватывается — если такой отказ окажется заметным на практике, его стоит
-довести до плашки отдельной находкой.
+- Каждая правка закоммичена отдельно; порядок коммитов совпадает с порядком
+  разделов выше.
+- После правок CR-01 и IN-06 менялась структура файлов (новая функция ревизии,
+  слияние двух фоновых путей) — их стоит перечитать глазами при верификации, а
+  не полагаться только на зелёную суиту.
+- WR-04 помечен как требующий человеческой проверки: тест воспроизводит конфликт
+  подменой хелпера, а не настоящей параллельной записью.
 
 ---
 
