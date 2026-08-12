@@ -1,7 +1,12 @@
 {% extends "base.html" %}
-{% from "components/button.html" import link_button %}
+{% from "components/badge.html" import badge %}
+{% from "components/button.html" import button, link_button %}
 {% from "components/card.html" import card_open, card_close %}
 {% from "components/empty_state.html" import empty_state %}
+{% from "components/field.html" import field %}
+{% from "components/filters.html" import filters %}
+{% from "components/mono.html" import mono %}
+{% from "includes/messenger_icon.html" import messenger_icon %}
 {% from "account_groups/includes/group_row.html" import group_row %}
 
 {% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
@@ -9,33 +14,126 @@
 
 {% block title %}{{ account_label }} — группы аккаунта — Broadcaster{% endblock %}
 
-{# Контракт «страница → шелл» (План 01-01): заголовок раздела и его действия
-   рендерит шапка шелла, собственного заголовка у страницы нет.
+{# Контракт «страница → шелл» (План 01-01): заголовок раздела рендерит шапка
+   шелла, собственного заголовка у страницы нет.
 
-   Действие «Синхронизировать всё» из UI-SPEC приходит планом 03-06 вместе с
-   результатом синка: этот план доказывает срез «маршрут → владение → выборка →
-   шаблон → форма → БД», а не собирает шапку экрана целиком. #}
+   Действия экрана живут в КАРТОЧКЕ АККАУНТА ниже, а не в блоке page_actions:
+   так их рисует макет (строки 906–920), и так «К аккаунтам» стоит рядом с тем
+   аккаунтом, к которому относится. Дублировать ссылку в шапке шелла нельзя —
+   одно действие на экране обязано быть в одном месте. Кнопка «Синхронизировать
+   всё» встанет в ту же карточку планом 03-06. #}
 {% block page_title %}{{ account_label }}{% endblock %}
 {% block page_subtitle %}Группы аккаунта: включение, удаление и повторная синхронизация{% endblock %}
-{% block page_actions %}
-{{ link_button('К аккаунтам', '/accounts', variant='ghost') }}
-{% endblock %}
 
 {% block content %}
 
+{#- Шапка аккаунта. Mono-строка идентичности ЧЕСТНА в каждой ветке: незаполненное
+    время последнего синка читается словами, а не выдуманным «0 минут назад»
+    (UI-SPEC E1 empty, Pitfall 2).
+
+    Телефона в строке нет и быть не может: колонки телефона у аккаунта не
+    существует, а `credentials` для Telegram хранит СТРОКУ СЕССИИ, для WhatsApp
+    — идентификатор сессии. Вывод этого поля в разметку означал бы утечку
+    сессии мессенджера, поэтому сегмент отсутствует вместе со своим
+    разделителем — ровно ветка `partial` контракта E1, а не упущение. -#}
+{% if account.status == 'syncing' %}
+{% set identity_line = 'синхронизация идёт сейчас' %}
+{% elif account.last_synced_at %}
+{% set identity_line = 'последняя синхронизация ' ~ time_ago_for_user(account.last_synced_at, user) %}
+{% else %}
+{% set identity_line = 'синхронизация ещё не выполнялась' %}
+{% endif %}
+<div data-acct-head>
+  {%- if account.type in MESSENGER_LABELS %}
+  <span class="acct-head__plate">{{ messenger_icon(account.type, size='avatar', show_label=false) }}</span>
+  {%- endif %}
+  <div class="acct-head__id">
+    <h2 class="acct-head__name">{{ account_label }}</h2>
+    {{ mono(identity_line) }}
+  </div>
+  {#- Словарь статусов — тот же, что на экране «Аккаунты»: свой словарь
+      разъехался бы с ним при первом же переименовании. Для статусов вне трёх
+      известных бейдж не рендерится вовсе: выдуманная подпись сообщала бы о
+      состоянии, которого экран аккаунтов не знает. -#}
+  {%- if account.status == 'active' %}{{ badge('Активно', 'success') }}
+  {%- elif account.status == 'syncing' %}{{ badge('Синхронизация...', 'warning') }}
+  {%- elif account.status == 'sync_failed' %}{{ badge('Ошибка синхронизации', 'danger') }}
+  {%- endif %}
+  <div class="acct-head__actions">
+    {{- link_button('К аккаунтам', '/accounts', variant='ghost') -}}
+  </div>
+</div>
+
+{#- Строка поиска. Экран показывает чаты ОДНОГО аккаунта, и у Telegram их
+    бывают сотни: без поиска список непригоден (D-03). Фильтров по мессенджеру
+    и по активности здесь нет — аккаунт задан маршрутом, а тумблер является
+    состоянием строки, а не измерением списка.
+
+    Полоса рендерится и при пустой выдаче: пользователь, отфильтровавший список
+    в ноль, обязан иметь чем сбросить фильтр (UI-SPEC E5 empty). -#}
+{% if total_groups or filter_search %}
+{% call filters('account-groups-filters', action='/accounts/' ~ account_id ~ '/groups') %}
+  {{ field(name="search", label='Поиск', value=filter_search or '',
+           placeholder='Поиск по названию группы', id='filter-search') }}
+  {{ button('Применить', variant='primary') }}
+  {{ link_button('Сбросить', '/accounts/' ~ account_id ~ '/groups', variant='ghost') }}
+{% endcall %}
+{% endif %}
+
+{#- Линейка-разделитель над списком. Числа приходят ДВУМЯ выделенными запросами
+    подсчёта (D-04) и не зависят от того, сколько строк успело загрузиться.
+    При нуле групп линейка не рендерится вовсе: «0 активных из 0 групп» — это
+    не сообщение, сообщение несёт пустое состояние (UI-SPEC E3 empty).
+
+    Правая надпись впервые правдива именно с этой фазы: выключенная группа
+    действительно пропускается при диспетчеризации (D-05). -#}
+{% if total_groups %}
+<div class="count-rule">
+  {{ mono(active_groups ~ ' ' ~ plural_ru(active_groups, 'активная', 'активные', 'активных') ~
+          ' из ' ~ total_groups ~ ' ' ~ plural_ru(total_groups, 'группы', 'групп', 'групп')) }}
+  <span class="count-rule__line" aria-hidden="true"></span>
+  {{ mono('ВЫКЛЮЧЕННЫЕ ГРУППЫ ПРОПУСКАЮТСЯ ПРИ РАССЫЛКЕ', upper=true) }}
+</div>
+{% endif %}
+
 {% if groups %}
 {{ card_open() }}
+  {# Инварианты бесконечной прокрутки (ломает перевёрстка, а не логика):
+     - сентинел остаётся ПОСЛЕДНИМ элементом внутри ТОГО ЖЕ контейнера, что и
+       строки: он заменяет сам себя и подтягивает следующий;
+     - разметка сентинела здесь и в partial_cards.html ИДЕНТИЧНА;
+     - цикл проброса параметров переносится ДОСЛОВНО вместе с приведением к
+       строке и экранированием для URL: потерянная строка поиска не роняет
+       страницу, а молча подмешивает к найденному остальной список аккаунта
+       (T-04-01, T-03-21). #}
   <div data-group-list>
-    {% for group in groups %}{{ group_row(group, account.id) }}{% endfor %}
+    {% for group in groups %}{{ group_row(group, account_id, schedule_counts.get(group.id, 0), user) }}{% endfor %}
+    {% if has_next %}
+<div hx-get="/accounts/{{ account_id }}/groups/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
+    {% endif %}
   </div>
 {{ card_close() }}
 {% else %}
-{#- Две ветки пустого состояния («Групп пока нет» до первого синка и «Все группы
-    удалены» после него) различает `last_synced_at`, а его колонка приходит
-    миграцией плана 03-04. До неё рендерится одна ветка — та, что называет
-    следующий шаг пользователю, у которого групп ещё не было. -#}
+{#- ТРИ РАЗЛИЧИМЫХ ПУСТЫХ СОСТОЯНИЯ (UI-SPEC E4 empty). Одно общее «Групп нет»
+    называло бы одним словом три разных положения дел, и в двух из трёх
+    следующий шаг пользователя был бы другим:
+    - поиск ничего не нашёл — сбросить фильтр (список аккаунта не пуст);
+    - синхронизация была, групп нет — все удалены, синк вернёт их (D-10);
+    - синхронизации не было — запустить первую.
+    Различаются по строке поиска и по `last_synced_at`; порядок веток именно
+    такой, потому что поиск может обнулить выдачу и при заполненном списке. -#}
+{% if filter_search %}
+{{ empty_state('Группы не найдены',
+               hint='Измените строку поиска или сбросьте фильтр',
+               action_label='Сбросить',
+               action_href='/accounts/' ~ account_id ~ '/groups') }}
+{% elif account.last_synced_at %}
+{{ empty_state('Все группы удалены',
+               hint='Запустите синхронизацию, чтобы подтянуть чаты заново') }}
+{% else %}
 {{ empty_state('Групп пока нет',
                hint='Нажмите «Синхронизировать всё», чтобы подтянуть чаты аккаунта') }}
+{% endif %}
 {% endif %}
 
 {% endblock %}

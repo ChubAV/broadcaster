@@ -19,6 +19,9 @@
 """
 
 import re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from httpx import AsyncClient
@@ -35,9 +38,35 @@ from app.models.user import User
 # с одинаковым именем они совпадают, а различить нужно именно строки.
 GROUP_ROW_RE = re.compile(r'id="group-row-(\d+)"')
 
+# Сентинел бесконечной прокрутки: адрес следующей порции.
+SENTINEL_RE = re.compile(r'hx-get="([^"]*/groups/partial\?[^"]*)"')
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
+
 
 def _row_ids(html: str) -> list[int]:
     return [int(value) for value in GROUP_ROW_RE.findall(html)]
+
+
+def _sentinels(html: str) -> list[str]:
+    return SENTINEL_RE.findall(html)
+
+
+def _row_html(html: str, group_id: int) -> str:
+    """Разметка ОДНОЙ строки списка целиком, от её `<div` до парного `</div>`.
+
+    Нужна для утверждения «панель подтверждения лежит ВНЕ строки»: подстрочный
+    поиск по всей странице такого различить не может — идентификатор панели
+    есть на странице в обоих случаях.
+    """
+    anchor = html.index(f'id="group-row-{group_id}"')
+    start = html.rindex("<div", 0, anchor)
+    depth = 0
+    for match in re.finditer(r"<div\b|</div>", html[start:]):
+        depth += 1 if match.group(0) == "<div" else -1
+        if depth == 0:
+            return html[start : start + match.end()]
+    raise AssertionError(f"строка группы {group_id} не закрыта")
 
 
 async def _user(db: AsyncSession) -> User:
@@ -453,3 +482,907 @@ async def test_accounts_screen_links_to_the_account_groups(
         "на экране «Аккаунты» нет входа на экран групп аккаунта"
     )
     assert "Настроить группы" in html
+
+
+# =============================================================================
+# План 03-05, Задача 1: паршал прокрутки, поиск и честные счётчики
+# =============================================================================
+#
+# У Telegram-аккаунта бывают сотни чатов (D-03, D-04). Три свойства экрана
+# закрепляются здесь и ни одно из них не видно по коду ответа:
+#
+# * ПОСТРАНИЧНАЯ ЗАГРУЗКА. Сентинел подтягивает следующие 30 строк. Ошибка в
+#   смещении не роняет страницу — она молча дублирует одни строки и теряет
+#   другие.
+# * ПОИСК, ПЕРЕЖИВАЮЩИЙ ПОДГРУЗКУ. Потерянная на второй странице строка поиска
+#   подмешивает к отфильтрованным строкам весь остальной список, и экран
+#   продолжает выглядеть исправным (T-04-01, T-03-21).
+# * ЧЕСТНЫЕ СЧЁТЧИКИ. «N активных из M групп» считается по ВСЕЙ таблице
+#   аккаунта, а не по загруженной странице: подсчёт по странице врёт ровно
+#   там, где цена вранья наибольшая — на списке длиннее 30 строк (D-04).
+
+
+async def _seed_many(
+    db: AsyncSession,
+    account: MessengerAccount,
+    names: list[str],
+    active: bool = True,
+) -> list[Group]:
+    """Пакетный посев: 35 отдельных commit-ов заняли бы дольше, чем весь файл."""
+    user = await _user(db)
+    groups = [
+        Group(
+            user_id=user.id,
+            account_id=account.id,
+            messenger_type=account.type,
+            group_external_id=f"ext-{index}-{name}",
+            name=name,
+            is_active=active,
+        )
+        for index, name in enumerate(names)
+    ]
+    db.add_all(groups)
+    await db.commit()
+    for group in groups:
+        await db.refresh(group)
+    return groups
+
+
+# --- Постраничная загрузка ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_page_shows_thirty_rows_and_a_sentinel(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-04: страница отдаёт первые 30 строк и адрес следующей порции."""
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, [f"Группа {i:02d}" for i in range(35)])
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert len(_row_ids(html)) == 30, "страница отдала не 30 строк"
+    sentinels = _sentinels(html)
+    assert len(sentinels) == 1, f"сентинел не единственный: {sentinels}"
+    assert "offset=30" in sentinels[0], sentinels[0]
+    assert "limit=30" in sentinels[0], sentinels[0]
+
+
+@pytest.mark.asyncio
+async def test_partial_returns_the_rest_and_drops_the_sentinel(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Последняя порция приходит БЕЗ сентинела — иначе прокрутка не кончится."""
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(35)]
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    response = await authed_client.get(_sentinels(page)[0])
+
+    assert response.status_code == 200
+    assert _row_ids(response.text) == [g.id for g in seeded[30:]], (
+        "паршал отдал не продолжение списка"
+    )
+    assert not _sentinels(response.text), (
+        "последняя порция принесла сентинел — прокрутка стала бесконечной"
+    )
+
+
+@pytest.mark.asyncio
+async def test_partial_of_a_foreign_account_leaks_nothing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-03-19: владение проверяется в САМОМ паршале, а не наследуется страницей."""
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    await _seed_group(
+        db_session, foreign_account, "Чужая группа паршала", user_id=foreign_user.id
+    )
+
+    response = await authed_client.get(
+        f"/accounts/{foreign_account.id}/groups/partial?offset=0&limit=30",
+        follow_redirects=False,
+    )
+
+    # Утверждение ИМЕННО о редиректе, а не о «302 или 404»: пока входа не
+    # существует, маршрутизатор отвечает 404, и мягкое утверждение зеленело бы
+    # на отсутствии кода, который оно должно проверять.
+    assert response.status_code == 302
+    assert response.headers["location"] == "/accounts"
+    assert "Чужая группа паршала" not in response.text
+    assert not _row_ids(response.text)
+
+
+@pytest.mark.asyncio
+async def test_partial_without_session_goes_to_login(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict
+):
+    """Аутентификация проверяется на каждом входе, включая паршал."""
+    account = await _seed_account(db_session)
+
+    response = await client.get(
+        f"/accounts/{account.id}/groups/partial?offset=0&limit=30",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["offset=-1&limit=30", "offset=0&limit=101"])
+async def test_partial_rejects_bad_pagination_params(
+    authed_client: AsyncClient, db_session: AsyncSession, query: str
+):
+    """T-03-22: негодные параметры отвергаются ДО обращения к базе."""
+    account = await _seed_account(db_session)
+
+    response = await authed_client.get(
+        f"/accounts/{account.id}/groups/partial?{query}", follow_redirects=False
+    )
+
+    assert response.status_code == 422, query
+
+
+# --- Поиск -------------------------------------------------------------------
+
+SEARCH_TERM = "Клуб садоводов"
+
+
+@pytest.mark.asyncio
+async def test_search_narrows_the_page(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-03: единственный фильтр экрана — поиск по названию."""
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, [f"{SEARCH_TERM} {i}" for i in range(3)])
+    await _seed_many(db_session, account, ["Барахолка района"])
+
+    html = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": SEARCH_TERM}
+        )
+    ).text
+
+    assert len(_row_ids(html)) == 3, "поиск не сузил список"
+    assert "Барахолка района" not in html, "в выдачу поиска попала несовпавшая группа"
+
+
+@pytest.mark.asyncio
+async def test_sentinel_carries_the_search_urlencoded(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-03-21: строка поиска уходит в адрес сентинела в urlencode-виде."""
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, [f"{SEARCH_TERM} {i:02d}" for i in range(35)])
+
+    html = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": SEARCH_TERM}
+        )
+    ).text
+
+    sentinel = _sentinels(html)[0]
+    assert f"search={quote(SEARCH_TERM, safe='/')}" in sentinel, sentinel
+
+
+@pytest.mark.asyncio
+async def test_partial_keeps_the_search_on_the_second_page(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Вторая страница поиска не возвращается к неотфильтрованному списку.
+
+    Потерянный фильтр не роняет страницу — он молча подмешивает к найденному
+    остальной список аккаунта, и экран продолжает выглядеть исправным.
+    """
+    account = await _seed_account(db_session)
+    matching = await _seed_many(
+        db_session, account, [f"{SEARCH_TERM} {i:02d}" for i in range(35)]
+    )
+    await _seed_many(db_session, account, [f"Прочая группа {i}" for i in range(5)])
+
+    page = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": SEARCH_TERM}
+        )
+    ).text
+    response = await authed_client.get(_sentinels(page)[0])
+
+    assert response.status_code == 200
+    assert _row_ids(response.text) == [g.id for g in matching[30:]], (
+        "паршал отдал продолжение НЕотфильтрованного списка"
+    )
+    assert "Прочая группа" not in response.text
+
+
+# --- Линейка счётчика --------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_counter_line_counts_the_whole_table(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-04: числа линейки не зависят от того, сколько строк загружено.
+
+    Подсчёт по загруженной странице дал бы «30 из 30» при 35 группах — то есть
+    соврал бы ровно там, где список перестал помещаться на экран.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, [f"Активная {i:02d}" for i in range(32)])
+    await _seed_many(
+        db_session, account, [f"Выключенная {i}" for i in range(3)], active=False
+    )
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    # «32 активные», а не «32 активных»: склонение считается по последней цифре,
+    # и 32 требует той же формы, что 2 (UI-SPEC: «2 активные из 5 групп»).
+    assert "32 активные из 35 групп" in html, "линейка посчитана по загруженной странице"
+
+
+@pytest.mark.asyncio
+async def test_partial_carries_no_counter_line(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Паршал прокрутки линейку не трогает — у неё не бывает промежуточных чисел."""
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, [f"Активная {i:02d}" for i in range(32)])
+    await _seed_many(
+        db_session, account, [f"Выключенная {i}" for i in range(3)], active=False
+    )
+
+    response = await authed_client.get(
+        f"/accounts/{account.id}/groups/partial?offset=30&limit=30"
+    )
+
+    # Положительное утверждение первым: без него тест зеленел бы на пустом теле
+    # несуществующего входа, ничего при этом не проверяя.
+    assert response.status_code == 200
+    html = response.text
+    assert len(_row_ids(html)) == 5, "паршал не отдал последнюю порцию строк"
+    assert "активных из" not in html, "паршал принёс линейку счётчика"
+    assert "ВЫКЛЮЧЕННЫЕ ГРУППЫ" not in html
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "count,expected",
+    [
+        (1, "1 активная из 1 группы"),
+        (2, "2 активные из 2 групп"),
+        (5, "5 активных из 5 групп"),
+    ],
+)
+async def test_counter_line_plurals(
+    authed_client: AsyncClient, db_session: AsyncSession, count: int, expected: str
+):
+    """UI-SPEC E3 zero-one-many: «1 активная из 1 группы», а не «1 активных»."""
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, [f"Группа {i}" for i in range(count)])
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert expected in html
+
+
+# --- Подпись «в N расписаниях» (D-08) ----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_row_shows_the_number_of_schedules(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-08: подпись строки объясняет цену удаления группы."""
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа двух расписаний")
+    await _seed_schedule(db_session, account, [group.id])
+    await _seed_schedule(db_session, account, [group.id])
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "в 2 расписаниях" in html
+
+
+@pytest.mark.asyncio
+async def test_row_without_schedules_says_so(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """При нуле подпись читается словами, а не «в 0 расписаниях»."""
+    account = await _seed_account(db_session)
+    await _seed_group(db_session, account, "Группа без расписаний")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "не в расписаниях" in html
+
+
+@pytest.mark.asyncio
+async def test_schedule_count_ignores_foreign_schedules(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Считаются только расписания владельца.
+
+    Аналог из старого раздела грузил ВСЕ расписания таблицы без ограничения
+    владельцем: чужое расписание, случайно содержащее наш идентификатор,
+    завышало бы подпись. Переносить дефект вместе с приёмом нельзя.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа одного расписания")
+    await _seed_schedule(db_session, account, [group.id])
+
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_ad = Ad(user_id=foreign_user.id, title="Чужое", text="Текст", images=[])
+    db_session.add(foreign_ad)
+    await db_session.commit()
+    await db_session.refresh(foreign_ad)
+    db_session.add(
+        Schedule(
+            ad_id=foreign_ad.id,
+            account_id=account.id,
+            group_ids=[group.id],
+            days_of_week=[1],
+            times_of_day=["10:00"],
+            timezone="UTC",
+        )
+    )
+    await db_session.commit()
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "в 1 расписании" in html, "подпись завышена чужим расписанием"
+
+
+# --- Синхронность двух разметок сентинела ------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sentinel_markup_is_identical_in_both_templates():
+    """Сентинел страницы и сентинел порции — одна и та же строка разметки.
+
+    Расхождение проявляется только у того, кто долистал до второй порции:
+    первая страница остаётся исправной.
+    """
+    page = (TEMPLATES_DIR / "account_groups" / "list.html").read_text(encoding="utf-8")
+    partial = (TEMPLATES_DIR / "account_groups" / "partial_cards.html").read_text(
+        encoding="utf-8"
+    )
+
+    page_sentinel = [line.strip() for line in page.splitlines() if "hx-get=" in line]
+    partial_sentinel = [
+        line.strip() for line in partial.splitlines() if "hx-get=" in line
+    ]
+
+    assert page_sentinel, "сентинел исчез из list.html"
+    assert page_sentinel == partial_sentinel, (
+        "разметка сентинела разошлась между страницей и порцией прокрутки"
+    )
+
+
+# =============================================================================
+# План 03-05, Задача 2: удаление группы с панелью подтверждения (GRP-06)
+# =============================================================================
+#
+# Удаление — единственное необратимое действие экрана, и у него два следствия,
+# о которых пользователь обязан знать ДО нажатия: группа уходит из всех
+# расписаний, а следующая синхронизация вернёт её как новую (D-10).
+#
+# Ключевое свойство маршрута — ТОЧНОСТЬ: удаляется ровно одна строка, из
+# расписаний уходит ровно один идентификатор, соседние остаются. Ошибка здесь
+# не роняет страницу — она молча вычищает из расписаний чужую группу, и увидит
+# это только тот, у кого перестала уходить рассылка.
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_the_group_and_redirects(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """GRP-06: своя группа удаляется, ответ — PRG-редирект на экран аккаунта."""
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа на удаление")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == f"/accounts/{account.id}/groups"
+    assert (await db_session.get(Group, group.id)) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_cleans_the_group_out_of_schedules(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Идентификатор удалённой группы исчезает из `group_ids` расписаний.
+
+    Осиротевший идентификатор не роняет отправку — он делает её тихо неполной:
+    расписание продолжает считаться настроенным на группу, которой уже нет.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа расписания")
+    schedule = await _seed_schedule(db_session, account, [group.id])
+
+    await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    db_session.expunge_all()
+    refreshed = await db_session.get(Schedule, schedule.id)
+    assert group.id not in (refreshed.group_ids or []), (
+        "идентификатор удалённой группы остался в расписании"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_keeps_the_neighbour_ids_in_the_same_schedule(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парный тест: чистка снимает РОВНО один идентификатор.
+
+    Без него предыдущий тест зеленел бы и на обработчике, обнуляющем состав
+    расписания целиком.
+    """
+    account = await _seed_account(db_session)
+    target = await _seed_group(db_session, account, "Удаляемая группа")
+    neighbour = await _seed_group(db_session, account, "Соседняя группа")
+    schedule = await _seed_schedule(db_session, account, [target.id, neighbour.id])
+
+    await authed_client.post(
+        f"/accounts/{account.id}/groups/{target.id}/delete", follow_redirects=False
+    )
+
+    db_session.expunge_all()
+    refreshed = await db_session.get(Schedule, schedule.id)
+    assert refreshed.group_ids == [neighbour.id], (
+        "чистка расписания задела соседний идентификатор"
+    )
+    assert (await db_session.get(Group, neighbour.id)) is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_spares_the_same_named_group_of_another_account(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Одноимённая группа соседнего аккаунта того же пользователя остаётся.
+
+    Мессенджеры отдают имена чатов без гарантии уникальности: удаление по имени
+    вместо идентификатора снесло бы обе.
+    """
+    first = await _seed_account(db_session, type_="wa")
+    second = await _seed_account(db_session, type_="tg_user")
+    target = await _seed_group(db_session, first, "Одинаковое имя")
+    twin = await _seed_group(db_session, second, "Одинаковое имя")
+
+    await authed_client.post(
+        f"/accounts/{first.id}/groups/{target.id}/delete", follow_redirects=False
+    )
+
+    assert (await db_session.get(Group, target.id)) is None
+    assert (await db_session.get(Group, twin.id)) is not None, (
+        "удаление снесло одноимённую группу соседнего аккаунта"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_does_not_trust_the_account_id_from_the_url(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-03-20: тройной WHERE — своя группа, но чужой для неё аккаунт в адресе."""
+    first = await _seed_account(db_session, type_="wa")
+    second = await _seed_account(db_session, type_="tg_user")
+    group_of_second = await _seed_group(db_session, second, "Группа второго аккаунта")
+
+    response = await authed_client.post(
+        f"/accounts/{first.id}/groups/{group_of_second.id}/delete",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert (await db_session.get(Group, group_of_second.id)) is not None, (
+        "группа удалена через адрес чужого для неё аккаунта"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_leaves_a_foreign_group_alone(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-03-20: чужая группа не удаляется прямым POST мимо страницы."""
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Чужая группа удаления", user_id=foreign_user.id
+    )
+
+    response = await authed_client.post(
+        f"/accounts/{foreign_account.id}/groups/{foreign_group.id}/delete",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert (await db_session.get(Group, foreign_group.id)) is not None
+
+
+@pytest.mark.asyncio
+async def test_repeated_delete_is_harmless(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Повтор запроса на уже удалённой группе — редирект, а не ошибка.
+
+    Кнопка «назад» и повторная отправка формы приводят сюда штатно; ответ
+    неотличим от успешного, поэтому по нему нельзя узнать, существовала ли
+    группа вообще.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа двойного удаления")
+
+    first = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+    second = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert first.status_code == 302
+    assert second.status_code == 302
+    assert second.headers["location"] == f"/accounts/{account.id}/groups"
+
+
+@pytest.mark.asyncio
+async def test_delete_of_a_group_in_no_schedule_works(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Группа вне расписаний удаляется штатно — чистка просто ничего не находит."""
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа вне расписаний")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert (await db_session.get(Group, group.id)) is None
+
+
+@pytest.mark.asyncio
+async def test_remaining_rows_keep_the_id_order_after_delete(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """После удаления порядок оставшихся строк остаётся возрастающим."""
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, ["Яблоко", "Смородина", "Абрикос", "Вишня"]
+    )
+
+    await authed_client.post(
+        f"/accounts/{account.id}/groups/{seeded[1].id}/delete", follow_redirects=False
+    )
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    expected = [seeded[0].id, seeded[2].id, seeded[3].id]
+    assert _row_ids(html) == expected, "порядок строк после удаления изменился"
+
+
+@pytest.mark.asyncio
+async def test_delete_without_session_goes_to_login(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict
+):
+    """Разрушительный вход тоже закрыт аутентификацией."""
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа без сессии")
+
+    response = await client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/login"
+    assert (await db_session.get(Group, group.id)) is not None
+
+
+# --- Панель подтверждения ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_confirm_panel_names_the_group_and_both_consequences(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC §Destructive confirmation: тело панели называет ОБА следствия.
+
+    Второе следствие (D-10: синк вернёт группу как новую) обязано быть сказано
+    ДО удаления, а не обнаружено после.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Барахолка Северного района")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Удалить группу?" in html
+    assert "Барахолка Северного района" in html
+    assert "группа исчезнет из всех расписаний" in html
+    assert "следующая синхронизация вернёт её как новую" in html
+
+
+@pytest.mark.asyncio
+async def test_confirm_panel_is_unique_per_group(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-11-04 в родном изводе: панелей ровно одна на группу.
+
+    Две панели с одним идентификатором открывались бы одним событием, и обход
+    по Tab уходил бы в невидимую копию.
+    """
+    account = await _seed_account(db_session)
+    first = await _seed_group(db_session, account, "Первая группа")
+    second = await _seed_group(db_session, account, "Вторая группа")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    for group in (first, second):
+        assert html.count(f'id="group-del-{group.id}"') == 1, (
+            f"панель подтверждения группы {group.id} не единственная"
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirm_panel_lives_outside_the_row(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Панель стоит РЯДОМ со строкой, а не внутри неё.
+
+    Панель позиционируется фиксированно, а внутри строки-карточки стала бы её
+    колонкой; кроме того, панель обязана жить вне любого заменяемого блока
+    (урок Фазы 1).
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа с панелью")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert f'id="group-del-{group.id}"' in html, "панель подтверждения не отрисована"
+    assert f'id="group-del-{group.id}"' not in _row_html(html, group.id), (
+        "панель подтверждения оказалась ВНУТРИ строки списка"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_trigger_is_a_real_post_form(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-09: без Alpine форма-триггер уходит настоящим POST-ом на тот же маршрут.
+
+    Кнопка-триггер вне формы оставила бы экран без единственного способа
+    удалить группу, когда скрипт не доехал.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа деградации удаления")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    row = _row_html(html, group.id)
+    form_match = re.search(
+        r'<form[^>]*action="/accounts/%d/groups/%d/delete"[^>]*>'
+        % (account.id, group.id),
+        row,
+    )
+    assert form_match, "триггер удаления не обёрнут формой на маршрут удаления"
+    opening = form_match.group(0)
+    assert 'method="post"' in opening.lower(), "форма удаления не POST"
+    assert "x-on:submit" in opening, "перехват отправки навешен не на саму форму"
+
+
+# =============================================================================
+# План 03-05, Задача 3: шапка аккаунта, пустые состояния и секция стилей
+# =============================================================================
+#
+# Экран собирается в тот вид, что описан макетом и UI-SPEC. Проверяется то, что
+# отдаёт 200 и при этом врёт: шапка с выдуманным «0 минут назад» вместо честного
+# «синхронизация ещё не выполнялась», одно пустое состояние вместо трёх
+# различимых, линейка «0 активных из 0 групп» на пустом экране.
+
+STATIC_DIR = Path(__file__).resolve().parents[2] / "app" / "static"
+
+# Признаки utility-фреймворка: разметка разделов от них избавлена (D-06).
+UTILITY_MARKERS = ("bg-white", "text-gray", "rounded-lg", "border-gray", "lg:")
+
+
+async def _seed_synced_account(
+    db: AsyncSession, hours_ago: int = 2, status: str = "active"
+) -> MessengerAccount:
+    """Аккаунт с заполненным временем последнего синка."""
+    user = await _user(db)
+    account = MessengerAccount(
+        user_id=user.id,
+        type="wa",
+        credentials="session",
+        status=status,
+        last_synced_at=datetime.now(timezone.utc) - timedelta(hours=hours_ago),
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+# --- Шапка аккаунта ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_header_says_the_sync_never_ran(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E1 empty: незаполненное время синка читается словами.
+
+    Выдуманное «0 минут назад» выглядело бы как успешная синхронизация,
+    которой не было (Pitfall 2: код обязан пережить NULL).
+    """
+    account = await _seed_account(db_session)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "data-acct-head" in html, "карточка аккаунта не отрисована"
+    assert "синхронизация ещё не выполнялась" in html
+    assert "назад" not in html
+
+
+@pytest.mark.asyncio
+async def test_header_shows_the_relative_time_of_the_last_sync(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парный тест: при заполненном времени шапка показывает «N назад»."""
+    account = await _seed_synced_account(db_session, hours_ago=2)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "последняя синхронизация 2 часа назад" in html
+    assert "синхронизация ещё не выполнялась" not in html
+
+
+@pytest.mark.asyncio
+async def test_header_says_the_sync_is_in_flight(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E1 loading: во время синка строка идентичности говорит об этом."""
+    account = await _seed_synced_account(db_session, status="syncing")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "синхронизация идёт сейчас" in html
+    assert "Синхронизация..." in html, "бейдж статуса разошёлся со словарём аккаунтов"
+
+
+@pytest.mark.asyncio
+async def test_header_never_renders_the_account_credentials(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """`credentials` — строка сессии мессенджера, а не телефон.
+
+    Сегмент телефона в строке идентичности отсутствует именно поэтому: поля
+    телефона у аккаунта нет, а вывод `credentials` был бы утечкой сессии.
+    """
+    user = await _user(db_session)
+    account = MessengerAccount(
+        user_id=user.id,
+        type="tg_user",
+        credentials="1BQANOTEuMTA4LjU2LjE0MFsecretSessionString",
+        status="active",
+    )
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert account.credentials not in html, "строка сессии аккаунта попала в разметку"
+
+
+# --- Три пустых состояния ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_state_before_the_first_sync(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Синхронизации не было и групп нет — предлагается первая синхронизация."""
+    account = await _seed_account(db_session)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Групп пока нет" in html
+    assert "Все группы удалены" not in html
+
+
+@pytest.mark.asyncio
+async def test_empty_state_after_all_groups_were_deleted(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Синхронизация была, групп нет — их удалили, и синк вернёт их (D-10)."""
+    account = await _seed_synced_account(db_session)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Все группы удалены" in html
+    assert "Групп пока нет" not in html
+
+
+@pytest.mark.asyncio
+async def test_empty_state_when_the_search_matched_nothing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Поиск ничего не нашёл — состояние своё, и у него есть сброс.
+
+    Без отдельной ветки пользователь читал бы «Групп пока нет» при непустом
+    списке аккаунта и не понимал бы, что список просто отфильтрован.
+    """
+    account = await _seed_synced_account(db_session)
+    await _seed_group(db_session, account, "Барахолка Северного района")
+
+    html = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": "ничего такого"}
+        )
+    ).text
+
+    assert "Группы не найдены" in html
+    assert "Все группы удалены" not in html
+    assert "Групп пока нет" not in html
+    assert f'href="/accounts/{account.id}/groups"' in html, "действия сброса нет"
+    assert "filters__toggle" in html, "строка поиска исчезла при пустой выдаче"
+
+
+@pytest.mark.asyncio
+async def test_zero_groups_render_no_counter_line(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E3 empty: «0 активных из 0 групп» — не сообщение.
+
+    Сообщение при нуле несёт пустое состояние; линейка не рендерится вовсе.
+    """
+    account = await _seed_account(db_session)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "count-rule" not in html
+    assert "ВЫКЛЮЧЕННЫЕ ГРУППЫ ПРОПУСКАЮТСЯ ПРИ РАССЫЛКЕ" not in html
+
+
+# --- Разметка и стили --------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_screen_has_no_utility_classes(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Экран собран на дизайн-системе, а не на классах удалённого фреймворка."""
+    account = await _seed_synced_account(db_session)
+    await _seed_group(db_session, account, "Группа проверки классов")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    for marker in UTILITY_MARKERS:
+        assert marker not in html, marker
+
+
+def test_screen_has_its_own_css_section():
+    """У экрана есть собственная секция стилей.
+
+    Проверка по исходнику, а не по выдаче: таблица стилей отдаётся статикой и
+    в HTML страницы не попадает, поэтому поведенческой проверки для неё не
+    существует. Ловится ровно то, ради чего секция заводилась: разметка,
+    оставшаяся без правил раскладки, выглядит «почти прилично» и молча теряет
+    и колонку имени, и приглушение выключенной строки.
+    """
+    css = (STATIC_DIR / "css" / "app.css").read_text(encoding="utf-8")
+
+    for selector in (
+        "[data-acct-head]",
+        ".count-rule",
+        "[data-group-list]",
+        "[data-group-row]",
+        ".group-row__name",
+        ".group-row--off",
+        ".group-row__mark",
+    ):
+        assert selector in css, f"в таблице стилей нет правил для {selector}"

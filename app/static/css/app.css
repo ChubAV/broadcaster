@@ -1563,3 +1563,136 @@ a:hover { color: var(--accent-link-hover); }
 @media (prefers-reduced-motion: reduce) {
   [data-editor] { animation: none !important; }
 }
+
+/* --------------------------------------------------------------------------
+   9. Экран групп аккаунта (Фаза 3, план 03-05).
+
+   Дополнение файла санкционировано планом: это единственный списочный экран
+   проекта, который остаётся КАРТОЧНЫМ на всех ширинах (UI-SPEC §Responsive
+   Contract), поэтому строка-таблица data-row с её подписями ячеек ему не
+   подходит, а прецедента карточной строки со своими органами управления в
+   разделах 4–8 нет. Ближайший стилевой сосед — «Выбор групп» раздела 8
+   (строки-флажки 40px), но у него нет ни аватара, ни двух подписей, ни
+   тумблера в строке.
+
+   Всё остальное на экране собрано из отгруженных макросов БЕЗ изменений:
+   card / field / filters / empty_state / modal / badge / mono / avatar /
+   toggle / button. Новых цветов, радиусов и кеглей не вводится — только токены
+   раздела 1. Utility-классов не вводится вовсе (запрет закреплён тестами).
+
+   Фиксированные размеры кратны четырём: плитка канала 48, аватар группы 32
+   (задаётся макросом), высота строки 64 = 16 + 32 + 16, минимальная сторона
+   органа управления 36, кнопки шапки 40. Шаг 12 — только вертикальный ритм
+   между блоками экрана (документированное исключение 4 UI-SPEC §Spacing).
+   -------------------------------------------------------------------------- */
+
+/* Шапка аккаунта ----------------------------------------------------------- */
+/* Переносящаяся строка: на узкой ширине действия уходят на собственную строку
+   сами, без второго медиазапроса. Обрезается ПЕРВЫМ имя аккаунта, а не бейдж
+   статуса и не действия — они несут состояние и выход с экрана. */
+[data-acct-head] {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+  min-width: 0; margin: 0 0 12px; padding: 16px;
+  border-radius: var(--r-xl);
+  background: var(--surface); border: 1px solid var(--border-input);
+}
+.acct-head__plate {
+  flex: none; width: 48px; height: 48px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-lg);
+  background: var(--surface-pill); border: 1px solid var(--border-input);
+}
+/* min-width: 0 обязателен: без него flex-элемент не сжимается ниже своего
+   содержимого, и длинная строка идентичности вытолкнула бы действия из
+   карточки вместо того, чтобы обрезаться. */
+.acct-head__id {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.acct-head__name {
+  margin: 0; min-width: 0;
+  font-size: var(--fs-2xl); font-weight: 600; line-height: 1.2;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.acct-head__id > .mono {
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+[data-acct-head] > .badge { flex: none; }
+.acct-head__actions {
+  flex: none; margin-left: auto;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+[data-acct-head] .btn { min-height: 40px; }
+
+/* Линейка счётчика --------------------------------------------------------- */
+/* Заполняющая черта забирает свободное место, поэтому на узкой ширине правая
+   надпись переносится ПОД число, а черта схлопывается до своей минимальной
+   ширины — обрезки не возникает (UI-SPEC E3 overflow). Приём — тот же, что у
+   .kv__rule раздела 8. */
+.count-rule {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  min-width: 0; margin: 0 0 12px;
+}
+.count-rule__line {
+  flex: 1 1 24px; min-width: 24px; height: 1px;
+  background: var(--border-soft);
+}
+
+/* Список и строка группы --------------------------------------------------- */
+[data-group-list] { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+[data-group-row] {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 16px;
+  min-width: 0; min-height: 64px; padding: 16px;
+  border-radius: var(--r-xl);
+  background: var(--surface); border: 1px solid var(--border-input);
+}
+[data-group-row] > .avatar,
+[data-group-row] > .group-row__sub,
+[data-group-row] > .group-row__mark,
+[data-group-row] > form { flex: none; }
+
+/* Имя приходит из внешнего мессенджера и не ограничено ничем: без min-width: 0
+   оно вытолкнуло бы органы управления за пределы строки. Полное значение живёт
+   в подсказке (title). */
+.group-row__name {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--fs-lg);
+}
+.group-row__sub { display: inline-flex; align-items: center; }
+
+/* Выключенная строка приглушена, но состояние несёт НЕ прозрачность: положение
+   тумблера и его подсказка остаются главным носителем, а области нажатия не
+   уменьшаются (UI-SPEC §Color). */
+.group-row--off { opacity: .55; }
+
+/* Пометка «не найдена при синке» (D-11). Точка декоративна и скрыта от
+   вспомогательных технологий — состояние несёт текст пометки. */
+.group-row__mark { display: inline-flex; align-items: center; gap: 4px; }
+.group-row__dot {
+  flex: none; width: 8px; height: 8px;
+  border-radius: var(--r-circle); background: var(--warn);
+}
+
+/* Цель касания: 36 по меньшей стороне у каждого органа управления строки.
+   Дорожка тумблера унаследованно 22px — компенсируется высотой его подписи,
+   как в разделе 8. */
+[data-group-row] .toggle { min-height: 36px; }
+[data-group-row] .btn { min-height: 36px; }
+/* Разрушительное наведение адресовано ФОРМЕ УДАЛЕНИЯ, а не любой ghost-кнопке
+   строки: собственного класса под это не заводится, а маршрут в селекторе
+   делает правило точным и переживает появление соседних кнопок. */
+[data-group-row] form[action$="/delete"] .btn:hover { color: var(--danger); }
+
+@media (max-width: 400px) {
+  /* Строка переносится в две: аватар с именем на первой, подписи и органы
+     управления на второй. Базис имени — вся ширина минус аватар и промежуток
+     (32 + 8), поэтому перенос происходит ровно после имени, а не в случайном
+     месте. Горизонтальной прокрутки и обрезки не появляется. */
+  [data-group-row] { gap: 8px; }
+  .group-row__name { flex: 1 1 calc(100% - 40px); }
+  /* Оба органа управления прижимаются вправо на второй строке: auto стоит на
+     ПЕРВОЙ форме, поэтому пара «тумблер + удаление» едет вправо целиком. */
+  [data-group-row] > form:first-of-type { margin-left: auto; }
+}

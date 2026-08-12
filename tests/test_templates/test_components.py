@@ -612,6 +612,12 @@ class RowDeleteSite(NamedTuple):
 # то место закреплено отдельно — tests/test_pages/test_editor_schedules.py
 # ::test_schedule_delete_is_a_real_form. Перечень СТРОЧНЫХ удалений уменьшился
 # на один вход, ни одно утверждение не ослаблено.
+#
+# План 03-05 добавил СЕДЬМОЙ шаблон и ТРИНАДЦАТОЕ место: строка группы на экране
+# аккаунта получила удаление (GRP-06). Место строчное, поэтому входит именно
+# сюда; образец адреса включает сегмент `/groups/`, иначе он совпал бы и с
+# формой удаления самого АККАУНТА (`/accounts/{id}/delete`) — общий префикс у
+# двух разных разрушительных действий.
 ROW_DELETE_SITES = (
     RowDeleteSite("accounts/list.html", r"/accounts/[^\"]+/delete", 3),
     RowDeleteSite("accounts/partial_cards.html", r"/accounts/[^\"]+/delete", 3),
@@ -619,11 +625,16 @@ ROW_DELETE_SITES = (
         "accounts/partials/sync_status_card.html", r"/accounts/[^\"]+/delete", 3
     ),
     RowDeleteSite("groups/includes/group_row.html", r"/groups/[^\"]+/delete", 1),
+    RowDeleteSite(
+        "account_groups/includes/group_row.html",
+        r"/accounts/[^\"]+/groups/[^\"]+/delete",
+        1,
+    ),
     RowDeleteSite("ads/includes/ad_card.html", r"/ads/[^\"]+/delete", 1),
     RowDeleteSite("admin/user_detail.html", r"/admin/users/[^\"]+/delete", 1),
 )
 
-ROW_DELETE_PLACES = 12
+ROW_DELETE_PLACES = 13
 
 # Три счёта инвентаризации. Третий обязателен: файл подмены статуса панель
 # сознательно НЕ импортирует (асимметрия Плана 11), поэтому счёт по импортёрам
@@ -650,9 +661,15 @@ ROW_DELETE_PLACES = 12
 # расписания по-прежнему подтверждается панелью, но ровно в одном месте.
 # Уменьшение объявленных чисел — признание СОЗНАТЕЛЬНОГО снятия: молчаливое
 # исчезновение места по-прежнему краснеет.
-MODAL_IMPORTERS = 9
+# План 03-05 добавил ДЕСЯТОГО импортёра и ШЕСТНАДЦАТОЕ место: строка группы на
+# экране аккаунта (`account_groups/includes/group_row.html`). Имя события —
+# ТО ЖЕ, что у строки старого раздела (`group-del-`), и число РАЗЛИЧНЫХ имён не
+# менялось: подтверждается одна и та же сущность по одному и тому же
+# идентификатору, а обе разметки на одной странице не встречаются — экран
+# аккаунта и глобальный раздел «Группы» это разные страницы.
+MODAL_IMPORTERS = 10
 MODAL_EVENT_NAMES = 6
-MODAL_PLACES = 15
+MODAL_PLACES = 16
 
 
 # --- разборщики исходников ---------------------------------------------------
