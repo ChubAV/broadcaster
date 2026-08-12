@@ -845,13 +845,50 @@ async def test_account_without_groups_says_so(
     """Аккаунт без групп — названная причина, а не пустой блок."""
     ad = await _seed_ad(db_session, owner.id)
     account = await _seed_account(db_session, owner.id)
-    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    # Выключенное: недоступен тумблер именно на ВОЗОБНОВЛЕНИИ неполного (D-08),
+    # а паузу активного не блокируют ни сервер, ни соседний шаблон.
+    schedule = await _seed_schedule(db_session, ad.id, account.id, is_active=False)
 
     html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
 
     assert "У выбранного аккаунта нет подключённых групп" in html
-    # Тумблер неполного расписания недоступен (D-08)
+    # Тумблер неполного ВЫКЛЮЧЕННОГО расписания недоступен (D-08)
     assert "disabled" in html.split(f"/schedules/{schedule.id}/toggle")[1][:400]
+
+
+@pytest.mark.asyncio
+async def test_active_incomplete_schedule_can_still_be_paused_from_the_editor(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Пауза АКТИВНОГО не зависит от заполненности — тумблер доступен.
+
+    Определение недоступности в карточке разъехалось с двумя другими носителями
+    того же правила: `schedules/includes/schedule_row.html` и обработчик
+    `app/pages/schedules.py` считают блокируемым только ВОЗОБНОВЛЕНИЕ
+    неполного. Карточка отключала орган управления и в состоянии «активное И
+    неполное», подпись при этом врала («Включить нельзя», когда пользователь
+    хочет ВЫКЛЮЧИТЬ), а выключенный флажок браузер не отправляет и события
+    `change` не порождает — пути поставить расписание на паузу из редактора не
+    было вовсе.
+
+    Состояние не теоретическое: удаление единственной группы вычищает
+    идентификатор из `Schedule.group_ids`, не трогая `is_active`.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[], is_active=True
+    )
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+
+    toggle_markup = html.split(f"/schedules/{schedule.id}/toggle")[1][:400]
+    assert "disabled" not in toggle_markup, (
+        "активное неполное расписание нельзя поставить на паузу из редактора"
+    )
+    assert "Приостановить" in toggle_markup, (
+        "подпись обязана называть действие, которое пользователь может сделать"
+    )
 
 
 @pytest.mark.asyncio
