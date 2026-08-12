@@ -1330,6 +1330,52 @@ async def test_empty_state_after_all_groups_were_deleted(
 
 
 @pytest.mark.asyncio
+async def test_successful_sync_that_found_nothing_does_not_claim_deletion(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Аккаунт без единого чата не читает «Все группы удалены».
+
+    `last_synced_at` отвечает на вопрос «синк состоялся?», а не «группы были?».
+    Успешный синк, законно вернувший ноль групп, эту колонку ставит — и
+    различение только по ней превращало пустой экран в утверждение об удалении,
+    которого не было. К времени добавлена сводка: ноль найденных, ноль новых и
+    ноль пропавших означают «групп нет».
+    """
+    account = await _seed_synced_account(db_session)
+    account.last_sync_result = json.dumps(
+        {"found": 0, "new": 0, "renamed": 0, "missing": 0, "error": None}
+    )
+    await db_session.commit()
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Групп пока нет" in html
+    assert "Все группы удалены" not in html
+
+
+@pytest.mark.asyncio
+async def test_sync_that_lost_every_group_still_says_they_were_deleted(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парный тест: сводка с пропажами оставляет утверждение об удалении.
+
+    Без него утверждение соседнего теста зеленело бы и на ветке, стёртой
+    целиком: «Все группы удалены» обязано оставаться там, где группы
+    действительно исчезли.
+    """
+    account = await _seed_synced_account(db_session)
+    account.last_sync_result = json.dumps(
+        {"found": 0, "new": 0, "renamed": 0, "missing": 3, "error": None}
+    )
+    await db_session.commit()
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Все группы удалены" in html
+    assert "Групп пока нет" not in html
+
+
+@pytest.mark.asyncio
 async def test_empty_state_when_the_search_matched_nothing(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
