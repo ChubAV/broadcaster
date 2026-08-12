@@ -191,7 +191,7 @@ Plans:
 
 **Canonical ref**: `new_broadcaster_design.html` (разделы «Аккаунты» и «Группы»)
 **Notes**: `Group.is_active` уже существует; протоколы синхронизации Telegram/WhatsApp/MAX не меняются — фаза меняет экран и операции над списком.
-**Plans**: 6/8 plans executed
+**Plans**: 7/8 plans executed
 
 Plans:
 **Wave 1**
@@ -211,7 +211,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 03-07-PLAN.md — GRP-08 снято владельцем: согласование документов и удаление входа ручного создания (GRP-08)
+- [x] 03-07-PLAN.md — GRP-08 снято владельцем: согласование документов и удаление входа ручного создания (GRP-08)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -281,7 +281,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 1. Интерфейсный фундамент | 13/13 | Complete    | 2026-08-10 |
 | 2. Объявления и расписания | 15/15 | Complete    | 2026-08-11 |
-| 3. Группы аккаунта | 6/8 | In Progress|  |
+| 3. Группы аккаунта | 7/8 | In Progress|  |
 | 4. Дашборд и история | 0/TBD | Not started | - |
 | 5. Тарифы | 0/TBD | Not started | - |
 | 6. Админ-панель | 0/TBD | Not started | - |
