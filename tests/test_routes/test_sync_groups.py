@@ -380,14 +380,21 @@ async def test_sync_renames_existing_group(sync_setup):
 
 @pytest.mark.asyncio
 async def test_sync_marks_missing_group_but_keeps_it(sync_setup):
-    """D-11: не вернувшаяся группа помечается, но остаётся в базе."""
+    """D-11: не вернувшаяся группа помечается, но остаётся в базе.
+
+    Ответ содержит ДРУГУЮ группу, а не пуст: пустой ответ при непустом составе
+    отклоняется предохранителем `apply_group_resync` как вырожденный, и на нём
+    эта проверка проходила бы по совсем другой ветке.
+    """
     client, session_factory = sync_setup
     await _login(client)
     account_id = await _make_account(session_factory)
     group_id = await _add_group(session_factory, account_id, "-1", "Пропавшая")
 
     with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
-        MockMessenger.return_value.get_groups = AsyncMock(return_value=[])
+        MockMessenger.return_value.get_groups = AsyncMock(
+            return_value=[{"id": "-2", "name": "Оставшаяся"}]
+        )
         await client.post(f"/accounts/{account_id}/sync-groups")
 
     async with session_factory() as session:
@@ -397,6 +404,35 @@ async def test_sync_marks_missing_group_but_keeps_it(sync_setup):
 
     _, result = await _account_result(session_factory, account_id)
     assert result["missing"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_refuses_to_mark_everything_on_an_empty_response(sync_setup):
+    """Пустой ответ при непустом составе не помечает НИ ОДНОЙ группы.
+
+    Достижимо независимо от отказа адаптера: WA/MAX-мост при `state == "ready"`
+    вправе положить в `groups` `null` или `[]`, а разлогиненная сессия отдаёт
+    200 с пустым списком. Зелёная сводка «не найдено 42» на таком ответе
+    обесценивала признак «не найдена при синке» целиком.
+    """
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+    first = await _add_group(session_factory, account_id, "-1", "Первая")
+    second = await _add_group(session_factory, account_id, "-2", "Вторая")
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        MockMessenger.return_value.get_groups = AsyncMock(return_value=[])
+        await client.post(f"/accounts/{account_id}/sync-groups")
+
+    async with session_factory() as session:
+        for group_id in (first, second):
+            group = await session.get(Group, group_id)
+            assert group.missing_since is None
+
+    _, result = await _account_result(session_factory, account_id)
+    assert result["missing"] == 0
+    assert result["error"], "вырожденный ответ обязан объяснить себя пользователю"
 
 
 @pytest.mark.asyncio

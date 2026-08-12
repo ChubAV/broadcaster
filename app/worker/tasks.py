@@ -306,13 +306,20 @@ async def _sync_wa_groups_async(account_id: int):
 
                     account.status = "active"
                     await session.commit()
-                    log.info(
-                        "sync_complete",
-                        total_groups=len(groups),
-                        new_groups=result.created,
-                        renamed_groups=result.renamed,
-                        missing_groups=result.missing,
-                    )
+                    if result.error:
+                        # Мост объявил `ready`, но состава не дал. Хелпер уже
+                        # отказался применять такой ответ и записал причину на
+                        # аккаунт; в логе это обязано быть отличимо от синка,
+                        # который действительно завершился (CR-02).
+                        log.warning("sync_response_rejected", reason=result.error)
+                    else:
+                        log.info(
+                            "sync_complete",
+                            total_groups=len(groups),
+                            new_groups=result.created,
+                            renamed_groups=result.renamed,
+                            missing_groups=result.missing,
+                        )
                 return
 
             if state in ("failed", "not_found", "unknown"):
@@ -405,13 +412,17 @@ async def _sync_max_groups_async(account_id: int):
 
                     account.status = "active"
                     await session.commit()
-                    log.info(
-                        "sync_complete",
-                        total_groups=len(groups),
-                        new_groups=result.created,
-                        renamed_groups=result.renamed,
-                        missing_groups=result.missing,
-                    )
+                    if result.error:
+                        # См. WA-путь выше: `ready` без состава — не успех.
+                        log.warning("sync_response_rejected", reason=result.error)
+                    else:
+                        log.info(
+                            "sync_complete",
+                            total_groups=len(groups),
+                            new_groups=result.created,
+                            renamed_groups=result.renamed,
+                            missing_groups=result.missing,
+                        )
                 return
 
             if state in ("failed", "not_found", "unknown"):

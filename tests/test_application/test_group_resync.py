@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.application.accounts.dto import GroupResyncResult
 from app.application.accounts.group_resync import (
+    EMPTY_RESPONSE_MESSAGE,
     apply_group_resync,
     parse_sync_result,
     record_sync_failure,
@@ -275,12 +276,22 @@ async def test_second_identical_resync_is_idempotent():
 
 
 @pytest.mark.asyncio
-async def test_empty_response_marks_all_and_deletes_none():
-    """Пустой ответ помечает ВСЕ группы и не удаляет ни одной."""
+async def test_empty_response_marks_nothing_and_deletes_none():
+    """Пустой ответ при непустом составе НЕ ставит ни одной пометки.
+
+    Прежняя редакция теста закрепляла обратное — «пустой ответ помечает ВСЕ
+    группы», — и ровно это поведение делало сбой мессенджера неотличимым от
+    исчезновения всех чатов: после одного отказа моста помеченным оказывался
+    весь список аккаунта, и настоящая пропажа одной группы становилась в нём
+    неразличима. Ответ, не содержащий НИ ОДНОЙ ранее известной группы, — с
+    большей вероятностью сбой мессенджера, чем одномоментный выход
+    пользователя из всех чатов, поэтому он не применяется, а называет причину.
+    """
     async with _Db() as session:
         account = await _seed_account(session)
         await apply_group_resync(session, account, THREE, messenger_type="wa")
         await session.commit()
+        synced_at = account.last_synced_at
 
         result = await apply_group_resync(session, account, [], messenger_type="wa")
         await session.commit()
@@ -289,10 +300,63 @@ async def test_empty_response_marks_all_and_deletes_none():
             0,
             0,
             0,
-            3,
+            0,
         )
+        assert result.error == EMPTY_RESPONSE_MESSAGE
         groups = await _groups(session, account)
         assert len(groups) == 3
+        assert all(g.missing_since is None for g in groups), (
+            "сбой мессенджера не имеет права выглядеть как исчезновение всех групп"
+        )
+        # Причина уходит на аккаунт той же формой, что и любая другая ошибка,
+        # — плашка на экране групп рисуется красной, а не зелёной.
+        assert parse_sync_result(account.last_sync_result)["error"] == (
+            EMPTY_RESPONSE_MESSAGE
+        )
+        # Синхронизация не состоялась — время последнего синка не переставляется.
+        assert account.last_synced_at == synced_at
+
+
+@pytest.mark.asyncio
+async def test_empty_response_on_empty_account_is_a_normal_zero_sync():
+    """Предохранитель НЕ срабатывает, когда терять нечего.
+
+    Аккаунт без групп + пустой ответ — это правдоподобная пара, а не признак
+    сбоя: ошибочно объявив её отказом, экран показывал бы красную плашку
+    новому аккаунту, у которого действительно нет ни одного чата.
+    """
+    async with _Db() as session:
+        account = await _seed_account(session)
+
+        result = await apply_group_resync(session, account, [], messenger_type="wa")
+        await session.commit()
+
+        assert result.error is None
+        assert (result.found, result.created, result.missing) == (0, 0, 0)
+        assert account.last_synced_at is not None
+
+
+@pytest.mark.asyncio
+async def test_allow_full_wipe_puts_the_decision_on_the_caller():
+    """Снять предохранитель можно только явно — и тогда пометки ставятся.
+
+    Ни один существующий вызывающий его не снимает; параметр закреплён тестом,
+    чтобы будущий достоверный путь объявлял себя явно, а не получал
+    разрушительное поведение по умолчанию.
+    """
+    async with _Db() as session:
+        account = await _seed_account(session)
+        await apply_group_resync(session, account, THREE, messenger_type="wa")
+        await session.commit()
+
+        result = await apply_group_resync(
+            session, account, [], messenger_type="wa", allow_full_wipe=True
+        )
+        await session.commit()
+
+        assert (result.missing, result.error) == (3, None)
+        groups = await _groups(session, account)
+        assert len(groups) == 3, "снятый предохранитель всё равно не удаляет строк"
         assert all(g.missing_since is not None for g in groups)
 
 
