@@ -13,6 +13,7 @@ from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.worker.tasks import check_schedules_async, _send_message
 from sqlalchemy import select
+from tests.conftest import seed_group
 
 
 @pytest_asyncio.fixture
@@ -86,13 +87,19 @@ async def test_full_flow(e2e_setup):
         account.status = "active"
         await session.commit()
 
-    # 5. Add group
-    resp = await client.post("/api/groups", headers=headers, json={
-        "account_id": account_id, "messenger_type": "telegram",
-        "group_external_id": "-100123456789", "name": "Sales Group"
-    })
-    assert resp.status_code == 201
-    group_id = resp.json()["id"]
+    # 5. Add group.
+    #    Группа приходит ТОЛЬКО синхронизацией: прикладного входа её создания в
+    #    приложении нет (GRP-08 снято, JSON-маршрут групп удалён — план 03-07).
+    #    Посев прямой вставкой воспроизводит результат синхронизации.
+    async with session_factory() as session:
+        group_id = (
+            await seed_group(
+                session,
+                account_id,
+                group_external_id="-100123456789",
+                name="Sales Group",
+            )
+        ).id
 
     # 6. Create schedule (runs now)
     resp = await client.post("/api/schedules", headers=headers, json={

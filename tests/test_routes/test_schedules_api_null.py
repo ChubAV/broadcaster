@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schedule import Schedule
+from tests.conftest import seed_group
 
 # Значения полного расписания, засеянного через публичный маршрут. После
 # отклонённого патча строка обязана остаться РАВНОЙ засеянной — сравнение идёт
@@ -50,27 +51,28 @@ async def _create_account(client: AsyncClient, auth_headers: dict) -> int:
     return response.json()["id"]
 
 
-async def _create_group(client: AsyncClient, auth_headers: dict, account_id: int) -> int:
-    response = await client.post(
-        "/api/groups",
-        json={
-            "account_id": account_id,
-            "messenger_type": "tg_user",
-            "group_external_id": "-1001000000001",
-            "name": "Своя группа",
-        },
-        headers=auth_headers,
+async def _create_group(db_session: AsyncSession, account_id: int) -> int:
+    """Группа этого аккаунта прямой вставкой через ORM.
+
+    Прикладного входа создания группы нет: GRP-08 снято, JSON-маршрут групп
+    удалён (план 03-07). Владельца и тип канала группа наследует от аккаунта.
+    """
+    group = await seed_group(
+        db_session,
+        account_id,
+        group_external_id="-1001000000001",
+        name="Своя группа",
     )
-    return response.json()["id"]
+    return group.id
 
 
 async def _seed_full_schedule(
-    client: AsyncClient, auth_headers: dict
+    client: AsyncClient, auth_headers: dict, db_session: AsyncSession
 ) -> tuple[int, int]:
-    """Полное расписание через публичные маршруты: (schedule_id, group_id)."""
+    """Полное расписание: (schedule_id, group_id)."""
     ad_id = await _create_ad(client, auth_headers)
     account_id = await _create_account(client, auth_headers)
-    group_id = await _create_group(client, auth_headers, account_id)
+    group_id = await _create_group(db_session, account_id)
     response = await client.post(
         "/api/schedules",
         json={
@@ -110,7 +112,7 @@ async def test_explicit_null_is_rejected_before_any_write(
     обратно. Отказ обязан стоять ДО первого setattr — иначе он оставил бы
     запись частично изменённой, а `GET /api/schedules` — мёртвым навсегда.
     """
-    schedule_id, group_id = await _seed_full_schedule(client, auth_headers)
+    schedule_id, group_id = await _seed_full_schedule(client, auth_headers, db_session)
     seeded = {
         "group_ids": [group_id],
         "days_of_week": SEEDED_DAYS,
@@ -149,7 +151,7 @@ async def test_valid_partial_patch_still_updates_exactly_that_field(
     отсутствующий ключ по-прежнему означает «не трогать» (exclude_unset), и
     валидатор не должен срабатывать на значениях по умолчанию.
     """
-    schedule_id, group_id = await _seed_full_schedule(client, auth_headers)
+    schedule_id, group_id = await _seed_full_schedule(client, auth_headers, db_session)
 
     response = await client.put(
         f"/api/schedules/{schedule_id}",
