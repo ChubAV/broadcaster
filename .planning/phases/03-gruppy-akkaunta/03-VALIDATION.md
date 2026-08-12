@@ -4,8 +4,8 @@ slug: gruppy-akkaunta
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
 # audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-08-12
 ---
 
@@ -19,20 +19,30 @@ created: 2026-08-12
 
 | Property | Value |
 |----------|-------|
-| **Framework** | {pytest 7.x / jest 29.x / vitest / go test / other} |
-| **Config file** | {path or "none — Wave 0 installs"} |
-| **Quick run command** | `{quick command}` |
-| **Full suite command** | `{full command}` |
-| **Estimated runtime** | ~{N} seconds |
+| **Framework** | pytest 9.x (`pytest>=9.0.2`) + `pytest-asyncio>=1.3.0`; база `sqlite+aiosqlite:///:memory:`, полная схема на каждый тест |
+| **Config file** | `pyproject.toml` (секция зависимостей `pytest`); отдельного `pytest.ini` / `setup.cfg` / `tox.ini` в проекте нет, фикстуры живут в `tests/conftest.py` |
+| **Quick run command** | `uv run pytest tests/test_pages/test_account_groups.py -x -q` |
+| **Full suite command** | `uv run pytest tests/ -q` |
+| **Estimated runtime** | быстрая команда ~5 с (замер: старт `uv` ~3.8 с + прогон одного файла); полная суита — 895 собранных тестов, сбор 1.0 с |
+
+**Замечание о замере полной суиты.** В среде планирования точное время полной суиты получить не удалось: `uv run pytest tests/ -q` не завершился за 560 с, `tests/test_pages/` — за 300 с, `tests/test_pages/test_shell.py` — за 120 с, при этом `tests/test_templates/` отработал за 0.22 с (46 тестов), а сбор всех 895 тестов занял 1.0 с. Картина указывает на то, что часть тестов блокируется на внешнем обращении, закрытом песочницей планирования, а не на медленной суите. Ориентир до первого настоящего замера — ~120 с. Первый прогон полной суиты в первой волне обязан записать измеренное время в эту таблицу и заменить им ориентир; если время окажется трёхзначным, это сигнал о сетезависимых тестах, и его следует внести отдельным пунктом в SUMMARY фазы.
 
 ---
 
 ## Sampling Rate
 
-- **After every task commit:** Run `{quick run command}`
-- **After every plan wave:** Run `{full suite command}`
+- **After every task commit:** `uv run pytest <файл этой задачи> -x -q` — поимённая быстрая команда из колонки «Automated Command» ниже
+- **After every plan wave:** `uv run pytest tests/ -q`
 - **Before `/gsd-verify-work`:** Full suite must be green
-- **Max feedback latency:** {N} seconds
+- **Max feedback latency:** ~5 секунд (быстрая команда одной задачи)
+
+**Правило адресации прогонов в параллельных волнах.** Пока в волне идут два плана, прогон одного из них не имеет права собирать каталог, в который пишет другой: он собрал бы чужой недописанный файл и дал бы отказ про чужую задачу — отказ, невидимый для проверки пересечений по `files_modified`, потому что пересечения там действительно нет. Пересечение здесь в широте прогона, не в записи. Отсюда три правила фазы, и снимать их при исполнении нельзя:
+
+1. **Волна 1** — 03-01 и 03-02 пишут оба в `tests/test_application/`, поэтому ни один из них этот каталог не обходит: 03-01 адресует `test_collect_due_inactive_group.py`, 03-02 — `test_group_resync.py` и каталог `tests/test_models/`, куда пишет только он. Каталог `tests/test_application/` целиком обходит 03-04 во второй волне.
+2. **Волна 1** — 03-03 обходит `tests/test_pages/` с флагом `--ignore=tests/test_pages/test_account_groups.py`, потому что этот файл в той же волне создаёт 03-01.
+3. **Волна 2** — 03-04 обходит `tests/test_pages/` с тем же флагом, потому что в этой волне файл дописывает 03-05. Обход `tests/test_pages/` без исключений выполняет 03-05 (владелец файла) и затем 03-06 в третьей волне.
+
+Полная суита (`uv run pytest tests/ -q`) запускается только там, где план идёт в волне один: 03-07 (волна 4) и 03-08 (волна 5). Гейт 03-07 «суита зелена ДО удаления входа» живёт внутри плана, между задачами 2 и 3, и переносу наружу не подлежит — его смысл именно в измерении до удаления.
 
 ---
 
@@ -40,19 +50,40 @@ created: 2026-08-12
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| {N}-01-01 | 01 | 1 | REQ-{XX} | T-{N}-01 / — | {expected secure behavior or "N/A"} | unit | `{command}` | ✅ / ❌ W0 | ⬜ pending |
+| 03-01-01 | 01 | 1 | GRP-04, GRP-05 | T-03-01, T-03-02, T-03-03 | Владение аккаунтом и группой проверяется тройным WHERE; чужой аккаунт не отдаёт имён групп и не переключается; имя группы рендерится под autoescape | integration | `uv run pytest tests/test_pages/test_account_groups.py -x -q` | ✅ создаётся задачей | ⬜ pending |
+| 03-01-02 | 01 | 1 | GRP-05 | T-03-04 | Пропуск выключенной группы тихий: `SendLog` не пишется, след только в structlog | unit | `uv run pytest tests/test_application/test_collect_due_inactive_group.py -x -q` | ✅ создаётся задачей | ⬜ pending |
+| 03-02-01 | 02 | 1 | GRP-07 | T-03-09 | Ревизия `0014` только additive nullable, без `server_default` и без data-migration | unit | `uv run pytest tests/test_models/test_sync_result_columns.py -x -q` | ✅ создаётся задачей | ⬜ pending |
+| 03-02-02 | 02 | 1 | GRP-07 | T-03-09 | Применение ревизии доказывается на одноразовой базе с программным guard по hostname/port/dbname; целевая база не адресуется | migration | `uv run alembic upgrade 0013:0014 --sql 2>&1 \| grep -Ei 'ALTER TABLE .*messenger_accounts.* ADD COLUMN last_synced_at'` | ✅ существующая инфраструктура alembic | ⬜ pending |
+| 03-02-03 | 02 | 1 | GRP-07 | T-03-06, T-03-08 | Выборка и запись скоупятся по `account_id` И `user_id`; `parse_sync_result` деградирует в `None`, а не в исключение | unit | `uv run pytest tests/test_application/test_group_resync.py -x -q` | ✅ создаётся задачей | ⬜ pending |
+| 03-03-01 | 03 | 1 | GRP-05 | T-03-11 | Расширение выборки на неактивные группы сохраняет `Group.user_id == user.id` — чужая группа в карточку не попадает | integration | `uv run pytest tests/test_pages/test_editor_schedules.py -x -q` | ✅ | ⬜ pending |
+| 03-03-02 | 03 | 1 | GRP-05 | T-03-12, T-03-13 | Имя группы в списке выбора — текст под autoescape, не разметка | integration | `uv run pytest tests/test_templates/ tests/test_pages/test_responsive_markup.py -q` | ✅ | ⬜ pending |
+| 03-04-01 | 04 | 2 | GRP-07 | T-03-14, T-03-15 | Проверка владения аккаунтом сохраняется без изменений; guard по статусу `syncing` не ставит второй Celery-задачи | integration | `uv run pytest tests/test_routes/test_sync_groups.py -x -q` | ✅ | ⬜ pending |
+| 03-04-02 | 04 | 2 | GRP-07 | T-03-16, T-03-17, T-03-18 | Хелпер не удаляет строк и не трогает `is_active`; в `last_sync_result` пишется сообщение исключения, не строка подключения; WA- и MAX-пути симметричны | unit | `uv run pytest tests/test_worker/test_tasks.py -x -q` | ✅ | ⬜ pending |
+| 03-05-01 | 05 | 2 | GRP-04 | T-03-19, T-03-21, T-03-22 | Паршал сам проверяет владение; строка поиска уходит bind-параметром, не конкатенацией SQL; смещение и предел валидируются до обращения к БД | integration | `uv run pytest tests/test_pages/test_account_groups.py -x -q` | ✅ создан 03-01 | ⬜ pending |
+| 03-05-02 | 05 | 2 | GRP-06 | T-03-20, T-03-23 | Тройное условие выборки при удалении; чистка `group_ids` ограничена владельцем; имя группы в панели подтверждения — текст, не разметка | integration | `uv run pytest tests/test_pages/test_account_groups.py -x -q` | ✅ создан 03-01 | ⬜ pending |
+| 03-05-03 | 05 | 2 | GRP-04 | T-03-24 | Подсчёт вхождений в `group_ids` выполняется для 30 отрисованных строк, агрегация по всей таблице расписаний не выполняется | integration | `uv run pytest tests/test_pages/test_responsive_markup.py tests/test_templates/test_components.py -q` | ✅ | ⬜ pending |
+| 03-06-01 | 06 | 3 | GRP-07 | T-03-27, T-03-28 | Текст ошибки из сохранённого результата выводится под autoescape; испорченное значение даёт отсутствие плашки, а не стек-трейс; guard повторного запуска сохраняется | integration | `uv run pytest tests/test_pages/test_account_groups.py -x -q` | ✅ создан 03-01 | ⬜ pending |
+| 03-06-02 | 06 | 3 | GRP-07 | T-03-25, T-03-26 | Владение проверяется во входе статуса; атрибуты опроса объявлены только в ветке выполнения — остановка доказывается парой тестов | integration | `uv run pytest tests/test_pages/test_htmx_preserved.py -q` | ✅ | ⬜ pending |
+| 03-07-01 | 07 | 4 | GRP-08 | T-03-32 | Причина, дата и автор снятия требования записаны; строка прослеживаемости сохранена — «отменено» отличимо от «потеряно» | docs-gate | `grep -qE '^\*\*Requirements\*\*: GRP-04, GRP-05, GRP-06, GRP-07$' .planning/ROADMAP.md` | ✅ | ⬜ pending |
+| 03-07-02 | 07 | 4 | GRP-08 | — | N/A — перевод тестового посева на прямую вставку ORM, поведение приложения не меняется | integration | `uv run pytest tests/ -q` | ✅ | ⬜ pending |
+| 03-07-03 | 07 | 4 | GRP-08 | T-03-29, T-03-30, T-03-31 | Вход создания группы без проверки владения аккаунтом удалён целиком вместе с остальной JSON-поверхностью; поведение живёт на страничных маршрутах с проверкой владения на каждом входе | integration | `uv run pytest tests/ -q` | ✅ | ⬜ pending |
+| 03-08-01 | 08 | 5 | GRP-04 | T-03-33, T-03-35 | Заглушка перенаправления не принимает параметров и не читает состояния; старые закладки не дают ответа об отсутствии страницы | integration | `uv run pytest tests/test_pages/test_shell.py -x -q` | ✅ | ⬜ pending |
+| 03-08-02 | 08 | 5 | GRP-04, GRP-06 | T-03-34 | Утверждения о владении при переключении и об удалении с чисткой расписаний существуют на новом экране ДО удаления старых тестов; список сверки в SUMMARY | integration | `uv run pytest tests/test_pages/test_responsive_markup.py tests/test_pages/test_htmx_preserved.py tests/test_pages/test_shell.py tests/test_templates/test_components.py -q` | ✅ | ⬜ pending |
+| 03-08-03 | 08 | 5 | GRP-04, GRP-06 | — | N/A — удаление осиротевших стилей снесённого раздела | full suite | `uv run pytest tests/ -q` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+
+**Покрытие карты:** 20 задач в 8 планах, у всех 20 есть блок `<automated>`. Трёх подряд идущих задач без автоматической проверки в фазе нет. Ни один блок `<automated>` фазы не содержит ссылки `MISSING —`.
 
 ---
 
 ## Wave 0 Requirements
 
-- [ ] `{tests/test_file.py}` — stubs for REQ-{XX}
-- [ ] `{tests/conftest.py}` — shared fixtures
-- [ ] `{framework install}` — if no framework detected
+**Existing infrastructure covers all phase requirements.**
 
-*If none: "Existing infrastructure covers all phase requirements."*
+- pytest, `pytest-asyncio` и `pytest-cov` уже в зависимостях проекта; ставить фреймворк не нужно
+- `tests/conftest.py` уже даёт `client`, `db_session`, `auth_headers`, `authed_client`; фаза добавляет к ним один хелпер прямого посева групп, и делает это задачей 03-07-02, а не отдельной волной подготовки
+- Четыре новых тестовых файла (`tests/test_pages/test_account_groups.py`, `tests/test_application/test_collect_due_inactive_group.py`, `tests/test_models/test_sync_result_columns.py`, `tests/test_application/test_group_resync.py`) создаются собственными задачами вместе с блоками `<behavior>`, задающими ожидания до реализации; отдельного скелета волны 0 они не требуют, потому что ни одна задача фазы не ссылается на них как на уже существующие
 
 ---
 
@@ -60,19 +91,24 @@ created: 2026-08-12
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| {behavior} | REQ-{XX} | {reason} | {steps} |
-
-*If none: "All phase behaviors have automated verification."*
+| Группа, выключенная между сбором расписаний и постановкой задач, может получить одну уже собранную отправку; гарантия ограничена моментом сбора | GRP-05 | Это граница гарантии, а не поведение: гонка между сбором и постановкой задач детерминированно в суите не воспроизводится, а тест на неё был бы тестом на планировщик Celery | При отладке жалобы «выключил группу, а сообщение ушло» проверить время `SendLog` против времени переключения: одна уже собранная отправка в пределах интервала сбора — ожидаемое поведение, две и больше — дефект |
+| Имя группы длиной 120 символов обрезается в одну строку с полным значением в `title`, элементы управления не покидают строку | GRP-04 | Обрезка задаётся CSS и измеряется по факту рендера в браузере; разметка сама по себе её не доказывает | Открыть экран групп аккаунта на ширине 320 пикселей с группой, имя которой 120 символов: строка не переносится, многоточие видно, наведение показывает полное имя, тумблер и кнопка удаления на месте |
+| Длинное имя группы в теле панели подтверждения переносится не более чем на две строки и затем обрезается; панель не выходит за свою предельную ширину | GRP-06 | То же — правило переноса проверяется рендером, не разметкой | На ширине 320 пикселей открыть панель подтверждения удаления для группы с именем в 120 символов: тело панели занимает не более двух строк, панель по ширине не выходит за экран |
+| Тело панели подтверждения — единственный слот пользовательского содержимого; оно экранируется шаблонизатором и ограничено правилом переноса выше | GRP-06 | Экранирование покрыто автоматически обходом всех шаблонов (`test_no_unsafe_escaping`); вручную проверяется только вторая половина — что слот действительно единственный и правило переноса к нему применено | Создать группу с именем, содержащим разметку и 120 символов, открыть панель подтверждения: разметка видна как текст, перенос ограничен двумя строками |
+| Имя аккаунта длиной 60 символов обрезается в колонке идентичности, не выталкивая бейдж статуса и действия | GRP-07 | Раскладка шапки на узкой ширине проверяется рендером | На ширине 320 пикселей открыть экран групп аккаунта с именем аккаунта в 60 символов: имя обрезано, бейдж статуса и оба действия видны и не съехали за экран |
+| Длинная строка ошибки воркера переносится внутри плашки на несколько строк, не расширяя страницу и не обрезаясь | GRP-07 | Требует настоящего провала синхронизации с длинным сообщением; воспроизводится подстановкой в `last_sync_result`, но измеряется рендером | Записать в `last_sync_result` аккаунта ошибку в 300 символов, открыть экран на ширине 320 пикселей: текст переносится внутри плашки, горизонтальной прокрутки страницы нет, текст не обрезан |
+| Экран групп аккаунта пригоден к использованию на ширинах 320, 860 и 1280 пикселей | GRP-04 (критерий успеха 5 фазы) | Чекпойнт `human-check` задачи 03-05-03 | Открыть экран на трёх ширинах: шапка переносит действия без обрезки, строка группы читается и её элементы управления доступны, горизонтальной прокрутки нет |
+| Пять критериев успеха фазы проходятся живым сценарием целиком | GRP-04, GRP-05, GRP-06, GRP-07 | Чекпойнт `human-check` задачи 03-08-03 — приёмка фазы владельцем | Открыть экран групп аккаунта, включить и отключить группу, удалить группу через панель подтверждения, запустить повторную синхронизацию и увидеть её результат не покидая экрана, повторить на ширине 320 пикселей |
 
 ---
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < {N}s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies — 20 из 20 задач несут `<automated>`
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify — разрывов нет
+- [x] Wave 0 covers all MISSING references — ссылок `MISSING —` в фазе нет, волна 0 не требуется
+- [x] No watch-mode flags — все команды однократные (`pytest`, `alembic`, `grep`, `test -f`)
+- [x] Feedback latency < 10s — быстрая команда задачи ~5 с
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** {pending / approved YYYY-MM-DD}
+**Approval:** pending
