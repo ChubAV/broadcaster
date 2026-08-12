@@ -59,6 +59,53 @@ async def _login(client: AsyncClient) -> None:
     await client.post("/login", data={"email": "sync@test.com", "password": "pass123"})
 
 
+async def _make_account(session_factory, *, email: str = "sync@test.com",
+                        type_: str = "tg_user", status: str = "active") -> int:
+    """Создаёт аккаунт указанного пользователя и возвращает его id."""
+    from app.models.user import User
+
+    async with session_factory() as session:
+        user = (
+            await session.execute(select(User).where(User.email == email))
+        ).scalar_one()
+        account = MessengerAccount(
+            user_id=user.id,
+            type=type_,
+            credentials="session-string",
+            status=status,
+        )
+        session.add(account)
+        await session.commit()
+        return account.id
+
+
+async def _add_group(session_factory, account_id: int, external_id: str, name: str,
+                     *, is_active: bool = True) -> int:
+    """Кладёт группу в базу от имени владельца аккаунта."""
+    async with session_factory() as session:
+        account = await session.get(MessengerAccount, account_id)
+        group = Group(
+            user_id=account.user_id,
+            account_id=account_id,
+            messenger_type=account.type,
+            group_external_id=external_id,
+            name=name,
+            is_active=is_active,
+        )
+        session.add(group)
+        await session.commit()
+        return group.id
+
+
+async def _account_result(session_factory, account_id: int):
+    """Возвращает (last_synced_at, разобранный last_sync_result) аккаунта."""
+    from app.application.accounts.group_resync import parse_sync_result
+
+    async with session_factory() as session:
+        account = await session.get(MessengerAccount, account_id)
+        return account.last_synced_at, parse_sync_result(account.last_sync_result)
+
+
 @pytest.mark.asyncio
 async def test_sync_groups_creates_groups(sync_setup):
     client, session_factory = sync_setup
@@ -263,11 +310,211 @@ async def test_sync_groups_skips_existing(sync_setup):
         groups = result.scalars().all()
         # Should have 2: existing + new, no duplicate
         assert len(groups) == 2
-        # Existing keeps its original name
-        assert groups[0].name == "Existing Group A"
+        # D-11: имя существующей группы обновляется ответом мессенджера,
+        # второй строки при этом не появляется
+        assert groups[0].name == "Group A (updated name)"
         assert groups[0].group_external_id == "-100111"
         # New group created
         assert groups[1].name == "Group C"
         assert groups[1].group_external_id == "-100333"
+
+
+# --- План 03-04: TG-синк через общий хелпер, результат на аккаунте (D-09…D-12) ---
+
+
+@pytest.mark.asyncio
+async def test_sync_records_result_on_account(sync_setup):
+    """После успешного синка на аккаунте есть время синка и разбираемая сводка."""
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+
+    mock_groups = [
+        {"id": "-1", "name": "Один"},
+        {"id": "-2", "name": "Два"},
+        {"id": "-3", "name": "Три"},
+    ]
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        MockMessenger.return_value.get_groups = AsyncMock(return_value=mock_groups)
+        await client.post(f"/accounts/{account_id}/sync-groups")
+
+    async with session_factory() as session:
+        groups = (
+            await session.execute(select(Group).where(Group.account_id == account_id))
+        ).scalars().all()
+        assert len(groups) == 3
+
+    last_synced_at, result = await _account_result(session_factory, account_id)
+    assert last_synced_at is not None
+    assert result is not None
+    assert result["found"] == 3
+    assert result["new"] == 3
+    assert result["renamed"] == 0
+    assert result["missing"] == 0
+    assert result["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_sync_renames_existing_group(sync_setup):
+    """D-11: изменившееся в мессенджере имя доезжает до строки и считается."""
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+    group_id = await _add_group(session_factory, account_id, "-1", "Старое имя")
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        MockMessenger.return_value.get_groups = AsyncMock(
+            return_value=[{"id": "-1", "name": "Новое имя"}]
+        )
+        await client.post(f"/accounts/{account_id}/sync-groups")
+
+    async with session_factory() as session:
+        group = await session.get(Group, group_id)
+        assert group.name == "Новое имя"
+
+    _, result = await _account_result(session_factory, account_id)
+    assert result["renamed"] == 1
+    assert result["new"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_marks_missing_group_but_keeps_it(sync_setup):
+    """D-11: не вернувшаяся группа помечается, но остаётся в базе."""
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+    group_id = await _add_group(session_factory, account_id, "-1", "Пропавшая")
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        MockMessenger.return_value.get_groups = AsyncMock(return_value=[])
+        await client.post(f"/accounts/{account_id}/sync-groups")
+
+    async with session_factory() as session:
+        group = await session.get(Group, group_id)
+        assert group is not None, "синк не имеет права удалять группы пользователя"
+        assert group.missing_since is not None
+
+    _, result = await _account_result(session_factory, account_id)
+    assert result["missing"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_keeps_disabled_group_disabled(sync_setup):
+    """D-11: включённость — выбор пользователя, синк её не переписывает."""
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+    group_id = await _add_group(
+        session_factory, account_id, "-1", "Выключенная", is_active=False
+    )
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        MockMessenger.return_value.get_groups = AsyncMock(
+            return_value=[{"id": "-1", "name": "Выключенная"}]
+        )
+        await client.post(f"/accounts/{account_id}/sync-groups")
+
+    async with session_factory() as session:
+        group = await session.get(Group, group_id)
+        assert group.is_active is False
+
+    # Сводка обязана подтвердить, что группа была УВИДЕНА синком: иначе тест
+    # зеленел бы и на пути, который до неё просто не дошёл.
+    _, result = await _account_result(session_factory, account_id)
+    assert result["found"] == 1
+    assert result["new"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_redirects_to_account_groups_screen(sync_setup):
+    """Пользователь возвращается на экран групп ТОГО аккаунта, с которым работал."""
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        MockMessenger.return_value.get_groups = AsyncMock(return_value=[])
+        resp = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == f"/accounts/{account_id}/groups"
+
+
+@pytest.mark.asyncio
+async def test_sync_while_syncing_does_not_touch_messenger(sync_setup):
+    """Guard повторного запуска: второй запрос не идёт в мессенджер."""
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory, status="syncing")
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        resp = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == f"/accounts/{account_id}/groups"
+    MockMessenger.assert_not_called()
+
+    last_synced_at, result = await _account_result(session_factory, account_id)
+    assert last_synced_at is None
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_sync_foreign_account_changes_nothing(sync_setup):
+    """T-03-14: чужой account_id не запускает синк и не меняет состояния."""
+    client, session_factory = sync_setup
+    await _login(client)
+
+    await client.post("/api/auth/register", json={
+        "email": "other@test.com", "password": "pass123", "name": "Other User",
+    })
+    foreign_id = await _make_account(session_factory, email="other@test.com")
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        resp = await client.post(
+            f"/accounts/{foreign_id}/sync-groups", follow_redirects=False
+        )
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/accounts"
+    MockMessenger.assert_not_called()
+
+    last_synced_at, result = await _account_result(session_factory, foreign_id)
+    assert last_synced_at is None
+    assert result is None
+    async with session_factory() as session:
+        groups = (
+            await session.execute(select(Group).where(Group.account_id == foreign_id))
+        ).scalars().all()
+        assert groups == []
+
+
+@pytest.mark.asyncio
+async def test_sync_failure_is_recorded_not_swallowed(sync_setup):
+    """Отказ мессенджера записывается на аккаунт, а не теряется."""
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        MockMessenger.return_value.get_groups = AsyncMock(
+            side_effect=RuntimeError("сессия Telegram протухла")
+        )
+        resp = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+
+    assert resp.status_code == 302
+    assert resp.headers["location"] == f"/accounts/{account_id}/groups"
+
+    last_synced_at, result = await _account_result(session_factory, account_id)
+    assert last_synced_at is not None
+    assert result is not None
+    assert "сессия Telegram протухла" in result["error"]
 
 

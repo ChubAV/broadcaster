@@ -11,7 +11,12 @@ from app.models.messenger_account import MessengerAccount
 from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
-from app.worker.tasks import check_schedules_async, _send_message
+from app.worker.tasks import (
+    check_schedules_async,
+    _send_message,
+    _sync_wa_groups_async,
+    _sync_max_groups_async,
+)
 
 
 @pytest_asyncio.fixture
@@ -283,3 +288,271 @@ async def test_check_schedules_uses_schedule_timezone(db_session):
     # Verify next_run_at was recomputed — it should exist and be in the future
     await db_session.refresh(schedule)
     assert schedule.next_run_at is not None
+
+
+# --- План 03-04: фоновые синхронизации WA и MAX через общий хелпер ---
+#
+# Оба пути проверяются ОДНИМ набором параметризованных тестов. Цель плана —
+# чтобы WA и MAX перестали быть двумя копиями, расходящимися молча; симметричные
+# сценарии делают расхождение падением теста, а не находкой в проде.
+
+SYNC_PATHS = [
+    pytest.param(
+        _sync_wa_groups_async,
+        "app.messengers.whatsapp.WhatsAppMessenger",
+        "wa",
+        id="wa",
+    ),
+    pytest.param(
+        _sync_max_groups_async,
+        "app.messengers.max.MaxMessenger",
+        "max",
+        id="max",
+    ),
+]
+
+
+async def _make_syncing_account(factory, account_type: str, *, status: str = "syncing"):
+    """Пользователь + аккаунт в статусе синхронизации."""
+    async with factory() as session:
+        user = User(email=f"{account_type}@sync.test", password_hash="h", name="S")
+        session.add(user)
+        await session.commit()
+
+        account = MessengerAccount(
+            user_id=user.id, type=account_type, credentials="c", status=status
+        )
+        session.add(account)
+        await session.commit()
+        return user.id, account.id
+
+
+async def _seed_group(factory, account_id: int, external_id: str, name: str,
+                      *, is_active: bool = True) -> int:
+    async with factory() as session:
+        account = await session.get(MessengerAccount, account_id)
+        group = Group(
+            user_id=account.user_id,
+            account_id=account_id,
+            messenger_type=account.type,
+            group_external_id=external_id,
+            name=name,
+            is_active=is_active,
+        )
+        session.add(group)
+        await session.commit()
+        return group.id
+
+
+async def _account_state(factory, account_id: int):
+    """(status, last_synced_at, разобранный last_sync_result)."""
+    from app.application.accounts.group_resync import parse_sync_result
+
+    async with factory() as session:
+        account = await session.get(MessengerAccount, account_id)
+        return (
+            account.status,
+            account.last_synced_at,
+            parse_sync_result(account.last_sync_result),
+        )
+
+
+def _sync_patches(factory, messenger_path: str, messenger):
+    """Общая обвязка: настройки, движок-заглушка, фабрика сессий, мессенджер."""
+    mock_settings = MagicMock()
+    mock_settings.database_url = "sqlite+aiosqlite:///:memory:"
+    mock_messenger_cls = MagicMock(return_value=messenger)
+    return (
+        patch("app.worker.tasks.get_settings", return_value=mock_settings),
+        patch("app.worker.tasks.get_engine", return_value=AsyncMock()),
+        patch("app.worker.tasks.get_session_factory", return_value=factory),
+        patch(messenger_path, mock_messenger_cls),
+    )
+
+
+async def _run_sync(sync_fn, factory, messenger_path: str, messenger, account_id: int):
+    settings_p, engine_p, factory_p, messenger_p = _sync_patches(
+        factory, messenger_path, messenger
+    )
+    with settings_p, engine_p, factory_p, messenger_p:
+        await sync_fn(account_id)
+
+
+def _ready_messenger(groups):
+    messenger = MagicMock()
+    messenger.get_sync_status = AsyncMock(
+        return_value={"state": "ready", "groups": groups}
+    )
+    return messenger
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_fn,messenger_path,account_type", SYNC_PATHS)
+async def test_background_sync_records_result(
+    db_engine_and_factory, sync_fn, messenger_path, account_type
+):
+    """Успешный фоновый синк создаёт строки, пишет сводку и включает аккаунт."""
+    _, factory = db_engine_and_factory
+    _, account_id = await _make_syncing_account(factory, account_type)
+
+    messenger = _ready_messenger(
+        [
+            {"id": "g1", "name": "Один"},
+            {"id": "g2", "name": "Два"},
+            {"id": "g3", "name": "Три"},
+        ]
+    )
+    await _run_sync(sync_fn, factory, messenger_path, messenger, account_id)
+
+    async with factory() as session:
+        groups = (
+            await session.execute(select(Group).where(Group.account_id == account_id))
+        ).scalars().all()
+        assert len(groups) == 3
+        assert {g.messenger_type for g in groups} == {account_type}
+
+    status, last_synced_at, result = await _account_state(factory, account_id)
+    assert status == "active"
+    assert last_synced_at is not None
+    assert result == {"found": 3, "new": 3, "renamed": 0, "missing": 0, "error": None}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_fn,messenger_path,account_type", SYNC_PATHS)
+async def test_background_sync_renames_existing_group(
+    db_engine_and_factory, sync_fn, messenger_path, account_type
+):
+    """D-11: имя существующей группы обновляется в обоих путях."""
+    _, factory = db_engine_and_factory
+    _, account_id = await _make_syncing_account(factory, account_type)
+    group_id = await _seed_group(factory, account_id, "g1", "Старое имя")
+
+    messenger = _ready_messenger([{"id": "g1", "name": "Новое имя"}])
+    await _run_sync(sync_fn, factory, messenger_path, messenger, account_id)
+
+    async with factory() as session:
+        group = await session.get(Group, group_id)
+        assert group.name == "Новое имя"
+
+    _, _, result = await _account_state(factory, account_id)
+    assert result["renamed"] == 1
+    assert result["new"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_fn,messenger_path,account_type", SYNC_PATHS)
+async def test_background_sync_marks_missing_group_but_keeps_it(
+    db_engine_and_factory, sync_fn, messenger_path, account_type
+):
+    """D-11: не вернувшаяся группа помечается и остаётся в базе в обоих путях."""
+    _, factory = db_engine_and_factory
+    _, account_id = await _make_syncing_account(factory, account_type)
+    group_id = await _seed_group(factory, account_id, "g1", "Пропавшая")
+
+    messenger = _ready_messenger([{"id": "g2", "name": "Другая"}])
+    await _run_sync(sync_fn, factory, messenger_path, messenger, account_id)
+
+    async with factory() as session:
+        group = await session.get(Group, group_id)
+        assert group is not None, "фоновый синк не имеет права удалять группы"
+        assert group.missing_since is not None
+
+    _, _, result = await _account_state(factory, account_id)
+    assert result["missing"] == 1
+    assert result["new"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_fn,messenger_path,account_type", SYNC_PATHS)
+async def test_background_sync_keeps_disabled_group_disabled(
+    db_engine_and_factory, sync_fn, messenger_path, account_type
+):
+    """D-11: включённость — выбор пользователя, фоновый синк её не трогает."""
+    _, factory = db_engine_and_factory
+    _, account_id = await _make_syncing_account(factory, account_type)
+    group_id = await _seed_group(
+        factory, account_id, "g1", "Выключенная", is_active=False
+    )
+
+    messenger = _ready_messenger([{"id": "g1", "name": "Выключенная"}])
+    await _run_sync(sync_fn, factory, messenger_path, messenger, account_id)
+
+    async with factory() as session:
+        group = await session.get(Group, group_id)
+        assert group.is_active is False
+
+    # Группа обязана быть УВИДЕНА синком, иначе тест зеленел бы и на пути,
+    # который до неё не дошёл.
+    _, _, result = await _account_state(factory, account_id)
+    assert result["found"] == 1
+    assert result["new"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_fn,messenger_path,account_type", SYNC_PATHS)
+async def test_background_sync_failed_state_records_error(
+    db_engine_and_factory, sync_fn, messenger_path, account_type
+):
+    """Отказ моста: аккаунт в sync_failed и пользователю есть что показать."""
+    _, factory = db_engine_and_factory
+    _, account_id = await _make_syncing_account(factory, account_type)
+
+    messenger = MagicMock()
+    messenger.get_sync_status = AsyncMock(return_value={"state": "failed"})
+    await _run_sync(sync_fn, factory, messenger_path, messenger, account_id)
+
+    status, last_synced_at, result = await _account_state(factory, account_id)
+    assert status == "sync_failed"
+    assert last_synced_at is not None
+    assert result is not None
+    assert result["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_fn,messenger_path,account_type", SYNC_PATHS)
+async def test_background_sync_timeout_records_error(
+    db_engine_and_factory, sync_fn, messenger_path, account_type
+):
+    """Исчерпание попыток опроса тоже перестаёт быть безмолвным."""
+    _, factory = db_engine_and_factory
+    _, account_id = await _make_syncing_account(factory, account_type)
+
+    messenger = MagicMock()
+    messenger.get_sync_status = AsyncMock(return_value={"state": "syncing"})
+
+    settings_p, engine_p, factory_p, messenger_p = _sync_patches(
+        factory, messenger_path, messenger
+    )
+    with settings_p, engine_p, factory_p, messenger_p, \
+         patch("app.worker.tasks.asyncio.sleep", AsyncMock()):
+        await sync_fn(account_id)
+
+    status, last_synced_at, result = await _account_state(factory, account_id)
+    assert status == "sync_failed"
+    assert last_synced_at is not None
+    assert result is not None
+    assert result["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_fn,messenger_path,account_type", SYNC_PATHS)
+async def test_background_sync_skips_account_not_syncing(
+    db_engine_and_factory, sync_fn, messenger_path, account_type
+):
+    """Существующий guard: задача для аккаунта не в статусе syncing ничего не меняет."""
+    _, factory = db_engine_and_factory
+    _, account_id = await _make_syncing_account(factory, account_type, status="active")
+
+    messenger = _ready_messenger([{"id": "g1", "name": "Один"}])
+    await _run_sync(sync_fn, factory, messenger_path, messenger, account_id)
+
+    async with factory() as session:
+        groups = (
+            await session.execute(select(Group).where(Group.account_id == account_id))
+        ).scalars().all()
+        assert groups == []
+
+    status, last_synced_at, result = await _account_state(factory, account_id)
+    assert status == "active"
+    assert last_synced_at is None
+    assert result is None

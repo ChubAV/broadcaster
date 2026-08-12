@@ -20,6 +20,10 @@ from app.services.billing_service import deduct_message
 from app.services.messenger_factory import create_messenger
 from app.services.s3 import get_image_url
 from app.services.schedule_service import compute_next_run_at
+from app.application.accounts.group_resync import (
+    apply_group_resync,
+    record_sync_failure,
+)
 from app.application.scheduling.use_cases import (
     DispatchTask,
     collect_due_schedules,
@@ -27,6 +31,24 @@ from app.application.scheduling.use_cases import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+def _bridge_failure_message(state: str | None) -> str:
+    """Текст провала синка для пользователя — один на оба фоновых пути.
+
+    Состояние моста само по себе пользователю ничего не говорит, поэтому оно
+    попадает внутрь фразы, а не вместо неё. В `last_sync_result` пишется именно
+    сообщение, а не строка подключения к мосту (T-03-17).
+    """
+    return f"Синхронизация не удалась: мессенджер вернул состояние «{state}»"
+
+
+def _sync_timeout_message(poll_interval: int, max_polls: int) -> str:
+    minutes = poll_interval * max_polls // 60
+    return (
+        f"Синхронизация не завершилась за {minutes} мин — мессенджер не отдал "
+        "список групп"
+    )
 
 
 async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
@@ -275,39 +297,31 @@ async def _sync_wa_groups_async(account_id: int):
                         log.info("sync_skipped", reason="account_not_syncing", status=account.status if account else None)
                         return
 
-                    existing = await session.execute(
-                        select(Group.group_external_id).where(
-                            Group.account_id == account_id,
-                            Group.user_id == account.user_id,
-                        )
+                    # Состав групп считает единственная реализация
+                    # переинвентаризации — та же, что у MAX-пути и у
+                    # страничного TG-обработчика (D-10, D-11, D-12).
+                    result = await apply_group_resync(
+                        session, account, groups, messenger_type="wa"
                     )
-                    existing_ids = {row[0] for row in existing}
-
-                    new_count = 0
-                    seen = set(existing_ids)
-                    for g in groups:
-                        if g["id"] not in seen:
-                            seen.add(g["id"])
-                            session.add(
-                                Group(
-                                    user_id=account.user_id,
-                                    account_id=account_id,
-                                    messenger_type="wa",
-                                    group_external_id=g["id"],
-                                    name=g.get("name") or g["id"],
-                                )
-                            )
-                            new_count += 1
 
                     account.status = "active"
                     await session.commit()
-                    log.info("sync_complete", total_groups=len(groups), new_groups=new_count)
+                    log.info(
+                        "sync_complete",
+                        total_groups=len(groups),
+                        new_groups=result.created,
+                        renamed_groups=result.renamed,
+                        missing_groups=result.missing,
+                    )
                 return
 
             if state in ("failed", "not_found", "unknown"):
                 async with session_factory() as session:
                     account = await session.get(MessengerAccount, account_id)
                     if account and account.status == "syncing":
+                        await record_sync_failure(
+                            session, account, _bridge_failure_message(state)
+                        )
                         account.status = "sync_failed"
                         await session.commit()
                 log.warning("sync_failed", state=state)
@@ -320,6 +334,9 @@ async def _sync_wa_groups_async(account_id: int):
         async with session_factory() as session:
             account = await session.get(MessengerAccount, account_id)
             if account and account.status == "syncing":
+                await record_sync_failure(
+                    session, account, _sync_timeout_message(POLL_INTERVAL, MAX_POLLS)
+                )
                 account.status = "sync_failed"
                 await session.commit()
         log.warning("sync_timeout", max_polls=MAX_POLLS)
@@ -330,6 +347,9 @@ async def _sync_wa_groups_async(account_id: int):
             async with session_factory() as session:
                 account = await session.get(MessengerAccount, account_id)
                 if account and account.status == "syncing":
+                    await record_sync_failure(
+                        session, account, str(e) or e.__class__.__name__
+                    )
                     account.status = "sync_failed"
                     await session.commit()
         except Exception:
@@ -377,39 +397,30 @@ async def _sync_max_groups_async(account_id: int):
                         log.info("sync_skipped", reason="account_not_syncing", status=account.status if account else None)
                         return
 
-                    existing = await session.execute(
-                        select(Group.group_external_id).where(
-                            Group.account_id == account_id,
-                            Group.user_id == account.user_id,
-                        )
+                    # Тот же хелпер, что у WA-пути: расхождение двух копий —
+                    # ровно то, ради устранения чего он и заведён.
+                    result = await apply_group_resync(
+                        session, account, groups, messenger_type="max"
                     )
-                    existing_ids = {row[0] for row in existing}
-
-                    new_count = 0
-                    seen = set(existing_ids)
-                    for g in groups:
-                        if g["id"] not in seen:
-                            seen.add(g["id"])
-                            session.add(
-                                Group(
-                                    user_id=account.user_id,
-                                    account_id=account_id,
-                                    messenger_type="max",
-                                    group_external_id=g["id"],
-                                    name=g.get("name") or g["id"],
-                                )
-                            )
-                            new_count += 1
 
                     account.status = "active"
                     await session.commit()
-                    log.info("sync_complete", total_groups=len(groups), new_groups=new_count)
+                    log.info(
+                        "sync_complete",
+                        total_groups=len(groups),
+                        new_groups=result.created,
+                        renamed_groups=result.renamed,
+                        missing_groups=result.missing,
+                    )
                 return
 
             if state in ("failed", "not_found", "unknown"):
                 async with session_factory() as session:
                     account = await session.get(MessengerAccount, account_id)
                     if account and account.status == "syncing":
+                        await record_sync_failure(
+                            session, account, _bridge_failure_message(state)
+                        )
                         account.status = "sync_failed"
                         await session.commit()
                 log.warning("sync_failed", state=state)
@@ -422,6 +433,9 @@ async def _sync_max_groups_async(account_id: int):
         async with session_factory() as session:
             account = await session.get(MessengerAccount, account_id)
             if account and account.status == "syncing":
+                await record_sync_failure(
+                    session, account, _sync_timeout_message(POLL_INTERVAL, MAX_POLLS)
+                )
                 account.status = "sync_failed"
                 await session.commit()
         log.warning("sync_timeout", max_polls=MAX_POLLS)
@@ -432,6 +446,9 @@ async def _sync_max_groups_async(account_id: int):
             async with session_factory() as session:
                 account = await session.get(MessengerAccount, account_id)
                 if account and account.status == "syncing":
+                    await record_sync_failure(
+                        session, account, str(e) or e.__class__.__name__
+                    )
                     account.status = "sync_failed"
                     await session.commit()
         except Exception:
