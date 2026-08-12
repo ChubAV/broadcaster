@@ -165,10 +165,18 @@ def test_downgrade_removes_all_three_columns(db_at_0013):
 
 
 def test_revision_0014_continues_0013():
-    """0014 продолжает 0013 — прыжок 0012 → 0014 остаётся одной линией."""
+    """0014 продолжает 0013 — прыжок 0012 → 0014 остаётся одной линией.
+
+    Проверяется принадлежность ЕДИНСТВЕННОЙ линии истории, а не то, что 0014
+    остаётся головой: головой она перестала быть с появлением 0015, а утверждение
+    файла всегда было про отсутствие ветвления, а не про положение в конце.
+    """
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ALEMBIC_INI)))
 
     assert script.get_revision("0014").down_revision == "0013"
-    assert "0014" in script.get_heads()
+    heads = script.get_heads()
+    assert len(heads) == 1, f"история разветвилась: {heads}"
+    line = {revision.revision for revision in script.walk_revisions(base="base")}
+    assert "0014" in line

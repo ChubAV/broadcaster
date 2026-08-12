@@ -18,6 +18,7 @@
 пустым (эталон — test_ads_card_renders_data).
 """
 
+import itertools
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -92,6 +93,9 @@ async def _seed_account(
     return account
 
 
+_external_id_counter = itertools.count(1)
+
+
 async def _seed_group(
     db: AsyncSession,
     account: MessengerAccount,
@@ -104,7 +108,12 @@ async def _seed_group(
         user_id=user.id if user_id is None else user_id,
         account_id=account.id,
         messenger_type=account.type,
-        group_external_id=f"ext-{name}",
+        # Внешний идентификатор выводится из СЧЁТЧИКА, а не из имени: имена
+        # чатов мессенджер отдаёт без гарантии уникальности, и на паре
+        # одноимённых групп прежний `ext-{name}` порождал две строки с
+        # одинаковым `group_external_id` — состояние, которое база с ревизии
+        # 0015 не принимает, а фикстура не имела в виду.
+        group_external_id=f"ext-{next(_external_id_counter)}",
         name=name,
         is_active=is_active,
     )
