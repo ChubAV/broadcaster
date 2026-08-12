@@ -6,6 +6,7 @@ from app.models.user import User
 from app.models.send_log import SendLog
 from app.models.schedule import Schedule
 from app.models.group import Group
+from tests.conftest import seed_group
 
 
 async def setup_dependencies(client, auth_headers, db_session):
@@ -22,13 +23,11 @@ async def setup_dependencies(client, auth_headers, db_session):
     }, headers=auth_headers)
     account_id = account_resp.json()["id"]
 
-    group_resp = await client.post("/api/groups", json={
-        "account_id": account_id,
-        "messenger_type": "tg_user",
-        "group_external_id": "ext-hist-1",
-        "name": "History Group",
-    }, headers=auth_headers)
-    group_id = group_resp.json()["id"]
+    group_id = (
+        await seed_group(
+            db_session, account_id, group_external_id="ext-hist-1", name="History Group"
+        )
+    ).id
 
     schedule_resp = await client.post("/api/schedules", json={
         "ad_id": ad_id,

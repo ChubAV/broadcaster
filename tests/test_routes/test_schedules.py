@@ -1,7 +1,9 @@
 import pytest
 
+from tests.conftest import seed_group
 
-async def setup_ad_and_account(client, auth_headers):
+
+async def setup_ad_and_account(client, auth_headers, db_session):
     """Объявление, аккаунт и ТРИ РЕАЛЬНЫЕ группы этого аккаунта.
 
     Группы настоящие, а не выдуманные значения вида `[1, 2, 3]`: расписание,
@@ -9,6 +11,9 @@ async def setup_ad_and_account(client, auth_headers):
     межарендная дыра (02-REVIEW.md, CR-02), а тест на выдуманных значениях её
     закреплял бы. Ожидания тестов от этого не меняются: меняются только данные,
     на которых они выполняются.
+
+    Группы сеются прямой вставкой через ORM: прикладного входа их создания в
+    приложении нет (GRP-08 снято, JSON-маршрут групп удалён — план 03-07).
     """
     ad_resp = await client.post("/api/ads", json={
         "title": "Schedule Ad",
@@ -24,20 +29,20 @@ async def setup_ad_and_account(client, auth_headers):
 
     group_ids = []
     for index in range(3):
-        group_resp = await client.post("/api/groups", json={
-            "account_id": account_id,
-            "messenger_type": "tg_user",
-            "group_external_id": f"-100100000000{index}",
-            "name": f"Группа {index + 1}",
-        }, headers=auth_headers)
-        group_ids.append(group_resp.json()["id"])
+        group = await seed_group(
+            db_session,
+            account_id,
+            group_external_id=f"-100100000000{index}",
+            name=f"Группа {index + 1}",
+        )
+        group_ids.append(group.id)
 
     return ad_id, account_id, group_ids
 
 
 @pytest.mark.asyncio
-async def test_create_schedule(client, auth_headers):
-    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
+async def test_create_schedule(client, auth_headers, db_session):
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers, db_session)
 
     response = await client.post("/api/schedules", json={
         "ad_id": ad_id,
@@ -60,8 +65,8 @@ async def test_create_schedule(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_list_schedules(client, auth_headers):
-    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
+async def test_list_schedules(client, auth_headers, db_session):
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers, db_session)
 
     await client.post("/api/schedules", json={
         "ad_id": ad_id,
@@ -85,8 +90,8 @@ async def test_list_schedules(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_update_schedule(client, auth_headers):
-    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
+async def test_update_schedule(client, auth_headers, db_session):
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers, db_session)
 
     create_resp = await client.post("/api/schedules", json={
         "ad_id": ad_id,
@@ -111,8 +116,8 @@ async def test_update_schedule(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_delete_schedule(client, auth_headers):
-    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
+async def test_delete_schedule(client, auth_headers, db_session):
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers, db_session)
 
     create_resp = await client.post("/api/schedules", json={
         "ad_id": ad_id,
@@ -132,8 +137,8 @@ async def test_delete_schedule(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_toggle_schedule(client, auth_headers):
-    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
+async def test_toggle_schedule(client, auth_headers, db_session):
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers, db_session)
 
     create_resp = await client.post("/api/schedules", json={
         "ad_id": ad_id,
@@ -159,8 +164,8 @@ async def test_toggle_schedule(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_create_schedule_with_timezone(client, auth_headers):
-    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
+async def test_create_schedule_with_timezone(client, auth_headers, db_session):
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers, db_session)
 
     response = await client.post("/api/schedules", json={
         "ad_id": ad_id,
@@ -177,8 +182,8 @@ async def test_create_schedule_with_timezone(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_update_schedule_timezone(client, auth_headers):
-    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
+async def test_update_schedule_timezone(client, auth_headers, db_session):
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers, db_session)
 
     create_resp = await client.post("/api/schedules", json={
         "ad_id": ad_id,
@@ -197,8 +202,8 @@ async def test_update_schedule_timezone(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_create_schedule_invalid_timezone(client, auth_headers):
-    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers)
+async def test_create_schedule_invalid_timezone(client, auth_headers, db_session):
+    ad_id, account_id, group_ids = await setup_ad_and_account(client, auth_headers, db_session)
 
     response = await client.post("/api/schedules", json={
         "ad_id": ad_id,
@@ -234,7 +239,7 @@ async def test_create_schedule_rejects_foreign_account(
     from app.models.schedule import Schedule
     from app.models.user import User
 
-    ad_id, _, group_ids = await setup_ad_and_account(client, auth_headers)
+    ad_id, _, group_ids = await setup_ad_and_account(client, auth_headers, db_session)
 
     stranger = User(email="stranger@test.com", password_hash="x", name="Stranger")
     db_session.add(stranger)
@@ -263,8 +268,8 @@ async def test_create_schedule_rejects_foreign_account(
 
 
 @pytest.mark.asyncio
-async def test_create_schedule_rejects_nonexistent_account(client, auth_headers):
-    ad_id, _, group_ids = await setup_ad_and_account(client, auth_headers)
+async def test_create_schedule_rejects_nonexistent_account(client, auth_headers, db_session):
+    ad_id, _, group_ids = await setup_ad_and_account(client, auth_headers, db_session)
 
     response = await client.post("/api/schedules", json={
         "ad_id": ad_id,

@@ -23,12 +23,16 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
+from tests.conftest import seed_group
 
 
-# --- Свои сущности: через публичные маршруты ----------------------------------
+# --- Свои сущности ------------------------------------------------------------
 #
-# `POST /api/groups` проставляет `user_id` вызывающего сам, поэтому «своя группа»
-# заводится ровно тем способом, каким её заводит пользователь.
+# Объявление и аккаунт — через публичные маршруты. Группа — прямой вставкой
+# через ORM: прикладного входа её создания в приложении нет (GRP-08 снято,
+# JSON-маршрут групп удалён — план 03-07). Владельца группа наследует ОТ
+# АККАУНТА, ровно как это делает синхронизация, — то есть «своя группа»
+# остаётся своей по тому же признаку, что и раньше.
 
 
 async def _create_ad(client: AsyncClient, auth_headers: dict, title: str = "Schedule Ad") -> int:
@@ -52,30 +56,24 @@ async def _create_account(
 
 
 async def _create_group(
-    client: AsyncClient,
-    auth_headers: dict,
+    db_session: AsyncSession,
     account_id: int,
     external_id: str = "-1001000000001",
     name: str = "Своя группа",
 ) -> int:
-    response = await client.post(
-        "/api/groups",
-        json={
-            "account_id": account_id,
-            "messenger_type": "tg_user",
-            "group_external_id": external_id,
-            "name": name,
-        },
-        headers=auth_headers,
+    group = await seed_group(
+        db_session, account_id, group_external_id=external_id, name=name
     )
-    return response.json()["id"]
+    return group.id
 
 
-async def _own_setup(client: AsyncClient, auth_headers: dict) -> tuple[int, int, int]:
+async def _own_setup(
+    client: AsyncClient, auth_headers: dict, db_session: AsyncSession
+) -> tuple[int, int, int]:
     """Объявление, аккаунт и группа ЭТОГО аккаунта — минимальный полный набор."""
     ad_id = await _create_ad(client, auth_headers)
     account_id = await _create_account(client, auth_headers)
-    group_id = await _create_group(client, auth_headers, account_id)
+    group_id = await _create_group(db_session, account_id)
     return ad_id, account_id, group_id
 
 
@@ -152,7 +150,7 @@ async def _create_full_schedule(
 async def test_create_rejects_a_group_id_of_another_user(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
-    ad_id, account_id, _ = await _own_setup(client, auth_headers)
+    ad_id, account_id, _ = await _own_setup(client, auth_headers, db_session)
     foreign_group_id = await _seed_foreign_group(db_session)
 
     response = await client.post(
@@ -181,8 +179,7 @@ async def test_create_rejects_a_group_id_of_another_account_of_the_same_user(
     first_account_id = await _create_account(client, auth_headers, "creds-first")
     second_account_id = await _create_account(client, auth_headers, "creds-second")
     other_account_group_id = await _create_group(
-        client,
-        auth_headers,
+        db_session,
         second_account_id,
         external_id="-1001000000002",
         name="Группа второго аккаунта",
@@ -208,7 +205,7 @@ async def test_create_rejects_a_group_id_of_another_account_of_the_same_user(
 async def test_create_accepts_own_group_ids(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
-    ad_id, account_id, group_id = await _own_setup(client, auth_headers)
+    ad_id, account_id, group_id = await _own_setup(client, auth_headers, db_session)
 
     response = await client.post(
         "/api/schedules",
@@ -234,7 +231,7 @@ async def test_create_accepts_own_group_ids(
 async def test_update_rejects_swapping_in_a_foreign_group_id(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
-    ad_id, account_id, group_id = await _own_setup(client, auth_headers)
+    ad_id, account_id, group_id = await _own_setup(client, auth_headers, db_session)
     schedule_id = await _create_full_schedule(
         client, auth_headers, ad_id, account_id, group_id
     )
@@ -260,7 +257,7 @@ async def test_update_without_group_ids_leaves_them_untouched(
     Отсутствующий ключ означает «не трогать»; отказ на нём превратил бы частичное
     обновление в обязательную передачу всего состава групп.
     """
-    ad_id, account_id, group_id = await _own_setup(client, auth_headers)
+    ad_id, account_id, group_id = await _own_setup(client, auth_headers, db_session)
     schedule_id = await _create_full_schedule(
         client, auth_headers, ad_id, account_id, group_id
     )
@@ -321,7 +318,7 @@ async def test_api_toggle_pausing_an_active_schedule_is_never_blocked(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
     """Право поставить на паузу не зависит от заполненности."""
-    ad_id, account_id, group_id = await _own_setup(client, auth_headers)
+    ad_id, account_id, group_id = await _own_setup(client, auth_headers, db_session)
     schedule_id = await _create_full_schedule(
         client, auth_headers, ad_id, account_id, group_id
     )
@@ -340,7 +337,7 @@ async def test_double_toggle_returns_to_the_initial_state(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
     """`is_active` вычисляется от значения В БАЗЕ, а не от присланного клиентом."""
-    ad_id, account_id, group_id = await _own_setup(client, auth_headers)
+    ad_id, account_id, group_id = await _own_setup(client, auth_headers, db_session)
     schedule_id = await _create_full_schedule(
         client, auth_headers, ad_id, account_id, group_id
     )
@@ -367,7 +364,7 @@ async def test_double_toggle_returns_to_the_initial_state(
 async def test_paused_schedule_does_not_carry_a_future_next_run(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
-    ad_id, account_id, group_id = await _own_setup(client, auth_headers)
+    ad_id, account_id, group_id = await _own_setup(client, auth_headers, db_session)
     schedule_id = await _create_full_schedule(
         client, auth_headers, ad_id, account_id, group_id
     )
@@ -393,7 +390,7 @@ async def test_paused_schedule_does_not_carry_a_future_next_run(
 async def test_repeated_update_is_idempotent(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
-    ad_id, account_id, group_id = await _own_setup(client, auth_headers)
+    ad_id, account_id, group_id = await _own_setup(client, auth_headers, db_session)
     schedule_id = await _create_full_schedule(
         client, auth_headers, ad_id, account_id, group_id
     )

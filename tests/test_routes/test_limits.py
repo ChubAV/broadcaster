@@ -1,3 +1,19 @@
+"""Отсутствие тарифных лимитов на создание сущностей.
+
+Тест `test_create_groups_no_limit` УДАЛЁН планом 03-07 вместе с входом, через
+который он утверждал. Он создавал семь групп запросами к JSON-маршруту создания
+группы и проверял, что ни один не отвергнут. Входа больше нет (GRP-08 снято решением
+владельца, D-13/D-14), а точки применения лимита за ним никогда не стояло:
+единственный лимит в системе — `check_balance_cached`, и он отвечает «разрешено»
+на любое действие, кроме `send` (`app/services/billing_cache.py:32`). Переписать
+тест на прямой посев через ORM означало бы проверять, что вставка семи строк в
+таблицу вставляет семь строк, — утверждение о SQLAlchemy, а не о продукте.
+
+ФАКТ, который тест документировал, остаётся верным и зафиксирован здесь:
+тарифного лимита на количество групп в системе нет. Появление такого лимита —
+решение вне рамок фазы 3; вместе с ним вернётся и его тест, но уже к настоящей
+точке применения.
+"""
 import pytest
 
 
@@ -7,22 +23,5 @@ async def test_create_ads_no_limit(client, auth_headers):
     for i in range(5):
         resp = await client.post("/api/ads", headers=auth_headers, json={
             "title": f"Ad {i}", "text": "text"
-        })
-        assert resp.status_code == 201
-
-
-@pytest.mark.asyncio
-async def test_create_groups_no_limit(client, auth_headers):
-    """No limit on groups — creating many should succeed."""
-    resp = await client.post("/api/accounts", headers=auth_headers, json={
-        "type": "tg_user", "credentials": "bot-token-123"
-    })
-    assert resp.status_code == 201
-    account_id = resp.json()["id"]
-
-    for i in range(7):
-        resp = await client.post("/api/groups", headers=auth_headers, json={
-            "account_id": account_id, "messenger_type": "telegram",
-            "group_external_id": f"ext-{i}", "name": f"Group {i}"
         })
         assert resp.status_code == 201
