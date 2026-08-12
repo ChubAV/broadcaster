@@ -24,6 +24,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.repositories.schedule import ScheduleRepository
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
@@ -272,4 +273,49 @@ async def account_groups_toggle(
     # D-05: состав расписаний маршрут не читает и не пишет. Выключенная группа
     # пропускается при диспетчеризации, а не вычищается из Schedule.group_ids —
     # иначе включение группы обратно не вернуло бы её в рассылку.
+    return RedirectResponse(url=f"/accounts/{account_id}/groups", status_code=302)
+
+
+@router.post("/accounts/{account_id}/groups/{group_id}/delete")
+async def account_groups_delete(
+    request: Request,
+    account_id: int,
+    group_id: int,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Удаление группы из списка аккаунта (GRP-06).
+
+    В отличие от тумблера удаление НЕОБРАТИМО, поэтому состав расписаний здесь
+    трогать обязательно: оставленный в `Schedule.group_ids` идентификатор
+    удалённой строки не роняет отправку, он делает её тихо неполной.
+    """
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    # ТОТ ЖЕ ТРОЙНОЙ WHERE, что у тумблера: свою группу можно адресовать через
+    # свой ЖЕ, но другой аккаунт, и одной проверки владельца не хватает
+    # (T-03-20).
+    result = await db.execute(
+        select(Group).where(
+            Group.id == group_id,
+            Group.user_id == user.id,
+            Group.account_id == account_id,
+        )
+    )
+    group = result.scalar_one_or_none()
+    if group:
+        # Чистка расписаний — ГОТОВЫМ методом репозитория: он учитывает
+        # JSON-природу колонки и ограничивает выборку владельцем через связь с
+        # объявлением. Собственный обход расписаний пришлось бы снабдить тем же
+        # ограничением заново, и второй экземпляр этого правила разъехался бы с
+        # первым при первой же правке.
+        await ScheduleRepository(db).remove_group_ids(user.id, {group.id})
+        await db.delete(group)
+        await db.commit()
+
+    # Ответ ОДИНАКОВ и для найденной, и для ненайденной группы: это делает
+    # повторный запрос безвредным (кнопка «назад», повторная отправка формы) и
+    # не сообщает, какие идентификаторы заняты чужими группами.
     return RedirectResponse(url=f"/accounts/{account_id}/groups", status_code=302)
