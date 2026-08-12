@@ -518,3 +518,47 @@ async def test_sync_failure_is_recorded_not_swallowed(sync_setup):
     assert "сессия Telegram протухла" in result["error"]
 
 
+@pytest.mark.asyncio
+async def test_bridge_failure_reaches_the_account_through_the_real_adapter(sync_setup):
+    """Отказ моста доезжает до сводки через НАСТОЯЩИЙ класс адаптера.
+
+    Соседний test_sync_failure_is_recorded_not_swallowed подменяет сам метод
+    `get_groups` моком с side_effect — то есть проверяет контракт, которого у
+    настоящего класса могло и не быть: пока адаптеры глушили исключение и
+    возвращали `[]`, тест зеленел, а прод молча помечал пропавшими все группы
+    аккаунта. Здесь подменён только HTTP-слой, а `WhatsAppMessenger` — живой,
+    поэтому тест падает ровно тогда, когда контракт адаптера ломается.
+    """
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory, type_="wa")
+    group_id = await _add_group(session_factory, account_id, "-1@g.us", "Живая")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 502
+
+    with patch("app.messengers.whatsapp.ensure_wa_container", return_value="http://fake:3000"), \
+         patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_client
+
+        resp = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+
+    assert resp.status_code == 302
+
+    _, result = await _account_result(session_factory, account_id)
+    assert result is not None
+    assert result["error"], "отказ моста обязан лечь на аккаунт ошибкой, а не сводкой успеха"
+    assert "502" in result["error"]
+
+    # И главное следствие: ни одна группа не помечена пропавшей.
+    async with session_factory() as session:
+        group = await session.get(Group, group_id)
+        assert group.missing_since is None, (
+            "сбой моста не имеет права выглядеть как исчезновение групп"
+        )
+
+

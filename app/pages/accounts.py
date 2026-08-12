@@ -30,6 +30,7 @@ from app.messengers.telegram_user import (
     submit_2fa,
     complete_auth,
 )
+from app.messengers.base import MessengerFetchError
 from app.messengers.max import MaxMessenger
 from app.messengers.whatsapp import WhatsAppMessenger
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
@@ -775,6 +776,12 @@ async def accounts_sync_groups(
     # Протоколы обращения к мессенджерам не меняются: те же конструкторы и тот
     # же единственный get_groups() в каждой ветке. Новое здесь только одно —
     # отказ внешней системы записывается на аккаунт, а не теряется 500-й.
+    #
+    # Ветка отказа ДОСТИЖИМА только потому, что адаптеры больше не глушат
+    # исключение и не возвращают вместо него пустой список: `MessengerFetchError`
+    # — это «состав групп получить не удалось», и оно отличимо от «групп нет».
+    # Пока адаптеры возвращали `[]`, этот except не срабатывал никогда, а сбой
+    # моста доезжал до переинвентаризации сводкой успеха.
     try:
         if account.type == "tg_user":
             messenger = TelegramUserMessenger(
@@ -795,7 +802,7 @@ async def accounts_sync_groups(
             fetched_groups = await messenger.get_groups()
             messenger_type = "max"
 
-    except Exception as e:
+    except MessengerFetchError as e:
         import structlog
         structlog.get_logger().error(
             "sync_groups_fetch_failed",
@@ -805,6 +812,25 @@ async def accounts_sync_groups(
             exc_info=True,
         )
         # Пишется сообщение исключения, а не строка подключения (T-03-17).
+        await record_sync_failure(db, account, str(e) or e.__class__.__name__)
+        await db.commit()
+        return RedirectResponse(url=account_groups_url, status_code=302)
+
+    except Exception as e:
+        # Широкий except СОХРАНЁН намеренно и стоит ПОСЛЕ узкого: отказ на
+        # конструкторе адаптера или на запуске wa-worker (RuntimeError из
+        # свойства `bridge_url`) случается ДО запроса за составом групп, и он
+        # тоже обязан лечь сводкой на аккаунт, а не пятисоткой. Сузить блок до
+        # одного `MessengerFetchError` означало бы вернуть на экран стек-трейс
+        # там, где раньше была красная плашка.
+        import structlog
+        structlog.get_logger().error(
+            "sync_groups_failed",
+            account_id=account_id,
+            account_type=account.type,
+            error=str(e),
+            exc_info=True,
+        )
         await record_sync_failure(db, account, str(e) or e.__class__.__name__)
         await db.commit()
         return RedirectResponse(url=account_groups_url, status_code=302)

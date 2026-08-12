@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from app.messengers.base import MessengerFetchError
 from app.messengers.max import MaxMessenger
 
 
@@ -157,6 +158,7 @@ async def test_get_groups_success():
 
 @pytest.mark.asyncio
 async def test_get_groups_error():
+    """Не-200 от моста — отказ, а не пустой состав групп (см. WhatsApp-адаптер)."""
     messenger = MaxMessenger(bridge_url="http://fake:3000", session_id="1")
     mock_response = MagicMock()
     mock_response.status_code = 500
@@ -166,12 +168,15 @@ async def test_get_groups_error():
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_get_client.return_value = mock_client
 
-        result = await messenger.get_groups()
-        assert result == []
+        with pytest.raises(MessengerFetchError) as exc_info:
+            await messenger.get_groups()
+
+    assert "500" in str(exc_info.value)
 
 
 @pytest.mark.asyncio
 async def test_get_groups_exception():
+    """Обрыв соединения с мостом — отказ, а не пустой состав групп."""
     messenger = MaxMessenger(bridge_url="http://fake:3000", session_id="1")
 
     with patch("app.messengers.max.get_http_client") as mock_get_client:
@@ -179,8 +184,26 @@ async def test_get_groups_exception():
         mock_client.get = AsyncMock(side_effect=Exception("Timeout"))
         mock_get_client.return_value = mock_client
 
-        result = await messenger.get_groups()
-        assert result == []
+        with pytest.raises(MessengerFetchError) as exc_info:
+            await messenger.get_groups()
+
+    assert "Timeout" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_groups_empty_list_is_not_an_error():
+    """Пустой ответ 200 — это РОВНО «групп нет», и он не исключение."""
+    messenger = MaxMessenger(bridge_url="http://fake:3000", session_id="1")
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = []
+
+    with patch("app.messengers.max.get_http_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_client
+
+        assert await messenger.get_groups() == []
 
 
 @pytest.mark.asyncio

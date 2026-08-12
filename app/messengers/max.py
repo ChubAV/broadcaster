@@ -4,7 +4,7 @@ import httpx
 import structlog
 import structlog.contextvars
 
-from app.messengers.base import BaseMessenger
+from app.messengers.base import BaseMessenger, MessengerFetchError
 
 logger = structlog.get_logger(__name__)
 
@@ -105,16 +105,23 @@ class MaxMessenger(BaseMessenger):
             return {"ok": False, "error": error}
 
     async def get_groups(self) -> list[dict]:
+        """Состав групп сессии. Отказ поднимает `MessengerFetchError`.
+
+        Контракт тот же, что у WhatsApp-адаптера, и по той же причине: пустой
+        список означает РОВНО «у аккаунта нет групп», а любой отказ уходит
+        исключением — иначе вызывающий примет молчание моста за авторитетную
+        опись и пометит пропавшими все группы аккаунта.
+        """
         client = get_http_client()
         try:
             response = await client.get(self._url("groups"), timeout=600.0)
-            if response.status_code == 200:
-                return response.json()
-            self.log.error("get_groups_error", http_status=response.status_code)
-            return []
         except Exception as e:
             self.log.error("get_groups_error", error=str(e), exc_info=True)
-            return []
+            raise MessengerFetchError(f"{type(e).__name__}: {e}") from e
+        if response.status_code != 200:
+            self.log.error("get_groups_error", http_status=response.status_code)
+            raise MessengerFetchError(f"мост вернул HTTP {response.status_code}")
+        return response.json()
 
     async def check_connection(self) -> bool:
         client = get_http_client()

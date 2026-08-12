@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
+from app.messengers.base import MessengerFetchError
 from app.messengers.telegram_user import (
     TelegramUserMessenger,
     start_qr_auth,
@@ -200,15 +201,23 @@ def test_cleanup_qr_session_nonexistent():
 
 @pytest.mark.asyncio
 async def test_get_groups_logs_error_on_failure(messenger, caplog):
-    """get_groups logs error when Telegram API fails."""
+    """Протухшая сессия Telethon — отказ, а не аккаунт без единой группы.
+
+    Раньше исключение только логировалось, наружу уходил `[]`, и полная
+    переинвентаризация (D-10) помечала пропавшими все группы аккаунта разом,
+    записав при этом сводку успеха.
+    """
     import logging
     messenger.client.get_dialogs = AsyncMock(side_effect=Exception("Session expired"))
 
     with caplog.at_level(logging.ERROR, logger="app.messengers.telegram_user"):
-        groups = await messenger.get_groups()
+        with pytest.raises(MessengerFetchError) as exc_info:
+            await messenger.get_groups()
 
-    assert groups == []
+    assert "Session expired" in str(exc_info.value)
     assert any("get_groups_error" in r.message or "Session expired" in r.message for r in caplog.records)
+    # Сессия закрывается и на пути отказа: `finally` обязан пережить raise.
+    messenger.client.disconnect.assert_awaited()
 
 
 @pytest.mark.asyncio
