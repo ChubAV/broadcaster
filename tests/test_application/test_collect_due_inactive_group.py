@@ -18,6 +18,13 @@
 
 Пара к ним — `test_enabling_the_group_resumes_dispatch`: без неё все утверждения
 о пропуске зеленели бы на функции, не создающей задач вовсе.
+
+СОСЕДНИЙ ПРОПУСК — висячая ссылка (секция «Пропуск несуществующей группы»).
+Идентификатор, которому не соответствует ни одной строки, — не то же самое, что
+выключенная группа, и раньше он проходил насквозь: задача создавалась, а дефект
+становился ТИХИМ. Для wa/max в очередь уезжал адресат `group_external_id=None`,
+для tg_user — журнальная запись «Missing ad, group, or account», то есть отказ
+отправки без причины. Тесты этой секции держат оба пропуска различимыми.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -216,6 +223,78 @@ async def test_enabling_the_group_resumes_dispatch(account_type: str):
         assert [t.group_id for t in tasks] == [group.id], (
             f"включённая обратно группа не возобновила рассылку на канале {account_type}"
         )
+
+
+# --- Пропуск несуществующей группы --------------------------------------------
+
+# Идентификатор, которого в таблице заведомо нет. Расписание переживает удаление
+# группы (маршрут удаления чистит `group_ids`, но ревизии, ручные правки и
+# рассинхрон пользователей — нет), поэтому висячая ссылка достижима.
+MISSING_GROUP_ID = 987654
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_type", ACCOUNT_TYPES)
+async def test_missing_group_produces_no_task_for_any_channel(account_type: str):
+    """Строки нет — задачи нет, ни на одном канале.
+
+    До правки задача создавалась: ветка пропуска читалась как
+    `if group and not group.is_active`, и `group is None` её не проходил. Для
+    wa/max в Redis уезжал payload с `group_external_id=None` — воркер получал
+    адресата `null`; для tg_user задача доезжала до `send_message_once` и
+    становилась записью журнала «Missing ad, group, or account».
+    """
+    async with _Db() as session:
+        schedule, _ = await _seed(
+            session, account_type=account_type, group_flags=[True]
+        )
+        schedule.group_ids = [MISSING_GROUP_ID]
+        await session.commit()
+
+        tasks = await collect_due_schedules(
+            session, now=datetime.now(timezone.utc), check_limit=_allow_everything
+        )
+
+        assert tasks == [], (
+            f"висячая ссылка получила задачу отправки на канале {account_type}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_missing_group_does_not_take_down_its_neighbours():
+    """Пропускается ГРУППА, а не расписание: соседняя живая строка шлёт дальше.
+
+    Отказ всего расписания из-за одной висячей ссылки был бы вторым тихим
+    дефектом на месте первого.
+    """
+    async with _Db() as session:
+        schedule, (alive,) = await _seed(session, group_flags=[True])
+        schedule.group_ids = [MISSING_GROUP_ID, alive.id]
+        await session.commit()
+
+        tasks = await collect_due_schedules(
+            session, now=datetime.now(timezone.utc), check_limit=_allow_everything
+        )
+
+        assert [t.group_id for t in tasks] == [alive.id]
+
+
+@pytest.mark.asyncio
+async def test_missing_group_writes_nothing_to_the_send_log():
+    """Пропуск висячей ссылки тоже тихий: попытки отправки не было (D-06)."""
+    async with _Db() as session:
+        schedule, _ = await _seed(session, group_flags=[True])
+        schedule.group_ids = [MISSING_GROUP_ID]
+        await session.commit()
+
+        await collect_due_schedules(
+            session, now=datetime.now(timezone.utc), check_limit=_allow_everything
+        )
+
+        logged = (
+            await session.execute(select(func.count()).select_from(SendLog))
+        ).scalar_one()
+        assert logged == 0
 
 
 # --- Что пропуск НЕ трогает ---------------------------------------------------

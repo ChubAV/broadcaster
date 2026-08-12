@@ -147,7 +147,28 @@ async def collect_due_schedules(
             #
             # Парный тестовый файл tests/test_application/
             # test_collect_due_inactive_group.py — спецификация этого места.
-            if group and not group.is_active:
+
+            # СТРОКИ НЕТ — ЗАДАЧИ НЕТ. Висячий идентификатор в group_ids
+            # (расписание пережило удаление группы) раньше проходил насквозь:
+            # ветка выше не срабатывала (`if group and ...`), задача создавалась,
+            # и дефект становился ТИХИМ. Для wa/max в очередь Redis уезжал
+            # адресат `group_external_id=None`, для tg_user задача доезжала до
+            # send_message_once и превращалась в запись журнала «Missing ad,
+            # group, or account» — отказ отправки без единого намёка на причину.
+            #
+            # Проверка стоит ПЕРЕД проверкой включённости и отдельно от неё:
+            # «группы нет» и «группа выключена» — разные события, и в логе они
+            # обязаны быть различимы. Уровень WARNING, а не INFO: выключение —
+            # решение пользователя, а висячая ссылка — расхождение данных.
+            if group is None:
+                logger.warning(
+                    "group_skipped_missing",
+                    group_id=group_id,
+                    schedule_id=schedule.id,
+                )
+                continue
+
+            if not group.is_active:
                 logger.info(
                     "group_skipped_inactive",
                     group_id=group_id,
@@ -162,21 +183,22 @@ async def collect_due_schedules(
                 account_id=schedule.account_id,
                 schedule_id=schedule.id,
             )
-            # Populate WA-specific fields for Redis per-account queues
+            # Populate WA-specific fields for Redis per-account queues.
+            # Второй проверки «группа есть» здесь нет намеренно: она была бы
+            # вторым определением того же условия и разъехалась бы с первым.
             if account.type in ("wa", "max"):
-                if group:
-                    task.user_id = ad.user_id
-                    task.ad_text = ad.text
-                    task.ad_title = ad.title
-                    if ad.images:
-                        from app.services.s3 import get_image_url
-                        from app.config import get_settings
-                        s3_public_url = get_settings().s3_public_url
-                        task.ad_images = [get_image_url(img, s3_public_url) for img in ad.images]
-                    else:
-                        task.ad_images = ad.images
-                    task.group_external_id = group.group_external_id
-                    task.group_name = group.name
+                task.user_id = ad.user_id
+                task.ad_text = ad.text
+                task.ad_title = ad.title
+                if ad.images:
+                    from app.services.s3 import get_image_url
+                    from app.config import get_settings
+                    s3_public_url = get_settings().s3_public_url
+                    task.ad_images = [get_image_url(img, s3_public_url) for img in ad.images]
+                else:
+                    task.ad_images = ad.images
+                task.group_external_id = group.group_external_id
+                task.group_name = group.name
             tasks_to_dispatch.append(task)
 
         schedule.next_run_at = compute_next_run_at(
