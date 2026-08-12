@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.accounts.group_resync import parse_sync_result
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
@@ -176,6 +177,12 @@ async def account_groups_page(
             ),
             "total_groups": total_groups,
             "active_groups": active_groups,
+            # СВОДКА ПОСЛЕДНЕГО СИНКА читается из АККАУНТА, а не из памяти
+            # запроса (D-09): плашка обязана быть видна и при перезаходе на
+            # экран, а не только сразу после нажатия кнопки. Разбор идёт
+            # защищённым парсером — испорченная строка даёт None, то есть
+            # отсутствие плашки, а не стек-трейс на экране (T-03-08, T-03-27).
+            "sync_result": parse_sync_result(account.last_sync_result),
             "has_next": has_next,
             "next_offset": PAGE_SIZE,
             "filter_params": _filter_params(term),
@@ -238,6 +245,54 @@ async def account_groups_partial(
             "filter_params": _filter_params(term),
         },
     )
+
+
+@router.get("/accounts/{account_id}/groups/sync-status", response_class=HTMLResponse)
+async def account_groups_sync_status(
+    request: Request,
+    account_id: int,
+    # D-15: параметр компоновки принимается и игнорируется — см. app/pages/ads.py
+    layout: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Блок статуса синхронизации — цель самоостанавливающегося опроса.
+
+    Статус читается из базы: фоновые задачи WA и MAX пишут его сами, а экран
+    его ДОБИРАЕТ. Опрос прекращается тем, что очередной ответ приходит без
+    атрибутов запроса и триггера — условие живёт в шаблоне, а не здесь, потому
+    что первичная отрисовка страницы обязана подчиняться ровно тому же условию
+    (T-03-26).
+
+    Аутентификация и владение аккаунтом проверяются ЗДЕСЬ ЗАНОВО: этот адрес
+    вызывается автоматически каждые пять секунд, то есть перебрать чужие
+    идентификаторы через него дешевле, чем через страницу (T-03-25).
+
+    ОТКАЗ — ПУСТОЙ ОТВЕТ, а не редирект. Пустой ответ и не отдаёт разметки, и
+    останавливает опрос: редирект на страницу входа вернул бы в подменяемый
+    блок целую страницу логина, а опрос продолжился бы как ни в чём не бывало.
+
+    Рендер идёт получением шаблона из окружения и его рендером напрямую — по
+    образцу входа статуса экрана «Аккаунты»: у ответа нет ни шелла, ни
+    контекста запроса, ему нужны ровно два значения.
+    """
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return HTMLResponse("")
+
+    account = await _load_owned_account(db, user, account_id)
+    if not account:
+        return HTMLResponse("")
+
+    # Вне трёх известных статусов разметки нет: выдуманная подпись сообщала бы
+    # о состоянии, которого словарь экрана «Аккаунты» не знает.
+    if account.status not in ("active", "sync_failed", "syncing"):
+        return HTMLResponse("")
+
+    html = templates.env.get_template(
+        "account_groups/partials/sync_result.html"
+    ).render(account_id=account_id, status=account.status)
+    return HTMLResponse(html)
 
 
 @router.post("/accounts/{account_id}/groups/{group_id}/toggle")

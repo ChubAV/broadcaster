@@ -18,6 +18,7 @@
 пустым (эталон — test_ads_card_renders_data).
 """
 
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1386,3 +1387,590 @@ def test_screen_has_its_own_css_section():
         ".group-row__mark",
     ):
         assert selector in css, f"в таблице стилей нет правил для {selector}"
+
+
+# =============================================================================
+# План 03-06, Задача 1: плашка результата синка и действие запуска в шапке
+# =============================================================================
+#
+# GRP-07 со стороны пользователя. Результат читается из АККАУНТА, а не из памяти
+# запроса, поэтому переживает перезаход: сохранённое значение пишут все три пути
+# синхронизации (план 03-04), а показывает его этот экран.
+#
+# Проверяется то, что отдаёт 200 и при этом бесполезно: экран без кнопки запуска,
+# сводка без чисел, «не найдено 0» вместо молчания, стек-трейс вместо плашки на
+# испорченном значении.
+
+
+async def _seed_account_with_result(
+    db: AsyncSession,
+    result: str | None,
+    status: str = "active",
+    hours_ago: int = 1,
+) -> MessengerAccount:
+    """Аккаунт с СЫРЫМ сохранённым результатом синка.
+
+    Значение кладётся строкой, а не через хелпер: колонка хранит именно строку,
+    и плашка обязана быть проверена на том виде значения, который приходит из
+    базы, включая испорченный.
+    """
+    user = await _user(db)
+    account = MessengerAccount(
+        user_id=user.id,
+        type="wa",
+        credentials="session",
+        status=status,
+        last_synced_at=datetime.now(timezone.utc) - timedelta(hours=hours_ago),
+        last_sync_result=result,
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+def _summary(found: int, new: int, renamed: int, missing: int = 0) -> str:
+    """Сохранённая сводка в том виде, в каком её пишет apply_group_resync."""
+    return json.dumps(
+        {"found": found, "new": new, "renamed": renamed, "missing": missing,
+         "error": None},
+        ensure_ascii=False,
+    )
+
+
+# --- Действие запуска синхронизации ------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_header_carries_the_sync_form(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Главное действие экрана — НАСТОЯЩАЯ форма на существующий вход синка.
+
+    Утверждается не подпись кнопки, а маршрут и метод: подпись можно нарисовать
+    и без формы, и экран останется валидным, а запустить синхронизацию с него
+    станет нечем (D-09).
+    """
+    account = await _seed_account(db_session)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert f'action="/accounts/{account.id}/sync-groups"' in html, (
+        "формы запуска синхронизации на экране нет"
+    )
+    assert re.search(
+        rf'<form method="POST" action="/accounts/{account.id}/sync-groups"', html
+    ), "запуск синхронизации собран не формой POST"
+    assert "Синхронизировать всё" in html
+
+
+@pytest.mark.asyncio
+async def test_sync_action_says_it_is_in_flight(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E1 loading: подпись действия при выполнении — «Синхронизация…».
+
+    Парный к предыдущему: без него подпись могла бы остаться одной на оба
+    состояния, и пользователь нажимал бы «Синхронизировать всё» поверх уже
+    идущей синхронизации, получая молчаливый отказ guard-а.
+    """
+    account = await _seed_account_with_result(db_session, None, status="syncing")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Синхронизация…" in html
+    assert "Синхронизировать всё" not in html.split("</form>")[0], (
+        "подпись действия не отражает выполняющуюся синхронизацию"
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_per_group_sync_action_on_the_screen(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-12: кнопки синхронизации ОТДЕЛЬНОЙ группы на экране нет.
+
+    Протокола синхронизации одной группы у воркеров не существует, а протоколы
+    фаза не трогает. Нарисованная кнопка вела бы на несуществующий маршрут —
+    отказ, который пользователь прочитал бы как поломку своей группы.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Барахолка Северного района")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert not re.search(r'/groups/\d+/sync', html), (
+        "на экране есть действие синхронизации отдельной группы"
+    )
+    row = _row_html(html, group.id)
+    assert "sync" not in row, f"в строке группы осталось действие синхронизации: {row}"
+
+
+# --- Плашка результата: успех -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_success_plashka_prints_all_three_counters(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E2 populated: сводка печатает найдено, новых и обновлено имён."""
+    account = await _seed_account_with_result(
+        db_session, _summary(found=42, new=7, renamed=3)
+    )
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Синхронизация завершена: найдено 42, новых 7, обновлено имён 3" in html
+    assert "alert--success" in html
+
+
+@pytest.mark.asyncio
+async def test_success_plashka_omits_the_missing_segment_when_zero(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """«не найдено 0» не рендерится никогда: это шум, а не сообщение."""
+    account = await _seed_account_with_result(
+        db_session, _summary(found=5, new=0, renamed=0, missing=0)
+    )
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "не найдено" not in html
+
+
+@pytest.mark.asyncio
+async def test_success_plashka_shows_the_missing_segment_when_nonzero(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парный к предыдущему: при ненулевом значении сегмент обязан быть.
+
+    Без него отсутствие сегмента ничего не доказывало бы — он мог бы не
+    рендериться вовсе, и пропавшие группы остались бы незамеченными (D-11).
+    """
+    account = await _seed_account_with_result(
+        db_session, _summary(found=5, new=0, renamed=0, missing=2)
+    )
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Синхронизация завершена: найдено 5, новых 0, обновлено имён 0, не найдено 2" in html
+
+
+@pytest.mark.asyncio
+async def test_plashka_renders_exactly_once(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E2 zero-one-many: результаты не накапливаются стопкой."""
+    account = await _seed_account_with_result(
+        db_session, _summary(found=3, new=1, renamed=0)
+    )
+    await _seed_group(db_session, account, "Группа проверки единственности")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert html.count("data-sync-plashka") == 1
+    assert html.count("Синхронизация завершена") == 1
+
+
+# --- Плашка результата: ошибка и деградация -----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_error_plashka_names_the_error_and_the_next_step(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E2 error: провал показывает текст ошибки И следующий шаг.
+
+    Одного текста ошибки мало: «Connection refused» без инструкции не говорит
+    пользователю, что делать дальше (UI-SPEC §Error states).
+    """
+    stored = json.dumps(
+        {"found": 0, "new": 0, "renamed": 0, "missing": 0,
+         "error": "Мост WhatsApp недоступен"},
+        ensure_ascii=False,
+    )
+    account = await _seed_account_with_result(db_session, stored, status="sync_failed")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "Синхронизация не удалась: Мост WhatsApp недоступен" in html
+    assert "повторить" in html
+    assert "alert--error" in html
+    assert "Синхронизация завершена" not in html, "сводка успеха вытеснила ошибку"
+
+
+@pytest.mark.asyncio
+async def test_error_text_from_the_worker_is_escaped(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-03-27: текст ошибки приходит из внешней системы и экранируется."""
+    stored = json.dumps(
+        {"found": 0, "new": 0, "renamed": 0, "missing": 0,
+         "error": '<script>alert("xss")</script>'},
+        ensure_ascii=False,
+    )
+    account = await _seed_account_with_result(db_session, stored, status="sync_failed")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "<script>alert" not in html
+    assert "&lt;script&gt;" in html
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "не json вовсе",
+        "{оборванный на полуслове",
+        "[1, 2, 3]",
+        '"строка верхнего уровня"',
+        "null",
+    ],
+)
+async def test_corrupt_stored_result_renders_no_plashka(
+    authed_client: AsyncClient, db_session: AsyncSession, stored: str
+):
+    """T-03-08: испорченное значение даёт ОТСУТСТВИЕ плашки, а не стек-трейс.
+
+    Значение пишется только кодом, но строка в колонке может оказаться
+    оборванной или написанной прежней версией формата. Экран обязан
+    деградировать в молчание, а не в 500-ю на весь список групп.
+    """
+    account = await _seed_account_with_result(db_session, stored)
+
+    response = await authed_client.get(f"/accounts/{account.id}/groups")
+
+    assert response.status_code == 200
+    assert "data-sync-plashka" not in response.text
+    assert "Синхронизация завершена" not in response.text
+    assert "Синхронизация не удалась" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_never_synced_account_renders_no_plashka(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E2 empty: пустой оболочки плашки не бывает.
+
+    Синхронизации не было — сообщение несёт строка идентичности шапки, а не
+    плашка с прочерками вместо чисел.
+    """
+    account = await _seed_account(db_session)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "data-sync-plashka" not in html
+    assert "синхронизация ещё не выполнялась" in html
+
+
+@pytest.mark.asyncio
+async def test_stored_result_survives_a_revisit(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-09: результат читается из аккаунта, поэтому виден при перезаходе.
+
+    Второй запрос — отдельный HTTP-запрос без каких-либо параметров: сводка,
+    жившая бы в памяти запроса или в параметре редиректа, до него бы не дожила.
+    """
+    account = await _seed_account_with_result(
+        db_session, _summary(found=9, new=2, renamed=1)
+    )
+
+    first = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    second = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "найдено 9, новых 2, обновлено имён 1" in first
+    assert "найдено 9, новых 2, обновлено имён 1" in second
+
+
+@pytest.mark.asyncio
+async def test_plashka_of_a_running_sync_keeps_the_previous_summary(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """UI-SPEC E2 partial: пока идёт новая синхронизация, старая сводка стоит.
+
+    Плашка отражает последнюю ЗАВЕРШЁННУЮ синхронизацию; состояние выполнения
+    несёт отдельный блок статуса, а не подмена плашки на пустоту.
+    """
+    account = await _seed_account_with_result(
+        db_session, _summary(found=11, new=4, renamed=0), status="syncing"
+    )
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    assert "найдено 11, новых 4, обновлено имён 0" in html
+    assert "синхронизация идёт сейчас" in html
+
+
+# =============================================================================
+# План 03-06, Задача 2: самоостанавливающийся опрос статуса фоновой синхронизации
+# =============================================================================
+#
+# Синхронизация WA и MAX уходит в Celery, и её завершение экрану приходится
+# ДОБИРАТЬ. Опрос обязан быть самоостанавливающимся: команды «стоп» у него нет,
+# он прекращается тем, что очередной ответ приходит БЕЗ атрибутов запроса и
+# триггера. Вынести атрибуты из-под условия по статусу — значит превратить экран
+# в вечный поток запросов каждые пять секунд на каждой открытой вкладке каждого
+# пользователя (T-03-26).
+#
+# Поэтому тесты идут ПАРАМИ: присутствие опроса при выполнении и его отсутствие
+# при остальных статусах. Одиночный тест присутствия зеленел бы и у вечного
+# опроса; одиночный тест отсутствия зеленел бы на пустом ответе.
+
+SYNC_BLOCK_ATTR = "data-acct-sync"
+# Триггер именно ОПРОСА. Сентинел бесконечной прокрутки несёт hx-trigger со
+# значением "revealed", и утверждение про голое имя атрибута ловило бы его тоже.
+POLL_TRIGGER = 'hx-trigger="every'
+
+
+def _sync_block(html: str) -> str:
+    """Подменяемый блок статуса целиком, от его `<div` до парного `</div>`.
+
+    Утверждение «плашка и панель подтверждения лежат ВНЕ подменяемого блока»
+    подстрочным поиском по всей странице недоказуемо: и то и другое есть на
+    странице в обоих случаях. Различает только извлечение по парным тегам.
+    """
+    anchor = html.index(SYNC_BLOCK_ATTR)
+    start = html.rindex("<div", 0, anchor)
+    depth = 0
+    for match in re.finditer(r"<div\b|</div>", html[start:]):
+        depth += 1 if match.group(0) == "<div" else -1
+        if depth == 0:
+            return html[start : start + match.end()]
+    raise AssertionError("блок статуса синхронизации не закрыт")
+
+
+# --- Опрос на странице: пара «продолжается / не начинается» -------------------
+
+
+@pytest.mark.asyncio
+async def test_page_polls_while_the_sync_is_running(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Статус выполнения — единственный, в котором страница объявляет опрос."""
+    account = await _seed_account_with_result(db_session, None, status="syncing")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    block = _sync_block(html)
+    assert f'hx-get="/accounts/{account.id}/groups/sync-status"' in block
+    assert POLL_TRIGGER in block
+    assert 'hx-swap="outerHTML"' in block
+    assert "Синхронизация выполняется" in block
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,expected_badge",
+    [("active", "Активно"), ("sync_failed", "Ошибка синхронизации")],
+)
+async def test_page_declares_no_poll_outside_the_running_state(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    status: str,
+    expected_badge: str,
+):
+    """Парный тест: вне выполнения атрибутов опроса на странице нет вовсе.
+
+    Без него предыдущий зеленел бы и у опроса, объявленного безусловно, — то
+    есть у вечного (T-03-26).
+
+    Начинается тест с ПОЛОЖИТЕЛЬНОГО утверждения — блок отрисован и несёт бейдж
+    своего статуса. Без него «опроса нет» выполнялось бы и на странице, где
+    блока нет вовсе, то есть тест зеленел бы, ничего не проверяя.
+    """
+    account = await _seed_account_with_result(db_session, None, status=status)
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    block = _sync_block(html)
+    assert expected_badge in block, "блок статуса не отрисован или потерял бейдж"
+
+    assert POLL_TRIGGER not in html, "страница опрашивает сервер вне синхронизации"
+    assert "/groups/sync-status" not in html
+    assert "Синхронизация выполняется" not in html
+
+
+# --- Вход статуса: пара «продолжает / останавливает» --------------------------
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_keeps_polling_while_syncing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Ответ входа при выполнении несёт атрибуты — опрос продолжается."""
+    account = await _seed_account_with_result(db_session, None, status="syncing")
+
+    response = await authed_client.get(f"/accounts/{account.id}/groups/sync-status")
+
+    assert response.status_code == 200
+    assert POLL_TRIGGER in response.text
+    assert f'hx-get="/accounts/{account.id}/groups/sync-status"' in response.text
+    assert SYNC_BLOCK_ATTR in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["active", "sync_failed"])
+async def test_status_endpoint_stops_the_poll_when_the_sync_ends(
+    authed_client: AsyncClient, db_session: AsyncSession, status: str
+):
+    """ЭТО И ЕСТЬ МЕХАНИЗМ ОСТАНОВКИ: ответ приходит без атрибутов опроса.
+
+    Аккаунт, перешедший в завершённое состояние, отдаёт разметку статуса — но
+    уже без запроса и триггера, поэтому следующего запроса не случится.
+    """
+    account = await _seed_account_with_result(db_session, None, status=status)
+
+    response = await authed_client.get(f"/accounts/{account.id}/groups/sync-status")
+
+    assert response.status_code == 200
+    assert SYNC_BLOCK_ATTR in response.text, "разметка статуса не отдана вовсе"
+    assert POLL_TRIGGER not in response.text
+    assert "hx-get" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_of_a_foreign_account_leaks_nothing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-03-25: вход опрашивается автоматически, и владение проверяется В НЁМ.
+
+    Чужой `account_id` не отдаёт ни бейджа статуса этого аккаунта, ни блока
+    вовсе: иначе опрос по перебору идентификаторов сообщал бы, какие аккаунты
+    заняты и в каком они состоянии.
+    """
+    other = await _seed_foreign_user(db_session)
+    foreign = MessengerAccount(
+        user_id=other.id, type="wa", credentials="session", status="syncing"
+    )
+    db_session.add(foreign)
+    await db_session.commit()
+    await db_session.refresh(foreign)
+
+    response = await authed_client.get(f"/accounts/{foreign.id}/groups/sync-status")
+
+    # Утверждается КОНКРЕТНЫЙ ответ, а не только отсутствие разметки: код 404
+    # несуществующего маршрута удовлетворял бы «разметки нет» и зеленил бы тест
+    # ДО того, как вход вообще появится.
+    assert response.status_code == 200
+    assert response.text.strip() == ""
+    assert SYNC_BLOCK_ATTR not in response.text
+    assert "Синхронизация..." not in response.text
+    assert POLL_TRIGGER not in response.text
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_without_session_leaks_nothing(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """Без cookie-сессии разметки статуса не выдаётся.
+
+    Пустой ответ здесь ещё и ОСТАНАВЛИВАЕТ опрос вкладки, у которой истекла
+    сессия: перенаправление на страницу входа вернуло бы в блок целую страницу
+    логина, а опрос продолжился бы.
+
+    Владелец аккаунта заводится ЗДЕСЬ, а не берётся общим помощником: тот
+    ищет пользователя, которого создаёт фикстура авторизации, а этому тесту она
+    по построению не положена.
+    """
+    owner = User(email="owner@test.com", password_hash="x", name="Owner")
+    db_session.add(owner)
+    await db_session.commit()
+    await db_session.refresh(owner)
+    account = MessengerAccount(
+        user_id=owner.id, type="wa", credentials="session", status="syncing"
+    )
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
+
+    response = await client.get(f"/accounts/{account.id}/groups/sync-status")
+
+    assert response.status_code == 200
+    assert response.text.strip() == ""
+    assert SYNC_BLOCK_ATTR not in response.text
+    assert POLL_TRIGGER not in response.text
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_accepts_the_layout_param(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-15: параметр компоновки принимается и игнорируется.
+
+    У открытых вкладок адреса опроса могут нести прежний параметр — оба вида
+    запроса обязаны отвечать одинаково.
+    """
+    account = await _seed_account_with_result(db_session, None, status="syncing")
+
+    without = await authed_client.get(f"/accounts/{account.id}/groups/sync-status")
+    legacy = await authed_client.get(
+        f"/accounts/{account.id}/groups/sync-status?layout=cards"
+    )
+
+    assert without.status_code == 200
+    assert legacy.status_code == 200
+    assert legacy.text == without.text
+
+
+# --- Состав подменяемого блока ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_confirm_panel_never_lives_inside_the_polled_block(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Панель подтверждения внутри подменяемого блока задваивалась бы (T-11-04).
+
+    Элемент, заменяемый целиком, приносит с каждым ответом свои дочерние блоки:
+    после первого же опроса на странице оказались бы две панели с одинаковым
+    идентификатором — событие открывало бы обе, а Tab уходил бы в невидимую
+    копию.
+    """
+    account = await _seed_account_with_result(db_session, None, status="syncing")
+    group = await _seed_group(db_session, account, "Барахолка Северного района")
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    block = _sync_block(html)
+    assert f"group-del-{group.id}" not in block, (
+        "панель подтверждения удаления оказалась внутри подменяемого блока"
+    )
+    assert f"group-del-{group.id}" in html, "панель исчезла со страницы вовсе"
+
+
+@pytest.mark.asyncio
+async def test_result_plashka_never_lives_inside_the_polled_block(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Плашка внутри подменяемого блока исчезла бы после первого опроса."""
+    account = await _seed_account_with_result(
+        db_session, _summary(found=6, new=1, renamed=0), status="syncing"
+    )
+
+    html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+
+    block = _sync_block(html)
+    assert "data-sync-plashka" not in block
+    assert "Синхронизация завершена" not in block
+    assert "Синхронизация завершена" in html, "плашка исчезла со страницы вовсе"
+
+
+@pytest.mark.asyncio
+async def test_polled_block_is_declared_exactly_once():
+    """Опрос объявлен в ОДНОМ месте: два объявления гонялись бы друг с другом.
+
+    Проверка по исходнику, а не по выдаче: второе объявление, лежащее в ветке
+    другого статуса, ни одним запросом не поймается — оно проявится только у
+    пользователя, дошедшего до этой ветки.
+    """
+    source = (
+        TEMPLATES_DIR / "account_groups" / "partials" / "sync_result.html"
+    ).read_text(encoding="utf-8")
+
+    assert source.count("hx-trigger") == 1, "объявлений опроса не одно"
+    assert source.count("hx-get") == 1
+    assert "syncing" in source, "объявление опроса не обусловлено статусом"
+    assert "group-del-" not in source, "панель подтверждения попала в блок подмены"
+    assert "aria-live" in source, "завершение синхронизации не будет объявлено"

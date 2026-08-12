@@ -239,6 +239,75 @@ async def test_sync_polling_continues_while_syncing(
     assert f'id="account-row-{account.id}"' in response.text
 
 
+# --- UI-05: самоостановка опроса на экране групп аккаунта (План 03-06) ------
+#
+# Второй в проекте самоостанавливающийся опрос. Экран групп аккаунта добирает
+# завершение ФОНОВОЙ синхронизации WA и MAX: она уходит в Celery, и без опроса
+# пользователь не узнал бы о её конце, не перезагрузив страницу.
+#
+# Пара повторена дословно по той же причине, что и у экрана аккаунтов: тест
+# присутствия в одиночку зеленеет и у вечного опроса, тест отсутствия в
+# одиночку — на пустом ответе. Красить обязан каждый из двух.
+
+
+async def _seed_groups_account(
+    db: AsyncSession, status: str
+) -> MessengerAccount:
+    user = await _user(db)
+    return await _seed_account(db, user.id, status=status)
+
+
+@pytest.mark.asyncio
+async def test_account_groups_polling_stops(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Ответ без hx-trigger — механизм остановки опроса экрана групп."""
+    account = await _seed_groups_account(db_session, status="active")
+
+    response = await authed_client.get(
+        f"/accounts/{account.id}/groups/sync-status?layout=cards"
+    )
+    assert response.status_code == 200
+    assert "hx-trigger" not in response.text
+    assert "hx-get" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_account_groups_polling_continues_while_syncing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парный тест: без него предыдущий зеленел бы вакуумно (пустой ответ)."""
+    account = await _seed_groups_account(db_session, status="syncing")
+
+    response = await authed_client.get(
+        f"/accounts/{account.id}/groups/sync-status?layout=cards"
+    )
+    assert response.status_code == 200
+    assert "hx-trigger" in response.text
+    assert "hx-get" in response.text
+    assert f'id="account-groups-sync-{account.id}"' in response.text
+
+
+@pytest.mark.asyncio
+async def test_account_groups_page_polls_only_while_syncing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Сама страница объявляет опрос ровно в статусе выполнения.
+
+    Ответ входа проверяют тесты выше; здесь проверяется ПЕРВИЧНАЯ отрисовка —
+    вечный опрос, объявленный страницей, до входа статуса вообще не доходит и
+    парой тестов на вход не ловится.
+    """
+    syncing = await _seed_groups_account(db_session, status="syncing")
+    active = await _seed_groups_account(db_session, status="active")
+
+    running = (await authed_client.get(f"/accounts/{syncing.id}/groups")).text
+    finished = (await authed_client.get(f"/accounts/{active.id}/groups")).text
+
+    assert 'hx-trigger="every' in running
+    assert 'hx-trigger="every' not in finished
+
+
 # --- UI-05: якоря подмены ---------------------------------------------------
 
 @pytest.mark.asyncio
