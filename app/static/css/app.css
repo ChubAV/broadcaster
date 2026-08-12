@@ -1618,6 +1618,13 @@ a:hover { color: var(--accent-link-hover); }
   min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 [data-acct-head] > .badge { flex: none; }
+/* Блок статуса — прямой ребёнок шапки на месте бейджа: он заменяется опросом
+   ЦЕЛИКОМ, поэтому раскладку обязан держать он сам, а не его содержимое.
+   Собственный перенос нужен ветке выполнения: там внутри бейдж И подпись. */
+[data-acct-sync] {
+  flex: none; min-width: 0;
+  display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px;
+}
 .acct-head__actions {
   flex: none; margin-left: auto;
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px;

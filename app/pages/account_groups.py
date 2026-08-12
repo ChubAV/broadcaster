@@ -247,6 +247,54 @@ async def account_groups_partial(
     )
 
 
+@router.get("/accounts/{account_id}/groups/sync-status", response_class=HTMLResponse)
+async def account_groups_sync_status(
+    request: Request,
+    account_id: int,
+    # D-15: параметр компоновки принимается и игнорируется — см. app/pages/ads.py
+    layout: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Блок статуса синхронизации — цель самоостанавливающегося опроса.
+
+    Статус читается из базы: фоновые задачи WA и MAX пишут его сами, а экран
+    его ДОБИРАЕТ. Опрос прекращается тем, что очередной ответ приходит без
+    атрибутов запроса и триггера — условие живёт в шаблоне, а не здесь, потому
+    что первичная отрисовка страницы обязана подчиняться ровно тому же условию
+    (T-03-26).
+
+    Аутентификация и владение аккаунтом проверяются ЗДЕСЬ ЗАНОВО: этот адрес
+    вызывается автоматически каждые пять секунд, то есть перебрать чужие
+    идентификаторы через него дешевле, чем через страницу (T-03-25).
+
+    ОТКАЗ — ПУСТОЙ ОТВЕТ, а не редирект. Пустой ответ и не отдаёт разметки, и
+    останавливает опрос: редирект на страницу входа вернул бы в подменяемый
+    блок целую страницу логина, а опрос продолжился бы как ни в чём не бывало.
+
+    Рендер идёт получением шаблона из окружения и его рендером напрямую — по
+    образцу входа статуса экрана «Аккаунты»: у ответа нет ни шелла, ни
+    контекста запроса, ему нужны ровно два значения.
+    """
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return HTMLResponse("")
+
+    account = await _load_owned_account(db, user, account_id)
+    if not account:
+        return HTMLResponse("")
+
+    # Вне трёх известных статусов разметки нет: выдуманная подпись сообщала бы
+    # о состоянии, которого словарь экрана «Аккаунты» не знает.
+    if account.status not in ("active", "sync_failed", "syncing"):
+        return HTMLResponse("")
+
+    html = templates.env.get_template(
+        "account_groups/partials/sync_result.html"
+    ).render(account_id=account_id, status=account.status)
+    return HTMLResponse(html)
+
+
 @router.post("/accounts/{account_id}/groups/{group_id}/toggle")
 async def account_groups_toggle(
     request: Request,

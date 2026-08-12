@@ -1869,8 +1869,21 @@ async def test_status_endpoint_without_session_leaks_nothing(
     Пустой ответ здесь ещё и ОСТАНАВЛИВАЕТ опрос вкладки, у которой истекла
     сессия: перенаправление на страницу входа вернуло бы в блок целую страницу
     логина, а опрос продолжился бы.
+
+    Владелец аккаунта заводится ЗДЕСЬ, а не берётся общим помощником: тот
+    ищет пользователя, которого создаёт фикстура авторизации, а этому тесту она
+    по построению не положена.
     """
-    account = await _seed_account_with_result(db_session, None, status="syncing")
+    owner = User(email="owner@test.com", password_hash="x", name="Owner")
+    db_session.add(owner)
+    await db_session.commit()
+    await db_session.refresh(owner)
+    account = MessengerAccount(
+        user_id=owner.id, type="wa", credentials="session", status="syncing"
+    )
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
 
     response = await client.get(f"/accounts/{account.id}/groups/sync-status")
 
