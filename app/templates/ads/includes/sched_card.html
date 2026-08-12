@@ -38,6 +38,7 @@
 {% from "components/modal.html" import modal %}
 {% from "components/toggle.html" import toggle %}
 {% from "components/empty_state.html" import empty_state %}
+{% from "components/mono.html" import mono %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 {% from "schedules/includes/schedule_row.html" import DAY_NAMES %}
 
@@ -58,12 +59,23 @@
 {{- {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'}.get(account.type, account.type) }} #{{ account.id -}}
 {%- endmacro %}
 
-{% macro sched_card(s, ad, accounts, groups, user, expanded=false) -%}
+{% macro sched_card(s, ad, accounts, groups, user, expanded=false, inactive_group_ids=none) -%}
 {%- set account = (accounts | selectattr('id', 'equalto', s.account_id) | list | first) if s.account_id else none -%}
 {%- set account_groups = groups | selectattr('account_id', 'equalto', s.account_id) | list if s.account_id else [] -%}
 {#- `or []` — вторая линия CR-03: строка, испорченная до отказа на входе
     (None вместо списка), не должна выключать экран владельца. -#}
 {%- set chosen = s.group_ids or [] -%}
+{#- Признак выключенности приходит ПАРАМЕТРОМ (D-07): импортированный макрос
+    контекста вызывающего не видит, а второго запроса за флагом из разметки быть
+    не может. Набор строит обработчик редактора (app/pages/ads.py). -#}
+{%- set inactive = inactive_group_ids or [] -%}
+{#- Числитель подписи «выбрано N из M» считает ОТРИСОВАННЫЕ выбранные строки, а
+    не длину хранимого списка: список мог бы нести идентификаторы, которых в
+    видимом наборе нет (группы другого аккаунта), и числа противоречили бы
+    списку перед глазами (RESEARCH Pitfall 6). Знаменатель — тот же набор,
+    включая выключенные-но-выбранные строки. -#}
+{%- set chosen_shown = [] -%}
+{%- for g in account_groups %}{% if g.id in chosen %}{% set _ = chosen_shown.append(g.id) %}{% endif %}{% endfor -%}
 {%- set day_labels = [] -%}
 {%- for d in (s.days_of_week or [])|sort %}{% set _ = day_labels.append(DAY_NAMES.get(d, d)) %}{% endfor -%}
 {#- Неполнота ОДНА и та же на сервере и в разметке: аккаунт, хотя бы одна
@@ -141,18 +153,27 @@
       </div>
 
       <div class="sched-card__block">
-        <span class="field__label">ГРУППЫ · выбрано {{ chosen | length }} из {{ account_groups | length }}</span>
+        <span class="field__label">ГРУППЫ · выбрано {{ chosen_shown | length }} из {{ account_groups | length }}</span>
         {%- if not s.account_id %}
         <span class="field__hint">Сначала выберите аккаунт</span>
         {%- elif not account_groups %}
         <span class="field__hint">У выбранного аккаунта нет подключённых групп</span>
         {%- else %}
         <div class="group-pick">
+          {#- Строка выключенной группы ОТРИСОВЫВАЕТСЯ, только если она уже
+              выбрана в этом расписании: невыбранные выключенные сюда не
+              приезжают вовсе — их отсекла выборка редактора. Поэтому признака
+              недоступности на флажке нет ни у одной строки: пользователь обязан
+              иметь возможность СНЯТЬ выбор с выключенной группы, иначе она
+              осталась бы в расписании навсегда молчащей (D-07). -#}
           {%- for group in account_groups %}
           <label class="group-pick__row" title="{{ group.name }}">
             <input class="group-pick__box" type="checkbox" name="group_ids" value="{{ group.id }}"
                    {% if group.id in chosen %}checked{% endif %}>
             <span class="group-pick__name">{{ group.name }}</span>
+            {%- if group.id in inactive %}
+            {{ mono('отключена', variant='warn', title='Группа отключена и пропускается при рассылке') }}
+            {%- endif %}
             <span class="group-pick__count">{{ group.group_external_id }}</span>
           </label>
           {%- endfor %}
