@@ -699,7 +699,9 @@ async def test_counter_line_counts_the_whole_table(
 
     html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
 
-    assert "32 активных из 35 групп" in html, "линейка посчитана по загруженной странице"
+    # «32 активные», а не «32 активных»: склонение считается по последней цифре,
+    # и 32 требует той же формы, что 2 (UI-SPEC: «2 активные из 5 групп»).
+    assert "32 активные из 35 групп" in html, "линейка посчитана по загруженной странице"
 
 
 @pytest.mark.asyncio

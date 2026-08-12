@@ -165,6 +165,33 @@ def format_datetime_for_user(
 templates.env.globals["format_datetime_for_user"] = format_datetime_for_user
 
 
+def plural_ru(count: int, one: str, few: str, many: str) -> str:
+    """Return the Russian noun form matching `count`.
+
+    Общего хелпера склонений в проекте не было: единственный случай был решён
+    конкатенацией одной формы (`sched_card.html`). Линейка счётчика экрана
+    групп обязана печатать «1 активная из 1 группы», а не «1 активных из 1
+    групп» (UI-SPEC §Copywriting Contract, E3 zero-one-many), поэтому форма
+    выбирается по числу, а не выписывается в разметке.
+
+    Хелпер возвращает ТОЛЬКО форму слова и ничего не форматирует: число рядом с
+    ней ставит вызывающий шаблон. Так один и тот же хелпер обслуживает и
+    «5 активных», и «в 3 расписаниях», где число стоит в разных местах строки.
+    """
+    tail = abs(int(count)) % 100
+    if 11 <= tail <= 14:
+        return many
+    tail %= 10
+    if tail == 1:
+        return one
+    if 2 <= tail <= 4:
+        return few
+    return many
+
+
+templates.env.globals["plural_ru"] = plural_ru
+
+
 async def get_user_from_cookie(
     request: Request, db: AsyncSession, settings: Settings
 ) -> User | None:

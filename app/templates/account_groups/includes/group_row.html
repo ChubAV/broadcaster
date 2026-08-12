@@ -1,30 +1,50 @@
 {# Строка группы на экране аккаунта — по эталону groups/includes/group_row.html.
 
    Это МАКРОС: импортированные шаблоны Jinja контекста вызывающего не получают,
-   поэтому `group` и `account_id` — явные параметры. Ошибка в имени параметра
-   проявится не исключением, а ПУСТОЙ строкой при валидной странице (200),
-   поэтому отрисовка реальных данных закреплена тестами
-   test_page_shows_groups_of_this_account и test_rows_are_ordered_by_group_id.
+   поэтому `group`, `account_id`, `schedules_count` и `user` — явные параметры.
+   Ошибка в имени параметра проявится не исключением, а ПУСТОЙ строкой при
+   валидной странице (200), поэтому отрисовка реальных данных закреплена
+   тестами test_page_shows_groups_of_this_account, test_rows_are_ordered_by_group_id
+   и test_row_shows_the_number_of_schedules.
 
    Строка КАРТОЧНАЯ ([data-group-row]), а не data-row-таблица: экран остаётся
    списком карточек на всех ширинах (UI-SPEC §Responsive Contract), поэтому
-   обработка ячеек с подписями колонок ему не нужна. Нумерованная секция
-   app.css для [data-group-row] приходит планом 03-05; до неё разметка
-   работоспособна на наследуемых классах карточки.
+   обработка ячеек с подписями колонок ему не нужна. Стили — раздел 9 app.css.
 
    Название группы приходит из внешнего мессенджера и приложением не
-   контролируется (T-03-03): оно выводится обычным экранированным выводом, ни
-   один макрос не принимает готовую разметку.
+   контролируется (T-03-03, T-03-23): и в строке, и в теле панели подтверждения
+   оно выводится обычным экранированным выводом, ни один макрос не принимает
+   готовую разметку.
 
    Импорт: {% from "account_groups/includes/group_row.html" import group_row %} #}
 
 {% from "components/avatar.html" import avatar %}
+{% from "components/mono.html" import mono %}
 {% from "components/toggle.html" import toggle %}
 
-{% macro group_row(group, account_id) -%}
+{% macro group_row(group, account_id, schedules_count=0, user=None) -%}
 <div data-group-row id="group-row-{{ group.id }}"{% if not group.is_active %} class="group-row--off"{% endif %}>
   {{- avatar(group.name, size=32) -}}
-  <span data-grow title="{{ group.name }}">{{ group.name }}</span>
+  <span class="group-row__name" data-grow title="{{ group.name }}">{{ group.name }}</span>
+  {#- Подпись «в N расписаниях» объясняет ЦЕНУ удаления заранее (D-08): группа,
+      входящая в расписания, уйдёт из них вместе со строкой. При нуле подпись
+      читается словами — «в 0 расписаниях» звучало бы как сбой подсчёта. -#}
+  <span class="group-row__sub">
+    {%- if schedules_count -%}
+      {{ mono('в ' ~ schedules_count ~ ' ' ~ plural_ru(schedules_count, 'расписании', 'расписаниях', 'расписаниях')) }}
+    {%- else -%}
+      {{ mono('не в расписаниях') }}
+    {%- endif -%}
+  </span>
+  {#- Пометка D-11. Синк её ставит и снимает, пользователь — нет: группа,
+      которую мессенджер больше не вернул, помечается, но не удаляется.
+      Точка декоративна и от вспомогательных технологий скрыта — состояние
+      несёт САМ ТЕКСТ пометки, а не только цвет. -#}
+  {%- if group.missing_since %}
+  <span class="group-row__mark" title="Не найдена при синхронизации {{ format_datetime_for_user(group.missing_since, user, '%d.%m.%Y %H:%M') }}">
+    <span class="group-row__dot" aria-hidden="true"></span>{{ mono('не найдена при синке', variant='warn') }}
+  </span>
+  {%- endif %}
   {#- Событие change всплывает от чекбокса к форме, поэтому обработчик висит на
       САМОЙ форме, а макрос toggle остаётся без собственных атрибутов событий.
       Перехват на форме — это и есть базовый путь без JS: не навесится Alpine —

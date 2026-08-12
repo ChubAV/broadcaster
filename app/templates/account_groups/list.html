@@ -1,7 +1,10 @@
 {% extends "base.html" %}
-{% from "components/button.html" import link_button %}
+{% from "components/button.html" import button, link_button %}
 {% from "components/card.html" import card_open, card_close %}
 {% from "components/empty_state.html" import empty_state %}
+{% from "components/field.html" import field %}
+{% from "components/filters.html" import filters %}
+{% from "components/mono.html" import mono %}
 {% from "account_groups/includes/group_row.html" import group_row %}
 
 {% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
@@ -13,8 +16,7 @@
    рендерит шапка шелла, собственного заголовка у страницы нет.
 
    Действие «Синхронизировать всё» из UI-SPEC приходит планом 03-06 вместе с
-   результатом синка: этот план доказывает срез «маршрут → владение → выборка →
-   шаблон → форма → БД», а не собирает шапку экрана целиком. #}
+   результатом синка. #}
 {% block page_title %}{{ account_label }}{% endblock %}
 {% block page_subtitle %}Группы аккаунта: включение, удаление и повторная синхронизация{% endblock %}
 {% block page_actions %}
@@ -23,17 +25,59 @@
 
 {% block content %}
 
+{#- Строка поиска. Экран показывает чаты ОДНОГО аккаунта, и у Telegram их
+    бывают сотни: без поиска список непригоден (D-03). Фильтров по мессенджеру
+    и по активности здесь нет — аккаунт задан маршрутом, а тумблер является
+    состоянием строки, а не измерением списка.
+
+    Полоса рендерится и при пустой выдаче: пользователь, отфильтровавший список
+    в ноль, обязан иметь чем сбросить фильтр (UI-SPEC E5 empty). -#}
+{% if total_groups or filter_search %}
+{% call filters('account-groups-filters', action='/accounts/' ~ account_id ~ '/groups') %}
+  {{ field(name="search", label='Поиск', value=filter_search or '',
+           placeholder='Поиск по названию группы', id='filter-search') }}
+  {{ button('Применить', variant='primary') }}
+  {{ link_button('Сбросить', '/accounts/' ~ account_id ~ '/groups', variant='ghost') }}
+{% endcall %}
+{% endif %}
+
+{#- Линейка-разделитель над списком. Числа приходят ДВУМЯ выделенными запросами
+    подсчёта (D-04) и не зависят от того, сколько строк успело загрузиться.
+    При нуле групп линейка не рендерится вовсе: «0 активных из 0 групп» — это
+    не сообщение, сообщение несёт пустое состояние (UI-SPEC E3 empty).
+
+    Правая надпись впервые правдива именно с этой фазы: выключенная группа
+    действительно пропускается при диспетчеризации (D-05). -#}
+{% if total_groups %}
+<div class="count-rule">
+  {{ mono(active_groups ~ ' ' ~ plural_ru(active_groups, 'активная', 'активные', 'активных') ~
+          ' из ' ~ total_groups ~ ' ' ~ plural_ru(total_groups, 'группы', 'групп', 'групп')) }}
+  <span class="count-rule__line" aria-hidden="true"></span>
+  {{ mono('ВЫКЛЮЧЕННЫЕ ГРУППЫ ПРОПУСКАЮТСЯ ПРИ РАССЫЛКЕ', upper=true) }}
+</div>
+{% endif %}
+
 {% if groups %}
 {{ card_open() }}
+  {# Инварианты бесконечной прокрутки (ломает перевёрстка, а не логика):
+     - сентинел остаётся ПОСЛЕДНИМ элементом внутри ТОГО ЖЕ контейнера, что и
+       строки: он заменяет сам себя и подтягивает следующий;
+     - разметка сентинела здесь и в partial_cards.html ИДЕНТИЧНА;
+     - цикл проброса параметров переносится ДОСЛОВНО вместе с приведением к
+       строке и экранированием для URL: потерянная строка поиска не роняет
+       страницу, а молча подмешивает к найденному остальной список аккаунта
+       (T-04-01, T-03-21). #}
   <div data-group-list>
-    {% for group in groups %}{{ group_row(group, account.id) }}{% endfor %}
+    {% for group in groups %}{{ group_row(group, account_id, schedule_counts.get(group.id, 0), user) }}{% endfor %}
+    {% if has_next %}
+<div hx-get="/accounts/{{ account_id }}/groups/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
+    {% endif %}
   </div>
 {{ card_close() }}
 {% else %}
 {#- Две ветки пустого состояния («Групп пока нет» до первого синка и «Все группы
-    удалены» после него) различает `last_synced_at`, а его колонка приходит
-    миграцией плана 03-04. До неё рендерится одна ветка — та, что называет
-    следующий шаг пользователю, у которого групп ещё не было. -#}
+    удалены» после него) различает `last_synced_at`; третью — «Группы не
+    найдены» — строка поиска. Ветвление приходит задачей 3 этого плана. -#}
 {{ empty_state('Групп пока нет',
                hint='Нажмите «Синхронизировать всё», чтобы подтянуть чаты аккаунта') }}
 {% endif %}
