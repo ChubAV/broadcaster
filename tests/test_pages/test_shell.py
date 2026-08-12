@@ -89,7 +89,6 @@ SHELL_ROUTES = (
     "/accounts/connect/tg_user",
     "/accounts/connect/wa",
     "/accounts/connect/max",
-    "/groups",
     "/schedules",
     "/history",
     "/billing",
@@ -105,7 +104,6 @@ ADMIN_SHELL_ROUTES = ("/admin", "/admin/users", "/admin/groups-info")
 PARTIAL_ROUTES = (
     "/ads/partial",
     "/accounts/partial",
-    "/groups/partial",
     "/schedules/partial",
     "/history/partial",
 )
@@ -117,6 +115,14 @@ PARTIAL_ROUTES = (
 # ValidationError. Глобалы изображений теперь привязываются к настройкам
 # приложения через bind_image_url_globals в create_app (D-21), поэтому
 # страница вернулась в SHELL_ROUTES наравне с остальными.
+#
+# АДРЕС /groups И ЕГО ПАРТИАЛ УБРАНЫ ИЗ ОБХОДА планом 03-08: глобальный раздел
+# «Группы» снесён целиком (D-01), и по обоим адресам теперь стоит заглушка,
+# отвечающая перенаправлением. Обход требует 200 и шелла — перенаправление ни
+# тем, ни другим не является. Вклад раздела в четыре проверки обхода не
+# потерян: он переехал на экран групп аккаунта и живёт в
+# test_account_groups_page_gets_the_full_shell_treatment ниже, а сама заглушка
+# закреплена тестами раздела «снесённый раздел» в конце файла.
 #
 # АДРЕС /schedules/new ИЗ ОБХОДА УБРАН планом 02-06: отдельные страницы
 # расписаний сняты (D-14). Страницей настройки расписаний стал редактор
@@ -369,11 +375,82 @@ async def test_admin_nav_visible_for_admin(admin_client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_nav_keeps_groups_and_links(authed_client: AsyncClient):
+async def test_nav_keeps_links(authed_client: AsyncClient):
+    """Переходы навигации остаются ссылками, а не кнопками со скриптом."""
     html = (await authed_client.get("/profile")).text
-    # Переходы остаются ссылками, пункт «Группы» сохраняется до Фазы 3
     assert 'href="/dashboard"' in html
-    assert 'href="/groups"' in html
+    assert 'href="/accounts"' in html
+
+
+# --- План 03-08: снесённый глобальный раздел «Группы» (D-01) -----------------
+#
+# Раздел снят целиком. Оба утверждения ниже — ЯВНЫЕ и положительные по форме:
+# отсутствие пункта меню не следует автоматически из того, что старый тест его
+# присутствия удалён, а перенаправление старого адреса не следует из того, что
+# адрес выпал из перечня обхода. Незаявленный возврат пункта или молчаливое
+# исчезновение заглушки обязаны краснеть.
+
+# Пункт рисуется в ДВУХ местах из одного списка NAV_ITEMS: в боковом меню
+# (<span class="nav-label">) и в нижних табах (текст ссылки). Проверяются оба.
+GROUPS_NAV_MARKERS = (
+    'href="/groups"',
+    '<span class="nav-label">Группы</span>',
+    ">Группы</a>",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", SHELL_ROUTES)
+async def test_nav_has_no_groups_item(authed_client: AsyncClient, route: str):
+    """Пункта «Группы» нет НИ НА ОДНОЙ странице — ни в меню, ни в табах.
+
+    Обход сплошной, потому что состав навигации приходит на каждую страницу из
+    одного списка: пункт, вернувшийся в него, появился бы сразу везде, а увидеть
+    это на одной проверенной странице — случайность, а не гарантия.
+    """
+    html = (await authed_client.get(route)).text
+    for marker in GROUPS_NAV_MARKERS:
+        assert marker not in html, f"{route}: пункт снесённого раздела вернулся ({marker})"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route",
+    (
+        "/groups",
+        "/groups?account_id=1&messenger_type=wa&is_active=1",
+        "/groups/partial?offset=30&limit=30",
+        "/groups/42/toggle",
+    ),
+)
+async def test_retired_groups_routes_redirect_to_accounts(
+    authed_client: AsyncClient, route: str
+):
+    """Старый адрес и любая старая глубокая ссылка отвечают перенаправлением.
+
+    Не 404: у пользователей остались закладки и открытые вкладки, чьи сентинелы
+    всё ещё несут прежние адреса. Ответ об отсутствии страницы был бы потерей
+    без нужды — перенаправление приводит человека туда, где его группы теперь
+    живут (UI-SPEC E8 error, T-03-33).
+    """
+    response = await authed_client.get(route, follow_redirects=False)
+    assert response.status_code == 302, route
+    assert response.headers["location"] == "/accounts", route
+
+
+@pytest.mark.asyncio
+async def test_retired_groups_section_accepts_no_post(authed_client: AsyncClient):
+    """Ни тумблера, ни удаления, ни массовых операций на старом префиксе нет.
+
+    Заглушка отвечает ТОЛЬКО на переход по ссылке. Обработчик POST, оставленный
+    «чтобы старые формы не ломались», означал бы второй живой путь изменения
+    данных мимо проверок владения нового экрана.
+    """
+    for route in ("/groups/42/toggle", "/groups/42/delete", "/groups/bulk"):
+        response = await authed_client.post(route, follow_redirects=False)
+        assert response.status_code == 405, (
+            f"{route}: снесённый раздел принял POST ({response.status_code})"
+        )
 
 
 # --- D-09/D-19: живые данные шелла ------------------------------------------

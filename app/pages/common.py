@@ -103,12 +103,15 @@ templates.env.globals["AD_STATUS_PUBLISHED"] = AD_STATUS_PUBLISHED
 # Состав навигации по D-11. Список выписан ОДИН раз и используется и в
 # боковом меню (data-nav), и в нижних табах (data-tabs) — иначе переименования
 # пришлось бы править в трёх местах, как было в старом шелле.
-# «Группы» сохраняются до Фазы 3: экран групп аккаунта появится только там,
-# и без пункта работающий раздел стал бы недостижим.
+#
+# ПУНКТА «ГРУППЫ» ЗДЕСЬ НЕТ с плана 03-08. Фаза 1 сохранила его временно —
+# ровно до появления экрана групп аккаунта, — и это обещание закрыто: группы
+# живут ВНУТРИ «Аккаунтов» (`/accounts/{id}/groups`, D-02), вход на них —
+# строка аккаунта, а глобальный раздел снесён целиком (D-01). Отдельный пункт
+# меню вёл бы на страницу, которой нет.
 NAV_ITEMS: list[dict] = [
     {"key": "dashboard", "label": "Дашборд", "href": "/dashboard", "count_key": None},
     {"key": "accounts", "label": "Аккаунты", "href": "/accounts", "count_key": "accounts"},
-    {"key": "groups", "label": "Группы", "href": "/groups", "count_key": None},
     {"key": "ads", "label": "Объявления", "href": "/ads", "count_key": "ads"},
     {"key": "schedules", "label": "Расписания", "href": "/schedules", "count_key": "schedules"},
     {"key": "history", "label": "История", "href": "/history", "count_key": "history"},

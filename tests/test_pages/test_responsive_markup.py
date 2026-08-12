@@ -2621,9 +2621,10 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     # Класс 1: макрос строки, потребляемый шаблоном с шапкой. Его исходник уже
     # входит в объединение своего списочного шаблона — подписи проверяются там.
     "ads/includes/ad_card.html": "макрос строки внутри объединения ads/list.html",
-    "groups/includes/group_row.html": (
-        "макрос строки внутри объединения groups/list.html"
-    ),
+    # groups/includes/group_row.html ВЫШЕЛ из перечня планом 03-08 вместе с
+    # самим шаблоном: глобальный раздел снесён (D-01). Строка группы на экране
+    # аккаунта его место не занимает — она КАРТОЧНАЯ и примитив строки-таблицы
+    # не рисует вовсе, поэтому в обход по строкам не попадает по построению.
     # schedules/includes/schedule_row.html ВЫШЕЛ из перечня планом 02-07: он
     # больше не рисует строку вовсе — сводный список стал карточным, и ни
     # вызова примитива строки, ни написанного вручную признака в нём нет.
@@ -2672,7 +2673,12 @@ ROWHEAD_PAGES = (
     # 860px шапку ему нечем, потому что шапки нет. Обещание «понятно, что
     # означает каждое значение» переехало в
     # test_schedules_card_names_each_value.
-    RowheadPage("groups/list.html", "/groups", False, "groups", frozenset({"Группа"})),
+    #
+    # groups/list.html ВЫШЕЛ из таблицы планом 03-08 вместе с самим шаблоном:
+    # глобальный раздел снесён (D-01). Замены в таблице у него нет и быть не
+    # может — экран групп аккаунта шапки колонок не вызывает, потому что список
+    # у него карточный; обещание «понятно, что означает каждое значение»
+    # переехало в test_account_groups_row_names_each_value.
     RowheadPage(
         "dashboard.html", "/dashboard", False, "dashboard", frozenset({"Объявление"})
     ),
@@ -2721,8 +2727,6 @@ async def _seed_rowhead_page(db: AsyncSession, seed: str) -> None:
         await _seed_ad(db)
     elif seed == "schedules":
         await _seed_schedule(db)
-    elif seed == "groups":
-        await _seed_group(db)
     elif seed == "dashboard":
         await _seed_send_log(db)
     elif seed == "admin_users":
@@ -2783,8 +2787,11 @@ def test_rowhead_pages_all_have_a_parametrization_entry():
         f"без входа в таблице {sorted(found - declared)}; "
         f"в таблице, но шапку не вызывают {sorted(declared - found)}"
     )
-    assert len(declared) == 8, (
-        f"ожидалось восемь шаблонов с шапкой колонок, объявлено {len(declared)}: "
+    # Восемь → СЕМЬ: план 03-08 снёс groups/list.html вместе с разделом (D-01).
+    # Уменьшение объявленного числа — признание СОЗНАТЕЛЬНОГО снятия; молчаливое
+    # исчезновение шаблона с шапкой по-прежнему краснеет.
+    assert len(declared) == 7, (
+        f"ожидалось семь шаблонов с шапкой колонок, объявлено {len(declared)}: "
         f"{sorted(declared)}"
     )
 
@@ -2803,8 +2810,10 @@ def test_row_templates_without_header_are_accounted_for():
         f"не названы {sorted(found - declared)}; "
         f"названы, но строку не рисуют {sorted(declared - found)}"
     )
-    assert len(declared) == 8, (
-        f"ожидалось восемь таких шаблонов, объявлено {len(declared)}"
+    # Восемь → СЕМЬ по той же причине: макрос строки снесённого раздела удалён
+    # планом 03-08 вместе с его списочной страницей.
+    assert len(declared) == 7, (
+        f"ожидалось семь таких шаблонов, объявлено {len(declared)}"
     )
     # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
     # макрос row_open он не вызывает. Без второго условия разрешителя он выпал
@@ -2899,8 +2908,10 @@ DIALOG_SWEEP_URLS = (
     "/ads/partial?offset=0&limit=30",
     "/schedules",
     "/schedules/partial?offset=0&limit=30",
-    "/groups",
-    "/groups/partial?offset=0&limit=30",
+    # Адреса снесённого раздела «Группы» ушли отсюда планом 03-08: обход требует
+    # 200, а по ним стоит заглушка-перенаправление. Его место занял экран групп
+    # аккаунта — он адресуется идентификатором и потому дописывается к обходу в
+    # самом тесте, как и ответ опроса статуса аккаунта.
     "/history",
     "/billing",
     "/profile",
@@ -2926,7 +2937,7 @@ async def test_no_rendered_page_calls_browser_dialog(
     один обход по списочным адресам.
     """
     account = await _seed_account(db_session, type_="max")
-    for seed in ("ads", "schedules", "groups", "dashboard", "billing"):
+    for seed in ("ads", "schedules", "dashboard", "billing"):
         await _seed_rowhead_page(db_session, seed)
     await _seed_group_info(db_session)
     # Экран групп аккаунта адресуется идентификатором и в статический перечень
