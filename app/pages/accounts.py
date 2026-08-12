@@ -13,6 +13,10 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
+from app.application.accounts.group_resync import (
+    apply_group_resync,
+    record_sync_failure,
+)
 from app.application.accounts.use_cases import (
     delete_account,
     detach_schedules_from_account,
@@ -731,7 +735,8 @@ async def accounts_retry_sync(
     task_name = "app.worker.tasks.sync_max_groups" if account.type == "max" else "app.worker.tasks.sync_wa_groups"
     celery.send_task(task_name, args=[account.id])
 
-    return RedirectResponse(url="/accounts", status_code=302)
+    # Повторный запуск нажимают с экрана групп аккаунта — туда же и возвращаем.
+    return RedirectResponse(url=f"/accounts/{account_id}/groups", status_code=302)
 
 
 @router.post("/accounts/{account_id}/sync-groups")
@@ -752,56 +757,64 @@ async def accounts_sync_groups(
         )
     )
     account = result.scalar_one_or_none()
-    if not account or account.type not in ("tg_user", "wa", "max"):
-        return RedirectResponse(url="/groups", status_code=302)
+    # Адрес несуществующего экрана предлагать нечему: аккаунт, не разрешённый в
+    # собственный аккаунт пользователя, уводит на список аккаунтов. Все
+    # остальные ветки возвращают пользователя туда, откуда он нажал кнопку.
+    if not account:
+        return RedirectResponse(url="/accounts", status_code=302)
 
+    account_groups_url = f"/accounts/{account_id}/groups"
+
+    if account.type not in ("tg_user", "wa", "max"):
+        return RedirectResponse(url=account_groups_url, status_code=302)
+
+    # Guard повторного запуска: он же закрывает гонку двойного нажатия.
     if account.status == "syncing":
-        return RedirectResponse(url="/groups", status_code=302)
+        return RedirectResponse(url=account_groups_url, status_code=302)
 
-    if account.type == "tg_user":
-        messenger = TelegramUserMessenger(
-            session_string=account.credentials,
-            api_id=settings.telegram_api_id,
-            api_hash=settings.telegram_api_hash,
-        )
-        fetched_groups = await messenger.get_groups()
-        messenger_type = "tg_user"
-
-    elif account.type == "wa":
-        messenger = WhatsAppMessenger(session_id=str(account.id))
-        fetched_groups = await messenger.get_groups()
-        messenger_type = "wa"
-
-    elif account.type == "max":
-        messenger = MaxMessenger(session_id=str(account.id))
-        fetched_groups = await messenger.get_groups()
-        messenger_type = "max"
-
-    # Load existing groups for this account to skip duplicates
-    existing = await db.execute(
-        select(Group.group_external_id).where(
-            Group.account_id == account_id,
-            Group.user_id == user.id,
-        )
-    )
-    existing_ids = {row[0] for row in existing}
-
-    seen = set(existing_ids)
-    for g in fetched_groups:
-        if g["id"] not in seen:
-            seen.add(g["id"])
-            db.add(
-                Group(
-                    user_id=user.id,
-                    account_id=account_id,
-                    messenger_type=messenger_type,
-                    group_external_id=g["id"],
-                    name=g.get("name") or g["id"],
-                )
+    # Протоколы обращения к мессенджерам не меняются: те же конструкторы и тот
+    # же единственный get_groups() в каждой ветке. Новое здесь только одно —
+    # отказ внешней системы записывается на аккаунт, а не теряется 500-й.
+    try:
+        if account.type == "tg_user":
+            messenger = TelegramUserMessenger(
+                session_string=account.credentials,
+                api_id=settings.telegram_api_id,
+                api_hash=settings.telegram_api_hash,
             )
+            fetched_groups = await messenger.get_groups()
+            messenger_type = "tg_user"
 
+        elif account.type == "wa":
+            messenger = WhatsAppMessenger(session_id=str(account.id))
+            fetched_groups = await messenger.get_groups()
+            messenger_type = "wa"
+
+        elif account.type == "max":
+            messenger = MaxMessenger(session_id=str(account.id))
+            fetched_groups = await messenger.get_groups()
+            messenger_type = "max"
+
+    except Exception as e:
+        import structlog
+        structlog.get_logger().error(
+            "sync_groups_fetch_failed",
+            account_id=account_id,
+            account_type=account.type,
+            error=str(e),
+            exc_info=True,
+        )
+        # Пишется сообщение исключения, а не строка подключения (T-03-17).
+        await record_sync_failure(db, account, str(e) or e.__class__.__name__)
+        await db.commit()
+        return RedirectResponse(url=account_groups_url, status_code=302)
+
+    # Состав групп считает единственная реализация переинвентаризации —
+    # та же, что у обеих фоновых задач (D-10, D-11, D-12). Транзакцией
+    # по-прежнему управляет обработчик: хелпер не коммитит.
+    await apply_group_resync(db, account, fetched_groups, messenger_type=messenger_type)
     await db.commit()
-    return RedirectResponse(url="/groups", status_code=302)
+    return RedirectResponse(url=account_groups_url, status_code=302)
 
 
 @router.post("/accounts/{account_id}/delete")
