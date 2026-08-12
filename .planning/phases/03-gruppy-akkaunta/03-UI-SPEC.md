@@ -1,10 +1,11 @@
 ---
 phase: 3
 slug: gruppy-akkaunta
-status: draft
+status: approved
 shadcn_initialized: false
 preset: none
 created: 2026-08-12
+reviewed_at: 2026-08-12
 ---
 
 # Phase 3 — UI Design Contract
@@ -315,22 +316,22 @@ Breakpoints are the shipped Phase 1 set (860/900/1080). This screen adds no new 
 > Shape-rooted UI state coverage. Empty-state and error-state COPY live in `## Copywriting Contract`
 > above — rows below cover state behaviour and reference that copy rather than restating it.
 
-Applicable state considerations resolved: **48 applicable · 43 covered · 5 backstop · 0 unresolved**
+Applicable state considerations resolved: **58 applicable · 54 covered · 4 backstop · 0 unresolved** (post-verification probe run 2026-08-12; plus 2 authored extra rows — E5/E6 `overflow` — retained beyond the probe's applicable set)
 
 ### Coverage matrix
 
 | Element | `empty` | `loading` | `error` | `populated` | `partial` | `overflow` | `zero-one-many` | `long-text` |
 |---|---|---|---|---|---|---|---|---|
-| **E1** Header card (identity, status, actions) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | – | 🧪 |
-| **E2** Sync result plashka + polled status block | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | – | 🧪 |
-| **E3** Counter line | ✅ | – | – | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **E1** Header card (identity, status, actions) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🧪 |
+| **E2** Sync result plashka + polled status block | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🧪 |
+| **E3** Counter line | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **E4** Group row list + infinite scroll | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🧪 |
 | **E5** Search bar | ✅ | ✅ | ✅ | – | ✅ | ✅ | – | ✅ |
 | **E6** Delete confirmation modal | ✅ | ✅ | ✅ | – | ✅ | 🧪 | – | 🧪 |
-| **E7** Editor group picker amendment (D-07) | ✅ | – | – | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **E8** `/accounts` entry + `/groups` redirect | – | – | ✅ | ✅ | – | – | – | – |
+| **E7** Editor group picker amendment (D-07) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **E8** `/accounts` entry + `/groups` redirect | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-`–` = the category does not apply to that element kind.
+`–` = not applicable per the probe engine (form-kind elements carry no populated/zero-one-many category). E5/E6 `overflow` are authored extras kept beyond the probe's applicable set.
 
 ### Resolutions
 
@@ -339,8 +340,10 @@ Applicable state considerations resolved: **48 applicable · 43 covered · 5 bac
 | empty | E1 | ✅ covered | `last_synced_at IS NULL` renders «синхронизация ещё не выполнялась» in the identity line — never a blank slot, never a fake «0 минут назад» (Pitfall 2: code must survive NULL) |
 | loading | E1 | ✅ covered | During a sync the identity line reads «синхронизация идёт сейчас» and the CTA reads «Синхронизация…» with the spinning glyph; the CTA is not double-submittable (existing `status=='syncing'` guard) |
 | error | E1 | ✅ covered | `sync_failed` renders the existing status-pill branch from `sync_status_card.html` vocabulary; the plashka (E2) carries the error text and next step |
+| populated | E1 | ✅ covered | Happy path is the mockup header (lines 906–920): icon plate with channel tint, name heading, identity mono line, status pill, two head actions — all from the already-loaded account row, no extra queries |
 | partial | E1 | ✅ covered | A missing phone (some account types) drops that segment and the «·» separator — never « · последняя синхронизация…» with a leading orphan dot |
 | overflow | E1 | ✅ covered | The header is `flex-wrap`; actions drop to their own row at narrow widths; nothing is clipped or horizontally scrolled |
+| zero-one-many | E1 | ✅ covered | Singleton surface — exactly one header card per screen, rendered unconditionally for the owned account; no zero-or-many variant exists |
 | long-text | E1 | 🧪 backstop | A 60-character account name ellipsizes in the identity column (`min-width:0`) without pushing the status pill or actions out. Held-out visual UI-state test at 320px |
 | empty | E2 | ✅ covered | No stored result and not syncing → no plashka at all (the header line covers «ещё не выполнялась»); an empty plashka shell never renders |
 | loading | E2 | ✅ covered | «Синхронизация выполняется…» lives in the polled block with `hx-get` declared **only** in the `syncing` branch; paired stop/continue tests are mandatory (01-06 invariants) |
@@ -348,8 +351,11 @@ Applicable state considerations resolved: **48 applicable · 43 covered · 5 bac
 | populated | E2 | ✅ covered | Success plashka renders the three counters; `missing` appears only when > 0, so «не найдено 0» never renders |
 | partial | E2 | ✅ covered | The plashka reflects the last **completed** sync only; while a new sync runs, the polled block carries the in-flight state and the old plashka stays until the new result lands with the poll's final swap |
 | overflow | E2 | ✅ covered | Counters are bounded numbers; the plashka is a full-width `alert` that wraps its text |
+| zero-one-many | E2 | ✅ covered | At most one plashka ever renders — it reflects only the stored last completed sync (zero → absent entirely); results never stack |
 | long-text | E2 | 🧪 backstop | A long worker error string wraps inside the alert to multiple lines, never widens the page or clips. Held-out visual UI-state test at 320px with a 300-character error |
 | empty | E3 | ✅ covered | With zero groups the counter line is not rendered — the empty state carries the message instead of «0 активных из 0 групп» |
+| loading | E3 | ✅ covered | Server-rendered with the page from the two COUNT queries — no in-flight state exists; the scroll partial never touches the line (D-04), so it can never show a stale mid-load count |
+| error | E3 | ✅ covered | The COUNT queries run inside the page render — a failure is the page-level error path (existing project behaviour), never a counter line with fabricated numbers |
 | populated | E3 | ✅ covered | Two dedicated COUNT queries (D-04); the scroll partial never touches the counter (Pitfall 5) |
 | partial | E3 | ✅ covered | All groups off renders «0 активных из M групп» honestly — paired with the right-side notice explaining the consequence |
 | overflow | E3 | ✅ covered | At narrow widths the uppercase notice wraps below the count; the 1px filler line collapses gracefully |
@@ -376,13 +382,21 @@ Applicable state considerations resolved: **48 applicable · 43 covered · 5 bac
 | overflow | E6 | 🧪 backstop | A long group name in the modal body wraps to at most two lines then ellipsizes; the panel never exceeds its max-width. Held-out visual UI-state test at 320px |
 | long-text | E6 | 🧪 backstop | The body is the only user-content slot; Jinja-escaped, bounded by the rule above. Held-out visual UI-state test |
 | empty | E7 | ✅ covered | A schedule with no disabled-selected groups renders the picker exactly as Phase 2 shipped it — zero diff for the common case |
+| loading | E7 | ✅ covered | The picker renders with the editor page; the D-07 mark is a static string added at render — no new in-flight state or fetch is introduced |
+| error | E7 | ✅ covered | Save/validation failures follow the Phase 2 editor error contract unchanged — the amendment adds display logic only, no new failure path |
 | populated | E7 | ✅ covered | Selected-but-disabled groups render with the «отключена» mono mark; unselected disabled groups are absent from the picker (D-07) |
 | partial | E7 | ✅ covered | The «выбрано {n} из {total}» caption counts the rendered set including disabled-selected rows, so the numbers never contradict the visible list (Pitfall 6) |
 | overflow | E7 | ✅ covered | Inherits the Phase 2 E5 group-picker overflow contract unchanged (full render, card grows) |
 | zero-one-many | E7 | ✅ covered | Works for one or many disabled-selected rows; unchecking the last one removes it from the picker on the next render — acceptable and explained by the mark's `title` |
 | long-text | E7 | ✅ covered | Inherits the Phase 2 E5 long-text backstop (ellipsis + `title`); the added mark is a fixed string |
+| empty | E8 | ✅ covered | Zero accounts → no rows → no entry links; the accounts screen's existing empty state ships unchanged by this phase |
+| loading | E8 | ✅ covered | Plain anchor navigation and a server 302 — no client in-flight state exists on either path |
 | error | E8 | ✅ covered | `/groups` and any old deep link answer 302 → `/accounts` (D-01) — bookmarks never 404; the nav item and its counter are gone from the shell on every page |
 | populated | E8 | ✅ covered | Every account row/card on `/accounts` carries «Настроить группы»; the link renders in all three synchronized copies of the row markup (list, partial, sync_status_card — 01-06 sync rule) |
+| partial | E8 | ✅ covered | The link renders for every account row regardless of account status — no conditional variant that could silently hide the entry point |
+| overflow | E8 | ✅ covered | Fixed-string label inside the shipped accounts row layout; inherits that screen's existing wrap behaviour unchanged |
+| zero-one-many | E8 | ✅ covered | One link per account row, scaling with the accounts list's existing pagination — no special casing at any count |
+| long-text | E8 | ✅ covered | «Настроить группы» is a fixed string; no user text enters the element |
 
 <!-- Status vocabulary (locked by probe-core projectTruths):
      ✅ covered   → a plain truth string lifted into must_haves.truths
@@ -413,11 +427,11 @@ Not applicable — no component registry is used. No `components.json`, no appli
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS
-- [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS
-- [ ] Dimension 5 Spacing: PASS
-- [ ] Dimension 6 Registry Safety: PASS
+- [x] Dimension 1 Copywriting: PASS
+- [x] Dimension 2 Visuals: PASS
+- [x] Dimension 3 Color: PASS
+- [x] Dimension 4 Typography: PASS
+- [x] Dimension 5 Spacing: PASS
+- [x] Dimension 6 Registry Safety: PASS
 
-**Approval:** pending
+**Approval:** APPROVED — gsd-ui-checker, 2026-08-12 (revision 1: Spacing BLOCK resolved via documented Exception 4)
