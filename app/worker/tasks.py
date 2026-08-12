@@ -21,6 +21,7 @@ from app.services.messenger_factory import create_messenger
 from app.services.s3 import get_image_url
 from app.services.schedule_service import compute_next_run_at
 from app.application.accounts.group_resync import (
+    UNEXPECTED_FAILURE_MESSAGE,
     apply_group_resync,
     record_sync_failure,
 )
@@ -354,8 +355,13 @@ async def _sync_wa_groups_async(account_id: int):
             async with session_factory() as session:
                 account = await session.get(MessengerAccount, account_id)
                 if account and account.status == "syncing":
+                    # Свой текст, а не `str(e)`: сводку печатает пользователю
+                    # шаблон экрана групп дословно, а сюда долетает что угодно —
+                    # `IntegrityError` с полным SQL или `RuntimeError` менеджера
+                    # контейнеров с внутренним адресом (T-03-17). Исходный текст
+                    # уже в логе строкой выше, с `exc_info=True`.
                     await record_sync_failure(
-                        session, account, str(e) or e.__class__.__name__
+                        session, account, UNEXPECTED_FAILURE_MESSAGE
                     )
                     account.status = "sync_failed"
                     await session.commit()
@@ -457,8 +463,9 @@ async def _sync_max_groups_async(account_id: int):
             async with session_factory() as session:
                 account = await session.get(MessengerAccount, account_id)
                 if account and account.status == "syncing":
+                    # См. WA-путь выше: пользователю — свой текст, исходный — в лог.
                     await record_sync_failure(
-                        session, account, str(e) or e.__class__.__name__
+                        session, account, UNEXPECTED_FAILURE_MESSAGE
                     )
                     account.status = "sync_failed"
                     await session.commit()

@@ -14,6 +14,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.application.accounts.group_resync import (
+    UNEXPECTED_FAILURE_MESSAGE,
     apply_group_resync,
     record_sync_failure,
 )
@@ -839,6 +840,11 @@ async def accounts_sync_groups(
         # тоже обязан лечь сводкой на аккаунт, а не пятисоткой. Сузить блок до
         # одного `MessengerFetchError` означало бы вернуть на экран стек-трейс
         # там, где раньше была красная плашка.
+        #
+        # На аккаунт пишется СВОЙ текст, а не `str(e)`: сюда долетает что
+        # угодно, включая `IntegrityError` с полным SQL и значениями параметров,
+        # а шаблон печатает `error` пользователю дословно (T-03-17). Исходный
+        # текст остаётся в логе строкой ниже — с `exc_info=True`.
         import structlog
         structlog.get_logger().error(
             "sync_groups_failed",
@@ -847,7 +853,7 @@ async def accounts_sync_groups(
             error=str(e),
             exc_info=True,
         )
-        await record_sync_failure(db, account, str(e) or e.__class__.__name__)
+        await record_sync_failure(db, account, UNEXPECTED_FAILURE_MESSAGE)
         await db.commit()
         return RedirectResponse(url=account_groups_url, status_code=302)
 

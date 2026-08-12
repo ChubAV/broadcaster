@@ -5,6 +5,7 @@ from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.application.accounts.group_resync import UNEXPECTED_FAILURE_MESSAGE
 from app.config import Settings
 from app.database import Base
 from app.dependencies import get_db, get_settings
@@ -532,7 +533,14 @@ async def test_sync_foreign_account_changes_nothing(sync_setup):
 
 @pytest.mark.asyncio
 async def test_sync_failure_is_recorded_not_swallowed(sync_setup):
-    """Отказ мессенджера записывается на аккаунт, а не теряется."""
+    """Неожиданный отказ записывается на аккаунт — но СВОИМ текстом.
+
+    `RuntimeError` ловит ШИРОКИЙ except, а туда долетает что угодно, включая
+    `IntegrityError` с полным SQL и значениями параметров или адрес моста из
+    менеджера контейнеров. Значение `error` шаблон печатает пользователю
+    дословно, поэтому проверяется не только «отказ не потерян», но и «детали
+    исключения на экран не уехали» (T-03-17). Исходный текст живёт в логе.
+    """
     client, session_factory = sync_setup
     await _login(client)
     account_id = await _make_account(session_factory)
@@ -553,7 +561,10 @@ async def test_sync_failure_is_recorded_not_swallowed(sync_setup):
     # не удавался ни разу, обязан остаться «синхронизация ещё не выполнялась».
     assert last_synced_at is None
     assert result is not None
-    assert "сессия Telegram протухла" in result["error"]
+    assert result["error"] == UNEXPECTED_FAILURE_MESSAGE
+    assert "сессия Telegram протухла" not in result["error"], (
+        "текст произвольного исключения уехал в пользовательскую плашку"
+    )
 
 
 @pytest.mark.asyncio
