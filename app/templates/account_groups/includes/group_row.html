@@ -1,0 +1,39 @@
+{# Строка группы на экране аккаунта — по эталону groups/includes/group_row.html.
+
+   Это МАКРОС: импортированные шаблоны Jinja контекста вызывающего не получают,
+   поэтому `group` и `account_id` — явные параметры. Ошибка в имени параметра
+   проявится не исключением, а ПУСТОЙ строкой при валидной странице (200),
+   поэтому отрисовка реальных данных закреплена тестами
+   test_page_shows_groups_of_this_account и test_rows_are_ordered_by_group_id.
+
+   Строка КАРТОЧНАЯ ([data-group-row]), а не data-row-таблица: экран остаётся
+   списком карточек на всех ширинах (UI-SPEC §Responsive Contract), поэтому
+   обработка ячеек с подписями колонок ему не нужна. Нумерованная секция
+   app.css для [data-group-row] приходит планом 03-05; до неё разметка
+   работоспособна на наследуемых классах карточки.
+
+   Название группы приходит из внешнего мессенджера и приложением не
+   контролируется (T-03-03): оно выводится обычным экранированным выводом, ни
+   один макрос не принимает готовую разметку.
+
+   Импорт: {% from "account_groups/includes/group_row.html" import group_row %} #}
+
+{% from "components/avatar.html" import avatar %}
+{% from "components/toggle.html" import toggle %}
+
+{% macro group_row(group, account_id) -%}
+<div data-group-row id="group-row-{{ group.id }}"{% if not group.is_active %} class="group-row--off"{% endif %}>
+  {{- avatar(group.name, size=32) -}}
+  <span data-grow title="{{ group.name }}">{{ group.name }}</span>
+  {#- Событие change всплывает от чекбокса к форме, поэтому обработчик висит на
+      САМОЙ форме, а макрос toggle остаётся без собственных атрибутов событий.
+      Перехват на форме — это и есть базовый путь без JS: не навесится Alpine —
+      форма уйдёт настоящим POST-ом на тот же маршрут (D-09, правило Фазы 2).
+      Кнопка-триггер вне формы такого пути не оставила бы. -#}
+  <form method="post" action="/accounts/{{ account_id }}/groups/{{ group.id }}/toggle"
+        x-data x-on:change="$el.submit()">
+    {{- toggle(name='is_active', checked=group.is_active, id='group-toggle-' ~ group.id,
+               title='Отключить' if group.is_active else 'Включить') -}}
+  </form>
+</div>
+{%- endmacro %}
