@@ -24,6 +24,18 @@ class Group(Base):
     error_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # D-11: «не найдена при последней синхронизации». NULL означает «найдена»;
+    # колонку ставит и снимает ТОЛЬКО синхронизация. Группа, не вернувшаяся из
+    # мессенджера, помечается, но НЕ удаляется: удаление остаётся решением
+    # пользователя.
+    #
+    # Колонка отдельная, а `last_error`/`error_at` выше НЕ переиспользуются:
+    # те про ошибки ОТПРАВКИ (app/application/scheduling/use_cases.py). Общая
+    # пара колонок на две разные семантики означала бы, что успешный синк
+    # затирает диагностику неудавшейся рассылки, и наоборот.
+    missing_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
