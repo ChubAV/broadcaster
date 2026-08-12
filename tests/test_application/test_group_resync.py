@@ -320,8 +320,17 @@ async def test_manually_deleted_group_returns_as_new():
     """D-10: удалённая пользователем группа возвращается новой и включённой."""
     async with _Db() as session:
         account = await _seed_account(session)
-        group = await _add_group(session, account, "g1", "Имя", is_active=False)
-        old_id = group.id
+        # Удаляемая группа несёт состояние, отличимое от состояния новой:
+        # выключена и помечена пропавшей. Именно оно и служит уликой — вернись
+        # старая строка, эти значения приехали бы вместе с ней.
+        group = await _add_group(
+            session,
+            account,
+            "g1",
+            "Имя",
+            is_active=False,
+            missing_since=datetime.now(timezone.utc),
+        )
         await session.delete(group)
         await session.commit()
 
@@ -334,11 +343,12 @@ async def test_manually_deleted_group_returns_as_new():
         groups = await _groups(session, account)
         assert len(groups) == 1
         revived = groups[0]
-        # Новая строка, а не воскрешение старой: прежний id в расписаниях
-        # больше ни на что не указывает — старых связей у группы нет (D-10).
-        assert revived.id != old_id
+        # Строка создана заново, со значениями по умолчанию (D-10): включена и
+        # без пометки. Сравнение id уликой служить НЕ может — SQLite переиспользует
+        # rowid удалённой строки, и равенство id говорило бы о движке, а не о нас.
         assert revived.is_active is True
         assert revived.missing_since is None
+        assert result.renamed == 0
 
 
 @pytest.mark.asyncio
@@ -412,12 +422,19 @@ async def test_helper_does_not_commit():
     """Транзакцией правит вызывающий: страница и Celery-таска ведут её по-разному."""
     async with _Db() as session:
         account = await _seed_account(session)
+        # id снимается ДО отката: откат обесценивает загруженные атрибуты, и
+        # обращение к account.id после него полезло бы в базу за перезагрузкой.
+        account_id = account.id
 
         await apply_group_resync(session, account, THREE, messenger_type="wa")
 
         assert session.in_transaction()
         await session.rollback()
-        assert await _groups(session, account) == []
+
+        rows = await session.execute(
+            select(Group).where(Group.account_id == account_id)
+        )
+        assert list(rows.scalars().all()) == []
 
 
 @pytest.mark.parametrize(
