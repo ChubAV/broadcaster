@@ -741,6 +741,36 @@ async def accounts_retry_sync(
     return RedirectResponse(url=f"/accounts/{account_id}/groups", status_code=302)
 
 
+# Аккаунты, синхронизация которых идёт прямо сейчас в ЭТОМ процессе. Реестр —
+# в памяти, а не в БД; обоснование формы, её границы и угроза T-03-36 записаны
+# у точки занятия заявки в accounts_sync_groups ниже.
+_SYNC_IN_FLIGHT: set[int] = set()
+
+
+def _claim_sync_slot(account_id: int) -> bool:
+    """Занимает заявку на синхронизацию аккаунта. `False` — заявка уже занята.
+
+    Функция СИНХРОННАЯ и не содержит ни одного `await` намеренно: между
+    проверкой и добавлением не должно быть точки переключения задач, иначе
+    гонка вернётся ровно туда, откуда её убирают.
+    """
+    if account_id in _SYNC_IN_FLIGHT:
+        return False
+    _SYNC_IN_FLIGHT.add(account_id)
+    return True
+
+
+def _release_sync_slot(account_id: int) -> None:
+    """Освобождает заявку. К БД не обращается и отказать не может.
+
+    Вызывается из `finally` — в том числе после `IntegrityError`, когда сессия
+    непригодна ни для чего, кроме отката. Именно поэтому освобождение не имеет
+    права зависеть от состояния сессии. `discard`, а не `remove`: повторный
+    вызов обязан быть безобидным.
+    """
+    _SYNC_IN_FLIGHT.discard(account_id)
+
+
 @router.post("/accounts/{account_id}/sync-groups")
 async def accounts_sync_groups(
     request: Request,
@@ -770,127 +800,185 @@ async def accounts_sync_groups(
     if account.type not in ("tg_user", "wa", "max"):
         return RedirectResponse(url=account_groups_url, status_code=302)
 
-    # Guard повторного запуска — и ТОЛЬКО он: гонку двойного нажатия он не
-    # закрывает и закрыть не может.
+    # Guard повторного запуска, ступень ПЕРВАЯ — поверх ФОНОВЫХ путей.
     #
     # Обработчик нигде не выставляет `syncing` — синхронизация выполняется
     # синхронно, прямо здесь; значение `syncing` ставят фоновые пути
-    # (accounts_retry_sync, accounts_connect_*_status), и guard отсекает
-    # страничный запуск, пока работает один из них. Два одновременных POST-а
-    # для tg_user оба читают `active`, оба проходят guard и оба идут в
-    # мессенджер.
-    #
-    # Занимать статус здесь нельзя: запрос, умерший между «занял» и
-    # «освободил», оставил бы аккаунт в `syncing` навсегда — фоновой задачи,
-    # которая его вычистит, на этом пути нет, — и заблокировал бы синк
-    # окончательно. Дубли строк вместо этого закрыты ограничением уровня схемы
-    # (uq_groups_account_external, ревизия 0015): гонка заканчивается
-    # IntegrityError на коммите одного из двух запросов, а не двумя строками
-    # на одну группу мессенджера.
+    # (accounts_retry_sync, accounts_connect_*_status), и эта проверка отсекает
+    # страничный запуск, пока работает один из них. Двойное нажатие она не
+    # закрывает и закрыть не может: два одновременных POST-а для tg_user оба
+    # читают `active` и оба проходят. Его закрывает ступень вторая.
     if account.status == "syncing":
         return RedirectResponse(url=account_groups_url, status_code=302)
 
-    # Протоколы обращения к мессенджерам не меняются: те же конструкторы и тот
-    # же единственный get_groups() в каждой ветке. Новое здесь только одно —
-    # отказ внешней системы записывается на аккаунт, а не теряется 500-й.
+    # Guard повторного запуска, ступень ВТОРАЯ — внутрипроцессная заявка.
     #
-    # Ветка отказа ДОСТИЖИМА только потому, что адаптеры больше не глушат
-    # исключение и не возвращают вместо него пустой список: `MessengerFetchError`
-    # — это «состав групп получить не удалось», и оно отличимо от «групп нет».
-    # Пока адаптеры возвращали `[]`, этот except не срабатывал никогда, а сбой
-    # моста доезжал до переинвентаризации сводкой успеха.
-    try:
-        if account.type == "tg_user":
-            messenger = TelegramUserMessenger(
-                session_string=account.credentials,
-                api_id=settings.telegram_api_id,
-                api_hash=settings.telegram_api_hash,
-            )
-            fetched_groups = await messenger.get_groups()
-            messenger_type = "tg_user"
-
-        elif account.type == "wa":
-            messenger = WhatsAppMessenger(session_id=str(account.id))
-            fetched_groups = await messenger.get_groups()
-            messenger_type = "wa"
-
-        elif account.type == "max":
-            messenger = MaxMessenger(session_id=str(account.id))
-            fetched_groups = await messenger.get_groups()
-            messenger_type = "max"
-
-    except MessengerFetchError as e:
-        import structlog
-        structlog.get_logger().error(
-            "sync_groups_fetch_failed",
-            account_id=account_id,
-            account_type=account.type,
-            error=str(e),
-            exc_info=True,
-        )
-        # Пишется сообщение исключения, а не строка подключения (T-03-17).
-        await record_sync_failure(db, account, str(e) or e.__class__.__name__)
-        await db.commit()
+    # ПОЧЕМУ ЗАЯВКА НЕ ПИШЕТСЯ В `MessengerAccount.status`. Диспетчеризация
+    # отправок пропускает аккаунт с неактивным статусом в ДВУХ местах, и оба
+    # теряют подошедшую отправку, но ПО-РАЗНОМУ:
+    #
+    #   - app/application/scheduling/use_cases.py:98 — условие внутри отбора
+    #     расписаний. Ветка не откладывает слот, а пересчитывает `next_run_at`
+    #     вперёд и делает `continue`: слот исчезает БЕЗ СЛЕДА, ни строки в
+    #     истории, ни отметки. Потеря МОЛЧАЛИВАЯ;
+    #   - app/application/scheduling/use_cases.py:280 — то же условие уже в
+    #     самой отправке. Ветка пишет строку SendLog со
+    #     `status="account_disconnected"`, коммитит и прекращает обработку:
+    #     отправка тоже не состоится, но след в истории остаётся. Потеря
+    #     ВИДИМАЯ. Пересчёта `next_run_at` здесь НЕТ — это другое место.
+    #
+    # Окно — вся длительность get_groups() на аккаунте с сотнями чатов. Запись
+    # `syncing` на это время внесла бы регрессию хуже закрываемого дефекта:
+    # отправка, которую настроил пользователь, не случилась бы.
+    #
+    # ПОЧЕМУ ВЕЧНОЙ БЛОКИРОВКИ НЕ БЫВАЕТ. Заявка живёт в памяти процесса.
+    # Запрос, умерший между «занял» и «освободил», оставил бы аккаунт в
+    # `syncing` навсегда — фоновой задачи-уборщика на этом пути нет; реестр же
+    # стирается вместе с процессом по построению. Это прямой ответ на
+    # возражение, ради которого статус здесь раньше не занимали.
+    #
+    # ГРАНИЦЫ КОНТРОЛЯ — угроза T-03-36, два РАЗНЫХ направления.
+    #
+    # (а) Заявка покрывает весь HTTP-трафик, пока приложение раскладывается
+    # ОДНИМ воркером uvicorn: флаг числа воркеров не задан ни в Dockerfile:30,
+    # ни в docker-compose.yml:25, ни в docker-compose.prod.yml:78, ни в
+    # justfile:11, а сервис `web` вдобавок несёт `container_name`
+    # (docker-compose.yml:26, docker-compose.prod.yml:79) и репликами не
+    # масштабируется без правки файла раскладки. При увеличении числа
+    # процессов заявка вырождается в защиту НА ПРОЦЕСС.
+    #
+    # (б) Отдельно от (а) и без смешения с ним: фоновый путь заявка не видит
+    # УЖЕ СЕГОДНЯ. Тот же apply_group_resync вызывается из `_sync_groups_async`
+    # (app/worker/tasks.py:300, вызов хелпера :331), а celery-worker-telegram
+    # раскладывается двумя репликами (docker-compose.yml:61-62). Сверх того
+    # страничный путь по построению не пишет `account.status`, поэтому фоновый
+    # повтор синка, запущенный через accounts_retry_sync во время идущего
+    # страничного, внутрипроцессной заявкой не блокируется.
+    #
+    # Кросс-процессным запасом для ОБОИХ направлений остаются
+    # uq_groups_account_external (ревизия 0015) и ветка IntegrityError ниже:
+    # они исключают дублирующие СТРОКИ, но не дублирующий внешний запрос.
+    if not _claim_sync_slot(account_id):
         return RedirectResponse(url=account_groups_url, status_code=302)
 
-    except Exception as e:
-        # Широкий except СОХРАНЁН намеренно и стоит ПОСЛЕ узкого: отказ на
-        # конструкторе адаптера или на запуске wa-worker (RuntimeError из
-        # свойства `bridge_url`) случается ДО запроса за составом групп, и он
-        # тоже обязан лечь сводкой на аккаунт, а не пятисоткой. Сузить блок до
-        # одного `MessengerFetchError` означало бы вернуть на экран стек-трейс
-        # там, где раньше была красная плашка.
-        #
-        # На аккаунт пишется СВОЙ текст, а не `str(e)`: сюда долетает что
-        # угодно, включая `IntegrityError` с полным SQL и значениями параметров,
-        # а шаблон печатает `error` пользователю дословно (T-03-17). Исходный
-        # текст остаётся в логе строкой ниже — с `exc_info=True`.
-        import structlog
-        structlog.get_logger().error(
-            "sync_groups_failed",
-            account_id=account_id,
-            account_type=account.type,
-            error=str(e),
-            exc_info=True,
-        )
-        await record_sync_failure(db, account, UNEXPECTED_FAILURE_MESSAGE)
-        await db.commit()
-        return RedirectResponse(url=account_groups_url, status_code=302)
-
-    # Состав групп считает единственная реализация переинвентаризации —
-    # та же, что у обеих фоновых задач (D-10, D-11, D-12). Транзакцией
-    # по-прежнему управляет обработчик: хелпер не коммитит.
-    await apply_group_resync(db, account, fetched_groups, messenger_type=messenger_type)
+    # ВСЁ, что ниже занятия заявки, обёрнуто внешним `try`: заявка обязана
+    # освобождаться на КАЖДОМ выходе обработчика — успешном возврате, узком
+    # `except`, широком `except` и ветке конфликта уникальности. Иначе
+    # пользователь остался бы без синхронизации до перезапуска процесса.
     try:
-        await db.commit()
-    except IntegrityError:
-        # Сработало ограничение уровня схемы (uq_groups_account_external): состав
-        # групп этого аккаунта уже записал параллельный запрос — та самая гонка
-        # двойного нажатия, ради которой ограничение и заведено (см. комментарий
-        # к guard выше). До этой ветки исключение уходило в generic_error_handler,
-        # и пользователь, отправивший обычную HTML-форму, получал `{"detail":
-        # "Internal server error"}` — сырой JSON вместо страницы, причём на
-        # аккаунт не ложилось НИЧЕГО: у отказа не оставалось следа в UI. Это
-        # противоречило правилу, объявленному широким except выше: «отказ обязан
-        # лечь сводкой на аккаунт, а не пятисоткой».
+        # Протоколы обращения к мессенджерам не меняются: те же конструкторы и
+        # тот же единственный get_groups() в каждой ветке. Новое здесь только
+        # одно — отказ внешней системы записывается на аккаунт, а не теряется
+        # 500-й.
         #
-        # Откат обязателен: после IntegrityError сессия непригодна ни для чего,
-        # кроме rollback, — и объект аккаунта после него приходится получать
-        # заново.
-        await db.rollback()
-        import structlog
-        # В событие идут только собственные значения обработчика: после отката
-        # атрибуты `account` просрочены, и обращение к ним потянуло бы ленивую
-        # догрузку вне greenlet-контекста — то есть новое исключение внутри
-        # обработчика исключения.
-        structlog.get_logger().warning("sync_groups_conflict", account_id=account_id)
-        account = await db.get(MessengerAccount, account_id)
-        if account:
-            await record_sync_failure(
-                db, account, "Синхронизация уже выполнялась — откройте экран заново"
+        # Ветка отказа ДОСТИЖИМА только потому, что адаптеры больше не глушат
+        # исключение и не возвращают вместо него пустой список:
+        # `MessengerFetchError` — это «состав групп получить не удалось», и оно
+        # отличимо от «групп нет». Пока адаптеры возвращали `[]`, этот except не
+        # срабатывал никогда, а сбой моста доезжал до переинвентаризации
+        # сводкой успеха.
+        try:
+            if account.type == "tg_user":
+                messenger = TelegramUserMessenger(
+                    session_string=account.credentials,
+                    api_id=settings.telegram_api_id,
+                    api_hash=settings.telegram_api_hash,
+                )
+                fetched_groups = await messenger.get_groups()
+                messenger_type = "tg_user"
+
+            elif account.type == "wa":
+                messenger = WhatsAppMessenger(session_id=str(account.id))
+                fetched_groups = await messenger.get_groups()
+                messenger_type = "wa"
+
+            elif account.type == "max":
+                messenger = MaxMessenger(session_id=str(account.id))
+                fetched_groups = await messenger.get_groups()
+                messenger_type = "max"
+
+        except MessengerFetchError as e:
+            import structlog
+            structlog.get_logger().error(
+                "sync_groups_fetch_failed",
+                account_id=account_id,
+                account_type=account.type,
+                error=str(e),
+                exc_info=True,
             )
+            # Пишется сообщение исключения, а не строка подключения (T-03-17).
+            await record_sync_failure(db, account, str(e) or e.__class__.__name__)
             await db.commit()
-    return RedirectResponse(url=account_groups_url, status_code=302)
+            return RedirectResponse(url=account_groups_url, status_code=302)
+
+        except Exception as e:
+            # Широкий except СОХРАНЁН намеренно и стоит ПОСЛЕ узкого: отказ на
+            # конструкторе адаптера или на запуске wa-worker (RuntimeError из
+            # свойства `bridge_url`) случается ДО запроса за составом групп, и
+            # он тоже обязан лечь сводкой на аккаунт, а не пятисоткой. Сузить
+            # блок до одного `MessengerFetchError` означало бы вернуть на экран
+            # стек-трейс там, где раньше была красная плашка.
+            #
+            # На аккаунт пишется СВОЙ текст, а не `str(e)`: сюда долетает что
+            # угодно, включая `IntegrityError` с полным SQL и значениями
+            # параметров, а шаблон печатает `error` пользователю дословно
+            # (T-03-17). Исходный текст остаётся в логе строкой ниже — с
+            # `exc_info=True`.
+            import structlog
+            structlog.get_logger().error(
+                "sync_groups_failed",
+                account_id=account_id,
+                account_type=account.type,
+                error=str(e),
+                exc_info=True,
+            )
+            await record_sync_failure(db, account, UNEXPECTED_FAILURE_MESSAGE)
+            await db.commit()
+            return RedirectResponse(url=account_groups_url, status_code=302)
+
+        # Состав групп считает единственная реализация переинвентаризации —
+        # та же, что у обеих фоновых задач (D-10, D-11, D-12). Транзакцией
+        # по-прежнему управляет обработчик: хелпер не коммитит.
+        await apply_group_resync(
+            db, account, fetched_groups, messenger_type=messenger_type
+        )
+        try:
+            await db.commit()
+        except IntegrityError:
+            # Сработало ограничение уровня схемы (uq_groups_account_external):
+            # состав групп этого аккаунта уже записал параллельный запрос — та
+            # самая гонка двойного нажатия, ради которой ограничение и заведено
+            # (см. комментарий к guard выше). Заявка выше сужает окно этой
+            # гонки до межпроцессного, но не закрывает его: ограничение схемы
+            # остаётся последним рубежом. До этой ветки исключение уходило в
+            # generic_error_handler, и пользователь, отправивший обычную
+            # HTML-форму, получал `{"detail": "Internal server error"}` — сырой
+            # JSON вместо страницы, причём на аккаунт не ложилось НИЧЕГО: у
+            # отказа не оставалось следа в UI. Это противоречило правилу,
+            # объявленному широким except выше: «отказ обязан лечь сводкой на
+            # аккаунт, а не пятисоткой».
+            #
+            # Откат обязателен: после IntegrityError сессия непригодна ни для
+            # чего, кроме rollback, — и объект аккаунта после него приходится
+            # получать заново.
+            await db.rollback()
+            import structlog
+            # В событие идут только собственные значения обработчика: после
+            # отката атрибуты `account` просрочены, и обращение к ним потянуло
+            # бы ленивую догрузку вне greenlet-контекста — то есть новое
+            # исключение внутри обработчика исключения.
+            structlog.get_logger().warning(
+                "sync_groups_conflict", account_id=account_id
+            )
+            account = await db.get(MessengerAccount, account_id)
+            if account:
+                await record_sync_failure(
+                    db, account, "Синхронизация уже выполнялась — откройте экран заново"
+                )
+                await db.commit()
+        return RedirectResponse(url=account_groups_url, status_code=302)
+    finally:
+        _release_sync_slot(account_id)
 
 
 @router.post("/accounts/{account_id}/delete")
