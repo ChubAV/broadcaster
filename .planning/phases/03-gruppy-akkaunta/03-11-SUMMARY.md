@@ -186,6 +186,16 @@ None — no external service configuration required.
 - **Перестроение графа знаний НЕ выполнялось намеренно.** Планы 03-09, 03-10 и 03-11 идут одной волной, а `graphify update .` пишет в общий `graphify-out/`. Перестроение — задача 3 плана 03-12 (волна 2), и именно тот прогон обязан увидеть исчезновение `app/repositories/group.py`. Если 03-12 отработает без перестроения, граф сохранит узел удалённого файла.
 - **Блокеров нет.** Миграций план не содержит.
 
+## Self-Check: PASSED
+
+Проверено на диске и в git, а не по памяти:
+
+- `test -f .planning/phases/03-gruppy-akkaunta/03-11-SUMMARY.md` → FOUND
+- `test -e app/repositories/group.py` → отсутствует (exit 1), как и заявлено
+- `git log --oneline` содержит `a6acc62` (задача 1) и `d2422e5` (задача 2)
+- `git status --short` пуст: неотслеживаемых и незакоммиченных файлов не осталось
+- `git diff --diff-filter=D HEAD~1 HEAD` на коммите задачи 1 → ровно `app/repositories/group.py`, других удалений нет
+
 ---
 *Phase: 03-gruppy-akkaunta*
 *Completed: 2026-08-13*
