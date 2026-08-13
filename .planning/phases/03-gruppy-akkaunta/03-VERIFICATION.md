@@ -1,114 +1,201 @@
 ---
 phase: 03-gruppy-akkaunta
-verified: 2026-08-13T08:05:00Z
-status: gaps_found
-score: 131/132 must-haves verified
-behavior_unverified: 0
+verified: 2026-08-13T16:08:43Z
+status: human_needed
+score: 164/167 must-haves verified
+behavior_unverified: 3
 overrides_applied: 0
-gaps:
-  - truth: "Кнопка подтверждения отражает выполняющийся запрос и не допускает повторной отправки (E6 loading)"
-    status: failed
-    reason: "Панель подтверждения удаления использует общий компонент `components/modal.html`, у которого кнопка подтверждения — обычный `<button type=\"submit\">` без единого признака выполняющегося запроса и без защиты от повторной отправки. Ни `disabled`, ни `aria-busy`, ни смены подписи, ни перехвата отправки в разметке нет; собственного JS у проекта нет (в `app/static/js/` только вендорные alpine.min.js и htmx.min.js), а UI-SPEC при этом объявляет строку E6/loading как `✅ covered`. Фактическая защита реализована ИНАЧЕ — идемпотентностью маршрута: повторный POST удаления безвреден (`app/pages/account_groups.py:363-377`, тест `test_repeated_delete_is_harmless`). То есть повторная отправка ДОПУСКАЕТСЯ, но не приводит к вреду — это не то, что утверждает must-have."
-    artifacts:
-      - path: "app/templates/components/modal.html"
-        issue: "Строка 82: `<button class=\"btn btn--{{ confirm_variant }}\" type=\"submit\">` — нет ни состояния выполнения, ни блокировки повторной отправки. Файл не входил в files_modified плана 03-05, объявившего эту истину."
-      - path: ".planning/phases/03-gruppy-akkaunta/03-UI-SPEC.md"
-        issue: "Строка 379 помечает E6/loading как `✅ covered` с формулировкой «The confirm button reflects the in-flight POST and is not double-submittable» — утверждение не подтверждается разметкой."
-      - path: ".planning/phases/03-gruppy-akkaunta/03-05-SUMMARY.md"
-        issue: "Сводка плана не упоминает E6/loading вовсе — истина объявлена планом и не закрыта ни кодом, ни тестом, ни явным отказом."
-    missing:
-      - "Либо признак выполняющегося запроса и защита от повторной отправки на кнопке подтверждения `components/modal.html` (например, `x-on:submit` на форме модалки, снимающий кнопку — тем же приёмом, что уже применён к тумблеру и к форме удаления в `account_groups/includes/group_row.html`), плюс тест уровня разметки"
-      - "Либо явный override с обоснованием «защита перенесена на уровень маршрута (идемпотентное удаление), UI-гарда сознательно нет» и синхронная правка строки E6/loading в 03-UI-SPEC.md, чтобы спецификация не утверждала непроверяемое"
+re_verification:
+  previous_status: gaps_found
+  previous_score: 131/132
+  gaps_closed:
+    - "Кнопка подтверждения отражает выполняющийся запрос и не допускает повторной отправки (E6 loading) — гард реализован в макросе components/modal.html (x-on:submit + x-bind:disabled + x-bind:aria-busy), закреплён четырьмя тестами уровня разметки, строка E6/loading в 03-UI-SPEC.md приведена к тому, что код действительно делает"
+  gaps_remaining: []
+  regressions: []
+behavior_unverified_items:
+  - truth: "Первая отправка формы панели подтверждения переводит её в состояние выполняющегося запроса: кнопка подтверждения получает disabled и aria-busy (03-10 truth 1, 03-05 E6 loading)"
+    test: "Открыть /accounts/{id}/groups в реальном браузере с поднявшимся Alpine, нажать «Удалить» у группы, в панели подтверждения нажать «Удалить» и наблюдать кнопку в момент отправки"
+    expected: "Кнопка подтверждения гаснет по правилу .btn[disabled] и получает aria-busy; при этом удаление ДОХОДИТ до сервера — строка группы исчезает, а браузер приходит на /accounts/{id}/groups. Отдельно убедиться, что удаление не отменилось: отключение submit-кнопки внутри обработчика submit не должно погасить уже начатую отправку"
+    why_human: "Переход состояния sending false→true исполняет Alpine в браузере. Тесты проверяют ТОЛЬКО разметку (наличие x-on:submit, выражение с preventDefault и sending = true, привязки x-bind на кнопке). Ни одного браузерного/e2e-теста в проекте нет — исполняемого доказательства перехода не существует"
+  - truth: "Повторная отправка той же формы отменяется обработчиком: второй submit до маршрута не уходит (03-10 truth 2)"
+    test: "В той же панели подтверждения нажать «Удалить» дважды подряд как можно быстрее (или Enter + клик)"
+    expected: "На сервер уходит ровно один POST удаления; второй отменяется обработчиком, а не проходит и не даёт вторую навигацию"
+    why_human: "Отмена повторной отправки — рантайм-инвариант очерёдности, невидимый grep-ом. Маршрут удаления идемпотентен (test_repeated_delete_is_harmless), поэтому вреда от промаха не будет, но САМ инвариант остаётся недоказанным"
+  - truth: "Гард наследуется всеми семью потребителями панели подтверждения и не ломает ни одно из двенадцати мест подтверждения (03-10 truths 3-6)"
+    test: "Проверить в браузере ещё два места подтверждения помимо групп: удаление объявления (ads/includes/ad_card.html) и удаление расписания из редактора объявления (ads/includes/sched_card.html — блочный вызов со скрытым полем return_to)"
+    expected: "Подтверждённое удаление проходит; для расписания пользователь возвращается в редактор объявления, а не на сводный список (скрытое поле return_to доехало вместе с формой); кнопка «Отмена» остаётся нажимаемой во время отправки"
+    why_human: "Правка легла в общий макрос и затрагивает 12 мест подтверждения во всём приложении. Тесты доказывают, что все потребители вызывают макрос и не собирают панель сами, но не то, что отправка с блочным слотом реально доносит скрытое поле при активном гарде"
+  - truth: "Узкая ветка отказа синхронизации не показывает пользователю внутренности (T-03-17, находка ревью CR-01)"
+    test: "Вызвать сбой синхронизации на WA/MAX-аккаунте так, чтобы httpx-исключение поднялось до wa-worker: остановить wa-worker или испортить его адрес в Redis, затем нажать «Синхронизировать всё» и прочитать плашку ошибки"
+    expected: "РЕШЕНИЕ ЧЕЛОВЕКА: приемлемо ли, что в плашку попадает текст стороннего исключения. app/messengers/whatsapp.py:130 и max.py:120 конструируют MessengerFetchError как f\"{type(e).__name__}: {e}\", а app/pages/accounts.py передаёт этот текст в record_sync_failure дословно; часть httpx-исключений (UnsupportedProtocol, InvalidURL, ProxyError) встраивает в сообщение адрес внутреннего wa-worker, а RuntimeError из bridge_url несёт строку «Cannot start wa-worker for account {id}»"
+    why_human: "Утечка раскрывается только при конкретном классе отказа моста, которого автотесты не воспроизводят; тест tests/test_routes/test_sync_groups.py:695 наоборот ЗАКРЕПЛЯЕТ сквозной проброс (assert \"502\" in result[\"error\"]). Severity — medium, ниже настроенного порога блокировки high, поэтому это не гейт фазы, но решение «принять и записать риск» либо «сузить текст узкой ветки» человек обязан принять явно"
+human_verification:
+  - test: "Открыть /accounts/{id}/groups в браузере с поднявшимся Alpine, нажать «Удалить» у группы и подтвердить удаление, наблюдая кнопку подтверждения в момент отправки"
+    expected: "Кнопка гаснет (.btn[disabled]) и получает aria-busy, при этом удаление доходит до сервера: строка исчезает, браузер приходит на /accounts/{id}/groups"
+    why_human: "Переход sending false→true исполняет Alpine в браузере; браузерных тестов в проекте нет. Отдельный риск: отключение submit-кнопки не должно отменить уже начатую отправку"
+  - test: "Нажать кнопку подтверждения дважды подряд как можно быстрее"
+    expected: "На сервер уходит ровно один POST удаления"
+    why_human: "Рантайм-инвариант очерёдности, недоказуемый разметкой"
+  - test: "Проверить ещё два места подтверждения: удаление объявления и удаление расписания из редактора объявления (блочный вызов со скрытым полем return_to)"
+    expected: "Удаление проходит; для расписания возврат происходит в редактор объявления; кнопка «Отмена» нажимаема во время отправки"
+    why_human: "Правка легла в общий макрос и затрагивает 12 мест подтверждения во всём приложении"
+  - test: "Вызвать сбой синхронизации WA/MAX так, чтобы поднялось httpx-исключение (остановить wa-worker), и прочитать плашку ошибки на экране групп аккаунта"
+    expected: "Решение человека: принять раскрытие текста стороннего исключения как риск severity medium ИЛИ сузить текст узкой ветки до подконтрольного (см. CR-01)"
+    why_human: "Класс отказа не воспроизводится автотестами; текущий тест наоборот закрепляет сквозной проброс. Решение об уровне раскрытия — за владельцем"
+  - test: "Повторить смоук-проход пяти критериев успеха фазы на живом приложении ПОСЛЕ волны закрытия пробелов (планы 03-09..03-12)"
+    expected: "Все пять критериев по-прежнему выполняются; синхронизация с экрана доходит до мессенджера и возвращает сводку; повторное нажатие кнопки синхронизации во время идущей синхронизации не запускает второй запрос к мессенджеру"
+    why_human: "Зафиксированное UAT фазы (03-UAT.md, status: complete, updated 2026-08-13T06:53Z) закрывало ТОЛЬКО планы 03-01..03-08 — это прямо видно в его поле source. Планы 03-09..03-12, изменившие обработчик синхронизации и общий макрос подтверждения, легли ПОЗЖЕ и человеком не проверялись ни разу"
+prohibitions_flagged:
+  - statement: "Регистр угроз НЕ ДОЛЖЕН записывать митигацию, которой в коде нет (03-12, judgment-tier)"
+    verdict: "НЕАВТОРИТЕТНЫЙ вердикт LLM-судьи: строка T-03-17 в 03-SECURITY.md утверждает «все конструкции — свой текст (telegram_user.py:265, whatsapp.py:130,133, max.py:120,123)» и стоит в статусе closed. Проверка по файлам: whatsapp.py:130, max.py:120 и telegram_user.py:265 конструируют MessengerFetchError как f\"{type(e).__name__}: {e}\" — это текст СТОРОННЕГО исключения, а не проектный. Своим текстом являются только whatsapp.py:133 и max.py:123 («мост вернул HTTP {code}»). Строка написана НЕ планом 03-12 (в его диффе она проходит контекстом, а не добавлением), поэтому формально прохибиция плана 03-12 не нарушена — но регистр фазы в этой строке утверждает больше, чем делает код"
+    flag: "unverified-prohibition — human review recommended"
 ---
 
-# Phase 3: Группы аккаунта — Verification Report
+# Phase 3: Группы аккаунта — Verification Report (RE-VERIFICATION)
 
 **Phase Goal:** Пользователь управляет составом групп на уровне конкретного messenger-аккаунта, а не только выбирает их при настройке рассылки.
-**Verified:** 2026-08-13T08:05:00Z
-**Status:** gaps_found (1 gap, WARNING-уровня — цель фазы достигнута, промах в краевой UI-истине)
-**Re-verification:** No — initial verification
+**Verified:** 2026-08-13T16:08:43Z
+**Status:** human_needed
+**Re-verification:** Yes — после закрытия пробела планами 03-09..03-12
+
+---
+
+## Итог одной строкой
+
+Единственный пробел первой верификации закрыт настоящим кодом, а не заявлением: гард повторной отправки живёт в макросе `components/modal.html` и закреплён четырьмя тестами уровня разметки. Регрессий нет. Но статус **не** `passed`: три из закрывших пробел истин утверждают РАНТАЙМ-переход, который в проекте не исполняет ни один тест, а зафиксированное UAT фазы закрывало только планы 03-01..03-08 и волну закрытия пробелов не видело.
 
 ---
 
 ## Goal Achievement
 
-### Roadmap Success Criteria (контракт фазы)
+### Roadmap Success Criteria (контракт фазы) — регрессионная проверка
 
-| # | Критерий | Статус | Доказательство в коде |
-|---|----------|--------|------------------------|
-| 1 | Пользователь может открыть экран групп конкретного messenger-аккаунта и видит на нём только группы этого аккаунта | ✓ VERIFIED | `app/pages/account_groups.py:109-194` — маршрут `GET /accounts/{account_id}/groups`; `_load_owned_account:65-75` на входе `:121`; выборка `_build_groups_query:51` скоуплена `Group.user_id == user_id AND Group.account_id == account_id`. Роутер зарегистрирован: `app/pages/__init__.py:45`. Вход с `/accounts` — 9 вхождений «Настроить группы» в трёх копиях разметки строки аккаунта. Тесты прошли: `test_page_shows_groups_of_this_account`, `test_page_hides_groups_of_another_account_of_the_same_user`, `test_page_of_a_foreign_account_leaks_nothing` |
-| 2 | Пользователь может включить или отключить отдельную группу, и это сразу отражается на том, какие группы доступны при настройке расписаний объявления | ✓ VERIFIED | Тумблер: `account_groups.py:299-332`, тройной WHERE `:314-320`, ИНВЕРСИЯ `:326`. Отражение в диспетчеризации: `app/application/scheduling/use_cases.py:171-177` — `if not group.is_active: logger.info(...); continue`. Отражение в редакторе: `app/pages/ads.py:243-259` — `group_scope = is_active OR id IN chosen`, `inactive_group_ids` → пометка «отключена» в `ads/includes/sched_card.html:186`. Тесты прошли: `test_toggle_inverts_is_active_and_redirects`, `test_double_toggle_returns_the_group_to_its_initial_state`, `test_only_the_active_group_of_a_schedule_gets_a_task`, `test_enabling_the_group_resumes_dispatch`, `test_disabled_group_chosen_in_the_schedule_stays_visible`, `test_disabled_group_not_chosen_is_absent_from_the_picker` |
-| 3 | Пользователь может удалить группу из списка аккаунта | ✓ VERIFIED | `account_groups.py:335-377` — тот же тройной WHERE, `ScheduleRepository(db).remove_group_ids(user.id, {group.id})` перед `db.delete(group)`. Панель подтверждения — `group_row.html:104-109`. Тесты прошли: `test_delete_removes_the_group_and_redirects`, `test_delete_cleans_the_group_out_of_schedules`, `test_delete_keeps_the_neighbour_ids_in_the_same_schedule`, `test_repeated_delete_is_harmless`, `test_remaining_rows_keep_the_id_order_after_delete` |
-| 4 | Пользователь может повторно синхронизировать группы аккаунта и увидеть результат синхронизации не покидая экран | ✓ VERIFIED | Кнопка «Синхронизировать всё» → `POST /accounts/{id}/sync-groups` (`list.html:84-90`); обработчик `app/pages/accounts.py:741,771,834,858,893` возвращает 302 на `/accounts/{id}/groups` во ВСЕХ ветках. Результат хранится на аккаунте (`last_synced_at`, `last_sync_result`) и читается при каждом заходе через `parse_sync_result` (`account_groups.py:186`). Плашка сводки — `list.html:113-143` (найдено / новых / обновлено имён / не найдено при >0, ошибка отдельной веткой). Фоновые WA/MAX добираются самоостанавливающимся опросом `sync-status` (`account_groups.py:251-296` + `partials/sync_result.html:50`). Тесты прошли: `test_success_plashka_prints_all_three_counters`, `test_error_plashka_names_the_error_and_the_next_step`, `test_stored_result_survives_a_revisit`, `test_account_groups_polling_stops`, `test_account_groups_polling_continues_while_syncing`. UAT №5 (живая синхронизация всех трёх путей) — pass |
-| 5 | Экран групп аккаунта пригоден к использованию на мобильных ширинах | ✓ VERIFIED | `app/static/css/app.css:1593-1735` — выделенная секция экрана: `[data-acct-head]` (flex-wrap, действия переносятся на свою строку), `.count-rule` (flex-wrap + схлопывающаяся линия), `[data-group-row]` (карточка, flex-wrap, `min-width:0`), `@media (max-width: 400px)` с перекомпоновкой строки; фильтры сворачиваются на 860px существующим макросом. Автопроверки прошли: `test_account_groups_list_is_card_based`, `test_account_groups_filters_block_collapsible`, `test_account_groups_row_names_each_value`, параметризованный `CLEAN_SECTIONS` включает `account_groups`. UAT №2 (320/860/1280) и №3 (шапка+плашка на трёх ширинах) — pass |
+| # | Критерий | Статус | Доказательство в коде (перепроверено в этом прогоне) |
+|---|----------|--------|------------------------------------------------------|
+| 1 | Экран групп конкретного аккаунта показывает только группы этого аккаунта | ✓ VERIFIED | `app/pages/account_groups.py:109` — `GET /accounts/{account_id}/groups`; роутер подключён `app/pages/__init__.py:12,46`; файл 377 строк, пять маршрутов на месте (`:109, :197, :251, :299, :335`). Волна 03-09..03-12 этот файл не трогала — регрессии не было где возникнуть |
+| 2 | Включение/отключение группы сразу отражается на доступности групп при настройке расписаний | ✓ VERIFIED | `app/application/scheduling/use_cases.py:171` — `if not group.is_active: continue`; `app/pages/ads.py:243` — `group_scope = Group.is_active == True`, `:259` — `inactive_group_ids`, `:281` — проброс в шаблон. Прогнано в этом процессе: `pytest tests/test_pages/test_account_groups.py -k "delete or toggle"` → **21 passed** |
+| 3 | Пользователь может удалить группу из списка аккаунта | ✓ VERIFIED | `account_groups.py:335` — маршрут удаления; панель подтверждения `account_groups/includes/group_row.html:104-109` вызывает макрос `modal` с `action='/accounts/{id}/groups/{gid}/delete'` и `method="post"`. Гард повторной отправки, добавленный планом 03-10, разметку формы не подменил: `x-on:submit` БЕЗ модификатора `.prevent` (закреплено утверждением в `_assert_guarded`). 21 тест удаления/тумблера — passed |
+| 4 | Повторная синхронизация с показом результата, не покидая экран | ✓ VERIFIED | `accounts_sync_groups` (`app/pages/accounts.py:775`) возвращает 302 на `/accounts/{id}/groups` во всех ветках, включая новую ветку конфликта (`:979`); плашка результата и самоостанавливающийся опрос — `account_groups/list.html`, `partials/sync_result.html`. План 03-09 добавил внутрипроцессную заявку, НЕ изменив ни редиректы, ни протоколы обращения к мессенджерам. Прогнано: `pytest tests/test_routes/test_sync_groups.py -k "slot or concurrent or syncing"` → **7 passed** |
+| 5 | Экран групп пригоден к использованию на мобильных ширинах | ✓ VERIFIED | `app/static/css/app.css:1593` `[data-acct-head]`, `:1657` `.count-rule`, `:1669` `[data-group-row]`. Волна закрытия пробелов CSS не трогала; гард 03-10 сознательно обошёлся без единой новой строки CSS, опираясь на уже отгруженное правило `.btn[disabled]` |
 
-**Roadmap SC: 5/5 VERIFIED.**
+**Roadmap SC: 5/5 VERIFIED.** Ни один из трёх блокеров код-ревью не фальсифицирует ни одного критерия — обоснование ниже, в разделе «Независимая оценка находок ревью».
 
-### Plan Must-Have Truths (по планам)
+### Plan Must-Have Truths
 
-| План | Труths | Verified | Failed | Заметки |
-|------|--------|----------|--------|---------|
-| 03-01 | 17 (1 backstop) | 17 | 0 | Backstop «окно между сбором и постановкой задач» подтверждён явным кодом: `collect_due_schedules` проверяет `is_active` на сборе, `dispatch_send_tasks` (`app/worker/tasks.py:50-130`) повторной проверки не делает — гарантия действительно ограничена моментом сбора, как и объявлено |
-| 03-02 | 11 | 11 | 0 | `apply_group_resync` не содержит слова `is_active` ни разу (grep -c = 0) — прохибиция D-11 в проверяемой форме. Ревизия `0014` — три `add_column` nullable, `down_revision = "0013"`, симметричный `downgrade` |
-| 03-03 | 13 | 13 | 0 | Все 13 закрыты тестами `test_editor_schedules.py` (6 профильных прогнаны отдельно — passed) |
-| 03-04 | 9 | 9 | 0 | Три пути синка сведены к одному хелперу: `app/pages/accounts.py:863` и `app/worker/tasks.py:331` вызывают `apply_group_resync`; WA и MAX объединены в один `_sync_groups_async` (коммит `31ed3dd`) |
-| 03-05 | 42 (3 backstop) | 41 | **1** | Провал: E6 loading — см. Gaps. Три backstop-истины (320px) закрыты человеческим UAT №2/№3 |
-| 03-06 | 23 (2 backstop) | 23 | 0 | Опрос объявлен ТОЛЬКО в ветке `syncing` (`sync_result.html:50`), закреплён парой тестов «продолжает» / «останавливается» — обе прошли |
-| 03-07 | 8 | 8 | 0 | GRP-08 снято согласованно в ROADMAP.md (стр. 26, 214, 291) и REQUIREMENTS.md (стр. 156, 220, 247, 252); `app/routes/groups.py` удалён, `app/main.py` его не упоминает; посев групп — `tests/conftest.py:110 seed_group` |
-| 03-08 | 9 | 9 | 0 | `app/templates/groups/` отсутствует целиком; `app/pages/groups.py` — 44-строчная заглушка с `RedirectResponse` на `/accounts` для `/groups` и `/groups/{deep_link:path}`; пункта меню нет (`test_nav_has_no_groups_item`); старых классов в CSS нет |
+| План | Truths | Verified | Behavior-unverified | Failed |
+|------|--------|----------|---------------------|--------|
+| 03-01..03-04, 03-06..03-08 | 90 | 90 | 0 | 0 |
+| 03-05 | 42 (3 backstop) | 41 | 1 (E6 loading — БЫЛА failed, теперь present) | 0 |
+| 03-09 | 6 | 6 | 0 | 0 |
+| 03-10 | 8 | 6 | 2 | 0 |
+| 03-11 | 5 | 5 | 0 | 0 |
+| 03-12 | 11 | 11 | 0 | 0 |
+| **Итого** | **162** | **159** | **3** | **0** |
 
-**Итого по планам: 131/132 truths verified, 1 FAILED.**
+Плюс 5 критериев ROADMAP → **score 164/167, behavior_unverified 3, failed 0.**
+
+#### Что именно проверено в закрывших пробел планах
+
+**03-09 — внутрипроцессная заявка на синхронизацию (6/6 VERIFIED)**
+
+Прочитан код, не сводка. `_SYNC_IN_FLIGHT: set[int]` объявлен на уровне модуля (`app/pages/accounts.py:747`), `_claim_sync_slot` (`:752`) СИНХРОННАЯ и без единого `await` между проверкой и добавлением — точки переключения задач между ними нет; `_release_sync_slot` (`:763`) использует `discard`, то есть повторный вызов безобиден и от состояния сессии не зависит. Заявка занимается ПОСЛЕ проверки владения и ПОСЛЕ guard-а по `account.status`, но ДО конструирования адаптера (`:860`), и весь остаток тела обёрнут внешним `try` с `finally: _release_sync_slot(account_id)` (`:980-981`). Между занятием и `try:` нет ни одной инструкции — окна утечки заявки не существует.
+
+Инверсия: заявка утекла бы, если бы запрос умер между занятием и `finally`. Проверено — `CancelledError` при обрыве клиента `finally` не обходит; ветки `account.type not in (...)` и `status == "syncing"` возвращаются ДО занятия.
+
+| Truth | Доказательство |
+|-------|----------------|
+| Второй POST во время первого до мессенджера не доходит | `test_second_sync_during_a_running_sync_does_not_reach_the_messenger` — вложенный POST отправляется ИЗ подменённого `get_groups`, утверждается `MockMessenger.call_count == 1` и `calls["n"] == 1`. Это настоящий поведенческий тест сквозь ASGI, не проверка наличия символа — **passed** |
+| Заявка освобождается на КАЖДОМ из четырёх выходов | Семейство `test_slot_is_released_after_{a_successful_sync, a_fetch_error, an_unexpected_error, an_integrity_conflict}` — все четыре доводят обработчик до своей точки выхода и затем выполняют ОБЫЧНУЮ синхронизацию, убеждаясь, что она снова дошла до мессенджера — **passed** |
+| Занятая заявка одного аккаунта не мешает другому | `test_sync_slot_is_per_account` — `call_count == 2` — **passed** |
+| Существующий guard по `status` сохранён | `accounts.py:809` — проверка стоит ПЕРВОЙ, до заявки; `test_sync_while_syncing_does_not_touch_messenger` в наборе — **passed** |
+| Вечной блокировки не бывает | Реестр — модульное множество в памяти процесса, исчезает вместе с ним по построению; в БД не пишется |
+| Заявка НЕ пишется в `MessengerAccount.status` (прохибиция, test-tier) | `test_sync_does_not_persist_syncing_for_the_page_path` читает статус ИЗНУТРИ подменённого `get_groups` и после запроса, оба раза `"active"` — **passed**. Enforcement wired, не декларация |
+| T-03-15/T-03-28 закрыты, остаток зарегистрирован T-03-36 двумя различёнными направлениями | `03-SECURITY.md:51, 64, 72` — обе строки `closed`, T-03-36 `open — below high threshold`, различает (а) гипотетическую многопроцессную раскладку web и (б) РЕАЛЬНУЮ сегодня асимметрию «страничный синк ↔ фоновый celery при replicas: 2» |
+
+**03-10 — гард повторной отправки (6/8 VERIFIED, 2 PRESENT_BEHAVIOR_UNVERIFIED)**
+
+Разметка проверена дословно, `app/templates/components/modal.html`:
+- `:89` — `sending: false` в `x-data`; `:90` — сброс в `show()`, а НЕ в `hide()` (возврат по истории браузера иначе оставил бы кнопку мёртвой);
+- `:104` — на самой форме `x-on:submit="if (sending) { $event.preventDefault(); return; } sending = true"` — без модификатора `.prevent`, то есть первая отправка уходит на сервер;
+- `:109` — на кнопке подтверждения `x-bind:disabled="sending"` и `x-bind:aria-busy="sending"`;
+- `:108` — кнопка ОТКАЗА не получает ни `disabled`, ни иной блокировки.
+
+Тесты (`tests/test_templates/test_components.py`, прогнан весь файл в этом процессе → **45 passed**): `test_modal_confirm_guards_double_submit`, `test_modal_guard_leaves_cancel_operable`, `test_modal_guard_survives_the_block_call`, `test_modal_guard_is_inherited_by_every_consumer`. Последний работает В ОБЕ СТОРОНЫ — сверяет множество потребителей с поимённым перечнем, красит и нового, и исчезнувшего, и ловит потребителя, который собирает панель в обход макроса. Инвентаризация сошлась: 7 потребителей + сам компонент = 8 файлов, что подтверждено независимым grep-ом.
+
+Почему 2 истины НЕ засчитаны как VERIFIED: истины 1 и 2 утверждают переход состояния (`sending` false→true) и отмену повторной отправки — то есть рантайм, который исполняет Alpine в браузере. Тесты доказывают наличие и КОРРЕКТНОСТЬ ВЫРАЖЕНИЙ в разметке, но ни одного браузерного/e2e-теста в проекте нет. Наличие ≠ поведение — эти две истины уходят человеку (см. `behavior_unverified_items`). То же относится к исходной истине E6 плана 03-05.
+
+Отдельный риск, названный человеку явно: отключение submit-кнопки внутри обработчика `submit` в некоторых сценариях способно повлиять на уже начатую отправку. Здесь кнопка подтверждения не несёт ни `name`, ни `value`, поэтому потери данных submitter-а быть не должно, а планировщик Alpine применяет привязку после синхронного завершения обработчика — но это рассуждение, а не измерение, и подменять им проверку нельзя.
+
+**03-11 — снос мёртвого слоя (5/5 VERIFIED)**
+
+`app/repositories/group.py` отсутствует; `grep -rn "GroupRepository" app/ tests/` (за вычетом `GroupInfoRepository`) даёт **ноль** вхождений — ни объявления, ни импорта, ни надгробного комментария. `app/domain/repositories.py` больше не импортирует модель группы (импорты `:6-10` — Ad, MessengerAccount, Schedule, SendLog, User), а прохибиция «не задеть живые репозитории» удерживается: `UserRepository`, `AdRepository`, `AccountRepository`, `ScheduleRepository`, `SendLogRepository` на месте (`:23, 29, 35, 41, 47`), пакет `app/repositories/` сохранил `base.py`, `group_info.py`, `schedule.py` и остальные. Приложение поднимается — исполнено в этом процессе: `from app.main import create_app; create_app()` → **101 маршрут, без ошибок**. Решение записано в `deferred-items.md:44` с обоснованием и датой — находка ЗАКРЫТА, а не переписана.
+
+**03-12 — приведение регистра и карт в соответствие (11/11 VERIFIED)**
+
+Ключевая проверка — не «строка появилась», а «строка не врёт». Прохибиция плана: регистр не имеет права записывать митигацию, которой в коде нет. Сверено дословно по строке T-03-37 (`03-SECURITY.md:73`):
+
+| Утверждение регистра | Проверка по файлу |
+|----------------------|-------------------|
+| `_DROP_DUPLICATES` объявлен константой, содержит `DELETE FROM groups` | `alembic/versions/0015_groups_unique_account_external.py:208` — константа; `:210` — `DELETE FROM groups` ✓ |
+| Порядок операций в `upgrade`: слияние → перезапись ссылок расписаний → удаление → ограничение | `:219-229` — `_MERGE_IS_ACTIVE`, `_MERGE_MISSING_SINCE`, `_remap_schedule_group_ids`, `_DROP_DUPLICATES`, затем `create_unique_constraint` ✓ ровно в этом порядке |
+| Восемь тестов в `tests/test_migrations/test_0015_...` | Файл существует, `grep -c "def test_"` = **8** ✓ |
+
+Прочее: `03-VALIDATION.md:73-77` — пять дописанных строк (`03-09-01/02`, `03-10-01/02`, `03-11-01`), у каждой свой блок автоматической команды; строка `03-02-03` и прочие ранее существовавшие строки не тронуты (правки в диффе — только дописывание). `03-RESEARCH.md:389` — `## Open Questions (RESOLVED)`. `threats_open: 0` корректен: единственная открытая угроза T-03-36 имеет severity `medium` при пороге `block_on: high`.
 
 ### Prohibitions (must-NOT)
 
-Четыре прохибиции, объявленные планами; все judgment-tier по умолчанию, но у каждой найдено **wired enforcement evidence** — проходящий негативный тест, а не только декларация. Поэтому ни одна не помечается `unverified-prohibition`.
+| # | Прохибиция | План | Tier | Enforcement evidence | Статус |
+|---|-----------|------|------|----------------------|--------|
+| 1-4 | Прохибиции планов 03-01..03-04 (тумблер не правит `Schedule.group_ids`; пропуск не пишет SendLog; синк не удаляет данные; то же для всех трёх путей) | 03-01, 03-02, 03-04 | test | Негативные тесты прошли в первой верификации, регрессий не внесено (волна 03-09..03-12 этих файлов не касалась, кроме `accounts.py`, где протоколы обращения не менялись) | ✓ ENFORCED |
+| 5 | Заявка НЕ ДОЛЖНА жить в `MessengerAccount.status` | 03-09 | test | `test_sync_does_not_persist_syncing_for_the_page_path` — passed. Wired enforcement, не декларация | ✓ ENFORCED |
+| 6 | Guard НЕ ДОЛЖЕН оставить пользователя без синхронизации | 03-09 | test | Четыре теста `test_slot_is_released_*` — passed | ✓ ENFORCED |
+| 7 | Гард НЕ ДОЛЖЕН отбирать возможность отменить действие | 03-10 | test | `test_modal_guard_leaves_cancel_operable` — passed; в разметке `:108` кнопка отказа чиста | ✓ ENFORCED |
+| 8 | Гард НЕ ДОЛЖЕН превратить панель в единственный путь удаления | 03-10 | test | `_assert_guarded` утверждает отсутствие `x-on:submit.prevent`; метод и адрес формы приходят параметрами макроса — passed | ✓ ENFORCED |
+| 9 | Снос НЕ ДОЛЖЕН задеть живые репозитории | 03-11 | test | Живые классы на месте, приложение поднимается (101 маршрут) | ✓ ENFORCED |
+| 10 | Закрытие находки НЕ ДОЛЖНО достигаться правкой запечатанных артефактов | 03-12 | test | Дифф `03-SECURITY.md` за волну не содержит правок PLAN/SUMMARY планов 03-01..03-08 | ✓ ENFORCED |
+| 11 | Дописывание строк матрицы НЕ ДОЛЖНО стать правкой существующих (в т.ч. 03-02-03) | 03-12 | test | В диффе `03-VALIDATION.md` строка `03-02-03` проходит контекстом | ✓ ENFORCED |
+| 12 | Регистр НЕ ДОЛЖЕН записывать митигацию, которой в коде нет | 03-12 | **judgment** | Строка T-03-37, написанная планом, сверена по файлу и точна (см. таблицу выше). НО строка T-03-17 регистра фазы утверждает больше, чем делает код — подробности ниже | ⚠️ **FLAGGED** |
 
-| # | Прохибиция | План | Enforcement evidence | Статус |
-|---|-----------|------|----------------------|--------|
-| 1 | Выключение группы не удаляет её id из `Schedule.group_ids` | 03-01 | `test_toggle_does_not_edit_the_schedules`, `test_schedule_group_ids_are_not_edited_by_the_skip` — passed. Маршрут тумблера состав расписаний не читает и не пишет (`account_groups.py:329-332`) | ✓ ENFORCED |
-| 2 | Пропуск выключенной группы не создаёт записи в SendLog | 03-01 | `test_skipping_writes_nothing_to_the_send_log`, `test_missing_group_writes_nothing_to_the_send_log` — passed. `use_cases.py:171-177` — только `logger.info` + `continue` | ✓ ENFORCED |
-| 3 | Синхронизация не удаляет данные пользователя (пропавшая группа помечается) | 03-02 | `test_missing_group_is_marked_not_deleted`, `test_empty_response_marks_nothing_and_deletes_none` — passed. В `group_resync.py` нет ни одного `session.delete` | ✓ ENFORCED |
-| 4 | То же для всех трёх путей синхронизации | 03-04 | Та же реализация вызывается всеми тремя путями (`accounts.py:863`, `tasks.py:331`) — прохибиция удерживается по построению | ✓ ENFORCED |
+**Прохибиция 12 — неавторитетный вердикт LLM-судьи, `unverified-prohibition — human review recommended`.** `03-SECURITY.md:53` держит T-03-17 в статусе `closed` с обоснованием «все конструкции — свой текст (`telegram_user.py:265`, `whatsapp.py:130,133`, `max.py:120,123`)». Проверка по файлам: `whatsapp.py:130`, `max.py:120` и `telegram_user.py:265` конструируют `MessengerFetchError` как `f"{type(e).__name__}: {e}"` — это текст СТОРОННЕГО исключения, а не проектный; своим текстом являются только `whatsapp.py:133` и `max.py:123` («мост вернул HTTP {code}»). Формально прохибиция плана 03-12 не нарушена: строка T-03-17 написана раньше и в диффе плана проходит контекстом, а не добавлением. Но регистр фазы в этой строке заявляет митигацию, которой в коде нет, — ровно тот класс дефекта, ради которого прохибиция и заводилась. Решение — человеку.
 
 ### Required Artifacts
 
 | Artifact | Expected | Exists | Substantive | Wired | Data flows | Status |
 |----------|----------|--------|-------------|-------|------------|--------|
-| `app/pages/account_groups.py` | Роутер экрана (мин. 150 стр.) | ✓ 377 стр. | ✓ 5 маршрутов | ✓ `pages/__init__.py:45` | ✓ 4 живых запроса к БД + 2 запроса подсчёта | ✓ VERIFIED |
-| `app/templates/account_groups/list.html` | Страница (мин. 25) | ✓ 234 стр. | ✓ | ✓ `TemplateResponse:165` | ✓ рендерит `groups`, `schedule_counts`, `sync_result`, счётчики | ✓ VERIFIED |
-| `app/templates/account_groups/includes/group_row.html` | Макрос строки (мин. 20) | ✓ 110 стр. | ✓ | ✓ импорт в list.html:10 и partial_cards.html:10 | ✓ | ✓ VERIFIED |
-| `app/templates/account_groups/partial_cards.html` | Порция прокрутки (мин. 10) | ✓ 18 стр. | ✓ | ✓ `TemplateResponse:235` | ✓ | ✓ VERIFIED |
-| `app/templates/account_groups/partials/sync_result.html` | Блок опроса (мин. 20) | ✓ 59 стр. | ✓ | ✓ `include` в list.html:68 + `env.get_template:293` | ✓ | ✓ VERIFIED |
-| `app/application/accounts/group_resync.py` | Хелпер переинвентаризации (мин. 60) | ✓ 354 стр. | ✓ | ✓ 3 вызывающих | ✓ | ✓ VERIFIED |
-| `alembic/versions/0014_sync_result_and_group_missing.py` | Ревизия D-11/D-12 (мин. 25) | ✓ 57 стр. | ✓ `down_revision="0013"` | ✓ цепь 0013→0014→0015 | ✓ колонки совпадают с ORM | ✓ VERIFIED |
-| `app/static/css/app.css` | Секция экрана, `data-group-row` | ✓ стр. 1593-1735 | ✓ | ✓ | — | ✓ VERIFIED |
-| `app/pages/groups.py` | Заглушка-редирект (мин. 8) | ✓ 44 стр. | ✓ `RedirectResponse` | ✓ `pages/__init__.py:46` | — | ✓ VERIFIED |
-| `tests/test_pages/test_account_groups.py` | Поведенческие тесты (мин. 60) | ✓ 2084 стр., 82 теста | ✓ | ✓ | ✓ | ✓ VERIFIED |
-| `tests/test_application/test_group_resync.py` | Тесты D-10/D-11/D-12 (мин. 80) | ✓ 745 стр., 24 теста | ✓ | ✓ | ✓ | ✓ VERIFIED |
-| `tests/test_application/test_collect_due_inactive_group.py` | Тесты D-05/D-06 (мин. 50) | ✓ 372 стр., 9 тестов | ✓ | ✓ | ✓ | ✓ VERIFIED |
-| `tests/conftest.py` (`seed_group`) | Фикстура посева через ORM | ✓ `:110`, `Group(` на `:141` | ✓ | ✓ | ✓ | ✓ VERIFIED |
-| `.planning/REQUIREMENTS.md` (GRP-08 out of scope) | Причина + прослеживаемость | ✓ стр. 156, 220 | ✓ | ✓ согласовано с ROADMAP | — | ✓ VERIFIED |
-| `app/routes/groups.py` | ДОЛЖЕН отсутствовать (D-14) | ✓ отсутствует | — | ✓ `app/main.py` его не импортирует | — | ✓ VERIFIED (removal) |
-| `app/templates/groups/` | ДОЛЖЕН отсутствовать (D-01) | ✓ каталога нет | — | — | — | ✓ VERIFIED (removal) |
+| `app/pages/account_groups.py` | Роутер экрана | ✓ 377 стр. | ✓ 5 маршрутов (`:109,197,251,299,335`) | ✓ `pages/__init__.py:12,46` | ✓ живые запросы к БД | ✓ VERIFIED |
+| `app/templates/account_groups/list.html` | Страница | ✓ 234 стр. | ✓ | ✓ | ✓ | ✓ VERIFIED |
+| `app/templates/account_groups/includes/group_row.html` | Строка + панель подтверждения | ✓ 110 стр. | ✓ `:104-109` вызов макроса `modal` | ✓ | ✓ | ✓ VERIFIED |
+| `app/templates/account_groups/partials/sync_result.html` | Блок опроса | ✓ 59 стр. | ✓ | ✓ | ✓ | ✓ VERIFIED |
+| `app/application/accounts/group_resync.py` | Единая переинвентаризация | ✓ 354 стр. | ✓ | ✓ 3 вызывающих | ✓ | ✓ VERIFIED |
+| `app/pages/groups.py` | Заглушка-редирект | ✓ 44 стр. | ✓ | ✓ | — | ✓ VERIFIED |
+| **`app/templates/components/modal.html`** | **Гард повторной отправки (03-10)** | ✓ 115 стр. | ✓ `sending` `:89`, `x-on:submit` `:104`, `x-bind:disabled`+`aria-busy` `:109` | ✓ 7 потребителей, наследование закреплено двусторонним тестом | ✓ | ✓ VERIFIED (разметка) |
+| **`app/pages/accounts.py`** | **Заявка на синхронизацию (03-09)** | ✓ | ✓ `_SYNC_IN_FLIGHT:747`, `_claim_sync_slot:752`, `_release_sync_slot:763` | ✓ занятие `:860`, `finally` `:980` | ✓ | ✓ VERIFIED |
+| **`tests/test_templates/test_components.py`** | **4 теста гарда (03-10)** | ✓ | ✓ `_assert_guarded:502` проверяет `preventDefault`, `sending = true`, отсутствие `.prevent`, обе `x-bind` | ✓ | ✓ | ✓ VERIFIED |
+| **`tests/test_routes/test_sync_groups.py`** | **7 тестов заявки (03-09)** | ✓ | ✓ `:706, 800, 842, 869, 905, 940` | ✓ | ✓ | ✓ VERIFIED |
+| **`app/domain/repositories.py`** | **Без мёртвого протокола (03-11)** | ✓ | ✓ живые протоколы на месте | ✓ | — | ✓ VERIFIED |
+| `app/repositories/group.py` | ДОЛЖЕН отсутствовать (03-11) | ✓ отсутствует | — | ✓ ноль ссылок в `app/`+`tests/` | — | ✓ VERIFIED (removal) |
+| `alembic/versions/0015_...py` | Разрушительная ревизия | ✓ | ✓ `_DROP_DUPLICATES:208`, порядок `:219-229` | ✓ | ✓ | ✓ VERIFIED |
+| `app/routes/groups.py`, `app/templates/groups/` | ДОЛЖНЫ отсутствовать | ✓ отсутствуют | — | — | — | ✓ VERIFIED (removal) |
+| `03-SECURITY.md` | T-03-36, T-03-37, `threats_open: 0` | ✓ `:72, 73`, frontmatter `:6` | ✓ сверено по коду | ✓ | — | ⚠️ VERIFIED с оговоркой (T-03-17, см. выше) |
+| `03-VALIDATION.md` | 5 дописанных строк | ✓ `:73-77` | ✓ | ✓ | — | ✓ VERIFIED |
+| `03-UI-SPEC.md` | Строка E6/loading по факту | ✓ `:379` | ✓ описывает реализованные атрибуты и честно оговаривает путь без Alpine | ✓ | — | ✓ VERIFIED |
 
 ### Key Link Verification
 
 | From | To | Via | Статус | Детали |
 |------|----|-----|--------|--------|
-| `app/pages/__init__.py` | `app/pages/account_groups.py` | `include_router` | ✓ WIRED | `from app.pages.account_groups import router as account_groups_router` + `router.include_router(account_groups_router)` |
-| `account_groups/includes/group_row.html` | `app/pages/account_groups.py` | action формы тумблера | ✓ WIRED | `action="/accounts/{{ account_id }}/groups/{{ group.id }}/toggle"` ↔ `@router.post("/accounts/{account_id}/groups/{group_id}/toggle")` |
-| `app/application/scheduling/use_cases.py` | `app/models/group.py` | `is_active` — условие пропуска | ✓ WIRED | `:171 if not group.is_active: continue`, поднято ВЫШЕ ветвления по `account.type` (покрывает Telegram) |
-| `alembic/versions/0014_...` | `app/models/messenger_account.py` | совпадение колонок | ✓ WIRED | `last_synced_at:27`, `last_sync_result:38`, `missing_since` в `models/group.py:69` |
-| `app/application/accounts/group_resync.py` | `app/models/group.py` | `missing_since` | ✓ WIRED | `:240 group.missing_since = None`, `:284 group.missing_since = marked_at` |
-| `app/pages/accounts.py` | `group_resync.py` | `apply_group_resync` | ✓ WIRED | `:863` — встроенного блока only-add больше нет |
-| `app/worker/tasks.py` | `group_resync.py` | `apply_group_resync` | ✓ WIRED | `:331` в единой `_sync_groups_async` для WA и MAX |
-| `app/pages/ads.py` | `ads/includes/sched_card.html` | `selectattr('account_id'...)` | ✓ WIRED | `sched_card.html:64` + `inactive` множество из `ads.py:259` |
-| `account_groups/list.html` | `app/pages/account_groups.py` | сентинел `groups/partial?offset=` | ✓ WIRED | `list.html:190` ↔ `@router.get(".../groups/partial")`; разметка идентична `partial_cards.html` (закреплено `test_sentinel_markup_is_identical_in_both_templates`) |
-| `app/pages/account_groups.py` | `app/repositories/schedule.py` | `remove_group_ids` | ✓ WIRED | `:370` |
-| `partials/sync_result.html` | `app/pages/account_groups.py` | `groups/sync-status` | ✓ WIRED | `:50 hx-get="/accounts/{{ account_id }}/groups/sync-status"` ↔ `@router.get(".../groups/sync-status")` |
-| `app/pages/account_groups.py` | `group_resync.py` | `parse_sync_result` | ✓ WIRED | импорт `:20`, вызов `:186` |
-| `app/pages/groups.py` | `app/pages/accounts.py` | `RedirectResponse` на `/accounts` | ✓ WIRED | `:44` |
-| `tests/conftest.py` | `app/models/group.py` | `Group(` прямой посев | ✓ WIRED | `:141` |
+| `app/pages/__init__.py` | `app/pages/account_groups.py` | `include_router` | ✓ WIRED | `:12` импорт, `:46` подключение |
+| `account_groups/includes/group_row.html` | `components/modal.html` | вызов макроса `modal` | ✓ WIRED | `:104-109`, `action='/accounts/{id}/groups/{gid}/delete'`, `method="post"` |
+| `components/modal.html` | 7 потребителей | наследование гарда из макроса | ✓ WIRED | Двусторонняя инвентаризация `test_modal_guard_is_inherited_by_every_consumer`; независимый grep даёт те же 7 + сам компонент |
+| `_claim_sync_slot` | `accounts_sync_groups` | занятие до конструктора адаптера | ✓ WIRED | `:860` — перед ветвлением по `account.type` |
+| `_release_sync_slot` | `accounts_sync_groups` | `finally` вокруг тела | ✓ WIRED | `:980-981`, между занятием и `try:` нет ни одной инструкции |
+| `03-SECURITY.md` | `app/pages/accounts.py` | строки T-03-15/T-03-28/T-03-36 ссылаются на хелперы | ✓ WIRED | Имена `_claim_sync_slot`/`_release_sync_slot` присутствуют в обеих строках |
+| `03-SECURITY.md` | `alembic/versions/0015_...` + `tests/test_migrations/test_0015_...` | строка T-03-37 | ✓ WIRED | Все три ссылки проверены по файлам, номера строк совпадают |
+| `app/pages/account_groups.py` | `app/repositories/schedule.py` | `remove_group_ids` | ✓ WIRED | Единственное обращение экрана к слою репозиториев осталось живым после сноса 03-11 |
+| `app/application/scheduling/use_cases.py` | `app/models/group.py` | `is_active` — пропуск | ✓ WIRED | `:171` |
+| `app/pages/ads.py` | `ads/includes/sched_card.html` | `inactive_group_ids` | ✓ WIRED | `:259` → `:281` |
+| `app/pages/accounts.py` / `app/worker/tasks.py` | `group_resync.py` | `apply_group_resync` | ✓ WIRED | Единая реализация у всех трёх путей |
+| Прочие 3 связки первой верификации | — | — | ✓ WIRED | Регрессионная проверка: файлы волной не тронуты |
 
 **Key links: 14/14 WIRED.**
 
@@ -116,97 +203,127 @@ gaps:
 
 | Артефакт | Значение | Источник | Реальные данные | Статус |
 |----------|----------|----------|------------------|--------|
-| `list.html` | `groups` | `_build_groups_query` → `db.execute` (`:131`) | ✓ | ✓ FLOWING |
-| `list.html` | `total_groups` / `active_groups` | два выделенных `select(func.count())` (`:143-162`) | ✓ | ✓ FLOWING |
-| `list.html` | `sync_result` | `account.last_sync_result` → `parse_sync_result` (`:186`) | ✓ | ✓ FLOWING |
-| `group_row.html` | `schedule_counts` | `_schedule_counts` → `select(Schedule.group_ids).join(Ad)` (`:96-106`) | ✓ | ✓ FLOWING |
-| `group_row.html` | `group.missing_since` | пишется `apply_group_resync:284`, снимается `:240` | ✓ | ✓ FLOWING |
-| `sync_result.html` | `status` | `account.status` из БД (`:290-295`) | ✓ | ✓ FLOWING |
-| `partial_cards.html` | `groups` (2-я порция) | тот же запрос с `offset` (`:227-229`) | ✓ | ✓ FLOWING |
+| `list.html` | `groups`, счётчики, `sync_result` | живые `db.execute` + `parse_sync_result` | ✓ | ✓ FLOWING |
+| `group_row.html` | `schedule_counts`, `missing_since` | запрос по `Schedule.group_ids`; пишется/снимается в `apply_group_resync` | ✓ | ✓ FLOWING |
+| `sync_result.html` | `status` | `account.status` из БД | ✓ | ✓ FLOWING |
+| `modal.html` | `sending` | реактивное состояние Alpine, не серверные данные | н/д | — не применимо (клиентское состояние) |
 | `sched_card.html` | `inactive` | `ads.py:259` из выборки БД | ✓ | ✓ FLOWING |
 
 Ни одна цепочка не заканчивается статическим возвратом, литералом или моком.
 
 ### Behavioral Spot-Checks
 
-Выполнены реальными прогонами тестов в этом процессе верификации (не пересказ SUMMARY).
+Выполнены реальными прогонами в ЭТОМ процессе верификации; ни один результат не взят из SUMMARY.
 
 | Behavior | Command | Result | Статус |
 |----------|---------|--------|--------|
-| Экран, тумблер, удаление, поиск, прокрутка, плашка, опрос | `pytest tests/test_pages/test_account_groups.py tests/test_application/test_group_resync.py tests/test_application/test_collect_due_inactive_group.py -q` | `136 passed in 101.80s` | ✓ PASS |
-| Синк всех трёх путей, htmx-инварианты, адаптивная разметка, шелл, миграции | `pytest tests/test_routes/test_sync_groups.py tests/test_pages/test_htmx_preserved.py tests/test_pages/test_responsive_markup.py tests/test_pages/test_shell.py tests/test_migrations -q` | `247 passed in 789.26s` | ✓ PASS |
-| Выключенные группы в редакторе расписаний | `pytest tests/test_pages/test_editor_schedules.py -q -k "disabled_group or disabled_chosen or without_disabled_selections"` | `6 passed` | ✓ PASS |
-| Прохибиция «повторная отправка удаления безвредна» | `test_repeated_delete_is_harmless` (в первом прогоне) | passed | ✓ PASS |
-| Двойная отправка тумблера возвращает исходное состояние | `test_double_toggle_returns_the_group_to_its_initial_state` | passed | ✓ PASS |
-| Защита от повторной отправки на кнопке подтверждения | grep по `app/templates/components/modal.html`, `app/static/js/`, всем шаблонам | ни `disabled`, ни `aria-busy`, ни `x-on:submit` на модалке; собственного JS нет | ✗ FAIL |
+| Гард панели подтверждения: наличие, работоспособность отказа, блочный вызов, наследование потребителями, инвентаризация submit-обработчиков | `uv run pytest tests/test_templates/test_components.py -q` | `45 passed in 0.23s` | ✓ PASS |
+| Заявка на синхронизацию: параллельный запуск, независимость аккаунтов, запрет записи `syncing`, четыре точки освобождения | `uv run pytest tests/test_routes/test_sync_groups.py -q -k "slot or concurrent or parallel or syncing"` | `7 passed in 7.09s` | ✓ PASS |
+| Удаление и тумблер после правки общего макроса (регрессия SC2/SC3) | `uv run pytest tests/test_pages/test_account_groups.py -q -k "delete or toggle"` | `21 passed in 23.32s` | ✓ PASS |
+| Приложение поднимается после сноса слоя репозитория | `uv run python -c "from app.main import create_app; a=create_app(); print(len(a.routes))"` | `app OK 101 routes` | ✓ PASS |
+| Ноль ссылок на снесённый класс | `grep -rn "GroupRepository" app/ tests/` за вычетом `GroupInfoRepository` | ноль вхождений | ✓ PASS |
+| Рантайм-переход `sending` false→true и отмена повторной отправки | браузерных/e2e-тестов в проекте нет | не исполнено | ? SKIP → человеку |
 
-**Итого прогнано в этой верификации: 389 тестов, 389 passed, 0 failed.**
+**Прогнано в этой верификации: 73 теста, 73 passed, 0 failed.** Полная суита (1094 passed) прогнана оркестратором дважды в этой сессии — повторный прогон не дал бы нового доказательства и здесь сознательно не выполнялся.
 
 ### Probe Execution
 
 | Probe | Command | Result | Статус |
 |-------|---------|--------|--------|
-| — | — | — | ? SKIP |
+| — | `find scripts -path '*/tests/probe-*.sh'` | пусто | ? SKIP |
 
-Проектных probe-скриптов нет (`find scripts -path '*/tests/probe-*.sh'` → пусто); ни один PLAN/SUMMARY фазы probe не объявляет. Роль probe здесь выполняет pytest-суита — прогнана выше.
+Проектных probe-скриптов нет; ни один PLAN/SUMMARY фазы probe не объявляет. Роль probe выполняет pytest — прогнан выше.
 
 ### Requirements Coverage
 
-| Requirement | Source Plan(s) | Описание | Статус | Evidence |
-|-------------|----------------|----------|--------|----------|
-| GRP-04 | 03-01, 03-05, 03-08 | Пользователь может открыть экран групп конкретного messenger-аккаунта | ✓ SATISFIED | SC1 + маршрут `account_groups.py:109`, вход с `/accounts` в 9 местах, старый раздел снесён |
-| GRP-05 | 03-01, 03-03 | Пользователь может включать и отключать отдельные группы аккаунта | ✓ SATISFIED | SC2 + `account_groups.py:299-332`, отражение в `use_cases.py:171` и `ads.py:243` |
-| GRP-06 | 03-05, 03-08 | Пользователь может удалить группу из списка аккаунта | ✓ SATISFIED | SC3 + `account_groups.py:335-377` с чисткой `Schedule.group_ids` |
-| GRP-07 | 03-02, 03-04, 03-06 | Повторная синхронизация с показом результата | ✓ SATISFIED | SC4 + ревизия 0014, `apply_group_resync`, плашка и самоостанавливающийся опрос |
-| GRP-08 | 03-07 | Ручное добавление группы | ✓ WITHDRAWN (не unmet) | Снятие зафиксировано согласованно: `REQUIREMENTS.md:156` (Out of Scope с причиной и датой), `:220` (строка прослеживаемости переведена в `Out of scope v2.0 (D-13, 2026-08-11)`, а не удалена), `:247/:252` (счётчики пересчитаны 39→38); `ROADMAP.md:26,214,291` согласованы, строка Requirements фазы 3 несёт только GRP-04..07. Код: `app/routes/groups.py` удалён, `app/main.py` его не импортирует, пустое состояние экрана призыва «добавить вручную» не содержит |
+| Requirement | Source Plan(s) | Статус | Evidence |
+|-------------|----------------|--------|----------|
+| GRP-04 | 03-01, 03-05, 03-08 | ✓ SATISFIED | SC1: маршрут `account_groups.py:109`, роутер подключён, выборка скоуплена аккаунтом |
+| GRP-05 | 03-01, 03-03 | ✓ SATISFIED | SC2: `use_cases.py:171`, `ads.py:243,259,281`; 21 тест тумблера/удаления passed |
+| GRP-06 | 03-05, 03-08, **03-10** | ✓ SATISFIED | SC3: маршрут `:335`, панель подтверждения с гардом повторной отправки; поведение гарда в браузере — к человеку |
+| GRP-07 | 03-02, 03-04, 03-06, **03-09** | ✓ SATISFIED | SC4: единая `apply_group_resync`, плашка и опрос, внутрипроцессная заявка; 7 тестов заявки passed |
+| GRP-08 | 03-07 | ✓ WITHDRAWN | `REQUIREMENTS.md:156` (Out of Scope с причиной и датой), `:220` (строка прослеживаемости сохранена), `:247,252` (счётчики 39→38); ROADMAP согласован |
 
-**Orphaned requirements:** нет. `grep "Phase 3" .planning/REQUIREMENTS.md` даёт ровно GRP-01..03 (baseline, closed ранее) и GRP-04..08; GRP-04..07 заявлены планами, GRP-08 закрыт как снятый.
+**Orphaned requirements:** нет. Планы 03-11 и 03-12 объявляют `requirements: []` СОЗНАТЕЛЬНО и с записанным обоснованием во frontmatter — гигиена кодовой базы и приведение регистра в соответствие не закрывают пользовательских требований. Это честная прослеживаемость, а не пропуск.
 
-**Бухгалтерская заметка (info, не gap):** GRP-04..GRP-07 в `REQUIREMENTS.md` всё ещё стоят как `- [ ]` и `Pending` в таблице прослеживаемости (строки 90-93, 216-219), а строка фазы 3 в Coverage-таблице ROADMAP.md — `In Progress`. Это состояние «фаза ещё не закрыта», и его штатно правит шаг закрытия фазы после верификации, а не исполнение планов.
+**Бухгалтерская заметка (⚠️ Warning, не gap):** в `REQUIREMENTS.md` GRP-04/05/06 стоят как `- [ ]` (`:90-92`) и `Pending` (`:216-218`), тогда как GRP-07 уже переведён в `Complete (2026-08-13, краевой промах закрыт планом 03-09)` (`:219`). Таблица прослеживаемости стала внутренне рассогласованной: четыре требования одной фазы находятся в трёх разных состояниях при одинаковой фактической готовности. Строка фазы 3 в Coverage-таблице ROADMAP — `In Progress`. Это правит шаг закрытия фазы; отмечено, чтобы рассогласование не уехало в архив милестоуна.
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 |------|------|---------|----------|--------|
-| — | — | `TBD` / `FIXME` / `XXX` | — | **Ноль вхождений** во всех файлах, изменённых фазой (34 файла `app/` + `alembic/`). Долговой гейт пройден |
-| — | — | `TODO` / `HACK` / `PLACEHOLDER` | — | Ноль вхождений в файлах фазы |
-| `app/repositories/group.py` | весь класс | Мёртвый код | ℹ️ Info | `GroupRepository` остался без единого потребителя после сноса `/groups` и JSON-входа. Зафиксировано осознанно в `deferred-items.md` с проверкой после 03-08: снос потребителей не добавил и не убавил. Решение о слое отложено намеренно, к цели фазы отношения не имеет |
-| `app/pages/accounts.py` | 790 | Guard `syncing` не покрывает синхронный TG-путь | ⚠️ Warning | Открытые угрозы T-03-15/T-03-28 (medium, ниже порога блокировки, `threats_open: 0`). Два одновременных POST для `tg_user` оба проходят guard; дубли строк закрыты ограничением схемы `uq_groups_account_external` (ревизия 0015). Задокументировано в 03-SECURITY.md с обоснованием, почему занимать статус здесь нельзя |
-| `app/templates/components/modal.html` | 82 | Кнопка подтверждения без состояния выполнения | 🛑 Gap | См. раздел Gaps — единственная провалившаяся must-have истина |
+| — | — | `TBD` / `FIXME` / `XXX` | — | **Ноль вхождений** в 66 файлах `app/`, `tests/`, `alembic/`, тронутых фазой. Долговой гейт пройден |
+| — | — | `TODO` / `HACK` / `PLACEHOLDER` | — | Ноль вхождений |
+| `app/messengers/whatsapp.py` | 130 | Текст стороннего исключения уходит пользователю | ⚠️ Warning | `f"{type(e).__name__}: {e}"` → `MessengerFetchError` → `record_sync_failure` → плашка. Идентично `max.py:120`, `telegram_user.py:265`. Регистр T-03-17 держит это в статусе `closed` на неверной посылке. Severity medium, ниже порога `block_on: high` — не гейт фазы, но решение человека нужно |
+| `app/pages/accounts.py` | 702-741 | `accounts_retry_sync` без заявки и без обработки отказа | ⚠️ Warning | Осознанно вне границ плана 03-09 («в границах СИНХРОННОГО HTTP-пути») и зарегистрировано строкой T-03-36 направлением (б). `account.status = "syncing"` в этой ветке существует с 2026-02-24 — фазой 3 не внесено |
+| `app/pages/accounts.py` | 242-347 | QR-сессия Telegram не связана с пользователем | ℹ️ Info | Регион фазой 3 не изменялся (`git log -L 242,347 --since=2026-08-11` пуст); предсуществующий код вне границ фазы. Заслуживает собственной записи в бэклоге, но фазу 3 не характеризует |
+| `app/templates/components/modal.html` | 85 | Без Alpine панель не открывается (`x-cloak` + `x-show`) | ℹ️ Info | Оговорка «базовый путь без Alpine остаётся настоящей формой» верна о РАЗМЕТКЕ, но открыть панель без Alpine всё равно нельзя — триггер тоже Alpine-атрибут. Свойство компонента с Фазы 1, фазой 3 не внесено и целям фазы не мешает |
+
+### Независимая оценка находок код-ревью (не наследуя severity рецензента)
+
+| Находка | Оценка верификатора | Обоснование |
+|---------|---------------------|-------------|
+| **CR-01** — узкая ветка пишет пользователю текст стороннего исключения | ⚠️ WARNING, не BLOCKER | Дефект РЕАЛЕН: `whatsapp.py:130`/`max.py:120` действительно строят сообщение из `str(e)`, и `accounts.py` передаёт его в плашку дословно. Но он не фальсифицирует ни одного критерия успеха: SC4 требует ПОКАЗАТЬ, что не удалось, — и это делается. Severity — Information Disclosure medium при пороге блокировки high. Отдельно и важнее: строка регистра T-03-17 держит статус `closed` на посылке, которая коду не соответствует, — это вынесено человеку как флагнутая прохибиция |
+| **CR-02** — `accounts_retry_sync` без гарда | ⚠️ WARNING, не BLOCKER | Прямо и заранее исключён из границ плана 03-09 («в границах СИНХРОННОГО HTTP-пути») и зарегистрирован как остаточный риск T-03-36 направлением (б) с поимённой ссылкой на `accounts.py:732`. Запись `status = "syncing"` в этой ветке датируется 2026-02-24 — фаза 3 её не вносила. Явно названный и записанный остаток — это не промах верификации |
+| **CR-03** — QR-сессия не привязана к пользователю | ℹ️ INFO для фазы 3 | Регион `accounts.py:242-347` фазой не изменялся; находка предсуществующая и к цели фазы отношения не имеет. Заслуживает записи в бэклог как самостоятельный дефект безопасности, но гейтом фазы 3 быть не может — иначе фаза отвечала бы за код, которого не писала |
 
 ### Human Verification Required
 
-**Нет открытых пунктов.** Человеческое UAT по фазе уже выполнено и зафиксировано: `03-UAT.md`, `status: complete`, 48/48 пройдено, 0 issues — 7 человеческих чекпоинтов (холодный старт с миграциями 0014/0015, адаптивность 320/860/1280, шапка+плашка на трёх ширинах, пометка «отключена» на 320/400, живая синхронизация всех трёх путей на реальном аккаунте, отсутствие внутренностей в тексте ошибки, пять критериев успеха на живом приложении) и 41 автопокрытый пункт с поимённой трассировкой `verified_by`.
+Пять пунктов. Три из них — истины, оставшиеся PRESENT_BEHAVIOR_UNVERIFIED; один — решение по CR-01; один — смоук после волны закрытия пробелов.
 
-Все backstop-истины (`verification: backstop`) фазы закрыты явными доказательствами:
-- 03-01 «окно между сбором и постановкой задач» — подтверждена чтением кода: `dispatch_send_tasks` повторной проверки `is_active` не делает, то есть гарантия действительно ограничена моментом сбора, как и объявлено;
-- 03-05 (2 шт.) и 03-06 (2 шт.) — визуальные на 320px — закрыты человеческими UAT №2 и №3 (`coverage_id: 03-05/D11`, `03-06/D9`).
+#### 1. Гард подтверждения: состояние выполняющегося запроса
 
-Поэтому статус — не `human_needed`.
+**Test:** Открыть `/accounts/{id}/groups` в браузере с поднявшимся Alpine, нажать «Удалить» у группы, в панели нажать «Удалить» и наблюдать кнопку в момент отправки.
+**Expected:** Кнопка гаснет правилом `.btn[disabled]` и получает `aria-busy`; **при этом удаление доходит до сервера** — строка исчезает, браузер приходит на `/accounts/{id}/groups`.
+**Why human:** Переход `sending` false→true исполняет Alpine в браузере. Тесты проверяют только разметку; браузерных тестов в проекте нет. Отдельный риск: отключение submit-кнопки внутри обработчика `submit` не должно погасить уже начатую отправку.
+
+#### 2. Гард подтверждения: отмена повторной отправки
+
+**Test:** В той же панели нажать кнопку подтверждения дважды подряд как можно быстрее.
+**Expected:** На сервер уходит ровно один POST удаления.
+**Why human:** Рантайм-инвариант очерёдности. Промах безвреден (маршрут идемпотентен, `test_repeated_delete_is_harmless`), но сам инвариант недоказан.
+
+#### 3. Гард в остальных местах подтверждения
+
+**Test:** Проверить в браузере удаление объявления (`ads/includes/ad_card.html`) и удаление расписания из редактора объявления (`ads/includes/sched_card.html` — блочный вызов со скрытым полем `return_to`).
+**Expected:** Удаление проходит; для расписания возврат происходит в редактор объявления, а не на сводный список; кнопка «Отмена» нажимаема во время отправки.
+**Why human:** Правка легла в общий макрос и затрагивает 12 мест подтверждения во всём приложении.
+
+#### 4. Решение по раскрытию текста ошибки синхронизации (CR-01 / T-03-17)
+
+**Test:** Остановить wa-worker (или испортить его адрес в Redis), нажать «Синхронизировать всё» на WA/MAX-аккаунте, прочитать плашку ошибки.
+**Expected:** РЕШЕНИЕ: принять раскрытие текста стороннего исключения как риск severity medium (и переписать обоснование строки T-03-17, чтобы регистр перестал утверждать несуществующее) ЛИБО сузить текст узкой ветки до подконтрольного, как это уже сделано для широкой ветки (`UNEXPECTED_FAILURE_MESSAGE`).
+**Why human:** Класс отказа автотестами не воспроизводится, а существующий тест (`tests/test_routes/test_sync_groups.py:695`) наоборот ЗАКРЕПЛЯЕТ сквозной проброс. Уровень допустимого раскрытия — решение владельца, не верификатора.
+
+#### 5. Смоук пяти критериев после волны закрытия пробелов
+
+**Test:** Пройти пять критериев успеха фазы на живом приложении заново.
+**Expected:** Все пять по-прежнему выполняются; синхронизация с экрана доходит до мессенджера и возвращает сводку; повторное нажатие кнопки синхронизации во время идущей синхронизации не запускает второй запрос к мессенджеру.
+**Why human:** Зафиксированное UAT фазы (`03-UAT.md`, `status: complete`, `updated: 2026-08-13T06:53:00Z`) закрывало ТОЛЬКО планы 03-01..03-08 — это прямо видно в его поле `source`. Планы 03-09..03-12, изменившие обработчик синхронизации и общий макрос подтверждения, легли позже и человеком не проверялись ни разу.
+
+### Deferred Items
+
+Отсутствуют. Проверены цели и критерии фаз 4, 5 и 6: ни одна не покрывает ни раскрытие текста ошибки синхронизации, ни рантайм-проверку гарда подтверждения. Упоминание «текста ошибки» в SC4 фазы 4 относится к ошибкам ОТПРАВКИ в истории (`SendLog`), а не к синхронизации групп — переносить туда находку было бы натяжкой.
 
 ### Gaps Summary
 
-Цель фазы достигнута: все пять критериев успеха ROADMAP подтверждены кодом и прогнанными тестами, все четыре требования GRP-04..07 удовлетворены, GRP-08 снято согласованно и прослеживаемо, все 14 ключевых связок соединены, все восемь артефактных наборов существенны и подключены, все четыре прохибиции имеют проходящие негативные тесты, долговых маркеров в файлах фазы ноль.
+**Пробелов нет. Цель фазы достигнута.**
 
-Провалилась **одна** must-have истина плана 03-05 — краевой UI-контракт `E6 loading`:
+Пять критериев успеха ROADMAP подтверждены кодом и прогнанными тестами; четыре требования GRP-04..07 удовлетворены, GRP-08 снято согласованно и прослеживаемо; 14 из 14 ключевых связок соединены; все артефакты существенны, подключены и несут живые данные; 11 из 12 прохибиций имеют проходящее wired enforcement; долговых маркеров в 66 файлах фазы ноль; регрессий после волны 03-09..03-12 не обнаружено (73 теста прогнано в этом процессе, полная суита — 1094 passed у оркестратора).
 
-> «Кнопка подтверждения отражает выполняющийся запрос и не допускает повторной отправки»
+Единственный пробел первой верификации закрыт настоящим кодом: гард повторной отправки живёт в макросе `components/modal.html`, наследуется всеми семью потребителями, закреплён четырьмя тестами уровня разметки, а строка `E6 / loading` в `03-UI-SPEC.md` приведена к тому, что код действительно делает, — вместе с честной оговоркой про путь без Alpine. Обходного «override» не потребовалось: дефект был устранён, а не принят.
 
-Разметка панели подтверждения (`components/modal.html:82`) отдаёт обычную submit-кнопку без единого признака выполняющегося запроса и без защиты от повторной отправки; собственного JS, который мог бы это добавить, в проекте нет. При этом `03-UI-SPEC.md:379` помечает эту строку матрицы как `✅ covered`, а `03-05-SUMMARY.md` про неё не говорит вовсе — то есть истина не была ни закрыта, ни явно снята. Пользовательского вреда нет: маршрут удаления идемпотентен и повторный POST безвреден (проверено `test_repeated_delete_is_harmless`), поэтому это WARNING-уровня расхождение «спецификация утверждает больше, чем делает код», а не поломка сценария удаления.
+Статус — `human_needed`, а не `passed`, по трём независимым причинам:
 
-**Это расхождение выглядит намеренным** — защита реализована на уровне маршрута вместо уровня UI. Чтобы принять его как осознанное отклонение, добавьте в frontmatter этого файла:
+1. **Три истины остались PRESENT_BEHAVIOR_UNVERIFIED.** Истины гарда утверждают ПЕРЕХОД СОСТОЯНИЯ, который исполняет Alpine в браузере. Тесты доказывают наличие и корректность выражений в разметке — это необходимо, но не достаточно. Браузерных тестов в проекте нет, поэтому засчитать переход как VERIFIED значило бы выдать наличие символа за поведение. Ровно это первая верификация и поймала в исходном виде — было бы иронично закрыть находку и тут же повторить её ошибку с обратным знаком.
 
-```yaml
-overrides:
-  - must_have: "Кнопка подтверждения отражает выполняющийся запрос и не допускает повторной отправки (E6 loading)"
-    reason: "Защита от повторной отправки перенесена на уровень маршрута: удаление идемпотентно (test_repeated_delete_is_harmless), UI-гарда сознательно нет — отключение кнопки не является защитой, а форму можно отправить и без страницы"
-    accepted_by: "{ваше имя}"
-    accepted_at: "{ISO timestamp}"
-```
+2. **Человеческое UAT фазы физически не видело волну закрытия пробелов.** `03-UAT.md` завершён в 06:53Z и в поле `source` перечисляет только `03-01..03-08-SUMMARY.md`. Планы 03-09 и 03-10 легли позже и тронули обработчик синхронизации и общий макрос подтверждения — то есть ровно те места, которые UAT проверяло вручную. Считать старое UAT покрытием нового кода нельзя.
 
-и синхронно поправьте строку `E6 / loading` в `03-UI-SPEC.md`, чтобы спецификация перестала утверждать непроверяемое. Альтернатива — реализовать гард тем же приёмом, который уже применён в `account_groups/includes/group_row.html` (`x-on:submit` на самой форме), и закрепить его тестом уровня разметки.
+3. **Одна judgment-прохибиция флагнута.** Строка T-03-17 регистра стоит `closed` на посылке «все конструкции — свой текст», которая коду не соответствует (`whatsapp.py:130`, `max.py:120`, `telegram_user.py:265`). Вердикт LLM-судьи неавторитетен по построению, а прохибиция judgment-tier не имеет права быть молча поглощённой зелёным статусом.
+
+Ни одна из трёх причин не является пробелом реализации: код на месте, соединён и работает. Это разрыв ДОКАЗАТЕЛЬСТВА, а не разрыв функциональности, и закрывается он человеком за пятнадцать минут в браузере плюс одним решением по тексту ошибки.
 
 ---
 
-_Verified: 2026-08-13T08:05:00Z_
-_Verifier: Claude (gsd-verifier)_
+_Verified: 2026-08-13T16:08:43Z_
+_Verifier: Claude (gsd-verifier), re-verification after gap-closure plans 03-09..03-12_
