@@ -832,3 +832,173 @@ async def test_sync_slot_is_per_account(sync_setup):
     assert nested["resp"].status_code == 302
 
 
+# Четыре теста ниже — негативные тесты прохибиции «guard не имеет права
+# оставить пользователя без синхронизации». Форма у всех одна: довести
+# обработчик до нужной точки выхода, затем выполнить ОБЫЧНУЮ синхронизацию того
+# же аккаунта и убедиться, что она снова дошла до мессенджера.
+
+
+@pytest.mark.asyncio
+async def test_slot_is_released_after_a_successful_sync(sync_setup):
+    """Выход первый — успешный возврат."""
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        MockMessenger.return_value.get_groups = AsyncMock(
+            return_value=[{"id": "g-1", "name": "Первая"}]
+        )
+        first = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+        second = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+
+    assert first.status_code == 302
+    assert second.status_code == 302
+    assert MockMessenger.call_count == 2, "заявка не освобождена после успеха"
+
+    _, result = await _account_result(session_factory, account_id)
+    assert result["error"] is None
+    assert result["found"] == 1
+
+
+@pytest.mark.asyncio
+async def test_slot_is_released_after_a_fetch_error(sync_setup):
+    """Выход второй — узкий `except MessengerFetchError`."""
+    from app.messengers.base import MessengerFetchError
+
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+
+    calls = {"n": 0}
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        async def _get_groups():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise MessengerFetchError("мост не ответил")
+            return [{"id": "g-1", "name": "Первая"}]
+
+        MockMessenger.return_value.get_groups = _get_groups
+        first = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+        second = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+
+    assert first.status_code == 302
+    assert second.status_code == 302
+    assert MockMessenger.call_count == 2, "заявка не освобождена после отказа мессенджера"
+
+    # Второй синк не просто дошёл — он записал УСПЕШНУЮ сводку поверх отказа.
+    _, result = await _account_result(session_factory, account_id)
+    assert result["error"] is None
+    assert result["found"] == 1
+
+
+@pytest.mark.asyncio
+async def test_slot_is_released_after_an_unexpected_error(sync_setup):
+    """Выход третий — широкий `except Exception`."""
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+
+    calls = {"n": 0}
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger:
+        async def _get_groups():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("сессия Telegram протухла")
+            return [{"id": "g-1", "name": "Первая"}]
+
+        MockMessenger.return_value.get_groups = _get_groups
+        first = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+        second = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+
+    assert first.status_code == 302
+    assert second.status_code == 302
+    assert MockMessenger.call_count == 2, (
+        "заявка не освобождена после неожиданного отказа"
+    )
+
+    _, result = await _account_result(session_factory, account_id)
+    assert result["error"] is None
+    assert result["found"] == 1
+
+
+@pytest.mark.asyncio
+async def test_slot_is_released_after_an_integrity_conflict(sync_setup):
+    """Выход четвёртый — ветка конфликта уникальности.
+
+    Ветка обязана быть ФАКТИЧЕСКИ пройдена, поэтому проверяется не только
+    освобождение заявки, но и записанная ею сводка. Конфликт вызывается
+    подменой переинвентаризации, которая на первом вызове кладёт строку,
+    нарушающую `uq_groups_account_external`: коммит обработчика падает
+    `IntegrityError`.
+
+    Освобождение здесь ценнее всего: сессия после `IntegrityError` непригодна
+    ни для чего, кроме отката, а `_release_sync_slot` к БД не обращается.
+    """
+    from app.application.accounts.group_resync import apply_group_resync as real_resync
+
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+    await _add_group(session_factory, account_id, "g-1", "Первая")
+
+    calls = {"n": 0}
+
+    async def _resync(session, account, fetched, *, messenger_type):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            session.add(
+                Group(
+                    user_id=account.user_id,
+                    account_id=account.id,
+                    messenger_type=messenger_type,
+                    group_external_id="g-1",
+                    name="Дубль",
+                )
+            )
+            return None
+        return await real_resync(session, account, fetched, messenger_type=messenger_type)
+
+    with patch("app.pages.accounts.TelegramUserMessenger") as MockMessenger, \
+         patch("app.pages.accounts.apply_group_resync", _resync):
+        MockMessenger.return_value.get_groups = AsyncMock(
+            return_value=[{"id": "g-1", "name": "Первая"}]
+        )
+        first = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+
+        assert first.status_code == 302
+        _, conflict_result = await _account_result(session_factory, account_id)
+        assert conflict_result is not None
+        assert (
+            conflict_result["error"]
+            == "Синхронизация уже выполнялась — откройте экран заново"
+        ), "ветка конфликта уникальности не пройдена — тест проверяет не то, что заявлено"
+
+        second = await client.post(
+            f"/accounts/{account_id}/sync-groups", follow_redirects=False
+        )
+
+    assert second.status_code == 302
+    assert MockMessenger.call_count == 2, "заявка не освобождена после конфликта"
+
+    _, result = await _account_result(session_factory, account_id)
+    assert result["error"] is None
+    assert result["found"] == 1
+
+
