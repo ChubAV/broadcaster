@@ -1,19 +1,15 @@
 ---
 phase: 03-gruppy-akkaunta
-reviewed: 2026-08-12T00:00:00Z
+reviewed: 2026-08-13T00:00:00Z
 depth: standard
-files_reviewed: 58
+files_reviewed: 50
 files_reviewed_list:
   - alembic/versions/0014_sync_result_and_group_missing.py
-  - alembic/versions/0015_groups_unique_account_external.py
   - app/application/accounts/dto.py
   - app/application/accounts/group_resync.py
   - app/application/scheduling/use_cases.py
+  - app/domain/repositories.py
   - app/main.py
-  - app/messengers/base.py
-  - app/messengers/max.py
-  - app/messengers/telegram_user.py
-  - app/messengers/whatsapp.py
   - app/models/group.py
   - app/models/messenger_account.py
   - app/pages/__init__.py
@@ -39,12 +35,8 @@ files_reviewed_list:
   - tests/test_application/test_collect_due_inactive_group.py
   - tests/test_application/test_group_resync.py
   - tests/test_e2e.py
-  - tests/test_messengers/test_max.py
-  - tests/test_messengers/test_telegram_user.py
-  - tests/test_messengers/test_whatsapp.py
   - tests/test_migrations/test_0013_ad_status.py
   - tests/test_migrations/test_0014_sync_result_columns.py
-  - tests/test_migrations/test_0015_groups_unique_account_external.py
   - tests/test_models/test_sync_result_columns.py
   - tests/test_pages/test_account_groups.py
   - tests/test_pages/test_editor_schedules.py
@@ -62,494 +54,705 @@ files_reviewed_list:
   - tests/test_templates/test_components.py
   - tests/test_worker/test_tasks.py
 findings:
-  critical: 1
-  warning: 5
-  info: 9
-  total: 15
+  critical: 3
+  warning: 8
+  info: 8
+  total: 19
 status: issues_found
 ---
 
-# Phase 03: Code Review Report (re-review after 03-REVIEW-FIX)
+# Phase 03: Code Review Report
 
-**Reviewed:** 2026-08-12
+**Reviewed:** 2026-08-13
 **Depth:** standard
-**Files Reviewed:** 58
+**Files Reviewed:** 50
 **Status:** issues_found
 
 ## Summary
 
-Повторный проход по тем же файлам ПОСЛЕ применённых исправлений CR-01, CR-02,
-WR-01…WR-05 и добавления ревизии 0015. Все шесть прежних находок проверены по
-текущему содержимому файлов и подтверждены как закрытые — они здесь НЕ
-повторяются:
+The phase's central refactor — collapsing three copies of group re-inventory into
+`app/application/accounts/group_resync.py` and pointing the page handler plus both
+Celery tasks at it — is sound in shape and unusually well argued in-comment. The
+in-process sync claim (`_SYNC_IN_FLIGHT`) added by 03-09 is correctly paired: the
+claim sits after the ownership check, and the `finally` covers all four handler
+exits including the `IntegrityError` branch where the session is unusable. Four
+negative tests in `tests/test_routes/test_sync_groups.py` prove each exit releases
+the slot. The modal double-submit guard is inherited by all seven consumers and is
+enforced two-way by `test_modal_guard_is_inherited_by_every_consumer`.
 
-- `MessengerFetchError` действительно поднимается всеми тремя адаптерами
-  (`app/messengers/{telegram_user,whatsapp,max}.py`) и ловится
-  `app/pages/accounts.py:821`;
-- предохранитель вырожденного ответа стоит (`group_resync.py:218`);
-- тумблер группы несёт резервную кнопку отправки (`group_row.html:76`);
-- `record_sync_failure` не трогает `last_synced_at` (`group_resync.py:275`);
-- уникальность `(account_id, group_external_id)` есть и в модели, и в ревизии;
-- плашка массовой пропажи красится `warning` (`list.html:135-140`).
+The defects are on the edges the phase did not re-open:
 
-Новые находки сосредоточены вокруг ПОСЛЕДСТВИЙ этих исправлений, а не вокруг
-них самих. Главная — ревизия 0015 стала единственным местом проекта, которое
-удаляет строки `groups`, и она удаляет их, не переписывая ссылки на них в
-`schedules.group_ids`; собственный маршрут удаления группы этой же фазы такие
-ссылки чистит обязательно, и его докстринг прямо называет цену пропуска
-(«тихо неполная отправка»). Ниже — она и ещё пять предупреждений: недосмотренный
-путь IntegrityError, произвольный текст исключения в пользовательской плашке,
-второе (расходящееся) определение полноты расписания в карточке редактора,
-обрезка ключа маршрутизации и создание задачи отправки для несуществующей
-группы.
+1. **The T-03-17 mitigation (no internal detail in user-visible summaries) is
+   provably incomplete.** The broad `except` was hardened to a fixed string; the
+   narrow `MessengerFetchError` branch was left writing the exception verbatim on
+   the premise that narrow-branch texts are "ours and controlled". They are not —
+   one of the two constructions in the adapters embeds a raw third-party exception.
+2. **`accounts_retry_sync` — the *other* route that starts a sync — received none
+   of the hardening.** No re-entrancy guard, no error handling, unbounded Celery
+   task spawn from a single authenticated form POST.
+3. **The Telegram QR auth session is not bound to a user.** Four endpoints accept
+   a `session_id` from the client with only an is-logged-in check, and one of them
+   persists the resulting Telegram session string as the *caller's* account.
 
-## Narrative Findings (AI reviewer)
+Two whole-file rewrites (`app/pages/groups.py` shim, `app/domain/repositories.py`
+Protocol removal) are clean: the deleted `GroupRepository` Protocol and
+`app/repositories/group.py` have no remaining references anywhere in `app/`,
+`tests/` or `scripts/` (`app/pages/admin.py` imports `GroupInfoRepository`, a
+different class). Migrations 0014/0015 are correct on both dialects, including the
+`CASE`-instead-of-`MIN(boolean)` and `false`-instead-of-`0` details.
 
 ## Critical Issues
 
-### CR-01: Ревизия 0015 удаляет строки `groups`, но не переписывает ссылки на них в `schedules.group_ids`
+### CR-01: Narrow sync-failure branch writes an uncontrolled third-party exception string to the user-visible summary (T-03-17 hole)
 
-**File:** `alembic/versions/0015_groups_unique_account_external.py:99-115` (обоснование — строки 18-21)
-**Severity:** BLOCKER
-
+**File:** `app/pages/accounts.py:900-912`
 **Issue:**
-`_DROP_DUPLICATES` снимает все строки, кроме `MIN(id)` в каждой паре
-`(account_id, group_external_id)`. Докстринг оправдывает выбор выжившей строки
-так: «именно на неё ссылаются расписания, созданные ДО появления дубля
-(`schedules.group_ids` хранится JSON-ом, и переписать эти ссылки ревизия не
-может)». Оправдание закрывает только половину случаев. Расписание, созданное
-или отредактированное ПОСЛЕ появления дубля, ссылается ровно на тот
-идентификатор, который пользователь увидел и выбрал в списке, — а в списке видны
-ОБЕ строки (это и есть описанный в том же докстринге дефект: «обе видны на
-экране, обе выбираемы в расписаниях»). Значит, выбранной вполне могла оказаться
-строка с бОльшим id, и ревизия её удаляет, оставляя в JSON висячий
-идентификатор.
-
-Дальше висячая ссылка ведёт себя молча и по-разному:
-
-- `app/application/scheduling/use_cases.py:124` — `session.get(Group, group_id)`
-  возвращает `None`, ветка пропуска на строке 150 не срабатывает (`if group and
-  not group.is_active`), и задача ВСЁ РАВНО создаётся (строка 158);
-- для `wa`/`max` блок наполнения полей закрыт условием `if group:` (строка 167),
-  поэтому в Redis уезжает payload с `"group_external_id": null` и
-  `"group_name": null` (`app/worker/tasks.py:97-110`, `136-149`);
-- для `tg_user` `send_message_once` пишет в журнал `status="fail"`,
-  `error_message="Missing ad, group, or account"`
-  (`use_cases.py:212-229`) — то есть пользователь видит отказ отправки без
-  единого намёка на его причину.
-
-Итог: после однократного выката рассылка в выбранный пользователем чат
-прекращается навсегда, а объяснение отсутствует. Ровно этот класс дефекта
-маршрут удаления группы ЭТОЙ ЖЕ фазы считает недопустимым и потому чистит
-расписания обязательно:
-`app/pages/account_groups.py:343-347` — «оставленный в `Schedule.group_ids`
-идентификатор удалённой строки не роняет отправку, он делает её тихо неполной»,
-`:370` — `await ScheduleRepository(db).remove_group_ids(user.id, {group.id})`.
-Ревизия обязана держать тот же инвариант; «ревизия не может» неверно —
-переписать JSON можно и на SQLite, и на PostgreSQL, и без импорта из
-`app.models`.
-
-**Fix:**
-Добавить шаг ПЕРЕД `_DROP_DUPLICATES`, который заменяет удаляемые идентификаторы
-на выживший. Портируемый вариант — на стороне Python, через тот же
-`op.get_bind()`:
+The broad `except Exception` immediately below was hardened to write
+`UNEXPECTED_FAILURE_MESSAGE`, with a comment stating "Тексты УЗКИХ веток
+(`MessengerFetchError`, состояние моста, таймаут) остаются своими — они
+формируются нами и подконтрольны"
+(`app/application/accounts/group_resync.py:90-92`). That premise is false for one
+of the two `MessengerFetchError` constructions:
 
 ```python
-import json
-
-_DUP_MAP = sa.text(
-    """
-    SELECT d.id AS dead, s.keep AS keep
-    FROM groups AS d
-    JOIN (
-        SELECT account_id, group_external_id, MIN(id) AS keep
-        FROM groups
-        GROUP BY account_id, group_external_id
-        HAVING COUNT(*) > 1
-    ) AS s
-      ON s.account_id = d.account_id
-     AND s.group_external_id = d.group_external_id
-    WHERE d.id <> s.keep
-    """
-)
-
-
-def _remap_schedule_group_ids(connection) -> None:
-    """Ссылки на удаляемые дубли переводятся на выжившую строку.
-
-    `schedules.group_ids` — JSON-строка, агрегата по ней нет ни в одном из двух
-    диалектов, поэтому перевод идёт построчно. Порядок сохраняется, дубликаты
-    после перевода схлопываются: расписание не должно получить одну группу
-    дважды и отправить в неё два сообщения.
-    """
-    mapping = {row.dead: row.keep for row in connection.execute(_DUP_MAP)}
-    if not mapping:
-        return
-    rows = connection.execute(
-        sa.text("SELECT id, group_ids FROM schedules WHERE group_ids IS NOT NULL")
-    ).fetchall()
-    for row in rows:
-        raw = row.group_ids
-        try:
-            ids = json.loads(raw) if isinstance(raw, str) else raw
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(ids, list):
-            continue
-        moved, seen = [], set()
-        for gid in ids:
-            new = mapping.get(gid, gid)
-            if new not in seen:
-                seen.add(new)
-                moved.append(new)
-        if moved != ids:
-            connection.execute(
-                sa.text("UPDATE schedules SET group_ids = :v WHERE id = :i"),
-                {"v": json.dumps(moved), "i": row.id},
-            )
-
-
-def upgrade():
-    connection = op.get_bind()
-    connection.execute(_MERGE_IS_ACTIVE)
-    connection.execute(_MERGE_MISSING_SINCE)
-    _remap_schedule_group_ids(connection)   # <-- до удаления строк
-    connection.execute(_DROP_DUPLICATES)
-    ...
+# app/messengers/whatsapp.py:128-130  (identical at app/messengers/max.py:118-120)
+except Exception as e:
+    self.log.error("get_groups_error", error=str(e), exc_info=True)
+    raise MessengerFetchError(f"{type(e).__name__}: {e}") from e
 ```
 
-Парный тест обязан быть в `tests/test_migrations/test_0015_*.py`: расписание,
-ссылающееся на дубль с бОльшим id, после апгрейда ссылается на выжившего и не
-содержит его дважды.
-
-## Warnings
-
-### WR-01: Задача отправки создаётся для группы, строки которой больше нет
-
-**File:** `app/application/scheduling/use_cases.py:123-180`
-**Severity:** WARNING
-
-**Issue:**
-```python
-group = await session.get(Group, group_id)
-if group and not group.is_active:
-    ...
-    continue
-task = DispatchTask(type=account.type, ..., group_id=group_id, ...)
-if account.type in ("wa", "max"):
-    if group:
-        ...  # заполнение group_external_id / group_name
-tasks_to_dispatch.append(task)
-```
-`group is None` не отсеивается нигде. Для `wa`/`max` в очередь Redis попадает
-задача с `group_external_id=None`; воркер получает адресата `null`. Для
-`tg_user` задача доезжает до `send_message_once` и превращается в запись журнала
-«Missing ad, group, or account» — то есть в отказ без причины. Ветка `if group:`
-на строке 167 показывает, что автор знал о возможности `None`, но выбрал
-наполнять поля условно вместо того, чтобы задачу не создавать.
-
-Это ОТДЕЛЬНЫЙ дефект от CR-01: он делает любую висячую ссылку тихой, откуда бы
-она ни взялась.
-
-**Fix:**
-```python
-group = await session.get(Group, group_id)
-# Строки нет — задачи нет. Отправлять в None нельзя, а «попытка», которой не
-# было, не должна занимать очередь и журнал.
-if group is None:
-    logger.warning("group_skipped_missing", group_id=group_id, schedule_id=schedule.id)
-    continue
-if not group.is_active:
-    logger.info("group_skipped_inactive", group_id=group_id, schedule_id=schedule.id)
-    continue
-```
-После этого `if group:` внутри ветки `wa`/`max` становится избыточным и должен
-быть снят — иначе останется два определения «группа есть».
-
-### WR-02: Текст произвольного исключения уезжает в пользовательскую плашку
-
-**File:** `app/pages/accounts.py:850`, `app/worker/tasks.py:358`, `app/worker/tasks.py:461`; отображается в `app/templates/account_groups/list.html:116`
-**Severity:** WARNING
-
-**Issue:**
-Широкие обработчики пишут на аккаунт `str(e) or e.__class__.__name__`, и это
-значение шаблон печатает пользователю дословно:
-`alert('Синхронизация не удалась: ' ~ sync_result.get('error') ~ …)`.
-Комментарий на `accounts.py:830` заявляет, что «пишется сообщение исключения, а
-не строка подключения (T-03-17)», но это верно только для узкой ветки
-`MessengerFetchError`. Широкая ветка ловит ВСЁ, включая исключения слоя данных:
-после добавления `uq_groups_account_external` реальный кандидат — `IntegrityError`,
-чей `str()` содержит полный SQL и значения параметров
-(`… UNIQUE constraint failed: groups.account_id, groups.group_external_id
-[SQL: INSERT INTO groups (user_id, account_id, …)] [parameters: (…)]`).
-В `tasks.py` то же значение пишется в фоновых путях, где источником может
-оказаться и `RuntimeError` менеджера контейнеров с внутренним адресом.
-
-Раскрытие ограничено владельцем аккаунта, но это всё равно утечка деталей схемы
-и внутренних адресов в UI, и она прямо противоречит объявленному правилу
-T-03-17.
-
-**Fix:** сообщение для пользователя должно быть СВОИМ, а исходный текст — только
-в лог (он там уже есть, `exc_info=True`):
+`e` here is whatever `httpx` raises against `self._url("groups")` — the internal
+per-account worker endpoint resolved from Redis. `httpx.UnsupportedProtocol`,
+`httpx.InvalidURL`, `httpx.ProxyError` and `httpx.RemoteProtocolError` all embed
+the request URL in `str(e)`. The handler then does:
 
 ```python
-# app/pages/accounts.py и оба фоновых пути
-UNEXPECTED_SYNC_FAILURE = (
-    "Синхронизация не удалась из-за внутренней ошибки — повторите попытку"
-)
-...
-await record_sync_failure(db, account, UNEXPECTED_SYNC_FAILURE)
+await record_sync_failure(db, account, str(e) or e.__class__.__name__)
 ```
-Текст `MessengerFetchError` (он формируется адаптером и подконтролен нам) можно
-оставить как есть — узкая ветка выше по коду.
 
-### WR-03: Карточка редактора запрещает ПОСТАВИТЬ НА ПАУЗУ активное неполное расписание
+and `app/templates/account_groups/list.html:116-117` renders it verbatim:
 
-**File:** `app/templates/ads/includes/sched_card.html:105-108`
-**Severity:** WARNING
-
-**Issue:**
 ```jinja
-{{ toggle(name='is_active', checked=s.is_active, id='sched-toggle-' ~ s.id,
-          disabled=(not complete),
-          title=('Включить нельзя: выберите аккаунт, хотя бы одну группу, день и время.'
-                 if not complete else …)) }}
+{{- alert('Синхронизация не удалась: ' ~ sync_result.get('error') ~ ...) -}}
 ```
-Условие недоступности — `not complete`. Два других носителя того же правила
-считают иначе:
 
-- `app/templates/schedules/includes/schedule_row.html:48`:
-  `resume_blocked = not s.is_active and not complete`;
-- обработчик `app/pages/schedules.py:723-729` с явным комментарием «Пауза
-  активного не блокируется: право поставить на паузу не зависит от
-  заполненности».
+`tests/test_routes/test_sync_groups.py:695` (`assert "502" in result["error"]`)
+locks in the pass-through, so the hole is currently *asserted* rather than caught.
+Autoescaping prevents XSS; it does not prevent disclosure of internal container
+addresses and library internals.
 
-То есть карточка редактора отключает орган управления в состоянии, которое и
-сервер, и второй шаблон считают полностью законным, — и подпись при этом врёт
-(«Включить нельзя», когда пользователь хочет ВЫКЛЮЧИТЬ). Флажок `disabled`
-браузером не отправляется и событие `change` не порождает, поэтому пути
-поставить расписание на паузу из редактора нет вовсе.
+**Fix:** Give the narrow branch a controlled message and keep the raw text in the
+log only, matching the discipline already applied to the broad branch:
 
-Состояние «активное И неполное» — не теоретическое, и создаёт его именно эта
-фаза: `POST /accounts/{id}/groups/{gid}/delete` вычищает идентификатор из
-`Schedule.group_ids` (`app/pages/account_groups.py:370`), не трогая `is_active`.
-Удалили единственную группу активного расписания — и оно осталось включённым,
-молчащим и не выключаемым из того экрана, куда его же карточка и ведёт.
-
-D-08 требует ОДНОГО определения полноты; здесь их два, и разошлись они ровно так,
-как предупреждает докстринг `app/services/schedule_rules.py`.
-
-**Fix:**
-```jinja
-{%- set resume_blocked = not s.is_active and not complete -%}
-...
-{{ toggle(name='is_active', checked=s.is_active, id='sched-toggle-' ~ s.id,
-          disabled=resume_blocked,
-          title=('Включить нельзя: выберите аккаунт, хотя бы одну группу, день и время.'
-                 if resume_blocked else ('Приостановить' if s.is_active else 'Возобновить'))) }}
-```
-Тест-спецификация: активное расписание с пустым `group_ids` рендерит тумблер БЕЗ
-`disabled` (парный к существующим в `tests/test_pages/test_editor_schedules.py`).
-
-### WR-04: `IntegrityError` на новом ограничении не обработан — вместо плашки JSON-пятисотка
-
-**File:** `app/pages/accounts.py:835-858`
-**Severity:** WARNING
-
-**Issue:**
-Комментарий на строках 772-788 объявляет размен осознанным: «гонка заканчивается
-IntegrityError на коммите одного из двух запросов». Но `await db.commit()` на
-строке 858 стоит ВНЕ какого-либо `except`, поэтому исключение уходит в
-`generic_error_handler` (`app/main.py:108-119`) и пользователь, отправивший
-обычную HTML-форму, получает `{"detail": "Internal server error"}` — сырой JSON
-вместо страницы. Хуже другое: на аккаунт при этом НИЧЕГО не записывается, то
-есть у отказа не остаётся ни следа в UI. Это прямо противоречит правилу,
-объявленному тем же обработчиком двадцатью строками выше (835-841): «отказ
-обязан лечь сводкой на аккаунт, а не пятисоткой… сузить блок означало бы вернуть
-на экран стек-трейс там, где раньше была красная плашка».
-
-Второй, более частый триггер того же исключения — не гонка, а обрезка ключа
-(см. WR-05).
-
-**Fix:**
 ```python
-from sqlalchemy.exc import IntegrityError
-
-...
-await apply_group_resync(db, account, fetched_groups, messenger_type=messenger_type)
-try:
+except MessengerFetchError as e:
+    import structlog
+    structlog.get_logger().error(
+        "sync_groups_fetch_failed",
+        account_id=account_id, account_type=account.type,
+        error=str(e), exc_info=True,
+    )
+    await record_sync_failure(db, account, FETCH_FAILURE_MESSAGE)
     await db.commit()
-except IntegrityError:
-    # Ограничение уровня схемы сработало — состав групп уже кто-то записал
-    # (второе нажатие «Синхронизировать всё»). Откат обязателен: сессия после
-    # IntegrityError непригодна ни для чего, кроме rollback.
-    await db.rollback()
-    structlog.get_logger().warning("sync_groups_conflict", account_id=account_id)
-    account = await db.get(MessengerAccount, account_id)
-    if account:
-        await record_sync_failure(
-            db, account, "Синхронизация уже выполнялась — откройте экран заново"
-        )
-        await db.commit()
-return RedirectResponse(url=account_groups_url, status_code=302)
+    return RedirectResponse(url=account_groups_url, status_code=302)
 ```
 
-### WR-05: Внешний идентификатор группы молча обрезается до 255 символов
-
-**File:** `app/application/accounts/group_resync.py:166` (обоснование — 79-90)
-**Severity:** WARNING
-
-**Issue:**
-```python
-external_id = str(external_id)[:_EXTERNAL_ID_MAX]
-```
-Для `name` (строка 174) обрезка — верное решение: «обрезанное имя чата читается
-хуже полного», и цена ошибки — косметическая. Для `group_external_id` цена
-другая: это КЛЮЧ МАРШРУТИЗАЦИИ, он же уходит в мессенджер при отправке
-(`app/application/scheduling/use_cases.py:307`:
-`group_id=group.group_external_id`). Обрезанный ключ — не «хуже читается», он
-не адресует ничего: строка создаётся, показывается пользователю, выбирается им в
-расписании, и каждая отправка по ней тихо проваливается.
-
-Побочно: два разных длинных идентификатора с одинаковым 255-символьным префиксом
-после обрезки становятся одним и теперь нарушают
-`uq_groups_account_external` — то есть роняют весь синк аккаунта именно тем
-`IntegrityError`, который не обработан (WR-04).
-
-Модуль уже умеет правильную реакцию на негодный элемент — пропуск (строки
-161-165, 167-170): «мусорный ЭЛЕМЕНТ не роняет весь синк… стоит пропуска одной
-группы». Идентификатор длиннее колонки — ровно такой элемент.
-
-**Fix:**
-```python
-raw_external_id = str(external_id)
-if len(raw_external_id) > _EXTERNAL_ID_MAX:
-    # Ключ маршрутизации обрезать нельзя: обрезанный адресует не тот чат или не
-    # адресует ничего. Пропуск ОДНОЙ группы честнее строки-призрака, по которой
-    # отправка будет молча проваливаться. Границу не проходит ни один реальный
-    # идентификатор трёх поддержанных мессенджеров.
-    continue
-external_id = raw_external_id
-```
-(обрезку `name` оставить как есть — там аргумент докстринга верен).
-
-## Info
-
-### IN-01: Мёртвые импорты в `app/worker/tasks.py`
-
-**File:** `app/worker/tasks.py:7, 9, 16, 21, 22`
-**Severity:** Info
-**Issue:** после переноса логики в `app/application/scheduling/use_cases.py` не
-используются `select`, `joinedload`, `Schedule`, `get_image_url`,
-`compute_next_run_at`. Находка переносится из прошлого прохода (IN-01) — в
-`03-REVIEW-FIX.md` она попала в «Skipped», в коде осталась.
-**Fix:** удалить пять строк импорта.
-
-### IN-02: `record_sync_failure` объявлена `async`, но ничего не ожидает
-
-**File:** `app/application/accounts/group_resync.py:253-277`
-**Severity:** Info
-**Issue:** тело — одно присваивание; `async` вынуждает всех вызывающих ставить
-`await` и создаёт впечатление обращения к БД, которого нет. Переносится из
-прошлого прохода (IN-03).
-**Fix:** оставить `async` ради симметрии с `apply_group_resync` можно, но тогда
-это должно быть сказано в докстринге явно; иначе — сделать обычной функцией и
-снять `await` в трёх точках вызова.
-
-### IN-03: Заглушка `/groups` объявляет параметр, которым не пользуется
-
-**File:** `app/pages/groups.py:35`
-**Severity:** Info
-**Issue:** `async def groups_retired(deep_link: str = "")` — значение не читается
-(и не должно: докстринг требует безусловного перенаправления). Параметр нужен
-только чтобы FastAPI принял `{deep_link:path}`. Переносится из прошлого прохода
-(IN-04).
-**Fix:** оставить, но назвать причину в сигнатуре комментарием — иначе первый же
-линтер «неиспользуемый аргумент» предложит его снять и сломает маршрут.
-
-### IN-04: «Все группы удалены» показывается аккаунту, у которого групп никогда не было
-
-**File:** `app/templates/account_groups/list.html:208-210`
-**Severity:** Info
-**Issue:** ветки пустого состояния различаются по `account.last_synced_at`.
-Успешный синк, законно вернувший ноль групп (аккаунт без единого чата), ставит
-`last_synced_at` (`group_resync.py:248`) — и пользователь читает утверждение
-«Все группы удалены», которого не было. Докстринг `record_sync_failure`
-(строки 268-271) называет именно этот класс вранья причиной не трогать колонку
-при отказе — но случай «синк удался, групп ноль» тем исправлением не покрыт.
-**Fix:** различать по сводке, а не только по времени: `sync_result.found == 0 and
-sync_result.new == 0` при `missing == 0` означает «групп нет», а не «все
-удалены».
-
-### IN-05: `SyncStatusView.group_count` считается запросом и никогда не используется
-
-**File:** `app/application/accounts/use_cases.py:54-62`, потребитель — `app/templates/accounts/partials/sync_status_card.html:52`
-**Severity:** Info
-**Issue:** шаблон читает `stats.get('groups_count', group_count or 0)`, а
-`_get_account_stats` (`app/pages/accounts.py:104-111`) кладёт ключ
-`groups_count` для КАЖДОГО запрошенного аккаунта — значит второй аргумент
-`get` недостижим. При этом `get_sync_status_view` ради него выполняет
-`SELECT Group.id …` и считает длину в Python на каждом ответе опроса (раз в
-5 секунд на вкладку).
-**Fix:** убрать `group_count` из `SyncStatusView` и второй аргумент из
-`stats.get(...)`, либо — если поле нужно — перестать дублировать подсчёт в
-`_get_account_stats`.
-
-### IN-06: `_sync_wa_groups_async` и `_sync_max_groups_async` — посимвольные копии
-
-**File:** `app/worker/tasks.py:272-366` и `379-469`
-**Severity:** Info
-**Issue:** различаются классом адаптера, литералом `messenger_type` и текстами
-логов; остальные ~90 строк (опрос, три ветки состояния, таймаут, обработчик
-исключения) дублированы. Это ровно тот дефект, ради устранения которого заведён
-`group_resync` («однажды поправят две из трёх», докстринг модуля) — просто на
-уровень выше.
-**Fix:** один `_sync_groups_async(account_id, messenger_type, messenger_factory)`
-и две трёхстрочные обёртки-таски.
-
-### IN-07: У слота `caller` в `components/modal.html` нет ни одного продуктового потребителя
-
-**File:** `app/templates/components/modal.html:74`
-**Severity:** Info
-**Issue:** единственный блочный вызов в продукте —
-`ads/includes/sched_card.html:238-247` (скрытое `return_to`), заведён же слот был
-под массовое удаление групп, снятое планом 03-08. Докстринг это признаёт.
-Переносится из прошлого прохода (IN-05) с уточнением: потребитель ОДИН, а не
-ноль, поэтому удалять слот нельзя.
-**Fix:** поправить докстринг (строки 33-36) — утверждение «ПОТРЕБИТЕЛЯ у слота
-сегодня нет ни одного» неверно и уведёт следующего читателя.
-
-### IN-08: `ADD CONSTRAINT` ревизии 0015 берёт исключительную блокировку — вразрез с дисциплиной 0014
-
-**File:** `alembic/versions/0015_groups_unique_account_external.py:117-120`
-**Severity:** Info
-**Issue:** ревизия 0014 отдельно объясняет, почему в ней нет ни одного
-переписывания строк («не держит долгую блокировку»). 0015 в той же истории
-делает `UPDATE`, `DELETE` и `ALTER TABLE … ADD CONSTRAINT UNIQUE`: последний на
-PostgreSQL строит уникальный индекс под `ACCESS EXCLUSIVE`. На сегодняшнем
-размере таблицы это неощутимо, но заявленная дисциплина нарушена молча.
-**Fix:** либо назвать размен в докстринге, либо (для больших таблиц)
-`CREATE UNIQUE INDEX CONCURRENTLY` + `ADD CONSTRAINT … USING INDEX` в отдельной
-ревизии без транзакции.
-
-### IN-09: Проверка владения в `apply_group_resync` шире ограничения схемы
-
-**File:** `app/application/accounts/group_resync.py:142-150`
-**Severity:** Info
-**Issue:** словарь существующих групп строится по `account_id AND user_id`, а
-`uq_groups_account_external` скоупится только по `account_id`. Строка, чей
-`user_id` разошёлся с владельцем аккаунта (миграция данных, ручная правка), в
-словарь не попадёт, будет вставлена заново и упрётся в ограничение — то есть
-защитное условие превращает безобидное расхождение в отказ всего синка. Тест
-`test_same_external_id_in_another_account_survives` этот случай не покрывает: там
-разные `account_id`.
-**Fix:** либо снять условие по `user_id` (владение уже проверено вызывающими и
-скоупом `account_id`), либо расширить ограничение до
-`(user_id, account_id, group_external_id)` — но тогда оно перестанет закрывать
-исходную гонку.
+Alternatively, sanitise at the source so `MessengerFetchError` only ever carries
+project-authored text (`f"мост вернул HTTP {response.status_code}"` already is;
+`f"{type(e).__name__}: {e}"` is not — reduce it to `type(e).__name__`).
 
 ---
 
-_Reviewed: 2026-08-12_
+### CR-02: `accounts_retry_sync` has no re-entrancy guard and no error handling — unbounded background task spawn and silent loss of due sends
+
+**File:** `app/pages/accounts.py:702-741`
+**Issue:**
+This is the second of the three routes that start a group sync, and it received
+none of the hardening 03-09 applied to `accounts_sync_groups`. The handler:
+
+```python
+account = result.scalar_one_or_none()
+if not account:
+    return RedirectResponse(url="/accounts", status_code=302)
+
+session_id = str(account.id)
+messenger = MaxMessenger(...) if account.type == "max" else WhatsAppMessenger(...)
+await messenger.retry_sync()          # no try/except
+
+account.status = "syncing"
+await db.commit()
+
+celery.send_task(task_name, args=[account.id])   # no dedup, no guard
+```
+
+Three provable consequences:
+
+1. **No `status == "syncing"` check and no slot claim.** The form at
+   `accounts/list.html:96-98`, `accounts/partial_cards.html:68-70` and
+   `accounts/partials/sync_status_card.html:88-90` is a plain POST with *no*
+   modal and *no* double-submit guard (`test_components.py:740-753` deliberately
+   inventories only the *delete* forms). N clicks dispatch N
+   `sync_wa_groups` / `sync_max_groups` tasks for the same account, each of which
+   polls the bridge for up to `POLL_INTERVAL * MAX_POLLS = 600 s`
+   (`app/worker/tasks.py:282-283`). There is no rate limiting on the route. An
+   authenticated user can saturate the `celery-worker-telegram` replicas with a
+   held-down Enter key.
+2. **`status = "syncing"` for up to 10 minutes silently drops every due send for
+   that account.** `app/application/scheduling/use_cases.py:95-107` matches
+   `account.status != "active"`, recomputes `next_run_at` forward and `continue`s
+   — no `SendLog` row, no trace. The 03-09 comment block at
+   `app/pages/accounts.py:816-832` identifies exactly this as "регрессия хуже
+   закрываемого дефекта" and refuses to introduce it on the page path, while the
+   route 60 lines above does it on every click.
+3. **`await messenger.retry_sync()` is unprotected.** Any bridge failure escapes
+   to `generic_error_handler` (`app/main.py:108-119`) and returns
+   `{"detail": "Internal server error"}` as raw JSON to a browser that submitted
+   an HTML form — precisely the failure mode the `IntegrityError` branch was added
+   to eliminate (`app/pages/accounts.py:947-959`).
+
+**Fix:**
+
+```python
+if account.status == "syncing":
+    return RedirectResponse(url=f"/accounts/{account_id}/groups", status_code=302)
+
+if not _claim_sync_slot(account_id):
+    return RedirectResponse(url=f"/accounts/{account_id}/groups", status_code=302)
+try:
+    try:
+        await messenger.retry_sync()
+    except Exception as e:
+        structlog.get_logger().error(
+            "retry_sync_failed", account_id=account_id, error=str(e), exc_info=True
+        )
+        await record_sync_failure(db, account, UNEXPECTED_FAILURE_MESSAGE)
+        account.status = "sync_failed"
+        await db.commit()
+        return RedirectResponse(url=f"/accounts/{account_id}/groups", status_code=302)
+
+    account.status = "syncing"
+    await db.commit()
+    celery.send_task(task_name, args=[account.id])
+finally:
+    _release_sync_slot(account_id)
+```
+
+Note the slot must be released here because the actual work runs in Celery, not in
+the request — the claim only needs to cover the dispatch window. The
+`status == "syncing"` check is what covers the long tail.
+
+---
+
+### CR-03: Telegram QR auth session is never bound to the authenticated user — any logged-in caller can drive and harvest another user's session
+
+**File:** `app/pages/accounts.py:242-347`
+**Issue:**
+Four endpoints take `session_id` straight from the request and pass it to the
+process-global `_qr_sessions` registry with no ownership check whatsoever:
+
+| Line | Route | `session_id` source | Ownership check |
+|------|-------|--------------------|-----------------|
+| 242-253 | `GET  /accounts/connect/tg_user/qr-status` | `Query(...)` | none |
+| 256-275 | `POST /accounts/connect/tg_user/refresh-qr` | JSON body | none |
+| 278-315 | `POST /accounts/connect/tg_user/verify-2fa` | JSON body | none |
+| 318-347 | `POST /accounts/connect/tg_user/complete` | JSON body | none |
+
+Every handler calls `get_user_from_cookie` and returns on `None` — that is an
+*authentication* check, not an *authorization* check. The phase's own rule, stated
+twice in `app/pages/account_groups.py:8-12` ("ВЛАДЕНИЕ ПРОВЕРЯЕТСЯ НА КАЖДОМ
+ВХОДЕ … `account_id` приходит из URL, то есть от недоверенного клиента"), is not
+applied here even though `session_id` arrives by exactly the same route.
+
+The worst of the four is `complete` (lines 318-347): it fetches the Telegram
+session string belonging to whoever started that QR flow and persists it as the
+**caller's** `MessengerAccount`:
+
+```python
+session_string = await complete_auth(session_id)
+...
+account = MessengerAccount(
+    user_id=user.id,           # <-- caller, not the session's originator
+    type="tg_user",
+    credentials=session_string,
+    status="active",
+)
+```
+
+`verify-2fa` (lines 278-315) is additionally an unauthenticated-in-effect password
+oracle against another user's Telegram 2FA: it accepts arbitrary `password` values
+for any `session_id`, has no attempt counter, and returns the failure reason
+verbatim (`return {"error": str(e)}`).
+
+The only thing standing between an attacker and another user's Telegram session is
+the secrecy of `uuid.uuid4().hex[:16]` (`app/messengers/telegram_user.py:57`) —
+64 bits, which is not brute-forceable, but it is the *sole* control and it is
+never rotated, never scoped, and is handed back to the client in the
+`start-qr` JSON response where it can leak via logs, referrers or a shared
+browser profile.
+
+**Fix:** Bind the session to its originator at creation and verify on every use:
+
+```python
+# start-qr
+session_id, login_url = await start_qr_auth(...)
+_qr_session_owner[session_id] = user.id
+
+# every other handler, immediately after the auth check
+if _qr_session_owner.get(session_id) != user.id:
+    return {"error": "Сессия не найдена"}   # same text as "missing" — no oracle
+```
+
+Store the owner alongside the session in `telegram_user._qr_sessions` (add a
+`user_id` field to `QRAuthState`) so the binding is cleaned up by the existing
+`_cleanup_expired_sessions`. Independently, add an attempt counter to `submit_2fa`
+and collapse its error text to a single non-distinguishing string.
+
+## Warnings
+
+### WR-01: `_SYNC_IN_FLIGHT` is process-global mutable state with no reset hook — order-dependent test failures and silent degradation
+
+**File:** `app/pages/accounts.py:747-771`
+**Issue:** Two distinct problems with the same root:
+
+*Tests.* `tests/conftest.py` and the `sync_setup` fixture in
+`tests/test_routes/test_sync_groups.py:17-52` build a fresh in-memory database per
+test, so `MessengerAccount.id` restarts at 1 every time. `_SYNC_IN_FLIGHT` does
+not: it is module state on `app.pages.accounts`, shared by every app instance in
+the pytest process. No fixture clears it. A single leaked entry — from a future
+`return` accidentally placed between `_claim_sync_slot` and the `try`, or from a
+test that patches the handler — silently converts every later test's
+`POST /accounts/1/sync-groups` into an early 302, and the failure surfaces as an
+unrelated assertion in a different file. The four "slot is released" tests
+(`test_sync_groups.py:841-1002`) prove the happy paths but cannot catch cross-test
+leakage.
+
+*Runtime.* The comment at lines 840-856 correctly bounds the guard to one uvicorn
+worker and to the HTTP path only. It does not degrade *loudly*: with a second
+process the guard silently becomes per-process and the only remaining backstop is
+`uq_groups_account_external`, which stops duplicate rows but not the duplicate
+outbound `get_groups()` call against the messenger.
+
+**Fix:** Add an autouse fixture, and make the degradation observable:
+
+```python
+# tests/conftest.py
+@pytest.fixture(autouse=True)
+def _clear_sync_slots():
+    from app.pages import accounts
+    accounts._SYNC_IN_FLIGHT.clear()
+    yield
+    accounts._SYNC_IN_FLIGHT.clear()
+```
+
+```python
+# app/pages/accounts.py
+if not _claim_sync_slot(account_id):
+    structlog.get_logger().info("sync_slot_busy", account_id=account_id)
+    return RedirectResponse(url=account_groups_url, status_code=302)
+```
+
+The log line is what tells operations that the in-process guard is doing work; its
+absence in a multi-worker deployment is the signal that the guard has degenerated.
+
+---
+
+### WR-02: `await db.commit()` inside the `except` branches is itself unguarded — the branch can raise the very 500 it exists to prevent
+
+**File:** `app/pages/accounts.py:911, 936, 978`
+**Issue:** All three failure branches end with a bare `await db.commit()`:
+
+```python
+except Exception as e:
+    ...
+    await record_sync_failure(db, account, UNEXPECTED_FAILURE_MESSAGE)
+    await db.commit()                       # line 936
+    return RedirectResponse(...)
+```
+
+If the exception that landed in the broad `except` originated from the session
+itself (an autoflush error, a lost connection, a `DataError` on a value already in
+the identity map), the session is in a failed state and `commit()` raises
+`PendingRollbackError`. That escapes the handler entirely, reaches
+`generic_error_handler` (`app/main.py:108-119`) and returns
+`{"detail": "Internal server error"}` — the exact raw-JSON-to-an-HTML-form outcome
+the branch's own comment (lines 953-959) says it was written to eliminate. The
+`finally` still releases the slot, so this is a correctness hole rather than a
+lock leak, but the stated contract is unmet.
+
+**Fix:** Roll back first, then write, and swallow a failed write:
+
+```python
+except Exception as e:
+    ...log...
+    try:
+        await db.rollback()
+        account = await db.get(MessengerAccount, account_id)
+        if account:
+            await record_sync_failure(db, account, UNEXPECTED_FAILURE_MESSAGE)
+            await db.commit()
+    except Exception:
+        structlog.get_logger().error("sync_failure_not_recorded", account_id=account_id, exc_info=True)
+    return RedirectResponse(url=account_groups_url, status_code=302)
+```
+
+---
+
+### WR-03: A failed or rejected sync leaves `MessengerAccount.status` inconsistent across the three call sites
+
+**File:** `app/pages/accounts.py:910, 935, 975` and `app/worker/tasks.py:331-342`
+**Issue:** `record_sync_failure` and `account.status` are set together in the
+background paths and never together in the page path:
+
+| Call site | `record_sync_failure` | `status = "sync_failed"` |
+|-----------|----------------------|--------------------------|
+| `tasks.py:357-361` (bridge failure) | yes | yes |
+| `tasks.py:372-376` (timeout) | yes | yes |
+| `tasks.py:390-394` (unexpected) | yes | yes |
+| `accounts.py:910` (fetch error) | yes | **no** |
+| `accounts.py:935` (unexpected) | yes | **no** |
+| `accounts.py:975` (uniqueness conflict) | yes | **no** |
+
+Consequence for a `tg_user` account whose page sync just failed: `status` stays
+`active`, so `accounts/list.html:120` renders the green "Активно" badge and
+`accounts/list.html:94-102` never renders the "Повторить" form — the user has no
+retry affordance on the accounts list at all. On the groups screen the same
+account shows a green "Активно" badge (`account_groups/partials/sync_result.html:51`)
+directly above a red "Синхронизация не удалась" alert
+(`account_groups/list.html:116`).
+
+Separately, `tasks.py:331-342` sets `account.status = "active"` **before** checking
+`result.error`, so a sync the helper *refused to apply* (`MALFORMED_RESPONSE_MESSAGE`
+or `EMPTY_RESPONSE_MESSAGE`) also lands the account in `active` with a red plaque.
+The `log.warning("sync_response_rejected", ...)` two lines later confirms the code
+knows the sync did not succeed.
+
+**Fix:** In `accounts.py`, set `account.status = "sync_failed"` next to each
+`record_sync_failure`. In `tasks.py`, branch on the result:
+
+```python
+result = await apply_group_resync(session, account, groups, messenger_type=messenger_type)
+account.status = "sync_failed" if result.error else "active"
+await session.commit()
+```
+
+---
+
+### WR-04: `allow_full_wipe` has no caller — an account whose groups were genuinely all removed can never be reconciled
+
+**File:** `app/application/accounts/group_resync.py:135, 263-272`
+**Issue:** The degenerate-response guard trips whenever `existing` is non-empty and
+`seen` is empty, and `allow_full_wipe` defaults to `False` with no call site
+anywhere setting it (`app/pages/accounts.py:942`, `app/worker/tasks.py:331`, both
+omit it). The docstring acknowledges this ("ни один существующий вызывающий его не
+снимает") but the operational consequence is not stated: once a user genuinely
+leaves every chat on an account, that account enters a permanent state where
+
+- every sync returns `EMPTY_RESPONSE_MESSAGE` and a red plaque,
+- `missing_since` is never set on any row, so the "не найдена при синке" mark that
+  D-11 exists to provide never appears,
+- `last_synced_at` is never advanced, so the groups-screen header reads
+  "синхронизация ещё не выполнялась" forever, and
+- the stale rows remain `is_active` and keep receiving sends
+  (`app/application/scheduling/use_cases.py:171-177` only skips *inactive* groups)
+  until the user deletes each one by hand.
+
+That last point is the sharp edge: the guard trades "one bridge glitch marks
+everything missing" for "a real emptying keeps sending to chats the user has left".
+
+**Fix:** Distinguish "the messenger answered with an authoritative empty list" from
+"the messenger did not answer". Since `MessengerFetchError` now makes a *fetch*
+failure distinguishable (adapters no longer return `[]` on error), the page path
+can safely pass `allow_full_wipe=True` for `tg_user`, where `get_groups()` raises
+on failure and `[]` means exactly "no groups":
+
+```python
+await apply_group_resync(
+    db, account, fetched_groups,
+    messenger_type=messenger_type,
+    allow_full_wipe=(messenger_type == "tg_user"),
+)
+```
+
+The WA/MAX background path must keep the guard, because there the composition comes
+from the `groups` field of `get_sync_status()` where `null`/absent is a valid
+answer — which is the case the docstring at lines 253-258 actually describes.
+Failing that, add an escape hatch (a "подтвердить, что групп не осталось" action)
+so the state is reachable at all.
+
+---
+
+### WR-05: Raw exception text is rendered to the user on all three connect screens — the same T-03-17 class the sync path just hardened
+
+**File:** `app/pages/accounts.py:233-234, 410-411, 594-595`
+**Issue:** Three sites interpolate an arbitrary exception into user-facing output:
+
+```python
+except Exception as e:
+    return {"error": f"Ошибка запуска QR авторизации: {e}"}          # :234, JSON to browser
+
+except Exception as e:
+    error = f"Ошибка подключения к WA Bridge: {e}"                    # :411, into connect_wa.html
+
+except Exception as e:
+    error = f"Ошибка подключения к MAX: {e}"                          # :595, into connect_max.html
+```
+
+Lines 411 and 595 sit directly around `messenger.start_session()` /
+`messenger.get_qr()`, whose first action is to resolve `bridge_url`; that property
+raises `RuntimeError` carrying the internal container endpoint — the exact leak
+`UNEXPECTED_FAILURE_MESSAGE` was introduced to stop
+(`app/application/accounts/group_resync.py:79-92` names it explicitly:
+"`RuntimeError` менеджера контейнеров с внутренним адресом моста"). Line 234 is a
+Telethon exception returned as JSON.
+
+Note by contrast that `accounts_connect_wa_status:476-479` and
+`accounts_connect_max_status:662-665` *do* it correctly — fixed user text, raw text
+to the log with `exc_info=True`. The three sites above are the ones that were
+missed.
+
+**Fix:** Apply the pattern already used 40 lines below in the same file:
+
+```python
+except Exception as e:
+    structlog.get_logger().error("wa_connect_start_error", error=str(e), exc_info=True)
+    error = "Не удалось подключиться к WhatsApp. Повторите попытку."
+```
+
+---
+
+### WR-06: `fetched_groups` / `messenger_type` can be unbound — the `if/elif/elif` chain has no `else`
+
+**File:** `app/pages/accounts.py:881-898`
+**Issue:**
+
+```python
+if account.type == "tg_user":
+    ...
+    fetched_groups = await messenger.get_groups()
+    messenger_type = "tg_user"
+elif account.type == "wa":
+    ...
+elif account.type == "max":
+    ...
+# no else
+```
+
+Both names are then used unconditionally at line 942. Correctness rests entirely on
+the membership test 80 lines earlier (line 800,
+`if account.type not in ("tg_user", "wa", "max")`). Adding a fourth messenger to
+that tuple without adding a branch here produces `UnboundLocalError` inside the
+`try`, which is caught by the broad `except` at line 914 — so the user gets
+"Синхронизация не удалась из-за внутренней ошибки" on a *supported* messenger, and
+the real cause is a name error buried in the log. The two conditions are 80 lines
+and one comment block apart, which is exactly the distance at which they drift.
+
+**Fix:** Close the chain so the failure is immediate and named:
+
+```python
+else:  # pragma: no cover — guarded at line 800
+    raise AssertionError(f"unsupported account type reached fetch: {account.type!r}")
+```
+
+Better still, derive both from a single mapping so the guard at line 800 and the
+dispatch here cannot disagree:
+
+```python
+_FETCHERS = {
+    "tg_user": lambda acc, s: TelegramUserMessenger(
+        session_string=acc.credentials, api_id=s.telegram_api_id, api_hash=s.telegram_api_hash
+    ),
+    "wa": lambda acc, s: WhatsAppMessenger(session_id=str(acc.id)),
+    "max": lambda acc, s: MaxMessenger(session_id=str(acc.id)),
+}
+if account.type not in _FETCHERS:
+    return RedirectResponse(url=account_groups_url, status_code=302)
+```
+
+---
+
+### WR-07: Modal double-submit guard never resets `sending` on close — the second POST it exists to stop is still reachable
+
+**File:** `app/templates/components/modal.html:90-91, 104`
+**Issue:** `sending` is cleared only in `show()`; `hide()` deliberately does not
+touch it (documented at lines 62-64). That is correct for the bfcache case the
+comment describes, but it leaves this sequence open:
+
+1. User confirms → `sending = true`, confirm button disabled, navigation starts.
+2. Before the new document commits, the user presses `Esc` (line 97,
+   `x-on:keydown.escape.window="hide()"`) or clicks the overlay (line 100).
+   `hide()` runs; `sending` stays `true` but the panel is closed.
+3. User re-opens the same panel → `show()` sets `sending = false`.
+4. User confirms again → a second POST for the same destructive action, both in
+   flight.
+
+The docstring's answer — "Защитой от повторной отправки на этом пути служит
+идемпотентность самих маршрутов удаления" — covers the *no-Alpine* path, not this
+one. For `POST /accounts/{id}/delete` the second request is harmless; for
+`POST /schedules/{id}/delete` with a `return_to` field
+(`ads/includes/sched_card.html:257`) it is a redirect to an editor for a schedule
+that no longer exists.
+
+**Fix:** Latch on navigation rather than on panel visibility, so closing and
+reopening cannot clear it:
+
+```js
+show() { this.opener = document.activeElement; this.open = true;
+         this.$nextTick(() => this.$refs.cancel.focus()); },
+```
+
+and reset `sending` from `pageshow` instead, which is the event bfcache actually
+fires:
+
+```html
+x-on:pageshow.window="sending = false"
+```
+
+That keeps the bfcache guarantee the current code is reaching for while closing the
+close-and-reopen path.
+
+---
+
+### WR-08: `app/pages/groups.py` catch-all answers GET only; bookmarked POST deep links get a JSON 405
+
+**File:** `app/pages/groups.py:33-44`
+**Issue:** The shim's docstring says "любая старая глубокая ссылка отвечает
+перенаправлением" and "Обработчиков POST в модуле нет ни одного: тумблер и
+удаление живут на маршрутах экрана аккаунта". Those two statements are in tension
+for the failure they are meant to prevent. `POST /groups/12/toggle` — a resubmitted
+form from a cached page, or a browser restoring a POST on back — now matches the
+path but not the method, so Starlette returns `405` with
+`{"detail": "Method Not Allowed"}`. The stated goal ("Ответ об отсутствии страницы
+на них был бы потерей без нужды") is not met for exactly the requests that carry
+user intent.
+
+**Fix:** Register the same handler for the methods the retired section actually
+exposed, and answer POST with `303 See Other` so the browser converts to GET:
+
+```python
+@router.api_route("/groups", methods=["GET", "POST"])
+@router.api_route("/groups/{deep_link:path}", methods=["GET", "POST"])
+async def groups_retired(request: Request, deep_link: str = "") -> RedirectResponse:
+    code = 303 if request.method == "POST" else 302
+    return RedirectResponse(url="/accounts", status_code=code)
+```
+
+## Info
+
+### IN-01: Unknown account statuses are shown to the user as raw latin identifiers
+
+**File:** `app/templates/accounts/list.html:122`, `app/templates/accounts/partial_cards.html:94`
+**Issue:** `{{ badge(account.status, 'warning') }}` prints the DB column verbatim
+for anything that is not `active`/`disconnected`. `connecting` is a real, reachable
+status (`app/pages/accounts.py:391, 574`), so a Russian-language UI shows the badge
+"connecting".
+**Fix:** Add a `STATUS_LABELS` dict next to `MESSENGER_LABELS` in all three row
+files and fall back to a generic "Неизвестно" rather than to the raw value.
+
+---
+
+### IN-02: `components/filters.html` still documents the removed `/groups` section
+
+**File:** `app/templates/components/filters.html:2-8`
+**Issue:** The header comment says "Применений три: группы (План 04) …" and the
+usage example is `{% call filters('groups-filters', action='/groups') %}`. The
+section was removed in 03-08. `tests/test_templates/test_components.py:405-408`
+explicitly warns that leftover addresses of the removed section give false
+positives to grep checks — this is one.
+**Fix:** Update the example to `action='/accounts/1/groups'` and correct the
+"Применений три" count.
+
+---
+
+### IN-03: Five function-local `import structlog` statements in one module
+
+**File:** `app/pages/accounts.py:477, 663, 901, 927, 965`
+**Issue:** `structlog` has no import cycle with this module (`app/worker/tasks.py:2`
+imports it at module level and binds `logger` once). The repeated local imports are
+noise that obscures the genuinely necessary local imports of `celery` and `asyncio`
+in the same file.
+**Fix:** `import structlog` at the top, `logger = structlog.get_logger(__name__)`
+once, and use `logger` at all five sites.
+
+---
+
+### IN-04: `record_sync_failure` is `async` with no `await` in its body
+
+**File:** `app/application/accounts/group_resync.py:298-333`
+**Issue:** The docstring defends the choice on symmetry grounds. The cost is real
+though: the signature forces all six call sites to be async contexts and hides
+that the function never touches the session it is handed, which is why nobody
+noticed it also never sets `status` (see WR-03).
+**Fix:** No change required if the symmetry argument is accepted, but drop the
+unused `session` parameter — it is the misleading part, not the `async`.
+
+---
+
+### IN-05: Group name fallback uses truthiness, so a legitimately falsy name becomes the external id
+
+**File:** `app/application/accounts/group_resync.py:218-219`
+**Issue:** `name = (str(raw_name) if raw_name else external_id)[:_NAME_MAX]`. A
+chat literally named `0` (or `""`, or a JSON `false`) is stored under its external
+id instead of its name.
+**Fix:** `name = external_id if raw_name is None else (str(raw_name) or external_id)`.
+
+---
+
+### IN-06: Hard-coded 5-second sleep with a function-local `import asyncio` in a request handler
+
+**File:** `app/pages/accounts.py:587-589`
+**Issue:**
+```python
+await messenger.start_session(phone=phone)
+import asyncio
+await asyncio.sleep(5)
+qr_data = await messenger.get_qr()
+```
+A magic number with no named constant and no comment explaining why 5. Every MAX
+connect request holds a connection open for at least five seconds regardless of
+whether the worker is ready.
+**Fix:** Hoist `asyncio` to the module imports, name the constant
+(`MAX_QR_WARMUP_SECONDS = 5`), and prefer polling `get_qr()` with a short interval
+and a deadline over a fixed sleep.
+
+---
+
+### IN-07: `account` is rebound after rollback, shadowing the ownership-checked object
+
+**File:** `app/pages/accounts.py:973`
+**Issue:** `account = await db.get(MessengerAccount, account_id)` reuses the name
+of the object that was loaded with the `user_id == user.id` filter at line 785. The
+new fetch has no ownership predicate. It is safe today because `account_id` was
+already authorized on line 795, but the shadowing hides that dependency from anyone
+reading only the `except` block.
+**Fix:** Bind a new name (`refreshed = await db.get(...)`) so the ownership-checked
+object and the unchecked reload are visibly different.
+
+---
+
+### IN-08: `test_sync_groups_always_uses_settings_credentials` duplicates the whole fixture inline
+
+**File:** `tests/test_routes/test_sync_groups.py:194-261`
+**Issue:** 68 lines re-implement `sync_setup` verbatim just to vary
+`telegram_api_id`/`telegram_api_hash`. Any future change to the fixture (engine
+options, dependency overrides, teardown) must be made in two places, and this copy
+will silently keep testing the old shape.
+**Fix:** Parameterize the fixture:
+
+```python
+@pytest_asyncio.fixture
+async def sync_setup(request):
+    overrides = getattr(request, "param", {})
+    settings = Settings(_env_file=None, ..., **overrides)
+    ...
+
+@pytest.mark.parametrize(
+    "sync_setup", [{"telegram_api_id": 0, "telegram_api_hash": ""}], indirect=True
+)
+async def test_sync_groups_always_uses_settings_credentials(sync_setup): ...
+```
+
+---
+
+_Reviewed: 2026-08-13_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
