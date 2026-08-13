@@ -2,44 +2,44 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
-current_phase: 03
-current_phase_name: gruppy-akkaunta
-status: executing
-stopped_at: Phase 3 UI-SPEC approved
-last_updated: "2026-08-13T13:41:44.077Z"
+current_phase: 4
+current_phase_name: Дашборд и история
+status: planning
+stopped_at: Phase 3 complete, ready to plan Phase 4
+last_updated: "2026-08-13T16:40:00.000Z"
 last_activity: 2026-08-13
-last_activity_desc: Phase 03 execution resumed (wave continue)
+last_activity_desc: Phase 03 complete — UAT round 2 passed (5/5), transitioned to Phase 4
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 40
-  completed_plans: 36
-  percent: 33
+  completed_plans: 40
+  percent: 50
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-11)
+See: .planning/PROJECT.md (updated 2026-08-13)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 03 — gruppy-akkaunta
+**Current focus:** Phase 4 — Дашборд и история
 
 ## Current Position
 
-Phase: 03 (gruppy-akkaunta) — EXECUTING
-Plan: 1 of 12
-Status: Executing Phase 03
-Last activity: 2026-08-13 — Phase 03 execution started
+Phase: 4 — Дашборд и история
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-08-13 — Phase 03 complete, transitioned to Phase 4
 
-Progress: [████████████████████] 28/28 plans (100%) — Phases 1–2 of 6 complete (33% фаз milestone v2.0)
+Progress: [████████████████████] 40/40 plans (100%) — Phases 1–3 of 6 complete (50% фаз milestone v2.0)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 28 (milestone v2.0)
+- Total plans completed: 40 (milestone v2.0)
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -49,6 +49,7 @@ Progress: [████████████████████] 28/28 p
 |-------|-------|-------|----------|
 | 1. Интерфейсный фундамент | 13/13 | - | - |
 | 2. Объявления и расписания | 15/15 | - | - |
+| 3. Группы аккаунта | 12/12 | - | - |
 
 **Recent Trend:**
 
@@ -70,6 +71,11 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - Phase 2: черновик объявления — колонка `ads.status` (миграция `0013`), планировщик пропускает черновики; выкат `0013` на целевую базу — решение владельца.
 - Phase 2: автосохранение — create-or-update по `ad_id` на сервере + очередь `this:queue last` на форме; наложение с «Сохранить» удержано именованной регрессией.
 - Phase 2: счётчик длины предупреждает (1024 с вложениями / 3686 без), но не блокирует сохранение и не режет текст.
+- Phase 3: глобальный раздел «Группы» снесён — группы живут только на экране конкретного аккаунта; старые адреса перенаправляются на `/accounts`.
+- Phase 3: GRP-08 (ручное добавление группы) снят, а не реализован — протокола синхронизации одной группы у воркеров нет, вход нёс дыру проверки владения.
+- Phase 3: выключенная группа пропускается тихо — без записи в SendLog, `next_run_at` продолжает двигаться.
+- Phase 3: повторный запуск синхронизации закрыт внутрипроцессной заявкой `_claim_sync_slot`, а не флагом в БД.
+- Phase 3: R-03-09 — раскрытие текста стороннего httpx-исключения в плашке синхронизации принято владельцем как риск severity medium.
 
 ### Pending Todos
 
@@ -79,6 +85,7 @@ None.
 
 - ⚠️ [Phase 2] Целевая база остаётся на ревизии `0012` — колонки `ads.status` в живой схеме нет. Выкат `0013` — решение владельца (guard по `hostname`/`port`/`dbname` и дамп `ads` отработаны в 02-12); до выката черновики не наблюдаемы в проде.
 - Brownfield-риск: система живая и покрыта тестами; протоколы отправки Telegram, WhatsApp и MAX трогать нельзя.
+- ⚠️ [Phase 3] Браузерных/e2e-тестов в проекте нет: рантайм-поведение Alpine (гард повторной отправки в общем макросе подтверждения, 12 мест) держится на ручной проверке. Регрессия автотестами не поймается.
 
 ### Quick Tasks Completed
 
@@ -101,9 +108,10 @@ None.
 | Phase 2 | CR-02 — клиентский Content-Type при загрузке, SVG на origin хранилища | ✓ Закрыто планом 02-02 (2026-08-11) | 2026-08-10 |
 | Phase 2 | WR-01 / T-10-04 — владение ключом изображения при сохранении объявления | ✓ Закрыто планом 02-02 (2026-08-11) | 2026-08-10 |
 | Phase 5 | `billing/plans.html` не подключён ни к одному маршруту | Решение о маршруте или переносе содержимого — за Фазой 5 | 2026-08-09 |
+| Phase 3 | R-03-09 / T-03-17 — текст стороннего httpx-исключения в плашке ошибки синхронизации | Принято владельцем как риск severity medium (2026-08-13); сужение текста — при желании отдельной задачей | 2026-08-13 |
 
 ## Session Continuity
 
-Last session: 2026-08-12T07:21:51.788Z
-Stopped at: Phase 3 UI-SPEC approved
-Resume file: .planning/phases/03-gruppy-akkaunta/03-UI-SPEC.md
+Last session: 2026-08-13
+Stopped at: Phase 3 complete (UAT раунд 2 — 5/5 pass, 0 issues), ready to plan Phase 4
+Resume file: None
