@@ -1033,6 +1033,78 @@ def test_modal_cancel_is_not_a_delete_trigger():
     assert "formaction" not in cancel_tag
 
 
+# Явный перечень ПОТРЕБИТЕЛЕЙ панели — семь файлов. В отличие от
+# MODAL_IMPORTERS (это ЦЕЛОЕ ЧИСЛО файлов со строкой "components/modal.html",
+# включая сам компонент) здесь МНОЖЕСТВО ИМЁН, поэтому напрямую сравнивать их
+# нельзя — отношение между двумя счётами утверждается ниже.
+MODAL_CONSUMERS = frozenset(
+    {
+        "account_groups/includes/group_row.html",
+        "accounts/list.html",
+        "accounts/partial_cards.html",
+        "admin/user_detail.html",
+        "ads/form.html",
+        "ads/includes/ad_card.html",
+        "ads/includes/sched_card.html",
+    }
+)
+
+# Разметка панели, собранная в обход библиотеки. Гард живёт в макросе, поэтому
+# самодельная копия панели его не унаследует — и обязана краснеть.
+PANEL_MARKUP_MARKERS = ("modal__form", "modal__actions", "modal__panel")
+
+
+def test_modal_guard_is_inherited_by_every_consumer():
+    """Гард повторной отправки приходит к каждому потребителю ИЗ МАКРОСА.
+
+    Тест работает в обе стороны: и новый импортёр, и исчезнувший его красят.
+    Иначе восьмой потребитель, добавленный будущей фазой в обход библиотеки,
+    остался бы без гарда молча — и заметил бы это только пользователь,
+    удаливший сущность дважды.
+    """
+    consumers = {
+        rel
+        for rel, source in _all_templates()
+        if MODAL_COMPONENT in source and rel != MODAL_COMPONENT
+    }
+    assert consumers == set(MODAL_CONSUMERS), (
+        "множество потребителей панели разошлось с названным перечнем: "
+        f"новые {sorted(consumers - MODAL_CONSUMERS)}; "
+        f"исчезнувшие {sorted(MODAL_CONSUMERS - consumers)}"
+    )
+
+    # Слагаемое «+ 1» — САМ компонент components/modal.html: он попадает в счёт
+    # MODAL_IMPORTERS, потому что строка импорта показана в его собственной
+    # шапке-документации, но потребителем при этом не является. Расхождение
+    # «семь против восьми» тут не ошибка счёта, и приводить числа к согласию
+    # правкой одного из них нельзя — они считают РАЗНЫЕ множества.
+    assert len(MODAL_CONSUMERS) + 1 == MODAL_IMPORTERS, (
+        f"потребителей {len(MODAL_CONSUMERS)}, импортёров ожидается "
+        f"{MODAL_IMPORTERS} — два счёта одного множества разошлись"
+    )
+
+    # Гард обязан быть в макросе: иначе наследовать потребителям нечего.
+    assert GUARD_ATTR_RE.search(_template_source(MODAL_COMPONENT)), (
+        "гард исчез из макроса — ни один потребитель его больше не наследует"
+    )
+
+    homemade = {}
+    for rel in sorted(consumers):
+        source = _template_source(rel)
+        if not _macro_calls(source, "modal"):
+            homemade[rel] = "импортирует панель, но макрос не вызывает"
+            continue
+        own = [marker for marker in PANEL_MARKUP_MARKERS if marker in source]
+        if own:
+            homemade[rel] = f"собирает разметку панели сам: {own}"
+
+    assert not homemade, (
+        "потребитель собирает панель в обход библиотеки — гарда повторной "
+        "отправки он не унаследует: "
+        + "; ".join(f"{rel} -> {why}" for rel, why in sorted(homemade.items()))
+    )
+
+
 def test_modal_site_inventory():
     """Инвентаризация мест подтверждения сходится ТРЕМЯ счётами.
 
