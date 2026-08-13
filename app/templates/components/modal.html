@@ -51,6 +51,31 @@
    - скрытые поля в обход по Tab не попадают: фильтр по видимости их отбрасывает;
    - метод и маршрут формы прежние.
 
+   Защита от повторной отправки (E6 loading). Первая отправка формы панели
+   переводит её в состояние выполняющегося запроса: поле `sending` встаёт в
+   true, кнопка подтверждения получает disabled и aria-busy привязками, а
+   вторая отправка отменяется тем же обработчиком `x-on:submit`, навешенным на
+   САМУ форму. Видимость состояния обеспечивает уже отгруженное правило
+   `.btn[disabled]` (app/static/css/app.css) — новой CSS и новых классов
+   контракт не требует. Кнопка ОТКАЗА не блокируется ничем: отмена
+   разрушительного действия не имеет права быть труднее его подтверждения.
+   Состояние сбрасывается в show(), а не в hide(): возврат по истории браузера
+   восстанавливает страницу из кеша уже с закрытой панелью, и сброс на закрытии
+   до неё не доехал бы — кнопка осталась бы мёртвой.
+
+   Без поднявшегося Alpine гарда НЕТ, и это осознанно: базовый путь остаётся
+   настоящей формой с прежним методом и прежним маршрутом, иначе пользователь
+   без работающего JS лишился бы возможности удалить сущность в двенадцати
+   местах приложения (WR-04). Защитой от повторной отправки на этом пути служит
+   идемпотентность самих маршрутов удаления — для группы это
+   app/pages/account_groups.py (закреплено test_repeated_delete_is_harmless).
+   Гард уровня разметки добавлен ПОВЕРХ неё, а не вместо неё.
+
+   Приём выбран Alpine-атрибутом, а не встроенным HTML-обработчиком отправки,
+   намеренно: встроенные обработчики закреплены двусторонней инвентаризацией
+   test_only_known_non_dialog_submit_handlers_remain, и второй такой обработчик,
+   где бы он ни появился, её покрасил бы.
+
    Импорт: {% from "components/modal.html" import modal %} #}
 
 {# Значения по умолчанию записаны двойными кавычками намеренно: метод формы
@@ -61,7 +86,8 @@
      x-data="{
        open: false,
        opener: null,
-       show() { this.opener = document.activeElement; this.open = true; this.$nextTick(() => this.$refs.cancel.focus()); },
+       sending: false,
+       show() { this.sending = false; this.opener = document.activeElement; this.open = true; this.$nextTick(() => this.$refs.cancel.focus()); },
        hide() { if (!this.open) return; this.open = false; const back = this.opener; this.opener = null; if (back && back.focus) this.$nextTick(() => back.focus()); },
        items() { return Array.from(this.$refs.panel.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])')).filter(el => el.offsetParent !== null); },
        trap(e) { const f = this.items(); if (!f.length) return; const last = f.length - 1; const i = f.indexOf(document.activeElement); let next; if (e.shiftKey) { next = (i === 0 || i === -1) ? f[last] : f[i - 1]; } else { next = (i === -1 || i === last) ? f[0] : f[i + 1]; } next.focus(); }
@@ -74,12 +100,13 @@
   <div class="modal__overlay" x-on:click="hide()"></div>
   <div class="modal__panel" x-ref="panel" tabindex="-1">
     <h2 class="modal__title" id="{{ id }}-title">{{ title }}</h2>
-    <form class="modal__form" method="{{ method }}" action="{{ action }}">
+    <form class="modal__form" method="{{ method }}" action="{{ action }}"
+          x-on:submit="if (sending) { $event.preventDefault(); return; } sending = true">
       {%- if body %}<p class="modal__text">{{ body }}</p>{% endif %}
       {%- if caller is defined %}{{ caller() }}{% endif %}
       <div class="modal__actions">
         <button class="btn btn--ghost" type="button" x-ref="cancel" x-on:click="hide()"><span class="btn__label">{{ cancel_label }}</span></button>
-        <button class="btn btn--{{ confirm_variant }}" type="submit"><span class="btn__label">{{ confirm_label }}</span></button>
+        <button class="btn btn--{{ confirm_variant }}" type="submit" x-bind:disabled="sending" x-bind:aria-busy="sending"><span class="btn__label">{{ confirm_label }}</span></button>
       </div>
     </form>
   </div>

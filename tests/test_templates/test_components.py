@@ -470,6 +470,107 @@ def test_modal_block_call_keeps_method_and_action():
     assert f'action="{SLOT_TEST_ACTION}"' in form
 
 
+# --- гард повторной отправки (E6 loading, план 03-10) ------------------------
+#
+# Провалившаяся must-have истина фазы 3 (03-VERIFICATION.md): кнопка
+# подтверждения обязана отражать выполняющийся запрос и не допускать повторной
+# отправки. Гард живёт в МАКРОСЕ, а не в местах применения: одна правка доходит
+# до всех двенадцати мест подтверждения, и ни один потребитель ради неё не
+# правится (см. test_modal_guard_is_inherited_by_every_consumer ниже).
+#
+# Приём — Alpine-атрибут на САМОЙ форме, а не встроенный обработчик отправки:
+# встроенные обработчики закреплены двусторонней инвентаризацией
+# test_only_known_non_dialog_submit_handlers_remain, и второй такой обработчик,
+# где бы он ни появился, её покрасил бы.
+
+GUARD_ATTR_RE = re.compile(r'x-on:submit\s*=\s*"([^"]*)"')
+
+
+def _form_tag(out: str) -> str:
+    """Открывающий тег формы панели целиком — от «<form» до «>»."""
+    start = out.index("<form")
+    return out[start : out.index(">", start) + 1]
+
+
+def _button_tag(out: str, marker: str) -> str:
+    """Тег кнопки, несущей ``marker``, целиком — от «<button» до «>»."""
+    at = out.index(marker)
+    start = out.rindex("<button", 0, at)
+    return out[start : out.index(">", start) + 1]
+
+
+def _assert_guarded(out: str) -> None:
+    """Гард на форме и признак запроса на кнопке подтверждения."""
+    form = _form_tag(out)
+    guard = GUARD_ATTR_RE.search(form)
+    assert guard, (
+        "на форме панели нет перехвата отправки — повторная отправка "
+        f"разрушительного действия ничем не отменяется: {form!r}"
+    )
+    expression = guard.group(1)
+    assert "preventDefault" in expression, (
+        f"перехват не отменяет повторную отправку: {expression!r}"
+    )
+    assert "sending" in expression and "= true" in expression, (
+        f"перехват не устанавливает признак выполняющегося запроса: {expression!r}"
+    )
+    # Модификатор .prevent отменял бы отправку ВСЕГДА, а форма панели —
+    # единственный настоящий путь выполнения разрушительного действия.
+    assert "x-on:submit.prevent" not in form, (
+        "перехват отменяет отправку всегда — подтверждённое удаление перестало "
+        f"уходить на сервер: {form!r}"
+    )
+
+    confirm = _button_tag(out, 'type="submit"')
+    assert 'x-bind:disabled="sending"' in confirm, (
+        f"кнопка подтверждения не отключается на время запроса: {confirm!r}"
+    )
+    assert 'x-bind:aria-busy="sending"' in confirm, (
+        f"кнопка подтверждения не сообщает о запросе вспомогательным технологиям: {confirm!r}"
+    )
+
+
+def test_modal_confirm_guards_double_submit():
+    """Первая отправка переводит панель в состояние запроса, вторая отменяется."""
+    out = render("components/modal.html", "modal", **MODAL_ARGS)
+
+    _assert_guarded(out)
+
+    assert "sending: false" in out, "состояние отправки не объявлено в x-data"
+    # Сброс именно в show(), а не в hide(): возврат по истории браузера
+    # восстанавливает страницу из кеша уже с закрытой панелью, и сброс на
+    # закрытии до неё не доедет — кнопка осталась бы мёртвой.
+    assert "this.sending = false" in out, (
+        "состояние не сбрасывается при открытии панели — после возврата по "
+        "истории кнопка подтверждения осталась бы отключённой навсегда"
+    )
+
+
+def test_modal_guard_leaves_cancel_operable():
+    """Отмена во время отправки остаётся доступной.
+
+    Правило компонента (План 09 Фазы 1): отмена разрушительного действия не
+    имеет права быть труднее его подтверждения — в том числе во время запроса.
+    """
+    out = render("components/modal.html", "modal", **MODAL_ARGS)
+    cancel = _button_tag(out, 'x-ref="cancel"')
+
+    assert "disabled" not in cancel, (
+        "кнопка отказа блокируется во время отправки — отмена стала труднее "
+        f"подтверждения: {cancel!r}"
+    )
+
+
+def test_modal_guard_survives_the_block_call():
+    """Гард не теряется на пути блочного вызова.
+
+    Единственный продуктовый потребитель слота — карточка расписания в
+    редакторе объявления (ads/includes/sched_card.html); её удаление обязано
+    получить тот же гард, что и вызовы без слота.
+    """
+    _assert_guarded(_modal_block())
+
+
 # --- инварианты библиотеки ---------------------------------------------------
 
 COMPONENT_CALLS = [
@@ -930,6 +1031,78 @@ def test_modal_cancel_is_not_a_delete_trigger():
         f"{cancel_tag!r}"
     )
     assert "formaction" not in cancel_tag
+
+
+# Явный перечень ПОТРЕБИТЕЛЕЙ панели — семь файлов. В отличие от
+# MODAL_IMPORTERS (это ЦЕЛОЕ ЧИСЛО файлов со строкой "components/modal.html",
+# включая сам компонент) здесь МНОЖЕСТВО ИМЁН, поэтому напрямую сравнивать их
+# нельзя — отношение между двумя счётами утверждается ниже.
+MODAL_CONSUMERS = frozenset(
+    {
+        "account_groups/includes/group_row.html",
+        "accounts/list.html",
+        "accounts/partial_cards.html",
+        "admin/user_detail.html",
+        "ads/form.html",
+        "ads/includes/ad_card.html",
+        "ads/includes/sched_card.html",
+    }
+)
+
+# Разметка панели, собранная в обход библиотеки. Гард живёт в макросе, поэтому
+# самодельная копия панели его не унаследует — и обязана краснеть.
+PANEL_MARKUP_MARKERS = ("modal__form", "modal__actions", "modal__panel")
+
+
+def test_modal_guard_is_inherited_by_every_consumer():
+    """Гард повторной отправки приходит к каждому потребителю ИЗ МАКРОСА.
+
+    Тест работает в обе стороны: и новый импортёр, и исчезнувший его красят.
+    Иначе восьмой потребитель, добавленный будущей фазой в обход библиотеки,
+    остался бы без гарда молча — и заметил бы это только пользователь,
+    удаливший сущность дважды.
+    """
+    consumers = {
+        rel
+        for rel, source in _all_templates()
+        if MODAL_COMPONENT in source and rel != MODAL_COMPONENT
+    }
+    assert consumers == set(MODAL_CONSUMERS), (
+        "множество потребителей панели разошлось с названным перечнем: "
+        f"новые {sorted(consumers - MODAL_CONSUMERS)}; "
+        f"исчезнувшие {sorted(MODAL_CONSUMERS - consumers)}"
+    )
+
+    # Слагаемое «+ 1» — САМ компонент components/modal.html: он попадает в счёт
+    # MODAL_IMPORTERS, потому что строка импорта показана в его собственной
+    # шапке-документации, но потребителем при этом не является. Расхождение
+    # «семь против восьми» тут не ошибка счёта, и приводить числа к согласию
+    # правкой одного из них нельзя — они считают РАЗНЫЕ множества.
+    assert len(MODAL_CONSUMERS) + 1 == MODAL_IMPORTERS, (
+        f"потребителей {len(MODAL_CONSUMERS)}, импортёров ожидается "
+        f"{MODAL_IMPORTERS} — два счёта одного множества разошлись"
+    )
+
+    # Гард обязан быть в макросе: иначе наследовать потребителям нечего.
+    assert GUARD_ATTR_RE.search(_template_source(MODAL_COMPONENT)), (
+        "гард исчез из макроса — ни один потребитель его больше не наследует"
+    )
+
+    homemade = {}
+    for rel in sorted(consumers):
+        source = _template_source(rel)
+        if not _macro_calls(source, "modal"):
+            homemade[rel] = "импортирует панель, но макрос не вызывает"
+            continue
+        own = [marker for marker in PANEL_MARKUP_MARKERS if marker in source]
+        if own:
+            homemade[rel] = f"собирает разметку панели сам: {own}"
+
+    assert not homemade, (
+        "потребитель собирает панель в обход библиотеки — гарда повторной "
+        "отправки он не унаследует: "
+        + "; ".join(f"{rel} -> {why}" for rel, why in sorted(homemade.items()))
+    )
 
 
 def test_modal_site_inventory():

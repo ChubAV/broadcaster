@@ -376,7 +376,7 @@ Applicable state considerations resolved: **58 applicable · 54 covered · 4 bac
 | overflow | E5 | ✅ covered | ≤860px the bar collapses behind the «Фильтры» button (existing macro behaviour) |
 | long-text | E5 | ✅ covered | A long term scrolls natively in the input; echoed terms pass Jinja autoescaping |
 | empty | E6 | ✅ covered | The modal always names its target group — never an empty body |
-| loading | E6 | ✅ covered | The confirm button reflects the in-flight POST and is not double-submittable |
+| loading | E6 | ✅ covered | The first submit sets the panel's `sending` state, so the confirm button binds `disabled` and `aria-busy`; visibility comes from the already-shipped `.btn[disabled]` rule — this contract needs no new CSS. A repeat submit is cancelled inside the `x-on:submit` handler bound to the form itself, while the cancel button is never blocked. Without Alpine there is no guard, and that is deliberate: the panel stays a real POST form (WR-04) and the backstop on that path is the delete route's idempotence (`app/pages/account_groups.py`, `test_repeated_delete_is_harmless`) |
 | error | E6 | ✅ covered | A failed delete closes the modal and renders a page-level alert; the row stays |
 | partial | E6 | ✅ covered | The body's consequence line renders in full regardless of the group's state; a group in zero schedules still gets the same honest copy (it is still true) |
 | overflow | E6 | 🧪 backstop | A long group name in the modal body wraps to at most two lines then ellipsizes; the panel never exceeds its max-width. Held-out visual UI-state test at 320px |
