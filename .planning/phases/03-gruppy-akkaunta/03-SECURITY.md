@@ -39,7 +39,7 @@ audit verified declared mitigations rather than building a register retroactivel
 | T-03-03 | Tampering | `account_groups/includes/group_row.html` | medium | mitigate | Autoescape Jinja2; ни одного `\|safe` в шаблонах `account_groups/` | closed |
 | T-03-04 | Repudiation | `collect_due_schedules` | low | accept | `app/application/scheduling/use_cases.py:171-177` — `logger.info` + `continue`, записи в SendLog нет (D-06) | closed |
 | T-03-05 | Tampering | POST-формы экрана | low | accept | CSRF-токенов нет ни на одной форме проекта; новой поверхности класса не добавлено | closed |
-| T-03-06 | Tampering | `apply_group_resync` — выборка существующих групп | high | mitigate | **Реализовано иначе, чем объявлено.** `group_resync.py:185-190` скоупит только по `account_id`. Безопасно: `Group(...)` конструируется единственным местом `:223-231` и всегда ставит `user_id=account.user_id`, поэтому `account_id ⇒ user_id` — инвариант; владение доказано вызывающим (`app/pages/accounts.py:755-766`, `app/worker/tasks.py:300`). Тесты `tests/test_application/test_group_resync.py:568-587,591-619` | closed |
+| T-03-06 | Tampering | `apply_group_resync` — выборка существующих групп | high | mitigate | **Реализовано иначе, чем объявлено.** `group_resync.py:185-190` скоупит только по `account_id`. Безопасно: `Group(...)` конструируется единственным местом `:223-231` и всегда ставит `user_id=account.user_id`, поэтому `account_id ⇒ user_id` — инвариант; владение доказано вызывающим (`app/pages/accounts.py:755-766`, `app/worker/tasks.py:300`). Тесты `tests/test_application/test_group_resync.py:568-587,591-619`. **Причина сужения скоупа (сверено с кодом, 03-12).** Скоуп приведён в соответствие со скоупом ограничения `uq_groups_account_external` правкой IN-09 (коммит `fb14859`): добавочное условие по `user_id` было ШИРЕ ограничения, поэтому строка с разошедшимся `user_id` в словарь существующих не попадала, вставлялась заново и упиралась в ограничение — защитное условие превращало безобидное расхождение данных в отказ синхронизации ВСЕГО аккаунта. Обоснование записано комментарием `group_resync.py:172-184`, сама выборка — `:185-190` | closed |
 | T-03-07 | Denial of Service | размер ответа мессенджера | medium | accept | Протоколы синхронизации запрещены к правке рамками milestone; действует таймаут опроса воркера | closed |
 | T-03-08 | Tampering | `last_sync_result` как JSON-строка | medium | mitigate | `parse_sync_result` (`group_resync.py:336-354`) не бросает: мусор даёт `None` | closed |
 | T-03-09 | Destruction of data | ревизия `0014` | high | mitigate | `alembic/versions/0014_...py:40-50` — три `add_column` nullable, без `server_default`, без data-migration | closed |
@@ -75,6 +75,15 @@ audit verified declared mitigations rather than building a register retroactivel
 *Status: open · closed · open — below {block_on} threshold (non-blocking)*
 *Severity: critical > high > medium > low — only open threats at or above workflow.security_block_on count toward threats_open*
 *Disposition: mitigate (implementation required) · accept (documented risk) · transfer (third-party)*
+
+**Настоящая таблица — авторитетная запись о реализованных контролях фазы.** Устаревшее
+утверждение о двойном скоупе выборки (`Group.account_id AND Group.user_id`) продолжает жить в
+двух запечатанных артефактах фазы — `03-02-SUMMARY.md:316` и `03-VALIDATION.md:57`. Оба
+названы здесь поимённо и НЕ правятся: сводка фиксирует результат на момент исполнения, матрица
+— покрытие на момент планирования, и переписывание их задним числом уничтожило бы единственный
+след того, как решение менялось (правка IN-09, коммит `fb14859`). Читатель, наткнувшийся на
+двойной скоуп в любом из этих двух файлов, обязан считать верной строку T-03-06 регистра, а не
+их. Расхождение промаркировано, а не скрыто.
 
 ---
 
@@ -112,26 +121,12 @@ Compensating control for both directions: the schema-level `uq_groups_account_ex
 *rows*. They do not prevent the duplicate outbound fetch. Both directions are also named in the
 code comment at the claim site.
 
----
-
-## Unregistered Findings (carry into next phase)
-
-1. **Revision `0015_groups_unique_account_external.py` has no threat ID.** It performs `UPDATE`
-   merges, rewrites `schedules.group_ids`, executes `DELETE FROM groups` (`:210-224`), and takes
-   `ACCESS EXCLUSIVE` on `groups` while building the unique index (self-documented at `:44-55`).
-   The register's only destruction-of-data entry, T-03-09 (high), scopes itself explicitly to
-   revision **0014** as "additive nullable only, no data-migration". Revision 0015 arrived later
-   via code-review fix WR-03 (commit `cd4714b`) and CR-01 (commit `96affc3`), and appears in no
-   `<threat_model>` and no SUMMARY `## Threat Flags`. It is well covered by
-   `tests/test_migrations/test_0015_groups_unique_account_external.py` (8 tests, including
-   remap-before-delete and downgrade), but the throwaway-database + hostname/port/dbname guard
-   discipline that T-03-09 demanded for 0014 has no recorded application to 0015.
-
-2. **T-03-06's register text is stale.** The recorded mitigation ("double scope `account_id AND
-   user_id`") no longer describes the code — IN-09 (commit `fb14859`) deliberately narrowed the
-   lookup to match `uq_groups_account_external`. The threat is closed on the merits, but the
-   register wording should be updated to the implemented control, or a future audit will read a
-   false mitigation as evidence.
+**Обе находки прошлого прогона, ждавшие идентификатора, разрешены и отдельного раздела больше
+не образуют.** Первая — разрушительная ревизия `0015_groups_unique_account_external.py` без
+собственного идентификатора угрозы — закрыта строкой `T-03-37` в таблице выше (план 03-12).
+Вторая — расхождение формулировки T-03-06 с реализованным контролем — закрыта сверкой строки
+регистра с кодом и пометкой об авторитетности регистра под таблицей (план 03-12). В следующую
+фазу отсюда не переходит ничего.
 
 ---
 
@@ -158,6 +153,7 @@ code comment at the claim site.
 |------------|---------------|--------|------|--------|
 | 2026-08-13 | 35 | 33 | 2 (both below `block_on: high`) | gsd-security-auditor |
 | 2026-08-13 | 36 | 35 | 1 (below `block_on: high`) | gsd-executor (план 03-09) |
+| 2026-08-13 | 37 | 36 | 1 — T-03-36, severity `medium`, ниже порога `block_on: high` | gsd-executor (план 03-12) |
 
 ---
 
@@ -168,4 +164,10 @@ code comment at the claim site.
 - [x] `threats_open: 0` confirmed
 - [x] `status: verified` set in frontmatter
 
-**Approval:** verified 2026-08-13
+**Approval:** verified 2026-08-13 · итоговая проверка регистра 2026-08-13 (план 03-12)
+
+Итоговая проверка подтвердила каждую галочку по факту, а не переносом: диспозиция есть у всех
+37 строк регистра; журнал принятых рисков содержит те же восемь подписанных владельцем записей
+и не изменялся ни одной строкой; `threats_open: 0` верен, потому что единственная открытая угроза T-03-36 имеет
+severity `medium` — ниже настроенного порога `block_on: high`; `status: verified` во
+frontmatter стоит. Переходящих находок без идентификатора в регистре не осталось.
