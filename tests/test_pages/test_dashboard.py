@@ -56,6 +56,21 @@ async def _current_user(db: AsyncSession) -> User:
     ).scalar_one()
 
 
+async def _seed_user(db: AsyncSession, email: str) -> User:
+    """Владелец записей для тестов БЕЗ поднятия страницы.
+
+    Пользователя `testuser@test.com` заводит фикстура регистрации, которую
+    тянет только `authed_client`. Тесты самой выборки страницу не поднимают —
+    им нужен владелец, а не сессия, — поэтому владелец заводится прямой
+    вставкой.
+    """
+    user = User(email=email, password_hash="x", name="Владелец")
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
 async def _seed_send_log(
     db: AsyncSession,
     user_id: int,
@@ -580,7 +595,7 @@ async def test_recent_feed_returns_newest_first(db_session: AsyncSession):
     заполненным, просто «живая» лента показывает самое старое сверху и не
     меняется при новых отправках.
     """
-    user = await _current_user(db_session)
+    user = await _seed_user(db_session, "feed-order@test.com")
     now = datetime.now(timezone.utc)
     await _seed_send_log(
         db_session, user.id, sent_at=now - timedelta(hours=3), ad_title="Старая"
@@ -600,7 +615,7 @@ async def test_recent_feed_returns_newest_first(db_session: AsyncSession):
 @pytest.mark.asyncio
 async def test_recent_feed_respects_the_limit(db_session: AsyncSession):
     """Лента отдаёт не больше `limit` строк — и по умолчанию, и по аргументу."""
-    user = await _current_user(db_session)
+    user = await _seed_user(db_session, "feed-limit@test.com")
     now = datetime.now(timezone.utc)
     for index in range(FEED_LIMIT + 4):
         await _seed_send_log(
@@ -620,7 +635,7 @@ async def test_recent_feed_row_carries_the_fields_of_the_record(
     Идентификатор — не украшение: по нему строится адрес записи истории, и
     строка без него вела бы в никуда.
     """
-    user = await _current_user(db_session)
+    user = await _seed_user(db_session, "feed-fields@test.com")
     sent_at = datetime.now(timezone.utc) - timedelta(minutes=7)
     log = await _seed_send_log(
         db_session,
@@ -649,11 +664,8 @@ async def test_recent_feed_ignores_other_users(db_session: AsyncSession):
     Маршрут ленты дёргается автоматически каждые несколько секунд на каждой
     открытой вкладке — утечка здесь тиражируется, а не случается однажды.
     """
-    user = await _current_user(db_session)
-    stranger = User(email="stranger-feed@test.com", password_hash="x", name="Чужой")
-    db_session.add(stranger)
-    await db_session.commit()
-    await db_session.refresh(stranger)
+    user = await _seed_user(db_session, "feed-owner@test.com")
+    stranger = await _seed_user(db_session, "feed-stranger@test.com")
 
     now = datetime.now(timezone.utc)
     await _seed_send_log(
