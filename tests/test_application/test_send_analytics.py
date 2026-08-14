@@ -654,7 +654,9 @@ async def test_heatmap_reads_naive_dates_without_raising(db_session):
         db_session, user_id=user.id, now=NOW, tz=timezone.utc
     )
 
-    assert list(_filled_cells(view)) == [(6, 7)]
+    # Ряд считается от начала окна: 13.05 12:00 → 19.05 07:15 = 139 часов,
+    # 139 // 24 = 5. Ряды — сутки ОКНА, а не календарные дни (D-12).
+    assert list(_filled_cells(view)) == [(5, 7)]
 
 
 @pytest.mark.asyncio
@@ -725,7 +727,8 @@ async def test_heatmap_counts_record_without_group_or_messenger(db_session):
         db_session, user_id=user.id, now=NOW, tz=timezone.utc
     )
 
-    assert _filled_cells(view) == {(6, 9): 1}
+    # 13.05 12:00 → 19.05 09:00 = 141 час, 141 // 24 = 5.
+    assert _filled_cells(view) == {(5, 9): 1}
     assert view.peak == 1
 
 
@@ -746,7 +749,8 @@ async def test_heatmap_cell_counts_every_send_of_the_hour_and_peak_is_the_max(
         db_session, user_id=user.id, now=NOW, tz=timezone.utc
     )
 
-    assert _filled_cells(view) == {(6, 14): 3, (5, 5): 1}
+    # 19.05 14:00 = 146-й час окна (ряд 6), 18.05 05:30 = 113-й (ряд 4).
+    assert _filled_cells(view) == {(6, 14): 3, (4, 5): 1}
     assert view.peak == 3
 
 

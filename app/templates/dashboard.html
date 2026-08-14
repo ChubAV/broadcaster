@@ -2,6 +2,7 @@
 {% from "components/card.html" import card_open, card_close %}
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/table.html" import rowhead %}
+{% from "dashboard/includes/heatmap.html" import heatmap %}
 {% from "dashboard/includes/metric_tile.html" import metric_tile %}
 {% from "dashboard/includes/recent_send_card.html" import recent_send_card, RECENT_COLS, RECENT_COLUMNS %}
 
@@ -47,6 +48,11 @@
   {{ empty_state('Отправок пока нет',
                  hint='Здесь появятся последние отправки по вашим расписаниям') }}
   {% endif %}
+
+  {#- Активность за неделю (DASH-04). Блок стоит ПОД лентой по макету (строки
+      447-462) и читает тот же модуль аналитики, что и плитки: агрегации
+      считаются один раз и переиспользуются. -#}
+  {{ heatmap(heatmap_view) }}
 
 </div>
 {% endblock %}

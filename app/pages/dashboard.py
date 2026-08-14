@@ -3,12 +3,17 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.analytics.send_analytics import send_metrics
+from app.application.analytics.send_analytics import activity_heatmap, send_metrics
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.models.group import Group
 from app.models.send_log import SendLog
-from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.pages.common import (
+    _get_timezone_for_user,
+    check_is_admin,
+    get_user_from_cookie,
+    templates,
+)
 
 router = APIRouter(tags=["pages"])
 
@@ -29,6 +34,14 @@ async def dashboard(
     # D-01/D-02 — счётчики дублировали боковое меню, а полночь показывала почти
     # ноль в первые часы суток независимо от того, работала система ночью.
     metrics = await send_metrics(db, user_id=user.id)
+
+    # Heatmap активности за неделю (DASH-04). Таймзона приезжает СЮДА, а не
+    # берётся внутри модуля: локальный час ячейки — свойство ЧИТАТЕЛЯ экрана, и
+    # в админке Фазы 6 тот же модуль позовут с зоной администратора, а не
+    # просматриваемого пользователя.
+    heatmap_view = await activity_heatmap(
+        db, user_id=user.id, tz=_get_timezone_for_user(user)
+    )
 
     # Recent sends (last 10)
     recent_query = (
@@ -63,6 +76,7 @@ async def dashboard(
             "user": user,
             "is_admin": check_is_admin(user, settings),
             "metrics": metrics,
+            "heatmap_view": heatmap_view,
             "recent_sends": recent_sends,
             "active_page": "dashboard",
         },

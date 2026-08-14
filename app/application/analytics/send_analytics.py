@@ -39,7 +39,7 @@ PostgreSQL. Календарная группировка средствами �
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -211,6 +211,132 @@ async def send_metrics(
         ok_prev=int(row.ok_prev or 0),
         failed_prev=int(row.failed_prev or 0),
         groups_prev=int(row.groups_prev or 0),
+    )
+
+
+# --- Heatmap активности -------------------------------------------------------
+
+# Короткие имена дней в порядке `datetime.weekday()` (0 — понедельник).
+# Выписаны ЯВНО, а не получены через `strftime('%a')`: результат strftime
+# зависит от локали ПРОЦЕССА, и на машине без установленной русской локали
+# подпись ряда молча отрисовалась бы английским сокращением. Это единственная
+# строка, которую модуль формирует сам, и она допустима: это подпись РЯДА
+# сетки, а не форматирование данных пользователя.
+SHORT_WEEKDAYS = ("ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС")
+
+# Размер батча потокового чтения окна heatmap. На asyncpg `yield_per` включает
+# настоящий серверный курсор, на aiosqlite — буферизацию батчами; API `stream`
+# одинаков на обоих.
+HEATMAP_YIELD_PER = 1000
+
+
+@dataclass(slots=True)
+class HeatmapView:
+    """Сетка активности: `days` рядов по 24 часа, подписи рядов и пик.
+
+    `peak` отдаётся ВЫЗЫВАЮЩЕМУ, а не превращается в ступени насыщенности
+    здесь: шкала — вопрос отображения, и её место в макросе разметки. Но
+    считать максимум заново в шаблоне значило бы обходить всю сетку второй раз
+    средствами Jinja, поэтому число, уже известное после раскладки, уезжает
+    полем.
+    """
+
+    grid: list[list[int]]
+    day_labels: list[str]
+    peak: int
+
+
+async def activity_heatmap(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    now: datetime | None = None,
+    tz: tzinfo | None = None,
+    days: int = 7,
+) -> HeatmapView:
+    """Раскладывает отправки окна по (сутки, локальный час) — сетка `days`×24.
+
+    ОКНО СКОЛЬЗЯЩЕЕ (D-12). Ряд `i` — сутки, начинающиеся в `local_origin + i
+    дней`, где `local_origin` есть `now - days` суток. Календарной недели
+    ПН-ВС макета здесь нет: она показывала бы в понедельник утром одну колонку
+    данных и шесть пустых. Подписи рядов поэтому следуют ОКНУ — `day_labels[i]`
+    есть день недели даты `local_origin + i дней`, а не фиксированный
+    понедельник.
+
+    РАСКЛАДКА ИДЁТ В PYTHON, А НЕ В БАЗЕ. Группировка по календарным единицам
+    средствами диалекта в этом модуле запрещена: тесты идут на SQLite, бой — на
+    PostgreSQL, и ветка, написанная под боевой диалект, не исполнилась бы
+    тестами НИ РАЗУ — она проверялась бы впервые на деплое. Прецедент выписан в
+    докстринге ревизии 0015; перечень запрещённых имён — в комментарии над
+    запросом ниже (в докстринге их нет НАМЕРЕННО: запрет держит тест
+    test_module_has_no_dialect_specific_calendar_functions, и он ищет имена по
+    сырому тексту модуля, снимая только строчные комментарии).
+    Дополнительная причина именно здесь: час ячейки — ЛОКАЛЬНЫЙ час
+    пользователя (D-10), а перевод в его зону база не делает вовсе.
+
+    ПОЧЕМУ ПРОЕКЦИЯ И ПОТОК. Выбирается ТОЛЬКО `sent_at`, а не сущность
+    `SendLog`: ни одного ORM-объекта не создаётся и identity map не растёт.
+    Чтение идёт `session.stream(...)` с `yield_per`, поэтому память держится
+    порядка размера батча, а не размера окна — окно недели на самой растущей
+    таблице системы иначе поднималось бы в память целиком (T-04-14).
+
+    ЧТО В СЕТКУ ПОПАДАЕТ. ВСЕ отправки окна, принадлежащие `user_id`. Запись с
+    пустым `group_id` или пустым `messenger_type` считается наравне с
+    остальными: она произошла в реальный час, и выбросить её ради «чистой»
+    сетки значило бы соврать о том, работала система в этот час или стояла.
+    Запись, попавшая ровно в правый край окна, приписывается последним суткам,
+    а не отбрасывается — по той же причине.
+
+    Пустой набор данных даёт сетку НУЛЕЙ, а не пустой список: шаблон обходит
+    ряды и ячейки, и пустой список отрисовал бы вместо сетки ничего — блок
+    выглядел бы сломанным, а не пустым.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if tz is None:
+        tz = timezone.utc
+
+    window_start = now - timedelta(days=days)
+    local_origin = window_start.astimezone(tz)
+
+    grid = [[0] * 24 for _ in range(days)]
+
+    # Запрещённые в этом модуле имена календарной группировки средствами
+    # диалекта: func.strftime, func.date_trunc, func.extract, func.to_char,
+    # func.julianday (RESEARCH §Pitfall 2). Запрос ниже выбирает ЗНАЧЕНИЯ и
+    # ничего не группирует — вся календарная арифметика идёт в Python.
+    stream = await session.stream(
+        select(SendLog.sent_at)
+        .where(
+            SendLog.user_id == user_id,
+            SendLog.sent_at >= window_start,
+        )
+        .execution_options(yield_per=HEATMAP_YIELD_PER)
+    )
+    async for row in stream:
+        # normalize_utc обязателен: SQLite отдаёт `sent_at` NAIVE, и вычитание
+        # naive из aware поднимает TypeError — то есть дефект существовал бы
+        # только на одном из двух диалектов и ловился бы не тестами.
+        local = normalize_utc(row.sent_at).astimezone(tz)
+        offset_hours = int((local - local_origin).total_seconds() // 3600)
+        day_index = offset_hours // 24
+        # Клампы, а не `continue`: запись ровно в `now` даёт смещение `days*24`
+        # и индекс на один больше последнего ряда. Она принадлежит самым свежим
+        # суткам окна, и пропуск такой записи был бы ровно тем молчаливым
+        # выбрасыванием, которое прохибиция плана запрещает.
+        if day_index >= days:
+            day_index = days - 1
+        elif day_index < 0:
+            day_index = 0
+        grid[day_index][local.hour] += 1
+
+    return HeatmapView(
+        grid=grid,
+        day_labels=[
+            SHORT_WEEKDAYS[(local_origin + timedelta(days=i)).weekday()]
+            for i in range(days)
+        ],
+        peak=max((max(day) for day in grid), default=0),
     )
 
 
