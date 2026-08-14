@@ -1,5 +1,6 @@
 """Wave 0: покрытие UI-01, UI-02, UI-03, UI-06 для нового шелла (План 01-01)."""
 
+import ast
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -559,3 +560,179 @@ async def test_auth_pages_drop_utility_classes(client: AsyncClient):
         html = (await client.get(route)).text
         for utility in ("bg-gray", "text-gray", "rounded-lg", "border-gray"):
             assert utility not in html, f"{route}: {utility}"
+
+
+# --- DASH-05: воркеры онлайн читаются ИЗ КОНТРАКТА ШЕЛЛА ---------------------
+#
+# Единственное требование Фазы 4, у которого реализация уже была: индикатор
+# рисует шелл из get_shell_context (Фаза 1, D-09/D-19). Работа здесь —
+# закрепляющая: не написать второй источник числа, а закрепить, что второго
+# источника не появилось.
+#
+# Ключи sessions_online / sessions_total измеряют состояние СЕССИИ мессенджера
+# (MessengerAccount.status в БД), а не живость Docker-контейнера воркера. Это
+# ограничение принято осознанно (T-04-21) и здесь только фиксируется: подмена
+# смысла индикатора на «контейнер жив» стоила бы синхронного Docker SDK на
+# рендере КАЖДОЙ страницы, а в тестах сокет Docker недоступен вовсе.
+
+# Модули пути рендера дашборда. Проверка «нет обращения к Docker» идёт ПО
+# ИСХОДНИКУ каждого из них: тот же приём уже применяется в проекте к проверкам
+# по тексту модуля (см. запрет календарных функций диалекта в тестах аналитики).
+DASHBOARD_RENDER_PATH = (
+    "app/pages/dashboard.py",
+    "app/pages/dashboard_feed.py",
+    "app/application/analytics/send_analytics.py",
+)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+SESSION_PILL_RE = re.compile(r'data-sessions-online="(\d+)"')
+
+
+async def _seed_messenger_account(
+    db: AsyncSession, user_id: int, status: str
+) -> MessengerAccount:
+    account = MessengerAccount(
+        user_id=user_id, type="wa", credentials="creds", status=status
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+async def _dashboard_user(db: AsyncSession) -> User:
+    return (
+        await db.execute(select(User).where(User.email == "testuser@test.com"))
+    ).scalar_one()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_shows_the_sessions_indicator(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """DASH-05: на дашборде индикатор числа онлайн-сессий присутствует."""
+    response = await authed_client.get("/dashboard")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "data-sessions" in html, "индикатор сессий на дашборде не отрисован"
+    assert "воркеров онлайн" in html, "подпись индикатора потеряна"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_sessions_number_counts_active_accounts(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Число индикатора равно числу messenger-аккаунтов в активном статусе.
+
+    Утверждение ПАРНОЕ по смыслу с тестом нуля ниже: одно число без второго не
+    отличает «счёт работает» от «счёт всегда показывает всё, что заведено».
+    """
+    user = await _dashboard_user(db_session)
+    await _seed_messenger_account(db_session, user.id, "active")
+    await _seed_messenger_account(db_session, user.id, "active")
+    await _seed_messenger_account(db_session, user.id, "sync_failed")
+
+    html = (await authed_client.get("/dashboard")).text
+
+    assert SESSION_PILL_RE.search(html).group(1) == "2", (
+        "индикатор считает не активные сессии, а что-то другое"
+    )
+    assert 'data-sessions-total="3"' in html, "общее число аккаунтов разошлось"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_sessions_number_is_zero_without_active_accounts(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Пользователь без активных аккаунтов видит НОЛЬ, а не отсутствие индикатора.
+
+    Спрятанный индикатор читался бы как сломанная шапка, а не как «воркеров
+    нет»: пользователю нужно понять, почему его рассылки не уходят.
+    """
+    html = (await authed_client.get("/dashboard")).text
+
+    assert "data-sessions" in html
+    assert SESSION_PILL_RE.search(html).group(1) == "0"
+
+
+def _identifiers_of(source: str) -> set[str]:
+    """Имена, которые модуль ИМПОРТИРУЕТ и ВЫЗЫВАЕТ — без прозы.
+
+    Разбор синтаксическим деревом, а не поиском подстроки по тексту. Поиск по
+    тексту здесь неприменим принципиально: контракт модуля аналитики ОБЪЯСНЯЕТ
+    свой запрет («не вызывает Docker SDK и вообще ничего синхронно-блокирующего
+    — он живёт на пути рендера страницы»), и на поиске по подстроке объяснение
+    запрета само нарушало бы запрет. Такой тест заставил бы снять из докстринга
+    самое ценное — причину, — и следующая правка вернула бы обращение обратно,
+    не встретив ни одного возражения.
+
+    Дерево различает УПОМИНАНИЕ и ОБРАЩЕНИЕ, а запрещено именно обращение.
+    """
+    tree = ast.parse(source)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            names.add(node.module or "")
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, ast.Name):
+            names.add(node.id)
+    return names
+
+
+def test_dashboard_render_path_never_touches_docker():
+    """T-04-21: в пути рендера дашборда обращения к Docker нет ни в каком виде.
+
+    Docker SDK синхронный: вызванный на рендере, он блокирует event loop на
+    КАЖДОЙ странице, а в тестах сокет Docker недоступен — то есть дефект
+    существовал бы только в бою и ловился бы не тестами, а пользователем.
+    Индикатор измеряет статус сессии мессенджера в БД, и этого достаточно:
+    подмена его смысла на «контейнер жив» — это и есть цена, которую платить
+    нечем.
+
+    Единственный владелец обращений к Docker в проекте — сервис управления
+    контейнерами воркеров; его имя запрещено здесь наравне с самим SDK.
+    """
+    offenders = {}
+    for rel in DASHBOARD_RENDER_PATH:
+        path = PROJECT_ROOT / rel
+        assert path.exists(), f"модуль пути рендера пропал: {rel}"
+        names = _identifiers_of(path.read_text(encoding="utf-8"))
+        hits = sorted(
+            name
+            for name in names
+            if "docker" in name.lower() or "wa_container_manager" in name
+        )
+        if hits:
+            offenders[rel] = hits
+
+    assert not offenders, (
+        f"путь рендера дашборда обращается к Docker: {offenders}"
+    )
+
+
+def test_dashboard_page_has_no_second_source_of_the_sessions_number():
+    """Собственного запроса по messenger-аккаунтам страница дашборда не делает.
+
+    Число уже посчитано контрактом шелла на каждом страничном маршруте
+    (`load_shell_context` → `get_shell_context`). Второй запрос ради того же
+    числа завёл бы ВТОРОЙ источник одного факта — ровно ту болезнь, которую
+    лечит D-35, — и Фаза 6, обязанная переиспользовать тот же контракт,
+    унаследовала бы расхождение.
+    """
+    source = (PROJECT_ROOT / "app" / "pages" / "dashboard.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "MessengerAccount" not in source, (
+        "страница дашборда выбирает messenger-аккаунты сама — второй источник "
+        "числа воркеров онлайн"
+    )
+    assert "sessions_online" not in source, (
+        "страница дашборда считает индикатор сама вместо чтения контракта шелла"
+    )
