@@ -1,23 +1,22 @@
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import (
     activity_heatmap,
+    recent_feed,
     send_metrics,
     upcoming_sends,
 )
 from app.config import Settings
 from app.dependencies import get_db, get_settings
-from app.models.group import Group
-from app.models.send_log import SendLog
 from app.pages.common import (
     _get_timezone_for_user,
     check_is_admin,
     get_user_from_cookie,
     templates,
 )
+from app.pages.dashboard_feed import FEED_LIMIT, FEED_POLL_SECONDS
 
 router = APIRouter(tags=["pages"])
 
@@ -91,31 +90,14 @@ async def dashboard(
     # групп — иначе то же правило пришлось бы повторить в Фазе 6.
     upcoming = await upcoming_sends(db, user_id=user.id)
 
-    # Recent sends (last 10)
-    recent_query = (
-        select(SendLog, Group)
-        .outerjoin(Group, SendLog.group_id == Group.id)
-        .where(SendLog.user_id == user.id)
-        .order_by(SendLog.sent_at.desc())
-        .limit(10)
-    )
-    recent_result = await db.execute(recent_query)
-    recent_sends = [
-        {
-            "id": r.id,
-            "ad_title": r.ad_title or "—",
-            "ad_text": r.ad_text or "",
-            "group_name": r.group_name or "—",
-            "group_external_id": group.group_external_id if group else None,
-            "account_id": group.account_id if group else None,
-            "task_id": r.task_id,
-            "status": r.status,
-            "messenger_type": r.messenger_type,
-            "error_message": r.error_message,
-            "sent_at": r.sent_at,
-        }
-        for r, group in recent_result
-    ]
+    # Живая лента (DASH-03). Первичная отрисовка идёт ТЕМ ЖЕ паршалом, что
+    # отдаёт маршрут опроса, поэтому строки приезжают под тем же именем `feed`
+    # и с тем же лимитом: блок, посчитанный здесь по своим правилам, разъехался
+    # бы с первым же тиком опроса.
+    #
+    # Блок «Последние отправки» отсюда СНЯТ вместе со своим шаблоном строки: его
+    # место заняла лента, а недостижимых шаблонов в проекте не оставляют.
+    feed = await recent_feed(db, user_id=user.id, limit=FEED_LIMIT)
 
     return templates.TemplateResponse(
         "dashboard.html",
@@ -131,7 +113,11 @@ async def dashboard(
             "next_step": dashboard_next_step(
                 getattr(request.state, "shell", {}).get("nav_counts")
             ),
-            "recent_sends": recent_sends,
+            "feed": feed,
+            # Интервал опроса едет в разметку ИЗ КОНСТАНТЫ модуля маршрута, где
+            # рядом живёт лимит строк: литерал в шаблоне разъехался бы с ним
+            # молча.
+            "feed_poll_seconds": FEED_POLL_SECONDS,
             "active_page": "dashboard",
         },
     )
