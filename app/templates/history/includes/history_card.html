@@ -31,10 +31,13 @@
 
    Импорт: {% from "history/includes/history_card.html" import history_card %}
    Кнопка копирования импортируется отдельно — её зовёт ещё страница записи:
-   {% from "history/includes/history_card.html" import copy_button %} #}
+   {% from "history/includes/history_card.html" import copy_button %}
+   Тем же путём импортируются запуск повтора и его панель подтверждения:
+   {% from "history/includes/history_card.html" import retry_trigger, retry_modal %} #}
 
 {% from "components/badge.html" import badge %}
-{% from "components/button.html" import link_button %}
+{% from "components/button.html" import button, link_button %}
+{% from "components/modal.html" import modal %}
 {% from "components/mono.html" import mono %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 
@@ -115,6 +118,67 @@
 {%- endif -%}
 {%- endmacro %}
 
+{# Запуск повтора отправки (HIST-04) — ДВА макроса, а не один, потому что их
+   разметка стоит в РАЗНЫХ местах: кнопка живёт в метаколонке записи, а панель
+   обязана лежать ВНЕ записи.
+
+   ПОЧЕМУ ПАНЕЛЬ СНАРУЖИ. Она позиционируется фиксированно и внутри записи
+   стала бы колонкой её сетки. Внутри же элемента, заменяемого бесконечной
+   прокруткой, панель размножилась бы после первой подмены, и одно событие
+   открывало бы две панели с одним идентификатором (T-11-04) — тот же приём и
+   та же причина, что у строки группы на экране аккаунта.
+
+   ПРИЗНАК ДОСТУПНОСТИ СЧИТАЕТ СЕРВЕР и передаёт значением (`log.can_retry`,
+   `log.retry_reason`). Разметке неоткуда узнать, целы ли объявление, группа и
+   аккаунт, а запрос из шаблона означал бы обращение к базе на каждую строку
+   списка. Отсутствие признака = повтор не предлагается: админский экран
+   истории пользуется этим же макросом карточки и признака не кладёт, поэтому
+   повтор чужой записи там не появляется сам собой.
+
+   У НЕДОСТУПНОГО ПОВТОРА ОСТАЁТСЯ ОБЪЯСНЕНИЕ (D-21). Молча спрятанная кнопка
+   неотличима от «повтор не поддерживается»: пользователь не узнал бы, что
+   мешает именно исчезнувшее объявление. У УСПЕШНОЙ записи не остаётся ничего —
+   там повторять нечего, и объяснять нечего тоже.
+
+   ТЕКСТ ПАНЕЛИ НАЗЫВАЕТ СЛЕДСТВИЕ D-17 ПРЯМО: уйдёт ТЕКУЩЕЕ содержимое
+   объявления из базы, а не снапшот, показанный в записи. Умолчать это значит
+   показать пользователю один текст, а отправить другой (T-04-40).
+
+   ОПРЕДЕЛЕНИЕ ОДНО на оба экрана — карточку списка и страницу записи (тот же
+   приём, что у кнопки копирования). Вторая копия разошлась бы с первой ровно
+   там, где расхождение опаснее всего: в обещании, ЧТО именно будет
+   отправлено. #}
+{# Параметры ЯВНЫЕ, а не поля записи: страница записи получает `log` сущностью
+   ORM, у которой вычисленных сервером признаков нет и быть не может, а карточка
+   списка — словарём, у которого они есть. Один макрос с явными аргументами
+   обслуживает оба, и ошибка в имени признака проявится ПУСТЫМ местом при
+   статусе 200 — поэтому оба экрана закреплены тестами. #}
+{% macro retry_trigger(log_id, can_retry=False, reason=None) -%}
+{%- if can_retry -%}
+  {#- Настоящая форма прежним методом на прежний маршрут: панель — УСИЛЕНИЕ
+      поверх неё. Без Alpine перехват не навешивается, и нажатие отправляет
+      форму напрямую; защиту от повторной отправки на этом пути держит
+      перенаправление после действия и заявка на стороне сервера. -#}
+  <form method="post" action="/history/{{ log_id }}/retry" data-retry
+        x-data x-on:submit.prevent="$dispatch('modal-open-history-retry-{{ log_id }}')">
+    {{- button('Повторить', variant='ghost', icon='refresh', title='Повторить отправку') -}}
+  </form>
+{%- elif reason -%}
+  <span data-retry-off>{{ mono(reason, 'muted', title='Повторить эту отправку нельзя: ' ~ reason) }}</span>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro retry_modal(log_id, can_retry=False) -%}
+{%- if can_retry -%}
+{{ modal(id='history-retry-' ~ log_id,
+         title='Повторить отправку?',
+         action='/history/' ~ log_id ~ '/retry',
+         confirm_label='Повторить',
+         method="post",
+         body='Уйдёт ТЕКУЩЕЕ содержимое объявления из базы, а не то, что показано в этой записи. Отправка в группу необратима и списывает сообщение с баланса.') }}
+{%- endif -%}
+{%- endmacro %}
+
 {% macro history_card(log, user=None, detail_base_path='/history') -%}
 <article data-hrow{% if log.status %} data-status="{{ log.status }}"{% endif %} id="history-row-{{ log.id }}">
   <div data-area="head">
@@ -155,8 +219,12 @@
       {{ mono('ID', 'muted', upper=true) }}<span data-selectall>{{ mono(log.task_id, 'bright', title=log.task_id) }}</span>
     {%- endif -%}
     {{ copy_button(log, user) }}
+    {{ retry_trigger(log.id, log.can_retry, log.retry_reason) }}
     {{ link_button('Подробнее', detail_base_path ~ '/' ~ log.id, variant='ghost',
                    title='Подробности отправки') }}
   </div>
 </article>
+{#- Панель подтверждения — СОСЕДОМ записи, а не внутри неё: см. шапку макросов
+    повтора выше. -#}
+{{ retry_modal(log.id, log.can_retry) }}
 {%- endmacro %}
