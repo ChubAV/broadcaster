@@ -1,16 +1,12 @@
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.analytics.send_analytics import send_metrics
 from app.config import Settings
-from app.constants import AD_STATUS_PUBLISHED
 from app.dependencies import get_db, get_settings
-from app.models.ad import Ad
 from app.models.group import Group
-from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
@@ -27,47 +23,12 @@ async def dashboard(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
-    # Stats
-    ads_count = (
-        await db.execute(
-            select(func.count(Ad.id)).where(
-                Ad.user_id == user.id, Ad.status == AD_STATUS_PUBLISHED
-            )
-        )
-    ).scalar() or 0
-    accounts_count = (
-        await db.execute(
-            select(func.count(MessengerAccount.id)).where(
-                MessengerAccount.user_id == user.id,
-                MessengerAccount.status == "active",
-            )
-        )
-    ).scalar() or 0
-    groups_count = (
-        await db.execute(
-            select(func.count(Group.id)).where(
-                Group.user_id == user.id, Group.is_active == True  # noqa: E712
-            )
-        )
-    ).scalar() or 0
-
-    today_start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    sent_today = (
-        await db.execute(
-            select(func.count(SendLog.id))
-            .join(Ad, SendLog.ad_id == Ad.id)
-            .where(Ad.user_id == user.id, SendLog.sent_at >= today_start)
-        )
-    ).scalar() or 0
-
-    stats = {
-        "active_ads": ads_count,
-        "active_accounts": accounts_count,
-        "active_groups": groups_count,
-        "sent_today": sent_today,
-    }
+    # Плитки. Страница агрегатов НЕ СЧИТАЕТ: восемь чисел приходят одним
+    # запросом из модуля аналитики, который зовут и история, и Фаза 6 (D-35).
+    # Три счётчика сущностей и отправки «от UTC-полуночи» отсюда сняты по
+    # D-01/D-02 — счётчики дублировали боковое меню, а полночь показывала почти
+    # ноль в первые часы суток независимо от того, работала система ночью.
+    metrics = await send_metrics(db, user_id=user.id)
 
     # Recent sends (last 10)
     recent_query = (
@@ -101,7 +62,7 @@ async def dashboard(
             "request": request,
             "user": user,
             "is_admin": check_is_admin(user, settings),
-            "stats": stats,
+            "metrics": metrics,
             "recent_sends": recent_sends,
             "active_page": "dashboard",
         },

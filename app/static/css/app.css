@@ -1025,17 +1025,30 @@ a:hover { color: var(--accent-link-hover); }
   border-radius: var(--r-md); background: var(--surface-input);
 }
 
-/* Плитки дашборда — ТОЛЬКО каркас в объёме сегодняшних данных. Спарклайны,
-   heatmap, живая лента и ближайшие отправки принадлежат Фазе 4
-   (DASH-01…DASH-05) и здесь сознательно отсутствуют. */
+/* Плитки дашборда: крупное число и дельта к предыдущему окну на одной базовой
+   линии (макет 387-392). Спарклайн макета (393-397) не реализуется — D-03.
+   Heatmap и живая лента приходят следующими планами Фазы 4. */
 [data-metrics] {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 13px;
 }
+[data-metric-line] {
+  display: flex; align-items: baseline; gap: 8px; margin-top: 10px;
+}
 [data-metric-value] {
-  display: block; margin-top: 10px;
   font-size: var(--fs-h3); font-weight: 600; letter-spacing: -.03em;
+  /* Цифры одной ширины: без этого число дёргает дельту вбок при каждом
+     обновлении страницы. */
   font-variant-numeric: tabular-nums;
 }
+/* Дельта. Тон приходит атрибутом от вызывающего, а не выводится из знака в
+   CSS: для плитки ошибок знак читается наоборот, и правило инверсии
+   принадлежит смыслу метрики. Нейтральный тон (дельта равна нулю) —
+   приглушённый, чтобы ноль не спорил за внимание с самим числом. */
+[data-metric-delta] {
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-muted);
+}
+[data-metric-delta][data-tone="success"] { color: var(--ok); }
+[data-metric-delta][data-tone="danger"] { color: var(--danger); }
 
 /* Вертикальная стопка панелей страницы (дашборд, профиль) */
 [data-stack] { display: flex; flex-direction: column; gap: 22px; }
