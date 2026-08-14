@@ -24,6 +24,7 @@ from app.routes.accounts import router as accounts_router
 from app.routes.schedules import router as schedules_router
 from app.routes.history import router as history_router
 from app.routes.billing import router as billing_router
+from app.pages.dashboard_feed import router as dashboard_feed_router
 from app.pages import router as pages_router
 
 logger = structlog.get_logger(__name__)
@@ -83,6 +84,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(schedules_router)
     app.include_router(history_router)
     app.include_router(billing_router)
+    # Паршал живой ленты включается ОТДЕЛЬНО и ДО страничного роутера: тот
+    # объявлен с зависимостью загрузки контекста шелла на каждом маршруте, а
+    # ленте шелл не нужен, и при бессрочном опросе эта цена умножалась бы на
+    # число открытых вкладок. Обоснование целиком — в докстринге модуля.
+    app.include_router(dashboard_feed_router)
     app.include_router(pages_router)
 
     @app.exception_handler(NotFoundError)

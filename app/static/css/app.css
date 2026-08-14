@@ -1096,6 +1096,57 @@ a:hover { color: var(--accent-link-hover); }
   [data-upbadge] .msg__label { display: none; }
 }
 
+/* Живая лента (DASH-03, макет 428-444) -------------------------------------- */
+/* Шапка блока: заголовок слева, подпись real-time прижата вправо. Своя, а не
+   card_open(title=...), по той же причине, что и у heatmap: парный макрос
+   карточки ставит подпись ПОД заголовком, а макет ставит её на ту же строку. */
+[data-feedhead] { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+[data-feedlive] { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+/* Пульсирующая точка «идёт прямо сейчас». Псевдоэлемент, а не отдельный узел
+   разметки: точка — чистое украшение подписи, и программе чтения с экрана в
+   потоке она не нужна. Анимация — СУЩЕСТВУЮЩИЙ @keyframes pulse раздела 2
+   (тот же, что у индикатора сессий в шапке шелла): второй пульсации в проекте
+   не заводится. */
+[data-feedlive]::before {
+  content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--ok); animation: pulse 1.4s ease-in-out infinite;
+}
+/* Контейнер подмены. Он же носитель опроса, поэтому в разметке у него есть
+   идентификатор: подмена приходит ВНУТРЬ него, и сам он DOM не покидает. */
+[data-feed] { display: flex; flex-direction: column; gap: 2px; }
+/* Строка — ССЫЛКА в запись истории (D-08): цвет и подчёркивание сбрасываются
+   здесь, а не отменяются в разметке. Фокус остаётся видимым — обвести ссылку
+   нечем, кроме контура. */
+[data-feedrow] {
+  display: flex; align-items: center; gap: 11px; min-width: 0;
+  padding: 9px 10px; border-radius: var(--r-lg);
+  color: inherit; text-decoration: none;
+  transition: background .16s ease;
+}
+[data-feedrow]:hover { background: var(--surface-input); }
+[data-feedrow]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* Точка статуса. Цвет приходит ПО ЗНАЧЕНИЮ статуса, а не инлайн-стилем макета:
+   инлайн-стилей в проекте нет, а неизвестный статус обязан остаться ВИДИМЫМ —
+   нейтральная заливка по умолчанию честнее исчезнувшей точки, которая сдвинула
+   бы текст события относительно соседних строк. */
+[data-feeddot] {
+  flex: none; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-muted);
+}
+[data-feeddot][data-status="ok"] { background: var(--ok); }
+[data-feeddot][data-status="fail"] { background: var(--danger); }
+[data-feeddot][data-status="account_disconnected"] { background: var(--warn); }
+/* min-width: 0 обязателен: название объявления и имя группы приходят от
+   пользователя и не ограничены ничем — без него они вытолкнули бы подпись
+   времени за пределы строки. */
+[data-feedtext] {
+  flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--fs-md);
+}
+/* Подпись времени прижата вправо и не сжимается: «2 часа назад» и «только что»
+   разной длины, и без фиксации край строки прыгал бы от строки к строке. */
+[data-feedrow] > .mono { flex: none; font-variant-numeric: tabular-nums; }
+
 /* Heatmap активности 7×24 (DASH-04, D-09) ----------------------------------- */
 /* Шапка блока: заголовок слева, mono-подпись прижата вправо (макет 449-451).
    Своя, а не card_open(title=...): парный макрос карточки ставит подпись ПОД
