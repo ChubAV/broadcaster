@@ -834,3 +834,446 @@ def test_retry_queue_client_is_imported_inside_the_handler():
     assert "from app.worker.celery_app import celery" in _handler_source(), (
         "локального импорта клиента очереди в обработчике нет"
     )
+
+
+# =============================================================================
+# Задача 2: запуск повтора, панель подтверждения и предпроверка для интерфейса
+# =============================================================================
+#
+# Признак доступности повтора вычисляется НА СЕРВЕРЕ и приезжает в карточку
+# значением. Вычислять его в шаблоне нельзя вовсе: разметке не из чего узнать,
+# цела ли тройка сущностей, а обращение к базе из Jinja означало бы запрос на
+# каждую строку списка.
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
+
+CARD_HTML = TEMPLATES_DIR / "history" / "includes" / "history_card.html"
+DETAIL_HTML = TEMPLATES_DIR / "history" / "detail.html"
+
+# Разметка панели, собранная в обход библиотеки. Своя копия не унаследовала бы
+# ни гарда повторной отправки, ни ловушки фокуса, ни закрытия по клавише отмены.
+PANEL_MARKUP_MARKERS = ("modal__form", "modal__actions", "modal__panel")
+
+_ARTICLE_RE = re.compile(r"<article\b.*?</article>", re.S)
+
+
+def _retry_trigger_present(html: str) -> bool:
+    return "data-retry" in html and "modal-open-history-retry-" in html
+
+
+async def _seed_retryable_with_ids(
+    db: AsyncSession, user_id: int, *, status: str = STATUS_FAIL
+) -> tuple[SendLog, Ad, Group, MessengerAccount]:
+    ad, group, account = await _seed_triple(db, user_id)
+    await _seed_balance(db, user_id)
+    log = await _seed_log(db, user_id, status=status, ad_id=ad.id, group_id=group.id)
+    return log, ad, group, account
+
+
+# --- запуск повтора в карточке списка -----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unsuccessful_record_offers_a_retry_launcher(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """У неуспешной записи в карточке списка есть чем запустить повтор."""
+    user = await _current_user(db_session)
+    log, *_ = await _seed_retryable_with_ids(db_session, user.id)
+
+    html = (await authed_client.get("/history")).text
+
+    assert _retry_trigger_present(html), "запуска повтора у неуспешной записи нет"
+    assert f"/history/{log.id}/retry" in html
+
+
+@pytest.mark.asyncio
+async def test_successful_record_offers_no_retry_launcher(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """У успешной записи запуска повтора НЕТ — ни кнопки, ни панели.
+
+    Недоступность возможности выражается отсутствием органа управления, а не
+    его бездействием: тот же принцип, по которому у успешной записи нет кнопки
+    копирования диагностики.
+    """
+    user = await _current_user(db_session)
+    await _seed_retryable_with_ids(db_session, user.id, status=STATUS_OK)
+
+    html = (await authed_client.get("/history")).text
+
+    assert not _retry_trigger_present(html), "успешной записи предложен повтор"
+    assert "/retry" not in html
+
+
+@pytest.mark.asyncio
+async def test_record_with_a_missing_entity_explains_instead_of_offering_retry(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Заведомо непроходимый повтор не предлагается, но и не молчит (D-21).
+
+    Молча спрятанная кнопка неотличима от «повтор не поддерживается»:
+    пользователь не узнал бы, что мешает именно исчезнувшее объявление.
+    """
+    user = await _current_user(db_session)
+    _ad, group, _account = await _seed_triple(db_session, user.id)
+    await _seed_log(db_session, user.id, ad_id=999999, group_id=group.id)
+
+    html = (await authed_client.get("/history")).text
+
+    assert not _retry_trigger_present(html), "повтор предложен там, где невозможен"
+    assert "data-retry-off" in html, "причина недоступности повтора не показана"
+
+
+@pytest.mark.asyncio
+async def test_retry_availability_is_computed_by_the_server(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Признак доступности приезжает в карточку значением, а не считается разметкой.
+
+    Иначе шаблон обязан был бы ходить в базу на каждую строку списка.
+    """
+    source = CARD_HTML.read_text(encoding="utf-8")
+
+    assert "can_retry" in source, "карточка не читает серверный признак"
+
+    user = await _current_user(db_session)
+    await _seed_retryable_with_ids(db_session, user.id)
+    html = (await authed_client.get("/history")).text
+
+    assert _retry_trigger_present(html)
+
+
+@pytest.mark.asyncio
+async def test_retry_launcher_survives_the_infinite_scroll_partial(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Порция прокрутки несёт тот же признак, что и первая страница.
+
+    Признак, вычисленный только в списочном обработчике, потерялся бы на
+    тридцать первой записи — молча, с исправным на вид экраном.
+    """
+    user = await _current_user(db_session)
+    await _seed_retryable_with_ids(db_session, user.id)
+
+    html = (await authed_client.get("/history/partial?offset=0&limit=30")).text
+
+    assert _retry_trigger_present(html), "порция прокрутки потеряла запуск повтора"
+
+
+# --- панель подтверждения -----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retry_confirmation_panel_carries_a_real_form(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Панель подтверждения несёт НАСТОЯЩУЮ форму на адрес повтора.
+
+    Панель — усиление поверх формы, а не замена ей: без Alpine перехват не
+    навешивается, и форма уходит прежним методом на прежний маршрут.
+    """
+    user = await _current_user(db_session)
+    log, *_ = await _seed_retryable_with_ids(db_session, user.id)
+
+    html = (await authed_client.get("/history")).text
+
+    start = html.find(f'id="history-retry-{log.id}"')
+    assert start != -1, "панели подтверждения повтора в разметке нет"
+    panel = html[start : start + 2000]
+    assert 'method="post"' in panel, panel[:400]
+    assert f'action="/history/{log.id}/retry"' in panel, panel[:400]
+    assert 'type="submit"' in panel, panel[:400]
+
+
+@pytest.mark.asyncio
+async def test_retry_confirmation_panel_names_the_current_ad_content(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Текст панели называет следствие D-17 прямо.
+
+    Уйдёт ТЕКУЩЕЕ содержимое объявления из базы, а не снапшот, показанный в
+    записи. Умолчать это значит показать пользователю один текст, а отправить
+    другой (T-04-40).
+    """
+    user = await _current_user(db_session)
+    log, *_ = await _seed_retryable_with_ids(db_session, user.id)
+
+    html = (await authed_client.get("/history")).text
+    start = html.find(f'id="history-retry-{log.id}"')
+    panel = html[start : start + 2000].lower()
+
+    assert "текущ" in panel, "панель не говорит, что уйдёт текущее содержимое"
+    assert "объявлени" in panel
+
+
+@pytest.mark.asyncio
+async def test_retry_panel_is_emitted_outside_the_record_markup(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Панель лежит ВНЕ разметки записи.
+
+    Внутри карточки панель стала бы колонкой её сетки — она позиционируется
+    фиксированно, — а внутри заменяемого прокруткой элемента размножилась бы
+    после первой же подмены, и событие открывало бы сразу две панели с одним
+    именем.
+    """
+    user = await _current_user(db_session)
+    log, *_ = await _seed_retryable_with_ids(db_session, user.id)
+
+    html = (await authed_client.get("/history")).text
+
+    articles = _ARTICLE_RE.findall(html)
+    assert articles, "записи в выдаче нет — проверять нечего"
+    for article in articles:
+        assert f'id="history-retry-{log.id}"' not in article, (
+            "панель подтверждения оказалась внутри разметки записи"
+        )
+    assert f'id="history-retry-{log.id}"' in html, "панели нет вовсе"
+
+
+def test_retry_uses_the_shared_confirmation_panel():
+    """Подтверждение идёт ОБЩЕЙ панелью проекта, а не собственным диалогом.
+
+    Своя копия панели не унаследовала бы ни гарда повторной отправки, ни
+    ловушки фокуса, ни закрытия по клавише отмены — а браузерный диалог красит
+    сплошной обход отрисованных страниц.
+    """
+    source = CARD_HTML.read_text(encoding="utf-8")
+
+    assert "components/modal.html" in source, "общая панель не импортирована"
+    own = [marker for marker in PANEL_MARKUP_MARKERS if marker in source]
+    assert not own, f"панель собрана в обход библиотеки: {own}"
+
+
+# --- страница записи ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_history_detail_offers_the_same_retry_path(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """На странице записи повтор запускается ТЕМ ЖЕ путём."""
+    user = await _current_user(db_session)
+    log, *_ = await _seed_retryable_with_ids(db_session, user.id)
+
+    html = (await authed_client.get(f"/history/{log.id}")).text
+
+    assert _retry_trigger_present(html), "страница записи не предлагает повтор"
+    assert f'action="/history/{log.id}/retry"' in html
+
+
+@pytest.mark.asyncio
+async def test_history_detail_offers_no_retry_for_a_successful_record(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    user = await _current_user(db_session)
+    log, *_ = await _seed_retryable_with_ids(db_session, user.id, status=STATUS_OK)
+
+    html = (await authed_client.get(f"/history/{log.id}")).text
+
+    assert not _retry_trigger_present(html)
+
+
+@pytest.mark.asyncio
+async def test_history_detail_panel_is_outside_the_record_markup(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    user = await _current_user(db_session)
+    log, *_ = await _seed_retryable_with_ids(db_session, user.id)
+
+    html = (await authed_client.get(f"/history/{log.id}")).text
+
+    for article in _ARTICLE_RE.findall(html):
+        assert f'id="history-retry-{log.id}"' not in article
+    assert f'id="history-retry-{log.id}"' in html
+
+
+def test_retry_launcher_has_one_definition_for_both_screens():
+    """Запуск повтора объявлен ОДИН раз и импортируется страницей записи.
+
+    Вторая копия разошлась бы с первой ровно там, где расхождение опаснее
+    всего: в тексте, обещающем пользователю, ЧТО именно будет отправлено. Тот
+    же приём, что у кнопки копирования диагностики (план 04-07).
+    """
+    detail = DETAIL_HTML.read_text(encoding="utf-8")
+
+    assert "history/includes/history_card.html" in detail
+    assert "retry" in detail
+    own = [marker for marker in PANEL_MARKUP_MARKERS if marker in detail]
+    assert not own, f"страница записи собрала панель сама: {own}"
+
+
+# --- админский экран истории --------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_admin_history_offers_no_retry_launcher(
+    client: AsyncClient, test_settings, db_session: AsyncSession
+):
+    """Админская история чужого пользователя повтора НЕ предлагает.
+
+    Тот же макрос карточки обслуживает админский экран, а признак доступности
+    приходит туда значением, которого админский обработчик не кладёт. Кнопка,
+    приехавшая туда сама, обещала бы админу действие, которое сервер всё равно
+    отклонит проверкой владения, — то есть предлагала бы заведомый отказ.
+    """
+    owner = await _current_user(db_session)
+    await _seed_retryable_with_ids(db_session, owner.id)
+
+    await client.post(
+        "/api/auth/register",
+        json={
+            "email": test_settings.admin_email,
+            "password": "testpass123",
+            "name": "Admin User",
+        },
+    )
+    await client.post(
+        "/login",
+        data={"email": test_settings.admin_email, "password": "testpass123"},
+        follow_redirects=False,
+    )
+
+    response = await client.get(f"/admin/users/{owner.id}/history")
+
+    assert response.status_code == 200
+    assert not _retry_trigger_present(response.text), (
+        "админскому экрану предложен повтор чужой записи"
+    )
+
+
+# --- предпроверка для интерфейса ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retry_availability_takes_a_bounded_number_of_queries(
+    db_session: AsyncSession,
+):
+    """Предпроверка страницы стоит ФИКСИРОВАННОЕ число запросов.
+
+    Проверка тройки сущностей по записи означала бы три обращения к базе на
+    строку — девяносто на страницу в тридцать записей, и так на каждый рендер
+    списка. Число запросов не имеет права зависеть от числа записей.
+    """
+    from sqlalchemy import event
+
+    from app.pages.history import retry_availability
+
+    user = await _current_user(db_session)
+    ad, group, _account = await _seed_triple(db_session, user.id)
+    rows = []
+    for _ in range(20):
+        log = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
+        rows.append((log, group))
+
+    statements: list[str] = []
+    sync_engine = db_session.bind.sync_engine
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(sync_engine, "before_cursor_execute", _record)
+    try:
+        verdict = await retry_availability(db_session, rows)
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _record)
+
+    assert len(verdict) == 20
+    assert all(reason is None for reason in verdict.values()), verdict
+    assert len(statements) <= 2, (
+        f"предпроверка сделала {len(statements)} запросов на двадцать записей — "
+        "это N+1 на каждом рендере списка"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_availability_ignores_successful_records(
+    db_session: AsyncSession,
+):
+    """Успешная запись в предпроверку не попадает вовсе.
+
+    Повтор ей не предлагается по статусу, и тратить на неё запросы незачем.
+    """
+    from app.pages.history import retry_availability
+
+    user = await _current_user(db_session)
+    ad, group, _account = await _seed_triple(db_session, user.id)
+    ok = await _seed_log(
+        db_session, user.id, status=STATUS_OK, ad_id=ad.id, group_id=group.id
+    )
+    bad = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
+
+    verdict = await retry_availability(db_session, [(ok, group), (bad, group)])
+
+    assert ok.id not in verdict
+    assert verdict[bad.id] is None
+
+
+@pytest.mark.asyncio
+async def test_retry_availability_names_each_missing_entity(
+    db_session: AsyncSession,
+):
+    """Причина называет ИМЕННО ту сущность, которой не хватает.
+
+    Общее «повторить нельзя» на все четыре случая не сказало бы пользователю
+    ничего о том, что чинить.
+    """
+    from app.pages.history import (
+        RETRY_REASON_ACCOUNT_GONE,
+        RETRY_REASON_ACCOUNT_OFF,
+        RETRY_REASON_AD_GONE,
+        RETRY_REASON_GROUP_GONE,
+        retry_availability,
+    )
+
+    user = await _current_user(db_session)
+    ad, group, _account = await _seed_triple(db_session, user.id)
+
+    no_ad = await _seed_log(db_session, user.id, ad_id=999999, group_id=group.id)
+    no_group = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=None)
+    whole = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
+
+    verdict = await retry_availability(
+        db_session, [(no_ad, group), (no_group, None), (whole, group)]
+    )
+    assert verdict[no_ad.id] == RETRY_REASON_AD_GONE
+    assert verdict[no_group.id] == RETRY_REASON_GROUP_GONE
+    assert verdict[whole.id] is None
+
+    off_account = MessengerAccount(
+        user_id=user.id, type="wa", credentials="creds", status="sync_failed"
+    )
+    db_session.add(off_account)
+    await db_session.commit()
+    await db_session.refresh(off_account)
+    off_group = Group(
+        user_id=user.id,
+        account_id=off_account.id,
+        messenger_type="wa",
+        group_external_id="-100777",
+        name="Отключённый",
+    )
+    orphan_group = Group(
+        user_id=user.id,
+        account_id=999999,
+        messenger_type="wa",
+        group_external_id="-100888",
+        name="Без аккаунта",
+    )
+    db_session.add(off_group)
+    db_session.add(orphan_group)
+    await db_session.commit()
+    await db_session.refresh(off_group)
+    await db_session.refresh(orphan_group)
+
+    log_off = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=off_group.id)
+    log_orphan = await _seed_log(
+        db_session, user.id, ad_id=ad.id, group_id=orphan_group.id
+    )
+
+    verdict = await retry_availability(
+        db_session, [(log_off, off_group), (log_orphan, orphan_group)]
+    )
+    assert verdict[log_off.id] == RETRY_REASON_ACCOUNT_OFF
+    assert verdict[log_orphan.id] == RETRY_REASON_ACCOUNT_GONE
