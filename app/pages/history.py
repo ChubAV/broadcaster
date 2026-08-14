@@ -1,8 +1,8 @@
 import csv
 import io
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +19,7 @@ from app.application.analytics.send_analytics import (
 )
 from app.config import Settings
 from app.dependencies import get_db, get_settings
+from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
@@ -29,6 +30,7 @@ from app.pages.common import (
     get_user_from_cookie,
     templates,
 )
+from app.services.billing_cache import check_balance_cached
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
@@ -248,6 +250,133 @@ def export_row(log: SendLog, group: Group | None, user: User | None) -> list[str
         export_cell(log.error_message),
         export_cell(log.task_id),
     ]
+
+
+# --- Повтор отправки ----------------------------------------------------------
+#
+# HIST-04. Единственное настоящее ДЕЙСТВИЕ раздела: всё остальное здесь читает.
+# Путь ведёт прямо в боевую очередь, отправка в стороннюю группу не отзывается и
+# тратит баланс, поэтому КАЖДАЯ проверка ниже стоит ДО постановки в очередь.
+
+# Имя Celery-таска повтора (заведён планом 04-03). Постановка идёт ПО ИМЕНИ:
+# импорт самого таска в web-слой затащил бы сюда модуль воркера целиком вместе
+# с его зависимостями.
+RETRY_TASK_NAME = "app.worker.tasks.retry_send"
+
+# Признаки исхода повтора, приезжающие на список перенаправлением. Значение
+# сравнивается ЦЕЛИКОМ по этому словарю — тем же приёмом, что признак
+# несостоявшейся выгрузки: плашка по любому непустому содержимому параметра
+# позволяла бы чужой ссылкой нарисовать пользователю сообщение о событии,
+# которого не было.
+RETRY_QUEUED = "queued"
+RETRY_GONE = "gone"
+RETRY_NO_BALANCE = "no_balance"
+RETRY_BUSY = "busy"
+
+# Тексты ПОСТОЯННЫЕ и из ответа гейта баланса не собираются. Гейт возвращает
+# причину строкой, и провоз этой строки через адрес означал бы, что владелец
+# ссылки печатает пользователю произвольный текст на его собственной странице.
+RETRY_NOTICES = {
+    RETRY_QUEUED: (
+        "Повтор поставлен в очередь. Уйдёт ТЕКУЩЕЕ содержимое объявления, "
+        "а не то, что показано в записи.",
+        "success",
+    ),
+    RETRY_GONE: (
+        "Повторить не удалось: объявления, группы или аккаунта этой отправки "
+        "больше нет либо аккаунт отключён.",
+        "warning",
+    ),
+    RETRY_NO_BALANCE: (
+        "Повторить не удалось: баланс сообщений исчерпан. Пополните баланс — "
+        "и повтор станет доступен.",
+        "warning",
+    ),
+    RETRY_BUSY: (
+        "Повтор этой отправки уже выполняется — второй раз он не уйдёт.",
+        "info",
+    ),
+}
+
+
+def _is_same_origin(request: Request) -> bool:
+    """Пришёл ли изменяющий запрос со страницы САМОГО приложения (T-04-38).
+
+    ЗАЧЕМ. Аутентификация проекта идёт cookie, а действие повтора необратимо:
+    отправка в стороннюю группу не отзывается и тратит баланс. Именно эта фаза
+    ВВОДИТ форму, запускающую такое действие, и ASVS L1 (V4.2.2) требует защиты
+    изменяющих состояние запросов от межсайтовой подделки. Сверка заголовков —
+    единственный вариант, который не требует ни схемы токенов на весь проект,
+    ни правки шаблонов, ни новой зависимости.
+
+    ПРАВИЛО. Пришёл `Sec-Fetch-Site` — принимается только значение
+    `same-origin`, всё прочее отклоняется. Иначе пришёл `Origin` — его ХОСТ
+    обязан совпасть с хостом самого запроса. Сравнивается именно хост, а не
+    строка целиком: заголовок источника несёт схему и порт, адрес запроса —
+    тоже, и посимвольное сравнение сломалось бы на первом же развёртывании за
+    обратным прокси. Хост своего адреса берётся ИЗ ЗАПРОСА, а не из настроек:
+    поля с базовым адресом приложения в настройках проекта нет, и заводить его
+    ради одной проверки значило бы завести конфигурацию, которую придётся
+    сопровождать.
+
+    ⚠️ НАЗВАННАЯ ГРАНИЦА ЗАЩИТЫ. Запрос, не приславший НИ ОДНОГО из двух
+    заголовков, пропускается. Браузер, способный отправить межсайтовую форму,
+    шлёт `Origin` на POST начиная с 2016 года, поэтому отсутствие обоих
+    заголовков означает не-браузерного клиента — в том числе тестовую суиту
+    проекта, которая их не шлёт. Отказ по их отсутствию не добавил бы ни одной
+    защиты и покрасил бы весь остальной путь. Ограничение выписано здесь и
+    продублировано в отчёте безопасности фазы намеренно: принятый риск, о
+    котором не написано, через один рефакторинг становится неизвестным.
+
+    ⚠️ РАМКИ. Проверка живёт в обработчике повтора и только в нём. Остальные
+    формы проекта (удаления через POST) защиты не получают — фаза не расширяет
+    рамки; остаток вынесен в отчёт безопасности фазы отдельной рекомендацией.
+    """
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site:
+        return fetch_site == "same-origin"
+    origin = request.headers.get("origin")
+    if origin:
+        return urlsplit(origin).hostname == request.url.hostname
+    return True
+
+
+# Записи журнала, повтор которых ставится в очередь прямо сейчас в ЭТОМ
+# процессе. Реестр — в памяти, а не в БД, по образцу реестра синхронизации
+# аккаунтов (`app/pages/accounts.py`).
+#
+# ⚠️ ГРАНИЦА ПРИЁМА, НАЗВАННАЯ ЯВНО. Реестр живёт в памяти ОДНОГО рабочего
+# процесса и нескольких процессов не переживает: два одновременных нажатия,
+# попавшие в разные процессы, обе заявки займут успешно. Ограничение уже
+# принято проектом для синхронизации, но здесь цена ошибки выше — вторая
+# необратимая отправка в чужую группу. Поэтому оно записано и здесь, и в отчёте
+# безопасности фазы, а не умолчано. Остальные три линии защиты от двойной
+# отправки (перенаправление после формы, гард панели подтверждения, отсутствие
+# автоперезапуска у самого таска) от числа процессов не зависят.
+_RETRY_IN_FLIGHT: set[int] = set()
+
+
+def _claim_retry_slot(log_id: int) -> bool:
+    """Занимает заявку на повтор записи. `False` — заявка уже занята.
+
+    Функция СИНХРОННАЯ и не содержит ни одного `await` намеренно: между
+    проверкой и добавлением не должно быть точки переключения задач, иначе
+    гонка вернётся ровно туда, откуда её убирают.
+    """
+    if log_id in _RETRY_IN_FLIGHT:
+        return False
+    _RETRY_IN_FLIGHT.add(log_id)
+    return True
+
+
+def _release_retry_slot(log_id: int) -> None:
+    """Освобождает заявку. К БД не обращается и отказать не может.
+
+    Вызывается из блока завершения — в том числе после исключения, когда
+    сессия непригодна ни для чего, кроме отката. Отбрасывание, а не удаление:
+    повторный вызов обязан быть безобидным.
+    """
+    _RETRY_IN_FLIGHT.discard(log_id)
 
 
 @router.get("/history/partial", response_class=HTMLResponse)
@@ -485,6 +614,99 @@ async def history_detail(
     )
 
 
+@router.post("/history/{log_id}/retry")
+async def history_retry(
+    request: Request,
+    log_id: int,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Ставит повтор отправки в очередь (HIST-04).
+
+    ПОРЯДОК ПРОВЕРОК — ЧАСТЬ КОНТРАКТА, а не оформление. Каждая стоит ДО
+    постановки в очередь, потому что отправка необратима: проверка, сделанная
+    внутри самой отправки, означала бы запись в журнал о заведомо невозможной
+    отправке, а то и настоящее сообщение в чужую группу.
+
+    1. Гард входа.
+    2. Сверка источника запроса — ПЕРВОЕ, что делается после гарда, до чтения
+       чего бы то ни было: подделанный межсайтовый запрос не имеет права
+       вызвать ни одного побочного эффекта. Отказ — код 403 без
+       перенаправления: дружелюбный ответ ему не полагается, а однозначный код
+       делает тест недвусмысленным.
+    3. Владение. Клиентским данным не верят: идентификатор приезжает из адреса.
+    4. Пригодность. Повторяется НЕуспешная запись, и предикат — «статус не
+       успешный», а не «статус из перечня известных неудач». Перечень конечен
+       ровно до появления следующего статуса, и запись с неизвестным значением
+       оказалась бы ни успешной, ни повторяемой — тот же предикат держат
+       счётчик неудач дашборда и кнопка копирования диагностики.
+    5. Предпроверка целости тройки (D-21): объявление, группа и аккаунт через
+       группу, плюс активность аккаунта. Случай реальный — удалённая группа
+       возвращается синхронизацией НОВОЙ строкой с новым идентификатором, и
+       ссылка старой записи ведёт в никуда.
+    6. Гейт баланса (T-04-36). Он стоит у планировщика, а не внутри отправки;
+       без этого шага повтор стал бы способом отправить столько, сколько у
+       пользователя неудачных записей, в обход тарифного лимита. Биллинг здесь
+       не правится: списание за успешный повтор произойдёт там же, где у боевой
+       рассылки (D-20).
+
+    ЗАЯВКА ЗАНИМАЕТСЯ ДО ЛЮБОЙ АСИНХРОННОЙ РАБОТЫ по записи и освобождается в
+    блоке завершения — второе нажатие в пределах процесса второй задачи не
+    ставит.
+
+    ОТВЕТ — ПЕРЕНАПРАВЛЕНИЕ. Оно же закрывает повтор по обновлению страницы и
+    по кнопке возврата браузера.
+    """
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    if not _is_same_origin(request):
+        return Response(status_code=403)
+
+    log = await db.get(SendLog, log_id)
+    if not log or log.user_id != user.id:
+        return RedirectResponse(url="/history", status_code=302)
+
+    if log.status == STATUS_OK:
+        return RedirectResponse(url="/history", status_code=302)
+
+    if not _claim_retry_slot(log.id):
+        return RedirectResponse(url=f"/history?retry={RETRY_BUSY}", status_code=302)
+
+    try:
+        group = await db.get(Group, log.group_id) if log.group_id else None
+        ad = await db.get(Ad, log.ad_id) if log.ad_id else None
+        # У журнала колонки аккаунта нет вовсе — аккаунт выводится через группу.
+        account = (
+            await db.get(MessengerAccount, group.account_id)
+            if group and group.account_id
+            else None
+        )
+        if not ad or not group or not account or account.status != "active":
+            return RedirectResponse(
+                url=f"/history?retry={RETRY_GONE}", status_code=302
+            )
+
+        allowed, _reason = await check_balance_cached(db, user.id, "send")
+        if not allowed:
+            return RedirectResponse(
+                url=f"/history?retry={RETRY_NO_BALANCE}", status_code=302
+            )
+
+        # Импорт ЛОКАЛЬНЫЙ и обязан таким остаться: именно он позволяет
+        # подменить модуль очереди в тесте. Поднятый на уровень модуля, он
+        # разрешился бы один раз при загрузке пакета страниц, и любой тест
+        # повтора пошёл бы к настоящему брокеру.
+        from app.worker.celery_app import celery
+
+        celery.send_task(RETRY_TASK_NAME, args=[log.id, user.id])
+    finally:
+        _release_retry_slot(log.id)
+
+    return RedirectResponse(url=f"/history?retry={RETRY_QUEUED}", status_code=302)
+
+
 @router.get("/history", response_class=HTMLResponse)
 async def history_list(
     request: Request,
@@ -494,6 +716,7 @@ async def history_list(
     period: str | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     export: str | None = Query(default=None),
+    retry: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -596,6 +819,11 @@ async def history_list(
             # выгрузке, которой не было.
             "export_blocked": export == EXPORT_TOO_MANY,
             "export_row_cap": EXPORT_ROW_CAP,
+            # Исход повтора приезжает признаком в адресе и разбирается ПО
+            # СЛОВАРЮ известных значений: неизвестное содержимое параметра не
+            # рисует ничего. Иначе чужая ссылка печатала бы пользователю
+            # сообщение о повторе, которого не было.
+            "retry_notice": RETRY_NOTICES.get(retry),
             "offset": offset,
             "page_size": PAGE_SIZE,
             "has_next": has_next,

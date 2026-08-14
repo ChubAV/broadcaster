@@ -734,13 +734,16 @@ async def test_retry_releases_the_slot_after_an_exception(
     boom = AsyncMock(side_effect=RuntimeError("гейт баланса упал"))
     with patch.dict(sys.modules, {"app.worker.celery_app": MagicMock()}):
         with patch("app.pages.history.check_balance_cached", boom):
-            with pytest.raises(RuntimeError):
-                await authed_client.post(
-                    f"/history/{log.id}/retry",
-                    headers=SAME_ORIGIN,
-                    follow_redirects=False,
-                )
+            # Исключение обработчика до теста не доезжает: посредник приложения
+            # (`app/middleware.py`) ловит его, пишет в журнал и отдаёт 500.
+            # Проверяется поэтому не всплытие, а СЛЕДСТВИЕ — заявка снята.
+            response = await authed_client.post(
+                f"/history/{log.id}/retry",
+                headers=SAME_ORIGIN,
+                follow_redirects=False,
+            )
 
+    assert response.status_code == 500, response.status_code
     assert log.id not in history_module._RETRY_IN_FLIGHT, (
         "заявка осталась занятой после исключения — запись больше не повторить"
     )
@@ -751,6 +754,11 @@ def test_retry_slot_claim_is_synchronous():
 
     Точка переключения задач между проверкой и добавлением вернула бы гонку
     ровно туда, откуда её убирают.
+
+    ДОКСТРИНГ ИЗ ПРОВЕРКИ ВЫРЕЗАН. Он обязан объяснять, почему ожидания здесь
+    нет, — то есть содержит само слово. Поиск по сырому тексту функции краснел
+    бы именно на объяснении запрета: ровно то ложное срабатывание, которое в
+    этом репозитории уже стоило переработки нескольким планам.
     """
     source = HISTORY_PY.read_text(encoding="utf-8")
     start = source.index("def _claim_retry_slot(")
@@ -759,7 +767,13 @@ def test_retry_slot_claim_is_synchronous():
     assert not re.search(r"^async def _claim_retry_slot", source[start:], re.M), (
         "функция занятия заявки стала асинхронной"
     )
-    assert "await" not in body, f"в занятии заявки появилось ожидание: {body!r}"
+
+    doc_open = body.index('"""')
+    doc_close = body.index('"""', doc_open + 3) + 3
+    code = body[:doc_open] + body[doc_close:]
+
+    assert '"""' not in code, "докстринг вырезан не целиком — проверка неверна"
+    assert "await" not in code, f"в занятии заявки появилось ожидание: {code!r}"
 
 
 def test_retry_slot_release_is_a_discard_in_a_finally_block():
