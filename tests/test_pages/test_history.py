@@ -522,6 +522,30 @@ async def test_reset_link_appears_only_with_active_filters(
     assert 'data-chipreset href="/history"' in filtered
 
 
+def test_messenger_chips_match_the_channel_axis_of_the_project():
+    """Значения канала не расходятся с осью канала сводного списка расписаний.
+
+    Связь закреплена ТЕСТОМ, а не импортом: ось расписаний описывает другой
+    экран, и импорт объявил бы одну ось определением другой. Разойтись им при
+    этом нельзя — канал у проекта один и тот же, и чипс, отбирающий по
+    значению, которого не пишет ни один аккаунт, не отберёт ничего никогда.
+    """
+    from app.pages.schedules import CHANNEL_FILTER_VALUES
+
+    assert tuple(value for value, _ in MESSENGER_CHIPS if value) == CHANNEL_FILTER_VALUES
+
+
+def test_period_chips_cover_every_period_the_module_knows():
+    """Каждый период модуля аналитики имеет свой чипс.
+
+    Период, заведённый в HISTORY_PERIODS и не показанный чипсом, недостижим с
+    экрана: он работает по прямой ссылке и не существует для пользователя.
+    """
+    from app.application.analytics.send_analytics import HISTORY_PERIODS
+
+    assert tuple(value for value, _ in PERIOD_CHIPS if value) == HISTORY_PERIODS
+
+
 @pytest.mark.asyncio
 async def test_filter_chips_template_lives_outside_the_component_library():
     """Новый шаблон положен в каталог включений раздела, а не в библиотеку.
