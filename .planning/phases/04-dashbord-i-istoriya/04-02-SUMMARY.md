@@ -184,6 +184,13 @@ None — внешних сервисов ревизия не касается.
 - Блокеров для последующих волн фазы 04 план не создаёт.
 - Единственный незакрытый вопрос — момент наката ревизий `0013`-`0016` на целевую базу.
 
+## Self-Check: PASSED
+
+Файлы на месте: `alembic/versions/0016_send_logs_user_sent_at.py`,
+`tests/test_migrations/test_0016_send_logs_user_sent_at.py`,
+`.planning/phases/04-dashbord-i-istoriya/04-02-SUMMARY.md`.
+Коммиты в истории: `ebf1dba`, `66c8f5e`. Дерево чистое, удалённых файлов ни в одном коммите нет.
+
 ---
 *Phase: 04-dashbord-i-istoriya*
 *Plan: 02*
