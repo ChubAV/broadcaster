@@ -1109,7 +1109,7 @@ def test_retry_launcher_has_one_definition_for_both_screens():
 
 @pytest.mark.asyncio
 async def test_admin_history_offers_no_retry_launcher(
-    client: AsyncClient, test_settings, db_session: AsyncSession
+    client: AsyncClient, auth_headers: dict, test_settings, db_session: AsyncSession
 ):
     """Админская история чужого пользователя повтора НЕ предлагает.
 
@@ -1148,7 +1148,7 @@ async def test_admin_history_offers_no_retry_launcher(
 
 @pytest.mark.asyncio
 async def test_retry_availability_takes_a_bounded_number_of_queries(
-    db_session: AsyncSession,
+    auth_headers: dict, db_session: AsyncSession
 ):
     """Предпроверка страницы стоит ФИКСИРОВАННОЕ число запросов.
 
@@ -1189,7 +1189,7 @@ async def test_retry_availability_takes_a_bounded_number_of_queries(
 
 @pytest.mark.asyncio
 async def test_retry_availability_ignores_successful_records(
-    db_session: AsyncSession,
+    auth_headers: dict, db_session: AsyncSession
 ):
     """Успешная запись в предпроверку не попадает вовсе.
 
@@ -1212,7 +1212,7 @@ async def test_retry_availability_ignores_successful_records(
 
 @pytest.mark.asyncio
 async def test_retry_availability_names_each_missing_entity(
-    db_session: AsyncSession,
+    auth_headers: dict, db_session: AsyncSession
 ):
     """Причина называет ИМЕННО ту сущность, которой не хватает.
 

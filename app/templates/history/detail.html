@@ -2,7 +2,7 @@
 {% from "components/badge.html" import badge %}
 {% from "components/button.html" import link_button %}
 {% from "components/mono.html" import mono %}
-{% from "history/includes/history_card.html" import copy_button %}
+{% from "history/includes/history_card.html" import copy_button, retry_trigger, retry_modal %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 
 {# Страница записи истории (D-24).
@@ -75,6 +75,12 @@
         {{ mono('ID задачи', 'muted', upper=true) }}<span data-selectall>{{ mono(log.task_id, 'bright', title=log.task_id) }}</span>
       {%- endif -%}
       {{ copy_button(log, user) }}
+      {#- Запуск повтора приходит ТЕМ ЖЕ макросом, что и в карточке списка
+          (HIST-04). Своя копия разошлась бы с оригиналом ровно там, где
+          расхождение опаснее всего: в обещании, ЧТО именно будет отправлено.
+          Признаки считает сервер и передаёт отдельными значениями — у `log`
+          здесь сущность ORM, а не словарь карточки. -#}
+      {{ retry_trigger(log.id, can_retry, retry_reason) }}
     </div>
 
     {%- if log.error_message %}
@@ -84,6 +90,10 @@
     </div>
     {%- endif %}
   </article>
+
+  {#- Панель подтверждения — СОСЕДОМ записи, а не внутри неё: она
+      позиционируется фиксированно и внутри записи стала бы колонкой её сетки. -#}
+  {{ retry_modal(log.id, can_retry) }}
 
 </div>
 {% endblock %}

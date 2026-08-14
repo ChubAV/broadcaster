@@ -356,6 +356,86 @@ def _is_same_origin(request: Request) -> bool:
 _RETRY_IN_FLIGHT: set[int] = set()
 
 
+# Причины, по которым повтор заведомо не пройдёт (D-21). Названы ПОИМЁННО, а не
+# одним «повторить нельзя»: общая формулировка на четыре случая не сказала бы
+# пользователю ничего о том, что чинить.
+RETRY_REASON_AD_GONE = "Объявление удалено"
+RETRY_REASON_GROUP_GONE = "Группа удалена"
+RETRY_REASON_ACCOUNT_GONE = "Аккаунт удалён"
+RETRY_REASON_ACCOUNT_OFF = "Аккаунт отключён"
+
+
+async def retry_availability(db: AsyncSession, rows) -> dict[int, str | None]:
+    """Причина недоступности повтора для каждой НЕуспешной записи страницы.
+
+    Ключ — идентификатор записи, значение — причина или `None`, если повтор
+    возможен. Успешные записи в результат не попадают вовсе: повтор им не
+    предлагается по статусу, и тратить на них запросы незачем. Именно поэтому
+    отсутствие ключа и `None` под ключом — РАЗНЫЕ ответы, и разметка обязана
+    различать их: «повторить нельзя, потому что успешно» и «повторить можно».
+
+    ФИКСИРОВАННОЕ ЧИСЛО ЗАПРОСОВ, а не по три на запись. Проверка тройки по
+    каждой строке стоила бы девяносто обращений к базе на страницу в тридцать
+    записей — и так на каждый рендер списка (тот же класс дефекта, что T-04-19
+    у блока ближайших отправок). Оба запроса идут ПО ОБЪЕДИНЕНИЮ
+    идентификаторов показываемых строк.
+
+    ГРУППА ПРИЕЗЖАЕТ АРГУМЕНТОМ, а не берётся с записи: списочный запрос
+    выбирает пару внешним соединением, и у записи с удалённой группой второй
+    элемент пары пуст. Аккаунт выводится ЧЕРЕЗ группу — колонки аккаунта в
+    журнале нет вовсе.
+
+    ПРЕДИКАТ НЕУСПЕШНОСТИ — «статус не успешный», а не «статус из перечня
+    известных неудач»: перечень конечен ровно до появления следующего статуса,
+    и запись с неизвестным значением оказалась бы ни успешной, ни повторяемой.
+    Тот же предикат держат счётчик неудач дашборда, кнопка копирования
+    диагностики и сам обработчик повтора.
+    """
+    candidates = [(log, group) for log, group in rows if log.status != STATUS_OK]
+    if not candidates:
+        return {}
+
+    ad_ids = {log.ad_id for log, _group in candidates if log.ad_id}
+    live_ads: set[int] = set()
+    if ad_ids:
+        live_ads = {
+            row_id
+            for (row_id,) in (
+                await db.execute(select(Ad.id).where(Ad.id.in_(ad_ids)))
+            ).all()
+        }
+
+    account_ids = {
+        group.account_id for _log, group in candidates if group and group.account_id
+    }
+    account_status: dict[int, str] = {}
+    if account_ids:
+        account_status = {
+            row_id: status
+            for row_id, status in (
+                await db.execute(
+                    select(MessengerAccount.id, MessengerAccount.status).where(
+                        MessengerAccount.id.in_(account_ids)
+                    )
+                )
+            ).all()
+        }
+
+    verdict: dict[int, str | None] = {}
+    for log, group in candidates:
+        if not log.ad_id or log.ad_id not in live_ads:
+            verdict[log.id] = RETRY_REASON_AD_GONE
+        elif group is None:
+            verdict[log.id] = RETRY_REASON_GROUP_GONE
+        elif not group.account_id or group.account_id not in account_status:
+            verdict[log.id] = RETRY_REASON_ACCOUNT_GONE
+        elif account_status[group.account_id] != "active":
+            verdict[log.id] = RETRY_REASON_ACCOUNT_OFF
+        else:
+            verdict[log.id] = None
+    return verdict
+
+
 def _claim_retry_slot(log_id: int) -> bool:
     """Занимает заявку на повтор записи. `False` — заявка уже занята.
 
@@ -417,6 +497,10 @@ async def history_partial(
     result = await db.execute(query)
     rows = list(result.all())
     has_next = len(rows) > limit
+    # Признак доступности повтора считает СЕРВЕР и здесь тоже: признак,
+    # вычисленный только в списочном обработчике, потерялся бы на тридцать
+    # первой записи — молча, с исправным на вид экраном.
+    retry_blockers = await retry_availability(db, rows[:limit])
     logs = [
         {
             "id": r.id,
@@ -431,6 +515,10 @@ async def history_partial(
             "messenger_type": r.messenger_type,
             "error_message": r.error_message,
             "sent_at": r.sent_at,
+            # Отсутствие ключа в вердикте и `None` под ключом — РАЗНЫЕ ответы:
+            # первое означает успешную запись, второе — что повтор возможен.
+            "can_retry": r.id in retry_blockers and retry_blockers[r.id] is None,
+            "retry_reason": retry_blockers.get(r.id),
         }
         for r, group in rows[:limit]
     ]
@@ -601,6 +689,11 @@ async def history_detail(
 
     group = await db.get(Group, log.group_id) if log.group_id else None
 
+    # Тот же вердикт, что у карточки списка, и той же функцией: две копии
+    # предпроверки разошлись бы, и один экран предлагал бы повтор там, где
+    # другой его прячет.
+    retry_blockers = await retry_availability(db, [(log, group)])
+
     return templates.TemplateResponse(
         "history/detail.html",
         {
@@ -609,6 +702,8 @@ async def history_detail(
             "is_admin": check_is_admin(user, settings),
             "log": log,
             "group": group,
+            "can_retry": log.id in retry_blockers and retry_blockers[log.id] is None,
+            "retry_reason": retry_blockers.get(log.id),
             "active_page": "history",
         },
     )
@@ -746,6 +841,7 @@ async def history_list(
     rows = list(result.all())
     has_next = len(rows) > PAGE_SIZE
     rows = rows[:PAGE_SIZE]
+    retry_blockers = await retry_availability(db, rows)
 
     logs = [
         {
@@ -761,6 +857,8 @@ async def history_list(
             "messenger_type": r.messenger_type,
             "error_message": r.error_message,
             "sent_at": r.sent_at,
+            "can_retry": r.id in retry_blockers and retry_blockers[r.id] is None,
+            "retry_reason": retry_blockers.get(r.id),
         }
         for r, group in rows
     ]
