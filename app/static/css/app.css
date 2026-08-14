@@ -1553,6 +1553,40 @@ a:hover { color: var(--accent-link-hover); }
 .chip:has(.chip__input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .chip:has(.chip__input:disabled) { opacity: .45; cursor: not-allowed; }
 
+/* Чипс-ссылкой: фильтры истории (План 04-06) ------------------------------- */
+/* Примитив выше рассчитан на поле ввода ВНУТРИ чипса, поэтому оба состояния —
+   выбранность и фокус — выражены через :has(.chip__input:…). У ссылки поля
+   ввода нет: состояния берутся с самого элемента.
+
+   Три правила ниже — не украшение, а перебивание базового `a`. Селектор
+   `a:hover` (0-1-1) сильнее `.chip--on` (0-1-0), и без них наведение на
+   ВЫБРАННЫЙ чипс перекрашивало бы его в цвет ссылки — то есть выбранный чипс
+   переставал бы выглядеть выбранным ровно в тот момент, когда на него
+   смотрят. Собственных цветов здесь не заводится: значения те же, что у
+   примитива. */
+a.chip { text-decoration: none; color: var(--text-secondary); }
+a.chip:hover { color: var(--text); border-color: var(--border-control-strong); }
+a.chip.chip--on, a.chip.chip--on:hover { color: var(--text); }
+a.chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* Полоса групп чипсов. Три группы плюс сброс переносятся на узкой ширине —
+   горизонтальной прокрутки и обрезки не возникает (UI-SPEC §Responsive
+   Contract). Разделителя между группами нет: группы разделены зазором вдвое
+   большим, чем чипсы внутри группы, и на этом читаются как группы. */
+.chip-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px;
+  min-width: 0; margin: 0 0 12px; padding: 12px 14px;
+  border-radius: var(--r-xl);
+  background: var(--surface); border: 1px solid var(--border-input);
+}
+/* Сброс прижимается вправо только там, где для этого есть место: на узкой
+   ширине margin-left:auto прижал бы его к правому краю СВОЕЙ строки переноса,
+   оставив под группами одинокую надпись у чужого края. */
+.chip-bar__reset { text-decoration: none; }
+@media (min-width: 861px) {
+  .chip-bar__reset { margin-left: auto; }
+}
+
 /* Сетка дней: семь ячеек 44×36, переносящихся на узкой ширине. */
 .day-grid { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .day-grid .chip {

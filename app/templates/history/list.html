@@ -3,6 +3,8 @@
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/field.html" import select_field %}
 {% from "components/filters.html" import filters %}
+{% from "components/mono.html" import mono %}
+{% from "history/includes/filter_chips.html" import filter_chips %}
 {% from "history/includes/history_card.html" import history_card %}
 
 {% block title %}История — Broadcaster{% endblock %}
@@ -17,22 +19,57 @@
    внутри макроса request недоступен. #}
 {% set account_options = [('', 'Все аккаунты')] %}
 {% for acc in all_accounts %}{% set _ = account_options.append((acc.id, acc.type ~ ' #' ~ acc.id)) %}{% endfor %}
+
+{#- Полоса чипсов: три оси выбираются ОДНИМ действием, без кнопки «Применить»
+    (D-29). Наборы значений приходят с сервера — там же, где отсекается мусор,
+    поэтому нарисованное и принимаемое разойтись не могут.
+
+    Кнопка сброса рендерится, только когда есть что сбрасывать: постоянная
+    кнопка «Сбросить» на чистом экране предлагает действие без последствий. -#}
+<div class="chip-bar">
+  {{ filter_chips(status_chips, status_filter, filter_params, 'status') }}
+  {{ filter_chips(messenger_chips, filter_messenger, filter_params, 'messenger') }}
+  {{ filter_chips(period_chips, filter_period, filter_params, 'period') }}
+  {%- if filter_params %}
+  <a class="chip-bar__reset" data-chipreset href="/history">{{ mono('СБРОСИТЬ', upper=true) }}</a>
+  {%- endif %}
+</div>
+
+{#- Аккаунт остаётся ВЫПАДАЮЩИМ СПИСКОМ, а не чипсами (D-29): аккаунтов может
+    быть сколько угодно, и полоса чипсов переполнилась бы именно тем перечнем,
+    который растёт без предела.
+
+    Скрытые поля обязательны. Форма отправляет ТОЛЬКО свои поля, поэтому без
+    них выбор аккаунта сбрасывал бы три чипсовые оси разом — молча, с 200 и
+    исправным на вид экраном. -#}
 {% call filters('history-filters', action='/history') %}
-  {{ select_field(name="status", label='Статус',
-                  options=[('', 'Все статусы'), ('ok', 'Успешные'), ('fail', 'Ошибки')],
-                  selected=status_filter or '', id='filter-status') }}
-  {{ select_field(name="messenger", label='Мессенджер',
-                  options=[('', 'Все мессенджеры'), ('tg_user', 'Telegram'), ('wa', 'WhatsApp')],
-                  selected=filter_messenger or '', id='filter-messenger') }}
+  <input type="hidden" name="status" value="{{ status_filter or '' }}">
+  <input type="hidden" name="messenger" value="{{ filter_messenger or '' }}">
+  <input type="hidden" name="period" value="{{ filter_period or '' }}">
   {{ select_field(name="account_id", label='Аккаунт', options=account_options,
                   selected=filter_account_id if filter_account_id is not none else '',
                   id='filter-account-id') }}
-  {{ select_field(name="period", label='Период',
-                  options=[('7d', '7 дней'), ('30d', '30 дней'), ('', 'Все время')],
-                  selected=filter_period or '', id='filter-period') }}
   {{ button('Применить', variant='primary') }}
   {{ link_button('Сбросить', '/history', variant='ghost') }}
 {% endcall %}
+
+{#- Линейка над списком: точное число найденного ТЕМ ЖЕ набором фильтров (D-31).
+    Число приходит отдельным запросом подсчёта и не зависит от того, сколько
+    строк успело загрузиться бесконечной прокруткой.
+
+    Правая часть линейки пуста НАМЕРЕННО: здесь встанет ссылка выгрузки (план
+    04-08), и заполняющая черта уже отдаёт ей место. Пустая ссылка не
+    рендерится — кнопка, которая ничего не делает, хуже её отсутствия.
+
+    При нуле записей линейка не рендерится вовсе: «0 записей» — это не
+    сообщение, сообщение несёт пустое состояние (тот же приём, что у линейки
+    экрана групп аккаунта). -#}
+{% if history_total %}
+<div class="count-rule" data-hcount="{{ history_total }}">
+  {{ mono(history_total ~ ' ' ~ plural_ru(history_total, 'запись', 'записи', 'записей')) }}
+  <span class="count-rule__line" aria-hidden="true"></span>
+</div>
+{% endif %}
 
 {% if logs %}
 <div data-hlist>
@@ -49,6 +86,18 @@
   <div hx-get="/history/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
   {% endif %}
 </div>
+{% elif filter_params %}
+{#- ДВА РАЗЛИЧИМЫХ ПУСТЫХ СОСТОЯНИЯ (D-41). Одно общее «Нет записей» называло
+    бы одним словом два разных положения дел, и следующий шаг пользователя в
+    них разный: здесь — снять фильтр, ниже — завести расписание. Обещание
+    «здесь появятся отправки» человеку с полным журналом, отфильтрованным в
+    ноль, просто неправда.
+
+    Оба состояния рисует существующий макрос пустого состояния: своей разметки
+    ради второго текста не заводится. -#}
+{{ empty_state('Ничего не найдено',
+               hint='измените фильтры или период',
+               action_label='Сбросить фильтры', action_href='/history') }}
 {% else %}
 {{ empty_state('Нет записей',
                hint='Здесь появятся отправки по вашим расписаниям') }}

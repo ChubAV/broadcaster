@@ -4,7 +4,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import (
+    FAILED_STATUSES,
+    HISTORY_PERIODS,
+    STATUS_ACCOUNT_DISCONNECTED,
+    STATUS_FAIL,
+    STATUS_OK,
     apply_history_filters,
+    history_count,
     history_filter_params,
 )
 from app.config import Settings
@@ -16,6 +22,81 @@ from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
+
+# --- Оси фильтрации: значения и подписи ---------------------------------------
+#
+# Перечни объявлены ЗДЕСЬ, а не в шаблоне (тот же приём, что у осей сводного
+# списка расписаний): неизвестное значение обязано отсекаться сервером, а
+# разметка точкой принуждения не является — она только рисует. Из этих же
+# перечней строятся допустимые наборы `_clean_choice`, поэтому нарисованное и
+# принимаемое разойтись не могут в принципе.
+
+# Три значения журнала, а не два. Прежний выпадающий список знал «Успешные» и
+# «Ошибки» и терял `account_disconnected` — единственный статус, по которому
+# видно, что отправка не ушла из-за отвалившегося аккаунта. Набор СОБИРАЕТСЯ из
+# констант модуля аналитики: четвёртый статус, заведённый там, обязан здесь
+# упасть по KeyError, а не потеряться молча.
+STATUS_LABELS = {
+    STATUS_OK: "Успешно",
+    STATUS_FAIL: "Ошибка",
+    STATUS_ACCOUNT_DISCONNECTED: "Аккаунт отключён",
+}
+STATUS_CHIPS = (("", "Все"),) + tuple(
+    (value, STATUS_LABELS[value]) for value in (STATUS_OK,) + FAILED_STATUSES
+)
+
+# Значения канала — те же, что у `MessengerAccount.type` и у оси канала
+# сводного списка расписаний (`app.pages.schedules.CHANNEL_FILTER_VALUES`);
+# подписи — те же слова, что печатают предпросмотр объявления и раздел
+# аккаунтов. Совпадение значений с осью расписаний закреплено тестом, а не
+# импортом: ось расписаний описывает ДРУГОЙ экран, и связывать их импортом
+# значило бы объявить одну осью другой.
+MESSENGER_CHIPS = (
+    ("", "Все"),
+    ("tg_user", "Telegram"),
+    ("wa", "WhatsApp"),
+    ("max", "MAX"),
+)
+
+# Произвольного диапазона дат нет (D-30): четыре варианта и ни одного поля
+# ввода даты. Порядок «сегодня → 7 дней → 30 дней → всё время» — от узкого к
+# широкому, как в макете; «всё время» стоит последним, потому что это снятие
+# фильтра, а не самый широкий период.
+PERIOD_LABELS = {"today": "Сегодня", "7d": "7 дней", "30d": "30 дней"}
+PERIOD_CHIPS = tuple((value, PERIOD_LABELS[value]) for value in HISTORY_PERIODS) + (
+    ("", "Всё время"),
+)
+
+
+def _values(chips) -> frozenset[str]:
+    """Допустимые значения оси без варианта «все»."""
+    return frozenset(value for value, _ in chips if value)
+
+
+STATUS_VALUES = _values(STATUS_CHIPS)
+MESSENGER_VALUES = _values(MESSENGER_CHIPS)
+PERIOD_VALUES = _values(PERIOD_CHIPS)
+
+
+def _clean_choice(value: str | None, allowed: frozenset[str]) -> str | None:
+    """Неизвестное или испорченное значение оси → «фильтр не применён».
+
+    Значение приезжает строкой запроса, то есть из ссылки, закладки или чужого
+    сообщения (T-04-23). Отказ страницы был бы здесь отказом в обслуживании по
+    подконтрольному отправителю значению, а молча применённый мусор — пустым
+    списком, в котором НИ ОДИН чипс не отмечен активным: по такому экрану не
+    прочитать, что вообще произошло. Оба исхода хуже, чем «мусор не выбирает
+    ничего», и последнее ровно то же, что делает ось канала сводного списка
+    расписаний.
+
+    Период отсекается той же дорогой, хотя модуль аналитики и сам не применяет
+    отсечку по неизвестному периоду: без отсечки здесь мусорный период доехал
+    бы до адреса чипса и до сентинеля прокрутки как действующий фильтр.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    return value if value in allowed else None
 
 
 def _parse_account_id(v: str | None) -> int | None:
@@ -52,6 +133,9 @@ async def history_partial(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
+    status = _clean_choice(status, STATUS_VALUES)
+    messenger = _clean_choice(messenger, MESSENGER_VALUES)
+    period = _clean_choice(period, PERIOD_VALUES)
     account_id_int = _parse_account_id(account_id)
     query = (
         select(SendLog, Group)
@@ -150,6 +234,9 @@ async def history_list(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
+    status = _clean_choice(status, STATUS_VALUES)
+    messenger = _clean_choice(messenger, MESSENGER_VALUES)
+    period = _clean_choice(period, PERIOD_VALUES)
     account_id_int = _parse_account_id(account_id)
     query = (
         select(SendLog, Group)
@@ -194,6 +281,27 @@ async def history_list(
     all_accounts = accounts_result.scalars().all()
     filter_params = history_filter_params(status, messenger, account_id_int, period)
 
+    # Точное число найденного ОТДЕЛЬНЫМ запросом с тем же набором фильтров
+    # (D-31) — тот же приём, что у счётчиков на экране групп аккаунта.
+    # Считать по длине выданного списка нельзя: список ограничен страницей, и
+    # такое число было бы верным ровно до тридцать первой записи, после чего
+    # молча врало бы — причём именно там, где счётчик и нужен. Число это
+    # обещание, на которое обопрётся выгрузка (план 04-08): выгрузка и счётчик
+    # обязаны отвечать одним числом на один вопрос, поэтому фильтры в обоих
+    # навешивает одна и та же функция модуля аналитики.
+    #
+    # В паршале прокрутки счётчик НЕ пересчитывается: он живёт над списком, а
+    # паршал подменяет только порцию записей и линейки не касается.
+    history_total = await history_count(
+        db,
+        user_id=user.id,
+        status=status,
+        messenger_type=messenger,
+        account_id=account_id_int,
+        period=period,
+        user=user,
+    )
+
     return templates.TemplateResponse(
         "history/list.html",
         {
@@ -207,6 +315,14 @@ async def history_list(
             "filter_account_id": account_id_int,
             "filter_period": period,
             "filter_params": filter_params,
+            # Наборы значений уходят ТОЛЬКО в список: чипсы живут над выдачей и
+            # подменой порций прокрутки не затрагиваются. Паршал получает
+            # активные значения (они едут в адресе сентинеля) и не получает
+            # перечней, которых не рисует.
+            "status_chips": STATUS_CHIPS,
+            "messenger_chips": MESSENGER_CHIPS,
+            "period_chips": PERIOD_CHIPS,
+            "history_total": history_total,
             "offset": offset,
             "page_size": PAGE_SIZE,
             "has_next": has_next,
