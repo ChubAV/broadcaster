@@ -22,6 +22,8 @@
 """
 
 import re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -35,6 +37,9 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.user import User
+from app.pages.dashboard_feed import FEED_POLL_SECONDS
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
 
 # Достаточно, чтобы вторая страница выдачи (offset=30, limit=30) сама имела
 # продолжение: обработчики берут limit + 1 строку и ставят сентинел при has_next.
@@ -398,3 +403,123 @@ async def test_partial_without_layout_param_ok(
         f"{base}/partial?offset=0&limit={PAGE}&layout=cards"
     )
     assert legacy.status_code == 200, section
+
+
+# --- DASH-03: БЕССРОЧНЫЙ опрос живой ленты дашборда --------------------------
+#
+# Четвёртый опрос проекта и ПЕРВЫЙ, который останавливаться не должен. Три
+# предыдущих (статус синхронизации аккаунта, статус синхронизации групп, статус
+# подключения) устроены обратно: они подменяют САМ элемент, а атрибуты запроса и
+# триггера обёрнуты в нём условием — исчезновение атрибутов из очередного ответа
+# и есть механизм остановки.
+#
+# Лента обязана тикать, пока вкладка открыта (D-07), поэтому подмена идёт ВНУТРЬ
+# стабильного контейнера, а атрибуты живут на самом контейнере и DOM не
+# покидают. Пара тестов ниже — спецификация этого механизма: тест присутствия в
+# одиночку зеленел бы и в случае, когда атрибуты уехали в паршал (лента умерла
+# бы после первой же подмены), а тест отсутствия в одиночку — на пустом ответе.
+# Красить обязан каждый из двух.
+
+FEED_CONTAINER_RE = re.compile(r'<[^>]*hx-get="/dashboard/feed"[^>]*>')
+
+
+async def _seed_feed_record(db: AsyncSession) -> SendLog:
+    user = await _user(db)
+    log = SendLog(
+        user_id=user.id,
+        ad_title="Отправка ленты",
+        ad_text="Текст",
+        ad_images=[],
+        group_name="Группа ленты",
+        messenger_type="wa",
+        task_id="task-feed",
+        status="ok",
+        sent_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    )
+    db.add(log)
+    await db.commit()
+    await db.refresh(log)
+    return log
+
+
+@pytest.mark.asyncio
+async def test_dashboard_feed_container_polls(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Половина ПЕРВАЯ: страница несёт адрес паршала и объявление интервала."""
+    await _seed_feed_record(db_session)
+
+    html = (await authed_client.get("/dashboard")).text
+
+    assert 'hx-get="/dashboard/feed"' in html, "контейнер ленты потерял адрес паршала"
+    assert f'hx-trigger="every {FEED_POLL_SECONDS}s"' in html, (
+        "контейнер ленты потерял объявление интервала опроса"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dashboard_feed_partial_carries_no_polling_attributes(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Половина ВТОРАЯ: в ответе паршала атрибутов опроса нет ни одного.
+
+    Без этой половины первая зеленела бы и у ленты, которая умрёт после первой
+    подмены: атрибуты, уехавшие в паршал, при подмене ВНУТРЬ контейнера
+    удваивают опрос, а при подмене самого контейнера уносят его вовсе.
+    """
+    await _seed_feed_record(db_session)
+
+    response = await authed_client.get("/dashboard/feed")
+
+    assert response.status_code == 200
+    assert "Отправка ленты" in response.text, "паршал пуст — утверждения вакуумны"
+    assert "hx-get" not in response.text
+    assert "hx-trigger" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_feed_polling_survives_an_empty_feed(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Опрос НЕ САМООСТАНАВЛИВАЕТСЯ: пустая лента атрибутов не уносит.
+
+    Обернуть контейнер условием по наличию записей — самый естественный способ
+    случайно получить ленту, которая у нового пользователя не оживёт никогда:
+    первой отправки он дождётся, а увидит её только после перезагрузки.
+    """
+    html = (await authed_client.get("/dashboard")).text
+
+    assert 'hx-get="/dashboard/feed"' in html
+    assert f'hx-trigger="every {FEED_POLL_SECONDS}s"' in html
+
+
+def test_dashboard_feed_polling_has_no_stop_branch():
+    """Машинная форма утверждения «опрос не самоостанавливается».
+
+    У трёх самоостанавливающихся опросов проекта условие стоит ВНУТРИ
+    открывающего тега — ровно там оно и делает атрибуты исчезающими. Здесь
+    внутри тега условия нет ни одного, поэтому ветки, в которой атрибуты
+    отсутствуют, не существует по построению разметки, а не по договорённости.
+    """
+    source = (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
+    tags = FEED_CONTAINER_RE.findall(source)
+
+    assert len(tags) == 1, f"контейнеров ленты не ровно один: {tags}"
+    assert "{%" not in tags[0], (
+        f"внутри тега контейнера ленты стоит условие — опрос может исчезнуть: {tags[0]}"
+    )
+
+
+def test_dashboard_feed_swaps_inside_the_container():
+    """Подмена идёт ВНУТРЬ контейнера, а не заменяет его собой.
+
+    При подмене самого контейнера забытые в паршале атрибуты убили бы ленту
+    МОЛЧА: страница выглядела бы исправной, а данные замерли бы. При подмене
+    внутрь такой отказ невозможен — контейнер с атрибутами подмену переживает.
+    """
+    source = (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
+    (tag,) = FEED_CONTAINER_RE.findall(source)
+
+    assert "outerHTML" not in tag, (
+        f"контейнер ленты подменяет сам себя и уносит с собой опрос: {tag}"
+    )
