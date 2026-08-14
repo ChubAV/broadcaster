@@ -22,6 +22,7 @@ from app.application.accounts.group_resync import (
 )
 from app.application.scheduling.use_cases import (
     DispatchTask,
+    build_dispatch_task,
     collect_due_schedules,
     send_message_once,
 )
@@ -258,6 +259,124 @@ def check_schedules(self):
                 await check_schedules_async(session)
         except Exception as e:
             logger.error("check_schedules_error", error=str(e), exc_info=True)
+            raise
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+@shared_task(name="app.worker.tasks.retry_send", bind=True, max_retries=0)
+def retry_send(self, log_id: int, user_id: int):
+    """Повторная отправка записи истории — один вход на все три канала.
+
+    ВТОРОГО МАРШРУТА ОТПРАВКИ НЕТ. Задача собирается тем же
+    `build_dispatch_task`, что и у планировщика, и отдаётся той же
+    `dispatch_send_tasks` — она уже маршрутизирует по типу аккаунта: Telegram
+    Celery-таском в очередь `telegram`, WhatsApp и MAX `rpush`-ем в Redis-очередь
+    своего аккаунта. Постановка напрямую в `send_telegram_message` была бы
+    входом ОДНОГО канала из трёх, и повтор WA-записи уехал бы по непроверенному
+    пути (T-04-09). Полезную нагрузку очередей таск не формирует и их формат не
+    меняет — его читает `wa_worker/index.js`; `send_message_once` и адаптеры
+    мессенджеров отсюда не вызываются.
+
+    ОТПРАВЛЯЕТСЯ ТЕКУЩИЙ КОНТЕНТ ОБЪЯВЛЕНИЯ ИЗ БД, А НЕ СНАПШОТ ИЗ ЖУРНАЛА
+    (D-17). Снапшот в записи истории — свидетельство о том, что было отправлено
+    тогда; повтор же есть новая отправка сейчас, и уехать в чужую группу обязано
+    то объявление, которое пользователь видит сегодня. Следствие в интерфейсе
+    (предупредить пользователя, что текст мог измениться) называет план 04-09.
+
+    НОВАЯ ЗАПИСЬ ЖУРНАЛА НИКАК НЕ СВЯЗАНА С ИСХОДНОЙ (D-22). Колонки связи не
+    вводится: повтор попадает в историю обычной строкой, как любая другая
+    отправка. Записи создаёт существующий путь — `send_message_once` для
+    Telegram и `process_wa_results`/`process_max_results` для очередей.
+
+    `max_retries=0`: повтор — решение пользователя. Автоматический перезапуск
+    превратил бы одно нажатие в серию отправок в чужую группу, которую нельзя
+    отозвать.
+    """
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    session_factory = get_session_factory(engine)
+    log = logger.bind(log_id=log_id, user_id=user_id)
+
+    async def _run():
+        try:
+            logger.info(
+                "celery_task_start",
+                task_name=self.name,
+                task_id=self.request.id,
+            )
+
+            # Вся работа с БД — внутри сессии; диспетчеризация — ПОСЛЕ выхода
+            # из неё: под `dispatch_send_tasks` синхронный redis-клиент, и
+            # держать сессию открытой на время сетевой работы незачем.
+            async with session_factory() as session:
+                send_log = await session.get(SendLog, log_id)
+
+                # ВЛАДЕНИЕ ПРОВЕРЯЕТСЯ ЗДЕСЬ ПОВТОРНО (T-04-08). Первая
+                # проверка стоит в HTTP-обработчике плана 04-09, но аргументы
+                # таска приходят из брокера, а не из запроса, и доверять им как
+                # проверенным нельзя: вход в очередь — своя граница доверия.
+                if send_log is None or send_log.user_id != user_id:
+                    log.warning("retry_send_rejected", reason="log_not_owned")
+                    return
+
+                group = (
+                    await session.get(Group, send_log.group_id)
+                    if send_log.group_id
+                    else None
+                )
+                ad = (
+                    await session.get(Ad, send_log.ad_id)
+                    if send_log.ad_id
+                    else None
+                )
+                # У журнала колонки аккаунта нет — аккаунт выводится через
+                # группу.
+                account = (
+                    await session.get(MessengerAccount, group.account_id)
+                    if group
+                    else None
+                )
+
+                # ВТОРАЯ ЛИНИЯ ЗАЩИТЫ D-21. Первая стоит в обработчике плана
+                # 04-09, но между предпроверкой и исполнением таска сущность
+                # может исчезнуть, а аккаунт — отвалиться. Выход здесь ТИХИЙ:
+                # записи в журнал не создаётся, иначе история наполнялась бы
+                # свидетельствами о заведомо невозможных отправках (T-04-11).
+                if not ad or not group or not account:
+                    log.warning(
+                        "retry_send_stopped",
+                        reason="missing_entity",
+                        has_ad=bool(ad),
+                        has_group=bool(group),
+                        has_account=bool(account),
+                    )
+                    return
+
+                if account.status != "active":
+                    log.warning(
+                        "retry_send_stopped",
+                        reason="account_not_active",
+                        status=account.status,
+                    )
+                    return
+
+                # `schedule_id` проходит как есть, включая None: у повтора
+                # записи без расписания осмысленного числа не существует, а
+                # ноль создал бы в журнале ссылку на несуществующее расписание.
+                task = build_dispatch_task(
+                    ad=ad,
+                    group=group,
+                    account=account,
+                    schedule_id=send_log.schedule_id,
+                )
+
+            await dispatch_send_tasks([task])
+            log.info("retry_send_dispatched", type=task.type, account_id=task.account_id)
+        except Exception as e:
+            log.error("retry_send_error", error=str(e), exc_info=True)
             raise
         finally:
             await engine.dispose()
