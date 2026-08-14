@@ -14,9 +14,11 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.analytics.send_analytics import recent_feed
 from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
 from app.models.ad import Ad
 from app.pages.dashboard import dashboard_next_step
+from app.pages.dashboard_feed import FEED_LIMIT, FEED_POLL_SECONDS
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
@@ -61,15 +63,18 @@ async def _seed_send_log(
     sent_at: datetime,
     status: str = "ok",
     group_id: int | None = None,
+    ad_title: str = "Отправка объявления",
+    group_name: str = "Группа отправки",
+    messenger_type: str = "wa",
 ) -> SendLog:
     log = SendLog(
         user_id=user_id,
         group_id=group_id,
-        ad_title="Отправка объявления",
+        ad_title=ad_title,
         ad_text="Текст отправленного объявления",
         ad_images=[],
-        group_name="Группа отправки",
-        messenger_type="wa",
+        group_name=group_name,
+        messenger_type=messenger_type,
         task_id="task-9f3c1d",
         status=status,
         sent_at=sent_at,
@@ -558,3 +563,224 @@ async def test_dashboard_empty_upcoming_block_has_its_own_text(
     titles = re.findall(r'<span class="empty__title">([^<]+)</span>', body)
     assert len(titles) >= 2, f"пустых состояний меньше двух: {titles}"
     assert len(set(titles)) == len(titles), f"тексты пустых состояний совпадают: {titles}"
+
+
+# --- Живая лента: выборка строк (DASH-03) -----------------------------------
+#
+# Источник ленты — ТОЛЬКО журнал отправок (D-05). Событий синхронизации,
+# переподключения воркера и активации расписания в базе нет вовсе, и заводить
+# ради них таблицу событий — работа отдельной фазы, а не этого блока.
+
+
+@pytest.mark.asyncio
+async def test_recent_feed_returns_newest_first(db_session: AsyncSession):
+    """Лента отсортирована по времени отправки ПО УБЫВАНИЮ.
+
+    Обратный порядок не роняет ни одного утверждения на статус: блок остаётся
+    заполненным, просто «живая» лента показывает самое старое сверху и не
+    меняется при новых отправках.
+    """
+    user = await _current_user(db_session)
+    now = datetime.now(timezone.utc)
+    await _seed_send_log(
+        db_session, user.id, sent_at=now - timedelta(hours=3), ad_title="Старая"
+    )
+    await _seed_send_log(
+        db_session, user.id, sent_at=now - timedelta(minutes=1), ad_title="Свежая"
+    )
+    await _seed_send_log(
+        db_session, user.id, sent_at=now - timedelta(hours=1), ad_title="Средняя"
+    )
+
+    rows = await recent_feed(db_session, user_id=user.id)
+
+    assert [row.ad_title for row in rows] == ["Свежая", "Средняя", "Старая"]
+
+
+@pytest.mark.asyncio
+async def test_recent_feed_respects_the_limit(db_session: AsyncSession):
+    """Лента отдаёт не больше `limit` строк — и по умолчанию, и по аргументу."""
+    user = await _current_user(db_session)
+    now = datetime.now(timezone.utc)
+    for index in range(FEED_LIMIT + 4):
+        await _seed_send_log(
+            db_session, user.id, sent_at=now - timedelta(minutes=index)
+        )
+
+    assert len(await recent_feed(db_session, user_id=user.id)) == FEED_LIMIT
+    assert len(await recent_feed(db_session, user_id=user.id, limit=3)) == 3
+
+
+@pytest.mark.asyncio
+async def test_recent_feed_row_carries_the_fields_of_the_record(
+    db_session: AsyncSession,
+):
+    """Строка несёт идентификатор записи, название, группу, статус и время.
+
+    Идентификатор — не украшение: по нему строится адрес записи истории, и
+    строка без него вела бы в никуда.
+    """
+    user = await _current_user(db_session)
+    sent_at = datetime.now(timezone.utc) - timedelta(minutes=7)
+    log = await _seed_send_log(
+        db_session,
+        user.id,
+        sent_at=sent_at,
+        status="fail",
+        ad_title="Объявление ленты",
+        group_name="Группа ленты",
+        messenger_type="tg_user",
+    )
+
+    (row,) = await recent_feed(db_session, user_id=user.id)
+
+    assert row.id == log.id
+    assert row.ad_title == "Объявление ленты"
+    assert row.group_name == "Группа ленты"
+    assert row.status == "fail"
+    assert row.messenger_type == "tg_user"
+    assert row.sent_at is not None
+
+
+@pytest.mark.asyncio
+async def test_recent_feed_ignores_other_users(db_session: AsyncSession):
+    """T-04-17: чужие записи в ленту не попадают.
+
+    Маршрут ленты дёргается автоматически каждые несколько секунд на каждой
+    открытой вкладке — утечка здесь тиражируется, а не случается однажды.
+    """
+    user = await _current_user(db_session)
+    stranger = User(email="stranger-feed@test.com", password_hash="x", name="Чужой")
+    db_session.add(stranger)
+    await db_session.commit()
+    await db_session.refresh(stranger)
+
+    now = datetime.now(timezone.utc)
+    await _seed_send_log(
+        db_session, stranger.id, sent_at=now, ad_title="Чужая отправка"
+    )
+    await _seed_send_log(db_session, user.id, sent_at=now, ad_title="Своя отправка")
+
+    rows = await recent_feed(db_session, user_id=user.id)
+
+    assert [row.ad_title for row in rows] == ["Своя отправка"]
+
+
+# --- Живая лента: маршрут паршала (DASH-03) ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dashboard_feed_returns_rows(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Маршрут отдаёт 200 и РАЗМЕТКУ строк, а не пустой фрагмент."""
+    user = await _current_user(db_session)
+    await _seed_send_log(
+        db_session,
+        user.id,
+        sent_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+        ad_title="Отправка в ленте",
+        group_name="Группа в ленте",
+    )
+
+    response = await authed_client.get("/dashboard/feed")
+
+    assert response.status_code == 200
+    assert "Отправка в ленте" in response.text
+    assert "Группа в ленте" in response.text
+    assert "data-feedrow" in response.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_feed_row_links_to_the_history_record(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-08: строка ленты — обычная ССЫЛКА в запись истории.
+
+    Не элемент с обработчиком щелчка: ссылка работает при выключенном
+    JavaScript, открывается средним щелчком и попадает под Tab.
+    """
+    user = await _current_user(db_session)
+    log = await _seed_send_log(
+        db_session, user.id, sent_at=datetime.now(timezone.utc) - timedelta(minutes=2)
+    )
+
+    response = await authed_client.get("/dashboard/feed")
+
+    assert f'href="/history/{log.id}"' in response.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_feed_requires_authentication(client: AsyncClient):
+    """T-04-17: неавторизованному маршрут ленты не отвечает данными."""
+    response = await client.get("/dashboard/feed", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_feed_response_is_a_fragment_not_a_page(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Ответ паршала — фрагмент: шелл он не наследует и не рисует.
+
+    Наследование шелла здесь означало бы целую страницу внутри контейнера
+    ленты каждые несколько секунд.
+    """
+    user = await _current_user(db_session)
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime.now(timezone.utc) - timedelta(minutes=2)
+    )
+
+    body = (await authed_client.get("/dashboard/feed")).text
+
+    for marker in ("<html", "data-shell", "data-side", "data-body"):
+        assert marker not in body, f"паршал ленты несёт разметку шелла: {marker}"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_feed_does_not_load_the_shell_context(
+    authed_client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    """Открытое решение 4: маршрут ленты объявлен МИМО страничного роутера.
+
+    Страничный роутер несёт `load_shell_context` зависимостью на КАЖДОМ своём
+    маршруте — четыре round-trip на вызов. При бессрочном опросе эта цена
+    умножается на число открытых вкладок и делится на интервал.
+
+    Тест ПАРНЫЙ внутри себя: сначала утверждается, что счётчик вообще
+    срабатывает (на самой странице), иначе вторая половина зеленела бы на
+    сломанном шпионе.
+    """
+    import app.pages as pages_package
+
+    original = pages_package.get_shell_context
+    calls: list[int] = []
+
+    async def _spy(db, user):
+        calls.append(1)
+        return await original(db, user)
+
+    monkeypatch.setattr(pages_package, "get_shell_context", _spy)
+
+    assert (await authed_client.get("/dashboard")).status_code == 200
+    assert calls, "шпион не сработал даже на странице — вторая половина бессмысленна"
+
+    calls.clear()
+    assert (await authed_client.get("/dashboard/feed")).status_code == 200
+    assert not calls, (
+        "паршал ленты тянет контекст шелла: четыре запроса на каждый тик "
+        "каждой открытой вкладки"
+    )
+
+
+def test_feed_constants_are_inside_the_decided_ranges():
+    """Интервал опроса и число строк — середины вилок D-07 (15-30 с) и D-08 (6-10).
+
+    Значения вынесены константами, чтобы разметка страницы и паршал читали ОДИН
+    источник: интервал, выписанный литералом в шаблоне, разъехался бы с лимитом
+    молча.
+    """
+    assert 15 <= FEED_POLL_SECONDS <= 30
+    assert 6 <= FEED_LIMIT <= 10
