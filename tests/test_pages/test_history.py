@@ -145,6 +145,19 @@ def _titles(html: str) -> list[str]:
     return re.findall(r"<span data-grow>([^<]*)</span>", html)
 
 
+def _counter(html: str) -> int | None:
+    """Число над списком либо None, если линейки счётчика нет."""
+    match = re.search(r'data-hcount="(\d+)"', html)
+    return int(match.group(1)) if match else None
+
+
+def _counter_text(html: str) -> str:
+    """Подпись счётчика целиком — по ней видно склонение."""
+    match = re.search(r'data-hcount="\d+"[^>]*>\s*<span[^>]*>([^<]*)</span>', html)
+    assert match, "линейка счётчика не найдена"
+    return match.group(1).strip()
+
+
 # =============================================================================
 # Задача 1: чипсы-ссылки для статуса, канала и периода
 # =============================================================================
@@ -562,3 +575,219 @@ async def test_filter_chips_template_lives_outside_the_component_library():
     templates_dir = Path(app.__file__).parent / "templates"
     assert (templates_dir / "history/includes/filter_chips.html").exists()
     assert len(sorted((templates_dir / "components").glob("*.html"))) == 13
+
+
+# =============================================================================
+# Задача 2: точное число найденного и пустой результат фильтров
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_counter_shows_the_number_of_found_records(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Над списком стоит число найденного (D-31)."""
+    user = await _current_user(db_session)
+    for i in range(3):
+        await _seed_send_log(db_session, user.id, ad_title=f"Отправка {i}")
+
+    html = _page_body((await authed_client.get("/history")).text)
+
+    assert _counter(html) == 3
+
+
+@pytest.mark.asyncio
+async def test_counter_counts_beyond_the_first_page(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Число — это число НАЙДЕННОГО, а не число загруженных строк.
+
+    Самая правдоподобная ошибка счётчика — `logs|length`: она даёт верное число
+    на любом наборе меньше страницы и молча врёт ровно там, где счётчик и нужен.
+    Именно на это число будет опираться потолок выгрузки (план 04-08).
+    """
+    user = await _current_user(db_session)
+    for i in range(35):
+        await _seed_send_log(db_session, user.id, ad_title=f"Отправка {i}")
+
+    html = _page_body((await authed_client.get("/history")).text)
+
+    assert _counter(html) == 35
+    assert len(_titles(html)) == 30, "страница отдаёт больше 30 записей — посев неверен"
+
+
+@pytest.mark.asyncio
+async def test_counter_follows_the_filters(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """При смене фильтра число меняется соответственно."""
+    user = await _current_user(db_session)
+    for i in range(4):
+        await _seed_send_log(db_session, user.id, status=STATUS_OK)
+    await _seed_send_log(db_session, user.id, status=STATUS_FAIL)
+
+    assert _counter(_page_body((await authed_client.get("/history")).text)) == 5
+    assert (
+        _counter(_page_body((await authed_client.get(f"/history?status={STATUS_OK}")).text))
+        == 4
+    )
+    assert (
+        _counter(
+            _page_body((await authed_client.get(f"/history?status={STATUS_FAIL}")).text)
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_counter_matches_the_full_selection_of_the_same_filters(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Число совпадает с длиной ПОЛНОЙ выборки тех же фильтров.
+
+    Именно это сравнение делает проверяемым обещание плана 04-08 «выгружен
+    именно отфильтрованный результат»: выгрузка и счётчик обязаны отвечать
+    одним числом на один вопрос. Выборка здесь строится НЕЗАВИСИМО от
+    `history_count` — иначе сравнивались бы два вызова одной функции.
+    """
+    from app.application.analytics.send_analytics import apply_history_filters
+
+    user = await _current_user(db_session)
+    for i in range(33):
+        await _seed_send_log(
+            db_session,
+            user.id,
+            status=STATUS_OK if i % 3 else STATUS_FAIL,
+            messenger_type="wa" if i % 2 else "max",
+        )
+
+    query = apply_history_filters(
+        select(SendLog, Group)
+        .outerjoin(Group, SendLog.group_id == Group.id)
+        .where(SendLog.user_id == user.id),
+        status=STATUS_OK,
+        messenger_type="wa",
+        user=user,
+    )
+    expected = len((await db_session.execute(query)).all())
+    assert expected, "посев не дал ни одной подходящей записи — сравнивать нечего"
+
+    html = _page_body(
+        (await authed_client.get(f"/history?status={STATUS_OK}&messenger=wa")).text
+    )
+
+    assert _counter(html) == expected
+
+
+@pytest.mark.asyncio
+async def test_counter_ignores_other_users(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-04-22: счётчик считает записи ТЕКУЩЕГО пользователя.
+
+    Счётчик — самостоятельный запрос, и условие владения в нём приходится
+    ставить отдельно: потерянное, оно не роняет ничего и не видно на экране —
+    список остаётся своим, а число молча сообщает объём чужого журнала.
+    """
+    user = await _current_user(db_session)
+    stranger = User(email="counter-stranger@test.com", password_hash="x", name="Чужой")
+    db_session.add(stranger)
+    await db_session.commit()
+    await db_session.refresh(stranger)
+
+    await _seed_send_log(db_session, user.id)
+    for _ in range(7):
+        await _seed_send_log(db_session, stranger.id)
+
+    html = _page_body((await authed_client.get("/history")).text)
+
+    assert _counter(html) == 1
+
+
+@pytest.mark.asyncio
+async def test_counter_is_declined_in_russian(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """«1 запись», «2 записи», «5 записей» — форма выбирается по числу."""
+    user = await _current_user(db_session)
+
+    await _seed_send_log(db_session, user.id)
+    assert "1 запись" == _counter_text(
+        _page_body((await authed_client.get("/history")).text)
+    )
+
+    await _seed_send_log(db_session, user.id)
+    assert "2 записи" == _counter_text(
+        _page_body((await authed_client.get("/history")).text)
+    )
+
+    for _ in range(3):
+        await _seed_send_log(db_session, user.id)
+    assert "5 записей" == _counter_text(
+        _page_body((await authed_client.get("/history")).text)
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_filter_result_differs_from_the_empty_journal(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Пустой результат ФИЛЬТРОВ — своё состояние со сбросом (D-41).
+
+    Одно общее «Нет записей» называло бы одним словом два разных положения дел,
+    и следующий шаг пользователя в них разный: в одном — снять фильтр, в другом
+    — завести расписание. Сообщение «здесь появятся отправки» человеку с полным
+    журналом и отфильтрованным в ноль экраном просто неправда.
+    """
+    user = await _current_user(db_session)
+    await _seed_send_log(db_session, user.id, status=STATUS_OK)
+
+    html = _page_body((await authed_client.get(f"/history?status={STATUS_FAIL}")).text)
+
+    assert "Ничего не найдено" in html
+    assert "измените фильтры или период" in html
+    assert 'href="/history"' in html, "сбросить фильтры нечем"
+    assert "Здесь появятся отправки" not in html
+
+
+@pytest.mark.asyncio
+async def test_empty_journal_keeps_the_old_text(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парная половина: без фильтров пустой журнал говорит прежнее.
+
+    Одиночный тест предыдущего свойства зеленел бы и на реализации, которая
+    заменила старый текст новым ВЕЗДЕ.
+    """
+    await _current_user(db_session)
+
+    html = _page_body((await authed_client.get("/history")).text)
+
+    assert "Нет записей" in html
+    assert "Здесь появятся отправки" in html
+    assert "Ничего не найдено" not in html
+    assert _counter(html) is None, "«0 записей» — не сообщение, сообщение несёт пустое состояние"
+
+
+@pytest.mark.asyncio
+async def test_infinite_scroll_sentinel_is_identical_in_page_and_partial():
+    """Разметка сентинела на странице и в паршале посимвольно одинакова.
+
+    Инвариант выписан комментарием в обоих файлах и держится ровно до первой
+    правки одного из них. Разошедшись, сентинелы теряют фильтр на второй
+    странице выдачи: список продолжает выглядеть исправным и молча подмешивает
+    к отфильтрованному остальной журнал.
+    """
+    from pathlib import Path
+
+    import app
+
+    templates_dir = Path(app.__file__).parent / "templates"
+
+    def sentinel(rel: str) -> str:
+        source = (templates_dir / rel).read_text(encoding="utf-8")
+        lines = [line.strip() for line in source.splitlines() if "hx-trigger" in line]
+        assert len(lines) == 1, f"{rel}: сентинелов не один, а {len(lines)}"
+        return lines[0]
+
+    assert sentinel("history/list.html") == sentinel("history/partial_cards.html")
