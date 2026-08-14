@@ -160,6 +160,7 @@ status: checkpoint-pending
 - `uv run pytest tests/test_routes/test_history.py -q` (RED) — **1 failed, 8 passed** — красный по проверяемому поведению
 - `uv run pytest tests/test_routes/test_history.py tests/test_e2e.py -q` (GREEN) — **10 passed**, exit 0
 - `uv run pytest tests/ -q` — **1367 passed**, exit 0, 954 с (база ветки 1364: +3, ни одного снятого)
+- `just test` (названный гейт плана; рецепт — `uv run pytest tests/ -v`) — **1367 passed**, exit 0, 959 с. Прогнан ОТДЕЛЬНО от `-q`-прогона выше, а не засчитан по эквивалентности рецепта
 - `uv run pytest tests/ -q --collect-only` — **1367 tests collected** (базовый уровень до фазы 1094 — превышен на 273)
 - `grep -c "def get_stats(" app/repositories/send_log.py` → **0**
 - `grep -n "send_metrics" app/routes/history.py` → присутствует (строки 7, 63)
