@@ -1,10 +1,12 @@
-from datetime import datetime, timedelta, timezone
-
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.analytics.send_analytics import (
+    apply_history_filters,
+    history_filter_params,
+)
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.models.group import Group
@@ -17,46 +19,20 @@ PAGE_SIZE = 30
 
 
 def _parse_account_id(v: str | None) -> int | None:
+    """Разбор HTTP-параметра, а не аналитика — поэтому остаётся здесь.
+
+    Определение самих фильтров переехало в
+    `app/application/analytics/send_analytics.py` (D-35): его зовут и история,
+    и админка, и счётчик, и ни один из них не владеет копией. Этот же хелпер
+    знает про то, что `account_id` приезжает строкой из query-строки, — знание
+    транспорта, которому в слое аналитики не место.
+    """
     if not v or not v.strip():
         return None
     try:
         return int(v)
     except ValueError:
         return None
-
-
-def _history_filter_params(
-    status: str | None,
-    messenger_type: str | None,
-    account_id: int | None,
-    period: str | None,
-) -> dict:
-    p = {}
-    if status:
-        p["status"] = status
-    if messenger_type:
-        p["messenger"] = messenger_type
-    if account_id is not None:
-        p["account_id"] = account_id
-    if period:
-        p["period"] = period
-    return p
-
-
-def _apply_history_filters(query, status, messenger_type, account_id, period):
-    if status:
-        query = query.where(SendLog.status == status)
-    if messenger_type:
-        query = query.where(SendLog.messenger_type == messenger_type)
-    if account_id is not None:
-        query = query.where(Group.account_id == account_id)
-    if period == "7d":
-        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-        query = query.where(SendLog.sent_at >= cutoff)
-    elif period == "30d":
-        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-        query = query.where(SendLog.sent_at >= cutoff)
-    return query
 
 
 @router.get("/history/partial", response_class=HTMLResponse)
@@ -82,7 +58,14 @@ async def history_partial(
         .outerjoin(Group, SendLog.group_id == Group.id)
         .where(SendLog.user_id == user.id)
     )
-    query = _apply_history_filters(query, status, messenger, account_id_int, period)
+    query = apply_history_filters(
+        query,
+        status=status,
+        messenger_type=messenger,
+        account_id=account_id_int,
+        period=period,
+        user=user,
+    )
     query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(limit + 1)
     result = await db.execute(query)
     rows = list(result.all())
@@ -104,7 +87,7 @@ async def history_partial(
         }
         for r, group in rows[:limit]
     ]
-    filter_params = _history_filter_params(status, messenger, account_id_int, period)
+    filter_params = history_filter_params(status, messenger, account_id_int, period)
     return templates.TemplateResponse(
         "history/partial_cards.html",
         {
@@ -173,7 +156,14 @@ async def history_list(
         .outerjoin(Group, SendLog.group_id == Group.id)
         .where(SendLog.user_id == user.id)
     )
-    query = _apply_history_filters(query, status, messenger, account_id_int, period)
+    query = apply_history_filters(
+        query,
+        status=status,
+        messenger_type=messenger,
+        account_id=account_id_int,
+        period=period,
+        user=user,
+    )
     query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(PAGE_SIZE + 1)
     result = await db.execute(query)
     rows = list(result.all())
@@ -202,7 +192,7 @@ async def history_list(
         select(MessengerAccount).where(MessengerAccount.user_id == user.id)
     )
     all_accounts = accounts_result.scalars().all()
-    filter_params = _history_filter_params(status, messenger, account_id_int, period)
+    filter_params = history_filter_params(status, messenger, account_id_int, period)
 
     return templates.TemplateResponse(
         "history/list.html",

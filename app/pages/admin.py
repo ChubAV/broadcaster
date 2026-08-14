@@ -7,11 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.dependencies import get_db, get_settings, require_admin
-from app.pages.history import (
-    _apply_history_filters,
-    _history_filter_params,
-    _parse_account_id,
+from app.application.analytics.send_analytics import (
+    apply_history_filters,
+    history_filter_params,
 )
+from app.pages.history import _parse_account_id
 from app.models.user import User
 from app.models.ad import Ad
 from app.models.group import Group
@@ -196,7 +196,16 @@ async def admin_user_history(
         .outerjoin(Group, SendLog.group_id == Group.id)
         .where(SendLog.user_id == user_id)
     )
-    query = _apply_history_filters(query, status, messenger, account_id_int, period)
+    # Владелец записей — target_user, но «сегодня» отсчитывается от полуночи
+    # ТОГО, КТО СМОТРИТ: границу дня задаёт часовой пояс читателя экрана.
+    query = apply_history_filters(
+        query,
+        status=status,
+        messenger_type=messenger,
+        account_id=account_id_int,
+        period=period,
+        user=admin,
+    )
     query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(page_size + 1)
 
     result = await db.execute(query)
@@ -226,7 +235,7 @@ async def admin_user_history(
         select(MessengerAccount).where(MessengerAccount.user_id == user_id)
     )
     all_accounts = accounts_result.scalars().all()
-    filter_params = _history_filter_params(status, messenger, account_id_int, period)
+    filter_params = history_filter_params(status, messenger, account_id_int, period)
 
     return templates.TemplateResponse(
         "admin/user_history.html",
@@ -274,7 +283,16 @@ async def admin_user_history_partial(
         .outerjoin(Group, SendLog.group_id == Group.id)
         .where(SendLog.user_id == user_id)
     )
-    query = _apply_history_filters(query, status, messenger, account_id_int, period)
+    # Владелец записей — target_user, но «сегодня» отсчитывается от полуночи
+    # ТОГО, КТО СМОТРИТ: границу дня задаёт часовой пояс читателя экрана.
+    query = apply_history_filters(
+        query,
+        status=status,
+        messenger_type=messenger,
+        account_id=account_id_int,
+        period=period,
+        user=admin,
+    )
     query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(limit + 1)
     result = await db.execute(query)
     rows = list(result.all())
@@ -296,7 +314,7 @@ async def admin_user_history_partial(
         }
         for r, group in rows[:limit]
     ]
-    filter_params = _history_filter_params(status, messenger, account_id_int, period)
+    filter_params = history_filter_params(status, messenger, account_id_int, period)
     return templates.TemplateResponse(
         "admin/history_partial_cards.html",
         {
