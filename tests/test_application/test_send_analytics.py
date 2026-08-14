@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import (
@@ -24,15 +24,20 @@ from app.application.analytics.send_analytics import (
     STATUS_OK,
     HeatmapView,
     SendMetrics,
+    UpcomingSend,
     activity_heatmap,
     apply_history_filters,
     history_count,
     history_filter_params,
     normalize_utc,
     send_metrics,
+    upcoming_sends,
 )
+from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
+from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
+from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.user import User
 
@@ -774,3 +779,340 @@ def test_heatmap_view_carries_grid_labels_and_peak():
     assert view.grid == [[0] * 24]
     assert view.day_labels == ["ПН"]
     assert view.peak == 0
+
+
+# --- upcoming_sends -----------------------------------------------------------
+#
+# Принадлежность расписания идёт через `Ad.user_id`: колонки владельца у
+# расписания НЕТ (app/models/schedule.py). Поэтому каждый посев здесь заводит
+# объявление, и владение проверяется через него.
+
+# Пометки причин — те же строки, что рендерит бейдж строки дашборда.
+REASON_DRAFT = "Объявление в черновике"
+REASON_ACCOUNT = "Аккаунт отключён"
+REASON_GROUPS = "Все группы выключены"
+
+
+async def _seed_ad(
+    db: AsyncSession,
+    user: User,
+    *,
+    title: str = "Объявление рассылки",
+    status: str = AD_STATUS_PUBLISHED,
+) -> Ad:
+    ad = Ad(user_id=user.id, title=title, text="Текст", images=[], status=status)
+    db.add(ad)
+    await db.commit()
+    await db.refresh(ad)
+    return ad
+
+
+async def _seed_account(
+    db: AsyncSession, user: User, *, status: str = "active", type_: str = "wa"
+) -> MessengerAccount:
+    account = MessengerAccount(
+        user_id=user.id, type=type_, credentials="creds", status=status
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+async def _seed_group_in_account(
+    db: AsyncSession,
+    user: User,
+    account: MessengerAccount,
+    *,
+    external_id: str,
+    is_active: bool = True,
+) -> Group:
+    group = Group(
+        user_id=user.id,
+        account_id=account.id,
+        messenger_type=account.type,
+        group_external_id=external_id,
+        name=f"Группа {external_id}",
+        is_active=is_active,
+    )
+    db.add(group)
+    await db.commit()
+    await db.refresh(group)
+    return group
+
+
+async def _seed_schedule(
+    db: AsyncSession,
+    user: User,
+    *,
+    next_run_at: datetime | None,
+    ad_status: str = AD_STATUS_PUBLISHED,
+    account_status: str = "active",
+    with_account: bool = True,
+    group_flags: tuple[bool, ...] = (True,),
+    is_active: bool = True,
+    title: str = "Объявление рассылки",
+    seq: str = "1",
+) -> Schedule:
+    """Расписание вместе с объявлением, аккаунтом и составом групп."""
+    ad = await _seed_ad(db, user, title=title, status=ad_status)
+    account = None
+    group_ids: list[int] = []
+    if with_account:
+        account = await _seed_account(db, user, status=account_status)
+        for index, flag in enumerate(group_flags):
+            group = await _seed_group_in_account(
+                db, user, account, external_id=f"-100{seq}{index}", is_active=flag
+            )
+            group_ids.append(group.id)
+    schedule = Schedule(
+        ad_id=ad.id,
+        account_id=account.id if account else None,
+        group_ids=group_ids,
+        days_of_week=[0, 1, 2, 3, 4, 5, 6],
+        times_of_day=["10:00"],
+        timezone="UTC",
+        is_active=is_active,
+        next_run_at=next_run_at,
+    )
+    db.add(schedule)
+    await db.commit()
+    await db.refresh(schedule)
+    return schedule
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_orders_by_next_run_at(db_session):
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session, user, next_run_at=NOW + timedelta(hours=5), title="Позже", seq="1"
+    )
+    await _seed_schedule(
+        db_session, user, next_run_at=NOW + timedelta(hours=1), title="Раньше", seq="2"
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert [item.ad_title for item in items] == ["Раньше", "Позже"]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_respects_the_limit(db_session):
+    user = await _user(db_session)
+    for i in range(5):
+        await _seed_schedule(
+            db_session, user, next_run_at=NOW + timedelta(hours=i + 1), seq=str(i)
+        )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW, limit=3)
+
+    assert len(items) == 3
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_skips_inactive_and_unscheduled(db_session):
+    """Приостановленное расписание и расписание без next_run_at не выстрелят."""
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        is_active=False,
+        title="Пауза",
+        seq="1",
+    )
+    await _seed_schedule(db_session, user, next_run_at=None, title="Без слота", seq="2")
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items == []
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_has_no_forward_time_bound(db_session):
+    """D-14: расписание через месяц попадает в список, если ближе ничего нет."""
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session, user, next_run_at=NOW + timedelta(days=30), title="Через месяц"
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert [item.ad_title for item in items] == ["Через месяц"]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_ignores_other_users(db_session):
+    """T-04-13: владение идёт через Ad.user_id — своей колонки у расписания нет."""
+    user = await _user(db_session)
+    stranger = await _user(db_session, email="stranger-up@test.com")
+    await _seed_schedule(
+        db_session, stranger, next_run_at=NOW + timedelta(hours=1), title="Чужое"
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items == []
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_does_not_trip_lazy_raise(db_session):
+    """`Schedule.ad` и `Schedule.account` объявлены lazy="raise".
+
+    Объявление и аккаунт обязаны приезжать ЗАПРОСОМ. Обращение к ним как к
+    атрибутам расписания поднимает InvalidRequestError — на боевом стеке это
+    пятисотка на самом дашборде, а не тихая деградация блока.
+    """
+    user = await _user(db_session)
+    await _seed_schedule(db_session, user, next_run_at=NOW + timedelta(hours=1))
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert len(items) == 1
+    item = items[0]
+    # Данные объявления и канала уже в результате: доступ к ним ничего не грузит.
+    assert item.ad_title == "Объявление рассылки"
+    assert item.messenger_type == "wa"
+    assert item.ad_id and item.schedule_id
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_keeps_schedule_with_detached_account(db_session):
+    """D-15: аккаунт удалён — расписание остаётся в списке с пометкой.
+
+    `Schedule.account_id` nullable с `ondelete="SET NULL"`, поэтому ВНУТРЕННИЙ
+    join потерял бы ровно те строки, ради которых D-15 написан: пользователь не
+    увидел бы, что его рассылка больше никуда не уйдёт.
+    """
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        with_account=False,
+        title="Отвязанное",
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert len(items) == 1
+    assert items[0].ad_title == "Отвязанное"
+    assert items[0].reason == REASON_ACCOUNT
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_marks_disconnected_account(db_session):
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        account_status="disconnected",
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items[0].reason == REASON_ACCOUNT
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_marks_draft_ad(db_session):
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        ad_status=AD_STATUS_DRAFT,
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items[0].reason == REASON_DRAFT
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_marks_all_groups_off(db_session):
+    """Третья причина D-15 — та, ради которой берётся второй запрос."""
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        group_flags=(False, False),
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items[0].reason == REASON_GROUPS
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_leaves_a_healthy_schedule_unmarked(db_session):
+    """Парный случай: без него пометки зеленели бы «всегда есть причина»."""
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        group_flags=(True, False),
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items[0].reason == ""
+    assert items[0].group_count == 2
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_takes_two_queries_regardless_of_group_count(db_session):
+    """T-04-19: второй запрос ОДИН на блок, а не по запросу на строку.
+
+    Отступление от D-38 названо и ограничено: флаги групп берутся одним
+    запросом по объединению идентификаторов показываемых строк. Обращение к БД
+    внутри цикла превратило бы отступление в дефект N+1, который на восьми
+    строках по десять групп стоит восемьдесят round-trip на каждый рендер
+    дашборда.
+    """
+    user = await _user(db_session)
+    for i in range(4):
+        await _seed_schedule(
+            db_session,
+            user,
+            next_run_at=NOW + timedelta(hours=i + 1),
+            group_flags=(True, True, False),
+            seq=str(i),
+        )
+
+    statements: list[str] = []
+    sync_engine = db_session.bind.sync_engine
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(sync_engine, "before_cursor_execute", _record)
+    try:
+        items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _record)
+
+    assert len(items) == 4
+    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+    assert len(selects) == 2, f"запросов не два, а {len(selects)}: {selects}"
+
+
+def test_upcoming_send_carries_the_row_of_the_block():
+    """Контракт датакласса: строка блока целиком, без обращений к БД из шаблона."""
+    item = UpcomingSend(
+        schedule_id=1,
+        ad_id=2,
+        ad_title="Объявление",
+        next_run_at=NOW,
+        group_count=3,
+        messenger_type="wa",
+        reason="",
+    )
+
+    assert item.schedule_id == 1
+    assert item.ad_id == 2
+    assert item.group_count == 3
+    assert item.reason == ""

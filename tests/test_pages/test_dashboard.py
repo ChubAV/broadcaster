@@ -14,6 +14,11 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
+from app.models.ad import Ad
+from app.models.group import Group
+from app.models.messenger_account import MessengerAccount
+from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.user import User
 
@@ -71,6 +76,70 @@ async def _seed_send_log(
     db.add(log)
     await db.commit()
     return log
+
+
+async def _seed_schedule(
+    db: AsyncSession,
+    *,
+    next_run_at: datetime | None,
+    title: str = "Объявление рассылки",
+    ad_status: str = AD_STATUS_PUBLISHED,
+    account_status: str = "active",
+    with_account: bool = True,
+    group_flags: tuple[bool, ...] = (True,),
+    is_active: bool = True,
+    seq: str = "1",
+) -> Schedule:
+    """Расписание текущего пользователя вместе с объявлением, аккаунтом и группами.
+
+    Владение расписанием идёт ЧЕРЕЗ ОБЪЯВЛЕНИЕ: колонки user_id у расписания
+    нет, поэтому посев обязан заводить объявление владельца.
+    """
+    user = await _current_user(db)
+    ad = Ad(
+        user_id=user.id, title=title, text="Текст объявления", images=[], status=ad_status
+    )
+    db.add(ad)
+    await db.commit()
+    await db.refresh(ad)
+
+    account = None
+    group_ids: list[int] = []
+    if with_account:
+        account = MessengerAccount(
+            user_id=user.id, type="wa", credentials="creds", status=account_status
+        )
+        db.add(account)
+        await db.commit()
+        await db.refresh(account)
+        for index, flag in enumerate(group_flags):
+            group = Group(
+                user_id=user.id,
+                account_id=account.id,
+                messenger_type="wa",
+                group_external_id=f"-200{seq}{index}",
+                name=f"Группа {seq}{index}",
+                is_active=flag,
+            )
+            db.add(group)
+            await db.commit()
+            await db.refresh(group)
+            group_ids.append(group.id)
+
+    schedule = Schedule(
+        ad_id=ad.id,
+        account_id=account.id if account else None,
+        group_ids=group_ids,
+        days_of_week=[0, 1, 2, 3, 4, 5, 6],
+        times_of_day=["10:00"],
+        timezone="UTC",
+        is_active=is_active,
+        next_run_at=next_run_at,
+    )
+    db.add(schedule)
+    await db.commit()
+    await db.refresh(schedule)
+    return schedule
 
 
 @pytest.mark.asyncio
@@ -196,3 +265,140 @@ async def test_dashboard_requires_authentication(client: AsyncClient):
 
     assert response.status_code == 302
     assert response.headers["location"] == "/login"
+
+
+# --- Ближайшие отправки (DASH-02) -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dashboard_upcoming_row_renders_data(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка блока отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+
+    Перевод include в макрос теряет неявный контекст вызывающего, и ошибка
+    проявляется ПУСТОЙ строкой при статусе 200 — утверждения на статус такую
+    поломку не ловят.
+    """
+    await _seed_schedule(
+        db_session,
+        next_run_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        title="Летняя распродажа",
+        group_flags=(True, True),
+    )
+
+    response = await authed_client.get("/dashboard")
+
+    assert response.status_code == 200
+    body = _page_body(response.text)
+    assert "Летняя распродажа" in body, "название объявления не отрисовано"
+    assert "2 группы" in body, "подпись состава групп не отрисована"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_upcoming_row_links_to_the_ad_editor(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-16: клик по строке ведёт в редактор объявления, обычной ссылкой.
+
+    Отдельной страницы расписания в проекте нет (D-14), поэтому адрес — тот же,
+    что у карточки раздела расписаний: редактор объявления с развёрнутым
+    расписанием.
+    """
+    schedule = await _seed_schedule(
+        db_session, next_run_at=datetime.now(timezone.utc) + timedelta(hours=2)
+    )
+
+    body = _page_body((await authed_client.get("/dashboard")).text)
+
+    assert f"/ads/{schedule.ad_id}/edit?sched={schedule.id}" in body
+
+
+@pytest.mark.asyncio
+async def test_dashboard_upcoming_marks_detached_account(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-15: расписание с отвязанным аккаунтом ВИДНО и помечено причиной."""
+    await _seed_schedule(
+        db_session,
+        next_run_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        title="Расписание без аккаунта",
+        with_account=False,
+    )
+
+    body = _page_body((await authed_client.get("/dashboard")).text)
+
+    assert "Расписание без аккаунта" in body, "внутренний join потерял строку"
+    assert "Аккаунт отключён" in body
+
+
+@pytest.mark.asyncio
+async def test_dashboard_upcoming_marks_draft_ad(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    await _seed_schedule(
+        db_session,
+        next_run_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        title="Черновик рассылки",
+        ad_status=AD_STATUS_DRAFT,
+    )
+
+    body = _page_body((await authed_client.get("/dashboard")).text)
+
+    assert "Черновик рассылки" in body
+    assert "Объявление в черновике" in body
+
+
+@pytest.mark.asyncio
+async def test_dashboard_upcoming_marks_all_groups_off(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    await _seed_schedule(
+        db_session,
+        next_run_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        title="Рассылка в выключенные группы",
+        group_flags=(False, False),
+    )
+
+    body = _page_body((await authed_client.get("/dashboard")).text)
+
+    assert "Рассылка в выключенные группы" in body
+    assert "Все группы выключены" in body
+
+
+@pytest.mark.asyncio
+async def test_dashboard_upcoming_is_sorted_by_next_run_at(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    now = datetime.now(timezone.utc)
+    await _seed_schedule(
+        db_session, next_run_at=now + timedelta(hours=6), title="Вечерняя", seq="1"
+    )
+    await _seed_schedule(
+        db_session, next_run_at=now + timedelta(hours=1), title="Утренняя", seq="2"
+    )
+
+    body = _page_body((await authed_client.get("/dashboard")).text)
+
+    assert body.index("Утренняя") < body.index("Вечерняя")
+
+
+@pytest.mark.asyncio
+async def test_dashboard_upcoming_survives_lazy_raise_relationships(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """`Schedule.ad`/`Schedule.account` объявлены lazy="raise".
+
+    Обращение к ним как к атрибутам даёт не пустой блок, а ПЯТИСОТКУ на самом
+    дашборде — поэтому статус ответа здесь утверждается наравне с содержимым.
+    """
+    await _seed_schedule(
+        db_session,
+        next_run_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        title="Проверка ленивой загрузки",
+    )
+
+    response = await authed_client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert "Проверка ленивой загрузки" in _page_body(response.text)
