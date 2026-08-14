@@ -3,7 +3,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.analytics.send_analytics import activity_heatmap, send_metrics
+from app.application.analytics.send_analytics import (
+    activity_heatmap,
+    send_metrics,
+    upcoming_sends,
+)
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.models.group import Group
@@ -43,6 +47,11 @@ async def dashboard(
         db, user_id=user.id, tz=_get_timezone_for_user(user)
     )
 
+    # Ближайшие отправки (DASH-02). Пометки причин считает модуль: страница не
+    # знает ни про черновик объявления, ни про статус аккаунта, ни про флаги
+    # групп — иначе то же правило пришлось бы повторить в Фазе 6.
+    upcoming = await upcoming_sends(db, user_id=user.id)
+
     # Recent sends (last 10)
     recent_query = (
         select(SendLog, Group)
@@ -77,6 +86,7 @@ async def dashboard(
             "is_admin": check_is_admin(user, settings),
             "metrics": metrics,
             "heatmap_view": heatmap_view,
+            "upcoming": upcoming,
             "recent_sends": recent_sends,
             "active_page": "dashboard",
         },

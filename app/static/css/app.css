@@ -1050,6 +1050,52 @@ a:hover { color: var(--accent-link-hover); }
 [data-metric-delta][data-tone="success"] { color: var(--ok); }
 [data-metric-delta][data-tone="danger"] { color: var(--danger); }
 
+/* Строка ближайшей отправки (DASH-02, макет 402-426) ------------------------ */
+/* Строка — ССЫЛКА (D-16), поэтому цвет и подчёркивание сбрасываются здесь, а не
+   отменяются в разметке: подчёркнутая строка целиком читалась бы как ошибка
+   вёрстки, а не как переход. Фокус остаётся видимым — обвести ссылку нечем,
+   кроме контура. */
+[data-uprow] {
+  display: flex; align-items: center; gap: 13px; min-width: 0;
+  padding: 11px 10px; border-radius: var(--r-lg);
+  color: inherit; text-decoration: none;
+  transition: background .16s ease;
+}
+[data-uprow]:hover { background: var(--surface-input); }
+[data-uprow]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* Колонка времени ФИКСИРОВАННОЙ ширины: без неё названия разной длины сдвигают
+   время по вертикали, и столбец перестаёт читаться сверху вниз. */
+[data-uprow] > .mono { flex: none; width: 84px; font-variant-numeric: tabular-nums; }
+[data-upstripe] {
+  flex: none; width: 3px; height: 26px; border-radius: 2px;
+  background: var(--border-control);
+}
+[data-upstripe][data-channel="tg_user"] { background: var(--info); }
+[data-upstripe][data-channel="wa"] { background: var(--ok); }
+[data-upstripe][data-channel="max"] { background: var(--accent); }
+/* min-width: 0 обязателен: название приходит от пользователя и не ограничено
+   ничем — без него оно вытолкнуло бы бейдж канала за пределы строки. */
+[data-upmain] { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+[data-uptitle] {
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--fs-md); font-weight: 500;
+}
+[data-upmeta] {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0;
+  font-size: var(--fs-xs); color: var(--text-tertiary);
+}
+[data-upbadge] { flex: none; }
+
+@media (max-width: 400px) {
+  /* Перестроение идёт СРЕДСТВАМИ CSS, переключателя вида на JS нет. Первой
+     уходит подпись канала: иконка несёт тот же смысл, а её aria-label остаётся
+     на месте, поэтому программе чтения с экрана канал по-прежнему называется
+     словом. */
+  [data-uprow] { gap: 9px; }
+  [data-uprow] > .mono { width: 72px; }
+  [data-upbadge] .msg__label { display: none; }
+}
+
 /* Heatmap активности 7×24 (DASH-04, D-09) ----------------------------------- */
 /* Шапка блока: заголовок слева, mono-подпись прижата вправо (макет 449-451).
    Своя, а не card_open(title=...): парный макрос карточки ставит подпись ПОД

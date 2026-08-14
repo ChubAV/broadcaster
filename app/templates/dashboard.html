@@ -5,6 +5,7 @@
 {% from "dashboard/includes/heatmap.html" import heatmap %}
 {% from "dashboard/includes/metric_tile.html" import metric_tile %}
 {% from "dashboard/includes/recent_send_card.html" import recent_send_card, RECENT_COLS, RECENT_COLUMNS %}
+{% from "dashboard/includes/upcoming_row.html" import upcoming_row %}
 
 {% block title %}Панель — Broadcaster{% endblock %}
 
@@ -38,6 +39,14 @@
     {{ metric_tile('Групп охвачено', metrics.groups, d_groups,
                    'success' if d_groups > 0 else ('danger' if d_groups < 0 else 'neutral')) }}
   </div>
+
+  {#- Ближайшие отправки (DASH-02). Левая половина пары макета «Ближайшие
+      отправки» / «Живая лента»; вторая половина приходит планом 04-05. Строка
+      блока ведёт в редактор объявления и честно называет причину, по которой
+      отправка не выстрелит (D-15, D-16). -#}
+  {{ card_open(title='Ближайшие отправки') }}
+    {% for item in upcoming %}{{ upcoming_row(item, user) }}{% endfor %}
+  {{ card_close() }}
 
   {% if recent_sends %}
   {{ card_open(title='Последние отправки') }}

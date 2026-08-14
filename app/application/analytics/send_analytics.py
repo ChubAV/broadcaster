@@ -44,7 +44,12 @@ from datetime import datetime, timedelta, timezone, tzinfo
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.scheduling.use_cases import effective_ad_status
+from app.constants import AD_STATUS_DRAFT
+from app.models.ad import Ad
 from app.models.group import Group
+from app.models.messenger_account import MessengerAccount
+from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.user import User
 
@@ -338,6 +343,164 @@ async def activity_heatmap(
         ],
         peak=max((max(day) for day in grid), default=0),
     )
+
+
+# --- Ближайшие отправки -------------------------------------------------------
+
+# Пометки причин несрабатывания (D-15). Строки живут ЗДЕСЬ по той же причине,
+# что и подписи рядов heatmap: это НАЗВАНИЯ трёх состояний, а не форматирование
+# данных пользователя, и второй их источник в шаблоне разъехался бы с первым
+# молча. Формулировки совпадают с бейджем карточки раздела расписаний
+# (`schedules/includes/schedule_row.html`) ДОСЛОВНО: один и тот же факт обязан
+# называться на двух экранах одними словами.
+REASON_AD_DRAFT = "Объявление в черновике"
+REASON_ACCOUNT_OFF = "Аккаунт отключён"
+REASON_GROUPS_OFF = "Все группы выключены"
+
+# Сколько строк показывает блок «Ближайшие отправки» по умолчанию (D-14).
+UPCOMING_LIMIT = 8
+
+
+@dataclass(slots=True)
+class UpcomingSend:
+    """Строка блока «Ближайшие отправки» ЦЕЛИКОМ.
+
+    Все поля — простые значения, а не сущности ORM. Отдать наружу `Schedule`
+    значило бы позвать шаблон на `schedule.ad`, а эта связь объявлена
+    `lazy="raise"`: обращение к ней из Jinja поднимает исключение уже на
+    рендере, то есть пятисотку на дашборде.
+    """
+
+    schedule_id: int
+    ad_id: int
+    ad_title: str
+    next_run_at: datetime
+    group_count: int
+    messenger_type: str | None
+    reason: str = ""
+
+
+async def upcoming_sends(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    now: datetime | None = None,
+    limit: int = UPCOMING_LIMIT,
+) -> list[UpcomingSend]:
+    """Ближайшие запланированные отправки владельца с пометками причин (D-15).
+
+    ВЛАДЕНИЕ ИДЁТ ЧЕРЕЗ ОБЪЯВЛЕНИЕ. Колонки `user_id` у расписания НЕТ
+    (`app/models/schedule.py`), поэтому границу владельца держит
+    `Ad.user_id == user_id` — так же, как во всех запросах
+    `app/pages/schedules.py` и в счётчиках шелла (T-04-13).
+
+    ОБЪЯВЛЕНИЕ И АККАУНТ ПРИЕЗЖАЮТ ЗАПРОСОМ. `Schedule.ad` и `Schedule.account`
+    объявлены `lazy="raise"`, и обращение к ним как к атрибутам поднимает
+    исключение — на боевом стеке это пятисотка на самом дашборде, а не тихая
+    деградация блока. Поэтому сущности выбираются явным `select(...)` с `join`
+    по объявлению.
+
+    `outerjoin` ДЛЯ АККАУНТА ОБЯЗАТЕЛЕН. `Schedule.account_id` nullable с
+    `ondelete="SET NULL"`: при удалении messenger-аккаунта расписание
+    сохраняется и отвязывается (issue #35). Внутренний join потерял бы ровно те
+    строки, ради которых D-15 и написан, — пользователь не увидел бы, что его
+    рассылка больше никуда не уйдёт.
+
+    ⚠️ ВТОРОЙ ЗАПРОС НА БЛОК — НАЗВАННОЕ ОТСТУПЛЕНИЕ ОТ D-38. Третья причина
+    («все группы выключены») требует флагов групп, а состав групп расписания
+    хранится JSON-списком (`Schedule.group_ids`), и join по его элементам не
+    строится ни в SQLite, ни в PostgreSQL — то же ограничение уже разобрано в
+    подборе расписаний к отправке (`collect_due_schedules`). Без флагов блок
+    показывал бы отправку, которой не будет. Отступление ОГРАНИЧЕНО: флаги
+    берутся ОДНИМ запросом по объединению идентификаторов не более чем `limit`
+    строк. Обращение к БД внутри цикла запрещено — оно превратило бы
+    отступление в дефект N+1 (T-04-19), закреплено тестом
+    test_upcoming_sends_takes_two_queries_regardless_of_group_count.
+
+    `now` НИЧЕГО НЕ ФИЛЬТРУЕТ и принят для единообразия сигнатур модуля.
+    Ограничения по времени вперёд у блока нет по D-14, а отсечка назад
+    (`next_run_at >= now`) спрятала бы просроченные расписания — то есть ровно
+    те, о которых пользователю важнее всего узнать, и при остановленном воркере
+    опустошила бы блок целиком, хотя активные расписания у пользователя есть.
+
+    `group_count` — размер СОСТАВА расписания, а не число включённых групп: это
+    то же число, что видит пользователь в редакторе, и расхождение двух экранов
+    по одному вопросу — ровно та болезнь, которую лечит D-35. О том, что
+    отправка не уйдёт, сообщает пометка причины, а не подменённое число.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    rows = (
+        await session.execute(
+            select(Schedule, Ad, MessengerAccount)
+            .join(Ad, Schedule.ad_id == Ad.id)
+            .outerjoin(MessengerAccount, Schedule.account_id == MessengerAccount.id)
+            .where(
+                Ad.user_id == user_id,
+                Schedule.is_active.is_(True),
+                Schedule.next_run_at.isnot(None),
+            )
+            .order_by(Schedule.next_run_at.asc())
+            .limit(limit)
+        )
+    ).all()
+
+    if not rows:
+        return []
+
+    # Объединение составов ВСЕХ показываемых строк — один запрос на блок.
+    group_ids = {
+        group_id for schedule, _ad, _account in rows for group_id in (schedule.group_ids or [])
+    }
+    group_active: dict[int, bool] = {}
+    if group_ids:
+        group_active = {
+            group_id: bool(is_active)
+            for group_id, is_active in (
+                await session.execute(
+                    select(Group.id, Group.is_active).where(Group.id.in_(group_ids))
+                )
+            ).all()
+        }
+
+    items: list[UpcomingSend] = []
+    for schedule, ad, account in rows:
+        composition = list(schedule.group_ids or [])
+        # Отсутствующий в выборке идентификатор — удалённая группа: получить
+        # рассылку она не может, поэтому её флаг считается выключенным.
+        # Пустой состав тоже даёт «все группы выключены»: расписание без групп
+        # не отправит ничего, и назвать это отдельным словом значило бы
+        # заводить четвёртую причину сверх трёх, названных D-15.
+        any_group_on = any(group_active.get(group_id, False) for group_id in composition)
+
+        # Приоритет причин — порядок этих ветвей. Совпасть могут все три сразу,
+        # и показывать три бейджа в строке шириной в одну строку некуда.
+        if effective_ad_status(ad) == AD_STATUS_DRAFT:
+            reason = REASON_AD_DRAFT
+        # Статус аккаунта сравнивается с ЛИТЕРАЛОМ "active" — так же, как в
+        # `collect_due_schedules` и в счётчиках шелла. Своей константы под это
+        # значение в проекте нет, и заводить её ЗДЕСЬ значило бы получить второй
+        # источник одного значения, не сняв ни одного из существующих литералов.
+        elif account is None or account.status != "active":
+            reason = REASON_ACCOUNT_OFF
+        elif not any_group_on:
+            reason = REASON_GROUPS_OFF
+        else:
+            reason = ""
+
+        items.append(
+            UpcomingSend(
+                schedule_id=schedule.id,
+                ad_id=ad.id,
+                ad_title=ad.title,
+                next_run_at=schedule.next_run_at,
+                group_count=len(composition),
+                messenger_type=account.type if account else None,
+                reason=reason,
+            )
+        )
+    return items
 
 
 # --- Фильтры истории ----------------------------------------------------------
