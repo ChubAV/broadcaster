@@ -1,5 +1,9 @@
+import csv
+import io
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +22,13 @@ from app.dependencies import get_db, get_settings
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
-from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.models.user import User
+from app.pages.common import (
+    check_is_admin,
+    format_datetime_for_user,
+    get_user_from_cookie,
+    templates,
+)
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
@@ -116,6 +126,130 @@ def _parse_account_id(v: str | None) -> int | None:
         return None
 
 
+# --- Выгрузка истории в файл --------------------------------------------------
+#
+# HIST-03. Экспорта в проекте не существовало вовсе, поэтому вместе с
+# возможностью появляется новый для проекта класс угрозы — см. `export_cell`.
+
+# Подписи колонок в порядке D-28. Снапшота ТЕЛА объявления среди них нет
+# намеренно: он раздувает файл в разы и ломает сетку переводами строк внутри
+# значения — открытый в редакторе файл рассыпался бы на строки, которых не
+# было. Заголовка объявления для узнавания записи достаточно.
+EXPORT_HEADER = (
+    "Время",
+    "Канал",
+    "Аккаунт",
+    "Группа",
+    "Заголовок объявления",
+    "Статус",
+    "Ошибка",
+    "Идентификатор задачи",
+)
+
+# Разделитель полей — ТОЧКА С ЗАПЯТОЙ, а не запятая (Open Question 2 плана).
+# Метка порядка байтов решает вопрос КОДИРОВКИ, но не разделителя: в русской
+# локали табличный редактор берёт разделитель списка из системных настроек, и
+# файл с запятыми открывается одной колонкой — то есть намерение D-25 «Excel
+# открывает нормально» выполнялось бы ровно наполовину и молча. Значение вынесено
+# константой, потому что оно видимо пользователю и может быть пересмотрено одной
+# правкой.
+EXPORT_DELIMITER = ";"
+
+# Метка порядка байтов UTF-8 (D-25). Записана ЭКРАНОМ, а не самим символом:
+# сам символ невидим в исходнике, и потерянный при правке он не оставил бы в
+# диффе ни следа — а без него кириллица в редакторе приезжает мусором.
+EXPORT_BOM = "\ufeff"
+
+# Потолок числа строк (D-27, значение — Claude's Discretion из названной там
+# окрестности). Превышение НЕ обрезает файл: обрезка неотличима от полной
+# выгрузки, и пользователь унёс бы неполные данные, не узнав об этом.
+EXPORT_ROW_CAP = 50_000
+
+# Имя файла ПОСТОЯННОЕ и не собирается из значений пользователя (T-04-34):
+# подстановка в заголовок ответа невозможна по построению.
+EXPORT_FILENAME = "history.csv"
+
+# Размер партии потокового чтения. На asyncpg включает серверный курсор, на
+# aiosqlite — буферизацию батчами; интерфейс `session.stream` одинаков на обоих
+# (тот же приём, что у окна heatmap).
+EXPORT_YIELD_PER = 500
+
+# Признак «выгрузка не состоялась из-за потолка», приезжающий на список
+# перенаправлением. Значение сравнивается ЦЕЛИКОМ — любое другое содержимое
+# параметра игнорируется, как и мусор в осях фильтрации.
+EXPORT_TOO_MANY = "too_many"
+
+# Символы, с которых табличный редактор начинает ИСПОЛНЯТЬ содержимое ячейки.
+_EXPORT_DANGEROUS_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+# Подписи канала — те же слова, что печатают чипсы фильтра: одно и то же
+# значение обязано называться на экране и в файле одинаково.
+MESSENGER_LABELS = {value: label for value, label in MESSENGER_CHIPS if value}
+
+
+def export_cell(value: object) -> str:
+    """Готовит одно значение к записи в файл выгрузки (T-04-16).
+
+    НОВЫЙ ДЛЯ ПРОЕКТА КЛАСС УГРОЗЫ. Заголовок объявления, имя группы и текст
+    ошибки приходят от пользователя и от стороннего мессенджера. Табличный
+    редактор ИСПОЛНЯЕТ содержимое ячейки, начинающееся с символа формулы, и
+    делает это на машине того, кто файл открыл, — не обязательно того, кто его
+    выгрузил. Ведущий апостроф переводит значение в текст: редактор его
+    показывает, но не исполняет.
+
+    Управляющие символы табуляции и возврата каретки перечислены вместе с
+    символами формулы не для красоты: ими открывается известный обход проверки
+    «начинается ли значение с равно», после которого редактор всё равно видит
+    формулу.
+
+    `None` и пустое значение дают ПУСТУЮ строку, а не слово «None»:
+    `error_message` пуст у каждой успешной отправки, то есть у большинства
+    строк файла.
+    """
+    if value is None:
+        return ""
+    text = str(value)
+    if not text:
+        return ""
+    if text[0] in _EXPORT_DANGEROUS_PREFIXES:
+        return "'" + text
+    return text
+
+
+def export_row(log: SendLog, group: Group | None, user: User | None) -> list[str]:
+    """Строка файла выгрузки для одной записи журнала — ровно по `EXPORT_HEADER`.
+
+    ФУНКЦИЯ ЧИСТАЯ: в базу не ходит, `Request` не читает. Всё, что ей нужно,
+    приезжает аргументами, поэтому состав строки проверяется без сессии, а
+    потоковый генератор маршрута не обрастает логикой.
+
+    Аккаунт выводится ЧЕРЕЗ ГРУППУ: колонки аккаунта в журнале нет вовсе, и
+    связь эта — единственная. Группа приезжает отдельным аргументом, а не
+    берётся с `log`: запрос выбирает пару `SendLog, Group` внешним соединением,
+    и у записи с удалённой группой второй элемент пары пуст. Пустая группа даёт
+    пустые ячейки и НЕ поднимает исключение: исключение оборвало бы уже начатый
+    поток, отдав пользователю обрезанный файл со статусом успеха.
+
+    Время форматируется тем же хелпером, что и разметка записи, — значение в
+    файле обязано совпадать с тем, что пользователь видел на экране (D-30).
+
+    Статус и канал печатаются ПОДПИСЯМИ, а незнакомое значение — как есть.
+    Пустая ячейка вместо неопознанного значения была бы тем самым молчаливым
+    выбрасыванием, которое запрещает прохибиция P-04-01: строка осталась бы в
+    файле без единого признака того, чем кончилась отправка.
+    """
+    return [
+        export_cell(format_datetime_for_user(log.sent_at, user)),
+        export_cell(MESSENGER_LABELS.get(log.messenger_type, log.messenger_type)),
+        export_cell(group.account_id if group else None),
+        export_cell(log.group_name),
+        export_cell(log.ad_title),
+        export_cell(STATUS_LABELS.get(log.status, log.status)),
+        export_cell(log.error_message),
+        export_cell(log.task_id),
+    ]
+
+
 @router.get("/history/partial", response_class=HTMLResponse)
 async def history_partial(
     request: Request,
@@ -189,6 +323,138 @@ async def history_partial(
     )
 
 
+@router.get("/history/export")
+async def history_export(
+    request: Request,
+    status: str | None = Query(default=None),
+    messenger: str | None = Query(default=None),
+    account_id: str | None = Query(default=None),
+    period: str | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Потоковая выгрузка ОТФИЛЬТРОВАННОЙ истории файлом (HIST-03).
+
+    ОБЪЯВЛЕН ВЫШЕ МАРШРУТА ЗАПИСИ. Сопоставление идёт в порядке объявления, и
+    объявленный ниже адрес уехал бы в `log_id` маршрута записи, отдав ошибку
+    разбора вместо файла. Ровно по этой причине выше маршрута записи уже стоит
+    паршал бесконечной прокрутки.
+
+    ФИЛЬТРЫ — ТЕ ЖЕ, ЧТО У СПИСКА, И НАВЕШИВАЕТ ИХ ТА ЖЕ ФУНКЦИЯ. Иначе
+    обещание «выгружено именно то, что показано» перестало бы быть проверяемым
+    утверждением: две копии условий расходятся молча, и пользователь уносит
+    файл, не совпадающий с экраном. Отсечка `_clean_choice` стоит и здесь —
+    выгрузка ТРЕТИЙ вход на те же оси, и без неё подобранное вручную значение
+    отдавало бы пустой файл, неотличимый от «записей действительно нет».
+
+    ВНЕШНЕЕ СОЕДИНЕНИЕ С ГРУППОЙ ОБЯЗАТЕЛЬНО даже без фильтра по аккаунту:
+    условие по `Group.account_id` иначе не с чем связать, и фильтр развалился
+    бы молча. Записей соединение не теряет — отправка с удалённой группой
+    остаётся в файле.
+
+    ⚠️ НЕСУЩЕЕ ОГРАНИЧЕНИЕ. Корректность держится на том, что генераторные
+    зависимости (сессия БД из `get_db`) закрываются ПОСЛЕ отправки тела ответа;
+    требование `fastapi>=0.129.0` записано в `pyproject.toml` и ослаблению не
+    подлежит. Суита эту границу не проверяет вовсе: подмена `get_db` в тестах
+    генератором не является, и времени закрытия сессии в тестах не наблюдается.
+    Пункт вынесен в ручные проверки плана 04-10.
+    """
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    status = _clean_choice(status, STATUS_VALUES)
+    messenger = _clean_choice(messenger, MESSENGER_VALUES)
+    period = _clean_choice(period, PERIOD_VALUES)
+    account_id_int = _parse_account_id(account_id)
+
+    # ПОТОЛОК ПРОВЕРЯЕТСЯ ДО КОНСТРУИРОВАНИЯ ПОТОКА (D-27, T-04-33). У потокового
+    # ответа код и заголовки уходят до первого фрагмента тела и после уже
+    # неизменяемы: проверка внутри генератора дала бы либо файл со статусом
+    # успеха и текстом ошибки внутри, либо обрезанный файл без единого признака
+    # обрезки. Число считает тот же счётчик, что показывает линейка над
+    # списком, — вызов один, потребителя два, и разойтись им не на чем.
+    total = await history_count(
+        db,
+        user_id=user.id,
+        status=status,
+        messenger_type=messenger,
+        account_id=account_id_int,
+        period=period,
+        user=user,
+    )
+    if total > EXPORT_ROW_CAP:
+        # Перенаправление на ТОТ ЖЕ отфильтрованный список: потерянные здесь
+        # фильтры показали бы другой экран и предложили бы сузить период у
+        # выборки, которую пользователь не выгружал.
+        params = history_filter_params(status, messenger, account_id_int, period)
+        params["export"] = EXPORT_TOO_MANY
+        return RedirectResponse(url=f"/history?{urlencode(params)}", status_code=302)
+
+    query = (
+        select(SendLog, Group)
+        .outerjoin(Group, SendLog.group_id == Group.id)
+        .where(SendLog.user_id == user.id)
+    )
+    query = apply_history_filters(
+        query,
+        status=status,
+        messenger_type=messenger,
+        account_id=account_id_int,
+        period=period,
+        user=user,
+    )
+    query = query.order_by(SendLog.sent_at.desc()).execution_options(
+        yield_per=EXPORT_YIELD_PER
+    )
+
+    async def body():
+        """Метка порядка байтов, шапка, затем строки — партиями.
+
+        Запись идёт стандартным модулем CSV в буфер на одну строку: он ставит
+        кавычки там, где значение содержит разделитель, кавычку или перевод
+        строки, — руками этот набор случаев не выписывается без ошибок.
+        """
+        buffer = io.StringIO()
+        writer = csv.writer(
+            buffer,
+            delimiter=EXPORT_DELIMITER,
+            quoting=csv.QUOTE_MINIMAL,
+            lineterminator="\r\n",
+        )
+
+        def flush() -> str:
+            chunk = buffer.getvalue()
+            buffer.seek(0)
+            buffer.truncate(0)
+            return chunk
+
+        writer.writerow(EXPORT_HEADER)
+        # Метка порядка байтов — ПЕРВЫЕ байты тела (D-25). Без неё табличный
+        # редактор в русской локали читает файл однобайтовой кодировкой, и
+        # кириллица приезжает мусором: файл открывается, выглядит заполненным и
+        # не содержит ни одного читаемого слова.
+        yield EXPORT_BOM + flush()
+
+        # Чтение ПОТОКОМ, а не одной выборкой: память держится порядка размера
+        # партии, а не размера выборки (T-04-32). На боевом драйвере это
+        # серверный курсор, на тестовом — буферизация партиями; интерфейс один.
+        result = await db.stream(query)
+        async for log, group in result:
+            writer.writerow(export_row(log, group, user))
+            yield flush()
+
+    return StreamingResponse(
+        body(),
+        media_type="text/csv; charset=utf-8",
+        # Имя файла — константа модуля и из значений пользователя не собирается
+        # (T-04-34): подстановка в заголовок ответа невозможна по построению.
+        headers={
+            "Content-Disposition": f'attachment; filename="{EXPORT_FILENAME}"',
+        },
+    )
+
+
 @router.get("/history/{log_id}", response_class=HTMLResponse)
 async def history_detail(
     request: Request,
@@ -227,6 +493,7 @@ async def history_list(
     account_id: str | None = Query(default=None),
     period: str | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
+    export: str | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -323,6 +590,12 @@ async def history_list(
             "messenger_chips": MESSENGER_CHIPS,
             "period_chips": PERIOD_CHIPS,
             "history_total": history_total,
+            # Признак несостоявшейся выгрузки сравнивается ЦЕЛИКОМ, как и
+            # значения осей фильтрации: плашка по любому непустому значению
+            # позволяла бы чужой ссылкой нарисовать пользователю сообщение о
+            # выгрузке, которой не было.
+            "export_blocked": export == EXPORT_TOO_MANY,
+            "export_row_cap": EXPORT_ROW_CAP,
             "offset": offset,
             "page_size": PAGE_SIZE,
             "has_next": has_next,
