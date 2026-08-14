@@ -14,6 +14,7 @@
 
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -50,21 +51,28 @@ async def _seed_send_log(
     sent_at: datetime | None = None,
     group_id: int | None = None,
     ad_title: str = "Отправка объявления",
+    ad_text: str = "Текст отправленного объявления",
+    ad_images: list | None = None,
+    group_name: str = "Группа отправки",
+    task_id: str | None = "task-9f3c1d",
+    error_message: str | None = None,
 ) -> SendLog:
     log = SendLog(
         user_id=user_id,
         group_id=group_id,
         ad_title=ad_title,
-        ad_text="Текст отправленного объявления",
-        ad_images=[],
-        group_name="Группа отправки",
+        ad_text=ad_text,
+        ad_images=ad_images if ad_images is not None else [],
+        group_name=group_name,
         messenger_type=messenger_type,
-        task_id="task-9f3c1d",
+        task_id=task_id,
         status=status,
+        error_message=error_message,
         sent_at=sent_at or datetime.now(timezone.utc),
     )
     db.add(log)
     await db.commit()
+    await db.refresh(log)
     return log
 
 
@@ -791,3 +799,302 @@ async def test_infinite_scroll_sentinel_is_identical_in_page_and_partial():
         return lines[0]
 
     assert sentinel("history/list.html") == sentinel("history/partial_cards.html")
+
+
+# =============================================================================
+# План 04-07, задача 1: блок ошибки, ограничение по высоте и копирование
+# =============================================================================
+#
+# Текст ошибки — единственное, по чему пользователь понимает, почему его реклама
+# не ушла, поэтому все обещания этого блока проверяются ПАРАМИ «есть там, где
+# должно быть» и «нет там, где не должно»: одиночное утверждение зеленеет на
+# реализации, которая применила ограничение везде или нигде.
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
+APP_CSS = Path(__file__).resolve().parents[2] / "app" / "static" / "css" / "app.css"
+
+HISTORY_CARD = "history/includes/history_card.html"
+HISTORY_DETAIL = "history/detail.html"
+
+# Сток разметки: значение, попавшее в строку разметки, разбирается парсером
+# всегда. Перечень тот же, что закрепляет редактор объявления
+# (tests/test_templates/test_ads_form_security.py) — второго определения одного
+# запрета в проекте не заводится.
+MARKUP_SINKS = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write")
+
+# Разметка, которую браузер НЕ отрисовывает: содержимое <template> попадает в
+# документ только через клиентский код. Кнопка копирования объявлена внутри
+# такого блока — это и есть «без Alpine её в разметке нет» (D-34).
+_TEMPLATE_BLOCK_RE = re.compile(r"<template\b[^>]*>.*?</template>", re.DOTALL)
+
+# Примитив длинного текста ДОСЛОВНО. Ограничение по высоте вводится соседним
+# модификатором, а сам примитив трогать нельзя: его свойство «текст читается
+# целиком» закреплено полнотой на странице записи и в админской истории.
+LONGTEXT_PRIMITIVE = """[data-longtext] {
+  display: block; margin: 0;
+  font-size: var(--fs-md); line-height: 1.6; color: var(--text-secondary);
+  white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;
+}"""
+
+LONG_ERROR = (
+    "PeerFloodError: Too many requests to join the group chat -420; "
+    "retry after 86400 seconds (account temporarily restricted by Telegram); "
+    "the session will stay limited until the flood wait expires"
+)
+
+
+def _template_text(rel: str) -> str:
+    return (TEMPLATES_DIR / rel).read_text(encoding="utf-8")
+
+
+def _outside_templates(html: str) -> str:
+    """Разметка без содержимого <template>: ровно то, что видит браузер без JS."""
+    return _TEMPLATE_BLOCK_RE.sub("", html)
+
+
+def _diag_blocks(html: str) -> list[str]:
+    """Диагностические блоки, приготовленные сервером для буфера обмена."""
+    return re.findall(r'data-diag="([^"]*)"', html)
+
+
+@pytest.mark.asyncio
+async def test_copy_button_is_absent_without_alpine(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-34: без поднявшегося Alpine кнопки копирования в разметке НЕТ.
+
+    Кнопка, отрисованная сервером и мёртвая без JavaScript, — обещание, которого
+    страница не выполняет: пользователь жмёт и не получает ничего, причём
+    молча. Объявление внутри <template> делает недоступность честной — кнопки
+    просто нет.
+    """
+    user = await _current_user(db_session)
+    await _seed_send_log(
+        db_session, user.id, status=STATUS_FAIL, error_message="ECONNRESET"
+    )
+
+    html = _page_body((await authed_client.get("/history")).text)
+
+    assert "data-copybtn" in html, "кнопка копирования не объявлена вовсе"
+    assert "data-copybtn" not in _outside_templates(html), (
+        "кнопка копирования отрисована сервером — без Alpine она останется "
+        "мёртвой кнопкой, а не отсутствующей"
+    )
+    template_with_button = [
+        block
+        for block in _TEMPLATE_BLOCK_RE.findall(html)
+        if "data-copybtn" in block
+    ]
+    assert template_with_button, "кнопка не внутри <template>"
+    for block in template_with_button:
+        assert "x-if" in block, block[:200]
+
+
+@pytest.mark.asyncio
+async def test_error_block_stays_copyable_without_the_button(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Базовый путь копирования — выделение одним действием, без JavaScript.
+
+    Он и остаётся единственным там, где Alpine не поднялся: кнопки в разметке
+    нет, а текст ошибки и идентификатор задачи выделяются одним действием
+    средствами CSS.
+    """
+    user = await _current_user(db_session)
+    await _seed_send_log(
+        db_session, user.id, status=STATUS_FAIL, error_message=LONG_ERROR
+    )
+
+    html = _page_body((await authed_client.get("/history")).text)
+    plain = _outside_templates(html)
+
+    assert plain.count("data-selectall") >= 2, (
+        "выделение одним действием потеряно: его обязаны нести и текст ошибки, "
+        "и значение идентификатора задачи"
+    )
+    assert LONG_ERROR in plain, "текст ошибки виден только при поднятом Alpine"
+
+    css = APP_CSS.read_text(encoding="utf-8")
+    rule = css[css.index("[data-selectall]") : css.index("[data-selectall]") + 200]
+    assert "user-select: all" in rule, rule
+
+
+@pytest.mark.asyncio
+async def test_copy_button_carries_the_whole_diagnostic_block(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-33: в буфер уходит диагностический блок, а не голый текст ошибки.
+
+    Голый текст ошибки бесполезен тому, кому его перешлют: без времени, канала,
+    группы, объявления и идентификатора задачи по нему нельзя найти ни отправку,
+    ни причину.
+    """
+    user = await _current_user(db_session)
+    await _seed_send_log(
+        db_session,
+        user.id,
+        status=STATUS_FAIL,
+        messenger_type="max",
+        ad_title="Объявление диагностики",
+        group_name="Группа диагностики",
+        task_id="task-diag-4242",
+        error_message="RPCError 500 internal",
+    )
+
+    html = _page_body((await authed_client.get("/history")).text)
+
+    blocks = _diag_blocks(html)
+    assert len(blocks) == 1, f"диагностических блоков не один, а {len(blocks)}"
+    diag = blocks[0]
+    for part in (
+        "max",
+        "Группа диагностики",
+        "Объявление диагностики",
+        "task-diag-4242",
+        "RPCError 500 internal",
+    ):
+        assert part in diag, f"в диагностическом блоке нет {part!r}: {diag!r}"
+    # Время отправки: год достаточно, формат проверять смысла нет — его считает
+    # тот же глобал, что печатает время в шапке записи.
+    assert str(datetime.now(timezone.utc).year) in diag, diag
+
+
+def test_copy_handler_checks_the_clipboard_before_reaching_for_it():
+    """T-04-29: доступность буфера проверяется ДО обращения к нему.
+
+    Интерфейс буфера существует только в защищённом контексте, а развёртывание
+    проекта допускает режим без шифрования. Обращение без проверки — исключение
+    в консоли и кнопка, которая молча не работает.
+    """
+    source = _template_text(HISTORY_CARD)
+
+    assert "isSecureContext" in source, "проверки защищённого контекста нет"
+    assert source.index("isSecureContext") < source.index("navigator.clipboard"), (
+        "обращение к буферу стоит РАНЬШЕ проверки его доступности"
+    )
+
+
+def test_copy_handler_never_claims_a_copy_that_did_not_happen():
+    """T-04-29: сообщение об успехе появляется ТОЛЬКО по свершившемуся копированию.
+
+    Сообщение об успешном копировании, которого не произошло, — прямая ложь:
+    пользователь уходит вставлять то, чего в буфере нет.
+    """
+    source = _template_text(HISTORY_CARD)
+
+    assert "if (!done) return" in source, (
+        "признак успеха выставляется без проверки результата записи в буфер"
+    )
+    # Признак успеха выставляется ровно в одном месте — в охраняемом методе.
+    assert source.count("copied = true") == 1, source.count("copied = true")
+
+
+def test_copy_handler_builds_dom_not_markup():
+    """T-04-30: узлы для запасного пути создаются как узлы DOM.
+
+    Уязвимость этого класса — свойство СПОСОБА сборки, а не конкретного
+    значения, поэтому проверяется исходник, а не отрисованная страница.
+    """
+    for rel in (HISTORY_CARD, HISTORY_DETAIL):
+        source = _template_text(rel)
+        offenders = [sink for sink in MARKUP_SINKS if sink in source]
+        assert not offenders, f"{rel}: {offenders}"
+
+    assert "createElement" in _template_text(HISTORY_CARD), (
+        "запасной путь копирования собран не узлами DOM"
+    )
+
+
+@pytest.mark.asyncio
+async def test_error_block_is_height_limited_only_in_the_list_card(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-32: ограничение по высоте живёт в карточке списка и только там.
+
+    Страница записи — то место, куда человек приходит ЗА полным текстом.
+    Ограничение, применённое и там, теряло бы гарантию в двух местах ради
+    одного.
+    """
+    user = await _current_user(db_session)
+    log = await _seed_send_log(
+        db_session, user.id, status=STATUS_FAIL, error_message=LONG_ERROR
+    )
+
+    listing = _page_body((await authed_client.get("/history")).text)
+    detail = (await authed_client.get(f"/history/{log.id}")).text
+
+    assert "data-clamp" in listing, "карточка списка не несёт модификатора"
+    assert "data-clamp" not in detail, (
+        "страница записи получила ограничение по высоте — за полным текстом "
+        "идти стало некуда"
+    )
+    assert LONG_ERROR in listing, "текст ошибки усечён сервером в карточке списка"
+    assert LONG_ERROR in detail, "текст ошибки усечён сервером на странице записи"
+
+
+def test_clamp_expansion_needs_no_javascript():
+    """Раскрытие ограниченного блока не зависит от JavaScript.
+
+    Раскрытие обработчиком означало бы, что при выключенном Alpine длинный текст
+    ошибки недоступен — ровно то, что D-32 прямо запрещает.
+    """
+    source = _template_text(HISTORY_CARD)
+    start = source.index("<details data-clamp")
+    block = source[start : source.index("</details>", start)]
+
+    assert "<summary" in block, "пары «сводка + раскрытие» нет"
+    for handler in ("x-on:", "@click", "onclick", "hx-get", "hx-trigger"):
+        assert handler not in block, f"раскрытие повешено на обработчик: {handler}"
+
+
+def test_long_text_primitive_is_untouched():
+    """Примитив длинного текста и его запрет усечения остались как были.
+
+    Ограничение по высоте вводится СОСЕДНИМ модификатором именно поэтому:
+    правка примитива распространила бы усечение на страницу записи, на
+    админскую историю и на снапшот текста объявления разом.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    assert LONGTEXT_PRIMITIVE in css, "примитив длинного текста изменён"
+    assert "Ни усечения, ни многоточия, ни скрытия за" in css, (
+        "комментарий, дословно запрещающий усечение, изменён или удалён"
+    )
+    assert "[data-clamp]" in css, "правила модификатора ограничения нет"
+
+
+@pytest.mark.asyncio
+async def test_successful_record_has_neither_error_block_nor_copy_button(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """У успешной записи копировать нечего и объяснять нечего."""
+    user = await _current_user(db_session)
+    await _seed_send_log(db_session, user.id, status=STATUS_OK)
+
+    html = _page_body((await authed_client.get("/history")).text)
+
+    assert 'data-area="err"' not in html
+    assert "data-copybtn" not in html
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status", [STATUS_FAIL, STATUS_ACCOUNT_DISCONNECTED, "обрыв-связи"]
+)
+async def test_every_unsuccessful_record_offers_the_copy_button(
+    status: str, authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Неуспешная — это «не успешная», а не «из известного списка неудач».
+
+    Перечень неудачных статусов конечен ровно до появления следующего: запись с
+    неизвестным статусом осталась бы без кнопки копирования, то есть без
+    диагностики, именно тогда, когда диагностика и нужна. Проверяется и запись
+    БЕЗ текста ошибки: диагностический блок ценен и без него — по нему находят
+    отправку.
+    """
+    user = await _current_user(db_session)
+    await _seed_send_log(db_session, user.id, status=status, error_message=None)
+
+    html = _page_body((await authed_client.get("/history")).text)
+
+    assert "data-copybtn" in html, status

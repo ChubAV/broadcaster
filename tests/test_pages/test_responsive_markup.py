@@ -609,6 +609,52 @@ async def test_history_detail_shows_error_text(
 
 
 @pytest.mark.asyncio
+async def test_history_card_shows_error_text_in_full(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """План 04-07: в КАРТОЧКЕ СПИСКА текст ошибки лежит целиком (D-32).
+
+    Соседний тест выше закрепляет полноту на странице записи, этот — в списке.
+    Ограничение по высоте, введённое планом 04-07, ограничивает ВИДИМУЮ высоту
+    блока средствами CSS; усечение текста СЕРВЕРОМ оно не вводит и ввести не
+    имеет права — усечённое на сервере не раскрывается ничем.
+    """
+    long_error = (
+        "PeerFloodError: Too many requests to join the group chat -420; "
+        "retry after 86400 seconds (account temporarily restricted by Telegram)"
+    )
+    await _seed_send_log(
+        db_session, status="fail", error_message=long_error, ad_title="Неудачная отправка"
+    )
+
+    response = await authed_client.get("/history")
+    assert response.status_code == 200
+    html = response.text
+    assert long_error in html, "текст ошибки усечён сервером в карточке списка"
+    assert "truncate" not in html
+
+
+@pytest.mark.asyncio
+async def test_history_card_escapes_error_text(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-04-26: разметка внутри текста ошибки остаётся текстом.
+
+    Строка приходит из внешнего мессенджера и приложением не контролируется.
+    Парный к test_admin_history_escapes_error_text: тот закрывает страницу
+    записи в админке, этот — карточку пользовательского списка, где тот же текст
+    теперь едет ещё и в диагностическом блоке для буфера обмена.
+    """
+    await _seed_send_log(
+        db_session, status="fail", error_message='<img src=x onerror="alert(1)">'
+    )
+
+    html = (await authed_client.get("/history")).text
+    assert "<img src=x" not in html, "текст ошибки отрисован как разметка"
+    assert "&lt;img src=x" in html, "экранированного вывода ошибки нет"
+
+
+@pytest.mark.asyncio
 async def test_history_detail_renders_for_successful_send(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
