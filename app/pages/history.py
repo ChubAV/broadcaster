@@ -10,6 +10,7 @@ from app.application.analytics.send_analytics import (
     STATUS_FAIL,
     STATUS_OK,
     apply_history_filters,
+    history_count,
     history_filter_params,
 )
 from app.config import Settings
@@ -280,6 +281,27 @@ async def history_list(
     all_accounts = accounts_result.scalars().all()
     filter_params = history_filter_params(status, messenger, account_id_int, period)
 
+    # Точное число найденного ОТДЕЛЬНЫМ запросом с тем же набором фильтров
+    # (D-31) — тот же приём, что у счётчиков на экране групп аккаунта.
+    # Считать по длине выданного списка нельзя: список ограничен страницей, и
+    # такое число было бы верным ровно до тридцать первой записи, после чего
+    # молча врало бы — причём именно там, где счётчик и нужен. Число это
+    # обещание, на которое обопрётся выгрузка (план 04-08): выгрузка и счётчик
+    # обязаны отвечать одним числом на один вопрос, поэтому фильтры в обоих
+    # навешивает одна и та же функция модуля аналитики.
+    #
+    # В паршале прокрутки счётчик НЕ пересчитывается: он живёт над списком, а
+    # паршал подменяет только порцию записей и линейки не касается.
+    history_total = await history_count(
+        db,
+        user_id=user.id,
+        status=status,
+        messenger_type=messenger,
+        account_id=account_id_int,
+        period=period,
+        user=user,
+    )
+
     return templates.TemplateResponse(
         "history/list.html",
         {
@@ -300,6 +322,7 @@ async def history_list(
             "status_chips": STATUS_CHIPS,
             "messenger_chips": MESSENGER_CHIPS,
             "period_chips": PERIOD_CHIPS,
+            "history_total": history_total,
             "offset": offset,
             "page_size": PAGE_SIZE,
             "has_next": has_next,
