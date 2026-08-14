@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import (
@@ -22,15 +22,22 @@ from app.application.analytics.send_analytics import (
     STATUS_ACCOUNT_DISCONNECTED,
     STATUS_FAIL,
     STATUS_OK,
+    HeatmapView,
     SendMetrics,
+    UpcomingSend,
+    activity_heatmap,
     apply_history_filters,
     history_count,
     history_filter_params,
     normalize_utc,
     send_metrics,
+    upcoming_sends,
 )
+from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
+from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
+from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.user import User
 
@@ -553,3 +560,559 @@ async def test_history_count_ignores_other_users(db_session):
     await _seed_send_log(db_session, stranger.id, sent_at=NOW)
 
     assert await history_count(db_session, user_id=user.id) == 0
+
+
+# --- activity_heatmap ---------------------------------------------------------
+#
+# Окно heatmap — СКОЛЬЗЯЩИЕ семь суток от `now` (D-12), а не календарная неделя
+# ПН-ВС макета. Поэтому все ожидания здесь считаются от `now - 7 суток`, и ни
+# одно не выписано календарной датой: тест, привязанный к фиксированному
+# понедельнику, зеленел бы ровно один день в неделю.
+
+# Короткие имена дней НЕЗАВИСИМО от локали процесса: `strftime('%a')` отдаёт
+# английские сокращения на любой машине без установленной русской локали, то
+# есть проверка через него утверждала бы не то, что видит пользователь.
+SHORT_DAYS = ("ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС")
+
+# UTC+3 круглый год: ни у одной из 12 зон проекта (app/constants.py) перехода на
+# летнее время нет, поэтому смещение в тестах постоянно.
+MOSCOW = ZoneInfo("Europe/Moscow")
+
+
+def _filled_cells(view: HeatmapView) -> dict[tuple[int, int], int]:
+    """Непустые ячейки сетки в виде {(ряд, локальный час): число}."""
+    return {
+        (row_index, hour): value
+        for row_index, row in enumerate(view.grid)
+        for hour, value in enumerate(row)
+        if value
+    }
+
+
+@pytest.mark.asyncio
+async def test_heatmap_empty_journal_gives_a_grid_of_zeros(db_session):
+    """Пустой набор данных — сетка нулей, а не пустой список.
+
+    Шаблон обходит `view.grid` рядами и ячейками; пустой список отрисовал бы
+    вместо сетки ничего, и блок «Активность за неделю» выглядел бы сломанным, а
+    не пустым.
+    """
+    user = await _user(db_session)
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    assert len(view.grid) == 7
+    assert all(len(row) == 24 for row in view.grid)
+    assert _filled_cells(view) == {}
+    assert view.peak == 0
+
+
+@pytest.mark.asyncio
+async def test_heatmap_same_records_land_in_different_cells_per_timezone(db_session):
+    """D-10: ОДИН набор записей раскладывается по локальному часу ЧИТАТЕЛЯ.
+
+    Прямая проверка того, ради чего heatmap считается в Python: запись в 23:30
+    UTC для пользователя в UTC — вечер, а для пользователя в UTC+3 — половина
+    третьего ночи СЛЕДУЮЩИХ локальных суток. Раскладка по UTC-часу показала бы
+    москвичу чужой график активности.
+    """
+    user = await _user(db_session)
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 19, 23, 30, tzinfo=timezone.utc)
+    )
+
+    in_utc = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+    in_moscow = await activity_heatmap(db_session, user_id=user.id, now=NOW, tz=MOSCOW)
+
+    utc_cells = _filled_cells(in_utc)
+    moscow_cells = _filled_cells(in_moscow)
+
+    assert list(utc_cells.values()) == [1]
+    assert list(moscow_cells.values()) == [1]
+    assert next(iter(utc_cells))[1] == 23, "в UTC запись обязана попасть в час 23"
+    assert next(iter(moscow_cells))[1] == 2, "в UTC+3 запись обязана попасть в час 2"
+    assert utc_cells != moscow_cells
+
+
+@pytest.mark.asyncio
+async def test_heatmap_reads_naive_dates_without_raising(db_session):
+    """Naive-дата SQLite обрабатывается, а не роняет расчёт.
+
+    Колонка объявлена `DateTime(timezone=True)`, но SQLite отдаёт её NAIVE.
+    Сравнение naive и aware в Python поднимает TypeError, поэтому нормализация
+    обязана жить В МОДУЛЕ: без неё дефект существовал бы только на одном из двух
+    диалектов. Тест утверждает и отсутствие исключения, и попадание в нужный час.
+    """
+    user = await _user(db_session)
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 19, 7, 15, tzinfo=timezone.utc)
+    )
+
+    raw = (await db_session.execute(select(SendLog.sent_at))).scalar_one()
+    assert raw.tzinfo is None, "SQLite перестал отдавать naive — тест потерял смысл"
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    # Ряд считается от начала окна: 13.05 12:00 → 19.05 07:15 = 139 часов,
+    # 139 // 24 = 5. Ряды — сутки ОКНА, а не календарные дни (D-12).
+    assert list(_filled_cells(view)) == [(5, 7)]
+
+
+@pytest.mark.asyncio
+async def test_heatmap_row_labels_follow_the_window_not_a_fixed_monday(db_session):
+    """D-12: подписи рядов — дни ОКНА, а не ПН-ВС макета."""
+    user = await _user(db_session)
+    origin = NOW - timedelta(days=7)
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    expected = [
+        SHORT_DAYS[(origin + timedelta(days=i)).weekday()] for i in range(7)
+    ]
+    assert view.day_labels == expected
+    # Окно начинается в среду, поэтому фиксированная раскладка макета краснеет.
+    assert view.day_labels[0] != "ПН"
+
+
+@pytest.mark.asyncio
+async def test_heatmap_ignores_records_outside_the_window(db_session):
+    user = await _user(db_session)
+    await _seed_send_log(
+        db_session, user.id, sent_at=NOW - timedelta(days=7, hours=2)
+    )
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    assert _filled_cells(view) == {}
+
+
+@pytest.mark.asyncio
+async def test_heatmap_ignores_other_users(db_session):
+    """T-04-13: владение стоит в базовом WHERE, а не в фильтре поверх."""
+    user = await _user(db_session)
+    stranger = await _user(db_session, email="stranger-heat@test.com")
+    await _seed_send_log(db_session, stranger.id, sent_at=NOW - timedelta(hours=3))
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    assert _filled_cells(view) == {}
+    assert view.peak == 0
+
+
+@pytest.mark.asyncio
+async def test_heatmap_counts_record_without_group_or_messenger(db_session):
+    """Прохибиция плана: неклассифицируемая запись из сетки НЕ выпадает.
+
+    Отправка без `group_id` и без `messenger_type` произошла в реальный час, и
+    выбросить её ради «чистой» сетки значило бы соврать о том, работала система
+    в этот час или стояла.
+    """
+    user = await _user(db_session)
+    await _seed_send_log(
+        db_session,
+        user.id,
+        sent_at=datetime(2026, 5, 19, 9, 0, tzinfo=timezone.utc),
+        group_id=None,
+        messenger_type=None,
+    )
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    # 13.05 12:00 → 19.05 09:00 = 141 час, 141 // 24 = 5.
+    assert _filled_cells(view) == {(5, 9): 1}
+    assert view.peak == 1
+
+
+@pytest.mark.asyncio
+async def test_heatmap_cell_counts_every_send_of_the_hour_and_peak_is_the_max(
+    db_session,
+):
+    """D-11: в ячейке ВСЕ отправки часа, а пик — самый горячий час окна."""
+    user = await _user(db_session)
+    hot = datetime(2026, 5, 19, 14, 0, tzinfo=timezone.utc)
+    for minutes in (0, 17, 59):
+        await _seed_send_log(db_session, user.id, sent_at=hot + timedelta(minutes=minutes))
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 18, 5, 30, tzinfo=timezone.utc)
+    )
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    # 19.05 14:00 = 146-й час окна (ряд 6), 18.05 05:30 = 113-й (ряд 4).
+    assert _filled_cells(view) == {(6, 14): 3, (4, 5): 1}
+    assert view.peak == 3
+
+
+@pytest.mark.asyncio
+async def test_heatmap_window_width_follows_the_days_argument(db_session):
+    """Ширина окна — параметр, а не константа: Фаза 6 попросит другое число."""
+    user = await _user(db_session)
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc, days=3
+    )
+
+    assert len(view.grid) == 3
+    assert len(view.day_labels) == 3
+
+
+def test_heatmap_view_carries_grid_labels_and_peak():
+    """Контракт датакласса: сетка, подписи рядов и пик — три отдельных поля."""
+    view = HeatmapView(grid=[[0] * 24], day_labels=["ПН"], peak=0)
+
+    assert view.grid == [[0] * 24]
+    assert view.day_labels == ["ПН"]
+    assert view.peak == 0
+
+
+# --- upcoming_sends -----------------------------------------------------------
+#
+# Принадлежность расписания идёт через `Ad.user_id`: колонки владельца у
+# расписания НЕТ (app/models/schedule.py). Поэтому каждый посев здесь заводит
+# объявление, и владение проверяется через него.
+
+# Пометки причин — те же строки, что рендерит бейдж строки дашборда.
+REASON_DRAFT = "Объявление в черновике"
+REASON_ACCOUNT = "Аккаунт отключён"
+REASON_GROUPS = "Все группы выключены"
+
+
+async def _seed_ad(
+    db: AsyncSession,
+    user: User,
+    *,
+    title: str = "Объявление рассылки",
+    status: str = AD_STATUS_PUBLISHED,
+) -> Ad:
+    ad = Ad(user_id=user.id, title=title, text="Текст", images=[], status=status)
+    db.add(ad)
+    await db.commit()
+    await db.refresh(ad)
+    return ad
+
+
+async def _seed_account(
+    db: AsyncSession, user: User, *, status: str = "active", type_: str = "wa"
+) -> MessengerAccount:
+    account = MessengerAccount(
+        user_id=user.id, type=type_, credentials="creds", status=status
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+    return account
+
+
+async def _seed_group_in_account(
+    db: AsyncSession,
+    user: User,
+    account: MessengerAccount,
+    *,
+    external_id: str,
+    is_active: bool = True,
+) -> Group:
+    group = Group(
+        user_id=user.id,
+        account_id=account.id,
+        messenger_type=account.type,
+        group_external_id=external_id,
+        name=f"Группа {external_id}",
+        is_active=is_active,
+    )
+    db.add(group)
+    await db.commit()
+    await db.refresh(group)
+    return group
+
+
+async def _seed_schedule(
+    db: AsyncSession,
+    user: User,
+    *,
+    next_run_at: datetime | None,
+    ad_status: str = AD_STATUS_PUBLISHED,
+    account_status: str = "active",
+    with_account: bool = True,
+    group_flags: tuple[bool, ...] = (True,),
+    is_active: bool = True,
+    title: str = "Объявление рассылки",
+    seq: str = "1",
+) -> Schedule:
+    """Расписание вместе с объявлением, аккаунтом и составом групп."""
+    ad = await _seed_ad(db, user, title=title, status=ad_status)
+    account = None
+    group_ids: list[int] = []
+    if with_account:
+        account = await _seed_account(db, user, status=account_status)
+        for index, flag in enumerate(group_flags):
+            group = await _seed_group_in_account(
+                db, user, account, external_id=f"-100{seq}{index}", is_active=flag
+            )
+            group_ids.append(group.id)
+    schedule = Schedule(
+        ad_id=ad.id,
+        account_id=account.id if account else None,
+        group_ids=group_ids,
+        days_of_week=[0, 1, 2, 3, 4, 5, 6],
+        times_of_day=["10:00"],
+        timezone="UTC",
+        is_active=is_active,
+        next_run_at=next_run_at,
+    )
+    db.add(schedule)
+    await db.commit()
+    await db.refresh(schedule)
+    return schedule
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_orders_by_next_run_at(db_session):
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session, user, next_run_at=NOW + timedelta(hours=5), title="Позже", seq="1"
+    )
+    await _seed_schedule(
+        db_session, user, next_run_at=NOW + timedelta(hours=1), title="Раньше", seq="2"
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert [item.ad_title for item in items] == ["Раньше", "Позже"]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_respects_the_limit(db_session):
+    user = await _user(db_session)
+    for i in range(5):
+        await _seed_schedule(
+            db_session, user, next_run_at=NOW + timedelta(hours=i + 1), seq=str(i)
+        )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW, limit=3)
+
+    assert len(items) == 3
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_skips_inactive_and_unscheduled(db_session):
+    """Приостановленное расписание и расписание без next_run_at не выстрелят."""
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        is_active=False,
+        title="Пауза",
+        seq="1",
+    )
+    await _seed_schedule(db_session, user, next_run_at=None, title="Без слота", seq="2")
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items == []
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_has_no_forward_time_bound(db_session):
+    """D-14: расписание через месяц попадает в список, если ближе ничего нет."""
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session, user, next_run_at=NOW + timedelta(days=30), title="Через месяц"
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert [item.ad_title for item in items] == ["Через месяц"]
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_ignores_other_users(db_session):
+    """T-04-13: владение идёт через Ad.user_id — своей колонки у расписания нет."""
+    user = await _user(db_session)
+    stranger = await _user(db_session, email="stranger-up@test.com")
+    await _seed_schedule(
+        db_session, stranger, next_run_at=NOW + timedelta(hours=1), title="Чужое"
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items == []
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_does_not_trip_lazy_raise(db_session):
+    """`Schedule.ad` и `Schedule.account` объявлены lazy="raise".
+
+    Объявление и аккаунт обязаны приезжать ЗАПРОСОМ. Обращение к ним как к
+    атрибутам расписания поднимает InvalidRequestError — на боевом стеке это
+    пятисотка на самом дашборде, а не тихая деградация блока.
+    """
+    user = await _user(db_session)
+    await _seed_schedule(db_session, user, next_run_at=NOW + timedelta(hours=1))
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert len(items) == 1
+    item = items[0]
+    # Данные объявления и канала уже в результате: доступ к ним ничего не грузит.
+    assert item.ad_title == "Объявление рассылки"
+    assert item.messenger_type == "wa"
+    assert item.ad_id and item.schedule_id
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_keeps_schedule_with_detached_account(db_session):
+    """D-15: аккаунт удалён — расписание остаётся в списке с пометкой.
+
+    `Schedule.account_id` nullable с `ondelete="SET NULL"`, поэтому ВНУТРЕННИЙ
+    join потерял бы ровно те строки, ради которых D-15 написан: пользователь не
+    увидел бы, что его рассылка больше никуда не уйдёт.
+    """
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        with_account=False,
+        title="Отвязанное",
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert len(items) == 1
+    assert items[0].ad_title == "Отвязанное"
+    assert items[0].reason == REASON_ACCOUNT
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_marks_disconnected_account(db_session):
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        account_status="disconnected",
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items[0].reason == REASON_ACCOUNT
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_marks_draft_ad(db_session):
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        ad_status=AD_STATUS_DRAFT,
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items[0].reason == REASON_DRAFT
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_marks_all_groups_off(db_session):
+    """Третья причина D-15 — та, ради которой берётся второй запрос."""
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        group_flags=(False, False),
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items[0].reason == REASON_GROUPS
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_leaves_a_healthy_schedule_unmarked(db_session):
+    """Парный случай: без него пометки зеленели бы «всегда есть причина»."""
+    user = await _user(db_session)
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        group_flags=(True, False),
+    )
+
+    items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+
+    assert items[0].reason == ""
+    assert items[0].group_count == 2
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_takes_two_queries_regardless_of_group_count(db_session):
+    """T-04-19: второй запрос ОДИН на блок, а не по запросу на строку.
+
+    Отступление от D-38 названо и ограничено: флаги групп берутся одним
+    запросом по объединению идентификаторов показываемых строк. Обращение к БД
+    внутри цикла превратило бы отступление в дефект N+1, который на восьми
+    строках по десять групп стоит восемьдесят round-trip на каждый рендер
+    дашборда.
+    """
+    user = await _user(db_session)
+    for i in range(4):
+        await _seed_schedule(
+            db_session,
+            user,
+            next_run_at=NOW + timedelta(hours=i + 1),
+            group_flags=(True, True, False),
+            seq=str(i),
+        )
+
+    statements: list[str] = []
+    sync_engine = db_session.bind.sync_engine
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(sync_engine, "before_cursor_execute", _record)
+    try:
+        items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _record)
+
+    assert len(items) == 4
+    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+    assert len(selects) == 2, f"запросов не два, а {len(selects)}: {selects}"
+
+
+def test_upcoming_send_carries_the_row_of_the_block():
+    """Контракт датакласса: строка блока целиком, без обращений к БД из шаблона."""
+    item = UpcomingSend(
+        schedule_id=1,
+        ad_id=2,
+        ad_title="Объявление",
+        next_run_at=NOW,
+        group_count=3,
+        messenger_type="wa",
+        reason="",
+    )
+
+    assert item.schedule_id == 1
+    assert item.ad_id == 2
+    assert item.group_count == 3
+    assert item.reason == ""

@@ -39,12 +39,17 @@ PostgreSQL. Календарная группировка средствами �
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.scheduling.use_cases import effective_ad_status
+from app.constants import AD_STATUS_DRAFT
+from app.models.ad import Ad
 from app.models.group import Group
+from app.models.messenger_account import MessengerAccount
+from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.user import User
 
@@ -212,6 +217,294 @@ async def send_metrics(
         failed_prev=int(row.failed_prev or 0),
         groups_prev=int(row.groups_prev or 0),
     )
+
+
+# --- Heatmap активности -------------------------------------------------------
+
+# Короткие имена дней в порядке `datetime.weekday()` (0 — понедельник).
+# Выписаны ЯВНО, а не получены через `strftime('%a')`: результат strftime
+# зависит от локали ПРОЦЕССА, и на машине без установленной русской локали
+# подпись ряда молча отрисовалась бы английским сокращением. Это единственная
+# строка, которую модуль формирует сам, и она допустима: это подпись РЯДА
+# сетки, а не форматирование данных пользователя.
+SHORT_WEEKDAYS = ("ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС")
+
+# Размер батча потокового чтения окна heatmap. На asyncpg `yield_per` включает
+# настоящий серверный курсор, на aiosqlite — буферизацию батчами; API `stream`
+# одинаков на обоих.
+HEATMAP_YIELD_PER = 1000
+
+
+@dataclass(slots=True)
+class HeatmapView:
+    """Сетка активности: `days` рядов по 24 часа, подписи рядов и пик.
+
+    `peak` отдаётся ВЫЗЫВАЮЩЕМУ, а не превращается в ступени насыщенности
+    здесь: шкала — вопрос отображения, и её место в макросе разметки. Но
+    считать максимум заново в шаблоне значило бы обходить всю сетку второй раз
+    средствами Jinja, поэтому число, уже известное после раскладки, уезжает
+    полем.
+    """
+
+    grid: list[list[int]]
+    day_labels: list[str]
+    peak: int
+
+
+async def activity_heatmap(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    now: datetime | None = None,
+    tz: tzinfo | None = None,
+    days: int = 7,
+) -> HeatmapView:
+    """Раскладывает отправки окна по (сутки, локальный час) — сетка `days`×24.
+
+    ОКНО СКОЛЬЗЯЩЕЕ (D-12). Ряд `i` — сутки, начинающиеся в `local_origin + i
+    дней`, где `local_origin` есть `now - days` суток. Календарной недели
+    ПН-ВС макета здесь нет: она показывала бы в понедельник утром одну колонку
+    данных и шесть пустых. Подписи рядов поэтому следуют ОКНУ — `day_labels[i]`
+    есть день недели даты `local_origin + i дней`, а не фиксированный
+    понедельник.
+
+    РАСКЛАДКА ИДЁТ В PYTHON, А НЕ В БАЗЕ. Группировка по календарным единицам
+    средствами диалекта в этом модуле запрещена: тесты идут на SQLite, бой — на
+    PostgreSQL, и ветка, написанная под боевой диалект, не исполнилась бы
+    тестами НИ РАЗУ — она проверялась бы впервые на деплое. Прецедент выписан в
+    докстринге ревизии 0015; перечень запрещённых имён — в комментарии над
+    запросом ниже (в докстринге их нет НАМЕРЕННО: запрет держит тест
+    test_module_has_no_dialect_specific_calendar_functions, и он ищет имена по
+    сырому тексту модуля, снимая только строчные комментарии).
+    Дополнительная причина именно здесь: час ячейки — ЛОКАЛЬНЫЙ час
+    пользователя (D-10), а перевод в его зону база не делает вовсе.
+
+    ПОЧЕМУ ПРОЕКЦИЯ И ПОТОК. Выбирается ТОЛЬКО `sent_at`, а не сущность
+    `SendLog`: ни одного ORM-объекта не создаётся и identity map не растёт.
+    Чтение идёт `session.stream(...)` с `yield_per`, поэтому память держится
+    порядка размера батча, а не размера окна — окно недели на самой растущей
+    таблице системы иначе поднималось бы в память целиком (T-04-14).
+
+    ЧТО В СЕТКУ ПОПАДАЕТ. ВСЕ отправки окна, принадлежащие `user_id`. Запись с
+    пустым `group_id` или пустым `messenger_type` считается наравне с
+    остальными: она произошла в реальный час, и выбросить её ради «чистой»
+    сетки значило бы соврать о том, работала система в этот час или стояла.
+    Запись, попавшая ровно в правый край окна, приписывается последним суткам,
+    а не отбрасывается — по той же причине.
+
+    Пустой набор данных даёт сетку НУЛЕЙ, а не пустой список: шаблон обходит
+    ряды и ячейки, и пустой список отрисовал бы вместо сетки ничего — блок
+    выглядел бы сломанным, а не пустым.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    if tz is None:
+        tz = timezone.utc
+
+    window_start = now - timedelta(days=days)
+    local_origin = window_start.astimezone(tz)
+
+    grid = [[0] * 24 for _ in range(days)]
+
+    # Запрещённые в этом модуле имена календарной группировки средствами
+    # диалекта: func.strftime, func.date_trunc, func.extract, func.to_char,
+    # func.julianday (RESEARCH §Pitfall 2). Запрос ниже выбирает ЗНАЧЕНИЯ и
+    # ничего не группирует — вся календарная арифметика идёт в Python.
+    stream = await session.stream(
+        select(SendLog.sent_at)
+        .where(
+            SendLog.user_id == user_id,
+            SendLog.sent_at >= window_start,
+        )
+        .execution_options(yield_per=HEATMAP_YIELD_PER)
+    )
+    async for row in stream:
+        # normalize_utc обязателен: SQLite отдаёт `sent_at` NAIVE, и вычитание
+        # naive из aware поднимает TypeError — то есть дефект существовал бы
+        # только на одном из двух диалектов и ловился бы не тестами.
+        local = normalize_utc(row.sent_at).astimezone(tz)
+        offset_hours = int((local - local_origin).total_seconds() // 3600)
+        day_index = offset_hours // 24
+        # Клампы, а не `continue`: запись ровно в `now` даёт смещение `days*24`
+        # и индекс на один больше последнего ряда. Она принадлежит самым свежим
+        # суткам окна, и пропуск такой записи был бы ровно тем молчаливым
+        # выбрасыванием, которое прохибиция плана запрещает.
+        if day_index >= days:
+            day_index = days - 1
+        elif day_index < 0:
+            day_index = 0
+        grid[day_index][local.hour] += 1
+
+    return HeatmapView(
+        grid=grid,
+        day_labels=[
+            SHORT_WEEKDAYS[(local_origin + timedelta(days=i)).weekday()]
+            for i in range(days)
+        ],
+        peak=max((max(day) for day in grid), default=0),
+    )
+
+
+# --- Ближайшие отправки -------------------------------------------------------
+
+# Пометки причин несрабатывания (D-15). Строки живут ЗДЕСЬ по той же причине,
+# что и подписи рядов heatmap: это НАЗВАНИЯ трёх состояний, а не форматирование
+# данных пользователя, и второй их источник в шаблоне разъехался бы с первым
+# молча. Формулировки совпадают с бейджем карточки раздела расписаний
+# (`schedules/includes/schedule_row.html`) ДОСЛОВНО: один и тот же факт обязан
+# называться на двух экранах одними словами.
+REASON_AD_DRAFT = "Объявление в черновике"
+REASON_ACCOUNT_OFF = "Аккаунт отключён"
+REASON_GROUPS_OFF = "Все группы выключены"
+
+# Сколько строк показывает блок «Ближайшие отправки» по умолчанию (D-14).
+UPCOMING_LIMIT = 8
+
+
+@dataclass(slots=True)
+class UpcomingSend:
+    """Строка блока «Ближайшие отправки» ЦЕЛИКОМ.
+
+    Все поля — простые значения, а не сущности ORM. Отдать наружу `Schedule`
+    значило бы позвать шаблон на `schedule.ad`, а эта связь объявлена
+    `lazy="raise"`: обращение к ней из Jinja поднимает исключение уже на
+    рендере, то есть пятисотку на дашборде.
+    """
+
+    schedule_id: int
+    ad_id: int
+    ad_title: str
+    next_run_at: datetime
+    group_count: int
+    messenger_type: str | None
+    reason: str = ""
+
+
+async def upcoming_sends(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    now: datetime | None = None,
+    limit: int = UPCOMING_LIMIT,
+) -> list[UpcomingSend]:
+    """Ближайшие запланированные отправки владельца с пометками причин (D-15).
+
+    ВЛАДЕНИЕ ИДЁТ ЧЕРЕЗ ОБЪЯВЛЕНИЕ. Колонки `user_id` у расписания НЕТ
+    (`app/models/schedule.py`), поэтому границу владельца держит
+    `Ad.user_id == user_id` — так же, как во всех запросах
+    `app/pages/schedules.py` и в счётчиках шелла (T-04-13).
+
+    ОБЪЯВЛЕНИЕ И АККАУНТ ПРИЕЗЖАЮТ ЗАПРОСОМ. `Schedule.ad` и `Schedule.account`
+    объявлены `lazy="raise"`, и обращение к ним как к атрибутам поднимает
+    исключение — на боевом стеке это пятисотка на самом дашборде, а не тихая
+    деградация блока. Поэтому сущности выбираются явным `select(...)` с `join`
+    по объявлению.
+
+    `outerjoin` ДЛЯ АККАУНТА ОБЯЗАТЕЛЕН. `Schedule.account_id` nullable с
+    `ondelete="SET NULL"`: при удалении messenger-аккаунта расписание
+    сохраняется и отвязывается (issue #35). Внутренний join потерял бы ровно те
+    строки, ради которых D-15 и написан, — пользователь не увидел бы, что его
+    рассылка больше никуда не уйдёт.
+
+    ⚠️ ВТОРОЙ ЗАПРОС НА БЛОК — НАЗВАННОЕ ОТСТУПЛЕНИЕ ОТ D-38. Третья причина
+    («все группы выключены») требует флагов групп, а состав групп расписания
+    хранится JSON-списком (`Schedule.group_ids`), и join по его элементам не
+    строится ни в SQLite, ни в PostgreSQL — то же ограничение уже разобрано в
+    подборе расписаний к отправке (`collect_due_schedules`). Без флагов блок
+    показывал бы отправку, которой не будет. Отступление ОГРАНИЧЕНО: флаги
+    берутся ОДНИМ запросом по объединению идентификаторов не более чем `limit`
+    строк. Обращение к БД внутри цикла запрещено — оно превратило бы
+    отступление в дефект N+1 (T-04-19), закреплено тестом
+    test_upcoming_sends_takes_two_queries_regardless_of_group_count.
+
+    `now` НИЧЕГО НЕ ФИЛЬТРУЕТ и принят для единообразия сигнатур модуля.
+    Ограничения по времени вперёд у блока нет по D-14, а отсечка назад
+    (`next_run_at >= now`) спрятала бы просроченные расписания — то есть ровно
+    те, о которых пользователю важнее всего узнать, и при остановленном воркере
+    опустошила бы блок целиком, хотя активные расписания у пользователя есть.
+
+    `group_count` — размер СОСТАВА расписания, а не число включённых групп: это
+    то же число, что видит пользователь в редакторе, и расхождение двух экранов
+    по одному вопросу — ровно та болезнь, которую лечит D-35. О том, что
+    отправка не уйдёт, сообщает пометка причины, а не подменённое число.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    rows = (
+        await session.execute(
+            select(Schedule, Ad, MessengerAccount)
+            .join(Ad, Schedule.ad_id == Ad.id)
+            .outerjoin(MessengerAccount, Schedule.account_id == MessengerAccount.id)
+            .where(
+                Ad.user_id == user_id,
+                Schedule.is_active.is_(True),
+                Schedule.next_run_at.isnot(None),
+            )
+            .order_by(Schedule.next_run_at.asc())
+            .limit(limit)
+        )
+    ).all()
+
+    if not rows:
+        return []
+
+    # Объединение составов ВСЕХ показываемых строк — один запрос на блок.
+    group_ids = {
+        group_id
+        for schedule, _ad, _account in rows
+        for group_id in (schedule.group_ids or [])
+    }
+    group_active: dict[int, bool] = {}
+    if group_ids:
+        group_active = {
+            group_id: bool(is_active)
+            for group_id, is_active in (
+                await session.execute(
+                    select(Group.id, Group.is_active).where(Group.id.in_(group_ids))
+                )
+            ).all()
+        }
+
+    items: list[UpcomingSend] = []
+    for schedule, ad, account in rows:
+        composition = list(schedule.group_ids or [])
+        # Отсутствующий в выборке идентификатор — удалённая группа: получить
+        # рассылку она не может, поэтому её флаг считается выключенным.
+        # Пустой состав тоже даёт «все группы выключены»: расписание без групп
+        # не отправит ничего, и назвать это отдельным словом значило бы
+        # заводить четвёртую причину сверх трёх, названных D-15.
+        any_group_on = any(
+            group_active.get(group_id, False) for group_id in composition
+        )
+
+        # Приоритет причин — порядок этих ветвей. Совпасть могут все три сразу,
+        # и показывать три бейджа в строке шириной в одну строку некуда.
+        if effective_ad_status(ad) == AD_STATUS_DRAFT:
+            reason = REASON_AD_DRAFT
+        # Статус аккаунта сравнивается с ЛИТЕРАЛОМ "active" — так же, как в
+        # `collect_due_schedules` и в счётчиках шелла. Своей константы под это
+        # значение в проекте нет, и заводить её ЗДЕСЬ значило бы получить второй
+        # источник одного значения, не сняв ни одного из существующих литералов.
+        elif account is None or account.status != "active":
+            reason = REASON_ACCOUNT_OFF
+        elif not any_group_on:
+            reason = REASON_GROUPS_OFF
+        else:
+            reason = ""
+
+        items.append(
+            UpcomingSend(
+                schedule_id=schedule.id,
+                ad_id=ad.id,
+                ad_title=ad.title,
+                next_run_at=schedule.next_run_at,
+                group_count=len(composition),
+                messenger_type=account.type if account else None,
+                reason=reason,
+            )
+        )
+    return items
 
 
 # --- Фильтры истории ----------------------------------------------------------

@@ -1027,7 +1027,7 @@ a:hover { color: var(--accent-link-hover); }
 
 /* Плитки дашборда: крупное число и дельта к предыдущему окну на одной базовой
    линии (макет 387-392). Спарклайн макета (393-397) не реализуется — D-03.
-   Heatmap и живая лента приходят следующими планами Фазы 4. */
+   Живая лента приходит планом 04-05. */
 [data-metrics] {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 13px;
 }
@@ -1049,6 +1049,91 @@ a:hover { color: var(--accent-link-hover); }
 }
 [data-metric-delta][data-tone="success"] { color: var(--ok); }
 [data-metric-delta][data-tone="danger"] { color: var(--danger); }
+
+/* Строка ближайшей отправки (DASH-02, макет 402-426) ------------------------ */
+/* Строка — ССЫЛКА (D-16), поэтому цвет и подчёркивание сбрасываются здесь, а не
+   отменяются в разметке: подчёркнутая строка целиком читалась бы как ошибка
+   вёрстки, а не как переход. Фокус остаётся видимым — обвести ссылку нечем,
+   кроме контура. */
+[data-uprow] {
+  display: flex; align-items: center; gap: 13px; min-width: 0;
+  padding: 11px 10px; border-radius: var(--r-lg);
+  color: inherit; text-decoration: none;
+  transition: background .16s ease;
+}
+[data-uprow]:hover { background: var(--surface-input); }
+[data-uprow]:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* Колонка времени ФИКСИРОВАННОЙ ширины: без неё названия разной длины сдвигают
+   время по вертикали, и столбец перестаёт читаться сверху вниз. */
+[data-uprow] > .mono { flex: none; width: 84px; font-variant-numeric: tabular-nums; }
+[data-upstripe] {
+  flex: none; width: 3px; height: 26px; border-radius: 2px;
+  background: var(--border-control);
+}
+[data-upstripe][data-channel="tg_user"] { background: var(--info); }
+[data-upstripe][data-channel="wa"] { background: var(--ok); }
+[data-upstripe][data-channel="max"] { background: var(--accent); }
+/* min-width: 0 обязателен: название приходит от пользователя и не ограничено
+   ничем — без него оно вытолкнуло бы бейдж канала за пределы строки. */
+[data-upmain] { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+[data-uptitle] {
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--fs-md); font-weight: 500;
+}
+[data-upmeta] {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0;
+  font-size: var(--fs-xs); color: var(--text-tertiary);
+}
+[data-upbadge] { flex: none; }
+
+@media (max-width: 400px) {
+  /* Перестроение идёт СРЕДСТВАМИ CSS, переключателя вида на JS нет. Первой
+     уходит подпись канала: иконка несёт тот же смысл, а её aria-label остаётся
+     на месте, поэтому программе чтения с экрана канал по-прежнему называется
+     словом. */
+  [data-uprow] { gap: 9px; }
+  [data-uprow] > .mono { width: 72px; }
+  [data-upbadge] .msg__label { display: none; }
+}
+
+/* Heatmap активности 7×24 (DASH-04, D-09) ----------------------------------- */
+/* Шапка блока: заголовок слева, mono-подпись прижата вправо (макет 449-451).
+   Своя, а не card_open(title=...): парный макрос карточки ставит подпись ПОД
+   заголовком, а макет ставит её на ту же строку справа. */
+[data-heathead] { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+[data-heathead] .mono { margin-left: auto; }
+/* Прокрутка на КОНТЕЙНЕРЕ — форма адаптивности этого блока (критерий приёмки
+   фазы). Долевая ширина ячейки (`1fr`) на 320px даёт полосу примерно в 8px, в
+   которой ступень насыщенности неразличима: сетка формально «влезла», а читать
+   её нельзя. Поэтому ячейка ФИКСИРОВАННАЯ, а узкая ширина получает прокрутку. */
+[data-heatscroll] { overflow-x: auto; }
+/* 25 колонок: подпись дня плюс 24 часа. Ряды не объявлены явно — их число
+   задаёт окно (`days`), и жёсткое `grid-template-rows: repeat(7, ...)` молча
+   разошлось бы с сеткой другой ширины, которую попросит Фаза 6. */
+[data-heatmap] {
+  display: grid;
+  grid-template-columns: 30px repeat(24, 14px);
+  grid-auto-rows: 14px;
+  gap: 3px;
+  align-items: center;
+  width: max-content;
+}
+[data-heatday], [data-heathour] {
+  font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: .06em; color: var(--text-muted);
+}
+/* Подпись помечает начало своего шестичасового блока и растягивается на него. */
+[data-heathour] { grid-column: span 6; }
+/* Пять ступеней: ноль плюс четыре уровня. Нулевая ступень — ВИДИМАЯ слабая
+   заливка, а не прозрачность: час без отправок обязан читаться как час без
+   отправок, а не как дырка в сетке. Радиус 3px взят от столбцов графика в
+   макете (строка 460): токены радиусов начинаются с 6px, а это половина стороны
+   ячейки — она перестала бы быть квадратной. */
+[data-heatcell] { border-radius: 3px; background: var(--surface-input); }
+[data-heatcell][data-level="1"] { background: color-mix(in oklab, var(--accent) 25%, var(--surface-input)); }
+[data-heatcell][data-level="2"] { background: color-mix(in oklab, var(--accent) 50%, var(--surface-input)); }
+[data-heatcell][data-level="3"] { background: color-mix(in oklab, var(--accent) 75%, var(--surface-input)); }
+[data-heatcell][data-level="4"] { background: var(--accent); }
 
 /* Вертикальная стопка панелей страницы (дашборд, профиль) */
 [data-stack] { display: flex; flex-direction: column; gap: 22px; }

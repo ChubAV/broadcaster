@@ -647,6 +647,54 @@ async def test_profile_no_utility_classes(authed_client: AsyncClient):
         assert marker not in response.text, marker
 
 
+# --- План 04-04: heatmap активности и ближайшие отправки --------------------
+
+@pytest.mark.asyncio
+async def test_dashboard_heatmap_is_a_grid_without_table_elements(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """DASH-04: сетка 7×24 построена примитивами сетки, а не таблицей.
+
+    Число ячеек утверждается ЯВНО: сетка, потерявшая ряд или час, отрисуется
+    без единого исключения и вернёт те же 200, а пользователь увидит неполную
+    неделю. Элементы таблицы запрещены по проекту (test_template_inventory),
+    и heatmap — самый естественный соблазн их вернуть.
+    """
+    await _seed_send_log(db_session, ad_title="Отправка недели")
+
+    response = await authed_client.get("/dashboard")
+
+    assert response.status_code == 200
+    html = response.text
+    assert "data-heatmap" in html, "сетка активности не отрисовалась"
+    assert html.count("data-heatcell") == 7 * 24, "сетка не 7×24"
+    for marker in ("<table", "<td", "<th ", "<thead", "<tbody"):
+        assert marker not in html, marker
+    for marker in UTILITY_MARKERS:
+        assert marker not in html, marker
+
+
+@pytest.mark.asyncio
+async def test_dashboard_heatmap_cells_carry_a_saturation_step(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Ступень насыщенности приезжает АТРИБУТОМ, а не инлайн-стилем.
+
+    Ступень в атрибуте — единственная форма, которую может раскрасить CSS без
+    инлайн-стилей (D-06) и на которую может опереться Фаза 6, не переписывая
+    шкалу заново.
+    """
+    await _seed_send_log(db_session, ad_title="Отправка недели")
+
+    html = (await authed_client.get("/dashboard")).text
+
+    assert re.search(r'data-heatcell data-level="[0-4]"', html), (
+        "у ячеек нет ступени насыщенности"
+    )
+    assert 'data-level="0"' in html, "пустые часы недели обязаны быть нулевой ступенью"
+    assert "style=\"background" not in html, "насыщенность выписана инлайн-стилем"
+
+
 # --- План 06: раздел «Аккаунты» --------------------------------------------
 
 @pytest.mark.asyncio
