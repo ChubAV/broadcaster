@@ -1,32 +1,21 @@
-from datetime import datetime, timedelta, timezone
-
-from sqlalchemy import select, func, case
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.send_log import SendLog
 from app.repositories.base import BaseRepository
 
+# СВОДКИ ПО ЖУРНАЛУ ЗДЕСЬ НЕТ И БЫТЬ НЕ ДОЛЖНО. Метод `get_stats` жил в этом
+# классе и считал «ошибками» только статус `fail`, то есть два статуса журнала
+# из трёх: отправка, не ушедшая из-за отвалившегося аккаунта, не попадала ни в
+# успешные, ни в неуспешные. Это было ВТОРОЕ определение сводки — первое живёт
+# в `app/application/analytics/send_analytics.py` и знает, что неуспешная
+# отправка есть «не `ok`». Считать агрегаты журнала полагается ТОЛЬКО тем
+# модулем; репозиторий отдаёт строки.
+
 
 class SendLogRepository(BaseRepository[SendLog]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, SendLog)
-
-    async def get_stats(self, user_id: int, days: int = 30) -> dict:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        result = await self.session.execute(
-            select(
-                func.count(SendLog.id).label("total_sent"),
-                func.sum(case((SendLog.status == "ok", 1), else_=0)).label("success_count"),
-                func.sum(case((SendLog.status == "fail", 1), else_=0)).label("fail_count"),
-            )
-            .where(SendLog.user_id == user_id, SendLog.sent_at >= cutoff)
-        )
-        row = result.one()
-        return {
-            "total_sent": row.total_sent or 0,
-            "success_count": row.success_count or 0,
-            "fail_count": row.fail_count or 0,
-        }
 
     async def list_for_user(
         self,
