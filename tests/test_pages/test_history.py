@@ -1098,3 +1098,184 @@ async def test_every_unsuccessful_record_offers_the_copy_button(
     html = _page_body((await authed_client.get("/history")).text)
 
     assert "data-copybtn" in html, status
+
+
+# =============================================================================
+# План 04-07, задача 2: страница записи истории
+# =============================================================================
+#
+# Страница СОХРАНЯЕТСЯ, а не сносится: лента дашборда (план 04-05) ведёт именно
+# в неё, а снапшот содержимого с изображениями в строку списка не влезает.
+# Переверстка идёт по областям карточки записи из макета, и примитив записи
+# переиспользуется целиком — своей копии областей, бейджа и иконки канала
+# страница не заводит.
+
+
+async def _seed_own_record(db: AsyncSession, user: User, **kwargs) -> SendLog:
+    """Запись текущего пользователя со значениями, различимыми в разметке."""
+    defaults = dict(
+        status=STATUS_FAIL,
+        messenger_type="wa",
+        ad_title="Объявление записи",
+        ad_text="Снапшот текста объявления",
+        group_name="Группа записи",
+        task_id="task-detail-77",
+        error_message=LONG_ERROR,
+    )
+    defaults.update(kwargs)
+    return await _seed_send_log(db, user.id, **defaults)
+
+
+@pytest.mark.asyncio
+async def test_history_detail_shows_the_whole_record(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Страница записи отвечает на все вопросы об отправке сразу.
+
+    Перевёрстка теряет значения молча: страница остаётся валидной и отдаёт 200,
+    а поля из неё исчезают. Поэтому проверяются ЗНАЧЕНИЯ, а не разметка.
+    """
+    user = await _current_user(db_session)
+    log = await _seed_own_record(db_session, user)
+
+    response = await authed_client.get(f"/history/{log.id}")
+
+    assert response.status_code == 200
+    html = response.text
+    for part in (
+        "Объявление записи",
+        "Группа записи",
+        "task-detail-77",
+        "WhatsApp",
+        "Ошибка",
+        str(datetime.now(timezone.utc).year),
+    ):
+        assert part in html, f"со страницы записи пропало {part!r}"
+
+
+@pytest.mark.asyncio
+async def test_history_detail_shows_the_content_snapshot(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Снапшот содержимого — то, ради чего страница и существует (D-24).
+
+    Текст и изображения сохранены в самой записи: объявление могли с тех пор
+    переписать или удалить, а история обязана показывать отправленное.
+    """
+    user = await _current_user(db_session)
+    log = await _seed_own_record(
+        db_session, user, ad_images=["snapshot-image-key.png"]
+    )
+
+    html = (await authed_client.get(f"/history/{log.id}")).text
+
+    assert "Снапшот текста объявления" in html
+    assert "snapshot-image-key.png" in html, "изображение снапшота не отрисовано"
+
+
+@pytest.mark.asyncio
+async def test_history_detail_reuses_the_record_primitive_and_adds_no_view_switch(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Страница собрана на примитиве записи и своего переключателя вида не имеет.
+
+    Примитив перестраивается медиазапросами 1080px и 860px, которые в файле уже
+    лежат: переиспользование делает страницу пригодной на мобильных ширинах, не
+    заводя ни одного нового правила раскладки. Переключатель вида на JS ломает
+    подмену через HTMX и запрещён по разделу.
+    """
+    user = await _current_user(db_session)
+    log = await _seed_own_record(db_session, user)
+
+    html = (await authed_client.get(f"/history/{log.id}")).text
+
+    assert "data-hrow" in html, "примитив записи не переиспользован"
+    assert 'data-area="err"' in html, "блок ошибки не размечен областью"
+    assert "layout=" not in html, "на странице появился переключатель вида"
+
+
+@pytest.mark.asyncio
+async def test_history_detail_offers_the_same_copy_button(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Кнопка копирования приходит сюда ИЗ ТОГО ЖЕ макроса, что и в список.
+
+    Вторая кнопка со своими правилами разошлась бы с первой при первой правке —
+    и разойтись ей было бы где: в проверке доступности буфера, в составе
+    диагностического блока и в отказе сообщать об успехе, которого не было.
+    """
+    user = await _current_user(db_session)
+    log = await _seed_own_record(db_session, user)
+
+    html = (await authed_client.get(f"/history/{log.id}")).text
+
+    assert "data-copybtn" in html
+    assert "data-copybtn" not in _outside_templates(html), (
+        "на странице записи кнопка отрисована сервером — без Alpine она мертва"
+    )
+    diag = _diag_blocks(html)
+    assert len(diag) == 1, f"диагностических блоков не один, а {len(diag)}"
+    assert "task-detail-77" in diag[0]
+
+    source = _template_text(HISTORY_DETAIL)
+    assert "import copy_button" in source, "макрос кнопки не импортирован"
+    assert source.count("copy_button(") == 1, (
+        "страница записи собрала кнопку копирования сама, а не вызвала макрос: "
+        f"вызовов {source.count('copy_button(')}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_history_detail_inherits_the_shell_and_draws_no_section_heading(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Заголовок раздела рисует шапка шелла — второй задвоился бы."""
+    user = await _current_user(db_session)
+    log = await _seed_own_record(db_session, user)
+
+    source = _template_text(HISTORY_DETAIL)
+    assert '{% extends "base.html" %}' in source, "страница потеряла шелл"
+    assert "<h1" not in source, "страница рисует собственный заголовок раздела"
+
+    response = await authed_client.get(f"/history/{log.id}")
+    assert response.status_code == 200
+    assert "<div data-body>" in response.text, "шелл не отрисован"
+
+
+@pytest.mark.asyncio
+async def test_history_detail_of_another_users_record_redirects_to_the_list(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-04-27: чужую запись не открыть — граница держится проверкой владения.
+
+    Текст стороннего исключения виден ТОЛЬКО владельцу записи, и держит это
+    ровно эта проверка на входе страницы. Перевёрстка её ослабить не имеет
+    права.
+    """
+    stranger = User(email="detail-stranger@test.com", password_hash="x", name="Чужой")
+    db_session.add(stranger)
+    await db_session.commit()
+    await db_session.refresh(stranger)
+    foreign = await _seed_own_record(
+        db_session, stranger, ad_title="Чужая отправка", error_message="Чужая ошибка"
+    )
+
+    response = await authed_client.get(
+        f"/history/{foreign.id}", follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/history"
+
+
+@pytest.mark.asyncio
+async def test_history_detail_of_a_missing_record_redirects_to_the_list(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Несуществующая запись ведёт в список, а не в пятисотку."""
+    await _current_user(db_session)
+
+    response = await authed_client.get("/history/999999", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/history"
