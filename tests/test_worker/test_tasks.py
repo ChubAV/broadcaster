@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,6 +15,7 @@ from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.worker.tasks import (
     check_schedules_async,
+    retry_send,
     _send_message,
     _sync_wa_groups_async,
     _sync_max_groups_async,
@@ -559,3 +562,276 @@ async def test_background_sync_skips_account_not_syncing(
     assert status == "active"
     assert last_synced_at is None
     assert result is None
+
+
+# --- План 04-03: retry_send — повтор отправки на все три канала ---------------
+#
+# ЧТО ИМЕННО ПРОВЕРЯЕТСЯ. Не «таск не упал», а ТРАНСПОРТ: в какую очередь
+# уехала задача. D-18 называл точкой постановки `send_telegram_message`, то есть
+# вход ОДНОГО канала из трёх; повтор WA-записи через него ушёл бы по второму,
+# непроверенному маршруту (T-04-09). Поэтому `dispatch_send_tasks` здесь НЕ
+# подменяется — подменяются Redis и Celery под ней, и тест смотрит, куда легла
+# задача. Подмена самой диспетчеризации зеленела бы и на неверном маршруте.
+
+RETRY_S3_URL = "https://cdn.example.com/bucket"
+
+
+class _FakePipeline:
+    """Пайплайн Redis: копит rpush, чтобы тест увидел ключ очереди и нагрузку."""
+
+    def __init__(self, sink):
+        self._sink = sink
+
+    def rpush(self, key, payload):
+        self._sink.append((key, payload))
+
+    def sadd(self, key, value):
+        pass
+
+    def execute(self):
+        pass
+
+
+class _FakeRedis:
+    def __init__(self, sink):
+        self._sink = sink
+
+    def pipeline(self):
+        return _FakePipeline(self._sink)
+
+    def close(self):
+        pass
+
+
+async def _seed_retry_case(
+    factory,
+    *,
+    account_type: str = "wa",
+    account_status: str = "active",
+    schedule_id: int | None = None,
+    images=None,
+):
+    """Пользователь, объявление, аккаунт, группа и запись журнала под повтор."""
+    async with factory() as session:
+        user = User(email=f"{account_type}@retry.test", password_hash="h", name="R")
+        session.add(user)
+        await session.commit()
+
+        ad = Ad(
+            user_id=user.id,
+            title="Заголовок",
+            text="Текст объявления",
+            images=["img.jpg"] if images is None else images,
+        )
+        account = MessengerAccount(
+            user_id=user.id,
+            type=account_type,
+            credentials="c",
+            status=account_status,
+        )
+        session.add_all([ad, account])
+        await session.commit()
+
+        group = Group(
+            user_id=user.id,
+            account_id=account.id,
+            messenger_type=account_type,
+            group_external_id="-100500",
+            name="Отдел продаж",
+        )
+        session.add(group)
+        await session.commit()
+
+        log = SendLog(
+            user_id=user.id,
+            schedule_id=schedule_id,
+            ad_id=ad.id,
+            group_id=group.id,
+            status="fail",
+            error_message="Rate limited",
+            messenger_type=account_type,
+        )
+        session.add(log)
+        await session.commit()
+
+        return {
+            "user_id": user.id,
+            "log_id": log.id,
+            "ad_id": ad.id,
+            "account_id": account.id,
+            "group_id": group.id,
+        }
+
+
+async def _run_retry(factory, log_id, user_id):
+    """Запускает таск повтора и отдаёт (rpush-и Redis, постановки в Celery).
+
+    `asyncio.run` подменяется захватом корутины: тело таска обязано выполниться
+    в ТОМ ЖЕ цикле событий, где живёт SQLite-движок фикстуры, — свой цикл
+    оторвал бы соединение aiosqlite. Тем же приёмом файл уже пользуется для
+    `asyncio.sleep` в тестах фоновой синхронизации.
+    """
+    redis_sink: list[tuple] = []
+    tg_sink: list[tuple] = []
+
+    mock_settings = MagicMock()
+    mock_settings.database_url = "sqlite+aiosqlite:///:memory:"
+    mock_settings.redis_url = "redis://localhost:6379/0"
+
+    mock_s3_settings = MagicMock()
+    mock_s3_settings.s3_public_url = RETRY_S3_URL
+
+    mock_tg = MagicMock()
+    mock_tg.apply_async = lambda *a, **kw: tg_sink.append((kw.get("args") or (a[0] if a else None), kw.get("queue")))
+
+    captured: list = []
+
+    with patch("app.worker.tasks.get_settings", return_value=mock_settings), \
+         patch("app.worker.tasks.get_engine", return_value=AsyncMock()), \
+         patch("app.worker.tasks.get_session_factory", return_value=factory), \
+         patch("app.worker.tasks.send_telegram_message", mock_tg), \
+         patch("app.config.get_settings", return_value=mock_s3_settings), \
+         patch("redis.from_url", return_value=_FakeRedis(redis_sink)), \
+         patch("app.worker.tasks.asyncio.run", captured.append):
+        retry_send(log_id, user_id)
+        assert captured, "таск повтора обязан запускать корутину через asyncio.run"
+        await captured[0]
+
+    return redis_sink, tg_sink
+
+
+async def _send_log_count(factory) -> int:
+    async with factory() as session:
+        rows = (await session.execute(select(SendLog))).scalars().all()
+        return len(rows)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_type", ["wa", "max"])
+async def test_retry_send_routes_queue_channels_to_redis(
+    db_engine_and_factory, account_type
+):
+    """T-04-09: WA и MAX уезжают в Redis-очередь аккаунта, а не в Celery."""
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(factory, account_type=account_type)
+
+    redis_sink, tg_sink = await _run_retry(factory, case["log_id"], case["user_id"])
+
+    assert len(redis_sink) == 1
+    queue_key, raw_payload = redis_sink[0]
+    assert queue_key == f"{account_type}:queue:{case['account_id']}"
+
+    payload = json.loads(raw_payload)
+    assert payload["ad_id"] == case["ad_id"]
+    assert payload["group_id"] == case["group_id"]
+    assert payload["account_id"] == case["account_id"]
+    assert payload["user_id"] == case["user_id"]
+    assert payload["group_external_id"] == "-100500"
+    assert payload["group_name"] == "Отдел продаж"
+    assert payload["ad_text"] == "Текст объявления"
+    assert payload["ad_images"] == [f"{RETRY_S3_URL}/img.jpg"]
+
+    # Второго маршрута нет: Celery-очередь telegram не трогается.
+    assert tg_sink == []
+
+
+@pytest.mark.asyncio
+async def test_retry_send_routes_telegram_to_celery(db_engine_and_factory):
+    """Telegram-повтор идёт тем же таском, что и боевая рассылка."""
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(factory, account_type="tg_user")
+
+    redis_sink, tg_sink = await _run_retry(factory, case["log_id"], case["user_id"])
+
+    assert redis_sink == []
+    assert len(tg_sink) == 1
+    args, queue = tg_sink[0]
+    assert queue == "telegram"
+    assert list(args) == [
+        case["ad_id"],
+        case["group_id"],
+        case["account_id"],
+        None,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retry_send_rejects_foreign_log(db_engine_and_factory):
+    """T-04-08: чужая запись не диспетчеризуется ни на один канал."""
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(factory, account_type="wa")
+
+    redis_sink, tg_sink = await _run_retry(
+        factory, case["log_id"], case["user_id"] + 1000
+    )
+
+    assert redis_sink == []
+    assert tg_sink == []
+
+
+@pytest.mark.asyncio
+async def test_retry_send_ignores_unknown_log(db_engine_and_factory):
+    """Отсутствующая запись журнала — выход без диспетчеризации."""
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(factory, account_type="wa")
+
+    redis_sink, tg_sink = await _run_retry(factory, case["log_id"] + 1000, case["user_id"])
+
+    assert redis_sink == []
+    assert tg_sink == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gone", ["ad", "group", "account"])
+async def test_retry_send_stops_when_entity_gone(db_engine_and_factory, gone):
+    """D-21: пропавшая сущность останавливает повтор и НЕ пишет в журнал."""
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(factory, account_type="wa")
+
+    model, key = {
+        "ad": (Ad, "ad_id"),
+        "group": (Group, "group_id"),
+        "account": (MessengerAccount, "account_id"),
+    }[gone]
+    async with factory() as session:
+        obj = await session.get(model, case[key])
+        await session.delete(obj)
+        await session.commit()
+
+    before = await _send_log_count(factory)
+    redis_sink, tg_sink = await _run_retry(factory, case["log_id"], case["user_id"])
+
+    assert redis_sink == []
+    assert tg_sink == []
+    # Журнал не наполняется записями о заведомо невозможных отправках (T-04-11).
+    assert await _send_log_count(factory) == before
+
+
+@pytest.mark.asyncio
+async def test_retry_send_stops_when_account_not_active(db_engine_and_factory):
+    """D-21: неактивный аккаунт останавливает повтор до диспетчеризации."""
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(
+        factory, account_type="wa", account_status="disconnected"
+    )
+
+    before = await _send_log_count(factory)
+    redis_sink, tg_sink = await _run_retry(factory, case["log_id"], case["user_id"])
+
+    assert redis_sink == []
+    assert tg_sink == []
+    assert await _send_log_count(factory) == before
+
+
+@pytest.mark.asyncio
+async def test_retry_send_without_schedule_still_dispatches(db_engine_and_factory):
+    """Запись без расписания повторяется, а schedule_id остаётся пустым."""
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(factory, account_type="wa", schedule_id=None)
+
+    redis_sink, tg_sink = await _run_retry(factory, case["log_id"], case["user_id"])
+
+    assert len(redis_sink) == 1
+    payload = json.loads(redis_sink[0][1])
+    assert payload["schedule_id"] is None
+    assert tg_sink == []
