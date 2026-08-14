@@ -1018,6 +1018,25 @@ a:hover { color: var(--accent-link-hover); }
 [data-selectall] {
   -webkit-user-select: all; user-select: all; cursor: text;
 }
+
+/* Страница записи истории (D-24) переиспользует примитив записи целиком:
+   области, сетка и медиазапросы 1080px/860px достаются ей даром. Модификатор
+   правит ровно то, чем страница отличается от строки списка, и ни правилом
+   больше. */
+[data-hrow][data-hrec]:hover { transform: none; }
+/* Тело страницы — колонка: в него приходит снапшот текста и изображений,
+   которых в строке списка нет и для которых строка не рассчитана. */
+[data-hrow][data-hrec] > [data-area="body"] {
+  flex-direction: column; align-items: stretch; gap: 10px;
+}
+/* В строке списка название и группа усечены многоточием — там им отведена одна
+   строка. Страница записи и есть то место, где показывают всё: усекать здесь
+   нечего и незачем. */
+[data-hrow][data-hrec] > [data-area="body"] > [data-grow],
+[data-hrow][data-hrec] > [data-area="body"] > [data-secondary] {
+  white-space: normal; overflow: visible; text-overflow: clip; max-width: none;
+}
+[data-hrow][data-hrec] > [data-area="meta"] { align-items: flex-start; }
 /* Опора исправленного медиазапроса 1080px: на узкой ширине левая граница здесь
    сменяется верхней. Правило-приёмник лежит в разделе 2 и правится только
    вместе с этим. */
