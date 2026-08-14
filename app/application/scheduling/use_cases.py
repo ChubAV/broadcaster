@@ -38,7 +38,12 @@ class DispatchTask:
     ad_id: int
     group_id: int
     account_id: int
-    schedule_id: int
+    # `None` — повтор записи журнала, у которой расписания нет (план 04-03).
+    # Колонка `send_logs.schedule_id` nullable и внешним ключом не является
+    # (ревизия 0005_sendlog_remove_fk_add_snapshots), поэтому осмысленного
+    # числа для подстановки у такой отправки не существует. Ноль создал бы в
+    # журнале ссылку на несуществующее расписание — значение проходит как есть.
+    schedule_id: int | None
     # WA-specific fields (populated for type="wa")
     user_id: int | None = None
     ad_text: str | None = None
@@ -46,6 +51,66 @@ class DispatchTask:
     ad_images: list[str] | None = None
     group_external_id: str | None = None
     group_name: str | None = None
+
+
+def build_dispatch_task(
+    *,
+    ad: Ad,
+    group: Group,
+    account: MessengerAccount,
+    schedule_id: int | None,
+) -> DispatchTask:
+    """Собирает задачу отправки — ОДНО определение на планировщик и повтор.
+
+    ПОЧЕМУ ХЕЛПЕР ОДИН. Задачу отправки собирают два пути: планировщик
+    (`collect_due_schedules` ниже) и повтор из истории (`retry_send` в
+    `app/worker/tasks.py`). Состав задачи не сводится к четырём
+    идентификаторам: для `wa` и `max` в неё кладётся вся полезная нагрузка
+    очереди — текст, заголовок, развёрнутые в полные URL изображения, внешний
+    идентификатор и имя группы, — потому что воркер аккаунта читает её из Redis
+    и в базу не ходит. Две копии этого блока означают, что однажды поправят
+    одну из двух, и повтор начнёт уезжать в очередь с составом полей, отличным
+    от боевой рассылки, — молча, без падения тестов. Поэтому сборка живёт
+    здесь, а оба пути её ВЫЗЫВАЮТ.
+
+    Разворачивание ключей изображений в полные URL — часть сборки, а не
+    вызывающего: в очередь обязан уехать адрес, доступный воркеру аккаунта, а
+    не ключ хранилища. Пустое значение проходит как есть — разворачивать нечего.
+
+    `schedule_id=None` — валидный вход: см. комментарий у поля `DispatchTask`.
+
+    ЧЕГО ХЕЛПЕР НЕ ДЕЛАЕТ:
+    - не ходит в БД и не принимает сессии: все три сущности передаются уже
+      загруженными, и решение «что грузить» остаётся за вызывающим;
+    - не диспетчеризует и не знает про Celery и Redis: маршрутизация по типу
+      аккаунта живёт в `dispatch_send_tasks`, и второго её определения здесь
+      не заводится;
+    - не проверяет пригодность сущностей — ни статус аккаунта, ни черновик, ни
+      включённость группы. Эти ветки различны у планировщика и у повтора и
+      стоят у вызывающих.
+    """
+    task = DispatchTask(
+        type=account.type,
+        ad_id=ad.id,
+        group_id=group.id,
+        account_id=account.id,
+        schedule_id=schedule_id,
+    )
+    # Populate WA-specific fields for Redis per-account queues.
+    if account.type in ("wa", "max"):
+        task.user_id = ad.user_id
+        task.ad_text = ad.text
+        task.ad_title = ad.title
+        if ad.images:
+            from app.services.s3 import get_image_url
+            from app.config import get_settings
+            s3_public_url = get_settings().s3_public_url
+            task.ad_images = [get_image_url(img, s3_public_url) for img in ad.images]
+        else:
+            task.ad_images = ad.images
+        task.group_external_id = group.group_external_id
+        task.group_name = group.name
+    return task
 
 
 async def collect_due_schedules(
@@ -176,29 +241,16 @@ async def collect_due_schedules(
                 )
                 continue
 
-            task = DispatchTask(
-                type=account.type,
-                ad_id=schedule.ad_id,
-                group_id=group_id,
-                account_id=schedule.account_id,
-                schedule_id=schedule.id,
-            )
-            # Populate WA-specific fields for Redis per-account queues.
+            # Сборка задачи — общий хелпер, а не блок на месте: тот же состав
+            # полей уезжает в очередь при повторе из истории (план 04-03).
             # Второй проверки «группа есть» здесь нет намеренно: она была бы
             # вторым определением того же условия и разъехалась бы с первым.
-            if account.type in ("wa", "max"):
-                task.user_id = ad.user_id
-                task.ad_text = ad.text
-                task.ad_title = ad.title
-                if ad.images:
-                    from app.services.s3 import get_image_url
-                    from app.config import get_settings
-                    s3_public_url = get_settings().s3_public_url
-                    task.ad_images = [get_image_url(img, s3_public_url) for img in ad.images]
-                else:
-                    task.ad_images = ad.images
-                task.group_external_id = group.group_external_id
-                task.group_name = group.name
+            task = build_dispatch_task(
+                ad=ad,
+                group=group,
+                account=account,
+                schedule_id=schedule.id,
+            )
             tasks_to_dispatch.append(task)
 
         schedule.next_run_at = compute_next_run_at(
@@ -218,7 +270,9 @@ async def send_message_once(
     ad_id: int,
     group_id: int,
     account_id: int,
-    schedule_id: int,
+    # `None` по тому же основанию, что у `DispatchTask.schedule_id`: отправка
+    # без расписания — валидный случай, а колонка журнала nullable.
+    schedule_id: int | None,
     messenger_factory: Any,
     settings: Any,
     task_id: str | None = None,
