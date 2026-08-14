@@ -609,6 +609,52 @@ async def test_history_detail_shows_error_text(
 
 
 @pytest.mark.asyncio
+async def test_history_card_shows_error_text_in_full(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """План 04-07: в КАРТОЧКЕ СПИСКА текст ошибки лежит целиком (D-32).
+
+    Соседний тест выше закрепляет полноту на странице записи, этот — в списке.
+    Ограничение по высоте, введённое планом 04-07, ограничивает ВИДИМУЮ высоту
+    блока средствами CSS; усечение текста СЕРВЕРОМ оно не вводит и ввести не
+    имеет права — усечённое на сервере не раскрывается ничем.
+    """
+    long_error = (
+        "PeerFloodError: Too many requests to join the group chat -420; "
+        "retry after 86400 seconds (account temporarily restricted by Telegram)"
+    )
+    await _seed_send_log(
+        db_session, status="fail", error_message=long_error, ad_title="Неудачная отправка"
+    )
+
+    response = await authed_client.get("/history")
+    assert response.status_code == 200
+    html = response.text
+    assert long_error in html, "текст ошибки усечён сервером в карточке списка"
+    assert "truncate" not in html
+
+
+@pytest.mark.asyncio
+async def test_history_card_escapes_error_text(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-04-26: разметка внутри текста ошибки остаётся текстом.
+
+    Строка приходит из внешнего мессенджера и приложением не контролируется.
+    Парный к test_admin_history_escapes_error_text: тот закрывает страницу
+    записи в админке, этот — карточку пользовательского списка, где тот же текст
+    теперь едет ещё и в диагностическом блоке для буфера обмена.
+    """
+    await _seed_send_log(
+        db_session, status="fail", error_message='<img src=x onerror="alert(1)">'
+    )
+
+    html = (await authed_client.get("/history")).text
+    assert "<img src=x" not in html, "текст ошибки отрисован как разметка"
+    assert "&lt;img src=x" in html, "экранированного вывода ошибки нет"
+
+
+@pytest.mark.asyncio
 async def test_history_detail_renders_for_successful_send(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
@@ -2669,7 +2715,15 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     # скрываться, значит и компенсировать подписью нечего.
     "admin/group_info_detail.html": "страница-карточка, шапки колонок нет вовсе",
     "admin/user_history_detail.html": "страница-карточка, шапки колонок нет вовсе",
-    "history/detail.html": "страница-карточка, шапки колонок нет вовсе",
+    # history/detail.html ВЫШЕЛ из перечня планом 04-07: страница записи
+    # перевёрстана на ПРИМИТИВ ЗАПИСИ (data-hrow) и строку-таблицу больше не
+    # рисует вовсе — ни вызова row_open, ни написанного вручную признака строки
+    # в ней не осталось, поэтому в обход по строкам она не попадает по
+    # построению. Из проекта файл никуда не делся: страница сохранена (D-24),
+    # лента дашборда и кнопка «Подробнее» ведут именно в неё. Её собственный
+    # примитив закреплён test_history_detail_reuses_the_record_primitive_and_
+    # adds_no_view_switch в tests/test_pages/test_history.py — по той же схеме,
+    # по какой закреплены расписания и экран групп аккаунта.
 }
 
 
@@ -2841,13 +2895,14 @@ def test_row_templates_without_header_are_accounted_for():
         f"не названы {sorted(found - declared)}; "
         f"названы, но строку не рисуют {sorted(declared - found)}"
     )
-    # Восемь → семь → ШЕСТЬ: макрос строки снесённого раздела удалён планом
-    # 03-08 вместе с его списочной страницей, макрос строки последних отправок —
-    # планом 04-05 вместе с заменённым блоком дашборда. Уменьшение объявленного
-    # числа — признание СОЗНАТЕЛЬНОГО снятия; молчаливое исчезновение файла
-    # по-прежнему краснеет.
-    assert len(declared) == 6, (
-        f"ожидалось шесть таких шаблонов, объявлено {len(declared)}"
+    # Восемь → семь → шесть → ПЯТЬ: макрос строки снесённого раздела удалён
+    # планом 03-08 вместе с его списочной страницей, макрос строки последних
+    # отправок — планом 04-05 вместе с заменённым блоком дашборда, а страница
+    # записи истории планом 04-07 перестала рисовать строку вовсе (перевёрстана
+    # на примитив записи). Уменьшение объявленного числа — признание
+    # СОЗНАТЕЛЬНОГО снятия; молчаливое исчезновение файла по-прежнему краснеет.
+    assert len(declared) == 5, (
+        f"ожидалось пять таких шаблонов, объявлено {len(declared)}"
     )
     # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
     # макрос row_open он не вызывает. Без второго условия разрешителя он выпал

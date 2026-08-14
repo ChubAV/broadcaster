@@ -20,12 +20,100 @@
    ЦЕЛИКОМ — ни усечения, ни многоточия. Это единственное, по чему пользователь
    понимает, почему его реклама не ушла.
 
-   Импорт: {% from "history/includes/history_card.html" import history_card %} #}
+   ОГРАНИЧЕНИЕ ПО ВЫСОТЕ (D-32, план 04-07) вводится СОСЕДНИМ модификатором
+   `data-clamp`, а не правкой примитива длинного текста: примитив обслуживает
+   ещё страницу записи, админскую историю и снапшот текста объявления, и его
+   правка распространила бы усечение на все четыре места разом. Модификатор
+   ограничивает ВИДИМУЮ высоту средствами CSS; текст при этом лежит в разметке
+   целиком, и раскрытие работает БЕЗ JavaScript — парой «сводка + раскрытие»
+   стандартных элементов. Обработчик здесь недопустим: при выключенном Alpine
+   длинный текст ошибки стал бы недоступен, что D-32 прямо запрещает.
+
+   Импорт: {% from "history/includes/history_card.html" import history_card %}
+   Кнопка копирования импортируется отдельно — её зовёт ещё страница записи:
+   {% from "history/includes/history_card.html" import copy_button %} #}
 
 {% from "components/badge.html" import badge %}
 {% from "components/button.html" import link_button %}
 {% from "components/mono.html" import mono %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
+
+{# Кнопка копирования диагностического блока (D-33, D-34).
+
+   ЧЕГО КНОПКИ НЕТ БЕЗ ALPINE. Она объявлена внутри <template>: содержимое
+   такого блока браузер не отрисовывает, и в документ оно попадает только
+   клиентским кодом. Кнопка, отрисованная сервером и мёртвая без JavaScript,
+   была бы обещанием, которого страница не выполняет — пользователь жмёт и
+   молча не получает ничего. Базовый путь копирования при этом остаётся: и
+   текст ошибки, и значение идентификатора задачи несут `data-selectall` и
+   выделяются одним действием средствами CSS.
+
+   ЧТО УХОДИТ В БУФЕР. Голый текст ошибки бесполезен тому, кому его перешлют:
+   по нему не найти ни отправку, ни причину. Поэтому блок собирается сервером
+   из значений, УЖЕ отрисованных в эту же разметку — время, канал, группа,
+   объявление, идентификатор задачи и текст ошибки, — а не добывается
+   повторным запросом.
+
+   ПОЧЕМУ ПРОВЕРКА ДОСТУПНОСТИ. Интерфейс буфера обмена существует только в
+   защищённом контексте, а развёртывание проекта допускает и режим без
+   шифрования (конфигурация обратного прокси предусматривает оба). Обработчик
+   проверяет доступность ДО обращения, а при недоступности уходит на запасной
+   путь и НЕ сообщает об успехе, которого не было (T-04-29): сообщение о
+   несостоявшемся копировании отправляет человека вставлять пустоту.
+
+   ПОЧЕМУ УЗЛЫ, А НЕ СТРОКИ. Запасной путь создаёт поле ввода узлом DOM
+   (T-04-30): присваивание строки разметки разбирается парсером всегда, и по
+   проекту таких присваиваний ноль — это проверяется по исходнику.
+
+   У УСПЕШНОЙ записи кнопки нет: копировать нечего. Предикат — «статус НЕ
+   успешный», а не «статус из списка неудач»: перечень неудач конечен ровно до
+   появления следующего, и запись с неизвестным статусом осталась бы без
+   диагностики именно тогда, когда диагностика и нужна. Тот же предикат, что у
+   счёта неудачных отправок в модуле аналитики. #}
+{% macro copy_button(log, user=None) -%}
+{%- if log.status != 'ok' -%}
+{%- set diag = 'ВРЕМЯ: ' ~ format_datetime_for_user(log.sent_at, user, '%d.%m.%Y %H:%M:%S')
+   ~ '\nКАНАЛ: ' ~ (log.messenger_type or '—')
+   ~ '\nГРУППА: ' ~ (log.group_name or '—')
+   ~ '\nОБЪЯВЛЕНИЕ: ' ~ (log.ad_title or '—')
+   ~ '\nЗАДАЧА: ' ~ (log.task_id or '—')
+   ~ '\nОШИБКА: ' ~ (log.error_message or '—') -%}
+<span data-copy x-data="{
+        copied: false,
+        timer: null,
+        copy(text) {
+          if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(() => this.mark(true), () => this.mark(this.legacy(text)));
+            return;
+          }
+          this.mark(this.legacy(text));
+        },
+        legacy(text) {
+          const area = document.createElement('textarea');
+          area.value = text;
+          area.setAttribute('readonly', '');
+          area.style.position = 'fixed';
+          area.style.top = '-1000px';
+          document.body.appendChild(area);
+          area.select();
+          let done = false;
+          try { done = document.execCommand('copy'); } catch (e) { done = false; }
+          area.remove();
+          return done;
+        },
+        mark(done) {
+          if (!done) return;
+          this.copied = true;
+          clearTimeout(this.timer);
+          this.timer = setTimeout(() => { this.copied = false; }, 2000);
+        }
+      }"><template x-if="true"><button class="btn btn--ghost" type="button" data-copybtn
+          title="Скопировать диагностический блок отправки"
+          data-diag="{{ diag }}"
+          x-on:click="copy($el.dataset.diag)"
+          x-text="copied ? 'Скопировано' : 'Копировать'">Копировать</button></template></span>
+{%- endif -%}
+{%- endmacro %}
 
 {% macro history_card(log, user=None, detail_base_path='/history') -%}
 <article data-hrow{% if log.status %} data-status="{{ log.status }}"{% endif %} id="history-row-{{ log.id }}">
@@ -51,13 +139,22 @@
   {%- if log.error_message %}
   <div data-area="err">
     {{- mono('Текст ошибки', 'danger', upper=true) -}}
-    <span data-longtext="mono">{{ log.error_message }}</span>
+    {#- Текст ЦЕЛИКОМ и выделяемый одним действием: это базовый путь
+        копирования, работающий при выключенном JavaScript. -#}
+    <span data-longtext="mono" data-selectall>{{ log.error_message }}</span>
+    {#- Модификатор ограничения по высоте. Он ЗДЕСЬ и только здесь: страница
+        записи и админская история показывают текст без ограничения. Пара
+        «сводка + раскрытие» переключает состояние сама — обработчика нет. -#}
+    <details data-clamp>
+      <summary><span data-clamp-more>Показать целиком</span><span data-clamp-less>Свернуть</span></summary>
+    </details>
   </div>
   {%- endif %}
   <div data-area="meta">
     {%- if log.task_id -%}
-      {{ mono('ID', 'muted', upper=true) }}{{ mono(log.task_id, 'bright', title=log.task_id) }}
+      {{ mono('ID', 'muted', upper=true) }}<span data-selectall>{{ mono(log.task_id, 'bright', title=log.task_id) }}</span>
     {%- endif -%}
+    {{ copy_button(log, user) }}
     {{ link_button('Подробнее', detail_base_path ~ '/' ~ log.id, variant='ghost',
                    title='Подробности отправки') }}
   </div>

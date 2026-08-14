@@ -978,6 +978,76 @@ a:hover { color: var(--accent-link-hover); }
   grid-area: err; display: flex; flex-direction: column; gap: 6px;
   padding: 11px 12px; border-radius: var(--r-lg); background: var(--surface-input);
 }
+
+/* Ограничение по высоте блока ошибки — МОДИФИКАТОР поверх примитива длинного
+   текста (D-32, план 04-07). Примитив ниже НЕ тронут: он обслуживает ещё
+   страницу записи, админскую историю и снапшот текста объявления, и правка
+   распространила бы усечение на все четыре места разом.
+
+   Ограничение включает САМО ПРИСУТСТВИЕ элемента раскрытия внутри блока —
+   поэтому страница записи, которая его не рисует, ограничения не получает, и
+   отдельного «сними ограничение» ей не требуется. Состояние переключает пара
+   «сводка + раскрытие»: обработчика здесь нет, иначе при выключенном Alpine
+   длинный текст ошибки стал бы недоступен.
+
+   Текст при этом лежит в разметке ЦЕЛИКОМ: ограничена видимая высота, а не
+   содержимое. Скрытое переполнением остаётся в дереве доступности и читается
+   экранным диктором без раскрытия. */
+[data-area="err"]:has(> [data-clamp]) > [data-longtext] {
+  max-height: 4.8em; overflow: hidden;
+}
+[data-area="err"]:has(> [data-clamp][open]) > [data-longtext] { max-height: none; }
+
+[data-clamp] > summary {
+  display: inline-block; list-style: none; cursor: pointer;
+  font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: .12em; text-transform: uppercase; color: var(--text-muted);
+}
+[data-clamp] > summary::-webkit-details-marker { display: none; }
+[data-clamp] > summary:hover { color: var(--text-bright); }
+[data-clamp] > summary:focus-visible {
+  outline: 2px solid var(--focus-ring); outline-offset: 2px;
+}
+[data-clamp] [data-clamp-less] { display: none; }
+[data-clamp][open] [data-clamp-more] { display: none; }
+[data-clamp][open] [data-clamp-less] { display: inline; }
+
+/* Выделение значения ОДНИМ действием (макет 862, строка `user-select:all`).
+   Это базовый путь копирования: он работает при выключенном JavaScript, когда
+   кнопки копирования в разметке нет вовсе. */
+[data-selectall] {
+  -webkit-user-select: all; user-select: all; cursor: text;
+}
+
+/* Кнопка копирования диагностического блока (макет 863) — мелкая
+   моношрифтовая таблетка в метаколонке. Это МОДИФИКАТОР существующей кнопки,
+   а не своя кнопка: собственная разошлась бы с библиотечной в правилах фокуса
+   и отключённого состояния, а рядом с ней в той же метаколонке стоит переход
+   «Подробнее», собранный библиотечным вариантом. */
+[data-copybtn] {
+  padding: 5px 10px; border-radius: var(--r-sm);
+  font-family: var(--font-mono); font-size: var(--fs-2xs);
+  font-weight: 500; letter-spacing: .06em; text-transform: uppercase;
+}
+
+/* Страница записи истории (D-24) переиспользует примитив записи целиком:
+   области, сетка и медиазапросы 1080px/860px достаются ей даром. Модификатор
+   правит ровно то, чем страница отличается от строки списка, и ни правилом
+   больше. */
+[data-hrow][data-hrec]:hover { transform: none; }
+/* Тело страницы — колонка: в него приходит снапшот текста и изображений,
+   которых в строке списка нет и для которых строка не рассчитана. */
+[data-hrow][data-hrec] > [data-area="body"] {
+  flex-direction: column; align-items: stretch; gap: 10px;
+}
+/* В строке списка название и группа усечены многоточием — там им отведена одна
+   строка. Страница записи и есть то место, где показывают всё: усекать здесь
+   нечего и незачем. */
+[data-hrow][data-hrec] > [data-area="body"] > [data-grow],
+[data-hrow][data-hrec] > [data-area="body"] > [data-secondary] {
+  white-space: normal; overflow: visible; text-overflow: clip; max-width: none;
+}
+[data-hrow][data-hrec] > [data-area="meta"] { align-items: flex-start; }
 /* Опора исправленного медиазапроса 1080px: на узкой ширине левая граница здесь
    сменяется верхней. Правило-приёмник лежит в разделе 2 и правится только
    вместе с этим. */
