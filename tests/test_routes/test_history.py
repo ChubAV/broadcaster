@@ -158,6 +158,98 @@ async def test_stats_endpoint(client, auth_headers, db_session):
 
 
 @pytest.mark.asyncio
+async def test_stats_counts_account_disconnected_as_failure(
+    client, auth_headers, db_session
+):
+    """Отправка с отвалившимся аккаунтом — неуспешная, а не потерянная.
+
+    Устаревший счёт по журналу знал два статуса из трёх и складывал в
+    `fail_count` только `fail`: отправка со статусом `account_disconnected` не
+    попадала ни в успешные, ни в неуспешные и молча исчезала из ответа. Здесь
+    закреплено обратное: `fail_count` — это «не `ok`», поэтому сумма успешных и
+    неуспешных обязана сходиться с общим числом.
+    """
+    ad_id, account_id, group_id, schedule_id = await setup_dependencies(
+        client, auth_headers, db_session
+    )
+
+    result = await db_session.execute(select(User))
+    user = result.scalar_one()
+
+    now = datetime.now(timezone.utc)
+    db_session.add_all([
+        SendLog(user_id=user.id, schedule_id=schedule_id, ad_id=ad_id,
+                group_id=group_id, status="ok", sent_at=now - timedelta(days=1)),
+        SendLog(user_id=user.id, schedule_id=schedule_id, ad_id=ad_id,
+                group_id=group_id, status="fail", error_message="timeout",
+                sent_at=now - timedelta(days=2)),
+        SendLog(user_id=user.id, schedule_id=schedule_id, ad_id=ad_id,
+                group_id=group_id, status="account_disconnected",
+                error_message="session dropped",
+                sent_at=now - timedelta(days=3)),
+    ])
+    await db_session.commit()
+
+    response = await client.get("/api/history/stats", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()
+
+    # Форма ответа не изменилась: те же три имени полей.
+    assert set(data) == {"total_sent", "success_count", "fail_count"}
+
+    assert data["total_sent"] == 3
+    assert data["success_count"] == 1
+    # Отвалившийся аккаунт считается неуспешной отправкой наравне с `fail`.
+    assert data["fail_count"] == 2
+    # Ни одна запись не потерялась между двумя числами.
+    assert data["success_count"] + data["fail_count"] == data["total_sent"]
+
+
+@pytest.mark.asyncio
+async def test_stats_counts_only_own_records(client, auth_headers, db_session):
+    """Сводка отдаёт числа только по записям текущего пользователя."""
+    ad_id, account_id, group_id, schedule_id = await setup_dependencies(
+        client, auth_headers, db_session
+    )
+
+    result = await db_session.execute(select(User))
+    user = result.scalar_one()
+
+    stranger = User(
+        email="stranger-stats@example.com", password_hash="x", name="Stranger"
+    )
+    db_session.add(stranger)
+    await db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    db_session.add_all([
+        SendLog(user_id=user.id, schedule_id=schedule_id, ad_id=ad_id,
+                group_id=group_id, status="ok", sent_at=now - timedelta(days=1)),
+        SendLog(user_id=stranger.id, schedule_id=schedule_id, ad_id=ad_id,
+                group_id=group_id, status="fail", error_message="not mine",
+                sent_at=now - timedelta(days=1)),
+        SendLog(user_id=stranger.id, schedule_id=schedule_id, ad_id=ad_id,
+                group_id=group_id, status="account_disconnected",
+                sent_at=now - timedelta(days=2)),
+    ])
+    await db_session.commit()
+
+    response = await client.get("/api/history/stats", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_sent"] == 1
+    assert data["success_count"] == 1
+    assert data["fail_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stats_unauthenticated_request(client):
+    """Неавторизованный запрос к сводке по-прежнему отклоняется."""
+    response = await client.get("/api/history/stats")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_stats_endpoint_empty(client, auth_headers):
     response = await client.get("/api/history/stats", headers=auth_headers)
     assert response.status_code == 200
