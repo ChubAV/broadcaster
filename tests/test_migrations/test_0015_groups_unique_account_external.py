@@ -303,10 +303,19 @@ def test_downgrade_removes_the_constraint(tmp_path, monkeypatch):
 
 
 def test_revision_0015_continues_0014():
-    """0015 продолжает 0014 — история остаётся одной линией."""
+    """0015 продолжает 0014 — история остаётся одной линией.
+
+    Голов проверяется КОЛИЧЕСТВО, а не имя. Прежняя редакция утверждала
+    `"0015" in get_heads()` и потому падала в тот момент, когда история
+    пополнялась следующей ревизией: имя головы меняется с каждой новой ревизией
+    и свойством истории не является — ту же оговорку несёт
+    `test_0013_ad_status.py`. Ловить нужно ВЕТВЛЕНИЕ: оно ломает
+    `alembic upgrade head` для всех сразу. Продолжение линии этой ревизией
+    проверяется её собственной сцепкой: 0015 продолжает 0014.
+    """
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(Config(str(ALEMBIC_INI)))
 
     assert script.get_revision("0015").down_revision == "0014"
-    assert "0015" in script.get_heads()
+    assert len(script.get_heads()) == 1, script.get_heads()
