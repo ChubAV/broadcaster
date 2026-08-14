@@ -22,7 +22,9 @@ from app.application.analytics.send_analytics import (
     STATUS_ACCOUNT_DISCONNECTED,
     STATUS_FAIL,
     STATUS_OK,
+    HeatmapView,
     SendMetrics,
+    activity_heatmap,
     apply_history_filters,
     history_count,
     history_filter_params,
@@ -553,3 +555,218 @@ async def test_history_count_ignores_other_users(db_session):
     await _seed_send_log(db_session, stranger.id, sent_at=NOW)
 
     assert await history_count(db_session, user_id=user.id) == 0
+
+
+# --- activity_heatmap ---------------------------------------------------------
+#
+# Окно heatmap — СКОЛЬЗЯЩИЕ семь суток от `now` (D-12), а не календарная неделя
+# ПН-ВС макета. Поэтому все ожидания здесь считаются от `now - 7 суток`, и ни
+# одно не выписано календарной датой: тест, привязанный к фиксированному
+# понедельнику, зеленел бы ровно один день в неделю.
+
+# Короткие имена дней НЕЗАВИСИМО от локали процесса: `strftime('%a')` отдаёт
+# английские сокращения на любой машине без установленной русской локали, то
+# есть проверка через него утверждала бы не то, что видит пользователь.
+SHORT_DAYS = ("ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС")
+
+# UTC+3 круглый год: ни у одной из 12 зон проекта (app/constants.py) перехода на
+# летнее время нет, поэтому смещение в тестах постоянно.
+MOSCOW = ZoneInfo("Europe/Moscow")
+
+
+def _filled_cells(view: HeatmapView) -> dict[tuple[int, int], int]:
+    """Непустые ячейки сетки в виде {(ряд, локальный час): число}."""
+    return {
+        (row_index, hour): value
+        for row_index, row in enumerate(view.grid)
+        for hour, value in enumerate(row)
+        if value
+    }
+
+
+@pytest.mark.asyncio
+async def test_heatmap_empty_journal_gives_a_grid_of_zeros(db_session):
+    """Пустой набор данных — сетка нулей, а не пустой список.
+
+    Шаблон обходит `view.grid` рядами и ячейками; пустой список отрисовал бы
+    вместо сетки ничего, и блок «Активность за неделю» выглядел бы сломанным, а
+    не пустым.
+    """
+    user = await _user(db_session)
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    assert len(view.grid) == 7
+    assert all(len(row) == 24 for row in view.grid)
+    assert _filled_cells(view) == {}
+    assert view.peak == 0
+
+
+@pytest.mark.asyncio
+async def test_heatmap_same_records_land_in_different_cells_per_timezone(db_session):
+    """D-10: ОДИН набор записей раскладывается по локальному часу ЧИТАТЕЛЯ.
+
+    Прямая проверка того, ради чего heatmap считается в Python: запись в 23:30
+    UTC для пользователя в UTC — вечер, а для пользователя в UTC+3 — половина
+    третьего ночи СЛЕДУЮЩИХ локальных суток. Раскладка по UTC-часу показала бы
+    москвичу чужой график активности.
+    """
+    user = await _user(db_session)
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 19, 23, 30, tzinfo=timezone.utc)
+    )
+
+    in_utc = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+    in_moscow = await activity_heatmap(db_session, user_id=user.id, now=NOW, tz=MOSCOW)
+
+    utc_cells = _filled_cells(in_utc)
+    moscow_cells = _filled_cells(in_moscow)
+
+    assert list(utc_cells.values()) == [1]
+    assert list(moscow_cells.values()) == [1]
+    assert next(iter(utc_cells))[1] == 23, "в UTC запись обязана попасть в час 23"
+    assert next(iter(moscow_cells))[1] == 2, "в UTC+3 запись обязана попасть в час 2"
+    assert utc_cells != moscow_cells
+
+
+@pytest.mark.asyncio
+async def test_heatmap_reads_naive_dates_without_raising(db_session):
+    """Naive-дата SQLite обрабатывается, а не роняет расчёт.
+
+    Колонка объявлена `DateTime(timezone=True)`, но SQLite отдаёт её NAIVE.
+    Сравнение naive и aware в Python поднимает TypeError, поэтому нормализация
+    обязана жить В МОДУЛЕ: без неё дефект существовал бы только на одном из двух
+    диалектов. Тест утверждает и отсутствие исключения, и попадание в нужный час.
+    """
+    user = await _user(db_session)
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 19, 7, 15, tzinfo=timezone.utc)
+    )
+
+    raw = (await db_session.execute(select(SendLog.sent_at))).scalar_one()
+    assert raw.tzinfo is None, "SQLite перестал отдавать naive — тест потерял смысл"
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    assert list(_filled_cells(view)) == [(6, 7)]
+
+
+@pytest.mark.asyncio
+async def test_heatmap_row_labels_follow_the_window_not_a_fixed_monday(db_session):
+    """D-12: подписи рядов — дни ОКНА, а не ПН-ВС макета."""
+    user = await _user(db_session)
+    origin = NOW - timedelta(days=7)
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    expected = [
+        SHORT_DAYS[(origin + timedelta(days=i)).weekday()] for i in range(7)
+    ]
+    assert view.day_labels == expected
+    # Окно начинается в среду, поэтому фиксированная раскладка макета краснеет.
+    assert view.day_labels[0] != "ПН"
+
+
+@pytest.mark.asyncio
+async def test_heatmap_ignores_records_outside_the_window(db_session):
+    user = await _user(db_session)
+    await _seed_send_log(
+        db_session, user.id, sent_at=NOW - timedelta(days=7, hours=2)
+    )
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    assert _filled_cells(view) == {}
+
+
+@pytest.mark.asyncio
+async def test_heatmap_ignores_other_users(db_session):
+    """T-04-13: владение стоит в базовом WHERE, а не в фильтре поверх."""
+    user = await _user(db_session)
+    stranger = await _user(db_session, email="stranger-heat@test.com")
+    await _seed_send_log(db_session, stranger.id, sent_at=NOW - timedelta(hours=3))
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    assert _filled_cells(view) == {}
+    assert view.peak == 0
+
+
+@pytest.mark.asyncio
+async def test_heatmap_counts_record_without_group_or_messenger(db_session):
+    """Прохибиция плана: неклассифицируемая запись из сетки НЕ выпадает.
+
+    Отправка без `group_id` и без `messenger_type` произошла в реальный час, и
+    выбросить её ради «чистой» сетки значило бы соврать о том, работала система
+    в этот час или стояла.
+    """
+    user = await _user(db_session)
+    await _seed_send_log(
+        db_session,
+        user.id,
+        sent_at=datetime(2026, 5, 19, 9, 0, tzinfo=timezone.utc),
+        group_id=None,
+        messenger_type=None,
+    )
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    assert _filled_cells(view) == {(6, 9): 1}
+    assert view.peak == 1
+
+
+@pytest.mark.asyncio
+async def test_heatmap_cell_counts_every_send_of_the_hour_and_peak_is_the_max(
+    db_session,
+):
+    """D-11: в ячейке ВСЕ отправки часа, а пик — самый горячий час окна."""
+    user = await _user(db_session)
+    hot = datetime(2026, 5, 19, 14, 0, tzinfo=timezone.utc)
+    for minutes in (0, 17, 59):
+        await _seed_send_log(db_session, user.id, sent_at=hot + timedelta(minutes=minutes))
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 18, 5, 30, tzinfo=timezone.utc)
+    )
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+
+    assert _filled_cells(view) == {(6, 14): 3, (5, 5): 1}
+    assert view.peak == 3
+
+
+@pytest.mark.asyncio
+async def test_heatmap_window_width_follows_the_days_argument(db_session):
+    """Ширина окна — параметр, а не константа: Фаза 6 попросит другое число."""
+    user = await _user(db_session)
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc, days=3
+    )
+
+    assert len(view.grid) == 3
+    assert len(view.day_labels) == 3
+
+
+def test_heatmap_view_carries_grid_labels_and_peak():
+    """Контракт датакласса: сетка, подписи рядов и пик — три отдельных поля."""
+    view = HeatmapView(grid=[[0] * 24], day_labels=["ПН"], peak=0)
+
+    assert view.grid == [[0] * 24]
+    assert view.day_labels == ["ПН"]
+    assert view.peak == 0
