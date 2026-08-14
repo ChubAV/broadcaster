@@ -1,0 +1,31 @@
+{# Плитка метрики дашборда с дельтой к предыдущему окну (DASH-01, макет 387-392).
+
+   Это МАКРОС, а не include: импортированные шаблоны Jinja контекста
+   вызывающего не получают, поэтому `label`, `value`, `delta` и `tone` — явные
+   параметры. Ошибка в имени параметра проявится не исключением, а ПУСТОЙ
+   плиткой при статусе 200, поэтому отрисовка реальных чисел закреплена тестом
+   test_dashboard_tile_counts_last_day_sends.
+
+   Спарклайна здесь НЕТ. Макет рисует его в строках 393-397, и по D-03 он в
+   фазу не входит: двенадцать столбиков требуют почасовой развёртки окна, то
+   есть второго запроса на каждую плитку ради украшения, которое ничего не
+   сообщает сверх самого числа и дельты рядом с ним.
+
+   `tone` выбирает ВЫЗЫВАЮЩИЙ, а не плитка: для «Ошибок» знак дельты читается
+   наоборот (рост ошибок — не успех), и правило этой инверсии принадлежит
+   смыслу метрики, а не её оформлению.
+
+   Импорт: {% from "dashboard/includes/metric_tile.html" import metric_tile %} #}
+
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/mono.html" import mono %}
+
+{% macro metric_tile(label, value, delta, tone='neutral') -%}
+{{ card_open() }}
+  {{ mono(label, 'muted', upper=true) }}
+  <div data-metric-line>
+    <span data-metric-value>{{ value }}</span>
+    <span data-metric-delta data-tone="{{ tone }}">{{ '+' if delta > 0 else '' }}{{ delta }}</span>
+  </div>
+{{ card_close() }}
+{%- endmacro %}
