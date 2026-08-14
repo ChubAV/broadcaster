@@ -451,7 +451,9 @@ async def upcoming_sends(
 
     # Объединение составов ВСЕХ показываемых строк — один запрос на блок.
     group_ids = {
-        group_id for schedule, _ad, _account in rows for group_id in (schedule.group_ids or [])
+        group_id
+        for schedule, _ad, _account in rows
+        for group_id in (schedule.group_ids or [])
     }
     group_active: dict[int, bool] = {}
     if group_ids:
@@ -472,7 +474,9 @@ async def upcoming_sends(
         # Пустой состав тоже даёт «все группы выключены»: расписание без групп
         # не отправит ничего, и назвать это отдельным словом значило бы
         # заводить четвёртую причину сверх трёх, названных D-15.
-        any_group_on = any(group_active.get(group_id, False) for group_id in composition)
+        any_group_on = any(
+            group_active.get(group_id, False) for group_id in composition
+        )
 
         # Приоритет причин — порядок этих ветвей. Совпасть могут все три сразу,
         # и показывать три бейджа в строке шириной в одну строку некуда.
