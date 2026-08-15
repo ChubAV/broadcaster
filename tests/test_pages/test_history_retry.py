@@ -790,6 +790,69 @@ async def test_two_sequential_retries_queue_exactly_one_task(
 
 
 @pytest.mark.asyncio
+async def test_retry_busy_notice_states_the_real_guarantee(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Плашка второго нажатия говорит правду о состоянии системы.
+
+    Под признак «занято» попадают ДВА случая: первый повтор ещё выполняется и
+    первый повтор УЖЕ поставлен, а обработчик давно завершился. После введения
+    окна второй случай стал основным, и прежний текст («уже выполняется»)
+    сообщал бы пользователю неправду о том, что происходит.
+
+    Текст плашки берётся ИЗ САМОГО словаря модуля, а не копируется в тест:
+    копия разъехалась бы с исходником молча.
+    """
+    user = await _current_user(db_session)
+    log = await _seed_retryable(db_session, user.id)
+
+    with _retry_env() as env:
+        await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+        page = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=True
+        )
+
+    assert len(env.queued) == 1, env.queued
+    assert page.status_code == 200
+
+    notice, tone = history_module.RETRY_NOTICES[history_module.RETRY_BUSY]
+    assert tone == "info", "отказ второму нажатию — не ошибка пользователя"
+    assert notice in page.text, "плашка отказа второму нажатию не показана"
+    assert "уже поставлен" in notice, (
+        "текст плашки говорит о состоянии ОБРАБОТЧИКА, а не задачи: второму "
+        "нажатию он обязан сказать, что повтор уже поставлен в очередь"
+    )
+    assert "второй раз он не уйдёт" in notice, (
+        "текст плашки не обещает пользователю отсутствие второй отправки"
+    )
+
+
+def test_retry_handler_description_matches_the_mechanism():
+    """Докстринг обработчика называет РЕАЛЬНЫЙ механизм, а не более сильный.
+
+    Расхождение описания с поведением верификация назвала блокером, а не
+    оформлением: следующий, кто будет менять этот код, поверит описанию.
+    Прежняя редакция обещала защиту от второго нажатия, которой в коде не было.
+    """
+    body = _handler_source()
+    doc_open = body.index('"""')
+    doc = body[doc_open : body.index('"""', doc_open + 3)].lower()
+
+    assert "окно" in doc, "докстринг не называет окно удержания"
+    assert "переживает ответ" in doc, (
+        "докстринг не говорит главного: окно переживает ответ — именно этим "
+        "останавливается ВТОРОЕ ПОСЛЕДОВАТЕЛЬНОЕ нажатие, а не только "
+        "пересекающийся во времени запрос"
+    )
+    assert "отказн" in doc, (
+        "докстринг не называет снятие удержания на отказном пути — читатель "
+        "решит, что не дошедший до очереди повтор блокирует запись на всё окно"
+    )
+
+
+@pytest.mark.asyncio
 async def test_retry_releases_the_slot_after_an_exception(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
