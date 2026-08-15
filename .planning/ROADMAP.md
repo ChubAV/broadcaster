@@ -303,7 +303,7 @@ Plans:
 
 **Canonical ref**: `new_broadcaster_design.html` (раздел «Тарифы»)
 **Notes**: Модели `Subscription`, `Payment`, `MessageBalance` и сервис лимитов уже существуют — фаза меняет представление и добавляет операцию продления.
-**Plans**: 1/6 plans executed
+**Plans**: 3/6 plans executed
 
 Plans:
 **Wave 1**
@@ -312,8 +312,8 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 05-02-PLAN.md — Отмена платежа, честные статусы и round-trip ревизии 0017 (волна 2)
-- [ ] 05-03-PLAN.md — Модуль четырёх осей тарифа и календарный месяц пользователя (волна 2)
+- [x] 05-02-PLAN.md — Отмена платежа, честные статусы и round-trip ревизии 0017 (волна 2)
+- [x] 05-03-PLAN.md — Модуль четырёх осей тарифа и календарный месяц пользователя (волна 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -357,7 +357,7 @@ Plans:
 | 2. Объявления и расписания | 15/15 | Complete    | 2026-08-11 |
 | 3. Группы аккаунта | 12/12 | Complete    | 2026-08-13 |
 | 4. Дашборд и история | 12/12 | Complete    | 2026-08-15 |
-| 5. Тарифы | 1/6 | In Progress|  |
+| 5. Тарифы | 3/6 | In Progress|  |
 | 6. Админ-панель | 0/TBD | Not started | - |
 
 ## Coverage
