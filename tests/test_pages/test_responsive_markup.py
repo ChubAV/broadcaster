@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import CHART_BUCKETS_PER_DAY
+from app.application.billing.plan_usage import PlanAxis
 from app.models.ad import Ad
 from app.models.balance_transaction import BalanceTransaction
 from app.models.group import Group
@@ -31,6 +32,7 @@ from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.models.user import User
+from app.pages.common import templates
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
 
@@ -1230,6 +1232,203 @@ async def test_billing_shows_current_plan(
 
     html = (await authed_client.get("/billing")).text
     assert "Business" in html, "название текущего тарифа не отрисовано"
+
+
+# --- План 05-05: паршалы раздела «Тарифы» ------------------------------------
+#
+# Три макроса раздела живут в billing/includes/, а НЕ в components/: они
+# специфичны для тарифов и в других разделах не переиспользуются, а
+# инвентаризация общей библиотеки держит жёсткое число файлов.
+#
+# Проверки идут ПРЯМЫМ рендером макроса, а не по странице: макрос, потерявший
+# явный параметр, отрисуется пустотой, а страница всё равно вернёт 200
+# (приём tests/test_templates/test_components.py).
+
+BILLING_PARTIALS = (
+    ("billing/includes/plan_card.html", "plan_card"),
+    ("billing/includes/usage_meters.html", "usage_meter"),
+    ("billing/includes/payment_row.html", "payment_row"),
+)
+
+# Разделитель разрядов и отбивка перед знаком рубля — НЕРАЗРЫВНЫЕ пробелы:
+# обычный пробел переносит «1» и «490» на разные строки узкой карточки.
+# Ожидания выписаны escape-последовательностью: невидимый символ в литерале
+# теста читается как обычный пробел и «чинится» первым же редактором.
+NBSP = "\u00a0"
+BASIC_PRICE = f"1{NBSP}490{NBSP}₽"
+PRO_PRICE = f"4{NBSP}900{NBSP}₽"
+
+# Запись тарифа в том виде, в каком её отдаёт Settings.parsed_plan_limits.
+BASIC_PLAN = {
+    "id": "basic",
+    "name": "Basic",
+    "price": "1490.00",
+    "ads": 15,
+    "groups": 30,
+    "sends": 5000,
+    "accounts": 5,
+}
+PRO_PLAN = {
+    "id": "pro",
+    "name": "Pro",
+    "price": "4900.00",
+    "ads": None,
+    "groups": None,
+    "sends": 50000,
+    "accounts": 20,
+}
+FREE_PLAN = {
+    "id": "free",
+    "name": "Free",
+    "price": "0.00",
+    "ads": 3,
+    "groups": 5,
+    "sends": 300,
+    "accounts": 1,
+}
+
+
+def _billing_macro(path: str, name: str):
+    return getattr(templates.env.get_template(path).module, name)
+
+
+def test_billing_amount_format_is_a_display_concern_only():
+    """Глобал форматирования суммы добавляет разряды и знак рубля.
+
+    Машинная строка ЮKassa («1490.00») остаётся в конфиге и в amount.value:
+    строка с разделителем разрядов — отказ платёжного API в проде, который не
+    поймает ни один мок. Форматирование живёт ТОЛЬКО на стороне показа.
+    """
+    format_amount = templates.env.globals["format_amount"]
+
+    assert format_amount("1490.00") == BASIC_PRICE
+    assert format_amount("4900.00") == PRO_PRICE
+    # Нулевые копейки не показываются: «0,00 ₽» — шум, а не точность.
+    assert format_amount("0.00") == f"0{NBSP}₽"
+    assert format_amount("149.50") == f"149,50{NBSP}₽"
+    assert format_amount(None) == ""
+
+
+def test_billing_partials_are_macros_with_an_import_line():
+    """Каждый паршал — МАКРОС и называет свою строку импорта комментарием."""
+    for rel, macro_name in BILLING_PARTIALS:
+        source = (TEMPLATES_DIR / rel).read_text(encoding="utf-8")
+        assert "{% macro " in source, f"{rel}: паршал не макрос"
+        assert rel in source, f"{rel}: строки импорта в комментарии нет"
+        assert _billing_macro(rel, macro_name), rel
+
+
+def test_billing_component_library_did_not_grow():
+    """Паршалы раздела не уехали в общую библиотеку компонентов."""
+    components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
+    assert len(components) == 13, [p.name for p in components]
+
+    partials = {p.name for p in (TEMPLATES_DIR / "billing" / "includes").glob("*.html")}
+    assert partials == {"plan_card.html", "usage_meters.html", "payment_row.html"}
+
+
+def test_billing_usage_meter_draws_no_denominator_for_an_unlimited_axis():
+    """Безлимитная ось не делит на ноль и не рисует шкалу вовсе.
+
+    Заливать шкалу полностью значило бы сообщить «израсходовано всё» там, где
+    израсходовать нельзя, а нарисовать «6 / 0» — назвать безлимит нулём.
+    """
+    axis = PlanAxis(key="ads", label="Объявлений", used=6, limit=None, percent=0)
+
+    out = str(_billing_macro("billing/includes/usage_meters.html", "usage_meter")(axis))
+
+    assert "∞" in out, "знака бесконечности на месте знаменателя нет"
+    assert "без ограничений" in out
+    assert "progress__track" not in out, "у безлимитной оси нарисована шкала"
+    assert "/ 0" not in out, "безлимит показан нулём"
+
+
+def test_billing_usage_meter_over_the_limit_reports_the_real_numbers():
+    """Превышение — факт, а не приговор: шкала на сотне, числа настоящие.
+
+    Фаза ничего не запрещает (D-08), и тревожное оформление обещало бы запрет,
+    которого не существует.
+    """
+    axis = PlanAxis(key="ads", label="Объявлений", used=20, limit=15, percent=100)
+
+    out = str(_billing_macro("billing/includes/usage_meters.html", "usage_meter")(axis))
+
+    assert "width: 100%" in out
+    assert "20 / 15" in out, "подпись не называет настоящие числа"
+    assert "progress--danger" not in out, "превышение оформлено как провинность"
+
+
+def test_billing_plan_card_marks_the_current_plan_and_offers_renewal():
+    plan_card = _billing_macro("billing/includes/plan_card.html", "plan_card")
+
+    out = str(plan_card(BASIC_PLAN, "basic", True))
+
+    assert "ВАШ ПЛАН" in out
+    assert "card--current" in out, "текущий план не выделен"
+    assert 'action="/billing/subscribe"' in out
+    assert 'name="plan" value="basic"' in out
+    assert "Продлить" in out
+    assert BASIC_PRICE in out, "цена показана машинной строкой"
+    assert "/ мес" in out
+    for label in ("Объявлений", "Групп", "Отправок в месяц", "Аккаунтов"):
+        assert label in out, label
+
+
+def test_billing_plan_card_draws_infinity_for_an_unlimited_limit():
+    plan_card = _billing_macro("billing/includes/plan_card.html", "plan_card")
+
+    out = str(plan_card(PRO_PLAN, "basic", True))
+
+    assert "БЕЗ ЛИМИТОВ" in out
+    assert "∞" in out
+    assert "Перейти на Pro" in out
+    assert "card--current" not in out
+
+
+def test_billing_free_plan_card_carries_no_form():
+    """Бесплатный тариф покупать нечего: подпись вместо формы."""
+    plan_card = _billing_macro("billing/includes/plan_card.html", "plan_card")
+
+    out = str(plan_card(FREE_PLAN, "free", True))
+
+    assert "<form" not in out
+    assert "Текущий на старте" in out
+
+
+def test_billing_plan_card_without_payments_names_the_administrator():
+    """D-21: выключенные платежи гасят кнопку, а не карточку."""
+    plan_card = _billing_macro("billing/includes/plan_card.html", "plan_card")
+
+    out = str(plan_card(BASIC_PLAN, "free", False))
+
+    assert "<form" not in out, "форма оплаты осталась при выключенных платежах"
+    assert "администратора" in out
+    assert BASIC_PRICE in out, "витрина погасла вместе с кнопкой"
+
+
+def test_billing_payment_row_is_built_on_row_primitives():
+    """Строка платежа — примитивы строки и подпись колонки внутри ячейки."""
+    source = (TEMPLATES_DIR / "billing" / "includes" / "payment_row.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "data-cell-label" in source, "подпись колонки не едет вместе со значением"
+    for marker in TABLE_MARKERS:
+        assert marker not in source, marker
+
+
+def test_billing_plans_grid_rule_does_not_redefine_the_dashboard_grid():
+    """Сетка карточек — новый атрибут, а не переопределение плиток дашборда.
+
+    `[data-metrics]` объявлен с меньшим минимумом и держит плитки Фазы 4;
+    карточка плана несёт четыре строки лимитов и в 210px не складывается.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    assert "[data-plans]" in css
+    assert "minmax(260px, 1fr)" in css
+    assert css.count("[data-metrics] {") == 1, "правило плиток объявлено дважды"
+    assert "minmax(210px, 1fr)" in css, "минимум плиток дашборда изменён"
 
 
 @pytest.mark.asyncio
@@ -2702,6 +2901,9 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     # Класс 1: макрос строки, потребляемый шаблоном с шапкой. Его исходник уже
     # входит в объединение своего списочного шаблона — подписи проверяются там.
     "ads/includes/ad_card.html": "макрос строки внутри объединения ads/list.html",
+    "billing/includes/payment_row.html": (
+        "макрос строки внутри объединения billing/balance.html"
+    ),
     # groups/includes/group_row.html ВЫШЕЛ из перечня планом 03-08 вместе с
     # самим шаблоном: глобальный раздел снесён (D-01). Строка группы на экране
     # аккаунта его место не занимает — она КАРТОЧНАЯ и примитив строки-таблицы
@@ -2907,14 +3109,17 @@ def test_row_templates_without_header_are_accounted_for():
         f"не названы {sorted(found - declared)}; "
         f"названы, но строку не рисуют {sorted(declared - found)}"
     )
-    # Восемь → семь → шесть → ПЯТЬ: макрос строки снесённого раздела удалён
-    # планом 03-08 вместе с его списочной страницей, макрос строки последних
-    # отправок — планом 04-05 вместе с заменённым блоком дашборда, а страница
-    # записи истории планом 04-07 перестала рисовать строку вовсе (перевёрстана
-    # на примитив записи). Уменьшение объявленного числа — признание
-    # СОЗНАТЕЛЬНОГО снятия; молчаливое исчезновение файла по-прежнему краснеет.
-    assert len(declared) == 5, (
-        f"ожидалось пять таких шаблонов, объявлено {len(declared)}"
+    # Восемь → семь → шесть → пять → ШЕСТЬ: макрос строки снесённого раздела
+    # удалён планом 03-08 вместе с его списочной страницей, макрос строки
+    # последних отправок — планом 04-05 вместе с заменённым блоком дашборда, а
+    # страница записи истории планом 04-07 перестала рисовать строку вовсе
+    # (перевёрстана на примитив записи). План 05-05 добавил ОДИН файл первого
+    # класса: макрос строки платежа, чей исходник входит в объединение
+    # billing/balance.html и там же проверяется на подписи. Изменение
+    # объявленного числа — признание СОЗНАТЕЛЬНОГО шага; молчаливое появление
+    # или исчезновение файла по-прежнему краснеет.
+    assert len(declared) == 6, (
+        f"ожидалось шесть таких шаблонов, объявлено {len(declared)}"
     )
     # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
     # макрос row_open он не вызывает. Без второго условия разрешителя он выпал
