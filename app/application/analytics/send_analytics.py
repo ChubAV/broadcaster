@@ -558,7 +558,20 @@ async def upcoming_sends(
             group_id: bool(is_active)
             for group_id, is_active in (
                 await session.execute(
-                    select(Group.id, Group.is_active).where(Group.id.in_(group_ids))
+                    # ПРЕДИКАТ ВЛАДЕНИЯ ЗДЕСЬ, А НЕ «ГДЕ-ТО РАНЬШЕ».
+                    # `Schedule.group_ids` — JSON-список без внешнего ключа и
+                    # без ограничения принадлежности, то есть корректность
+                    # запроса без этого условия держалась бы на том, что
+                    # редактор расписаний проверил владение в ДРУГОМ модуле, и
+                    # на том, что идентификаторы не переиспользуются. Второе
+                    # верно на PostgreSQL и НЕВЕРНО на SQLite, где INTEGER
+                    # PRIMARY KEY без AUTOINCREMENT выдаёт max(rowid)+1 и
+                    # переиспользует номер удалённой строки, — то есть именно
+                    # тестовая среда способна нарушить инвариант, который
+                    # тестом не поймать. Условие стоит ровно ничего.
+                    select(Group.id, Group.is_active).where(
+                        Group.id.in_(group_ids), Group.user_id == user_id
+                    )
                 )
             ).all()
         }

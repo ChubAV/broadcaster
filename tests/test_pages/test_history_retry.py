@@ -1583,7 +1583,7 @@ async def test_retry_availability_takes_a_bounded_number_of_queries(
 
     event.listen(sync_engine, "before_cursor_execute", _record)
     try:
-        verdict = await retry_availability(db_session, rows)
+        verdict = await retry_availability(db_session, rows, user.id)
     finally:
         event.remove(sync_engine, "before_cursor_execute", _record)
 
@@ -1612,7 +1612,7 @@ async def test_retry_availability_ignores_successful_records(
     )
     bad = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
 
-    verdict = await retry_availability(db_session, [(ok, group), (bad, group)])
+    verdict = await retry_availability(db_session, [(ok, group), (bad, group)], user.id)
 
     assert ok.id not in verdict
     assert verdict[bad.id] is None
@@ -1643,7 +1643,7 @@ async def test_retry_availability_names_each_missing_entity(
     whole = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
 
     verdict = await retry_availability(
-        db_session, [(no_ad, group), (no_group, None), (whole, group)]
+        db_session, [(no_ad, group), (no_group, None), (whole, group)], user.id
     )
     assert verdict[no_ad.id] == RETRY_REASON_AD_GONE
     assert verdict[no_group.id] == RETRY_REASON_GROUP_GONE
@@ -1681,10 +1681,49 @@ async def test_retry_availability_names_each_missing_entity(
     )
 
     verdict = await retry_availability(
-        db_session, [(log_off, off_group), (log_orphan, orphan_group)]
+        db_session, [(log_off, off_group), (log_orphan, orphan_group)], user.id
     )
     assert verdict[log_off.id] == RETRY_REASON_ACCOUNT_OFF
     assert verdict[log_orphan.id] == RETRY_REASON_ACCOUNT_GONE
+
+
+@pytest.mark.asyncio
+async def test_retry_availability_does_not_see_another_users_entities(
+    auth_headers: dict, db_session: AsyncSession
+):
+    """Вспомогательные запросы предпроверки НЕСУТ владельца.
+
+    `send_logs.ad_id` и `send_logs.group_id` — простые Integer без внешнего
+    ключа, поэтому идентификатор переживает удаление своей цели. На SQLite,
+    где идёт вся суита, INTEGER PRIMARY KEY без AUTOINCREMENT переиспользует
+    номер, и протухшая ссылка способна привести к ЧУЖОЙ строке — то есть
+    инвариант «идентификаторы не переиспользуются», на котором держалась
+    безопасность, ломается именно в тестовой среде.
+
+    Здесь чужая сущность подставляется явно: запись ссылается на объявление
+    другого пользователя. Без предиката владения оно нашлось бы живым, и кнопка
+    повтора предложила бы отправку чужого объявления.
+    """
+    from app.pages.history import RETRY_REASON_AD_GONE, retry_availability
+
+    user = await _current_user(db_session)
+    _ad, group, _account = await _seed_triple(db_session, user.id)
+
+    stranger = User(email="stranger-retry@test.com", password_hash="x", name="S")
+    db_session.add(stranger)
+    await db_session.commit()
+    await db_session.refresh(stranger)
+    foreign_ad, _fg, _fa = await _seed_triple(db_session, stranger.id)
+
+    log = await _seed_log(
+        db_session, user.id, ad_id=foreign_ad.id, group_id=group.id
+    )
+
+    verdict = await retry_availability(db_session, [(log, group)], user.id)
+
+    assert verdict[log.id] == RETRY_REASON_AD_GONE, (
+        "чужое объявление засчитано живым — повтор предложил бы отправить его"
+    )
 
 
 # =============================================================================
@@ -1778,7 +1817,7 @@ async def test_availability_names_the_draft_ad_and_the_switched_off_group(
     )
 
     verdict = await retry_availability(
-        db_session, [(log_draft, group), (log_off_group, off_group)]
+        db_session, [(log_draft, group), (log_off_group, off_group)], user.id
     )
 
     assert verdict[log_draft.id] == RETRY_REASON_AD_DRAFT

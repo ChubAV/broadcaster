@@ -440,7 +440,9 @@ RETRY_REASON_ACCOUNT_GONE = "Аккаунт удалён"
 RETRY_REASON_ACCOUNT_OFF = "Аккаунт отключён"
 
 
-async def retry_availability(db: AsyncSession, rows) -> dict[int, str | None]:
+async def retry_availability(
+    db: AsyncSession, rows, user_id: int
+) -> dict[int, str | None]:
     """Причина недоступности повтора для каждой НЕуспешной записи страницы.
 
     Ключ — идентификатор записи, значение — причина или `None`, если повтор
@@ -465,6 +467,17 @@ async def retry_availability(db: AsyncSession, rows) -> dict[int, str | None]:
     и запись с неизвестным значением оказалась бы ни успешной, ни повторяемой.
     Тот же предикат держат счётчик неудач дашборда, кнопка копирования
     диагностики и сам обработчик повтора.
+
+    ВЛАДЕЛЕЦ ПРИЕЗЖАЕТ АРГУМЕНТОМ, И ОБА ВСПОМОГАТЕЛЬНЫХ ЗАПРОСА ЕГО НЕСУТ.
+    `send_logs.ad_id` и `send_logs.group_id` — простые Integer БЕЗ внешнего
+    ключа (`app/models/send_log.py`), поэтому идентификатор переживает удаление
+    своей цели. На PostgreSQL последовательности номера не переиспользуют, и
+    протухший идентификатор просто ничего не находит; на SQLite — на котором
+    идёт вся суита — INTEGER PRIMARY KEY без AUTOINCREMENT выдаёт max(rowid)+1
+    и номер переиспользует. То есть инвариант, на котором держалась
+    безопасность этих запросов, ЛОМАЕТСЯ ИМЕННО В ТЕСТОВОЙ СРЕДЕ и не ломается
+    в боевой: тест такую регрессию поймать не мог бы в принципе. Предикат
+    владения делает инвариант локальным и стоит ровно ничего.
     """
     candidates = [(log, group) for log, group in rows if log.status != STATUS_OK]
     if not candidates:
@@ -481,7 +494,11 @@ async def retry_availability(db: AsyncSession, rows) -> dict[int, str | None]:
         live_ads = {
             row_id: status
             for row_id, status in (
-                await db.execute(select(Ad.id, Ad.status).where(Ad.id.in_(ad_ids)))
+                await db.execute(
+                    select(Ad.id, Ad.status).where(
+                        Ad.id.in_(ad_ids), Ad.user_id == user_id
+                    )
+                )
             ).all()
         }
 
@@ -495,7 +512,8 @@ async def retry_availability(db: AsyncSession, rows) -> dict[int, str | None]:
             for row_id, status in (
                 await db.execute(
                     select(MessengerAccount.id, MessengerAccount.status).where(
-                        MessengerAccount.id.in_(account_ids)
+                        MessengerAccount.id.in_(account_ids),
+                        MessengerAccount.user_id == user_id,
                     )
                 )
             ).all()
@@ -610,7 +628,7 @@ async def history_partial(
     # Признак доступности повтора считает СЕРВЕР и здесь тоже: признак,
     # вычисленный только в списочном обработчике, потерялся бы на тридцать
     # первой записи — молча, с исправным на вид экраном.
-    retry_blockers = await retry_availability(db, rows[:limit])
+    retry_blockers = await retry_availability(db, rows[:limit], user.id)
     logs = [
         {
             "id": r.id,
@@ -802,7 +820,7 @@ async def history_detail(
     # Тот же вердикт, что у карточки списка, и той же функцией: две копии
     # предпроверки разошлись бы, и один экран предлагал бы повтор там, где
     # другой его прячет.
-    retry_blockers = await retry_availability(db, [(log, group)])
+    retry_blockers = await retry_availability(db, [(log, group)], user.id)
 
     return templates.TemplateResponse(
         "history/detail.html",
@@ -898,14 +916,31 @@ async def history_retry(
     # повтора до конца окна, причём молча.
     queued = False
     try:
+        # ВЛАДЕНИЕ ПРОВЕРЯЕТСЯ У КАЖДОЙ ИЗ ТРЁХ СУЩНОСТЕЙ, а не выводится из
+        # владения записью журнала. `send_logs.ad_id` и `send_logs.group_id` —
+        # простые Integer БЕЗ внешнего ключа, поэтому идентификатор переживает
+        # удаление своей цели. На PostgreSQL номера не переиспользуются, и
+        # протухший идентификатор просто ничего не находит; на SQLite, где идёт
+        # вся суита, INTEGER PRIMARY KEY без AUTOINCREMENT выдаёт max(rowid)+1 и
+        # номер ПЕРЕИСПОЛЬЗУЕТ — то есть протухшая ссылка способна привести к
+        # чужой строке именно там, где это некому поймать. Несовпадение
+        # владельца читается как «сущности больше нет»: для пользователя это
+        # один и тот же ответ, а разные коды объясняли бы ему разницу, которой
+        # на экране нет.
         group = await db.get(Group, log.group_id) if log.group_id else None
+        if group is not None and group.user_id != user.id:
+            group = None
         ad = await db.get(Ad, log.ad_id) if log.ad_id else None
+        if ad is not None and ad.user_id != user.id:
+            ad = None
         # У журнала колонки аккаунта нет вовсе — аккаунт выводится через группу.
         account = (
             await db.get(MessengerAccount, group.account_id)
             if group and group.account_id
             else None
         )
+        if account is not None and account.user_id != user.id:
+            account = None
         # Снятое с публикации объявление и выключенная группа стоят ЗДЕСЬ, рядом
         # с целостью тройки, а не отдельной веткой: для пользователя это один и
         # тот же ответ «повторить нечего», и разводить его на два кода
@@ -1005,7 +1040,7 @@ async def history_list(
     rows = list(result.all())
     has_next = len(rows) > PAGE_SIZE
     rows = rows[:PAGE_SIZE]
-    retry_blockers = await retry_availability(db, rows)
+    retry_blockers = await retry_availability(db, rows, user.id)
 
     logs = [
         {
