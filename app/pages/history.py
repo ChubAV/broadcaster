@@ -3,6 +3,7 @@ import io
 from time import monotonic
 from urllib.parse import urlencode, urlsplit
 
+import structlog
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
@@ -37,6 +38,8 @@ from app.pages.common import (
     templates,
 )
 from app.services.billing_cache import check_balance_cached
+
+logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
@@ -186,6 +189,15 @@ EXPORT_ROW_CAP = 50_000
 # Имя файла ПОСТОЯННОЕ и не собирается из значений пользователя (T-04-34):
 # подстановка в заголовок ответа невозможна по построению.
 EXPORT_FILENAME = "history.csv"
+
+# Последняя строка файла, оборвавшегося на середине. Заголовки ответа уходят до
+# первого фрагмента тела и после уже неизменяемы, поэтому сбой посреди потока
+# нельзя превратить ни в код ошибки, ни в другое имя файла — единственное
+# место, где о неполноте ещё можно сказать, это САМ файл. Без этой строки
+# пользователь уносит выгрузку, которая открывается, выглядит полной и короче
+# правды: ровно тот исход, ради которого потолок строк проверяется ДО начала
+# ответа (D-27).
+EXPORT_TRUNCATED_MARKER = "ВЫГРУЗКА ОБОРВАНА — ФАЙЛ НЕПОЛНЫЙ"
 
 # Размер партии потокового чтения. На asyncpg включает серверный курсор, на
 # aiosqlite — буферизацию батчами; интерфейс `session.stream` одинаков на обоих
@@ -795,10 +807,28 @@ async def history_export(
         # Чтение ПОТОКОМ, а не одной выборкой: память держится порядка размера
         # партии, а не размера выборки (T-04-32). На боевом драйвере это
         # серверный курсор, на тестовом — буферизация партиями; интерфейс один.
-        result = await db.stream(query)
-        async for log, group in result:
-            writer.writerow(export_row(log, group, user))
+        #
+        # ОБРЫВ ПОСРЕДИ ПОТОКА НАЗЫВАЕТ СЕБЯ (D-27). Код 200 и заголовок с
+        # именем файла уходят ДО первого фрагмента тела и после уже
+        # неизменяемы: ошибка базы, оборванный курсор или сбой сериализации
+        # после первого `yield` оставили бы пользователя с файлом, который
+        # открывается, выглядит полным и короче правды. Потолок строк проверен
+        # ДО начала ответа ровно затем, чтобы такого исхода не было, — здесь
+        # закрыт второй вход в него. Строка-маркёр не чинит выгрузку: она
+        # делает неполноту ВИДИМОЙ, а исключение уходит дальше, чтобы попасть в
+        # журнал приложения.
+        try:
+            result = await db.stream(query)
+            async for log, group in result:
+                writer.writerow(export_row(log, group, user))
+                yield flush()
+        except Exception:
+            logger.error(
+                "history_export_stream_failed", user_id=user.id, exc_info=True
+            )
+            writer.writerow([EXPORT_TRUNCATED_MARKER])
             yield flush()
+            raise
 
     return StreamingResponse(
         body(),

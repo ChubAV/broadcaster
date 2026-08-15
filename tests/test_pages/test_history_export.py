@@ -805,3 +805,99 @@ async def test_export_cap_notice_ignores_a_garbage_reason(
     html = (await authed_client.get("/history?export=что-угодно")).text
 
     assert "alert--warning" not in html
+
+
+@pytest.mark.asyncio
+async def test_export_announces_a_failure_that_happens_mid_stream(
+    authed_client: AsyncClient, db_session: AsyncSession, test_settings, monkeypatch
+):
+    """Обрыв ПОСРЕДИ потока дописывает в файл строку-маркёр.
+
+    Потолок строк проверяется ДО начала ответа именно затем, чтобы неполный
+    файл нельзя было принять за полный (D-27). У генератора такой защиты не
+    было: код 200 и заголовок с именем файла уходят до первого фрагмента тела и
+    после уже неизменяемы, поэтому ошибка базы, оборванный курсор или сбой
+    сериализации после первого `yield` отдавали пользователю файл, который
+    открывается, выглядит полным и короче правды — тот же исход, только другой
+    дорогой.
+
+    ПРОВЕРКА ИДЁТ ПО ТЕЛУ ГЕНЕРАТОРА, а не через тестовый HTTP-клиент: у
+    ASGI-транспорта исключение внутри потокового тела снимает ответ целиком, и
+    уже отданные фрагменты до клиента не доезжают — то есть через клиент этот
+    тест зеленел бы на любом поведении. Обработчик поэтому вызывается напрямую,
+    а `body_iterator` вычитывается вручную.
+
+    Сбой вносится подменой `AsyncSession.stream`: суита никогда не заставляла
+    поток упасть, и именно поэтому дефект дожил до ревью.
+    """
+    from starlette.requests import Request
+
+    from app.pages.history import history_export
+
+    user = await _current_user(db_session)
+    await _seed_logs(db_session, user.id, 3)
+
+    token = authed_client.cookies.get("access_token")
+    assert token, "фикстура не положила cookie входа — тест проверяет не то"
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/history/export",
+            "raw_path": b"/history/export",
+            "root_path": "",
+            "scheme": "http",
+            "query_string": b"",
+            "headers": [(b"cookie", f"access_token={token}".encode())],
+            "server": ("test", 80),
+            "client": ("test", 12345),
+        }
+    )
+
+    response = await history_export(
+        request,
+        status=None,
+        messenger=None,
+        account_id=None,
+        period=None,
+        db=db_session,
+        settings=test_settings,
+    )
+    assert response.status_code == 200, (
+        "заголовки ответа уходят до тела — именно поэтому обрыв можно назвать "
+        "только внутри самого файла"
+    )
+
+    async def _boom(self, *args, **kwargs):
+        raise RuntimeError("курсор оборван посреди выгрузки")
+
+    monkeypatch.setattr(AsyncSession, "stream", _boom)
+
+    chunks: list[str] = []
+    with pytest.raises(RuntimeError):
+        async for chunk in response.body_iterator:
+            chunks.append(chunk)
+
+    body = "".join(chunks)
+    assert history_module.EXPORT_TRUNCATED_MARKER in body, (
+        f"оборванная выгрузка отдана без единого признака неполноты: {body!r}"
+    )
+    assert EXPORT_HEADER[0] in body, "шапка файла не отдана — тест проверяет не то"
+
+
+@pytest.mark.asyncio
+async def test_export_writes_no_truncation_marker_on_a_healthy_run(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Целая выгрузка себя оборванной НЕ называет.
+
+    Маркёр, попадающий в исправный файл, был бы ровно той же неправдой, только
+    с другим знаком: пользователь выбросил бы полные данные.
+    """
+    user = await _current_user(db_session)
+    await _seed_logs(db_session, user.id, 3)
+
+    body = (await authed_client.get("/history/export")).text
+
+    assert history_module.EXPORT_TRUNCATED_MARKER not in body
