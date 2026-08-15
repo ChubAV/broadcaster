@@ -541,6 +541,16 @@ async def retry_availability(
             verdict[log.id] = RETRY_REASON_GROUP_GONE
         elif not group.is_active:
             verdict[log.id] = RETRY_REASON_GROUP_OFF
+        # ⚠️ ВЕТКА НЕДОСТИЖИМА ПРИ ВКЛЮЧЁННЫХ ВНЕШНИХ КЛЮЧАХ, и это записано
+        # здесь, чтобы следующий читатель не потратил время на её проверку.
+        # `groups.account_id` объявлен NOT NULL с `ondelete="CASCADE"`
+        # (`app/models/group.py`), поэтому удаление аккаунта уносит и группу:
+        # состояние «группа жива, аккаунта нет» на PostgreSQL не существует, и
+        # такая запись доходит сюда уже отвергнутой веткой `group is None` со
+        # словом «Группа удалена». Ветка ОСТАВЛЕНА защитой в глубину: SQLite не
+        # проверяет внешние ключи без `PRAGMA foreign_keys`, а сюда же попадает
+        # и случай чужого аккаунта — предикат владения выше исключает его из
+        # выборки, и «Аккаунт удалён» тогда правда.
         elif not group.account_id or group.account_id not in account_status:
             verdict[log.id] = RETRY_REASON_ACCOUNT_GONE
         elif account_status[group.account_id] != "active":
