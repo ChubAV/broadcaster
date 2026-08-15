@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 from yookassa.domain.notification import WebhookNotificationEventType
 
+from app.application.billing.subscription_period import add_one_month
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.payment import Payment
@@ -118,16 +119,6 @@ async def test_handle_webhook_success(db_session):
 
     assert processed is True
     assert await get_balance(db_session, user.id) == 100
-
-
-@pytest.mark.asyncio
-async def test_handle_webhook_wrong_event(db_session):
-    processed = await handle_webhook(
-        db_session,
-        event="payment.canceled",
-        payment_data={"object": {"id": "yoo_789"}},
-    )
-    assert processed is False
 
 
 @pytest.mark.asyncio
@@ -367,10 +358,13 @@ async def test_a_canceled_webhook_for_an_unknown_payment_is_not_processed(db_ses
 async def test_handle_webhook_ignores_an_event_it_does_not_know(db_session, event):
     """Знакомых событий ровно два; остальные пять SDK объявляет, но фаза не берёт.
 
-    Наследник `test_handle_webhook_wrong_event`: тот утверждал, что
-    `payment.canceled` — неверное событие, и после D-16 стал лгать (событие
-    теперь верное). Проверяемое свойство сохранено, предмет проверки заменён на
-    ДЕЙСТВИТЕЛЬНО неизвестные обработчику события.
+    Прежняя редакция этого теста звалась «неверное событие» и брала предметом
+    проверки отмену платежа. После D-16 отмена — событие ЗНАКОМОЕ, и то
+    утверждение стало ложью. Проверяемое свойство сохранено, предмет проверки
+    заменён на ДЕЙСТВИТЕЛЬНО неизвестные обработчику события; заодно
+    проверяется, что неизвестное событие не меняет статус платежа — прежняя
+    редакция звала обработчик по НЕСУЩЕСТВУЮЩЕМУ платежу и потому прошла бы
+    даже с полностью сломанной проверкой события.
     """
     user = await _user(db_session)
     payment = await _payment(db_session, user, yookassa_payment_id="yoo_other")
@@ -384,3 +378,160 @@ async def test_handle_webhook_ignores_an_event_it_does_not_know(db_session, even
     assert processed is False
     await db_session.refresh(payment)
     assert payment.status == "pending", "неизвестное событие ничего не решает"
+
+
+# --- Новый срок подписки: обе половины D-04 ---------------------------------
+#
+# Правило одно, а половин у него две, и каждая ломается отдельно:
+#   * срок ещё не истёк → месяц от СРОКА (оплаченный остаток не сгорает);
+#   * срок уже истёк    → месяц от СЕГОДНЯ (прошедший месяц не воскресает).
+# Реализация, отвечающая только за одну половину, проходит однополовинный тест
+# и обкрадывает пользователя во второй, поэтому половины закреплены РАЗНЫМИ
+# именованными тестами, а не одним «продление работает».
+#
+# ПОСЕВЫ СТАВЯТ `expires_at` ЯВНО. У колонки нет `server_default`, но неявное
+# «сейчас» сделало бы тест действующей подписки неотличимым от теста истёкшей в
+# момент прогона на границе.
+
+
+async def _subscription_payment(db, user: User, plan: str = "basic", **overrides):
+    return await _payment(
+        db,
+        user,
+        yookassa_payment_id=overrides.pop("yookassa_payment_id", "yoo_sub"),
+        kind="subscription",
+        plan=plan,
+        messages_count=None,
+        package_name=None,
+        **overrides,
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_active_subscription_is_extended_from_its_own_expiry(db_session):
+    """Остаток не сгорает: месяц прибавляется к СРОКУ, а не к сегодняшнему дню."""
+    user = await _user(db_session)
+    current = (datetime.now(timezone.utc) + timedelta(days=10)).replace(microsecond=0)
+    subscription = Subscription(
+        user_id=user.id, plan="basic", expires_at=current, is_active=True
+    )
+    db_session.add(subscription)
+    await db_session.commit()
+
+    payment = await _subscription_payment(db_session, user)
+
+    processed = await handle_webhook(
+        db_session,
+        event=EVENT_SUCCEEDED,
+        payment_data={"object": {"id": payment.yookassa_payment_id}},
+    )
+
+    assert processed is True
+    await db_session.refresh(subscription)
+    assert _utc(subscription.expires_at) == add_one_month(current)
+
+
+@pytest.mark.asyncio
+async def test_an_expired_subscription_is_extended_from_today(db_session):
+    """Прошедший месяц не воскресает: отсчёт идёт от сегодня, а не от старой даты."""
+    user = await _user(db_session)
+    expired = (datetime.now(timezone.utc) - timedelta(days=40)).replace(microsecond=0)
+    subscription = Subscription(
+        user_id=user.id, plan="basic", expires_at=expired, is_active=True
+    )
+    db_session.add(subscription)
+    await db_session.commit()
+
+    payment = await _subscription_payment(db_session, user)
+
+    before = datetime.now(timezone.utc)
+    processed = await handle_webhook(
+        db_session,
+        event=EVENT_SUCCEEDED,
+        payment_data={"object": {"id": payment.yookassa_payment_id}},
+    )
+    after = datetime.now(timezone.utc)
+
+    assert processed is True
+    await db_session.refresh(subscription)
+    new_expiry = _utc(subscription.expires_at)
+    # Окно, а не точка: «сейчас» берётся внутри обработчика. Границы окна —
+    # моменты вокруг вызова, поэтому утверждение остаётся точным.
+    assert add_one_month(before) <= new_expiry <= add_one_month(after)
+    assert new_expiry > datetime.now(timezone.utc), "срок в прошлом ничего не продаёт"
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_subscription_webhook_moves_the_expiry_once(db_session):
+    """Близнец `test_handle_webhook_idempotent` для подписки.
+
+    Тот держит идемпотентность на балансе; этот — на сроке. Именно он поймает
+    будущую перестановку проверки терминального статуса ЗА ветвление по предмету
+    покупки: баланс при такой перестановке уцелел бы, а срок уехал бы на два
+    месяца за один платёж.
+    """
+    user = await _user(db_session)
+    payment = await _subscription_payment(db_session, user)
+
+    await handle_webhook(
+        db_session,
+        event=EVENT_SUCCEEDED,
+        payment_data={"object": {"id": payment.yookassa_payment_id}},
+    )
+    subscription = (
+        await db_session.execute(
+            select(Subscription).where(Subscription.user_id == user.id)
+        )
+    ).scalar_one()
+    first_expiry = _utc(subscription.expires_at)
+
+    processed = await handle_webhook(
+        db_session,
+        event=EVENT_SUCCEEDED,
+        payment_data={"object": {"id": payment.yookassa_payment_id}},
+    )
+
+    assert processed is True
+    rows = (
+        (
+            await db_session.execute(
+                select(Subscription).where(Subscription.user_id == user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1, "повтор не заводит вторую строку"
+    assert _utc(rows[0].expires_at) == first_expiry
+
+
+@pytest.mark.asyncio
+async def test_the_first_purchase_takes_the_plan_from_the_payment(db_session):
+    """У пользователя на Free строки подписки нет — она заводится с ПЛАНОМ ПЛАТЕЖА.
+
+    Умолчание модели `Subscription.plan` — `"free"`, и строка, заведённая без
+    явного плана, молча выдала бы бесплатный тариф за оплаченный: страница
+    вернула бы 200, а пользователь не получил бы купленного.
+    """
+    user = await _user(db_session)
+    payment = await _subscription_payment(db_session, user, plan="pro")
+
+    processed = await handle_webhook(
+        db_session,
+        event=EVENT_SUCCEEDED,
+        payment_data={"object": {"id": payment.yookassa_payment_id}},
+    )
+
+    assert processed is True
+    rows = (
+        (
+            await db_session.execute(
+                select(Subscription).where(Subscription.user_id == user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].plan == "pro"
+    assert rows[0].is_active is True
