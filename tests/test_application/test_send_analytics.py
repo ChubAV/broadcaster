@@ -169,6 +169,51 @@ async def test_send_metrics_ignores_records_older_than_two_windows(db_session):
     assert metrics.total_prev == 0
 
 
+@pytest.mark.asyncio
+async def test_send_metrics_ignores_records_from_the_future(db_session):
+    """Окно ограничено и СВЕРХУ: запись «после now» плитку не завышает.
+
+    Оба окна были ограничены только снизу, поэтому запись с `sent_at` в
+    будущем — расхождение часов Celery-воркера и базы либо явный `now` от
+    вызывающего — попадала в ТЕКУЩЕЕ окно. Плитка «Отправок за сутки» считала
+    бы отправку, которой ещё не было, а на экране это неотличимо от правды.
+
+    Граница включающая: запись ровно в `now` окну принадлежит.
+    """
+    user = await _user(db_session)
+    await _seed_send_log(db_session, user.id, sent_at=NOW)
+    await _seed_send_log(db_session, user.id, sent_at=NOW + timedelta(seconds=1))
+    await _seed_send_log(db_session, user.id, sent_at=NOW + timedelta(days=3))
+
+    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+
+    assert metrics.total == 1, (
+        "запись из будущего попала в текущее окно и завысила плитку"
+    )
+    assert metrics.total_prev == 0
+
+
+@pytest.mark.asyncio
+async def test_activity_heatmap_ignores_records_from_the_future(db_session):
+    """Сетка активности тоже не принимает записи «после now».
+
+    Без верхней границы такая запись доезжала до раскладки и КЛАМПОМ
+    приписывалась последним суткам окна — то есть рисовала активность в часе, в
+    котором её ещё не было, причём в самом заметном месте сетки.
+    """
+    user = await _user(db_session)
+    await _seed_send_log(db_session, user.id, sent_at=NOW)
+    await _seed_send_log(db_session, user.id, sent_at=NOW + timedelta(days=2))
+
+    view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc, days=7
+    )
+
+    assert sum(sum(row) for row in view.grid) == 1, (
+        "запись из будущего попала в сетку активности"
+    )
+
+
 # --- Три статуса --------------------------------------------------------------
 
 
