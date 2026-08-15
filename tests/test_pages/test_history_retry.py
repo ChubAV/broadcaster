@@ -1341,7 +1341,7 @@ async def test_retry_into_a_switched_off_group_does_not_reach_the_queue(
 
 @pytest.mark.asyncio
 async def test_availability_names_the_draft_ad_and_the_switched_off_group(
-    db_session: AsyncSession,
+    auth_headers: dict, db_session: AsyncSession
 ):
     """Кнопка объясняет ОБА новых запрета своей причиной, а не молчит.
 

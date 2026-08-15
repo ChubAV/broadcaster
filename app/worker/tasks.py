@@ -24,8 +24,10 @@ from app.application.scheduling.use_cases import (
     DispatchTask,
     build_dispatch_task,
     collect_due_schedules,
+    effective_ad_status,
     send_message_once,
 )
+from app.constants import AD_STATUS_DRAFT
 
 logger = structlog.get_logger(__name__)
 
@@ -360,6 +362,35 @@ def retry_send(self, log_id: int, user_id: int):
                         "retry_send_stopped",
                         reason="account_not_active",
                         status=account.status,
+                    )
+                    return
+
+                # ПОСЛЕДНЯЯ ТОЧКА, ГДЕ ЭТИ ДВА ЗАПРЕТА ЕЩЁ ИСПОЛНИМЫ (CR-01,
+                # CR-02). Для `wa` и `max` ниже кладётся готовая полезная
+                # нагрузка в Redis, и `wa_worker/index.js` отправляет её НЕ
+                # ЗАГЛЯДЫВАЯ В БАЗУ: ни статуса объявления, ни флага группы он
+                # не видит. У Telegram тот же запрет сработал бы позже, в
+                # `send_message_once`, — то есть без проверки ЗДЕСЬ защита
+                # существовала бы на одном канале из трёх и ловилась бы не
+                # тестами, а отправкой в чужую группу.
+                #
+                # Предикат берётся у планировщика (`effective_ad_status`), а не
+                # пишется сравнением с литералом: безопасный дефолт «всё, кроме
+                # опубликованного, — черновик» обязан иметь на проекте ровно
+                # одно определение, иначе следующий статус разъедет два места.
+                if effective_ad_status(ad) == AD_STATUS_DRAFT:
+                    log.warning("retry_send_stopped", reason="ad_is_draft", ad_id=ad.id)
+                    return
+
+                # `Group.is_active` — обратимый выключатель ПОЛЬЗОВАТЕЛЯ (D-05),
+                # и `send_message_once` его не смотрит вовсе: он полагается на
+                # то, что планировщик уже отфильтровал. Повтор планировщик
+                # минует, поэтому фильтр обязан стоять здесь.
+                if not group.is_active:
+                    log.warning(
+                        "retry_send_stopped",
+                        reason="group_inactive",
+                        group_id=group.id,
                     )
                     return
 

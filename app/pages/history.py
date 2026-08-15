@@ -17,7 +17,12 @@ from app.application.analytics.send_analytics import (
     history_count,
     history_filter_params,
 )
+from app.application.scheduling.use_cases import (
+    effective_ad_status,
+    effective_status_value,
+)
 from app.config import Settings
+from app.constants import AD_STATUS_DRAFT
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
 from app.models.group import Group
@@ -360,7 +365,14 @@ _RETRY_IN_FLIGHT: set[int] = set()
 # одним «повторить нельзя»: общая формулировка на четыре случая не сказала бы
 # пользователю ничего о том, что чинить.
 RETRY_REASON_AD_GONE = "Объявление удалено"
+# Черновик и удаление — РАЗНЫЕ причины, и своя строка у каждой не оформление:
+# «Объявление удалено» под снятым с публикации послало бы пользователя искать
+# его в корзине, хотя объявление на месте и вернуть кнопку он может сам.
+RETRY_REASON_AD_DRAFT = "Объявление в черновике"
 RETRY_REASON_GROUP_GONE = "Группа удалена"
+# То же и с группой: «Группа удалена» под выключенной отправила бы
+# пересинхронизировать живую группу вместо того, чтобы включить её обратно.
+RETRY_REASON_GROUP_OFF = "Группа выключена"
 RETRY_REASON_ACCOUNT_GONE = "Аккаунт удалён"
 RETRY_REASON_ACCOUNT_OFF = "Аккаунт отключён"
 
@@ -395,13 +407,18 @@ async def retry_availability(db: AsyncSession, rows) -> dict[int, str | None]:
     if not candidates:
         return {}
 
+    # Статус выбирается ВМЕСТЕ с идентификатором, а не вторым запросом: пара
+    # приезжает из той же строки, и число запросов на страницу не растёт.
+    # Присутствия строки НЕДОСТАТОЧНО — снятое с публикации объявление живо, но
+    # повтору не подлежит (CR-01), и кнопка обязана это назвать, а не
+    # предлагать отправку, которую обработчик всё равно отвергнет.
     ad_ids = {log.ad_id for log, _group in candidates if log.ad_id}
-    live_ads: set[int] = set()
+    live_ads: dict[int, str] = {}
     if ad_ids:
         live_ads = {
-            row_id
-            for (row_id,) in (
-                await db.execute(select(Ad.id).where(Ad.id.in_(ad_ids)))
+            row_id: status
+            for row_id, status in (
+                await db.execute(select(Ad.id, Ad.status).where(Ad.id.in_(ad_ids)))
             ).all()
         }
 
@@ -425,8 +442,12 @@ async def retry_availability(db: AsyncSession, rows) -> dict[int, str | None]:
     for log, group in candidates:
         if not log.ad_id or log.ad_id not in live_ads:
             verdict[log.id] = RETRY_REASON_AD_GONE
+        elif effective_status_value(live_ads[log.ad_id]) == AD_STATUS_DRAFT:
+            verdict[log.id] = RETRY_REASON_AD_DRAFT
         elif group is None:
             verdict[log.id] = RETRY_REASON_GROUP_GONE
+        elif not group.is_active:
+            verdict[log.id] = RETRY_REASON_GROUP_OFF
         elif not group.account_id or group.account_id not in account_status:
             verdict[log.id] = RETRY_REASON_ACCOUNT_GONE
         elif account_status[group.account_id] != "active":
@@ -778,7 +799,19 @@ async def history_retry(
             if group and group.account_id
             else None
         )
-        if not ad or not group or not account or account.status != "active":
+        # Снятое с публикации объявление и выключенная группа стоят ЗДЕСЬ, рядом
+        # с целостью тройки, а не отдельной веткой: для пользователя это один и
+        # тот же ответ «повторить нечего», и разводить его на два кода
+        # перенаправления значило бы объяснять разницу, которой на экране нет.
+        # Причину, по которой кнопка недоступна, называет `retry_availability`.
+        if (
+            not ad
+            or effective_ad_status(ad) == AD_STATUS_DRAFT
+            or not group
+            or not group.is_active
+            or not account
+            or account.status != "active"
+        ):
             return RedirectResponse(
                 url=f"/history?retry={RETRY_GONE}", status_code=302
             )

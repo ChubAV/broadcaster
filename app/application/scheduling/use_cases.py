@@ -20,6 +20,19 @@ from app.services.schedule_service import compute_next_run_at
 logger = structlog.get_logger(__name__)
 
 
+def effective_status_value(status: str | None) -> str:
+    """Тот же безопасный дефолт, но по СЫРОМУ значению колонки.
+
+    Отдельная функция нужна там, где сущность не читается целиком: список
+    истории выбирает у объявления проекцию `(id, status)`, чтобы не поднимать
+    ORM-объект на каждую строку страницы. Сравнивать там с литералом значило бы
+    завести ВТОРОЕ определение безопасного дефолта, и следующий статус разъехал
+    бы два места молча — ровно тот класс дефекта, из-за которого повтор
+    отправлял черновики (CR-01).
+    """
+    return AD_STATUS_PUBLISHED if status == AD_STATUS_PUBLISHED else AD_STATUS_DRAFT
+
+
 def effective_ad_status(ad: Ad) -> str:
     """Состояние объявления с безопасным дефолтом.
 
@@ -29,7 +42,7 @@ def effective_ad_status(ad: Ad) -> str:
     неточность, а отправить объявление с нераспознанным состоянием — рассылка
     в чужие группы, которую нельзя отозвать.
     """
-    return AD_STATUS_PUBLISHED if ad.status == AD_STATUS_PUBLISHED else AD_STATUS_DRAFT
+    return effective_status_value(ad.status)
 
 
 @dataclass(slots=True)
