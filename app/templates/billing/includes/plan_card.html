@@ -1,0 +1,80 @@
+{# Карточка тарифного плана раздела «Тарифы» (BILL-05, макет 962-992).
+
+   Это МАКРОС, а не include: импортированные шаблоны Jinja контекста
+   вызывающего не получают, поэтому `plan`, `current_plan` и `payments_enabled`
+   — явные параметры. Ошибка в имени параметра проявится не исключением, а
+   ПУСТОЙ карточкой при статусе 200, поэтому отрисовка реальной записи тарифа
+   закреплена тестами test_billing_plan_card_* в
+   tests/test_pages/test_responsive_markup.py.
+
+   Файл лежит в billing/includes/, а НЕ в components/: карточка специфична для
+   тарифов и в других разделах не переиспользуется, а инвентаризация общей
+   библиотеки держит жёсткое число файлов.
+
+   ФОРМА, А НЕ ОБРАБОТЧИК СОБЫТИЯ. Базовый путь оплаты обязан работать при
+   выключенном Alpine и при неудавшейся загрузке скрипта (D-20): из формы
+   уезжает ТОЛЬКО идентификатор плана, цену обработчик читает из настроек по
+   этому идентификатору (T-05-28). Гард двойного нажатия, если он появится, —
+   прогрессивное усиление ПОВЕРХ работающей формы, а не условие её работы.
+
+   ЧЕГО ЗДЕСЬ НЕТ. Ни процентов, ни шкал: карточка показывает, что тариф
+   ДАЁТ, а сколько израсходовано — дело метров (usage_meters.html). Смешать
+   витрину с потреблением значило бы нарисовать чужой лимит своей шкалой.
+
+   plan — запись из Settings.parsed_plan_limits; None в оси означает безлимит.
+   current_plan — идентификатор ТЕКУЩЕГО тарифа пользователя (строка).
+
+   Импорт: {% from "billing/includes/plan_card.html" import plan_card %} #}
+
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/mono.html" import mono %}
+
+{% macro plan_card(plan, current_plan, payments_enabled) -%}
+{%- set is_current = plan.get('id') == current_plan -%}
+{#- «БЕЗ ЛИМИТОВ» ставится по осям объявлений и групп: именно они приезжают из
+    конфига значением null у старшего тарифа. Тег текущего плана важнее —
+    человек ищет глазами свой, а не самый щедрый. -#}
+{%- set is_unlimited = plan.get('ads') is none and plan.get('groups') is none -%}
+{%- set tag = 'ВАШ ПЛАН' if is_current else ('БЕЗ ЛИМИТОВ' if is_unlimited else '') -%}
+{{ card_open(extra_class='card--current' if is_current else None) }}
+  <div data-metric-line>
+    {#- Имя плана НЕ рисуется крупным числом карточки: крупное здесь одно —
+        цена, и второй элемент того же размера отнял бы у неё роль. -#}
+    <span data-plan-name>{{ plan.get('name') }}</span>
+    {%- if tag %}{{ mono(tag, 'accent' if is_current else 'ok', upper=true) }}{% endif -%}
+  </div>
+  <div data-metric-line>
+    {#- Машинная строка конфига («1490.00») превращается в подпись ЗДЕСЬ и
+        только здесь: в платёж уезжает то, что лежит в конфиге. -#}
+    <span data-metric-value>{{ format_amount(plan.get('price')) }}</span>
+    {{ mono('/ мес') }}
+  </div>
+  <div data-plan-limits>
+    {#- Порядок и подписи осей приходят ГЛОБАЛАМИ из модуля осей (05-03):
+        вторая копия подписей в разметке разъехалась бы с первой молча. -#}
+    {% for key in plan_axis_order %}
+    <div>
+      <span>{{ plan_axis_labels[key] }}</span>
+      {{- mono('∞' if plan.get(key) is none else plan.get(key), 'bright') -}}
+    </div>
+    {% endfor %}
+  </div>
+  {% if plan.get('id') == 'free' %}
+  {#- Бесплатный тариф формы не получает: покупать в нём нечего, а платёж на
+      «0.00» ЮKassa отвергнет (то же решение, что у FREE_PLAN_ID в
+      app/pages/billing.py). -#}
+  {{ mono('Текущий на старте') }}
+  {% elif not payments_enabled %}
+  {#- D-21: выключенные платежи гасят КНОПКУ, а не витрину. Подпись той же
+      формы, что уже стоит у пакетов сообщений. -#}
+  {{ mono('Оплата тарифа доступна через администратора') }}
+  {% else %}
+  <form method="post" action="/billing/subscribe" data-plan-cta>
+    <input type="hidden" name="plan" value="{{ plan.get('id') }}">
+    <button class="btn btn--primary" type="submit">
+      <span class="btn__label">{% if is_current %}Продлить{% else %}Перейти на {{ plan.get('name') }}{% endif %}</span>
+    </button>
+  </form>
+  {% endif %}
+{{ card_close() }}
+{%- endmacro %}

@@ -51,18 +51,34 @@
                 {% endif %}
             </nav>
 
-            {# Виджет квоты тарифа — живые данные из request.state.shell #}
+            {# Виджет БАЛАНСА СООБЩЕНИЙ — живые данные из request.state.shell.
+
+               ⚠️ ПОДПИСЬ НАЗЫВАЕТ ТО, ЧТО ВИДЖЕТ ПОКАЗЫВАЕТ (T-05-29). До
+               плана 05-05 он был подписан тарифом, а рисовал used / limit
+               БАЛАНСА СООБЩЕНИЙ: эти числа считаются по журналу списаний
+               баланса (app/pages/common.py::get_shell_context), а не по
+               тарифной оси. Раздел «Тарифы» разводит две величины на одном
+               экране, и подпись обязана была перестать врать.
+
+               ИСТОЧНИК ДАННЫХ НЕ ИЗМЕНИЛСЯ. Перенаправить виджет на тарифную
+               ось отклонено: это добавило бы запрос по журналу отправок во
+               ВСЕ 26 рендеров страниц ради метрики, у которой уже есть свой
+               полноценный экран. Название тарифа и срок живут на /billing,
+               где рядом стоят настоящие четыре оси.
+
+               Имена переменных не переименовываются: `quota` читают 26
+               страниц — менялся текст, а не контракт. #}
             <div data-quota
                  data-quota-percent="{{ quota.get('percent', 0) }}"
                  {% if quota.get('expires_at') %}data-quota-expires="{{ quota.get('expires_at') }}"{% endif %}>
                 <div class="quota-head">
-                    <span class="quota-plan">Тариф {{ quota.get('plan', 'free')|capitalize }}</span>
+                    <span class="quota-plan">Баланс сообщений</span>
                     <span class="quota-label">{% if quota.get('limit', 0) > 0 %}{{ quota.get('used', 0) }} / {{ quota.get('limit', 0) }}{% else %}∞{% endif %}</span>
                 </div>
                 <div class="quota-track">
                     <div class="quota-fill" style="width: {{ quota.get('percent', 0) }}%"></div>
                 </div>
-                <a class="quota-link" href="/billing">ПОВЫСИТЬ ЛИМИТЫ →</a>
+                <a class="quota-link" href="/billing">ТАРИФЫ И ПОПОЛНЕНИЕ →</a>
             </div>
 
             <div data-user>
