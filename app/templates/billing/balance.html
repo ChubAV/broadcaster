@@ -5,30 +5,43 @@
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/mono.html" import mono %}
 {% from "components/progress.html" import progress %}
+{% from "billing/includes/plan_card.html" import plan_card %}
+{% from "billing/includes/usage_meters.html" import usage_meter %}
+{% from "billing/includes/payment_row.html" import payment_row %}
 
 {% block title %}Тарифы — Broadcaster{% endblock %}
 
 {# Контракт «страница → шелл» (План 01): заголовок раздела рендерит шапка. #}
 {% block page_title %}Тарифы{% endblock %}
-{% block page_subtitle %}Баланс сообщений и история операций{% endblock %}
+{% block page_subtitle %}Тариф, лимиты, баланс сообщений и платежи{% endblock %}
 
 {% block content %}
 
+{#- ПЯТЬ БЛОКОВ СВЕРХУ ВНИЗ (D-18): текущий тариф и срок → четыре метра →
+    карточки планов → баланс сообщений и пакеты → история платежей. Один экран,
+    ни табов, ни второго маршрута. На мобильной ширине блоки складываются в
+    одну колонку САМИ примитивами Фазы 1 — второй вёрстки и JS не нужно.
+
+    НОВОГО JS РАЗДЕЛ НЕ ДОБАВЛЯЕТ, ОН ЕГО УБИРАЕТ. Здесь стоял последний в
+    проекте асинхронный запрос из скрипта с браузерным диалогом оповещения
+    вместо разметки; обе оплаты теперь идут настоящими формами POST (D-20).
+    Клиентская разметка узлами DOM в разделе не строится вовсе. -#}
+
 {#- Квота приходит из живого контекста шелла (get_shell_context, План 01), а не
-    из нового запроса: тот же самый показатель, тот же самый источник, что и у
-    виджета в сайдбаре. На ширине ≤860px сайдбар скрыт медиазапросом, поэтому
-    на разделе «Тарифы» это ЕДИНСТВЕННОЕ место, где мобильный пользователь
-    видит свой тариф. Внутри блока content переменные шелла из base.html
-    недоступны (Jinja не передаёт контекст вложенного блока), поэтому
-    request.state.shell читается здесь заново. -#}
+    из нового запроса. ⚠️ Это БАЛАНС СООБЩЕНИЙ, а не тарифная ось «Отправок в
+    месяц»: числа считаются по журналу списаний баланса, а ось — по журналу
+    отправок. Раздел разводит их на два блока (D-10) — приравнять значило бы
+    поставить лимит тарифа в зависимость от того, сколько пакетов человек
+    докупил. Внутри блока content переменные шелла из base.html недоступны
+    (Jinja не передаёт контекст вложенного блока), поэтому request.state.shell
+    читается здесь заново. -#}
 {% set quota = request.state.shell.get('quota', {}) if request.state.shell else {} %}
 
 {#- Раскладка ЕДИНСТВЕННЫХ табличных данных проекта. Элементов таблицы в
     макете нет вообще: и списки, и табличные данные построены на сетке.
-    Поэтому история операций собрана на тех же примитивах
+    Поэтому оба журнала раздела собраны на тех же примитивах
     data-rowhead / data-row / data-grow, что и все списки разделов — адаптив на
-    860px приходит бесплатно, без второй вёрстки и без JS. Фазы 5 и 6 строят
-    табличные представления этим же способом. -#}
+    860px приходит бесплатно, без второй вёрстки и без JS. -#}
 {% set TX_COLS = 'minmax(132px,1fr) 128px 92px 100px minmax(160px,2fr)' %}
 {% set TX_COLUMNS = ['Дата', 'Тип', 'Кол-во', 'Баланс', 'Описание'] %}
 {#- Маппинг «тип операции → подпись и вариант бейджа» живёт в вызывающем
@@ -40,25 +53,82 @@
   'send_deduction': ('Отправка', 'warning'),
 } %}
 
+{% set PAY_COLS = 'minmax(132px,1fr) minmax(150px,2fr) 110px 118px' %}
+{% set PAY_COLUMNS = ['Дата', 'Назначение', 'Сумма', 'Статус'] %}
+{#- Формулировки взяты из макета админки (2040-2050): одно и то же состояние
+    платежа обязано называться одним словом у пользователя и у администратора
+    (D-14, D-16). Неизвестный статус макрос рисует моношрифтом как есть. -#}
+{% set PAY_LABELS = {
+  'succeeded': ('проведён', 'success'),
+  'canceled': ('отклонён', 'danger'),
+  'pending': ('в обработке', 'neutral'),
+} %}
+
+{#- Есть ли текущий тариф в перечне конфига. Продлевать план, которого в
+    конфиге нет, некуда: обработчик вернул бы в раздел, а кнопка обещала бы
+    оплату. -#}
+{% set current_in_config = plans|selectattr('id', 'equalto', subscription.plan)|list %}
+
 <div data-stack>
 
-  <div data-metrics>
-    {{ card_open() }}
-      {{ mono('Текущий тариф', 'muted', upper=true) }}
-      <span data-metric-value>{{ quota.get('plan', 'free')|capitalize }}</span>
-    {{ card_close() }}
-    {{ card_open() }}
-      {{ mono('Баланс сообщений', 'muted', upper=true) }}
-      <span data-metric-value>{% if balance_info.is_unlimited %}∞{% else %}{{ balance_info.balance }}{% endif %}</span>
-    {{ card_close() }}
+  {# ===== 1. Текущий тариф и срок ===== #}
+  {{ card_open(title='Текущий тариф') }}
+    <div data-metric-line>
+      <span data-metric-value>{{ subscription.plan|capitalize }}</span>
+      {%- if subscription.expires_at %}
+        {%- if subscription.expired %}
+          {{ badge('срок истёк', 'warning') }}
+        {%- else %}
+          {{ mono('действует до ' ~ format_datetime_for_user(subscription.expires_at, user)) }}
+        {%- endif %}
+      {%- else %}
+        {{ mono('бессрочный стартовый тариф') }}
+      {%- endif %}
+    </div>
+    {% if subscription.expired %}
+    {#- ⚠️ ИСТЕЧЕНИЕ СРОКА НИЧЕГО НЕ ОТКЛЮЧАЕТ (D-07): применения лимитов в
+        системе нет вовсе, и вводить принуждение по сроку в фазе, которая
+        сознательно не вводит принуждение по лимитам, значило бы завести два
+        разных ответа на один вопрос. Меняется ТОЛЬКО показ. -#}
+    {{ mono('Срок подписки истёк ' ~ format_datetime_for_user(subscription.expires_at, user)
+            ~ ' — ничего не отключено, продлите тариф, когда будет удобно', 'warn') }}
+    {% if payments_enabled and current_in_config %}
+    <form method="post" action="/billing/subscribe" data-plan-cta>
+      <input type="hidden" name="plan" value="{{ subscription.plan }}">
+      <button class="btn btn--primary" type="submit"><span class="btn__label">Продлить</span></button>
+    </form>
+    {% endif %}
+    {% endif %}
+  {{ card_close() }}
+
+  {# ===== 2. Четыре метра тарифа ===== #}
+  {{ card_open(title='Потребление тарифа') }}
+    {#- Порядок осей задан модулем (AXIS_ORDER), разметка его не пересобирает.
+        Процент приезжает уже клампованным — здесь ничего не делится. -#}
+    {% for axis in usage %}{{ usage_meter(axis) }}{% endfor %}
+  {{ card_close() }}
+
+  {# ===== 3. Карточки планов ===== #}
+  {#- Список приходит ГОТОВЫМ из обработчика: свойство разбора конфига из Jinja
+      не зовётся — кэша у него нет, и вызов из цикла парсил бы строку на каждой
+      итерации. -#}
+  <div data-plans>
+    {% for p in plans %}
+    {{ plan_card(p, subscription.plan, payments_enabled) }}
+    {% endfor %}
   </div>
 
-  {{ card_open(title='Потребление') }}
+  {# ===== 4. Баланс сообщений и пакеты ===== #}
+  {{ card_open(title='Баланс сообщений') }}
     {% if balance_info.is_unlimited %}
       {{ badge('Безлимит', 'warning') }}
       {{ mono('безлимитная отправка сообщений') }}
     {% else %}
-      {#- Тот же макрос, что и у виджета квоты в сайдбаре: показатель один,
+      <div data-metric-line>
+        <span data-metric-value>{{ balance_info.balance }}</span>
+        {{ mono('сообщений доступно') }}
+      </div>
+      {#- Тот же макрос, что и у виджета баланса в сайдбаре: показатель один,
           компонент должен быть один. Ограничение диапазона 0..100 макрос
           делает сам. -#}
       {{ progress(quota.get('percent', 0),
@@ -70,41 +140,22 @@
     {% endif %}
   {{ card_close() }}
 
-  {#- Покупка тарифа — НАСТОЯЩАЯ ФОРМА, без JS. Базовый путь оплаты обязан
-      работать при выключенном Alpine и при неудавшейся загрузке скрипта:
-      блок покупки пакетов рядом собран на fetch и без JS не работает вовсе, и
-      повторять это на подписке значило бы поставить приём денег в зависимость
-      от одного тега <script>. Из формы уезжает ТОЛЬКО идентификатор плана —
-      цену обработчик читает из настроек (T-05-03). Бесплатный тариф формы не
-      получает: покупать в нём нечего. Карточки планов с лимитами приходят
-      планом 05-05; здесь — одна кнопка на план, не больше. -#}
-  {% if payments_enabled %}
-  <div data-metrics data-plans>
-    {% for p in plans if p.id != 'free' %}
-    {{ card_open() }}
-      {{ mono(p.name, 'muted', upper=true) }}
-      <span data-metric-value>{{ p.price }} &#8381;</span>
-      {{ mono('в месяц') }}
-      <form method="post" action="/billing/subscribe">
-        <input type="hidden" name="plan" value="{{ p.id }}">
-        <button class="btn btn--primary" type="submit"><span class="btn__label">Подключить</span></button>
-      </form>
-    {{ card_close() }}
-    {% endfor %}
-  </div>
-  {% endif %}
-
   {% if payments_enabled and not balance_info.is_unlimited %}
   <div data-metrics>
     {% for pkg in packages %}
     {{ card_open() }}
       {{ mono(pkg.name, 'muted', upper=true) }}
-      <span data-metric-value>{{ pkg.price }} &#8381;</span>
+      <span data-metric-value>{{ format_amount(pkg.price) }}</span>
       {{ mono(pkg.count ~ ' сообщений') }}
-      {#- Кнопкой управляет скрипт страницы, а макрос button не принимает
-          обработчика события — собрана на его классах вручную (прецедент
-          Плана 06). Контракт с purchasePackage сохранён дословно. -#}
-      <button class="btn btn--primary" type="button" onclick="purchasePackage({{ loop.index0 }})"><span class="btn__label">Купить</span></button>
+      {#- НАСТОЯЩАЯ ФОРМА, а не кнопка с обработчиком события. Здесь стоял
+          последний в проекте асинхронный запрос из скрипта, сообщавший об
+          ошибке браузерным диалогом: раздел терял приём денег вместе с одним
+          тегом скрипта. Из формы уезжает ТОЛЬКО индекс пакета — цену и число
+          сообщений обработчик читает из конфига по этому индексу (T-05-22). -#}
+      <form method="post" action="/billing/purchase" data-plan-cta>
+        <input type="hidden" name="package_index" value="{{ loop.index0 }}">
+        <button class="btn btn--primary" type="submit"><span class="btn__label">Купить</span></button>
+      </form>
     {{ card_close() }}
     {% endfor %}
   </div>
@@ -112,6 +163,37 @@
   {{ empty_state('Пополнение баланса доступно через администратора') }}
   {% endif %}
 
+  {# ===== 5. История ПЛАТЕЖЕЙ — рубли ===== #}
+  {% if payments %}
+  {{ card_open(title='История платежей') }}
+    {% if payments_truncated %}
+    {#- Потолок НАЗЫВАЕТ СЕБЯ (D-17): молча короткий журнал денег читается как
+        «других платежей не было». -#}
+    {{ mono('Показаны последние ' ~ payments_cap ~ ' платежей из ' ~ payments_total, 'warn') }}
+    {% endif %}
+    {{ rowhead(columns=PAY_COLUMNS, cols=PAY_COLS) }}
+    {#- Карта «план → дата САМОГО РАННЕГО платежа за него». Журнал отсортирован
+        по дате убыванием, поэтому последнее присваивание в цикле и есть самая
+        ранняя строка плана — то есть его первый платёж. Второго запроса ради
+        одной подписи не заводится. -#}
+    {%- set first_payment_at = {} -%}
+    {%- for pay in payments -%}
+      {%- if pay.kind == 'subscription' and pay.plan -%}
+        {%- set _ = first_payment_at.update({pay.plan: pay.created_at}) -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {% for pay in payments %}
+    {{ payment_row(pay, user, PAY_COLS, PAY_LABELS, first_payment_at) }}
+    {% endfor %}
+  {{ card_close() }}
+  {% else %}
+  {{ empty_state('Платежей пока нет',
+                 hint='Здесь появятся оплаты тарифа и пакетов сообщений') }}
+  {% endif %}
+
+  {# ===== История ОПЕРАЦИЙ — штуки сообщений ===== #}
+  {#- Остаётся СВОИМ блоком: она считает штуки сообщений, а история платежей —
+      рубли, и это разные журналы с разными потолками. -#}
   {% if transactions %}
   {{ card_open(title='История операций') }}
     {{ rowhead(columns=TX_COLUMNS, cols=TX_COLS) }}
@@ -143,30 +225,5 @@
   {% endif %}
 
 </div>
-
-{% if payments_enabled %}
-<script>
-async function purchasePackage(index) {
-  try {
-    const resp = await fetch('/api/billing/purchase', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({package_index: index})
-    });
-    if (!resp.ok) {
-      const data = await resp.json();
-      alert(data.detail || 'Ошибка при создании платежа');
-      return;
-    }
-    const data = await resp.json();
-    if (data.confirmation_url) {
-      window.location.href = data.confirmation_url;
-    }
-  } catch (e) {
-    alert('Ошибка: ' + e.message);
-  }
-}
-</script>
-{% endif %}
 
 {% endblock %}
