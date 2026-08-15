@@ -914,7 +914,12 @@ async def test_retry_becomes_possible_again_after_the_cooldown_window(
         )
 
     assert f"retry={history_module.RETRY_QUEUED}" in response.headers["location"]
-    assert len(env.queued) == 2, (
+    # Ассерт называет, ЧТО поставлено, а не только сколько: после истечения окна
+    # вторая задача обязана быть повтором ТОЙ ЖЕ записи, а не чем угодно.
+    assert [call.kwargs["args"] for call in env.queued] == [
+        [log.id, user.id],
+        [log.id, user.id],
+    ], (
         "после истечения окна повтор не прошёл — удержание стало вечным замком "
         f"на записи: {env.queued}"
     )
@@ -1013,7 +1018,13 @@ async def test_retry_cooldown_is_keyed_per_record(
         )
 
     assert f"retry={history_module.RETRY_QUEUED}" in response.headers["location"]
-    assert len(env.queued) == 2, (
+    # По одной задаче НА КАЖДУЮ запись, и это сильнее простого счёта: ассерт
+    # называет обе записи поимённо, поэтому две постановки по одной и той же
+    # записи его не удовлетворят.
+    assert [call.kwargs["args"] for call in env.queued] == [
+        [first.id, user.id],
+        [second.id, user.id],
+    ], (
         "повтор СОСЕДНЕЙ неуспешной записи заблокирован удержанием первой — "
         f"окно разлилось на раздел: {env.queued}"
     )
