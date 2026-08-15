@@ -4,17 +4,17 @@ milestone: v2.0
 milestone_name: Redesign
 current_phase: 5
 current_phase_name: Тарифы
-status: planning
+status: "Phase 04 shipped — PR #38"
 stopped_at: Phase 5 not started
-last_updated: "2026-08-15T13:45:00.000Z"
+last_updated: "2026-08-15T13:51:16.521Z"
 last_activity: 2026-08-15
-last_activity_desc: "Phase 04 UAT round 2 complete — 22/22 passed, 0 issues (04-11, 04-12 и волна WR-01…WR-17)"
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 52
   completed_plans: 52
   percent: 67
+last_activity_desc: Phase 04 UAT round 2 complete — 22/22 passed, 0 issues (04-11, 04-12 и волна WR-01…WR-17)
 ---
 
 # Project State
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-08-13)
 
 Phase: 5 — Тарифы
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-08-15 — Phase 04 UAT раунд 2 принят (22/22), фаза закрыта окончательно
+Status: Phase 04 shipped — PR #38
+Last activity: 2026-08-15
 
 Progress: [█████████████░░░░░░░] 52/52 plans (100%) — Phases 1–4 of 6 complete (67% фаз milestone v2.0)
 
