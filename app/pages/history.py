@@ -46,7 +46,7 @@ PAGE_SIZE = 30
 # Перечни объявлены ЗДЕСЬ, а не в шаблоне (тот же приём, что у осей сводного
 # списка расписаний): неизвестное значение обязано отсекаться сервером, а
 # разметка точкой принуждения не является — она только рисует. Из этих же
-# перечней строятся допустимые наборы `_clean_choice`, поэтому нарисованное и
+# перечней строятся допустимые наборы `clean_choice`, поэтому нарисованное и
 # принимаемое разойтись не могут в принципе.
 
 # Три значения журнала, а не два. Прежний выпадающий список знал «Успешные» и
@@ -96,7 +96,7 @@ MESSENGER_VALUES = _values(MESSENGER_CHIPS)
 PERIOD_VALUES = _values(PERIOD_CHIPS)
 
 
-def _clean_choice(value: str | None, allowed: frozenset[str]) -> str | None:
+def clean_choice(value: str | None, allowed: frozenset[str]) -> str | None:
     """Неизвестное или испорченное значение оси → «фильтр не применён».
 
     Значение приезжает строкой запроса, то есть из ссылки, закладки или чужого
@@ -110,6 +110,11 @@ def _clean_choice(value: str | None, allowed: frozenset[str]) -> str | None:
     Период отсекается той же дорогой, хотя модуль аналитики и сам не применяет
     отсечку по неизвестному периоду: без отсечки здесь мусорный период доехал
     бы до адреса чипса и до сентинеля прокрутки как действующий фильтр.
+
+    ИМЯ ПУБЛИЧНОЕ, потому что вход на эти оси не один: их читают история,
+    выгрузка, счётчик И админка (`app/pages/admin.py`). Отсечка, доступная
+    только «своему» модулю, означала бы, что один из входов её не применяет, —
+    ровно то, чем админка и отличалась.
     """
     if not value:
         return None
@@ -581,9 +586,9 @@ async def history_partial(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
-    status = _clean_choice(status, STATUS_VALUES)
-    messenger = _clean_choice(messenger, MESSENGER_VALUES)
-    period = _clean_choice(period, PERIOD_VALUES)
+    status = clean_choice(status, STATUS_VALUES)
+    messenger = clean_choice(messenger, MESSENGER_VALUES)
+    period = clean_choice(period, PERIOD_VALUES)
     account_id_int = parse_account_id(account_id)
     query = (
         select(SendLog, Group)
@@ -665,7 +670,7 @@ async def history_export(
     ФИЛЬТРЫ — ТЕ ЖЕ, ЧТО У СПИСКА, И НАВЕШИВАЕТ ИХ ТА ЖЕ ФУНКЦИЯ. Иначе
     обещание «выгружено именно то, что показано» перестало бы быть проверяемым
     утверждением: две копии условий расходятся молча, и пользователь уносит
-    файл, не совпадающий с экраном. Отсечка `_clean_choice` стоит и здесь —
+    файл, не совпадающий с экраном. Отсечка `clean_choice` стоит и здесь —
     выгрузка ТРЕТИЙ вход на те же оси, и без неё подобранное вручную значение
     отдавало бы пустой файл, неотличимый от «записей действительно нет».
 
@@ -685,9 +690,9 @@ async def history_export(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
-    status = _clean_choice(status, STATUS_VALUES)
-    messenger = _clean_choice(messenger, MESSENGER_VALUES)
-    period = _clean_choice(period, PERIOD_VALUES)
+    status = clean_choice(status, STATUS_VALUES)
+    messenger = clean_choice(messenger, MESSENGER_VALUES)
+    period = clean_choice(period, PERIOD_VALUES)
     account_id_int = parse_account_id(account_id)
 
     # ПОТОЛОК ПРОВЕРЯЕТСЯ ДО КОНСТРУИРОВАНИЯ ПОТОКА (D-27, T-04-33). У потокового
@@ -978,9 +983,9 @@ async def history_list(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
-    status = _clean_choice(status, STATUS_VALUES)
-    messenger = _clean_choice(messenger, MESSENGER_VALUES)
-    period = _clean_choice(period, PERIOD_VALUES)
+    status = clean_choice(status, STATUS_VALUES)
+    messenger = clean_choice(messenger, MESSENGER_VALUES)
+    period = clean_choice(period, PERIOD_VALUES)
     account_id_int = parse_account_id(account_id)
     query = (
         select(SendLog, Group)

@@ -11,7 +11,13 @@ from app.application.analytics.send_analytics import (
     apply_history_filters,
     history_filter_params,
 )
-from app.pages.history import parse_account_id
+from app.pages.history import (
+    MESSENGER_VALUES,
+    PERIOD_VALUES,
+    STATUS_VALUES,
+    clean_choice,
+    parse_account_id,
+)
 from app.models.user import User
 from app.models.ad import Ad
 from app.models.group import Group
@@ -190,6 +196,17 @@ async def admin_user_history(
 
     page_size = 30
 
+    # ОТСЕЧКА НЕИЗВЕСТНЫХ ЗНАЧЕНИЙ ОСЕЙ — ТА ЖЕ, ЧТО У ПОЛЬЗОВАТЕЛЬСКИХ
+    # МАРШРУТОВ. Значения приезжают строкой запроса — из ссылки, закладки или
+    # чужого сообщения. Без отсечки мусорное значение давало бы пустой список,
+    # в котором НИ ОДИН чипс не отмечен активным, а сырая строка уезжала бы в
+    # `filter_params` — то есть в сентинель прокрутки и в контекст шаблона как
+    # действующий фильтр. Инъекции здесь нет (значения связываются параметрами),
+    # но экран получается нечитаемым ровно так же, как получался бы у
+    # пользователя, — а админка смотрит на ТУ ЖЕ историю.
+    status = clean_choice(status, STATUS_VALUES)
+    messenger = clean_choice(messenger, MESSENGER_VALUES)
+    period = clean_choice(period, PERIOD_VALUES)
     account_id_int = parse_account_id(account_id)
     query = (
         select(SendLog, Group)
@@ -277,6 +294,12 @@ async def admin_user_history_partial(
     target_user = await db.get(User, user_id)
     if not target_user:
         return RedirectResponse(url="/admin/users", status_code=302)
+    # Отсечка стоит и здесь: паршал прокрутки — ВТОРОЙ вход на те же оси, и
+    # значение приезжает к нему из адреса сентинеля. Пропущенная тут, она
+    # позволила бы мусору дожить до второй страницы выдачи.
+    status = clean_choice(status, STATUS_VALUES)
+    messenger = clean_choice(messenger, MESSENGER_VALUES)
+    period = clean_choice(period, PERIOD_VALUES)
     account_id_int = parse_account_id(account_id)
     query = (
         select(SendLog, Group)

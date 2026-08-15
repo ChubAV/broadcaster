@@ -1,5 +1,104 @@
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.send_log import SendLog
+from app.models.user import User
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("axis", ["status", "messenger", "period"])
+async def test_admin_history_ignores_an_unknown_filter_value(
+    admin_client: AsyncClient, db_session: AsyncSession, axis: str
+):
+    """Мусор в оси фильтра НЕ ВЫБИРАЕТ НИЧЕГО — и на админских маршрутах тоже.
+
+    Пользовательские маршруты истории прогоняют каждую ось через `clean_choice`
+    до `apply_history_filters`; админские звали фильтрацию сырыми значениями.
+    Неизвестное значение давало там пустой список, в котором ни один чипс не
+    отмечен активным, а сырая строка уезжала в `filter_params` — то есть в адрес
+    сентинеля прокрутки и в контекст шаблона как ДЕЙСТВУЮЩИЙ фильтр. Инъекции
+    нет (значения связываются параметрами), но экран нечитаем ровно так же, как
+    был бы нечитаем у пользователя.
+
+    Утверждается ПОВЕДЕНИЕ, а не наличие вызова: запись остаётся на экране.
+    """
+    target = User(email="target@test.com", password_hash="x", name="Target")
+    db_session.add(target)
+    await db_session.commit()
+    await db_session.refresh(target)
+
+    db_session.add(
+        SendLog(
+            user_id=target.id,
+            ad_id=1,
+            group_id=1,
+            status="fail",
+            messenger_type="wa",
+            ad_title="Заголовок под отсечку",
+            group_name="Группа",
+        )
+    )
+    await db_session.commit()
+
+    clean = await admin_client.get(f"/admin/users/{target.id}/history")
+    assert clean.status_code == 200
+    assert "Заголовок под отсечку" in clean.text
+
+    dirty = await admin_client.get(
+        f"/admin/users/{target.id}/history?{axis}=нетакогозначения"
+    )
+
+    assert dirty.status_code == 200
+    assert "Заголовок под отсечку" in dirty.text, (
+        f"мусор в оси «{axis}» применён как фильтр и выбрал пустой список"
+    )
+    assert "нетакогозначения" not in dirty.text, (
+        f"сырое значение оси «{axis}» уехало в разметку как действующий фильтр"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_history_partial_ignores_an_unknown_filter_value(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Паршал прокрутки — ВТОРОЙ вход на те же оси, и отсечка стоит и там.
+
+    Значение приезжает к нему из адреса сентинеля, поэтому пропущенная здесь
+    отсечка позволила бы мусору дожить до второй страницы выдачи — там, где
+    пользователь его уже не связывает со своим действием.
+    """
+    target = (
+        await db_session.execute(select(User).where(User.email == "target2@test.com"))
+    ).scalar_one_or_none()
+    if target is None:
+        target = User(email="target2@test.com", password_hash="x", name="Target2")
+        db_session.add(target)
+        await db_session.commit()
+        await db_session.refresh(target)
+
+    db_session.add(
+        SendLog(
+            user_id=target.id,
+            ad_id=1,
+            group_id=1,
+            status="fail",
+            messenger_type="wa",
+            ad_title="Запись паршала",
+            group_name="Группа",
+        )
+    )
+    await db_session.commit()
+
+    response = await admin_client.get(
+        f"/admin/users/{target.id}/history/partial?status=нетакогостатуса"
+    )
+
+    assert response.status_code == 200
+    assert "Запись паршала" in response.text, (
+        "мусор в оси статуса применён как фильтр в паршале прокрутки"
+    )
 
 
 @pytest.mark.asyncio
