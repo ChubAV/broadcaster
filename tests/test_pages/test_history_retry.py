@@ -21,6 +21,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,7 +34,7 @@ from app.application.analytics.send_analytics import (
     STATUS_FAIL,
     STATUS_OK,
 )
-from app.constants import AD_STATUS_DRAFT
+from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.message_balance import MessageBalance
@@ -44,6 +45,35 @@ from app.pages import history as history_module
 from app.pages.history import RETRY_TASK_NAME
 
 HISTORY_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "history.py"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_retry_registry():
+    """Чистит модульный реестр удержания повтора до и после КАЖДОГО теста файла.
+
+    ЭТО НЕ ГИГИЕНА, А УСЛОВИЕ ОСМЫСЛЕННОСТИ ПРОГОНА — снести фикстуру как
+    шаблонный мусор значит получить необъяснимые красные тесты. Реестр
+    `_RETRY_IN_FLIGHT` объявлен на уровне модуля `app.pages.history` и живёт всё
+    время процесса pytest. Фикстура `db_session` (`tests/conftest.py`) —
+    пофункционная и на каждый тест поднимает НОВУЮ базу в памяти, поэтому
+    `send_logs.id` в каждом тесте снова начинается с `1`. Ключ реестра — как раз
+    этот идентификатор: «запись №1» в двадцати разных тестах — это двадцать
+    РАЗНЫХ записей и ОДИН И ТОТ ЖЕ ключ.
+
+    Удержание переживает ответ обработчика НАМЕРЕННО: в этом и состоит защита от
+    двух последовательных нажатий. Без чистки первый же тест, выполнивший
+    успешный повтор, армировал бы ключ `1` на весь оставшийся прогон, и каждый
+    следующий тест, ожидающий постановки, получал бы отказ по причине, не видной
+    из его собственного текста.
+
+    Фикстура НИЧЕГО не маскирует: реестр в памяти одного процесса — сознательно
+    принятая граница (T-04-G2-05), а в бою у каждой записи ключ свой. Чистка
+    ПОСЛЕ теста нужна, чтобы этот файл не отравлял тесты, идущие за ним в общем
+    прогоне суиты.
+    """
+    history_module._RETRY_IN_FLIGHT.clear()
+    yield
+    history_module._RETRY_IN_FLIGHT.clear()
 
 
 # --- посев --------------------------------------------------------------------
@@ -188,6 +218,26 @@ def _handler_source() -> str:
     rest = source[start:]
     end = rest.find("\n@router")
     return rest if end == -1 else rest[:end]
+
+
+def _next_top_level_after(source: str, start: int) -> int:
+    """Конец определения верхнего уровня, начавшегося на позиции `start`.
+
+    Граница считается по СЛЕДУЮЩЕМУ определению, а не срезом фиксированной
+    длины: срез в N символов — мина замедленного действия. Докстринг растёт, код
+    уезжает за границу окна, и ассерт начинает проверять пустоту — то есть
+    краснеет на ровном месте либо, что хуже, зеленеет ни на чём.
+    """
+    ends = [
+        pos
+        for pos in (
+            source.find("\ndef ", start + 1),
+            source.find("\nasync def ", start + 1),
+            source.find("\n@router", start + 1),
+        )
+        if pos != -1
+    ]
+    return min(ends) if ends else len(source)
 
 
 # =============================================================================
@@ -701,10 +751,22 @@ async def test_retry_of_a_busy_record_queues_no_second_task(
 
 
 @pytest.mark.asyncio
-async def test_retry_releases_the_slot_after_success(
+async def test_two_sequential_retries_queue_exactly_one_task(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """После успешной постановки следующий повтор той же записи возможен."""
+    """Два ПОСЛЕДОВАТЕЛЬНЫХ нажатия по одной записи ставят РОВНО ОДНУ задачу.
+
+    Это главная гарантия защиты. Первое нажатие открывает окно удержания,
+    которое ПЕРЕЖИВАЕТ ответ 302, поэтому второе нажатие — повторным кликом при
+    выключенном JavaScript, когда панель подтверждения не открывается вовсе, —
+    второй необратимой отправки в чужую группу не порождает и второго платежа
+    баланса не списывает.
+
+    Прежняя редакция этого теста ассертила ДВЕ поставленные задачи и закрепляла
+    ровно тот дефект, ради которого удержание существует: снятие стояло в блоке
+    завершения безусловно, окно закрывалось раньше ответа, и останавливались
+    только ПЕРЕСЕКАЮЩИЕСЯ во времени запросы.
+    """
     user = await _current_user(db_session)
     log = await _seed_retryable(db_session, user.id)
 
@@ -712,12 +774,83 @@ async def test_retry_releases_the_slot_after_success(
         await authed_client.post(
             f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
         )
-        assert log.id not in history_module._RETRY_IN_FLIGHT, "заявка не освобождена"
-        await authed_client.post(
+        assert log.id in history_module._RETRY_IN_FLIGHT, (
+            "после успешной постановки удержания нет — окно не пережило ответ, "
+            "и второе нажатие пройдёт насквозь"
+        )
+        second = await authed_client.post(
             f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
         )
 
-    assert len(env.queued) == 2
+    assert len(env.queued) == 1, (
+        "два последовательных нажатия поставили больше одной задачи: одно "
+        f"намерение пользователя обернулось несколькими необратимыми "
+        f"отправками — {env.queued}"
+    )
+    assert f"retry={history_module.RETRY_BUSY}" in second.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_retry_busy_notice_states_the_real_guarantee(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Плашка второго нажатия говорит правду о состоянии системы.
+
+    Под признак «занято» попадают ДВА случая: первый повтор ещё выполняется и
+    первый повтор УЖЕ поставлен, а обработчик давно завершился. После введения
+    окна второй случай стал основным, и прежний текст («уже выполняется»)
+    сообщал бы пользователю неправду о том, что происходит.
+
+    Текст плашки берётся ИЗ САМОГО словаря модуля, а не копируется в тест:
+    копия разъехалась бы с исходником молча.
+    """
+    user = await _current_user(db_session)
+    log = await _seed_retryable(db_session, user.id)
+
+    with _retry_env() as env:
+        await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+        page = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=True
+        )
+
+    assert len(env.queued) == 1, env.queued
+    assert page.status_code == 200
+
+    notice, tone = history_module.RETRY_NOTICES[history_module.RETRY_BUSY]
+    assert tone == "info", "отказ второму нажатию — не ошибка пользователя"
+    assert notice in page.text, "плашка отказа второму нажатию не показана"
+    assert "уже поставлен" in notice, (
+        "текст плашки говорит о состоянии ОБРАБОТЧИКА, а не задачи: второму "
+        "нажатию он обязан сказать, что повтор уже поставлен в очередь"
+    )
+    assert "второй раз он не уйдёт" in notice, (
+        "текст плашки не обещает пользователю отсутствие второй отправки"
+    )
+
+
+def test_retry_handler_description_matches_the_mechanism():
+    """Докстринг обработчика называет РЕАЛЬНЫЙ механизм, а не более сильный.
+
+    Расхождение описания с поведением верификация назвала блокером, а не
+    оформлением: следующий, кто будет менять этот код, поверит описанию.
+    Прежняя редакция обещала защиту от второго нажатия, которой в коде не было.
+    """
+    body = _handler_source()
+    doc_open = body.index('"""')
+    doc = body[doc_open : body.index('"""', doc_open + 3)].lower()
+
+    assert "окно" in doc, "докстринг не называет окно удержания"
+    assert "переживает ответ" in doc, (
+        "докстринг не говорит главного: окно переживает ответ — именно этим "
+        "останавливается ВТОРОЕ ПОСЛЕДОВАТЕЛЬНОЕ нажатие, а не только "
+        "пересекающийся во времени запрос"
+    )
+    assert "отказн" in doc, (
+        "докстринг не называет снятие удержания на отказном пути — читатель "
+        "решит, что не дошедший до очереди повтор блокирует запись на всё окно"
+    )
 
 
 @pytest.mark.asyncio
@@ -750,6 +883,155 @@ async def test_retry_releases_the_slot_after_an_exception(
     )
 
 
+@pytest.mark.asyncio
+async def test_retry_becomes_possible_again_after_the_cooldown_window(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """По истечении окна та же запись снова повторяема — это окно, а не замок.
+
+    Без этого края единственная неудачная отправка могла бы лишить пользователя
+    возможности повтора надолго, причём молча: экран показал бы «уже поставлен»
+    там, где ничего не поставлено.
+
+    Истечение имитируется переписыванием СРОКА на уже прошедший момент, а не
+    ожиданием: окно измеряется десятками секунд, и настоящее ожидание
+    остановило бы суиту. Переписывается срок в реестре, а не константа модуля —
+    утверждение теста именно «срок истёк».
+    """
+    user = await _current_user(db_session)
+    log = await _seed_retryable(db_session, user.id)
+
+    with _retry_env() as env:
+        await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+        assert len(env.queued) == 1, env.queued
+
+        history_module._RETRY_IN_FLIGHT[log.id] = monotonic() - 1.0
+
+        response = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+
+    assert f"retry={history_module.RETRY_QUEUED}" in response.headers["location"]
+    # Ассерт называет, ЧТО поставлено, а не только сколько: после истечения окна
+    # вторая задача обязана быть повтором ТОЙ ЖЕ записи, а не чем угодно.
+    assert [call.kwargs["args"] for call in env.queued] == [
+        [log.id, user.id],
+        [log.id, user.id],
+    ], (
+        "после истечения окна повтор не прошёл — удержание стало вечным замком "
+        f"на записи: {env.queued}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_refused_retry_arms_no_cooldown(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Повтор, не дошедший до очереди, окна за собой не оставляет.
+
+    Сценарий настоящий: пользователь получил «повторить нечего», исправил
+    причину и повторяет. Заставлять его ждать окно за отправку, которой не
+    было, значило бы наказывать за исправление.
+    """
+    user = await _current_user(db_session)
+    ad, group, _account = await _seed_triple(db_session, user.id)
+    await _seed_balance(db_session, user.id)
+    ad.status = AD_STATUS_DRAFT
+    await db_session.commit()
+    log = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
+
+    with _retry_env() as env:
+        refused = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+
+        assert env.queued == [], "черновик попал в очередь"
+        assert f"retry={history_module.RETRY_GONE}" in refused.headers["location"]
+        assert log.id not in history_module._RETRY_IN_FLIGHT, (
+            "отказ предпроверки оставил окно удержания — пользователь, "
+            "исправивший причину, вынужден ждать за несостоявшуюся отправку"
+        )
+
+        ad.status = AD_STATUS_PUBLISHED
+        await db_session.commit()
+
+        accepted = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+
+    assert f"retry={history_module.RETRY_QUEUED}" in accepted.headers["location"]
+    assert len(env.queued) == 1, (
+        "повтор после устранения причины отказа не прошёл — окно армировалось "
+        f"на пути, который до очереди не дошёл: {env.queued}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_balance_refusal_arms_no_cooldown(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Тот же край для гейта баланса: отказ по балансу окна не оставляет.
+
+    Пополнивший баланс повторяет сразу — иначе оплата не даёт того, за что
+    заплачено.
+    """
+    user = await _current_user(db_session)
+    log = await _seed_retryable(db_session, user.id)
+
+    with _retry_env(allowed=False, reason="Баланс исчерпан") as env:
+        response = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+
+    assert env.queued == []
+    assert f"retry={history_module.RETRY_NO_BALANCE}" in response.headers["location"]
+    assert log.id not in history_module._RETRY_IN_FLIGHT, (
+        "отказ по балансу оставил окно удержания"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_cooldown_is_keyed_per_record(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Удержание держится по КОНКРЕТНОЙ записи, а не по разделу.
+
+    Удержание, разлившееся на весь раздел, было бы регрессией: пользователь с
+    десятью неудачами обязан разобрать их подряд, а не по одной в минуту.
+    """
+    user = await _current_user(db_session)
+    ad, group, _account = await _seed_triple(db_session, user.id)
+    await _seed_balance(db_session, user.id)
+    first = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
+    second = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
+
+    assert first.id != second.id
+
+    with _retry_env() as env:
+        await authed_client.post(
+            f"/history/{first.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+        response = await authed_client.post(
+            f"/history/{second.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+
+    assert f"retry={history_module.RETRY_QUEUED}" in response.headers["location"]
+    # По одной задаче НА КАЖДУЮ запись, и это сильнее простого счёта: ассерт
+    # называет обе записи поимённо, поэтому две постановки по одной и той же
+    # записи его не удовлетворят.
+    assert [call.kwargs["args"] for call in env.queued] == [
+        [first.id, user.id],
+        [second.id, user.id],
+    ], (
+        "повтор СОСЕДНЕЙ неуспешной записи заблокирован удержанием первой — "
+        f"окно разлилось на раздел: {env.queued}"
+    )
+    assert first.id in history_module._RETRY_IN_FLIGHT
+    assert second.id in history_module._RETRY_IN_FLIGHT
+
+
 def test_retry_slot_claim_is_synchronous():
     """Занятие заявки — СИНХРОННАЯ функция без единого ожидания.
 
@@ -777,16 +1059,25 @@ def test_retry_slot_claim_is_synchronous():
     assert "await" not in code, f"в занятии заявки появилось ожидание: {code!r}"
 
 
-def test_retry_slot_release_is_a_discard_in_a_finally_block():
-    """Освобождение — отбрасыванием и в блоке завершения.
+def test_retry_slot_release_is_idempotent_and_in_a_finally_block():
+    """Снятие удержания безобидно при повторном вызове и стоит в блоке завершения.
 
-    `discard`, а не `remove`: повторный вызов обязан быть безобидным.
+    Повторный вызов обязан быть безобидным: блок завершения отрабатывает в том
+    числе после исключения, и второй вызов не имеет права бросить.
+
+    Ассерт смотрит на КОД, который действительно выполняется, а не на слово в
+    комментарии. Тест, проверяющий прозу, перестаёт пинить механизм ровно тогда,
+    когда механизм меняют, — и это тот же дефект, что докстринг, описывающий
+    несуществующую защиту.
     """
     source = HISTORY_PY.read_text(encoding="utf-8")
     start = source.index("def _release_retry_slot(")
-    release = source[start : start + 700]
+    release = source[start : _next_top_level_after(source, start)]
 
-    assert ".discard(" in release, "освобождение снимает заявку не отбрасыванием"
+    assert re.search(r"\.pop\([^)]*,\s*None\s*\)", release), (
+        "снятие удержания идёт не отбрасывающим вызовом со значением по "
+        "умолчанию — повторный вызов перестал быть безобидным"
+    )
     assert ".remove(" not in release
 
     body = _handler_source()
