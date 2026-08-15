@@ -31,6 +31,7 @@ async def test_create_payment(db_session):
         result = await create_payment(
             db_session,
             user_id=user.id,
+            kind="package",
             package_name="100 messages",
             messages_count=100,
             price="149.00",

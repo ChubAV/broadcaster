@@ -60,11 +60,38 @@ class Settings(BaseSettings):
     free_monthly_messages: int = 10
     message_packages: str = '[{"name":"100 сообщений","count":100,"price":"149.00"},{"name":"500 сообщений","count":500,"price":"599.00"},{"name":"1000 сообщений","count":1000,"price":"999.00"}]'
 
+    # Billing — тарифные планы.
+    #
+    # ЦЕНА — МАШИННАЯ СТРОКА ФОРМАТА ЮKASSA («1490.00»), а не подпись макета.
+    # `create_payment` кладёт это значение прямо в `amount.value`, и строка с
+    # разделителем разрядов или знаком рубля — отказ платёжного API в проде,
+    # которого не поймает ни один мок: моки не валидируют формат суммы.
+    #
+    # БЕЗЛИМИТ КОДИРУЕТСЯ ИМЕННО `null`, не `0` и не большим числом. Ноль
+    # неотличим от нулевого лимита («ни одного объявления не разрешено»), а
+    # большое число рано или поздно достигается и превращается в лимит, о
+    # котором пользователю обещали, что его нет.
+    plan_limits: str = (
+        '[{"id":"free","name":"Free","price":"0.00","ads":3,"groups":5,"sends":300,"accounts":1},'
+        '{"id":"basic","name":"Basic","price":"1490.00","ads":15,"groups":30,"sends":5000,"accounts":5},'
+        '{"id":"pro","name":"Pro","price":"4900.00","ads":null,"groups":null,"sends":50000,"accounts":20}]'
+    )
+
     # YooKassa
     yookassa_enabled: bool = True
     yookassa_shop_id: str = ""
     yookassa_secret_key: str = ""
     yookassa_return_url: str = ""
+    # Проверка подлинности уведомления по адресу источника. Включена по
+    # умолчанию; `False` — аварийный выключатель на случай, когда сквозной адрес
+    # клиента за прокси определить не удаётся и приём денег важнее.
+    yookassa_webhook_verify_ip: bool = True
+    # Имя заголовка, из которого читается адрес источника за обратным прокси.
+    # Пусто = доверять `request.client.host` напрямую (локальный запуск, тесты).
+    # На бою заполняется значением `X-Real-IP`: nginx проекта ПЕРЕЗАПИСЫВАЕТ его
+    # адресом реального пира на каждом location. Разбор — в докстринге гарда в
+    # app/routes/billing.py.
+    yookassa_webhook_client_ip_header: str = ""
 
     @property
     def wa_bridge_url(self) -> str:
@@ -74,6 +101,10 @@ class Settings(BaseSettings):
     @property
     def parsed_message_packages(self) -> list[dict]:
         return json.loads(self.message_packages)
+
+    @property
+    def parsed_plan_limits(self) -> list[dict]:
+        return json.loads(self.plan_limits)
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

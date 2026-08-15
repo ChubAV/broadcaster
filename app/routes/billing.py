@@ -59,6 +59,7 @@ async def purchase_package(
     result = await create_payment(
         db,
         user_id=user_id,
+        kind="package",
         package_name=pkg["name"],
         messages_count=pkg["count"],
         price=pkg["price"],
