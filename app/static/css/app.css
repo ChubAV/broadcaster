@@ -627,11 +627,41 @@ a:hover { color: var(--accent-link-hover); }
 .session-dot.is-online { background: var(--ok); animation: pulse 1.6s ease-in-out infinite; }
 .session-label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); }
 
+/* Перечень воркеров аккаунтов на дашборде (DASH-05). Источник состояния тот
+   же, что у пилюли выше, поэтому и зелёный тот же токен --ok: два разных
+   зелёных на одном экране означали бы два разных смысла.
+
+   Высота ограничена ПРОКРУТКОЙ, а не обрезкой по количеству: пользователь с
+   тремя десятками аккаунтов получает перечень целиком (ни одна строка не
+   выпадает молча), а первый экран дашборда не превращается в список аккаунтов.
+
+   Строка переносится (flex-wrap) и сжимает подпись канала многоточием: на
+   ширине 320 px горизонтальной прокрутки не возникает. */
+.worker-list { display: flex; flex-direction: column; max-height: 264px; overflow-y: auto; }
+.worker-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0;
+  padding: 9px 2px; border-bottom: 1px solid var(--border-soft);
+}
+.worker-row:last-child { border-bottom: none; }
+.worker-row__dot {
+  flex: none; width: 7px; height: 7px;
+  border-radius: var(--r-circle); background: var(--text-dim);
+}
+.worker-row__dot.is-online { background: var(--ok); animation: pulse 1.6s ease-in-out infinite; }
+.worker-row__label {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-md); color: var(--text);
+}
+.worker-row__state {
+  margin-left: auto; font-family: var(--font-mono);
+  font-size: var(--fs-xs); color: var(--text-secondary);
+}
+
 /* Контент */
 [data-body] { padding: 26px 32px 60px; }
 
 @media (prefers-reduced-motion: reduce) {
-  .brand-mark::after, .quota-fill, .session-dot.is-online, .animate-fade-in { animation: none !important; }
+  .brand-mark::after, .quota-fill, .session-dot.is-online, .worker-row__dot.is-online, .animate-fade-in { animation: none !important; }
 }
 
 /* --------------------------------------------------------------------------

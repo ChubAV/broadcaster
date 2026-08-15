@@ -771,6 +771,73 @@ async def test_shell_worker_list_carries_no_secrets(
     assert secret_session not in html, "строка сессии аккаунта попала в разметку"
 
 
+@pytest.mark.asyncio
+async def test_dashboard_worker_list_keeps_an_unrecognised_status_visible(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Аккаунт с незнакомым статусом остаётся в перечне со своим значением.
+
+    Пользователь пришёл на дашборд узнать, почему его рассылки не уходят.
+    Строка, выпавшая из перечня потому, что интерфейс не знает её статуса, —
+    ровно тот ответ, которого он не получит. Проверяются ДВА незнакомых
+    статуса: существующий в проекте `sync_failed` и вымышленный, которого в
+    коде нет вовсе, — иначе тест доказывал бы только наличие четвёртой ветки,
+    а не отсутствие обрезки по списку известных значений.
+    """
+    user = await _dashboard_user(db_session)
+    failed = await _seed_messenger_account(db_session, user.id, "sync_failed")
+    invented_status = f"status-{uuid4().hex[:8]}"
+    unknown = await _seed_messenger_account(db_session, user.id, invented_status)
+
+    html = (await authed_client.get("/dashboard")).text
+
+    rows = _worker_rows(html)
+    assert set(rows) == {failed.id, unknown.id}, "незнакомый статус выпал из перечня"
+    assert rows[failed.id] == "false"
+    assert rows[unknown.id] == "false", "незнакомый статус зачтён за онлайн"
+    assert "sync_failed" in html, "сырое значение статуса не показано"
+    assert invented_status in html, "сырое значение статуса не показано"
+    assert SESSION_PILL_RE.search(html).group(1) == "0"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_worker_list_shows_an_empty_state_without_accounts(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Без аккаунтов блок остаётся на месте и ведёт на подключение (D-39/D-40)."""
+    html = (await authed_client.get("/dashboard")).text
+
+    assert "Воркеры аккаунтов" in html, "блок перечня спрятан вместо пустого состояния"
+    assert not _worker_rows(html), "строки перечня взялись из ниоткуда"
+
+    start = html.index("Каналы не подключены")
+    empty_block = html[start : html.index("</div>", start)]
+    assert 'href="/accounts"' in empty_block, "пустое состояние никуда не ведёт"
+    assert "Подключить аккаунт" in empty_block
+
+
+def test_dashboard_worker_row_has_one_definition():
+    """Разметка строки перечня объявлена РОВНО в одном месте — в макросе.
+
+    Инвентаризационный тест в духе уже существующих в проекте: вторая копия
+    строки разъехалась бы с первой при первой же правке, а страница осталась бы
+    исправной с виду.
+    """
+    templates_dir = PROJECT_ROOT / "app" / "templates"
+
+    owners = sorted(
+        path.relative_to(templates_dir).as_posix()
+        for path in templates_dir.rglob("*.html")
+        if "data-worker-id" in path.read_text(encoding="utf-8")
+    )
+    assert owners == ["dashboard/includes/worker_row.html"], (
+        f"разметка строки перечня объявлена не только в макросе: {owners}"
+    )
+
+    page = (templates_dir / "dashboard.html").read_text(encoding="utf-8")
+    assert "worker_row" in page, "страница не импортирует и не зовёт макрос строки"
+
+
 def _identifiers_of(source: str) -> set[str]:
     """Имена, которые модуль ИМПОРТИРУЕТ и ВЫЗЫВАЕТ — без прозы.
 

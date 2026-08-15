@@ -5,6 +5,7 @@
 {% from "dashboard/includes/activity_chart.html" import activity_chart %}
 {% from "dashboard/includes/metric_tile.html" import metric_tile %}
 {% from "dashboard/includes/upcoming_row.html" import upcoming_row %}
+{% from "dashboard/includes/worker_row.html" import worker_row %}
 
 {% block title %}Панель — Broadcaster{% endblock %}
 
@@ -65,21 +66,31 @@
       экранах, к DASH-05 отношения не имеющих.
 
       Подписи каналов повторяют раздел аккаунтов: два разных названия одного
-      канала на двух экранах — та же болезнь, которую лечит эта фаза. -#}
-  {% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
+      канала на двух экранах — та же болезнь, которую лечит эта фаза. Разметка
+      строки живёт В МАКРОСЕ и имеет ровно одно определение.
+
+      САМ БЛОК УСЛОВИЕМ НЕ ОБЁРНУТ (D-39): спрятанная карточка читалась бы как
+      сломанная страница — по тому же рассуждению, по которому пилюля шапки
+      показывает ноль, а не исчезает. Условие стоит ВНУТРИ: без аккаунтов на
+      месте перечня — пустое состояние с призывом подключить канал (D-40). -#}
   {{ card_open() }}
     <div data-blockhead>
       <h2 class="card__title">Воркеры аккаунтов</h2>
     </div>
+    {% if sessions %}
     <div class="worker-list">
-      {% for s in sessions %}
-      <div class="worker-row" data-worker data-worker-id="{{ s.id }}" data-worker-online="{{ 'true' if s.is_online else 'false' }}">
-        <span class="worker-row__dot{% if s.is_online %} is-online{% endif %}"></span>
-        <span class="worker-row__label">{{ MESSENGER_LABELS.get(s.type, s.type) }}</span>
-        {{ mono('#' ~ s.id) }}
-      </div>
-      {% endfor %}
+      {% for s in sessions %}{{ worker_row(s) }}{% endfor %}
     </div>
+    {% else %}
+    {#- ЗАГОЛОВОК НАЗЫВАЕТ КАНАЛ, А НЕ РАЗДЕЛ. Слово «Аккаунты» с заглавной в
+        теле дашборда запрещено D-01 (`test_dashboard_body_has_no_entity_counters`):
+        снятые плитки-счётчики дублировали им боковое меню. Пустое состояние
+        счётчиком не является, но повторять запрещённое слово ради этого не
+        стоит — «каналы» и есть то, чего у пользователя нет. -#}
+    {{ empty_state('Каналы не подключены',
+                   hint='Рассылки уходят через подключённый канал — подключите аккаунт, и его воркер появится здесь',
+                   action_label=next_label, action_href=next_href) }}
+    {% endif %}
   {{ card_close() }}
 
   {#- ПАРА МАКЕТА В ДВЕ КОЛОНКИ. Обёртка несёт ровно раскладку: обе половины

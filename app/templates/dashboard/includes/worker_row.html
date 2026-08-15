@@ -1,0 +1,40 @@
+{# Строка перечня «Воркеры аккаунтов» (DASH-05, D-13).
+
+   Это МАКРОС, а не include: импортированные шаблоны Jinja контекста
+   вызывающего не получают, поэтому `session` — явный параметр. По той же
+   причине словарь подписей каналов объявлен ЗДЕСЬ: макрос обязан быть
+   самодостаточным, а не рассчитывать на переменную вызывающей страницы.
+
+   ВЕТКА «ИНАЧЕ» — НЕСУЩАЯ, а не заглушка. Статусы `syncing` и `sync_failed`
+   уже существуют в проекте, а следующий появится без правки этого макроса.
+   Аккаунт, статус которого макрос не знает, обязан остаться ВИДИМЫМ со своим
+   сырым значением: пользователь пришёл на дашборд узнать, почему его рассылки
+   не уходят, и молча выпавшая строка — ровно тот ответ, которого он не
+   получит. Ветвление повторяет уже принятое в разделе аккаунтов
+   (`accounts/partial_cards.html`), а не изобретает второе.
+
+   ПРИЗНАК «ОНЛАЙН» БУЛЕВ и приходит готовым из контракта шелла: незнакомый
+   статус онлайном не считается, и пилюля шапки, посчитанная из того же
+   списка, разойтись с этой строкой не может.
+
+   Учётных данных аккаунта здесь нет и быть не может: в словаре `sessions` их
+   нет вовсе (проекция трёх колонок в `get_shell_context`).
+
+   Импорт: {% from "dashboard/includes/worker_row.html" import worker_row %} #}
+
+{% from "components/mono.html" import mono %}
+
+{% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
+
+{% macro worker_row(session) -%}
+<div class="worker-row" data-worker data-worker-id="{{ session.id }}" data-worker-online="{{ 'true' if session.is_online else 'false' }}">
+  <span class="worker-row__dot{% if session.is_online %} is-online{% endif %}"></span>
+  <span class="worker-row__label">{{ MESSENGER_LABELS.get(session.type, session.type) }}</span>
+  {{- mono('#' ~ session.id) -}}
+  <span class="worker-row__state">
+    {%- if session.status == 'active' %}Онлайн
+    {%- elif session.status == 'disconnected' %}Отключён
+    {%- else %}{{ session.status }}{% endif -%}
+  </span>
+</div>
+{%- endmacro %}
