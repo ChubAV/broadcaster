@@ -1199,3 +1199,72 @@ def test_chart_carries_the_day_labels_of_the_window():
     # Копия, а не тот же список: правка подписей графика не должна доставать
     # до сетки, которую Фаза 6 может держать рядом.
     assert view.day_labels is not source.day_labels
+
+
+# --- Сквозной порядок столбцов ------------------------------------------------
+#
+# Свёртка `activity_chart` читает столбцы СЛЕВА НАПРАВО как время. Это верно
+# ровно тогда, когда ряд сетки — календарные сутки читателя: колонка ряда есть
+# АБСОЛЮТНЫЙ локальный час (`grid[day][local.hour]`), а не смещение от начала
+# ряда. Пока окно якорилось моментом запроса, ряд начинался в произвольный час,
+# и левая часть ряда была ПОЗЖЕ правой — график шёл против времени.
+#
+# Проверки ниже держат сквозное свойство: сетка и свёртка вместе, с базой, а не
+# синтетическая сетка в чистую функцию. Пять тестов свёртки выше не могут
+# покраснеть на этом дефекте — они подают уже готовые ряды.
+
+
+@pytest.mark.asyncio
+async def test_chart_bars_run_in_chronological_order_across_local_midnight(db_session):
+    """Отправка, случившаяся РАНЬШЕ, стоит ЛЕВЕЕ — через локальную полночь тоже.
+
+    Две отправки по разные стороны полуночи читателя: 19.05 20:00 и 20.05 09:00.
+    Вторая произошла на 13 часов позже, значит её столбец обязан стоять правее.
+    При якоре окна на момент запроса (12:00) обе попадали в ОДИН ряд, и час 9
+    оказывался левее часа 20 — то есть более поздняя отправка рисовалась левее
+    более ранней.
+    """
+    user = await _user(db_session)
+    earlier = datetime(2026, 5, 19, 20, 0, tzinfo=timezone.utc)
+    later = datetime(2026, 5, 20, 9, 0, tzinfo=timezone.utc)
+    await _seed_send_log(db_session, user.id, sent_at=earlier)
+    await _seed_send_log(db_session, user.id, sent_at=later)
+
+    view = activity_chart(
+        await activity_heatmap(db_session, user_id=user.id, now=NOW, tz=timezone.utc)
+    )
+
+    filled = [i for i, value in enumerate(view.bars) if value]
+    assert len(filled) == 2, f"обе отправки обязаны стоять в РАЗНЫХ столбцах: {filled}"
+    assert filled[0] < filled[1]
+    # Ряд — календарные сутки, поэтому столбцы разъезжаются и по суткам тоже:
+    # доля 18-23 предыдущих суток и доля 6-11 текущих.
+    assert filled == [23, 25]
+
+
+@pytest.mark.asyncio
+async def test_chart_bar_falls_under_its_own_day_label(db_session):
+    """Подпись суток честна: столбец лежит под подписью ТЕХ суток, когда он был.
+
+    Подписей `days`, столбцов `days * CHART_BUCKETS_PER_DAY`, и шаблон кладёт
+    по четыре столбца на подпись. Пока ряд начинался в полдень, половина его
+    данных приходилась на СЛЕДУЮЩИЕ сутки, и подпись врала о половине столбцов.
+    """
+    user = await _user(db_session)
+    # Последние сутки окна: 20.05, среда.
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 20, 3, 0, tzinfo=timezone.utc)
+    )
+
+    grid_view = await activity_heatmap(
+        db_session, user_id=user.id, now=NOW, tz=timezone.utc
+    )
+    view = activity_chart(grid_view)
+
+    filled = [i for i, value in enumerate(view.bars) if value]
+    assert len(filled) == 1
+    day_of_bar = filled[0] // CHART_BUCKETS_PER_DAY
+    assert day_of_bar == len(view.day_labels) - 1, "отправка сегодняшних суток"
+    assert view.day_labels[day_of_bar] == SHORT_DAYS[
+        datetime(2026, 5, 20, tzinfo=timezone.utc).weekday()
+    ]
