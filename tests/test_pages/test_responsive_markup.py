@@ -1602,24 +1602,13 @@ def test_billing_plans_grid_rule_does_not_redefine_the_dashboard_grid():
     assert "minmax(210px, 1fr)" in css, "минимум плиток дашборда изменён"
 
 
-@pytest.mark.asyncio
-async def test_billing_plans_template_is_migrated():
-    """`billing/plans.html` мигрирован, хотя маршрута у него нет.
-
-    Шаблон не рендерится ни одним обработчиком (см. SUMMARY Плана 07):
-    поведенческой проверки для него не существует, поэтому здесь — проверка
-    исходника. Она ловит ровно то, ради чего шаблон правился: возврат
-    utility-классов и отказ от компонентов.
-    """
-    source = (TEMPLATES_DIR / "billing" / "plans.html").read_text(encoding="utf-8")
-
-    for marker in UTILITY_MARKERS:
-        assert marker not in source, marker
-    for marker in TABLE_MARKERS:
-        assert marker not in source, marker
-    assert "{% block page_title %}" in source
-    assert "components/progress.html" in source
-    assert "components/card.html" in source
+# test_billing_plans_template_is_migrated УДАЛЁН планом 05-05 вместе с файлом,
+# который он читал с диска (D-19). Это не обход поломки, а завершение работы
+# теста: проверка исходника существовала ровно потому, что у неподключённого
+# шаблона не было поведенческой проверки. Содержимое шаблона переехало в живые
+# паршалы раздела, и у них проверки есть — test_billing_plan_card_* и
+# test_billing_usage_meter_* выше. Отсутствие самого файла закреплено
+# test_the_unwired_plans_template_is_gone.
 
 
 # --- План 07: админ-панель ---------------------------------------------------
