@@ -8,13 +8,14 @@ from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import AD_STATUS_PUBLISHED
 from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
 from app.models.user import User
+from app.pages.common import get_shell_context
 from tests.conftest import seed_group
 
 
@@ -583,6 +584,11 @@ DASHBOARD_RENDER_PATH = (
     "app/pages/dashboard.py",
     "app/pages/dashboard_feed.py",
     "app/application/analytics/send_analytics.py",
+    # Модуль контекста шелла входит в перечень С ФАЗЫ 4: поаккаунтное чтение
+    # состояния воркеров живёт теперь здесь, то есть именно сюда потянется
+    # следующий разработчик дописать «а давайте покажем, жив ли контейнер».
+    # Запрет обязан стоять там, где стоит соблазн.
+    "app/pages/common.py",
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -878,6 +884,10 @@ def test_dashboard_render_path_never_touches_docker():
 
     Единственный владелец обращений к Docker в проекте — сервис управления
     контейнерами воркеров; его имя запрещено здесь наравне с самим SDK.
+
+    Перечень модулей СЛЕДУЕТ ЗА ВЛАДЕЛЬЦЕМ чтения состояния воркеров: с Фазы 4
+    поаккаунтное чтение живёт в модуле контекста шелла, и он входит в перечень
+    наравне с тремя модулями самой страницы.
     """
     offenders = {}
     for rel in DASHBOARD_RENDER_PATH:
@@ -895,6 +905,116 @@ def test_dashboard_render_path_never_touches_docker():
     assert not offenders, (
         f"путь рендера дашборда обращается к Docker: {offenders}"
     )
+
+
+@pytest.mark.asyncio
+async def test_shell_reads_worker_state_in_a_single_query(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-04-G1-03: перечень стоит ОДНО обращение к таблице аккаунтов, не N.
+
+    Перечень на N строк — естественное место для запроса на строку, а контракт
+    шелла висит на пути рендера КАЖДОЙ из 26 страниц: N+1 здесь обошёлся бы
+    дороже того самого синхронного Docker SDK, ради отказа от которого весь
+    этот перечень и построен на статусе из БД.
+
+    Считаются РЕАЛЬНЫЕ обращения к курсору, а не вызовы прикладного кода.
+
+    Простой пересчёт запросов, УПОМИНАЮЩИХ таблицу, здесь не годится: блок
+    ближайших отправок (DASH-02) присоединяет messenger_accounts к расписаниям
+    своим запросом, и таких упоминаний на рендере два независимо от перечня.
+    Поэтому утверждений тоже два, и оба про перечень: собственное чтение
+    состояния воркеров РОВНО ОДНО, и число обращений НЕ РАСТЁТ вместе с числом
+    аккаунтов — второе и есть настоящая проверка на N+1, потому что запрос на
+    строку не поймать никакой константой.
+    """
+    user = await _dashboard_user(db_session)
+    for _ in range(3):
+        await _seed_messenger_account(db_session, user.id, "active")
+
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    bind = db_session.get_bind()
+    engine = getattr(bind, "sync_engine", bind)
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        first = await authed_client.get("/dashboard")
+        with_three = [s for s in statements if "messenger_accounts" in s]
+
+        for _ in range(3):
+            await _seed_messenger_account(db_session, user.id, "active")
+        # Посев в счёт не идёт — считается только рендер.
+        statements.clear()
+        second = await authed_client.get("/dashboard")
+        with_six = [s for s in statements if "messenger_accounts" in s]
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    own_read = [s for s in with_three if "FROM messenger_accounts" in s]
+    assert len(own_read) == 1, (
+        "состояние воркеров читается не одним запросом: "
+        f"{len(own_read)} собственных обращений\n" + "\n".join(own_read)
+    )
+    assert len(with_six) == len(with_three), (
+        "число обращений к messenger_accounts выросло вместе с числом аккаунтов "
+        f"({len(with_three)} на трёх, {len(with_six)} на шести) — это N+1 на "
+        "пути рендера каждой страницы"
+    )
+
+
+@pytest.mark.asyncio
+async def test_shell_aggregate_is_derived_from_the_worker_list(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Оба числа выведены ИЗ ПЕРЕЧНЯ, а не посчитаны отдельно.
+
+    Утверждается не арифметика, а отсутствие второго источника: разойтись эти
+    числа могут только если кто-то вернёт им независимое вычисление.
+    """
+    user = await _dashboard_user(db_session)
+    await _seed_messenger_account(db_session, user.id, "active")
+    await _seed_messenger_account(db_session, user.id, "active")
+    await _seed_messenger_account(db_session, user.id, "disconnected")
+    await _seed_messenger_account(db_session, user.id, "sync_failed")
+
+    result = await get_shell_context(db_session, user)
+
+    assert len(result["sessions"]) == 4
+    assert result["sessions_total"] == len(result["sessions"])
+    online = [s for s in result["sessions"] if s["is_online"]]
+    assert result["sessions_online"] == len(online) == 2
+    assert result["nav_counts"]["accounts"] == len(result["sessions"])
+
+
+@pytest.mark.asyncio
+async def test_shell_worker_entries_expose_only_the_declared_keys(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-04-G1-02: состав ключей контракта закреплён, секретам в нём места нет.
+
+    Граница держится на УРОВНЕ КОНТРАКТА, а не только на отрендеренной
+    разметке: словарь шелла печатается на каждой странице, и смена способа его
+    сборки не должна протащить `credentials` или `session_data` следующей
+    правкой.
+    """
+    user = await _dashboard_user(db_session)
+    await _seed_messenger_account(
+        db_session, user.id, "active", credentials="secret", session_data="secret"
+    )
+
+    result = await get_shell_context(db_session, user)
+
+    assert result["sessions"], "перечень пуст — проверка стала бы вакуумной"
+    for session in result["sessions"]:
+        assert set(session) == {"id", "type", "status", "is_online"}, (
+            f"состав ключей строки контракта изменился: {sorted(session)}"
+        )
 
 
 def test_dashboard_page_has_no_second_source_of_the_sessions_number():
