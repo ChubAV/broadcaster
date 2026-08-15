@@ -13,6 +13,7 @@ from app.application.analytics.send_analytics import (
 )
 from app.pages.history import (
     MESSENGER_VALUES,
+    PAGE_SIZE,
     PERIOD_VALUES,
     STATUS_VALUES,
     clean_choice,
@@ -194,7 +195,11 @@ async def admin_user_history(
     if not target_user:
         return RedirectResponse(url="/admin/users", status_code=302)
 
-    page_size = 30
+    # Размер страницы — ТОТ ЖЕ, что у пользовательской истории, и берётся у неё
+    # же. Своя копия числа здесь и в сентинелях разметки разъехалась бы с
+    # `next_offset` молча: вторая страница выдачи начала бы перекрываться с
+    # первой или пропускать записи, а экран остался бы исправным на вид.
+    page_size = PAGE_SIZE
 
     # ОТСЕЧКА НЕИЗВЕСТНЫХ ЗНАЧЕНИЙ ОСЕЙ — ТА ЖЕ, ЧТО У ПОЛЬЗОВАТЕЛЬСКИХ
     # МАРШРУТОВ. Значения приезжают строкой запроса — из ссылки, закладки или
@@ -287,7 +292,7 @@ async def admin_user_history_partial(
     account_id: str | None = Query(default=None),
     period: str | None = Query(default=None),
     offset: int = Query(0, ge=0),
-    limit: int = Query(30, ge=1, le=100),
+    limit: int = Query(PAGE_SIZE, ge=1, le=100),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -347,6 +352,9 @@ async def admin_user_history_partial(
             "logs": logs,
             "has_next": has_next,
             "next_offset": offset + limit,
+            # Размер страницы уезжает в сентинель из контекста — тем же
+            # значением, которым выбрана ЭТА порция.
+            "page_size": limit,
             "status_filter": status,
             "filter_messenger": messenger,
             "filter_account_id": account_id_int,

@@ -659,6 +659,12 @@ async def history_partial(
             "logs": logs,
             "has_next": has_next,
             "next_offset": offset + limit,
+            # Размер страницы уезжает в сентинель ИЗ КОНТЕКСТА, а не литералом
+            # в разметке: литерал разъехался бы с `next_offset` молча — вторая
+            # страница выдачи начала бы перекрываться с первой или пропускать
+            # записи, а экран остался бы исправным на вид. Значение — тот самый
+            # `limit`, которым выбрана ЭТА порция.
+            "page_size": limit,
             "status_filter": status,
             "filter_messenger": messenger,
             "filter_account_id": account_id_int,
