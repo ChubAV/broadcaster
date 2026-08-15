@@ -21,6 +21,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,7 +34,7 @@ from app.application.analytics.send_analytics import (
     STATUS_FAIL,
     STATUS_OK,
 )
-from app.constants import AD_STATUS_DRAFT
+from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.message_balance import MessageBalance
@@ -880,6 +881,144 @@ async def test_retry_releases_the_slot_after_an_exception(
     assert log.id not in history_module._RETRY_IN_FLIGHT, (
         "заявка осталась занятой после исключения — запись больше не повторить"
     )
+
+
+@pytest.mark.asyncio
+async def test_retry_becomes_possible_again_after_the_cooldown_window(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """По истечении окна та же запись снова повторяема — это окно, а не замок.
+
+    Без этого края единственная неудачная отправка могла бы лишить пользователя
+    возможности повтора надолго, причём молча: экран показал бы «уже поставлен»
+    там, где ничего не поставлено.
+
+    Истечение имитируется переписыванием СРОКА на уже прошедший момент, а не
+    ожиданием: окно измеряется десятками секунд, и настоящее ожидание
+    остановило бы суиту. Переписывается срок в реестре, а не константа модуля —
+    утверждение теста именно «срок истёк».
+    """
+    user = await _current_user(db_session)
+    log = await _seed_retryable(db_session, user.id)
+
+    with _retry_env() as env:
+        await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+        assert len(env.queued) == 1, env.queued
+
+        history_module._RETRY_IN_FLIGHT[log.id] = monotonic() - 1.0
+
+        response = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+
+    assert f"retry={history_module.RETRY_QUEUED}" in response.headers["location"]
+    assert len(env.queued) == 2, (
+        "после истечения окна повтор не прошёл — удержание стало вечным замком "
+        f"на записи: {env.queued}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_refused_retry_arms_no_cooldown(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Повтор, не дошедший до очереди, окна за собой не оставляет.
+
+    Сценарий настоящий: пользователь получил «повторить нечего», исправил
+    причину и повторяет. Заставлять его ждать окно за отправку, которой не
+    было, значило бы наказывать за исправление.
+    """
+    user = await _current_user(db_session)
+    ad, group, _account = await _seed_triple(db_session, user.id)
+    await _seed_balance(db_session, user.id)
+    ad.status = AD_STATUS_DRAFT
+    await db_session.commit()
+    log = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
+
+    with _retry_env() as env:
+        refused = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+
+        assert env.queued == [], "черновик попал в очередь"
+        assert f"retry={history_module.RETRY_GONE}" in refused.headers["location"]
+        assert log.id not in history_module._RETRY_IN_FLIGHT, (
+            "отказ предпроверки оставил окно удержания — пользователь, "
+            "исправивший причину, вынужден ждать за несостоявшуюся отправку"
+        )
+
+        ad.status = AD_STATUS_PUBLISHED
+        await db_session.commit()
+
+        accepted = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+
+    assert f"retry={history_module.RETRY_QUEUED}" in accepted.headers["location"]
+    assert len(env.queued) == 1, (
+        "повтор после устранения причины отказа не прошёл — окно армировалось "
+        f"на пути, который до очереди не дошёл: {env.queued}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_balance_refusal_arms_no_cooldown(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Тот же край для гейта баланса: отказ по балансу окна не оставляет.
+
+    Пополнивший баланс повторяет сразу — иначе оплата не даёт того, за что
+    заплачено.
+    """
+    user = await _current_user(db_session)
+    log = await _seed_retryable(db_session, user.id)
+
+    with _retry_env(allowed=False, reason="Баланс исчерпан") as env:
+        response = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+
+    assert env.queued == []
+    assert f"retry={history_module.RETRY_NO_BALANCE}" in response.headers["location"]
+    assert log.id not in history_module._RETRY_IN_FLIGHT, (
+        "отказ по балансу оставил окно удержания"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_cooldown_is_keyed_per_record(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Удержание держится по КОНКРЕТНОЙ записи, а не по разделу.
+
+    Удержание, разлившееся на весь раздел, было бы регрессией: пользователь с
+    десятью неудачами обязан разобрать их подряд, а не по одной в минуту.
+    """
+    user = await _current_user(db_session)
+    ad, group, _account = await _seed_triple(db_session, user.id)
+    await _seed_balance(db_session, user.id)
+    first = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
+    second = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
+
+    assert first.id != second.id
+
+    with _retry_env() as env:
+        await authed_client.post(
+            f"/history/{first.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+        response = await authed_client.post(
+            f"/history/{second.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+        )
+
+    assert f"retry={history_module.RETRY_QUEUED}" in response.headers["location"]
+    assert len(env.queued) == 2, (
+        "повтор СОСЕДНЕЙ неуспешной записи заблокирован удержанием первой — "
+        f"окно разлилось на раздел: {env.queued}"
+    )
+    assert first.id in history_module._RETRY_IN_FLIGHT
+    assert second.id in history_module._RETRY_IN_FLIGHT
 
 
 def test_retry_slot_claim_is_synchronous():
