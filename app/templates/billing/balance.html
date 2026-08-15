@@ -70,6 +70,30 @@
     {% endif %}
   {{ card_close() }}
 
+  {#- Покупка тарифа — НАСТОЯЩАЯ ФОРМА, без JS. Базовый путь оплаты обязан
+      работать при выключенном Alpine и при неудавшейся загрузке скрипта:
+      блок покупки пакетов рядом собран на fetch и без JS не работает вовсе, и
+      повторять это на подписке значило бы поставить приём денег в зависимость
+      от одного тега <script>. Из формы уезжает ТОЛЬКО идентификатор плана —
+      цену обработчик читает из настроек (T-05-03). Бесплатный тариф формы не
+      получает: покупать в нём нечего. Карточки планов с лимитами приходят
+      планом 05-05; здесь — одна кнопка на план, не больше. -#}
+  {% if payments_enabled %}
+  <div data-metrics data-plans>
+    {% for p in plans if p.id != 'free' %}
+    {{ card_open() }}
+      {{ mono(p.name, 'muted', upper=true) }}
+      <span data-metric-value>{{ p.price }} &#8381;</span>
+      {{ mono('в месяц') }}
+      <form method="post" action="/billing/subscribe">
+        <input type="hidden" name="plan" value="{{ p.id }}">
+        <button class="btn btn--primary" type="submit"><span class="btn__label">Подключить</span></button>
+      </form>
+    {{ card_close() }}
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if payments_enabled and not balance_info.is_unlimited %}
   <div data-metrics>
     {% for pkg in packages %}
