@@ -17,45 +17,32 @@ class SendLogRepository(BaseRepository[SendLog]):
     def __init__(self, session: AsyncSession):
         super().__init__(session, SendLog)
 
+    # ЕДИНСТВЕННЫЙ МЕТОД ЧТЕНИЯ, И У НЕГО ЕДИНСТВЕННЫЙ ВЫЗЫВАЮЩИЙ
+    # (`app/routes/history.py`). Отсюда убраны две вещи, и обе — по одному
+    # рассуждению.
+    #
+    # 1. Параметр `status_filter`. Его не передавал ни один вызов; ось статуса
+    #    живёт в `app/application/analytics/send_analytics.py`, где её знают все
+    #    три экрана истории. Второй, никем не используемый способ отфильтровать
+    #    тот же журнал — приглашение отфильтровать его ИНАЧЕ, чем остальные.
+    #
+    # 2. Метод `list_for_user_with_details`. Вызывающих не было ни в `app/`, ни
+    #    в `tests/`, и он вдобавок подставлял «—» вместо пустого значения —
+    #    оформление экрана внутри слоя доступа к данным. Ровно поэтому из этого
+    #    класса уже уехала сводка `get_stats` (см. комментарий выше): считать и
+    #    оформлять полагается не здесь.
     async def list_for_user(
         self,
         user_id: int,
         offset: int = 0,
         limit: int = 50,
-        status_filter: str | None = None,
     ) -> list[SendLog]:
         query = (
             select(SendLog)
             .where(SendLog.user_id == user_id)
+            .order_by(SendLog.sent_at.desc())
+            .offset(offset)
+            .limit(limit)
         )
-        if status_filter:
-            query = query.where(SendLog.status == status_filter)
-        query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(limit)
         result = await self.session.execute(query)
         return list(result.scalars().all())
-
-    async def list_for_user_with_details(
-        self,
-        user_id: int,
-        offset: int = 0,
-        limit: int = 50,
-        status_filter: str | None = None,
-    ) -> list[dict]:
-        query = (
-            select(SendLog)
-            .where(SendLog.user_id == user_id)
-        )
-        if status_filter:
-            query = query.where(SendLog.status == status_filter)
-        query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(limit)
-        result = await self.session.execute(query)
-        return [
-            {
-                "ad_title": log.ad_title or "—",
-                "group_name": log.group_name or "—",
-                "status": log.status,
-                "error_message": log.error_message,
-                "sent_at": log.sent_at,
-            }
-            for log in result.scalars()
-        ]
