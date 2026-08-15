@@ -1,13 +1,12 @@
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from yookassa.domain.common.security_helper import SecurityHelper
 
 from app.config import Settings
 from app.dependencies import get_current_user_id, get_db, get_settings
 from app.services.billing_service import get_balance_info, get_transaction_history
-from app.services.payment_service import create_payment, handle_webhook
+from app.services.payment_service import handle_webhook
 
 logger = structlog.get_logger()
 
@@ -39,33 +38,23 @@ async def get_transactions(
     return {"transactions": txs}
 
 
-class PurchaseRequest(BaseModel):
-    package_index: int
-
-
-@router.post("/purchase")
-async def purchase_package(
-    data: PurchaseRequest,
-    user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    if not settings.yookassa_enabled:
-        raise HTTPException(status_code=403, detail="Payments are disabled")
-    packages = settings.parsed_message_packages
-    if data.package_index < 0 or data.package_index >= len(packages):
-        raise HTTPException(status_code=400, detail="Invalid package index")
-
-    pkg = packages[data.package_index]
-    result = await create_payment(
-        db,
-        user_id=user_id,
-        kind="package",
-        package_name=pkg["name"],
-        messages_count=pkg["count"],
-        price=pkg["price"],
-    )
-    return result
+# ЧЕТВЁРТОГО ЧТЕНИЯ И ПЯТОГО ВХОДА ЗДЕСЬ НЕТ НАМЕРЕННО.
+#
+# `POST /api/billing/purchase` вместе со своей моделью тела запроса снесён
+# планом 05-04 (D-24). Покупка пакета сообщений идёт формой раздела
+# (`app/pages/billing.py`), и у JSON-маршрута не осталось ни одного
+# потребителя: его единственным вызывающим был скрипт шаблона.
+#
+# ⚠️ ЭТО БЫЛ НЕ ПРОСТО МЁРТВЫЙ КОД. Маршрут возвращал в браузер тело ответа с
+# `yookassa_payment_id` — единственным «секретом», которым до этой фазы был
+# защищён неаутентифицированный вебхук: зная идентификатор платежа, кто угодно
+# отправлял уведомление об успешной оплате. Форма отдаёт 302 на страницу
+# оплаты, и идентификатор наружу не попадает вовсе. Восстанавливать маршрут
+# ради «удобства API» — значит вернуть утечку вместе с ним.
+#
+# Три ЧИТАЮЩИХ входа выше сохранены одним решением того же плана: удаление
+# объявленного читающего API — отдельный вопрос совместимости, а не следствие
+# перевода покупки на форму.
 
 
 def _webhook_client_ip(request: Request, settings: Settings) -> str | None:
