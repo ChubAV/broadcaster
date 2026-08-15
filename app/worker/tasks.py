@@ -50,8 +50,17 @@ def _sync_timeout_message(poll_interval: int, max_polls: int) -> str:
     )
 
 
-async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
-    """Dispatch tasks: Telegram to Celery queue, WhatsApp to Redis per-account queues."""
+async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> int:
+    """Dispatch tasks: Telegram to Celery queue, WhatsApp to Redis per-account queues.
+
+    ВОЗВРАЩАЕТ ЧИСЛО ДЕЙСТВИТЕЛЬНО РАЗОСЛАННЫХ ЗАДАЧ, а не None. Ветвление по
+    типу аккаунта конечно ровно до появления следующего значения, а
+    `MessengerAccount.type` — свободная строка без ограничения перечнем: задача
+    незнакомого типа не попала бы ни в одну из трёх корзин. Без возвращаемого
+    числа вызывающий не мог бы отличить «разослано» от «не разослано ничего» —
+    и `retry_send` записывал бы в журнал успешную диспетчеризацию, которой не
+    было, показав пользователю обещание записи истории, которая не появится.
+    """
     import json
     import redis as redis_lib
     from uuid import uuid4
@@ -61,6 +70,7 @@ async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
     tg_tasks: list[DispatchTask] = []
     wa_tasks_by_account: dict[int, list[DispatchTask]] = {}
     max_tasks_by_account: dict[int, list[DispatchTask]] = {}
+    unrouted: list[DispatchTask] = []
 
     for task in tasks_to_dispatch:
         if task.type == "tg_user":
@@ -69,6 +79,19 @@ async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
             wa_tasks_by_account.setdefault(task.account_id, []).append(task)
         elif task.type == "max":
             max_tasks_by_account.setdefault(task.account_id, []).append(task)
+        else:
+            # ВЕТКА «ИНАЧЕ» ОБЯЗАТЕЛЬНА. Три `elif` без неё выбрасывали бы
+            # задачу молча: ни строки в журнале, ни исключения, ни записи
+            # истории — отправка просто не происходила бы, а вызывающий видел
+            # бы тот же результат, что при успехе. `MessengerAccount.type` —
+            # String(20) без ограничения перечнем, то есть «четвёртого типа не
+            # бывает» верно ровно до того момента, когда он появится.
+            unrouted.append(task)
+            logger.error("dispatch_unknown_account_type",
+                        type=task.type,
+                        account_id=task.account_id,
+                        ad_id=task.ad_id,
+                        group_id=task.group_id)
 
     # Dispatch Telegram tasks via Celery (unchanged)
     for task in tg_tasks:
@@ -158,7 +181,9 @@ async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
     total = len(tg_tasks) + sum(len(t) for t in wa_tasks_by_account.values()) + sum(len(t) for t in max_tasks_by_account.values())
     logger.info("send_tasks_dispatched", total=total, tg=len(tg_tasks),
                wa=sum(len(t) for t in wa_tasks_by_account.values()),
-               max=sum(len(t) for t in max_tasks_by_account.values()))
+               max=sum(len(t) for t in max_tasks_by_account.values()),
+               unrouted=len(unrouted))
+    return total
 
 
 async def check_schedules_async(session: AsyncSession):
@@ -405,12 +430,11 @@ def retry_send(self, log_id: int, user_id: int):
                 # обработчике плана 04-09, но между нажатием и исполнением
                 # таска проходит время: задача может простоять за очередью
                 # ровно столько, сколько нужно, чтобы баланс кончился на другой
-                # рассылке. Без проверки ЗДЕСЬ сообщение уходит, а
-                # `deduct_message` уже ПОСЛЕ отправки возвращает False по своему
-                # условию `balance > 0` — то есть получается не отрицательный
-                # баланс, а БЕСПЛАТНАЯ отправка мимо тарифа. У планировщика
-                # такой асимметрии нет: его гейт стоит в том же такте, что и
-                # диспетчеризация.
+                # рассылке. Без проверки ЗДЕСЬ сообщение уходит, а `deduct_message`
+                # уже после отправки возвращает False по условию `balance > 0` —
+                # то есть получается не отрицательный баланс, а БЕСПЛАТНАЯ
+                # отправка в обход тарифа. У планировщика такой асимметрии нет:
+                # его гейт стоит в том же такте, что и диспетчеризация.
                 #
                 # Выход ТИХИЙ, как и у остальных проверок этого таска: записи в
                 # журнал не создаётся, иначе история наполнялась бы
@@ -430,7 +454,21 @@ def retry_send(self, log_id: int, user_id: int):
                     schedule_id=send_log.schedule_id,
                 )
 
-            await dispatch_send_tasks([task])
+            # Число разосланных проверяется, а не игнорируется: без этого
+            # запись «повтор диспетчеризован» утверждала бы отправку, которой
+            # не было, — задача незнакомого типа аккаунта не попадает ни в одну
+            # корзину маршрутизации. Пользователю при этом уже показано
+            # обещание новой записи истории, и молчаливый ноль превратил бы это
+            # обещание в ложь без единого следа в журнале.
+            dispatched = await dispatch_send_tasks([task])
+            if not dispatched:
+                log.error(
+                    "retry_send_not_dispatched",
+                    reason="unrouted_account_type",
+                    type=task.type,
+                    account_id=task.account_id,
+                )
+                return
             log.info("retry_send_dispatched", type=task.type, account_id=task.account_id)
         except Exception as e:
             log.error("retry_send_error", error=str(e), exc_info=True)

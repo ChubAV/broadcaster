@@ -14,8 +14,10 @@ from app.models.messenger_account import MessengerAccount
 from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
+from app.application.scheduling.use_cases import DispatchTask
 from app.worker.tasks import (
     check_schedules_async,
+    dispatch_send_tasks,
     retry_send,
     _send_message,
     _sync_wa_groups_async,
@@ -940,3 +942,39 @@ async def test_retry_send_stops_when_the_balance_is_exhausted(
     assert redis_sink == [], "повтор ушёл в очередь мимо гейта баланса"
     assert tg_sink == [], "повтор ушёл в очередь мимо гейта баланса"
     assert await _send_log_count(factory) == before
+
+
+@pytest.mark.asyncio
+async def test_dispatch_reports_an_unroutable_account_type_instead_of_dropping_it():
+    """Задача незнакомого типа не теряется молча: она СЧИТАЕТСЯ неразосланной.
+
+    Ветвление маршрутизации — три `elif` без `else`, а
+    `MessengerAccount.type` — свободная строка `String(20)` без ограничения
+    перечнем. «Четвёртого типа не бывает» верно ровно до того момента, когда он
+    появится, и до этой правки такая задача исчезала без строки в журнале, без
+    исключения и без записи истории, а вызывающий получал тот же `None`, что и
+    при успехе.
+
+    Утверждается ЧИСЛО, а не наличие записи в журнале: именно число читает
+    `retry_send`, и именно оно отличает «разослано» от «не разослано ничего».
+    """
+    settings = MagicMock()
+    settings.redis_url = "redis://localhost:6379/0"
+
+    unknown = DispatchTask(
+        type="signal", ad_id=1, group_id=2, account_id=3, schedule_id=None
+    )
+    known = DispatchTask(
+        type="tg_user", ad_id=4, group_id=5, account_id=6, schedule_id=None
+    )
+
+    with patch("app.worker.tasks.get_settings", return_value=settings), \
+         patch("app.worker.tasks.send_telegram_message", MagicMock()):
+        assert await dispatch_send_tasks([unknown]) == 0, (
+            "задача незнакомого типа засчитана как разосланная — вызывающий "
+            "не может отличить её от успеха"
+        )
+        assert await dispatch_send_tasks([known, unknown]) == 1, (
+            "число разосланных считает и те задачи, что никуда не уехали"
+        )
+        assert await dispatch_send_tasks([]) == 0
