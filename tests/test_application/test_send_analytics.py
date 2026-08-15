@@ -669,9 +669,15 @@ async def test_heatmap_reads_naive_dates_without_raising(db_session):
 
 @pytest.mark.asyncio
 async def test_heatmap_row_labels_follow_the_window_not_a_fixed_monday(db_session):
-    """D-12: подписи рядов — дни ОКНА, а не ПН-ВС макета."""
+    """D-12: подписи рядов — дни ОКНА, а не ПН-ВС макета.
+
+    Окно якорится на локальную полночь читателя, поэтому ряд — календарные
+    сутки, а подпись — их день недели. Последняя подпись есть СЕГОДНЯ: именно
+    это делает её честной для столбцов графика, половина которых до якоря
+    приходилась на соседние сутки.
+    """
     user = await _user(db_session)
-    origin = NOW - timedelta(days=7)
+    origin = NOW.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
 
     view = await activity_heatmap(
         db_session, user_id=user.id, now=NOW, tz=timezone.utc
@@ -681,7 +687,8 @@ async def test_heatmap_row_labels_follow_the_window_not_a_fixed_monday(db_sessio
         SHORT_DAYS[(origin + timedelta(days=i)).weekday()] for i in range(7)
     ]
     assert view.day_labels == expected
-    # Окно начинается в среду, поэтому фиксированная раскладка макета краснеет.
+    assert view.day_labels[-1] == SHORT_DAYS[NOW.weekday()], "последний ряд — сегодня"
+    # Окно начинается в четверг, поэтому фиксированная раскладка макета краснеет.
     assert view.day_labels[0] != "ПН"
 
 
@@ -757,8 +764,11 @@ async def test_heatmap_cell_counts_every_send_of_the_hour_and_peak_is_the_max(
         db_session, user_id=user.id, now=NOW, tz=timezone.utc
     )
 
-    # 19.05 14:00 = 146-й час окна (ряд 6), 18.05 05:30 = 113-й (ряд 4).
-    assert _filled_cells(view) == {(6, 14): 3, (4, 5): 1}
+    # Окно якорится на локальную полночь: начало — 14.05 00:00. 19.05 14:00 =
+    # 134-й час окна (ряд 5), 18.05 05:30 = 101-й (ряд 4). Ряд есть КАЛЕНДАРНЫЕ
+    # сутки, поэтому номер ряда равен номеру суток в окне, а не доле от часа
+    # запроса.
+    assert _filled_cells(view) == {(5, 14): 3, (4, 5): 1}
     assert view.peak == 3
 
 
