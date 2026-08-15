@@ -21,6 +21,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.analytics.send_analytics import CHART_BUCKETS_PER_DAY
 from app.models.ad import Ad
 from app.models.balance_transaction import BalanceTransaction
 from app.models.group import Group
@@ -693,18 +694,22 @@ async def test_profile_no_utility_classes(authed_client: AsyncClient):
         assert marker not in response.text, marker
 
 
-# --- План 04-04: heatmap активности и ближайшие отправки --------------------
+# --- План 04-04: активность за неделю и ближайшие отправки ------------------
+#
+# Сетка 7×24 (прежнее решение D-09) снята на приёмке Фазы 4 в пользу бар-чарта
+# макета. Часовая раскладка при этом ОСТАЛАСЬ в модуле аналитики и покрыта
+# своими тестами — снят её показ на экране, а не сама раскладка.
 
 @pytest.mark.asyncio
-async def test_dashboard_heatmap_is_a_grid_without_table_elements(
+async def test_dashboard_activity_chart_renders_bars_without_table_elements(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """DASH-04: сетка 7×24 построена примитивами сетки, а не таблицей.
+    """DASH-04: график построен примитивами раскладки, а не таблицей.
 
-    Число ячеек утверждается ЯВНО: сетка, потерявшая ряд или час, отрисуется
-    без единого исключения и вернёт те же 200, а пользователь увидит неполную
-    неделю. Элементы таблицы запрещены по проекту (test_template_inventory),
-    и heatmap — самый естественный соблазн их вернуть.
+    Число столбцов утверждается ЯВНО: график, потерявший сутки или долю,
+    отрисуется без единого исключения и вернёт те же 200, а пользователь увидит
+    неполную неделю. Элементы таблицы запрещены по проекту
+    (test_template_inventory), и график — самый естественный соблазн их вернуть.
     """
     await _seed_send_log(db_session, ad_title="Отправка недели")
 
@@ -712,8 +717,12 @@ async def test_dashboard_heatmap_is_a_grid_without_table_elements(
 
     assert response.status_code == 200
     html = response.text
-    assert "data-heatmap" in html, "сетка активности не отрисовалась"
-    assert html.count("data-heatcell") == 7 * 24, "сетка не 7×24"
+    assert "data-chart" in html, "график активности не отрисовался"
+    assert html.count("data-chartcol") == 7 * CHART_BUCKETS_PER_DAY, (
+        "график не 7 суток по четыре доли"
+    )
+    # Подпись у каждых суток окна ровно одна.
+    assert html.count("data-chartdays") == 1
     for marker in ("<table", "<td", "<th ", "<thead", "<tbody"):
         assert marker not in html, marker
     for marker in UTILITY_MARKERS:
@@ -721,24 +730,27 @@ async def test_dashboard_heatmap_is_a_grid_without_table_elements(
 
 
 @pytest.mark.asyncio
-async def test_dashboard_heatmap_cells_carry_a_saturation_step(
+async def test_dashboard_chart_bars_carry_height_but_never_inline_colour(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Ступень насыщенности приезжает АТРИБУТОМ, а не инлайн-стилем.
+    """Высота столбца — инлайн-размер, цвет — атрибут.
 
-    Ступень в атрибуте — единственная форма, которую может раскрасить CSS без
-    инлайн-стилей (D-06) и на которую может опереться Фаза 6, не переписывая
-    шкалу заново.
+    Запрет D-06 касается инлайн-ЦВЕТА: раскрасить график без него можно только
+    признаком в атрибуте, на который обопрётся и Фаза 6. А размер по данным
+    инлайном в проекте разрешён и применяется — ровно так его задаёт
+    `components/progress.html`. Проверяется и то, и другое: подмена признака
+    заливки инлайн-цветом прошла бы молча.
     """
     await _seed_send_log(db_session, ad_title="Отправка недели")
 
     html = (await authed_client.get("/dashboard")).text
 
-    assert re.search(r'data-heatcell data-level="[0-4]"', html), (
-        "у ячеек нет ступени насыщенности"
+    assert re.search(r'data-empty="[yn]" style="height: \d+%"', html), (
+        "у столбцов нет доли высоты или признака пустоты"
     )
-    assert 'data-level="0"' in html, "пустые часы недели обязаны быть нулевой ступенью"
-    assert "style=\"background" not in html, "насыщенность выписана инлайн-стилем"
+    assert 'data-empty="y"' in html, "пустые доли недели обязаны остаться видимыми"
+    assert 'data-empty="n"' in html, "заполненная доля не помечена"
+    assert 'style="background' not in html, "заливка выписана инлайн-стилем"
 
 
 # --- План 06: раздел «Аккаунты» --------------------------------------------
@@ -3220,3 +3232,137 @@ def test_editor_collapses_to_one_column_and_shrinks_day_cells():
     # Полосы прогресса внутри карточки расписания нет и быть не может (D-17).
     assert ".sched-card__progress" not in css
     assert "[data-sched-card] .progress" not in css
+
+
+# --- UAT Фазы 4, тест 1: три расхождения дашборда с макетом ------------------
+#
+# Все три — CSS/раскладка, и ни одно из них НЕ ВИДНО поведенческой проверке:
+# страница отдаёт 200 и с ними, и без них, разметка на месте, данные верные.
+# Отсюда форма проверок — утверждения о самом правиле, как у соседнего теста
+# редактора выше. Каждое поймано на живом стеке и подтверждено скриншотом.
+
+
+def test_upcoming_badge_sizes_the_messenger_glyph():
+    """Бейдж канала задаёт размер иконки — иначе строка разъезжается.
+
+    Макрос messenger_icon вызывается дашбордом с size='' по уговору «размер
+    задаёт раздел» (его собственный докстринг). Раздел истории свою половину
+    уговора выполняет правилом [data-hrow] [data-area=head] svg, дашборд — не
+    выполнял, и svg с одним viewBox без width/height растягивался до размера
+    контейнера: иконки каналов выросли в разы, высота строки «Ближайших
+    отправок» — следом, подпись канала уехала за правый край.
+
+    Размер 11px и форма пилюли взяты из макета (бейдж строки ближайшей
+    отправки: mono 10px, отступы 4px 8px 4px 6px, радиус 6px).
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    assert "[data-upbadge] .msg__glyph { width: 11px; height: 11px; }" in css, (
+        "размер иконки канала на дашборде снят — svg снова растянется по контейнеру"
+    )
+    assert "[data-upbadge] .msg {" in css, "пилюля бейджа макета снята"
+    # Тон приходит атрибутом канала: иконка MAX залита градиентом, а не
+    # currentColor, и через цвет глифа её бейдж не покрасить.
+    for channel in ("tg_user", "wa", "max"):
+        assert f'[data-upbadge][data-channel="{channel}"] .msg' in css, channel
+
+
+def test_activity_chart_columns_are_fractional_not_fixed():
+    """Столбцы графика — ДОЛЕВЫЕ, поэтому мёртвого поля справа не возникает.
+
+    Прежняя сетка 7×24 держала ячейку в жёстких 14px при `width: max-content` и
+    занимала около четырёхсот пикселей в карточке любой ширины — справа
+    оставалась пустота в треть экрана. У долевого столбца этой болезни нет по
+    построению, и фиксированная ширина сюда вернуться не должна.
+
+    Высота контейнера ФИКСИРОВАНА намеренно: доля столбца считается процентом
+    от неё, а высота по содержимому у пустых span схлопнулась бы в ноль ровно
+    так же, как схлопывались ячейки прежней сетки.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    assert (
+        "[data-chart] { display: flex; align-items: flex-end; gap: 4px; height: 120px; }"
+        in css
+    ), "контейнер графика потерял высоту — проценты столбцов схлопнутся в ноль"
+    assert "[data-chartcol] {\n  flex: 1;" in css, "столбец перестал быть долевым"
+    # Ноль обязан остаться видимым — час без отправок не дырка в графике.
+    assert "min-height: 2px" in css
+    # Прокрутки этому блоку больше не нужно: долевой столбец влезает всегда.
+    assert "[data-heatscroll]" not in css, "остался контейнер прокрутки снятой сетки"
+    assert "[data-heatcell]" not in css, "остались правила снятой сетки"
+
+
+def test_dashboard_blocks_share_one_head_without_a_divider():
+    """Три блока дашборда несут ОДНУ шапку, и разделителя под ней нет.
+
+    `card_open(title=...)` рисует `.card__head` с `border-bottom`, которого в
+    макете нет ни у одной карточки дашборда: «Ближайшие отправки» шли через
+    него и получали линию, а лента и график — нет, и две карточки одной пары
+    выглядели по-разному.
+
+    Правило ОДНО на три атрибута: до консолидации их было два с побайтово
+    совпадающими телами. Сам примитив `.card__head` с разделителем остаётся —
+    здесь снято его применение на этой странице, а не он сам.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+    page = (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
+    chart = (
+        TEMPLATES_DIR / "dashboard" / "includes" / "activity_chart.html"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "[data-blockhead] { display: flex; align-items: center; gap: 10px;"
+        " margin-bottom: 16px; }" in css
+    )
+    # Копии консолидированного правила не вернулись.
+    assert "[data-feedhead]" not in css
+    assert "[data-heathead]" not in css
+
+    assert page.count("data-blockhead") == 2, "шапки пары разъехались"
+    assert "data-blockhead" in chart, "у графика своя шапка вместо общей"
+
+    # Комментарии Jinja снимаются ПЕРЕД проверкой вызова. Первая редакция этого
+    # теста искала подстроку по сырому тексту и краснела на собственном
+    # объяснении: докстринг шаблона называет `card_open(title=...)`, чтобы
+    # сказать, почему он здесь НЕ применяется. Приём уже был пройден проектом на
+    # запрете Docker SDK (план 04-05) — тот же вывод: объяснение запрета не
+    # должно считаться его нарушением, иначе следующая правка снимет из
+    # комментария самое ценное, ПРИЧИНУ.
+    code = re.sub(r"\{#.*?#\}", "", page, flags=re.DOTALL)
+    assert "card_open(title=" not in code, (
+        "заголовок снова идёт через card_open — вернётся разделительная линия"
+    )
+    # Невакуумность: без снятия комментариев проверка ловила бы объяснение.
+    assert "card_open(title=" in page, "объяснение причины ушло из шаблона"
+    # Разделитель остаётся примитивом проекта для всех прочих разделов.
+    assert ".card__head {" in css
+
+
+def test_dashboard_pairs_upcoming_and_feed_in_two_columns():
+    """«Ближайшие отправки» и «Живая лента» — пара в две колонки по макету.
+
+    Оба шаблона называют себя «левой» и «правой половиной пары» в своих
+    комментариях, но лежали прямыми детьми вертикальной стопки страницы и
+    занимали полную ширину каждая: пара существовала в комментариях и не
+    существовала на экране.
+
+    Схлопывание в одну колонку делает сама сетка (`auto-fit` + `minmax`), и
+    отдельного медиазапроса для этого нет — второй точки правды о том же
+    переломе в проекте заводиться не должно.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+    page = (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
+
+    assert (
+        "grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));" in css
+    ), "сетка пары дашборда снята"
+    assert "[data-dashpair] > * { min-width: 0; }" in css, (
+        "без min-width: 0 длинное название вытолкнет колонку"
+    )
+
+    # Обёртка обязана охватывать ОБЕ половины, а не одну: открывающий тег стоит
+    # до блока ближайших отправок, закрывающий — после контейнера ленты.
+    assert "data-dashpair" in page
+    assert page.index("data-dashpair") < page.index("Ближайшие отправки")
+    assert page.index("/data-dashpair") > page.index('id="dash-feed"')

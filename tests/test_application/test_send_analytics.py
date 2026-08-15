@@ -22,9 +22,12 @@ from app.application.analytics.send_analytics import (
     STATUS_ACCOUNT_DISCONNECTED,
     STATUS_FAIL,
     STATUS_OK,
+    CHART_BUCKET_HOURS,
+    CHART_BUCKETS_PER_DAY,
     HeatmapView,
     SendMetrics,
     UpcomingSend,
+    activity_chart,
     activity_heatmap,
     apply_history_filters,
     history_count,
@@ -1116,3 +1119,83 @@ def test_upcoming_send_carries_the_row_of_the_block():
     assert item.ad_id == 2
     assert item.group_count == 3
     assert item.reason == ""
+
+
+# --- Свёртка часовой сетки в столбцы графика ---------------------------------
+#
+# `activity_chart` ЧИСТАЯ и синхронная: ни базы, ни фикстур, ни asyncio. Она и
+# существует затем, чтобы второго запроса за тем же окном не появилось — все
+# свойства окна (локальная зона, скользящие сутки, подписи по окну) уже держит
+# `activity_heatmap`, и эти тесты их не перепроверяют.
+
+
+def _grid(*rows: list[int]) -> HeatmapView:
+    """Сетка из явно заданных суток. Подпись ряда роли в свёртке не играет."""
+    return HeatmapView(
+        grid=[list(r) for r in rows],
+        day_labels=[f"Д{i}" for i in range(len(rows))],
+        peak=max((max(r) for r in rows), default=0),
+    )
+
+
+def test_chart_folds_each_day_into_four_six_hour_buckets():
+    """Столбец есть СУММА своих шести часов, а суток — четыре столбца."""
+    day = [0] * 24
+    day[0] = 1  # первая доля
+    day[5] = 2  # тоже первая доля: 0-5 включительно
+    day[6] = 4  # вторая доля
+    day[23] = 8  # четвёртая доля
+
+    view = activity_chart(_grid(day))
+
+    assert CHART_BUCKET_HOURS == 6
+    assert len(view.bars) == CHART_BUCKETS_PER_DAY
+    assert view.bars == [3, 4, 0, 8]
+
+
+def test_chart_keeps_days_separate_and_in_order():
+    """Сутки не смешиваются: столбцы идут подряд по суткам окна."""
+    first = [1] + [0] * 23
+    second = [0] * 18 + [2] * 6
+
+    view = activity_chart(_grid(first, second))
+
+    assert len(view.bars) == 2 * CHART_BUCKETS_PER_DAY
+    assert view.bars == [1, 0, 0, 0, 0, 0, 0, 12]
+
+
+def test_chart_peak_is_the_hottest_bucket_not_the_hottest_hour():
+    """Пик считается ПО СТОЛБЦАМ.
+
+    Взять пик часовой сетки значило бы мерить долю шести часов шкалой одного:
+    столбец никогда не дорос бы до полной высоты, и график читался бы ниже, чем
+    он есть.
+    """
+    day = [0] * 24
+    day[0] = 3
+    day[1] = 3  # столбец = 6, при этом самый горячий ЧАС равен трём
+
+    view = activity_chart(_grid(day))
+
+    assert view.peak == 6
+
+
+def test_chart_of_an_empty_window_is_zeros_not_an_empty_list():
+    """Пустое окно даёт столбцы нулей — иначе блок выглядел бы сломанным."""
+    view = activity_chart(_grid([0] * 24, [0] * 24))
+
+    assert view.bars == [0] * (2 * CHART_BUCKETS_PER_DAY)
+    assert view.peak == 0
+
+
+def test_chart_carries_the_day_labels_of_the_window():
+    """Подписи приходят ИЗ сетки: второго источника дней недели не заводится."""
+    source = _grid([0] * 24, [0] * 24)
+    source.day_labels = ["ПТ", "СБ"]
+
+    view = activity_chart(source)
+
+    assert view.day_labels == ["ПТ", "СБ"]
+    # Копия, а не тот же список: правка подписей графика не должна доставать
+    # до сетки, которую Фаза 6 может держать рядом.
+    assert view.day_labels is not source.day_labels

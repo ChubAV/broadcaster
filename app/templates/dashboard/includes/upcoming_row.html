@@ -50,7 +50,10 @@
   {#- Ветка «неизвестный мессенджер» в messenger_icon несёт utility-класс, а у
       отвязанного расписания типа нет: вызов ограничен известными типами. -#}
   {%- if item.messenger_type in ('tg_user', 'wa', 'max') %}
-  <span data-upbadge>{{ messenger_icon(item.messenger_type, size='', show_label=true) }}</span>
+  {#- Канал приезжает АТРИБУТОМ, как и у полоски строки выше: тон пилюли красит
+      CSS. Через цвет глифа это не сделать — иконка MAX залита градиентом, а не
+      currentColor, и её бейдж остался бы бесцветным. -#}
+  <span data-upbadge data-channel="{{ item.messenger_type }}">{{ messenger_icon(item.messenger_type, size='', show_label=true) }}</span>
   {%- endif %}
 </a>
 {%- endmacro %}

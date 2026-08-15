@@ -1154,7 +1154,38 @@ a:hover { color: var(--accent-link-hover); }
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0;
   font-size: var(--fs-xs); color: var(--text-tertiary);
 }
+/* Бейдж канала — КОМПАКТНАЯ ПИЛЮЛЯ макета: mono-подпись 10px, отступы
+   4px 8px 4px 6px, радиус 6px, иконка 11px.
+
+   РАЗМЕР ИКОНКИ ЗАДАЁТСЯ ЗДЕСЬ И ЭТО ОБЯЗАТЕЛЬНО. Макрос messenger_icon
+   получает size='' именно с уговором, что размер придёт от раздела (см. его
+   докстринг). Без этого правила svg остаётся с одним viewBox и без width/height
+   — заменяемый элемент растягивается до размера контейнера: строка вырастала в
+   несколько раз по высоте, а подпись канала уезжала за правый край. Раздел
+   истории свою половину уговора выполняет строкой 1063; дашборд — не выполнял.
+
+   Тон приходит АТРИБУТОМ канала, тем же, что у полоски строки: у MAX иконка
+   залита градиентом, а не currentColor, поэтому окрасить бейдж через цвет
+   глифа нельзя — источником тона обязан быть контейнер. */
 [data-upbadge] { flex: none; }
+[data-upbadge] .msg {
+  gap: 5px; padding: 4px 8px 4px 6px; border-radius: var(--r-xs);
+  background: var(--surface-input);
+}
+[data-upbadge] .msg__glyph { width: 11px; height: 11px; }
+[data-upbadge] .msg__label {
+  font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: .08em; color: inherit;
+}
+[data-upbadge][data-channel="tg_user"] .msg {
+  color: var(--info); background: color-mix(in oklab, var(--info) 12%, transparent);
+}
+[data-upbadge][data-channel="wa"] .msg {
+  color: var(--ok); background: color-mix(in oklab, var(--ok) 12%, transparent);
+}
+[data-upbadge][data-channel="max"] .msg {
+  color: var(--accent); background: color-mix(in oklab, var(--accent) 12%, transparent);
+}
 
 @media (max-width: 400px) {
   /* Перестроение идёт СРЕДСТВАМИ CSS, переключателя вида на JS нет. Первой
@@ -1164,13 +1195,29 @@ a:hover { color: var(--accent-link-hover); }
   [data-uprow] { gap: 9px; }
   [data-uprow] > .mono { width: 72px; }
   [data-upbadge] .msg__label { display: none; }
+  /* Без подписи асимметричные отступы пилюли (6px слева под иконку, 8px справа
+     под текст) превращают её в скошенный прямоугольник — выравниваем. */
+  [data-upbadge] .msg { gap: 0; padding: 5px; }
 }
 
+/* Шапка блока дашборда ------------------------------------------------------ */
+/* ОДНА шапка на все три блока: заголовок слева, mono-подпись прижата вправо
+   на ТОЙ ЖЕ строке. Своя, а не card_open(title=...), по двум причинам сразу:
+   парный макрос карточки ставит подпись ПОД заголовком, а макет — справа на
+   строке заголовка; и он же рисует под шапкой разделительную линию
+   (.card__head border-bottom), которой в макете нет ни у одной карточки
+   дашборда. До этого правила «Ближайшие отправки» шли через card_open(title=)
+   и получали линию, а лента и график — нет: две карточки одной пары выглядели
+   по-разному.
+
+   Правило ОДНО на три атрибута, а не три одинаковых: до консолидации их было
+   два с побайтово совпадающими телами, и третий блок завёл бы третью копию.
+   .card__head с разделителем остаётся как есть для всех прочих разделов
+   проекта — здесь снят не примитив, а его применение на этой странице. */
+[data-blockhead] { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+[data-blockhead] .mono { margin-left: auto; }
+
 /* Живая лента (DASH-03, макет 428-444) -------------------------------------- */
-/* Шапка блока: заголовок слева, подпись real-time прижата вправо. Своя, а не
-   card_open(title=...), по той же причине, что и у heatmap: парный макрос
-   карточки ставит подпись ПОД заголовком, а макет ставит её на ту же строку. */
-[data-feedhead] { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 [data-feedlive] { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
 /* Пульсирующая точка «идёт прямо сейчас». Псевдоэлемент, а не отдельный узел
    разметки: точка — чистое украшение подписи, и программе чтения с экрана в
@@ -1217,47 +1264,69 @@ a:hover { color: var(--accent-link-hover); }
    разной длины, и без фиксации край строки прыгал бы от строки к строке. */
 [data-feedrow] > .mono { flex: none; font-variant-numeric: tabular-nums; }
 
-/* Heatmap активности 7×24 (DASH-04, D-09) ----------------------------------- */
-/* Шапка блока: заголовок слева, mono-подпись прижата вправо (макет 449-451).
-   Своя, а не card_open(title=...): парный макрос карточки ставит подпись ПОД
-   заголовком, а макет ставит её на ту же строку справа. */
-[data-heathead] { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
-[data-heathead] .mono { margin-left: auto; }
-/* Прокрутка на КОНТЕЙНЕРЕ — форма адаптивности этого блока (критерий приёмки
-   фазы). Долевая ширина ячейки (`1fr`) на 320px даёт полосу примерно в 8px, в
-   которой ступень насыщенности неразличима: сетка формально «влезла», а читать
-   её нельзя. Поэтому ячейка ФИКСИРОВАННАЯ, а узкая ширина получает прокрутку. */
-[data-heatscroll] { overflow-x: auto; }
-/* 25 колонок: подпись дня плюс 24 часа. Ряды не объявлены явно — их число
-   задаёт окно (`days`), и жёсткое `grid-template-rows: repeat(7, ...)` молча
-   разошлось бы с сеткой другой ширины, которую попросит Фаза 6. */
-[data-heatmap] {
-  display: grid;
-  grid-template-columns: 30px repeat(24, 14px);
-  grid-auto-rows: 14px;
-  gap: 3px;
-  align-items: center;
-  width: max-content;
+/* Активность за неделю — бар-чарт (DASH-04) --------------------------------- */
+/* СТОЛБЦЫ ДОЛЕВЫЕ (`flex: 1`), а не фиксированные. Прежняя сетка 7×24 держала
+   ячейку в жёстких 14px и оттого занимала около четырёхсот пикселей в карточке
+   любой ширины — справа оставалось мёртвое поле в треть экрана. У долевого
+   столбца этой болезни нет по построению: график занимает ровно ту ширину,
+   которая ему дана, на любом экране, и горизонтальной прокрутки этому блоку
+   больше не нужно вовсе.
+
+   Высота 120px — из макета. Она ФИКСИРОВАНА, потому что доля столбца считается
+   в процентах от неё: высота по содержимому у пустых span схлопнулась бы в
+   ноль ровно так же, как схлопывались ячейки прежней сетки. */
+[data-chart] { display: flex; align-items: flex-end; gap: 4px; height: 120px; }
+/* Колонка — носитель доли ширины и прижима столбца к низу. Отдельный элемент,
+   а не `align-self` на самом столбце: столбец обязан расти снизу вверх, а его
+   высота задаётся процентом, который считается от высоты РОДИТЕЛЯ. */
+[data-chartcol] {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  justify-content: flex-end; height: 100%;
 }
-[data-heatday], [data-heathour] {
+/* Ноль — ВИДИМАЯ слабая подложка, а не пустое место: шесть часов без отправок
+   обязаны читаться как шесть часов без отправок, а не как дырка в графике.
+   min-height держит эту подложку различимой при нулевой доле. */
+[data-chartbar] {
+  border-radius: 3px; min-height: 2px;
+  background: var(--surface-input); transition: background .18s ease;
+}
+[data-chartbar][data-empty="n"] { background: var(--accent); }
+[data-chartbar][data-empty="n"]:hover { background: var(--accent-link); }
+/* Подписи суток: по одной на свою четвёрку столбцов, по центру группы.
+   Колонки НЕ перечислены явно — их число задаёт окно (`days`), и жёсткое
+   `repeat(7, 1fr)` молча разошлось бы с окном другой ширины, которое попросит
+   Фаза 6. `grid-auto-flow: column` раскладывает столько, сколько приехало.
+   Тот же gap, что у столбцов: иначе подпись поехала бы относительно группы. */
+[data-chartdays] {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 4px;
+  margin-top: 10px; text-align: center;
   font-family: var(--font-mono); font-size: var(--fs-2xs);
   letter-spacing: .06em; color: var(--text-muted);
 }
-/* Подпись помечает начало своего шестичасового блока и растягивается на него. */
-[data-heathour] { grid-column: span 6; }
-/* Пять ступеней: ноль плюс четыре уровня. Нулевая ступень — ВИДИМАЯ слабая
-   заливка, а не прозрачность: час без отправок обязан читаться как час без
-   отправок, а не как дырка в сетке. Радиус 3px взят от столбцов графика в
-   макете (строка 460): токены радиусов начинаются с 6px, а это половина стороны
-   ячейки — она перестала бы быть квадратной. */
-[data-heatcell] { border-radius: 3px; background: var(--surface-input); }
-[data-heatcell][data-level="1"] { background: color-mix(in oklab, var(--accent) 25%, var(--surface-input)); }
-[data-heatcell][data-level="2"] { background: color-mix(in oklab, var(--accent) 50%, var(--surface-input)); }
-[data-heatcell][data-level="3"] { background: color-mix(in oklab, var(--accent) 75%, var(--surface-input)); }
-[data-heatcell][data-level="4"] { background: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-chartbar] { transition: none; }
+}
 
 /* Вертикальная стопка панелей страницы (дашборд, профиль) */
 [data-stack] { display: flex; flex-direction: column; gap: 22px; }
+/* ПАРА «Ближайшие отправки» / «Живая лента» — ДВЕ КОЛОНКИ по макету. Оба
+   шаблона называют себя «левой» и «правой половиной пары», но до этого правила
+   лежали в вертикальной стопке страницы, то есть каждая занимала полную ширину:
+   пара существовала в комментариях и не существовала на экране.
+
+   Схлопывание в одну колонку делает сама сетка (`auto-fit` + `minmax`), когда
+   на две колонки по 330px перестаёт хватать ширины — отдельный медиазапрос для
+   этого не нужен и завёл бы вторую точку правды о том же переломе.
+
+   min-width: 0 на потомках обязателен: внутри обеих половин лежат строки с
+   обрезкой по многоточию, а элемент сетки по умолчанию не сжимается меньше
+   своего содержимого — без него длинное название вытолкнуло бы колонку. */
+[data-dashpair] {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 13px; min-width: 0;
+}
+[data-dashpair] > * { min-width: 0; }
 /* Вертикальная стопка полей формы */
 [data-form] { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
 [data-form] > .field { align-self: stretch; }

@@ -502,7 +502,7 @@ async def test_dashboard_empty_grid_is_replaced_by_an_empty_state(
     """Сетка из нулей выглядит как поломка, поэтому её место занимает объяснение."""
     body = _page_body((await authed_client.get("/dashboard")).text)
 
-    assert "data-heatmap" not in body, "пустая сетка отрисована вместо объяснения"
+    assert "data-chart" not in body, "пустой график отрисован вместо объяснения"
     assert 'href="/accounts"' in body, "пустое состояние не ведёт к подключению канала"
 
 
@@ -565,7 +565,7 @@ async def test_dashboard_empty_state_has_no_action_when_everything_is_set_up(
     body = _page_body((await authed_client.get("/dashboard")).text)
 
     assert "empty__action" not in body, "призыв к действию остался при заполненном аккаунте"
-    assert "data-heatmap" not in body, "пустая сетка отрисована вместо объяснения"
+    assert "data-chart" not in body, "пустой график отрисован вместо объяснения"
 
 
 @pytest.mark.asyncio
