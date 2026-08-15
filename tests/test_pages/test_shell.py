@@ -698,6 +698,25 @@ def _worker_rows(html: str) -> dict[int, str]:
     return rows
 
 
+def _worker_states(html: str) -> dict[int, str]:
+    """{id аккаунта: ВИДИМЫЙ текст состояния} по строкам перечня воркеров.
+
+    Разбирается именно ТЕКСТ, а не атрибут: атрибут `data-worker-online` уже
+    пинится `_worker_rows`, а расходятся между собой они — точка считается из
+    булева признака контракта шелла, а слово рисовалось сравнением со строкой в
+    самом макросе. Тест, читающий только атрибут, зеленел бы на серой точке
+    рядом со словом «Онлайн».
+    """
+    states: dict[int, str] = {}
+    for account_id, body in re.findall(
+        r'data-worker-id="(\d+)"(.*?)</div>', html, re.S
+    ):
+        state = re.search(r'class="worker-row__state">\s*(.*?)\s*</span>', body, re.S)
+        assert state, f"строка перечня без видимого состояния: {body}"
+        states[int(account_id)] = state.group(1).strip()
+    return states
+
+
 @pytest.mark.asyncio
 async def test_dashboard_lists_each_account_with_its_worker_state(
     authed_client: AsyncClient, db_session: AsyncSession
@@ -724,6 +743,19 @@ async def test_dashboard_lists_each_account_with_its_worker_state(
     assert rows == {wa.id: "true", tg.id: "false", mx.id: "true"}, (
         "состояние строки разошлось со статусом аккаунта"
     )
+    # ТОЧКА И СЛОВО ИДУТ ИЗ ОДНОГО ПРИЗНАКА. Пока слово рисовалось собственным
+    # сравнением со строкой 'active', смена константы WORKER_ONLINE_STATUS дала
+    # бы серую точку рядом со словом «Онлайн», и ни один тест не покраснел бы:
+    # разбирался только атрибут.
+    states = _worker_states(html)
+    assert states == {wa.id: "Онлайн", tg.id: "Отключён", mx.id: "Онлайн"}, (
+        "видимое состояние строки разошлось с булевым признаком онлайна"
+    )
+    for account_id, online in rows.items():
+        assert (states[account_id] == "Онлайн") == (online == "true"), (
+            f"точка и слово спорят об аккаунте {account_id}: "
+            f"{online} против {states[account_id]!r}"
+        )
     # Агрегат шапки посчитан из того же списка и разойтись с ним не может.
     assert SESSION_PILL_RE.search(html).group(1) == "2"
 
