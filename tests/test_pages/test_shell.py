@@ -4,6 +4,7 @@ import ast
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import pytest
 from httpx import AsyncClient
@@ -590,10 +591,26 @@ SESSION_PILL_RE = re.compile(r'data-sessions-online="(\d+)"')
 
 
 async def _seed_messenger_account(
-    db: AsyncSession, user_id: int, status: str
+    db: AsyncSession,
+    user_id: int,
+    status: str,
+    *,
+    type_: str = "wa",
+    credentials: str = "creds",
+    session_data: str | None = None,
 ) -> MessengerAccount:
+    """Посеять messenger-аккаунт. Один посев на всю секцию DASH-05.
+
+    Канал, учётные данные и строка сессии — именованные параметры с прежними
+    умолчаниями: тесты индикатора, написанные до перечня, продолжают звать
+    помощника тремя позиционными аргументами и не правятся.
+    """
     account = MessengerAccount(
-        user_id=user_id, type="wa", credentials="creds", status=status
+        user_id=user_id,
+        type=type_,
+        credentials=credentials,
+        session_data=session_data,
+        status=status,
     )
     db.add(account)
     await db.commit()
@@ -655,6 +672,103 @@ async def test_dashboard_sessions_number_is_zero_without_active_accounts(
 
     assert "data-sessions" in html
     assert SESSION_PILL_RE.search(html).group(1) == "0"
+
+
+def _worker_rows(html: str) -> dict[int, str]:
+    """{id аккаунта: значение data-worker-online} по строкам перечня воркеров.
+
+    Разбор идёт по ТЕГУ строки целиком, а не по паре соседних атрибутов: порядок
+    атрибутов в разметке — не контракт, и тест, который его закрепил бы, краснел
+    бы от перестановки, ничего не сломавшей на экране.
+    """
+    rows: dict[int, str] = {}
+    for tag in re.findall(r"<[^>]*\sdata-worker\s[^>]*>", html):
+        account_id = re.search(r'data-worker-id="(\d+)"', tag)
+        online = re.search(r'data-worker-online="(true|false)"', tag)
+        assert account_id and online, (
+            f"строка перечня без опознавательных атрибутов: {tag}"
+        )
+        rows[int(account_id.group(1))] = online.group(1)
+    return rows
+
+
+@pytest.mark.asyncio
+async def test_dashboard_lists_each_account_with_its_worker_state(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """DASH-05/SC-1: пользователь читает, КАКОЙ аккаунт онлайн, а не сколько.
+
+    Одно число не отвечает на вопрос, ради которого пользователь пришёл на
+    дашборд: «почему мои рассылки не уходят». Отвечает перечень, в котором
+    отвалившийся канал назван по имени.
+    """
+    user = await _dashboard_user(db_session)
+    wa = await _seed_messenger_account(db_session, user.id, "active", type_="wa")
+    tg = await _seed_messenger_account(
+        db_session, user.id, "disconnected", type_="tg_user"
+    )
+    mx = await _seed_messenger_account(db_session, user.id, "active", type_="max")
+
+    response = await authed_client.get("/dashboard")
+
+    assert response.status_code == 200
+    html = response.text
+    rows = _worker_rows(html)
+    assert len(rows) == 3, "перечень показывает не все аккаунты пользователя"
+    assert rows == {wa.id: "true", tg.id: "false", mx.id: "true"}, (
+        "состояние строки разошлось со статусом аккаунта"
+    )
+    # Агрегат шапки посчитан из того же списка и разойтись с ним не может.
+    assert SESSION_PILL_RE.search(html).group(1) == "2"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_worker_list_excludes_another_users_account(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-04-G1-01: чужой аккаунт не попадает ни в перечень, ни в счёт."""
+    user = await _dashboard_user(db_session)
+    mine = await _seed_messenger_account(db_session, user.id, "active")
+
+    stranger = User(email="stranger@test.com", password_hash="x", name="Stranger")
+    db_session.add(stranger)
+    await db_session.commit()
+    await db_session.refresh(stranger)
+    theirs = await _seed_messenger_account(db_session, stranger.id, "active")
+
+    html = (await authed_client.get("/dashboard")).text
+
+    rows = _worker_rows(html)
+    assert theirs.id not in rows, "в перечень попал аккаунт другого пользователя"
+    assert set(rows) == {mine.id}
+    assert 'data-sessions-total="1"' in html, "счёт аккаунтов считает чужие строки"
+
+
+@pytest.mark.asyncio
+async def test_shell_worker_list_carries_no_secrets(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-04-G1-02: учётные данные и строка сессии на экран не выводятся.
+
+    `credentials` хранит строку сессии Telegram и телефон MAX/WhatsApp. Контракт
+    шелла печатается в HTML на КАЖДОЙ странице, поэтому граница проверяется по
+    отрендеренной разметке, а не по намерению.
+    """
+    user = await _dashboard_user(db_session)
+    secret_credentials = f"credentials-{uuid4().hex}"
+    secret_session = f"session-{uuid4().hex}"
+    await _seed_messenger_account(
+        db_session,
+        user.id,
+        "active",
+        credentials=secret_credentials,
+        session_data=secret_session,
+    )
+
+    html = (await authed_client.get("/dashboard")).text
+
+    assert secret_credentials not in html, "учётные данные аккаунта попали в разметку"
+    assert secret_session not in html, "строка сессии аккаунта попала в разметку"
 
 
 def _identifiers_of(source: str) -> set[str]:
