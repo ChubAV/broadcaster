@@ -664,13 +664,17 @@ async def _seed_retry_case(
         }
 
 
-async def _run_retry(factory, log_id, user_id):
+async def _run_retry(factory, log_id, user_id, *, balance_allowed: bool = True):
     """Запускает таск повтора и отдаёт (rpush-и Redis, постановки в Celery).
 
     `asyncio.run` подменяется захватом корутины: тело таска обязано выполниться
     в ТОМ ЖЕ цикле событий, где живёт SQLite-движок фикстуры, — свой цикл
     оторвал бы соединение aiosqlite. Тем же приёмом файл уже пользуется для
     `asyncio.sleep` в тестах фоновой синхронизации.
+
+    Гейт баланса подменяется по образцу тестов рассылки выше: настоящий лезет в
+    Redis, которого в тестовой среде нет, и красил бы каждый тест повтора чужой
+    причиной. `balance_allowed=False` даёт исчерпанный баланс.
     """
     redis_sink: list[tuple] = []
     tg_sink: list[tuple] = []
@@ -693,6 +697,10 @@ async def _run_retry(factory, log_id, user_id):
          patch("app.worker.tasks.send_telegram_message", mock_tg), \
          patch("app.config.get_settings", return_value=mock_s3_settings), \
          patch("redis.from_url", return_value=_FakeRedis(redis_sink)), \
+         patch(
+             "app.worker.tasks.check_balance_cached",
+             AsyncMock(return_value=(balance_allowed, "" if balance_allowed else "Баланс исчерпан")),
+         ), \
          patch("app.worker.tasks.asyncio.run", captured.append):
         retry_send(log_id, user_id)
         assert captured, "таск повтора обязан запускать корутину через asyncio.run"
@@ -898,4 +906,37 @@ async def test_retry_send_stops_when_group_is_switched_off(
 
     assert redis_sink == [], "выключенная группа не имеет права получить отправку"
     assert tg_sink == []
+    assert await _send_log_count(factory) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_type", ["wa", "max", "tg_user"])
+async def test_retry_send_stops_when_the_balance_is_exhausted(
+    db_engine_and_factory, account_type
+):
+    """T-04-36: исчерпанный баланс останавливает повтор ЗДЕСЬ, а не после отправки.
+
+    Гейт стоял только в HTTP-обработчике, а между нажатием и исполнением таска
+    проходит время: задача может простоять за очередью ровно столько, сколько
+    нужно, чтобы баланс кончился на другой рассылке. Без проверки в таске
+    сообщение уходит, и только потом `deduct_message` возвращает False по своему
+    условию `balance > 0` — то есть выходит не отрицательный баланс, а
+    БЕСПЛАТНАЯ отправка мимо тарифа. Остальные три запрета обработчика
+    (владение, черновик, выключенная группа) вторую линию здесь уже имеют;
+    гейт баланса был единственным, у которого её не было.
+
+    Выход, как и у прочих остановок таска, ТИХИЙ: записи в журнал не
+    появляется — иначе история наполнялась бы свидетельствами о заведомо
+    невозможных отправках.
+    """
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(factory, account_type=account_type)
+
+    before = await _send_log_count(factory)
+    redis_sink, tg_sink = await _run_retry(
+        factory, case["log_id"], case["user_id"], balance_allowed=False
+    )
+
+    assert redis_sink == [], "повтор ушёл в очередь мимо гейта баланса"
+    assert tg_sink == [], "повтор ушёл в очередь мимо гейта баланса"
     assert await _send_log_count(factory) == before
