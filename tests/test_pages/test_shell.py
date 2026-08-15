@@ -761,6 +761,72 @@ async def test_dashboard_lists_each_account_with_its_worker_state(
 
 
 @pytest.mark.asyncio
+async def test_worker_list_is_capped_but_the_counts_are_not(
+    authed_client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    """Перечень воркеров ограничен потолком, а числа шапки — нет.
+
+    Число messenger-аккаунтов задаёт ПОЛЬЗОВАТЕЛЬ, схема его не ограничивает, а
+    контракт шелла собирается на КАЖДОМ из 26 маршрутов — в том числе на 25,
+    которые перечня не читают. Выборка без потолка — выделение памяти и
+    разметка, растущие вместе с числом аккаунтов, на каждом рендере продукта.
+
+    Числа при этом обязаны остаться ТОЧНЫМИ: выведенные из обрезанного перечня,
+    они показали бы пользователю за потолком меньше аккаунтов, чем у него есть,
+    — молча, с исправным на вид экраном.
+
+    Потолок подменяется, а не создаётся сотня аккаунтов: утверждение теста —
+    «перечень ограничен потолком», и настоящая сотня строк проверяла бы то же
+    самое, но минутой дольше.
+    """
+    monkeypatch.setattr("app.pages.common.WORKER_LIST_CAP", 2)
+
+    user = await _dashboard_user(db_session)
+    for _ in range(3):
+        await _seed_messenger_account(db_session, user.id, "active")
+    await _seed_messenger_account(db_session, user.id, "disconnected")
+
+    context = await get_shell_context(db_session, user)
+
+    assert len(context["sessions"]) == 2, "перечень воркеров не ограничен потолком"
+    assert context["sessions_total"] == 4, (
+        "счёт аккаунтов выведен из обрезанного перечня и потому занижен"
+    )
+    assert context["sessions_online"] == 3, (
+        "счёт онлайн-аккаунтов выведен из обрезанного перечня и потому занижен"
+    )
+    assert context["nav_counts"]["accounts"] == 4, (
+        "счётчик бокового меню выведен из обрезанного перечня"
+    )
+    assert context["sessions_truncated"] is True, (
+        "обрезка перечня не названа — короткий список читается как «остальных "
+        "каналов нет»"
+    )
+
+    html = (await authed_client.get("/dashboard")).text
+    assert "data-worker-truncated" in html, (
+        "пользователю не сказано, что перечень показан не целиком"
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_list_reports_no_truncation_when_it_fits(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Умещающийся перечень обрезанным себя не называет."""
+    user = await _dashboard_user(db_session)
+    await _seed_messenger_account(db_session, user.id, "active")
+
+    context = await get_shell_context(db_session, user)
+
+    assert context["sessions_truncated"] is False
+    html = (await authed_client.get("/dashboard")).text
+    assert "data-worker-truncated" not in html, (
+        "полный перечень объявлен обрезанным — сообщение о неполноте лжёт"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dashboard_worker_list_excludes_another_users_account(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
@@ -959,6 +1025,12 @@ async def test_shell_reads_worker_state_in_a_single_query(
     состояния воркеров РОВНО ОДНО, и число обращений НЕ РАСТЁТ вместе с числом
     аккаунтов — второе и есть настоящая проверка на N+1, потому что запрос на
     строку не поймать никакой константой.
+
+    ЧТО СЧИТАЕТСЯ СОБСТВЕННЫМ ЧТЕНИЕМ. Перечень ограничен потолком
+    (WORKER_LIST_CAP), а его агрегаты считаются скалярными подзапросами В ТОМ ЖЕ
+    round-trip, где считаются объявления, расписания и история, — то есть
+    дополнительного обращения к базе они не стоят. Собственным чтением здесь
+    называется отдельный ЗАПРОС за строками перечня, и он один.
     """
     user = await _dashboard_user(db_session)
     for _ in range(3):
@@ -988,10 +1060,32 @@ async def test_shell_reads_worker_state_in_a_single_query(
     assert first.status_code == 200
     assert second.status_code == 200
 
-    own_read = [s for s in with_three if "FROM messenger_accounts" in s]
+    own_read = [
+        s
+        for s in with_three
+        if "FROM messenger_accounts" in s and "ORDER BY messenger_accounts.id" in s
+    ]
     assert len(own_read) == 1, (
         "состояние воркеров читается не одним запросом: "
         f"{len(own_read)} собственных обращений\n" + "\n".join(own_read)
+    )
+
+    # Агрегаты перечня не стоят СВОЕГО round-trip: они едут скалярными
+    # подзапросами в общем запросе счётчиков — том самом, что считает
+    # объявления. Отдельный запрос за ними был бы двадцать шестым обращением на
+    # двадцати шести маршрутах.
+    aggregate_reads = [
+        s
+        for s in with_three
+        if "FROM messenger_accounts" in s and s not in own_read
+    ]
+    assert len(aggregate_reads) == 1, (
+        "агрегаты аккаунтов читаются не одним запросом: "
+        f"{len(aggregate_reads)}\n" + "\n".join(aggregate_reads)
+    )
+    assert "FROM ads" in aggregate_reads[0], (
+        "агрегаты аккаунтов уехали в СВОЁ обращение к базе вместо общего "
+        f"round-trip счётчиков: {aggregate_reads[0]}"
     )
     assert len(with_six) == len(with_three), (
         "число обращений к messenger_accounts выросло вместе с числом аккаунтов "
@@ -1004,10 +1098,14 @@ async def test_shell_reads_worker_state_in_a_single_query(
 async def test_shell_aggregate_is_derived_from_the_worker_list(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Оба числа выведены ИЗ ПЕРЕЧНЯ, а не посчитаны отдельно.
+    """Оба числа СОГЛАСНЫ С ПЕРЕЧНЕМ, пока перечень умещается целиком.
 
-    Утверждается не арифметика, а отсутствие второго источника: разойтись эти
-    числа могут только если кто-то вернёт им независимое вычисление.
+    Считаются числа агрегатами, а перечень ограничен потолком — иначе
+    пользователь за потолком видел бы в шапке заниженную цифру. Разойтись им
+    всё равно не на чем: предикат «онлайн» у строки и у агрегата ОДИН
+    (WORKER_ONLINE_STATUS), и именно это утверждает тест — не одно вычисление,
+    а одно определение. Пока строк меньше потолка, согласие наблюдаемо
+    поштучно, что здесь и проверяется.
     """
     user = await _dashboard_user(db_session)
     await _seed_messenger_account(db_session, user.id, "active")

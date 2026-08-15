@@ -270,6 +270,20 @@ def check_is_admin(user: User | None, settings: Settings) -> bool:
 # пилюля шапки и строка перечня разошлись бы на одном и том же аккаунте.
 WORKER_ONLINE_STATUS = "active"
 
+# Потолок ПЕРЕЧНЯ воркеров, уезжающего в разметку. Число строк задаёт
+# пользователь — схема не ограничивает, сколько messenger-аккаунтов он заведёт,
+# — а контракт шелла собирается на КАЖДОМ из 26 маршрутов страниц, включая 25,
+# которые перечня не читают вовсе. Выборка без потолка означала бы выделение
+# памяти и разметку, растущие вместе с числом аккаунтов, на каждом рендере
+# продукта: не «медленно», а неограниченно по управляемому пользователем входу.
+#
+# Сто — с большим запасом больше, чем бывает у живого пользователя, и заведомо
+# меньше, чем нужно, чтобы это стало заметно. Перебравший потолок НЕ узнаёт об
+# этом молча: `sessions_truncated` уезжает в контекст, и перечень говорит, что
+# показан не целиком (тот же принцип, что у потолка выгрузки истории — обрезка
+# обязана называть себя).
+WORKER_LIST_CAP = 100
+
 
 async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
     """Collect live shell data: nav counts, plan quota and messenger sessions.
@@ -285,16 +299,24 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
     Docker недоступен.
 
     Контракт отдаёт и ПЕРЕЧЕНЬ `sessions` — по строке на messenger-аккаунт
-    владельца, — а sessions_online / sessions_total выводятся из него на
-    стороне Python. Второго источника числа воркеров онлайн не существует:
-    разойтись перечню и агрегату физически не с чем (D-35).
+    владельца, не более WORKER_LIST_CAP строк, — а sessions_online /
+    sessions_total считаются агрегатами и от потолка перечня не зависят: иначе
+    пользователь за потолком видел бы в шапке заниженное число, то есть цифру,
+    которая молча врёт. ПРЕДИКАТ «онлайн» у перечня и у агрегата ОДИН
+    (WORKER_ONLINE_STATUS): разойтись им не на чем, и это то, что обещает D-35, —
+    одно определение предиката, а не одно физическое чтение.
+
+    Признак `sessions_truncated` говорит, что перечень показан не целиком.
     """
     if user is None:
         return {}
 
     # Один round-trip на счётчики сущностей: скалярные подзапросы без FROM.
-    # Счётчиков здесь ТРИ, а не пять: подзапросы по messenger-аккаунтам сняты,
-    # оба их числа теперь выводятся из перечня ниже.
+    # Оба числа по messenger-аккаунтам считаются ЗДЕСЬ, а не длиной перечня
+    # ниже: перечень ограничен потолком, и выведенные из него агрегаты за
+    # потолком показывали бы пользователю не то число аккаунтов, которое у него
+    # есть. Предикат «онлайн» при этом остаётся ОДНИМ (WORKER_ONLINE_STATUS) —
+    # сравнение то же самое, что у строки перечня.
     counts = (
         await db.execute(
             select(
@@ -316,6 +338,19 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
                 .where(SendLog.user_id == user.id)
                 .scalar_subquery()
                 .label("history"),
+                select(func.count())
+                .select_from(MessengerAccount)
+                .where(MessengerAccount.user_id == user.id)
+                .scalar_subquery()
+                .label("accounts"),
+                select(func.count())
+                .select_from(MessengerAccount)
+                .where(
+                    MessengerAccount.user_id == user.id,
+                    MessengerAccount.status == WORKER_ONLINE_STATUS,
+                )
+                .scalar_subquery()
+                .label("accounts_online"),
             )
         )
     ).one()
@@ -332,6 +367,11 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
     # аккаунтов показал бы, каким каналом пользуется другой пользователь.
     #
     # Порядок по id — чтобы разметка была детерминированной.
+    #
+    # ПОТОЛОК ОБЯЗАТЕЛЕН: перечень читает ОДИН маршрут из 26, а собирается он на
+    # всех, и число строк задаёт пользователь. Без `limit` это выделение памяти
+    # и разметка, растущие вместе с числом его аккаунтов, на каждом рендере
+    # продукта.
     worker_rows = (
         await db.execute(
             select(
@@ -341,6 +381,7 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
             )
             .where(MessengerAccount.user_id == user.id)
             .order_by(MessengerAccount.id)
+            .limit(WORKER_LIST_CAP)
         )
     ).all()
     sessions = [
@@ -352,7 +393,6 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
         }
         for row in worker_rows
     ]
-    sessions_online = sum(1 for session in sessions if session["is_online"])
 
     subscription = (
         await db.execute(
@@ -391,7 +431,7 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
     return {
         "nav_counts": {
             "ads": counts.ads,
-            "accounts": len(sessions),
+            "accounts": counts.accounts,
             "schedules": counts.schedules,
             "history": counts.history,
         },
@@ -402,8 +442,13 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
             "percent": percent,
             "expires_at": subscription.expires_at if subscription else None,
         },
-        # Перечень и оба его агрегата — ОДИН источник, три представления.
+        # Перечень ограничен потолком, агрегаты — нет: числу в шапке нельзя
+        # зависеть от того, сколько строк поместилось в перечень.
         "sessions": sessions,
-        "sessions_online": sessions_online,
-        "sessions_total": len(sessions),
+        "sessions_online": counts.accounts_online,
+        "sessions_total": counts.accounts,
+        # Обрезка обязана НАЗЫВАТЬ СЕБЯ: молча короткий перечень читался бы как
+        # «остальных аккаунтов нет», то есть как ответ на вопрос, ради которого
+        # пользователь и пришёл на дашборд.
+        "sessions_truncated": counts.accounts > len(sessions),
     }
