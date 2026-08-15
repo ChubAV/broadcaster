@@ -633,8 +633,13 @@ async def history_partial(
         {
             "id": r.id,
             "ad_title": r.ad_title or "—",
-            "ad_text": r.ad_text or "",
-            "ad_images": r.ad_images or [],
+            # СНАПШОТА ТЕЛА ОБЪЯВЛЕНИЯ В СТРОКЕ СПИСКА НЕТ. Ни `ad_text`, ни
+            # `ad_images` карточка списка не рисует — их читает только экран
+            # записи, и он получает ORM-сущность, а не этот словарь. Пока они
+            # тут лежали, каждый рендер списка и каждый тик бесконечной
+            # прокрутки поднимал в память до тридцати полных снимков тела
+            # объявления (`ad_text` — Text, длина не ограничена) ради контекста,
+            # который их выбрасывает.
             "group_name": r.group_name or "—",
             "group_external_id": group.group_external_id if group else None,
             "account_id": group.account_id if group else None,
@@ -1052,8 +1057,13 @@ async def history_list(
         {
             "id": r.id,
             "ad_title": r.ad_title or "—",
-            "ad_text": r.ad_text or "",
-            "ad_images": r.ad_images or [],
+            # СНАПШОТА ТЕЛА ОБЪЯВЛЕНИЯ В СТРОКЕ СПИСКА НЕТ. Ни `ad_text`, ни
+            # `ad_images` карточка списка не рисует — их читает только экран
+            # записи, и он получает ORM-сущность, а не этот словарь. Пока они
+            # тут лежали, каждый рендер списка и каждый тик бесконечной
+            # прокрутки поднимал в память до тридцати полных снимков тела
+            # объявления (`ad_text` — Text, длина не ограничена) ради контекста,
+            # который их выбрасывает.
             "group_name": r.group_name or "—",
             "group_external_id": group.group_external_id if group else None,
             "account_id": group.account_id if group else None,
