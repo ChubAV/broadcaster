@@ -1097,6 +1097,42 @@ def test_retry_slot_registry_documents_its_limit():
     )
 
 
+def test_retry_slot_registry_does_not_grow_with_expired_holds():
+    """Реестр размером с число ДЕЙСТВУЮЩИХ окон, а не с числом повторов.
+
+    Успешная постановка удержание сохраняет, и снять его больше некому: обхода
+    реестра нет нигде, периодической задачи под него не заведено. Без уборки
+    словарь рос бы на запись за каждый успешный повтор и не уменьшался до
+    перезапуска — утечка, которая проявляется ТОЛЬКО на долгоживущем боевом
+    процессе и никогда в прогоне тестов, то есть ровно там, где её никто не
+    поймает.
+
+    Проверяется СТРУКТУРА, а не проза рядом с объявлением: тест на слово в
+    комментарии зеленел бы и на растущем словаре.
+    """
+    history_module._RETRY_IN_FLIGHT.clear()
+    try:
+        for log_id in range(1, 51):
+            assert history_module._claim_retry_slot(log_id) is True
+        assert len(history_module._RETRY_IN_FLIGHT) == 50
+
+        # Срок переписывается на прошедший момент, а не имитируется ожиданием:
+        # окно измеряется десятками секунд, и настоящее ожидание остановило бы
+        # суиту. Утверждение теста при этом именно «сроки истекли».
+        past = monotonic() - 1.0
+        for log_id in list(history_module._RETRY_IN_FLIGHT):
+            history_module._RETRY_IN_FLIGHT[log_id] = past
+
+        assert history_module._claim_retry_slot(999) is True
+        assert len(history_module._RETRY_IN_FLIGHT) == 1, (
+            "просроченные удержания остались в реестре — он растёт всё время "
+            f"жизни процесса: {history_module._RETRY_IN_FLIGHT}"
+        )
+        assert 999 in history_module._RETRY_IN_FLIGHT
+    finally:
+        history_module._RETRY_IN_FLIGHT.clear()
+
+
 # =============================================================================
 # Форма маршрута
 # =============================================================================
