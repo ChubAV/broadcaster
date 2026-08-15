@@ -28,6 +28,7 @@ from app.models.balance_transaction import BalanceTransaction
 from app.models.group import Group
 from app.models.group_info import GroupInfo
 from app.models.messenger_account import MessengerAccount
+from app.models.payment import Payment
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
@@ -48,6 +49,7 @@ SECTION_URLS = {
     "account_groups": "/accounts/{account_id}/groups",
     "history": "/history",
     "accounts": "/accounts",
+    "billing": "/billing",
 }
 
 # Разделы на примитиве строки-таблицы data-row. История сюда НЕ входит: у неё
@@ -67,7 +69,18 @@ MIGRATED_SECTIONS = ["ads", "accounts"]
 
 # Все разделы, переведённые на дизайн-систему, независимо от примитива.
 # Планы 06-08 дописывают свои сюда.
-CLEAN_SECTIONS = MIGRATED_SECTIONS + ["history", "schedules", "account_groups"]
+#
+# «Тарифы» встали сюда планом 05-05: раздел перевёрстан по макету и собран
+# целиком из компонентов и примитивов Фазы 1. В перечень строк-таблиц
+# (MIGRATED_SECTIONS) он не входит — его собственные примитивы закреплены
+# именованными проверками test_billing_* ниже, по той же схеме, что у
+# расписаний и экрана групп аккаунта.
+CLEAN_SECTIONS = MIGRATED_SECTIONS + [
+    "history",
+    "schedules",
+    "account_groups",
+    "billing",
+]
 
 
 async def _user(db: AsyncSession) -> User:
@@ -194,6 +207,27 @@ async def _seed_transaction(
     return tx
 
 
+async def _seed_payment(
+    db: AsyncSession, status: str = "succeeded", plan: str = "basic"
+) -> Payment:
+    """Строка журнала ДЕНЕГ. `created_at` ставится явно: у колонки есть умолчание."""
+    user = await _user(db)
+    payment = Payment(
+        user_id=user.id,
+        yookassa_payment_id="yoo_markup_seed",
+        status=status,
+        amount_value="1490.00",
+        amount_currency="RUB",
+        kind="subscription",
+        plan=plan,
+        created_at=datetime(2026, 5, 20, 12, 0, tzinfo=timezone.utc),
+    )
+    db.add(payment)
+    await db.commit()
+    await db.refresh(payment)
+    return payment
+
+
 async def _seed_subscription(db: AsyncSession, plan: str = "business") -> Subscription:
     user = await _user(db)
     sub = Subscription(
@@ -251,6 +285,11 @@ async def _seed_section(db: AsyncSession, section: str) -> str:
         # WhatsApp редиректит, а тесты раздела ходят и туда (см. Плана 03
         # test_swap_anchors_present).
         await _seed_account(db, type_="max")
+    elif section == "billing":
+        # Оба журнала раздела: деньги и сообщения. Пустой раздел нарисовал бы
+        # два пустых состояния, и проверка разметки зазеленела бы вакуумно.
+        await _seed_payment(db)
+        await _seed_transaction(db)
     else:  # pragma: no cover — защита от опечатки в параметризации
         raise AssertionError(f"неизвестный раздел: {section}")
     return SECTION_URLS[section]
@@ -1415,6 +1454,138 @@ def test_billing_payment_row_is_built_on_row_primitives():
     assert "data-cell-label" in source, "подпись колонки не едет вместе со значением"
     for marker in TABLE_MARKERS:
         assert marker not in source, marker
+
+
+# --- План 05-05, задача 3: снос, честная подпись, адаптивные регрессии -------
+#
+# ⚠️ НАЗВАННАЯ ГРАНИЦА ПРОВЕРКИ. Браузерных и e2e-тестов в проекте нет
+# (блокер STATE.md), поэтому проверки ниже закрепляют РАЗМЕТКУ и ПРАВИЛО CSS, а
+# не отрисовку. Зелёный прогон означает, что сетка объявлена складывающейся и
+# что подписи колонок едут вместе со значениями, — но НЕ означает, что на
+# настоящей мобильной ширине ничего не уехало в горизонтальную прокрутку.
+# Соответствующая истина плана помечена требующей человеческого подтверждения:
+# при отсутствии явного доказательства верификатор обязан позвать человека, а
+# не засчитать молча.
+
+APP_DIR = Path(__file__).resolve().parents[2] / "app"
+COMMON_PY = APP_DIR / "pages" / "common.py"
+REMOVED_PLANS_TEMPLATE = TEMPLATES_DIR / "billing" / "plans.html"
+
+
+def test_the_unwired_plans_template_is_gone():
+    """Неподключённый шаблон раздела снесён (D-19).
+
+    Файл не рендерился НИ ОДНИМ маршрутом и ссылался на переменные, которых
+    нет ни в одном контексте; его поведенческой проверки не существовало —
+    была только проверка исходника, удалённая вместе с ним. Содержимое
+    перенесено в живые паршалы раздела. Тот же ход, что снос шести
+    недостижимых шаблонов в Фазе 1 и мёртвого репозитория групп в Фазе 3.
+    """
+    assert not REMOVED_PLANS_TEMPLATE.exists(), "неподключённый шаблон на месте"
+
+    # Ссылок на снесённый файл в исходниках приложения не осталось: прозой
+    # указывать на несуществующий путь — та же ложь, что мёртвый импорт.
+    needle = REMOVED_PLANS_TEMPLATE.name
+    offenders = [
+        str(path.relative_to(APP_DIR))
+        for path in sorted(APP_DIR.rglob("*"))
+        if path.suffix in {".py", ".html"}
+        and needle in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, f"ссылки на снесённый шаблон остались: {offenders}"
+
+
+@pytest.mark.asyncio
+async def test_the_sidebar_widget_names_the_message_balance_not_the_plan(
+    authed_client: AsyncClient,
+):
+    """Виджет сайдбара подписан ТЕМ, ЧТО ПОКАЗЫВАЕТ (T-05-29).
+
+    `quota.used` / `quota.limit` считаются по журналу списаний БАЛАНСА
+    СООБЩЕНИЙ, а подпись обещала тариф. Раздел «Тарифы» теперь разводит эти две
+    величины на одном экране, и подпись обязана перестать врать: название
+    тарифа и срок живут ТАМ, где рядом стоят настоящие четыре оси.
+    """
+    source = (TEMPLATES_DIR / "base.html").read_text(encoding="utf-8")
+
+    assert "Тариф {{" not in source, "виджет по-прежнему подписан тарифом"
+    assert "Баланс сообщений" in source
+
+    # Контракт переменных виджета НЕ изменился: `quota` читают 26 страниц, и
+    # переименование сломало бы их все. Меняется текст, а не контракт.
+    for expression in ("quota.get('used'", "quota.get('limit'", "quota.get('percent'"):
+        assert expression in source, expression
+    assert 'href="/billing"' in source, "ссылка виджета на раздел исчезла"
+
+    html = (await authed_client.get("/profile")).text
+    assert "data-quota" in html
+    assert "Баланс сообщений" in html
+
+
+def test_the_shell_did_not_gain_a_query_for_the_widget():
+    """Источник виджета остался прежним — журнал списаний баланса.
+
+    Перенаправить виджет на тарифную ось отклонено: это добавило бы запрос по
+    журналу отправок во ВСЕ 26 рендеров страниц ради метрики, у которой уже
+    есть свой полноценный экран.
+    """
+    source = COMMON_PY.read_text(encoding="utf-8")
+
+    assert "BalanceTransaction" in source
+    for forbidden in ("plan_axes(", "sends_in_current_month"):
+        assert forbidden not in source, (
+            f"в контекст шелла приехал {forbidden} — это запрос на каждый рендер"
+        )
+
+
+@pytest.mark.asyncio
+async def test_billing_payment_labels_ride_with_the_values(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Подписи колонок истории платежей едут вместе со значениями.
+
+    На 860px шапка колонок скрывается, и сумма без подписи становится числом
+    без смысла. Дата подписи не получает намеренно — она читается сама, как и
+    в соседнем журнале операций.
+    """
+    await _seed_payment(db_session)
+
+    html = (await authed_client.get("/billing")).text
+
+    for label in ("Назначение", "Сумма", "Статус"):
+        assert f"<span data-cell-label>{label}</span>" in html, label
+
+
+@pytest.mark.asyncio
+async def test_billing_has_no_event_handler_on_a_button(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """В разметке раздела ноль обработчиков события на кнопке (D-20).
+
+    Раздел был последним местом проекта, где действие недоступно без
+    JavaScript. Проверка идёт по ОТРЕНДЕРЕННОЙ выдаче: обработчик мог бы
+    приехать из паршала.
+    """
+    await _seed_payment(db_session)
+    await _seed_transaction(db_session)
+
+    html = (await authed_client.get("/billing")).text
+
+    for marker in ("onclick", "@click", "x-on:click", "onsubmit"):
+        assert marker not in html, marker
+
+
+@pytest.mark.asyncio
+async def test_billing_plans_grid_is_declared_folding(authed_client: AsyncClient):
+    """Сетка карточек складывается в одну колонку САМА, без второй вёрстки.
+
+    ⚠️ Проверяется ОБЪЯВЛЕНИЕ правила, а не отрисовка: браузера в суите нет.
+    """
+    html = (await authed_client.get("/billing")).text
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    assert "data-plans" in html
+    assert "repeat(auto-fit, minmax(260px, 1fr))" in css
 
 
 def test_billing_plans_grid_rule_does_not_redefine_the_dashboard_grid():
