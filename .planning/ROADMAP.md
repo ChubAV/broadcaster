@@ -303,7 +303,7 @@ Plans:
 
 **Canonical ref**: `new_broadcaster_design.html` (раздел «Тарифы»)
 **Notes**: Модели `Subscription`, `Payment`, `MessageBalance` и сервис лимитов уже существуют — фаза меняет представление и добавляет операцию продления.
-**Plans**: 3/6 plans executed
+**Plans**: 4/6 plans executed
 
 Plans:
 **Wave 1**
@@ -317,7 +317,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 05-04-PLAN.md — Страничный слой /billing: один экран, обе формы оплаты, журнал платежей (волна 3)
+- [x] 05-04-PLAN.md — Страничный слой /billing: один экран, обе формы оплаты, журнал платежей (волна 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -357,7 +357,7 @@ Plans:
 | 2. Объявления и расписания | 15/15 | Complete    | 2026-08-11 |
 | 3. Группы аккаунта | 12/12 | Complete    | 2026-08-13 |
 | 4. Дашборд и история | 12/12 | Complete    | 2026-08-15 |
-| 5. Тарифы | 3/6 | In Progress|  |
+| 5. Тарифы | 4/6 | In Progress|  |
 | 6. Админ-панель | 0/TBD | Not started | - |
 
 ## Coverage
