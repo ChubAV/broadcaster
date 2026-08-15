@@ -38,7 +38,9 @@
 {%- set tag = 'ВАШ ПЛАН' if is_current else ('БЕЗ ЛИМИТОВ' if is_unlimited else '') -%}
 {{ card_open(extra_class='card--current' if is_current else None) }}
   <div data-metric-line>
-    <span data-metric-value>{{ plan.get('name') }}</span>
+    {#- Имя плана НЕ рисуется крупным числом карточки: крупное здесь одно —
+        цена, и второй элемент того же размера отнял бы у неё роль. -#}
+    <span data-plan-name>{{ plan.get('name') }}</span>
     {%- if tag %}{{ mono(tag, 'accent' if is_current else 'ok', upper=true) }}{% endif -%}
   </div>
   <div data-metric-line>
