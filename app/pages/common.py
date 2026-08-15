@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
+from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED, MESSENGER_LABELS
 from app.models.ad import Ad
 from app.models.balance_transaction import BalanceTransaction
 from app.models.message_balance import MessageBalance
@@ -98,6 +98,14 @@ templates.env.globals["asset_version"] = _compute_asset_version()
 # Конструирования Settings здесь не происходит: значения — модульные константы.
 templates.env.globals["AD_STATUS_DRAFT"] = AD_STATUS_DRAFT
 templates.env.globals["AD_STATUS_PUBLISHED"] = AD_STATUS_PUBLISHED
+
+# Подписи каналов доезжают до шаблонов тем же способом и по той же причине:
+# строка перечня воркеров — МАКРОС, а импортированным макросам Jinja контекст
+# вызывающего не передаёт. Довод «макрос обязан быть самодостаточным» запрещает
+# рассчитывать на переменную ВЫЗЫВАЮЩЕЙ страницы, но не на глобал окружения —
+# и именно глобал снимает копию словаря из разметки, оставляя один источник в
+# app/constants.py.
+templates.env.globals["messenger_labels"] = MESSENGER_LABELS
 
 
 # Состав навигации по D-11. Список выписан ОДИН раз и используется и в

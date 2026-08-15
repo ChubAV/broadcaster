@@ -23,7 +23,7 @@ from app.application.scheduling.use_cases import (
     effective_status_value,
 )
 from app.config import Settings
-from app.constants import AD_STATUS_DRAFT
+from app.constants import AD_STATUS_DRAFT, MESSENGER_LABELS
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
 from app.models.group import Group
@@ -69,12 +69,12 @@ STATUS_CHIPS = (("", "Все"),) + tuple(
 # аккаунтов. Совпадение значений с осью расписаний закреплено тестом, а не
 # импортом: ось расписаний описывает ДРУГОЙ экран, и связывать их импортом
 # значило бы объявить одну осью другой.
-MESSENGER_CHIPS = (
-    ("", "Все"),
-    ("tg_user", "Telegram"),
-    ("wa", "WhatsApp"),
-    ("max", "MAX"),
-)
+#
+# Сами ПОДПИСИ берутся из `app/constants.py`, а не выписываются здесь: их
+# читают ещё перечень воркеров дашборда и файл выгрузки, и четвёртая копия
+# разъехалась бы с остальными молча. Вариант «Все» дописывается тут — он
+# принадлежит ЭТОЙ оси фильтрации, а не перечню каналов.
+MESSENGER_CHIPS = (("", "Все"),) + tuple(MESSENGER_LABELS.items())
 
 # Произвольного диапазона дат нет (D-30): четыре варианта и ни одного поля
 # ввода даты. Порядок «сегодня → 7 дней → 30 дней → всё время» — от узкого к
@@ -190,9 +190,10 @@ EXPORT_TOO_MANY = "too_many"
 # Символы, с которых табличный редактор начинает ИСПОЛНЯТЬ содержимое ячейки.
 _EXPORT_DANGEROUS_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
-# Подписи канала — те же слова, что печатают чипсы фильтра: одно и то же
-# значение обязано называться на экране и в файле одинаково.
-MESSENGER_LABELS = {value: label for value, label in MESSENGER_CHIPS if value}
+# Подписи канала для файла выгрузки — ТЕ ЖЕ, что печатают чипсы фильтра
+# (`MESSENGER_LABELS` из `app/constants.py`, откуда чипсы и собраны): одно и то
+# же значение обязано называться на экране и в файле одинаково. Своего словаря
+# здесь нет намеренно — он был бы вторым источником одних и тех же слов.
 
 
 def export_cell(value: object) -> str:

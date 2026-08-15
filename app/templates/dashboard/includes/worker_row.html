@@ -1,9 +1,12 @@
 {# Строка перечня «Воркеры аккаунтов» (DASH-05, D-13).
 
    Это МАКРОС, а не include: импортированные шаблоны Jinja контекста
-   вызывающего не получают, поэтому `session` — явный параметр. По той же
-   причине словарь подписей каналов объявлен ЗДЕСЬ: макрос обязан быть
-   самодостаточным, а не рассчитывать на переменную вызывающей страницы.
+   вызывающего не получают, поэтому `session` — явный параметр. Подписи каналов
+   приходят ГЛОБАЛОМ окружения (`messenger_labels`, привязан в
+   app/pages/common.py из app/constants.py): глобал виден импортированному
+   макросу так же, как AD_STATUS_DRAFT, то есть самодостаточность макроса он не
+   нарушает, — а свой словарь здесь был бы четвёртой копией одних и тех же трёх
+   слов и разъехался бы с чипсами фильтра истории и файлом выгрузки молча.
 
    ВЕТКА «ИНАЧЕ» — НЕСУЩАЯ, а не заглушка. Статусы `syncing` и `sync_failed`
    уже существуют в проекте, а следующий появится без правки этого макроса.
@@ -29,12 +32,10 @@
 
 {% from "components/mono.html" import mono %}
 
-{% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
-
 {% macro worker_row(session) -%}
 <div class="worker-row" data-worker data-worker-id="{{ session.id }}" data-worker-online="{{ 'true' if session.is_online else 'false' }}">
   <span class="worker-row__dot{% if session.is_online %} is-online{% endif %}"></span>
-  <span class="worker-row__label">{{ MESSENGER_LABELS.get(session.type, session.type) }}</span>
+  <span class="worker-row__label">{{ messenger_labels.get(session.type, session.type) }}</span>
   {{- mono('#' ~ session.id) -}}
   <span class="worker-row__state">
     {%- if session.is_online %}Онлайн
