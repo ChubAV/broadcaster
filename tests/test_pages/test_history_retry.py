@@ -46,6 +46,35 @@ from app.pages.history import RETRY_TASK_NAME
 HISTORY_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "history.py"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_retry_registry():
+    """Чистит модульный реестр удержания повтора до и после КАЖДОГО теста файла.
+
+    ЭТО НЕ ГИГИЕНА, А УСЛОВИЕ ОСМЫСЛЕННОСТИ ПРОГОНА — снести фикстуру как
+    шаблонный мусор значит получить необъяснимые красные тесты. Реестр
+    `_RETRY_IN_FLIGHT` объявлен на уровне модуля `app.pages.history` и живёт всё
+    время процесса pytest. Фикстура `db_session` (`tests/conftest.py`) —
+    пофункционная и на каждый тест поднимает НОВУЮ базу в памяти, поэтому
+    `send_logs.id` в каждом тесте снова начинается с `1`. Ключ реестра — как раз
+    этот идентификатор: «запись №1» в двадцати разных тестах — это двадцать
+    РАЗНЫХ записей и ОДИН И ТОТ ЖЕ ключ.
+
+    Удержание переживает ответ обработчика НАМЕРЕННО: в этом и состоит защита от
+    двух последовательных нажатий. Без чистки первый же тест, выполнивший
+    успешный повтор, армировал бы ключ `1` на весь оставшийся прогон, и каждый
+    следующий тест, ожидающий постановки, получал бы отказ по причине, не видной
+    из его собственного текста.
+
+    Фикстура НИЧЕГО не маскирует: реестр в памяти одного процесса — сознательно
+    принятая граница (T-04-G2-05), а в бою у каждой записи ключ свой. Чистка
+    ПОСЛЕ теста нужна, чтобы этот файл не отравлял тесты, идущие за ним в общем
+    прогоне суиты.
+    """
+    history_module._RETRY_IN_FLIGHT.clear()
+    yield
+    history_module._RETRY_IN_FLIGHT.clear()
+
+
 # --- посев --------------------------------------------------------------------
 
 
@@ -188,6 +217,26 @@ def _handler_source() -> str:
     rest = source[start:]
     end = rest.find("\n@router")
     return rest if end == -1 else rest[:end]
+
+
+def _next_top_level_after(source: str, start: int) -> int:
+    """Конец определения верхнего уровня, начавшегося на позиции `start`.
+
+    Граница считается по СЛЕДУЮЩЕМУ определению, а не срезом фиксированной
+    длины: срез в N символов — мина замедленного действия. Докстринг растёт, код
+    уезжает за границу окна, и ассерт начинает проверять пустоту — то есть
+    краснеет на ровном месте либо, что хуже, зеленеет ни на чём.
+    """
+    ends = [
+        pos
+        for pos in (
+            source.find("\ndef ", start + 1),
+            source.find("\nasync def ", start + 1),
+            source.find("\n@router", start + 1),
+        )
+        if pos != -1
+    ]
+    return min(ends) if ends else len(source)
 
 
 # =============================================================================
@@ -701,10 +750,22 @@ async def test_retry_of_a_busy_record_queues_no_second_task(
 
 
 @pytest.mark.asyncio
-async def test_retry_releases_the_slot_after_success(
+async def test_two_sequential_retries_queue_exactly_one_task(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """После успешной постановки следующий повтор той же записи возможен."""
+    """Два ПОСЛЕДОВАТЕЛЬНЫХ нажатия по одной записи ставят РОВНО ОДНУ задачу.
+
+    Это главная гарантия защиты. Первое нажатие открывает окно удержания,
+    которое ПЕРЕЖИВАЕТ ответ 302, поэтому второе нажатие — повторным кликом при
+    выключенном JavaScript, когда панель подтверждения не открывается вовсе, —
+    второй необратимой отправки в чужую группу не порождает и второго платежа
+    баланса не списывает.
+
+    Прежняя редакция этого теста ассертила ДВЕ поставленные задачи и закрепляла
+    ровно тот дефект, ради которого удержание существует: снятие стояло в блоке
+    завершения безусловно, окно закрывалось раньше ответа, и останавливались
+    только ПЕРЕСЕКАЮЩИЕСЯ во времени запросы.
+    """
     user = await _current_user(db_session)
     log = await _seed_retryable(db_session, user.id)
 
@@ -712,12 +773,20 @@ async def test_retry_releases_the_slot_after_success(
         await authed_client.post(
             f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
         )
-        assert log.id not in history_module._RETRY_IN_FLIGHT, "заявка не освобождена"
-        await authed_client.post(
+        assert log.id in history_module._RETRY_IN_FLIGHT, (
+            "после успешной постановки удержания нет — окно не пережило ответ, "
+            "и второе нажатие пройдёт насквозь"
+        )
+        second = await authed_client.post(
             f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
         )
 
-    assert len(env.queued) == 2
+    assert len(env.queued) == 1, (
+        "два последовательных нажатия поставили больше одной задачи: одно "
+        f"намерение пользователя обернулось несколькими необратимыми "
+        f"отправками — {env.queued}"
+    )
+    assert f"retry={history_module.RETRY_BUSY}" in second.headers["location"]
 
 
 @pytest.mark.asyncio
@@ -777,16 +846,25 @@ def test_retry_slot_claim_is_synchronous():
     assert "await" not in code, f"в занятии заявки появилось ожидание: {code!r}"
 
 
-def test_retry_slot_release_is_a_discard_in_a_finally_block():
-    """Освобождение — отбрасыванием и в блоке завершения.
+def test_retry_slot_release_is_idempotent_and_in_a_finally_block():
+    """Снятие удержания безобидно при повторном вызове и стоит в блоке завершения.
 
-    `discard`, а не `remove`: повторный вызов обязан быть безобидным.
+    Повторный вызов обязан быть безобидным: блок завершения отрабатывает в том
+    числе после исключения, и второй вызов не имеет права бросить.
+
+    Ассерт смотрит на КОД, который действительно выполняется, а не на слово в
+    комментарии. Тест, проверяющий прозу, перестаёт пинить механизм ровно тогда,
+    когда механизм меняют, — и это тот же дефект, что докстринг, описывающий
+    несуществующую защиту.
     """
     source = HISTORY_PY.read_text(encoding="utf-8")
     start = source.index("def _release_retry_slot(")
-    release = source[start : start + 700]
+    release = source[start : _next_top_level_after(source, start)]
 
-    assert ".discard(" in release, "освобождение снимает заявку не отбрасыванием"
+    assert re.search(r"\.pop\([^)]*,\s*None\s*\)", release), (
+        "снятие удержания идёт не отбрасывающим вызовом со значением по "
+        "умолчанию — повторный вызов перестал быть безобидным"
+    )
     assert ".remove(" not in release
 
     body = _handler_source()
