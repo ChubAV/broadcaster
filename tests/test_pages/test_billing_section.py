@@ -362,6 +362,33 @@ async def test_the_screen_creates_neither_a_subscription_nor_a_payment(
     assert await _payments_count(db_session) == 0
 
 
+@pytest.mark.asyncio
+async def test_the_screen_never_prints_the_yookassa_payment_id(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Идентификатор платежа не выходит в тело ответа НИ ОДНИМ маршрутом.
+
+    Он служит ключом подделки уведомления об оплате, и именно из-за него снесён
+    JSON-маршрут покупки (D-24). Контекст раздела несёт строки модели ЦЕЛИКОМ —
+    так разметке достаётся настоящий `datetime` даты, — поэтому запрет на показ
+    обязан держаться регрессией, а не аккуратностью автора шаблона: она
+    переживёт разметку плана 05-05, которой этот тест старше.
+    """
+    owner = await _current_user(db_session)
+    secret = "yoo_secret_never_render_me"
+    payment = _payment_row(owner.id)
+    payment.yookassa_payment_id = secret
+    db_session.add(payment)
+    await db_session.commit()
+
+    response = await authed_client.get("/billing")
+
+    assert response.status_code == 200
+    assert secret not in response.text, (
+        "идентификатор платежа напечатан в разметке раздела"
+    )
+
+
 def test_the_get_handler_contains_no_write_path():
     """Структурно: у обработчика раздела нет ни одного пути записи."""
     body = _handler_source("async def billing_page(")
