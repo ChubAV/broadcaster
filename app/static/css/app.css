@@ -1150,6 +1150,28 @@ a:hover { color: var(--accent-link-hover); }
 [data-metric-delta][data-tone="success"] { color: var(--ok); }
 [data-metric-delta][data-tone="danger"] { color: var(--danger); }
 
+/* Карточки тарифов раздела «Тарифы» (макет 962-992) ------------------------- */
+/* Форма правила скопирована у [data-metrics] выше, ЗНАЧЕНИЕ взято из макета:
+   карточка плана несёт четыре строки лимитов и в 210px не складывается.
+   Переопределять [data-metrics] нельзя — его держат плитки дашборда Фазы 4, и
+   изменение минимума перевёрстало бы чужой раздел. Складывание в одну колонку
+   на узких ширинах приходит из auto-fit, а не из второй вёрстки и не из JS. */
+[data-plans] {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 13px;
+}
+/* Текущий план выделен рамкой акцентного цвета (макет: bd текущей карточки).
+   Модификатор, а не форк макроса card: меняется одна рамка, а не компонент. */
+[data-plans] .card--current { border-color: var(--accent); }
+/* Четыре строки лимитов: подпись слева, значение моношрифтом у правого края.
+   Строка ПЕРЕНОСЯЩАЯСЯ (flex + gap), поэтому длинная подпись на узкой
+   карточке уходит на вторую строку, а не в горизонтальную прокрутку. */
+[data-plan-limits] { display: flex; flex-direction: column; gap: 9px; margin: 14px 0; }
+[data-plan-limits] > div {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+  font-size: var(--fs-md); color: var(--text-secondary);
+}
+
 /* Строка ближайшей отправки (DASH-02, макет 402-426) ------------------------ */
 /* Строка — ССЫЛКА (D-16), поэтому цвет и подчёркивание сбрасываются здесь, а не
    отменяются в разметке: подчёркнутая строка целиком читалась бы как ошибка

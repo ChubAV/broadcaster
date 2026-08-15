@@ -1,0 +1,66 @@
+{# Строка журнала ПЛАТЕЖЕЙ раздела «Тарифы» (BILL-07, макет 2040-2050).
+
+   Это МАКРОС, а не include: импортированным шаблонам Jinja контекст
+   вызывающего не передаёт, поэтому каждый параметр объявлен явно. Ошибка в
+   имени параметра проявится не исключением, а ПУСТОЙ строкой при статусе 200.
+
+   Раскладка — примитивы строки (data-rowhead / data-row / data-grow), как у
+   истории операций того же раздела: ЭЛЕМЕНТОВ ТАБЛИЦЫ В РАЗМЕТКЕ НЕТ НИ
+   ОДНОГО, их запрещает инвентаризация шаблонов по всему проекту. Подпись
+   колонки едет ВМЕСТЕ со значением: на 860px шапка колонок скрывается, и без
+   подписи число теряет смысл. Шапку рисует вызывающий шаблон тем же списком
+   колонок — иначе шапка и подписи разъедутся, и увидит это только тот, кто
+   открыл раздел с телефона.
+
+   ⚠️ ИДЕНТИФИКАТОР ПЛАТЕЖА НЕ ПЕЧАТАЕТСЯ НИ В ЗНАЧЕНИИ, НИ В АТРИБУТЕ, НИ В
+   КОММЕНТАРИИ. Контекст раздела несёт строки `Payment` целиком, включая
+   `yookassa_payment_id` — ключ подделки уведомления об оплате. Запрет держится
+   регрессией test_the_screen_never_prints_the_yookassa_payment_id, которая
+   старше этой разметки (план 05-04).
+
+   payment — строка модели Payment: created_at (настоящий datetime), kind,
+   plan, package_name, amount_value (машинная строка), status.
+   user — ради зоны показа даты; свой формат даты здесь не заводится.
+   cols — тот же CSS-набор колонок, которым вызывающий рисует шапку.
+   labels — «статус → (подпись, вариант бейджа)». Словарь живёт у ВЫЗЫВАЮЩЕГО:
+   единого enum статусов в проекте нет, и один литерал в разных разделах значит
+   разное (контракт components/badge.html).
+   first_payment_at — «план → дата САМОГО РАННЕГО платежа за него» в этом же
+   списке. Нужен, чтобы отличить первый платёж от продления, не заводя второго
+   запроса: в журнале, отсортированном по дате убыванием, самая ранняя строка
+   плана и есть его первый платёж. Без карты все подписки читаются продлением.
+
+   Импорт: {% from "billing/includes/payment_row.html" import payment_row %} #}
+
+{% from "components/table.html" import row_open, row_close, cell %}
+{% from "components/badge.html" import badge %}
+{% from "components/mono.html" import mono %}
+
+{% macro payment_row(payment, user, cols, labels=None, first_payment_at=None) -%}
+{%- set status_label = (labels or {}).get(payment.status) -%}
+{%- if payment.kind == 'subscription' -%}
+  {%- set plan_name = (payment.plan or '')|capitalize or 'Тариф' -%}
+  {%- set is_first = first_payment_at and payment.plan
+        and first_payment_at.get(payment.plan) == payment.created_at -%}
+  {%- set purpose = plan_name ~ (' · первый платёж' if is_first else ' · продление') -%}
+{%- else -%}
+  {%- set purpose = payment.package_name or 'Пакет сообщений' -%}
+{%- endif -%}
+{{ row_open(cols=cols) }}
+  {{- cell(text=format_datetime_for_user(payment.created_at, user), mono=true, muted=true) }}
+  {%- call cell(grow=true) %}
+    <span data-cell-label>Назначение</span>
+    {{- purpose -}}
+  {%- endcall %}
+  {%- call cell() %}
+    <span data-cell-label>Сумма</span>
+    {{- mono(format_amount(payment.amount_value), 'bright') -}}
+  {%- endcall %}
+  {%- call cell() %}
+    <span data-cell-label>Статус</span>
+    {#- Неизвестный статус рисуется моношрифтом КАК ЕСТЬ, а не прячется:
+        спрятанное состояние платежа читается как «платежа не было». -#}
+    {%- if status_label %}{{ badge(status_label[0], status_label[1]) }}{% else %}{{ mono(payment.status) }}{% endif -%}
+  {%- endcall %}
+{{ row_close() }}
+{%- endmacro %}

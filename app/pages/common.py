@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime, timezone
+from decimal import Decimal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -8,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.billing.plan_usage import AXIS_LABELS, AXIS_ORDER
 from app.config import Settings
 from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED, MESSENGER_LABELS
 from app.models.ad import Ad
@@ -240,6 +242,54 @@ def time_ago_for_user(value: datetime | None, user: User | None) -> str:
 
 
 templates.env.globals["time_ago_for_user"] = time_ago_for_user
+
+
+# Разделитель разрядов и отбивка перед знаком рубля — НЕРАЗРЫВНЫЙ пробел:
+# обычный перенёс бы «1» и «490» на разные строки узкой карточки тарифа.
+_NBSP = "\u00a0"
+
+
+def format_amount(value) -> str:
+    """Денежная сумма ПОДПИСЬЮ: «1490.00» → «1 490 ₽».
+
+    ФОРМАТИРОВАНИЕ ЖИВЁТ ТОЛЬКО НА СТОРОНЕ ПОКАЗА. В конфиге тарифов и пакетов
+    цена хранится машинной строкой формата ЮKassa, и `create_payment` кладёт
+    её прямо в `amount.value`: строка с разделителем разрядов или знаком рубля
+    — отказ платёжного API в проде, который не поймает ни один мок на моках
+    (05-RESEARCH A3). Поэтому обратной функции здесь нет и быть не должно:
+    подпись никогда не едет обратно в платёж.
+
+    Нулевые копейки не показываются: «1 490 ₽» вместо «1 490,00 ₽» — так же,
+    как в макете. Ненулевые показываются через запятую, потому что потерять
+    полтинник на экране хуже, чем показать лишние два знака.
+
+    Непригодное значение возвращается КАК ЕСТЬ, а не заменяется нулём:
+    выдуманный ноль в денежной подписи — правдоподобная ложь, а исходная
+    строка на экране хотя бы называет себя странной.
+    """
+    if value is None or value == "":
+        return ""
+    try:
+        amount = Decimal(str(value))
+    except (ArithmeticError, ValueError, TypeError):
+        return str(value)
+
+    sign = "-" if amount < 0 else ""
+    whole, _, kopecks = f"{abs(amount):.2f}".partition(".")
+    groups = f"{int(whole):,}".replace(",", _NBSP)
+    tail = "" if kopecks == "00" else f",{kopecks}"
+    return f"{sign}{groups}{tail}{_NBSP}₽"
+
+
+templates.env.globals["format_amount"] = format_amount
+
+# Порядок и подписи осей тарифа приезжают в разметку ИЗ МОДУЛЯ ОСЕЙ, а не
+# выписываются в шаблоне второй раз: это НАЗВАНИЯ осей, а не форматирование
+# данных пользователя, и вторая их копия разъехалась бы с первой молча
+# (контракт плана 05-03). Тем же приёмом в разметку приходят подписи
+# мессенджеров выше.
+templates.env.globals["plan_axis_order"] = AXIS_ORDER
+templates.env.globals["plan_axis_labels"] = AXIS_LABELS
 
 
 async def get_user_from_cookie(

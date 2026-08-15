@@ -1,0 +1,40 @@
+{# Метр ОДНОЙ оси тарифа: сколько израсходовано из скольких (BILL-06, D-09).
+
+   Это МАКРОС, а не include: импортированным шаблонам Jinja контекст
+   вызывающего не передаёт, поэтому `axis` — явный параметр. Ошибка в имени
+   параметра проявится не исключением, а ПУСТЫМ блоком при статусе 200,
+   поэтому обе ветки закреплены тестами test_billing_usage_meter_* в
+   tests/test_pages/test_responsive_markup.py.
+
+   axis — PlanAxis из app/application/billing/plan_usage.py: key, label, used,
+   limit (int | None) и percent, УЖЕ клампованный в 0..100. Процент здесь не
+   считается и не переклампывается: правило «при отсутствии лимита процент
+   равен нулю» живёт в одном месте — в модуле осей.
+
+   БЕЗЛИМИТНАЯ ОСЬ ШКАЛЫ НЕ РИСУЕТ ВОВСЕ. Залитая до конца шкала сообщила бы
+   «израсходовано всё» там, где израсходовать нельзя, а «6 / 0» назвало бы
+   безлимит нулём. Деление на лимит не выполняется НИ РАЗУ — ни здесь, ни в
+   модуле: неподключённый шаблон, чьё место занял этот, падал на нулевом
+   лимите ZeroDivisionError.
+
+   ПРЕВЫШЕНИЕ — ФАКТ, А НЕ ПРИГОВОР. Шкала встаёт на сотне, подпись называет
+   настоящие числа («20 / 15»), тревожного варианта нет: фаза ничего не
+   запрещает (D-08), и красный метр обещал бы запрет, которого не существует.
+
+   Импорт: {% from "billing/includes/usage_meters.html" import usage_meter %} #}
+
+{% from "components/mono.html" import mono %}
+{% from "components/progress.html" import progress %}
+
+{% macro usage_meter(axis) -%}
+{%- if axis.limit is none %}
+<div data-axis="{{ axis.key }}">
+  {{ mono(axis.label ~ ' — ' ~ axis.used ~ ' / ∞', 'bright') }}
+  {{ mono('без ограничений') }}
+</div>
+{%- else %}
+<div data-axis="{{ axis.key }}">
+  {{ progress(axis.percent, label=axis.label ~ ' — ' ~ axis.used ~ ' / ' ~ axis.limit) }}
+</div>
+{%- endif %}
+{%- endmacro %}
