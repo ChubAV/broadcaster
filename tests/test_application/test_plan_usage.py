@@ -15,6 +15,7 @@
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import (
@@ -546,3 +547,134 @@ def test_plan_usage_module_writes_nothing_and_knows_nothing_about_http():
     assert not re.search(r"\bRequest\b|request\.", code)
     # Ось «Аккаунты» — заведённые аккаунты, а не онлайн-сессии.
     assert "accounts_online" not in code
+
+
+# --- Регрессии: один запрос, владение, граница месяца ----------------------------
+
+
+@pytest.mark.asyncio
+async def test_plan_axes_takes_exactly_one_query(db_session):
+    """Два числителя приходят из шелла, два считаются ОДНИМ round-trip.
+
+    Регрессия ловит будущую «починку», которая начнёт считать объявления и
+    аккаунты своим запросом вместо `nav_counts`: числа при этом не изменятся, а
+    второй источник одного числа появится молча — ровно то расхождение, ради
+    которого D-23 и написан.
+    """
+    user = await _user(db_session)
+    account = await _seed_account(db_session, user)
+    await _seed_ad(db_session, user, "Объявление")
+    await _seed_group(db_session, user, "g-1", account=account)
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 10, 9, 0, tzinfo=timezone.utc)
+    )
+    shell = await get_shell_context(db_session, user)
+
+    statements: list[str] = []
+    sync_engine = db_session.bind.sync_engine
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(sync_engine, "before_cursor_execute", _record)
+    try:
+        axes = await plan_axes(
+            db_session,
+            user=user,
+            limits=BASIC_LIMITS,
+            nav_counts=shell["nav_counts"],
+            now=NOW,
+        )
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _record)
+
+    assert len(axes) == 4
+    selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+    assert len(selects) == 1, f"запросов не один, а {len(selects)}: {selects}"
+
+
+@pytest.mark.asyncio
+async def test_plan_axes_isolates_every_axis_from_another_user(db_session):
+    """T-05-16: чужие объявления, группы, отправки и аккаунты не протекают.
+
+    Владение проверяется предикатом запроса, а не фильтром на стороне
+    вызывающего, поэтому появление второго пользователя с данными не имеет
+    права сдвинуть НИ ОДНУ ось первого.
+    """
+    user = await _user(db_session)
+    account = await _seed_account(db_session, user)
+    await _seed_ad(db_session, user, "Своё объявление")
+    await _seed_group(db_session, user, "own-1", account=account)
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 10, 9, 0, tzinfo=timezone.utc)
+    )
+
+    async def _axes() -> dict[str, int]:
+        shell = await get_shell_context(db_session, user)
+        axes = await plan_axes(
+            db_session,
+            user=user,
+            limits=BASIC_LIMITS,
+            nav_counts=shell["nav_counts"],
+            now=NOW,
+        )
+        return {axis.key: axis.used for axis in axes}
+
+    before = await _axes()
+
+    other = await _user(db_session, email="other@test.com")
+    other_account = await _seed_account(db_session, other)
+    await _seed_account(db_session, other)
+    await _seed_ad(db_session, other, "Чужое объявление")
+    await _seed_ad(db_session, other, "Чужой черновик", status=AD_STATUS_DRAFT)
+    await _seed_group(db_session, other, "alien-1", account=other_account)
+    await _seed_group(db_session, other, "alien-2", account=other_account)
+    for day in (11, 12, 13):
+        await _seed_send_log(
+            db_session,
+            other.id,
+            sent_at=datetime(2026, 5, day, 9, 0, tzinfo=timezone.utc),
+        )
+
+    after = await _axes()
+
+    assert before == {AXIS_ADS: 1, AXIS_GROUPS: 1, AXIS_SENDS: 1, AXIS_ACCOUNTS: 1}
+    assert after == before
+
+
+@pytest.mark.asyncio
+async def test_plan_axes_month_boundary_uses_the_users_timezone(db_session):
+    """D-11: отправка 1-го числа в 00:30 по Москве — уже НОВЫЙ месяц.
+
+    Посевы ставят `sent_at` ЯВНО: тест границы, посеявший запись неявно, был бы
+    зелёным в любой день года и не проверял бы ничего.
+    """
+    user = await _user(db_session, tz_name=MSK)
+    # 01.06 00:30 МСК = 31.05 21:30 UTC — принадлежит ИЮНЮ.
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 31, 21, 30, tzinfo=timezone.utc)
+    )
+    # 31.05 23:30 МСК = 31.05 20:30 UTC — принадлежит МАЮ.
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 31, 20, 30, tzinfo=timezone.utc)
+    )
+    # Середина июня — обязана попасть в июньское окно.
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 6, 15, 9, 0, tzinfo=timezone.utc)
+    )
+
+    async def _sends(now: datetime) -> int:
+        axes = await plan_axes(
+            db_session,
+            user=user,
+            limits=BASIC_LIMITS,
+            nav_counts=_nav_counts(),
+            now=now,
+        )
+        return next(axis for axis in axes if axis.key == AXIS_SENDS).used
+
+    june = await _sends(datetime(2026, 6, 20, 12, 0, tzinfo=timezone.utc))
+    may = await _sends(NOW)
+
+    assert june == 2
+    assert may == 1
