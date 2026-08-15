@@ -45,6 +45,9 @@ from app.pages import history as history_module
 from app.pages.history import RETRY_TASK_NAME
 
 HISTORY_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "history.py"
+# Гард источника живёт ЗДЕСЬ, а не в модуле раздела: с планом 05-04 у правила
+# один источник на проект, и структурная проверка обязана читать его оттуда.
+COMMON_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "common.py"
 
 
 @pytest.fixture(autouse=True)
@@ -344,8 +347,8 @@ def test_retry_origin_check_runs_before_the_record_is_read():
     """
     body = _handler_source()
 
-    assert "_is_same_origin(" in body, "сверки источника в обработчике нет"
-    assert body.index("_is_same_origin(") < body.index("SendLog"), (
+    assert "is_same_origin(" in body, "сверки источника в обработчике нет"
+    assert body.index("is_same_origin(") < body.index("SendLog"), (
         "запись журнала читается раньше сверки источника — межсайтовый запрос "
         "успевает вызвать побочный эффект"
     )
@@ -356,9 +359,13 @@ def test_retry_origin_check_documents_its_boundary():
 
     Принятый остаточный риск, о котором не написано, через один рефакторинг
     становится неизвестным риском.
+
+    Проверка смотрит в `app/pages/common.py`: с планом 05-04 гард объявлен ОДИН
+    раз на проект, и приватная копия из этого раздела снята. Условие теста от
+    переезда не изменилось — граница обязана быть названа там, где живёт код.
     """
-    source = HISTORY_PY.read_text(encoding="utf-8")
-    start = source.index("def _is_same_origin(")
+    source = COMMON_PY.read_text(encoding="utf-8")
+    start = source.index("def is_same_origin(")
     doc = source[start : start + 1800]
 
     assert "Sec-Fetch-Site" in doc
