@@ -11,7 +11,7 @@ from app.application.analytics.send_analytics import (
     apply_history_filters,
     history_filter_params,
 )
-from app.pages.history import _parse_account_id
+from app.pages.history import parse_account_id
 from app.models.user import User
 from app.models.ad import Ad
 from app.models.group import Group
@@ -190,7 +190,7 @@ async def admin_user_history(
 
     page_size = 30
 
-    account_id_int = _parse_account_id(account_id)
+    account_id_int = parse_account_id(account_id)
     query = (
         select(SendLog, Group)
         .outerjoin(Group, SendLog.group_id == Group.id)
@@ -277,7 +277,7 @@ async def admin_user_history_partial(
     target_user = await db.get(User, user_id)
     if not target_user:
         return RedirectResponse(url="/admin/users", status_code=302)
-    account_id_int = _parse_account_id(account_id)
+    account_id_int = parse_account_id(account_id)
     query = (
         select(SendLog, Group)
         .outerjoin(Group, SendLog.group_id == Group.id)

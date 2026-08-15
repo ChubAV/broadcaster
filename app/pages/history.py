@@ -117,7 +117,7 @@ def _clean_choice(value: str | None, allowed: frozenset[str]) -> str | None:
     return value if value in allowed else None
 
 
-def _parse_account_id(v: str | None) -> int | None:
+def parse_account_id(v: str | None) -> int | None:
     """Разбор HTTP-параметра, а не аналитика — поэтому остаётся здесь.
 
     Определение самих фильтров переехало в
@@ -125,6 +125,11 @@ def _parse_account_id(v: str | None) -> int | None:
     и админка, и счётчик, и ни один из них не владеет копией. Этот же хелпер
     знает про то, что `account_id` приезжает строкой из query-строки, — знание
     транспорта, которому в слое аналитики не место.
+
+    ИМЯ БЕЗ ПОДЧЁРКИВАНИЯ — ЭТО ЧАСТЬ КОНТРАКТА. Хелпер зовёт `app/pages/admin.py`
+    через границу модуля, а ведущее подчёркивание означает «переименовать
+    безопасно»: под прежним именем `_parse_account_id` переименование роняло бы
+    админку на импорте, и ни одна проверка не назвала бы причину.
     """
     if not v or not v.strip():
         return None
@@ -579,7 +584,7 @@ async def history_partial(
     status = _clean_choice(status, STATUS_VALUES)
     messenger = _clean_choice(messenger, MESSENGER_VALUES)
     period = _clean_choice(period, PERIOD_VALUES)
-    account_id_int = _parse_account_id(account_id)
+    account_id_int = parse_account_id(account_id)
     query = (
         select(SendLog, Group)
         .outerjoin(Group, SendLog.group_id == Group.id)
@@ -683,7 +688,7 @@ async def history_export(
     status = _clean_choice(status, STATUS_VALUES)
     messenger = _clean_choice(messenger, MESSENGER_VALUES)
     period = _clean_choice(period, PERIOD_VALUES)
-    account_id_int = _parse_account_id(account_id)
+    account_id_int = parse_account_id(account_id)
 
     # ПОТОЛОК ПРОВЕРЯЕТСЯ ДО КОНСТРУИРОВАНИЯ ПОТОКА (D-27, T-04-33). У потокового
     # ответа код и заголовки уходят до первого фрагмента тела и после уже
@@ -976,7 +981,7 @@ async def history_list(
     status = _clean_choice(status, STATUS_VALUES)
     messenger = _clean_choice(messenger, MESSENGER_VALUES)
     period = _clean_choice(period, PERIOD_VALUES)
-    account_id_int = _parse_account_id(account_id)
+    account_id_int = parse_account_id(account_id)
     query = (
         select(SendLog, Group)
         .outerjoin(Group, SendLog.group_id == Group.id)
