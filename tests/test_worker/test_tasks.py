@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import select
+from app.constants import AD_STATUS_DRAFT
 from app.database import Base
 from app.models.user import User
 from app.models.ad import Ad
@@ -835,3 +836,66 @@ async def test_retry_send_without_schedule_still_dispatches(db_engine_and_factor
     payload = json.loads(redis_sink[0][1])
     assert payload["schedule_id"] is None
     assert tg_sink == []
+
+
+# --- Повтор и состояние объявления/группы (CR-01, CR-02) ----------------------
+#
+# ПОЧЕМУ ЭТО ПРОВЕРЯЕТСЯ ИМЕННО ЗДЕСЬ, А НЕ ТОЛЬКО НА HTTP-ГРАНИЦЕ. Для `wa` и
+# `max` таск кладёт готовую полезную нагрузку в Redis, и Node-воркер отправляет
+# её, НЕ ЗАГЛЯДЫВАЯ В БАЗУ: ни статуса объявления, ни флага группы он не видит.
+# Значит последняя точка, где эти два запрета ещё исполнимы, — вот эта. У
+# Telegram запрет случайно срабатывал бы позже, в `send_message_once`, поэтому
+# оба канала проверяются параметром: дефект был АСИММЕТРИЧЕН по каналам, и
+# проверка одного канала его бы не поймала.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_type", ["wa", "max", "telegram"])
+async def test_retry_send_stops_when_ad_is_draft(db_engine_and_factory, account_type):
+    """Снятое с публикации объявление повтором НЕ уезжает (CR-01).
+
+    Планировщик этот запрет держит дважды (`collect_due_schedules` и
+    `send_message_once`), и снятие объявления с публикации — обычный способ
+    пользователя остановить рассылку. Повтор из истории обязан подчиняться тому
+    же запрету, иначе снятие с публикации ничего не останавливает.
+    """
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(factory, account_type=account_type)
+    async with factory() as session:
+        ad = await session.get(Ad, case["ad_id"])
+        ad.status = AD_STATUS_DRAFT
+        await session.commit()
+
+    before = await _send_log_count(factory)
+    redis_sink, tg_sink = await _run_retry(factory, case["log_id"], case["user_id"])
+
+    assert redis_sink == [], "черновик не имеет права попасть в очередь канала"
+    assert tg_sink == []
+    assert await _send_log_count(factory) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_type", ["wa", "max", "telegram"])
+async def test_retry_send_stops_when_group_is_switched_off(
+    db_engine_and_factory, account_type
+):
+    """Выключенная группа повтором НЕ получает отправку (CR-02).
+
+    `Group.is_active` — обратимый выключатель пользователя, и планировщик его
+    чтит явно (D-05). `send_message_once` флаг не смотрит вовсе: он полагается
+    на то, что планировщик уже отфильтровал. Повтор минует планировщик, поэтому
+    без проверки здесь выключение группы не останавливало отправку в неё.
+    """
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(factory, account_type=account_type)
+    async with factory() as session:
+        group = await session.get(Group, case["group_id"])
+        group.is_active = False
+        await session.commit()
+
+    before = await _send_log_count(factory)
+    redis_sink, tg_sink = await _run_retry(factory, case["log_id"], case["user_id"])
+
+    assert redis_sink == [], "выключенная группа не имеет права получить отправку"
+    assert tg_sink == []
+    assert await _send_log_count(factory) == before

@@ -33,6 +33,7 @@ from app.application.analytics.send_analytics import (
     STATUS_FAIL,
     STATUS_OK,
 )
+from app.constants import AD_STATUS_DRAFT
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.message_balance import MessageBalance
@@ -1277,3 +1278,101 @@ async def test_retry_availability_names_each_missing_entity(
     )
     assert verdict[log_off.id] == RETRY_REASON_ACCOUNT_OFF
     assert verdict[log_orphan.id] == RETRY_REASON_ACCOUNT_GONE
+
+
+# =============================================================================
+# Состояние объявления и группы на границе HTTP (CR-01, CR-02)
+# =============================================================================
+#
+# Предпроверка обработчика знала только ПРИСУТСТВИЕ тройки и активность
+# аккаунта. Два состояния, которыми пользователь останавливает рассылку —
+# снятие объявления с публикации и выключение группы, — она не читала, а вторая
+# линия защиты в таске их тоже не читала. Кнопка при этом предлагалась: verdict
+# считал объявление живым по одному факту существования строки.
+#
+# Здесь закрыта ровно граница HTTP: что до очереди НЕ доходит и что кнопка
+# объясняет. Вторая линия в таске закреплена в tests/test_worker/test_tasks.py и
+# сюда не дублируется — два теста одного свойства расходятся при первой правке.
+
+
+@pytest.mark.asyncio
+async def test_retry_of_a_draft_ad_does_not_reach_the_queue(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """CR-01: снятое с публикации объявление повтором не отправляется."""
+    user = await _current_user(db_session)
+    ad, group, _account = await _seed_triple(db_session, user.id)
+    await _seed_balance(db_session, user.id)
+    ad.status = AD_STATUS_DRAFT
+    await db_session.commit()
+    log = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
+
+    with _retry_env() as env:
+        response = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN
+        )
+
+    assert response.status_code == 302
+    assert env.queued == [], "черновик не имеет права попасть в очередь"
+    assert f"retry={history_module.RETRY_GONE}" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_retry_into_a_switched_off_group_does_not_reach_the_queue(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """CR-02: выключенная группа повтором не получает отправку."""
+    user = await _current_user(db_session)
+    ad, group, _account = await _seed_triple(db_session, user.id)
+    await _seed_balance(db_session, user.id)
+    group.is_active = False
+    await db_session.commit()
+    log = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
+
+    with _retry_env() as env:
+        response = await authed_client.post(
+            f"/history/{log.id}/retry", headers=SAME_ORIGIN
+        )
+
+    assert response.status_code == 302
+    assert env.queued == [], "выключенная группа не имеет права получить отправку"
+    assert f"retry={history_module.RETRY_GONE}" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_availability_names_the_draft_ad_and_the_switched_off_group(
+    db_session: AsyncSession,
+):
+    """Кнопка объясняет ОБА новых запрета своей причиной, а не молчит.
+
+    Причина обязана быть отдельной строкой: «Объявление удалено» под снятым с
+    публикации объявлением послала бы пользователя искать его в корзине, а
+    «Группа удалена» под выключенной — пересинхронизировать живую группу.
+    """
+    from app.pages.history import (
+        RETRY_REASON_AD_DRAFT,
+        RETRY_REASON_GROUP_OFF,
+        retry_availability,
+    )
+
+    user = await _current_user(db_session)
+    draft_ad, group, _account = await _seed_triple(db_session, user.id)
+    draft_ad.status = AD_STATUS_DRAFT
+    await db_session.commit()
+    log_draft = await _seed_log(
+        db_session, user.id, ad_id=draft_ad.id, group_id=group.id
+    )
+
+    live_ad, off_group, _account2 = await _seed_triple(db_session, user.id)
+    off_group.is_active = False
+    await db_session.commit()
+    log_off_group = await _seed_log(
+        db_session, user.id, ad_id=live_ad.id, group_id=off_group.id
+    )
+
+    verdict = await retry_availability(
+        db_session, [(log_draft, group), (log_off_group, off_group)]
+    )
+
+    assert verdict[log_draft.id] == RETRY_REASON_AD_DRAFT
+    assert verdict[log_off_group.id] == RETRY_REASON_GROUP_OFF
