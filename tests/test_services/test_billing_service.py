@@ -1,9 +1,11 @@
 import pytest
 import pytest_asyncio
 from datetime import datetime, timezone, timedelta
+from app.constants import PAYMENT_LIST_CAP
 from app.models.user import User
 from app.models.message_balance import MessageBalance
 from app.models.balance_transaction import BalanceTransaction
+from app.models.payment import Payment
 from app.services.billing_service import (
     get_or_create_balance,
     get_balance,
@@ -13,6 +15,8 @@ from app.services.billing_service import (
     reset_free_monthly,
     get_balance_info,
     get_transaction_history,
+    count_payments,
+    get_payment_history,
 )
 
 
@@ -181,3 +185,161 @@ async def test_get_transaction_history(db_session):
     types = {tx["type"] for tx in txs}
     assert "purchase" in types
     assert "free_monthly" in types
+
+
+# --- Журнал платежей (BILL-07) ------------------------------------------------
+#
+# Это ВТОРОЙ журнал раздела, а не замена первому. `BalanceTransaction` считает
+# ШТУКИ сообщений и рублёвой суммы не знает вовсе — колонки под неё в таблице
+# нет. Критерий фазы требует показать сумму в рублях, и она есть только у
+# `Payment` (D-14), поэтому история платежей строится по нему.
+#
+# `created_at` во всех посевах ставится ЯВНО: у колонки есть
+# `server_default=func.now()`, и записи без явного времени легли бы в одну
+# миллисекунду — порядок по убыванию даты стал бы тогда порядком вставки, то
+# есть тест проверял бы не то, что утверждает.
+
+BASE_TIME = datetime(2026, 5, 20, 12, 0, tzinfo=timezone.utc)
+
+_payment_seq = 0
+
+
+async def _payment(
+    db_session,
+    user_id: int,
+    *,
+    status: str = "succeeded",
+    created_at: datetime | None = None,
+    amount_value: str = "1490.00",
+    kind: str = "subscription",
+) -> Payment:
+    """Строка `payments` владельца. Идентификатор ЮKassa уникален по схеме."""
+    global _payment_seq
+    _payment_seq += 1
+    payment = Payment(
+        user_id=user_id,
+        yookassa_payment_id=f"yoo_{_payment_seq}",
+        status=status,
+        amount_value=amount_value,
+        amount_currency="RUB",
+        kind=kind,
+        plan="basic" if kind == "subscription" else None,
+        created_at=created_at or BASE_TIME,
+    )
+    db_session.add(payment)
+    await db_session.commit()
+    return payment
+
+
+async def _two_users(db_session) -> tuple[User, User]:
+    owner = User(email="owner@test.com", password_hash="h", name="O")
+    stranger = User(email="stranger@test.com", password_hash="h", name="S")
+    db_session.add_all([owner, stranger])
+    await db_session.commit()
+    return owner, stranger
+
+
+@pytest.mark.asyncio
+async def test_get_payment_history_returns_only_the_owners_payments(db_session):
+    """Владение — предикатом запроса, а не фильтром у вызывающего (T-05-20)."""
+    owner, stranger = await _two_users(db_session)
+    for _ in range(5):
+        await _payment(db_session, owner.id)
+    for _ in range(3):
+        await _payment(db_session, stranger.id)
+
+    rows = await get_payment_history(db_session, owner.id, limit=PAYMENT_LIST_CAP)
+
+    assert len(rows) == 5
+    assert {row.user_id for row in rows} == {owner.id}
+
+
+@pytest.mark.asyncio
+async def test_get_payment_history_orders_by_creation_date_descending(db_session):
+    owner, _ = await _two_users(db_session)
+    oldest = await _payment(db_session, owner.id, created_at=BASE_TIME)
+    middle = await _payment(
+        db_session, owner.id, created_at=BASE_TIME + timedelta(days=1)
+    )
+    newest = await _payment(
+        db_session, owner.id, created_at=BASE_TIME + timedelta(days=2)
+    )
+
+    rows = await get_payment_history(db_session, owner.id, limit=PAYMENT_LIST_CAP)
+
+    assert [row.id for row in rows] == [newest.id, middle.id, oldest.id]
+
+
+@pytest.mark.asyncio
+async def test_get_payment_history_never_sorts_by_the_amount(db_session):
+    """Сумма — СТРОКА, и строковое сравнение поставило бы «999.00» выше «1490.00».
+
+    Проверка идёт данными, а не грепом: платёж с большей суммой заводится
+    старше, и правильная сортировка обязана поставить его ВТОРЫМ.
+    """
+    owner, _ = await _two_users(db_session)
+    expensive_but_older = await _payment(
+        db_session, owner.id, amount_value="1490.00", created_at=BASE_TIME
+    )
+    cheap_but_newer = await _payment(
+        db_session,
+        owner.id,
+        amount_value="999.00",
+        created_at=BASE_TIME + timedelta(days=1),
+    )
+
+    rows = await get_payment_history(db_session, owner.id, limit=PAYMENT_LIST_CAP)
+
+    assert [row.id for row in rows] == [cheap_but_newer.id, expensive_but_older.id]
+
+
+@pytest.mark.asyncio
+async def test_get_payment_history_includes_every_status(db_session):
+    """Три статуса после D-16: скрыть отменённый значило бы солгать о нём."""
+    owner, _ = await _two_users(db_session)
+    for status in ("pending", "succeeded", "canceled"):
+        await _payment(db_session, owner.id, status=status)
+
+    rows = await get_payment_history(db_session, owner.id, limit=PAYMENT_LIST_CAP)
+
+    assert {row.status for row in rows} == {"pending", "succeeded", "canceled"}
+
+
+@pytest.mark.asyncio
+async def test_get_payment_history_never_returns_more_than_the_limit(db_session):
+    owner, _ = await _two_users(db_session)
+    for index in range(7):
+        await _payment(db_session, owner.id, created_at=BASE_TIME + timedelta(days=index))
+
+    rows = await get_payment_history(db_session, owner.id, limit=3)
+
+    assert len(rows) == 3
+
+
+@pytest.mark.asyncio
+async def test_count_payments_counts_only_the_owner(db_session):
+    """Число нужно ДО конструирования списка — значит, считать без выборки."""
+    owner, stranger = await _two_users(db_session)
+    for _ in range(4):
+        await _payment(db_session, owner.id)
+    for _ in range(9):
+        await _payment(db_session, stranger.id)
+
+    assert await count_payments(db_session, owner.id) == 4
+    assert await count_payments(db_session, stranger.id) == 9
+
+
+@pytest.mark.asyncio
+async def test_count_payments_sees_records_beyond_the_cap(db_session):
+    """Потолок обязан УЗНАВАТЬСЯ, а не выводиться из длины обрезанного списка."""
+    owner, _ = await _two_users(db_session)
+    for _ in range(5):
+        await _payment(db_session, owner.id)
+
+    assert await count_payments(db_session, owner.id) == 5
+    assert len(await get_payment_history(db_session, owner.id, limit=2)) == 2
+
+
+def test_the_payment_list_cap_is_named_once_for_the_project():
+    """Потолок обязаны называть одинаково обработчик, тест и Фаза 6."""
+    assert PAYMENT_LIST_CAP == 200
