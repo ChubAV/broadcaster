@@ -303,12 +303,12 @@ Plans:
 
 **Canonical ref**: `new_broadcaster_design.html` (раздел «Тарифы»)
 **Notes**: Модели `Subscription`, `Payment`, `MessageBalance` и сервис лимитов уже существуют — фаза меняет представление и добавляет операцию продления.
-**Plans**: 6 plans
+**Plans**: 1/6 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 05-01-PLAN.md — Tracer: сквозная покупка и продление подписки через защищённый вебхук (волна 1)
+- [x] 05-01-PLAN.md — Tracer: сквозная покупка и продление подписки через защищённый вебхук (волна 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -357,7 +357,7 @@ Plans:
 | 2. Объявления и расписания | 15/15 | Complete    | 2026-08-11 |
 | 3. Группы аккаунта | 12/12 | Complete    | 2026-08-13 |
 | 4. Дашборд и история | 12/12 | Complete    | 2026-08-15 |
-| 5. Тарифы | 0/TBD | Not started | - |
+| 5. Тарифы | 1/6 | In Progress|  |
 | 6. Админ-панель | 0/TBD | Not started | - |
 
 ## Coverage
