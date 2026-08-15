@@ -3,6 +3,7 @@ from app.config import Settings
 
 def test_s3_settings_defaults():
     s = Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         secret_key="test",
     )
@@ -16,6 +17,7 @@ def test_s3_settings_defaults():
 
 def test_s3_settings_custom():
     s = Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         secret_key="test",
         s3_endpoint_url="https://s3.example.com",

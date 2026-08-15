@@ -4,33 +4,63 @@ import structlog.contextvars
 from datetime import datetime, timezone
 
 from celery import shared_task
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
 
 from app.config import get_settings
 from app.database import get_engine, get_session_factory
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
-from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.services.billing_cache import check_balance_cached, invalidate_balance_cache
 from app.services.billing_service import deduct_message
 from app.services.messenger_factory import create_messenger
-from app.services.s3 import get_image_url
-from app.services.schedule_service import compute_next_run_at
+from app.application.accounts.group_resync import (
+    UNEXPECTED_FAILURE_MESSAGE,
+    apply_group_resync,
+    record_sync_failure,
+)
 from app.application.scheduling.use_cases import (
     DispatchTask,
+    build_dispatch_task,
     collect_due_schedules,
+    effective_ad_status,
     send_message_once,
 )
+from app.constants import AD_STATUS_DRAFT
 
 logger = structlog.get_logger(__name__)
 
 
-async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
-    """Dispatch tasks: Telegram to Celery queue, WhatsApp to Redis per-account queues."""
+def _bridge_failure_message(state: str | None) -> str:
+    """Текст провала синка для пользователя — один на оба фоновых пути.
+
+    Состояние моста само по себе пользователю ничего не говорит, поэтому оно
+    попадает внутрь фразы, а не вместо неё. В `last_sync_result` пишется именно
+    сообщение, а не строка подключения к мосту (T-03-17).
+    """
+    return f"Синхронизация не удалась: мессенджер вернул состояние «{state}»"
+
+
+def _sync_timeout_message(poll_interval: int, max_polls: int) -> str:
+    minutes = poll_interval * max_polls // 60
+    return (
+        f"Синхронизация не завершилась за {minutes} мин — мессенджер не отдал "
+        "список групп"
+    )
+
+
+async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> int:
+    """Dispatch tasks: Telegram to Celery queue, WhatsApp to Redis per-account queues.
+
+    ВОЗВРАЩАЕТ ЧИСЛО ДЕЙСТВИТЕЛЬНО РАЗОСЛАННЫХ ЗАДАЧ, а не None. Ветвление по
+    типу аккаунта конечно ровно до появления следующего значения, а
+    `MessengerAccount.type` — свободная строка без ограничения перечнем: задача
+    незнакомого типа не попала бы ни в одну из трёх корзин. Без возвращаемого
+    числа вызывающий не мог бы отличить «разослано» от «не разослано ничего» —
+    и `retry_send` записывал бы в журнал успешную диспетчеризацию, которой не
+    было, показав пользователю обещание записи истории, которая не появится.
+    """
     import json
     import redis as redis_lib
     from uuid import uuid4
@@ -40,6 +70,7 @@ async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
     tg_tasks: list[DispatchTask] = []
     wa_tasks_by_account: dict[int, list[DispatchTask]] = {}
     max_tasks_by_account: dict[int, list[DispatchTask]] = {}
+    unrouted: list[DispatchTask] = []
 
     for task in tasks_to_dispatch:
         if task.type == "tg_user":
@@ -48,6 +79,19 @@ async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
             wa_tasks_by_account.setdefault(task.account_id, []).append(task)
         elif task.type == "max":
             max_tasks_by_account.setdefault(task.account_id, []).append(task)
+        else:
+            # ВЕТКА «ИНАЧЕ» ОБЯЗАТЕЛЬНА. Три `elif` без неё выбрасывали бы
+            # задачу молча: ни строки в журнале, ни исключения, ни записи
+            # истории — отправка просто не происходила бы, а вызывающий видел
+            # бы тот же результат, что при успехе. `MessengerAccount.type` —
+            # String(20) без ограничения перечнем, то есть «четвёртого типа не
+            # бывает» верно ровно до того момента, когда он появится.
+            unrouted.append(task)
+            logger.error("dispatch_unknown_account_type",
+                        type=task.type,
+                        account_id=task.account_id,
+                        ad_id=task.ad_id,
+                        group_id=task.group_id)
 
     # Dispatch Telegram tasks via Celery (unchanged)
     for task in tg_tasks:
@@ -137,7 +181,9 @@ async def dispatch_send_tasks(tasks_to_dispatch: list[DispatchTask]) -> None:
     total = len(tg_tasks) + sum(len(t) for t in wa_tasks_by_account.values()) + sum(len(t) for t in max_tasks_by_account.values())
     logger.info("send_tasks_dispatched", total=total, tg=len(tg_tasks),
                wa=sum(len(t) for t in wa_tasks_by_account.values()),
-               max=sum(len(t) for t in max_tasks_by_account.values()))
+               max=sum(len(t) for t in max_tasks_by_account.values()),
+               unrouted=len(unrouted))
+    return total
 
 
 async def check_schedules_async(session: AsyncSession):
@@ -247,20 +293,238 @@ def check_schedules(self):
     asyncio.run(_run())
 
 
-async def _sync_wa_groups_async(account_id: int):
-    """Poll bridge for group sync completion, save groups to DB."""
+@shared_task(name="app.worker.tasks.retry_send", bind=True, max_retries=0)
+def retry_send(self, log_id: int, user_id: int):
+    """Повторная отправка записи истории — один вход на все три канала.
+
+    ВТОРОГО МАРШРУТА ОТПРАВКИ НЕТ. Задача собирается тем же
+    `build_dispatch_task`, что и у планировщика, и отдаётся той же
+    `dispatch_send_tasks` — она уже маршрутизирует по типу аккаунта: Telegram
+    Celery-таском в очередь `telegram`, WhatsApp и MAX `rpush`-ем в Redis-очередь
+    своего аккаунта. Постановка напрямую в `send_telegram_message` была бы
+    входом ОДНОГО канала из трёх, и повтор WA-записи уехал бы по непроверенному
+    пути (T-04-09). Полезную нагрузку очередей таск не формирует и их формат не
+    меняет — его читает `wa_worker/index.js`; `send_message_once` и адаптеры
+    мессенджеров отсюда не вызываются.
+
+    ОТПРАВЛЯЕТСЯ ТЕКУЩИЙ КОНТЕНТ ОБЪЯВЛЕНИЯ ИЗ БД, А НЕ СНАПШОТ ИЗ ЖУРНАЛА
+    (D-17). Снапшот в записи истории — свидетельство о том, что было отправлено
+    тогда; повтор же есть новая отправка сейчас, и уехать в чужую группу обязано
+    то объявление, которое пользователь видит сегодня. Следствие в интерфейсе
+    (предупредить пользователя, что текст мог измениться) называет план 04-09.
+
+    НОВАЯ ЗАПИСЬ ЖУРНАЛА НИКАК НЕ СВЯЗАНА С ИСХОДНОЙ (D-22). Колонки связи не
+    вводится: повтор попадает в историю обычной строкой, как любая другая
+    отправка. Записи создаёт существующий путь — `send_message_once` для
+    Telegram и `process_wa_results`/`process_max_results` для очередей.
+
+    ВТОРАЯ ЛИНИЯ ВСЕХ ЗАПРЕТОВ ОБРАБОТЧИКА СТОИТ ЗДЕСЬ. Аргументы приходят из
+    брокера, а не из запроса, и между нажатием и исполнением проходит время:
+    владение, целость тройки, статус аккаунта, черновик, выключенная группа и
+    ГЕЙТ БАЛАНСА проверяются заново. Гейт баланса — не украшение: задача может
+    простоять за очередью до момента, когда баланс кончился, а списание после
+    отправки уже ничего не остановит.
+
+    `max_retries=0`: повтор — решение пользователя. Автоматический перезапуск
+    превратил бы одно нажатие в серию отправок в чужую группу, которую нельзя
+    отозвать.
+    """
+    settings = get_settings()
+    engine = get_engine(settings.database_url)
+    session_factory = get_session_factory(engine)
+    log = logger.bind(log_id=log_id, user_id=user_id)
+
+    async def _run():
+        try:
+            logger.info(
+                "celery_task_start",
+                task_name=self.name,
+                task_id=self.request.id,
+            )
+
+            # Вся работа с БД — внутри сессии; диспетчеризация — ПОСЛЕ выхода
+            # из неё: под `dispatch_send_tasks` синхронный redis-клиент, и
+            # держать сессию открытой на время сетевой работы незачем.
+            async with session_factory() as session:
+                send_log = await session.get(SendLog, log_id)
+
+                # ВЛАДЕНИЕ ПРОВЕРЯЕТСЯ ЗДЕСЬ ПОВТОРНО (T-04-08). Первая
+                # проверка стоит в HTTP-обработчике плана 04-09, но аргументы
+                # таска приходят из брокера, а не из запроса, и доверять им как
+                # проверенным нельзя: вход в очередь — своя граница доверия.
+                if send_log is None or send_log.user_id != user_id:
+                    log.warning("retry_send_rejected", reason="log_not_owned")
+                    return
+
+                group = (
+                    await session.get(Group, send_log.group_id)
+                    if send_log.group_id
+                    else None
+                )
+                ad = (
+                    await session.get(Ad, send_log.ad_id)
+                    if send_log.ad_id
+                    else None
+                )
+                # У журнала колонки аккаунта нет — аккаунт выводится через
+                # группу.
+                account = (
+                    await session.get(MessengerAccount, group.account_id)
+                    if group
+                    else None
+                )
+
+                # ВТОРАЯ ЛИНИЯ ЗАЩИТЫ D-21. Первая стоит в обработчике плана
+                # 04-09, но между предпроверкой и исполнением таска сущность
+                # может исчезнуть, а аккаунт — отвалиться. Выход здесь ТИХИЙ:
+                # записи в журнал не создаётся, иначе история наполнялась бы
+                # свидетельствами о заведомо невозможных отправках (T-04-11).
+                if not ad or not group or not account:
+                    log.warning(
+                        "retry_send_stopped",
+                        reason="missing_entity",
+                        has_ad=bool(ad),
+                        has_group=bool(group),
+                        has_account=bool(account),
+                    )
+                    return
+
+                if account.status != "active":
+                    log.warning(
+                        "retry_send_stopped",
+                        reason="account_not_active",
+                        status=account.status,
+                    )
+                    return
+
+                # ПОСЛЕДНЯЯ ТОЧКА, ГДЕ ЭТИ ДВА ЗАПРЕТА ЕЩЁ ИСПОЛНИМЫ (CR-01,
+                # CR-02). Для `wa` и `max` ниже кладётся готовая полезная
+                # нагрузка в Redis, и `wa_worker/index.js` отправляет её НЕ
+                # ЗАГЛЯДЫВАЯ В БАЗУ: ни статуса объявления, ни флага группы он
+                # не видит. У Telegram тот же запрет сработал бы позже, в
+                # `send_message_once`, — то есть без проверки ЗДЕСЬ защита
+                # существовала бы на одном канале из трёх и ловилась бы не
+                # тестами, а отправкой в чужую группу.
+                #
+                # Предикат берётся у планировщика (`effective_ad_status`), а не
+                # пишется сравнением с литералом: безопасный дефолт «всё, кроме
+                # опубликованного, — черновик» обязан иметь на проекте ровно
+                # одно определение, иначе следующий статус разъедет два места.
+                if effective_ad_status(ad) == AD_STATUS_DRAFT:
+                    log.warning("retry_send_stopped", reason="ad_is_draft", ad_id=ad.id)
+                    return
+
+                # `Group.is_active` — обратимый выключатель ПОЛЬЗОВАТЕЛЯ (D-05),
+                # и `send_message_once` его не смотрит вовсе: он полагается на
+                # то, что планировщик уже отфильтровал. Повтор планировщик
+                # минует, поэтому фильтр обязан стоять здесь.
+                if not group.is_active:
+                    log.warning(
+                        "retry_send_stopped",
+                        reason="group_inactive",
+                        group_id=group.id,
+                    )
+                    return
+
+                # ГЕЙТ БАЛАНСА ВТОРОЙ ЛИНИЕЙ (T-04-36). Первый стоит в
+                # обработчике плана 04-09, но между нажатием и исполнением
+                # таска проходит время: задача может простоять за очередью
+                # ровно столько, сколько нужно, чтобы баланс кончился на другой
+                # рассылке. Без проверки ЗДЕСЬ сообщение уходит, а `deduct_message`
+                # уже после отправки возвращает False по условию `balance > 0` —
+                # то есть получается не отрицательный баланс, а БЕСПЛАТНАЯ
+                # отправка в обход тарифа. У планировщика такой асимметрии нет:
+                # его гейт стоит в том же такте, что и диспетчеризация.
+                #
+                # Выход ТИХИЙ, как и у остальных проверок этого таска: записи в
+                # журнал не создаётся, иначе история наполнялась бы
+                # свидетельствами о заведомо невозможных отправках (T-04-11).
+                allowed, _reason = await check_balance_cached(session, user_id, "send")
+                if not allowed:
+                    log.warning("retry_send_stopped", reason="no_balance")
+                    return
+
+                # `schedule_id` проходит как есть, включая None: у повтора
+                # записи без расписания осмысленного числа не существует, а
+                # ноль создал бы в журнале ссылку на несуществующее расписание.
+                task = build_dispatch_task(
+                    ad=ad,
+                    group=group,
+                    account=account,
+                    schedule_id=send_log.schedule_id,
+                )
+
+            # Число разосланных проверяется, а не игнорируется: без этого
+            # запись «повтор диспетчеризован» утверждала бы отправку, которой
+            # не было, — задача незнакомого типа аккаунта не попадает ни в одну
+            # корзину маршрутизации. Пользователю при этом уже показано
+            # обещание новой записи истории, и молчаливый ноль превратил бы это
+            # обещание в ложь без единого следа в журнале.
+            dispatched = await dispatch_send_tasks([task])
+            if not dispatched:
+                log.error(
+                    "retry_send_not_dispatched",
+                    reason="unrouted_account_type",
+                    type=task.type,
+                    account_id=task.account_id,
+                )
+                return
+            log.info("retry_send_dispatched", type=task.type, account_id=task.account_id)
+        except Exception as e:
+            log.error("retry_send_error", error=str(e), exc_info=True)
+            raise
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
+
+
+# --- Фоновая синхронизация состава групп: ОДНА реализация на два канала -------
+#
+# WA и MAX опрашивают своих воркеров одинаково: `get_sync_status()` до состояния
+# `ready`, применение состава общим `apply_group_resync`, три ветки исхода
+# (готово / отказ моста / таймаут) и общий обработчик исключения. Раньше это
+# было двумя посимвольными копиями, различавшимися классом адаптера, литералом
+# `messenger_type` и текстами логов, — то есть ровно тем дефектом, ради
+# устранения которого заведён `group_resync` («однажды поправят две из трёх»),
+# только уровнем выше.
+#
+# Различия каналов вынесены в ДВА значения: тип и фабрика адаптера. Имена
+# событий лога выводятся из типа, а не передаются отдельно, — иначе появился бы
+# третий параметр, который можно рассогласовать с первыми двумя.
+
+POLL_INTERVAL = 15  # секунд между опросами воркера
+MAX_POLLS = 40  # 40 * 15s = 10 минут максимум
+
+
+def _wa_messenger(account_id: int):
+    """Адаптер WA. Импорт локальный — модуль тянет docker-клиент."""
+    from app.messengers.whatsapp import WhatsAppMessenger
+
+    return WhatsAppMessenger(session_id=str(account_id))
+
+
+def _max_messenger(account_id: int):
+    """Адаптер MAX. Импорт локальный по той же причине."""
+    from app.messengers.max import MaxMessenger
+
+    return MaxMessenger(session_id=str(account_id))
+
+
+async def _sync_groups_async(account_id: int, *, messenger_type: str, messenger_factory):
+    """Опрашивает воркера до завершения синка и записывает состав групп.
+
+    `messenger_type` — и литерал переинвентаризации, и корень имён событий лога
+    (`sync_wa_groups_error` / `sync_max_groups_error`): одно значение вместо
+    двух рассогласуемых.
+    """
     log = logger.bind(account_id=account_id)
     settings = get_settings()
     engine = get_engine(settings.database_url)
     session_factory = get_session_factory(engine)
 
-    from app.messengers.whatsapp import WhatsAppMessenger
-
-    POLL_INTERVAL = 15  # seconds
-    MAX_POLLS = 40  # 40 * 15s = 10 minutes max
-
     try:
-        messenger = WhatsAppMessenger(session_id=str(account_id))
+        messenger = messenger_factory(account_id)
 
         for attempt in range(MAX_POLLS):
             sync_data = await messenger.get_sync_status()
@@ -275,39 +539,38 @@ async def _sync_wa_groups_async(account_id: int):
                         log.info("sync_skipped", reason="account_not_syncing", status=account.status if account else None)
                         return
 
-                    existing = await session.execute(
-                        select(Group.group_external_id).where(
-                            Group.account_id == account_id,
-                            Group.user_id == account.user_id,
-                        )
+                    # Состав групп считает единственная реализация
+                    # переинвентаризации — та же, что у страничного
+                    # TG-обработчика (D-10, D-11, D-12).
+                    result = await apply_group_resync(
+                        session, account, groups, messenger_type=messenger_type
                     )
-                    existing_ids = {row[0] for row in existing}
-
-                    new_count = 0
-                    seen = set(existing_ids)
-                    for g in groups:
-                        if g["id"] not in seen:
-                            seen.add(g["id"])
-                            session.add(
-                                Group(
-                                    user_id=account.user_id,
-                                    account_id=account_id,
-                                    messenger_type="wa",
-                                    group_external_id=g["id"],
-                                    name=g.get("name") or g["id"],
-                                )
-                            )
-                            new_count += 1
 
                     account.status = "active"
                     await session.commit()
-                    log.info("sync_complete", total_groups=len(groups), new_groups=new_count)
+                    if result.error:
+                        # Мост объявил `ready`, но состава не дал. Хелпер уже
+                        # отказался применять такой ответ и записал причину на
+                        # аккаунт; в логе это обязано быть отличимо от синка,
+                        # который действительно завершился (CR-02).
+                        log.warning("sync_response_rejected", reason=result.error)
+                    else:
+                        log.info(
+                            "sync_complete",
+                            total_groups=len(groups),
+                            new_groups=result.created,
+                            renamed_groups=result.renamed,
+                            missing_groups=result.missing,
+                        )
                 return
 
             if state in ("failed", "not_found", "unknown"):
                 async with session_factory() as session:
                     account = await session.get(MessengerAccount, account_id)
                     if account and account.status == "syncing":
+                        await record_sync_failure(
+                            session, account, _bridge_failure_message(state)
+                        )
                         account.status = "sync_failed"
                         await session.commit()
                 log.warning("sync_failed", state=state)
@@ -320,16 +583,27 @@ async def _sync_wa_groups_async(account_id: int):
         async with session_factory() as session:
             account = await session.get(MessengerAccount, account_id)
             if account and account.status == "syncing":
+                await record_sync_failure(
+                    session, account, _sync_timeout_message(POLL_INTERVAL, MAX_POLLS)
+                )
                 account.status = "sync_failed"
                 await session.commit()
         log.warning("sync_timeout", max_polls=MAX_POLLS)
 
     except Exception as e:
-        log.error("sync_wa_groups_error", error=str(e), exc_info=True)
+        log.error(f"sync_{messenger_type}_groups_error", error=str(e), exc_info=True)
         try:
             async with session_factory() as session:
                 account = await session.get(MessengerAccount, account_id)
                 if account and account.status == "syncing":
+                    # Свой текст, а не `str(e)`: сводку печатает пользователю
+                    # шаблон экрана групп дословно, а сюда долетает что угодно —
+                    # `IntegrityError` с полным SQL или `RuntimeError` менеджера
+                    # контейнеров с внутренним адресом (T-03-17). Исходный текст
+                    # уже в логе строкой выше, с `exc_info=True`.
+                    await record_sync_failure(
+                        session, account, UNEXPECTED_FAILURE_MESSAGE
+                    )
                     account.status = "sync_failed"
                     await session.commit()
         except Exception:
@@ -337,6 +611,20 @@ async def _sync_wa_groups_async(account_id: int):
         raise
     finally:
         await engine.dispose()
+
+
+async def _sync_wa_groups_async(account_id: int):
+    """WA-обёртка общей реализации."""
+    await _sync_groups_async(
+        account_id, messenger_type="wa", messenger_factory=_wa_messenger
+    )
+
+
+async def _sync_max_groups_async(account_id: int):
+    """MAX-обёртка общей реализации."""
+    await _sync_groups_async(
+        account_id, messenger_type="max", messenger_factory=_max_messenger
+    )
 
 
 @shared_task(
@@ -347,98 +635,6 @@ async def _sync_wa_groups_async(account_id: int):
 def sync_wa_groups(self, account_id: int):
     """Background task: poll bridge until group sync completes, save to DB."""
     asyncio.run(_sync_wa_groups_async(account_id))
-
-
-async def _sync_max_groups_async(account_id: int):
-    """Poll MAX worker for group sync completion, save groups to DB."""
-    log = logger.bind(account_id=account_id)
-    settings = get_settings()
-    engine = get_engine(settings.database_url)
-    session_factory = get_session_factory(engine)
-
-    from app.messengers.max import MaxMessenger
-
-    POLL_INTERVAL = 15  # seconds
-    MAX_POLLS = 40  # 40 * 15s = 10 minutes max
-
-    try:
-        messenger = MaxMessenger(session_id=str(account_id))
-
-        for attempt in range(MAX_POLLS):
-            sync_data = await messenger.get_sync_status()
-            state = sync_data.get("state")
-            log.debug("sync_poll", attempt=attempt + 1, state=state)
-
-            if state == "ready":
-                groups = sync_data.get("groups") or []
-                async with session_factory() as session:
-                    account = await session.get(MessengerAccount, account_id)
-                    if not account or account.status != "syncing":
-                        log.info("sync_skipped", reason="account_not_syncing", status=account.status if account else None)
-                        return
-
-                    existing = await session.execute(
-                        select(Group.group_external_id).where(
-                            Group.account_id == account_id,
-                            Group.user_id == account.user_id,
-                        )
-                    )
-                    existing_ids = {row[0] for row in existing}
-
-                    new_count = 0
-                    seen = set(existing_ids)
-                    for g in groups:
-                        if g["id"] not in seen:
-                            seen.add(g["id"])
-                            session.add(
-                                Group(
-                                    user_id=account.user_id,
-                                    account_id=account_id,
-                                    messenger_type="max",
-                                    group_external_id=g["id"],
-                                    name=g.get("name") or g["id"],
-                                )
-                            )
-                            new_count += 1
-
-                    account.status = "active"
-                    await session.commit()
-                    log.info("sync_complete", total_groups=len(groups), new_groups=new_count)
-                return
-
-            if state in ("failed", "not_found", "unknown"):
-                async with session_factory() as session:
-                    account = await session.get(MessengerAccount, account_id)
-                    if account and account.status == "syncing":
-                        account.status = "sync_failed"
-                        await session.commit()
-                log.warning("sync_failed", state=state)
-                return
-
-            # Still syncing — wait and poll again
-            await asyncio.sleep(POLL_INTERVAL)
-
-        # Timeout — max polls reached
-        async with session_factory() as session:
-            account = await session.get(MessengerAccount, account_id)
-            if account and account.status == "syncing":
-                account.status = "sync_failed"
-                await session.commit()
-        log.warning("sync_timeout", max_polls=MAX_POLLS)
-
-    except Exception as e:
-        log.error("sync_max_groups_error", error=str(e), exc_info=True)
-        try:
-            async with session_factory() as session:
-                account = await session.get(MessengerAccount, account_id)
-                if account and account.status == "syncing":
-                    account.status = "sync_failed"
-                    await session.commit()
-        except Exception:
-            pass
-        raise
-    finally:
-        await engine.dispose()
 
 
 @shared_task(

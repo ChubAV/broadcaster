@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
+from app.messengers.base import MessengerFetchError
 from app.messengers.whatsapp import WhatsAppMessenger, ensure_wa_container
 
 
@@ -139,6 +140,13 @@ async def test_get_groups_success():
 
 @pytest.mark.asyncio
 async def test_get_groups_failure():
+    """Не-200 от моста — это ОТКАЗ, а не пустой состав групп.
+
+    Тест поднимает настоящий `WhatsAppMessenger` и подменяет только HTTP-слой:
+    мок самого `get_groups` проверял бы контракт, которого у класса нет.
+    Возврат `[]` здесь означал бы, что вызывающий примет молчание моста за
+    авторитетную опись и пометит пропавшими все группы аккаунта.
+    """
     messenger = WhatsAppMessenger("http://wa-bridge:3000", session_id="42")
     mock_response = MagicMock()
     mock_response.status_code = 500
@@ -148,8 +156,30 @@ async def test_get_groups_failure():
         mock_client.get = AsyncMock(return_value=mock_response)
         mock_get_client.return_value = mock_client
 
-        groups = await messenger.get_groups()
-        assert groups == []
+        with pytest.raises(MessengerFetchError) as exc_info:
+            await messenger.get_groups()
+
+    assert "500" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_get_groups_empty_list_is_not_an_error():
+    """Пустой ответ 200 — это РОВНО «групп нет», и он не исключение.
+
+    Парная к test_get_groups_failure: различие пустоты и отказа — весь смысл
+    `MessengerFetchError`, поэтому обе стороны различия закреплены.
+    """
+    messenger = WhatsAppMessenger("http://wa-bridge:3000", session_id="42")
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = []
+
+    with patch("app.messengers.whatsapp.get_http_client") as mock_get_client:
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_get_client.return_value = mock_client
+
+        assert await messenger.get_groups() == []
 
 
 @pytest.mark.asyncio
@@ -279,7 +309,7 @@ async def test_get_groups_logs_error_on_failure(caplog):
         mock_get_client.return_value = mock_client
 
         with caplog.at_level(logging.ERROR, logger="app.messengers.whatsapp"):
-            groups = await messenger.get_groups()
+            with pytest.raises(MessengerFetchError):
+                await messenger.get_groups()
 
-    assert groups == []
     assert any("get_groups_error" in r.message or "Timeout" in r.message for r in caplog.records)

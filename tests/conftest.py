@@ -1,3 +1,5 @@
+import itertools
+
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -6,11 +8,16 @@ from app.config import Settings
 from app.database import Base
 from app.dependencies import get_db, get_settings
 from app.main import create_app
+from app.models.group import Group
+from app.models.messenger_account import MessengerAccount
 
 
 @pytest_asyncio.fixture
 async def test_settings():
     return Settings(
+        # .env разработчика не должен протекать в тесты: без этого фикстура
+        # наследует боевые SMTP/S3-параметры рабочего каталога.
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         secret_key="test-secret-key",
@@ -80,6 +87,68 @@ async def authed_client(client, auth_headers):
         follow_redirects=False,
     )
     return client
+
+
+# --- Посев групп --------------------------------------------------------------
+#
+# Группа заводится ПРЯМОЙ ВСТАВКОЙ через ORM, а не запросом к прикладному
+# маршруту. Прикладного входа создания группы в приложении больше нет: GRP-08
+# («добавить группу вручную») снято решением владельца, и вместе с ним удалён
+# JSON-маршрут создания группы (`app/routes/groups.py` целиком) — единственный
+# вход, который принимал `account_id` от клиента и НЕ проверял владение им
+# (D-13, D-14, план 03-07). Единственный источник появления групп в продукте —
+# синхронизация с мессенджером; посев здесь воспроизводит ровно её результат.
+#
+# Хелпер живёт функцией модуля, а не фикстурой: почти все вызывающие — свои
+# `_create_group`/`setup_*` тестовых файлов, то есть обычные функции, которым
+# фикстуру пришлось бы протаскивать лишним параметром через всю цепочку.
+# Импортируется как `from tests.conftest import seed_group`.
+
+_group_external_id_seq = itertools.count(1)
+
+
+async def seed_group(
+    session: AsyncSession,
+    account_id: int,
+    user_id: int | None = None,
+    *,
+    name: str | None = None,
+    messenger_type: str | None = None,
+    group_external_id: str | None = None,
+) -> Group:
+    """Строка `groups` на указанном аккаунте. Возвращает созданный объект.
+
+    `user_id` и `messenger_type` по умолчанию берутся С АККАУНТА, а не из
+    аргументов, и это не экономия печати. Группа, чей владелец или тип канала
+    разошёлся с аккаунтом, синхронизацией непроизводима — такую строку в базе
+    может оставить только ошибка теста. Значения передаются явно лишь там, где
+    расхождение и есть предмет проверки (посев ЧУЖОЙ группы делается локальными
+    хелперами соответствующих файлов, не этим).
+
+    Идентификатор возвращённого объекта следует снимать сразу: последующие
+    `commit()`/`expire_all()` в проверках сбрасывают загруженные атрибуты, и
+    обращение к ним из синхронного кода теста ушло бы в ленивую подгрузку вне
+    greenlet-а.
+    """
+    account = await session.get(MessengerAccount, account_id)
+    if account is None:
+        raise AssertionError(
+            f"seed_group: аккаунта {account_id} нет в базе — "
+            "группа не может принадлежать несуществующему аккаунту"
+        )
+
+    seq = next(_group_external_id_seq)
+    group = Group(
+        user_id=account.user_id if user_id is None else user_id,
+        account_id=account_id,
+        messenger_type=messenger_type or account.type,
+        group_external_id=group_external_id or f"-100{account_id:03d}{seq:06d}",
+        name=name or f"Группа {seq}",
+    )
+    session.add(group)
+    await session.commit()
+    await session.refresh(group)
+    return group
 
 
 @pytest_asyncio.fixture

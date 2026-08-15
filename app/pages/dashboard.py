@@ -1,19 +1,64 @@
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.analytics.send_analytics import (
+    activity_chart,
+    activity_heatmap,
+    recent_feed,
+    send_metrics,
+    upcoming_sends,
+)
 from app.config import Settings
 from app.dependencies import get_db, get_settings
-from app.models.ad import Ad
-from app.models.group import Group
-from app.models.messenger_account import MessengerAccount
-from app.models.send_log import SendLog
-from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.pages.common import (
+    _get_timezone_for_user,
+    check_is_admin,
+    get_user_from_cookie,
+    templates,
+)
+from app.pages.dashboard_feed import FEED_LIMIT, FEED_POLL_SECONDS
 
 router = APIRouter(tags=["pages"])
+
+
+def dashboard_next_step(nav_counts: dict | None) -> tuple[str, str]:
+    """Подпись и адрес СЛЕДУЮЩЕГО шага пользователя по счётчикам шелла (D-40).
+
+    Пустой дашборд обязан вести по тому, чего НЕ ХВАТАЕТ, а не показывать один
+    и тот же призыв всем: «создайте объявление» пользователю без подключённого
+    канала бесполезно — объявление он создаст, а отправить его будет некуда.
+    Порядок ветвей и есть порядок шагов продукта: канал → объявление →
+    расписание.
+
+    Счётчики УЖЕ посчитаны шеллом на каждом страничном маршруте
+    (`load_shell_context` → `get_shell_context`), поэтому второго запроса за
+    ними здесь нет. Пустой словарь — валидный вход: шелл отдаёт его, когда
+    пользователя нет, и обращение к отсутствующему ключу дало бы пятисотку
+    вместо призыва.
+
+    АДРЕСА ПОВТОРЯЮТ пустые состояния самих разделов, а не изобретают свои:
+    «нет объявлений» ведёт туда же, куда ведёт `ads/list.html`, «нет
+    расписаний» — туда же, куда `schedules/list.html` (в редактор объявления, а
+    не на сводный список: создать расписание там больше нельзя, D-14). Два
+    разных адреса на один вопрос — ровно та болезнь, которую лечит эта фаза.
+
+    Единственное расхождение — «нет аккаунтов»: раздел аккаунтов ведёт сразу в
+    подключение Telegram, а дашборд ведёт НА раздел, где предложены все каналы.
+    Пользователь дашборда канал ещё не выбирал, и решать за него, что это
+    Telegram, значит отвечать не на его вопрос.
+
+    Функция ЧИСТАЯ: ни запросов, ни `Request`, ни шаблонов — поэтому её ветки
+    проверяются напрямую, без поднятия страницы.
+    """
+    counts = nav_counts or {}
+    if not counts.get("accounts"):
+        return ("Подключить аккаунт", "/accounts")
+    if not counts.get("ads"):
+        return ("Создать объявление", "/ads/new")
+    if not counts.get("schedules"):
+        return ("К объявлениям", "/ads")
+    return ("", "")
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
@@ -26,73 +71,39 @@ async def dashboard(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
-    # Stats
-    ads_count = (
-        await db.execute(
-            select(func.count(Ad.id)).where(
-                Ad.user_id == user.id, Ad.is_active == True  # noqa: E712
-            )
-        )
-    ).scalar() or 0
-    accounts_count = (
-        await db.execute(
-            select(func.count(MessengerAccount.id)).where(
-                MessengerAccount.user_id == user.id,
-                MessengerAccount.status == "active",
-            )
-        )
-    ).scalar() or 0
-    groups_count = (
-        await db.execute(
-            select(func.count(Group.id)).where(
-                Group.user_id == user.id, Group.is_active == True  # noqa: E712
-            )
-        )
-    ).scalar() or 0
+    # Плитки. Страница агрегатов НЕ СЧИТАЕТ: восемь чисел приходят одним
+    # запросом из модуля аналитики, который зовут и история, и Фаза 6 (D-35).
+    # Три счётчика сущностей и отправки «от UTC-полуночи» отсюда сняты по
+    # D-01/D-02 — счётчики дублировали боковое меню, а полночь показывала почти
+    # ноль в первые часы суток независимо от того, работала система ночью.
+    metrics = await send_metrics(db, user_id=user.id)
 
-    today_start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    # Активность за неделю (DASH-04). Таймзона приезжает СЮДА, а не берётся
+    # внутри модуля: локальный час — свойство ЧИТАТЕЛЯ экрана, и в админке
+    # Фазы 6 тот же модуль позовут с зоной администратора, а не просматриваемого
+    # пользователя.
+    #
+    # Часовая раскладка считается ОДНИМ запросом, а столбцы графика получаются
+    # её свёрткой: второго обращения к самой растущей таблице системы ради того
+    # же окна не делается. Часовая сетка при этом остаётся доступной Фазе 6 —
+    # снят её показ на этом экране, а не сама раскладка.
+    chart_view = activity_chart(
+        await activity_heatmap(db, user_id=user.id, tz=_get_timezone_for_user(user))
     )
-    sent_today = (
-        await db.execute(
-            select(func.count(SendLog.id))
-            .join(Ad, SendLog.ad_id == Ad.id)
-            .where(Ad.user_id == user.id, SendLog.sent_at >= today_start)
-        )
-    ).scalar() or 0
 
-    stats = {
-        "active_ads": ads_count,
-        "active_accounts": accounts_count,
-        "active_groups": groups_count,
-        "sent_today": sent_today,
-    }
+    # Ближайшие отправки (DASH-02). Пометки причин считает модуль: страница не
+    # знает ни про черновик объявления, ни про статус аккаунта, ни про флаги
+    # групп — иначе то же правило пришлось бы повторить в Фазе 6.
+    upcoming = await upcoming_sends(db, user_id=user.id)
 
-    # Recent sends (last 10)
-    recent_query = (
-        select(SendLog, Group)
-        .outerjoin(Group, SendLog.group_id == Group.id)
-        .where(SendLog.user_id == user.id)
-        .order_by(SendLog.sent_at.desc())
-        .limit(10)
-    )
-    recent_result = await db.execute(recent_query)
-    recent_sends = [
-        {
-            "id": r.id,
-            "ad_title": r.ad_title or "—",
-            "ad_text": r.ad_text or "",
-            "group_name": r.group_name or "—",
-            "group_external_id": group.group_external_id if group else None,
-            "account_id": group.account_id if group else None,
-            "task_id": r.task_id,
-            "status": r.status,
-            "messenger_type": r.messenger_type,
-            "error_message": r.error_message,
-            "sent_at": r.sent_at,
-        }
-        for r, group in recent_result
-    ]
+    # Живая лента (DASH-03). Первичная отрисовка идёт ТЕМ ЖЕ паршалом, что
+    # отдаёт маршрут опроса, поэтому строки приезжают под тем же именем `feed`
+    # и с тем же лимитом: блок, посчитанный здесь по своим правилам, разъехался
+    # бы с первым же тиком опроса.
+    #
+    # Блок «Последние отправки» отсюда СНЯТ вместе со своим шаблоном строки: его
+    # место заняла лента, а недостижимых шаблонов в проекте не оставляют.
+    feed = await recent_feed(db, user_id=user.id, limit=FEED_LIMIT)
 
     return templates.TemplateResponse(
         "dashboard.html",
@@ -100,8 +111,34 @@ async def dashboard(
             "request": request,
             "user": user,
             "is_admin": check_is_admin(user, settings),
-            "stats": stats,
-            "recent_sends": recent_sends,
+            "metrics": metrics,
+            "chart_view": chart_view,
+            "upcoming": upcoming,
+            # Пара «подпись, адрес» для пустых состояний блоков (D-40).
+            # Счётчики берутся из шелла, уже посчитанного зависимостью маршрута.
+            "next_step": dashboard_next_step(
+                getattr(request.state, "shell", {}).get("nav_counts")
+            ),
+            # Перечень воркеров (DASH-05). Страница его НЕ ЧИТАЕТ: список уже
+            # собран контрактом шелла на этом же маршруте — тем же приёмом, что
+            # и счётчики строкой выше. Пустой список запасным значением
+            # обязателен: на маршруте без шелла отсутствующий ключ дал бы
+            # пятисотку вместо блока.
+            "sessions": getattr(request.state, "shell", {}).get("sessions") or [],
+            # Признак обрезки и полное число едут рядом с перечнем: перечень
+            # ограничен потолком контракта шелла, и молча короткий список
+            # читался бы как «остальных каналов нет» — ровно тот ответ, за
+            # которым пользователь на дашборд и пришёл.
+            "sessions_truncated": bool(
+                getattr(request.state, "shell", {}).get("sessions_truncated")
+            ),
+            "sessions_total": getattr(request.state, "shell", {}).get("sessions_total")
+            or 0,
+            "feed": feed,
+            # Интервал опроса едет в разметку ИЗ КОНСТАНТЫ модуля маршрута, где
+            # рядом живёт лимит строк: литерал в шаблоне разъехался бы с ним
+            # молча.
+            "feed_poll_seconds": FEED_POLL_SECONDS,
             "active_page": "dashboard",
         },
     )

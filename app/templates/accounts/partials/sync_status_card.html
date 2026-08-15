@@ -27,7 +27,7 @@
    тестом test_accounts_three_files_dispatch_same_modal_event: панель обязана
    присутствовать в двух файлах и отсутствовать здесь. #}
 
-{% from "components/button.html" import button %}
+{% from "components/button.html" import button, link_button %}
 {% from "components/table.html" import cell %}
 {% from "components/badge.html" import badge %}
 {% from "components/mono.html" import mono %}
@@ -49,7 +49,11 @@
     <span data-grow>{{ label }}</span>{{ mono('#' ~ account_id) }}
   {%- endcall %}
   {% if status == 'active' %}
-  {{- cell(text=stats.get('groups_count', group_count or 0), mono=true, muted=true, title='Групп', label=ACCOUNT_COLUMNS[1]) }}
+  {#- Число групп приходит ТОЛЬКО из stats — тем же путём, что и в двух соседних
+      файлах строки. Прежний запасной вариант (`group_count` из SyncStatusView)
+      был недостижим: обработчик кладёт `groups_count` для каждого запрошенного
+      аккаунта, — и стоил отдельного запроса на каждый ответ опроса. -#}
+  {{- cell(text=stats.get('groups_count', 0), mono=true, muted=true, title='Групп', label=ACCOUNT_COLUMNS[1]) }}
   {{- cell(text=stats.get('schedules_count', 0), mono=true, muted=true, title='Расписаний', label=ACCOUNT_COLUMNS[2]) }}
   {%- set attempts = stats.get('send_attempts', 0) -%}
   {{- cell(text=(((stats.get('send_success', 0) / attempts) * 100)|round|int ~ '%') if attempts > 0 else '—',
@@ -61,6 +65,12 @@
   {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[5]) }}
   {%- call cell(label=ACCOUNT_COLUMNS[6]) %}{{ badge('Активно', 'success') }}{% endcall %}
   {%- call cell() %}
+    {#- Вход на экран групп аккаунта (D-02). Идентификатор здесь приходит
+        переменной account_id, а не account.id: файл подмены получает контекст
+        от обработчика опроса, а не строку списка. Потеря входа именно тут
+        проявится только ПОСЛЕ первого опроса — на первичной отрисовке разметки
+        этого файла нет вовсе (WR-04). -#}
+    {{- link_button('Настроить группы', '/accounts/' ~ account_id ~ '/groups', variant='ghost') -}}
     <form method="POST" action="/accounts/{{ account_id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account_id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
@@ -74,6 +84,7 @@
   {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[5]) }}
   {%- call cell(label=ACCOUNT_COLUMNS[6]) %}{{ badge('Ошибка синхронизации', 'danger') }}{% endcall %}
   {%- call cell() %}
+    {{- link_button('Настроить группы', '/accounts/' ~ account_id ~ '/groups', variant='ghost') -}}
     <form method="POST" action="/accounts/{{ account_id }}/retry-sync">
       {{- button('Повторить', variant='ghost', icon='refresh', title='Повторить синхронизацию') -}}
     </form>
@@ -92,6 +103,7 @@
     {{- badge('Синхронизация...', 'warning', title='Загружаем группы из ' ~ label ~ '. Это может занять несколько минут.') -}}
   {%- endcall %}
   {%- call cell() %}
+    {{- link_button('Настроить группы', '/accounts/' ~ account_id ~ '/groups', variant='ghost') -}}
     <form method="POST" action="/accounts/{{ account_id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account_id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>

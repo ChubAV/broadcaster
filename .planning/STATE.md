@@ -2,44 +2,44 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
-current_phase: 2
-current_phase_name: Объявления и расписания
-status: Phase 01 shipped — pushed to origin/master (no PR)
-stopped_at: Phase 1 complete, ready to plan Phase 2
-last_updated: "2026-08-10T05:11:58.649Z"
-last_activity: 2026-08-10
+current_phase: 5
+current_phase_name: Тарифы
+status: "Phase 04 shipped — PR #38"
+stopped_at: Phase 5 not started
+last_updated: "2026-08-15T13:51:16.521Z"
+last_activity: 2026-08-15
 progress:
   total_phases: 6
-  completed_phases: 1
-  total_plans: 13
-  completed_plans: 13
-  percent: 17
-last_activity_desc: Phase 01 complete, transitioned to Phase 2
+  completed_phases: 4
+  total_plans: 52
+  completed_plans: 52
+  percent: 67
+last_activity_desc: Phase 04 UAT round 2 complete — 22/22 passed, 0 issues (04-11, 04-12 и волна WR-01…WR-17)
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-10)
+See: .planning/PROJECT.md (updated 2026-08-13)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 2 — Объявления и расписания
+**Current focus:** Phase 05 — Тарифы
 
 ## Current Position
 
-Phase: 2 — Объявления и расписания
+Phase: 5 — Тарифы
 Plan: Not started
-Status: Phase 01 shipped — pushed to origin/master (no PR)
-Last activity: 2026-08-10
+Status: Phase 04 shipped — PR #38
+Last activity: 2026-08-15
 
-Progress: [████████████████████] 13/13 plans (100%) — Phase 1 of 6 complete (17% фаз milestone v2.0)
+Progress: [█████████████░░░░░░░] 52/52 plans (100%) — Phases 1–4 of 6 complete (67% фаз milestone v2.0)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 13 (milestone v2.0 только начат)
+- Total plans completed: 12 (milestone v2.0)
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -48,6 +48,9 @@ Progress: [████████████████████] 13/13 p
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1. Интерфейсный фундамент | 13/13 | - | - |
+| 2. Объявления и расписания | 15/15 | - | - |
+| 3. Группы аккаунта | 12/12 | - | - |
+| 04 | 12 | - | - |
 
 **Recent Trend:**
 
@@ -65,7 +68,15 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - Roadmap v2.0: нумерация фаз перезапущена с 1 (`--reset-phase-numbers`), так как фазы v1 были ретроспективной документацией уже отгруженной системы.
 - Phase 1: htmx и Alpine вендорены файлами, Tailwind удалён — внешних ресурсов в проекте 0, build-шаг не вводится.
 - Phase 1: браузерный `confirm()` заменён собственной панелью подтверждения с настоящей формой POST в 13 местах — путь удаления сохраняется без Alpine.
-- Phase 1: CR-01, CR-02 и WR-01/T-10-04 отнесены в Фазу 2 (решение UAT 2026-08-10); T-10-04 принята как риск R-01 в `01-SECURITY.md`.
+- Phase 2: долги Фазы 1 (CR-01, CR-02, WR-01/T-10-04) закрыты планом 02-02 — владение `ad_id`/`account_id`, сигнатурная проверка типа загрузки, владение ключом изображения.
+- Phase 2: черновик объявления — колонка `ads.status` (миграция `0013`), планировщик пропускает черновики; выкат `0013` на целевую базу — решение владельца.
+- Phase 2: автосохранение — create-or-update по `ad_id` на сервере + очередь `this:queue last` на форме; наложение с «Сохранить» удержано именованной регрессией.
+- Phase 2: счётчик длины предупреждает (1024 с вложениями / 3686 без), но не блокирует сохранение и не режет текст.
+- Phase 3: глобальный раздел «Группы» снесён — группы живут только на экране конкретного аккаунта; старые адреса перенаправляются на `/accounts`.
+- Phase 3: GRP-08 (ручное добавление группы) снят, а не реализован — протокола синхронизации одной группы у воркеров нет, вход нёс дыру проверки владения.
+- Phase 3: выключенная группа пропускается тихо — без записи в SendLog, `next_run_at` продолжает двигаться.
+- Phase 3: повторный запуск синхронизации закрыт внутрипроцессной заявкой `_claim_sync_slot`, а не флагом в БД.
+- Phase 3: R-03-09 — раскрытие текста стороннего httpx-исключения в плашке синхронизации принято владельцем как риск severity medium.
 
 ### Pending Todos
 
@@ -73,11 +84,9 @@ None.
 
 ### Blockers/Concerns
 
-- Счётчик в REQUIREMENTS.md указывал 38 требований v2.0, фактических REQ-ID — 39. Счётчики исправлены на 39; смысловых требований не добавлялось и не удалялось.
-- ⚠️ [Phase 1] Гейт код-ревью открыт: `01-REVIEW.md` — `status: issues_found`, `critical: 2`. CR-01 (владение `ad_id`/`account_id` в `app/pages/schedules.py:204-213,314-315`), CR-02 (клиентский Content-Type в `app/routes/uploads.py:48-52`) и WR-01/T-10-04 (владение ключом изображения в `app/pages/ads.py:133-135,183-187`) перенесены в Фазу 2. Фаза 01 отгружена с этими находками открытыми (решение 2026-08-10): ship-гейты GSD — security (`threats_open: 0`) и broken-windows (`open_count: 0`) — оба прошли, код-ревью ship-гейтом не является. **Починить в Фазе 2 до релиза.**
-- ⚠️ [Phase 1] `/ads/new` и `/ads/{id}/edit` не рендерятся ни одним тестом суиты — глобал `s3_public_url` в `app/pages/common.py:38` собирает `Settings()` в обход подмены зависимостей. Дефект на базовом коммите фазы, не внесён перевёрсткой; развилка ADS-07.
-- ADS-04 (черновик объявления) требует миграции схемы: поля `status` у `Ad` сейчас нет.
+- ⚠️ [Phase 2] Целевая база остаётся на ревизии `0012` — колонки `ads.status` в живой схеме нет. Выкат `0013` — решение владельца (guard по `hostname`/`port`/`dbname` и дамп `ads` отработаны в 02-12); до выката черновики не наблюдаемы в проде.
 - Brownfield-риск: система живая и покрыта тестами; протоколы отправки Telegram, WhatsApp и MAX трогать нельзя.
+- ⚠️ [Phase 3] Браузерных/e2e-тестов в проекте нет: рантайм-поведение Alpine (гард повторной отправки в общем макросе подтверждения, 12 мест) держится на ручной проверке. Регрессия автотестами не поймается.
 
 ### Quick Tasks Completed
 
@@ -96,13 +105,14 @@ None.
 | v2.1 | Email-уведомления NOTIF-01..04 | Отложено, вне roadmap v2.0 | 2026-08-08 |
 | v2.1 | Прогрев аккаунтов и автопауза WARM-01..02 | Отложено, вне roadmap v2.0 | 2026-08-08 |
 | Future scope | Reliability and hardening suggestions в research/SUMMARY.md (v1-era) | Не активно; требует отдельного решения по milestone | 2026-08-03 |
-| Phase 2 | CR-01 — владение `ad_id`/`account_id` при постановке в расписание | Решение UAT: чинить в Фазе 2 | 2026-08-10 |
-| Phase 2 | CR-02 — клиентский Content-Type при загрузке, SVG на origin хранилища | Решение UAT: чинить в Фазе 2 | 2026-08-10 |
-| Phase 2 | WR-01 / T-10-04 — владение ключом изображения при сохранении объявления | Принята как риск R-01 в `01-SECURITY.md`; чинить в Фазе 2 | 2026-08-10 |
+| Phase 2 | CR-01 — владение `ad_id`/`account_id` при постановке в расписание | ✓ Закрыто планом 02-02 (2026-08-11) | 2026-08-10 |
+| Phase 2 | CR-02 — клиентский Content-Type при загрузке, SVG на origin хранилища | ✓ Закрыто планом 02-02 (2026-08-11) | 2026-08-10 |
+| Phase 2 | WR-01 / T-10-04 — владение ключом изображения при сохранении объявления | ✓ Закрыто планом 02-02 (2026-08-11) | 2026-08-10 |
 | Phase 5 | `billing/plans.html` не подключён ни к одному маршруту | Решение о маршруте или переносе содержимого — за Фазой 5 | 2026-08-09 |
+| Phase 3 | R-03-09 / T-03-17 — текст стороннего httpx-исключения в плашке ошибки синхронизации | Принято владельцем как риск severity medium (2026-08-13); сужение текста — при желании отдельной задачей | 2026-08-13 |
 
 ## Session Continuity
 
-Last session: 2026-08-10
-Stopped at: Phase 1 complete, ready to plan Phase 2
-Resume file: None
+Last session: 2026-08-13T17:07:20.817Z
+Stopped at: Phase 4 context gathered
+Resume file: .planning/phases/04-dashbord-i-istoriya/04-CONTEXT.md

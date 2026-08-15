@@ -2,7 +2,11 @@
 {% from "components/button.html" import button, link_button %}
 {% from "components/card.html" import card_open, card_close %}
 {% from "components/field.html" import field, textarea_field %}
-{% from "components/toggle.html" import toggle %}
+{% from "components/empty_state.html" import empty_state %}
+{% from "components/alert.html" import alert %}
+{% from "components/modal.html" import modal %}
+{% from "components/mono.html" import mono %}
+{% from "ads/includes/sched_card.html" import sched_card, sched_count_label %}
 
 {% block title %}{{ 'Редактировать' if ad else 'Создать' }} объявление — Broadcaster{% endblock %}
 
@@ -10,113 +14,410 @@
 {% block page_actions %}{{ link_button('К объявлениям', '/ads', variant='ghost') }}{% endblock %}
 
 {% block content %}
-{# Фаза 2 переделает этот экран под черновики и вложения (D-06): здесь он
-   переносится на макросы целиком, потому что без Tailwind старая разметка
-   осталась бы без стилей. Контракт с обработчиком — имена полей title, text,
-   images и is_active — сохранён дословно. #}
-{{ card_open() }}
-  <form class="auth-form" method="post" action="{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}" id="ad-form">
-    {{ field(name="title", label='Заголовок', value=(ad.title if ad else ''), required=true, placeholder='Название объявления') }}
-    {{ textarea_field(name="text", label='Текст', value=(ad.text if ad else ''), rows=6, required=true, placeholder='Текст объявления') }}
+{# Редактор объявления (ADS-04, ADS-05, ADS-06).
 
-    <label class="field" for="file-input">
-      <span class="field__label">Изображения</span>
-      <span class="field__hint">Перетащите изображения в область ниже или нажмите на неё. Максимум 10.</span>
-    </label>
-    <div class="empty" id="drop-zone" onclick="document.getElementById('file-input').click()">
-      <span class="empty__title">Перетащите изображения сюда</span>
-      <span class="empty__hint">или нажмите, чтобы выбрать файлы</span>
-    </div>
-    <input class="field__input" type="file" id="file-input" accept="image/*" multiple hidden onchange="handleFiles(this.files)">
-    <div id="image-preview" class="modal__actions"></div>
-    <div id="image-inputs"></div>
+   ПОРЯДОК РАЗМЕТКИ ЖЁСТКИЙ: содержание → расписания → предпросмотр → сводка →
+   «Сохранить»/«Отмена» → «УДАЛИТЬ ОБЪЯВЛЕНИЕ». На ширинах ≤900px колонки
+   схлопываются в одну (медиазапрос раздела 2 app.css) и порядок разметки
+   становится порядком чтения — поэтому предпросмотр обязан стоять ПОСЛЕ
+   составителя, а не над ним.
 
-    {% if ad %}
-    {{ toggle(name="is_active", checked=ad.is_active, label='Активно', value='true') }}
-    {% endif %}
+   ЧТО ОБЯЗАНО ПЕРЕЖИТЬ ЛЮБУЮ ПРАВКУ ЭТОГО ФАЙЛА. Клиентская сборка плиток
+   вложений живёт ЗДЕСЬ и никуда не выносится: шесть тестов
+   tests/test_templates/test_ads_form_security.py читают ЭТОТ файл как текст и
+   требуют блок скрипта с узловой сборкой (createElement ≥ 3, textContent,
+   replaceChildren ≥ 2) при нуле опасных способов вставки разметки. Вынос
+   сборки в отдельный include или в статический JS покрасил бы шесть тестов —
+   и это выглядело бы регрессией безопасности, ею не являясь.
 
-    <div class="modal__actions">
+   Причина запрета строковой сборки (CR-01): ключ объекта хранилища приходит из
+   имени файла, полностью подконтрольного отправителю, и хранится в Ad.images —
+   то есть исполнялся бы при каждом открытии редактора. Значение, присвоенное
+   СВОЙСТВУ узла, парсером разметки не разбирается никогда; то же значение,
+   попавшее в строку разметки, разбирается всегда. #}
+<div data-editor>
+
+  <div data-stack>
+    {# Форма объявления. hx-swap="none" — форма НИКОГДА не перерисовывается:
+       любая подмена, накрывающая поле ввода, сбрасывает каретку и выделение, и
+       набрать длинный текст стало бы физически невозможно. Всё обновление
+       приезжает внеполосно (ads/includes/autosave_response.html).
+
+       Форма остаётся НАСТОЯЩЕЙ формой с методом и адресом: без htmx она уходит
+       обычным POST-ом на тот же маршрут — базовый путь D-09.
+
+       Признака required на полях нет намеренно: htmx проверяет форму перед
+       запросом, и required заблокировал бы ПЕРВОЕ автосохранение пустого
+       редактора, то есть ровно создание черновика по D-03.
+
+       Наложение запросов ставится В ОЧЕРЕДЬ, а не отменяется (CR-04): на пути
+       создания ответ является НАГРУЗКОЙ — он несёт идентификатор созданного
+       черновика для внеполосной подмены #ad-id-field, и терять его нельзя.
+       Прежняя стратегия отмены выбрасывала этот ответ вместе с идентификатором,
+       заменяющий запрос сериализовался с пустым скрытым полем и уходил в ветку
+       создания — сирота-черновик плюс дубль. Поставленный в очередь запрос
+       сериализуется из живой формы ПОСЛЕ обработки ответа первого, то есть уже
+       ПОСЛЕ подмены поля, и потому несёт идентификатор. #}
+    <form id="ad-form"
+          method="post"
+          action="{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}"
+          hx-post="{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}"
+          hx-trigger="submit, keyup changed delay:2s, change delay:2s"
+          hx-sync="this:queue last"
+          hx-swap="none">
+      {# Карточка «Содержание» выписана классами компонента, а не макросом
+         card_open: индикатор автосохранения обязан стоять в ШАПКЕ карточки у
+         правого края (UI-SPEC §Autosave indicator), а у макроса слота в шапке
+         нет. Тот же приём, что у кнопок в ads/includes/ad_card.html: классы
+         дизайн-системы используются напрямую там, где макрос не подходит.
+         Макрос при этом не форкается и не перестилизуется. #}
+      <section class="card">
+        <header class="card__head">
+          <h2 class="card__title">Содержание</h2>
+          {% include "ads/includes/autosave.html" %}
+        </header>
+        <div class="card__body">
+          <div data-form>
+            {{ field(name='title', label='НАЗВАНИЕ', value=(ad.title if ad else ''),
+                     placeholder='Например: Скидки на курсы Python', autocomplete='off') }}
+            {{ textarea_field(name='text', label='ТЕКСТ', value=(ad.text if ad else ''), rows=8,
+                              placeholder='Текст, который увидят участники групп') }}
+            {# Счётчик длины НЕ блокирует сохранение и не обрезает текст: у
+               maxlength здесь делать нечего. Порог предупреждения зависит от
+               наличия вложений — с ними текст уходит подписью к медиа, и его
+               предел существенно ниже (см. app/pages/ads.py). #}
+            {%- set text_len = (ad.text | length) if ad and ad.text else 0 -%}
+            <span class="counter{% if text_len > editor.text_limit %} counter--over{% elif text_len >= editor.text_warn_at %} counter--warn{% endif %}"
+                  id="text-counter">{{ text_len }} / {{ editor.text_limit }}</span>
+
+            <span class="field__label">Вложения</span>
+            {# Полоса вложений. Порядок плиток — порядок списка ключей
+               объявления, то есть порядок загрузки и он же порядок отправки.
+               Имя файла на плитке НЕ рендерится: оно подконтрольно отправителю
+               и живёт в подсказке. #}
+            <div data-media id="media-strip">
+              {%- for key in (ad.images if ad and ad.images else []) %}
+              <span class="media-tile">
+                <img src="{{ resolve_image_url(key) }}" alt="">
+                {#- Именованная кнопка ОТПРАВКИ внутри настоящей формы: без
+                    Alpine и без htmx она уходит POST-ом, и обработчик убирает
+                    ровно этот ключ (D-12). Подтверждения нет намеренно —
+                    объект в хранилище остаётся, повторная загрузка дёшева. -#}
+                <button class="media-tile__remove" type="submit" name="remove_image"
+                        value="{{ key }}" aria-label="Убрать вложение"
+                        title="{{ key.split('_', 1)[-1] }}">×</button>
+              </span>
+              {%- endfor %}
+              <label class="media-tile media-tile--add"{% if ad and ad.images and ad.images | length >= editor.max_images %} hidden{% endif %} for="file-input">+ ФАЙЛ</label>
+            </div>
+            <div id="image-inputs">
+              {%- for key in (ad.images if ad and ad.images else []) %}
+              <input type="hidden" name="images" value="{{ key }}">
+              {%- endfor %}
+            </div>
+            {# Идентификатор объявления — цель внеполосной подмены из
+               ads/includes/autosave_response.html. На /ads/new поле рендерится
+               ПУСТЫМ: записи ещё нет (D-03), и первое автосохранение обязано
+               уйти путём создания. Ответ первого сохранения подменяет это поле
+               идентификатором созданного черновика, и каждое следующее
+               автосохранение уходит на ТОТ ЖЕ адрес /ads/new, но уже путём
+               обновления — адрес формы не переписывается никогда.
+
+               Поле стоит СНАРУЖИ #image-inputs намеренно: renderImages()
+               вызывает imageInputs.replaceChildren(), и внутри блока вложений
+               идентификатор стирался бы при первой же перерисовке плиток. #}
+            <input type="hidden" id="ad-id-field" name="ad_id" value="{{ ad.id if ad else '' }}">
+            <input class="field__input" type="file" id="file-input" accept="image/*" multiple hidden>
+            <div id="upload-error"></div>
+          </div>
+        </div>
+      </section>
+    </form>
+
+    {# Секция расписаний стоит СОСЕДОМ формы объявления, а не внутри неё:
+       вложенные формы браузер молча отбрасывает, и кнопки карточек расписаний
+       перестали бы работать — и с JavaScript, и без него. Позиция закреплена
+       тестом test_editor_schedule_section_is_a_sibling_of_the_ad_form, а
+       отсутствие вложенности — test_editor_markup_has_no_nested_forms:
+       симптом поломки — молчащая кнопка, а не ошибка.
+
+       Ни списка групп, ни числа времён, ни числа расписаний секция НЕ
+       ограничивает: внутреннего скролла, кнопки «показать ещё» и потолка в
+       этой фазе не вводится (UI-SPEC §Interaction Contract). Секция растёт. #}
+    {{ card_open('Расписания') }}
+      {#- Отказ обработчика расписания, вернувший пользователя СЮДА (WR-07).
+          Текст приходит из app/pages/ads.py константой: значение строки запроса
+          лишь выбирает его и в разметку не попадает.
+
+          Макрос `alert` берётся готовый — это тот же компонент, которым
+          сообщают об ошибке семь экранов авторизации. Вызов НЕ вводит ни формы,
+          ни поля формы: секция расписаний стоит СОСЕДОМ <form id="ad-form">, и
+          вложенная форма молча отключила бы кнопки карточек (это удерживают
+          test_editor_schedule_section_is_a_sibling_of_the_ad_form и
+          test_editor_markup_has_no_nested_forms). -#}
+      {%- if sched_error %}
+      {{ alert(sched_error) }}
+      {%- endif %}
+      {%- if ad %}
+        {%- if not editor.accounts %}
+        {# Ни одного подключённого аккаунта: подсказка с путём восстановления,
+           а не пустая полоса чипсов (UI-SPEC E4 empty). #}
+        {{ empty_state('Сначала подключите аккаунт мессенджера',
+                       hint='Без аккаунта расписание отправлять некуда',
+                       action_label='Подключить аккаунт', action_href='/accounts') }}
+        {%- endif %}
+
+        {%- if editor.schedules %}
+        {# Счётчик считает ВСЕ расписания, а не только активные: иначе число
+           противоречило бы видимым карточкам (UI-SPEC E8 partial). #}
+        {{ mono(sched_count_label(editor.schedules_count), variant='muted', upper=true) }}
+        <div data-sched-list>
+          {%- for s in editor.schedules %}
+          {#- Множество выключенных протаскивается туда же, куда и `groups`:
+              импортированный макрос контекста вызывающего не получает (D-07). -#}
+          {{ sched_card(s, ad, editor.accounts, editor.groups, user,
+                        expanded=(s.id == editor.expanded_schedule_id),
+                        inactive_group_ids=editor.inactive_group_ids) }}
+          {%- endfor %}
+        </div>
+        {%- else %}
+        {{ empty_state('Расписаний пока нет — объявление не будет отправляться') }}
+        {%- endif %}
+
+        {%- if editor.accounts %}
+        {# Добавление — НАСТОЯЩАЯ форма, а не ссылка на отдельную страницу:
+           расписание создаётся тем же обработчиком, что и раньше, и признак
+           возврата оставляет пользователя в редакторе. Без JavaScript путь тот
+           же самый. #}
+        <form method="post" action="/schedules/new">
+          <input type="hidden" name="ad_id" value="{{ ad.id }}">
+          <input type="hidden" name="return_to" value="editor">
+          {%- if editor.accounts | length == 1 %}
+          {# Единственный аккаунт выбран заранее: выбор из одного варианта —
+             лишний шаг. При нескольких не выбран ни один, и расписание
+             остаётся не заполненным до выбора (UI-SPEC E4 zero-one-many). #}
+          <input type="hidden" name="account_id" value="{{ editor.accounts[0].id }}">
+          {%- endif %}
+          {{ button(('+ РАСПИСАНИЕ' if editor.schedules else '+ ДОБАВИТЬ ПЕРВОЕ'),
+                    variant='ghost', icon='plus') }}
+        </form>
+        {%- endif %}
+      {%- else %}
+        {# На /ads/new записи ещё нет (D-03), и привязать расписание не к чему:
+           действие добавления здесь было бы обещанием, которое некому
+           исполнить. #}
+        {{ empty_state('Расписаний пока нет — объявление не будет отправляться',
+                       hint='Расписание добавляется после первого сохранения объявления') }}
+      {%- endif %}
+    {{ card_close() }}
+  </div>
+
+  <aside data-editor-side>
+    {# Предпросмотр и сводка — цели внеполосной подмены. Идентификаторы обязаны
+       совпадать с ads/includes/autosave_response.html: разъехавшись, ответ
+       автосохранения приедет в никуда, а страница останется живой. #}
+    {{ card_open('Предпросмотр') }}
+      <div id="ad-preview">{% include "ads/includes/preview.html" %}</div>
+    {{ card_close() }}
+
+    {{ card_open() }}
+      <div id="ad-summary">{% include "ads/includes/summary.html" %}</div>
+    {{ card_close() }}
+
+    {# «Сохранить» — единственная первичная CTA экрана. Кнопка стоит вне формы и
+       связана с ней атрибутом form: сама форма закончилась выше, потому что
+       секция расписаний обязана быть её соседом. Именованное значение save —
+       это и есть признак ЯВНОЙ отправки, по которому обработчик отличает
+       публикацию от автосохранения (D-04). #}
+    <div data-actions>
+      <button class="btn btn--primary" type="submit" form="ad-form" name="save" value="1"><span class="btn__label">Сохранить</span></button>
       {{ link_button('Отмена', '/ads', variant='ghost') }}
-      {{ button('Сохранить', variant='primary', type='submit') }}
     </div>
-  </form>
-{{ card_close() }}
 
-<!-- IMPORTANT: предпросмотр изображений обязан собираться УЗЛАМИ DOM.
-     Ключ объекта приходит из имени файла, которое полностью подконтрольно
-     отправителю, и хранится в Ad.images — то есть выполнялся бы при каждом
-     открытии редактирования (CR-01, хранимый вектор). Серверное экранирование
-     сюда не доезжает: `tojson` на строке ниже безопасен, но значения после
-     этого уходят в клиентский код, где строка разбиралась бы парсером разметки
-     заново. Присвоенное свойство узла парсером разметки не разбирается никогда. -->
+    {%- if ad %}
+    {# Разрушительное действие — отдельным рядом ниже строки действий: на 400px
+       перенос внутрь одного ряда поставил бы удаление рядом с первичной
+       кнопкой. Перехват отправки навешен на САМУ форму, поэтому без Alpine она
+       уходит POST-ом на прежний маршрут (образец schedules/includes/schedule_row.html). #}
+    <div data-actions>
+      <form method="post" action="/ads/{{ ad.id }}/delete"
+            x-data x-on:submit.prevent="$dispatch('modal-open-ad-del-{{ ad.id }}')">
+        {{ button('УДАЛИТЬ ОБЪЯВЛЕНИЕ', variant='danger', type='submit', icon='trash') }}
+      </form>
+    </div>
+    {{ modal(id='ad-del-' ~ ad.id,
+             title='Удалить объявление?',
+             action='/ads/' ~ ad.id ~ '/delete',
+             confirm_label='Удалить',
+             method="post",
+             body=ad.title) }}
+    {%- endif %}
+  </aside>
+
+</div>
+
 <script>
-const IMAGE_BASE_URL = '{{ s3_public_url() }}';
+// Значения из настроек и из базы приходят в JS-контекст СЕРИАЛИЗАЦИЕЙ В JSON
+// БЕЗ ОКРУЖАЮЩИХ КАВЫЧЕК. Подстановка внутрь кавычек ломается на первой же
+// кавычке в значении и превращает данные в код (01-REVIEW.md:625-626).
+const IMAGE_BASE_URL = {{ s3_public_url() | tojson }};
+const MAX_IMAGES = {{ editor.max_images | tojson }};
+const TEXT_LIMIT = {{ editor.text_limit | tojson }};
+const TEXT_WARN_AT = {{ (editor.text_limit * 0.9) | round | int | tojson }};
+const CAPTION_LIMIT = {{ editor.caption_limit | tojson }};
+
+const UPLOAD_TYPE_ERROR = 'Не удалось загрузить: подойдут только изображения JPEG, PNG, WebP или GIF. Выберите другой файл.';
+const UPLOAD_LIMIT_ERROR = 'Можно прикрепить не больше ' + MAX_IMAGES + ' вложений. Удалите лишние и попробуйте снова.';
+const UPLOAD_TRANSPORT_ERROR = 'Не удалось загрузить файл. Проверьте соединение и попробуйте ещё раз.';
+
 let imagePaths = {{ (ad.images | tojson) if ad and ad.images else '[]' }};
 
+const adForm = document.getElementById('ad-form');
+const mediaStrip = document.getElementById('media-strip');
+const imageInputs = document.getElementById('image-inputs');
+const fileInput = document.getElementById('file-input');
+const errorBox = document.getElementById('upload-error');
+const counter = document.getElementById('text-counter');
+const textArea = document.getElementById('text');
+// Плитка добавления создана СЕРВЕРОМ и переиспользуется: держим ссылку до
+// первой перерисовки, иначе после достижения лимита её было бы неоткуда взять.
+const addTile = document.getElementById('media-strip').querySelector('.media-tile--add');
+
+function fileNameOf(path) {
+    const tail = path.split('/').pop();
+    const cut = tail.indexOf('_');
+    return cut === -1 ? tail : tail.slice(cut + 1);
+}
+
+function updateCounter() {
+    if (!counter || !textArea) { return; }
+    const length = textArea.value.length;
+    // Порог зависит от НАЛИЧИЯ вложений: с ними текст уходит подписью к медиа.
+    const warnAt = imagePaths.length ? CAPTION_LIMIT : TEXT_WARN_AT;
+    counter.textContent = length + ' / ' + TEXT_LIMIT;
+    let state = '';
+    if (length > TEXT_LIMIT) { state = ' counter--over'; }
+    else if (length >= warnAt) { state = ' counter--warn'; }
+    counter.className = 'counter' + state;
+}
+
 function renderImages() {
-    const preview = document.getElementById('image-preview');
-    const inputs = document.getElementById('image-inputs');
-    preview.replaceChildren();
-    inputs.replaceChildren();
-    imagePaths.forEach((path, i) => {
+    mediaStrip.replaceChildren();
+    imageInputs.replaceChildren();
+    imagePaths.forEach((path, index) => {
         const url = path.startsWith('http') ? path : IMAGE_BASE_URL + '/' + path;
 
-        const wrap = document.createElement('span');
-        wrap.className = 'cell';
+        const tile = document.createElement('span');
+        tile.className = 'media-tile';
 
         const img = document.createElement('img');
-        img.className = 'avatar';
         img.src = url;
         img.alt = '';
 
-        const label = document.createElement('span');
-        label.className = 'btn__label';
-        label.textContent = 'Убрать';
+        const remove = document.createElement('button');
+        remove.type = 'submit';
+        remove.name = 'remove_image';
+        remove.value = path;
+        remove.className = 'media-tile__remove';
+        remove.setAttribute('aria-label', 'Убрать вложение');
+        remove.title = fileNameOf(path);
+        remove.textContent = '×';
+        // Перехват навешен на созданный узел: без скрипта та же кнопка уходит
+        // обычной отправкой формы, и вложение убирает сервер.
+        remove.addEventListener('click', event => { event.preventDefault(); removeImage(index); });
 
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'btn btn--ghost';
-        btn.addEventListener('click', () => removeImage(i));
-        btn.appendChild(label);
-
-        wrap.append(img, btn);
-        preview.appendChild(wrap);
+        tile.append(img, remove);
+        mediaStrip.appendChild(tile);
 
         const hidden = document.createElement('input');
         hidden.type = 'hidden';
         hidden.name = 'images';
         hidden.value = path;
-        inputs.appendChild(hidden);
+        imageInputs.appendChild(hidden);
     });
+    if (addTile && imagePaths.length < MAX_IMAGES) {
+        addTile.hidden = false;
+        mediaStrip.appendChild(addTile);
+    }
+    updateCounter();
+}
+
+function requestSave() {
+    // Собственного запроса не отправляем: событие поднимает штатный триггер
+    // формы, и дебаунс с очередью наложения остаются htmx-овыми (CR-04).
+    adForm.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 function removeImage(index) {
     imagePaths.splice(index, 1);
     renderImages();
+    requestSave();
+}
+
+function showUploadError(message) {
+    const box = document.createElement('div');
+    box.className = 'alert alert--error';
+    box.setAttribute('role', 'alert');
+    box.textContent = message;
+    errorBox.replaceChildren(box);
+}
+
+function clearUploadError() {
+    errorBox.replaceChildren();
 }
 
 async function uploadFile(file) {
-    if (imagePaths.length >= 10) { alert('Максимум 10 изображений'); return; }
+    if (imagePaths.length >= MAX_IMAGES) { showUploadError(UPLOAD_LIMIT_ERROR); return false; }
     const formData = new FormData();
     formData.append('file', file);
     try {
         const resp = await fetch('/api/uploads/image', { method: 'POST', body: formData });
+        if (!resp.ok) { showUploadError(resp.status === 400 ? UPLOAD_TYPE_ERROR : UPLOAD_TRANSPORT_ERROR); return false; }
         const data = await resp.json();
-        if (data.path) { imagePaths.push(data.path); renderImages(); }
-    } catch (e) { console.error('Upload failed:', e); }
+        if (!data.path) { showUploadError(UPLOAD_TRANSPORT_ERROR); return false; }
+        imagePaths.push(data.path);
+        return true;
+    } catch (e) {
+        showUploadError(UPLOAD_TRANSPORT_ERROR);
+        return false;
+    }
 }
 
-function handleFiles(files) {
-    Array.from(files).forEach(f => uploadFile(f));
+async function handleFiles(files) {
+    clearUploadError();
+    let added = 0;
+    for (const file of Array.from(files)) {
+        if (await uploadFile(file)) { added += 1; }
+    }
+    // Успешно загруженные остаются прикреплёнными, даже если часть отвалилась.
+    renderImages();
+    if (added) { requestSave(); }
 }
 
-// Drag and drop
-const dropZone = document.getElementById('drop-zone');
-dropZone.addEventListener('dragover', e => { e.preventDefault(); });
-dropZone.addEventListener('dragleave', e => { e.preventDefault(); });
-dropZone.addEventListener('drop', e => { e.preventDefault(); handleFiles(e.dataTransfer.files); });
+if (fileInput) {
+    fileInput.addEventListener('change', () => { handleFiles(fileInput.files); fileInput.value = ''; });
+}
+if (textArea) {
+    textArea.addEventListener('input', updateCounter);
+}
 
-// Initial render
+// Состояние ОШИБКИ автосохранения. Состояние «сохраняем…» описано в CSS через
+// класс, который htmx вешает на форму сам, а неудача класса не оставляет —
+// поэтому здесь только она, и только классом на индикаторе: ни модального
+// окна, ни общестраничного алерта, набранный текст не трогается.
+function markAutosaveError() {
+    const indicator = document.getElementById('autosave-indicator');
+    if (indicator) { indicator.classList.add('autosave--error'); }
+}
+function clearAutosaveError() {
+    const indicator = document.getElementById('autosave-indicator');
+    if (indicator) { indicator.classList.remove('autosave--error'); }
+}
+adForm.addEventListener('htmx:beforeRequest', clearAutosaveError);
+adForm.addEventListener('htmx:responseError', markAutosaveError);
+adForm.addEventListener('htmx:sendError', markAutosaveError);
+adForm.addEventListener('htmx:timeout', markAutosaveError);
+
 renderImages();
 </script>
 {% endblock %}

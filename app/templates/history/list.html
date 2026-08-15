@@ -1,8 +1,11 @@
 {% extends "base.html" %}
+{% from "components/alert.html" import alert %}
 {% from "components/button.html" import button, link_button %}
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/field.html" import select_field %}
 {% from "components/filters.html" import filters %}
+{% from "components/mono.html" import mono %}
+{% from "history/includes/filter_chips.html" import filter_chips %}
 {% from "history/includes/history_card.html" import history_card %}
 
 {% block title %}История — Broadcaster{% endblock %}
@@ -13,26 +16,91 @@
 
 {% block content %}
 
+{#- Отказ выгрузки объясняется, а не молчит (D-27). Обрезанный файл выглядел бы
+    исправным и унёс бы неполные данные без единого признака обрезки, поэтому
+    файла не возникает вовсе, а пользователь возвращается на ТОТ ЖЕ
+    отфильтрованный список с объяснением и следующим шагом.
+
+    Плашку рисует существующий макрос сообщения; обёртка несёт число потолка
+    атрибутом — оно же названо в тексте. -#}
+{% if export_blocked %}
+<div data-export-cap="{{ export_row_cap }}">
+  {{ alert('Выгрузка не сформирована: под текущие фильтры попадает больше ' ~ export_row_cap ~ ' ' ~ plural_ru(export_row_cap, 'записи', 'записей', 'записей') ~ '. Сузьте период или добавьте фильтр — и выгрузка станет доступна.', variant='warning') }}
+</div>
+{% endif %}
+
+{#- Исход повтора отправки (HIST-04). Повтор отвечает перенаправлением сюда, и
+    без этой плашки пользователь возвращался бы на тот же экран без единого
+    признака того, ушла отправка или была отклонена — исход, неотличимый от
+    «ничего не произошло».
+
+    Текст и вариант приходят с сервера ПАРОЙ из словаря известных признаков:
+    неизвестное содержимое параметра адреса не рисует ничего. -#}
+{% if retry_notice %}
+<div data-retry-notice="{{ retry_notice[1] }}">
+  {{ alert(retry_notice[0], variant=retry_notice[1]) }}
+</div>
+{% endif %}
+
 {# Значения фильтров вычисляются здесь и приходят в макросы параметрами:
    внутри макроса request недоступен. #}
 {% set account_options = [('', 'Все аккаунты')] %}
 {% for acc in all_accounts %}{% set _ = account_options.append((acc.id, acc.type ~ ' #' ~ acc.id)) %}{% endfor %}
+
+{#- Полоса чипсов: три оси выбираются ОДНИМ действием, без кнопки «Применить»
+    (D-29). Наборы значений приходят с сервера — там же, где отсекается мусор,
+    поэтому нарисованное и принимаемое разойтись не могут.
+
+    Кнопка сброса рендерится, только когда есть что сбрасывать: постоянная
+    кнопка «Сбросить» на чистом экране предлагает действие без последствий. -#}
+<div class="chip-bar">
+  {{ filter_chips(status_chips, status_filter, filter_params, 'status') }}
+  {{ filter_chips(messenger_chips, filter_messenger, filter_params, 'messenger') }}
+  {{ filter_chips(period_chips, filter_period, filter_params, 'period') }}
+  {%- if filter_params %}
+  <a class="chip-bar__reset" data-chipreset href="/history">{{ mono('СБРОСИТЬ', upper=true) }}</a>
+  {%- endif %}
+</div>
+
+{#- Аккаунт остаётся ВЫПАДАЮЩИМ СПИСКОМ, а не чипсами (D-29): аккаунтов может
+    быть сколько угодно, и полоса чипсов переполнилась бы именно тем перечнем,
+    который растёт без предела.
+
+    Скрытые поля обязательны. Форма отправляет ТОЛЬКО свои поля, поэтому без
+    них выбор аккаунта сбрасывал бы три чипсовые оси разом — молча, с 200 и
+    исправным на вид экраном. -#}
 {% call filters('history-filters', action='/history') %}
-  {{ select_field(name="status", label='Статус',
-                  options=[('', 'Все статусы'), ('ok', 'Успешные'), ('fail', 'Ошибки')],
-                  selected=status_filter or '', id='filter-status') }}
-  {{ select_field(name="messenger", label='Мессенджер',
-                  options=[('', 'Все мессенджеры'), ('tg_user', 'Telegram'), ('wa', 'WhatsApp')],
-                  selected=filter_messenger or '', id='filter-messenger') }}
+  <input type="hidden" name="status" value="{{ status_filter or '' }}">
+  <input type="hidden" name="messenger" value="{{ filter_messenger or '' }}">
+  <input type="hidden" name="period" value="{{ filter_period or '' }}">
   {{ select_field(name="account_id", label='Аккаунт', options=account_options,
                   selected=filter_account_id if filter_account_id is not none else '',
                   id='filter-account-id') }}
-  {{ select_field(name="period", label='Период',
-                  options=[('7d', '7 дней'), ('30d', '30 дней'), ('', 'Все время')],
-                  selected=filter_period or '', id='filter-period') }}
   {{ button('Применить', variant='primary') }}
   {{ link_button('Сбросить', '/history', variant='ghost') }}
 {% endcall %}
+
+{#- Линейка над списком: точное число найденного ТЕМ ЖЕ набором фильтров (D-31).
+    Число приходит отдельным запросом подсчёта и не зависит от того, сколько
+    строк успело загрузиться бесконечной прокруткой.
+
+    В правой части линейки — ссылка выгрузки (HIST-03). Она ОБЫЧНАЯ: выгрузка
+    обязана работать при выключенном JavaScript (D-26), поэтому ни подмены
+    фрагмента, ни обработчика нажатия у неё нет. Адрес собирается тем же циклом
+    проброса действующих фильтров, что и сентинел прокрутки, — с приведением к
+    строке и экранированием для адреса: ссылка без фильтров выгружала бы всю
+    историю с экрана, показывающего отфильтрованную.
+
+    При нуле записей линейка не рендерится вовсе — вместе с ней исчезает и
+    ссылка: «0 записей» не сообщение (сообщение несёт пустое состояние), а
+    выгрузка пустого файла не действие. -#}
+{% if history_total %}
+<div class="count-rule" data-hcount="{{ history_total }}">
+  {{ mono(history_total ~ ' ' ~ plural_ru(history_total, 'запись', 'записи', 'записей')) }}
+  <span class="count-rule__line" aria-hidden="true"></span>
+  <a data-hexport href="/history/export{% if filter_params %}?{% for k, v in filter_params.items() %}{% if not loop.first %}&amp;{% endif %}{{ k }}={{ v|string|urlencode }}{% endfor %}{% endif %}">{{ mono('ЭКСПОРТ CSV →', upper=true) }}</a>
+</div>
+{% endif %}
 
 {% if logs %}
 <div data-hlist>
@@ -46,9 +114,21 @@
        подмешивает чужие записи к отфильтрованным (T-05-03). #}
   {% for log in logs %}{{ history_card(log, user) }}{% endfor %}
   {% if has_next %}
-  <div hx-get="/history/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
+  <div hx-get="/history/partial?offset={{ next_offset }}&limit={{ page_size }}{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
   {% endif %}
 </div>
+{% elif filter_params %}
+{#- ДВА РАЗЛИЧИМЫХ ПУСТЫХ СОСТОЯНИЯ (D-41). Одно общее «Нет записей» называло
+    бы одним словом два разных положения дел, и следующий шаг пользователя в
+    них разный: здесь — снять фильтр, ниже — завести расписание. Обещание
+    «здесь появятся отправки» человеку с полным журналом, отфильтрованным в
+    ноль, просто неправда.
+
+    Оба состояния рисует существующий макрос пустого состояния: своей разметки
+    ради второго текста не заводится. -#}
+{{ empty_state('Ничего не найдено',
+               hint='измените фильтры или период',
+               action_label='Сбросить фильтры', action_href='/history') }}
 {% else %}
 {{ empty_state('Нет записей',
                hint='Здесь появятся отправки по вашим расписаниям') }}

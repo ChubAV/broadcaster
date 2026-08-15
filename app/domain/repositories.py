@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from typing import Protocol, Sequence
 
 from app.models.ad import Ad
-from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
@@ -37,10 +36,6 @@ class AccountRepository(Protocol):
     async def get_by_id(self, account_id: int) -> MessengerAccount | None: ...
 
     async def list_by_user(self, user_id: int) -> Sequence[MessengerAccount]: ...
-
-
-class GroupRepository(Protocol):
-    async def list_for_account(self, account_id: int, user_id: int) -> Sequence[Group]: ...
 
 
 class ScheduleRepository(Protocol):

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.schedule import Schedule
+from tests.conftest import seed_group
 
 
 async def _login(client: AsyncClient) -> None:
@@ -21,7 +22,10 @@ async def _login(client: AsyncClient) -> None:
 
 
 async def _seed_detached_schedule(
-    client: AsyncClient, auth_headers: dict, title: str = "Detached Ad"
+    client: AsyncClient,
+    auth_headers: dict,
+    db_session: AsyncSession,
+    title: str = "Detached Ad",
 ) -> int:
     """Создаёт объявление, аккаунт и расписание, затем удаляет аккаунт."""
     ad_id = (
@@ -38,13 +42,29 @@ async def _seed_detached_schedule(
         )
     ).json()["id"]
 
+    # РЕАЛЬНАЯ группа этого аккаунта: JSON-вход расписаний сводит `group_ids` к
+    # группам владельца И выбранного аккаунта, и выдуманный идентификатор даёт
+    # 404 (план 02-09, CR-02). Проверяемое здесь — видимость ОТВЯЗАННОГО
+    # расписания — от состава групп не зависит.
+    #
+    # Посев прямой вставкой через ORM: прикладного входа создания группы нет
+    # (GRP-08 снято, JSON-маршрут групп удалён — план 03-07).
+    group_id = (
+        await seed_group(
+            db_session,
+            account_id,
+            group_external_id="-1001000000035",
+            name="Группа для #35",
+        )
+    ).id
+
     schedule_id = (
         await client.post(
             "/api/schedules",
             json={
                 "ad_id": ad_id,
                 "account_id": account_id,
-                "group_ids": [1],
+                "group_ids": [group_id],
                 "days_of_week": [0, 1, 2, 3, 4, 5, 6],
                 "times_of_day": ["09:00"],
             },
@@ -61,7 +81,7 @@ async def _seed_detached_schedule(
 async def test_schedules_list_page_shows_detached_schedule(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
-    await _seed_detached_schedule(client, auth_headers)
+    await _seed_detached_schedule(client, auth_headers, db_session)
     await _login(client)
 
     response = await client.get("/schedules")
@@ -74,7 +94,7 @@ async def test_schedules_list_page_shows_detached_schedule(
 async def test_schedules_partial_shows_detached_schedule(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
-    await _seed_detached_schedule(client, auth_headers)
+    await _seed_detached_schedule(client, auth_headers, db_session)
     await _login(client)
 
     response = await client.get("/schedules/partial")
@@ -87,25 +107,42 @@ async def test_schedules_partial_shows_detached_schedule(
 
 
 @pytest.mark.asyncio
-async def test_schedules_edit_page_renders_for_detached_schedule(
+async def test_editor_renders_the_detached_schedule(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
-    schedule_id = await _seed_detached_schedule(client, auth_headers)
+    """Отвязанное расписание открывается на настройку и не даёт выбрать аккаунт.
+
+    До плана 02-06 то же проверялось на `/schedules/{id}/edit`; отдельная
+    страница снята (D-14), и настройка живёт в редакторе объявления. Проверяемое
+    поведение то же: запись не теряется, её карточка открывается, а аккаунт
+    выбрать не из чего — единственный был удалён (issue #35).
+    """
+    schedule_id = await _seed_detached_schedule(client, auth_headers, db_session)
     await _login(client)
 
-    response = await client.get(f"/schedules/{schedule_id}/edit")
+    db_session.expire_all()
+    ad_id = (
+        await db_session.execute(select(Schedule).where(Schedule.id == schedule_id))
+    ).scalar_one().ad_id
+
+    response = await client.get(f"/ads/{ad_id}/edit?sched={schedule_id}")
     assert response.status_code == 200
     html = response.text
-    assert 'name="account_id"' in html
-    # Ни один вариант аккаунта не может быть выбран: аккаунт удалён
-    assert "selected" not in html.split('name="account_id"')[1].split("</select>")[0]
+    # Карточка развёрнута: её собственная форма сохранения на месте.
+    assert f'action="/schedules/{schedule_id}/edit"' in html
+    # Аккаунт выбрать НЕ ИЗ ЧЕГО, и вместо пустой полосы чипсов названа причина
+    # и следующий шаг.
+    assert 'name="account_id"' not in html
+    assert "Сначала подключите аккаунт мессенджера" in html
+    # Без аккаунта расписание неполно и включиться не может (D-08, SCH-05).
+    assert "Не заполнено" in html
 
 
 @pytest.mark.asyncio
 async def test_api_list_schedules_returns_detached_schedule(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
-    schedule_id = await _seed_detached_schedule(client, auth_headers)
+    schedule_id = await _seed_detached_schedule(client, auth_headers, db_session)
 
     response = await client.get("/api/schedules", headers=auth_headers)
     assert response.status_code == 200
@@ -120,7 +157,7 @@ async def test_api_list_schedules_returns_detached_schedule(
 async def test_detached_schedule_row_survives_in_db(
     client: AsyncClient, db_session: AsyncSession, auth_headers: dict
 ):
-    schedule_id = await _seed_detached_schedule(client, auth_headers)
+    schedule_id = await _seed_detached_schedule(client, auth_headers, db_session)
 
     db_session.expire_all()
     row = (

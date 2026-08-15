@@ -1,0 +1,1 @@
+No external API integration: группы переезжают на экран messenger-аккаунта своим кодом (FastAPI, Jinja2, Alembic); протоколы TG/WA/MAX править запрещено рамками milestone, внешних зависимостей нет, детектор: `detected: false`

@@ -7,10 +7,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.dependencies import get_db, get_settings, require_admin
+from app.application.analytics.send_analytics import (
+    apply_history_filters,
+    history_filter_params,
+)
 from app.pages.history import (
-    _apply_history_filters,
-    _history_filter_params,
-    _parse_account_id,
+    MESSENGER_VALUES,
+    PAGE_SIZE,
+    PERIOD_VALUES,
+    STATUS_VALUES,
+    clean_choice,
+    parse_account_id,
 )
 from app.models.user import User
 from app.models.ad import Ad
@@ -188,15 +195,39 @@ async def admin_user_history(
     if not target_user:
         return RedirectResponse(url="/admin/users", status_code=302)
 
-    page_size = 30
+    # Размер страницы — ТОТ ЖЕ, что у пользовательской истории, и берётся у неё
+    # же. Своя копия числа здесь и в сентинелях разметки разъехалась бы с
+    # `next_offset` молча: вторая страница выдачи начала бы перекрываться с
+    # первой или пропускать записи, а экран остался бы исправным на вид.
+    page_size = PAGE_SIZE
 
-    account_id_int = _parse_account_id(account_id)
+    # ОТСЕЧКА НЕИЗВЕСТНЫХ ЗНАЧЕНИЙ ОСЕЙ — ТА ЖЕ, ЧТО У ПОЛЬЗОВАТЕЛЬСКИХ
+    # МАРШРУТОВ. Значения приезжают строкой запроса — из ссылки, закладки или
+    # чужого сообщения. Без отсечки мусорное значение давало бы пустой список,
+    # в котором НИ ОДИН чипс не отмечен активным, а сырая строка уезжала бы в
+    # `filter_params` — то есть в сентинель прокрутки и в контекст шаблона как
+    # действующий фильтр. Инъекции здесь нет (значения связываются параметрами),
+    # но экран получается нечитаемым ровно так же, как получался бы у
+    # пользователя, — а админка смотрит на ТУ ЖЕ историю.
+    status = clean_choice(status, STATUS_VALUES)
+    messenger = clean_choice(messenger, MESSENGER_VALUES)
+    period = clean_choice(period, PERIOD_VALUES)
+    account_id_int = parse_account_id(account_id)
     query = (
         select(SendLog, Group)
         .outerjoin(Group, SendLog.group_id == Group.id)
         .where(SendLog.user_id == user_id)
     )
-    query = _apply_history_filters(query, status, messenger, account_id_int, period)
+    # Владелец записей — target_user, но «сегодня» отсчитывается от полуночи
+    # ТОГО, КТО СМОТРИТ: границу дня задаёт часовой пояс читателя экрана.
+    query = apply_history_filters(
+        query,
+        status=status,
+        messenger_type=messenger,
+        account_id=account_id_int,
+        period=period,
+        user=admin,
+    )
     query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(page_size + 1)
 
     result = await db.execute(query)
@@ -209,8 +240,13 @@ async def admin_user_history(
         {
             "id": r.id,
             "ad_title": r.ad_title or "—",
-            "ad_text": r.ad_text or "",
-            "ad_images": r.ad_images or [],
+            # СНАПШОТА ТЕЛА ОБЪЯВЛЕНИЯ В СТРОКЕ СПИСКА НЕТ. Ни `ad_text`, ни
+            # `ad_images` карточка списка не рисует — их читает только экран
+            # записи, и он получает ORM-сущность, а не этот словарь. Пока они
+            # тут лежали, каждый рендер списка и каждый тик бесконечной
+            # прокрутки поднимал в память до тридцати полных снимков тела
+            # объявления (`ad_text` — Text, длина не ограничена) ради контекста,
+            # который их выбрасывает.
             "group_name": r.group_name or "—",
             "group_external_id": group.group_external_id if group else None,
             "account_id": group.account_id if group else None,
@@ -226,7 +262,7 @@ async def admin_user_history(
         select(MessengerAccount).where(MessengerAccount.user_id == user_id)
     )
     all_accounts = accounts_result.scalars().all()
-    filter_params = _history_filter_params(status, messenger, account_id_int, period)
+    filter_params = history_filter_params(status, messenger, account_id_int, period)
 
     return templates.TemplateResponse(
         "admin/user_history.html",
@@ -261,20 +297,35 @@ async def admin_user_history_partial(
     account_id: str | None = Query(default=None),
     period: str | None = Query(default=None),
     offset: int = Query(0, ge=0),
-    limit: int = Query(30, ge=1, le=100),
+    limit: int = Query(PAGE_SIZE, ge=1, le=100),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     target_user = await db.get(User, user_id)
     if not target_user:
         return RedirectResponse(url="/admin/users", status_code=302)
-    account_id_int = _parse_account_id(account_id)
+    # Отсечка стоит и здесь: паршал прокрутки — ВТОРОЙ вход на те же оси, и
+    # значение приезжает к нему из адреса сентинеля. Пропущенная тут, она
+    # позволила бы мусору дожить до второй страницы выдачи.
+    status = clean_choice(status, STATUS_VALUES)
+    messenger = clean_choice(messenger, MESSENGER_VALUES)
+    period = clean_choice(period, PERIOD_VALUES)
+    account_id_int = parse_account_id(account_id)
     query = (
         select(SendLog, Group)
         .outerjoin(Group, SendLog.group_id == Group.id)
         .where(SendLog.user_id == user_id)
     )
-    query = _apply_history_filters(query, status, messenger, account_id_int, period)
+    # Владелец записей — target_user, но «сегодня» отсчитывается от полуночи
+    # ТОГО, КТО СМОТРИТ: границу дня задаёт часовой пояс читателя экрана.
+    query = apply_history_filters(
+        query,
+        status=status,
+        messenger_type=messenger,
+        account_id=account_id_int,
+        period=period,
+        user=admin,
+    )
     query = query.order_by(SendLog.sent_at.desc()).offset(offset).limit(limit + 1)
     result = await db.execute(query)
     rows = list(result.all())
@@ -283,8 +334,13 @@ async def admin_user_history_partial(
         {
             "id": r.id,
             "ad_title": r.ad_title or "—",
-            "ad_text": r.ad_text or "",
-            "ad_images": r.ad_images or [],
+            # СНАПШОТА ТЕЛА ОБЪЯВЛЕНИЯ В СТРОКЕ СПИСКА НЕТ. Ни `ad_text`, ни
+            # `ad_images` карточка списка не рисует — их читает только экран
+            # записи, и он получает ORM-сущность, а не этот словарь. Пока они
+            # тут лежали, каждый рендер списка и каждый тик бесконечной
+            # прокрутки поднимал в память до тридцати полных снимков тела
+            # объявления (`ad_text` — Text, длина не ограничена) ради контекста,
+            # который их выбрасывает.
             "group_name": r.group_name or "—",
             "group_external_id": group.group_external_id if group else None,
             "account_id": group.account_id if group else None,
@@ -296,7 +352,7 @@ async def admin_user_history_partial(
         }
         for r, group in rows[:limit]
     ]
-    filter_params = _history_filter_params(status, messenger, account_id_int, period)
+    filter_params = history_filter_params(status, messenger, account_id_int, period)
     return templates.TemplateResponse(
         "admin/history_partial_cards.html",
         {
@@ -306,6 +362,9 @@ async def admin_user_history_partial(
             "logs": logs,
             "has_next": has_next,
             "next_offset": offset + limit,
+            # Размер страницы уезжает в сентинель из контекста — тем же
+            # значением, которым выбрана ЭТА порция.
+            "page_size": limit,
             "status_filter": status,
             "filter_messenger": messenger,
             "filter_account_id": account_id_int,

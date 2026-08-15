@@ -16,14 +16,15 @@ from app.database import get_engine, get_session_factory
 from app.dependencies import init_db
 from app.infrastructure.uow import create_uow_factory
 from app.middleware import RequestIdMiddleware
+from app.pages.common import bind_image_url_globals
 from app.routes.auth import router as auth_router
 from app.routes.ads import router as ads_router
 from app.routes.uploads import router as uploads_router
 from app.routes.accounts import router as accounts_router
-from app.routes.groups import router as groups_router
 from app.routes.schedules import router as schedules_router
 from app.routes.history import router as history_router
 from app.routes.billing import router as billing_router
+from app.pages.dashboard_feed import router as dashboard_feed_router
 from app.pages import router as pages_router
 
 logger = structlog.get_logger(__name__)
@@ -62,6 +63,11 @@ async def lifespan(app: FastAPI):
 def create_app(settings: Settings | None = None) -> FastAPI:
     if settings is None:
         settings = get_settings()
+    # Шаблонные глобалы изображений привязываются к настройкам, которыми
+    # приложение уже владеет (D-21). Без этого они собирали Settings() из
+    # окружения процесса в обход create_app(settings=...) и подмены
+    # зависимостей — см. комментарий в app/pages/common.py.
+    bind_image_url_globals(settings)
     setup_logging(log_level=settings.log_level, log_format=settings.log_format)
 
     app = FastAPI(title="Broadcaster", version="0.1.0", lifespan=lifespan)
@@ -75,10 +81,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(ads_router)
     app.include_router(uploads_router)
     app.include_router(accounts_router)
-    app.include_router(groups_router)
     app.include_router(schedules_router)
     app.include_router(history_router)
     app.include_router(billing_router)
+    # Паршал живой ленты включается ОТДЕЛЬНО и ДО страничного роутера: тот
+    # объявлен с зависимостью загрузки контекста шелла на каждом маршруте, а
+    # ленте шелл не нужен, и при бессрочном опросе эта цена умножалась бы на
+    # число открытых вкладок. Обоснование целиком — в докстринге модуля.
+    app.include_router(dashboard_feed_router)
     app.include_router(pages_router)
 
     @app.exception_handler(NotFoundError)

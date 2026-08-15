@@ -1,89 +1,99 @@
 {% extends "base.html" %}
 {% from "components/badge.html" import badge %}
 {% from "components/button.html" import link_button %}
-{% from "components/card.html" import card_open, card_close %}
 {% from "components/mono.html" import mono %}
-{% from "components/table.html" import row_open, row_close, cell %}
+{% from "history/includes/history_card.html" import copy_button, retry_trigger, retry_modal %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 
-{# Раскладка «подпись → значение». Приходит параметром cols в пользовательское
-   свойство --cols: собственного класса под эту страницу не заводится. #}
-{% set DETAIL_COLS = 'minmax(120px, 180px) minmax(0, 1fr)' %}
+{# Страница записи истории (D-24).
+
+   Страница СОХРАНЯЕТСЯ, а не сносится в пользу строки списка: живая лента
+   дашборда (план 04-05) и кнопка «Подробнее» карточки ведут именно сюда, а
+   снапшот содержимого с изображениями в строку списка не влезает.
+
+   Разметка переиспользует ПРИМИТИВ ЗАПИСИ (data-hrow) с теми же областями
+   head · body · meta · err. Своей раскладки страница не заводит по двум
+   причинам: медиазапросы 1080px и 860px, перестраивающие примитив, уже лежат в
+   app.css — пригодность на мобильных ширинах достаётся даром; а копия областей,
+   бейджа и иконки канала краснила бы инвентаризационные тесты и разошлась бы с
+   оригиналом при первой правке. Модификатор data-hrec правит ровно то, чем
+   страница ОТЛИЧАЕТСЯ от строки списка.
+
+   ТЕКСТ ОШИБКИ ВЫВОДИТСЯ ЦЕЛИКОМ И БЕЗ ОГРАНИЧЕНИЯ ПО ВЫСОТЕ. Модификатор
+   ограничения здесь не ставится СОЗНАТЕЛЬНО: ограничение живёт в карточке
+   списка, а эта страница — то место, куда человек приходит ЗА полным текстом.
+   Его имя в этом файле не упоминается намеренно — отсутствие модификатора
+   проверяется поиском по исходнику, и упомянутое контрпримером имя такую
+   проверку красит. Строка приходит из внешнего мессенджера и приложением не
+   контролируется
+   (T-05-01) — выводится только штатным экранированием Jinja2, длинные строки
+   переносятся правилом [data-longtext].
+
+   Собственного заголовка раздела у страницы нет: его рисует шапка шелла
+   (контракт «страница → шелл», План 01), и второй задвоился бы. #}
 
 {% block title %}Детали отправки — Broadcaster{% endblock %}
 
-{# Контракт «страница → шелл» (План 01): заголовок и действие раздела рендерит
-   шапка шелла. Повтор отправки и копирование ошибки одним действием — Фаза 4
-   (HIST-04); правило этой фазы — «новый вид, старые действия». #}
 {% block page_title %}Детали отправки{% endblock %}
 {% block page_actions %}{{ link_button('К истории', '/history', variant='ghost') }}{% endblock %}
 
 {% block content %}
 <div data-stack>
 
-  {{ card_open(title='Отправка') }}
-    {{ row_open(cols=DETAIL_COLS) }}
-      {{- cell(text='Статус', mono=true, muted=true) -}}
-      {%- call cell() -%}
-        {%- if log.status == 'ok' -%}{{ badge('Успешно', 'success') }}
-        {%- elif log.status == 'fail' -%}{{ badge('Ошибка', 'danger') }}
-        {%- elif log.status == 'account_disconnected' -%}{{ badge('Аккаунт отключён', 'warning') }}
-        {%- else -%}{{ badge(log.status, 'neutral') }}{%- endif -%}
-      {%- endcall %}
-    {{ row_close() }}
-    {{ row_open(cols=DETAIL_COLS) }}
-      {{- cell(text='Время', mono=true, muted=true) -}}
-      {{- cell(text=format_datetime_for_user(log.sent_at, user, '%d.%m.%Y %H:%M:%S'), mono=true) -}}
-    {{ row_close() }}
-    {{ row_open(cols=DETAIL_COLS) }}
-      {{- cell(text='Мессенджер', mono=true, muted=true) -}}
-      {%- call cell() -%}
-        {#- Ветка «неизвестный мессенджер» несёт utility-класс: вызов ограничен
-            известными типами, у остальных остаётся текстовая подпись. -#}
-        {%- if log.messenger_type in ('tg_user', 'wa', 'max') -%}
-          {{ messenger_icon(log.messenger_type, size='avatar', show_label=false) }}
-        {%- endif -%}
-        {{ mono(log.messenger_type or '—', 'bright') }}
-      {%- endcall %}
-    {{ row_close() }}
-    {% if log.task_id %}
-    {{ row_open(cols=DETAIL_COLS) }}
-      {{- cell(text='ID задачи', mono=true, muted=true) -}}
-      {{- cell(text=log.task_id, mono=true, title=log.task_id) -}}
-    {{ row_close() }}
-    {% endif %}
-    {{ row_open(cols=DETAIL_COLS) }}
-      {{- cell(text='Группа', mono=true, muted=true) -}}
-      {%- call cell(grow=true) -%}
-        <span data-grow>{{ log.group_name }}</span>
-        {%- if group %}{{ mono(group.group_external_id, 'muted') }}{% endif -%}
-      {%- endcall %}
-    {{ row_close() }}
-  {{ card_close() }}
-
-  {% if log.error_message %}
-  {#- ТЕКСТ ОШИБКИ ВЫВОДИТСЯ ЦЕЛИКОМ. Ни усечения, ни многоточия, ни скрытия за
-      раскрытием: это единственное, по чему пользователь понимает, почему его
-      реклама не ушла. Строка приходит из внешнего мессенджера и приложением не
-      контролируется (T-05-01) — выводится только через штатное экранирование
-      Jinja2, длинные строки переносятся правилом [data-longtext]. -#}
-  {{ card_open(title='Текст ошибки') }}
-    <span data-longtext="mono">{{ log.error_message }}</span>
-  {{ card_close() }}
-  {% endif %}
-
-  {{ card_open(title='Объявление', subtitle=log.ad_title) }}
-    <span data-longtext>{{ log.ad_text }}</span>
-    {% if log.ad_images %}
-    <div data-thumbs>
-      {% for img in log.ad_images %}
-      <a href="{{ resolve_image_url(img) }}" target="_blank" rel="noopener">
-        <img src="{{ resolve_image_url(img) }}" alt="">
-      </a>
-      {% endfor %}
+  <article data-hrow data-hrec{% if log.status %} data-status="{{ log.status }}"{% endif %}>
+    <div data-area="head">
+      {#- Бейдж канала с иконкой и подписью: на странице записи подпись нужна —
+          она отвечает на вопрос «куда ушло», а не только красит строку. -#}
+      {{- messenger_icon(log.messenger_type, size='', show_label=true) -}}
+      {{- mono(format_datetime_for_user(log.sent_at, user, '%d.%m.%Y %H:%M:%S'), 'bright') -}}
+      {%- if log.status == 'ok' -%}{{ badge('Успешно', 'success') }}
+      {%- elif log.status == 'fail' -%}{{ badge('Ошибка', 'danger') }}
+      {%- elif log.status == 'account_disconnected' -%}{{ badge('Аккаунт отключён', 'warning') }}
+      {%- else -%}{{ badge(log.status, 'neutral') }}{%- endif -%}
+      {%- if group %}{{ mono('#' ~ group.group_external_id, 'muted') }}{% endif -%}
     </div>
-    {% endif %}
-  {{ card_close() }}
+
+    <div data-area="body">
+      <span data-grow>{{ log.ad_title }}</span>
+      <span data-secondary>→ {{ log.group_name }}</span>
+      {#- Снапшот содержимого, сохранённый в самой записи: объявление могли с тех
+          пор переписать или удалить, а история обязана показывать отправленное. -#}
+      <span data-longtext>{{ log.ad_text }}</span>
+      {% if log.ad_images %}
+      <div data-thumbs>
+        {% for img in log.ad_images %}
+        <a href="{{ resolve_image_url(img) }}" target="_blank" rel="noopener">
+          <img src="{{ resolve_image_url(img) }}" alt="">
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <div data-area="meta">
+      {%- if log.task_id -%}
+        {{ mono('ID задачи', 'muted', upper=true) }}<span data-selectall>{{ mono(log.task_id, 'bright', title=log.task_id) }}</span>
+      {%- endif -%}
+      {{ copy_button(log, user) }}
+      {#- Запуск повтора приходит ТЕМ ЖЕ макросом, что и в карточке списка
+          (HIST-04). Своя копия разошлась бы с оригиналом ровно там, где
+          расхождение опаснее всего: в обещании, ЧТО именно будет отправлено.
+          Признаки считает сервер и передаёт отдельными значениями — у `log`
+          здесь сущность ORM, а не словарь карточки. -#}
+      {{ retry_trigger(log.id, can_retry, retry_reason) }}
+    </div>
+
+    {%- if log.error_message %}
+    <div data-area="err">
+      {{- mono('Текст ошибки', 'danger', upper=true) -}}
+      <span data-longtext="mono" data-selectall>{{ log.error_message }}</span>
+    </div>
+    {%- endif %}
+  </article>
+
+  {#- Панель подтверждения — СОСЕДОМ записи, а не внутри неё: она
+      позиционируется фиксированно и внутри записи стала бы колонкой её сетки. -#}
+  {{ retry_modal(log.id, can_retry) }}
 
 </div>
 {% endblock %}

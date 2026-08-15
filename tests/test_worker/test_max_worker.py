@@ -699,6 +699,42 @@ async def test_all_failed_images_fall_back_to_text(worker, monkeypatch):
     clients[0].send_message.assert_awaited_once_with(chat_id=17, text="Fallback")
 
 
+def test_websocket_frame_size_compatibility_lifts_the_1mib_cap():
+    """A clean interpreter proves the shim alone removes the frame-size cap.
+
+    Without it, MAX closes the login frame with 1009 "message too big" for any
+    account whose chat list exceeds 1 MiB, and the worker reconnect-loops forever.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import asyncio, inspect; "
+            "from websockets.asyncio import client; "
+            "from pymax.transport.websocket import WebSocketTransport; "
+            "assert inspect.signature(client.connect).parameters['max_size'].default == 1048576; "
+            "from max_worker.pymax_compat import apply_websocket_frame_size_compatibility; "
+            "assert apply_websocket_frame_size_compatibility() is True; "
+            "assert apply_websocket_frame_size_compatibility() is False; "
+            "seen = {}; "
+            "captured = lambda *a, **kw: seen.update(kw) or asyncio.sleep(0); "
+            "client.connect = captured; "
+            "t = WebSocketTransport('wss://ws-api.oneme.ru/websocket', None); "
+            "asyncio.run(t.connect()); "
+            "assert seen['max_size'] is None, seen; "
+            "t2 = WebSocketTransport('wss://ws-api.oneme.ru/websocket', 'http://proxy:8080'); "
+            "asyncio.run(t2.connect()); "
+            "assert seen['max_size'] is None and seen['proxy'] == 'http://proxy:8080', seen",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(REPO_ROOT),
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_requirements_pin_maxapi_2_3_1():
     requirements = Path("max_worker/requirements.txt").read_text().splitlines()
     assert requirements.count("maxapi-python==2.3.1") == 1

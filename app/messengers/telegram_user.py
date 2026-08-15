@@ -16,7 +16,7 @@ from telethon.sessions import StringSession
 from telethon.tl.functions.channels import GetParticipantsRequest
 from telethon.tl.types import Channel, ChannelParticipantsAdmins, Chat
 
-from app.messengers.base import BaseMessenger
+from app.messengers.base import BaseMessenger, MessengerFetchError
 
 logger = structlog.get_logger(__name__)
 
@@ -245,6 +245,14 @@ class TelegramUserMessenger(BaseMessenger):
                 pass
 
     async def get_groups(self) -> list[dict]:
+        """Состав групп аккаунта. Отказ поднимает `MessengerFetchError`.
+
+        Раньше исключение здесь только логировалось, а наружу уходил частично
+        заполненный (обычно пустой) список — то есть протухшая сессия Telethon
+        выглядела как аккаунт без единой группы. С полной переинвентаризацией
+        (D-10) это помечало пропавшими все группы разом, поэтому отказ обязан
+        быть отличим от пустоты.
+        """
         groups = []
         try:
             await self.client.connect()
@@ -254,6 +262,7 @@ class TelegramUserMessenger(BaseMessenger):
                     groups.append({"id": str(dialog.id), "name": dialog.title})
         except Exception as e:
             self.log.error("get_groups_error", error=str(e), exc_info=True)
+            raise MessengerFetchError(f"{type(e).__name__}: {e}") from e
         finally:
             try:
                 await self.client.disconnect()

@@ -7,7 +7,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings, get_settings
+from app.config import Settings
+from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED, MESSENGER_LABELS
 from app.models.ad import Ad
 from app.models.balance_transaction import BalanceTransaction
 from app.models.message_balance import MessageBalance
@@ -23,19 +24,53 @@ _templates_dir = Path(__file__).resolve().parent.parent / "templates"
 _static_dir = Path(__file__).resolve().parent.parent / "static"
 templates = Jinja2Templates(directory=str(_templates_dir))
 
-# Register get_image_url as Jinja2 global so templates can use {{ get_image_url(key) }}
-def _resolve_image_url(key: str) -> str:
+# Глобалы изображений привязываются к настройкам ПРИЛОЖЕНИЯ, а не к окружению
+# процесса (D-21). Раньше все три вызывали get_settings() — то есть собирали
+# Settings() из `.env` рабочего каталога в обход create_app(settings=...) и
+# dependency_overrides. Следствий было два: базовый URL приезжал из окружения
+# мимо подменённых настроек, а без файла `.env` рендер /ads/new падал
+# ValidationError на обязательных полях (T-02-02).
+#
+# Почему не параметрическая инъекция по образцу format_datetime_for_user.
+# ad_card — это МАКРОС (app/templates/ads/includes/ad_card.html:25), а
+# импортированным макросам Jinja контекст вызывающего не передаёт. Передача
+# базового URL параметром потребовала бы менять сигнатуру макроса и все его
+# вызовы в ads/list.html и ads/partial_cards.html, то есть трогать разметку
+# списка ради починки настроек. Привязка на уровне create_app чинит ровно
+# заявленный дефект и не касается ни одного шаблона.
+#
+# ОГРАНИЧЕНИЕ: templates — модульный синглтон, общий на процесс, поэтому
+# привязка глобальна и последний create_app выигрывает. Для одного приложения
+# на процесс (бой) и для теста, создающего своё приложение в фикстуре, этого
+# достаточно. Разведение окружений Jinja по приложениям — архитектурная
+# правка, выходящая за границы этого плана.
+def _resolve_image_url(key: str, s3_public_url: str) -> str:
     """Return key as-is if it's already a full URL, else build S3 URL."""
     if not key:
         return ""
     if key.startswith("http://") or key.startswith("https://"):
         return key
-    return get_image_url(key, get_settings().s3_public_url)
+    return get_image_url(key, s3_public_url)
 
 
-templates.env.globals["get_image_url"] = lambda key: get_image_url(key, get_settings().s3_public_url)
-templates.env.globals["resolve_image_url"] = _resolve_image_url
-templates.env.globals["s3_public_url"] = lambda: get_settings().s3_public_url
+def _bind_image_url_globals(s3_public_url: str) -> None:
+    """Register the three image globals closed over an explicit base URL."""
+    templates.env.globals["get_image_url"] = lambda key: get_image_url(key, s3_public_url)
+    templates.env.globals["resolve_image_url"] = lambda key: _resolve_image_url(key, s3_public_url)
+    templates.env.globals["s3_public_url"] = lambda: s3_public_url
+
+
+def bind_image_url_globals(settings: Settings) -> None:
+    """Bind image template globals to the settings the app actually owns.
+
+    Вызывается из create_app (app/main.py) сразу после разрешения settings.
+    """
+    _bind_image_url_globals(settings.s3_public_url)
+
+
+# Безопасный дефолт на импорте: имена существуют с пустым базовым URL, и НИ
+# ОДНОГО конструирования Settings на импорте модуля не происходит.
+_bind_image_url_globals("")
 
 
 def _compute_asset_version() -> str:
@@ -53,15 +88,38 @@ def _compute_asset_version() -> str:
 templates.env.globals["asset_version"] = _compute_asset_version()
 
 
+# Состояние объявления доезжает до шаблонов ГЛОБАЛОМ, по образцу nav_items.
+# Карточка объявления — макрос (app/templates/ads/includes/ad_card.html:25), а
+# импортированным макросам Jinja контекст вызывающего не передаёт: параметром
+# значение пришлось бы протащить через сигнатуру макроса и оба его вызова.
+# Литерал, выписанный в шаблоне вручную, лишил бы app/constants.py статуса
+# единственного источника — разъехавшись с моделью, он показывал бы
+# «Опубликовано» тому, что планировщик не отправляет.
+# Конструирования Settings здесь не происходит: значения — модульные константы.
+templates.env.globals["AD_STATUS_DRAFT"] = AD_STATUS_DRAFT
+templates.env.globals["AD_STATUS_PUBLISHED"] = AD_STATUS_PUBLISHED
+
+# Подписи каналов доезжают до шаблонов тем же способом и по той же причине:
+# строка перечня воркеров — МАКРОС, а импортированным макросам Jinja контекст
+# вызывающего не передаёт. Довод «макрос обязан быть самодостаточным» запрещает
+# рассчитывать на переменную ВЫЗЫВАЮЩЕЙ страницы, но не на глобал окружения —
+# и именно глобал снимает копию словаря из разметки, оставляя один источник в
+# app/constants.py.
+templates.env.globals["messenger_labels"] = MESSENGER_LABELS
+
+
 # Состав навигации по D-11. Список выписан ОДИН раз и используется и в
 # боковом меню (data-nav), и в нижних табах (data-tabs) — иначе переименования
 # пришлось бы править в трёх местах, как было в старом шелле.
-# «Группы» сохраняются до Фазы 3: экран групп аккаунта появится только там,
-# и без пункта работающий раздел стал бы недостижим.
+#
+# ПУНКТА «ГРУППЫ» ЗДЕСЬ НЕТ с плана 03-08. Фаза 1 сохранила его временно —
+# ровно до появления экрана групп аккаунта, — и это обещание закрыто: группы
+# живут ВНУТРИ «Аккаунтов» (`/accounts/{id}/groups`, D-02), вход на них —
+# строка аккаунта, а глобальный раздел снесён целиком (D-01). Отдельный пункт
+# меню вёл бы на страницу, которой нет.
 NAV_ITEMS: list[dict] = [
     {"key": "dashboard", "label": "Дашборд", "href": "/dashboard", "count_key": None},
     {"key": "accounts", "label": "Аккаунты", "href": "/accounts", "count_key": "accounts"},
-    {"key": "groups", "label": "Группы", "href": "/groups", "count_key": None},
     {"key": "ads", "label": "Объявления", "href": "/ads", "count_key": "ads"},
     {"key": "schedules", "label": "Расписания", "href": "/schedules", "count_key": "schedules"},
     {"key": "history", "label": "История", "href": "/history", "count_key": "history"},
@@ -118,6 +176,71 @@ def format_datetime_for_user(
 templates.env.globals["format_datetime_for_user"] = format_datetime_for_user
 
 
+def plural_ru(count: int, one: str, few: str, many: str) -> str:
+    """Return the Russian noun form matching `count`.
+
+    Общего хелпера склонений в проекте не было: единственный случай был решён
+    конкатенацией одной формы (`sched_card.html`). Линейка счётчика экрана
+    групп обязана печатать «1 активная из 1 группы», а не «1 активных из 1
+    групп» (UI-SPEC §Copywriting Contract, E3 zero-one-many), поэтому форма
+    выбирается по числу, а не выписывается в разметке.
+
+    Хелпер возвращает ТОЛЬКО форму слова и ничего не форматирует: число рядом с
+    ней ставит вызывающий шаблон. Так один и тот же хелпер обслуживает и
+    «5 активных», и «в 3 расписаниях», где число стоит в разных местах строки.
+    """
+    tail = abs(int(count)) % 100
+    if 11 <= tail <= 14:
+        return many
+    tail %= 10
+    if tail == 1:
+        return one
+    if 2 <= tail <= 4:
+        return few
+    return many
+
+
+templates.env.globals["plural_ru"] = plural_ru
+
+
+def time_ago_for_user(value: datetime | None, user: User | None) -> str:
+    """Return a short Russian «N назад» string for a past moment.
+
+    Шапка экрана групп обязана читаться «последняя синхронизация 2 часа назад»
+    (UI-SPEC §Header card). Абсолютное форматирование
+    (`format_datetime_for_user`) для этого не годится, а клиентских часов в
+    проекте нет и заводить их не за чем: таймзона пользователя уже решена
+    хелперами этого модуля, поэтому разница считается на сервере.
+
+    Пустое значение отдаёт ПУСТУЮ строку, а не «0 минут назад»: «синхронизация
+    ещё не выполнялась» — отдельная ветка разметки, и выдуманный ноль подменил
+    бы её правдоподобной ложью (Pitfall 2).
+
+    Момент из будущего (часы сервера и базы разошлись) читается «только что»:
+    отрицательная разница напечатала бы «-1 минуту назад».
+    """
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    tz = _get_timezone_for_user(user)
+    seconds = int((datetime.now(tz) - value.astimezone(tz)).total_seconds())
+
+    minutes = seconds // 60
+    if minutes < 1:
+        return "только что"
+    if minutes < 60:
+        return f"{minutes} {plural_ru(minutes, 'минуту', 'минуты', 'минут')} назад"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} {plural_ru(hours, 'час', 'часа', 'часов')} назад"
+    days = hours // 24
+    return f"{days} {plural_ru(days, 'день', 'дня', 'дней')} назад"
+
+
+templates.env.globals["time_ago_for_user"] = time_ago_for_user
+
+
 async def get_user_from_cookie(
     request: Request, db: AsyncSession, settings: Settings
 ) -> User | None:
@@ -141,6 +264,27 @@ def check_is_admin(user: User | None, settings: Settings) -> bool:
     return user.email == settings.admin_email
 
 
+# Предикат «воркер онлайн» объявлен ОДИН раз. Значение дословно повторяет то,
+# что раньше было захардкожено в счётном подзапросе get_shell_context: перечень
+# и агрегат обязаны решать «онлайн ли он» одним и тем же сравнением, иначе
+# пилюля шапки и строка перечня разошлись бы на одном и том же аккаунте.
+WORKER_ONLINE_STATUS = "active"
+
+# Потолок ПЕРЕЧНЯ воркеров, уезжающего в разметку. Число строк задаёт
+# пользователь — схема не ограничивает, сколько messenger-аккаунтов он заведёт,
+# — а контракт шелла собирается на КАЖДОМ из 26 маршрутов страниц, включая 25,
+# которые перечня не читают вовсе. Выборка без потолка означала бы выделение
+# памяти и разметку, растущие вместе с числом аккаунтов, на каждом рендере
+# продукта: не «медленно», а неограниченно по управляемому пользователем входу.
+#
+# Сто — с большим запасом больше, чем бывает у живого пользователя, и заведомо
+# меньше, чем нужно, чтобы это стало заметно. Перебравший потолок НЕ узнаёт об
+# этом молча: `sessions_truncated` уезжает в контекст, и перечень говорит, что
+# показан не целиком (тот же принцип, что у потолка выгрузки истории — обрезка
+# обязана называть себя).
+WORKER_LIST_CAP = 100
+
+
 async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
     """Collect live shell data: nav counts, plan quota and messenger sessions.
 
@@ -153,11 +297,26 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
     вызывается ни при каких условиях: это синхронный Docker SDK, он
     блокирует event loop на рендере каждой страницы, а в тестах сокет
     Docker недоступен.
+
+    Контракт отдаёт и ПЕРЕЧЕНЬ `sessions` — по строке на messenger-аккаунт
+    владельца, не более WORKER_LIST_CAP строк, — а sessions_online /
+    sessions_total считаются агрегатами и от потолка перечня не зависят: иначе
+    пользователь за потолком видел бы в шапке заниженное число, то есть цифру,
+    которая молча врёт. ПРЕДИКАТ «онлайн» у перечня и у агрегата ОДИН
+    (WORKER_ONLINE_STATUS): разойтись им не на чем, и это то, что обещает D-35, —
+    одно определение предиката, а не одно физическое чтение.
+
+    Признак `sessions_truncated` говорит, что перечень показан не целиком.
     """
     if user is None:
         return {}
 
-    # Один round-trip на все шесть счётчиков: скалярные подзапросы без FROM.
+    # Один round-trip на счётчики сущностей: скалярные подзапросы без FROM.
+    # Оба числа по messenger-аккаунтам считаются ЗДЕСЬ, а не длиной перечня
+    # ниже: перечень ограничен потолком, и выведенные из него агрегаты за
+    # потолком показывали бы пользователю не то число аккаунтов, которое у него
+    # есть. Предикат «онлайн» при этом остаётся ОДНИМ (WORKER_ONLINE_STATUS) —
+    # сравнение то же самое, что у строки перечня.
     counts = (
         await db.execute(
             select(
@@ -166,11 +325,6 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
                 .where(Ad.user_id == user.id)
                 .scalar_subquery()
                 .label("ads"),
-                select(func.count())
-                .select_from(MessengerAccount)
-                .where(MessengerAccount.user_id == user.id)
-                .scalar_subquery()
-                .label("accounts"),
                 # У Schedule нет user_id — принадлежность идёт через Ad,
                 # как во всех запросах app/pages/schedules.py.
                 select(func.count())
@@ -186,15 +340,59 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
                 .label("history"),
                 select(func.count())
                 .select_from(MessengerAccount)
+                .where(MessengerAccount.user_id == user.id)
+                .scalar_subquery()
+                .label("accounts"),
+                select(func.count())
+                .select_from(MessengerAccount)
                 .where(
                     MessengerAccount.user_id == user.id,
-                    MessengerAccount.status == "active",
+                    MessengerAccount.status == WORKER_ONLINE_STATUS,
                 )
                 .scalar_subquery()
-                .label("sessions_online"),
+                .label("accounts_online"),
             )
         )
     ).one()
+
+    # Состояние воркеров ПОАККАУНТНО — одно обращение по индексированному
+    # user_id, возвращающее единицы строк (DASH-05).
+    #
+    # Проекция ровно трёх колонок — не оптимизация, а ГРАНИЦА: credentials
+    # хранит строку сессии Telegram и телефон MAX/WhatsApp, session_data —
+    # состояние сессии, а этот словарь печатается в HTML на каждой из 26
+    # страниц. ORM-объект целиком затащил бы секреты на экран.
+    #
+    # Предикат user_id — второй слой владения, а не украшение: перечень чужих
+    # аккаунтов показал бы, каким каналом пользуется другой пользователь.
+    #
+    # Порядок по id — чтобы разметка была детерминированной.
+    #
+    # ПОТОЛОК ОБЯЗАТЕЛЕН: перечень читает ОДИН маршрут из 26, а собирается он на
+    # всех, и число строк задаёт пользователь. Без `limit` это выделение памяти
+    # и разметка, растущие вместе с числом его аккаунтов, на каждом рендере
+    # продукта.
+    worker_rows = (
+        await db.execute(
+            select(
+                MessengerAccount.id,
+                MessengerAccount.type,
+                MessengerAccount.status,
+            )
+            .where(MessengerAccount.user_id == user.id)
+            .order_by(MessengerAccount.id)
+            .limit(WORKER_LIST_CAP)
+        )
+    ).all()
+    sessions = [
+        {
+            "id": row.id,
+            "type": row.type,
+            "status": row.status,
+            "is_online": row.status == WORKER_ONLINE_STATUS,
+        }
+        for row in worker_rows
+    ]
 
     subscription = (
         await db.execute(
@@ -244,6 +442,13 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
             "percent": percent,
             "expires_at": subscription.expires_at if subscription else None,
         },
-        "sessions_online": counts.sessions_online,
+        # Перечень ограничен потолком, агрегаты — нет: числу в шапке нельзя
+        # зависеть от того, сколько строк поместилось в перечень.
+        "sessions": sessions,
+        "sessions_online": counts.accounts_online,
         "sessions_total": counts.accounts,
+        # Обрезка обязана НАЗЫВАТЬ СЕБЯ: молча короткий перечень читался бы как
+        # «остальных аккаунтов нет», то есть как ответ на вопрос, ради которого
+        # пользователь и пришёл на дашборд.
+        "sessions_truncated": counts.accounts > len(sessions),
     }

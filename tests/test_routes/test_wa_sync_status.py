@@ -27,6 +27,7 @@ async def sync_setup():
         engine, class_=AsyncSession, expire_on_commit=False
     )
     settings = Settings(
+        _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
         redis_url="redis://localhost:6379/0",
         secret_key="test-secret",

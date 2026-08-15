@@ -69,6 +69,11 @@
       {{- badge('Синхронизация...', 'warning', title='Загружаем группы из ' ~ label ~ '. Это может занять несколько минут.') -}}
     {%- endcall %}
     {%- call cell() %}
+      {#- Вход на экран групп аккаунта (D-02). Стоит во ВСЕХ ТРЁХ ветках статуса
+          и во всех трёх синхронных копиях строки: условная ветка, скрывающая
+          вход, оставила бы группы синхронизирующегося аккаунта недостижимыми
+          (UI-SPEC E8 partial). -#}
+      {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
       <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
         {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
       </form>
@@ -87,6 +92,7 @@
     {{- cell(text=format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M'), mono=true, muted=true, label=ACCOUNT_COLUMNS[5]) }}
     {%- call cell(label=ACCOUNT_COLUMNS[6]) %}{{ badge('Ошибка синхронизации', 'danger') }}{% endcall %}
     {%- call cell() %}
+      {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
       <form method="POST" action="/accounts/{{ account.id }}/retry-sync">
         {{- button('Повторить', variant='ghost', icon='refresh', title='Повторить синхронизацию') -}}
       </form>
@@ -116,6 +122,7 @@
       {%- else %}{{ badge(account.status, 'warning') }}{% endif -%}
     {%- endcall %}
     {%- call cell() %}
+      {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
       <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
         {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
       </form>
