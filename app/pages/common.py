@@ -256,6 +256,13 @@ def check_is_admin(user: User | None, settings: Settings) -> bool:
     return user.email == settings.admin_email
 
 
+# Предикат «воркер онлайн» объявлен ОДИН раз. Значение дословно повторяет то,
+# что раньше было захардкожено в счётном подзапросе get_shell_context: перечень
+# и агрегат обязаны решать «онлайн ли он» одним и тем же сравнением, иначе
+# пилюля шапки и строка перечня разошлись бы на одном и том же аккаунте.
+WORKER_ONLINE_STATUS = "active"
+
+
 async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
     """Collect live shell data: nav counts, plan quota and messenger sessions.
 
@@ -268,11 +275,18 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
     вызывается ни при каких условиях: это синхронный Docker SDK, он
     блокирует event loop на рендере каждой страницы, а в тестах сокет
     Docker недоступен.
+
+    Контракт отдаёт и ПЕРЕЧЕНЬ `sessions` — по строке на messenger-аккаунт
+    владельца, — а sessions_online / sessions_total выводятся из него на
+    стороне Python. Второго источника числа воркеров онлайн не существует:
+    разойтись перечню и агрегату физически не с чем (D-35).
     """
     if user is None:
         return {}
 
-    # Один round-trip на все шесть счётчиков: скалярные подзапросы без FROM.
+    # Один round-trip на счётчики сущностей: скалярные подзапросы без FROM.
+    # Счётчиков здесь ТРИ, а не пять: подзапросы по messenger-аккаунтам сняты,
+    # оба их числа теперь выводятся из перечня ниже.
     counts = (
         await db.execute(
             select(
@@ -281,11 +295,6 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
                 .where(Ad.user_id == user.id)
                 .scalar_subquery()
                 .label("ads"),
-                select(func.count())
-                .select_from(MessengerAccount)
-                .where(MessengerAccount.user_id == user.id)
-                .scalar_subquery()
-                .label("accounts"),
                 # У Schedule нет user_id — принадлежность идёт через Ad,
                 # как во всех запросах app/pages/schedules.py.
                 select(func.count())
@@ -299,17 +308,43 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
                 .where(SendLog.user_id == user.id)
                 .scalar_subquery()
                 .label("history"),
-                select(func.count())
-                .select_from(MessengerAccount)
-                .where(
-                    MessengerAccount.user_id == user.id,
-                    MessengerAccount.status == "active",
-                )
-                .scalar_subquery()
-                .label("sessions_online"),
             )
         )
     ).one()
+
+    # Состояние воркеров ПОАККАУНТНО — одно обращение по индексированному
+    # user_id, возвращающее единицы строк (DASH-05).
+    #
+    # Проекция ровно трёх колонок — не оптимизация, а ГРАНИЦА: credentials
+    # хранит строку сессии Telegram и телефон MAX/WhatsApp, session_data —
+    # состояние сессии, а этот словарь печатается в HTML на каждой из 26
+    # страниц. ORM-объект целиком затащил бы секреты на экран.
+    #
+    # Предикат user_id — второй слой владения, а не украшение: перечень чужих
+    # аккаунтов показал бы, каким каналом пользуется другой пользователь.
+    #
+    # Порядок по id — чтобы разметка была детерминированной.
+    worker_rows = (
+        await db.execute(
+            select(
+                MessengerAccount.id,
+                MessengerAccount.type,
+                MessengerAccount.status,
+            )
+            .where(MessengerAccount.user_id == user.id)
+            .order_by(MessengerAccount.id)
+        )
+    ).all()
+    sessions = [
+        {
+            "id": row.id,
+            "type": row.type,
+            "status": row.status,
+            "is_online": row.status == WORKER_ONLINE_STATUS,
+        }
+        for row in worker_rows
+    ]
+    sessions_online = sum(1 for session in sessions if session["is_online"])
 
     subscription = (
         await db.execute(
@@ -348,7 +383,7 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
     return {
         "nav_counts": {
             "ads": counts.ads,
-            "accounts": counts.accounts,
+            "accounts": len(sessions),
             "schedules": counts.schedules,
             "history": counts.history,
         },
@@ -359,6 +394,8 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
             "percent": percent,
             "expires_at": subscription.expires_at if subscription else None,
         },
-        "sessions_online": counts.sessions_online,
-        "sessions_total": counts.accounts,
+        # Перечень и оба его агрегата — ОДИН источник, три представления.
+        "sessions": sessions,
+        "sessions_online": sessions_online,
+        "sessions_total": len(sessions),
     }
