@@ -896,6 +896,74 @@ async def test_retry_releases_the_slot_after_an_exception(
 
 
 @pytest.mark.asyncio
+async def test_retry_keeps_the_slot_when_the_broker_fails_after_accepting(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Исключение НЕИЗВЕСТНОГО класса от брокера удержание СОХРАНЯЕТ.
+
+    `send_task` доставляет по меньшей мере один раз: обрыв или таймаут ПОСЛЕ
+    того, как брокер сообщение принял, поднимает исключение, но сообщение уже в
+    очереди. Снятое по нему удержание приняло бы следующее нажатие немедленно —
+    вторая необратимая отправка в чужую группу и второе списание баланса за
+    первую, которая на самом деле ушла.
+
+    Утверждение теста именно «окно осталось», а не «ответ такой-то»: исключение
+    ловит посредник приложения и отдаёт 500.
+    """
+    user = await _current_user(db_session)
+    log = await _seed_retryable(db_session, user.id)
+
+    fake_module = MagicMock()
+    fake_module.celery.send_task.side_effect = RuntimeError("брокер оборвал ответ")
+    with patch.dict(sys.modules, {"app.worker.celery_app": fake_module}):
+        with patch(
+            "app.pages.history.check_balance_cached", AsyncMock(return_value=(True, ""))
+        ):
+            response = await authed_client.post(
+                f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+            )
+
+    assert response.status_code == 500, response.status_code
+    assert log.id in history_module._RETRY_IN_FLIGHT, (
+        "удержание снято по исключению, о котором НЕ известно, что сообщение до "
+        "очереди не доехало — следующее нажатие поставит вторую отправку"
+    )
+    history_module._RETRY_IN_FLIGHT.clear()
+
+
+@pytest.mark.asyncio
+async def test_retry_releases_the_slot_when_the_broker_connection_is_refused(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Отказ ПОДКЛЮЧЕНИЯ к брокеру удержание снимает: сообщение не доехало.
+
+    `OperationalError` kombu поднимает на неудачном подключении, то есть ДО
+    передачи сообщения. Это единственный класс, про который известно, что в
+    очередь не ушло ничего, — держать по нему окно значило бы лишить
+    пользователя повтора на минуту за чужой сбой, причём молча.
+    """
+    from celery.exceptions import OperationalError
+
+    user = await _current_user(db_session)
+    log = await _seed_retryable(db_session, user.id)
+
+    fake_module = MagicMock()
+    fake_module.celery.send_task.side_effect = OperationalError("брокер недоступен")
+    with patch.dict(sys.modules, {"app.worker.celery_app": fake_module}):
+        with patch(
+            "app.pages.history.check_balance_cached", AsyncMock(return_value=(True, ""))
+        ):
+            response = await authed_client.post(
+                f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
+            )
+
+    assert response.status_code == 500, response.status_code
+    assert log.id not in history_module._RETRY_IN_FLIGHT, (
+        "окно осталось за повтором, который до очереди не доехал"
+    )
+
+
+@pytest.mark.asyncio
 async def test_retry_becomes_possible_again_after_the_cooldown_window(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
