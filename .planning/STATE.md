@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
-current_phase: 5
-current_phase_name: Тарифы
-status: "Phase 04 shipped — PR #38"
+current_phase: 05
+current_phase_name: tarify
+status: executing
 stopped_at: Phase 5 context gathered
-last_updated: "2026-08-15T15:53:57.007Z"
+last_updated: "2026-08-15T16:07:11.305Z"
 last_activity: 2026-08-15
 last_activity_desc: Phase 04 UAT round 2 complete — 22/22 passed, 0 issues (04-11, 04-12 и волна WR-01…WR-17)
 progress:
@@ -24,14 +24,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-13)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 05 — Тарифы
+**Current focus:** Phase 05 — tarify
 
 ## Current Position
 
-Phase: 5 — Тарифы
-Plan: Not started
-Status: Phase 04 shipped — PR #38
-Last activity: 2026-08-15 — Phase 5 planning complete
+Phase: 05 (tarify) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 05
+Last activity: 2026-08-15 — Phase 05 execution started
 
 Progress: [█████████████░░░░░░░] 52/52 plans (100%) — Phases 1–4 of 6 complete (67% фаз milestone v2.0)
 
