@@ -21,6 +21,30 @@ logger = structlog.get_logger()
 KIND_PACKAGE = "package"
 KIND_SUBSCRIPTION = "subscription"
 
+STATUS_PENDING = "pending"
+STATUS_SUCCEEDED = "succeeded"
+STATUS_CANCELED = "canceled"
+
+# ТЕРМИНАЛЬНЫЕ СТАТУСЫ — те, из которых платёж больше не выходит. Их два, и
+# защита от повторной обработки написана через это множество, а не через
+# перечисление в каждой ветке: копия в ветке рано или поздно разойдётся с
+# оригиналом — достаточно, чтобы третью ветку добавили, забыв её скопировать.
+TERMINAL_STATUSES = frozenset({STATUS_SUCCEEDED, STATUS_CANCELED})
+
+# ЗНАКОМЫЕ СОБЫТИЯ — КОНСТАНТАМИ SDK, НИКОГДА СТРОКОВЫМИ ЛИТЕРАЛАМИ (T-05-12).
+# Опечатка в литерале не поднимает ошибку: событие просто молча не
+# обрабатывается, платёж остаётся pending, а обнаруживается это на боевом
+# приёме денег. Константа с опечаткой падает AttributeError на импорте модуля.
+#
+# В SDK объявлено семь событий; refund.succeeded, payout.* и deal.closed этой
+# фазе не принадлежат и по-прежнему возвращают False.
+KNOWN_EVENTS = frozenset(
+    {
+        WebhookNotificationEventType.PAYMENT_SUCCEEDED,
+        WebhookNotificationEventType.PAYMENT_CANCELED,
+    }
+)
+
 
 def _configure_yookassa():
     settings = get_settings()
@@ -115,22 +139,27 @@ async def create_payment(
 async def handle_webhook(
     db: AsyncSession, event: str, payment_data: dict
 ) -> bool:
-    """Выдаёт оплаченное по подтверждённому уведомлению об успешном платеже.
+    """Доводит платёж до терминального статуса по подтверждённому уведомлению.
 
     ПОРЯДОК ПРОВЕРОК ЗНАЧИМ И МЕНЯТЬСЯ НЕ ДОЛЖЕН: событие → наличие `id` →
-    строка платежа в СВОЕЙ базе → идемпотентность → и только потом ветвление по
-    предмету покупки.
+    строка платежа в СВОЕЙ базе → терминальный статус → и только потом
+    ветвление по исходу платежа и по предмету покупки.
 
-    Проверка идемпотентности стоит ДО ветвления намеренно. Это единственное
-    место, где живёт защита от двойного начисления (T-05-04); её копия внутри
-    каждой ветки рано или поздно разойдётся с остальными — достаточно, чтобы
-    третью ветку добавили, забыв скопировать.
+    Проверка терминального статуса стоит ДО ветвления намеренно. Это
+    единственное место, где живёт защита от двойного начисления (T-05-04), и
+    ровно она же не даёт припоздавшему уведомлению об отмене отнять уже
+    выданное (T-05-10): платёж в `succeeded` не переводится в `canceled`.
+
+    ЗНАКОМЫХ СОБЫТИЙ ДВА — успех и отмена (D-16). До этого отмена возвращала
+    False, и отменённый платёж навсегда оставался `pending`: история показывала
+    бы «в обработке» там, где денег не взяли вовсе — то есть неправду, а не
+    отсутствие данных (BILL-07).
 
     ПРЕДМЕТ ПОКУПКИ РЕШАЕТ КОЛОНКА `kind` ИЗ БД, никогда `metadata`
     уведомления: тело уведомления приезжает из сети и источником истины быть не
     может (T-05-02). Пользователь берётся оттуда же — из строки платежа.
     """
-    if event != WebhookNotificationEventType.PAYMENT_SUCCEEDED:
+    if event not in KNOWN_EVENTS:
         return False
 
     obj = payment_data.get("object", {})
@@ -147,12 +176,40 @@ async def handle_webhook(
         logger.warning("webhook_payment_not_found", yookassa_id=yookassa_id)
         return False
 
-    if db_payment.status == "succeeded":
+    if db_payment.status in TERMINAL_STATUSES:
         logger.info("webhook_payment_already_processed", yookassa_id=yookassa_id)
         return True
 
     now = datetime.now(timezone.utc)
-    db_payment.status = "succeeded"
+
+    if event == WebhookNotificationEventType.PAYMENT_CANCELED:
+        # ВЕТКА ОТМЕНЫ НАМЕРЕННО НИЧЕГО НЕ НАЧИСЛЯЕТ: ни сообщений, ни дней
+        # подписки. Она только записывает исход — и тем снимает платёж с вечного
+        # `pending`. Баланс при этом не изменился, поэтому и инвалидировать
+        # кэш нечего.
+        #
+        # Момент решения пишется в СУЩЕСТВУЮЩУЮ колонку времени подтверждения:
+        # колонка одна, и её смысл — «когда платёж перешёл в терминальное
+        # состояние». Второй колонки под отмену D-15 не заводит, а расширять
+        # решение владельца этот код не вправе.
+        #
+        # Причина отмены (`cancellation_details` в теле уведомления) не пишется
+        # и не логируется (T-05-13): её не называет ни требование, ни макет, а
+        # разбор чужой структуры ради неиспользуемого поля — лишний контракт с
+        # внешним форматом.
+        db_payment.status = STATUS_CANCELED
+        db_payment.confirmed_at = now
+        await db.commit()
+
+        logger.info(
+            "payment_canceled",
+            user_id=db_payment.user_id,
+            yookassa_id=yookassa_id,
+            kind=db_payment.kind,
+        )
+        return True
+
+    db_payment.status = STATUS_SUCCEEDED
     db_payment.confirmed_at = now
 
     if db_payment.kind == KIND_SUBSCRIPTION:
