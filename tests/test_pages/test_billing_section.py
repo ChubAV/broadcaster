@@ -881,3 +881,86 @@ async def test_the_section_survives_an_unusable_price_in_the_plan_config(
     html = response.text
     assert "NaN" in html, "непригодная цена не напечатана как есть"
     assert "Basic" in html, "витрина потеряла план с непригодной ценой"
+
+
+# =============================================================================
+# Пустой каталог пакетов говорит словами (план 05-09, U4 / U5)
+# =============================================================================
+#
+# ДВЕ ПРИЧИНЫ ПУСТОТЫ — ДВЕ РАЗНЫЕ ПАРЫ СЛОВ, ровно тем же правилом, каким два
+# журнала раздела несут две разные пары строк (R16). «Платежи выключены
+# администратором» и «платежи включены, но каталог пуст» — разные ответы, и
+# подмена одного другим была бы неправдой: во втором случае администратор ни
+# при чём, покупать просто нечего.
+
+# Заголовок нового пустого состояния и прежняя строка выключенных платежей.
+PACKAGES_EMPTY_TITLE = "Пакеты сообщений временно недоступны"
+PAYMENTS_DISABLED_LINE = "Пополнение баланса доступно через администратора"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_package_catalogue_speaks_instead_of_showing_a_void(
+    authed_client: AsyncClient, test_settings
+):
+    """Ноль пакетов при ВКЛЮЧЁННЫХ платежах рисует пустое состояние (U4).
+
+    До плана 05-09 цикл крутился в `[data-metrics]` безусловно, и пустой
+    конфиг давал пустой блок под балансом. Пустота без слов читается как
+    поломка интерфейса, а не как «показывать нечего».
+    """
+    test_settings.message_packages = "[]"
+    try:
+        response = await authed_client.get("/billing")
+    finally:
+        test_settings.message_packages = Settings.model_fields[
+            "message_packages"
+        ].default
+
+    assert response.status_code == 200
+    html = response.text
+    assert PACKAGES_EMPTY_TITLE in html, "пустой каталог пакетов промолчал"
+    assert 'action="/billing/purchase"' not in html, (
+        "форма покупки осталась при пустом каталоге"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_filled_package_catalogue_carries_no_empty_state(
+    authed_client: AsyncClient,
+):
+    """Непустой каталог нового заголовка НЕ печатает.
+
+    Без этой пары пустое состояние могло бы рисоваться поверх наполненной
+    сетки, и тест выше остался бы зелёным.
+    """
+    html = (await authed_client.get("/billing")).text
+
+    assert PACKAGES_EMPTY_TITLE not in html, (
+        "пустое состояние нарисовано поверх наполненного каталога"
+    )
+    assert 'action="/billing/purchase"' in html, "формы покупки исчезли"
+
+
+@pytest.mark.asyncio
+async def test_disabled_payments_keep_their_own_words(
+    authed_client: AsyncClient, test_settings
+):
+    """U4 не подменяет собой ПРЕЖНЕЕ пустое состояние (D-21).
+
+    Подмена одного пустого состояния другим — самый вероятный способ закрыть
+    U4 неправильно: строка про администратора отвечает на вопрос «почему нельзя
+    купить», а не «почему список пуст», и при выключенных платежах она обязана
+    остаться единственной.
+    """
+    test_settings.yookassa_enabled = False
+    try:
+        response = await authed_client.get("/billing")
+    finally:
+        test_settings.yookassa_enabled = True
+
+    assert response.status_code == 200
+    html = response.text
+    assert PAYMENTS_DISABLED_LINE in html, "прежнее пустое состояние исчезло"
+    assert PACKAGES_EMPTY_TITLE not in html, (
+        "новое пустое состояние подменило собой ответ о выключенных платежах"
+    )
