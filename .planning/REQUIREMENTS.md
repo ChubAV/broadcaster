@@ -112,9 +112,9 @@
 
 ### Тарифы
 
-- [x] **BILL-05**: Пользователь может продлить текущую подписку. (Форма «Продлить» в карточке текущего плана — `app/templates/billing/includes/plan_card.html:72` — и у истёкшего срока — `app/templates/billing/balance.html:96`; обе ведут в `POST /billing/subscribe`, `app/pages/billing.py:151`.)
-- [x] **BILL-06**: Пользователь видит потребление и остаток лимитов по четырём осям тарифа. (Четыре оси `AXIS_ORDER` — `app/application/billing/plan_usage.py:64` — рисуются метрами в `app/templates/billing/balance.html:108`; безлимитная ось показывается «без ограничений», а не нулём.)
-- [x] **BILL-07**: Пользователь видит историю своих платежей. (Журнал `get_payment_history` / `count_payments` — `app/services/billing_service.py:179`, `:210` — выводится блоком «История платежей», `app/templates/billing/balance.html:166`, с датой, назначением, суммой и статусом.)
+- [ ] **BILL-05**: Пользователь может продлить текущую подписку. (Форма «Продлить» в карточке текущего плана — `app/templates/billing/includes/plan_card.html:72` — и у истёкшего срока — `app/templates/billing/balance.html:96`; обе ведут в `POST /billing/subscribe`, `app/pages/billing.py:151`.)
+- [ ] **BILL-06**: Пользователь видит потребление и остаток лимитов по четырём осям тарифа. (Четыре оси `AXIS_ORDER` — `app/application/billing/plan_usage.py:64` — рисуются метрами в `app/templates/billing/balance.html:108`; безлимитная ось показывается «без ограничений», а не нулём.)
+- [ ] **BILL-07**: Пользователь видит историю своих платежей. (Журнал `get_payment_history` / `count_payments` — `app/services/billing_service.py:179`, `:210` — выводится блоком «История платежей», `app/templates/billing/balance.html:166`, с датой, назначением, суммой и статусом.)
 
 ### Администрирование
 
