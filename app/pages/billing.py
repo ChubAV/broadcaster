@@ -15,7 +15,11 @@ from app.services.billing_service import (
     get_payment_history,
     get_transaction_history,
 )
-from app.services.payment_service import create_payment
+from app.services.payment_service import (
+    KIND_PACKAGE,
+    KIND_SUBSCRIPTION,
+    create_payment,
+)
 from app.pages.common import (
     check_is_admin,
     get_user_from_cookie,
@@ -193,7 +197,10 @@ async def subscribe_to_plan(
     result = await create_payment(
         db,
         user_id=user.id,
-        kind="subscription",
+        # Предмет покупки — КОНСТАНТОЙ, никогда голым литералом (WR-04):
+        # опечатка в литерале не падает громко, а уводит подписочный платёж в
+        # пакетную ветку вебхука с пустым `messages_count`.
+        kind=KIND_SUBSCRIPTION,
         plan=selected["id"],
         price=selected["price"],
         package_name=None,
@@ -256,7 +263,7 @@ async def purchase_package(
     result = await create_payment(
         db,
         user_id=user.id,
-        kind="package",
+        kind=KIND_PACKAGE,
         package_name=package["name"],
         messages_count=package["count"],
         price=package["price"],

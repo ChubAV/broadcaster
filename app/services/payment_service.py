@@ -2,8 +2,10 @@ import uuid
 from datetime import datetime, timezone
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 from yookassa import Configuration, Payment as YooPayment
 from yookassa.domain.notification import WebhookNotificationEventType
 
@@ -136,6 +138,51 @@ async def create_payment(
     }
 
 
+async def _claim_payment(
+    db: AsyncSession, yookassa_id: str, new_status: str, now: datetime
+) -> bool:
+    """Заявляет платёж на обработку. True — заявка выиграна, False — опередили.
+
+    ЭТО COMPARE-AND-SWAP, А НЕ ПРОВЕРКА С ПОСЛЕДУЮЩЕЙ ЗАПИСЬЮ. Условие «статус
+    ещё не терминальный» стоит В ТОМ ЖЕ операторе, что и запись нового статуса,
+    поэтому между проверкой и записью не остаётся зазора ВОВСЕ. Прежняя пара
+    «прочитали статус → много позже записали» оставляла окно, в которое
+    помещалась целая вторая доставка: обе видели `pending`, обе начисляли.
+
+    РАБОТАЕТ ОДИНАКОВО НА PostgreSQL И НА SQLite, и это принципиально. Суита
+    проекта живёт на SQLite, где `SELECT ... FOR UPDATE` диалектом ИГНОРИРУЕТСЯ
+    — то есть блокировка строки сама по себе регрессией непокрываема. Условный
+    UPDATE покрываем, потому что атомарность одного оператора даёт и SQLite.
+
+    `synchronize_session=False`: оператор идёт мимо identity map, и сессия о
+    записи не знает. Поля объекта платежа отзеркаливает вызывающий.
+    """
+    result = await db.execute(
+        update(Payment)
+        .where(
+            Payment.yookassa_payment_id == yookassa_id,
+            Payment.status.not_in(TERMINAL_STATUSES),
+        )
+        .values(status=new_status, confirmed_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount == 1
+
+
+def _mirror_claim(db_payment: Payment, new_status: str, now: datetime) -> None:
+    """Отзеркаливает выигранную заявку на объект платежа в Python.
+
+    `synchronize_session=False` означает, что сессия о записи не знает, а ниже
+    по ветке эти поля читаются логированием и `_extend_subscription`.
+
+    Значения ставятся `set_committed_value`, а не присваиванием: присваивание
+    пометило бы объект грязным, и ORM выдала бы на коммите ВТОРОЙ UPDATE тех же
+    колонок — лишний оператор, притворяющийся, что запись сделал он.
+    """
+    set_committed_value(db_payment, "status", new_status)
+    set_committed_value(db_payment, "confirmed_at", now)
+
+
 async def handle_webhook(
     db: AsyncSession, event: str, payment_data: dict
 ) -> bool:
@@ -145,10 +192,25 @@ async def handle_webhook(
     строка платежа в СВОЕЙ базе → терминальный статус → и только потом
     ветвление по исходу платежа и по предмету покупки.
 
-    Проверка терминального статуса стоит ДО ветвления намеренно. Это
-    единственное место, где живёт защита от двойного начисления (T-05-04), и
-    ровно она же не даёт припоздавшему уведомлению об отмене отнять уже
-    выданное (T-05-10): платёж в `succeeded` не переводится в `canceled`.
+    ЗАЩИТА ОТ ДВОЙНОГО НАЧИСЛЕНИЯ ДЕРЖИТСЯ ДВУМЯ МЕХАНИЗМАМИ, И ГРАНИЦА МЕЖДУ
+    НИМИ НАЗВАНА ЗДЕСЬ НАМЕРЕННО (T-05-04, T-05-35):
+
+    * `_claim_payment` — условный UPDATE, держит НАЛОЖИВШИЕСЯ доставки. Их обе
+      прошли проверку статуса ниже, потому что обе прочитали строку, пока она
+      была `pending`; заявку выигрывает ровно одна, проигравшая до начисления не
+      доходит физически. Работает на обоих диалектах и покрыт регрессией
+      `tests/test_services/test_payment_concurrency.py`;
+    * `with_for_update()` на выборке — убирает саму конкуренцию НА PostgreSQL:
+      вторая доставка ждёт на выборке и доходит до проверки статуса уже с
+      обновлённым значением, то есть выходит раньше и без единой записи. НА
+      SQLite эта половина не исполняется вовсе — диалект молча опускает
+      `FOR UPDATE`, поэтому суита её не проверяет и проверить не может.
+
+    Проверка терминального статуса стоит ДО ветвления намеренно, но единственной
+    защитой она БОЛЬШЕ НЕ ЯВЛЯЕТСЯ: это быстрый выход для ПОСЛЕДОВАТЕЛЬНОЙ
+    повторной доставки (первая завершилась, вторая пришла после). Ровно она же не
+    даёт припоздавшему уведомлению об отмене отнять уже выданное (T-05-10):
+    платёж в `succeeded` не переводится в `canceled`.
 
     ЗНАКОМЫХ СОБЫТИЙ ДВА — успех и отмена (D-16). До этого отмена возвращала
     False, и отменённый платёж навсегда оставался `pending`: история показывала
@@ -169,7 +231,9 @@ async def handle_webhook(
         return False
 
     result = await db.execute(
-        select(Payment).where(Payment.yookassa_payment_id == yookassa_id)
+        select(Payment)
+        .where(Payment.yookassa_payment_id == yookassa_id)
+        .with_for_update()
     )
     db_payment = result.scalar_one_or_none()
     if db_payment is None:
@@ -197,8 +261,12 @@ async def handle_webhook(
         # и не логируется (T-05-13): её не называет ни требование, ни макет, а
         # разбор чужой структуры ради неиспользуемого поля — лишний контракт с
         # внешним форматом.
-        db_payment.status = STATUS_CANCELED
-        db_payment.confirmed_at = now
+        if not await _claim_payment(db, yookassa_id, STATUS_CANCELED, now):
+            await db.rollback()
+            logger.info("webhook_claim_lost", yookassa_id=yookassa_id)
+            return True
+
+        _mirror_claim(db_payment, STATUS_CANCELED, now)
         await db.commit()
 
         logger.info(
@@ -209,8 +277,33 @@ async def handle_webhook(
         )
         return True
 
-    db_payment.status = STATUS_SUCCEEDED
-    db_payment.confirmed_at = now
+    # ПРОВЕРКА ПРИГОДНОСТИ ПАКЕТА СТОИТ ДО ЗАЯВКИ (T-05-39, WR-04). Платёж с
+    # пустым `messages_count` — последствие опечатки в `kind` у вызывающего:
+    # подписочная покупка ушла в пакетную ветку, где считать нечего. Заявить его
+    # проведённым и потом отказаться значило бы пометить платёж выданным, ничего
+    # не выдав. Раньше начисление падало TypeError, маршрут отвечал 500, и
+    # ЮKassa повторяла доставку до отказа при взятых деньгах.
+    if db_payment.kind != KIND_SUBSCRIPTION and not db_payment.messages_count:
+        logger.error(
+            "webhook_package_without_messages_count",
+            yookassa_id=yookassa_id,
+            user_id=db_payment.user_id,
+            kind=db_payment.kind,
+        )
+        return False
+
+    # ЗАЯВКА СТОИТ ПЕРЕД ЛЮБЫМ НАЧИСЛЕНИЕМ И В ТОЙ ЖЕ ТРАНЗАКЦИИ, ЧТО И ОНО:
+    # единственный `commit` в конце ветки остаётся единственным. Отдельный
+    # коммит заявки завёл бы окно, в котором платёж помечен проведённым, а
+    # ресурс не выдан.
+    if not await _claim_payment(db, yookassa_id, STATUS_SUCCEEDED, now):
+        # Не отказ: уведомление обработано — просто не этой доставкой. 5xx здесь
+        # спровоцировал бы новую попытку ЮKassa по уже проведённому платежу.
+        await db.rollback()
+        logger.info("webhook_claim_lost", yookassa_id=yookassa_id)
+        return True
+
+    _mirror_claim(db_payment, STATUS_SUCCEEDED, now)
 
     if db_payment.kind == KIND_SUBSCRIPTION:
         await _extend_subscription(db, db_payment, now)
@@ -252,21 +345,74 @@ async def _extend_subscription(
 
     ЗАПРОС АКТИВНОЙ ПОДПИСКИ ПОВТОРЯЕТ `get_shell_context` ДОСЛОВНО
     (app/pages/common.py:397-404): те же три условия, та же сортировка, тот же
-    `limit(1)`. Уникального ограничения на `subscriptions.user_id` в схеме нет,
-    поэтому строк у одного пользователя может оказаться несколько — и
-    одинаковый запрос у ЧИТАТЕЛЯ (шелл показывает тариф и срок) и у ПИСАТЕЛЯ
-    (этот код) единственное, что держит их в согласии. Разойдись они, продление
-    двигало бы одну строку, а пользователь видел бы другую.
+    `limit(1)`. Одинаковый запрос у ЧИТАТЕЛЯ (шелл показывает тариф и срок) и у
+    ПИСАТЕЛЯ (этот код) держит их в согласии; разойдись они, продление двигало
+    бы одну строку, а пользователь видел бы другую.
+
+    ВТОРАЯ АКТИВНАЯ СТРОКА С РЕВИЗИИ 0018 НЕВОЗМОЖНА НА УРОВНЕ СУБД — частичный
+    уникальный индекс `uq_subscriptions_active_user`. Это закрывает остаточную
+    щель, которую прикладная заявка `_claim_payment` закрыть не могла: два
+    РАЗНЫХ платежа одного пользователя, доставленные внахлёст при отсутствующей
+    подписке, честно выигрывают КАЖДЫЙ СВОЮ заявку — строки платежей-то разные,
+    — оба видят «подписки нет» и оба вставляют.
+
+    ОТКАЗ ОГРАНИЧЕНИЯ ЗДЕСЬ ОБРАБАТЫВАЕТСЯ, А НЕ ПРОПУСКАЕТСЯ НАВЕРХ. Платёж
+    настоящий, деньги взяты, и ответить на него 500-й значило бы наказать
+    пользователя за гонку внутри платформы. Проигравшая вставку доставка
+    перечитывает чужую строку и двигает срок НА НЕЙ — исход тот же, что при
+    последовательном приходе двух платежей.
+
+    ВСТАВКА ИДЁТ В SAVEPOINT. Откат по нарушению ограничения обязан снять ТОЛЬКО
+    неудавшуюся вставку: снаружи, в той же транзакции, уже лежит выигранная
+    заявка на платёж (`_claim_payment`), и полный откат вернул бы платёж в
+    `pending` — то есть потерял бы факт обработки денег.
 
     Срок двигается ТОЛЬКО ЗДЕСЬ — то есть только по подтверждённому платежу.
     Возврат браузера с `return_url` доказательством оплаты не является и
     происходит в том числе при отказе (D-05, T-05-05).
     """
-    subscription = (
+    subscription = await _active_subscription(db, db_payment.user_id)
+
+    if subscription is not None:
+        _apply_extension(subscription, db_payment, now)
+        return
+
+    try:
+        async with db.begin_nested():
+            db.add(
+                Subscription(
+                    user_id=db_payment.user_id,
+                    plan=db_payment.plan or "free",
+                    expires_at=next_expiry(None, now),
+                    is_active=True,
+                )
+            )
+            await db.flush()
+        return
+    except IntegrityError as rejection:
+        logger.info(
+            "subscription_insert_lost",
+            user_id=db_payment.user_id,
+            yookassa_id=db_payment.yookassa_payment_id,
+        )
+        rejected_by = rejection
+
+    subscription = await _active_subscription(db, db_payment.user_id)
+    if subscription is None:
+        # Ограничение отвергло вставку, но активной строки нет — значит отказ
+        # пришёл НЕ от `uq_subscriptions_active_user`, и глотать его нельзя:
+        # исключение поднимается тем же объектом, а не новым.
+        raise rejected_by
+    _apply_extension(subscription, db_payment, now)
+
+
+async def _active_subscription(db: AsyncSession, user_id: int) -> Subscription | None:
+    """Действующая подписка пользователя — тем же запросом, что у читателя."""
+    return (
         await db.execute(
             select(Subscription)
             .where(
-                Subscription.user_id == db_payment.user_id,
+                Subscription.user_id == user_id,
                 Subscription.is_active.is_(True),
             )
             .order_by(Subscription.expires_at.desc())
@@ -274,17 +420,10 @@ async def _extend_subscription(
         )
     ).scalar_one_or_none()
 
-    if subscription is not None:
-        subscription.expires_at = next_expiry(subscription.expires_at, now)
-        if db_payment.plan:
-            subscription.plan = db_payment.plan
-        return
 
-    db.add(
-        Subscription(
-            user_id=db_payment.user_id,
-            plan=db_payment.plan or "free",
-            expires_at=next_expiry(None, now),
-            is_active=True,
-        )
-    )
+def _apply_extension(
+    subscription: Subscription, db_payment: Payment, now: datetime
+) -> None:
+    subscription.expires_at = next_expiry(subscription.expires_at, now)
+    if db_payment.plan:
+        subscription.plan = db_payment.plan
