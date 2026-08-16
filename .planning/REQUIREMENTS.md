@@ -252,8 +252,8 @@
 - v2.0 requirements: 38 total (было 39; GRP-08 снято решением владельца — см. Out of Scope)
 - Mapped to phases: 38
 - Unmapped: 0
-- Complete: 16 (UI-01…UI-06, ADS-04…ADS-08, SCH-04, SCH-05, BILL-05…BILL-07)
-- Pending: 22
+- Complete: 13 (UI-01…UI-06, ADS-04…ADS-08, SCH-04, SCH-05)
+- Pending: 25 (включая BILL-05…BILL-07 — сняты с `Complete` 2026-08-16 после вердикта `gaps_found` по Фазе 5; код реализован, отметка вернётся вместе с закрытием гэпов)
 - Out of scope: 1 (GRP-08, D-13, 2026-08-11) — строка прослеживаемости сохранена намеренно, чтобы отличать «снято» от «потеряно»
 
 ---
