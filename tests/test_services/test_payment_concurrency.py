@@ -40,17 +40,26 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from yookassa.domain.notification import WebhookNotificationEventType
 
+from app.application.billing.subscription_period import add_one_month
 from app.database import Base
 from app.models.balance_transaction import BalanceTransaction
 from app.models.message_balance import MessageBalance
 from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.user import User
+from app.services import payment_service
 from app.services.payment_service import handle_webhook
 
 EVENT_SUCCEEDED = WebhookNotificationEventType.PAYMENT_SUCCEEDED
 
 YOO_ID = "yoo_overlap_1"
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    """Доводит значение из БД до aware-UTC: SQLite отдаёт naive, PostgreSQL — aware."""
+    if value is None:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 @pytest_asyncio.fixture
@@ -274,3 +283,162 @@ async def test_a_package_payment_without_a_count_credits_nothing(db_session):
         select(MessageBalance.balance).where(MessageBalance.user_id == user.id)
     )
     assert balance in (None, 0), f"пустой пакет что-то начислил: {balance}"
+
+
+# --- Остаточная щель: ДВА РАЗНЫХ платежа одного пользователя ------------------
+#
+# Заявка `_claim_payment` эту пару не разводит и не обязана: строки платежей
+# РАЗНЫЕ, поэтому каждая доставка честно выигрывает СВОЮ заявку. Разводит их
+# ограничение схемы — частичный уникальный индекс `uq_subscriptions_active_user`
+# ревизии 0018 (решение владельца: `constraint-plus-backfill-guard`).
+
+
+async def _seed_two_subscription_payments(factory) -> int:
+    """Пользователь БЕЗ подписки и два его платежа за тариф."""
+    async with factory() as session:
+        user = User(email="two@t.com", password_hash="h", name="T")
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        for yoo_id in ("yoo_sub_a", "yoo_sub_b"):
+            session.add(
+                Payment(
+                    user_id=user.id,
+                    yookassa_payment_id=yoo_id,
+                    status="pending",
+                    amount_value="1490.00",
+                    amount_currency="RUB",
+                    kind="subscription",
+                    plan="basic",
+                    messages_count=None,
+                    package_name=None,
+                )
+            )
+        await session.commit()
+        return user.id
+
+
+@pytest.mark.asyncio
+async def test_two_different_payments_leave_one_active_subscription(sessions):
+    """Два РАЗНЫХ платежа внахлёст: одна активная строка, два оплаченных месяца.
+
+    Каждая доставка выигрывает свою заявку — платежи разные, и отказывать в
+    одном из них было бы кражей оплаченного месяца. Проверяется, что при этом
+    строка подписки остаётся ОДНА (её больше не может быть две — ограничение
+    схемы), а срок двигается ДВАЖДЫ: пользователь заплатил дважды.
+    """
+    started = datetime.now(timezone.utc)
+    user_id = await _seed_two_subscription_payments(sessions)
+
+    async def second_delivery():
+        async with sessions() as second:
+            await handle_webhook(second, EVENT_SUCCEEDED, _payload("yoo_sub_b"))
+
+    async with sessions() as first:
+        _interleave_after_first_read(first, second_delivery)
+        with patch(
+            "app.services.payment_service.invalidate_balance_cache",
+            new_callable=AsyncMock,
+        ):
+            processed = await handle_webhook(
+                first, EVENT_SUCCEEDED, _payload("yoo_sub_a")
+            )
+
+    assert processed is True, "обработчик отказал по настоящему платежу"
+
+    async with sessions() as check:
+        rows = list(
+            (
+                await check.execute(
+                    select(Subscription).where(
+                        Subscription.user_id == user_id,
+                        Subscription.is_active.is_(True),
+                    )
+                )
+            ).scalars()
+        )
+
+    assert len(rows) == 1, f"активных строк подписки {len(rows)}, а не одна"
+    expires = rows[0].expires_at
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    # Два платежа — два месяца. Один месяц означал бы, что второй платёж взят и
+    # не отработан.
+    assert started + timedelta(days=57) < expires < started + timedelta(days=63), (
+        f"два платежа сдвинули срок не на два месяца: {expires}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_subscription_insert_is_recovered_not_raised(db_session):
+    """Отказ ограничения на вставке обрабатывается, а не роняет обработчик 500-й.
+
+    ⚠️ ЭТУ ВЕТКУ НЕЛЬЗЯ ПОЛУЧИТЬ НАСТОЯЩЕЙ КОНКУРЕНЦИЕЙ НА SQLite, и это
+    свойство ДВИЖКА, а не теста: чтобы столкнуться на вставке, обе доставки
+    обязаны держать открытые транзакции записи одновременно, а SQLite второй
+    такой транзакции просто не даёт («database is locked»). PostgreSQL даёт.
+    Поэтому момент «мы прочитали до конкурента, а вставляем после него» задаётся
+    подменой `_active_subscription`: её ПЕРВЫЙ вызов отвечает «подписки нет», как
+    и было в момент чтения. Всё остальное — настоящее: настоящий уникальный
+    индекс отвергает настоящую вставку, и дальше работает настоящий разбор
+    отказа.
+    """
+    user = User(email="rejected@t.com", password_hash="h", name="T")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    current = (datetime.now(timezone.utc) + timedelta(days=10)).replace(microsecond=0)
+    existing = Subscription(
+        user_id=user.id, plan="basic", expires_at=current, is_active=True
+    )
+    db_session.add(existing)
+    db_session.add(
+        Payment(
+            user_id=user.id,
+            yookassa_payment_id="yoo_rejected",
+            status="pending",
+            amount_value="1490.00",
+            amount_currency="RUB",
+            kind="subscription",
+            plan="pro",
+            messages_count=None,
+            package_name=None,
+        )
+    )
+    await db_session.commit()
+
+    real_lookup = payment_service._active_subscription
+    calls = {"n": 0}
+
+    async def lookup_that_missed_the_competitor(db, user_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None
+        return await real_lookup(db, user_id)
+
+    with patch(
+        "app.services.payment_service._active_subscription",
+        lookup_that_missed_the_competitor,
+    ), patch(
+        "app.services.payment_service.invalidate_balance_cache", new_callable=AsyncMock
+    ):
+        processed = await handle_webhook(
+            db_session, EVENT_SUCCEEDED, _payload("yoo_rejected")
+        )
+
+    assert processed is True
+    assert calls["n"] == 2, "разбор отказа не перечитал чужую строку"
+
+    rows = list(
+        (
+            await db_session.execute(
+                select(Subscription).where(Subscription.user_id == user.id)
+            )
+        ).scalars()
+    )
+    assert len(rows) == 1, f"строк подписки {len(rows)}: отвергнутая вставка уцелела"
+    # Платёж отработан НА ЧУЖОЙ строке: срок сдвинут, тариф обновлён.
+    assert _utc(rows[0].expires_at) == add_one_month(current)
+    assert rows[0].plan == "pro"

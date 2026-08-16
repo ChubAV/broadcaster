@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 import structlog
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 from yookassa import Configuration, Payment as YooPayment
@@ -344,21 +345,74 @@ async def _extend_subscription(
 
     ЗАПРОС АКТИВНОЙ ПОДПИСКИ ПОВТОРЯЕТ `get_shell_context` ДОСЛОВНО
     (app/pages/common.py:397-404): те же три условия, та же сортировка, тот же
-    `limit(1)`. Уникального ограничения на `subscriptions.user_id` в схеме нет,
-    поэтому строк у одного пользователя может оказаться несколько — и
-    одинаковый запрос у ЧИТАТЕЛЯ (шелл показывает тариф и срок) и у ПИСАТЕЛЯ
-    (этот код) единственное, что держит их в согласии. Разойдись они, продление
-    двигало бы одну строку, а пользователь видел бы другую.
+    `limit(1)`. Одинаковый запрос у ЧИТАТЕЛЯ (шелл показывает тариф и срок) и у
+    ПИСАТЕЛЯ (этот код) держит их в согласии; разойдись они, продление двигало
+    бы одну строку, а пользователь видел бы другую.
+
+    ВТОРАЯ АКТИВНАЯ СТРОКА С РЕВИЗИИ 0018 НЕВОЗМОЖНА НА УРОВНЕ СУБД — частичный
+    уникальный индекс `uq_subscriptions_active_user`. Это закрывает остаточную
+    щель, которую прикладная заявка `_claim_payment` закрыть не могла: два
+    РАЗНЫХ платежа одного пользователя, доставленные внахлёст при отсутствующей
+    подписке, честно выигрывают КАЖДЫЙ СВОЮ заявку — строки платежей-то разные,
+    — оба видят «подписки нет» и оба вставляют.
+
+    ОТКАЗ ОГРАНИЧЕНИЯ ЗДЕСЬ ОБРАБАТЫВАЕТСЯ, А НЕ ПРОПУСКАЕТСЯ НАВЕРХ. Платёж
+    настоящий, деньги взяты, и ответить на него 500-й значило бы наказать
+    пользователя за гонку внутри платформы. Проигравшая вставку доставка
+    перечитывает чужую строку и двигает срок НА НЕЙ — исход тот же, что при
+    последовательном приходе двух платежей.
+
+    ВСТАВКА ИДЁТ В SAVEPOINT. Откат по нарушению ограничения обязан снять ТОЛЬКО
+    неудавшуюся вставку: снаружи, в той же транзакции, уже лежит выигранная
+    заявка на платёж (`_claim_payment`), и полный откат вернул бы платёж в
+    `pending` — то есть потерял бы факт обработки денег.
 
     Срок двигается ТОЛЬКО ЗДЕСЬ — то есть только по подтверждённому платежу.
     Возврат браузера с `return_url` доказательством оплаты не является и
     происходит в том числе при отказе (D-05, T-05-05).
     """
-    subscription = (
+    subscription = await _active_subscription(db, db_payment.user_id)
+
+    if subscription is not None:
+        _apply_extension(subscription, db_payment, now)
+        return
+
+    try:
+        async with db.begin_nested():
+            db.add(
+                Subscription(
+                    user_id=db_payment.user_id,
+                    plan=db_payment.plan or "free",
+                    expires_at=next_expiry(None, now),
+                    is_active=True,
+                )
+            )
+            await db.flush()
+        return
+    except IntegrityError as rejection:
+        logger.info(
+            "subscription_insert_lost",
+            user_id=db_payment.user_id,
+            yookassa_id=db_payment.yookassa_payment_id,
+        )
+        rejected_by = rejection
+
+    subscription = await _active_subscription(db, db_payment.user_id)
+    if subscription is None:
+        # Ограничение отвергло вставку, но активной строки нет — значит отказ
+        # пришёл НЕ от `uq_subscriptions_active_user`, и глотать его нельзя:
+        # исключение поднимается тем же объектом, а не новым.
+        raise rejected_by
+    _apply_extension(subscription, db_payment, now)
+
+
+async def _active_subscription(db: AsyncSession, user_id: int) -> Subscription | None:
+    """Действующая подписка пользователя — тем же запросом, что у читателя."""
+    return (
         await db.execute(
             select(Subscription)
             .where(
-                Subscription.user_id == db_payment.user_id,
+                Subscription.user_id == user_id,
                 Subscription.is_active.is_(True),
             )
             .order_by(Subscription.expires_at.desc())
@@ -366,17 +420,10 @@ async def _extend_subscription(
         )
     ).scalar_one_or_none()
 
-    if subscription is not None:
-        subscription.expires_at = next_expiry(subscription.expires_at, now)
-        if db_payment.plan:
-            subscription.plan = db_payment.plan
-        return
 
-    db.add(
-        Subscription(
-            user_id=db_payment.user_id,
-            plan=db_payment.plan or "free",
-            expires_at=next_expiry(None, now),
-            is_active=True,
-        )
-    )
+def _apply_extension(
+    subscription: Subscription, db_payment: Payment, now: datetime
+) -> None:
+    subscription.expires_at = next_expiry(subscription.expires_at, now)
+    if db_payment.plan:
+        subscription.plan = db_payment.plan
