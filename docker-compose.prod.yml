@@ -16,6 +16,15 @@ x-app-base: &app-base
       S3_BUCKET_NAME: ${S3_BUCKET_NAME}
       S3_REGION: ${S3_REGION}
       S3_PUBLIC_URL: ${S3_PUBLIC_URL}
+      # Имя заголовка, из которого гард вебхука ЮKassa читает адрес источника.
+      # Переменная обязательна ИМЕННО потому, что у web ниже стоит
+      # --forwarded-allow-ips=*: из-за него адрес пира приходит подконтрольным
+      # вызывающему, и доверять можно только заголовку, который nginx
+      # ПЕРЕЗАПИСЫВАЕТ ($remote_addr на каждом location) — не тому, который он
+      # дописывает. Форма с ":-": значение из .env побеждает, но при его
+      # отсутствии артефакт даёт безопасное умолчание сам, а не молча открывает
+      # гард.
+      YOOKASSA_WEBHOOK_CLIENT_IP_HEADER: ${YOOKASSA_WEBHOOK_CLIENT_IP_HEADER:-X-Real-IP}
   env_file: .env
 
 services:

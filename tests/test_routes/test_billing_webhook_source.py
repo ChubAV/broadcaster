@@ -151,19 +151,35 @@ async def test_a_forged_leftmost_element_does_not_grant_trust(client, test_setti
 
 
 @pytest.mark.asyncio
-async def test_without_a_configured_header_the_peer_address_is_used(
-    client, test_settings
-):
-    """Пустая настройка = читать `request.client.host` напрямую.
+async def test_an_unconfigured_header_refuses_every_request(client, test_settings):
+    """Пустая настройка = ОТКАЗ КАЖДОМУ уведомлению, а не чтение адреса пира.
 
-    Так работает локальный запуск без прокси и вся суита: адрес пира тестового
-    транспорта не входит в сети ЮKassa, поэтому ожидается отказ.
+    Прежде этот тест назывался `..._the_peer_address_is_used` и закреплял ветку
+    «пусто → `request.client.host`» как корректную. Ветки больше нет: на бою
+    uvicorn запущен с `--forwarded-allow-ips=*`, и адрес пира там — левый
+    элемент `X-Forwarded-For`, то есть значение вызывающего (гэп 1, план 05-07).
+
+    Проверяется именно ОТКАЗ, а не совпадение с недоверенным пиром: доверенный
+    адрес приходит и заголовком, который перезаписывал бы прокси, и подделкой в
+    `X-Forwarded-For`, и всё равно получает 403. Ненастроенный гард не доверяет
+    НИЧЕМУ — подтвердить источник ему нечем.
     """
     test_settings.yookassa_webhook_verify_ip = True
     test_settings.yookassa_webhook_client_ip_header = ""
 
-    with patch("app.routes.billing.handle_webhook", new_callable=AsyncMock) as handler:
-        response = await client.post("/api/billing/webhook", json=SUCCEEDED_BODY)
+    with patch(
+        "app.routes.billing.handle_webhook", new_callable=AsyncMock, return_value=True
+    ) as handler:
+        bare = await client.post("/api/billing/webhook", json=SUCCEEDED_BODY)
+        with_trusted_headers = await client.post(
+            "/api/billing/webhook",
+            json=SUCCEEDED_BODY,
+            headers={IP_HEADER: TRUSTED_IP, "X-Forwarded-For": TRUSTED_IP},
+        )
 
-    assert response.status_code == 403
+    assert bare.status_code == 403
+    assert with_trusted_headers.status_code == 403, (
+        "ненастроенный заголовок обязан отвергать и запрос с доверенным адресом: "
+        "источник не подтверждён, а не подтверждён чем-то другим"
+    )
     handler.assert_not_awaited()

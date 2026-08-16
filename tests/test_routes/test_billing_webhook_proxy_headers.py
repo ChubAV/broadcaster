@@ -24,6 +24,7 @@ uvicorn тем же конструктором, который uvicorn вызы�
 исполняется; сборка без логики — доказательство, что 403 приходит, но неизвестно
 по какой причине.
 """
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -44,6 +45,8 @@ UNTRUSTED_IP = "203.0.113.7"
 
 IP_HEADER = "X-Real-IP"
 SUCCEEDED_BODY = {"event": "payment.succeeded", "object": {"id": "yoo_1"}}
+
+PROD_COMPOSE = Path(__file__).resolve().parents[2] / "docker-compose.prod.yml"
 
 
 @pytest_asyncio.fixture
@@ -272,3 +275,36 @@ def test_the_shipped_default_header_name_is_x_real_ip():
     )
 
     assert settings.yookassa_webhook_client_ip_header == "X-Real-IP"
+
+
+def test_the_deploy_artifact_pins_the_header_name():
+    """Безопасное значение — свойство артефакта выката, а не записи в STATE.md.
+
+    Файл читается КАК ТЕКСТ, и это осознанно. Дефект гэпа 1 жил ровно в
+    РАСХОЖДЕНИИ между кодом и тем, что уезжает на бой: код гарда был написан
+    верно, а сборка выката его не исполняла. Грепом по коду такое расхождение
+    непоймаемо по построению — проверять нужно сам артефакт. Прецедент чтения
+    неисполняемого файла из суиты в проекте есть: тесты раздела читают `app.css`.
+
+    Умолчание в `app/config.py` закрывает гард и без этой записи. Запись нужна
+    затем, чтобы значение оставалось названным в артефакте, а не восстанавливалось
+    читателем из умолчания кода: `env_file: .env` даёт только то, что в `.env`
+    уже есть, и перечень `environment` переменную прежде не упоминал вовсе.
+    """
+    text = PROD_COMPOSE.read_text(encoding="utf-8")
+
+    assert "YOOKASSA_WEBHOOK_CLIENT_IP_HEADER" in text, (
+        "docker-compose.prod.yml обязан объявлять имя заголовка явно"
+    )
+    # Считаются ИСПОЛНЯЕМЫЕ вхождения, а не вхождения строки в файл: флаг
+    # разобран в двух комментариях (над `command` и над самой переменной), и
+    # подсчёт сырого текста мерил бы объём объяснений, а не конфигурацию.
+    flag_lines = [
+        line
+        for line in text.splitlines()
+        if "forwarded-allow-ips" in line and not line.lstrip().startswith("#")
+    ]
+    assert len(flag_lines) == 1, (
+        "флаг --forwarded-allow-ips не удалён и не продублирован: он обязателен "
+        f"для проброса X-Forwarded-Proto, и правка гарда его не трогает; {flag_lines}"
+    )
