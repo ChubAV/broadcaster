@@ -1,10 +1,11 @@
 ---
 phase: 05-tarify
-reviewed: 2026-08-16T05:35:12Z
+reviewed: 2026-08-16T00:00:00Z
 depth: standard
-files_reviewed: 31
+files_reviewed: 38
 files_reviewed_list:
   - alembic/versions/0017_payment_kind_and_plan.py
+  - alembic/versions/0018_subscriptions_unique_user.py
   - app/application/analytics/send_analytics.py
   - app/application/billing/__init__.py
   - app/application/billing/plan_usage.py
@@ -12,6 +13,7 @@ files_reviewed_list:
   - app/config.py
   - app/constants.py
   - app/models/payment.py
+  - app/models/subscription.py
   - app/pages/billing.py
   - app/pages/common.py
   - app/pages/history.py
@@ -24,630 +26,695 @@ files_reviewed_list:
   - app/templates/billing/includes/payment_row.html
   - app/templates/billing/includes/plan_card.html
   - app/templates/billing/includes/usage_meters.html
+  - app/templates/billing/plans.html
+  - docker-compose.prod.yml
   - tests/test_application/test_plan_usage.py
   - tests/test_application/test_subscription_period.py
   - tests/test_migrations/test_0017_payment_kind_and_plan.py
+  - tests/test_migrations/test_0018_subscriptions_unique_user.py
+  - tests/test_pages/test_billing_payment_errors.py
   - tests/test_pages/test_billing_section.py
   - tests/test_pages/test_billing_subscription.py
   - tests/test_pages/test_history_retry.py
   - tests/test_pages/test_responsive_markup.py
   - tests/test_routes/test_billing.py
+  - tests/test_routes/test_billing_webhook_proxy_headers.py
   - tests/test_routes/test_billing_webhook_source.py
   - tests/test_services/test_billing_service.py
+  - tests/test_services/test_payment_concurrency.py
   - tests/test_services/test_payment_service.py
 findings:
   critical: 2
-  warning: 10
-  info: 6
+  warning: 9
+  info: 7
   total: 18
 status: issues_found
 ---
 
 # Phase 05: Code Review Report
 
-**Reviewed:** 2026-08-16T05:35:12Z
+**Reviewed:** 2026-08-16
 **Depth:** standard
-**Files Reviewed:** 31
+**Files Reviewed:** 38
 **Status:** issues_found
 
 ## Summary
 
-Phase 05 adds YooKassa subscriptions, plan-usage metering, and the `/billing`
-section. The suite is green (292 passed) and the documented design decisions
-(rightmost source-IP read, `webhook_event` instead of `event=`, no payment id in
-response bodies, purchase price read from config not from the form, ownership as
-a query predicate) are all implemented as described and covered by tests.
+The webhook source guard, the claim-and-credit atomicity, and the `0018` backfill
+hold up under adversarial reading. The rightmost-element parse is correct for the
+shipped `X-Real-IP` header; the CAS claim is genuinely a compare-and-swap and works
+on both dialects; the `0018` correlated-subquery backfill converges to the correct
+keeper regardless of row order on both PostgreSQL and SQLite (`expires_at` and
+`is_active` are `NOT NULL` per `0001`, so the NULL-ordering divergence between the
+dialects cannot bite). 307 targeted tests pass.
 
-The defects below are the places where the *implementation* and the *deployment
-artifacts* disagree with the documented intent, or where a documented invariant
-holds only in the single-request case:
+Two blockers survive that review, and both are on the money path:
 
-1. The webhook source-IP guard is written correctly but is **inert in the
-   shipped production configuration**: `yookassa_webhook_client_ip_header`
-   defaults to empty, no compose file / `.env.example` / README sets it, and the
-   prod `web` service runs uvicorn with `--forwarded-allow-ips=*`. In that
-   combination `request.client.host` *is* the attacker-controlled leftmost
-   `X-Forwarded-For` element — exactly the leftmost read the module docstring
-   forbids.
-2. The double-credit protection (`TERMINAL_STATUSES` check) is a check-then-act
-   with no row lock and no unique constraint, so it protects against *sequential*
-   redelivery only. `tests/test_services/test_payment_service.py` tests exactly
-   the sequential case.
+1. **`_apply_extension` overwrites the plan unconditionally.** The `upgrade-only`
+   rule is enforced only at the *intent* stage (form guard) and nowhere at the
+   *application* stage. Two ordinary pending payments — or one out-of-order webhook
+   delivery — silently strip a user of a tier they paid for. Reproduced with a
+   failing test against the real code path (see CR-01).
+2. **`YooPayment.create()` is a synchronous, timeout-less HTTP call on the event
+   loop** of a single-worker uvicorn. A blackholed YooKassa connection hangs the
+   whole application, including `/health`.
 
-Everything else is warning-tier: a proven `format_amount` crash on `NaN`/
-`Infinity`, undefined plan-switch semantics that destroy a paid remainder on
-downgrade, and a migration that silently drops `ON DELETE CASCADE` on SQLite
-while its round-trip test uses a fixture schema that omits the constraint.
+The narrative below builds on those; nine warnings and seven info items follow.
+Known debt WR-10 (string limit crashing `axis_percent`) was verified as reported
+and is not re-listed, though WR-07 below is its unreported sibling one level up.
 
-## Structural Findings (fallow)
-
-No `<structural_findings>` block was supplied with this review request; no
-structural pre-pass results are incorporated below. All findings are narrative.
+No structural pre-pass was supplied with this review, so there is no
+`Structural Findings (fallow)` section.
 
 ## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: Webhook source-IP guard is bypassable in the shipped production configuration
+### CR-01: A confirmed lower-tier payment silently downgrades an active higher tier
 
-**Severity:** BLOCKER (Critical)
-**File:** `app/routes/billing.py:76-83`, `app/config.py:94`, `docker-compose.prod.yml:78`, `nginx/nginx.conf.template:40`
-
-**Issue:**
-`_webhook_client_ip` has two paths. The configured-header path reads the
-rightmost element and is correct. The **fallback path is the one production
-actually takes**, and it is forgeable:
-
-```python
-header_name = settings.yookassa_webhook_client_ip_header   # default: ""
-if header_name:
-    ...                       # rightmost read — correct
-client = request.client       # <-- production path
-return client.host if client else None
-```
-
-Chain of evidence, all verified in this repository:
-
-- `app/config.py:94` — `yookassa_webhook_client_ip_header: str = ""` (default empty).
-- No deployable artifact sets it. `grep -rn "yookassa_webhook" --include="*.yml"
-  --include=".env.example" --include="*.md"` over the repo (excluding
-  `.planning/`) returns **nothing**. `docker-compose.prod.yml` enumerates its
-  env keys explicitly and does not include it.
-- `docker-compose.prod.yml:78` — `uvicorn main:app ... --forwarded-allow-ips=*`.
-- `.venv/.../uvicorn/middleware/proxy_headers.py` — with `always_trust`,
-  `get_trusted_client_host()` returns `x_forwarded_for_hosts[0]`, i.e. the
-  **leftmost** element, and `ProxyHeadersMiddleware` writes it into
-  `scope["client"]`, which is what `request.client.host` returns.
-- `nginx/nginx.conf.template:40` — `proxy_set_header X-Forwarded-For
-  $proxy_add_x_forwarded_for;` appends the real peer on the **right**, so the
-  leftmost element is whatever the client sent.
-
-Net effect: `curl -H 'X-Forwarded-For: 77.75.156.11' -d '{"event":
-"payment.succeeded","object":{"id":"<id>"}}' https://<host>/api/billing/webhook`
-passes `_is_trusted_source()` and grants a paid resource. The victim payment id
-is not the secret the code assumes it is either: the browser is redirected to
-YooKassa's `confirmation_url`, which carries the payment id as a query parameter,
-so a buyer can read their own pending payment id out of the URL bar and then
-confirm it for free.
-
-`tests/test_routes/test_billing_webhook_source.py:154-169` tests the empty-header
-path but only asserts that the *test transport's* peer address is untrusted — it
-cannot see the proxy-header rewrite, so the suite is green while production is
-open.
-
-**Fix:** make the guard refuse to fall back to `request.client` whenever the app
-may be behind a trusted-everything proxy, and set the header in the deployment
-artifacts.
-
-```python
-# app/routes/billing.py
-def _webhook_client_ip(request: Request, settings: Settings) -> str | None:
-    header_name = settings.yookassa_webhook_client_ip_header
-    if not header_name:
-        # НЕТ НАСТРОЕННОГО ЗАГОЛОВКА = НЕТ ДОВЕРЕННОГО ИСТОЧНИКА АДРЕСА.
-        # За --forwarded-allow-ips=* request.client.host — это ЛЕВЫЙ элемент
-        # X-Forwarded-For, то есть значение, которое присылает сам клиент.
-        logger.error("webhook_ip_header_not_configured")
-        return None
-    raw = request.headers.get(header_name)
-    if not raw:
-        return None
-    return raw.split(",")[-1].strip() or None
-```
-
-```yaml
-# docker-compose.prod.yml, x-app-base environment:
-  YOOKASSA_WEBHOOK_CLIENT_IP_HEADER: ${YOOKASSA_WEBHOOK_CLIENT_IP_HEADER:-X-Real-IP}
-```
-
-Add a regression test that the empty-header configuration cannot be satisfied by
-any request header, and document the variable in `.env.example`.
-
----
-
-### CR-02: Webhook double-credit protection is a check-then-act with no lock — concurrent redelivery double-credits and double-extends
-
-**Severity:** BLOCKER (Critical)
-**File:** `app/services/payment_service.py:171-181`, `app/services/payment_service.py:227-234`, `app/services/payment_service.py:265-290`, `app/services/billing_service.py:75-77`
+**File:** `app/services/payment_service.py:504-509`
+**Severity:** BLOCKER
 
 **Issue:**
-`handle_webhook` reads the payment row, checks `db_payment.status in
-TERMINAL_STATUSES`, and only later commits the new status. Nothing serialises
-two concurrent deliveries of the same notification:
 
 ```python
-result = await db.execute(
-    select(Payment).where(Payment.yookassa_payment_id == yookassa_id)
-)          # <-- plain SELECT, no FOR UPDATE
-db_payment = result.scalar_one_or_none()
-if db_payment.status in TERMINAL_STATUSES:   # <-- check
-    return True
-...
-db_payment.status = STATUS_SUCCEEDED         # <-- act, much later
+def _apply_extension(subscription, db_payment, now) -> None:
+    subscription.expires_at = next_expiry(subscription.expires_at, now)
+    if db_payment.plan:
+        subscription.plan = db_payment.plan     # unconditional overwrite
 ```
 
-Under PostgreSQL READ COMMITTED (the default), two overlapping requests both
-observe `pending` and both proceed. Consequences:
+`PLAN_ORDER` exists specifically to rank plans, and `app/constants.py:48-70` states
+the owner decision that a downgrade "не предлагается и не принимается". That rule is
+enforced in exactly two places — `plan_card.html` (CTA state) and the
+`POST /billing/subscribe` guard — both of which act on *intent*. Nothing consults
+`PLAN_ORDER` when the money actually lands. `_apply_extension` will lower the plan
+on any confirmed payment.
 
-- `add_messages` does a Python-side read-modify-write
-  (`bal.balance += amount` at `billing_service.py:76`) on two separately loaded
-  `MessageBalance` instances, so the credit is applied twice **and** one of the
-  two writes is lost — the balance ends up wrong in a way that is not even
-  `2 × amount`.
-- `_extend_subscription` runs its "is there an active subscription?" SELECT
-  twice; if there is none, both branches `db.add(Subscription(...))` and the
-  user ends up with **two** subscription rows (`subscriptions` has no unique
-  index on `user_id` — `app/models/subscription.py:12-14`). If there is one, the
-  expiry is advanced two months for one month's payment.
+The `_extend_subscription` docstring (lines 447-452) defends this as "ГАРД СТОИТ НА
+ВХОДЕ", arguing that refusing a paid payment would be worse. That argument justifies
+*not refusing the payment*; it does not justify *lowering the tier*. Extending the
+period while keeping the higher plan satisfies both constraints, and is the only
+behaviour consistent with the stated rule.
 
-This is directly exploitable in combination with CR-01: an attacker who can
-reach the endpoint can fire N concurrent identical POSTs for a known payment id.
-Even without CR-01, YooKassa redelivers notifications, and the docstring's claim
-that this check is "единственное место, где живёт защита от двойного
-начисления" is only true single-threaded — which is exactly what
-`test_handle_webhook_idempotent` and
-`test_a_repeated_subscription_webhook_moves_the_expiry_once` exercise.
+Two reachable paths, neither requiring an attacker:
 
-**Fix:** take a row lock on the payment before the terminal-status check, and
-make the balance update a SQL-side increment.
+*Path A — two pending payments (ordinary user indecision).* User on `free` clicks
+"Перейти на Pro" → payment P1 created, redirected to YooKassa, does not pay yet.
+Goes back, clicks "Перейти на Basic" → the subscribe guard sees no *live*
+subscription (none exists), so it allows → P2 created. User pays both.
+P1 lands: plan = `pro`. P2 lands: plan = `basic`. **The user paid 4 900 ₽ + 1 490 ₽
+and ends on Basic.**
+
+*Path B — out-of-order webhook delivery.* YooKassa delivery order is not guaranteed
+and retries reorder. A user who correctly upgrades Basic → Pro, whose Basic webhook
+is delayed past the Pro one, ends on Basic.
+
+Reproduced against the real code path (test written, run, then removed — review is
+read-only):
+
+```
+after pro  : pro   2026-09-16 ...
+after basic: basic 2026-10-16 ...
+AssertionError: PLAN WAS SILENTLY DOWNGRADED to 'basic' after paying for both
+```
+
+Note the aggravating detail: `expires_at` *is* advanced twice, so the payment is
+visibly honoured in the period column while the tier is silently lost. There is no
+log line recording the demotion.
+
+**Fix:** consult the same rank table the form guard uses, and never lower the plan
+from the webhook path.
 
 ```python
 # app/services/payment_service.py
-result = await db.execute(
-    select(Payment)
-    .where(Payment.yookassa_payment_id == yookassa_id)
-    .with_for_update()          # сериализует конкурирующие доставки
-)
+from app.constants import PLAN_ORDER
+
+_PLAN_RANK = {plan: index for index, plan in enumerate(PLAN_ORDER)}
+
+
+def _apply_extension(subscription, db_payment, now) -> None:
+    subscription.expires_at = next_expiry(subscription.expires_at, now)
+    if not db_payment.plan:
+        return
+    # ПЛАН ТОЛЬКО ПОВЫШАЕТСЯ. Подтверждённый платёж исполняется ЛЮБОЙ (срок
+    # двинут выше), но тариф, за который уже заплачено, он не отнимает:
+    # правило `upgrade-only` (C2/WR-02) обязано держаться и здесь, иначе оно
+    # существует только на входе, а деньги приходят не через вход.
+    paid = _PLAN_RANK.get(db_payment.plan)
+    held = _PLAN_RANK.get(subscription.plan)
+    if paid is None or held is None or paid >= held:
+        subscription.plan = db_payment.plan
+        return
+    logger.info(
+        "subscription_plan_kept_higher",
+        user_id=db_payment.user_id,
+        yookassa_id=db_payment.yookassa_payment_id,
+        paid_plan=db_payment.plan,
+        held_plan=subscription.plan,
+    )
 ```
+
+Add a regression test asserting that `pro` → `basic` (both confirmed) leaves
+`plan == "pro"` with the period advanced twice.
+
+---
+
+### CR-02: Synchronous, timeout-less YooKassa call blocks the single-worker event loop
+
+**File:** `app/services/payment_service.py:128-141`; `docker-compose.prod.yml:87`
+**Severity:** BLOCKER
+
+**Issue:** `create_payment` is `async def`, but line 129 calls `YooPayment.create(...)`
+directly. That is a blocking `requests` call executed on the ASGI event loop. Two
+compounding facts make it a whole-application hang rather than a slow request:
+
+1. **The SDK sets no timeout.** `yookassa/client.py:83-92` calls
+   `session.request(method, url, params=…, headers=…, json=…, verify=…)` with no
+   `timeout=` argument. `requests` then blocks indefinitely on a blackholed TCP
+   connection. The `Retry(total=self.max_attempts, backoff_factor=self.timeout/1000)`
+   mounted at `client.py:97-102` multiplies the wait rather than bounding it.
+2. **Prod runs one worker with one loop.**
+   `command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --forwarded-allow-ips=*`
+   — no `--workers`. There is also no `restart:` policy on the `web` service (nginx,
+   certbot and flower have one; `web` does not), so a wedged process is not recycled.
+
+Consequence: one user pressing "Оплатить"/"Перейти на …" while YooKassa is
+unreachable stalls *every* route on the process — all 26 pages, the compose
+healthcheck at `/health`, and `POST /api/billing/webhook` itself. Incoming webhooks
+for already-paid subscriptions cannot be processed while the loop is parked, so
+money is taken and nothing is credited until the socket eventually gives up.
+
+This also contradicts the project's own stated boundary — `app/pages/common.py:406-410`
+and `app/application/analytics/send_analytics.py:20-22` both explicitly forbid
+synchronous blocking calls on the render path for exactly this reason.
+
+**Fix:** bound the call and get it off the loop.
 
 ```python
-# app/services/billing_service.py — вместо bal.balance += amount
-await db.execute(
-    update(MessageBalance)
-    .where(MessageBalance.user_id == user_id)
-    .values(balance=MessageBalance.balance + amount)
-    .returning(MessageBalance.balance)
-)
+# app/services/payment_service.py
+import asyncio
+from yookassa import Configuration
+
+
+def _configure_yookassa():
+    settings = get_settings()
+    Configuration.account_id = settings.yookassa_shop_id
+    Configuration.secret_key = settings.yookassa_secret_key
+    # Таймаут ОБЯЗАТЕЛЕН: SDK зовёт requests без него вовсе
+    # (yookassa/client.py:83-92), а без границы ожидания зависшее соединение
+    # держит цикл событий бесконечно.
+    Configuration.timeout = settings.yookassa_timeout_ms
+
+
+# ... в create_payment:
+    try:
+        # ВЫЗОВ УХОДИТ В ПОТОК. `YooPayment.create` — синхронный requests-вызов,
+        # а обработчик живёт в цикле событий одного воркера: блокировка здесь
+        # останавливает ВЕСЬ сайт, включая приём вебхуков и healthcheck.
+        payment = await asyncio.to_thread(
+            YooPayment.create,
+            {...},
+            idempotency_key,
+        )
+    except Exception as exc:
+        ...
 ```
 
-Also add `UniqueConstraint("user_id")` (or a partial unique index on
-`user_id WHERE is_active`) to `subscriptions` in a follow-up revision so the
-duplicate-row outcome is impossible rather than merely unlikely.
+Add `yookassa_timeout_ms: int = 10_000` to `Settings`. Consider `--workers 2+` in
+`docker-compose.prod.yml` and `restart: unless-stopped` on `web` as defence in depth.
 
 ## Warnings
 
-### WR-01: `format_amount` raises on `NaN` / `Infinity`, 500-ing the whole billing page
+### WR-01: `reset_free_monthly` keeps the exact lost-update pattern `add_messages` was fixed to remove
 
+**File:** `app/services/billing_service.py:121-145` (line 133)
 **Severity:** WARNING
-**File:** `app/pages/common.py:270-281`
 
-**Issue:** The function documents "непригодное значение возвращается КАК ЕСТЬ",
-but the guard is in the wrong place. `Decimal("NaN")` and `Decimal("Infinity")`
-parse successfully, then escape the `try`:
-
-```
-$ uv run python -c "from app.pages.common import format_amount; format_amount('NaN')"
-decimal.InvalidOperation: [<class 'decimal.InvalidOperation'>]      # from f"{abs(amount):.2f}"
-$ ... format_amount('Infinity')
-ValueError: invalid literal for int() with base 10: 'Infinity'      # from int(whole)
-```
-
-(Verified by execution.) `format_amount` is a Jinja global called for every plan
-card (`plan_card.html:49`), every package tile (`balance.html:148`) and every
-payment row (`payment_row.html:57`), so one bad `price` in `PLAN_LIMITS` /
-`MESSAGE_PACKAGES` — or one bad `payments.amount_value` — takes down `/billing`
-with a 500 instead of showing the odd string.
-
-**Fix:** reject non-finite values inside the guarded region.
+`add_messages` was hardened this phase (line 94-101) so the increment is computed
+DB-side: `values(balance=MessageBalance.balance + amount)`. Its sibling in the same
+file was left as a Python read-modify-write:
 
 ```python
-    try:
-        amount = Decimal(str(value))
-    except (ArithmeticError, ValueError, TypeError):
-        return str(value)
-    if not amount.is_finite():
-        return str(value)
-```
-
----
-
-### WR-02: Plan switching destroys the paid remainder on downgrade (and gifts it on upgrade)
-
-**Severity:** WARNING
-**File:** `app/services/payment_service.py:277-281`
-
-**Issue:**
-
-```python
-if subscription is not None:
-    subscription.expires_at = next_expiry(subscription.expires_at, now)
-    if db_payment.plan:
-        subscription.plan = db_payment.plan
-    return
-```
-
-The plan is overwritten unconditionally while the expiry is only pushed one
-month from the *existing* expiry. A `pro` subscriber (4900 ₽/mo) with 25 days
-left who buys `basic` (1490 ₽) is immediately downgraded to `basic` and keeps
-the 25 days — i.e. the 4900 ₽ they already paid for those days is destroyed.
-Symmetrically, a `basic` subscriber who buys `pro` gets `pro` limits for the
-remaining `basic` days for free. `next_expiry`'s docstring is explicit that the
-remainder must not be burned ("Пользователь уже заплатил за неистраченный
-остаток"), and this path burns it whenever the plans differ.
-
-No test covers a plan change: `test_payment_service.py` and
-`test_billing_subscription.py` only exercise same-plan renewal and first
-purchase.
-
-**Fix:** make the semantics explicit. Minimum viable behaviour — a plan change
-starts a fresh period from today rather than inheriting the old one, and an
-upgrade/downgrade decision is recorded:
-
-```python
-if subscription is not None:
-    changing_plan = bool(db_payment.plan) and db_payment.plan != subscription.plan
-    base = None if changing_plan else subscription.expires_at
-    subscription.expires_at = next_expiry(base, now)
-    if db_payment.plan:
-        subscription.plan = db_payment.plan
-    return
-```
-
-and add tests for `basic → pro` and `pro → basic` with an unexpired remainder.
-
----
-
-### WR-03: Revision 0017 silently drops `ON DELETE CASCADE` on SQLite; the round-trip test cannot see it
-
-**Severity:** WARNING
-**File:** `alembic/versions/0017_payment_kind_and_plan.py:63-66`, `tests/test_migrations/test_0017_payment_kind_and_plan.py:46-61`
-
-**Issue:** `op.batch_alter_table("payments")` recreates the table on SQLite by
-reflection. Reflection does not recover the referential action, so the FK comes
-back as `NO ACTION`. Verified by running the real revision against a fixture
-that includes the real constraint:
-
-```
-before: FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-after : FOREIGN KEY(user_id) REFERENCES users (id)
-PRAGMA foreign_key_list(payments) -> (..., 'NO ACTION', 'NO ACTION', 'NONE')
-```
-
-The round-trip test cannot catch this because `PAYMENTS_AT_0016` in the fixture
-(lines 46-61) is **not** the revision-0016 schema: it omits the
-`REFERENCES users(id) ON DELETE CASCADE` that `0009_add_message_balance_and_payment_tables.py:67-73`
-actually creates, and it omits the `status` / `amount_currency` server defaults.
-The file's own docstring claims round-trip fidelity ("обязаны пережить откат без
-потери строк"), so the test is weaker than it advertises. Production is
-PostgreSQL, where batch mode degrades to a plain `ALTER ... DROP NOT NULL` and
-the FK is untouched — that is why this is a warning and not a blocker — but the
-same batch pattern will be copied into the next revision.
-
-**Fix:** give batch mode the real table definition so nothing is inferred, and
-fix the fixture:
-
-```python
-PAYMENTS = sa.Table(
-    "payments", sa.MetaData(),
-    sa.Column("id", sa.Integer, primary_key=True),
-    sa.Column("user_id", sa.Integer,
-              sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
-    ...  # остальные колонки на момент 0016 + kind/plan
-)
-with op.batch_alter_table("payments", copy_from=PAYMENTS) as batch_op:
-    batch_op.alter_column("messages_count", existing_type=sa.Integer(), nullable=True)
-```
-
-and add `REFERENCES users(id) ON DELETE CASCADE` to `PAYMENTS_AT_0016` plus an
-assertion on `PRAGMA foreign_key_list(payments)` after upgrade and downgrade.
-
----
-
-### WR-04: `kind` is passed as a bare string literal by both callers, defeating the constants it was introduced for
-
-**Severity:** WARNING
-**File:** `app/pages/billing.py:197`, `app/pages/billing.py:259`
-
-**Issue:** `payment_service` defines `KIND_PACKAGE` / `KIND_SUBSCRIPTION`
-(lines 21-22) precisely so the writer and the webhook branch cannot drift, and
-`create_payment` makes `kind` keyword-only so "необновлённый вызывающий обязан
-упасть громко". Both call sites then hardcode the value:
-
-```python
-kind="subscription",   # app/pages/billing.py:197
-kind="package",        # app/pages/billing.py:259
-```
-
-A typo here does not fail loudly — it produces a row that
-`db_payment.kind == KIND_SUBSCRIPTION` evaluates false for, so the webhook takes
-the package branch and calls `add_messages(db, user_id, None, ...)`, which does
-`bal.balance += None` → `TypeError` → the route's `except Exception` returns
-500 → YooKassa retries the same notification until it gives up. The payment stays
-`pending` forever with the money taken.
-
-**Fix:** import and use the constants, and defend the branch.
-
-```python
-from app.services.payment_service import KIND_PACKAGE, KIND_SUBSCRIPTION, create_payment
+bal = await get_or_create_balance(db, user_id)   # reads balance
 ...
-kind=KIND_SUBSCRIPTION,
+bal.balance += free_limit                        # computes in Python
+await db.flush()                                 # writes an absolute value
 ```
 
+`reset_all_free_monthly` (line 148-160) loops over **every** user inside one
+transaction and commits once (`app/worker/tasks.py:938-942`). Under READ COMMITTED,
+any purchase webhook that commits between the read and the flush has its credit
+overwritten by the absolute write. The docstring on `add_messages` calls the
+eliminated race "недостижимость, а не малая вероятность" — that claim is only true
+for one of the two crediting paths in the file.
+
+**Fix:** same shape as `add_messages`.
+
 ```python
-# payment_service.handle_webhook, package branch
-if db_payment.messages_count is None:
-    logger.error("payment_package_without_count", yookassa_id=yookassa_id,
-                 kind=db_payment.kind)
+result = await db.execute(
+    update(MessageBalance)
+    .where(MessageBalance.user_id == user_id)
+    .values(balance=MessageBalance.balance + free_limit,
+            free_balance_reset_at=now)
+    .returning(MessageBalance.balance)
+    .execution_options(synchronize_session=False)
+)
+new_balance = result.scalar_one()
+set_committed_value(bal, "balance", new_balance)
+set_committed_value(bal, "free_balance_reset_at", now)
+```
+
+---
+
+### WR-02: The webhook guard is re-openable by a single unvalidated env var, and reports itself as enabled while doing so
+
+**File:** `app/config.py:102-108`; `app/routes/billing.py:100-103`
+**Severity:** WARNING
+
+`app/config.py:102-107` states the constraint as "⚠️ ЗАПРЕТ, А НЕ РЕКОМЕНДАЦИЯ" —
+but nothing enforces it. `_webhook_client_ip` accepts *any* header name:
+
+```python
+header_name = settings.yookassa_webhook_client_ip_header
+...
+raw = request.headers.get(header_name)
+```
+
+Set `YOOKASSA_WEBHOOK_CLIENT_IP_HEADER=X-Client-IP` (or `True-Client-IP`, or
+`CF-Connecting-IP` — any header the project's nginx does not touch) and the guard
+becomes a no-op that an attacker satisfies with one request header:
+
+```
+POST /api/billing/webhook
+X-Client-IP: 77.75.156.11
+{"event":"payment.succeeded","object":{"id":"<known payment id>"}}
+```
+
+`yookassa_webhook_verify_ip` remains `True` throughout, so every log line, every
+health signal and every operator dashboard reports the guard as *on*. This is a
+strictly worse failure mode than the kill switch, which at least names itself.
+
+The shipped default (`X-Real-IP`) is safe, is pinned in `docker-compose.prod.yml:27`,
+and is asserted by `test_the_shipped_default_header_name_is_x_real_ip` — so this is
+a hardening gap, not an active vulnerability. But the phase context asks explicitly
+whether the guard can be re-opened by configuration, and the answer is yes, silently.
+
+**Fix:** validate the header name against the set the project's own proxy
+overwrites, and fail loudly at construction rather than silently at request time.
+
+```python
+# app/config.py
+from pydantic import field_validator
+
+# Заголовки, которые nginx проекта ПЕРЕЗАПИСЫВАЕТ (`$remote_addr` на каждом
+# location). Заголовок, который прокси лишь ДОПИСЫВАЕТ либо не трогает вовсе,
+# подконтролен клиенту, и гард на нём — декорация, отчитывающаяся как защита.
+WEBHOOK_IP_HEADERS_OVERWRITTEN_BY_PROXY = frozenset({"", "x-real-ip"})
+
+@field_validator("yookassa_webhook_client_ip_header")
+@classmethod
+def _only_proxy_owned_headers(cls, value: str) -> str:
+    if value.strip().lower() not in WEBHOOK_IP_HEADERS_OVERWRITTEN_BY_PROXY:
+        raise ValueError(
+            f"YOOKASSA_WEBHOOK_CLIENT_IP_HEADER={value!r} не перезаписывается "
+            "прокси проекта: гард стал бы декоративным. Допустимо: X-Real-IP "
+            "или пусто (= отказ каждому уведомлению)."
+        )
+    return value
+```
+
+---
+
+### WR-03: The kill switch bypasses the only authentication on a money-crediting endpoint and logs nothing
+
+**File:** `app/routes/billing.py:179-185`
+**Severity:** WARNING
+
+```python
+if settings.yookassa_webhook_verify_ip:
+    client_ip = _webhook_client_ip(request, settings)
+    ...
+```
+
+When the switch is off the entire block is skipped in silence. Compare the adjacent
+failure mode: an unconfigured header name logs `webhook_ip_header_not_configured` at
+`error` level, precisely because "молча остановленный приём неотличим от отсутствия
+платежей" (line 91-98). The inverse — a silently *disabled* guard — is the more
+dangerous of the two and produces no trace at all.
+
+There is no compensating control behind it. The `yookassa` SDK carries no signature
+verification (correctly noted at line 145-150), the JSON purchase route that leaked
+`yookassa_payment_id` is gone, and there is no shared secret in the webhook URL. With
+`verify_ip=False`, possession of any payment id is sufficient to credit a subscription.
+
+**Fix:** make the bypass loud, so a forgotten `.env` line surfaces in log search.
+
+```python
+if settings.yookassa_webhook_verify_ip:
+    ...
+else:
+    # Уровень `error`: выключатель — аварийный, а не режим работы. Пока он
+    # выключен, вход не аутентифицирован ничем, и след об этом обязан быть в
+    # журнале на КАЖДОМ уведомлении, а не в чьей-то памяти о правке .env.
+    logger.error("webhook_ip_verification_disabled")
+```
+
+Longer term: register the webhook with YooKassa at a URL carrying a high-entropy
+path segment from `Settings`, so the kill switch is not a full bypass.
+
+---
+
+### WR-04: `"object": null` in a webhook body produces a 500 and a YooKassa retry loop
+
+**File:** `app/services/payment_service.py:282`
+**Severity:** WARNING
+
+```python
+obj = payment_data.get("object", {})
+yookassa_id = obj.get("id")
+```
+
+`dict.get(key, default)` returns the *stored* value when the key exists — so a body
+of `{"event":"payment.succeeded","object":null}` yields `obj is None` and
+`None.get("id")` raises `AttributeError`. That propagates to `yookassa_webhook`'s
+`except Exception` (line 200-202) and becomes a 500, which YooKassa treats as
+"retry later" — exactly the retry-storm outcome the module reasons about avoiding at
+lines 355-356 and 116-118. The `if not yookassa_id` guard immediately below never
+runs.
+
+**Fix:**
+
+```python
+# `or {}`, а не значение по умолчанию: у `get` умолчание не применяется, когда
+# ключ ЕСТЬ и несёт null, а тело приезжает из сети и обязано быть подозрительным.
+obj = payment_data.get("object") or {}
+if not isinstance(obj, dict):
+    logger.warning("webhook_object_not_an_object", yookassa_id=None)
     return False
 ```
 
 ---
 
-### WR-05: Blocking YooKassa SDK call inside an async handler, with no timeout and no error handling
+### WR-05: `GET /api/billing/transactions` passes unvalidated `limit`/`offset` straight to the query
 
-**Severity:** WARNING
-**File:** `app/services/payment_service.py:95-107`, `app/pages/billing.py:193-202`, `app/pages/billing.py:256-263`
-
-**Issue:** `YooPayment.create(...)` is the synchronous `requests`-based SDK call
-executed directly in the event loop of an `async def` handler. Until YooKassa
-answers, the worker serves no other request — and there is no timeout argument,
-so a hung TLS connection stalls the whole process, not just this user. There is
-also no `try/except`: any SDK error (network, 4xx from YooKassa, malformed
-`price` in config) propagates out of a *page* handler and gives the user a raw
-500 instead of a return to `/billing` with a notice, which is the pattern every
-other rejection in these two handlers uses.
-
-**Fix:**
-
-```python
-try:
-    payment = await asyncio.to_thread(YooPayment.create, {...}, idempotency_key)
-except Exception as exc:                      # SDK бросает своё дерево исключений
-    logger.error("payment_create_failed", user_id=user_id, kind=kind, error=str(exc))
-    raise PaymentCreationError from exc
-```
-
-and in both page handlers, catch `PaymentCreationError` and
-`return RedirectResponse(url="/billing?error=payment", status_code=302)`.
-
----
-
-### WR-06: An unprocessed webhook answers HTTP 200, so a payment YooKassa accepted is never retried and raises no alarm
-
-**Severity:** WARNING
-**File:** `app/routes/billing.py:171-172`, `app/services/payment_service.py:162-177`
-
-**Issue:** `handle_webhook` returns `False` for an unknown event, a body without
-`object.id`, and — most importantly — **a payment id that is not in our
-database**; the route turns all three into `200 {"ok": false}`. YooKassa treats
-2xx as delivered and stops retrying. The "payment id not in our database" case
-is reachable whenever `create_payment` created the payment at YooKassa but the
-subsequent `db.commit()` (line 121) failed: the customer can still pay, and the
-one notification we would have got is acknowledged and dropped, with only a
-`logger.warning` that nothing watches.
-
-**Fix:** distinguish "not ours / not interesting" (200, correct) from "ours but
-we could not process it" (5xx, so YooKassa retries), and alert on the unknown-id
-case:
-
-```python
-if db_payment is None:
-    logger.error("webhook_payment_not_found", yookassa_id=yookassa_id)
-    # НЕ 200: платёж мог быть заведён нами и потерян на коммите.
-    raise HTTPException(status_code=503, detail="Unknown payment")
-```
-
-At minimum, raise the unknown-id log from `warning` to `error` and add a metric
-so an accepted-but-uncredited payment is visible.
-
----
-
-### WR-07: "первый платёж" is mislabelled once the payment list hits its cap
-
-**Severity:** WARNING
-**File:** `app/templates/billing/balance.html:179-184`, `app/templates/billing/includes/payment_row.html:43-45`
-
-**Issue:** `first_payment_at` is built by iterating the **already capped** list
-(`get_payment_history(..., limit=PAYMENT_LIST_CAP)`), so "самая ранняя строка
-плана" is only the true first payment when nothing was truncated. When
-`payments_truncated` is true — the case the phase went out of its way to detect
-and announce — the oldest *displayed* renewal is labelled «первый платёж». The
-screen therefore prints a factual claim about payment history that is false in
-exactly the situation the cap warning is telling the user about.
-
-Secondary: the match is `first_payment_at.get(pay.plan) == pay.created_at`, so
-two payments for one plan sharing a `created_at` are both labelled first.
-
-**Fix:** suppress the label when the list is known to be incomplete.
-
-```jinja
-{{ payment_row(pay, user, PAY_COLS, PAY_LABELS,
-               {} if payments_truncated else first_payment_at) }}
-```
-
-or compute the true first-payment date server-side with a
-`min(created_at) GROUP BY plan` query.
-
----
-
-### WR-08: `/api/billing/transactions` accepts unvalidated `limit` / `offset`
-
-**Severity:** WARNING
 **File:** `app/routes/billing.py:30-38`
+**Severity:** WARNING
 
-**Issue:** (Pre-existing in a file this phase edits, and now the only remaining
-JSON write-adjacent surface.) `limit` and `offset` go straight into
-`.limit()` / `.offset()`:
+```python
+async def get_transactions(limit: int = 50, offset: int = 0, ...):
+    txs = await get_transaction_history(db, user_id, limit=limit, offset=offset)
+```
 
-- `?limit=-1` renders `LIMIT -1`. PostgreSQL raises `ERROR: LIMIT must not be
-  negative`, i.e. an authenticated user can 500 the endpoint at will.
-- `?limit=100000000` is unbounded — the whole transaction journal is
-  materialised into dicts in memory.
-- `?offset=-1` similarly errors on PostgreSQL.
+Both values reach `.limit()` / `.offset()` unbounded (`app/services/billing_service.py:179-180`).
+On PostgreSQL, `?limit=-1` and `?offset=-1` raise `LIMIT must not be negative` /
+`OFFSET must not be negative` → uncaught → 500. `?limit=100000000` is an unbounded
+result set materialised into a list of dicts. The rest of the phase is careful about
+exactly this class — `PAYMENT_LIST_CAP` (`app/constants.py:73-94`) and
+`WORKER_LIST_CAP` (`app/pages/common.py:386-395`) both exist because "число строк
+задаёт пользователь". This route has no such cap.
 
 **Fix:**
 
 ```python
 from fastapi import Query
 
+@router.get("/transactions")
 async def get_transactions(
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=TRANSACTION_API_CAP),
     offset: int = Query(0, ge=0),
     ...
+):
 ```
 
 ---
 
-### WR-09: The webhook grants paid resources purely on the notification body; the payment is never re-fetched from YooKassa
+### WR-06: The sidebar widget shows "∞" to users who have zero messages and cannot send at all
 
+**File:** `app/templates/base.html:76`; `app/pages/common.py:534-539`
 **Severity:** WARNING
-**File:** `app/services/payment_service.py:162-234`
-
-**Issue:** The only inputs to "grant a subscription month / credit N messages"
-are (a) the `event` string from the request body and (b) our own DB row. The
-notification's `object.status` and `object.amount` are never read, and
-`YooPayment.find_one(yookassa_id)` is never called. Since the SDK offers no
-signature verification (correctly noted in the docstring), the source-IP check is
-the *entire* authentication — and CR-01 shows that check currently fails open in
-production. Re-fetching the payment over the authenticated API is the standard
-YooKassa recommendation and turns a forged body into a no-op even if the IP guard
-is bypassed.
-
-**Fix:** confirm out-of-band before granting anything.
 
 ```python
-_configure_yookassa()
-remote = await asyncio.to_thread(YooPayment.find_one, yookassa_id)
-if remote.status != "succeeded" or remote.amount.value != db_payment.amount_value:
-    logger.error("webhook_payment_mismatch", yookassa_id=yookassa_id,
-                 remote_status=remote.status)
-    return False
+# app/pages/common.py
+if is_unlimited:
+    limit = 0
+else:
+    limit = used + remaining      # 0 + 0 == 0 for a fresh user
+```
+
+```jinja
+{# app/templates/base.html:76 #}
+{% if quota.get('limit', 0) > 0 %}{{ used }} / {{ limit }}{% else %}∞{% endif %}
+```
+
+`limit == 0` is the encoding for *unlimited*, but it is also what a non-unlimited
+user with no balance row produces. Registration does not create a `MessageBalance`
+row (no caller of `get_or_create_balance` outside `admin.py` and the send path), and
+`free_balance_reset_at` starts `None`, so every newly registered user renders `∞`
+until the monthly Celery beat runs.
+
+This phase changed the widget's label from `Тариф {{ plan }}` to `Баланс сообщений`
+(base.html:75). Before the change the `∞` plausibly read as "unlimited plan"; now it
+reads as "unlimited messages", which is the opposite of the truth —
+`check_balance` (`app/services/billing_service.py:32-38`) refuses every send for the
+same user. The `/billing` section is honest ("0 сообщений доступно"), so the two
+surfaces now contradict each other.
+
+Note the same conflation is called out in `app/config.py:69-73` and
+`app/application/billing/plan_usage.py:77-82` as a design rule — "Ноль неотличим от
+нулевого лимита" — and the shell quota is the one place that violates it.
+
+**Fix:** carry the unlimited flag explicitly instead of overloading `0`.
+
+```python
+# app/pages/common.py — in the returned "quota" dict
+"is_unlimited": is_unlimited,
+"limit": 0 if is_unlimited else used + remaining,
+```
+
+```jinja
+{# app/templates/base.html #}
+{% if quota.get('is_unlimited') %}∞{% else %}{{ quota.get('used', 0) }} / {{ quota.get('limit', 0) }}{% endif %}
 ```
 
 ---
 
-### WR-10: Config-driven `KeyError` / `TypeError` paths surface as 500s
+### WR-07: A malformed `PLAN_LIMITS` / `MESSAGE_PACKAGES` env var 500s the whole section, contradicting the module's stated invariant
 
+**File:** `app/config.py:116-121`; `app/pages/billing.py:187`, `414`
 **Severity:** WARNING
-**File:** `app/pages/billing.py:198`, `app/pages/billing.py:260-262`, `app/application/billing/plan_usage.py:116-118`
 
-**Issue:** The phase is consistent about "опечатка в окружении обязана стоить
-ненарисованной шкалы, а не пятисотки" — `plan_axes` and `billing_page` both use
-`.get()` with defaults for that reason. The purchase paths do not:
+```python
+@property
+def parsed_message_packages(self) -> list[dict]:
+    return json.loads(self.message_packages)
 
-- `selected["price"]` (line 198) — `KeyError` → 500 if a plan record has no price.
-- `package["name"] / ["count"] / ["price"]` (lines 260-262) — same.
-- `axis_percent`: `limit is None or limit <= 0` then `used * 100 / limit`. A
-  JSON string limit (`"ads": "3"`) passes `<= 0` comparison with `TypeError`
-  ("'<=' not supported between 'str' and 'int'") → 500 on `/billing`.
+@property
+def parsed_plan_limits(self) -> list[dict]:
+    return json.loads(self.plan_limits)
+```
 
-**Fix:** validate the parsed config once instead of trusting shape at every use
-site — e.g. a `PlanRecord` / `PackageRecord` pydantic model on `Settings` with
-`parsed_plan_limits` returning typed objects, so a malformed `PLAN_LIMITS` fails
-at startup rather than on a customer's checkout click. Short of that, use
-`.get()` with an explicit redirect back to `/billing` on missing keys, and
-coerce `limit` with `isinstance(limit, int)` in `axis_percent`.
+Unguarded. A malformed value raises `json.JSONDecodeError` at
+`app/pages/billing.py:187` (`billing_page`), `:326` (`subscribe_to_plan`), `:414`
+(`purchase_package`) and `app/routes/billing.py:27` (`list_packages`) — none of which
+catch it. The result is a 500 on the tariff section and both payment forms.
+
+`app/pages/billing.py:189-191` and `app/application/billing/plan_usage.py:131-135`
+both promise the opposite: "опечатка в ней обязана стоить одной ненарисованной
+шкалы, а не пятисотки на странице тарифов". That promise is kept for a *missing key*
+and broken for a *malformed document* — and a malformed document is the more likely
+operator error, since the value is a single-line JSON string in `.env`.
+
+This is the same family as known debt WR-10 (a string limit value crashing
+`axis_percent`) one level up the stack, and is not covered by it.
+
+**Fix:** validate once, at `Settings` construction, so a bad value fails at boot
+rather than on the first customer page view.
+
+```python
+@field_validator("plan_limits", "message_packages")
+@classmethod
+def _must_be_a_json_list(cls, value: str) -> str:
+    # Разбор ЗДЕСЬ, а не на рендере: опечатка в окружении обязана уронить
+    # запуск, где её увидит выкатывающий, а не страницу тарифов, где её
+    # увидит покупатель.
+    try:
+        parsed = json.loads(value)
+    except ValueError as exc:
+        raise ValueError(f"не разбирается как JSON: {exc}") from exc
+    if not isinstance(parsed, list):
+        raise ValueError("ожидался JSON-список записей")
+    return value
+```
+
+---
+
+### WR-08: "первый платёж" / "продление" is decided from a truncated, status-blind, in-page map
+
+**File:** `app/templates/billing/balance.html:217-222`; `app/templates/billing/includes/payment_row.html:43-45`
+**Severity:** WARNING
+
+```jinja
+{%- for pay in payments -%}
+  {%- if pay.kind == 'subscription' and pay.plan -%}
+    {%- set _ = first_payment_at.update({pay.plan: pay.created_at}) -%}
+  {%- endif -%}
+{%- endfor -%}
+```
+
+Three defects in one derivation:
+
+1. **Truncation.** `payments` is capped at `PAYMENT_LIST_CAP = 200`
+   (`app/pages/billing.py:214`). Past the cap, the oldest *visible* payment is
+   labelled "первый платёж" although it is a renewal. The section is otherwise
+   scrupulous about the cap naming itself (balance.html:207-211); this derived label
+   silently ignores it.
+2. **Status blindness.** `canceled` and `pending` rows enter the map. A failed first
+   attempt therefore claims "первый платёж" and the real first successful payment is
+   labelled "продление".
+3. **Equality on `created_at`.** Two rows for one plan sharing a timestamp are both
+   labelled first.
+
+**Fix:** compute the label where the data is, not in Jinja — e.g. a
+`first_subscription_payment_at(db, user_id) -> dict[str, datetime]` in
+`billing_service.py` that queries `MIN(created_at) GROUP BY plan WHERE
+status = 'succeeded'`, unaffected by the display cap, and pass the resulting map
+into the template as it is passed today.
+
+---
+
+### WR-09: An unexpected SDK response shape leaves a committed orphan `pending` payment — the exact outcome the ordering comment exists to prevent
+
+**File:** `app/services/payment_service.py:166-193`
+**Severity:** WARNING
+
+```python
+    db.add(db_payment)
+    await db.commit()          # line 178
+    ...
+    return {
+        "confirmation_url": payment.confirmation.confirmation_url,   # line 191
+        "payment_id": payment.id,
+    }
+```
+
+Lines 116-121 argue at length that the SDK call must precede the DB write, because a
+row left behind after a failure "означала бы платёж, которого у ЮKassa нет вовсе …
+висел бы `pending` вечно". Line 191 reintroduces the mirror image: it dereferences
+`payment.confirmation.confirmation_url` *after* the commit and *outside* the guarded
+block. If `confirmation` is absent or `None` for any response shape the SDK returns,
+the raised `AttributeError` is not a `PaymentCreationError`, so
+`app/pages/billing.py:362` and `:435` do not catch it — the user gets an unhandled
+500 while a committed `pending` row sits in `payments` forever.
+
+`payment.id` is likewise dereferenced at line 167 before the guard.
+
+**Fix:** validate the response before writing, and raise the module's own type.
+
+```python
+    confirmation_url = getattr(
+        getattr(payment, "confirmation", None), "confirmation_url", None
+    )
+    if not payment.id or not confirmation_url:
+        # Ответ без ссылки подтверждения — тот же исход, что и отказ создания:
+        # платить некуда. Строка в `payments` под него не заводится, иначе она
+        # повисла бы `pending` навсегда (тот же довод, что у порядка выше).
+        logger.error(
+            "payment_create_malformed_response",
+            user_id=user_id, kind=kind, plan=plan, amount=price,
+        )
+        raise PaymentCreationError("ЮKassa не вернула ссылку подтверждения")
+
+    db_payment = Payment(...)
+    db.add(db_payment)
+    await db.commit()
+```
 
 ## Info
 
-### IN-01: `add_messages(type=...)` shadows the `type` builtin
+### IN-01: Unused import `text`
 
-**Severity:** Info
-**File:** `app/services/billing_service.py:70`, called from `app/services/payment_service.py:231`
-**Issue:** Parameter named `type` shadows the builtin inside the function body.
-**Fix:** rename to `tx_type` (the column is `BalanceTransaction.type`, so keep
-the keyword at the call site via an explicit mapping).
-
----
-
-### IN-02: Revision 0017 leaves `server_default='package'` permanently on `payments.kind`
-
-**Severity:** Info
-**File:** `alembic/versions/0017_payment_kind_and_plan.py:50-58`
-**Issue:** The server default is the backfill mechanism (correctly explained),
-but it is never dropped, so any future INSERT that forgets `kind` silently
-becomes a package payment — the exact ambiguity the column was added to remove,
-and the input to the WR-04 failure mode.
-**Fix:** add `op.alter_column("payments", "kind", server_default=None)` after the
-backfill, as is conventional for `ADD COLUMN NOT NULL DEFAULT` backfills.
+**File:** `app/services/billing_service.py:4`
+`from sqlalchemy import select, update, func, text` — `text` has no use in the module
+(confirmed by `ruff --select F`: `F401`).
+**Fix:** `from sqlalchemy import select, update, func`
 
 ---
 
-### IN-03: `/api/billing/packages` advertises the catalogue even when payments are disabled
+### IN-02: Unused local `now`
 
-**Severity:** Info
+**File:** `app/services/billing_service.py:150`
+`reset_all_free_monthly` computes `now = datetime.now(timezone.utc)` and never reads
+it (`ruff`: `F841`). Each `reset_free_monthly` call computes its own.
+**Fix:** delete the line.
+
+---
+
+### IN-03: Dead defensive branch on `rowcount`
+
+**File:** `alembic/versions/0018_subscriptions_unique_user.py:112`
+```python
+deactivated = result.rowcount if result.rowcount is not None else -1
+```
+`CursorResult.rowcount` is documented to return `-1` when unavailable, never `None`,
+so the `else` branch is unreachable and the sentinel is produced by the driver anyway.
+**Fix:** `deactivated = result.rowcount`.
+
+---
+
+### IN-04: `GET /api/billing/packages` has no authentication, unlike its two neighbours
+
 **File:** `app/routes/billing.py:25-27`
-**Issue:** `billing_page` passes `packages = [] if not yookassa_enabled`
-(`app/pages/billing.py:137-139`) and the template shows "доступно через
-администратора"; the JSON route ignores the flag entirely, so the two surfaces
-disagree about whether packages are purchasable.
-**Fix:** `return {"packages": settings.parsed_message_packages if settings.yookassa_enabled else []}`.
+`get_balance` and `get_transactions` both depend on `get_current_user_id`;
+`list_packages` depends only on `get_settings`. The data is low-sensitivity (prices
+are on the public tariff page), but the asymmetry is unexplained in a file that
+documents every other decision, and it is a second unauthenticated entry point that
+inherits WR-07's 500-on-malformed-config.
+**Fix:** add `user_id: int = Depends(get_current_user_id)`, or document why this one
+route is public.
 
 ---
 
-### IN-04: `plan_axes` is handed the whole plan record, not a limits mapping
+### IN-05: `datetime.now(timezone.utc)` sampled three times in one render
 
-**Severity:** Info
-**File:** `app/pages/billing.py:91-93`, `app/application/billing/plan_usage.py:121-128`
-**Issue:** `limits` is documented as "ключи осей, значения — целое либо None",
-but the caller passes the full config record including `id`, `name` and `price`.
-It works because only four keys are read, but the type hint
-(`Mapping[str, int | None]`) is a lie about `price: str`. Related: an unknown
-plan id yields `current_plan = {}`, so all four axes render `∞` — a user whose
-plan was removed from `PLAN_LIMITS` is told they have no limits at all.
-**Fix:** pass `{k: current_plan.get(k) for k in AXIS_ORDER}` and log once when
-`current_plan_id` is not in the config.
+**File:** `app/pages/billing.py:228`, `237`
+`expired` and `live` are computed from two separate `datetime.now()` calls describing
+the same instant. Harmless today (the two predicates are strict complements around
+the boundary), but it makes the two flags derivable from different clocks.
+**Fix:** hoist `now = datetime.now(timezone.utc)` to the top of the handler and pass
+it to both.
 
 ---
 
-### IN-05: A fresh idempotency key per call means a double-clicked form creates two YooKassa payments
+### IN-06: Loop-invariant `live` evaluated inside the set comprehension
 
-**Severity:** Info
-**File:** `app/services/payment_service.py:94`
-**Issue:** `idempotency_key = str(uuid.uuid4())` is generated per invocation, so
-the key provides no idempotency across retries of the *same user intent* — two
-form submissions create two YooKassa payments and two `pending` rows in the
-history. Only one will be paid, but the journal shows two "в обработке" lines.
-**Fix:** derive the key from a stable intent (e.g. `f"{user_id}:{kind}:{plan or package_index}:{minute_bucket}"`),
-or add a `data-plan-cta` submit-once guard as progressive enhancement.
-
----
-
-### IN-06: The expired-subscription "Продлить" button can render for a plan the handler always rejects
-
-**Severity:** Info
-**File:** `app/templates/billing/balance.html:95-100`
-**Issue:** The button is gated on `payments_enabled and current_in_config`, and
-`free` *is* in the config — so a subscription row with `plan='free'` and a past
-`expires_at` renders a "Продлить" button that posts `plan=free`, which
-`subscribe_to_plan` rejects at `app/pages/billing.py:190` with a silent redirect
-back to the same page. A control that does nothing reads as a broken payment
-flow.
-**Fix:** add `and subscription.plan != 'free'` to the condition, mirroring
-`FREE_PLAN_ID` on the handler side.
+**File:** `app/pages/billing.py:238-244`
+```python
+refused_plan_ids = {
+    plan["id"] for plan in plans
+    if plan.get("id") and live and _switch_is_refused(current_plan_id, plan["id"])
+}
+```
+`live` does not depend on `plan`. Reads as if it might.
+**Fix:** `refused_plan_ids = {...} if live else set()`.
 
 ---
 
-_Reviewed: 2026-08-16T05:35:12Z_
+### IN-07: A paid subscription can be recorded with `plan="free"`
+
+**File:** `app/services/payment_service.py:466`
+```python
+Subscription(user_id=..., plan=db_payment.plan or "free", ...)
+```
+A `kind="subscription"` payment with a NULL `plan` silently creates a *free* tier
+subscription for money taken. Not reachable through `subscribe_to_plan` (which always
+passes `selected["id"]`), but the fallback converts a data defect into a plausible
+lie rather than a loud failure — the opposite of the "плану, которого там нет, ранг
+НЕ УГАДЫВАЕТСЯ" rule in `app/constants.py:61-65`.
+**Fix:** log at `error` and skip the plan assignment rather than substituting `free`.
+
+---
+
+_Reviewed: 2026-08-16_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
