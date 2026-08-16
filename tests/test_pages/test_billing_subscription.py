@@ -119,7 +119,10 @@ async def test_subscribe_rejects_the_free_plan(
     response = await _subscribe(authed_client, plan="free")
 
     assert response.status_code == 302
-    assert response.headers["location"] == "/billing"
+    # С плана 05-10 возврат несёт причину: молчаливый редирект на неизменившуюся
+    # страницу читался как «кнопка сломана». Закрытость множества кодов держит
+    # tests/test_pages/test_billing_payment_errors.py.
+    assert response.headers["location"] == "/billing?error=plan"
     count = await db_session.scalar(select(func.count()).select_from(Payment))
     assert count == 0
 
@@ -131,7 +134,7 @@ async def test_subscribe_rejects_an_unknown_plan(
     response = await _subscribe(authed_client, plan="platinum")
 
     assert response.status_code == 302
-    assert response.headers["location"] == "/billing"
+    assert response.headers["location"] == "/billing?error=plan"
     count = await db_session.scalar(select(func.count()).select_from(Payment))
     assert count == 0
 

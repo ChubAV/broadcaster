@@ -48,6 +48,25 @@ KNOWN_EVENTS = frozenset(
 )
 
 
+class PaymentCreationError(Exception):
+    """ЮKassa не создала платёж. Своё исключение модуля, а не чужое дерево.
+
+    ЗАЧЕМ ОТДЕЛЬНЫЙ ТИП. Вызывающий обязан отличить «платёж не создан» от любой
+    другой поломки, и делать это по типу исключения SDK он не может: дерево
+    исключений `yookassa` — чужой контракт, который меняется без нашего ведома,
+    а сетевые отказы приходят из `requests` вовсе не через него. Ловить здесь
+    `Exception` и поднимать СВОЙ тип — единственный способ дать вызывающему
+    ветку, которая не разъедется с версией SDK.
+
+    ТЕКСТ ЧУЖОГО ИСКЛЮЧЕНИЯ В ЭТОТ ОБЪЕКТ НЕ КЛАДЁТСЯ. Он уходит в журнал ключом
+    `payment_create_failed` и НИКОГДА на экран (T-05-47): прецедент R-03-09
+    Фазы 3 — раскрытие текста стороннего исключения в плашке — принят владельцем
+    риском severity medium, и повторять его на ДЕНЕЖНОМ пути не следует.
+    Исходное исключение остаётся доступным через `__cause__` для отладчика,
+    который читает трассировку, а не страницу.
+    """
+
+
 def _configure_yookassa():
     settings = get_settings()
     Configuration.account_id = settings.yookassa_shop_id
@@ -94,19 +113,55 @@ async def create_payment(
         }
 
     idempotency_key = str(uuid.uuid4())
-    payment = YooPayment.create(
-        {
-            "amount": {"value": price, "currency": "RUB"},
-            "confirmation": {
-                "type": "redirect",
-                "return_url": settings.yookassa_return_url or f"{settings.app_name}/billing",
+    # ВЫЗОВ SDK СТОИТ ДО ЗАПИСИ В БД, И ЭТОТ ПОРЯДОК ОБЯЗАТЕЛЕН (T-05-49).
+    # Строка `payments`, оставшаяся после отказа, означала бы платёж, которого у
+    # ЮKassa нет вовсе: он не пришёл бы ни успехом, ни отменой и висел бы
+    # `pending` вечно, показывая пользователю «в обработке» там, где обработки
+    # не начиналось.
+    #
+    # ЛОВИТСЯ `Exception`, А НЕ ТИП ИЗ SDK. Отказ приезжает и своим деревом
+    # исключений `yookassa`, и сетевым исключением `requests` из-под него, и
+    # разбором чужого ответа. Перечислить это множество нельзя, а всякий
+    # непойманный его элемент — необработанная пятисотка на кнопке оплаты.
+    # `KeyboardInterrupt` и `SystemExit` наследуются от `BaseException` и сюда
+    # намеренно не попадают.
+    try:
+        payment = YooPayment.create(
+            {
+                "amount": {"value": price, "currency": "RUB"},
+                "confirmation": {
+                    "type": "redirect",
+                    "return_url": settings.yookassa_return_url or f"{settings.app_name}/billing",
+                },
+                "capture": True,
+                "description": description,
+                "metadata": metadata,
             },
-            "capture": True,
-            "description": description,
-            "metadata": metadata,
-        },
-        idempotency_key,
-    )
+            idempotency_key,
+        )
+    except Exception as exc:
+        # СЛЕД ОБЯЗАТЕЛЕН (T-05-48). Отказ без записи в журнале превращает
+        # жалобу «я нажал, ничего не произошло» в непроверяемую: на экране
+        # человек видит одну фиксированную строку, и различить по ней сеть,
+        # неверный ключ магазина и отвергнутую сумму невозможно.
+        #
+        # Уровень `error`, а не `warning`: этот отказ останавливает приём денег,
+        # и в потоке предупреждений он потерялся бы (тот же выбор, что у
+        # `webhook_ip_header_not_configured`).
+        logger.error(
+            "payment_create_failed",
+            user_id=user_id,
+            kind=kind,
+            plan=plan,
+            package_name=package_name,
+            messages=messages_count,
+            amount=price,
+            error_type=type(exc).__name__,
+            error=str(exc),
+        )
+        raise PaymentCreationError(
+            "ЮKassa не создала платёж"
+        ) from exc
 
     db_payment = Payment(
         user_id=user_id,

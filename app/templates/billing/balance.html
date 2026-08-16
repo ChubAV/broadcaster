@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/alert.html" import alert %}
 {% from "components/card.html" import card_open, card_close %}
 {% from "components/table.html" import rowhead, row_open, row_close, cell %}
 {% from "components/badge.html" import badge %}
@@ -71,6 +72,23 @@
 
 <div data-stack>
 
+  {#- ПРИЧИНА ОТКАЗА ЧИТАЕТСЯ РАНЬШЕ НЕИЗМЕНИВШИХСЯ ЧИСЕЛ (U1, U2, U3). Плашка
+      стоит ПЕРВОЙ в разделе намеренно: под блоком текущего тарифа её прочитали
+      бы уже после вывода «ничего не изменилось, кнопка сломана».
+
+      Приезжает ГОТОВАЯ СТРОКА из закрытого отображения обработчика
+      (`_payment_error_message`), а не код и не значение параметра запроса
+      (T-05-46): подставить сюда произвольный текст через адрес невозможно,
+      потому что подставлять нечего. Макрос `alert` берёт значение параметром и
+      сам `request` не читает — правило выписано в его докстринге.
+
+      Ни одного тега скрипта здесь не появляется: раздел не несёт их вовсе
+      (основание снятия D1-D6), и плашка приезжает отрисованной серверным
+      обходом. -#}
+  {% if error_message %}
+  <div data-payment-error>{{ alert(error_message, 'error') }}</div>
+  {% endif %}
+
   {# ===== 1. Текущий тариф и срок ===== #}
   {{ card_open(title='Текущий тариф') }}
     <div data-metric-line>
@@ -92,7 +110,13 @@
         разных ответа на один вопрос. Меняется ТОЛЬКО показ. -#}
     {{ mono('Срок подписки истёк ' ~ format_datetime_for_user(subscription.expires_at, user)
             ~ ' — ничего не отключено, продлите тариф, когда будет удобно', 'warn') }}
-    {% if payments_enabled and current_in_config %}
+    {#- IN-06: `free` ЕСТЬ в перечне конфига, поэтому одной проверки
+        `current_in_config` мало — она пропускала бесплатный тариф с прошедшим
+        сроком, и кнопка «Продлить» упиралась в отказ обработчика. Управляющий
+        элемент, который ничего не делает, читается как сломанный платёжный
+        путь. Идентификатор приезжает ЗЕРКАЛОМ FREE_PLAN_ID из обработчика, а
+        не выписан здесь второй копией. -#}
+    {% if payments_enabled and current_in_config and subscription.plan != free_plan_id %}
     <form method="post" action="/billing/subscribe" data-plan-cta>
       <input type="hidden" name="plan" value="{{ subscription.plan }}">
       <button class="btn btn--primary" type="submit"><span class="btn__label">Продлить</span></button>

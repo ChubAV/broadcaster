@@ -18,6 +18,7 @@ from app.services.billing_service import (
 from app.services.payment_service import (
     KIND_PACKAGE,
     KIND_SUBSCRIPTION,
+    PaymentCreationError,
     create_payment,
 )
 from app.pages.common import (
@@ -38,6 +39,44 @@ FREE_PLAN_ID = "free"
 # Потолок истории операций по балансу сообщений. Это ДРУГОЙ журнал и другой
 # потолок: он считает штуки сообщений и живёт своим блоком экрана.
 TRANSACTION_LIST_LIMIT = 20
+
+
+# ЗАКРЫТОЕ МНОЖЕСТВО ПРИЧИН ОТКАЗА (U1, U2, U3, T-05-46).
+#
+# Раздел, который берёт деньги, обязан отвечать на отказ словами. До этого
+# отображения все ветки гардов возвращали ГОЛЫЙ редирект на `/billing`: человек
+# нажимал «Оплатить» и получал ту же самую страницу без единого слова — а это
+# читается как «кнопка сломана», и следующим действием становится повторное
+# нажатие. Из отрисованной разметки эти ветки недостижимы, но УСТАРЕВШАЯ
+# СТРАНИЦА достижима: администратор выключает платежи или план уходит из
+# конфига между отрисовкой и нажатием.
+#
+# ПОЧЕМУ МНОЖЕСТВО ЗАКРЫТО. В разметку уходит строка ИЗ ЭТОГО отображения, а не
+# значение параметра запроса, поэтому подставить через адрес произвольный текст
+# невозможно. Это НЕДОСТИЖИМОСТЬ, а не экранирование: подставлять нечего,
+# потому что вход в разметку не связан со входом из адреса. Тем же приёмом
+# закрыт признак исхода повтора отправки (RETRY_NOTICES, app/pages/history.py).
+#
+# ТЕКСТ СТОРОННЕГО ИСКЛЮЧЕНИЯ СЮДА НЕ ПОПАДАЕТ НИ ПРИ КАКИХ УСЛОВИЯХ (T-05-47):
+# он уходит в журнал ключом `payment_create_failed`, а на экран — одна из этих
+# четырёх строк.
+PAYMENT_ERROR_MESSAGES = {
+    "payment": "Не удалось начать оплату — попробуйте ещё раз через минуту",
+    "disabled": "Оплата сейчас недоступна — обратитесь к администратору",
+    "plan": "Этот тариф больше не предлагается — обновите страницу и выберите другой",
+    "package": "Этот пакет больше не предлагается — обновите страницу и выберите другой",
+}
+
+
+def _payment_error_message(code: str | None) -> str:
+    """Код причины отказа → готовая строка. Неизвестный код даёт пустую.
+
+    Пустая строка означает «плашки нет вовсе», а не «плашка без текста»:
+    неизвестный код не имеет права ни напечатать себя, ни нарисовать пустую
+    рамку, потому что владелец ссылки не должен уметь сообщить пользователю о
+    событии, которого не было.
+    """
+    return PAYMENT_ERROR_MESSAGES.get(code or "", "")
 
 
 @router.get("/billing", response_class=HTMLResponse)
@@ -66,6 +105,12 @@ async def billing_page(
     Пользователь, вернувшийся до прихода уведомления, видит свой платёж СТРОКОЙ
     истории в статусе «в обработке» — то есть узнаёт, что деньги в обработке, а
     не что оплата не прошла.
+
+    ПАРАМЕТР `error` ТОЛЬКО ПОКАЗЫВАЕТ И НИЧЕГО НЕ МЕНЯЕТ. Он приезжает
+    перенаправлением от форм оплаты и прогоняется через закрытое отображение
+    `_payment_error_message`; в контекст уходит ГОТОВАЯ СТРОКА, а не код и не
+    значение параметра (T-05-46). Запрет на запись из этого обработчика
+    параметр не ослабляет ни на йоту.
     """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
@@ -147,6 +192,15 @@ async def billing_page(
             "payments_cap": PAYMENT_LIST_CAP,
             "payments_truncated": payments_total > PAYMENT_LIST_CAP,
             "payments_enabled": settings.yookassa_enabled,
+            # ГОТОВАЯ СТРОКА, а не код: значение параметра запроса в разметку не
+            # уходит ни значением, ни атрибутом (T-05-46).
+            "error_message": _payment_error_message(
+                request.query_params.get("error")
+            ),
+            # Зеркало FREE_PLAN_ID для разметки: бесплатный тариф ЕСТЬ в
+            # перечне конфига, поэтому проверки «план есть в конфиге» мало,
+            # чтобы не нарисовать ему кнопку оплаты (IN-06).
+            "free_plan_id": FREE_PLAN_ID,
             "active_page": "billing",
         },
     )
@@ -182,30 +236,40 @@ async def subscribe_to_plan(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
+    # СВЕРКА ИСТОЧНИКА ОСТАЁТСЯ 403 БЕЗ ПРИЧИНЫ. Чужому источнику причина
+    # отказа не сообщается: межсайтовый запрос не имеет права узнать даже,
+    # включены ли платежи. Порядок проверок не меняется — сначала кто пришёл,
+    # потом откуда, потом что просит.
     if not is_same_origin(request):
         return Response(status_code=403)
 
     if not settings.yookassa_enabled:
-        return RedirectResponse(url="/billing", status_code=302)
+        return RedirectResponse(url="/billing?error=disabled", status_code=302)
 
     selected = next(
         (p for p in settings.parsed_plan_limits if p.get("id") == plan), None
     )
     if selected is None or selected.get("id") == FREE_PLAN_ID:
-        return RedirectResponse(url="/billing", status_code=302)
+        return RedirectResponse(url="/billing?error=plan", status_code=302)
 
-    result = await create_payment(
-        db,
-        user_id=user.id,
-        # Предмет покупки — КОНСТАНТОЙ, никогда голым литералом (WR-04):
-        # опечатка в литерале не падает громко, а уводит подписочный платёж в
-        # пакетную ветку вебхука с пустым `messages_count`.
-        kind=KIND_SUBSCRIPTION,
-        plan=selected["id"],
-        price=selected["price"],
-        package_name=None,
-        messages_count=None,
-    )
+    try:
+        result = await create_payment(
+            db,
+            user_id=user.id,
+            # Предмет покупки — КОНСТАНТОЙ, никогда голым литералом (WR-04):
+            # опечатка в литерале не падает громко, а уводит подписочный платёж
+            # в пакетную ветку вебхука с пустым `messages_count`.
+            kind=KIND_SUBSCRIPTION,
+            plan=selected["id"],
+            price=selected["price"],
+            package_name=None,
+            messages_count=None,
+        )
+    except PaymentCreationError:
+        # Текст исключения СЮДА НЕ ПРИХОДИТ И НЕ НУЖЕН: он уже записан журналом
+        # сервиса ключом `payment_create_failed`. На экран уезжает код причины,
+        # а строку по нему подбирает `_payment_error_message` (T-05-47).
+        return RedirectResponse(url="/billing?error=payment", status_code=302)
     return RedirectResponse(url=result["confirmation_url"], status_code=302)
 
 
@@ -245,27 +309,35 @@ async def purchase_package(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
+    # Та же оговорка, что у соседней формы: чужому источнику причина отказа не
+    # сообщается, и сверка стоит ДО любого обращения к БД.
     if not is_same_origin(request):
         return Response(status_code=403)
 
     if not settings.yookassa_enabled:
-        return RedirectResponse(url="/billing", status_code=302)
+        return RedirectResponse(url="/billing?error=disabled", status_code=302)
 
     packages = settings.parsed_message_packages
+    # НЕЧИСЛОВОЙ И ВНЕДИАПАЗОННЫЙ ИНДЕКС ВЕДУТ В ОДНУ ПРИЧИНУ: для человека это
+    # один случай — «этого пакета нет», — а различие между ними принадлежит
+    # разбору запроса, а не экрану.
     try:
         index = int(package_index)
     except (TypeError, ValueError):
-        return RedirectResponse(url="/billing", status_code=302)
+        return RedirectResponse(url="/billing?error=package", status_code=302)
     if index < 0 or index >= len(packages):
-        return RedirectResponse(url="/billing", status_code=302)
+        return RedirectResponse(url="/billing?error=package", status_code=302)
 
     package = packages[index]
-    result = await create_payment(
-        db,
-        user_id=user.id,
-        kind=KIND_PACKAGE,
-        package_name=package["name"],
-        messages_count=package["count"],
-        price=package["price"],
-    )
+    try:
+        result = await create_payment(
+            db,
+            user_id=user.id,
+            kind=KIND_PACKAGE,
+            package_name=package["name"],
+            messages_count=package["count"],
+            price=package["price"],
+        )
+    except PaymentCreationError:
+        return RedirectResponse(url="/billing?error=payment", status_code=302)
     return RedirectResponse(url=result["confirmation_url"], status_code=302)
