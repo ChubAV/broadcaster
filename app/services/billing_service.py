@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import structlog
 from sqlalchemy import select, update, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.message_balance import MessageBalance
 from app.models.balance_transaction import BalanceTransaction
@@ -71,22 +72,50 @@ async def add_messages(
     description: str | None = None,
     payment_id: str | None = None,
 ) -> int:
-    """Add messages to balance. Returns new balance."""
+    """Начисляет сообщения на баланс. Возвращает новый баланс.
+
+    ПРИРАЩЕНИЕ СЧИТАЕТ СУБД, А НЕ PYTHON (T-05-36). Прежняя пара
+    «прочитали строку → прибавили в Python → записали» теряла одно из двух
+    наложившихся начислений: обе стороны читали одно и то же старое значение и
+    обе записывали своё, затирая чужое. Выражение `balance + amount` считается
+    на стороне СУБД внутри одного оператора, поэтому потерять запись НЕЧЕМ —
+    это недостижимость, а не малая вероятность.
+
+    `get_or_create_balance` остаётся: строка баланса обязана существовать до
+    приращения, иначе UPDATE не заденет ни одной строки.
+
+    ПОДПИСЬ И ВОЗВРАЩАЕМОЕ ЗНАЧЕНИЕ НЕ МЕНЯЮТСЯ — у функции есть другие
+    вызывающие (`app/pages/admin.py`), и ключевое слово `type` тоже остаётся
+    прежним намеренно (IN-01): его переименование правит все вызовы и к защите
+    от двойного начисления отношения не имеет.
+    """
     bal = await get_or_create_balance(db, user_id)
-    bal.balance += amount
-    await db.flush()
+
+    result = await db.execute(
+        update(MessageBalance)
+        .where(MessageBalance.user_id == user_id)
+        .values(balance=MessageBalance.balance + amount)
+        .returning(MessageBalance.balance)
+        .execution_options(synchronize_session=False)
+    )
+    new_balance = result.scalar_one()
+
+    # Значение ставится как ЗАГРУЖЕННОЕ, а не присваиванием: присваивание
+    # пометило бы объект грязным, и ORM выдала бы на flush второй UPDATE — то
+    # есть прибавила бы `amount` ещё раз поверх уже посчитанного СУБД.
+    set_committed_value(bal, "balance", new_balance)
 
     tx = BalanceTransaction(
         user_id=user_id,
         amount=amount,
-        balance_after=bal.balance,
+        balance_after=new_balance,
         type=type,
         description=description,
         payment_id=payment_id,
     )
     db.add(tx)
     await db.flush()
-    return bal.balance
+    return new_balance
 
 
 async def reset_free_monthly(db: AsyncSession, user_id: int, free_limit: int) -> bool:
