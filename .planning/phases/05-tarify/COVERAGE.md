@@ -39,6 +39,61 @@ re-decided for the subscription surface as well.
 | `sbp_banks` | OPT-OUT | not needed — confirmation is `redirect` only; ЮKassa's own payment page owns method selection. |
 | `settings` (`me`) | OPT-OUT | not needed — shop identity is configured through `YOOKASSA_SHOP_ID` / `YOOKASSA_SECRET_KEY`; no runtime introspection is used. |
 
+---
+
+## Line-by-line reconciliation against the code (plan 05-06, task 3, 2026-08-16)
+
+Every INTEGRATE row was checked against `app/` at the end of the phase, and every
+OPT-OUT row was checked for the opposite failure — a capability implemented «заодно»,
+without a decision. An unplanned implementation is as much an unclosed question as a
+missed one.
+
+**INTEGRATE — all six have an implementation:**
+
+| capability | implementation | verified |
+|---|---|---|
+| `payments.create` | `YooPayment.create(...)` — `app/services/payment_service.py:95` | ✅ the only SDK payment call in the project |
+| `payments.confirmation` (type `redirect`) | `{"type": "redirect", "return_url": ...}` — `app/services/payment_service.py:98-101`; consumed as `RedirectResponse(..., 302)` — `app/pages/billing.py:202` (подписка) и `:264` (пакеты) | ✅ both purchase kinds |
+| `payments.metadata` | `metadata` собирается по ветке `kind` — `app/services/payment_service.py:80-92`, передаётся `:104` | ✅ несёт `user_id`/`kind`/`plan`; источником истины на вебхуке НЕ служит (`:158`) |
+| webhook `payment.succeeded` | `KNOWN_EVENTS` — `app/services/payment_service.py:41-46`; ветка успеха `:212-245`; `_extend_subscription` `:215-216` | ✅ единственный писатель `expires_at` (D-05) |
+| webhook `payment.canceled` | `KNOWN_EVENTS` `:44`; ветка отмены `:185-210` | ⚠️ **зелёная в тестах, НЕ проверена в проде** — см. ниже |
+| `SecurityHelper.is_ip_trusted` | `_is_trusted_source` — `app/routes/billing.py:101`; вызов гарда `:152-158` | ✅ стоит до `request.json()`, вне `try`, отказ остаётся 403 |
+
+**OPT-OUT — ни одна не реализована «заодно».** Проверено grep'ом по `app/`: единственный
+вызов SDK во всём приложении — `YooPayment.create` (`app/services/payment_service.py:95`),
+поэтому `payments.find_one`, `payments.list`, `payments.capture` и `payments.cancel`
+отсутствуют по построению (`capture: True` ставится при создании — `:102`, отдельного шага
+захвата нет, ровно как записано в матрице). `refunds.*`, `receipts.*`, `payouts.*`,
+`deals.*`, `personal_data.*`, `invoices.*`, `sbp_banks`, `settings (me)`, сохранённые
+способы оплаты и `webhooks.*` не встречаются в `app/` ни одной строкой. `KNOWN_EVENTS`
+содержит ровно два события, остальные пять объявленных SDK возвращают `False`
+(`app/services/payment_service.py:39-46`).
+
+**⚠️ Оговорка к строке `payment.canceled`, без которой матрица врёт.** Решение INTEGRATE
+исполнено В КОДЕ и покрыто тестами, но состав рассылаемых событий задаётся ВНЕ
+репозитория и кодом не проверяется (T-05-33). Владелец **не подтвердил** включение
+подписки на это событие в кабинете ЮKassa (D-27). Пока она не включена, уведомление об
+отмене просто не приходит, отменённый платёж в проде остаётся `pending` навсегда, и
+критерий 3 фазы на боевом стенде показывает неправду. Включение: Личный кабинет ЮKassa →
+Интеграция → HTTP-уведомления → выбор событий; URL уведомления обязан указывать на
+`POST /api/billing/webhook` боевого домена.
+
+**⚠️ Вторая оговорка ко всем шести строкам.** Решением D-26 (`defer-deploy`) ревизия `0017`
+на боевую базу не выкачена — прод остаётся на `0012`. Колонок `payments.kind` и
+`payments.plan` там нет, `messages_count` всё ещё `NOT NULL`, поэтому в проде НЕ работает
+ни одна строка подписочной ветки: платёж не запишется. Матрица описывает состояние
+репозитория, а не боевого стенда.
+
+**⚠️ Третья оговорка — к строке `SecurityHelper.is_ip_trusted`.** Гард в проде читает адрес
+заголовком, а не из `request.client.host`, поэтому до выката в `.env` прода обязана быть
+задана переменная `YOOKASSA_WEBHOOK_CLIENT_IP_HEADER=X-Real-IP`. Без неё гард увидит адрес
+контейнера nginx и отвергнет **каждое** настоящее уведомление, молча остановив приём
+денег. Аварийный выход — `YOOKASSA_WEBHOOK_VERIFY_IP=false`. Правок nginx или
+docker-compose не требуется: nginx проекта уже ставит `proxy_set_header X-Real-IP
+$remote_addr` на каждом location, то есть затирает присланное клиентом.
+
+---
+
 **Non-existent capability (documented for the record):** `SecurityHelper.verify_webhook_signature`
 appears in Context7's documentation for this SDK but **does not exist** in the
 installed `yookassa==3.10.0` (`security_helper.py` has exactly two methods, both
