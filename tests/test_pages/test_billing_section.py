@@ -491,11 +491,16 @@ async def test_purchase_rejects_an_index_the_config_does_not_have(
     Нечисловое значение обязано вести туда же: страничная форма не имеет права
     отвечать страницей ошибки разбора — её видел бы пользователь, а не клиент
     JSON-API.
+
+    С плана 05-10 возврат несёт ПРИЧИНУ: голый редирект на неизменившуюся
+    страницу читался как «кнопка сломана». Само содержание причины и закрытость
+    множества кодов держит `test_billing_payment_errors.py`; здесь проверяется
+    только, что покупка не состоялась и след её не остался.
     """
     response = await _purchase(authed_client, data={"package_index": index})
 
     assert response.status_code == 302
-    assert response.headers["location"] == "/billing"
+    assert response.headers["location"] == "/billing?error=package"
     assert await _payments_count(db_session) == 0
 
 
@@ -510,7 +515,9 @@ async def test_purchase_creates_nothing_when_payments_are_disabled(
         test_settings.yookassa_enabled = True
 
     assert response.status_code == 302
-    assert response.headers["location"] == "/billing"
+    # С плана 05-10 отказ несёт причину: страница могла быть отрисована ДО того,
+    # как администратор выключил платежи.
+    assert response.headers["location"] == "/billing?error=disabled"
     assert await _payments_count(db_session) == 0
 
 
@@ -587,11 +594,26 @@ def test_the_section_markup_carries_no_script_at_all():
     JavaScript и где ошибка сообщается диалогом оповещения вместо разметки.
     Проверка идёт по исходнику шаблона, а не по выдаче: в выдаче есть теги
     скриптов шелла (htmx и Alpine), и утверждение по HTML было бы про них.
+
+    ⚠️ МАРКЕР `alert(` СЧИТАЕТСЯ ТОЛЬКО ВНЕ ВЫРАЖЕНИЙ JINJA. Предмет запрета —
+    БРАУЗЕРНЫЙ ДИАЛОГ `window.alert(...)`, стоявший здесь вместо разметки. Но
+    точно так же называется общий макрос плашки (`components/alert.html`),
+    которым план 05-10 рисует причину отказа оплаты, — и он ровно та самая
+    разметка, ради которой диалог был убран. Голый поиск подстроки не различал
+    эти два случая и запрещал бы правильное решение вместе с неправильным,
+    поэтому конструкции Jinja вырезаются до сверки.
     """
     source = BALANCE_HTML.read_text(encoding="utf-8")
 
-    for marker in ("<script", "alert(", "fetch(", "onclick", "purchasePackage"):
+    for marker in ("<script", "fetch(", "onclick", "purchasePackage"):
         assert marker not in source, marker
+
+    # `{{ ... }}`, `{% ... %}` и `{# ... #}` — не JavaScript ни при каких
+    # условиях: они исполняются на сервере и до браузера не доезжают вовсе.
+    without_jinja = re.sub(r"\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}", "", source, flags=re.S)
+    assert "alert(" not in without_jinja, (
+        "в разметке раздела снова появился браузерный диалог оповещения"
+    )
 
 
 def test_the_section_markup_imports_all_three_partials():

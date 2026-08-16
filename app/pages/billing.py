@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.analytics.send_analytics import normalize_utc
 from app.application.billing.plan_usage import plan_axes
 from app.config import Settings
-from app.constants import PAYMENT_LIST_CAP
+from app.constants import PAYMENT_LIST_CAP, PLAN_ORDER
 from app.dependencies import get_db, get_settings
 from app.services.billing_service import (
     count_payments,
@@ -18,6 +18,7 @@ from app.services.billing_service import (
 from app.services.payment_service import (
     KIND_PACKAGE,
     KIND_SUBSCRIPTION,
+    PaymentCreationError,
     create_payment,
 )
 from app.pages.common import (
@@ -38,6 +39,103 @@ FREE_PLAN_ID = "free"
 # Потолок истории операций по балансу сообщений. Это ДРУГОЙ журнал и другой
 # потолок: он считает штуки сообщений и живёт своим блоком экрана.
 TRANSACTION_LIST_LIMIT = 20
+
+
+# ЗАКРЫТОЕ МНОЖЕСТВО ПРИЧИН ОТКАЗА (U1, U2, U3, T-05-46).
+#
+# Раздел, который берёт деньги, обязан отвечать на отказ словами. До этого
+# отображения все ветки гардов возвращали ГОЛЫЙ редирект на `/billing`: человек
+# нажимал «Оплатить» и получал ту же самую страницу без единого слова — а это
+# читается как «кнопка сломана», и следующим действием становится повторное
+# нажатие. Из отрисованной разметки эти ветки недостижимы, но УСТАРЕВШАЯ
+# СТРАНИЦА достижима: администратор выключает платежи или план уходит из
+# конфига между отрисовкой и нажатием.
+#
+# ПОЧЕМУ МНОЖЕСТВО ЗАКРЫТО. В разметку уходит строка ИЗ ЭТОГО отображения, а не
+# значение параметра запроса, поэтому подставить через адрес произвольный текст
+# невозможно. Это НЕДОСТИЖИМОСТЬ, а не экранирование: подставлять нечего,
+# потому что вход в разметку не связан со входом из адреса. Тем же приёмом
+# закрыт признак исхода повтора отправки (RETRY_NOTICES, app/pages/history.py).
+#
+# ТЕКСТ СТОРОННЕГО ИСКЛЮЧЕНИЯ СЮДА НЕ ПОПАДАЕТ НИ ПРИ КАКИХ УСЛОВИЯХ (T-05-47):
+# он уходит в журнал ключом `payment_create_failed`, а на экран — одна из этих
+# четырёх строк.
+PAYMENT_ERROR_MESSAGES = {
+    "payment": "Не удалось начать оплату — попробуйте ещё раз через минуту",
+    "disabled": "Оплата сейчас недоступна — обратитесь к администратору",
+    "plan": "Этот тариф больше не предлагается — обновите страницу и выберите другой",
+    "package": "Этот пакет больше не предлагается — обновите страницу и выберите другой",
+    # Понижение тарифа при действующей подписке (C2/WR-02, вариант
+    # `upgrade-only`). Строка НАЗЫВАЕТ ВЫГОДУ, а не только запрет: отказ без
+    # причины читается как поломка, а «оплаченные дни не сгорают» объясняет,
+    # ради чего отказ существует.
+    "downgrade": (
+        "Перейти на младший тариф можно после окончания оплаченного срока — "
+        "оплаченные дни не сгорают"
+    ),
+}
+
+# Подпись четвёртого состояния CTA карточки плана. Живёт РЯДОМ со строкой
+# отказа обработчика намеренно: это две половины одного правила, и разъехаться
+# им негде, пока они стоят в одном месте.
+DOWNGRADE_CARD_CAPTION = (
+    "Переход на младший тариф — после окончания оплаченного срока: "
+    "оплаченные дни не сгорают"
+)
+
+
+def _payment_error_message(code: str | None) -> str:
+    """Код причины отказа → готовая строка. Неизвестный код даёт пустую.
+
+    Пустая строка означает «плашки нет вовсе», а не «плашка без текста»:
+    неизвестный код не имеет права ни напечатать себя, ни нарисовать пустую
+    рамку, потому что владелец ссылки не должен уметь сообщить пользователю о
+    событии, которого не было.
+    """
+    return PAYMENT_ERROR_MESSAGES.get(code or "", "")
+
+
+def _subscription_is_live(expires_at, now: datetime) -> bool:
+    """Есть ли у пользователя НЕИСТЁКШИЙ оплаченный срок.
+
+    Гард смены тарифа защищает УПЛАЧЕННОЕ, а не запирает пользователя в тарифе
+    навсегда: когда срок истёк, сжигать нечего, и переход в любую сторону снова
+    открыт.
+
+    Сравнение идёт через `normalize_utc` по той же причине, что и на рендере
+    раздела: колонка объявлена с таймзоной, но SQLite отдаёт её naive, а
+    PostgreSQL aware — сравнение без приведения падало бы TypeError ровно на
+    одном из двух диалектов.
+    """
+    normalized = normalize_utc(expires_at)
+    return normalized is not None and normalized > now
+
+
+def _switch_is_refused(current_plan: str, target_plan: str) -> bool:
+    """Отвергается ли покупка `target_plan` подписчиком `current_plan`.
+
+    Вызывается ТОЛЬКО при действующей подписке — истёкший срок гард снимает.
+
+    РЕШЕНИЕ ВЛАДЕЛЬЦА (C2/WR-02, чекпойнт плана 05-10, вариант `upgrade-only`):
+    повышение разрешено и оплаченный остаток не сжигает; понижение не
+    предлагается и не принимается. Закрыта денежно опасная половина —
+    уничтожение уплаченного за старший тариф, — и оставлена открытой безопасная.
+
+    ОТКАЗ ПО УМОЛЧАНИЮ У НЕЗНАКОМОГО ПЛАНА. Ранг берётся из `PLAN_ORDER`
+    (app/constants.py), и плану, которого там нет, ранг НЕ УГАДЫВАЕТСЯ: перечень
+    тарифов правится окружением, а порядок — кодом, и догадка в любую сторону
+    стоит денег. Продление СВОЕГО тарифа гардом не задевается вовсе — у него
+    план не меняется, и сравнивать нечего.
+    """
+    if target_plan == current_plan:
+        return False
+
+    ranks = {plan: index for index, plan in enumerate(PLAN_ORDER)}
+    current = ranks.get(current_plan)
+    target = ranks.get(target_plan)
+    if current is None or target is None:
+        return True
+    return target < current
 
 
 @router.get("/billing", response_class=HTMLResponse)
@@ -66,6 +164,12 @@ async def billing_page(
     Пользователь, вернувшийся до прихода уведомления, видит свой платёж СТРОКОЙ
     истории в статусе «в обработке» — то есть узнаёт, что деньги в обработке, а
     не что оплата не прошла.
+
+    ПАРАМЕТР `error` ТОЛЬКО ПОКАЗЫВАЕТ И НИЧЕГО НЕ МЕНЯЕТ. Он приезжает
+    перенаправлением от форм оплаты и прогоняется через закрытое отображение
+    `_payment_error_message`; в контекст уходит ГОТОВАЯ СТРОКА, а не код и не
+    значение параметра (T-05-46). Запрет на запись из этого обработчика
+    параметр не ослабляет ни на йоту.
     """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
@@ -124,6 +228,21 @@ async def billing_page(
         and normalized_expiry < datetime.now(timezone.utc)
     )
 
+    # ЧЕТВЁРТОЕ СОСТОЯНИЕ CTA КАРТОЧКИ считается ЗДЕСЬ, а не в разметке
+    # (C2/WR-02, вариант `upgrade-only`): правило перехода между тарифами — одно
+    # на раздел, и вторая его копия в Jinja разъехалась бы с гардом обработчика
+    # молча. Разметке достаётся ГОТОВЫЙ ответ «этой карточке кнопку не рисовать».
+    #
+    # Множество, а не предикат в цикле шаблона: карточек три, а правило одно.
+    live = _subscription_is_live(expires_at, datetime.now(timezone.utc))
+    refused_plan_ids = {
+        plan["id"]
+        for plan in plans
+        if plan.get("id")
+        and live
+        and _switch_is_refused(current_plan_id, plan["id"])
+    }
+
     return templates.TemplateResponse(
         "billing/balance.html",
         {
@@ -147,6 +266,17 @@ async def billing_page(
             "payments_cap": PAYMENT_LIST_CAP,
             "payments_truncated": payments_total > PAYMENT_LIST_CAP,
             "payments_enabled": settings.yookassa_enabled,
+            # ГОТОВАЯ СТРОКА, а не код: значение параметра запроса в разметку не
+            # уходит ни значением, ни атрибутом (T-05-46).
+            "error_message": _payment_error_message(
+                request.query_params.get("error")
+            ),
+            # Зеркало FREE_PLAN_ID для разметки: бесплатный тариф ЕСТЬ в
+            # перечне конфига, поэтому проверки «план есть в конфиге» мало,
+            # чтобы не нарисовать ему кнопку оплаты (IN-06).
+            "free_plan_id": FREE_PLAN_ID,
+            "refused_plan_ids": refused_plan_ids,
+            "downgrade_caption": DOWNGRADE_CARD_CAPTION,
             "active_page": "billing",
         },
     )
@@ -182,30 +312,58 @@ async def subscribe_to_plan(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
+    # СВЕРКА ИСТОЧНИКА ОСТАЁТСЯ 403 БЕЗ ПРИЧИНЫ. Чужому источнику причина
+    # отказа не сообщается: межсайтовый запрос не имеет права узнать даже,
+    # включены ли платежи. Порядок проверок не меняется — сначала кто пришёл,
+    # потом откуда, потом что просит.
     if not is_same_origin(request):
         return Response(status_code=403)
 
     if not settings.yookassa_enabled:
-        return RedirectResponse(url="/billing", status_code=302)
+        return RedirectResponse(url="/billing?error=disabled", status_code=302)
 
     selected = next(
         (p for p in settings.parsed_plan_limits if p.get("id") == plan), None
     )
     if selected is None or selected.get("id") == FREE_PLAN_ID:
-        return RedirectResponse(url="/billing", status_code=302)
+        return RedirectResponse(url="/billing?error=plan", status_code=302)
 
-    result = await create_payment(
-        db,
-        user_id=user.id,
-        # Предмет покупки — КОНСТАНТОЙ, никогда голым литералом (WR-04):
-        # опечатка в литерале не падает громко, а уводит подписочный платёж в
-        # пакетную ветку вебхука с пустым `messages_count`.
-        kind=KIND_SUBSCRIPTION,
-        plan=selected["id"],
-        price=selected["price"],
-        package_name=None,
-        messages_count=None,
-    )
+    # ГАРД СМЕНЫ ТАРИФА (C2/WR-02, вариант `upgrade-only`). Стоит ПОСЛЕ сверки
+    # плана с конфигом: сравнивать ранги имеет смысл только у тарифа, который
+    # вообще продаётся.
+    #
+    # Действующая подписка берётся из УЖЕ ПОСЧИТАННОГО контекста шелла
+    # (зависимость `load_shell_context` висит на всём роутере страниц, включая
+    # POST), вторым запросом не считается — правило раздела D-09/D-19.
+    #
+    # ЗАЧЕМ ГАРД, ЕСЛИ КАРТОЧКА МЛАДШЕГО ПЛАНА КНОПКИ НЕ РИСУЕТ. Затем, что
+    # УСТАРЕВШАЯ СТРАНИЦА ДОСТИЖИМА: подписка могла быть куплена в соседней
+    # вкладке после отрисовки этой. Разметка гарантий не даёт вовсе, и правило,
+    # живущее только в ней, не является правилом.
+    quota = (getattr(request.state, "shell", None) or {}).get("quota", {})
+    if _subscription_is_live(
+        quota.get("expires_at"), datetime.now(timezone.utc)
+    ) and _switch_is_refused(quota.get("plan", FREE_PLAN_ID), selected["id"]):
+        return RedirectResponse(url="/billing?error=downgrade", status_code=302)
+
+    try:
+        result = await create_payment(
+            db,
+            user_id=user.id,
+            # Предмет покупки — КОНСТАНТОЙ, никогда голым литералом (WR-04):
+            # опечатка в литерале не падает громко, а уводит подписочный платёж
+            # в пакетную ветку вебхука с пустым `messages_count`.
+            kind=KIND_SUBSCRIPTION,
+            plan=selected["id"],
+            price=selected["price"],
+            package_name=None,
+            messages_count=None,
+        )
+    except PaymentCreationError:
+        # Текст исключения СЮДА НЕ ПРИХОДИТ И НЕ НУЖЕН: он уже записан журналом
+        # сервиса ключом `payment_create_failed`. На экран уезжает код причины,
+        # а строку по нему подбирает `_payment_error_message` (T-05-47).
+        return RedirectResponse(url="/billing?error=payment", status_code=302)
     return RedirectResponse(url=result["confirmation_url"], status_code=302)
 
 
@@ -245,27 +403,35 @@ async def purchase_package(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
+    # Та же оговорка, что у соседней формы: чужому источнику причина отказа не
+    # сообщается, и сверка стоит ДО любого обращения к БД.
     if not is_same_origin(request):
         return Response(status_code=403)
 
     if not settings.yookassa_enabled:
-        return RedirectResponse(url="/billing", status_code=302)
+        return RedirectResponse(url="/billing?error=disabled", status_code=302)
 
     packages = settings.parsed_message_packages
+    # НЕЧИСЛОВОЙ И ВНЕДИАПАЗОННЫЙ ИНДЕКС ВЕДУТ В ОДНУ ПРИЧИНУ: для человека это
+    # один случай — «этого пакета нет», — а различие между ними принадлежит
+    # разбору запроса, а не экрану.
     try:
         index = int(package_index)
     except (TypeError, ValueError):
-        return RedirectResponse(url="/billing", status_code=302)
+        return RedirectResponse(url="/billing?error=package", status_code=302)
     if index < 0 or index >= len(packages):
-        return RedirectResponse(url="/billing", status_code=302)
+        return RedirectResponse(url="/billing?error=package", status_code=302)
 
     package = packages[index]
-    result = await create_payment(
-        db,
-        user_id=user.id,
-        kind=KIND_PACKAGE,
-        package_name=package["name"],
-        messages_count=package["count"],
-        price=package["price"],
-    )
+    try:
+        result = await create_payment(
+            db,
+            user_id=user.id,
+            kind=KIND_PACKAGE,
+            package_name=package["name"],
+            messages_count=package["count"],
+            price=package["price"],
+        )
+    except PaymentCreationError:
+        return RedirectResponse(url="/billing?error=payment", status_code=302)
     return RedirectResponse(url=result["confirmation_url"], status_code=302)
