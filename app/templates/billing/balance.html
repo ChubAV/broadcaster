@@ -138,7 +138,8 @@
       итерации. -#}
   <div data-plans>
     {% for p in plans %}
-    {{ plan_card(p, subscription.plan, payments_enabled) }}
+    {{ plan_card(p, subscription.plan, payments_enabled,
+                 p.get('id') in refused_plan_ids, downgrade_caption) }}
     {% endfor %}
   </div>
 

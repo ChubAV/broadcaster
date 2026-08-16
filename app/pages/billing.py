@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.analytics.send_analytics import normalize_utc
 from app.application.billing.plan_usage import plan_axes
 from app.config import Settings
-from app.constants import PAYMENT_LIST_CAP
+from app.constants import PAYMENT_LIST_CAP, PLAN_ORDER
 from app.dependencies import get_db, get_settings
 from app.services.billing_service import (
     count_payments,
@@ -65,7 +65,23 @@ PAYMENT_ERROR_MESSAGES = {
     "disabled": "Оплата сейчас недоступна — обратитесь к администратору",
     "plan": "Этот тариф больше не предлагается — обновите страницу и выберите другой",
     "package": "Этот пакет больше не предлагается — обновите страницу и выберите другой",
+    # Понижение тарифа при действующей подписке (C2/WR-02, вариант
+    # `upgrade-only`). Строка НАЗЫВАЕТ ВЫГОДУ, а не только запрет: отказ без
+    # причины читается как поломка, а «оплаченные дни не сгорают» объясняет,
+    # ради чего отказ существует.
+    "downgrade": (
+        "Перейти на младший тариф можно после окончания оплаченного срока — "
+        "оплаченные дни не сгорают"
+    ),
 }
+
+# Подпись четвёртого состояния CTA карточки плана. Живёт РЯДОМ со строкой
+# отказа обработчика намеренно: это две половины одного правила, и разъехаться
+# им негде, пока они стоят в одном месте.
+DOWNGRADE_CARD_CAPTION = (
+    "Переход на младший тариф — после окончания оплаченного срока: "
+    "оплаченные дни не сгорают"
+)
 
 
 def _payment_error_message(code: str | None) -> str:
@@ -77,6 +93,49 @@ def _payment_error_message(code: str | None) -> str:
     событии, которого не было.
     """
     return PAYMENT_ERROR_MESSAGES.get(code or "", "")
+
+
+def _subscription_is_live(expires_at, now: datetime) -> bool:
+    """Есть ли у пользователя НЕИСТЁКШИЙ оплаченный срок.
+
+    Гард смены тарифа защищает УПЛАЧЕННОЕ, а не запирает пользователя в тарифе
+    навсегда: когда срок истёк, сжигать нечего, и переход в любую сторону снова
+    открыт.
+
+    Сравнение идёт через `normalize_utc` по той же причине, что и на рендере
+    раздела: колонка объявлена с таймзоной, но SQLite отдаёт её naive, а
+    PostgreSQL aware — сравнение без приведения падало бы TypeError ровно на
+    одном из двух диалектов.
+    """
+    normalized = normalize_utc(expires_at)
+    return normalized is not None and normalized > now
+
+
+def _switch_is_refused(current_plan: str, target_plan: str) -> bool:
+    """Отвергается ли покупка `target_plan` подписчиком `current_plan`.
+
+    Вызывается ТОЛЬКО при действующей подписке — истёкший срок гард снимает.
+
+    РЕШЕНИЕ ВЛАДЕЛЬЦА (C2/WR-02, чекпойнт плана 05-10, вариант `upgrade-only`):
+    повышение разрешено и оплаченный остаток не сжигает; понижение не
+    предлагается и не принимается. Закрыта денежно опасная половина —
+    уничтожение уплаченного за старший тариф, — и оставлена открытой безопасная.
+
+    ОТКАЗ ПО УМОЛЧАНИЮ У НЕЗНАКОМОГО ПЛАНА. Ранг берётся из `PLAN_ORDER`
+    (app/constants.py), и плану, которого там нет, ранг НЕ УГАДЫВАЕТСЯ: перечень
+    тарифов правится окружением, а порядок — кодом, и догадка в любую сторону
+    стоит денег. Продление СВОЕГО тарифа гардом не задевается вовсе — у него
+    план не меняется, и сравнивать нечего.
+    """
+    if target_plan == current_plan:
+        return False
+
+    ranks = {plan: index for index, plan in enumerate(PLAN_ORDER)}
+    current = ranks.get(current_plan)
+    target = ranks.get(target_plan)
+    if current is None or target is None:
+        return True
+    return target < current
 
 
 @router.get("/billing", response_class=HTMLResponse)
@@ -169,6 +228,21 @@ async def billing_page(
         and normalized_expiry < datetime.now(timezone.utc)
     )
 
+    # ЧЕТВЁРТОЕ СОСТОЯНИЕ CTA КАРТОЧКИ считается ЗДЕСЬ, а не в разметке
+    # (C2/WR-02, вариант `upgrade-only`): правило перехода между тарифами — одно
+    # на раздел, и вторая его копия в Jinja разъехалась бы с гардом обработчика
+    # молча. Разметке достаётся ГОТОВЫЙ ответ «этой карточке кнопку не рисовать».
+    #
+    # Множество, а не предикат в цикле шаблона: карточек три, а правило одно.
+    live = _subscription_is_live(expires_at, datetime.now(timezone.utc))
+    refused_plan_ids = {
+        plan["id"]
+        for plan in plans
+        if plan.get("id")
+        and live
+        and _switch_is_refused(current_plan_id, plan["id"])
+    }
+
     return templates.TemplateResponse(
         "billing/balance.html",
         {
@@ -201,6 +275,8 @@ async def billing_page(
             # перечне конфига, поэтому проверки «план есть в конфиге» мало,
             # чтобы не нарисовать ему кнопку оплаты (IN-06).
             "free_plan_id": FREE_PLAN_ID,
+            "refused_plan_ids": refused_plan_ids,
+            "downgrade_caption": DOWNGRADE_CARD_CAPTION,
             "active_page": "billing",
         },
     )
@@ -251,6 +327,24 @@ async def subscribe_to_plan(
     )
     if selected is None or selected.get("id") == FREE_PLAN_ID:
         return RedirectResponse(url="/billing?error=plan", status_code=302)
+
+    # ГАРД СМЕНЫ ТАРИФА (C2/WR-02, вариант `upgrade-only`). Стоит ПОСЛЕ сверки
+    # плана с конфигом: сравнивать ранги имеет смысл только у тарифа, который
+    # вообще продаётся.
+    #
+    # Действующая подписка берётся из УЖЕ ПОСЧИТАННОГО контекста шелла
+    # (зависимость `load_shell_context` висит на всём роутере страниц, включая
+    # POST), вторым запросом не считается — правило раздела D-09/D-19.
+    #
+    # ЗАЧЕМ ГАРД, ЕСЛИ КАРТОЧКА МЛАДШЕГО ПЛАНА КНОПКИ НЕ РИСУЕТ. Затем, что
+    # УСТАРЕВШАЯ СТРАНИЦА ДОСТИЖИМА: подписка могла быть куплена в соседней
+    # вкладке после отрисовки этой. Разметка гарантий не даёт вовсе, и правило,
+    # живущее только в ней, не является правилом.
+    quota = (getattr(request.state, "shell", None) or {}).get("quota", {})
+    if _subscription_is_live(
+        quota.get("expires_at"), datetime.now(timezone.utc)
+    ) and _switch_is_refused(quota.get("plan", FREE_PLAN_ID), selected["id"]):
+        return RedirectResponse(url="/billing?error=downgrade", status_code=302)
 
     try:
         result = await create_payment(
