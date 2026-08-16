@@ -41,6 +41,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.billing.plan_usage import AXIS_LABELS, AXIS_ORDER
+from app.config import Settings
 from app.constants import PAYMENT_LIST_CAP
 from app.models.payment import Payment
 from app.models.subscription import Subscription
@@ -783,3 +784,100 @@ async def test_the_message_balance_stays_a_block_of_its_own(
     assert "Баланс сообщений" in html
     assert AXIS_LABELS["sends"] in html
     assert "История операций" in html or "Операций пока нет" in html
+
+
+# =============================================================================
+# Устойчивость денежной подписи к порче конфигурации (план 05-09, WR-01)
+# =============================================================================
+#
+# ЧТО ЗДЕСЬ ПРОВЕРЯЕТСЯ И ЧЕГО НЕТ. Правильность самого форматирования держит
+# test_billing_amount_format_is_a_display_concern_only в
+# tests/test_pages/test_responsive_markup.py — это ДРУГОЕ свойство: там речь о
+# том, что подпись живёт только на стороне показа. Здесь — об устойчивости:
+# `format_amount` вызывается на КАЖДОЙ карточке плана, КАЖДОЙ плитке пакета и
+# КАЖДОЙ строке платежа, поэтому одна непригодная строка в конфиге цен или в
+# `payments.amount_value` роняла весь раздел вместе с балансом, планами и
+# историей.
+#
+# `NaN` и `Infinity` — ВАЛИДНЫЕ значения `Decimal`: разбор их принимает, и
+# прежний `except` вокруг разбора их не видел. Падение происходило ниже — на
+# форматировании и на `int(...)`.
+
+# Значения, которые `Decimal` разбирает успешно, а арифметика подписи не
+# переживает. Непригодное возвращается КАК ЕСТЬ.
+NON_FINITE_AMOUNTS = ("NaN", "Infinity", "-Infinity", "sNaN")
+
+# Неразрывный пробел кодом, а не литералом: невидимый символ в исходнике теста
+# читается как обычный пробел и «чинится» первым же редактором. Тем же приёмом
+# выписан RENDERED_AMOUNT в шапке файла.
+NBSP = chr(0x00A0)
+
+
+@pytest.mark.parametrize("value", NON_FINITE_AMOUNTS)
+def test_the_amount_label_survives_a_non_finite_value(value: str):
+    """Неконечная сумма ПЕЧАТАЕТСЯ как есть, а не поднимает исключение.
+
+    До плана 05-09 `NaN` и `sNaN` поднимали `decimal.InvalidOperation`, а
+    `Infinity` и `-Infinity` — `ValueError` из `int(...)`.
+    """
+    format_amount = templates.env.globals["format_amount"]
+
+    assert format_amount(value) == value
+
+
+def test_the_amount_label_never_invents_a_zero():
+    """Непригодное значение возвращается ИСХОДНЫМ, а не заменяется нулём.
+
+    Выдуманный ноль в денежной подписи — правдоподобная ложь: пользователь
+    прочитает его как настоящую цену. Исходная строка на экране хотя бы
+    называет себя странной. Контракт выписан в докстринге функции и этой
+    правкой НЕ меняется — меняется лишь то, что он исполняется для всего
+    множества непригодных значений, а не для подмножества, которое отвергает
+    разбор.
+    """
+    format_amount = templates.env.globals["format_amount"]
+
+    for value in (*NON_FINITE_AMOUNTS, "не число"):
+        assert format_amount(value) != f"0{NBSP}₽", value
+        assert format_amount(value) == value, value
+
+
+def test_the_amount_label_still_formats_a_valid_amount():
+    """Парный тест: без него предыдущие зеленели бы на возврате входа целиком.
+
+    Ожидания выписаны escape-последовательностью: неразрывный пробел в
+    литерале читается как обычный и «чинится» первым же редактором.
+    """
+    format_amount = templates.env.globals["format_amount"]
+
+    assert format_amount("1490.00") == f"1{NBSP}490{NBSP}₽"
+    assert format_amount("4900.50") == f"4{NBSP}900,50{NBSP}₽"
+    assert format_amount(None) == ""
+    assert format_amount("") == ""
+
+
+@pytest.mark.asyncio
+async def test_the_section_survives_an_unusable_price_in_the_plan_config(
+    authed_client: AsyncClient, test_settings
+):
+    """Одна плохая цена в конфиге не отнимает у пользователя ВЕСЬ раздел.
+
+    Настоящий предмет предупреждения — не функция, а раздел: `format_amount`
+    зовётся из трёх поверхностей сразу, и необработанное исключение уводило
+    `/billing` в 500 вместе с балансом, планами и историей платежей.
+    """
+    test_settings.plan_limits = (
+        '[{"id":"free","name":"Free","price":"0.00","ads":3,"groups":5,'
+        '"sends":300,"accounts":1},'
+        '{"id":"basic","name":"Basic","price":"NaN","ads":15,"groups":30,'
+        '"sends":5000,"accounts":5}]'
+    )
+    try:
+        response = await authed_client.get("/billing")
+    finally:
+        test_settings.plan_limits = Settings.model_fields["plan_limits"].default
+
+    assert response.status_code == 200, "раздел упал из-за одной строки конфига"
+    html = response.text
+    assert "NaN" in html, "непригодная цена не напечатана как есть"
+    assert "Basic" in html, "витрина потеряла план с непригодной ценой"
