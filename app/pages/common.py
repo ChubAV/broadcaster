@@ -266,12 +266,21 @@ def format_amount(value) -> str:
     Непригодное значение возвращается КАК ЕСТЬ, а не заменяется нулём:
     выдуманный ноль в денежной подписи — правдоподобная ложь, а исходная
     строка на экране хотя бы называет себя странной.
+
+    ПРОВЕРКА КОНЕЧНОСТИ СТОИТ ПОСЛЕ РАЗБОРА, А НЕ ВМЕСТО НЕГО. `NaN` и
+    `Infinity` — валидные значения `Decimal`, и `except` вокруг разбора их не
+    видит: до плана 05-09 они уходили из-под защиты и роняли форматирование
+    ниже. Функция — глобал Jinja на трёх поверхностях раздела сразу, поэтому
+    одна такая строка в конфиге цен или в `payments.amount_value` уводила
+    `/billing` в 500 целиком.
     """
     if value is None or value == "":
         return ""
     try:
         amount = Decimal(str(value))
     except (ArithmeticError, ValueError, TypeError):
+        return str(value)
+    if not amount.is_finite():
         return str(value)
 
     sign = "-" if amount < 0 else ""

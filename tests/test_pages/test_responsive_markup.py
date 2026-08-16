@@ -1602,6 +1602,74 @@ def test_billing_plans_grid_rule_does_not_redefine_the_dashboard_grid():
     assert "minmax(210px, 1fr)" in css, "минимум плиток дашборда изменён"
 
 
+# --- План 05-09: нажимаемая высота кнопок оплаты (M3 / C1) ------------------
+#
+# Три формы оплаты раздела несут атрибут data-plan-cta, и до этого плана у него
+# не было в app.css НИ ОДНОГО правила: атрибут был объявлен точкой расширения и
+# остался неиспользованным.
+
+# Шаблоны с формами оплаты и число форм в каждом. Правило без атрибута так же
+# бесполезно, как атрибут без правила, и до плана 05-09 в разделе была ровно
+# вторая половина.
+PLAN_CTA_TEMPLATES = {
+    "billing/includes/plan_card.html": 1,
+    "billing/balance.html": 2,
+}
+
+# Собственный порог проекта — токен `touch` из 05-UI-SPEC.md `## Spacing Scale`.
+PLAN_CTA_MIN_HEIGHT_PX = 44
+
+
+def test_billing_payment_buttons_declare_the_project_touch_height():
+    """Кнопка оплаты объявлена не ниже собственного порога проекта — 44px.
+
+    ⚠️ Проверяется ОБЪЯВЛЕНИЕ правила, а не отрисовка: браузера в суите нет.
+
+    Арифметика унаследованной кнопки выписана здесь намеренно, чтобы будущая
+    правка `--fs-md` или padding не прошла молча: `.btn` вычисляется в
+    13px (`--fs-md` при `line-height:1`) + 9px×2 padding + 1px×2 border = 33px.
+    Эти 33px ПРОХОДЯТ порог WCAG 2.5.8 AA (24px) и не проходят только
+    собственный порог проекта 44px — формулировка не смягчается и не
+    ужесточается.
+
+    Правило адресовано `[data-plan-cta] .btn`, а не голому `.btn`: общая кнопка
+    стоит на 26 страницах проекта, и её высота этой правкой не меняется.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    rule = re.search(r"\[data-plan-cta\]\s+\.btn\s*\{([^}]*)\}", css)
+    assert rule, "правила [data-plan-cta] .btn в app.css нет"
+
+    declared = re.search(r"min-height:\s*(\d+)px", rule.group(1))
+    assert declared, "у правила кнопки оплаты нет объявления min-height"
+    assert int(declared.group(1)) >= PLAN_CTA_MIN_HEIGHT_PX, (
+        f"высота кнопки оплаты ниже порога проекта {PLAN_CTA_MIN_HEIGHT_PX}px"
+    )
+
+    # Высота ОСТАЛЬНЫХ 26 страниц не тронута: у голого .btn min-height нет.
+    base = re.search(r"(?<!\])\n\.btn\s*\{([^}]*)\}", css)
+    assert base, "блок .btn в app.css не найден"
+    assert "min-height" not in base.group(1), (
+        "min-height уехал в общую кнопку — высота кнопок всех 26 страниц проекта "
+        "изменилась вместе с разделом тарифов"
+    )
+
+
+def test_billing_payment_forms_carry_the_touch_attribute():
+    """Атрибут `data-plan-cta` стоит на всех трёх формах оплаты раздела.
+
+    Правило CSS без атрибута бесполезно ровно так же, как атрибут без правила.
+    Счёт по каждому шаблону, а не «встречается хотя бы раз»: потерянный атрибут
+    на одной из трёх форм оставил бы её кнопку на прежних 33px, а страница
+    продолжила бы отдавать 200.
+    """
+    for template, expected in PLAN_CTA_TEMPLATES.items():
+        markup = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
+        assert markup.count("data-plan-cta") == expected, (
+            f"{template}: форм оплаты с атрибутом data-plan-cta не {expected}"
+        )
+
+
 # test_billing_plans_template_is_migrated УДАЛЁН планом 05-05 вместе с файлом,
 # который он читал с диска (D-19). Это не обход поломки, а завершение работы
 # теста: проверка исходника существовала ровно потому, что у неподключённого
