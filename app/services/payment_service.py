@@ -9,6 +9,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 from yookassa import Configuration, Payment as YooPayment
 from yookassa.domain.notification import WebhookNotificationEventType
 
+from app.application.billing.plan_switch import switch_is_refused
 from app.application.billing.subscription_period import next_expiry
 from app.config import get_settings
 from app.models.payment import Payment
@@ -504,6 +505,40 @@ async def _active_subscription(db: AsyncSession, user_id: int) -> Subscription |
 def _apply_extension(
     subscription: Subscription, db_payment: Payment, now: datetime
 ) -> None:
+    """Двигает срок действующей подписки и применяет план — ТОЛЬКО ВВЕРХ.
+
+    ПОРЯДОК ДВУХ ДЕЙСТВИЙ ЗДЕСЬ — ПРАВИЛО, А НЕ ОФОРМЛЕНИЕ. Срок двигается
+    ВСЕГДА и первым: платёж подтверждён, деньги списаны, и «не выдать ничего»
+    было бы худшим из исходов. Решение о ПЛАНЕ принимается отдельно и не имеет
+    права отменить начисление дней.
+
+    Сравнение рангов читает `switch_is_refused` — ТО ЖЕ объявление, что и гард
+    формы `POST /billing/subscribe`. Вторая копия сравнения здесь и была тем
+    дефектом, который закрывает план 05-11: гард на входе не срабатывает вовсе,
+    когда действующей подписки на момент нажатия не было, и оплаченный месяц
+    старшего тарифа становился днями младшего.
+
+    Функция синхронная и в БД не пишет сама: `commit` делает `handle_webhook`,
+    и заявка платежа с начислением обязаны остаться в одной транзакции (05-08).
+    """
     subscription.expires_at = next_expiry(subscription.expires_at, now)
-    if db_payment.plan:
-        subscription.plan = db_payment.plan
+
+    if not db_payment.plan:
+        return
+
+    if switch_is_refused(subscription.plan, db_payment.plan):
+        # УРОВЕНЬ `warning`, А НЕ `info`, И ЭТО НАМЕРЕННО. Платёж принят и
+        # оплаченные дни выданы, но уплаченный тариф применён НЕ был — исход,
+        # по которому к нам придёт человек. Без собственного ключа он прятался
+        # бы за `subscription_payment_succeeded`, который печатает план ПЛАТЕЖА
+        # как обычный успех, и разбирать обращение было бы не по чему.
+        logger.warning(
+            "subscription_plan_preserved",
+            user_id=db_payment.user_id,
+            yookassa_id=db_payment.yookassa_payment_id,
+            plan=subscription.plan,
+            paid_plan=db_payment.plan,
+        )
+        return
+
+    subscription.plan = db_payment.plan

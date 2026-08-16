@@ -5,9 +5,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import normalize_utc
+from app.application.billing.plan_switch import switch_is_refused
 from app.application.billing.plan_usage import plan_axes
 from app.config import Settings
-from app.constants import PAYMENT_LIST_CAP, PLAN_ORDER
+from app.constants import PAYMENT_LIST_CAP
 from app.dependencies import get_db, get_settings
 from app.services.billing_service import (
     count_payments,
@@ -111,31 +112,16 @@ def _subscription_is_live(expires_at, now: datetime) -> bool:
     return normalized is not None and normalized > now
 
 
-def _switch_is_refused(current_plan: str, target_plan: str) -> bool:
-    """Отвергается ли покупка `target_plan` подписчиком `current_plan`.
-
-    Вызывается ТОЛЬКО при действующей подписке — истёкший срок гард снимает.
-
-    РЕШЕНИЕ ВЛАДЕЛЬЦА (C2/WR-02, чекпойнт плана 05-10, вариант `upgrade-only`):
-    повышение разрешено и оплаченный остаток не сжигает; понижение не
-    предлагается и не принимается. Закрыта денежно опасная половина —
-    уничтожение уплаченного за старший тариф, — и оставлена открытой безопасная.
-
-    ОТКАЗ ПО УМОЛЧАНИЮ У НЕЗНАКОМОГО ПЛАНА. Ранг берётся из `PLAN_ORDER`
-    (app/constants.py), и плану, которого там нет, ранг НЕ УГАДЫВАЕТСЯ: перечень
-    тарифов правится окружением, а порядок — кодом, и догадка в любую сторону
-    стоит денег. Продление СВОЕГО тарифа гардом не задевается вовсе — у него
-    план не меняется, и сравнивать нечего.
-    """
-    if target_plan == current_plan:
-        return False
-
-    ranks = {plan: index for index, plan in enumerate(PLAN_ORDER)}
-    current = ranks.get(current_plan)
-    target = ranks.get(target_plan)
-    if current is None or target is None:
-        return True
-    return target < current
+# ПРАВИЛО ПЕРЕХОДА МЕЖДУ ТАРИФАМИ ЭТОТ МОДУЛЬ БОЛЬШЕ НЕ ОБЪЯВЛЯЕТ, А ЧИТАЕТ.
+# `switch_is_refused` живёт в `app/application/billing/plan_switch.py`, потому
+# что читателей у него два: этот раздел (стадия НАМЕРЕНИЯ — продавать ли) и
+# `_apply_extension` в `app/services/payment_service.py` (стадия ПРИМЕНЕНИЯ —
+# что делать с уже уплаченным). Пока объявление стояло здесь, вторая стадия его
+# не видела вовсе, и подтверждённый платёж младшего тарифа снимал уплаченный
+# старший (гэп 1, 05-VERIFICATION.md).
+#
+# `_subscription_is_live` при этом НЕ переехала: она про СРОК, а не про порядок
+# тарифов, и её единственный читатель — этот файл.
 
 
 @router.get("/billing", response_class=HTMLResponse)
@@ -240,7 +226,7 @@ async def billing_page(
         for plan in plans
         if plan.get("id")
         and live
-        and _switch_is_refused(current_plan_id, plan["id"])
+        and switch_is_refused(current_plan_id, plan["id"])
     }
 
     return templates.TemplateResponse(
@@ -343,7 +329,7 @@ async def subscribe_to_plan(
     quota = (getattr(request.state, "shell", None) or {}).get("quota", {})
     if _subscription_is_live(
         quota.get("expires_at"), datetime.now(timezone.utc)
-    ) and _switch_is_refused(quota.get("plan", FREE_PLAN_ID), selected["id"]):
+    ) and switch_is_refused(quota.get("plan", FREE_PLAN_ID), selected["id"]):
         return RedirectResponse(url="/billing?error=downgrade", status_code=302)
 
     try:
