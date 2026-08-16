@@ -991,6 +991,109 @@ async def test_renewing_the_own_plan_still_moves_the_date_at_the_apply_stage(
     )
 
 
+async def _seed_subscription_payment(
+    db: AsyncSession, plan: str | None, payment_id: str
+) -> Payment:
+    """Подписочный платёж в состоянии «уведомление ещё не приходило».
+
+    Строка заводится НАПРЯМУЮ, а не формой: оба сценария ниже описывают платежи,
+    которые форма завести не может вовсе — с пустым планом (поле обязательное) и
+    с планом, которого нет в конфиге. Дефект при этом достижим: платёж мог быть
+    заведён до того, как конфиг разошёлся с `PLAN_ORDER`.
+
+    Владелец платежа — пользователь, которого заводит фикстура `authed_client`;
+    поэтому тесты, ходящие только в БД, её всё равно запрашивают.
+    """
+    payment = Payment(
+        user_id=(await _current_user(db)).id,
+        yookassa_payment_id=payment_id,
+        status="pending",
+        amount_value="1490.00",
+        amount_currency="RUB",
+        kind="subscription",
+        plan=plan,
+        messages_count=None,
+        package_name=None,
+    )
+    db.add(payment)
+    await db.commit()
+    return payment
+
+
+@pytest.mark.asyncio
+async def test_a_payment_without_a_plan_moves_the_date_and_leaves_the_plan_alone(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Пустой план платежа двигает срок и НЕ трогает действующий тариф.
+
+    Ветка существовала в коде и до этого плана, но регрессии не имела ни одной.
+    Сверка ранга встала рядом с ней, поэтому проверка нужна именно теперь:
+    `switch_is_refused("pro", "")` вернул бы `True` — и без явного выхода по
+    пустому плану ветка начала бы писать в журнал строку о расхождении, которого
+    не было.
+    """
+    current = await _seed_live_subscription(db_session, "pro", days=25)
+    await _seed_subscription_payment(db_session, None, "yoo_noplan")
+
+    assert await _confirm(db_session, "yoo_noplan") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro", "пустой план платежа переписал действующий"
+    assert _aware(rows[0].expires_at) > current + timedelta(days=27), (
+        "оплаченные дни не выданы"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_paid_plan_without_a_rank_keeps_the_live_plan_at_the_apply_stage(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Зеркало `test_a_plan_without_a_rank_fails_closed` на стадии применения.
+
+    Тот держит отказ по умолчанию на входе, этот — там, где приходят деньги.
+    Инвариант один и тот же: догадка о ранге незнакомого плана стоит денег в обе
+    стороны. Разница только в цене отказа — на входе это лишний экран, здесь
+    отказать платежу нельзя вовсе, поэтому «отказ» означает сохранение
+    действующего тарифа при выданных днях.
+    """
+    current = await _seed_live_subscription(db_session, "pro", days=25)
+    await _seed_subscription_payment(db_session, "platinum", "yoo_unranked")
+
+    with patch("app.services.payment_service.logger") as spy:
+        assert await _confirm(db_session, "yoo_unranked") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro", "незнакомому плану угадали ранг"
+    assert _aware(rows[0].expires_at) > current + timedelta(days=27), (
+        "оплаченные дни не выданы"
+    )
+    assert any(
+        call.args and call.args[0] == "subscription_plan_preserved"
+        for call in spy.warning.call_args_list
+    ), "отказ по умолчанию не оставил следа"
+
+
+@pytest.mark.asyncio
+async def test_the_first_subscription_still_takes_its_plan_from_the_payment(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Первая покупка с Free заводит подписку с планом ИЗ ПЛАТЕЖА.
+
+    Ветка вставки сверку ранга не получила и получить не должна: подписки нет,
+    защищать нечего, а сравнение ранга с пустотой отвергло бы первую же покупку.
+    Тест держит её от правки «заодно».
+    """
+    await _subscribe(authed_client, plan="basic")
+    assert await _confirm(db_session) is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "basic", "первая подписка не взяла план из платежа"
+    assert _aware(rows[0].expires_at) > datetime.now(timezone.utc)
+
+
 def test_the_switch_semantics_are_named_in_the_place_that_moves_the_date():
     """Правило записано ТАМ, ГДЕ двигается срок, а не только в документах фазы.
 
@@ -998,6 +1101,13 @@ def test_the_switch_semantics_are_named_in_the_place_that_moves_the_date():
     повторяет читателя дословно, и до этого плана МОЛЧАЛ о том, что делается с
     планом. Читатель этой функции — тот самый человек, который завтра будет
     решать, можно ли поменять здесь порядок двух строк.
+
+    НАЗВАТЬ СЕМАНТИКУ МАЛО — ОНА ОБЯЗАНА СОВПАДАТЬ С КОДОМ. Верификатор нашёл
+    ровно это расхождение: докстринг утверждал, что понижение «не предлагается
+    карточкой и не принимается гардом», умалчивая, что подтверждённый платёж его
+    ПРИМЕНЯЕТ. Поэтому к двум словам добавлено утверждение об ИСХОДЕ: расхождение
+    уплаченного и действующего тарифа названо своим ключом журнала, а ключ
+    существует только вместе с поведением, которое его пишет.
     """
     source = (
         Path(__file__).resolve().parents[2]
@@ -1010,3 +1120,7 @@ def test_the_switch_semantics_are_named_in_the_place_that_moves_the_date():
 
     assert "upgrade-only" in docstring, "выбранная семантика не названа"
     assert "05-01" in docstring, "решение не связано с прохибицией, которую щадит"
+    assert "subscription_plan_preserved" in docstring, (
+        "докстринг молчит о том, чем кончается подтверждённый платёж младшего "
+        "тарифа — то есть снова описывает не исполняемое поведение"
+    )
