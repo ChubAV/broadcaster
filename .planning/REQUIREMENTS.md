@@ -232,9 +232,9 @@
 | HIST-02 | Phase 4 | Complete (2026-08-15) |
 | HIST-03 | Phase 4 | Complete (2026-08-15) |
 | HIST-04 | Phase 4 | Complete (2026-08-15, защита от двойной постановки закрыта планом 04-12) |
-| BILL-05 | Phase 5 | Complete (2026-08-15, форма продления `plan_card.html:72` и `balance.html:96` → `POST /billing/subscribe`, `app/pages/billing.py:151`) |
-| BILL-06 | Phase 5 | Complete (2026-08-15, `AXIS_ORDER` из `plan_usage.py:64` → четыре метра в `balance.html:108`) |
-| BILL-07 | Phase 5 | Complete (2026-08-15, `get_payment_history` из `billing_service.py:179` → блок «История платежей» в `balance.html:166`) |
+| BILL-05 | Phase 5 | In Progress (реализовано: форма продления `plan_card.html:72` и `balance.html:96` → `POST /billing/subscribe`, `app/pages/billing.py:151`; Complete снят 2026-08-16 — фаза в статусе `gaps_found`, см. `05-VERIFICATION.md`) |
+| BILL-06 | Phase 5 | In Progress (реализовано: `AXIS_ORDER` из `plan_usage.py:64` → четыре метра в `balance.html:108`; Complete снят 2026-08-16 — фаза в статусе `gaps_found`, см. `05-VERIFICATION.md`) |
+| BILL-07 | Phase 5 | In Progress (реализовано: `get_payment_history` из `billing_service.py:179` → блок «История платежей» в `balance.html:166`; Complete снят 2026-08-16 — фаза в статусе `gaps_found`, см. `05-VERIFICATION.md`) |
 | ADMIN-03 | Phase 6 | Pending |
 | ADMIN-04 | Phase 6 | Pending |
 | ADMIN-05 | Phase 6 | Pending |
