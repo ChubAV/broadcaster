@@ -131,8 +131,18 @@ async def _post(
     *,
     failing: bool = False,
     headers=None,
+    payment_id: str = "yoo_1",
 ):
-    sdk = _failing_sdk() if failing else _healthy_sdk()
+    """POST формы оплаты с подменённым SDK.
+
+    ИДЕНТИФИКАТОР ПЛАТЕЖА ПАРАМЕТРИЗОВАН, А НЕ ЗАШИТ. Пока тест заводил ровно
+    один платёж, разницы не было; сценариям стадии ПРИМЕНЕНИЯ нужны ДВА платежа
+    одного пользователя, и с одинаковым `yookassa_payment_id` второй заводился
+    бы дубликатом — выборка платежа в `handle_webhook` поднимала бы
+    `MultipleResultsFound` вместо воспроизведения дефекта. Значение по умолчанию
+    оставлено прежним, поэтому ни один существующий тест не меняется.
+    """
+    sdk = _failing_sdk() if failing else _healthy_sdk(payment_id)
     with patch(
         "app.services.payment_service.get_settings", return_value=_yoo_settings()
     ), sdk:
@@ -145,7 +155,12 @@ async def _post(
 
 
 async def _subscribe(
-    client: AsyncClient, plan: str = "basic", *, failing: bool = False, headers=None
+    client: AsyncClient,
+    plan: str = "basic",
+    *,
+    failing: bool = False,
+    headers=None,
+    payment_id: str = "yoo_1",
 ):
     return await _post(
         client,
@@ -153,6 +168,7 @@ async def _subscribe(
         {"plan": plan},
         failing=failing,
         headers=headers,
+        payment_id=payment_id,
     )
 
 
@@ -843,6 +859,136 @@ async def test_without_a_live_subscription_every_paid_card_keeps_its_button(
     assert 'value="basic"' in html
     assert 'value="pro"' in html
     assert CAPTION_DOWNGRADE not in html
+
+
+# =============================================================================
+# СТАДИЯ ПРИМЕНЕНИЯ — правило `upgrade-only` там, где приходят деньги
+# =============================================================================
+#
+# ЧЕМ ЭТИ ТЕСТЫ ОТЛИЧАЮТСЯ ОТ СОСЕДНИХ. Все тесты выше останавливаются на 302
+# гарда формы — то есть на стадии НАМЕРЕНИЯ, где решается, продавать ли. Ниже
+# проверяется вторая стадия: что подтверждённый платёж делает с УЖЕ ДЕЙСТВУЮЩЕЙ
+# подпиской. До этого плана регрессии на неё не было ни одной, и правило
+# `upgrade-only` существовало ровно на входе: `_apply_extension` перезаписывал
+# `subscription.plan` безусловно.
+#
+# ВОСПРОИЗВЕДЁННЫЙ ДЕФЕКТ (гэп 1, 05-VERIFICATION.md). Пользователь без
+# подписки нажимает «Оплатить» дважды — сначала Pro, потом Basic. Гард формы в
+# этом сценарии не срабатывает ВОВСЕ: на момент ОБОИХ нажатий действующей
+# подписки нет, сжигать нечего. Оба платежа подтверждаются, и оплаченный месяц
+# старшего тарифа становится днями младшего.
+
+
+async def _confirm(db: AsyncSession, payment_id: str = "yoo_1") -> bool:
+    """Подтверждённое уведомление ЮKassa по конкретному платежу.
+
+    `add_messages` подменяется по образцу соседних тестов: подписочная ветка его
+    не зовёт, но подмена держит тест независимым от порядка ветвления.
+    """
+    with patch("app.services.payment_service.add_messages", new_callable=AsyncMock):
+        return await handle_webhook(
+            db,
+            event="payment.succeeded",
+            payment_data={"object": {"id": payment_id}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_lower_plan_does_not_strip_the_higher_one_at_the_apply_stage(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Воспроизведение верификатора: младший тариф не снимает уплаченный старший.
+
+    ПОРЯДОК ЗДЕСЬ — ПРЕДМЕТ ПРОВЕРКИ, А НЕ ОФОРМЛЕНИЕ. Оба платежа заводятся ДО
+    первого уведомления, потому что именно так дефект и достижим: пока подписки
+    нет, гард формы не участвует, и «понижение» проскакивает мимо него обоими
+    нажатиями.
+
+    РАЗДЕЛЕНИЕ СРОКОВ ЧИСЛОВОЕ. Один календарный месяц — не больше 31 дня, два —
+    не меньше 59; порог в 45 дней лежит между ними, поэтому промах в любую
+    сторону однозначен: «срок сдвинут один раз» и «сдвинут дважды» не могут
+    оказаться по одну сторону порога.
+    """
+    await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
+    await _subscribe(authed_client, plan="basic", payment_id="yoo_basic")
+
+    assert await _confirm(db_session, "yoo_pro") is True
+    assert await _confirm(db_session, "yoo_basic") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1, "два платежа завели две подписки"
+    assert rows[0].plan == "pro", "оплаченный старший тариф снят младшим платежом"
+    assert _aware(rows[0].expires_at) > datetime.now(timezone.utc) + timedelta(
+        days=45
+    ), "деньги второго платежа не превратились в дни"
+
+
+@pytest.mark.asyncio
+async def test_the_preserved_plan_is_visible_in_the_log(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Расхождение уплаченного и действующего тарифа оставляет свой след.
+
+    Без собственного ключа исход прячется за `subscription_payment_succeeded`,
+    который печатает план ПЛАТЕЖА как обычный успех: разбирающему обращение
+    пользователя опереться не на что. Уровень `warning`, а не `info` — платёж
+    принят, дни выданы, но уплаченный тариф применён НЕ был.
+    """
+    await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
+    await _subscribe(authed_client, plan="basic", payment_id="yoo_basic")
+
+    await _confirm(db_session, "yoo_pro")
+    with patch("app.services.payment_service.logger") as spy:
+        await _confirm(db_session, "yoo_basic")
+
+    preserved = [
+        call
+        for call in spy.warning.call_args_list
+        if call.args and call.args[0] == "subscription_plan_preserved"
+    ]
+    assert preserved, "сохранение старшего тарифа не оставило следа в журнале"
+    fields = preserved[0].kwargs
+    assert fields.get("plan") == "pro", "не назван сохранённый тариф"
+    assert fields.get("paid_plan") == "basic", "не назван уплаченный тариф"
+    assert fields.get("yookassa_id") == "yoo_basic"
+    assert fields.get("user_id") == (await _current_user(db_session)).id
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_higher_plan_is_applied_at_the_apply_stage(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Повышение на стадии применения ОСТАЁТСЯ повышением.
+
+    Самый вероятный способ сломать этот план — отвергнуть вместе с понижением и
+    повышение, перепутав направление сравнения рангов.
+    """
+    await _seed_live_subscription(db_session, "basic")
+
+    await _subscribe(authed_client, plan="pro")
+    assert await _confirm(db_session) is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro", "оплаченное повышение не применено"
+
+
+@pytest.mark.asyncio
+async def test_renewing_the_own_plan_still_moves_the_date_at_the_apply_stage(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Продление СВОЕГО тарифа новой сверкой не задето: план тот же, срок дальше."""
+    current = await _seed_live_subscription(db_session, "pro", days=25)
+
+    await _subscribe(authed_client, plan="pro")
+    assert await _confirm(db_session) is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro"
+    assert _aware(rows[0].expires_at) > current + timedelta(days=27), (
+        "продление перестало двигать срок от существующего"
+    )
 
 
 def test_the_switch_semantics_are_named_in_the_place_that_moves_the_date():
