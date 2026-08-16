@@ -27,19 +27,23 @@
 риском severity medium. Повторять его на ДЕНЕЖНОМ пути не следует: текст SDK
 уходит в журнал, на экран — фиксированная строка.
 """
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import Settings
+from app.constants import PLAN_ORDER
 from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.user import User
+from app.services.payment_service import handle_webhook
 
 BILLING_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "billing.py"
 
@@ -61,6 +65,18 @@ MSG_PAYMENT = "Не удалось начать оплату — попробу�
 MSG_DISABLED = "Оплата сейчас недоступна — обратитесь к администратору"
 MSG_PLAN = "Этот тариф больше не предлагается — обновите страницу и выберите другой"
 MSG_PACKAGE = "Этот пакет больше не предлагается — обновите страницу и выберите другой"
+MSG_DOWNGRADE = (
+    "Перейти на младший тариф можно после окончания оплаченного срока — "
+    "оплаченные дни не сгорают"
+)
+
+# Подпись четвёртого состояния CTA карточки плана. Она обязана НАЗЫВАТЬ ПРИЧИНУ,
+# по которой кнопки нет: карточка без кнопки и без слов читается как поломка
+# витрины, а не как правило продукта.
+CAPTION_DOWNGRADE = (
+    "Переход на младший тариф — после окончания оплаченного срока: "
+    "оплаченные дни не сгорают"
+)
 
 # Признак нарисованной плашки отказа. Проверяется ИМЕННО он, а не наличие слова
 # из текста: слово может прийти из соседнего блока экрана, обёртка — только из
@@ -369,6 +385,7 @@ def test_no_bare_redirect_without_a_reason_is_left_in_the_section():
         ("disabled", MSG_DISABLED),
         ("plan", MSG_PLAN),
         ("package", MSG_PACKAGE),
+        ("downgrade", MSG_DOWNGRADE),
     ],
 )
 async def test_a_known_reason_code_prints_its_own_words(
@@ -440,7 +457,7 @@ def test_the_reason_codes_of_the_handlers_are_exactly_the_known_set():
     source = BILLING_PY.read_text(encoding="utf-8")
     used = set(re.findall(r"/billing\?error=([a-z]+)", source))
 
-    assert used == {"payment", "disabled", "plan", "package"}, used
+    assert used == {"payment", "disabled", "plan", "package", "downgrade"}, used
     for code in used:
         assert billing_module._payment_error_message(code), code
     assert billing_module._payment_error_message("zzz") == ""
@@ -508,3 +525,342 @@ async def test_an_expired_paid_plan_still_keeps_its_renewal_button(
 
     assert "истёк" in html
     assert 'value="basic"' in html
+
+
+# =============================================================================
+# C2 / WR-02 — семантика смены тарифа, вариант `upgrade-only`
+# =============================================================================
+#
+# РЕШЕНИЕ ВЛАДЕЛЬЦА (чекпойнт плана 05-10): повышение разрешено и НЕ сжигает
+# оплаченный остаток; понижение не предлагается и не принимается.
+#
+# ЧТО ЭТО ЗАКРЫВАЕТ. До решения `_extend_subscription` перезаписывал план
+# безусловно, а срок двигал от существующего: подписчик Pro с 25 неистёкшими
+# днями, купивший Basic, немедленно понижался и сохранял эти дни — то есть
+# 4 900 ₽, уплаченные за них, превращались в дни младшего тарифа. Путь был
+# ДОСТИЖИМ: карточка чужого платного плана рисовала «Перейти на {план}», а
+# обработчик такой платёж принимал.
+#
+# ЧЕМ ЭТО ОПЛАЧЕНО (принятая цена варианта, а не недосмотр). Повышение отдаёт
+# лимиты старшего тарифа на оставшиеся дни младшего бесплатно (T-05-51).
+# Применения лимитов в системе нет вовсе (D-08), поэтому сегодня «лимиты Pro»
+# не дают доступа ни к чему сверх показа.
+#
+# ЗАЩИТА НА ОБОИХ КОНЦАХ. Карточка младшего плана не рисует CTA, а обработчик
+# отвергает такой платёж названной причиной — устаревшая страница безопасна.
+# Прохибиция 05-01 («не сжигать неистраченный остаток») СОБЛЮДЕНА: ни один
+# разрешённый переход остатка не сжигает, переопределять её не пришлось.
+
+# Конфиг с планом, которого НЕТ в PLAN_ORDER. Отдельная константа, потому что
+# её читают два теста отказа по умолчанию.
+UNRANKED_PLAN_LIMITS = json.dumps(
+    [
+        {
+            "id": "free",
+            "name": "Free",
+            "price": "0.00",
+            "ads": 3,
+            "groups": 5,
+            "sends": 300,
+            "accounts": 1,
+        },
+        {
+            "id": "basic",
+            "name": "Basic",
+            "price": "1490.00",
+            "ads": 15,
+            "groups": 30,
+            "sends": 5000,
+            "accounts": 5,
+        },
+        {
+            "id": "platinum",
+            "name": "Platinum",
+            "price": "9900.00",
+            "ads": None,
+            "groups": None,
+            "sends": 50000,
+            "accounts": 20,
+        },
+    ]
+)
+
+
+async def _seed_live_subscription(
+    db: AsyncSession, plan: str, *, days: int = 25
+) -> datetime:
+    """Действующая (неистёкшая) подписка владельца. Возвращает её срок."""
+    expires_at = datetime.now(timezone.utc) + timedelta(days=days)
+    db.add(
+        Subscription(
+            user_id=(await _current_user(db)).id,
+            plan=plan,
+            expires_at=expires_at,
+            is_active=True,
+        )
+    )
+    await db.commit()
+    return expires_at
+
+
+async def _subscription_rows(db: AsyncSession) -> list[Subscription]:
+    owner = await _current_user(db)
+    return list(
+        (
+            await db.execute(
+                select(Subscription).where(Subscription.user_id == owner.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def _aware(value: datetime) -> datetime:
+    """SQLite отдаёт колонку с таймзоной NAIVE, PostgreSQL — aware."""
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def test_the_order_of_plans_is_declared_and_not_derived_from_price():
+    """Порядок тарифов объявлен ЯВНО, а не выведен из цены.
+
+    Цена настраивается окружением. Вывод порядка из неё сделал бы порядок
+    тарифов конфигурируемым ПОБОЧНО: правка цены Basic выше цены Pro молча
+    превратила бы понижение в повышение и разрешила бы отвергаемый сегодня
+    переход.
+    """
+    assert isinstance(PLAN_ORDER, tuple), "порядок обязан быть неизменяемым"
+    assert PLAN_ORDER == ("free", "basic", "pro")
+    assert len(set(PLAN_ORDER)) == len(PLAN_ORDER), "повтор в порядке тарифов"
+
+
+def test_every_shipped_plan_of_the_config_has_a_rank():
+    """Ни один план УМОЛЧАНИЯ конфига не остаётся без ранга.
+
+    Отказ по умолчанию — правильное поведение для незнакомого плана, но если в
+    него попадает план, который проект отгружает сам, то отказ становится не
+    защитой, а поломкой: пользователь Pro не смог бы даже продлиться.
+    """
+    shipped = {
+        plan["id"]
+        for plan in json.loads(Settings.model_fields["plan_limits"].default)
+    }
+
+    assert shipped <= set(PLAN_ORDER), shipped - set(PLAN_ORDER)
+
+
+@pytest.mark.asyncio
+async def test_an_upgrade_is_accepted(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Повышение остаётся открытым: растущему клиенту не отказывают в продаже."""
+    await _seed_live_subscription(db_session, "basic")
+
+    response = await _subscribe(authed_client, plan="pro")
+
+    assert response.status_code == 302
+    assert response.headers["location"] == CONFIRMATION_URL
+    payment = (await db_session.execute(select(Payment))).scalar_one()
+    assert payment.plan == "pro"
+
+
+@pytest.mark.asyncio
+async def test_an_upgrade_does_not_burn_the_paid_remainder(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Прохибиция 05-01 соблюдена: срок считается от СРОКА, а не от сегодня.
+
+    Это половина решения, ради которой оно и выбрано: остаток младшего тарифа
+    переживает переход, а не превращается в ноль в момент оплаты старшего.
+    """
+    current = await _seed_live_subscription(db_session, "basic", days=25)
+
+    await _subscribe(authed_client, plan="pro")
+    with patch("app.services.payment_service.add_messages", new_callable=AsyncMock):
+        processed = await handle_webhook(
+            db_session,
+            event="payment.succeeded",
+            payment_data={"object": {"id": "yoo_1"}},
+        )
+
+    assert processed is True
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1, "переход не должен заводить вторую строку"
+    assert rows[0].plan == "pro", "оплаченный старший тариф не применён"
+    assert _aware(rows[0].expires_at) > current + timedelta(days=27), (
+        "оплаченный остаток младшего тарифа сгорел"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_downgrade_is_refused_with_a_named_reason(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Понижение отвергается НА ВХОДЕ и говорит, почему.
+
+    Отвергнуть молча было бы тем же дефектом, который закрывает задача 1:
+    устаревшая страница достижима, и голый редирект читался бы как «кнопка
+    сломана».
+    """
+    await _seed_live_subscription(db_session, "pro")
+
+    response = await _subscribe(authed_client, plan="basic")
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/billing?error=downgrade"
+    assert await _payments_count(db_session) == 0
+
+
+@pytest.mark.asyncio
+async def test_renewing_the_own_live_plan_is_still_accepted(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Гард смены плана не задевает продление СВОЕГО тарифа.
+
+    Самый вероятный способ сломать этот вариант — отвергнуть вместе с
+    понижением и продление, у которого план тоже «уже есть».
+    """
+    await _seed_live_subscription(db_session, "pro")
+
+    response = await _subscribe(authed_client, plan="pro")
+
+    assert response.status_code == 302
+    assert response.headers["location"] == CONFIRMATION_URL
+    assert await _payments_count(db_session) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_first_purchase_from_free_is_still_accepted(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Подписки нет вовсе — сжигать нечего, и гард не участвует."""
+    response = await _subscribe(authed_client, plan="basic")
+
+    assert response.status_code == 302
+    assert response.headers["location"] == CONFIRMATION_URL
+    assert await _payments_count(db_session) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_downgrade_after_the_period_has_ended_is_accepted(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Истёкший срок снимает гард: остатка, который можно сжечь, больше нет.
+
+    Правило защищает УПЛАЧЕННОЕ, а не запирает пользователя в тарифе навсегда.
+    """
+    owner = await _current_user(db_session)
+    db_session.add(
+        Subscription(
+            user_id=owner.id,
+            plan="pro",
+            expires_at=datetime.now(timezone.utc) - timedelta(days=1),
+            is_active=True,
+        )
+    )
+    await db_session.commit()
+
+    response = await _subscribe(authed_client, plan="basic")
+
+    assert response.status_code == 302
+    assert response.headers["location"] == CONFIRMATION_URL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "live_plan,requested", [("platinum", "basic"), ("basic", "platinum")]
+)
+async def test_a_plan_without_a_rank_fails_closed(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    test_settings,
+    live_plan: str,
+    requested: str,
+):
+    """ОТКАЗ ПО УМОЛЧАНИЮ: незнакомому плану ранг не угадывается.
+
+    Перечень тарифов правится переменной окружения, а `PLAN_ORDER` — кодом.
+    Разойтись они могут в любую сторону, и в обеих «догадка» стоила бы денег:
+    угаданное повышение подарило бы месяц, угаданное понижение сожгло бы
+    остаток. Отказ стоит одного лишнего экрана, догадка — уплаченных денег.
+    """
+    test_settings.plan_limits = UNRANKED_PLAN_LIMITS
+    try:
+        await _seed_live_subscription(db_session, live_plan)
+        response = await _subscribe(authed_client, plan=requested)
+    finally:
+        test_settings.plan_limits = Settings.model_fields["plan_limits"].default
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/billing?error=downgrade"
+    assert await _payments_count(db_session) == 0
+
+
+@pytest.mark.asyncio
+async def test_the_lower_plan_card_explains_itself_instead_of_offering_a_button(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Четвёртое состояние CTA: подпись С ПРИЧИНОЙ вместо кнопки.
+
+    Карточка без кнопки и без слов читается как поломка витрины. Асимметрия
+    («вверх можно, вниз нельзя») обязана быть объяснена НА ЭКРАНЕ, а не только
+    в коде: пользователь кода не читает.
+    """
+    await _seed_live_subscription(db_session, "pro")
+
+    html = (await authed_client.get("/billing")).text
+
+    assert CAPTION_DOWNGRADE in html, "младший тариф не объяснил отсутствие кнопки"
+    assert 'value="basic"' not in html, "младший тариф всё ещё обещает оплату"
+    # Витрина при этом НЕ гаснет: карточка младшего плана на месте целиком.
+    assert "Basic" in html
+    assert "data-plans" in html
+
+
+@pytest.mark.asyncio
+async def test_the_higher_plan_card_still_offers_the_upgrade(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Парный тест: подпись не должна встать на карточки, которым она не нужна.
+
+    Без него предыдущий тест зеленел бы на разметке, погасившей ВСЕ кнопки.
+    """
+    await _seed_live_subscription(db_session, "basic")
+
+    html = (await authed_client.get("/billing")).text
+
+    assert 'value="pro"' in html, "повышение перестало предлагаться"
+    assert CAPTION_DOWNGRADE not in html, "подпись встала на карточку повышения"
+
+
+@pytest.mark.asyncio
+async def test_without_a_live_subscription_every_paid_card_keeps_its_button(
+    authed_client: AsyncClient,
+):
+    """Гард не трогает витрину пользователя без действующей подписки."""
+    html = (await authed_client.get("/billing")).text
+
+    assert 'value="basic"' in html
+    assert 'value="pro"' in html
+    assert CAPTION_DOWNGRADE not in html
+
+
+def test_the_switch_semantics_are_named_in_the_place_that_moves_the_date():
+    """Правило записано ТАМ, ГДЕ двигается срок, а не только в документах фазы.
+
+    Докстринг `_extend_subscription` объясняет, почему запрос активной подписки
+    повторяет читателя дословно, и до этого плана МОЛЧАЛ о том, что делается с
+    планом. Читатель этой функции — тот самый человек, который завтра будет
+    решать, можно ли поменять здесь порядок двух строк.
+    """
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "app"
+        / "services"
+        / "payment_service.py"
+    ).read_text(encoding="utf-8")
+    body = source[source.index("async def _extend_subscription(") :]
+    docstring = body[: body.index('"""', body.index('"""') + 3)]
+
+    assert "upgrade-only" in docstring, "выбранная семантика не названа"
+    assert "05-01" in docstring, "решение не связано с прохибицией, которую щадит"
