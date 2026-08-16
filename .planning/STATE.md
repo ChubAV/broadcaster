@@ -6,13 +6,13 @@ current_phase: 05
 current_phase_name: tarify
 status: executing
 stopped_at: План 05-12 исполнен — волна 9 завершена, фаза ждёт повторной верификации
-last_updated: "2026-08-16T18:35:00.000Z"
+last_updated: "2026-08-16T20:03:05.112Z"
 last_activity: 2026-08-16
 last_activity_desc: "План 05-12 исполнен: бухгалтерия фазы записана в STATE.md"
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 64
+  total_plans: 66
   completed_plans: 64
   percent: 67
 ---
