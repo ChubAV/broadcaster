@@ -1470,6 +1470,58 @@ def _period_module_names() -> frozenset[str]:
     )
 
 
+def _liveness_sample(source: str, liveness: str) -> ast.Assign | None:
+    """Присваивание, ЗНАЧЕНИЕ которого — вызов признака живости, либо `None`.
+
+    СОВПАДЕНИЕ ИЩЕТСЯ ПО ТИПАМ УЗЛОВ, А НЕ ПОДСТРОКОЙ, и это несущее свойство:
+    докстринги `_apply_extension` и `subscription_is_live` обязаны НАЗЫВАТЬ оба
+    имени, поэтому поиск подстроки прочёл бы содержимое строкового литерала и
+    краснел бы на ВЕРНОМ коде. Литерал узлом `ast.Call` не становится никогда.
+    """
+    function = ast.parse(source).body[0]
+    hits = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and getattr(node.value.func, "id", None) == liveness
+    ]
+    return min(hits, key=lambda node: node.lineno) if hits else None
+
+
+def _expiry_assignment_lines(source: str, *, attr: str = "expires_at") -> list[int]:
+    """Строки КАЖДОГО присваивания, ЦЕЛЬ которого — поле срока подписки.
+
+    Второй инвариант, независимый от имён: он ловит то, чего не ловит первый —
+    сдвиг, сделанный не вызовом функции модуля отсчёта, а любым другим
+    выражением.
+    """
+    function = ast.parse(source).body[0]
+    return sorted(
+        node.lineno
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Attribute) and target.attr == attr
+    )
+
+
+def _movers_used(source: str, *, movers: frozenset[str]) -> frozenset[str]:
+    """Какие из выведенных имён в теле функции ДЕЙСТВИТЕЛЬНО вызываются.
+
+    Нужно затем, чтобы инвариант не стал вакуумным: помощник, проверяющий имена,
+    которых в теле нет вовсе, зеленеет при любом порядке.
+    """
+    function = ast.parse(source).body[0]
+    return frozenset(
+        name
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        for name in [getattr(node.func, "id", None)]
+        if name in movers
+    )
+
+
 def _order_violations(
     source: str,
     *,
@@ -1479,9 +1531,46 @@ def _order_violations(
 ) -> list[str]:
     """Перечень нарушений порядка «признак снимается раньше КАЖДОГО сдвига».
 
-    Пустой перечень означает, что нарушений нет. Заглушка.
+    Пустой перечень означает, что нарушений нет.
+
+    ОБХОД — `ast.walk` ПО ВСЕМУ ТЕЛУ, А НЕ ПЕРЕБОР ОПЕРАТОРОВ ВЕРХНЕГО УРОВНЯ.
+    Перебор верхнего уровня держал ОДИН оператор из четырёх: сдвиги внутри
+    ветвей ему не видны вовсе (WR-03 раунда 5), а именно в ветвях и стоят и доля
+    месяца D-29, и откат к полному месяцу, и конверсия остатка формы
+    `convert-remainder`.
+
+    ПРИЗНАК ЖИВОСТИ ИСКЛЮЧАЕТСЯ ИЗ МНОЖЕСТВА ДВИГАЮЩИХ ЯВНО: он приезжает сюда
+    вместе с остальными именами модуля отсчёта, потому что множество ВЫВОДИТСЯ
+    из импорта, а требовать от него стоять раньше самого себя бессмысленно.
+    Прочие имена модуля (`countdown_base` в их числе) остаются в множестве
+    намеренно — они читают ту же величину, и снятый после них признак так же
+    описывал бы уже сдвинутый срок.
     """
-    return []
+    function = ast.parse(source).body[0]
+    sample = _liveness_sample(source, liveness)
+    if sample is None:
+        return [
+            f"в теле нет присваивания из вызова `{liveness}`: признак живости не "
+            "снимается вовсе, и порядок держать не над чем"
+        ]
+
+    violations: list[str] = []
+    for node in ast.walk(function):
+        if isinstance(node, ast.Call):
+            name = getattr(node.func, "id", None)
+            if name in movers - {liveness} and node.lineno < sample.lineno:
+                violations.append(
+                    f"строка {node.lineno}: `{name}` двигает срок ВЫШЕ снятия "
+                    f"признака (строка {sample.lineno})"
+                )
+        elif isinstance(node, ast.Assign) and node.lineno < sample.lineno:
+            for target in node.targets:
+                if isinstance(target, ast.Attribute) and target.attr == moved_attr:
+                    violations.append(
+                        f"строка {node.lineno}: `.{moved_attr}` перезаписывается "
+                        f"ВЫШЕ снятия признака (строка {sample.lineno})"
+                    )
+    return sorted(set(violations))
 
 
 def test_the_order_helper_reports_a_move_placed_above_the_sample():
@@ -1541,43 +1630,51 @@ def test_the_liveness_is_sampled_before_the_date_moves():
     платежа или подписки — правило начинало бы решать по чужой величине, стоя
     при этом на верном месте. Проверяется, что признак снимается ИМЕННО от
     `subscription.expires_at`, то есть от той величины, которую перезаписывает
-    `next_expiry`: только для неё порядок вообще что-то значит. Нагрузка на этот
-    тест выросла вместе с планом 05-15 — сдвиг срока теперь стоит В ДВУХ ВЕТКАХ,
-    и половина инварианта под возросшей нагрузкой была бы долгом следующего
-    раунда.
+    `next_expiry`: только для неё порядок вообще что-то значит.
+
+    ЧТО ТЕСТ ДЕРЖИТ СЕГОДНЯ — КАЖДЫЙ СДВИГ, А НЕ ОДИН ИЗ ЧЕТЫРЁХ. Прежняя
+    редакция перебирала операторы ВЕРХНЕГО УРОВНЯ и утверждала при этом покрытие
+    двух ветвей; фактически она держала последний оператор верхнего уровня, а
+    сдвиги внутри ветвей — долю месяца D-29 в их числе — не видела вовсе
+    (WR-03 раунда 5). Теперь обход идёт `ast.walk` по всему телу, и держатся ДВА
+    независимых инварианта: по ИМЕНИ вызываемого (множество ВЫВОДИТСЯ из импорта
+    модуля отсчёта, поэтому имя, добавленное будущим планом, попадает под
+    проверку без правки теста) и по ЦЕЛИ присваивания (любое выражение,
+    перезаписывающее поле срока, чем бы оно ни считалось).
+
+    ⚠️ ЧЕГО ТЕСТ НЕ ДЕРЖИТ, НАЗВАНО ЗДЕСЬ, ЧТОБЫ ИМЯ СНОВА НЕ ОБЕЩАЛО БОЛЬШЕ
+    ТЕЛА. Он не проверяет, что сдвиг вообще ВЕРЕН — только что он стоит ниже
+    снятия признака; арифметику держат тесты `tests/test_application/`. Он ничего
+    не знает о ветке, где признак не участвует вовсе. И он молчит о ПОРЯДКЕ
+    сдвигов между собой: их взаимная перестановка инвариантом не запрещена.
+    Краснота самого инварианта доказана не рассуждением, а двумя негативными
+    контролями над синтетическими исходниками — `test_the_order_helper_*` выше.
     """
     import app.services.payment_service as module
 
-    function = ast.parse(inspect.getsource(module._apply_extension)).body[0]
-    statements = [
-        node
-        for node in function.body
-        if not (
-            isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        )
-    ]
+    source = inspect.getsource(module._apply_extension)
+    movers = _period_module_names()
 
-    def _assignment_from(name: str) -> int:
-        for index, node in enumerate(statements):
-            if (
-                isinstance(node, ast.Assign)
-                and isinstance(node.value, ast.Call)
-                and getattr(node.value.func, "id", None) == name
-            ):
-                return index
-        raise AssertionError(f"в теле нет присваивания из вызова {name}")
-
-    live = _assignment_from("subscription_is_live")
-    moved = _assignment_from("next_expiry")
-
-    assert live < moved, (
-        "признак живости снимается ПОСЛЕ сдвига срока — правило всегда получит "
-        f"«живо», и блокер восстановлен молча (индексы {live} и {moved})"
+    used = _movers_used(source, movers=movers)
+    assert len(used) >= 2, (
+        "инвариант стал вакуумным: в теле не осталось вызовов, ввезённых из "
+        "`app.application.billing.subscription_period`, кроме признака живости "
+        f"— проверять нечего ({sorted(used)})"
     )
 
-    sampled = statements[live].value.args[0]
+    violations = _order_violations(source, movers=movers)
+    assert violations == [], (
+        "признак живости снимается ПОСЛЕ сдвига срока — правило всегда получит "
+        f"«живо», и блокер восстановлен молча: {violations}"
+    )
+
+    moves = _expiry_assignment_lines(source, attr="expires_at")
+    assert len(moves) >= 3, (
+        "сдвигов срока стало меньше трёх: либо ветка исчезла, либо срок "
+        f"двигается уже не присваиванием в поле подписки — {moves}"
+    )
+
+    sampled = _liveness_sample(source, "subscription_is_live").value.args[0]
     assert isinstance(sampled, ast.Attribute) and sampled.attr == "expires_at", (
         "признак снимается НЕ от той величины, которую перезаписывает "
         "`next_expiry`: порядок соблюдён, а правило решает по чужому полю "
