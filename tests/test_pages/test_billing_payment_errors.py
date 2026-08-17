@@ -45,7 +45,7 @@ from app.constants import PLAN_ORDER
 from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.user import User
-from app.services.payment_service import handle_webhook
+from app.services.payment_service import create_payment, handle_webhook
 
 BILLING_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "billing.py"
 
@@ -881,13 +881,40 @@ async def test_without_a_live_subscription_every_paid_card_keeps_its_button(
 # старшего тарифа становится днями младшего.
 
 
+def _app_settings() -> Settings:
+    """Настоящие `Settings` с УМОЛЧАНИЯМИ конфига, а не MagicMock.
+
+    Нужны стадии применения с решения D-29: цена действующего плана читается из
+    `parsed_plan_limits`, то есть доля месяца считается по НАСТОЯЩИМ ценам
+    проекта (Free 0 ₽, Basic 1490 ₽, Pro 4900 ₽). MagicMock здесь не годится
+    принципиально: его `parsed_plan_limits` не список словарей, и тест зеленел бы
+    на откате к полному месяцу — то есть ровно на том исходе, который D-29
+    отменяет.
+
+    Два обязательных поля задаются теми же значениями, что в `tests/conftest.py`:
+    боевой `.env` в суите не читается, а `Settings()` без них не строится.
+    """
+    return Settings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        secret_key="test-secret-key",
+    )
+
+
 async def _confirm(db: AsyncSession, payment_id: str = "yoo_1") -> bool:
     """Подтверждённое уведомление ЮKassa по конкретному платежу.
 
     `add_messages` подменяется по образцу соседних тестов: подписочная ветка его
     не зовёт, но подмена держит тест независимым от порядка ветвления.
+
+    `get_settings` подменяется по образцу `_post`, и с решения D-29 это не
+    оформление: ветка отказа читает цену действующего плана из конфига, а
+    `Settings()` в суите не строится — боевого `.env` здесь нет.
     """
-    with patch("app.services.payment_service.add_messages", new_callable=AsyncMock):
+    with patch(
+        "app.services.payment_service.add_messages", new_callable=AsyncMock
+    ), patch(
+        "app.services.payment_service.get_settings", return_value=_app_settings()
+    ):
         return await handle_webhook(
             db,
             event="payment.succeeded",
@@ -910,9 +937,37 @@ async def test_a_confirmed_lower_plan_does_not_strip_the_higher_one_at_the_apply
     не меньше 59; порог в 45 дней лежит между ними, поэтому промах в любую
     сторону однозначен: «срок сдвинут один раз» и «сдвинут дважды» не могут
     оказаться по одну сторону порога.
+
+    ⚠️ УТВЕРЖДЕНИЕ О СРОКЕ ПОМЕНЯЛО ЗНАК ВМЕСТЕ С РЕШЕНИЕМ ВЛАДЕЛЬЦА D-29, И ЭТО
+    ГЛАВНОЕ В ЭТОЙ ПРАВКЕ. Раньше здесь стояло `> now + 45 дней` с пояснением
+    «деньги второго платежа не превратились в дни» — и ровно это утверждение
+    ЗАКРЕПЛЯЛО обход цены как ожидаемое поведение: платёж `basic` за 1490 ₽
+    покупал полный календарный месяц действующего `pro` стоимостью 4900 ₽, и
+    повторов не ограничивало ничто. Решение D-29: отвергнутый платёж продолжает
+    давать дни, но ПО УПЛАЧЕННОМУ тарифу — долю месяца по отношению уплаченной
+    суммы к цене действующего плана.
+
+    Утверждение стало ДВУСТОРОННИМ, и обе стороны несущие: нижняя граница
+    (`> now + 33 дня`) держит принцип «деньги ВСЕГДА превращаются в дни» — без
+    неё тест зеленел бы на коде, не выдавшем ничего; верхняя (`< now + 45 дней`)
+    держит то, ради чего решение принято, — второй платёж НЕ купил второго
+    полного месяца старшего тарифа. Порог 45 дней сохранён и поменял сторону:
+    именно это и делает регрессию доказательной.
+
+    ⚠️ ВТОРОЙ ПЛАТЁЖ ЗАВОДИТСЯ НАПРЯМУЮ И БЕЗ ЗАПИСАННОГО ОТВЕТА (D-28). Пока
+    ответа гарда на платеже не существовало, форма годилась: оба нажатия
+    проходили мимо гарда, потому что подписки на их момент не было. С появлением
+    колонки `switch_authorized` форма записывает на ОБА платежа разрешение
+    `True` — и путь, который проверяет ЭТОТ тест (решение принимает ПРАВИЛО),
+    через форму больше не достижим. Достижим он остаётся у строк, заведённых до
+    ревизии `0019`, и именно они здесь и сеются. Путь, где оба платежа несут
+    записанное `True`, ЭТИМ ПЛАНОМ НЕ ЗАКРЫТ и закрывается планом `05-17`
+    потолком одновременных намерений (`cap-different-plan`).
     """
     await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
-    await _subscribe(authed_client, plan="basic", payment_id="yoo_basic")
+    await _seed_subscription_payment(
+        db_session, "basic", "yoo_basic", switch_authorized=None
+    )
 
     assert await _confirm(db_session, "yoo_pro") is True
     assert await _confirm(db_session, "yoo_basic") is True
@@ -920,9 +975,15 @@ async def test_a_confirmed_lower_plan_does_not_strip_the_higher_one_at_the_apply
     rows = await _subscription_rows(db_session)
     assert len(rows) == 1, "два платежа завели две подписки"
     assert rows[0].plan == "pro", "оплаченный старший тариф снят младшим платежом"
-    assert _aware(rows[0].expires_at) > datetime.now(timezone.utc) + timedelta(
-        days=45
-    ), "деньги второго платежа не превратились в дни"
+    now = datetime.now(timezone.utc)
+    assert _aware(rows[0].expires_at) > now + timedelta(days=33), (
+        "деньги второго платежа не превратились в дни — исход «взяли и не выдали "
+        "ничего», названный решением D-29 худшим"
+    )
+    assert _aware(rows[0].expires_at) < now + timedelta(days=45), (
+        "платёж младшего тарифа купил ПОЛНЫЙ месяц действующего старшего: "
+        "1490 ₽ за месяц Pro стоимостью 4900 ₽ (D-29 нарушен)"
+    )
 
 
 @pytest.mark.asyncio
@@ -935,9 +996,16 @@ async def test_the_preserved_plan_is_visible_in_the_log(
     который печатает план ПЛАТЕЖА как обычный успех: разбирающему обращение
     пользователя опереться не на что. Уровень `warning`, а не `info` — платёж
     принят, дни выданы, но уплаченный тариф применён НЕ был.
+
+    ⚠️ ВТОРОЙ ПЛАТЁЖ БЕЗ ЗАПИСАННОГО ОТВЕТА — по той же причине, что у соседа
+    выше: ключ `subscription_plan_preserved` пишется только там, где переход
+    ОТВЕРГНУТ, а через форму после D-28 оба платежа уносят разрешение `True` и
+    отказа не возникает ни у одного.
     """
     await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
-    await _subscribe(authed_client, plan="basic", payment_id="yoo_basic")
+    await _seed_subscription_payment(
+        db_session, "basic", "yoo_basic", switch_authorized=None
+    )
 
     await _confirm(db_session, "yoo_pro")
     with patch("app.services.payment_service.logger") as spy:
@@ -994,7 +1062,12 @@ async def test_renewing_the_own_plan_still_moves_the_date_at_the_apply_stage(
 
 
 async def _seed_subscription_payment(
-    db: AsyncSession, plan: str | None, payment_id: str
+    db: AsyncSession,
+    plan: str | None,
+    payment_id: str,
+    *,
+    switch_authorized: bool | None = None,
+    amount: str = "1490.00",
 ) -> Payment:
     """Подписочный платёж в состоянии «уведомление ещё не приходило».
 
@@ -1005,17 +1078,29 @@ async def _seed_subscription_payment(
 
     Владелец платежа — пользователь, которого заводит фикстура `authed_client`;
     поэтому тесты, ходящие только в БД, её всё равно запрашивают.
+
+    `switch_authorized` — ЗАПИСАННЫЙ ОТВЕТ ГАРДА (D-28). Умолчание `None`
+    означает «правило не спрашивали», то есть строку, заведённую ДО ревизии
+    `0019`; именно на таких строках живёт остаточный путь, который форма после
+    плана `05-17` завести уже не сможет. Умолчание оставлено прежним по смыслу,
+    поэтому ни один существующий вызов помощника не меняется.
+
+    `amount` — УПЛАЧЕННАЯ СУММА, и она перестала быть безразличной с решением
+    D-29: платёж, чей план не применён, покупает долю месяца ПО НЕЙ, а не
+    календарный месяц действующего тарифа. Умолчание — цена Basic, то есть
+    прежнее зашитое значение; сценарии, где важна разница цен, называют её явно.
     """
     payment = Payment(
         user_id=(await _current_user(db)).id,
         yookassa_payment_id=payment_id,
         status="pending",
-        amount_value="1490.00",
+        amount_value=amount,
         amount_currency="RUB",
         kind="subscription",
         plan=plan,
         messages_count=None,
         package_name=None,
+        switch_authorized=switch_authorized,
     )
     db.add(payment)
     await db.commit()
@@ -1058,6 +1143,12 @@ async def test_a_paid_plan_without_a_rank_keeps_the_live_plan_at_the_apply_stage
     стороны. Разница только в цене отказа — на входе это лишний экран, здесь
     отказать платежу нельзя вовсе, поэтому «отказ» означает сохранение
     действующего тарифа при выданных днях.
+
+    ⚠️ ЧИСЛО ДНЕЙ ИЗМЕНИЛОСЬ ВМЕСТЕ С РЕШЕНИЕМ D-29, ПРЕДМЕТ ТЕСТА — НЕТ. Раньше
+    здесь стояло `> current + 27 дней`, то есть отказ покупал ПОЛНЫЙ месяц
+    действующего Pro за 1490 ₽. Теперь он покупает долю по уплаченному. Держится
+    ровно то же, что и раньше: ранг не угадан И дни выданы, — но верхняя граница
+    добавлена, потому что без неё тест снова закреплял бы обход цены.
     """
     current = await _seed_live_subscription(db_session, "pro", days=25)
     await _seed_subscription_payment(db_session, "platinum", "yoo_unranked")
@@ -1068,8 +1159,9 @@ async def test_a_paid_plan_without_a_rank_keeps_the_live_plan_at_the_apply_stage
     rows = await _subscription_rows(db_session)
     assert len(rows) == 1
     assert rows[0].plan == "pro", "незнакомому плану угадали ранг"
-    assert _aware(rows[0].expires_at) > current + timedelta(days=27), (
-        "оплаченные дни не выданы"
+    assert _aware(rows[0].expires_at) > current, "оплаченные дни не выданы"
+    assert _aware(rows[0].expires_at) < current + timedelta(days=27), (
+        "отвергнутый платёж купил полный месяц действующего тарифа (D-29)"
     )
     assert any(
         call.args and call.args[0] == "subscription_plan_preserved"
@@ -1230,6 +1322,11 @@ async def test_a_live_period_still_keeps_the_higher_plan(
     Без него первый тест раздела зеленел бы на коде, снявшем отказ вообще везде —
     то есть на возврате ровно того дефекта, который закрыл план 05-11. Платёж
     заводится напрямую, потому что гард формы такую покупку не пропустит.
+
+    ⚠️ ЧИСЛО ДНЕЙ ИЗМЕНИЛОСЬ ВМЕСТЕ С РЕШЕНИЕМ D-29, ПРЕДМЕТ ТЕСТА — НЕТ.
+    Отказ по-прежнему означает «действующий тариф сохранён, дни выданы»; менялась
+    только МЕРА дней, и верхняя граница добавлена, чтобы полный месяц старшего
+    тарифа за цену младшего не вернулся сюда молча.
     """
     current = await _seed_live_subscription(db_session, "pro", days=25)
     await _seed_subscription_payment(db_session, "basic", "yoo_live_basic")
@@ -1241,8 +1338,9 @@ async def test_a_live_period_still_keeps_the_higher_plan(
     assert rows[0].plan == "pro", (
         "живой оплаченный старший тариф снят младшим платежом"
     )
-    assert _aware(rows[0].expires_at) > current + timedelta(days=27), (
-        "оплаченные дни не выданы"
+    assert _aware(rows[0].expires_at) > current, "оплаченные дни не выданы"
+    assert _aware(rows[0].expires_at) < current + timedelta(days=27), (
+        "отвергнутый платёж купил полный месяц действующего тарифа (D-29)"
     )
 
 
@@ -1262,6 +1360,16 @@ def test_the_liveness_is_sampled_before_the_date_moves():
     докстринг из перечня операторов вычёркивается, а ищется присваивание, ЗНАЧЕНИЕ
     которого — вызов функции с этим именем. Упоминание имени в комментарии
     оператором не является и тест не ломает; перестановка двух операторов — ломает.
+
+    ⚠️ ТЕСТ ДЕРЖИТ И ВЕЛИЧИНУ, А НЕ ТОЛЬКО ПОРЯДОК (IN-02 раунда 4). Держа один
+    порядок, он зеленел бы при подмене АРГУМЕНТА снятия на любое другое поле
+    платежа или подписки — правило начинало бы решать по чужой величине, стоя
+    при этом на верном месте. Проверяется, что признак снимается ИМЕННО от
+    `subscription.expires_at`, то есть от той величины, которую перезаписывает
+    `next_expiry`: только для неё порядок вообще что-то значит. Нагрузка на этот
+    тест выросла вместе с планом 05-15 — сдвиг срока теперь стоит В ДВУХ ВЕТКАХ,
+    и половина инварианта под возросшей нагрузкой была бы долгом следующего
+    раунда.
     """
     import app.services.payment_service as module
 
@@ -1292,6 +1400,13 @@ def test_the_liveness_is_sampled_before_the_date_moves():
     assert live < moved, (
         "признак живости снимается ПОСЛЕ сдвига срока — правило всегда получит "
         f"«живо», и блокер восстановлен молча (индексы {live} и {moved})"
+    )
+
+    sampled = statements[live].value.args[0]
+    assert isinstance(sampled, ast.Attribute) and sampled.attr == "expires_at", (
+        "признак снимается НЕ от той величины, которую перезаписывает "
+        "`next_expiry`: порядок соблюдён, а правило решает по чужому полю "
+        f"({ast.dump(sampled)})"
     )
 
 
@@ -1338,3 +1453,354 @@ def test_the_switch_semantics_are_named_in_the_place_that_moves_the_date():
     assert "subscription_is_live" in docstring, (
         "докстринг не называет, ЧЕМ считается признак живости и где он объявлен"
     )
+    # ТРЕТЬЕ ПРИМЕНЕНИЕ ТОГО ЖЕ УРОКА. Подстрока `switch_authorized` существует
+    # только вместе с абзацем о том, ЧТО решает, применять ли план: записанное
+    # разрешение, а не сегодняшнее состояние подписки. Пока абзаца не было,
+    # докстринг описывал стадию, которая принимает решение заново, — то есть
+    # снова не исполняемое поведение (гэп 1 раунда 4).
+    assert "switch_authorized" in docstring, (
+        "докстринг молчит о том, что решение о плане принимается по ЗАПИСАННОМУ "
+        "разрешению, а не по состоянию подписки в момент уведомления"
+    )
+
+
+# =============================================================================
+# РАЗРЕШЕНИЕ СДЕЛКИ ЗАПИСАНО НА ПЛАТЕЖЕ — состояние подписки МЕНЯЕТСЯ между
+# продажей и подтверждением
+# =============================================================================
+#
+# ЧЕМ ЭТОТ РАЗДЕЛ ОТЛИЧАЕТСЯ ОТ ВСЕХ СОСЕДНИХ, И ЭТО ЕДИНСТВЕННОЕ ОТЛИЧИЕ.
+# Соседние разделы держат состояние подписки НЕИЗМЕННЫМ между стадией ПРОДАЖИ
+# и стадией ПОДТВЕРЖДЕНИЯ: подписка либо живая на обеих, либо истёкшая на
+# обеих, либо отсутствует на обеих. Ровно поэтому суита из 1681 теста
+# оставалась зелёной при работающем блокере — класса тестов, меняющих это
+# состояние МЕЖДУ двумя стадиями, не было ни одного.
+#
+# Здесь состояние МЕНЯЕТСЯ. Между двумя моментами лежит вся сессия оплаты у
+# ЮKassa, и за это время подписка успевает ожить (соседний платёж подтверждён),
+# истечь (прошло время) или появиться впервые.
+#
+# РЕШЕНИЕ ВЛАДЕЛЬЦА D-28: ответ гарда о разрешённом переходе записывается НА
+# ПЛАТЁЖ (`payments.switch_authorized`, ревизия `0019`), и стадия применения
+# читает записанный ФАКТ, а не пересчитывает предикат по изменившейся строке
+# подписки. `True` — правило спросили и переход разрешило; `False` — спросили и
+# отвергло; `NULL` — НЕ спрашивали (пакетный платёж либо строка старше ревизии).
+
+
+@pytest.mark.asyncio
+async def test_a_deal_sold_on_an_expired_period_is_delivered_after_the_period_revives(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Зеркальный путь WR-01 раунда 4: продано на истёкшем — выдано на ожившем.
+
+    ВРЕД ЗДЕСЬ ДОСТАЁТСЯ ПОЛЬЗОВАТЕЛЮ, а не кассе, и этим путь отличается от
+    денежного (CR-01). Подписка `pro` истекла вчера; пользователь покупает
+    `basic` — гард ПРОПУСКАЕТ покупку, потому что защищать нечего, и обещание
+    карточки «переход на младший тариф — после окончания оплаченного срока»
+    исполнено ровно в этот момент. Дальше подтверждается соседний платёж `pro`,
+    и период ОЖИВАЕТ. К моменту, когда приходит уведомление о проданном
+    `basic`, состояние подписки уже другое — и правило, пересчитанное по нему,
+    отвечает «отказ»: сделка продана под обещание и не выдана.
+
+    Записанный ответ гарда (D-28) убирает эту переменную: платёж несёт то, что
+    было ПРОДАНО, и стадия применения читает его, а не текущее состояние БД.
+    """
+    await _seed_expired_subscription(db_session, "pro")
+
+    # ПРОДАЖА: период истёк, гард пропускает, ответ обязан быть записан.
+    await _subscribe(authed_client, plan="basic", payment_id="yoo_basic")
+
+    # ОКНО МЕЖДУ СТАДИЯМИ: соседний платёж оживляет период и ставит план `pro`.
+    await _seed_subscription_payment(
+        db_session, "pro", "yoo_pro", switch_authorized=True
+    )
+    assert await _confirm(db_session, "yoo_pro") is True
+
+    # ПРИМЕНЕНИЕ проданного: состояние подписки уже ДРУГОЕ.
+    assert await _confirm(db_session, "yoo_basic") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1, "два платежа завели две подписки"
+    assert rows[0].plan == "basic", (
+        "сделка продана под обещание «понижение будет применено» и НЕ выдана: "
+        "стадия применения решила заново по состоянию, которого в момент "
+        "продажи не было"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_intent_stage_records_its_answer_on_the_payment(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Ответ гарда существует на строке платежа, а не только в стеке вызова.
+
+    Пока ответ нигде не записан, любая пара «продали → выдали» решает заново по
+    тому, что успело измениться. Утверждение самое простое из раздела и самое
+    несущее: без него всё остальное чинило бы следствие.
+    """
+    await _subscribe(authed_client, plan="basic", payment_id="yoo_recorded")
+
+    payment = (
+        await db_session.execute(
+            select(Payment).where(Payment.yookassa_payment_id == "yoo_recorded")
+        )
+    ).scalar_one()
+
+    assert payment.switch_authorized is True, (
+        "стадия намерения не записала СВОЙ ответ на платёж"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_deal_cannot_be_sold_without_recording_its_authorization(
+    db_session: AsyncSession,
+):
+    """Разрешение НЕЛЬЗЯ не записать: вызов без него падает громко.
+
+    МАШИННАЯ ГАРАНТИЯ ВМЕСТО ДИСЦИПЛИНЫ ВЫЗЫВАЮЩЕГО. Параметр со значением по
+    умолчанию однажды не подадут — ровно так разошлись две стадии дважды
+    подряд, и ровно поэтому `kind` тоже объявлен обязательным keyword-only.
+    Четвёртый вызывающий, заведённый завтра, обязан упасть НА ВЫЗОВЕ, а не
+    тихо записать платёж, о котором неизвестно, что было продано.
+    """
+    with pytest.raises(TypeError):
+        create_payment(
+            db_session,
+            user_id=1,
+            kind="subscription",
+            plan="basic",
+            price="1490.00",
+            package_name=None,
+            messages_count=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_package_payment_records_that_the_rule_was_not_asked(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Пакетный платёж записывает `NULL` ЗНАЧЕНИЕМ, а не отсутствием поля.
+
+    Правило смены тарифа пакета не касается вовсе, и это обязано быть выражено
+    записанным `NULL`, а не «забыли записать». Разница видна на стадии
+    применения: `NULL` означает «не спрашивали», а не «спрашивали и отказали».
+    """
+    await _purchase(authed_client)
+
+    payment = (
+        await db_session.execute(
+            select(Payment).where(Payment.yookassa_payment_id == "yoo_1")
+        )
+    ).scalar_one()
+
+    assert payment.kind == "package"
+    assert payment.switch_authorized is None, (
+        "пакетному платежу записан ответ правила, которое его не касается"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_payment_without_a_recorded_answer_still_decides_by_the_rule(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ПАРНЫЙ тест: строка старше ревизии `0019` по-прежнему решается правилом.
+
+    Без него «читать записанный факт» можно было бы исполнить так, что строки
+    без записанного ответа перестали бы решаться вовсе — и действующий старший
+    тариф снимался бы любым подтверждённым младшим платежом, заведённым до
+    ревизии. У такой строки записанному ответу взяться неоткуда, и выдумать его
+    хуже, чем пересчитать.
+    """
+    await _seed_live_subscription(db_session, "pro", days=25)
+    await _seed_subscription_payment(
+        db_session, "basic", "yoo_old", switch_authorized=None
+    )
+
+    assert await _confirm(db_session, "yoo_old") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro", (
+        "строка без записанного ответа перестала решаться правилом"
+    )
+
+
+# =============================================================================
+# ДНИ ПО УПЛАЧЕННОМУ ТАРИФУ (D-29) — платёж, чей план не применён
+# =============================================================================
+#
+# ДО ЭТОГО ПЛАНА `subscription.expires_at = next_expiry(...)` стоял БЕЗУСЛОВНО и
+# ВЫШЕ решения о плане, поэтому отвергнутый платёж младшего тарифа покупал полный
+# календарный месяц действующего СТАРШЕГО: 1490 ₽ давали месяц Pro стоимостью
+# 4900 ₽, и повторов не ограничивало ничто.
+#
+# РЕШЕНИЕ ВЛАДЕЛЬЦА D-29: платёж продолжает давать дни — принцип «деньги ВСЕГДА
+# превращаются в дни» сохранён, и «не выдать ничего» остаётся худшим из исходов,
+# — но дни считаются ПО УПЛАЧЕННОМУ: доля календарного месяца по отношению
+# уплаченной суммы к цене действующего плана, не меньше одного дня.
+
+
+@pytest.mark.asyncio
+async def test_a_pro_deal_sold_before_any_subscription_is_not_erased_by_a_later_basic(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """СЛУЧАЙ (1) третьего пункта `missing:` — подписки НЕТ на момент ОБЕИХ продаж.
+
+    ⚠️ ЧЕМ ЭТОТ СЛУЧАЙ ОТЛИЧАЕТСЯ ОТ СОСЕДНЕГО, И ОТЛИЧИЕ ПРИНЦИПИАЛЬНО.
+    У соседа подписка к моменту второго подтверждения уже существует как
+    ПРОДЛЕВАЕМАЯ. Здесь подписки нет ВОВСЕ, поэтому первый подтверждённый платёж
+    идёт веткой ПЕРВОЙ ВСТАВКИ, а не веткой продления — ровно то состояние,
+    которое воспроизводил верификатор. Считать эти два теста дубликатами и
+    удалить один нельзя.
+
+    У ТРЁХ УТВЕРЖДЕНИЙ ЗДЕСЬ РАЗНЫЕ РОЛИ, и путать их значило бы записать в
+    отчёт величину, которой ни один прогон не даёт:
+
+    * «строка одна» — ЗАЩИТНОЕ, на входе ЗЕЛЁНОЕ;
+    * `plan == "pro"` — ЗАЩИТНОЕ, на входе ЗЕЛЁНОЕ. У строки без записанного
+      ответа решение принимает правило: `switch_is_refused("pro", "basic",
+      period_is_live=True)` отвечает `True`, ветка `subscription_plan_preserved`
+      возвращает управление, и план НЕ перезаписывается уже сегодня.
+      Утверждение ловит регрессию БУДУЩЕГО — снятие старшего плана записанным
+      фактом или долей месяца, — а не сегодняшний дефект;
+    * срок строго между «сейчас + 33 дня» и «сейчас + 45 дней» — ЕДИНСТВЕННОЕ
+      КРАСНОЕ на входе: сегодня отвергнутый платёж двигает срок на полный
+      календарный месяц, и итог уходит за 59 дней.
+
+    Путь, на котором план ДЕЙСТВИТЕЛЬНО стирается последним подтверждением, —
+    это путь строк С записанным разрешением `True`, то есть заведённых ФОРМОЙ.
+    Он этим планом НЕ достижим и закрывается планом `05-17` (потолок
+    одновременных намерений, форма `cap-different-plan`).
+    """
+    await _seed_subscription_payment(
+        db_session, "pro", "yoo_pro", switch_authorized=None, amount="4900.00"
+    )
+    await _seed_subscription_payment(
+        db_session, "basic", "yoo_basic", switch_authorized=None, amount="1490.00"
+    )
+
+    assert await _confirm(db_session, "yoo_pro") is True
+    assert await _confirm(db_session, "yoo_basic") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1, "два платежа завели две подписки"
+    assert rows[0].plan == "pro", (
+        "сделка на 4900 ₽ продана и не выдана: старший тариф снят последним "
+        "подтверждённым младшим платежом"
+    )
+    now = datetime.now(timezone.utc)
+    assert _aware(rows[0].expires_at) > now + timedelta(days=33), (
+        "деньги второго платежа не превратились в дни"
+    )
+    assert _aware(rows[0].expires_at) < now + timedelta(days=45), (
+        "второй платёж купил ВТОРОЙ полный месяц старшего тарифа за цену "
+        "младшего (D-29 нарушен)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_upgrade_confirmed_last_is_still_applied_without_a_recorded_answer(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ЗЕРКАЛО предыдущего по ПОРЯДКУ подтверждений: тот же посев, обратный порядок.
+
+    Целиком защитный и на входе зелёный. Без него предыдущий тест зеленел бы на
+    коде, запретившем менять план ВООБЩЕ: повышение обязано остаться повышением,
+    а оплаченный остаток — не сгореть.
+    """
+    await _seed_subscription_payment(
+        db_session, "pro", "yoo_pro", switch_authorized=None, amount="4900.00"
+    )
+    await _seed_subscription_payment(
+        db_session, "basic", "yoo_basic", switch_authorized=None, amount="1490.00"
+    )
+
+    assert await _confirm(db_session, "yoo_basic") is True
+    assert await _confirm(db_session, "yoo_pro") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro", "оплаченное повышение не применено"
+    assert _aware(rows[0].expires_at) > datetime.now(timezone.utc) + timedelta(
+        days=45
+    ), "повышение сожгло оплаченный остаток младшего тарифа"
+
+
+@pytest.mark.asyncio
+async def test_a_refused_payment_buys_days_of_what_it_paid_for(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Журнал объясняет, ПОЧЕМУ дней девять, а не тридцать.
+
+    НАЧАЛЬНОЕ СОСТОЯНИЕ НАЗВАНО ЗДЕСЬ ЯВНО, потому что соседних прогонов теперь
+    три, а число выданных дней зависит от того, какой из них взят: ЖИВАЯ `pro`
+    плюс отвергнутый `basic` без записанного ответа.
+
+    Без своего ключа исход «выдано девять дней вместо тридцати» неотличим в
+    журнале от «дни не выданы», и разбирающий обращение не сможет объяснить
+    человеку ни числа, ни его основания.
+    """
+    await _seed_live_subscription(db_session, "pro", days=25)
+    await _seed_subscription_payment(
+        db_session, "basic", "yoo_basic", switch_authorized=None, amount="1490.00"
+    )
+
+    with patch("app.services.payment_service.logger") as spy:
+        assert await _confirm(db_session, "yoo_basic") is True
+
+    preserved = [
+        call
+        for call in spy.warning.call_args_list
+        if call.args and call.args[0] == "subscription_plan_preserved"
+    ]
+    assert preserved, "сохранение старшего тарифа не оставило следа в журнале"
+    fields = preserved[0].kwargs
+    assert fields.get("plan") == "pro"
+    assert fields.get("paid_plan") == "basic"
+
+    granted = fields.get("granted_days")
+    assert isinstance(granted, int), "журнал не называет числа выданных дней"
+    assert 1 <= granted <= 12, (
+        f"выдано {granted} дней — это не доля месяца от 1490 ₽ при цене 4900 ₽"
+    )
+    assert str(fields.get("price_basis")) == "4900.00", (
+        "журнал не называет цену, ПО КОТОРОЙ посчитаны дни — без неё число "
+        "выданных дней нечем объяснить"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_price_that_cannot_be_read_falls_back_to_the_whole_month(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Непрочитанная цена НЕ поднимает исключения и НЕ отнимает дней.
+
+    ПРИЧИНА ТРЕБОВАНИЯ ПРИКЛАДНАЯ. Необработанное исключение в обработчике
+    уведомления даёт 5xx, а 5xx на уведомлении ЮKassa запускает цикл повторов и
+    оставляет платёж `pending` навсегда — класс отказа, уже стоивший фазе
+    находки `WR-04` раунда 2.
+
+    Перечень тарифов правится окружением, а действующий план записан в строке
+    подписки: разойтись они могут в любую сторону, и тогда цены, по которой
+    считать долю, взяться неоткуда. Откат к полному месяцу выбран в сторону
+    пользователя — отнимать дни за расхождение конфига с базой не за что.
+    """
+    current = await _seed_live_subscription(db_session, "platinum", days=25)
+    await _seed_subscription_payment(
+        db_session, "basic", "yoo_basic", switch_authorized=None, amount="1490.00"
+    )
+
+    with patch("app.services.payment_service.logger") as spy:
+        assert await _confirm(db_session, "yoo_basic") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "platinum", "незнакомому плану угадали ранг"
+    assert _aware(rows[0].expires_at) > current + timedelta(days=27), (
+        "откат к полному месяцу не сработал — дни отняты за расхождение конфига"
+    )
+
+    assert any(
+        call.args and call.args[0] == "subscription_prorating_skipped"
+        for call in spy.warning.call_args_list
+    ), "непрочитанная цена не оставила следа в журнале"

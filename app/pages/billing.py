@@ -315,14 +315,19 @@ async def subscribe_to_plan(
     # ОДИН ВЫЗОВ, А НЕ КОНЪЮНКЦИЯ ИЗ ДВУХ ЧЛЕНОВ. Признак живости оплаченного
     # срока — обязательный вход правила, поэтому выражения, которое могло бы
     # разъехаться с таким же выражением второй стадии, здесь не остаётся вовсе.
+    #
+    # ОТВЕТ ГАРДА СЧИТАЕТСЯ ОДИН РАЗ И ПОЛУЧАЕТ ИМЯ (D-28). Раньше он был
+    # выражением внутри `if` и нигде не переживал этот оператор; теперь он
+    # уезжает на платёж и живёт столько же, сколько сделка.
     quota = (getattr(request.state, "shell", None) or {}).get("quota", {})
-    if switch_is_refused(
+    switch_refused = switch_is_refused(
         quota.get("plan", FREE_PLAN_ID),
         selected["id"],
         period_is_live=subscription_is_live(
             quota.get("expires_at"), datetime.now(timezone.utc)
         ),
-    ):
+    )
+    if switch_refused:
         return RedirectResponse(url="/billing?error=downgrade", status_code=302)
 
     try:
@@ -335,6 +340,13 @@ async def subscribe_to_plan(
             kind=KIND_SUBSCRIPTION,
             plan=selected["id"],
             price=selected["price"],
+            # ОТРИЦАНИЕ ВЫЧИСЛЕННОГО ОТВЕТА, А НЕ ЛИТЕРАЛ `True`. Литерал был бы
+            # ВТОРЫМ выражением того же смысла — а два выражения одного смысла
+            # в этом разделе расходились уже трижды, и каждый раз это стоило
+            # блокера. Отрицание остаётся верным и в будущем, где отказ
+            # перестанет возвращаться немедленно: тогда сюда придёт `False`, и
+            # платёж унесёт записанный ОТКАЗ, а не выдуманное разрешение.
+            switch_authorized=not switch_refused,
             package_name=None,
             messages_count=None,
         )
@@ -410,6 +422,10 @@ async def purchase_package(
             package_name=package["name"],
             messages_count=package["count"],
             price=package["price"],
+            # Правило смены тарифа пакета не касается вовсе, и это выражается
+            # ЗАПИСАННЫМ `None`, а не пропущенным аргументом: пропуск читался бы
+            # как «забыли», и стадия применения не отличила бы его от отказа.
+            switch_authorized=None,
         )
     except PaymentCreationError:
         return RedirectResponse(url="/billing?error=payment", status_code=302)
