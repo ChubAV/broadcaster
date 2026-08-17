@@ -275,6 +275,14 @@ None — внешних сервисов план не конфигурируе�
 - **Три judgment-tier прохибиции фазы** (BILL-05, BILL-06, BILL-07) остаются `unresolved`.
 - **Долг, принятый явно:** расхождение модели с БОЕВОЙ схемой машиной не ловится. Форсирующий признак промоции — первый выкат после D-26 либо второй стенд с собственной ревизией.
 
+## Self-Check: PASSED
+
+- `tests/test_migrations/test_model_matches_head.py` — FOUND
+- `tests/test_migrations/test_deploy_applies_migrations_before_serving.py` — FOUND
+- `alembic/versions/0019_payment_switch_authorized.py` — FOUND (изменён)
+- Коммиты `faaddc8`, `d9ee957`, `fcb8320` — FOUND в `git log`
+- `git diff --name-only 1e62a71 HEAD` содержит ровно четыре пути: три из `files_modified` плюс собственный SUMMARY. `entrypoint.sh` отсутствует — проверенный факт, а не пропуск. `.planning/STATE.md` и `.planning/ROADMAP.md` не тронуты.
+
 ---
 *Phase: 05-tarify*
 *Completed: 2026-08-17*
