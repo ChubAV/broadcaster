@@ -2140,10 +2140,10 @@ async def test_a_second_subscription_intent_from_the_form_is_refused_with_words(
 
 
 @pytest.mark.asyncio
-async def test_the_two_authorized_intents_of_case_one_are_unreachable_through_the_form(
+async def test_a_second_intent_of_another_plan_is_refused_while_the_first_is_fresh(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """СЛУЧАЙ (1) доведён до конца: состояния с двумя разрешениями больше нет.
+    """Второе намерение ДРУГОГО тарифа отвергается, пока первое СВЕЖЕЕ.
 
     ⚠️ ЧЕМ ЭТОТ ТЕСТ ОТЛИЧАЕТСЯ ОТ
     `test_a_pro_deal_sold_before_any_subscription_is_not_erased_by_a_later_basic`,
@@ -2158,6 +2158,15 @@ async def test_the_two_authorized_intents_of_case_one_are_unreachable_through_th
 
     Именно на этом пути сделка на 4900 ₽ продавалась и стиралась последним
     подтверждённым `basic`.
+
+    ⚠️ ЧЕГО ЭТОТ ТЕСТ НЕ ДЕРЖИТ, И ПОЧЕМУ ЕГО ИМЯ БОЛЬШЕ НЕ ГОВОРИТ
+    «UNREACHABLE». Оба намерения он заводит ПОДРЯД, о сроке давности не знает
+    вовсе, и потому доказывает ровно одно: пока первое намерение СВЕЖЕЕ, второго
+    не появится. Состояние «два оплачиваемых намерения разных тарифов»
+    недостижимым он НЕ объявляет — оно достижимо через сутки, и это доказывает
+    `tests/test_services/test_payment_service.py::test_a_stale_intent_does_not_block_a_new_one`.
+    Прежнее имя обещало инвариант шире тела, и читатель, искавший покрытие по
+    имени, получал ложную уверенность (WR-05 раунда 5).
     """
     await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
     refused = await _subscribe(authed_client, plan="basic", payment_id="yoo_basic")
