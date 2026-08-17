@@ -32,6 +32,7 @@ import inspect
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -40,6 +41,7 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.billing.subscription_period import add_one_month
 from app.config import Settings
 from app.constants import PLAN_ORDER
 from app.models.payment import Payment
@@ -94,6 +96,14 @@ CAPTION_DOWNGRADE = (
 # из текста: слово может прийти из соседнего блока экрана, обёртка — только из
 # ветки показа причины.
 ALERT_MARKER = "data-payment-error"
+
+# ЦЕНЫ ПРЕЙСКУРАНТА — СТРОКАМИ В `Decimal`, НИКОГДА ЧИСЛАМИ С ПЛАВАЮЩЕЙ ТОЧКОЙ.
+# Это те же значения, что отдаёт `parsed_plan_limits` умолчаний конфига и что
+# читает `_plan_price` денежного пути (Basic 1490 ₽, Pro 4900 ₽). Двоичная дробь
+# дала бы разные ответы на одинаковых суммах в зависимости от записи, а
+# `payments.amount_value` объявлена строкой намеренно.
+BASIC_PRICE = Decimal("1490.00")
+PRO_PRICE = Decimal("4900.00")
 
 
 # --- Инструменты --------------------------------------------------------------
@@ -724,27 +734,46 @@ async def test_an_upgrade_is_accepted(
 async def test_an_upgrade_does_not_burn_the_paid_remainder(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Прохибиция 05-01 соблюдена: срок считается от СРОКА, а не от сегодня.
+    """Прохибиция 05-01 соблюдена: оплаченный остаток переживает переход.
 
-    Это половина решения, ради которой оно и выбрано: остаток младшего тарифа
-    переживает переход, а не превращается в ноль в момент оплаты старшего.
+    ⚠️ ИМЯ ПРЕЖНЕЕ, А ЧИСЛО ДНЕЙ ДРУГОЕ, И ЭТО РЕШЕНИЕ ВЛАДЕЛЬЦА, А НЕ ПРАВКА
+    ПОД РЕЗУЛЬТАТ (форма `convert-remainder`, чекпойнт задачи 1 плана 05-18).
+    Прежняя редакция утверждала, что остаток переживает переход ДНЯМИ: 25 дней
+    Basic оставались 25 днями Pro, и следующий оператор добавлял к ним полный
+    оплаченный месяц. На безобидном масштабе 25 дней это выглядело щедростью, но
+    ровно этот механизм на масштабе года и был гэпом 1 раунда 5: двенадцать
+    предоплаченных месяцев Basic (17 880 ₽) плюс один платёж Pro (4 900 ₽) давали
+    тринадцать месяцев Pro при прейскуранте 63 700 ₽. Тест закреплял механизм
+    утечки как ЖЕЛАЕМОЕ поведение — поэтому переписан, а не удалён: удаление
+    дефекта вместе с записью о нём запрещено этой фазой.
+
+    КАКАЯ ВЕЛИЧИНА ТЕПЕРЬ ПЕРЕЖИВАЕТ ПЕРЕХОД — ДЕНЬГИ, А НЕ ДНИ. Остаток
+    пересчитывается по отношению цен: 25 дней Basic по 1490 ₽/мес стоят столько
+    же, сколько 7 дней Pro по 4900 ₽/мес. Обещание «оплаченный остаток не
+    сгорает» остаётся верным — сгоревшим считался бы исход «ровно месяц от
+    сегодня», и НИЖНЕЕ утверждение держит именно его. ВЕРХНЕЕ держит то, ради
+    чего решение принято: остаток не переносится по дням.
     """
     current = await _seed_live_subscription(db_session, "basic", days=25)
 
     await _subscribe(authed_client, plan="pro")
-    with patch("app.services.payment_service.add_messages", new_callable=AsyncMock):
-        processed = await handle_webhook(
-            db_session,
-            event="payment.succeeded",
-            payment_data={"object": {"id": "yoo_1"}},
-        )
+    assert await _confirm(db_session) is True
 
-    assert processed is True
     rows = await _subscription_rows(db_session)
     assert len(rows) == 1, "переход не должен заводить вторую строку"
     assert rows[0].plan == "pro", "оплаченный старший тариф не применён"
-    assert _aware(rows[0].expires_at) > current + timedelta(days=27), (
-        "оплаченный остаток младшего тарифа сгорел"
+
+    now = datetime.now(timezone.utc)
+    assert _aware(rows[0].expires_at) > add_one_month(now), (
+        "оплаченный остаток сгорел: повышение выдало ровно месяц от сегодня"
+    )
+
+    remainder_days = (_aware(current) - now).days
+    converted_days = int(Decimal(remainder_days) * BASIC_PRICE / PRO_PRICE)
+    expected = add_one_month(now + timedelta(days=converted_days))
+    assert abs(_aware(rows[0].expires_at) - expected) <= timedelta(days=2), (
+        "остаток перенесён ПО ДНЯМ, а не по деньгам: 25 дней Basic стоят "
+        f"{converted_days} дней Pro, а не 25"
     )
 
 
@@ -1742,9 +1771,23 @@ async def test_an_upgrade_confirmed_last_is_still_applied_without_a_recorded_ans
 ):
     """ЗЕРКАЛО предыдущего по ПОРЯДКУ подтверждений: тот же посев, обратный порядок.
 
-    Целиком защитный и на входе зелёный. Без него предыдущий тест зеленел бы на
-    коде, запретившем менять план ВООБЩЕ: повышение обязано остаться повышением,
-    а оплаченный остаток — не сгореть.
+    Целиком защитный. Без него предыдущий тест зеленел бы на коде, запретившем
+    менять план ВООБЩЕ: повышение обязано остаться повышением, а оплаченный
+    остаток — не сгореть.
+
+    ⚠️ УТВЕРЖДЕНИЕ О СРОКЕ ПОМЕНЯЛО СТОРОНУ ВМЕСТЕ С РЕШЕНИЕМ ВЛАДЕЛЬЦА
+    `convert-remainder` (чекпойнт задачи 1 плана 05-18), ровно как это уже
+    случилось с порогом 45 дней у соседа `..._does_not_strip_the_higher_one_...`
+    при решении D-29. Раньше здесь стояло `> now + 45 дней`: оплаченный месяц
+    Basic переживал переход ДНЯМИ и складывался с оплаченным месяцем Pro в
+    шестьдесят дней. Именно этот механизм на масштабе года и был гэпом 1 раунда
+    5. Теперь остаток переносится ПО ДЕНЬГАМ: месяц Basic (1490 ₽) стоит девять
+    дней Pro (4900 ₽), и срок выходит около тридцати девяти дней.
+
+    Порог 45 дней сохранён и поменял сторону — именно это и делает утверждение
+    доказательным. Обе стороны несущие: нижняя (`> месяц от сегодня`) держит
+    обещание «оплаченный остаток не сгорает» — без неё тест зеленел бы на коде,
+    отнявшем остаток целиком; верхняя держит то, ради чего решение принято.
     """
     await _seed_subscription_payment(
         db_session, "pro", "yoo_pro", switch_authorized=None, amount="4900.00"
@@ -1759,9 +1802,15 @@ async def test_an_upgrade_confirmed_last_is_still_applied_without_a_recorded_ans
     rows = await _subscription_rows(db_session)
     assert len(rows) == 1
     assert rows[0].plan == "pro", "оплаченное повышение не применено"
-    assert _aware(rows[0].expires_at) > datetime.now(timezone.utc) + timedelta(
-        days=45
-    ), "повышение сожгло оплаченный остаток младшего тарифа"
+    now = datetime.now(timezone.utc)
+    assert _aware(rows[0].expires_at) > add_one_month(now), (
+        "повышение сожгло оплаченный остаток младшего тарифа: выдан ровно месяц "
+        "от сегодня"
+    )
+    assert _aware(rows[0].expires_at) < now + timedelta(days=45), (
+        "оплаченный остаток перенесён ПО ДНЯМ, а не по деньгам: месяц Basic "
+        "сложился с месяцем Pro в два полных месяца старшего тарифа"
+    )
 
 
 @pytest.mark.asyncio
@@ -1941,3 +1990,186 @@ async def test_a_package_purchase_is_not_blocked_by_a_pending_subscription_inten
     assert response.status_code == 302
     assert response.headers["location"] == CONFIRMATION_URL
     assert await _payments_count(db_session) == 2
+
+
+# =============================================================================
+# ГЭП 1 РАУНДА 5 — НАКОПЛЕННЫЙ ПРЕДОПЛАЧЕННЫЙ ГОРИЗОНТ И ЕГО ПЕРЕВОД НА
+# СТАРШИЙ ТАРИФ ОДНИМ ПЛАТЕЖОМ
+#
+# ПРЕДМЕТ РАЗДЕЛА. Горизонт предоплаты — величина, которой управляет ПОКУПАТЕЛЬ:
+# он предоплачивает младший тариф сколько угодно раз подряд, и ни гард формы, ни
+# потолок одновременных намерений повтору СВОЕГО тарифа не мешают (и не должны).
+# Затем один платёж старшего тарифа переводит на него ВЕСЬ накопленный горизонт,
+# потому что `subscription.plan` — скаляр без истории: вместить два отрезка,
+# купленных по разным ценам, эта величина не умеет.
+#
+# ЧИСЛА ОТЧЁТА (`05-VERIFICATION.md`, гэп 1, воспроизведено верификацией поверх
+# настоящего кода, без единой правки `app/`): двенадцать платежей `basic`
+# (17 880 ₽) плюс один платёж `pro` (4 900 ₽) — уплачено 22 780 ₽ — давали
+# ТРИНАДЦАТЬ месяцев Pro при прейскуранте 63 700 ₽. Утечка растёт ЛИНЕЙНО с
+# горизонтом предоплаты.
+#
+# ПРАВИЛО УТВЕРЖДЕНИЙ ЭТОГО РАЗДЕЛА. Каждое читает только СЕГОДНЯШНЕЕ
+# наблюдаемое состояние — строку `subscriptions`, перечитанную из БД после
+# операции (её `plan` и `expires_at`), и строки `payments` (их число и
+# уплаченные суммы). Ни одно не называет символа, которого ещё нет: утверждение
+# о несуществующем имени даёт ошибку импорта вместо доказательства красноты, и
+# эта фигура уже раскрыта планами 05-15 и 05-17.
+# =============================================================================
+
+
+async def _accrue_confirmed_months(
+    db: AsyncSession, plan: str, count: int, *, amount: str
+) -> tuple[datetime, Decimal]:
+    """`count` ПОДТВЕРЖДЁННЫХ платежей одного тарифа. Возвращает срок И уплаченное.
+
+    ОБЕ ВЕЛИЧИНЫ НЕСУЩИЕ, И ВТОРАЯ — НЕ УДОБСТВО. Утверждение о прейскуранте
+    есть отношение ДВУХ чисел: сколько срока накоплено и сколько за него отдано.
+    Помощник, возвращающий только срок, заставил бы каждый тест считать сумму у
+    себя — то есть завёл бы столько копий прейскуранта, сколько тестов.
+
+    Платежи заводятся `_seed_subscription_payment` и подтверждаются `_confirm`
+    поимённо: идентификаторы нумеруются, потому что одинаковый
+    `yookassa_payment_id` сделал бы вторую строку дубликатом и выборка в
+    `handle_webhook` подняла бы `MultipleResultsFound` вместо накопления срока.
+
+    `switch_authorized=True` — то, что записывает форма на повторе СВОЕГО тарифа
+    (D-28): гард спросили, и он разрешил. Умолчание `None` («правило не
+    спрашивали») описывало бы строки старше ревизии `0019`, то есть другой путь.
+    """
+    paid = Decimal("0.00")
+    for index in range(count):
+        payment_id = f"yoo_{plan}_{index}"
+        await _seed_subscription_payment(
+            db, plan, payment_id, switch_authorized=True, amount=amount
+        )
+        assert await _confirm(db, payment_id) is True, (
+            f"уведомление по платежу {payment_id} не обработано"
+        )
+        paid += Decimal(amount)
+
+    rows = await _subscription_rows(db)
+    assert len(rows) == 1, "посев завёл вторую строку подписки"
+    return _aware(rows[0].expires_at), paid
+
+
+@pytest.mark.asyncio
+async def test_a_prepaid_horizon_is_not_converted_to_the_senior_plan_for_one_month(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Накопленный горизонт не переезжает на старший тариф за цену ОДНОГО месяца.
+
+    ЭТО ЯДРО ГЭПА 1 РАУНДА 5. Уплачено 22 780 ₽ (двенадцать `basic` по 1490 ₽ и
+    один `pro` за 4900 ₽); прейскурант тринадцати месяцев Pro — 63 700 ₽.
+    Механизм воспроизведён верификацией НЕЗАВИСИМО, поверх настоящего кода и без
+    единой правки `app/`, поэтому предмет теста — не гипотеза.
+
+    ЧТО УТВЕРЖДАЕТСЯ (форма `convert-remainder`, решение владельца). Оплаченный
+    остаток младшего тарифа переносится ПО ДЕНЬГАМ, а не по дням: он стоит
+    столько дней старшего тарифа, сколько за него отдано по отношению цен.
+    Сверху добавляется оплаченный месяц старшего тарифа — тот, за который
+    заплачено тринадцатым платежом.
+
+    ОЖИДАЕМОЕ ЧИСЛО СЧИТАЕТ АРИФМЕТИКА САМОГО ТЕСТА, а не вызов функции границы:
+    тест, зовущий её, зеленел бы вместе с ней тавтологически, каким бы ни
+    оказалось её содержимое. Допуск в два дня — цена того, что тест и денежный
+    путь снимают `now` в разные микросекунды, а число дней округляется вниз.
+    """
+    accrued, paid_basic = await _accrue_confirmed_months(
+        db_session, "basic", 12, amount="1490.00"
+    )
+    now = datetime.now(timezone.utc)
+    remainder_days = (accrued - now).days
+    assert remainder_days > 300, (
+        "посев не накопил предоплаченного горизонта — проверять нечего"
+    )
+
+    await _seed_subscription_payment(
+        db_session, "pro", "yoo_pro", switch_authorized=True, amount="4900.00"
+    )
+    assert await _confirm(db_session, "yoo_pro") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1, "тринадцатый платёж завёл вторую подписку"
+    assert rows[0].plan == "pro", "оплаченное повышение не применено"
+
+    converted_days = int(Decimal(remainder_days) * BASIC_PRICE / PRO_PRICE)
+    expected = add_one_month(now + timedelta(days=converted_days))
+    assert abs(_aware(rows[0].expires_at) - expected) <= timedelta(days=2), (
+        f"уплачено {paid_basic + PRO_PRICE} ₽, а выдан горизонт "
+        f"{(_aware(rows[0].expires_at) - now).days} дней на тарифе pro: "
+        f"остаток {remainder_days} дней basic обязан стоить {converted_days} "
+        "дней pro, а не переезжать на старший тариф днями"
+    )
+
+
+@pytest.mark.asyncio
+async def test_repeated_payments_of_one_plan_stay_priced_at_the_list(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Повтор СВОЕГО тарифа остаётся возможным и остаётся честным.
+
+    N платежей одного тарифа дают N месяцев ЭТОГО тарифа по прейскуранту — и
+    правило `upgrade-only` (`plan_switch.py:87-88`, повтор своего тарифа им не
+    задевается) этой правкой не переоткрывается. Самый вероятный способ сломать
+    закрытие гэпа 1 — запретить предоплату вообще, и тогда пользователь,
+    оплативший год вперёд СВОЕГО тарифа, получил бы отказ там, где ничего дурного
+    не сделал.
+
+    ⚠️ РОЛЬ ЭТОГО УТВЕРЖДЕНИЯ — ХАРАКТЕРИЗУЮЩАЯ, А НЕ ПАДАЮЩАЯ, И ЭТО НАЗВАНО
+    ЗДЕСЬ ЧЕСТНО. Пункт `missing:` №2 гэпа 1 требует от регрессии повторных
+    платежей падения на текущем коде; падающей она является ТОЛЬКО при форме
+    `cap-horizon`, где повтор упирался бы в новый потолок. Выбранная форма
+    `convert-remainder` трогает ПОВЫШЕНИЕ и повтора своего тарифа не задевает
+    вовсе — падать этому тесту не на чем, и написать его падающим можно было бы
+    только утверждением, которое потом пришлось бы ослабить.
+    """
+    accrued, paid = await _accrue_confirmed_months(
+        db_session, "basic", 12, amount="1490.00"
+    )
+    now = datetime.now(timezone.utc)
+
+    rows = await _subscription_rows(db_session)
+    assert rows[0].plan == "basic", "повтор своего тарифа сменил тариф"
+    assert paid == BASIC_PRICE * 12, "уплачено не по прейскуранту"
+    assert await _payments_count(db_session) == 12, (
+        "часть повторов своего тарифа не продана"
+    )
+    # Двенадцать календарных месяцев — 365 или 366 дней; окно 362…368 лежит
+    # между одиннадцатью (не больше 341) и тринадцатью (не меньше 393), поэтому
+    # промах в любую сторону однозначен.
+    assert now + timedelta(days=362) < accrued < now + timedelta(days=368), (
+        "двенадцать оплаченных месяцев дали не двенадцать месяцев срока"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_upgrade_with_one_paid_month_still_does_not_burn_the_remainder(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Защитная: на масштабе ОДНОГО месяца остаток по-прежнему не сгорает.
+
+    Семантика D-04 («срок считается от СРОКА, а не от сегодня») правкой границы
+    не отменяется, а измеряется: остаток переживает переход в виде своего
+    ДЕНЕЖНОГО эквивалента, строго большего нуля дней. Сгоревшим считался бы
+    исход «ровно один месяц от сегодня» — то есть повышение, отнявшее у человека
+    всё, что он уже оплатил.
+
+    ⚠️ РОЛЬ — ЗАЩИТНАЯ: утверждение зелено и на текущем коде (там остаток
+    переносится днями, что тем более больше месяца от сегодня). Оно держит не
+    дефект, а то, что правка не имеет права сломать.
+    """
+    await _accrue_confirmed_months(db_session, "basic", 1, amount="1490.00")
+    now = datetime.now(timezone.utc)
+
+    await _seed_subscription_payment(
+        db_session, "pro", "yoo_pro", switch_authorized=True, amount="4900.00"
+    )
+    assert await _confirm(db_session, "yoo_pro") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1, "повышение завело вторую подписку"
+    assert rows[0].plan == "pro", "оплаченное повышение не применено"
+    assert _aware(rows[0].expires_at) > add_one_month(now), (
+        "оплаченный остаток сгорел: повышение выдало ровно месяц от сегодня"
+    )

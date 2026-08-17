@@ -41,6 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from yookassa.domain.notification import WebhookNotificationEventType
 
 from app.application.billing.subscription_period import add_one_month
+from app.config import Settings
 from app.database import Base
 from app.models.balance_transaction import BalanceTransaction
 from app.models.message_balance import MessageBalance
@@ -60,6 +61,23 @@ def _utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _app_settings() -> Settings:
+    """Настоящие `Settings` с УМОЛЧАНИЯМИ конфига, а не MagicMock.
+
+    Нужны с формы `convert-remainder` (план 05-18): разрешённый переход между
+    РАЗНЫМИ планами читает цены обоих из `parsed_plan_limits`, чтобы перенести
+    оплаченный остаток по деньгам. MagicMock здесь не годится принципиально —
+    его `parsed_plan_limits` не список словарей, и путь ушёл бы в откат к
+    прежнему поведению, то есть тест зеленел бы ровно на том исходе, который
+    правка отменяет. Два обязательных поля задаются теми же значениями, что в
+    `tests/conftest.py`: боевой `.env` в суите не читается.
+    """
+    return Settings(
+        database_url="sqlite+aiosqlite:///:memory:",
+        secret_key="test-secret-key",
+    )
 
 
 @pytest_asyncio.fixture
@@ -423,6 +441,8 @@ async def test_a_rejected_subscription_insert_is_recovered_not_raised(db_session
         lookup_that_missed_the_competitor,
     ), patch(
         "app.services.payment_service.invalidate_balance_cache", new_callable=AsyncMock
+    ), patch(
+        "app.services.payment_service.get_settings", return_value=_app_settings()
     ):
         processed = await handle_webhook(
             db_session, EVENT_SUCCEEDED, _payload("yoo_rejected")
@@ -440,5 +460,20 @@ async def test_a_rejected_subscription_insert_is_recovered_not_raised(db_session
     )
     assert len(rows) == 1, f"строк подписки {len(rows)}: отвергнутая вставка уцелела"
     # Платёж отработан НА ЧУЖОЙ строке: срок сдвинут, тариф обновлён.
-    assert _utc(rows[0].expires_at) == add_one_month(current)
+    #
+    # ⚠️ УТВЕРЖДЕНИЕ О СРОКЕ ПЕРЕСТАЛО БЫТЬ РАВЕНСТВОМ ВМЕСТЕ С ФОРМОЙ
+    # `convert-remainder` (решение владельца, чекпойнт задачи 1 плана 05-18).
+    # Раньше здесь стояло `== add_one_month(current)`: оплаченный остаток
+    # младшего тарифа переезжал на старший ДНЯМИ, и этот же механизм на масштабе
+    # года был гэпом 1 раунда 5. Теперь остаток переносится ПО ДЕНЬГАМ — десять
+    # дней Basic (1490 ₽/мес) стоят три дня Pro (4900 ₽/мес), — и точка отсчёта
+    # считается от `now` денежного пути, который тесту недоступен до микросекунды.
+    # Поэтому окно, а не равенство; обе его стороны несущие: нижняя держит
+    # «остаток не сгорел» (иначе был бы ровно месяц от сегодня), верхняя — «он не
+    # перенесён днями» (иначе было бы около десяти дней сверху).
+    now = datetime.now(timezone.utc)
+    paid_month = add_one_month(now)
+    assert paid_month < _utc(rows[0].expires_at) < paid_month + timedelta(days=5), (
+        "оплаченный остаток либо сгорел, либо перенесён по дням вместо денег"
+    )
     assert rows[0].plan == "pro"
