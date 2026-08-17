@@ -10,7 +10,10 @@ from yookassa import Configuration, Payment as YooPayment
 from yookassa.domain.notification import WebhookNotificationEventType
 
 from app.application.billing.plan_switch import switch_is_refused
-from app.application.billing.subscription_period import next_expiry
+from app.application.billing.subscription_period import (
+    next_expiry,
+    subscription_is_live,
+)
 from app.config import get_settings
 from app.models.payment import Payment
 from app.models.subscription import Subscription
@@ -532,12 +535,21 @@ def _apply_extension(
     Функция синхронная и в БД не пишет сама: `commit` делает `handle_webhook`,
     и заявка платежа с начислением обязаны остаться в одной транзакции (05-08).
     """
+    # ⚠️ ПРИЗНАК СНИМАЕТСЯ ЗДЕСЬ, А НЕ СТРОКОЙ НИЖЕ, И ЭТО ЛОВУШКА, А НЕ
+    # ОФОРМЛЕНИЕ. Следующий оператор ПЕРЕЗАПИСЫВАЕТ `subscription.expires_at` —
+    # ту самую величину, по которой признак считается. Снятый после сдвига, он
+    # всегда вернул бы «живо», отказ не снялся бы никогда, и блокер истёкшего
+    # срока восстановился бы молча (T-05-63, гэп 1 раунда 3).
+    period_is_live = subscription_is_live(subscription.expires_at, now)
+
     subscription.expires_at = next_expiry(subscription.expires_at, now)
 
     if not db_payment.plan:
         return
 
-    if switch_is_refused(subscription.plan, db_payment.plan):
+    if switch_is_refused(
+        subscription.plan, db_payment.plan, period_is_live=period_is_live
+    ):
         # УРОВЕНЬ `warning`, А НЕ `info`, И ЭТО НАМЕРЕННО. Платёж принят и
         # оплаченные дни выданы, но уплаченный тариф применён НЕ был — исход,
         # по которому к нам придёт человек. Без собственного ключа он прятался

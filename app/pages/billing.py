@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.analytics.send_analytics import normalize_utc
 from app.application.billing.plan_switch import switch_is_refused
 from app.application.billing.plan_usage import plan_axes
+from app.application.billing.subscription_period import subscription_is_live
 from app.config import Settings
 from app.constants import PAYMENT_LIST_CAP
 from app.dependencies import get_db, get_settings
@@ -96,32 +97,14 @@ def _payment_error_message(code: str | None) -> str:
     return PAYMENT_ERROR_MESSAGES.get(code or "", "")
 
 
-def _subscription_is_live(expires_at, now: datetime) -> bool:
-    """Есть ли у пользователя НЕИСТЁКШИЙ оплаченный срок.
-
-    Гард смены тарифа защищает УПЛАЧЕННОЕ, а не запирает пользователя в тарифе
-    навсегда: когда срок истёк, сжигать нечего, и переход в любую сторону снова
-    открыт.
-
-    Сравнение идёт через `normalize_utc` по той же причине, что и на рендере
-    раздела: колонка объявлена с таймзоной, но SQLite отдаёт её naive, а
-    PostgreSQL aware — сравнение без приведения падало бы TypeError ровно на
-    одном из двух диалектов.
-    """
-    normalized = normalize_utc(expires_at)
-    return normalized is not None and normalized > now
-
-
-# ПРАВИЛО ПЕРЕХОДА МЕЖДУ ТАРИФАМИ ЭТОТ МОДУЛЬ БОЛЬШЕ НЕ ОБЪЯВЛЯЕТ, А ЧИТАЕТ.
-# `switch_is_refused` живёт в `app/application/billing/plan_switch.py`, потому
-# что читателей у него два: этот раздел (стадия НАМЕРЕНИЯ — продавать ли) и
-# `_apply_extension` в `app/services/payment_service.py` (стадия ПРИМЕНЕНИЯ —
-# что делать с уже уплаченным). Пока объявление стояло здесь, вторая стадия его
-# не видела вовсе, и подтверждённый платёж младшего тарифа снимал уплаченный
-# старший (гэп 1, 05-VERIFICATION.md).
-#
-# `_subscription_is_live` при этом НЕ переехала: она про СРОК, а не про порядок
-# тарифов, и её единственный читатель — этот файл.
+# ОБА ОБЪЯВЛЕНИЯ ПРАВИЛА ЖИВУТ В `app/application/billing/`, А МОДУЛЬ ИХ ТОЛЬКО
+# ЧИТАЕТ: `switch_is_refused` (`plan_switch.py`) — порядок тарифов,
+# `subscription_is_live` (`subscription_period.py`) — признак живости
+# оплаченного срока, который правило принимает обязательным аргументом. Своей
+# копии ни того, ни другого этот файл не держит: пока признак живости стоял
+# здесь, вторая стадия (`_apply_extension` в `app/services/payment_service.py`)
+# его не получала вовсе, и подтверждённый платёж на истёкшем сроке брал деньги
+# за тариф, который не выдавался (гэп 1, 05-VERIFICATION.md).
 
 
 @router.get("/billing", response_class=HTMLResponse)
@@ -220,13 +203,16 @@ async def billing_page(
     # молча. Разметке достаётся ГОТОВЫЙ ответ «этой карточке кнопку не рисовать».
     #
     # Множество, а не предикат в цикле шаблона: карточек три, а правило одно.
-    live = _subscription_is_live(expires_at, datetime.now(timezone.utc))
+    #
+    # ПРИЗНАК ЖИВОСТИ УХОДИТ В ВЫЗОВ АРГУМЕНТОМ, а не стоит средним членом
+    # конъюнкции: член условия можно забыть, обязательный аргумент — нельзя.
+    # Ровно на забытом члене и разошлись две стадии правила (гэп 1 раунда 3).
+    live = subscription_is_live(expires_at, datetime.now(timezone.utc))
     refused_plan_ids = {
         plan["id"]
         for plan in plans
         if plan.get("id")
-        and live
-        and switch_is_refused(current_plan_id, plan["id"])
+        and switch_is_refused(current_plan_id, plan["id"], period_is_live=live)
     }
 
     return templates.TemplateResponse(
@@ -326,10 +312,17 @@ async def subscribe_to_plan(
     # УСТАРЕВШАЯ СТРАНИЦА ДОСТИЖИМА: подписка могла быть куплена в соседней
     # вкладке после отрисовки этой. Разметка гарантий не даёт вовсе, и правило,
     # живущее только в ней, не является правилом.
+    # ОДИН ВЫЗОВ, А НЕ КОНЪЮНКЦИЯ ИЗ ДВУХ ЧЛЕНОВ. Признак живости оплаченного
+    # срока — обязательный вход правила, поэтому выражения, которое могло бы
+    # разъехаться с таким же выражением второй стадии, здесь не остаётся вовсе.
     quota = (getattr(request.state, "shell", None) or {}).get("quota", {})
-    if _subscription_is_live(
-        quota.get("expires_at"), datetime.now(timezone.utc)
-    ) and switch_is_refused(quota.get("plan", FREE_PLAN_ID), selected["id"]):
+    if switch_is_refused(
+        quota.get("plan", FREE_PLAN_ID),
+        selected["id"],
+        period_is_live=subscription_is_live(
+            quota.get("expires_at"), datetime.now(timezone.utc)
+        ),
+    ):
         return RedirectResponse(url="/billing?error=downgrade", status_code=302)
 
     try:
