@@ -6,9 +6,9 @@ current_phase: 05
 current_phase_name: tarify
 status: executing
 stopped_at: План 05-12 исполнен — волна 9 завершена, фаза ждёт повторной верификации
-last_updated: "2026-08-16T20:03:05.112Z"
-last_activity: 2026-08-16
-last_activity_desc: "План 05-12 исполнен: бухгалтерия фазы записана в STATE.md"
+last_updated: "2026-08-17T03:39:10.234Z"
+last_activity: 2026-08-17
+last_activity_desc: Phase 05 execution started
 progress:
   total_phases: 6
   completed_phases: 4
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-13)
 
 ## Current Position
 
-Phase: 05 (tarify) — EXECUTING (закрытие гэпов раунда 2)
-Plan: 12 of 12
-Status: Исполнены планы 05-01…05-12; вердикт `05-VERIFICATION.md` раунда 2 — `gaps_found`. Гэп 1 (молчаливое понижение тарифа) закрыт планом 05-11, гэп 2 (бухгалтерия фазы) закрыт планом 05-12. Отметку `Complete` требованиям возвращает повторная верификация, а не эти планы.
-Last activity: 2026-08-16 — план 05-12 исполнен: бухгалтерия фазы записана в STATE.md
+Phase: 05 (tarify) — EXECUTING
+Plan: 1 of 14
+Status: Executing Phase 05
+Last activity: 2026-08-17 — Phase 05 execution started
 
 Progress: [████████████████████] 64/64 планов (100%) — Фазы 1–4 из 6 завершены (67% фаз milestone v2.0); Фаза 5 — 12/12, фаза ждёт повторной верификации
 
