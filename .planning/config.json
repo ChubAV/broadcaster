@@ -50,7 +50,8 @@
     "ui_review": true,
     "tdd_mode": true,
     "use_worktrees": true,
-    "_auto_chain_active": false
+    "_auto_chain_active": false,
+    "test_gate_timeout": 2400
   },
   "ship": {
     "pr_body_sections": []
