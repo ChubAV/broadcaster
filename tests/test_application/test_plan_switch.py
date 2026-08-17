@@ -42,11 +42,11 @@ def test_renewing_the_own_plan_is_not_refused():
     продление, у которого план «уже есть». Тогда подписчик Pro не смог бы даже
     продлиться.
     """
-    assert switch_is_refused("pro", "pro") is False
+    assert switch_is_refused("pro", "pro", period_is_live=True) is False
 
 
 def test_an_upgrade_is_not_refused():
-    assert switch_is_refused("basic", "pro") is False
+    assert switch_is_refused("basic", "pro", period_is_live=True) is False
 
 
 @pytest.mark.parametrize(
@@ -59,7 +59,7 @@ def test_every_downgrade_is_refused(current: str, target: str):
     Пары выписаны все три, потому что «вниз» бывает не только с вершины: переход
     Basic → Free сжёг бы оплаченный остаток ровно так же, как Pro → Basic.
     """
-    assert switch_is_refused(current, target) is True
+    assert switch_is_refused(current, target, period_is_live=True) is True
 
 
 @pytest.mark.parametrize(
@@ -75,7 +75,36 @@ def test_an_unranked_plan_is_refused_from_either_side(current: str, target: str)
     оплаченный остаток. Поэтому проверяются ОБЕ стороны — незнакомым может
     оказаться и действующий план, и покупаемый.
     """
-    assert switch_is_refused(current, target) is True
+    assert switch_is_refused(current, target, period_is_live=True) is True
+
+
+# --- Обязательность признака живости оплаченного срока -------------------------
+
+
+def test_the_rule_cannot_be_asked_without_the_liveness_term():
+    """Спросить правило, не сказав, есть ли что защищать, ФИЗИЧЕСКИ нельзя.
+
+    Гэп 1 раунда 3 состоит не в том, что кто-то забыл проверку, а в том, что
+    проверку МОЖНО было забыть: правило принимало два аргумента, а решение
+    требует трёх величин, и третья висела на дисциплине вызывающего. Ровно так и
+    разошлись стадии — гард формы спрашивал правило только при живой подписке, а
+    `_apply_extension` спрашивал безусловно.
+
+    Keyword-only параметр БЕЗ значения по умолчанию превращает дисциплину в
+    `TypeError`. Умолчание вернуло бы ту же дисциплину под другим именем.
+    """
+    with pytest.raises(TypeError):
+        switch_is_refused("pro", "basic")
+
+
+def test_an_expired_period_refuses_nothing():
+    """Признак `False` снимает отказ ЦЕЛИКОМ: сравнение рангов не выполняется.
+
+    Решение владельца (чекпойнт плана 05-13, `apply-after-expiry`): истёкший срок
+    снимает отказ на ОБЕИХ стадиях. Защищать нечего — оплаченный период кончился,
+    и сжигать у пользователя больше нечего.
+    """
+    assert switch_is_refused("pro", "basic", period_is_live=False) is False
 
 
 # --- Границы модуля -----------------------------------------------------------

@@ -27,6 +27,8 @@
 риском severity medium. Повторять его на ДЕНЕЖНОМ пути не следует: текст SDK
 уходит в журнал, на экран — фиксированная строка.
 """
+import ast
+import inspect
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -1092,6 +1094,205 @@ async def test_the_first_subscription_still_takes_its_plan_from_the_payment(
     assert len(rows) == 1
     assert rows[0].plan == "basic", "первая подписка не взяла план из платежа"
     assert _aware(rows[0].expires_at) > datetime.now(timezone.utc)
+
+
+# =============================================================================
+# СТАДИЯ ПРИМЕНЕНИЯ НА ИСТЁКШЕМ СРОКЕ — ветка, которой у соседнего раздела нет
+# =============================================================================
+#
+# ЧЕМ ЭТОТ РАЗДЕЛ ОТЛИЧАЕТСЯ ОТ ПРЕДЫДУЩЕГО. Там КАЖДЫЙ тест сеет ЖИВУЮ подписку
+# (`_seed_live_subscription`), и ровно поэтому суита из 1665 тестов оставалась
+# зелёной при работающем блокере: единственный тест истёкшего срока
+# (`test_a_downgrade_after_the_period_has_ended_is_accepted`) останавливается на
+# 302 гарда формы и до `handle_webhook` не доходит вовсе. Стадия ПРИМЕНЕНИЯ на
+# истёкшем сроке не была покрыта ни одним тестом.
+#
+# ВОСПРОИЗВЕДЁННЫЙ ДЕФЕКТ (гэп 1 раунда 3, `05-VERIFICATION.md`). Подписка `pro`,
+# срок истёк вчера; пользователь покупает `basic` — гард формы его ПРОПУСКАЕТ
+# (защищать нечего). Уведомление подтверждает платёж, и `_apply_extension` зовёт
+# правило БЕЗУСЛОВНО: план остаётся `pro`. Деньги взяты за тариф, который не
+# выдан, а со следующей попытки подписка снова живая и гард отвечает
+# `?error=downgrade` — понижение становится недостижимым на всё время жизни
+# аккаунта.
+#
+# РЕШЕНИЕ ВЛАДЕЛЬЦА (чекпойнт плана 05-13): `apply-after-expiry` — истёкший срок
+# снимает отказ на ОБЕИХ стадиях, оплаченное понижение применяется.
+
+
+async def _seed_expired_subscription(
+    db: AsyncSession, plan: str, *, days_ago: int = 1
+) -> datetime:
+    """Зеркало `_seed_live_subscription` с ПРОШЕДШИМ сроком. Возвращает срок.
+
+    Срок возвращается, чтобы тест умел отличить «сдвинут от старого срока» от
+    «сдвинут от сегодня»: правило D-04 требует второго, и без возврата исходной
+    величины разница была бы неотличима.
+    """
+    expires_at = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    db.add(
+        Subscription(
+            user_id=(await _current_user(db)).id,
+            plan=plan,
+            expires_at=expires_at,
+            is_active=True,
+        )
+    )
+    await db.commit()
+    return expires_at
+
+
+@pytest.mark.asyncio
+async def test_an_expired_period_lets_the_paid_plan_through_at_the_apply_stage(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Прямое воспроизведение верификатора: истёкший срок ВЫДАЁТ уплаченный план.
+
+    РАЗДЕЛЕНИЕ СРОКОВ ЧИСЛОВОЕ И ДВУСТОРОННЕЕ. Месяц от СЕГОДНЯ лежит между 28 и
+    31 днём, поэтому проверяются ОБЕ границы — больше «сейчас + 27 дней» и меньше
+    «сейчас + 45 дней». Одной верхней границы мало: без нижней тест зеленел бы на
+    коде, который дней не выдал вовсе или посчитал их от прошедшей даты.
+    """
+    await _seed_expired_subscription(db_session, "pro")
+
+    await _subscribe(authed_client, plan="basic")
+    assert await _confirm(db_session) is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1, "подтверждение завело вторую строку подписки"
+    assert rows[0].plan == "basic", (
+        "деньги взяты за тариф, который не выдан: истёкший срок оставил "
+        "старший план на стадии применения"
+    )
+    now = datetime.now(timezone.utc)
+    assert _aware(rows[0].expires_at) > now + timedelta(days=27), (
+        "оплаченные дни не выданы"
+    )
+    assert _aware(rows[0].expires_at) < now + timedelta(days=45), (
+        "срок посчитан не от сегодня — D-04 нарушен"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_expired_period_writes_no_preserved_plan_warning(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """На этом пути сохранять нечего — значит и следа о сохранении быть не должно.
+
+    Ключ `subscription_plan_preserved` читается разбирающим обращение как «тариф
+    сохранён, уплаченный не применён». Написать его там, где тариф КАК РАЗ выдан,
+    значило бы соврать журналу (T-05-65).
+    """
+    await _seed_expired_subscription(db_session, "pro")
+    await _subscribe(authed_client, plan="basic")
+
+    with patch("app.services.payment_service.logger") as spy:
+        assert await _confirm(db_session) is True
+
+    preserved = [
+        call
+        for call in spy.warning.call_args_list
+        if call.args and call.args[0] == "subscription_plan_preserved"
+    ]
+    assert preserved == [], (
+        "журнал сообщает о сохранении тарифа там, где тариф выдан"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_expired_period_still_renews_the_own_plan(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Продление СВОЕГО тарифа на истёкшем сроке не задето правкой «заодно».
+
+    Равные планы правилом не задеваются вовсе, и снятие отказа по сроку не имеет
+    права это изменить: подписчик Pro, пропустивший месяц, продлевает Pro.
+    """
+    await _seed_expired_subscription(db_session, "pro")
+
+    await _subscribe(authed_client, plan="pro")
+    assert await _confirm(db_session) is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro", "продление своего тарифа сменило план"
+    now = datetime.now(timezone.utc)
+    assert now + timedelta(days=27) < _aware(rows[0].expires_at) < now + timedelta(
+        days=45
+    ), "срок продления посчитан не от сегодня"
+
+
+@pytest.mark.asyncio
+async def test_a_live_period_still_keeps_the_higher_plan(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ПАРНЫЙ тест: истёкшего срока здесь НЕТ, и отказ обязан остаться.
+
+    Без него первый тест раздела зеленел бы на коде, снявшем отказ вообще везде —
+    то есть на возврате ровно того дефекта, который закрыл план 05-11. Платёж
+    заводится напрямую, потому что гард формы такую покупку не пропустит.
+    """
+    current = await _seed_live_subscription(db_session, "pro", days=25)
+    await _seed_subscription_payment(db_session, "basic", "yoo_live_basic")
+
+    assert await _confirm(db_session, "yoo_live_basic") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro", (
+        "живой оплаченный старший тариф снят младшим платежом"
+    )
+    assert _aware(rows[0].expires_at) > current + timedelta(days=27), (
+        "оплаченные дни не выданы"
+    )
+
+
+def test_the_liveness_is_sampled_before_the_date_moves():
+    """ЛОВУШКА ПОРЯДКА, проверяемая машиной, а не прочтением.
+
+    Признак живости, снятый ПОСЛЕ `next_expiry`, всегда отвечает «живо»: сдвиг
+    срока перезаписывает ту самую величину, по которой принимается следующее
+    решение в той же функции. Блокер восстанавливается молча, правкой, которая
+    выглядит безобидной перестановкой двух строк (T-05-63).
+
+    СОВПАДЕНИЕ ИЩЕТСЯ ПО ТИПАМ УЗЛОВ, А НЕ ПОДСТРОКОЙ. Докстринг самой
+    `_apply_extension` обязан НАЗВАТЬ оба имени (задача 3 плана 05-13), поэтому
+    поиск подстроки в тексте или в дампе дерева прочёл бы содержимое строкового
+    литерала: при обоих именах оба индекса стали бы нулевыми и тест падал бы на
+    ВЕРНОМ коде, при одном имени — зеленел бы при ЛЮБОМ порядке. Поэтому
+    докстринг из перечня операторов вычёркивается, а ищется присваивание, ЗНАЧЕНИЕ
+    которого — вызов функции с этим именем. Упоминание имени в комментарии
+    оператором не является и тест не ломает; перестановка двух операторов — ломает.
+    """
+    import app.services.payment_service as module
+
+    function = ast.parse(inspect.getsource(module._apply_extension)).body[0]
+    statements = [
+        node
+        for node in function.body
+        if not (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        )
+    ]
+
+    def _assignment_from(name: str) -> int:
+        for index, node in enumerate(statements):
+            if (
+                isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Call)
+                and getattr(node.value.func, "id", None) == name
+            ):
+                return index
+        raise AssertionError(f"в теле нет присваивания из вызова {name}")
+
+    live = _assignment_from("subscription_is_live")
+    moved = _assignment_from("next_expiry")
+
+    assert live < moved, (
+        "признак живости снимается ПОСЛЕ сдвига срока — правило всегда получит "
+        f"«живо», и блокер восстановлен молча (индексы {live} и {moved})"
+    )
 
 
 def test_the_switch_semantics_are_named_in_the_place_that_moves_the_date():
