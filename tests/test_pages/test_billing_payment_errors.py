@@ -1411,6 +1411,114 @@ async def test_a_live_period_still_keeps_the_higher_plan(
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ЛОВУШКА ПОРЯДКА: ПОМОЩНИК, ЕГО НЕГАТИВНЫЕ КОНТРОЛИ И ВЫВЕДЕНИЕ МНОЖЕСТВА ИМЁН
+#
+# Помощник вынесен из тела теста НЕ РАДИ ОФОРМЛЕНИЯ, а затем, чтобы его можно
+# было применить к СИНТЕТИЧЕСКОМУ исходнику. Инвариант, проверяемый только на
+# настоящем модуле, проверяем лишь собой: доказать его красноту можно тогда
+# одноразовой мутацией `app/`, удаляемой до коммита, — то есть доказательства не
+# остаётся вовсе, и следующий раунд перепроверить его не может. Планы 05-15 и
+# 05-17 раскрыли эту фигуру как отсутствие RED-коммита; здесь оба негативных
+# контроля живут в суите постоянно.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_PERIOD_MODULE = "app.application.billing.subscription_period"
+
+# Признак живости снят ПОСЛЕ сдвига, оба оператора на верхнем уровне. Этот
+# случай видел и прежний перебор `function.body`.
+_SYNTHETIC_MOVE_ABOVE_THE_SAMPLE = '''
+def _apply_extension(subscription, db_payment, now):
+    """Синтетический исходник: сдвиг срока стоит ВЫШЕ снятия признака."""
+    subscription.expires_at = next_expiry(subscription.expires_at, now)
+    period_is_live = subscription_is_live(subscription.expires_at, now)
+    return period_is_live
+'''
+
+# Сдвиг спрятан ВНУТРИ ветви, признак снимается после неё. Прежний перебор
+# операторов верхнего уровня не видел этого случая ВОВСЕ — находка WR-03
+# раунда 5: из четырёх операторов, двигающих срок, он держал один.
+_SYNTHETIC_MOVE_INSIDE_A_BRANCH = '''
+def _apply_extension(subscription, db_payment, now):
+    """Синтетический исходник: сдвиг спрятан ВНУТРИ ветви, снятие — после неё."""
+    if not db_payment.plan:
+        subscription.expires_at = prorated_expiry(
+            subscription.expires_at, now, paid=1, price=2
+        )
+    period_is_live = subscription_is_live(subscription.expires_at, now)
+    return period_is_live
+'''
+
+
+def _period_module_names() -> frozenset[str]:
+    """Имена, ввезённые денежным путём из модуля отсчёта срока.
+
+    ВЫВОДЯТСЯ ИЗ ИМПОРТА, А НЕ ПЕРЕЧИСЛЯЮТСЯ ЛИТЕРАЛОМ, И ЭТО ВЕСЬ СМЫСЛ. Литерал
+    протух бы МОЛЧА в тот момент, когда очередной план добавил бы четвёртый
+    оператор сдвига: тест остался бы зелёным, а инвариант перестал бы держать
+    новое имя. Ровно это и случилось между планом 05-15 и раундом 5.
+    """
+    import app.services.payment_service as module
+
+    tree = ast.parse(inspect.getsource(module))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == _PERIOD_MODULE:
+            return frozenset(alias.asname or alias.name for alias in node.names)
+    raise AssertionError(
+        f"денежный путь больше не ввозит `{_PERIOD_MODULE}` — либо арифметика "
+        "срока переехала, либо она снова размазана по вызывающему"
+    )
+
+
+def _order_violations(
+    source: str,
+    *,
+    movers: frozenset[str],
+    liveness: str = "subscription_is_live",
+    moved_attr: str = "expires_at",
+) -> list[str]:
+    """Перечень нарушений порядка «признак снимается раньше КАЖДОГО сдвига».
+
+    Пустой перечень означает, что нарушений нет. Заглушка.
+    """
+    return []
+
+
+def test_the_order_helper_reports_a_move_placed_above_the_sample():
+    """НЕГАТИВНЫЙ КОНТРОЛЬ №1: перестановка на верхнем уровне обязана краснеть.
+
+    Синтетический исходник, а не мутация настоящего модуля: доказательство
+    красноты обязано пережить коммит, иначе следующий раунд не может его
+    перепроверить (T-05-115).
+    """
+    violations = _order_violations(
+        _SYNTHETIC_MOVE_ABOVE_THE_SAMPLE, movers=_period_module_names()
+    )
+
+    assert violations, (
+        "помощник не нашёл нарушения на исходнике, где срок двигается ВЫШЕ "
+        "снятия признака живости: инвариант ничего не держит"
+    )
+
+
+def test_the_order_helper_reports_a_move_hidden_inside_a_branch():
+    """НЕГАТИВНЫЙ КОНТРОЛЬ №2: сдвиг ВНУТРИ ветви обязан краснеть тоже.
+
+    Именно этот случай прежний перебор `function.body` не видел вовсе, и именно
+    он описан находкой WR-03 раунда 5: тест держал последний оператор верхнего
+    уровня, а сдвиги в ветвях (`prorated_expiry` в их числе) оставались вне
+    инварианта.
+    """
+    violations = _order_violations(
+        _SYNTHETIC_MOVE_INSIDE_A_BRANCH, movers=_period_module_names()
+    )
+
+    assert violations, (
+        "помощник не нашёл нарушения на исходнике, где сдвиг спрятан ВНУТРИ "
+        "ветви: обход идёт по операторам верхнего уровня, а не по всему телу"
+    )
+
+
 def test_the_liveness_is_sampled_before_the_date_moves():
     """ЛОВУШКА ПОРЯДКА, проверяемая машиной, а не прочтением.
 
