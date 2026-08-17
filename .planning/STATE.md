@@ -6,13 +6,13 @@ current_phase: 05
 current_phase_name: tarify
 status: executing
 stopped_at: План 05-14 — реестр раундов ревью и распоряжения раунда 3 записаны в STATE.md
-last_updated: "2026-08-17T04:32:00.000Z"
+last_updated: "2026-08-17T07:37:22.024Z"
 last_activity: 2026-08-17
 last_activity_desc: "План 05-14: реестр раундов ревью и распоряжения раунда 3 записаны в STATE.md"
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 66
+  total_plans: 69
   completed_plans: 65
   percent: 67
 ---
