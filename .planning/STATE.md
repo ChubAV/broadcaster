@@ -6,14 +6,14 @@ current_phase: 05
 current_phase_name: tarify
 status: executing
 stopped_at: План 05-14 — реестр раундов ревью и распоряжения раунда 3 записаны в STATE.md
-last_updated: "2026-08-17T07:37:22.024Z"
+last_updated: "2026-08-17T07:48:33.223Z"
 last_activity: 2026-08-17
 last_activity_desc: "План 05-14: реестр раундов ревью и распоряжения раунда 3 записаны в STATE.md"
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 69
-  completed_plans: 65
+  completed_plans: 66
   percent: 67
 ---
 
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-13)
 
 ## Current Position
 
-Phase: 05 (tarify) — EXECUTING (закрытие гэпов раунда 3)
-Plan: 13 of 14
-Status: Исполнены планы 05-01…05-13; вердикт `05-VERIFICATION.md` раунда 3 — `gaps_found`. Гэп 1 (оплаченное понижение на истёкшем сроке) закрыт планом 05-13, гэп 2 (реестр раундов ревью и распоряжения раунда 3) закрывается планом 05-14. Отметку `Complete` требованиям возвращает повторная верификация, а не эти планы.
-Last activity: 2026-08-17 — план 05-14: реестр раундов ревью и распоряжения раунда 3 записаны в STATE.md
+Phase: 05 (tarify) — EXECUTING
+Plan: 1 of 17
+Status: Executing Phase 05
+Last activity: 2026-08-17 — Phase 05 execution started
 
 Progress: [███████████████████░] 65/66 планов (98%) — Фазы 1–4 из 6 завершены (67% фаз milestone v2.0); Фаза 5 — 13/14, план 05-14 исполняется
 
