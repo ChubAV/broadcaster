@@ -13,6 +13,7 @@ from yookassa.domain.notification import WebhookNotificationEventType
 from app.application.analytics.send_analytics import normalize_utc
 from app.application.billing.plan_switch import switch_is_refused
 from app.application.billing.subscription_period import (
+    converted_remainder,
     countdown_base,
     next_expiry,
     prorated_expiry,
@@ -658,6 +659,12 @@ async def _extend_subscription(
         _apply_extension(subscription, db_payment, now)
         return
 
+    # ⚠️ ВЕТКА ПЕРВОЙ ВСТАВКИ И ГРАНИЦА ПЕРЕНОСА ОСТАТКА: РЕШЕНИЕ ЯВНОЕ, А НЕ
+    # УНАСЛЕДОВАННОЕ УМОЛЧАНИЕ (T-05-108). Конвертировать здесь НЕЧЕГО, и это
+    # свойство состояния, а не упущение: активной строки подписки нет вовсе,
+    # значит нет ни прежнего плана, ни оплаченного остатка, купленного по другой
+    # цене. Платёж покупает ровно один месяц СВОЕГО плана от сегодня. Обойти
+    # границу этой веткой нельзя по построению — обходить нечего.
     try:
         async with db.begin_nested():
             db.add(
@@ -769,6 +776,23 @@ def _apply_extension(
     сдвига, стоявший выше решения о плане; именно эта безусловность и была второй
     половиной гэпа — отвергнутый платёж покупал полный месяц действующего
     старшего тарифа за цену младшего.
+
+    ЧЕТВЁРТЫМ действием, и только на РАЗРЕШЁННОМ переходе между РАЗНЫМИ планами,
+    оплаченный остаток переносится ПО ДЕНЬГАМ, а не по дням (форма
+    `convert-remainder`, решение владельца, чекпойнт задачи 1 плана 05-18).
+    До него пара «сдвиг срока плюс присваивание плана» одним движением переводила
+    на новый тариф ВЕСЬ накопленный горизонт: `subscription.plan` — скаляр без
+    истории, поэтому двенадцать предоплаченных месяцев `basic` плюс один платёж
+    `pro` давали тринадцать месяцев Pro за 22 780 ₽ при прейскуранте 63 700 ₽, и
+    величина эта не имела верхней границы ни в коде, ни в схеме, а управлял ею
+    покупатель (гэп 1 раунда 5). Правило переноса объявлено ОДИН раз —
+    `converted_remainder` в `app/application/billing/subscription_period.py`, — и
+    ЧИТАЕТСЯ здесь, а не повторяется. Обещание «оплаченный остаток не сгорает»
+    остаётся верным: меняется единица измерения переноса, а не факт переноса, и
+    нижняя граница в один день у живого остатка гарантирована `prorated_days`.
+    Когда цену любого из двух планов прочитать нельзя (Free, план, выпавший из
+    конфига), — откат к прежнему поведению с записью в журнал, а не исключение:
+    5xx на уведомлении запустил бы цикл повторов ЮKassa (T-05-104).
 
     Сравнение рангов читает `switch_is_refused` — ТО ЖЕ объявление, что и гард
     формы `POST /billing/subscribe`. Вторая копия сравнения здесь и была тем
@@ -883,5 +907,68 @@ def _apply_extension(
         subscription.expires_at = new_expiry
         return
 
-    subscription.expires_at = next_expiry(subscription.expires_at, now)
+    # ЧЕТВЁРТОЕ ДЕЙСТВИЕ — ВЕРХНЯЯ ГРАНИЦА НА ПЕРЕХОДЕ (форма `convert-remainder`,
+    # решение владельца, чекпойнт задачи 1 плана 05-18). Пара операторов ниже
+    # ОДНИМ движением переводила на новый тариф ВЕСЬ накопленный горизонт, потому
+    # что `subscription.plan` — скаляр без истории: двенадцать предоплаченных
+    # месяцев `basic` плюс один платёж `pro` давали тринадцать месяцев Pro за
+    # 22 780 ₽ при прейскуранте 63 700 ₽, и величина эта росла линейно, а
+    # управлял ею покупатель (гэп 1 раунда 5).
+    #
+    # ТОЧКА ОТСЧЁТА ЧИТАЕТСЯ У `converted_remainder`, А НЕ СЧИТАЕТСЯ ЗДЕСЬ.
+    # Правило переноса объявлено ОДИН раз, в `subscription_period.py`, рядом с
+    # `next_expiry`, `countdown_base` и `prorated_expiry`; вторая копия условия
+    # на денежном пути двигала бы срок от другой точки, и разница проявилась бы
+    # только у пользователя с неистраченным остатком.
+    base = subscription.expires_at
+    if period_is_live and db_payment.plan != subscription.plan:
+        # ПРИЗНАК ЖИВОСТИ ВЗЯТ ТОТ ЖЕ, ЧТО СНЯТ ПЕРВЫМ ДЕЙСТВИЕМ, а не снят
+        # заново: у мёртвого срока конвертировать нечего, и решение
+        # `apply-after-expiry` (чекпойнт плана 05-13) этим условием не задето.
+        price_from = _plan_price(subscription.plan)
+        price_to = _plan_price(db_payment.plan)
+        if price_from is None or price_to is None:
+            # ОТКАТ К ПРЕЖНЕМУ ПОВЕДЕНИЮ, А НЕ ОТКАЗ И НЕ ИСКЛЮЧЕНИЕ — та же
+            # развилка и та же причина, что в ветке отказа выше: расхождение
+            # конфига с базой наша беда, а не пользователя, а исключение здесь
+            # дало бы 5xx на уведомлении и цикл повторов ЮKassa (T-05-104).
+            # Ключ журнала переиспользован НАМЕРЕННО: событие ровно то же —
+            # «цену прочитать нельзя, дни считаем по-старому», — и второй ключ
+            # под тот же исход разошёлся бы с первым при первой же правке.
+            logger.warning(
+                "subscription_prorating_skipped",
+                user_id=db_payment.user_id,
+                yookassa_id=db_payment.yookassa_payment_id,
+                plan=subscription.plan,
+                paid_plan=db_payment.plan,
+                unreadable="price" if price_from is None else "paid_plan_price",
+            )
+        else:
+            base = converted_remainder(
+                subscription.expires_at,
+                now,
+                old_price=price_from,
+                new_price=price_to,
+            )
+            # УРОВЕНЬ `warning`, А НЕ `info`, по той же записанной причине, что у
+            # `subscription_plan_preserved`: человек, у которого срок стал
+            # КОРОЧЕ, чем он ожидал, придёт с этим к нам, и разбирающему
+            # обращение нужны обе цены и обе величины в днях — иначе «перенесено
+            # 110 дней вместо 364» неотличимо от «дни отняли».
+            logger.warning(
+                "subscription_remainder_converted",
+                user_id=db_payment.user_id,
+                yookassa_id=db_payment.yookassa_payment_id,
+                plan=subscription.plan,
+                paid_plan=db_payment.plan,
+                price_from=str(price_from),
+                price_to=str(price_to),
+                remainder_days=(
+                    countdown_base(subscription.expires_at, now)
+                    - normalize_utc(now)
+                ).days,
+                converted_days=(base - normalize_utc(now)).days,
+            )
+
+    subscription.expires_at = next_expiry(base, now)
     subscription.plan = db_payment.plan
