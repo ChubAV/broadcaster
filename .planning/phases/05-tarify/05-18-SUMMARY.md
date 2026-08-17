@@ -405,6 +405,12 @@ FAILED tests/test_pages/test_billing_payment_errors.py::test_a_prepaid_horizon_i
   тарифов (BILL-06); выкат очереди D-26.
 - **План `05-22` не требуется:** он был бы авторизован только ответом `apply-after-period`.
 
+## Self-Check: PASSED
+
+- `.planning/phases/05-tarify/05-18-SUMMARY.md` — FOUND
+- `a3706c6` (RED), `28677ac` (fix), `6c98b89` (SUMMARY) — все три найдены в `git log --all`
+- рабочее дерево чистое, `git diff --name-only -- .planning/STATE.md .planning/ROADMAP.md` пуст
+
 ---
 *Phase: 05-tarify*
 *Completed: 2026-08-17*
