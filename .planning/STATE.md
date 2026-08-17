@@ -6,13 +6,13 @@ current_phase: 05
 current_phase_name: tarify
 status: executing
 stopped_at: План 05-16 — распоряжения раунда 4 и реестр без констант величины записаны в STATE.md
-last_updated: "2026-08-17T11:55:37.000Z"
+last_updated: "2026-08-17T15:31:15.122Z"
 last_activity: 2026-08-17
 last_activity_desc: "План 05-16: распоряжения раунда 4 и реестр без констант величины записаны в STATE.md"
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 69
+  total_plans: 73
   completed_plans: 69
   percent: 67
 ---
