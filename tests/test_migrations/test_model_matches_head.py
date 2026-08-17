@@ -87,14 +87,19 @@ CREATE TABLE payments (
 
 
 def missing_columns(mapped: Iterable[str], actual: Iterable[str]) -> list[str]:
-    """ЗАГЛУШКА: перечень отображённых колонок, которых нет в схеме.
+    """Отображённые колонки, которых нет в схеме, — ПОИМЁННО и по алфавиту.
 
-    Сейчас всегда сообщает «недостающих нет». Существует в таком виде ровно
-    столько, сколько нужно негативному контролю ниже, чтобы упасть НА
-    УТВЕРЖДЕНИИ: проверка, зелёная при любом входе, неотличима от отсутствующей,
-    и отличать их обязана машина, а не память автора.
+    Возвращается перечень имён, а не их количество и не булев ответ: «не хватает
+    трёх» не говорит, каких, и разбирающему пришлось бы повторять работу
+    проверки руками. Порядок отсортирован, чтобы сообщение об ошибке не зависело
+    от порядка обхода множества и читалось одинаково в двух прогонах подряд.
+
+    Направление сверки одностороннее и это намеренно: требуется, чтобы каждая
+    ОТОБРАЖЁННАЯ колонка существовала в схеме. Обратное включение не требуется —
+    колонка, существующая в схеме и не отображённая моделью, ничего не ломает:
+    в `SELECT` уезжает перечень модели, а не перечень таблицы.
     """
-    return []
+    return sorted(set(mapped) - set(actual))
 
 
 def _table_columns(db_path: Path, table: str) -> set[str]:
@@ -103,6 +108,64 @@ def _table_columns(db_path: Path, table: str) -> set[str]:
         return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
     finally:
         conn.close()
+
+
+def _stamped_revision(db_path: Path) -> str | None:
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def _repository_head() -> str:
+    """Головная ревизия РЕПОЗИТОРИЯ — та, до которой доводит `upgrade head`.
+
+    Читается у каталога ревизий, а не выписывается литералом: литерал устарел бы
+    на следующей заведённой ревизии и превратил бы утверждение о достижении
+    головы в утверждение о достижении вчерашней головы.
+    """
+    from alembic.script import ScriptDirectory
+
+    return ScriptDirectory.from_config(Config(str(ALEMBIC_INI))).get_current_head()
+
+
+@pytest.fixture
+def db_at_head(tmp_path: Path, monkeypatch) -> Path:
+    """Файловая база, доведённая НАСТОЯЩИМ Alembic до головной ревизии."""
+    db_path = tmp_path / "model_vs_head.db"
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(PAYMENTS_AT_START)
+        conn.commit()
+    finally:
+        conn.close()
+
+    url = f"sqlite+aiosqlite:///{db_path}"
+    # `alembic/env.py` предпочитает DATABASE_URL любому значению из alembic.ini.
+    # Переменная подменяется ЯВНО: без этого прогон ушёл бы на адрес из окружения
+    # разработчика — то есть на живую базу. Тест не имеет права ни читать боевую
+    # схему, ни писать в неё.
+    monkeypatch.setenv("DATABASE_URL", url)
+
+    config = Config(str(ALEMBIC_INI))
+    config.set_main_option("sqlalchemy.url", url)
+    command.stamp(config, START_REVISION)
+    command.upgrade(config, "head")
+    return db_path
+
+
+def test_the_upgrade_actually_reached_head(db_at_head):
+    """Прогон дошёл ДО ГОЛОВЫ, а не остановился по дороге.
+
+    Утверждение обязательное, а не декоративное. Без него парная проверка ниже
+    зеленела бы и в случае, когда `upgrade` встал на полпути: недостающая
+    колонка нашлась бы «уже применённой» ревизией, до которой прогон дошёл, а
+    правка, добавившая несовместимую с SQLite ревизию, прошла бы молча.
+    """
+    assert _stamped_revision(db_at_head) == _repository_head()
 
 
 def test_the_check_names_the_missing_column_by_name():
@@ -120,3 +183,26 @@ def test_the_check_names_the_missing_column_by_name():
     without_one = mapped - {"switch_authorized"}
 
     assert missing_columns(mapped, without_one) == ["switch_authorized"]
+
+
+def test_every_mapped_payment_column_exists_at_head(db_at_head):
+    """⚠️ ОТОБРАЖЁННАЯ КОЛОНКА БЕЗ РЕВИЗИИ = 500 НА КАЖДОМ ЧТЕНИИ ТАБЛИЦЫ.
+
+    Не «новая функция не доедет»: в `SELECT` уезжает ПОЛНЫЙ перечень отображённых
+    колонок, поэтому на схеме без такой колонки отказывают ВСЕ читающие пути
+    `payments` — включая обработчик уведомления ЮKassa, который падает ДО
+    ветвления по предмету покупки, то есть и для пакетного платежа, к новым
+    колонкам отношения не имеющего.
+
+    Сверяется ГОЛОВНАЯ РЕВИЗИЯ РЕПОЗИТОРИЯ. О том, какая ревизия накачена на
+    боевой базе (решением D-26 — `0012`), этот тест не знает ничего: см. шапку
+    файла.
+    """
+    mapped = {column.name for column in Payment.__table__.columns}
+    actual = _table_columns(db_at_head, "payments")
+
+    absent = missing_columns(mapped, actual)
+    assert not absent, (
+        "отображены моделью, но не заведены ни одной ревизией до головы: "
+        f"{absent}"
+    )
