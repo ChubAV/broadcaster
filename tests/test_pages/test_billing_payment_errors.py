@@ -1411,6 +1411,203 @@ async def test_a_live_period_still_keeps_the_higher_plan(
     )
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ЛОВУШКА ПОРЯДКА: ПОМОЩНИК, ЕГО НЕГАТИВНЫЕ КОНТРОЛИ И ВЫВЕДЕНИЕ МНОЖЕСТВА ИМЁН
+#
+# Помощник вынесен из тела теста НЕ РАДИ ОФОРМЛЕНИЯ, а затем, чтобы его можно
+# было применить к СИНТЕТИЧЕСКОМУ исходнику. Инвариант, проверяемый только на
+# настоящем модуле, проверяем лишь собой: доказать его красноту можно тогда
+# одноразовой мутацией `app/`, удаляемой до коммита, — то есть доказательства не
+# остаётся вовсе, и следующий раунд перепроверить его не может. Планы 05-15 и
+# 05-17 раскрыли эту фигуру как отсутствие RED-коммита; здесь оба негативных
+# контроля живут в суите постоянно.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_PERIOD_MODULE = "app.application.billing.subscription_period"
+
+# Признак живости снят ПОСЛЕ сдвига, оба оператора на верхнем уровне. Этот
+# случай видел и прежний перебор `function.body`.
+_SYNTHETIC_MOVE_ABOVE_THE_SAMPLE = '''
+def _apply_extension(subscription, db_payment, now):
+    """Синтетический исходник: сдвиг срока стоит ВЫШЕ снятия признака."""
+    subscription.expires_at = next_expiry(subscription.expires_at, now)
+    period_is_live = subscription_is_live(subscription.expires_at, now)
+    return period_is_live
+'''
+
+# Сдвиг спрятан ВНУТРИ ветви, признак снимается после неё. Прежний перебор
+# операторов верхнего уровня не видел этого случая ВОВСЕ — находка WR-03
+# раунда 5: из четырёх операторов, двигающих срок, он держал один.
+_SYNTHETIC_MOVE_INSIDE_A_BRANCH = '''
+def _apply_extension(subscription, db_payment, now):
+    """Синтетический исходник: сдвиг спрятан ВНУТРИ ветви, снятие — после неё."""
+    if not db_payment.plan:
+        subscription.expires_at = prorated_expiry(
+            subscription.expires_at, now, paid=1, price=2
+        )
+    period_is_live = subscription_is_live(subscription.expires_at, now)
+    return period_is_live
+'''
+
+
+def _period_module_names() -> frozenset[str]:
+    """Имена, ввезённые денежным путём из модуля отсчёта срока.
+
+    ВЫВОДЯТСЯ ИЗ ИМПОРТА, А НЕ ПЕРЕЧИСЛЯЮТСЯ ЛИТЕРАЛОМ, И ЭТО ВЕСЬ СМЫСЛ. Литерал
+    протух бы МОЛЧА в тот момент, когда очередной план добавил бы четвёртый
+    оператор сдвига: тест остался бы зелёным, а инвариант перестал бы держать
+    новое имя. Ровно это и случилось между планом 05-15 и раундом 5.
+    """
+    import app.services.payment_service as module
+
+    tree = ast.parse(inspect.getsource(module))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == _PERIOD_MODULE:
+            return frozenset(alias.asname or alias.name for alias in node.names)
+    raise AssertionError(
+        f"денежный путь больше не ввозит `{_PERIOD_MODULE}` — либо арифметика "
+        "срока переехала, либо она снова размазана по вызывающему"
+    )
+
+
+def _liveness_sample(source: str, liveness: str) -> ast.Assign | None:
+    """Присваивание, ЗНАЧЕНИЕ которого — вызов признака живости, либо `None`.
+
+    СОВПАДЕНИЕ ИЩЕТСЯ ПО ТИПАМ УЗЛОВ, А НЕ ПОДСТРОКОЙ, и это несущее свойство:
+    докстринги `_apply_extension` и `subscription_is_live` обязаны НАЗЫВАТЬ оба
+    имени, поэтому поиск подстроки прочёл бы содержимое строкового литерала и
+    краснел бы на ВЕРНОМ коде. Литерал узлом `ast.Call` не становится никогда.
+    """
+    function = ast.parse(source).body[0]
+    hits = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and getattr(node.value.func, "id", None) == liveness
+    ]
+    return min(hits, key=lambda node: node.lineno) if hits else None
+
+
+def _expiry_assignment_lines(source: str, *, attr: str = "expires_at") -> list[int]:
+    """Строки КАЖДОГО присваивания, ЦЕЛЬ которого — поле срока подписки.
+
+    Второй инвариант, независимый от имён: он ловит то, чего не ловит первый —
+    сдвиг, сделанный не вызовом функции модуля отсчёта, а любым другим
+    выражением.
+    """
+    function = ast.parse(source).body[0]
+    return sorted(
+        node.lineno
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Attribute) and target.attr == attr
+    )
+
+
+def _movers_used(source: str, *, movers: frozenset[str]) -> frozenset[str]:
+    """Какие из выведенных имён в теле функции ДЕЙСТВИТЕЛЬНО вызываются.
+
+    Нужно затем, чтобы инвариант не стал вакуумным: помощник, проверяющий имена,
+    которых в теле нет вовсе, зеленеет при любом порядке.
+    """
+    function = ast.parse(source).body[0]
+    return frozenset(
+        name
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        for name in [getattr(node.func, "id", None)]
+        if name in movers
+    )
+
+
+def _order_violations(
+    source: str,
+    *,
+    movers: frozenset[str],
+    liveness: str = "subscription_is_live",
+    moved_attr: str = "expires_at",
+) -> list[str]:
+    """Перечень нарушений порядка «признак снимается раньше КАЖДОГО сдвига».
+
+    Пустой перечень означает, что нарушений нет.
+
+    ОБХОД — `ast.walk` ПО ВСЕМУ ТЕЛУ, А НЕ ПЕРЕБОР ОПЕРАТОРОВ ВЕРХНЕГО УРОВНЯ.
+    Перебор верхнего уровня держал ОДИН оператор из четырёх: сдвиги внутри
+    ветвей ему не видны вовсе (WR-03 раунда 5), а именно в ветвях и стоят и доля
+    месяца D-29, и откат к полному месяцу, и конверсия остатка формы
+    `convert-remainder`.
+
+    ПРИЗНАК ЖИВОСТИ ИСКЛЮЧАЕТСЯ ИЗ МНОЖЕСТВА ДВИГАЮЩИХ ЯВНО: он приезжает сюда
+    вместе с остальными именами модуля отсчёта, потому что множество ВЫВОДИТСЯ
+    из импорта, а требовать от него стоять раньше самого себя бессмысленно.
+    Прочие имена модуля (`countdown_base` в их числе) остаются в множестве
+    намеренно — они читают ту же величину, и снятый после них признак так же
+    описывал бы уже сдвинутый срок.
+    """
+    function = ast.parse(source).body[0]
+    sample = _liveness_sample(source, liveness)
+    if sample is None:
+        return [
+            f"в теле нет присваивания из вызова `{liveness}`: признак живости не "
+            "снимается вовсе, и порядок держать не над чем"
+        ]
+
+    violations: list[str] = []
+    for node in ast.walk(function):
+        if isinstance(node, ast.Call):
+            name = getattr(node.func, "id", None)
+            if name in movers - {liveness} and node.lineno < sample.lineno:
+                violations.append(
+                    f"строка {node.lineno}: `{name}` двигает срок ВЫШЕ снятия "
+                    f"признака (строка {sample.lineno})"
+                )
+        elif isinstance(node, ast.Assign) and node.lineno < sample.lineno:
+            for target in node.targets:
+                if isinstance(target, ast.Attribute) and target.attr == moved_attr:
+                    violations.append(
+                        f"строка {node.lineno}: `.{moved_attr}` перезаписывается "
+                        f"ВЫШЕ снятия признака (строка {sample.lineno})"
+                    )
+    return sorted(set(violations))
+
+
+def test_the_order_helper_reports_a_move_placed_above_the_sample():
+    """НЕГАТИВНЫЙ КОНТРОЛЬ №1: перестановка на верхнем уровне обязана краснеть.
+
+    Синтетический исходник, а не мутация настоящего модуля: доказательство
+    красноты обязано пережить коммит, иначе следующий раунд не может его
+    перепроверить (T-05-115).
+    """
+    violations = _order_violations(
+        _SYNTHETIC_MOVE_ABOVE_THE_SAMPLE, movers=_period_module_names()
+    )
+
+    assert violations, (
+        "помощник не нашёл нарушения на исходнике, где срок двигается ВЫШЕ "
+        "снятия признака живости: инвариант ничего не держит"
+    )
+
+
+def test_the_order_helper_reports_a_move_hidden_inside_a_branch():
+    """НЕГАТИВНЫЙ КОНТРОЛЬ №2: сдвиг ВНУТРИ ветви обязан краснеть тоже.
+
+    Именно этот случай прежний перебор `function.body` не видел вовсе, и именно
+    он описан находкой WR-03 раунда 5: тест держал последний оператор верхнего
+    уровня, а сдвиги в ветвях (`prorated_expiry` в их числе) оставались вне
+    инварианта.
+    """
+    violations = _order_violations(
+        _SYNTHETIC_MOVE_INSIDE_A_BRANCH, movers=_period_module_names()
+    )
+
+    assert violations, (
+        "помощник не нашёл нарушения на исходнике, где сдвиг спрятан ВНУТРИ "
+        "ветви: обход идёт по операторам верхнего уровня, а не по всему телу"
+    )
+
+
 def test_the_liveness_is_sampled_before_the_date_moves():
     """ЛОВУШКА ПОРЯДКА, проверяемая машиной, а не прочтением.
 
@@ -1433,43 +1630,51 @@ def test_the_liveness_is_sampled_before_the_date_moves():
     платежа или подписки — правило начинало бы решать по чужой величине, стоя
     при этом на верном месте. Проверяется, что признак снимается ИМЕННО от
     `subscription.expires_at`, то есть от той величины, которую перезаписывает
-    `next_expiry`: только для неё порядок вообще что-то значит. Нагрузка на этот
-    тест выросла вместе с планом 05-15 — сдвиг срока теперь стоит В ДВУХ ВЕТКАХ,
-    и половина инварианта под возросшей нагрузкой была бы долгом следующего
-    раунда.
+    `next_expiry`: только для неё порядок вообще что-то значит.
+
+    ЧТО ТЕСТ ДЕРЖИТ СЕГОДНЯ — КАЖДЫЙ СДВИГ, А НЕ ОДИН ИЗ ЧЕТЫРЁХ. Прежняя
+    редакция перебирала операторы ВЕРХНЕГО УРОВНЯ и утверждала при этом покрытие
+    двух ветвей; фактически она держала последний оператор верхнего уровня, а
+    сдвиги внутри ветвей — долю месяца D-29 в их числе — не видела вовсе
+    (WR-03 раунда 5). Теперь обход идёт `ast.walk` по всему телу, и держатся ДВА
+    независимых инварианта: по ИМЕНИ вызываемого (множество ВЫВОДИТСЯ из импорта
+    модуля отсчёта, поэтому имя, добавленное будущим планом, попадает под
+    проверку без правки теста) и по ЦЕЛИ присваивания (любое выражение,
+    перезаписывающее поле срока, чем бы оно ни считалось).
+
+    ⚠️ ЧЕГО ТЕСТ НЕ ДЕРЖИТ, НАЗВАНО ЗДЕСЬ, ЧТОБЫ ИМЯ СНОВА НЕ ОБЕЩАЛО БОЛЬШЕ
+    ТЕЛА. Он не проверяет, что сдвиг вообще ВЕРЕН — только что он стоит ниже
+    снятия признака; арифметику держат тесты `tests/test_application/`. Он ничего
+    не знает о ветке, где признак не участвует вовсе. И он молчит о ПОРЯДКЕ
+    сдвигов между собой: их взаимная перестановка инвариантом не запрещена.
+    Краснота самого инварианта доказана не рассуждением, а двумя негативными
+    контролями над синтетическими исходниками — `test_the_order_helper_*` выше.
     """
     import app.services.payment_service as module
 
-    function = ast.parse(inspect.getsource(module._apply_extension)).body[0]
-    statements = [
-        node
-        for node in function.body
-        if not (
-            isinstance(node, ast.Expr)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        )
-    ]
+    source = inspect.getsource(module._apply_extension)
+    movers = _period_module_names()
 
-    def _assignment_from(name: str) -> int:
-        for index, node in enumerate(statements):
-            if (
-                isinstance(node, ast.Assign)
-                and isinstance(node.value, ast.Call)
-                and getattr(node.value.func, "id", None) == name
-            ):
-                return index
-        raise AssertionError(f"в теле нет присваивания из вызова {name}")
-
-    live = _assignment_from("subscription_is_live")
-    moved = _assignment_from("next_expiry")
-
-    assert live < moved, (
-        "признак живости снимается ПОСЛЕ сдвига срока — правило всегда получит "
-        f"«живо», и блокер восстановлен молча (индексы {live} и {moved})"
+    used = _movers_used(source, movers=movers)
+    assert len(used) >= 2, (
+        "инвариант стал вакуумным: в теле не осталось вызовов, ввезённых из "
+        "`app.application.billing.subscription_period`, кроме признака живости "
+        f"— проверять нечего ({sorted(used)})"
     )
 
-    sampled = statements[live].value.args[0]
+    violations = _order_violations(source, movers=movers)
+    assert violations == [], (
+        "признак живости снимается ПОСЛЕ сдвига срока — правило всегда получит "
+        f"«живо», и блокер восстановлен молча: {violations}"
+    )
+
+    moves = _expiry_assignment_lines(source, attr="expires_at")
+    assert len(moves) >= 3, (
+        "сдвигов срока стало меньше трёх: либо ветка исчезла, либо срок "
+        f"двигается уже не присваиванием в поле подписки — {moves}"
+    )
+
+    sampled = _liveness_sample(source, "subscription_is_live").value.args[0]
     assert isinstance(sampled, ast.Attribute) and sampled.attr == "expires_at", (
         "признак снимается НЕ от той величины, которую перезаписывает "
         "`next_expiry`: порядок соблюдён, а правило решает по чужому полю "
@@ -1935,10 +2140,10 @@ async def test_a_second_subscription_intent_from_the_form_is_refused_with_words(
 
 
 @pytest.mark.asyncio
-async def test_the_two_authorized_intents_of_case_one_are_unreachable_through_the_form(
+async def test_a_second_intent_of_another_plan_is_refused_while_the_first_is_fresh(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """СЛУЧАЙ (1) доведён до конца: состояния с двумя разрешениями больше нет.
+    """Второе намерение ДРУГОГО тарифа отвергается, пока первое СВЕЖЕЕ.
 
     ⚠️ ЧЕМ ЭТОТ ТЕСТ ОТЛИЧАЕТСЯ ОТ
     `test_a_pro_deal_sold_before_any_subscription_is_not_erased_by_a_later_basic`,
@@ -1953,6 +2158,15 @@ async def test_the_two_authorized_intents_of_case_one_are_unreachable_through_th
 
     Именно на этом пути сделка на 4900 ₽ продавалась и стиралась последним
     подтверждённым `basic`.
+
+    ⚠️ ЧЕГО ЭТОТ ТЕСТ НЕ ДЕРЖИТ, И ПОЧЕМУ ЕГО ИМЯ БОЛЬШЕ НЕ ГОВОРИТ
+    «UNREACHABLE». Оба намерения он заводит ПОДРЯД, о сроке давности не знает
+    вовсе, и потому доказывает ровно одно: пока первое намерение СВЕЖЕЕ, второго
+    не появится. Состояние «два оплачиваемых намерения разных тарифов»
+    недостижимым он НЕ объявляет — оно достижимо через сутки, и это доказывает
+    `tests/test_services/test_payment_service.py::test_a_stale_intent_does_not_block_a_new_one`.
+    Прежнее имя обещало инвариант шире тела, и читатель, искавший покрытие по
+    имени, получал ложную уверенность (WR-05 раунда 5).
     """
     await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
     refused = await _subscribe(authed_client, plan="basic", payment_id="yoo_basic")
