@@ -86,6 +86,7 @@ async def create_payment(
     package_name: str | None = None,
     messages_count: int | None = None,
     plan: str | None = None,
+    switch_authorized: bool | None,
 ) -> dict:
     """Создаёт платёж в ЮKassa и строку `payments` под него.
 
@@ -93,6 +94,22 @@ async def create_payment(
     была: необновлённый вызывающий обязан упасть громко на вызове, а не тихо
     записать платёж с угаданным предметом покупки — угаданный предмет
     обнаружился бы только на вебхуке, то есть после того, как деньги списаны.
+
+    `switch_authorized` ОБЯЗАТЕЛЕН И KEYWORD-ONLY ПО ТОЙ ЖЕ ПРИЧИНЕ, И ЭТО НЕ
+    единообразие ради единообразия. Он несёт ОТВЕТ ГАРДА смены тарифа, снятый в
+    момент ПРОДАЖИ (D-28): `True` — правило спросили и переход разрешило,
+    `False` — спросили и отвергло, `None` — не спрашивали (пакетная покупка).
+    Значение по умолчанию вернуло бы ровно ту дисциплину вызывающего, из-за
+    которой две стадии правила разошлись дважды подряд: параметр, который можно
+    не подать, однажды не подадут — и платёж уедет к ЮKassa, не неся того, что
+    было продано. Пакетный вызов подаёт `None` ЯВНО, тем же способом, каким уже
+    подаёт `messages_count=None` и `package_name=None`.
+
+    ⚠️ В `metadata` ПЛАТЕЖА ЭТО ЗНАЧЕНИЕ НЕ УЕЗЖАЕТ, и это не экономия полей.
+    Предмет и условия сделки решает СВОЯ строка, никогда тело уведомления
+    (T-05-08, T-05-68): всё, что ушло в ЮKassa, возвращается оттуда как вход из
+    сети, и решать по нему, что человеку выдать, значило бы отдать условия
+    сделки наружу.
     """
     _configure_yookassa()
     settings = get_settings()
@@ -175,6 +192,7 @@ async def create_payment(
         amount_currency="RUB",
         kind=kind,
         plan=plan,
+        switch_authorized=switch_authorized,
         messages_count=messages_count,
         package_name=package_name,
     )
@@ -576,26 +594,51 @@ def _apply_extension(
     # срока восстановился бы молча (T-05-63, гэп 1 раунда 3).
     period_is_live = subscription_is_live(subscription.expires_at, now)
 
-    subscription.expires_at = next_expiry(subscription.expires_at, now)
-
     if not db_payment.plan:
+        # У платежа без плана менять нечего, и полный период здесь верен: он
+        # ничего не отвергает, а значит и делить месяц не на что.
+        subscription.expires_at = next_expiry(subscription.expires_at, now)
         return
 
-    if switch_is_refused(
-        subscription.plan, db_payment.plan, period_is_live=period_is_live
-    ):
+    # РЕШЕНИЕ ПРИНИМАЕТСЯ ЗДЕСЬ И ТОЛЬКО ЗДЕСЬ, И ПЕРВЫМ ЕГО ИСТОЧНИКОМ
+    # СЛУЖИТ ЗАПИСАННЫЙ ФАКТ (D-28). У платежа, заведённого после ревизии
+    # `0019`, ответ гарда снят в момент ПРОДАЖИ и лежит на строке; правило по
+    # текущему состоянию БД тогда не спрашивается вовсе — именно этот
+    # пересчёт по изменившейся строке и был корнем гэпа.
+    #
+    # `NULL` означает «правило не спрашивали»: строка старше ревизии `0019`.
+    # Для неё ответ считается правилом, как и до плана, — выдумать записанный
+    # ответ хуже, чем пересчитать.
+    if db_payment.switch_authorized is not None:
+        refused = not db_payment.switch_authorized
+        decided_by = "recorded_answer"
+    else:
+        refused = switch_is_refused(
+            subscription.plan, db_payment.plan, period_is_live=period_is_live
+        )
+        decided_by = "rule"
+
+    if refused:
         # УРОВЕНЬ `warning`, А НЕ `info`, И ЭТО НАМЕРЕННО. Платёж принят и
         # оплаченные дни выданы, но уплаченный тариф применён НЕ был — исход,
         # по которому к нам придёт человек. Без собственного ключа он прятался
         # бы за `subscription_payment_succeeded`, который печатает план ПЛАТЕЖА
         # как обычный успех, и разбирать обращение было бы не по чему.
+        #
+        # ИСТОЧНИК РЕШЕНИЯ НАЗЫВАЕТСЯ ОТДЕЛЬНЫМ ПОЛЕМ: два разных исхода
+        # («так было продано» и «так решило правило, потому что продано было
+        # неизвестно как») приходят в один ключ, и без поля разбирающий
+        # обращение их не различит.
         logger.warning(
             "subscription_plan_preserved",
             user_id=db_payment.user_id,
             yookassa_id=db_payment.yookassa_payment_id,
             plan=subscription.plan,
             paid_plan=db_payment.plan,
+            decided_by=decided_by,
         )
+        subscription.expires_at = next_expiry(subscription.expires_at, now)
         return
 
+    subscription.expires_at = next_expiry(subscription.expires_at, now)
     subscription.plan = db_payment.plan

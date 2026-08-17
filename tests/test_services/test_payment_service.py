@@ -86,6 +86,10 @@ async def test_create_payment(db_session):
             package_name="100 messages",
             messages_count=100,
             price="149.00",
+            # Тело меняется НАМЕРЕННО: сигнатура изменилась намеренно. Правило
+            # смены тарифа пакета не касается, и это записывается ЗНАЧЕНИЕМ
+            # `None`, а не пропуском аргумента (D-28).
+            switch_authorized=None,
         )
 
     assert result["confirmation_url"] == "https://yookassa.ru/pay/123"
