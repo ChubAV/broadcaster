@@ -1,9 +1,8 @@
 ---
 phase: 05-tarify
-round: 5
-reviewed: 2026-08-17T12:40:00Z
+reviewed: 2026-08-17T18:47:42Z
 depth: standard
-files_reviewed: 42
+files_reviewed: 44
 files_reviewed_list:
   - alembic/versions/0017_payment_kind_and_plan.py
   - alembic/versions/0018_subscriptions_unique_user.py
@@ -36,6 +35,8 @@ files_reviewed_list:
   - tests/test_migrations/test_0017_payment_kind_and_plan.py
   - tests/test_migrations/test_0018_subscriptions_unique_user.py
   - tests/test_migrations/test_0019_payment_switch_authorized.py
+  - tests/test_migrations/test_deploy_applies_migrations_before_serving.py
+  - tests/test_migrations/test_model_matches_head.py
   - tests/test_pages/test_billing_payment_errors.py
   - tests/test_pages/test_billing_section.py
   - tests/test_pages/test_billing_subscription.py
@@ -48,653 +49,560 @@ files_reviewed_list:
   - tests/test_services/test_payment_concurrency.py
   - tests/test_services/test_payment_service.py
 findings:
-  critical: 2
-  warning: 5
-  info: 2
-  total: 9
+  critical: 1
+  warning: 7
+  info: 4
+  total: 12
 status: issues_found
 ---
 
-# Фаза 05 (tarify): отчёт код-ревью — РАУНД 5
+# Phase 05-tarify: Code Review Report
 
-**Reviewed:** 2026-08-17T12:40:00Z
+**Reviewed:** 2026-08-17T18:47:42Z
 **Depth:** standard
-**Files Reviewed:** 42
+**Files Reviewed:** 44
 **Status:** issues_found
-**Round:** 5
-
-## ⚠️ ПРОЧТИТЕ ДО ТОГО, КАК РАЗРЕШАТЬ ЛЮБОЙ НОМЕР НАХОДКИ
-
-Номера находок **между раундами ПЕРЕНАЗНАЧЕНЫ**. `CR-01` в этом файле — ДРУГОЙ
-дефект, чем `CR-01` раундов 1–4. Каждая ссылка ниже квалифицирована раундом;
-делайте так же.
-
-| Раунд | Где читать | Итог |
-|-------|------------|------|
-| 1 | `git show 4989f7a:.planning/phases/05-tarify/05-REVIEW.md` | critical 2, warning 10, info 6 |
-| 2 | `git show 1d29360:.planning/phases/05-tarify/05-REVIEW.md` | critical 2, warning 9, info 7 |
-| 3 | `git show 164d210:.planning/phases/05-tarify/05-REVIEW.md` | critical 1, warning 7, info 5 |
-| 4 | `git show 5da8e82:.planning/phases/05-tarify/05-REVIEW.md` | critical 1, warning 4, info 2 |
-| 5 | этот файл | critical 2, warning 5, info 2 |
-
-Полный перечень, включая будущие раунды, отдаёт
-`git log --oneline -- .planning/phases/05-tarify/05-REVIEW.md`.
-
-**Что читалось.** Дельта с раунда 4 (`git diff 5da8e82..HEAD`) — 11 файлов,
-1963 строки: ревизия `0019`, `payments.switch_authorized`, `prorated_expiry` /
-`prorated_days` / `countdown_base`, потолок одновременных намерений и 1393 строки
-новых тестов. Остальные 31 файла области не менялись с раунда 4, и находки по ним
-— это находки раунда 4 с записанными распоряжениями; они не переоткрываются.
-
-## Structural Findings (fallow)
-
-Блок `<structural_findings>` с запросом не передан, структурного пред-прохода
-нет. Все находки ниже — нарративные.
 
 ## Summary
 
-Гэп раунда 4 закрыт в НАЗВАННОМ направлении, и это проверено прогоном, а не по
-`SUMMARY`: записанный ответ гарда живёт на строке платежа, читается ПЕРВЫМ, доля
-месяца считается в `Decimal` и совпадает с полным месяцем ровно при `paid ==
-price` на всех краевых датах, потолок поднимается ДО единого обращения к SDK, и
-`_open_subscription_intents` честно нормализует оба диалекта. Направление
-«младший платёж покупает месяц старшего», ради которого существовал раунд 4,
-воспроизвести через форму больше нельзя.
+Reviewed the billing/subscription surface with the money path as the primary target:
+`create_payment` → YooKassa → `handle_webhook` → `_claim_payment` → `_extend_subscription`
+→ `_apply_extension` → `subscription_period` arithmetic.
 
-**Но денежный дефект снова обнаружился в новой формулировке — и на этот раз он
-идёт в ПРОТИВОПОЛОЖНУЮ сторону, туда, где четыре раунда подряд никто не смотрел,
-потому что эта сторона объявлена «подарком».** Правило `upgrade-only` разрешает
-повышение всегда, повтор ОДНОГО И ТОГО ЖЕ тарифа потолок пропускает намеренно, а
-`expires_at` не ограничен ничем. Произведение этих трёх решений никто не считал:
-пользователь копит предоплаченный горизонт дешёвым тарифом, а затем ОДНИМ
-платежом старшего тарифа переводит на старший тариф ВЕСЬ накопленный горизонт.
-Прогон (симуляция ниже) даёт 13 месяцев `pro` за 22 780 ₽ при списочной цене
-63 700 ₽. Записанная цена варианта — «повышение отдаёт лимиты старшего тарифа на
-ОСТАВШИЕСЯ ДНИ младшего» — говорит об остатке; код не ограничивает остаток ничем.
+What holds up under attack:
 
-Вторая тема раунда — та же, что и в раунде 4, и это тревожно само по себе:
-**обоснование безопасности, записанное в коде и в `STATE.md`, ссылается на
-механизм, который на этом пути исполниться не может.** Оговорка «остаточное окно
-гонки денежно нейтрально благодаря D-29» (`payment_service.py:209-218`,
-`.planning/STATE.md:124`) неверна по построению: у платежа, заведённого формой,
-`switch_authorized` ВСЕГДА `True` (отказ возвращает 302 ДО создания платежа),
-поэтому `refused` там ложно всегда, и ветка доли месяца не исполняется НИ РАЗУ.
-D-29 остаётся живой только для строк старше ревизии `0019`.
+- The webhook source guard is real end to end. Every proxying `location` in both
+  `nginx/nginx.conf.template` and `nginx/nginx-http.conf.template` sets
+  `X-Real-IP $remote_addr` (overwrite, not append), the default header name is pinned in
+  `app/config.py:108` and in `docker-compose.prod.yml:27`, the rightmost-element read in
+  `app/routes/billing.py:103` is correct for an overwriting proxy, an unconfigured header
+  fails closed, and the guard sits outside the `try` so it cannot be downgraded to a 500.
+- `_claim_payment` (`app/services/payment_service.py:422-431`) is a genuine compare-and-swap
+  and works identically on both dialects; `_mirror_claim` correctly uses `set_committed_value`
+  so no second UPDATE is emitted; `add_messages` increments in SQL, not in Python.
+- The migration-order deploy gate is wired correctly: `entrypoint.sh` has `set -e` before
+  `alembic upgrade head` before `exec "$@"`, and `web` is the only service bound to it.
+  All three migration test fixtures monkeypatch `DATABASE_URL` *and* `set_main_option`, so
+  none of them can be pointed at a developer's real database.
+- The AST ordering invariant (`test_the_liveness_is_sampled_before_the_date_moves`) is not
+  vacuous: it derives the mover set from the import, walks the whole body, and has two
+  negative controls over synthetic sources.
 
-Третья тема — деплой. Модель `Payment` объявляет три колонки, которых в боевой
-схеме нет (`kind`, `plan`, теперь `switch_authorized`). Запись `STATE.md` о D-26
-описывает последствие как «кнопка оплаты упирается в ошибку записи»; фактически
-ломается КАЖДОЕ чтение таблицы платежей, включая уже работавший до этой фазы
-приём пакетных платежей.
+What does not hold up: the newest money arithmetic, `converted_remainder` (plan 05-18), is
+the least-verified code in the phase. It has **zero direct unit tests**, its stated rationale
+for taking the month length from `add_one_month` is provably inoperative (the term cancels
+algebraically), and its price-unreadable fallback silently restores the exact unbounded-carry
+leak the function was written to close — in a branch no test exercises. Separately, three
+docstring claims that plan 05-19 was supposed to make confirmable are still not confirmable
+by the code beside them, and `GET /api/billing/transactions` accepts unvalidated `limit`/`offset`.
+
+Known and recorded debt (second intent-cap window, `uq_subscriptions_active_user` not built
+in prod, D-26 schema divergence) is **not** re-reported below.
 
 ---
 
 ## Critical Issues
 
-### CR-01: Предоплаченный горизонт переводится на старший тариф целиком за цену ОДНОГО месяца — 13 месяцев Pro за 22 780 ₽ вместо 63 700 ₽
+### CR-01: `convert-remainder` fallback silently restores the unbounded prepaid-horizon leak, in a branch with zero test coverage
 
-**Файлы:**
-`app/services/payment_service.py:886-887` (безусловная перезапись плана + сдвиг),
-`app/application/billing/plan_switch.py:87-88` (повтор своего тарифа разрешён),
-`app/application/billing/plan_switch.py:95` (повышение разрешено),
-`app/application/billing/subscription_period.py:103-121` (`countdown_base` не
-ограничивает горизонт), достижимость — `app/pages/billing.py:341-349`,
-`app/services/payment_service.py:229-244`.
+**File:** `app/services/payment_service.py:1019-1036` (fallback), `app/services/payment_service.py:787-815` (`_plan_price`)
+**Severity:** BLOCKER
 
 **Issue:**
 
-Три решения фазы, каждое верное по отдельности:
-
-1. `switch_is_refused(X, X, period_is_live=True)` → `False`
-   (`plan_switch.py:87-88`): повтор своего тарифа правилом не задевается.
-   Потолок 05-17 тоже пропускает его НАМЕРЕННО — форма `cap-different-plan`
-   (`payment_service.py:229-230`, `intent.plan != plan`).
-2. `next_expiry` считает от ПОЗДНЕЙШЕЙ из двух точек, и верхней границы у
-   `expires_at` нет ни в коде, ни в схеме: каждый подтверждённый платёж
-   добавляет календарный месяц К УЖЕ НАКОПЛЕННОМУ сроку.
-3. `switch_is_refused(basic, pro, period_is_live=True)` → `False`, и
-   `_apply_extension` в разрешённой ветке пишет
-   `subscription.plan = db_payment.plan` (`:887`) — ОДНИМ оператором на ВЕСЬ
-   оставшийся срок, потому что `subscription.plan` — скаляр без истории.
-
-Произведение: предоплати `basic` сколько угодно раз, затем один раз `pro`.
-
-```
-$ uv run python -c "...(симуляция _apply_extension поверх настоящего кода)"
-after 12x basic: basic 2027-01-10 12:00:00+00:00
-guard refuses basic->pro on live period? False
-after 1x pro   : pro   2027-02-10 12:00:00+00:00
-paid total     : 22780
-list price for 13 months of pro: 63700
-```
-
-Каждое из тринадцати нажатий проходит гард формы (`billing.py:341-349`) и потолок
-(`payment_service.py:225-244`) ЗАКОННО: двенадцать — «продление своего тарифа»,
-тринадцатое — «повышение». Ни гонок, ни истёкших намерений, ни срока давности,
-ни устаревшей страницы. Утечка — 40 920 ₽ на одном пользователе за один год и
-растёт линейно с горизонтом предоплаты, которого никто не ограничивает.
-
-**Почему это НЕ покрыто записанным распоряжением.** `.planning/STATE.md:80`
-называет цену варианта `upgrade-only` дословно: «повышение отдаёт лимиты старшего
-тарифа на ОСТАВШИЕСЯ ДНИ младшего бесплатно, и это принято сознательно». Тот же
-текст лежит в `payment_service.py:596-599` и в чекпойнте `05-10`. «Оставшиеся
-дни» читается как остаток текущего месяца — величина, ограниченная сверху одним
-периодом. Код не ограничивает её ничем: остаток равен всему, что пользователь
-успел предоплатить, и управляет им ПОКУПАТЕЛЬ. Принятая цена и фактическая цена
-отличаются на два порядка, и решение принималось по первой.
-
-Смягчение, которое запись называет и которое надо назвать честно: D-08 —
-применения тарифных лимитов в системе нет вовсе, поэтому «pro» сегодня не даёт
-доступа ни к чему сверх показа. Это откладывает денежную цену до BILL-02, но не
-устраняет её: продаётся именно тариф, он печатается в разделе и в журнале
-платежей, и первая же выкатка принуждения превратит отложенную цену в списанную.
-Ни одного теста на ПОВТОРНУЮ покупку своего тарифа с последующим повышением в
-суите нет — ни в `test_billing_payment_errors.py`, ни в
-`test_subscription_period.py`; все существующие прогоны заводят не более двух
-платежей.
-
-**Fix:**
-
-Это продуктовое решение (что покупает повышение поверх предоплаченного
-горизонта), поэтому ниже три пригодные формы, а не одна правка:
-
-1. **Повышение считает доплату, а не дарит горизонт.** Тот же аппарат `Decimal`,
-   который уже написан для D-29, только в другую сторону: при повышении срок
-   пересчитывается по отношению цен, а не сдвигается на месяц.
+In the allowed-upgrade path, when either plan price cannot be read, the code logs and falls
+through with `base` still bound to `subscription.expires_at` (line 1014):
 
 ```python
-# app/services/payment_service.py, разрешённая ветка
-if subscription.plan != db_payment.plan:
-    # повышение поверх предоплаченного остатка: остаток конвертируется
-    # по отношению цен, а не переносится на старший тариф целиком
-    old_price = _plan_price(subscription.plan)
-    new_price = _plan_price(db_payment.plan)
-    if old_price is not None and new_price is not None:
-        subscription.expires_at = converted_remainder(
-            subscription.expires_at, now, old_price=old_price, new_price=new_price
-        )
-subscription.expires_at = next_expiry(subscription.expires_at, now)
+base = subscription.expires_at
+if period_is_live and db_payment.plan != subscription.plan:
+    price_from = _plan_price(subscription.plan)
+    price_to   = _plan_price(db_payment.plan)
+    if price_from is None or price_to is None:
+        logger.warning("subscription_prorating_skipped", ...)   # base stays == expires_at
+    else:
+        base = converted_remainder(...)
+
+subscription.expires_at = next_expiry(base, now)
 subscription.plan = db_payment.plan
 ```
 
-2. **Ограничить горизонт предоплаты.** Потолок вида «`expires_at` не дальше N
-   месяцев от сегодня» на стадии НАМЕРЕНИЯ, рядом с потолком одновременных
-   намерений и в том же модуле: платёж, который увёл бы срок за потолок, не
-   продаётся, и человеку говорится словом (новый код причины, по образцу
-   `pending`). Тогда «оставшиеся дни» становятся ограниченной величиной, какой
-   их и описывает принятое решение.
+"Fallback to prior behaviour" here *is* gap 1 of round 5: the entire accumulated prepaid
+horizon is carried onto the senior plan by days, and then the plan is overwritten. The
+docstrings quantify the damage themselves — twelve `basic` months (17 880 ₽) plus one `pro`
+payment (4 900 ₽) yields thirteen months of Pro against a 63 700 ₽ list price, and the loss
+grows linearly with a horizon the buyer controls.
 
-3. **Повышение вступает в силу со следующего периода.** Оплаченный горизонт
-   доживает на купленном тарифе, повышение записывается «следующим» — та же
-   форма, что предлагалась вариантом 2 находки `CR-01 (раунд 4)`.
+Three things make this more than theoretical:
 
-Чего делать НЕЛЬЗЯ: оставить как есть, сославшись на записанную цену варианта.
-Записанная цена ограничена остатком; код не ограничен ничем, и это разные
-величины.
+1. `_plan_price` returns `None` for any price that is absent, unparseable, **or not greater
+   than zero**. The shipped `free` plan is priced `"0.00"` (`app/config.py:75`), so `free` is
+   a *permanently* unreadable price by construction — any subscription row on `free` with a
+   live `expires_at` takes this branch on its first paid upgrade. (See WR-05 for how such a
+   row can be created.)
+2. `price_to is None` fires whenever the payment's plan has left `PLAN_LIMITS` between sale
+   and confirmation. The codebase repeatedly states this is normal operation
+   (`app/services/payment_service.py:794-796`: "Перечень тарифов правится окружением, а
+   действующий план записан в строке подписки — разойтись они могут в любую сторону и без
+   нашего участия"). An operator renaming or dropping a plan id is a one-line env edit.
+3. **The branch is untested.** `subscription_prorating_skipped` appears exactly once in the
+   whole suite (`tests/test_pages/test_billing_payment_errors.py:2096`), and that test
+   exercises the *refused* branch (`unreadable="price"` / seeded plan `"platinum"`), not this
+   one. The value `"paid_plan_price"` — which only this branch can emit — is asserted nowhere.
 
-Требуемые регрессии (сегодня нет ни одной):
+The correct behaviour on an unreadable price is not to raise (a 5xx starts the YooKassa retry
+cycle — that part of the design is right), but the current fallback chooses the *most*
+expensive possible outcome for the platform rather than a bounded one.
 
-- N подтверждённых платежей ОДНОГО тарифа → срок растёт, и растёт он не дальше
-  объявленного потолка горизонта (вариант 2) либо конвертируется при повышении
-  (вариант 1);
-- N×`basic` + 1×`pro` → выданный срок `pro` СООТВЕТСТВУЕТ уплаченному, а не
-  равен N+1 месяцам;
-- повышение при ОДНОМ оплаченном месяце по-прежнему не сжигает остаток
-  (защитная, существующая семантика не должна сломаться).
-
----
-
-### CR-02: Модель `Payment` объявляет три колонки, которых нет в боевой схеме — ломается КАЖДОЕ чтение таблицы платежей, а не только кнопка подписки
-
-**Файлы:** `app/models/payment.py:30-31, 57`,
-`alembic/versions/0017_payment_kind_and_plan.py:50-72`,
-`alembic/versions/0019_payment_switch_authorized.py:81-85`,
-последствия — `app/services/billing_service.py:230-236`,
-`app/services/payment_service.py:442-447`, `app/pages/billing.py:200-201`.
-
-**Issue:**
-
-Эта находка НЕ переоткрывает D-26 (решение отложить выкат — записанное
-распоряжение, `.planning/STATE.md:88`). Она о том, что ЗАПИСАННОЕ ПОСЛЕДСТВИЕ
-этого решения уже, чем фактическое, а гейт выката принимается по записанному.
-
-`STATE.md:88` описывает последствие так: «колонок `ads.status` и
-`payments.kind`/`plan` в живой схеме нет, `messages_count` остаётся `NOT NULL`,
-поэтому подписка на проде не записывается … кнопка оплаты упирается в ошибку
-записи». Ревизия `0019` добавляет в тот же список `switch_authorized`
-(`0019:44-52` — «практического последствия у этого сегодня нет ровно потому, что
-подписка на проде не записывается вовсе»).
-
-Оба утверждения неверны в одну и ту же сторону. ORM-выборка сущности выписывает
-ПОЛНЫЙ перечень отображённых колонок в `SELECT`, а не только те, которые читает
-вызывающий. Поэтому на схеме `0012`, где колонок нет, `UndefinedColumn` поднимают
-ВСЕ три ЧИТАЮЩИХ пути, ни один из которых к подписке отношения не имеет:
-
-| Путь | Оператор | Что перестаёт работать |
-|------|----------|------------------------|
-| `get_payment_history` (`billing_service.py:230`) | `select(Payment)` | раздел «Тарифы» целиком отдаёт 500 любому вошедшему |
-| `count_payments` (`billing_service.py:247`) | `count()` — уцелеет | — |
-| `handle_webhook` (`payment_service.py:442-447`) | `select(Payment).with_for_update()` | **приём ПАКЕТНЫХ платежей**, работавший до этой фазы |
-
-Третья строка — цена находки. `POST /api/billing/webhook` падает ДО ветвления по
-`kind`, то есть для платежа за ПАКЕТ СООБЩЕНИЙ тоже. Маршрут отвечает 500
-(`app/routes/billing.py:200-202`), ЮKassa трактует 5xx как «попробовать позже»,
-повторяет доставку ограниченное число раз и сдаётся — деньги списаны, сообщения
-не начислены, платёж навсегда `pending`. Это ровно тот класс отказа, который фаза
-старательно лечит в других местах (`webhook_package_without_messages_count`,
-`WR-04 (раунд 2)`), — только здесь он введён самой фазой в путь, который до неё
-работал.
-
-Иначе говоря: выкатывать код без очереди миграций НЕЛЬЗЯ не потому, что подписка
-не заработает, а потому, что перестанет работать уже проданный продукт. Гейт
-D-26 сегодня описан как «новая функция не доедет»; фактически он «старая функция
-сломается».
-
-**Fix:**
-
-Кода в приложении находка не требует — она требует правки ФАКТА, по которому
-принимается решение о выкате, и одной машинной проверки:
-
-1. Исправить формулировку последствия в `.planning/STATE.md:88` и в докстринге
-   `0019:44-52`: назвать, что при расхождении модели и схемы отказывают ВСЕ
-   чтения `payments`, включая пакетный вебхук, и что выкат кода и выкат очереди
-   миграций отделить друг от друга НЕЛЬЗЯ.
-2. Завести проверку соответствия — она дешёвая и ловит весь класс:
+**Fix:** bound the carry instead of restoring the unlimited one, and cover the branch.
 
 ```python
-# tests/test_migrations/test_model_matches_head.py
-def test_every_mapped_payment_column_exists_at_head(alembic_at_head_engine):
-    """Отображённая колонка без ревизии = 500 на каждом чтении таблицы."""
-    actual = set(inspect(alembic_at_head_engine).get_columns("payments"))
-    mapped = {c.name for c in Payment.__table__.columns}
-    assert mapped <= actual, mapped - actual
+    if price_from is None or price_to is None:
+        logger.warning(
+            "subscription_prorating_skipped",
+            user_id=db_payment.user_id,
+            yookassa_id=db_payment.yookassa_payment_id,
+            plan=subscription.plan,
+            paid_plan=db_payment.plan,
+            unreadable="price" if price_from is None else "paid_plan_price",
+        )
+        # ГРАНИЦА ПЕРЕНОСА ПРИ НЕПРОЧИТАННОЙ ЦЕНЕ. Конвертировать нечем, но
+        # переносить ВЕСЬ горизонт нельзя — это и есть гэп 1 раунда 5. Остаток
+        # переносится не более чем на один календарный месяц: «остаток не сгорает»
+        # держится, а величина, которой управляет покупатель, перестаёт быть
+        # неограниченной.
+        capped = min(
+            normalize_utc(subscription.expires_at),
+            add_one_month(normalize_utc(now)),
+        )
+        base = capped
 ```
 
-3. Отдельно — на боевом старте: `entrypoint.sh` обязан отказаться поднимать `web`
-   при `alembic current != head`, а не поднимать приложение, которое отвечает 500
-   на деньги. Сегодня несоответствие обнаруживается пользователем.
+Add two regressions mirroring `test_a_prepaid_horizon_is_not_converted_to_the_senior_plan_for_one_month`:
+one seeding `subscription.plan = "free"` (permanently unreadable price), one seeding a payment
+whose `plan` is absent from `parsed_plan_limits`, both asserting the resulting `expires_at`
+stays bounded and that `unreadable="paid_plan_price"` is logged.
 
 ---
 
 ## Warnings
 
-### WR-01: Обоснование «остаточное окно гонки денежно нейтрально благодаря D-29» неверно: у платежа, заведённого формой, ветка D-29 не исполняется НИКОГДА
+### WR-01: `converted_remainder`'s month-length rationale is provably false; `month_days` cancels out of the formula
 
-**Файлы:** `app/services/payment_service.py:209-218` (докстринг `create_payment`),
-`.planning/STATE.md:124`, код — `app/pages/billing.py:348-367`,
-`app/services/payment_service.py:813-822`.
+**File:** `app/application/billing/subscription_period.py:231-236`, `:249-256`
+**Severity:** WARNING
 
-**Issue:**
+**Issue:** The docstring states:
 
-Потолок 05-17 честно объявляет своё ограничение: атомарности он не даёт, между
-проверкой и записью лежит сетевой вызов. Но следом стоит оговорка, которой это
-ограничение принимается:
+> ДЛИНА МЕСЯЦА БЕРЁТСЯ У `add_one_month` ОТ ТОЙ ЖЕ БАЗЫ, А НЕ КОНСТАНТОЙ 30 — по той же
+> причине, что у `prorated_expiry`: константа разошлась бы с `next_expiry` в феврале и в
+> декабре, и «полный месяц» получил бы два разных определения.
 
-> …а остаточный риск покрыт решением D-29 — платёж, чей план не применён,
-> покупает долю месяца по уплаченной сумме, поэтому окно остаётся денежно
-> нейтральным.
+That is not true of this function. `month_days` appears once in the denominator of `paid` and
+once as the multiplier inside `prorated_days`, and the two cancel:
 
-Проследите значения. Гард формы при отказе возвращает 302 ДО `create_payment`
-(`billing.py:348-349`), поэтому в `create_payment` попадает только
-`switch_authorized = not switch_refused = True` (`:367`). На стадии применения
-`db_payment.switch_authorized is not None` → `refused = not True = False`
-(`payment_service.py:813-814`). **Ветка `if refused:` со всей арифметикой
-`prorated_expiry` для платежа, заведённого формой, недостижима.** Это признаёт и
-сам проект — тремя строками: `app/models/payment.py:42-44` («через форму сегодня
-недостижимо»), `alembic/versions/0019...py:33-36`, докстринг теста
-`test_billing_payment_errors.py:1899-1903` («обе несут записанное разрешение
-`True`: отказа не возникает ни у одной, ветка доли месяца не исполняется вовсе»).
-
-Значит в остаточном окне гонки оба платежа несут `True`, оба применяют свой план
-полным месяцем, и исход решает ПОРЯДОК подтверждения: подтверждённый последним
-старший тариф переписывает план на весь накопленный срок — то есть окно даёт не
-нейтральность, а ровно `CR-01` этого раунда в миниатюре. D-29 действует ТОЛЬКО
-для строк со `switch_authorized IS NULL`, то есть заведённых до ревизии `0019`;
-после её выката множество таких строк перестаёт пополняться навсегда.
-
-Это второй раунд подряд, когда блокирующая находка приходит из утверждения,
-которого код не исполняет (`WR-01 (раунд 4)` — «С ОДНИМ НАБОРОМ ВЕЛИЧИН»).
-Разница в том, что теперь неверное утверждение записано не только в докстринге,
-но и в `STATE.md` — то есть в документе, по которому принимаются решения.
-
-**Fix:** снять неверную опору и назвать настоящую.
-
-```python
-    # ⚠️ ЧЕГО ПОТОЛОК НЕ ДАЁТ — АТОМАРНОСТИ. … Две абсолютно одновременные
-    # попытки теоретически проходят проверку обе, и D-29 их НЕ покрывает: у
-    # обеих строк `switch_authorized = True`, отказа не возникает ни у одной,
-    # и доля месяца не исполняется вовсе. Остаточный исход окна — тот же, что
-    # у разрешённого повышения: план решает ПОРЯДОК подтверждения.
+```
+days = floor( month_days · (old · rem_sec / (month_days · 86400)) / new )
+     = floor( rem_days · old / new )
 ```
 
-и та же правка в `.planning/STATE.md:124`. Если нейтральность окна нужна как
-свойство, а не как формулировка, — её обязан дать другой механизм (уникальный
-частичный индекс на «не более одного незакрытого подписочного намерения
-пользователя», по образцу `uq_subscriptions_active_user` ревизии `0018`: СУБД
-умеет то, чего не умеет проверка вокруг сетевого вызова).
+Verified numerically — the answer is byte-identical for `month_days` of 28, 30 and 31:
 
-### WR-02: Записанный отказ (`switch_authorized = False`) чтится ровно на ОДНОЙ из двух веток `_extend_subscription` — вторая применит его как разрешение
+| now | month_days | remainder | converted days | `int(rem·1490/4900)` |
+|---|---|---|---|---|
+| 2026-01-31 | 28 | 365 d | 110 | 110 |
+| 2026-03-01 | 31 | 365 d | 110 | 110 |
+| 2026-04-01 | 30 | 365 d | 110 | 110 |
 
-**Файл:** `app/services/payment_service.py:661-672` против `:813-822`,
-контекст — `app/pages/billing.py:361-367`.
+The phase's own regression already encodes the cancelled form
+(`tests/test_pages/test_billing_payment_errors.py:2310`:
+`int(Decimal(remainder_days) * BASIC_PRICE / PRO_PRICE)`), with no month-length term at all.
+
+This is precisely the class plan 05-19 was chartered to remove: a paragraph asserting a
+property the neighbouring code does not have. It is also live risk — `add_one_month(now_utc)`
+and the `timedelta` round-trip on lines 249-254 are dead computation that a future reader will
+"fix" in the wrong direction, believing the calendar matters here.
+
+**Fix:** either state the truth, or make the claim real. Truth is cheaper:
+
+```python
+    # ДЛИНА МЕСЯЦА В ОТВЕТ НЕ ВХОДИТ, И ЭТО СВОЙСТВО, А НЕ УПУЩЕНИЕ: она стоит
+    # знаменателем стоимости остатка и множителем в `prorated_days`, и два
+    # вхождения сокращаются. Ответ равен floor(остаток_в_днях · old / new) при
+    # любой длине месяца — проверено на 28, 30 и 31 дне. Единица месяца остаётся
+    # здесь только затем, чтобы деление денег на цену жило ОДНИМ объявлением
+    # (`prorated_days`), а не второй формулой.
+```
+
+If instead the intent was that a shorter calendar month should make a remainder worth *more*,
+that requires two different month lengths (the one the remainder was bought in, and the one it
+is being converted into) and is a behaviour change, not a comment change.
+
+### WR-02: `switch_authorized = False` is honoured in one branch and silently ignored in the other; the "expiry lifts the refusal on both stages" claim is false for it
+
+**File:** `app/services/payment_service.py:920-927`, `:743-754`, docstring `:712-720`
+**Severity:** WARNING
+
+**Issue:** Three inconsistencies around the recorded-refusal value:
+
+1. `_apply_extension:920-921` reads the recorded answer *without ever consulting*
+   `period_is_live`. A payment carrying `switch_authorized = False` therefore keeps
+   `refused = True` even when the paid period has expired. The `_extend_subscription`
+   docstring (`:712-720`) states the opposite as an unconditional property:
+   "Когда оплаченный срок истёк, отказ снимается на ОБЕИХ стадиях … План платежа
+   ПРИМЕНЯЕТСЯ, каким бы он ни был … и следа `subscription_plan_preserved` на этом пути НЕТ."
+   For a recorded `False`, the plan is not applied and `subscription_plan_preserved` *is*
+   written.
+2. `_extend_subscription`'s first-insert branch (`:743-754`) applies `db_payment.plan`
+   unconditionally and never reads `switch_authorized` at all. So the same recorded refusal is
+   honoured when a subscription row exists and ignored when it does not.
+3. `app/models/payment.py:40-46` and `alembic/versions/0019_...py:33-36` both state explicitly
+   that the column "обязана уметь выразить" `False` and that a future writer will otherwise
+   express refusal through `NULL`. The value is unreachable *today* only because
+   `subscribe_to_plan` returns 302 before creating the payment (`app/pages/billing.py:348-349`)
+   — a one-line change away from being live on the money path.
+
+**Fix:** make the recorded answer obey the same expiry rule as the rule branch, and state the
+insert branch's position explicitly rather than by omission.
+
+```python
+    if db_payment.switch_authorized is not None:
+        # ⚠️ ИСТЁКШИЙ СРОК СНИМАЕТСЯ ОТКАЗ И У ЗАПИСАННОГО ОТВЕТА
+        # (`apply-after-expiry`, чекпойнт 05-13): защищать нечего независимо от
+        # того, кто отказ вынес. Без этого члена записанный `False` пережил бы
+        # собственный период, а докстринг `_extend_subscription` утверждает
+        # обратное безусловно.
+        refused = period_is_live and not db_payment.switch_authorized
+        decided_by = "recorded_answer"
+```
+
+and in the insert branch add one line of reasoning naming why a recorded refusal is not
+consulted there (no prior plan exists, so there is nothing to refuse) — or consult it.
+
+### WR-03: "план только повышается" is violated silently, with no journal entry, on a path the code itself documents as reachable
+
+**File:** `app/services/payment_service.py:686-693`, `:1015`, `:1065`; `app/application/billing/plan_switch.py:70`
+**Severity:** WARNING
+
+**Issue:** Both declarations state the outcome as an invariant —
+"срок двигается всегда, план только растёт" (`plan_switch.py:70`) and
+"Но ПЛАН при этом только повышается" (`payment_service.py:688`). Neither is true once D-28
+recorded answers exist. Concrete sequence, using only mechanisms the file documents as
+reachable:
+
+1. No subscription. `POST /billing/subscribe plan=basic` → guard passes (nothing to protect) →
+   payment `P1` written with `switch_authorized = True`. Not paid.
+2. 25 h later `P1` is past `PENDING_INTENT_TTL_HOURS` and stops counting
+   (`_open_subscription_intents:150-159`; the docstring at `:219-232` names this window
+   explicitly and `tests/test_services/test_payment_service.py::test_a_stale_intent_does_not_block_a_new_one`
+   is a green test that reaches it). `POST /billing/subscribe plan=pro` → `P2`,
+   `switch_authorized = True`.
+3. `P2` confirms → subscription `pro`, live.
+4. `P1` confirms → `refused = not True = False` → line 1015 converts the `pro` remainder into
+   `basic` days and line 1065 sets `subscription.plan = "basic"`.
+
+The user is demoted from `pro` to `basic`, and because the refusal branch was never entered,
+`subscription_plan_preserved` is **not** logged — the outcome leaves no trace at all. Money is
+approximately conserved by the conversion, so this is a correctness/observability defect
+rather than a leak, but the stated product rule (`upgrade-only`) is not enforced and the
+declarations claim it is.
+
+**Fix:** either enforce the invariant at the apply stage, or stop declaring it. Enforcing is
+one condition and keeps the existing journal key:
+
+```python
+    if db_payment.switch_authorized is not None:
+        refused = period_is_live and (
+            not db_payment.switch_authorized
+            # ЗАПИСАННОЕ РАЗРЕШЕНИЕ НЕ ОТМЕНЯЕТ `upgrade-only`. Оно снято ДО того,
+            # как появился действующий старший тариф (окно срока давности
+            # намерения), и понижать по нему значило бы исполнить сделку, которой
+            # на момент подтверждения уже не существует.
+            or switch_is_refused(
+                subscription.plan, db_payment.plan, period_is_live=True
+            )
+        )
+```
+
+If the owner prefers the current behaviour, delete the "план только растёт" sentence from both
+declarations and name the demotion outcome in `_extend_subscription`'s docstring.
+
+### WR-04: no error handling or log around the DB write that follows a successful YooKassa `create`
+
+**File:** `app/services/payment_service.py:372-385`
+**Severity:** WARNING
+
+**Issue:** The module argues at length (`:322-333`, T-05-49) that the SDK call must precede the
+DB write, and it handles every failure of the SDK call. It handles none of the DB write:
+
+```python
+    db_payment = Payment(...)
+    db.add(db_payment)
+    await db.commit()
+```
+
+If this `commit` raises (unique violation on `yookassa_payment_id`, connection drop, the
+`UndefinedColumn` case D-26 names for the pre-`0019` schema), a real payment exists at YooKassa
+with **no row in our database and no log entry naming its id**. Every later notification for it
+takes `webhook_payment_not_found` (`:501-503`) and returns `{"ok": false}` with HTTP 200, so
+YooKassa stops retrying. Exposure is limited today because the user never receives the
+confirmation URL, but the orphan is untraceable: the only place `payment.id` appears in a log is
+`payment_created`, which is emitted *after* the commit.
+
+Note this is exactly the class the phase already fixed once, in
+`webhook_package_without_messages_count`.
+
+**Fix:**
+
+```python
+    db.add(db_payment)
+    try:
+        await db.commit()
+    except Exception as exc:
+        # СЛЕД ОБЯЗАТЕЛЕН, И ИМЕННО ЗДЕСЬ. Платёж у ЮKassa уже СОЗДАН; без этой
+        # записи он остаётся сиротой, которого не с чем сверить: его
+        # идентификатор не попадает ни в один журнал, а `webhook_payment_not_found`
+        # отвечает 200 и повторов не вызывает.
+        await db.rollback()
+        logger.error(
+            "payment_row_not_written",
+            user_id=user_id,
+            yookassa_id=payment.id,
+            kind=kind,
+            plan=plan,
+            amount=price,
+            error_type=type(exc).__name__,
+        )
+        raise PaymentCreationError("Платёж не записан в базу") from exc
+```
+
+### WR-05: `handle_webhook` guards the package branch against a missing `messages_count` but the subscription branch has no equivalent guard on `plan`
+
+**File:** `app/services/payment_service.py:548-555`, `:743-754`, `:905-909`
+**Severity:** WARNING
+
+**Issue:** The package branch refuses to claim a payment whose `messages_count` is empty, and
+the reasoning (`:542-547`) is that claiming it would mark a payment delivered while delivering
+nothing. The subscription branch has no counterpart. A row with `kind = 'subscription'` and
+`plan IS NULL` is claimed as `succeeded` and then:
+
+- if no subscription row exists → `_extend_subscription:746-752` inserts
+  `Subscription(plan=db_payment.plan or "free", expires_at=next_expiry(None, now))`, i.e. the
+  user is put on the **free** plan with a month of paid expiry. Money taken, nothing sold
+  delivered — and because `_plan_price("free")` is `None` by construction, that row is
+  precisely the permanently-unreadable-price input that triggers CR-01 on the next upgrade;
+- if a subscription row exists → `_apply_extension:905-909` extends the period and returns.
+
+`create_payment` cannot produce such a row today, but neither can it produce a subscription
+payment with an empty `messages_count` — the guard next door exists for exactly the same
+"opechatka in the caller / data fix / admin script" reason.
+
+**Fix:** mirror the existing guard, using the same fail-without-claiming shape:
+
+```python
+    if db_payment.kind == KIND_SUBSCRIPTION and not db_payment.plan:
+        # СИММЕТРИЯ С ПРОВЕРКОЙ ПАКЕТА ВЫШЕ И ПО ТОЙ ЖЕ ПРИЧИНЕ. Подписочный
+        # платёж без плана выдать нечем: ветка первой вставки положила бы человека
+        # на `free` с оплаченным месяцем, то есть пометила бы платёж проведённым,
+        # ничего не выдав. Заявка не берётся — платёж остаётся незакрытым и
+        # разбирается человеком.
+        logger.error(
+            "webhook_subscription_without_plan",
+            yookassa_id=yookassa_id,
+            user_id=db_payment.user_id,
+        )
+        return False
+```
+
+and drop the `or "free"` default at `:747` once the guard is in place — a default that invents a
+plan is the thing that made the outcome silent.
+
+### WR-06: `GET /api/billing/transactions` accepts unvalidated `limit` / `offset`
+
+**File:** `app/routes/billing.py:30-38`
+**Severity:** WARNING
 
 **Issue:**
 
-`_extend_subscription` имеет две ветки: продление существующей подписки
-(`:657-659` → `_apply_extension`) и ПЕРВАЯ ВСТАВКА (`:661-672`). Записанный ответ
-гарда читает только первая. Вторая пишет план безусловно:
+```python
+async def get_transactions(
+    limit: int = 50,
+    offset: int = 0,
+    ...
+):
+    txs = await get_transaction_history(db, user_id, limit=limit, offset=offset)
+```
+
+Neither bound is validated, and `get_transaction_history`
+(`app/services/billing_service.py:172-194`) passes both straight into `.offset()` / `.limit()`.
+
+- `?limit=-1` → PostgreSQL raises `LIMIT must not be negative` → unhandled 500 for any
+  authenticated caller. (SQLite treats `-1` as unlimited, so the test suite cannot see this —
+  the same dialect-divergence trap the phase documents elsewhere.)
+- `?offset=-1` → PostgreSQL `OFFSET must not be negative` → 500.
+- `?limit=100000000` → unbounded result set materialised into a list of dicts.
+
+Every other list in this phase carries an explicit cap and a stated reason
+(`PAYMENT_LIST_CAP`, `TRANSACTION_LIST_LIMIT`, `WORKER_LIST_CAP`); this is the one reader that
+does not.
+
+**Fix:**
 
 ```python
-db.add(
-    Subscription(
-        user_id=db_payment.user_id,
-        plan=db_payment.plan or "free",     # ← switch_authorized не спрошен
-        expires_at=next_expiry(None, now),  # ← и полный месяц, не доля
-        is_active=True,
+from fastapi import Query
+
+@router.get("/transactions")
+async def get_transactions(
+    # Границы объявлены В СИГНАТУРЕ, а не проверены телом: FastAPI отвергает
+    # выход за них 422 до входа в обработчик, и второму месту проверки завестись
+    # негде. Потолок — тот же, что у остальных перечней раздела.
+    limit: int = Query(50, ge=1, le=PAYMENT_LIST_CAP),
+    offset: int = Query(0, ge=0),
+    ...
+):
+```
+
+### WR-07: `test_model_matches_head.py` compares column *names* only — the deploy gate passes on a type/nullability divergence
+
+**File:** `tests/test_migrations/test_model_matches_head.py:89-102`, `:188-208`
+**Severity:** WARNING
+
+**Issue:** `missing_columns` is `sorted(set(mapped) - set(actual))` over
+`PRAGMA table_info` names. The gate therefore accepts any revision whose column *exists* but
+whose shape disagrees with the model. The concrete hazard is live in this very phase:
+`0019` adds `switch_authorized` as `nullable=True`, and both `app/models/payment.py:48-53` and
+the revision docstring argue at length that a `server_default` or `NOT NULL` here would be
+wrong. If a future revision adds it (or re-adds it after the documented lossy `downgrade`) as
+`NOT NULL`, this test stays green while `create_payment` starts failing on every package
+purchase, which passes `switch_authorized=None` explicitly (`app/pages/billing.py:456`).
+
+The file's own "ЧЕГО ЭТОТ ФАЙЛ НЕ ДОКАЗЫВАЕТ" section names the prod-divergence limit but not
+this one, so a reader reasonably concludes the model/head comparison is total.
+
+**Fix:** extend the comparison to the two attributes the phase actually reasons about, and
+name the remaining boundary:
+
+```python
+def _table_shape(db_path: Path, table: str) -> dict[str, tuple[str, bool]]:
+    """Имя колонки → (тип, признак NOT NULL). Имени МАЛО, и вот почему.
+
+    Колонка `switch_authorized` обязана быть NULLABLE (D-28: NULL означает
+    «правило не спрашивали», и это не то же самое, что «нет»). Ревизия,
+    заведшая её NOT NULL, сверку по одним ИМЕНАМ прошла бы, а
+    `create_payment` начал бы падать на КАЖДОЙ пакетной покупке, которая
+    подаёт `None` явно.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        return {
+            row[1]: (row[2].upper(), bool(row[3]))
+            for row in conn.execute(f"PRAGMA table_info({table})")
+        }
+    finally:
+        conn.close()
+
+
+def test_every_mapped_payment_column_keeps_its_nullability_at_head(db_at_head):
+    shape = _table_shape(db_at_head, "payments")
+    divergent = sorted(
+        column.name
+        for column in Payment.__table__.columns
+        if column.name in shape and shape[column.name][1] == column.nullable
     )
-)
-```
-
-Сегодня это латентно ровно потому, что `False` через форму не приходит. Но
-комментарий гарда (`billing.py:361-366`) прямо анонсирует будущее, в котором
-придёт:
-
-> Отрицание остаётся верным и в будущем, где отказ перестанет возвращаться
-> немедленно: тогда сюда придёт `False`, и платёж унесёт записанный ОТКАЗ.
-
-В том будущем платёж с записанным ОТКАЗОМ, пришедший к пользователю БЕЗ строки
-подписки, заведёт подписку на отвергнутом плане и выдаст полный месяц — то есть
-исполнит ровно то, в чём было отказано. Ветка вставки достижима не гипотетически:
-именно она обслуживает первый платёж каждого нового пользователя.
-
-Тот же разрыв у `switch_authorized IS NULL`: на ветке вставки правило не
-спрашивается вовсе, хотя на ветке продления спрашивается.
-
-**Fix:** свести обе ветки к одному решению — либо вынести чтение записанного
-ответа выше развилки, либо (проще и без изменения сегодняшнего поведения)
-зафиксировать инвариант тестом, который упадёт, когда `False` станет достижим:
-
-```python
-async def test_a_recorded_refusal_is_not_applied_by_the_insert_branch(db_session):
-    """У пользователя БЕЗ подписки отвергнутый платёж не заводит отвергнутый план."""
-    payment = await _seed_subscription_payment(
-        db_session, "basic", "yoo_x", switch_authorized=False, amount="1490.00"
+    assert not divergent, (
+        "нулевость отображённой колонки расходится с головной ревизией: "
+        f"{divergent}"
     )
-    assert await _confirm(db_session, "yoo_x") is True
-    rows = await _subscription_rows(db_session)
-    assert rows == [] or rows[0].plan != "basic"
 ```
-
-### WR-03: AST-тест порядка проверяет 1 из 3 операторов, двигающих срок, и не видит `prorated_expiry` — при том, что его докстринг утверждает обратное
-
-**Файл:** `tests/test_pages/test_billing_payment_errors.py:1385-1450`,
-предмет проверки — `app/services/payment_service.py:796-886`.
-
-**Issue:**
-
-Тест перебирает `function.body`, то есть ТОЛЬКО операторы верхнего уровня тела
-`_apply_extension`. Проверено разбором настоящего исходника:
-
-```
-top-level stmt types:            ['Expr','Assign','If','If','If','Assign','Assign']
-top-level assign-from-call:      ['subscription_is_live', 'next_expiry']
-ВСЕ assign-from-call внутри fn:  ['subscription_is_live', 'next_expiry',
-                                  'next_expiry', 'switch_is_refused',
-                                  '_plan_price', 'next_expiry',
-                                  'prorated_expiry', 'Decimal']
-```
-
-Из четырёх операторов, двигающих срок, тест видит ОДИН — последний, на верхнем
-уровне (`:886`). Сдвиги внутри ветвей (`:801` — платёж без плана, `:858` — откат
-к полному месяцу) невидимы, а `prorated_expiry` (`:860`) не проверяется вовсе:
-его имя в тесте не упоминается ни разу.
-
-При этом докстринг теста (`:1402-1410`) утверждает:
-
-> Нагрузка на этот тест выросла вместе с планом 05-15 — сдвиг срока теперь стоит
-> В ДВУХ ВЕТКАХ, и половина инварианта под возросшей нагрузкой была бы долгом
-> следующего раунда.
-
-Половина инварианта под возросшей нагрузкой и есть сегодняшнее состояние: тест
-держит ту ветку, которая существовала до 05-15, и не держит ту, которую 05-15
-добавил. Проверка аргумента (`:1445-1450`, закрытие `IN-02 (раунд 4)`) сделана
-верно и относится к тому же единственному оператору.
-
-**Fix:** ходить по `ast.walk(function)`, а не по `function.body`, и требовать,
-чтобы признак снимался раньше КАЖДОГО сдвига, включая долевой:
-
-```python
-def _first_index(names: set[str]) -> int:
-    hits = [
-        node.lineno
-        for node in ast.walk(function)
-        if isinstance(node, ast.Assign)
-        and isinstance(node.value, ast.Call)
-        and getattr(node.value.func, "id", None) in names
-    ]
-    assert hits, f"в теле нет присваивания из вызова {names}"
-    return min(hits)
-
-live = _first_index({"subscription_is_live"})
-moved = _first_index({"next_expiry", "prorated_expiry"})
-assert live < moved
-```
-
-### WR-04: Два докстринга одного денежного правила утверждают ПРОТИВОПОЛОЖНОЕ, и один из них противоречит коду
-
-**Файлы:** `app/services/payment_service.py:762-764` и `:833-835` против
-`:836`; `app/application/billing/subscription_period.py:151-153`.
-
-**Issue:**
-
-Код делит уплаченную сумму на цену ДЕЙСТВУЮЩЕГО плана:
-
-```python
-price = _plan_price(subscription.plan)      # :836 — план ПОДПИСКИ
-paid  = Decimal(db_payment.amount_value)    # :840 — сумма ПЛАТЕЖА
-```
-
-`subscription_period.py:151-153` описывает это верно: «долю календарного месяца
-по отношению уплаченной суммы к цене ДЕЙСТВУЮЩЕГО плана».
-
-`payment_service.py` дважды описывает это наоборот:
-
-* `:762-764` — «Доля месяца (`prorated_expiry`, D-29) … дни считаются по
-  УПЛАЧЕННОМУ тарифу, а не по действующему»;
-* `:833-835` — «ДНИ СЧИТАЮТСЯ ПО УПЛАЧЕННОМУ ТАРИФУ, А НЕ ПО ДЕЙСТВУЮЩЕМУ
-  (D-29)» — и стоит эта фраза НЕПОСРЕДСТВЕННО над строкой, которая читает цену
-  действующего.
-
-Величина расхождения не косметическая: «по уплаченному тарифу» дало бы
-`1490/1490 = 1` полный месяц, «по действующему» даёт `1490/4900 ≈ 9` дней. Это
-разница между дефектом раунда 4 и его исправлением, записанная как синонимы.
-Следующий человек, правящий эту ветку, прочитает `:833` и «починит» `:836` на
-`_plan_price(db_payment.plan)` — то есть вернёт блокер раунда 4 правкой, которая
-выглядит приведением кода в соответствие с комментарием.
-
-**Fix:** привести оба абзаца `payment_service.py` к формулировке
-`subscription_period.py` и назвать величину явно:
-
-```python
-# ДНИ СЧИТАЮТСЯ ПО УПЛАЧЕННОЙ СУММЕ, ОТНЕСЁННОЙ К ЦЕНЕ ДЕЙСТВУЮЩЕГО ТАРИФА
-# (D-29): paid / price(subscription.plan). Полный месяц ДЕЙСТВУЮЩЕГО тарифа
-# здесь и был дырой — 1490 ₽ покупали месяц Pro за 4900 ₽.
-```
-
-### WR-05: «Потолок делает состояние недостижимым» — состояние достижимо, и это доказывает собственный тест проекта
-
-**Файлы:** `app/services/payment_service.py:195-207` (докстринг),
-`tests/test_services/test_payment_service.py:703-729`
-(`test_a_stale_intent_does_not_block_a_new_one`),
-`tests/test_pages/test_billing_payment_errors.py:1889` (имя теста).
-
-**Issue:**
-
-Докстринг `create_payment` объявляет:
-
-> ПОТОЛОК … ВОТ ЧТО ИМЕННО ОН ДЕЛАЕТ НЕДОСТИЖИМЫМ. Состояние, в котором у одного
-> пользователя ОДНОВРЕМЕННО висят два незакрытых намерения РАЗНЫХ тарифов.
-
-Ниже перечислено ровно одно остаточное окно — гонка двух абсолютно одновременных
-попыток, — и оно названо «несравнимо уже окна „человек открыл две вкладки“».
-Второе, гораздо более широкое и полностью детерминированное окно не названо
-вовсе: срок давности. Намерение старше `PENDING_INTENT_TTL_HOURS` перестаёт
-СЧИТАТЬСЯ (`_open_subscription_intents:149-157`), но оплачиваемым быть не
-перестаёт — своей строки оно не теряет и терминальным не становится. Значит любой
-пользователь, подождав сутки, заводит второе намерение другого тарифа
-гарантированно, а затем оплачивает оба. Ровно это и утверждает
-`test_a_stale_intent_does_not_block_a_new_one`, стоящий в 200 строках от
-докстринга.
-
-Имя `test_the_two_authorized_intents_of_case_one_are_unreachable_through_the_form`
-(`:1889`) обещает больше, чем тест проверяет: тело заводит два намерения ПОДРЯД
-(`:1908-1911`) и о сроке давности не знает. Следующий читатель, ищущий покрытие
-инварианта по имени теста, получит ложную уверенность — тот же механизм, который
-раунд 4 назвал в `test_a_confirmed_lower_plan_does_not_strip_the_higher_one…`.
-
-Денежного следствия у этого окна ОТДЕЛЬНОГО от `CR-01` нет (исход совпадает с
-разрешённым повышением), поэтому находка — `WARNING`, а не блокер. Но
-утверждение о недостижимости обязано быть верным: на нём стоит вся аргументация
-05-17.
-
-**Fix:** назвать оба окна в докстринге и переименовать тест по тому, что он
-держит:
-
-```python
-    # ⚠️ ДВА ОКНА, А НЕ ОДНО. (1) гонка двух одновременных попыток; (2) СРОК
-    # ДАВНОСТИ: намерение старше PENDING_INTENT_TTL_HOURS перестаёт считаться,
-    # но оплачиваемым быть не перестаёт, поэтому подождавший сутки заводит
-    # второе намерение другого тарифа ГАРАНТИРОВАННО. Второе окно — цена
-    # неподтверждённой подписки на `payment.canceled` (D-27), и закрыть его
-    # можно только вместе с ней.
-```
-
-и `test_a_second_intent_of_another_plan_is_refused_while_the_first_is_fresh`.
-Если недостижимость нужна как свойство — её даёт снятие намерения с оплаты
-(`Payment.cancel` в SDK) при истечении срока давности, а не молчаливое
-исключение строки из подсчёта.
 
 ---
 
 ## Info
 
-### IN-01: `create_payment` не проверяет, что у подписочного платежа есть план
+### IN-01: `converted_remainder` has no direct unit tests in the module that owns the arithmetic
 
-**Файл:** `app/services/payment_service.py:249-258`, `:230`
+**File:** `tests/test_application/test_subscription_period.py` (whole file), `app/application/billing/subscription_period.py:186-256`
 
-`kind` и `switch_authorized` сделаны обязательными keyword-only именно затем,
-чтобы необновлённый вызывающий падал громко. `plan` при `kind ==
-KIND_SUBSCRIPTION` такой защиты не получил: при `plan=None` описание платежа
-уезжает в ЮKassa строкой `Подписка «None»`, `metadata["plan"]` становится `""`, а
-условие потолка `intent.plan != plan` считает такое намерение отдельным тарифом.
-Сегодня недостижимо — единственный вызывающий берёт `selected["id"]`, — но это
-ровно тот класс, который фаза закрывала у `kind` и `switch_authorized`.
+**Issue:** `add_one_month`, `subscription_is_live`, `next_expiry` and `prorated_expiry` each get a
+full boundary table in this file — every day of a common and a leap year, naive/aware pairs,
+the exact-equality case, the one-day floor, the no-upper-cap case. `converted_remainder`, added
+by 05-18 and the only new arithmetic on the money path, is not imported here at all. Its entire
+coverage is integration assertions with `± 2 days` tolerance
+(`tests/test_pages/test_billing_payment_errors.py:2312`,
+`tests/test_services/test_payment_concurrency.py:470`), which cannot see a one-day truncation, a
+February/December divergence, or a naive/aware mismatch.
 
-**Fix:** `if kind == KIND_SUBSCRIPTION and not plan: raise ValueError(...)` первой
-строкой, рядом с потолком.
+**Fix:** add the same shape of table this file already uses for `prorated_expiry` — expired and
+absent `current` return `now`; a live remainder never converts to zero days; naive and aware
+`current` give the identical answer; `old_price == new_price` round-trips; the answer is
+invariant across `month_days ∈ {28, 30, 31}` (which is what WR-01 shows the code actually does).
 
-### IN-02: Срок давности сравнивает часы приложения с часами СУБД
+### IN-02: every conversion truncates the sub-day part of the paid remainder
 
-**Файл:** `app/services/payment_service.py:149` против
-`app/models/payment.py:62-64`
+**File:** `app/application/billing/subscription_period.py:143`, `:256`
 
-`cutoff` считается от `datetime.now(timezone.utc)` в процессе приложения, а
-`created_at` проставляет СУБД (`server_default=func.now()`). На боевом артефакте
-это два разных контейнера с двумя разными часами; расхождение сдвигает срок
-давности в обе стороны и не проявляется в суите, где обе стороны — один процесс.
-Величина в норме мала, вывод — нет: потолок, который «иногда мешает на час
-дольше», разбирается по жалобам, а не по журналу.
+**Issue:** `prorated_days` uses `int(...)`, which truncates toward zero. Because `month_days`
+cancels (WR-01), a switch between two plans priced identically yields
+`now + floor(remainder_in_days)` — up to 23 h 59 m 59 s of already-paid time is dropped. The
+docstring promises "обещание «оплаченный остаток не сгорает» остаётся верным … меняется единица
+измерения переноса, а не сам факт переноса" (`:219-225`), which is true in spirit and slightly
+false in the last day. Small in money, but it is the kind of statement this phase has been
+rewriting for five rounds.
 
-**Fix:** либо считать `cutoff` тем же источником времени (`func.now() -
-interval`), либо проставлять `created_at` приложением, как это уже делает
-`confirmed_at`.
+**Fix:** either say so in one clause ("целая часть, поэтому неполный день переноса теряется —
+цена того, что срок хранится днями") or round the conversion to the nearest day rather than
+down.
 
----
+### IN-03: dead guard in `converted_remainder`
 
-## Previously Dispositioned — повторно НЕ открываются
+**File:** `app/application/billing/subscription_period.py:245-247`
 
-Перепроверено в коде: все перечисленные ниже по-прежнему присутствуют, ни одна не
-заводится новой находкой. Распоряжения — `.planning/STATE.md` §Blockers/Concerns
-(сводная запись по раундам 1-2 и по одной записи на раунды 3 и 4) и §Deferred
-Items.
+**Issue:**
 
-| Пункт | Где | Распоряжение |
-|-------|-----|--------------|
-| Рукописное отрицание признака живости в `billing_page` рядом с импортированным объявлением | `app/pages/billing.py:213-216` против `:228` | `WR-02 (раунд 4)` — отложено, владелец не назначен |
-| `if not period_is_live` короткозамыкает fail-closed незнакомого плана | `plan_switch.py:84-85` против `:93-94` | `WR-03 (раунд 4)` — отложено; после 05-15 путь СОХРАНЯЕТСЯ и это записано |
-| Нет `restart:` у `web`, `celery-beat` и обоих воркеров | `docker-compose.prod.yml` (есть только `:64`, `:73`, `:135`) | `WR-04 (раунд 4)` — отложено, вне объёма кода фазы |
-| Отказ ПОВЫШЕНИЯ незнакомому плану сообщается словом «понижение» | `plan_switch.py:93-94`, `app/pages/billing.py:75-78, 349` | `WR-01 (раунд 3)` |
-| `/var/run/docker.sock` смонтирован в `web`, терминирующий вебхук | `docker-compose.prod.yml` | `WR-07 (раунд 3)` — 🔴, владелец не назначен |
-| План вне `PLAN_LIMITS` рисует все четыре оси как «без ограничений» | `plan_usage.py:185`, `usage_meters.html` | `WR-06 (раунд 3)` / `WR-10 (раунд 1)` |
-| `yookassa_return_url` строит адрес из `settings.app_name` | `payment_service.py:287` | `WR-02 (раунд 3)` |
-| `STATUS_PENDING` мёртв, путь записи пишет литерал `"pending"` | `payment_service.py:34` и `:322` | `WR-03 (раунд 3)` |
-| `plan_card.html` зашивает `'free'` | `plan_card.html:76` | `WR-04 (раунд 3)` |
-| Журнал операций молча обрезается на 20 строках | `app/pages/billing.py:44, 191-193` | `WR-05 (раунд 3)` |
-| Неиспользуемый импорт `text`, ни разу не вызванный `logger` | `billing_service.py:4, 12` | `IN-01 (раунд 3)` |
-| `app/application/billing/__init__.py` пуст | тот же файл | `IN-02 (раунд 3)` |
-| Утверждение о границах `subscription_period.py` без AST-теста | `subscription_period.py:3-9` | `IN-03 (раунд 3)` |
-| `datetime.now(timezone.utc)` снимается трижды за рендер | `app/pages/billing.py:215, 228, 345` | `IN-04 (раунд 3)` |
-| Фраза отказа в двух формулировках | `app/pages/billing.py:75-78` и `:101-104` | `IN-05 (раунд 3)` |
-| Блокирующий `YooPayment.create()` в `async def`, один воркер uvicorn | `payment_service.py:282-294` | `CR-02 (раунд 2)` — 🔴 отложено |
-| Нетипизированные `PLAN_LIMITS` / `MESSAGE_PACKAGES` | `app/config.py` | `WR-10 (раунд 1)` + `WR-07 (раунд 2)` |
-| Lost update в `reset_free_monthly` (`bal.balance += free_limit`) | `billing_service.py:133` | `WR-01 (раунд 2)` |
-| `"object": null` → 500 → цикл повторов ЮKassa | `payment_service.py:436`, `routes/billing.py:200-202` | `WR-04 (раунд 2)` |
-| Неподтверждённые `limit` / `offset` у `GET /api/billing/transactions` | `routes/billing.py:30-38` | `WR-08 (раунд 1)` / `WR-05 (раунд 2)` |
-| `∞` в виджете баланса при нулевом лимите | `base.html:76` | `WR-06 (раунд 2)` |
-| «первый платёж» / «продление» по усечённой карте | `payment_row.html`, `balance.html` | `WR-08 (раунды 1 и 2)` |
-| Осиротевший `pending` при неожиданной форме ответа SDK | `payment_service.py:344-347` | `WR-09 (раунд 2)` |
-| Подписочный платёж с пустым планом записывается как `free` | `payment_service.py:666` | `IN-07 (раунд 2)` |
-| `handle_webhook`, вернувший `False`, отвечает HTTP 200 | `routes/billing.py:198-199` | `WR-06 (раунд 1)` |
-| Пересоздание таблицы SQLite в ревизии `0017` | `0017:63-72` | `WR-03 (раунд 1)` |
-| Гард вебхука переоткрывается одной переменной, выключатель без следа | `routes/billing.py:176-185` | `WR-02`, `WR-03 (раунд 2)` |
-| Запрос без обоих заголовков источника пропускается | `app/pages/common.py:368-374` | Названная граница защиты, отчёт безопасности фазы |
+```python
+    base = countdown_base(current, now_utc)
+    if base <= now_utc:
+        return now_utc
+```
 
----
+`countdown_base` (`:117-121`) already returns `now_utc` whenever `base is None or base <= now_utc`,
+so the condition can never be true — the branch is unreachable. Harmless, but it reads as a
+second, independent expiry rule sitting next to the real one, which is the duplication this
+module exists to prevent.
 
-## Что выдержало враждебное чтение
+**Fix:** replace with a comment stating that the clamp is `countdown_base`'s job, or invert the
+guard to `if base == now_utc: return now_utc` and say why (nothing to convert).
 
-Записано, чтобы раунд 6 не перепроверял это заново:
+### IN-04: `subscription_prorating_skipped` is reused across two branches with two different `unreadable` vocabularies and different field sets
 
-- **Записанный ответ читается ПЕРВЫМ и правило при `NOT NULL` не спрашивается
-  вовсе** (`payment_service.py:813-820`); `decided_by` уезжает в журнал отдельным
-  полем, поэтому два разных исхода одного ключа различимы при разборе обращения.
-- **`prorated_expiry` совпадает с `next_expiry` ТОЧНО при `paid == price` на всех
-  краевых датах**, а не приблизительно: `month_days` берётся у `add_one_month` от
-  ТОЙ ЖЕ базы, а зажим дня через `calendar.monthrange` делает тождество верным и
-  31 января, и 29 февраля. Проверено разбором, не только тестом `:197`.
-- **Нижняя граница в один день не декоративна** (`prorated_days:143`): целая часть
-  доли от рубля при цене 4900 ₽ равна нулю, и без `max(..., 1)` исход «взяли и не
-  дали ничего» возник бы сам собой.
-- **Арифметика денег целиком в `Decimal`**, `float` не проходит нигде; `paid`
-  разбирается в `try` и при отказе разбора даёт откат к полному месяцу, а не 5xx
-  на уведомлении.
-- **Потолок поднимается ДО `_configure_yookassa()` и до `YooPayment.create`**, и
-  это держится не разбором исходника, а счётчиком `create_mock.call_count == 0`
-  (`test_the_refusal_never_reaches_yookassa`) — то есть тест ловит и перенос
-  строки, и обход.
-- **`PendingIntentCapError` — свой тип, своя ветка обработчика, свой код причины**
-  `pending`; текст исключения на экран не уходит, строку подбирает закрытое
-  отображение, и подставить произвольный текст через адрес нечем.
-- **`_open_subscription_intents` нормализует `created_at` в Python, а не в SQL** —
-  причина названа верно: сравнение в SQL разошлось бы ровно на одном из двух
-  диалектов; отсутствующее время рождения считается СВЕЖИМ, то есть отказ по
-  отсутствию данных закрывает, а не открывает.
-- **Ревизия `0019` без `server_default` и без `batch_alter_table`** — оба решения
-  обоснованы верно: умолчание записало бы факт, которого не было, а batch-режим
-  пересоздал бы таблицу платежей без причины. `downgrade` называет потерю данных
-  и пишет её в журнал наката.
-- **Три теста, которые НЕ дублируют друг друга и объясняют, чем отличаются**
-  (`:1682`, `:1740`, `:1889`): роли утверждений («защитное, на входе зелёное» /
-  «единственное красное») названы честно, и там, где красного прогона не
-  существовало, это записано прямо, а не приписано.
-- `_claim_payment` — по-прежнему настоящий compare-and-swap с `rowcount == 1`;
-  частичный уникальный индекс `0018` объявлен И в модели, И в ревизии;
-  `_webhook_client_ip` читает ПРАВЫЙ элемент списка, обращения к адресу пира в
-  файле нет ни одного.
+**File:** `app/services/payment_service.py:964-971` vs `:1029-1036`
+
+**Issue:** The key reuse is argued at `:1026-1028` ("событие ровно то же"), but the two emissions
+are not interchangeable to anyone reading the log:
+
+| | refused branch (`:964`) | conversion branch (`:1029`) |
+|---|---|---|
+| `unreadable` values | `"price"` \| `"amount"` | `"price"` \| `"paid_plan_price"` |
+| `granted_days` | emitted (as `None`) | absent |
+| `price_basis` | emitted by the paired `subscription_plan_preserved` | absent |
+
+`unreadable="price"` means "the *active* plan's price is unreadable" in both, but the second
+value differs in meaning and in name, and only one of the two branches is followed by a second
+record naming the outcome. An operator filtering on the key gets two different events with
+overlapping value vocabularies and no field that distinguishes the branch.
+
+**Fix:** add one discriminating field rather than a second key:
+
+```python
+            logger.warning(
+                "subscription_prorating_skipped",
+                stage="convert_remainder",   # vs stage="prorate_refused" выше
+                ...
+            )
+```
 
 ---
 
-_Reviewed: 2026-08-17T12:40:00Z_
+_Reviewed: 2026-08-17T18:47:42Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
-_Round: 5 — раунд 1 `4989f7a`, раунд 2 `1d29360`, раунд 3 `164d210`, раунд 4 `5da8e82`_
