@@ -71,6 +71,16 @@ MSG_DOWNGRADE = (
     "Перейти на младший тариф можно после окончания оплаченного срока — "
     "оплаченные дни не сгорают"
 )
+# Отказ по потолку одновременных подписочных намерений (план 05-17). Строка
+# НАЗЫВАЕТ ПРИЧИНУ и говорит, ЧТО ДЕЛАТЬ: человек обязан понять, что незакрытой
+# осталась ЕГО ПРЕДЫДУЩАЯ оплата, а не что кнопка сломана и не что с него
+# списали деньги и не зачли — это отдельный класс беды, и путать их дороже, чем
+# молчать. Числа часов срока давности здесь НЕТ: константа живёт в сервисе, и
+# копия в копирайте разошлась бы с ней молча при первой же правке.
+MSG_PENDING = (
+    "Предыдущая оплата ещё не завершена — дождитесь её результата "
+    "или попробуйте позже"
+)
 
 # Подпись четвёртого состояния CTA карточки плана. Она обязана НАЗЫВАТЬ ПРИЧИНУ,
 # по которой кнопки нет: карточка без кнопки и без слов читается как поломка
@@ -438,6 +448,22 @@ async def test_an_unknown_reason_code_prints_nothing_at_all(
 
 
 @pytest.mark.asyncio
+async def test_the_pending_reason_prints_its_own_words(authed_client: AsyncClient):
+    """Попавший под потолок получает СЛОВА, а не молчаливый редирект.
+
+    Отдельным именем, а не строкой в перечне соседа, потому что предмет у него
+    свой: связь нового кода с его строкой — последнее звено цепи «отказ сервиса
+    → код причины → отображение → плашка», и разрыв ЛЮБОГО звена даёт ту самую
+    возвращённую без слов страницу, которую фаза закрывала планом 05-10.
+    """
+    response = await authed_client.get("/billing?error=pending")
+
+    assert response.status_code == 200
+    assert ALERT_MARKER in response.text, "плашки отказа на экране нет"
+    assert MSG_PENDING in response.text
+
+
+@pytest.mark.asyncio
 async def test_the_section_without_the_parameter_prints_no_alert(
     authed_client: AsyncClient,
 ):
@@ -475,7 +501,19 @@ def test_the_reason_codes_of_the_handlers_are_exactly_the_known_set():
     source = BILLING_PY.read_text(encoding="utf-8")
     used = set(re.findall(r"/billing\?error=([a-z]+)", source))
 
-    assert used == {"payment", "disabled", "plan", "package", "downgrade"}, used
+    assert used == {
+        "payment",
+        "disabled",
+        "plan",
+        "package",
+        "downgrade",
+        # Потолок одновременных подписочных намерений (план 05-17). Код обязан
+        # войти в ОБА места сразу — в литерал редиректа и в отображение, — иначе
+        # эта регрессия краснеет. Правка её множества и есть часть работы, а не
+        # побочный эффект: тест держит связь, которую иначе держала бы только
+        # аккуратность автора.
+        "pending",
+    }, used
     for code in used:
         assert billing_module._payment_error_message(code), code
     assert billing_module._payment_error_message("zzz") == ""
@@ -1804,3 +1842,102 @@ async def test_a_price_that_cannot_be_read_falls_back_to_the_whole_month(
         call.args and call.args[0] == "subscription_prorating_skipped"
         for call in spy.warning.call_args_list
     ), "непрочитанная цена не оставила следа в журнале"
+
+
+# =============================================================================
+# ПОТОЛОК ОДНОВРЕМЕННЫХ НАМЕРЕНИЙ — ЧЕРЕЗ НАСТОЯЩИЙ ОБРАБОТЧИК ФОРМЫ
+# =============================================================================
+#
+# ЧТО ЗАКРЫВАЕТ ЭТОТ РАЗДЕЛ. Последний открытый путь случая (1) третьего пункта
+# `missing:` раунда 4: два подписочных платежа РАЗНЫХ тарифов, заведённых ФОРМОЙ
+# и потому несущих записанное разрешение `True` оба. Записанное разрешение
+# (D-28) на нём бессильно по построению — когда подписки нет вовсе, гард
+# пропускает любой план, — а доля месяца (D-29) не исполняется вовсе, потому что
+# отказа не возникает ни у одного платежа. Лечится это не решением о сделке и не
+# арифметикой дней, а НЕДОПУЩЕНИЕМ СОСТОЯНИЯ: пока два разрешённых намерения
+# разных тарифов не могут висеть одновременно, `subscription.plan` не обязан
+# вмещать два перехода в разные стороны.
+#
+# ФОРМА — `cap-different-plan` (решение владельца, чекпойнт задачи 1 плана
+# 05-15): повтор оплаты ТОГО ЖЕ тарифа остаётся разрешённым.
+
+
+@pytest.mark.asyncio
+async def test_a_second_subscription_intent_from_the_form_is_refused_with_words(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Форма отвечает на потолок 302 с ПРИЧИНОЙ и не заводит второй строки.
+
+    Голый редирект здесь был бы худшим из ответов: человек, нажавший «Оплатить»
+    и получивший ту же страницу, читает это как поломку и нажимает снова —
+    ровно то поведение, которое потолок и ловит.
+    """
+    first = await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
+    assert first.status_code == 302
+    assert first.headers["location"] == CONFIRMATION_URL
+
+    second = await _subscribe(authed_client, plan="basic", payment_id="yoo_basic")
+
+    assert second.status_code == 302
+    assert second.headers["location"] == "/billing?error=pending", (
+        "второе намерение другого тарифа ушло на оплату либо вернулось без слов"
+    )
+    assert await _payments_count(db_session) == 1, "заведена вторая строка платежа"
+
+
+@pytest.mark.asyncio
+async def test_the_two_authorized_intents_of_case_one_are_unreachable_through_the_form(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """СЛУЧАЙ (1) доведён до конца: состояния с двумя разрешениями больше нет.
+
+    ⚠️ ЧЕМ ЭТОТ ТЕСТ ОТЛИЧАЕТСЯ ОТ
+    `test_a_pro_deal_sold_before_any_subscription_is_not_erased_by_a_later_basic`,
+    И БЕЗ ЭТОЙ ФРАЗЫ СЛЕДУЮЩИЙ ЧИТАТЕЛЬ УДАЛИТ ОДИН ИЗ НИХ КАК ДУБЛИКАТ. Тот
+    держит строки БЕЗ записанного ответа (`switch_authorized IS NULL`, то есть
+    заведённые до ревизии `0019`): у них решение принимает правило, отказ
+    возникает, и предмет проверки — доля месяца (D-29). ЗДЕСЬ строки заводит
+    ФОРМА, и обе несут записанное разрешение `True`: отказа не возникает ни у
+    одной, ветка доли месяца не исполняется вовсе, и вылечить это можно только
+    тем, чтобы второй строки не появилось. Тот тест проверяет, СКОЛЬКО дней
+    покупает отвергнутый платёж; этот — что второго платежа не существует.
+
+    Именно на этом пути сделка на 4900 ₽ продавалась и стиралась последним
+    подтверждённым `basic`.
+    """
+    await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
+    refused = await _subscribe(authed_client, plan="basic", payment_id="yoo_basic")
+    assert refused.headers["location"] == "/billing?error=pending"
+    assert await _payments_count(db_session) == 1
+
+    assert await _confirm(db_session, "yoo_pro") is True
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1, "заведена вторая подписка"
+    assert rows[0].plan == "pro", "проданный старший тариф не выдан"
+    now = datetime.now(timezone.utc)
+    assert _aware(rows[0].expires_at) > now + timedelta(days=27), (
+        "оплаченный месяц не выдан вовсе"
+    )
+    assert _aware(rows[0].expires_at) < now + timedelta(days=45), (
+        "срок сдвинут дважды — второй платёж всё-таки существует"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_package_purchase_is_not_blocked_by_a_pending_subscription_intent(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Пакет потолком не задет: у него нет плана, и вмещать ему нечего.
+
+    Защита от одновременных намерений существует из-за скалярности
+    `subscription.plan`. Распространить её на пакеты значило бы запретить
+    покупку сообщений человеку, у которого просто висит неоплаченная подписка.
+    """
+    await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
+
+    response = await _purchase(authed_client)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == CONFIRMATION_URL
+    assert await _payments_count(db_session) == 2
