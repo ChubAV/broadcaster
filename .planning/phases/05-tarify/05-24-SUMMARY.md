@@ -344,3 +344,14 @@ $ git show HEAD:app/application/billing/plan_switch.py | grep -c "срок дв�
 1. **RED** — `07f2158`, коммит типа `test(...)`, прогон завершался кодом `1`.
 2. **GREEN** — `9fcfaf5`, коммит после него, прогон завершается кодом `0`.
 3. **REFACTOR** — не потребовался, отдельного коммита нет.
+
+## Self-Check: PASSED
+
+- `.planning/phases/05-tarify/05-24-SUMMARY.md` — FOUND
+- `app/services/payment_service.py` — FOUND (изменён)
+- `app/application/billing/plan_switch.py` — FOUND (изменён)
+- `tests/test_pages/test_billing_payment_errors.py` — FOUND (изменён)
+- коммит `07f2158` — FOUND
+- коммит `9fcfaf5` — FOUND
+- коммит `0229144` — FOUND
+- рабочее дерево чистое, удалённых файлов ни в одном коммите нет
