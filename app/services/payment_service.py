@@ -13,6 +13,7 @@ from yookassa.domain.notification import WebhookNotificationEventType
 from app.application.analytics.send_analytics import normalize_utc
 from app.application.billing.plan_switch import switch_is_refused
 from app.application.billing.subscription_period import (
+    capped_carryover,
     converted_remainder,
     countdown_base,
     next_expiry,
@@ -968,6 +969,12 @@ def _apply_extension(
                 plan=subscription.plan,
                 paid_plan=db_payment.plan,
                 unreadable="price" if price is None else "amount",
+                # ВЕТКУ НАЗЫВАЕТ ПОЛЕ, А НЕ КЛЮЧ (`IN-04`). Этот же ключ
+                # испускает ветка КОНВЕРСИИ ниже, и словари `unreadable` у них
+                # ПЕРЕСЕКАЮТСЯ (`"price"` есть у обеих): без поля разбирающий
+                # обращение получает два разных исхода в одном событии и не
+                # может сказать человеку, что именно произошло.
+                stage="prorate_refused",
             )
             granted_days = None
             new_expiry = next_expiry(subscription.expires_at, now)
@@ -1011,6 +1018,14 @@ def _apply_extension(
     # `next_expiry`, `countdown_base` и `prorated_expiry`; вторая копия условия
     # на денежном пути двигала бы срок от другой точки, и разница проявилась бы
     # только у пользователя с неистраченным остатком.
+    #
+    # ⚠️ ЭТО ИНИЦИАЛИЗАЦИЯ ДЛЯ ОДНОГО-ЕДИНСТВЕННОГО СЛУЧАЯ, И НАЗВАН ОН ЗДЕСЬ
+    # ЯВНО: «план НЕ меняется либо оплаченный срок МЁРТВ» — то есть условие ниже
+    # ложно и переносить нечего. Во ВСЕХ остальных случаях базу присваивает
+    # ветка, и ни одна из них не имеет права оставить это значение доживать до
+    # сдвига срока: именно такое доживание в ветке отката и было гэпом 1,
+    # пришедшим шестой раунд подряд (весь накопленный горизонт переезжал на
+    # старший тариф за цену одного месяца).
     base = subscription.expires_at
     if period_is_live and db_payment.plan != subscription.plan:
         # ПРИЗНАК ЖИВОСТИ ВЗЯТ ТОТ ЖЕ, ЧТО СНЯТ ПЕРВЫМ ДЕЙСТВИЕМ, а не снят
@@ -1026,6 +1041,10 @@ def _apply_extension(
             # Ключ журнала переиспользован НАМЕРЕННО: событие ровно то же —
             # «цену прочитать нельзя, дни считаем по-старому», — и второй ключ
             # под тот же исход разошёлся бы с первым при первой же правке.
+            # РАЗЛИЧАЕТ ВЕТКИ ТЕПЕРЬ ПОЛЕ, А НЕ КЛЮЧ (`IN-04`): значения
+            # `prorate_refused` и `convert_remainder` постоянны и различны, и
+            # оба утверждает тест — словари `unreadable` у двух испусканий
+            # пересекаются, и по одному лишь ключу исход неразличим.
             logger.warning(
                 "subscription_prorating_skipped",
                 user_id=db_payment.user_id,
@@ -1033,7 +1052,28 @@ def _apply_extension(
                 plan=subscription.plan,
                 paid_plan=db_payment.plan,
                 unreadable="price" if price_from is None else "paid_plan_price",
+                stage="convert_remainder",
             )
+            # ⚠️ ВЕРХНЯЯ ГРАНИЦА СТОИТ И ЗДЕСЬ (форма `cap-one-month`, решение
+            # владельца, чекпойнт задачи 1 плана 05-22). Конвертировать остаток
+            # нечем — цены нет, — но переносить его ЦЕЛИКОМ нельзя: ровно это
+            # доживание значения по умолчанию и есть гэп 1, приходящий шестой
+            # раунд подряд (396 дней Pro за 22 780 ₽ при прейскуранте 63 700 ₽,
+            # тогда как соседняя ветка того же решения даёт 140).
+            #
+            # ЦЕНА ФОРМЫ НАЗВАНА ЧИСЛОМ, А НЕ ЭПИТЕТОМ. Обещание «оплаченный
+            # остаток не сгорает» держится В ОБЪЁМЕ ГРАНИЦЫ: остаток короче
+            # календарного месяца переносится целиком, а часть остатка СВЕРХ
+            # месяца сгорает — исключение из прохибиции плана `05-01`,
+            # допущенное сознательно.
+            #
+            # ПРАВИЛО ОБЪЯВЛЕНО ОДИН РАЗ И ЧИТАЕТСЯ ЗДЕСЬ, А НЕ СЧИТАЕТСЯ:
+            # `capped_carryover` живёт в `subscription_period.py` рядом с
+            # `countdown_base`, `next_expiry`, `prorated_expiry` и
+            # `converted_remainder`. Своя формула на денежном пути была бы
+            # третьей копией правила отсчёта D-04 — тем самым классом
+            # расхождения, ради устранения которого заведён модуль.
+            base = capped_carryover(subscription.expires_at, now)
         else:
             base = converted_remainder(
                 subscription.expires_at,
