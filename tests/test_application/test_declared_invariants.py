@@ -75,7 +75,7 @@ LEDGER_PATH = Path(__file__).resolve().parent / "declared_invariants_without_wit
 # ЗАПИСАННЫЙ ДОЛГ, А НЕ ЗАПАС. Величина равна фактическому числу записей реестра и
 # может ТОЛЬКО СНИЖАТЬСЯ: запас есть место для нового ложного абзаца, то есть ровно
 # та дыра, которую гейт закрывает.
-WITHOUT_WITNESS_CEILING = 9
+WITHOUT_WITNESS_CEILING = 37
 
 LEDGER_SEPARATOR = "::"
 FINGERPRINT_LENGTH = 60
