@@ -651,6 +651,39 @@ UNRANKED_PLAN_LIMITS = json.dumps(
     ]
 )
 
+# Конфиг, из которого ВЫПАЛ `pro`. Имя константы называет ровно то, чего в ней
+# нет, потому что предмет проверки — исход для плана, отсутствующего в перечне.
+#
+# ЧЕМ ОНА ОТЛИЧАЕТСЯ ОТ `UNRANKED_PLAN_LIMITS`, И БЕЗ ЭТОЙ ФРАЗЫ СЛЕДУЮЩИЙ
+# ЧИТАТЕЛЬ СОЧТЁТ ИХ ДУБЛИКАТАМИ. Та описывает план, которого нет в `PLAN_ORDER`
+# (ранг незнаком, отказ по умолчанию); эта — план, который в `PLAN_ORDER` ЕСТЬ,
+# но которого нет в конфиге, то есть ранг известен, переход разрешён, а ЦЕНУ
+# прочитать нельзя. Перечень тарифов правится ОКРУЖЕНИЕМ, и код называет такое
+# расхождение нормальным состоянием (`payment_service.py:790-796`): одна правка
+# `.env` — и каждое повышение на переименованный план идёт этим путём.
+PLAN_LIMITS_WITHOUT_PRO = json.dumps(
+    [
+        {
+            "id": "free",
+            "name": "Free",
+            "price": "0.00",
+            "ads": 3,
+            "groups": 5,
+            "sends": 300,
+            "accounts": 1,
+        },
+        {
+            "id": "basic",
+            "name": "Basic",
+            "price": "1490.00",
+            "ads": 15,
+            "groups": 30,
+            "sends": 5000,
+            "accounts": 5,
+        },
+    ]
+)
+
 
 async def _seed_live_subscription(
     db: AsyncSession, plan: str, *, days: int = 25
@@ -948,7 +981,7 @@ async def test_without_a_live_subscription_every_paid_card_keeps_its_button(
 # старшего тарифа становится днями младшего.
 
 
-def _app_settings() -> Settings:
+def _app_settings(plan_limits: str | None = None) -> Settings:
     """Настоящие `Settings` с УМОЛЧАНИЯМИ конфига, а не MagicMock.
 
     Нужны стадии применения с решения D-29: цена действующего плана читается из
@@ -960,15 +993,45 @@ def _app_settings() -> Settings:
 
     Два обязательных поля задаются теми же значениями, что в `tests/conftest.py`:
     боевой `.env` в суите не читается, а `Settings()` без них не строится.
+
+    `plan_limits` СО ЗНАЧЕНИЕМ `None` ОЗНАЧАЕТ «УМОЛЧАНИЕ КОНФИГА», и передаётся
+    он в `Settings(...)` ТОЛЬКО когда задан явно. Умолчание выбрано так, что ни
+    один существующий вызов помощника не меняется: перечень тарифов нужен ровно
+    тем тестам, чей предмет — исход при плане, ВЫПАВШЕМ из перечня, а всем
+    остальным подмена перечня молча сменила бы цены под ногами (T-05-143).
     """
+    if plan_limits is None:
+        return Settings(
+            database_url="sqlite+aiosqlite:///:memory:",
+            secret_key="test-secret-key",
+        )
     return Settings(
         database_url="sqlite+aiosqlite:///:memory:",
         secret_key="test-secret-key",
+        plan_limits=plan_limits,
     )
 
 
 async def _confirm(db: AsyncSession, payment_id: str = "yoo_1") -> bool:
     """Подтверждённое уведомление ЮKassa по конкретному платежу.
+
+    ⚠️ СИГНАТУРА ОСТАВЛЕНА ДОСЛОВНОЙ, И ЭТО ПРЕДМЕТ КРИТЕРИЯ ПРИЁМКИ, А НЕ ВКУС.
+    Помощника зовут больше двадцати тестов файла; вписать перечень тарифов ПРЯМО
+    В НЕГО значило бы тронуть объявление, которое читают все они, ради двух,
+    которым перечень нужен. Общий случай вынесен в `_confirm_with_plan_limits`
+    ниже, а здесь остался его частный вызов — тот же, что и был, с умолчаниями
+    конфига.
+    """
+    return await _confirm_with_plan_limits(db, payment_id)
+
+
+async def _confirm_with_plan_limits(
+    db: AsyncSession,
+    payment_id: str = "yoo_1",
+    *,
+    plan_limits: str | None = None,
+) -> bool:
+    """Подтверждённое уведомление ЮKassa при НАЗВАННОМ перечне тарифов.
 
     `add_messages` подменяется по образцу соседних тестов: подписочная ветка его
     не зовёт, но подмена держит тест независимым от порядка ветвления.
@@ -976,11 +1039,17 @@ async def _confirm(db: AsyncSession, payment_id: str = "yoo_1") -> bool:
     `get_settings` подменяется по образцу `_post`, и с решения D-29 это не
     оформление: ветка отказа читает цену действующего плана из конфига, а
     `Settings()` в суите не строится — боевого `.env` здесь нет.
+
+    ПОДМЕНА ЖИВЁТ ВНУТРИ `with` И НЕ ПЕРЕЖИВАЕТ ВЫЗОВА. Перечень тарифов —
+    глобальное для денежного пути состояние, и утечка его на соседний тест
+    сменила бы цены там, где предмет проверки другой (T-05-143). Поэтому он
+    приезжает АРГУМЕНТОМ, а не правкой модульной переменной.
     """
     with patch(
         "app.services.payment_service.add_messages", new_callable=AsyncMock
     ), patch(
-        "app.services.payment_service.get_settings", return_value=_app_settings()
+        "app.services.payment_service.get_settings",
+        return_value=_app_settings(plan_limits),
     ):
         return await handle_webhook(
             db,
@@ -2386,4 +2455,237 @@ async def test_an_upgrade_with_one_paid_month_still_does_not_burn_the_remainder(
     assert rows[0].plan == "pro", "оплаченное повышение не применено"
     assert _aware(rows[0].expires_at) > add_one_month(now), (
         "оплаченный остаток сгорел: повышение выдало ровно месяц от сегодня"
+    )
+
+
+# =============================================================================
+# ГЭП 1 РАУНДА 6 — ВЕТКА ОТКАТА ДЕНЕЖНОГО ПУТИ, ГДЕ ЦЕНУ ПРОЧИТАТЬ НЕЛЬЗЯ
+#
+# ПРЕДМЕТ РАЗДЕЛА. Верхняя граница предоплаченного горизонта поставлена в ветке
+# КОНВЕРСИИ (обе цены читаются) и ОТСУТСТВОВАЛА в ветке ОТКАТА: при
+# `price_from is None or price_to is None` переменная `base` оставалась связанной
+# с `subscription.expires_at`, после чего срок двигался от НЕЁ, а план
+# перезаписывался платежом. Это дословно поведение до плана `05-18`, и
+# верификация раунда 6 воспроизвела его численно поверх настоящего кода, без
+# единой правки `app/`: тот же посев, что даёт 140 дней на соседней ветке, здесь
+# давал 396 дней Pro за 22 780 ₽ при прейскуранте 63 700 ₽.
+#
+# ВЕТКА НЕ РЕДКАЯ, И ЭТО УТВЕРЖДАЕТ САМ КОД. Два входа, и ни один не требует ни
+# гонки, ни правки кода:
+#   * `price_to is None` — план ПЛАТЕЖА выпал из `parsed_plan_limits`. Перечень
+#     правится окружением, и код называет это нормальным состоянием;
+#   * `price_from is None` — цена ДЕЙСТВУЮЩЕГО плана не читается. Сюда попадает
+#     `free` ПО ПОСТРОЕНИЮ: `_plan_price` объявляет непригодной цену, не большую
+#     нуля (`payment_service.py:814`), а `free` объявлен `"0.00"`
+#     (`app/config.py`).
+#
+# ФОРМА ГРАНИЦЫ — `cap-one-month` (РЕШЕНИЕ ВЛАДЕЛЬЦА, чекпойнт задачи 1 плана
+# 05-22): перенос оплаченного остатка ограничен потолком в ОДИН календарный
+# месяц. Остаток короче месяца переносится целиком и не сгорает; остаток длиннее
+# месяца сгорает В ЧАСТИ, превышающей месяц, — цена формы названа числом и
+# принята сознательно, а не пропущена.
+#
+# ПРАВИЛО УТВЕРЖДЕНИЙ ЭТОГО РАЗДЕЛА — ТО ЖЕ, ЧТО У РАЗДЕЛА ВЫШЕ. Каждый
+# интеграционный тест читает СЕГОДНЯШНЕЕ наблюдаемое состояние (строку
+# `subscriptions`, перечитанную из БД) и утверждает И величину горизонта, И
+# значение в журнале. Тест, утверждающий только журнал, зелен от рождения:
+# журнальную запись эта ветка испускала и до правки.
+# =============================================================================
+
+# Значения поля, называющего ВЕТКУ у двух испусканий одного журнального ключа
+# (`IN-04` раунда 6). Ключ `subscription_prorating_skipped` намеренно один:
+# событие ровно то же — «цену прочитать нельзя, дни считаем по-старому», — и
+# второй ключ под тот же исход разошёлся бы с первым при первой же правке.
+# Различает ветки ПОЛЕ, и обе строки выписаны здесь, потому что предмет
+# проверки — что разбирающий обращение может НАЗВАТЬ ветку, а не что поле
+# непустое.
+STAGE_PRORATE_REFUSED = "prorate_refused"
+STAGE_CONVERT_REMAINDER = "convert_remainder"
+
+
+def _prorating_skips(spy) -> list:
+    """Испускания `subscription_prorating_skipped` из перехваченного журнала."""
+    return [
+        call
+        for call in spy.warning.call_args_list
+        if call.args and call.args[0] == "subscription_prorating_skipped"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_paid_plan_price_does_not_carry_the_whole_horizon(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Цена плана ПЛАТЕЖА нечитаема — весь горизонт на старший тариф не едет.
+
+    ДОСТИЖИМОСТЬ — СВОЙСТВО ЭКСПЛУАТАЦИИ, А НЕ ГИПОТЕЗА. Перечень тарифов
+    правится переменной окружения, а план записан в строке платежа: одна правка
+    `.env` (переименовали `pro`, сняли его с продажи) — и КАЖДОЕ повышение на
+    этот план идёт веткой отката. Ранг при этом известен (`pro` есть в
+    `PLAN_ORDER`), переход разрешён, и отказа не возникает — не читается только
+    ЦЕНА.
+
+    ЧТО УТВЕРЖДАЕТСЯ (форма `cap-one-month`, решение владельца). Перенос
+    оплаченного остатка ограничен одним календарным месяцем, поверх которого
+    ложится оплаченный месяц старшего тарифа: горизонт не превышает двух
+    календарных месяцев от сегодня. Нижним утверждением закреплено, что остаток
+    при этом НЕ СГОРЕЛ дочиста — обещание «оплаченные дни не сгорают» держится в
+    объёме границы.
+
+    ОЖИДАЕМОЕ ЧИСЛО СЧИТАЕТ АРИФМЕТИКА САМОГО ТЕСТА, а не вызов функции границы:
+    тест, зовущий её, зеленел бы вместе с ней тавтологически. Допуск в два дня —
+    цена того, что тест и денежный путь снимают `now` в разные микросекунды.
+    """
+    current = await _seed_live_subscription(db_session, "basic", days=365)
+    now = datetime.now(timezone.utc)
+    remainder_days = (_aware(current) - now).days
+    assert remainder_days > 300, (
+        "посев не накопил предоплаченного горизонта — проверять нечего"
+    )
+
+    await _seed_subscription_payment(
+        db_session, "pro", "yoo_pro", switch_authorized=True, amount="4900.00"
+    )
+
+    with patch("app.services.payment_service.logger") as spy:
+        handled = await _confirm_with_plan_limits(
+            db_session, "yoo_pro", plan_limits=PLAN_LIMITS_WITHOUT_PRO
+        )
+    assert handled is True, "уведомление по платежу не обработано"
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1, "повышение завело вторую подписку"
+    assert rows[0].plan == "pro", "оплаченное повышение не применено"
+
+    granted = _aware(rows[0].expires_at)
+    ceiling = add_one_month(add_one_month(now))
+    assert granted <= ceiling + timedelta(days=2), (
+        f"уплачено {BASIC_PRICE * 12 + PRO_PRICE} ₽, а выдан горизонт "
+        f"{(granted - now).days} дней на тарифе pro при прейскуранте "
+        f"{PRO_PRICE * 13} ₽: остаток {remainder_days} дней перенесён ЦЕЛИКОМ — "
+        "у ветки отката нет верхней границы"
+    )
+    assert granted > add_one_month(now), (
+        "оплаченный остаток сгорел дочиста: повышение выдало ровно месяц от "
+        "сегодня, хотя граница обязана переносить месяц остатка"
+    )
+
+    skips = _prorating_skips(spy)
+    assert len(skips) == 1, "ветка отката не оставила ровно одного следа в журнале"
+    fields = skips[0].kwargs
+    assert fields.get("unreadable") == "paid_plan_price", (
+        "журнал не назвал, ЧЬЯ именно цена не прочиталась — цена плана платежа "
+        "и цена действующего плана дают разные исходы и разбираются по-разному"
+    )
+    assert fields.get("stage") == STAGE_CONVERT_REMAINDER, (
+        "испускание не назвало своей ветки: тот же ключ приходит из ветки "
+        f"{STAGE_PRORATE_REFUSED}, и без поля разбирающий обращение их не "
+        "различит"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_upgrade_from_free_does_not_carry_the_whole_horizon(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Повышение с `free` с живым горизонтом не переносит горизонт целиком.
+
+    ⚠️ МЕХАНИЗМ ДОСТИЖИМОСТИ НАЗВАН ЗДЕСЬ ПРЯМО, ПОТОМУ ЧТО ЭТО НЕ РЕДКИЙ ОТКАЗ,
+    А СВОЙСТВО ПОСТРОЕНИЯ. Цена `free` объявлена `"0.00"` в `app/config.py`, а
+    `_plan_price` объявляет непригодной цену, НЕ БОЛЬШУЮ НУЛЯ
+    (`payment_service.py:814`) — и делает это не по недосмотру: деление на ноль
+    было бы отказом обработчика уведомления на самом достижимом из планов.
+    Значит, ЛЮБАЯ строка подписки на `free` с живым сроком берёт ветку отката на
+    первом же платном повышении, без единой правки конфига и без гонки.
+
+    Здесь не читается цена ДЕЙСТВУЮЩЕГО плана (`price_from is None`), поэтому
+    журнал называет `price`, а не `paid_plan_price`: два разных входа в одну
+    ветку различимы по этому полю, и оба обязаны быть ограничены.
+    """
+    current = await _seed_live_subscription(db_session, "free", days=365)
+    now = datetime.now(timezone.utc)
+    remainder_days = (_aware(current) - now).days
+    assert remainder_days > 300, (
+        "посев не накопил предоплаченного горизонта — проверять нечего"
+    )
+
+    await _seed_subscription_payment(
+        db_session, "pro", "yoo_pro", switch_authorized=True, amount="4900.00"
+    )
+
+    with patch("app.services.payment_service.logger") as spy:
+        handled = await _confirm(db_session, "yoo_pro")
+    assert handled is True, "уведомление по платежу не обработано"
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1, "повышение завело вторую подписку"
+    assert rows[0].plan == "pro", "оплаченное повышение не применено"
+
+    granted = _aware(rows[0].expires_at)
+    ceiling = add_one_month(add_one_month(now))
+    assert granted <= ceiling + timedelta(days=2), (
+        f"уплачено {PRO_PRICE} ₽, а выдан горизонт {(granted - now).days} дней "
+        f"на тарифе pro при прейскуранте {PRO_PRICE * 13} ₽: остаток "
+        f"{remainder_days} дней бесплатного тарифа перенесён ЦЕЛИКОМ"
+    )
+    assert granted > add_one_month(now), (
+        "оплаченный остаток сгорел дочиста: повышение выдало ровно месяц от "
+        "сегодня, хотя граница обязана переносить месяц остатка"
+    )
+
+    skips = _prorating_skips(spy)
+    assert len(skips) == 1, "ветка отката не оставила ровно одного следа в журнале"
+    fields = skips[0].kwargs
+    assert fields.get("unreadable") == "price", (
+        "журнал не назвал нечитаемой цену ДЕЙСТВУЮЩЕГО плана"
+    )
+    assert fields.get("stage") == STAGE_CONVERT_REMAINDER, (
+        "испускание не назвало своей ветки: тот же ключ приходит из ветки "
+        f"{STAGE_PRORATE_REFUSED}, и без поля разбирающий обращение их не "
+        "различит"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_refused_branch_names_its_own_stage_in_the_journal(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Второе испускание того же ключа называет СВОЮ ветку — и другим значением.
+
+    ⚠️ ЧЕМ ЭТОТ ТЕСТ ОТЛИЧАЕТСЯ ОТ
+    `test_a_price_that_cannot_be_read_falls_back_to_the_whole_month`, И БЕЗ ЭТОЙ
+    ФРАЗЫ СЛЕДУЮЩИЙ ЧИТАТЕЛЬ УДАЛИТ ОДИН ИЗ НИХ КАК ДУБЛИКАТ. Тот держит откат к
+    полному месяцу при нечитаемой ЦЕНЕ и утверждает, что дни не отняты. Здесь
+    нечитаема УПЛАЧЕННАЯ СУММА (`unreadable="amount"` — значение, которое до
+    этого теста не утверждал ни один тест суиты), а предмет проверки — что
+    испускание ветки ОТКАЗА несёт своё, ОТЛИЧНОЕ от ветки конверсии значение
+    поля `stage`.
+
+    БЕЗ ЭТОГО УТВЕРЖДЕНИЯ РАЗЛИЧИМОСТЬ ДВУХ ИСПУСКАНИЙ БЫЛА БЫ ЗАЯВЛЕНА, А НЕ
+    ПРОВЕРЕНА: тесты выше видят только испускание ветки конверсии, и правка,
+    поставившая обеим веткам одно значение, осталась бы для них зелёной.
+    """
+    await _seed_live_subscription(db_session, "pro", days=25)
+    await _seed_subscription_payment(
+        db_session, "basic", "yoo_basic", switch_authorized=None, amount="не-число"
+    )
+
+    with patch("app.services.payment_service.logger") as spy:
+        handled = await _confirm(db_session, "yoo_basic")
+    assert handled is True, "нечитаемая сумма уронила обработчик уведомления"
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro", "отвергнутый младший тариф всё-таки применён"
+
+    skips = _prorating_skips(spy)
+    assert len(skips) == 1, "ветка отказа не оставила следа в журнале"
+    fields = skips[0].kwargs
+    assert fields.get("unreadable") == "amount", (
+        "журнал назвал нечитаемой цену, хотя не прочиталась уплаченная сумма"
+    )
+    assert fields.get("stage") == STAGE_PRORATE_REFUSED, (
+        f"ветка отказа не назвала себя: значение {STAGE_CONVERT_REMAINDER} "
+        "принадлежит ветке конверсии, и совпадение сделало бы два разных исхода "
+        "неразличимыми в журнале"
     )

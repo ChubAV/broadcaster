@@ -13,6 +13,7 @@ import pytest
 
 from app.application.billing.subscription_period import (
     add_one_month,
+    capped_carryover,
     next_expiry,
     prorated_expiry,
     subscription_is_live,
@@ -279,3 +280,99 @@ def test_a_naive_and_an_aware_date_give_the_same_fraction(offset_days: int):
     assert prorated_expiry(aware, now, paid=PRICE_BASIC, price=PRICE_PRO) == (
         prorated_expiry(naive, now, paid=PRICE_BASIC, price=PRICE_PRO)
     )
+
+
+# --- Потолок переноса при нечитаемой цене: таблица решений ---------------------
+#
+# ПРЕДМЕТ РАЗДЕЛА. Когда цену любого из двух планов прочитать нельзя, конвертиро-
+# вать остаток по деньгам не из чего, а переносить его ЦЕЛИКОМ нельзя: покупатель
+# управляет горизонтом предоплаты сам, и без верхней границы один платёж старшего
+# тарифа переводил на него весь накопленный срок — 396 дней Pro за 22 780 ₽ при
+# прейскуранте 63 700 ₽ (гэп 1 раунда 6, воспроизведён верификацией поверх
+# настоящего кода).
+#
+# ФОРМА `cap-one-month` — РЕШЕНИЕ ВЛАДЕЛЬЦА (чекпойнт задачи 1 плана 05-22):
+# перенос ограничен потолком в ОДИН календарный месяц остатка. Остаток короче
+# месяца переносится целиком и не сгорает; часть остатка СВЕРХ месяца сгорает —
+# это названная числом цена формы, а не упущение.
+#
+# ЭТО АРИФМЕТИКА ВРЕМЕНИ, А НЕ ДЕНЕГ, и таблица проверяет её без единой цены:
+# соседний `converted_remainder` переносит остаток ПО ДЕНЬГАМ и потому берёт две
+# цены, а здесь ни одной цены нет — их-то и нельзя прочитать.
+
+
+def test_the_capped_carryover_of_a_missing_period_is_today():
+    """Подписки не было — переносить нечего, точка отсчёта равна сегодня."""
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+
+    assert capped_carryover(None, now) == now
+
+
+def test_the_capped_carryover_of_an_expired_period_is_today():
+    """Истёкший срок не воскрешается: зеркало `next_expiry` на той же колонке.
+
+    Решение `apply-after-expiry` (чекпойнт плана 05-13) этим не задевается —
+    план платежа применяется, а срок считается от сегодня.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+
+    assert capped_carryover(now - timedelta(days=40), now) == now
+
+
+def test_a_remainder_shorter_than_a_month_is_carried_whole():
+    """⚠️ ОСТАТОК КОРОЧЕ МЕСЯЦА НЕ СГОРАЕТ НИ НА ДЕНЬ.
+
+    Это главное свойство формы `cap-one-month` и единственное, чем она
+    отличается от отвергнутой формы `no-carry`. Защитная семантика 25 дней
+    (D-04) держится именно здесь: потолок обязан РЕЗАТЬ длинный горизонт, а не
+    обнулять короткий.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+    current = now + timedelta(days=25)
+
+    assert capped_carryover(current, now) == current
+
+
+def test_a_remainder_longer_than_a_month_is_capped_at_one_month():
+    """Остаток длиннее месяца зажимается РОВНО календарным месяцем от сегодня.
+
+    Календарным, а не константой 30: расхождение с `next_expiry` в феврале и в
+    декабре дало бы «полному месяцу» два разных определения — ровно тот класс
+    расхождения, ради устранения которого заведён этот модуль.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+    current = now + timedelta(days=365)
+
+    assert capped_carryover(current, now) == add_one_month(now)
+
+
+@pytest.mark.parametrize("offset_days", [-40, 25, 365])
+def test_a_naive_and_an_aware_date_give_the_same_capped_carryover(offset_days: int):
+    """SQLite отдаёт `expires_at` naive, PostgreSQL aware — ответ ОДИН.
+
+    Без этой пары дефект сравнения жил бы ровно на одном из двух диалектов, то
+    есть ловился бы пользователем на PostgreSQL, а не суитой на SQLite.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+    aware = now + timedelta(days=offset_days)
+    naive = aware.replace(tzinfo=None)
+
+    assert capped_carryover(aware, now) == capped_carryover(naive, now)
+
+
+@pytest.mark.parametrize("year", [2026, 2028])
+def test_the_capped_carryover_never_exceeds_one_month_on_any_day_of_the_year(year):
+    """Ни один день обычного и високосного года не пробивает потолка.
+
+    Проход по календарю ловит не конкретную известную дату, а целый класс
+    «календарь не сошёлся»: длина месяца меняется от 28 до 31 дня, и граница,
+    посчитанная не тем месяцем, дала бы покупателю лишние дни старшего тарифа на
+    краю, которого нет ни в одном точечном тесте.
+    """
+    day = datetime(year, 1, 1, 12, 0, tzinfo=timezone.utc)
+    end = datetime(year + 1, 1, 1, 12, 0, tzinfo=timezone.utc)
+    while day < end:
+        result = capped_carryover(day + timedelta(days=400), day)
+        assert result <= add_one_month(day), f"{day.date()}: потолок пробит"
+        assert result > day, f"{day.date()}: живой остаток сгорел дочиста"
+        day += timedelta(days=1)
