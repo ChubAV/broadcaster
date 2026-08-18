@@ -5,10 +5,10 @@ milestone_name: Redesign
 current_phase: 05
 current_phase_name: tarify
 status: executing
-stopped_at: Закрытие гэпов раунда 7 СПЛАНИРОВАНО (волны 22-24) и ждёт исполнения; перечень планов с отметками — `.planning/ROADMAP.md` §«Phase 5: Тарифы»
+stopped_at: Закрытие гэпов раунда 7 СПЛАНИРОВАНО (волны 22-25) и ждёт исполнения; перечень планов с отметками — `.planning/ROADMAP.md` §«Phase 5: Тарифы»
 last_updated: "2026-08-18T12:00:00.000Z"
 last_activity: 2026-08-18
-last_activity_desc: Phase 05 round-7 gap closure planned (waves 22-24)
+last_activity_desc: Phase 05 round-7 gap closure planned (waves 22-25)
 progress:
   total_phases: 6
   completed_phases: 4
@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-13)
 
 Phase: 05 (tarify) — EXECUTING
 Status: Executing Phase 05
-Last activity: 2026-08-18 — раунд 7 верификации вернул gaps_found; закрытие его гэпов спланировано волнами 22-24
+Last activity: 2026-08-18 — раунд 7 верификации вернул gaps_found; закрытие его гэпов спланировано волнами 22-25
 
 Progress: Фазы 1–4 из 6 завершены (67% фаз milestone v2.0). Фаза 5 исполнила всё, что было запланировано до раунда 7, и получила от него вердикт `gaps_found`; закрытие его гэпов СПЛАНИРОВАНО и ждёт исполнения (перечень планов с отметками — `.planning/ROADMAP.md` §«Phase 5: Тарифы»). Отметку `Complete` требованиям возвращает верификация, а не исполненные планы.
 
