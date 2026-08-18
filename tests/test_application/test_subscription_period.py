@@ -14,6 +14,7 @@ import pytest
 from app.application.billing.subscription_period import (
     add_one_month,
     capped_carryover,
+    converted_remainder,
     next_expiry,
     prorated_expiry,
     subscription_is_live,
@@ -376,3 +377,174 @@ def test_the_capped_carryover_never_exceeds_one_month_on_any_day_of_the_year(yea
         assert result <= add_one_month(day), f"{day.date()}: потолок пробит"
         assert result > day, f"{day.date()}: живой остаток сгорел дочиста"
         day += timedelta(days=1)
+
+
+# --- Перенос остатка ПО ДЕНЬГАМ: таблица решений -------------------------------
+#
+# ПРЕДМЕТ РАЗДЕЛА (решение владельца D-30, форма `convert-remainder`, чекпойнт
+# задачи 1 плана 05-18). Повышение тарифа СЧИТАЕТ ДОПЛАТУ: неистраченный остаток,
+# купленный по цене старого плана, пересчитывается в дни по цене нового, и уже к
+# этой точке вызывающий добавляет оплаченный месяц. Это тот же аппарат D-29,
+# запущенный в другую сторону, а не вторая арифметика денег.
+#
+# ПОЧЕМУ ТАБЛИЦА ПОНАДОБИЛАСЬ ИМЕННО ТЕПЕРЬ. `add_one_month`, `subscription_is_live`,
+# `next_expiry`, `prorated_expiry` и `capped_carryover` держат в этом файле по
+# полной таблице краёв каждая, а `converted_remainder` — ЕДИНСТВЕННАЯ новая
+# арифметика денежного пути — не была здесь даже импортирована (`IN-01` раунда 6).
+# Всё её покрытие жило интеграционными утверждениями с допуском ±2 дня
+# (`test_billing_payment_errors.py`, `test_payment_concurrency.py`), а такой допуск
+# не видит НИ ОДНОГО из трёх дефектов, ради которых модуль вынесен из БД: усечения
+# неполного дня, расхождения февраля с декабрём и разницы naive/aware.
+#
+# ПРАВИЛО УТВЕРЖДЕНИЙ РАЗДЕЛА. Здесь проверяется то, что функция ДЕЛАЕТ, а не то,
+# что о ней написано: абзац докстринга о длине месяца утверждал зависимость,
+# которой у ответа нет, и опровергнут он был прогоном настоящей функции, а не
+# чтением. Поэтому длина месяца проверяется ТОЧНЫМ числом (её в ответе нет вовсе),
+# в отличие от таблицы `prorated_expiry`, где та же величина действительно входит
+# в ответ множителем и потому проверяется диапазоном.
+#
+# Все моменты `now` сняты литералами с `timezone.utc`: раздел проверяет арифметику,
+# а не сегодняшний день.
+
+
+def test_a_missing_period_converts_to_today():
+    """Подписки не было — конвертировать нечего, точка отсчёта равна сегодня."""
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+
+    assert converted_remainder(None, now, old_price=PRICE_BASIC, new_price=PRICE_PRO) == now
+
+
+def test_an_expired_period_converts_to_today():
+    """Истёкший срок не воскрешается: зеркало `next_expiry` на той же колонке.
+
+    Прямое зеркало `test_next_expiry_of_an_expired_subscription_counts_from_today`:
+    обе функции читают одну колонку и обязаны выбирать точку отсчёта одинаково.
+    Решение `apply-after-expiry` (чекпойнт плана 05-13) этим не задевается — план
+    платежа применяется, а срок считается от сегодня.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+
+    assert converted_remainder(
+        now - timedelta(days=40), now, old_price=PRICE_BASIC, new_price=PRICE_PRO
+    ) == now
+
+
+def test_a_live_remainder_never_converts_to_zero_days():
+    """⚠️ ЖИВОЙ ОСТАТОК НИКОГДА НЕ КОНВЕРТИРУЕТСЯ В НОЛЬ ДНЕЙ.
+
+    Самый дешёвый живой остаток — один день `basic`, пересчитанный по цене `pro`, —
+    даёт РОВНО один день, а не ноль. Целая часть доли здесь равна нулю, и именно
+    поэтому нижняя граница `prorated_days` не декоративна: без неё обещание
+    «оплаченный остаток не сгорает» ломалось бы молча на самом незаметном краю, то
+    есть возник бы исход «взяли деньги и не дали ничего», названный D-29 худшим.
+
+    Зеркало `test_a_sum_smaller_than_a_day_still_buys_one_day`.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+
+    result = converted_remainder(
+        now + timedelta(days=1), now, old_price=PRICE_BASIC, new_price=PRICE_PRO
+    )
+
+    assert result - now == timedelta(days=1)
+
+
+@pytest.mark.parametrize("offset_days", [-40, 10, 365])
+def test_a_naive_and_an_aware_date_give_the_same_conversion(offset_days: int):
+    """SQLite отдаёт `expires_at` naive, PostgreSQL aware — ответ ОДИН.
+
+    Зеркало `test_a_naive_and_an_aware_date_give_the_same_fraction`. Без этой пары
+    дефект сравнения жил бы ровно на одном из двух диалектов, то есть ловился бы
+    пользователем на PostgreSQL, а не суитой на SQLite; допуск ±2 дня в
+    интеграционных регрессиях такой разницы не видит вовсе.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+    aware = now + timedelta(days=offset_days)
+    naive = aware.replace(tzinfo=None)
+
+    assert converted_remainder(
+        aware, now, old_price=PRICE_BASIC, new_price=PRICE_PRO
+    ) == converted_remainder(naive, now, old_price=PRICE_BASIC, new_price=PRICE_PRO)
+
+
+def test_equal_prices_return_the_remainder_in_whole_days():
+    """⚠️ ПРИ РАВНЫХ ЦЕНАХ ОСТАТОК ВОЗВРАЩАЕТСЯ СЕБЕ — НО В ЦЕЛЫХ ДНЯХ.
+
+    Утверждение о точном равенстве действующему сроку было бы ЛОЖНЫМ, и тест
+    закрепляет настоящее поведение, а не желаемое: `prorated_days` берёт ЦЕЛУЮ
+    часть, поэтому неполный день переноса теряется — до 23 ч 59 м уже оплаченного
+    времени. Обещание «оплаченный остаток не сгорает» верно в днях и слегка
+    неверно в последнем дне (`IN-02` раунда 6); та же целая часть даёт и нижнюю
+    границу в один день, закреплённую тестом выше.
+
+    Цена того, что срок хранится днями, а не решение о деньгах.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+    current = now + timedelta(days=10, hours=5)
+
+    result = converted_remainder(current, now, old_price=PRICE_PRO, new_price=PRICE_PRO)
+
+    assert result == now + timedelta(days=(current - now).days)
+    assert result < current, "неполный день обязан теряться — иначе усечения нет"
+
+
+def test_the_conversion_does_not_depend_on_the_length_of_the_month():
+    """⚠️ ДЛИНА КАЛЕНДАРНОГО МЕСЯЦА В ОТВЕТ НЕ ВХОДИТ — И ЭТО СВОЙСТВО ФУНКЦИИ.
+
+    Величина стоит знаменателем стоимости остатка и множителем внутри
+    `prorated_days`, и два вхождения СОКРАЩАЮТСЯ: ответ равен целой части от
+    произведения остатка в днях на отношение цен — форме, в которой длины месяца
+    нет вовсе. Абзац докстринга, утверждавший обратное («длина месяца берётся у
+    `add_one_month` от той же базы»), был опровергнут верификацией раунда 6 ровно
+    этим вычислением, прогоном настоящей функции.
+
+    Три базы выбраны так, чтобы `add_one_month` дал ТРИ РАЗНЫЕ длины месяца — 28,
+    31 и 30 дней, — и это утверждается здесь же, чтобы тест не проходил молча,
+    если календарь выберет одинаковые. Ответ обязан быть ОДИН на всех трёх.
+
+    ⚠️ Тест закрепляет утверждение машиной: правка, вводящая настоящую зависимость
+    от календаря, красит его, а не проходит незамеченной. Такая правка была бы
+    правкой ПОВЕДЕНИЯ — она меняет величину, которую наблюдает покупатель, — и
+    потребовала бы решения владельца, а не правки комментария.
+    """
+    remainder_days = 365
+    month_lengths = {
+        datetime(2026, 1, 31, 9, 0, tzinfo=timezone.utc): 28,
+        datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc): 31,
+        datetime(2026, 4, 1, 9, 0, tzinfo=timezone.utc): 30,
+    }
+    expected = timedelta(days=int(Decimal(remainder_days) * PRICE_BASIC / PRICE_PRO))
+
+    answers = {}
+    for now, month_days in month_lengths.items():
+        assert (add_one_month(now) - now).days == month_days, (
+            f"{now.date()}: длина месяца не та, ради которой база выбрана"
+        )
+        answers[now.date()] = (
+            converted_remainder(
+                now + timedelta(days=remainder_days),
+                now,
+                old_price=PRICE_BASIC,
+                new_price=PRICE_PRO,
+            )
+            - now
+        )
+
+    assert set(answers.values()) == {expected}, answers
+
+
+def test_a_downgrade_converts_the_remainder_into_more_days():
+    """Аппарат симметричен: понижение УВЕЛИЧИВАЕТ остаток, повышение уменьшает.
+
+    Остаток, купленный по дорогой цене, стоит больше дней дешёвого плана. Сторона
+    повышения закреплена тестом длины месяца выше (365 дней `basic` дают 110 дней
+    `pro`); здесь утверждается вторая сторона — сравнением с исходным остатком, без
+    точного числа: точное число здесь ничего не добавило бы к утверждению о
+    направлении.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+    current = now + timedelta(days=10)
+
+    result = converted_remainder(current, now, old_price=PRICE_PRO, new_price=PRICE_BASIC)
+
+    assert result > current, "понижение обязано давать БОЛЬШЕ дней, а не меньше"
