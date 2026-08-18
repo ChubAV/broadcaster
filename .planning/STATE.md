@@ -6,7 +6,7 @@ current_phase: 05
 current_phase_name: tarify
 status: executing
 stopped_at: "Закрытие гэпов раунда 7 СПЛАНИРОВАНО ЗАНОВО в сокращённом объёме и ждёт исполнения; четыре спланированных плана сняты до исполнения решением владельца — причина в §Blockers/Concerns; перечень планов с отметками — `.planning/ROADMAP.md` §«Phase 5: Тарифы»"
-last_updated: "2026-08-18T12:05:27.357Z"
+last_updated: "2026-08-18T12:43:02.345Z"
 last_activity: 2026-08-18
 last_activity_desc: Phase 05 round-7 gap closure re-planned at narrowed scope (four plans retired)
 progress:
