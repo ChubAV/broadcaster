@@ -1247,8 +1247,22 @@ def _apply_extension(
         price = _plan_price(subscription.plan)
         paid = None
         if price is not None:
+            # КОНЕЧНОСТЬ КЛАССИФИЦИРУЕТСЯ ВНУТРИ ТОЙ ЖЕ ЗАЩИТЫ, ЧТО И РАЗБОР, И
+            # ЭТО ПРИЁМ `_plan_price` И `format_amount` (`app/pages/common.py`,
+            # план 05-09), А НЕ ИЗОБРЕТЕНИЕ ЗДЕСЬ. `NaN`, `Infinity` и `sNaN` —
+            # ВАЛИДНЫЕ значения `Decimal`: разбор их ПРИНИМАЕТ, перечень типов
+            # ниже их не видит вовсе, и отказ уезжал в `int(...)` внутри
+            # `prorated_days`, роняя обработчик уведомления пятисоткой при уже
+            # списанных деньгах (T-05-104). Ветка отката и её поле
+            # `unreadable="amount"` были написаны и объявлены ЗАДОЛГО до этой
+            # правки — менялся не контракт, а вход, который мимо них проходил.
+            # За пределами защиты не остаётся ни одной операции над `Decimal`.
+            # Закреплено
+            # `test_an_unusable_amount_does_not_five_hundred_the_notification` и
+            # `test_the_refused_branch_names_its_own_stage_in_the_journal`.
             try:
-                paid = Decimal(db_payment.amount_value)
+                candidate = Decimal(db_payment.amount_value)
+                paid = candidate if candidate.is_finite() else None
             except (InvalidOperation, TypeError, ValueError):
                 paid = None
 
