@@ -144,6 +144,18 @@ def prorated_days(paid: Decimal, price: Decimal, month_days: int) -> int:
     с другой стороны. Закреплено
     `test_a_sum_larger_than_the_price_buys_more_than_a_month`.
 
+    ВЫРАЗИМОСТЬ КУПЛЕННОГО СРОКА — НЕ ЗАБОТА ЭТОЙ ФУНКЦИИ, И СКАЗАНО ЭТО ЗДЕСЬ
+    ЗАТЕМ, ЧТОБЫ СЛЕДУЮЩИЙ ЧИТАТЕЛЬ НЕ ЗАВЁЛ ПОТОЛОК ИМЕННО ТУТ. Ответ есть
+    целое число дней, и оно бывает больше, чем календарь `datetime` умеет
+    отложить от даты: цена в одну копейку при уплаченных 1490 ₽ даёт около
+    4 619 000 дней, а девятитысячный год кончает календарь. Отвечать на это
+    обрезанием значило бы отменить абзац выше, поэтому число возвращается КАК
+    ЕСТЬ, а момент, которого не существует, называют `None`-ом обе функции
+    сдвига — `prorated_expiry` и `converted_remainder`. Закреплено
+    `test_a_sum_larger_than_the_price_buys_more_than_a_month` (потолка нет) и
+    `test_a_span_that_the_calendar_cannot_express_returns_no_moment` (момента
+    нет).
+
     АРИФМЕТИКА В `Decimal`, НИКАКОГО float. Деньги в этом проекте через float не
     проходят нигде: `payments.amount_value` объявлена строкой намеренно, и цена
     плана приезжает строкой из конфига. Двоичная дробь дала бы разные ответы на
@@ -152,9 +164,37 @@ def prorated_days(paid: Decimal, price: Decimal, month_days: int) -> int:
     return max(int(Decimal(month_days) * paid / price), 1)
 
 
+def _shifted_by_days(base: datetime, days: int) -> datetime | None:
+    """Сдвиг `base` на `days` дней либо `None`, если такого момента нет.
+
+    ОБЕ ФУНКЦИИ СДВИГА ПО ДОЛЕ МЕСЯЦА ОТВЕЧАЮТ ОДИНАКОВО, ПОТОМУ ЧТО ЧИТАЮТ
+    ЭТОТ ПОМОЩНИК, А НЕ ПИШУТ СВОЙ `try` РЯДОМ. Две копии разошлись бы перечнем
+    перехватываемых типов, и разница проявилась бы только у пользователя, на
+    списанных деньгах. Что ответ у обеих один, закреплено
+    `test_a_span_that_the_calendar_cannot_express_returns_no_moment`
+    (`prorated_expiry`) и
+    `test_a_conversion_that_the_calendar_cannot_express_returns_no_moment`
+    (`converted_remainder`).
+
+    ПЕРЕЧЕНЬ ТИПОВ ЗАКРЫТ, А НЕ ЗАМЕНЁН НА `Exception`, И НАЗВАН ПО ПРИЧИНЕ.
+    `timedelta(days=n)` при `n` избыточного порядка поднимает `OverflowError`
+    («Python int too large to convert to C int»), а сложение с датой за концом
+    календаря — тот же `OverflowError` («date value out of range»). Никакой
+    другой отказ здесь не штатен: `NaN` и бесконечность до этой строки не
+    доходят вовсе, потому что `int()` внутри `prorated_days` роняет их РАНЬШЕ, и
+    глушить их здесь значило бы назвать нечитаемую сумму невыразимым сроком.
+    Закреплено `test_a_span_that_the_calendar_cannot_express_returns_no_moment`
+    и `test_a_non_finite_amount_is_not_named_an_unrepresentable_span`.
+    """
+    try:
+        return base + timedelta(days=days)
+    except OverflowError:
+        return None
+
+
 def prorated_expiry(
     current: datetime | None, now: datetime, *, paid: Decimal, price: Decimal
-) -> datetime:
+) -> datetime | None:
     """Новый срок подписки, когда УПЛАЧЕННЫЙ план применён НЕ БУДЕТ (D-29).
     Закреплено `test_a_refused_payment_buys_days_of_what_it_paid_for`.
 
@@ -196,10 +236,32 @@ def prorated_expiry(
     выдумав его. Что вызывающий это предусловие ДЕЙСТВИТЕЛЬНО проверяет,
     закреплено `test_a_price_that_cannot_be_read_falls_back_to_the_whole_month`:
     нечитаемая цена уводит денежный путь на откат к полному месяцу, а не сюда.
+    ⚠️ ПРЕДУСЛОВИЕ ГОВОРИТ О ЗНАКЕ ЦЕНЫ И НЕ ГОВОРИТ О ЕЁ ПОРЯДКЕ, и обязанности
+    вызывающего оно НЕ РАСШИРЯЕТ: цена положительная, но настолько малая, что
+    купленного ею срока в календаре нет, предусловию УДОВЛЕТВОРЯЕТ — и получает
+    `None` по абзацу ниже, а не исключение. Прежняя редакция этого абзаца
+    читалась как исчерпывающая, и на цене `0.01` функция роняла обработчик
+    уведомления при выполненном предусловии (гэп раунда 9, экземпляр «б»).
+    Закреплено `test_a_span_that_the_calendar_cannot_express_returns_no_moment`.
+
+    ⚠️ НЕВЫРАЗИМЫЙ МОМЕНТ ВОЗВРАЩАЕТСЯ КАК `None`, А НЕ ПОДНИМАЕТСЯ
+    ИСКЛЮЧЕНИЕМ: это ЧАСТЬ КОНТРАКТА, а не защита от ошибки программиста.
+    Календарь `datetime` кончается 9999 годом, а цена в одну копейку при
+    уплаченных 1490 ₽ покупает около 4 619 000 дней — момента с такой датой не
+    существует. ВЕРХНЕГО ПОТОЛКА У ДОЛИ МЕСЯЦА ПО-ПРЕЖНЕМУ НЕТ (D-29,
+    `prorated_days`), и обрезать пропорциональный срок эта ветка права не имеет:
+    46 190 дней (цена `1.00`) и 923 800 дней (цена `0.05`) календарём выражаются
+    и возвращаются моментом, а не `None`-ом. `None` означает РОВНО ОДНО —
+    момента не существует, — и что делать дальше, решает денежный путь, где есть
+    и журнал, и откат к полному месяцу, и обязанность не уронить обработчик
+    уведомления пятисоткой. Закреплено
+    `test_a_span_that_the_calendar_cannot_express_returns_no_moment` (границей
+    ему служит `test_a_span_that_the_calendar_can_express_is_not_capped`) и
+    `test_a_price_beyond_the_calendar_does_not_five_hundred_the_notification`.
     """
     base = countdown_base(current, now)
     month_days = (add_one_month(base) - base).days
-    return base + timedelta(days=prorated_days(paid, price, month_days))
+    return _shifted_by_days(base, prorated_days(paid, price, month_days))
 
 
 def converted_remainder(
@@ -208,7 +270,7 @@ def converted_remainder(
     *,
     old_price: Decimal,
     new_price: Decimal,
-) -> datetime:
+) -> datetime | None:
     """Точка отсчёта при переходе на ДРУГОЙ тариф: остаток переносится ПО ДЕНЬГАМ.
     Закреплено `test_a_downgrade_converts_the_remainder_into_more_days`.
 
@@ -300,6 +362,18 @@ def converted_remainder(
     предусловие ДЕЙСТВИТЕЛЬНО проверяет, закреплено
     `test_an_unreadable_paid_plan_price_does_not_carry_the_whole_horizon`:
     нечитаемая цена уводит денежный путь на `capped_carryover`, а не сюда.
+
+    ⚠️ НЕВЫРАЗИМЫЙ МОМЕНТ ВОЗВРАЩАЕТСЯ КАК `None` — ТОЧНО ТАК ЖЕ, КАК У
+    `prorated_expiry`, И ПО ТОЙ ЖЕ ПРИЧИНЕ. Дефект здесь ОДИН на две функции, а
+    не два похожих: остаток пересчитывается тем же `prorated_days`, и малая
+    НОВАЯ цена даёт число дней, которого календарь `datetime` от даты отложить
+    не может (остаток в 25 дней Basic при цене `pro` в одну копейку — около
+    3 725 000 дней). Раунд 9 назвал прямо, что объём защиты, равный объёму
+    попробованного предыдущим раундом, есть НЕДООБЪЯВЛЕННЫЙ КОНТРАКТ, поэтому
+    ветка названа здесь наравне с соседней, а не оставлена «похожим случаем».
+    Делового потолка ни здесь, ни там не заводится. Закреплено
+    `test_a_conversion_that_the_calendar_cannot_express_returns_no_moment` и
+    `test_a_price_beyond_the_calendar_does_not_break_the_conversion_branch`.
     """
     now_utc = normalize_utc(now)
     base = countdown_base(current, now_utc)
@@ -327,7 +401,7 @@ def converted_remainder(
         * Decimal((base - now_utc) // second)
         / Decimal(timedelta(days=month_days) // second)
     )
-    return now_utc + timedelta(days=prorated_days(paid, new_price, month_days))
+    return _shifted_by_days(now_utc, prorated_days(paid, new_price, month_days))
 
 
 def capped_carryover(current: datetime | None, now: datetime) -> datetime:

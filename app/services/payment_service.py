@@ -1252,7 +1252,25 @@ def _apply_extension(
             except (InvalidOperation, TypeError, ValueError):
                 paid = None
 
-        if price is None or paid is None:
+        # ⚠️ ДОЛЯ МЕСЯЦА СЧИТАЕТСЯ ДО РАЗВИЛКИ, ПОТОМУ ЧТО НЕПРИГОДНОЙ ЦЕНУ
+        # ДЕЛАЕТ НЕ ТОЛЬКО НЕЧИТАЕМОСТЬ. `prorated_expiry` отвечает `None`,
+        # когда купленного срока НЕТ В КАЛЕНДАРЕ: `datetime` кончается 9999
+        # годом, а цена в одну копейку при уплаченных 1490 ₽ покупает около
+        # 4 619 000 дней. До этой правки такой ответ был `OverflowError`, он
+        # доходил до `app/routes/billing.py:200-202` и давал 500 на уведомлении
+        # при УЖЕ СПИСАННЫХ деньгах — тот же исход `T-05-104`, ради
+        # недостижимости которого написан откат ниже. Делового потолка это НЕ
+        # заводит: цена, купившая выразимый срок, отдаёт его целиком (D-29).
+        # Закреплено
+        # `test_a_price_beyond_the_calendar_does_not_five_hundred_the_notification`
+        # и `test_a_span_that_the_calendar_can_express_is_not_capped`.
+        new_expiry = None
+        if price is not None and paid is not None:
+            new_expiry = prorated_expiry(
+                subscription.expires_at, now, paid=paid, price=price
+            )
+
+        if new_expiry is None:
             # ОТКАТ К ПОЛНОМУ МЕСЯЦУ, А НЕ ОТКАЗ В ДНЯХ, и не исключение.
             # Расхождение конфига с базой — наша беда, а не пользователя, и
             # отнимать за неё оплаченные дни не за что. Исключение здесь дало бы
@@ -1265,7 +1283,21 @@ def _apply_extension(
                 yookassa_id=db_payment.yookassa_payment_id,
                 plan=subscription.plan,
                 paid_plan=db_payment.plan,
-                unreadable="price" if price is None else "amount",
+                # ТРИ ИСХОДА, А НЕ ДВА, И У ТРЕТЬЕГО СВОЁ СЛОВО. `"price"` —
+                # цену прочитать нельзя, `"amount"` — нельзя прочитать
+                # уплаченную сумму, `"span"` — прочиталось ВСЁ, а срока,
+                # купленного этими двумя числами, не существует. Сложить третий
+                # исход с любым из первых двух значило бы сказать разбирающему
+                # обращение неправду о том, что именно сломано.
+                # Закреплено
+                # `test_a_price_beyond_the_calendar_does_not_five_hundred_the_notification`.
+                unreadable=(
+                    "price"
+                    if price is None
+                    else "amount"
+                    if paid is None
+                    else "span"
+                ),
                 # ВЕТКУ НАЗЫВАЕТ ПОЛЕ, А НЕ КЛЮЧ (`IN-04`). Этот же ключ
                 # испускает ветка КОНВЕРСИИ ниже, и словари `unreadable` у них
                 # ПЕРЕСЕКАЮТСЯ (`"price"` есть у обеих): без поля разбирающий
@@ -1278,9 +1310,6 @@ def _apply_extension(
             granted_days = None
             new_expiry = next_expiry(subscription.expires_at, now)
         else:
-            new_expiry = prorated_expiry(
-                subscription.expires_at, now, paid=paid, price=price
-            )
             # База берётся ТЕМ ЖЕ объявлением, от которого посчитан сдвиг:
             # своя формула отсчёта здесь была бы третьей копией правила D-04.
             granted_days = (
@@ -1339,7 +1368,26 @@ def _apply_extension(
         # `test_an_expired_period_lets_the_paid_plan_through_at_the_apply_stage`.
         price_from = _plan_price(subscription.plan)
         price_to = _plan_price(db_payment.plan)
-        if price_from is None or price_to is None:
+
+        # ⚠️ ПЕРЕНОС СЧИТАЕТСЯ ДО РАЗВИЛКИ ПО ТОЙ ЖЕ ПРИЧИНЕ, ЧТО И ДОЛЯ МЕСЯЦА В
+        # ВЕТКЕ ОТКАЗА ВЫШЕ: дефект ОДИН на две ветки, а не два похожих.
+        # `converted_remainder` зовёт тот же `prorated_days`, поэтому малая цена
+        # НОВОГО плана даёт число дней, которого календарь от даты отложить не
+        # может (25 дней Basic при цене `pro` в одну копейку — около 3 725 000
+        # дней), и до этой правки такой перенос давал `OverflowError`, 500 на
+        # уведомлении и вечный `pending` при списанных деньгах (T-05-104).
+        # Закреплено
+        # `test_a_price_beyond_the_calendar_does_not_break_the_conversion_branch`.
+        converted = None
+        if price_from is not None and price_to is not None:
+            converted = converted_remainder(
+                subscription.expires_at,
+                now,
+                old_price=price_from,
+                new_price=price_to,
+            )
+
+        if converted is None:
             # ОТКАТ К ПРЕЖНЕМУ ПОВЕДЕНИЮ, А НЕ ОТКАЗ И НЕ ИСКЛЮЧЕНИЕ — та же
             # развилка и та же причина, что в ветке отказа выше: расхождение
             # конфига с базой наша беда, а не пользователя, а исключение здесь
@@ -1359,7 +1407,20 @@ def _apply_extension(
                 yookassa_id=db_payment.yookassa_payment_id,
                 plan=subscription.plan,
                 paid_plan=db_payment.plan,
-                unreadable="price" if price_from is None else "paid_plan_price",
+                # ТРИ ИСХОДА, А НЕ ДВА, И ТРЕТИЙ НАЗВАН СВОИМ СЛОВОМ — теми же
+                # тремя словами, что и в ветке отказа выше: `"price"`,
+                # `"paid_plan_price"`, `"span"`. Последнее означает, что обе
+                # цены ПРОЧИТАНЫ, а момента, в который перенос упирается, не
+                # существует.
+                # Закреплено
+                # `test_a_price_beyond_the_calendar_does_not_break_the_conversion_branch`.
+                unreadable=(
+                    "price"
+                    if price_from is None
+                    else "paid_plan_price"
+                    if price_to is None
+                    else "span"
+                ),
                 stage="convert_remainder",
             )
             # ⚠️ ВЕРХНЯЯ ГРАНИЦА СТОИТ И ЗДЕСЬ (форма `cap-one-month`, решение
@@ -1386,12 +1447,7 @@ def _apply_extension(
             # расхождения, ради устранения которого заведён модуль.
             base = capped_carryover(subscription.expires_at, now)
         else:
-            base = converted_remainder(
-                subscription.expires_at,
-                now,
-                old_price=price_from,
-                new_price=price_to,
-            )
+            base = converted
             # УРОВЕНЬ `warning`, А НЕ `info`, по той же записанной причине, что у
             # `subscription_plan_preserved`: человек, у которого срок стал
             # КОРОЧЕ, чем он ожидал, придёт с этим к нам, и разбирающему
