@@ -224,8 +224,9 @@ def _synthetic_state(*, completed: int, total: int) -> str:
 
 
 # Воспроизведение РОВНО той пары, которую раунд 7 нашёл на дереве и назвал
-# регрессией против закрытого гэпа 3 раунда 5: ROADMAP отмечает исполненными 78
-# планов, а машинно читаемое поле состояния держит 73.
+# регрессией против закрытого гэпа 3 раунда 5: ROADMAP отмечает исполненными
+# больше планов, чем держит машинно читаемое поле состояния. Числа стоят ТОЛЬКО
+# в самих синтетических текстах ниже и больше нигде в модуле.
 _SYNTHETIC_ROADMAP_OF_THE_ROUND_SEVEN_TREE = _synthetic_roadmap(executed=78, planned=3)
 _SYNTHETIC_STATE_OF_THE_ROUND_SEVEN_REGRESSION = _synthetic_state(
     completed=73, total=81
