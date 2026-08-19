@@ -112,9 +112,9 @@
 
 ### Тарифы
 
-- [ ] **BILL-05**: Пользователь может продлить текущую подписку. (Форма «Продлить» в карточке текущего плана — `app/templates/billing/includes/plan_card.html:72` — и у истёкшего срока — `app/templates/billing/balance.html:96`; обе ведут в `POST /billing/subscribe`, `app/pages/billing.py:151`.)
-- [ ] **BILL-06**: Пользователь видит потребление и остаток лимитов по четырём осям тарифа. (Четыре оси `AXIS_ORDER` — `app/application/billing/plan_usage.py:64` — рисуются метрами в `app/templates/billing/balance.html:108`; безлимитная ось показывается «без ограничений», а не нулём.)
-- [ ] **BILL-07**: Пользователь видит историю своих платежей. (Журнал `get_payment_history` / `count_payments` — `app/services/billing_service.py:179`, `:210` — выводится блоком «История платежей», `app/templates/billing/balance.html:166`, с датой, назначением, суммой и статусом.)
+- [ ] **BILL-05**: Пользователь может продлить текущую подписку. (Форма «Продлить» в карточке текущего плана — `app/templates/billing/includes/plan_card.html:94` — и у истёкшего срока — `app/templates/billing/balance.html:120`; обе ведут в `POST /billing/subscribe`, `app/pages/billing.py:275`.)
+- [ ] **BILL-06**: Пользователь видит потребление и остаток лимитов по четырём осям тарифа. (Четыре оси `AXIS_ORDER` — `app/application/billing/plan_usage.py:71` — рисуются метрами в `app/templates/billing/balance.html:132`; безлимитная ось показывается «без ограничений», а не нулём.)
+- [ ] **BILL-07**: Пользователь видит историю своих платежей. (Журнал `get_payment_history` / `count_payments` — `app/services/billing_service.py:208`, `:239` — выводится блоком «История платежей», `app/templates/billing/balance.html:206`, с датой, назначением, суммой и статусом.)
 
 ### Администрирование
 
@@ -232,9 +232,9 @@
 | HIST-02 | Phase 4 | Complete (2026-08-15) |
 | HIST-03 | Phase 4 | Complete (2026-08-15) |
 | HIST-04 | Phase 4 | Complete (2026-08-15, защита от двойной постановки закрыта планом 04-12) |
-| BILL-05 | Phase 5 | In Progress (реализовано: форма продления `plan_card.html:72` и `balance.html:96` → `POST /billing/subscribe`, `app/pages/billing.py:151`; Complete снят 2026-08-16 — фаза в статусе `gaps_found`, см. `05-VERIFICATION.md`) |
-| BILL-06 | Phase 5 | In Progress (реализовано: `AXIS_ORDER` из `plan_usage.py:64` → четыре метра в `balance.html:108`; Complete снят 2026-08-16 — фаза в статусе `gaps_found`, см. `05-VERIFICATION.md`) |
-| BILL-07 | Phase 5 | In Progress (реализовано: `get_payment_history` из `billing_service.py:179` → блок «История платежей» в `balance.html:166`; Complete снят 2026-08-16 — фаза в статусе `gaps_found`, см. `05-VERIFICATION.md`) |
+| BILL-05 | Phase 5 | In Progress (реализовано: форма продления `plan_card.html:94` и `balance.html:120` → `POST /billing/subscribe`, `app/pages/billing.py:275`; Complete снят 2026-08-16 при вердикте `gaps_found`; ОСНОВАНИЕ СНЯТИЯ ОТПАЛО — раунд 10 (2026-08-19) вернул `human_needed` при 0 провалов, см. `05-VERIFICATION.md`. Complete возвращает НЕ эта запись, а `/gsd-verify-work 05`: открытым остаётся ОДИН пункт, и он человеческий — отрисовка /billing на 375px (`05-UAT.md`), браузерного харнесса в проекте нет) |
+| BILL-06 | Phase 5 | In Progress (реализовано: `AXIS_ORDER` из `plan_usage.py:71` → четыре метра в `balance.html:132`; Complete снят 2026-08-16 при вердикте `gaps_found`; ОСНОВАНИЕ СНЯТИЯ ОТПАЛО — раунд 10 (2026-08-19) вернул `human_needed` при 0 провалов, см. `05-VERIFICATION.md`. Complete возвращает НЕ эта запись, а `/gsd-verify-work 05`: открытым остаётся ОДИН пункт, и он человеческий — отрисовка /billing на 375px (`05-UAT.md`), браузерного харнесса в проекте нет) |
+| BILL-07 | Phase 5 | In Progress (реализовано: `get_payment_history` из `billing_service.py:208` → блок «История платежей» в `balance.html:206`; Complete снят 2026-08-16 при вердикте `gaps_found`; ОСНОВАНИЕ СНЯТИЯ ОТПАЛО — раунд 10 (2026-08-19) вернул `human_needed` при 0 провалов, см. `05-VERIFICATION.md`. Complete возвращает НЕ эта запись, а `/gsd-verify-work 05`: открытым остаётся ОДИН пункт, и он человеческий — отрисовка /billing на 375px (`05-UAT.md`), браузерного харнесса в проекте нет) |
 | ADMIN-03 | Phase 6 | Pending |
 | ADMIN-04 | Phase 6 | Pending |
 | ADMIN-05 | Phase 6 | Pending |
