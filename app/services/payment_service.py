@@ -971,9 +971,30 @@ def _plan_price(plan_id: str | None) -> Decimal | None:
     старт приложения.
 
     Непригодной считается цена, которой нет, которая не читается как `Decimal`,
-    и которая не больше нуля. Последнее — не паранойя: у плана Free цена
-    объявлена `"0.00"`, и деление на неё было бы отказом обработчика на самом
-    достижимом из планов.
+    которая не конечна, и которая не больше нуля. Последнее — не паранойя: у
+    плана Free цена объявлена `"0.00"`, и деление на неё было бы отказом
+    обработчика на самом достижимом из планов.
+
+    ⚠️ КОНЕЧНОСТЬ — ЧЕТВЁРТЫЙ ЧЛЕН ТОГО ЖЕ ПЕРЕЧНЯ, А НЕ ОГОВОРКА К НЕМУ, и
+    классифицируется она ВНУТРИ той же защиты, что и разбор. Форма достижима
+    ПРАВКОЙ ОКРУЖЕНИЯ, а не ошибкой программиста: `json.loads` принимает голые
+    литералы `NaN` и `Infinity` ПО УМОЛЧАНИЮ и переполняет числовой литерал
+    избыточного порядка (`1e400`) в бесконечность, а `PLAN_LIMITS` есть строка
+    окружения, разбираемая без схемы (`app/config.py:120-121`). ⚠️ ПРЕЖНЯЯ
+    РЕДАКЦИЯ ЭТОГО АБЗАЦА НАЗЫВАЕТСЯ, А НЕ СТИРАЕТСЯ: она обещала «`None`
+    вместо исключения» БЕЗУСЛОВНО и на нефинитной цене обещания НЕ ДЕРЖАЛА —
+    сравнение `result > 0` стояло ВНЕ `try`, поэтому `Decimal("NaN") > 0`
+    поднимало `InvalidOperation`, а `Decimal("Infinity")` сравнение проходила и
+    уезжала в `converted_remainder`, где `int()` давал `OverflowError`. Обе
+    формы доходили до `app/routes/billing.py:200-202` и превращались в 500 на
+    уведомлении ЮKassa при УЖЕ СПИСАННЫХ деньгах. ПРИЁМ ВЗЯТ У `format_amount`
+    (`app/pages/common.py`, план 05-09), а не изобретён здесь: класс был
+    известен этому дереву с названной причиной за девятнадцать волн до правки —
+    «`NaN` и `Infinity` — валидные значения `Decimal`, и `except` вокруг
+    разбора их не видит». Закреплено
+    `test_a_non_finite_price_does_not_five_hundred_the_notification` (сквозной
+    случай до HTTP-кода настоящего маршрута) и расширенным набором форм
+    `test_a_malformed_plan_list_does_not_break_the_notification`.
 
     Помощник СИНХРОННЫЙ: настройки читаются синхронно, а `_apply_extension`
     обязана остаться синхронной и в БД не писать сама — `commit` делает
@@ -993,8 +1014,22 @@ def _plan_price(plan_id: str | None) -> Decimal | None:
                 continue
             if plan.get("id") != plan_id:
                 continue
+            # КЛАССИФИКАЦИЯ ЦЕЛИКОМ ЖИВЁТ ВНУТРИ ЭТОЙ ЗАЩИТЫ, И ЭТО ПРИЁМ
+            # `format_amount` (`app/pages/common.py:283`, план 05-09), а не
+            # изобретение здесь: `NaN` и `Infinity` суть ВАЛИДНЫЕ значения
+            # `Decimal`, поэтому `except` вокруг разбора их не видит, а
+            # сравнение `NaN > 0` поднимает `InvalidOperation`. Порядок —
+            # разбор, конечность, знак. За пределами защиты не остаётся НИ
+            # ОДНОЙ операции над `Decimal`: последняя строка функции возвращает
+            # `result` и ничего не вычисляет. Закреплено
+            # `test_a_non_finite_price_does_not_five_hundred_the_notification`.
             try:
-                result = Decimal(str(plan.get("price")))
+                candidate = Decimal(str(plan.get("price")))
+                result = (
+                    candidate
+                    if candidate.is_finite() and candidate > 0
+                    else None
+                )
             except (InvalidOperation, TypeError, ValueError):
                 # Цена этого плана не читается — штатный исход, а не поломка
                 # перечня, и собственного следа поломки он не оставляет:
@@ -1020,7 +1055,7 @@ def _plan_price(plan_id: str | None) -> Decimal | None:
         # `test_a_malformed_plan_list_does_not_break_the_notification`.
         logger.error("plan_limits_unreadable", plan_id=plan_id)
 
-    return result if result is not None and result > 0 else None
+    return result
 
 def _apply_extension(
     subscription: Subscription, db_payment: Payment, now: datetime
