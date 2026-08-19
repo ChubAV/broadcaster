@@ -18,6 +18,10 @@ test *args:
 test-cov:
     uv run pytest tests/ --cov=app --cov-report=term-missing
 
+# Check planning tracking: STATE progress derived from ROADMAP
+tracking-check:
+    uv run pytest tests/test_planning/ -q
+
 # Start Docker dev environment
 dev:
     docker compose -f docker-compose.yml -f docker-compose.dev.yml up
