@@ -2403,6 +2403,88 @@ async def test_a_price_that_cannot_be_read_falls_back_to_the_whole_month(
     ), "непрочитанная цена не оставила следа в журнале"
 
 
+# Перечень тарифов, в котором цена действующего плана есть ГОЛЫЙ ЛИТЕРАЛ `NaN`.
+# Форма взята ДОСЛОВНО из отчёта раунда 8 и достижима штатной правкой оператора:
+# `PLAN_LIMITS` — строка окружения, разбираемая `json.loads` без схемы
+# (`app/config.py:120-121`), а `json.loads` принимает голые `NaN` и `Infinity`
+# по умолчанию.
+NON_FINITE_PLAN_LIMITS = '[{"id":"basic","price":NaN},{"id":"pro","price":"4900.00"}]'
+
+SUCCEEDED_WEBHOOK_BODY = {"event": "payment.succeeded", "object": {"id": "yoo_pro"}}
+
+
+@pytest.mark.asyncio
+async def test_a_non_finite_price_does_not_five_hundred_the_notification(
+    authed_client: AsyncClient, db_session: AsyncSession, test_settings: Settings
+):
+    """Нефинитная цена НЕ даёт 500 на НАСТОЯЩЕМ маршруте уведомления ЮKassa.
+
+    ПРЕДМЕТ УТВЕРЖДЕНИЯ — HTTP-КОД, А НЕ ВОЗВРАТ ФУНКЦИИ, и это не оформление.
+    Исключение из `_plan_price` доходит до `app/routes/billing.py:200-202`, где
+    `except Exception` превращает его в `HTTPException(500)`; именно 500
+    запускает цикл повторов ЮKassa и оставляет платёж `pending` НАВСЕГДА при уже
+    списанных деньгах (T-05-104). Прямой вызов `handle_webhook` через это место
+    не проходит вовсе, поэтому четыре закреплённые формы соседнего теста 500 не
+    стерегут — его стережёт этот случай.
+
+    ГАРД ИСТОЧНИКА СНИМАЕТСЯ ЯВНО, аварийным выключателем — форма
+    `test_the_kill_switch_lets_any_source_through`. Умолчание конфига
+    (`app/config.py:88`) равно `True`, и фикстура `test_settings` его не
+    переопределяет: запрос без заголовка адреса получил бы 403 и до предмета не
+    дошёл бы. Выключатель выбран вместо доверенного адреса потому, что случай не
+    должен уметь краснеть по причине, к предмету не относящейся: обновление
+    списка сетей в SDK покрасило бы утверждение о цене поведением гарда.
+
+    Посев обязателен ровно такой: план платежа ОТЛИЧАЕТСЯ от плана подписки, а
+    оплаченный срок ЖИВОЙ. Без этого ветка конверсии, зовущая `_plan_price` для
+    обоих планов, недостижима, и случай был бы зелёным всегда.
+    """
+    confirmed_at = datetime.now(timezone.utc)
+    current = await _seed_live_subscription(db_session, "basic", days=25)
+    await _seed_subscription_payment(
+        db_session, "pro", "yoo_pro", switch_authorized=True, amount="4900.00"
+    )
+
+    test_settings.yookassa_webhook_verify_ip = False
+
+    with patch(
+        "app.services.payment_service.add_messages", new_callable=AsyncMock
+    ), patch(
+        "app.services.payment_service.get_settings",
+        return_value=_app_settings(NON_FINITE_PLAN_LIMITS),
+    ):
+        response = await authed_client.post(
+            "/api/billing/webhook", json=SUCCEEDED_WEBHOOK_BODY
+        )
+
+    assert response.status_code == 200, (
+        f"маршрут ответил {response.status_code}. 500 — исключение на денежном "
+        "пути: искомая краснота, деньги списаны, ЮKassa будет повторять "
+        "уведомление при том же конфиге бесконечно. 403 — гард отверг источник: "
+        "краснота ЛОЖНАЯ, случай до предмета не дошёл, и чинить надо тест, а не "
+        "`_plan_price`"
+    )
+
+    payment = (
+        await db_session.execute(
+            select(Payment).where(Payment.yookassa_payment_id == "yoo_pro")
+        )
+    ).scalar_one()
+    assert payment.status == "succeeded", (
+        f"платёж остался в статусе {payment.status!r} — деньги списаны, дней нет"
+    )
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    moved = _aware(rows[0].expires_at)
+    assert moved > current, "срок не сдвинулся — деньги не превратились в дни"
+    assert moved <= add_one_month(add_one_month(confirmed_at)), (
+        "срок ушёл дальше двух календарных месяцев от подтверждения — верхняя "
+        "граница `capped_carryover` не включилась, то есть откат пошёл мимо "
+        "штатной ветки"
+    )
+
+
 # Четыре формы испорченного `PLAN_LIMITS`, СНЯТЫЕ ПРОГОНОМ, а не придуманные:
 # верификация раунда 7 вызвала `_plan_price` напрямую и получила на них
 # `JSONDecodeError`, `AttributeError`, `AttributeError` и `TypeError`
