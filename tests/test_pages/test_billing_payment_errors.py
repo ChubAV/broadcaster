@@ -2485,28 +2485,86 @@ async def test_a_non_finite_price_does_not_five_hundred_the_notification(
     )
 
 
-# Четыре формы испорченного `PLAN_LIMITS`, СНЯТЫЕ ПРОГОНОМ, а не придуманные:
-# верификация раунда 7 вызвала `_plan_price` напрямую и получила на них
-# `JSONDecodeError`, `AttributeError`, `AttributeError` и `TypeError`
-# соответственно. Имена форм — ярлыки для `ids=` у `parametrize`: отказ обязан
-# называть ФОРМУ, а не индекс, потому что «случай 2 упал» разбирающему не
-# говорит ничего.
+# Формы испорченного `PLAN_LIMITS`. ИСТОЧНИКОВ НАБОРА ДВА, и каждый элемент
+# отнесён к своему — набор не переписан из чужого прогона целиком.
+#
+# (1) ВОСПРОИЗВЕДЕНО ПРЕДЫДУЩИМИ РАУНДАМИ. Первые четыре сняты прогоном
+#     верификации раунда 7, и каждая роняла `_plan_price` СВОИМ исключением:
+#     `JSONDecodeError`, `AttributeError`, `AttributeError`, `TypeError`.
+#     Формы `nan_price` и `infinite_price` даны ДОСЛОВНО отчётом раунда 8.
+# (2) ВЫВЕДЕНО ИЗ СВОЙСТВА ВХОДА. Объём защиты, равный объёму того, что успел
+#     попробовать предыдущий раунд, есть НЕДООБЪЯВЛЕННЫЙ КОНТРАКТ, а не честно
+#     суженный объём. Свойство названо прямо: `json.loads` по умолчанию
+#     принимает голые литералы `NaN`, `Infinity` и `-Infinity` И переполняет
+#     числовой литерал избыточного порядка в бесконечность, а `Decimal(str(…))`
+#     дополнительно принимает написания `nan` и `Infinity` в строках. Отсюда
+#     `nan_price_as_string`, `infinite_price_as_string`,
+#     `overflowing_price_literal` и `negative_infinite_price`.
+#
+# Имена форм — ярлыки для `ids=` у `parametrize`: отказ обязан называть ФОРМУ,
+# а не индекс, потому что «случай 2 упал» разбирающему не говорит ничего.
 MALFORMED_PLAN_LIMITS = (
     ("broken_json", "{not json"),
     ("object_instead_of_list", '{"id": "basic"}'),
     ("list_of_strings", '["basic"]'),
     ("json_null", "null"),
+    ("nan_price", '[{"id":"basic","price":NaN},{"id":"pro","price":"4900.00"}]'),
+    (
+        "infinite_price",
+        '[{"id":"basic","price":Infinity},{"id":"pro","price":"4900.00"}]',
+    ),
+    (
+        "nan_price_as_string",
+        '[{"id":"basic","price":"nan"},{"id":"pro","price":"4900.00"}]',
+    ),
+    (
+        "infinite_price_as_string",
+        '[{"id":"basic","price":"Infinity"},{"id":"pro","price":"4900.00"}]',
+    ),
+    (
+        "overflowing_price_literal",
+        '[{"id":"basic","price":1e400},{"id":"pro","price":"4900.00"}]',
+    ),
+    (
+        "negative_infinite_price",
+        '[{"id":"basic","price":-Infinity},{"id":"pro","price":"4900.00"}]',
+    ),
+)
+
+# ДВА КЛАССА ПОЛОМКИ РАЗВЕДЕНЫ КОНСТАНТОЙ, А НЕ КОММЕНТАРИЕМ. Здесь — формы, у
+# которых сломана ЦЕНА ОДНОГО ПЛАНА; остальные ломают ПЕРЕЧЕНЬ ЦЕЛИКОМ. Разница
+# наблюдаема в журнале и утверждается ниже: авария окружения
+# (`plan_limits_unreadable`, уровень `error`) объявляется ТОЛЬКО на второй, и
+# утверждение краснеет при смешении двух смыслов — ровно тех, за разведение
+# которых план 05-28 заводил отдельный ключ.
+#
+# ⚠️ `negative_infinite_price` — ГРАНИЦА НАБОРА, А НЕ ЕГО ЧЛЕН ПО ПРИЗНАКУ
+# КРАСНОТЫ: она была зелёной и ДО правки плана 05-34, потому что отрицательная
+# бесконечность отсеивалась классификацией «не больше нуля». Включена, чтобы
+# граница была НАЗВАНА, а не подразумевалась.
+PRICE_IS_NOT_FINITE_FORMS = frozenset(
+    {
+        "nan_price",
+        "infinite_price",
+        "nan_price_as_string",
+        "infinite_price_as_string",
+        "overflowing_price_literal",
+        "negative_infinite_price",
+    }
 )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "plan_limits",
-    [limits for _, limits in MALFORMED_PLAN_LIMITS],
+    ("form", "plan_limits"),
+    MALFORMED_PLAN_LIMITS,
     ids=[name for name, _ in MALFORMED_PLAN_LIMITS],
 )
 async def test_a_malformed_plan_list_does_not_break_the_notification(
-    authed_client: AsyncClient, db_session: AsyncSession, plan_limits: str
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    form: str,
+    plan_limits: str,
 ):
     """Испорченный перечень тарифов НЕ роняет уведомление ЮKassa.
 
@@ -2523,6 +2581,13 @@ async def test_a_malformed_plan_list_does_not_break_the_notification(
     Четыре формы сняты прогоном верификации, а не придуманы, и каждая роняла
     `_plan_price` СВОИМ исключением: битый JSON — `JSONDecodeError`, объект
     вместо списка и список строк — `AttributeError`, `null` — `TypeError`.
+
+    ШЕСТЬ ФОРМ НЕФИНИТНОЙ ЦЕНЫ ВЫВЕДЕНЫ ИЗ СВОЙСТВА ВХОДА, а не переписаны из
+    отчёта: пять из шести роняли `_plan_price` `InvalidOperation` или
+    `OverflowError` до правки плана 05-34, шестая (`negative_infinite_price`)
+    была зелёной и до неё и включена ГРАНИЦЕЙ набора. Разбор двух классов
+    поломки ведёт `PRICE_IS_NOT_FINITE_FORMS`: сломанная ЦЕНА ОДНОГО ПЛАНА не
+    объявляет аварии окружения, сломанный ПЕРЕЧЕНЬ объявляет.
     """
     confirmed_at = datetime.now(timezone.utc)
     current = await _seed_live_subscription(db_session, "basic", days=25)
@@ -2559,19 +2624,49 @@ async def test_a_malformed_plan_list_does_not_break_the_notification(
         "штатной ветки"
     )
 
-    assert any(
-        call.args and call.args[0] == "plan_limits_unreadable"
+    unreadable_calls = [
+        call
         for call in spy.error.call_args_list
-    ), (
-        "поломка перечня не оставила собственного следа: по журналу «конфиг "
-        "сломан целиком» неотличимо от «цена этого плана не читается»"
+        if call.args and call.args[0] == "plan_limits_unreadable"
+    ]
+    if form in PRICE_IS_NOT_FINITE_FORMS:
+        assert not unreadable_calls, (
+            f"форма {form!r} ломает ЦЕНУ ОДНОГО ПЛАНА, а журнал объявил АВАРИЮ "
+            "ОКРУЖЕНИЯ: перечень разобран, остальные планы читаются, и "
+            "`plan_limits_unreadable` здесь лишний — два разных смысла сложены "
+            "в один ключ, и разбирающий обращение перестал их различать"
+        )
+    else:
+        assert unreadable_calls, (
+            f"форма {form!r} ломает ПЕРЕЧЕНЬ ЦЕЛИКОМ, но собственного следа не "
+            "оставила: по журналу «конфиг сломан целиком» неотличимо от «цена "
+            "этого плана не читается»"
+        )
+
+    # СНЯТО УТВЕРЖДЕНИЕ, КОТОРОЕ НЕ МОГЛО ПОКРАСНЕТЬ. Прежняя редакция искала
+    # `subscription_prorating_skipped` в `spy.error` и утверждала его
+    # ОТСУТСТВИЕ — истина ТОЖДЕСТВЕННАЯ: ключ пишется уровнем `warning`
+    # (`app/services/payment_service.py:1227` и `:1321`) и в `error` не
+    # пишется нигде в модуле. Утверждение, истинное при любой правке кода, есть
+    # та же форма отказа, что и абзац, который не может оказаться ложным.
+    # Взамен утверждается то, что закрепляется на самом деле.
+    prorating_calls = [
+        call
+        for call in spy.warning.call_args_list
+        if call.args and call.args[0] == "subscription_prorating_skipped"
+    ]
+    assert prorating_calls, (
+        "откат не оставил следа там, где ключ действительно пишется — уровень "
+        "`warning`, а не `error`"
     )
-    assert not any(
-        call.args and call.args[0] == "subscription_prorating_skipped"
-        for call in spy.error.call_args_list
+    assert any(
+        call.kwargs.get("stage") == "convert_remainder"
+        for call in prorating_calls
     ), (
-        "авария окружения записана ключом ветки «цена не читается» — два "
-        "разных смысла сложены в один ключ"
+        "след не называет ВЕТКУ. Тот же ключ испускает ветка отказа, словари "
+        "`unreadable` у двух испусканий ПЕРЕСЕКАЮТСЯ, и без поля `stage` "
+        "разбирающий обращение получает два разных исхода в одном событии "
+        "(`IN-04`)"
     )
 
 
