@@ -7,7 +7,7 @@
 года: он ловит не конкретную известную дату, а целый класс «календарь не сошёлся».
 """
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import pytest
 
@@ -548,3 +548,84 @@ def test_a_downgrade_converts_the_remainder_into_more_days():
     result = converted_remainder(current, now, old_price=PRICE_PRO, new_price=PRICE_BASIC)
 
     assert result > current, "понижение обязано давать БОЛЬШЕ дней, а не меньше"
+
+
+# --- Срок, которого нет в календаре -------------------------------------------
+#
+# ПРЕДМЕТ РАЗДЕЛА И ЕГО ГРАНИЦА. Верхнего потолка у доли месяца НЕТ, и это
+# решение D-29: сумма больше цены покупает больше месяца, обрезание было бы
+# «взяли деньги и не дали ничего». Раздел его не отменяет и не сужает — соседний
+# `test_a_sum_larger_than_the_price_buys_more_than_a_month` остаётся зелёным без
+# единой правки. Здесь другое: `datetime` кончается 9999 годом, и доля месяца,
+# у которой нет момента, обязана вернуться `None`-ом, а не исключением, потому
+# что решение принимает денежный путь — там есть журнал, откат к полному месяцу
+# и обязанность не уронить обработчик уведомления пятисоткой (T-05-104).
+#
+# ЦЕНА ВЗЯТА ТА ЖЕ, ЧТО ВОСПРОИЗВЕЛ РАУНД 9 — одна копейка: правильно
+# оформленное положительное значение, какое оператор ставит промо-тарифу, а не
+# ошибка формата.
+
+PRICE_BEYOND_THE_CALENDAR = Decimal("0.01")
+
+
+def test_a_span_that_the_calendar_cannot_express_returns_no_moment():
+    """Доля месяца без момента в календаре возвращается `None`-ом.
+
+    До правки эта же цена поднимала `OverflowError: date value out of range`,
+    который доходил до маршрута уведомления и становился 500 при уже списанных
+    деньгах.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+
+    assert (
+        prorated_expiry(None, now, paid=PRICE_BASIC, price=PRICE_BEYOND_THE_CALENDAR)
+        is None
+    )
+
+
+def test_a_conversion_that_the_calendar_cannot_express_returns_no_moment():
+    """ВТОРАЯ ветка того же дефекта: перенос остатка зовёт тот же `prorated_days`.
+
+    Без этого случая объём защиты равнялся бы объёму того, что успел попробовать
+    предыдущий раунд, — тот самый НЕДООБЪЯВЛЕННЫЙ КОНТРАКТ, который назван
+    решением D-35.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+    current = now + timedelta(days=25)
+
+    assert (
+        converted_remainder(
+            current, now, old_price=PRICE_BASIC, new_price=PRICE_BEYOND_THE_CALENDAR
+        )
+        is None
+    )
+
+
+def test_a_non_finite_amount_is_not_named_an_unrepresentable_span():
+    """ГРАНИЦА ПЕРЕХВАТА НАЗВАНА: нефинитная сумма сюда не относится.
+
+    Перехват в `_shifted_by_days` закрыт `OverflowError` намеренно. Нечитаемая
+    (нефинитная) сумма — ДРУГОЙ исход с другим словом в журнале (`"amount"`), и
+    он классифицируется денежным путём, а не глушится арифметикой: `int()`
+    внутри `prorated_days` роняет её РАНЬШЕ сдвига. Без этого случая правка,
+    заменившая перечень на `Exception`, слила бы два исхода в один и осталась бы
+    зелёной.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+
+    with pytest.raises((ValueError, OverflowError, InvalidOperation)):
+        prorated_expiry(None, now, paid=Decimal("NaN"), price=PRICE_PRO)
+
+
+def test_a_span_the_calendar_can_express_is_still_a_moment():
+    """Позитивный контроль: без него оба случая выше зеленели бы от `None` всегда.
+
+    Цена `1.00` при уплаченных 1490 ₽ даёт 2153 год — величина невероятная, но
+    выразимая, и потолком она не режется.
+    """
+    now = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+
+    result = prorated_expiry(None, now, paid=PRICE_BASIC, price=Decimal("1.00"))
+
+    assert result is not None
+    assert result > next_expiry(None, now)
