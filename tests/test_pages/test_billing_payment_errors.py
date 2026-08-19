@@ -48,6 +48,7 @@ from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.services.payment_service import create_payment, handle_webhook
+from tests.test_pages.test_billing_section import NON_FINITE_AMOUNTS
 
 BILLING_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "billing.py"
 
@@ -3252,9 +3253,12 @@ def _plan_limits_with_pro_priced(price: str) -> str:
 
 
 async def _post_succeeded_webhook(
-    client: AsyncClient, payment_id: str, plan_limits: str
+    client: AsyncClient, payment_id: str, plan_limits: str | None = None
 ):
     """Настоящий маршрут `POST /api/billing/webhook` при названном перечне цен.
+
+    `plan_limits` со значением `None` означает УМОЛЧАНИЕ конфига — прейскурант
+    проекта без единой подмены; так ходят случаи, чей предмет не цена.
 
     Предмет утверждений этого раздела — HTTP-код, а не возврат функции.
     Исключение денежного пути доходит до `app/routes/billing.py:200-202`, где
@@ -3447,3 +3451,112 @@ async def test_a_span_that_the_calendar_can_express_is_not_capped(
         f"форма {form}: пропорциональный срок ушёл на откат — граница проведена "
         "не по выразимости момента, а по правдоподобию величины"
     )
+
+
+# =============================================================================
+# ГЭП РАУНДА 9, ЭКЗЕМПЛЯР (а) — НЕПРИГОДНАЯ УПЛАЧЕННАЯ СУММА
+#
+# ПРЕДМЕТ РАЗДЕЛА. Ветка отказа уже ОБЪЯВЛЯЕТ «нечитаемую СУММУ» штатным,
+# классифицированным и залогированным исходом: поле `unreadable="amount"`
+# написано, ключ журнала написан, а комментарий над веткой говорит дословно
+# «ОТКАТ К ПОЛНОМУ МЕСЯЦУ… и не исключение». Тело этого не делало: `Decimal`
+# разбирает `NaN` и `Infinity` УСПЕШНО, `except` вокруг разбора их не видит, и
+# отказ уезжал в `int(...)` внутри `prorated_days`, где ронял обработчик
+# уведомления — HTTP 500, цикл повторов ЮKassa, вечный `pending` при списанных
+# деньгах (T-05-104).
+#
+# НОВОЙ СЕМАНТИКИ ЗДЕСЬ НЕТ И НОВОГО ОБЪЯВЛЕНИЯ НЕ ЗАВОДИТСЯ. Ветка, в которую
+# эти формы обязаны попадать, существует, объявлена и закреплена
+# `test_the_refused_branch_names_its_own_stage_in_the_journal`; менялся только
+# вход, который сегодня проходил мимо неё.
+#
+# МНОЖЕСТВО ФОРМ ВЫВЕДЕНО ИЗ СВОЙСТВА ВХОДА, А НЕ ПЕРЕПИСАНО ИЗ ЧУЖОГО ПРОГОНА.
+# Класс «`Decimal` разбирает, арифметика не переживает» проект объявил живым для
+# колонки `payments.amount_value` ещё планом 05-09 — константа
+# `NON_FINITE_AMOUNTS` (`tests/test_pages/test_billing_section.py`), и она
+# читается здесь, а не копируется пятый раз. Сверх неё взята форма
+# `1e400` — ПЕРЕПОЛНЯЮЩИЙ ЛИТЕРАЛ, которого константа не несёт: он КОНЕЧЕН,
+# поэтому классификацией конечности не отсеивается и уходит в соседний исход
+# «срока не существует». Разные исходы у двух подмножеств названы таблицей, а не
+# описаны прозой: испускание обязано быть разбираемо, а не просто существовать.
+# =============================================================================
+
+# Форма и ОЖИДАЕМОЕ значение поля `unreadable`. Пара, а не голый перечень:
+# `1e400` конечен и потому попадает в исход `"span"`, а не `"amount"`, и слить
+# два исхода в одно утверждение значило бы объявить их неразличимыми ровно там,
+# где `IN-04` требует обратного.
+UNUSABLE_AMOUNTS = tuple(
+    (value, UNREADABLE_AMOUNT) for value in NON_FINITE_AMOUNTS
+) + (("1e400", UNREADABLE_SPAN),)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("amount", "expected_unreadable"),
+    UNUSABLE_AMOUNTS,
+    ids=[value for value, _ in UNUSABLE_AMOUNTS],
+)
+async def test_an_unusable_amount_does_not_five_hundred_the_notification(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    test_settings: Settings,
+    amount: str,
+    expected_unreadable: str,
+):
+    """Непригодная уплаченная сумма НЕ даёт 500 на маршруте уведомления.
+
+    Посев — тот же, что у `test_the_refused_branch_names_its_own_stage_in_the_journal`:
+    живая `pro` плюс отвергнутый ПО ПРАВИЛУ `basic` (`switch_authorized=None`), а
+    не через значение `False`, которое проект сам объявил недостижимым через
+    форму. Прейскурант НЕ подменяется: предмет — сумма, а не цена.
+
+    До правки формы давали пятисотку тремя разными исключениями: `NaN` —
+    `ValueError`, `Infinity` и `-Infinity` — `OverflowError`, `sNaN` —
+    `InvalidOperation`, `1e400` — `OverflowError` из `timedelta`.
+    """
+    confirmed_at = datetime.now(timezone.utc)
+    current = await _seed_live_subscription(db_session, "pro", days=25)
+    await _seed_subscription_payment(
+        db_session, "basic", "yoo_basic", switch_authorized=None, amount=amount
+    )
+
+    test_settings.yookassa_webhook_verify_ip = False
+
+    with patch("app.services.payment_service.logger") as spy:
+        response = await _post_succeeded_webhook(authed_client, "yoo_basic")
+
+    assert response.status_code == 200, (
+        f"сумма {amount!r}: маршрут ответил {response.status_code}. 500 — "
+        "исключение на денежном пути там, где соседний комментарий обещает "
+        "«откат к полному месяцу… и не исключение»: деньги списаны, ЮKassa "
+        "будет повторять уведомление бесконечно"
+    )
+
+    payment = (
+        await db_session.execute(
+            select(Payment).where(Payment.yookassa_payment_id == "yoo_basic")
+        )
+    ).scalar_one()
+    assert payment.status == "succeeded", (
+        f"сумма {amount!r}: платёж остался в статусе {payment.status!r}"
+    )
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro", "отвергнутый младший тариф всё-таки применён"
+    moved = _aware(rows[0].expires_at)
+    assert moved > current, "срок не сдвинулся — деньги не превратились в дни"
+    assert moved <= add_one_month(add_one_month(confirmed_at)), (
+        f"сумма {amount!r}: записан срок {moved.date()} — откат к полному "
+        "календарному месяцу не сработал"
+    )
+
+    skips = _prorating_skips(spy)
+    assert len(skips) == 1, f"сумма {amount!r}: следа в журнале ровно один не вышло"
+    assert skips[0].kwargs.get("unreadable") == expected_unreadable, (
+        f"сумма {amount!r}: журнал назвал исход "
+        f"{skips[0].kwargs.get('unreadable')!r} вместо {expected_unreadable!r} — "
+        "разбирающий обращение не сможет сказать, что именно оказалось "
+        "непригодным"
+    )
+    assert skips[0].kwargs.get("stage") == STAGE_PRORATE_REFUSED
