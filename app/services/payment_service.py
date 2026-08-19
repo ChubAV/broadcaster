@@ -916,6 +916,30 @@ def _plan_price(plan_id: str | None) -> Decimal | None:
     `test_a_price_that_cannot_be_read_falls_back_to_the_whole_month`:
     вызывающий получает `None` и уходит на откат, а не ловит исключение.
 
+    ⚠️ НЕПРИГОДНЫМ СЧИТАЕТСЯ И САМ ПЕРЕЧЕНЬ, А НЕ ТОЛЬКО ЦЕНА В НЁМ. Прежняя
+    редакция этого объявления обещала ровно то же, что и нынешняя, но тело
+    обещания не держало: защита накрывала ТОЛЬКО приведение цены к `Decimal`, а
+    обход `parsed_plan_limits` стоял ВНЕ неё — то есть «`None` вместо
+    исключения» было верно ровно для той половины входа, которую правит не
+    оператор. `PLAN_LIMITS` — строка окружения, разбираемая `json.loads` без
+    схемы и без валидации, и верификация раунда 7 воспроизвела на ней ЧЕТЫРЕ
+    формы отказа: битый JSON — `JSONDecodeError`, объект вместо списка —
+    `AttributeError`, список строк — `AttributeError`, `null` — `TypeError`.
+    Сегодня все четыре дают `None` и собственную запись в журнале уровня
+    `error` — ключ назван один раз, в теле ниже. Закреплено
+    `test_a_malformed_plan_list_does_not_break_the_notification`, который на
+    прежнем теле краснел на каждой из четырёх форм.
+
+    ⚠️ НАЗВАНО И ТО, ЧЕГО ЭТА ЗАЩИТА НЕ ДЕЛАЕТ: она НЕ ВАЛИДИРУЕТ КОНФИГ НА
+    СТАРТЕ. Перечень тарифов и строка подписки расходятся В РАБОТЕ и без нашего
+    участия — стартовая проверка такого расхождения не видит вовсе и дала бы
+    ложное чувство закрытия, потому что о ней отчитались бы как о защите.
+    Поэтому единственное место защиты — здесь: денежный путь уже считает это
+    место тотальным. Тем же
+    `test_a_malformed_plan_list_does_not_break_the_notification` это и
+    закреплено — он ходит через настоящий обработчик уведомления, а не через
+    старт приложения.
+
     Непригодной считается цена, которой нет, которая не читается как `Decimal`,
     и которая не больше нуля. Последнее — не паранойя: у плана Free цена
     объявлена `"0.00"`, и деление на неё было бы отказом обработчика на самом
@@ -925,16 +949,48 @@ def _plan_price(plan_id: str | None) -> Decimal | None:
     обязана остаться синхронной и в БД не писать сама — `commit` делает
     `handle_webhook`, и порядок транзакции плана 05-08 не трогается.
     """
-    for plan in get_settings().parsed_plan_limits:
-        if plan.get("id") != plan_id:
-            continue
-        try:
-            price = Decimal(str(plan.get("price")))
-        except (InvalidOperation, TypeError, ValueError):
-            return None
-        return price if price > 0 else None
-    return None
+    unreadable = False
+    result: Decimal | None = None
+    try:
+        for plan in get_settings().parsed_plan_limits:
+            if not isinstance(plan, dict):
+                # Сломан один элемент из трёх — остальные читаются, и чужая
+                # строка в перечне не имеет права отнять у покупателя дни на
+                # его собственном, исправном плане. Пропуск оставляет след:
+                # флаг ниже доводит его до журнала. Закреплено
+                # `test_a_malformed_plan_list_does_not_break_the_notification`.
+                unreadable = True
+                continue
+            if plan.get("id") != plan_id:
+                continue
+            try:
+                result = Decimal(str(plan.get("price")))
+            except (InvalidOperation, TypeError, ValueError):
+                # Цена этого плана не читается — штатный исход, а не поломка
+                # перечня, и собственного следа поломки он не оставляет:
+                # свой ключ пишет ветка отката в `_apply_extension`. Закреплено
+                # `test_a_price_that_cannot_be_read_falls_back_to_the_whole_month`.
+                result = None
+            break
+    except (InvalidOperation, TypeError, ValueError, AttributeError):
+        # `JSONDecodeError` — подкласс `ValueError` и накрывается им;
+        # `AttributeError` добавлен ради формы «элемент перечня не словарь».
+        # Перечень типов оставлен закрытым, а не заменён на `Exception`: иначе
+        # опечатка в имени поля отдала бы `None` молча. Закреплено
+        # `test_a_malformed_plan_list_does_not_break_the_notification`.
+        unreadable = True
 
+    if unreadable:
+        # Собственный ключ, а не `subscription_prorating_skipped`: без него
+        # «перечень сломан целиком» неотличимо от «цена этого плана не
+        # читается», а второе есть штатный исход, тогда как первое — авария
+        # окружения. Содержимое переменной окружения в запись не попадает —
+        # там цены, состав тарифов и возможные внутренние идентификаторы.
+        # Закреплено
+        # `test_a_malformed_plan_list_does_not_break_the_notification`.
+        logger.error("plan_limits_unreadable", plan_id=plan_id)
+
+    return result if result is not None and result > 0 else None
 
 def _apply_extension(
     subscription: Subscription, db_payment: Payment, now: datetime

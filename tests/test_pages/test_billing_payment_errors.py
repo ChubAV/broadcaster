@@ -2403,6 +2403,96 @@ async def test_a_price_that_cannot_be_read_falls_back_to_the_whole_month(
     ), "непрочитанная цена не оставила следа в журнале"
 
 
+# Четыре формы испорченного `PLAN_LIMITS`, СНЯТЫЕ ПРОГОНОМ, а не придуманные:
+# верификация раунда 7 вызвала `_plan_price` напрямую и получила на них
+# `JSONDecodeError`, `AttributeError`, `AttributeError` и `TypeError`
+# соответственно. Имена форм — ярлыки для `ids=` у `parametrize`: отказ обязан
+# называть ФОРМУ, а не индекс, потому что «случай 2 упал» разбирающему не
+# говорит ничего.
+MALFORMED_PLAN_LIMITS = (
+    ("broken_json", "{not json"),
+    ("object_instead_of_list", '{"id": "basic"}'),
+    ("list_of_strings", '["basic"]'),
+    ("json_null", "null"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "plan_limits",
+    [limits for _, limits in MALFORMED_PLAN_LIMITS],
+    ids=[name for name, _ in MALFORMED_PLAN_LIMITS],
+)
+async def test_a_malformed_plan_list_does_not_break_the_notification(
+    authed_client: AsyncClient, db_session: AsyncSession, plan_limits: str
+):
+    """Испорченный перечень тарифов НЕ роняет уведомление ЮKassa.
+
+    ПРИЧИНА ТРЕБОВАНИЯ ПРИКЛАДНАЯ, А НЕ МЕХАНИЧЕСКАЯ. Необработанное исключение
+    в обработчике уведомления даёт 5xx, а 5xx на уведомлении ЮKassa запускает
+    цикл повторов и оставляет платёж `pending` НАВСЕГДА при уже списанных
+    деньгах (T-05-104): при повторе конфиг тот же, и пятисотка та же.
+
+    Форма отказа заводится не ошибкой программиста, а ШТАТНОЙ ОПЕРАЦИЕЙ.
+    `PLAN_LIMITS` — строка окружения, разбираемая `json.loads` без схемы, и
+    правит её оператор; достижимый путь гонки не требует вовсе: правка
+    окружения плюс подтверждение платежа плана, отличного от действующего.
+
+    Четыре формы сняты прогоном верификации, а не придуманы, и каждая роняла
+    `_plan_price` СВОИМ исключением: битый JSON — `JSONDecodeError`, объект
+    вместо списка и список строк — `AttributeError`, `null` — `TypeError`.
+    """
+    confirmed_at = datetime.now(timezone.utc)
+    current = await _seed_live_subscription(db_session, "basic", days=25)
+    await _seed_subscription_payment(
+        db_session, "pro", "yoo_pro", switch_authorized=True, amount="4900.00"
+    )
+
+    with patch("app.services.payment_service.logger") as spy:
+        accepted = await _confirm_with_plan_limits(
+            db_session, "yoo_pro", plan_limits=plan_limits
+        )
+
+    assert accepted is True, (
+        "уведомление не принято — платёж остаётся `pending`, и ЮKassa будет "
+        "повторять его при том же конфиге бесконечно"
+    )
+
+    payment = (
+        await db_session.execute(
+            select(Payment).where(Payment.yookassa_payment_id == "yoo_pro")
+        )
+    ).scalar_one()
+    assert payment.status == "succeeded", (
+        f"платёж остался в статусе {payment.status!r} — деньги списаны, дней нет"
+    )
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    moved = _aware(rows[0].expires_at)
+    assert moved > current, "срок не сдвинулся — деньги не превратились в дни"
+    assert moved <= add_one_month(add_one_month(confirmed_at)), (
+        "срок ушёл дальше двух календарных месяцев от подтверждения — верхняя "
+        "граница `capped_carryover` не включилась, то есть откат пошёл мимо "
+        "штатной ветки"
+    )
+
+    assert any(
+        call.args and call.args[0] == "plan_limits_unreadable"
+        for call in spy.error.call_args_list
+    ), (
+        "поломка перечня не оставила собственного следа: по журналу «конфиг "
+        "сломан целиком» неотличимо от «цена этого плана не читается»"
+    )
+    assert not any(
+        call.args and call.args[0] == "subscription_prorating_skipped"
+        for call in spy.error.call_args_list
+    ), (
+        "авария окружения записана ключом ветки «цена не читается» — два "
+        "разных смысла сложены в один ключ"
+    )
+
+
 # =============================================================================
 # ПОТОЛОК ОДНОВРЕМЕННЫХ НАМЕРЕНИЙ — ЧЕРЕЗ НАСТОЯЩИЙ ОБРАБОТЧИК ФОРМЫ
 # =============================================================================
