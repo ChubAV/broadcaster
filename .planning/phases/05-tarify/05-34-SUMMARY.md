@@ -318,6 +318,13 @@ None — внешних сервисов план не настраивает, �
 - **Осталось за оркестратором:** сведение `.planning/ROADMAP.md` и `.planning/STATE.md` (см. Deviations №2). До этого сведения счёт планов фазы не отражает волну 25.
 - **Переносится дальше, кодом не закрывается:** мобильные ширины `/billing` на 375px (девятый раунд подряд — браузерного харнесса в проекте нет); настоящий платёж в тестовом магазине ЮKassa; прохождение гардом источника первого настоящего уведомления после выката.
 
+## Self-Check: PASSED
+
+- Все объявленные файлы существуют на диске: `app/services/payment_service.py`, `tests/test_pages/test_billing_payment_errors.py`, `.planning/phases/05-tarify/05-CONTEXT.md`, `.planning/phases/05-tarify/05-34-SUMMARY.md`.
+- Все шесть хешей резолвятся в `git log --all`: `75605a5`, `54c06e9`, `c9dda53`, `60762db`, `080004a`, `8443d34`.
+- Рабочее дерево чисто: `git status --short` пуст.
+- `.planning/ROADMAP.md` и `.planning/STATE.md` НЕ изменены этим агентом — `git diff --name-only 62f6f15 HEAD` их не содержит.
+
 ---
 *Phase: 05-tarify*
 *Completed: 2026-08-19*
