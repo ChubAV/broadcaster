@@ -1,8 +1,9 @@
 ---
 phase: 05-tarify
-reviewed: 2026-08-18T10:05:14Z
+reviewed: 2026-08-19T12:27:43Z
 depth: standard
-files_reviewed: 46
+round: 8
+files_reviewed: 49
 files_reviewed_list:
   - alembic/versions/0017_payment_kind_and_plan.py
   - alembic/versions/0018_subscriptions_unique_user.py
@@ -29,6 +30,7 @@ files_reviewed_list:
   - app/templates/billing/includes/plan_card.html
   - app/templates/billing/includes/usage_meters.html
   - docker-compose.prod.yml
+  - justfile
   - tests/test_application/declared_invariants_without_witness.txt
   - tests/test_application/test_declared_invariants.py
   - tests/test_application/test_plan_switch.py
@@ -44,6 +46,8 @@ files_reviewed_list:
   - tests/test_pages/test_billing_subscription.py
   - tests/test_pages/test_history_retry.py
   - tests/test_pages/test_responsive_markup.py
+  - tests/test_planning/__init__.py
+  - tests/test_planning/test_state_progress_matches_roadmap.py
   - tests/test_routes/test_billing.py
   - tests/test_routes/test_billing_webhook_proxy_headers.py
   - tests/test_routes/test_billing_webhook_source.py
@@ -51,616 +55,509 @@ files_reviewed_list:
   - tests/test_services/test_payment_concurrency.py
   - tests/test_services/test_payment_service.py
 findings:
-  critical: 1
+  critical: 2
   warning: 6
-  info: 6
-  total: 13
+  info: 4
+  total: 12
 status: issues_found
 ---
 
-# Phase 05-tarify: Code Review Report
+# Phase 05: Отчёт код-ревью (раунд 8)
 
-**Reviewed:** 2026-08-18T10:05:14Z
-**Depth:** standard
-**Files Reviewed:** 46
-**Status:** issues_found
+**Проверено:** 2026-08-19T12:27:43Z
+**Глубина:** standard
+**Файлов в объёме:** 49
+**Статус:** issues_found
+
+> Идентификаторы находок принадлежат РАУНДУ 8. Проект переназначает `CR-nn` / `WR-nn` / `IN-nn` в каждом раунде, поэтому ссылаться на них следует как на `раунд 8, CR-01` и т. д.
 
 ## Summary
 
-Round 7. Re-attacked the money path end to end (`create_payment` → YooKassa →
-`handle_webhook` → `_claim_payment` → `_extend_subscription` → `_apply_extension` →
-`subscription_period` arithmetic), plus the two artefacts this run added
-(`capped_carryover` and the declared-invariant gate).
+Основное внимание уделено поверхностям, тронутым волной закрытия гэпов раунда 7:
+`_plan_price` в `app/services/payment_service.py` (план 05-28), новый гейт
+`tests/test_planning/` и рецепт `tracking-check` в `justfile` (план 05-31).
+Документарная правка 05-33 (три абзаца докстрингов) прочитана и расхождений с
+исполняемым кодом не даёт — за исключением одного устаревшего обоснования
+(`IN-02`).
 
-**What round 6's fixes actually closed, verified by reading the code, not the plans:**
+Найдено две блокирующие находки, и обе воспроизведены прогоном, а не выведены
+чтением.
 
-- `CR-01` is genuinely closed. `capped_carryover`
-  (`app/application/billing/subscription_period.py:333-393`) is a pure `min(countdown_base,
-  add_one_month(now))`, the money path reads it rather than recomputing
-  (`app/services/payment_service.py:1257`), the horizon is bounded at two calendar months
-  from `now`, and two integration tests seed a 365-day horizon and assert both halves of
-  the cost (`test_an_unreadable_paid_plan_price_does_not_carry_the_whole_horizon`,
-  `test_an_upgrade_from_free_does_not_carry_the_whole_horizon`). I traced the money on
-  both directions of `converted_remainder` (12×basic + 1×pro = 22 780 ₽ → ~140 days Pro;
-  12×pro + 1×basic → ~1200 days Basic) — the arithmetic is now money-preserving in both
-  directions, and `month_days` cancels exactly as WR-01 said.
-- `WR-02` is closed: `refused = period_is_live and not db_payment.switch_authorized`
-  (`:1080`) — a recorded `False` no longer outlives its own period.
-- `WR-03` is closed by decision plus a real trace: `subscription_plan_downgraded`
-  (`:1320-1333`) fires on the record-wins demotion.
-- `IN-04` is closed: both `subscription_prorating_skipped` emissions carry a distinct
-  constant `stage` field, and `test_the_refused_branch_names_its_own_stage_in_the_journal`
-  asserts the *other* value, so the two cannot be collapsed silently.
-- `IN-02` (sub-day truncation) is closed by declaration — `converted_remainder:250-257`
-  now names the truncation with the number, exactly as the finding asked. Not re-reported.
-- Per the round brief, `IN-03` is treated as refuted by run and is not re-raised.
+1. Защита `_plan_price`, ради которой существует план 05-28, ПРОПУСКАЕТ пятую
+   форму отказа — НЕФИНИТНУЮ цену (`NaN` / `Infinity`). Финальное сравнение
+   `result > 0` стоит ВНЕ `try`, а `Decimal('NaN') > 0` поднимает
+   `InvalidOperation`. Исход — ровно тот, который план объявляет закрытым: 500 на
+   уведомлении ЮKassa, цикл повторов и платёж `pending` навсегда при списанных
+   деньгах. Тот же класс дефекта уже был найден и починен в этом же проекте на
+   `format_amount` (`app/pages/common.py:270-284`, план 05-09), и его собственный
+   докстринг называет причину дословно: «`NaN` и `Infinity` — валидные значения
+   `Decimal`, и `except` вокруг разбора их не видит».
 
-**What does not hold up:**
+2. Рецепт `just prod-hard-deploy` в `justfile` СЕГОДНЯ НЕ ДЕЛАЕТ НИЧЕГО и
+   возвращает код 0. Закомментированная строка `#git pull && \` заканчивается
+   продолжением строки, а `just` склеивает продолжения ДО передачи оболочке —
+   в результате весь рецепт становится одним комментарием оболочки.
 
-1. `_plan_price` breaks the very contract its docstring exists to guarantee. Its
-   promise — "`None` вместо исключения… 5xx на уведомлении запускает цикл повторов и
-   оставляет платёж `pending` навсегда" — is not kept for malformed or non-list
-   `PLAN_LIMITS`, which the same codebase repeatedly calls normal operation ("перечень
-   тарифов правится окружением"). Proven by run, four ways. That is CR-01.
-2. **Wave 18 introduced a fresh instance of this phase's signature defect class in the
-   same run that built the gate against it.** `_extend_subscription:691-698` declares the
-   05-01 prohibition "СОБЛЮДЕНА, а не переопределена: ни один разрешённый переход остатка
-   не сжигает" — while `capped_carryover:359-372` and `_apply_extension:1238-1246`, both
-   written by 05-22, declare the same branch an *exception* to that prohibition, and the
-   suite's own green test burns ~11 months of paid time on an allowed transition. Two
-   declarations in one module contradict each other; the newer one matches the code. The
-   new gate passed it because the paragraph *names* a test that exists but does not cover
-   the claim — the gate's declared blind spot, realised on its first round (WR-01).
-3. The gate's scope excludes the INTENT stage of the money path. `app/pages/billing.py`
-   (34 selected declarations, **34 without a witness**), `app/routes/billing.py` (10/10,
-   including the webhook trust guard), `app/pages/common.py` (13/13, including the CSRF
-   guard) and `app/services/billing_service.py` (6/6) are all outside `checked_modules()`,
-   although `plan_switch.py` itself calls `app/pages/billing.py` one of the rule's two
-   stages (WR-02).
-4. `WR-04`, `WR-05`, `WR-06`, `WR-07` of round 6 were not addressed and are re-reported
-   verbatim in substance (WR-03…WR-06 below), each re-verified against the current tree.
+Дополнительно: закрепляющий регресс плана 05-28 содержит утверждение, которое не
+может покраснеть НИКОГДА (`WR-01`), — то есть половина заявленного свойства не
+закреплена ничем, хотя выглядит закреплённой.
 
-Known and recorded debt (second intent-cap race window, `PENDING_INTENT_TTL_HOURS`
-demotion window, `uq_subscriptions_active_user` not built on prod, D-26 schema
-divergence) is **not** re-reported.
+Гейт `tests/test_planning/` на сегодняшнем дереве даёт согласие
+(derived `(81, 81)` = recorded `(81, 81)`), негативные контроли настоящие, реестр
+принятого долга (`declared_invariants_without_witness.txt`, 37 записей при потолке
+37) НЕ РОС. Прохибиция фазы соблюдена.
 
 ---
 
 ## Critical Issues
 
-### CR-01: `_plan_price` raises instead of returning `None` on a malformed plan list — 500 on the YooKassa notification, payment stuck `pending` forever
+### CR-01: Нефинитная цена в `PLAN_LIMITS` роняет обработчик уведомления ЮKassa
 
-**File:** `app/services/payment_service.py:905-937` (declaration `:906-927`, body `:928-936`)
-**Severity:** BLOCKER
+**Файл:** `app/services/payment_service.py:1023` (защита — `:984-1022`)
+**Классификация:** BLOCKER
 
-**Issue:**
-
-`_plan_price` exists for exactly one reason, stated in its own docstring:
-
-> `None` ВМЕСТО ИСКЛЮЧЕНИЯ — ТРЕБОВАНИЕ ВЫЗЫВАЮЩЕГО… Необработанное исключение там
-> означает 5xx на уведомлении, а 5xx запускает цикл повторов и оставляет платёж `pending`
-> навсегда: класс отказа, уже стоивший фазе находки `WR-04` раунда 2. **Перечень тарифов
-> правится окружением**, а действующий план записан в строке подписки — разойтись они
-> могут в любую сторону и без нашего участия.
-
-The `try` covers only the `Decimal` conversion. The iteration itself is unguarded:
+**Проблема.** Возврат написан так:
 
 ```python
-    for plan in get_settings().parsed_plan_limits:   # <- outside the try
-        if plan.get("id") != plan_id:                # <- assumes dict entries
-            continue
-        try:
-            price = Decimal(str(plan.get("price")))
-        except (InvalidOperation, TypeError, ValueError):
-            return None
-        return price if price > 0 else None
-    return None
-```
-
-`Settings.parsed_plan_limits` (`app/config.py:119-121`) is a bare `json.loads` of the
-`PLAN_LIMITS` env string, with no validation and no schema. Run against the real function
-with `get_settings` patched to a real `Settings`:
-
-```
-malformed json         -> RAISED JSONDecodeError: Expecting value: line 1 column 33
-json object not list   -> RAISED AttributeError: 'str' object has no attribute 'get'
-list of strings        -> RAISED AttributeError: 'str' object has no attribute 'get'
-null                   -> RAISED TypeError: 'NoneType' object is not iterable
-```
-
-Note that `JSONDecodeError` subclasses `ValueError`, so it *would* have been caught had
-the call sat inside the existing `except` — the guard is one line away from working.
-
-**Why this is a BLOCKER and not a config-hygiene note.** Trace the reachable path:
-
-1. Operator edits `PLAN_LIMITS` (rename a plan, drop `pro` from sale, add a trailing
-   comma). The phase names this as routine in three separate docstrings.
-2. A subscription payment for a *different* plan than the current subscription is
-   confirmed. `_apply_extension` reaches `_plan_price` at `:1116` (refused branch) or
-   `:1253-1254` (convert branch).
-3. The exception propagates through `_extend_subscription` → `handle_webhook` →
-   `app/routes/billing.py:200-202` → **HTTP 500**.
-4. `await db.commit()` at `:612` is never reached, so the `_claim_payment` UPDATE rolls
-   back and the row returns to `pending`.
-5. YooKassa retries the notification. Same config, same 500. **Forever.** Money taken,
-   nothing delivered, and the payment never leaves `pending` — the precise outcome
-   T-05-104 and the `capped_carryover` docstring ("⚠️ ИСКЛЮЧЕНИЯ ЗДЕСЬ НЕДОПУСТИМЫ НИ В
-   КАКОМ ВИДЕ") declare impossible.
-
-The same unguarded property also 500s `GET /billing` (`app/pages/billing.py:174`) and
-`POST /billing/subscribe` (`:315`), and `parsed_message_packages` has the identical shape
-for `GET /api/billing/packages` and `POST /billing/purchase` — but those cost a page, not
-a stuck payment.
-
-**Fix:** make the reader total, at the one place the money path already trusts to be
-total. Do not "validate config at startup" instead — the phase's own reasoning is that
-config and DB are allowed to diverge *at runtime*, and a startup check cannot see that.
-
-```python
-def _plan_price(plan_id: str | None) -> Decimal | None:
-    """...
-
-    ⚠️ НЕПРИГОДНЫМ СЧИТАЕТСЯ И САМ ПЕРЕЧЕНЬ, А НЕ ТОЛЬКО ЦЕНА В НЁМ. `PLAN_LIMITS`
-    — строка окружения, разбираемая `json.loads` без схемы: битая запятая даёт
-    `JSONDecodeError`, объект вместо списка и список строк дают `AttributeError`,
-    `null` — `TypeError`. Прежняя редакция ловила только отказ `Decimal`, то есть
-    держала обещание «`None` вместо исключения» ровно для той половины входа,
-    которую правит не оператор. Вторая половина роняла обработчик уведомления
-    пятисоткой, и платёж оставался `pending` навсегда (T-05-104) — тот самый
-    исход, ради невозможности которого функция и заведена.
-    Закреплено `test_a_malformed_plan_list_does_not_break_the_notification`.
-    """
-    try:
-        plans = get_settings().parsed_plan_limits
-        for plan in plans:
-            if not isinstance(plan, dict) or plan.get("id") != plan_id:
-                continue
-            price = Decimal(str(plan.get("price")))
-            return price if price > 0 else None
     except (InvalidOperation, TypeError, ValueError, AttributeError):
-        # ЖУРНАЛ ОБЯЗАТЕЛЕН: расхождение конфига с базой — наша беда, и без следа
-        # «дни посчитаны по-старому» неотличимо от «конфиг сломан целиком».
+        unreadable = True
+
+    if unreadable:
         logger.error("plan_limits_unreadable", plan_id=plan_id)
-        return None
-    return None
+
+    return result if result is not None and result > 0 else None   # ← строка 1023, ВНЕ try
 ```
 
-Add the regression next to `test_a_price_that_cannot_be_read_falls_back_to_the_whole_month`,
-parametrised over the four shapes above, asserting `handle_webhook` returns `True`, the
-payment reaches `succeeded`, and the expiry moved — i.e. the notification survives.
-Consider the same treatment for `parsed_message_packages` at `app/routes/billing.py:26-27`
-and `app/pages/billing.py:433`.
+`Decimal("NaN")` — ВАЛИДНОЕ значение, и `Decimal(str(...))` его принимает без
+исключения. Исключение поднимает СРАВНЕНИЕ `result > 0`, которое стоит ВНЕ `try`:
+
+* `"price": NaN` либо `"price": "nan"` → `InvalidOperation` на строке 1023;
+* `"price": Infinity` → сравнение проходит (`Infinity > 0` истинно), цена уезжает
+  в `converted_remainder` → `prorated_days` → `int(Decimal('Infinity'))` →
+  `OverflowError`.
+
+`json.loads` принимает голые литералы `NaN`, `Infinity` и `-Infinity` ПО
+УМОЛЧАНИЮ, поэтому форма достигается штатной правкой переменной окружения
+оператором — тем же путём, каким достигаются четыре формы, закреплённые
+`test_a_malformed_plan_list_does_not_break_the_notification`.
+
+**Воспроизведение (прогон, не рассуждение).** Вызов настоящего `_apply_extension`
+с живой подпиской `basic`, платежом `pro` и `switch_authorized=True`:
+
+```
+RAISE InvalidOperation  <- [{"id":"basic","price":NaN},{"id":"pro","price":"4900.00"}]
+RAISE InvalidOperation  <- [{"id":"basic","price":"nan"},{"id":"pro","price":"4900.00"}]
+RAISE OverflowError     <- [{"id":"basic","price":Infinity},{"id":"pro","price":"4900.00"}]
+```
+
+**Цена.** Необработанное исключение доезжает до `app/routes/billing.py:200-202`,
+маршрут отвечает 500, ЮKassa запускает цикл повторов, конфиг при повторе тот же —
+и `_claim_payment` откатывается вместе с транзакцией, то есть платёж остаётся
+`pending` НАВСЕГДА при списанных деньгах. Это дословно тот исход, который
+докстринг `_plan_price` (`:938-947`) объявляет недостижимым, и тот, который
+докстринг регресса называет «класс отказа, уже стоивший фазе находки `WR-04`
+раунда 2».
+
+**Исправление.** Проверка конечности обязана стоять ВНУТРИ той же защиты, что и
+разбор, — ровно тем приёмом, каким это уже сделано в `format_amount`
+(`app/pages/common.py:283`, «ПРОВЕРКА КОНЕЧНОСТИ СТОИТ ПОСЛЕ РАЗБОРА, А НЕ ВМЕСТО
+НЕГО»):
+
+```python
+            try:
+                candidate = Decimal(str(plan.get("price")))
+                # Конечность проверяется ЗДЕСЬ, рядом с разбором: `NaN` и
+                # `Infinity` разбор проходят, а сравнение `> 0` поднимает
+                # InvalidOperation, и вне try оно уже не защищено ничем.
+                result = candidate if candidate.is_finite() else None
+            except (InvalidOperation, TypeError, ValueError):
+                result = None
+            break
+```
+
+Регресс, который сегодня краснеет: две новые формы в `MALFORMED_PLAN_LIMITS`
+(`tests/test_pages/test_billing_payment_errors.py:2411-2417`) —
+`("nan_price", '[{"id":"basic","price":NaN},{"id":"pro","price":"4900.00"}]')` и
+`("infinite_price", '[{"id":"basic","price":Infinity},{"id":"pro","price":"4900.00"}]')`.
+Формы обязаны идти через настоящий обработчик уведомления, как и четыре уже
+закреплённые.
+
+---
+
+### CR-02: `just prod-hard-deploy` не исполняет НИ ОДНОЙ команды и рапортует успех
+
+**Файл:** `justfile:104-113` (строка 105)
+**Классификация:** BLOCKER
+
+**Проблема.** В рабочем дереве стоит:
+
+```make
+prod-hard-deploy:
+    #git pull && \
+    docker compose -f docker-compose.prod.yml build --no-cache && \
+    ...
+```
+
+`just` склеивает строки, оканчивающиеся `\`, В ОДНУ ещё ДО передачи оболочке.
+Получившаяся единственная строка начинается с `#`, то есть весь рецепт становится
+комментарием оболочки. Проверено настоящим `just` (`/usr/bin/just`) на
+минимальном воспроизведении:
+
+```
+$ just demo
+#echo one && echo two && echo three
+exit=0
+```
+
+Ни `echo` не исполнился, код возврата — 0.
+
+**Цена.** Оператор, запустивший `just prod-hard-deploy`, получает МОЛЧАЛИВЫЙ
+успех: образы не пересобираются, воркеры не останавливаются, `up -d` не
+вызывается. На фазе, чья главная неисполненная работа — выкатка очереди ревизий
+`0017`…`0019` (D-26), команда выката, тихо рапортующая успех, есть худшая из
+возможных форм отказа: следующий шаг («ревизии применены, `entrypoint.sh` довёл
+очередь») будет считаться сделанным, не будучи сделанным.
+
+Соседний `prod-deploy` (`:116-125`) не тронут и `git pull` сохраняет, поэтому два
+рецепта одного назначения сегодня расходятся не флагом сборки, а тем, что один из
+них не работает вовсе.
+
+**Замечание об учёте.** Правка НЕ ЗАКОММИЧЕНА — она видна только в рабочем дереве
+(`git diff justfile`). Это не снимает находки: файл заявлен в объёме ревизии, а
+незакоммиченная правка боевого выката либо уезжает в коммит следующим шагом, либо
+не должна лежать в дереве вовсе.
+
+**Исправление.** Либо вернуть строку, либо снять её целиком вместе с
+продолжением — но НЕ оставлять комментарий, оканчивающийся `\`:
+
+```make
+# Hard deploy to prod environment (build --no-cache and deploy)
+# ⚠️ git pull снят намеренно: <причина>. Комментировать строку с продолжением
+# `\` нельзя — just склеивает продолжения, и весь рецепт становится
+# комментарием оболочки.
+prod-hard-deploy:
+    docker compose -f docker-compose.prod.yml build --no-cache && \
+    ...
+```
+
+Страховочная сетка своего размера: тест по образцу
+`tests/test_migrations/test_deploy_applies_migrations_before_serving.py`,
+утверждающий, что ни одна строка рецептов выката в `justfile` не является
+комментарием, оканчивающимся продолжением.
 
 ---
 
 ## Warnings
 
-### WR-01: `_extend_subscription` declares the 05-01 prohibition OBSERVED while the same module, 550 lines away, declares the same branch an EXCEPTION to it — and the suite's own green test proves the exception
+### WR-01: Утверждение регресса 05-28 не может покраснеть никогда
 
-**File:** `app/services/payment_service.py:684-698` (the claim),
-`app/application/billing/subscription_period.py:359-372` and
-`app/services/payment_service.py:1238-1246` (the contradiction),
-`tests/test_pages/test_billing_payment_errors.py:767-810` (the named witness)
-**Severity:** WARNING
+**Файл:** `tests/test_pages/test_billing_payment_errors.py:2487-2493`
+**Классификация:** WARNING
 
-**Issue:** `_extend_subscription`'s docstring, as edited by plan 05-24, ends:
+**Проблема.** Второе утверждение теста
+`test_a_malformed_plan_list_does_not_break_the_notification` ищет ключ
+`subscription_prorating_skipped` в `spy.error.call_args_list`. Но этот ключ
+пишется УРОВНЕМ `warning` (`app/services/payment_service.py:1227` и `:1321`), а не
+`error`. Значит `assert not any(...)` истинно ТОЖДЕСТВЕННО — при любом поведении
+кода, включая полностью сломанное.
 
-> Прохибиция плана `05-01` — «MUST NOT сжигать неистраченный остаток уже оплаченного
-> периода» — тем самым **СОБЛЮДЕНА, а не переопределена: ни один разрешённый переход
-> остатка не сжигает.** … что разрешённый переход остатка не сжигает —
-> `test_an_upgrade_does_not_burn_the_paid_remainder`.
-
-Plan 05-22, in the same run, wrote the opposite into `capped_carryover`:
-
-> Остаток ДЛИННЕЕ месяца сгорает в части, превышающей месяц: человек, предоплативший год
-> … теряет около одиннадцати месяцев оплаченного времени. Это **ИСКЛЮЧЕНИЕ из прохибиции
-> плана `05-01`** … **а не её соблюдение**, и записано оно исключением намеренно.
-
-Both statements describe the same branch: `period_is_live and db_payment.plan !=
-subscription.plan` — an **allowed** transition (the refused branch returned at `:1224`).
-`capped_carryover` is reached from inside it at `:1257`. So "ни один разрешённый переход
-остатка не сжигает" is false, and it is false against the project's *own green test*:
-`test_an_unreadable_paid_plan_price_does_not_carry_the_whole_horizon`
-(`tests/test_pages/test_billing_payment_errors.py:2752-2818`) seeds a 365-day remainder
-and asserts the result is `<= add_one_month(add_one_month(now)) + 2 days`. That is ~305
-days of already-paid time burned, on an allowed transition, asserted as desired
-behaviour.
-
-The named witness cannot see it: `test_an_upgrade_does_not_burn_the_paid_remainder`
-(`:790-810`) seeds 25 days of `basic` with both prices readable — it exercises only the
-`converted_remainder` leg. This is the declared blind spot of the new gate ("Абзац,
-называющий существующий, но НЕ ТОТ тест, гейт пропустит зелёным") firing on the gate's
-first round, on a paragraph written in the same run.
-
-This is the round-7 instance of the class that produced rounds 4, 5 and 6 findings. It is
-reported as a declaration defect, not a behaviour defect: the code is bounded and correct.
-
-**Fix:** make the claim match the branch set, and name both witnesses.
+Хуже: свойство, которое утверждение якобы стережёт, на сегодняшнем дереве НЕ
+ВЫПОЛНЯЕТСЯ в том смысле, в каком его формулирует текст отказа. Прогон настоящего
+`_apply_extension` на форме `null` даёт:
 
 ```
-    Правило: повышение тарифа разрешено; понижение при действующей подписке не
-    предлагается карточкой и не продаётся гардом `POST /billing/subscribe`.
-
-    ⚠️ ПРОХИБИЦИЯ 05-01 СОБЛЮДЕНА С ОДНИМ НАЗВАННЫМ ИСКЛЮЧЕНИЕМ, И ВЕЛИЧИНА ЕГО
-    ЗАПИСАНА ЧИСЛОМ. Переход, у которого обе цены читаются, остаток НЕ СЖИГАЕТ —
-    он переносится по деньгам (`converted_remainder`), закреплено
-    `test_an_upgrade_does_not_burn_the_paid_remainder`. Переход, у которого хотя
-    бы одну цену прочитать нельзя, идёт на `capped_carryover` (форма
-    `cap-one-month`, решение владельца, план 05-22) и переносит НЕ БОЛЕЕ одного
-    календарного месяца остатка: предоплаченный год теряет около одиннадцати
-    месяцев. Это ИСКЛЮЧЕНИЕ из прохибиции, допущенное сознательно, и
-    утверждать здесь её безусловное соблюдение — ровно тот класс объявления,
-    которого код не исполняет, за который фаза получила раунды 4, 5 и 6.
-    Закреплено `test_an_unreadable_paid_plan_price_does_not_carry_the_whole_horizon`
-    и `test_an_upgrade_from_free_does_not_carry_the_whole_horizon`.
+ERROR   calls: ['plan_limits_unreadable', 'plan_limits_unreadable']
+WARNING calls: ['subscription_prorating_skipped']
 ```
 
-### WR-02: the declared-invariant gate excludes the INTENT half of the money path — 63 selected declarations, all 63 without a witness, none of them under the ratchet
+То есть авария окружения пишет ОБА ключа. Правильно нацеленное утверждение
+(`spy.warning`) покраснело бы немедленно.
 
-**File:** `tests/test_application/test_declared_invariants.py:66-69`, `:293-298`
-**Severity:** WARNING
-
-**Issue:** The gate defines its own scoping rule at `:66-68`:
-
-> Модули денежного пути ВНЕ пакета. Выводить их неоткуда — их приходится называть, **и
-> молчание о них было бы дырой в гейте**: денежный путь проходит через них.
-
-and then names exactly one: `EXTRA_CHECKED_MODULES = ("app/services/payment_service.py",)`.
-
-But `plan_switch.py:11-13` states the rule has **two** stages and names them: "`app/pages/billing.py` (стадия НАМЕРЕНИЯ) и `app/services/payment_service.py` (стадия ПРИМЕНЕНИЯ)". Only the second is checked. Running the gate's own helpers against the unchecked modules:
-
-```
-app/pages/billing.py           selected: 34   without witness: 34
-app/pages/common.py            selected: 13   without witness: 13
-app/routes/billing.py          selected: 10   without witness: 10
-app/services/billing_service.py selected:  6   without witness:  6
-```
-
-These are not decorative paragraphs. They include the webhook trust guard's
-`⚠️ СПИСОК АДРЕСОВ ЧИТАЕТСЯ СПРАВА, А НЕ СЛЕВА` and `⚠️ АДРЕС ПИРА ИСТОЧНИКОМ НЕ СЛУЖИТ
-НИ ПРИ КАКОЙ НАСТРОЙКЕ` (`app/routes/billing.py`), the CSRF guard's
-`⚠️ НАЗВАННАЯ ГРАНИЦА ЗАЩИТЫ` (`app/pages/common.py::is_same_origin`), and
-`⚠️ ОБРАБОТЧИК НЕ ПИШЕТ В БД НИ ПРИ КАКИХ УСЛОВИЯХ` (`app/pages/billing.py::billing_page`).
-Tests for several of them exist (`test_billing_webhook_proxy_headers.py`,
-`test_billing_webhook_source.py`) — the paragraphs simply do not name them, which is
-precisely the condition the gate was built to detect.
-
-`test_the_checked_set_covers_every_module_of_the_billing_package` (`:552-562`) only proves
-the *package* is covered; nothing asserts anything about `EXTRA_CHECKED_MODULES`
-completeness, so the hole is invisible to the suite.
-
-**Fix:** extend the set and land the new debt in the ledger in the same commit, raising
-`WITHOUT_WITNESS_CEILING` **once, with the numbers written down**, so that subsequent
-rounds ratchet from a real baseline rather than from a scoped-down one:
+**Исправление.** Решить, что именно закрепляется, и нацелить утверждение туда:
 
 ```python
-# Модули денежного пути ВНЕ пакета. Выводить их неоткуда — их приходится называть,
-# и молчание о них было бы дырой в гейте. Перечень отвечает ДВУМ стадиям правила,
-# названным в `plan_switch.py`: применение (`payment_service`) и НАМЕРЕНИЕ
-# (`pages/billing`), плюс вход уведомления и общий гард источника, через которые
-# денежный путь проходит целиком.
-EXTRA_CHECKED_MODULES = (
-    "app/services/payment_service.py",
-    "app/pages/billing.py",
-    "app/routes/billing.py",
-    "app/services/billing_service.py",
-    "app/pages/common.py",
-)
+    # Оба ключа ДОПУСТИМЫ и означают разное: `plan_limits_unreadable` — авария
+    # окружения, `subscription_prorating_skipped` — ветка отката. Закрепляется
+    # то, что первый ключ ЕСТЬ, а не то, что второго нет.
+    assert not any(
+        call.args and call.args[0] == "plan_limits_unreadable"
+        for call in spy.warning.call_args_list
+    ), "авария окружения записана уровнем warning — в потоке предупреждений она теряется"
 ```
 
-and add the missing counterpart control:
+Если же замысел был именно «второго ключа быть не должно», то краснеть обязан
+КОД, а не тест: ветка отката тогда не имеет права писать
+`subscription_prorating_skipped` при поднятом флаге `unreadable`.
 
-```python
-def test_the_checked_set_names_both_stages_of_the_rule():
-    """Гейт, видящий одну стадию из двух, проверяет половину денежного пути."""
-    checked = set(checked_modules())
-    for stage in ("app/services/payment_service.py", "app/pages/billing.py"):
-        assert stage in checked, f"стадия правила вне проверяемого множества: {stage}"
+---
+
+### WR-02: `plan_limits_unreadable` зависит от ПОРЯДКА записей в `PLAN_LIMITS`
+
+**Файл:** `app/services/payment_service.py:986-1004`
+**Классификация:** WARNING
+
+**Проблема.** Флаг `unreadable` поднимается при встрече нечитаемого элемента, но
+цикл выходит по `break` сразу после совпадения `id`. Значит поломанный элемент,
+стоящий ПОСЛЕ искомого плана, не виден вовсе, а стоящий ДО — поднимает аварийный
+ключ, хотя цена прочитана успешно. Прогон:
+
+```
+'["junk", {"id":"basic","price":"1490.00"}]' -> 1490.00  errors: ['plan_limits_unreadable']
+'[{"id":"basic","price":"1490.00"}, "junk"]' -> 1490.00  errors: []
 ```
 
-### WR-03: no error handling or log around the DB write that follows a successful YooKassa `create` (round 6 `WR-04`, unaddressed)
+Один и тот же испорченный конфиг даёт либо запись уровня `error`, либо тишину — в
+зависимости от порядка ключей, который оператор не контролирует осмысленно. Ключ,
+чей смысл объявлен как «перечень сломан ЦЕЛИКОМ» (`:1014-1020`), при этом
+срабатывает на успешном чтении цены.
 
-**File:** `app/services/payment_service.py:404-427`
-**Severity:** WARNING
-
-**Issue:** Re-verified against the current tree — unchanged. The module argues at length
-(`:348-363`, T-05-49) that the SDK call must precede the DB write and handles every
-failure of the SDK call. It handles none of the DB write:
+**Исправление.** Развести две величины — «перечень пригоден» и «цена этого плана
+прочитана»: проверять пригодность перечня ОТДЕЛЬНЫМ проходом до поиска, либо не
+выходить по `break`, а дочитывать перечень до конца и брать первое совпадение.
+Второе дешевле:
 
 ```python
-    db_payment = Payment(...)
-    db.add(db_payment)
-    await db.commit()
+    for plan in get_settings().parsed_plan_limits:
+        if not isinstance(plan, dict):
+            unreadable = True
+            continue
+        if plan.get("id") != plan_id or result is not None:
+            continue
+        ...  # без break: перечень дочитывается, флаг перестаёт зависеть от порядка
 ```
 
-If this `commit` raises (unique violation on `yookassa_payment_id`, connection drop, the
-`UndefinedColumn` case D-26 names for the pre-`0019` prod schema), a real payment exists
-at YooKassa with **no row in our database and no log entry naming its id**. Every later
-notification takes `webhook_payment_not_found` (`:536`) and returns `{"ok": false}` with
-HTTP 200, so YooKassa stops retrying. The only place `payment.id` reaches a log is
-`payment_created` (`:419-427`), emitted *after* the commit.
+---
 
-Note this is the class the phase already fixed once, in
-`webhook_package_without_messages_count`.
+### WR-03: Гейт трекинга считает ЛЮБОЙ чекбокс планом, а его текст отказа зовёт править НЕ ТО
 
-**Fix:**
+**Файл:** `tests/test_planning/test_state_progress_matches_roadmap.py:61-86`, `:131-137`
+**Классификация:** WARNING
+
+**Проблема.** `roadmap_plan_counts` считает планом всякую строку, чей `lstrip()`
+начинается с `- [x] ` или `- [ ] `, внутри раздела `### Phase `. Понятия «план» у
+разбора нет вовсе: вложенный чек-лист, критерий UAT, пункт «Blockers» — всё это
+станет планом, как только окажется под заголовком фазы.
+
+Сегодня это не срабатывает лишь по случайности расположения: перечень фаз
+`- [x] **Phase 1: …**` (`.planning/ROADMAP.md:24-29`) лежит ВЫШЕ первого
+`### Phase `, и разбор его пропускает по ветке `section is None`. Перенос этого
+перечня ниже — правка оформления, а не смысла — молча прибавил бы шесть
+«планов».
+
+Опаснее текст отказа (`:131-137`): он утверждает, что править надо ПОЛЕ в
+`STATE.md`. При ложном срабатывании эта инструкция заставит автора вписать в
+машинно читаемое поле НЕВЕРНОЕ число — то есть гейт, заведённый против
+расхождения, сам его и внесёт.
+
+Отдельно: `ROADMAP_PATH.read_text(...)` (`:181`) не защищён ничем — отсутствие
+`.planning/` даёт `FileNotFoundError` вместо объясняющего сообщения, которых
+модуль в других местах пишет по три строки.
+
+**Исправление.** Сузить форму до формы плана и оставить отказ объясняющим:
 
 ```python
-    db.add(db_payment)
-    try:
-        await db.commit()
-    except Exception as exc:
-        # СЛЕД ОБЯЗАТЕЛЕН, И ИМЕННО ЗДЕСЬ. Платёж у ЮKassa уже СОЗДАН; без этой
-        # записи он остаётся сиротой, которого не с чем сверить: его
-        # идентификатор не попадает ни в один журнал, а `webhook_payment_not_found`
-        # отвечает 200 и повторов не вызывает.
-        await db.rollback()
-        logger.error(
-            "payment_row_not_written",
-            user_id=user_id,
-            yookassa_id=payment.id,
-            kind=kind,
-            plan=plan,
-            amount=price,
-            error_type=type(exc).__name__,
-        )
-        raise PaymentCreationError("Платёж не записан в базу") from exc
+PLAN_LINE = re.compile(r"^- \[([ xX])\] +\d\d-\d\d-PLAN\.md\b")
 ```
 
-### WR-04: the subscription branch of `handle_webhook` has no guard on `plan`, and the insert branch invents `"free"` (round 6 `WR-05`, unaddressed)
-
-**File:** `app/services/payment_service.py:586-593` (the package guard), `:866` (the
-invented default), `:1046-1049` (the extend path)
-**Severity:** WARNING
-
-**Issue:** Re-verified — unchanged. The package branch refuses to claim a payment whose
-`messages_count` is empty, reasoning (`:579-585`) that claiming it would mark a payment
-delivered while delivering nothing. The subscription branch has no counterpart. A row with
-`kind = 'subscription'` and `plan IS NULL` is claimed `succeeded` and then:
-
-- no subscription row → `_extend_subscription:862-870` inserts
-  `Subscription(plan=db_payment.plan or "free", expires_at=next_expiry(None, now))` — the
-  user is put on **free** with a month of paid expiry. Money taken, nothing sold delivered;
-- a subscription row exists → `_apply_extension:1046-1049` extends the period and returns
-  with the plan untouched.
-
-This round adds a second consequence the previous review could not state: because
-`_plan_price("free")` is `None` **by construction** (`"0.00"` is not `> 0`), the row this
-default creates is exactly the permanently-unreadable-price input that forces every later
-upgrade down the `capped_carryover` leg — the branch whose *declared* cost is burning
-everything past one month of remainder (WR-01). The phase's own test
-`test_an_upgrade_from_free_does_not_carry_the_whole_horizon` names the mechanism
-explicitly: "ЛЮБАЯ строка подписки на `free` с живым сроком берёт ветку отката на первом
-же платном повышении, без единой правки конфига и без гонки." The only production maker
-of such a row is the `or "free"` default flagged here.
-
-Repeated null-plan payments compound it: `_apply_extension:1046-1049` adds a month per
-payment while leaving `plan = "free"`, so the free horizon grows without bound and is then
-truncated to one month on the first real upgrade.
-
-**Fix:** mirror the existing guard, using the same fail-without-claiming shape, and drop
-the invented default once it is in place:
+и, для читаемого отказа при отсутствующем источнике:
 
 ```python
-    if db_payment.kind == KIND_SUBSCRIPTION and not db_payment.plan:
-        # СИММЕТРИЯ С ПРОВЕРКОЙ ПАКЕТА ВЫШЕ И ПО ТОЙ ЖЕ ПРИЧИНЕ. Подписочный
-        # платёж без плана выдать нечем: ветка первой вставки положила бы человека
-        # на `free` с оплаченным месяцем — то есть пометила бы платёж проведённым,
-        # ничего не выдав, — и та же строка становится входом в ветку
-        # `capped_carryover` при следующем повышении. Заявка не берётся: платёж
-        # остаётся незакрытым и разбирается человеком.
-        logger.error(
-            "webhook_subscription_without_plan",
-            yookassa_id=yookassa_id,
-            user_id=db_payment.user_id,
-        )
-        return False
-```
-
-### WR-05: `GET /api/billing/transactions` accepts unvalidated `limit` / `offset` (round 6 `WR-06`, unaddressed)
-
-**File:** `app/routes/billing.py:30-38`, `app/services/billing_service.py:172-194`
-**Severity:** WARNING
-
-**Issue:** Re-verified — unchanged.
-
-```python
-async def get_transactions(
-    limit: int = 50,
-    offset: int = 0,
-    ...
-):
-    txs = await get_transaction_history(db, user_id, limit=limit, offset=offset)
-```
-
-Both bounds go straight into `.offset()` / `.limit()` (`billing_service.py:179-180`).
-
-- `?limit=-1` → PostgreSQL `LIMIT must not be negative` → unhandled 500 for any
-  authenticated caller. SQLite treats `-1` as unlimited, so the suite cannot see this —
-  the same dialect-divergence trap this phase documents in four other places.
-- `?offset=-1` → PostgreSQL `OFFSET must not be negative` → 500.
-- `?limit=100000000` → unbounded result set materialised into a list of dicts.
-
-Every other list in this phase carries an explicit cap and a stated reason
-(`PAYMENT_LIST_CAP`, `TRANSACTION_LIST_LIMIT`, `WORKER_LIST_CAP`); this is the one reader
-that does not.
-
-**Fix:**
-
-```python
-from fastapi import Query
-from app.constants import PAYMENT_LIST_CAP
-
-@router.get("/transactions")
-async def get_transactions(
-    # Границы объявлены В СИГНАТУРЕ, а не проверены телом: FastAPI отвергает
-    # выход за них 422 до входа в обработчик, и второму месту проверки завестись
-    # негде. Потолок — тот же, что у остальных перечней раздела.
-    limit: int = Query(50, ge=1, le=PAYMENT_LIST_CAP),
-    offset: int = Query(0, ge=0),
-    ...
-):
-```
-
-### WR-06: `test_model_matches_head.py` compares column *names* only, and only for `payments` (round 6 `WR-07`, unaddressed)
-
-**File:** `tests/test_migrations/test_model_matches_head.py:89-102`, `:188-208`
-**Severity:** WARNING
-
-**Issue:** Re-verified — unchanged. `missing_columns` is `sorted(set(mapped) -
-set(actual))` over `PRAGMA table_info` **names**. The gate therefore accepts any revision
-whose column exists but whose shape disagrees with the model.
-
-The concrete hazard is live in this phase: `0019` adds `switch_authorized` as
-`nullable=True`, and both `app/models/payment.py:57` and the revision docstring argue at
-length that a `server_default` or `NOT NULL` here would be wrong (D-28: `NULL` means "the
-rule was not asked", which is not "no"). A future revision adding it — or re-adding it
-after the documented lossy `downgrade` — as `NOT NULL` keeps this test green while
-`create_payment` starts failing on **every package purchase**, which passes
-`switch_authorized=None` explicitly (`app/pages/billing.py:456`).
-
-Second, narrower gap found this round: the fixture only creates and compares `payments`
-(`PAYMENTS_AT_START`, `:72-86`). The `subscriptions` table gained a model-level
-`__table_args__` index in this phase (`app/models/subscription.py:20-28`) and is not
-compared to head here at all.
-
-The file's own "ЧЕГО ЭТОТ ФАЙЛ НЕ ДОКАЗЫВАЕТ" section names the prod-divergence limit but
-neither of these, so a reader reasonably concludes the model/head comparison is total.
-
-**Fix:** extend the comparison to the attribute the phase actually reasons about, and name
-the remaining boundary:
-
-```python
-def _table_shape(db_path: Path, table: str) -> dict[str, tuple[str, bool]]:
-    """Имя колонки → (тип, признак NOT NULL). Имени МАЛО, и вот почему.
-
-    Колонка `switch_authorized` обязана быть NULLABLE (D-28: NULL означает
-    «правило не спрашивали», и это не то же самое, что «нет»). Ревизия,
-    заведшая её NOT NULL, сверку по одним ИМЕНАМ прошла бы, а `create_payment`
-    начал бы падать на КАЖДОЙ пакетной покупке, которая подаёт `None` явно.
-    """
-    conn = sqlite3.connect(db_path)
-    try:
-        return {
-            row[1]: (row[2].upper(), bool(row[3]))
-            for row in conn.execute(f"PRAGMA table_info({table})")
-        }
-    finally:
-        conn.close()
-
-
-def test_every_mapped_payment_column_keeps_its_nullability_at_head(db_at_head):
-    shape = _table_shape(db_at_head, "payments")
-    divergent = sorted(
-        column.name
-        for column in Payment.__table__.columns
-        if column.name in shape and shape[column.name][1] == column.nullable
-    )
-    assert not divergent, (
-        f"нулевость отображённой колонки расходится с головной ревизией: {divergent}"
+    assert ROADMAP_PATH.exists(), (
+        f"источник счёта планов не найден: {ROADMAP_PATH} — гейт не сверяет, "
+        "а падает, и по трассировке это неотличимо от расхождения"
     )
 ```
 
-Add the `subscriptions` counterpart with the same fixture, or state in the file header
-that only `payments` is compared and why.
+Синтетические тексты `_synthetic_roadmap` уже пишут строки в форме
+`СИНТ-{index}-PLAN.md`, поэтому потребуют лишь приведения к форме `NN-NN`.
+
+---
+
+### WR-04: Раздел «Тарифы» отвечает 500 на том же испорченном `PLAN_LIMITS`, который вебхук уже переживает
+
+**Файл:** `app/pages/billing.py:174`, `:315-317`, `:433-451`
+**Классификация:** WARNING
+
+**Проблема.** План 05-28 сделал тотальным ОДНО место — `_plan_price`. Тот же
+вход ломает раздел целиком:
+
+* `billing_page:174` — `plans = settings.parsed_plan_limits` поднимает
+  `JSONDecodeError` на битом JSON;
+* `billing_page:229-234` — `plan.get("id")` поднимает `AttributeError` на списке
+  строк;
+* `subscribe_to_plan:359-360` — `selected["price"]` поднимает `KeyError` у записи
+  без цены;
+* `purchase_package:450-451` — `package["name"]` / `package["count"]` поднимают
+  `KeyError` у записи без полей.
+
+Докстринг `_plan_price` (`:964-972`) прямо называет причину, по которой защита
+живёт «единственным местом»: «денежный путь уже считает это место тотальным».
+Довод верен для уведомления и неверен для раздела: правка `PLAN_LIMITS`, снявшая
+500 с вебхука, оставляет 500 на `/billing` — то есть человек не может ни увидеть
+тарифы, ни узнать, что произошло.
+
+**Исправление.** Ветка на выбор владельца, но не молчание: либо один защищённый
+читатель конфига тарифов на проект (`parsed_plan_limits` отдаёт пустой перечень и
+пишет `plan_limits_unreadable`), либо явное решение «раздел падает намеренно»,
+записанное там, где сегодня записан противоположный довод. Сегодня в двух местах
+одного конфига действуют две разные политики, и ни одна из них о другой не знает.
+
+---
+
+### WR-05: План, выпавший из конфига, показывается пользователю как БЕЗЛИМИТНЫЙ
+
+**Файл:** `app/pages/billing.py:179-188`
+**Классификация:** WARNING
+
+**Проблема.**
+
+```python
+    current_plan = next(
+        (plan for plan in plans if plan.get("id") == current_plan_id), {}
+    )
+    usage = await plan_axes(db, user=user, limits=current_plan, nav_counts=nav_counts)
+```
+
+Умолчание — ПУСТОЙ словарь. `plan_axes` читает лимиты как
+`limits.get(key, UNLIMITED)` (`app/application/billing/plan_usage.py:202`), а
+`UNLIMITED is None`, и шаблон рисует `None` как `∞` и подпись «без ограничений»
+(`app/templates/billing/includes/usage_meters.html:30-34`). То есть пользователь,
+чей план исчез из `PLAN_LIMITS` (или чья подписка несёт незнакомый план — путь,
+который проект считает достижимым, см. `test_a_price_that_cannot_be_read_falls_back_to_the_whole_month`
+с планом `platinum`), видит НА ЧЕТЫРЁХ ОСЯХ обещание отсутствия лимитов.
+
+Это прямо противоположно объявленному принципу соседнего модуля:
+«ПЛАН, КОТОРОГО ЗДЕСЬ НЕТ, РАНГА НЕ ПОЛУЧАЕТ, И ЭТО ОТКАЗ, А НЕ ДОГАДКА»
+(`app/constants.py:61-65`). Здесь отсутствующий план получает САМУЮ ЩЕДРУЮ из
+возможных догадок.
+
+**Исправление.** Отсутствие записи плана обязано быть отличимо от безлимита:
+
+```python
+    current_plan = next(
+        (plan for plan in plans if plan.get("id") == current_plan_id), None
+    )
+    # Записи плана нет — осей не рисуем вовсе и говорим об этом словами:
+    # `∞` на каждой оси обещал бы отсутствие лимитов там, где лимиты просто
+    # неизвестны (тот же отказ, что у PLAN_ORDER для плана без ранга).
+    usage = (
+        await plan_axes(db, user=user, limits=current_plan, nav_counts=nav_counts)
+        if current_plan is not None
+        else []
+    )
+```
+
+плюс подпись в разметке о том, что состав тарифа неизвестен.
+
+---
+
+### WR-06: Сокет Docker примонтирован в контейнер, терминирующий интернет-трафик
+
+**Файл:** `docker-compose.prod.yml:91-92` (и `:120-121`)
+**Классификация:** WARNING (унаследованное, не правка этой волны)
+
+**Проблема.** Сервис `web` — тот самый, который принимает
+`POST /api/billing/webhook` и весь пользовательский трафик, — монтирует
+`/var/run/docker.sock` на запись. Доступ к сокету Docker эквивалентен root на
+ХОСТЕ: любое исполнение кода внутри `web` (в том числе через десериализацию,
+шаблон или зависимость) перестаёт быть ограниченным контейнером.
+
+Находка не принадлежит волне раунда 7 и, судя по составу файла, принята вместе с
+`wa_container_manager`. Она названа здесь потому, что файл заявлен в объёме, а
+митигации в нём нет ни одной строкой.
+
+**Исправление (работа своего размера, не правка на месте).** Вынести управление
+контейнерами воркеров в отдельный сервис (сокет остаётся только у него, `web`
+ходит к нему по сети), либо поставить перед сокетом прокси с белым списком
+операций. Минимум на сегодня — записать принятый риск там же, где записаны
+остальные («⚠️ НАЗВАННАЯ ГРАНИЦА ЗАЩИТЫ» в `is_same_origin` — готовый образец
+формы).
 
 ---
 
 ## Info
 
-### IN-01: an expired or config-dropped plan still renders as the user's live entitlement
+### IN-01: `STATUS_PENDING` объявлен, не используется, и его значение выписано литералом
 
-**File:** `app/pages/billing.py:174-188`, `:207-216`
+**Файл:** `app/services/payment_service.py:36` и `:407`
 
-**Issue:** `current_plan_id` comes from `quota["plan"]`, which `get_shell_context` fills
-from the subscription row **regardless of whether it expired**
-(`app/pages/common.py:507-514`, `:549`). So a user whose Pro period lapsed still sees Pro
-limits on all four meters and the "ВАШ ПЛАН" tag on the Pro card, next to the "срок истёк"
-badge. Separately, `current_plan = next((...), {})` (`:179-181`) falls back to an **empty
-dict**, so a plan id that has left `PLAN_LIMITS` renders all four axes as `limit=None` →
-"без ограничений". `plan_usage`'s docstring authorises a missing *key* to read as
-unlimited ("опечатка обязана стоить одной ненарисованной шкалы"), which is a much weaker
-claim than "every axis unlimited". D-08 means nothing is enforced, so this is display
-only — but the display is the entire deliverable of this phase.
+Константа `STATUS_PENDING = "pending"` не читается НИГДЕ на проекте, а
+единственное место записи этого статуса (`create_payment`, `:407`) выписывает
+литерал `status="pending"`. Это ровно тот приём, который соседний блок того же
+модуля объявляет запрещённым: «защита… написана через это множество, а не через
+перечисление в каждой ветке: копия в ветке рано или поздно разойдётся с
+оригиналом» (`:40-44`).
 
-**Fix:** decide the semantics explicitly. Either pass `FREE_PLAN_ID`'s record when the
-period is expired or the id is unknown, or add a caption naming the state
-("тариф снят с продажи — лимиты не показываются") rather than showing unlimited.
-
-### IN-02: `decided_by` in `subscription_plan_downgraded` is constant by construction, and unlike its neighbour is not marked as such
-
-**File:** `app/services/payment_service.py:1320-1333`
-
-**Issue:** The branch is only reachable when `refused` is `False`. In the `decided_by ==
-"rule"` case, `refused` was computed by the same `switch_is_refused` with the same
-arguments, so the guard at `:1300-1302` cannot be `True`. The field is therefore always
-`"recorded_answer"`. The sibling field `period_was_live` got an explicit "ПОЛЕ ПОСТОЯННО
-ПО ПОСТРОЕНИЮ И ОСТАВЛЕНО НАМЕРЕННО" comment (`:1327-1332`); `decided_by` did not, so the
-next reader will treat it as discriminating.
-
-**Fix:** one clause next to `decided_by=decided_by` saying it is constant here and why it
-is kept (uniform shape with `subscription_plan_preserved`), or drop it.
-
-### IN-03: dead code and a redundant alias in the new gate
-
-**File:** `tests/test_application/test_declared_invariants.py:383-397` (`render_ledger`),
-`:124-127` (`Declaration.opening`)
-
-**Issue:** `render_ledger` is called by no test and by nothing else in the tree — it was
-the one-shot printer used to seed the ledger. `Declaration.opening` returns
-`self.fingerprint` verbatim; two names for one value in a module whose whole subject is
-"one declaration, one place".
-
-**Fix:** delete `render_ledger` (the seeding procedure belongs in the plan, not the
-suite), or keep it and name it in the module docstring as the ledger's printer. Collapse
-`opening` into `fingerprint`.
-
-### IN-04: the ledger parser fails closed on a separator collision, taking the gate down instead of reporting
-
-**File:** `tests/test_application/test_declared_invariants.py:342-357`, ledger format
-`LEDGER_SEPARATOR = "::"` (`:80`)
-
-**Issue:** `ledger_entries()` splits on `"::"` and raises `AssertionError` when the result
-is not exactly four parts. Fingerprints are the first 60 characters of a real paragraph
-and reasons are free text; either may one day contain `::` (a doubled colon, a `C++`
-reference, a path fragment). The failure then surfaces as a hard error in **five** tests
-at once, none of which name the offending line usefully.
-
-**Fix:** `line.split(LEDGER_SEPARATOR, 3)` with the reason taking the remainder, or use a
-separator that cannot appear in prose (`\t`). Either way, name the constraint in the
-ledger header.
-
-### IN-05: `first_payment_at` mislabels a renewal as "первый платёж" once the journal is truncated
-
-**File:** `app/templates/billing/balance.html:217-222`,
-`app/templates/billing/includes/payment_row.html:28-31`, `:43-45`
-
-**Issue:** The macro's contract states "в журнале, отсортированном по дате убыванием,
-самая ранняя строка плана и есть его первый платёж". That holds only *within the window*.
-`get_payment_history` caps at `PAYMENT_LIST_CAP = 200` and the page already knows it may
-be truncated (`payments_truncated`). Past 200 payments, the oldest visible row for a plan
-is labelled "первый платёж" although the real first payment is off-screen.
-
-**Fix:** suppress the label when `payments_truncated` is true, or state the boundary in
-the macro's docstring next to the existing contract sentence.
-
-### IN-06: `/var/run/docker.sock` is mounted read-write into `web` (pre-dates this phase)
-
-**File:** `docker-compose.prod.yml:89-90`, `:120-121`
-
-**Issue:** The internet-facing application container gets the host Docker socket, which is
-root-equivalent on the host. Any RCE in the FastAPI process escalates to full host
-compromise. `celery-worker-default` plausibly needs it for `wa_container_manager`; `web`
-mounting it as well widens the blast radius to the request-handling process. This is
-outside the phase's change set — the only phase-05 edit to this file was pinning
-`YOOKASSA_WEBHOOK_CLIENT_IP_HEADER` (commit 48d79c8) — and is recorded here for the
-security backlog rather than as phase work.
-
-**Fix:** move container management behind the worker only, or front the socket with a
-proxy restricting it to the container lifecycle verbs actually used.
+**Исправление:** `status=STATUS_PENDING` на строке 407.
 
 ---
 
-_Reviewed: 2026-08-18T10:05:14Z_
+### IN-02: `AttributeError` в перечне перехвата `_plan_price` недостижим, а объяснение устарело
+
+**Файл:** `app/services/payment_service.py:1005-1011`
+
+Комментарий утверждает: «`AttributeError` добавлен ради формы „элемент перечня не
+словарь“». Эта форма с плана 05-28 обрабатывается проверкой `isinstance` внутри
+цикла (`:986`), до всякого `plan.get`. Единственный оставшийся источник —
+`for plan in <не-итерируемое>`, а он даёт `TypeError`. Итерирование словаря, строки
+или списка `AttributeError` не даёт ни при каком содержимом.
+
+**Исправление:** либо снять `AttributeError` из перечня, либо переписать
+объяснение под настоящую причину («оставлен страховкой на случай, если
+`parsed_plan_limits` перестанет быть свойством»). Сегодня комментарий описывает
+защиту, которой нет.
+
+---
+
+### IN-03: Одна пустая строка между определениями верхнего уровня
+
+**Файл:** `app/services/payment_service.py:1024`
+
+Между `return` в `_plan_price` и `def _apply_extension` стоит одна пустая строка;
+все остальные определения модуля разделены двумя (PEP 8, E302). Линтера в проекте
+нет, поэтому это не отказ прогона — но модуль в остальном оформлен безупречно, и
+одиночное расхождение читается как след правки, а не как решение.
+
+---
+
+### IN-04: `tracking-check` не попал в перечень команд `CLAUDE.md`
+
+**Файл:** `justfile:21-23` (потребитель — `CLAUDE.md`, §Commands)
+
+План 05-31 завёл рецепт `tracking-check`, но раздел «Local development» в
+`CLAUDE.md` перечисляет `run`/`test`/`test-cov`/`sync`/`add`/… без него. Рецепт,
+о котором не сказано там, где читатель ищет команды, запускать будет только его
+автор. (`CLAUDE.md` в объёме этой ревизии не числится — находка записана на
+`justfile` как на источник расхождения.)
+
+---
+
+## Проверенное и НЕ ставшее находкой
+
+Записано, чтобы следующий раунд не перепроверял то же самое:
+
+* **Реестр принятого долга НЕ РОС.** `declared_invariants_without_witness.txt` — 37
+  записей при потолке `WITHOUT_WITNESS_CEILING = 37`
+  (`tests/test_application/test_declared_invariants.py:78`); последняя правка файла —
+  `04160ce` (план 05-25), волной раунда 7 он не тронут. Прохибиция фазы соблюдена.
+* **Ключ `plan_limits_unreadable` встречается в модуле РОВНО ОДИН РАЗ**
+  (`app/services/payment_service.py:1021`), в докстринге его литерала нет —
+  критерий приёмки плана 05-28 выполнен.
+* **Гейт трекинга согласен с деревом:** выведено `(81, 81)`, записано `(81, 81)`;
+  негативные контроли (`…round_seven_regression`, `…unchecked_plan_raises_the_total`)
+  настоящие — они краснеют на подложенных парах, а не на константах.
+* **Порядок старта** (`entrypoint.sh`: `set -e` → `alembic upgrade head` → `exec`)
+  и его закрепление в `tests/test_migrations/test_deploy_applies_migrations_before_serving.py`
+  проверены — свойство держится, и тест утверждает именно порядок, а не наличие.
+* **500 при отказе брокера в `history_retry`** (`app/pages/history.py:1003-1013`) —
+  не находка: исход объявлен решением и закреплён
+  `tests/test_pages/test_history_retry.py:947-967`.
+* **Экранирование разметки раздела** — шаблоны билинга не используют ни `|safe`,
+  ни отключение автоэкранирования; `yookassa_payment_id` в разметку не уезжает.
+
+---
+
+_Reviewed: 2026-08-19T12:27:43Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+_Round: 8_
