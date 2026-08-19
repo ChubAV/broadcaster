@@ -3192,3 +3192,258 @@ async def test_the_refused_branch_names_its_own_stage_in_the_journal(
         "принадлежит ветке конверсии, и совпадение сделало бы два разных исхода "
         "неразличимыми в журнале"
     )
+
+
+# =============================================================================
+# ГЭП РАУНДА 9, ЭКЗЕМПЛЯР (б) — ЦЕНА, КУПЛЕННЫЙ КОТОРОЙ СРОК НЕ ВЫРАЖАЕТСЯ
+# КАЛЕНДАРЁМ
+#
+# ПРЕДМЕТ РАЗДЕЛА. `prorated_days` не имеет верхнего потолка, и это ОБЪЯВЛЕННОЕ
+# решение D-29: сумма больше цены покупает больше месяца, а обрезание было бы
+# «взяли деньги и не дали ничего». Решение не отменяется и не сужается ни одним
+# тестом этого раздела. Отменяется другое: доля месяца, у которой нет момента в
+# календаре. `datetime` кончается 9999 годом, а цена `0.01` при уплаченных
+# 1490 ₽ покупает около 4 619 000 дней — момента с такой датой не существует,
+# `base + timedelta(...)` поднимает `OverflowError`, и он доходит до
+# `app/routes/billing.py:200-202`, где становится HTTP 500 на уведомлении при
+# УЖЕ СПИСАННЫХ деньгах (T-05-104). Закреплено
+# `test_a_price_beyond_the_calendar_does_not_five_hundred_the_notification`.
+#
+# ГРАНИЦА НАЗВАНА ЧИСЛОМ И ПРОХОДИТ ПО ВЫРАЗИМОСТИ, А НЕ ПО ПРАВДОПОДОБИЮ
+# ВЕЛИЧИНЫ. Цена `1.00` даёт 46 190 дней (2153 год), цена `0.05` — 923 800 дней
+# (4555 год); ОБЕ выражаются календарём, обе остаются пропорциональными, и ни
+# одна не уводит на откат. Делового потолка здесь нет и этой правкой не
+# заводится — иначе она противоречила бы D-29 в том самом месте, где D-29
+# объявлен. Закреплено
+# `test_a_span_that_the_calendar_can_express_is_not_capped`.
+#
+# НЕПРИГОДНАЯ ЦЕНА ЛЕЧИТСЯ ТЕМ ЖЕ ОТКАТОМ, ЧТО И НЕЧИТАЕМАЯ: полный календарный
+# месяц плюс `subscription_prorating_skipped` уровня `warning`. Исход назван
+# СВОИМ значением поля `unreadable` (`IN-04`): «цену прочитать нельзя» и «срока,
+# купленного этой ценой, не существует» — два разных исхода, и разбирающий
+# обращение обязан их различать. Закреплено
+# `test_a_price_beyond_the_calendar_does_not_break_the_conversion_branch`.
+# =============================================================================
+
+# Значение поля `unreadable`, называющее исход «момента с такой датой нет».
+# Стоит рядом с `"price"`, `"amount"` и `"paid_plan_price"` — теми же словами,
+# что и они, потому что читает их один и тот же человек.
+UNREADABLE_SPAN = "span"
+UNREADABLE_AMOUNT = "amount"
+
+# Цена `pro` в перечне тарифов. Ни одна из трёх не является ошибкой формата:
+# это правильно оформленные положительные значения, какие оператор ставит
+# промо-тарифу.
+PRICE_BEYOND_THE_CALENDAR = "0.01"  # ~4 619 000 дней — момента нет
+PRICE_OF_MILLENNIA = "0.05"  # ~923 800 дней — 4555 год, момент ЕСТЬ
+PRICE_OF_A_LONG_SPAN = "1.00"  # ~46 190 дней — 2153 год, момент ЕСТЬ
+
+
+def _plan_limits_with_pro_priced(price: str) -> str:
+    """Перечень тарифов, где у `pro` названная цена, а у `basic` — прейскурантная.
+
+    Цена приезжает аргументом, а не правкой модульной переменной: перечень
+    тарифов есть глобальное для денежного пути состояние, и утечка его на
+    соседний тест сменила бы цены там, где предмет проверки другой (T-05-143).
+    """
+    return json.dumps(
+        [{"id": "basic", "price": "1490.00"}, {"id": "pro", "price": price}]
+    )
+
+
+async def _post_succeeded_webhook(
+    client: AsyncClient, payment_id: str, plan_limits: str
+):
+    """Настоящий маршрут `POST /api/billing/webhook` при названном перечне цен.
+
+    Предмет утверждений этого раздела — HTTP-код, а не возврат функции.
+    Исключение денежного пути доходит до `app/routes/billing.py:200-202`, где
+    `except Exception` превращает его в `HTTPException(500)`; именно 500
+    запускает цикл повторов ЮKassa и оставляет платёж `pending` навсегда при уже
+    списанных деньгах (T-05-104). Прямой вызов `handle_webhook` через это место
+    не проходит вовсе, поэтому стеречь 500 может только маршрут. Закреплено
+    `test_a_price_beyond_the_calendar_does_not_five_hundred_the_notification`.
+    """
+    with patch(
+        "app.services.payment_service.add_messages", new_callable=AsyncMock
+    ), patch(
+        "app.services.payment_service.get_settings",
+        return_value=_app_settings(plan_limits),
+    ):
+        return await client.post(
+            "/api/billing/webhook",
+            json={"event": "payment.succeeded", "object": {"id": payment_id}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_price_beyond_the_calendar_does_not_five_hundred_the_notification(
+    authed_client: AsyncClient, db_session: AsyncSession, test_settings: Settings
+):
+    """Цена, покупающая невыразимый срок, НЕ даёт 500 на маршруте уведомления.
+
+    Посев — ветка ОТКАЗА: живая `pro` плюс отвергнутый ПО ПРАВИЛУ `basic`
+    (`switch_authorized=None`), та же форма, что у
+    `test_the_refused_branch_names_its_own_stage_in_the_journal`.
+
+    Гард источника снимается явно, аварийным выключателем: умолчание конфига
+    равно `True`, и запрос без заголовка адреса получил бы 403, то есть случай
+    покраснел бы по причине, к предмету не относящейся.
+    """
+    confirmed_at = datetime.now(timezone.utc)
+    current = await _seed_live_subscription(db_session, "pro", days=25)
+    await _seed_subscription_payment(
+        db_session, "basic", "yoo_basic", switch_authorized=None, amount="1490.00"
+    )
+
+    test_settings.yookassa_webhook_verify_ip = False
+
+    with patch("app.services.payment_service.logger") as spy:
+        response = await _post_succeeded_webhook(
+            authed_client,
+            "yoo_basic",
+            _plan_limits_with_pro_priced(PRICE_BEYOND_THE_CALENDAR),
+        )
+
+    assert response.status_code == 200, (
+        f"маршрут ответил {response.status_code}. 500 — `OverflowError: date "
+        "value out of range` на денежном пути: деньги списаны, ЮKassa будет "
+        "повторять уведомление при том же прейскуранте бесконечно. 403 — гард "
+        "отверг источник: краснота ЛОЖНАЯ, случай до предмета не дошёл"
+    )
+
+    payment = (
+        await db_session.execute(
+            select(Payment).where(Payment.yookassa_payment_id == "yoo_basic")
+        )
+    ).scalar_one()
+    assert payment.status == "succeeded", (
+        f"платёж остался в статусе {payment.status!r} — деньги списаны, дней нет"
+    )
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro", "отвергнутый младший тариф всё-таки применён"
+    moved = _aware(rows[0].expires_at)
+    assert moved > current, "срок не сдвинулся — деньги не превратились в дни"
+    assert moved <= add_one_month(add_one_month(confirmed_at)), (
+        f"записан срок {moved.date()} — откат к полному календарному месяцу не "
+        "сработал, и в базу ушёл момент, которого никто не покупал"
+    )
+
+    skips = _prorating_skips(spy)
+    assert len(skips) == 1, "непригодная цена не оставила ровно одного следа"
+    fields = skips[0].kwargs
+    assert fields.get("unreadable") == UNREADABLE_SPAN, (
+        f"журнал назвал исход {fields.get('unreadable')!r}: цена ПРОЧИТАНА, не "
+        "существует купленного ею СРОКА, и без своего значения этот исход "
+        "неотличим от нечитаемой цены и от нечитаемой суммы"
+    )
+    assert fields.get("stage") == STAGE_PRORATE_REFUSED
+
+
+@pytest.mark.asyncio
+async def test_a_price_beyond_the_calendar_does_not_break_the_conversion_branch(
+    authed_client: AsyncClient, db_session: AsyncSession, test_settings: Settings
+):
+    """ВТОРАЯ ветка того же дефекта: конверсия остатка зовёт тот же `prorated_days`.
+
+    Без этого случая объём защиты снова равнялся бы объёму того, что успел
+    попробовать предыдущий раунд, — ровно тот НЕДООБЪЯВЛЕННЫЙ КОНТРАКТ, который
+    раунд 8 назвал по имени, а D-35 объявил унаследованным суждением.
+
+    Посев — РАЗРЕШЁННОЕ повышение при живом остатке: `basic` действует, оплачен
+    `pro`, ответ гарда записан. Ветка отказа сюда не заходит вовсе.
+    """
+    confirmed_at = datetime.now(timezone.utc)
+    await _seed_live_subscription(db_session, "basic", days=25)
+    await _seed_subscription_payment(
+        db_session, "pro", "yoo_pro", switch_authorized=True, amount="4900.00"
+    )
+
+    test_settings.yookassa_webhook_verify_ip = False
+
+    with patch("app.services.payment_service.logger") as spy:
+        response = await _post_succeeded_webhook(
+            authed_client,
+            "yoo_pro",
+            _plan_limits_with_pro_priced(PRICE_BEYOND_THE_CALENDAR),
+        )
+
+    assert response.status_code == 200, (
+        f"маршрут ответил {response.status_code}. 500 — `OverflowError` из "
+        "`converted_remainder`: та же арифметика, другая ветка, тот же вечный "
+        "`pending` при списанных деньгах"
+    )
+
+    rows = await _subscription_rows(db_session)
+    assert len(rows) == 1
+    assert rows[0].plan == "pro", "оплаченный старший тариф не применён"
+    moved = _aware(rows[0].expires_at)
+    assert moved <= add_one_month(add_one_month(confirmed_at)), (
+        f"записан срок {moved.date()} — зажим переноса не включился, и в базу "
+        "ушёл момент, которого никто не покупал"
+    )
+
+    skips = _prorating_skips(spy)
+    assert len(skips) == 1, "ветка конверсии не оставила ровно одного следа"
+    fields = skips[0].kwargs
+    assert fields.get("unreadable") == UNREADABLE_SPAN
+    assert fields.get("stage") == STAGE_CONVERT_REMAINDER, (
+        f"значение {STAGE_PRORATE_REFUSED} принадлежит ветке отказа, и "
+        "совпадение сделало бы два разных исхода неразличимыми в журнале"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("form", "price"),
+    (("long_span", PRICE_OF_A_LONG_SPAN), ("millennia", PRICE_OF_MILLENNIA)),
+    ids=("long_span", "millennia"),
+)
+async def test_a_span_that_the_calendar_can_express_is_not_capped(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    test_settings: Settings,
+    form: str,
+    price: str,
+):
+    """ПАРНЫЙ СЛУЧАЙ: делового потолка нет, и соседняя защита его не заводит.
+
+    Без него защита выше зеленела бы и от обрезания доли месяца — то есть от
+    исхода «взяли деньги и не дали ничего», который D-29 называет ХУДШИМ из
+    возможных. Цена `1.00` даёт 2153 год, цена `0.05` — 4555; обе выражаются
+    календарём, обе остаются пропорциональными, и ни одна не уходит на откат.
+
+    ⚠️ ЦЕНА ЭТОГО РЕШЕНИЯ НАЗВАНА, А НЕ ЗАМОЛЧАНА: в базу действительно уходит
+    срок, отстоящий на века, и наблюдаемым он остаётся сознательно — это ответ
+    D-29 на вопрос «что покупает сумма, во много раз превышающая цену». Граница
+    этого утверждения — соседний
+    `test_a_price_beyond_the_calendar_does_not_five_hundred_the_notification`.
+    """
+    confirmed_at = datetime.now(timezone.utc)
+    await _seed_live_subscription(db_session, "pro", days=25)
+    await _seed_subscription_payment(
+        db_session, "basic", "yoo_basic", switch_authorized=None, amount="1490.00"
+    )
+
+    test_settings.yookassa_webhook_verify_ip = False
+
+    with patch("app.services.payment_service.logger") as spy:
+        response = await _post_succeeded_webhook(
+            authed_client, "yoo_basic", _plan_limits_with_pro_priced(price)
+        )
+
+    assert response.status_code == 200, f"маршрут ответил {response.status_code}"
+
+    rows = await _subscription_rows(db_session)
+    moved = _aware(rows[0].expires_at)
+    assert moved > add_one_month(add_one_month(confirmed_at)), (
+        f"форма {form}: выразимая доля месяца обрезана до отката — заведён "
+        "деловой потолок, которого D-29 не заводил, и сумма, во много раз "
+        "превышающая цену, купила календарный месяц"
+    )
+    assert not _prorating_skips(spy), (
+        f"форма {form}: пропорциональный срок ушёл на откат — граница проведена "
+        "не по выразимости момента, а по правдоподобию величины"
+    )
