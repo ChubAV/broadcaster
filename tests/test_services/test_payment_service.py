@@ -1073,8 +1073,10 @@ async def test_a_package_payment_is_outside_the_cap(db_session):
 async def test_the_refusal_leaves_its_own_trace(db_session):
     """След обязателен: без него отказ неотличим от отказа ЮKassa.
 
-    Уровень `warning`, а не `info`, по той же причине, что у
-    `subscription_plan_preserved`: это исход, по которому к нам придёт человек.
+    Уровень `warning`, а не `info`: это исход, по которому к нам придёт человек.
+    Прежняя редакция ссылалась за обоснованием на ключ сохранённого тарифа, снятый
+    планом 05.1-07 вместе с решением о плане, — довод от несуществующего соседа не
+    проверяем ничем.
     """
     user = await _user(db_session)
     await _open_intent(db_session, user, payment_id="yoo_first")

@@ -320,9 +320,12 @@ async def create_payment(
         # (срабатывает), `test_a_user_without_open_intents_pays_without_obstruction`
         # (граница снизу) и `test_an_intent_of_another_user_does_not_reach_over`.
         if open_intents:
-            # УРОВЕНЬ `warning`, А НЕ `info`, по той же причине, что у
-            # `subscription_plan_preserved`: это исход, по которому к нам придёт
+            # УРОВЕНЬ `warning`, А НЕ `info`: это исход, по которому к нам придёт
             # человек, и жалоба «я нажал, а мне отказали» обязана иметь опору.
+            # ⚠️ ПРЕЖНЯЯ РЕДАКЦИЯ ССЫЛАЛАСЬ ЗА ОБОСНОВАНИЕМ НА КЛЮЧ СОХРАНЁННОГО
+            # ТАРИФА, снятый планом 05.1-07 вместе с решением о плане. Довод от
+            # несуществующего соседа не проверяем ничем, поэтому он назван здесь
+            # своими словами, а не ссылкой.
             logger.warning(
                 "subscription_intent_cap_reached",
                 user_id=user_id,
