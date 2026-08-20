@@ -542,7 +542,7 @@ Plans:
   заменяется в этой фазе.
 
 **UI hint**: yes
-**Plans:** 3/9 plans executed
+**Plans:** 4/9 plans executed
 
 Plans:
 **Wave 1**
@@ -556,7 +556,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 05.1-04-PLAN.md — Контракт шелла `quota` → `access`; виджет сайдбара перецелен на срок доступа, шкала снята (D-J, D-K)
+- [x] 05.1-04-PLAN.md — Контракт шелла `quota` → `access`; виджет сайдбара перецелен на срок доступа, шкала снята (D-J, D-K)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
