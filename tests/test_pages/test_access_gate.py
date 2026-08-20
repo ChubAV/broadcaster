@@ -316,6 +316,35 @@ def test_the_api_authentication_dependency_is_left_untouched():
     )
 
 
+def test_the_api_admin_gate_does_not_ask_about_paid_access():
+    """Администратор без действующей подписки входит в админку (T-05.1-17).
+
+    ⚠️ ЭТО НЕ УДОБСТВО, А УСЛОВИЕ ВОССТАНОВИМОСТИ ПРОДУКТА. Админка — место, где
+    выдают бесплатный доступ; повесив на неё гейт доступа, мы получили бы
+    систему, в которой администратор с истёкшим сроком не может открыть доступ
+    НИ СЕБЕ, НИ ДРУГОМУ, и чинится она только правкой строки в базе руками.
+
+    Утверждение снимается с ИСХОДНИКА по синтаксическому дереву, потому что
+    вопрос здесь — про отсутствие ветки, а отсутствие проверяется чтением кода, а
+    не запросом: маршрут, отвечающий администратору 200 сегодня, ничего не
+    говорит о том, спросят ли у него оплату завтра. Вторая половина того же
+    утверждения — что `admin_router` стоит в `OPEN_ROUTERS` страничной сборки —
+    закреплена `test_pages_gate_covers_exactly_the_declared_routers`.
+    """
+    tree = ast.parse(DEPENDENCIES_PY.read_text(encoding="utf-8"))
+    admin_gate = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "require_admin"
+    )
+
+    assert "check_access" not in ast.unparse(admin_gate), (
+        "гейт прав администратора начал спрашивать про оплату — администратор "
+        "без подписки не сможет выдать бесплатный доступ ни себе, ни другому"
+    )
+
+
 @pytest.mark.asyncio
 async def test_api_of_value_is_refused_by_code_when_access_expired(
     expired_client: AsyncClient,
