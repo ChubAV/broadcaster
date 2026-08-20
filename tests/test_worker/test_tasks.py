@@ -193,7 +193,7 @@ async def test_check_schedules_dispatches(db_session):
     mock_dispatch_settings.redis_url = "redis://localhost:6379/0"
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))), \
+         patch("app.worker.tasks.check_access_cached", AsyncMock(return_value=(True, ""))), \
          patch("app.worker.tasks.get_settings", return_value=mock_dispatch_settings):
         await check_schedules_async(db_session)
 
@@ -219,7 +219,7 @@ async def test_check_schedules_skips_inactive(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))):
+         patch("app.worker.tasks.check_access_cached", AsyncMock(return_value=(True, ""))):
         await check_schedules_async(db_session)
 
     assert len(dispatched) == 0
@@ -235,7 +235,7 @@ async def test_check_schedules_skips_future(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))):
+         patch("app.worker.tasks.check_access_cached", AsyncMock(return_value=(True, ""))):
         await check_schedules_async(db_session)
 
     assert len(dispatched) == 0
@@ -252,7 +252,7 @@ async def test_check_schedules_skips_billing_limited(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(False, "limit reached"))):
+         patch("app.worker.tasks.check_access_cached", AsyncMock(return_value=(False, "limit reached"))):
         await check_schedules_async(db_session)
 
     # No tasks dispatched
@@ -285,7 +285,7 @@ async def test_check_schedules_uses_schedule_timezone(db_session):
     mock_dispatch_settings.redis_url = "redis://localhost:6379/0"
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))), \
+         patch("app.worker.tasks.check_access_cached", AsyncMock(return_value=(True, ""))), \
          patch("app.worker.tasks.get_settings", return_value=mock_dispatch_settings):
         await check_schedules_async(db_session)
 
@@ -666,7 +666,7 @@ async def _seed_retry_case(
         }
 
 
-async def _run_retry(factory, log_id, user_id, *, balance_allowed: bool = True):
+async def _run_retry(factory, log_id, user_id, *, access_allowed: bool = True):
     """Запускает таск повтора и отдаёт (rpush-и Redis, постановки в Celery).
 
     `asyncio.run` подменяется захватом корутины: тело таска обязано выполниться
@@ -674,9 +674,13 @@ async def _run_retry(factory, log_id, user_id, *, balance_allowed: bool = True):
     оторвал бы соединение aiosqlite. Тем же приёмом файл уже пользуется для
     `asyncio.sleep` в тестах фоновой синхронизации.
 
-    Гейт баланса подменяется по образцу тестов рассылки выше: настоящий лезет в
+    Гейт доступа подменяется по образцу тестов рассылки выше: настоящий лезет в
     Redis, которого в тестовой среде нет, и красил бы каждый тест повтора чужой
-    причиной. `balance_allowed=False` даёт исчерпанный баланс.
+    причиной. `access_allowed=False` даёт закрытый доступ.
+
+    Патч ставится на ИМЯ В `app.worker.tasks`, а не на объявление в
+    `app.services.billing_cache`: таск импортировал функцию к себе на уровне
+    модуля, и подмена по месту объявления его вызов не подменила бы вовсе.
     """
     redis_sink: list[tuple] = []
     tg_sink: list[tuple] = []
@@ -700,8 +704,8 @@ async def _run_retry(factory, log_id, user_id, *, balance_allowed: bool = True):
          patch("app.config.get_settings", return_value=mock_s3_settings), \
          patch("redis.from_url", return_value=_FakeRedis(redis_sink)), \
          patch(
-             "app.worker.tasks.check_balance_cached",
-             AsyncMock(return_value=(balance_allowed, "" if balance_allowed else "Баланс исчерпан")),
+             "app.worker.tasks.check_access_cached",
+             AsyncMock(return_value=(access_allowed, "" if access_allowed else "access_closed")),
          ), \
          patch("app.worker.tasks.asyncio.run", captured.append):
         retry_send(log_id, user_id)
@@ -911,21 +915,33 @@ async def test_retry_send_stops_when_group_is_switched_off(
     assert await _send_log_count(factory) == before
 
 
+# =============================================================================
+# Вторая линия гейта ДОСТУПА в повторе — группа `-k access`
+# =============================================================================
+#
+# Тесты этой группы различимы по `-k access` намеренно: вторая линия гейта — то
+# место, снятие которого не красит ни один тест соседних предметов, и прогнать
+# её отдельным отбором обязано быть возможно одной командой.
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("account_type", ["wa", "max", "tg_user"])
-async def test_retry_send_stops_when_the_balance_is_exhausted(
+async def test_retry_send_stops_when_the_access_period_is_closed(
     db_engine_and_factory, account_type
 ):
-    """T-04-36: исчерпанный баланс останавливает повтор ЗДЕСЬ, а не после отправки.
+    """T-04-36, T-05.1-02: закрытый доступ останавливает повтор ЗДЕСЬ, а не после.
 
-    Гейт стоял только в HTTP-обработчике, а между нажатием и исполнением таска
+    Гейт стоит и в HTTP-обработчике, но между нажатием и исполнением таска
     проходит время: задача может простоять за очередью ровно столько, сколько
-    нужно, чтобы баланс кончился на другой рассылке. Без проверки в таске
-    сообщение уходит, и только потом `deduct_message` возвращает False по своему
-    условию `balance > 0` — то есть выходит не отрицательный баланс, а
-    БЕСПЛАТНАЯ отправка мимо тарифа. Остальные три запрета обработчика
-    (владение, черновик, выключенная группа) вторую линию здесь уже имеют;
-    гейт баланса был единственным, у которого её не было.
+    нужно, чтобы срок доступа истёк. Без проверки в таске отправка уходит у
+    человека, у которого доступ уже закончился, — то есть работа, за которую
+    продукт денег не берёт, при живой очереди. Остальные три запрета обработчика
+    (владение, черновик, выключенная группа) вторую линию здесь уже имеют; гейт
+    был единственным, у которого её не было.
+
+    ПРЕДМЕТ ВОПРОСА СМЕНИЛСЯ С БАЛАНСА НА ДОСТУП, А ПРИЧИНА ВТОРОЙ ЛИНИИ
+    ОСТАЛАСЬ ТОЙ ЖЕ И НЕ ОСЛАБЛА: обе величины меняются между постановкой и
+    исполнением, и обе — не в пользу отправляющего.
 
     Выход, как и у прочих остановок таска, ТИХИЙ: записи в журнал не
     появляется — иначе история наполнялась бы свидетельствами о заведомо
@@ -936,12 +952,35 @@ async def test_retry_send_stops_when_the_balance_is_exhausted(
 
     before = await _send_log_count(factory)
     redis_sink, tg_sink = await _run_retry(
-        factory, case["log_id"], case["user_id"], balance_allowed=False
+        factory, case["log_id"], case["user_id"], access_allowed=False
     )
 
-    assert redis_sink == [], "повтор ушёл в очередь мимо гейта баланса"
-    assert tg_sink == [], "повтор ушёл в очередь мимо гейта баланса"
+    assert redis_sink == [], "повтор ушёл в очередь мимо гейта доступа"
+    assert tg_sink == [], "повтор ушёл в очередь мимо гейта доступа"
     assert await _send_log_count(factory) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_type", ["wa", "tg_user"])
+async def test_retry_send_dispatches_when_the_access_period_is_live(
+    db_engine_and_factory, account_type
+):
+    """Граница сверху: при открытом доступе тот же повтор УХОДИТ в очередь.
+
+    Без этого утверждения вторая линия, отказывающая ВСЕМ, прошла бы проверку
+    выше — и повтор не работал бы вовсе ни у кого, включая оплативших.
+    """
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(factory, account_type=account_type)
+
+    redis_sink, tg_sink = await _run_retry(
+        factory, case["log_id"], case["user_id"], access_allowed=True
+    )
+
+    assert redis_sink or tg_sink, (
+        "открытый доступ не поставил повтор ни в одну очередь — вторая линия "
+        "отказывает всем подряд"
+    )
 
 
 @pytest.mark.asyncio
