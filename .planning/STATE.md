@@ -5,14 +5,14 @@ milestone_name: Redesign
 current_phase: 05.1
 current_phase_name: edinaya-podpiska
 status: planning
-stopped_at: Phase 05.1 UI-SPEC approved
+stopped_at: Phase 05.1 planned — 8 plans, waves 1-7
 last_updated: "2026-08-20T08:09:36.917Z"
 last_activity: 2026-08-20
-last_activity_desc: Модель тарификации сведена к плоской подписке 3000 ₽/мес — фаза 05.1 переписана, UAT фазы 5 остановлен
+last_activity_desc: Фаза 05.1 разложена на 8 планов — трассер сквозного пути доступа, три поверхности гейта, вычитание метрической модели, ревизия 0020 за чекпойнтом односторонней двери
 progress:
   total_phases: 7
   completed_phases: 5
-  total_plans: 82
+  total_plans: 90
   completed_plans: 82
   percent: 71
 ---
