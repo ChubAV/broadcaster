@@ -6,7 +6,7 @@ current_phase: 05.1
 current_phase_name: edinaya-podpiska
 status: planning
 stopped_at: Phase 05.1 planned — 9 plans, waves 1-8
-last_updated: "2026-08-20T09:20:00.000Z"
+last_updated: "2026-08-20T09:15:33.868Z"
 last_activity: 2026-08-20
 last_activity_desc: "Фаза 05.1 разложена на 9 планов: план 08 разделён по замечанию проверки — необратимая ревизия 0020 отделена от бесплатного доступа администратора и приёмки фазы (новый план 09, волна 8)"
 progress:
