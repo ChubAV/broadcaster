@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,12 +29,9 @@ from app.pages.common import templates
 from app.repositories.group_info import GroupInfoRepository
 from app.repositories.user import UserRepository
 from app.services.billing_service import (
-    get_balance,
     get_balance_info,
     get_or_create_balance,
-    add_messages,
 )
-from app.services.billing_cache import invalidate_balance_cache
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -407,34 +404,6 @@ async def admin_user_history_detail(
     )
 
 
-@router.post("/users/{user_id}/balance")
-async def admin_add_balance(
-    request: Request,
-    user_id: int,
-    amount: int = Form(...),
-    description: str = Form(""),
-    admin: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    target_user = await db.get(User, user_id)
-    if not target_user:
-        return RedirectResponse(url="/admin/users", status_code=302)
-
-    await add_messages(
-        db,
-        user_id,
-        amount,
-        type="admin_adjustment",
-        description=description or f"Пополнение администратором ({admin.email})",
-    )
-    await db.commit()
-    await invalidate_balance_cache(user_id)
-
-    return RedirectResponse(
-        url=f"/admin/users/{user_id}", status_code=302
-    )
-
-
 @router.post("/users/{user_id}/unlimited")
 async def admin_toggle_unlimited(
     request: Request,
@@ -449,7 +418,12 @@ async def admin_toggle_unlimited(
     bal = await get_or_create_balance(db, user_id)
     bal.is_unlimited = not bal.is_unlimited
     await db.commit()
-    await invalidate_balance_cache(user_id)
+    # СБРОСА КЭША ЗДЕСЬ БОЛЬШЕ НЕТ, ПОТОМУ ЧТО НЕТ КЭШИРУЕМОЙ ВЕЛИЧИНЫ. Он
+    # сбрасывал вердикт об ОСТАТКЕ СООБЩЕНИЙ, снятом вместе со всей валютой.
+    # Кэш вердикта ДОСТУПА этим тумблером не задет: тумблер пишет признак
+    # безлимита, а не срок доступа. План `05.1-08` меняет предмет тумблера на
+    # бесплатный доступ — и вот ТОГДА он станет писателем той величины, которую
+    # кэш и хранит, и сброс вернётся сюда уже осмысленным.
 
     return RedirectResponse(
         url=f"/admin/users/{user_id}", status_code=302

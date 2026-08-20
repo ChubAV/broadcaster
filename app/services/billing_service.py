@@ -1,12 +1,8 @@
-from datetime import datetime, timezone
-
 import structlog
-from sqlalchemy import select, update, func, text
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.message_balance import MessageBalance
-from app.models.balance_transaction import BalanceTransaction
 from app.models.payment import Payment
 
 logger = structlog.get_logger()
@@ -24,98 +20,22 @@ async def get_or_create_balance(db: AsyncSession, user_id: int) -> MessageBalanc
     return balance
 
 
-async def get_balance(db: AsyncSession, user_id: int) -> int:
-    bal = await get_or_create_balance(db, user_id)
-    return bal.balance
-
-
-async def check_balance(db: AsyncSession, user_id: int) -> tuple[bool, str]:
-    bal = await get_or_create_balance(db, user_id)
-    if bal.is_unlimited:
-        return True, ""
-    if bal.balance <= 0:
-        return False, "Баланс сообщений исчерпан. Пополните баланс для продолжения отправки."
-    return True, ""
-
-
-async def deduct_message(db: AsyncSession, user_id: int) -> bool:
-    """Atomically deduct 1 message. Returns True if deducted, False if insufficient."""
-    bal = await get_or_create_balance(db, user_id)
-    if bal.is_unlimited:
-        return True
-    result = await db.execute(
-        update(MessageBalance)
-        .where(MessageBalance.user_id == user_id, MessageBalance.balance > 0)
-        .values(balance=MessageBalance.balance - 1)
-        .returning(MessageBalance.balance)
-    )
-    row = result.first()
-    if row is None:
-        return False
-
-    new_balance = row[0]
-    tx = BalanceTransaction(
-        user_id=user_id,
-        amount=-1,
-        balance_after=new_balance,
-        type="send_deduction",
-    )
-    db.add(tx)
-    return True
-
-
-async def add_messages(
-    db: AsyncSession,
-    user_id: int,
-    amount: int,
-    type: str,
-    description: str | None = None,
-    payment_id: str | None = None,
-) -> int:
-    """Начисляет сообщения на баланс. Возвращает новый баланс.
-
-    ПРИРАЩЕНИЕ СЧИТАЕТ СУБД, А НЕ PYTHON (T-05-36). Прежняя пара
-    «прочитали строку → прибавили в Python → записали» теряла одно из двух
-    наложившихся начислений: обе стороны читали одно и то же старое значение и
-    обе записывали своё, затирая чужое. Выражение `balance + amount` считается
-    на стороне СУБД внутри одного оператора, поэтому потерять запись НЕЧЕМ —
-    это недостижимость, а не малая вероятность.
-
-    `get_or_create_balance` остаётся: строка баланса обязана существовать до
-    приращения, иначе UPDATE не заденет ни одной строки.
-
-    ПОДПИСЬ И ВОЗВРАЩАЕМОЕ ЗНАЧЕНИЕ НЕ МЕНЯЮТСЯ — у функции есть другие
-    вызывающие (`app/pages/admin.py`), и ключевое слово `type` тоже остаётся
-    прежним намеренно (IN-01): его переименование правит все вызовы и к защите
-    от двойного начисления отношения не имеет.
-    """
-    bal = await get_or_create_balance(db, user_id)
-
-    result = await db.execute(
-        update(MessageBalance)
-        .where(MessageBalance.user_id == user_id)
-        .values(balance=MessageBalance.balance + amount)
-        .returning(MessageBalance.balance)
-        .execution_options(synchronize_session=False)
-    )
-    new_balance = result.scalar_one()
-
-    # Значение ставится как ЗАГРУЖЕННОЕ, а не присваиванием: присваивание
-    # пометило бы объект грязным, и ORM выдала бы на flush второй UPDATE — то
-    # есть прибавила бы `amount` ещё раз поверх уже посчитанного СУБД.
-    set_committed_value(bal, "balance", new_balance)
-
-    tx = BalanceTransaction(
-        user_id=user_id,
-        amount=amount,
-        balance_after=new_balance,
-        type=type,
-        description=description,
-        payment_id=payment_id,
-    )
-    db.add(tx)
-    await db.flush()
-    return new_balance
+# ЧТЕНИЕ ОСТАТКА, ЕГО ПРОВЕРКА, СПИСАНИЕ И НАЧИСЛЕНИЕ СНЯТЫ ЦЕЛИКОМ.
+#
+# Валюты сообщений в продукте не существует: число отправленных сообщений не
+# влияет на сумму и ничем не ограничено (D-D, критерий 1). Проверка остатка была
+# ВТОРЫМ ответом на вопрос «можно ли отправлять» — первый даёт вердикт доступа
+# (`app/services/subscription_service.py`), — и два ответа на один вопрос рано
+# или поздно расходятся.
+#
+# ⚠️ ЧТЕНИЕ СТРОКИ ОСТАТКА НИЖЕ ОСТАЁТСЯ, И ЭТО ПОРЯДОК, А НЕ ЗАБЫВЧИВОСТЬ.
+# `get_or_create_balance` и `get_balance_info` читает админка — список
+# пользователей и тумблер. Снять их здесь значило бы уронить админские страницы
+# на целую волну; они уходят планом `05.1-08` вместе с самими моделями и
+# ревизией, которая роняет таблицы.
+#
+# ИМЯ МОДУЛЯ НЕ МЕНЯЕТСЯ: переименование стоит четырёх импортов и ссылок в шести
+# документах ради нуля пользы.
 
 
 async def get_balance_info(db: AsyncSession, user_id: int) -> dict:
@@ -201,10 +121,14 @@ async def count_succeeded_subscription_payments(db: AsyncSession, user_id: int) 
     аккаунта длиннее потолка выгрузки, и считать признак по УЖЕ ОБРЕЗАННОМУ
     списку значило бы получить «никогда не платил» у того, кто платил давно.
     """
-    # ИМПОРТ ВНУТРИ ФУНКЦИИ — РАЗРЫВ ЦИКЛА, А НЕ НЕБРЕЖНОСТЬ: `payment_service`
-    # импортирует `add_messages` из этого модуля, и встречный импорт на уровне
-    # модуля дал бы ImportError на старте приложения. Своих литералов вида и
-    # статуса здесь не заводится — они КОНСТАНТЫ (WR-04), и вторая их копия
+    # ИМПОРТ ВНУТРИ ФУНКЦИИ ОСТАЁТСЯ, ХОТЯ ВСТРЕЧНОГО ИМПОРТА БОЛЬШЕ НЕТ.
+    # Цикл разрывала именно эта строка: `payment_service` брал из этого модуля
+    # начисляющую функцию, снятую вместе со всей валютой сообщений. Поднять
+    # импорт на уровень модуля теперь можно — и не нужно: он завёл бы жёсткую
+    # зависимость денежного модуля от этого в обе стороны, и первый же
+    # встречный импорт, дописанный завтра, снова уронил бы старт приложения.
+    # Своих литералов вида и статуса здесь не заводится — они КОНСТАНТЫ
+    # (WR-04), и вторая их копия
     # разошлась бы с оригиналом молча: подписочный платёж перестал бы считаться,
     # а экран сообщил бы «пробный период» человеку, который платит третий месяц.
     from app.services.payment_service import KIND_SUBSCRIPTION, STATUS_SUCCEEDED
