@@ -6,15 +6,20 @@
 отдельным тестом, а сверх них идёт проход по КАЖДОМУ дню обычного и високосного
 года: он ловит не конкретную известную дату, а целый класс «календарь не сошёлся».
 """
+import ast
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 import pytest
 
+import app.application.billing as app_billing
 from app.application.billing.subscription_period import (
+    access_is_open,
     add_one_month,
     capped_carryover,
     converted_remainder,
+    days_left,
     next_expiry,
     prorated_expiry,
     subscription_is_live,
@@ -629,3 +634,146 @@ def test_a_span_the_calendar_can_express_is_still_a_moment():
 
     assert result is not None
     assert result > next_expiry(None, now)
+
+
+# =============================================================================
+# ВЕРДИКТ ДОСТУПА И ОСТАТОК СРОКА (фаза 05.1, плоская модель)
+#
+# Обе функции — чистые, как и весь модуль: строку подписки они получают
+# ЗНАЧЕНИЕМ, в БД не ходят и о сессии SQLAlchemy не знают. Поэтому подделка
+# строки простым объектом здесь не «мок вместо настоящего», а ровно тот вход,
+# который функция и принимает.
+# =============================================================================
+
+
+class _Row:
+    """Строка подписки в объёме, который читает `access_is_open`.
+
+    Настоящая модель здесь не нужна и была бы хуже: `Subscription` тянет за
+    собой метаданные таблицы и создание схемы, а вердикт доступа читает ровно
+    два атрибута. Тест на настоящей строке живёт в
+    `tests/test_pages/test_access_lifecycle.py`, где предмет — стыковка слоёв.
+    """
+
+    def __init__(self, expires_at, is_active=True):
+        self.expires_at = expires_at
+        self.is_active = is_active
+
+
+NOW = datetime(2026, 3, 10, 9, 0, tzinfo=timezone.utc)
+
+
+def test_a_user_without_a_subscription_row_has_a_definite_verdict():
+    """Отсутствие строки — это «доступа нет», а не «ответа нет».
+
+    Свидетель абзаца «ПОЛЬЗОВАТЕЛЬ БЕЗ СТРОКИ ПОДПИСКИ ИМЕЕТ ОПРЕДЕЛЁННОЕ
+    СОСТОЯНИЕ». Возвращается БУЛЕВО, а не `None` и не исключение: до плоской
+    модели строка была у меньшинства пользователей, и такой пользователь
+    переживёт выкат.
+    """
+    verdict = access_is_open(None, NOW)
+
+    assert verdict is False
+    assert isinstance(verdict, bool), "вердикт доступа обязан быть булевым"
+
+
+def test_a_deactivated_row_gives_no_access_however_late_its_date():
+    """Признак снимается С ДВУХ величин: активности строки И живости срока.
+
+    История подписок лежит в тех же строках. Читать срок, не спросив про
+    активность, значило бы выдать доступ по отменённому периоду — на входе у
+    этого теста ровно такая строка: срок на год вперёд, `is_active` ложно.
+    """
+    far_future = NOW + timedelta(days=365)
+
+    assert access_is_open(_Row(far_future, is_active=False), NOW) is False
+    assert access_is_open(_Row(far_future, is_active=True), NOW) is True, (
+        "позитивный контроль: без него тест зеленел бы от вердикта «нет» всегда"
+    )
+
+
+def test_the_verdict_follows_the_liveness_of_the_period():
+    """Живой срок открывает доступ, истёкший — закрывает; равный `now` закрыт.
+
+    Строгость сравнения достаётся от `subscription_is_live` и здесь только
+    ПЕРЕПРОВЕРЯЕТСЯ на границе: оплаченный момент, равный `now`, уже прошёл.
+    Второго сравнения дат `access_is_open` не заводит.
+    """
+    assert access_is_open(_Row(NOW + timedelta(seconds=1)), NOW) is True
+    assert access_is_open(_Row(NOW), NOW) is False
+    assert access_is_open(_Row(NOW - timedelta(seconds=1)), NOW) is False
+
+
+def test_the_verdict_does_not_read_a_free_access_column_yet():
+    """Ветки бесплатного доступа администратора здесь ещё НЕТ — и это решение.
+
+    Свидетель абзаца «ВЕТКИ БЕСПЛАТНОГО ДОСТУПА АДМИНИСТРАТОРА ЗДЕСЬ ПОКА НЕТ».
+    Колонку `has_free_access` заводит план `05.1-08` вместе со своей ревизией;
+    чтение несуществующего атрибута падало бы `AttributeError` на каждом рендере
+    до её выката. Утверждение отрицательное и снимается с ИСХОДНИКА — по образцу
+    `tests/test_pages/test_history_retry.py`; когда план `05.1-08` добавит ветку,
+    этот тест обязан покраснеть и быть заменён утверждением о ней.
+
+    ⚠️ ДОКСТРИНГ ИЗ ПРОВЕРКИ ИСКЛЮЧЁН, И БЕЗ ЭТОГО ТЕСТ БЫЛ БЫ НЕВОЗМОЖЕН: он
+    НАЗЫВАЕТ колонку, объясняя, почему её здесь нет. Проверка по сырому тексту
+    краснела бы от собственного объяснения, и единственным способом её пройти
+    стало бы молчание об отсутствующей ветке. Поэтому тело берётся по
+    синтаксическому дереву, с выброшенным узлом докстринга.
+    """
+    source = (
+        Path(app_billing.__file__).parent / "subscription_period.py"
+    ).read_text(encoding="utf-8")
+    function = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.FunctionDef) and node.name == "access_is_open"
+    )
+    statements = function.body
+    if ast.get_docstring(function) is not None:
+        statements = statements[1:]
+    body = "\n".join(ast.unparse(statement) for statement in statements)
+
+    assert "has_free_access" not in body, (
+        "ветка бесплатного доступа появилась — замените этот тест утверждением "
+        "о ней (план 05.1-08)"
+    )
+
+
+def test_a_period_that_does_not_exist_has_no_number_of_days():
+    """`None` означает РОВНО ОДНО — срока не существует."""
+    assert days_left(None, NOW) is None
+
+
+def test_the_last_day_of_access_is_zero_and_not_absent():
+    """Ноль — ЖИВОЙ последний день доступа, а не край и не отсутствие ответа.
+
+    Правило P-6 UI-контракта опирается на достижимость нуля: разметка обязана
+    уметь сказать «последний день». Слить его с `None` значило бы показать
+    человеку в его последний оплаченный день то же, что человеку без подписки.
+    """
+    assert days_left(NOW + timedelta(hours=23), NOW) == 0
+    assert days_left(NOW + timedelta(hours=23), NOW) is not None
+
+
+def test_whole_days_are_counted_and_not_hours_rounded():
+    """Считается целая часть разности, а не округление часов.
+
+    23 часа — ещё ноль полных суток, 25 часов — уже одни. Округление дало бы
+    единицу в первом случае, то есть обещало бы человеку день, которого нет.
+    """
+    assert days_left(NOW + timedelta(hours=23), NOW) == 0
+    assert days_left(NOW + timedelta(hours=25), NOW) == 1
+    assert days_left(NOW + timedelta(days=5), NOW) == 5
+
+
+def test_the_remaining_days_accept_a_naive_moment():
+    """Оба момента проходят через `normalize_utc` — иначе TypeError на SQLite.
+
+    Колонка объявлена `DateTime(timezone=True)`, но SQLite отдаёт её NAIVE, а
+    PostgreSQL — aware. Вычитание без приведения падало бы ровно на одном из
+    двух диалектов, то есть у пользователя, а не в суите.
+    """
+    naive_expiry = (NOW + timedelta(days=3)).replace(tzinfo=None)
+
+    assert days_left(naive_expiry, NOW) == 3
+    assert days_left(NOW + timedelta(days=3), NOW.replace(tzinfo=None)) == 3
