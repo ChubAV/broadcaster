@@ -1874,13 +1874,22 @@ async def test_a_deal_sold_on_an_expired_period_is_delivered_after_the_period_re
 async def test_the_intent_stage_records_its_answer_on_the_payment(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Ответ гарда существует на строке платежа, а не только в стеке вызова.
+    """Форма записывает `NULL` — «правило не спрашивали», — а не выдуманное «да».
 
-    Пока ответ нигде не записан, любая пара «продали → выдали» решает заново по
-    тому, что успело измениться. Утверждение самое простое из раздела и самое
-    несущее: без него всё остальное чинило бы следствие.
+    ⚠️ УТВЕРЖДЕНИЕ ПЕРЕВЁРНУТО ФАЗОЙ 05.1, А НЕ ОСЛАБЛЕНО. Раньше здесь стояло
+    `is True`: форма спрашивала гард смены тарифа и уносила его ответ на платёж
+    (D-28), потому что «продали» и «выдали» решались двумя стадиями и обязаны
+    были совпасть. Правила смены тарифа больше нет — нет тарифов (D-A, D-D), —
+    и спросить его невозможно. `NULL` в этой колонке означает РОВНО «правило не
+    спрашивали» (`app/models/payment.py`), и это ПРАВДА о сделке; литерал `True`
+    записал бы разрешение, которого никто не выдавал, то есть подпись от имени
+    несуществующего правила (T-05.1-11, disposition `accept`).
+
+    Утверждение остаётся несущим: колонка обязана нести факт, а не умолчание,
+    и «не спрашивали» отличимо от «спросили и разрешили» ровно потому, что
+    записано отдельным значением.
     """
-    await _subscribe(authed_client, plan="basic", payment_id="yoo_recorded")
+    await _subscribe(authed_client, payment_id="yoo_recorded")
 
     payment = (
         await db_session.execute(
@@ -1888,8 +1897,8 @@ async def test_the_intent_stage_records_its_answer_on_the_payment(
         )
     ).scalar_one()
 
-    assert payment.switch_authorized is True, (
-        "стадия намерения не записала СВОЙ ответ на платёж"
+    assert payment.switch_authorized is None, (
+        "форма записала ответ правила, которого больше не существует"
     )
 
 
@@ -2685,8 +2694,12 @@ async def test_a_malformed_plan_list_does_not_break_the_notification(
 # разных тарифов не могут висеть одновременно, `subscription.plan` не обязан
 # вмещать два перехода в разные стороны.
 #
-# ФОРМА — `cap-different-plan` (решение владельца, чекпойнт задачи 1 плана
-# 05-15): повтор оплаты ТОГО ЖЕ тарифа остаётся разрешённым.
+# ФОРМА — «НЕ БОЛЕЕ ОДНОГО НЕЗАКРЫТОГО ПОДПИСОЧНОГО НАМЕРЕНИЯ» (решение
+# владельца D-I, фаза 05.1). Прежняя форма `cap-different-plan` отбирала
+# намерения по несовпадению тарифа и в плоской модели выродилась бы МОЛЧА:
+# тарифа у платежа нет, сравнение ложно всегда, защита не срабатывает и не
+# краснеет. Повтор оплаты теперь отвергается — цена этого названа в докстринге
+# `create_payment` и разменена на второй счёт за один и тот же месяц доступа.
 
 
 @pytest.mark.asyncio
@@ -2699,58 +2712,48 @@ async def test_a_second_subscription_intent_from_the_form_is_refused_with_words(
     и получивший ту же страницу, читает это как поломку и нажимает снова —
     ровно то поведение, которое потолок и ловит.
     """
-    first = await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
+    first = await _subscribe(authed_client, payment_id="yoo_first")
     assert first.status_code == 302
     assert first.headers["location"] == CONFIRMATION_URL
 
-    second = await _subscribe(authed_client, plan="basic", payment_id="yoo_basic")
+    second = await _subscribe(authed_client, payment_id="yoo_second")
 
     assert second.status_code == 302
     assert second.headers["location"] == "/billing?error=pending", (
-        "второе намерение другого тарифа ушло на оплату либо вернулось без слов"
+        "второе намерение ушло на оплату либо вернулось без слов"
     )
     assert await _payments_count(db_session) == 1, "заведена вторая строка платежа"
 
 
 @pytest.mark.asyncio
-async def test_a_second_intent_of_another_plan_is_refused_while_the_first_is_fresh(
+async def test_a_second_intent_is_refused_while_the_first_is_fresh(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Второе намерение ДРУГОГО тарифа отвергается, пока первое СВЕЖЕЕ.
+    """Пока первое намерение СВЕЖЕЕ, второго не появится — и срок не сдвинется дважды.
 
-    ⚠️ ЧЕМ ЭТОТ ТЕСТ ОТЛИЧАЕТСЯ ОТ
-    `test_a_pro_deal_sold_before_any_subscription_is_not_erased_by_a_later_basic`,
-    И БЕЗ ЭТОЙ ФРАЗЫ СЛЕДУЮЩИЙ ЧИТАТЕЛЬ УДАЛИТ ОДИН ИЗ НИХ КАК ДУБЛИКАТ. Тот
-    держит строки БЕЗ записанного ответа (`switch_authorized IS NULL`, то есть
-    заведённые до ревизии `0019`): у них решение принимает правило, отказ
-    возникает, и предмет проверки — доля месяца (D-29). ЗДЕСЬ строки заводит
-    ФОРМА, и обе несут записанное разрешение `True`: отказа не возникает ни у
-    одной, ветка доли месяца не исполняется вовсе, и вылечить это можно только
-    тем, чтобы второй строки не появилось. Тот тест проверяет, СКОЛЬКО дней
-    покупает отвергнутый платёж; этот — что второго платежа не существует.
-
-    Именно на этом пути сделка на 4900 ₽ продавалась и стиралась последним
-    подтверждённым `basic`.
-
-    ⚠️ ЧЕГО ЭТОТ ТЕСТ НЕ ДЕРЖИТ, И ПОЧЕМУ ЕГО ИМЯ БОЛЬШЕ НЕ ГОВОРИТ
-    «UNREACHABLE». Оба намерения он заводит ПОДРЯД, о сроке давности не знает
-    вовсе, и потому доказывает ровно одно: пока первое намерение СВЕЖЕЕ, второго
-    не появится. Состояние «два оплачиваемых намерения разных тарифов»
-    недостижимым он НЕ объявляет — оно достижимо через сутки, и это доказывает
+    ⚠️ ЧЕГО ЭТОТ ТЕСТ НЕ ДЕРЖИТ. Оба намерения он заводит ПОДРЯД, о сроке
+    давности не знает вовсе, и потому доказывает ровно одно: пока первое
+    намерение свежее, второго не появится. Состояние «два оплачиваемых
+    намерения» недостижимым он НЕ объявляет — оно достижимо через сутки, и это
+    доказывает
     `tests/test_services/test_payment_service.py::test_a_stale_intent_does_not_block_a_new_one`.
-    Прежнее имя обещало инвариант шире тела, и читатель, искавший покрытие по
-    имени, получал ложную уверенность (WR-05 раунда 5).
+    Имя, обещающее инвариант шире тела, давало бы читателю ложную уверенность
+    (WR-05 раунда 5).
+
+    ⚠️ ПОСЛЕДНИЕ ДВА УТВЕРЖДЕНИЯ — ГЛАВНЫЕ, И ОНИ О ДЕНЬГАХ, А НЕ О СТРОКАХ.
+    Срок обязан уехать вперёд РОВНО НА ОДИН месяц: сдвиг на два означал бы, что
+    второе намерение всё-таки существует и было подтверждено, то есть человек
+    заплатил дважды за один и тот же доступ.
     """
-    await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
-    refused = await _subscribe(authed_client, plan="basic", payment_id="yoo_basic")
+    await _subscribe(authed_client, payment_id="yoo_first")
+    refused = await _subscribe(authed_client, payment_id="yoo_second")
     assert refused.headers["location"] == "/billing?error=pending"
     assert await _payments_count(db_session) == 1
 
-    assert await _confirm(db_session, "yoo_pro") is True
+    assert await _confirm(db_session, "yoo_first") is True
 
     rows = await _subscription_rows(db_session)
     assert len(rows) == 1, "заведена вторая подписка"
-    assert rows[0].plan == "pro", "проданный старший тариф не выдан"
     now = datetime.now(timezone.utc)
     assert _aware(rows[0].expires_at) > now + timedelta(days=27), (
         "оплаченный месяц не выдан вовсе"
@@ -2764,13 +2767,13 @@ async def test_a_second_intent_of_another_plan_is_refused_while_the_first_is_fre
 async def test_a_package_purchase_is_not_blocked_by_a_pending_subscription_intent(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Пакет потолком не задет: у него нет плана, и вмещать ему нечего.
+    """Пакет потолком не задет: это другой предмет и другие деньги.
 
-    Защита от одновременных намерений существует из-за скалярности
-    `subscription.plan`. Распространить её на пакеты значило бы запретить
-    покупку сообщений человеку, у которого просто висит неоплаченная подписка.
+    Потолок отвечает на вопрос «сколько раз человек может начать оплату
+    ДОСТУПА». Распространить его на пакеты значило бы запретить покупку
+    сообщений человеку, у которого просто висит неоплаченный счёт за доступ.
     """
-    await _subscribe(authed_client, plan="pro", payment_id="yoo_pro")
+    await _subscribe(authed_client, payment_id="yoo_access")
 
     response = await _purchase(authed_client)
 

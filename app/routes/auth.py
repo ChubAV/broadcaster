@@ -5,6 +5,7 @@ from app.dependencies import get_db, get_settings
 from app.config import Settings
 from app.repositories.user import UserRepository
 from app.services.auth_service import hash_password, verify_password, create_access_token, decode_verification_token
+from app.services.subscription_service import start_trial
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -55,6 +56,23 @@ async def register(
         password_hash=hash_password(data.password),
         name=data.name,
     )
+
+    # ВТОРОЙ ПУТЬ РЕГИСТРАЦИИ ЗАВОДИТ ПРОБНЫЙ СРОК ТОЙ ЖЕ ФУНКЦИЕЙ, ЧТО И ПЕРВЫЙ
+    # (`app/pages/auth.py`). Копия тела здесь развела бы длину пробного периода
+    # по двум входам регистрации, и разница проявилась бы не в суите, а у
+    # человека, зарегистрировавшегося «не тем» способом.
+    #
+    # Коммит ОДИН и стоит здесь: `BaseRepository.create` коммитит СВОЮ вставку
+    # сам (`app/repositories/base.py`), а `start_trial` не коммитит вовсе —
+    # граница транзакции принадлежит вызывающему. Второго коммита вокруг
+    # пользователя не добавляется.
+    #
+    # Заведение стоит ДО возврата ответа: клиент, получивший `201`, вправе
+    # считать, что пользователь готов работать, а пользователь без строки
+    # подписки встретил бы продукт с закрытым доступом.
+    await start_trial(db, user.id)
+    await db.commit()
+
     return UserResponse(id=user.id, email=user.email, name=user.name)
 
 

@@ -27,6 +27,12 @@ from app.services.billing_service import get_balance, add_messages
 EVENT_SUCCEEDED = WebhookNotificationEventType.PAYMENT_SUCCEEDED
 EVENT_CANCELED = WebhookNotificationEventType.PAYMENT_CANCELED
 
+# Цена доступа — машинная строка формата ЮKassa. Выписана здесь ДОСЛОВНО, а не
+# прочитана из `Settings`: тест, берущий значение из того же источника, что и
+# код, утверждал бы «значение равно самому себе» и пережил бы подмену умолчания
+# на «3 000,00 ₽», которую платёжное API отвергает в проде.
+ACCESS_PRICE = "3000.00"
+
 
 def _utc(value: datetime | None) -> datetime | None:
     """Доводит значение из БД до aware-UTC.
@@ -551,23 +557,25 @@ async def test_the_first_purchase_takes_the_plan_from_the_payment(db_session):
 
 # --- ПОТОЛОК ОДНОВРЕМЕННЫХ ПОДПИСОЧНЫХ НАМЕРЕНИЙ ----------------------------
 #
-# ЗАЧЕМ ЭТОТ РАЗДЕЛ СУЩЕСТВУЕТ. Пока у пользователя может ОДНОВРЕМЕННО висеть
-# два незакрытых подписочных намерения РАЗНЫХ тарифов, `subscription.plan`
-# обязан вместить два перехода в разные стороны — а он СКАЛЯР. Последний
-# подтверждённый платёж стирает тариф предыдущего, сколько бы тот ни стоил:
-# платёж `pro` за 4900 ₽ продавался и стирался подтверждённым следом `basic`.
-# Записанное разрешение (D-28) этот путь не лечит: когда подписки нет вовсе,
-# гард пропускает ЛЮБОЙ план, оба платежа уносят `switch_authorized=True`,
-# отказа не возникает ни у одного, и ветка доли месяца (D-29) не исполняется.
+# ФОРМА ПОТОЛКА — «НЕ БОЛЕЕ ОДНОГО НЕЗАКРЫТОГО ПОДПИСОЧНОГО НАМЕРЕНИЯ НА
+# ПОЛЬЗОВАТЕЛЯ» (решение владельца D-I, фаза 05.1). Прежняя форма
+# `cap-different-plan` отбирала намерения по НЕСОВПАДЕНИЮ ТАРИФА; в плоской
+# модели тариф у платежа один и тот же — его нет вовсе, — поэтому сравнение
+# было бы ложно ВСЕГДА и защита перестала бы срабатывать МОЛЧА. Молчаливое
+# вырождение и есть предмет замены: потолок либо снимают решением, либо
+# переоснуют решением, но не оставляют выродившимся.
 #
-# ФОРМА ПОТОЛКА — `cap-different-plan` (ответ чекпойнта задачи 1 плана 05-15):
-# отвергается второе намерение с ДРУГИМ планом, повтор оплаты ТОГО ЖЕ тарифа
-# остаётся разрешённым — самая частая человеческая ошибка не наказывается.
+# ЧТО ПОТОЛОК ЗАКРЫВАЕТ СЕГОДНЯ. Человек, открывший две вкладки оплаты, заводит
+# ОДНО намерение, а не два: второй счёт на те же 3000 ₽ означал бы два списания
+# за один и тот же месяц доступа, и объяснять человеку, почему с него взяли
+# дважды, было бы дороже, чем не дать нажать второй раз.
 #
-# СРОК ДАВНОСТИ — 24 часа, тем же ответом. Он не удобство: подписка на событие
+# СРОК ДАВНОСТИ — 24 часа, и он не удобство: подписка на событие
 # `payment.canceled` в кабинете ЮKassa НЕ подтверждена (D-27), поэтому
 # отменённый платёж остаётся `pending` навсегда, и потолок без срока давности
 # запер бы человека, закрывшего вкладку оплаты, без единого пути наружу.
+# Просроченное и отменённое намерение открытыми НЕ считаются — иначе один
+# брошенный счёт заблокировал бы оплату навсегда.
 
 
 def _yoo_settings():
@@ -604,7 +612,6 @@ async def _open_intent(
     db,
     user: User,
     *,
-    plan: str = "pro",
     payment_id: str = "yoo_open",
     age_hours: float = 0,
     status: str = "pending",
@@ -616,15 +623,20 @@ async def _open_intent(
     `created_at` объявлен `server_default=func.now()`, то есть СУБД проставляет
     текущий момент, и прошлого им не выразить вовсе — а срок давности только о
     прошлом и говорит.
+
+    ТАРИФА У НАМЕРЕНИЯ НЕТ. Параметр `plan` снят вместе с формой
+    `cap-different-plan`: намерения плоской модели неразличимы по предмету
+    покупки, и оставить его значило бы дать тесту рычаг, которого нет у
+    продукта.
     """
     payment = await _payment(
         db,
         user,
         yookassa_payment_id=payment_id,
         kind=kind,
-        plan=plan,
+        plan=None,
         status=status,
-        amount_value="4900.00",
+        amount_value=ACCESS_PRICE if kind == KIND_SUBSCRIPTION else "149.00",
         messages_count=None if kind == KIND_SUBSCRIPTION else 100,
         package_name=None if kind == KIND_SUBSCRIPTION else "100 messages",
     )
@@ -640,16 +652,23 @@ async def _payments_count(db, user: User) -> int:
     )
 
 
-async def _subscribe(db, user: User, plan: str, *, price: str = "1490.00"):
+async def _subscribe(db, user: User, *, price: str = ACCESS_PRICE):
+    """Намерение оплатить ДОСТУП — без тарифа и без записанного ответа гарда.
+
+    `switch_authorized=None` не умолчание, а запись факта: правила смены тарифа
+    больше нет, ответа никто не давал (T-05.1-11). Ровно это подаёт обработчик
+    формы, и тест, подающий `True`, проверял бы вход, которого продукт не
+    производит.
+    """
     return await create_payment(
         db,
         user_id=user.id,
         price=price,
         kind=KIND_SUBSCRIPTION,
-        plan=plan,
+        plan=None,
         package_name=None,
         messages_count=None,
-        switch_authorized=True,
+        switch_authorized=None,
     )
 
 
@@ -657,19 +676,22 @@ async def _subscribe(db, user: User, plan: str, *, price: str = "1490.00"):
 async def test_a_second_subscription_intent_is_refused_before_the_money_moves(
     db_session,
 ):
-    """Второе намерение ДРУГОГО тарифа не заводится вовсе — и своим типом отказа.
+    """Второе намерение при ОДНОМ уже открытом не заводится — и своим типом отказа.
 
     Чужой тип здесь не годится: `PaymentCreationError` говорит «ЮKassa не
     создала платёж», а здесь ЮKassa не спрашивали вовсе — отказали мы, и
     человеку об этом сообщается ДРУГИМИ словами.
+
+    Тарифы в утверждении больше не участвуют: предмет покупки один, и «второе
+    намерение» отличается от первого только тем, что первое ещё не закрыто.
     """
     user = await _user(db_session)
-    await _open_intent(db_session, user, plan="pro", payment_id="yoo_pro")
+    await _open_intent(db_session, user, payment_id="yoo_first")
     before = await _payments_count(db_session, user)
 
-    with _sdk("yoo_basic"):
+    with _sdk("yoo_second"):
         with pytest.raises(PendingIntentCapError):
-            await _subscribe(db_session, user, "basic")
+            await _subscribe(db_session, user)
 
     assert await _payments_count(db_session, user) == before, (
         "отвергнутое намерение оставило строку в `payments`"
@@ -687,11 +709,11 @@ async def test_the_refusal_never_reaches_yookassa(db_session):
     придёт ни успехом, ни отменой. Одним тестом обе стороны не держатся.
     """
     user = await _user(db_session)
-    await _open_intent(db_session, user, plan="pro", payment_id="yoo_pro")
+    await _open_intent(db_session, user, payment_id="yoo_first")
 
-    with _sdk("yoo_basic") as create_mock:
+    with _sdk("yoo_second") as create_mock:
         with pytest.raises(PendingIntentCapError):
-            await _subscribe(db_session, user, "basic")
+            await _subscribe(db_session, user)
 
     assert create_mock.call_count == 0, (
         f"ЮKassa вызвана {create_mock.call_count} раз(а) до отказа: платёж создан "
@@ -711,9 +733,11 @@ async def test_a_stale_intent_does_not_block_a_new_one(db_session):
     `PENDING_INTENT_TTL_HOURS` перестаёт СЧИТАТЬСЯ, но ОПЛАЧИВАЕМЫМ быть не
     перестаёт: своей строки оно не теряет, терминальным не становится, и ссылка
     на оплату у ЮKassa продолжает работать. Значит после этого теста у
-    пользователя ДВА оплачиваемых намерения разных тарифов — то самое состояние,
-    ради сужения которого потолок и существует. Достигается оно не гонкой, а
-    ожиданием, то есть ДЕТЕРМИНИРОВАННО и шире гонки.
+    пользователя ДВА оплачиваемых намерения — то самое состояние, ради сужения
+    которого потолок и существует. Достигается оно не гонкой, а ожиданием, то
+    есть ДЕТЕРМИНИРОВАННО и шире гонки. В плоской модели цена окна названа
+    деньгами прямо: два оплачиваемых счёта на 3000 ₽ за один и тот же месяц
+    доступа.
 
     Пока докстринг молчал, `create_payment` называл это состояние недостижимым,
     имея этот тест зелёным в двухстах строках от себя (гэп 2 раунда 5). Теперь
@@ -733,16 +757,76 @@ async def test_a_stale_intent_does_not_block_a_new_one(db_session):
     await _open_intent(
         db_session,
         user,
-        plan="pro",
         payment_id="yoo_stale",
         age_hours=PENDING_INTENT_TTL_HOURS + 1,
     )
 
-    with _sdk("yoo_basic"):
-        result = await _subscribe(db_session, user, "basic")
+    with _sdk("yoo_new"):
+        result = await _subscribe(db_session, user)
 
-    assert result["payment_id"] == "yoo_basic"
+    assert result["payment_id"] == "yoo_new"
     assert await _payments_count(db_session, user) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_canceled_intent_does_not_block_a_new_one(db_session):
+    """Отменённое намерение открытым НЕ считается — брошенный счёт не запирает.
+
+    Утверждение отдельное от `test_a_terminal_payment_never_blocks_a_new_one`, и
+    это не дубликат: тот держит ОБА терминальных статуса разом и отвечает на
+    вопрос «выходит ли платёж из терминального состояния»; здесь предмет узкий и
+    названный решением D-I — ЕДИНСТВЕННОЕ намерение пользователя, и оно
+    отменено. При потолке «не более одного незакрытого» именно этот случай стал
+    бы вечным замком, если бы отбор считал строку по факту существования, а не
+    по статусу: человек, отказавшийся от оплаты, не смог бы заплатить НИКОГДА.
+    """
+    user = await _user(db_session)
+    await _open_intent(
+        db_session, user, payment_id="yoo_gone", status="canceled"
+    )
+
+    with _sdk("yoo_new"):
+        result = await _subscribe(db_session, user)
+
+    assert result["payment_id"] == "yoo_new"
+
+
+@pytest.mark.asyncio
+async def test_a_user_without_open_intents_pays_without_obstruction(db_session):
+    """Ноль незакрытых намерений — оплата проходит. Граница потолка снизу.
+
+    Без этого утверждения тесты потолка доказывали бы только «когда отказывает»,
+    и потолок, отвергающий ВСЁ, прошёл бы их все до одного.
+    """
+    user = await _user(db_session)
+    assert await _payments_count(db_session, user) == 0
+
+    with _sdk("yoo_only"):
+        result = await _subscribe(db_session, user)
+
+    assert result["payment_id"] == "yoo_only"
+    assert await _payments_count(db_session, user) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_intent_of_another_user_does_not_reach_over(db_session):
+    """Потолок считает намерения ВЛАДЕЛЬЦА, а не все незакрытые в базе.
+
+    Отбор без условия по пользователю зеленел бы на всех утверждениях выше — они
+    работают с одним человеком — и запирал бы оплату всему продукту, как только
+    хоть у кого-то повиснет неоплаченный счёт. Дефект такого рода не ловится
+    ничем, кроме второго пользователя в тесте.
+    """
+    stranger = await _user(db_session, "cap-stranger@t.com")
+    await _open_intent(db_session, stranger, payment_id="yoo_stranger")
+
+    buyer = await _user(db_session, "cap-buyer@t.com")
+    with _sdk("yoo_buyer"):
+        result = await _subscribe(db_session, buyer)
+
+    assert result["payment_id"] == "yoo_buyer", (
+        "чужое незакрытое намерение перекрыло оплату"
+    )
 
 
 @pytest.mark.asyncio
@@ -750,28 +834,28 @@ async def test_a_terminal_payment_never_blocks_a_new_one(db_session):
     """Из терминального статуса платёж не выходит — мешать он не вправе никогда."""
     user = await _user(db_session)
     await _open_intent(
-        db_session, user, plan="pro", payment_id="yoo_done", status="succeeded"
+        db_session, user, payment_id="yoo_done", status="succeeded"
     )
     await _open_intent(
-        db_session, user, plan="pro", payment_id="yoo_gone", status="canceled"
+        db_session, user, payment_id="yoo_gone", status="canceled"
     )
 
-    with _sdk("yoo_basic"):
-        result = await _subscribe(db_session, user, "basic")
+    with _sdk("yoo_new"):
+        result = await _subscribe(db_session, user)
 
-    assert result["payment_id"] == "yoo_basic"
+    assert result["payment_id"] == "yoo_new"
 
 
 @pytest.mark.asyncio
 async def test_a_package_payment_is_outside_the_cap(db_session):
     """Два утверждения в ОБЕ стороны: пакет и подписка друг другу не мешают.
 
-    Потолок существует из-за скалярности `subscription.plan`; у пакета плана
-    нет вовсе, и задевать его этим правилом не за что — ни как препятствие, ни
-    как жертву.
+    Потолок отвечает на вопрос «сколько раз человек может начать оплату
+    ДОСТУПА»; покупка сообщений — другой предмет и другие деньги. Задевать её
+    этим правилом не за что — ни как препятствие, ни как жертву.
     """
     buyer = await _user(db_session, "cap-a@t.com")
-    await _open_intent(db_session, buyer, plan="pro", payment_id="yoo_pro")
+    await _open_intent(db_session, buyer, payment_id="yoo_access")
 
     with _sdk("yoo_pack"):
         package = await create_payment(
@@ -789,36 +873,15 @@ async def test_a_package_payment_is_outside_the_cap(db_session):
     await _open_intent(
         db_session,
         other,
-        plan=None,
         payment_id="yoo_pack_open",
         kind=KIND_PACKAGE,
     )
 
     with _sdk("yoo_sub_new"):
-        subscription = await _subscribe(db_session, other, "basic")
+        subscription = await _subscribe(db_session, other)
     assert subscription["payment_id"] == "yoo_sub_new", (
         "пакетный платёж не даёт купить подписку"
     )
-
-
-@pytest.mark.asyncio
-async def test_a_second_intent_for_the_same_plan_is_accepted(db_session):
-    """ФОРМА `cap-different-plan` (ответ чекпойнта): повтор ТОГО ЖЕ тарифа проходит.
-
-    Расходиться двум одинаковым планам не на чем: `subscription.plan` вместит
-    оба перехода, потому что переход один. Самая частая человеческая ошибка —
-    «нажал ещё раз, потому что первая вкладка зависла» — потолком не
-    наказывается. Парный тест формы `cap-any-pending` НЕ пишется: форму выбрал
-    владелец, и вариантов у неё не два одновременно.
-    """
-    user = await _user(db_session)
-    await _open_intent(db_session, user, plan="basic", payment_id="yoo_first")
-
-    with _sdk("yoo_second"):
-        result = await _subscribe(db_session, user, "basic")
-
-    assert result["payment_id"] == "yoo_second"
-    assert await _payments_count(db_session, user) == 2
 
 
 @pytest.mark.asyncio
@@ -829,11 +892,11 @@ async def test_the_refusal_leaves_its_own_trace(db_session):
     `subscription_plan_preserved`: это исход, по которому к нам придёт человек.
     """
     user = await _user(db_session)
-    await _open_intent(db_session, user, plan="pro", payment_id="yoo_pro")
+    await _open_intent(db_session, user, payment_id="yoo_first")
 
-    with _sdk("yoo_basic"), patch("app.services.payment_service.logger") as spy:
+    with _sdk("yoo_second"), patch("app.services.payment_service.logger") as spy:
         with pytest.raises(PendingIntentCapError):
-            await _subscribe(db_session, user, "basic")
+            await _subscribe(db_session, user)
 
     refusals = [
         call
@@ -844,4 +907,3 @@ async def test_the_refusal_leaves_its_own_trace(db_session):
     fields = refusals[0].kwargs
     assert fields.get("user_id") == user.id
     assert fields.get("open_intents") == 1, "журнал не называет числа намерений"
-    assert fields.get("open_plans") == ["pro"], "журнал не называет их планов"
