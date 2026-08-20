@@ -5,16 +5,16 @@ milestone_name: Redesign
 current_phase: 05.1
 current_phase_name: edinaya-podpiska
 status: planning
-stopped_at: "UAT фазы 5 ОСТАНОВЛЕН решением владельца 2026-08-20. Модель тарификации менялась в этот день ДВАЖДЫ: сперва на поаккаунтную (1500 ₽/аккаунт), затем — окончательно — на ПЛОСКУЮ: 3000 ₽/мес за доступ к системе, без единого лимита по аккаунтам, группам и сообщениям. Поаккаунтная редакция отменена целиком вместе с решением D-C (свой период у каждого аккаунта); до кода она не дожила, отменён замысел. Действующие решения — D-A/D-B/D-D/D-E в ROADMAP §«Phase 05.1». Фаза 5 НЕ откатывается. Следующий шаг — `/gsd-plan-phase 05.1`; планов у фазы пока нет."
-last_updated: "2026-08-20T00:00:00Z"
+stopped_at: Phase 05.1 UI-SPEC approved
+last_updated: "2026-08-20T08:09:36.917Z"
 last_activity: 2026-08-20
 last_activity_desc: Модель тарификации сведена к плоской подписке 3000 ₽/мес — фаза 05.1 переписана, UAT фазы 5 остановлен
 progress:
   total_phases: 7
-  completed_phases: 4
-  total_plans: 83
+  completed_phases: 5
+  total_plans: 82
   completed_plans: 82
-  percent: 57
+  percent: 71
 ---
 
 # Project State
@@ -209,6 +209,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-17T18:36:00.768Z
-Stopped at: Completed 05-21-PLAN.md — фаза 05 ждёт верификации раунда 6
-Resume file: None
+Last session: 2026-08-20T08:09:36.761Z
+Stopped at: Phase 05.1 UI-SPEC approved
+Resume file: .planning/phases/05.1-edinaya-podpiska/05.1-UI-SPEC.md
