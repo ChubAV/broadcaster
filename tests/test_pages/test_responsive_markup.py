@@ -228,18 +228,30 @@ async def _seed_payment(
     return payment
 
 
-async def _seed_subscription(db: AsyncSession, plan: str = "business") -> Subscription:
-    user = await _user(db)
-    sub = Subscription(
-        user_id=user.id,
-        plan=plan,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
-        is_active=True,
-    )
-    db.add(sub)
+async def _access_row(db: AsyncSession) -> Subscription:
+    """Активная строка подписки пользователя — её заводит регистрация."""
+    return (
+        await db.execute(
+            select(Subscription).where(
+                Subscription.user_id == (await _user(db)).id,
+                Subscription.is_active.is_(True),
+            )
+        )
+    ).scalar_one()
+
+
+async def _move_access_expiry(db: AsyncSession, delta: timedelta) -> datetime:
+    """Сдвигает срок УЖЕ СУЩЕСТВУЮЩЕЙ строки, а не заводит вторую.
+
+    Частичный уникальный индекс `uq_subscriptions_active_user` допускает у
+    пользователя ровно одну активную строку, а пробный срок ему завела
+    регистрация (план 05.1-01). Вторая вставка дала бы IntegrityError, то есть
+    тест падал бы на посеве, а не на предмете.
+    """
+    row = await _access_row(db)
+    row.expires_at = datetime.now(timezone.utc) + delta
     await db.commit()
-    await db.refresh(sub)
-    return sub
+    return row.expires_at
 
 
 async def _seed_group_info(
@@ -1259,18 +1271,30 @@ async def test_billing_renders_transaction_data(
 
 
 @pytest.mark.asyncio
-async def test_billing_shows_current_plan(
+async def test_billing_shows_the_access_date_from_the_live_shell(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Раздел тарифов показывает НАЗВАНИЕ ТЕКУЩЕГО тарифа пользователя.
+    """Раздел подписки показывает СРОК ДОСТУПА пользователя, а не имя тарифа.
 
-    Тариф приходит из живого контекста шелла (get_shell_context), а не из
-    константы в разметке: подписка с другим названием обязана изменить выдачу.
+    ⚠️ УТВЕРЖДЕНИЕ ПЕРЕЦЕЛЕНО ПЛАНОМ 05.1-04, А НЕ УДАЛЕНО. Оно охраняет ту же
+    границу — «величина приходит из живого контекста шелла, а не из константы в
+    разметке», — и сменило предмет вместе с моделью: имён тарифов больше нет
+    (D-F), доступ стоит одно число, и единственная величина, которая у человека
+    своя, — дата окончания. Подписка с другой датой обязана изменить выдачу.
     """
-    await _seed_subscription(db_session, plan="business")
+    expires_at = await _move_access_expiry(db_session, timedelta(days=30))
+    user = await _user(db_session)
+
+    from app.pages.common import format_datetime_for_user
 
     html = (await authed_client.get("/billing")).text
-    assert "Business" in html, "название текущего тарифа не отрисовано"
+    # Сверяется ТЕЛО СТРАНИЦЫ, а не вся выдача: ту же дату печатает виджет
+    # сайдбара, и утверждение по целому документу проходило бы и при
+    # неотрисованной панели раздела — то есть проверяло бы чужую поверхность.
+    body = html.split("<div data-body>", 1)[-1]
+    assert format_datetime_for_user(expires_at, user) in body, (
+        "срок доступа пользователя в теле раздела не отрисован"
+    )
 
 
 # --- План 05-05: паршалы раздела «Тарифы» ------------------------------------
@@ -1495,31 +1519,286 @@ def test_the_unwired_plans_template_is_gone():
     assert not offenders, f"ссылки на снесённый шаблон остались: {offenders}"
 
 
+BASE_HTML = TEMPLATES_DIR / "base.html"
+
+
+def _markup_without_comments(path: Path) -> str:
+    """Разметка без объяснительных комментариев Jinja.
+
+    Запреты этого блока адресованы КОПИРАЙТУ и КОДУ, а не прозе, которая
+    объясняет, почему запрет существует. Абзац, называющий отвергнутую
+    формулировку («осталось 0 дней» читается как «уже кончилось»), обязан
+    остаться в файле: без него следующий читатель «приведёт ветку в
+    соответствие» с соседней. Проверка по сырому тексту краснела бы от
+    собственного объяснения — тот же приём, которым план 05.1-01 разрешил
+    проверку отсутствия ветки разбором по синтаксическому дереву.
+    """
+    return re.sub(r"\{#.*?#\}", "", path.read_text(encoding="utf-8"), flags=re.S)
+
+
+def _css_without_comments() -> str:
+    """Таблица стилей без комментариев — по тому же основанию."""
+    return re.sub(r"/\*.*?\*/", "", APP_CSS.read_text(encoding="utf-8"), flags=re.S)
+
+
 @pytest.mark.asyncio
-async def test_the_sidebar_widget_names_the_message_balance_not_the_plan(
+async def test_the_sidebar_widget_names_the_access_it_shows(
     authed_client: AsyncClient,
 ):
-    """Виджет сайдбара подписан ТЕМ, ЧТО ПОКАЗЫВАЕТ (T-05-29).
+    """Виджет сайдбара подписан ТЕМ, ЧТО ПОКАЗЫВАЕТ (T-05-29, D-22).
 
-    `quota.used` / `quota.limit` считаются по журналу списаний БАЛАНСА
-    СООБЩЕНИЙ, а подпись обещала тариф. Раздел «Тарифы» теперь разводит эти две
-    величины на одном экране, и подпись обязана перестать врать: название
-    тарифа и срок живут ТАМ, где рядом стоят настоящие четыре оси.
+    ⚠️ УТВЕРЖДЕНИЕ ПЕРЕЦЕЛЕНО ПЛАНОМ 05.1-04, А НЕ УДАЛЕНО. Правило прежнее,
+    предмет у него сменился: виджет перестал показывать баланс сообщений и
+    показывает СРОК ДОСТУПА — ту величину, по которой `require_access` впускает
+    или отказывает. Подпись обязана следовать за предметом, иначе она врёт
+    ровно так же, как врала подпись тарифом над балансом.
+
+    Переименование ключа и классов (`quota` → `access`) здесь тоже не
+    косметика: сменилась ФОРМА значения — `{used, limit, percent, plan}` →
+    `{open, expires_at, days_left}`. Прецедент D-22 («менялся текст, а не
+    контракт») к смене формы не применяется.
     """
-    source = (TEMPLATES_DIR / "base.html").read_text(encoding="utf-8")
+    source = BASE_HTML.read_text(encoding="utf-8")
 
     assert "Тариф {{" not in source, "виджет по-прежнему подписан тарифом"
-    assert "Баланс сообщений" in source
+    assert "Баланс сообщений" not in source, (
+        "виджет подписан балансом сообщений, которого он больше не показывает"
+    )
+    assert "quota" not in source, "имя снятого ключа осталось в разметке шелла"
+    assert ">Доступ<" in source, "подписи виджета в разметке нет"
 
-    # Контракт переменных виджета НЕ изменился: `quota` читают 26 страниц, и
-    # переименование сломало бы их все. Меняется текст, а не контракт.
-    for expression in ("quota.get('used'", "quota.get('limit'", "quota.get('percent'"):
+    for expression in ("access.get('open'", "access.get('days_left'", "access.get('expires_at'"):
         assert expression in source, expression
     assert 'href="/billing"' in source, "ссылка виджета на раздел исчезла"
+    assert "ПОДПИСКА И ОПЛАТА →" in source, "подпись ссылки виджета не перецелена"
 
     html = (await authed_client.get("/profile")).text
-    assert "data-quota" in html
-    assert "Баланс сообщений" in html
+    assert "data-access" in html
+    assert "data-quota" not in html
+    assert "Доступ" in html
+
+
+@pytest.mark.asyncio
+async def test_the_widget_calls_the_last_day_by_its_name_and_not_zero(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """P-6: последний день доступа называется словами, а не «осталось 0 дней».
+
+    Ветка проверяется РАНЬШЕ ветки счёта дней, и это не оформление. «Осталось
+    0 дней» формально верно и читается как «уже кончилось» — то есть человек, у
+    которого доступ ещё работает, прочитал бы, что доступ закрыт. Формулировка
+    едина с панелью раздела подписки: две разные фразы про один день на двух
+    поверхностях — то же расхождение, за которое снят виджет с чужой подписью.
+    """
+    await _move_access_expiry(db_session, timedelta(hours=5))
+
+    html = (await authed_client.get("/profile")).text
+
+    assert "последний день" in html
+    assert "осталось 0" not in html, "напечатан счёт вместо слов последнего дня"
+    assert "закрыт" not in html, "живой доступ назван закрытым"
+
+
+@pytest.mark.asyncio
+async def test_the_widget_counts_the_days_inside_the_warning_threshold(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Внутри порога печатаются ДНИ, и форма слова приезжает склонением (P-1).
+
+    Порог — именованная константа `ACCESS_SOON_DAYS`, приезжающая в разметку
+    глобалом: выписанная семёрка была бы второй копией правила и разошлась бы с
+    первой молча.
+    """
+    await _move_access_expiry(db_session, timedelta(days=3))
+
+    html = (await authed_client.get("/profile")).text
+
+    assert "осталось 2 дня" in html, "счёт дней внутри порога не напечатан"
+
+
+@pytest.mark.asyncio
+async def test_the_widget_prints_the_date_beyond_the_warning_threshold(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Вне порога печатается ДАТА — и только глобалом форматирования (P-2)."""
+    expires_at = await _move_access_expiry(db_session, timedelta(days=30))
+    user = await _user(db_session)
+
+    html = (await authed_client.get("/profile")).text
+
+    from app.pages.common import format_datetime_for_user
+
+    assert f"до {format_datetime_for_user(expires_at, user)}" in html
+    assert "осталось" not in html, "вне порога напечатан счёт дней"
+
+
+@pytest.mark.asyncio
+async def test_the_widget_says_the_access_is_closed_when_it_is(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Закрытый доступ назван бейджем `закрыт` — тон danger, а не warning.
+
+    Тон изменён относительно контракта фазы 5 намеренно (A-9): там истечение
+    НИЧЕГО не отключало, теперь отключает. Предупреждающий цвет остался бы от
+    утверждения, переставшего быть правдой.
+    """
+    await _move_access_expiry(db_session, timedelta(days=-1))
+
+    html = (await authed_client.get("/profile")).text
+
+    assert "закрыт" in html
+    assert "осталось" not in html
+    assert "последний день" not in html
+
+
+@pytest.mark.asyncio
+async def test_the_widget_is_not_drawn_at_all_without_the_access_key(
+    authed_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Нет ключа `access` — нет виджета. Умолчание «закрыт» ЗАПРЕЩЕНО.
+
+    Ложное «доступ закрыт», выведенное из пустого словаря, — худший из
+    возможных дефектов этого виджета: он сказал бы человеку, что работа
+    остановлена, на каждой из 26 страниц, на которых она работает. Отсутствие
+    виджета честнее неправды.
+    """
+    import app.pages as app_pages
+
+    real = app_pages.get_shell_context
+
+    async def without_access(db, user):
+        context = await real(db, user)
+        context.pop("access", None)
+        return context
+
+    monkeypatch.setattr("app.pages.get_shell_context", without_access)
+
+    response = await authed_client.get("/profile")
+    html = response.text
+
+    assert response.status_code == 200, "страница упала вместо того, чтобы не рисовать виджет"
+    assert "data-access" not in html, "виджет нарисован без данных"
+    assert ">Доступ<" not in html
+    assert "badge--danger" not in html, "пустой словарь выведен как «доступ закрыт»"
+    # Сайдбар при этом цел: исчезает ВИДЖЕТ, а не блок пользователя под ним.
+    assert "data-user" in html
+
+
+def test_the_bottom_pinning_rides_with_the_widget_selector():
+    """`margin-top: auto` объявлен на виджете, а не на блоке пользователя (D-J).
+
+    Сайдбар — колонка flex, и к низу её прижимает ИМЕННО виджет, утаскивая за
+    собой блок пользователя. Свойство обязано было уехать вместе с
+    переименованием селектора: не уехав, оно оторвало бы блок пользователя от
+    низа сайдбара на всех 26 страницах — правкой, выглядящей безобидным
+    переименованием.
+    """
+    css = _css_without_comments()
+
+    widget = re.search(r"\[data-access\]\s*\{([^}]*)\}", css)
+    assert widget, "правила [data-access] в app.css нет"
+    assert "margin-top: auto" in widget.group(1), (
+        "прижатие к низу сайдбара не уехало вместе с переименованием виджета"
+    )
+
+    assert css.count("margin-top: auto;") == 1, (
+        "прижатие к низу объявлено дважды — два элемента спорят за низ сайдбара"
+    )
+
+
+def test_the_widget_and_the_user_block_are_hidden_by_one_mobile_rule():
+    """Мобильной поверхности у виджета нет и не появляется (A-4).
+
+    Правило сохранено дословно, сменилось только имя атрибута. Ту же величину
+    на телефоне несёт панель раздела подписки.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    mobile = re.search(r"@media \(max-width: 860px\) \{(.*?)\n\}", css, re.S)
+    assert mobile, "мобильного блока 860px в app.css нет"
+    assert "[data-access], [data-user] { display: none !important; }" in mobile.group(1), (
+        "виджет доступа и блок пользователя скрываются не одним правилом"
+    )
+
+
+def test_the_value_of_the_widget_wraps_instead_of_leaving_the_widget():
+    """Ни подпись, ни значение не объявлены nowrap и flex:none (long-text E4).
+
+    Под значение остаётся 147px, самое длинное — «до 2026-08-20 14:30» ≈138px.
+    Запас узкий, и безопасным его делает именно отсутствие этих двух
+    объявлений: при нехватке ширины значение переносится ВНУТРИ виджета, а не
+    вылезает за его границу. Ровно этим строка long-text отличается от M1,
+    требующего действия.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    for selector in (r"\.access-plan", r"\.access-value"):
+        rule = re.search(selector + r"\s*\{([^}]*)\}", css)
+        assert rule, f"правила {selector} в app.css нет"
+        body = rule.group(1)
+        assert "nowrap" not in body, f"{selector}: значение перестало переноситься"
+        assert "flex: none" not in body, f"{selector}: значение перестало сжиматься"
+
+
+def test_the_reduced_motion_rule_names_only_living_classes():
+    """Правило, адресованное несуществующему классу, — мусор.
+
+    Имя заливки шкалы вычеркнуто вместе со шкалой; остальные четыре имени
+    остались нетронутыми. Следующий читатель принял бы мёртвое имя за живое.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    rule = re.search(
+        r"@media \(prefers-reduced-motion: reduce\) \{([^}]*)\}", css
+    )
+    assert rule, "правила prefers-reduced-motion в app.css нет"
+    selectors = [s.strip() for s in rule.group(1).split("{")[0].split(",")]
+
+    assert "quota-fill" not in rule.group(1)
+    assert len(selectors) == 4, f"имён в перечне не четыре: {selectors}"
+    for name in (
+        ".brand-mark::after",
+        ".session-dot.is-online",
+        ".worker-row__dot.is-online",
+        ".animate-fade-in",
+    ):
+        assert name in selectors, f"живое имя {name} вычеркнуто заодно"
+
+
+def test_the_widget_carries_no_progress_bar_at_all():
+    """Прохибиция P-4: шкалы в виджете нет ни в каком виде.
+
+    Шкала «сколько месяца прошло» вернула бы на все 26 страниц счёт, ради
+    снятия которого фаза существует.
+    """
+    source = _markup_without_comments(BASE_HTML)
+    css = _css_without_comments()
+
+    for marker in ("progress", "track", "fill", "percent"):
+        assert marker not in source, f"в разметке шелла остался признак шкалы: {marker}"
+    for marker in (".access-track", ".access-fill"):
+        assert marker not in css, f"в app.css заведена шкала виджета: {marker}"
+
+
+def test_the_warning_threshold_is_named_and_not_written_out_in_the_copy():
+    """Ни порога, ни формы слова разметка не выписывает литералом.
+
+    Числа не копируются в копирайт: порог живёт в одной константе
+    (`ACCESS_SOON_DAYS`) и приезжает подстановкой, форма слова — склонением.
+    «Осталось 1 дней» — дефект контракта, а не опечатка.
+    """
+    source = _markup_without_comments(BASE_HTML)
+
+    assert "access_soon_days" in source, "порог выписан мимо константы"
+    assert "plural_ru(access.get('days_left'), 'день', 'дня', 'дней')" in source, (
+        "форма слова выписана вместо склонения"
+    )
+    assert source.count("дней") == 1, (
+        "литерал «дней» встречается вне вызова склонения"
+    )
+    assert not re.search(r"days_left'\)\s*<=\s*\d", source), (
+        "порог сравнивается с числом, выписанным в разметке"
+    )
 
 
 def test_the_shell_did_not_gain_a_query_for_the_widget():
