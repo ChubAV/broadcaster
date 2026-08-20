@@ -40,7 +40,6 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.billing.plan_usage import AXIS_LABELS, AXIS_ORDER
 from app.config import Settings
 from app.constants import PAYMENT_LIST_CAP
 from app.models.payment import Payment
@@ -188,14 +187,24 @@ async def test_the_section_redirects_an_anonymous_visitor_to_login(
 
 
 @pytest.mark.asyncio
-async def test_the_section_carries_every_block_of_the_screen(
+async def test_the_section_carries_only_what_is_left_of_the_screen(
     authed_client: AsyncClient,
 ):
-    """Пять блоков макета приезжают ОДНИМ маршрутом: ни табов, ни второго пути."""
+    """Раздел приезжает ОДНИМ маршрутом, и в нём осталось ровно два блока.
+
+    ⚠️ ТЕСТ ПЕРЕЦЕЛЕН, А НЕ УДАЛЁН. Он охраняет ту же границу — «контракт между
+    обработчиком и разметкой объявлен целиком», — и сменил предмет вместе с
+    экраном: пяти блоков больше нет, потому что четыре из них были счётом.
+    Утверждение об ОТСУТСТВИИ снятых ключей столь же обязательно, сколько о
+    наличии оставшихся: ключ, забытый в контексте, — это запрос, который никто
+    не читает, и он оплачивается на каждом рендере.
+    """
     with rendered_context() as context:
         response = await authed_client.get("/billing")
 
     assert response.status_code == 200
+    for key in ("access", "ever_paid", "subscription_price", "payments"):
+        assert key in context, f"ключ «{key}» не доехал до разметки"
     for key in (
         "subscription",
         "usage",
@@ -203,34 +212,12 @@ async def test_the_section_carries_every_block_of_the_screen(
         "balance_info",
         "packages",
         "transactions",
-        "payments",
+        "free_plan_id",
+        "refused_plan_ids",
+        "downgrade_caption",
     ):
-        assert key in context, f"блок «{key}» не доехал до разметки"
+        assert key not in context, f"снятый ключ «{key}» остался в контексте"
     assert context["active_page"] == "billing"
-
-
-@pytest.mark.asyncio
-async def test_the_section_carries_the_four_axes_in_the_layout_order(
-    authed_client: AsyncClient,
-):
-    with rendered_context() as context:
-        response = await authed_client.get("/billing")
-
-    assert response.status_code == 200
-    axes = context["usage"]
-    assert len(axes) == 4
-    assert tuple(axis.key for axis in axes) == AXIS_ORDER
-
-
-@pytest.mark.asyncio
-async def test_the_section_carries_the_plans_from_the_config(
-    authed_client: AsyncClient,
-):
-    """Список планов разбирается В ОБРАБОТЧИКЕ и уезжает готовым (Pitfall 10)."""
-    with rendered_context() as context:
-        await authed_client.get("/billing")
-
-    assert [plan["id"] for plan in context["plans"]] == ["free", "basic", "pro"]
 
 
 @pytest.mark.asyncio
@@ -323,10 +310,11 @@ async def test_the_billing_page_stays_open_when_the_access_is_closed(
         response = await authed_client.get("/billing")
 
     assert response.status_code == 200
-    assert context["subscription"]["expired"] is True
-    # Витрина и оси на месте: их снимает план 05.1-05, а не истечение срока.
-    assert len(context["usage"]) == 4
-    assert len(context["plans"]) == 3
+    assert context["access"]["state"] == "expired"
+    # Журнал платежей и кнопка оплаты на месте: закрытый доступ закрывает
+    # создание ценности, а не путь к оплате.
+    assert "payments" in context
+    assert context["payments_enabled"] is True
 
 
 @pytest.mark.asyncio
@@ -338,38 +326,13 @@ async def test_a_live_access_period_is_not_reported_expired(
     with rendered_context() as context:
         await authed_client.get("/billing")
 
-    assert context["subscription"]["expired"] is False
+    assert context["access"]["state"] != "expired"
 
 
-@pytest.mark.asyncio
-async def test_a_user_without_a_subscription_row_gets_the_page_and_not_a_five_hundred(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Строки подписки нет вовсе — экран отвечает 200 и называет доступ закрытым.
-
-    ⚠️ ТЕСТ ПЕРЕЦЕЛЕН, А НЕ ОСЛАБЛЕН. До плана 05.1-01 у пользователя строки не
-    было по умолчанию, и утверждение «отсутствие подписки — не истёкший срок»
-    описывало обычного человека. Теперь строку заводит регистрация, и прежняя
-    формулировка проверяла бы пробный срок, называя его отсутствием, — то есть
-    молчала бы о состоянии, ради которого написана.
-
-    Состояние остаётся ДОСТИЖИМЫМ: пользователи, заведённые до ревизии
-    05.1-08, строки не имеют, и встретить их пятисоткой значило бы закрыть
-    единственный экран, с которого они могут заплатить. Все чтения ключа
-    доступа идут через умолчание именно поэтому.
-    """
-    row = await _access_row(db_session)
-    await db_session.delete(row)
-    await db_session.commit()
-
-    with rendered_context() as context:
-        response = await authed_client.get("/billing")
-
-    assert response.status_code == 200
-    assert context["subscription"]["expires_at"] is None
-    assert context["subscription"]["expired"] is True, (
-        "отсутствие строки прочитано как открытый доступ"
-    )
+# ⚠️ ТЕСТ ОТСУТСТВУЮЩЕЙ СТРОКИ ПОДПИСКИ ПЕРЕЕХАЛ ВНИЗ, В БЛОК ЧЕТЫРЁХ СОСТОЯНИЙ
+# (`test_a_user_without_a_subscription_row_gets_the_closed_state`): его предмет —
+# состояние экрана, и жить ему рядом с остальными тремя. Здесь он снят как
+# ВТОРАЯ копия того же утверждения, а не как потерявший предмет.
 
 
 # =============================================================================
@@ -545,10 +508,17 @@ async def test_purchase_creates_nothing_when_payments_are_disabled(
 
 
 @pytest.mark.asyncio
-async def test_the_section_still_carries_plans_and_axes_without_payments(
+async def test_the_section_still_carries_the_price_and_the_date_without_payments(
     authed_client: AsyncClient, test_settings
 ):
-    """Выключенные платежи гасят КНОПКИ, а не витрину тарифов (D-21)."""
+    """Выключенные платежи гасят КНОПКУ, а не витрину (D-21).
+
+    ⚠️ ПРЕДМЕТ СМЕНИЛСЯ ВМЕСТЕ С ВИТРИНОЙ, ГРАНИЦА ОСТАЛАСЬ ТОЙ ЖЕ. Витриной
+    были три карточки тарифов и четыре оси; теперь витрина — это цена и дата,
+    и они обязаны пережить выключение платежей ровно по тому же основанию:
+    экран без цены и без даты читается как поломка, а не как «оплата
+    недоступна».
+    """
     test_settings.yookassa_enabled = False
     try:
         with rendered_context() as context:
@@ -557,9 +527,9 @@ async def test_the_section_still_carries_plans_and_axes_without_payments(
         test_settings.yookassa_enabled = True
 
     assert response.status_code == 200
-    assert len(context["plans"]) == 3
-    assert len(context["usage"]) == 4
     assert context["payments_enabled"] is False
+    assert context["subscription_price"], "цена исчезла вместе с кнопкой"
+    assert "state" in context["access"], "состояние исчезло вместе с кнопкой"
 
 
 def test_the_origin_check_runs_before_the_payment_is_created():
@@ -654,36 +624,22 @@ def test_the_section_markup_carries_no_script_at_all():
     )
 
 
-def test_the_section_markup_imports_all_three_partials():
+def test_the_section_markup_imports_the_only_partial_it_has_left():
+    """Паршал у раздела остался ОДИН, и два снятых не импортируются.
+
+    ⚠️ ПРОВЕРЯЕТСЯ И ОТСУТСТВИЕ, А НЕ ТОЛЬКО НАЛИЧИЕ. Импорт удалённого шаблона
+    — это `TemplateNotFound` на рендере, то есть пятисотка на разделе, который
+    существует ради приёма денег; поймать её обязан тест исходника, а не
+    пользователь.
+    """
     source = BALANCE_HTML.read_text(encoding="utf-8")
 
-    for rel in (
-        "billing/includes/plan_card.html",
-        "billing/includes/usage_meters.html",
-        "billing/includes/payment_row.html",
-    ):
-        assert rel in source, rel
-    # Разбор конфига из Jinja запрещён: обработчик уже положил готовый список,
+    assert "billing/includes/payment_row.html" in source
+    for gone in ("plan_card", "usage_meter"):
+        assert gone not in source, gone
+    # Разбор конфига из Jinja запрещён: обработчик уже положил готовые значения,
     # а свойство кэша не имеет и парсило бы строку на каждой итерации.
     assert "parsed_plan_limits" not in source
-
-
-@pytest.mark.asyncio
-async def test_the_screen_draws_all_four_axes(authed_client: AsyncClient):
-    """Четыре метра на экране, подписи — из модуля осей, а не из разметки."""
-    html = (await authed_client.get("/billing")).text
-
-    for key in AXIS_ORDER:
-        assert AXIS_LABELS[key] in html, AXIS_LABELS[key]
-
-
-@pytest.mark.asyncio
-async def test_the_screen_draws_three_plan_cards(authed_client: AsyncClient):
-    html = (await authed_client.get("/billing")).text
-
-    assert "data-plans" in html, "сетки карточек планов на экране нет"
-    for name in ("Free", "Basic", "Pro"):
-        assert name in html, name
 
 
 @pytest.mark.asyncio
@@ -754,17 +710,17 @@ async def test_a_closed_access_is_named_and_offered_a_payment(
     await _move_access_expiry(db_session, days=-3)
 
     response = await authed_client.get("/billing")
-    html = response.text
+    body = _body(response.text)
 
     assert response.status_code == 200
-    assert "Доступ закрыт" in html, "закрытие доступа на экране не названо"
-    assert "работа продолжится с того же места" in html, (
+    assert "Доступ закрыт" in body, "закрытие доступа на экране не названо"
+    assert "работа продолжится с того же места" in body, (
         "закрытие названо без продолжения — читается как потеря данных"
     )
-    assert "ничего не отключено" not in html, (
+    assert "ничего не отключено" not in body, (
         "экран печатает утверждение, переставшее быть правдой"
     )
-    renewals = [f for f in _payment_forms(html) if "/billing/subscribe" in f]
+    renewals = [f for f in _payment_forms(body) if "/billing/subscribe" in f]
     assert renewals, "предложения оплатить доступ нет"
     for form in renewals:
         assert 'action="/billing/subscribe"' in form
@@ -774,84 +730,83 @@ async def test_a_closed_access_is_named_and_offered_a_payment(
 async def test_a_live_access_period_is_not_marked_closed(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Живой доступ назван открытым и своей датой, а не именем тарифа."""
+    """Живой оплаченный доступ назван открытым и своей датой.
+
+    Сверяется ТЕЛО страницы: ту же дату печатает виджет сайдбара, и утверждение
+    по целому документу прошло бы при неотрисованной панели раздела.
+    """
+    owner = await _current_user(db_session)
     expires_at = await _move_access_expiry(db_session, days=30)
+    await _seed_subscription_payment(db_session, owner.id)
     user = await _current_user(db_session)
 
     from app.pages.common import format_datetime_for_user
 
-    html = (await authed_client.get("/billing")).text
+    body = _body((await authed_client.get("/billing")).text)
 
-    assert "Доступ закрыт" not in html
-    assert f"доступ открыт до {format_datetime_for_user(expires_at, user)}" in html
+    assert "Доступ закрыт" not in body
+    assert f"доступ открыт до {format_datetime_for_user(expires_at, user)}" in body
 
 
 @pytest.mark.asyncio
-async def test_both_payments_are_real_forms_and_degrade_without_alpine(
+async def test_the_only_payment_left_is_a_real_form_and_degrades_without_alpine(
     authed_client: AsyncClient,
 ):
-    """T-05-31: обе оплаты — формы POST, а не кнопки с обработчиком события.
+    """T-05-31: оплата — форма POST, а не кнопка с обработчиком события.
 
     Кнопка type="button" рядом с асинхронным запросом из скрипта — это не
     оплата, а единственная точка отказа: раздел терял бы приём денег вместе с
     одним тегом <script>. Именованная регрессия по образцу четырёх
     существующих в проекте (WR-04).
+
+    ⚠️ ФОРМА НА ЭКРАНЕ ОДНА ВМЕСТО ТРЁХ, И ОНА НЕ НЕСЁТ НИ ОДНОГО ПОЛЯ: цену
+    читает сервер из настройки, и поверхность подмены суммы схлопнута до нуля,
+    а не отфильтрована (T-05.1-22).
     """
-    html = (await authed_client.get("/billing")).text
+    body = _body((await authed_client.get("/billing")).text)
 
-    forms = _payment_forms(html)
-    assert forms, "форм оплаты на экране нет вовсе"
+    forms = _payment_forms(body)
+    assert len(forms) == 1, f"форм оплаты на экране не одна: {len(forms)}"
 
-    actions = {
-        re.search(r'action="([^"]+)"', form).group(1) for form in forms
-    }
-    assert actions == {"/billing/subscribe", "/billing/purchase"}, actions
-
-    for form in forms:
-        assert re.search(r'method="post"', form, re.I), form[:200]
-        assert 'type="submit"' in form, form[:200]
-        assert 'type="button"' not in form, form[:200]
-
-    purchases = [f for f in forms if "/billing/purchase" in f]
-    for form in purchases:
-        assert 'name="package_index"' in form, form[:200]
+    form = forms[0]
+    assert 'action="/billing/subscribe"' in form
+    assert re.search(r'method="post"', form, re.I), form[:200]
+    assert 'type="submit"' in form, form[:200]
+    assert 'type="button"' not in form, form[:200]
+    assert "<input" not in form, "форма оплаты снова несёт поле"
 
 
 @pytest.mark.asyncio
-async def test_the_screen_shows_the_showcase_but_no_payment_form_when_disabled(
+async def test_the_screen_keeps_the_price_but_no_payment_form_when_disabled(
     authed_client: AsyncClient, test_settings
 ):
-    """D-21: выключенные платежи гасят КНОПКИ, а не витрину."""
+    """D-21: выключенные платежи гасят КНОПКУ, а не витрину.
+
+    ⚠️ ЭТОТ ТЕСТ ПОГЛОТИЛ ПРЕЖНИЙ `test_disabled_payments_keep_their_own_words`.
+    Тот утверждал ту же границу — «отказ назван словами администратора», — но
+    его вторая половина различала два пустых состояния КАТАЛОГА ПАКЕТОВ,
+    которого больше нет. Осталась одна пара слов, и живёт она здесь.
+    """
     test_settings.yookassa_enabled = False
     try:
         response = await authed_client.get("/billing")
     finally:
         test_settings.yookassa_enabled = True
 
-    html = response.text
+    body = _body(response.text)
     assert response.status_code == 200
-    assert not _payment_forms(html), "форма оплаты осталась при выключенных платежах"
-    assert "администратора" in html
-    for name in ("Free", "Basic", "Pro"):
-        assert name in html, name
-    for key in AXIS_ORDER:
-        assert AXIS_LABELS[key] in html, AXIS_LABELS[key]
+    assert not _payment_forms(body), "форма оплаты осталась при выключенных платежах"
+    assert "Оплатить доступ можно через администратора" in body
+    assert templates.env.globals["format_amount"](SUBSCRIPTION_PRICE) in body, (
+        "витрина погасла вместе с кнопкой"
+    )
 
 
-@pytest.mark.asyncio
-async def test_the_message_balance_stays_a_block_of_its_own(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Баланс сообщений и ось «Отправок в месяц» — РАЗНЫЕ блоки (D-10).
-
-    Приравнять их значило бы поставить лимит тарифа в зависимость от того,
-    сколько пакетов человек докупил.
-    """
-    html = (await authed_client.get("/billing")).text
-
-    assert "Баланс сообщений" in html
-    assert AXIS_LABELS["sends"] in html
-    assert "История операций" in html or "Операций пока нет" in html
+# ⚠️ `test_the_message_balance_stays_a_block_of_its_own` СНЯТ ВМЕСТЕ С ПРЕДМЕТОМ.
+# Он утверждал, что баланс сообщений и ось «Отправок в месяц» — разные блоки
+# (D-10). Обоих на экране больше нет: ни баланса, ни осей, ни пакетов, которые
+# он разводил. Границу «лимит тарифа не зависит от докупленных пакетов» снял
+# не этот тест, а решение D-D — предмет исчез, а не перестал проверяться.
 
 
 # =============================================================================
@@ -862,10 +817,9 @@ async def test_the_message_balance_stays_a_block_of_its_own(
 # test_billing_amount_format_is_a_display_concern_only в
 # tests/test_pages/test_responsive_markup.py — это ДРУГОЕ свойство: там речь о
 # том, что подпись живёт только на стороне показа. Здесь — об устойчивости:
-# `format_amount` вызывается на КАЖДОЙ карточке плана, КАЖДОЙ плитке пакета и
-# КАЖДОЙ строке платежа, поэтому одна непригодная строка в конфиге цен или в
-# `payments.amount_value` роняла весь раздел вместе с балансом, планами и
-# историей.
+# `format_amount` зовётся и на цене доступа, и на КАЖДОЙ строке платежа,
+# поэтому одна непригодная строка в настройке цены или в `payments.amount_value`
+# роняла весь раздел вместе с датой, кнопкой и историей.
 #
 # `NaN` и `Infinity` — ВАЛИДНЫЕ значения `Decimal`: разбор их принимает, и
 # прежний `except` вокруг разбора их не видел. Падение происходило ниже — на
@@ -925,110 +879,631 @@ def test_the_amount_label_still_formats_a_valid_amount():
 
 
 @pytest.mark.asyncio
-async def test_the_section_survives_an_unusable_price_in_the_plan_config(
+async def test_the_section_survives_an_unusable_subscription_price(
     authed_client: AsyncClient, test_settings
 ):
-    """Одна плохая цена в конфиге не отнимает у пользователя ВЕСЬ раздел.
+    """Непригодная цена в настройке не отнимает у пользователя ВЕСЬ раздел.
 
-    Настоящий предмет предупреждения — не функция, а раздел: `format_amount`
-    зовётся из трёх поверхностей сразу, и необработанное исключение уводило
-    `/billing` в 500 вместе с балансом, планами и историей платежей.
+    ⚠️ ТЕСТ ПЕРЕЦЕЛЕН С ПРЕЙСКУРАНТА НА ЕДИНСТВЕННУЮ ЦЕНУ. Граница осталась той
+    же: `format_amount` зовётся и на витрине, и на каждой строке платежа, и
+    необработанное исключение уводило `/billing` в 500 целиком — то есть
+    закрывало экран, с которого человек только и может заплатить. Сменился
+    источник цены: прейскуранта нет, есть одна настройка.
+
+    Непригодное значение печатается КАК ЕСТЬ: выдуманный ноль в денежной
+    подписи — правдоподобная ложь, а исходная строка хотя бы называет себя
+    странной.
     """
-    test_settings.plan_limits = (
-        '[{"id":"free","name":"Free","price":"0.00","ads":3,"groups":5,'
-        '"sends":300,"accounts":1},'
-        '{"id":"basic","name":"Basic","price":"NaN","ads":15,"groups":30,'
-        '"sends":5000,"accounts":5}]'
-    )
+    test_settings.subscription_price = "NaN"
     try:
         response = await authed_client.get("/billing")
     finally:
-        test_settings.plan_limits = Settings.model_fields["plan_limits"].default
-
-    assert response.status_code == 200, "раздел упал из-за одной строки конфига"
-    html = response.text
-    assert "NaN" in html, "непригодная цена не напечатана как есть"
-    assert "Basic" in html, "витрина потеряла план с непригодной ценой"
-
-
-# =============================================================================
-# Пустой каталог пакетов говорит словами (план 05-09, U4 / U5)
-# =============================================================================
-#
-# ДВЕ ПРИЧИНЫ ПУСТОТЫ — ДВЕ РАЗНЫЕ ПАРЫ СЛОВ, ровно тем же правилом, каким два
-# журнала раздела несут две разные пары строк (R16). «Платежи выключены
-# администратором» и «платежи включены, но каталог пуст» — разные ответы, и
-# подмена одного другим была бы неправдой: во втором случае администратор ни
-# при чём, покупать просто нечего.
-
-# Заголовок нового пустого состояния и прежняя строка выключенных платежей.
-PACKAGES_EMPTY_TITLE = "Пакеты сообщений временно недоступны"
-PAYMENTS_DISABLED_LINE = "Пополнение баланса доступно через администратора"
-
-
-@pytest.mark.asyncio
-async def test_an_empty_package_catalogue_speaks_instead_of_showing_a_void(
-    authed_client: AsyncClient, test_settings
-):
-    """Ноль пакетов при ВКЛЮЧЁННЫХ платежах рисует пустое состояние (U4).
-
-    До плана 05-09 цикл крутился в `[data-metrics]` безусловно, и пустой
-    конфиг давал пустой блок под балансом. Пустота без слов читается как
-    поломка интерфейса, а не как «показывать нечего».
-    """
-    test_settings.message_packages = "[]"
-    try:
-        response = await authed_client.get("/billing")
-    finally:
-        test_settings.message_packages = Settings.model_fields[
-            "message_packages"
+        test_settings.subscription_price = Settings.model_fields[
+            "subscription_price"
         ].default
 
+    assert response.status_code == 200, "раздел упал из-за одной строки настройки"
+    body = _body(response.text)
+    assert "NaN" in body, "непригодная цена не напечатана как есть"
+
+
+# ⚠️ ТРИ ТЕСТА КАТАЛОГА ПАКЕТОВ СНЯТЫ ВМЕСТЕ С САМИМ КАТАЛОГОМ (D-D):
+# `…empty_package_catalogue_speaks…`, `…filled_package_catalogue_carries_no…` и
+# `test_disabled_payments_keep_their_own_words`. Первые два различали два
+# пустых состояния сетки пакетов, которой на экране больше нет. Третий охранял
+# границу «выключенные платежи названы словами», и она НЕ потеряна: её держит
+# `test_the_screen_keeps_the_price_but_no_payment_form_when_disabled` выше —
+# там же, где живёт единственная оставшаяся строка про администратора.
+
+
+# =============================================================================
+# План 05.1-05: одно из ЧЕТЫРЁХ состояний считает ОБРАБОТЧИК, а не разметка
+# =============================================================================
+#
+# Правило состояния одно на раздел, и вторая его копия в Jinja разъехалась бы с
+# гардом доступа молча — тот же класс дефекта, за который фаза 5 получила шесть
+# раундов гэпов подряд. Разметке достаётся ГОТОВЫЙ ответ `access.state`.
+#
+# ⚠️ УТВЕРЖДЕНИЯ О ВЕЛИЧИНЕ НА ЭКРАНЕ СВЕРЯЮТ ТЕЛО СТРАНИЦЫ, А НЕ ВСЮ ВЫДАЧУ.
+# Виджет сайдбара печатает дату доступа на КАЖДОМ документе проекта, и проверка
+# по целому HTML прошла бы при неотрисованной панели раздела (план 05.1-04,
+# «Issues» №2).
+
+STATE_TRIAL = "trial"
+STATE_PAID = "paid"
+STATE_EXPIRED = "expired"
+STATE_COMPED = "comped"
+
+# Цена доступа МАШИННОЙ СТРОКОЙ приезжает из настройки, а не выписывается
+# литералом: копия числа в тесте разошлась бы с конфигом молча — ровно тем же
+# правилом, каким её нет в разметке.
+SUBSCRIPTION_PRICE = Settings.model_fields["subscription_price"].default
+
+# Две строки объяснения закрытого доступа. Каждая называет ФАКТ и ПРОДОЛЖЕНИЕ:
+# «доступ закрыт» без слов о сохранности читается как потеря данных, а это
+# неправда — планировщик лишь не отправляет.
+NOTICE_NEVER_PAID = "Пробный период закончился"
+NOTICE_AFTER_PAYING = "Оплаченный срок закончился"
+NOTICE_TAIL = "работа продолжится с того же места"
+
+
+def _body(html: str) -> str:
+    """Тело страницы — всё после открытия `[data-body]`, без шелла."""
+    return html.split("<div data-body>", 1)[-1]
+
+
+async def _seed_subscription_payment(
+    db: AsyncSession, user_id: int, *, status: str = "succeeded"
+) -> Payment:
+    """Подписочный платёж с явным статусом. `plan` пуст — тарифов больше нет."""
+    payment = _payment_row(user_id, status=status)
+    payment.plan = None
+    db.add(payment)
+    await db.commit()
+    return payment
+
+
+@pytest.mark.asyncio
+async def test_a_live_period_without_a_paid_subscription_is_a_trial(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Срок жив, успешных подписочных платежей нет — это ПРОБНЫЙ период."""
+    await _move_access_expiry(db_session, days=3)
+
+    with rendered_context() as context:
+        response = await authed_client.get("/billing")
+
     assert response.status_code == 200
-    html = response.text
-    assert PACKAGES_EMPTY_TITLE in html, "пустой каталог пакетов промолчал"
-    assert 'action="/billing/purchase"' not in html, (
-        "форма покупки осталась при пустом каталоге"
+    assert context["access"]["state"] == STATE_TRIAL
+    assert context["ever_paid"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["pending", "canceled"])
+async def test_an_unfinished_payment_does_not_make_the_period_paid(
+    authed_client: AsyncClient, db_session: AsyncSession, status: str
+):
+    """Незавершённый и отклонённый платежи «оплаченным» состояние НЕ делают.
+
+    Иначе человек, отказавшийся от оплаты на стороне ЮKassa, прочитал бы
+    «подписка оплачена» — то есть экран подтвердил бы сделку, которой не было.
+    """
+    owner = await _current_user(db_session)
+    await _move_access_expiry(db_session, days=3)
+    await _seed_subscription_payment(db_session, owner.id, status=status)
+
+    with rendered_context() as context:
+        await authed_client.get("/billing")
+
+    assert context["access"]["state"] == STATE_TRIAL
+    assert context["ever_paid"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_live_period_after_a_succeeded_payment_is_paid(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    owner = await _current_user(db_session)
+    await _move_access_expiry(db_session, days=20)
+    await _seed_subscription_payment(db_session, owner.id)
+
+    with rendered_context() as context:
+        response = await authed_client.get("/billing")
+
+    assert response.status_code == 200
+    assert context["access"]["state"] == STATE_PAID
+    assert context["ever_paid"] is True
+
+
+@pytest.mark.asyncio
+async def test_an_expired_period_is_named_closed(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    await _move_access_expiry(db_session, days=-3)
+
+    with rendered_context() as context:
+        response = await authed_client.get("/billing")
+
+    assert response.status_code == 200
+    assert context["access"]["state"] == STATE_EXPIRED
+
+
+@pytest.mark.asyncio
+async def test_a_user_without_a_subscription_row_gets_the_closed_state(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Отсутствие строки — ОПРЕДЕЛЁННОЕ состояние (доступа нет), а не падение.
+
+    Пользователи, заведённые до ревизии 05.1-08, строки не имеют, и встретить
+    их пятисоткой значило бы закрыть единственный экран, с которого они могут
+    заплатить. Все чтения ключа доступа идут через умолчание именно поэтому.
+    """
+    row = await _access_row(db_session)
+    await db_session.delete(row)
+    await db_session.commit()
+
+    with rendered_context() as context:
+        response = await authed_client.get("/billing")
+
+    assert response.status_code == 200
+    assert context["access"]["state"] == STATE_EXPIRED
+    assert context["access"]["expires_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_closed_access_explains_itself_and_prints_the_price(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Тело страницы несёт объяснение и цену, отформатированную глобалом."""
+    await _move_access_expiry(db_session, days=-3)
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    assert NOTICE_NEVER_PAID in body, "закрытие доступа не объяснено"
+    assert NOTICE_TAIL in body, (
+        "закрытие названо без продолжения — читается как потеря данных"
+    )
+    assert templates.env.globals["format_amount"](SUBSCRIPTION_PRICE) in body, (
+        "цена доступа в теле раздела не напечатана"
+    )
+    assert SUBSCRIPTION_PRICE not in body, "машинная строка цены вышла на экран"
+
+
+@pytest.mark.asyncio
+async def test_the_explanation_differs_by_whether_the_person_ever_paid(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Одна из двух историй была бы неправдой для половины людей."""
+    owner = await _current_user(db_session)
+    await _move_access_expiry(db_session, days=-3)
+    await _seed_subscription_payment(db_session, owner.id)
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    assert NOTICE_AFTER_PAYING in body
+    assert NOTICE_NEVER_PAID not in body, (
+        "человеку, который платил, сказано, что у него кончился пробный период"
     )
 
 
 @pytest.mark.asyncio
-async def test_a_filled_package_catalogue_carries_no_empty_state(
+async def test_the_notice_does_not_depend_on_the_redirect_flag(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Плашка рисуется по СОСТОЯНИЮ с сервера, а не по параметру адреса.
+
+    Человек, открывший раздел из меню, обязан прочитать те же слова: критерий
+    требует, чтобы ему было СКАЗАНО, а не чтобы ему повезло с маршрутом.
+    """
+    await _move_access_expiry(db_session, days=-3)
+
+    from_menu = _body((await authed_client.get("/billing")).text)
+    from_gate = _body((await authed_client.get("/billing?expired=1")).text)
+
+    assert NOTICE_NEVER_PAID in from_menu
+    assert NOTICE_NEVER_PAID in from_gate
+
+
+def test_the_handler_never_reads_the_redirect_flag():
+    """Ни одной строкой: из адресной строки в разметку не уходит НИЧЕГО.
+
+    Это недостижимость, а не экранирование — подставлять нечего, потому что
+    вход в разметку не связан со входом из адреса (T-05.1-21).
+    """
+    body = _handler_source("async def billing_page(")
+
+    assert 'query_params.get("expired")' not in body
+    assert "query_params.get('expired')" not in body
+    assert body.count("query_params") == 1, (
+        "обработчик читает больше одного параметра адреса"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_outcome_of_the_last_action_wins_over_the_background_notice(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Две плашки подряд читаются как две разные беды — рисуется одна.
+
+    Исход только что нажатой кнопки важнее фонового состояния: человек нажал
+    «Оплатить» и получил отказ, и именно про отказ он и спрашивает.
+    """
+    await _move_access_expiry(db_session, days=-3)
+
+    body = _body((await authed_client.get("/billing?error=payment")).text)
+
+    assert "Не удалось начать оплату" in body
+    assert NOTICE_NEVER_PAID not in body, "фоновая плашка нарисована второй"
+
+
+@pytest.mark.asyncio
+async def test_the_section_is_named_subscription_on_every_surface(
     authed_client: AsyncClient,
 ):
-    """Непустой каталог нового заголовка НЕ печатает.
+    """Подпись раздела читают сайдбар, нижние табы и заголовок страницы.
 
-    Без этой пары пустое состояние могло бы рисоваться поверх наполненной
-    сетки, и тест выше остался бы зелёным.
+    Она объявлена ОДИН раз в `NAV_ITEMS`, поэтому проверка идёт по выдаче: имя
+    раздела обязано смениться сразу на всех трёх поверхностях, а не в одной.
     """
+    from app.pages.common import NAV_ITEMS, nav_label
+
     html = (await authed_client.get("/billing")).text
 
-    assert PACKAGES_EMPTY_TITLE not in html, (
-        "пустое состояние нарисовано поверх наполненного каталога"
-    )
-    assert 'action="/billing/purchase"' in html, "формы покупки исчезли"
+    assert nav_label("billing") == "Подписка"
+    assert [item["label"] for item in NAV_ITEMS if item["key"] == "billing"] == [
+        "Подписка"
+    ]
+    assert "<title>Подписка — Broadcaster</title>" in html
+    assert "Доступ к системе и история платежей" in html
+    assert "Тарифы" not in html, "прежнее имя раздела осталось на экране"
+
+
+# =============================================================================
+# План 05.1-05, задача 3: раздел закрыт тестами по СВОЕМУ НОВОМУ предмету
+# =============================================================================
+#
+# Снятое не проверяется, оставшееся проверяется полностью. Три регрессии,
+# СТАРШИЕ этой разметки, не потеряны ни одной: запрет печати идентификатора
+# платежа живёт выше, а обе регрессии нажимаемой высоты кнопки — в
+# tests/test_pages/test_responsive_markup.py, перецеленные на единственную
+# оставшуюся форму.
+
+# Признаки снятых блоков. Каждый — ЛИТЕРАЛ С ЭКРАНА, а не имя переменной:
+# проверяется, что человек их больше не видит, а не что код их не упоминает.
+GONE_FROM_THE_SCREEN = (
+    "Потребление тарифа",
+    "Баланс сообщений",
+    "История операций",
+    "data-plans",
+    "Пакеты сообщений",
+    "progress__track",
+)
 
 
 @pytest.mark.asyncio
-async def test_disabled_payments_keep_their_own_words(
-    authed_client: AsyncClient, test_settings
+@pytest.mark.parametrize("days", [3, 20, -3])
+async def test_the_screen_carries_none_of_the_five_removed_blocks(
+    authed_client: AsyncClient, db_session: AsyncSession, days: int
 ):
-    """U4 не подменяет собой ПРЕЖНЕЕ пустое состояние (D-21).
+    """Снятые блоки не возвращаются НИ В ОДНОМ из достижимых состояний.
 
-    Подмена одного пустого состояния другим — самый вероятный способ закрыть
-    U4 неправильно: строка про администратора отвечает на вопрос «почему нельзя
-    купить», а не «почему список пуст», и при выключенных платежах она обязана
-    остаться единственной.
+    Параметризация по сроку покрывает `trial`, `paid` и `expired`; четвёртое
+    состояние (`comped`) проверяется отдельно — его источник приезжает планом
+    05.1-08, и здесь оно достигается подменой готового ответа обработчика.
     """
-    test_settings.yookassa_enabled = False
-    try:
-        response = await authed_client.get("/billing")
-    finally:
-        test_settings.yookassa_enabled = True
+    owner = await _current_user(db_session)
+    await _move_access_expiry(db_session, days=days)
+    if days == 20:
+        await _seed_subscription_payment(db_session, owner.id)
 
+    body = _body((await authed_client.get("/billing")).text)
+
+    for marker in GONE_FROM_THE_SCREEN:
+        assert marker not in body, marker
+
+
+@pytest.mark.asyncio
+async def test_the_free_access_state_stands_whole_without_a_date(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Бесплатный доступ печатает «бессрочно», цену и НИ ОДНОЙ кнопки оплаты.
+
+    ⚠️ СОСТОЯНИЕ ДОСТИГАЕТСЯ ПОДМЕНОЙ ГОТОВОГО ОТВЕТА ОБРАБОТЧИКА, и это не
+    обход: колонка `subscriptions.has_free_access` приезжает планом 05.1-08, а
+    РАЗМЕТКА четырёх состояний написана здесь и обязана быть проверена здесь же.
+    Подменяется ровно одно значение — то самое, которое обработчик вычислит сам,
+    когда у него появится источник.
+
+    Кнопки нет вовсе, и её место занимает подпись с причиной: кнопка предлагала
+    бы купить то, что у человека уже есть бесплатно (P-3).
+    """
+    row = await _access_row(db_session)
+    await db_session.delete(row)
+    await db_session.commit()
+
+    original = templates.TemplateResponse
+
+    def as_comped(*args, **kwargs):
+        context = args[1] if len(args) > 1 else (kwargs.get("context") or {})
+        context["access"]["state"] = "comped"
+        return original(*args, **kwargs)
+
+    with patch.object(templates, "TemplateResponse", as_comped):
+        response = await authed_client.get("/billing")
+
+    body = _body(response.text)
     assert response.status_code == 200
-    html = response.text
-    assert PAYMENTS_DISABLED_LINE in html, "прежнее пустое состояние исчезло"
-    assert PACKAGES_EMPTY_TITLE not in html, (
-        "новое пустое состояние подменило собой ответ о выключенных платежах"
+    assert "доступ открыт бессрочно" in body
+    assert "Оплата не требуется" in body
+    assert not _payment_forms(body), "бесплатному доступу предложено купить доступ"
+    assert templates.env.globals["format_amount"](SUBSCRIPTION_PRICE) in body, (
+        "цена спрятана у бесплатного пользователя"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_state_badge_stands_on_a_line_of_its_own(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Бейдж состояния вынесен ИЗ строки цены — единственный детектор M1.
+
+    Строка цены объявлена без переноса, бейдж — без переноса и без сжатия; при
+    полотне 303px запас около девяти пикселей. Проверка «помещается в карточку»
+    проходит и при НАРУШЕННОМ контракте, поэтому проверяется структура: узел
+    бейджа не лежит внутри узла строки цены.
+    """
+    await _move_access_expiry(db_session, days=-3)
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    price_line = re.search(r"<div data-metric-line>(.*?)</div>", body, re.S)
+    assert price_line, "строки цены на экране нет"
+    assert "badge" not in price_line.group(1), (
+        "бейдж состояния стоит ВНУТРИ строки цены — при выходе за полотно "
+        "строка не сложится, а вылезет за карточку"
+    )
+    assert "data-access-state" in body, "бейджа состояния на экране нет вовсе"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_payment_history_speaks_both_of_its_lines(
+    authed_client: AsyncClient,
+):
+    """Ноль платежей — пустое состояние СЛОВАМИ, а не пустая таблица.
+
+    Пустой блок под панелью читается как поломка интерфейса, а не как
+    «показывать нечего», а отсутствие блока — как «истории у нас не бывает».
+    """
+    body = _body((await authed_client.get("/billing")).text)
+
+    assert "Платежей пока нет" in body
+    assert "Здесь появятся оплаты доступа" in body
+    assert "data-rowhead" not in body, "шапка колонок нарисована над пустотой"
+
+
+@pytest.mark.asyncio
+async def test_one_payment_and_many_use_the_same_row_primitive(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Один платёж и много — ОДИН и тот же примитив строки (zero-one-many)."""
+    owner = await _current_user(db_session)
+    await _seed_payments(db_session, owner.id, 1)
+
+    single = _body((await authed_client.get("/billing")).text)
+    assert single.count("data-row") >= 1
+    assert "Платежей пока нет" not in single
+
+    await _seed_payments(db_session, owner.id, 3)
+    many = _body((await authed_client.get("/billing")).text)
+    # Пробел после атрибута обязателен: `<div data-rowhead` начинается теми же
+    # знаками, и счёт без него прибавлял бы к строкам шапку колонок.
+    assert many.count("<div data-row ") == 4, "строки журнала рисуются по-разному"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_payment_status_is_printed_as_it_is(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Неизвестный статус печатается моношрифтом КАК ЕСТЬ, а не прячется.
+
+    Спрятанное состояние платежа читается как «платежа не было» — то есть как
+    пропавшие деньги.
+    """
+    owner = await _current_user(db_session)
+    db_session.add(_payment_row(owner.id, status="waiting_for_capture"))
+    await db_session.commit()
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    assert "waiting_for_capture" in body, "неизвестный статус спрятан"
+    assert re.search(r'class="mono[^"]*">waiting_for_capture<', body), (
+        "неизвестный статус напечатан не моношрифтом"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_purpose_of_a_payment_has_three_sources(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Назначение выбирается ПО НАЛИЧИЮ ПОЛЯ, а не по эпохе платежа.
+
+    ⚠️ ИСТОРИЧЕСКАЯ ПОКУПКА ОБЯЗАНА ОСТАТЬСЯ СОБОЙ. Переименовать чужой прошлый
+    платёж за тариф в «Доступ к системе» — значит соврать в денежном журнале
+    (T-05.1-10). Колонки `plan` и `package_name` ревизия фазы не трогает, и
+    разметка читает их и после неё.
+    """
+    owner = await _current_user(db_session)
+    fresh = _payment_row(owner.id)
+    fresh.plan = None
+    historic = _payment_row(owner.id)
+    historic.plan = "basic"
+    package = _payment_row(owner.id)
+    package.kind = "package"
+    package.plan = None
+    package.package_name = "Пакет на 500 сообщений"
+    nameless = _payment_row(owner.id)
+    nameless.kind = "package"
+    nameless.plan = None
+    nameless.package_name = None
+    db_session.add_all([fresh, historic, package, nameless])
+    await db_session.commit()
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    assert "Доступ к системе" in body, "платёж за доступ не подписан"
+    assert "Basic" in body, "исторический платёж за тариф переименован"
+    assert "Пакет на 500 сообщений" in body, "имя пакета потеряно"
+    assert "Пакет сообщений" in body, "безымянный пакет остался без подписи"
+
+
+@pytest.mark.asyncio
+async def test_a_payment_without_a_date_still_draws_its_whole_row(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Отсутствие даты даёт ПУСТУЮ ЯЧЕЙКУ, а не пропавшую строку.
+
+    Строка платежа без даты — всё ещё запись о деньгах, и спрятать её значило бы
+    показать журнал короче, чем он есть, не сказав об этом ни слова.
+    """
+    owner = await _current_user(db_session)
+    payment = _payment_row(owner.id)
+    payment.created_at = None
+    db_session.add(payment)
+    await db_session.commit()
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    assert "проведён" in body, "строка без даты не нарисована"
+    assert RENDERED_AMOUNT in body, "сумма строки без даты потеряна"
+
+
+@pytest.mark.asyncio
+async def test_the_amount_on_the_screen_carries_non_breaking_spaces(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Разряды и отбивка перед знаком рубля — НЕРАЗРЫВНЫЕ пробелы.
+
+    Обычный пробел перенёс бы «1» и «490» на разные строки узкой карточки, и
+    сумма на 375px прочиталась бы двумя числами вместо одного.
+    """
+    owner = await _current_user(db_session)
+    db_session.add(_payment_row(owner.id))
+    await db_session.commit()
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    assert RENDERED_AMOUNT in body
+    assert "1 490 ₽" not in body, "сумма напечатана обычными пробелами"
+    # Цена доступа — тем же правилом и тем же глобалом.
+    assert templates.env.globals["format_amount"](SUBSCRIPTION_PRICE) in body
+    assert NBSP in templates.env.globals["format_amount"](SUBSCRIPTION_PRICE)
+
+
+@pytest.mark.asyncio
+async def test_the_payment_history_order_is_stable_on_equal_timestamps(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Равные даты создания НЕ отдают порядок на откуп плану запроса.
+
+    У выборки объявлен ВТОРИЧНЫЙ ключ сортировки. Без него две строки с
+    одинаковой секундой меняются местами от прогона к прогону, и денежный
+    журнал перестаёт быть воспроизводимым — а его читают, чтобы сверить
+    списание, то есть в ровно тот момент, когда порядок важен.
+    """
+    from app.services.billing_service import get_payment_history
+
+    owner = await _current_user(db_session)
+    stamp = datetime(2026, 5, 20, 12, 0, tzinfo=timezone.utc)
+    db_session.add_all([_payment_row(owner.id, created_at=stamp) for _ in range(5)])
+    await db_session.commit()
+
+    first = [row.id for row in await get_payment_history(db_session, owner.id, 10)]
+    second = [row.id for row in await get_payment_history(db_session, owner.id, 10)]
+
+    assert first == second, "порядок при равных датах не воспроизводится"
+    assert first == sorted(first, reverse=True), (
+        "вторичный ключ сортировки не объявлен — порядок зависит от плана запроса"
+    )
+
+
+def test_the_payment_history_query_declares_two_sort_keys():
+    """Структурно: у выборки истории платежей ДВА ключа сортировки.
+
+    Поведенческий тест выше на SQLite может зазеленеть случайно — движок волен
+    вернуть строки в порядке вставки. Утверждение об ОБЪЯВЛЕНИИ ключа не зависит
+    от движка и краснеет ровно тогда, когда ключ снимут.
+    """
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "app"
+        / "services"
+        / "billing_service.py"
+    ).read_text(encoding="utf-8")
+    body = source[source.index("async def get_payment_history(") :]
+    body = body[: body.index("async def count_payments(")]
+
+    order_by = re.search(r"\.order_by\((.*)\)\n", body)
+    assert order_by, "у выборки истории платежей нет сортировки вовсе"
+    assert order_by.group(1).count(".desc(") >= 2, (
+        "у выборки истории платежей объявлен один ключ сортировки: "
+        f"{order_by.group(1)}"
+    )
+
+
+def test_the_long_package_name_wraps_inside_the_row_instead_of_scrolling():
+    """Длинное назначение переносится ВНУТРИ строки, а не даёт прокрутку.
+
+    ⚠️ ПРОВЕРЯЕТСЯ ОБЪЯВЛЕНИЕ, А НЕ ОТРИСОВКА: браузерного харнесса в проекте
+    нет. Утверждение снимается по исходнику стилей и разметки: ячейка назначения
+    объявлена растягиваемой, правила усечения у неё нет, а ниже 861px набор
+    ширин колонок инертен — строка раскладывается правилами мобильного блока.
+    """
+    css = (
+        Path(__file__).resolve().parents[2] / "app" / "static" / "css" / "app.css"
+    ).read_text(encoding="utf-8")
+    row_macro = (
+        Path(__file__).resolve().parents[2]
+        / "app"
+        / "templates"
+        / "billing"
+        / "includes"
+        / "payment_row.html"
+    ).read_text(encoding="utf-8")
+
+    assert "grow=true" in row_macro, "ячейка назначения не объявлена растягиваемой"
+    assert "text-overflow" not in row_macro
+    assert "flex-wrap: wrap !important" in css, (
+        "набор ширин колонок перестал быть инертным ниже 861px"
+    )
+    assert "flex: 1 1 100% !important" in css, (
+        "растягиваемая ячейка перестала занимать всю ширину строки"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url,marker",
+    [("/billing?error=payment", "Не удалось начать оплату"), ("/billing", NOTICE_NEVER_PAID)],
+)
+async def test_the_notice_stands_before_the_access_panel(
+    authed_client: AsyncClient, db_session: AsyncSession, url: str, marker: str
+):
+    """Причина читается РАНЬШЕ цены и даты — обе плашки стоят ПЕРВЫМИ.
+
+    ⚠️ ГРАНИЦА УНАСЛЕДОВАНА У `test_the_alert_stands_before_the_current_plan_block`
+    (tests/test_pages/test_billing_payment_errors.py), чьим якорем был блок
+    текущего тарифа: блока нет, якоря нет, а граница осталась той же и получила
+    новый якорь — панель доступа. Плашка под панелью была бы прочитана после
+    того, как человек уже сделал вывод «ничего не изменилось, кнопка сломана».
+
+    Это же пятый пункт ручной приёмки на 375px: в закрытом доступе плашка видна
+    БЕЗ ПРОКРУТКИ, то есть стоит первой.
+    """
+    await _move_access_expiry(db_session, days=-3)
+
+    body = _body((await authed_client.get(url)).text)
+
+    assert marker in body
+    assert body.index(marker) < body.index("data-access-panel"), (
+        "плашка причины стоит ниже панели доступа"
     )

@@ -800,7 +800,7 @@ async def _extend_subscription(
     затем Basic, — гард не участвовал ни в одном нажатии (действующей подписки
     на тот момент не было), и оплаченный месяц старшего тарифа становился днями
     младшего (гэп 1, `05-VERIFICATION.md`). Что обе стадии читают ОДНО
-    объявление, закреплено `test_both_stages_read_the_same_declaration_of_the_rule`;
+    объявление, закреплено `test_the_only_remaining_stage_reads_the_declaration_of_the_rule`;
     что названный сценарий закрыт —
     `test_a_pro_deal_sold_before_any_subscription_is_not_erased_by_a_later_basic`.
 
@@ -1534,7 +1534,7 @@ def _apply_extension(
         # `True` при уже снятом отказе означает ровно одно: переход исполняется
         # по ЗАПИСАННОМУ разрешению вопреки тому, что правило сказало бы о
         # сегодняшнем состоянии подписки (D-28).
-        # Закреплено `test_both_stages_read_the_same_declaration_of_the_rule`.
+        # Закреплено `test_the_only_remaining_stage_reads_the_declaration_of_the_rule`.
         #
         # ⚠️ ЦЕНА ЭТОГО ПРОЧТЕНИЯ НАЗВАНА, А НЕ ЗАМОЛЧАНА: правило отвергает и
         # НЕЗНАКОМЫЙ ранг, поэтому переход на план, выпавший из `PLAN_ORDER`,
