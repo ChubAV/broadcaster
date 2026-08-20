@@ -125,6 +125,14 @@ async def test_admin_can_access_admin_dashboard(client: AsyncClient):
 
     resp = await client.get("/admin", headers=admin_headers)
     assert resp.status_code == 200
+    # ⚠️ ПЛИТКА ОБЩЕГО ОСТАТКА СНЯТА И НЕ ЗАМЕНЕНА (A-8). Утверждение стоит
+    # здесь, а не отдельным именем: обзор либо отдаёт 200 без неё, либо не
+    # отдаёт 200 вовсе, и разделять эти два вопроса было бы разделением одного.
+    # Замену завела бы фаза 6, и показатель, поставленный сюда сейчас, был бы
+    # работой под снос.
+    assert "Общий баланс сообщений" not in resp.text, (
+        "плитка снятой величины вернулась на админский обзор"
+    )
 
 
 @pytest.mark.asyncio
@@ -175,42 +183,47 @@ async def test_admin_user_detail(client: AsyncClient, db_session):
 
     resp = await client.get(f"/admin/users/{target.id}", headers=admin_headers)
     assert resp.status_code == 200
+    # Карточка пополнения и плитка остатка сняты вместе с самой величиной.
+    # Управляющий элемент, упирающийся в несуществующий маршрут, читается как
+    # поломка админки, а не как «эта операция больше не предлагается».
+    assert "Пополнить баланс" not in resp.text, (
+        "карточка пополнения вернулась в карточку пользователя"
+    )
 
 
 @pytest.mark.asyncio
-async def test_admin_set_plan(client: AsyncClient, db_session):
-    """Admin can set user plan."""
-    await client.post("/api/auth/register", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-        "name": "Admin",
-    })
-    resp = await client.post("/api/auth/login", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-    })
-    admin_token = resp.json()["access_token"]
-    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+async def test_the_admin_top_up_route_no_longer_answers(client: AsyncClient, db_session):
+    """Маршрута пополнения остатка сообщений не существует.
 
-    # Create regular user
+    ⚠️ ПРЕДМЕТ ИНВЕРТИРОВАН, А НЕ УДАЛЁН. Прежде тест утверждал, что
+    администратор пополняет остаток формой; валюта сообщений снята из продукта
+    целиком, и пополнять больше нечего. Утверждение «этого входа нет» держится
+    регрессией, а не памятью: привилегированная операция над чужой учётной
+    записью возвращается тем легче, чем меньше остаётся следов, зачем её сняли.
+
+    Запрос идёт БЕЗ учётных данных намеренно: живой маршрут ответил бы отказом
+    доступа, и именно этим «маршрут есть, но не пускает» отличается от
+    «маршрута нет».
+    """
+    from app.models.user import User
+    from sqlalchemy import select
+
     await client.post("/api/auth/register", json={
         "email": "user@test.com",
         "password": "userpass123",
         "name": "User",
     })
-
-    from app.models.user import User
-    from sqlalchemy import select
     result = await db_session.execute(select(User).where(User.email == "user@test.com"))
     target = result.scalar_one()
 
     resp = await client.post(
         f"/admin/users/{target.id}/balance",
         data={"amount": "100", "description": "Test top-up"},
-        headers=admin_headers,
         follow_redirects=False,
     )
-    assert resp.status_code == 302
+    assert resp.status_code in (404, 405), (
+        "маршрут админского пополнения всё ещё отвечает"
+    )
 
 
 @pytest.mark.asyncio

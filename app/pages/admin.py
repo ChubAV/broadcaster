@@ -24,7 +24,6 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
-from app.models.message_balance import MessageBalance
 from app.pages.common import templates
 from app.repositories.group_info import GroupInfoRepository
 from app.repositories.user import UserRepository
@@ -69,11 +68,12 @@ async def admin_dashboard(
         )
     ).scalar() or 0
 
-    total_balance = (
-        await db.execute(
-            select(func.coalesce(func.sum(MessageBalance.balance), 0))
-        )
-    ).scalar() or 0
+    # ПЯТОГО ПОКАЗАТЕЛЯ ЗДЕСЬ НЕТ, И ЗАМЕНА ЕМУ НЕ ЗАВЕДЕНА НАМЕРЕННО (A-8).
+    # Он суммировал остатки сообщений по всем пользователям — величину, которой
+    # в продукте больше не существует. Подраздел обзора принадлежит фазе 6, и
+    # показатель, заведённый здесь, будет ею переопределён: это работа под
+    # снос. Раскладка не страдает — сетка плиток автозаполняемая, четыре плитки
+    # переливаются без дыры.
 
     return templates.TemplateResponse(
         "admin/dashboard.html",
@@ -87,7 +87,6 @@ async def admin_dashboard(
                 "total_accounts": total_accounts,
                 "active_accounts": total_active_accounts,
                 "sends_today": sends_today,
-                "total_balance": total_balance,
             },
         },
     )

@@ -13,6 +13,7 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.balance_transaction import BalanceTransaction
 from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.user import User
@@ -146,17 +147,21 @@ async def test_webhook_creates_the_first_subscription(
     await _subscribe(authed_client)
     user = await _current_user(db_session)
 
-    with patch(
-        "app.services.payment_service.add_messages", new_callable=AsyncMock
-    ) as add_messages:
-        processed = await handle_webhook(
-            db_session,
-            event="payment.succeeded",
-            payment_data={"object": {"id": "yoo_sub_1"}},
-        )
+    processed = await handle_webhook(
+        db_session,
+        event="payment.succeeded",
+        payment_data={"object": {"id": "yoo_sub_1"}},
+    )
 
     assert processed is True
-    add_messages.assert_not_awaited(), "подписка не начисляет сообщений"
+    # ⚠️ ГРАНИЦА «ПОДПИСКА НЕ НАЧИСЛЯЕТ СООБЩЕНИЙ» ПРОВЕРЯЕТСЯ ПО СТРОКАМ, А НЕ
+    # ПО МОКУ. Прежде здесь подменялась начисляющая функция, и утверждение
+    # звучало как «её не позвали»; функции больше не существует, а строка,
+    # записанная в обход известного имени, моком не ловилась бы вовсе.
+    rows = await db_session.scalar(
+        select(func.count()).select_from(BalanceTransaction)
+    )
+    assert rows == 0, f"подписочный платёж записал {rows} строк начисления"
 
     subscription = (
         await db_session.execute(
@@ -187,12 +192,11 @@ async def test_webhook_extends_an_active_subscription_without_burning_the_remain
     )
     await db_session.commit()
 
-    with patch("app.services.payment_service.add_messages", new_callable=AsyncMock):
-        await handle_webhook(
-            db_session,
-            event="payment.succeeded",
-            payment_data={"object": {"id": "yoo_sub_1"}},
-        )
+    await handle_webhook(
+        db_session,
+        event="payment.succeeded",
+        payment_data={"object": {"id": "yoo_sub_1"}},
+    )
 
     rows = (
         (
@@ -219,12 +223,11 @@ async def test_a_repeated_webhook_does_not_move_the_date_twice(
     await _subscribe(authed_client)
     user = await _current_user(db_session)
 
-    with patch("app.services.payment_service.add_messages", new_callable=AsyncMock):
-        await handle_webhook(
-            db_session,
-            event="payment.succeeded",
-            payment_data={"object": {"id": "yoo_sub_1"}},
-        )
+    await handle_webhook(
+        db_session,
+        event="payment.succeeded",
+        payment_data={"object": {"id": "yoo_sub_1"}},
+    )
     first = (
         await db_session.execute(
             select(Subscription).where(Subscription.user_id == user.id)
@@ -232,12 +235,11 @@ async def test_a_repeated_webhook_does_not_move_the_date_twice(
     ).scalar_one()
     first_expiry = first.expires_at
 
-    with patch("app.services.payment_service.add_messages", new_callable=AsyncMock):
-        processed = await handle_webhook(
-            db_session,
-            event="payment.succeeded",
-            payment_data={"object": {"id": "yoo_sub_1"}},
-        )
+    processed = await handle_webhook(
+        db_session,
+        event="payment.succeeded",
+        payment_data={"object": {"id": "yoo_sub_1"}},
+    )
 
     assert processed is True
     rows = (
