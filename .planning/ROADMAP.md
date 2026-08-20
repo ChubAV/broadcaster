@@ -542,7 +542,7 @@ Plans:
   заменяется в этой фазе.
 
 **UI hint**: yes
-**Plans:** 5/9 plans executed
+**Plans:** 6/9 plans executed
 
 Plans:
 **Wave 1**
@@ -564,7 +564,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 05.1-06-PLAN.md — Снятие валюты сообщений: начисление, пакеты, списание, кэш баланса, административное пополнение
+- [x] 05.1-06-PLAN.md — Снятие валюты сообщений: начисление, пакеты, списание, кэш баланса, административное пополнение
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
