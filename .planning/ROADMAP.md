@@ -542,7 +542,7 @@ Plans:
   заменяется в этой фазе.
 
 **UI hint**: yes
-**Plans:** 4/9 plans executed
+**Plans:** 5/9 plans executed
 
 Plans:
 **Wave 1**
@@ -560,7 +560,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 05.1-05-PLAN.md — Страница «Подписка»: четыре состояния, снятие матрицы тарифов из разметки и стилей, ручная приёмка на 375px
+- [x] 05.1-05-PLAN.md — Страница «Подписка»: четыре состояния, снятие матрицы тарифов из разметки и стилей, ручная приёмка на 375px
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
