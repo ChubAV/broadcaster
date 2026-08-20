@@ -858,6 +858,55 @@ async def _subscribe(db, user: User, *, price: str = ACCESS_PRICE):
 
 
 @pytest.mark.asyncio
+async def test_the_intent_records_that_no_rule_was_asked(db_session):
+    """Намерение записывает `NULL` в колонку ответа гарда — и наружу его не шлёт.
+
+    ⚠️ СВИДЕТЕЛЬ ПЕРЕЦЕЛЕН ПЛАНОМ 05.1-07, А НЕ ЗАВЕДЁН НА ПУСТОМ МЕСТЕ. Прежде
+    границу держали `test_the_deal_cannot_be_sold_without_recording_its_authorization`
+    и `test_the_intent_stage_records_its_answer_on_the_payment`: оба утверждали,
+    что ответ ГАРДА уезжает на строку платежа. Гарда смены тарифа не существует,
+    и оба теста сняты вместе с ним, а колонка ЖУРНАЛЬНАЯ и осталась. Утверждать
+    о ней теперь нужно ДРУГОЕ, и это другое — не слабее: значение `NULL` есть
+    ЗАПИСЬ ФАКТА «правило не спрашивали», а литерал `True` был бы подписью под
+    сделкой от имени правила, которого нет (T-05.1-11).
+
+    ТРИ УТВЕРЖДЕНИЯ, И НИ ОДНО НЕ ЗАМЕНЯЕТ ДВА ОСТАЛЬНЫХ: что записано `NULL`;
+    что аргумент нельзя ПРОПУСТИТЬ (иначе умолчание вернуло бы дисциплину
+    вызывающего); что значение не уезжает в `metadata` платежа — всё, ушедшее в
+    ЮKassa, возвращается оттуда входом из сети (T-05-08, T-05-68).
+    """
+    user = await _user(db_session)
+
+    with _sdk("yoo_recorded") as create_mock:
+        await _subscribe(db_session, user)
+
+    payment = (
+        await db_session.execute(
+            select(Payment).where(Payment.yookassa_payment_id == "yoo_recorded")
+        )
+    ).scalar_one()
+    assert payment.switch_authorized is None, (
+        "намерение записало ответ правила, которого никто не спрашивал"
+    )
+
+    body = create_mock.call_args.args[0]
+    assert "switch_authorized" not in str(body), (
+        "условие сделки уехало в ЮKassa и вернётся оттуда входом из сети"
+    )
+
+    with pytest.raises(TypeError):
+        await create_payment(
+            db_session,
+            user_id=user.id,
+            price=ACCESS_PRICE,
+            kind=KIND_SUBSCRIPTION,
+            plan=None,
+            package_name=None,
+            messages_count=None,
+        )
+
+
+@pytest.mark.asyncio
 async def test_a_second_subscription_intent_is_refused_before_the_money_moves(
     db_session,
 ):
