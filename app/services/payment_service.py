@@ -804,6 +804,7 @@ def _apply_extension(
     subscription: Subscription, db_payment: Payment, now: datetime
 ) -> None:
     """Двигает срок действующей подписки — и НИ ОТ ЧЕГО БОЛЬШЕ НЕ ВЕТВИТСЯ.
+    Закреплено `test_a_confirmed_payment_only_moves_the_date`.
 
     ПОРЯДОК ДВУХ ДЕЙСТВИЙ ЗДЕСЬ — ПРАВИЛО, А НЕ ОФОРМЛЕНИЕ, И ОН ПЕРЕЖИЛ СНЯТИЕ
     МАТРИЦЫ ТАРИФОВ. ПЕРВЫМ действием тела снимается признак живости оплаченного
