@@ -472,7 +472,11 @@ a:hover { color: var(--accent-link-hover); }
     border-right: none !important; border-bottom: 1px solid var(--border-side) !important;
     overflow: visible !important; }
   [data-nav] { display: none !important; }
-  [data-quota], [data-user] { display: none !important; }
+  /* Мобильной поверхности у виджета доступа НЕТ и не появляется (A-4): правило
+     сохранено дословно, сменилось только имя атрибута. Ту же величину на
+     телефоне несёт панель раздела подписки, а критерий «человеку сказано
+     словами» закрыт редиректом на /billing и плашкой, а не виджетом. */
+  [data-access], [data-user] { display: none !important; }
   [data-tabs] { display: flex !important; }
   [data-head] { padding: 14px 16px !important; }
   [data-body] { padding: 18px 16px 90px !important; }
@@ -553,21 +557,31 @@ a:hover { color: var(--accent-link-hover); }
 .nav-tag { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .1em; color: var(--text-faint); }
 .nav-sep { height: 1px; background: var(--border-side); margin: 10px 12px 8px; }
 
-/* Виджет квоты */
-[data-quota] {
+/* Виджет доступа.
+   ⚠️ `margin-top: auto` ОБЪЯВЛЕН ЗДЕСЬ, А НЕ НА [data-user]. Сайдбар — это
+   колонка flex, и к низу её прижимает ИМЕННО ЭТОТ элемент, утаскивая за собой
+   блок пользователя. Свойство обязано ездить вместе с селектором виджета: не
+   уехав, оно оторвало бы блок пользователя от низа сайдбара на всех 26
+   страницах, и правка выглядела бы безобидным переименованием (D-J).
+
+   Шкалы у виджета нет (.access-track / .access-fill не существует и не должно
+   появиться) — прохибиция P-4 UI-контракта.
+
+   ⚠️ НИ .access-plan, НИ .access-value НЕ ПОЛУЧАЮТ `white-space: nowrap` И
+   `flex: none`. Под значение остаётся 147px (262 сайдбар − 16×2 его padding −
+   14×2 padding виджета − 2 border − 45 подпись «Доступ» − 8 зазор), а самое
+   длинное значение «до 2026-08-20 14:30» — ≈138px. Запас узкий, и безопасным
+   его делает именно отсутствие этих двух объявлений: при нехватке ширины
+   значение ПЕРЕНЕСЁТСЯ внутри виджета, а не вылезет за его границу. */
+[data-access] {
   margin-top: auto; display: flex; flex-direction: column; gap: 11px;
   padding: 14px; border-radius: var(--r-xl);
   background: var(--surface-pill); border: 1px solid var(--border-pill);
 }
-.quota-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.quota-plan { font-size: var(--fs-md); font-weight: 600; }
-.quota-label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-tertiary); }
-.quota-track { height: 5px; border-radius: var(--r-pill); background: var(--border-pill); overflow: hidden; }
-.quota-fill {
-  height: 100%; border-radius: var(--r-pill); background: var(--accent);
-  transform-origin: left; animation: grow .8s cubic-bezier(.2, .8, .2, 1);
-}
-.quota-link { font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: .06em; }
+.access-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.access-plan { font-size: var(--fs-md); font-weight: 600; }
+.access-value { font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: .06em; color: var(--text-tertiary); }
+.access-link { font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: .06em; }
 
 /* Блок пользователя */
 [data-user] { display: flex; align-items: center; gap: 10px; padding: 0 4px; }
@@ -660,8 +674,11 @@ a:hover { color: var(--accent-link-hover); }
 /* Контент */
 [data-body] { padding: 26px 32px 60px; }
 
+/* Имя заливки шкалы виджета вычеркнуто вместе с самой шкалой (план 05.1-04):
+   правило, адресованное несуществующему классу, — мусор, который следующий
+   читатель примет за живой. Остальные четыре имени не тронуты. */
 @media (prefers-reduced-motion: reduce) {
-  .brand-mark::after, .quota-fill, .session-dot.is-online, .worker-row__dot.is-online, .animate-fade-in { animation: none !important; }
+  .brand-mark::after, .session-dot.is-online, .worker-row__dot.is-online, .animate-fade-in { animation: none !important; }
 }
 
 /* --------------------------------------------------------------------------

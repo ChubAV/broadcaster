@@ -295,51 +295,45 @@ def test_the_handler_names_the_project_cap_and_checks_it_before_building():
 
 
 # =============================================================================
-# Подписка: истечение срока ничего не отключает (D-07)
+# Подписка: истечение срока ПРЕКРАЩАЕТ ДОСТУП, но не ломает путь к оплате
 # =============================================================================
+#
+# ⚠️ ЗАГОЛОВОК БЛОКА ОТМЕНЯЕТ ПРЕЖНИЙ, А НЕ УТОЧНЯЕТ ЕГО. Он гласил «истечение
+# срока ничего не отключает (D-07)» и был правдой при плане фазы 5, где
+# применения лимитов не существовало вовсе. С плана 05.1-01 истечение закрывает
+# шесть роутеров создания ценности зависимостью `require_access`. Утверждения
+# ниже проверяют вторую половину того же правила: сам раздел подписки остаётся
+# ОТКРЫТЫМ и в закрытом доступе — иначе человек не смог бы заплатить.
 
 
 @pytest.mark.asyncio
-async def test_an_expired_subscription_is_reported_not_enforced(
+async def test_the_billing_page_stays_open_when_the_access_is_closed(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Истёкший срок меняет ПОКАЗ и только его: ни 403, ни редиректа."""
-    owner = await _current_user(db_session)
-    db_session.add(
-        Subscription(
-            user_id=owner.id,
-            plan="basic",
-            expires_at=datetime.now(timezone.utc) - timedelta(days=3),
-            is_active=True,
-        )
-    )
-    await db_session.commit()
+    """Закрытый доступ не закрывает путь к оплате: ни 403, ни редиректа.
+
+    Признак истечения приезжает ГОТОВЫМ ВЕРДИКТОМ из контекста шелла, а не
+    пересчитывается страницей: вторая копия правила разъехалась бы с гейтом
+    молча — и экран сказал бы «доступ открыт» человеку, которому шесть
+    роутеров уже отказывают.
+    """
+    await _move_access_expiry(db_session, days=-3)
 
     with rendered_context() as context:
         response = await authed_client.get("/billing")
 
     assert response.status_code == 200
     assert context["subscription"]["expired"] is True
-    assert context["subscription"]["plan"] == "basic"
-    # Ничего не отключено: оси и планы на месте.
+    # Витрина и оси на месте: их снимает план 05.1-05, а не истечение срока.
     assert len(context["usage"]) == 4
     assert len(context["plans"]) == 3
 
 
 @pytest.mark.asyncio
-async def test_a_live_subscription_is_not_reported_expired(
+async def test_a_live_access_period_is_not_reported_expired(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    owner = await _current_user(db_session)
-    db_session.add(
-        Subscription(
-            user_id=owner.id,
-            plan="basic",
-            expires_at=datetime.now(timezone.utc) + timedelta(days=10),
-            is_active=True,
-        )
-    )
-    await db_session.commit()
+    await _move_access_expiry(db_session, days=10)
 
     with rendered_context() as context:
         await authed_client.get("/billing")
@@ -348,15 +342,34 @@ async def test_a_live_subscription_is_not_reported_expired(
 
 
 @pytest.mark.asyncio
-async def test_a_user_without_a_subscription_is_not_reported_expired(
-    authed_client: AsyncClient,
+async def test_a_user_without_a_subscription_row_gets_the_page_and_not_a_five_hundred(
+    authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Отсутствие подписки — не истёкший срок: срока нет вовсе."""
-    with rendered_context() as context:
-        await authed_client.get("/billing")
+    """Строки подписки нет вовсе — экран отвечает 200 и называет доступ закрытым.
 
-    assert context["subscription"]["plan"] == "free"
-    assert context["subscription"]["expired"] is False
+    ⚠️ ТЕСТ ПЕРЕЦЕЛЕН, А НЕ ОСЛАБЛЕН. До плана 05.1-01 у пользователя строки не
+    было по умолчанию, и утверждение «отсутствие подписки — не истёкший срок»
+    описывало обычного человека. Теперь строку заводит регистрация, и прежняя
+    формулировка проверяла бы пробный срок, называя его отсутствием, — то есть
+    молчала бы о состоянии, ради которого написана.
+
+    Состояние остаётся ДОСТИЖИМЫМ: пользователи, заведённые до ревизии
+    05.1-08, строки не имеют, и встретить их пятисоткой значило бы закрыть
+    единственный экран, с которого они могут заплатить. Все чтения ключа
+    доступа идут через умолчание именно поэтому.
+    """
+    row = await _access_row(db_session)
+    await db_session.delete(row)
+    await db_session.commit()
+
+    with rendered_context() as context:
+        response = await authed_client.get("/billing")
+
+    assert response.status_code == 200
+    assert context["subscription"]["expires_at"] is None
+    assert context["subscription"]["expired"] is True, (
+        "отсутствие строки прочитано как открытый доступ"
+    )
 
 
 # =============================================================================
@@ -368,18 +381,28 @@ async def test_a_user_without_a_subscription_is_not_reported_expired(
 async def test_the_screen_creates_neither_a_subscription_nor_a_payment(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Возврат браузера с ЮKassa приводит СЮДА — и не доказывает оплату."""
+    """Возврат браузера с ЮKassa приводит СЮДА — и не доказывает оплату.
+
+    Считается РАЗНИЦА до и после рендера, а не абсолютный ноль: пробную строку
+    пользователю завела регистрация (план 05.1-01), и утверждение «строк ноль»
+    проверяло бы теперь отсутствие пробного срока, то есть чужой предмет.
+    Предмет здесь один — рендер раздела не создаёт НИ ОДНОЙ новой строки.
+    """
     owner = await _current_user(db_session)
+
+    async def _subscriptions() -> int:
+        return await db_session.scalar(
+            select(func.count())
+            .select_from(Subscription)
+            .where(Subscription.user_id == owner.id)
+        )
+
+    before = await _subscriptions()
 
     response = await authed_client.get("/billing")
 
     assert response.status_code == 200
-    subscriptions = await db_session.scalar(
-        select(func.count())
-        .select_from(Subscription)
-        .where(Subscription.user_id == owner.id)
-    )
-    assert subscriptions == 0
+    assert await _subscriptions() == before
     assert await _payments_count(db_session) == 0
 
 
@@ -564,18 +587,33 @@ def test_the_origin_check_runs_before_the_payment_is_created():
 # статусе 200, и проверка контекста этого не увидит.
 
 
-async def _seed_subscription(
-    db: AsyncSession, *, plan: str = "basic", days: int = 30
-) -> None:
-    db.add(
-        Subscription(
-            user_id=(await _current_user(db)).id,
-            plan=plan,
-            expires_at=datetime.now(timezone.utc) + timedelta(days=days),
-            is_active=True,
+async def _access_row(db: AsyncSession) -> Subscription:
+    """Активная строка подписки пользователя — её заводит регистрация."""
+    return (
+        await db.execute(
+            select(Subscription).where(
+                Subscription.user_id == (await _current_user(db)).id,
+                Subscription.is_active.is_(True),
+            )
         )
-    )
+    ).scalar_one()
+
+
+async def _move_access_expiry(db: AsyncSession, *, days: int = 30) -> datetime:
+    """Сдвигает срок УЖЕ СУЩЕСТВУЮЩЕЙ строки, а не заводит вторую.
+
+    Частичный уникальный индекс `uq_subscriptions_active_user` допускает у
+    пользователя ровно одну активную строку, а пробный срок ему завела
+    регистрация (план 05.1-01). Вторая вставка дала бы IntegrityError, то есть
+    тест падал бы на посеве, а не на предмете, — ровно так и краснели эти
+    четыре теста после сквозного плана фазы.
+    """
+    row = await _access_row(db)
+    row.expires_at = datetime.now(timezone.utc) + timedelta(days=days)
     await db.commit()
+    return row.expires_at
+
+
 
 
 def _payment_forms(html: str) -> list[str]:
@@ -698,46 +736,54 @@ async def test_the_screen_names_a_truncated_payment_list(
 
 
 @pytest.mark.asyncio
-async def test_an_expired_subscription_is_marked_and_offered_a_renewal(
+async def test_a_closed_access_is_named_and_offered_a_payment(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Истёкший срок помечен и сопровождается предложением продлить (D-07).
+    """Закрытый доступ НАЗВАН словами и сопровождается кнопкой оплаты.
 
-    Ничего при этом не отключено: карточки планов и метры на месте.
+    ⚠️ КОПИЯ ОТМЕНЕНА ВМЕСТЕ С УТВЕРЖДЕНИЕМ, КОТОРОЕ ЕЁ ПОРОДИЛО. Экран печатал
+    «срок подписки истёк — ничего не отключено, продлите тариф, когда будет
+    удобно». Это было правдой при D-07 фазы 5 и перестало ею быть: теперь
+    истечение прекращает доступ. Закрытие называется ФАКТОМ С ПРОДОЛЖЕНИЕМ —
+    без слов о сохранности «доступ закрыт» читается как потеря данных, а это
+    неправда.
+
+    Управляющий элемент при этом обязан существовать: панель без кнопки и без
+    слов читается как сломанный платёжный путь.
     """
-    owner = await _current_user(db_session)
-    db_session.add(
-        Subscription(
-            user_id=owner.id,
-            plan="basic",
-            expires_at=datetime.now(timezone.utc) - timedelta(days=3),
-            is_active=True,
-        )
-    )
-    await db_session.commit()
+    await _move_access_expiry(db_session, days=-3)
 
     response = await authed_client.get("/billing")
     html = response.text
 
     assert response.status_code == 200
-    assert "истёк" in html, "пометки истёкшего срока на экране нет"
-    assert "data-plans" in html, "витрина погасла вместе со сроком"
-    renewals = [f for f in _payment_forms(html) if 'value="basic"' in f]
-    assert renewals, "предложения продлить нет"
+    assert "Доступ закрыт" in html, "закрытие доступа на экране не названо"
+    assert "работа продолжится с того же места" in html, (
+        "закрытие названо без продолжения — читается как потеря данных"
+    )
+    assert "ничего не отключено" not in html, (
+        "экран печатает утверждение, переставшее быть правдой"
+    )
+    renewals = [f for f in _payment_forms(html) if "/billing/subscribe" in f]
+    assert renewals, "предложения оплатить доступ нет"
     for form in renewals:
         assert 'action="/billing/subscribe"' in form
 
 
 @pytest.mark.asyncio
-async def test_a_live_subscription_is_not_marked_expired(
+async def test_a_live_access_period_is_not_marked_closed(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    await _seed_subscription(db_session)
+    """Живой доступ назван открытым и своей датой, а не именем тарифа."""
+    expires_at = await _move_access_expiry(db_session, days=30)
+    user = await _current_user(db_session)
+
+    from app.pages.common import format_datetime_for_user
 
     html = (await authed_client.get("/billing")).text
 
-    assert "истёк" not in html
-    assert "Basic" in html
+    assert "Доступ закрыт" not in html
+    assert f"доступ открыт до {format_datetime_for_user(expires_at, user)}" in html
 
 
 @pytest.mark.asyncio

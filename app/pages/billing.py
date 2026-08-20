@@ -1,13 +1,9 @@
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.analytics.send_analytics import normalize_utc
 from app.application.billing.plan_switch import switch_is_refused
 from app.application.billing.plan_usage import plan_axes
-from app.application.billing.subscription_period import subscription_is_live
 from app.config import Settings
 from app.constants import PAYMENT_LIST_CAP
 from app.dependencies import get_db, get_settings
@@ -115,14 +111,18 @@ def _payment_error_message(code: str | None) -> str:
     return PAYMENT_ERROR_MESSAGES.get(code or "", "")
 
 
-# ОБА ОБЪЯВЛЕНИЯ ПРАВИЛА ЖИВУТ В `app/application/billing/`, А МОДУЛЬ ИХ ТОЛЬКО
-# ЧИТАЕТ: `switch_is_refused` (`plan_switch.py`) — порядок тарифов,
-# `subscription_is_live` (`subscription_period.py`) — признак живости
-# оплаченного срока, который правило принимает обязательным аргументом. Своей
+# ОБЪЯВЛЕНИЯ ПРАВИЛ ЖИВУТ В `app/application/billing/`, А МОДУЛЬ ИХ ТОЛЬКО
+# ЧИТАЕТ: `switch_is_refused` (`plan_switch.py`) — порядок тарифов, а признак
+# живости оплаченного срока правило принимает обязательным аргументом. Своей
 # копии ни того, ни другого этот файл не держит: пока признак живости стоял
 # здесь, вторая стадия (`_apply_extension` в `app/services/payment_service.py`)
 # его не получала вовсе, и подтверждённый платёж на истёкшем сроке брал деньги
 # за тариф, который не выдавался (гэп 1, 05-VERIFICATION.md).
+#
+# ⚠️ С ПЛАНА 05.1-04 ПРИЗНАК ЖИВОСТИ ПРИЕЗЖАЕТ ГОТОВЫМ ВЕРДИКТОМ ИЗ КОНТЕКСТА
+# ШЕЛЛА (`access["open"]`), а не снимается здесь собственным сравнением дат:
+# правило доступа одно на проект (`access_is_open`), и второе его выражение на
+# странице разъехалось бы с зависимостью `require_access` молча.
 
 
 @router.get("/billing", response_class=HTMLResponse)
@@ -162,17 +162,26 @@ async def billing_page(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
-    # Тариф и срок берутся из УЖЕ ПОСЧИТАННОГО контекста шелла, вторым запросом
-    # не считаются: показатель один — источник обязан быть один (D-09/D-19).
+    # Вердикт доступа и срок берутся из УЖЕ ПОСЧИТАННОГО контекста шелла, вторым
+    # запросом не считаются: показатель один — источник обязан быть один
+    # (D-09/D-19). Ключ `quota` заменён ключом `access` планом 05.1-04 вместе со
+    # сменой ФОРМЫ значения: имени тарифа в нём больше нет, потому что тарифов
+    # нет (D-F), а есть вердикт, дата и остаток дней.
     shell = getattr(request.state, "shell", None) or {}
-    quota = shell.get("quota", {})
+    access = shell.get("access", {})
     nav_counts = shell.get("nav_counts", {})
 
     # JSON разбирается ОДИН раз в обработчике, а не свойством из цикла Jinja:
     # `parsed_plan_limits` кэша не имеет (`@lru_cache` стоит на `get_settings`,
     # а не на нём), и вызов из шаблона парсил бы строку на каждой итерации.
     plans = settings.parsed_plan_limits
-    current_plan_id = quota.get("plan", FREE_PLAN_ID)
+    # ⚠️ ИДЕНТИФИКАТОР ТАРИФА БОЛЬШЕ НЕ ВЫВОДИТСЯ ИЗ ШЕЛЛА: ключа с ним там нет,
+    # и второго источника ему здесь не заводится. Оставшиеся потребители —
+    # витрина планов, оси и гард смены тарифа — доживают до плана 05.1-05,
+    # который снимает их вместе с предметом; читать ради них снятую колонку
+    # `subscriptions.plan` значило бы восстановить источник правды, объявленный
+    # мёртвым (D-F).
+    current_plan_id = FREE_PLAN_ID
     # Отсутствующая запись плана читается как «лимитов нет», а не как падение:
     # перечень тарифов правится переменной окружения, и опечатка в ней обязана
     # стоить ненарисованных шкал, а не пятисотки на странице тарифов.
@@ -200,20 +209,22 @@ async def billing_page(
     payments_total = await count_payments(db, user.id)
     payments = await get_payment_history(db, user.id, limit=PAYMENT_LIST_CAP)
 
-    # Срок сравнивается через `normalize_utc`: колонка объявлена с таймзоной,
-    # но SQLite отдаёт её naive, а PostgreSQL aware — сравнение без приведения
-    # падало бы TypeError ровно на одном из двух диалектов, то есть только в
-    # проде либо только в тестах.
-    expires_at = quota.get("expires_at")
-    normalized_expiry = normalize_utc(expires_at)
-    # ⚠️ ИСТЕЧЕНИЕ СРОКА НИЧЕГО НЕ ОТКЛЮЧАЕТ (D-07). Применения лимитов в
-    # системе нет вовсе, и вводить принуждение по сроку в фазе, которая
-    # сознательно не вводит принуждение по лимитам, значило бы завести два
-    # разных ответа на один вопрос. Истёкшая подписка меняет только показ.
-    expired = (
-        normalized_expiry is not None
-        and normalized_expiry < datetime.now(timezone.utc)
-    )
+    # ⚠️ ИСТЕЧЕНИЕ СРОКА ТЕПЕРЬ ПРЕКРАЩАЕТ ДОСТУП, И ПРЕЖНИЙ АБЗАЦ ЗДЕСЬ ОТМЕНЁН
+    # ПРЯМО, А НЕ УДАЛЁН МОЛЧА. Он утверждал (D-07 фазы 5), что истечение ничего
+    # не отключает и применения лимитов в системе нет вовсе. Это было правдой
+    # тогда и перестало ею быть: зависимость `require_access` закрывает шесть
+    # роутеров создания ценности, как только срок истёк (план 05.1-01). Абзац
+    # обязан назвать отмену, потому что следующий читатель, нашедший прежнее
+    # утверждение живым, привёл бы код в соответствие с ним.
+    #
+    # ПРИЗНАК ИСТЕЧЕНИЯ БЕРЁТСЯ ИЗ ВЕРДИКТА, А НЕ ПЕРЕСЧИТЫВАЕТСЯ СРАВНЕНИЕМ ДАТ.
+    # Второе выражение того же правила разъехалось бы с первым молча — например,
+    # на строгости сравнения или на признаке активности строки, — и экран
+    # показывал бы «доступ открыт» человеку, которому зависимость уже
+    # отказывает. Вердикт считает `access_is_open` внутри контекста шелла, и
+    # копии его здесь нет (T-05.1-19).
+    expires_at = access.get("expires_at")
+    expired = not access.get("open", False)
 
     # ЧЕТВЁРТОЕ СОСТОЯНИЕ CTA КАРТОЧКИ считается ЗДЕСЬ, а не в разметке
     # (C2/WR-02, вариант `upgrade-only`): правило перехода между тарифами — одно
@@ -225,7 +236,11 @@ async def billing_page(
     # ПРИЗНАК ЖИВОСТИ УХОДИТ В ВЫЗОВ АРГУМЕНТОМ, а не стоит средним членом
     # конъюнкции: член условия можно забыть, обязательный аргумент — нельзя.
     # Ровно на забытом члене и разошлись две стадии правила (гэп 1 раунда 3).
-    live = subscription_is_live(expires_at, datetime.now(timezone.utc))
+    #
+    # Сам признак берётся ИЗ ВЕРДИКТА, а не снимается здесь вторым сравнением
+    # дат: то же основание, что абзацем выше. Вычисление живёт в одном месте —
+    # в предикате доступа, — и разъезжаться двум его выражениям не на чем.
+    live = not expired
     refused_plan_ids = {
         plan["id"]
         for plan in plans
