@@ -1032,3 +1032,245 @@ async def test_disabled_payments_keep_their_own_words(
     assert PACKAGES_EMPTY_TITLE not in html, (
         "новое пустое состояние подменило собой ответ о выключенных платежах"
     )
+
+
+# =============================================================================
+# План 05.1-05: одно из ЧЕТЫРЁХ состояний считает ОБРАБОТЧИК, а не разметка
+# =============================================================================
+#
+# Правило состояния одно на раздел, и вторая его копия в Jinja разъехалась бы с
+# гардом доступа молча — тот же класс дефекта, за который фаза 5 получила шесть
+# раундов гэпов подряд. Разметке достаётся ГОТОВЫЙ ответ `access.state`.
+#
+# ⚠️ УТВЕРЖДЕНИЯ О ВЕЛИЧИНЕ НА ЭКРАНЕ СВЕРЯЮТ ТЕЛО СТРАНИЦЫ, А НЕ ВСЮ ВЫДАЧУ.
+# Виджет сайдбара печатает дату доступа на КАЖДОМ документе проекта, и проверка
+# по целому HTML прошла бы при неотрисованной панели раздела (план 05.1-04,
+# «Issues» №2).
+
+STATE_TRIAL = "trial"
+STATE_PAID = "paid"
+STATE_EXPIRED = "expired"
+STATE_COMPED = "comped"
+
+# Цена доступа МАШИННОЙ СТРОКОЙ приезжает из настройки, а не выписывается
+# литералом: копия числа в тесте разошлась бы с конфигом молча — ровно тем же
+# правилом, каким её нет в разметке.
+SUBSCRIPTION_PRICE = Settings.model_fields["subscription_price"].default
+
+# Две строки объяснения закрытого доступа. Каждая называет ФАКТ и ПРОДОЛЖЕНИЕ:
+# «доступ закрыт» без слов о сохранности читается как потеря данных, а это
+# неправда — планировщик лишь не отправляет.
+NOTICE_NEVER_PAID = "Пробный период закончился"
+NOTICE_AFTER_PAYING = "Оплаченный срок закончился"
+NOTICE_TAIL = "работа продолжится с того же места"
+
+
+def _body(html: str) -> str:
+    """Тело страницы — всё после открытия `[data-body]`, без шелла."""
+    return html.split("<div data-body>", 1)[-1]
+
+
+async def _seed_subscription_payment(
+    db: AsyncSession, user_id: int, *, status: str = "succeeded"
+) -> Payment:
+    """Подписочный платёж с явным статусом. `plan` пуст — тарифов больше нет."""
+    payment = _payment_row(user_id, status=status)
+    payment.plan = None
+    db.add(payment)
+    await db.commit()
+    return payment
+
+
+@pytest.mark.asyncio
+async def test_a_live_period_without_a_paid_subscription_is_a_trial(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Срок жив, успешных подписочных платежей нет — это ПРОБНЫЙ период."""
+    await _move_access_expiry(db_session, days=3)
+
+    with rendered_context() as context:
+        response = await authed_client.get("/billing")
+
+    assert response.status_code == 200
+    assert context["access"]["state"] == STATE_TRIAL
+    assert context["ever_paid"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["pending", "canceled"])
+async def test_an_unfinished_payment_does_not_make_the_period_paid(
+    authed_client: AsyncClient, db_session: AsyncSession, status: str
+):
+    """Незавершённый и отклонённый платежи «оплаченным» состояние НЕ делают.
+
+    Иначе человек, отказавшийся от оплаты на стороне ЮKassa, прочитал бы
+    «подписка оплачена» — то есть экран подтвердил бы сделку, которой не было.
+    """
+    owner = await _current_user(db_session)
+    await _move_access_expiry(db_session, days=3)
+    await _seed_subscription_payment(db_session, owner.id, status=status)
+
+    with rendered_context() as context:
+        await authed_client.get("/billing")
+
+    assert context["access"]["state"] == STATE_TRIAL
+    assert context["ever_paid"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_live_period_after_a_succeeded_payment_is_paid(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    owner = await _current_user(db_session)
+    await _move_access_expiry(db_session, days=20)
+    await _seed_subscription_payment(db_session, owner.id)
+
+    with rendered_context() as context:
+        response = await authed_client.get("/billing")
+
+    assert response.status_code == 200
+    assert context["access"]["state"] == STATE_PAID
+    assert context["ever_paid"] is True
+
+
+@pytest.mark.asyncio
+async def test_an_expired_period_is_named_closed(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    await _move_access_expiry(db_session, days=-3)
+
+    with rendered_context() as context:
+        response = await authed_client.get("/billing")
+
+    assert response.status_code == 200
+    assert context["access"]["state"] == STATE_EXPIRED
+
+
+@pytest.mark.asyncio
+async def test_a_user_without_a_subscription_row_gets_the_closed_state(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Отсутствие строки — ОПРЕДЕЛЁННОЕ состояние (доступа нет), а не падение.
+
+    Пользователи, заведённые до ревизии 05.1-08, строки не имеют, и встретить
+    их пятисоткой значило бы закрыть единственный экран, с которого они могут
+    заплатить. Все чтения ключа доступа идут через умолчание именно поэтому.
+    """
+    row = await _access_row(db_session)
+    await db_session.delete(row)
+    await db_session.commit()
+
+    with rendered_context() as context:
+        response = await authed_client.get("/billing")
+
+    assert response.status_code == 200
+    assert context["access"]["state"] == STATE_EXPIRED
+    assert context["access"]["expires_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_closed_access_explains_itself_and_prints_the_price(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Тело страницы несёт объяснение и цену, отформатированную глобалом."""
+    await _move_access_expiry(db_session, days=-3)
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    assert NOTICE_NEVER_PAID in body, "закрытие доступа не объяснено"
+    assert NOTICE_TAIL in body, (
+        "закрытие названо без продолжения — читается как потеря данных"
+    )
+    assert templates.env.globals["format_amount"](SUBSCRIPTION_PRICE) in body, (
+        "цена доступа в теле раздела не напечатана"
+    )
+    assert SUBSCRIPTION_PRICE not in body, "машинная строка цены вышла на экран"
+
+
+@pytest.mark.asyncio
+async def test_the_explanation_differs_by_whether_the_person_ever_paid(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Одна из двух историй была бы неправдой для половины людей."""
+    owner = await _current_user(db_session)
+    await _move_access_expiry(db_session, days=-3)
+    await _seed_subscription_payment(db_session, owner.id)
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    assert NOTICE_AFTER_PAYING in body
+    assert NOTICE_NEVER_PAID not in body, (
+        "человеку, который платил, сказано, что у него кончился пробный период"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_notice_does_not_depend_on_the_redirect_flag(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Плашка рисуется по СОСТОЯНИЮ с сервера, а не по параметру адреса.
+
+    Человек, открывший раздел из меню, обязан прочитать те же слова: критерий
+    требует, чтобы ему было СКАЗАНО, а не чтобы ему повезло с маршрутом.
+    """
+    await _move_access_expiry(db_session, days=-3)
+
+    from_menu = _body((await authed_client.get("/billing")).text)
+    from_gate = _body((await authed_client.get("/billing?expired=1")).text)
+
+    assert NOTICE_NEVER_PAID in from_menu
+    assert NOTICE_NEVER_PAID in from_gate
+
+
+def test_the_handler_never_reads_the_redirect_flag():
+    """Ни одной строкой: из адресной строки в разметку не уходит НИЧЕГО.
+
+    Это недостижимость, а не экранирование — подставлять нечего, потому что
+    вход в разметку не связан со входом из адреса (T-05.1-21).
+    """
+    body = _handler_source("async def billing_page(")
+
+    assert 'query_params.get("expired")' not in body
+    assert "query_params.get('expired')" not in body
+    assert body.count("query_params") == 1, (
+        "обработчик читает больше одного параметра адреса"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_outcome_of_the_last_action_wins_over_the_background_notice(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Две плашки подряд читаются как две разные беды — рисуется одна.
+
+    Исход только что нажатой кнопки важнее фонового состояния: человек нажал
+    «Оплатить» и получил отказ, и именно про отказ он и спрашивает.
+    """
+    await _move_access_expiry(db_session, days=-3)
+
+    body = _body((await authed_client.get("/billing?error=payment")).text)
+
+    assert "Не удалось начать оплату" in body
+    assert NOTICE_NEVER_PAID not in body, "фоновая плашка нарисована второй"
+
+
+@pytest.mark.asyncio
+async def test_the_section_is_named_subscription_on_every_surface(
+    authed_client: AsyncClient,
+):
+    """Подпись раздела читают сайдбар, нижние табы и заголовок страницы.
+
+    Она объявлена ОДИН раз в `NAV_ITEMS`, поэтому проверка идёт по выдаче: имя
+    раздела обязано смениться сразу на всех трёх поверхностях, а не в одной.
+    """
+    from app.pages.common import NAV_ITEMS, nav_label
+
+    html = (await authed_client.get("/billing")).text
+
+    assert nav_label("billing") == "Подписка"
+    assert [item["label"] for item in NAV_ITEMS if item["key"] == "billing"] == [
+        "Подписка"
+    ]
+    assert "<title>Подписка — Broadcaster</title>" in html
+    assert "Доступ к системе и история платежей" in html
+    assert "Тарифы" not in html, "прежнее имя раздела осталось на экране"
