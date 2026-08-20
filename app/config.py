@@ -56,10 +56,6 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_use_tls: bool = True
 
-    # Billing — message balance
-    free_monthly_messages: int = 10
-    message_packages: str = '[{"name":"100 сообщений","count":100,"price":"149.00"},{"name":"500 сообщений","count":500,"price":"599.00"},{"name":"1000 сообщений","count":1000,"price":"999.00"}]'
-
     # Billing — тарифные планы.
     #
     # ЦЕНА — МАШИННАЯ СТРОКА ФОРМАТА ЮKASSA («1490.00»), а не подпись макета.
@@ -126,10 +122,6 @@ class Settings(BaseSettings):
     def wa_bridge_url(self) -> str:
         """Backward-compatible: returns first bridge URL."""
         return self.wa_bridge_urls[0]
-
-    @property
-    def parsed_message_packages(self) -> list[dict]:
-        return json.loads(self.message_packages)
 
     @property
     def parsed_plan_limits(self) -> list[dict]:

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,17 +24,13 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
-from app.models.message_balance import MessageBalance
 from app.pages.common import templates
 from app.repositories.group_info import GroupInfoRepository
 from app.repositories.user import UserRepository
 from app.services.billing_service import (
-    get_balance,
     get_balance_info,
     get_or_create_balance,
-    add_messages,
 )
-from app.services.billing_cache import invalidate_balance_cache
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -72,11 +68,12 @@ async def admin_dashboard(
         )
     ).scalar() or 0
 
-    total_balance = (
-        await db.execute(
-            select(func.coalesce(func.sum(MessageBalance.balance), 0))
-        )
-    ).scalar() or 0
+    # ПЯТОГО ПОКАЗАТЕЛЯ ЗДЕСЬ НЕТ, И ЗАМЕНА ЕМУ НЕ ЗАВЕДЕНА НАМЕРЕННО (A-8).
+    # Он суммировал остатки сообщений по всем пользователям — величину, которой
+    # в продукте больше не существует. Подраздел обзора принадлежит фазе 6, и
+    # показатель, заведённый здесь, будет ею переопределён: это работа под
+    # снос. Раскладка не страдает — сетка плиток автозаполняемая, четыре плитки
+    # переливаются без дыры.
 
     return templates.TemplateResponse(
         "admin/dashboard.html",
@@ -90,7 +87,6 @@ async def admin_dashboard(
                 "total_accounts": total_accounts,
                 "active_accounts": total_active_accounts,
                 "sends_today": sends_today,
-                "total_balance": total_balance,
             },
         },
     )
@@ -407,34 +403,6 @@ async def admin_user_history_detail(
     )
 
 
-@router.post("/users/{user_id}/balance")
-async def admin_add_balance(
-    request: Request,
-    user_id: int,
-    amount: int = Form(...),
-    description: str = Form(""),
-    admin: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    target_user = await db.get(User, user_id)
-    if not target_user:
-        return RedirectResponse(url="/admin/users", status_code=302)
-
-    await add_messages(
-        db,
-        user_id,
-        amount,
-        type="admin_adjustment",
-        description=description or f"Пополнение администратором ({admin.email})",
-    )
-    await db.commit()
-    await invalidate_balance_cache(user_id)
-
-    return RedirectResponse(
-        url=f"/admin/users/{user_id}", status_code=302
-    )
-
-
 @router.post("/users/{user_id}/unlimited")
 async def admin_toggle_unlimited(
     request: Request,
@@ -449,7 +417,12 @@ async def admin_toggle_unlimited(
     bal = await get_or_create_balance(db, user_id)
     bal.is_unlimited = not bal.is_unlimited
     await db.commit()
-    await invalidate_balance_cache(user_id)
+    # СБРОСА КЭША ЗДЕСЬ БОЛЬШЕ НЕТ, ПОТОМУ ЧТО НЕТ КЭШИРУЕМОЙ ВЕЛИЧИНЫ. Он
+    # сбрасывал вердикт об ОСТАТКЕ СООБЩЕНИЙ, снятом вместе со всей валютой.
+    # Кэш вердикта ДОСТУПА этим тумблером не задет: тумблер пишет признак
+    # безлимита, а не срок доступа. План `05.1-08` меняет предмет тумблера на
+    # бесплатный доступ — и вот ТОГДА он станет писателем той величины, которую
+    # кэш и хранит, и сброс вернётся сюда уже осмысленным.
 
     return RedirectResponse(
         url=f"/admin/users/{user_id}", status_code=302

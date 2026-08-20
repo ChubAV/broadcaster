@@ -2,8 +2,10 @@
 
 Предмет файла — СБОРКА раздела (BILL-05 / BILL-06 / BILL-07): что один маршрут
 `GET /billing` отдаёт все пять блоков экрана сразу (D-18), что список платежей
-принадлежит владельцу и называет свой потолок (D-17), и что покупка пакета
-сообщений идёт формой `POST`, а не асинхронным запросом из скрипта (D-20).
+принадлежит владельцу и называет свой потолок (D-17), и что ЕДИНСТВЕННАЯ
+оставшаяся оплата идёт формой `POST`, а не асинхронным запросом из скрипта
+(D-20). Второй оплаты у раздела больше нет: валюта сообщений снята целиком, и
+входа покупки не существует ни формой, ни маршрутом.
 
 ЧЕГО ЗДЕСЬ НЕТ.
 
@@ -57,13 +59,6 @@ BALANCE_HTML = (
 )
 
 SAME_ORIGIN = {"Origin": "http://test"}
-CROSS_SITE = {"Origin": "https://evil.example"}
-CONFIRMATION_URL = "https://yookassa.ru/checkout/payments/2c85a"
-
-# Первый пакет умолчания конфига: 100 сообщений за 149.00.
-FIRST_PACKAGE_INDEX = "0"
-FIRST_PACKAGE_PRICE = "149.00"
-FIRST_PACKAGE_COUNT = 100
 
 # Та же сумма ПОДПИСЬЮ: разряды и отбивка перед знаком рубля — неразрывные
 # пробелы (app/pages/common.py::format_amount). Ожидание выписано
@@ -97,36 +92,6 @@ def _handler_source(signature: str) -> str:
     rest = source[source.index(signature) :]
     end = rest.find("\n@router")
     return rest if end == -1 else rest[:end]
-
-
-def _yoo_mocks(payment_id: str = "yoo_pkg_1"):
-    """Мок сети ЮKassa по образцу tests/test_services/test_payment_service.py."""
-    mock_payment = MagicMock()
-    mock_payment.id = payment_id
-    mock_payment.confirmation = MagicMock()
-    mock_payment.confirmation.confirmation_url = CONFIRMATION_URL
-
-    mock_settings = MagicMock()
-    mock_settings.yookassa_shop_id = "shop123"
-    mock_settings.yookassa_secret_key = "secret"
-    mock_settings.yookassa_return_url = "http://test/billing"
-    mock_settings.app_name = "Broadcaster"
-    return mock_payment, mock_settings
-
-
-async def _purchase(client: AsyncClient, data: dict | None = None, headers=None):
-    mock_payment, mock_settings = _yoo_mocks()
-    with patch(
-        "app.services.payment_service.get_settings", return_value=mock_settings
-    ), patch(
-        "app.services.payment_service.YooPayment.create", return_value=mock_payment
-    ):
-        return await client.post(
-            "/billing/purchase",
-            data={"package_index": FIRST_PACKAGE_INDEX} if data is None else data,
-            headers=SAME_ORIGIN if headers is None else headers,
-            follow_redirects=False,
-        )
 
 
 async def _current_user(db: AsyncSession) -> User:
@@ -405,108 +370,6 @@ def test_the_get_handler_contains_no_write_path():
     )
 
 
-# =============================================================================
-# Покупка пакета сообщений формой POST (D-20)
-# =============================================================================
-
-
-@pytest.mark.asyncio
-async def test_purchase_redirects_an_anonymous_visitor_to_login(
-    client: AsyncClient, db_session: AsyncSession
-):
-    response = await _purchase(client)
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "/login"
-    assert await _payments_count(db_session) == 0
-
-
-@pytest.mark.asyncio
-async def test_purchase_redirects_to_the_yookassa_confirmation_url(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    response = await _purchase(authed_client)
-
-    assert response.status_code == 302
-    assert response.headers["location"] == CONFIRMATION_URL
-
-    payment = (await db_session.execute(select(Payment))).scalar_one()
-    assert payment.kind == "package"
-    assert payment.messages_count == FIRST_PACKAGE_COUNT
-    assert payment.amount_value == FIRST_PACKAGE_PRICE
-
-
-@pytest.mark.asyncio
-async def test_purchase_reads_the_price_and_the_count_from_config(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Из формы приезжает ТОЛЬКО индекс: иначе покупатель назначает себе цену."""
-    response = await _purchase(
-        authed_client,
-        data={
-            "package_index": FIRST_PACKAGE_INDEX,
-            "price": "1.00",
-            "messages_count": "999999",
-            "package_name": "Бесплатно",
-        },
-    )
-
-    assert response.status_code == 302
-    payment = (await db_session.execute(select(Payment))).scalar_one()
-    assert payment.amount_value == FIRST_PACKAGE_PRICE
-    assert payment.messages_count == FIRST_PACKAGE_COUNT
-
-
-@pytest.mark.asyncio
-async def test_purchase_rejects_a_cross_site_origin(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    response = await _purchase(authed_client, headers=CROSS_SITE)
-
-    assert response.status_code == 403
-    assert await _payments_count(db_session) == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("index", ["99", "-1", "не число", ""])
-async def test_purchase_rejects_an_index_the_config_does_not_have(
-    authed_client: AsyncClient, db_session: AsyncSession, index: str
-):
-    """Неизвестный индекс возвращает в раздел, а НЕ выбирает «умолчание».
-
-    Нечисловое значение обязано вести туда же: страничная форма не имеет права
-    отвечать страницей ошибки разбора — её видел бы пользователь, а не клиент
-    JSON-API.
-
-    С плана 05-10 возврат несёт ПРИЧИНУ: голый редирект на неизменившуюся
-    страницу читался как «кнопка сломана». Само содержание причины и закрытость
-    множества кодов держит `test_billing_payment_errors.py`; здесь проверяется
-    только, что покупка не состоялась и след её не остался.
-    """
-    response = await _purchase(authed_client, data={"package_index": index})
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "/billing?error=package"
-    assert await _payments_count(db_session) == 0
-
-
-@pytest.mark.asyncio
-async def test_purchase_creates_nothing_when_payments_are_disabled(
-    authed_client: AsyncClient, db_session: AsyncSession, test_settings
-):
-    test_settings.yookassa_enabled = False
-    try:
-        response = await _purchase(authed_client)
-    finally:
-        test_settings.yookassa_enabled = True
-
-    assert response.status_code == 302
-    # С плана 05-10 отказ несёт причину: страница могла быть отрисована ДО того,
-    # как администратор выключил платежи.
-    assert response.headers["location"] == "/billing?error=disabled"
-    assert await _payments_count(db_session) == 0
-
-
 @pytest.mark.asyncio
 async def test_the_section_still_carries_the_price_and_the_date_without_payments(
     authed_client: AsyncClient, test_settings
@@ -538,17 +401,24 @@ def test_the_origin_check_runs_before_the_payment_is_created():
     Проверка структурная: поведенчески «403 до» и «403 после» на клиенте
     неразличимы, а разница существенна — межсайтовый запрос не имеет права
     вызвать ни одного побочного эффекта, тем более платного.
-    """
-    body = _handler_source("async def purchase_package(")
 
-    assert "is_same_origin(" in body, "сверки источника в обработчике покупки нет"
+    ⚠️ ПРЕДМЕТ ПЕРЕЦЕЛЕН НА ЕДИНСТВЕННЫЙ ОСТАВШИЙСЯ ПЛАТЁЖНЫЙ ВХОД, А НЕ СНЯТ
+    ВМЕСТЕ СО СВОИМ ПРЕЖНИМ. Раньше сторожем порядка был обработчик покупки
+    пакета; его больше нет, но граница принадлежит не ему, а самому приёму
+    денег. Удалить утверждение вместе с обработчиком значило бы оставить
+    оплату доступа без единого сторожа порядка «сверка источника → создание
+    платежа», а перестановка двух операторов вернула бы дефект молча.
+    """
+    body = _handler_source("async def subscribe_to_plan(")
+
+    assert "is_same_origin(" in body, "сверки источника в обработчике оплаты нет"
     assert body.index("is_same_origin(") < body.index("create_payment("), (
         "платёж создаётся раньше сверки источника"
     )
 
 
 # =============================================================================
-# Разметка раздела: пять блоков на экране, обе оплаты формами (план 05-05)
+# Разметка раздела: пять блоков на экране, единственная оплата формой (план 05-05)
 # =============================================================================
 #
 # Утверждения ниже идут по HTML, а не по контексту: контракт «обработчик →
@@ -587,9 +457,15 @@ async def _move_access_expiry(db: AsyncSession, *, days: int = 30) -> datetime:
 
 
 def _payment_forms(html: str) -> list[str]:
-    """Формы обеих оплат раздела ЦЕЛИКОМ — открывающий тег и тело."""
+    """Формы оплаты раздела ЦЕЛИКОМ — открывающий тег и тело.
+
+    ⚠️ ВЕТКА ВТОРОГО АДРЕСА СНЯТА ВМЕСТЕ СО ВТОРОЙ ОПЛАТОЙ, А НЕ ОСТАВЛЕНА «НА
+    ВСЯКИЙ СЛУЧАЙ». Оставленная альтернатива в образце — это утверждение
+    «форма оплаты на экране одна», которое молча зазеленело бы и на двух
+    формах, если бы вторая когда-нибудь вернулась под прежним адресом.
+    """
     return re.findall(
-        r'<form[^>]*action="/billing/(?:subscribe|purchase)"[^>]*>.*?</form>',
+        r'<form[^>]*action="/billing/subscribe"[^>]*>.*?</form>',
         html,
         re.S,
     )
@@ -613,7 +489,7 @@ def test_the_section_markup_carries_no_script_at_all():
     """
     source = BALANCE_HTML.read_text(encoding="utf-8")
 
-    for marker in ("<script", "fetch(", "onclick", "purchasePackage"):
+    for marker in ("<script", "fetch(", "onclick"):
         assert marker not in source, marker
 
     # `{{ ... }}`, `{% ... %}` и `{# ... #}` — не JavaScript ни при каких

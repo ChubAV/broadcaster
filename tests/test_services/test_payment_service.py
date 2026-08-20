@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from yookassa.domain.notification import WebhookNotificationEventType
 
 from app.application.billing.subscription_period import add_one_month
+from app.models.balance_transaction import BalanceTransaction
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.payment import Payment
@@ -19,7 +20,12 @@ from app.services.payment_service import (
     create_payment,
     handle_webhook,
 )
-from app.services.billing_service import get_balance, add_messages
+
+# ИМЯ ЖУРНАЛЬНОГО КЛЮЧА ВЫПИСАНО ДОСЛОВНО, А НЕ ИМПОРТИРОВАНО ИЗ СЕРВИСА. Тест,
+# берущий ключ из того же места, что и код, утверждал бы «значение равно самому
+# себе» и пережил бы любое переименование молча — а ключ журнала есть контракт с
+# читателем логов, и меняться он обязан ЗАМЕТНО.
+PACKAGE_NOT_CREDITED_KEY = "webhook_package_payment_not_credited"
 
 # Имена событий берутся КОНСТАНТАМИ SDK и в тестах тоже. Литерал с опечаткой не
 # поднял бы ошибку: обработчик просто вернул бы False, и тест «событие не
@@ -110,62 +116,111 @@ async def test_create_payment(db_session):
     assert result["payment_id"] == "yoo_123"
 
 
-@pytest.mark.asyncio
-async def test_handle_webhook_success(db_session):
-    user = User(email="t@t.com", password_hash="h", name="T")
-    db_session.add(user)
-    await db_session.commit()
-
-    payment = Payment(
-        user_id=user.id,
-        yookassa_payment_id="yoo_456",
-        status="pending",
-        amount_value="149.00",
-        amount_currency="RUB",
-        messages_count=100,
-        package_name="100 messages",
-    )
-    db_session.add(payment)
-    await db_session.commit()
-
-    with patch("app.services.payment_service.invalidate_balance_cache", new_callable=AsyncMock):
-        processed = await handle_webhook(
-            db_session,
-            event="payment.succeeded",
-            payment_data={"object": {"id": "yoo_456"}},
-        )
-
-    assert processed is True
-    assert await get_balance(db_session, user.id) == 100
+# --- Пакетное уведомление ПОСЛЕ снятия валюты сообщений (T-05.1-24) ----------
+#
+# ПОЧЕМУ ВЕТКА НЕ УДАЛЕНА ЦЕЛИКОМ. Уведомление о покупке пакета всё ещё может
+# прийти по платежу, заведённому ДО выката: человек нажал «купить» вчера,
+# ЮKassa подтвердила сегодня. Купить пакет больше негде — ни формой, ни
+# маршрутом, — но взятые деньги обязаны получить терминальный статус.
+#
+# ⚠️ ОТВЕТ ОБЯЗАН БЫТЬ УСПЕШНЫМ, А НЕ ПЯТИСОТКОЙ. Возврат 5xx спровоцировал бы
+# новую попытку доставки ЮKassa по УЖЕ ПРОВЕДЁННОМУ платежу — то есть отказ,
+# который сам себя повторяет.
 
 
 @pytest.mark.asyncio
-async def test_handle_webhook_idempotent(db_session):
-    user = User(email="t@t.com", password_hash="h", name="T")
-    db_session.add(user)
-    await db_session.commit()
+async def test_a_package_notification_marks_the_payment_and_credits_nothing(
+    db_session,
+):
+    """Пакетное уведомление проводит платёж и НЕ начисляет ничего.
 
-    payment = Payment(
-        user_id=user.id,
-        yookassa_payment_id="yoo_dup",
-        status="succeeded",
-        amount_value="149.00",
-        amount_currency="RUB",
-        messages_count=100,
-        package_name="100 messages",
-        confirmed_at=datetime.now(timezone.utc),
-    )
-    db_session.add(payment)
-    await db_session.commit()
+    Валюта сообщений снята из продукта целиком: начислять больше нечего, и
+    начисление здесь означало бы, что величина, которой не существует, у
+    кого-то всё-таки растёт.
+    """
+    user = await _user(db_session)
+    payment = await _payment(db_session, user, yookassa_payment_id="yoo_pkg_late")
 
-    # Already processed — should return True but not add more balance
     processed = await handle_webhook(
         db_session,
-        event="payment.succeeded",
-        payment_data={"object": {"id": "yoo_dup"}},
+        event=EVENT_SUCCEEDED,
+        payment_data={"object": {"id": "yoo_pkg_late"}},
     )
-    assert processed is True
-    assert await get_balance(db_session, user.id) == 0
+
+    assert processed is True, "успешный ответ подменён отказом"
+    await db_session.refresh(payment)
+    assert payment.status == "succeeded"
+    assert payment.confirmed_at is not None
+
+    # ЖУРНАЛ ОПЕРАЦИЙ ПО ОСТАТКУ ПУСТ — проверка идёт по СТРОКАМ, а не по моку:
+    # мок ловит только вызов известного имени, а строка, записанная в обход
+    # него, осталась бы незамеченной.
+    rows = await db_session.scalar(
+        select(func.count()).select_from(BalanceTransaction)
+    )
+    assert rows == 0, f"строк журнала операций по остатку {rows}, а не ноль"
+
+
+@pytest.mark.asyncio
+async def test_a_package_notification_records_the_fact_by_its_own_key(db_session):
+    """У непроведённого начисления есть СЛЕД, а не молчание.
+
+    Платёж, помеченный проведённым без выдачи чего бы то ни было, обязан
+    оставить в журнале причину: жалоба «я заплатил и ничего не получил» иначе
+    не проверяема ничем, а ветка выглядит потерянным начислением.
+    """
+    user = await _user(db_session)
+    await _payment(db_session, user, yookassa_payment_id="yoo_pkg_logged")
+
+    with patch("app.services.payment_service.logger") as log:
+        await handle_webhook(
+            db_session,
+            event=EVENT_SUCCEEDED,
+            payment_data={"object": {"id": "yoo_pkg_logged"}},
+        )
+
+    keys = [call.args[0] for call in log.info.call_args_list if call.args]
+    assert PACKAGE_NOT_CREDITED_KEY in keys, keys
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_package_notification_is_still_processed_only_once(
+    db_session,
+):
+    """Повторная доставка того же уведомления не даёт двойной обработки.
+
+    ПАРНЫЙ ТЕСТ К ДВУМ ПРЕДЫДУЩИМ. Ветка перестала начислять, и соблазн
+    посчитать защиту от двойной обработки ненужной появляется ровно здесь: она
+    держит не только начисление, но и МОМЕНТ проведения платежа. Сдвинутая
+    второй доставкой дата подтверждения — это неправда о том, когда деньги были
+    взяты.
+    """
+    user = await _user(db_session)
+    payment = await _payment(db_session, user, yookassa_payment_id="yoo_pkg_twice")
+
+    first = await handle_webhook(
+        db_session,
+        event=EVENT_SUCCEEDED,
+        payment_data={"object": {"id": "yoo_pkg_twice"}},
+    )
+    await db_session.refresh(payment)
+    confirmed_once = _utc(payment.confirmed_at)
+
+    second = await handle_webhook(
+        db_session,
+        event=EVENT_SUCCEEDED,
+        payment_data={"object": {"id": "yoo_pkg_twice"}},
+    )
+
+    assert first is True and second is True, "повтор ответил отказом"
+    await db_session.refresh(payment)
+    assert _utc(payment.confirmed_at) == confirmed_once, (
+        "повторная доставка сдвинула момент проведения платежа"
+    )
+    rows = await db_session.scalar(
+        select(func.count()).select_from(BalanceTransaction)
+    )
+    assert rows == 0, f"строк журнала операций по остатку {rows}, а не ноль"
 
 
 # --- Отмена платежа (D-16) --------------------------------------------------
@@ -175,10 +230,10 @@ async def test_handle_webhook_idempotent(db_session):
 # показывала бы «в обработке» там, где деньги не взяты вовсе. Это не отсутствие
 # данных, а неправда о них (прохибиция BILL-07).
 #
-# Ветка отмены НИЧЕГО НЕ НАЧИСЛЯЕТ — и это её главное свойство, поэтому оно
-# проверяется с двух сторон: и «не позвали», и «баланс не изменился». Мока
-# достаточно, чтобы поймать вызов; настоящего баланса — чтобы поймать начисление
-# в обход мока.
+# Ветка отмены НИЧЕГО НЕ НАЧИСЛЯЕТ — и это её главное свойство. Проверяется оно
+# по СТРОКАМ журнала операций, а не по моку начисляющей функции: начислять после
+# снятия валюты сообщений нечем и нечего, функции больше не существует, а строка,
+# записанная в обход известного имени, моком не ловилась бы вовсе.
 
 
 @pytest.mark.asyncio
@@ -187,16 +242,11 @@ async def test_a_canceled_webhook_gives_a_pending_payment_a_terminal_status(db_s
     user = await _user(db_session)
     payment = await _payment(db_session, user)
 
-    with patch(
-        "app.services.payment_service.add_messages", new_callable=AsyncMock
-    ), patch(
-        "app.services.payment_service.invalidate_balance_cache", new_callable=AsyncMock
-    ):
-        processed = await handle_webhook(
-            db_session,
-            event=EVENT_CANCELED,
-            payment_data={"object": {"id": payment.yookassa_payment_id}},
-        )
+    processed = await handle_webhook(
+        db_session,
+        event=EVENT_CANCELED,
+        payment_data={"object": {"id": payment.yookassa_payment_id}},
+    )
 
     assert processed is True
     await db_session.refresh(payment)
@@ -209,26 +259,21 @@ async def test_a_canceled_webhook_gives_a_pending_payment_a_terminal_status(db_s
 
 @pytest.mark.asyncio
 async def test_a_canceled_package_payment_credits_nothing(db_session):
-    """Отмена пакета не начисляет сообщений и не трогает кэш баланса."""
+    """Отмена пакета не оставляет ни одной строки в журнале операций."""
     user = await _user(db_session)
     payment = await _payment(db_session, user)
 
-    with patch(
-        "app.services.payment_service.add_messages", new_callable=AsyncMock
-    ) as add_messages_mock, patch(
-        "app.services.payment_service.invalidate_balance_cache", new_callable=AsyncMock
-    ) as invalidate_mock:
-        processed = await handle_webhook(
-            db_session,
-            event=EVENT_CANCELED,
-            payment_data={"object": {"id": payment.yookassa_payment_id}},
-        )
+    processed = await handle_webhook(
+        db_session,
+        event=EVENT_CANCELED,
+        payment_data={"object": {"id": payment.yookassa_payment_id}},
+    )
 
     assert processed is True
-    add_messages_mock.assert_not_awaited()
-    # Баланс не изменился — инвалидировать нечего.
-    invalidate_mock.assert_not_awaited()
-    assert await get_balance(db_session, user.id) == 0
+    rows = await db_session.scalar(
+        select(func.count()).select_from(BalanceTransaction)
+    )
+    assert rows == 0, f"строк журнала операций по остатку {rows}, а не ноль"
 
 
 @pytest.mark.asyncio

@@ -23,8 +23,7 @@ from app.application.billing.subscription_period import (
 from app.config import get_settings
 from app.models.payment import Payment
 from app.models.subscription import Subscription
-from app.services.billing_service import add_messages
-from app.services.billing_cache import invalidate_access_cache, invalidate_balance_cache
+from app.services.billing_cache import invalidate_access_cache
 
 logger = structlog.get_logger()
 
@@ -609,12 +608,13 @@ async def handle_webhook(
         )
         return False
 
-    # ЗАЯВКА СТОИТ ПЕРЕД ЛЮБЫМ НАЧИСЛЕНИЕМ И В ТОЙ ЖЕ ТРАНЗАКЦИИ, ЧТО И ОНО:
+    # ЗАЯВКА СТОИТ ПЕРЕД ЛЮБОЙ ВЫДАЧЕЙ И В ТОЙ ЖЕ ТРАНЗАКЦИИ, ЧТО И ОНА:
     # единственный `commit` в конце ветки остаётся единственным. Отдельный
     # коммит заявки завёл бы окно, в котором платёж помечен проведённым, а
-    # ресурс не выдан.
-    # Закреплено `test_overlapping_deliveries_credit_the_package_exactly_once`
-    # и `test_overlapping_deliveries_write_one_balance_transaction`.
+    # ресурс не выдан. Выдаваемый ресурс остался один — срок доступа: валюта
+    # сообщений снята, и пакетной ветке выдавать больше нечего.
+    # Закреплено `test_overlapping_deliveries_of_a_package_credit_nothing`
+    # и `test_overlapping_deliveries_extend_subscription_by_one_month`.
     if not await _claim_payment(db, yookassa_id, STATUS_SUCCEEDED, now):
         # Не отказ: уведомление обработано — просто не этой доставкой. 5xx здесь
         # спровоцировал бы новую попытку ЮKassa по уже проведённому платежу.
@@ -650,23 +650,36 @@ async def handle_webhook(
         )
         return True
 
-    new_balance = await add_messages(
-        db,
-        db_payment.user_id,
-        db_payment.messages_count,
-        type="purchase",
-        description=f"Покупка: {db_payment.package_name}",
-        payment_id=yookassa_id,
-    )
+    # ПАКЕТНАЯ ВЕТКА СТАЛА ЖУРНАЛЬНОЙ, А НЕ УДАЛЁННОЙ (T-05.1-24). Закреплено
+    # `test_a_package_notification_marks_the_payment_and_credits_nothing`.
+    #
+    # Валюта сообщений снята из продукта целиком, и начислять больше нечего.
+    # Ветка при этом ОБЯЗАНА остаться: уведомление о покупке пакета всё ещё
+    # может прийти по платежу, заведённому ДО выката — человек нажал «купить»
+    # вчера, ЮKassa подтвердила сегодня. Взятые деньги обязаны получить
+    # терминальный статус, поэтому платёж помечается проведённым выше
+    # (`_claim_payment` + `_mirror_claim`) и фиксируется этим `commit`.
+    # Закреплено `test_a_package_notification_marks_the_payment_and_credits_nothing`.
+    #
+    # ⚠️ ОТВЕТ УСПЕШНЫЙ, А НЕ ПЯТИСОТКА. Возврат 5xx спровоцировал бы новую
+    # попытку доставки по УЖЕ ПРОВЕДЁННОМУ платежу — отказ, который сам себя
+    # повторяет, и растущая очередь повторов у платёжного провайдера.
+    # Закреплено `test_a_repeated_package_notification_is_still_processed_only_once`
+    # и `test_the_losing_delivery_answers_accepted`.
+    #
+    # ⚠️ У НЕПРОВЕДЁННОГО НАЧИСЛЕНИЯ ЕСТЬ СЛЕД, И КЛЮЧ У НЕГО СВОЙ. Прежний ключ
+    # успеха означал «выдано столько-то сообщений»; сохранить его значило бы
+    # писать в журнал неправду о выдаче. Жалоба «я заплатил и ничего не
+    # получил» проверяема ровно этой строкой, и причина названа в ней явно.
+    # Закреплено `test_a_package_notification_records_the_fact_by_its_own_key`.
     await db.commit()
-    await invalidate_balance_cache(db_payment.user_id)
 
     logger.info(
-        "payment_succeeded",
+        "webhook_package_payment_not_credited",
         user_id=db_payment.user_id,
         yookassa_id=yookassa_id,
         messages=db_payment.messages_count,
-        new_balance=new_balance,
+        reason="message_currency_removed",
     )
     return True
 

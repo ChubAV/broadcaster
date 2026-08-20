@@ -3,7 +3,6 @@
 {% from "components/badge.html" import badge %}
 {% from "components/button.html" import button, link_button %}
 {% from "components/card.html" import card_open, card_close %}
-{% from "components/field.html" import field %}
 {% from "components/modal.html" import modal %}
 {% from "components/mono.html" import mono %}
 {% from "components/table.html" import rowhead, row_open, row_close, cell %}
@@ -55,14 +54,6 @@
     </div>
     <div data-metrics>
       {{ card_open() }}
-        {{ mono('Баланс', 'muted', upper=true) }}
-        {%- if balance_info.is_unlimited -%}
-          <span data-metric-value>∞</span>{{ badge('Безлимит', 'warning') }}
-        {%- else -%}
-          <span data-metric-value>{{ balance_info.balance }}</span>
-        {%- endif -%}
-      {{ card_close() }}
-      {{ card_open() }}
         {{ mono('Объявления', 'muted', upper=true) }}
         <span data-metric-value>{{ ads_count }}</span>
       {{ card_close() }}
@@ -102,16 +93,6 @@
     {% endfor %}
   {{ card_close() }}
   {% endif %}
-
-  {{ card_open(title='Пополнить баланс') }}
-    <form method="post" action="/admin/users/{{ target_user.id }}/balance" data-form>
-      {{ field(name="amount", label='Кол-во сообщений', type='number', value='100',
-               min=1, id='balance-amount') }}
-      {{ field(name="description", label='Описание', placeholder='Причина пополнения',
-               id='balance-description') }}
-      {{ button('Пополнить') }}
-    </form>
-  {{ card_close() }}
 
   {{ card_open(title='Действия') }}
     <div data-actions>

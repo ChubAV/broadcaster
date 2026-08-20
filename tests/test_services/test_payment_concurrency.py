@@ -32,7 +32,7 @@
 
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -157,14 +157,10 @@ async def _overlapping_deliveries(factory, payload=None, logger_mock=None):
     async with factory() as first:
         _interleave_after_first_read(first, second_delivery)
         with ExitStack() as stack:
-            # Redis в суите нет — инвалидация кэша баланса мокается по образцу
-            # существующего файла тестов платёжного сервиса.
-            stack.enter_context(
-                patch(
-                    "app.services.payment_service.invalidate_balance_cache",
-                    new_callable=AsyncMock,
-                )
-            )
+            # ПОДМЕНЫ СБРОСА КЭША ЗДЕСЬ БОЛЬШЕ НЕТ. Она держала сброс вердикта
+            # об ОСТАТКЕ СООБЩЕНИЙ, снятом вместе со всей валютой. Оставшийся
+            # сброс вердикта доступа Redis не требует: и он, и чтение обёрнуты,
+            # а отсутствие Redis вердикта не отменяет.
             if logger_mock is not None:
                 stack.enter_context(
                     patch("app.services.payment_service.logger", logger_mock)
@@ -173,8 +169,19 @@ async def _overlapping_deliveries(factory, payload=None, logger_mock=None):
 
 
 @pytest.mark.asyncio
-async def test_overlapping_deliveries_credit_the_package_exactly_once(sessions):
-    """Баланс вырастает на количество пакета, а НЕ на удвоенное."""
+async def test_overlapping_deliveries_of_a_package_credit_nothing(sessions):
+    """Наложившиеся доставки пакета не начисляют НИ РАЗУ, а не ровно один раз.
+
+    ⚠️ ПРЕДМЕТ УТВЕРЖДЕНИЯ ИНВЕРТИРОВАН ВМЕСТЕ С ПРЕДМЕТОМ КОДА, А НЕ СНЯТ.
+    Прежде здесь проверялось, что заявка не даёт удвоить начисление; валюта
+    сообщений снята целиком, и начислять нечего вовсе — граница «две доставки
+    одного платежа не выдают лишнего» осталась той же и стала строже.
+
+    ДВА ПРЕЖНИХ УТВЕРЖДЕНИЯ СЛИТЫ В ОДНО НАМЕРЕННО: соседнее считало строки
+    журнала операций, и после снятия валюты оба свелись к одному вопросу —
+    «выдано ли хоть что-нибудь». Держать два имени под одним вопросом значило бы
+    получить пару, которая расходится при первой же правке.
+    """
     user_id, _ = await _seed(sessions)
 
     await _overlapping_deliveries(sessions)
@@ -183,26 +190,14 @@ async def test_overlapping_deliveries_credit_the_package_exactly_once(sessions):
         balance = await check.scalar(
             select(MessageBalance.balance).where(MessageBalance.user_id == user_id)
         )
-    assert balance == 100, (
-        "две наложившиеся доставки одного платежа начислили не один раз: "
-        f"баланс {balance} вместо 100"
-    )
-
-
-@pytest.mark.asyncio
-async def test_overlapping_deliveries_write_one_balance_transaction(sessions):
-    """Журнал операций и баланс не расходятся: строка ровно одна."""
-    await _seed(sessions)
-
-    await _overlapping_deliveries(sessions)
-
-    async with sessions() as check:
         rows = await check.scalar(
             select(func.count())
             .select_from(BalanceTransaction)
             .where(BalanceTransaction.payment_id == YOO_ID)
         )
-    assert rows == 1, f"строк BalanceTransaction по одному платежу {rows}, а не одна"
+
+    assert balance in (None, 0), f"наложившиеся доставки начислили {balance}"
+    assert rows == 0, f"строк журнала операций по одному платежу {rows}, а не ноль"
 
 
 @pytest.mark.asyncio
@@ -289,12 +284,9 @@ async def test_a_package_payment_without_a_count_credits_nothing(db_session):
     db_session.add(payment)
     await db_session.commit()
 
-    with patch(
-        "app.services.payment_service.invalidate_balance_cache", new_callable=AsyncMock
-    ):
-        processed = await handle_webhook(
-            db_session, EVENT_SUCCEEDED, _payload("yoo_no_count")
-        )
+    processed = await handle_webhook(
+        db_session, EVENT_SUCCEEDED, _payload("yoo_no_count")
+    )
 
     assert processed is False
     balance = await db_session.scalar(
@@ -355,13 +347,9 @@ async def test_two_different_payments_leave_one_active_subscription(sessions):
 
     async with sessions() as first:
         _interleave_after_first_read(first, second_delivery)
-        with patch(
-            "app.services.payment_service.invalidate_balance_cache",
-            new_callable=AsyncMock,
-        ):
-            processed = await handle_webhook(
-                first, EVENT_SUCCEEDED, _payload("yoo_sub_a")
-            )
+        processed = await handle_webhook(
+            first, EVENT_SUCCEEDED, _payload("yoo_sub_a")
+        )
 
     assert processed is True, "обработчик отказал по настоящему платежу"
 
@@ -439,8 +427,6 @@ async def test_a_rejected_subscription_insert_is_recovered_not_raised(db_session
     with patch(
         "app.services.payment_service._active_subscription",
         lookup_that_missed_the_competitor,
-    ), patch(
-        "app.services.payment_service.invalidate_balance_cache", new_callable=AsyncMock
     ), patch(
         "app.services.payment_service.get_settings", return_value=_app_settings()
     ):

@@ -2066,7 +2066,13 @@ async def test_admin_user_detail_renders_data(
     assert f"/admin/users/{user.id}/history" in html, "ссылка на историю потеряна"
     # Действия сохраняются на прежних маршрутах: новых не добавляется, старые
     # не теряются (блокировка и вход под пользователем — Фаза 6, ADMIN-04/05).
-    for action in ("/balance", "/unlimited", "/block", "/delete"):
+    #
+    # ⚠️ ПОПОЛНЕНИЕ УШЛО ИЗ ПЕРЕЧНЯ ВМЕСТЕ С МАРШРУТОМ, А НЕ ПОТЕРЯЛОСЬ. Валюта
+    # сообщений снята из продукта целиком, пополнять больше нечего, и карточка
+    # снята вместе с входом. Проверку, что вход действительно исчез, держит
+    # `tests/test_admin.py::test_the_admin_top_up_route_no_longer_answers`;
+    # здесь остались ровно те действия, которые карточка обязана предлагать.
+    for action in ("/unlimited", "/block", "/delete"):
         assert f"/admin/users/{user.id}{action}" in html, action
 
 
