@@ -973,8 +973,11 @@ async def _confirm_with_plan_limits(
 ) -> bool:
     """Подтверждённое уведомление ЮKassa при НАЗВАННОМ перечне тарифов.
 
-    `add_messages` подменяется по образцу соседних тестов: подписочная ветка его
-    не зовёт, но подмена держит тест независимым от порядка ветвления.
+    ⚠️ ПОДМЕНЫ НАЧИСЛЯЮЩЕЙ ФУНКЦИИ ЗДЕСЬ БОЛЬШЕ НЕТ, И ЭТО НЕ УПРОЩЕНИЕ. Она
+    держала тест независимым от порядка ветвления, пока начисление сообщений
+    существовало; валюта сообщений снята из продукта целиком, функции больше нет
+    ни одной, и подмена несуществующего имени падает `AttributeError` — то есть
+    красит тест по причине, к его предмету отношения не имеющей.
 
     `get_settings` подменяется по образцу `_post`, и с решения D-29 это не
     оформление: ветка отказа читает цену действующего плана из конфига, а
@@ -986,8 +989,6 @@ async def _confirm_with_plan_limits(
     приезжает АРГУМЕНТОМ, а не правкой модульной переменной.
     """
     with patch(
-        "app.services.payment_service.add_messages", new_callable=AsyncMock
-    ), patch(
         "app.services.payment_service.get_settings",
         return_value=_app_settings(plan_limits),
     ):
@@ -2373,8 +2374,6 @@ async def test_a_non_finite_price_does_not_five_hundred_the_notification(
     test_settings.yookassa_webhook_verify_ip = False
 
     with patch(
-        "app.services.payment_service.add_messages", new_callable=AsyncMock
-    ), patch(
         "app.services.payment_service.get_settings",
         return_value=_app_settings(NON_FINITE_PLAN_LIMITS),
     ):
@@ -3168,8 +3167,6 @@ async def _post_succeeded_webhook(
     `test_a_price_beyond_the_calendar_does_not_five_hundred_the_notification`.
     """
     with patch(
-        "app.services.payment_service.add_messages", new_callable=AsyncMock
-    ), patch(
         "app.services.payment_service.get_settings",
         return_value=_app_settings(plan_limits),
     ):
