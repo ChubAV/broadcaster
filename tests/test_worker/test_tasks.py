@@ -1,13 +1,17 @@
 import json
 
+from pathlib import Path
+
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy import select
+from sqlalchemy import func, select
 from app.constants import AD_STATUS_DRAFT
 from app.database import Base
+from app.models.balance_transaction import BalanceTransaction
+from app.models.message_balance import MessageBalance
 from app.models.user import User
 from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
@@ -1017,3 +1021,125 @@ async def test_dispatch_reports_an_unroutable_account_type_instead_of_dropping_i
             "число разосланных считает и те задачи, что никуда не уехали"
         )
         assert await dispatch_send_tasks([]) == 0
+
+
+# =============================================================================
+# ОДИН ВОПРОС НА ПУТИ ОТПРАВКИ — группа `-k one_question`
+# =============================================================================
+#
+# ПРЕДМЕТ ГРУППЫ. До этой волны путь отправки спрашивал ДВА раза: «открыт ли
+# доступ» у гейта и «есть ли остаток сообщений» у списания. Два ответа на один
+# вопрос «можно ли отправлять» рано или поздно расходятся, и разойтись они могут
+# только в одну сторону — рассылка либо идёт у того, кому нельзя, либо не идёт у
+# того, кому можно. Валюта сообщений снята, и вопрос остался один.
+#
+# ⚠️ УТВЕРЖДЕНИЯ ИДУТ И ПО ПОВЕДЕНИЮ, И ПО ТЕКСТУ ИСХОДНИКА. Поведенческое ловит
+# уже написанное списание; структурное — списание, дописанное завтра в ветку,
+# которой сегодня нет. Ни одно не заменяет другое.
+
+
+SEND_PATH_SOURCES = (
+    Path(__file__).resolve().parents[2] / "app" / "worker" / "tasks.py",
+    Path(__file__).resolve().parents[2]
+    / "app"
+    / "application"
+    / "scheduling"
+    / "use_cases.py",
+)
+
+# Имена снятой валюты сообщений. Выписаны ЗДЕСЬ, а не в исходниках пути
+# отправки: гейт читает файлы ТЕКСТОМ, и объяснение, набранное запрещённым
+# именем, уронило бы собственный запрет (находка плана 05.1-04).
+BILLING_SYMBOLS_GONE_FROM_THE_SEND_PATH = (
+    "deduct_message",
+    "check_balance",
+    "add_messages",
+    "invalidate_balance_cache",
+)
+
+
+@pytest.mark.asyncio
+async def test_a_successful_send_leaves_no_row_in_the_balance_journal_one_question(
+    db_engine_and_factory,
+):
+    """Успешная отправка не списывает ничего и ни у кого (D-D, критерий 1).
+
+    ⚠️ ОСТАТОК ПОСЕЯН НЕНУЛЕВЫМ НАМЕРЕННО. При нулевом остатке прежнее списание
+    не находило строки для уменьшения и не писало в журнал вовсе — тест зеленел
+    бы и ДО снятия списания, то есть проверял бы посев, а не продукт.
+    """
+    engine, factory = db_engine_and_factory
+
+    async with factory() as session:
+        user, ad, account, group, schedule = await create_test_data(session)
+        session.add(MessageBalance(user_id=user.id, balance=100))
+        await session.commit()
+
+    mock_messenger = AsyncMock()
+    mock_messenger.send_message = AsyncMock(return_value={"ok": True})
+
+    mock_settings = AsyncMock()
+    mock_settings.s3_public_url = "https://cdn.example.com/bucket"
+    mock_settings.database_url = "sqlite+aiosqlite:///:memory:"
+
+    mock_engine = AsyncMock()
+    with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
+         patch("app.worker.tasks.get_settings", return_value=mock_settings), \
+         patch("app.worker.tasks.get_engine", return_value=mock_engine), \
+         patch("app.worker.tasks.get_session_factory", return_value=factory):
+        await _send_message(ad.id, group.id, account.id, schedule.id)
+
+    async with factory() as session:
+        # Отправка состоялась — иначе «журнал пуст» верно по неверной причине.
+        log = (await session.execute(select(SendLog))).scalar_one()
+        assert log.status == "ok"
+
+        rows = await session.scalar(
+            select(func.count()).select_from(BalanceTransaction)
+        )
+        assert rows == 0, f"успешная отправка записала {rows} строк списания"
+
+        remaining = await session.scalar(
+            select(MessageBalance.balance).where(MessageBalance.user_id == user.id)
+        )
+        assert remaining == 100, f"остаток уменьшен до {remaining}"
+
+
+@pytest.mark.asyncio
+async def test_the_send_path_asks_the_access_verdict_exactly_once_one_question(
+    db_session,
+):
+    """Вопрос на пути отправки ровно ОДИН, и это вердикт доступа.
+
+    Утверждается ЧИСЛО вызовов, а не факт: второй вопрос — хоть о доступе, хоть
+    об остатке — это второе место, где решается «можно ли отправлять», и
+    разойтись с первым оно может молча.
+    """
+    await create_test_data(db_session)
+
+    dispatch_settings = MagicMock()
+    dispatch_settings.redis_url = "redis://localhost:6379/0"
+
+    gate = AsyncMock(return_value=(True, ""))
+    with patch("app.worker.tasks.send_telegram_message", MagicMock()), \
+         patch("app.worker.tasks.get_settings", return_value=dispatch_settings), \
+         patch("app.worker.tasks.check_access_cached", gate):
+        await check_schedules_async(db_session)
+
+    assert gate.await_count == 1, (
+        f"вердикт доступа спрошен {gate.await_count} раз(а), а не один"
+    )
+    assert gate.await_args.args[2] == "send", gate.await_args
+
+
+def test_no_second_question_is_left_in_the_source_of_the_send_path_one_question():
+    """Структурно: снятой валюты сообщений на пути отправки нет ни именем.
+
+    Поведенческие утверждения выше держат уже написанные ветки; это держит
+    ветку, которой сегодня нет, — списание, дописанное завтра в четвёртое место
+    отправки, вернуло бы второй ответ на единственный вопрос молча.
+    """
+    for path in SEND_PATH_SOURCES:
+        source = path.read_text(encoding="utf-8")
+        for symbol in BILLING_SYMBOLS_GONE_FROM_THE_SEND_PATH:
+            assert symbol not in source, f"{path.name}: {symbol}"
