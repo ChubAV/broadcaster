@@ -4,8 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yookassa.domain.common.security_helper import SecurityHelper
 
 from app.config import Settings
-from app.dependencies import get_current_user_id, get_db, get_settings
-from app.services.billing_service import get_balance_info, get_transaction_history
+from app.dependencies import get_db, get_settings
 from app.services.payment_service import handle_webhook
 
 logger = structlog.get_logger()
@@ -13,48 +12,18 @@ logger = structlog.get_logger()
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
 
-@router.get("/balance")
-async def get_balance(
-    user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db),
-):
-    info = await get_balance_info(db, user_id)
-    return info
-
-
-@router.get("/packages")
-async def list_packages(settings: Settings = Depends(get_settings)):
-    return {"packages": settings.parsed_message_packages}
-
-
-@router.get("/transactions")
-async def get_transactions(
-    limit: int = 50,
-    offset: int = 0,
-    user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db),
-):
-    txs = await get_transaction_history(db, user_id, limit=limit, offset=offset)
-    return {"transactions": txs}
-
-
-# ЧЕТВЁРТОГО ЧТЕНИЯ И ПЯТОГО ВХОДА ЗДЕСЬ НЕТ НАМЕРЕННО.
+# У ЭТОГО ФАЙЛА ОСТАЛСЯ РОВНО ОДИН ВХОД — УВЕДОМЛЕНИЕ ЮKASSA НИЖЕ.
 #
-# `POST /api/billing/purchase` вместе со своей моделью тела запроса снесён
-# планом 05-04 (D-24). Покупка пакета сообщений идёт формой раздела
-# (`app/pages/billing.py`), и у JSON-маршрута не осталось ни одного
-# потребителя: его единственным вызывающим был скрипт шаблона.
+# Три читающих входа (остаток сообщений, прейскурант и журнал операций по нему)
+# сняты вместе со ВСЕЙ валютой сообщений: считать больше нечего, и маршрут,
+# отдающий ноль по несуществующей величине, читался бы как «у вас кончилось», а
+# не как «этого больше нет». Четвёртый вход, `POST /api/billing/purchase`, был
+# снесён ещё планом 05-04 (D-24) — он возвращал `yookassa_payment_id` прямо в
+# браузер, а идентификатор платежа служит ключом подделки уведомления.
 #
-# ⚠️ ЭТО БЫЛ НЕ ПРОСТО МЁРТВЫЙ КОД. Маршрут возвращал в браузер тело ответа с
-# `yookassa_payment_id` — единственным «секретом», которым до этой фазы был
-# защищён неаутентифицированный вебхук: зная идентификатор платежа, кто угодно
-# отправлял уведомление об успешной оплате. Форма отдаёт 302 на страницу
-# оплаты, и идентификатор наружу не попадает вовсе. Восстанавливать маршрут
-# ради «удобства API» — значит вернуть утечку вместе с ним.
-#
-# Три ЧИТАЮЩИХ входа выше сохранены одним решением того же плана: удаление
-# объявленного читающего API — отдельный вопрос совместимости, а не следствие
-# перевода покупки на форму.
+# ⚠️ ВЕБХУК НИЖЕ НЕ ТРОНУТ НИ ОДНОЙ СТРОКОЙ И ТРОГАТЬСЯ НЕ ДОЛЖЕН: это
+# единственный писатель срока доступа и единственная точка приёма денег в
+# проекте. Гард подлинности источника — его часть, а не украшение.
 
 
 def _webhook_client_ip(request: Request, settings: Settings) -> str | None:

@@ -118,48 +118,6 @@ async def add_messages(
     return new_balance
 
 
-async def reset_free_monthly(db: AsyncSession, user_id: int, free_limit: int) -> bool:
-    """Reset free monthly messages for a single user. Returns True if reset."""
-    bal = await get_or_create_balance(db, user_id)
-    now = datetime.now(timezone.utc)
-
-    if bal.free_balance_reset_at is not None:
-        reset_at = bal.free_balance_reset_at
-        if reset_at.tzinfo is None:
-            reset_at = reset_at.replace(tzinfo=timezone.utc)
-        if reset_at.month == now.month and reset_at.year == now.year:
-            return False
-
-    bal.balance += free_limit
-    bal.free_balance_reset_at = now
-    await db.flush()
-
-    tx = BalanceTransaction(
-        user_id=user_id,
-        amount=free_limit,
-        balance_after=bal.balance,
-        type="free_monthly",
-        description=f"Ежемесячное начисление {free_limit} бесплатных сообщений",
-    )
-    db.add(tx)
-    return True
-
-
-async def reset_all_free_monthly(db: AsyncSession, free_limit: int) -> int:
-    """Reset free monthly for all users. Returns count of users reset."""
-    now = datetime.now(timezone.utc)
-    from app.models.user import User
-
-    result = await db.execute(select(User.id))
-    user_ids = [row[0] for row in result.all()]
-
-    count = 0
-    for uid in user_ids:
-        if await reset_free_monthly(db, uid, free_limit):
-            count += 1
-    return count
-
-
 async def get_balance_info(db: AsyncSession, user_id: int) -> dict:
     bal = await get_or_create_balance(db, user_id)
     return {
@@ -169,40 +127,13 @@ async def get_balance_info(db: AsyncSession, user_id: int) -> dict:
     }
 
 
-async def get_transaction_history(
-    db: AsyncSession, user_id: int, limit: int = 50, offset: int = 0
-) -> list[dict]:
-    result = await db.execute(
-        select(BalanceTransaction)
-        .where(BalanceTransaction.user_id == user_id)
-        .order_by(BalanceTransaction.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-    )
-    txs = result.scalars().all()
-    return [
-        {
-            "id": tx.id,
-            "amount": tx.amount,
-            "balance_after": tx.balance_after,
-            "type": tx.type,
-            "description": tx.description,
-            "payment_id": tx.payment_id,
-            "created_at": tx.created_at.isoformat() if tx.created_at else None,
-        }
-        for tx in txs
-    ]
-
-
 # --- Журнал платежей ----------------------------------------------------------
 #
-# ВТОРОЙ ЖУРНАЛ РАЗДЕЛА, А НЕ ЗАМЕНА ПЕРВОМУ (D-14). `BalanceTransaction` выше
-# считает ШТУКИ сообщений: рублёвой суммы у него нет — колонки под неё в таблице
-# не существует. Критерий фазы требует показать пользователю сумму в рублях, и
-# она есть только у `Payment`. Поэтому история платежей строится по `payments`,
-# а история операций по балансу остаётся своим блоком: одно про деньги, другое
-# про сообщения, и склеивать их значило бы получить журнал, в котором половина
-# строк без суммы, а половина без количества.
+# ЖУРНАЛ РАЗДЕЛА ОСТАЛСЯ ОДИН, И ЭТО ЖУРНАЛ ДЕНЕГ (D-14). Второй журнал —
+# читатель операций по остатку сообщений — снят вместе со своим единственным
+# входом: JSON-маршрута, который его звал, больше нет, а сама величина снимается
+# этой же волной. Рублёвая сумма есть только у `Payment`, и критерий фазы
+# требует показать пользователю именно её.
 
 
 async def get_payment_history(

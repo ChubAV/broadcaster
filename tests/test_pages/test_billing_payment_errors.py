@@ -56,8 +56,6 @@ SAME_ORIGIN = {"Origin": "http://test"}
 CROSS_SITE = {"Origin": "https://evil.example"}
 CONFIRMATION_URL = "https://yookassa.ru/checkout/payments/2c85a"
 
-FIRST_PACKAGE_INDEX = "0"
-
 # Текст «стороннего исключения». Строка нарочно узнаваемая: она не встречается
 # ни в одном шаблоне проекта, поэтому её появление в разметке однозначно значит
 # «текст чужого исключения вышел на экран», а не совпадение со словом верстки.
@@ -69,7 +67,6 @@ SDK_FAILURE_TEXT = "yookassa_sdk_internal_boom_do_not_render_me"
 MSG_PAYMENT = "Не удалось начать оплату — попробуйте ещё раз через минуту"
 MSG_DISABLED = "Оплата сейчас недоступна — обратитесь к администратору"
 MSG_PLAN = "Этот тариф больше не предлагается — обновите страницу и выберите другой"
-MSG_PACKAGE = "Этот пакет больше не предлагается — обновите страницу и выберите другой"
 MSG_DOWNGRADE = (
     "Перейти на младший тариф можно после окончания оплаченного срока — "
     "оплаченные дни не сгорают"
@@ -195,22 +192,6 @@ async def _subscribe(
     )
 
 
-async def _purchase(
-    client: AsyncClient,
-    index: str = FIRST_PACKAGE_INDEX,
-    *,
-    failing: bool = False,
-    headers=None,
-):
-    return await _post(
-        client,
-        "/billing/purchase",
-        {"package_index": index},
-        failing=failing,
-        headers=headers,
-    )
-
-
 async def _payments_count(db: AsyncSession) -> int:
     return await db.scalar(select(func.count()).select_from(Payment))
 
@@ -242,49 +223,35 @@ async def test_a_failed_subscription_payment_returns_the_person_with_a_reason(
 
 
 @pytest.mark.asyncio
-async def test_a_failed_package_payment_returns_the_person_with_a_reason(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Один порядок проверок на обоих входах означает один ответ на отказ."""
-    response = await _purchase(authed_client, failing=True)
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "/billing?error=payment"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("form", ["subscribe", "purchase"])
 async def test_a_failed_payment_leaves_no_row_in_the_journal(
-    authed_client: AsyncClient, db_session: AsyncSession, form: str
+    authed_client: AsyncClient, db_session: AsyncSession
 ):
     """Платёж не заводится в журнале, если ЮKassa его не создала (T-05-49).
 
     Порядок «сначала SDK, потом запись в БД» — не деталь реализации, а условие
     этого свойства: строка `payments`, оставшаяся после отказа, означала бы
     платёж, которого у ЮKassa нет вовсе.
+
+    ⚠️ РАЗБОР ПО ФОРМАМ СНЯТ ВМЕСТЕ СО ВТОРОЙ ФОРМОЙ. Платёжный вход у раздела
+    остался ОДИН: валюта сообщений снята целиком, и покупать пакет больше
+    негде. Параметр, у которого осталось одно значение, называет разбор,
+    которого нет.
     """
-    if form == "subscribe":
-        await _subscribe(authed_client, failing=True)
-    else:
-        await _purchase(authed_client, failing=True)
+    await _subscribe(authed_client, failing=True)
 
     assert await _payments_count(db_session) == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("form", ["subscribe", "purchase"])
 async def test_the_third_party_exception_text_never_reaches_the_screen(
-    authed_client: AsyncClient, form: str
+    authed_client: AsyncClient,
 ):
     """T-05-47: текст исключения SDK уходит в журнал и НИКОГДА на экран.
 
     Проверяется вся линия: и заголовок перенаправления, и страница, на которую
     оно привело.
     """
-    if form == "subscribe":
-        response = await _subscribe(authed_client, failing=True)
-    else:
-        response = await _purchase(authed_client, failing=True)
+    response = await _subscribe(authed_client, failing=True)
 
     assert SDK_FAILURE_TEXT not in response.text
     landing = await authed_client.get(response.headers["location"])
@@ -332,21 +299,6 @@ async def test_subscribing_with_payments_disabled_names_the_reason(
 
 
 @pytest.mark.asyncio
-async def test_purchasing_with_payments_disabled_names_the_reason(
-    authed_client: AsyncClient, db_session: AsyncSession, test_settings
-):
-    test_settings.yookassa_enabled = False
-    try:
-        response = await _purchase(authed_client)
-    finally:
-        test_settings.yookassa_enabled = True
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "/billing?error=disabled"
-    assert await _payments_count(db_session) == 0
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("plan", ["platinum", "free", ""])
 async def test_subscribing_to_a_plan_the_config_does_not_sell_names_the_reason(
     authed_client: AsyncClient, db_session: AsyncSession, plan: str
@@ -362,34 +314,23 @@ async def test_subscribing_to_a_plan_the_config_does_not_sell_names_the_reason(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("index", ["99", "-1", "не число", ""])
-async def test_purchasing_an_index_the_config_does_not_have_names_the_reason(
-    authed_client: AsyncClient, db_session: AsyncSession, index: str
-):
-    """Нечисловой и внедиапазонный индексы ведут в ОДНУ ветку с одной причиной:
-    для человека это один и тот же случай — «этого пакета нет»."""
-    response = await _purchase(authed_client, index=index)
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "/billing?error=package"
-    assert await _payments_count(db_session) == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("url", ["/billing/subscribe", "/billing/purchase"])
 async def test_a_cross_site_post_is_refused_without_a_reason(
-    authed_client: AsyncClient, db_session: AsyncSession, url: str
+    authed_client: AsyncClient, db_session: AsyncSession
 ):
     """Чужому источнику причина отказа НЕ сообщается.
 
     Порядок проверок не меняется: сначала кто пришёл, потом откуда, потом что
     просит. 403 без тела и без перенаправления — межсайтовый запрос не имеет
     права узнать даже, включены ли платежи.
+
+    ⚠️ ВТОРОЙ АДРЕС СНЯТ ВМЕСТЕ СО ВТОРЫМ ПЛАТЁЖНЫМ ВХОДОМ, А ГРАНИЦА ОСТАЛАСЬ
+    ТОЙ ЖЕ И НЕ ОСЛАБЛА: у раздела остался ровно один вход, принимающий деньги,
+    и именно он обязан отвечать 403 без слов.
     """
     response = await _post(
         authed_client,
-        url,
-        {"plan": "basic", "package_index": FIRST_PACKAGE_INDEX},
+        "/billing/subscribe",
+        {"plan": "basic"},
         headers=CROSS_SITE,
     )
 
@@ -423,7 +364,6 @@ def test_no_bare_redirect_without_a_reason_is_left_in_the_section():
         ("payment", MSG_PAYMENT),
         ("disabled", MSG_DISABLED),
         ("plan", MSG_PLAN),
-        ("package", MSG_PACKAGE),
         ("downgrade", MSG_DOWNGRADE),
     ],
 )
@@ -516,7 +456,6 @@ def test_the_reason_codes_of_the_handlers_are_exactly_the_known_set():
         "payment",
         "disabled",
         "plan",
-        "package",
         "downgrade",
         # Потолок одновременных подписочных намерений (план 05-17). Код обязан
         # войти в ОБА места сразу — в литерал редиректа и в отображение, — иначе
@@ -1927,30 +1866,6 @@ async def test_the_deal_cannot_be_sold_without_recording_its_authorization(
 
 
 @pytest.mark.asyncio
-async def test_a_package_payment_records_that_the_rule_was_not_asked(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Пакетный платёж записывает `NULL` ЗНАЧЕНИЕМ, а не отсутствием поля.
-
-    Правило смены тарифа пакета не касается вовсе, и это обязано быть выражено
-    записанным `NULL`, а не «забыли записать». Разница видна на стадии
-    применения: `NULL` означает «не спрашивали», а не «спрашивали и отказали».
-    """
-    await _purchase(authed_client)
-
-    payment = (
-        await db_session.execute(
-            select(Payment).where(Payment.yookassa_payment_id == "yoo_1")
-        )
-    ).scalar_one()
-
-    assert payment.kind == "package"
-    assert payment.switch_authorized is None, (
-        "пакетному платежу записан ответ правила, которое его не касается"
-    )
-
-
-@pytest.mark.asyncio
 async def test_a_legacy_payment_without_a_recorded_answer_still_decides_by_the_rule(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
@@ -2761,25 +2676,6 @@ async def test_a_second_intent_is_refused_while_the_first_is_fresh(
     assert _aware(rows[0].expires_at) < now + timedelta(days=45), (
         "срок сдвинут дважды — второй платёж всё-таки существует"
     )
-
-
-@pytest.mark.asyncio
-async def test_a_package_purchase_is_not_blocked_by_a_pending_subscription_intent(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Пакет потолком не задет: это другой предмет и другие деньги.
-
-    Потолок отвечает на вопрос «сколько раз человек может начать оплату
-    ДОСТУПА». Распространить его на пакеты значило бы запретить покупку
-    сообщений человеку, у которого просто висит неоплаченный счёт за доступ.
-    """
-    await _subscribe(authed_client, payment_id="yoo_access")
-
-    response = await _purchase(authed_client)
-
-    assert response.status_code == 302
-    assert response.headers["location"] == CONFIRMATION_URL
-    assert await _payments_count(db_session) == 2
 
 
 # =============================================================================

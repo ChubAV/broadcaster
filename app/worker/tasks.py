@@ -929,30 +929,6 @@ async def _process_max_results_async(results: list[dict]):
     await engine.dispose()
 
 
-@shared_task(name="app.worker.tasks.reset_free_monthly_balance")
-def reset_free_monthly_balance():
-    """Reset free monthly messages for all users."""
-    from app.services.billing_service import reset_all_free_monthly
-
-    settings = get_settings()
-    engine = get_engine(settings.database_url)
-    session_factory = get_session_factory(engine)
-
-    async def _run():
-        try:
-            async with session_factory() as session:
-                count = await reset_all_free_monthly(session, settings.free_monthly_messages)
-                await session.commit()
-                logger.info("free_monthly_reset_complete", users_reset=count)
-        except Exception as e:
-            logger.error("free_monthly_reset_error", error=str(e), exc_info=True)
-            raise
-        finally:
-            await engine.dispose()
-
-    asyncio.run(_run())
-
-
 @shared_task(name="app.worker.tasks.send_verification_email")
 def send_verification_email_task(email: str, code: str):
     """Send verification code email in background."""
