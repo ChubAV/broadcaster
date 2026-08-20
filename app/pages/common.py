@@ -10,11 +10,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.billing.plan_usage import AXIS_LABELS, AXIS_ORDER
+from app.application.billing.subscription_period import access_is_open, days_left
 from app.config import Settings
-from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED, MESSENGER_LABELS
+from app.constants import (
+    ACCESS_SOON_DAYS,
+    AD_STATUS_DRAFT,
+    AD_STATUS_PUBLISHED,
+    MESSENGER_LABELS,
+)
 from app.models.ad import Ad
-from app.models.balance_transaction import BalanceTransaction
-from app.models.message_balance import MessageBalance
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
@@ -300,6 +304,14 @@ templates.env.globals["format_amount"] = format_amount
 templates.env.globals["plan_axis_order"] = AXIS_ORDER
 templates.env.globals["plan_axis_labels"] = AXIS_LABELS
 
+# ПОРОГ «СКОРО КОНЧИТСЯ» ПРИЕЗЖАЕТ В РАЗМЕТКУ КОНСТАНТОЙ, А НЕ ЛИТЕРАЛОМ (D-K).
+# Внутри порога виджет доступа показывает ДНИ, вне — ДАТУ, и это же число
+# читает вердикт. Выписанная в шаблоне семёрка была бы второй копией правила и
+# разошлась бы с первой молча — то есть виджет предупреждал бы не тогда, когда
+# предупреждает система. То же основание, по которому строка отказа `pending`
+# не называет число часов давности.
+templates.env.globals["access_soon_days"] = ACCESS_SOON_DAYS
+
 
 async def get_user_from_cookie(
     request: Request, db: AsyncSession, settings: Settings
@@ -396,7 +408,7 @@ WORKER_LIST_CAP = 100
 
 
 async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
-    """Collect live shell data: nav counts, plan quota and messenger sessions.
+    """Collect live shell data: nav counts, access period and messenger sessions.
 
     Публичный контракт живых данных шелла (D-09/D-19). Фаза 4 (DASH-05) и
     Фаза 6 переиспользуют его, а не пишут своё чтение.
@@ -513,30 +525,15 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
         )
     ).scalar_one_or_none()
 
-    # Чтение без записи: get_or_create_balance создаёт строку и делает flush,
-    # а рендер страницы не должен ничего писать в БД.
-    balance = (
-        await db.execute(select(MessageBalance).where(MessageBalance.user_id == user.id))
-    ).scalar_one_or_none()
-    remaining = max(balance.balance, 0) if balance else 0
-    is_unlimited = bool(balance.is_unlimited) if balance else False
-    period_start = balance.free_balance_reset_at if balance else None
-
-    # Израсходовано за текущий период — по журналу списаний, а не оценкой.
-    used_stmt = select(func.coalesce(func.sum(-BalanceTransaction.amount), 0)).where(
-        BalanceTransaction.user_id == user.id,
-        BalanceTransaction.amount < 0,
-    )
-    if period_start is not None:
-        used_stmt = used_stmt.where(BalanceTransaction.created_at >= period_start)
-    used = int(await db.scalar(used_stmt) or 0)
-
-    if is_unlimited:
-        limit = 0
-        percent = 0
-    else:
-        limit = used + remaining
-        percent = min(100, round(used * 100 / limit)) if limit > 0 else 0
+    # ВЕРДИКТ СНИМАЕТСЯ ЕДИНСТВЕННЫМ ПРЕДИКАТОМ ПРОЕКТА, а не вторым сравнением
+    # дат на этом месте. Разойдясь на строгости сравнения или на признаке
+    # активности строки, две копии правила выдали бы разные ответы, и виджет на
+    # 26 страницах обещал бы доступ ровно тогда, когда зависимость
+    # `require_access` в нём уже отказывает. Момент времени берётся ОДИН на весь
+    # словарь: вердикт и остаток дней, посчитанные от разных `now`, могли бы
+    # разъехаться на границе суток (T-05.1-19).
+    now = datetime.now(timezone.utc)
+    expires_at = subscription.expires_at if subscription else None
 
     return {
         "nav_counts": {
@@ -545,12 +542,19 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
             "schedules": counts.schedules,
             "history": counts.history,
         },
-        "quota": {
-            "plan": subscription.plan if subscription else "free",
-            "used": used,
-            "limit": limit,
-            "percent": percent,
-            "expires_at": subscription.expires_at if subscription else None,
+        # СРОК ДОСТУПА, А НЕ КВОТА СООБЩЕНИЙ. Ключ переименован вместе со сменой
+        # ФОРМЫ значения ({used, limit, percent, plan} → {open, expires_at,
+        # days_left}), а не подписи: имя `quota` над словарём без квоты — та же
+        # ложь, за которую фаза 5 сняла виджет с чужой подписью (D-22, A-10).
+        #
+        # УМОЛЧАНИЙ У ВЕРДИКТА НЕТ. Пользователь без строки подписки получает
+        # `False` / `None` / `None`, а не выдуманное имя тарифа, которое здесь
+        # подставлялось прежде: отсутствие строки — это ОПРЕДЕЛЁННОЕ состояние
+        # (доступа нет), и оно переживёт выкат ревизии (D-G, П-о-1).
+        "access": {
+            "open": access_is_open(subscription, now),
+            "expires_at": expires_at,
+            "days_left": days_left(expires_at, now),
         },
         # Перечень ограничен потолком, агрегаты — нет: числу в шапке нельзя
         # зависеть от того, сколько строк поместилось в перечень.

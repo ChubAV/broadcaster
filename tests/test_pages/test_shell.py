@@ -2,6 +2,7 @@
 
 import ast
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -11,9 +12,11 @@ from httpx import AsyncClient
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.analytics.send_analytics import normalize_utc
 from app.constants import AD_STATUS_PUBLISHED
 from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
+from app.models.subscription import Subscription
 from app.models.user import User
 from app.pages.common import get_shell_context
 from tests.conftest import seed_group
@@ -461,8 +464,8 @@ async def test_retired_groups_section_accepts_no_post(authed_client: AsyncClient
 @pytest.mark.asyncio
 async def test_shell_live_data(authed_client: AsyncClient):
     html = (await authed_client.get("/profile")).text
-    # Виджет квоты
-    assert "data-quota" in html
+    # Виджет доступа (план 05.1-04: был виджетом квоты сообщений)
+    assert "data-access" in html
     # Индикатор сессий мессенджеров (rename-to-sessions, Задача 1)
     assert "data-sessions" in html
     assert 'data-sessions-online="0"' in html
@@ -471,6 +474,168 @@ async def test_shell_live_data(authed_client: AsyncClient):
     counts = re.findall(r'<span class="nav-count">(\d+)</span>', html)
     assert len(counts) == 4
     assert all(c.isdigit() for c in counts)
+
+
+# --- 05.1-04: контракт доступа в шелле ---------------------------------------
+#
+# Ключ `quota` заменён ключом `access`, и это переименование при СМЕНЕ ФОРМЫ
+# значения, а не при смене подписи: `{used, limit, percent, plan}` →
+# `{open, expires_at, days_left}`. Имя `quota` над словарём без квоты — ровно
+# та ловушка, за которую фаза 5 сняла виджет с чужой подписью (D-22).
+#
+# Вердикт считается ЕДИНСТВЕННЫМ предикатом проекта (`access_is_open`), а не
+# вторым сравнением дат на месте: две копии одного правила разъехались бы с
+# гейтом `require_access` молча — то есть виджет обещал бы доступ, в котором
+# зависимость уже отказывает.
+
+
+async def _access_row(db: AsyncSession, user: User) -> Subscription:
+    """Активная строка подписки пользователя — её заводит регистрация."""
+    return (
+        await db.execute(
+            select(Subscription).where(
+                Subscription.user_id == user.id,
+                Subscription.is_active.is_(True),
+            )
+        )
+    ).scalar_one()
+
+
+async def _move_expiry(db: AsyncSession, user: User, delta: timedelta) -> datetime:
+    """Сдвигает срок УЖЕ СУЩЕСТВУЮЩЕЙ строки, а не заводит вторую.
+
+    Частичный уникальный индекс `uq_subscriptions_active_user` допускает у
+    пользователя ровно одну активную строку, а пробный срок ему завела
+    регистрация (план 05.1-01). Вторая вставка дала бы IntegrityError, то есть
+    тест падал бы на посеве, а не на предмете.
+    """
+    row = await _access_row(db, user)
+    row.expires_at = datetime.now(timezone.utc) + delta
+    await db.commit()
+    return row.expires_at
+
+
+@pytest.mark.asyncio
+async def test_the_shell_reports_an_open_period_with_its_date_and_days(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Живой срок: вердикт открыт, дата — та же, что в строке, дни — число.
+
+    Дата сверяется через `normalize_utc`, а не оператором равенства: колонка
+    объявлена `DateTime(timezone=True)`, но SQLite отдаёт её NAIVE, а
+    PostgreSQL — aware. Шелл отдаёт разметке ЗНАЧЕНИЕ КОЛОНКИ как есть — ровно
+    как отдавал прежний ключ, — и приведение делает глобал форматирования.
+    Сравнение без приведения проверяло бы диалект, а не контракт.
+    """
+    user = await _dashboard_user(db_session)
+    expires_at = await _move_expiry(db_session, user, timedelta(days=10))
+
+    access = (await get_shell_context(db_session, user))["access"]
+
+    assert access["open"] is True
+    assert normalize_utc(access["expires_at"]) == normalize_utc(expires_at)
+    assert isinstance(access["days_left"], int)
+    assert access["days_left"] == 9  # 9 полных суток + остаток
+
+
+@pytest.mark.asyncio
+async def test_the_shell_reports_a_closed_period_when_the_date_has_passed(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Истёкший срок закрывает доступ, а не «почти закрывает»."""
+    user = await _dashboard_user(db_session)
+    await _move_expiry(db_session, user, timedelta(days=-3))
+
+    access = (await get_shell_context(db_session, user))["access"]
+
+    assert access["open"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_user_without_a_subscription_row_gets_a_verdict_not_an_exception(
+    db_session: AsyncSession,
+):
+    """Отсутствие строки — ОПРЕДЕЛЁННОЕ состояние, а не отсутствие ответа.
+
+    Ключ `access` присутствует всегда, когда пользователь есть: подстановка
+    выдуманного имени тарифа («free»), которой жил прежний ключ `quota`, снята
+    вместе с ним — умолчаний у вердикта доступа нет. Ветка несущая, а не
+    защитная: пользователи, заведённые до ревизии 05.1-08, строки не имеют.
+    """
+    user = User(email="rowless@test.com", password_hash="h", name="R")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    access = (await get_shell_context(db_session, user))["access"]
+
+    assert access["open"] is False
+    assert access["expires_at"] is None
+    assert access["days_left"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_last_day_of_access_is_reachable_through_the_shell(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Ноль полных суток при ЖИВОМ сроке достижим НА ПОВЕРХНОСТИ ШЕЛЛА.
+
+    Правило P-6 UI-контракта требует от виджета слов «последний день» вместо
+    «осталось 0 дней». Ветка имела бы право на существование только если ноль
+    вообще выпадает: округление вверх сделало бы её мёртвым кодом. Здесь
+    показано, что не сделало, — и показано там, где ветка живёт, а не только в
+    арифметике модуля.
+    """
+    user = await _dashboard_user(db_session)
+    await _move_expiry(db_session, user, timedelta(hours=5))
+
+    access = (await get_shell_context(db_session, user))["access"]
+
+    assert access["days_left"] == 0
+    assert access["open"] is True, "ноль выпал на УЖЕ ЗАКРЫТОМ доступе"
+
+
+@pytest.mark.asyncio
+async def test_the_widget_costs_the_shell_no_query_of_its_own(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Виджет доступа стоит НОЛЬ дополнительных запросов (UI-контракт C3).
+
+    Строку подписки шелл читал и до правки — она же несёт дату. Два чтения
+    журнала сообщений (`message_balances` и `balance_transactions`) уходят и
+    ничем не заменяются: это минус два обращения к базе на каждом из 26
+    страничных маршрутов, а не перенос стоимости в другое место.
+    """
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    bind = db_session.get_bind()
+    engine = getattr(bind, "sync_engine", bind)
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        response = await authed_client.get("/profile")
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert response.status_code == 200
+
+    journal = [
+        s
+        for s in statements
+        if "message_balances" in s or "balance_transactions" in s
+    ]
+    assert not journal, (
+        "шелл по-прежнему читает журнал сообщений на рендере страницы:\n"
+        + "\n".join(journal)
+    )
+
+    subscriptions = [s for s in statements if "FROM subscriptions" in s]
+    assert len(subscriptions) == 1, (
+        "строка подписки читается не одним запросом: "
+        f"{len(subscriptions)}\n" + "\n".join(subscriptions)
+    )
 
 
 # --- UI-06: адаптив ---------------------------------------------------------

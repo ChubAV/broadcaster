@@ -755,6 +755,42 @@ def test_the_last_day_of_access_is_zero_and_not_absent():
     assert days_left(NOW + timedelta(hours=23), NOW) is not None
 
 
+@pytest.mark.parametrize("hours", [1, 6, 12, 23])
+def test_the_last_day_is_zero_while_the_period_is_still_live(hours: int):
+    """Ноль и ЖИВОСТЬ срока выпадают ОДНОВРЕМЕННО — ветка P-6 достижима.
+
+    Соседний тест показывает, что ноль отличим от `None`. Здесь показано
+    большее и именно то, на что опирается правило P-6: ноль выпадает у
+    человека, чей доступ ЕЩЁ РАБОТАЕТ. Без этой пары утверждений ветка
+    «последний день» могла бы оказаться мёртвым кодом — веткой, в которую
+    попадает только тот, кому и так уже отказано, — и тогда её место занял бы
+    бейдж «закрыт», а не слова про последний день.
+
+    Проверено на всём диапазоне последних суток, а не на одной точке: ноль,
+    выпадающий лишь в одном часе из двадцати четырёх, был бы достижим
+    формально и недостижим практически.
+    """
+    expires_at = NOW + timedelta(hours=hours)
+
+    assert days_left(expires_at, NOW) == 0
+    assert subscription_is_live(expires_at, NOW) is True
+
+
+def test_an_expired_period_never_reports_zero_days_left():
+    """У закрытого доступа ноль не выпадает НИ ПРИ КАКОМ смещении в прошлое.
+
+    Это вторая половина достижимости: если бы истёкший срок тоже давал ноль,
+    ветка «последний день» печаталась бы человеку, которому уже отказано, —
+    то есть худшую из возможных подмен, обратную той, от которой защищает P-6.
+    Целая часть отрицательной разности округляется ВНИЗ (`timedelta.days`),
+    поэтому даже секунда просрочки даёт −1, а не ноль.
+    """
+    for seconds in (1, 60, 3600, 86_399, 86_400):
+        expires_at = NOW - timedelta(seconds=seconds)
+        assert days_left(expires_at, NOW) < 0, seconds
+        assert subscription_is_live(expires_at, NOW) is False, seconds
+
+
 def test_whole_days_are_counted_and_not_hours_rounded():
     """Считается целая часть разности, а не округление часов.
 
