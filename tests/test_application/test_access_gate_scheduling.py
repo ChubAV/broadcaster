@@ -22,11 +22,12 @@ JSON-API — обхода авторизации, а пропуск ЗДЕСЬ �
 """
 import contextlib
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.application.analytics.send_analytics import normalize_utc
 from app.application.scheduling.use_cases import collect_due_schedules
 from app.constants import AD_STATUS_PUBLISHED
 from app.database import Base
@@ -116,6 +117,7 @@ async def _seed_due_schedule(session: AsyncSession, user: User) -> Schedule:
     return schedule
 
 
+@contextlib.contextmanager
 def _no_redis():
     """Redis в тестовой среде нет, и вердикт обязан считаться без него.
 
@@ -123,8 +125,18 @@ def _no_redis():
     `redis.asyncio.from_url` объект СОЗДАЁТ (соединение ленивое) и падал бы
     только на первом обращении — то есть тест зависел бы от того, поднят ли на
     машине разработчика Redis, и на боевом стенде вёл бы себя иначе, чем в CI.
+
+    Настройки подменяются рядом по той же причине, что и в
+    `tests/test_billing_cache.py`: у файла своего приложения нет, а `Settings()`
+    из окружения процесса собрать нельзя — тест краснел бы отсутствием `.env`,
+    то есть чужой причиной.
     """
-    return patch("app.services.billing_cache._get_redis", return_value=None)
+    settings = MagicMock()
+    settings.redis_url = "redis://localhost:6379/0"
+    settings.billing_cache_ttl = 60
+    with patch("app.services.billing_cache._get_redis", return_value=None):
+        with patch("app.services.billing_cache.get_settings", return_value=settings):
+            yield
 
 
 # =============================================================================
@@ -201,7 +213,11 @@ async def test_an_expired_user_dispatches_nothing_and_keeps_the_schedule():
 
         await session.refresh(schedule)
         assert schedule.is_active is True, "отказ выключил расписание пользователя"
-        assert schedule.next_run_at > was_due_at, (
+        # Оба момента через `normalize_utc` (Pattern 3): колонка объявлена
+        # `DateTime(timezone=True)`, но SQLite отдаёт её NAIVE, а PostgreSQL —
+        # aware. Сравнение без приведения падает TypeError ровно на одном из двух
+        # диалектов, то есть у пользователя, а не в суите.
+        assert normalize_utc(schedule.next_run_at) > normalize_utc(was_due_at), (
             "срок следующего запуска не сдвинут вперёд — расписание выстрелит "
             "всеми накопленными слотами сразу, как только доступ вернётся"
         )
