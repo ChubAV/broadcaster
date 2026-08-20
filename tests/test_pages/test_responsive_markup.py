@@ -298,10 +298,11 @@ async def _seed_section(db: AsyncSession, section: str) -> str:
         # test_swap_anchors_present).
         await _seed_account(db, type_="max")
     elif section == "billing":
-        # Оба журнала раздела: деньги и сообщения. Пустой раздел нарисовал бы
-        # два пустых состояния, и проверка разметки зазеленела бы вакуумно.
+        # ЕДИНСТВЕННЫЙ журнал раздела — деньги: история операций по балансу
+        # сообщений снята планом 05.1-05 вместе с самим балансом. Пустой раздел
+        # нарисовал бы пустое состояние, и проверка разметки зазеленела бы
+        # вакуумно.
         await _seed_payment(db)
-        await _seed_transaction(db)
     else:  # pragma: no cover — защита от опечатки в параметризации
         raise AssertionError(f"неизвестный раздел: {section}")
     return SECTION_URLS[section]
@@ -1211,8 +1212,12 @@ TABLE_MARKERS = ("<table", "<thead", "<tbody", "<tr", "<td", "<th ", "<th>")
 async def test_billing_uses_row_primitives(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """История операций собрана на строке-таблице, а не на своей вёрстке."""
-    await _seed_transaction(db_session)
+    """Журнал платежей собран на строке-таблице, а не на своей вёрстке.
+
+    ⚠️ ПОСЕВ СМЕНИЛСЯ ВМЕСТЕ С ЖУРНАЛОМ: история операций по балансу сообщений
+    снята планом 05.1-05, и единственные табличные данные раздела — платежи.
+    """
+    await _seed_payment(db_session)
 
     response = await authed_client.get("/billing")
     assert response.status_code == 200
@@ -1232,7 +1237,7 @@ async def test_billing_no_table_markup(
     Проверка идёт по ОТРЕНДЕРЕННОЙ выдаче, а не по файлу: таблица могла бы
     приехать из включаемого шаблона.
     """
-    await _seed_transaction(db_session)
+    await _seed_payment(db_session)
 
     html = (await authed_client.get("/billing")).text
     for marker in TABLE_MARKERS:
@@ -1243,31 +1248,17 @@ async def test_billing_no_table_markup(
 async def test_billing_no_utility_classes(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    await _seed_transaction(db_session)
+    await _seed_payment(db_session)
 
     html = (await authed_client.get("/billing")).text
     for marker in UTILITY_MARKERS:
         assert marker not in html, marker
 
 
-@pytest.mark.asyncio
-async def test_billing_renders_transaction_data(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Строка операции отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
-
-    Перевод таблицы на макросы теряет неявный контекст: страница останется
-    валидной и вернёт 200, а строки будут пустыми.
-    """
-    await _seed_transaction(
-        db_session, amount=25, description="Уникальное описание операции"
-    )
-
-    html = (await authed_client.get("/billing")).text
-    assert "Уникальное описание операции" in html
-    assert "+25" in html, "знак и величина операции не отрисованы"
-    assert "125" in html, "баланс после операции не отрисован"
-    assert "Покупка" in html, "тип операции не расшифрован"
+# ⚠️ `test_billing_renders_transaction_data` СНЯТ ВМЕСТЕ С ЖУРНАЛОМ ОПЕРАЦИЙ ПО
+# БАЛАНСУ СООБЩЕНИЙ (D-D). Он охранял границу «строка журнала отрисовывает
+# настоящие данные, а не пустоту», и граница НЕ потеряна: её держит
+# `test_billing_renders_payment_data` ниже — на журнале, который остался.
 
 
 @pytest.mark.asyncio
@@ -1297,21 +1288,23 @@ async def test_billing_shows_the_access_date_from_the_live_shell(
     )
 
 
-# --- План 05-05: паршалы раздела «Тарифы» ------------------------------------
+# --- План 05-05: паршалы раздела подписки ------------------------------------
 #
-# Три макроса раздела живут в billing/includes/, а НЕ в components/: они
-# специфичны для тарифов и в других разделах не переиспользуются, а
-# инвентаризация общей библиотеки держит жёсткое число файлов.
+# ⚠️ ПАРШАЛОВ ОСТАЛСЯ ОДИН ИЗ ТРЁХ (план 05.1-05). Карточка тарифа и метр оси
+# удалены вместе с предметом: тарифов Free/Basic/Pro нет (D-F), а четыре оси
+# потребления были счётом, ради снятия которого фаза и существует. Их проверки
+# сняты здесь же — тест удалённого файла краснеет на чтении с диска и говорит
+# не о том, о чём написан.
+#
+# Паршал живёт в billing/includes/, а НЕ в components/: он специфичен для
+# раздела и в других не переиспользуется, а инвентаризация общей библиотеки
+# держит жёсткое число файлов.
 #
 # Проверки идут ПРЯМЫМ рендером макроса, а не по странице: макрос, потерявший
 # явный параметр, отрисуется пустотой, а страница всё равно вернёт 200
 # (приём tests/test_templates/test_components.py).
 
-BILLING_PARTIALS = (
-    ("billing/includes/plan_card.html", "plan_card"),
-    ("billing/includes/usage_meters.html", "usage_meter"),
-    ("billing/includes/payment_row.html", "payment_row"),
-)
+BILLING_PARTIALS = (("billing/includes/payment_row.html", "payment_row"),)
 
 # Разделитель разрядов и отбивка перед знаком рубля — НЕРАЗРЫВНЫЕ пробелы:
 # обычный пробел переносит «1» и «490» на разные строки узкой карточки.
@@ -1321,34 +1314,10 @@ NBSP = "\u00a0"
 BASIC_PRICE = f"1{NBSP}490{NBSP}₽"
 PRO_PRICE = f"4{NBSP}900{NBSP}₽"
 
-# Запись тарифа в том виде, в каком её отдаёт Settings.parsed_plan_limits.
-BASIC_PLAN = {
-    "id": "basic",
-    "name": "Basic",
-    "price": "1490.00",
-    "ads": 15,
-    "groups": 30,
-    "sends": 5000,
-    "accounts": 5,
-}
-PRO_PLAN = {
-    "id": "pro",
-    "name": "Pro",
-    "price": "4900.00",
-    "ads": None,
-    "groups": None,
-    "sends": 50000,
-    "accounts": 20,
-}
-FREE_PLAN = {
-    "id": "free",
-    "name": "Free",
-    "price": "0.00",
-    "ads": 3,
-    "groups": 5,
-    "sends": 300,
-    "accounts": 1,
-}
+# ⚠️ ТРИ ЗАПИСИ ТАРИФА СНЯТЫ ВМЕСТЕ С ИХ ЕДИНСТВЕННЫМ ПОТРЕБИТЕЛЕМ — прямым
+# рендером карточки тарифа. Суммы выше остались: они проверяют ГЛОБАЛ
+# форматирования, а он живёт и после снятия прейскуранта — его зовут и цена
+# доступа, и каждая строка платежа.
 
 
 def _billing_macro(path: str, name: str):
@@ -1387,86 +1356,21 @@ def test_billing_component_library_did_not_grow():
     assert len(components) == 13, [p.name for p in components]
 
     partials = {p.name for p in (TEMPLATES_DIR / "billing" / "includes").glob("*.html")}
-    assert partials == {"plan_card.html", "usage_meters.html", "payment_row.html"}
+    assert partials == {"payment_row.html"}, (
+        "паршалов раздела не один: карточка тарифа и метр оси удалены планом "
+        "05.1-05 вместе с предметом"
+    )
 
 
-def test_billing_usage_meter_draws_no_denominator_for_an_unlimited_axis():
-    """Безлимитная ось не делит на ноль и не рисует шкалу вовсе.
-
-    Заливать шкалу полностью значило бы сообщить «израсходовано всё» там, где
-    израсходовать нельзя, а нарисовать «6 / 0» — назвать безлимит нулём.
-    """
-    axis = PlanAxis(key="ads", label="Объявлений", used=6, limit=None, percent=0)
-
-    out = str(_billing_macro("billing/includes/usage_meters.html", "usage_meter")(axis))
-
-    assert "∞" in out, "знака бесконечности на месте знаменателя нет"
-    assert "без ограничений" in out
-    assert "progress__track" not in out, "у безлимитной оси нарисована шкала"
-    assert "/ 0" not in out, "безлимит показан нулём"
-
-
-def test_billing_usage_meter_over_the_limit_reports_the_real_numbers():
-    """Превышение — факт, а не приговор: шкала на сотне, числа настоящие.
-
-    Фаза ничего не запрещает (D-08), и тревожное оформление обещало бы запрет,
-    которого не существует.
-    """
-    axis = PlanAxis(key="ads", label="Объявлений", used=20, limit=15, percent=100)
-
-    out = str(_billing_macro("billing/includes/usage_meters.html", "usage_meter")(axis))
-
-    assert "width: 100%" in out
-    assert "20 / 15" in out, "подпись не называет настоящие числа"
-    assert "progress--danger" not in out, "превышение оформлено как провинность"
-
-
-def test_billing_plan_card_marks_the_current_plan_and_offers_renewal():
-    plan_card = _billing_macro("billing/includes/plan_card.html", "plan_card")
-
-    out = str(plan_card(BASIC_PLAN, "basic", True))
-
-    assert "ВАШ ПЛАН" in out
-    assert "card--current" in out, "текущий план не выделен"
-    assert 'action="/billing/subscribe"' in out
-    assert 'name="plan" value="basic"' in out
-    assert "Продлить" in out
-    assert BASIC_PRICE in out, "цена показана машинной строкой"
-    assert "/ мес" in out
-    for label in ("Объявлений", "Групп", "Отправок в месяц", "Аккаунтов"):
-        assert label in out, label
-
-
-def test_billing_plan_card_draws_infinity_for_an_unlimited_limit():
-    plan_card = _billing_macro("billing/includes/plan_card.html", "plan_card")
-
-    out = str(plan_card(PRO_PLAN, "basic", True))
-
-    assert "БЕЗ ЛИМИТОВ" in out
-    assert "∞" in out
-    assert "Перейти на Pro" in out
-    assert "card--current" not in out
-
-
-def test_billing_free_plan_card_carries_no_form():
-    """Бесплатный тариф покупать нечего: подпись вместо формы."""
-    plan_card = _billing_macro("billing/includes/plan_card.html", "plan_card")
-
-    out = str(plan_card(FREE_PLAN, "free", True))
-
-    assert "<form" not in out
-    assert "Текущий на старте" in out
-
-
-def test_billing_plan_card_without_payments_names_the_administrator():
-    """D-21: выключенные платежи гасят кнопку, а не карточку."""
-    plan_card = _billing_macro("billing/includes/plan_card.html", "plan_card")
-
-    out = str(plan_card(BASIC_PLAN, "free", False))
-
-    assert "<form" not in out, "форма оплаты осталась при выключенных платежах"
-    assert "администратора" in out
-    assert BASIC_PRICE in out, "витрина погасла вместе с кнопкой"
+# ⚠️ ШЕСТЬ ТЕСТОВ ПРЯМОГО РЕНДЕРА СНЯТЫ ВМЕСТЕ С ДВУМЯ УДАЛЁННЫМИ МАКРОСАМИ:
+# два про метр оси (безлимит и превышение) и четыре про карточку тарифа
+# (текущий план, безлимитный лимит, бесплатный тариф без формы, выключенные
+# платежи). Их предмет — оси потребления и прейскурант — снят решениями D-D и
+# D-F; тест удалённого шаблона краснеет на чтении с диска и говорит не о том, о
+# чём написан. Две границы, которые они охраняли и которые ПЕРЕЖИЛИ снос,
+# закреплены в другом месте: «выключенные платежи гасят кнопку, а не витрину» —
+# в test_billing_section.py, «сумма форматируется только на стороне показа» —
+# тестом глобала выше.
 
 
 def test_billing_payment_row_is_built_on_row_primitives():
@@ -1835,8 +1739,8 @@ async def test_billing_payment_labels_ride_with_the_values(
     """Подписи колонок истории платежей едут вместе со значениями.
 
     На 860px шапка колонок скрывается, и сумма без подписи становится числом
-    без смысла. Дата подписи не получает намеренно — она читается сама, как и
-    в соседнем журнале операций.
+    без смысла. Дата подписи не получает намеренно — форматированная дата
+    самоописательна.
     """
     await _seed_payment(db_session)
 
@@ -1844,6 +1748,26 @@ async def test_billing_payment_labels_ride_with_the_values(
 
     for label in ("Назначение", "Сумма", "Статус"):
         assert f"<span data-cell-label>{label}</span>" in html, label
+
+
+@pytest.mark.asyncio
+async def test_billing_renders_payment_data(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка платежа отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+
+    ⚠️ ГРАНИЦА УНАСЛЕДОВАНА У СНЯТОГО `test_billing_renders_transaction_data`.
+    Макрос, потерявший явный параметр, отрисуется ПУСТОТОЙ при статусе 200, и
+    проверка «раздел отдал 200» этого не увидит. Журнал сменился — граница нет.
+    """
+    await _seed_payment(db_session)
+
+    html = (await authed_client.get("/billing")).text
+
+    assert BASIC_PRICE in html, "сумма платежа не отрисована подписью"
+    assert "проведён" in html, "статус платежа не расшифрован"
+    assert "2026-05-20" in html, "дата платежа не отрисована"
+    assert "1490.00" not in html, "машинная строка суммы вышла на экран"
 
 
 @pytest.mark.asyncio
@@ -1865,45 +1789,39 @@ async def test_billing_has_no_event_handler_on_a_button(
         assert marker not in html, marker
 
 
-@pytest.mark.asyncio
-async def test_billing_plans_grid_is_declared_folding(authed_client: AsyncClient):
-    """Сетка карточек складывается в одну колонку САМА, без второй вёрстки.
+def test_the_plan_card_rules_are_gone_and_the_dashboard_tiles_survived():
+    """Разрез стилей: блок карточек тарифов вырезан, СОСЕДИ целы.
 
-    ⚠️ Проверяется ОБЪЯВЛЕНИЕ правила, а не отрисовка: браузера в суите нет.
-    """
-    html = (await authed_client.get("/billing")).text
-    css = APP_CSS.read_text(encoding="utf-8")
-
-    assert "data-plans" in html
-    assert "repeat(auto-fit, minmax(260px, 1fr))" in css
-
-
-def test_billing_plans_grid_rule_does_not_redefine_the_dashboard_grid():
-    """Сетка карточек — новый атрибут, а не переопределение плиток дашборда.
-
-    `[data-metrics]` объявлен с меньшим минимумом и держит плитки Фазы 4;
-    карточка плана несёт четыре строки лимитов и в 210px не складывается.
+    ⚠️ ТЕСТ ИНВЕРТИРОВАН, А НЕ УДАЛЁН. Он утверждал, что сетка карточек
+    объявлена складывающейся и не переопределяет плитки дашборда. Карточек нет
+    (D-F), и предметом стала вторая половина того же утверждения — САМАЯ ДОРОГАЯ
+    ОШИБКА ФАЗЫ ВЫЧИТАНИЯ: удалить лишнее. Правила плиток лежали ВПЛОТНУЮ к
+    вырезанному блоку, их держат дашборд Фазы 4 и карточка пользователя в
+    админке, и уйти вместе с соседями они не имели права.
     """
     css = APP_CSS.read_text(encoding="utf-8")
 
-    assert "[data-plans]" in css
-    assert "minmax(260px, 1fr)" in css
+    for gone in ("[data-plans]", "[data-plan-name]", "[data-plan-limits]"):
+        assert gone not in css, f"правило {gone} пережило снос карточек тарифов"
     assert css.count("[data-metrics] {") == 1, "правило плиток объявлено дважды"
     assert "minmax(210px, 1fr)" in css, "минимум плиток дашборда изменён"
+    for kept in ("[data-metric-line] {", "[data-metric-value] {"):
+        assert kept in css, f"правило {kept} удалено вместе с соседями"
 
 
 # --- План 05-09: нажимаемая высота кнопок оплаты (M3 / C1) ------------------
 #
-# Три формы оплаты раздела несут атрибут data-plan-cta, и до этого плана у него
-# не было в app.css НИ ОДНОГО правила: атрибут был объявлен точкой расширения и
-# остался неиспользованным.
+# ⚠️ ФОРМА ОПЛАТЫ НА РАЗДЕЛЕ ОСТАЛАСЬ ОДНА ВМЕСТО ТРЁХ (план 05.1-05), И ОБЕ
+# РЕГРЕССИИ ПЕРЕНАЦЕЛЕНЫ НА НЕЁ, А НЕ УДАЛЕНЫ ВМЕСТЕ С ДВУМЯ ИСЧЕЗНУВШИМИ.
+# Атрибут `data-plan-cta` обязан был переехать на единственную оставшуюся форму:
+# потерять его при переписывании — значит молча вернуть кнопку к 33px и заново
+# открыть тот самый пункт UAT фазы 5, который эта фаза объявляет снятым.
 
 # Шаблоны с формами оплаты и число форм в каждом. Правило без атрибута так же
 # бесполезно, как атрибут без правила, и до плана 05-09 в разделе была ровно
 # вторая половина.
 PLAN_CTA_TEMPLATES = {
-    "billing/includes/plan_card.html": 1,
-    "billing/balance.html": 2,
+    "billing/balance.html": 1,
 }
 
 # Собственный порог проекта — токен `touch` из 05-UI-SPEC.md `## Spacing Scale`.
@@ -1946,12 +1864,12 @@ def test_billing_payment_buttons_declare_the_project_touch_height():
 
 
 def test_billing_payment_forms_carry_the_touch_attribute():
-    """Атрибут `data-plan-cta` стоит на всех трёх формах оплаты раздела.
+    """Атрибут `data-plan-cta` стоит на ЕДИНСТВЕННОЙ форме оплаты раздела.
 
     Правило CSS без атрибута бесполезно ровно так же, как атрибут без правила.
-    Счёт по каждому шаблону, а не «встречается хотя бы раз»: потерянный атрибут
-    на одной из трёх форм оставил бы её кнопку на прежних 33px, а страница
-    продолжила бы отдавать 200.
+    Счёт по каждому шаблону, а не «встречается хотя бы раз»: лишний атрибут
+    означал бы вторую форму оплаты на экране, где её быть не должно, а
+    потерянный — кнопку на прежних 33px при статусе 200.
     """
     for template, expected in PLAN_CTA_TEMPLATES.items():
         markup = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
@@ -1960,12 +1878,27 @@ def test_billing_payment_forms_carry_the_touch_attribute():
         )
 
 
+@pytest.mark.asyncio
+async def test_the_touch_attribute_reaches_the_rendered_form(
+    authed_client: AsyncClient,
+):
+    """Вторая половина той же регрессии — по ОТРЕНДЕРЕННОЙ выдаче.
+
+    Проверка по исходнику шаблона зеленеет и тогда, когда форма стоит в ветке,
+    которая не срабатывает никогда. Здесь утверждается, что атрибут доехал до
+    экрана в штатном состоянии — и что форма на экране ровно одна.
+    """
+    html = (await authed_client.get("/billing")).text
+
+    assert html.count("data-plan-cta") == 1, (
+        "форм оплаты на отрисованном экране не одна"
+    )
+
+
 # test_billing_plans_template_is_migrated УДАЛЁН планом 05-05 вместе с файлом,
 # который он читал с диска (D-19). Это не обход поломки, а завершение работы
 # теста: проверка исходника существовала ровно потому, что у неподключённого
-# шаблона не было поведенческой проверки. Содержимое шаблона переехало в живые
-# паршалы раздела, и у них проверки есть — test_billing_plan_card_* и
-# test_billing_usage_meter_* выше. Отсутствие самого файла закреплено
+# шаблона не было поведенческой проверки. Отсутствие самого файла закреплено
 # test_the_unwired_plans_template_is_gone.
 
 
@@ -3506,19 +3439,16 @@ ROWHEAD_PAGES = (
         "admin/user_detail.html", "/admin/users/{user_id}", True, "admin_user_detail",
         frozenset({"Аккаунт"}),
     ),
-    # НАБЛЮДЕНИЕ, а НЕ принятая базовая линия. История операций эмитила подписи
-    # ДО набора планов 09-13, причём атрибутом вручную, и покрыла две колонки из
-    # четырёх. 01-VERIFICATION.md пробелом это не считает и относит страницу к
-    # применившим примитив, поэтому дописывать подписи здесь нельзя — работа вне
-    # закрываемого пробела. Но пользовательская правда SC-5 «понятно, что каждое
-    # значение означает» на этой странице остаётся частично ложной: «Тип» и
-    # «Описание» на 860px остаются без названия. Передано в /gsd-verify-work
-    # (T-13-09). Формулировка «принято как базовая линия» запрещена.
+    # ⚠️ НАБЛЮДЕНИЕ T-13-09 ПО ЭТОЙ СТРАНИЦЕ ЗАКРЫТО — И ЗАКРЫТО СНОСОМ, А НЕ
+    # ДОПИСЫВАНИЕМ ПОДПИСЕЙ. Колонки «Тип» и «Описание» принадлежали истории
+    # операций по балансу сообщений; журнал снят планом 05.1-05 вместе с самим
+    # балансом (D-D), и вместе с ним исчезла половина пользовательской правды
+    # SC-5, которая на этой странице оставалась ложной. Осталась одна колонка
+    # без подписи — «Дата», и она освобождена НАМЕРЕННО: форматированная дата
+    # самоописательна (контракт C2 UI-SPEC фазы 05.1).
     RowheadPage(
         "billing/balance.html", "/billing", False, "billing",
-        frozenset({"Дата", "Тип", "Описание"}),
-        note="НАБЛЮДЕНИЕ для /gsd-verify-work: «Тип» и «Описание» не подписаны "
-        "помимо колонки даты; НЕ принятая базовая линия",
+        frozenset({"Дата"}),
     ),
     # НАБЛЮДЕНИЕ, а НЕ принятая базовая линия — та же история, что у тарифов:
     # «Канал» и «Обновлено» на 860px остаются без названия (T-13-09).
@@ -3550,7 +3480,10 @@ async def _seed_rowhead_page(db: AsyncSession, seed: str) -> None:
     elif seed == "admin_user_detail":
         await _seed_account(db, type_="max")
     elif seed == "billing":
-        await _seed_transaction(db)
+        # Шапку колонок раздела рисует ЖУРНАЛ ПЛАТЕЖЕЙ: история операций по
+        # балансу сообщений снята планом 05.1-05, и посев операцией оставлял бы
+        # страницу с пустым состоянием вместо шапки.
+        await _seed_payment(db)
     elif seed == "admin_groups_info":
         await _seed_group_info(db)
     else:  # pragma: no cover — защита от опечатки в таблице параметризации
