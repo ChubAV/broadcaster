@@ -9,7 +9,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.billing.plan_usage import AXIS_LABELS, AXIS_ORDER
 from app.application.billing.subscription_period import access_is_open, days_left
 from app.config import Settings
 from app.constants import (
@@ -303,14 +302,6 @@ def format_amount(value) -> str:
 
 
 templates.env.globals["format_amount"] = format_amount
-
-# Порядок и подписи осей тарифа приезжают в разметку ИЗ МОДУЛЯ ОСЕЙ, а не
-# выписываются в шаблоне второй раз: это НАЗВАНИЯ осей, а не форматирование
-# данных пользователя, и вторая их копия разъехалась бы с первой молча
-# (контракт плана 05-03). Тем же приёмом в разметку приходят подписи
-# мессенджеров выше.
-templates.env.globals["plan_axis_order"] = AXIS_ORDER
-templates.env.globals["plan_axis_labels"] = AXIS_LABELS
 
 # ПОРОГ «СКОРО КОНЧИТСЯ» ПРИЕЗЖАЕТ В РАЗМЕТКУ КОНСТАНТОЙ, А НЕ ЛИТЕРАЛОМ (D-K).
 # Внутри порога виджет доступа показывает ДНИ, вне — ДАТУ, и это же число

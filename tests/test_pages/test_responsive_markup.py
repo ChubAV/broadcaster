@@ -22,7 +22,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import CHART_BUCKETS_PER_DAY
-from app.application.billing.plan_usage import PlanAxis
 from app.models.ad import Ad
 from app.models.balance_transaction import BalanceTransaction
 from app.models.group import Group

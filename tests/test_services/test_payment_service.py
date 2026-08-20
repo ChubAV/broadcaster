@@ -633,6 +633,113 @@ async def test_the_first_purchase_takes_the_plan_from_the_payment(db_session):
     assert rows[0].is_active is True
 
 
+# --- ПРОДЛЕНИЕ ДЕЙСТВУЮЩЕЙ ПОДПИСКИ ПОСЛЕ СНЯТИЯ МАТРИЦЫ ТАРИФОВ -------------
+#
+# ЧТО ЗАКРЫВАЮТ ЭТИ ДВА ТЕСТА. План 05.1-07 снял из `_apply_extension` решение о
+# ПЛАНЕ целиком: записанный ответ гарда, сравнение рангов, долю месяца и
+# конверсию остатка. Осталась одна пара операторов — снятие признака живости и
+# сдвиг срока, — и обе стороны этой пары обязаны иметь свидетеля, иначе «ветку
+# случайно вернули» и «ветка отсутствует намеренно» неотличимы по прогону.
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_payment_only_moves_the_date(db_session):
+    """Подтверждённый платёж двигает СРОК и не трогает больше ничего.
+
+    ⚠️ ТЕСТ УТВЕРЖДАЕТ ОТСУТСТВИЕ ВЕТВЛЕНИЯ, А НЕ ЕГО ИСХОД, И ЭТО РАЗНЫЕ ВЕЩИ.
+    Прежде план подписки перезаписывался планом платежа — либо сохранялся, если
+    правило перехода отвергало его. Тарифов больше нет (D-A), и платёж, чей
+    `plan` РАЗОШЁЛСЯ со строкой подписки, обязан оставить строку в покое: любое
+    присваивание плана здесь означало бы, что ветка вернулась.
+    """
+    user = await _user(db_session)
+    current = (datetime.now(timezone.utc) + timedelta(days=10)).replace(microsecond=0)
+    subscription = Subscription(
+        user_id=user.id, plan="pro", expires_at=current, is_active=True
+    )
+    db_session.add(subscription)
+    await db_session.commit()
+
+    payment = await _subscription_payment(db_session, user, plan="basic")
+
+    processed = await handle_webhook(
+        db_session,
+        event=EVENT_SUCCEEDED,
+        payment_data={"object": {"id": payment.yookassa_payment_id}},
+    )
+
+    assert processed is True
+    await db_session.refresh(subscription)
+    assert _utc(subscription.expires_at) == add_one_month(current), (
+        "срок не сдвинут на календарный месяц от собственной даты"
+    )
+    assert subscription.plan == "pro", (
+        "строка подписки изменена платежом — решение о плане вернулось в "
+        "`_apply_extension`"
+    )
+    assert subscription.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_the_journal_of_an_extension_names_the_liveness_of_the_period(db_session):
+    """Журнал различает ПРОДЛЕНИЕ живого срока и ВОЗВРАТ после перерыва.
+
+    Строка подписки после обоих исходов выглядит одинаково — дата в будущем, —
+    и человек, у которого «пропали дни», приходит с этим к нам. Признак живости
+    потерял ветвление вместе с матрицей тарифов, но не потерял смысла: он и есть
+    то единственное, что эти два исхода различает. Снятый ПОСЛЕ сдвига, он
+    отвечал бы «живо» в обоих — то есть поле молча стало бы константой.
+    """
+    user = await _user(db_session)
+    live = (datetime.now(timezone.utc) + timedelta(days=10)).replace(microsecond=0)
+    subscription = Subscription(
+        user_id=user.id, plan="basic", expires_at=live, is_active=True
+    )
+    db_session.add(subscription)
+    await db_session.commit()
+    payment = await _subscription_payment(
+        db_session, user, yookassa_payment_id="yoo_sub_live"
+    )
+
+    with patch("app.services.payment_service.logger") as spy:
+        await handle_webhook(
+            db_session,
+            event=EVENT_SUCCEEDED,
+            payment_data={"object": {"id": payment.yookassa_payment_id}},
+        )
+
+    assert _extension_records(spy) == [True], "продление живого срока не названо"
+
+    subscription.expires_at = (datetime.now(timezone.utc) - timedelta(days=40)).replace(
+        microsecond=0
+    )
+    await db_session.commit()
+    lapsed = await _subscription_payment(
+        db_session, user, yookassa_payment_id="yoo_sub_lapsed"
+    )
+
+    with patch("app.services.payment_service.logger") as spy:
+        await handle_webhook(
+            db_session,
+            event=EVENT_SUCCEEDED,
+            payment_data={"object": {"id": lapsed.yookassa_payment_id}},
+        )
+
+    assert _extension_records(spy) == [False], (
+        "возврат после перерыва записан как продление живого срока — признак "
+        "снят ПОСЛЕ сдвига и стал константой"
+    )
+
+
+def _extension_records(spy) -> list[bool]:
+    """Значения `period_was_live` у записей продления, в порядке испускания."""
+    return [
+        call.kwargs.get("period_was_live")
+        for call in spy.info.call_args_list
+        if call.args and call.args[0] == "subscription_extended"
+    ]
+
+
 # --- ПОТОЛОК ОДНОВРЕМЕННЫХ ПОДПИСОЧНЫХ НАМЕРЕНИЙ ----------------------------
 #
 # ФОРМА ПОТОЛКА — «НЕ БОЛЕЕ ОДНОГО НЕЗАКРЫТОГО ПОДПИСОЧНОГО НАМЕРЕНИЯ НА
@@ -748,6 +855,55 @@ async def _subscribe(db, user: User, *, price: str = ACCESS_PRICE):
         messages_count=None,
         switch_authorized=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_the_intent_records_that_no_rule_was_asked(db_session):
+    """Намерение записывает `NULL` в колонку ответа гарда — и наружу его не шлёт.
+
+    ⚠️ СВИДЕТЕЛЬ ПЕРЕЦЕЛЕН ПЛАНОМ 05.1-07, А НЕ ЗАВЕДЁН НА ПУСТОМ МЕСТЕ. Прежде
+    границу держали `test_the_deal_cannot_be_sold_without_recording_its_authorization`
+    и `test_the_intent_stage_records_its_answer_on_the_payment`: оба утверждали,
+    что ответ ГАРДА уезжает на строку платежа. Гарда смены тарифа не существует,
+    и оба теста сняты вместе с ним, а колонка ЖУРНАЛЬНАЯ и осталась. Утверждать
+    о ней теперь нужно ДРУГОЕ, и это другое — не слабее: значение `NULL` есть
+    ЗАПИСЬ ФАКТА «правило не спрашивали», а литерал `True` был бы подписью под
+    сделкой от имени правила, которого нет (T-05.1-11).
+
+    ТРИ УТВЕРЖДЕНИЯ, И НИ ОДНО НЕ ЗАМЕНЯЕТ ДВА ОСТАЛЬНЫХ: что записано `NULL`;
+    что аргумент нельзя ПРОПУСТИТЬ (иначе умолчание вернуло бы дисциплину
+    вызывающего); что значение не уезжает в `metadata` платежа — всё, ушедшее в
+    ЮKassa, возвращается оттуда входом из сети (T-05-08, T-05-68).
+    """
+    user = await _user(db_session)
+
+    with _sdk("yoo_recorded") as create_mock:
+        await _subscribe(db_session, user)
+
+    payment = (
+        await db_session.execute(
+            select(Payment).where(Payment.yookassa_payment_id == "yoo_recorded")
+        )
+    ).scalar_one()
+    assert payment.switch_authorized is None, (
+        "намерение записало ответ правила, которого никто не спрашивал"
+    )
+
+    body = create_mock.call_args.args[0]
+    assert "switch_authorized" not in str(body), (
+        "условие сделки уехало в ЮKassa и вернётся оттуда входом из сети"
+    )
+
+    with pytest.raises(TypeError):
+        await create_payment(
+            db_session,
+            user_id=user.id,
+            price=ACCESS_PRICE,
+            kind=KIND_SUBSCRIPTION,
+            plan=None,
+            package_name=None,
+            messages_count=None,
+        )
 
 
 @pytest.mark.asyncio
@@ -966,8 +1122,10 @@ async def test_a_package_payment_is_outside_the_cap(db_session):
 async def test_the_refusal_leaves_its_own_trace(db_session):
     """След обязателен: без него отказ неотличим от отказа ЮKassa.
 
-    Уровень `warning`, а не `info`, по той же причине, что у
-    `subscription_plan_preserved`: это исход, по которому к нам придёт человек.
+    Уровень `warning`, а не `info`: это исход, по которому к нам придёт человек.
+    Прежняя редакция ссылалась за обоснованием на ключ сохранённого тарифа, снятый
+    планом 05.1-07 вместе с решением о плане, — довод от несуществующего соседа не
+    проверяем ничем.
     """
     user = await _user(db_session)
     await _open_intent(db_session, user, payment_id="yoo_first")
