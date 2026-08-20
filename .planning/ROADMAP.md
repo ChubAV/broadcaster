@@ -542,7 +542,7 @@ Plans:
   заменяется в этой фазе.
 
 **UI hint**: yes
-**Plans:** 2/9 plans executed
+**Plans:** 3/9 plans executed
 
 Plans:
 **Wave 1**
@@ -552,7 +552,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 05.1-03-PLAN.md — Гейт доступа на JSON-API и на пути отправки; кэш переименован вместе со смыслом, инвалидация в подписочной ветке вебхука
+- [x] 05.1-03-PLAN.md — Гейт доступа на JSON-API и на пути отправки; кэш переименован вместе со смыслом, инвалидация в подписочной ветке вебхука
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
