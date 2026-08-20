@@ -24,7 +24,7 @@ from app.config import get_settings
 from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.services.billing_service import add_messages
-from app.services.billing_cache import invalidate_balance_cache
+from app.services.billing_cache import invalidate_access_cache, invalidate_balance_cache
 
 logger = structlog.get_logger()
 
@@ -627,6 +627,20 @@ async def handle_webhook(
     if db_payment.kind == KIND_SUBSCRIPTION:
         await _extend_subscription(db, db_payment, now)
         await db.commit()
+        # СБРОС ВЕРДИКТА ДОСТУПА СТОИТ ЗДЕСЬ, ПОСЛЕ КОММИТА И ДО ВОЗВРАТА.
+        # Инвалидация в этой ветке отсутствовала и была верна: подписка баланса
+        # не меняла, а кэш хранил именно баланс. С переводом гейта на вердикт
+        # ДОСТУПА подписочная ветка стала писателем ровно той величины, которую
+        # кэш и хранит, — без сброса оплативший до минуты (TTL) видел бы «доступ
+        # закончился» на всех страницах и не рассылал бы по расписанию, то есть
+        # деньги уже взяты, а куплённое ещё не выдано. Закреплено
+        # `test_a_confirmed_subscription_payment_reopens_access_at_once`.
+        #
+        # ПОСЛЕ КОММИТА, А НЕ ДО НЕГО: сброс до фиксации срока дал бы гонку, в
+        # которой соседний запрос перечитывает СТАРЫЙ срок и кладёт закрытый
+        # вердикт обратно в кэш на целый TTL.
+        # Закреплено `test_a_confirmed_subscription_payment_reopens_access_at_once`.
+        await invalidate_access_cache(db_payment.user_id)
         logger.info(
             "subscription_payment_succeeded",
             user_id=db_payment.user_id,

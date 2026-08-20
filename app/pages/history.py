@@ -38,7 +38,7 @@ from app.pages.common import (
     is_same_origin,
     templates,
 )
-from app.services.billing_cache import check_balance_cached
+from app.services.billing_cache import check_access_cached
 
 logger = structlog.get_logger(__name__)
 
@@ -972,7 +972,7 @@ async def history_retry(
                 url=f"/history?retry={RETRY_GONE}", status_code=302
             )
 
-        allowed, _reason = await check_balance_cached(db, user.id, "send")
+        allowed, _reason = await check_access_cached(db, user.id, "send")
         if not allowed:
             return RedirectResponse(
                 url=f"/history?retry={RETRY_NO_BALANCE}", status_code=302

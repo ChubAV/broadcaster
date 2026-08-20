@@ -1,10 +1,17 @@
-"""Заведение пробного срока при регистрации — ОДНО объявление на два пути.
+"""Срок доступа: его заведение при регистрации и вопрос «открыт ли он сейчас».
 
 ГРАНИЦЫ МОДУЛЯ. Здесь живёт единственная запись, порождающая строку подписки
 БЕЗ денег: пробный срок, который продукт выдаёт человеку при регистрации (D-B,
 критерий 2 фазы 05.1). Второй писатель `subscriptions` — подтверждённое
 уведомление ЮKassa (`app/services/payment_service.py`), и он двигает срок
 ВПЕРЁД, а не заводит его.
+
+ЗДЕСЬ ЖЕ ЖИВЁТ ЧТЕНИЕ ЭТОГО СРОКА ДЛЯ ПУТИ ОТПРАВКИ — `check_access`. Писатель и
+читатель одной величины стоят рядом намеренно: разойдись они запросом (условия,
+сортировка, `limit`), планировщик решал бы по одной строке, а продление двигало
+бы другую. Сам ВЕРДИКТ при этом считает не этот модуль: `access_is_open`
+(`app/application/billing/subscription_period.py`) — единственное объявление
+предиката доступа на проект, и второго сравнения дат здесь нет.
 
 ПОЧЕМУ ОТДЕЛЬНЫЙ МОДУЛЬ, А НЕ ФУНКЦИЯ В `payment_service`. Пробный срок к
 деньгам отношения не имеет: его не покупают, он не проходит ни через SDK, ни
@@ -19,10 +26,18 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.billing.subscription_period import access_is_open
 from app.constants import TRIAL_DAYS
 from app.models.subscription import Subscription
 
 logger = structlog.get_logger()
+
+# ПРИЧИНА ОТКАЗА — КОРОТКАЯ СТРОКА ЖУРНАЛЬНОГО СВОЙСТВА, А НЕ ТЕКСТ ДЛЯ ЭКРАНА.
+# Слова пользователю рисует разметка из закрытого множества (UI-контракт E2), и
+# вторая формулировка того же отказа, живущая в сервисе, неизбежно разъехалась бы
+# с первой. Но пустой строка быть не имеет права: на пути отправки отказ вообще
+# ничем, кроме журнала, не виден — отправки-то не происходит.
+ACCESS_CLOSED_REASON = "access_closed"
 
 
 async def start_trial(db: AsyncSession, user_id: int) -> None:
@@ -109,3 +124,51 @@ async def start_trial(db: AsyncSession, user_id: int) -> None:
         # пришёл НЕ от `uq_subscriptions_active_user`, и глотать его нельзя:
         # исключение поднимается тем же объектом, а не новым.
         raise rejected_by
+
+
+async def check_access(db: AsyncSession, user_id: int) -> tuple[bool, str]:
+    """Открыт ли пользователю доступ ПРЯМО СЕЙЧАС — вердикт для пути отправки.
+
+    ФОРМА ОТВЕТА `(bool, str)` — КОНТРАКТ, А НЕ ОФОРМЛЕНИЕ. Ровно её ждёт
+    параметр `check_limit` у `collect_due_schedules`
+    (`app/application/scheduling/use_cases.py`), и ровно она позволяет заменить
+    гейт в трёх точках пути отправки переименованием, а не правкой поведения.
+    Вернуть отсюда голый `bool` значило бы переписать все три места и цикл
+    планировщика заодно.
+
+    Закреплено `test_a_live_period_opens_access`,
+    `test_an_expired_period_closes_access_with_a_named_reason` и
+    `test_a_user_without_a_subscription_row_is_refused_and_not_raised_at`
+    (`tests/test_application/test_access_gate_scheduling.py`).
+
+    ЗАПРОС ПОВТОРЯЕТ `get_shell_context` ДОСЛОВНО (`app/pages/common.py`): те же
+    три условия, та же сортировка, тот же `limit(1)`. Читатель (шелл рисует
+    срок), гейт страниц (`require_access`) и этот гейт обязаны смотреть на ОДНУ
+    строку — иначе экран говорит одно, дверь отвечает другое, а планировщик
+    решает по третьему.
+
+    ⚠️ ОТСУТСТВИЕ СТРОКИ ПОДПИСКИ — ОПРЕДЕЛЁННЫЙ ОТКАЗ, А НЕ ИСКЛЮЧЕНИЕ. Такие
+    пользователи существуют сегодня и переживут выкат (популяция П-о-1,
+    населяется ревизией плана `05.1-08`). Исключение здесь уронило бы ВЕСЬ такт
+    планировщика: отказ одного пользователя остановил бы рассылку всем
+    остальным. Ответ даёт `access_is_open`, который принимает `None` наравне со
+    строкой.
+
+    ⚠️ ВЕРДИКТ НЕ КЭШИРУЕТСЯ ЗДЕСЬ. Кэш живёт в `check_access_cached`
+    (`app/services/billing_cache.py`) — отдельным слоем ровно затем, чтобы этот
+    ответ можно было получить и без Redis, и мимо TTL: сразу после
+    подтверждённой оплаты, в тестах и в любом месте, где минута задержки была бы
+    неверным вердиктом авторизации.
+    """
+    subscription = (
+        await db.execute(
+            select(Subscription)
+            .where(Subscription.user_id == user_id, Subscription.is_active.is_(True))
+            .order_by(Subscription.expires_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if access_is_open(subscription, datetime.now(timezone.utc)):
+        return True, ""
+    return False, ACCESS_CLOSED_REASON

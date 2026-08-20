@@ -4,7 +4,7 @@ import structlog
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request as FastAPIRequest
+from fastapi import Depends, FastAPI, Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -13,7 +13,7 @@ from app.logging_config import setup_logging
 from app.config import Settings, get_settings
 from app.exceptions import NotFoundError, ForbiddenError, BillingLimitError, MessengerConnectionError
 from app.database import get_engine, get_session_factory
-from app.dependencies import init_db
+from app.dependencies import get_current_user_id_with_access, init_db
 from app.infrastructure.uow import create_uow_factory
 from app.middleware import RequestIdMiddleware
 from app.pages.common import bind_image_url_globals
@@ -77,17 +77,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     Instrumentator(
         excluded_handlers=["/health", "/metrics"],
     ).instrument(app).expose(app, endpoint="/metrics")
+    # ГЕЙТ ДОСТУПА НА JSON-ВХОДЕ ВЕШАЕТСЯ ПЕР-РОУТЕРНО И ПЕРЕЧНЕМ — ТОЧНО ТАК
+    # ЖЕ, КАК НА СТРАНИЦАХ (`app/pages/__init__.py`). Причина та же: перечень
+    # «кого пускать всегда» длиннее и опаснее перечня «кого закрывать» и ГНИЁТ
+    # при добавлении маршрута — новый вход по умолчанию оказался бы закрыт
+    # вместе с входом в систему и с денежными чтениями, то есть человек не смог
+    # бы ни войти, ни узнать, сколько платить (T-05.1-16).
+    #
+    # ⚠️ ЧТО РОУТЕР, ДОБАВЛЕННЫЙ БУДУЩИМ ПЛАНОМ БЕЗ ЗАВИСИМОСТИ, НЕ ПРОСКОЧИТ
+    # МОЛЧА, держит машинный гейт `tests/test_pages/test_access_gate.py`: он
+    # читает ЭТОТ ИСХОДНИК, а не собранное приложение — роутер без зависимости в
+    # объекте приложения выглядит совершенно обычно (T-05.1-14). Ручное «не
+    # забыть» средством защиты не считается.
     app.include_router(auth_router)
-    app.include_router(ads_router)
-    app.include_router(uploads_router)
-    app.include_router(accounts_router)
-    app.include_router(schedules_router)
-    app.include_router(history_router)
+    app.include_router(
+        ads_router, dependencies=[Depends(get_current_user_id_with_access)]
+    )
+    app.include_router(
+        uploads_router, dependencies=[Depends(get_current_user_id_with_access)]
+    )
+    app.include_router(
+        accounts_router, dependencies=[Depends(get_current_user_id_with_access)]
+    )
+    app.include_router(
+        schedules_router, dependencies=[Depends(get_current_user_id_with_access)]
+    )
+    app.include_router(
+        history_router, dependencies=[Depends(get_current_user_id_with_access)]
+    )
+    # Денежный роутер НЕ закрывается гейтом доступа НИКОГДА: там живут и чтения
+    # раздела оплаты, и вебхук ЮKassa. Закрыть его значило бы запереть человека
+    # в продукте, где единственное открывающее действие само требует доступа, а
+    # на вебхуке — остановить приём денег отказом 402 в ответ на уведомление о
+    # состоявшемся платеже.
     app.include_router(billing_router)
     # Паршал живой ленты включается ОТДЕЛЬНО и ДО страничного роутера: тот
     # объявлен с зависимостью загрузки контекста шелла на каждом маршруте, а
     # ленте шелл не нужен, и при бессрочном опросе эта цена умножалась бы на
     # число открытых вкладок. Обоснование целиком — в докстринге модуля.
+    #
+    # ⚠️ ГЕЙТА ДОСТУПА НА ЛЕНТЕ НЕТ СОЗНАТЕЛЬНО, И РЕШЕНИЕ ЗАПИСАНО ЗДЕСЬ, А НЕ
+    # ОСТАВЛЕНО УМОЛЧАНИЕМ (T-05.1-15, disposition `accept`). Маршрут, выпавший
+    # из общей зависимости молча, — ровно та форма обхода, которую соседний
+    # перечень и закрывает, поэтому цена названа тремя фактами. Первое: лента
+    # ТОЛЬКО ЧИТАЕТ — она не создаёт ни объявлений, ни расписаний, ни отправок,
+    # то есть ценности, за которую берут деньги, через неё не производится.
+    # Второе: свой гард ВХОДА она держит сама (`get_user_from_cookie`), поэтому
+    # открытой для постороннего она не становится. Третье: опрос бессрочный, и
+    # запрос к базе за вердиктом доступа умножался бы на число открытых вкладок
+    # каждого пользователя на каждом тике — цена, которой закрытая лента не
+    # оправдывает. Что просроченный человек видит СВОЮ ленту и не видит ничего
+    # чужого, — допущенное следствие, а не упущение.
     app.include_router(dashboard_feed_router)
     app.include_router(pages_router)
 

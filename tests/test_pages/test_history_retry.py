@@ -181,15 +181,20 @@ async def _seed_retryable(
 # раз при загрузке `app.pages.history`, и подмена до него не доехала бы —
 # тест пошёл бы к настоящему брокеру.
 #
-# Гейт баланса подменяется по тому же образцу, что в тестах воркера
-# (`patch("app.worker.tasks.check_balance_cached", ...)`): настоящий гейт лезет
+# Гейт доступа подменяется по тому же образцу, что в тестах воркера
+# (`patch("app.worker.tasks.check_access_cached", ...)`): настоящий гейт лезет
 # в Redis, которого в тестовой среде нет, и красил бы тесты чужой причиной.
+#
+# Патч ставится на ИМЯ В МОДУЛЕ-ПОТРЕБИТЕЛЕ (`app.pages.history`), а не на
+# объявление в `app.services.billing_cache`: обработчик импортировал функцию к
+# себе на уровне модуля, и подмена по месту объявления до его имени не доехала
+# бы — тест пошёл бы к настоящему Redis, а гейт остался бы неподменённым.
 
 
 class _RetryEnv:
-    def __init__(self, send_task, balance):
+    def __init__(self, send_task, gate):
         self.send_task = send_task
-        self.balance = balance
+        self.gate = gate
 
     @property
     def queued(self) -> list:
@@ -197,16 +202,16 @@ class _RetryEnv:
 
 
 def _retry_env(*, allowed: bool = True, reason: str = ""):
-    """Контекст-менеджер подмены очереди и гейта баланса."""
+    """Контекст-менеджер подмены очереди и гейта доступа."""
     import contextlib
 
     @contextlib.contextmanager
     def _cm():
         fake_module = MagicMock()
-        balance = AsyncMock(return_value=(allowed, reason))
+        gate = AsyncMock(return_value=(allowed, reason))
         with patch.dict(sys.modules, {"app.worker.celery_app": fake_module}):
-            with patch("app.pages.history.check_balance_cached", balance):
-                yield _RetryEnv(fake_module.celery.send_task, balance)
+            with patch("app.pages.history.check_access_cached", gate):
+                yield _RetryEnv(fake_module.celery.send_task, gate)
 
     return _cm()
 
@@ -698,10 +703,19 @@ async def test_retry_explains_the_exhausted_balance_to_the_user(
 
 
 @pytest.mark.asyncio
-async def test_retry_balance_gate_runs_before_the_queue(
+async def test_retry_access_gate_runs_before_the_queue(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Гейт баланса вызывается для действия отправки и ДО постановки."""
+    """Гейт доступа вызывается для действия отправки и ДО постановки.
+
+    ⚠️ УТВЕРЖДЕНИЕ ПОРЯДКА ПЕРЕЦЕЛЕНО НА НОВОЕ ИМЯ И НЕ ОСЛАБЛЕНО НИ НА ШАГ.
+    Оно сравнивает ПОЗИЦИЮ вызова гейта с ПОЗИЦИЕЙ постановки задачи в теле
+    обработчика, а не только факт вызова: перестановка двух операторов вернула бы
+    дефект молча — гейт по-прежнему звался бы, `await_count` по-прежнему был бы
+    единицей, а отправка уже уехала бы в очередь. Смена предмета вопроса с
+    баланса на доступ этой ловушки не отменяет; этот тест — единственный сторож
+    порядка на первой линии.
+    """
     user = await _current_user(db_session)
     log = await _seed_retryable(db_session, user.id)
 
@@ -710,12 +724,12 @@ async def test_retry_balance_gate_runs_before_the_queue(
             f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
         )
 
-    assert env.balance.await_count == 1, "гейт баланса не вызван"
-    assert env.balance.await_args.args[2] == "send", env.balance.await_args
+    assert env.gate.await_count == 1, "гейт доступа не вызван"
+    assert env.gate.await_args.args[2] == "send", env.gate.await_args
 
     body = _handler_source()
-    assert body.index("check_balance_cached(") < body.index("send_task("), (
-        "гейт баланса стоит ПОСЛЕ постановки задачи в очередь"
+    assert body.index("check_access_cached(") < body.index("send_task("), (
+        "гейт доступа стоит ПОСЛЕ постановки задачи в очередь"
     )
 
 
@@ -886,7 +900,7 @@ async def test_retry_releases_the_slot_after_an_exception(
 
     boom = AsyncMock(side_effect=RuntimeError("гейт баланса упал"))
     with patch.dict(sys.modules, {"app.worker.celery_app": MagicMock()}):
-        with patch("app.pages.history.check_balance_cached", boom):
+        with patch("app.pages.history.check_access_cached", boom):
             # Исключение обработчика до теста не доезжает: посредник приложения
             # (`app/middleware.py`) ловит его, пишет в журнал и отдаёт 500.
             # Проверяется поэтому не всплытие, а СЛЕДСТВИЕ — заявка снята.
@@ -924,7 +938,7 @@ async def test_retry_keeps_the_slot_when_the_broker_fails_after_accepting(
     fake_module.celery.send_task.side_effect = RuntimeError("брокер оборвал ответ")
     with patch.dict(sys.modules, {"app.worker.celery_app": fake_module}):
         with patch(
-            "app.pages.history.check_balance_cached", AsyncMock(return_value=(True, ""))
+            "app.pages.history.check_access_cached", AsyncMock(return_value=(True, ""))
         ):
             response = await authed_client.post(
                 f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
@@ -958,7 +972,7 @@ async def test_retry_releases_the_slot_when_the_broker_connection_is_refused(
     fake_module.celery.send_task.side_effect = OperationalError("брокер недоступен")
     with patch.dict(sys.modules, {"app.worker.celery_app": fake_module}):
         with patch(
-            "app.pages.history.check_balance_cached", AsyncMock(return_value=(True, ""))
+            "app.pages.history.check_access_cached", AsyncMock(return_value=(True, ""))
         ):
             response = await authed_client.post(
                 f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
