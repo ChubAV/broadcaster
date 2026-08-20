@@ -7,11 +7,16 @@ JSON-API обязан отвечать кодом и телом (клиенту 
 файл заводится затем, чтобы ПЕРЕЧЕНЬ закрытого нельзя было расширить на одной
 поверхности, забыв про другую.
 
-⚠️ ГРУППУ `api` ЗАПОЛНЯЕТ ПЛАН `05.1-03`, И ФАЙЛ ОБЯЗАН БЫТЬ ГОТОВ ЕЁ ПРИНЯТЬ.
-Сегодня в ней стоит единственное утверждение — что JSON-поверхность гейта ещё
-НЕ существует, — и оно намеренно ПАДАЕТ, как только зависимость появится: план
-`05.1-03` обязан заменить его настоящими утверждениями, а не дописать их рядом.
-Пустая группа молчала бы о несделанном; эта — называет его вслух.
+ГРУППА `api` ЗАПОЛНЕНА ПЛАНОМ `05.1-03`. Запись долга
+(`test_api_surface_of_the_gate_is_not_built_yet`), стоявшая здесь до него,
+ЗАМЕНЕНА настоящими утверждениями отказа, а не дополнена ими: утверждение «этого
+ещё нет» и утверждение «это работает так» не могут быть верны одновременно, и
+оставить оба значило бы держать в суите заведомо красный тест как декорацию.
+
+ДВА ГЕЙТА ПЕРЕЧНЯ ЧИТАЮТ ДВА РАЗНЫХ ИСХОДНИКА ОДНИМ ПОМОЩНИКОМ. Страничная
+сборка живёт в `app/pages/__init__.py`, JSON-сборка — в `app/main.py`; вторая
+копия разбора разошлась бы с первой, и расхождение проявилось бы ровно на той
+поверхности, про которую забыли.
 
 ПОЧЕМУ ГЕЙТ ПЕРЕЧНЯ ЧИТАЕТ ИСХОДНИК, А НЕ СОБРАННОЕ ПРИЛОЖЕНИЕ. Цель —
 поймать роутер, добавленный БУДУЩИМ планом БЕЗ зависимости. В объекте
@@ -27,6 +32,8 @@ import pytest
 from httpx import AsyncClient
 
 PAGES_INIT = Path(__file__).resolve().parents[2] / "app" / "pages" / "__init__.py"
+MAIN_PY = Path(__file__).resolve().parents[2] / "app" / "main.py"
+DEPENDENCIES_PY = Path(__file__).resolve().parents[2] / "app" / "dependencies.py"
 
 EXPIRED_LOCATION = "/billing?expired=1"
 
@@ -58,15 +65,44 @@ OPEN_ROUTERS = {
 }
 
 
-def _included_routers() -> dict[str, bool]:
-    """Каждый вызов `router.include_router(...)` → «висит ли на нём гейт».
+# РОУТЕРЫ JSON-API, КОТОРЫЕ ЗАКРЫВАЕТ ИСТЁКШИЙ ДОСТУП. Перечень выписан ЗДЕСЬ по
+# той же причине, что и страничный: тест, выводящий ожидание из проверяемого,
+# согласился бы с любой правкой.
+GATED_API_ROUTERS = {
+    "ads_router",
+    "accounts_router",
+    "schedules_router",
+    "history_router",
+    "uploads_router",
+}
+
+# РОУТЕРЫ JSON-API, КОТОРЫЕ НЕ ЗАКРЫВАЮТСЯ НИКОГДА. Вход — иначе человек не
+# может даже войти, чтобы заплатить (T-05.1-16); денежный роутер — там живут и
+# чтения раздела, и вебхук ЮKassa, отказ на котором остановил бы приём денег;
+# страничный роутер держит СВОЙ пер-роутерный гейт внутри
+# (`app/pages/__init__.py`), и второй поверх него закрыл бы вход и оплату.
+#
+# ⚠️ `dashboard_feed_router` СТОИТ ЗДЕСЬ ПО ОТДЕЛЬНОМУ РЕШЕНИЮ (T-05.1-15), а не
+# заодно с соседями, и обоснование записано абзацем в `app/main.py` рядом с его
+# включением. Молчание здесь было бы ровно той формой обхода, которую этот файл
+# закрывает.
+OPEN_API_ROUTERS = {
+    "auth_router",
+    "billing_router",
+    "dashboard_feed_router",
+    "pages_router",
+}
+
+
+def _routers_with_dependency(source: Path, dependency: str) -> dict[str, bool]:
+    """Каждый вызов `.include_router(...)` → «висит ли на нём названная зависимость».
 
     Разбор по синтаксическому дереву, а не грепом: греп по строке
     `Depends(require_access)` посчитал бы её и в комментарии, и в докстринге, и
     в объявлении самой зависимости, а вопрос здесь ровно один — с какими
     аргументами позван `include_router`.
     """
-    tree = ast.parse(PAGES_INIT.read_text(encoding="utf-8"))
+    tree = ast.parse(source.read_text(encoding="utf-8"))
     found: dict[str, bool] = {}
 
     for node in ast.walk(tree):
@@ -84,14 +120,21 @@ def _included_routers() -> dict[str, bool]:
             if keyword.arg != "dependencies":
                 continue
             for element in ast.walk(keyword.value):
-                if (
-                    isinstance(element, ast.Name)
-                    and element.id == "require_access"
-                ):
+                if isinstance(element, ast.Name) and element.id == dependency:
                     gated = True
         found[router_name] = gated
 
     return found
+
+
+def _included_routers() -> dict[str, bool]:
+    """Страничная сборка: кто включён и на ком висит `require_access`."""
+    return _routers_with_dependency(PAGES_INIT, "require_access")
+
+
+def _api_included_routers() -> dict[str, bool]:
+    """Сборка приложения: кто включён и на ком висит гейт доступа JSON-входа."""
+    return _routers_with_dependency(MAIN_PY, "get_current_user_id_with_access")
 
 
 # =============================================================================
@@ -211,26 +254,155 @@ async def test_pages_of_value_stay_open_while_the_trial_is_live(
 # =============================================================================
 
 
-def test_api_surface_of_the_gate_is_not_built_yet():
-    """НАЗВАННЫЙ ДОЛГ: гейт доступа на JSON-API ещё не поставлен.
+def test_api_gate_covers_exactly_the_declared_routers():
+    """Множество закрытых JSON-роутеров равно объявленному — ни шире, ни уже.
 
-    ⚠️ ЭТОТ ТЕСТ ОБЯЗАН УПАСТЬ, КОГДА ДОЛГ БУДЕТ ЗАКРЫТ, И ЭТО ЕГО РАБОТА.
-    План `05.1-03` заводит `get_current_user_id_with_access` и вешает её
-    пер-роутерно на `ads`, `accounts`, `schedules`, `history`, `uploads`; в тот
-    же момент это утверждение перестаёт быть верным, красит группу `api` и
-    требует заменить себя настоящими утверждениями отказа (402/403 с телом-
-    объяснением).
+    ⚠️ БЛИЗНЕЦ `test_pages_gate_covers_exactly_the_declared_routers`, И ЧИТАЕТ
+    ОН ДРУГОЙ ИСХОДНИК. Страничная сборка живёт в `app/pages/__init__.py`,
+    JSON-сборка — в `app/main.py`; перечень закрытого расширить на одной
+    поверхности, забыв про другую, — ровно тот исход, ради которого обе группы
+    держатся в одном файле.
 
-    Зачем он стоит здесь СЕЙЧАС. Пустая группа `api` молчала бы о том, что
-    JSON-поверхность продукта доступом не закрыта вовсе: страницы отвечают 302,
-    а те же данные достижимы через `/api/*` без единой проверки срока. Молчание
-    читалось бы как «проверено и закрыто».
+    Роутер, добавленный будущим планом, роняет этот тест В ЛЮБОМ СЛУЧАЕ: он не
+    назван ни в `GATED_API_ROUTERS`, ни в `OPEN_API_ROUTERS`. Ручное «не забыть
+    повесить зависимость» средством защиты не считается (T-05.1-14).
     """
-    dependencies = (
-        Path(__file__).resolve().parents[2] / "app" / "dependencies.py"
-    ).read_text(encoding="utf-8")
+    included = _api_included_routers()
 
-    assert "get_current_user_id_with_access" not in dependencies, (
-        "JSON-поверхность гейта появилась — замените это утверждение долга "
-        "настоящими утверждениями отказа группы `api` (план 05.1-03)"
+    gated = {name for name, is_gated in included.items() if is_gated}
+    open_ = {name for name, is_gated in included.items() if not is_gated}
+
+    assert gated == GATED_API_ROUTERS, (
+        f"перечень закрытых JSON-роутеров разошёлся с объявленным: "
+        f"лишние {gated - GATED_API_ROUTERS}, недостающие {GATED_API_ROUTERS - gated}"
+    )
+    assert open_ == OPEN_API_ROUTERS, (
+        f"перечень ВСЕГДА открытых JSON-роутеров разошёлся с объявленным: "
+        f"лишние {open_ - OPEN_API_ROUTERS}, недостающие {OPEN_API_ROUTERS - open_}"
+    )
+    assert set(included) == GATED_API_ROUTERS | OPEN_API_ROUTERS, (
+        "в сборку приложения включён роутер, о котором этот тест не знает — "
+        "решение «закрывает ли его истёкший доступ» не принято"
+    )
+
+
+def test_the_api_authentication_dependency_is_left_untouched():
+    """`get_current_user_id` не получила ни проверки доступа, ни сессии БД.
+
+    ⚠️ ЭТО ЗАПРЕТ, А НЕ ПРЕДПОЧТЕНИЕ. Зависимость обслуживает в том числе
+    маршруты, которые обязаны оставаться открытыми (`GET /api/billing/*`), и
+    добавление проверки доступа В НЕЁ расширило бы радиус отказа на них молча —
+    правкой, выглядящей как «сделать в одном месте вместо пяти». Отказ по
+    неоплате живёт в СОСЕДНЕЙ зависимости, и это единственная причина, по
+    которой денежные маршруты не закрываются вместе с остальными.
+    """
+    tree = ast.parse(DEPENDENCIES_PY.read_text(encoding="utf-8"))
+    authenticator = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "get_current_user_id"
+    )
+    body = ast.unparse(authenticator)
+
+    assert "check_access" not in body, (
+        "проверка доступа переехала в зависимость аутентификации — денежные "
+        "маршруты закрылись вместе с остальными"
+    )
+    parameters = {argument.arg for argument in authenticator.args.args}
+    assert "db" not in parameters, (
+        "зависимость аутентификации получила сессию БД — она обслуживает и "
+        "незащищённые пути, и цена запроса на них ничем не оправдана"
+    )
+
+
+@pytest.mark.asyncio
+async def test_api_of_value_is_refused_by_code_when_access_expired(
+    expired_client: AsyncClient,
+):
+    """Просроченный не создаёт объявление через JSON-вход: отказ приходит КОДОМ.
+
+    Код отказа — 402 либо 403, и он ОБЯЗАН отличаться от успеха: страничная
+    поверхность отвечает 302 на место, где чинят, а JSON-клиенту редирект
+    бессмыслен — он проследовал бы по нему и получил бы HTML вместо ресурса.
+    """
+    response = await expired_client.post(
+        "/api/ads",
+        json={"title": "T", "text": "Body", "images": []},
+        follow_redirects=False,
+    )
+
+    assert response.status_code != 201, (
+        "истёкший доступ создал объявление через JSON-вход — те же данные "
+        "достижимы в обход страничного гейта"
+    )
+    assert response.status_code in (402, 403), (
+        f"/api/ads ответил {response.status_code} при истёкшем доступе"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_api_refusal_is_json_and_not_a_redirect(expired_client: AsyncClient):
+    """Тело отказа — JSON с объяснением, а не HTML и не пустой редирект."""
+    response = await expired_client.post(
+        "/api/ads",
+        json={"title": "T", "text": "Body", "images": []},
+        follow_redirects=False,
+    )
+
+    assert "location" not in response.headers, (
+        "JSON-вход ответил редиректом — клиент получил бы HTML страницы оплаты "
+        "вместо объяснения отказа"
+    )
+    assert response.headers["content-type"].startswith("application/json")
+    body = response.json()
+    assert body.get("detail"), "отказ не объяснён ни словом"
+
+
+@pytest.mark.asyncio
+async def test_api_of_money_stays_open_when_access_expired(
+    expired_client: AsyncClient,
+):
+    """Денежные маршруты истёкшим доступом НЕ закрываются (T-05.1-16).
+
+    Закрыть их значило бы запереть человека в продукте, где единственное
+    действие, открывающее доступ, само требует доступа.
+    """
+    response = await expired_client.get("/api/billing/balance")
+
+    assert response.status_code not in (402, 403), (
+        "денежный маршрут закрыт гейтом доступа: человек не может заплатить"
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_the_api_of_login_stays_open_when_access_expired(expired_client: AsyncClient):
+    """Вход истёкшим доступом НЕ закрывается — иначе чинить нечем."""
+    response = await expired_client.post(
+        "/api/auth/login",
+        json={"email": "testuser@test.com", "password": "testpass123"},
+    )
+
+    assert response.status_code == 200, (
+        f"вход ответил {response.status_code} при истёкшем доступе"
+    )
+    assert response.json().get("access_token")
+
+
+@pytest.mark.asyncio
+async def test_api_of_value_stays_open_while_the_trial_is_live(
+    authed_client: AsyncClient,
+):
+    """Граница сверху: внутри пробного срока тот же вход отдаёт 201.
+
+    Без этого утверждения гейт, отказывающий ВСЕМ, прошёл бы проверки выше.
+    """
+    response = await authed_client.post(
+        "/api/ads",
+        json={"title": "T", "text": "Body", "images": []},
+    )
+
+    assert response.status_code == 201, (
+        f"/api/ads ответил {response.status_code} внутри пробного срока"
     )
