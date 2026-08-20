@@ -50,7 +50,7 @@ missed one.
 
 **INTEGRATE — all six have an implementation:**
 
-| capability | implementation | verified |
+| capability (INTEGRATE) | implementation | verified |
 |---|---|---|
 | `payments.create` | `YooPayment.create(...)` — `app/services/payment_service.py:95` | ✅ the only SDK payment call in the project |
 | `payments.confirmation` (type `redirect`) | `{"type": "redirect", "return_url": ...}` — `app/services/payment_service.py:98-101`; consumed as `RedirectResponse(..., 302)` — `app/pages/billing.py:202` (подписка) и `:264` (пакеты) | ✅ both purchase kinds |
