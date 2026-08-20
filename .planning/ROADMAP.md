@@ -542,7 +542,7 @@ Plans:
   заменяется в этой фазе.
 
 **UI hint**: yes
-**Plans:** 6/9 plans executed
+**Plans:** 7/9 plans executed
 
 Plans:
 **Wave 1**
@@ -568,7 +568,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 05.1-07-PLAN.md — Снятие матрицы тарифов из кода, расщепление `subscription_period`, ратчет объявленных инвариантов, отрицательный греп-гейт
+- [x] 05.1-07-PLAN.md — Снятие матрицы тарифов из кода, расщепление `subscription_period`, ратчет объявленных инвариантов, отрицательный греп-гейт
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
