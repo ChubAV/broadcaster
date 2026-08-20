@@ -524,6 +524,39 @@ async def test_a_repeated_subscription_webhook_moves_the_expiry_once(db_session)
 
 
 @pytest.mark.asyncio
+async def test_a_confirmed_subscription_payment_reopens_access_at_once(db_session):
+    """Оплативший получает доступ НЕМЕДЛЕННО, а не через TTL кэша.
+
+    ⚠️ ЭТО ДЕФЕКТ ПЛОСКОЙ МОДЕЛИ, А НЕ УЛУЧШЕНИЕ. Инвалидация кэша стояла только
+    в ПАКЕТНОЙ ветке обработчика — после начисления сообщений, — и была там
+    верна: подписка баланса не меняла. С переводом гейта на вердикт ДОСТУПА
+    подписочная ветка стала писателем ровно той величины, которую кэш и хранит:
+    без вызова здесь человек, который только что заплатил, до минуты видел бы
+    «доступ закончился» на всех страницах и не рассылал бы по расписанию —
+    ровно то, за что он заплатил, чтобы это прекратилось.
+
+    Вызов утверждается ОДИН и С ВЛАДЕЛЬЦЕМ ПЛАТЕЖА: сброшенный чужой ключ был бы
+    минутой неверных вердиктов у постороннего пользователя.
+    """
+    user = await _user(db_session)
+    payment = await _subscription_payment(
+        db_session, user, yookassa_payment_id="yoo_sub_access"
+    )
+
+    with patch(
+        "app.services.payment_service.invalidate_access_cache", new_callable=AsyncMock
+    ) as invalidate_access:
+        processed = await handle_webhook(
+            db_session,
+            event=EVENT_SUCCEEDED,
+            payment_data={"object": {"id": payment.yookassa_payment_id}},
+        )
+
+    assert processed is True
+    invalidate_access.assert_awaited_once_with(user.id)
+
+
+@pytest.mark.asyncio
 async def test_the_first_purchase_takes_the_plan_from_the_payment(db_session):
     """У пользователя на Free строки подписки нет — она заводится с ПЛАНОМ ПЛАТЕЖА.
 
