@@ -1478,3 +1478,32 @@ def test_the_long_package_name_wraps_inside_the_row_instead_of_scrolling():
     assert "flex: 1 1 100% !important" in css, (
         "растягиваемая ячейка перестала занимать всю ширину строки"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url,marker",
+    [("/billing?error=payment", "Не удалось начать оплату"), ("/billing", NOTICE_NEVER_PAID)],
+)
+async def test_the_notice_stands_before_the_access_panel(
+    authed_client: AsyncClient, db_session: AsyncSession, url: str, marker: str
+):
+    """Причина читается РАНЬШЕ цены и даты — обе плашки стоят ПЕРВЫМИ.
+
+    ⚠️ ГРАНИЦА УНАСЛЕДОВАНА У `test_the_alert_stands_before_the_current_plan_block`
+    (tests/test_pages/test_billing_payment_errors.py), чьим якорем был блок
+    текущего тарифа: блока нет, якоря нет, а граница осталась той же и получила
+    новый якорь — панель доступа. Плашка под панелью была бы прочитана после
+    того, как человек уже сделал вывод «ничего не изменилось, кнопка сломана».
+
+    Это же пятый пункт ручной приёмки на 375px: в закрытом доступе плашка видна
+    БЕЗ ПРОКРУТКИ, то есть стоит первой.
+    """
+    await _move_access_expiry(db_session, days=-3)
+
+    body = _body((await authed_client.get(url)).text)
+
+    assert marker in body
+    assert body.index(marker) < body.index("data-access-panel"), (
+        "плашка причины стоит ниже панели доступа"
+    )
