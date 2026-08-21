@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
-current_phase: 6
+current_phase: 06
 current_phase_name: Админ-панель
 status: planning
 stopped_at: Phase 6 planned — 14 plans, 10 waves
-last_updated: "2026-08-21T19:17:56.216Z"
+last_updated: "2026-08-21T21:00:10.001Z"
 last_activity: 2026-08-21
-state_head: b5ebd0f8ccc4d140c841b3b52ee57b8ed5bce7aa
+last_activity_desc: Phase 06 planning complete
+state_head: ae283e14ac66695a5e44f377b0a4ea0eba152af7
 progress:
   total_phases: 7
   completed_phases: 5
   total_plans: 110
   completed_plans: 96
   percent: 71
-last_activity_desc: "Фаза 05.1 ЗАКРЫТА и отгружена. UAT 3/3 passed (вёрстка 375px: состояние paid, история из 5 строк с длинным историческим именем пакета, пятизначная цена). Verification переведена в passed (10/10 must-have, behavior_unverified 0, 1 override по форме приёмки). Security-ревизия проведена: 05.1-SECURITY.md, threats_open 0 при ASVS L1 и block_on high — 56 записей реестра, 33 закрыты по Threat Flags сводок, 18 проверены аудитором по коду, 230 тестов зелёные. Transition исполнен: ROADMAP и STATE отмечают 14/14, следующая фаза 6 «Админ-панель». Отгрузка: ветка gsd/phase-05.1-edinaya-podpiska, PR #41 в master. ⚠️ PR несёт 393 коммита — origin/master отстал с мёрджа PR #38 (фаза 04), поэтому вместе с 05.1 едет неверифицированная фаза 05 (UAT partial, VERIFICATION human_needed). Долги вне предмета фазы: 3 BLOCKER заведены как todo и адресованы фазе 6; по трассируемости требований — BILL-06 цитируется ROADMAP, но не зарегистрирован в REQUIREMENTS.md, строки Traceability отсутствуют для BILL-05, BILL-07…BILL-11, шесть REQ-ID (NOTIF-01…04, WARM-01, WARM-02) есть в теле и не в таблице"
 ---
 
 # Project State
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-21)
 
 ## Current Position
 
-Phase: 6 — Админ-панель
+Phase: 06 (Админ-панель) — READY TO EXECUTE
 Status: Phase 05.1 shipped — PR #41; Phase 6 ready to plan
-Last activity: 2026-08-21
+Last activity: 2026-08-21 — Phase 06 planning complete
 
 Владелец остановил UAT фазы 5 на первом же пункте: «получилась очень сложная для понимания система тарифов». Диагноз подтверждается кодом — в фазе 5 сосуществовали ДВЕ независимые системы оплаты: три тарифных плана по четырём осям лимитов (`Settings.plan_limits`) И отдельная валюта сообщений с пакетами (`Settings.message_packages`, `MessageBalance`, списание `deduct_message()`). Итоговая модель убирает счёт целиком: 3000 ₽/мес за доступ к системе, без лимитов по аккаунтам, группам и сообщениям.
 
