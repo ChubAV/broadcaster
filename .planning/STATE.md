@@ -5,14 +5,14 @@ milestone_name: Redesign
 current_phase: 6
 current_phase_name: Админ-панель
 status: planning
-stopped_at: Phase 6 context gathered
+stopped_at: Phase 6 planned — 14 plans, 10 waves
 last_updated: "2026-08-21T19:17:56.216Z"
 last_activity: 2026-08-21
 state_head: b5ebd0f8ccc4d140c841b3b52ee57b8ed5bce7aa
 progress:
   total_phases: 7
   completed_phases: 5
-  total_plans: 96
+  total_plans: 110
   completed_plans: 96
   percent: 71
 last_activity_desc: "Фаза 05.1 ЗАКРЫТА и отгружена. UAT 3/3 passed (вёрстка 375px: состояние paid, история из 5 строк с длинным историческим именем пакета, пятизначная цена). Verification переведена в passed (10/10 must-have, behavior_unverified 0, 1 override по форме приёмки). Security-ревизия проведена: 05.1-SECURITY.md, threats_open 0 при ASVS L1 и block_on high — 56 записей реестра, 33 закрыты по Threat Flags сводок, 18 проверены аудитором по коду, 230 тестов зелёные. Transition исполнен: ROADMAP и STATE отмечают 14/14, следующая фаза 6 «Админ-панель». Отгрузка: ветка gsd/phase-05.1-edinaya-podpiska, PR #41 в master. ⚠️ PR несёт 393 коммита — origin/master отстал с мёрджа PR #38 (фаза 04), поэтому вместе с 05.1 едет неверифицированная фаза 05 (UAT partial, VERIFICATION human_needed). Долги вне предмета фазы: 3 BLOCKER заведены как todo и адресованы фазе 6; по трассируемости требований — BILL-06 цитируется ROADMAP, но не зарегистрирован в REQUIREMENTS.md, строки Traceability отсутствуют для BILL-05, BILL-07…BILL-11, шесть REQ-ID (NOTIF-01…04, WARM-01, WARM-02) есть в теле и не в таблице"
