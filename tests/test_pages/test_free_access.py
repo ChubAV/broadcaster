@@ -25,10 +25,7 @@ import pytest
 from httpx import AsyncClient
 
 
-@pytest.mark.parametrize(
-    "path",
-    ["/ads", "/accounts", "/schedules", "/groups", "/history"],
-)
+@pytest.mark.parametrize("path", ["/ads", "/accounts", "/schedules", "/history"])
 @pytest.mark.asyncio
 async def test_pages_of_value_open_for_free_access_over_a_dead_date(
     comped_client: AsyncClient, path: str
@@ -38,6 +35,14 @@ async def test_pages_of_value_open_for_free_access_over_a_dead_date(
     Утверждение стоит и по коду, и по ЗАГОЛОВКУ `location`: 302 сам по себе мог
     бы прийти по чужой причине, а `/billing?expired=1` означает ровно одно —
     гейт доступа признал человека просроченным, то есть льгота не прочитана.
+
+    ⚠️ `/groups` В ПЕРЕЧНЕ НЕТ НАМЕРЕННО, и причина названа здесь, чтобы
+    следующий читатель не «привёл его в соответствие» с соседними гейтовыми
+    тестами. Раздел снят решением владельца (GRP-08, план 03-07) и БЕЗУСЛОВНО
+    уводит на `/accounts` — двухсотки он не отдаёт никому и никогда, ни с
+    доступом, ни без. Его проверяет тест ниже, утверждением от противного;
+    формулировка унаследована у `test_access_gate.py`, где эта же граница уже
+    объяснена дословно.
     """
     response = await comped_client.get(path, follow_redirects=False)
 
@@ -46,6 +51,25 @@ async def test_pages_of_value_open_for_free_access_over_a_dead_date(
     )
     assert response.status_code == 200, (
         f"{path} ответил {response.status_code} при выданном бесплатном доступе"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_retired_groups_section_redirects_by_its_own_reason(
+    comped_client: AsyncClient,
+):
+    """Снятый раздел уводит на `/accounts`, а не на оплату доступа.
+
+    Утверждение от противного: у `/groups` есть СВОЙ безусловный редирект, и
+    двухсотка от него означала бы, что раздел вернулся, а не что льгота
+    прочитана. Проверяется единственное, что здесь относится к делу, — что в
+    его редирект не вмешался гейт доступа.
+    """
+    response = await comped_client.get("/groups", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/accounts", (
+        "снятый раздел увёл не на свой адрес — гейт доступа вмешался в льготу"
     )
 
 

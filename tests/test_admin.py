@@ -486,7 +486,7 @@ async def test_granting_free_access_invalidates_the_access_verdict_cache(
 
 @pytest.mark.asyncio
 async def test_the_free_access_grant_is_journaled_with_both_identities(
-    admin_client: AsyncClient, db_session
+    admin_client: AsyncClient, db_session, caplog
 ):
     """Выдача уходит в журнал ИМЕНОВАННЫМ ключом с обоими идентификаторами.
 
@@ -498,20 +498,36 @@ async def test_the_free_access_grant_is_journaled_with_both_identities(
 
     Утверждается и НОВОЕ ЗНАЧЕНИЕ признака: одна пара записей на включение и
     выключение сделала бы журнал неспособным отличить выдачу от отзыва.
-    """
-    import structlog
 
+    ⚠️ ЗАПИСЬ СНИМАЕТСЯ `caplog`-ОМ, А НЕ `structlog.testing.capture_logs()`, И
+    ЭТО НЕ ВКУСОВЩИНА. Приложение настраивает structlog на вывод через stdlib
+    `logging` (`app/logging_config.py`), а ленивый прокси `structlog.get_logger()`
+    связывается с цепочкой процессоров при ПЕРВОМ использовании и кэширует её:
+    подмена, поставленная позже импорта модуля, до этого логгера уже не
+    доезжает, и `capture_logs` возвращает пустой список при исправно
+    напечатанной записи — то есть тест краснел бы, а журнал работал. `caplog`
+    стоит на приёмнике, а не на цепочке, и видит ровно то, что реально
+    записано.
+    """
     target = await _register_target(admin_client, db_session)
 
-    with structlog.testing.capture_logs() as logs:
+    with caplog.at_level("INFO", logger="app.pages.admin"):
         await admin_client.post(
             f"/admin/users/{target.id}/unlimited", follow_redirects=False
         )
 
-    entries = [entry for entry in logs if entry.get("event") == "free_access_toggled"]
+    # Запись — СЛОВАРЬ в `record.msg`: structlog отдаёт stdlib-приёмнику готовое
+    # событие, а не отформатированную строку. Разбирать текст было бы хуже —
+    # утверждение зависело бы от порядка ключей в выводе.
+    entries = [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict)
+        and record.msg.get("event") == "free_access_toggled"
+    ]
     assert len(entries) == 1, (
-        f"выдача бесплатного доступа не оставила записи `free_access_toggled`: "
-        f"{[entry.get('event') for entry in logs]}"
+        "выдача бесплатного доступа не оставила записи `free_access_toggled`: "
+        f"{[getattr(r, 'msg', r) for r in caplog.records]}"
     )
     entry = entries[0]
     assert entry.get("target_user_id") == target.id
