@@ -542,7 +542,7 @@ Plans:
   заменяется в этой фазе.
 
 **UI hint**: yes
-**Plans:** 7/9 plans executed
+**Plans:** 8/9 plans executed
 
 Plans:
 **Wave 1**
@@ -572,7 +572,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 05.1-08-PLAN.md — Ревизия `0020` (⚠️ односторонняя дверь, чекпойнт решения) и правки моделей ОДНИМ коммитом
+- [x] 05.1-08-PLAN.md — Ревизия `0020` (⚠️ односторонняя дверь, чекпойнт решения) и правки моделей ОДНИМ коммитом
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
