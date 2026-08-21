@@ -8,7 +8,6 @@ from sqlalchemy import func, select
 from yookassa.domain.notification import WebhookNotificationEventType
 
 from app.application.billing.subscription_period import add_one_month
-from app.models.balance_transaction import BalanceTransaction
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.models.payment import Payment
@@ -152,13 +151,21 @@ async def test_a_package_notification_marks_the_payment_and_credits_nothing(
     assert payment.status == "succeeded"
     assert payment.confirmed_at is not None
 
-    # ЖУРНАЛ ОПЕРАЦИЙ ПО ОСТАТКУ ПУСТ — проверка идёт по СТРОКАМ, а не по моку:
-    # мок ловит только вызов известного имени, а строка, записанная в обход
-    # него, осталась бы незамеченной.
-    rows = await db_session.scalar(
-        select(func.count()).select_from(BalanceTransaction)
+    # ⚠️ ПРЕДМЕТ ЭТОГО УТВЕРЖДЕНИЯ СМЕНИЛСЯ ВМЕСТЕ С РЕВИЗИЕЙ `0020`. Прежде оно
+    # считало строки журнала операций по остатку сообщений — таблицы, которой
+    # больше нет: «начислить пакет» теперь невозможно ПО СХЕМЕ, и утверждать это
+    # прогоном значило бы утверждать про SQLAlchemy, а не про продукт.
+    #
+    # Осталась граница, которая по схеме НЕ закрыта и закрыта быть не может:
+    # пакетный платёж не имеет права выдать ДОСТУП. Обе величины лежат теперь в
+    # одной таблице подписок, и ветка, перепутавшая предмет покупки, выдала бы
+    # месяц доступа за цену пакета. Проверка идёт по СТРОКАМ, а не по моку: мок
+    # ловит вызов известного имени, а строка, записанная в обход него, осталась
+    # бы незамеченной.
+    granted = await db_session.scalar(
+        select(func.count()).select_from(Subscription)
     )
-    assert rows == 0, f"строк журнала операций по остатку {rows}, а не ноль"
+    assert granted == 0, f"пакетный платёж завёл {granted} строк доступа, а не ноль"
 
 
 @pytest.mark.asyncio
@@ -217,10 +224,10 @@ async def test_a_repeated_package_notification_is_still_processed_only_once(
     assert _utc(payment.confirmed_at) == confirmed_once, (
         "повторная доставка сдвинула момент проведения платежа"
     )
-    rows = await db_session.scalar(
-        select(func.count()).select_from(BalanceTransaction)
+    granted = await db_session.scalar(
+        select(func.count()).select_from(Subscription)
     )
-    assert rows == 0, f"строк журнала операций по остатку {rows}, а не ноль"
+    assert granted == 0, f"пакетный платёж завёл {granted} строк доступа, а не ноль"
 
 
 # --- Отмена платежа (D-16) --------------------------------------------------
@@ -270,10 +277,10 @@ async def test_a_canceled_package_payment_credits_nothing(db_session):
     )
 
     assert processed is True
-    rows = await db_session.scalar(
-        select(func.count()).select_from(BalanceTransaction)
+    granted = await db_session.scalar(
+        select(func.count()).select_from(Subscription)
     )
-    assert rows == 0, f"строк журнала операций по остатку {rows}, а не ноль"
+    assert granted == 0, f"пакетный платёж завёл {granted} строк доступа, а не ноль"
 
 
 @pytest.mark.asyncio
@@ -313,7 +320,7 @@ async def test_a_canceled_subscription_payment_does_not_move_an_existing_expiry(
     user = await _user(db_session)
     expires_at = datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc)
     subscription = Subscription(
-        user_id=user.id, plan="basic", expires_at=expires_at, is_active=True
+        user_id=user.id, expires_at=expires_at, is_active=True
     )
     db_session.add(subscription)
     await db_session.commit()
@@ -476,7 +483,7 @@ async def test_an_active_subscription_is_extended_from_its_own_expiry(db_session
     user = await _user(db_session)
     current = (datetime.now(timezone.utc) + timedelta(days=10)).replace(microsecond=0)
     subscription = Subscription(
-        user_id=user.id, plan="basic", expires_at=current, is_active=True
+        user_id=user.id, expires_at=current, is_active=True
     )
     db_session.add(subscription)
     await db_session.commit()
@@ -500,7 +507,7 @@ async def test_an_expired_subscription_is_extended_from_today(db_session):
     user = await _user(db_session)
     expired = (datetime.now(timezone.utc) - timedelta(days=40)).replace(microsecond=0)
     subscription = Subscription(
-        user_id=user.id, plan="basic", expires_at=expired, is_active=True
+        user_id=user.id, expires_at=expired, is_active=True
     )
     db_session.add(subscription)
     await db_session.commit()
@@ -602,14 +609,20 @@ async def test_a_confirmed_subscription_payment_reopens_access_at_once(db_sessio
 
 
 @pytest.mark.asyncio
-async def test_the_first_purchase_takes_the_plan_from_the_payment(db_session):
-    """У пользователя на Free строки подписки нет — она заводится с ПЛАНОМ ПЛАТЕЖА.
+async def test_the_first_purchase_creates_the_row_from_today(db_session):
+    """У пользователя строки подписки нет — она заводится СРОКОМ ОТ СЕГОДНЯ.
 
-    Умолчание модели `Subscription.plan` — `"free"`, и строка, заведённая без
-    явного плана, молча выдала бы бесплатный тариф за оплаченный: страница
-    вернула бы 200, а пользователь не получил бы купленного.
+    ⚠️ ПРЕЖНИЙ ПРЕДМЕТ ЭТОГО ТЕСТА СНЯТ РЕВИЗИЕЙ `0020` ВМЕСТЕ С КОЛОНКОЙ ТАРИФА.
+    Он назывался `test_the_first_purchase_takes_the_plan_from_the_payment` и
+    держал единственное место, где имя тарифа платежа становилось именем тарифа
+    подписки. Тест ПЕРЕЦЕЛЕН, а не удалён: ветка первой вставки жива, и у неё
+    осталась своя граница — она обязана считать срок от СЕГОДНЯ, а не от чего бы
+    то ни было ещё. Продлевать ей нечего: активной строки нет, значит нет и
+    оплаченного остатка, к которому мог бы прибавиться месяц. Удали мы тест
+    вместе с колонкой — ветка первой вставки осталась бы без свидетеля вовсе.
     """
     user = await _user(db_session)
+    bought_at = datetime.now(timezone.utc)
     payment = await _subscription_payment(db_session, user, plan="pro")
 
     processed = await handle_webhook(
@@ -629,8 +642,11 @@ async def test_the_first_purchase_takes_the_plan_from_the_payment(db_session):
         .all()
     )
     assert len(rows) == 1
-    assert rows[0].plan == "pro"
     assert rows[0].is_active is True
+    # Месяц ОТ СЕГОДНЯ, тем же объявлением, что двигает срок действующей
+    # подписки, — а не второй формулой рядом.
+    assert _utc(rows[0].expires_at) >= add_one_month(bought_at)
+    assert _utc(rows[0].expires_at) <= add_one_month(datetime.now(timezone.utc))
 
 
 # --- ПРОДЛЕНИЕ ДЕЙСТВУЮЩЕЙ ПОДПИСКИ ПОСЛЕ СНЯТИЯ МАТРИЦЫ ТАРИФОВ -------------
@@ -648,17 +664,27 @@ async def test_a_confirmed_payment_only_moves_the_date(db_session):
 
     ⚠️ ТЕСТ УТВЕРЖДАЕТ ОТСУТСТВИЕ ВЕТВЛЕНИЯ, А НЕ ЕГО ИСХОД, И ЭТО РАЗНЫЕ ВЕЩИ.
     Прежде план подписки перезаписывался планом платежа — либо сохранялся, если
-    правило перехода отвергало его. Тарифов больше нет (D-A), и платёж, чей
-    `plan` РАЗОШЁЛСЯ со строкой подписки, обязан оставить строку в покое: любое
-    присваивание плана здесь означало бы, что ветка вернулась.
+    правило перехода отвергало его. Тарифов больше нет (D-A), и платёж, несущий в
+    журнальной колонке имя тарифа, обязан двинуть срок и не тронуть больше
+    НИЧЕГО.
+
+    ⚠️ КОЛОНКИ, ПО КОТОРОЙ ЭТО ПРОВЕРЯЛОСЬ, БОЛЬШЕ НЕТ (ревизия `0020`), И
+    УТВЕРЖДЕНИЕ ПЕРЕНЕСЕНО НА ТУ, ЧТО ОСТАЛАСЬ. Прежде тест требовал, чтобы
+    `subscription.plan` не изменился; теперь измениться в строке подписки может
+    только `is_active` и сам срок, и утверждается ОБА: строка та же самая (по
+    идентификатору), вторая не заведена, признак активности не снят. Что решения
+    о плане не вернулось в `_apply_extension` вовсе, держит греп-гейт
+    `tests/test_application/test_no_metering_remains.py` и AST-ловушка порядка
+    `test_the_liveness_is_sampled_before_the_date_moves`.
     """
     user = await _user(db_session)
     current = (datetime.now(timezone.utc) + timedelta(days=10)).replace(microsecond=0)
     subscription = Subscription(
-        user_id=user.id, plan="pro", expires_at=current, is_active=True
+        user_id=user.id, expires_at=current, is_active=True
     )
     db_session.add(subscription)
     await db_session.commit()
+    row_id = subscription.id
 
     payment = await _subscription_payment(db_session, user, plan="basic")
 
@@ -673,11 +699,14 @@ async def test_a_confirmed_payment_only_moves_the_date(db_session):
     assert _utc(subscription.expires_at) == add_one_month(current), (
         "срок не сдвинут на календарный месяц от собственной даты"
     )
-    assert subscription.plan == "pro", (
-        "строка подписки изменена платежом — решение о плане вернулось в "
-        "`_apply_extension`"
-    )
     assert subscription.is_active is True
+    assert subscription.id == row_id, "продлена не та строка"
+    rows = await db_session.scalar(
+        select(func.count())
+        .select_from(Subscription)
+        .where(Subscription.user_id == user.id)
+    )
+    assert rows == 1, f"продление завело вторую строку: строк {rows}"
 
 
 @pytest.mark.asyncio
@@ -693,7 +722,7 @@ async def test_the_journal_of_an_extension_names_the_liveness_of_the_period(db_s
     user = await _user(db_session)
     live = (datetime.now(timezone.utc) + timedelta(days=10)).replace(microsecond=0)
     subscription = Subscription(
-        user_id=user.id, plan="basic", expires_at=live, is_active=True
+        user_id=user.id, expires_at=live, is_active=True
     )
     db_session.add(subscription)
     await db_session.commit()

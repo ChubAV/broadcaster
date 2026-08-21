@@ -731,7 +731,7 @@ async def _extend_subscription(
     этом не на чем: тариф в системе один (D-A), и с плана 05.1-07 подтверждённый
     платёж делает ровно одно — двигает `expires_at`. Закреплено
     `test_a_confirmed_payment_only_moves_the_date` (действующая подписка) и
-    `test_the_first_purchase_takes_the_plan_from_the_payment` (первая покупка).
+    `test_the_first_purchase_creates_the_row_from_today` (первая покупка).
 
     ЧТО ПРОИСХОДИТ, КОГДА ОПЛАЧЕННЫЙ СРОК УЖЕ ИСТЁК. Срок считается ОТ СЕГОДНЯ,
     а не от даты в прошлом (D-04): продление мёртвого периода не имеет права
@@ -765,13 +765,18 @@ async def _extend_subscription(
     # остатка, к которому мог бы прибавиться месяц. Платёж покупает ровно один
     # месяц от сегодня — тем же объявлением `next_expiry`, что двигает срок
     # действующей подписки, а не второй формулой рядом.
-    # Закреплено `test_the_first_purchase_takes_the_plan_from_the_payment`.
+    # Закреплено `test_the_first_purchase_creates_the_row_from_today`.
+    #
+    # ТАРИФ КОНСТРУКТОРУ НЕ ПЕРЕДАЁТСЯ, ПОТОМУ ЧТО КОЛОНКИ БОЛЬШЕ НЕТ (ревизия
+    # `0020`). Прежде сюда уезжал `db_payment.plan or "free"` — единственное
+    # место, где имя тарифа платежа становилось именем тарифа подписки. Предмет
+    # покупки теперь один, и второго источника правды о нём не заводится.
+    # Закреплено `test_the_first_purchase_creates_the_row_from_today`.
     try:
         async with db.begin_nested():
             db.add(
                 Subscription(
                     user_id=db_payment.user_id,
-                    plan=db_payment.plan or "free",
                     expires_at=next_expiry(None, now),
                     is_active=True,
                 )

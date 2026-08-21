@@ -2,25 +2,13 @@ import structlog
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.message_balance import MessageBalance
 from app.models.payment import Payment
 
 logger = structlog.get_logger()
 
 
-async def get_or_create_balance(db: AsyncSession, user_id: int) -> MessageBalance:
-    result = await db.execute(
-        select(MessageBalance).where(MessageBalance.user_id == user_id)
-    )
-    balance = result.scalar_one_or_none()
-    if balance is None:
-        balance = MessageBalance(user_id=user_id, balance=0)
-        db.add(balance)
-        await db.flush()
-    return balance
-
-
-# ЧТЕНИЕ ОСТАТКА, ЕГО ПРОВЕРКА, СПИСАНИЕ И НАЧИСЛЕНИЕ СНЯТЫ ЦЕЛИКОМ.
+# ЧТЕНИЕ ОСТАТКА, ЕГО ПРОВЕРКА, СПИСАНИЕ, НАЧИСЛЕНИЕ И САМА СТРОКА ОСТАТКА СНЯТЫ
+# ЦЕЛИКОМ.
 #
 # Валюты сообщений в продукте не существует: число отправленных сообщений не
 # влияет на сумму и ничем не ограничено (D-D, критерий 1). Проверка остатка была
@@ -28,23 +16,17 @@ async def get_or_create_balance(db: AsyncSession, user_id: int) -> MessageBalanc
 # (`app/services/subscription_service.py`), — и два ответа на один вопрос рано
 # или поздно расходятся.
 #
-# ⚠️ ЧТЕНИЕ СТРОКИ ОСТАТКА НИЖЕ ОСТАЁТСЯ, И ЭТО ПОРЯДОК, А НЕ ЗАБЫВЧИВОСТЬ.
-# `get_or_create_balance` и `get_balance_info` читает админка — список
-# пользователей и тумблер. Снять их здесь значило бы уронить админские страницы
-# на целую волну; они уходят планом `05.1-08` вместе с самими моделями и
-# ревизией, которая роняет таблицы.
+# Последними держателями чтения были два административных читателя — тот, что
+# заводил недостающую строку остатка, и тот, что собирал её в словарь для
+# карточки. Ревизия `0020` уронила таблицу под ними, и функция, читающая
+# несуществующую таблицу, отвечала бы не пустым значением, а отказом СУБД.
+# Их имена здесь не набираются: они стоят под отрицательным греп-гейтом
+# `tests/test_application/test_no_metering_remains.py`, читающим ИСХОДНИКИ.
+# Административный признак бесплатного доступа заводит на их месте план
+# `05.1-09` — уже поверх `subscriptions.has_free_access`.
 #
 # ИМЯ МОДУЛЯ НЕ МЕНЯЕТСЯ: переименование стоит четырёх импортов и ссылок в шести
 # документах ради нуля пользы.
-
-
-async def get_balance_info(db: AsyncSession, user_id: int) -> dict:
-    bal = await get_or_create_balance(db, user_id)
-    return {
-        "balance": bal.balance,
-        "is_unlimited": bal.is_unlimited,
-        "free_balance_reset_at": bal.free_balance_reset_at.isoformat() if bal.free_balance_reset_at else None,
-    }
 
 
 # --- Журнал платежей ----------------------------------------------------------

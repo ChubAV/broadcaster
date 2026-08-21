@@ -302,56 +302,47 @@ async def test_admin_delete_user(client: AsyncClient, db_session):
 
 
 @pytest.mark.asyncio
-async def test_admin_toggle_unlimited(client: AsyncClient, db_session):
-    """Admin can toggle unlimited status for a user."""
-    await client.post("/api/auth/register", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-        "name": "Admin",
-    })
-    resp = await client.post("/api/auth/login", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-    })
-    admin_token = resp.json()["access_token"]
-    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+async def test_the_admin_unlimited_route_no_longer_answers(
+    client: AsyncClient, db_session
+):
+    """Маршрута тумблера безлимита на остатке сообщений не существует.
+
+    ⚠️ ПРЕДМЕТ ИНВЕРТИРОВАН, А НЕ УДАЛЁН — тем же приёмом, что у соседнего
+    `test_the_admin_top_up_route_no_longer_answers`. Прежде тест утверждал, что
+    администратор переключает признак безлимита формой; ревизия `0020` уронила
+    таблицу под этим признаком, и переключать больше нечего. Утверждение «этого
+    входа нет» держится регрессией, а не памятью: привилегированная операция над
+    чужой учётной записью возвращается тем легче, чем меньше остаётся следов,
+    зачем её сняли.
+
+    ⚠️ ПРАВО АДМИНИСТРАТОРА ОТКРЫТЬ ДОСТУП БЕСПЛАТНО НЕ ОТМЕНЕНО (D-E, критерий 5
+    фазы). Оно переезжает на `subscriptions.has_free_access`, и тумблер
+    возвращается планом `05.1-09`. Когда он вернётся, ЭТОТ тест обязан быть
+    заменён на положительный — падение здесь и будет сигналом, что вход снова
+    есть, а не поломкой.
+
+    Запрос идёт БЕЗ учётных данных намеренно: живой маршрут ответил бы отказом
+    доступа, и именно этим «маршрут есть, но не пускает» отличается от
+    «маршрута нет».
+    """
+    from app.models.user import User
+    from sqlalchemy import select
 
     await client.post("/api/auth/register", json={
         "email": "user@test.com",
         "password": "userpass123",
         "name": "User",
     })
-
-    from app.models.user import User
-    from app.models.message_balance import MessageBalance
-    from sqlalchemy import select
     result = await db_session.execute(select(User).where(User.email == "user@test.com"))
     target = result.scalar_one()
 
-    # Toggle on
     resp = await client.post(
         f"/admin/users/{target.id}/unlimited",
-        headers=admin_headers,
         follow_redirects=False,
     )
-    assert resp.status_code == 302
-
-    bal_result = await db_session.execute(
-        select(MessageBalance).where(MessageBalance.user_id == target.id)
+    assert resp.status_code in (404, 405), (
+        "маршрут админского тумблера безлимита всё ещё отвечает"
     )
-    bal = bal_result.scalar_one()
-    assert bal.is_unlimited is True
-
-    # Toggle off
-    resp = await client.post(
-        f"/admin/users/{target.id}/unlimited",
-        headers=admin_headers,
-        follow_redirects=False,
-    )
-    assert resp.status_code == 302
-
-    await db_session.refresh(bal)
-    assert bal.is_unlimited is False
 
 
 @pytest.mark.asyncio

@@ -27,10 +27,13 @@ from app.models.send_log import SendLog
 from app.pages.common import templates
 from app.repositories.group_info import GroupInfoRepository
 from app.repositories.user import UserRepository
-from app.services.billing_service import (
-    get_balance_info,
-    get_or_create_balance,
-)
+
+# ЧИТАТЕЛЕЙ ОСТАТКА СООБЩЕНИЙ ЗДЕСЬ БОЛЬШЕ НЕТ. Ревизия `0020` уронила таблицы
+# `message_balances` и `balance_transactions`; две функции, которые их читали,
+# сняты вместе с ними из `app/services/billing_service.py`. Признак бесплатного
+# доступа заводится ТОЙ ЖЕ ревизией на `subscriptions.has_free_access`, но его
+# читателей — предикат, колонку списка и тумблер карточки — вводит план
+# `05.1-09`. Порядок такой, потому что снятие таблиц необратимо, а тумблер нет.
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -106,10 +109,11 @@ async def admin_users(
     else:
         users = await user_repo.get_all_users()
 
-    user_data = []
-    for u in users:
-        bal = await get_or_create_balance(db, u.id)
-        user_data.append({"user": u, "balance": bal.balance, "is_unlimited": bal.is_unlimited})
+    # СПИСОК БОЛЬШЕ НЕ ХОДИТ В БАЗУ ЗА КАЖДЫМ ПОЛЬЗОВАТЕЛЕМ. Прежний цикл делал
+    # запрос на строку — и заводил недостающую строку остатка ПРЯМО В GET-е.
+    # Величины, ради которой он это делал, не существует; колонку доступа в этот
+    # список вернёт план `05.1-09` одним запросом, а не циклом.
+    user_data = [{"user": u} for u in users]
 
     return templates.TemplateResponse(
         "admin/users.html",
@@ -135,8 +139,6 @@ async def admin_user_detail(
     target_user = await db.get(User, user_id)
     if not target_user:
         return RedirectResponse(url="/admin/users", status_code=302)
-
-    balance_info = await get_balance_info(db, target_user.id)
 
     accounts_result = await db.execute(
         select(MessengerAccount).where(
@@ -167,7 +169,6 @@ async def admin_user_detail(
             "is_admin": True,
             "active_page": "admin",
             "target_user": target_user,
-            "balance_info": balance_info,
             "accounts": accounts,
             "ads_count": ads_count,
             "groups_count": groups_count,
@@ -403,30 +404,20 @@ async def admin_user_history_detail(
     )
 
 
-@router.post("/users/{user_id}/unlimited")
-async def admin_toggle_unlimited(
-    request: Request,
-    user_id: int,
-    admin: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    target_user = await db.get(User, user_id)
-    if not target_user:
-        return RedirectResponse(url="/admin/users", status_code=302)
-
-    bal = await get_or_create_balance(db, user_id)
-    bal.is_unlimited = not bal.is_unlimited
-    await db.commit()
-    # СБРОСА КЭША ЗДЕСЬ БОЛЬШЕ НЕТ, ПОТОМУ ЧТО НЕТ КЭШИРУЕМОЙ ВЕЛИЧИНЫ. Он
-    # сбрасывал вердикт об ОСТАТКЕ СООБЩЕНИЙ, снятом вместе со всей валютой.
-    # Кэш вердикта ДОСТУПА этим тумблером не задет: тумблер пишет признак
-    # безлимита, а не срок доступа. План `05.1-08` меняет предмет тумблера на
-    # бесплатный доступ — и вот ТОГДА он станет писателем той величины, которую
-    # кэш и хранит, и сброс вернётся сюда уже осмысленным.
-
-    return RedirectResponse(
-        url=f"/admin/users/{user_id}", status_code=302
-    )
+# ТУМБЛЕРА БЕЗЛИМИТА ЗДЕСЬ БОЛЬШЕ НЕТ, И ЭТО СНЯТИЕ ПРЕДМЕТА, А НЕ ПРАВА.
+#
+# Он писал колонку безлимита на таблице ОСТАТКА СООБЩЕНИЙ, и ревизия `0020`
+# уронила таблицу под ним. Оставить маршрут значило бы держать на карточке
+# кнопку, отвечающую отказом СУБД. Имя снятой колонки здесь не набирается: оно
+# стоит под отрицательным греп-гейтом
+# `tests/test_application/test_no_metering_remains.py`, а гейт читает ИСХОДНИКИ —
+# объяснение, набранное запрещённым именем, уронило бы собственный запрет.
+#
+# ⚠️ ПРАВО АДМИНИСТРАТОРА ОТКРЫТЬ ДОСТУП БЕСПЛАТНО НЕ ОТМЕНЕНО, А ПЕРЕЕХАЛО НА
+# ДРУГОЙ ПРЕДМЕТ (решение D-E, критерий 5 фазы). Тумблер возвращается сюда планом
+# `05.1-09` уже поверх `subscriptions.has_free_access`, и вместе с ним вернётся
+# сброс кэша вердикта доступа: у прежнего тумблера сбрасывать было нечего —
+# он писал не ту величину, которую кэш хранит, а новый пишет ровно ту.
 
 
 @router.post("/users/{user_id}/block")

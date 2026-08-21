@@ -96,10 +96,11 @@
 
   {{ card_open(title='Действия') }}
     <div data-actions>
-      <form method="post" action="/admin/users/{{ target_user.id }}/unlimited">
-        {%- if balance_info.is_unlimited %}{{ button('Безлимит выкл', variant='ghost') }}
-        {%- else %}{{ button('Безлимит вкл', variant='ghost') }}{% endif -%}
-      </form>
+      {#- ТУМБЛЕРА БЕЗЛИМИТА ЗДЕСЬ БОЛЬШЕ НЕТ: он писал признак на остатке
+          сообщений, а ревизия `0020` уронила таблицу под ним. Право открыть
+          доступ бесплатно не отменено (D-E) — тумблер возвращается сюда планом
+          `05.1-09` поверх `subscriptions.has_free_access`. Названо явно, чтобы
+          следующий читатель не счёл действие потерянным при перевёрстке. -#}
       <form method="post" action="/admin/users/{{ target_user.id }}/block">
         {%- if target_user.is_blocked %}{{ button('Разблокировать', variant='ghost') }}
         {%- else %}{{ button('Заблокировать', variant='ghost') }}{% endif -%}
