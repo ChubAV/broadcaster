@@ -15,6 +15,7 @@ from app.application.billing.subscription_period import (
     subscription_is_live,
 )
 from app.config import get_settings
+from app.constants import SUBSCRIPTION_DESCRIPTION
 from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.services.billing_cache import invalidate_access_cache
@@ -346,7 +347,29 @@ async def create_payment(
     settings = get_settings()
 
     if kind == KIND_SUBSCRIPTION:
-        description = f"Подписка «{plan}»"
+        # НАЗНАЧЕНИЕ ЧИТАЕТСЯ КОНСТАНТОЙ И НЕ СОБИРАЕТСЯ ПОДСТАНОВКОЙ.
+        # Строка уезжает ТРЕТЬЕЙ СТОРОНЕ и печатается покупателю на странице
+        # оплаты, в фискальном чеке и в кабинете мерчанта. Прежняя редакция
+        # подставляла сюда поле тарифа, снятое из модели плоской подпиской
+        # (D-F): вызывающий подаёт `None` НАМЕРЕННО, и чек называл предмет
+        # покупки текстовым представлением пустого значения — на КАЖДОМ платеже
+        # новой модели, а не изредка. Закреплено
+        # `test_the_subscription_payment_names_its_purpose_in_words`, читающим
+        # тело вызова SDK.
+        #
+        # ⚠️ ЗАПАСНОГО ЗНАЧЕНИЯ ЗДЕСЬ НЕТ И БЫТЬ НЕ ДОЛЖНО. Ветка «если тариф
+        # непуст — печатать его» прошла бы свидетеля выше целиком, но оставила
+        # бы имени снятого тарифа ЖИВОЙ ПУТЬ в фискальный чек для первого же
+        # будущего вызывающего. Предмет продажи ОДИН (D-A), поэтому назначение
+        # есть свойство ПРЕДМЕТА, а не места вызова, и ветка решена в сервисе, а
+        # не у вызывающего. Закреплено
+        # `test_the_purpose_of_a_subscription_payment_is_not_a_substitution`.
+        #
+        # Параметр `plan` при этом НЕ снимается с сигнатуры: он по-прежнему
+        # уезжает в ЖУРНАЛЬНУЮ колонку `payments.plan`, содержимое которой
+        # защищено решением D-H — исторические строки печатаются так, как были
+        # проданы.
+        description = SUBSCRIPTION_DESCRIPTION
         # Ключ `kind` в metadata обязателен: без него в личном кабинете ЮKassa
         # два предмета покупки неразличимы, и вопрос «за что этот платёж»
         # разрешается только сверкой со своей базой (T-05-08).
