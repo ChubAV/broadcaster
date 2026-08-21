@@ -57,6 +57,17 @@ COLUMN_FREE_ACCESS = "has_free_access"
 # теста и есть верный сигнал, что кто-то поменял константу, не тронув ревизию.
 TRIAL_DAYS = 5
 
+# Модульные константы ревизии, несущие ОПЕРАЦИИ НАД ДАННЫМИ. Перечислены здесь,
+# чтобы проверка «журнал платежей не тронут» могла потребовать, что помощник
+# извлечения прочёл КАЖДУЮ из них: пустое извлечение делает ту проверку зелёной
+# на молчании, а не на факте.
+DATA_OPERATION_CONSTANTS = (
+    "_SNAPSHOT_FREE_EXPIRY",
+    "_COUNT_PAID_CARRIED_OVER",
+    "_RESET_FREE_EXPIRY",
+    "_INSERT_MISSING_SUBSCRIPTIONS",
+)
+
 # Схема на момент ревизии 0019. Состав колонок сверен по
 # `0001_initial_schema.py` (таблицы `users` и `subscriptions`),
 # `0009_add_message_balance_and_payment_tables.py` (обе таблицы валюты сообщений
@@ -363,22 +374,127 @@ def test_a_user_without_a_subscription_row_is_given_one(db_at_0019):
     assert _scalar(db_path, "SELECT is_active FROM subscriptions WHERE id = 10") == 0
 
 
-def test_a_free_plan_row_gets_the_trial_window_from_the_moment_of_the_run(db_at_0019):
-    """П-о-2: активной бесплатной строке срок ПЕРЕСТАВЛЕН на окно от исполнения.
+def test_a_free_plan_row_with_a_farther_date_keeps_it(db_at_0019):
+    """П-о-2, ВЕРХНЯЯ ПОЛОВИНА ПРАВИЛА: срок ДАЛЬШЕ окна остаётся нетронутым.
 
-    Посев даёт этой строке срок в 2099 году, то есть заведомо ДАЛЬШЕ окна:
-    переставленный срок обязан оказаться БЛИЖЕ прежнего. Посей мы срок в
-    прошлом — тест зеленел бы и на реализации, которая только продлевает.
+    ⚠️ ПРЕДМЕТ ЭТОГО ТЕСТА ПЕРЕМЕНЁН РЕШЕНИЕМ ВЛАДЕЛЬЦА ОТ 2026-08-21, И ЭТО НЕ
+    ОСЛАБЛЕНИЕ ТЕСТА. Прежде тест назывался
+    `test_a_free_plan_row_gets_the_trial_window_from_the_moment_of_the_run` и
+    ТРЕБОВАЛ обратного: посеянная фикстурой строка (пользователь 2, тариф `free`,
+    срок 2099 год) обязана была переехать НАЗАД, на окно от момента исполнения.
+    Владелец, отвечая на CR-01, выбрал ветку `b-never-shorten`: срок
+    ПОДТЯГИВАЕТСЯ, но НИКОГДА не укорачивается. Основание записано его словами в
+    `.planning/phases/05.1-edinaya-podpiska/05.1-11-SUMMARY.md` — строку с тарифом
+    `free` и живым сроком дальше окна заводили административная выдача и ветка
+    первой вставки денежного пути, различить её после наката нечем (колонка
+    тарифа снимается той же ревизией), а укороченный срок не восстановить ничем.
+
+    Нижнюю половину того же правила закрепляет
+    `test_a_free_plan_row_in_the_past_moves_to_the_window`: без неё «никогда не
+    укорачивать» удовлетворила бы и реализация, не делающая НИЧЕГО.
     """
-    config, db_path, before = db_at_0019
+    config, db_path, _ = db_at_0019
 
     command.upgrade(config, "0020")
 
-    moved = _expiry_of(db_path, 2)
-    assert moved >= before + timedelta(days=TRIAL_DAYS)
+    assert _expiry_of(db_path, 2) == datetime(2099, 1, 1, tzinfo=timezone.utc), (
+        "срок бесплатной строки укорочен — ветка `b-never-shorten` не исполнена"
+    )
+
+
+def test_a_free_plan_row_in_the_past_moves_to_the_window(db_at_0019):
+    """П-о-2, НИЖНЯЯ ПОЛОВИНА ПРАВИЛА: просроченная бесплатная строка ПОДТЯНУТА.
+
+    Без этого теста ветка «никогда не укорачивать» прошла бы и на реализации,
+    которая не делает НИЧЕГО: верхняя половина требует сохранения даты, и
+    предикат, не пропускающий НИ ОДНОЙ строки, удовлетворил бы её целиком, а
+    решение D-G («первые пять дней бесплатно от даты миграции») осталось бы
+    неисполненным для тех, кому оно и адресовано.
+
+    Сравнивается с моментом, возвращаемым фикстурой ТРЕТЬИМ элементом, а не с
+    часами в теле теста: между фикстурой и утверждением проходит настоящий прогон
+    Alembic, и его длительность попала бы в допуск.
+    """
+    config, db_path, before = db_at_0019
+    stale = datetime(2021, 6, 1, tzinfo=timezone.utc)
+    _execute(
+        db_path,
+        "INSERT INTO subscriptions (id, user_id, plan, expires_at, is_active) "
+        "VALUES (40, 4, 'free', ?, true)",
+        (stale.isoformat(),),
+    )
+
+    command.upgrade(config, "0020")
+
+    moved = _expiry_of(db_path, 4)
+    assert moved >= before + timedelta(days=TRIAL_DAYS), (
+        f"просроченная бесплатная строка не подтянута: {moved.isoformat()}"
+    )
     assert moved <= datetime.now(timezone.utc) + timedelta(days=TRIAL_DAYS)
-    assert moved < datetime(2099, 1, 1, tzinfo=timezone.utc), (
-        "срок бесплатной строки не тронут — операция П-о-2 не исполнилась"
+
+
+def test_a_free_plan_row_a_second_above_the_window_keeps_it(db_at_0019):
+    """СТРОГОСТЬ ГРАНИЦЫ, ПОЛОВИНА ПЕРВАЯ: соседняя точка выше границы сохраняется.
+
+    Строка лежит на СЕКУНДУ выше «момент фикстуры + пробное окно» и обязана
+    сохранить свою дату ДО МИКРОСЕКУНДЫ. Запас в секунду выбран не на глаз: момент
+    исполнения ревизии всегда ПОЗЖЕ момента фикстуры, поэтому строка, посеянная
+    ровно на «момент фикстуры + окно», к накату оказалась бы НИЖЕ границы и была
+    бы подтянута — то есть тест проверял бы противоположное тому, что объявляет.
+    Секунда — запас на длительность прогона Alembic между фикстурой и накатом (на
+    момент написания — около семи сотых секунды).
+
+    ⚠️ ЧЕГО ЭТОТ ТЕСТ НЕ ДОКАЗЫВАЕТ, СКАЗАНО ЗДЕСЬ, А НЕ УМОЛЧАНО. Точное
+    равенство сроку «момент исполнения + окно» здесь не проверяется и проверяться
+    не будет: момент снимается ВНУТРИ `upgrade()` и тесту недоступен, а тест,
+    подгоняющий дату под угаданное значение, проверял бы удачу, а не правило. Этот
+    тест закрепляет НАПРАВЛЕНИЕ границы соседней точкой; характер сравнения
+    закрепляет `test_the_free_expiry_predicate_compares_strictly`, снимающий
+    утверждение с текста SQL.
+    """
+    config, db_path, before = db_at_0019
+    just_above = before + timedelta(days=TRIAL_DAYS, seconds=1)
+    _execute(
+        db_path,
+        "INSERT INTO subscriptions (id, user_id, plan, expires_at, is_active) "
+        "VALUES (40, 4, 'free', ?, true)",
+        (just_above.isoformat(),),
+    )
+
+    command.upgrade(config, "0020")
+
+    assert _expiry_of(db_path, 4) == just_above, (
+        "строка на секунду выше границы укорочена — сравнение по сроку либо "
+        "отсутствует, либо закрыто не в ту сторону"
+    )
+
+
+def test_the_free_expiry_predicate_compares_strictly():
+    """СТРОГОСТЬ ГРАНИЦЫ, ПОЛОВИНА ВТОРАЯ: оператор внутри текста SQL — СТРОГИЙ.
+
+    Строгость совпадает со строгостью `subscription_is_live`
+    (`app/application/billing/subscription_period.py`): миграция и продукт обязаны
+    отвечать на вопрос о границе одинаково, иначе человек, чья секунда совпала с
+    накатом, получил бы от миграции один ответ, а от продукта противоположный.
+    Строке, чей срок в точности равен окну, переписывание ничего не даёт.
+
+    ⚠️ УТВЕРЖДЕНИЙ ДВА, И ОДНОГО МАЛО. Знак строгого сравнения входит в запись
+    нестрогого как подстрока, поэтому одиночная проверка присутствия прошла бы на
+    предикате, где рядом стоит ВТОРОЕ, нестрогое сравнение той же колонки.
+
+    ⚠️ УТВЕРЖДЕНИЕ СНИМАЕТСЯ С ИЗВЛЕЧЁННОГО ТЕКСТА SQL, А НЕ ГРЕПОМ ПО ФАЙЛУ.
+    Докстринг ревизии и комментарий над константой законно называют ОБА оператора,
+    объясняя выбор, — греп по файлу краснел бы от собственного объяснения. Разбор
+    по дереву комментариев не видит вовсе, и это и есть причина выбора.
+    """
+    sql = _sql_text_of(ast.parse(_revision_source()), "_RESET_FREE_EXPIRY")
+
+    assert sql, "текст SQL ветки П-о-2 не извлечён — утверждать не о чем"
+    assert "expires_at < :trial_expires_at" in sql, (
+        f"строгого сравнения по сроку в предикате нет:\n{sql}"
+    )
+    assert "expires_at <= :trial_expires_at" not in sql, (
+        f"в предикате стоит НЕСТРОГОЕ сравнение по сроку:\n{sql}"
     )
 
 
@@ -605,6 +721,75 @@ def _argument_value(argument: ast.AST, constants: dict[str, str]) -> str | None:
     return None
 
 
+def _string_value(node: ast.AST, constants: dict[str, str]) -> str | None:
+    """Текст строкового узла: литерал, ссылка на модульную константу ИЛИ f-строка.
+
+    ⚠️ БЕЗ ВЕТКИ `ast.JoinedStr` ПРОВЕРКИ ЭТОГО ФАЙЛА СЛЕПЫ К SQL ЭТОЙ РЕВИЗИИ, И
+    ЭТО СВОЙСТВО ЕЁ ИСХОДНИКА, А НЕ ПРЕДПОЛОЖЕНИЕ. Все её тексты SQL собраны из
+    модульных констант имён и потому объявлены f-строками — узлом `ast.JoinedStr`,
+    а не `ast.Constant`. Помощник `_argument_value`, принимающий только константу
+    и ссылку, возвращает на них пустоту, и половина проверки «журнал платежей не
+    тронут», отвечающая за операции над данными, не читала НИ ОДНОГО текста SQL:
+    она была зелёной, потому что ей было нечего смотреть.
+
+    ⚠️ `ast.unparse` ЗДЕСЬ ОТВЕРГНУТ, И ПРИЧИНА НАЗВАНА, ЧТОБЫ ЕГО НЕ ВЕРНУЛИ КАК
+    «ПРОЩЕ». Он отдаёт исходный текст с НЕРАЗРЕШЁННЫМИ подстановками: имя таблицы
+    осталось бы именем константы в фигурных скобках, а не значением, — и
+    проверка, ищущая ИМЯ таблицы платежей, не нашла бы его никогда. Тем же
+    помощником пользуется утверждение об операторе сравнения, поэтому помощник
+    здесь ОДИН, а не два разных на один предмет.
+
+    Имя, которого нет в словаре модульных констант, подставляется как есть в
+    фигурных скобках: неразрешённая подстановка обязана быть ВИДНА читателю
+    упавшего теста, а не потеряться молча.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    if isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for piece in node.values:
+            if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
+                parts.append(piece.value)
+            elif isinstance(piece, ast.FormattedValue):
+                inner = piece.value
+                name = inner.id if isinstance(inner, ast.Name) else None
+                if name is not None and name in constants:
+                    parts.append(constants[name])
+                else:
+                    parts.append("{" + (name or type(inner).__name__) + "}")
+        return "".join(parts)
+    return None
+
+
+def _sql_text_of(tree: ast.AST, name: str) -> str:
+    """Текст SQL модульной константы `name`, объявленной вызовом `sa.text(...)`.
+
+    Возвращает ПУСТУЮ строку, если константы с таким именем нет или она объявлена
+    не вызовом `sa.text`. Пустота здесь значима: тест, получивший её, обязан
+    покраснеть, а не пройти на молчании — ровно этим молчанием и была зелена
+    проверка журнала платежей до правки.
+    """
+    constants = _module_string_constants(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not (isinstance(target, ast.Name) and target.id == name):
+            continue
+        call = node.value
+        if not (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "text"
+            and call.args
+        ):
+            continue
+        return _string_value(call.args[0], constants) or ""
+    return ""
+
+
 def _upgrade_body_positions() -> tuple[int, int]:
     """Позиции первой операции над данными и снятия колонки тарифа в `upgrade`.
 
@@ -712,8 +897,17 @@ def test_the_revision_performs_no_operation_on_the_payment_journal():
     (схемные операции) и тексты `sa.text` (операции над данными). Греп по всему
     файлу здесь не годится — имя таблицы стоит в докстринге и в предупреждении
     отката, и оба места ОБЯЗАНЫ его называть.
+
+    ⚠️ ПОЛОВИНА ОПЕРАЦИЙ НАД ДАННЫМИ БЫЛА СЛЕПОЙ, И ЭТО ИСПРАВЛЕНО ЗДЕСЬ. Она
+    разрешала только `ast.Constant`, тогда как все тексты SQL этой ревизии
+    объявлены f-строками (`ast.JoinedStr`): проверка не читала НИ ОДНОГО из них и
+    была зелёной, потому что ей было нечего смотреть. Извлечение переведено на
+    `_string_value`, и последним утверждением тест требует, чтобы КАЖДАЯ
+    константа операций над данными была прочитана непусто — иначе слепота
+    вернулась бы молча, а зелёная галочка осталась бы стоять на месте проверки.
     """
     tree = ast.parse(_revision_source())
+    constants = _module_string_constants(tree)
     touched: list[str] = []
 
     for node in ast.walk(tree):
@@ -734,12 +928,57 @@ def test_the_revision_performs_no_operation_on_the_payment_journal():
         if not (is_op_call or is_sa_text):
             continue
         for argument in node.args:
-            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
-                if "payments" in argument.value:
-                    touched.append(f"строка {node.lineno}: {argument.value[:60]}")
+            value = _string_value(argument, constants)
+            if value is not None and "payments" in value:
+                touched.append(f"строка {node.lineno}: {value[:60]}")
 
     assert not touched, (
         "ревизия обращается к журналу платежей:\n" + "\n".join(touched)
+    )
+
+    unread = [name for name in DATA_OPERATION_CONSTANTS if not _sql_text_of(tree, name)]
+    assert not unread, (
+        "помощник извлечения не прочёл тексты SQL: "
+        + ", ".join(unread)
+        + " — проверка журнала платежей снова смотрит в пустоту"
+    )
+
+
+def test_the_payment_journal_check_reads_sql_hidden_in_an_f_string():
+    """НЕГАТИВНЫЙ КОНТРОЛЬ: извлечение видит имя таблицы ВНУТРИ f-строки.
+
+    Проверка выше утверждает ОТСУТСТВИЕ обращений к журналу платежей, а
+    утверждение об отсутствии зеленеет и у того, кто ничего не ищет. Здесь
+    разбирается СИНТЕТИЧЕСКИЙ исходник, где имя таблицы платежей спрятано ровно
+    так, как оно было бы спрятано в настоящей ревизии — подстановкой модульной
+    константы внутри f-строки, — и требуется, чтобы контроль его НАШЁЛ.
+
+    Вторым утверждением фиксируется, ПОЧЕМУ правка понадобилась: прежний помощник
+    на том же образце возвращает пустоту. Это не украшение — без него следующий
+    читатель не отличит починку от переписывания работавшего.
+    """
+    synthetic = (
+        'TABLE_PAYMENTS = "payments"\n'
+        'STATUS_SUCCEEDED = "succeeded"\n'
+        "_WIPE_JOURNAL = sa.text(\n"
+        '    f"DELETE FROM {TABLE_PAYMENTS} WHERE status = \'{STATUS_SUCCEEDED}\'"\n'
+        ")\n"
+    )
+    tree = ast.parse(synthetic)
+    constants = _module_string_constants(tree)
+
+    extracted = _sql_text_of(tree, "_WIPE_JOURNAL")
+    assert "payments" in extracted, (
+        f"извлечение не нашло имя таблицы платежей в f-строке: {extracted!r}"
+    )
+    assert "succeeded" in extracted, (
+        "подстановки разрешаются не все — часть текста SQL остаётся непрочитанной"
+    )
+
+    call = tree.body[2].value
+    assert _argument_value(call.args[0], constants) is None, (
+        "прежний помощник читает f-строку — значит слепоты не было, и правка "
+        "проверки журнала платежей объясняет несуществующую проблему"
     )
 
 
