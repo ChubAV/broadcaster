@@ -45,7 +45,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.constants import PAYMENT_LIST_CAP
+from app.constants import PAYMENT_LIST_CAP, SUBSCRIPTION_DESCRIPTION
 from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.user import User
@@ -58,6 +58,14 @@ BALANCE_HTML = (
     / "templates"
     / "billing"
     / "balance.html"
+)
+PAYMENT_ROW_HTML = (
+    Path(__file__).resolve().parents[2]
+    / "app"
+    / "templates"
+    / "billing"
+    / "includes"
+    / "payment_row.html"
 )
 
 SAME_ORIGIN = {"Origin": "http://test"}
@@ -1232,6 +1240,55 @@ async def test_the_purpose_of_a_payment_has_three_sources(
     assert "Basic" in body, "исторический платёж за тариф переименован"
     assert "Пакет на 500 сообщений" in body, "имя пакета потеряно"
     assert "Пакет сообщений" in body, "безымянный пакет остался без подписи"
+
+
+@pytest.mark.asyncio
+async def test_the_two_surfaces_of_the_payment_purpose_speak_one_string(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Касса и журнал произносят назначение платежа ОДНОЙ строкой.
+
+    ⚠️ ЭТО НЕ «ЗНАЧЕНИЕ РАВНО САМОМУ СЕБЕ». Шаблон строки журнала константу не
+    читает — он несёт СОБСТВЕННЫЙ литерал, объявленный независимо от
+    `app.constants`. Тест связывает ДВА независимых объявления одного значения:
+    разойдись они — краснеет прогон, а не боевой платёж, на котором покупателю
+    печатается одно слово в чеке ЮKassa и другое в истории платежей.
+
+    ДВА УТВЕРЖДЕНИЯ, И НИ ОДНО НЕ ЗАМЕНЯЕТ ДРУГОЕ. Первое — ИСХОДНИК: литерал в
+    шаблоне объявлен и совпадает с константой. Второе — ОТРИСОВКА: он доезжает
+    до экрана через макрос. Исходник без отрисовки прошёл бы и при литерале,
+    стоящем в мёртвой ветке; отрисовка без исходника не отличила бы совпадение
+    от связи.
+
+    ОТВЕРГНУТАЯ АЛЬТЕРНАТИВА И ЕЁ ЦЕНА. Единственный источник можно было бы
+    получить, отдав константу в глобалы Jinja и напечатав её подстановкой. Довод
+    против записан в самом макросе `payment_row.html`: ошибка в имени параметра
+    проявляется не исключением, а ПУСТОЙ строкой при статусе 200. То есть
+    опечатка в имени глобала напечатала бы в денежном журнале пустое назначение
+    МОЛЧА. Два объявления, связанные тестом, дешевле одного объявления с тихим
+    отказом.
+
+    ⚠️ СОСЕДНИЙ ЖИВОЙ ТЕСТ `test_the_purpose_of_a_payment_has_three_sources` НЕ
+    ТРОНУТ: он держит границу D-H — исторический платёж с непустым полем тарифа
+    печатает имя своей эпохи. Этот тест стоит РЯДОМ и утверждает о другом.
+    """
+    source = PAYMENT_ROW_HTML.read_text(encoding="utf-8")
+    assert SUBSCRIPTION_DESCRIPTION in source, (
+        "литерал назначения в шаблоне журнала разошёлся с константой, которую "
+        "касса отправляет в ЮKassa"
+    )
+
+    owner = await _current_user(db_session)
+    fresh = _payment_row(owner.id)
+    fresh.plan = None
+    db_session.add(fresh)
+    await db_session.commit()
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    assert SUBSCRIPTION_DESCRIPTION in body, (
+        "назначение платежа за доступ не доехало до экрана истории платежей"
+    )
 
 
 @pytest.mark.asyncio

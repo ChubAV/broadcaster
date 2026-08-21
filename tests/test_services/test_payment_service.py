@@ -1,6 +1,8 @@
+import ast
 import pytest
 import pytest_asyncio
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime, timedelta, timezone
 
@@ -37,6 +39,27 @@ EVENT_CANCELED = WebhookNotificationEventType.PAYMENT_CANCELED
 # код, утверждал бы «значение равно самому себе» и пережил бы подмену умолчания
 # на «3 000,00 ₽», которую платёжное API отвергает в проде.
 ACCESS_PRICE = "3000.00"
+
+# НАЗНАЧЕНИЕ ПОДПИСОЧНОГО ПЛАТЕЖА — выписано ДОСЛОВНО, а не импортировано из
+# `app.constants`, по тому же правилу, что `ACCESS_PRICE` и
+# `PACKAGE_NOT_CREDITED_KEY` двумя абзацами выше. Тест, берущий строку из того же
+# источника, что и код, утверждал бы «значение равно самому себе» и пережил бы
+# любую подмену формулировки молча. А назначение платежа есть КОНТРАКТ С
+# ПОКУПАТЕЛЕМ: его печатают страница оплаты ЮKassa, фискальный чек и кабинет
+# мерчанта, — и меняться он обязан ЗАМЕТНО.
+#
+# Та же строка объявлена ВТОРОЙ раз в ветке пустого тарифа
+# `app/templates/billing/includes/payment_row.html`, и два объявления связаны
+# тестом `test_the_two_surfaces_of_the_payment_purpose_speak_one_string`, а не
+# соглашением.
+SUBSCRIPTION_DESCRIPTION_TEXT = "Доступ к системе"
+
+# Исходник денежного модуля читается тестом разбора синтаксического дерева:
+# утверждение «значение назначения есть ИМЯ, а не собранная строка» о теле вызова
+# не выражается — снаружи любая строка выглядит строкой.
+PAYMENT_SERVICE_PY = (
+    Path(__file__).resolve().parents[2] / "app" / "services" / "payment_service.py"
+)
 
 
 def _utc(value: datetime | None) -> datetime | None:
@@ -932,6 +955,143 @@ async def test_the_intent_records_that_no_rule_was_asked(db_session):
             plan=None,
             package_name=None,
             messages_count=None,
+        )
+
+
+def _subscription_description_values() -> list[ast.AST]:
+    """Узлы значений, присваиваемых `description` в ВЕТКЕ ПОДПИСКИ `create_payment`.
+
+    Ветка ищется по СРАВНЕНИЮ с `KIND_SUBSCRIPTION`, а не по номеру строки:
+    привязка к номеру рассыпалась бы на первой же правке соседнего абзаца.
+    Ветка «иначе» (пакетная) сюда не попадает — у неё своё назначение, и её
+    снятие есть предмет отложенного WR-05.
+    """
+    tree = ast.parse(PAYMENT_SERVICE_PY.read_text(encoding="utf-8"))
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "create_payment"
+    ]
+    assert functions, "функция create_payment не найдена в исходнике сервиса"
+
+    values: list[ast.AST] = []
+    for function in functions:
+        for node in ast.walk(function):
+            if not isinstance(node, ast.If):
+                continue
+            test = node.test
+            if not isinstance(test, ast.Compare):
+                continue
+            names = [
+                operand.id
+                for operand in [test.left, *test.comparators]
+                if isinstance(operand, ast.Name)
+            ]
+            if "KIND_SUBSCRIPTION" not in names:
+                continue
+            for statement in node.body:
+                for inner in ast.walk(statement):
+                    if not isinstance(inner, ast.Assign):
+                        continue
+                    if any(
+                        isinstance(target, ast.Name) and target.id == "description"
+                        for target in inner.targets
+                    ):
+                        values.append(inner.value)
+    return values
+
+
+@pytest.mark.asyncio
+async def test_the_subscription_payment_names_its_purpose_in_words(db_session):
+    """Подписочный платёж уезжает в SDK, НАЗЫВАЯ СВОЙ ПРЕДМЕТ СЛОВАМИ.
+
+    ⚠️ УТВЕРЖДЕНИЕ СНЯТО С ТЕЛА ВЫЗОВА, А НЕ С ИСХОДНИКА. Строка назначения
+    пересекает границу доверия: её печатают покупателю страница оплаты ЮKassa,
+    фискальный чек и кабинет мерчанта. Разбор исходника поймал бы переписанное
+    выражение, но не поймал бы ключ, переименованный в теле запроса, — а именно
+    ключ `description` и есть то, что третья сторона показывает человеку
+    (T-05.1-35). До этого теста назначение не утверждал в суите НИ ОДИН тест.
+
+    ВТОРОЕ УТВЕРЖДЕНИЕ — ОТ ДЕФЕКТА, А НЕ ОТ ФОРМУЛИРОВКИ: текстового
+    представления пустого значения в назначении нет. Оно переживёт любую
+    будущую правку самих слов и покраснеет ровно тогда, когда снятое поле
+    тарифа снова начнёт подставляться в чек.
+    """
+    user = await _user(db_session)
+
+    with _sdk("yoo_named") as create_mock:
+        await _subscribe(db_session, user)
+
+    body = create_mock.call_args.args[0]
+    assert body["description"] == SUBSCRIPTION_DESCRIPTION_TEXT, (
+        "назначение подписочного платежа разошлось со строкой, которую печатает "
+        "журнал платежей"
+    )
+    assert str(None) not in body["description"], (
+        "в фискальный чек уехало текстовое представление пустого значения"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_purpose_of_a_subscription_payment_is_not_a_substitution(db_session):
+    """У назначения НЕТ МЕСТА ВСТАВКИ: непустой тариф даёт ТУ ЖЕ строку.
+
+    Это не перефразировка соседнего теста, а НАБЛЮДАЕМОЕ СЛЕДСТВИЕ, которого у
+    него нет. Реализация вида «если тариф пуст — одно, иначе — печатать тариф»
+    прошла бы соседний тест целиком: единственный вызывающий подаёт пустой
+    тариф намеренно (`app/pages/billing.py`). Но она оставила бы имени снятого
+    тарифа ЖИВОЙ ПУТЬ в фискальный чек — путь, который открылся бы первому же
+    будущему вызывающему. Этот тест закрывает именно её.
+
+    Аргументы — те же, что подаёт `_subscribe`, кроме тарифа: он равен `basic`,
+    то есть имени тарифа снятой эпохи.
+    """
+    user = await _user(db_session)
+
+    with _sdk("yoo_no_slot") as create_mock:
+        await create_payment(
+            db_session,
+            user_id=user.id,
+            price=ACCESS_PRICE,
+            kind=KIND_SUBSCRIPTION,
+            plan="basic",
+            package_name=None,
+            messages_count=None,
+            switch_authorized=None,
+        )
+
+    body = create_mock.call_args.args[0]
+    assert body["description"] == SUBSCRIPTION_DESCRIPTION_TEXT, (
+        "имя тарифа доехало до назначения платежа — место вставки осталось"
+    )
+    assert "basic" not in body["description"].lower(), (
+        "имя тарифа снятой эпохи печатается покупателю в чеке"
+    )
+
+
+def test_the_subscription_purpose_is_a_name_and_not_an_fstring():
+    """Значение, присваиваемое `description` в ветке подписки, — ИМЯ.
+
+    ⚠️ РАЗБОР ИСХОДНИКА ЗДЕСЬ НЕЗАМЕНИМ ТЕЛОМ ВЫЗОВА. Снаружи собранная строка
+    неотличима от постоянной: обе приезжают строкой. Утверждение «места вставки
+    нет ПО ПОСТРОЕНИЮ» выражается только о синтаксическом дереве, и оно и есть
+    гарантия того, что ни одно значение — ни из формы, ни из БД, ни из настроек
+    — в текст, видимый третьей стороне, попасть не может (T-05.1-34).
+
+    Образцы разбора по дереву в проекте есть:
+    `tests/test_migrations/test_0020_flat_subscription.py` и
+    `tests/test_application/test_declared_invariants.py`.
+    """
+    values = _subscription_description_values()
+
+    assert values, (
+        "в ветке подписки `create_payment` не нашлось присваивания `description`"
+    )
+    for value in values:
+        assert isinstance(value, ast.Name), (
+            "назначение подписочного платежа снова собирается выражением "
+            f"({type(value).__name__}) — у него появилось место вставки"
         )
 
 
