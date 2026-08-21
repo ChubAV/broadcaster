@@ -54,15 +54,11 @@
       </div>
     </div>
     <div data-metrics>
-      {{ card_open() }}
-        {{ mono('Объявления', 'muted', upper=true) }}
-        <span data-metric-value>{{ ads_count }}</span>
-      {{ card_close() }}
-      {{ card_open() }}
-        {{ mono('Группы', 'muted', upper=true) }}
-        <span data-metric-value>{{ groups_count }}</span>
-      {{ card_close() }}
       {#- ПЛИТКА ДОСТУПА — НА МЕСТЕ ПЛИТКИ ОСТАТКА СООБЩЕНИЙ И С ТОЙ ЖЕ ФОРМОЙ.
+          Место буквальное: она стоит ПЕРВОЙ, ровно там, где до фазы стояла
+          плитка остатка, и несёт то же крупное значение со знаком бесконечности
+          в льготной ветке. Порядок плиток — не оформление: администратор,
+          открывший карточку, ищет глазами ту же позицию, что и раньше.
           Значение — КРУПНОЕ ЧИСЛО: число полных суток, знак бесконечности при
           выданной льготе, прочерк при закрытом доступе. Дата в само значение НЕ
           помещается — плитка минимальной ширины 210px (`app.css`), а
@@ -91,6 +87,14 @@
         {{ mono('закрыт ' ~ format_datetime_for_user(target_access.get('expires_at'), user), 'danger') }}
         {%- endif %}
         {%- endif %}
+      {{ card_close() }}
+      {{ card_open() }}
+        {{ mono('Объявления', 'muted', upper=true) }}
+        <span data-metric-value>{{ ads_count }}</span>
+      {{ card_close() }}
+      {{ card_open() }}
+        {{ mono('Группы', 'muted', upper=true) }}
+        <span data-metric-value>{{ groups_count }}</span>
       {{ card_close() }}
       {{ card_open() }}
         {{ mono('Регистрация', 'muted', upper=true) }}
