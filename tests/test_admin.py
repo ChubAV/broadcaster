@@ -301,47 +301,223 @@ async def test_admin_delete_user(client: AsyncClient, db_session):
     assert deleted is None
 
 
-@pytest.mark.asyncio
-async def test_the_admin_unlimited_route_no_longer_answers(
-    client: AsyncClient, db_session
-):
-    """Маршрута тумблера безлимита на остатке сообщений не существует.
+# --- План 05.1-09: тумблер бесплатного ДОСТУПА -------------------------------
+#
+# ⚠️ ПРЕДМЕТ ЭТИХ ТЕСТОВ ВЕРНУЛСЯ, СМЕНИВ ХРАНИЛИЩЕ, А НЕ ВЕРНУЛСЯ КАК БЫЛ.
+# `test_the_admin_unlimited_route_no_longer_answers`, живший здесь между планами
+# `05.1-08` и `05.1-09`, утверждал ОТСУТСТВИЕ входа: ревизия `0020` уронила
+# таблицу остатка сообщений, на которой стоял прежний признак, и переключать
+# стало нечего. Право администратора открыть доступ бесплатно при этом не
+# отменялось (D-E, критерий 5 фазы) — оно переехало на
+# `subscriptions.has_free_access`. Тот тест сам называл своё падение сигналом
+# «вход снова есть», и вот он, положительный, на его месте.
+#
+# Маршрут, метод и адрес СОХРАНЕНЫ дословно (`POST /admin/users/{id}/unlimited`):
+# переиспользуется вход, меняются хранилище и подписи кнопок.
 
-    ⚠️ ПРЕДМЕТ ИНВЕРТИРОВАН, А НЕ УДАЛЁН — тем же приёмом, что у соседнего
-    `test_the_admin_top_up_route_no_longer_answers`. Прежде тест утверждал, что
-    администратор переключает признак безлимита формой; ревизия `0020` уронила
-    таблицу под этим признаком, и переключать больше нечего. Утверждение «этого
-    входа нет» держится регрессией, а не памятью: привилегированная операция над
-    чужой учётной записью возвращается тем легче, чем меньше остаётся следов,
-    зачем её сняли.
 
-    ⚠️ ПРАВО АДМИНИСТРАТОРА ОТКРЫТЬ ДОСТУП БЕСПЛАТНО НЕ ОТМЕНЕНО (D-E, критерий 5
-    фазы). Оно переезжает на `subscriptions.has_free_access`, и тумблер
-    возвращается планом `05.1-09`. Когда он вернётся, ЭТОТ тест обязан быть
-    заменён на положительный — падение здесь и будет сигналом, что вход снова
-    есть, а не поломкой.
-
-    Запрос идёт БЕЗ учётных данных намеренно: живой маршрут ответил бы отказом
-    доступа, и именно этим «маршрут есть, но не пускает» отличается от
-    «маршрута нет».
-    """
-    from app.models.user import User
-    from sqlalchemy import select
-
+async def _register_target(client: AsyncClient, db_session) -> "User":
+    """Обычный пользователь-цель админской операции. Возвращает строку `users`."""
     await client.post("/api/auth/register", json={
         "email": "user@test.com",
         "password": "userpass123",
         "name": "User",
     })
-    result = await db_session.execute(select(User).where(User.email == "user@test.com"))
-    target = result.scalar_one()
+    return (
+        await db_session.execute(select(User).where(User.email == "user@test.com"))
+    ).scalar_one()
 
-    resp = await client.post(
-        f"/admin/users/{target.id}/unlimited",
-        follow_redirects=False,
+
+async def _active_subscription(db_session, user_id: int):
+    from app.models.subscription import Subscription
+
+    return (
+        await db_session.execute(
+            select(Subscription).where(
+                Subscription.user_id == user_id,
+                Subscription.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+@pytest.mark.asyncio
+async def test_the_admin_toggle_flips_free_access_in_both_directions(
+    admin_client: AsyncClient, db_session
+):
+    """Тумблер ВЫДАЁТ и СНИМАЕТ бесплатный доступ одним и тем же маршрутом.
+
+    Обе стороны в одном тесте намеренно: тумблер, который умеет включать и не
+    умеет выключать, проходит любую проверку «выдача работает» и оставляет
+    администратора без способа отозвать выданное благо. Обратимость — то
+    свойство, которым этот план оправдывает отсутствие подтверждения (UI-SPEC
+    E5, Destructive confirmation), и она обязана быть УТВЕРЖДЕНА, а не обещана.
+
+    Признак читается ИЗ БАЗЫ после каждого нажатия, а не из ответа формы: ответ
+    отдаёт редирект и о состоянии колонки не говорит ничего.
+    """
+    target = await _register_target(admin_client, db_session)
+
+    resp = await admin_client.post(
+        f"/admin/users/{target.id}/unlimited", follow_redirects=False
     )
-    assert resp.status_code in (404, 405), (
-        "маршрут админского тумблера безлимита всё ещё отвечает"
+    assert resp.status_code == 302, "тумблер не ответил редиректом на карточку"
+
+    subscription = await _active_subscription(db_session, target.id)
+    assert subscription is not None, "у цели нет активной строки подписки"
+    await db_session.refresh(subscription)
+    assert subscription.has_free_access is True, "бесплатный доступ не выдан"
+
+    resp = await admin_client.post(
+        f"/admin/users/{target.id}/unlimited", follow_redirects=False
+    )
+    assert resp.status_code == 302
+
+    await db_session.refresh(subscription)
+    assert subscription.has_free_access is False, (
+        "бесплатный доступ не снимается тем же тумблером — выданное благо "
+        "нечем отозвать"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_free_access_toggle_is_refused_for_a_non_admin(
+    authed_client: AsyncClient, db_session
+):
+    """Выдача бесплатного доступа НЕ ДОСТУПНА обычному пользователю (T-05.1-05).
+
+    Привилегированная операция над ЧУЖОЙ учётной записью, раздающая платное
+    благо. Проверка прав живёт в зависимости `require_admin` и этим планом не
+    ослабляется; утверждение стоит и по коду ответа, и по СОСТОЯНИЮ КОЛОНКИ —
+    отказ, после которого признак всё-таки выставлен, отказом не является.
+    """
+    target = (
+        await db_session.execute(
+            select(User).where(User.email == "testuser@test.com")
+        )
+    ).scalar_one()
+
+    resp = await authed_client.post(
+        f"/admin/users/{target.id}/unlimited", follow_redirects=False
+    )
+
+    assert resp.status_code == 403, (
+        f"тумблер ответил {resp.status_code} обычному пользователю"
+    )
+    subscription = await _active_subscription(db_session, target.id)
+    await db_session.refresh(subscription)
+    assert subscription.has_free_access is False, (
+        "обычный пользователь выдал себе бесплатный доступ"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_free_access_toggle_survives_a_user_without_a_subscription_row(
+    admin_client: AsyncClient, db_session
+):
+    """Пятисотки на админском пути НЕТ у пользователя без строки подписки.
+
+    🧪 BACKSTOP UI-контракта (E5 error, C4). Ревизия `0020` завела строку всем
+    существующим пользователям, но утверждать это ЗДЕСЬ нельзя: суита строит
+    схему из моделей и Alembic не запускает, то есть про популяцию П-о-1 она не
+    знает ничего. Пользователь без строки в базе создаётся руками именно затем,
+    чтобы требование «не отдавать 500» проверялось на самом состоянии, а не на
+    вере в то, что ревизия его больше не производит.
+
+    Требование интерфейсное и сформулировано отрицательно: чем именно оно
+    обеспечено — созданием строки или отказом со словами — решает реализация.
+    """
+    target = User(email="rowless@test.com", password_hash="x", name="Rowless")
+    db_session.add(target)
+    await db_session.commit()
+    await db_session.refresh(target)
+
+    assert await _active_subscription(db_session, target.id) is None, (
+        "посев не удался: у цели уже есть строка подписки, и backstop проверяет "
+        "не то состояние"
+    )
+
+    resp = await admin_client.post(
+        f"/admin/users/{target.id}/unlimited", follow_redirects=False
+    )
+
+    assert resp.status_code < 500, (
+        f"тумблер бесплатного доступа отдал {resp.status_code} пользователю без "
+        "строки подписки — админский путь падает на популяции, которая переживёт "
+        "выкат"
+    )
+
+
+@pytest.mark.asyncio
+async def test_granting_free_access_invalidates_the_access_verdict_cache(
+    admin_client: AsyncClient, db_session
+):
+    """Тумблер СБРАСЫВАЕТ кэш вердикта доступа — в обе стороны (T-05.1-04).
+
+    Вердикт `check_access` кэшируется на минуту (`app/services/billing_cache.py`),
+    и тумблер пишет РОВНО ТУ величину, из которой вердикт считается. Без сброса
+    выданный бесплатный доступ до минуты не работал бы, а СНЯТЫЙ — до минуты
+    продолжал бы работать: второе хуже, потому что это платный ресурс, который
+    продукт уже перестал выдавать.
+
+    Утверждается ВЫЗОВ, а не наблюдаемое следствие: Redis в суите не поднят, и
+    настоящий кэш здесь недостижим ни в одну сторону.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    target = await _register_target(admin_client, db_session)
+
+    with patch(
+        "app.pages.admin.invalidate_access_cache", new_callable=AsyncMock
+    ) as invalidate:
+        await admin_client.post(
+            f"/admin/users/{target.id}/unlimited", follow_redirects=False
+        )
+        assert invalidate.await_count == 1, "выдача не сбросила кэш вердикта"
+        assert invalidate.await_args.args[0] == target.id, (
+            "сброшен кэш не того пользователя"
+        )
+
+        await admin_client.post(
+            f"/admin/users/{target.id}/unlimited", follow_redirects=False
+        )
+        assert invalidate.await_count == 2, "снятие не сбросило кэш вердикта"
+
+
+@pytest.mark.asyncio
+async def test_the_free_access_grant_is_journaled_with_both_identities(
+    admin_client: AsyncClient, db_session
+):
+    """Выдача уходит в журнал ИМЕНОВАННЫМ ключом с обоими идентификаторами.
+
+    T-05.1-05, вторая половина смягчения. Проверка прав отвечает на вопрос «кто
+    имел право»; журнал отвечает на вопрос «кто и кому это сделал», и без него
+    привилегированная операция над чужой учётной записью не оставляет следа
+    вовсе. Оба идентификатора обязательны: запись без цели не позволяет узнать,
+    кому выдали, а без администратора — кто выдал.
+
+    Утверждается и НОВОЕ ЗНАЧЕНИЕ признака: одна пара записей на включение и
+    выключение сделала бы журнал неспособным отличить выдачу от отзыва.
+    """
+    import structlog
+
+    target = await _register_target(admin_client, db_session)
+
+    with structlog.testing.capture_logs() as logs:
+        await admin_client.post(
+            f"/admin/users/{target.id}/unlimited", follow_redirects=False
+        )
+
+    entries = [entry for entry in logs if entry.get("event") == "free_access_toggled"]
+    assert len(entries) == 1, (
+        f"выдача бесплатного доступа не оставила записи `free_access_toggled`: "
+        f"{[entry.get('event') for entry in logs]}"
+    )
+    entry = entries[0]
+    assert entry.get("target_user_id") == target.id
+    assert entry.get("admin_user_id") is not None, "журнал не назвал администратора"
+    assert entry.get("has_free_access") is True, (
+        "журнал не назвал НОВОЕ значение признака — выдача неотличима от отзыва"
     )
 
 
