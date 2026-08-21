@@ -5,16 +5,17 @@ milestone_name: Redesign
 current_phase: 6
 current_phase_name: Админ-панель
 status: planning
-stopped_at: Фаза 05.1 отгружена (PR #41); фаза 6 не планировалась
-last_updated: "2026-08-21T18:07:01.089Z"
+stopped_at: Phase 6 context gathered
+last_updated: "2026-08-21T19:17:56.216Z"
 last_activity: 2026-08-21
-last_activity_desc: "Фаза 05.1 ЗАКРЫТА и отгружена. UAT 3/3 passed (вёрстка 375px: состояние paid, история из 5 строк с длинным историческим именем пакета, пятизначная цена). Verification переведена в passed (10/10 must-have, behavior_unverified 0, 1 override по форме приёмки). Security-ревизия проведена: 05.1-SECURITY.md, threats_open 0 при ASVS L1 и block_on high — 56 записей реестра, 33 закрыты по Threat Flags сводок, 18 проверены аудитором по коду, 230 тестов зелёные. Transition исполнен: ROADMAP и STATE отмечают 14/14, следующая фаза 6 «Админ-панель». Отгрузка: ветка gsd/phase-05.1-edinaya-podpiska, PR #41 в master. ⚠️ PR несёт 393 коммита — origin/master отстал с мёрджа PR #38 (фаза 04), поэтому вместе с 05.1 едет неверифицированная фаза 05 (UAT partial, VERIFICATION human_needed). Долги вне предмета фазы: 3 BLOCKER заведены как todo и адресованы фазе 6; по трассируемости требований — BILL-06 цитируется ROADMAP, но не зарегистрирован в REQUIREMENTS.md, строки Traceability отсутствуют для BILL-05, BILL-07…BILL-11, шесть REQ-ID (NOTIF-01…04, WARM-01, WARM-02) есть в теле и не в таблице"
+state_head: b5ebd0f8ccc4d140c841b3b52ee57b8ed5bce7aa
 progress:
   total_phases: 7
-  completed_phases: 6
+  completed_phases: 5
   total_plans: 96
   completed_plans: 96
-  percent: 86
+  percent: 71
+last_activity_desc: "Фаза 05.1 ЗАКРЫТА и отгружена. UAT 3/3 passed (вёрстка 375px: состояние paid, история из 5 строк с длинным историческим именем пакета, пятизначная цена). Verification переведена в passed (10/10 must-have, behavior_unverified 0, 1 override по форме приёмки). Security-ревизия проведена: 05.1-SECURITY.md, threats_open 0 при ASVS L1 и block_on high — 56 записей реестра, 33 закрыты по Threat Flags сводок, 18 проверены аудитором по коду, 230 тестов зелёные. Transition исполнен: ROADMAP и STATE отмечают 14/14, следующая фаза 6 «Админ-панель». Отгрузка: ветка gsd/phase-05.1-edinaya-podpiska, PR #41 в master. ⚠️ PR несёт 393 коммита — origin/master отстал с мёрджа PR #38 (фаза 04), поэтому вместе с 05.1 едет неверифицированная фаза 05 (UAT partial, VERIFICATION human_needed). Долги вне предмета фазы: 3 BLOCKER заведены как todo и адресованы фазе 6; по трассируемости требований — BILL-06 цитируется ROADMAP, но не зарегистрирован в REQUIREMENTS.md, строки Traceability отсутствуют для BILL-05, BILL-07…BILL-11, шесть REQ-ID (NOTIF-01…04, WARM-01, WARM-02) есть в теле и не в таблице"
 ---
 
 # Project State
@@ -222,6 +223,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-21
-Stopped at: Phase 05.1 complete, ready to plan Phase 6
-Resume file: None
+Last session: 2026-08-21T19:17:55.655Z
+Stopped at: Phase 6 context gathered
+Resume file: .planning/phases/06-admin-panel/06-CONTEXT.md
