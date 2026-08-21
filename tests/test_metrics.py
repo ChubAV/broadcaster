@@ -62,9 +62,13 @@ async def test_update_business_metrics(db_session):
         db_session.add(schedule)
 
     # Seed: 1 active subscription
+    #
+    # ⚠️ РЯД СЧИТАЕТ ВСЕХ, У КОГО ЕСТЬ ДОСТУП, А НЕ ТОЛЬКО ПЛАТЯЩИХ. До ревизии
+    # `0020` строка подписки заводилась только подтверждённым платежом, и число
+    # совпадало со счётом плативших; теперь строка есть у пробных и у открытых
+    # администратором тоже. Тариф конструктору не передаётся — колонки нет.
     subscription = Subscription(
         user_id=user.id,
-        plan="pro",
         expires_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
         is_active=True,
     )

@@ -23,14 +23,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import CHART_BUCKETS_PER_DAY
 from app.models.ad import Ad
-from app.models.balance_transaction import BalanceTransaction
 from app.models.group import Group
 from app.models.group_info import GroupInfo
 from app.models.messenger_account import MessengerAccount
+from app.models.payment import Payment
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.models.user import User
+from app.pages.common import templates
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
 
@@ -46,6 +47,7 @@ SECTION_URLS = {
     "account_groups": "/accounts/{account_id}/groups",
     "history": "/history",
     "accounts": "/accounts",
+    "billing": "/billing",
 }
 
 # Разделы на примитиве строки-таблицы data-row. История сюда НЕ входит: у неё
@@ -65,7 +67,18 @@ MIGRATED_SECTIONS = ["ads", "accounts"]
 
 # Все разделы, переведённые на дизайн-систему, независимо от примитива.
 # Планы 06-08 дописывают свои сюда.
-CLEAN_SECTIONS = MIGRATED_SECTIONS + ["history", "schedules", "account_groups"]
+#
+# «Тарифы» встали сюда планом 05-05: раздел перевёрстан по макету и собран
+# целиком из компонентов и примитивов Фазы 1. В перечень строк-таблиц
+# (MIGRATED_SECTIONS) он не входит — его собственные примитивы закреплены
+# именованными проверками test_billing_* ниже, по той же схеме, что у
+# расписаний и экрана групп аккаунта.
+CLEAN_SECTIONS = MIGRATED_SECTIONS + [
+    "history",
+    "schedules",
+    "account_groups",
+    "billing",
+]
 
 
 async def _user(db: AsyncSession) -> User:
@@ -172,38 +185,58 @@ async def _seed_send_log(
     return log
 
 
-async def _seed_transaction(
-    db: AsyncSession,
-    amount: int = 25,
-    type_: str = "purchase",
-    description: str = "Пакет «Старт»",
-) -> BalanceTransaction:
-    user = await _user(db)
-    tx = BalanceTransaction(
-        user_id=user.id,
-        amount=amount,
-        balance_after=100 + amount,
-        type=type_,
-        description=description,
-    )
-    db.add(tx)
-    await db.commit()
-    await db.refresh(tx)
-    return tx
+# ПОМОЩНИКА ПОСЕВА ЖУРНАЛА ОПЕРАЦИЙ ПО ОСТАТКУ ЗДЕСЬ БОЛЬШЕ НЕТ: ревизия `0020`
+# уронила таблицу под ним, а раздел, который он наполнял, снят ещё планом
+# `05.1-06`. Единственный его вызывающий — проверка отсутствия обработчиков
+# события в разметке раздела — сеет теперь только строку журнала ДЕНЕГ, которая
+# на странице и рисуется.
 
 
-async def _seed_subscription(db: AsyncSession, plan: str = "business") -> Subscription:
+async def _seed_payment(
+    db: AsyncSession, status: str = "succeeded", plan: str = "basic"
+) -> Payment:
+    """Строка журнала ДЕНЕГ. `created_at` ставится явно: у колонки есть умолчание."""
     user = await _user(db)
-    sub = Subscription(
+    payment = Payment(
         user_id=user.id,
+        yookassa_payment_id="yoo_markup_seed",
+        status=status,
+        amount_value="1490.00",
+        amount_currency="RUB",
+        kind="subscription",
         plan=plan,
-        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
-        is_active=True,
+        created_at=datetime(2026, 5, 20, 12, 0, tzinfo=timezone.utc),
     )
-    db.add(sub)
+    db.add(payment)
     await db.commit()
-    await db.refresh(sub)
-    return sub
+    await db.refresh(payment)
+    return payment
+
+
+async def _access_row(db: AsyncSession) -> Subscription:
+    """Активная строка подписки пользователя — её заводит регистрация."""
+    return (
+        await db.execute(
+            select(Subscription).where(
+                Subscription.user_id == (await _user(db)).id,
+                Subscription.is_active.is_(True),
+            )
+        )
+    ).scalar_one()
+
+
+async def _move_access_expiry(db: AsyncSession, delta: timedelta) -> datetime:
+    """Сдвигает срок УЖЕ СУЩЕСТВУЮЩЕЙ строки, а не заводит вторую.
+
+    Частичный уникальный индекс `uq_subscriptions_active_user` допускает у
+    пользователя ровно одну активную строку, а пробный срок ему завела
+    регистрация (план 05.1-01). Вторая вставка дала бы IntegrityError, то есть
+    тест падал бы на посеве, а не на предмете.
+    """
+    row = await _access_row(db)
+    row.expires_at = datetime.now(timezone.utc) + delta
+    await db.commit()
+    return row.expires_at
 
 
 async def _seed_group_info(
@@ -249,6 +282,12 @@ async def _seed_section(db: AsyncSession, section: str) -> str:
         # WhatsApp редиректит, а тесты раздела ходят и туда (см. Плана 03
         # test_swap_anchors_present).
         await _seed_account(db, type_="max")
+    elif section == "billing":
+        # ЕДИНСТВЕННЫЙ журнал раздела — деньги: история операций по балансу
+        # сообщений снята планом 05.1-05 вместе с самим балансом. Пустой раздел
+        # нарисовал бы пустое состояние, и проверка разметки зазеленела бы
+        # вакуумно.
+        await _seed_payment(db)
     else:  # pragma: no cover — защита от опечатки в параметризации
         raise AssertionError(f"неизвестный раздел: {section}")
     return SECTION_URLS[section]
@@ -1158,8 +1197,12 @@ TABLE_MARKERS = ("<table", "<thead", "<tbody", "<tr", "<td", "<th ", "<th>")
 async def test_billing_uses_row_primitives(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """История операций собрана на строке-таблице, а не на своей вёрстке."""
-    await _seed_transaction(db_session)
+    """Журнал платежей собран на строке-таблице, а не на своей вёрстке.
+
+    ⚠️ ПОСЕВ СМЕНИЛСЯ ВМЕСТЕ С ЖУРНАЛОМ: история операций по балансу сообщений
+    снята планом 05.1-05, и единственные табличные данные раздела — платежи.
+    """
+    await _seed_payment(db_session)
 
     response = await authed_client.get("/billing")
     assert response.status_code == 200
@@ -1179,7 +1222,7 @@ async def test_billing_no_table_markup(
     Проверка идёт по ОТРЕНДЕРЕННОЙ выдаче, а не по файлу: таблица могла бы
     приехать из включаемого шаблона.
     """
-    await _seed_transaction(db_session)
+    await _seed_payment(db_session)
 
     html = (await authed_client.get("/billing")).text
     for marker in TABLE_MARKERS:
@@ -1190,66 +1233,657 @@ async def test_billing_no_table_markup(
 async def test_billing_no_utility_classes(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    await _seed_transaction(db_session)
+    await _seed_payment(db_session)
 
     html = (await authed_client.get("/billing")).text
     for marker in UTILITY_MARKERS:
         assert marker not in html, marker
 
 
+# ⚠️ `test_billing_renders_transaction_data` СНЯТ ВМЕСТЕ С ЖУРНАЛОМ ОПЕРАЦИЙ ПО
+# БАЛАНСУ СООБЩЕНИЙ (D-D). Он охранял границу «строка журнала отрисовывает
+# настоящие данные, а не пустоту», и граница НЕ потеряна: её держит
+# `test_billing_renders_payment_data` ниже — на журнале, который остался.
+
+
 @pytest.mark.asyncio
-async def test_billing_renders_transaction_data(
+async def test_billing_shows_the_access_date_from_the_live_shell(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Строка операции отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+    """Раздел подписки показывает СРОК ДОСТУПА пользователя, а не имя тарифа.
 
-    Перевод таблицы на макросы теряет неявный контекст: страница останется
-    валидной и вернёт 200, а строки будут пустыми.
+    ⚠️ УТВЕРЖДЕНИЕ ПЕРЕЦЕЛЕНО ПЛАНОМ 05.1-04, А НЕ УДАЛЕНО. Оно охраняет ту же
+    границу — «величина приходит из живого контекста шелла, а не из константы в
+    разметке», — и сменило предмет вместе с моделью: имён тарифов больше нет
+    (D-F), доступ стоит одно число, и единственная величина, которая у человека
+    своя, — дата окончания. Подписка с другой датой обязана изменить выдачу.
     """
-    await _seed_transaction(
-        db_session, amount=25, description="Уникальное описание операции"
+    expires_at = await _move_access_expiry(db_session, timedelta(days=30))
+    user = await _user(db_session)
+
+    from app.pages.common import format_datetime_for_user
+
+    html = (await authed_client.get("/billing")).text
+    # Сверяется ТЕЛО СТРАНИЦЫ, а не вся выдача: ту же дату печатает виджет
+    # сайдбара, и утверждение по целому документу проходило бы и при
+    # неотрисованной панели раздела — то есть проверяло бы чужую поверхность.
+    body = html.split("<div data-body>", 1)[-1]
+    assert format_datetime_for_user(expires_at, user) in body, (
+        "срок доступа пользователя в теле раздела не отрисован"
     )
 
-    html = (await authed_client.get("/billing")).text
-    assert "Уникальное описание операции" in html
-    assert "+25" in html, "знак и величина операции не отрисованы"
-    assert "125" in html, "баланс после операции не отрисован"
-    assert "Покупка" in html, "тип операции не расшифрован"
+
+# --- План 05-05: паршалы раздела подписки ------------------------------------
+#
+# ⚠️ ПАРШАЛОВ ОСТАЛСЯ ОДИН ИЗ ТРЁХ (план 05.1-05). Карточка тарифа и метр оси
+# удалены вместе с предметом: тарифов Free/Basic/Pro нет (D-F), а четыре оси
+# потребления были счётом, ради снятия которого фаза и существует. Их проверки
+# сняты здесь же — тест удалённого файла краснеет на чтении с диска и говорит
+# не о том, о чём написан.
+#
+# Паршал живёт в billing/includes/, а НЕ в components/: он специфичен для
+# раздела и в других не переиспользуется, а инвентаризация общей библиотеки
+# держит жёсткое число файлов.
+#
+# Проверки идут ПРЯМЫМ рендером макроса, а не по странице: макрос, потерявший
+# явный параметр, отрисуется пустотой, а страница всё равно вернёт 200
+# (приём tests/test_templates/test_components.py).
+
+BILLING_PARTIALS = (("billing/includes/payment_row.html", "payment_row"),)
+
+# Разделитель разрядов и отбивка перед знаком рубля — НЕРАЗРЫВНЫЕ пробелы:
+# обычный пробел переносит «1» и «490» на разные строки узкой карточки.
+# Ожидания выписаны escape-последовательностью: невидимый символ в литерале
+# теста читается как обычный пробел и «чинится» первым же редактором.
+NBSP = "\u00a0"
+BASIC_PRICE = f"1{NBSP}490{NBSP}₽"
+PRO_PRICE = f"4{NBSP}900{NBSP}₽"
+
+# ⚠️ ТРИ ЗАПИСИ ТАРИФА СНЯТЫ ВМЕСТЕ С ИХ ЕДИНСТВЕННЫМ ПОТРЕБИТЕЛЕМ — прямым
+# рендером карточки тарифа. Суммы выше остались: они проверяют ГЛОБАЛ
+# форматирования, а он живёт и после снятия прейскуранта — его зовут и цена
+# доступа, и каждая строка платежа.
 
 
-@pytest.mark.asyncio
-async def test_billing_shows_current_plan(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Раздел тарифов показывает НАЗВАНИЕ ТЕКУЩЕГО тарифа пользователя.
+def _billing_macro(path: str, name: str):
+    return getattr(templates.env.get_template(path).module, name)
 
-    Тариф приходит из живого контекста шелла (get_shell_context), а не из
-    константы в разметке: подписка с другим названием обязана изменить выдачу.
+
+def test_billing_amount_format_is_a_display_concern_only():
+    """Глобал форматирования суммы добавляет разряды и знак рубля.
+
+    Машинная строка ЮKassa («1490.00») остаётся в конфиге и в amount.value:
+    строка с разделителем разрядов — отказ платёжного API в проде, который не
+    поймает ни один мок. Форматирование живёт ТОЛЬКО на стороне показа.
     """
-    await _seed_subscription(db_session, plan="business")
+    format_amount = templates.env.globals["format_amount"]
 
-    html = (await authed_client.get("/billing")).text
-    assert "Business" in html, "название текущего тарифа не отрисовано"
+    assert format_amount("1490.00") == BASIC_PRICE
+    assert format_amount("4900.00") == PRO_PRICE
+    # Нулевые копейки не показываются: «0,00 ₽» — шум, а не точность.
+    assert format_amount("0.00") == f"0{NBSP}₽"
+    assert format_amount("149.50") == f"149,50{NBSP}₽"
+    assert format_amount(None) == ""
 
 
-@pytest.mark.asyncio
-async def test_billing_plans_template_is_migrated():
-    """`billing/plans.html` мигрирован, хотя маршрута у него нет.
+def test_billing_partials_are_macros_with_an_import_line():
+    """Каждый паршал — МАКРОС и называет свою строку импорта комментарием."""
+    for rel, macro_name in BILLING_PARTIALS:
+        source = (TEMPLATES_DIR / rel).read_text(encoding="utf-8")
+        assert "{% macro " in source, f"{rel}: паршал не макрос"
+        assert rel in source, f"{rel}: строки импорта в комментарии нет"
+        assert _billing_macro(rel, macro_name), rel
 
-    Шаблон не рендерится ни одним обработчиком (см. SUMMARY Плана 07):
-    поведенческой проверки для него не существует, поэтому здесь — проверка
-    исходника. Она ловит ровно то, ради чего шаблон правился: возврат
-    utility-классов и отказ от компонентов.
-    """
-    source = (TEMPLATES_DIR / "billing" / "plans.html").read_text(encoding="utf-8")
 
-    for marker in UTILITY_MARKERS:
-        assert marker not in source, marker
+def test_billing_component_library_did_not_grow():
+    """Паршалы раздела не уехали в общую библиотеку компонентов."""
+    components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
+    assert len(components) == 13, [p.name for p in components]
+
+    partials = {p.name for p in (TEMPLATES_DIR / "billing" / "includes").glob("*.html")}
+    assert partials == {"payment_row.html"}, (
+        "паршалов раздела не один: карточка тарифа и метр оси удалены планом "
+        "05.1-05 вместе с предметом"
+    )
+
+
+# ⚠️ ШЕСТЬ ТЕСТОВ ПРЯМОГО РЕНДЕРА СНЯТЫ ВМЕСТЕ С ДВУМЯ УДАЛЁННЫМИ МАКРОСАМИ:
+# два про метр оси (безлимит и превышение) и четыре про карточку тарифа
+# (текущий план, безлимитный лимит, бесплатный тариф без формы, выключенные
+# платежи). Их предмет — оси потребления и прейскурант — снят решениями D-D и
+# D-F; тест удалённого шаблона краснеет на чтении с диска и говорит не о том, о
+# чём написан. Две границы, которые они охраняли и которые ПЕРЕЖИЛИ снос,
+# закреплены в другом месте: «выключенные платежи гасят кнопку, а не витрину» —
+# в test_billing_section.py, «сумма форматируется только на стороне показа» —
+# тестом глобала выше.
+
+
+def test_billing_payment_row_is_built_on_row_primitives():
+    """Строка платежа — примитивы строки и подпись колонки внутри ячейки."""
+    source = (TEMPLATES_DIR / "billing" / "includes" / "payment_row.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "data-cell-label" in source, "подпись колонки не едет вместе со значением"
     for marker in TABLE_MARKERS:
         assert marker not in source, marker
-    assert "{% block page_title %}" in source
-    assert "components/progress.html" in source
-    assert "components/card.html" in source
+
+
+# --- План 05-05, задача 3: снос, честная подпись, адаптивные регрессии -------
+#
+# ⚠️ НАЗВАННАЯ ГРАНИЦА ПРОВЕРКИ. Браузерных и e2e-тестов в проекте нет
+# (блокер STATE.md), поэтому проверки ниже закрепляют РАЗМЕТКУ и ПРАВИЛО CSS, а
+# не отрисовку. Зелёный прогон означает, что сетка объявлена складывающейся и
+# что подписи колонок едут вместе со значениями, — но НЕ означает, что на
+# настоящей мобильной ширине ничего не уехало в горизонтальную прокрутку.
+# Соответствующая истина плана помечена требующей человеческого подтверждения:
+# при отсутствии явного доказательства верификатор обязан позвать человека, а
+# не засчитать молча.
+
+APP_DIR = Path(__file__).resolve().parents[2] / "app"
+COMMON_PY = APP_DIR / "pages" / "common.py"
+REMOVED_PLANS_TEMPLATE = TEMPLATES_DIR / "billing" / "plans.html"
+
+
+def test_the_unwired_plans_template_is_gone():
+    """Неподключённый шаблон раздела снесён (D-19).
+
+    Файл не рендерился НИ ОДНИМ маршрутом и ссылался на переменные, которых
+    нет ни в одном контексте; его поведенческой проверки не существовало —
+    была только проверка исходника, удалённая вместе с ним. Содержимое
+    перенесено в живые паршалы раздела. Тот же ход, что снос шести
+    недостижимых шаблонов в Фазе 1 и мёртвого репозитория групп в Фазе 3.
+    """
+    assert not REMOVED_PLANS_TEMPLATE.exists(), "неподключённый шаблон на месте"
+
+    # Ссылок на снесённый файл в исходниках приложения не осталось: прозой
+    # указывать на несуществующий путь — та же ложь, что мёртвый импорт.
+    needle = REMOVED_PLANS_TEMPLATE.name
+    offenders = [
+        str(path.relative_to(APP_DIR))
+        for path in sorted(APP_DIR.rglob("*"))
+        if path.suffix in {".py", ".html"}
+        and needle in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, f"ссылки на снесённый шаблон остались: {offenders}"
+
+
+BASE_HTML = TEMPLATES_DIR / "base.html"
+
+
+def _markup_without_comments(path: Path) -> str:
+    """Разметка без объяснительных комментариев Jinja.
+
+    Запреты этого блока адресованы КОПИРАЙТУ и КОДУ, а не прозе, которая
+    объясняет, почему запрет существует. Абзац, называющий отвергнутую
+    формулировку («осталось 0 дней» читается как «уже кончилось»), обязан
+    остаться в файле: без него следующий читатель «приведёт ветку в
+    соответствие» с соседней. Проверка по сырому тексту краснела бы от
+    собственного объяснения — тот же приём, которым план 05.1-01 разрешил
+    проверку отсутствия ветки разбором по синтаксическому дереву.
+    """
+    return re.sub(r"\{#.*?#\}", "", path.read_text(encoding="utf-8"), flags=re.S)
+
+
+def _css_without_comments() -> str:
+    """Таблица стилей без комментариев — по тому же основанию."""
+    return re.sub(r"/\*.*?\*/", "", APP_CSS.read_text(encoding="utf-8"), flags=re.S)
+
+
+@pytest.mark.asyncio
+async def test_the_sidebar_widget_names_the_access_it_shows(
+    authed_client: AsyncClient,
+):
+    """Виджет сайдбара подписан ТЕМ, ЧТО ПОКАЗЫВАЕТ (T-05-29, D-22).
+
+    ⚠️ УТВЕРЖДЕНИЕ ПЕРЕЦЕЛЕНО ПЛАНОМ 05.1-04, А НЕ УДАЛЕНО. Правило прежнее,
+    предмет у него сменился: виджет перестал показывать баланс сообщений и
+    показывает СРОК ДОСТУПА — ту величину, по которой `require_access` впускает
+    или отказывает. Подпись обязана следовать за предметом, иначе она врёт
+    ровно так же, как врала подпись тарифом над балансом.
+
+    Переименование ключа и классов (`quota` → `access`) здесь тоже не
+    косметика: сменилась ФОРМА значения — `{used, limit, percent, plan}` →
+    `{open, expires_at, days_left}`. Прецедент D-22 («менялся текст, а не
+    контракт») к смене формы не применяется.
+    """
+    source = BASE_HTML.read_text(encoding="utf-8")
+
+    assert "Тариф {{" not in source, "виджет по-прежнему подписан тарифом"
+    assert "Баланс сообщений" not in source, (
+        "виджет подписан балансом сообщений, которого он больше не показывает"
+    )
+    assert "quota" not in source, "имя снятого ключа осталось в разметке шелла"
+    assert ">Доступ<" in source, "подписи виджета в разметке нет"
+
+    for expression in ("access.get('open'", "access.get('days_left'", "access.get('expires_at'"):
+        assert expression in source, expression
+    assert 'href="/billing"' in source, "ссылка виджета на раздел исчезла"
+    assert "ПОДПИСКА И ОПЛАТА →" in source, "подпись ссылки виджета не перецелена"
+
+    html = (await authed_client.get("/profile")).text
+    assert "data-access" in html
+    assert "data-quota" not in html
+    assert "Доступ" in html
+
+
+@pytest.mark.asyncio
+async def test_the_widget_calls_the_last_day_by_its_name_and_not_zero(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """P-6: последний день доступа называется словами, а не «осталось 0 дней».
+
+    Ветка проверяется РАНЬШЕ ветки счёта дней, и это не оформление. «Осталось
+    0 дней» формально верно и читается как «уже кончилось» — то есть человек, у
+    которого доступ ещё работает, прочитал бы, что доступ закрыт. Формулировка
+    едина с панелью раздела подписки: две разные фразы про один день на двух
+    поверхностях — то же расхождение, за которое снят виджет с чужой подписью.
+    """
+    await _move_access_expiry(db_session, timedelta(hours=5))
+
+    html = (await authed_client.get("/profile")).text
+
+    assert "последний день" in html
+    assert "осталось 0" not in html, "напечатан счёт вместо слов последнего дня"
+    assert "закрыт" not in html, "живой доступ назван закрытым"
+
+
+@pytest.mark.asyncio
+async def test_the_widget_counts_the_days_inside_the_warning_threshold(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Внутри порога печатаются ДНИ, и форма слова приезжает склонением (P-1).
+
+    Порог — именованная константа `ACCESS_SOON_DAYS`, приезжающая в разметку
+    глобалом: выписанная семёрка была бы второй копией правила и разошлась бы с
+    первой молча.
+    """
+    await _move_access_expiry(db_session, timedelta(days=3))
+
+    html = (await authed_client.get("/profile")).text
+
+    assert "осталось 2 дня" in html, "счёт дней внутри порога не напечатан"
+
+
+@pytest.mark.asyncio
+async def test_the_widget_prints_the_date_beyond_the_warning_threshold(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Вне порога печатается ДАТА — и только глобалом форматирования (P-2)."""
+    expires_at = await _move_access_expiry(db_session, timedelta(days=30))
+    user = await _user(db_session)
+
+    html = (await authed_client.get("/profile")).text
+
+    from app.pages.common import format_datetime_for_user
+
+    assert f"до {format_datetime_for_user(expires_at, user)}" in html
+    assert "осталось" not in html, "вне порога напечатан счёт дней"
+
+
+@pytest.mark.asyncio
+async def test_the_widget_says_the_access_is_closed_when_it_is(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Закрытый доступ назван бейджем `закрыт` — тон danger, а не warning.
+
+    Тон изменён относительно контракта фазы 5 намеренно (A-9): там истечение
+    НИЧЕГО не отключало, теперь отключает. Предупреждающий цвет остался бы от
+    утверждения, переставшего быть правдой.
+    """
+    await _move_access_expiry(db_session, timedelta(days=-1))
+
+    html = (await authed_client.get("/profile")).text
+
+    assert "закрыт" in html
+    assert "осталось" not in html
+    assert "последний день" not in html
+
+
+@pytest.mark.asyncio
+async def test_the_widget_is_not_drawn_at_all_without_the_access_key(
+    authed_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Нет ключа `access` — нет виджета. Умолчание «закрыт» ЗАПРЕЩЕНО.
+
+    Ложное «доступ закрыт», выведенное из пустого словаря, — худший из
+    возможных дефектов этого виджета: он сказал бы человеку, что работа
+    остановлена, на каждой из 26 страниц, на которых она работает. Отсутствие
+    виджета честнее неправды.
+    """
+    import app.pages as app_pages
+
+    real = app_pages.get_shell_context
+
+    async def without_access(db, user):
+        context = await real(db, user)
+        context.pop("access", None)
+        return context
+
+    monkeypatch.setattr("app.pages.get_shell_context", without_access)
+
+    response = await authed_client.get("/profile")
+    html = response.text
+
+    assert response.status_code == 200, "страница упала вместо того, чтобы не рисовать виджет"
+    assert "data-access" not in html, "виджет нарисован без данных"
+    assert ">Доступ<" not in html
+    assert "badge--danger" not in html, "пустой словарь выведен как «доступ закрыт»"
+    # Сайдбар при этом цел: исчезает ВИДЖЕТ, а не блок пользователя под ним.
+    assert "data-user" in html
+
+
+def test_the_bottom_pinning_rides_with_the_widget_selector():
+    """`margin-top: auto` объявлен на виджете, а не на блоке пользователя (D-J).
+
+    Сайдбар — колонка flex, и к низу её прижимает ИМЕННО виджет, утаскивая за
+    собой блок пользователя. Свойство обязано было уехать вместе с
+    переименованием селектора: не уехав, оно оторвало бы блок пользователя от
+    низа сайдбара на всех 26 страницах — правкой, выглядящей безобидным
+    переименованием.
+    """
+    css = _css_without_comments()
+
+    widget = re.search(r"\[data-access\]\s*\{([^}]*)\}", css)
+    assert widget, "правила [data-access] в app.css нет"
+    assert "margin-top: auto" in widget.group(1), (
+        "прижатие к низу сайдбара не уехало вместе с переименованием виджета"
+    )
+
+    assert css.count("margin-top: auto;") == 1, (
+        "прижатие к низу объявлено дважды — два элемента спорят за низ сайдбара"
+    )
+
+
+def test_the_widget_and_the_user_block_are_hidden_by_one_mobile_rule():
+    """Мобильной поверхности у виджета нет и не появляется (A-4).
+
+    Правило сохранено дословно, сменилось только имя атрибута. Ту же величину
+    на телефоне несёт панель раздела подписки.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    mobile = re.search(r"@media \(max-width: 860px\) \{(.*?)\n\}", css, re.S)
+    assert mobile, "мобильного блока 860px в app.css нет"
+    assert "[data-access], [data-user] { display: none !important; }" in mobile.group(1), (
+        "виджет доступа и блок пользователя скрываются не одним правилом"
+    )
+
+
+def test_the_value_of_the_widget_wraps_instead_of_leaving_the_widget():
+    """Ни подпись, ни значение не объявлены nowrap и flex:none (long-text E4).
+
+    Под значение остаётся 147px, самое длинное — «до 2026-08-20 14:30» ≈138px.
+    Запас узкий, и безопасным его делает именно отсутствие этих двух
+    объявлений: при нехватке ширины значение переносится ВНУТРИ виджета, а не
+    вылезает за его границу. Ровно этим строка long-text отличается от M1,
+    требующего действия.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    for selector in (r"\.access-plan", r"\.access-value"):
+        rule = re.search(selector + r"\s*\{([^}]*)\}", css)
+        assert rule, f"правила {selector} в app.css нет"
+        body = rule.group(1)
+        assert "nowrap" not in body, f"{selector}: значение перестало переноситься"
+        assert "flex: none" not in body, f"{selector}: значение перестало сжиматься"
+
+
+def test_the_reduced_motion_rule_names_only_living_classes():
+    """Правило, адресованное несуществующему классу, — мусор.
+
+    Имя заливки шкалы вычеркнуто вместе со шкалой; остальные четыре имени
+    остались нетронутыми. Следующий читатель принял бы мёртвое имя за живое.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    rule = re.search(
+        r"@media \(prefers-reduced-motion: reduce\) \{([^}]*)\}", css
+    )
+    assert rule, "правила prefers-reduced-motion в app.css нет"
+    selectors = [s.strip() for s in rule.group(1).split("{")[0].split(",")]
+
+    assert "quota-fill" not in rule.group(1)
+    assert len(selectors) == 4, f"имён в перечне не четыре: {selectors}"
+    for name in (
+        ".brand-mark::after",
+        ".session-dot.is-online",
+        ".worker-row__dot.is-online",
+        ".animate-fade-in",
+    ):
+        assert name in selectors, f"живое имя {name} вычеркнуто заодно"
+
+
+def test_the_widget_carries_no_progress_bar_at_all():
+    """Прохибиция P-4: шкалы в виджете нет ни в каком виде.
+
+    Шкала «сколько месяца прошло» вернула бы на все 26 страниц счёт, ради
+    снятия которого фаза существует.
+    """
+    source = _markup_without_comments(BASE_HTML)
+    css = _css_without_comments()
+
+    for marker in ("progress", "track", "fill", "percent"):
+        assert marker not in source, f"в разметке шелла остался признак шкалы: {marker}"
+    for marker in (".access-track", ".access-fill"):
+        assert marker not in css, f"в app.css заведена шкала виджета: {marker}"
+
+
+def test_the_warning_threshold_is_named_and_not_written_out_in_the_copy():
+    """Ни порога, ни формы слова разметка не выписывает литералом.
+
+    Числа не копируются в копирайт: порог живёт в одной константе
+    (`ACCESS_SOON_DAYS`) и приезжает подстановкой, форма слова — склонением.
+    «Осталось 1 дней» — дефект контракта, а не опечатка.
+    """
+    source = _markup_without_comments(BASE_HTML)
+
+    assert "access_soon_days" in source, "порог выписан мимо константы"
+    assert "plural_ru(access.get('days_left'), 'день', 'дня', 'дней')" in source, (
+        "форма слова выписана вместо склонения"
+    )
+    assert source.count("дней") == 1, (
+        "литерал «дней» встречается вне вызова склонения"
+    )
+    assert not re.search(r"days_left'\)\s*<=\s*\d", source), (
+        "порог сравнивается с числом, выписанным в разметке"
+    )
+
+
+def test_the_shell_did_not_gain_a_query_for_the_widget():
+    """Виджет стоит НОЛЬ дополнительных запросов, и их стало на два меньше.
+
+    ⚠️ УТВЕРЖДЕНИЕ ИНВЕРТИРОВАНО ПЛАНОМ 05.1-04, А НЕ УДАЛЕНО. Гейт охраняет ту
+    же границу — «на рендере каждой из 26 страниц не появляется запроса ради
+    виджета», — изменилось направление: пока виджет показывал баланс сообщений,
+    модели журнала в шелле БЫЛИ обязаны присутствовать; теперь он показывает
+    срок доступа, который шелл уже читает строкой подписки, и присутствие
+    журнала означало бы два чтения, за которые больше никто не платит.
+
+    Перенаправить виджет на тарифную ось отклонено и остаётся отклонённым: это
+    добавило бы запрос по журналу отправок во ВСЕ 26 рендеров ради метрики, у
+    которой есть свой полноценный экран.
+    """
+    source = COMMON_PY.read_text(encoding="utf-8")
+
+    for gone in ("BalanceTransaction", "MessageBalance"):
+        assert gone not in source, (
+            f"шелл по-прежнему читает {gone} — это чтение журнала сообщений на "
+            "каждом из 26 страничных маршрутов"
+        )
+    for forbidden in ("plan_axes(", "sends_in_current_month"):
+        assert forbidden not in source, (
+            f"в контекст шелла приехал {forbidden} — это запрос на каждый рендер"
+        )
+
+
+@pytest.mark.asyncio
+async def test_billing_payment_labels_ride_with_the_values(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Подписи колонок истории платежей едут вместе со значениями.
+
+    На 860px шапка колонок скрывается, и сумма без подписи становится числом
+    без смысла. Дата подписи не получает намеренно — форматированная дата
+    самоописательна.
+    """
+    await _seed_payment(db_session)
+
+    html = (await authed_client.get("/billing")).text
+
+    for label in ("Назначение", "Сумма", "Статус"):
+        assert f"<span data-cell-label>{label}</span>" in html, label
+
+
+@pytest.mark.asyncio
+async def test_billing_renders_payment_data(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка платежа отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
+
+    ⚠️ ГРАНИЦА УНАСЛЕДОВАНА У СНЯТОГО `test_billing_renders_transaction_data`.
+    Макрос, потерявший явный параметр, отрисуется ПУСТОТОЙ при статусе 200, и
+    проверка «раздел отдал 200» этого не увидит. Журнал сменился — граница нет.
+    """
+    await _seed_payment(db_session)
+
+    html = (await authed_client.get("/billing")).text
+
+    assert BASIC_PRICE in html, "сумма платежа не отрисована подписью"
+    assert "проведён" in html, "статус платежа не расшифрован"
+    assert "2026-05-20" in html, "дата платежа не отрисована"
+    assert "1490.00" not in html, "машинная строка суммы вышла на экран"
+
+
+@pytest.mark.asyncio
+async def test_billing_has_no_event_handler_on_a_button(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """В разметке раздела ноль обработчиков события на кнопке (D-20).
+
+    Раздел был последним местом проекта, где действие недоступно без
+    JavaScript. Проверка идёт по ОТРЕНДЕРЕННОЙ выдаче: обработчик мог бы
+    приехать из паршала.
+    """
+    await _seed_payment(db_session)
+
+    html = (await authed_client.get("/billing")).text
+
+    for marker in ("onclick", "@click", "x-on:click", "onsubmit"):
+        assert marker not in html, marker
+
+
+def test_the_plan_card_rules_are_gone_and_the_dashboard_tiles_survived():
+    """Разрез стилей: блок карточек тарифов вырезан, СОСЕДИ целы.
+
+    ⚠️ ТЕСТ ИНВЕРТИРОВАН, А НЕ УДАЛЁН. Он утверждал, что сетка карточек
+    объявлена складывающейся и не переопределяет плитки дашборда. Карточек нет
+    (D-F), и предметом стала вторая половина того же утверждения — САМАЯ ДОРОГАЯ
+    ОШИБКА ФАЗЫ ВЫЧИТАНИЯ: удалить лишнее. Правила плиток лежали ВПЛОТНУЮ к
+    вырезанному блоку, их держат дашборд Фазы 4 и карточка пользователя в
+    админке, и уйти вместе с соседями они не имели права.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    for gone in ("[data-plans]", "[data-plan-name]", "[data-plan-limits]"):
+        assert gone not in css, f"правило {gone} пережило снос карточек тарифов"
+    assert css.count("[data-metrics] {") == 1, "правило плиток объявлено дважды"
+    assert "minmax(210px, 1fr)" in css, "минимум плиток дашборда изменён"
+    for kept in ("[data-metric-line] {", "[data-metric-value] {"):
+        assert kept in css, f"правило {kept} удалено вместе с соседями"
+
+
+# --- План 05-09: нажимаемая высота кнопок оплаты (M3 / C1) ------------------
+#
+# ⚠️ ФОРМА ОПЛАТЫ НА РАЗДЕЛЕ ОСТАЛАСЬ ОДНА ВМЕСТО ТРЁХ (план 05.1-05), И ОБЕ
+# РЕГРЕССИИ ПЕРЕНАЦЕЛЕНЫ НА НЕЁ, А НЕ УДАЛЕНЫ ВМЕСТЕ С ДВУМЯ ИСЧЕЗНУВШИМИ.
+# Атрибут `data-plan-cta` обязан был переехать на единственную оставшуюся форму:
+# потерять его при переписывании — значит молча вернуть кнопку к 33px и заново
+# открыть тот самый пункт UAT фазы 5, который эта фаза объявляет снятым.
+
+# Шаблоны с формами оплаты и число форм в каждом. Правило без атрибута так же
+# бесполезно, как атрибут без правила, и до плана 05-09 в разделе была ровно
+# вторая половина.
+PLAN_CTA_TEMPLATES = {
+    "billing/balance.html": 1,
+}
+
+# Собственный порог проекта — токен `touch` из 05-UI-SPEC.md `## Spacing Scale`.
+PLAN_CTA_MIN_HEIGHT_PX = 44
+
+
+def test_billing_payment_buttons_declare_the_project_touch_height():
+    """Кнопка оплаты объявлена не ниже собственного порога проекта — 44px.
+
+    ⚠️ Проверяется ОБЪЯВЛЕНИЕ правила, а не отрисовка: браузера в суите нет.
+
+    Арифметика унаследованной кнопки выписана здесь намеренно, чтобы будущая
+    правка `--fs-md` или padding не прошла молча: `.btn` вычисляется в
+    13px (`--fs-md` при `line-height:1`) + 9px×2 padding + 1px×2 border = 33px.
+    Эти 33px ПРОХОДЯТ порог WCAG 2.5.8 AA (24px) и не проходят только
+    собственный порог проекта 44px — формулировка не смягчается и не
+    ужесточается.
+
+    Правило адресовано `[data-plan-cta] .btn`, а не голому `.btn`: общая кнопка
+    стоит на 26 страницах проекта, и её высота этой правкой не меняется.
+    """
+    css = APP_CSS.read_text(encoding="utf-8")
+
+    rule = re.search(r"\[data-plan-cta\]\s+\.btn\s*\{([^}]*)\}", css)
+    assert rule, "правила [data-plan-cta] .btn в app.css нет"
+
+    declared = re.search(r"min-height:\s*(\d+)px", rule.group(1))
+    assert declared, "у правила кнопки оплаты нет объявления min-height"
+    assert int(declared.group(1)) >= PLAN_CTA_MIN_HEIGHT_PX, (
+        f"высота кнопки оплаты ниже порога проекта {PLAN_CTA_MIN_HEIGHT_PX}px"
+    )
+
+    # Высота ОСТАЛЬНЫХ 26 страниц не тронута: у голого .btn min-height нет.
+    base = re.search(r"(?<!\])\n\.btn\s*\{([^}]*)\}", css)
+    assert base, "блок .btn в app.css не найден"
+    assert "min-height" not in base.group(1), (
+        "min-height уехал в общую кнопку — высота кнопок всех 26 страниц проекта "
+        "изменилась вместе с разделом тарифов"
+    )
+
+
+def test_billing_payment_forms_carry_the_touch_attribute():
+    """Атрибут `data-plan-cta` стоит на ЕДИНСТВЕННОЙ форме оплаты раздела.
+
+    Правило CSS без атрибута бесполезно ровно так же, как атрибут без правила.
+    Счёт по каждому шаблону, а не «встречается хотя бы раз»: лишний атрибут
+    означал бы вторую форму оплаты на экране, где её быть не должно, а
+    потерянный — кнопку на прежних 33px при статусе 200.
+    """
+    for template, expected in PLAN_CTA_TEMPLATES.items():
+        markup = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
+        assert markup.count("data-plan-cta") == expected, (
+            f"{template}: форм оплаты с атрибутом data-plan-cta не {expected}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_touch_attribute_reaches_the_rendered_form(
+    authed_client: AsyncClient,
+):
+    """Вторая половина той же регрессии — по ОТРЕНДЕРЕННОЙ выдаче.
+
+    Проверка по исходнику шаблона зеленеет и тогда, когда форма стоит в ветке,
+    которая не срабатывает никогда. Здесь утверждается, что атрибут доехал до
+    экрана в штатном состоянии — и что форма на экране ровно одна.
+    """
+    html = (await authed_client.get("/billing")).text
+
+    assert html.count("data-plan-cta") == 1, (
+        "форм оплаты на отрисованном экране не одна"
+    )
+
+
+# test_billing_plans_template_is_migrated УДАЛЁН планом 05-05 вместе с файлом,
+# который он читал с диска (D-19). Это не обход поломки, а завершение работы
+# теста: проверка исходника существовала ровно потому, что у неподключённого
+# шаблона не было поведенческой проверки. Отсутствие самого файла закреплено
+# test_the_unwired_plans_template_is_gone.
 
 
 # --- План 07: админ-панель ---------------------------------------------------
@@ -1416,7 +2050,20 @@ async def test_admin_user_detail_renders_data(
     assert f"/admin/users/{user.id}/history" in html, "ссылка на историю потеряна"
     # Действия сохраняются на прежних маршрутах: новых не добавляется, старые
     # не теряются (блокировка и вход под пользователем — Фаза 6, ADMIN-04/05).
-    for action in ("/balance", "/unlimited", "/block", "/delete"):
+    #
+    # ⚠️ ПОПОЛНЕНИЕ И ТУМБЛЕР БЕЗЛИМИТА УШЛИ ИЗ ПЕРЕЧНЯ ВМЕСТЕ СО СВОИМИ
+    # МАРШРУТАМИ, А НЕ ПОТЕРЯЛИСЬ. Валюта сообщений снята из продукта целиком, а
+    # ревизия `0020` уронила таблицы под обоими: пополнять нечего и переключать
+    # нечего. Проверку, что вход пополнения действительно исчез, держит
+    # `tests/test_admin.py::test_the_admin_top_up_route_no_longer_answers`.
+    #
+    # ⚠️ ВХОД ТУМБЛЕРА ВЕРНУЛСЯ ПЛАНОМ `05.1-09` — уже поверх признака подписки,
+    # и перечень ниже дополнен ТЕМ ЖЕ планом, как и предписывал этот абзац.
+    # Пополнение НЕ вернулось и не вернётся: валюта сообщений снята из продукта
+    # целиком, пополнять нечего. Что тумблер именно ПЕРЕКЛЮЧАЕТ признак, а не
+    # просто отвечает, держат тесты `-k free_access` в `tests/test_admin.py`;
+    # здесь утверждается только присутствие входа на карточке.
+    for action in ("/block", "/delete", "/unlimited"):
         assert f"/admin/users/{user.id}{action}" in html, action
 
 
@@ -2317,7 +2964,14 @@ AD_CELL_LABELS = ("Текст", "Отправок", "Расписаний", "С�
 # RECENT_CELL_LABELS вместе с test_dashboard_cell_labels_present ВЫШЛИ отсюда
 # планом 04-05: блок «Последние отправки» заменён живой лентой (DASH-03), её
 # строка не таблица и колонок не имеет вовсе — подписывать в ней нечего.
-ADMIN_USER_CELL_LABELS = ("Регистрация", "Баланс", "Статус")
+# «Баланс» ВЫШЕЛ отсюда планом 05.1-08 вместе со своей колонкой: ревизия `0020`
+# уронила таблицу остатка сообщений, и подписывать в строке стало нечего.
+# «Доступ» ВЕРНУЛ сюда план `05.1-09` вместе с колонкой на её месте — тем самым
+# планом, как и предписывал абзац выше: иначе новая колонка приехала бы без
+# подписи и на 860px стала бы значением без названия. Подпись читается элементом
+# `USER_COLUMNS` ПО ИНДЕКСУ и в шапке, и в ячейке; кортеж ниже — независимый
+# свидетель того, что обе копии совпали, а не второй источник строки.
+ADMIN_USER_CELL_LABELS = ("Регистрация", "Доступ", "Статус")
 
 
 @pytest.mark.asyncio
@@ -2702,6 +3356,9 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     # Класс 1: макрос строки, потребляемый шаблоном с шапкой. Его исходник уже
     # входит в объединение своего списочного шаблона — подписи проверяются там.
     "ads/includes/ad_card.html": "макрос строки внутри объединения ads/list.html",
+    "billing/includes/payment_row.html": (
+        "макрос строки внутри объединения billing/balance.html"
+    ),
     # groups/includes/group_row.html ВЫШЕЛ из перечня планом 03-08 вместе с
     # самим шаблоном: глобальный раздел снесён (D-01). Строка группы на экране
     # аккаунта его место не занимает — она КАРТОЧНАЯ и примитив строки-таблицы
@@ -2786,19 +3443,16 @@ ROWHEAD_PAGES = (
         "admin/user_detail.html", "/admin/users/{user_id}", True, "admin_user_detail",
         frozenset({"Аккаунт"}),
     ),
-    # НАБЛЮДЕНИЕ, а НЕ принятая базовая линия. История операций эмитила подписи
-    # ДО набора планов 09-13, причём атрибутом вручную, и покрыла две колонки из
-    # четырёх. 01-VERIFICATION.md пробелом это не считает и относит страницу к
-    # применившим примитив, поэтому дописывать подписи здесь нельзя — работа вне
-    # закрываемого пробела. Но пользовательская правда SC-5 «понятно, что каждое
-    # значение означает» на этой странице остаётся частично ложной: «Тип» и
-    # «Описание» на 860px остаются без названия. Передано в /gsd-verify-work
-    # (T-13-09). Формулировка «принято как базовая линия» запрещена.
+    # ⚠️ НАБЛЮДЕНИЕ T-13-09 ПО ЭТОЙ СТРАНИЦЕ ЗАКРЫТО — И ЗАКРЫТО СНОСОМ, А НЕ
+    # ДОПИСЫВАНИЕМ ПОДПИСЕЙ. Колонки «Тип» и «Описание» принадлежали истории
+    # операций по балансу сообщений; журнал снят планом 05.1-05 вместе с самим
+    # балансом (D-D), и вместе с ним исчезла половина пользовательской правды
+    # SC-5, которая на этой странице оставалась ложной. Осталась одна колонка
+    # без подписи — «Дата», и она освобождена НАМЕРЕННО: форматированная дата
+    # самоописательна (контракт C2 UI-SPEC фазы 05.1).
     RowheadPage(
         "billing/balance.html", "/billing", False, "billing",
-        frozenset({"Дата", "Тип", "Описание"}),
-        note="НАБЛЮДЕНИЕ для /gsd-verify-work: «Тип» и «Описание» не подписаны "
-        "помимо колонки даты; НЕ принятая базовая линия",
+        frozenset({"Дата"}),
     ),
     # НАБЛЮДЕНИЕ, а НЕ принятая базовая линия — та же история, что у тарифов:
     # «Канал» и «Обновлено» на 860px остаются без названия (T-13-09).
@@ -2830,7 +3484,10 @@ async def _seed_rowhead_page(db: AsyncSession, seed: str) -> None:
     elif seed == "admin_user_detail":
         await _seed_account(db, type_="max")
     elif seed == "billing":
-        await _seed_transaction(db)
+        # Шапку колонок раздела рисует ЖУРНАЛ ПЛАТЕЖЕЙ: история операций по
+        # балансу сообщений снята планом 05.1-05, и посев операцией оставлял бы
+        # страницу с пустым состоянием вместо шапки.
+        await _seed_payment(db)
     elif seed == "admin_groups_info":
         await _seed_group_info(db)
     else:  # pragma: no cover — защита от опечатки в таблице параметризации
@@ -2907,14 +3564,17 @@ def test_row_templates_without_header_are_accounted_for():
         f"не названы {sorted(found - declared)}; "
         f"названы, но строку не рисуют {sorted(declared - found)}"
     )
-    # Восемь → семь → шесть → ПЯТЬ: макрос строки снесённого раздела удалён
-    # планом 03-08 вместе с его списочной страницей, макрос строки последних
-    # отправок — планом 04-05 вместе с заменённым блоком дашборда, а страница
-    # записи истории планом 04-07 перестала рисовать строку вовсе (перевёрстана
-    # на примитив записи). Уменьшение объявленного числа — признание
-    # СОЗНАТЕЛЬНОГО снятия; молчаливое исчезновение файла по-прежнему краснеет.
-    assert len(declared) == 5, (
-        f"ожидалось пять таких шаблонов, объявлено {len(declared)}"
+    # Восемь → семь → шесть → пять → ШЕСТЬ: макрос строки снесённого раздела
+    # удалён планом 03-08 вместе с его списочной страницей, макрос строки
+    # последних отправок — планом 04-05 вместе с заменённым блоком дашборда, а
+    # страница записи истории планом 04-07 перестала рисовать строку вовсе
+    # (перевёрстана на примитив записи). План 05-05 добавил ОДИН файл первого
+    # класса: макрос строки платежа, чей исходник входит в объединение
+    # billing/balance.html и там же проверяется на подписи. Изменение
+    # объявленного числа — признание СОЗНАТЕЛЬНОГО шага; молчаливое появление
+    # или исчезновение файла по-прежнему краснеет.
+    assert len(declared) == 6, (
+        f"ожидалось шесть таких шаблонов, объявлено {len(declared)}"
     )
     # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
     # макрос row_open он не вызывает. Без второго условия разрешителя он выпал

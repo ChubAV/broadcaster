@@ -415,12 +415,17 @@ async def send_message_once(
     )
     session.add(log_entry)
 
-    if status == "ok":
-        from app.services.billing_service import deduct_message
-        from app.services.billing_cache import invalidate_balance_cache
-        await deduct_message(session, ad.user_id)
-        await invalidate_balance_cache(ad.user_id)
-
+    # ЗДЕСЬ БЫЛА ТРЕТЬЯ ВЕТКА ПЛАТЫ ЗА СООБЩЕНИЕ, И ОНА СНЯТА ВМЕСТЕ С ДВУМЯ
+    # ОСТАЛЬНЫМИ. Число отправленных сообщений не влияет на сумму и ничем не
+    # ограничено (D-D, критерий 1): исход отправки записывается в историю и
+    # больше никуда. Вопрос «можно ли отправлять» задаётся РОВНО ОДИН РАЗ и
+    # раньше — вердиктом доступа у планировщика (`collect_due_schedules`,
+    # параметр `check_limit`); второй ответ на него в этой точке разошёлся бы с
+    # первым молча.
+    #
+    # ⚠️ ЛОКАЛЬНЫЕ ИМПОРТЫ УДАЛЕНЫ ВМЕСТЕ С ВЫЗОВАМИ, а не оставлены «на потом»:
+    # импорт снятого имени — это ImportError на первой же успешной отправке, то
+    # есть отказ ровно там, где всё сработало.
     await session.commit()
 
     # Ошибка с флагом no_retry помечает группу, но не выбрасывает исключение.

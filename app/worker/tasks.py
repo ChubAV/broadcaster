@@ -12,8 +12,7 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
-from app.services.billing_cache import check_balance_cached, invalidate_balance_cache
-from app.services.billing_service import deduct_message
+from app.services.billing_cache import check_access_cached
 from app.services.messenger_factory import create_messenger
 from app.application.accounts.group_resync import (
     UNEXPECTED_FAILURE_MESSAGE,
@@ -192,7 +191,7 @@ async def check_schedules_async(session: AsyncSession):
     tasks: list[DispatchTask] = await collect_due_schedules(
         session,
         now=now,
-        check_limit=check_balance_cached,
+        check_limit=check_access_cached,
     )
     logger.info("check_schedules_found", now=now.isoformat(), due_count=len(tasks))
     if tasks:
@@ -426,22 +425,26 @@ def retry_send(self, log_id: int, user_id: int):
                     )
                     return
 
-                # ГЕЙТ БАЛАНСА ВТОРОЙ ЛИНИЕЙ (T-04-36). Первый стоит в
-                # обработчике плана 04-09, но между нажатием и исполнением
-                # таска проходит время: задача может простоять за очередью
-                # ровно столько, сколько нужно, чтобы баланс кончился на другой
-                # рассылке. Без проверки ЗДЕСЬ сообщение уходит, а `deduct_message`
-                # уже после отправки возвращает False по условию `balance > 0` —
-                # то есть получается не отрицательный баланс, а БЕСПЛАТНАЯ
-                # отправка в обход тарифа. У планировщика такой асимметрии нет:
-                # его гейт стоит в том же такте, что и диспетчеризация.
+                # ГЕЙТ ДОСТУПА ВТОРОЙ ЛИНИЕЙ (T-04-36, T-05.1-02). Первый стоит
+                # в обработчике повтора (`app/pages/history.py`), но между
+                # нажатием и исполнением таска проходит время: задача может
+                # простоять за очередью ровно столько, сколько нужно, чтобы срок
+                # доступа истёк. Без проверки ЗДЕСЬ отправка уходит у человека,
+                # у которого доступ уже закончился, — то есть работа, за которую
+                # продукт денег не берёт, при живой очереди. У планировщика такой
+                # асимметрии нет: его гейт стоит в том же такте, что и
+                # диспетчеризация.
+                #
+                # Предмет вопроса сменился с баланса на доступ, а ПРИЧИНА второй
+                # линии осталась той же и не ослабла: обе величины меняются между
+                # постановкой и исполнением, и обе — не в пользу отправляющего.
                 #
                 # Выход ТИХИЙ, как и у остальных проверок этого таска: записи в
                 # журнал не создаётся, иначе история наполнялась бы
                 # свидетельствами о заведомо невозможных отправках (T-04-11).
-                allowed, _reason = await check_balance_cached(session, user_id, "send")
+                allowed, _reason = await check_access_cached(session, user_id, "send")
                 if not allowed:
-                    log.warning("retry_send_stopped", reason="no_balance")
+                    log.warning("retry_send_stopped", reason="access_closed")
                     return
 
                 # `schedule_id` проходит как есть, включая None: у повтора
@@ -791,10 +794,6 @@ async def _process_results_async(results: list[dict]):
                 )
                 session.add(send_log)
 
-                if result["status"] == "ok" and result.get("user_id"):
-                    await deduct_message(session, result["user_id"])
-                    await invalidate_balance_cache(result["user_id"])
-
                 group_id = result.get("group_id")
                 if group_id:
                     group = await session.get(Group, group_id)
@@ -892,10 +891,6 @@ async def _process_max_results_async(results: list[dict]):
                 )
                 session.add(send_log)
 
-                if result["status"] == "ok" and result.get("user_id"):
-                    await deduct_message(session, result["user_id"])
-                    await invalidate_balance_cache(result["user_id"])
-
                 group_id = result.get("group_id")
                 if group_id:
                     group = await session.get(Group, group_id)
@@ -923,30 +918,6 @@ async def _process_max_results_async(results: list[dict]):
         logger.info("results_processed", count=len(results))
 
     await engine.dispose()
-
-
-@shared_task(name="app.worker.tasks.reset_free_monthly_balance")
-def reset_free_monthly_balance():
-    """Reset free monthly messages for all users."""
-    from app.services.billing_service import reset_all_free_monthly
-
-    settings = get_settings()
-    engine = get_engine(settings.database_url)
-    session_factory = get_session_factory(engine)
-
-    async def _run():
-        try:
-            async with session_factory() as session:
-                count = await reset_all_free_monthly(session, settings.free_monthly_messages)
-                await session.commit()
-                logger.info("free_monthly_reset_complete", users_reset=count)
-        except Exception as e:
-            logger.error("free_monthly_reset_error", error=str(e), exc_info=True)
-            raise
-        finally:
-            await engine.dispose()
-
-    asyncio.run(_run())
 
 
 @shared_task(name="app.worker.tasks.send_verification_email")

@@ -1,5 +1,7 @@
 from pathlib import Path
 from datetime import datetime, timezone
+from decimal import Decimal
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from fastapi import Request
@@ -7,11 +9,15 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.billing.subscription_period import access_is_open, days_left
 from app.config import Settings
-from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED, MESSENGER_LABELS
+from app.constants import (
+    ACCESS_SOON_DAYS,
+    AD_STATUS_DRAFT,
+    AD_STATUS_PUBLISHED,
+    MESSENGER_LABELS,
+)
 from app.models.ad import Ad
-from app.models.balance_transaction import BalanceTransaction
-from app.models.message_balance import MessageBalance
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
@@ -123,7 +129,15 @@ NAV_ITEMS: list[dict] = [
     {"key": "ads", "label": "Объявления", "href": "/ads", "count_key": "ads"},
     {"key": "schedules", "label": "Расписания", "href": "/schedules", "count_key": "schedules"},
     {"key": "history", "label": "История", "href": "/history", "count_key": "history"},
-    {"key": "billing", "label": "Тарифы", "href": "/billing", "count_key": None},
+    # ⚠️ РАЗДЕЛ ПЕРЕИМЕНОВАН ВМЕСТЕ СО СМЕНОЙ ПРЕДМЕТА (план 05.1-05, A-1).
+    # Тарифов Free/Basic/Pro не существует (D-F), выбирать не из чего, и прежняя
+    # подпись обещала бы выбор, которого нет. Прежнее имя раздела в этом
+    # комментарии НЕ НАЗВАНО: гейт переименования читает файл по тексту, и
+    # объяснение, набранное старым литералом, роняло бы собственный запрет.
+    # Строка выписана ЗДЕСЬ ОДИН раз — отсюда её читают и сайдбар, и нижние
+    # табы, и заголовок страницы через `nav_label`, поэтому имя меняется сразу
+    # на трёх поверхностях, а не в одной из них.
+    {"key": "billing", "label": "Подписка", "href": "/billing", "count_key": None},
     {"key": "profile", "label": "Профиль", "href": "/profile", "count_key": None},
 ]
 
@@ -241,6 +255,63 @@ def time_ago_for_user(value: datetime | None, user: User | None) -> str:
 templates.env.globals["time_ago_for_user"] = time_ago_for_user
 
 
+# Разделитель разрядов и отбивка перед знаком рубля — НЕРАЗРЫВНЫЙ пробел:
+# обычный перенёс бы «1» и «490» на разные строки узкой карточки тарифа.
+_NBSP = "\u00a0"
+
+
+def format_amount(value) -> str:
+    """Денежная сумма ПОДПИСЬЮ: «1490.00» → «1 490 ₽».
+
+    ФОРМАТИРОВАНИЕ ЖИВЁТ ТОЛЬКО НА СТОРОНЕ ПОКАЗА. В конфиге тарифов и пакетов
+    цена хранится машинной строкой формата ЮKassa, и `create_payment` кладёт
+    её прямо в `amount.value`: строка с разделителем разрядов или знаком рубля
+    — отказ платёжного API в проде, который не поймает ни один мок на моках
+    (05-RESEARCH A3). Поэтому обратной функции здесь нет и быть не должно:
+    подпись никогда не едет обратно в платёж.
+
+    Нулевые копейки не показываются: «1 490 ₽» вместо «1 490,00 ₽» — так же,
+    как в макете. Ненулевые показываются через запятую, потому что потерять
+    полтинник на экране хуже, чем показать лишние два знака.
+
+    Непригодное значение возвращается КАК ЕСТЬ, а не заменяется нулём:
+    выдуманный ноль в денежной подписи — правдоподобная ложь, а исходная
+    строка на экране хотя бы называет себя странной.
+
+    ПРОВЕРКА КОНЕЧНОСТИ СТОИТ ПОСЛЕ РАЗБОРА, А НЕ ВМЕСТО НЕГО. `NaN` и
+    `Infinity` — валидные значения `Decimal`, и `except` вокруг разбора их не
+    видит: до плана 05-09 они уходили из-под защиты и роняли форматирование
+    ниже. Функция — глобал Jinja на трёх поверхностях раздела сразу, поэтому
+    одна такая строка в конфиге цен или в `payments.amount_value` уводила
+    `/billing` в 500 целиком.
+    """
+    if value is None or value == "":
+        return ""
+    try:
+        amount = Decimal(str(value))
+    except (ArithmeticError, ValueError, TypeError):
+        return str(value)
+    if not amount.is_finite():
+        return str(value)
+
+    sign = "-" if amount < 0 else ""
+    whole, _, kopecks = f"{abs(amount):.2f}".partition(".")
+    groups = f"{int(whole):,}".replace(",", _NBSP)
+    tail = "" if kopecks == "00" else f",{kopecks}"
+    return f"{sign}{groups}{tail}{_NBSP}₽"
+
+
+templates.env.globals["format_amount"] = format_amount
+
+# ПОРОГ «СКОРО КОНЧИТСЯ» ПРИЕЗЖАЕТ В РАЗМЕТКУ КОНСТАНТОЙ, А НЕ ЛИТЕРАЛОМ (D-K).
+# Внутри порога виджет доступа показывает ДНИ, вне — ДАТУ, и это же число
+# читает вердикт. Выписанная в шаблоне семёрка была бы второй копией правила и
+# разошлась бы с первой молча — то есть виджет предупреждал бы не тогда, когда
+# предупреждает система. То же основание, по которому строка отказа `pending`
+# не называет число часов давности.
+templates.env.globals["access_soon_days"] = ACCESS_SOON_DAYS
+
+
 async def get_user_from_cookie(
     request: Request, db: AsyncSession, settings: Settings
 ) -> User | None:
@@ -262,6 +333,56 @@ def check_is_admin(user: User | None, settings: Settings) -> bool:
     if not user or not settings.admin_email:
         return False
     return user.email == settings.admin_email
+
+
+def is_same_origin(request: Request) -> bool:
+    """Пришёл ли изменяющий запрос со страницы САМОГО приложения (T-04-38, T-05-06).
+
+    ЗАЧЕМ. Аутентификация проекта идёт cookie, поэтому браузер прикладывает её к
+    межсайтовой форме сам, и изменяющий запрос со стороннего сайта неотличим от
+    своего. ASVS L1 (V4.2.2) требует защиты изменяющих состояние запросов от
+    межсайтовой подделки. Сверка заголовков — единственный вариант, который не
+    требует ни схемы токенов на весь проект, ни правки шаблонов, ни новой
+    зависимости.
+
+    ПРАВИЛО. Пришёл `Sec-Fetch-Site` — принимается только значение
+    `same-origin`, всё прочее отклоняется. Иначе пришёл `Origin` — его ХОСТ
+    обязан совпасть с хостом самого запроса. Сравнивается именно хост, а не
+    строка целиком: заголовок источника несёт схему и порт, адрес запроса —
+    тоже, и посимвольное сравнение сломалось бы на первом же развёртывании за
+    обратным прокси. Хост своего адреса берётся ИЗ ЗАПРОСА, а не из настроек:
+    поля с базовым адресом приложения в настройках проекта нет, и заводить его
+    ради одной проверки значило бы завести конфигурацию, которую придётся
+    сопровождать.
+
+    ⚠️ НАЗВАННАЯ ГРАНИЦА ЗАЩИТЫ. Запрос, не приславший НИ ОДНОГО из двух
+    заголовков, пропускается. Браузер, способный отправить межсайтовую форму,
+    шлёт `Origin` на POST начиная с 2016 года, поэтому отсутствие обоих
+    заголовков означает не-браузерного клиента — в том числе тестовую суиту
+    проекта, которая их не шлёт. Отказ по их отсутствию не добавил бы ни одной
+    защиты и покрасил бы весь остальной путь. Ограничение выписано здесь и
+    продублировано в отчёте безопасности фазы намеренно: принятый риск, о
+    котором не написано, через один рефакторинг становится неизвестным.
+
+    ⚠️ РАМКИ. Гард живёт ПУБЛИЧНЫМ именем здесь, чтобы у правила был ОДИН
+    источник на проект. Потребителей три, и все зовут эту функцию: форма
+    покупки тарифа, форма покупки пакета сообщений (обе —
+    `app/pages/billing.py`) и повтор отправки (`app/pages/history.py`).
+    Приватная копия, жившая в `history.py` с плана 04-10, снята планом 05-04:
+    второй экземпляр правила означал бы, что правку одного гарда придётся не
+    забыть повторить в другом, а забытая половина выглядела бы работающей.
+
+    Остальные изменяющие формы проекта (удаления через POST) гарда не
+    получают — это остаток, вынесенный в отчёт безопасности отдельной
+    рекомендацией, а не упущение.
+    """
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site:
+        return fetch_site == "same-origin"
+    origin = request.headers.get("origin")
+    if origin:
+        return urlsplit(origin).hostname == request.url.hostname
+    return True
 
 
 # Предикат «воркер онлайн» объявлен ОДИН раз. Значение дословно повторяет то,
@@ -286,7 +407,7 @@ WORKER_LIST_CAP = 100
 
 
 async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
-    """Collect live shell data: nav counts, plan quota and messenger sessions.
+    """Collect live shell data: nav counts, access period and messenger sessions.
 
     Публичный контракт живых данных шелла (D-09/D-19). Фаза 4 (DASH-05) и
     Фаза 6 переиспользуют его, а не пишут своё чтение.
@@ -403,30 +524,15 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
         )
     ).scalar_one_or_none()
 
-    # Чтение без записи: get_or_create_balance создаёт строку и делает flush,
-    # а рендер страницы не должен ничего писать в БД.
-    balance = (
-        await db.execute(select(MessageBalance).where(MessageBalance.user_id == user.id))
-    ).scalar_one_or_none()
-    remaining = max(balance.balance, 0) if balance else 0
-    is_unlimited = bool(balance.is_unlimited) if balance else False
-    period_start = balance.free_balance_reset_at if balance else None
-
-    # Израсходовано за текущий период — по журналу списаний, а не оценкой.
-    used_stmt = select(func.coalesce(func.sum(-BalanceTransaction.amount), 0)).where(
-        BalanceTransaction.user_id == user.id,
-        BalanceTransaction.amount < 0,
-    )
-    if period_start is not None:
-        used_stmt = used_stmt.where(BalanceTransaction.created_at >= period_start)
-    used = int(await db.scalar(used_stmt) or 0)
-
-    if is_unlimited:
-        limit = 0
-        percent = 0
-    else:
-        limit = used + remaining
-        percent = min(100, round(used * 100 / limit)) if limit > 0 else 0
+    # ВЕРДИКТ СНИМАЕТСЯ ЕДИНСТВЕННЫМ ПРЕДИКАТОМ ПРОЕКТА, а не вторым сравнением
+    # дат на этом месте. Разойдясь на строгости сравнения или на признаке
+    # активности строки, две копии правила выдали бы разные ответы, и виджет на
+    # 26 страницах обещал бы доступ ровно тогда, когда зависимость
+    # `require_access` в нём уже отказывает. Момент времени берётся ОДИН на весь
+    # словарь: вердикт и остаток дней, посчитанные от разных `now`, могли бы
+    # разъехаться на границе суток (T-05.1-19).
+    now = datetime.now(timezone.utc)
+    expires_at = subscription.expires_at if subscription else None
 
     return {
         "nav_counts": {
@@ -435,12 +541,33 @@ async def get_shell_context(db: AsyncSession, user: User | None) -> dict:
             "schedules": counts.schedules,
             "history": counts.history,
         },
-        "quota": {
-            "plan": subscription.plan if subscription else "free",
-            "used": used,
-            "limit": limit,
-            "percent": percent,
-            "expires_at": subscription.expires_at if subscription else None,
+        # СРОК ДОСТУПА, А НЕ КВОТА СООБЩЕНИЙ. Ключ переименован вместе со сменой
+        # ФОРМЫ значения ({used, limit, percent, plan} → {open, expires_at,
+        # days_left}), а не подписи: имя `quota` над словарём без квоты — та же
+        # ложь, за которую фаза 5 сняла виджет с чужой подписью (D-22, A-10).
+        #
+        # УМОЛЧАНИЙ У ВЕРДИКТА НЕТ. Пользователь без строки подписки получает
+        # `False` / `None` / `None`, а не выдуманное имя тарифа, которое здесь
+        # подставлялось прежде: отсутствие строки — это ОПРЕДЕЛЁННОЕ состояние
+        # (доступа нет), и оно переживёт выкат ревизии (D-G, П-о-1).
+        #
+        # ФОРМА КЛЮЧА СТАЛА ПОЛНОЙ ПЛАНОМ 05.1-09 (D-E, UI-контракт C3): признак
+        # выданной администратором льготы приезжает ВМЕСТЕ со своей колонкой.
+        # Дополнительного запроса не появилось — строка подписки уже прочитана
+        # выше, и признак снимается с неё же. Порядок ключей повторяет порядок
+        # чтения, а не важности: вердикт, дата, признак, остаток суток.
+        #
+        # ⚠️ ПРИЗНАК ЕДЕТ СЮДА, ЧТОБЫ ЕГО ПОКАЗАТЬ, А НЕ ЧТОБЫ ПО НЕМУ РЕШАТЬ.
+        # Решение принимает `access_is_open` строкой выше — единственное
+        # объявление правила доступа на проект; поверхности показа (виджет
+        # сайдбара, панель раздела) читают ГОТОВЫЙ вердикт и этот признак как
+        # подпись к нему. Ветка «если льгота — считай доступ открытым», выписанная
+        # в разметке или на странице, была бы вторым выражением того же правила.
+        "access": {
+            "open": access_is_open(subscription, now),
+            "expires_at": expires_at,
+            "is_comped": bool(subscription.has_free_access) if subscription else False,
+            "days_left": days_left(expires_at, now),
         },
         # Перечень ограничен потолком, агрегаты — нет: числу в шапке нельзя
         # зависеть от того, сколько строк поместилось в перечень.

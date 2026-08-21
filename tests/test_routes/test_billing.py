@@ -1,26 +1,77 @@
+"""JSON-поверхность биллинга: у неё остался РОВНО ОДИН вход, и он не читающий.
+
+ПРЕДМЕТ ФАЙЛА ИНВЕРТИРОВАН ВМЕСТЕ С ПРЕДМЕТОМ ПРОВЕРКИ. Раньше он утверждал,
+что три читающих маршрута — остаток сообщений, прейскурант и журнал операций по
+нему — отвечают 200. Валюта сообщений снята из продукта целиком: начисления,
+покупки, списания и остатка не существует, и читать этим маршрутам больше
+нечего. Оставить их значило бы отдавать ноль по несуществующей величине —
+ответ, который читается как «у вас кончилось», а не как «этого больше нет».
+
+ПОЧЕМУ ФАЙЛ НЕ УДАЛЁН ВМЕСТЕ С МАРШРУТАМИ. Утверждение «этой поверхности нет»
+дешевле держать регрессией, чем памятью: восстановить читающий маршрут проще
+всего именно тогда, когда никто не помнит, зачем его снимали. Тот же приём уже
+применён к JSON-маршруту покупки, снесённому планом 05-04 (D-24).
+
+ЗАПРОСЫ ИДУТ БЕЗ УЧЁТНЫХ ДАННЫХ НАМЕРЕННО: живой маршрут ответил бы отказом
+доступа, и именно этим «маршрут есть, но не пускает» отличается от «маршрута
+нет». Ответ 401 или 403 на любой из них означал бы, что вход пережил снятие
+своего предмета.
+"""
 import pytest
 
-
-@pytest.mark.asyncio
-async def test_get_balance(client, auth_headers):
-    response = await client.get("/api/billing/balance", headers=auth_headers)
-    assert response.status_code == 200
-    data = response.json()
-    assert "balance" in data
-
-
-@pytest.mark.asyncio
-async def test_list_packages(client, auth_headers):
-    response = await client.get("/api/billing/packages", headers=auth_headers)
-    assert response.status_code == 200
-    data = response.json()
-    assert "packages" in data
-    assert len(data["packages"]) == 3
+# Снятые входы. Перечень выписан здесь ДОСЛОВНО: адрес обязан читаться целиком
+# в том месте, где он проверяется.
+GONE_READ_ROUTES = (
+    "/api/billing/balance",
+    "/api/billing/packages",
+    "/api/billing/transactions",
+)
 
 
 @pytest.mark.asyncio
-async def test_get_transactions(client, auth_headers):
-    response = await client.get("/api/billing/transactions", headers=auth_headers)
-    assert response.status_code == 200
-    data = response.json()
-    assert "transactions" in data
+async def test_the_json_purchase_route_no_longer_answers(client):
+    """Мёртвая поверхность снесена, а не оставлена «на всякий случай».
+
+    Маршрут отдавал `yookassa_payment_id` прямо в браузер — то есть ключ,
+    которым до появления IP-гарда подделывалось уведомление об успешной оплате.
+    """
+    response = await client.post(
+        "/api/billing/purchase", json={"package_index": 0}
+    )
+
+    assert response.status_code in (404, 405), (
+        "JSON-маршрут покупки пакета всё ещё отвечает"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", GONE_READ_ROUTES)
+async def test_a_reading_route_of_the_removed_currency_no_longer_answers(
+    client, url: str
+):
+    """Ни один читающий вход снятой валюты сообщений не существует."""
+    response = await client.get(url)
+
+    assert response.status_code in (404, 405), (
+        f"читающий вход {url} пережил снятие своего предмета"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_webhook_is_the_only_entry_left_on_this_router(client):
+    """ПАРНЫЙ тест: приём денег не снесён вместе с читающими входами.
+
+    Без него предыдущие зеленели бы и на файле, из которого удалён весь роутер
+    целиком, — то есть на продукте, потерявшем единственную точку приёма денег
+    и единственного писателя срока доступа.
+
+    Тело намеренно пустое: предмет проверки — что вход СУЩЕСТВУЕТ, а не что он
+    принимает произвольное уведомление. Гард подлинности источника и разбор
+    тела держат свои собственные регрессии в
+    `tests/test_pages/test_billing_payment_errors.py`.
+    """
+    response = await client.post("/api/billing/webhook", json={})
+
+    assert response.status_code not in (404, 405), (
+        "маршрут уведомления ЮKassa исчез вместе с читающими входами"
+    )

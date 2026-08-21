@@ -38,10 +38,11 @@ PostgreSQL. Календарная группировка средствами �
 
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone, tzinfo
 
-from sqlalchemy import case, func, select
+from sqlalchemy import Select, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.scheduling.use_cases import effective_ad_status
@@ -829,3 +830,116 @@ async def history_count(
         user=user,
     )
     return int(await session.scalar(query) or 0)
+
+
+# --- Календарный месяц: ось тарифа --------------------------------------------
+#
+# Ось «Отправок в месяц» экрана тарифов (D-10) — это вопрос к журналу отправок,
+# а журналом владеет ЭТОТ модуль (D-35). Готового календарного окна в нём не
+# было: плитки считают скользящие сутки, а фильтр истории умеет только
+# `today` / `7d` / `30d`. Поэтому окно живёт здесь, рядом с остальными
+# запросами к `send_logs`, а не в модуле осей тарифа.
+
+
+def current_month_bounds_utc(
+    user: User | None, now: datetime | None = None
+) -> tuple[datetime, datetime]:
+    """Полуинтервал `[начало, конец)` текущего календарного месяца ЧИТАТЕЛЯ в UTC.
+
+    ОКНО — КАЛЕНДАРНЫЙ МЕСЯЦ В ЗОНЕ ПОЛЬЗОВАТЕЛЯ (D-11). Отправка 1-го числа в
+    00:30 по Москве принадлежит НОВОМУ месяцу, хотя по UTC это ещё 31-е число
+    предыдущего. Окно от UTC-полуночи первого числа для пользователя в UTC+3
+    три часа подряд считало бы новые отправки в счёт прошлого месяца — то есть
+    ровно в те часы, когда квота «уже обнулилась» по его календарю. Приём тот
+    же, что у отсечки периода `today` (D-30): граница считается в зоне читателя
+    и переводится в UTC.
+
+    ВЕРХНЯЯ ГРАНИЦА — НАЧАЛО СЛЕДУЮЩЕГО МЕСЯЦА, а не «последняя секунда
+    текущего», и условие запроса к ней СТРОГОЕ. Включающая граница «23:59:59»
+    потеряла бы отправки внутри последней секунды месяца, а на PostgreSQL, где
+    время хранится с микросекундами, — ещё и весь микросекундный хвост.
+
+    ДЛИНА МЕСЯЦА — `calendar.monthrange`, а не `replace(month=month + 1)`.
+    Наивный сдвиг падает в декабре («month must be in 1..12»), и падал бы у
+    пользователя, а не в суите. Сложение с `timedelta` идёт по СТЕННЫМ часам
+    зоны, поэтому переход на летнее время не сдвигает границу месяца на час.
+    """
+    # Импорт отложен в тело функции НАМЕРЕННО. `app/pages/__init__.py` собирает
+    # роутеры разделов, поэтому импорт `app.pages.common` на верхнем уровне
+    # этого модуля замыкает цикл: pages → dashboard → send_analytics → pages.
+    # Цикл рвётся только отложенным импортом или копией хелпера таймзоны —
+    # копия завела бы второй источник одного правила.
+    from app.pages.common import _get_timezone_for_user
+
+    tz = _get_timezone_for_user(user)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    # normalize_utc обязателен: `now` приезжает и из теста, и из `datetime.now`,
+    # и naive-значение уронило бы `astimezone` не там, где это видно.
+    local_now = normalize_utc(now).astimezone(tz)
+
+    start_local = local_now.replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    days_in_month = calendar.monthrange(start_local.year, start_local.month)[1]
+    end_local = start_local + timedelta(days=days_in_month)
+
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+
+def sends_in_current_month_query(
+    user: User | None, *, user_id: int, now: datetime | None = None
+) -> Select:
+    """Счётный ЗАПРОС отправок владельца за календарный месяц — без исполнения.
+
+    Запрос отдаётся отдельно от исполнения, чтобы у оси тарифа было ОДНО
+    определение предиката при ДВУХ способах чтения: экран тарифов вкладывает
+    его скалярным подзапросом в общий запрос осей и платит один round-trip, а
+    любой одиночный вызывающий берёт `sends_in_current_month` ниже. Второй
+    запрос, написанный на месте вызова, был бы вторым источником одного числа —
+    ровно та болезнь, которую лечит D-35.
+
+    ФИЛЬТРА ПО СТАТУСУ ЗДЕСЬ НЕТ НАМЕРЕННО (D-25). Квоту месяца расходует ЛЮБАЯ
+    попытка отправки, а не только доставленная: неуспешная отправка уже заняла
+    слот воркера и ушла в мессенджер. «Квота тратится только на доставленное» —
+    отдельное продуктовое обещание со своей семантикой возвратов и ретраев, и
+    ввести его внутри витрины значило бы завести второй ответ на вопрос
+    «сколько я потратил». Это не забытый фильтр: не добавлять.
+
+    КАЛЕНДАРНОЙ ГРУППИРОВКИ СРЕДСТВАМИ ДИАЛЕКТА ЗДЕСЬ НЕТ и быть не должно —
+    границы посчитаны в Python, а в базу уезжает обычное сравнение по
+    составному индексу `(user_id, sent_at)` ревизии 0016.
+    """
+    start, end = current_month_bounds_utc(user, now=now)
+    return (
+        select(func.count())
+        .select_from(SendLog)
+        .where(
+            SendLog.user_id == user_id,
+            SendLog.sent_at >= start,
+            # Строго меньше верхней границы: момент 00:00 первого числа
+            # принадлежит уже следующему месяцу.
+            SendLog.sent_at < end,
+        )
+    )
+
+
+async def sends_in_current_month(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    user: User | None,
+    now: datetime | None = None,
+) -> int:
+    """Сколько отправок владелец сделал за свой текущий календарный месяц.
+
+    `user` нужен ТОЛЬКО ради таймзоны окна, а владение держит отдельный
+    `user_id`-предикат запроса: числу владельца нельзя зависеть от того, какой
+    объект пользователя случайно оказался у вызывающего под рукой.
+    """
+    return int(
+        await session.scalar(
+            sends_in_current_month_query(user, user_id=user_id, now=now)
+        )
+        or 0
+    )

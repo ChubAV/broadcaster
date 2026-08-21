@@ -1,69 +1,95 @@
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from yookassa.domain.common.security_helper import SecurityHelper
 
 from app.config import Settings
-from app.dependencies import get_current_user_id, get_db, get_settings
-from app.services.billing_service import get_balance_info, get_transaction_history
-from app.services.payment_service import create_payment, handle_webhook
+from app.dependencies import get_db, get_settings
+from app.services.payment_service import handle_webhook
 
 logger = structlog.get_logger()
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
 
-@router.get("/balance")
-async def get_balance(
-    user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db),
-):
-    info = await get_balance_info(db, user_id)
-    return info
+# У ЭТОГО ФАЙЛА ОСТАЛСЯ РОВНО ОДИН ВХОД — УВЕДОМЛЕНИЕ ЮKASSA НИЖЕ.
+#
+# Три читающих входа (остаток сообщений, прейскурант и журнал операций по нему)
+# сняты вместе со ВСЕЙ валютой сообщений: считать больше нечего, и маршрут,
+# отдающий ноль по несуществующей величине, читался бы как «у вас кончилось», а
+# не как «этого больше нет». Четвёртый вход, `POST /api/billing/purchase`, был
+# снесён ещё планом 05-04 (D-24) — он возвращал `yookassa_payment_id` прямо в
+# браузер, а идентификатор платежа служит ключом подделки уведомления.
+#
+# ⚠️ ВЕБХУК НИЖЕ НЕ ТРОНУТ НИ ОДНОЙ СТРОКОЙ И ТРОГАТЬСЯ НЕ ДОЛЖЕН: это
+# единственный писатель срока доступа и единственная точка приёма денег в
+# проекте. Гард подлинности источника — его часть, а не украшение.
 
 
-@router.get("/packages")
-async def list_packages(settings: Settings = Depends(get_settings)):
-    return {"packages": settings.parsed_message_packages}
+def _webhook_client_ip(request: Request, settings: Settings) -> str | None:
+    """Адрес источника уведомления — ТОЛЬКО из настроенного заголовка.
+
+    ⚠️ АДРЕС ПИРА ИСТОЧНИКОМ НЕ СЛУЖИТ НИ ПРИ КАКОЙ НАСТРОЙКЕ, и ветки его
+    чтения здесь нет намеренно. На бою uvicorn запущен с
+    `--forwarded-allow-ips=*` (`docker-compose.prod.yml`), из-за чего
+    `ProxyHeadersMiddleware` ПЕРЕЗАПИСЫВАЕТ `scope["client"]` ЛЕВЫМ элементом
+    `X-Forwarded-For` — то есть значением, которое присылает сам вызывающий.
+    Прежняя ветка «настройка пуста → взять адрес пира» в этой сборке означала
+    «доверять тому адресу, который назовёт атакующий», и гард, написанный
+    верно, не исполнялся в проде ни разу.
+
+    Обращения к адресу пира в этом файле нет ни одной строкой, и это проверяемо
+    грепом — критерий фазы (`05-07`) требует пустого вывода по соответствующему
+    атрибуту запроса. Пожалуйста, не возвращайте его «на всякий случай».
+
+    НЕНАСТРОЕННОЕ ИМЯ ЗАГОЛОВКА = `None`, то есть «источник не подтверждён».
+    Отказ по умолчанию ЗАКРЫВАЕТ гард, а не открывает его: подтвердить источник
+    нечем, и это отказ, а не повод поверить.
+
+    ⚠️ СПИСОК АДРЕСОВ ЧИТАЕТСЯ СПРАВА, А НЕ СЛЕВА. Если в настроенном заголовке
+    всё-таки оказался список `a, b, c`, берётся ПРАВЫЙ элемент. Это ровно
+    обратно тому, что подсказывает интуиция «левый элемент — исходный клиент»,
+    и разница здесь не стилистическая, а решает исход атаки: список растёт
+    слева направо, ЛЕВЫЙ элемент присылает сам клиент, а свой прокси лишь
+    дописывает реальный адрес пира СПРАВА. Возьми этот код левый элемент —
+    любой желающий подделал бы успешный платёж, прислав доверенный адрес
+    ЮKassa первым в списке.
+    """
+    header_name = settings.yookassa_webhook_client_ip_header
+    if not header_name:
+        # Уровень `error`, а не `warning`: этот отказ отвергает ВСЕ настоящие
+        # уведомления, то есть полностью останавливает приём денег, а молча
+        # остановленный приём неотличим от отсутствия платежей. В потоке
+        # предупреждений такая запись потерялась бы.
+        #
+        # Логируется ОДИН факт ненастроенности, без тела уведомления: в теле
+        # приезжает `payment_method.card` с `first6` / `last4` (T-05-07).
+        logger.error("webhook_ip_header_not_configured")
+        return None
+    raw = request.headers.get(header_name)
+    if not raw:
+        return None
+    return raw.split(",")[-1].strip() or None
 
 
-@router.get("/transactions")
-async def get_transactions(
-    limit: int = 50,
-    offset: int = 0,
-    user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db),
-):
-    txs = await get_transaction_history(db, user_id, limit=limit, offset=offset)
-    return {"transactions": txs}
+def _is_trusted_source(ip: str) -> bool:
+    """Входит ли адрес в боевые сети ЮKassa.
 
+    Список сетей и разбор CIDR берутся ИЗ SDK (`SecurityHelper`): десять сетей
+    живут там и обновляются вместе с пакетом, а своя копия устарела бы молча и
+    начала отбрасывать легитимные уведомления — то есть останавливать приём
+    денег без единой ошибки в логах.
 
-class PurchaseRequest(BaseModel):
-    package_index: int
-
-
-@router.post("/purchase")
-async def purchase_package(
-    data: PurchaseRequest,
-    user_id: int = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    if not settings.yookassa_enabled:
-        raise HTTPException(status_code=403, detail="Payments are disabled")
-    packages = settings.parsed_message_packages
-    if data.package_index < 0 or data.package_index >= len(packages):
-        raise HTTPException(status_code=400, detail="Invalid package index")
-
-    pkg = packages[data.package_index]
-    result = await create_payment(
-        db,
-        user_id=user_id,
-        package_name=pkg["name"],
-        messages_count=pkg["count"],
-        price=pkg["price"],
-    )
-    return result
+    Неразбираемый адрес — НЕДОВЕРЕННЫЙ. `netaddr` поднимает на мусоре
+    `AddrFormatError`, и любой отказ разбора обязан читаться как «источник не
+    подтверждён»: исключение, ушедшее наверх, превратилось бы в 500, а 500 на
+    вебхуке ЮKassa трактует как «попробовать позже» — то есть мусорный запрос
+    получал бы повторные попытки вместо отказа.
+    """
+    try:
+        return SecurityHelper().is_ip_trusted(ip)
+    except Exception:
+        return False
 
 
 @router.post("/webhook")
@@ -72,14 +98,71 @@ async def yookassa_webhook(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Принимает уведомление ЮKassa о смене состояния платежа.
+
+    ЗАЧЕМ ГАРД. Это вход, на котором принимается решение выдать ПЛАТНЫЙ ресурс,
+    и до этой фазы он не был аутентифицирован ничем: единственным «секретом»
+    служил `yookassa_payment_id`, который старый JSON-маршрут покупки возвращал
+    прямо в браузер покупателю. С подключением подписки цена подделанного
+    уведомления выросла до 4 900 ₽/мес, поэтому источник проверяется (T-05-01).
+
+    ПРАВИЛО. Проверка стоит СРАЗУ после `yookassa_enabled` и ДО `request.json()`:
+    недоверенный источник не должен доходить даже до разбора тела. Она вынесена
+    ЗА пределы `try` намеренно — `except Exception` ниже превращает всё в 500, а
+    отказ гарда обязан остаться 403.
+
+    Механизм — проверка по IP. Проверки ПОДПИСИ уведомления в установленном
+    `yookassa` (3.10.0) не существует вовсе: у `SecurityHelper` ровно два
+    метода, и оба про адреса. Документация, обещающая метод сверки подписи,
+    описывает не этот пакет — импортировать такой метод неверно по построению,
+    в том числе через `getattr(..., None)` с тихим переходом в no-op, который
+    выглядел бы как работающая криптографическая проверка, ничего не проверяя.
+
+    ⚠️ НАЗВАННАЯ ГРАНИЦА ЗАЩИТЫ. Доверие даёт РОВНО ОДИН источник — заголовок
+    `yookassa_webhook_client_ip_header` (умолчание `X-Real-IP`). Заголовку можно
+    верить постольку, поскольку свой прокси его ПЕРЕЗАПИСЫВАЕТ: nginx проекта
+    ставит `proxy_set_header X-Real-IP $remote_addr` на каждом location, то есть
+    затирает всё, что прислал клиент. Заголовок, который прокси лишь ДОПИСЫВАЕТ
+    (`X-Forwarded-For` через `$proxy_add_x_forwarded_for`), такой гарантии не
+    даёт, и настраивать сюда его нельзя: проверка станет декоративной — клиент
+    подделает адрес сам.
+
+    ⚠️ АДРЕС ПИРА НЕ ИСПОЛЬЗУЕТСЯ ВОВСЕ, и это не упущение. На бою uvicorn
+    запущен с `--forwarded-allow-ips=*`, из-за чего `ProxyHeadersMiddleware`
+    переписывает `scope["client"]` ЛЕВЫМ элементом `X-Forwarded-For` —
+    значением, подконтрольным вызывающему. Пока гард имел ветку «настройка
+    пуста → взять адрес пира», подделанный `X-Forwarded-For` проводил платёж на
+    боевом стенде, хотя весь код чтения справа был написан верно: до него просто
+    не доходило управление. Поэтому ненастроенный заголовок теперь ОТВЕРГАЕТ
+    каждое уведомление, а не открывает дверь (гэп 1, план 05-07).
+
+    ⚠️ АВАРИЙНЫЙ ВЫКЛЮЧАТЕЛЬ. `yookassa_webhook_verify_ip = False` пропускает
+    любой источник. Он существует, потому что ошибка настройки заголовка
+    отвергает ВСЕ настоящие уведомления, и приём денег встаёт молча: ЮKassa
+    повторит доставку несколько раз и сдастся. Выключатель — способ вернуть
+    приём денег за одну правку окружения, не выкатывая код.
+    """
     if not settings.yookassa_enabled:
         raise HTTPException(status_code=403, detail="Payments are disabled")
+
+    if settings.yookassa_webhook_verify_ip:
+        client_ip = _webhook_client_ip(request, settings)
+        if not client_ip or not _is_trusted_source(client_ip):
+            # Логируется АДРЕС, но не тело уведомления: в теле приезжает
+            # `payment_method.card` с `first6` / `last4` (T-05-07).
+            logger.warning("webhook_untrusted_source", client_ip=client_ip)
+            raise HTTPException(status_code=403, detail="Untrusted source")
+
     try:
         body = await request.json()
         event = body.get("event", "")
         payment_data = body
 
-        logger.info("yookassa_webhook_received", event=event)
+        # Ключ НЕ называется `event`: у structlog первый позиционный параметр
+        # `BoundLogger.info()` именно так и называется, поэтому `event=` рядом с
+        # именем сообщения поднимал TypeError — и падал он ДО вызова
+        # handle_webhook, то есть ни одно уведомление не обрабатывалось вовсе.
+        logger.info("yookassa_webhook_received", webhook_event=event)
 
         processed = await handle_webhook(db, event, payment_data)
         return {"ok": processed}

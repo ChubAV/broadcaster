@@ -37,7 +37,6 @@ from app.application.analytics.send_analytics import (
 from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
 from app.models.ad import Ad
 from app.models.group import Group
-from app.models.message_balance import MessageBalance
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
 from app.models.user import User
@@ -45,6 +44,9 @@ from app.pages import history as history_module
 from app.pages.history import RETRY_TASK_NAME
 
 HISTORY_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "history.py"
+# Гард источника живёт ЗДЕСЬ, а не в модуле раздела: с планом 05-04 у правила
+# один источник на проект, и структурная проверка обязана читать его оттуда.
+COMMON_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "common.py"
 
 
 @pytest.fixture(autouse=True)
@@ -96,11 +98,6 @@ async def _seed_other_user(db: AsyncSession) -> User:
     await db.commit()
     await db.refresh(other)
     return other
-
-
-async def _seed_balance(db: AsyncSession, user_id: int, amount: int = 100) -> None:
-    db.add(MessageBalance(user_id=user_id, balance=amount))
-    await db.commit()
 
 
 async def _seed_triple(
@@ -162,9 +159,13 @@ async def _seed_log(
 async def _seed_retryable(
     db: AsyncSession, user_id: int, *, status: str = STATUS_FAIL
 ) -> SendLog:
-    """Запись, у которой цела вся тройка и хватает баланса."""
+    """Запись, у которой цела вся тройка.
+
+    ПОСЕВА ОСТАТКА СООБЩЕНИЙ ЗДЕСЬ БОЛЬШЕ НЕТ: величины не существует, и повтор
+    её не спрашивает. Единственный вопрос повтора — вердикт доступа, и задаёт
+    его окружение теста (`_retry_env`), а не строка в базе.
+    """
     ad, group, _account = await _seed_triple(db, user_id)
-    await _seed_balance(db, user_id)
     return await _seed_log(
         db, user_id, status=status, ad_id=ad.id, group_id=group.id
     )
@@ -178,15 +179,20 @@ async def _seed_retryable(
 # раз при загрузке `app.pages.history`, и подмена до него не доехала бы —
 # тест пошёл бы к настоящему брокеру.
 #
-# Гейт баланса подменяется по тому же образцу, что в тестах воркера
-# (`patch("app.worker.tasks.check_balance_cached", ...)`): настоящий гейт лезет
+# Гейт доступа подменяется по тому же образцу, что в тестах воркера
+# (`patch("app.worker.tasks.check_access_cached", ...)`): настоящий гейт лезет
 # в Redis, которого в тестовой среде нет, и красил бы тесты чужой причиной.
+#
+# Патч ставится на ИМЯ В МОДУЛЕ-ПОТРЕБИТЕЛЕ (`app.pages.history`), а не на
+# объявление в `app.services.billing_cache`: обработчик импортировал функцию к
+# себе на уровне модуля, и подмена по месту объявления до его имени не доехала
+# бы — тест пошёл бы к настоящему Redis, а гейт остался бы неподменённым.
 
 
 class _RetryEnv:
-    def __init__(self, send_task, balance):
+    def __init__(self, send_task, gate):
         self.send_task = send_task
-        self.balance = balance
+        self.gate = gate
 
     @property
     def queued(self) -> list:
@@ -194,16 +200,16 @@ class _RetryEnv:
 
 
 def _retry_env(*, allowed: bool = True, reason: str = ""):
-    """Контекст-менеджер подмены очереди и гейта баланса."""
+    """Контекст-менеджер подмены очереди и гейта доступа."""
     import contextlib
 
     @contextlib.contextmanager
     def _cm():
         fake_module = MagicMock()
-        balance = AsyncMock(return_value=(allowed, reason))
+        gate = AsyncMock(return_value=(allowed, reason))
         with patch.dict(sys.modules, {"app.worker.celery_app": fake_module}):
-            with patch("app.pages.history.check_balance_cached", balance):
-                yield _RetryEnv(fake_module.celery.send_task, balance)
+            with patch("app.pages.history.check_access_cached", gate):
+                yield _RetryEnv(fake_module.celery.send_task, gate)
 
     return _cm()
 
@@ -344,8 +350,8 @@ def test_retry_origin_check_runs_before_the_record_is_read():
     """
     body = _handler_source()
 
-    assert "_is_same_origin(" in body, "сверки источника в обработчике нет"
-    assert body.index("_is_same_origin(") < body.index("SendLog"), (
+    assert "is_same_origin(" in body, "сверки источника в обработчике нет"
+    assert body.index("is_same_origin(") < body.index("SendLog"), (
         "запись журнала читается раньше сверки источника — межсайтовый запрос "
         "успевает вызвать побочный эффект"
     )
@@ -356,9 +362,13 @@ def test_retry_origin_check_documents_its_boundary():
 
     Принятый остаточный риск, о котором не написано, через один рефакторинг
     становится неизвестным риском.
+
+    Проверка смотрит в `app/pages/common.py`: с планом 05-04 гард объявлен ОДИН
+    раз на проект, и приватная копия из этого раздела снята. Условие теста от
+    переезда не изменилось — граница обязана быть названа там, где живёт код.
     """
-    source = HISTORY_PY.read_text(encoding="utf-8")
-    start = source.index("def _is_same_origin(")
+    source = COMMON_PY.read_text(encoding="utf-8")
+    start = source.index("def is_same_origin(")
     doc = source[start : start + 1800]
 
     assert "Sec-Fetch-Site" in doc
@@ -542,7 +552,6 @@ async def test_retry_precheck_stops_when_the_ad_is_gone(
     """Удалённое объявление останавливает повтор ДО очереди и ДО журнала."""
     user = await _current_user(db_session)
     _ad, group, _account = await _seed_triple(db_session, user.id)
-    await _seed_balance(db_session, user.id)
     log = await _seed_log(db_session, user.id, ad_id=999999, group_id=group.id)
 
     before = len((await db_session.execute(select(SendLog))).all())
@@ -570,7 +579,6 @@ async def test_retry_precheck_stops_when_the_group_is_gone(
     """
     user = await _current_user(db_session)
     ad, _group, _account = await _seed_triple(db_session, user.id)
-    await _seed_balance(db_session, user.id)
     log = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=999999)
 
     with _retry_env() as env:
@@ -589,7 +597,6 @@ async def test_retry_precheck_stops_when_the_account_is_gone(
     """Аккаунт выводится ЧЕРЕЗ группу — колонки аккаунта в журнале нет."""
     user = await _current_user(db_session)
     ad, group, account = await _seed_triple(db_session, user.id)
-    await _seed_balance(db_session, user.id)
     log = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
 
     await db_session.delete(account)
@@ -613,7 +620,6 @@ async def test_retry_precheck_stops_when_the_account_is_not_active(
     ad, group, _account = await _seed_triple(
         db_session, user.id, account_status="sync_failed"
     )
-    await _seed_balance(db_session, user.id)
     log = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
 
     with _retry_env() as env:
@@ -642,59 +648,83 @@ def test_retry_precheck_runs_before_the_queue():
 
 
 # =============================================================================
-# Гейт баланса (T-04-36)
+# Гейт доступа (T-04-36, T-05.1-02)
 # =============================================================================
+#
+# ⚠️ ПРЕДМЕТ ГРУППЫ СМЕНИЛСЯ С ОСТАТКА СООБЩЕНИЙ НА ВЕРДИКТ ДОСТУПА, А ГРАНИЦЫ
+# ОСТАЛИСЬ ТЕМИ ЖЕ И НЕ ОСЛАБЛИ. Гейт по-прежнему стоит ДО очереди, и отказ
+# по-прежнему обязан объясняться словами; изменилось только то, о чём он
+# отвечает. Валюты сообщений в продукте нет, и утверждать о ней что-либо здесь
+# значило бы держать зелёными тесты снятой величины.
 
 
 @pytest.mark.asyncio
-async def test_retry_is_refused_when_the_balance_is_exhausted(
+async def test_retry_is_refused_when_the_access_is_closed(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Исчерпанный лимит отправок отклоняет повтор ДО очереди.
+    """Закрытый доступ отклоняет повтор ДО очереди.
 
-    Гейт баланса стоит у планировщика, а не внутри отправки. Без этого шага
-    повтор стал бы способом отправить столько, сколько у пользователя неудачных
-    записей, в обход тарифного лимита.
+    Гейт стоит у планировщика, а не внутри отправки. Без этого шага повтор стал
+    бы способом отправить столько, сколько у пользователя неудачных записей, в
+    обход оплаты доступа.
     """
     user = await _current_user(db_session)
     log = await _seed_retryable(db_session, user.id)
 
-    with _retry_env(allowed=False, reason="Баланс исчерпан") as env:
+    with _retry_env(allowed=False, reason="Доступ закрыт") as env:
         response = await authed_client.post(
             f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
         )
 
     assert response.status_code == 302
-    assert env.queued == [], "повтор обошёл гейт баланса"
+    assert env.queued == [], "повтор обошёл гейт доступа"
 
 
 @pytest.mark.asyncio
-async def test_retry_explains_the_exhausted_balance_to_the_user(
+async def test_retry_explains_the_closed_access_to_the_user(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Отказ по балансу ОБЪЯСНЯЕТСЯ, а не молчит.
+    """Отказ по доступу ОБЪЯСНЯЕТСЯ, а не молчит.
 
     Молчаливое перенаправление на тот же список неотличимо от «ничего не
     произошло»: пользователь нажал, вернулся на прежний экран и не узнал, что
     отправки не будет.
+
+    ⚠️ УТВЕРЖДАЕТСЯ И ТО, ЧЕГО В ОТВЕТЕ БЫТЬ НЕ ДОЛЖНО. Прежняя строка звала
+    пополнить остаток сообщений — величину, которой больше не существует, — и
+    совет, который невозможно выполнить, хуже отсутствующего: человек уходит
+    искать несуществующий экран пополнения вместо того, чтобы оплатить доступ.
     """
     user = await _current_user(db_session)
     log = await _seed_retryable(db_session, user.id)
 
-    with _retry_env(allowed=False, reason="Баланс исчерпан"):
+    with _retry_env(allowed=False, reason="Доступ закрыт"):
         response = await authed_client.post(
             f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=True
         )
 
     assert response.status_code == 200
-    assert "баланс" in response.text.lower(), "отказ по балансу не объяснён"
+    body = response.text.lower()
+    assert "доступ" in body, "отказ по доступу не объяснён"
+    assert "пополните" not in body, (
+        "человека зовут пополнить величину, которой больше нет"
+    )
 
 
 @pytest.mark.asyncio
-async def test_retry_balance_gate_runs_before_the_queue(
+async def test_retry_access_gate_runs_before_the_queue(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Гейт баланса вызывается для действия отправки и ДО постановки."""
+    """Гейт доступа вызывается для действия отправки и ДО постановки.
+
+    ⚠️ УТВЕРЖДЕНИЕ ПОРЯДКА ПЕРЕЦЕЛЕНО НА НОВОЕ ИМЯ И НЕ ОСЛАБЛЕНО НИ НА ШАГ.
+    Оно сравнивает ПОЗИЦИЮ вызова гейта с ПОЗИЦИЕЙ постановки задачи в теле
+    обработчика, а не только факт вызова: перестановка двух операторов вернула бы
+    дефект молча — гейт по-прежнему звался бы, `await_count` по-прежнему был бы
+    единицей, а отправка уже уехала бы в очередь. Смена предмета вопроса с
+    баланса на доступ этой ловушки не отменяет; этот тест — единственный сторож
+    порядка на первой линии.
+    """
     user = await _current_user(db_session)
     log = await _seed_retryable(db_session, user.id)
 
@@ -703,25 +733,32 @@ async def test_retry_balance_gate_runs_before_the_queue(
             f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
         )
 
-    assert env.balance.await_count == 1, "гейт баланса не вызван"
-    assert env.balance.await_args.args[2] == "send", env.balance.await_args
+    assert env.gate.await_count == 1, "гейт доступа не вызван"
+    assert env.gate.await_args.args[2] == "send", env.gate.await_args
 
     body = _handler_source()
-    assert body.index("check_balance_cached(") < body.index("send_task("), (
-        "гейт баланса стоит ПОСЛЕ постановки задачи в очередь"
+    assert body.index("check_access_cached(") < body.index("send_task("), (
+        "гейт доступа стоит ПОСЛЕ постановки задачи в очередь"
     )
 
 
-def test_retry_does_not_touch_billing_itself():
-    """Списание за повтор происходит там же, где у боевой рассылки (D-20).
+def test_retry_asks_no_second_question_of_its_own():
+    """Повтор задаёт РОВНО ОДИН вопрос — тот же, что и боевая рассылка.
 
-    Второе место списания разошлось бы с первым, и повтор либо списывал бы
-    дважды, либо не списывал вовсе.
+    ⚠️ УТВЕРЖДЕНИЕ ИНВЕРТИРОВАНО ВМЕСТЕ С ПРЕДМЕТОМ, А НЕ СНЯТО. Прежде оно
+    охраняло границу «повтор не списывает своими руками, списание живёт там же,
+    где у боевой рассылки»: второе место списания разошлось бы с первым, и
+    повтор либо списывал бы дважды, либо не списывал вовсе. Валюта сообщений
+    снята целиком, и та же граница выражается сильнее — упоминаний снятой
+    величины в теле обработчика нет ВОВСЕ, ни своими руками, ни чужими.
+
+    ИМЕНА ВЫПИСАНЫ ЗДЕСЬ, А НЕ В ОБРАБОТЧИКЕ: гейт читает тело функции ТЕКСТОМ,
+    и объяснение, набранное запрещённым именем, уронило бы собственный запрет.
     """
     body = _handler_source()
 
-    assert "deduct_message" not in body
-    assert "add_messages" not in body
+    for symbol in ("deduct_message", "add_messages", "check_balance"):
+        assert symbol not in body, symbol
 
 
 # =============================================================================
@@ -879,7 +916,7 @@ async def test_retry_releases_the_slot_after_an_exception(
 
     boom = AsyncMock(side_effect=RuntimeError("гейт баланса упал"))
     with patch.dict(sys.modules, {"app.worker.celery_app": MagicMock()}):
-        with patch("app.pages.history.check_balance_cached", boom):
+        with patch("app.pages.history.check_access_cached", boom):
             # Исключение обработчика до теста не доезжает: посредник приложения
             # (`app/middleware.py`) ловит его, пишет в журнал и отдаёт 500.
             # Проверяется поэтому не всплытие, а СЛЕДСТВИЕ — заявка снята.
@@ -917,7 +954,7 @@ async def test_retry_keeps_the_slot_when_the_broker_fails_after_accepting(
     fake_module.celery.send_task.side_effect = RuntimeError("брокер оборвал ответ")
     with patch.dict(sys.modules, {"app.worker.celery_app": fake_module}):
         with patch(
-            "app.pages.history.check_balance_cached", AsyncMock(return_value=(True, ""))
+            "app.pages.history.check_access_cached", AsyncMock(return_value=(True, ""))
         ):
             response = await authed_client.post(
                 f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
@@ -951,7 +988,7 @@ async def test_retry_releases_the_slot_when_the_broker_connection_is_refused(
     fake_module.celery.send_task.side_effect = OperationalError("брокер недоступен")
     with patch.dict(sys.modules, {"app.worker.celery_app": fake_module}):
         with patch(
-            "app.pages.history.check_balance_cached", AsyncMock(return_value=(True, ""))
+            "app.pages.history.check_access_cached", AsyncMock(return_value=(True, ""))
         ):
             response = await authed_client.post(
                 f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
@@ -1017,7 +1054,6 @@ async def test_a_refused_retry_arms_no_cooldown(
     """
     user = await _current_user(db_session)
     ad, group, _account = await _seed_triple(db_session, user.id)
-    await _seed_balance(db_session, user.id)
     ad.status = AD_STATUS_DRAFT
     await db_session.commit()
     log = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
@@ -1049,26 +1085,26 @@ async def test_a_refused_retry_arms_no_cooldown(
 
 
 @pytest.mark.asyncio
-async def test_a_balance_refusal_arms_no_cooldown(
+async def test_an_access_refusal_arms_no_cooldown(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Тот же край для гейта баланса: отказ по балансу окна не оставляет.
+    """Тот же край для гейта доступа: отказ по доступу окна не оставляет.
 
-    Пополнивший баланс повторяет сразу — иначе оплата не даёт того, за что
+    Оплативший доступ повторяет сразу — иначе оплата не даёт того, за что
     заплачено.
     """
     user = await _current_user(db_session)
     log = await _seed_retryable(db_session, user.id)
 
-    with _retry_env(allowed=False, reason="Баланс исчерпан") as env:
+    with _retry_env(allowed=False, reason="Доступ закрыт") as env:
         response = await authed_client.post(
             f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
         )
 
     assert env.queued == []
-    assert f"retry={history_module.RETRY_NO_BALANCE}" in response.headers["location"]
+    assert f"retry={history_module.RETRY_ACCESS_CLOSED}" in response.headers["location"]
     assert log.id not in history_module._RETRY_IN_FLIGHT, (
-        "отказ по балансу оставил окно удержания"
+        "отказ по доступу оставил окно удержания"
     )
 
 
@@ -1083,7 +1119,6 @@ async def test_retry_cooldown_is_keyed_per_record(
     """
     user = await _current_user(db_session)
     ad, group, _account = await _seed_triple(db_session, user.id)
-    await _seed_balance(db_session, user.id)
     first = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
     second = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
 
@@ -1273,7 +1308,6 @@ async def _seed_retryable_with_ids(
     db: AsyncSession, user_id: int, *, status: str = STATUS_FAIL
 ) -> tuple[SendLog, Ad, Group, MessengerAccount]:
     ad, group, account = await _seed_triple(db, user_id)
-    await _seed_balance(db, user_id)
     log = await _seed_log(db, user_id, status=status, ad_id=ad.id, group_id=group.id)
     return log, ad, group, account
 
@@ -1748,7 +1782,6 @@ async def test_retry_of_a_draft_ad_does_not_reach_the_queue(
     """CR-01: снятое с публикации объявление повтором не отправляется."""
     user = await _current_user(db_session)
     ad, group, _account = await _seed_triple(db_session, user.id)
-    await _seed_balance(db_session, user.id)
     ad.status = AD_STATUS_DRAFT
     await db_session.commit()
     log = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)
@@ -1770,7 +1803,6 @@ async def test_retry_into_a_switched_off_group_does_not_reach_the_queue(
     """CR-02: выключенная группа повтором не получает отправку."""
     user = await _current_user(db_session)
     ad, group, _account = await _seed_triple(db_session, user.id)
-    await _seed_balance(db_session, user.id)
     group.is_active = False
     await db_session.commit()
     log = await _seed_log(db_session, user.id, ad_id=ad.id, group_id=group.id)

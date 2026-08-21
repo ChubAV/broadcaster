@@ -19,6 +19,7 @@ from app.services.auth_service import (
     decode_verification_token,
 )
 from app.services.email_service import send_verification_email, send_password_reset_email
+from app.services.subscription_service import start_trial
 from app.pages.common import templates
 
 logger = structlog.get_logger(__name__)
@@ -323,6 +324,17 @@ async def register_complete(
     db.add(user)
     await db.commit()
     await db.refresh(user)
+
+    # ПРОБНЫЙ СРОК ЗАВОДИТСЯ ДО ВЫДАЧИ COOKIE, И ПОРЯДОК ЗДЕСЬ НЕСУЩИЙ (D-B).
+    # Cookie, выданная раньше строки подписки, уводит человека на `/dashboard`,
+    # где первый же рендер шелла увидит пользователя БЕЗ доступа — то есть новый
+    # пользователь встретит продукт закрытым в ту же секунду, как в него вошёл.
+    #
+    # Заведение вызывается ОДНОЙ функцией, общей со вторым путём регистрации
+    # (`POST /api/auth/register`, `app/routes/auth.py`): копия тела здесь
+    # развела бы длину пробного периода по двум входам регистрации.
+    await start_trial(db, user.id)
+    await db.commit()
 
     access_token = create_access_token(user.id, settings.secret_key)
     response = RedirectResponse(url="/dashboard", status_code=302)

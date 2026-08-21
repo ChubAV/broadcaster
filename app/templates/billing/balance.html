@@ -1,148 +1,120 @@
 {% extends "base.html" %}
+{% from "components/alert.html" import alert %}
 {% from "components/card.html" import card_open, card_close %}
-{% from "components/table.html" import rowhead, row_open, row_close, cell %}
+{% from "components/table.html" import rowhead %}
 {% from "components/badge.html" import badge %}
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/mono.html" import mono %}
-{% from "components/progress.html" import progress %}
+{% from "billing/includes/payment_row.html" import payment_row %}
 
-{% block title %}Тарифы — Broadcaster{% endblock %}
+{% block title %}Подписка — Broadcaster{% endblock %}
 
-{# Контракт «страница → шелл» (План 01): заголовок раздела рендерит шапка. #}
-{% block page_title %}Тарифы{% endblock %}
-{% block page_subtitle %}Баланс сообщений и история операций{% endblock %}
+{#- Заголовок раздела НЕ переопределяется: шапка берёт его из `nav_label`, то
+    есть из единственной строки NAV_ITEMS — копия имени разъехалась бы с
+    сайдбаром и нижними табами молча. -#}
+{% block page_subtitle %}Доступ к системе и история платежей{% endblock %}
 
 {% block content %}
-
-{#- Квота приходит из живого контекста шелла (get_shell_context, План 01), а не
-    из нового запроса: тот же самый показатель, тот же самый источник, что и у
-    виджета в сайдбаре. На ширине ≤860px сайдбар скрыт медиазапросом, поэтому
-    на разделе «Тарифы» это ЕДИНСТВЕННОЕ место, где мобильный пользователь
-    видит свой тариф. Внутри блока content переменные шелла из base.html
-    недоступны (Jinja не передаёт контекст вложенного блока), поэтому
-    request.state.shell читается здесь заново. -#}
-{% set quota = request.state.shell.get('quota', {}) if request.state.shell else {} %}
-
-{#- Раскладка ЕДИНСТВЕННЫХ табличных данных проекта. Элементов таблицы в
-    макете нет вообще: и списки, и табличные данные построены на сетке.
-    Поэтому история операций собрана на тех же примитивах
-    data-rowhead / data-row / data-grow, что и все списки разделов — адаптив на
-    860px приходит бесплатно, без второй вёрстки и без JS. Фазы 5 и 6 строят
-    табличные представления этим же способом. -#}
-{% set TX_COLS = 'minmax(132px,1fr) 128px 92px 100px minmax(160px,2fr)' %}
-{% set TX_COLUMNS = ['Дата', 'Тип', 'Кол-во', 'Баланс', 'Описание'] %}
-{#- Маппинг «тип операции → подпись и вариант бейджа» живёт в вызывающем
-    шаблоне: единого enum статусов в проекте нет (контракт Плана 02). -#}
-{% set TX_LABELS = {
-  'purchase': ('Покупка', 'success'),
-  'free_monthly': ('Бесплатные', 'info'),
-  'admin_adjustment': ('Админ', 'neutral'),
-  'send_deduction': ('Отправка', 'warning'),
+{#- ДВЕ КАРТОЧКИ В ВЕРТИКАЛЬНОЙ СТОПКЕ, И БОЛЬШЕ НИЧЕГО: панель доступа и
+    журнал платежей. Пять прежних блоков (оси потребления, витрина тарифов,
+    баланс сообщений, пакеты, история операций) сняты вместе с предметом —
+    четыре из них были СЧЁТОМ, а фаза существует ради экрана, на котором
+    считать нечего. Шкал прогресса не осталось ни одной, и компонент шкалы в
+    раздел не импортируется (прохибиция P-4). Журнал платежей — единственные
+    табличные данные раздела, и элементов таблицы в нём нет ни одного:
+    примитивы data-rowhead / data-row / data-grow дают адаптив ниже 861px без
+    второй вёрстки. Формулировки статусов взяты из макета админки — одно
+    состояние называется одним словом и у пользователя, и у админа (D-14). -#}
+{% set PAY_COLS = 'minmax(132px,1fr) minmax(150px,2fr) 110px 118px' %}
+{% set PAY_COLUMNS = ['Дата', 'Назначение', 'Сумма', 'Статус'] %}
+{% set PAY_LABELS = {
+  'succeeded': ('проведён', 'success'),
+  'canceled': ('отклонён', 'danger'),
+  'pending': ('в обработке', 'neutral'),
 } %}
+
+{#- ЧЕТЫРЕ СОСТОЯНИЯ, И КАЖДОЕ ОТЛИЧАЕТСЯ СЛОВАМИ, А НЕ ТОЛЬКО ЦВЕТОМ: подпись
+    карточки, бейдж с тоном, подпись кнопки. Состояние приезжает ГОТОВЫМ из
+    обработчика (`access.state`) — здесь оно только читается по ключу. Пустая
+    подпись кнопки означает «кнопки нет вовсе»: у бесплатного доступа она
+    предлагала бы купить то, что у человека уже есть (P-3). Неизвестное
+    состояние читается как ЗАКРЫТЫЙ доступ, а не как пустая карточка. -#}
+{% set PANELS = {
+  'trial': ('Пробный период. Когда он закончится, доступ закроется, пока подписка не оплачена.', 'пробный период', 'info', 'Оплатить доступ'),
+  'paid': ('Подписка оплачена. Оплата продлевает доступ на месяц от текущей даты окончания — оплаченные дни не сгорают.', '', '', 'Продлить доступ'),
+  'expired': ('Доступ закрыт. Оплатите подписку — работа продолжится с того же места.', 'доступ закрыт', 'danger', 'Оплатить доступ'),
+  'comped': ('Бесплатный доступ, выданный администратором. Оплата не требуется.', 'бесплатный доступ', 'success', ''),
+} %}
+{% set state = access.get('state', 'expired') %}
+{% set panel = PANELS.get(state, PANELS['expired']) %}
+{% set expires_label = format_datetime_for_user(access.get('expires_at'), user) %}
 
 <div data-stack>
 
-  <div data-metrics>
-    {{ card_open() }}
-      {{ mono('Текущий тариф', 'muted', upper=true) }}
-      <span data-metric-value>{{ quota.get('plan', 'free')|capitalize }}</span>
-    {{ card_close() }}
-    {{ card_open() }}
-      {{ mono('Баланс сообщений', 'muted', upper=true) }}
-      <span data-metric-value>{% if balance_info.is_unlimited %}∞{% else %}{{ balance_info.balance }}{% endif %}</span>
-    {{ card_close() }}
-  </div>
-
-  {{ card_open(title='Потребление') }}
-    {% if balance_info.is_unlimited %}
-      {{ badge('Безлимит', 'warning') }}
-      {{ mono('безлимитная отправка сообщений') }}
-    {% else %}
-      {#- Тот же макрос, что и у виджета квоты в сайдбаре: показатель один,
-          компонент должен быть один. Ограничение диапазона 0..100 макрос
-          делает сам. -#}
-      {{ progress(quota.get('percent', 0),
-                  label='Израсходовано ' ~ quota.get('used', 0) ~ ' из ' ~ quota.get('limit', 0)) }}
-      {% if balance_info.free_balance_reset_at %}
-      {{ mono('Последнее бесплатное начисление: ' ~ balance_info.free_balance_reset_at[:10]) }}
-      {% endif %}
-      {{ mono('Каждый месяц начисляется 10 бесплатных сообщений') }}
-    {% endif %}
-  {{ card_close() }}
-
-  {% if payments_enabled and not balance_info.is_unlimited %}
-  <div data-metrics>
-    {% for pkg in packages %}
-    {{ card_open() }}
-      {{ mono(pkg.name, 'muted', upper=true) }}
-      <span data-metric-value>{{ pkg.price }} &#8381;</span>
-      {{ mono(pkg.count ~ ' сообщений') }}
-      {#- Кнопкой управляет скрипт страницы, а макрос button не принимает
-          обработчика события — собрана на его классах вручную (прецедент
-          Плана 06). Контракт с purchasePackage сохранён дословно. -#}
-      <button class="btn btn--primary" type="button" onclick="purchasePackage({{ loop.index0 }})"><span class="btn__label">Купить</span></button>
-    {{ card_close() }}
-    {% endfor %}
-  </div>
-  {% elif not payments_enabled and not balance_info.is_unlimited %}
-  {{ empty_state('Пополнение баланса доступно через администратора') }}
+  {#- ПРИЧИНА ЧИТАЕТСЯ РАНЬШЕ ЦЕНЫ И ДАТЫ: под панелью её прочитали бы уже после
+      вывода «ничего не изменилось, кнопка сломана». Обе строки приезжают
+      ГОТОВЫМИ из обработчика — ни код причины, ни значение параметра адреса сюда
+      не уходят (T-05-46, T-05.1-21). Приоритет объявлен ТАМ ЖЕ, а не порядком
+      узлов: `access_notice` пуст, пока есть `error_message`. -#}
+  {% if error_message %}
+  <div data-payment-error>{{ alert(error_message, 'error') }}</div>
+  {% elif access_notice %}
+  <div data-access-notice>{{ alert(access_notice, 'warning') }}</div>
   {% endif %}
 
-  {% if transactions %}
-  {{ card_open(title='История операций') }}
-    {{ rowhead(columns=TX_COLUMNS, cols=TX_COLS) }}
-    {% for tx in transactions %}
-    {%- set tx_label = TX_LABELS.get(tx.type) -%}
-    {{ row_open(cols=TX_COLS) }}
-      {{- cell(text=tx.created_at[:16] if tx.created_at else '', mono=true, muted=true) }}
-      {%- call cell() %}
-        {%- if tx_label %}{{ badge(tx_label[0], tx_label[1]) }}{% else %}{{ mono(tx.type) }}{% endif -%}
-      {%- endcall %}
-      {#- Подпись колонки едет вместе со значением: на 860px шапка колонок
-          скрывается, и без подписи число теряет смысл. Атрибут общий, не
-          принадлежит разделу. -#}
-      {%- call cell() %}
-        <span data-cell-label>Кол-во</span>
-        {{- mono(('+' if tx.amount > 0 else '') ~ tx.amount, 'ok' if tx.amount > 0 else 'danger') -}}
-      {%- endcall %}
-      {%- call cell() %}
-        <span data-cell-label>Баланс</span>
-        {{- mono(tx.balance_after, 'bright') -}}
-      {%- endcall %}
-      {{- cell(text=tx.description or '', grow=true) }}
-    {{ row_close() }}
-    {% endfor %}
+  {{ card_open(title='Доступ к системе', subtitle=panel[0]) }}
+  <div data-access-panel>
+    {#- ЦЕНА ПЕЧАТАЕТСЯ ВО ВСЕХ ЧЕТЫРЁХ СОСТОЯНИЯХ, включая бесплатное: цена —
+        свойство продукта, а не счёт человеку. Крупный элемент на экране РОВНО
+        ОДИН, и это она: второе крупное число вернуло бы арифметику. -#}
+    <div data-metric-line>
+      <span data-metric-value>{{ format_amount(subscription_price) }}</span>
+      {{- mono('/ мес') -}}
+    </div>
+    {#- ⚠️ БЕЙДЖ СТОИТ ОТДЕЛЬНОЙ СТРОКОЙ, А НЕ ВНУТРИ СТРОКИ ЦЕНЫ. Строка цены
+        объявлена без переноса, бейдж — без переноса и без сжатия; при полотне
+        303px запас около девяти пикселей, а девять пикселей у строки, которая
+        не умеет переноситься, запасом не являются: при выходе за полотно она не
+        сложится, а вылезет за карточку. Править сам селектор строки цены
+        запрещено — его держат плитки дашборда фазы 4. -#}
+    {% if panel[1] %}<div data-access-state>{{ badge(panel[1], panel[2]) }}</div>{% endif %}
+    {#- У бесплатного доступа даты нет вовсе, и панель обязана стоять целиком:
+        печатается «бессрочно», а не пустое место. Последний день пробного
+        периода называется СВОИМИ словами — «осталось 0 дней» формально верно и
+        читается как «уже кончилось», то есть как закрытый доступ. -#}
+    {% if state == 'comped' %}{{ mono('доступ открыт бессрочно', 'ok') }}
+    {% elif state == 'expired' %}{{ mono('доступ закрыт' ~ (' ' ~ expires_label if expires_label else ''), 'danger') }}
+    {% elif state == 'trial' and access.get('days_left') == 0 %}{{ mono('последний день, до ' ~ expires_label, 'warn') }}
+    {% elif state == 'trial' %}{{ mono('осталось ' ~ access.days_left ~ ' ' ~ plural_ru(access.days_left, 'день', 'дня', 'дней') ~ ', до ' ~ expires_label, 'warn') }}
+    {% else %}{{ mono('доступ открыт до ' ~ expires_label, 'bright') }}
+    {% endif %}
+    {#- ФОРМА БЕЗ ЕДИНОГО ПОЛЯ: цену читает сервер из настройки, подменить
+        покупателю нечего (T-05.1-22). Атрибут формы ОБЯЗАТЕЛЕН — на нём висит
+        единственное правило нажимаемой высоты, и потерять его значит молча
+        вернуть кнопку к 33px. При выключенных платежах гаснет КНОПКА, а не
+        витрина: цена и дата остаются, экран без них читался бы поломкой. -#}
+    {% if not panel[3] %}{{ mono('Оплата не требуется', 'ok') }}
+    {% elif payments_enabled %}
+    <form method="post" action="/billing/subscribe" data-plan-cta>
+      <button class="btn btn--primary" type="submit"><span class="btn__label">{{ panel[3] }}</span></button>
+    </form>
+    {% else %}{{ mono('Оплатить доступ можно через администратора', 'warn') }}
+    {% endif %}
+  </div>
+  {{ card_close() }}
+
+  {% if payments %}
+  {{ card_open(title='История платежей') }}
+    {#- Потолок НАЗЫВАЕТ СЕБЯ (D-17): молча короткий журнал денег читается как
+        «других платежей не было». -#}
+    {% if payments_truncated %}
+    {{ mono('Показаны последние ' ~ payments_cap ~ ' платежей из ' ~ payments_total, 'warn') }}
+    {% endif %}
+    {{ rowhead(columns=PAY_COLUMNS, cols=PAY_COLS) }}
+    {% for pay in payments %}{{ payment_row(pay, user, PAY_COLS, PAY_LABELS) }}{% endfor %}
   {{ card_close() }}
   {% else %}
-  {{ empty_state('Операций пока нет',
-                 hint='Здесь появятся начисления, покупки и списания сообщений') }}
+  {{ empty_state('Платежей пока нет', hint='Здесь появятся оплаты доступа') }}
   {% endif %}
-
 </div>
-
-{% if payments_enabled %}
-<script>
-async function purchasePackage(index) {
-  try {
-    const resp = await fetch('/api/billing/purchase', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({package_index: index})
-    });
-    if (!resp.ok) {
-      const data = await resp.json();
-      alert(data.detail || 'Ошибка при создании платежа');
-      return;
-    }
-    const data = await resp.json();
-    if (data.confirmation_url) {
-      window.location.href = data.confirmation_url;
-    }
-  } catch (e) {
-    alert('Ошибка: ' + e.message);
-  }
-}
-</script>
-{% endif %}
-
 {% endblock %}

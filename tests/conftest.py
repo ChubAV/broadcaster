@@ -1,7 +1,9 @@
 import itertools
+from datetime import datetime, timedelta, timezone
 
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import Settings
@@ -10,6 +12,8 @@ from app.dependencies import get_db, get_settings
 from app.main import create_app
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
+from app.models.subscription import Subscription
+from app.models.user import User
 
 
 @pytest_asyncio.fixture
@@ -87,6 +91,93 @@ async def authed_client(client, auth_headers):
         follow_redirects=False,
     )
     return client
+
+
+@pytest_asyncio.fixture
+async def expired_client(authed_client, db_session):
+    """Client of a regular user whose access period has ALREADY expired.
+
+    Критерий 2 фазы 05.1 («по истечении пробного срока доступ прекращается»)
+    без этой фикстуры непроверяем: каждый файл заводил бы просроченного
+    пользователя своим хелпером, и длина пробного срока разъехалась бы по
+    суите — ровно тот класс расхождения, ради которого `TRIAL_DAYS` живёт одной
+    константой.
+
+    СРОК СДВИГАЕТСЯ ПРЯМОЙ ПРАВКОЙ СТРОКИ ЧЕРЕЗ ORM, А НЕ МАРШРУТОМ, и это уже
+    принятый в этом файле приём (см. объяснение у `seed_group` ниже):
+    прикладного входа «состарить подписку» в продукте нет и быть не должно —
+    единственный писатель `expires_at` есть подтверждённое уведомление ЮKassa,
+    и двигать срок НАЗАД он не умеет.
+
+    Строка подписки берётся ТА ЖЕ, что читает продукт: активная строка
+    владельца. Если её нет вовсе, фикстура падает вслух — «пробный срок при
+    регистрации не завёлся» есть поломка продукта, и молчаливый пропуск
+    превратил бы её в зелёный тест доступа у пользователя вообще без подписки.
+    """
+    user = (
+        await db_session.execute(
+            select(User).where(User.email == "testuser@test.com")
+        )
+    ).scalar_one()
+
+    subscription = (
+        await db_session.execute(
+            select(Subscription).where(
+                Subscription.user_id == user.id,
+                Subscription.is_active.is_(True),
+            )
+        )
+    ).scalar_one_or_none()
+    assert subscription is not None, (
+        "у только что зарегистрированного пользователя нет активной подписки — "
+        "пробный срок при регистрации не завёлся"
+    )
+
+    subscription.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+    await db_session.commit()
+    return authed_client
+
+
+@pytest_asyncio.fixture
+async def comped_client(expired_client, db_session):
+    """Клиент пользователя с ВЫДАННЫМ бесплатным доступом и МЁРТВОЙ датой.
+
+    Критерий 5 фазы 05.1 («администратор выдаёт бесплатный ДОСТУП») без этой
+    фикстуры непроверяем на трёх поверхностях применения сразу: каждый файл
+    заводил бы льготного пользователя своим хелпером, и «мёртвость» даты
+    разъехалась бы по суите ровно так же, как разъехалась бы длина пробного
+    срока без `expired_client`.
+
+    ⚠️ ФИКСТУРА СТОИТ НА `expired_client`, А НЕ НА `authed_client`, И ЭТО
+    ПРЕДМЕТ, А НЕ ЭКОНОМИЯ. Льгота, выданная человеку с ЖИВЫМ сроком, ничего не
+    доказывает: доступ у него открыт и без неё, и тест зеленел бы при полностью
+    непрочитанном признаке. Утверждение имеет силу только на просроченной
+    строке — там вердикт «открыт» не может прийти ниоткуда, кроме признака.
+
+    Признак ставится ПРЯМОЙ ПРАВКОЙ СТРОКИ через ORM, а не админским маршрутом,
+    по тому же основанию, что и сдвиг срока у `expired_client`: предмет проверки
+    — ПОВЕДЕНИЕ ДОСТУПА при выданной льготе, и прогонять его через ещё один
+    маршрут значило бы уронить эти тесты за компанию при поломке админки.
+    Сам маршрут тумблера проверяется отдельно (`tests/test_admin.py`).
+    """
+    user = (
+        await db_session.execute(
+            select(User).where(User.email == "testuser@test.com")
+        )
+    ).scalar_one()
+
+    subscription = (
+        await db_session.execute(
+            select(Subscription).where(
+                Subscription.user_id == user.id,
+                Subscription.is_active.is_(True),
+            )
+        )
+    ).scalar_one()
+
+    subscription.has_free_access = True
+    await db_session.commit()
+    return expired_client
 
 
 # --- Посев групп --------------------------------------------------------------

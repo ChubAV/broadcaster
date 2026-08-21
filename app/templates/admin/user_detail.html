@@ -3,7 +3,6 @@
 {% from "components/badge.html" import badge %}
 {% from "components/button.html" import button, link_button %}
 {% from "components/card.html" import card_open, card_close %}
-{% from "components/field.html" import field %}
 {% from "components/modal.html" import modal %}
 {% from "components/mono.html" import mono %}
 {% from "components/table.html" import rowhead, row_open, row_close, cell %}
@@ -25,10 +24,11 @@
 {% block content %}
 
 {#- СОСТАВ ПОКАЗЫВАЕМЫХ ПЕРСОНАЛЬНЫХ ДАННЫХ НЕ РАСШИРЯЕТСЯ (T-08-02). Карточка
-    показывает ровно то же, что и до перевёрстки: имя, адрес, баланс, число
-    объявлений, число групп, дату регистрации, список аккаунтов и признак
-    блокировки. Перевёрстка — не основание показать в админке больше, чем
-    показывается сейчас. Закреплено тестом
+    показывает имя, адрес, состояние ДОСТУПА, число объявлений, число групп,
+    дату регистрации, список аккаунтов и признак блокировки. Плитка доступа
+    заняла место плитки остатка сообщений один к одному (планы `05.1-08` и
+    `05.1-09`) — величин по-прежнему столько же. Перевёрстка — не основание
+    показать в админке больше, чем показывается сейчас. Закреплено тестом
     test_admin_user_detail_shows_no_extra_personal_data.
 
     ПРОВЕРКА ПРАВ ОСТАЁТСЯ В ОБРАБОТЧИКЕ (require_admin, T-08-01) и в шаблон не
@@ -54,13 +54,39 @@
       </div>
     </div>
     <div data-metrics>
+      {#- ПЛИТКА ДОСТУПА — НА МЕСТЕ ПЛИТКИ ОСТАТКА СООБЩЕНИЙ И С ТОЙ ЖЕ ФОРМОЙ.
+          Место буквальное: она стоит ПЕРВОЙ, ровно там, где до фазы стояла
+          плитка остатка, и несёт то же крупное значение со знаком бесконечности
+          в льготной ветке. Порядок плиток — не оформление: администратор,
+          открывший карточку, ищет глазами ту же позицию, что и раньше.
+          Значение — КРУПНОЕ ЧИСЛО: число полных суток, знак бесконечности при
+          выданной льготе, прочерк при закрытом доступе. Дата в само значение НЕ
+          помещается — плитка минимальной ширины 210px (`app.css`), а
+          `[data-metric-value]` набран крупным кеглем, — поэтому она стоит
+          ОТДЕЛЬНОЙ строкой под плиткой и печатается только тогда, когда её есть
+          что означать.
+
+          ⚠️ У ЛЬГОТЫ СТРОКИ ДАТЫ НЕТ ВОВСЕ (UI-контракт E5, partial). Дата у
+          такого человека может быть мёртвой, и напечатанная рядом со знаком
+          бесконечности она читалась бы как «бесплатно до вчера» —
+          самопротиворечие вместо ответа. У закрытого доступа дата, наоборот,
+          печатается: администратору важно, КОГДА он закрылся.
+
+          Формат даты — только через глобал зоны пользователя (правило P-2);
+          своего `strftime` у этой строки нет. -#}
       {{ card_open() }}
-        {{ mono('Баланс', 'muted', upper=true) }}
-        {%- if balance_info.is_unlimited -%}
-          <span data-metric-value>∞</span>{{ badge('Безлимит', 'warning') }}
-        {%- else -%}
-          <span data-metric-value>{{ balance_info.balance }}</span>
-        {%- endif -%}
+        {{ mono('Доступ', 'muted', upper=true) }}
+        {%- if target_access.get('is_comped') %}
+        <span data-metric-value>∞</span>
+        {%- elif target_access.get('open') %}
+        <span data-metric-value>{{ target_access.get('days_left') }}</span>
+        {{ mono('до ' ~ format_datetime_for_user(target_access.get('expires_at'), user), 'muted') }}
+        {%- else %}
+        <span data-metric-value>—</span>
+        {%- if target_access.get('expires_at') %}
+        {{ mono('закрыт ' ~ format_datetime_for_user(target_access.get('expires_at'), user), 'danger') }}
+        {%- endif %}
+        {%- endif %}
       {{ card_close() }}
       {{ card_open() }}
         {{ mono('Объявления', 'muted', upper=true) }}
@@ -103,21 +129,22 @@
   {{ card_close() }}
   {% endif %}
 
-  {{ card_open(title='Пополнить баланс') }}
-    <form method="post" action="/admin/users/{{ target_user.id }}/balance" data-form>
-      {{ field(name="amount", label='Кол-во сообщений', type='number', value='100',
-               min=1, id='balance-amount') }}
-      {{ field(name="description", label='Описание', placeholder='Причина пополнения',
-               id='balance-description') }}
-      {{ button('Пополнить') }}
-    </form>
-  {{ card_close() }}
-
   {{ card_open(title='Действия') }}
     <div data-actions>
+      {#- ТУМБЛЕР БЕСПЛАТНОГО ДОСТУПА. Маршрут, метод и адрес — ПРЕЖНИЕ: план
+          `05.1-09` переиспользовал вход снятого тумблера, сменив ему хранилище
+          и подписи. Подписи НАЗЫВАЮТ ДЕЙСТВИЕ, а не состояние («Выдать» /
+          «Снять»), как и у соседней пары блокировки: кнопка, подписанная
+          состоянием, читается как переключатель, у которого непонятно, что
+          случится по нажатию.
+
+          ПОДТВЕРЖДЕНИЯ НЕТ, И ЭТО РЕШЕНИЕ (UI-контракт E5). Тумблер обратим и
+          данных не разрушает: снятая льгота возвращается тем же нажатием. У
+          соседнего тумблера блокировки подтверждения тоже нет — модалка здесь
+          стоит ровно у одного действия, необратимого (удаление). -#}
       <form method="post" action="/admin/users/{{ target_user.id }}/unlimited">
-        {%- if balance_info.is_unlimited %}{{ button('Безлимит выкл', variant='ghost') }}
-        {%- else %}{{ button('Безлимит вкл', variant='ghost') }}{% endif -%}
+        {%- if target_access.get('is_comped') %}{{ button('Снять бесплатный доступ', variant='ghost') }}
+        {%- else %}{{ button('Выдать бесплатный доступ', variant='ghost') }}{% endif -%}
       </form>
       <form method="post" action="/admin/users/{{ target_user.id }}/block">
         {%- if target_user.is_blocked %}{{ button('Разблокировать', variant='ghost') }}

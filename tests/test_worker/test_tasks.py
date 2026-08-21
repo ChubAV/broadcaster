@@ -1,11 +1,13 @@
 import json
 
+from pathlib import Path
+
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy import select
+from sqlalchemy import func, select
 from app.constants import AD_STATUS_DRAFT
 from app.database import Base
 from app.models.user import User
@@ -14,6 +16,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
+from app.models.subscription import Subscription
 from app.application.scheduling.use_cases import DispatchTask
 from app.worker.tasks import (
     check_schedules_async,
@@ -193,7 +196,7 @@ async def test_check_schedules_dispatches(db_session):
     mock_dispatch_settings.redis_url = "redis://localhost:6379/0"
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))), \
+         patch("app.worker.tasks.check_access_cached", AsyncMock(return_value=(True, ""))), \
          patch("app.worker.tasks.get_settings", return_value=mock_dispatch_settings):
         await check_schedules_async(db_session)
 
@@ -219,7 +222,7 @@ async def test_check_schedules_skips_inactive(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))):
+         patch("app.worker.tasks.check_access_cached", AsyncMock(return_value=(True, ""))):
         await check_schedules_async(db_session)
 
     assert len(dispatched) == 0
@@ -235,7 +238,7 @@ async def test_check_schedules_skips_future(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))):
+         patch("app.worker.tasks.check_access_cached", AsyncMock(return_value=(True, ""))):
         await check_schedules_async(db_session)
 
     assert len(dispatched) == 0
@@ -252,7 +255,7 @@ async def test_check_schedules_skips_billing_limited(db_session):
     mock_tg.apply_async = lambda *a, **kw: dispatched.append(("tg", kw.get("queue")))
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(False, "limit reached"))):
+         patch("app.worker.tasks.check_access_cached", AsyncMock(return_value=(False, "limit reached"))):
         await check_schedules_async(db_session)
 
     # No tasks dispatched
@@ -285,7 +288,7 @@ async def test_check_schedules_uses_schedule_timezone(db_session):
     mock_dispatch_settings.redis_url = "redis://localhost:6379/0"
 
     with patch("app.worker.tasks.send_telegram_message", mock_tg), \
-         patch("app.worker.tasks.check_balance_cached", AsyncMock(return_value=(True, ""))), \
+         patch("app.worker.tasks.check_access_cached", AsyncMock(return_value=(True, ""))), \
          patch("app.worker.tasks.get_settings", return_value=mock_dispatch_settings):
         await check_schedules_async(db_session)
 
@@ -666,7 +669,7 @@ async def _seed_retry_case(
         }
 
 
-async def _run_retry(factory, log_id, user_id, *, balance_allowed: bool = True):
+async def _run_retry(factory, log_id, user_id, *, access_allowed: bool = True):
     """Запускает таск повтора и отдаёт (rpush-и Redis, постановки в Celery).
 
     `asyncio.run` подменяется захватом корутины: тело таска обязано выполниться
@@ -674,9 +677,13 @@ async def _run_retry(factory, log_id, user_id, *, balance_allowed: bool = True):
     оторвал бы соединение aiosqlite. Тем же приёмом файл уже пользуется для
     `asyncio.sleep` в тестах фоновой синхронизации.
 
-    Гейт баланса подменяется по образцу тестов рассылки выше: настоящий лезет в
+    Гейт доступа подменяется по образцу тестов рассылки выше: настоящий лезет в
     Redis, которого в тестовой среде нет, и красил бы каждый тест повтора чужой
-    причиной. `balance_allowed=False` даёт исчерпанный баланс.
+    причиной. `access_allowed=False` даёт закрытый доступ.
+
+    Патч ставится на ИМЯ В `app.worker.tasks`, а не на объявление в
+    `app.services.billing_cache`: таск импортировал функцию к себе на уровне
+    модуля, и подмена по месту объявления его вызов не подменила бы вовсе.
     """
     redis_sink: list[tuple] = []
     tg_sink: list[tuple] = []
@@ -700,8 +707,8 @@ async def _run_retry(factory, log_id, user_id, *, balance_allowed: bool = True):
          patch("app.config.get_settings", return_value=mock_s3_settings), \
          patch("redis.from_url", return_value=_FakeRedis(redis_sink)), \
          patch(
-             "app.worker.tasks.check_balance_cached",
-             AsyncMock(return_value=(balance_allowed, "" if balance_allowed else "Баланс исчерпан")),
+             "app.worker.tasks.check_access_cached",
+             AsyncMock(return_value=(access_allowed, "" if access_allowed else "access_closed")),
          ), \
          patch("app.worker.tasks.asyncio.run", captured.append):
         retry_send(log_id, user_id)
@@ -911,21 +918,33 @@ async def test_retry_send_stops_when_group_is_switched_off(
     assert await _send_log_count(factory) == before
 
 
+# =============================================================================
+# Вторая линия гейта ДОСТУПА в повторе — группа `-k access`
+# =============================================================================
+#
+# Тесты этой группы различимы по `-k access` намеренно: вторая линия гейта — то
+# место, снятие которого не красит ни один тест соседних предметов, и прогнать
+# её отдельным отбором обязано быть возможно одной командой.
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("account_type", ["wa", "max", "tg_user"])
-async def test_retry_send_stops_when_the_balance_is_exhausted(
+async def test_retry_send_stops_when_the_access_period_is_closed(
     db_engine_and_factory, account_type
 ):
-    """T-04-36: исчерпанный баланс останавливает повтор ЗДЕСЬ, а не после отправки.
+    """T-04-36, T-05.1-02: закрытый доступ останавливает повтор ЗДЕСЬ, а не после.
 
-    Гейт стоял только в HTTP-обработчике, а между нажатием и исполнением таска
+    Гейт стоит и в HTTP-обработчике, но между нажатием и исполнением таска
     проходит время: задача может простоять за очередью ровно столько, сколько
-    нужно, чтобы баланс кончился на другой рассылке. Без проверки в таске
-    сообщение уходит, и только потом `deduct_message` возвращает False по своему
-    условию `balance > 0` — то есть выходит не отрицательный баланс, а
-    БЕСПЛАТНАЯ отправка мимо тарифа. Остальные три запрета обработчика
-    (владение, черновик, выключенная группа) вторую линию здесь уже имеют;
-    гейт баланса был единственным, у которого её не было.
+    нужно, чтобы срок доступа истёк. Без проверки в таске отправка уходит у
+    человека, у которого доступ уже закончился, — то есть работа, за которую
+    продукт денег не берёт, при живой очереди. Остальные три запрета обработчика
+    (владение, черновик, выключенная группа) вторую линию здесь уже имеют; гейт
+    был единственным, у которого её не было.
+
+    ПРЕДМЕТ ВОПРОСА СМЕНИЛСЯ С БАЛАНСА НА ДОСТУП, А ПРИЧИНА ВТОРОЙ ЛИНИИ
+    ОСТАЛАСЬ ТОЙ ЖЕ И НЕ ОСЛАБЛА: обе величины меняются между постановкой и
+    исполнением, и обе — не в пользу отправляющего.
 
     Выход, как и у прочих остановок таска, ТИХИЙ: записи в журнал не
     появляется — иначе история наполнялась бы свидетельствами о заведомо
@@ -936,12 +955,35 @@ async def test_retry_send_stops_when_the_balance_is_exhausted(
 
     before = await _send_log_count(factory)
     redis_sink, tg_sink = await _run_retry(
-        factory, case["log_id"], case["user_id"], balance_allowed=False
+        factory, case["log_id"], case["user_id"], access_allowed=False
     )
 
-    assert redis_sink == [], "повтор ушёл в очередь мимо гейта баланса"
-    assert tg_sink == [], "повтор ушёл в очередь мимо гейта баланса"
+    assert redis_sink == [], "повтор ушёл в очередь мимо гейта доступа"
+    assert tg_sink == [], "повтор ушёл в очередь мимо гейта доступа"
     assert await _send_log_count(factory) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("account_type", ["wa", "tg_user"])
+async def test_retry_send_dispatches_when_the_access_period_is_live(
+    db_engine_and_factory, account_type
+):
+    """Граница сверху: при открытом доступе тот же повтор УХОДИТ в очередь.
+
+    Без этого утверждения вторая линия, отказывающая ВСЕМ, прошла бы проверку
+    выше — и повтор не работал бы вовсе ни у кого, включая оплативших.
+    """
+    _, factory = db_engine_and_factory
+    case = await _seed_retry_case(factory, account_type=account_type)
+
+    redis_sink, tg_sink = await _run_retry(
+        factory, case["log_id"], case["user_id"], access_allowed=True
+    )
+
+    assert redis_sink or tg_sink, (
+        "открытый доступ не поставил повтор ни в одну очередь — вторая линия "
+        "отказывает всем подряд"
+    )
 
 
 @pytest.mark.asyncio
@@ -978,3 +1020,143 @@ async def test_dispatch_reports_an_unroutable_account_type_instead_of_dropping_i
             "число разосланных считает и те задачи, что никуда не уехали"
         )
         assert await dispatch_send_tasks([]) == 0
+
+
+# =============================================================================
+# ОДИН ВОПРОС НА ПУТИ ОТПРАВКИ — группа `-k one_question`
+# =============================================================================
+#
+# ПРЕДМЕТ ГРУППЫ. До этой волны путь отправки спрашивал ДВА раза: «открыт ли
+# доступ» у гейта и «есть ли остаток сообщений» у списания. Два ответа на один
+# вопрос «можно ли отправлять» рано или поздно расходятся, и разойтись они могут
+# только в одну сторону — рассылка либо идёт у того, кому нельзя, либо не идёт у
+# того, кому можно. Валюта сообщений снята, и вопрос остался один.
+#
+# ⚠️ УТВЕРЖДЕНИЯ ИДУТ И ПО ПОВЕДЕНИЮ, И ПО ТЕКСТУ ИСХОДНИКА. Поведенческое ловит
+# уже написанное списание; структурное — списание, дописанное завтра в ветку,
+# которой сегодня нет. Ни одно не заменяет другое.
+
+
+SEND_PATH_SOURCES = (
+    Path(__file__).resolve().parents[2] / "app" / "worker" / "tasks.py",
+    Path(__file__).resolve().parents[2]
+    / "app"
+    / "application"
+    / "scheduling"
+    / "use_cases.py",
+)
+
+# Имена снятой валюты сообщений. Выписаны ЗДЕСЬ, а не в исходниках пути
+# отправки: гейт читает файлы ТЕКСТОМ, и объяснение, набранное запрещённым
+# именем, уронило бы собственный запрет (находка плана 05.1-04).
+BILLING_SYMBOLS_GONE_FROM_THE_SEND_PATH = (
+    "deduct_message",
+    "check_balance",
+    "add_messages",
+    "invalidate_balance_cache",
+)
+
+
+@pytest.mark.asyncio
+async def test_a_successful_send_does_not_shorten_the_access_period_one_question(
+    db_engine_and_factory,
+):
+    """Успешная отправка не отнимает у пользователя НИЧЕГО (D-D, критерий 1).
+
+    ⚠️ ПРЕДМЕТ ЭТОГО ТЕСТА СМЕНИЛСЯ ВМЕСТЕ С РЕВИЗИЕЙ `0020`, А НЕ ИСЧЕЗ. Он
+    назывался `test_a_successful_send_leaves_no_row_in_the_balance_journal_one_question`
+    и сеял НЕНУЛЕВОЙ остаток сообщений, чтобы списание нашло, что уменьшать.
+    Остатка и его журнала больше не существует ни таблицей, ни моделью: прогон,
+    утверждающий, что в несуществующую таблицу не пишут, утверждал бы о
+    SQLAlchemy, а не о продукте.
+
+    ОСТАЛАСЬ ТА ЖЕ ГРАНИЦА НАД ЖИВОЙ ВЕЛИЧИНОЙ: отправка ЧИТАЕТ вердикт доступа и
+    не имеет права его ТРАТИТЬ. Срок посеян в будущем и сверяется до и после —
+    отправка, укоротившая его хоть на секунду, вернула бы метрическую модель под
+    другим именем. Что имена снятой валюты не вернулись в путь отправки, держит
+    соседний греп-гейт этого же файла.
+    """
+    engine, factory = db_engine_and_factory
+
+    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+    async with factory() as session:
+        user, ad, account, group, schedule = await create_test_data(session)
+        session.add(
+            Subscription(user_id=user.id, expires_at=expires_at, is_active=True)
+        )
+        await session.commit()
+
+    mock_messenger = AsyncMock()
+    mock_messenger.send_message = AsyncMock(return_value={"ok": True})
+
+    mock_settings = AsyncMock()
+    mock_settings.s3_public_url = "https://cdn.example.com/bucket"
+    mock_settings.database_url = "sqlite+aiosqlite:///:memory:"
+
+    mock_engine = AsyncMock()
+    with patch("app.worker.tasks.create_messenger", return_value=mock_messenger), \
+         patch("app.worker.tasks.get_settings", return_value=mock_settings), \
+         patch("app.worker.tasks.get_engine", return_value=mock_engine), \
+         patch("app.worker.tasks.get_session_factory", return_value=factory):
+        await _send_message(ad.id, group.id, account.id, schedule.id)
+
+    async with factory() as session:
+        # Отправка состоялась — иначе «ничего не потрачено» верно по неверной
+        # причине.
+        log = (await session.execute(select(SendLog))).scalar_one()
+        assert log.status == "ok"
+
+        rows = list(
+            (
+                await session.execute(
+                    select(Subscription).where(Subscription.user_id == user.id)
+                )
+            ).scalars()
+        )
+        assert len(rows) == 1, f"строк доступа {len(rows)}, а не одна"
+        assert rows[0].is_active is True, "отправка сняла признак активности"
+
+        remaining = rows[0].expires_at
+        if remaining.tzinfo is None:
+            remaining = remaining.replace(tzinfo=timezone.utc)
+        assert remaining == expires_at, f"срок доступа сдвинут отправкой на {remaining}"
+
+
+@pytest.mark.asyncio
+async def test_the_send_path_asks_the_access_verdict_exactly_once_one_question(
+    db_session,
+):
+    """Вопрос на пути отправки ровно ОДИН, и это вердикт доступа.
+
+    Утверждается ЧИСЛО вызовов, а не факт: второй вопрос — хоть о доступе, хоть
+    об остатке — это второе место, где решается «можно ли отправлять», и
+    разойтись с первым оно может молча.
+    """
+    await create_test_data(db_session)
+
+    dispatch_settings = MagicMock()
+    dispatch_settings.redis_url = "redis://localhost:6379/0"
+
+    gate = AsyncMock(return_value=(True, ""))
+    with patch("app.worker.tasks.send_telegram_message", MagicMock()), \
+         patch("app.worker.tasks.get_settings", return_value=dispatch_settings), \
+         patch("app.worker.tasks.check_access_cached", gate):
+        await check_schedules_async(db_session)
+
+    assert gate.await_count == 1, (
+        f"вердикт доступа спрошен {gate.await_count} раз(а), а не один"
+    )
+    assert gate.await_args.args[2] == "send", gate.await_args
+
+
+def test_no_second_question_is_left_in_the_source_of_the_send_path_one_question():
+    """Структурно: снятой валюты сообщений на пути отправки нет ни именем.
+
+    Поведенческие утверждения выше держат уже написанные ветки; это держит
+    ветку, которой сегодня нет, — списание, дописанное завтра в четвёртое место
+    отправки, вернуло бы второй ответ на единственный вопрос молча.
+    """
+    for path in SEND_PATH_SOURCES:
+        source = path.read_text(encoding="utf-8")
+        for symbol in BILLING_SYMBOLS_GONE_FROM_THE_SEND_PATH:
+            assert symbol not in source, f"{path.name}: {symbol}"
