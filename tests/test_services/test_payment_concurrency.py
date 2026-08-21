@@ -43,8 +43,6 @@ from yookassa.domain.notification import WebhookNotificationEventType
 from app.application.billing.subscription_period import add_one_month
 from app.config import Settings
 from app.database import Base
-from app.models.balance_transaction import BalanceTransaction
-from app.models.message_balance import MessageBalance
 from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.user import User
@@ -179,23 +177,25 @@ async def test_overlapping_deliveries_of_a_package_credit_nothing(sessions):
     журнала операций, и после снятия валюты оба свелись к одному вопросу —
     «выдано ли хоть что-нибудь». Держать два имени под одним вопросом значило бы
     получить пару, которая расходится при первой же правке.
+
+    ⚠️ ВЕЛИЧИНА, ПО КОТОРОЙ СЧИТАЛОСЬ «ВЫДАННОЕ», СМЕНИЛАСЬ ВМЕСТЕ С РЕВИЗИЕЙ
+    `0020`. Остаток сообщений и его журнал сняты вместе с таблицами: начислить их
+    невозможно ПО СХЕМЕ, и прогон, это утверждающий, утверждал бы о SQLAlchemy, а
+    не о продукте. Единственное, что пакетная доставка может выдать сегодня и не
+    имеет права, — ДОСТУП, и считается теперь он.
     """
     user_id, _ = await _seed(sessions)
 
     await _overlapping_deliveries(sessions)
 
     async with sessions() as check:
-        balance = await check.scalar(
-            select(MessageBalance.balance).where(MessageBalance.user_id == user_id)
-        )
-        rows = await check.scalar(
+        granted = await check.scalar(
             select(func.count())
-            .select_from(BalanceTransaction)
-            .where(BalanceTransaction.payment_id == YOO_ID)
+            .select_from(Subscription)
+            .where(Subscription.user_id == user_id)
         )
 
-    assert balance in (None, 0), f"наложившиеся доставки начислили {balance}"
-    assert rows == 0, f"строк журнала операций по одному платежу {rows}, а не ноль"
+    assert granted == 0, f"наложившиеся доставки пакета выдали {granted} строк доступа"
 
 
 @pytest.mark.asyncio
@@ -287,10 +287,14 @@ async def test_a_package_payment_without_a_count_credits_nothing(db_session):
     )
 
     assert processed is False
-    balance = await db_session.scalar(
-        select(MessageBalance.balance).where(MessageBalance.user_id == user.id)
+    # Начислять после снятия валюты сообщений нечего и некуда — проверяется
+    # ОСТАВШАЯСЯ выдача: пустой пакет не имеет права открыть доступ.
+    granted = await db_session.scalar(
+        select(func.count())
+        .select_from(Subscription)
+        .where(Subscription.user_id == user.id)
     )
-    assert balance in (None, 0), f"пустой пакет что-то начислил: {balance}"
+    assert granted == 0, f"пустой пакет выдал {granted} строк доступа"
 
 
 # --- Остаточная щель: ДВА РАЗНЫХ платежа одного пользователя ------------------
@@ -395,7 +399,7 @@ async def test_a_rejected_subscription_insert_is_recovered_not_raised(db_session
 
     current = (datetime.now(timezone.utc) + timedelta(days=10)).replace(microsecond=0)
     existing = Subscription(
-        user_id=user.id, plan="basic", expires_at=current, is_active=True
+        user_id=user.id, expires_at=current, is_active=True
     )
     db_session.add(existing)
     db_session.add(
@@ -456,5 +460,8 @@ async def test_a_rejected_subscription_insert_is_recovered_not_raised(db_session
         "срок сдвинут не на календарный месяц от даты чужой строки"
     )
     # Строку подписки платёж не переписывает: решение о плане снято из
-    # `_apply_extension` вместе с рангом тарифов.
-    assert rows[0].plan == "basic"
+    # `_apply_extension` вместе с рангом тарифов, а сама колонка — ревизией
+    # `0020`. Утверждение переехало с колонки тарифа на ТОЖДЕСТВО СТРОКИ: сдвинута
+    # именно ЧУЖАЯ строка, а не заведённая заново под тем же пользователем.
+    assert rows[0].id == existing.id, "продлена не чужая строка, а новая"
+    assert rows[0].is_active is True

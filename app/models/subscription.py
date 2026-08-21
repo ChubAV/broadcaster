@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, func, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -31,9 +31,20 @@ class Subscription(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE")
     )
-    plan: Mapped[str] = mapped_column(String(50), default="free")
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Признак бесплатного доступа, назначаемого администратором (ревизия 0020).
+    #
+    # ЧИТАТЕЛЕЙ У НЕГО ПОКА НЕТ, И ЭТО ПОРЯДОК РАБОТ, А НЕ ЗАБЫВЧИВОСТЬ. Колонка
+    # заводится вместе с необратимой правкой схемы, потому что она её часть;
+    # предикат доступа, шелл и админский тумблер вводит план `05.1-09`.
+    #
+    # Умолчание ЛОЖНО у обеих сторон — и у Python, и у СУБД. Разойдись они, строка,
+    # вставленная в обход ORM (а именно так её вставляет ревизия популяции без
+    # подписки), получила бы другой ответ, чем строка, вставленная приложением.
+    has_free_access: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -23,7 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import CHART_BUCKETS_PER_DAY
 from app.models.ad import Ad
-from app.models.balance_transaction import BalanceTransaction
 from app.models.group import Group
 from app.models.group_info import GroupInfo
 from app.models.messenger_account import MessengerAccount
@@ -186,24 +185,11 @@ async def _seed_send_log(
     return log
 
 
-async def _seed_transaction(
-    db: AsyncSession,
-    amount: int = 25,
-    type_: str = "purchase",
-    description: str = "Пакет «Старт»",
-) -> BalanceTransaction:
-    user = await _user(db)
-    tx = BalanceTransaction(
-        user_id=user.id,
-        amount=amount,
-        balance_after=100 + amount,
-        type=type_,
-        description=description,
-    )
-    db.add(tx)
-    await db.commit()
-    await db.refresh(tx)
-    return tx
+# ПОМОЩНИКА ПОСЕВА ЖУРНАЛА ОПЕРАЦИЙ ПО ОСТАТКУ ЗДЕСЬ БОЛЬШЕ НЕТ: ревизия `0020`
+# уронила таблицу под ним, а раздел, который он наполнял, снят ещё планом
+# `05.1-06`. Единственный его вызывающий — проверка отсутствия обработчиков
+# события в разметке раздела — сеет теперь только строку журнала ДЕНЕГ, которая
+# на странице и рисуется.
 
 
 async def _seed_payment(
@@ -1780,7 +1766,6 @@ async def test_billing_has_no_event_handler_on_a_button(
     приехать из паршала.
     """
     await _seed_payment(db_session)
-    await _seed_transaction(db_session)
 
     html = (await authed_client.get("/billing")).text
 
@@ -2066,12 +2051,16 @@ async def test_admin_user_detail_renders_data(
     # Действия сохраняются на прежних маршрутах: новых не добавляется, старые
     # не теряются (блокировка и вход под пользователем — Фаза 6, ADMIN-04/05).
     #
-    # ⚠️ ПОПОЛНЕНИЕ УШЛО ИЗ ПЕРЕЧНЯ ВМЕСТЕ С МАРШРУТОМ, А НЕ ПОТЕРЯЛОСЬ. Валюта
-    # сообщений снята из продукта целиком, пополнять больше нечего, и карточка
-    # снята вместе с входом. Проверку, что вход действительно исчез, держит
-    # `tests/test_admin.py::test_the_admin_top_up_route_no_longer_answers`;
-    # здесь остались ровно те действия, которые карточка обязана предлагать.
-    for action in ("/unlimited", "/block", "/delete"):
+    # ⚠️ ПОПОЛНЕНИЕ И ТУМБЛЕР БЕЗЛИМИТА УШЛИ ИЗ ПЕРЕЧНЯ ВМЕСТЕ СО СВОИМИ
+    # МАРШРУТАМИ, А НЕ ПОТЕРЯЛИСЬ. Валюта сообщений снята из продукта целиком, а
+    # ревизия `0020` уронила таблицы под обоими: пополнять нечего и переключать
+    # нечего. Проверку, что вход пополнения действительно исчез, держит
+    # `tests/test_admin.py::test_the_admin_top_up_route_no_longer_answers`; что
+    # исчез вход тумблера — `test_the_admin_unlimited_route_no_longer_answers`
+    # там же. Право открыть доступ бесплатно не отменено (D-E): тумблер
+    # возвращается сюда планом `05.1-09` уже поверх признака подписки, и перечень
+    # ниже придётся дополнить ТЕМ ЖЕ планом.
+    for action in ("/block", "/delete"):
         assert f"/admin/users/{user.id}{action}" in html, action
 
 
@@ -2972,7 +2961,12 @@ AD_CELL_LABELS = ("Текст", "Отправок", "Расписаний", "С�
 # RECENT_CELL_LABELS вместе с test_dashboard_cell_labels_present ВЫШЛИ отсюда
 # планом 04-05: блок «Последние отправки» заменён живой лентой (DASH-03), её
 # строка не таблица и колонок не имеет вовсе — подписывать в ней нечего.
-ADMIN_USER_CELL_LABELS = ("Регистрация", "Баланс", "Статус")
+# «Баланс» ВЫШЕЛ отсюда планом 05.1-08 вместе со своей колонкой: ревизия `0020`
+# уронила таблицу остатка сообщений, и подписывать в строке стало нечего.
+# Колонку доступа на её место ставит план `05.1-09` — и подпись обязана вернуться
+# в этот кортеж ТЕМ ЖЕ планом, иначе новая колонка приедет без подписи и на 860px
+# станет значением без названия.
+ADMIN_USER_CELL_LABELS = ("Регистрация", "Статус")
 
 
 @pytest.mark.asyncio

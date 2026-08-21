@@ -10,14 +10,13 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from sqlalchemy import func, select
 from app.constants import AD_STATUS_DRAFT
 from app.database import Base
-from app.models.balance_transaction import BalanceTransaction
-from app.models.message_balance import MessageBalance
 from app.models.user import User
 from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
 from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
+from app.models.subscription import Subscription
 from app.application.scheduling.use_cases import DispatchTask
 from app.worker.tasks import (
     check_schedules_async,
@@ -1059,20 +1058,32 @@ BILLING_SYMBOLS_GONE_FROM_THE_SEND_PATH = (
 
 
 @pytest.mark.asyncio
-async def test_a_successful_send_leaves_no_row_in_the_balance_journal_one_question(
+async def test_a_successful_send_does_not_shorten_the_access_period_one_question(
     db_engine_and_factory,
 ):
-    """Успешная отправка не списывает ничего и ни у кого (D-D, критерий 1).
+    """Успешная отправка не отнимает у пользователя НИЧЕГО (D-D, критерий 1).
 
-    ⚠️ ОСТАТОК ПОСЕЯН НЕНУЛЕВЫМ НАМЕРЕННО. При нулевом остатке прежнее списание
-    не находило строки для уменьшения и не писало в журнал вовсе — тест зеленел
-    бы и ДО снятия списания, то есть проверял бы посев, а не продукт.
+    ⚠️ ПРЕДМЕТ ЭТОГО ТЕСТА СМЕНИЛСЯ ВМЕСТЕ С РЕВИЗИЕЙ `0020`, А НЕ ИСЧЕЗ. Он
+    назывался `test_a_successful_send_leaves_no_row_in_the_balance_journal_one_question`
+    и сеял НЕНУЛЕВОЙ остаток сообщений, чтобы списание нашло, что уменьшать.
+    Остатка и его журнала больше не существует ни таблицей, ни моделью: прогон,
+    утверждающий, что в несуществующую таблицу не пишут, утверждал бы о
+    SQLAlchemy, а не о продукте.
+
+    ОСТАЛАСЬ ТА ЖЕ ГРАНИЦА НАД ЖИВОЙ ВЕЛИЧИНОЙ: отправка ЧИТАЕТ вердикт доступа и
+    не имеет права его ТРАТИТЬ. Срок посеян в будущем и сверяется до и после —
+    отправка, укоротившая его хоть на секунду, вернула бы метрическую модель под
+    другим именем. Что имена снятой валюты не вернулись в путь отправки, держит
+    соседний греп-гейт этого же файла.
     """
     engine, factory = db_engine_and_factory
 
+    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
     async with factory() as session:
         user, ad, account, group, schedule = await create_test_data(session)
-        session.add(MessageBalance(user_id=user.id, balance=100))
+        session.add(
+            Subscription(user_id=user.id, expires_at=expires_at, is_active=True)
+        )
         await session.commit()
 
     mock_messenger = AsyncMock()
@@ -1090,19 +1101,25 @@ async def test_a_successful_send_leaves_no_row_in_the_balance_journal_one_questi
         await _send_message(ad.id, group.id, account.id, schedule.id)
 
     async with factory() as session:
-        # Отправка состоялась — иначе «журнал пуст» верно по неверной причине.
+        # Отправка состоялась — иначе «ничего не потрачено» верно по неверной
+        # причине.
         log = (await session.execute(select(SendLog))).scalar_one()
         assert log.status == "ok"
 
-        rows = await session.scalar(
-            select(func.count()).select_from(BalanceTransaction)
+        rows = list(
+            (
+                await session.execute(
+                    select(Subscription).where(Subscription.user_id == user.id)
+                )
+            ).scalars()
         )
-        assert rows == 0, f"успешная отправка записала {rows} строк списания"
+        assert len(rows) == 1, f"строк доступа {len(rows)}, а не одна"
+        assert rows[0].is_active is True, "отправка сняла признак активности"
 
-        remaining = await session.scalar(
-            select(MessageBalance.balance).where(MessageBalance.user_id == user.id)
-        )
-        assert remaining == 100, f"остаток уменьшен до {remaining}"
+        remaining = rows[0].expires_at
+        if remaining.tzinfo is None:
+            remaining = remaining.replace(tzinfo=timezone.utc)
+        assert remaining == expires_at, f"срок доступа сдвинут отправкой на {remaining}"
 
 
 @pytest.mark.asyncio
