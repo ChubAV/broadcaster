@@ -42,12 +42,18 @@ from app.services.subscription_service import check_access
 
 
 @contextlib.asynccontextmanager
-async def _session_with_user(*, expires_in_days: int | None):
+async def _session_with_user(
+    *, expires_in_days: int | None, has_free_access: bool = False
+):
     """Сессия на своём движке и пользователь с УПРАВЛЯЕМЫМ сроком доступа.
 
     `expires_in_days=None` означает «строки подписки нет вовсе» — состояние,
     которое переживёт выкат (популяция П-о-1) и обязано иметь определённый
     вердикт, а не исключение на середине цикла планировщика.
+
+    `has_free_access` — признак выданной администратором льготы (план 05.1-09).
+    Умолчание ЛОЖНО, поэтому ни один существующий вызов помощника смысла не
+    меняет: льгота приезжает только туда, где она и есть предмет проверки.
     """
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
@@ -68,6 +74,7 @@ async def _session_with_user(*, expires_in_days: int | None):
                         expires_at=datetime.now(timezone.utc)
                         + timedelta(days=expires_in_days),
                         is_active=True,
+                        has_free_access=has_free_access,
                     )
                 )
                 await session.commit()
@@ -166,6 +173,37 @@ async def test_an_expired_period_closes_access_with_a_named_reason():
 
     assert allowed is False
     assert reason, "отказ пути отправки не оставил в журнале ни слова о причине"
+
+
+@pytest.mark.asyncio
+async def test_free_access_opens_the_send_path_over_a_dead_date():
+    """Третья поверхность применения льготы — САМАЯ ДОРОГАЯ из трёх.
+
+    Пропуск льготы на страницах стоит человеку одного экрана; здесь он стоит
+    ему РАССЫЛКИ, которую администратор ему разрешил. Вход — мёртвая дата:
+    вердикт «открыт» на ней не может прийти ниоткуда, кроме признака.
+
+    Оба утверждения — и вердикт, и НЕПУСТОЙ список задач: вердикт без задач
+    доказывал бы только то, что гейт согласен, а не то, что планировщик
+    действительно собрал отправку.
+    """
+    async with _session_with_user(
+        expires_in_days=-1, has_free_access=True
+    ) as (session, user):
+        assert await check_access(session, user.id) == (True, "")
+
+        await _seed_due_schedule(session, user)
+        with _no_redis():
+            tasks = await collect_due_schedules(
+                session,
+                now=datetime.now(timezone.utc),
+                check_limit=check_access_cached,
+            )
+
+        assert tasks, (
+            "выданный бесплатный доступ не рассылает по расписанию — льгота "
+            "доехала до экранов и не доехала до пути отправки"
+        )
 
 
 @pytest.mark.asyncio
