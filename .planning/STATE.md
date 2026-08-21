@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-08-21)
 ## Current Position
 
 Phase: 06 (Админ-панель) — READY TO EXECUTE
-Status: Phase 05.1 shipped — PR #41; Phase 6 ready to plan
+Status: Phase 05.1 shipped — PR #41; Phase 6 planned — 14 plans, 10 waves, verification passed
 Last activity: 2026-08-21 — Phase 06 planning complete
 
 Владелец остановил UAT фазы 5 на первом же пункте: «получилась очень сложная для понимания система тарифов». Диагноз подтверждается кодом — в фазе 5 сосуществовали ДВЕ независимые системы оплаты: три тарифных плана по четырём осям лимитов (`Settings.plan_limits`) И отдельная валюта сообщений с пакетами (`Settings.message_packages`, `MessageBalance`, списание `deduct_message()`). Итоговая модель убирает счёт целиком: 3000 ₽/мес за доступ к системе, без лимитов по аккаунтам, группам и сообщениям.
@@ -224,5 +224,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-08-21T19:17:55.655Z
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-admin-panel/06-CONTEXT.md
+Stopped at: Phase 6 planned — 14 plans, 10 waves
+Resume file: .planning/phases/06-admin-panel/06-01-PLAN.md
