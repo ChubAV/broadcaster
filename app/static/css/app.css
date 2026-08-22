@@ -872,6 +872,32 @@ a:hover { color: var(--accent-link-hover); }
 .cell--mono { font-family: var(--font-mono); font-size: var(--fs-xs); }
 .cell--muted { color: var(--text-tertiary); }
 
+/* Вкладки подразделов админ-панели.
+   ⚠️ ИМЯ СВОЁ, А НЕ [data-tabs]: тот атрибут уже занят НИЖНЕЙ мобильной
+   навигацией шелла, которая на узких экранах становится фиксированной панелью
+   внизу. Переиспользование имени утащило бы вкладки подраздела вниз экрана
+   вместе с ней.
+   ⚠️ ПЕРЕНОС ПО СТРОКАМ, А НЕ ГОРИЗОНТАЛЬНАЯ ПРОКРУТКА: на 375px шесть
+   подписей не помещаются в строку, и прокручиваемая полоса прятала бы
+   последние вкладки за краем — достижимыми, но невидимыми. */
+[data-subtabs] {
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 4px; padding: 3px; margin-bottom: 4px;
+  border-radius: var(--r-lg); background: var(--surface-input);
+  border: 1px solid var(--border-input);
+}
+.subtab {
+  padding: 8px 13px; border-radius: var(--r-md);
+  font-size: var(--fs-sm); white-space: nowrap;
+  color: var(--text-secondary); background: transparent;
+  transition: background .16s ease, color .16s ease;
+}
+.subtab:hover { color: var(--text); }
+/* Тот же приподнятый фон, что у активного нижнего таба шелла (.tab-item
+   [aria-current]) — две полосы вкладок на одной странице обязаны отмечать
+   активное одинаково, иначе читаются как разные механизмы. */
+.subtab[data-subtab-active] { background: #15151d; color: var(--text); }
+
 @media (prefers-reduced-motion: reduce) {
   .progress__bar, .toggle__knob { animation: none !important; transition: none !important; }
 }

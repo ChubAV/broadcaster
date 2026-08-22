@@ -28,9 +28,9 @@ from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.pages.common import templates
-from app.repositories.group_info import GroupInfoRepository
 from app.repositories.user import UserRepository
 from app.services.billing_cache import invalidate_access_cache
+from app.services.ops_state import worker_liveness
 
 logger = structlog.get_logger(__name__)
 
@@ -42,6 +42,44 @@ logger = structlog.get_logger(__name__)
 # необратимо, а тумблер нет.
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+# ПОДРАЗДЕЛ АДМИН-ПАНЕЛИ ЕСТЬ МАРШРУТ, А НЕ СОСТОЯНИЕ НА ОДНОМ ЭКРАНЕ (D-01).
+# В макете вкладки переключаются состоянием потому, что макет статический, —
+# это не указание к архитектуре. Контракт Фазы 1 требует, чтобы базовый путь
+# работал без JS, и переключение подраздела подменой блока сделало бы навигацию
+# JS-зависимой: администратор, пришедший чинить аварию с урезанным браузером,
+# остался бы с одним подразделом из шести.
+#
+# ⚠️ ПЕРЕЧЕНЬ ОБЪЯВЛЕН ЗДЕСЬ ОДИН РАЗ и читается И обработчиками, И разметкой
+# вкладок (`admin/includes/_tabs.html`). Вторая копия подписей в шаблоне
+# разъехалась бы с этой молча — подпись поменяли бы в одном месте, а активная
+# вкладка продолжала бы подсвечиваться по старому ключу.
+ADMIN_TABS: tuple[dict[str, str], ...] = (
+    {"key": "overview", "label": "Обзор", "href": "/admin"},
+    {"key": "users", "label": "Пользователи", "href": "/admin/users"},
+    {"key": "workers", "label": "Воркеры", "href": "/admin/workers"},
+    {"key": "queue", "label": "Очередь", "href": "/admin/queue"},
+    {"key": "logs", "label": "Логи", "href": "/admin/logs"},
+    {"key": "payments", "label": "Платежи", "href": "/admin/payments"},
+)
+
+
+def _admin_context(request: Request, admin: User, tab: str) -> dict:
+    """Общая часть контекста любого подраздела админ-панели.
+
+    `active_page` подсвечивает раздел в сайдбаре шелла и через `nav_label`
+    рисует заголовок — собственного заголовка подразделам заводить не нужно.
+    `admin_tab` отмечает активную вкладку, `admin_tabs` отдаёт сам перечень.
+    """
+    return {
+        "request": request,
+        "user": admin,
+        "is_admin": True,
+        "active_page": "admin",
+        "admin_tab": tab,
+        "admin_tabs": ADMIN_TABS,
+    }
 
 
 async def _active_subscriptions_by_user(
@@ -152,12 +190,9 @@ async def admin_dashboard(
     # переливаются без дыры.
 
     return templates.TemplateResponse(
-        "admin/dashboard.html",
+        "admin/overview.html",
         {
-            "request": request,
-            "user": admin,
-            "is_admin": True,
-            "active_page": "admin",
+            **_admin_context(request, admin, "overview"),
             "stats": {
                 "total_users": total_users,
                 "total_accounts": total_accounts,
@@ -196,13 +231,91 @@ async def admin_users(
     return templates.TemplateResponse(
         "admin/users.html",
         {
-            "request": request,
-            "user": admin,
-            "is_admin": True,
-            "active_page": "admin",
+            **_admin_context(request, admin, "users"),
             "users": user_data,
             "search_query": q,
         },
+    )
+
+
+@router.get("/workers", response_class=HTMLResponse)
+async def admin_workers(
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Подраздел «Воркеры»: состояние сессии из базы и живость воркера из Redis.
+
+    ⚠️ ЖИВОСТЬ ЧИТАЕТСЯ СЕРВИСОМ, А НЕ ЭТИМ ОБРАБОТЧИКОМ. Обращение к Redis,
+    написанное здесь, было бы непроверяемо: суита идёт на SQLite без внешних
+    служб и подменяет ИМЕНОВАННУЮ точку `app.services.ops_state._get_redis`.
+
+    ⚠️ КОНТЕЙНЕРНОГО API ЗДЕСЬ НЕТ НИ ОДНОЙ СТРОКОЙ, и это контракт Фазы 1,
+    оставленный в силе буквально: демон, недоступный на пути рендера, вешал бы
+    подраздел ровно тогда, когда его открывают ради аварии. Утверждение
+    снимается разбором ЭТОГО исходника по синтаксическому дереву в
+    `tests/test_pages/test_admin_panel.py`, а не наблюдением за страницей.
+
+    ⚠️ ИМЯ КОНТЕЙНЕРНОГО КЛИЕНТА НЕ ВЫПИСАНО ЗДЕСЬ НИ РАЗУ, И ЭТО НАМЕРЕННО:
+    страховочный греп по модулю считает вхождение и в докстринге тоже, поэтому
+    объяснение «почему вызова нет» иначе роняло бы проверку, утверждающую, что
+    вызова нет.
+    """
+    accounts = (
+        (
+            await db.execute(
+                select(MessengerAccount).order_by(MessengerAccount.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    wa_ids = [a.id for a in accounts if a.type == "wa"]
+    max_ids = [a.id for a in accounts if a.type == "max"]
+    liveness = await worker_liveness(wa_ids=wa_ids, max_ids=max_ids)
+
+    # У телеграм-аккаунта отдельного воркера нет: величина в колонке «Воркер»
+    # ещё НЕ ОПРЕДЕЛЕНА, и строка печатает прочерк вместо выдуманного бейджа.
+    # Честную подпись назначает план 06-05 чекпойнтом владельца.
+    rows = [{"account": a, "state": liveness.get(a.id)} for a in accounts]
+
+    return templates.TemplateResponse(
+        "admin/workers.html",
+        {**_admin_context(request, admin, "workers"), "rows": rows},
+    )
+
+
+@router.get("/queue", response_class=HTMLResponse)
+async def admin_queue(
+    request: Request,
+    admin: User = Depends(require_admin),
+):
+    """Каркас подраздела «Очередь». Содержимое приносит план 06-07."""
+    return templates.TemplateResponse(
+        "admin/queue.html", _admin_context(request, admin, "queue")
+    )
+
+
+@router.get("/logs", response_class=HTMLResponse)
+async def admin_logs(
+    request: Request,
+    admin: User = Depends(require_admin),
+):
+    """Каркас подраздела «Логи». Содержимое приносит план 06-08."""
+    return templates.TemplateResponse(
+        "admin/logs.html", _admin_context(request, admin, "logs")
+    )
+
+
+@router.get("/payments", response_class=HTMLResponse)
+async def admin_payments(
+    request: Request,
+    admin: User = Depends(require_admin),
+):
+    """Каркас подраздела «Платежи». Содержимое приносит план 06-11."""
+    return templates.TemplateResponse(
+        "admin/payments.html", _admin_context(request, admin, "payments")
     )
 
 
@@ -631,69 +744,3 @@ async def admin_delete_user(
     await db.commit()
 
     return RedirectResponse(url="/admin/users", status_code=302)
-
-
-@router.get("/groups-info", response_class=HTMLResponse)
-async def admin_groups_info(
-    request: Request,
-    q: str = "",
-    messenger: str = "",
-    offset: int = Query(default=0, ge=0),
-    admin: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    page_size = 30
-    repo = GroupInfoRepository(db)
-
-    items, total = await repo.search(
-        q=q, messenger_type=messenger, offset=offset, limit=page_size
-    )
-    counts = await repo.count_by_type()
-    total_all = sum(counts.values())
-
-    has_next = offset + page_size < total
-    has_prev = offset > 0
-
-    return templates.TemplateResponse(
-        "admin/groups_info.html",
-        {
-            "request": request,
-            "user": admin,
-            "is_admin": True,
-            "active_page": "admin",
-            "items": items,
-            "total": total,
-            "total_all": total_all,
-            "counts": counts,
-            "q": q,
-            "messenger": messenger,
-            "offset": offset,
-            "page_size": page_size,
-            "has_next": has_next,
-            "has_prev": has_prev,
-        },
-    )
-
-
-@router.get("/groups-info/{item_id}", response_class=HTMLResponse)
-async def admin_group_info_detail(
-    request: Request,
-    item_id: int,
-    admin: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    repo = GroupInfoRepository(db)
-    item = await repo.get_by_id(item_id)
-    if not item:
-        return RedirectResponse(url="/admin/groups-info", status_code=302)
-
-    return templates.TemplateResponse(
-        "admin/group_info_detail.html",
-        {
-            "request": request,
-            "user": admin,
-            "is_admin": True,
-            "active_page": "admin",
-            "item": item,
-        },
-    )
