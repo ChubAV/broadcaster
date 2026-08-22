@@ -35,7 +35,9 @@
 Покрашенная красным норма приучает администратора не смотреть в подраздел
 вовсе — и тогда настоящий отказ он тоже не увидит.
 """
+import json
 import time
+from dataclasses import dataclass
 
 import structlog
 
@@ -269,3 +271,209 @@ async def infra_liveness() -> dict[str, str]:
         service: (WORKER_ONLINE if _is_fresh(beats[position]) else WORKER_OFFLINE)
         for position, service in enumerate(INFRA_SERVICE_ORDER)
     }
+
+
+# ---------------------------------------------------------------------------
+# Содержимое очередей и снятие одной задачи (ADMIN-08, D-13, D-17)
+# ---------------------------------------------------------------------------
+#
+# ⚠️ ЧТЕНИЕ ОЧЕРЕДИ НЕ СНИМАЕТ ЗАДАЧИ, И ЭТО ГЛАВНОЕ ОГРАНИЧЕНИЕ РАЗДЕЛА.
+# Подраздел отвечает на вопрос «что ждёт отправки»; чтение, снимающее элементы,
+# отняло бы у пользователей оплаченные рассылки просто оттого, что администратор
+# открыл страницу. Поэтому здесь есть `LRANGE` и нет ни одного `LPOP`/`BLPOP` —
+# отсутствие закреплено грепом в критериях приёмки плана.
+#
+# ⚠️ ДЛИНА ОЧЕРЕДИ TELEGRAM ЧИТАЕТСЯ ПО ИМЕНИ, БЕЗ РАЗБОРА СОДЕРЖИМОГО (D-14).
+# Тело задачи там — конверт брокера с закодированным содержимым; его разбор
+# привязал бы админку к внутренностям библиотеки, которые меняются между
+# версиями молча. Счёт по длине полон РОВНО ПОКА постановка не передаёт
+# приоритет: с ненулевым приоритетом kombu раскладывает задачи по ключам с
+# суффиксами (`_q_for_pri`), и подраздел начал бы недосчитывать без единого
+# признака. Этот день ловит `test_no_dispatch_call_in_the_project_passes_a_priority`.
+
+# Имя очереди канала telegram — то же, которым постановщик зовёт `apply_async`
+# (`app/worker/tasks.py:96-100`). Выписанное здесь вторым литералом, оно
+# разъехалось бы с постановщиком молча: подраздел считал бы длину ключа,
+# которого никто не пишет, и печатал бы уверенный ноль.
+TELEGRAM_QUEUE_KEY = "telegram"
+
+# Исходы снятия задачи. Строки, а не булево: «снял» и «уже нечего снимать» —
+# разные ответы администратору, и третий, «наблюдатель сломан», не имеет права
+# слиться ни с одним из них. Молчаливый успех при недоступном Redis был бы
+# худшим из трёх: администратор решил бы, что отправку остановил.
+DROP_REMOVED = "removed"
+DROP_MISSING = "missing"
+DROP_UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class QueuePage:
+    """Прочитанная страница очереди канала.
+
+    `total` — длина ВСЕЙ очереди, а не число прочитанных тел: страница усечена
+    потолком, и без полной длины разметка не смогла бы назвать усечение.
+    `unavailable` едет ОТДЕЛЬНЫМ полем: пустая очередь и сломанный наблюдатель —
+    разные состояния мира, и слитые в одно они сообщили бы «рассылать нечего»
+    ровно тогда, когда очередь стоит и её не видно.
+    `unreadable` — число тел, которые не разобрались: битая задача не имеет права
+    ни уронить подраздел, ни исчезнуть молча, поэтому она считается и называется.
+    """
+
+    tasks: tuple[dict, ...]
+    total: int | None
+    unavailable: bool
+    unreadable: int = 0
+
+
+def queue_key(channel: str, account_id: int) -> str:
+    """Ключ очереди аккаунта. Форма — из инвентаря ключей (`06-RESEARCH.md`)."""
+    return f"{channel}:queue:{account_id}"
+
+
+async def _read_raw(client, key: str, limit: int) -> list | None:
+    """Сырые тела задач и длина очереди — ОДНИМ конвейером, НЕ снимая элементов.
+
+    `LRANGE` берёт диапазон, а не всё: список Redis неограничен, и очередь
+    вставшего канала растёт неограниченно же. Отрисовка всей очереди уложила бы
+    подраздел ровно в той аварии, ради которой его открывают (T-06-Q2).
+    """
+    pipe = client.pipeline()
+    pipe.llen(key)
+    pipe.lrange(key, 0, limit - 1)
+    return await pipe.execute()
+
+
+async def queue_page(channel: str, account_id: int, limit: int) -> QueuePage:
+    """Страница очереди аккаунта: тела задач и полная длина, БЕЗ снятия.
+
+    Недоступный Redis и ошибка чтения не поднимают исключение и не притворяются
+    пустой очередью: подраздел обязан отвечать 200 и при сломанном наблюдателе,
+    но обязан и назвать его сломанным.
+    """
+    client = _get_redis()
+    if client is None:
+        return QueuePage(tasks=(), total=None, unavailable=True)
+
+    key = queue_key(channel, account_id)
+    try:
+        reply = await _read_raw(client, key, limit)
+    except Exception as e:
+        logger.warning(
+            "ops_state_queue_read_error", key=key, error=str(e)
+        )
+        return QueuePage(tasks=(), total=None, unavailable=True)
+
+    if reply is None or len(reply) < 2:
+        logger.warning("ops_state_queue_short_reply", key=key)
+        return QueuePage(tasks=(), total=None, unavailable=True)
+
+    try:
+        total = int(reply[0] or 0)
+    except (TypeError, ValueError):
+        total = 0
+
+    tasks: list[dict] = []
+    unreadable = 0
+    for raw in reply[1] or []:
+        body = _decode_task(raw)
+        if body is None:
+            unreadable += 1
+            continue
+        tasks.append(body)
+
+    if unreadable:
+        # Битое тело считается и называется разметкой. Пропущенное молча, оно
+        # укоротило бы список ровно так же, как потолок, — то есть ответило бы
+        # «остальных задач нет» на вопрос, ради которого сюда пришли.
+        logger.warning("ops_state_queue_unreadable_bodies", key=key, count=unreadable)
+
+    return QueuePage(
+        tasks=tuple(tasks),
+        total=total,
+        unavailable=False,
+        unreadable=unreadable,
+    )
+
+
+def _decode_task(raw) -> dict | None:
+    """Сырое тело задачи → словарь. Мусор возвращает пустоту, а не исключение."""
+    try:
+        body = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+async def telegram_queue_depth() -> int | None:
+    """Число задач в очереди канала telegram — ОДНИМ обращением по имени ключа.
+
+    Содержимое не разбирается вовсе (D-14). Недоступность возвращается пустотой,
+    и разметка обязана отличать её от нуля: «задач нет» и «сколько задач —
+    неизвестно» отвечают на один вопрос противоположным образом.
+    """
+    client = _get_redis()
+    if client is None:
+        return None
+
+    try:
+        return int(await client.llen(TELEGRAM_QUEUE_KEY) or 0)
+    except Exception as e:
+        logger.warning("ops_state_telegram_depth_error", error=str(e))
+        return None
+
+
+async def drop_task(
+    channel: str, account_id: int, task_id: str, limit: int
+) -> str:
+    """Снять ОДНУ задачу очереди по её идентификатору. Возвращает исход.
+
+    ⚠️ ФОРМА ПРИСЫЛАЕТ ИДЕНТИФИКАТОР, А ТЕЛО СЕРВЕР БЕРЁТ ИЗ СВОЕГО ЧТЕНИЯ
+    (T-06-DROP2). Тело в этих очередях содержит текст чужого объявления и может
+    быть большим; доверять клиенту точные байты удаляемого не нужно вовсе. Здесь
+    сервер читает страницу очереди сам, находит элемент с совпавшим
+    идентификатором и удаляет ИМЕННО ТЕ БАЙТЫ, которые прочитал.
+
+    ⚠️ КОЛИЧЕСТВО УДАЛЯЕМЫХ — ЯВНАЯ ЕДИНИЦА, А НЕ НОЛЬ. Ноль удалил бы ВСЕ
+    совпадающие вхождения. Тела содержат `task_id` из uuid4 и потому сегодня
+    уникальны, но правило «снять одну» обязано быть ВЫРАЖЕНО, а не выведено из
+    свойства данных: свойство завтра может перестать выполняться, а правило —
+    нет.
+
+    ⚠️ ЗАПИСИ В ЖУРНАЛ ОТПРАВОК ЗДЕСЬ НЕТ И НЕ БУДЕТ (D-18): журнал отражает
+    совершённые попытки отправки, а снятая задача попытки не совершила. След
+    остаётся именованной строкой журнала приложения на стороне обработчика.
+    """
+    client = _get_redis()
+    if client is None:
+        return DROP_UNAVAILABLE
+
+    key = queue_key(channel, account_id)
+    try:
+        reply = await _read_raw(client, key, limit)
+    except Exception as e:
+        logger.warning("ops_state_drop_read_error", key=key, error=str(e))
+        return DROP_UNAVAILABLE
+
+    if reply is None or len(reply) < 2:
+        logger.warning("ops_state_drop_short_reply", key=key)
+        return DROP_UNAVAILABLE
+
+    target = None
+    for raw in reply[1] or []:
+        body = _decode_task(raw)
+        if body is not None and body.get("task_id") == task_id:
+            target = raw
+            break
+
+    if target is None:
+        # Задача ушла из очереди сама, пока администратор читал экран, — это
+        # НОРМАЛЬНЫЙ исход, и он называется словами, а не молчаливым возвратом.
+        return DROP_MISSING
+
+    try:
+        removed = await client.lrem(key, 1, target)
+    except Exception as e:
+        logger.warning("ops_state_drop_error", key=key, error=str(e))
+        return DROP_UNAVAILABLE
+
+    return DROP_REMOVED if removed else DROP_MISSING
