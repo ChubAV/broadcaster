@@ -13,7 +13,11 @@ from app.logging_config import setup_logging
 from app.config import Settings, get_settings
 from app.exceptions import NotFoundError, ForbiddenError, BillingLimitError, MessengerConnectionError
 from app.database import get_engine, get_session_factory
-from app.dependencies import get_current_user_id_with_access, init_db
+from app.dependencies import (
+    get_current_user_id_active,
+    get_current_user_id_with_access,
+    init_db,
+)
 from app.infrastructure.uow import create_uow_factory
 from app.middleware import RequestIdMiddleware
 from app.pages.common import bind_image_url_globals
@@ -91,26 +95,67 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # объекте приложения выглядит совершенно обычно (T-05.1-14). Ручное «не
     # забыть» средством защиты не считается.
     app.include_router(auth_router)
+    #
+    # ⚠️ ГЕЙТОВ НА ЭТИХ РОУТЕРАХ ДВА, И ОНИ ОТВЕЧАЮТ НА РАЗНЫЕ ВОПРОСЫ.
+    # `get_current_user_id_with_access` спрашивает «оплачено ли»,
+    # `get_current_user_id_active` — «действует ли учётная запись» (CR-01,
+    # D-30). Перечни сегодня совпадают по составу, но выводить один из другого
+    # нельзя: первая же фаза, ответившая на эти вопросы по-разному, развела бы
+    # их молча. Полноту обоих держит `tests/test_pages/test_access_gate.py`
+    # тремя объявленными множествами.
+    #
+    # Блокировка стоит ПЕРВОЙ намеренно: заблокированному с истёкшим сроком
+    # осмысленно сказать «учётная запись заблокирована», а не «продлите
+    # доступ» — продление ему ничего не откроет.
     app.include_router(
-        ads_router, dependencies=[Depends(get_current_user_id_with_access)]
+        ads_router,
+        dependencies=[
+            Depends(get_current_user_id_active),
+            Depends(get_current_user_id_with_access),
+        ],
     )
     app.include_router(
-        uploads_router, dependencies=[Depends(get_current_user_id_with_access)]
+        uploads_router,
+        dependencies=[
+            Depends(get_current_user_id_active),
+            Depends(get_current_user_id_with_access),
+        ],
     )
     app.include_router(
-        accounts_router, dependencies=[Depends(get_current_user_id_with_access)]
+        accounts_router,
+        dependencies=[
+            Depends(get_current_user_id_active),
+            Depends(get_current_user_id_with_access),
+        ],
     )
     app.include_router(
-        schedules_router, dependencies=[Depends(get_current_user_id_with_access)]
+        schedules_router,
+        dependencies=[
+            Depends(get_current_user_id_active),
+            Depends(get_current_user_id_with_access),
+        ],
     )
     app.include_router(
-        history_router, dependencies=[Depends(get_current_user_id_with_access)]
+        history_router,
+        dependencies=[
+            Depends(get_current_user_id_active),
+            Depends(get_current_user_id_with_access),
+        ],
     )
-    # Денежный роутер НЕ закрывается гейтом доступа НИКОГДА: там живут и чтения
-    # раздела оплаты, и вебхук ЮKassa. Закрыть его значило бы запереть человека
-    # в продукте, где единственное открывающее действие само требует доступа, а
-    # на вебхуке — остановить приём денег отказом 402 в ответ на уведомление о
-    # состоявшемся платеже.
+    # Денежный роутер НЕ закрывается НИ ГЕЙТОМ ДОСТУПА, НИ БЛОКИРОВКОЙ (D-53,
+    # решение владельца). У роутера остался РОВНО ОДИН вход — вебхук ЮKassa
+    # ниже; отказ на нём есть отказ в ответ на уведомление о СОСТОЯВШЕМСЯ
+    # платеже, то есть остановленный приём денег по уже совершённым платежам,
+    # и потерянное уведомление откатом кода не возвращается.
+    #
+    # ⚠️ ПРЕЖНЯЯ РЕДАКЦИЯ ЭТОГО КОММЕНТАРИЯ УТВЕРЖДАЛА, ЧТО ЗДЕСЬ ЖИВУТ И
+    # ЧТЕНИЯ РАЗДЕЛА ОПЛАТЫ. Исходнику это больше не соответствует: читающие
+    # входы сняты вместе со всей валютой сообщений (план 05-04), а страничные
+    # маршруты оплаты живут в `app/pages/billing.py` — за гардом
+    # `get_user_from_cookie`, который заблокированного не пускает и так.
+    # Расхождение исправлено здесь и записано решением D-53: решение о денежном
+    # пути принималось по этому комментарию, и вторая фаза приняла бы его по
+    # той же ложной посылке.
     app.include_router(billing_router)
     # Паршал живой ленты включается ОТДЕЛЬНО и ДО страничного роутера: тот
     # объявлен с зависимостью загрузки контекста шелла на каждом маршруте, а
