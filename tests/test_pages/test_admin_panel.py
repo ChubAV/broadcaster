@@ -20,6 +20,7 @@
 import ast
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1073,3 +1074,436 @@ def test_groups_info_gone_but_its_storage_survived():
     assert Path("app/models/group_info.py").exists()
     assert Path("app/repositories/group_info.py").exists()
     assert list(Path("alembic/versions").glob("0011*.py"))
+
+
+# ---- Подраздел «Очередь» (ADMIN-08, план 06-07) ----
+#
+# ⚠️ ЧТЕНИЕ ОЧЕРЕДИ ЗДЕСЬ ПРОВЕРЯЕТСЯ НА НАСТОЯЩИХ СПИСКАХ. Двойник ниже держит
+# очереди списками байтов и меняет их по-настоящему: снятие, проверенное по
+# факту вызова, зеленело бы и при удалении ВСЕХ совпадающих вхождений — то есть
+# ровно в том случае, ради запрета которого проверка и написана.
+
+QUEUE_DROP_URL = "/admin/queue/{account_id}/drop"
+
+
+class _FakeQueuePageRedis:
+    """Двойник клиента Redis для подраздела «Очередь»: списки, а не заглушки."""
+
+    def __init__(self, lists: dict[str, list[bytes]] | None = None):
+        self.lists: dict[str, list[bytes]] = lists or {}
+
+    def pipeline(self):
+        return _FakeQueuePagePipeline(self)
+
+    async def llen(self, key: str) -> int:
+        return len(self.lists.get(key, []))
+
+    async def lrange(self, key: str, start: int, stop: int) -> list[bytes]:
+        items = self.lists.get(key, [])
+        return items[start:] if stop == -1 else items[start : stop + 1]
+
+    async def lrem(self, key: str, count: int, value: bytes) -> int:
+        items = self.lists.get(key, [])
+        removed = 0
+        out: list[bytes] = []
+        for item in items:
+            if item == value and removed < count:
+                removed += 1
+                continue
+            out.append(item)
+        self.lists[key] = out
+        return removed
+
+    async def get(self, key: str):
+        return None
+
+
+class _FakeQueuePagePipeline:
+    def __init__(self, client: "_FakeQueuePageRedis"):
+        self._client = client
+        self._ops: list = []
+
+    def llen(self, key: str):
+        self._ops.append(("llen", (key,)))
+        return self
+
+    def lrange(self, key: str, start: int, stop: int):
+        self._ops.append(("lrange", (key, start, stop)))
+        return self
+
+    def get(self, key: str):
+        self._ops.append(("get", (key,)))
+        return self
+
+    async def execute(self):
+        return [await getattr(self._client, name)(*args) for name, args in self._ops]
+
+
+def _queue_task(task_id: str, group_name: str = "Группа «Барахолка»", **extra) -> bytes:
+    """Тело задачи ровно в той форме, в какой его кладёт постановщик."""
+    import json
+
+    body = {
+        "task_id": task_id,
+        "ad_id": 11,
+        "group_id": 22,
+        "account_id": 33,
+        "schedule_id": 44,
+        "user_id": 55,
+        "ad_text": "Текст объявления",
+        "ad_title": "Заголовок",
+        "ad_images": [],
+        "group_external_id": "-100123456789",
+        "group_name": group_name,
+        "created_at": "2026-08-22T10:00:00+00:00",
+    }
+    body.update(extra)
+    return json.dumps(body, ensure_ascii=False).encode()
+
+
+@pytest.mark.asyncio
+async def test_queue_subsection_answers_the_admin_and_shows_three_channels(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Подраздел отвечает 200 админу и делит экран на три канала.
+
+    Каналов три, и блоки у них РАЗНЫЕ по устройству: у WA и MAX есть строки
+    задач, у telegram строк нет вовсе (D-14). Сведённые в один список, они
+    заставили бы читать одну колонку одинаково там, где она означает разное.
+
+    ⚠️ ПОСТОРОННИЙ ПРОВЕРЯЕТСЯ ОТДЕЛЬНЫМ ТЕСТОМ, А НЕ ЗДЕСЬ. Оба клиентских
+    приспособления суиты наращивают ОДИН И ТОТ ЖЕ экземпляр клиента, и вход под
+    посторонним в этом же тесте подменил бы cookie администратора: утверждение
+    про 200 проверяло бы права не того, кого называет.
+    """
+    await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_FakeQueuePageRedis({})
+    ):
+        response = await admin_client.get("/admin/queue")
+    assert response.status_code == 200
+
+    html = response.text
+    for label in ("WhatsApp", "MAX", "Telegram"):
+        assert label in html, f"блок канала {label} не отрисован"
+
+
+@pytest.mark.asyncio
+async def test_the_queue_subsection_is_denied_to_an_outsider(
+    authed_client: AsyncClient,
+):
+    """Подраздел отвечает 403 постороннему: в нём лежат чужие объявления."""
+    assert (await authed_client.get("/admin/queue")).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_queue_rows_print_the_state_that_matches_each_task_body(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Две задачи — две строки, и состояние каждой соответствует её телу.
+
+    Свежепоставленная задача ждёт; задача с отложенностью в БУДУЩЕМ отложена.
+    Значение отложенности взято тем же выражением, каким его пишет WA-воркер, —
+    в миллисекундах: единая формула нарисовала бы здесь 1970 год, не упав.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    client = _FakeQueuePageRedis(
+        {
+            f"wa:queue:{account.id}": [
+                _queue_task("fresh-one", group_name="Группа Первая"),
+                _queue_task(
+                    "delayed-one",
+                    group_name="Группа Вторая",
+                    _retry_count=1,
+                    _delay_until=int((time.time() + 600) * 1000),
+                ),
+            ]
+        }
+    )
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    assert "Группа Первая" in html and "Группа Вторая" in html
+    assert "ждёт" in html
+    assert "отложена до" in html
+    assert "1970" not in html, (
+        "отложенность разобрана меркой чужого канала — дата выдумана, но "
+        "правдоподобна, и ничем себя не выдаёт"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_empty_queue_and_an_unreachable_redis_are_different_markup(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Пустая очередь и сломанный наблюдатель — РАЗНАЯ разметка, а не одна.
+
+    Слитые в одно, они сообщили бы «рассылать нечего» ровно тогда, когда
+    очередь стоит и её не видно. Недоступность внешнего источника — именованная
+    ошибка, никогда не пустота и никогда не 500.
+    """
+    await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_FakeQueuePageRedis({})
+    ):
+        empty = (await admin_client.get("/admin/queue")).text
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        blind = (await admin_client.get("/admin/queue")).text
+
+    assert "Очередь пуста" in empty
+    assert "Очередь пуста" not in blind, (
+        "сломанный наблюдатель показан пустой очередью — это ответ на вопрос, "
+        "ради которого в подраздел пришли, и ответ ложный"
+    )
+    assert "Redis" in blind, "недоступность источника не названа словами"
+
+
+@pytest.mark.asyncio
+async def test_the_telegram_queue_block_names_exactly_what_its_number_measures(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """У канала брокера — число задач и величина с ПРОВЕРЯЕМОЙ подписью.
+
+    ⚠️ ПОДПИСЬ НЕ ИМЕЕТ ПРАВА ЧИТАТЬСЯ КАК «ВОЗРАСТ САМОЙ СТАРОЙ ЗАДАЧИ». Этот
+    возраст лежит ВНУТРИ конверта брокера, распаковывать который запрещено
+    решением D-14; подпись, позволяющая прочитать величину так, была бы
+    измеренной на вид выдумкой. Измеряется время с последней зафиксированной
+    отправки по каналу — по журналу отправок, а не по содержимому очереди.
+    """
+    from app.models.send_log import SendLog
+
+    account = await _seed_account(db_session, account_type="tg_user")
+    db_session.add(
+        SendLog(
+            user_id=account.user_id,
+            group_id=None,
+            status="sent",
+            messenger_type="tg_user",
+            sent_at=datetime.now(timezone.utc) - timedelta(seconds=120),
+        )
+    )
+    await db_session.commit()
+
+    client = _FakeQueuePageRedis({"telegram": [b"opaque-1", b"opaque-2", b"opaque-3"]})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    assert "3" in html
+    assert "последней отправки" in html, (
+        "величина канала брокера не названа: подпись обязана называть то, что "
+        "измерено, а не оставлять читателя догадываться"
+    )
+    assert "самой старой задачи" not in html
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_queue_task_removes_exactly_one_and_comes_back(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Форма снятия убирает РОВНО ОДНУ задачу и возвращает на тот же подраздел."""
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis(
+        {key: [_queue_task("keep-me"), _queue_task("drop-me")]}
+    )
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        response = await admin_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("/admin/queue")
+    assert len(client.lists[key]) == 1
+    assert b"keep-me" in client.lists[key][0]
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_queue_task_is_refused_to_an_outsider(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Форма снятия отвергает постороннего по правам и ничего не удаляет."""
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis({key: [_queue_task("drop-me")]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        response = await authed_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403
+    assert len(client.lists[key]) == 1, "задача снята запросом, который отвергнут"
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_queue_task_is_refused_when_it_comes_from_a_foreign_origin(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Гард происхождения стоит ПЕРЕД действием (T-06-DROP1).
+
+    Аутентификация проекта идёт cookie, поэтому браузер приложит её к
+    межсайтовой форме сам, и запрос со стороннего сайта неотличим от своего.
+    Чужому источнику причина отказа не сообщается: он не имеет права узнать
+    даже, существует ли такой аккаунт.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis({key: [_queue_task("drop-me")]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        response = await admin_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            headers={"Origin": "https://evil.example"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403
+    assert len(client.lists[key]) == 1, "межсайтовый запрос снял чужую задачу"
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_queue_task_writes_no_send_log_row(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Снятие НЕ создаёт записи в журнале отправок (D-18).
+
+    Журнал отражает совершённые попытки отправки, а снятая задача попытки не
+    совершила. Запись о ней сделала бы историю пользователя неотличимой от
+    настоящего отказа отправки.
+    """
+    from sqlalchemy import func as sa_func, select as sa_select
+    from app.models.send_log import SendLog
+
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis({key: [_queue_task("drop-me")]})
+
+    before = (await db_session.execute(sa_select(sa_func.count(SendLog.id)))).scalar()
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        await admin_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            follow_redirects=False,
+        )
+    after = (await db_session.execute(sa_select(sa_func.count(SendLog.id)))).scalar()
+
+    assert before == after
+    assert client.lists[key] == [], "задача не снята — тест проверяет не тот путь"
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_queue_task_leaves_a_named_application_log_line(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """След остаётся именованной строкой журнала приложения (T-06-DROP3).
+
+    Привилегированная операция над ЧУЖОЙ сущностью без следа неотличима от
+    того, что её не было. Журнал подменяется, а не читается `caplog`-ом, по той
+    же причине, что у формы перезапуска выше.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis({key: [_queue_task("drop-me")]})
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=client
+    ), patch("app.pages.admin.logger") as log:
+        await admin_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            follow_redirects=False,
+        )
+
+    (event,), fields = log.info.call_args
+    assert event == "queue_task_dropped"
+    assert fields["account_id"] == account.id
+    assert fields["task_id"] == "drop-me"
+    assert "admin_user_id" in fields
+
+
+@pytest.mark.asyncio
+async def test_no_wholesale_queue_wipe_exists_in_the_markup_or_in_the_routes(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """ОТРИЦАТЕЛЬНЫЙ: действия, стирающего очередь целиком, нет нигде (D-17).
+
+    Одно нажатие уничтожило бы пачку чужих оплаченных рассылок без возможности
+    восстановления: задачи существуют ТОЛЬКО в очереди. Отсутствие закрепляется
+    проверкой, а не намерением — намерение не переживает следующий рефакторинг.
+    """
+    from app.pages.admin import router
+
+    await _seed_account(db_session, account_type="wa")
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_FakeQueuePageRedis({})
+    ):
+        html = (await admin_client.get("/admin/queue")).text
+
+    for marker in ("clear_queue", "/purge", "wipe"):
+        assert marker not in html, f"разметка несёт признак стирания очереди: {marker}"
+
+    wipe_routes = [
+        route.path
+        for route in router.routes
+        if any(
+            marker in getattr(route, "path", "")
+            for marker in ("clear", "purge", "wipe", "flush")
+        )
+    ]
+    assert wipe_routes == [], f"маршрут стирания очереди объявлен: {wipe_routes}"
+
+
+@pytest.mark.asyncio
+async def test_a_capped_queue_list_says_so_instead_of_just_showing_fewer_rows(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сработавший потолок НАЗЫВАЕТ себя подписью, а не проявляется коротко.
+
+    Молча усечённый перечень читается как «остальных задач нет» — то есть как
+    ответ на вопрос, ради которого администратор в подраздел и пришёл.
+    """
+    from app.application.admin.queue_rows import QUEUE_ROW_CAP
+
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis(
+        {key: [_queue_task(f"task-{n}") for n in range(QUEUE_ROW_CAP + 7)]}
+    )
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    assert str(QUEUE_ROW_CAP) in html, "потолок не назван числом"
+    assert str(QUEUE_ROW_CAP + 7) in html, "полная длина очереди не названа"
+
+
+@pytest.mark.asyncio
+async def test_queue_row_cells_carry_their_column_labels_for_narrow_screens(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Каждая ячейка строки несёт подпись колонки (Mobile Contract, M2).
+
+    На 860px шапка колонок скрывается правилом `app.css`, и подпись внутри
+    ячейки остаётся ЕДИНСТВЕННЫМ названием величины. Ячейка без подписи на
+    телефоне превращается в число без смысла.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    client = _FakeQueuePageRedis({f"wa:queue:{account.id}": [_queue_task("one")]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    row = html.split("<div data-row")[-1]
+    for column in ("Аккаунт", "Группа", "Состояние", "Действие"):
+        assert f"<span data-cell-label>{column}</span>" in row, (
+            f"ячейка колонки «{column}» осталась без подписи"
+        )
