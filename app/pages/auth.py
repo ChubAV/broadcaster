@@ -1,4 +1,4 @@
-import random
+import secrets
 import structlog
 from datetime import datetime, timezone, timedelta
 
@@ -26,6 +26,21 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["pages"])
 
+# ⚠️ КОД ПОДТВЕРЖДЕНИЯ БЕРЁТСЯ ИЗ КРИПТОГРАФИЧЕСКОГО ИСТОЧНИКА (CR-02).
+# Прежний генератор общего назначения — Mersenne Twister: наблюдатель, набравший
+# достаточно выходов, восстанавливает состояние генератора и предсказывает
+# СЛЕДУЮЩИЕ коды, а выборка добывается бесплатно и легально — коды раздаются
+# любому желающему через собственную регистрацию. Цена успеха — захват чужой
+# учётки вместе с платёжным путём.
+#
+# ⚠️ СРОК ЖИЗНИ КОДА И ЛИМИТ ПОПЫТОК ЗДЕСЬ НЕ ЗАЩИТА. Они ограничивают ПЕРЕБОР,
+# а предсказание перебором не является: предсказанный код принимается с первой
+# попытки и внутри срока. Заменить смену источника ими нельзя.
+#
+# Форма значения при замене НЕ изменилась: та же длина, те же десятичные цифры,
+# тот же тип — сменился только источник, и свидетель этого
+# (`tests/test_pages/test_reset_code_source.py`) утверждает ИСТОЧНИК разбором
+# дерева модуля, потому что по значению два источника неотличимы.
 CODE_LENGTH = 6
 CODE_TTL_MINUTES = 10
 CODE_MAX_ATTEMPTS = 5
@@ -146,7 +161,7 @@ async def register_send_code(
         )
 
     # Generate and save code
-    code = "".join([str(random.randint(0, 9)) for _ in range(CODE_LENGTH)])
+    code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
     verification = EmailVerificationCode(
         email=email,
         code=code,
@@ -291,7 +306,7 @@ async def register_resend_code(
         )
 
     # Generate new code
-    code = "".join([str(random.randint(0, 9)) for _ in range(CODE_LENGTH)])
+    code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
     verification = EmailVerificationCode(
         email=email,
         code=code,
@@ -444,7 +459,7 @@ async def forgot_password_send_code(
         )
 
     # Generate and save code
-    code = "".join([str(random.randint(0, 9)) for _ in range(CODE_LENGTH)])
+    code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
     verification = EmailVerificationCode(
         email=email,
         code=code,
@@ -583,7 +598,7 @@ async def forgot_password_resend_code(
             },
         )
 
-    code = "".join([str(random.randint(0, 9)) for _ in range(CODE_LENGTH)])
+    code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
     verification = EmailVerificationCode(
         email=email,
         code=code,
