@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, Form, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select, func
@@ -12,6 +12,11 @@ from app.dependencies import get_db, get_settings, require_admin
 from app.application.analytics.send_analytics import (
     apply_history_filters,
     history_filter_params,
+)
+from app.application.admin.queue_rows import (
+    QUEUE_ROW_CAP,
+    queue_rows,
+    telegram_lag_seconds,
 )
 from app.application.billing.subscription_period import access_is_open, days_left
 from app.pages.history import (
@@ -33,11 +38,17 @@ from app.repositories.user import UserRepository
 from app.services import max_container_manager, wa_container_manager
 from app.services.billing_cache import invalidate_access_cache
 from app.services.ops_state import (
+    DROP_MISSING,
+    DROP_REMOVED,
+    DROP_UNAVAILABLE,
     INFRA_BEAT,
     INFRA_WORKER_DEFAULT,
     INFRA_WORKER_TELEGRAM,
+    drop_task,
     infra_heartbeat_key,
     infra_liveness,
+    queue_page,
+    telegram_queue_depth,
     worker_liveness,
 )
 
@@ -176,6 +187,58 @@ WORKER_RESTART_MANAGERS = {
     "wa": wa_container_manager,
     "max": max_container_manager,
 }
+
+
+# ПОДРАЗДЕЛ «ОЧЕРЕДЬ» (ADMIN-08, D-13 … D-18).
+#
+# ⚠️ КАНАЛОВ ЗДЕСЬ ДВА, А НЕ ТРИ, И ЭТО ОТВЕТ, А НЕ ПРОБЕЛ. У telegram-канала
+# тело задачи — конверт брокера с закодированным содержимым, и решение D-14
+# запрещает его распаковывать: разбор привязал бы админку к внутренностям
+# библиотеки, которые меняются между версиями молча. Поэтому построчного списка
+# у него нет вовсе, а есть число задач и величина, измеримая СНАРУЖИ конверта.
+# Третий блок собирается отдельно и устроен иначе — намеренно.
+QUEUE_CHANNELS: tuple[dict[str, str], ...] = (
+    {"key": "wa", "label": "WhatsApp"},
+    {"key": "max", "label": "MAX"},
+)
+
+# Канал, чьи задачи разбирает общий celery-воркер. Значение — то же, которым
+# `MessengerAccount.type` и `SendLog.messenger_type` называют telegram-аккаунт:
+# вторая копия строки разъехалась бы с ними молча, и блок канала показывал бы
+# уверенный ноль отправок.
+QUEUE_TELEGRAM_CHANNEL = "tg_user"
+
+# ЗАКРЫТОЕ МНОЖЕСТВО ИСХОДОВ СНЯТИЯ ЗАДАЧИ, И СЛОВА ЖИВУТ ЗДЕСЬ, А НЕ В
+# РАЗМЕТКЕ — по той же форме, что у отказов перезапуска выше.
+#
+# ⚠️ ОТСУТСТВИЕ ЗАДАЧИ — ТОЖЕ ИСХОД, И ОН НАЗЫВАЕТСЯ СЛОВАМИ. Задача могла уйти
+# из очереди сама, пока администратор читал экран; молчаливый возврат на ту же
+# страницу он прочитал бы как «кнопка сломана» — и пошёл бы жать её снова.
+#
+# ⚠️ ПАРАМЕТР АДРЕСНОЙ СТРОКИ — КЛЮЧ, А НЕ ТЕКСТ. Владелец ссылки не может ни
+# выбрать чужую формулировку, ни подставить свою: неизвестный ключ не рисует
+# ничего.
+QUEUE_DROP_RESULTS: dict[str, tuple[str, str]] = {
+    DROP_REMOVED: ("Задача снята из очереди", "success"),
+    DROP_MISSING: ("Задача уже ушла из очереди — снимать нечего", "warning"),
+    DROP_UNAVAILABLE: (
+        "Не удалось снять задачу: Redis не отвечает, а очередь хранится только "
+        "в нём",
+        "error",
+    ),
+    "unknown_account": (
+        "Снимать нечего: у этого аккаунта нет своей очереди задач",
+        "warning",
+    ),
+}
+
+# ПОТОЛОК ЧТЕНИЯ НА ОДНУ ОЧЕРЕДЬ — НА ЕДИНИЦУ БОЛЬШЕ ПОТОЛКА ПОКАЗА.
+#
+# Лишний элемент читается НЕ ради показа: он и есть улика усечения. Без него
+# «прочитано ровно столько, сколько потолок» было бы неотличимо от «в очереди
+# ровно столько», и разметка не смогла бы назвать усечение — то есть молча
+# ответила бы «остальных задач нет» на вопрос, ради которого сюда пришли.
+QUEUE_READ_LIMIT = QUEUE_ROW_CAP + 1
 
 
 def _admin_context(request: Request, admin: User, tab: str) -> dict:
@@ -616,11 +679,193 @@ async def admin_restart_worker(
 @router.get("/queue", response_class=HTMLResponse)
 async def admin_queue(
     request: Request,
+    result: str | None = Query(None),
     admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Каркас подраздела «Очередь». Содержимое приносит план 06-07."""
+    """Подраздел «Очередь»: что ждёт отправки прямо сейчас по трём каналам.
+
+    ⚠️ ЧТЕНИЕ НИЧЕГО НЕ СНИМАЕТ. Подраздел отвечает на вопрос «что ждёт
+    отправки», и чтение, снимающее задачи, отняло бы у пользователей оплаченные
+    рассылки просто оттого, что администратор открыл страницу. Отсутствие
+    снимающих команд закреплено грепом по сервису, а не намерением.
+
+    ⚠️ СОСТОЯНИЯ «В РАБОТЕ» ЗДЕСЬ НЕТ (D-15). У WA и MAX задача физически
+    уходит из списка, когда воркер её берёт, и «в работе» пришлось бы
+    синтезировать из heartbeat — то есть подавать догадку как факт. Кто
+    работает сейчас, показывает подраздел «Воркеры» свежим heartbeat.
+
+    ⚠️ НЕДОСТУПНЫЙ REDIS ОТВЕЧАЕТ ПЛАШКОЙ, А НЕ ПУСТОЙ ОЧЕРЕДЬЮ И НЕ ПЯТИСОТКОЙ.
+    Пустая очередь и сломанный наблюдатель — разные состояния мира; слитые в
+    одно, они сообщили бы «рассылать нечего» ровно тогда, когда очередь стоит и
+    её не видно.
+    """
+    accounts = (
+        (
+            await db.execute(
+                select(MessengerAccount).order_by(MessengerAccount.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    now = datetime.now(timezone.utc)
+    unavailable = False
+    blocks = []
+    for channel in QUEUE_CHANNELS:
+        entries = []
+        for account in (a for a in accounts if a.type == channel["key"]):
+            page = await queue_page(channel["key"], account.id, QUEUE_READ_LIMIT)
+            unavailable = unavailable or page.unavailable
+            rows = queue_rows(page.tasks, channel["key"], now)
+            entries.append(
+                {
+                    "account": account,
+                    "rows": rows.rows,
+                    "capped": rows.capped,
+                    "total": page.total,
+                    "unavailable": page.unavailable,
+                    "unreadable": page.unreadable,
+                }
+            )
+        blocks.append({**channel, "accounts": entries})
+
+    # БЛОК КАНАЛА БРОКЕРА УСТРОЕН ИНАЧЕ, И ЭТО ОСОЗНАННО (D-14).
+    #
+    # ⚠️ ВЕЛИЧИНА ИЗМЕРЯЕТСЯ ПО ЖУРНАЛУ ОТПРАВОК, А НЕ ПО СОДЕРЖИМОМУ ОЧЕРЕДИ, И
+    # ПОДПИСЬ ОБЯЗАНА НАЗЫВАТЬ ИМЕННО ЭТО. Возраст самой старой задачи лежит
+    # внутри конверта брокера, читать который запрещено тем же решением;
+    # подпись, позволяющая прочитать величину так, была бы измеренной на вид
+    # выдумкой.
+    #
+    # ⚠️ ПРИ ПУСТОЙ ОЧЕРЕДИ ВЕЛИЧИНА НЕ СЧИТАЕТСЯ ВОВСЕ: время с последней
+    # отправки на пустой очереди означает «работы не было», а не «работа стоит»,
+    # и напечатанное оно тревожило бы администратора ровно там, где всё в
+    # порядке.
+    telegram_depth = await telegram_queue_depth()
+    unavailable = unavailable or telegram_depth is None
+    telegram_lag = None
+    if telegram_depth:
+        last_sent_at = (
+            await db.execute(
+                select(func.max(SendLog.sent_at)).where(
+                    SendLog.messenger_type == QUEUE_TELEGRAM_CHANNEL
+                )
+            )
+        ).scalar()
+        telegram_lag = telegram_lag_seconds(last_sent_at, now)
+
+    has_telegram_accounts = any(
+        a.type == QUEUE_TELEGRAM_CHANNEL for a in accounts
+    )
+    has_rows = any(
+        entry["rows"] for block in blocks for entry in block["accounts"]
+    )
+
+    drop_result = QUEUE_DROP_RESULTS.get(result or "")
     return templates.TemplateResponse(
-        "admin/queue.html", _admin_context(request, admin, "queue")
+        "admin/queue.html",
+        {
+            **_admin_context(request, admin, "queue"),
+            "blocks": blocks,
+            "telegram": {
+                "depth": telegram_depth,
+                "lag_sec": telegram_lag,
+                "has_accounts": has_telegram_accounts,
+            },
+            "queue_row_cap": QUEUE_ROW_CAP,
+            "redis_unavailable": unavailable,
+            "has_rows": has_rows,
+            "drop_result": drop_result,
+        },
+    )
+
+
+@router.post("/queue/{account_id}/drop")
+async def admin_drop_task(
+    request: Request,
+    account_id: int,
+    task_id: str = Form(...),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Снять ОДНУ задачу из очереди аккаунта (D-17). Необратимо.
+
+    ⚠️ ДЕЙСТВИЯ, СТИРАЮЩЕГО ОЧЕРЕДЬ ЦЕЛИКОМ, НЕТ НИ ЗДЕСЬ, НИ В РАЗМЕТКЕ. Одно
+    нажатие уничтожило бы пачку чужих оплаченных рассылок без возможности
+    восстановления: задачи существуют ТОЛЬКО в очереди, и восстановить их
+    нечем. Симметрично D-11: лекарство от конкретного отказа, а не рубильник.
+    Отсутствие закреплено отрицательным тестом.
+
+    ⚠️ ФОРМА НЕСЁТ ТОЛЬКО ИДЕНТИФИКАТОР ЗАДАЧИ (T-06-DROP2). Точные байты
+    удаляемого элемента сервер берёт из СВОЕГО чтения очереди: тело содержит
+    текст чужого объявления и может быть большим, а доверять клиенту байты
+    удаляемого не нужно вовсе.
+
+    ⚠️ ГАРД ПРОИСХОЖДЕНИЯ СТОИТ ПЕРЕД ДЕЙСТВИЕМ И ОБЯЗАТЕЛЕН (T-06-DROP1).
+    Аутентификация проекта идёт cookie, поэтому браузер приложит её к
+    межсайтовой форме сам, и запрос со стороннего сайта неотличим от своего.
+
+    ⚠️ КАНАЛ ОПРЕДЕЛЯЕТСЯ ПО САМОМУ АККАУНТУ, А НЕ ПО ПОЛЮ ФОРМЫ. Поле
+    подделывается вместе с запросом; колонка в базе — нет.
+
+    ⚠️ ЗАПИСИ В ЖУРНАЛ ОТПРАВОК НЕ ДЕЛАЕТСЯ (D-18): журнал отражает совершённые
+    попытки отправки, а снятая задача попытки не совершила. След остаётся
+    именованной строкой журнала приложения и виден в подразделе логов.
+    """
+    if not is_same_origin(request):
+        # Чужому источнику причина отказа не сообщается: межсайтовый запрос не
+        # имеет права узнать даже, существует ли такой аккаунт.
+        return Response(status_code=403)
+
+    location = "/admin/queue"
+
+    account = await db.get(MessengerAccount, account_id)
+    known = {channel["key"] for channel in QUEUE_CHANNELS}
+    if account is None or account.type not in known:
+        # Молчаливый успех был бы хуже отказа: администратор решил бы, что снял
+        # отправку, которой на самом деле не касался.
+        logger.warning(
+            "queue_task_drop_unsupported",
+            admin_user_id=admin.id,
+            account_id=account_id,
+            channel=account.type if account else None,
+        )
+        return RedirectResponse(
+            url=f"{location}?result=unknown_account", status_code=302
+        )
+
+    outcome = await drop_task(
+        account.type, account.id, task_id, QUEUE_READ_LIMIT
+    )
+
+    if outcome != DROP_REMOVED:
+        logger.warning(
+            "queue_task_drop_failed",
+            admin_user_id=admin.id,
+            account_id=account.id,
+            channel=account.type,
+            task_id=task_id,
+            outcome=outcome,
+        )
+        return RedirectResponse(
+            url=f"{location}?result={outcome}", status_code=302
+        )
+
+    # Привилегированная операция над ЧУЖОЙ сущностью обязана оставлять след, и
+    # форма следа в проекте уже есть (`worker_restarted`): именованный ключ, все
+    # идентификаторы и то, ЧТО именно сделано. Без записи снятие неотличимо от
+    # того, что его не было.
+    logger.info(
+        "queue_task_dropped",
+        admin_user_id=admin.id,
+        account_id=account.id,
+        channel=account.type,
+        task_id=task_id,
+    )
+    return RedirectResponse(
+        url=f"{location}?result={DROP_REMOVED}", status_code=302
     )
 
 

@@ -1,0 +1,71 @@
+{#- Строка очереди аккаунта (S3, C2).
+
+    ⚠️ ФОРМА СТРОКИ ВЗЯТА У УЖЕ ОТГРУЖЕННОЙ СТРОКИ ВОРКЕРА, А НЕ ИЗОБРЕТЕНА
+    ЗАНОВО. Тот же примитив `[data-row]`, тот же `cell()`, та же раскладка
+    параметром `cols` в `--cols`, те же подписи колонок элементом списка по
+    индексу. Расхождение между отгруженным воркером и новой очередью читалось бы
+    как два разных механизма — а это один и тот же подраздел одной и той же
+    админки.
+
+    ⚠️ ШТАТНОЕ СОСТОЯНИЕ БЕЙДЖА НЕ НОСИТ. «Ждёт» — это норма, и бейдж на ней
+    обучил бы глаз игнорировать бейджи; тогда «отложена до T» перестало бы
+    работать ровно тогда, когда нужно. Тревожны ровно два состояния: отложенность
+    и повтор.
+
+    ⚠️ МОМЕНТ ОТЛОЖЕННОСТИ ПЕЧАТАЕТСЯ ОБЩИМ ФОРМАТОМ ПРОЕКТА, а разбирается он
+    ПО КАНАЛУ в прикладном модуле: у одного канала значение в миллисекундах, у
+    другого — в секундах, и единая формула не падает — она рисует правдоподобную
+    дату. Здесь печатается уже разобранный момент, и своего формата даты
+    подраздел не заводит.
+
+    ⚠️ ПРОЧЕРК ВСЕГДА НЕСЁТ ПРИЧИНУ СВОЕГО ОТСУТСТВИЯ. Подсказка, пересказывающая
+    провал («не удалось получить»), запрещена наравне с отсутствием подсказки:
+    она сообщает, что величины нет, вместо того чтобы назвать, почему её нет.
+
+    ⚠️ ДЕЙСТВИЕ ОДНО — «СНЯТЬ» (D-17). Кнопки, стирающей очередь целиком, нет ни
+    здесь, ни в маршрутах: одно нажатие уничтожило бы пачку чужих оплаченных
+    рассылок без возможности восстановления. Форма НАСТОЯЩАЯ и метод настоящий:
+    без поднявшегося Alpine она просто отправится, и базовый путь останется
+    рабочим. Панель подтверждения навешана ПОВЕРХ, а не вместо. -#}
+{%- from "components/table.html" import cell -%}
+{%- from "components/badge.html" import badge -%}
+{%- from "components/mono.html" import mono -%}
+{%- from "includes/messenger_icon.html" import messenger_icon -%}
+
+{%- set QUEUE_MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} -%}
+
+{%- macro queue_row(account, row, columns, cols, user) -%}
+<div data-row data-queue-row style="--cols: {{ cols }}">
+  {%- call cell(grow=true, label=columns[0]) %}
+    {%- if account.type in QUEUE_MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
+    <span data-grow>{{ QUEUE_MESSENGER_LABELS.get(account.type, account.type) }}</span>{{ mono('#' ~ account.id) }}
+  {%- endcall %}
+  {%- call cell(label=columns[1]) %}
+    {%- if row.group_name -%}
+      <span data-grow>{{ row.group_name }}</span>
+    {%- else -%}
+      {{- mono('—', title='Имя группы приходит внутри тела задачи, и у этой задачи поля нет: его кладёт постановщик, а задача попала в очередь помимо него') -}}
+    {%- endif -%}
+  {%- endcall %}
+  {%- call cell(label=columns[2]) %}
+    {%- if row.state == 'delayed' -%}
+      {{- badge('отложена до ' ~ format_datetime_for_user(row.delay_until, user), 'warning', title='Момент дописан воркером канала при повторе и разобран меркой ИМЕННО этого канала: единицы времени у каналов разные') -}}
+    {%- elif row.state == 'retrying' -%}
+      {{- badge('ретрай ' ~ row.retries, 'warning', title='Число совершённых попыток отправки — из тела задачи, дописано воркером канала') -}}
+    {%- else -%}
+      {{- mono('ждёт', 'muted') -}}
+    {%- endif -%}
+  {%- endcall %}
+  {%- call cell(label=columns[3]) %}
+    {%- if row.task_id -%}
+      <form method="post" action="/admin/queue/{{ account.id }}/drop"
+            x-data x-on:submit.prevent="$dispatch('modal-open-queue-drop-{{ account.id }}-{{ row.task_id }}')">
+        <input type="hidden" name="task_id" value="{{ row.task_id }}">
+        <button type="submit" class="btn btn--danger"><span class="btn__label">Снять</span></button>
+      </form>
+    {%- else -%}
+      {{- mono('—', title='Снимать нечем: у этой задачи нет идентификатора, а снятие адресуется именно им — иначе удалилась бы соседняя задача с тем же содержимым') -}}
+    {%- endif -%}
+  {%- endcall %}
+</div>
+{%- endmacro -%}
