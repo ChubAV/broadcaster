@@ -37,6 +37,19 @@ from app.pages.common import is_same_origin, templates
 from app.repositories.user import UserRepository
 from app.services import max_container_manager, wa_container_manager
 from app.services.billing_cache import invalidate_access_cache
+from app.services.loki_client import (
+    LEVEL_CHIP_OPTIONS,
+    LOG_LINE_CAP,
+    LOG_SOURCES,
+    LOG_SOURCE_TELEGRAM_WORKER,
+    LOG_WINDOWS,
+    LOG_WINDOW_CHIPS,
+    build_logql,
+    clean_level,
+    clean_source,
+    clean_window,
+    query_range,
+)
 from app.services.ops_state import (
     DROP_MISSING,
     DROP_REMOVED,
@@ -477,6 +490,33 @@ async def admin_workers_partial(
     )
 
 
+def _worker_logs_href(account: MessengerAccount) -> str:
+    """Адрес логов ЭТОГО воркера с предустановленным фильтром источника (D-10).
+
+    ⚠️ АДРЕС СОБИРАЕТСЯ ЗДЕСЬ, А НЕ В РАЗМЕТКЕ. Литерал в шаблоне разошёлся бы с
+    санацией источника молча: ссылка вела бы на 200 и на выдачу БЕЗ фильтра, то
+    есть показывала бы логи всех служб как логи одного воркера. Приём тот же,
+    каким модуль признаков отдаёт «куда чинить» строкам инцидентов.
+
+    ⚠️ У TELEGRAM-СТРОКИ ИСТОЧНИК — СЛУЖБА, А НЕ АККАУНТ. Своего контейнера у
+    канала нет вовсе, поэтому метки идентификатора аккаунта у его записей не
+    существует: фильтр по ней дал бы пустоту при исправном запросе. Задачи
+    канала разбирает общая служба, и её логи — единственные, где эта строка
+    вообще что-то оставляет.
+
+    «Живой лог» в самой строке не делается (D-10): он стал бы вторым
+    независимым путём чтения логов рядом с подразделом, а у остановленного по
+    простою контейнера живого лога нет вовсе — кнопка была бы мёртвой у
+    большинства строк.
+    """
+    source = (
+        LOG_SOURCE_TELEGRAM_WORKER
+        if account.type == QUEUE_TELEGRAM_CHANNEL
+        else account.id
+    )
+    return f"/admin/logs?source={source}"
+
+
 async def _workers_view(db: AsyncSession) -> dict:
     """Оба блока подраздела «Воркеры» — общий контекст страницы и её паршала.
 
@@ -533,6 +573,7 @@ async def _workers_view(db: AsyncSession) -> dict:
                 if account.type == "tg_user"
                 else liveness.get(account.id)
             ),
+            "logs_href": _worker_logs_href(account),
         }
         for account in accounts
     ]
@@ -872,11 +913,74 @@ async def admin_drop_task(
 @router.get("/logs", response_class=HTMLResponse)
 async def admin_logs(
     request: Request,
+    level: str | None = Query(None),
+    source: str | None = Query(None),
+    window: str | None = Query(None),
+    q: str | None = Query(None),
     admin: User = Depends(require_admin),
 ):
-    """Каркас подраздела «Логи». Содержимое приносит план 06-08."""
+    """Подраздел «Логи»: операционный срез журналов приложения и воркеров.
+
+    ⚠️ ИСТОЧНИК ЛОГОВ ОПЦИОНАЛЕН, И ЕГО ОТСУТСТВИЕ — ШТАТНАЯ ВЕТКА (D-28).
+    Мониторинг не поднимается боевыми командами запуска и выката: это решение
+    проекта, а не недоделка. Поэтому недоступность приходит ОТДЕЛЬНЫМ полем
+    результата и рисуется ПЛАШКОЙ с причиной и командой подъёма — не пустым
+    списком. Пустой список здесь читается как «ошибок нет», то есть отвечает на
+    вопрос, ради которого администратор в подраздел и пришёл, и отвечает
+    неправдой.
+
+    ⚠️ ТРИ СОСТОЯНИЯ, А НЕ ДВА, И РАЗМЕТКА РАЗЛИЧАЕТ ВСЕ ТРИ: пустая выдача при
+    живом источнике, недоступный источник, сработавший потолок. Ни одно из них
+    не выводится из длины перечня строк.
+
+    ⚠️ ОПРОСА ЗДЕСЬ НЕТ, ОБНОВЛЕНИЕ ИДЁТ КНОПКОЙ (D-29). Администратор читает и
+    ищет глазами, а лента, прыгающая под курсором, мешает; вдобавок каждый
+    запрос — поход во внешний источник по сети, а не чтение из памяти.
+
+    ⚠️ ЗНАЧЕНИЯ ТРЁХ ОСЕЙ САНИРУЮТСЯ ЗАМКНУТЫМ МНОЖЕСТВОМ ИЗ ОБЪЯВЛЕННЫХ
+    СЛОВАРЕЙ (T-06-LOG3), а текст поиска экранируется сборщиком запроса: это
+    единственный вход фазы, уходящий в чужой язык запросов (T-06-LQL).
+    """
+    level = clean_level(level)
+    source = clean_source(source)
+    window_key = clean_window(window)
+    text = (q or "").strip()
+
+    result = await query_range(
+        build_logql(level, source, text), LOG_WINDOWS[window_key].delta
+    )
+
+    # Действующие значения осей для сборки адресов чипсов: переключение ОДНОЙ
+    # оси обязано сохранить остальные, иначе выбор уровня молча сбросил бы окно
+    # и текст поиска — при исправном на вид экране.
+    filter_params = {"window": window_key}
+    if level:
+        filter_params["level"] = level
+    if source:
+        filter_params["source"] = source
+    if text:
+        filter_params["q"] = text
+
     return templates.TemplateResponse(
-        "admin/logs.html", _admin_context(request, admin, "logs")
+        "admin/logs.html",
+        {
+            **_admin_context(request, admin, "logs"),
+            # Три поля результата приезжают ПОРОЗНЬ, потому что разметка
+            # различает три случая. Признак, выведенный из длины списка, рано
+            # или поздно ошибётся — и ошибётся молча.
+            "log_lines": result.lines,
+            "log_capped": result.capped,
+            "log_unavailable": result.unavailable,
+            "log_line_cap": LOG_LINE_CAP,
+            "level_chips": LEVEL_CHIP_OPTIONS,
+            "source_chips": LOG_SOURCES,
+            "window_chips": LOG_WINDOW_CHIPS,
+            "filter_level": level,
+            "filter_source": source,
+            "filter_window": window_key,
+            "filter_text": text,
+            "filter_params": filter_params,
+        },
     )
 
 

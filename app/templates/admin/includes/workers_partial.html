@@ -86,7 +86,7 @@
   <h3 class="card__title">{{ group.label }}</h3>
   {{ rowhead(WORKER_COLUMNS, cols=WORKER_COLS) }}
   {% for row in group.rows %}
-  {{ worker_row(row.account, row.state, WORKER_COLUMNS, WORKER_COLS) }}
+  {{ worker_row(row.account, row.state, WORKER_COLUMNS, WORKER_COLS, row.logs_href) }}
   {% endfor %}
   {% endif %}
   {% endfor %}
