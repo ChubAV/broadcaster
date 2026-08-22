@@ -24,7 +24,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.analytics.send_analytics import CHART_BUCKETS_PER_DAY
 from app.models.ad import Ad
 from app.models.group import Group
-from app.models.group_info import GroupInfo
 from app.models.messenger_account import MessengerAccount
 from app.models.payment import Payment
 from app.models.schedule import Schedule
@@ -239,24 +238,11 @@ async def _move_access_expiry(db: AsyncSession, delta: timedelta) -> datetime:
     return row.expires_at
 
 
-async def _seed_group_info(
-    db: AsyncSession,
-    name: str = "Справочная группа",
-    messenger_type: str = "tg_user",
-    external_id: str = "-100777",
-) -> GroupInfo:
-    item = GroupInfo(
-        messenger_type=messenger_type,
-        external_id=external_id,
-        name=name,
-        member_count=128,
-        admin_contacts=[{"id": "1", "name": "Админ группы", "username": "chief"}],
-        raw_metadata={},
-    )
-    db.add(item)
-    await db.commit()
-    await db.refresh(item)
-    return item
+# _seed_group_info УДАЛЁН ПЛАНОМ 06-01 вместе со всеми своими потребителями:
+# экраны справочника групп снесены (D-05), и наполнять стало нечего. Сама
+# таблица `group_info`, её модель, её репозиторий и ревизия `0011` НЕ тронуты —
+# снос касается поверхности, а не хранилища, и репозиторий по-прежнему покрыт
+# tests/test_repositories/test_group_info.py.
 
 
 async def _seed_section(db: AsyncSession, section: str) -> str:
@@ -1910,9 +1896,9 @@ async def test_admin_pages_use_row_primitives(
 async def test_admin_no_utility_classes(
     admin_client: AsyncClient, db_session: AsyncSession
 ):
-    await _seed_group_info(db_session)
-
-    # Четыре новых подраздела дописаны планом 06-01 вместе с их маршрутами.
+    # Четыре новых подраздела дописаны планом 06-01 вместе с их маршрутами;
+    # адрес справочника групп тем же планом убран вместе с его экранами (D-05),
+    # и посев справочника здесь стал беспредметным.
     for url in (
         "/admin",
         "/admin/users",
@@ -1920,7 +1906,6 @@ async def test_admin_no_utility_classes(
         "/admin/queue",
         "/admin/logs",
         "/admin/payments",
-        "/admin/groups-info",
     ):
         response = await admin_client.get(url)
         assert response.status_code == 200, url
@@ -1973,62 +1958,21 @@ async def test_admin_denied_for_regular_user(authed_client: AsyncClient):
     Утверждение идёт и по статусу, и по телу: отказ, отданный со страницей
     админки внутри, отказом не является.
     """
-    for url in ("/admin", "/admin/users", "/admin/groups-info"):
+    for url in ("/admin", "/admin/users"):
         response = await authed_client.get(url, follow_redirects=False)
         assert response.status_code != 200, url
         assert "Администрирование" not in response.text, url
         assert "data-rowhead" not in response.text, url
 
 
-@pytest.mark.asyncio
-async def test_admin_groups_info_uses_row_primitives(
-    admin_client: AsyncClient, db_session: AsyncSession
-):
-    """Справочник групп собран на строке-таблице, а не на своей вёрстке."""
-    await _seed_group_info(db_session)
-
-    response = await admin_client.get("/admin/groups-info")
-    assert response.status_code == 200
-    html = response.text
-    assert "data-row" in html
-    assert "data-rowhead" in html
-
-
-@pytest.mark.asyncio
-async def test_admin_groups_info_renders_data(
-    admin_client: AsyncClient, db_session: AsyncSession
-):
-    """Строка справочника отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
-
-    Видимая подпись раздела зафиксирована существующим покрытием
-    (tests/test_pages/test_admin_groups_info.py) и переименованию не подлежит:
-    переименования D-11 касаются пунктов основной навигации, а не заголовков
-    внутри админки.
-    """
-    item = await _seed_group_info(db_session, name="Уникальное имя справочника")
-
-    html = (await admin_client.get("/admin/groups-info")).text
-    assert "Справочник групп" in html, "видимая подпись раздела потеряна"
-    assert "Уникальное имя справочника" in html, "название группы не отрисовано"
-    assert "-100777" in html, "внешний идентификатор не отрисован"
-    assert f"/admin/groups-info/{item.id}" in html, "ссылка на карточку потеряна"
-
-
-@pytest.mark.asyncio
-async def test_admin_groups_info_escapes_external_name(
-    admin_client: AsyncClient, db_session: AsyncSession
-):
-    """T-07-03: название группы приходит из внешнего мессенджера.
-
-    Это недоверенная строка: приложение её не контролирует и проверить не
-    может. Она обязана выводиться штатным экранированием — макросам передаётся
-    текст, а не разметка.
-    """
-    await _seed_group_info(db_session, name='<img src=x onerror="alert(1)">')
-
-    html = (await admin_client.get("/admin/groups-info")).text
-    assert '<img src=x' not in html, "название группы отрисовано как разметка"
-    assert "&lt;img src=x" in html, "экранированного вывода названия нет"
+# ТРИ ТЕСТА СПРАВОЧНИКА ГРУПП УДАЛЕНЫ ПЛАНОМ 06-01 ВМЕСТЕ С ПРЕДМЕТОМ (D-05), А
+# НЕ ПЕРЕНАЦЕЛЕНЫ НА ДРУГОЙ ЭКРАН. Они утверждали про строку справочника: что
+# она собрана примитивом, что рисует реальные данные и что экранирует пришедшее
+# из мессенджера название. Экрана нет — утверждать не о чем, а тест, потерявший
+# предмет и перенацеленный, перестаёт утверждать то, ради чего был написан.
+# Вклад в проверки не потерян молча: экранирование внешних строк закрыто теми же
+# проверками на остальных поверхностях, а отсутствие снесённого адреса
+# закреплено test_groups_info_gone_from_templates_and_routes в test_admin_panel.py.
 
 
 # --- План 08, Задача 1: детальные страницы админки ---------------------------
@@ -2076,20 +2020,9 @@ async def test_admin_user_detail_renders_data(
         assert f"/admin/users/{user.id}{action}" in html, action
 
 
-@pytest.mark.asyncio
-async def test_admin_group_info_detail_renders_data(
-    admin_client: AsyncClient, db_session: AsyncSession
-):
-    """Деталь справочника групп отрисовывает реальные данные."""
-    item = await _seed_group_info(db_session, name="Уникальная деталь справочника")
-
-    response = await admin_client.get(f"/admin/groups-info/{item.id}")
-    assert response.status_code == 200
-    html = response.text
-
-    assert "Уникальная деталь справочника" in html, "название группы не отрисовано"
-    assert "-100777" in html, "внешний идентификатор не отрисован"
-    assert "Админ группы" in html, "контакт администратора не отрисован"
+# test_admin_group_info_detail_renders_data УДАЛЁН ПЛАНОМ 06-01 вместе с самой
+# карточкой справочника (D-05). Он утверждал, что карточка отрисовывает реальные
+# данные; карточки нет — утверждать не о чем.
 
 
 @pytest.mark.asyncio
@@ -2097,9 +2030,10 @@ async def test_admin_detail_pages_no_utility_classes(
     authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
 ):
     user = await _user(db_session)
-    item = await _seed_group_info(db_session)
 
-    for url in (f"/admin/users/{user.id}", f"/admin/groups-info/{item.id}"):
+    # Адрес карточки справочника вышел из обхода вместе с самой карточкой:
+    # детальных страниц админки осталась одна.
+    for url in (f"/admin/users/{user.id}",):
         response = await admin_client.get(url)
         assert response.status_code == 200, url
         for marker in UTILITY_MARKERS:
@@ -2117,13 +2051,11 @@ async def test_admin_detail_denied_for_regular_user(
     отрендеренной страницей внутри, отказом не является.
     """
     user = await _user(db_session)
-    item = await _seed_group_info(db_session)
 
-    for url in (f"/admin/users/{user.id}", f"/admin/groups-info/{item.id}"):
+    for url in (f"/admin/users/{user.id}",):
         response = await authed_client.get(url, follow_redirects=False)
         assert response.status_code != 200, url
         assert user.email not in response.text, url
-        assert "Справочная группа" not in response.text, url
 
 
 @pytest.mark.asyncio
@@ -3394,7 +3326,8 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     ),
     # Класс 3: страницы-карточки без шапки колонок вовсе. На 860px нечему
     # скрываться, значит и компенсировать подписью нечего.
-    "admin/group_info_detail.html": "страница-карточка, шапки колонок нет вовсе",
+    # admin/group_info_detail.html ВЫШЕЛ из перечня планом 06-01 вместе с самим
+    # шаблоном: экраны справочника групп снесены (D-05).
     "admin/user_history_detail.html": "страница-карточка, шапки колонок нет вовсе",
     # history/detail.html ВЫШЕЛ из перечня планом 04-07: страница записи
     # перевёрстана на ПРИМИТИВ ЗАПИСИ (data-hrow) и строку-таблицу больше не
@@ -3475,12 +3408,11 @@ ROWHEAD_PAGES = (
     ),
     # НАБЛЮДЕНИЕ, а НЕ принятая базовая линия — та же история, что у тарифов:
     # «Канал» и «Обновлено» на 860px остаются без названия (T-13-09).
-    RowheadPage(
-        "admin/groups_info.html", "/admin/groups-info", True, "admin_groups_info",
-        frozenset({"Группа", "Канал", "Обновлено"}),
-        note="НАБЛЮДЕНИЕ для /gsd-verify-work: «Канал» и «Обновлено» не подписаны "
-        "помимо колонки названия; НЕ принятая базовая линия",
-    ),
+    # admin/groups_info.html ВЫШЕЛ из таблицы планом 06-01 вместе с самим
+    # шаблоном: экраны справочника групп снесены (D-05). Вместе с ним закрыто и
+    # НАБЛЮДЕНИЕ T-13-09 по этой странице («Канал» и «Обновлено» оставались без
+    # подписи) — закрыто СНОСОМ предмета, а не дописыванием подписей. Замены в
+    # таблице у него нет и быть не может: поверхность снята, а не переименована.
 )
 
 
@@ -3513,8 +3445,6 @@ async def _seed_rowhead_page(db: AsyncSession, seed: str) -> None:
         # балансу сообщений снята планом 05.1-05, и посев операцией оставлял бы
         # страницу с пустым состоянием вместо шапки.
         await _seed_payment(db)
-    elif seed == "admin_groups_info":
-        await _seed_group_info(db)
     else:  # pragma: no cover — защита от опечатки в таблице параметризации
         raise AssertionError(f"неизвестное наполнение: {seed}")
 
@@ -3570,9 +3500,12 @@ def test_rowhead_pages_all_have_a_parametrization_entry():
     # отправок. Уменьшение объявленного числа — признание СОЗНАТЕЛЬНОГО снятия;
     # молчаливое исчезновение шаблона с шапкой по-прежнему краснеет.
     #
-    # ШЕСТЬ → СЕМЬ: план 06-01 завёл подраздел «Воркеры» со своей шапкой.
-    assert len(declared) == 7, (
-        f"ожидалось семь шаблонов с шапкой колонок, объявлено {len(declared)}: "
+    # ШЕСТЬ → ШЕСТЬ, И ЭТО НЕ «БЕЗ ИЗМЕНЕНИЙ»: план 06-01 завёл подраздел
+    # «Воркеры» со своей шапкой (+1) и снёс справочник групп вместе с его
+    # шапкой (−1). Совпадение итога — арифметика двух РАЗНЫХ шагов, а не
+    # отсутствие правки; проверку держат имена в `declared`, а не число.
+    assert len(declared) == 6, (
+        f"ожидалось шесть шаблонов с шапкой колонок, объявлено {len(declared)}: "
         f"{sorted(declared)}"
     )
 
@@ -3601,11 +3534,12 @@ def test_row_templates_without_header_are_accounted_for():
     # объявленного числа — признание СОЗНАТЕЛЬНОГО шага; молчаливое появление
     # или исчезновение файла по-прежнему краснеет.
     #
-    # ШЕСТЬ → СЕМЬ: план 06-01 добавил ОДИН файл первого класса — макрос строки
-    # воркера, чей исходник входит в объединение admin/workers.html и там же
-    # проверяется на подписи.
-    assert len(declared) == 7, (
-        f"ожидалось семь таких шаблонов, объявлено {len(declared)}"
+    # ШЕСТЬ → ШЕСТЬ, И ЭТО НЕ «БЕЗ ИЗМЕНЕНИЙ»: план 06-01 добавил ОДИН файл
+    # первого класса (макрос строки воркера, чей исходник входит в объединение
+    # admin/workers.html) и снял ОДИН файл третьего класса (карточка справочника
+    # групп снесена, D-05). Совпадение итога — арифметика двух разных шагов.
+    assert len(declared) == 6, (
+        f"ожидалось шесть таких шаблонов, объявлено {len(declared)}"
     )
     # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
     # макрос row_open он не вызывает. Без второго условия разрешителя он выпал
@@ -3711,7 +3645,13 @@ DIALOG_SWEEP_URLS = (
 
 DIALOG_SWEEP_ADMIN_URLS = (
     "/admin/users",
-    "/admin/groups-info",
+    # Адрес справочника групп ушёл отсюда планом 06-01 вместе с его экранами
+    # (D-05). Его место заняли подразделы админ-панели: обход требует 200, и все
+    # пять новых адресов его дают.
+    "/admin/workers",
+    "/admin/queue",
+    "/admin/logs",
+    "/admin/payments",
 )
 
 
@@ -3731,7 +3671,6 @@ async def test_no_rendered_page_calls_browser_dialog(
     account = await _seed_account(db_session, type_="max")
     for seed in ("ads", "schedules", "dashboard", "billing"):
         await _seed_rowhead_page(db_session, seed)
-    await _seed_group_info(db_session)
     # Экран групп аккаунта адресуется идентификатором и в статический перечень
     # по построению не входит; в обход он попадает вместе со своей порцией
     # прокрутки — тем же приёмом, что ответ опроса статуса аккаунта.

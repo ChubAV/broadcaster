@@ -28,7 +28,6 @@ from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.pages.common import templates
-from app.repositories.group_info import GroupInfoRepository
 from app.repositories.user import UserRepository
 from app.services.billing_cache import invalidate_access_cache
 from app.services.ops_state import worker_liveness
@@ -745,69 +744,3 @@ async def admin_delete_user(
     await db.commit()
 
     return RedirectResponse(url="/admin/users", status_code=302)
-
-
-@router.get("/groups-info", response_class=HTMLResponse)
-async def admin_groups_info(
-    request: Request,
-    q: str = "",
-    messenger: str = "",
-    offset: int = Query(default=0, ge=0),
-    admin: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    page_size = 30
-    repo = GroupInfoRepository(db)
-
-    items, total = await repo.search(
-        q=q, messenger_type=messenger, offset=offset, limit=page_size
-    )
-    counts = await repo.count_by_type()
-    total_all = sum(counts.values())
-
-    has_next = offset + page_size < total
-    has_prev = offset > 0
-
-    return templates.TemplateResponse(
-        "admin/groups_info.html",
-        {
-            "request": request,
-            "user": admin,
-            "is_admin": True,
-            "active_page": "admin",
-            "items": items,
-            "total": total,
-            "total_all": total_all,
-            "counts": counts,
-            "q": q,
-            "messenger": messenger,
-            "offset": offset,
-            "page_size": page_size,
-            "has_next": has_next,
-            "has_prev": has_prev,
-        },
-    )
-
-
-@router.get("/groups-info/{item_id}", response_class=HTMLResponse)
-async def admin_group_info_detail(
-    request: Request,
-    item_id: int,
-    admin: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    repo = GroupInfoRepository(db)
-    item = await repo.get_by_id(item_id)
-    if not item:
-        return RedirectResponse(url="/admin/groups-info", status_code=302)
-
-    return templates.TemplateResponse(
-        "admin/group_info_detail.html",
-        {
-            "request": request,
-            "user": admin,
-            "is_admin": True,
-            "active_page": "admin",
-            "item": item,
-        },
-    )

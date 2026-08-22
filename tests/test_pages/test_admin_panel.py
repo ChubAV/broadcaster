@@ -330,3 +330,70 @@ async def test_no_mockup_placeholder_numbers_reached_the_subsections(
         html = (await admin_client.get(url)).text
         for marker in forbidden:
             assert marker not in html, f"{url}: {marker}"
+
+
+# ---- Страховочная сетка сноса справочника групп (D-05) ----
+
+def test_groups_info_gone_from_templates_and_routes():
+    """Ни один шаблон и ни один маршрут не ведёт на снесённый адрес (D-05).
+
+    ⚠️ УТВЕРЖДЕНИЕ ПО ДЕРЕВУ КАТАЛОГА И ПО ПЕРЕЧНЮ МАРШРУТОВ, А НЕ ПО ОДНОМУ
+    ФАЙЛУ. Ссылка, забытая в соседнем шаблоне, отдала бы администратору 404 —
+    и отдала бы молча, потому что сам снос выглядел бы завершённым. Поэтому
+    проверяются ВСЕ шаблоны проекта и ВСЕ маршруты собранного приложения.
+
+    Хранилище под снос НЕ попадает: таблица `group_info`, её модель, её
+    репозиторий и ревизия `0011` остаются — снос касается поверхности, и это
+    отдельное намеренное решение, а не недоделка.
+    """
+    dead_url = "/admin/" + "groups-info"
+
+    offenders = [
+        str(path)
+        for path in TEMPLATES_ROOT.rglob("*.html")
+        if dead_url in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, f"ссылка на снесённый адрес осталась в шаблонах: {offenders}"
+
+    assert not (TEMPLATES_ROOT / "admin" / "groups_info.html").exists()
+    assert not (TEMPLATES_ROOT / "admin" / "group_info_detail.html").exists()
+
+    from app.main import create_app
+    from app.config import Settings
+
+    app = create_app(
+        settings=Settings(
+            _env_file=None,
+            database_url="sqlite+aiosqlite:///:memory:",
+            redis_url="redis://localhost:6379/0",
+            secret_key="test-secret-key",
+            telegram_api_id=12345,
+            telegram_api_hash="test_api_hash",
+            wa_bridge_urls=["http://localhost:3000"],
+            admin_email="admin@test.com",
+            smtp_host="",
+            smtp_port=587,
+            smtp_user="",
+            smtp_password="",
+            smtp_from="noreply@test.com",
+        )
+    )
+    live = [
+        route.path
+        for route in app.routes
+        if dead_url in getattr(route, "path", "")
+    ]
+    assert not live, f"маршрут снесённого справочника всё ещё объявлен: {live}"
+
+
+def test_groups_info_gone_but_its_storage_survived():
+    """Хранилище справочника ЦЕЛО — снесена поверхность, а не данные (D-05).
+
+    Утверждение парное к предыдущему и существует ради ассимметрии решения:
+    экраны сняты, потому что у таблицы нет производителя, но таблица, её
+    модель, её репозиторий и ревизия остаются — снос данных был бы необратим,
+    а снос экранов откатывается из git.
+    """
+    assert Path("app/models/group_info.py").exists()
+    assert Path("app/repositories/group_info.py").exists()
+    assert list(Path("alembic/versions").glob("0011*.py"))
