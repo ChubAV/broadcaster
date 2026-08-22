@@ -3337,6 +3337,11 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     "admin/includes/worker_row.html": (
         "макрос строки внутри объединения admin/includes/workers_partial.html"
     ),
+    # Подраздел «Очередь» (план 06-07) повторяет форму подраздела «Воркеры»
+    # дословно: макрос строки в своём файле, шапка — в шаблоне страницы.
+    "admin/includes/queue_row.html": (
+        "макрос строки внутри объединения admin/queue.html"
+    ),
     # groups/includes/group_row.html ВЫШЕЛ из перечня планом 03-08 вместе с
     # самим шаблоном: глобальный раздел снесён (D-01). Строка группы на экране
     # аккаунта его место не занимает — она КАРТОЧНАЯ и примитив строки-таблицы
@@ -3375,12 +3380,67 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
 }
 
 
+class _QueueRowheadPipeline:
+    """Конвейер заглушки: отвечает на пару «длина + диапазон» одной очереди."""
+
+    def __init__(self):
+        self._keys: list[str] = []
+
+    def llen(self, key: str):
+        self._keys.append(key)
+        return self
+
+    def lrange(self, key: str, start: int, stop: int):
+        self._keys.append(key)
+        return self
+
+    def get(self, key: str):
+        self._keys.append(key)
+        return self
+
+    async def execute(self):
+        import json
+
+        body = json.dumps(
+            {
+                "task_id": "rowhead-task",
+                "ad_title": "Заголовок",
+                "group_name": "Группа «Барахолка»",
+            },
+            ensure_ascii=False,
+        ).encode()
+        occupied = any(key.startswith("wa:queue:") for key in self._keys)
+        return [1, [body]] if occupied else [0, []]
+
+
+class _QueueRowheadRedis:
+    """Заглушка Redis для подраздела «Очередь» — ровно одна задача в WA-очереди.
+
+    ⚠️ БЕЗ НЕЁ ЭТОТ ВХОД ТАБЛИЦЫ ЗЕЛЕНЕЛ БЫ ВАКУУМНО. Шапка колонок подраздела
+    рисуется ТОЛЬКО над непустой очередью — пустая печатает пустое состояние, у
+    которого ни шапки, ни подписей нет вовсе, и сравнение разностей сошлось бы,
+    ничего не сравнив. Очередь же живёт в Redis, которого в суите нет: подмена
+    идёт через ту же именованную точку модуля, что у подраздела «Воркеры».
+    """
+
+    def pipeline(self):
+        return _QueueRowheadPipeline()
+
+    async def llen(self, key: str) -> int:
+        return 0
+
+
 class RowheadPage(NamedTuple):
     """Вход таблицы параметризации: одна страница с шапкой колонок.
 
     unlabelled — ОЖИДАЕМАЯ разность «названия колонок шапки минус подписи»,
     объявленная явно, а не выведенная. Это и делает сетку строгой: новая колонка
     без подписи увеличивает разность и роняет тест.
+
+    ops_state — нужна ли странице подмена оперативного состояния, чтобы шапка
+    вообще отрисовалась. Признак объявлен явно, а не выведен из имени шаблона:
+    страница, которой подмена нужна и не досталась, показала бы пустое
+    состояние, и вход таблицы утверждал бы про вёрстку, которой на экране нет.
     """
 
     template: str
@@ -3389,6 +3449,7 @@ class RowheadPage(NamedTuple):
     seed: str
     unlabelled: frozenset[str]
     note: str = ""
+    ops_state: bool = False
 
 
 ROWHEAD_PAGES = (
@@ -3449,6 +3510,17 @@ ROWHEAD_PAGES = (
     # SC-5, которая на этой странице оставалась ложной. Осталась одна колонка
     # без подписи — «Дата», и она освобождена НАМЕРЕННО: форматированная дата
     # самоописательна (контракт C2 UI-SPEC фазы 05.1).
+    # Подраздел «Очередь» (план 06-07). Разность ПУСТА: подписаны все четыре
+    # колонки — на 860px шапка скрывается, и «ждёт» без названия колонки было бы
+    # неотличимо от имени группы, стоящего рядом.
+    RowheadPage(
+        "admin/queue.html", "/admin/queue", True, "admin_queue", frozenset(),
+        note=(
+            "Шапка рисуется только над непустой очередью, поэтому вход требует "
+            "подмены оперативного состояния."
+        ),
+        ops_state=True,
+    ),
     RowheadPage(
         "billing/balance.html", "/billing", False, "billing",
         frozenset({"Дата"}),
@@ -3487,6 +3559,11 @@ async def _seed_rowhead_page(db: AsyncSession, seed: str) -> None:
         # MAX, обход по выдаче начал бы стучаться в брокер, которого в суите
         # нет, — то есть проверка вёрстки зависела бы от внешней службы.
         await _seed_account(db, type_="tg_user")
+    elif seed == "admin_queue":
+        # WA-АККАУНТ ВЫБРАН НАМЕРЕННО: строки очереди есть только у каналов со
+        # своим списком задач, а у telegram-канала их нет вовсе (D-14) — посеяв
+        # его, страница осталась бы без шапки колонок.
+        await _seed_account(db, type_="wa")
     elif seed == "billing":
         # Шапку колонок раздела рисует ЖУРНАЛ ПЛАТЕЖЕЙ: история операций по
         # балансу сообщений снята планом 05.1-05, и посев операцией оставлял бы
@@ -3551,8 +3628,11 @@ def test_rowhead_pages_all_have_a_parametrization_entry():
     # «Воркеры» со своей шапкой (+1) и снёс справочник групп вместе с его
     # шапкой (−1). Совпадение итога — арифметика двух РАЗНЫХ шагов, а не
     # отсутствие правки; проверку держат имена в `declared`, а не число.
-    assert len(declared) == 6, (
-        f"ожидалось шесть шаблонов с шапкой колонок, объявлено {len(declared)}: "
+    #
+    # ШЕСТЬ → СЕМЬ: план 06-07 завёл подраздел «Очередь» со своей шапкой (+1).
+    # Снятия в паре с ним нет — это чистое прибавление поверхности.
+    assert len(declared) == 7, (
+        f"ожидалось семь шаблонов с шапкой колонок, объявлено {len(declared)}: "
         f"{sorted(declared)}"
     )
 
@@ -3585,8 +3665,12 @@ def test_row_templates_without_header_are_accounted_for():
     # первого класса (макрос строки воркера, чей исходник входит в объединение
     # admin/workers.html) и снял ОДИН файл третьего класса (карточка справочника
     # групп снесена, D-05). Совпадение итога — арифметика двух разных шагов.
-    assert len(declared) == 6, (
-        f"ожидалось шесть таких шаблонов, объявлено {len(declared)}"
+    #
+    # ШЕСТЬ → СЕМЬ: план 06-07 добавил ОДИН файл первого класса — макрос строки
+    # очереди, чей исходник входит в объединение admin/queue.html и там же
+    # проверяется на подписи. Снятия в паре с ним нет.
+    assert len(declared) == 7, (
+        f"ожидалось семь таких шаблонов, объявлено {len(declared)}"
     )
     # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
     # макрос row_open он не вызывает. Без второго условия разрешителя он выпал
@@ -3634,7 +3718,15 @@ async def test_rowhead_titles_are_covered_by_labels(
         follow_redirects=False,
     )
 
-    response = await client.get(page.url.format(user_id=user.id))
+    if page.ops_state:
+        from unittest.mock import patch
+
+        with patch(
+            "app.services.ops_state._get_redis", return_value=_QueueRowheadRedis()
+        ):
+            response = await client.get(page.url.format(user_id=user.id))
+    else:
+        response = await client.get(page.url.format(user_id=user.id))
     assert response.status_code == 200, (
         f"{page.template}: страница {page.url} вернула {response.status_code}"
     )

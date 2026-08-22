@@ -372,3 +372,299 @@ def test_infra_states_are_drawn_from_the_existing_four_state_vocabulary():
     allowed = {WORKER_ONLINE, WORKER_IDLE, WORKER_OFFLINE, WORKER_UNKNOWN}
     assert ops_state.INFRA_STATES <= allowed
     assert WORKER_IDLE not in ops_state.INFRA_STATES
+
+
+# ---- Чтение очередей и снятие одной задачи (ADMIN-08, D-13, D-17) ----
+#
+# ⚠️ ЧТЕНИЕ ОЧЕРЕДИ НЕ ИМЕЕТ ПРАВА СНИМАТЬ ЗАДАЧИ. Подраздел отвечает на вопрос
+# «что ждёт отправки», и чтение, снимающее элементы, отняло бы у пользователей
+# оплаченные рассылки просто оттого, что администратор открыл страницу. Поэтому
+# двойник клиента ниже держит НАСТОЯЩИЙ список: утверждения адресуются данным, а
+# не количеству вызовов — вызов можно сделать правильным и всё равно потерять
+# задачу.
+
+class _FakeQueueRedis:
+    """Двойник клиента Redis, хранящий очереди настоящими списками.
+
+    Проверять снятие по вызванным методам недостаточно: `LREM` с количеством 0
+    удаляет ВСЕ совпадающие вхождения, и утверждение «lrem был вызван» зеленело
+    бы ровно в том случае, ради запрета которого тест и написан. Список
+    изменяется по-настоящему, и проверяется его содержимое.
+    """
+
+    def __init__(self, lists: dict[str, list[bytes]] | None = None):
+        self.lists: dict[str, list[bytes]] = lists or {}
+        self.lrem_calls: list[tuple] = []
+        self.forbidden_calls: list[str] = []
+
+    # -- конвейер --
+    def pipeline(self):
+        return _FakeQueuePipeline(self)
+
+    # -- одиночные команды --
+    async def llen(self, key: str) -> int:
+        return len(self.lists.get(key, []))
+
+    async def lrange(self, key: str, start: int, stop: int) -> list[bytes]:
+        items = self.lists.get(key, [])
+        return items[start:] if stop == -1 else items[start : stop + 1]
+
+    async def lrem(self, key: str, count: int, value: bytes) -> int:
+        self.lrem_calls.append((key, count, value))
+        items = self.lists.get(key, [])
+        removed = 0
+        limit = count if count > 0 else len(items)
+        out: list[bytes] = []
+        for item in items:
+            if item == value and removed < limit:
+                removed += 1
+                continue
+            out.append(item)
+        self.lists[key] = out
+        return removed
+
+    # -- команды, снимающие задачи: их здесь быть не должно --
+    async def lpop(self, *args, **kwargs):
+        self.forbidden_calls.append("lpop")
+        raise AssertionError("чтение очереди сняло задачу через lpop")
+
+    async def rpop(self, *args, **kwargs):
+        self.forbidden_calls.append("rpop")
+        raise AssertionError("чтение очереди сняло задачу через rpop")
+
+    async def blpop(self, *args, **kwargs):
+        self.forbidden_calls.append("blpop")
+        raise AssertionError("чтение очереди сняло задачу через blpop")
+
+
+class _FakeQueuePipeline:
+    """Конвейер поверх двойника: команды копятся, `execute` выполняет по порядку."""
+
+    def __init__(self, client: "_FakeQueueRedis"):
+        self._client = client
+        self._ops: list = []
+
+    def llen(self, key: str):
+        self._ops.append(("llen", (key,)))
+        return self
+
+    def lrange(self, key: str, start: int, stop: int):
+        self._ops.append(("lrange", (key, start, stop)))
+        return self
+
+    def get(self, key: str):
+        self._ops.append(("get", (key,)))
+        return self
+
+    async def execute(self):
+        out = []
+        for name, args in self._ops:
+            out.append(await getattr(self._client, name)(*args))
+        return out
+
+
+def _task_body(task_id: str, **extra) -> bytes:
+    """Тело задачи в том же виде, в каком его кладёт постановщик — байтами."""
+    import json
+
+    body = {
+        "task_id": task_id,
+        "ad_id": 11,
+        "group_id": 22,
+        "account_id": 33,
+        "schedule_id": 44,
+        "user_id": 55,
+        "ad_text": "Текст объявления",
+        "ad_title": "Заголовок",
+        "ad_images": [],
+        "group_external_id": "-100123456789",
+        "group_name": "Группа «Барахолка»",
+        "created_at": "2026-08-22T10:00:00+00:00",
+    }
+    body.update(extra)
+    return json.dumps(body, ensure_ascii=False).encode()
+
+
+@pytest.mark.asyncio
+async def test_reading_a_queue_page_does_not_shorten_the_queue():
+    """Чтение отдаёт тела задач и НЕ уменьшает длину списка.
+
+    Длина до и после совпадает: подраздел отвечает на вопрос «что ждёт
+    отправки», а не забирает ответ себе.
+    """
+    from app.services.ops_state import queue_page
+
+    client = _FakeQueueRedis({"wa:queue:7": [_task_body("a"), _task_body("b")]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        page = await queue_page("wa", 7, limit=50)
+
+    assert [task["task_id"] for task in page.tasks] == ["a", "b"]
+    assert page.total == 2
+    assert page.unavailable is False
+    assert len(client.lists["wa:queue:7"]) == 2
+    assert client.forbidden_calls == []
+
+
+@pytest.mark.asyncio
+async def test_reading_an_empty_queue_returns_an_empty_page_without_raising():
+    """Пустая очередь — пустой перечень и НЕ исключение."""
+    from app.services.ops_state import queue_page
+
+    client = _FakeQueueRedis({})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        page = await queue_page("max", 9, limit=50)
+
+    assert page.tasks == ()
+    assert page.total == 0
+    assert page.unavailable is False
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_redis_is_named_and_not_shown_as_an_empty_queue():
+    """Недоступный Redis возвращает признак недоступности, а не пустоту.
+
+    Пустая очередь и сломанный наблюдатель — РАЗНЫЕ состояния мира. Слитые в
+    одно, они сообщили бы «рассылать нечего» ровно тогда, когда очередь стоит и
+    её не видно.
+    """
+    from app.services.ops_state import queue_page
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        page = await queue_page("wa", 7, limit=50)
+    assert page.tasks == ()
+    assert page.total is None
+    assert page.unavailable is True
+
+    broken = MagicMock()
+    broken.llen = MagicMock(return_value=broken)
+    broken.lrange = MagicMock(return_value=broken)
+    broken.execute = AsyncMock(side_effect=OSError("connection reset"))
+    client = MagicMock()
+    client.pipeline = MagicMock(return_value=broken)
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        page = await queue_page("wa", 7, limit=50)
+    assert page.unavailable is True
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_task_removes_exactly_one_entry_with_an_explicit_count():
+    """Снятие удаляет РОВНО ОДНУ запись, и количество передано явным литералом.
+
+    Два одинаковых тела в очереди — и одно обязано остаться. Количество не
+    выводится из того, что идентификаторы уникальны: правило «снять одну»
+    обязано быть выражено, а не выведено из свойства данных, которое завтра
+    может перестать выполняться.
+    """
+    from app.services.ops_state import DROP_REMOVED, drop_task
+
+    body = _task_body("dup")
+    client = _FakeQueueRedis({"wa:queue:7": [body, body, _task_body("other")]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        outcome = await drop_task("wa", 7, "dup", limit=50)
+
+    assert outcome == DROP_REMOVED
+    assert client.lists["wa:queue:7"].count(body) == 1
+    assert len(client.lists["wa:queue:7"]) == 2
+    assert [call[1] for call in client.lrem_calls] == [1]
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_task_that_is_already_gone_removes_nothing_and_says_so():
+    """Снятие несуществующей задачи ничего не удаляет и НАЗЫВАЕТ этот исход.
+
+    Молчаливый успех был бы хуже отказа: администратор решил бы, что снял
+    отправку, которая на самом деле уже ушла к получателю.
+    """
+    from app.services.ops_state import DROP_MISSING, drop_task
+
+    client = _FakeQueueRedis({"wa:queue:7": [_task_body("a")]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        outcome = await drop_task("wa", 7, "no-such-task", limit=50)
+
+    assert outcome == DROP_MISSING
+    assert client.lrem_calls == []
+    assert len(client.lists["wa:queue:7"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_dropped_bytes_come_from_the_servers_own_read_not_from_the_form():
+    """Точные байты удаляемого берутся из СВОЕГО чтения очереди (T-06-DROP2).
+
+    Форма присылает только идентификатор задачи. Тело в этих очередях содержит
+    текст чужого объявления и может быть большим; доверять клиенту точные байты
+    удаляемого не нужно вовсе, и подделать снятие чужой задачи подстановкой тела
+    нельзя, потому что тело из запроса не используется ничем.
+    """
+    from app.services.ops_state import DROP_REMOVED, drop_task
+
+    stored = _task_body("target", _retry_count=2)
+    client = _FakeQueueRedis({"max:queue:3": [stored]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        outcome = await drop_task("max", 3, "target", limit=50)
+
+    assert outcome == DROP_REMOVED
+    assert client.lrem_calls[0][2] == stored
+    assert client.lists["max:queue:3"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_telegram_queue_is_measured_by_length_without_opening_its_envelope():
+    """Длина очереди telegram читается по ИМЕНИ очереди, без разбора содержимого.
+
+    Тело задачи там — конверт брокера с закодированным содержимым (D-14). Его
+    разбор привязал бы админку к внутренностям библиотеки, которые меняются
+    между версиями молча.
+    """
+    from app.services.ops_state import TELEGRAM_QUEUE_KEY, telegram_queue_depth
+
+    client = _FakeQueueRedis({TELEGRAM_QUEUE_KEY: [b"opaque-1", b"opaque-2"]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        depth = await telegram_queue_depth()
+    assert depth == 2
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        assert await telegram_queue_depth() is None
+
+
+def test_no_dispatch_call_in_the_project_passes_a_priority():
+    """СТРАХОВОЧНАЯ СЕТКА: постановка задач нигде не передаёт приоритет (Ф-13).
+
+    ⚠️ ЭТОТ ТЕСТ ОБЯЗАН ПОКРАСНЕТЬ В ТОТ ДЕНЬ, КОГДА ПРИОРИТЕТ ПОЯВИТСЯ, А НЕ
+    ЧЕРЕЗ МЕСЯЦ. Брокер хранит очередь Redis-списком, но при НЕНУЛЕВОМ
+    приоритете — в отдельном ключе с суффиксом (`_q_for_pri`,
+    kombu/transport/redis.py:1024-1028). Сегодня приоритет не передаётся нигде,
+    и именно поэтому длина ключа `telegram` есть ПОЛНОЕ число задач канала. В
+    день, когда он появится, задачи разъедутся по ключам с суффиксами, и
+    подраздел начнёт недосчитывать МОЛЧА: числу нечем будет себя опровергнуть.
+
+    Обход идёт по синтаксическому дереву, а не поиском подстроки: слово
+    `priority` в комментарии или в чужом вызове красило бы тест, ничего не
+    сообщая.
+    """
+    import ast
+    from pathlib import Path
+
+    offenders: list[str] = []
+    for source in sorted(Path("app").rglob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else None
+            if name not in {"apply_async", "delay", "send_task"}:
+                continue
+            for keyword in node.keywords:
+                if keyword.arg == "priority":
+                    offenders.append(f"{source}:{node.lineno}")
+
+    assert offenders == [], (
+        "постановка задачи передаёт приоритет: длина ключа `telegram` больше не "
+        f"есть полное число задач канала — {offenders}"
+    )
