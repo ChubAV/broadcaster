@@ -229,7 +229,7 @@ async def test_a_return_to_active_clears_the_account_incident(db_session):
 
     account.status = "active"
     await db_session.flush()
-    assert await _collect(db_session) == []
+    assert await _collect(db_session) == ()
 
 
 def test_both_downed_statuses_are_declared_as_a_set_and_active_is_not_one():
@@ -338,7 +338,7 @@ async def test_a_fresh_unclosed_payment_does_not_raise_the_incident(db_session):
         payment_id=1,
         created_at=NOW - timedelta(hours=PENDING_INTENT_TTL_HOURS - 1),
     )
-    assert await _collect(db_session) == []
+    assert await _collect(db_session) == ()
 
 
 @pytest.mark.asyncio
@@ -353,7 +353,7 @@ async def test_a_terminal_status_clears_the_payment_incident(db_session):
     payment = await db_session.get(Payment, 1)
     payment.status = STATUS_CANCELED
     await db_session.flush()
-    assert await _collect(db_session) == []
+    assert await _collect(db_session) == ()
 
 
 # --- Признак 5: планировщик не дышит (D-45.5) ---------------------------------
@@ -381,7 +381,7 @@ async def test_moving_the_next_run_forward_clears_the_beat_incident(db_session):
 
     schedule.next_run_at = _naive(NOW + timedelta(minutes=10))
     await db_session.flush()
-    assert await _collect(db_session) == []
+    assert await _collect(db_session) == ()
 
 
 @pytest.mark.asyncio
@@ -392,7 +392,7 @@ async def test_an_inactive_schedule_does_not_wake_the_beat_incident(db_session):
         next_run_at=NOW - timedelta(days=30),
         is_active=False,
     )
-    assert await _collect(db_session) == []
+    assert await _collect(db_session) == ()
 
 
 # --- Время инцидента: последний НАБЛЮДЁННЫЙ след (D-47) -----------------------
