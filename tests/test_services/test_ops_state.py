@@ -187,3 +187,188 @@ async def test_empty_account_lists_do_not_touch_redis():
         result = await worker_liveness(wa_ids=[], max_ids=[])
     assert result == {}
     assert pipe.execute.await_count == 0
+
+
+# ---- Инфраструктурный heartbeat: писатель и читатель одного контракта (D-52) ----
+#
+# ⚠️ ПИСАТЕЛЬ ИМПОРТИРУЕТСЯ ЧЕРЕЗ ФИКСТУРУ, А НЕ СВЕРХУ ФАЙЛА, И ЭТО НЕ СТИЛЬ.
+# `app/worker/celery_app.py` строит приложение Celery НА УРОВНЕ МОДУЛЯ, а оно
+# читает настройки из файла окружения. Файла окружения в суите нет намеренно:
+# тесты обязаны идти на чистой машине. Импорт сверху уронил бы ВЕСЬ файл — в том
+# числе двенадцать утверждений про читателя, к писателю отношения не имеющих.
+
+
+@pytest.fixture
+def celery_app_module():
+    """Модуль приложения Celery, импортируемый без файла окружения.
+
+    Два обязательных поля настроек назначаются заглушками ТОЛЬКО ради импорта:
+    предмет проверки — форма ключа heartbeat, его единица и срок жизни, и ни
+    адрес базы, ни подпись сессий в них не участвуют. `setdefault` выбран
+    вместо присваивания намеренно: настоящее окружение, если оно есть,
+    перетирать нельзя.
+    """
+    import os
+
+    from app.config import get_settings
+
+    os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    os.environ.setdefault("SECRET_KEY", "import-only-not-a-real-secret")
+    get_settings.cache_clear()
+
+    import app.worker.celery_app as module
+
+    return module
+#
+# ⚠️ ПИСАТЕЛЬ И ЧИТАТЕЛЬ ПРОВЕРЯЮТСЯ В ОДНОМ ФАЙЛЕ НАМЕРЕННО. Ключ пишет
+# приложение Celery (`app/worker/celery_app.py`), читает веб-процесс
+# (`app/services/ops_state.py`), и разъехаться они могут молча: писатель
+# продолжит писать, читатель — читать пустоту, и верхний блок покажет
+# «отключён» на живых службах. Единственная защита от такого расхождения —
+# утверждение, читающее ОБЕ стороны сразу.
+
+
+def test_infra_ttl_is_the_same_number_the_reader_calls_stale(celery_app_module):
+    """Срок жизни ключа равен порогу свежести — второго числа не заведено.
+
+    ⚠️ ЭТО ЗАПРЕТ, А НЕ СОВПАДЕНИЕ. Писатель ставит ключу TTL, читатель
+    сравнивает ВОЗРАСТ значения с порогом. Разъехавшись, они дали бы два
+    разных ответа на один вопрос «жив ли процесс»: ключ, переживший порог,
+    читался бы мёртвым, а ключ, умерший раньше порога, — неизвестным.
+    """
+    INFRA_HEARTBEAT_INTERVAL_SEC = celery_app_module.INFRA_HEARTBEAT_INTERVAL_SEC
+    INFRA_HEARTBEAT_TTL_SEC = celery_app_module.INFRA_HEARTBEAT_TTL_SEC
+
+    assert INFRA_HEARTBEAT_TTL_SEC == INFRA_HEARTBEAT_INTERVAL_SEC * 3, (
+        "форма срока жизни разошлась с образцом MAX-воркера "
+        "(HEARTBEAT_TTL_SEC = HEARTBEAT_INTERVAL_SEC * 3)"
+    )
+    assert INFRA_HEARTBEAT_TTL_SEC == MAX_HEARTBEAT_STALE_SEC, (
+        "срок жизни ключа разошёлся с порогом свежести читателя — "
+        "на вопрос «жив ли процесс» в проекте появилось два числа"
+    )
+
+
+def test_infra_role_comes_from_the_consumed_queue_not_from_a_container_name(
+    celery_app_module,
+):
+    """Роль celery-воркера выводится из ВЫБРАННОЙ очереди (D-52).
+
+    Имя контейнера — свойство развёртывания и переименовывается в
+    docker-compose.yml без единой правки кода; очередь — свойство самого
+    процесса, объявленное его же командой запуска (`--queues=telegram`).
+    """
+    from app.services.ops_state import INFRA_WORKER_DEFAULT, INFRA_WORKER_TELEGRAM
+
+    _infra_service_for_queues = celery_app_module._infra_service_for_queues
+
+    assert _infra_service_for_queues(["telegram"]) == INFRA_WORKER_TELEGRAM
+    assert _infra_service_for_queues(["default"]) == INFRA_WORKER_DEFAULT
+    # Воркер без указанной очереди слушает всё — общие задачи в том числе.
+    assert _infra_service_for_queues([]) == INFRA_WORKER_DEFAULT
+
+
+def test_infra_heartbeat_writer_puts_a_millisecond_epoch_under_the_read_key(
+    celery_app_module,
+):
+    """Писатель кладёт эпоху в МИЛЛИСЕКУНДАХ по тому ключу, который читают.
+
+    Единица не декоративна: `_is_fresh` делит на миллисекунды, и секунды под
+    тем же ключом дали бы возраст в пятьдесят с лишним лет, то есть вечное
+    «отключён» на живой службе.
+    """
+    from app.services.ops_state import INFRA_WORKER_TELEGRAM, infra_heartbeat_key
+
+    INFRA_HEARTBEAT_TTL_SEC = celery_app_module.INFRA_HEARTBEAT_TTL_SEC
+    _write_infra_heartbeat = celery_app_module._write_infra_heartbeat
+
+    client = MagicMock()
+    _write_infra_heartbeat(client, INFRA_WORKER_TELEGRAM)
+
+    (key, value), kwargs = client.set.call_args
+    assert key == infra_heartbeat_key(INFRA_WORKER_TELEGRAM)
+    assert key == "infra:heartbeat:worker-telegram"
+    assert kwargs.get("ex") == INFRA_HEARTBEAT_TTL_SEC
+    assert _is_fresh(value) is True
+
+
+# ---- Чтение живости инфраструктуры (D-52) ----
+
+@pytest.mark.asyncio
+async def test_infra_liveness_reads_three_keys_in_one_round_trip():
+    """Три службы читаются ОДНИМ конвейером и своими ключами."""
+    from app.services.ops_state import (
+        INFRA_BEAT,
+        INFRA_WORKER_DEFAULT,
+        INFRA_WORKER_TELEGRAM,
+        infra_liveness,
+    )
+
+    client, pipe = _fake_redis([_beat(1), _beat(1), _beat(1)])
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        result = await infra_liveness()
+
+    assert pipe.execute.await_count == 1
+    assert client.pipeline.call_count == 1
+    assert [call.args[0] for call in pipe.get.call_args_list] == [
+        "infra:heartbeat:beat",
+        "infra:heartbeat:worker-telegram",
+        "infra:heartbeat:worker-default",
+    ]
+    assert result == {
+        INFRA_BEAT: WORKER_ONLINE,
+        INFRA_WORKER_TELEGRAM: WORKER_ONLINE,
+        INFRA_WORKER_DEFAULT: WORKER_ONLINE,
+    }
+
+
+@pytest.mark.asyncio
+async def test_infra_stale_heartbeat_is_offline_and_never_idle():
+    """Несвежий heartbeat инфраструктуры — «отключён», а НЕ «простаивает».
+
+    ⚠️ ГРАНИЦА D-08 НЕ РАСТЯГИВАЕТСЯ НА ВЕРХНИЙ БЛОК, И ЭТО УТВЕРЖДЕНИЕ.
+    `wa-worker` и `max-worker` самоубиваются через `IDLE_SHUTDOWN_SEC = 300`,
+    поэтому у них отсутствие heartbeat при пустой очереди — норма. Celery-
+    процесс по простою не уходит НИКОГДА: его молчание означает отказ, и
+    «простаивает» здесь было бы покрашенной в нейтральный цвет аварией.
+    """
+    from app.services.ops_state import INFRA_BEAT, infra_liveness
+
+    client, _ = _fake_redis([_beat(600), _beat(600), _beat(600)])
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        result = await infra_liveness()
+
+    assert set(result.values()) == {WORKER_OFFLINE}
+    assert WORKER_IDLE not in result.values()
+    assert result[INFRA_BEAT] == WORKER_OFFLINE
+
+
+@pytest.mark.asyncio
+async def test_infra_liveness_is_unknown_when_the_observer_is_broken():
+    """Недоступный Redis и оборванное чтение дают «неизвестно», а не отказ."""
+    from app.services.ops_state import infra_liveness
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        result = await infra_liveness()
+    assert set(result.values()) == {WORKER_UNKNOWN}
+
+    client, pipe = _fake_redis([])
+    pipe.execute = AsyncMock(side_effect=OSError("connection reset"))
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        result = await infra_liveness()
+    assert set(result.values()) == {WORKER_UNKNOWN}
+
+    # Короткий ответ конвейера — тоже сломанный наблюдатель, а не отказ служб.
+    client, _ = _fake_redis([_beat(1)])
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        result = await infra_liveness()
+    assert set(result.values()) == {WORKER_UNKNOWN}
+
+
+def test_infra_states_are_drawn_from_the_existing_four_state_vocabulary():
+    """Пятого состояния не заведено: инфраструктура пользуется той же четвёркой."""
+    from app.services import ops_state
+
+    allowed = {WORKER_ONLINE, WORKER_IDLE, WORKER_OFFLINE, WORKER_UNKNOWN}
+    assert ops_state.INFRA_STATES <= allowed
+    assert WORKER_IDLE not in ops_state.INFRA_STATES
