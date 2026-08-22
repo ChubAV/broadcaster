@@ -15,10 +15,13 @@
 в бою»: без явного приведения обеих сторон он зелен на боевой СУБД и красен на
 тестовой, то есть ловит расхождение ровно там, где оно и живёт.
 """
+import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,10 +36,18 @@ from app.application.admin.users_query import (
     users_page,
 )
 from app.application.billing.subscription_period import access_is_open
+from app.models.messenger_account import MessengerAccount
 from app.models.subscription import Subscription
 from app.models.user import User
 
-NOW = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+# ⚠️ МОМЕНТ БЕРЁТСЯ НАСТОЯЩИЙ, А НЕ ЗАФИКСИРОВАННЫЙ ДАТОЙ В ИСХОДНИКЕ. Половина
+# файла проверяет модуль, которому момент передаётся параметром, — ему всё равно.
+# Вторая половина ходит через маршрут, а маршрут снимает момент сам, и
+# зафиксированная в прошлом дата сделала бы «живую» подписку просроченной ровно
+# тогда, когда до неё дойдёт календарь: тест позеленел бы навсегда на ветке
+# «истёк» и перестал бы проверять ту, ради которой написан. Все сроки ниже
+# заданы СМЕЩЕНИЯМИ от этого момента.
+NOW = datetime.now(timezone.utc)
 
 
 async def _seed_user(
@@ -442,3 +453,423 @@ async def test_the_number_of_queries_does_not_grow_with_the_rows(db_session: Asy
 
     assert len(page.users) == 30
     assert big.call_count == small_calls
+
+
+# =============================================================================
+# Подраздел: разметка, чипсы, страницы, счётчик
+# =============================================================================
+#
+# ⚠️ ЭТА ПОЛОВИНА ФАЙЛА ХОДИТ ЧЕРЕЗ МАРШРУТ, А НЕ ЗОВЁТ МОДУЛЬ. Утверждения
+# верхней половины про выборку остаются верными и при подразделе, который
+# показывает НЕ ТО, что выбрал: между выборкой и экраном лежат санация значений,
+# сборка контекста и разметка, и каждый из трёх шагов способен разойтись с
+# остальными молча.
+
+USERS_URL = "/admin/users"
+ROW_TEMPLATE = Path("app/templates/admin/includes/user_row.html")
+LIST_TEMPLATE = Path("app/templates/admin/users.html")
+ADMIN_PAGES_SOURCE = Path("app/pages/admin.py")
+
+
+def _chipset(html: str, axis: str) -> str:
+    """Разметка ОДНОЙ группы чипсов. Группы проверяются порознь намеренно.
+
+    Общий счёт отмеченных чипсов по всей полосе сошёлся бы и у экрана, где одна
+    ось отмечена дважды, а вторая не отмечена вовсе.
+    """
+    match = re.search(rf'data-chipset="{axis}">(.*?)</div>', html, re.S)
+    assert match, f"группа чипсов «{axis}» не отрисована"
+    return match.group(1)
+
+
+def _counters(html: str) -> list[tuple[str, str]]:
+    """Все пары «N из M», напечатанные на экране."""
+    return re.findall(r"(\d+) из (\d+)", html)
+
+
+@pytest.mark.asyncio
+async def test_the_subsection_answers_the_admin_and_refuses_everyone_else(
+    authed_client: AsyncClient, admin_client: AsyncClient
+):
+    """Тест 1: 200 администратору, 403 постороннему.
+
+    Отказ снимается и по коду, и по телу: отказ, отданный со страницей админки
+    внутри, отказом не является.
+    """
+    assert (await admin_client.get(USERS_URL)).status_code == 200
+
+    # authed_client и admin_client — ОДИН клиент с разными cookie; порядок
+    # фикстур делает последним вход администратора, поэтому вход обычного
+    # пользователя повторяется здесь явно.
+    await authed_client.post(
+        "/login",
+        data={"email": "testuser@test.com", "password": "testpass123"},
+        follow_redirects=False,
+    )
+    refused = await authed_client.get(USERS_URL, follow_redirects=False)
+    assert refused.status_code == 403
+    assert "data-rowhead" not in refused.text
+
+
+@pytest.mark.asyncio
+async def test_the_counter_over_the_list_equals_the_list(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 2: «N из M» над списком совпадает с выборкой, и оба числа — одно выражение.
+
+    Печатаются ДВА счётчика — над списком и в панели страниц, — и они обязаны
+    совпадать посимвольно: два числа об одном и том же, собранные порознь,
+    расходятся сперва на границе страницы, а потом везде.
+    """
+    for i in range(3):
+        await _seed_user(db_session, name=f"Пользователь {i}", email=f"u{i}@test.com")
+
+    html = (await admin_client.get(USERS_URL)).text
+    counters = _counters(html)
+
+    assert counters, "счётчика «N из M» на экране нет"
+    assert len(set(counters)) == 1, f"счётчики разошлись: {counters}"
+    shown, total = counters[0]
+    # Администратор тоже пользователь и тоже попадает в список.
+    assert int(total) == 4
+    assert int(shown) == int(total)
+    assert html.count("data-user-row") == int(shown)
+
+
+@pytest.mark.asyncio
+async def test_two_chip_groups_come_from_the_library_with_the_subsection_path(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 3: две группы чипсов, базовый адрес подраздела, ровно один отмеченный.
+
+    ⚠️ БАЗОВЫЙ АДРЕС ПРОВЕРЯЕТСЯ У КАЖДОЙ ССЫЛКИ. Чипс с чужим адресом уводит
+    администратора из подраздела при КАЖДОМ клике — при статусе 200 и верной на
+    вид разметке; заметить это можно только по адресной строке ПОСЛЕ перехода.
+    """
+    html = (await admin_client.get(f"{USERS_URL}?access=comped&state=blocked")).text
+
+    for axis in ("access", "state"):
+        group = _chipset(html, axis)
+        assert group.count("chip--on") == 1, f"в группе «{axis}» отмечен не один чипс"
+        hrefs = re.findall(r'href="([^"]*)"', group)
+        assert hrefs, f"в группе «{axis}» нет ссылок"
+        for href in hrefs:
+            assert href.startswith(USERS_URL), f"чипс уводит из подраздела: {href}"
+
+    # Групп ровно две (D-32) — не три, как в «Логах», и не одна.
+    assert len(re.findall(r"data-chipset=", html)) == 2
+
+
+@pytest.mark.asyncio
+async def test_switching_one_axis_keeps_the_other_and_drops_the_page(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 4: смена оси сохраняет вторую ось и поиск, но НЕ номер страницы.
+
+    Сохранённый номер страницы после смены фильтра — это пустой экран при
+    непустой выдаче: страницы пересчитались, а адрес всё ещё указывает на
+    седьмую.
+    """
+    html = (
+        await admin_client.get(f"{USERS_URL}?q=иван&access=comped&state=active&page=2")
+    ).text
+
+    for href in re.findall(r'href="([^"]*)"', _chipset(html, "state")):
+        assert "access=comped" in href, f"смена состояния потеряла ось доступа: {href}"
+        assert "q=" in href, f"смена состояния потеряла поиск: {href}"
+        assert "page=" not in href, f"смена состояния сохранила номер страницы: {href}"
+
+    for href in re.findall(r'href="([^"]*)"', _chipset(html, "access")):
+        assert "state=active" in href, f"смена доступа потеряла ось состояния: {href}"
+        assert "page=" not in href
+
+
+@pytest.mark.asyncio
+async def test_an_empty_filtered_result_is_not_an_empty_product(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 5: пустая выдача ФИЛЬТРОВ отличима от пустого состояния «пользователей нет».
+
+    Слитые в одно, они отвечают «пользователей нет» на экран, где пользователи
+    есть, — и администратор пойдёт искать поломку регистрации вместо того, чтобы
+    снять свой же фильтр.
+    """
+    filtered = (await admin_client.get(f"{USERS_URL}?q=такого-точно-нет")).text
+
+    assert "Пользователи не найдены" in filtered
+    assert "Уточните запрос или снимите фильтры." in filtered
+    # Выход из пустого состояния назван: предлагать снять фильтры и не давать
+    # чем — это тупик с объяснением.
+    assert f'href="{USERS_URL}"' in filtered
+
+
+@pytest.mark.asyncio
+async def test_the_row_prints_the_five_declared_columns(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 6: имя, адрес, доступ, состояние, число аккаунтов и дата регистрации."""
+    user = await _seed_user(
+        db_session, name="Иван Петров", email="ivan@test.com", subscription="paid"
+    )
+    db_session.add(
+        MessengerAccount(user_id=user.id, type="wa", credentials="{}", status="active")
+    )
+    await db_session.commit()
+
+    html = (await admin_client.get(f"{USERS_URL}?q=ivan@test.com")).text
+
+    assert "Иван Петров" in html
+    assert "ivan@test.com" in html
+    assert f'href="/admin/users/{user.id}"' in html
+    assert "открыт" in html
+    assert (NOW - timedelta(days=30)).strftime("%d.%m.%Y") in html
+    # Подписи колонок и подписи ячеек берутся из ОДНОГО списка (M2 UI-контракта).
+    for column in ("Пользователь", "Доступ", "Состояние", "Аккаунтов", "Регистрация"):
+        assert column in html, column
+
+
+@pytest.mark.asyncio
+async def test_a_comped_user_gets_no_number_of_days(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 7: у льготного число дней НЕ печатается — печатается признак бессрочности.
+
+    ⚠️ ЭТО НЕ ОФОРМЛЕНИЕ (D-35). У пользователя с выданным бесплатным доступом
+    дата окончания МЁРТВАЯ, и число дней получается отрицательным — сам
+    `_access_view` об этом предупреждает. Напечатанное, оно прочиталось бы как
+    «доступ кончился» у человека, чей доступ открыт бессрочно.
+    """
+    await _seed_user(
+        db_session, name="Льготный", email="comped@test.com", subscription="comped-dead"
+    )
+
+    html = (await admin_client.get(f"{USERS_URL}?q=comped@test.com")).text
+
+    assert "бесплатный" in html
+    assert "бессрочно" in html
+    assert "Осталось полных суток" not in html, "у льготного напечатано число дней"
+    assert not re.search(r"-\d+\s*(дн|сут)", html), "на экране отрицательное число дней"
+
+
+@pytest.mark.asyncio
+async def test_an_expired_user_gets_a_date_and_not_a_negative_number(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 8: у истёкшего печатается дата окончания, а не отрицательное число дней."""
+    await _seed_user(db_session, name="Истёкший", email="exp@test.com", subscription="expired")
+
+    html = (await admin_client.get(f"{USERS_URL}?q=exp@test.com")).text
+
+    assert "закрыт" in html
+    assert (NOW - timedelta(days=10)).strftime("%d.%m.%Y") in html
+    assert "Осталось полных суток" not in html
+    assert not re.search(r"-\d+\s*(дн|сут)", html)
+
+
+@pytest.mark.asyncio
+async def test_no_consumption_or_quota_survived_the_reverse_layout(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 9 (отрицательный): величин потребления и квоты в подразделе нет.
+
+    Макет рисует шкалу «использовано / квота». После смены модели тарификации
+    такой величины НЕ СУЩЕСТВУЕТ, и перенос шкалы нарисовал бы предмет, которого
+    нет: администратор принял бы по ней решение, а числа под ней ничего не
+    значат.
+    """
+    await _seed_user(db_session, name="Кто-то", email="someone@test.com", subscription="paid")
+    html = (await admin_client.get(USERS_URL)).text
+
+    sources = (
+        html
+        + LIST_TEMPLATE.read_text(encoding="utf-8")
+        + ROW_TEMPLATE.read_text(encoding="utf-8")
+    )
+    for marker in ("Использовано", "квота", "Квота", "usagePct", "лимит сообщений"):
+        assert marker not in sources, marker
+
+
+@pytest.mark.asyncio
+async def test_no_manual_extension_of_access_exists(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 10 (отрицательный): ручного продления доступа нет ни в разметке, ни в маршрутах.
+
+    Право открыть доступ бесплатно уже есть и покрыто. Третий способ управлять
+    сроком рядом с оплатой и льготой немедленно поднял бы вопросы, на которые
+    фаза не отвечает: попадает ли он в MRR, что с ним при последующей оплате
+    (D-36). Отсутствие закрепляется тестом, потому что «мы решили не делать»
+    возвращается первой же правкой, которая выглядит удобной.
+    """
+    sources = (
+        (await admin_client.get(USERS_URL)).text
+        + LIST_TEMPLATE.read_text(encoding="utf-8")
+        + ROW_TEMPLATE.read_text(encoding="utf-8")
+        + ADMIN_PAGES_SOURCE.read_text(encoding="utf-8")
+    )
+    for marker in ("продлить", "Продлить", "extend_access", "+30 ДНЕЙ", "ОТПРАВОК"):
+        assert marker not in sources, marker
+
+
+@pytest.mark.asyncio
+async def test_the_row_leads_to_the_card_and_does_not_unfold_in_place(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 11: строка ведёт в карточку; разворота строки на месте нет (D-03).
+
+    Макетный разворот несёт доступ, действия и историю — 11 КБ разметки; на
+    375px такой разворот нечитаем, и прецедент отдельной страницы детали в
+    проекте прямой.
+    """
+    user = await _seed_user(db_session, name="Иван", email="ivan@test.com")
+
+    html = (await admin_client.get(f"{USERS_URL}?q=ivan@test.com")).text
+    assert f'href="/admin/users/{user.id}"' in html
+
+    row_source = ROW_TEMPLATE.read_text(encoding="utf-8")
+    for marker in ("adminOpenUser", "x-show", "x-data", "toggleOpen"):
+        assert marker not in row_source, marker
+
+
+@pytest.mark.asyncio
+async def test_the_card_still_reaches_the_user_history(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 12: вход из карточки в историю отправок жив и отвечает 200 (D-04).
+
+    Экран отгружен требованием ADMIN-02 и уже переверстан Фазой 1. Переписывание
+    подраздела списка не имеет права его отрезать — а отрезанный, он остаётся
+    рабочим маршрутом, до которого просто нельзя дойти руками.
+    """
+    user = await _seed_user(db_session, name="Иван", email="ivan@test.com")
+
+    card = await admin_client.get(f"/admin/users/{user.id}")
+    assert card.status_code == 200
+    assert f"/admin/users/{user.id}/history" in card.text
+
+    history = await admin_client.get(f"/admin/users/{user.id}/history")
+    assert history.status_code == 200
+
+
+# --- Страницы в разметке ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_pager_uses_the_shipped_primitive(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Панель страниц собрана на уже отгруженном `[data-pager]`, а не на своих классах.
+
+    Примитив объявлен в `app.css` и до этого плана не имел ни одного
+    потребителя; новых классов подраздел не заводит — utility-классы по проекту
+    запрещены и проверяются сплошным обходом всех шаблонов.
+    """
+    html = (await admin_client.get(USERS_URL)).text
+
+    assert "data-pager" in html
+    assert "data-pager-actions" in html
+    assert 'class="pager' not in html and "users-pager" not in html
+
+
+@pytest.mark.asyncio
+async def test_the_edge_pages_disable_the_button_instead_of_hiding_it(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """На краю списка кнопка ОТКЛЮЧЕНА, а не убрана.
+
+    Исчезающая кнопка сдвигает соседнюю под курсор: администратор, листавший
+    вперёд, на последней странице попадает нажатием в «назад».
+    """
+    one_page = (await admin_client.get(USERS_URL)).text
+    assert one_page.count("disabled") >= 2, "на единственной странице обе кнопки живые"
+
+    for i in range(USERS_PAGE_SIZE + 2):
+        await _seed_user(db_session, name=f"User {i:03d}", email=f"u{i:03d}@test.com")
+
+    first = (await admin_client.get(USERS_URL)).text
+    last = (await admin_client.get(f"{USERS_URL}?page=2")).text
+
+    assert "page=2" in first, "с первой страницы нет перехода вперёд"
+    assert "page=1" in last, "с последней страницы нет перехода назад"
+
+
+@pytest.mark.asyncio
+async def test_the_page_number_from_the_address_never_breaks_the_subsection(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Мусорный или запредельный номер страницы отдаёт крайнюю страницу, а не отказ.
+
+    Номер приезжает из ссылки, закладки или чужого сообщения (T-06-USR3). Отказ
+    был бы отказом в обслуживании по подконтрольному отправителю значению.
+    """
+    await _seed_user(db_session, name="Кто-то", email="someone@test.com")
+
+    for suffix in ("?page=99999", "?page=-3", "?page=абв", "?page=", "?page=1e9"):
+        response = await admin_client.get(f"{USERS_URL}{suffix}")
+        assert response.status_code == 200, suffix
+        assert "data-user-row" in response.text, suffix
+
+
+@pytest.mark.asyncio
+async def test_the_subsection_does_not_query_per_row(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Число обращений к базе не растёт с числом строк — включая подписки и аккаунты.
+
+    Прежний список ходил в базу за каждым пользователем. Сравниваются два
+    прогона разного размера, а не сверка с магическим числом: константа в
+    утверждении устарела бы при первом же законном изменении формы страницы.
+    """
+    for i in range(2):
+        await _seed_user(db_session, name=f"User {i:03d}", email=f"u{i:03d}@test.com")
+    with patch.object(db_session, "execute", wraps=db_session.execute) as small:
+        await admin_client.get(USERS_URL)
+    small_calls = small.call_count
+
+    for i in range(2, 25):
+        await _seed_user(db_session, name=f"User {i:03d}", email=f"u{i:03d}@test.com")
+    with patch.object(db_session, "execute", wraps=db_session.execute) as big:
+        html = (await admin_client.get(USERS_URL)).text
+
+    assert html.count("data-user-row") == 26
+    assert big.call_count == small_calls
+
+
+@pytest.mark.asyncio
+async def test_no_credentials_of_messenger_accounts_reach_the_markup(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """T-06-USR1: учётных данных и данных сессий в разметке подраздела нет.
+
+    Они не нужны ни для одной операции поддержки, а один раз попав в разметку,
+    уезжают в историю браузера, в скриншот и в тикет.
+    """
+    user = await _seed_user(db_session, name="Иван", email="ivan@test.com")
+    db_session.add(
+        MessengerAccount(
+            user_id=user.id,
+            type="wa",
+            credentials='{"session": "СЕКРЕТНАЯ-СТРОКА-СЕССИИ"}',
+            status="active",
+        )
+    )
+    await db_session.commit()
+
+    html = (await admin_client.get(USERS_URL)).text
+
+    assert "СЕКРЕТНАЯ-СТРОКА-СЕССИИ" not in html
+    assert "credentials" not in html
+    assert "password_hash" not in html
+    assert user.password_hash not in html
+
+
+def test_the_unlimited_select_left_the_repository():
+    """Выборки без предела в репозитории пользователей не осталось (D-33, T-06-USR2).
+
+    Метод, оставленный «на всякий случай», — это приглашение вернуть страницу к
+    полной таблице одной строкой правки, и вернувший её не узнает, что нарушил
+    решение: тест списка останется зелёным.
+    """
+    source = Path("app/repositories/user.py").read_text(encoding="utf-8")
+    assert "def get_all_users" not in source
+    assert "def search_users" not in source
