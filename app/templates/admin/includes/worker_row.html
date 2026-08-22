@@ -56,11 +56,26 @@
     показанная там, где менеджера нет, вела бы на гарантированный отказ. -#}
 {%- set RESTARTABLE_CHANNELS = ['wa', 'max'] -%}
 
-{%- macro worker_row(account, state, columns, cols) -%}
+{%- macro worker_row(account, state, columns, cols, logs_href=None) -%}
 <div data-row style="--cols: {{ cols }}">
   {%- call cell(grow=true, label=columns[0]) %}
     {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
-    <span data-grow>{{ MESSENGER_LABELS.get(account.type, account.type) }}</span>{{ mono('#' ~ account.id) }}
+    <span data-grow>{{ MESSENGER_LABELS.get(account.type, account.type) }}</span>
+    {#- ⚠️ ИДЕНТИФИКАТОР СТРОКИ ВЕДЁТ В ЛОГИ ЭТОГО ВОРКЕРА (D-10). «Живой лог»
+        макета в строке не рисуется: он стал бы вторым независимым путём чтения
+        логов рядом с подразделом «Логи», а у остановленного по простою
+        контейнера живого лога нет вовсе — кнопка была бы мёртвой у большинства
+        строк. Взамен работает приём Фазы 4: строка ведёт туда, где величина
+        разбирается подробно.
+        Адрес приходит ГОТОВЫМ из страничного модуля, а не собирается здесь:
+        литерал в разметке разошёлся бы с санацией источника молча — ссылка
+        вела бы на 200 и на выдачу БЕЗ фильтра, то есть показывала бы логи всех
+        служб как логи одного воркера. -#}
+    {%- if logs_href -%}
+      <a href="{{ logs_href }}" title="Логи этого воркера за выбранное окно">{{ mono('#' ~ account.id) }}</a>
+    {%- else -%}
+      {{- mono('#' ~ account.id) -}}
+    {%- endif -%}
   {%- endcall %}
   {%- call cell(label=columns[1]) %}
     {%- if account.status == 'active' %}{{ badge('Активно', 'success') }}

@@ -210,6 +210,34 @@ async def test_an_error_status_from_the_source_is_unavailable_not_an_empty_answe
 
 
 @pytest.mark.asyncio
+async def test_unreadable_settings_are_the_same_unavailable_not_a_five_hundred():
+    """Несобравшиеся настройки — та же недоступность, а не отказ подраздела.
+
+    Сборка настроек читает окружение и падает, если обязательного поля в нём
+    нет. Прочитанный ДО гарда адрес превращал бы это падение в пятисотку на
+    подразделе — то есть отнимал бы и логи, и сам подраздел разом, ради службы,
+    объявленной ОПЦИОНАЛЬНОЙ. «Адреса источника нет» означает ровно то же, что
+    «источник не отвечает»: прочитать негде.
+
+    Дефект был живым и пойман обходом шелла: подраздел отвечал 500 везде, где
+    настройки собираются подменой зависимости, а не из окружения.
+    """
+    client = _client(response=_response(_payload()))
+
+    with patch(
+        "app.services.loki_client._client", return_value=client
+    ), patch(
+        "app.services.loki_client.get_settings",
+        side_effect=ValueError("обязательное поле настроек отсутствует"),
+    ):
+        window = await query_range('{job="docker"}', timedelta(hours=1))
+
+    assert window.unavailable is True
+    assert window.lines == []
+    client.get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_a_missing_client_is_unavailable_rather_than_an_exception():
     """Клиент не собрался — тот же штатный отказ, а не падение обработчика."""
     with patch(

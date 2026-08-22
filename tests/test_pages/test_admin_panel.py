@@ -1716,12 +1716,25 @@ async def test_the_logs_subsection_carries_no_polling_attributes(
     Причин две, и обе названы решением: администратор читает и ищет глазами, а
     лента, прыгающая под курсором, мешает; и каждый запрос здесь — поход во
     внешний источник по сети, а не чтение из памяти.
+
+    ⚠️ УТВЕРЖДЕНИЕ АДРЕСОВАНО РАЗМЕТКЕ ПОДРАЗДЕЛА, А НЕ ВСЕЙ ВЫДАЧЕ. Шелл
+    проекта несёт в комментарии объяснение, почему у бесконечной прокрутки
+    сменился признак подмены, и поиск по готовой странице засчитал бы это
+    объяснение за опрос — то есть краснел бы на чужом файле, ничего не сообщая
+    об этом подразделе.
     """
+    subsection = (TEMPLATES_ROOT / "admin" / "logs.html").read_text(
+        encoding="utf-8"
+    ) + (
+        TEMPLATES_ROOT / "admin" / "includes" / "log_row.html"
+    ).read_text(encoding="utf-8")
+
+    for marker in ("hx-get", "hx-trigger", "hx-post"):
+        assert marker not in subsection, f"опрос в подразделе логов: {marker}"
+
     with _logs_source():
         html = (await admin_client.get(LOGS_URL)).text
 
-    for marker in ("hx-get", "hx-trigger", "hx-post"):
-        assert marker not in html, f"опрос в подразделе логов: {marker}"
     assert "Обновить" in html, "кнопки обновления нет — читать нечем"
 
 

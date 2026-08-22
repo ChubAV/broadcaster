@@ -128,6 +128,32 @@ LEVEL_CHIP_OPTIONS: tuple[tuple[str, str], ...] = (
 )
 
 
+# ТОН УРОВНЯ — ПО ЧИПСУ, А НЕ ПО СЛОВУ МЕТКИ, И ЭТО НЕСУЩЕЕ РАЗЛИЧИЕ.
+#
+# Ключи здесь — те же три чипса, что объявлены выше, поэтому ВТОРОГО перечня
+# слов уровня не возникает ни здесь, ни тем более в разметке. Выпиши тона по
+# словам метки — и словарь пришлось бы держать синхронным с `LEVEL_CHIPS`
+# вручную: `warn` покрасился бы, а `warning` — нет, то есть половина
+# предупреждений приехала бы на экран нейтральным серым.
+LEVEL_TONES: dict[str, str] = {
+    "error": "danger",
+    "warn": "warn",
+    "info": "muted",
+}
+
+
+def level_tone(level: str) -> str:
+    """Тон строки по её уровню, выведенный ИЗ СЛОВАРЯ ЧИПСОВ.
+
+    Незнакомое слово уровня — нейтральный тон: покрасить его тревожно значило бы
+    выдать незнание за измерение.
+    """
+    for chip, values in LEVEL_CHIPS.items():
+        if level and level in values:
+            return LEVEL_TONES[chip]
+    return "muted"
+
+
 @dataclass(frozen=True, slots=True)
 class LogWindowChoice:
     """Окно отбора: подпись для чипса и длительность для запроса."""
@@ -149,6 +175,21 @@ LOG_WINDOWS: dict[str, LogWindowChoice] = {
 }
 LOG_WINDOW_DEFAULT = "1h"
 
+# Подписи чипсов окна выводятся ИЗ ТОГО ЖЕ словаря: второй перечень окон
+# разъехался бы с первым молча — нарисованное окно перестало бы совпадать с
+# запрашиваемым.
+LOG_WINDOW_CHIPS: tuple[tuple[str, str], ...] = tuple(
+    (key, choice.label) for key, choice in LOG_WINDOWS.items()
+)
+
+# ⚠️ ИМЯ КОНТЕЙНЕРА СЛУЖБЫ, РАЗБИРАЮЩЕЙ ОЧЕРЕДЬ КАНАЛА TELEGRAM, — ЕДИНСТВЕННОЕ
+# ГЕНЕРИРУЕМОЕ. Это единственная служба боевой сборки без явного имени
+# контейнера, поэтому её метка складывается сборкой из имени проекта, имени
+# службы и порядкового номера. Значение живёт ОДНОЙ строкой и здесь: его
+# уточнение на живом стенде обязано быть правкой одной строки, а не переделкой
+# фильтра. Проверка имени входит в человеческую приёмку фазы.
+LOG_SOURCE_TELEGRAM_WORKER = "broadcaster-celery-worker-telegram-1"
+
 # ПЕРЕЧЕНЬ ИСТОЧНИКОВ ОБЪЯВЛЕН СЛОВАРЁМ НА СЕРВЕРЕ, И ЭТО НЕ УДОБСТВО.
 #
 # ⚠️ ОДНО ИЗ ЭТИХ ИМЁН ГЕНЕРИРУЕТСЯ СБОРКОЙ. Служба, разбирающая очередь канала
@@ -167,7 +208,7 @@ LOG_SOURCES: tuple[tuple[str, str], ...] = (
     ("web-broadcaster", "Веб"),
     ("celery-beat-broadcaster", "Планировщик"),
     ("celery-worker-default-broadcaster", "Воркер задач"),
-    ("broadcaster-celery-worker-telegram-1", "Воркер Telegram"),
+    (LOG_SOURCE_TELEGRAM_WORKER, "Воркер Telegram"),
 )
 
 LOG_SOURCE_VALUES: frozenset[str] = frozenset(
@@ -296,6 +337,11 @@ class LogLine:
     source: str
     text: str
 
+    @property
+    def tone(self) -> str:
+        """Тон уровня для разметки: выводится из объявленного словаря чипсов."""
+        return level_tone(self.level)
+
 
 @dataclass(frozen=True, slots=True)
 class LogWindow:
@@ -344,7 +390,10 @@ def _parse_stream(stream: dict) -> list[LogLine]:
     контейнера.
     """
     labels = stream.get("stream") or {}
-    source = labels.get("account_id") or labels.get("container_name") or "—"
+    # Пустая строка, а не прочерк: печатать нечего — решает РАЗМЕТКА, и там же
+    # живёт объяснение причины, по которой величины нет. Прочерк, пришедший из
+    # сервиса, был бы оформлением, приехавшим из слоя данных.
+    source = labels.get("account_id") or labels.get("container_name") or ""
     level = labels.get("level") or ""
     lines = []
     for value in stream.get("values") or []:
@@ -377,8 +426,15 @@ async def query_range(logql: str, window: timedelta) -> LogWindow:
     if client is None:
         return LogWindow(lines=[], capped=False, unavailable=True)
 
-    url = f"{get_settings().loki_url.rstrip('/')}{LOKI_QUERY_RANGE_PATH}"
     try:
+        # ⚠️ АДРЕС ЧИТАЕТСЯ ВНУТРИ ГАРДА, А НЕ ДО НЕГО, И ЭТО НЕ ПЕДАНТИЗМ.
+        # Сборка настроек — обращение к внешнему по отношению к подразделу
+        # факту: она читает окружение и падает, если обязательного поля в нём
+        # нет. Прочитанный ДО гарда адрес превращал бы это падение в ПЯТИСОТКУ
+        # на подразделе — то есть отнимал бы и логи, и сам подраздел разом,
+        # ради службы, которая объявлена опциональной. «Адреса источника нет»
+        # означает ровно то же, что «источник не отвечает»: прочитать негде.
+        url = f"{get_settings().loki_url.rstrip('/')}{LOKI_QUERY_RANGE_PATH}"
         response = await client.get(
             url,
             params={
