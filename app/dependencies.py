@@ -1,10 +1,13 @@
 from typing import AsyncGenerator
+import structlog
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import Settings, get_settings
 from app.services.auth_service import decode_access_token
 from app.services.subscription_service import check_access
+
+logger = structlog.get_logger(__name__)
 
 security = HTTPBearer(auto_error=False)
 
@@ -131,4 +134,112 @@ async def get_current_user_id_with_access(
     allowed, _reason = await check_access(db, user_id)
     if not allowed:
         raise HTTPException(status_code=402, detail=ACCESS_EXPIRED_DETAIL)
+    return user_id
+
+
+# ТЕЛО ОТКАЗА ЗАБЛОКИРОВАННОМУ — ОБЪЯСНЕНИЕ, А НЕ КОД СОСТОЯНИЯ. Основание то
+# же, что у соседней константы выше: JSON-клиенту показывать нечего, и
+# единственное, что он может сделать с отказом осмысленно, — сказать словами,
+# что произошло. Молчаливый отказ приводит человека в поддержку с «у меня не
+# работает» и без единого способа отличить блокировку от поломки (T-06-BL5).
+BLOCKED_DETAIL = (
+    "Учётная запись заблокирована. Разделы продукта закрыты до снятия "
+    "блокировки — обратитесь в поддержку."
+)
+
+
+def _actor_claim(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None,
+    settings: Settings,
+) -> str | None:
+    """Признак действующего лица (`act`) из того же токена — либо `None`.
+
+    ⚠️ ТОКЕН РАЗБИРАЕТСЯ ВТОРОЙ РАЗ, И ЭТО НАЗВАННАЯ ЦЕНА, А НЕ НЕДОСМОТР.
+    Общий аутентификатор отдаёт наружу только `sub`, а трогать его нельзя ни
+    одной строкой — запрет закреплён машинным гейтом и держит открытыми
+    маршруты, которым сессия БД не нужна. Поэтому «есть ли действующее лицо»
+    читается рядом, второй проверкой подписи. Цена — один HMAC на запрос к
+    ЗАКРЫТЫМ маршрутам; цена альтернативы — расширение зависимости,
+    обслуживающей в том числе незащищённые пути.
+
+    Отсутствие токена и негодный токен дают `None`, а не исключение: отказ по
+    ним — работа аутентификатора, и второе его определение здесь разошлось бы
+    с первым.
+    """
+    token = None
+    if credentials is not None:
+        token = credentials.credentials
+    if token is None:
+        token = request.cookies.get("access_token")
+    if token is None:
+        return None
+    payload = decode_access_token(token, settings.secret_key)
+    if payload is None:
+        return None
+    return payload.get("act")
+
+
+async def get_current_user_id_active(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> int:
+    """Идентификатор вошедшего — при условии, что учётная запись ДЕЙСТВУЕТ.
+
+    Форма копируется с соседа (`get_current_user_id_with_access`) целиком, и
+    вместе с ней копируется причина, по которой проверка живёт СНАРУЖИ
+    аутентификатора: `get_current_user_id` обслуживает и незащищённые пути, и
+    цена запроса к базе на них ничем не оправдана. Отказ обязан быть именно
+    исключением — зависимость, объявленная через
+    `include_router(dependencies=[...])`, своего возвращаемого значения никуда
+    не отдаёт.
+
+    ⚠️ ЛОБОВАЯ ПОЧИНКА — ПРОВЕРКА `is_blocked` ВНУТРИ `get_current_user_id` —
+    ЗАПРЕЩЕНА, И ЗАПРЕТ ЗАКРЕПЛЁН ТЕСТОМ. Выглядит она как «сделать в одном
+    месте вместо пяти», а означает закрытие денежного роутера заодно:
+    уведомление ЮKassa о СОСТОЯВШЕМСЯ платеже получило бы отказ, то есть приём
+    денег остановился бы по уже совершённым платежам (D-53). Перечень
+    закрываемых роутеров поэтому пер-роутерный и выписан решением.
+
+    ⚠️ ПРИ НАЛИЧИИ ПРИЗНАКА ДЕЙСТВУЮЩЕГО ЛИЦА БЛОКИРОВКА СУБЪЕКТА НЕ
+    ПРИМЕНЯЕТСЯ (D-26). Вход администратора под заблокированным пользователем
+    разрешён ЯВНЫМ решением: «за что меня заблокировали» — типовой вопрос, и
+    ответить на него можно, только увидев продукт глазами заблокированного.
+    Ветка написана сейчас и до плана 06-12, выпускающего такие токены, мертва —
+    это осознанно: наивная починка блокировки выкинула бы заодно
+    администратора, и следующая правка авторизации закрыла бы вход молча.
+
+    ⚠️ КЭША ВЕРДИКТА ЗДЕСЬ НЕТ (D-31). Это чтение строки по первичному ключу;
+    кэш добавил бы поверхность инвалидации — новый источник ошибок ради
+    неизмеренной экономии. Готовый кэш вердикта из фазы 05.1 лежит рядом и
+    остаётся приёмом на случай, если замер покажет обратное.
+
+    БЛОКИРОВКА НЕ ВЫСЕЛЯЕТ ОТКРЫТЫЙ СЕАНС МГНОВЕННО: она закрывает СЛЕДУЮЩЕЕ
+    обращение. Мгновенное выселение потребовало бы списка отозванных токенов,
+    то есть хранилища, которого фаза не заводит.
+    """
+    from app.models.user import User
+
+    user_id = await get_current_user_id(request, credentials, settings)
+
+    if _actor_claim(request, credentials, settings) is not None:
+        return user_id
+
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
+        )
+    if user.is_blocked:
+        # 403, а не 402: «нет прав», а не «не оплачено». Различимость двух
+        # причин отказа стоит одного кода состояния — у неоплаты есть ровно
+        # одно действие, у блокировки нет ни одного.
+        logger.warning(
+            "blocked_request_refused", user_id=user_id, path=request.url.path
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=BLOCKED_DETAIL
+        )
     return user_id

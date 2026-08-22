@@ -48,6 +48,19 @@ CODE_RESEND_COOLDOWN_SECONDS = 60
 
 SESSION_COOKIE_NAME = "access_token"
 
+# ⚠️ ОТКАЗ ЗАБЛОКИРОВАННОМУ НАЗЫВАЕТСЯ СЛОВАМИ, А НЕ МОЛЧИТ (CR-01, T-06-BL5).
+# Молчаливый отказ неотличим для человека от «пароль не подходит»: он пойдёт
+# восстанавливать пароль, восстановит, снова не войдёт — и придёт в поддержку с
+# «у меня не работает», без единого способа отличить блокировку от поломки.
+#
+# ПОСТОРОННЕМУ ЭТОТ ТЕКСТ НЕ ДОСТАЁТСЯ (T-06-BL6, disposition `accept`): он
+# выдаётся только ПОСЛЕ успешной проверки пароля, то есть тому, кто пароль и
+# так знает.
+BLOCKED_LOGIN_ERROR = (
+    "Учётная запись заблокирована. Обратитесь в поддержку — вход закрыт до "
+    "снятия блокировки."
+)
+
 
 def _session_cookie_attrs(settings: Settings) -> dict:
     """ЕДИНСТВЕННОЕ объявление набора атрибутов cookie сессии.
@@ -109,6 +122,16 @@ async def login_submit(
     if not user or not verify_password(password, user.password_hash):
         return templates.TemplateResponse(
             "auth/login.html", {"request": request, "error": "Неверный email или пароль"}
+        )
+    # Отказ стоит ДО выдачи cookie — первый из трёх путей блокировки (D-30).
+    # До этой правки заблокированный входил СТРАНИЧНОЙ формой как ни в чём не
+    # бывало: проверка `is_blocked` стояла только в JSON-маршруте входа, а
+    # человек ходит сюда.
+    if user.is_blocked:
+        logger.warning("blocked_login_refused", user_id=user.id)
+        return templates.TemplateResponse(
+            "auth/login.html",
+            {"request": request, "error": BLOCKED_LOGIN_ERROR},
         )
     token = create_access_token(user.id, settings.secret_key)
     response = RedirectResponse(url="/dashboard", status_code=302)
