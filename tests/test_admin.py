@@ -227,43 +227,6 @@ async def test_the_admin_top_up_route_no_longer_answers(client: AsyncClient, db_
 
 
 @pytest.mark.asyncio
-async def test_admin_block_user(client: AsyncClient, db_session):
-    """Admin can block a user."""
-    await client.post("/api/auth/register", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-        "name": "Admin",
-    })
-    resp = await client.post("/api/auth/login", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-    })
-    admin_token = resp.json()["access_token"]
-    admin_headers = {"Authorization": f"Bearer {admin_token}"}
-
-    await client.post("/api/auth/register", json={
-        "email": "user@test.com",
-        "password": "userpass123",
-        "name": "User",
-    })
-
-    from app.models.user import User
-    from sqlalchemy import select
-    result = await db_session.execute(select(User).where(User.email == "user@test.com"))
-    target = result.scalar_one()
-
-    resp = await client.post(
-        f"/admin/users/{target.id}/block",
-        headers=admin_headers,
-        follow_redirects=False,
-    )
-    assert resp.status_code == 302
-
-    await db_session.refresh(target)
-    assert target.is_blocked is True
-
-
-@pytest.mark.asyncio
 async def test_admin_delete_user(client: AsyncClient, db_session):
     """Admin can delete a user."""
     await client.post("/api/auth/register", json={
@@ -535,59 +498,6 @@ async def test_the_free_access_grant_is_journaled_with_both_identities(
     assert entry.get("has_free_access") is True, (
         "журнал не назвал НОВОЕ значение признака — выдача неотличима от отзыва"
     )
-
-
-@pytest.mark.asyncio
-async def test_blocked_user_cannot_login(client: AsyncClient, db_session):
-    """Blocked user gets rejected on login."""
-    from app.models.user import User
-    from app.services.auth_service import hash_password
-
-    user = User(
-        email="blocked@test.com",
-        password_hash=hash_password("pass123"),
-        name="Blocked",
-        is_blocked=True,
-    )
-    db_session.add(user)
-    await db_session.commit()
-
-    resp = await client.post("/api/auth/login", json={
-        "email": "blocked@test.com",
-        "password": "pass123",
-    })
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_admin_cannot_block_self(client: AsyncClient, db_session):
-    """Admin cannot block themselves."""
-    await client.post("/api/auth/register", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-        "name": "Admin",
-    })
-    resp = await client.post("/api/auth/login", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-    })
-    admin_token = resp.json()["access_token"]
-    admin_headers = {"Authorization": f"Bearer {admin_token}"}
-
-    from app.models.user import User
-    from sqlalchemy import select
-    result = await db_session.execute(select(User).where(User.email == "admin@test.com"))
-    admin_user = result.scalar_one()
-
-    resp = await client.post(
-        f"/admin/users/{admin_user.id}/block",
-        headers=admin_headers,
-        follow_redirects=False,
-    )
-    assert resp.status_code == 302
-
-    await db_session.refresh(admin_user)
-    assert admin_user.is_blocked is False
 
 
 @pytest.mark.asyncio

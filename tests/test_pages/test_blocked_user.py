@@ -22,18 +22,31 @@
 второго свидетеля.
 """
 import ast
+import contextlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from jose import jwt
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.application.analytics.send_analytics import normalize_utc
+from app.application.scheduling.use_cases import collect_due_schedules
+from app.constants import AD_STATUS_PUBLISHED
+from app.database import Base
 from app.dependencies import get_db, get_settings
 from app.main import create_app
+from app.models.ad import Ad
+from app.models.group import Group
+from app.models.messenger_account import MessengerAccount
+from app.models.schedule import Schedule
+from app.models.send_log import SendLog
+from app.models.subscription import Subscription
 from app.models.user import User
+from app.services.billing_cache import check_access_cached
 
 DEPENDENCIES_PY = Path(__file__).resolve().parents[2] / "app" / "dependencies.py"
 
@@ -404,3 +417,344 @@ def test_the_blocking_check_did_not_move_into_the_shared_authenticator():
         "зависимость аутентификации получила сессию БД — она обслуживает и "
         "незащищённые пути, и цена запроса на них ничем не оправдана"
     )
+
+
+# =============================================================================
+# Путь 3 — сбор расписаний к отправке (`collect_due_schedules`)
+# =============================================================================
+#
+# ⚠️ СОБСТВЕННЫЙ ДВИЖОК, А НЕ ФИКСТУРА `db_session`, — приём взят у соседа
+# (`tests/test_application/test_access_gate_scheduling.py`). Причина та же:
+# сбор расписаний работает с сессией напрямую и ПИШЕТ в неё (`next_run_at`), а
+# посев здесь нужен точный — до строки подписки включительно.
+#
+# ⚠️ ЭТО САМАЯ ДОРОГАЯ ИЗ ТРЁХ ПОВЕРХНОСТЕЙ. Ошибка на входе стоит человеку
+# одного экрана, ошибка на JSON-поверхности — обхода авторизации, а ошибка
+# ЗДЕСЬ ТИХО ПРЕКРАЩАЕТ РАССЫЛКИ ЖИВЫМ ПЛАТЯЩИМ ЛЮДЯМ: отказ проявится не
+# исключением, а отсутствием отправок, которого никто не заметит до жалобы.
+# Поэтому смешанная выборка стоит ОТДЕЛЬНЫМ тестом, а не следствием.
+
+
+@contextlib.asynccontextmanager
+async def _scheduler_session():
+    """Сессия на своём движке — для посева расписаний и прогона сбора."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False
+    )
+    try:
+        async with session_factory() as session:
+            yield session
+    finally:
+        await engine.dispose()
+
+
+@contextlib.contextmanager
+def _no_redis():
+    """Redis в тестовой среде нет, и вердикт доступа обязан считаться без него.
+
+    Подмена стоит на `_get_redis`, а не на клиенте, по основанию, выписанному в
+    `tests/test_application/test_access_gate_scheduling.py`: настоящий
+    `from_url` объект СОЗДАЁТ, и тест зависел бы от того, поднят ли Redis на
+    машине разработчика.
+    """
+    settings = MagicMock()
+    settings.redis_url = "redis://localhost:6379/0"
+    settings.billing_cache_ttl = 60
+    with patch("app.services.billing_cache._get_redis", return_value=None):
+        with patch("app.services.billing_cache.get_settings", return_value=settings):
+            yield
+
+
+async def _seed_sender(
+    session: AsyncSession, email: str, *, blocked: bool = False
+) -> User:
+    """Пользователь с ЖИВЫМ доступом — под расписание к отправке.
+
+    Доступ живой намеренно: на просроченном отсутствие задач не доказало бы
+    ничего — их не было бы и без блокировки.
+    """
+    user = User(email=email, password_hash="x", name="U", is_blocked=blocked)
+    session.add(user)
+    await session.commit()
+
+    session.add(
+        Subscription(
+            user_id=user.id,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=3),
+            is_active=True,
+        )
+    )
+    await session.commit()
+    return user
+
+
+async def _seed_due_schedule(session: AsyncSession, user: User) -> Schedule:
+    """Расписание, срок которого УЖЕ наступил, со всей живой тройкой под ним."""
+    ad = Ad(
+        user_id=user.id,
+        title="T",
+        text="Body",
+        images=[],
+        status=AD_STATUS_PUBLISHED,
+    )
+    account = MessengerAccount(
+        user_id=user.id, type="tg_user", credentials="sess", status="active"
+    )
+    session.add_all([ad, account])
+    await session.commit()
+
+    group = Group(
+        user_id=user.id,
+        account_id=account.id,
+        messenger_type="telegram",
+        group_external_id=f"-100{account.id}",
+        name="G",
+    )
+    session.add(group)
+    await session.commit()
+
+    schedule = Schedule(
+        ad_id=ad.id,
+        account_id=account.id,
+        group_ids=[group.id],
+        days_of_week=[0, 1, 2, 3, 4, 5, 6],
+        times_of_day=["00:00", "06:00", "12:00", "18:00"],
+        is_active=True,
+        next_run_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        timezone="UTC",
+    )
+    session.add(schedule)
+    await session.commit()
+    return schedule
+
+
+async def _collect(session: AsyncSession):
+    with _no_redis():
+        return await collect_due_schedules(
+            session,
+            now=datetime.now(timezone.utc),
+            check_limit=check_access_cached,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_user_dispatches_nothing_and_keeps_the_schedule():
+    """Заблокированный не рассылает — и его расписание ПЕРЕНОСИТСЯ, а не тонет.
+
+    ⚠️ ДВА УТВЕРЖДЕНИЯ, И ВТОРОЕ НЕСУЩЕЕ. Пустой список говорит «не отправили».
+    Сдвиг `next_run_at` вперёд говорит второе: момент, оставленный в прошлом,
+    при РАЗБЛОКИРОВКЕ выстрелит всеми накопленными слотами сразу — тихой
+    рассылкой задним числом в чужие группы. Реализация, отфильтровавшая
+    заблокированного в WHERE выборки, прошла бы первое утверждение и провалила
+    второе.
+    """
+    async with _scheduler_session() as session:
+        user = await _seed_sender(session, "blocked@test.com", blocked=True)
+        schedule = await _seed_due_schedule(session, user)
+        was_due_at = schedule.next_run_at
+
+        tasks = await _collect(session)
+
+        assert tasks == [], "заблокированный продолжает рассылать по расписанию"
+
+        await session.refresh(schedule)
+        assert schedule.is_active is True, "блокировка выключила расписание"
+        # Оба момента через `normalize_utc`: колонка объявлена
+        # `DateTime(timezone=True)`, но SQLite отдаёт её NAIVE, а PostgreSQL —
+        # aware, и сравнение без приведения падает ровно на одном из диалектов.
+        assert normalize_utc(schedule.next_run_at) > normalize_utc(was_due_at), (
+            "момент следующего запуска не сдвинут вперёд — при разблокировке "
+            "расписание выстрелит всеми накопленными слотами сразу"
+        )
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_user_still_dispatches():
+    """Граница сверху: НЕзаблокированный собирает задачи как прежде.
+
+    Без этого утверждения правка, останавливающая рассылку ВСЕМ, прошла бы
+    проверку выше — и заметила бы её жалоба, а не суита.
+    """
+    async with _scheduler_session() as session:
+        user = await _seed_sender(session, "ordinary@test.com")
+        await _seed_due_schedule(session, user)
+
+        tasks = await _collect(session)
+
+        assert tasks, "незаблокированный перестал рассылать по расписанию"
+
+
+@pytest.mark.asyncio
+async def test_the_blocking_verdict_is_asked_once_per_user():
+    """Два расписания одного заблокированного — ОДИН вопрос о блокировке (Ф-5).
+
+    Вердикт обязан лечь в ту же мемоизацию на пользователя, что и вердикт
+    доступа. Реализация, спрашивающая блокировку на КАЖДОЕ расписание,
+    умножает запросы к базе на число расписаний в такте планировщика.
+
+    Считаются обращения `session.get(User, ...)`, а не строки лога: предмет —
+    сколько РАЗ спросили, и наблюдается он на вызове, а не на его следе.
+    """
+    async with _scheduler_session() as session:
+        user = await _seed_sender(session, "blocked@test.com", blocked=True)
+        await _seed_due_schedule(session, user)
+        await _seed_due_schedule(session, user)
+
+        original_get = AsyncSession.get
+        asked: list[object] = []
+
+        async def counting_get(self, entity, ident, *args, **kwargs):
+            if entity is User:
+                asked.append(ident)
+            return await original_get(self, entity, ident, *args, **kwargs)
+
+        with patch.object(AsyncSession, "get", counting_get):
+            tasks = await _collect(session)
+
+        assert tasks == []
+        assert len(asked) == 1, (
+            f"вердикт блокировки спрошен {len(asked)} раз(а) на одного "
+            f"пользователя — проверка встала вне мемоизации"
+        )
+
+
+@pytest.mark.asyncio
+async def test_blocking_one_user_does_not_touch_the_others():
+    """СМЕШАННАЯ ВЫБОРКА: рассылки остальных не задеты (T-06-BL3).
+
+    ⚠️ ОТДЕЛЬНЫЙ ТЕСТ, А НЕ СЛЕДСТВИЕ ДВУХ ПРЕДЫДУЩИХ. Те гоняют выборку, где
+    все пользователи одинаковы; здесь заблокированный и незаблокированные
+    приходят ОДНИМ списком расписаний — то есть проверяется ровно то, что
+    пропуск не выносит цикл целиком и не переносится на соседей по такту.
+    Ошибка такого рода останавливает отправки живым платящим людям и
+    проявляется отсутствием действия, а не отказом (D-30).
+    """
+    async with _scheduler_session() as session:
+        blocked = await _seed_sender(session, "blocked@test.com", blocked=True)
+        first = await _seed_sender(session, "first@test.com")
+        second = await _seed_sender(session, "second@test.com")
+
+        await _seed_due_schedule(session, blocked)
+        live_ads = {
+            (await _seed_due_schedule(session, first)).ad_id,
+            (await _seed_due_schedule(session, second)).ad_id,
+        }
+
+        tasks = await _collect(session)
+
+        assert {task.ad_id for task in tasks} == live_ads, (
+            "смешанная выборка отдала не те задачи: блокировка одного "
+            "пользователя задела рассылки остальных"
+        )
+
+
+@pytest.mark.asyncio
+async def test_unblocking_returns_the_schedule_to_the_selection():
+    """Разблокировка возвращает расписания в выборку без иных действий.
+
+    Критерий 2 фазы требует «заблокировать И РАЗБЛОКИРОВАТЬ». Правка, которая
+    закрывает путь необратимо (удалением расписания, снятием `is_active`),
+    прошла бы все проверки выше и провалила бы обещание кнопки.
+    """
+    async with _scheduler_session() as session:
+        user = await _seed_sender(session, "blocked@test.com", blocked=True)
+        await _seed_due_schedule(session, user)
+
+        assert await _collect(session) == []
+
+        user.is_blocked = False
+        await session.commit()
+
+        # Момент сдвинут вперёд первым тактом, поэтому выборка спрашивается на
+        # МОМЕНТ ПОСЛЕ него: предмет — вернулось ли расписание в выборку, а не
+        # наступил ли уже следующий слот.
+        with _no_redis():
+            tasks = await collect_due_schedules(
+                session,
+                now=datetime.now(timezone.utc) + timedelta(days=1),
+                check_limit=check_access_cached,
+            )
+
+        assert tasks, "разблокировка не вернула расписания в выборку"
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_blocked_user_writes_no_send_log():
+    """Пропуск заблокированного ТИХИЙ: записи в журнал отправок не делается.
+
+    Журнал отражает СОВЕРШЁННЫЕ попытки отправки, а пропущенное расписание
+    попытки не совершало — прецедент выключенной группы прямой (D-06). Запись
+    «не отправлено, потому что заблокирован» превратила бы историю пользователя
+    в ленту его блокировки, и по каждому слоту каждого расписания.
+    """
+    async with _scheduler_session() as session:
+        user = await _seed_sender(session, "blocked@test.com", blocked=True)
+        await _seed_due_schedule(session, user)
+
+        await _collect(session)
+
+        logs = (await session.execute(select(SendLog))).scalars().all()
+        assert logs == [], (
+            f"пропуск заблокированного оставил {len(logs)} записей в журнале "
+            f"отправок — история показывает попытки, которых не было"
+        )
+
+
+# =============================================================================
+# Тумблер блокировки в админке — переехал из `tests/test_admin.py`
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_the_admin_toggle_blocks_a_user(client: AsyncClient, db_session):
+    """Кнопка в админке ставит признак блокировки на чужую учётную запись.
+
+    Переехала сюда вместе со всем предметом блокировки: половина, оставленная
+    в файле админки, снова разложила бы блокировку по файлам — ровно то, из-за
+    чего эффекта у кнопки не было целую фазу.
+    """
+    await _register(client, "admin@test.com")
+    resp = await client.post(
+        "/api/auth/login", json={"email": "admin@test.com", "password": PASSWORD}
+    )
+    admin_headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+    await _register(client, "target@test.com")
+    target = await _user(db_session, "target@test.com")
+
+    response = await client.post(
+        f"/admin/users/{target.id}/block",
+        headers=admin_headers,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    await db_session.refresh(target)
+    assert target.is_blocked is True, "кнопка админки не поставила признак"
+
+
+@pytest.mark.asyncio
+async def test_the_admin_cannot_block_himself(client: AsyncClient, db_session):
+    """Администратор не блокирует себя: иначе админку некому открыть.
+
+    Восстановление после такой блокировки — правка строки в базе руками.
+    """
+    await _register(client, "admin@test.com")
+    resp = await client.post(
+        "/api/auth/login", json={"email": "admin@test.com", "password": PASSWORD}
+    )
+    admin_headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    admin = await _user(db_session, "admin@test.com")
+
+    response = await client.post(
+        f"/admin/users/{admin.id}/block",
+        headers=admin_headers,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    await db_session.refresh(admin)
+    assert admin.is_blocked is False, "администратор заблокировал сам себя"
