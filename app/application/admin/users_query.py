@@ -24,11 +24,11 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import Select, and_, func, not_, or_, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.subscription import Subscription
 from app.models.user import User
+from app.repositories.user import access_axis_clause
 
 # Размер страницы объявлен ЗДЕСЬ и только здесь: число, выписанное вторым местом
 # в разметке или в обработчике, разъехалось бы с запрашиваемым пределом молча —
@@ -71,67 +71,13 @@ ACCESS_VALUES = _values(ACCESS_CHIPS)
 STATE_VALUES = _values(STATE_CHIPS)
 
 
-def _active_row(*conditions):
-    """Признак «у пользователя есть АКТИВНАЯ строка подписки, отвечающая условиям».
-
-    Активность спрашивается ВСЕГДА и не является частью условий вызывающего:
-    история подписок пользователя лежит в тех же строках, и отбор по сроку без
-    вопроса про активность выдал бы доступ по отменённому периоду. Частичный
-    уникальный индекс `uq_subscriptions_active_user` гарантирует не более одной
-    активной строки на пользователя, поэтому вопрос «есть ли такая строка»
-    здесь тождествен вопросу «такова ли ЕГО строка».
-    """
-    return (
-        select(Subscription.id)
-        .where(Subscription.user_id == User.id, Subscription.is_active.is_(True), *conditions)
-        .exists()
-    )
-
-
-def _comped(now: datetime):
-    return _active_row(Subscription.has_free_access.is_(True))
-
-
-def _paid_and_live(now: datetime):
-    # Сравнение СТРОГОЕ — той же строгости, что `subscription_is_live`: момент,
-    # равный `now`, живым не считается, оплаченный момент уже прошёл.
-    return _active_row(Subscription.expires_at > now)
-
-
-def _access_open(now: datetime):
-    return _active_row(
-        or_(Subscription.has_free_access.is_(True), Subscription.expires_at > now)
-    )
-
-
-# ⚠️ ПЕРЕВОД ЕДИНСТВЕННОГО ВЕРДИКТА ДОСТУПА В ЯЗЫК ЗАПРОСА, А НЕ ВТОРОЕ ПРАВИЛО.
-#
-# Правило доступа объявлено ОДИН раз — `access_is_open`
-# (`app/application/billing/subscription_period.py`), и объявлено на Python:
-# модуль срока подписки по своей объявленной границе ничего не знает про сессию
-# SQLAlchemy, и тащить туда выражения запроса значило бы сломать границу, ради
-# которой он и вынесен. При этом счётчик и страница обязаны считаться одним
-# выражением (D-34) — а это требует, чтобы ось доступа отбирала В ЗАПРОСЕ, до
-# `OFFSET`. Отсюда перевод.
-#
-# Цена перевода названа вслух и оплачена тестом: расхождение с оригиналом падает
-# `test_the_sql_axis_agrees_with_the_single_python_verdict`, который прогоняет
-# оба выражения по одной популяции. Без него разойтись было бы на чём — хватило
-# бы забыть про активность строки или ослабить строгость сравнения дат, и
-# администратор увидел бы «открыт» у человека, которому продукт уже отказывает.
-#
-# ТРИ ЗНАЧЕНИЯ РАЗБИВАЮТ ПОПУЛЯЦИЮ, А НЕ ПЕРЕСЕКАЮТ ЕЁ: «бесплатно» забирает
-# льготных целиком (в том числе с мёртвой датой), «открыт» — оставшихся живых по
-# сроку, «истёк» — дополнение до всех, включая тех, у кого строки подписки нет
-# вовсе. Разбиение — не украшение: пересечение показало бы человека под двумя
-# взаимоисключающими ярлыками, а недостача оставила бы кого-то ненаходимым НИ
-# ОДНИМ фильтром.
-_ACCESS_CLAUSES = {
-    "comped": lambda now: _comped(now),
-    "open": lambda now: and_(_paid_and_live(now), not_(_comped(now))),
-    "expired": lambda now: not_(_access_open(now)),
-}
-
+# ⚠️ УСЛОВИЕ ОСИ ДОСТУПА ПРИХОДИТ ИЗ СЛОЯ ДОСТУПА К ДАННЫМ, А НЕ СТРОИТСЯ ЗДЕСЬ
+# (`app/repositories/user.py::access_axis_clause`). Причина не в раскладке
+# файлов: признак бесплатного доступа читается в `app/application/` РОВНО ОДНИМ
+# файлом — предикатом доступа, — и это машинный гейт, а не соглашение. Второе
+# чтение признака в прикладной логике развело бы одно правило по двум
+# выражениям. SQL-выражения по нашим таблицам — работа слоя доступа к данным, и
+# перевод вердикта живёт там вместе с объяснением своей цены.
 _STATE_CLAUSES = {
     "active": lambda: User.is_blocked.is_(False),
     "blocked": lambda: User.is_blocked.is_(True),
@@ -177,9 +123,9 @@ def apply_user_filters(
             )
         )
 
-    access_clause = _ACCESS_CLAUSES.get(access or "")
+    access_clause = access_axis_clause(access, now)
     if access_clause is not None:
-        query = query.where(access_clause(now))
+        query = query.where(access_clause)
 
     state_clause = _STATE_CLAUSES.get(state or "")
     if state_clause is not None:

@@ -73,7 +73,10 @@ async def _seed_user(
     """
     user = User(
         email=email,
-        password_hash="x",
+        # Хеш ЗАМЕТНЫЙ и разный у каждого: односимвольная заглушка нашлась бы в
+        # любой разметке по построению, и утверждение «хеша на экране нет»
+        # проверяло бы наличие буквы, а не отсутствие секрета.
+        password_hash=f"ХЕШ-ПАРОЛЯ-{email}-НЕ-ДОЛЖЕН-ПОПАСТЬ-В-РАЗМЕТКУ",
         name=name,
         is_blocked=blocked,
         created_at=NOW - timedelta(days=30),
@@ -707,7 +710,10 @@ async def test_no_manual_extension_of_access_exists(
         + ROW_TEMPLATE.read_text(encoding="utf-8")
         + ADMIN_PAGES_SOURCE.read_text(encoding="utf-8")
     )
-    for marker in ("продлить", "Продлить", "extend_access", "+30 ДНЕЙ", "ОТПРАВОК"):
+    # Литералы взяты у макета дословно: он рисует на развороте строки две
+    # пунктирные кнопки, «+1000 ОТПРАВОК» и «+30 ДНЕЙ», — обе управляют
+    # величинами, которых фаза не заводит.
+    for marker in ("продлить", "Продлить", "extend_access", "+30 ДНЕЙ", "+1000 ОТПРАВОК"):
         assert marker not in sources, marker
 
 

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 import structlog
 from fastapi import APIRouter, Depends, Form, Query, Request, Response
@@ -17,6 +18,13 @@ from app.application.admin.queue_rows import (
     QUEUE_ROW_CAP,
     queue_rows,
     telegram_lag_seconds,
+)
+from app.application.admin.users_query import (
+    ACCESS_CHIPS,
+    ACCESS_VALUES,
+    STATE_CHIPS,
+    STATE_VALUES,
+    users_page,
 )
 from app.application.billing.subscription_period import access_is_open, days_left
 from app.pages.history import (
@@ -392,37 +400,140 @@ async def admin_dashboard(
     )
 
 
+async def _account_counts_by_user(
+    db: AsyncSession, user_ids: list[int]
+) -> dict[int, int]:
+    """Число мессенджер-аккаунтов перечисленных пользователей — ОДНИМ запросом.
+
+    Форма повторяет `_active_subscriptions_by_user` дословно и по той же
+    причине: колонка на строку, посчитанная запросом на строку, стоит числа
+    обращений, растущего вместе с числом зарегистрированных, — а страница
+    администратора видит их всех сразу.
+
+    Пустой список НЕ ходит в базу: `IN ()` — синтаксическая ошибка на части
+    диалектов и бессмысленный запрос на остальных.
+    """
+    if not user_ids:
+        return {}
+
+    rows = await db.execute(
+        select(MessengerAccount.user_id, func.count(MessengerAccount.id))
+        .where(MessengerAccount.user_id.in_(user_ids))
+        .group_by(MessengerAccount.user_id)
+    )
+    return {user_id: count for user_id, count in rows.all()}
+
+
+def _parse_page(value: str | None) -> int:
+    """Номер страницы из адреса — ЧИСЛОМ, и без отказа на мусоре.
+
+    Объявить параметр как `int` значило бы отдать 422 на `?page=абв`, то есть
+    отказать в обслуживании по значению, которое приезжает из ссылки, закладки
+    или чужого сообщения (T-06-USR3). Разбор здесь, а зажим диапазона — в модуле
+    выборки, который один знает, сколько страниц получилось.
+    """
+    try:
+        return int((value or "").strip())
+    except (TypeError, ValueError):
+        return 1
+
+
+def _users_href(params: dict[str, str], page: int) -> str:
+    """Адрес подраздела с текущими фильтрами и ЗАДАННЫМ номером страницы.
+
+    ⚠️ АДРЕС СОБИРАЕТСЯ ЗДЕСЬ, А НЕ В РАЗМЕТКЕ. Имена параметров объявлены
+    подписью обработчика ниже; литерал, собранный в шаблоне, разъехался бы с
+    ними молча — переход отвечал бы 200 и терял фильтр. Тот же довод стоит в
+    модуле признаков инцидента, где адреса переходов тоже приходят из кода.
+    """
+    query = dict(params)
+    query["page"] = str(page)
+    return f"/admin/users?{urlencode(query)}"
+
+
 @router.get("/users", response_class=HTMLResponse)
 async def admin_users(
     request: Request,
     q: str = "",
+    access: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    page: str | None = Query(default=None),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    user_repo = UserRepository(db)
-    if q:
-        users = await user_repo.search_users(q)
-    else:
-        users = await user_repo.get_all_users()
+    """Подраздел «Пользователи»: поиск, две оси, страницы по 50, честный счётчик.
 
-    # СПИСОК НЕ ХОДИТ В БАЗУ ЗА КАЖДЫМ ПОЛЬЗОВАТЕЛЕМ. Колонка доступа собирается
-    # ОДНИМ запросом на всю страницу, а момент времени снимается ОДИН на весь
-    # список: посчитанные от разных `now`, вердикт и остаток дней разъехались бы
-    # на границе суток у соседних строк одной и той же таблицы (T-05.1-19).
+    ⚠️ ПОИСК, ОБЕ ОСИ, СТРАНИЦА И СЧЁТЧИК СЧИТАЮТСЯ ОДНИМ ВЫРАЖЕНИЕМ (D-34).
+    Обработчик не строит условий сам — он передаёт значения в модуль выборки,
+    где `count_users` зовёт ту же `apply_user_filters`, что и страница. Проект
+    уже платил за нарушение этого правила в разделе истории: счётчик обещал
+    записи, которых в выдаче не было.
+
+    ⚠️ ЗНАЧЕНИЯ ОСЕЙ САНИРУЮТСЯ ЗДЕСЬ ТОЖЕ, ХОТЯ МОДУЛЬ САНИРУЕТ ИХ САМ. Модуль
+    отсекает мусор для ЗАПРОСА; здесь отсечка нужна для РАЗМЕТКИ: неотсечённое
+    значение доехало бы до чипсов как активное, и администратор увидел бы
+    подсвеченный фильтр, которого не задавал и который ничего не отбирает.
+    Отсекает ОБЩАЯ функция проекта, а не своя копия (`clean_choice`).
+    """
+    search = (q or "").strip()
+    access = clean_choice(access, ACCESS_VALUES)
+    state = clean_choice(state, STATE_VALUES)
+
+    # МОМЕНТ СНИМАЕТСЯ ОДИН НА ВЕСЬ ЗАПРОС — и для отбора по оси доступа, и для
+    # вердикта каждой строки. Посчитанные от разных `now`, отбор и бейдж
+    # разъехались бы на границе суток: строка попала бы под чипс «открыт» и
+    # отрисовалась «закрыт» (T-05.1-19).
     now = datetime.now(timezone.utc)
-    subscriptions = await _active_subscriptions_by_user(db, [u.id for u in users])
+    result = await users_page(
+        db, search=search, access=access, state=state, now=now, page=_parse_page(page)
+    )
+
+    # СПИСОК НЕ ХОДИТ В БАЗУ ЗА КАЖДЫМ ПОЛЬЗОВАТЕЛЕМ: и подписки, и число
+    # аккаунтов собираются ОДНИМ запросом на всю страницу.
+    user_ids = [u.id for u in result.users]
+    subscriptions = await _active_subscriptions_by_user(db, user_ids)
+    accounts = await _account_counts_by_user(db, user_ids)
     user_data = [
-        {"user": u, "access": _access_view(subscriptions.get(u.id), now)}
-        for u in users
+        {
+            "user": u,
+            "access": _access_view(subscriptions.get(u.id), now),
+            "accounts": accounts.get(u.id, 0),
+        }
+        for u in result.users
     ]
+
+    # ⚠️ НОМЕР СТРАНИЦЫ В НАБОР ФИЛЬТРОВ НЕ ВХОДИТ. Набор проносится чипсами при
+    # смене оси, и сохранённый номер дал бы пустой экран при непустой выдаче:
+    # страницы пересчитались, а адрес всё ещё указывает на седьмую.
+    filter_params = {
+        key: value
+        for key, value in (("q", search), ("access", access), ("state", state))
+        if value
+    }
 
     return templates.TemplateResponse(
         "admin/users.html",
         {
             **_admin_context(request, admin, "users"),
             "users": user_data,
-            "search_query": q,
+            "users_total": result.total,
+            "users_page_number": result.page,
+            "users_pages": result.pages,
+            "search_query": search,
+            "access_chips": ACCESS_CHIPS,
+            "state_chips": STATE_CHIPS,
+            "filter_access": access,
+            "filter_state": state,
+            "filter_params": filter_params,
+            "prev_page_href": (
+                _users_href(filter_params, result.page - 1) if result.page > 1 else None
+            ),
+            "next_page_href": (
+                _users_href(filter_params, result.page + 1)
+                if result.page < result.pages
+                else None
+            ),
         },
     )
 
