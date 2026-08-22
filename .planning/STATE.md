@@ -4,12 +4,12 @@ milestone: v2.0
 milestone_name: Redesign
 current_phase: 06
 current_phase_name: Админ-панель
-status: planning
+status: executing
 stopped_at: Phase 6 planned — 14 plans, 10 waves
-last_updated: "2026-08-21T21:00:10.001Z"
-last_activity: 2026-08-21
-last_activity_desc: Phase 06 planning complete
-state_head: ae283e14ac66695a5e44f377b0a4ea0eba152af7
+last_updated: "2026-08-22T05:46:56.887Z"
+last_activity: 2026-08-22
+last_activity_desc: Phase 06 execution started
+state_head: 4fee7450ad8d4d184080f4d4df48f61175020c73
 progress:
   total_phases: 7
   completed_phases: 5
@@ -25,13 +25,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-21)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 6 — Админ-панель
+**Current focus:** Phase 06 — Админ-панель
 
 ## Current Position
 
-Phase: 06 (Админ-панель) — READY TO EXECUTE
-Status: Phase 05.1 shipped — PR #41; Phase 6 planned — 14 plans, 10 waves, verification passed
-Last activity: 2026-08-21 — Phase 06 planning complete
+Phase: 06 (Админ-панель) — EXECUTING
+Status: Executing Phase 06
+Last activity: 2026-08-22 — Phase 06 execution started
 
 Владелец остановил UAT фазы 5 на первом же пункте: «получилась очень сложная для понимания система тарифов». Диагноз подтверждается кодом — в фазе 5 сосуществовали ДВЕ независимые системы оплаты: три тарифных плана по четырём осям лимитов (`Settings.plan_limits`) И отдельная валюта сообщений с пакетами (`Settings.message_packages`, `MessageBalance`, списание `deduct_message()`). Итоговая модель убирает счёт целиком: 3000 ₽/мес за доступ к системе, без лимитов по аккаунтам, группам и сообщениям.
 
