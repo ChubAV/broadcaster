@@ -351,3 +351,205 @@ def test_the_settings_field_for_the_source_address_has_a_default():
 
     assert "loki_url" in Settings.model_fields
     assert Settings.model_fields["loki_url"].default
+
+
+# =============================================================================
+# Задача 2: сборка запроса — словарь уровней на ДВА словаря источника
+# =============================================================================
+#
+# ⚠️ ГЛАВНОЕ УТВЕРЖДЕНИЕ ЭТОГО РАЗДЕЛА — про чипс предупреждения. Уровень
+# «предупреждение» приезжает в источник ДВУМЯ разными словами: журналирование
+# приложения пишет одно (`structlog.stdlib.add_log_level` кладёт имя метода
+# логгера в нижнем регистре), а сборщик логов ПЕРЕВОДИТ числовой уровень воркера
+# канала WhatsApp шаблоном во второе (`monitoring/promtail.yml`). Селектор,
+# собранный из одного слова, скрыл бы ровно половину предупреждений — молча, при
+# статусе 200 и пустом перечне, неотличимом от отсутствия предупреждений. Тест
+# перечисляет ОБА слова явными литералами: вывод их из самого словаря сделал бы
+# утверждение тавтологией.
+#
+# ⚠️ ТЕКСТ ПОИСКА — ЕДИНСТВЕННЫЙ ВХОД ФАЗЫ, УХОДЯЩИЙ В ЧУЖОЙ ЯЗЫК ЗАПРОСОВ
+# (T-06-LQL). Кавычка внутри него ломает запрос СИНТАКСИЧЕСКИ, и подраздел
+# ответил бы отказом источника на нормальный пользовательский ввод. Утверждение
+# адресовано ЦЕЛОСТНОСТИ собранного запроса, а не отсутствию символа: проверка
+# «кавычки нет» зеленела бы и на молча выброшенном тексте.
+
+from app.services.loki_client import (  # noqa: E402
+    LEVEL_CHIPS,
+    LOG_WINDOWS,
+    LOG_WINDOW_DEFAULT,
+    build_logql,
+    clean_level,
+    clean_source,
+    window_for,
+)
+
+
+def _line_filter_payload(query: str) -> str:
+    """Содержимое фильтра строки, снятое РАЗБОРОМ, а не срезом по кавычке.
+
+    Разбор идёт посимвольно с учётом экранирования и ТРЕБУЕТ, чтобы строка
+    закрылась ровно в конце запроса. Именно это и означает «запрос остался
+    синтаксически целым»: неэкранированная кавычка закрыла бы строку раньше, и
+    хвост запроса оказался бы за её пределами.
+    """
+    marker = ' |= "'
+    assert marker in query, f"фильтра строки нет вовсе: {query}"
+    body = query[query.index(marker) + len(marker):]
+
+    out = []
+    escaped = False
+    for pos, ch in enumerate(body):
+        if escaped:
+            out.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == '"':
+            assert pos == len(body) - 1, (
+                "строка фильтра закрылась НЕ в конце запроса — значит кавычка "
+                f"внутри текста не экранирована: {query}"
+            )
+            return "".join(out)
+        out.append(ch)
+    raise AssertionError(f"строка фильтра не закрыта вовсе: {query}")
+
+
+def test_the_warning_level_chip_covers_both_words_the_source_receives():
+    """Чипс предупреждения покрывает ОБА слова уровня, и оба названы явно.
+
+    Приложение пишет `warning`, перевод числового уровня воркера канала
+    WhatsApp даёт `warn`. Один литерал в селекторе скрыл бы ровно половину
+    предупреждений — при статусе 200 и пустом списке, который читается как
+    «предупреждений нет».
+    """
+    query = build_logql("warn", None, None)
+
+    assert "warn" in LEVEL_CHIPS["warn"]
+    assert "warning" in LEVEL_CHIPS["warn"]
+    assert "level=~" in query, "условие уровня собрано равенством одному слову"
+    assert '"warn|warning"' in query or '"warning|warn"' in query, query
+
+
+def test_the_error_level_chip_covers_the_declared_set_not_a_single_word():
+    """Ошибка тоже приезжает не одним словом: критическая и фатальная — тоже она.
+
+    Администратор, отбирающий ошибки, ищет «что сломалось». Уровень выше
+    ошибки — это тем более сломалось, и выпасть из отбора он не имеет права.
+    """
+    query = build_logql("error", None, None)
+
+    assert set(LEVEL_CHIPS["error"]) >= {"error", "critical", "fatal"}
+    for value in LEVEL_CHIPS["error"]:
+        assert value in query, f"{value} не попал в селектор: {query}"
+
+
+def test_the_all_level_chip_adds_no_level_condition_at_all():
+    """Вариант «все» не добавляет условия по уровню вовсе.
+
+    Не «пустой перечень значений», а отсутствие условия: селектор с пустым
+    перечислением не совпал бы ни с одной строкой.
+    """
+    query = build_logql("", None, None)
+
+    assert "level" not in query, query
+
+
+def test_a_level_outside_the_declared_dictionary_falls_back_to_all():
+    """Мусорный уровень означает «все», а не подставляется в запрос сырым.
+
+    Значение приезжает строкой адреса, то есть из ссылки, закладки или чужого
+    сообщения. Подставленное сырым, оно ушло бы в чужой язык запросов; принятое
+    за отбор — нарисовало бы администратору фильтр, которого он не задавал.
+    """
+    assert clean_level('error"} |= "') == ""
+    query = build_logql('error"} |= "', None, None)
+
+    assert "level" not in query, query
+    assert "|=" not in query, query
+
+
+def test_a_numeric_source_reads_as_an_account_id_and_a_name_as_a_container():
+    """Форма значения различает воркер аккаунта и службу сборки.
+
+    У воркера аккаунта есть метка идентификатора: имя его контейнера собирается
+    менеджером и меняется при пересоздании, а идентификатор — нет. У служб
+    сборки идентификатора не существует вовсе.
+    """
+    assert 'account_id="42"' in build_logql("", "42", None)
+    assert 'container_name="web-broadcaster"' in build_logql(
+        "", "web-broadcaster", None
+    )
+
+
+def test_a_source_outside_the_declared_vocabulary_is_dropped():
+    """Источник санируется закрытым словарём ЛИБО формой идентификатора.
+
+    Перечень служб объявлен на сервере, идентификаторы аккаунтов не
+    перечислимы — но состоят только из цифр, и ничем иным быть не могут.
+    Значение, не подходящее ни под то, ни под другое, фильтром не становится.
+    """
+    assert clean_source('web" ,x="') is None
+    assert clean_source("nope-broadcaster") is None
+    assert clean_source("42") == "42"
+    assert clean_source("web-broadcaster") == "web-broadcaster"
+
+
+def test_the_search_text_goes_to_the_line_filter_not_into_the_label_selector():
+    """Текст уходит в фильтр СТРОКИ: селектор индексируется и текста не примет.
+
+    Уехав в селектор, произвольный текст не нашёл бы ничего — при исправном на
+    вид запросе.
+    """
+    query = build_logql("", None, "таймаут")
+
+    selector = query.split(" |= ")[0]
+    assert "таймаут" not in selector, query
+    assert _line_filter_payload(query) == "таймаут"
+
+
+def test_a_quote_inside_the_search_text_is_escaped_and_the_query_stays_whole():
+    """Кавычка экранируется, и запрос остаётся синтаксически ЦЕЛЫМ.
+
+    Утверждение адресовано целостности, а не отсутствию символа: проверка «в
+    запросе нет кавычки» зеленела бы и на молча выброшенном тексте.
+    """
+    text = 'он сказал "готово"'
+    query = build_logql("error", None, text)
+
+    assert _line_filter_payload(query) == text
+    assert query.startswith("{"), query
+
+
+def test_a_backslash_inside_the_search_text_is_escaped():
+    """Обратная косая экранируется ПЕРВОЙ, иначе она съедает свою же кавычку."""
+    text = 'путь C:\\temp и кавычка "'
+    query = build_logql("", None, text)
+
+    assert _line_filter_payload(query) == text
+
+
+def test_an_empty_search_text_adds_no_line_filter():
+    """Пустой текст не добавляет фильтра строки вовсе.
+
+    Фильтр по пустой строке совпал бы со всем — то есть был бы бесполезен, — но
+    в запросе выглядел бы как действующий отбор.
+    """
+    assert " |= " not in build_logql("", None, "")
+    assert " |= " not in build_logql("", None, None)
+    assert " |= " not in build_logql("", None, "   ")
+
+
+def test_a_window_outside_the_declared_dictionary_falls_back_to_one_hour():
+    """Окон ровно три, и мусорное значение заменяется умолчанием в час.
+
+    Произвольного диапазона нет намеренно: срок хранения источника — семь
+    суток, и произвольный диапазон уткнулся бы в него молча, вернув неполную
+    выдачу без единого признака неполноты.
+    """
+    assert set(LOG_WINDOWS) == {"15m", "1h", "24h"}
+    assert LOG_WINDOW_DEFAULT == "1h"
+    assert window_for("nope") == LOG_WINDOWS[LOG_WINDOW_DEFAULT].delta
+    assert window_for(None) == LOG_WINDOWS[LOG_WINDOW_DEFAULT].delta
+    assert window_for("15m") == LOG_WINDOWS["15m"].delta
