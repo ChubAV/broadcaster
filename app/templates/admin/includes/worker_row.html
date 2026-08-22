@@ -51,6 +51,11 @@
     } -%}
 {%- set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} -%}
 
+{#- Каналы, у которых есть СВОЙ контейнер и потому есть что перезапускать.
+    Перечень зеркалит `WORKER_RESTART_MANAGERS` страничного модуля: кнопка,
+    показанная там, где менеджера нет, вела бы на гарантированный отказ. -#}
+{%- set RESTARTABLE_CHANNELS = ['wa', 'max'] -%}
+
 {%- macro worker_row(account, state, columns, cols) -%}
 <div data-row style="--cols: {{ cols }}">
   {%- call cell(grow=true, label=columns[0]) %}
@@ -73,6 +78,24 @@
       {{- mono('—', title='Очередь telegram одна на все аккаунты канала: отдельной глубины у строки не существует, а общее число здесь читалось бы как величина этого аккаунта') -}}
     {%- else -%}
       {{- mono('—', title='Глубина очереди хранится только в Redis, а он сейчас не отвечает — по той же причине и состояние воркера показано как «неизвестно»') -}}
+    {%- endif -%}
+  {%- endcall %}
+  {#- ДЕЙСТВИЕ ОДНО, И ЭТО «ПЕРЕЗАПУСТИТЬ» (D-11). Остановки здесь нет ни
+      кнопкой, ни маршрутом: она обещает контроль, которого нет — воркер уходит
+      сам через 300 секунд простоя и возвращается через 15 секунд при появлении
+      задачи, — а администратор, нажавший её в аварии, решит, что починил.
+
+      Форма НАСТОЯЩАЯ и метод настоящий: без поднявшегося Alpine она просто
+      отправится, и базовый путь останется рабочим. Панель подтверждения
+      навешана ПОВЕРХ (`submit.prevent` + событие), а не вместо. -#}
+  {%- call cell(label=columns[4]) %}
+    {%- if account.type in RESTARTABLE_CHANNELS -%}
+      <form method="post" action="/admin/workers/{{ account.id }}/restart"
+            x-data x-on:submit.prevent="$dispatch('modal-open-worker-restart-{{ account.id }}')">
+        <button type="submit" class="btn btn--secondary"><span class="btn__label">Перезапустить</span></button>
+      </form>
+    {%- else -%}
+      {{- mono('—', title='Перезапускать нечего: своего воркера у канала нет, задачи Telegram разбирает общий celery-воркер очереди telegram') -}}
     {%- endif -%}
   {%- endcall %}
 </div>

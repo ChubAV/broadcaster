@@ -112,16 +112,30 @@ def _row_markup(html: str, account_id: int) -> str:
     return chunks[0][: chunks[0].index("</div>")]
 
 
+# Пять колонок: «Аккаунт», «Сессия», «Воркер», «В очереди», «Действие». Число
+# закреплено УТВЕРЖДЕНИЕМ, а не подразумевается: индексы ниже адресуют колонки
+# позицией, и молча уехавшая на единицу колонка проверяла бы соседнюю ячейку —
+# то есть тест продолжал бы зеленеть, утверждая не то, что написано в его имени.
+WORKER_ROW_CELLS = 5
+
+
 def _row_cell(html: str, account_id: int, index: int) -> str:
     """Ячейка строки аккаунта по индексу колонки (0 — «Аккаунт», -1 — последняя)."""
     cells = _row_markup(html, account_id).split('<span class="cell')[1:]
-    assert len(cells) == 4, f"ожидалось четыре ячейки, найдено {len(cells)}"
+    assert len(cells) == WORKER_ROW_CELLS, (
+        f"ожидалось {WORKER_ROW_CELLS} ячеек, найдено {len(cells)}"
+    )
     return cells[index]
 
 
 def _tg_worker_cell(html: str, account_id: int) -> str:
     """Ячейка колонки «Воркер» — третья по `WORKER_COLUMNS`."""
     return _row_cell(html, account_id, 2)
+
+
+def _queue_cell(html: str, account_id: int) -> str:
+    """Ячейка колонки «В очереди» — четвёртая по `WORKER_COLUMNS`."""
+    return _row_cell(html, account_id, 3)
 
 
 # ---- Каркас шести подразделов ----
@@ -409,7 +423,7 @@ async def test_telegram_queue_cell_names_the_cause_of_the_missing_depth(
     ):
         html = (await admin_client.get("/admin/workers")).text
 
-    cell = _row_cell(html, account.id, -1)
+    cell = _queue_cell(html, account.id)
     assert "—" in cell
     assert "title=" in cell, "голый прочерк без подсказки — запрещён контрактом"
     for forbidden in ("не удалось", "не определен", "неизвестно почему"):
@@ -431,7 +445,7 @@ async def test_queue_cell_names_the_broken_observer_when_redis_is_down(
     with patch("app.services.ops_state._get_redis", return_value=None):
         html = (await admin_client.get("/admin/workers")).text
 
-    cell = _row_cell(html, account.id, -1)
+    cell = _queue_cell(html, account.id)
     assert "title=" in cell
     assert "Redis" in cell, f"подсказка не называет сломанного наблюдателя: {cell}"
 
@@ -871,9 +885,21 @@ async def test_no_stop_action_exists_in_markup_or_in_routes(
     assert "Остановить" not in html
     assert "/stop" not in html
 
-    from app.main import create_app
+    # ⚠️ ПЕРЕЧЕНЬ БЕРЁТСЯ У САМИХ РОУТЕРОВ МОДУЛЯ, А НЕ У СОБРАННОГО ПРИЛОЖЕНИЯ.
+    # Сборка приложения читает настройки из файла окружения, которого в суите
+    # нет намеренно, и тест падал бы на импорте — то есть переставал бы
+    # проверять запрет ровно тогда, когда запрет и надо проверять. Область
+    # утверждения при этом не сузилась: маршрут остановки, если бы он появился,
+    # объявили бы здесь — оба роутера подраздела живут в этом модуле.
+    from app.pages.admin import partials_router, router as admin_router
 
-    paths = {route.path for route in create_app().routes if hasattr(route, "path")}
+    paths = {
+        route.path
+        for router in (admin_router, partials_router)
+        for route in router.routes
+        if hasattr(route, "path")
+    }
+    assert paths, "маршруты админки не найдены — утверждать не о чем"
     assert not [path for path in paths if "stop" in path.lower()], sorted(paths)
 
     assert "stop_container" not in ADMIN_PAGES_SOURCE.read_text(encoding="utf-8")
@@ -913,11 +939,22 @@ def test_the_container_api_lives_only_in_the_restart_handler():
     tree = ast.parse(ADMIN_PAGES_SOURCE.read_text(encoding="utf-8"))
 
     def _calls(node) -> list[str]:
+        """Имена, которыми функция ТРОГАЕТ чужое API: вызовы И ссылки на них.
+
+        ⚠️ ОДНИХ ВЫЗОВОВ МАЛО, И ЭТО НЕ ПЕДАНТИЗМ. Синхронный менеджер уходит в
+        отдельный поток, поэтому в исходнике стоит не `start_container(...)`, а
+        ССЫЛКА на функцию, переданная исполнителю. Обход, считающий только узлы
+        вызова, такой код не увидел бы вовсе — и запрет, ради которого этот
+        тест написан, зеленел бы при обращении к демону прямо на пути
+        отрисовки, стоило бы его обернуть в поток.
+        """
         return [
             child.func.id if isinstance(child.func, ast.Name) else child.func.attr
             for child in ast.walk(node)
             if isinstance(child, ast.Call)
             and isinstance(child.func, (ast.Name, ast.Attribute))
+        ] + [
+            child.attr for child in ast.walk(node) if isinstance(child, ast.Attribute)
         ]
 
     container_callers = {

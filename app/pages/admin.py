@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 
 import structlog
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,8 +28,9 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
-from app.pages.common import templates
+from app.pages.common import is_same_origin, templates
 from app.repositories.user import UserRepository
+from app.services import max_container_manager, wa_container_manager
 from app.services.billing_cache import invalidate_access_cache
 from app.services.ops_state import (
     INFRA_BEAT,
@@ -126,6 +128,29 @@ INFRA_SERVICES: tuple[dict[str, str], ...] = (
 # чем на дашборде, потому что решение о перезапуске принимается по нему.
 WORKERS_POLL_SEC = 20
 
+# ЗАКРЫТОЕ МНОЖЕСТВО ПРИЧИН ОТКАЗА ПЕРЕЗАПУСКА, И СЛОВА ЖИВУТ ЗДЕСЬ, А НЕ В
+# РАЗМЕТКЕ (Pitfall 7).
+#
+# ⚠️ КНОПКА, ВЕРНУВШАЯ ТУ ЖЕ СТРАНИЦУ МОЛЧА, ЧИТАЕТСЯ КАК СЛОМАННАЯ. Именно для
+# этого проект держит форму «отказ не проглатывается молча»; здесь она нужнее,
+# чем где-либо, потому что кнопку жмут в аварии и по её результату решают, идти
+# ли на сервер руками.
+#
+# ⚠️ ТЕКСТ СТОРОННЕГО ИСКЛЮЧЕНИЯ НА ЭКРАН НЕ ВЫХОДИТ. Он ничего не сообщает
+# администратору и способен вынести наружу внутренние пути и адреса; причина
+# берётся ИЗ ЭТОГО СЛОВАРЯ по ключу, а неизвестный ключ из адресной строки не
+# рисует ничего. Владелец ссылки не может ни выбрать чужой текст, ни подставить
+# свой.
+WORKER_RESTART_ERRORS: dict[str, str] = {
+    "restart_failed": (
+        "Не удалось перезапустить воркер — демон контейнеров не отвечает"
+    ),
+    "no_container": (
+        "У этого канала своего воркера нет: перезапускать нечего. "
+        "Задачи Telegram разбирает общий celery-воркер очереди telegram"
+    ),
+}
+
 # Подписи каналов нижнего блока. Порядок несущий: telegram первым, потому что
 # его строка — единственная, чей воркер общий, и объяснение стоит выше строк, к
 # которым оно не относится.
@@ -134,6 +159,23 @@ WORKER_CHANNELS: tuple[dict[str, str], ...] = (
     {"key": "wa", "label": "WhatsApp"},
     {"key": "max", "label": "MAX"},
 )
+
+# КАКОЙ МЕНЕДЖЕР ПОДНИМАЕТ ВОРКЕР КАКОГО КАНАЛА (D-11).
+#
+# ⚠️ ОТСУТСТВИЕ КАНАЛА В ЭТОМ СЛОВАРЕ — ОТВЕТ, А НЕ ПРОБЕЛ. У telegram-канала
+# своего контейнера нет вовсе, поэтому перезапускать нечего, и обработчик
+# отказывает СЛОВАМИ вместо того, чтобы притвориться успешным. Ветка «если
+# канал неизвестен — попробуем WhatsApp» отсутствует намеренно: она подняла бы
+# контейнер чужого типа под идентификатором этого аккаунта.
+#
+# ⚠️ МОДУЛИ ИМПОРТИРУЮТСЯ ЦЕЛИКОМ, А НЕ ИМЕНАМИ ФУНКЦИЙ. Связывание имени при
+# импорте сделало бы вызов неподменяемым в суите: тест подменяет функцию в её
+# СОБСТВЕННОМ модуле, и локальная копия имени продолжала бы звать настоящий
+# демон — то есть проверка «контейнер поднят» ходила бы на живой сокет.
+WORKER_RESTART_MANAGERS = {
+    "wa": wa_container_manager,
+    "max": max_container_manager,
+}
 
 
 def _admin_context(request: Request, admin: User, tab: str) -> dict:
@@ -312,6 +354,7 @@ async def admin_users(
 @router.get("/workers", response_class=HTMLResponse)
 async def admin_workers(
     request: Request,
+    error: str | None = Query(None),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -334,7 +377,13 @@ async def admin_workers(
     """
     return templates.TemplateResponse(
         "admin/workers.html",
-        {**_admin_context(request, admin, "workers"), **await _workers_view(db)},
+        {
+            **_admin_context(request, admin, "workers"),
+            **await _workers_view(db),
+            # Параметр адресной строки — КЛЮЧ, а не текст: рисуется только то,
+            # что объявлено закрытым множеством выше.
+            "restart_error": WORKER_RESTART_ERRORS.get(error or ""),
+        },
     )
 
 
@@ -465,6 +514,103 @@ async def _workers_view(db: AsyncSession) -> dict:
         "rows": rows,
         "workers_poll_sec": WORKERS_POLL_SEC,
     }
+
+
+@router.post("/workers/{account_id}/restart")
+async def admin_restart_worker(
+    request: Request,
+    account_id: int,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Перезапустить воркер аккаунта — ЕДИНСТВЕННОЕ обращение фазы к демону.
+
+    ⚠️ ГРАНИЦА D-07 НЕ НАРУШЕНА, А ПРОЙДЕНА ТАМ, ГДЕ ОНА ПРОВЕДЕНА. Контракт
+    запрещает контейнерное API на пути ОТРИСОВКИ, а не в приложении вообще
+    (D-11): недоступный демон обязан не мешать открыть подраздел, но обязан
+    честно отказать нажатой кнопке. Что вызов не расползся по соседям,
+    утверждает двусторонний разбор дерева в
+    `tests/test_pages/test_admin_panel.py`.
+
+    ⚠️ ГАРД ПРОИСХОЖДЕНИЯ СТОИТ ПЕРЕД ЛЮБЫМ ДЕЙСТВИЕМ И ОБЯЗАТЕЛЕН
+    (T-06-RST2). Аутентификация проекта идёт cookie, поэтому браузер приложит
+    её к межсайтовой форме сам, и запрос со стороннего сайта неотличим от
+    своего. Сегодня гард несут ровно три формы проекта — две денежные и повтор
+    отправки; новая изменяющая форма админки без него МОЛЧА расширила бы
+    принятую границу риска. Названная граница самого гарда (запрос без обоих
+    заголовков пропускается) наследуется осознанно и записана в реестре угроз
+    плана.
+
+    ⚠️ КАНАЛ ОПРЕДЕЛЯЕТСЯ ПО САМОМУ АККАУНТУ, А НЕ ПО ПОЛЮ ФОРМЫ (T-06-RST1).
+    Поле подделывается вместе с запросом; колонка в базе — нет. Перепутанный
+    канал поднял бы контейнер чужого типа под идентификатором этого аккаунта.
+
+    ⚠️ ПОРЯДОК ПРОВЕРОК НЕСУЩИЙ: кто пришёл → откуда → что просит. Неизвестный
+    аккаунт и канал без своего контейнера отвергаются ДО обращения к демону,
+    иначе отказ приходил бы от чужой службы и по чужой причине.
+    """
+    if not is_same_origin(request):
+        # Чужому источнику причина отказа не сообщается: межсайтовый запрос не
+        # имеет права узнать даже, существует ли такой аккаунт. Форма ответа —
+        # та же, что у денежных форм проекта.
+        return Response(status_code=403)
+
+    location = "/admin/workers"
+
+    account = await db.get(MessengerAccount, account_id)
+    if account is None:
+        logger.warning(
+            "worker_restart_unknown_account",
+            admin_user_id=admin.id,
+            account_id=account_id,
+        )
+        return RedirectResponse(url=location, status_code=302)
+
+    manager = WORKER_RESTART_MANAGERS.get(account.type)
+    if manager is None:
+        # Молчаливый успех здесь был бы ХУЖЕ отказа: администратор решил бы,
+        # что починил, и перестал бы искать настоящую причину.
+        logger.warning(
+            "worker_restart_unsupported_channel",
+            admin_user_id=admin.id,
+            account_id=account.id,
+            channel=account.type,
+        )
+        return RedirectResponse(
+            url=f"{location}?error=no_container", status_code=302
+        )
+
+    try:
+        # ⚠️ В ОТДЕЛЬНОМ ПОТОКЕ, А НЕ ПРЯМО В ЦИКЛЕ СОБЫТИЙ. Менеджер синхронен и
+        # ходит по сети к демону: вызванный здесь напрямую, он заблокировал бы
+        # весь веб-процесс на время подъёма контейнера — включая опрос этого же
+        # подраздела у всех открытых вкладок.
+        await run_in_threadpool(manager.start_container, account.id)
+    except Exception as e:
+        # Причина в журнал, слова — на экран из ЗАКРЫТОГО множества. Текст
+        # исключения на экран не выходит: он несёт внутренние пути и ничего не
+        # сообщает администратору.
+        logger.warning(
+            "worker_restart_failed",
+            admin_user_id=admin.id,
+            account_id=account.id,
+            channel=account.type,
+            error=str(e),
+        )
+        return RedirectResponse(
+            url=f"{location}?error=restart_failed", status_code=302
+        )
+
+    # Привилегированная операция над ЧУЖОЙ сущностью обязана оставлять след, и
+    # форма следа в проекте уже есть (`free_access_toggled`): именованный ключ,
+    # оба идентификатора и то, ЧТО именно сделано.
+    logger.info(
+        "worker_restarted",
+        admin_user_id=admin.id,
+        account_id=account.id,
+        channel=account.type,
+    )
+    return RedirectResponse(url=location, status_code=302)
 
 
 @router.get("/queue", response_class=HTMLResponse)
