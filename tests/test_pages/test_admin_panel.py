@@ -1507,3 +1507,287 @@ async def test_queue_row_cells_carry_their_column_labels_for_narrow_screens(
         assert f"<span data-cell-label>{column}</span>" in row, (
             f"ячейка колонки «{column}» осталась без подписи"
         )
+
+
+# =============================================================================
+# План 06-08: подраздел «Логи»
+# =============================================================================
+#
+# ⚠️ ГЛАВНОЕ УТВЕРЖДЕНИЕ РАЗДЕЛА — `test_an_empty_answer_and_an_unavailable_
+# source_are_different_logs_markup`. Источник логов ОПЦИОНАЛЕН и остаётся таким
+# (D-28): боевые команды запуска и выката мониторинг не поднимают. Значит
+# недоступность — штатная ветка, и она обязана быть НАЗВАНА словами вместе с
+# командой подъёма. Пустой список вместо плашки читается как «ошибок нет» — то
+# есть отвечает на вопрос, ради которого администратор в подраздел и пришёл, и
+# отвечает неправдой.
+#
+# ⚠️ ТЕЛО СТРОКИ ЖУРНАЛА НЕ ЛОЖИТСЯ НА ПРИМИТИВ ТАБЛИЦЫ, И ЭТО РЕШЕНИЕ. Ячейка
+# таблицы объявлена с усечением многоточием; усечённая строка лога бесполезна
+# ровно в том случае, ради которого журнал открыли. Тело идёт примитивом текста,
+# который обязан читаться целиком, — тем самым, что Фаза 4 завела под текст
+# ошибки отправки.
+
+LOGS_URL = "/admin/logs"
+
+# Команда подъёма мониторинга — ровно та, что объявлена в перечне команд
+# проекта. Плашка без неё называла бы отказ, не давая выхода.
+MONITORING_UP_COMMAND = "just monitoring-start"
+
+
+def _log_line(
+    text: str = "таймаут отправки",
+    level: str = "error",
+    source: str = "web-broadcaster",
+    at: datetime | None = None,
+):
+    from app.services.loki_client import LogLine
+
+    return LogLine(
+        at=at or datetime(2026, 8, 22, 10, 0, tzinfo=timezone.utc),
+        level=level,
+        source=source,
+        text=text,
+    )
+
+
+def _log_window(lines=(), *, capped: bool = False, unavailable: bool = False):
+    from app.services.loki_client import LogWindow
+
+    return LogWindow(
+        lines=list(lines), capped=capped, unavailable=unavailable
+    )
+
+
+def _logs_source(window=None):
+    """Подмена чтения окна логов НА СТОРОНЕ СТРАНИЧНОГО МОДУЛЯ.
+
+    Подменяется имя, которым обработчик зовёт сервис: суита идёт без поднятого
+    источника, и подраздел обязан быть проверяем в каждом из трёх своих
+    состояний, ни одно из которых на живом стенде по заказу не воспроизвести.
+    """
+    return patch(
+        "app.pages.admin.query_range",
+        new=AsyncMock(return_value=window if window is not None else _log_window()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_logs_subsection_answers_the_admin(admin_client: AsyncClient):
+    """Подраздел отвечает администратору."""
+    with _logs_source():
+        response = await admin_client.get(LOGS_URL)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_the_logs_subsection_refuses_an_outsider(authed_client: AsyncClient):
+    """Постороннему подраздел не отвечает.
+
+    Клиент в тесте ОДИН: обе фикстуры наращивают один экземпляр, и запрос
+    администратором в том же тесте подменил бы cookie постороннего.
+    """
+    with _logs_source():
+        response = await authed_client.get(LOGS_URL)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_an_empty_answer_and_an_unavailable_source_are_different_logs_markup(
+    admin_client: AsyncClient,
+):
+    """Пустая выдача и недоступный источник рисуются РАЗНО.
+
+    Оба состояния дают ноль строк. Слитые в одну разметку, они сообщили бы
+    «ошибок нет» ровно тогда, когда прочитать их негде, — и администратор ушёл
+    бы искать причину в другом месте.
+    """
+    with _logs_source(_log_window(unavailable=True)):
+        dead = (await admin_client.get(LOGS_URL)).text
+    with _logs_source(_log_window()):
+        quiet = (await admin_client.get(LOGS_URL)).text
+
+    assert MONITORING_UP_COMMAND in dead, "плашка не называет команду подъёма"
+    assert "недоступен" in dead
+    assert "За окно записей нет" not in dead, (
+        "недоступный источник нарисован пустым состоянием — это ответ «ошибок "
+        "нет» на вопрос «что сломалось»"
+    )
+
+    assert "За окно записей нет" in quiet
+    assert MONITORING_UP_COMMAND not in quiet, (
+        "живой источник с пустой выдачей нарисован плашкой недоступности"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_capped_logs_list_says_so_instead_of_just_showing_fewer_lines(
+    admin_client: AsyncClient,
+):
+    """Сработавший потолок НАЗЫВАЕТСЯ подписью, а не проявляется короткой лентой.
+
+    Число потолка приезжает подстановкой из ЕДИНСТВЕННОЙ константы: выписанное
+    в разметке, оно разошлось бы с запрашиваемым пределом молча.
+    """
+    from app.services.loki_client import LOG_LINE_CAP
+
+    with _logs_source(_log_window([_log_line()], capped=True)):
+        capped = (await admin_client.get(LOGS_URL)).text
+    with _logs_source(_log_window([_log_line()])):
+        whole = (await admin_client.get(LOGS_URL)).text
+
+    assert str(LOG_LINE_CAP) in capped, "потолок не назван числом"
+    assert "Показаны последние" in capped
+    assert "Показаны последние" not in whole, (
+        "полная выдача объявила себя усечённой"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_logs_filter_chips_carry_the_subsections_own_base_path(
+    admin_client: AsyncClient,
+):
+    """Три оси рисуются компонентом библиотеки с базовым адресом ПОДРАЗДЕЛА.
+
+    Умолчания у компонента больше нет, и это ровно та ловушка, ради которой он
+    переезжал: чипсы с чужим адресом уводили бы администратора из своего
+    подраздела при КАЖДОМ клике, отвечая при этом 200.
+    """
+    with _logs_source():
+        html = (await admin_client.get(LOGS_URL)).text
+
+    for axis in ("level", "source", "window"):
+        assert f'data-chipset="{axis}"' in html, f"ось {axis} не нарисована"
+
+    hrefs = re.findall(r'class="chip[^"]*"[^>]*href="([^"]*)"', html)
+    assert hrefs, "чипсы не нарисованы вовсе"
+    for href in hrefs:
+        assert href.startswith(LOGS_URL), f"чипс ведёт из подраздела: {href}"
+
+
+@pytest.mark.asyncio
+async def test_each_logs_axis_marks_exactly_one_chip_as_chosen(
+    admin_client: AsyncClient,
+):
+    """На каждой оси отмечено РОВНО одно значение.
+
+    Ни одного отмеченного — экран, по которому не прочитать, что применено; два
+    — обещание отбора, которого запрос не делал.
+    """
+    with _logs_source():
+        html = (await admin_client.get(f"{LOGS_URL}?level=warn&window=24h")).text
+
+    for axis in ("level", "source", "window"):
+        group = html.split(f'data-chipset="{axis}"')[1].split("</div>")[0]
+        assert group.count("chip--on") == 1, f"ось {axis}: {group.count('chip--on')}"
+
+
+@pytest.mark.asyncio
+async def test_a_logs_axis_value_outside_the_declared_set_changes_nothing(
+    admin_client: AsyncClient,
+):
+    """Мусор из адреса не попадает ни в разметку, ни в запрос к источнику.
+
+    Значение приезжает из ссылки, закладки или чужого сообщения, а уходит в
+    ЧУЖОЙ язык запросов: подставленное сырым, оно ломает запрос, а принятое за
+    отбор — рисует администратору фильтр, которого он не задавал.
+    """
+    poison = 'x"} |= "'
+    reader = AsyncMock(return_value=_log_window())
+
+    with patch("app.pages.admin.query_range", new=reader):
+        response = await admin_client.get(
+            LOGS_URL, params={"level": poison, "source": poison, "window": poison}
+        )
+
+    assert response.status_code == 200
+    assert poison not in response.text
+    logql = reader.await_args.args[0]
+    assert poison not in logql, f"мусор уехал в запрос: {logql}"
+
+
+@pytest.mark.asyncio
+async def test_the_logs_subsection_carries_no_polling_attributes(
+    admin_client: AsyncClient,
+):
+    """Обновление — КНОПКОЙ, опроса нет (D-29).
+
+    Причин две, и обе названы решением: администратор читает и ищет глазами, а
+    лента, прыгающая под курсором, мешает; и каждый запрос здесь — поход во
+    внешний источник по сети, а не чтение из памяти.
+    """
+    with _logs_source():
+        html = (await admin_client.get(LOGS_URL)).text
+
+    for marker in ("hx-get", "hx-trigger", "hx-post"):
+        assert marker not in html, f"опрос в подразделе логов: {marker}"
+    assert "Обновить" in html, "кнопки обновления нет — читать нечем"
+
+
+@pytest.mark.asyncio
+async def test_the_logs_search_text_comes_back_into_the_field_and_is_escaped(
+    admin_client: AsyncClient,
+):
+    """Текст поиска возвращается в поле и экранируется разметкой.
+
+    Не вернувшись, он оставил бы человека без ответа на вопрос «что я ищу».
+    Не экранированный — вышел бы из атрибута наружу.
+    """
+    with _logs_source():
+        html = (await admin_client.get(LOGS_URL, params={"q": 'сбой "45"'})).text
+
+    assert "&#34;45&#34;" in html or "&quot;45&quot;" in html, (
+        "текст поиска не вернулся в поле либо вернулся неэкранированным"
+    )
+    assert 'value="сбой "45""' not in html
+
+
+@pytest.mark.asyncio
+async def test_a_logs_body_uses_the_read_in_full_primitive_not_the_ellipsis_cell(
+    admin_client: AsyncClient,
+):
+    """Тело строки журнала идёт примитивом, читаемым ЦЕЛИКОМ.
+
+    Ячейка таблицы объявлена с усечением многоточием, и стектрейс в ней
+    оборвался бы ровно на той части, ради которой журнал открыли. Примитив
+    длинного текста заведён Фазой 4 под ровно этот случай.
+    """
+    text = "Traceback: " + "очень длинная строка ошибки " * 12
+
+    with _logs_source(_log_window([_log_line(text=text)])):
+        html = (await admin_client.get(LOGS_URL)).text
+
+    assert 'data-longtext="mono"' in html, "тело строки не читается целиком"
+    body = html.split('data-longtext="mono"')[1]
+    assert text[:40] in body
+
+
+@pytest.mark.asyncio
+async def test_a_worker_row_leads_to_the_logs_of_that_worker(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Из строки воркера один переход ведёт в логи ЭТОГО воркера (D-10).
+
+    «Живой лог» в самой строке не делается: он стал бы вторым независимым путём
+    чтения логов рядом с подразделом, а у остановленного по простою контейнера
+    живого лога нет вовсе — кнопка была бы мёртвой у большинства строк.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_fake_redis([])
+    ):
+        workers = (await admin_client.get("/admin/workers")).text
+
+    href = f"{LOGS_URL}?source={account.id}"
+    assert href in workers, "строки воркера в логи не ведут"
+
+    reader = AsyncMock(return_value=_log_window())
+    with patch("app.pages.admin.query_range", new=reader):
+        response = await admin_client.get(href)
+
+    assert response.status_code == 200
+    assert f'account_id="{account.id}"' in reader.await_args.args[0], (
+        "переход по ссылке из строки не выбрал источник этого воркера"
+    )
