@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from sqlalchemy import event
 
 from app.application.admin.incidents import (
     ACCOUNT_DOWN_STATUSES,
@@ -26,11 +27,13 @@ from app.application.admin.incidents import (
     FAILURE_SPIKE_MIN_TOTAL,
     FAILURE_SPIKE_RATIO,
     FAILURE_SPIKE_WINDOW_MIN,
+    INCIDENT_DESTINATIONS,
     INCIDENT_KIND_ACCOUNT_DOWN,
     INCIDENT_KIND_BEAT_SILENT,
     INCIDENT_KIND_FAILURE_SPIKE,
     INCIDENT_KIND_PAYMENT_STUCK,
     INCIDENT_KIND_WORKER_STUCK,
+    INCIDENT_LIST_CAP,
     WorkerLiveness,
     collect_incidents,
     detect_failure_spike,
@@ -155,7 +158,7 @@ async def _collect(session, liveness=None, *, now: datetime = NOW):
     Задача 3 меняет ответ со списка на структуру с признаком потолка; тесты
     признаков не обязаны об этом знать, поэтому форму разбирает один хелпер.
     """
-    return await collect_incidents(session, liveness or {}, now=now)
+    return (await collect_incidents(session, liveness or {}, now=now)).incidents
 
 
 def _kinds(incidents) -> list[str]:
@@ -522,3 +525,198 @@ def test_the_module_declares_five_kinds_and_not_four():
         INCIDENT_KIND_BEAT_SILENT,
     }
     assert len(kinds) == 5
+
+
+# ============================================================================
+# Задача 3: сборка блока — порядок, потолок, пустота и адрес «куда чинить»
+# ============================================================================
+
+
+def _select_statements(statements: list[str]) -> list[str]:
+    return [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+
+
+async def _collect_board(session, liveness=None, *, now: datetime = NOW):
+    return await collect_incidents(session, liveness or {}, now=now)
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_service_returns_an_empty_board(db_session):
+    """Пустота — ВАЛИДНЫЙ ответ, а не признак поломки сборки.
+
+    «Сейчас ничего не сломано» — это то, что блок обязан уметь сказать. Сборка,
+    падающая или молчащая на здоровом сервисе, делает блок неотличимым от
+    сломанного показа ровно в тот момент, когда всё в порядке.
+    """
+    await _seed_account(db_session, account_id=1, status="active")
+    board = await _collect_board(db_session)
+    assert board.incidents == ()
+    assert board.capped is False
+
+
+@pytest.mark.asyncio
+async def test_incidents_are_ordered_by_the_freshest_trace_first(db_session):
+    """Свежая авария важнее давней: порядок — по убыванию времени следа."""
+    await _seed_account(
+        db_session,
+        account_id=1,
+        status="disconnected",
+        last_synced_at=NOW - timedelta(hours=9),
+    )
+    await _seed_payment(
+        db_session,
+        payment_id=1,
+        created_at=NOW - timedelta(hours=PENDING_INTENT_TTL_HOURS + 2),
+    )
+    liveness = {
+        7: WorkerLiveness(
+            queue_depth=2, heartbeat_fresh=False, last_seen_at=NOW - timedelta(minutes=2)
+        )
+    }
+    board = await _collect_board(db_session, liveness)
+    moments = [incident.at for incident in board.incidents]
+    assert moments == sorted(moments, reverse=True)
+    assert board.incidents[0].kind == INCIDENT_KIND_WORKER_STUCK
+
+
+@pytest.mark.asyncio
+async def test_the_number_of_queries_does_not_grow_with_the_number_of_incidents(
+    db_session,
+):
+    """Блок живёт на «Обзоре», куда заходят В МОМЕНТ АВАРИИ (T-06-INC1).
+
+    Запрос на строку умножился бы ровно тогда, когда база и так под нагрузкой,
+    и стоимость показа росла бы вместе с тяжестью аварии.
+    """
+    sync_engine = db_session.bind.sync_engine
+
+    async def _count_queries(liveness) -> int:
+        statements: list[str] = []
+
+        def _record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        event.listen(sync_engine, "before_cursor_execute", _record)
+        try:
+            await _collect_board(db_session, liveness)
+        finally:
+            event.remove(sync_engine, "before_cursor_execute", _record)
+        return len(_select_statements(statements))
+
+    await _seed_account(
+        db_session,
+        account_id=1,
+        status="disconnected",
+        last_synced_at=NOW - timedelta(hours=1),
+    )
+    await _seed_payment(
+        db_session,
+        payment_id=1,
+        created_at=NOW - timedelta(hours=PENDING_INTENT_TTL_HOURS + 1),
+    )
+    few = await _count_queries({})
+
+    for extra in range(2, 12):
+        await _seed_account(
+            db_session,
+            account_id=extra,
+            user_id=extra,
+            status="sync_failed",
+            last_synced_at=NOW - timedelta(hours=extra),
+        )
+        await _seed_payment(
+            db_session,
+            payment_id=extra,
+            user_id=extra,
+            created_at=NOW - timedelta(hours=PENDING_INTENT_TTL_HOURS + extra),
+        )
+    many = await _count_queries({})
+
+    board = await _collect_board(db_session)
+    assert len(board.incidents) > 2
+    assert few == many, f"запросов было {few}, стало {many}"
+
+
+@pytest.mark.asyncio
+async def test_the_cap_truncates_and_names_itself_in_its_own_field(db_session):
+    """Сработавший потолок ОБЯЗАН НАЗЫВАТЬ СЕБЯ — правило проекта.
+
+    Молча короткий перечень читается как «других инцидентов нет», то есть как
+    ответ на вопрос, ради которого администратор в блок и смотрит. Признак
+    срабатывания — ОТДЕЛЬНОЕ поле, а не вывод из длины перечня: длина, равная
+    потолку, случайно совпасть может, а поле — нет.
+    """
+    for number in range(1, INCIDENT_LIST_CAP + 5):
+        await _seed_payment(
+            db_session,
+            payment_id=number,
+            user_id=number,
+            created_at=NOW - timedelta(hours=PENDING_INTENT_TTL_HOURS + number),
+        )
+    board = await _collect_board(db_session)
+    assert len(board.incidents) == INCIDENT_LIST_CAP
+    assert board.capped is True
+
+
+@pytest.mark.asyncio
+async def test_every_incident_carries_a_destination_declared_for_its_kind(db_session):
+    """Строка без адреса сообщает об аварии и не говорит, что с ней делать (D-48)."""
+    await _seed_account(
+        db_session,
+        account_id=1,
+        status="disconnected",
+        last_synced_at=NOW - timedelta(hours=2),
+    )
+    await _seed_payment(
+        db_session,
+        payment_id=1,
+        created_at=NOW - timedelta(hours=PENDING_INTENT_TTL_HOURS + 1),
+    )
+    await _seed_schedule(
+        db_session,
+        schedule_id=1,
+        next_run_at=NOW - timedelta(seconds=BEAT_SILENT_OVERDUE_SEC + 60),
+    )
+    await _seed_send_logs(
+        db_session,
+        statuses=[STATUS_FAIL] * FAILURE_SPIKE_MIN_TOTAL,
+        sent_at=NOW - timedelta(minutes=5),
+    )
+    liveness = {
+        7: WorkerLiveness(queue_depth=1, heartbeat_fresh=False, last_seen_at=NOW)
+    }
+    board = await _collect_board(db_session, liveness)
+
+    assert set(INCIDENT_DESTINATIONS) == {
+        INCIDENT_KIND_WORKER_STUCK,
+        INCIDENT_KIND_ACCOUNT_DOWN,
+        INCIDENT_KIND_FAILURE_SPIKE,
+        INCIDENT_KIND_PAYMENT_STUCK,
+        INCIDENT_KIND_BEAT_SILENT,
+    }
+    assert {incident.kind for incident in board.incidents} == set(INCIDENT_DESTINATIONS)
+    for incident in board.incidents:
+        assert incident.href
+        assert incident.href.startswith(INCIDENT_DESTINATIONS[incident.kind])
+
+
+@pytest.mark.asyncio
+async def test_no_recovered_row_is_ever_returned(db_session):
+    """Зелёных строк «восстановлен» нет ни в каком виде (D-46).
+
+    Восстановление — СОБЫТИЕ, а не состояние: чтобы его показать, понадобилась бы
+    история, то есть отклонённая трижды таблица. Аккаунт, вернувшийся в рабочее
+    состояние, обязан исчезнуть из блока молча, а не оставить зелёную строку.
+    """
+    await _seed_account(db_session, account_id=1, status="active")
+    await _seed_send_logs(
+        db_session,
+        statuses=[STATUS_ACCOUNT_DISCONNECTED],
+        sent_at=NOW - timedelta(minutes=30),
+    )
+    board = await _collect_board(db_session)
+    assert board.incidents == ()
+
+    source = INCIDENTS_MODULE.read_text(encoding="utf-8").lower()
+    for token in ("recovered", "restored", "восстановлен"):
+        assert f'"{token}' not in source and f"'{token}" not in source
