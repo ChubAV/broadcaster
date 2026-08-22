@@ -1912,7 +1912,16 @@ async def test_admin_no_utility_classes(
 ):
     await _seed_group_info(db_session)
 
-    for url in ("/admin", "/admin/users", "/admin/groups-info"):
+    # Четыре новых подраздела дописаны планом 06-01 вместе с их маршрутами.
+    for url in (
+        "/admin",
+        "/admin/users",
+        "/admin/workers",
+        "/admin/queue",
+        "/admin/logs",
+        "/admin/payments",
+        "/admin/groups-info",
+    ):
         response = await admin_client.get(url)
         assert response.status_code == 200, url
         for marker in UTILITY_MARKERS:
@@ -3359,6 +3368,9 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     "billing/includes/payment_row.html": (
         "макрос строки внутри объединения billing/balance.html"
     ),
+    "admin/includes/worker_row.html": (
+        "макрос строки внутри объединения admin/workers.html"
+    ),
     # groups/includes/group_row.html ВЫШЕЛ из перечня планом 03-08 вместе с
     # самим шаблоном: глобальный раздел снесён (D-01). Строка группы на экране
     # аккаунта его место не занимает — она КАРТОЧНАЯ и примитив строки-таблицы
@@ -3443,6 +3455,13 @@ ROWHEAD_PAGES = (
         "admin/user_detail.html", "/admin/users/{user_id}", True, "admin_user_detail",
         frozenset({"Аккаунт"}),
     ),
+    # Подраздел «Воркеры» (план 06-01). Разность ПУСТА: все четыре колонки
+    # подписаны — на 860px шапка скрывается, и «в работе» без названия колонки
+    # был бы неотличим от состояния сессии, стоящего рядом.
+    RowheadPage(
+        "admin/workers.html", "/admin/workers", True, "admin_workers",
+        frozenset(),
+    ),
     # ⚠️ НАБЛЮДЕНИЕ T-13-09 ПО ЭТОЙ СТРАНИЦЕ ЗАКРЫТО — И ЗАКРЫТО СНОСОМ, А НЕ
     # ДОПИСЫВАНИЕМ ПОДПИСЕЙ. Колонки «Тип» и «Описание» принадлежали истории
     # операций по балансу сообщений; журнал снят планом 05.1-05 вместе с самим
@@ -3483,6 +3502,12 @@ async def _seed_rowhead_page(db: AsyncSession, seed: str) -> None:
         pass  # обычный пользователь и админ зарегистрированы фикстурами
     elif seed == "admin_user_detail":
         await _seed_account(db, type_="max")
+    elif seed == "admin_workers":
+        # ТЕЛЕГРАМ-АККАУНТ ВЫБРАН НАМЕРЕННО: у него нет отдельного воркера, и
+        # сводка живости не делает ни одного обращения к Redis. Посеяв WA или
+        # MAX, обход по выдаче начал бы стучаться в брокер, которого в суите
+        # нет, — то есть проверка вёрстки зависела бы от внешней службы.
+        await _seed_account(db, type_="tg_user")
     elif seed == "billing":
         # Шапку колонок раздела рисует ЖУРНАЛ ПЛАТЕЖЕЙ: история операций по
         # балансу сообщений снята планом 05.1-05, и посев операцией оставлял бы
@@ -3544,8 +3569,10 @@ def test_rowhead_pages_all_have_a_parametrization_entry():
     # (D-01), план 04-05 снял шапку с дашборда вместе с блоком последних
     # отправок. Уменьшение объявленного числа — признание СОЗНАТЕЛЬНОГО снятия;
     # молчаливое исчезновение шаблона с шапкой по-прежнему краснеет.
-    assert len(declared) == 6, (
-        f"ожидалось шесть шаблонов с шапкой колонок, объявлено {len(declared)}: "
+    #
+    # ШЕСТЬ → СЕМЬ: план 06-01 завёл подраздел «Воркеры» со своей шапкой.
+    assert len(declared) == 7, (
+        f"ожидалось семь шаблонов с шапкой колонок, объявлено {len(declared)}: "
         f"{sorted(declared)}"
     )
 
@@ -3573,8 +3600,12 @@ def test_row_templates_without_header_are_accounted_for():
     # billing/balance.html и там же проверяется на подписи. Изменение
     # объявленного числа — признание СОЗНАТЕЛЬНОГО шага; молчаливое появление
     # или исчезновение файла по-прежнему краснеет.
-    assert len(declared) == 6, (
-        f"ожидалось шесть таких шаблонов, объявлено {len(declared)}"
+    #
+    # ШЕСТЬ → СЕМЬ: план 06-01 добавил ОДИН файл первого класса — макрос строки
+    # воркера, чей исходник входит в объединение admin/workers.html и там же
+    # проверяется на подписи.
+    assert len(declared) == 7, (
+        f"ожидалось семь таких шаблонов, объявлено {len(declared)}"
     )
     # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
     # макрос row_open он не вызывает. Без второго условия разрешителя он выпал

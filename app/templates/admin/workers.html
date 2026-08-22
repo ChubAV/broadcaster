@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% from "components/table.html" import rowhead %}
+{% from "components/empty_state.html" import empty_state %}
+{% from "admin/includes/worker_row.html" import worker_row %}
+
+{% block title %}Воркеры — Broadcaster{% endblock %}
+
+{# Контракт «страница → шелл» (План 01): заголовок раздела рендерит шапка
+   шелла по active_page, собственного заголовка у подраздела нет. #}
+{% block page_title %}Воркеры{% endblock %}
+
+{% block content %}
+
+{% include "admin/includes/_tabs.html" %}
+
+{#- Раскладка приходит параметром cols в пользовательское свойство --cols:
+    своих классов подраздел в app.css не заводит. -#}
+{% set WORKER_COLS = 'minmax(180px,2.2fr) 148px 160px 120px' %}
+{% set WORKER_COLUMNS = ['Аккаунт', 'Сессия', 'Воркер', 'В очереди'] %}
+
+{#- ДВЕ КОЛОНКИ СОСТОЯНИЯ ПОДРЯД, И ЭТО РЕШЕНИЕ, А НЕ ИЗБЫТОК. «Сессия» —
+    состояние мессенджер-аккаунта из базы, «Воркер» — признак живости из Redis.
+    Контейнер с мёртвой сессией остаётся запущенным, поэтому один индикатор на
+    две величины врал бы про обе. Развёрнуто — в admin/includes/worker_row.html. -#}
+<div data-stack>
+  {% if rows %}
+  {{ rowhead(WORKER_COLUMNS, cols=WORKER_COLS) }}
+  {% for row in rows %}
+  {{ worker_row(row.account, row.state, WORKER_COLUMNS, WORKER_COLS) }}
+  {% endfor %}
+  {% else %}
+  {{ empty_state(
+      'Мессенджер-аккаунтов нет',
+      hint='Воркеры поднимаются под подключённые аккаунты: пока их нет, поднимать нечего.'
+  ) }}
+  {% endif %}
+</div>
+
+{% endblock %}

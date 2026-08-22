@@ -1,0 +1,62 @@
+{#- Строка воркера аккаунта.
+
+    ⚠️ ДВЕ КОЛОНКИ СОСТОЯНИЯ, А НЕ ОДНА, И СВЕСТИ ИХ НЕЛЬЗЯ. «Сессия» — это
+    `MessengerAccount.status` из базы: жива ли сессия мессенджера. «Воркер» —
+    признак живости из Redis: работает ли контейнер, который эту сессию несёт.
+    Величины независимы: контейнер с мёртвой сессией остаётся ЗАПУЩЕННЫМ, а
+    свежая сессия на диске переживает смерть контейнера. Один бейдж на две
+    величины врал бы про обе — и врал бы именно в аварии, где они расходятся.
+
+    ⚠️ «ПРОСТАИВАЕТ» — ЭТО НОРМА, А НЕ ОТКАЗ, И ЦВЕТ ЗДЕСЬ НЕСУЩИЙ (D-08).
+    Воркер самоубивается через 300 секунд простоя, а менеджер контейнеров
+    поднимает его ТОЛЬКО при непустой очереди: отсутствие контейнера при пустой
+    очереди — штатное состояние выключенного за ненадобностью воркера. Покрасив
+    его красным, подраздел приучил бы администратора звонить по каждому
+    «офлайн» — и через неделю не смотреть сюда вовсе, включая настоящий отказ.
+    Поэтому «простаивает» нейтрален, а тревожен ровно «отключён»: работа в
+    очереди есть, а делать её некому.
+
+    ⚠️ «НЕИЗВЕСТНО» НЕ РАВНО «ОТКЛЮЧЁН». Пустое состояние здесь означает
+    сломанный НАБЛЮДАТЕЛЬ (Redis недоступен), а не сломанный воркер: покажи мы
+    отказ, администратор пошёл бы чинить исправное. -#}
+{%- from "components/table.html" import cell -%}
+{%- from "components/badge.html" import badge -%}
+{%- from "components/mono.html" import mono -%}
+{%- from "includes/messenger_icon.html" import messenger_icon -%}
+
+{%- set WORKER_LABELS = {
+      'online': ('в работе', 'success'),
+      'idle': ('простаивает', 'neutral'),
+      'offline': ('отключён', 'danger'),
+      'unknown': ('неизвестно', 'warning'),
+    } -%}
+{%- set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} -%}
+
+{%- macro worker_row(account, state, columns, cols) -%}
+<div data-row style="--cols: {{ cols }}">
+  {%- call cell(grow=true, label=columns[0]) %}
+    {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
+    <span data-grow>{{ MESSENGER_LABELS.get(account.type, account.type) }}</span>{{ mono('#' ~ account.id) }}
+  {%- endcall %}
+  {%- call cell(label=columns[1]) %}
+    {%- if account.status == 'active' %}{{ badge('Активно', 'success') }}
+    {%- elif account.status == 'disconnected' %}{{ badge('Отключён', 'neutral') }}
+    {%- else %}{{ badge(account.status, 'warning') }}{% endif -%}
+  {%- endcall %}
+  {%- call cell(label=columns[2]) %}
+    {%- if state %}
+      {%- set entry = WORKER_LABELS.get(state.worker, ('неизвестно', 'warning')) -%}
+      {{- badge(entry[0], entry[1]) -}}
+    {%- else -%}
+      {{- mono('—', title='У этого канала отдельного воркера нет — величина ещё не определена') -}}
+    {%- endif -%}
+  {%- endcall %}
+  {%- call cell(label=columns[3]) %}
+    {%- if state and state.queue_depth is not none -%}
+      {{- mono(state.queue_depth) -}}
+    {%- else -%}
+      {{- mono('—') -}}
+    {%- endif -%}
+  {%- endcall %}
+</div>
+{%- endmacro -%}
