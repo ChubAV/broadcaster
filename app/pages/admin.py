@@ -30,7 +30,14 @@ from app.models.subscription import Subscription
 from app.pages.common import templates
 from app.repositories.user import UserRepository
 from app.services.billing_cache import invalidate_access_cache
-from app.services.ops_state import worker_liveness
+from app.services.ops_state import (
+    INFRA_BEAT,
+    INFRA_WORKER_DEFAULT,
+    INFRA_WORKER_TELEGRAM,
+    infra_heartbeat_key,
+    infra_liveness,
+    worker_liveness,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -42,6 +49,21 @@ logger = structlog.get_logger(__name__)
 # необратимо, а тумблер нет.
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# ВТОРОЙ РОУТЕР МОДУЛЯ — ПАРШАЛЫ ОПРОСА, ВКЛЮЧАЕМЫЕ МИМО СТРАНИЧНОЙ СБОРКИ.
+#
+# ⚠️ ОН ОБЪЯВЛЕН ЗДЕСЬ, А ВКЛЮЧАЕТСЯ В `app/main.py` РЯДОМ С `dashboard_feed`.
+# Причина ровно та же, по которой живая лента Фазы 4 вынесена из страничного
+# роутера: `app/pages/__init__.py` вешает `load_shell_context` на КАЖДЫЙ свой
+# маршрут, а та делает четыре обращения к базе. Опрос бессрочен (D-12), поэтому
+# эта цена умножалась бы на число открытых вкладок и делилась на интервал
+# опроса — то есть платилась бы вечно за то, чего паршал не рисует.
+#
+# ⚠️ ЕГО ОТСУТСТВИЕ В СТРАНИЧНОЙ СБОРКЕ НЕ ДЕЛАЕТ ЕГО ОТКРЫТЫМ. Права
+# администратора висят на самом обработчике, а решение «закрывает ли его
+# истёкший доступ» записано ВТОРЫМ местом в `tests/test_pages/test_access_gate.py`
+# — молчаливое добавление роутера в сборку этот тест роняет по построению.
+partials_router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 # ПОДРАЗДЕЛ АДМИН-ПАНЕЛИ ЕСТЬ МАРШРУТ, А НЕ СОСТОЯНИЕ НА ОДНОМ ЭКРАНЕ (D-01).
@@ -62,6 +84,55 @@ ADMIN_TABS: tuple[dict[str, str], ...] = (
     {"key": "queue", "label": "Очередь", "href": "/admin/queue"},
     {"key": "logs", "label": "Логи", "href": "/admin/logs"},
     {"key": "payments", "label": "Платежи", "href": "/admin/payments"},
+)
+
+
+# ИНФРАСТРУКТУРНЫЙ БЛОК ПОДРАЗДЕЛА «ВОРКЕРЫ» (D-09, источник признака — D-52).
+#
+# ⚠️ ПЕРЕЧЕНЬ СЛУЖБ ОБЪЯВЛЕН ОДИН РАЗ, а имена служб приходят из сервиса
+# оперативного состояния: вторая копия имён разъехалась бы с ключами Redis
+# молча — блок продолжал бы рисовать три строки, читая ключи, которых никто не
+# пишет, и показывал бы «отключён» на исправных службах.
+#
+# ⚠️ `source` — ЭТО ТО, ЧТО ВИДИТ АДМИНИСТРАТОР В АВАРИИ. Вердикт без указания,
+# ЧЕМ он получен, заставляет верить на слово; названный ключ позволяет
+# проверить его руками за одну команду. Поэтому подпись источника печатается, а
+# не живёт комментарием в исходнике.
+INFRA_SERVICES: tuple[dict[str, str], ...] = (
+    {
+        "key": INFRA_BEAT,
+        "label": "Планировщик расписаний",
+        "source": "Процесс celery-beat обновляет этот ключ раз в 30 секунд",
+    },
+    {
+        "key": INFRA_WORKER_TELEGRAM,
+        "label": "Воркер Telegram",
+        "source": "Процесс, разбирающий очередь telegram, обновляет этот ключ раз в 30 секунд",
+    },
+    {
+        "key": INFRA_WORKER_DEFAULT,
+        "label": "Воркер общих задач",
+        "source": "Процесс, разбирающий очередь default, обновляет этот ключ раз в 30 секунд",
+    },
+)
+
+# ИНТЕРВАЛ ОПРОСА ПОДРАЗДЕЛА (D-12). Живёт константой модуля, а не литералом в
+# разметке: адрес паршала и его частота объявлены рядом, и выписанные порознь
+# они разъехались бы молча — так же, как это уже закрыто у живой ленты
+# (`FEED_POLL_SECONDS`, `app/pages/dashboard_feed.py`).
+#
+# ⚠️ АВТОСТОПА НЕТ НАМЕРЕННО, И МОТИВ ОТЛИЧАЕТСЯ ОТ ЖИВОЙ ЛЕНТЫ. Администратор
+# открывает этот подраздел В МОМЕНТ АВАРИИ: замершее состояние здесь вреднее,
+# чем на дашборде, потому что решение о перезапуске принимается по нему.
+WORKERS_POLL_SEC = 20
+
+# Подписи каналов нижнего блока. Порядок несущий: telegram первым, потому что
+# его строка — единственная, чей воркер общий, и объяснение стоит выше строк, к
+# которым оно не относится.
+WORKER_CHANNELS: tuple[dict[str, str], ...] = (
+    {"key": "tg_user", "label": "Telegram"},
+    {"key": "wa", "label": "WhatsApp"},
+    {"key": "max", "label": "MAX"},
 )
 
 
@@ -261,6 +332,51 @@ async def admin_workers(
     объяснение «почему вызова нет» иначе роняло бы проверку, утверждающую, что
     вызова нет.
     """
+    return templates.TemplateResponse(
+        "admin/workers.html",
+        {**_admin_context(request, admin, "workers"), **await _workers_view(db)},
+    )
+
+
+@partials_router.get("/workers/partial", response_class=HTMLResponse)
+async def admin_workers_partial(
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Очередной снимок обоих блоков подраздела «Воркеры» (D-12).
+
+    ⚠️ ЖИВЁТ ВНЕ СТРАНИЧНОГО РОУТЕРА, И ЭТО НЕ ОФОРМЛЕНИЕ. Страничный роутер
+    несёт зависимость `load_shell_context` на КАЖДОМ своём маршруте, а та
+    делает четыре обращения к базе ради шелла. Для страницы это правильная цена
+    — шелл рисуется. Для паршала цена не разовая: опрос БЕССРОЧЕН, поэтому
+    четыре запроса умножились бы на число открытых вкладок и поделились на
+    двадцать секунд. Тот же довод и то же решение, что у живой ленты Фазы 4
+    (`app/pages/dashboard_feed.py`).
+
+    ⚠️ РОУТЕР БЕЗ ЗАВИСИМОСТИ ШЕЛЛА — ЭТО РОУТЕР БЕЗ ЗАВИСИМОСТИ ШЕЛЛА, А НЕ
+    РОУТЕР БЕЗ ПРОВЕРКИ ПРАВ (T-06-PART). Права администратора проверяет
+    параметр этого обработчика, и постороннему он отвечает 403 — утверждение
+    снято тестом, а не намерением.
+    """
+    return templates.TemplateResponse(
+        "admin/includes/workers_partial.html",
+        {"request": request, "user": admin, **await _workers_view(db)},
+    )
+
+
+async def _workers_view(db: AsyncSession) -> dict:
+    """Оба блока подраздела «Воркеры» — общий контекст страницы и её паршала.
+
+    ⚠️ ОДИН СБОРЩИК НА ДВА ВХОДА. Первичная отрисовка и обновление обязаны
+    показывать ОДНО И ТО ЖЕ: разъехавшись, они дали бы экран, который после
+    первого же тика меняет содержание без изменения состояния мира — и
+    администратор в аварии перестал бы верить обоим.
+
+    Запрос дёшев по построению: живость инфраструктуры — один конвейер Redis,
+    живость воркеров аккаунтов — второй, состояния аккаунтов — один `SELECT`.
+    Это и есть цена, объявленная принятой в реестре угроз (T-06-POLL).
+    """
     accounts = (
         (
             await db.execute(
@@ -271,19 +387,84 @@ async def admin_workers(
         .all()
     )
 
+    infra_states = await infra_liveness()
     wa_ids = [a.id for a in accounts if a.type == "wa"]
     max_ids = [a.id for a in accounts if a.type == "max"]
     liveness = await worker_liveness(wa_ids=wa_ids, max_ids=max_ids)
 
-    # У телеграм-аккаунта отдельного воркера нет: величина в колонке «Воркер»
-    # ещё НЕ ОПРЕДЕЛЕНА, и строка печатает прочерк вместо выдуманного бейджа.
-    # Честную подпись назначает план 06-05 чекпойнтом владельца.
-    rows = [{"account": a, "state": liveness.get(a.id)} for a in accounts]
+    # ⚠️ У TELEGRAM-СТРОКИ КОЛОНКА «ВОРКЕР» ЧИТАЕТ ЖИВОСТЬ ОБЩЕГО ВОРКЕРА
+    # КАНАЛА (D-52). Прежняя редакция D-09 требовала здесь константу «в пуле
+    # app»; она отменена решением владельца, потому что истинна безусловно —
+    # то есть выглядит измеренным состоянием, ничего не измеряя. Задачи канала
+    # уходят в очередь telegram, и разбирает её именно эта служба, поэтому
+    # подпись отвечает на вопрос, ради которого в подраздел заходят: есть ли
+    # кому забрать мою задачу.
+    #
+    # ⚠️ ГЛУБИНА ОЧЕРЕДИ У TELEGRAM-СТРОКИ ОТСУТСТВУЕТ ПО ПРИЧИНЕ, А НЕ ПО
+    # НЕУДАЧЕ: очередь `telegram` ОДНА на все telegram-аккаунты. Напечатать в
+    # каждой строке общее число значило бы выдать его за величину аккаунта.
+    telegram_state = {
+        "worker": infra_states[INFRA_WORKER_TELEGRAM],
+        "queue_depth": None,
+        "queue_scope": "shared",
+        "worker_hint": (
+            "Своего воркера у канала нет: задачи Telegram разбирает общий "
+            "celery-воркер очереди telegram — состояние взято у него"
+        ),
+    }
 
-    return templates.TemplateResponse(
-        "admin/workers.html",
-        {**_admin_context(request, admin, "workers"), "rows": rows},
-    )
+    rows = [
+        {
+            "account": account,
+            "state": (
+                telegram_state
+                if account.type == "tg_user"
+                else liveness.get(account.id)
+            ),
+        }
+        for account in accounts
+    ]
+
+    groups = [
+        {
+            "label": channel["label"],
+            "rows": [row for row in rows if row["account"].type == channel["key"]],
+        }
+        for channel in WORKER_CHANNELS
+    ]
+    # Аккаунт неизвестного канала не исчезает молча: он попадает в собственную
+    # группу с именем своего типа. Тихая пропажа строки была бы худшим исходом,
+    # чем незнакомая подпись — администратор не узнал бы, что аккаунт вообще
+    # есть.
+    known = {channel["key"] for channel in WORKER_CHANNELS}
+    for account_type in dict.fromkeys(
+        row["account"].type for row in rows if row["account"].type not in known
+    ):
+        groups.append(
+            {
+                "label": account_type,
+                "rows": [
+                    row for row in rows if row["account"].type == account_type
+                ],
+            }
+        )
+
+    infra = [
+        {
+            "label": service["label"],
+            "redis_key": infra_heartbeat_key(service["key"]),
+            "source": service["source"],
+            "state": infra_states[service["key"]],
+        }
+        for service in INFRA_SERVICES
+    ]
+
+    return {
+        "infra": infra,
+        "groups": groups,
+        "rows": rows,
+        "workers_poll_sec": WORKERS_POLL_SEC,
+    }
 
 
 @router.get("/queue", response_class=HTMLResponse)

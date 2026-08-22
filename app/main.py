@@ -25,6 +25,7 @@ from app.routes.schedules import router as schedules_router
 from app.routes.history import router as history_router
 from app.routes.billing import router as billing_router
 from app.pages.dashboard_feed import router as dashboard_feed_router
+from app.pages.admin import partials_router as admin_partials_router
 from app.pages import router as pages_router
 
 logger = structlog.get_logger(__name__)
@@ -129,6 +130,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # оправдывает. Что просроченный человек видит СВОЮ ленту и не видит ничего
     # чужого, — допущенное следствие, а не упущение.
     app.include_router(dashboard_feed_router)
+    # ПАРШАЛ ОПРОСА ПОДРАЗДЕЛА «ВОРКЕРЫ» (D-12) — ВНЕ СТРАНИЧНОЙ СБОРКИ ПО ТОМУ
+    # ЖЕ ДОВОДУ, ЧТО ЖИВАЯ ЛЕНТА ВЫШЕ, и по нему же — БЕЗ гейта оплаченного
+    # доступа. Во-первых, админка целиком стоит в «не закрывается никогда»
+    # (`OPEN_ROUTERS`): администратор без оплаченного доступа обязан входить в
+    # админку, иначе чинить аварию некому. Во-вторых, права администратора
+    # висят на самом обработчике, поэтому открытым для постороннего маршрут не
+    # становится — он отвечает 403. В-третьих, опрос бессрочен, и запрос за
+    # вердиктом доступа умножался бы на число открытых вкладок каждые двадцать
+    # секунд ради ответа, который для админки заранее известен.
+    app.include_router(admin_partials_router)
     app.include_router(pages_router)
 
     @app.exception_handler(NotFoundError)

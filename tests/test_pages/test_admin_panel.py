@@ -103,7 +103,13 @@ def _row_markup(html: str, account_id: int) -> str:
         f"строка аккаунта #{account_id} найдена {len(chunks)} раз — "
         "утверждение адресовать нечему"
     )
-    return chunks[0]
+    # Обрезаем по ЗАКРЫВАЮЩЕМУ тегу строки, а не по началу следующей: у
+    # ПОСЛЕДНЕЙ строки следующей нет, и без этой обрезки в «разметку строки»
+    # попал бы весь хвост документа — вместе с закрывающими тегами шелла,
+    # которых у паршала нет. Сравнение страницы с паршалом тогда падало бы на
+    # разнице, к строке не относящейся. Ячейки вложенных `div` не содержат,
+    # поэтому первый `</div>` и есть конец строки.
+    return chunks[0][: chunks[0].index("</div>")]
 
 
 def _row_cell(html: str, account_id: int, index: int) -> str:
@@ -538,14 +544,15 @@ async def test_lower_block_groups_accounts_by_channel(
 
 
 @pytest.mark.asyncio
-async def test_workers_partial_answers_the_admin_and_refuses_the_stranger(
-    admin_client: AsyncClient, authed_client: AsyncClient, db_session: AsyncSession
+async def test_workers_partial_answers_the_admin_with_the_same_rows(
+    admin_client: AsyncClient, db_session: AsyncSession
 ):
-    """Тест 6: паршал — 200 администратору, 403 постороннему (T-06-PART).
+    """Тест 6а: паршал отвечает администратору ТЕМИ ЖЕ строками, что страница.
 
-    Паршал живёт ВНЕ страничного пути и зависимостей его не наследует, поэтому
-    проверку прав он держит СВОЮ. Роутер без зависимости шелла — это роутер без
-    зависимости шелла, а не роутер без проверки владельца.
+    ⚠️ ОТКАЗ ПОСТОРОННЕМУ ПРОВЕРЯЕТСЯ ОТДЕЛЬНЫМ ТЕСТОМ, И ЭТО НЕ ДРОБЛЕНИЕ РАДИ
+    дробления: `admin_client` и `authed_client` — ОДИН И ТОТ ЖЕ объект клиента с
+    разными cookie входа, и запрошенные в одном тесте они затирают друг друга.
+    Утверждение про 403 в таком тесте проверяло бы не права, а порядок фикстур.
     """
     account = await _seed_account(db_session, account_type="wa")
     fresh = str(int(time.time() * 1000))
@@ -561,11 +568,20 @@ async def test_workers_partial_answers_the_admin_and_refuses_the_stranger(
         partial = await admin_client.get("/admin/workers/partial")
 
     assert partial.status_code == 200
-    assert (await authed_client.get("/admin/workers/partial")).status_code == 403
-
     # Те же строки, что первичная отрисовка: паршал и есть первичная отрисовка.
     assert f">#{account.id}<" in partial.text
     assert _row_markup(page.text, account.id) == _row_markup(partial.text, account.id)
+
+
+@pytest.mark.asyncio
+async def test_workers_partial_refuses_the_stranger(authed_client: AsyncClient):
+    """Тест 6б: паршал отвечает 403 постороннему (T-06-PART).
+
+    Роутер без зависимости шелла — это роутер без зависимости ШЕЛЛА, а не
+    роутер без проверки прав. Паршал живёт вне страничной сборки, поэтому
+    проверку администратора он держит СВОЮ, на самом обработчике.
+    """
+    assert (await authed_client.get("/admin/workers/partial")).status_code == 403
 
 
 @pytest.mark.asyncio

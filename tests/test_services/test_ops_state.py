@@ -191,6 +191,35 @@ async def test_empty_account_lists_do_not_touch_redis():
 
 # ---- Инфраструктурный heartbeat: писатель и читатель одного контракта (D-52) ----
 #
+# ⚠️ ПИСАТЕЛЬ ИМПОРТИРУЕТСЯ ЧЕРЕЗ ФИКСТУРУ, А НЕ СВЕРХУ ФАЙЛА, И ЭТО НЕ СТИЛЬ.
+# `app/worker/celery_app.py` строит приложение Celery НА УРОВНЕ МОДУЛЯ, а оно
+# читает настройки из файла окружения. Файла окружения в суите нет намеренно:
+# тесты обязаны идти на чистой машине. Импорт сверху уронил бы ВЕСЬ файл — в том
+# числе двенадцать утверждений про читателя, к писателю отношения не имеющих.
+
+
+@pytest.fixture
+def celery_app_module():
+    """Модуль приложения Celery, импортируемый без файла окружения.
+
+    Два обязательных поля настроек назначаются заглушками ТОЛЬКО ради импорта:
+    предмет проверки — форма ключа heartbeat, его единица и срок жизни, и ни
+    адрес базы, ни подпись сессий в них не участвуют. `setdefault` выбран
+    вместо присваивания намеренно: настоящее окружение, если оно есть,
+    перетирать нельзя.
+    """
+    import os
+
+    from app.config import get_settings
+
+    os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    os.environ.setdefault("SECRET_KEY", "import-only-not-a-real-secret")
+    get_settings.cache_clear()
+
+    import app.worker.celery_app as module
+
+    return module
+#
 # ⚠️ ПИСАТЕЛЬ И ЧИТАТЕЛЬ ПРОВЕРЯЮТСЯ В ОДНОМ ФАЙЛЕ НАМЕРЕННО. Ключ пишет
 # приложение Celery (`app/worker/celery_app.py`), читает веб-процесс
 # (`app/services/ops_state.py`), и разъехаться они могут молча: писатель
@@ -199,7 +228,7 @@ async def test_empty_account_lists_do_not_touch_redis():
 # утверждение, читающее ОБЕ стороны сразу.
 
 
-def test_infra_ttl_is_the_same_number_the_reader_calls_stale():
+def test_infra_ttl_is_the_same_number_the_reader_calls_stale(celery_app_module):
     """Срок жизни ключа равен порогу свежести — второго числа не заведено.
 
     ⚠️ ЭТО ЗАПРЕТ, А НЕ СОВПАДЕНИЕ. Писатель ставит ключу TTL, читатель
@@ -207,10 +236,8 @@ def test_infra_ttl_is_the_same_number_the_reader_calls_stale():
     разных ответа на один вопрос «жив ли процесс»: ключ, переживший порог,
     читался бы мёртвым, а ключ, умерший раньше порога, — неизвестным.
     """
-    from app.worker.celery_app import (
-        INFRA_HEARTBEAT_INTERVAL_SEC,
-        INFRA_HEARTBEAT_TTL_SEC,
-    )
+    INFRA_HEARTBEAT_INTERVAL_SEC = celery_app_module.INFRA_HEARTBEAT_INTERVAL_SEC
+    INFRA_HEARTBEAT_TTL_SEC = celery_app_module.INFRA_HEARTBEAT_TTL_SEC
 
     assert INFRA_HEARTBEAT_TTL_SEC == INFRA_HEARTBEAT_INTERVAL_SEC * 3, (
         "форма срока жизни разошлась с образцом MAX-воркера "
@@ -222,15 +249,18 @@ def test_infra_ttl_is_the_same_number_the_reader_calls_stale():
     )
 
 
-def test_infra_role_comes_from_the_consumed_queue_not_from_a_container_name():
+def test_infra_role_comes_from_the_consumed_queue_not_from_a_container_name(
+    celery_app_module,
+):
     """Роль celery-воркера выводится из ВЫБРАННОЙ очереди (D-52).
 
     Имя контейнера — свойство развёртывания и переименовывается в
     docker-compose.yml без единой правки кода; очередь — свойство самого
     процесса, объявленное его же командой запуска (`--queues=telegram`).
     """
-    from app.worker.celery_app import _infra_service_for_queues
     from app.services.ops_state import INFRA_WORKER_DEFAULT, INFRA_WORKER_TELEGRAM
+
+    _infra_service_for_queues = celery_app_module._infra_service_for_queues
 
     assert _infra_service_for_queues(["telegram"]) == INFRA_WORKER_TELEGRAM
     assert _infra_service_for_queues(["default"]) == INFRA_WORKER_DEFAULT
@@ -238,7 +268,9 @@ def test_infra_role_comes_from_the_consumed_queue_not_from_a_container_name():
     assert _infra_service_for_queues([]) == INFRA_WORKER_DEFAULT
 
 
-def test_infra_heartbeat_writer_puts_a_millisecond_epoch_under_the_read_key():
+def test_infra_heartbeat_writer_puts_a_millisecond_epoch_under_the_read_key(
+    celery_app_module,
+):
     """Писатель кладёт эпоху в МИЛЛИСЕКУНДАХ по тому ключу, который читают.
 
     Единица не декоративна: `_is_fresh` делит на миллисекунды, и секунды под
@@ -246,7 +278,9 @@ def test_infra_heartbeat_writer_puts_a_millisecond_epoch_under_the_read_key():
     «отключён» на живой службе.
     """
     from app.services.ops_state import INFRA_WORKER_TELEGRAM, infra_heartbeat_key
-    from app.worker.celery_app import INFRA_HEARTBEAT_TTL_SEC, _write_infra_heartbeat
+
+    INFRA_HEARTBEAT_TTL_SEC = celery_app_module.INFRA_HEARTBEAT_TTL_SEC
+    _write_infra_heartbeat = celery_app_module._write_infra_heartbeat
 
     client = MagicMock()
     _write_infra_heartbeat(client, INFRA_WORKER_TELEGRAM)
