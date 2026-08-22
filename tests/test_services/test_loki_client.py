@@ -408,7 +408,7 @@ from app.services.loki_client import (  # noqa: E402
     build_logql,
     clean_level,
     clean_source,
-    window_for,
+    clean_window,
 )
 
 
@@ -578,6 +578,7 @@ def test_a_window_outside_the_declared_dictionary_falls_back_to_one_hour():
     """
     assert set(LOG_WINDOWS) == {"15m", "1h", "24h"}
     assert LOG_WINDOW_DEFAULT == "1h"
-    assert window_for("nope") == LOG_WINDOWS[LOG_WINDOW_DEFAULT].delta
-    assert window_for(None) == LOG_WINDOWS[LOG_WINDOW_DEFAULT].delta
-    assert window_for("15m") == LOG_WINDOWS["15m"].delta
+    assert clean_window("nope") == LOG_WINDOW_DEFAULT
+    assert clean_window(None) == LOG_WINDOW_DEFAULT
+    assert clean_window("15m") == "15m"
+    assert LOG_WINDOWS[LOG_WINDOW_DEFAULT].delta == timedelta(hours=1)

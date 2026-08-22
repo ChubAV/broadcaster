@@ -273,11 +273,6 @@ def clean_window(value: str | None) -> str:
     return LOG_WINDOW_DEFAULT
 
 
-def window_for(value: str | None) -> timedelta:
-    """Длительность окна по значению из адреса."""
-    return LOG_WINDOWS[clean_window(value)].delta
-
-
 def _escape_line_filter(text: str) -> str:
     """Экранирование текста поиска для фильтра строки.
 
