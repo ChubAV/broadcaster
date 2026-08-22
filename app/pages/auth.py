@@ -2,7 +2,7 @@ import random
 import structlog
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +31,50 @@ CODE_TTL_MINUTES = 10
 CODE_MAX_ATTEMPTS = 5
 CODE_RESEND_COOLDOWN_SECONDS = 60
 
+SESSION_COOKIE_NAME = "access_token"
+
+
+def _session_cookie_attrs(settings: Settings) -> dict:
+    """ЕДИНСТВЕННОЕ объявление набора атрибутов cookie сессии.
+
+    ⚠️ НАБОР ОБЪЯВЛЕН ОДИН РАЗ, И ЭТО ПРЕДМЕТ, А НЕ ЭКОНОМИЯ ПЕЧАТИ (Pitfall 9).
+    Браузер сопоставляет cookie установки и снятия по имени, пути и домену, а
+    `secure` определяет, уйдёт ли она вообще. Пока набор объявлялся отдельно у
+    каждой точки, снятие брало умолчания `delete_cookie` — без `samesite` и без
+    `secure`, — и стоило установке получить признак транспортной защиты, как
+    выход переставал снимать cookie: она переживала выход. На равенство этих
+    наборов встаёт и перевыпуск токена при возврате из имперсонации (план
+    06-12): он ПЕРЕЗАПИСЫВАЕТ cookie тем же набором, а не заводит вторую.
+
+    ⚠️ СРОКА ЖИЗНИ У COOKIE НЕТ НАМЕРЕННО. Она сеансовая, такой была до правки
+    признака `secure`, и этот набор её таковой оставляет: `max_age`/`expires`
+    здесь появиться не должны молча — это отдельное решение о том, переживает
+    ли вход закрытие браузера.
+
+    Признак транспортной защиты читается из НАСТРОЙКИ, а не из литерала
+    (CR-03, Ф-9): прод-nginx сам уходит в HTTP-only режим при отсутствии
+    сертификата, и невыключаемый признак в этот момент отменил бы вход целиком.
+    Разбор умолчания — в `app/config.py` у поля `cookie_secure`.
+    """
+    return {
+        "path": "/",
+        "httponly": True,
+        "samesite": "lax",
+        "secure": settings.cookie_secure,
+    }
+
+
+def set_session_cookie(response: Response, token: str, settings: Settings) -> None:
+    """Поставить cookie сессии — единственная точка установки в модуле."""
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME, value=token, **_session_cookie_attrs(settings)
+    )
+
+
+def clear_session_cookie(response: Response, settings: Settings) -> None:
+    """Снять cookie сессии ТЕМ ЖЕ набором атрибутов, каким она поставлена."""
+    response.delete_cookie(key=SESSION_COOKIE_NAME, **_session_cookie_attrs(settings))
+
 
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
@@ -53,7 +97,7 @@ async def login_submit(
         )
     token = create_access_token(user.id, settings.secret_key)
     response = RedirectResponse(url="/dashboard", status_code=302)
-    response.set_cookie(key="access_token", value=token, httponly=True, samesite="lax")
+    set_session_cookie(response, token, settings)
     return response
 
 
@@ -338,14 +382,18 @@ async def register_complete(
 
     access_token = create_access_token(user.id, settings.secret_key)
     response = RedirectResponse(url="/dashboard", status_code=302)
-    response.set_cookie(key="access_token", value=access_token, httponly=True, samesite="lax")
+    set_session_cookie(response, access_token, settings)
     return response
 
 
 @router.get("/logout")
-async def logout():
+async def logout(settings: Settings = Depends(get_settings)):
+    # Настройки нужны ВЫХОДУ, хотя он ничего не читает из БД: снятие обязано
+    # объявить тот же набор атрибутов, что и установка, а он зависит от
+    # признака транспортной защиты (Pitfall 9). Без этой зависимости снятие
+    # ушло бы на умолчания `delete_cookie`, и cookie пережила бы выход.
     response = RedirectResponse(url="/login", status_code=302)
-    response.delete_cookie("access_token")
+    clear_session_cookie(response, settings)
     return response
 
 
