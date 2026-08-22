@@ -812,13 +812,20 @@ async def test_restart_of_an_unknown_account_never_reaches_the_container(
 
 @pytest.mark.asyncio
 async def test_unreachable_daemon_gives_named_words_and_a_log_line_not_a_500(
-    admin_client: AsyncClient, db_session: AsyncSession, caplog
+    admin_client: AsyncClient, db_session: AsyncSession
 ):
     """Тест 4: недоступный демон — названный отказ и запись в журнал, НЕ 500.
 
     Молча вернувшая ту же страницу кнопка читается как «кнопка сломана»
     (Pitfall 7). Текст стороннего исключения на экран при этом не выходит: он
     ничего не сообщает администратору и может нести внутренние адреса.
+
+    ⚠️ ЖУРНАЛ ПРОВЕРЯЕТСЯ ПОДМЕНОЙ САМОГО ЖУРНАЛА, А НЕ `caplog`. Проект
+    настраивает structlog из обработчика запуска, и в ДЛИННОМ прогоне суиты
+    настройка соседнего файла меняет доставку записей — тест на `caplog`
+    зеленел бы в одиночку и краснел в общем прогоне, то есть проверял бы
+    порядок файлов, а не наличие записи. Утверждение о факте записи не имеет
+    права зависеть от того, куда её сегодня доставляют.
     """
     account = await _seed_account(db_session, account_type="wa")
 
@@ -827,17 +834,19 @@ async def test_unreachable_daemon_gives_named_words_and_a_log_line_not_a_500(
         side_effect=RuntimeError(
             "Error while fetching server API version: /var/run/whale.sock"
         ),
-    ):
-        with caplog.at_level("WARNING"):
-            response = await admin_client.post(
-                _restart_url(account.id), follow_redirects=False
-            )
+    ), patch("app.pages.admin.logger") as log:
+        response = await admin_client.post(
+            _restart_url(account.id), follow_redirects=False
+        )
 
     assert response.status_code == 302, "отказ обязан оставаться отказом, а не 500"
-    assert "worker_restart_failed" in caplog.text, (
+    (event,), fields = log.warning.call_args
+    assert event == "worker_restart_failed", (
         "отказ проглочен молча — именованной строки журнала нет"
     )
-    assert str(account.id) in caplog.text
+    assert fields["account_id"] == account.id
+    assert fields["channel"] == "wa"
+    assert "admin_user_id" in fields
 
     with patch("app.services.ops_state._get_redis", return_value=None):
         page = (await admin_client.get(response.headers["location"])).text
@@ -847,24 +856,28 @@ async def test_unreachable_daemon_gives_named_words_and_a_log_line_not_a_500(
 
 @pytest.mark.asyncio
 async def test_successful_restart_leaves_a_named_trace(
-    admin_client: AsyncClient, db_session: AsyncSession, caplog
+    admin_client: AsyncClient, db_session: AsyncSession
 ):
     """Тест 5: успех уходит в журнал с идентификаторами админа, аккаунта и канала.
 
     Привилегированная операция над чужой сущностью обязана оставлять след, и
-    форма следа в проекте уже есть (`free_access_toggled`).
+    форма следа в проекте уже есть (`free_access_toggled`): именованный ключ,
+    оба идентификатора и то, ЧТО именно сделано. Журнал подменяется по той же
+    причине, что и в тесте отказа выше.
     """
     account = await _seed_account(db_session, account_type="wa")
 
     with patch(
         "app.services.wa_container_manager.start_container", return_value="http://x"
-    ):
-        with caplog.at_level("INFO"):
-            await admin_client.post(_restart_url(account.id), follow_redirects=False)
+    ), patch("app.pages.admin.logger") as log:
+        await admin_client.post(_restart_url(account.id), follow_redirects=False)
 
-    assert "worker_restarted" in caplog.text
-    assert str(account.id) in caplog.text
-    assert "wa" in caplog.text
+    (event,), fields = log.info.call_args
+    assert event == "worker_restarted"
+    assert fields["account_id"] == account.id
+    assert fields["channel"] == "wa"
+    assert "admin_user_id" in fields
+    log.warning.assert_not_called()
 
 
 @pytest.mark.asyncio
