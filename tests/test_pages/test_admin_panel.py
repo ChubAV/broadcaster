@@ -649,7 +649,13 @@ def test_no_docker_client_reaches_the_partial_handler_either():
     ]
     assert any(node.name == "admin_workers_partial" for node in handlers)
 
+    # Обработчик формы перезапуска исключён ИМЕНЕМ, а не забыт: D-11 разрешает
+    # ему ровно одно обращение к контейнерному API, и разрешение это адресное.
+    # Что оно не расползлось на соседей, утверждает
+    # `test_the_container_api_lives_only_in_the_restart_handler` — двусторонне.
     for handler in handlers:
+        if handler.name == "admin_restart_worker":
+            continue
         called = [
             node.func.id if isinstance(node.func, ast.Name) else node.func.attr
             for node in ast.walk(handler)
@@ -658,6 +664,280 @@ def test_no_docker_client_reaches_the_partial_handler_either():
         ]
         assert not [name for name in called if "docker" in name.lower()], handler.name
         assert not [name for name in called if "container" in name.lower()], handler.name
+
+
+# ---- Перезапуск воркера: единственное во всей фазе обращение к Docker (D-11) ----
+#
+# ⚠️ ЭТОТ БЛОК ПРОВЕРЯЕТ ГРАНИЦУ, А НЕ КНОПКУ. D-07 запрещает контейнерное API
+# на пути ОТРИСОВКИ, а не в приложении вообще; D-11 разрешает ровно один вызов и
+# ровно по нажатию. Утверждения ниже держат обе половины: вызов происходит там,
+# где разрешён, и не происходит нигде больше.
+
+
+def _restart_url(account_id: int) -> str:
+    return f"/admin/workers/{account_id}/restart"
+
+
+@pytest.mark.asyncio
+async def test_restart_starts_the_container_of_the_accounts_own_channel(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 1: форма зовёт запуск контейнера НУЖНОГО канала ровно один раз.
+
+    Канал берётся из САМОГО аккаунта, а не из поля формы: поле подделывается
+    вместе с запросом, колонка в базе — нет.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.wa_container_manager.start_container", return_value="http://x"
+    ) as wa_start, patch(
+        "app.services.max_container_manager.start_container", return_value="http://x"
+    ) as max_start:
+        response = await admin_client.post(
+            _restart_url(account.id), follow_redirects=False
+        )
+
+    assert response.status_code == 302
+    wa_start.assert_called_once_with(account.id)
+    max_start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restart_of_a_max_account_goes_to_the_max_manager(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Второй канал ходит к СВОЕМУ менеджеру: один на два канала перепутал бы их."""
+    account = await _seed_account(db_session, account_type="max")
+
+    with patch(
+        "app.services.wa_container_manager.start_container", return_value="http://x"
+    ) as wa_start, patch(
+        "app.services.max_container_manager.start_container", return_value="http://x"
+    ) as max_start:
+        await admin_client.post(_restart_url(account.id), follow_redirects=False)
+
+    max_start.assert_called_once_with(account.id)
+    wa_start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restart_is_refused_for_a_channel_without_a_container(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """У telegram-аккаунта своего контейнера нет — перезапускать нечего.
+
+    Молчаливый успех здесь был бы хуже отказа: администратор решил бы, что
+    починил, и перестал бы искать настоящую причину.
+    """
+    account = await _seed_account(db_session, account_type="tg_user")
+
+    with patch("app.services.wa_container_manager.start_container") as wa_start, patch(
+        "app.services.max_container_manager.start_container"
+    ) as max_start:
+        response = await admin_client.post(
+            _restart_url(account.id), follow_redirects=False
+        )
+
+    assert response.status_code == 302
+    wa_start.assert_not_called()
+    max_start.assert_not_called()
+    assert "error=" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_restart_is_denied_for_a_regular_user(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 2: посторонний отвергается по правам и контейнера не трогает."""
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.wa_container_manager.start_container") as wa_start:
+        response = await authed_client.post(_restart_url(account.id))
+
+    assert response.status_code == 403
+    wa_start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restart_is_refused_for_a_foreign_origin_before_touching_anything(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 3: чужое происхождение отвергается ДО вызова (T-06-RST2).
+
+    Гард обязателен: аутентификация проекта идёт cookie, поэтому браузер
+    приложит её к межсайтовой форме сам, и изменяющий запрос со стороннего
+    сайта неотличим от своего. Новая изменяющая форма админки без гарда молча
+    расширила бы принятую границу риска — сегодня его несут ровно три формы, и
+    две из них денежные.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.wa_container_manager.start_container") as wa_start:
+        response = await admin_client.post(
+            _restart_url(account.id),
+            headers={"Sec-Fetch-Site": "cross-site"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403
+    wa_start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restart_of_an_unknown_account_never_reaches_the_container(
+    admin_client: AsyncClient,
+):
+    """Тест 6: неизвестный аккаунт отвергается до обращения к контейнеру."""
+    with patch("app.services.wa_container_manager.start_container") as wa_start:
+        response = await admin_client.post(_restart_url(999999), follow_redirects=False)
+
+    assert response.status_code == 302
+    wa_start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unreachable_daemon_gives_named_words_and_a_log_line_not_a_500(
+    admin_client: AsyncClient, db_session: AsyncSession, caplog
+):
+    """Тест 4: недоступный демон — названный отказ и запись в журнал, НЕ 500.
+
+    Молча вернувшая ту же страницу кнопка читается как «кнопка сломана»
+    (Pitfall 7). Текст стороннего исключения на экран при этом не выходит: он
+    ничего не сообщает администратору и может нести внутренние адреса.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.wa_container_manager.start_container",
+        side_effect=RuntimeError(
+            "Error while fetching server API version: /var/run/whale.sock"
+        ),
+    ):
+        with caplog.at_level("WARNING"):
+            response = await admin_client.post(
+                _restart_url(account.id), follow_redirects=False
+            )
+
+    assert response.status_code == 302, "отказ обязан оставаться отказом, а не 500"
+    assert "worker_restart_failed" in caplog.text, (
+        "отказ проглочен молча — именованной строки журнала нет"
+    )
+    assert str(account.id) in caplog.text
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        page = (await admin_client.get(response.headers["location"])).text
+    assert "демон контейнеров не отвечает" in page
+    assert "/var/run" not in page, "текст стороннего исключения вышел на экран"
+
+
+@pytest.mark.asyncio
+async def test_successful_restart_leaves_a_named_trace(
+    admin_client: AsyncClient, db_session: AsyncSession, caplog
+):
+    """Тест 5: успех уходит в журнал с идентификаторами админа, аккаунта и канала.
+
+    Привилегированная операция над чужой сущностью обязана оставлять след, и
+    форма следа в проекте уже есть (`free_access_toggled`).
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.wa_container_manager.start_container", return_value="http://x"
+    ):
+        with caplog.at_level("INFO"):
+            await admin_client.post(_restart_url(account.id), follow_redirects=False)
+
+    assert "worker_restarted" in caplog.text
+    assert str(account.id) in caplog.text
+    assert "wa" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_no_stop_action_exists_in_markup_or_in_routes(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 7 (отрицательный): действия остановки нет ни в разметке, ни в маршрутах.
+
+    ⚠️ ЭТО ЗАПРЕТ, ЗАКРЕПЛЁННЫЙ ТЕСТОМ, А НЕ НАМЕРЕНИЕ (D-11). Остановка
+    обещает контроль, которого нет: воркер уходит сам через 300 секунд простоя
+    и возвращается через 15 секунд при появлении задачи. Администратор,
+    нажавший её в аварии, решит, что починил, и перестанет искать причину.
+    """
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        html = (await admin_client.get("/admin/workers")).text
+    assert "Остановить" not in html
+    assert "/stop" not in html
+
+    from app.main import create_app
+
+    paths = {route.path for route in create_app().routes if hasattr(route, "path")}
+    assert not [path for path in paths if "stop" in path.lower()], sorted(paths)
+
+    assert "stop_container" not in ADMIN_PAGES_SOURCE.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_restart_button_goes_through_the_confirmation_panel(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 8: кнопка ведёт через общую панель подтверждения, а не шлёт сразу.
+
+    Тринадцать мест проекта уже переведены с системного диалога на панель;
+    четырнадцатое не имеет права быть исключением. Перезапуск обрывает активные
+    отправки этого аккаунта — откат кода тривиален, последствия нажатия нет.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        html = (await admin_client.get("/admin/workers")).text
+
+    assert "Перезапустить" in html
+    assert 'role="dialog"' in html, "панель подтверждения не отрисована"
+    assert f"modal-open-worker-restart-{account.id}" in html
+    assert "confirm(" not in html and "onclick" not in html
+    # Базовый путь без JS остаётся настоящей формой POST на тот же адрес.
+    assert f'action="{_restart_url(account.id)}"' in html
+
+
+def test_the_container_api_lives_only_in_the_restart_handler():
+    """Разбор ДЕРЕВА: контейнерное API есть ТОЛЬКО в обработчике перезапуска.
+
+    Утверждение двустороннее намеренно. Односторонний запрет («нигде нет»)
+    выполнялся бы и пустым модулем; одностороннее разрешение («в перезапуске
+    есть») не заметило бы второго вызова, уехавшего на путь отрисовки. Вместе
+    они и есть граница D-07/D-11.
+    """
+    tree = ast.parse(ADMIN_PAGES_SOURCE.read_text(encoding="utf-8"))
+
+    def _calls(node) -> list[str]:
+        return [
+            child.func.id if isinstance(child.func, ast.Name) else child.func.attr
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call)
+            and isinstance(child.func, (ast.Name, ast.Attribute))
+        ]
+
+    container_callers = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and [name for name in _calls(node) if "container" in name.lower()]
+    }
+    assert container_callers == {"admin_restart_worker"}, (
+        "контейнерное API вызывается не только из обработчика формы перезапуска: "
+        f"{sorted(container_callers)}"
+    )
+
+    assert not [
+        name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for name in _calls(node)
+        if "stop_container" in name
+    ]
 
 
 # ---- Данные-заглушки макета не доехали ----
