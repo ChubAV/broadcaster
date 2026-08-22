@@ -3,9 +3,9 @@
 {% from "components/button.html" import button, link_button %}
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/field.html" import select_field %}
+{% from "components/filter_chips.html" import filter_chips %}
 {% from "components/filters.html" import filters %}
 {% from "components/mono.html" import mono %}
-{% from "history/includes/filter_chips.html" import filter_chips %}
 {% from "history/includes/history_card.html" import history_card %}
 
 {% block title %}История — Broadcaster{% endblock %}
@@ -52,11 +52,15 @@
     поэтому нарисованное и принимаемое разойтись не могут.
 
     Кнопка сброса рендерится, только когда есть что сбрасывать: постоянная
-    кнопка «Сбросить» на чистом экране предлагает действие без последствий. -#}
+    кнопка «Сбросить» на чистом экране предлагает действие без последствий.
+
+    Базовый адрес назван вслух в каждом вызове: макрос переехал в библиотеку
+    компонентов (план 06-03) и обслуживает три раздела, поэтому умолчания,
+    указывавшего сюда, у него больше нет. -#}
 <div class="chip-bar">
-  {{ filter_chips(status_chips, status_filter, filter_params, 'status') }}
-  {{ filter_chips(messenger_chips, filter_messenger, filter_params, 'messenger') }}
-  {{ filter_chips(period_chips, filter_period, filter_params, 'period') }}
+  {{ filter_chips(status_chips, status_filter, filter_params, 'status', base_path='/history') }}
+  {{ filter_chips(messenger_chips, filter_messenger, filter_params, 'messenger', base_path='/history') }}
+  {{ filter_chips(period_chips, filter_period, filter_params, 'period', base_path='/history') }}
   {%- if filter_params %}
   <a class="chip-bar__reset" data-chipreset href="/history">{{ mono('СБРОСИТЬ', upper=true) }}</a>
   {%- endif %}

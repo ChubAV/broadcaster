@@ -1323,8 +1323,14 @@ def test_billing_partials_are_macros_with_an_import_line():
 
 def test_billing_component_library_did_not_grow():
     """Паршалы раздела не уехали в общую библиотеку компонентов."""
+    # 14, а не 13: четырнадцатый файл — filter_chips.html, переехавший из
+    # history/includes/ планом 06-03, когда потребителей чипсов стало трое
+    # (история, «Пользователи» и «Логи» админки). Число пинуется в этом файле
+    # ДВАЖДЫ — здесь и в test_template_inventory, — и обе константы подняты
+    # тем же коммитом, что и переезд: правка задним числом на время отключила
+    # бы проверку, которая ловит молчаливое пополнение библиотеки.
     components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
-    assert len(components) == 13, [p.name for p in components]
+    assert len(components) == 14, [p.name for p in components]
 
     partials = {p.name for p in (TEMPLATES_DIR / "billing" / "includes").glob("*.html")}
     assert partials == {"payment_row.html"}, (
@@ -2570,9 +2576,16 @@ def test_template_inventory():
     }
     assert not with_tables, f"элементы таблицы остались: {with_tables}"
 
-    # Библиотека компонентов Плана 02 на месте целиком (12 макросов + filters)
+    # Библиотека компонентов Плана 02 на месте целиком (12 макросов + filters),
+    # плюс четырнадцатый файл — filter_chips.html, переехавший из
+    # history/includes/ планом 06-03 вслед за вторым и третьим потребителями
+    # («Пользователи» и «Логи» админки). Второе утверждение о том же числе
+    # стоит в test_billing_component_library_did_not_grow; выборка
+    # `-k inventory` берёт только ЭТО, поэтому поднимать надо оба — иначе
+    # выборка зеленеет, а полный прогон краснеет из теста, названного по
+    # чужому разделу.
     components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
-    assert len(components) == 13, [p.name for p in components]
+    assert len(components) == 14, [p.name for p in components]
 
     # Два шелла проекта: основной и auth
     assert (TEMPLATES_DIR / "base.html").exists()

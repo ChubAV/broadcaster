@@ -567,22 +567,24 @@ def test_period_chips_cover_every_period_the_module_knows():
     assert tuple(value for value, _ in PERIOD_CHIPS if value) == HISTORY_PERIODS
 
 
-@pytest.mark.asyncio
-async def test_filter_chips_template_lives_outside_the_component_library():
-    """Новый шаблон положен в каталог включений раздела, а не в библиотеку.
-
-    Инвентаризация библиотеки компонентов фиксирует число файлов ровно 13
-    (`test_template_inventory`). Файл, положенный туда, потребовал бы правки
-    константы в том же плане — то есть сдвинул бы инвентаризацию под своё же
-    появление, а именно она и ловит молчаливое пополнение библиотеки.
-    """
-    from pathlib import Path
-
-    import app
-
-    templates_dir = Path(app.__file__).parent / "templates"
-    assert (templates_dir / "history/includes/filter_chips.html").exists()
-    assert len(sorted((templates_dir / "components").glob("*.html"))) == 13
+# ⚠️ ЗДЕСЬ СТОЯЛ test_filter_chips_template_lives_outside_the_component_library
+# — ТРЕТЬЕ место, пинившее число файлов библиотеки компонентов (13), и
+# единственное, утверждавшее, что шаблон чипсов лежит ВНЕ библиотеки.
+#
+# Его предмет снят планом 06-03, а не сломан им: макрос переехал в
+# app/templates/components/filter_chips.html ровно по сроку, назначенному его
+# собственным докстрингом («второй потребитель станет поводом для переезда»), и
+# потребителей стало трое — история, «Пользователи» и «Логи» админки. Тест
+# утверждал обратное текущему устройству проекта и краснел бы на чтении с
+# диска, говоря не о том, о чём написан.
+#
+# Обе половины утверждения ПЕРЕЖИЛИ снос и закреплены в других местах:
+#   * число файлов библиотеки — двумя утверждениями в
+#     tests/test_pages/test_responsive_markup.py (обе константы подняты до 14
+#     тем же коммитом, что и переезд);
+#   * место шаблона — тестом test_no_template_imports_the_old_path в
+#     tests/test_pages/test_filter_chips.py, который обходит всё дерево
+#     шаблонов и ловит возврат старого пути импорта постоянно, а не разово.
 
 
 # =============================================================================
