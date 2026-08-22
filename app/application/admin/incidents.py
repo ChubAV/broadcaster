@@ -491,7 +491,7 @@ async def collect_incidents(
                 func.count(SendLog.id),
                 func.sum(case((is_failed, 1), else_=0)),
                 func.max(case((is_failed, SendLog.sent_at))),
-            ).where(SendLog.sent_at >= _as_column_moment(window_start))
+            ).where(SendLog.sent_at >= window_start)
         )
     ).one()
     spike = detect_failure_spike(
@@ -525,7 +525,7 @@ async def collect_incidents(
             select(func.count(Schedule.id), func.max(Schedule.next_run_at)).where(
                 Schedule.is_active.is_(True),
                 Schedule.next_run_at.is_not(None),
-                Schedule.next_run_at < _as_column_moment(beat_cutoff),
+                Schedule.next_run_at < beat_cutoff,
             )
         )
     ).one()
@@ -541,28 +541,12 @@ async def collect_incidents(
     return incidents
 
 
-def _as_column_moment(moment: datetime) -> datetime:
-    """Граница окна в том виде, в каком колонка хранит момент на этом диалекте.
+def _parse_moment(value: datetime | None) -> datetime | None:
+    """Момент из агрегата, приведённый к единой зоне.
 
-    Сравнение идёт в БАЗЕ, а не в Python, и SQLite хранит `DateTime(timezone=True)`
-    строкой без смещения: aware-граница уехала бы в строку со смещением и
-    сравнилась бы лексикографически не с тем. Драйвер PostgreSQL смещение
-    понимает, поэтому обрезка зоны безопасна для обоих: момент один и тот же,
-    записан он в UTC.
+    `max()` сохраняет тип колонки на обоих диалектах и отдаёт `datetime`
+    (проверено прогоном на SQLite), но зону НЕ сохраняет: SQLite отдаёт момент
+    naive, PostgreSQL — aware. Дальше он сравнивается и вычитается в Python,
+    поэтому приведение обязательно (Pitfall 1).
     """
-    normalized = normalize_utc(moment)
-    return normalized.replace(tzinfo=None) if normalized else moment
-
-
-def _parse_moment(value: datetime | str | None) -> datetime | None:
-    """Момент из агрегата — уже приведённый к единой зоне.
-
-    `max()` на SQLite возвращает СТРОКУ, а не `datetime`: агрегат теряет тип
-    колонки, и код, ждущий `datetime`, падает на строке — на одном диалекте из
-    двух, то есть у пользователя, а не в суите (Pitfall 1).
-    """
-    if value is None:
-        return None
-    if isinstance(value, str):
-        value = datetime.fromisoformat(value)
     return normalize_utc(value)
