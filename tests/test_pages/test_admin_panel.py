@@ -1804,3 +1804,643 @@ async def test_a_worker_row_leads_to_the_logs_of_that_worker(
     assert f'account_id="{account.id}"' in reader.await_args.args[0], (
         "переход по ссылке из строки не выбрал источник этого воркера"
     )
+
+
+# =============================================================================
+# Подраздел «Обзор»: четыре плитки ключевых показателей (план 06-10, D-37…D-40)
+# =============================================================================
+#
+# ⚠️ ГЛАВНОЕ УТВЕРЖДЕНИЕ БЛОКА ОДНО: НИ ОДНО ЧИСЛО «ОБЗОРА» НЕ РАСХОДИТСЯ С ТЕМ,
+# ЧТО ВИДИТ ПОЛЬЗОВАТЕЛЬ. Расхождение такого рода не роняет ни один тест и не
+# даёт пятисотки — оно просто печатает два разных числа на один вопрос, и первым
+# его замечает не разработчик, а человек, принимающий по этим числам решение.
+
+OVERVIEW_URL = "/admin"
+
+# Подписи плиток. Читаются ЗДЕСЬ по одному разу и адресуют утверждения ячейке, а
+# не документу: «3» на странице с четырьмя числами прошло бы за любое из них.
+TILE_USERS = "Пользователей"
+TILE_PAYING = "Платящих"
+TILE_QUEUE = "Задач в очереди"
+TILE_ERRORS = "Ошибок за сутки"
+
+# Слова величины времени очереди. ТА ЖЕ строка, что уже отгружена подразделом
+# «Очередь»: если «Обзор» и «Очередь» назовут одно число двумя именами,
+# администратор не сможет понять, что это одно и то же число.
+QUEUE_TIME_WORDS = "с последней отправки по каналу"
+
+
+def _tile(html: str, label: str) -> str:
+    """Разметка ОДНОЙ плитки, найденной по её подписи."""
+    chunks = [
+        chunk for chunk in html.split('<section class="card')[1:] if label in chunk
+    ]
+    assert len(chunks) == 1, (
+        f"плитка «{label}» найдена {len(chunks)} раз — утверждение адресовать нечему"
+    )
+    return chunks[0]
+
+
+def _tile_value(html: str, label: str) -> str:
+    """Крупное число плитки."""
+    found = re.search(r"data-metric-value[^>]*>([^<]*)<", _tile(html, label))
+    assert found, f"у плитки «{label}» нет крупного числа"
+    return found.group(1).strip()
+
+
+async def _seed_send(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    sent_at: datetime,
+    status: str = "ok",
+    messenger_type: str = "wa",
+) -> None:
+    """Запись журнала с ЯВНЫМ временем: без него она попала бы в окно «сейчас»."""
+    from app.models.send_log import SendLog
+
+    db.add(
+        SendLog(
+            user_id=user_id,
+            group_id=None,
+            ad_title="Объявление",
+            ad_text="Текст",
+            ad_images=[],
+            group_name="Группа",
+            messenger_type=messenger_type,
+            task_id="task-1",
+            status=status,
+            sent_at=sent_at,
+        )
+    )
+    await db.commit()
+
+
+async def _admin_user(db: AsyncSession):
+    from sqlalchemy import select
+    from app.models.user import User
+
+    return (await db.execute(select(User))).scalars().first()
+
+
+async def _seed_user(db: AsyncSession, email: str, *, created_at: datetime):
+    """Пользователь с ЯВНЫМ моментом регистрации — источник прироста за неделю."""
+    from app.models.user import User
+
+    user = User(
+        email=email,
+        password_hash="x",
+        name="U",
+        timezone="UTC",
+        created_at=created_at,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def _seed_subscription(
+    db: AsyncSession, user_id: int, *, expires_at: datetime, free: bool = False
+):
+    from app.models.subscription import Subscription
+
+    row = Subscription(
+        user_id=user_id,
+        expires_at=expires_at,
+        is_active=True,
+        has_free_access=free,
+    )
+    db.add(row)
+    await db.commit()
+    return row
+
+
+@pytest.mark.asyncio
+async def test_the_overview_users_tile_counts_the_week_by_the_registration_moment(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Плитка людей: всего и прирост за неделю по моменту регистрации."""
+    now = datetime.now(timezone.utc)
+    await _seed_user(db_session, "fresh@test.com", created_at=now - timedelta(days=2))
+    await _seed_user(db_session, "old@test.com", created_at=now - timedelta(days=40))
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+
+    # Три пользователя: администратор (зарегистрирован фикстурой только что) и
+    # двое посеянных. Прирост за неделю — администратор и свежий.
+    assert _tile_value(html, TILE_USERS) == "3"
+    assert "+2 за неделю" in _tile(html, TILE_USERS)
+
+
+def test_the_overview_week_caption_is_still_true():
+    """Подпись «за неделю» и окно счёта обязаны означать одно и то же.
+
+    ⚠️ ЧИСЛО В КОПИРАЙТ НЕ КОПИРУЕТСЯ, поэтому в подписи стоит СЛОВО, а не «за
+    7 дней». Цена такого решения ровно одна: слово не меняется вместе с
+    константой. Правка окна на десять дней оставила бы подпись прежней, и
+    администратор читал бы «за неделю» под числом за декаду — величина
+    называлась бы не тем, что посчитано. Этот тест и есть та цена, уплаченная
+    вперёд.
+    """
+    from app.application.admin.overview_stats import NEW_USERS_WINDOW
+
+    assert NEW_USERS_WINDOW == timedelta(days=7), (
+        "окно прироста разъехалось со словом «за неделю» в подписи плитки: "
+        "поправьте либо константу, либо подпись — но не одно без другого"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_overview_paying_tile_leaves_the_comped_user_out(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """ТРИ условия, а не два: льготный в счёт платящих не идёт (D-38).
+
+    ⚠️ У пользователя с бесплатным доступом дверь открыта, а денег нет. Слив его
+    в один счётчик с платящими, «Обзор» сообщил бы, что АДМИНИСТРАТИВНАЯ ЛЬГОТА
+    накручивает выручку — в отчёте, по которому принимают решение о цене.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Отсчёт берётся ДО посева, а не назначается числом: регистрация
+    # администратора фикстурой сама заводит ему строку подписки, и вписанная
+    # сюда «единица» проверяла бы состав фикстуры, а не правило отбора.
+    before = int(_tile_value((await admin_client.get(OVERVIEW_URL)).text, TILE_PAYING))
+
+    payer = await _seed_user(db_session, "payer@test.com", created_at=now)
+    comped = await _seed_user(db_session, "comped@test.com", created_at=now)
+    expired = await _seed_user(db_session, "expired@test.com", created_at=now)
+
+    await _seed_subscription(db_session, payer.id, expires_at=now + timedelta(days=10))
+    await _seed_subscription(
+        db_session, comped.id, expires_at=now + timedelta(days=10), free=True
+    )
+    await _seed_subscription(db_session, expired.id, expires_at=now - timedelta(days=1))
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+
+    # Трое посеяны, прибавился РОВНО ОДИН: льготный не платит, истёкший не
+    # платит больше. Три условия отбора, а не два.
+    assert int(_tile_value(html, TILE_PAYING)) == before + 1
+
+
+@pytest.mark.asyncio
+async def test_the_overview_revenue_caption_is_the_payers_times_the_price(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Подпись выручки = платящие × цена доступа, через ОБЩИЙ денежный глобал.
+
+    Собственное форматирование уронило бы раздел на нечисловом значении: общий
+    глобал проверяет конечность значения, и это уже оплачено планом 05-09.
+    """
+    from decimal import Decimal
+
+    from app.pages.common import format_amount
+
+    now = datetime.now(timezone.utc)
+    for index in range(2):
+        payer = await _seed_user(db_session, f"p{index}@test.com", created_at=now)
+        await _seed_subscription(
+            db_session, payer.id, expires_at=now + timedelta(days=10)
+        )
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+    tile = _tile(html, TILE_PAYING)
+
+    # Множитель берётся ИЗ САМОЙ ПЛИТКИ: утверждение проверяет, что деньги под
+    # числом посчитаны по ТОМУ ЖЕ числу, а не по второму множеству рядом.
+    shown = int(_tile_value(html, TILE_PAYING))
+    assert shown >= 2, tile
+    expected = format_amount(Decimal(test_settings.subscription_price) * shown)
+    assert f"MRR {expected}" in tile, expected
+
+
+@pytest.mark.asyncio
+async def test_the_overview_queue_tile_sums_the_three_sources(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Плитка очереди суммирует три источника, объявленных подразделом «Очередь»."""
+    wa = await _seed_account(db_session, account_type="wa")
+    max_account = await _seed_account(db_session, account_type="max")
+
+    client = _FakeQueuePageRedis(
+        {
+            "telegram": [b"a", b"b", b"c"],
+            f"wa:queue:{wa.id}": [b"x", b"y"],
+            f"max:queue:{max_account.id}": [b"z"],
+        }
+    )
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert _tile_value(html, TILE_QUEUE) == "6"
+
+
+@pytest.mark.asyncio
+async def test_the_overview_queue_tile_says_unknown_and_not_zero_when_redis_is_down(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сломанный наблюдатель даёт НЕИЗВЕСТНОСТЬ, а не ноль.
+
+    ⚠️ Ноль читается как «очередь пуста» — то есть как ОТВЕТ на вопрос, которого
+    мы не знаем. Администратор, увидев его в аварии, решит, что рассылать нечего.
+    """
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        response = await admin_client.get(OVERVIEW_URL)
+
+    html = response.text
+    assert response.status_code == 200
+    assert _tile_value(html, TILE_QUEUE) == "—"
+    assert "title=" in _tile(html, TILE_QUEUE), (
+        "прочерк без названной причины: он читается как отказ, а причина у него есть"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_overview_errors_tile_takes_the_rolling_day_and_its_delta(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Окно суточное, дельта — к предыдущим суткам (D-40)."""
+    admin = await _admin_user(db_session)
+    now = datetime.now(timezone.utc)
+
+    for _ in range(3):
+        await _seed_send(
+            db_session, admin.id, sent_at=now - timedelta(hours=2), status="fail"
+        )
+    await _seed_send(
+        db_session, admin.id, sent_at=now - timedelta(hours=30), status="fail"
+    )
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+    tile = _tile(html, TILE_ERRORS)
+
+    assert _tile_value(html, TILE_ERRORS) == "3"
+    assert "+2" in tile, tile
+    # Рост числа ошибок успехом не является: тон дельты ИНВЕРТИРОВАН.
+    assert 'data-tone="danger"' in tile, tile
+
+
+@pytest.mark.asyncio
+async def test_the_overview_error_number_matches_the_users_own_dashboard(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Число ошибок «Обзора» совпадает с числом на дашборде того же человека.
+
+    ⚠️ ЭТО И ЕСТЬ ПРИЧИНА, ПО КОТОРОЙ ОКНО СУТОЧНОЕ, А НЕ ЧАСОВОЕ ИЗ МАКЕТА.
+    Часовое окно дало бы администратору и пользователю разные числа об одном и
+    том же периоде, и оба считали бы своё верным.
+    """
+    admin = await _admin_user(db_session)
+    now = datetime.now(timezone.utc)
+    await _seed_send(
+        db_session, admin.id, sent_at=now - timedelta(hours=3), status="fail"
+    )
+    await _seed_send(
+        db_session,
+        admin.id,
+        sent_at=now - timedelta(hours=5),
+        status="account_disconnected",
+    )
+    await _seed_send(db_session, admin.id, sent_at=now - timedelta(hours=1))
+
+    overview = (await admin_client.get(OVERVIEW_URL)).text
+    dashboard = (await admin_client.get("/dashboard")).text
+
+    assert _tile_value(overview, TILE_ERRORS) == _tile_value(dashboard, "Ошибок")
+    assert _tile_value(overview, TILE_ERRORS) == "2"
+
+
+@pytest.mark.asyncio
+async def test_the_overview_names_the_queue_time_exactly_as_the_queue_subsection_does(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Одно число — ОДНИ слова на обоих подразделах.
+
+    ⚠️ ПОДПИСЬ СРАВНИВАЕТСЯ ДОСЛОВНО, А НЕ «ПО СМЫСЛУ». Два имени одной величины
+    на двух экранах администратор прочитает как две РАЗНЫЕ величины и станет
+    искать между ними расхождение, которого нет. Слово «лаг» тут не годится ни
+    на одном из экранов: оно читается как возраст самой старой задачи, а он
+    лежит внутри конверта брокера и решением D-14 не читается вовсе.
+    """
+    account = await _seed_account(db_session, account_type="tg_user")
+    await _seed_send(
+        db_session,
+        account.user_id,
+        sent_at=datetime.now(timezone.utc) - timedelta(seconds=120),
+        messenger_type="tg_user",
+    )
+
+    client = _FakeQueuePageRedis({"telegram": [b"one", b"two"]})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        overview = (await admin_client.get(OVERVIEW_URL)).text
+        queue = (await admin_client.get("/admin/queue")).text
+
+    caption = re.search(
+        r'<span class="mono[^"]*"[^>]*>(с последней отправки по каналу[^<]*)</span>',
+        queue,
+    )
+    assert caption, "подраздел «Очередь» перестал печатать величину времени"
+
+    assert QUEUE_TIME_WORDS in overview, "«Обзор» не назвал величину времени вовсе"
+    assert caption.group(1) in overview, (
+        "«Обзор» и «Очередь» называют одно число разными словами: "
+        f"очередь печатает {caption.group(1)!r}"
+    )
+    assert "лаг" not in overview and "самой старой задачи" not in overview
+
+
+@pytest.mark.asyncio
+async def test_the_overview_answers_two_hundred_with_an_unreachable_redis(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сломанный наблюдатель не роняет «Обзор»: страница обязана открыться."""
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        response = await admin_client.get(OVERVIEW_URL)
+
+    assert response.status_code == 200
+    assert TILE_QUEUE in response.text
+
+
+@pytest.mark.asyncio
+async def test_no_mockup_values_reached_the_overview_tiles(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Ни одно нарисованное в макете число не доехало до плиток «Обзора».
+
+    Число из макета, дожившее до прода, читается администратором как
+    ИЗМЕРЕННОЕ, и в аварии он примет решение по нарисованной цифре.
+    """
+    html = (await admin_client.get(OVERVIEW_URL)).text
+
+    for marker in ("621 000", "18 д", "4 ч", "ОШИБОК ЗА ЧАС", "Ошибок за час"):
+        assert marker not in html, marker
+
+
+# =============================================================================
+# Блок инцидентов на «Обзоре» (план 06-10, D-43…D-48)
+# =============================================================================
+#
+# ⚠️ БЛОК ПОКАЗЫВАЕТ ТОЛЬКО СЛОМАННОЕ СЕЙЧАС. Инцидент есть СОСТОЯНИЕ, а не
+# событие: он держится, пока не починено, и исчезает сам, когда неисправность
+# ушла (D-43, D-44). Строк о восстановлении здесь не бывает ни в каком виде —
+# для них понадобилась бы история, то есть трижды отклонённая таблица.
+#
+# ⚠️ СЛОМАННЫЙ НАБЛЮДАТЕЛЬ ДАЁТ ЧАСТИЧНУЮ КАРТИНУ, НАЗВАННУЮ ЧАСТИЧНОЙ.
+# Молчаливое исчезновение одного из пяти признаков — худший из исходов: блок
+# выглядит полным и таковым не является, и администратор читает «всё остальное
+# в порядке» там, где остального просто не посчитали.
+
+INCIDENTS_HEADING = "Инциденты"
+INCIDENTS_EMPTY_HEADING = "Сейчас ничего не сломано"
+INCIDENT_LINK_LABEL = "Чинить"
+
+# Пять видов и их подписи в слоте «источник» — по одному разу и здесь.
+INCIDENT_KIND_LABELS = {
+    "worker_stuck": "воркер",
+    "account_down": "аккаунт",
+    "failure_spike": "отправка",
+    "payment_stuck": "платежи",
+    "beat_silent": "планировщик",
+}
+
+
+def _incident_rows(html: str) -> list[str]:
+    """Разметка строк блока инцидентов."""
+    return [chunk.split("</div>")[0] for chunk in html.split("<div data-incident-row")[1:]]
+
+
+async def _seed_down_account(db: AsyncSession, status: str = "disconnected"):
+    """Отвалившийся аккаунт — самый дешёвый способ поднять инцидент из базы."""
+    account = await _seed_account(db, account_type="wa", status=status)
+    account.last_synced_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    await db.commit()
+    return account
+
+
+@pytest.mark.asyncio
+async def test_the_incident_board_says_nothing_is_broken_when_nothing_is(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Пустой блок — ВАЛИДНЫЙ и ожидаемый ответ, а не отсутствие данных.
+
+    ⚠️ И формулировка обязана сказать ДВЕ вещи: что всё в порядке И что список
+    чистит себя сам. Без второй администратор станет искать кнопку «закрыть»,
+    которой нет и не будет (D-44).
+    """
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert INCIDENTS_HEADING in html, "блока инцидентов на «Обзоре» нет вовсе"
+    assert INCIDENTS_EMPTY_HEADING in html
+    assert "вручную" in html, (
+        "пустое состояние не сказало, что список очищается сам: администратор "
+        "пойдёт искать кнопку «закрыть»"
+    )
+    assert not _incident_rows(html), "здоровый сервис напечатал строку инцидента"
+
+
+@pytest.mark.asyncio
+async def test_a_raised_incident_prints_a_row_with_time_text_and_a_link(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Поднятый признак печатает строку: время, подпись вида, текст и переход."""
+    account = await _seed_down_account(db_session)
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    rows = _incident_rows(html)
+    assert len(rows) == 1, rows
+    row = rows[0]
+
+    assert INCIDENT_KIND_LABELS["account_down"] in row, row
+    assert str(account.id) in row, row
+    assert INCIDENT_LINK_LABEL in row, row
+    assert f'href="/admin/users/{account.user_id}"' in row, row
+
+
+@pytest.mark.asyncio
+async def test_every_incident_kind_has_a_label_a_tone_and_a_living_route(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Все пять видов названы, окрашены и ведут по адресу, который существует.
+
+    ⚠️ АДРЕС ПРОВЕРЯЕТСЯ ПРОТИВ ЖИВЫХ МАРШРУТОВ ПРИЛОЖЕНИЯ, а не против самого
+    себя. Ссылка, совпадающая с объявлением и никуда не ведущая, — это ровно
+    то, что видит администратор в аварии: он жмёт её и получает 404 вместо
+    подраздела, в котором чинят.
+    """
+    from app.application.admin.incidents import (
+        INCIDENT_DESTINATIONS,
+        INCIDENT_KIND_ACCOUNT_DOWN,
+    )
+    from app.main import create_app
+
+    assert set(INCIDENT_DESTINATIONS) == set(INCIDENT_KIND_LABELS), (
+        "перечень видов разъехался с подписями: вид без подписи напечатал бы "
+        "строку без имени источника"
+    )
+
+    # Живые маршруты приложения — множество путей, а не догадка о них.
+    routes = {
+        getattr(route, "path", "")
+        for route in create_app(settings=test_settings).routes
+    }
+
+    for kind, root in INCIDENT_DESTINATIONS.items():
+        path = root.split("?")[0].rstrip("/")
+        # У адреса карточки пользователя путь параметризован: сравнивать его
+        # надо с шаблоном маршрута, а не с подставленным идентификатором.
+        expected = "/admin/users/{user_id}" if kind == INCIDENT_KIND_ACCOUNT_DOWN else path
+        assert expected in routes, (
+            f"вид {kind} ведёт по адресу {root!r}, которому в приложении не "
+            f"соответствует ни один маршрут"
+        )
+
+
+@pytest.mark.asyncio
+async def test_incident_rows_come_freshest_first(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Свежая авария важнее давней: первая строка отвечает «что чинить первым»."""
+    old = await _seed_down_account(db_session)
+    fresh = await _seed_account(db_session, account_type="max", status="sync_failed")
+    fresh.last_synced_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    old.last_synced_at = datetime.now(timezone.utc) - timedelta(days=3)
+    await db_session.commit()
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    rows = _incident_rows(html)
+    assert len(rows) == 2, rows
+    assert str(fresh.id) in rows[0], rows
+    assert str(old.id) in rows[1], rows
+
+
+@pytest.mark.asyncio
+async def test_a_capped_incident_board_names_its_own_ceiling(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сработавший потолок НАЗЫВАЕТ СЕБЯ, и число приезжает подстановкой.
+
+    Молча усечённый перечень читается как «других инцидентов нет» — то есть как
+    ответ на вопрос, ради которого администратор в блок и пришёл.
+    """
+    from app.application.admin.incidents import INCIDENT_LIST_CAP
+
+    for _ in range(INCIDENT_LIST_CAP + 2):
+        await _seed_down_account(db_session)
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert len(_incident_rows(html)) == INCIDENT_LIST_CAP
+    assert f"Показаны первые {INCIDENT_LIST_CAP}" in html, (
+        "потолок сработал молча: перечень укоротился, и об этом не сказано"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_incident_board_carries_no_recovery_rows(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Зелёных строк «восстановлен» нет ни в разметке, ни в шаблоне (D-46).
+
+    Восстановление — СОБЫТИЕ, а не состояние; для него нужна история, то есть
+    трижды отклонённая таблица. Строка о восстановлении рядом со строками об
+    авариях читается как часть текущего состояния сервиса.
+    """
+    await _seed_down_account(db_session)
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert "осстановлен" not in html, html[:200]
+    for name in ("admin/overview.html", "admin/includes/incident_row.html"):
+        source = (TEMPLATES_ROOT / name).read_text(encoding="utf-8")
+        assert "осстановлен" not in source, name
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_redis_gives_a_partial_incident_board_that_says_so(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Частичная картина НАЗЫВАЕТСЯ частичной, а не выдаёт себя за полную.
+
+    ⚠️ Признак «воркер не забирает работу» считается из живости, а живость
+    хранится только в Redis. При недоступном Redis он не считается вовсе — и
+    молчание об этом было бы худшим исходом: блок выглядел бы полным, показывал
+    бы инциденты из базы и умалчивал, что пятого признака в нём нет.
+    """
+    await _seed_down_account(db_session)
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        response = await admin_client.get(OVERVIEW_URL)
+
+    html = response.text
+    assert response.status_code == 200
+    assert _incident_rows(html), "инциденты из базы исчезли вместе с наблюдателем"
+    assert "картина неполная" in html, (
+        "блок не сказал, что часть признаков посчитать нечем"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stuck_worker_incident_comes_from_the_liveness_values(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Признак живости доезжает до блока ЗНАЧЕНИЯМИ через переходник «Обзора».
+
+    ⚠️ ПРИКЛАДНОЙ МОДУЛЬ ПРИЗНАКОВ КЛИЕНТОВ НЕ ЗНАЕТ И ЗНАТЬ НЕ ДОЛЖЕН: он
+    принимает уже решённую живость, и поэтому пять признаков проверяются суитой
+    без единой поднятой службы. Переходник от формы сервиса к форме модуля живёт
+    ЗДЕСЬ, на стороне потребителя.
+    """
+    account = await _seed_account(db_session, account_type="wa", status="active")
+
+    # Непустая очередь И несвежий heartbeat: работа есть, а делать её некому.
+    client = _FakeQueuePageRedis({f"wa:queue:{account.id}": [b"a", b"b"]})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    rows = _incident_rows(html)
+    assert len(rows) == 1, rows
+    assert INCIDENT_KIND_LABELS["worker_stuck"] in rows[0], rows[0]
+    assert 'href="/admin/workers"' in rows[0], rows[0]
+
+
+def test_the_incident_module_still_knows_no_client_of_an_external_service():
+    """Переходник не втащил клиент брокера в прикладной модуль признаков.
+
+    Стык, за который план 06-04 отвечал прямо: если бы модуль признаков стал
+    импортировать сервис оперативного состояния, суита пяти признаков потребовала
+    бы поднятого стенда — и перестала бы ловить их регрессии на каждом прогоне.
+    """
+    source = Path("app/application/admin/incidents.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+
+    forbidden = [
+        name
+        for name in imported
+        if any(marker in name.lower() for marker in ("redis", "docker", "httpx", "ops_state"))
+    ]
+    assert not forbidden, forbidden

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -5,14 +6,35 @@ import structlog
 from fastapi import APIRouter, Depends, Form, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.dependencies import get_db, get_settings, require_admin
+# ⚠️ АГРЕГАТОВ ЖУРНАЛА ОТПРАВОК ЭТОТ МОДУЛЬ НЕ СТРОИТ — ОН ИХ ЗОВЁТ (D-35, D-39).
+# Конструктор SQL-функций (`func`) здесь не импортируется ВОВСЕ, и это не
+# аккуратность, а проверяемое свойство: пока агрегат стоял в обработчике, запрет
+# «не заводить второй счёт отправок» исполнял человек, а теперь его исполняет
+# `test_the_admin_pages_module_builds_no_aggregate_over_the_send_journal`.
+# Числа, о которых аналитика отправок не знает (люди, деньги, объявления,
+# группы), считает `app/application/admin/overview_stats.py`.
 from app.application.analytics.send_analytics import (
     apply_history_filters,
     history_filter_params,
+    last_send_at,
+    send_metrics,
+)
+from app.application.admin.incidents import (
+    INCIDENT_LIST_CAP,
+    WorkerLiveness,
+    collect_incidents,
+)
+from app.application.admin.overview_stats import (
+    account_counts_by_user,
+    monthly_revenue,
+    paying_total,
+    user_card_counts,
+    user_totals,
 )
 from app.application.admin.queue_rows import (
     QUEUE_ROW_CAP,
@@ -36,13 +58,11 @@ from app.pages.history import (
     parse_account_id,
 )
 from app.models.user import User
-from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.pages.common import is_same_origin, templates
-from app.repositories.user import UserRepository
 from app.services import max_container_manager, wa_container_manager
 from app.services.billing_cache import invalidate_access_cache
 from app.services.loki_client import (
@@ -59,12 +79,16 @@ from app.services.loki_client import (
     query_range,
 )
 from app.services.ops_state import (
+    CHANNEL_MAX,
+    CHANNEL_WA,
     DROP_MISSING,
     DROP_REMOVED,
     DROP_UNAVAILABLE,
     INFRA_BEAT,
     INFRA_WORKER_DEFAULT,
     INFRA_WORKER_TELEGRAM,
+    WORKER_ONLINE,
+    WORKER_UNKNOWN,
     drop_task,
     infra_heartbeat_key,
     infra_liveness,
@@ -346,6 +370,93 @@ def _access_view(subscription: Subscription | None, now: datetime) -> dict:
     }
 
 
+def _liveness_for_incidents(
+    views: dict[int, dict],
+) -> tuple[dict[int, WorkerLiveness], bool]:
+    """Переходник от формы сервиса к форме прикладного модуля признаков.
+
+    ⚠️ ПЕРЕХОДНИК ЖИВЁТ ЗДЕСЬ, НА СТОРОНЕ ПОТРЕБИТЕЛЯ, И ЭТО НЕСУЩЕЕ РЕШЕНИЕ
+    СТЫКА. Модуль признаков (`app/application/admin/incidents.py`) принимает
+    живость ЗНАЧЕНИЯМИ и не знает ни одного клиента внешней службы — именно
+    поэтому пять признаков проверяются суитой на SQLite без единого поднятого
+    стенда. Импортируй он сервис оперативного состояния, чтобы «самому
+    разобраться» с формой ответа, — и суита признаков потребовала бы Redis, то
+    есть перестала бы гонять их на каждом прогоне. Плата за это ровно одна: у
+    сервиса своя форма ответа, и перевод её в форму модуля кто-то обязан
+    написать. Пишем его здесь.
+
+    ⚠️ СВЕЖЕСТЬ HEARTBEAT ПРИЕЗЖАЕТ УЖЕ РЕШЁННОЙ, а не сырым возрастом: порог
+    объявлен там, где heartbeat читается (`MAX_HEARTBEAT_STALE_SEC`), и второй
+    порог на стороне признаков разошёлся бы с первым молча.
+
+    ⚠️ «НЕИЗВЕСТНО» НЕ ПРЕВРАЩАЕТСЯ НИ В ЧТО. Аккаунт, о котором наблюдатель не
+    смог сказать ничего, из отображения ВЫПАДАЕТ, а вызывающий получает признак
+    неполноты. Подстановка «живой» спрятала бы настоящий отказ, подстановка
+    «мёртвый» подняла бы инцидент на исправном воркере, и обе были бы догадкой,
+    поданной как измерение.
+    """
+    liveness: dict[int, WorkerLiveness] = {}
+    partial = False
+    for account_id, view in views.items():
+        depth = view.get("queue_depth")
+        state = view.get("worker")
+        if depth is None or state == WORKER_UNKNOWN:
+            partial = True
+            continue
+        liveness[account_id] = WorkerLiveness(
+            queue_depth=int(depth),
+            heartbeat_fresh=state == WORKER_ONLINE,
+        )
+    return liveness, partial
+
+
+@dataclass(frozen=True, slots=True)
+class _OpsSnapshot:
+    """Оперативное состояние на момент запроса «Обзора» — ОДНИМ чтением.
+
+    Живость воркеров аккаунтов и глубина очереди канала брокера нужны и плитке
+    задач, и блоку инцидентов. Два независимых чтения дали бы два снимка разного
+    момента, и плитка могла бы не сойтись с блоком под ней на глазах у
+    администратора — при том что оба числа он читает как одно состояние.
+
+    `queue_total` равен `None`, когда хотя бы один источник не прочитан:
+    сумма, посчитанная по части источников, выглядит измеренной и таковой не
+    является. Ноль вместо неё читался бы как «очередь пуста», то есть как ОТВЕТ
+    на вопрос, которого мы не знаем.
+    """
+
+    liveness: dict[int, dict]
+    telegram_depth: int | None
+    queue_total: int | None
+    partial: bool
+
+
+async def _ops_snapshot(db: AsyncSession) -> _OpsSnapshot:
+    """Живость воркеров аккаунтов и глубина очереди брокера — на один момент."""
+    accounts = (
+        (await db.execute(select(MessengerAccount).order_by(MessengerAccount.id)))
+        .scalars()
+        .all()
+    )
+    liveness = await worker_liveness(
+        [a.id for a in accounts if a.type == CHANNEL_WA],
+        [a.id for a in accounts if a.type == CHANNEL_MAX],
+    )
+    telegram_depth = await telegram_queue_depth()
+
+    depths = [view.get("queue_depth") for view in liveness.values()]
+    partial = telegram_depth is None or any(depth is None for depth in depths)
+    queue_total = (
+        None if partial else telegram_depth + sum(depth for depth in depths)
+    )
+    return _OpsSnapshot(
+        liveness=liveness,
+        telegram_depth=telegram_depth,
+        queue_total=queue_total,
+        partial=partial,
+    )
+
+
 @router.get("", response_class=HTMLResponse)
 async def admin_dashboard(
     request: Request,
@@ -353,75 +464,61 @@ async def admin_dashboard(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    user_repo = UserRepository(db)
-    total_users = await user_repo.count_all()
+    """Подраздел «Обзор»: ключевые показатели сервиса и текущие инциденты.
 
-    total_accounts = (
-        await db.execute(select(func.count(MessengerAccount.id)))
-    ).scalar() or 0
+    ⚠️ ЧИСЛО ОШИБОК БЕРЁТСЯ У МОДУЛЯ АНАЛИТИКИ, А НЕ СЧИТАЕТСЯ ЗДЕСЬ (D-39).
+    На тот же вопрос отвечает пользовательский дашборд, и второй счёт рядом
+    означал бы день, когда администратор и пользователь смотрят на РАЗНЫЕ числа
+    об одном и том же периоде и оба считают своё верным. Общесистемная область
+    передаётся ЯВНО (`user_id=None`), потому что умолчания у параметра нет.
 
-    total_active_accounts = (
-        await db.execute(
-            select(func.count(MessengerAccount.id)).where(
-                MessengerAccount.status == "active"
-            )
+    ⚠️ ОКНО ОШИБОК — СУТКИ, А НЕ ЧАС ИЗ МАКЕТА (D-40). Модуль настроен на
+    скользящие 24 часа, дельта приезжает тем же обращением к базе, и цифра
+    «Обзора» совпадает с той, что пользователь видит у себя. Острые всплески
+    ловит блок инцидентов — у него на это свой признак с окном в час (D-51).
+    """
+    now = datetime.now(timezone.utc)
+
+    users = await user_totals(db, now=now)
+    paying = await paying_total(db, now=now)
+    metrics = await send_metrics(db, user_id=None, now=now)
+
+    ops = await _ops_snapshot(db)
+    liveness, liveness_partial = _liveness_for_incidents(ops.liveness)
+    board = await collect_incidents(db, liveness, now=now)
+
+    # ⚠️ ВЕЛИЧИНА ВРЕМЕНИ СЧИТАЕТСЯ ТОЛЬКО ПРИ НЕПУСТОЙ ОЧЕРЕДИ КАНАЛА, и это то
+    # же правило, по которому её печатает подраздел «Очередь». Время с последней
+    # отправки на ПУСТОЙ очереди означает «работы не было», а не «работа стоит»,
+    # и напечатанное оно тревожило бы администратора ровно там, где всё в
+    # порядке.
+    queue_time_sec = None
+    if ops.telegram_depth:
+        queue_time_sec = telegram_lag_seconds(
+            await last_send_at(db, messenger_type=QUEUE_TELEGRAM_CHANNEL), now
         )
-    ).scalar() or 0
-
-    today_start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    sends_today = (
-        await db.execute(
-            select(func.count(SendLog.id)).where(
-                SendLog.sent_at >= today_start
-            )
-        )
-    ).scalar() or 0
-
-    # ПЯТОГО ПОКАЗАТЕЛЯ ЗДЕСЬ НЕТ, И ЗАМЕНА ЕМУ НЕ ЗАВЕДЕНА НАМЕРЕННО (A-8).
-    # Он суммировал остатки сообщений по всем пользователям — величину, которой
-    # в продукте больше не существует. Подраздел обзора принадлежит фазе 6, и
-    # показатель, заведённый здесь, будет ею переопределён: это работа под
-    # снос. Раскладка не страдает — сетка плиток автозаполняемая, четыре плитки
-    # переливаются без дыры.
 
     return templates.TemplateResponse(
         "admin/overview.html",
         {
             **_admin_context(request, admin, "overview"),
-            "stats": {
-                "total_users": total_users,
-                "total_accounts": total_accounts,
-                "active_accounts": total_active_accounts,
-                "sends_today": sends_today,
-            },
+            "users": users,
+            "paying": paying,
+            "mrr": monthly_revenue(paying, settings.subscription_price),
+            "queue_total": ops.queue_total,
+            "queue_time_sec": queue_time_sec,
+            "metrics": metrics,
+            "board": board,
+            "incident_cap": INCIDENT_LIST_CAP,
+            # ⚠️ НЕПОЛНОТА КАРТИНЫ НАЗЫВАЕТСЯ, А НЕ УМАЛЧИВАЕТСЯ. Признак «воркер
+            # не забирает работу» считается из живости, а живость лежит только в
+            # Redis: при недоступном наблюдателе он не считается ВОВСЕ. Блок,
+            # промолчавший об этом, выглядел бы полным и таковым не был бы —
+            # худший из возможных исходов, потому что администратор прочитал бы
+            # «остальное в порядке» там, где остального просто не посчитали.
+            "incidents_partial": liveness_partial,
         },
     )
-
-
-async def _account_counts_by_user(
-    db: AsyncSession, user_ids: list[int]
-) -> dict[int, int]:
-    """Число мессенджер-аккаунтов перечисленных пользователей — ОДНИМ запросом.
-
-    Форма повторяет `_active_subscriptions_by_user` дословно и по той же
-    причине: колонка на строку, посчитанная запросом на строку, стоит числа
-    обращений, растущего вместе с числом зарегистрированных, — а страница
-    администратора видит их всех сразу.
-
-    Пустой список НЕ ходит в базу: `IN ()` — синтаксическая ошибка на части
-    диалектов и бессмысленный запрос на остальных.
-    """
-    if not user_ids:
-        return {}
-
-    rows = await db.execute(
-        select(MessengerAccount.user_id, func.count(MessengerAccount.id))
-        .where(MessengerAccount.user_id.in_(user_ids))
-        .group_by(MessengerAccount.user_id)
-    )
-    return {user_id: count for user_id, count in rows.all()}
 
 
 def _parse_page(value: str | None) -> int:
@@ -493,7 +590,7 @@ async def admin_users(
     # аккаунтов собираются ОДНИМ запросом на всю страницу.
     user_ids = [u.id for u in result.users]
     subscriptions = await _active_subscriptions_by_user(db, user_ids)
-    accounts = await _account_counts_by_user(db, user_ids)
+    accounts = await account_counts_by_user(db, user_ids)
     user_data = [
         {
             "user": u,
@@ -899,14 +996,9 @@ async def admin_queue(
     unavailable = unavailable or telegram_depth is None
     telegram_lag = None
     if telegram_depth:
-        last_sent_at = (
-            await db.execute(
-                select(func.max(SendLog.sent_at)).where(
-                    SendLog.messenger_type == QUEUE_TELEGRAM_CHANNEL
-                )
-            )
-        ).scalar()
-        telegram_lag = telegram_lag_seconds(last_sent_at, now)
+        telegram_lag = telegram_lag_seconds(
+            await last_send_at(db, messenger_type=QUEUE_TELEGRAM_CHANNEL), now
+        )
 
     has_telegram_accounts = any(
         a.type == QUEUE_TELEGRAM_CHANNEL for a in accounts
@@ -1125,19 +1217,7 @@ async def admin_user_detail(
     )
     accounts = list(accounts_result.scalars().all())
 
-    ads_count = (
-        await db.execute(
-            select(func.count(Ad.id)).where(Ad.user_id == target_user.id)
-        )
-    ).scalar() or 0
-
-    groups_count = (
-        await db.execute(
-            select(func.count(Group.id)).where(
-                Group.user_id == target_user.id
-            )
-        )
-    ).scalar() or 0
+    counts = await user_card_counts(db, target_user.id)
 
     # Плитка доступа читает ТУ ЖЕ строку и ТОТ ЖЕ предикат, что список и продукт.
     subscriptions = await _active_subscriptions_by_user(db, [target_user.id])
@@ -1154,8 +1234,8 @@ async def admin_user_detail(
             "active_page": "admin",
             "target_user": target_user,
             "accounts": accounts,
-            "ads_count": ads_count,
-            "groups_count": groups_count,
+            "ads_count": counts.ads,
+            "groups_count": counts.groups,
             # ⚠️ КЛЮЧ НАЗВАН `target_access`, А НЕ `access`. Шелл кладёт в
             # контекст СВОЙ словарь доступа — АДМИНИСТРАТОРА, который смотрит на
             # эту карточку, — и совпадение имён напечатало бы срок админа на
