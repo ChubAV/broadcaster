@@ -700,3 +700,79 @@ def test_the_heartbeat_invariant_is_derived_and_not_asserted_at_import(
         "роняет импорт у всех воркеров и beat разом. Инвариант обязан быть "
         "ВЫВЕДЕН из одного источника, а не сверен с ним"
     )
+
+
+def test_unreadable_queues_are_named_in_the_journal_not_swallowed(
+    celery_app_module,
+):
+    """Непрочитанный перечень очередей оставляет ИМЕНОВАННУЮ запись (WR-09).
+
+    ⚠️ ЦЕНА МОЛЧАНИЯ ЗДЕСЬ ВЫШЕ, ЧЕМ ВЫГЛЯДИТ. Сорвись чтение на
+    telegram-воркере — перечень остаётся пустым, роль сваливается в умолчание, и
+    процесс пишет ЧУЖОЙ ключ. Подраздел «Воркеры» показывает после этого
+    Telegram вечно отключённым И default живым дважды: ложная тревога и ложное
+    «всё в порядке» из одного проглоченного исключения, на блоке, который
+    администратор открывает во время аварии. Проглоченное, оно не оставляло ни
+    одной строки, по которой это можно было бы установить.
+
+    Поток признака живости здесь подменён: предмет утверждения — запись о
+    непрочитанной роли, а не подъём фонового потока с обращением к Redis.
+    """
+    from unittest.mock import MagicMock, patch
+
+    class _SenderWithoutQueues:
+        @property
+        def app(self):
+            raise RuntimeError("очереди ещё не выбраны")
+
+    logger = MagicMock()
+
+    with patch.object(
+        celery_app_module, "_start_infra_heartbeat"
+    ) as started, patch(
+        "structlog.get_logger", return_value=logger
+    ):
+        celery_app_module.start_worker_infra_heartbeat(
+            sender=_SenderWithoutQueues()
+        )
+
+    events = [call.args[0] for call in logger.warning.call_args_list if call.args]
+    assert "infra_heartbeat_queues_unreadable" in events, (
+        f"непрочитанные очереди проглочены молча: {events} — роль воркера "
+        "выбрана не по измерению, и установить это нечем"
+    )
+    assert started.called, (
+        "признак живости не поднят вовсе — процесс стал невидим в подразделе "
+        "целиком, а это хуже, чем неверная роль"
+    )
+
+
+def test_readable_queues_leave_no_such_line_and_pick_the_measured_role(
+    celery_app_module,
+):
+    """ГРАНИЦА СВЕРХУ: при читаемых очередях записи нет, а роль — измеренная.
+
+    Без этого утверждения запись, выставляемая ВСЕГДА, прошла бы тест выше и
+    объявляла бы роль неизмеренной на каждом исправном запуске.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from app.services.ops_state import INFRA_WORKER_TELEGRAM
+
+    sender = MagicMock()
+    sender.app.amqp.queues.keys.return_value = ["telegram"]
+    logger = MagicMock()
+
+    with patch.object(
+        celery_app_module, "_start_infra_heartbeat"
+    ) as started, patch(
+        "structlog.get_logger", return_value=logger
+    ):
+        celery_app_module.start_worker_infra_heartbeat(sender=sender)
+
+    events = [call.args[0] for call in logger.warning.call_args_list if call.args]
+    assert "infra_heartbeat_queues_unreadable" not in events, (
+        "исправный запуск объявлен непрочитанным — запись выставляется всегда "
+        "и потому ничего не сообщает"
+    )
+    started.assert_called_once_with(INFRA_WORKER_TELEGRAM)
