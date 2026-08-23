@@ -2180,3 +2180,267 @@ async def test_no_mockup_values_reached_the_overview_tiles(
 
     for marker in ("621 000", "18 д", "4 ч", "ОШИБОК ЗА ЧАС", "Ошибок за час"):
         assert marker not in html, marker
+
+
+# =============================================================================
+# Блок инцидентов на «Обзоре» (план 06-10, D-43…D-48)
+# =============================================================================
+#
+# ⚠️ БЛОК ПОКАЗЫВАЕТ ТОЛЬКО СЛОМАННОЕ СЕЙЧАС. Инцидент есть СОСТОЯНИЕ, а не
+# событие: он держится, пока не починено, и исчезает сам, когда неисправность
+# ушла (D-43, D-44). Строк о восстановлении здесь не бывает ни в каком виде —
+# для них понадобилась бы история, то есть трижды отклонённая таблица.
+#
+# ⚠️ СЛОМАННЫЙ НАБЛЮДАТЕЛЬ ДАЁТ ЧАСТИЧНУЮ КАРТИНУ, НАЗВАННУЮ ЧАСТИЧНОЙ.
+# Молчаливое исчезновение одного из пяти признаков — худший из исходов: блок
+# выглядит полным и таковым не является, и администратор читает «всё остальное
+# в порядке» там, где остального просто не посчитали.
+
+INCIDENTS_HEADING = "Инциденты"
+INCIDENTS_EMPTY_HEADING = "Сейчас ничего не сломано"
+INCIDENT_LINK_LABEL = "Чинить"
+
+# Пять видов и их подписи в слоте «источник» — по одному разу и здесь.
+INCIDENT_KIND_LABELS = {
+    "worker_stuck": "воркер",
+    "account_down": "аккаунт",
+    "failure_spike": "отправка",
+    "payment_stuck": "платежи",
+    "beat_silent": "планировщик",
+}
+
+
+def _incident_rows(html: str) -> list[str]:
+    """Разметка строк блока инцидентов."""
+    return [chunk.split("</div>")[0] for chunk in html.split("<div data-incident-row")[1:]]
+
+
+async def _seed_down_account(db: AsyncSession, status: str = "disconnected"):
+    """Отвалившийся аккаунт — самый дешёвый способ поднять инцидент из базы."""
+    account = await _seed_account(db, account_type="wa", status=status)
+    account.last_synced_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    await db.commit()
+    return account
+
+
+@pytest.mark.asyncio
+async def test_the_incident_board_says_nothing_is_broken_when_nothing_is(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Пустой блок — ВАЛИДНЫЙ и ожидаемый ответ, а не отсутствие данных.
+
+    ⚠️ И формулировка обязана сказать ДВЕ вещи: что всё в порядке И что список
+    чистит себя сам. Без второй администратор станет искать кнопку «закрыть»,
+    которой нет и не будет (D-44).
+    """
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert INCIDENTS_HEADING in html, "блока инцидентов на «Обзоре» нет вовсе"
+    assert INCIDENTS_EMPTY_HEADING in html
+    assert "вручную" in html, (
+        "пустое состояние не сказало, что список очищается сам: администратор "
+        "пойдёт искать кнопку «закрыть»"
+    )
+    assert not _incident_rows(html), "здоровый сервис напечатал строку инцидента"
+
+
+@pytest.mark.asyncio
+async def test_a_raised_incident_prints_a_row_with_time_text_and_a_link(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Поднятый признак печатает строку: время, подпись вида, текст и переход."""
+    account = await _seed_down_account(db_session)
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    rows = _incident_rows(html)
+    assert len(rows) == 1, rows
+    row = rows[0]
+
+    assert INCIDENT_KIND_LABELS["account_down"] in row, row
+    assert str(account.id) in row, row
+    assert INCIDENT_LINK_LABEL in row, row
+    assert f'href="/admin/users/{account.user_id}"' in row, row
+
+
+@pytest.mark.asyncio
+async def test_every_incident_kind_has_a_label_a_tone_and_a_living_route(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Все пять видов названы, окрашены и ведут по адресу, который существует.
+
+    ⚠️ АДРЕС ПРОВЕРЯЕТСЯ ПРОТИВ ЖИВЫХ МАРШРУТОВ ПРИЛОЖЕНИЯ, а не против самого
+    себя. Ссылка, совпадающая с объявлением и никуда не ведущая, — это ровно
+    то, что видит администратор в аварии: он жмёт её и получает 404 вместо
+    подраздела, в котором чинят.
+    """
+    from app.application.admin.incidents import (
+        INCIDENT_DESTINATIONS,
+        INCIDENT_KIND_ACCOUNT_DOWN,
+    )
+    from app.main import create_app
+
+    assert set(INCIDENT_DESTINATIONS) == set(INCIDENT_KIND_LABELS), (
+        "перечень видов разъехался с подписями: вид без подписи напечатал бы "
+        "строку без имени источника"
+    )
+
+    # Живые маршруты приложения — множество путей, а не догадка о них.
+    routes = {
+        getattr(route, "path", "")
+        for route in create_app(settings=test_settings).routes
+    }
+
+    for kind, root in INCIDENT_DESTINATIONS.items():
+        path = root.split("?")[0].rstrip("/")
+        # У адреса карточки пользователя путь параметризован: сравнивать его
+        # надо с шаблоном маршрута, а не с подставленным идентификатором.
+        expected = "/admin/users/{user_id}" if kind == INCIDENT_KIND_ACCOUNT_DOWN else path
+        assert expected in routes, (
+            f"вид {kind} ведёт по адресу {root!r}, которому в приложении не "
+            f"соответствует ни один маршрут"
+        )
+
+
+@pytest.mark.asyncio
+async def test_incident_rows_come_freshest_first(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Свежая авария важнее давней: первая строка отвечает «что чинить первым»."""
+    old = await _seed_down_account(db_session)
+    fresh = await _seed_account(db_session, account_type="max", status="sync_failed")
+    fresh.last_synced_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    old.last_synced_at = datetime.now(timezone.utc) - timedelta(days=3)
+    await db_session.commit()
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    rows = _incident_rows(html)
+    assert len(rows) == 2, rows
+    assert str(fresh.id) in rows[0], rows
+    assert str(old.id) in rows[1], rows
+
+
+@pytest.mark.asyncio
+async def test_a_capped_incident_board_names_its_own_ceiling(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сработавший потолок НАЗЫВАЕТ СЕБЯ, и число приезжает подстановкой.
+
+    Молча усечённый перечень читается как «других инцидентов нет» — то есть как
+    ответ на вопрос, ради которого администратор в блок и пришёл.
+    """
+    from app.application.admin.incidents import INCIDENT_LIST_CAP
+
+    for _ in range(INCIDENT_LIST_CAP + 2):
+        await _seed_down_account(db_session)
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert len(_incident_rows(html)) == INCIDENT_LIST_CAP
+    assert f"Показаны первые {INCIDENT_LIST_CAP}" in html, (
+        "потолок сработал молча: перечень укоротился, и об этом не сказано"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_incident_board_carries_no_recovery_rows(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Зелёных строк «восстановлен» нет ни в разметке, ни в шаблоне (D-46).
+
+    Восстановление — СОБЫТИЕ, а не состояние; для него нужна история, то есть
+    трижды отклонённая таблица. Строка о восстановлении рядом со строками об
+    авариях читается как часть текущего состояния сервиса.
+    """
+    await _seed_down_account(db_session)
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert "осстановлен" not in html, html[:200]
+    for name in ("admin/overview.html", "admin/includes/incident_row.html"):
+        source = (TEMPLATES_ROOT / name).read_text(encoding="utf-8")
+        assert "осстановлен" not in source, name
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_redis_gives_a_partial_incident_board_that_says_so(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Частичная картина НАЗЫВАЕТСЯ частичной, а не выдаёт себя за полную.
+
+    ⚠️ Признак «воркер не забирает работу» считается из живости, а живость
+    хранится только в Redis. При недоступном Redis он не считается вовсе — и
+    молчание об этом было бы худшим исходом: блок выглядел бы полным, показывал
+    бы инциденты из базы и умалчивал, что пятого признака в нём нет.
+    """
+    await _seed_down_account(db_session)
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        response = await admin_client.get(OVERVIEW_URL)
+
+    html = response.text
+    assert response.status_code == 200
+    assert _incident_rows(html), "инциденты из базы исчезли вместе с наблюдателем"
+    assert "картина неполная" in html, (
+        "блок не сказал, что часть признаков посчитать нечем"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stuck_worker_incident_comes_from_the_liveness_values(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Признак живости доезжает до блока ЗНАЧЕНИЯМИ через переходник «Обзора».
+
+    ⚠️ ПРИКЛАДНОЙ МОДУЛЬ ПРИЗНАКОВ КЛИЕНТОВ НЕ ЗНАЕТ И ЗНАТЬ НЕ ДОЛЖЕН: он
+    принимает уже решённую живость, и поэтому пять признаков проверяются суитой
+    без единой поднятой службы. Переходник от формы сервиса к форме модуля живёт
+    ЗДЕСЬ, на стороне потребителя.
+    """
+    account = await _seed_account(db_session, account_type="wa", status="active")
+
+    # Непустая очередь И несвежий heartbeat: работа есть, а делать её некому.
+    client = _FakeQueuePageRedis({f"wa:queue:{account.id}": [b"a", b"b"]})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    rows = _incident_rows(html)
+    assert len(rows) == 1, rows
+    assert INCIDENT_KIND_LABELS["worker_stuck"] in rows[0], rows[0]
+    assert 'href="/admin/workers"' in rows[0], rows[0]
+
+
+def test_the_incident_module_still_knows_no_client_of_an_external_service():
+    """Переходник не втащил клиент брокера в прикладной модуль признаков.
+
+    Стык, за который план 06-04 отвечал прямо: если бы модуль признаков стал
+    импортировать сервис оперативного состояния, суита пяти признаков потребовала
+    бы поднятого стенда — и перестала бы ловить их регрессии на каждом прогоне.
+    """
+    source = Path("app/application/admin/incidents.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+
+    forbidden = [
+        name
+        for name in imported
+        if any(marker in name.lower() for marker in ("redis", "docker", "httpx", "ops_state"))
+    ]
+    assert not forbidden, forbidden
