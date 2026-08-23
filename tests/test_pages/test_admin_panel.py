@@ -2444,3 +2444,174 @@ def test_the_incident_module_still_knows_no_client_of_an_external_service():
         if any(marker in name.lower() for marker in ("redis", "docker", "httpx", "ops_state"))
     ]
     assert not forbidden, forbidden
+
+
+# =============================================================================
+# План 06-14: сквозная проверка фазы — шесть подразделов как ОДНО целое
+# =============================================================================
+#
+# ⚠️ ЭТО НЕ ПОВТОР ТЕСТОВ ОТДЕЛЬНЫХ ПОДРАЗДЕЛОВ. Тесты выше проверяют
+# СОДЕРЖИМОЕ каждого подраздела — плитки «Обзора», строки «Очереди», плашку
+# «Логов». Обход ниже проверяет другое: что после тринадцати планов, каждый из
+# которых правил ОДИН И ТОТ ЖЕ страничный модуль и ОДИН И ТОТ ЖЕ файл стилей,
+# ни один подраздел не потерял вкладки, не сменил подсветку, не открылся
+# постороннему и не начал ронять 500 при отсутствующих внешних службах.
+#
+# ⚠️ ОБХОД ПАРАМЕТРИЗОВАН, А НЕ ЗАЦИКЛЕН, И ЭТО РАЗНИЦА ПО СУЩЕСТВУ. Цикл
+# внутри одного теста останавливается на ПЕРВОМ упавшем адресе, и о состоянии
+# остальных пяти отчёт молчит; на приёмке фазы это ровно та потеря сведений,
+# ради которой обход и заводится — «сломан один» и «сломаны все шесть» суть
+# разные диагнозы. Параметризация даёт шесть независимых случаев в отчёте.
+#
+# ⚠️ ОТЛИЧИЕ ОТ ОБХОДА ПЛАНА 06-01, СТОЯЩЕГО ВЫШЕ. Тот утверждает по ОДНОМУ
+# свойству на шесть адресов (все отвечают 200; признак активности встречается
+# один раз). Этот утверждает СОСТАВ свойств на КАЖДОМ адресе и добавляет то,
+# чего у обхода 06-01 нет и быть не могло: активная вкладка ведёт ИМЕННО на
+# текущий подраздел (счёт вхождений этого не доказывает — единственный признак
+# на чужой вкладке дал бы тот же счёт), и обе внешние службы отсутствуют
+# ОДНОВРЕМЕННО.
+
+# Тройки «адрес, ключ, подпись» — из единственного объявления перечня. Второй
+# копией шести адресов обход разъехался бы с продуктом молча.
+SUBSECTION_SWEEP = tuple(
+    pytest.param(tab["href"], tab["key"], tab["label"], id=tab["key"])
+    for tab in ADMIN_TABS
+)
+
+
+def _tabs_markup(html: str) -> str:
+    """Разметка блока вкладок отданной страницы.
+
+    Утверждения адресуются блоку, а не документу: `href="/admin/logs"` есть и в
+    ссылке строки воркера «посмотреть логи», и в плашке инцидента, — то есть
+    поиск по всей странице зеленел бы при начисто пропавших вкладках.
+    """
+    start = html.index("<nav data-subtabs")
+    return html[start : html.index("</nav>", start)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_each_subsection_still_carries_all_six_tabs(
+    admin_client: AsyncClient, url: str, key: str, label: str
+):
+    """Каждый из шести адресов отвечает 200 и несёт ПОЛНЫЙ перечень вкладок.
+
+    Потеря вкладок — самый дешёвый способ для подраздела стать недостижимым, не
+    став при этом сломанным: маршрут отвечает 200, страница рисуется, а уйти с
+    неё некуда. Обнаруживается такое только глазами, поэтому утверждение стоит
+    здесь.
+    """
+    response = await admin_client.get(url)
+    assert response.status_code == 200, url
+
+    tabs = _tabs_markup(response.text)
+    hrefs = re.findall(r'<a class="subtab" href="([^"]+)"', tabs)
+    assert hrefs == list(SUBSECTION_URLS), (
+        f"{url}: перечень вкладок разъехался с ADMIN_TABS — {hrefs}"
+    )
+    for tab in ADMIN_TABS:
+        assert tab["label"] in tabs, f"{url}: пропала подпись «{tab['label']}»"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_each_subsection_marks_its_own_tab_and_only_its_own(
+    admin_client: AsyncClient, url: str, key: str, label: str
+):
+    """Признак активности стоит РОВНО ОДИН раз и ведёт на ТЕКУЩИЙ подраздел.
+
+    ⚠️ СЧЁТ ВХОЖДЕНИЙ ЭТОГО НЕ ДОКАЗЫВАЕТ. Единственный признак, уехавший на
+    соседнюю вкладку, даёт ту же единицу — и подраздел подсвечивал бы чужое имя,
+    оставаясь зелёным. Поэтому утверждение адресуется АДРЕСУ помеченного якоря.
+    """
+    tabs = _tabs_markup((await admin_client.get(url)).text)
+
+    assert tabs.count("data-subtab-active") == 1, url
+    marked = re.findall(
+        r'<a class="subtab" href="([^"]+)" data-subtab-active', tabs
+    )
+    assert marked == [url], (
+        f"{url}: активная вкладка ведёт на {marked} — подсвечен чужой подраздел"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_each_subsection_keeps_the_admin_section_highlighted(
+    admin_client: AsyncClient, url: str, key: str, label: str
+):
+    """Раздел «Админ-панель» подсвечен в навигации шелла на каждом адресе.
+
+    Подсветка раздела и подсветка подраздела — две РАЗНЫЕ вещи на двух разных
+    признаках (`is-active` шелла против `data-subtab-active` вкладок). Потеря
+    первой означает, что администратор внутри админ-панели не видит, где он.
+    """
+    html = (await admin_client.get(url)).text
+    assert 'class="nav-item is-active"' in html, url
+    assert 'href="/admin"' in html, url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_each_subsection_is_denied_to_an_outsider(
+    authed_client: AsyncClient, url: str, key: str, label: str
+):
+    """Каждый адрес отвечает посторонним 403 — привилегия у КАЖДОГО, не у входа.
+
+    Шесть маршрутов заведены пятью разными планами. Зависимость администратора,
+    забытая на одном из них, открыла бы чужие учётные записи, чужие платежи или
+    журнал всего сервиса любому вошедшему — и остальные пять маршрутов об этом
+    молчали бы.
+    """
+    response = await authed_client.get(url)
+    assert response.status_code == 403, url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_each_subsection_survives_both_external_services_at_once(
+    admin_client: AsyncClient, url: str, key: str, label: str
+):
+    """Ни один адрес не роняет 500 при ОДНОВРЕМЕННО мёртвых Redis и источнике логов.
+
+    ⚠️ ПРОВЕРЯЕТСЯ ПОДМЕНОЙ КЛИЕНТОВ, А НЕ УДАЧЕЙ ОКРУЖЕНИЯ. В среде разработки
+    обеих служб нет по умолчанию, и тест на голом окружении зеленел бы, ничего
+    не утверждая: он не отличал бы «ветка отказа пройдена» от «ветка отказа не
+    достигнута». Подмена ИМЕНОВАННЫХ точек получения клиента — единственных в
+    обоих модулях — делает отказ ФАКТОМ прогона.
+    Обе службы гасятся ВМЕСТЕ, потому что порознь это уже проверено выше по
+    файлу: предмет здесь — что деградации не складываются в отказ страницы.
+    """
+    with patch("app.services.ops_state._get_redis", return_value=None), patch(
+        "app.services.loki_client._client", return_value=None
+    ):
+        response = await admin_client.get(url)
+
+    assert response.status_code == 200, (
+        f"{url}: отсутствие внешних служб превратилось в отказ страницы"
+    )
+    # Вкладки на месте — то есть страница ДЕГРАДИРОВАЛА, а не подменилась
+    # страницей ошибки, которая тоже могла бы отдать 200.
+    assert "<nav data-subtabs" in response.text, (
+        f"{url}: 200 отдан, но это не подраздел — вкладок в ответе нет"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_no_subsection_leaks_the_removed_groups_directory(
+    admin_client: AsyncClient, url: str, key: str, label: str
+):
+    """Снесённый справочник групп не всплыл ни в одной ОТДАННОЙ разметке (D-05).
+
+    Страховочная сетка плана 06-01 читает ИСХОДНИКИ шаблонов и маршрутов. Она
+    не увидела бы адреса, собранного обработчиком в контекст на лету, — а
+    именно так его и вернул бы сюда невнимательный план: строкой в перечне
+    ссылок, а не выписанным в шаблоне якорем. Поэтому обход смотрит на то, что
+    ушло в браузер.
+    """
+    html = (await admin_client.get(url)).text
+    assert "groups-info" not in html, (
+        f"{url}: снесённая поверхность справочника групп вернулась в разметку"
+    )
