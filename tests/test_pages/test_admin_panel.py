@@ -1804,3 +1804,349 @@ async def test_a_worker_row_leads_to_the_logs_of_that_worker(
     assert f'account_id="{account.id}"' in reader.await_args.args[0], (
         "переход по ссылке из строки не выбрал источник этого воркера"
     )
+
+
+# =============================================================================
+# Подраздел «Обзор»: четыре плитки ключевых показателей (план 06-10, D-37…D-40)
+# =============================================================================
+#
+# ⚠️ ГЛАВНОЕ УТВЕРЖДЕНИЕ БЛОКА ОДНО: НИ ОДНО ЧИСЛО «ОБЗОРА» НЕ РАСХОДИТСЯ С ТЕМ,
+# ЧТО ВИДИТ ПОЛЬЗОВАТЕЛЬ. Расхождение такого рода не роняет ни один тест и не
+# даёт пятисотки — оно просто печатает два разных числа на один вопрос, и первым
+# его замечает не разработчик, а человек, принимающий по этим числам решение.
+
+OVERVIEW_URL = "/admin"
+
+# Подписи плиток. Читаются ЗДЕСЬ по одному разу и адресуют утверждения ячейке, а
+# не документу: «3» на странице с четырьмя числами прошло бы за любое из них.
+TILE_USERS = "Пользователей"
+TILE_PAYING = "Платящих"
+TILE_QUEUE = "Задач в очереди"
+TILE_ERRORS = "Ошибок за сутки"
+
+# Слова величины времени очереди. ТА ЖЕ строка, что уже отгружена подразделом
+# «Очередь»: если «Обзор» и «Очередь» назовут одно число двумя именами,
+# администратор не сможет понять, что это одно и то же число.
+QUEUE_TIME_WORDS = "с последней отправки по каналу"
+
+
+def _tile(html: str, label: str) -> str:
+    """Разметка ОДНОЙ плитки, найденной по её подписи."""
+    chunks = [
+        chunk for chunk in html.split('<section class="card')[1:] if label in chunk
+    ]
+    assert len(chunks) == 1, (
+        f"плитка «{label}» найдена {len(chunks)} раз — утверждение адресовать нечему"
+    )
+    return chunks[0]
+
+
+def _tile_value(html: str, label: str) -> str:
+    """Крупное число плитки."""
+    found = re.search(r"data-metric-value[^>]*>([^<]*)<", _tile(html, label))
+    assert found, f"у плитки «{label}» нет крупного числа"
+    return found.group(1).strip()
+
+
+async def _seed_send(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    sent_at: datetime,
+    status: str = "ok",
+    messenger_type: str = "wa",
+) -> None:
+    """Запись журнала с ЯВНЫМ временем: без него она попала бы в окно «сейчас»."""
+    from app.models.send_log import SendLog
+
+    db.add(
+        SendLog(
+            user_id=user_id,
+            group_id=None,
+            ad_title="Объявление",
+            ad_text="Текст",
+            ad_images=[],
+            group_name="Группа",
+            messenger_type=messenger_type,
+            task_id="task-1",
+            status=status,
+            sent_at=sent_at,
+        )
+    )
+    await db.commit()
+
+
+async def _admin_user(db: AsyncSession):
+    from sqlalchemy import select
+    from app.models.user import User
+
+    return (await db.execute(select(User))).scalars().first()
+
+
+async def _seed_user(db: AsyncSession, email: str, *, created_at: datetime):
+    """Пользователь с ЯВНЫМ моментом регистрации — источник прироста за неделю."""
+    from app.models.user import User
+
+    user = User(
+        email=email,
+        password_hash="x",
+        name="U",
+        timezone="UTC",
+        created_at=created_at,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def _seed_subscription(
+    db: AsyncSession, user_id: int, *, expires_at: datetime, free: bool = False
+):
+    from app.models.subscription import Subscription
+
+    row = Subscription(
+        user_id=user_id,
+        expires_at=expires_at,
+        is_active=True,
+        has_free_access=free,
+    )
+    db.add(row)
+    await db.commit()
+    return row
+
+
+@pytest.mark.asyncio
+async def test_the_overview_users_tile_counts_the_week_by_the_registration_moment(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Плитка людей: всего и прирост за неделю по моменту регистрации."""
+    now = datetime.now(timezone.utc)
+    await _seed_user(db_session, "fresh@test.com", created_at=now - timedelta(days=2))
+    await _seed_user(db_session, "old@test.com", created_at=now - timedelta(days=40))
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+
+    # Три пользователя: администратор (зарегистрирован фикстурой только что) и
+    # двое посеянных. Прирост за неделю — администратор и свежий.
+    assert _tile_value(html, TILE_USERS) == "3"
+    assert "+2 за неделю" in _tile(html, TILE_USERS)
+
+
+@pytest.mark.asyncio
+async def test_the_paying_tile_leaves_the_comped_user_out(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """ТРИ условия, а не два: льготный в счёт платящих не идёт (D-38).
+
+    ⚠️ У пользователя с бесплатным доступом дверь открыта, а денег нет. Слив его
+    в один счётчик с платящими, «Обзор» сообщил бы, что АДМИНИСТРАТИВНАЯ ЛЬГОТА
+    накручивает выручку — в отчёте, по которому принимают решение о цене.
+    """
+    now = datetime.now(timezone.utc)
+    payer = await _seed_user(db_session, "payer@test.com", created_at=now)
+    comped = await _seed_user(db_session, "comped@test.com", created_at=now)
+    expired = await _seed_user(db_session, "expired@test.com", created_at=now)
+
+    await _seed_subscription(db_session, payer.id, expires_at=now + timedelta(days=10))
+    await _seed_subscription(
+        db_session, comped.id, expires_at=now + timedelta(days=10), free=True
+    )
+    await _seed_subscription(db_session, expired.id, expires_at=now - timedelta(days=1))
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert _tile_value(html, TILE_PAYING) == "1"
+
+
+@pytest.mark.asyncio
+async def test_the_revenue_caption_is_the_payers_times_the_price(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Подпись выручки = платящие × цена доступа, через ОБЩИЙ денежный глобал.
+
+    Собственное форматирование уронило бы раздел на нечисловом значении: общий
+    глобал проверяет конечность значения, и это уже оплачено планом 05-09.
+    """
+    from decimal import Decimal
+
+    from app.pages.common import format_amount
+
+    now = datetime.now(timezone.utc)
+    for index in range(2):
+        payer = await _seed_user(db_session, f"p{index}@test.com", created_at=now)
+        await _seed_subscription(
+            db_session, payer.id, expires_at=now + timedelta(days=10)
+        )
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+
+    expected = format_amount(Decimal(test_settings.subscription_price) * 2)
+    assert _tile_value(html, TILE_PAYING) == "2"
+    assert f"MRR {expected}" in _tile(html, TILE_PAYING), expected
+
+
+@pytest.mark.asyncio
+async def test_the_queue_tile_sums_the_three_sources(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Плитка очереди суммирует три источника, объявленных подразделом «Очередь»."""
+    wa = await _seed_account(db_session, account_type="wa")
+    max_account = await _seed_account(db_session, account_type="max")
+
+    client = _FakeQueuePageRedis(
+        {
+            "telegram": [b"a", b"b", b"c"],
+            f"wa:queue:{wa.id}": [b"x", b"y"],
+            f"max:queue:{max_account.id}": [b"z"],
+        }
+    )
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert _tile_value(html, TILE_QUEUE) == "6"
+
+
+@pytest.mark.asyncio
+async def test_the_queue_tile_says_unknown_and_not_zero_when_redis_is_down(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сломанный наблюдатель даёт НЕИЗВЕСТНОСТЬ, а не ноль.
+
+    ⚠️ Ноль читается как «очередь пуста» — то есть как ОТВЕТ на вопрос, которого
+    мы не знаем. Администратор, увидев его в аварии, решит, что рассылать нечего.
+    """
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        response = await admin_client.get(OVERVIEW_URL)
+
+    html = response.text
+    assert response.status_code == 200
+    assert _tile_value(html, TILE_QUEUE) == "—"
+    assert "title=" in _tile(html, TILE_QUEUE), (
+        "прочерк без названной причины: он читается как отказ, а причина у него есть"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_errors_tile_takes_the_rolling_day_and_its_delta(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Окно суточное, дельта — к предыдущим суткам (D-40)."""
+    admin = await _admin_user(db_session)
+    now = datetime.now(timezone.utc)
+
+    for _ in range(3):
+        await _seed_send(
+            db_session, admin.id, sent_at=now - timedelta(hours=2), status="fail"
+        )
+    await _seed_send(
+        db_session, admin.id, sent_at=now - timedelta(hours=30), status="fail"
+    )
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+    tile = _tile(html, TILE_ERRORS)
+
+    assert _tile_value(html, TILE_ERRORS) == "3"
+    assert "+2" in tile, tile
+    # Рост числа ошибок успехом не является: тон дельты ИНВЕРТИРОВАН.
+    assert 'data-tone="danger"' in tile, tile
+
+
+@pytest.mark.asyncio
+async def test_the_overview_error_number_matches_the_users_own_dashboard(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Число ошибок «Обзора» совпадает с числом на дашборде того же человека.
+
+    ⚠️ ЭТО И ЕСТЬ ПРИЧИНА, ПО КОТОРОЙ ОКНО СУТОЧНОЕ, А НЕ ЧАСОВОЕ ИЗ МАКЕТА.
+    Часовое окно дало бы администратору и пользователю разные числа об одном и
+    том же периоде, и оба считали бы своё верным.
+    """
+    admin = await _admin_user(db_session)
+    now = datetime.now(timezone.utc)
+    await _seed_send(
+        db_session, admin.id, sent_at=now - timedelta(hours=3), status="fail"
+    )
+    await _seed_send(
+        db_session,
+        admin.id,
+        sent_at=now - timedelta(hours=5),
+        status="account_disconnected",
+    )
+    await _seed_send(db_session, admin.id, sent_at=now - timedelta(hours=1))
+
+    overview = (await admin_client.get(OVERVIEW_URL)).text
+    dashboard = (await admin_client.get("/dashboard")).text
+
+    assert _tile_value(overview, TILE_ERRORS) == _tile_value(dashboard, "Ошибок")
+    assert _tile_value(overview, TILE_ERRORS) == "2"
+
+
+@pytest.mark.asyncio
+async def test_the_overview_names_the_queue_time_exactly_as_the_queue_subsection_does(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Одно число — ОДНИ слова на обоих подразделах.
+
+    ⚠️ ПОДПИСЬ СРАВНИВАЕТСЯ ДОСЛОВНО, А НЕ «ПО СМЫСЛУ». Два имени одной величины
+    на двух экранах администратор прочитает как две РАЗНЫЕ величины и станет
+    искать между ними расхождение, которого нет. Слово «лаг» тут не годится ни
+    на одном из экранов: оно читается как возраст самой старой задачи, а он
+    лежит внутри конверта брокера и решением D-14 не читается вовсе.
+    """
+    account = await _seed_account(db_session, account_type="tg_user")
+    await _seed_send(
+        db_session,
+        account.user_id,
+        sent_at=datetime.now(timezone.utc) - timedelta(seconds=120),
+        messenger_type="tg_user",
+    )
+
+    client = _FakeQueuePageRedis({"telegram": [b"one", b"two"]})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        overview = (await admin_client.get(OVERVIEW_URL)).text
+        queue = (await admin_client.get("/admin/queue")).text
+
+    caption = re.search(
+        r'<span class="mono[^"]*"[^>]*>(с последней отправки по каналу[^<]*)</span>',
+        queue,
+    )
+    assert caption, "подраздел «Очередь» перестал печатать величину времени"
+
+    assert QUEUE_TIME_WORDS in overview, "«Обзор» не назвал величину времени вовсе"
+    assert caption.group(1) in overview, (
+        "«Обзор» и «Очередь» называют одно число разными словами: "
+        f"очередь печатает {caption.group(1)!r}"
+    )
+    assert "лаг" not in overview and "самой старой задачи" not in overview
+
+
+@pytest.mark.asyncio
+async def test_the_overview_answers_two_hundred_with_an_unreachable_redis(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сломанный наблюдатель не роняет «Обзор»: страница обязана открыться."""
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        response = await admin_client.get(OVERVIEW_URL)
+
+    assert response.status_code == 200
+    assert TILE_QUEUE in response.text
+
+
+@pytest.mark.asyncio
+async def test_no_mockup_values_reached_the_overview_tiles(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Ни одно нарисованное в макете число не доехало до плиток «Обзора».
+
+    Число из макета, дожившее до прода, читается администратором как
+    ИЗМЕРЕННОЕ, и в аварии он примет решение по нарисованной цифре.
+    """
+    html = (await admin_client.get(OVERVIEW_URL)).text
+
+    for marker in ("621 000", "18 д", "4 ч", "ОШИБОК ЗА ЧАС", "Ошибок за час"):
+        assert marker not in html, marker
