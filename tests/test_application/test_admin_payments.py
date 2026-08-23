@@ -32,12 +32,14 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.admin.incidents import unclosed_payment_clause
 from app.application.admin.overview_stats import monthly_revenue, paying_total
 from app.application.admin.payments_query import (
     EXPIRED_LOOKBACK_DAYS,
     PAYMENT_PERIOD_CHIPS,
     PAYMENT_PERIOD_VALUES,
     PAYMENT_STATUS_CHIPS,
+    PAYMENT_STATUS_FILTERS,
     PAYMENT_STATUS_VALUES,
     apply_payment_filters,
     expired_not_renewed,
@@ -468,6 +470,18 @@ def test_the_axis_values_are_derived_from_the_declaration_and_not_rewritten():
     # фильтр можно было бы только правкой адреса руками.
     assert "" in {value for value, _ in PAYMENT_STATUS_CHIPS}
     assert "" in {value for value, _ in PAYMENT_PERIOD_CHIPS}
+
+
+def test_the_unclosed_chip_reuses_the_single_declared_rule_instead_of_a_copy():
+    """За чипсом «В обработке» стоит ТО ЖЕ условие, что за признаком инцидента.
+
+    ⚠️ УТВЕРЖДЕНИЕ ПРО ТОЖДЕСТВО, А НЕ ПРО ПОВЕДЕНИЕ, И ЭТО НАМЕРЕННО. Копия
+    условия, написанная рядом, вела бы себя одинаково с оригиналом ровно до того
+    дня, когда множество терминальных статусов пополнится, — и разошлась бы
+    молча. Соседний тест на третьем статусе проверяет, что правило ВЕРНО;
+    этот — что оно ОДНО, и заменить его копией нельзя, не уронив тест.
+    """
+    assert PAYMENT_STATUS_FILTERS["unclosed"].clause is unclosed_payment_clause
 
 
 def test_the_module_never_names_the_metrics_that_the_decision_threw_out():
