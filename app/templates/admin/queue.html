@@ -4,7 +4,7 @@
 {% from "components/modal.html" import modal %}
 {% from "components/mono.html" import mono %}
 {% from "components/table.html" import rowhead %}
-{% from "admin/includes/queue_row.html" import queue_row %}
+{% from "admin/includes/queue_row.html" import queue_row, queue_drop_modal_id %}
 {#- Величина времени канала брокера приходит ОТТУДА ЖЕ, откуда её берёт «Обзор»:
     одно число обязано называться на двух подразделах одними словами. -#}
 {% from "admin/includes/queue_time.html" import queue_time %}
@@ -91,7 +91,7 @@
   <h3 class="card__title">Аккаунт #{{ entry.account.id }}</h3>
   {{ rowhead(QUEUE_COLUMNS, cols=QUEUE_COLS) }}
   {% for row in entry.rows %}
-  {{ queue_row(entry.account, row, QUEUE_COLUMNS, QUEUE_COLS, user) }}
+  {{ queue_row(entry.account, row, QUEUE_COLUMNS, QUEUE_COLS, user, queue_drop_modal_id(entry.account, loop.index0)) }}
   {% endfor %}
   {#- ПОТОЛОК НАЗЫВАЕТ СЕБЯ. Молча усечённый перечень читается как «остальных
       задач нет» — то есть как ответ на вопрос, ради которого администратор в
@@ -131,8 +131,16 @@
 {#- Идентификатор задачи едет СКРЫТЫМ ПОЛЕМ ВНУТРИ формы панели — через слот
     макроса, заведённый ровно под такие поля. Снятие адресуется идентификатором,
     а не телом: тело несёт текст чужого объявления, и доверять клиенту точные
-    байты удаляемого не нужно вовсе. -#}
-{% call modal(id='queue-drop-' ~ entry.account.id ~ '-' ~ row.task_id,
+    байты удаляемого не нужно вовсе.
+
+    ⚠️ В КЛЮЧЕ ПАНЕЛИ ИДЕНТИФИКАТОРА ЗАДАЧИ НЕТ (WR-04). Ключ становится ИМЕНЕМ
+    АТРИБУТА в `modal.html`, а имена атрибутов не экранируются ничем; величина
+    из тела очереди там дописала бы админской странице чужие атрибуты. Ключ
+    собирает `queue_drop_modal_id` из позиции строки — величины, выбранной
+    сервером. Порядок обхода здесь ТОТ ЖЕ `entry.rows`, что и при отрисовке
+    строк, поэтому позиции совпадают; сама пропущенная строка (`if
+    row.task_id`) счёт не сдвигает — считает цикл, а не условие. -#}
+{% call modal(id=queue_drop_modal_id(entry.account, loop.index0),
               title='Снять задачу из очереди?',
               body='Отправка в группу «' ~ (row.group_name or 'без имени') ~ '» не состоится, и повторить её автоматически будет нечем: задача исчезнет из очереди. В журнал отправок запись не попадёт — попытки не было.',
               action='/admin/queue/' ~ entry.account.id ~ '/drop',

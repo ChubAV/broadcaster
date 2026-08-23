@@ -2872,3 +2872,106 @@ async def test_the_destructive_admin_actions_still_work_from_the_own_page(
         "блокировка со своей страницы не состоялась: отказ пришёл молча, "
         "кодом редиректа"
     )
+
+
+# =============================================================================
+# КЛЮЧ ПАНЕЛИ ПОДТВЕРЖДЕНИЯ НЕ СОБИРАЕТСЯ ИЗ ЧУЖИХ ДАННЫХ (WR-04)
+#
+# ⚠️ ПОЧЕМУ АВТОЭКРАНИРОВАНИЯ ЗДЕСЬ НЕ ХВАТАЕТ, ХОТЯ ОНО ВКЛЮЧЕНО СПЛОШЬ.
+# Идентификатор задачи приезжал в ДВА места, которых экранирование Jinja не
+# защищает: в выражение Alpine (разметка декодируется парсером ДО того, как
+# Alpine прочитает атрибут как JavaScript, поэтому `&#39;` снова становится
+# кавычкой и закрывает строковый литерал) и в ИМЯ АТРИБУТА
+# `x-on:modal-open-…` (имена атрибутов не экранируются в принципе). Сегодня
+# идентификатор пишет постановщик и это `uuid4`, поэтому живой эксплуатации
+# нет; предмет — расхождение между заявленной моделью («разметка это
+# экранирует») и кодом, на данных, которые прикладной модуль сам считает
+# чужими и возможно испорченными.
+# =============================================================================
+
+
+HOSTILE_TASK_ID = "x' ) ; alert(1) //  x-on:click=\"evil()\" q=\""
+
+
+@pytest.mark.asyncio
+async def test_a_queue_task_id_never_reaches_a_dom_identifier(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Идентификатор задачи не участвует в ключе панели — ни в одном из двух мест.
+
+    ⚠️ УТВЕРЖДЕНИЕ СНИМАЕТСЯ С КЛЮЧА, А НЕ С ОТСУТСТВИЯ ПОДСТРОКИ В СТРАНИЦЕ.
+    Идентификатор ОБЯЗАН остаться на странице — он едет скрытым полем формы,
+    и там экранирование работает и снятие им же адресуется. Проверяется, что
+    его нет ИМЕННО в диспетчеризуемом событии и в имени атрибута обработчика.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    client = _FakeQueuePageRedis(
+        {f"wa:queue:{account.id}": [_queue_task(HOSTILE_TASK_ID)]}
+    )
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    dispatched = re.findall(r"\$dispatch\('([^']*)'\)", html)
+    assert dispatched, (
+        "ни одного диспетчеризуемого события не найдено — утверждение ниже "
+        "проверяло бы пустое множество"
+    )
+    for event in dispatched:
+        assert re.fullmatch(r"modal-open-[A-Za-z0-9-]+", event), (
+            f"ключ события собран не только из выбранных сервером величин: "
+            f"{event!r} — кавычка в нём закрывает строковый литерал Alpine"
+        )
+
+    attribute_names = re.findall(r"x-on:modal-open-([^.\s=]*)", html)
+    assert attribute_names, "ни одного обработчика открытия панели не найдено"
+    for name in attribute_names:
+        assert re.fullmatch(r"[A-Za-z0-9-]+", name), (
+            f"имя атрибута собрано из чужой величины: {name!r} — имена "
+            "атрибутов не экранируются ничем"
+        )
+
+    assert 'name="task_id"' in html, (
+        "идентификатор задачи исчез со страницы вовсе — снятие адресовать "
+        "нечем, и починка отняла само действие"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_drop_button_and_its_confirmation_panel_still_match(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """ГРАНИЦА СВЕРХУ: ключ у кнопки и у панели ОДИН И ТОТ ЖЕ.
+
+    ⚠️ БЕЗ ЭТОГО УТВЕРЖДЕНИЯ ПОЧИНКА ВЫШЕ ПРОШЛА БЫ И РАЗОРВАВ СВЯЗЬ. Формат
+    ключа читается двумя сторонами — строкой очереди и панелью подтверждения; и
+    та и другая перестали бы совпадать МОЛЧА: кнопка отправляла бы событие,
+    которого никто не слушает, и подтверждение просто не открывалось бы.
+    Проверяется на ДВУХ строках одного аккаунта — при одной строке совпали бы и
+    два разошедшихся счётчика.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    client = _FakeQueuePageRedis(
+        {
+            f"wa:queue:{account.id}": [
+                _queue_task("первая", group_name="Группа Первая"),
+                _queue_task("вторая", group_name="Группа Вторая"),
+            ]
+        }
+    )
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    dispatched = set(re.findall(r"\$dispatch\('modal-open-([^']*)'\)", html))
+    listening = set(re.findall(r"x-on:modal-open-([^.\s=]*)\.window", html))
+
+    assert len(dispatched) == 2, (
+        f"две строки очереди дали {len(dispatched)} различных ключей: "
+        f"{sorted(dispatched)} — одна панель обслуживала бы обе задачи"
+    )
+    assert dispatched <= listening, (
+        f"кнопка шлёт событие, которого никто не слушает: "
+        f"{sorted(dispatched - listening)} — подтверждение не откроется, и "
+        "узнать об этом можно только глазами"
+    )

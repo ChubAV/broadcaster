@@ -34,7 +34,24 @@
 
 {%- set QUEUE_MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} -%}
 
-{%- macro queue_row(account, row, columns, cols, user) -%}
+{#- ⚠️ КЛЮЧ ПАНЕЛИ СОБИРАЕТСЯ ТОЛЬКО ИЗ ВЕЛИЧИН, КОТОРЫЕ ВЫБРАЛ СЕРВЕР, И ЭТО
+    ПРЕДМЕТ, А НЕ ОФОРМЛЕНИЕ (WR-04 ревизии фазы 6). Ключ едет в ДВА места,
+    которых автоэкранирование Jinja не защищает: в выражение Alpine (разметка
+    декодируется парсером ДО того, как Alpine прочитает атрибут как JavaScript,
+    поэтому экранированная кавычка закрывает строковый литерал) и в ИМЯ
+    АТРИБУТА `x-on:modal-open-…` (имена атрибутов не экранируются в принципе —
+    пробел или `="` в значении дописывает админской странице новые атрибуты).
+    Идентификатор задачи приезжает из ТЕЛА ОЧЕРЕДИ — данных, которые прикладной
+    модуль явно считает чужими и, возможно, испорченными, — и в ключе ему
+    поэтому не место. Он едет туда, где экранирование работает: скрытым полем
+    формы. Позиция строки выбрана сервером и состоит из цифр.
+
+    Формат ключа выписан ОДИН РАЗ, здесь, и читается обеими сторонами связи:
+    строкой (диспетчеризация события) и панелью подтверждения (`queue.html`).
+    Разъехавшись, две копии оставили бы кнопку без панели молча. -#}
+{%- macro queue_drop_modal_id(account, index) -%}queue-drop-{{ account.id }}-{{ index }}{%- endmacro -%}
+
+{%- macro queue_row(account, row, columns, cols, user, modal_id) -%}
 <div data-row data-queue-row style="--cols: {{ cols }}">
   {%- call cell(grow=true, label=columns[0]) %}
     {%- if account.type in QUEUE_MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
@@ -59,7 +76,7 @@
   {%- call cell(label=columns[3]) %}
     {%- if row.task_id -%}
       <form method="post" action="/admin/queue/{{ account.id }}/drop"
-            x-data x-on:submit.prevent="$dispatch('modal-open-queue-drop-{{ account.id }}-{{ row.task_id }}')">
+            x-data x-on:submit.prevent="$dispatch('modal-open-{{ modal_id }}')">
         <input type="hidden" name="task_id" value="{{ row.task_id }}">
         <button type="submit" class="btn btn--danger"><span class="btn__label">Снять</span></button>
       </form>
