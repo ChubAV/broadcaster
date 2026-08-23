@@ -972,8 +972,8 @@ async def test_the_password_change_is_refused_under_another_identity(
 
     for path, payload in (
         ("/forgot-password/send-code", {"email": TARGET_EMAIL}),
-        ("/forgot-password/verify", {"email": TARGET_EMAIL, "code": "000000"}),
-        ("/forgot-password/resend-code", {"email": TARGET_EMAIL}),
+        ("/forgot-password/verify", {"token": "x", "code": "000000"}),
+        ("/forgot-password/resend-code", {"token": "x"}),
         ("/forgot-password/reset", {"token": "x", "password": "newpass123"}),
     ):
         response = await admin_client.post(
