@@ -45,7 +45,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.analytics.send_analytics import (
     FAILED_STATUSES,
     STATUS_ACCOUNT_DISCONNECTED,
-    STATUS_FAIL,
     normalize_utc,
 )
 from app.config import Settings
@@ -77,10 +76,22 @@ INCIDENT_KIND_BEAT_SILENT = "beat_silent"  # D-45.5
 HREF_WORKERS = "/admin/workers"
 HREF_USER_CARD = "/admin/users/{user_id}"
 HREF_PAYMENTS = "/admin/payments"
-# «История» с фильтром по неуспешной отправке (D-48). Значение фильтра — та же
-# строка статуса, которую объявляет модуль аналитики: своя копия разошлась бы с
-# перечнем чипсов раздела истории.
-HREF_SEND_HISTORY = "/history?status={status}"
+# ⚠️ АДРЕС ВСПЛЕСКА ОТКАЗОВ — «ЛОГИ», А НЕ «ИСТОРИЯ». ПРАВКА D-48, решение
+# владельца, с причиной.
+#
+# D-48 записывал «отказы → „История“ с фильтром». Адрес заменён, потому что
+# признак и цель отвечали на РАЗНЫЕ вопросы: всплеск по D-51 считает отказы ПО
+# ВСЕМУ СЕРВИСУ (`total >= 20` и `failed / total >= 0.30`), а `/history`
+# фильтрует `SendLog.user_id == user.id` — это ЛИЧНАЯ лента того, кто смотрит.
+# У администратора, который сам почти не рассылает, она пуста ровно в тот
+# момент, когда инцидент горит; пустая лента при горящем инциденте читается как
+# «всё в порядке», то есть отвечает на вопрос ЛОЖНО. Ссылка «куда чинить»,
+# ведущая туда, где аварии не видно, хуже отсутствия ссылки: она выглядит
+# рабочей.
+#
+# Когда писался D-48, подраздела «Логи» ещё не существовало в построенном виде;
+# теперь он отгружен планом 06-08 и отвечает на сервис-широкий вопрос напрямую.
+HREF_SERVICE_ERRORS = "/admin/logs?level=error"
 
 # Вид инцидента → КОРЕНЬ его адреса. Отображение объявлено ЦЕЛИКОМ и проверяется
 # тестом на полноту: вид, заведённый без адреса, краснит прогон в момент
@@ -88,7 +99,7 @@ HREF_SEND_HISTORY = "/history?status={status}"
 INCIDENT_DESTINATIONS: dict[str, str] = {
     INCIDENT_KIND_WORKER_STUCK: HREF_WORKERS,
     INCIDENT_KIND_ACCOUNT_DOWN: "/admin/users/",
-    INCIDENT_KIND_FAILURE_SPIKE: "/history",
+    INCIDENT_KIND_FAILURE_SPIKE: HREF_SERVICE_ERRORS,
     INCIDENT_KIND_PAYMENT_STUCK: HREF_PAYMENTS,
     INCIDENT_KIND_BEAT_SILENT: HREF_WORKERS,
 }
@@ -348,7 +359,7 @@ def detect_failure_spike(
             f"({share}%)"
         ),
         at=normalize_utc(last_failure_at) or normalize_utc(now),
-        href=HREF_SEND_HISTORY.format(status=STATUS_FAIL),
+        href=HREF_SERVICE_ERRORS,
     )
 
 
