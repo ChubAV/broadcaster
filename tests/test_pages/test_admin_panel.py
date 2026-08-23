@@ -2615,3 +2615,260 @@ async def test_no_subsection_leaks_the_removed_groups_directory(
     assert "groups-info" not in html, (
         f"{url}: снесённая поверхность справочника групп вернулась в разметку"
     )
+
+
+# =============================================================================
+# ГАРД ПРОИСХОЖДЕНИЯ НА ИЗМЕНЯЮЩИХ МАРШРУТАХ АДМИНКИ (CR-02 ревизии фазы 6)
+#
+# ⚠️ ПОЧЕМУ ГЕЙТ, А НЕ ТРИ ТЕСТА НА ТРИ ПОЧИНЕННЫХ МАРШРУТА. Дефект был не в
+# том, что забыли гард у трёх обработчиков, а в том, что ПОЛНОТУ ПЕРЕЧНЯ никто
+# не держал: правило жило перечнем из трёх имён в докстринге `is_same_origin`,
+# фаза добавила в раздел шесть изменяющих маршрутов, половина взяла гард,
+# половина — нет, и разошедшийся перечень выглядел работающим. Три точечных
+# теста закрепили бы сегодняшнее состояние и промолчали бы о СЛЕДУЮЩЕМ
+# добавленном маршруте — ровно тот чёрный список, от которого проект уже
+# отказался явно при построении гейта запретов под чужой личностью (D-23).
+#
+# Форма скопирована оттуда целиком: разбор ДЕРЕВА исходника (поиск строки
+# считал бы вхождение в докстринге, то есть объяснение роняло бы утверждение),
+# замыкающее требование «каждый найденный маршрут», и отрицательный контроль,
+# доказывающий, что гейт КРАСНЕЕТ.
+# =============================================================================
+
+ORIGIN_GUARD = "is_same_origin"
+
+# Изменяющие методы. `GET` сюда не входит намеренно: изменяющих `GET` в разделе
+# нет, а гард на чтении закрыл бы подраздел межсайтовой ссылке впустую.
+ADMIN_MUTATING_METHODS = frozenset({"post", "put", "patch", "delete"})
+
+# Число изменяющих маршрутов раздела, выписанное РУКАМИ. Без него утверждение
+# «каждый найденный несёт гард» зеленело бы и на пустом множестве найденных —
+# например, если разбор декораторов перестанет их узнавать.
+ADMIN_MUTATING_ROUTE_COUNT = 6
+
+
+def _admin_mutating_handlers(source: str) -> dict[str, ast.AsyncFunctionDef]:
+    """Обработчики изменяющих маршрутов раздела — по дереву, а не по тексту.
+
+    Узнаются оба вида объявления, живущие в модуле: `@router.post(...)` и
+    `@partials_router.post(...)`. Имя роутера НЕ фиксируется — иначе роутер,
+    заведённый будущей фазой, выпал бы из обхода молча.
+    """
+    found: dict[str, ast.AsyncFunctionDef] = {}
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            call = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if isinstance(call, ast.Attribute) and call.attr in ADMIN_MUTATING_METHODS:
+                found[node.name] = node
+                break
+    return found
+
+
+def _admin_routes_without_the_origin_guard(source: str) -> set[str]:
+    """Изменяющие маршруты раздела, НЕ зовущие гард происхождения."""
+    missing = set()
+    for name, handler in _admin_mutating_handlers(source).items():
+        calls = {
+            call.func.id
+            for call in ast.walk(handler)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+        }
+        if ORIGIN_GUARD not in calls:
+            missing.add(name)
+    return missing
+
+
+def test_the_number_of_mutating_admin_routes_is_the_declared_one():
+    """Найденных изменяющих маршрутов ровно столько, сколько выписано руками.
+
+    ⚠️ ЭТО НЕ ДУБЛИРОВАНИЕ СЛЕДУЮЩЕГО ТЕСТА, А ЕГО ОПОРА. «Каждый найденный
+    несёт гард» — утверждение, истинное и для ПУСТОГО множества найденных:
+    сломайся разбор декораторов, и гейт зеленел бы навсегда, ничего не
+    обходя.
+    """
+    handlers = _admin_mutating_handlers(
+        ADMIN_PAGES_SOURCE.read_text(encoding="utf-8")
+    )
+
+    assert len(handlers) == ADMIN_MUTATING_ROUTE_COUNT, (
+        f"изменяющих маршрутов админки найдено {len(handlers)}, объявлено "
+        f"{ADMIN_MUTATING_ROUTE_COUNT}: {sorted(handlers)}. Маршрут добавлен "
+        "или снят — решение о гарде происхождения обязано быть принято ЯВНО, "
+        "а число исправлено вместе с ним"
+    )
+
+
+def test_every_mutating_admin_route_checks_the_origin():
+    """КАЖДЫЙ изменяющий маршрут раздела сверяет источник запроса (CR-02).
+
+    ⚠️ ПОЧЕМУ ЭТОГО НЕ ЗАМЕНЯЕТ `samesite="lax"`. Умолчание cookie
+    межсайтовый POST действительно не пропускает — и ровно поэтому оно было
+    ЕДИНСТВЕННЫМ, что стояло между сторонней страницей и необратимым удалением
+    учётной записи: одна политика браузера без единого рубежа за ней, там где
+    проект в трёх соседних маршрутах требует явной серверной проверки. Правило
+    продукта не имеет права зависеть от умолчания, которое продукт не
+    выставляет и не проверяет.
+
+    Самопротиворечивость прежнего состояния названа прямо: `admin_impersonate`
+    нёс гард с доводом «без него сторонняя страница выписала бы себе токен
+    имперсонации», а СОСЕДНИЙ маршрут, удаляющий того же пользователя целиком,
+    не нёс ничего.
+    """
+    missing = _admin_routes_without_the_origin_guard(
+        ADMIN_PAGES_SOURCE.read_text(encoding="utf-8")
+    )
+
+    assert missing == set(), (
+        "изменяющий маршрут админки не сверяет источник запроса: "
+        + ", ".join(sorted(missing))
+        + ". Аутентификация проекта идёт cookie — браузер приложит её к "
+        "межсайтовой форме сам, и запрос со стороннего сайта неотличим от "
+        "своего"
+    )
+
+
+def test_control_negative_a_mutating_admin_route_without_the_guard_reddens():
+    """ЧТО ДОКАЗЫВАЕТ: гейт выше КРАСНЕЕТ на снятом вызове гарда.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ГЕЙТ БЫЛ БЫ ЗЕЛЁН ПО ПОСТРОЕНИЮ, а обнаружилось бы
+    это в тот единственный день, когда он пропустит настоящий пропуск. Довод
+    дословно тот же, которым в этом проекте снабжён гейт запретов под чужой
+    личностью, и повторяется он потому, что тот же.
+
+    Боевой файл НЕ ТРОГАЕТСЯ: подмена живёт строкой в памяти, а разборщику
+    подаётся она.
+    """
+    original = ADMIN_PAGES_SOURCE.read_text(encoding="utf-8")
+
+    # Снимается ВЕСЬ блок гарда — условие вместе с отказом и объяснением между
+    # ними. Удаление одной строки условия оставило бы висящий `return` и
+    # уронило бы РАЗБОР, а не гейт: контроль тогда «краснел» бы по чужой
+    # причине и ничего про зубы гейта не доказывал.
+    block = re.compile(
+        r"[ \t]*if not " + ORIGIN_GUARD + r"\(request\):\n"
+        r"(?:[ \t]*#.*\n)*"
+        r"[ \t]*return Response\(status_code=403\)\n"
+    )
+    stripped, removed = block.subn("", original)
+
+    assert removed == ADMIN_MUTATING_ROUTE_COUNT, (
+        f"подмена сняла {removed} блоков гарда из "
+        f"{ADMIN_MUTATING_ROUTE_COUNT} — контроль проверял бы дерево, в "
+        "котором гард местами остался, и доказывал бы меньше, чем утверждает"
+    )
+    assert ORIGIN_GUARD in stripped, (
+        "из подменённого исходника исчезло и упоминание гарда: контроль "
+        "перестал доказывать, что гейт смотрит на ВЫЗОВ, а не на текст"
+    )
+
+    missing = _admin_routes_without_the_origin_guard(stripped)
+
+    assert len(missing) == ADMIN_MUTATING_ROUTE_COUNT, (
+        "ГЕЙТ НЕ ЗАМЕТИЛ СНЯТЫЙ ГАРД у "
+        f"{ADMIN_MUTATING_ROUTE_COUNT - len(missing)} маршрутов — он зелёный "
+        "по построению, и настоящий пропуск сверки источника пройдёт мимо него"
+    )
+
+
+# ---- Тот же запрет, но по HTTP: три починенных маршрута ----
+
+FOREIGN_ORIGIN = {"Sec-Fetch-Site": "cross-site"}
+
+
+async def _seed_plain_user(admin_client: AsyncClient, db_session: AsyncSession) -> int:
+    """Обычный пользователь, над которым админка совершает действие."""
+    from app.models.user import User
+    from sqlalchemy import select
+
+    response = await admin_client.post(
+        "/api/auth/register",
+        json={
+            "email": "cr02-target@test.com",
+            "password": "testpass123",
+            "name": "Цель",
+        },
+    )
+    assert response.status_code == 201, (
+        f"регистрация цели не прошла ({response.status_code}) — утверждения "
+        "ниже проверяли бы отказ по отсутствию пользователя"
+    )
+    target = (
+        await db_session.execute(
+            select(User).where(User.email == "cr02-target@test.com")
+        )
+    ).scalar_one()
+    return target.id
+
+
+@pytest.mark.asyncio
+async def test_the_destructive_admin_actions_refuse_a_foreign_origin(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Блокировка, удаление и выдача льготы отвергают межсайтовый запрос.
+
+    ⚠️ ПРОВЕРЯЕТСЯ НЕ ТОЛЬКО КОД ОТВЕТА, НО И НЕСОСТОЯВШЕЕСЯ ДЕЙСТВИЕ. Отказ
+    этих маршрутов при удаче приходит РЕДИРЕКТОМ, и тест, смотрящий только на
+    код, не отличил бы «отвергнуто гардом» от «сделано и отвечено редиректом».
+    Предмет — что учётная запись ЖИВА, не заблокирована и без льготы.
+    """
+    from app.models.user import User
+
+    target_id = await _seed_plain_user(admin_client, db_session)
+
+    for url in (
+        f"/admin/users/{target_id}/block",
+        f"/admin/users/{target_id}/unlimited",
+        f"/admin/users/{target_id}/delete",
+    ):
+        response = await admin_client.post(
+            url, headers=FOREIGN_ORIGIN, follow_redirects=False
+        )
+        assert response.status_code == 403, (
+            f"{url} ответил {response.status_code} межсайтовому запросу — "
+            "сторонняя страница совершает действие руками вошедшего "
+            "администратора"
+        )
+
+    db_session.expire_all()
+    survivor = await db_session.get(User, target_id)
+    assert survivor is not None, (
+        "учётная запись удалена межсайтовым запросом — гард ответил 403 ПОСЛЕ "
+        "действия"
+    )
+    assert survivor.is_blocked is False, (
+        "учётная запись заблокирована межсайтовым запросом"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_destructive_admin_actions_still_work_from_the_own_page(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """ГРАНИЦА СВЕРХУ: со своей страницы те же действия по-прежнему работают.
+
+    ⚠️ БЕЗ ЭТОГО УТВЕРЖДЕНИЯ ГАРД, ОТКАЗЫВАЮЩИЙ ВСЕГДА, ПРОШЁЛ БЫ ТЕСТ ВЫШЕ и
+    отнял бы у администратора блокировку, удаление и выдачу доступа целиком —
+    то есть три критерия фазы, — оставаясь зелёным.
+    """
+    from app.models.user import User
+
+    target_id = await _seed_plain_user(admin_client, db_session)
+
+    blocked = await admin_client.post(
+        f"/admin/users/{target_id}/block",
+        headers={"Sec-Fetch-Site": "same-origin"},
+        follow_redirects=False,
+    )
+    assert blocked.status_code == 302, (
+        f"блокировка со СВОЕЙ страницы ответила {blocked.status_code} — гард "
+        "отказывает всегда и отнял у администратора критерий фазы"
+    )
+
+    db_session.expire_all()
+    target = await db_session.get(User, target_id)
+    assert target.is_blocked is True, (
+        "блокировка со своей страницы не состоялась: отказ пришёл молча, "
+        "кодом редиректа"
+    )
