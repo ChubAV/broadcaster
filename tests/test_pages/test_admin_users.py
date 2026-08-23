@@ -879,3 +879,94 @@ def test_the_unlimited_select_left_the_repository():
     source = Path("app/repositories/user.py").read_text(encoding="utf-8")
     assert "def get_all_users" not in source
     assert "def search_users" not in source
+
+
+# --- Подстановочные знаки LIKE внутри искомого текста (WR-10) -----------------
+
+
+@pytest.mark.asyncio
+async def test_an_underscore_in_the_search_matches_an_underscore(
+    db_session: AsyncSession,
+):
+    """Подчёркивание ищется как ЗНАК, а не как «любой один знак».
+
+    ⚠️ ЭТО НЕ ВОПРОС БЕЗОПАСНОСТИ. Инъекции здесь нет и не было: текст едет
+    параметром. Предмет — обещание подраздела «администратор ищет КОНКРЕТНОГО
+    человека», которое тихо не выполнялось: `%` и `_` внутри текста сохраняли
+    своё значение для `LIKE`. Подчёркивание — частый знак в локальной части
+    почтового адреса, то есть случай рабочий.
+    """
+    await _seed_user(db_session, name="Первый", email="a_b@test.com")
+    await _seed_user(db_session, name="Второй", email="axb@test.com")
+
+    users, total = await _page_and_count(db_session, search="a_b")
+
+    assert total == len(users) == 1, (
+        f"поиск `a_b` нашёл {total} записей — подчёркивание сработало как "
+        "«любой один знак», и администратор получил не того человека"
+    )
+    assert users[0].email == "a_b@test.com"
+
+
+@pytest.mark.asyncio
+async def test_a_percent_in_the_search_matches_a_percent(db_session: AsyncSession):
+    """Знак процента ищется как знак, а не как «что угодно».
+
+    Худший случай предыдущего дефекта: поиск из одного знака `%` (или `_`)
+    возвращал ВСЕХ пользователей продукта, то есть выглядел как «поиск не
+    работает» ровно наоборот — он находил всё.
+    """
+    await _seed_user(db_session, name="Скидка 50% навсегда", email="one@test.com")
+    await _seed_user(db_session, name="Обычный", email="two@test.com")
+
+    exact, exact_total = await _page_and_count(db_session, search="50% нав")
+    assert exact_total == len(exact) == 1
+    assert exact[0].email == "one@test.com"
+
+    _everyone, wildcard_total = await _page_and_count(db_session, search="%")
+    assert wildcard_total == 1, (
+        f"поиск одного знака процента вернул {wildcard_total} записей — знак "
+        "сработал подстановочным и нашёл всех"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_backslash_in_the_search_is_matched_and_escapes_nothing(
+    db_session: AsyncSession,
+):
+    """Обратная косая — тоже искомый знак, а не экранирующий.
+
+    ⚠️ ПОРЯДОК ЗАМЕН НЕСУЩИЙ, И ЭТОТ СЛУЧАЙ ЕГО ЛОВИТ. Экранируй мы `%` и `_`
+    раньше самой обратной косой — дописанные экранирующие знаки были бы
+    экранированы повторно, и текст перестал бы находить сам себя.
+    """
+    await _seed_user(db_session, name=r"путь C:\temp", email="slash@test.com")
+    await _seed_user(db_session, name="Обычный", email="plain@test.com")
+
+    users, total = await _page_and_count(db_session, search=r"C:\temp")
+
+    assert total == len(users) == 1, (
+        f"поиск с обратной косой нашёл {total} записей — знак истолкован "
+        "экранирующим, и текст перестал находить сам себя"
+    )
+    assert users[0].email == "slash@test.com"
+
+
+@pytest.mark.asyncio
+async def test_the_ordinary_substring_search_still_works(db_session: AsyncSession):
+    """ГРАНИЦА СВЕРХУ: обычный поиск подстрокой не сломан экранированием.
+
+    Без этого утверждения экранирование, применённое и к обрамляющим `%`,
+    прошло бы все три случая выше и превратило бы поиск подстрокой в поиск
+    точного совпадения — то есть отняло бы сам подраздел.
+    """
+    await _seed_user(db_session, name="Иван Петров", email="ivan@test.com")
+    await _seed_user(db_session, name="Сергей Сидоров", email="sergey@test.com")
+
+    users, total = await _page_and_count(db_session, search="етро")
+
+    assert total == len(users) == 1, (
+        f"поиск подстрокой нашёл {total} записей — обрамляющие знаки "
+        "экранированы вместе с текстом, и поиск стал точным совпадением"
+    )
+    assert users[0].email == "ivan@test.com"
