@@ -182,6 +182,35 @@ BLOCKED_DETAIL = (
 )
 
 
+def _presented_tokens(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None,
+) -> list[str]:
+    """ВСЕ носители токена, ПРЕДЪЯВЛЕННЫЕ запросом, без повторов.
+
+    Единственное место на проект, где выписан ПЕРЕЧЕНЬ носителей:
+    разобранные учётные данные, заголовок `Authorization: Bearer`, cookie
+    сессии. Порядок сохранён тот же, что у `get_current_user`, чтобы
+    «кто пришёл» и «есть ли действующее лицо» начинали с одного и того же
+    носителя; но читатель признака обязан дойти до конца перечня.
+
+    Пустой список — НОРМАЛЬНЫЙ ИСХОД, а не ошибка: уведомление
+    ЮKassa приходит не от браузера и никакого токена не несёт (D-53).
+    """
+    tokens: list[str] = []
+    if credentials is not None:
+        tokens.append(credentials.credentials)
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        header_token = auth_header[7:]
+        if header_token not in tokens:
+            tokens.append(header_token)
+    cookie_token = request.cookies.get("access_token")
+    if cookie_token and cookie_token not in tokens:
+        tokens.append(cookie_token)
+    return tokens
+
+
 def _actor_id(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None,
@@ -201,27 +230,35 @@ def _actor_id(
     ним — работа аутентификатора, и второе его определение здесь разошлось бы
     с первым.
 
-    ⚠️ ПОРЯДОК ИСТОЧНИКОВ ТОКЕНА ПОВТОРЯЕТ `get_current_user` ДОСЛОВНО: сначала
-    разобранные учётные данные, затем заголовок, затем cookie. Читатель,
-    забывший заголовок, видел бы «действующего лица нет» ровно у клиентов с
-    Bearer — то есть терял бы админ-доступ у половины поверхностей и сохранял у
-    другой.
+    ⚠️ СПРАШИВАЮТСЯ ВСЕ ПРЕДЪЯВЛЕННЫЕ НОСИТЕЛИ, А НЕ ПЕРВЫЙ ПО ПОРЯДКУ, И ЭТО
+    НЕСУЩЕЕ СВОЙСТВО, А НЕ ПЕРЕСТРАХОВКА. Прежняя редакция читала ТОЛЬКО ПЕРВЫЙ
+    найденный токен в порядке «учётные данные → заголовок → cookie», а все
+    страничные обработчики, которых закрывает `forbid_when_impersonating`,
+    аутентифицируются через `get_user_from_cookie`, читающий ТОЛЬКО cookie.
+    Два чтения расходились в том, что считать «токеном запроса», и любой
+    заголовок `Authorization: Bearer ...` — В ТОМ ЧИСЛЕ НЕГОДНЫЙ, В ТОМ ЧИСЛЕ
+    НЕ ТОКЕН ВОВСЕ — отключал запрет целиком: гард видел «действующего лица
+    нет», обработчик продолжал действовать под чужой личностью, и отказ не
+    попадал даже в журнал (CR-01 ревизии фазы 6). Обход ВСЕГО
+    предъявленного закрывает расхождение В ОБЕ СТОРОНЫ и не требует от
+    зависимости знания о том, каким именно чтением аутентифицируется
+    каждый из закрытых маршрутов, — знания, которое разошлось бы снова.
+
+    ДОСТУП Bearer-КЛИЕНТА НЕ ПОТЕРЯН: токен из заголовка по-прежнему
+    спрашивается и по-прежнему ПЕРВЫМ — изменилось только то, что его
+    ОТСУТСТВИЕ признака больше не заканчивает поиск. Маршрутов, где читается
+    признак действующего лица, всего три семейства (`require_admin`,
+    `forbid_when_impersonating`, `get_current_user_id_active`), и ни на одном
+    из них два разных действующих лица одновременно не предъявляются.
 
     Приведение типа здесь НЕ делается: оно живёт внутри чтения токена, а
     значение снимается единственным читателем признака на проект.
     """
-    token = None
-    if credentials is not None:
-        token = credentials.credentials
-    if token is None:
-        auth_header = request.headers.get("authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-    if token is None:
-        token = request.cookies.get("access_token")
-    if token is None:
-        return None
-    return actor_id(decode_access_token(token, settings.secret_key))
+    for token in _presented_tokens(request, credentials):
+        found = actor_id(decode_access_token(token, settings.secret_key))
+        if found is not None:
+            return found
+    return None
 
 
 # ТЕЛО ОТКАЗА ПОД ЧУЖОЙ ЛИЧНОСТЬЮ — И ОНО ОБЯЗАНО ОТЛИЧАТЬСЯ ОТ ОТКАЗА ПО

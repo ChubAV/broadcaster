@@ -1315,3 +1315,173 @@ async def test_without_impersonation_no_forbidden_route_changed_behaviour(
             f"{path} закрыт запретом имперсонации БЕЗ имперсонации — запрет "
             "срабатывает всегда и ломает продукт обычному пользователю"
         )
+
+
+# =============================================================================
+# ИСТОЧНИК ТОКЕНА У ЗАПРЕТА — ПОВЕДЕНИЕ, А НЕ ОБЪЯВЛЕНИЕ (CR-01 ревизии фазы 6)
+#
+# ⚠️ ПОЧЕМУ ЭТИ УТВЕРЖДЕНИЯ ПОНАДОБИЛИСЬ ОТДЕЛЬНО ОТ ВСЕХ ВЫШЕ. Дефект, ради
+# которого они написаны, пережил всю фазу при ЗЕЛЁНОМ машинном гейте и зелёных
+# сквозных проверках выше, и причина ровно одна: ни те, ни другие не подавали
+# запросу ВТОРОГО носителя токена. Гейт утверждает, что запрет ОБЪЯВЛЕН на
+# маршруте; проверки выше утверждают, что он срабатывает НА ЗАПРОСЕ ОДНОГО
+# ВИДА — с одной лишь cookie. Между «объявлен» и «срабатывает на любом запросе»
+# помещалась дыра: `_actor_id` читал ПЕРВЫЙ предъявленный носитель, а закрытые
+# страничные обработчики аутентифицируются ТОЛЬКО из cookie, и присланный
+# заголовок `Authorization` — в том числе негодный, в том числе не токен
+# вовсе — отключал запрет целиком.
+#
+# ⚠️ ПОКРЫТИЕ ОБЪЯВЛЕНИЯ И ПОКРЫТИЕ ПОВЕДЕНИЯ — РАЗНЫЕ ВЫСКАЗЫВАНИЯ. Мутация
+# «снять зависимость с маршрута» краснит гейт и потому выглядит доказательством
+# его зубов; мутация «прислать лишний заголовок» не краснила НИЧЕГО. Перечень
+# носителей ниже выписан руками именно поэтому: он есть предмет, а не оформление.
+# =============================================================================
+
+
+# Носители, которые запрос может предъявить ПОМИМО cookie сессии. Пустой
+# словарь — исходный случай, ради сравнения; остальные — ровно те заголовки,
+# которыми запрет отключался.
+PRESENTED_BESIDES_THE_COOKIE = (
+    {},
+    {"Authorization": "Bearer zzz"},
+    {"Authorization": "Bearer "},
+    {"Authorization": "Basic zzz"},
+)
+
+# Маршруты, на которых дыра была воспроизведена живым запросом: начало захвата
+# учётной записи и денежный вход, закрытый роутером ЦЕЛИКОМ.
+FORBIDDEN_PAGE_ENTRIES = (
+    ("/forgot-password/send-code", {"email": TARGET_EMAIL}),
+    ("/billing/subscribe", None),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path,payload", FORBIDDEN_PAGE_ENTRIES)
+async def test_no_presented_header_switches_the_prohibition_off(
+    path, payload, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Запрет держится при ЛЮБОМ предъявленном заголовке (CR-01, D-22).
+
+    ⚠️ ПРЕДМЕТ — НЕ «ЗАГОЛОВОК ПЛОХОЙ», А «ИСТОЧНИК ТОКЕНА У ГАРДА И У
+    ОБРАБОТЧИКА ОБЯЗАН БЫТЬ ОДИН». Обработчики этих маршрутов читают личность
+    ТОЛЬКО из cookie (`get_user_from_cookie`); гард, читавший первый носитель по
+    порядку, при наличии заголовка приходил к выводу «действующего лица нет» и
+    пропускал запрос — при полностью живом сеансе имперсонации. Живой снимок
+    дыры: `POST /forgot-password/send-code` без заголовка отвечал 403, с
+    заголовком `Bearer zzz` — 200 и выписанным кодом сброса пароля ЖЕРТВЫ.
+
+    ⚠️ ПУСТОЙ СЛОВАРЬ В ПЕРЕЧНЕ НОСИТЕЛЕЙ ОБЯЗАТЕЛЕН. Без него тест зеленел бы у
+    запрета, отказывающего по САМОМУ ФАКТУ заголовка, а не по признаку
+    действующего лица, и мы не отличили бы починку от новой поломки.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    for headers in PRESENTED_BESIDES_THE_COOKIE:
+        response = await admin_client.post(
+            path, data=payload, headers=headers, follow_redirects=False
+        )
+
+        assert response.status_code == 403, (
+            f"{path} ответил {response.status_code} под чужой личностью при "
+            f"заголовках {headers} — запрет отключается присланным заголовком, "
+            "и под чужой учётной записью доступны захват учётки и деньги"
+        )
+        assert IMPERSONATION_REFUSAL_MARK in _detail_of(response), (
+            f"{path} при заголовках {headers} отказал ПО ДРУГОЙ ПРИЧИНЕ "
+            f"({_detail_of(response)!r}) — совпадение кода 403 доказательством "
+            "срабатывания запрета не является"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_valid_bearer_token_of_the_actor_does_not_switch_it_off(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Запрет держится и при ГОДНОМ токене в заголовке, а не только при мусоре.
+
+    ⚠️ ЭТО САМЫЙ ПРАВДОПОДОБНЫЙ ВИД ДЫРЫ, И БЕЗ НЕГО ПОЧИНКА ВЫГЛЯДЕЛА БЫ КАК
+    «отвергать негодные заголовки». Администратор с собственным API-токеном
+    предъявляет его СОВЕРШЕННО ЗАКОННО; носитель годен, подпись верна,
+    признака действующего лица в нём нет — и прежнее чтение «первый носитель по
+    порядку» на этом заканчивалось, объявляя, что имперсонации нет. Сеанс
+    имперсонации при этом продолжал ехать в cookie, которой обработчик и
+    аутентифицируется.
+
+    Отсюда и форма починки: спрашиваются ВСЕ предъявленные носители, а не
+    первый. Проверка «заголовок разобрался — значит имперсонации нет» закрыла бы
+    мусорный случай и оставила бы этот.
+    """
+    from app.services.auth_service import create_access_token
+
+    target_id = await _seed_target(admin_client, db_session)
+    admin_id = (await _user(db_session, test_settings.admin_email)).id
+    ordinary = create_access_token(admin_id, test_settings.secret_key)
+
+    await _enter(admin_client, target_id)
+
+    response = await admin_client.post(
+        "/billing/subscribe",
+        headers={"Authorization": f"Bearer {ordinary}"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 403, (
+        f"денежный вход ответил {response.status_code} под чужой личностью при "
+        "ГОДНОМ токене администратора в заголовке — запрет отключается вторым "
+        "законным носителем"
+    )
+    assert IMPERSONATION_REFUSAL_MARK in _detail_of(response), (
+        f"отказ пришёл по другой причине: {_detail_of(response)!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_under_a_presented_header_reaches_the_journal(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сработавший запрет ОСТАВЛЯЕТ СЛЕД — в том числе при лишнем заголовке.
+
+    ⚠️ МОЛЧАНИЕ ЖУРНАЛА БЫЛО ВТОРОЙ ПОЛОВИНОЙ ДЕФЕКТА, И ОНО ЖЕ БЫЛО ПРИЧИНОЙ,
+    ПО КОТОРОЙ ОН ПРОЖИЛ ВСЮ ФАЗУ. Обход не доходил до строки
+    `impersonated_action_refused`, поэтому у эксплуатации не было ни одного
+    наблюдаемого признака: ни отказа, ни записи. Утверждение про журнал стоит
+    рядом с утверждением про код ответа именно поэтому — «отказал» и «отказ
+    видно» суть разные свойства.
+
+    Снимается с самого вызова журнала, а не с `caplog`, по причине, уже
+    записанной у `test_both_the_entry_and_the_return_are_journaled_with_both_ids`:
+    настройка журналирования общая на процесс, и запись до перехватчика
+    доезжает не в каждом порядке файлов.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import app.dependencies as dependencies_module
+
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    guard_logger = MagicMock()
+    with patch.object(dependencies_module, "logger", guard_logger):
+        response = await admin_client.post(
+            "/billing/subscribe",
+            headers={"Authorization": "Bearer zzz"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403, (
+        f"запрет не сработал ({response.status_code}) — утверждение о журнале "
+        "проверяло бы след несостоявшегося отказа"
+    )
+
+    events = [
+        call.args[0]
+        for call in guard_logger.warning.call_args_list
+        if call.args
+    ]
+    assert "impersonated_action_refused" in events, (
+        "сработавший запрет не оставил именованной записи в журнале: "
+        f"{events} — эксплуатация обхода не имела бы ни одного наблюдаемого "
+        "признака"
+    )
