@@ -24,6 +24,11 @@ from app.application.analytics.send_analytics import (
     last_send_at,
     send_metrics,
 )
+from app.application.admin.incidents import (
+    INCIDENT_LIST_CAP,
+    WorkerLiveness,
+    collect_incidents,
+)
 from app.application.admin.overview_stats import (
     account_counts_by_user,
     monthly_revenue,
@@ -82,6 +87,8 @@ from app.services.ops_state import (
     INFRA_BEAT,
     INFRA_WORKER_DEFAULT,
     INFRA_WORKER_TELEGRAM,
+    WORKER_ONLINE,
+    WORKER_UNKNOWN,
     drop_task,
     infra_heartbeat_key,
     infra_liveness,
@@ -363,6 +370,46 @@ def _access_view(subscription: Subscription | None, now: datetime) -> dict:
     }
 
 
+def _liveness_for_incidents(
+    views: dict[int, dict],
+) -> tuple[dict[int, WorkerLiveness], bool]:
+    """Переходник от формы сервиса к форме прикладного модуля признаков.
+
+    ⚠️ ПЕРЕХОДНИК ЖИВЁТ ЗДЕСЬ, НА СТОРОНЕ ПОТРЕБИТЕЛЯ, И ЭТО НЕСУЩЕЕ РЕШЕНИЕ
+    СТЫКА. Модуль признаков (`app/application/admin/incidents.py`) принимает
+    живость ЗНАЧЕНИЯМИ и не знает ни одного клиента внешней службы — именно
+    поэтому пять признаков проверяются суитой на SQLite без единого поднятого
+    стенда. Импортируй он сервис оперативного состояния, чтобы «самому
+    разобраться» с формой ответа, — и суита признаков потребовала бы Redis, то
+    есть перестала бы гонять их на каждом прогоне. Плата за это ровно одна: у
+    сервиса своя форма ответа, и перевод её в форму модуля кто-то обязан
+    написать. Пишем его здесь.
+
+    ⚠️ СВЕЖЕСТЬ HEARTBEAT ПРИЕЗЖАЕТ УЖЕ РЕШЁННОЙ, а не сырым возрастом: порог
+    объявлен там, где heartbeat читается (`MAX_HEARTBEAT_STALE_SEC`), и второй
+    порог на стороне признаков разошёлся бы с первым молча.
+
+    ⚠️ «НЕИЗВЕСТНО» НЕ ПРЕВРАЩАЕТСЯ НИ В ЧТО. Аккаунт, о котором наблюдатель не
+    смог сказать ничего, из отображения ВЫПАДАЕТ, а вызывающий получает признак
+    неполноты. Подстановка «живой» спрятала бы настоящий отказ, подстановка
+    «мёртвый» подняла бы инцидент на исправном воркере, и обе были бы догадкой,
+    поданной как измерение.
+    """
+    liveness: dict[int, WorkerLiveness] = {}
+    partial = False
+    for account_id, view in views.items():
+        depth = view.get("queue_depth")
+        state = view.get("worker")
+        if depth is None or state == WORKER_UNKNOWN:
+            partial = True
+            continue
+        liveness[account_id] = WorkerLiveness(
+            queue_depth=int(depth),
+            heartbeat_fresh=state == WORKER_ONLINE,
+        )
+    return liveness, partial
+
+
 @dataclass(frozen=True, slots=True)
 class _OpsSnapshot:
     """Оперативное состояние на момент запроса «Обзора» — ОДНИМ чтением.
@@ -437,6 +484,8 @@ async def admin_dashboard(
     metrics = await send_metrics(db, user_id=None, now=now)
 
     ops = await _ops_snapshot(db)
+    liveness, liveness_partial = _liveness_for_incidents(ops.liveness)
+    board = await collect_incidents(db, liveness, now=now)
 
     # ⚠️ ВЕЛИЧИНА ВРЕМЕНИ СЧИТАЕТСЯ ТОЛЬКО ПРИ НЕПУСТОЙ ОЧЕРЕДИ КАНАЛА, и это то
     # же правило, по которому её печатает подраздел «Очередь». Время с последней
@@ -459,6 +508,15 @@ async def admin_dashboard(
             "queue_total": ops.queue_total,
             "queue_time_sec": queue_time_sec,
             "metrics": metrics,
+            "board": board,
+            "incident_cap": INCIDENT_LIST_CAP,
+            # ⚠️ НЕПОЛНОТА КАРТИНЫ НАЗЫВАЕТСЯ, А НЕ УМАЛЧИВАЕТСЯ. Признак «воркер
+            # не забирает работу» считается из живости, а живость лежит только в
+            # Redis: при недоступном наблюдателе он не считается ВОВСЕ. Блок,
+            # промолчавший об этом, выглядел бы полным и таковым не был бы —
+            # худший из возможных исходов, потому что администратор прочитал бы
+            # «остальное в порядке» там, где остального просто не посчитали.
+            "incidents_partial": liveness_partial,
         },
     )
 
