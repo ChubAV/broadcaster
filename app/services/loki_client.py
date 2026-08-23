@@ -450,17 +450,36 @@ async def query_range(logql: str, window: timedelta) -> LogWindow:
         return LogWindow(lines=[], capped=False, unavailable=True)
 
     try:
+        # ⚠️ РАЗБОР СТОИТ ВНУТРИ ТОЙ ЖЕ ВЕТКИ, ЧТО И ПОИСК КЛЮЧА, И ЭТО ПРЕДМЕТ,
+        # А НЕ ОФОРМЛЕНИЕ (WR-03 ревизии фазы 6). Ключ `result` был известен
+        # как «какое-то значение», а его СОДЕРЖИМОЕ разбиралось снаружи всех
+        # гардов и принималось на веру: элемент не-словарь ронял `.get`,
+        # неитерируемые `values` — цикл, короткая запись — индексацию,
+        # нечисловой момент — приведение. Любое из четырёх уносило подраздел в
+        # пятисотку через общий обработчик — то есть ответ НЕВЕРНОЙ ФОРМЫ
+        # обслуживался иначе, чем МОЛЧАНИЕ источника, хотя для администратора
+        # это одно и то же событие: прочитать негде. Подраздел, чья
+        # объявленная задача — работать, когда система не работает, отказывал
+        # ровно от того, ради чего написан.
         streams = payload["data"]["result"]
-    except (KeyError, TypeError):
+        lines: list[LogLine] = []
+        for stream in streams:
+            lines.extend(_parse_stream(stream))
+    except (
+        KeyError,
+        TypeError,
+        AttributeError,
+        IndexError,
+        ValueError,
+        OverflowError,
+        OSError,
+    ):
         # Ответ пришёл, но формы, о которой договаривались, в нём нет. Это тоже
         # «прочитать негде», а не «строк не было»: выдать пустой перечень
         # значило бы утверждать про журнал то, чего мы не читали.
         logger.warning("loki_unreadable_answer", query=logql)
         return LogWindow(lines=[], capped=False, unavailable=True)
 
-    lines: list[LogLine] = []
-    for stream in streams:
-        lines.extend(_parse_stream(stream))
     lines.sort(key=lambda line: line.at, reverse=True)
 
     return LogWindow(

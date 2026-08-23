@@ -582,3 +582,124 @@ def test_a_window_outside_the_declared_dictionary_falls_back_to_one_hour():
     assert clean_window(None) == LOG_WINDOW_DEFAULT
     assert clean_window("15m") == "15m"
     assert LOG_WINDOWS[LOG_WINDOW_DEFAULT].delta == timedelta(hours=1)
+
+
+# =============================================================================
+# ОТВЕТ НЕВЕРНОЙ ФОРМЫ — ТА ЖЕ НЕДОСТУПНОСТЬ, А НЕ ПЯТИСОТКА (WR-03)
+#
+# ⚠️ ПОЧЕМУ ЭТО ОТДЕЛЬНЫЙ РАЗДЕЛ, А НЕ ЕЩЁ ОДИН СЛУЧАЙ К «недоступности».
+# Утверждения выше проверяют, что МОЛЧАНИЕ источника — штатная ветка. Здесь
+# проверяется соседнее и до ревизии не выполнявшееся: ответ, который ПРИШЁЛ, но
+# устроен не так, как договаривались. Разбор содержимого жил снаружи всех
+# гардов, и любая из четырёх поломок формы уносила подраздел в 500 через общий
+# обработчик — то есть подраздел, написанный ради работы в аварии, отказывал от
+# аварии.
+# =============================================================================
+
+
+MALFORMED_ANSWERS = {
+    "result не перечень": {"status": "success", "data": {"result": 42}},
+    "элемент перечня не словарь": {
+        "status": "success",
+        "data": {"result": ["не словарь"]},
+    },
+    "values не итерируемы": {
+        "status": "success",
+        "data": {"result": [{"stream": {}, "values": 7}]},
+    },
+    "запись короче двух полей": {
+        "status": "success",
+        "data": {"result": [{"stream": {}, "values": [["только момент"]]}]},
+    },
+    "момент не число": {
+        "status": "success",
+        "data": {"result": [{"stream": {}, "values": [["не момент", "текст"]]}]},
+    },
+    "момент вне календаря": {
+        "status": "success",
+        "data": {
+            "result": [{"stream": {}, "values": [["9" * 30, "текст"]]}]
+        },
+    },
+    "метки не словарь": {
+        "status": "success",
+        "data": {"result": [{"stream": ["не словарь"], "values": []}]},
+    },
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("shape", sorted(MALFORMED_ANSWERS))
+async def test_an_answer_of_the_wrong_shape_is_unavailable_not_an_exception(shape):
+    """Ответ неверной формы = «прочитать негде», и НИ ОДНО исключение не выходит.
+
+    ⚠️ УТВЕРЖДАЕТСЯ ИМЕННО ОТСУТСТВИЕ ИСКЛЮЧЕНИЯ, А НЕ ТОЛЬКО ПРИЗНАК. Прежний
+    разбор не падал бы, если бы источник всегда отвечал по договорённости;
+    предмет находки в том, что он ВЕРИЛ ответу. Вызов сам по себе, доехавший до
+    возврата, и есть половина утверждения.
+
+    Пустой перечень строк здесь недостаточен: он неотличим от «за окно ничего не
+    было», и разметка, выводящая недоступность из длины, сказала бы
+    администратору «ошибок нет» в самой аварии.
+    """
+    with patch(
+        "app.services.loki_client._client",
+        return_value=_client(response=_response(MALFORMED_ANSWERS[shape])),
+    ), patch("app.services.loki_client.get_settings", return_value=_settings()):
+        window = await query_range('{job="docker"}', timedelta(hours=1))
+
+    assert window.unavailable is True, (
+        f"{shape}: ответ неверной формы принят за здоровую пустоту — подраздел "
+        "скажет «ошибок нет» ровно в аварии"
+    )
+    assert window.lines == []
+    assert window.capped is False
+
+
+@pytest.mark.asyncio
+async def test_the_unreadable_answer_leaves_a_named_line_in_the_journal():
+    """Форма, которой не договаривались, НАЗЫВАЕТСЯ в журнале одним ключом.
+
+    Событие с точки зрения экрана — то же «прочитать негде», и различить
+    «источник молчит» от «источник отвечает не тем» можно только в журнале.
+    Без именованной записи причина не устанавливалась бы вовсе.
+    """
+    with patch(
+        "app.services.loki_client._client",
+        return_value=_client(
+            response=_response(MALFORMED_ANSWERS["элемент перечня не словарь"])
+        ),
+    ), patch(
+        "app.services.loki_client.get_settings", return_value=_settings()
+    ), patch("app.services.loki_client.logger") as log:
+        await query_range('{job="docker"}', timedelta(hours=1))
+
+    events = [call.args[0] for call in log.warning.call_args_list if call.args]
+    assert "loki_unreadable_answer" in events, (
+        f"нечитаемый ответ не назван в журнале: {events}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_healthy_answer_still_parses_after_the_guard_moved():
+    """ГРАНИЦА СВЕРХУ: гард, отвергающий ВСЁ, прошёл бы утверждения выше.
+
+    Ветка «недоступно», накрывшая и здоровый ответ, оставила бы подраздел
+    вечно пустым и вечно зелёным на всех случаях этого раздела.
+    """
+    moment = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
+    payload = _payload(
+        _stream({"account_id": "7", "level": "error"}, [[_ns(moment), "упало"]])
+    )
+
+    with patch(
+        "app.services.loki_client._client",
+        return_value=_client(response=_response(payload)),
+    ), patch("app.services.loki_client.get_settings", return_value=_settings()):
+        window = await query_range('{job="docker"}', timedelta(hours=1))
+
+    assert window.unavailable is False, (
+        "здоровый ответ объявлен недоступностью — гард отвергает всё, и "
+        "подраздел пуст навсегда"
+    )
+    assert [line.text for line in window.lines] == ["упало"]
