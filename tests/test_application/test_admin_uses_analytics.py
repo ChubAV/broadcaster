@@ -206,7 +206,7 @@ async def test_the_systemwide_count_keeps_the_single_round_trip(
         if statement.lstrip().upper().startswith("SELECT"):
             statements.append(statement)
 
-    engine = db_session.get_bind().sync_engine
+    engine = db_session.bind.sync_engine
     event.listen(engine, "before_cursor_execute", _record)
     try:
         system = await send_metrics(db_session, user_id=None, now=NOW)
@@ -256,6 +256,31 @@ async def test_an_empty_journal_gives_zeroes_and_not_an_exception(
     assert system == SendMetrics()
     assert system.total == 0
     assert system.failed_delta == 0
+
+
+def test_the_owner_of_a_summary_cannot_be_omitted_by_accident():
+    """У области счёта НЕТ умолчания, и это форма T-04-01 после обобщения.
+
+    До фазы 6 изоляция по владельцу держалась на том, что ветки «все
+    пользователи» в модуле не было вовсе. Ветка появилась (D-39), и держать
+    изоляцию теперь может ровно одно: параметр обязателен. С умолчанием `None`
+    вызов, у которого владельца просто забыли передать, вернул бы чужие числа
+    и напечатал бы их на СОБСТВЕННОМ дашборде пользователя — без исключения,
+    без пятисотки и без единого красного теста. Разница между молчаливой
+    общесистемной выдачей и явной — ровно отсутствие умолчания.
+    """
+    import inspect
+
+    parameter = inspect.signature(send_metrics).parameters["user_id"]
+
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY, (
+        "область счёта обязана приезжать ИМЕНЕМ: позиционный аргумент подставился "
+        "бы соседним значением молча"
+    )
+    assert parameter.default is inspect.Parameter.empty, (
+        "у области счёта появилось умолчание: общесистемная выдача стала "
+        "достижимой по забывчивости, а не по решению (T-04-01)"
+    )
 
 
 # ---- Машинный свидетель: страничный модуль админки агрегаций не строит ----

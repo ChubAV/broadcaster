@@ -5,14 +5,30 @@ import structlog
 from fastapi import APIRouter, Depends, Form, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.dependencies import get_db, get_settings, require_admin
+# ⚠️ АГРЕГАТОВ ЖУРНАЛА ОТПРАВОК ЭТОТ МОДУЛЬ НЕ СТРОИТ — ОН ИХ ЗОВЁТ (D-35, D-39).
+# Конструктор SQL-функций (`func`) здесь не импортируется ВОВСЕ, и это не
+# аккуратность, а проверяемое свойство: пока агрегат стоял в обработчике, запрет
+# «не заводить второй счёт отправок» исполнял человек, а теперь его исполняет
+# `test_the_admin_pages_module_builds_no_aggregate_over_the_send_journal`.
+# Числа, о которых аналитика отправок не знает (люди, деньги, объявления,
+# группы), считает `app/application/admin/overview_stats.py`.
 from app.application.analytics.send_analytics import (
     apply_history_filters,
     history_filter_params,
+    last_send_at,
+    send_metrics,
+)
+from app.application.admin.overview_stats import (
+    NEW_USERS_WINDOW,
+    account_counts_by_user,
+    paying_total,
+    user_card_counts,
+    user_totals,
 )
 from app.application.admin.queue_rows import (
     QUEUE_ROW_CAP,
@@ -36,13 +52,11 @@ from app.pages.history import (
     parse_account_id,
 )
 from app.models.user import User
-from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.pages.common import is_same_origin, templates
-from app.repositories.user import UserRepository
 from app.services import max_container_manager, wa_container_manager
 from app.services.billing_cache import invalidate_access_cache
 from app.services.loki_client import (
@@ -353,75 +367,39 @@ async def admin_dashboard(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    user_repo = UserRepository(db)
-    total_users = await user_repo.count_all()
+    """Подраздел «Обзор»: ключевые показатели сервиса и текущие инциденты.
 
-    total_accounts = (
-        await db.execute(select(func.count(MessengerAccount.id)))
-    ).scalar() or 0
+    ⚠️ ЧИСЛО ОШИБОК БЕРЁТСЯ У МОДУЛЯ АНАЛИТИКИ, А НЕ СЧИТАЕТСЯ ЗДЕСЬ (D-39).
+    На тот же вопрос отвечает пользовательский дашборд, и второй счёт рядом
+    означал бы день, когда администратор и пользователь смотрят на РАЗНЫЕ числа
+    об одном и том же периоде и оба считают своё верным. Общесистемная область
+    передаётся ЯВНО (`user_id=None`), потому что умолчания у параметра нет.
 
-    total_active_accounts = (
-        await db.execute(
-            select(func.count(MessengerAccount.id)).where(
-                MessengerAccount.status == "active"
-            )
-        )
-    ).scalar() or 0
+    ⚠️ ОКНО ОШИБОК — СУТКИ, А НЕ ЧАС ИЗ МАКЕТА (D-40). Модуль настроен на
+    скользящие 24 часа, дельта приезжает тем же обращением к базе, и цифра
+    «Обзора» совпадает с той, что пользователь видит у себя. Острые всплески
+    ловит блок инцидентов — у него на это свой признак с окном в час (D-51).
+    """
+    now = datetime.now(timezone.utc)
 
-    today_start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    sends_today = (
-        await db.execute(
-            select(func.count(SendLog.id)).where(
-                SendLog.sent_at >= today_start
-            )
-        )
-    ).scalar() or 0
-
-    # ПЯТОГО ПОКАЗАТЕЛЯ ЗДЕСЬ НЕТ, И ЗАМЕНА ЕМУ НЕ ЗАВЕДЕНА НАМЕРЕННО (A-8).
-    # Он суммировал остатки сообщений по всем пользователям — величину, которой
-    # в продукте больше не существует. Подраздел обзора принадлежит фазе 6, и
-    # показатель, заведённый здесь, будет ею переопределён: это работа под
-    # снос. Раскладка не страдает — сетка плиток автозаполняемая, четыре плитки
-    # переливаются без дыры.
+    users = await user_totals(db, now=now)
+    paying = await paying_total(db, now=now)
+    metrics = await send_metrics(db, user_id=None, now=now)
 
     return templates.TemplateResponse(
         "admin/overview.html",
         {
             **_admin_context(request, admin, "overview"),
-            "stats": {
-                "total_users": total_users,
-                "total_accounts": total_accounts,
-                "active_accounts": total_active_accounts,
-                "sends_today": sends_today,
-            },
+            "users": users,
+            # Ширина окна прироста приезжает ЧИСЛОМ ИЗ КОНСТАНТЫ, а не выписана
+            # в подписи: «за неделю» рядом с иным окном называло бы не то, что
+            # посчитано.
+            "new_users_days": NEW_USERS_WINDOW.days,
+            "paying": paying,
+            "subscription_price": settings.subscription_price,
+            "metrics": metrics,
         },
     )
-
-
-async def _account_counts_by_user(
-    db: AsyncSession, user_ids: list[int]
-) -> dict[int, int]:
-    """Число мессенджер-аккаунтов перечисленных пользователей — ОДНИМ запросом.
-
-    Форма повторяет `_active_subscriptions_by_user` дословно и по той же
-    причине: колонка на строку, посчитанная запросом на строку, стоит числа
-    обращений, растущего вместе с числом зарегистрированных, — а страница
-    администратора видит их всех сразу.
-
-    Пустой список НЕ ходит в базу: `IN ()` — синтаксическая ошибка на части
-    диалектов и бессмысленный запрос на остальных.
-    """
-    if not user_ids:
-        return {}
-
-    rows = await db.execute(
-        select(MessengerAccount.user_id, func.count(MessengerAccount.id))
-        .where(MessengerAccount.user_id.in_(user_ids))
-        .group_by(MessengerAccount.user_id)
-    )
-    return {user_id: count for user_id, count in rows.all()}
 
 
 def _parse_page(value: str | None) -> int:
@@ -493,7 +471,7 @@ async def admin_users(
     # аккаунтов собираются ОДНИМ запросом на всю страницу.
     user_ids = [u.id for u in result.users]
     subscriptions = await _active_subscriptions_by_user(db, user_ids)
-    accounts = await _account_counts_by_user(db, user_ids)
+    accounts = await account_counts_by_user(db, user_ids)
     user_data = [
         {
             "user": u,
@@ -899,14 +877,9 @@ async def admin_queue(
     unavailable = unavailable or telegram_depth is None
     telegram_lag = None
     if telegram_depth:
-        last_sent_at = (
-            await db.execute(
-                select(func.max(SendLog.sent_at)).where(
-                    SendLog.messenger_type == QUEUE_TELEGRAM_CHANNEL
-                )
-            )
-        ).scalar()
-        telegram_lag = telegram_lag_seconds(last_sent_at, now)
+        telegram_lag = telegram_lag_seconds(
+            await last_send_at(db, messenger_type=QUEUE_TELEGRAM_CHANNEL), now
+        )
 
     has_telegram_accounts = any(
         a.type == QUEUE_TELEGRAM_CHANNEL for a in accounts
@@ -1125,19 +1098,7 @@ async def admin_user_detail(
     )
     accounts = list(accounts_result.scalars().all())
 
-    ads_count = (
-        await db.execute(
-            select(func.count(Ad.id)).where(Ad.user_id == target_user.id)
-        )
-    ).scalar() or 0
-
-    groups_count = (
-        await db.execute(
-            select(func.count(Group.id)).where(
-                Group.user_id == target_user.id
-            )
-        )
-    ).scalar() or 0
+    counts = await user_card_counts(db, target_user.id)
 
     # Плитка доступа читает ТУ ЖЕ строку и ТОТ ЖЕ предикат, что список и продукт.
     subscriptions = await _active_subscriptions_by_user(db, [target_user.id])
@@ -1154,8 +1115,8 @@ async def admin_user_detail(
             "active_page": "admin",
             "target_user": target_user,
             "accounts": accounts,
-            "ads_count": ads_count,
-            "groups_count": groups_count,
+            "ads_count": counts.ads,
+            "groups_count": counts.groups,
             # ⚠️ КЛЮЧ НАЗВАН `target_access`, А НЕ `access`. Шелл кладёт в
             # контекст СВОЙ словарь доступа — АДМИНИСТРАТОРА, который смотрит на
             # эту карточку, — и совпадение имён напечатало бы срок админа на

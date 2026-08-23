@@ -25,12 +25,7 @@
 
 {% include "admin/includes/_tabs.html" %}
 
-{#- ЧЕТЫРЕ ПЛИТКИ ОСТАВЛЕНЫ КАК ЕСТЬ, И ЭТО НЕ НЕДОДЕЛКА. Наполнение «Обзора»
-    ключевыми показателями переопределяет план 06-10; этот план приносит
-    КАРКАС подразделов и их достижимость. Дорисовать сюда показатели сейчас
-    значило бы отдать их на переделку через два плана.
-
-    ⚠️ ДАННЫХ-ЗАГЛУШЕК МАКЕТА ЗДЕСЬ НЕТ НАМЕРЕННО: ни наработки контейнера,
+{#- ⚠️ ДАННЫХ-ЗАГЛУШЕК МАКЕТА ЗДЕСЬ НЕТ НАМЕРЕННО: ни наработки контейнера,
     ни выдуманной выручки, ни зелёных строк восстановления. Число из макета,
     дожившее до прода, читается администратором как ИЗМЕРЕННОЕ, и в аварии он
     примет решение по нарисованной цифре. -#}
@@ -38,20 +33,23 @@
 
   <div data-metrics>
     {{ card_open() }}
-      {{ mono('Пользователи', 'muted', upper=true) }}
-      <span data-metric-value>{{ stats.total_users }}</span>
+      {{ mono('Пользователей', 'muted', upper=true) }}
+      <div data-metric-line>
+        <span data-metric-value>{{ users.total }}</span>
+        {{ mono('+' ~ users.joined_in_window ~ ' за ' ~ new_users_days ~ ' дней') }}
+      </div>
     {{ card_close() }}
     {{ card_open() }}
-      {{ mono('Аккаунты', 'muted', upper=true) }}
-      <span data-metric-value>{{ stats.total_accounts }}</span>
+      {{ mono('Платящих', 'muted', upper=true) }}
+      <div data-metric-line>
+        <span data-metric-value>{{ paying }}</span>
+      </div>
     {{ card_close() }}
     {{ card_open() }}
-      {{ mono('Активные акк.', 'muted', upper=true) }}
-      <span data-metric-value>{{ stats.active_accounts }}</span>
-    {{ card_close() }}
-    {{ card_open() }}
-      {{ mono('Отправлено', 'muted', upper=true) }}
-      <span data-metric-value>{{ stats.sends_today }}</span>
+      {{ mono('Ошибок за сутки', 'muted', upper=true) }}
+      <div data-metric-line>
+        <span data-metric-value>{{ metrics.failed }}</span>
+      </div>
     {{ card_close() }}
   </div>
 
