@@ -272,7 +272,7 @@ async def test_amounts_go_through_the_money_global_and_junk_does_not_break_the_p
 
 
 @pytest.mark.asyncio
-async def test_the_dead_tariff_plan_never_reaches_the_markup(
+async def test_no_plan_value_from_the_dead_tariff_column_reaches_the_markup(
     admin_client: AsyncClient, db_session: AsyncSession
 ):
     """Значение заполненной колонки тарифа НЕ появляется в разметке.
@@ -295,7 +295,7 @@ async def test_the_dead_tariff_plan_never_reaches_the_markup(
     )
 
 
-def test_neither_payments_template_reaches_for_the_tariff_plan_at_all():
+def test_no_plan_lookup_exists_in_either_payments_template():
     """Ни один из двух шаблонов подраздела не обращается к колонке тарифа.
 
     Утверждение по ТЕКСТУ шаблонов, а не по отданной странице: обращение,

@@ -36,6 +36,15 @@ from app.application.admin.overview_stats import (
     user_card_counts,
     user_totals,
 )
+from app.application.admin.payments_query import (
+    EXPIRED_LOOKBACK_DAYS,
+    PAYMENT_PERIOD_CHIPS,
+    PAYMENT_PERIOD_VALUES,
+    PAYMENT_STATUS_CHIPS,
+    PAYMENT_STATUS_VALUES,
+    expired_not_renewed,
+    payment_ledger,
+)
 from app.application.admin.queue_rows import (
     QUEUE_ROW_CAP,
     queue_rows,
@@ -1190,11 +1199,69 @@ async def admin_logs(
 @router.get("/payments", response_class=HTMLResponse)
 async def admin_payments(
     request: Request,
+    status: str | None = Query(default=None),
+    period: str | None = Query(default=None),
     admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ):
-    """Каркас подраздела «Платежи». Содержимое приносит план 06-11."""
+    """Подраздел «Платежи»: две величины, журнал с двумя осями и честный потолок.
+
+    ⚠️ ВЫРУЧКА БЕРЁТСЯ ТЕМ ЖЕ ПУТЁМ, ЧТО И НА «ОБЗОРЕ» — счётом платящих по трём
+    условиям и умножением его на цену доступа (D-38). Второй счёт рядом дал бы
+    два разных числа об одной величине на двух экранах одной админки, и узналось
+    бы это по жалобе, что выручка на обзоре не сходится с выручкой в платежах.
+    Агрегатов обработчик не строит вовсе — они живут в прикладном слое, и это
+    машинное свойство модуля
+    (`test_the_admin_pages_module_builds_no_aggregate_over_the_send_journal`).
+
+    ⚠️ ЗНАЧЕНИЯ ОСЕЙ САНИРУЮТСЯ ЗДЕСЬ ТОЖЕ, ХОТЯ МОДУЛЬ САНИРУЕТ ИХ САМ. Модуль
+    отсекает мусор для ЗАПРОСА; здесь отсечка нужна для РАЗМЕТКИ: неотсечённое
+    значение доехало бы до чипсов как активное, и администратор увидел бы
+    подсвеченный фильтр, которого не задавал и который ничего не отбирает.
+    Отсекает ОБЩАЯ функция проекта, а не своя копия (`clean_choice`).
+
+    ⚠️ МОМЕНТ СНИМАЕТСЯ ОДИН НА ВЕСЬ ЗАПРОС — и для отбора платящих, и для окна
+    ушедших, и для отсечки периода. Посчитанные от разных моментов, три величины
+    разъехались бы на границе суток.
+    """
+    status = clean_choice(status, PAYMENT_STATUS_VALUES)
+    period = clean_choice(period, PAYMENT_PERIOD_VALUES)
+
+    now = datetime.now(timezone.utc)
+    paying = await paying_total(db, now=now)
+    ledger = await payment_ledger(db, status=status, period=period, now=now)
+
+    filter_params = {
+        key: value
+        for key, value in (("status", status), ("period", period))
+        if value
+    }
+
     return templates.TemplateResponse(
-        "admin/payments.html", _admin_context(request, admin, "payments")
+        "admin/payments.html",
+        {
+            **_admin_context(request, admin, "payments"),
+            # ⚠️ ДВЕ ВЕЛИЧИНЫ, И РОВНО ДВЕ (D-41). Средней величины платежа нет:
+            # при единственной цене она тождественно равна ей. Доли ушедших нет:
+            # подписка одна на пользователя, дата окончания сдвигается при
+            # продлении, истории продлений строка не хранит — доля из имеющегося
+            # была бы числом без определения.
+            "mrr": monthly_revenue(paying, settings.subscription_price),
+            "lapsed": await expired_not_renewed(db, now=now),
+            # Окно уезжает в подпись ЗНАЧЕНИЕМ, а не выписывается в шаблоне: копия
+            # числа в копирайте разошлась бы с окном молча.
+            "expired_lookback_days": EXPIRED_LOOKBACK_DAYS,
+            "payments": ledger.rows,
+            "payments_total": ledger.total,
+            "payments_cap": ledger.cap,
+            "payments_truncated": ledger.truncated,
+            "status_chips": PAYMENT_STATUS_CHIPS,
+            "period_chips": PAYMENT_PERIOD_CHIPS,
+            "filter_status": status,
+            "filter_period": period,
+            "filter_params": filter_params,
+        },
     )
 
 
