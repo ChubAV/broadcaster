@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from httpx import AsyncClient
 from jose import jwt
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
@@ -577,4 +577,231 @@ async def test_a_hand_built_token_with_a_scalar_actor_claim_still_reads(
     assert actor_id(payload) == admin_id, (
         "скалярная форма признака перестала читаться — утверждение плана 06-06 "
         "обесценилось молча"
+    )
+
+
+# =============================================================================
+# Полоса возврата в шелле — видна на КАЖДОЙ странице продукта (D-25, S8)
+# =============================================================================
+#
+# ⚠️ ЭТО ИЗМЕНЕНИЕ УРОВНЯ ШЕЛЛА, А НЕ РАЗДЕЛА. Полоса рисуется на всех 26
+# страничных маршрутах, и обход НЕСКОЛЬКИХ РАЗНЫХ разделов здесь не
+# перестраховка: в макете полоса живёт внутри админского блока, и самая
+# правдоподобная ошибка исполнения — поставить её туда же. Такая полоса прошла
+# бы проверку на одной странице и молчала бы ровно там, где нужна: у
+# администратора, ушедшего под чужой личностью в «Объявления».
+
+# Разные РАЗДЕЛЫ продукта, а не разные адреса одного раздела.
+SECTIONS = ("/dashboard", "/ads", "/accounts", "/schedules", "/billing", "/profile")
+
+RETURN_FORM = '<form method="post" action="/impersonation/stop"'
+
+
+@pytest.mark.asyncio
+async def test_the_return_bar_is_present_in_every_section(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 1: под чужой личностью полоса есть в РАЗМЕТКЕ ЛЮБОЙ страницы.
+
+    Обход идёт по шести разным разделам. Полоса, поставленная в админский блок
+    вместо шелла, зеленела бы на админской странице и молчала бы во всех
+    остальных — то есть ровно там, где администратор о чужой личности и
+    забывает.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    for route in SECTIONS:
+        response = await admin_client.get(route)
+        assert response.status_code == 200, f"{route} ответил {response.status_code}"
+        assert "data-impersonation" in response.text, (
+            f"{route}: полосы возврата нет — администратор не видит, что "
+            "находится под чужой личностью (D-25)"
+        )
+
+
+@pytest.mark.asyncio
+async def test_without_impersonation_no_section_draws_the_bar(
+    authed_client: AsyncClient
+):
+    """Тест 2: нет признака — НЕТ РАЗМЕТКИ ВОВСЕ.
+
+    Умолчание «показать» запрещено прямо: ложная полоса «вы работаете от имени»
+    на 26 страницах хуже её отсутствия — она сообщает человеку, что его
+    действия уходят от чужого имени, когда это неправда.
+    """
+    for route in SECTIONS:
+        response = await authed_client.get(route)
+        assert response.status_code == 200, route
+        assert "data-impersonation" not in response.text, (
+            f"{route}: полоса возврата нарисована пользователю, который ни под "
+            "кем не находится"
+        )
+        assert RETURN_FORM not in response.text, route
+
+
+@pytest.mark.asyncio
+async def test_the_bar_names_the_user_the_admin_is_acting_as(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 3: полоса НАЗЫВАЕТ, под кем находится администратор.
+
+    Полоса без имени отвечает «вы под кем-то» — то есть на вопрос, которого
+    никто не задавал. У администратора в разборе обычно открыто несколько
+    учётных записей подряд, и «под кем именно» — единственное, что полоса
+    сообщает сверх самого факта.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    html = (await admin_client.get("/dashboard")).text
+
+    assert f"Вы работаете от имени пользователя {TARGET_NAME}" in html, (
+        "полоса не называет, под кем находится администратор"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_user_without_a_name_is_named_by_address_never_by_emptiness(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """У пользователя может не быть имени — тогда печатается АДРЕС.
+
+    «Вы работаете от имени пользователя » — подпись, не называющая никого.
+    Адрес есть у каждого, и он отвечает на тот же вопрос.
+    """
+    await _register(admin_client, "nameless@test.com", "")
+    nameless = await _user(db_session, "nameless@test.com")
+    nameless.name = None
+    await db_session.commit()
+    await _enter(admin_client, nameless.id)
+
+    html = (await admin_client.get("/dashboard")).text
+
+    assert "Вы работаете от имени пользователя nameless@test.com" in html, (
+        "подпись полосы осталась без имени и без адреса"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_arbitrarily_long_name_does_not_stretch_the_bar(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Имя — ПРОИЗВОЛЬНЫЙ ВВОД, а полоса рисуется на 26 маршрутах.
+
+    Имя в двести знаков растянуло бы полосу на несколько строк над КАЖДЫМ
+    экраном продукта. Усечение стоит в обработчике, а не в разметке: величина,
+    обрезанная в шаблоне, обрезалась бы по-разному в каждом месте показа.
+    """
+    from app.pages.common import IMPERSONATION_LABEL_CAP
+
+    long_name = "Пользователь " + "Ы" * 300
+    await _register(admin_client, "long@test.com", long_name)
+    long_user = await _user(db_session, "long@test.com")
+    await _enter(admin_client, long_user.id)
+
+    html = (await admin_client.get("/dashboard")).text
+
+    assert long_name not in html, (
+        "имя произвольной длины уехало в полосу целиком — полоса растянется "
+        "над каждым экраном продукта"
+    )
+    printed = html.split("Вы работаете от имени пользователя ", 1)[1].split("<", 1)[0]
+    assert len(printed.strip()) <= IMPERSONATION_LABEL_CAP, (
+        f"подпись длиннее объявленного потолка: {len(printed.strip())}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_return_control_is_a_real_post_form(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 4: возврат — НАСТОЯЩАЯ форма POST, а не ссылка и не обработчик.
+
+    Возврат меняет состояние: он перевыпускает токен и переписывает cookie.
+    Переход по ссылке для такого действия неверен, а кнопка, работающая только
+    при поднявшемся Alpine, оставила бы администратора запертым в чужой учётной
+    записи ровно тогда, когда что-то пошло не так.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    html = (await admin_client.get("/dashboard")).text
+
+    assert RETURN_FORM in html, (
+        "возврат сделан не формой POST — на странице без работающего JS пути "
+        "назад не остаётся"
+    )
+    assert 'href="/impersonation/stop"' not in html, (
+        "возврат сделан ссылкой: изменяющее состояние действие по GET"
+    )
+    assert "ВЕРНУТЬСЯ В АДМИНА" in html, "подписи возврата в полосе нет"
+
+
+@pytest.mark.asyncio
+async def test_the_bar_does_not_break_the_shell_layout(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 5: полоса не ломает раскладку шелла ни в одном разделе.
+
+    Полоса встаёт в КАЖДУЮ страницу проекта, и ошибка вёрстки здесь видна всем
+    сразу. Утверждение снимается с тех же признаков, которыми обход шелла
+    проверяет целость раскладки.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    for route in SECTIONS:
+        html = (await admin_client.get(route)).text
+        for marker in ("data-shell", "data-side", "data-nav", "data-tabs", "data-main"):
+            assert marker in html, f"{route}: раскладка шелла потеряла {marker}"
+
+
+@pytest.mark.asyncio
+async def test_the_bar_costs_the_shell_no_query_of_its_own(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 6: признак имперсонации не стоит НИ ОДНОГО лишнего запроса.
+
+    ⚠️ УТВЕРЖДЕНИЕ СТРУКТУРНОЕ, А НЕ О НАМЕРЕНИИ: у сборщика признака нет
+    сессии БД в параметрах, поэтому обратиться к базе ему НЕЧЕМ. Полоса
+    рисуется на каждом из 26 маршрутов, и запрос ради неё оплачивался бы на
+    каждом рендере продукта.
+
+    Второе чтение строки пользователей при имперсонации ЕСТЬ, и оно названо: это
+    само действующее лицо, и нужно оно ПРОВЕРКЕ ПРАВ, а не полосе — админство
+    есть совпадение АДРЕСА с настройкой, а адрес берётся только из строки.
+    Третьего чтения полоса не добавляет.
+    """
+    import inspect
+
+    from app.pages.common import impersonation_view
+
+    assert "db" not in inspect.signature(impersonation_view).parameters, (
+        "сборщик признака имперсонации получил сессию БД — полоса стала стоить "
+        "запрос на каждом из 26 рендеров"
+    )
+
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    bind = db_session.get_bind()
+    engine = getattr(bind, "sync_engine", bind)
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        response = await admin_client.get("/profile")
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert response.status_code == 200
+    user_reads = [s for s in statements if "FROM users" in s]
+    assert len(user_reads) == 2, (
+        "чтений строки пользователей на рендере под чужой личностью не два "
+        f"(субъект и действующее лицо), а {len(user_reads)}:\n"
+        + "\n".join(user_reads)
     )
