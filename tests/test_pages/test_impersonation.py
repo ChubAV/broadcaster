@@ -347,7 +347,7 @@ async def test_an_outsider_can_neither_enter_as_anyone_nor_return(
 
 @pytest.mark.asyncio
 async def test_both_the_entry_and_the_return_are_journaled_with_both_ids(
-    admin_client: AsyncClient, db_session: AsyncSession, test_settings, caplog
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
 ):
     """Тест 6 (D-24): обе операции оставляют именованный след с ОБОИМИ ид.
 
@@ -356,33 +356,55 @@ async def test_both_the_entry_and_the_return_are_journaled_with_both_ids(
     разобрать потом, кто это сделал, нечем: запись «пользователь X отправил
     рассылку» не отличима от той же записи, сделанной администратором за него.
 
-    Запись снимается `caplog`-ом, а не `capture_logs()`: ленивый прокси
-    structlog связывается с цепочкой процессоров при первом использовании и
-    кэширует её (основание выписано в `tests/test_admin.py`).
+    ⚠️ УТВЕРЖДЕНИЕ СНИМАЕТСЯ С САМОГО ВЫЗОВА ЖУРНАЛА, А НЕ С `caplog`, И ЭТО
+    ВЫНУЖДЕННЫЙ ВЫБОР, А НЕ ПРЕДПОЧТЕНИЕ. Первая редакция теста снимала запись
+    `caplog`-ом по образцу соседей и краснела ТОЛЬКО в полном прогоне: в наборе
+    `test_admin.py … test_models` + этот файл (516 тестов, 70 секунд) запись
+    `app.pages.admin` не доезжает до перехватчика, тогда как запись
+    `app.pages.auth` в том же теле доезжает. Причина лежит в конфигурации
+    журналирования, общей на процесс: `setup_logging` вызывается на КАЖДОЙ
+    сборке приложения и чистит обработчики корневого регистратора
+    (`app/logging_config.py`), а `tests/test_messengers/conftest.py`
+    переконфигурирует structlog на старте сессии. Разведение этих двух — правка
+    общей поверхности журналирования, то есть чужой предмет.
+
+    Проверка через подмену самого регистратора от порядка файлов не зависит и
+    утверждает ровно то, что требует D-24: ИМЯ события и ОБА идентификатора в
+    нём. Чего она не утверждает — что запись доехала до вывода; это свойство
+    общей настройки журналирования, и его проверяют тесты самой настройки.
     """
+    from unittest.mock import MagicMock, patch
+
+    import app.pages.admin as admin_module
+    import app.pages.auth as auth_module
+
     target_id = await _seed_target(admin_client, db_session)
     admin_id = (await _user(db_session, test_settings.admin_email)).id
 
-    with caplog.at_level("INFO", logger="app.pages.admin"):
+    entry_logger = MagicMock()
+    with patch.object(admin_module, "logger", entry_logger):
         await _impersonate(admin_client, target_id)
-    with caplog.at_level("INFO", logger="app.pages.auth"):
+
+    stop_logger = MagicMock()
+    with patch.object(auth_module, "logger", stop_logger):
         await _stop(admin_client)
 
-    events = {
-        record.msg["event"]: record.msg
-        for record in caplog.records
-        if isinstance(record.msg, dict) and "event" in record.msg
-    }
+    def _event(mock, name: str) -> dict:
+        for call in mock.info.call_args_list:
+            if call.args and call.args[0] == name:
+                return call.kwargs
+        raise AssertionError(
+            f"строки журнала `{name}` нет: "
+            f"{[c.args[0] for c in mock.info.call_args_list if c.args]}"
+        )
 
-    for name in ("impersonation_start", "impersonation_stop"):
-        assert name in events, (
-            f"строки журнала `{name}` нет: {sorted(events)}"
+    for mock, name in ((entry_logger, "impersonation_start"), (stop_logger, "impersonation_stop")):
+        fields = _event(mock, name)
+        assert fields.get("admin_user_id") == admin_id, (
+            f"`{name}` не назвал администратора: {fields}"
         )
-        assert events[name].get("admin_user_id") == admin_id, (
-            f"`{name}` не назвал администратора"
-        )
-        assert events[name].get("target_user_id") == target_id, (
-            f"`{name}` не назвал целевого пользователя"
+        assert fields.get("target_user_id") == target_id, (
+            f"`{name}` не назвал целевого пользователя: {fields}"
         )
 
 
@@ -672,7 +694,10 @@ async def test_a_user_without_a_name_is_named_by_address_never_by_emptiness(
     """
     await _register(admin_client, "nameless@test.com", "")
     nameless = await _user(db_session, "nameless@test.com")
-    nameless.name = None
+    # Колонка имени объявлена обязательной, поэтому «имени нет» в этой схеме
+    # выражается ПУСТОЙ строкой, а не отсутствием значения. Подпись обязана
+    # видеть в ней то же самое, что увидела бы в отсутствии.
+    nameless.name = "   "
     await db_session.commit()
     await _enter(admin_client, nameless.id)
 
@@ -702,11 +727,16 @@ async def test_an_arbitrarily_long_name_does_not_stretch_the_bar(
 
     html = (await admin_client.get("/dashboard")).text
 
-    assert long_name not in html, (
+    # Предмет — ПОЛОСА, а не блок пользователя в сайдбаре: тот печатает имя
+    # целиком и делал это до этого плана. Утверждение «имени нет нигде в
+    # разметке» краснело бы на чужой, не этим планом заведённой поверхности.
+    bar = html.split("data-impersonation", 1)[1].split("</div>", 1)[0]
+
+    assert long_name not in bar, (
         "имя произвольной длины уехало в полосу целиком — полоса растянется "
         "над каждым экраном продукта"
     )
-    printed = html.split("Вы работаете от имени пользователя ", 1)[1].split("<", 1)[0]
+    printed = bar.split("Вы работаете от имени пользователя ", 1)[1].split("<", 1)[0]
     assert len(printed.strip()) <= IMPERSONATION_LABEL_CAP, (
         f"подпись длиннее объявленного потолка: {len(printed.strip())}"
     )
@@ -759,21 +789,30 @@ async def test_the_bar_does_not_break_the_shell_layout(
 
 @pytest.mark.asyncio
 async def test_the_bar_costs_the_shell_no_query_of_its_own(
-    admin_client: AsyncClient, db_session: AsyncSession
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
 ):
-    """Тест 6: признак имперсонации не стоит НИ ОДНОГО лишнего запроса.
+    """Тест 6: признак имперсонации не стоит НИ ОДНОГО запроса.
 
-    ⚠️ УТВЕРЖДЕНИЕ СТРУКТУРНОЕ, А НЕ О НАМЕРЕНИИ: у сборщика признака нет
-    сессии БД в параметрах, поэтому обратиться к базе ему НЕЧЕМ. Полоса
-    рисуется на каждом из 26 маршрутов, и запрос ради неё оплачивался бы на
-    каждом рендере продукта.
+    ⚠️ ПЕРВОЕ УТВЕРЖДЕНИЕ СТРУКТУРНОЕ, А НЕ О НАМЕРЕНИИ: у сборщика признака нет
+    сессии БД в параметрах, поэтому обратиться к базе ему НЕЧЕМ. Полоса рисуется
+    на каждом из 26 маршрутов, и запрос ради неё оплачивался бы на каждом
+    рендере продукта — в том числе у 100% пользователей, которые под чужой
+    личностью не находятся никогда.
 
-    Второе чтение строки пользователей при имперсонации ЕСТЬ, и оно названо: это
-    само действующее лицо, и нужно оно ПРОВЕРКЕ ПРАВ, а не полосе — админство
-    есть совпадение АДРЕСА с настройкой, а адрес берётся только из строки.
-    Третьего чтения полоса не добавляет.
+    ⚠️ ВТОРОЕ СРАВНИВАЕТ ДВА РЕНДЕРА ОДНОЙ И ТОЙ ЖЕ СТРАНИЦЫ — обычный и
+    из-под чужой личности, — и требует, чтобы ВСЯ разница состояла из чтений
+    строки пользователей. Это и есть точная формулировка названной цены: при
+    имперсонации читается САМО ДЕЙСТВУЮЩЕЕ ЛИЦО, и нужно оно ПРОВЕРКЕ ПРАВ, а не
+    полосе (админство есть совпадение АДРЕСА с настройкой, а адрес берётся
+    только из строки). Появись из-за полосы хоть один запрос к любой другой
+    таблице — разница его покажет.
+
+    Сравнение идёт по ТЕКСТУ запросов, а не по их числу: два рендера сделаны от
+    разных людей, и одинаковые по смыслу запросы отличаются только параметрами,
+    которых в тексте нет.
     """
     import inspect
+    from collections import Counter
 
     from app.pages.common import impersonation_view
 
@@ -783,25 +822,44 @@ async def test_the_bar_costs_the_shell_no_query_of_its_own(
     )
 
     target_id = await _seed_target(admin_client, db_session)
+
+    async def _statements_of_profile_render() -> list[str]:
+        recorded: list[str] = []
+
+        def record(conn, cursor, statement, parameters, context, executemany):
+            recorded.append(statement)
+
+        bind = db_session.get_bind()
+        engine = getattr(bind, "sync_engine", bind)
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            response = await admin_client.get("/profile")
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+        assert response.status_code == 200
+        return recorded
+
+    # Обычный рендер — тот же адрес, тот же человек, но без чужой личности.
+    await admin_client.post(
+        "/login",
+        data={"email": TARGET_EMAIL, "password": PASSWORD},
+        follow_redirects=False,
+    )
+    plain = await _statements_of_profile_render()
+
+    # Тот же рендер из-под чужой личности.
+    await admin_client.post(
+        "/login",
+        data={"email": test_settings.admin_email, "password": PASSWORD},
+        follow_redirects=False,
+    )
     await _enter(admin_client, target_id)
+    impersonated = await _statements_of_profile_render()
 
-    statements: list[str] = []
+    extra = Counter(impersonated) - Counter(plain)
+    foreign = [s for s in extra.elements() if "FROM users" not in s]
 
-    def record(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
-
-    bind = db_session.get_bind()
-    engine = getattr(bind, "sync_engine", bind)
-    event.listen(engine, "before_cursor_execute", record)
-    try:
-        response = await admin_client.get("/profile")
-    finally:
-        event.remove(engine, "before_cursor_execute", record)
-
-    assert response.status_code == 200
-    user_reads = [s for s in statements if "FROM users" in s]
-    assert len(user_reads) == 2, (
-        "чтений строки пользователей на рендере под чужой личностью не два "
-        f"(субъект и действующее лицо), а {len(user_reads)}:\n"
-        + "\n".join(user_reads)
+    assert not foreign, (
+        "полоса возврата привела с собой запрос помимо чтения строки "
+        "действующего лица:\n" + "\n".join(foreign)
     )
