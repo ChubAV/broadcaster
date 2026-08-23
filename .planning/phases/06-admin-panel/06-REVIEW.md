@@ -186,7 +186,12 @@ point: the codebase already resolves the token header-first everywhere except th
 authenticator, and the guard was written to match the wrong one.
 
 `tests/test_pages/test_impersonation_gate.py` cannot catch this — it asserts only that the
-dependency is *declared* on the route, never that it *fires*.
+dependency is *declared* on the route, never that it *fires*. Confirmed by measurement, not
+inference: `test_impersonation_gate.py` and `test_impersonation.py` were run against the
+code as submitted and report **44 passed**. The machine gate walks all 49 mutating routes,
+finds the dependency correctly declared on every one it should be, and goes green — while
+the bypass above works on all of them. The gate certifies declaration; the defect is in
+enforcement, and nothing in the phase's 2 000-plus lines of impersonation tests looks there.
 
 **Fix:** make the guard read the token from the same place, and only the same place, as the
 handler it guards. The simplest correct form is to stop consulting bearer credentials for
