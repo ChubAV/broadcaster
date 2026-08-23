@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import Settings, get_settings
-from app.services.auth_service import decode_access_token
+from app.services.auth_service import actor_id, decode_access_token
 from app.services.subscription_service import check_access
 
 logger = structlog.get_logger(__name__)
@@ -79,7 +79,41 @@ async def require_admin(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> "User":
-    """Require current user to be admin. Returns User object."""
+    """Права администратора — по ДЕЙСТВУЮЩЕМУ ЛИЦУ, а не по субъекту (D-20).
+
+    ⚠️ ВОЗВРАЩАЕТСЯ ТОТ, КТО ДЕЙСТВУЕТ, А НЕ ТОТ, ЧЬЮ УЧЁТНУЮ ЗАПИСЬ ОТКРЫЛИ.
+    Обработчики админки пишут `admin.id` в журнал привилегированных операций
+    (`admin_toggle_free_access`, `admin_restart_worker`); верни эта зависимость
+    субъекта — и журнал называл бы автором действия того, НАД КЕМ оно
+    совершено. Это ровно тот класс записи, ради которого журнал и ведётся.
+
+    ⚠️ БЛОКИРОВКА СУБЪЕКТА ЗДЕСЬ НЕ СПРАШИВАЕТСЯ ПРИ НАЛИЧИИ ДЕЙСТВУЮЩЕГО ЛИЦА
+    (D-26). Общая проверка `get_current_user` отказывает заблокированному 403, и
+    администратор, вошедший под заблокированным ради вопроса «за что меня
+    заблокировали», потерял бы вместе с этим и админку — то есть путь назад.
+    Блокировка самого ДЕЙСТВУЮЩЕГО ЛИЦА при этом действует: заблокированный
+    администратор админом быть перестаёт.
+
+    ⚠️ ПОРЯДОК ВЕТОК НЕСУЩИЙ: сначала «есть ли действующее лицо», потом всё
+    остальное. Ветка «сначала обычная проверка, а если она отказала — посмотреть
+    на признак» отказывала бы заблокированному субъекту раньше, чем узнала бы,
+    что за ним стоит администратор.
+    """
+    from app.models.user import User
+
+    acting_id = _actor_id(request, None, settings)
+    if acting_id is not None:
+        actor = await db.get(User, acting_id)
+        if actor is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
+            )
+        if actor.is_blocked or actor.email != settings.admin_email:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
+            )
+        return actor
+
     user = await get_current_user(request, db, settings)
     if user.email != settings.admin_email:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
@@ -148,12 +182,12 @@ BLOCKED_DETAIL = (
 )
 
 
-def _actor_claim(
+def _actor_id(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None,
     settings: Settings,
-) -> str | None:
-    """Признак действующего лица (`act`) из того же токена — либо `None`.
+) -> int | None:
+    """Идентификатор действующего лица из того же токена — либо `None`.
 
     ⚠️ ТОКЕН РАЗБИРАЕТСЯ ВТОРОЙ РАЗ, И ЭТО НАЗВАННАЯ ЦЕНА, А НЕ НЕДОСМОТР.
     Общий аутентификатор отдаёт наружу только `sub`, а трогать его нельзя ни
@@ -166,18 +200,28 @@ def _actor_claim(
     Отсутствие токена и негодный токен дают `None`, а не исключение: отказ по
     ним — работа аутентификатора, и второе его определение здесь разошлось бы
     с первым.
+
+    ⚠️ ПОРЯДОК ИСТОЧНИКОВ ТОКЕНА ПОВТОРЯЕТ `get_current_user` ДОСЛОВНО: сначала
+    разобранные учётные данные, затем заголовок, затем cookie. Читатель,
+    забывший заголовок, видел бы «действующего лица нет» ровно у клиентов с
+    Bearer — то есть терял бы админ-доступ у половины поверхностей и сохранял у
+    другой.
+
+    Приведение типа здесь НЕ делается: оно живёт внутри чтения токена, а
+    значение снимается единственным читателем признака на проект.
     """
     token = None
     if credentials is not None:
         token = credentials.credentials
     if token is None:
+        auth_header = request.headers.get("authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if token is None:
         token = request.cookies.get("access_token")
     if token is None:
         return None
-    payload = decode_access_token(token, settings.secret_key)
-    if payload is None:
-        return None
-    return payload.get("act")
+    return actor_id(decode_access_token(token, settings.secret_key))
 
 
 async def get_current_user_id_active(
@@ -224,7 +268,7 @@ async def get_current_user_id_active(
 
     user_id = await get_current_user_id(request, credentials, settings)
 
-    if _actor_claim(request, credentials, settings) is not None:
+    if _actor_id(request, credentials, settings) is not None:
         return user_id
 
     user = await db.get(User, user_id)
