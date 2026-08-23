@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -24,8 +25,8 @@ from app.application.analytics.send_analytics import (
     send_metrics,
 )
 from app.application.admin.overview_stats import (
-    NEW_USERS_WINDOW,
     account_counts_by_user,
+    monthly_revenue,
     paying_total,
     user_card_counts,
     user_totals,
@@ -73,6 +74,8 @@ from app.services.loki_client import (
     query_range,
 )
 from app.services.ops_state import (
+    CHANNEL_MAX,
+    CHANNEL_WA,
     DROP_MISSING,
     DROP_REMOVED,
     DROP_UNAVAILABLE,
@@ -360,6 +363,53 @@ def _access_view(subscription: Subscription | None, now: datetime) -> dict:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class _OpsSnapshot:
+    """Оперативное состояние на момент запроса «Обзора» — ОДНИМ чтением.
+
+    Живость воркеров аккаунтов и глубина очереди канала брокера нужны и плитке
+    задач, и блоку инцидентов. Два независимых чтения дали бы два снимка разного
+    момента, и плитка могла бы не сойтись с блоком под ней на глазах у
+    администратора — при том что оба числа он читает как одно состояние.
+
+    `queue_total` равен `None`, когда хотя бы один источник не прочитан:
+    сумма, посчитанная по части источников, выглядит измеренной и таковой не
+    является. Ноль вместо неё читался бы как «очередь пуста», то есть как ОТВЕТ
+    на вопрос, которого мы не знаем.
+    """
+
+    liveness: dict[int, dict]
+    telegram_depth: int | None
+    queue_total: int | None
+    partial: bool
+
+
+async def _ops_snapshot(db: AsyncSession) -> _OpsSnapshot:
+    """Живость воркеров аккаунтов и глубина очереди брокера — на один момент."""
+    accounts = (
+        (await db.execute(select(MessengerAccount).order_by(MessengerAccount.id)))
+        .scalars()
+        .all()
+    )
+    liveness = await worker_liveness(
+        [a.id for a in accounts if a.type == CHANNEL_WA],
+        [a.id for a in accounts if a.type == CHANNEL_MAX],
+    )
+    telegram_depth = await telegram_queue_depth()
+
+    depths = [view.get("queue_depth") for view in liveness.values()]
+    partial = telegram_depth is None or any(depth is None for depth in depths)
+    queue_total = (
+        None if partial else telegram_depth + sum(depth for depth in depths)
+    )
+    return _OpsSnapshot(
+        liveness=liveness,
+        telegram_depth=telegram_depth,
+        queue_total=queue_total,
+        partial=partial,
+    )
+
+
 @router.get("", response_class=HTMLResponse)
 async def admin_dashboard(
     request: Request,
@@ -386,17 +436,28 @@ async def admin_dashboard(
     paying = await paying_total(db, now=now)
     metrics = await send_metrics(db, user_id=None, now=now)
 
+    ops = await _ops_snapshot(db)
+
+    # ⚠️ ВЕЛИЧИНА ВРЕМЕНИ СЧИТАЕТСЯ ТОЛЬКО ПРИ НЕПУСТОЙ ОЧЕРЕДИ КАНАЛА, и это то
+    # же правило, по которому её печатает подраздел «Очередь». Время с последней
+    # отправки на ПУСТОЙ очереди означает «работы не было», а не «работа стоит»,
+    # и напечатанное оно тревожило бы администратора ровно там, где всё в
+    # порядке.
+    queue_time_sec = None
+    if ops.telegram_depth:
+        queue_time_sec = telegram_lag_seconds(
+            await last_send_at(db, messenger_type=QUEUE_TELEGRAM_CHANNEL), now
+        )
+
     return templates.TemplateResponse(
         "admin/overview.html",
         {
             **_admin_context(request, admin, "overview"),
             "users": users,
-            # Ширина окна прироста приезжает ЧИСЛОМ ИЗ КОНСТАНТЫ, а не выписана
-            # в подписи: «за неделю» рядом с иным окном называло бы не то, что
-            # посчитано.
-            "new_users_days": NEW_USERS_WINDOW.days,
             "paying": paying,
-            "subscription_price": settings.subscription_price,
+            "mrr": monthly_revenue(paying, settings.subscription_price),
+            "queue_total": ops.queue_total,
+            "queue_time_sec": queue_time_sec,
             "metrics": metrics,
         },
     )

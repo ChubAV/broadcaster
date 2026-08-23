@@ -19,6 +19,7 @@
 """
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -88,6 +89,31 @@ async def paying_total(session: AsyncSession, *, now: datetime) -> int:
             )
         )
     ).scalar() or 0
+
+
+def monthly_revenue(paying: int, price: str):
+    """Выручка подписью: число платящих × цена доступа.
+
+    ЦЕНА ХРАНИТСЯ МАШИННОЙ СТРОКОЙ формата платёжного API, и разбор её здесь —
+    не педантизм: `float` на деньгах даёт копейку разницы там, где её никто не
+    ищет. Умножение идёт в `Decimal`, а форматирование остаётся на стороне
+    показа — общий денежный глобал уже умеет и разделитель разрядов, и знак
+    рубля, и проверку конечности значения.
+
+    ⚠️ НЕПРИГОДНАЯ ЦЕНА ВОЗВРАЩАЕТСЯ КАК ЕСТЬ, А НЕ ПОДМЕНЯЕТСЯ НУЛЁМ. Ноль в
+    денежной подписи — правдоподобная ложь: администратор прочитает «выручки
+    нет» вместо «в настройке цены мусор». Исходная строка на экране хотя бы
+    называет себя странной. Приём и его причина дословно те же, что у
+    `format_amount` (`app/pages/common.py`), и разойтись им нельзя: одна и та же
+    строка проходит обе функции подряд.
+    """
+    try:
+        amount = Decimal(str(price))
+    except (ArithmeticError, ValueError, TypeError):
+        return price
+    if not amount.is_finite():
+        return price
+    return amount * paying
 
 
 async def account_counts_by_user(

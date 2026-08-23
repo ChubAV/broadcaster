@@ -5,6 +5,9 @@
 {% from "components/mono.html" import mono %}
 {% from "components/table.html" import rowhead %}
 {% from "admin/includes/queue_row.html" import queue_row %}
+{#- Величина времени канала брокера приходит ОТТУДА ЖЕ, откуда её берёт «Обзор»:
+    одно число обязано называться на двух подразделах одними словами. -#}
+{% from "admin/includes/queue_time.html" import queue_time %}
 
 {% block title %}Очередь — Broadcaster{% endblock %}
 
@@ -62,7 +65,7 @@
   {% endif %}
   {% if telegram.depth %}
   {% if telegram.lag_sec is not none %}
-  {{ mono('с последней отправки по каналу — ' ~ telegram.lag_sec ~ ' с', 'warn' if telegram.lag_sec > 600 else 'muted', title='Измерено по журналу отправок: столько прошло с последней записи об отправке по каналу Telegram. Это НЕ возраст задачи в очереди — он лежит внутри конверта брокера и не читается.') }}
+  {{ queue_time(telegram.lag_sec) }}
   {% else %}
   {{ mono('—', title='По каналу Telegram ещё не зафиксировано ни одной отправки, поэтому отсчитывать не от чего') }}
   {% endif %}

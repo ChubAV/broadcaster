@@ -1933,8 +1933,26 @@ async def test_the_overview_users_tile_counts_the_week_by_the_registration_momen
     assert "+2 за неделю" in _tile(html, TILE_USERS)
 
 
+def test_the_overview_week_caption_is_still_true():
+    """Подпись «за неделю» и окно счёта обязаны означать одно и то же.
+
+    ⚠️ ЧИСЛО В КОПИРАЙТ НЕ КОПИРУЕТСЯ, поэтому в подписи стоит СЛОВО, а не «за
+    7 дней». Цена такого решения ровно одна: слово не меняется вместе с
+    константой. Правка окна на десять дней оставила бы подпись прежней, и
+    администратор читал бы «за неделю» под числом за декаду — величина
+    называлась бы не тем, что посчитано. Этот тест и есть та цена, уплаченная
+    вперёд.
+    """
+    from app.application.admin.overview_stats import NEW_USERS_WINDOW
+
+    assert NEW_USERS_WINDOW == timedelta(days=7), (
+        "окно прироста разъехалось со словом «за неделю» в подписи плитки: "
+        "поправьте либо константу, либо подпись — но не одно без другого"
+    )
+
+
 @pytest.mark.asyncio
-async def test_the_paying_tile_leaves_the_comped_user_out(
+async def test_the_overview_paying_tile_leaves_the_comped_user_out(
     admin_client: AsyncClient, db_session: AsyncSession
 ):
     """ТРИ условия, а не два: льготный в счёт платящих не идёт (D-38).
@@ -1944,6 +1962,12 @@ async def test_the_paying_tile_leaves_the_comped_user_out(
     накручивает выручку — в отчёте, по которому принимают решение о цене.
     """
     now = datetime.now(timezone.utc)
+
+    # Отсчёт берётся ДО посева, а не назначается числом: регистрация
+    # администратора фикстурой сама заводит ему строку подписки, и вписанная
+    # сюда «единица» проверяла бы состав фикстуры, а не правило отбора.
+    before = int(_tile_value((await admin_client.get(OVERVIEW_URL)).text, TILE_PAYING))
+
     payer = await _seed_user(db_session, "payer@test.com", created_at=now)
     comped = await _seed_user(db_session, "comped@test.com", created_at=now)
     expired = await _seed_user(db_session, "expired@test.com", created_at=now)
@@ -1956,11 +1980,13 @@ async def test_the_paying_tile_leaves_the_comped_user_out(
 
     html = (await admin_client.get(OVERVIEW_URL)).text
 
-    assert _tile_value(html, TILE_PAYING) == "1"
+    # Трое посеяны, прибавился РОВНО ОДИН: льготный не платит, истёкший не
+    # платит больше. Три условия отбора, а не два.
+    assert int(_tile_value(html, TILE_PAYING)) == before + 1
 
 
 @pytest.mark.asyncio
-async def test_the_revenue_caption_is_the_payers_times_the_price(
+async def test_the_overview_revenue_caption_is_the_payers_times_the_price(
     admin_client: AsyncClient, db_session: AsyncSession, test_settings
 ):
     """Подпись выручки = платящие × цена доступа, через ОБЩИЙ денежный глобал.
@@ -1980,14 +2006,18 @@ async def test_the_revenue_caption_is_the_payers_times_the_price(
         )
 
     html = (await admin_client.get(OVERVIEW_URL)).text
+    tile = _tile(html, TILE_PAYING)
 
-    expected = format_amount(Decimal(test_settings.subscription_price) * 2)
-    assert _tile_value(html, TILE_PAYING) == "2"
-    assert f"MRR {expected}" in _tile(html, TILE_PAYING), expected
+    # Множитель берётся ИЗ САМОЙ ПЛИТКИ: утверждение проверяет, что деньги под
+    # числом посчитаны по ТОМУ ЖЕ числу, а не по второму множеству рядом.
+    shown = int(_tile_value(html, TILE_PAYING))
+    assert shown >= 2, tile
+    expected = format_amount(Decimal(test_settings.subscription_price) * shown)
+    assert f"MRR {expected}" in tile, expected
 
 
 @pytest.mark.asyncio
-async def test_the_queue_tile_sums_the_three_sources(
+async def test_the_overview_queue_tile_sums_the_three_sources(
     admin_client: AsyncClient, db_session: AsyncSession
 ):
     """Плитка очереди суммирует три источника, объявленных подразделом «Очередь»."""
@@ -2008,7 +2038,7 @@ async def test_the_queue_tile_sums_the_three_sources(
 
 
 @pytest.mark.asyncio
-async def test_the_queue_tile_says_unknown_and_not_zero_when_redis_is_down(
+async def test_the_overview_queue_tile_says_unknown_and_not_zero_when_redis_is_down(
     admin_client: AsyncClient, db_session: AsyncSession
 ):
     """Сломанный наблюдатель даёт НЕИЗВЕСТНОСТЬ, а не ноль.
@@ -2030,7 +2060,7 @@ async def test_the_queue_tile_says_unknown_and_not_zero_when_redis_is_down(
 
 
 @pytest.mark.asyncio
-async def test_the_errors_tile_takes_the_rolling_day_and_its_delta(
+async def test_the_overview_errors_tile_takes_the_rolling_day_and_its_delta(
     admin_client: AsyncClient, db_session: AsyncSession
 ):
     """Окно суточное, дельта — к предыдущим суткам (D-40)."""
