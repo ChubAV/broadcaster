@@ -71,8 +71,13 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
+from app.pages.auth import set_session_cookie
 from app.pages.common import is_same_origin, templates
 from app.services import max_container_manager, wa_container_manager
+from app.services.auth_service import (
+    IMPERSONATION_EXPIRE_MINUTES,
+    create_access_token,
+)
 from app.services.billing_cache import invalidate_access_cache
 from app.services.loki_client import (
     LEVEL_CHIP_OPTIONS,
@@ -1630,6 +1635,100 @@ async def admin_toggle_free_access(
     await invalidate_access_cache(target_user.id)
 
     return RedirectResponse(url=location, status_code=302)
+
+
+@router.post("/users/{user_id}/impersonate")
+async def admin_impersonate(
+    request: Request,
+    user_id: int,
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """ВОЙТИ ПОД ПОЛЬЗОВАТЕЛЕМ из его карточки (ADMIN-06, критерий 3 фазы).
+
+    ЗАЧЕМ ЭТО ЕСТЬ. Типовые обращения в поддержку звучат как «не отправляется»
+    и «не синхронизируются группы», и разобрать их, не видя экран пользователя,
+    нельзя. Режим «только чтение» смысла не имеет: смысл входа — ВОСПРОИЗВЕСТИ
+    проблему.
+
+    ⚠️ ЭТО САМАЯ ПРИВИЛЕГИРОВАННАЯ ОПЕРАЦИЯ ПРОДУКТА, И ПОРЯДОК ПРОВЕРОК
+    НЕСУЩИЙ: кто пришёл → откуда → над кем. Гард происхождения стоит ДО выпуска
+    токена: аутентификация идёт cookie, браузер прикладывает её к межсайтовой
+    форме сам, и без гарда сторонняя страница выписала бы себе токен
+    имперсонации от имени вошедшего администратора.
+
+    ⚠️ ЛИЧНОСТЬ ЕДЕТ В ЕДИНСТВЕННОЙ COOKIE, ВТОРОЙ НЕ ЗАВОДИТСЯ (D-19). Два
+    независимо валидных носителя рассинхронизируются, и возврат ломается при
+    потере одного; подпись ОДНОГО токена покрывает саму СВЯЗЬ
+    администратор→пользователь, а не два отдельных факта. Серверная таблица
+    сессий имперсонации не заводится по тому же основанию плюс миграция,
+    которой фаза не берёт.
+
+    ⚠️ СРОК — КОРОТКИЙ И СВОЙ (D-25). Обычный токен живёт сутки; имперсонация
+    на сутки есть забытая открытой чужая учётная запись, и следующее действие
+    администратора ушло бы от чужого имени — в том числе рассылка в чужие
+    группы, необратимо.
+
+    ВХОД ПОД САМИМ СОБОЙ ОТВЕРГАЕТСЯ ЯВНО. Токен, где действующее лицо совпало
+    бы с субъектом, — состояние, которого в продукте не бывает, и первый же
+    читатель признака истолковал бы его по-своему. Отказ ничего не отнимает:
+    администратор и так находится в своей учётной записи.
+
+    ⚠️ ВХОД ПОД ЗАБЛОКИРОВАННЫМ РАЗРЕШЁН (D-26) и отдельной ветки здесь не
+    требует: ветка живёт там, где блокировка ПРИМЕНЯЕТСЯ, — в страничном пути и
+    в соседней зависимости JSON-стороны. Это тот самый случай, ради которого
+    вход и нужен.
+
+    ⚠️ ЗАПРЕТЫ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ (оплата, смена пароля, отправка рассылки —
+    D-22, D-23) ЗАКРЫВАЮТСЯ ПЛАНОМ 06-13, А НЕ ЗДЕСЬ. До его исполнения вход
+    под пользователем на бой не выкатывается.
+    """
+    if not is_same_origin(request):
+        # Чужому источнику причина отказа не сообщается: межсайтовый запрос не
+        # имеет права узнать даже, существует ли такой пользователь. Форма
+        # ответа — та же, что у денежных форм проекта и у соседних админских
+        # изменяющих маршрутов.
+        return Response(status_code=403)
+
+    target_user = await db.get(User, user_id)
+    if target_user is None:
+        logger.warning(
+            "impersonation_unknown_user",
+            admin_user_id=admin.id,
+            target_user_id=user_id,
+        )
+        return RedirectResponse(url="/admin/users", status_code=302)
+
+    if target_user.id == admin.id:
+        logger.warning("impersonation_self_refused", admin_user_id=admin.id)
+        return RedirectResponse(url=f"/admin/users/{user_id}", status_code=302)
+
+    token = create_access_token(
+        target_user.id,
+        settings.secret_key,
+        IMPERSONATION_EXPIRE_MINUTES,
+        actor_id=admin.id,
+    )
+
+    # ЕДИНСТВЕННАЯ ФУНКЦИЯ УСТАНОВКИ (план 06-02). Собственный `set_cookie`
+    # здесь означал бы второй набор атрибутов рядом с первым, и возврат,
+    # ходящий через ту же функцию, не сопоставил бы с ним свою перезапись.
+    response = RedirectResponse(url="/dashboard", status_code=302)
+    set_session_cookie(response, token, settings)
+
+    # СЛЕД ОБЯЗАТЕЛЕН И НАЗЫВАЕТ ОБОИХ (D-24). Это единственная операция
+    # продукта, в которой действия одного человека выглядят как действия
+    # другого; без строки с обоими идентификаторами разобрать потом, кто это
+    # сделал, нечем. ⚠️ Принятая цена названа прямо: источник логов опционален
+    # (D-27), и при неподнятом мониторинге след останется только в стандартном
+    # выводе контейнера.
+    logger.info(
+        "impersonation_start",
+        admin_user_id=admin.id,
+        target_user_id=target_user.id,
+    )
+    return response
 
 
 @router.post("/users/{user_id}/block")

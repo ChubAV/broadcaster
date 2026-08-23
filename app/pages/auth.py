@@ -12,6 +12,8 @@ from app.dependencies import get_db, get_settings
 from app.models.user import User
 from app.models.email_verification import EmailVerificationCode
 from app.services.auth_service import (
+    actor_id,
+    decode_access_token,
     hash_password,
     verify_password,
     create_access_token,
@@ -20,7 +22,7 @@ from app.services.auth_service import (
 )
 from app.services.email_service import send_verification_email, send_password_reset_email
 from app.services.subscription_service import start_trial
-from app.pages.common import templates
+from app.pages.common import is_same_origin, templates
 
 logger = structlog.get_logger(__name__)
 
@@ -432,6 +434,76 @@ async def logout(settings: Settings = Depends(get_settings)):
     # ушло бы на умолчания `delete_cookie`, и cookie пережила бы выход.
     response = RedirectResponse(url="/login", status_code=302)
     clear_session_cookie(response, settings)
+    return response
+
+
+@router.post("/impersonation/stop")
+async def stop_impersonation(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """ВЕРНУТЬСЯ В СВОЮ УЧЁТНУЮ ЗАПИСЬ из-под чужой личности (D-19, D-25).
+
+    ⚠️ ВОЗВРАТ ПЕРЕЗАПИСЫВАЕТ COOKIE, А НЕ УДАЛЯЕТ ЕЁ И НЕ ЗАВОДИТ ВТОРУЮ
+    (Pitfall 9). Удаление выставляет удаляющую cookie со СВОИМ набором
+    атрибутов, и если установка получила признак транспортной защиты, а
+    удаление нет, браузер их не сопоставит: старая cookie переживёт возврат —
+    администратор остался бы под чужой личностью, будучи уверен, что вышел.
+    Единая функция установки, объявленная планом 06-02, снимает этот класс
+    ошибок целиком, и возврат обязан ходить через неё. Закреплено сравнением
+    НАБОРОВ атрибутов и запретом `delete_cookie` в обработчиках имперсонации.
+
+    ⚠️ ОБРАБОТЧИК ЖИВЁТ ЗДЕСЬ, А НЕ В АДМИНКЕ, И ЭТО ПРЕДМЕТ. Полоса возврата
+    рисуется в шелле, то есть на КАЖДОЙ из 26 страниц; маршрут возврата в
+    админском роутере означал бы, что вернуться можно только оттуда, куда
+    администратор под чужой личностью может и не дойти. Здесь же лежит
+    единственная функция установки cookie, через которую возврат обязан идти.
+
+    ⚠️ ПРАВ АДМИНИСТРАТОРА ОБРАБОТЧИК НЕ СПРАШИВАЕТ, И ЭТО НЕ ПОСЛАБЛЕНИЕ.
+    Единственный вход сюда — ПРИЗНАК В СОБСТВЕННОМ ПОДПИСАННОМ ТОКЕНЕ
+    предъявителя: нет признака — нет и токена на выпуск, обработчик возвращает
+    человека туда же, откуда он пришёл, ничего не выдав. Спросить `require_admin`
+    значило бы закрыть возврат ровно тому, у кого админство под чужой личностью
+    почему-либо не прочиталось, — то есть запереть в чужой учётной записи того,
+    кого этот обработчик и должен из неё вывести.
+
+    СРОК ВОЗВРАЩЁННОГО ТОКЕНА — ОБЫЧНЫЙ, а признака действующего лица в нём
+    нет: это снова простой вход администратора в свою учётную запись, и
+    короткий срок имперсонации к нему не относится.
+    """
+    if not is_same_origin(request):
+        # Возврат — изменяющая операция (перевыпуск токена и перезапись
+        # cookie), и гард у неё тот же, что у остальных изменяющих форм.
+        return Response(status_code=403)
+
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    payload = decode_access_token(token, settings.secret_key) if token else None
+    admin_id = actor_id(payload)
+    if admin_id is None:
+        # Действующего лица нет — возвращаться неоткуда. Человек уходит туда
+        # же, откуда пришёл, и НИ ОДНОГО токена ему не выдаётся.
+        return RedirectResponse(url="/dashboard", status_code=302)
+
+    admin = await db.get(User, admin_id)
+    if admin is None:
+        # Учётной записи действующего лица больше нет: вернуть человека не к
+        # кому. Единственный честный исход — выход, а не молчаливое оставление
+        # под чужой личностью.
+        response = RedirectResponse(url="/login", status_code=302)
+        clear_session_cookie(response, settings)
+        return response
+
+    response = RedirectResponse(url="/admin", status_code=302)
+    set_session_cookie(
+        response, create_access_token(admin.id, settings.secret_key), settings
+    )
+
+    logger.info(
+        "impersonation_stop",
+        admin_user_id=admin.id,
+        target_user_id=payload["sub"],
+    )
     return response
 
 
