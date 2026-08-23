@@ -1485,3 +1485,54 @@ async def test_the_refusal_under_a_presented_header_reaches_the_journal(
         f"{events} — эксплуатация обхода не имела бы ни одного наблюдаемого "
         "признака"
     )
+
+
+# =============================================================================
+# ВОЗВРАТ ПРОВЕРЯЕТ ДЕЙСТВУЮЩЕЕ ЛИЦО (WR-02 ревизии фазы 6)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_actor_is_logged_out_by_the_return_not_re_admitted(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Заблокированный ВО ВРЕМЯ имперсонации не выходит из неё со свежим сеансом.
+
+    ⚠️ ЦЕНА ОТСУТСТВУЮЩЕЙ ВЕТКИ — ПОЛНЫЙ СУТОЧНЫЙ ТОКЕН НА ОТОЗВАННУЮ УЧЁТНУЮ
+    ЗАПИСЬ. Возврат читал признак действующего лица, поднимал строку и выписывал
+    ОБЫЧНЫЙ токен, не спросив, действует ли ещё эта учётная запись. Окно
+    имперсонации — шестьдесят минут; администратор, заблокированный внутри него,
+    нажимал «вернуться» и получал сеанс на сутки — то есть блокировка снималась
+    бы действием самого заблокированного.
+
+    Ветка «действующего лица больше НЕТ» уже была и вела на выход; предмет
+    находки в том, что «закрыто» обслуживалось иначе, чем «нет», хотя исход у
+    них один.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    admin = await _user(db_session, test_settings.admin_email)
+
+    await _enter(admin_client, target_id)
+
+    admin.is_blocked = True
+    await db_session.commit()
+
+    back = await _stop(admin_client)
+
+    assert back.status_code == 302, (
+        f"возврат ответил {back.status_code} — утверждение о выходе проверяло "
+        "бы не тот ответ"
+    )
+    assert back.headers["location"] == "/login", (
+        f"заблокированное действующее лицо возвращено в {back.headers['location']} "
+        "вместо выхода — свежий суточный сеанс выписан на отозванную учётную "
+        "запись"
+    )
+    assert "access_token" in _session_cookies(back), (
+        "сеанс не переписан ни одной cookie — старый токен переживает выход"
+    )
+
+    still_in = await admin_client.get("/admin", follow_redirects=False)
+    assert still_in.status_code != 200, (
+        f"админка отдана заблокированному после возврата ({still_in.status_code})"
+    )
