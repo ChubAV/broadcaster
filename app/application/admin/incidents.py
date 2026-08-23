@@ -396,7 +396,7 @@ def detect_payment_stuck(
     провайдера не подтверждена, и отменённый платёж остаётся незакрытым
     навсегда), и второе число на тот же вопрос разошлось бы с первым молча.
     """
-    threshold = normalize_utc(now) - timedelta(hours=PENDING_INTENT_TTL_HOURS)
+    threshold = payment_stuck_before(now)
     incidents: list[Incident] = []
     for row in payments:
         created = normalize_utc(row.created_at)
@@ -434,14 +434,47 @@ def unclosed_payment_clause():
     return Payment.status.not_in(tuple(TERMINAL_STATUSES))
 
 
-def unclosed_payments_stmt():
-    """Три колонки незакрытых платежей для признака инцидента.
+def payment_stuck_before(now: datetime) -> datetime:
+    """Момент, СТАРШЕ которого незакрытый платёж считается залипшим.
 
-    Условие берётся у `unclosed_payment_clause`, а не выписывается здесь: см.
-    его объяснение.
+    ⚠️ ЕДИНСТВЕННОЕ ВЫРАЖЕНИЕ СРОКА ДАВНОСТИ НА ПРОЕКТ. Читателей у него два —
+    выборка (`unclosed_payments_stmt`, которой он нужен, чтобы не читать
+    таблицу целиком) и признак (`detect_payment_stuck`, которому он нужен,
+    чтобы решить). Выписанный дважды, он разошёлся бы молча, и выборка
+    отбрасывала бы строки, которые признак посчитал бы инцидентом: платёж
+    исчезал бы из блока ровно тогда, когда за ним и приходят.
     """
-    return select(Payment.id, Payment.user_id, Payment.created_at).where(
-        unclosed_payment_clause()
+    return normalize_utc(now) - timedelta(hours=PENDING_INTENT_TTL_HOURS)
+
+
+def unclosed_payments_stmt(before: datetime, limit: int = INCIDENT_LIST_CAP + 1):
+    """Три колонки ЗАЛИПШИХ незакрытых платежей — ограниченной выборкой.
+
+    Условие незакрытости берётся у `unclosed_payment_clause`, а не выписывается
+    здесь: см. его объяснение.
+
+    ⚠️ ПОТОЛОК И СРОК СТОЯТ В ЗАПРОСЕ, А НЕ ТОЛЬКО В PYTHON (WR-07 ревизии фазы
+    6). Прежняя редакция читала КАЖДЫЙ нетерминальный платёж за всю историю и
+    отсеивала лишнее уже в памяти. Множество это РАСТЁТ МОНОТОННО — сам признак
+    и существует потому, что отменённые у провайдера намерения не закрываются
+    никогда, — и полное чтение приходилось на «Обзор», то есть на страницу,
+    которую открывают в момент аварии. Фаза ограничивает КАЖДОЕ такое чтение
+    (`WORKER_LIST_CAP`, `QUEUE_ROW_CAP`, `LOG_LINE_CAP`, `PAYMENT_LIST_CAP`,
+    `USERS_PAGE_SIZE`); это было единственным исключением.
+
+    ⚠️ ПОРЯДОК — ОТ СВЕЖИХ К СТАРЫМ, И ЭТО НЕ ВКУС. Блок сортирует инциденты по
+    убыванию момента и оставляет первые `INCIDENT_LIST_CAP`; выборка, читающая
+    самые СТАРЫЕ строки, отдала бы ровно те, которые блок отбросил бы последними.
+
+    Строка сверх потолка читается НАМЕРЕННО (`+ 1`): она единственная улика
+    того, что перечень усечён, и без неё «ровно двадцать» было бы неотличимо от
+    «двадцать и есть все».
+    """
+    return (
+        select(Payment.id, Payment.user_id, Payment.created_at)
+        .where(unclosed_payment_clause(), Payment.created_at <= before)
+        .order_by(Payment.created_at.desc(), Payment.id.desc())
+        .limit(limit)
     )
 
 
@@ -513,7 +546,16 @@ async def collect_incidents(
 
     incidents: list[Incident] = list(detect_worker_stuck(liveness or {}, now=moment))
 
-    # (1) Отвалившиеся аккаунты.
+    # (1) Отвалившиеся аккаунты — ОГРАНИЧЕННОЙ выборкой (WR-07). В массовой
+    # аварии в этом состоянии оказываются ВСЕ аккаунты продукта, и чтение
+    # приходится на страницу, которую в аварии и открывают. Порядок — от
+    # свежих к старым по последней синхронизации: точный момент строки блок
+    # берёт из последнего СЛЕДА отвала, а он живёт в другой таблице и в
+    # выборку не заводится (это был бы запрос на строку — ровно то, что
+    # `collect_incidents` запрещает себе явно). Приближение названо: в аварии,
+    # где отвалилось больше двадцати аккаунтов, вопрос «какие именно двадцать»
+    # смысла не имеет, а вопрос «прочитана ли таблица целиком на пути
+    # отрисовки» — имеет.
     down_rows = (
         await session.execute(
             select(
@@ -522,9 +564,16 @@ async def collect_incidents(
                 MessengerAccount.type,
                 MessengerAccount.status,
                 MessengerAccount.last_synced_at,
-            ).where(MessengerAccount.status.in_(tuple(ACCOUNT_DOWN_STATUSES)))
+            )
+            .where(MessengerAccount.status.in_(tuple(ACCOUNT_DOWN_STATUSES)))
+            .order_by(
+                MessengerAccount.last_synced_at.desc().nullslast(),
+                MessengerAccount.id.desc(),
+            )
+            .limit(INCIDENT_LIST_CAP + 1)
         )
     ).all()
+    sources_capped = len(down_rows) > INCIDENT_LIST_CAP
     accounts = [
         DownAccountRow(
             account_id=row[0],
@@ -576,8 +625,12 @@ async def collect_incidents(
     if spike is not None:
         incidents.append(spike)
 
-    # (4) Незакрытые платежи.
-    payment_rows = (await session.execute(unclosed_payments_stmt())).all()
+    # (4) Незакрытые платежи — ограниченной выборкой по тому же сроку давности,
+    # который применяет сам признак (WR-07).
+    payment_rows = (
+        await session.execute(unclosed_payments_stmt(payment_stuck_before(moment)))
+    ).all()
+    sources_capped = sources_capped or len(payment_rows) > INCIDENT_LIST_CAP
     incidents.extend(
         detect_payment_stuck(
             [
@@ -614,7 +667,12 @@ async def collect_incidents(
     incidents.sort(key=lambda incident: incident.at, reverse=True)
     return IncidentBoard(
         incidents=tuple(incidents[:INCIDENT_LIST_CAP]),
-        capped=len(incidents) > INCIDENT_LIST_CAP,
+        # ⚠️ ПОТОЛОК, СРАБОТАВШИЙ В ВЫБОРКЕ, — ТОТ ЖЕ СРАБОТАВШИЙ ПОТОЛОК.
+        # Ограничив чтение, но не сказав об этом, блок сообщал бы «других
+        # инцидентов нет» ровно там, где их не читали. Признак поэтому
+        # объединяет две причины усечения: перечень длиннее потолка и источник,
+        # отдавший строку сверх потолка.
+        capped=len(incidents) > INCIDENT_LIST_CAP or sources_capped,
     )
 
 

@@ -720,3 +720,147 @@ async def test_no_recovered_row_is_ever_returned(db_session):
     source = INCIDENTS_MODULE.read_text(encoding="utf-8").lower()
     for token in ("recovered", "restored", "восстановлен"):
         assert f'"{token}' not in source and f"'{token}" not in source
+
+
+# ============================================================================
+# ЧИСЛО ПРОЧИТАННЫХ СТРОК ОГРАНИЧЕНО, А НЕ ТОЛЬКО ЧИСЛО ПОКАЗАННЫХ (WR-07)
+#
+# ⚠️ «ОБРАЩЕНИЙ ПЯТЬ» И «СТРОК ОГРАНИЧЕННОЕ ЧИСЛО» — РАЗНЫЕ УТВЕРЖДЕНИЯ, И
+# ВЫШЕ ПРОВЕРЕНО ТОЛЬКО ПЕРВОЕ. Незакрытые платежи читались ЦЕЛИКОМ за всю
+# историю продукта, а множество это растёт монотонно — сам признак и
+# существует потому, что отменённые у провайдера намерения не закрываются
+# никогда. Полное чтение приходилось на «Обзор», то есть на страницу, которую
+# открывают В МОМЕНТ АВАРИИ; потолок `INCIDENT_LIST_CAP` усекал ПОКАЗ уже
+# после того, как все строки материализованы в память.
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_the_incident_sources_read_a_bounded_number_of_rows(db_session):
+    """Число ПРОЧИТАННЫХ строк ограничено потолком, а не числом инцидентов.
+
+    Утверждение снимается с самих строк, отданных выборками: тест, смотрящий на
+    длину блока, зеленел бы и при полном чтении таблицы — блок усекается в
+    памяти в любом случае.
+    """
+    from app.application.admin.incidents import (
+        payment_stuck_before,
+        unclosed_payments_stmt,
+    )
+
+    stale = NOW - timedelta(hours=PENDING_INTENT_TTL_HOURS + 1)
+    for payment_id in range(1, INCIDENT_LIST_CAP + 12):
+        await _seed_payment(
+            db_session, payment_id=payment_id, created_at=stale
+        )
+
+    rows = (
+        await db_session.execute(
+            unclosed_payments_stmt(payment_stuck_before(NOW))
+        )
+    ).all()
+
+    assert len(rows) == INCIDENT_LIST_CAP + 1, (
+        f"выборка залипших платежей отдала {len(rows)} строк при "
+        f"{INCIDENT_LIST_CAP + 11} подходящих — таблица читается целиком, и "
+        "чтение растёт вместе с аварией"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_source_is_reported_capped_and_not_silently_short(
+    db_session,
+):
+    """Потолок, сработавший В ВЫБОРКЕ, — тот же сработавший потолок.
+
+    ⚠️ БЕЗ ЭТОГО УТВЕРЖДЕНИЯ ПОЧИНКА ВЫШЕ БЫЛА БЫ ХУЖЕ ИСХОДНОГО ДЕФЕКТА.
+    Ограничив чтение и промолчав об этом, блок сообщал бы «других инцидентов
+    нет» ровно там, где их не читали, — то есть отвечал бы неправдой на
+    единственный заданный ему вопрос.
+    """
+    stale = NOW - timedelta(hours=PENDING_INTENT_TTL_HOURS + 1)
+    for payment_id in range(1, INCIDENT_LIST_CAP + 5):
+        await _seed_payment(
+            db_session, payment_id=payment_id, created_at=stale
+        )
+
+    board = await _collect_board(db_session)
+
+    assert board.capped is True, (
+        "перечень усечён молча — читатель блока не отличит «других инцидентов "
+        "нет» от «остальные не прочитаны»"
+    )
+    assert len(board.incidents) == INCIDENT_LIST_CAP
+
+
+@pytest.mark.asyncio
+async def test_the_bounded_read_still_finds_the_stuck_payment(db_session):
+    """ГРАНИЦА СВЕРХУ: ограничение выборки не отняло сам признак.
+
+    ⚠️ САМАЯ ПРАВДОПОДОБНАЯ ПОЛОМКА ЭТОЙ ПОЧИНКИ — ПОРЯДОК. Блок сортирует
+    инциденты от свежих к старым и оставляет первые двадцать; выборка,
+    читающая самые СТАРЫЕ строки, отдала бы ровно те, которые блок отбросит.
+    Здесь свежий залипший платёж стоит РЯДОМ с двумя десятками старых, и он
+    обязан оказаться в блоке.
+
+    Второе утверждение — что срок давности выборки и срок давности признака
+    остались ОДНИМ числом: платёж моложе срока не инцидент и в блок попасть не
+    имеет права.
+    """
+    for payment_id in range(1, INCIDENT_LIST_CAP + 1):
+        await _seed_payment(
+            db_session,
+            payment_id=payment_id,
+            created_at=NOW - timedelta(days=30),
+        )
+    await _seed_payment(
+        db_session,
+        payment_id=500,
+        created_at=NOW - timedelta(hours=PENDING_INTENT_TTL_HOURS + 1),
+    )
+    await _seed_payment(
+        db_session,
+        payment_id=501,
+        created_at=NOW - timedelta(minutes=1),
+    )
+
+    board = await _collect_board(db_session)
+    stuck = [
+        incident
+        for incident in board.incidents
+        if incident.kind == INCIDENT_KIND_PAYMENT_STUCK
+    ]
+
+    assert stuck, "залипший платёж исчез из блока — ограничение выборки съело признак"
+    assert stuck[0].subject_id == 500, (
+        f"первым показан платёж {stuck[0].subject_id}, а не самый свежий из "
+        "залипших — выборка читает не тот конец перечня, который показывает блок"
+    )
+    assert 501 not in [incident.subject_id for incident in stuck], (
+        "платёж моложе срока давности объявлен залипшим — срок в выборке и "
+        "срок в признаке разошлись"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_down_account_source_is_bounded_too(db_session):
+    """Второе неограниченное чтение — отвалившиеся аккаунты — тоже ограничено.
+
+    В массовой аварии в этом состоянии оказываются ВСЕ аккаунты продукта, и
+    чтение приходится на страницу, которую в аварии и открывают.
+    """
+    for account_id in range(1, INCIDENT_LIST_CAP + 6):
+        await _seed_account(
+            db_session,
+            account_id=account_id,
+            user_id=account_id,
+            status="disconnected",
+            last_synced_at=NOW - timedelta(minutes=account_id),
+        )
+
+    board = await _collect_board(db_session)
+
+    assert len(board.incidents) == INCIDENT_LIST_CAP
+    assert board.capped is True, (
+        "перечень отвалившихся аккаунтов усечён молча"
+    )
