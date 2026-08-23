@@ -39,6 +39,30 @@
 Тест, обходящий сорок девять маршрутов и зелёный ПО ПОСТРОЕНИЮ, создавал бы
 уверенность вместо проверки, и обнаружилось бы это в тот день, когда он
 пропустит настоящий пропуск зависимости.
+
+⚠️ ЧЕГО ГЕЙТ НЕ ВИДИТ — ВЫПИСАНО ЗДЕСЬ, А НЕ ОСТАВЛЕНО НА ДОГАДКУ (WR-08
+ревизии фазы 6). Гейт — несущий контроль безопасности, и ненаписанная граница
+через один рефакторинг становится границей НЕИЗВЕСТНОЙ. Границ две, и обе
+закрыты не молчанием, а утверждением:
+
+1. ОБЪЯВЛЕНИЕ ВЫЗОВОМ (`router.add_api_route(handler, methods=[...])`)
+   разборщику невидимо: обработчик приезжает туда ссылкой, и связать его с
+   объявлением по дереву нечем. Форма поэтому ЗАПРЕЩЕНА в обоих слоях —
+   `test_no_route_is_declared_in_a_form_the_gate_cannot_see`. Гейт, который
+   чего-то не видит, обязан требовать, чтобы этого и не было.
+
+2. ИЗМЕНЯЮЩИЙ `GET` невидим, и один такой в проекте есть — `GET /logout`,
+   очищающий cookie сессии. Это ПРИНЯТАЯ граница, а не пропуск: расширение
+   множества методов на `GET` втянуло бы в перечни все читающие маршруты
+   продукта, то есть заменило бы осмысленный список шумом, в котором
+   настоящий пропуск снова стал бы незаметен. Ни один из запретов D-22
+   `GET`-маршрутов не касается.
+
+Ещё две границы БЫЛИ и закрыты той же ревизией, а не объявлены: плоский обход
+каталогов (`*.py` вместо `**/*.py`) не увидел бы роутер в подкаталоге, а
+столкновение имён обработчиков в одном модуле схлопывало две записи в одну,
+и утверждение о числе согласилось бы с пропажей. Обе теперь ловятся —
+рекурсивным обходом и `test_no_two_mutating_routes_collapse_into_one_key`.
 """
 import ast
 from dataclasses import dataclass
@@ -251,7 +275,11 @@ def _project_sources() -> dict[str, str]:
     """
     sources: dict[str, str] = {}
     for directory in ROUTE_DIRECTORIES:
-        for path in sorted((PROJECT_ROOT / directory).glob("*.py")):
+        # ⚠️ ОБХОД РЕКУРСИВНЫЙ (`**/*.py`), И ЭТО НЕ ПРИДИРКА (WR-08 ревизии
+        # фазы 6. Плоский `*.py` не увидел бы роутер, положенный будущей фазой
+        # в подкаталог (`app/routes/admin/`), — то есть гейт молча перестал бы
+        # видеть целый слой ровно в тот момент, когда слой начал расти.
+        for path in sorted((PROJECT_ROOT / directory).glob("**/*.py")):
             sources[str(path.relative_to(PROJECT_ROOT))] = path.read_text(
                 encoding="utf-8"
             )
@@ -303,13 +331,88 @@ def _declares_dependency(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bo
     return False
 
 
+def _dotted(node: ast.AST) -> str | None:
+    """Точечное имя узла (`router`, `pkg.mod.router`) — либо `None`.
+
+    Обращение через модуль узнаётся наравне с голым именем: роутер, включённый
+    в сборку как `pkg.mod.router`, — то же объявление, и невидимый разборщику
+    он оказался бы РАЗРЕШЁН по умолчанию (WR-08).
+    """
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def _decorator_mutating_methods(decorator: ast.Call) -> bool:
+    """Объявляет ли этот декоратор ИЗМЕНЯЮЩИЙ маршрут.
+
+    Узнаются обе формы, которыми FastAPI объявляет маршрут декоратором:
+    именованный метод (`@router.post(...)`) и общая
+    (`@router.api_route(..., methods=["POST"])`). Вторая до ревизии фазы 6
+    проходила мимо разборщика — то есть изменяющий маршрут, объявленный ею,
+    оказался бы разрешён ПО УМОЛЧАНИЮ, ровно тем дефектом, ради которого гейт и
+    написан (WR-08).
+    """
+    func = decorator.func
+    if not isinstance(func, ast.Attribute):
+        return False
+
+    if func.attr in MUTATING_METHODS:
+        return True
+
+    if func.attr != "api_route":
+        return False
+
+    for keyword in decorator.keywords:
+        if keyword.arg != "methods":
+            continue
+        if not isinstance(keyword.value, (ast.List, ast.Tuple, ast.Set)):
+            # Перечень методов, собранный выражением, разборщику не виден.
+            # Считаем маршрут изменяющим: пропустить его значило бы разрешить
+            # по умолчанию, а лишняя строка в перечне заметна и снимается
+            # решением.
+            return True
+        for element in keyword.value.elts:
+            if (
+                isinstance(element, ast.Constant)
+                and isinstance(element.value, str)
+                and element.value.lower() in MUTATING_METHODS
+            ):
+                return True
+    return False
+
+
 def _mutating_routes(sources: dict[str, str]) -> dict[str, _Route]:
     """Каждое ИЗМЕНЯЮЩЕЕ объявление маршрута во всех поданных исходниках.
 
     Изменяющим считается объявление, украшенное `@<роутер>.<метод>(...)` с
-    методом из `MUTATING_METHODS`. Разбор по дереву, а не грепом: греп по
-    `@router.post` посчитал бы строку и в комментарии, и в докстринге, и в
-    закомментированном коде.
+    методом из `MUTATING_METHODS` либо `@<роутер>.api_route(..., methods=[...])`
+    с изменяющим методом в перечне. Имя роутера узнаётся и точечное
+    (`pkg.mod.router`). Разбор по дереву, а не грепом: греп по `@router.post`
+    посчитал бы строку и в комментарии, и в докстринге, и в закомментированном
+    коде.
+
+    ⚠️ НАЗВАННЫЕ ГРАНИЦЫ РАЗБОРЩИКА — их две, и обе выписаны здесь, а не
+    оставлены на догадку читателя (WR-08 ревизии фазы 6):
+
+    1. `router.add_api_route(handler, methods=[...])` — объявление ВЫЗОВОМ, а не
+       декоратором — разборщику не видно: обработчик приезжает туда ссылкой, и
+       связать его с объявлением по дереву нечем. Форма поэтому ЗАПРЕЩЕНА в
+       обоих слоях отдельным утверждением
+       (`test_no_route_is_declared_in_a_form_the_gate_cannot_see`): гейт,
+       который чего-то не видит, обязан требовать, чтобы этого и не было.
+
+    2. Изменяющим считается только маршрут изменяющего МЕТОДА. Меняющий
+       состояние `GET` невидим, и один такой в проекте есть — `GET /logout`,
+       очищающий cookie сессии. Это ПРИНЯТАЯ граница: расширение множества на
+       `GET` втянуло бы в перечни все читающие маршруты продукта, то есть
+       заменило бы осмысленный список шумом, в котором пропуск снова стал бы
+       незаметен. Запреты D-22 при этом ни одного `GET` не касаются.
     """
     routes: dict[str, _Route] = {}
 
@@ -321,23 +424,52 @@ def _mutating_routes(sources: dict[str, str]) -> dict[str, _Route]:
             for decorator in node.decorator_list:
                 if not isinstance(decorator, ast.Call):
                     continue
-                func = decorator.func
-                if not isinstance(func, ast.Attribute):
+                if not _decorator_mutating_methods(decorator):
                     continue
-                if func.attr not in MUTATING_METHODS:
-                    continue
-                if not isinstance(func.value, ast.Name):
+                router = _dotted(decorator.func.value)
+                if router is None:
                     continue
 
                 route = _Route(
                     module=module,
-                    router=func.value.id,
+                    router=router,
                     handler=node.name,
                     carries_dependency=_declares_dependency(node),
                 )
                 routes[route.key] = route
 
     return routes
+
+
+def _colliding_route_keys(sources: dict[str, str]) -> set[str]:
+    """Ключи, под которыми в один словарь маршрутов легло БОЛЬШЕ ОДНОГО объявления.
+
+    ⚠️ ЭТО ЕДИНСТВЕННОЕ МЕСТО, ГДЕ ГЕЙТ МОГ БЫ ПОТЕРЯТЬ МАРШРУТ, НЕ ЗАМЕТИВ ЭТОГО
+    (WR-08). Ключ — `модуль::обработчик`; два изменяющих маршрута с одинаковым
+    именем обработчика в одном модуле схлопнулись бы в одну запись, и число
+    найденных маршрутов не выросло бы — то есть утверждение о числе поглотило бы
+    пропажу молча. Столкновение поэтому объявляется ОТКАЗОМ, а не разрешается
+    сменой формы ключа: имя обработчика — то, чем маршрут назван в перечнях, и
+    два маршрута с одним именем неразличимы и для человека, который эти перечни
+    читает.
+    """
+    seen: dict[str, int] = {}
+    for module, text in sources.items():
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for decorator in node.decorator_list:
+                if not isinstance(decorator, ast.Call):
+                    continue
+                if not _decorator_mutating_methods(decorator):
+                    continue
+                if _dotted(decorator.func.value) is None:
+                    continue
+                key = f"{module}::{node.name}"
+                seen[key] = seen.get(key, 0) + 1
+                break
+    return {key for key, count in seen.items() if count > 1}
 
 
 def _router_origins(tree: ast.Module, assembly: str) -> dict[str, str]:
@@ -402,7 +534,7 @@ _MODULE_PATHS = frozenset(
         *(
             str(path.relative_to(PROJECT_ROOT))
             for directory in ROUTE_DIRECTORIES
-            for path in (PROJECT_ROOT / directory).glob("*.py")
+            for path in (PROJECT_ROOT / directory).glob("**/*.py")
         ),
         *ASSEMBLIES,
     ]
@@ -625,6 +757,58 @@ def test_the_gate_imports_no_application_module():
     )
 
 
+def test_no_route_is_declared_in_a_form_the_gate_cannot_see():
+    """Ни один маршрут не объявлен формой, НЕВИДИМОЙ разборщику (WR-08).
+
+    ⚠️ ГЕЙТ, КОТОРЫЙ ЧЕГО-ТО НЕ ВИДИТ, ОБЯЗАН ТРЕБОВАТЬ, ЧТОБЫ ЭТОГО НЕ БЫЛО.
+    `router.add_api_route(handler, methods=[...])` объявляет маршрут ВЫЗОВОМ, а
+    не декоратором: обработчик приезжает туда ссылкой, и связать его с
+    объявлением по дереву нечем. Маршрут, объявленный так, не попал бы ни в одно
+    из трёх множеств и не уронил бы замыкающее утверждение полноты — то есть
+    оказался бы разрешён ПО УМОЛЧАНИЮ, ровно тем дефектом, ради которого гейт и
+    написан.
+
+    Отказ здесь — не запрет формы навсегда, а требование СНАЧАЛА научить
+    разборщик: замена одной строки в `_mutating_routes` вернёт форму в
+    обращение вместе с видимостью.
+    """
+    offenders: list[str] = []
+    for module, text in _project_sources().items():
+        for node in ast.walk(ast.parse(text)):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_api_route"
+            ):
+                offenders.append(module)
+
+    assert not offenders, (
+        "маршрут объявлен вызовом `add_api_route`, которого разборщик гейта не "
+        f"видит: {sorted(set(offenders))}. Такой маршрут не попадёт ни в одно "
+        "из трёх множеств и окажется разрешён под чужой личностью ПО "
+        "УМОЛЧАНИЮ. Научите `_mutating_routes` этой форме прежде, чем ею "
+        "пользоваться"
+    )
+
+
+def test_no_two_mutating_routes_collapse_into_one_key():
+    """Два изменяющих маршрута с одним именем обработчика в одном модуле — отказ.
+
+    ⚠️ ЭТО ЕДИНСТВЕННОЕ МЕСТО, ГДЕ ГЕЙТ МОГ БЫ ПОТЕРЯТЬ МАРШРУТ БЕСШУМНО (WR-08).
+    Ключ — `модуль::обработчик`, и столкновение схлопнуло бы две записи в одну.
+    Утверждение о ЧИСЛЕ маршрутов пропажу не поймало бы: оно считает тот же
+    словарь, то есть согласилось бы с самим собой.
+    """
+    collisions = _colliding_route_keys(_project_sources())
+
+    assert collisions == set(), (
+        "два изменяющих маршрута делят одно имя обработчика в одном модуле: "
+        + ", ".join(sorted(collisions))
+        + ". В словаре гейта они схлопываются в одну запись, и решение о втором "
+        "не принимает никто"
+    )
+
+
 # =============================================================================
 # КОНТРОЛИ: доказательство того, что гейт КРАСНЕЕТ (`-k control`)
 #
@@ -746,4 +930,54 @@ def test_control_positive_the_untouched_source_tree_keeps_the_gate_green():
     assert _unclassified(sources) == set(), (
         "утверждение полноты краснеет на неизменённом дереве — отрицательные "
         "контроли выше ничего не доказывают"
+    )
+
+
+def test_control_negative_a_collapsed_route_key_reddens_the_gate(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: столкновение ключей действительно ловится.
+
+    Без этого контроля утверждение выше было бы зелёным по построению — на
+    сегодняшнем дереве столкновений нет, и отличить «ловит» от «не смотрит»
+    нечем.
+    """
+    module = "app/pages/profile.py"
+    original = _project_sources()[module]
+
+    twin = (
+        '\n\n@router.post("/profile/a-twin-some-future-phase-will-add")\n'
+        "async def profile_post():\n"
+        "    return None\n"
+    )
+    sources = _sources_with(tmp_path, module, original + twin)
+
+    assert f"{module}::profile_post" in _colliding_route_keys(sources), (
+        "СТОЛКНОВЕНИЕ КЛЮЧЕЙ НЕ ЗАМЕЧЕНО — гейт способен потерять маршрут "
+        "бесшумно, и утверждение о числе согласится с пропажей"
+    )
+
+
+def test_control_negative_a_general_api_route_declaration_is_seen(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: общая форма объявления маршрута разборщику ВИДНА.
+
+    `@router.api_route(..., methods=["POST"])` объявляет ровно то же, что
+    `@router.post(...)`. Невидимая разборщику, она оказалась бы разрешена по
+    умолчанию.
+    """
+    module = "app/pages/profile.py"
+    original = _project_sources()[module]
+
+    general = (
+        '\n\n@router.api_route("/profile/a-general-form", methods=["POST"])\n'
+        "async def a_general_form_some_future_phase_will_add():\n"
+        "    return None\n"
+    )
+    sources = _sources_with(tmp_path, module, original + general)
+
+    assert (
+        f"{module}::a_general_form_some_future_phase_will_add"
+        in _unclassified(sources)
+    ), (
+        "ОБЩАЯ ФОРМА ОБЪЯВЛЕНИЯ МАРШРУТА ПРОШЛА МИМО РАЗБОРЩИКА — изменяющий "
+        "маршрут, написанный ею, окажется разрешён под чужой личностью по "
+        "умолчанию"
     )
