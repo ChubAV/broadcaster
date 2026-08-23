@@ -74,6 +74,30 @@ async def get_current_user(
     return user
 
 
+def email_is_admin(email: str | None, settings: Settings) -> bool:
+    """ЕДИНСТВЕННОЕ выражение правила «кто администратор» на проект (WR-01).
+
+    ⚠️ ПРАВИЛО БЫЛО ВЫПИСАНО ДВАЖДЫ, И ДВЕ КОПИИ РАЗОШЛИСЬ РОВНО В ТУ СТОРОНУ,
+    КОТОРАЯ ДАЁТ ДОСТУП. Страничная проверка (`check_is_admin`) открывалась
+    веткой «настройка не задана — администраторов нет»; зависимость, гейтящая
+    все маршруты раздела, такой ветки не имела и сравнивала адрес напрямую.
+    Умолчание `admin_email` — ПУСТАЯ СТРОКА, поэтому на развёртывании без
+    заданного `ADMIN_EMAIL` строка пользователя с пустым адресом проходила бы
+    в админку по всем маршрутам, тогда как ссылка на раздел оставалась бы
+    скрытой: два ответа на один вопрос, и расходились они молча.
+
+    ⚠️ ПУСТАЯ НАСТРОЙКА — «АДМИНИСТРАТОРОВ НЕТ», А НЕ «АДМИНИСТРАТОР ЛЮБОЙ С
+    ПУСТЫМ АДРЕСОМ». Достижимость второго сегодня узкая (оба пути регистрации
+    пустой адрес не принимают), но предмет находки не в достижимости, а в том,
+    что правило существовало в двух экземплярах.
+
+    Ветка сравнения здесь одна, и потому разойтись ей больше не с чем.
+    """
+    if not settings.admin_email:
+        return False
+    return email == settings.admin_email
+
+
 async def require_admin(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -108,14 +132,14 @@ async def require_admin(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found"
             )
-        if actor.is_blocked or actor.email != settings.admin_email:
+        if actor.is_blocked or not email_is_admin(actor.email, settings):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
             )
         return actor
 
     user = await get_current_user(request, db, settings)
-    if user.email != settings.admin_email:
+    if not email_is_admin(user.email, settings):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
     return user
 

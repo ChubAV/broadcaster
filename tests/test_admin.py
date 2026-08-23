@@ -529,3 +529,72 @@ async def test_admin_cannot_delete_self(client: AsyncClient, db_session):
 
     still_exists = await db_session.get(User, admin_user.id)
     assert still_exists is not None
+
+
+# =============================================================================
+# «КТО АДМИНИСТРАТОР» — ОДНО ПРАВИЛО, А НЕ ДВА (WR-01 ревизии фазы 6)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_an_unset_admin_email_makes_nobody_an_administrator(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Незаданная настройка означает «администраторов нет» на ОБЕИХ проверках.
+
+    ⚠️ ПРЕДМЕТ — РАСХОЖДЕНИЕ ДВУХ ВЫРАЖЕНИЙ ОДНОГО ПРАВИЛА, А НЕ ПУСТОЙ АДРЕС
+    САМ ПО СЕБЕ. Страничная проверка открывалась веткой «настройка не задана —
+    прав нет»; зависимость, гейтящая ВСЕ шестнадцать маршрутов раздела, такой
+    ветки не имела и сравнивала адрес напрямую. Умолчание `admin_email` —
+    пустая строка, поэтому две проверки отвечали на один вопрос по-разному, и
+    расходились они в сторону ВЫДАЧИ доступа: маршруты раздела открыты, ссылка
+    на раздел скрыта.
+
+    Достижимость сегодня узкая — оба пути регистрации пустой адрес отвергают, —
+    и утверждение поэтому снимается с ПРЕДИКАТА, а не с живого запроса: иначе
+    оно проверяло бы валидацию регистрации, а не правило прав.
+    """
+    from app.config import Settings
+    from app.dependencies import email_is_admin
+    from app.pages.common import check_is_admin
+
+    unset = test_settings.model_copy(update={"admin_email": ""})
+
+    assert email_is_admin("", unset) is False, (
+        "при незаданной настройке пустой адрес признан административным — "
+        "любая строка с пустым адресом становится администратором на всех "
+        "маршрутах раздела"
+    )
+    assert email_is_admin(None, unset) is False
+    assert email_is_admin("anybody@test.com", unset) is False
+
+    ghost = User(email="", password_hash="x", name="Пустой адрес")
+    assert check_is_admin(ghost, unset) is False, (
+        "страничная проверка и зависимость снова разошлись"
+    )
+
+
+def test_both_admin_checks_answer_through_the_same_predicate(test_settings):
+    """Обе проверки прав дают ОДИН ответ на каждом входе — потому что предикат один.
+
+    ⚠️ ЭТО НЕ ПЕРЕСКАЗ ТЕСТА ВЫШЕ. Тот утверждает ОДИН случай (незаданная
+    настройка); этот утверждает СОГЛАСИЕ двух проверок на всём переборе — то
+    есть краснеет и на расхождении, которое будущая правка заведёт где-нибудь
+    ещё, например в регистре адреса.
+
+    Проверка `require_admin` вызывается здесь не целиком: она требует запроса и
+    сессии БД, а предмет утверждения — правило прав, а не способ добраться до
+    строки пользователя. Сравниваются РЕШАЮЩИЕ выражения обеих сторон.
+    """
+    from app.dependencies import email_is_admin
+    from app.pages.common import check_is_admin
+
+    for admin_email in ("", "admin@test.com", "ADMIN@test.com"):
+        settings = test_settings.model_copy(update={"admin_email": admin_email})
+        for email in ("", "admin@test.com", "ADMIN@test.com", "other@test.com"):
+            user = User(email=email, password_hash="x", name="U")
+            assert check_is_admin(user, settings) == email_is_admin(email, settings), (
+                "страничная проверка и зависимость разошлись при "
+                f"admin_email={admin_email!r}, email={email!r} — одно правило "
+                "снова выписано дважды"
+            )

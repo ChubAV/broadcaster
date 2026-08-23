@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.billing.subscription_period import access_is_open, days_left
 from app.config import Settings
+from app.dependencies import email_is_admin
 from app.constants import (
     ACCESS_SOON_DAYS,
     AD_STATUS_DRAFT,
@@ -417,13 +418,18 @@ def check_is_admin(user: User | None, settings: Settings) -> bool:
     Закреплено инвариантом
     `test_admin_ness_is_decided_by_the_actor_and_otherwise_by_the_subject` —
     обе половины правила в одном теле.
+
+    ⚠️ САМО СРАВНЕНИЕ ЗДЕСЬ НЕ ВЫПИСАНО: оно живёт в `email_is_admin`
+    (`app/dependencies.py`) — единственном выражении правила «кто
+    администратор» на проект. Пока копий было две, они разошлись веткой
+    «настройка не задана», и разошлись в сторону выдачи доступа (WR-01
+    ревизии фазы 6). Здесь остаётся то, чего у зависимости нет и быть не
+    должно: ВЫБОР ЛИЦА, о правах которого спрашивают.
     """
-    if not settings.admin_email:
-        return False
     actor = actor_of(user) or user
     if actor is None:
         return False
-    return actor.email == settings.admin_email
+    return email_is_admin(actor.email, settings)
 
 
 def impersonation_view(user: User | None) -> dict:
