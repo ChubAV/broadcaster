@@ -14,6 +14,7 @@ from app.config import Settings, get_settings
 from app.exceptions import NotFoundError, ForbiddenError, BillingLimitError, MessengerConnectionError
 from app.database import get_engine, get_session_factory
 from app.dependencies import (
+    forbid_when_impersonating,
     get_current_user_id_active,
     get_current_user_id_with_access,
     init_db,
@@ -156,7 +157,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Расхождение исправлено здесь и записано решением D-53: решение о денежном
     # пути принималось по этому комментарию, и вторая фаза приняла бы его по
     # той же ложной посылке.
-    app.include_router(billing_router)
+    #
+    # ⚠️ ЗАПРЕТ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ — ЕДИНСТВЕННОЕ, ЧЕМ ЭТОТ РОУТЕР ЗАКРЫТ, И
+    # ЗАКРЫТ ОН ЦЕЛИКОМ (D-22). Под чужой учётной записью запрещено ВСЁ
+    # денежное, поэтому здесь не перечень маршрутов, а роутер: маршрут,
+    # добавленный сюда будущей фазой, окажется закрыт ПО УМОЛЧАНИЮ — то
+    # направление ошибки, которое денежному пути и полагается.
+    #
+    # ⚠️ ВЕБХУК ЭТИМ НЕ ЗАДЕТ, И ИМЕННО ПОЭТОМУ ОТСУТСТВИЕ ТОКЕНА НЕ СЧИТАЕТСЯ
+    # ОТКАЗОМ. Уведомление ЮKassa о СОСТОЯВШЕМСЯ платеже приходит не от
+    # браузера и токена не несёт; зависимость пропускает запрос, у которого
+    # действующего лица нет. Обратное поведение остановило бы приём денег по
+    # уже совершённым платежам (D-53), и закреплено это отдельным тестом
+    # (`test_the_payment_webhook_without_a_token_is_not_refused`).
+    app.include_router(
+        billing_router, dependencies=[Depends(forbid_when_impersonating)]
+    )
     # Паршал живой ленты включается ОТДЕЛЬНО и ДО страничного роутера: тот
     # объявлен с зависимостью загрузки контекста шелла на каждом маршруте, а
     # ленте шелл не нужен, и при бессрочном опросе эта цена умножалась бы на

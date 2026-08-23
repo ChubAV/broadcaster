@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.dependencies import get_db, get_settings
+from app.dependencies import forbid_when_impersonating, get_db, get_settings
 from app.models.user import User
 from app.models.email_verification import EmailVerificationCode
 from app.services.auth_service import (
@@ -508,6 +508,22 @@ async def stop_impersonation(
 
 
 # ---- Forgot Password ----
+#
+# ⚠️ ВЕСЬ ЭТОТ ПУТЬ ЗАПРЕЩЁН ПОД ЧУЖОЙ ЛИЧНОСТЬЮ (D-22), И ЗАПРЕТ НАВЕШЕН
+# ПОМАРШРУТНО, А НЕ НА РОУТЕР. Роутер авторизации закрывать целиком НЕЛЬЗЯ: в
+# нём живут вход, регистрация и возврат из имперсонации — закрыв его, мы лишили
+# бы продукт входа, а администратора под чужой личностью — пути назад. Ровно
+# этот случай и делает чисто пер-роутерную форму запрета недостаточной.
+#
+# ЗАКРЫТЫ ВСЕ ЧЕТЫРЕ ШАГА, А НЕ ТОЛЬКО ПОСЛЕДНИЙ. Закрытый один лишь `reset`
+# оставил бы администратору три первых: код ушёл бы НА ПОЧТУ ПОЛЬЗОВАТЕЛЯ, то
+# есть захват учётной записи начался бы и остановился на полпути — с письмом,
+# которого пользователь не просил, и с поводом для обращения в поддержку на
+# ровном месте.
+#
+# ⚠️ ОБЫЧНОГО ЧЕЛОВЕКА ЭТО НЕ ЗАДЕВАЕТ: у запроса без действующего лица
+# зависимость отказа не даёт вовсе. Восстановление пароля остаётся открытым
+# всем, включая незалогиненного, — а он и есть его основной посетитель.
 
 @router.get("/forgot-password", response_class=HTMLResponse)
 async def forgot_password_page(request: Request):
@@ -520,6 +536,7 @@ async def forgot_password_send_code(
     email: str = Form(...),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
     # Check if email exists
     existing = await db.execute(select(User).where(User.email == email))
@@ -596,6 +613,7 @@ async def forgot_password_verify(
     code: str = Form(...),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
     payload = decode_verification_token(token, settings.secret_key)
     if not payload or payload.get("purpose") != "password_reset":
@@ -661,6 +679,7 @@ async def forgot_password_resend_code(
     token: str = Form(...),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
     payload = decode_verification_token(token, settings.secret_key)
     if not payload or payload.get("purpose") != "password_reset":
@@ -739,6 +758,7 @@ async def forgot_password_reset(
     password: str = Form(...),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
     payload = decode_verification_token(token, settings.secret_key)
     if not payload or not payload.get("verified") or payload.get("purpose") != "password_reset":

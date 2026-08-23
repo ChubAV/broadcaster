@@ -863,3 +863,455 @@ async def test_the_bar_costs_the_shell_no_query_of_its_own(
         "полоса возврата привела с собой запрос помимо чтения строки "
         "действующего лица:\n" + "\n".join(foreign)
     )
+
+
+# =============================================================================
+# Запреты под чужой личностью (D-22, D-23 — план 06-13)
+#
+# ПОЧЕМУ ЭТИ УТВЕРЖДЕНИЯ ЖИВУТ ЗДЕСЬ, А НЕ В ФАЙЛЕ МАШИННОГО ГЕЙТА. Гейт
+# (`test_impersonation_gate.py`) отвечает на вопрос «объявлен ли запрет на
+# маршруте» и читает ИСХОДНИК; эти утверждения отвечают на вопрос «отказывает ли
+# он на самом деле» и ходят по HTTP. Ни одно из двух не заменяет другое: гейт
+# зеленел бы на зависимости, навешенной верно и не срабатывающей, а сквозная
+# проверка зеленела бы на маршруте, о существовании которого она не знает.
+# =============================================================================
+
+
+PERMISSION_REFUSAL_DETAIL = "Admin access required"
+
+# Опознавательный обрывок текста отказа под чужой личностью. Утверждения
+# «отказ пришёл НЕ от запрета имперсонации» сравнивают именно с ним, а не с
+# кодом состояния: код 403 у этих маршрутов есть и по своим причинам.
+IMPERSONATION_REFUSAL_MARK = "чужой учётной записью"
+
+
+def _detail_of(response) -> str:
+    """Текст отказа из тела ответа — либо пустая строка."""
+    try:
+        return str(response.json().get("detail", ""))
+    except Exception:
+        return ""
+
+
+async def _seed_account_with_group(db_session: AsyncSession, user_id: int):
+    """Аккаунт мессенджера с одной группой у названного пользователя.
+
+    Нужен утверждениям о РАЗРЕШЁННОМ: «синхронизация групп разрешена» и
+    «переключение группы разрешено» без предмета проверялись бы на редиректе
+    «аккаунта нет», то есть зеленели бы и при наглухо закрытом маршруте.
+    """
+    from app.models.messenger_account import MessengerAccount
+    from tests.conftest import seed_group
+
+    account = MessengerAccount(
+        user_id=user_id,
+        type="tg_user",
+        credentials="{}",
+        status="active",
+    )
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
+    account_id = account.id
+
+    group = await seed_group(db_session, account_id, user_id)
+    return account_id, group.id
+
+
+@pytest.mark.asyncio
+async def test_the_purchase_form_is_refused_under_another_identity(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Под чужой личностью НЕЛЬЗЯ ЗАПЛАТИТЬ, а без неё тот же вход работает (D-22).
+
+    ⚠️ ВТОРАЯ ПОЛОВИНА УТВЕРЖДЕНИЯ НЕ УКРАШЕНИЕ. Запрет, закрывший денежный вход
+    ВСЕМ, прошёл бы первую половину и остановил бы приём денег целиком —
+    отличить «закрыто под чужой личностью» от «закрыто вообще» можно только
+    вторым запросом.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+
+    await _enter(admin_client, target_id)
+    refused = await admin_client.post("/billing/subscribe", follow_redirects=False)
+
+    assert refused.status_code == 403, (
+        f"вход оплаты ответил {refused.status_code} под чужой личностью — "
+        "администратор может заплатить деньгами пользователя"
+    )
+    assert IMPERSONATION_REFUSAL_MARK in _detail_of(refused), (
+        f"отказ не назвал причиной чужую личность: {_detail_of(refused)!r}"
+    )
+
+    await _stop(admin_client)
+    allowed = await admin_client.post("/billing/subscribe", follow_redirects=False)
+
+    assert allowed.status_code != 403, (
+        "вход оплаты закрыт и БЕЗ имперсонации — запрет остановил приём денег "
+        "вместо того, чтобы закрыть чужую личность"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_password_change_is_refused_under_another_identity(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Под чужой личностью НЕЛЬЗЯ СМЕНИТЬ ПАРОЛЬ, а вход и выход работают (D-22).
+
+    ⚠️ ЗАКРЫТ ВЕСЬ ПУТЬ ВОССТАНОВЛЕНИЯ, А НЕ ТОЛЬКО ПОСЛЕДНИЙ ШАГ. Смена пароля
+    — это четыре маршрута подряд, и закрытый только последний оставил бы
+    администратору три первых: код ушёл бы на почту пользователя, то есть
+    захват учётной записи начался бы и остановился на полпути, с письмом,
+    которого пользователь не просил.
+
+    ВХОД И ВЫХОД ПРОВЕРЯЮТСЯ РЯДОМ, ПОТОМУ ЧТО ОНИ ЖИВУТ В ТОМ ЖЕ РОУТЕРЕ.
+    Закрыть роутер авторизации целиком нельзя: никто не смог бы войти — и
+    утверждение здесь ловит именно эту ошибку навески.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    for path, payload in (
+        ("/forgot-password/send-code", {"email": TARGET_EMAIL}),
+        ("/forgot-password/verify", {"token": "x", "code": "000000"}),
+        ("/forgot-password/resend-code", {"token": "x"}),
+        ("/forgot-password/reset", {"token": "x", "password": "newpass123"}),
+    ):
+        response = await admin_client.post(
+            path, data=payload, follow_redirects=False
+        )
+        assert response.status_code == 403, (
+            f"{path} ответил {response.status_code} под чужой личностью — "
+            "администратор может перехватить пароль пользователя"
+        )
+
+    logout = await admin_client.get("/logout", follow_redirects=False)
+    assert logout.status_code == 302, (
+        "выход закрыт запретом — администратор заперт под чужой личностью"
+    )
+
+    login = await admin_client.post(
+        "/login",
+        data={"email": TARGET_EMAIL, "password": PASSWORD},
+        follow_redirects=False,
+    )
+    assert login.status_code == 302, (
+        "вход закрыт запретом — запрет навешен на роутер авторизации целиком, "
+        "и войти в продукт больше нельзя никому"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_profile_change_is_refused_under_another_identity(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Под чужой личностью НЕЛЬЗЯ ПРАВИТЬ УЧЁТНЫЕ ДАННЫЕ пользователя (D-22).
+
+    ⚠️ ОТДЕЛЬНОГО МАРШРУТА СМЕНЫ АДРЕСА В ПРОДУКТЕ СЕГОДНЯ НЕТ, и это записано
+    здесь, чтобы следующий читатель не счёл утверждение неполным. D-22 называет
+    смену адреса запрещённой; носителя у неё пока два — путь восстановления
+    пароля по почте (закрыт утверждением выше) и форма профиля, куда поле
+    адреса и приедет, когда его заведут. Форма профиля закрыта ЦЕЛИКОМ именно
+    поэтому: поле, добавленное в уже разрешённый маршрут, машинный гейт не
+    заметил бы — маршрут-то объявлен, — и запрет D-22 обошёлся бы молча.
+
+    Сегодняшнее содержимое формы — часовой пояс, и он тоже не безобиден: им
+    определяется, В КАКОЕ ВРЕМЯ уходят рассылки пользователя.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    response = await admin_client.post(
+        "/profile", data={"timezone": "Europe/Moscow"}, follow_redirects=False
+    )
+
+    assert response.status_code == 403, (
+        f"форма профиля ответила {response.status_code} под чужой личностью"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_account_deletion_is_refused_under_another_identity(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Под чужой личностью НЕЛЬЗЯ УДАЛИТЬ УЧЁТНУЮ ЗАПИСЬ (D-22).
+
+    ⚠️ УДАЛЕНИЕ ДОСТИЖИМО ИМЕННО ПОД ЧУЖОЙ ЛИЧНОСТЬЮ, И В ЭТОМ ВЕСЬ ВОПРОС.
+    Права администратора читаются по ДЕЙСТВУЮЩЕМУ ЛИЦУ (D-20), поэтому админка
+    из-под имперсонации открыта — то есть кнопка удаления пользователя доступна
+    администратору, находящемуся в чужой учётной записи. Операция необратима:
+    откатом кода удалённый пользователь не возвращается.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    response = await admin_client.post(
+        f"/admin/users/{target_id}/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 403, (
+        f"удаление пользователя ответило {response.status_code} под чужой "
+        "личностью — необратимая операция выполнена от чужого имени"
+    )
+
+    db_session.expire_all()
+    survivor = await db_session.get(User, target_id)
+    assert survivor is not None, (
+        "пользователь удалён под чужой личностью — отказ пришёл ПОСЛЕ удаления"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_send_retry_is_refused_but_the_history_reads(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Повтор отправки запрещён, ЧТЕНИЕ истории разрешено (D-22).
+
+    ⚠️ РОВНО ЭТА ПАРА И ДЕЛАЕТ ЧИСТО ПЕР-РОУТЕРНЫЙ ЗАПРЕТ НЕДОСТАТОЧНЫМ.
+    Повтор живёт в роутере истории, чтение которого под чужой личностью не
+    просто разрешено, а СОСТАВЛЯЕТ СМЫСЛ входа: типовое обращение звучит как
+    «не отправляется», и ответ на него виден именно в журнале отправок. Закрыть
+    роутер целиком значило бы отнять то, ради чего входили.
+
+    Отправка необратима: сообщение уходит в чужие группы от имени пользователя,
+    и отменить его не может ни администратор, ни владелец учётной записи.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    refused = await admin_client.post("/history/1/retry", follow_redirects=False)
+    assert refused.status_code == 403, (
+        f"повтор отправки ответил {refused.status_code} под чужой личностью — "
+        "рассылка может уйти в чужие группы от имени пользователя"
+    )
+    assert IMPERSONATION_REFUSAL_MARK in _detail_of(refused), (
+        f"отказ не назвал причиной чужую личность: {_detail_of(refused)!r}"
+    )
+
+    read = await admin_client.get("/history", follow_redirects=False)
+    assert read.status_code == 200, (
+        f"чтение истории ответило {read.status_code} под чужой личностью — "
+        "закрыт роутер целиком, и воспроизвести жалобу «не отправляется» нечем"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_group_sync_is_allowed_under_another_identity(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Синхронизация групп под чужой личностью РАЗРЕШЕНА (D-22).
+
+    ⚠️ ЭТО ГРАНИЦА СВЕРХУ, БЕЗ КОТОРОЙ ЗАПРЕТ «НА ВСЁ» ПРОШЁЛ БЫ ВЕСЬ ФАЙЛ.
+    Режим «только чтение» отвергнут явно: смысл входа под пользователем — в
+    ВОСПРОИЗВЕДЕНИИ проблемы, а типовая проблема продукта звучит как «не
+    синхронизируются группы». Запрет, закрывший синхронизацию, отнял бы у входа
+    половину его назначения.
+
+    Предмет утверждения — что запрет НЕ СРАБОТАЛ, а не что синхронизация
+    удалась: настоящая синхронизация ушла бы в сеть прямо из суиты, и её исход
+    к вопросу этого теста отношения не имеет.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    account_id, _group_id = await _seed_account_with_group(db_session, target_id)
+    await _enter(admin_client, target_id)
+
+    response = await admin_client.post(
+        f"/accounts/{account_id}/sync-groups", follow_redirects=False
+    )
+
+    assert IMPERSONATION_REFUSAL_MARK not in _detail_of(response), (
+        "синхронизация групп закрыта под чужой личностью — вход под "
+        "пользователем потерял половину своего назначения"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_group_toggle_is_allowed_under_another_identity(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Включение и выключение группы под чужой личностью РАЗРЕШЕНЫ (D-22).
+
+    Вторая граница сверху рядом с синхронизацией. Действие обратимо одним
+    нажатием, ничего не отправляет и денег не трогает.
+
+    Проверяется НЕ ТОЛЬКО код ответа, но и СОСТОЯВШИЙСЯ переворот флага: отказ,
+    пришедший редиректом, кодом от успеха здесь неотличим.
+    """
+    from app.models.group import Group
+
+    target_id = await _seed_target(admin_client, db_session)
+    account_id, group_id = await _seed_account_with_group(db_session, target_id)
+    await _enter(admin_client, target_id)
+
+    response = await admin_client.post(
+        f"/accounts/{account_id}/groups/{group_id}/toggle", follow_redirects=False
+    )
+
+    assert IMPERSONATION_REFUSAL_MARK not in _detail_of(response), (
+        "переключение группы закрыто под чужой личностью — D-22 называет его "
+        "разрешённым поимённо"
+    )
+
+    db_session.expire_all()
+    group = await db_session.get(Group, group_id)
+    assert group.is_active is False, (
+        "переключение не состоялось: отказ пришёл молча, кодом успеха"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_nested_impersonation_is_refused(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Находясь под чужой личностью, войти ещё под кем-то НЕЛЬЗЯ.
+
+    ⚠️ ЦЕПОЧКУ ЛИЧНОСТЕЙ ФОРМАТ ТОКЕНА ДОПУСКАЕТ, А ПРОДУКТ НЕ ПОДДЕРЖИВАЕТ.
+    Разрешить её молча значило бы завести состояние, о котором не думал никто:
+    полоса возврата назвала бы одного пользователя, возврат привёл бы к
+    другому, а журнал записал бы пару, которой не было. Отказ ничего не
+    отнимает — администратор возвращается к себе одним нажатием и входит
+    заново.
+    """
+    first_id = await _seed_target(admin_client, db_session)
+    await _register(admin_client, "second@test.com", "Второй")
+    second_id = (await _user(db_session, "second@test.com")).id
+
+    await _enter(admin_client, first_id)
+    response = await _impersonate(admin_client, second_id)
+
+    assert response.status_code == 403, (
+        f"вложенный вход ответил {response.status_code} — цепочка личностей "
+        "заведена состоянием, которого продукт не предусматривает"
+    )
+    assert _act_of(response) is None, (
+        "вложенный вход выдал токен — отказ пришёл ПОСЛЕ выпуска"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_names_the_other_identity_and_not_missing_rights(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Текст отказа под чужой личностью ОТЛИЧАЕТСЯ от отказа по правам.
+
+    ⚠️ ЭТО НЕ ВОПРОС ФОРМУЛИРОВОК, А ВОПРОС ТОГО, ЧТО ЧЕЛОВЕК ПОЙДЁТ ЧИНИТЬ.
+    Администратор, получивший «недостаточно прав» там, где на самом деле мешает
+    чужая личность, пойдёт разбираться с правами: проверять адрес в настройке,
+    перевыпускать токен, читать журнал доступа. Настоящая причина — что он не
+    вышел из чужой учётной записи — при этом не названа ни одним словом, и
+    единственное действие, которое ему нужно, останется невыполненным.
+
+    Отказ по правам берётся у СОСЕДНЕГО гейта ЖИВЫМ ЗАПРОСОМ, а не литералом:
+    сравнение с константой согласилось бы с правкой, сблизившей два текста.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+
+    # Отказ по правам: посторонний (не администратор) просится в админку.
+    await _register(admin_client, "outsider@test.com", "Посторонний")
+    await admin_client.post(
+        "/login",
+        data={"email": "outsider@test.com", "password": PASSWORD},
+        follow_redirects=False,
+    )
+    rights = await _impersonate(admin_client, target_id)
+    rights_detail = _detail_of(rights)
+
+    # Отказ по чужой личности: тот же администратор, но под пользователем.
+    await admin_client.post(
+        "/login",
+        data={"email": "admin@test.com", "password": PASSWORD},
+        follow_redirects=False,
+    )
+    await _enter(admin_client, target_id)
+    identity = await admin_client.post("/billing/subscribe", follow_redirects=False)
+    identity_detail = _detail_of(identity)
+
+    # ⚠️ КОД ОТКАЗА УТВЕРЖДАЕТСЯ ДО СРАВНЕНИЯ ТЕКСТОВ, И ЭТО НЕ ПРИДИРКА.
+    # Без него тест зеленел бы на ЛЮБОМ непохожем ответе — в том числе на 500
+    # с телом «Internal server error», которое от отказа по правам тоже
+    # отличается. Проверялась бы тогда не различимость причин, а несовпадение
+    # двух случайных строк.
+    assert rights.status_code == 403, (
+        f"отказ по правам ответил {rights.status_code} — сравнивать не с чем"
+    )
+    assert identity.status_code == 403, (
+        f"отказ по чужой личности ответил {identity.status_code} — тексты "
+        "сравнивались бы у ответа, отказом не являющегося"
+    )
+    assert IMPERSONATION_REFUSAL_MARK in identity_detail, (
+        f"отказ не назвал причиной чужую личность: {identity_detail!r}"
+    )
+    assert rights_detail, "отказ по правам не объяснён ни словом"
+    assert identity_detail, "отказ по чужой личности не объяснён ни словом"
+    assert identity_detail != rights_detail, (
+        "два отказа неразличимы по тексту: администратор пойдёт чинить права "
+        f"вместо того, чтобы выйти из чужой учётной записи ({identity_detail!r})"
+    )
+    assert identity_detail != PERMISSION_REFUSAL_DETAIL, (
+        "отказ по чужой личности говорит словами отказа по правам"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_payment_webhook_without_a_token_is_not_refused(
+    client: AsyncClient,
+):
+    """Вебхук платёжной системы приходит БЕЗ токена и запретом НЕ задевается.
+
+    ⚠️ ОТСУТСТВИЕ ТОКЕНА — НЕ ОТКАЗ, И ЭТО НЕСУЩЕЕ СВОЙСТВО ЗАПРЕТА. Денежный
+    роутер закрыт ЦЕЛИКОМ, а единственный его вход — уведомление ЮKassa о
+    СОСТОЯВШЕМСЯ платеже, приходящее не от браузера и никакого токена не
+    несущее. Зависимость, отвергающая запрос без действующего лица, остановила
+    бы приём денег по УЖЕ СОВЕРШЁННЫМ платежам, и потерянное уведомление
+    откатом кода не возвращается — ровно цена, которую разбирал чекпойнт плана
+    06-06 (D-53).
+
+    Предмет — что отказ пришёл НЕ ОТ ЗАПРЕТА ИМПЕРСОНАЦИИ. Собственный гард
+    вебхука (сверка адреса источника) отвечает 403 своим текстом, и это его
+    работа, а не наша.
+    """
+    response = await client.post(
+        "/api/billing/webhook",
+        json={"event": "payment.succeeded", "object": {"id": "x"}},
+    )
+
+    assert response.status_code != 401, (
+        "вебхук отвергнут по отсутствию токена — приём денег остановлен"
+    )
+    detail = _detail_of(response)
+    assert IMPERSONATION_REFUSAL_MARK not in detail, (
+        f"вебхук отвергнут ЗАПРЕТОМ ИМПЕРСОНАЦИИ ({detail!r}) — уведомление о "
+        "состоявшемся платеже потеряно, и откатом кода оно не возвращается"
+    )
+
+
+@pytest.mark.asyncio
+async def test_without_impersonation_no_forbidden_route_changed_behaviour(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """БЕЗ имперсонации ни один запрещённый маршрут поведения не изменил.
+
+    ⚠️ ЭТО ГЛАВНАЯ ГРАНИЦА СВЕРХУ ВСЕГО ПЛАНА. Запрет, срабатывающий ВСЕГДА,
+    прошёл бы каждое утверждение выше и при этом закрыл бы обычному
+    пользователю оплату, восстановление пароля, правку профиля и повтор
+    отправки — то есть сломал бы продукт целиком, оставаясь зелёным.
+
+    Утверждения написаны ОТ ПРОТИВНОГО: предмет — что отказ пришёл НЕ ОТ
+    ЗАПРЕТА ИМПЕРСОНАЦИИ. Собственные причины у этих маршрутов есть (истёкшая
+    ссылка сброса, отсутствующая запись журнала), и требовать от них успеха
+    значило бы вписать в этот тест чужие правила.
+    """
+    for path, payload in (
+        ("/billing/subscribe", None),
+        ("/forgot-password/send-code", {"email": "testuser@test.com"}),
+        ("/forgot-password/reset", {"token": "x", "password": "newpass123"}),
+        ("/profile", {"timezone": "Europe/Moscow"}),
+        ("/history/1/retry", None),
+    ):
+        response = await authed_client.post(
+            path, data=payload, follow_redirects=False
+        )
+        detail = _detail_of(response)
+        assert IMPERSONATION_REFUSAL_MARK not in detail, (
+            f"{path} закрыт запретом имперсонации БЕЗ имперсонации — запрет "
+            "срабатывает всегда и ломает продукт обычному пользователю"
+        )
