@@ -34,7 +34,16 @@ services:
     image: grafana/grafana:latest
     container_name: grafana-broadcaster
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # ⚠️ УМОЛЧАНИЯ ЗДЕСЬ БЫТЬ НЕ ДОЛЖНО, И ЭТО НЕСУЩЕЕ СВОЙСТВО СТРОКИ.
+      # Раньше стояло `${GRAFANA_ADMIN_PASSWORD:-admin}`. В связке с боевым
+      # шаблоном nginx, который проксирует `/grafana/` наружу БЕЗ аутентификации
+      # перед ним (`nginx/nginx.conf.template`), это публиковало админскую
+      # консоль Grafana с парой admin/admin — подключённую к Loki, который несёт
+      # логи приложения. Развернувший по `.env.example` получал это молча, ничего
+      # не сделав неправильно. Обязательная переменная (`:?`) роняет ПОДЪЁМ
+      # мониторинга с названной причиной вместо того, чтобы поднять его открытым:
+      # отказ стартовать виден сразу, а открытая консоль не видна никогда.
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set — /grafana/ is proxied publicly and this is its only credential}
       GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     volumes:

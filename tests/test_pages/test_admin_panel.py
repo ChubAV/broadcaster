@@ -1,0 +1,2977 @@
+"""Каркас админ-панели: шесть подразделов — МАРШРУТЫ, а не состояния экрана.
+
+Файл держит три архитектурных решения фазы, каждое из которых дороже исправить
+после десяти планов, чем после одного:
+
+1. **Подраздел есть маршрут (D-01).** Проверяется тем, что разметка вкладок не
+   несёт ни атрибутов HTMX, ни обработчиков Alpine: при выключенном JS
+   переключение подраздела обязано работать. HTMX в фазе применяется ВНУТРИ
+   подраздела, но никогда — для его смены.
+2. **Docker при рендере не зовётся (D-07).** Утверждение снимается РАЗБОРОМ
+   исходника по синтаксическому дереву, а не поиском строки и не наблюдением за
+   страницей: поиск строки считает вхождение и в комментарии, и в докстринге, а
+   наблюдение зелено ровно до того дня, когда демон недоступен.
+3. **Живость приезжает из Redis через сервис.** Подраздел «Воркеры» проверяется
+   с ПОДМЕНЁННЫМ клиентом — ни один тест не требует поднятой внешней службы.
+
+Плюс страховочная сетка сноса справочника групп (D-05): ни один шаблон и ни один
+маршрут собранного приложения не ссылается на снесённый адрес.
+"""
+import ast
+import re
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.messenger_account import MessengerAccount
+from app.pages.admin import ADMIN_TABS
+
+ADMIN_PAGES_SOURCE = Path("app/pages/admin.py")
+TABS_TEMPLATE = Path("app/templates/admin/includes/_tabs.html")
+TEMPLATES_ROOT = Path("app/templates")
+
+SUBSECTION_URLS = tuple(tab["href"] for tab in ADMIN_TABS)
+
+# Признаки клиентских библиотек. Любой из них в разметке вкладок означал бы, что
+# смена подраздела перестала быть переходом по ссылке.
+CLIENT_LIB_MARKERS = ("hx-", "x-data", "x-on:", "@click", ":class")
+
+
+async def _seed_account(
+    db_session: AsyncSession, account_type: str = "wa", status: str = "active"
+) -> MessengerAccount:
+    """Мессенджер-аккаунт под существующим пользователем.
+
+    Пользователя создаёт фикстура admin_client через регистрацию, поэтому
+    идентификатор владельца берётся первым существующим.
+    """
+    from sqlalchemy import select
+    from app.models.user import User
+
+    user = (await db_session.execute(select(User))).scalars().first()
+    account = MessengerAccount(
+        user_id=user.id,
+        type=account_type,
+        credentials="{}",
+        status=status,
+    )
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
+    return account
+
+
+def _fake_redis(*replies: list):
+    """Двойник клиента Redis, отдающий ответы конвейера ПО ПОРЯДКУ вызовов.
+
+    ⚠️ ОТВЕТОВ НЕСКОЛЬКО, ПОТОМУ ЧТО КОНВЕЙЕРОВ ДВА (D-52). Подраздел читает
+    сперва живость инфраструктуры (три ключа), потом живость воркеров
+    аккаунтов; смешать их в один ответ значило бы проверять не то, что
+    отдаётся. Последний объявленный ответ повторяется на всех последующих
+    вызовах — так вызовы, которым тест ничего не назначил, не падают и не
+    притворяются осмысленными.
+    """
+    queue = list(replies) or [[]]
+
+    async def _execute():
+        return queue.pop(0) if len(queue) > 1 else queue[0]
+
+    pipe = MagicMock()
+    pipe.get = MagicMock(return_value=pipe)
+    pipe.llen = MagicMock(return_value=pipe)
+    pipe.execute = AsyncMock(side_effect=_execute)
+    client = MagicMock()
+    client.pipeline = MagicMock(return_value=pipe)
+    return client
+
+
+def _row_markup(html: str, account_id: int) -> str:
+    """Разметка ОДНОЙ строки воркера, найденная по идентификатору аккаунта.
+
+    Утверждать про подпись поиском подстроки по ВСЕЙ странице нельзя: на
+    странице два блока и сколько угодно строк, и «в работе» из
+    инфраструктурного блока прошло бы за подпись строки аккаунта. Поэтому
+    утверждения адресуются ячейке, а не документу.
+    """
+    marker = f">#{account_id}<"
+    chunks = [chunk for chunk in html.split("<div data-row")[1:] if marker in chunk]
+    assert len(chunks) == 1, (
+        f"строка аккаунта #{account_id} найдена {len(chunks)} раз — "
+        "утверждение адресовать нечему"
+    )
+    # Обрезаем по ЗАКРЫВАЮЩЕМУ тегу строки, а не по началу следующей: у
+    # ПОСЛЕДНЕЙ строки следующей нет, и без этой обрезки в «разметку строки»
+    # попал бы весь хвост документа — вместе с закрывающими тегами шелла,
+    # которых у паршала нет. Сравнение страницы с паршалом тогда падало бы на
+    # разнице, к строке не относящейся. Ячейки вложенных `div` не содержат,
+    # поэтому первый `</div>` и есть конец строки.
+    return chunks[0][: chunks[0].index("</div>")]
+
+
+# Пять колонок: «Аккаунт», «Сессия», «Воркер», «В очереди», «Действие». Число
+# закреплено УТВЕРЖДЕНИЕМ, а не подразумевается: индексы ниже адресуют колонки
+# позицией, и молча уехавшая на единицу колонка проверяла бы соседнюю ячейку —
+# то есть тест продолжал бы зеленеть, утверждая не то, что написано в его имени.
+WORKER_ROW_CELLS = 5
+
+
+def _row_cell(html: str, account_id: int, index: int) -> str:
+    """Ячейка строки аккаунта по индексу колонки (0 — «Аккаунт», -1 — последняя)."""
+    cells = _row_markup(html, account_id).split('<span class="cell')[1:]
+    assert len(cells) == WORKER_ROW_CELLS, (
+        f"ожидалось {WORKER_ROW_CELLS} ячеек, найдено {len(cells)}"
+    )
+    return cells[index]
+
+
+def _tg_worker_cell(html: str, account_id: int) -> str:
+    """Ячейка колонки «Воркер» — третья по `WORKER_COLUMNS`."""
+    return _row_cell(html, account_id, 2)
+
+
+def _queue_cell(html: str, account_id: int) -> str:
+    """Ячейка колонки «В очереди» — четвёртая по `WORKER_COLUMNS`."""
+    return _row_cell(html, account_id, 3)
+
+
+# ---- Каркас шести подразделов ----
+
+@pytest.mark.asyncio
+async def test_six_subsections_answer_the_admin(admin_client: AsyncClient):
+    """Все шесть адресов отвечают 200 администратору."""
+    assert len(SUBSECTION_URLS) == 6
+    for url in SUBSECTION_URLS:
+        response = await admin_client.get(url)
+        assert response.status_code == 200, url
+
+
+@pytest.mark.asyncio
+async def test_six_subsections_denied_for_regular_user(authed_client: AsyncClient):
+    """Все шесть адресов отвечают 403 постороннему (T-06-01).
+
+    Пять маршрутов заведены этим планом, и зависимость администратора на каждом
+    из них — не формальность: без неё привилегированные чтения о ЧУЖИХ учётных
+    записях открылись бы любому вошедшему.
+    """
+    for url in SUBSECTION_URLS:
+        response = await authed_client.get(url)
+        assert response.status_code == 403, url
+
+
+@pytest.mark.asyncio
+async def test_subsection_navigation_degrades_without_js(admin_client: AsyncClient):
+    """Вкладки — ссылки: ни HTMX, ни Alpine в разметке переключения нет (D-01).
+
+    Утверждение снимается и с ФАЙЛА, и с отданной страницы: атрибут, дописанный
+    обработчиком в контекст, в файле бы не нашёлся.
+    """
+    source = TABS_TEMPLATE.read_text(encoding="utf-8")
+    for marker in CLIENT_LIB_MARKERS:
+        assert marker not in source, f"_tabs.html: {marker}"
+
+    html = (await admin_client.get("/admin/workers")).text
+    tabs_markup = html[html.index("<nav data-subtabs") : html.index("</nav>", html.index("<nav data-subtabs"))]
+    for marker in CLIENT_LIB_MARKERS:
+        assert marker not in tabs_markup, f"отданная разметка вкладок: {marker}"
+
+
+@pytest.mark.asyncio
+async def test_tabs_render_six_real_links(admin_client: AsyncClient):
+    """Отданная разметка вкладок — ШЕСТЬ якорей с адресами подразделов.
+
+    Проверка идёт по отданной разметке, а не по числу строк с `href` в файле:
+    перечень объявлен ОДИН раз (`ADMIN_TABS`), и шаблон обходит его циклом —
+    шесть выписанных в шаблоне ссылок были бы второй копией подписей и
+    разъехались бы с первой молча.
+    """
+    html = (await admin_client.get("/admin")).text
+    start = html.index("<nav data-subtabs")
+    tabs_markup = html[start : html.index("</nav>", start)]
+
+    hrefs = re.findall(r'<a class="subtab" href="([^"]+)"', tabs_markup)
+    assert hrefs == list(SUBSECTION_URLS)
+    for tab in ADMIN_TABS:
+        assert tab["label"] in tabs_markup, tab["label"]
+
+
+@pytest.mark.asyncio
+async def test_active_subsection_is_marked_exactly_once(admin_client: AsyncClient):
+    """Признак активной вкладки встречается на странице РОВНО один раз.
+
+    Признак свой (`data-subtab-active`), а не признак сайдбара или нижних
+    табов: переиспользование чужого сделало бы «активный подраздел»
+    неотличимым от «активного раздела».
+    """
+    for url in SUBSECTION_URLS:
+        html = (await admin_client.get(url)).text
+        assert html.count("data-subtab-active") == 1, url
+
+
+@pytest.mark.asyncio
+async def test_admin_section_stays_highlighted_in_the_sidebar(
+    admin_client: AsyncClient,
+):
+    """Раздел «Админ-панель» подсвечен в сайдбаре на всех шести адресах."""
+    for url in SUBSECTION_URLS:
+        html = (await admin_client.get(url)).text
+        assert 'class="nav-item is-active"' in html, url
+        assert 'href="/admin"' in html, url
+
+
+def test_all_six_subsection_templates_include_the_same_tabs():
+    """Одни вкладки на шесть шаблонов — вторая копия разъехалась бы молча."""
+    for name in ("overview", "users", "workers", "queue", "logs", "payments"):
+        template = TEMPLATES_ROOT / "admin" / f"{name}.html"
+        assert template.exists(), template
+        assert "admin/includes/_tabs.html" in template.read_text(encoding="utf-8"), name
+
+
+# ---- Docker не трогается при рендере (D-07, T-06-03) ----
+
+def test_no_docker_client_on_the_render_path():
+    """Разбор ДЕРЕВА исходника: ни один обработчик не зовёт клиент контейнеров.
+
+    Поиск строки считал бы вхождение и в комментарии, и в докстринге — то есть
+    объяснение, ПОЧЕМУ вызова нет, роняло бы тест, утверждающий, что вызова
+    нет. Поэтому проверяются имена в дереве: импорты и обращения к атрибутам.
+    """
+    tree = ast.parse(ADMIN_PAGES_SOURCE.read_text(encoding="utf-8"))
+
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+            imported += [alias.name for alias in node.names]
+    assert not [name for name in imported if "docker" in name.lower()], imported
+
+    called: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            target = node.func
+            if isinstance(target, ast.Name):
+                called.append(target.id)
+            elif isinstance(target, ast.Attribute):
+                called.append(target.attr)
+    assert not [name for name in called if "docker" in name.lower()], called
+
+
+# ---- Подраздел «Воркеры» на живых данных ----
+
+@pytest.mark.asyncio
+async def test_workers_subsection_shows_idle_account_row(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Аккаунт без heartbeat и с ПУСТОЙ очередью показан ПРОСТАИВАЮЩИМ (D-08).
+
+    Отключённым он показан только при непустой очереди: воркер уходит сам через
+    300 секунд простоя, и отсутствие контейнера здесь — норма, а не отказ.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    stale = str(int((time.time() - 600) * 1000))
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_fake_redis([stale, 0])
+    ):
+        response = await admin_client.get("/admin/workers")
+
+    assert response.status_code == 200
+    html = response.text
+    assert f"#{account.id}" in html, "строка аккаунта не отрисовалась"
+    assert "простаивает" in html
+    # Строчная форма приходит ТОЛЬКО из колонки воркера: состояние сессии здесь
+    # «Активно», а бейдж сессии пишется с прописной.
+    assert "отключён" not in html
+
+
+@pytest.mark.asyncio
+async def test_workers_subsection_shows_offline_only_with_pending_queue(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Несвежий heartbeat при НЕПУСТОЙ очереди — «отключён»: работать некому."""
+    await _seed_account(db_session, account_type="wa")
+    stale = str(int((time.time() - 600) * 1000))
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_fake_redis([stale, 5])
+    ):
+        html = (await admin_client.get("/admin/workers")).text
+
+    assert "отключён" in html
+    assert "простаивает" not in html
+
+
+@pytest.mark.asyncio
+async def test_workers_subsection_keeps_session_and_worker_apart(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Колонки «Сессия» и «Воркер» независимы и печатаются обе.
+
+    Контейнер с мёртвой сессией остаётся ЗАПУЩЕННЫМ: один бейдж на две
+    величины врал бы про обе.
+    """
+    await _seed_account(db_session, account_type="wa", status="disconnected")
+    fresh = str(int(time.time() * 1000))
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_fake_redis([fresh, 0])
+    ):
+        html = (await admin_client.get("/admin/workers")).text
+
+    assert "Сессия" in html and "Воркер" in html
+    assert "в работе" in html, "живой воркер при мёртвой сессии не показан"
+
+
+@pytest.mark.asyncio
+async def test_workers_subsection_survives_unavailable_redis(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Недоступный Redis не роняет подраздел: 200 и «неизвестно» (T-06-02).
+
+    Показать здесь «отключён» значило бы сообщить об аварии воркеров, когда
+    сломан наблюдатель.
+    """
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        response = await admin_client.get("/admin/workers")
+
+    assert response.status_code == 200
+    assert "неизвестно" in response.text
+
+
+@pytest.mark.asyncio
+async def test_telegram_row_worker_label_changes_with_the_source_state(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 4 (D-52): подпись «Воркер» у TG-строки ВЫВЕДЕНА ИЗ СОСТОЯНИЯ.
+
+    ⚠️ УТВЕРЖДЕНИЕ ЗДЕСЬ — НЕ «НАПЕЧАТАНА ПРАВИЛЬНАЯ СТРОКА», А «СТРОКА
+    МЕНЯЕТСЯ». Прежняя редакция D-09 мандатировала константу «в пуле app»:
+    она истинна безусловно, поэтому не может измениться никогда и провалить
+    проверку не может тоже — величина выглядела бы измеренной, ничего не
+    измеряя. Единственный способ отличить измерение от декорации — прогнать
+    ОДИН И ТОТ ЖЕ экран на РАЗНЫХ состояниях источника и потребовать разной
+    подписи. Источник здесь — heartbeat службы `celery-worker-telegram`,
+    третий ключ инфраструктурного конвейера.
+    """
+    from app.services.ops_state import INFRA_SERVICE_ORDER, INFRA_WORKER_TELEGRAM
+
+    account = await _seed_account(db_session, account_type="tg_user")
+    telegram_slot = INFRA_SERVICE_ORDER.index(INFRA_WORKER_TELEGRAM)
+
+    def _infra(telegram_age_sec: float) -> list:
+        beats = [str(int((time.time() - 600) * 1000))] * len(INFRA_SERVICE_ORDER)
+        beats[telegram_slot] = str(int((time.time() - telegram_age_sec) * 1000))
+        return beats
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_fake_redis(_infra(1))
+    ):
+        alive = (await admin_client.get("/admin/workers")).text
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_fake_redis(_infra(600))
+    ):
+        dead = (await admin_client.get("/admin/workers")).text
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        blind = (await admin_client.get("/admin/workers")).text
+
+    for html in (alive, dead, blind):
+        assert f"#{account.id}" in html, "строка telegram-аккаунта не отрисовалась"
+
+    tg_alive = _tg_worker_cell(alive, account.id)
+    tg_dead = _tg_worker_cell(dead, account.id)
+    tg_blind = _tg_worker_cell(blind, account.id)
+
+    assert "в работе" in tg_alive
+    assert "отключён" in tg_dead
+    assert "неизвестно" in tg_blind
+    assert tg_alive != tg_dead != tg_blind, (
+        "подпись колонки «Воркер» не изменилась при смене состояния источника — "
+        "величина неопровержима и потому не является измерением"
+    )
+    # Отменённая константа не вернулась ни в одну из веток.
+    for html in (alive, dead, blind):
+        assert "в пуле app" not in html
+        assert "величина ещё не определена" not in html
+
+
+@pytest.mark.asyncio
+async def test_telegram_queue_cell_names_the_cause_of_the_missing_depth(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Прочерк в «В очереди» несёт `title` с ПРИЧИНОЙ, а не с фактом неполучения.
+
+    Правило контракта UI заострено намеренно: `title`, сообщающий, что
+    величину не удалось получить, запрещён ровно так же, как отсутствие
+    `title` — он пересказывает провал вместо его причины. Причина у TG-строки
+    названа предметно: очередь `telegram` ОДНА на все telegram-аккаунты,
+    поэтому отдельной глубины у строки не существует; общее число, повторённое
+    в каждой строке, читалось бы как величина аккаунта.
+    """
+    account = await _seed_account(db_session, account_type="tg_user")
+    fresh = str(int(time.time() * 1000))
+
+    with patch(
+        "app.services.ops_state._get_redis",
+        return_value=_fake_redis([fresh, fresh, fresh]),
+    ):
+        html = (await admin_client.get("/admin/workers")).text
+
+    cell = _queue_cell(html, account.id)
+    assert "—" in cell
+    assert "title=" in cell, "голый прочерк без подсказки — запрещён контрактом"
+    for forbidden in ("не удалось", "не определен", "неизвестно почему"):
+        assert forbidden not in cell.lower(), f"подсказка пересказывает провал: {cell}"
+    assert "одна на все" in cell, f"подсказка не называет причину: {cell}"
+
+
+@pytest.mark.asyncio
+async def test_queue_cell_names_the_broken_observer_when_redis_is_down(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Второй случай отсутствия глубины назван СВОЕЙ причиной, а не общей.
+
+    Две разные причины под одной подсказкой слились бы в бессодержательную:
+    «глубины нет» верно в обоих случаях и не помогает ни в одном.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        html = (await admin_client.get("/admin/workers")).text
+
+    cell = _queue_cell(html, account.id)
+    assert "title=" in cell
+    assert "Redis" in cell, f"подсказка не называет сломанного наблюдателя: {cell}"
+
+
+@pytest.mark.asyncio
+async def test_workers_subsection_uses_row_primitives(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка собрана существующим примитивом, а не своей вёрсткой."""
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        html = (await admin_client.get("/admin/workers")).text
+
+    assert "data-row" in html
+    assert "data-rowhead" in html
+
+
+# ---- Два блока подраздела, опрос и паршал (D-09, D-12, D-52) ----
+
+@pytest.mark.asyncio
+async def test_workers_subsection_has_two_named_blocks(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 1: блоков ДВА, и у каждого свой заголовок (D-09).
+
+    Без верхнего блока упавший `celery-beat` не виден НИГДЕ, кроме отсутствия
+    рассылок, — а это самая частая причина «всё встало».
+    """
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        html = (await admin_client.get("/admin/workers")).text
+
+    assert "Инфраструктура" in html
+    assert "Воркеры аккаунтов" in html
+    assert html.index("Инфраструктура") < html.index("Воркеры аккаунтов"), (
+        "инфраструктурный блок обязан стоять сверху: в аварии сперва смотрят, "
+        "жив ли планировщик"
+    )
+
+
+@pytest.mark.asyncio
+async def test_infrastructure_block_prints_three_services_from_the_named_source(
+    admin_client: AsyncClient
+):
+    """Тест 2: три службы, и состояние каждой взято из источника решения D-52."""
+    from app.pages.admin import INFRA_SERVICES
+    from app.services.ops_state import INFRA_SERVICE_ORDER
+
+    assert len(INFRA_SERVICES) == 3
+    assert [service["key"] for service in INFRA_SERVICES] == list(INFRA_SERVICE_ORDER)
+
+    beats = [str(int((time.time() - age) * 1000)) for age in (1, 600, 1)]
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_fake_redis(beats)
+    ):
+        html = (await admin_client.get("/admin/workers")).text
+
+    for service in INFRA_SERVICES:
+        assert service["label"] in html, service["label"]
+        # Ключ признака напечатан: в аварии администратору нужно знать, ЧТО
+        # смотреть в Redis, а не только вердикт.
+        assert f"infra:heartbeat:{service['key']}" in html
+    assert "в работе" in html and "отключён" in html
+
+
+@pytest.mark.asyncio
+async def test_infrastructure_block_says_unknown_when_the_source_is_unreachable(
+    admin_client: AsyncClient
+):
+    """Тест 3: сломанный наблюдатель — «неизвестно» и 200, а не отказ и не 500.
+
+    Показать «отключён» при недоступном Redis значило бы отправить
+    администратора чинить исправные службы.
+    """
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        response = await admin_client.get("/admin/workers")
+
+    assert response.status_code == 200
+    assert "неизвестно" in response.text
+    assert "отключён" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_lower_block_groups_accounts_by_channel(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 5: нижний блок делит строки по каналам, каждая — в своей группе."""
+    tg = await _seed_account(db_session, account_type="tg_user")
+    wa = await _seed_account(db_session, account_type="wa")
+    mx = await _seed_account(db_session, account_type="max")
+
+    fresh = str(int(time.time() * 1000))
+    with patch(
+        "app.services.ops_state._get_redis",
+        return_value=_fake_redis([fresh, fresh, fresh], [fresh, 0, fresh, 0]),
+    ):
+        html = (await admin_client.get("/admin/workers")).text
+
+    for label in ("Telegram", "WhatsApp", "MAX"):
+        assert label in html, label
+    positions = {
+        account_type: html.index(f">#{account.id}<")
+        for account_type, account in (("tg", tg), ("wa", wa), ("max", mx))
+    }
+    for account_type, group in (("tg", "Telegram"), ("wa", "WhatsApp"), ("max", "MAX")):
+        heading = html.rindex(f"{group}</h", 0, positions[account_type])
+        assert heading > 0, f"строка {account_type} стоит вне группы своего канала"
+
+
+@pytest.mark.asyncio
+async def test_workers_partial_answers_the_admin_with_the_same_rows(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 6а: паршал отвечает администратору ТЕМИ ЖЕ строками, что страница.
+
+    ⚠️ ОТКАЗ ПОСТОРОННЕМУ ПРОВЕРЯЕТСЯ ОТДЕЛЬНЫМ ТЕСТОМ, И ЭТО НЕ ДРОБЛЕНИЕ РАДИ
+    дробления: `admin_client` и `authed_client` — ОДИН И ТОТ ЖЕ объект клиента с
+    разными cookie входа, и запрошенные в одном тесте они затирают друг друга.
+    Утверждение про 403 в таком тесте проверяло бы не права, а порядок фикстур.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    fresh = str(int(time.time() * 1000))
+    replies = ([fresh, fresh, fresh], [fresh, 3])
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_fake_redis(*replies)
+    ):
+        page = await admin_client.get("/admin/workers")
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_fake_redis(*replies)
+    ):
+        partial = await admin_client.get("/admin/workers/partial")
+
+    assert partial.status_code == 200
+    # Те же строки, что первичная отрисовка: паршал и есть первичная отрисовка.
+    assert f">#{account.id}<" in partial.text
+    assert _row_markup(page.text, account.id) == _row_markup(partial.text, account.id)
+
+
+@pytest.mark.asyncio
+async def test_workers_partial_refuses_the_stranger(authed_client: AsyncClient):
+    """Тест 6б: паршал отвечает 403 постороннему (T-06-PART).
+
+    Роутер без зависимости шелла — это роутер без зависимости ШЕЛЛА, а не
+    роутер без проверки прав. Паршал живёт вне страничной сборки, поэтому
+    проверку администратора он держит СВОЮ, на самом обработчике.
+    """
+    assert (await authed_client.get("/admin/workers/partial")).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_workers_partial_does_not_inherit_the_shell(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 7: в ответе паршала нет ни одного признака разметки шелла."""
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        body = (await admin_client.get("/admin/workers/partial")).text
+
+    for marker in ("<!DOCTYPE", "<html", "<body", "data-sidebar", "data-subtabs"):
+        assert marker not in body, f"паршал притащил шелл: {marker}"
+    partial_source = (TEMPLATES_ROOT / "admin/includes/workers_partial.html").read_text(
+        encoding="utf-8"
+    )
+    assert "extends" not in partial_source
+
+
+@pytest.mark.asyncio
+async def test_workers_subsection_polls_without_a_stop_condition(
+    admin_client: AsyncClient
+):
+    """Тест 8: атрибуты опроса есть, интервал — константа модуля, автостопа нет.
+
+    Автостопа нет НАМЕРЕННО, и мотив отличается от живой ленты Фазы 4:
+    администратор открывает подраздел в момент аварии, и замершее состояние
+    здесь вреднее, чем на дашборде (D-12).
+    """
+    from app.pages.admin import WORKERS_POLL_SEC
+
+    assert 15 <= WORKERS_POLL_SEC <= 30
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        html = (await admin_client.get("/admin/workers")).text
+
+    assert 'hx-get="/admin/workers/partial"' in html
+    assert f'hx-trigger="every {WORKERS_POLL_SEC}s"' in html
+    # Условие остановки опроса не заводится: ни `once`, ни оборванный триггер.
+    poll_markup = html[html.index('hx-get="/admin/workers/partial"') :][:400]
+    for stopper in ("hx-trigger=\"once", " once", "hx-swap-oob"):
+        assert stopper not in poll_markup, f"в разметку опроса попал автостоп: {stopper}"
+
+    page_source = (TEMPLATES_ROOT / "admin/workers.html").read_text(encoding="utf-8")
+    assert f"every {WORKERS_POLL_SEC}s" not in page_source, (
+        "интервал выписан в разметке литералом — он обязан приходить константой "
+        "модуля, иначе разъедется с маршрутом молча"
+    )
+
+
+def test_no_docker_client_reaches_the_partial_handler_either():
+    """Тест 9: разбор дерева — обращений к контейнерному API нет и в паршале.
+
+    Утверждение повторяет `test_no_docker_client_on_the_render_path` по ДРУГОМУ
+    поводу: паршал тикает каждые двадцать секунд, и вызов демона в нём стоил бы
+    не одного обращения на открытие страницы, а бессрочного потока обращений.
+    """
+    tree = ast.parse(ADMIN_PAGES_SOURCE.read_text(encoding="utf-8"))
+    handlers = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and (node.name.startswith("admin_") or node.name.startswith("_workers"))
+    ]
+    assert any(node.name == "admin_workers_partial" for node in handlers)
+
+    # Обработчик формы перезапуска исключён ИМЕНЕМ, а не забыт: D-11 разрешает
+    # ему ровно одно обращение к контейнерному API, и разрешение это адресное.
+    # Что оно не расползлось на соседей, утверждает
+    # `test_the_container_api_lives_only_in_the_restart_handler` — двусторонне.
+    for handler in handlers:
+        if handler.name == "admin_restart_worker":
+            continue
+        called = [
+            node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, (ast.Name, ast.Attribute))
+        ]
+        assert not [name for name in called if "docker" in name.lower()], handler.name
+        assert not [name for name in called if "container" in name.lower()], handler.name
+
+
+# ---- Перезапуск воркера: единственное во всей фазе обращение к Docker (D-11) ----
+#
+# ⚠️ ЭТОТ БЛОК ПРОВЕРЯЕТ ГРАНИЦУ, А НЕ КНОПКУ. D-07 запрещает контейнерное API
+# на пути ОТРИСОВКИ, а не в приложении вообще; D-11 разрешает ровно один вызов и
+# ровно по нажатию. Утверждения ниже держат обе половины: вызов происходит там,
+# где разрешён, и не происходит нигде больше.
+
+
+def _restart_url(account_id: int) -> str:
+    return f"/admin/workers/{account_id}/restart"
+
+
+@pytest.mark.asyncio
+async def test_restart_starts_the_container_of_the_accounts_own_channel(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 1: форма зовёт запуск контейнера НУЖНОГО канала ровно один раз.
+
+    Канал берётся из САМОГО аккаунта, а не из поля формы: поле подделывается
+    вместе с запросом, колонка в базе — нет.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.wa_container_manager.start_container", return_value="http://x"
+    ) as wa_start, patch(
+        "app.services.max_container_manager.start_container", return_value="http://x"
+    ) as max_start:
+        response = await admin_client.post(
+            _restart_url(account.id), follow_redirects=False
+        )
+
+    assert response.status_code == 302
+    wa_start.assert_called_once_with(account.id)
+    max_start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restart_of_a_max_account_goes_to_the_max_manager(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Второй канал ходит к СВОЕМУ менеджеру: один на два канала перепутал бы их."""
+    account = await _seed_account(db_session, account_type="max")
+
+    with patch(
+        "app.services.wa_container_manager.start_container", return_value="http://x"
+    ) as wa_start, patch(
+        "app.services.max_container_manager.start_container", return_value="http://x"
+    ) as max_start:
+        await admin_client.post(_restart_url(account.id), follow_redirects=False)
+
+    max_start.assert_called_once_with(account.id)
+    wa_start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restart_is_refused_for_a_channel_without_a_container(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """У telegram-аккаунта своего контейнера нет — перезапускать нечего.
+
+    Молчаливый успех здесь был бы хуже отказа: администратор решил бы, что
+    починил, и перестал бы искать настоящую причину.
+    """
+    account = await _seed_account(db_session, account_type="tg_user")
+
+    with patch("app.services.wa_container_manager.start_container") as wa_start, patch(
+        "app.services.max_container_manager.start_container"
+    ) as max_start:
+        response = await admin_client.post(
+            _restart_url(account.id), follow_redirects=False
+        )
+
+    assert response.status_code == 302
+    wa_start.assert_not_called()
+    max_start.assert_not_called()
+    assert "error=" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_restart_is_denied_for_a_regular_user(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 2: посторонний отвергается по правам и контейнера не трогает."""
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.wa_container_manager.start_container") as wa_start:
+        response = await authed_client.post(_restart_url(account.id))
+
+    assert response.status_code == 403
+    wa_start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restart_is_refused_for_a_foreign_origin_before_touching_anything(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 3: чужое происхождение отвергается ДО вызова (T-06-RST2).
+
+    Гард обязателен: аутентификация проекта идёт cookie, поэтому браузер
+    приложит её к межсайтовой форме сам, и изменяющий запрос со стороннего
+    сайта неотличим от своего. Новая изменяющая форма админки без гарда молча
+    расширила бы принятую границу риска — сегодня его несут ровно три формы, и
+    две из них денежные.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.wa_container_manager.start_container") as wa_start:
+        response = await admin_client.post(
+            _restart_url(account.id),
+            headers={"Sec-Fetch-Site": "cross-site"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403
+    wa_start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_restart_of_an_unknown_account_never_reaches_the_container(
+    admin_client: AsyncClient,
+):
+    """Тест 6: неизвестный аккаунт отвергается до обращения к контейнеру."""
+    with patch("app.services.wa_container_manager.start_container") as wa_start:
+        response = await admin_client.post(_restart_url(999999), follow_redirects=False)
+
+    assert response.status_code == 302
+    wa_start.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unreachable_daemon_gives_named_words_and_a_log_line_not_a_500(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 4: недоступный демон — названный отказ и запись в журнал, НЕ 500.
+
+    Молча вернувшая ту же страницу кнопка читается как «кнопка сломана»
+    (Pitfall 7). Текст стороннего исключения на экран при этом не выходит: он
+    ничего не сообщает администратору и может нести внутренние адреса.
+
+    ⚠️ ЖУРНАЛ ПРОВЕРЯЕТСЯ ПОДМЕНОЙ САМОГО ЖУРНАЛА, А НЕ `caplog`. Проект
+    настраивает structlog из обработчика запуска, и в ДЛИННОМ прогоне суиты
+    настройка соседнего файла меняет доставку записей — тест на `caplog`
+    зеленел бы в одиночку и краснел в общем прогоне, то есть проверял бы
+    порядок файлов, а не наличие записи. Утверждение о факте записи не имеет
+    права зависеть от того, куда её сегодня доставляют.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.wa_container_manager.start_container",
+        side_effect=RuntimeError(
+            "Error while fetching server API version: /var/run/whale.sock"
+        ),
+    ), patch("app.pages.admin.logger") as log:
+        response = await admin_client.post(
+            _restart_url(account.id), follow_redirects=False
+        )
+
+    assert response.status_code == 302, "отказ обязан оставаться отказом, а не 500"
+    (event,), fields = log.warning.call_args
+    assert event == "worker_restart_failed", (
+        "отказ проглочен молча — именованной строки журнала нет"
+    )
+    assert fields["account_id"] == account.id
+    assert fields["channel"] == "wa"
+    assert "admin_user_id" in fields
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        page = (await admin_client.get(response.headers["location"])).text
+    assert "демон контейнеров не отвечает" in page
+    assert "/var/run" not in page, "текст стороннего исключения вышел на экран"
+
+
+@pytest.mark.asyncio
+async def test_successful_restart_leaves_a_named_trace(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 5: успех уходит в журнал с идентификаторами админа, аккаунта и канала.
+
+    Привилегированная операция над чужой сущностью обязана оставлять след, и
+    форма следа в проекте уже есть (`free_access_toggled`): именованный ключ,
+    оба идентификатора и то, ЧТО именно сделано. Журнал подменяется по той же
+    причине, что и в тесте отказа выше.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.wa_container_manager.start_container", return_value="http://x"
+    ), patch("app.pages.admin.logger") as log:
+        await admin_client.post(_restart_url(account.id), follow_redirects=False)
+
+    (event,), fields = log.info.call_args
+    assert event == "worker_restarted"
+    assert fields["account_id"] == account.id
+    assert fields["channel"] == "wa"
+    assert "admin_user_id" in fields
+    log.warning.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_stop_action_exists_in_markup_or_in_routes(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 7 (отрицательный): действия остановки нет ни в разметке, ни в маршрутах.
+
+    ⚠️ ЭТО ЗАПРЕТ, ЗАКРЕПЛЁННЫЙ ТЕСТОМ, А НЕ НАМЕРЕНИЕ (D-11). Остановка
+    обещает контроль, которого нет: воркер уходит сам через 300 секунд простоя
+    и возвращается через 15 секунд при появлении задачи. Администратор,
+    нажавший её в аварии, решит, что починил, и перестанет искать причину.
+    """
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        html = (await admin_client.get("/admin/workers")).text
+    assert "Остановить" not in html
+    assert "/stop" not in html
+
+    # ⚠️ ПЕРЕЧЕНЬ БЕРЁТСЯ У САМИХ РОУТЕРОВ МОДУЛЯ, А НЕ У СОБРАННОГО ПРИЛОЖЕНИЯ.
+    # Сборка приложения читает настройки из файла окружения, которого в суите
+    # нет намеренно, и тест падал бы на импорте — то есть переставал бы
+    # проверять запрет ровно тогда, когда запрет и надо проверять. Область
+    # утверждения при этом не сузилась: маршрут остановки, если бы он появился,
+    # объявили бы здесь — оба роутера подраздела живут в этом модуле.
+    from app.pages.admin import partials_router, router as admin_router
+
+    paths = {
+        route.path
+        for router in (admin_router, partials_router)
+        for route in router.routes
+        if hasattr(route, "path")
+    }
+    assert paths, "маршруты админки не найдены — утверждать не о чем"
+    assert not [path for path in paths if "stop" in path.lower()], sorted(paths)
+
+    assert "stop_container" not in ADMIN_PAGES_SOURCE.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_restart_button_goes_through_the_confirmation_panel(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Тест 8: кнопка ведёт через общую панель подтверждения, а не шлёт сразу.
+
+    Тринадцать мест проекта уже переведены с системного диалога на панель;
+    четырнадцатое не имеет права быть исключением. Перезапуск обрывает активные
+    отправки этого аккаунта — откат кода тривиален, последствия нажатия нет.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        html = (await admin_client.get("/admin/workers")).text
+
+    assert "Перезапустить" in html
+    assert 'role="dialog"' in html, "панель подтверждения не отрисована"
+    assert f"modal-open-worker-restart-{account.id}" in html
+    assert "confirm(" not in html and "onclick" not in html
+    # Базовый путь без JS остаётся настоящей формой POST на тот же адрес.
+    assert f'action="{_restart_url(account.id)}"' in html
+
+
+def test_the_container_api_lives_only_in_the_restart_handler():
+    """Разбор ДЕРЕВА: контейнерное API есть ТОЛЬКО в обработчике перезапуска.
+
+    Утверждение двустороннее намеренно. Односторонний запрет («нигде нет»)
+    выполнялся бы и пустым модулем; одностороннее разрешение («в перезапуске
+    есть») не заметило бы второго вызова, уехавшего на путь отрисовки. Вместе
+    они и есть граница D-07/D-11.
+    """
+    tree = ast.parse(ADMIN_PAGES_SOURCE.read_text(encoding="utf-8"))
+
+    def _calls(node) -> list[str]:
+        """Имена, которыми функция ТРОГАЕТ чужое API: вызовы И ссылки на них.
+
+        ⚠️ ОДНИХ ВЫЗОВОВ МАЛО, И ЭТО НЕ ПЕДАНТИЗМ. Синхронный менеджер уходит в
+        отдельный поток, поэтому в исходнике стоит не `start_container(...)`, а
+        ССЫЛКА на функцию, переданная исполнителю. Обход, считающий только узлы
+        вызова, такой код не увидел бы вовсе — и запрет, ради которого этот
+        тест написан, зеленел бы при обращении к демону прямо на пути
+        отрисовки, стоило бы его обернуть в поток.
+        """
+        return [
+            child.func.id if isinstance(child.func, ast.Name) else child.func.attr
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call)
+            and isinstance(child.func, (ast.Name, ast.Attribute))
+        ] + [
+            child.attr for child in ast.walk(node) if isinstance(child, ast.Attribute)
+        ]
+
+    container_callers = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and [name for name in _calls(node) if "container" in name.lower()]
+    }
+    assert container_callers == {"admin_restart_worker"}, (
+        "контейнерное API вызывается не только из обработчика формы перезапуска: "
+        f"{sorted(container_callers)}"
+    )
+
+    assert not [
+        name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for name in _calls(node)
+        if "stop_container" in name
+    ]
+
+
+# ---- Данные-заглушки макета не доехали ----
+
+@pytest.mark.asyncio
+async def test_no_mockup_placeholder_numbers_reached_the_subsections(
+    admin_client: AsyncClient,
+):
+    """Ни одно нарисованное в макете число не доехало до подразделов.
+
+    Число из макета, дожившее до прода, читается администратором как
+    ИЗМЕРЕННОЕ, и в аварии он примет решение по нарисованной цифре.
+    """
+    forbidden = ("621 000", "18 д 4 ч", "uptime", "восстановлен после рестарта")
+    for url in SUBSECTION_URLS:
+        html = (await admin_client.get(url)).text
+        for marker in forbidden:
+            assert marker not in html, f"{url}: {marker}"
+
+
+# ---- Страховочная сетка сноса справочника групп (D-05) ----
+
+def test_groups_info_gone_from_templates_and_routes():
+    """Ни один шаблон и ни один маршрут не ведёт на снесённый адрес (D-05).
+
+    ⚠️ УТВЕРЖДЕНИЕ ПО ДЕРЕВУ КАТАЛОГА И ПО ПЕРЕЧНЮ МАРШРУТОВ, А НЕ ПО ОДНОМУ
+    ФАЙЛУ. Ссылка, забытая в соседнем шаблоне, отдала бы администратору 404 —
+    и отдала бы молча, потому что сам снос выглядел бы завершённым. Поэтому
+    проверяются ВСЕ шаблоны проекта и ВСЕ маршруты собранного приложения.
+
+    Хранилище под снос НЕ попадает: таблица `group_info`, её модель, её
+    репозиторий и ревизия `0011` остаются — снос касается поверхности, и это
+    отдельное намеренное решение, а не недоделка.
+    """
+    dead_url = "/admin/" + "groups-info"
+
+    offenders = [
+        str(path)
+        for path in TEMPLATES_ROOT.rglob("*.html")
+        if dead_url in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, f"ссылка на снесённый адрес осталась в шаблонах: {offenders}"
+
+    assert not (TEMPLATES_ROOT / "admin" / "groups_info.html").exists()
+    assert not (TEMPLATES_ROOT / "admin" / "group_info_detail.html").exists()
+
+    from app.main import create_app
+    from app.config import Settings
+
+    app = create_app(
+        settings=Settings(
+            _env_file=None,
+            database_url="sqlite+aiosqlite:///:memory:",
+            redis_url="redis://localhost:6379/0",
+            secret_key="test-secret-key",
+            telegram_api_id=12345,
+            telegram_api_hash="test_api_hash",
+            wa_bridge_urls=["http://localhost:3000"],
+            admin_email="admin@test.com",
+            smtp_host="",
+            smtp_port=587,
+            smtp_user="",
+            smtp_password="",
+            smtp_from="noreply@test.com",
+        )
+    )
+    live = [
+        route.path
+        for route in app.routes
+        if dead_url in getattr(route, "path", "")
+    ]
+    assert not live, f"маршрут снесённого справочника всё ещё объявлен: {live}"
+
+
+def test_groups_info_gone_but_its_storage_survived():
+    """Хранилище справочника ЦЕЛО — снесена поверхность, а не данные (D-05).
+
+    Утверждение парное к предыдущему и существует ради ассимметрии решения:
+    экраны сняты, потому что у таблицы нет производителя, но таблица, её
+    модель, её репозиторий и ревизия остаются — снос данных был бы необратим,
+    а снос экранов откатывается из git.
+    """
+    assert Path("app/models/group_info.py").exists()
+    assert Path("app/repositories/group_info.py").exists()
+    assert list(Path("alembic/versions").glob("0011*.py"))
+
+
+# ---- Подраздел «Очередь» (ADMIN-08, план 06-07) ----
+#
+# ⚠️ ЧТЕНИЕ ОЧЕРЕДИ ЗДЕСЬ ПРОВЕРЯЕТСЯ НА НАСТОЯЩИХ СПИСКАХ. Двойник ниже держит
+# очереди списками байтов и меняет их по-настоящему: снятие, проверенное по
+# факту вызова, зеленело бы и при удалении ВСЕХ совпадающих вхождений — то есть
+# ровно в том случае, ради запрета которого проверка и написана.
+
+QUEUE_DROP_URL = "/admin/queue/{account_id}/drop"
+
+
+class _FakeQueuePageRedis:
+    """Двойник клиента Redis для подраздела «Очередь»: списки, а не заглушки."""
+
+    def __init__(self, lists: dict[str, list[bytes]] | None = None):
+        self.lists: dict[str, list[bytes]] = lists or {}
+
+    def pipeline(self):
+        return _FakeQueuePagePipeline(self)
+
+    async def llen(self, key: str) -> int:
+        return len(self.lists.get(key, []))
+
+    async def lrange(self, key: str, start: int, stop: int) -> list[bytes]:
+        items = self.lists.get(key, [])
+        return items[start:] if stop == -1 else items[start : stop + 1]
+
+    async def lrem(self, key: str, count: int, value: bytes) -> int:
+        items = self.lists.get(key, [])
+        removed = 0
+        out: list[bytes] = []
+        for item in items:
+            if item == value and removed < count:
+                removed += 1
+                continue
+            out.append(item)
+        self.lists[key] = out
+        return removed
+
+    async def get(self, key: str):
+        return None
+
+
+class _FakeQueuePagePipeline:
+    def __init__(self, client: "_FakeQueuePageRedis"):
+        self._client = client
+        self._ops: list = []
+
+    def llen(self, key: str):
+        self._ops.append(("llen", (key,)))
+        return self
+
+    def lrange(self, key: str, start: int, stop: int):
+        self._ops.append(("lrange", (key, start, stop)))
+        return self
+
+    def get(self, key: str):
+        self._ops.append(("get", (key,)))
+        return self
+
+    async def execute(self):
+        return [await getattr(self._client, name)(*args) for name, args in self._ops]
+
+
+def _queue_task(task_id: str, group_name: str = "Группа «Барахолка»", **extra) -> bytes:
+    """Тело задачи ровно в той форме, в какой его кладёт постановщик."""
+    import json
+
+    body = {
+        "task_id": task_id,
+        "ad_id": 11,
+        "group_id": 22,
+        "account_id": 33,
+        "schedule_id": 44,
+        "user_id": 55,
+        "ad_text": "Текст объявления",
+        "ad_title": "Заголовок",
+        "ad_images": [],
+        "group_external_id": "-100123456789",
+        "group_name": group_name,
+        "created_at": "2026-08-22T10:00:00+00:00",
+    }
+    body.update(extra)
+    return json.dumps(body, ensure_ascii=False).encode()
+
+
+@pytest.mark.asyncio
+async def test_queue_subsection_answers_the_admin_and_shows_three_channels(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Подраздел отвечает 200 админу и делит экран на три канала.
+
+    Каналов три, и блоки у них РАЗНЫЕ по устройству: у WA и MAX есть строки
+    задач, у telegram строк нет вовсе (D-14). Сведённые в один список, они
+    заставили бы читать одну колонку одинаково там, где она означает разное.
+
+    ⚠️ ПОСТОРОННИЙ ПРОВЕРЯЕТСЯ ОТДЕЛЬНЫМ ТЕСТОМ, А НЕ ЗДЕСЬ. Оба клиентских
+    приспособления суиты наращивают ОДИН И ТОТ ЖЕ экземпляр клиента, и вход под
+    посторонним в этом же тесте подменил бы cookie администратора: утверждение
+    про 200 проверяло бы права не того, кого называет.
+    """
+    await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_FakeQueuePageRedis({})
+    ):
+        response = await admin_client.get("/admin/queue")
+    assert response.status_code == 200
+
+    html = response.text
+    for label in ("WhatsApp", "MAX", "Telegram"):
+        assert label in html, f"блок канала {label} не отрисован"
+
+
+@pytest.mark.asyncio
+async def test_the_queue_subsection_is_denied_to_an_outsider(
+    authed_client: AsyncClient,
+):
+    """Подраздел отвечает 403 постороннему: в нём лежат чужие объявления."""
+    assert (await authed_client.get("/admin/queue")).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_queue_rows_print_the_state_that_matches_each_task_body(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Две задачи — две строки, и состояние каждой соответствует её телу.
+
+    Свежепоставленная задача ждёт; задача с отложенностью в БУДУЩЕМ отложена.
+    Значение отложенности взято тем же выражением, каким его пишет WA-воркер, —
+    в миллисекундах: единая формула нарисовала бы здесь 1970 год, не упав.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    client = _FakeQueuePageRedis(
+        {
+            f"wa:queue:{account.id}": [
+                _queue_task("fresh-one", group_name="Группа Первая"),
+                _queue_task(
+                    "delayed-one",
+                    group_name="Группа Вторая",
+                    _retry_count=1,
+                    _delay_until=int((time.time() + 600) * 1000),
+                ),
+            ]
+        }
+    )
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    assert "Группа Первая" in html and "Группа Вторая" in html
+    assert "ждёт" in html
+    assert "отложена до" in html
+    assert "1970" not in html, (
+        "отложенность разобрана меркой чужого канала — дата выдумана, но "
+        "правдоподобна, и ничем себя не выдаёт"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_empty_queue_and_an_unreachable_redis_are_different_markup(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Пустая очередь и сломанный наблюдатель — РАЗНАЯ разметка, а не одна.
+
+    Слитые в одно, они сообщили бы «рассылать нечего» ровно тогда, когда
+    очередь стоит и её не видно. Недоступность внешнего источника — именованная
+    ошибка, никогда не пустота и никогда не 500.
+    """
+    await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_FakeQueuePageRedis({})
+    ):
+        empty = (await admin_client.get("/admin/queue")).text
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        blind = (await admin_client.get("/admin/queue")).text
+
+    assert "Очередь пуста" in empty
+    assert "Очередь пуста" not in blind, (
+        "сломанный наблюдатель показан пустой очередью — это ответ на вопрос, "
+        "ради которого в подраздел пришли, и ответ ложный"
+    )
+    assert "Redis" in blind, "недоступность источника не названа словами"
+
+
+@pytest.mark.asyncio
+async def test_the_telegram_queue_block_names_exactly_what_its_number_measures(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """У канала брокера — число задач и величина с ПРОВЕРЯЕМОЙ подписью.
+
+    ⚠️ ПОДПИСЬ НЕ ИМЕЕТ ПРАВА ЧИТАТЬСЯ КАК «ВОЗРАСТ САМОЙ СТАРОЙ ЗАДАЧИ». Этот
+    возраст лежит ВНУТРИ конверта брокера, распаковывать который запрещено
+    решением D-14; подпись, позволяющая прочитать величину так, была бы
+    измеренной на вид выдумкой. Измеряется время с последней зафиксированной
+    отправки по каналу — по журналу отправок, а не по содержимому очереди.
+    """
+    from app.models.send_log import SendLog
+
+    account = await _seed_account(db_session, account_type="tg_user")
+    db_session.add(
+        SendLog(
+            user_id=account.user_id,
+            group_id=None,
+            status="sent",
+            messenger_type="tg_user",
+            sent_at=datetime.now(timezone.utc) - timedelta(seconds=120),
+        )
+    )
+    await db_session.commit()
+
+    client = _FakeQueuePageRedis({"telegram": [b"opaque-1", b"opaque-2", b"opaque-3"]})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    assert "3" in html
+    assert "последней отправки" in html, (
+        "величина канала брокера не названа: подпись обязана называть то, что "
+        "измерено, а не оставлять читателя догадываться"
+    )
+    assert "самой старой задачи" not in html
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_queue_task_removes_exactly_one_and_comes_back(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Форма снятия убирает РОВНО ОДНУ задачу и возвращает на тот же подраздел."""
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis(
+        {key: [_queue_task("keep-me"), _queue_task("drop-me")]}
+    )
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        response = await admin_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"].startswith("/admin/queue")
+    assert len(client.lists[key]) == 1
+    assert b"keep-me" in client.lists[key][0]
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_queue_task_is_refused_to_an_outsider(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Форма снятия отвергает постороннего по правам и ничего не удаляет."""
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis({key: [_queue_task("drop-me")]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        response = await authed_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403
+    assert len(client.lists[key]) == 1, "задача снята запросом, который отвергнут"
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_queue_task_is_refused_when_it_comes_from_a_foreign_origin(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Гард происхождения стоит ПЕРЕД действием (T-06-DROP1).
+
+    Аутентификация проекта идёт cookie, поэтому браузер приложит её к
+    межсайтовой форме сам, и запрос со стороннего сайта неотличим от своего.
+    Чужому источнику причина отказа не сообщается: он не имеет права узнать
+    даже, существует ли такой аккаунт.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis({key: [_queue_task("drop-me")]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        response = await admin_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            headers={"Origin": "https://evil.example"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 403
+    assert len(client.lists[key]) == 1, "межсайтовый запрос снял чужую задачу"
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_queue_task_writes_no_send_log_row(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Снятие НЕ создаёт записи в журнале отправок (D-18).
+
+    Журнал отражает совершённые попытки отправки, а снятая задача попытки не
+    совершила. Запись о ней сделала бы историю пользователя неотличимой от
+    настоящего отказа отправки.
+    """
+    from sqlalchemy import func as sa_func, select as sa_select
+    from app.models.send_log import SendLog
+
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis({key: [_queue_task("drop-me")]})
+
+    before = (await db_session.execute(sa_select(sa_func.count(SendLog.id)))).scalar()
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        await admin_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            follow_redirects=False,
+        )
+    after = (await db_session.execute(sa_select(sa_func.count(SendLog.id)))).scalar()
+
+    assert before == after
+    assert client.lists[key] == [], "задача не снята — тест проверяет не тот путь"
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_queue_task_leaves_a_named_application_log_line(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """След остаётся именованной строкой журнала приложения (T-06-DROP3).
+
+    Привилегированная операция над ЧУЖОЙ сущностью без следа неотличима от
+    того, что её не было. Журнал подменяется, а не читается `caplog`-ом, по той
+    же причине, что у формы перезапуска выше.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis({key: [_queue_task("drop-me")]})
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=client
+    ), patch("app.pages.admin.logger") as log:
+        await admin_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            follow_redirects=False,
+        )
+
+    (event,), fields = log.info.call_args
+    assert event == "queue_task_dropped"
+    assert fields["account_id"] == account.id
+    assert fields["task_id"] == "drop-me"
+    assert "admin_user_id" in fields
+
+
+@pytest.mark.asyncio
+async def test_no_wholesale_queue_wipe_exists_in_the_markup_or_in_the_routes(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """ОТРИЦАТЕЛЬНЫЙ: действия, стирающего очередь целиком, нет нигде (D-17).
+
+    Одно нажатие уничтожило бы пачку чужих оплаченных рассылок без возможности
+    восстановления: задачи существуют ТОЛЬКО в очереди. Отсутствие закрепляется
+    проверкой, а не намерением — намерение не переживает следующий рефакторинг.
+    """
+    from app.pages.admin import router
+
+    await _seed_account(db_session, account_type="wa")
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_FakeQueuePageRedis({})
+    ):
+        html = (await admin_client.get("/admin/queue")).text
+
+    for marker in ("clear_queue", "/purge", "wipe"):
+        assert marker not in html, f"разметка несёт признак стирания очереди: {marker}"
+
+    wipe_routes = [
+        route.path
+        for route in router.routes
+        if any(
+            marker in getattr(route, "path", "")
+            for marker in ("clear", "purge", "wipe", "flush")
+        )
+    ]
+    assert wipe_routes == [], f"маршрут стирания очереди объявлен: {wipe_routes}"
+
+
+@pytest.mark.asyncio
+async def test_a_capped_queue_list_says_so_instead_of_just_showing_fewer_rows(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сработавший потолок НАЗЫВАЕТ себя подписью, а не проявляется коротко.
+
+    Молча усечённый перечень читается как «остальных задач нет» — то есть как
+    ответ на вопрос, ради которого администратор в подраздел и пришёл.
+    """
+    from app.application.admin.queue_rows import QUEUE_ROW_CAP
+
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis(
+        {key: [_queue_task(f"task-{n}") for n in range(QUEUE_ROW_CAP + 7)]}
+    )
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    assert str(QUEUE_ROW_CAP) in html, "потолок не назван числом"
+    assert str(QUEUE_ROW_CAP + 7) in html, "полная длина очереди не названа"
+
+
+@pytest.mark.asyncio
+async def test_queue_row_cells_carry_their_column_labels_for_narrow_screens(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Каждая ячейка строки несёт подпись колонки (Mobile Contract, M2).
+
+    На 860px шапка колонок скрывается правилом `app.css`, и подпись внутри
+    ячейки остаётся ЕДИНСТВЕННЫМ названием величины. Ячейка без подписи на
+    телефоне превращается в число без смысла.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    client = _FakeQueuePageRedis({f"wa:queue:{account.id}": [_queue_task("one")]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    row = html.split("<div data-row")[-1]
+    for column in ("Аккаунт", "Группа", "Состояние", "Действие"):
+        assert f"<span data-cell-label>{column}</span>" in row, (
+            f"ячейка колонки «{column}» осталась без подписи"
+        )
+
+
+# =============================================================================
+# План 06-08: подраздел «Логи»
+# =============================================================================
+#
+# ⚠️ ГЛАВНОЕ УТВЕРЖДЕНИЕ РАЗДЕЛА — `test_an_empty_answer_and_an_unavailable_
+# source_are_different_logs_markup`. Источник логов ОПЦИОНАЛЕН и остаётся таким
+# (D-28): боевые команды запуска и выката мониторинг не поднимают. Значит
+# недоступность — штатная ветка, и она обязана быть НАЗВАНА словами вместе с
+# командой подъёма. Пустой список вместо плашки читается как «ошибок нет» — то
+# есть отвечает на вопрос, ради которого администратор в подраздел и пришёл, и
+# отвечает неправдой.
+#
+# ⚠️ ТЕЛО СТРОКИ ЖУРНАЛА НЕ ЛОЖИТСЯ НА ПРИМИТИВ ТАБЛИЦЫ, И ЭТО РЕШЕНИЕ. Ячейка
+# таблицы объявлена с усечением многоточием; усечённая строка лога бесполезна
+# ровно в том случае, ради которого журнал открыли. Тело идёт примитивом текста,
+# который обязан читаться целиком, — тем самым, что Фаза 4 завела под текст
+# ошибки отправки.
+
+LOGS_URL = "/admin/logs"
+
+# Команда подъёма мониторинга — ровно та, что объявлена в перечне команд
+# проекта. Плашка без неё называла бы отказ, не давая выхода.
+MONITORING_UP_COMMAND = "just monitoring-start"
+
+
+def _log_line(
+    text: str = "таймаут отправки",
+    level: str = "error",
+    source: str = "web-broadcaster",
+    at: datetime | None = None,
+):
+    from app.services.loki_client import LogLine
+
+    return LogLine(
+        at=at or datetime(2026, 8, 22, 10, 0, tzinfo=timezone.utc),
+        level=level,
+        source=source,
+        text=text,
+    )
+
+
+def _log_window(lines=(), *, capped: bool = False, unavailable: bool = False):
+    from app.services.loki_client import LogWindow
+
+    return LogWindow(
+        lines=list(lines), capped=capped, unavailable=unavailable
+    )
+
+
+def _logs_source(window=None):
+    """Подмена чтения окна логов НА СТОРОНЕ СТРАНИЧНОГО МОДУЛЯ.
+
+    Подменяется имя, которым обработчик зовёт сервис: суита идёт без поднятого
+    источника, и подраздел обязан быть проверяем в каждом из трёх своих
+    состояний, ни одно из которых на живом стенде по заказу не воспроизвести.
+    """
+    return patch(
+        "app.pages.admin.query_range",
+        new=AsyncMock(return_value=window if window is not None else _log_window()),
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_logs_subsection_answers_the_admin(admin_client: AsyncClient):
+    """Подраздел отвечает администратору."""
+    with _logs_source():
+        response = await admin_client.get(LOGS_URL)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_the_logs_subsection_refuses_an_outsider(authed_client: AsyncClient):
+    """Постороннему подраздел не отвечает.
+
+    Клиент в тесте ОДИН: обе фикстуры наращивают один экземпляр, и запрос
+    администратором в том же тесте подменил бы cookie постороннего.
+    """
+    with _logs_source():
+        response = await authed_client.get(LOGS_URL)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_an_empty_answer_and_an_unavailable_source_are_different_logs_markup(
+    admin_client: AsyncClient,
+):
+    """Пустая выдача и недоступный источник рисуются РАЗНО.
+
+    Оба состояния дают ноль строк. Слитые в одну разметку, они сообщили бы
+    «ошибок нет» ровно тогда, когда прочитать их негде, — и администратор ушёл
+    бы искать причину в другом месте.
+    """
+    with _logs_source(_log_window(unavailable=True)):
+        dead = (await admin_client.get(LOGS_URL)).text
+    with _logs_source(_log_window()):
+        quiet = (await admin_client.get(LOGS_URL)).text
+
+    assert MONITORING_UP_COMMAND in dead, "плашка не называет команду подъёма"
+    assert "недоступен" in dead
+    assert "За окно записей нет" not in dead, (
+        "недоступный источник нарисован пустым состоянием — это ответ «ошибок "
+        "нет» на вопрос «что сломалось»"
+    )
+
+    assert "За окно записей нет" in quiet
+    assert MONITORING_UP_COMMAND not in quiet, (
+        "живой источник с пустой выдачей нарисован плашкой недоступности"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_capped_logs_list_says_so_instead_of_just_showing_fewer_lines(
+    admin_client: AsyncClient,
+):
+    """Сработавший потолок НАЗЫВАЕТСЯ подписью, а не проявляется короткой лентой.
+
+    Число потолка приезжает подстановкой из ЕДИНСТВЕННОЙ константы: выписанное
+    в разметке, оно разошлось бы с запрашиваемым пределом молча.
+    """
+    from app.services.loki_client import LOG_LINE_CAP
+
+    with _logs_source(_log_window([_log_line()], capped=True)):
+        capped = (await admin_client.get(LOGS_URL)).text
+    with _logs_source(_log_window([_log_line()])):
+        whole = (await admin_client.get(LOGS_URL)).text
+
+    assert str(LOG_LINE_CAP) in capped, "потолок не назван числом"
+    assert "Показаны последние" in capped
+    assert "Показаны последние" not in whole, (
+        "полная выдача объявила себя усечённой"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_logs_filter_chips_carry_the_subsections_own_base_path(
+    admin_client: AsyncClient,
+):
+    """Три оси рисуются компонентом библиотеки с базовым адресом ПОДРАЗДЕЛА.
+
+    Умолчания у компонента больше нет, и это ровно та ловушка, ради которой он
+    переезжал: чипсы с чужим адресом уводили бы администратора из своего
+    подраздела при КАЖДОМ клике, отвечая при этом 200.
+    """
+    with _logs_source():
+        html = (await admin_client.get(LOGS_URL)).text
+
+    for axis in ("level", "source", "window"):
+        assert f'data-chipset="{axis}"' in html, f"ось {axis} не нарисована"
+
+    hrefs = re.findall(r'class="chip[^"]*"[^>]*href="([^"]*)"', html)
+    assert hrefs, "чипсы не нарисованы вовсе"
+    for href in hrefs:
+        assert href.startswith(LOGS_URL), f"чипс ведёт из подраздела: {href}"
+
+
+@pytest.mark.asyncio
+async def test_each_logs_axis_marks_exactly_one_chip_as_chosen(
+    admin_client: AsyncClient,
+):
+    """На каждой оси отмечено РОВНО одно значение.
+
+    Ни одного отмеченного — экран, по которому не прочитать, что применено; два
+    — обещание отбора, которого запрос не делал.
+    """
+    with _logs_source():
+        html = (await admin_client.get(f"{LOGS_URL}?level=warn&window=24h")).text
+
+    for axis in ("level", "source", "window"):
+        group = html.split(f'data-chipset="{axis}"')[1].split("</div>")[0]
+        assert group.count("chip--on") == 1, f"ось {axis}: {group.count('chip--on')}"
+
+
+@pytest.mark.asyncio
+async def test_a_logs_axis_value_outside_the_declared_set_changes_nothing(
+    admin_client: AsyncClient,
+):
+    """Мусор из адреса не попадает ни в разметку, ни в запрос к источнику.
+
+    Значение приезжает из ссылки, закладки или чужого сообщения, а уходит в
+    ЧУЖОЙ язык запросов: подставленное сырым, оно ломает запрос, а принятое за
+    отбор — рисует администратору фильтр, которого он не задавал.
+    """
+    poison = 'x"} |= "'
+    reader = AsyncMock(return_value=_log_window())
+
+    with patch("app.pages.admin.query_range", new=reader):
+        response = await admin_client.get(
+            LOGS_URL, params={"level": poison, "source": poison, "window": poison}
+        )
+
+    assert response.status_code == 200
+    assert poison not in response.text
+    logql = reader.await_args.args[0]
+    assert poison not in logql, f"мусор уехал в запрос: {logql}"
+
+
+@pytest.mark.asyncio
+async def test_the_logs_subsection_carries_no_polling_attributes(
+    admin_client: AsyncClient,
+):
+    """Обновление — КНОПКОЙ, опроса нет (D-29).
+
+    Причин две, и обе названы решением: администратор читает и ищет глазами, а
+    лента, прыгающая под курсором, мешает; и каждый запрос здесь — поход во
+    внешний источник по сети, а не чтение из памяти.
+
+    ⚠️ УТВЕРЖДЕНИЕ АДРЕСОВАНО РАЗМЕТКЕ ПОДРАЗДЕЛА, А НЕ ВСЕЙ ВЫДАЧЕ. Шелл
+    проекта несёт в комментарии объяснение, почему у бесконечной прокрутки
+    сменился признак подмены, и поиск по готовой странице засчитал бы это
+    объяснение за опрос — то есть краснел бы на чужом файле, ничего не сообщая
+    об этом подразделе.
+    """
+    subsection = (TEMPLATES_ROOT / "admin" / "logs.html").read_text(
+        encoding="utf-8"
+    ) + (
+        TEMPLATES_ROOT / "admin" / "includes" / "log_row.html"
+    ).read_text(encoding="utf-8")
+
+    for marker in ("hx-get", "hx-trigger", "hx-post"):
+        assert marker not in subsection, f"опрос в подразделе логов: {marker}"
+
+    with _logs_source():
+        html = (await admin_client.get(LOGS_URL)).text
+
+    assert "Обновить" in html, "кнопки обновления нет — читать нечем"
+
+
+@pytest.mark.asyncio
+async def test_the_logs_search_text_comes_back_into_the_field_and_is_escaped(
+    admin_client: AsyncClient,
+):
+    """Текст поиска возвращается в поле и экранируется разметкой.
+
+    Не вернувшись, он оставил бы человека без ответа на вопрос «что я ищу».
+    Не экранированный — вышел бы из атрибута наружу.
+    """
+    with _logs_source():
+        html = (await admin_client.get(LOGS_URL, params={"q": 'сбой "45"'})).text
+
+    assert "&#34;45&#34;" in html or "&quot;45&quot;" in html, (
+        "текст поиска не вернулся в поле либо вернулся неэкранированным"
+    )
+    assert 'value="сбой "45""' not in html
+
+
+@pytest.mark.asyncio
+async def test_a_logs_body_uses_the_read_in_full_primitive_not_the_ellipsis_cell(
+    admin_client: AsyncClient,
+):
+    """Тело строки журнала идёт примитивом, читаемым ЦЕЛИКОМ.
+
+    Ячейка таблицы объявлена с усечением многоточием, и стектрейс в ней
+    оборвался бы ровно на той части, ради которой журнал открыли. Примитив
+    длинного текста заведён Фазой 4 под ровно этот случай.
+    """
+    text = "Traceback: " + "очень длинная строка ошибки " * 12
+
+    with _logs_source(_log_window([_log_line(text=text)])):
+        html = (await admin_client.get(LOGS_URL)).text
+
+    assert 'data-longtext="mono"' in html, "тело строки не читается целиком"
+    body = html.split('data-longtext="mono"')[1]
+    assert text[:40] in body
+
+
+@pytest.mark.asyncio
+async def test_a_worker_row_leads_to_the_logs_of_that_worker(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Из строки воркера один переход ведёт в логи ЭТОГО воркера (D-10).
+
+    «Живой лог» в самой строке не делается: он стал бы вторым независимым путём
+    чтения логов рядом с подразделом, а у остановленного по простою контейнера
+    живого лога нет вовсе — кнопка была бы мёртвой у большинства строк.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+
+    with patch(
+        "app.services.ops_state._get_redis", return_value=_fake_redis([])
+    ):
+        workers = (await admin_client.get("/admin/workers")).text
+
+    href = f"{LOGS_URL}?source={account.id}"
+    assert href in workers, "строки воркера в логи не ведут"
+
+    reader = AsyncMock(return_value=_log_window())
+    with patch("app.pages.admin.query_range", new=reader):
+        response = await admin_client.get(href)
+
+    assert response.status_code == 200
+    assert f'account_id="{account.id}"' in reader.await_args.args[0], (
+        "переход по ссылке из строки не выбрал источник этого воркера"
+    )
+
+
+# =============================================================================
+# Подраздел «Обзор»: четыре плитки ключевых показателей (план 06-10, D-37…D-40)
+# =============================================================================
+#
+# ⚠️ ГЛАВНОЕ УТВЕРЖДЕНИЕ БЛОКА ОДНО: НИ ОДНО ЧИСЛО «ОБЗОРА» НЕ РАСХОДИТСЯ С ТЕМ,
+# ЧТО ВИДИТ ПОЛЬЗОВАТЕЛЬ. Расхождение такого рода не роняет ни один тест и не
+# даёт пятисотки — оно просто печатает два разных числа на один вопрос, и первым
+# его замечает не разработчик, а человек, принимающий по этим числам решение.
+
+OVERVIEW_URL = "/admin"
+
+# Подписи плиток. Читаются ЗДЕСЬ по одному разу и адресуют утверждения ячейке, а
+# не документу: «3» на странице с четырьмя числами прошло бы за любое из них.
+TILE_USERS = "Пользователей"
+TILE_PAYING = "Платящих"
+TILE_QUEUE = "Задач в очереди"
+TILE_ERRORS = "Ошибок за сутки"
+
+# Слова величины времени очереди. ТА ЖЕ строка, что уже отгружена подразделом
+# «Очередь»: если «Обзор» и «Очередь» назовут одно число двумя именами,
+# администратор не сможет понять, что это одно и то же число.
+QUEUE_TIME_WORDS = "с последней отправки по каналу"
+
+
+def _tile(html: str, label: str) -> str:
+    """Разметка ОДНОЙ плитки, найденной по её подписи."""
+    chunks = [
+        chunk for chunk in html.split('<section class="card')[1:] if label in chunk
+    ]
+    assert len(chunks) == 1, (
+        f"плитка «{label}» найдена {len(chunks)} раз — утверждение адресовать нечему"
+    )
+    return chunks[0]
+
+
+def _tile_value(html: str, label: str) -> str:
+    """Крупное число плитки."""
+    found = re.search(r"data-metric-value[^>]*>([^<]*)<", _tile(html, label))
+    assert found, f"у плитки «{label}» нет крупного числа"
+    return found.group(1).strip()
+
+
+async def _seed_send(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    sent_at: datetime,
+    status: str = "ok",
+    messenger_type: str = "wa",
+) -> None:
+    """Запись журнала с ЯВНЫМ временем: без него она попала бы в окно «сейчас»."""
+    from app.models.send_log import SendLog
+
+    db.add(
+        SendLog(
+            user_id=user_id,
+            group_id=None,
+            ad_title="Объявление",
+            ad_text="Текст",
+            ad_images=[],
+            group_name="Группа",
+            messenger_type=messenger_type,
+            task_id="task-1",
+            status=status,
+            sent_at=sent_at,
+        )
+    )
+    await db.commit()
+
+
+async def _admin_user(db: AsyncSession):
+    from sqlalchemy import select
+    from app.models.user import User
+
+    return (await db.execute(select(User))).scalars().first()
+
+
+async def _seed_user(db: AsyncSession, email: str, *, created_at: datetime):
+    """Пользователь с ЯВНЫМ моментом регистрации — источник прироста за неделю."""
+    from app.models.user import User
+
+    user = User(
+        email=email,
+        password_hash="x",
+        name="U",
+        timezone="UTC",
+        created_at=created_at,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def _seed_subscription(
+    db: AsyncSession, user_id: int, *, expires_at: datetime, free: bool = False
+):
+    from app.models.subscription import Subscription
+
+    row = Subscription(
+        user_id=user_id,
+        expires_at=expires_at,
+        is_active=True,
+        has_free_access=free,
+    )
+    db.add(row)
+    await db.commit()
+    return row
+
+
+@pytest.mark.asyncio
+async def test_the_overview_users_tile_counts_the_week_by_the_registration_moment(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Плитка людей: всего и прирост за неделю по моменту регистрации."""
+    now = datetime.now(timezone.utc)
+    await _seed_user(db_session, "fresh@test.com", created_at=now - timedelta(days=2))
+    await _seed_user(db_session, "old@test.com", created_at=now - timedelta(days=40))
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+
+    # Три пользователя: администратор (зарегистрирован фикстурой только что) и
+    # двое посеянных. Прирост за неделю — администратор и свежий.
+    assert _tile_value(html, TILE_USERS) == "3"
+    assert "+2 за неделю" in _tile(html, TILE_USERS)
+
+
+def test_the_overview_week_caption_is_still_true():
+    """Подпись «за неделю» и окно счёта обязаны означать одно и то же.
+
+    ⚠️ ЧИСЛО В КОПИРАЙТ НЕ КОПИРУЕТСЯ, поэтому в подписи стоит СЛОВО, а не «за
+    7 дней». Цена такого решения ровно одна: слово не меняется вместе с
+    константой. Правка окна на десять дней оставила бы подпись прежней, и
+    администратор читал бы «за неделю» под числом за декаду — величина
+    называлась бы не тем, что посчитано. Этот тест и есть та цена, уплаченная
+    вперёд.
+    """
+    from app.application.admin.overview_stats import NEW_USERS_WINDOW
+
+    assert NEW_USERS_WINDOW == timedelta(days=7), (
+        "окно прироста разъехалось со словом «за неделю» в подписи плитки: "
+        "поправьте либо константу, либо подпись — но не одно без другого"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_overview_paying_tile_leaves_the_comped_user_out(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """ТРИ условия, а не два: льготный в счёт платящих не идёт (D-38).
+
+    ⚠️ У пользователя с бесплатным доступом дверь открыта, а денег нет. Слив его
+    в один счётчик с платящими, «Обзор» сообщил бы, что АДМИНИСТРАТИВНАЯ ЛЬГОТА
+    накручивает выручку — в отчёте, по которому принимают решение о цене.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Отсчёт берётся ДО посева, а не назначается числом: регистрация
+    # администратора фикстурой сама заводит ему строку подписки, и вписанная
+    # сюда «единица» проверяла бы состав фикстуры, а не правило отбора.
+    before = int(_tile_value((await admin_client.get(OVERVIEW_URL)).text, TILE_PAYING))
+
+    payer = await _seed_user(db_session, "payer@test.com", created_at=now)
+    comped = await _seed_user(db_session, "comped@test.com", created_at=now)
+    expired = await _seed_user(db_session, "expired@test.com", created_at=now)
+
+    await _seed_subscription(db_session, payer.id, expires_at=now + timedelta(days=10))
+    await _seed_subscription(
+        db_session, comped.id, expires_at=now + timedelta(days=10), free=True
+    )
+    await _seed_subscription(db_session, expired.id, expires_at=now - timedelta(days=1))
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+
+    # Трое посеяны, прибавился РОВНО ОДИН: льготный не платит, истёкший не
+    # платит больше. Три условия отбора, а не два.
+    assert int(_tile_value(html, TILE_PAYING)) == before + 1
+
+
+@pytest.mark.asyncio
+async def test_the_overview_revenue_caption_is_the_payers_times_the_price(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Подпись выручки = платящие × цена доступа, через ОБЩИЙ денежный глобал.
+
+    Собственное форматирование уронило бы раздел на нечисловом значении: общий
+    глобал проверяет конечность значения, и это уже оплачено планом 05-09.
+    """
+    from decimal import Decimal
+
+    from app.pages.common import format_amount
+
+    now = datetime.now(timezone.utc)
+    for index in range(2):
+        payer = await _seed_user(db_session, f"p{index}@test.com", created_at=now)
+        await _seed_subscription(
+            db_session, payer.id, expires_at=now + timedelta(days=10)
+        )
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+    tile = _tile(html, TILE_PAYING)
+
+    # Множитель берётся ИЗ САМОЙ ПЛИТКИ: утверждение проверяет, что деньги под
+    # числом посчитаны по ТОМУ ЖЕ числу, а не по второму множеству рядом.
+    shown = int(_tile_value(html, TILE_PAYING))
+    assert shown >= 2, tile
+    expected = format_amount(Decimal(test_settings.subscription_price) * shown)
+    assert f"MRR {expected}" in tile, expected
+
+
+@pytest.mark.asyncio
+async def test_the_overview_queue_tile_sums_the_three_sources(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Плитка очереди суммирует три источника, объявленных подразделом «Очередь»."""
+    wa = await _seed_account(db_session, account_type="wa")
+    max_account = await _seed_account(db_session, account_type="max")
+
+    client = _FakeQueuePageRedis(
+        {
+            "telegram": [b"a", b"b", b"c"],
+            f"wa:queue:{wa.id}": [b"x", b"y"],
+            f"max:queue:{max_account.id}": [b"z"],
+        }
+    )
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert _tile_value(html, TILE_QUEUE) == "6"
+
+
+@pytest.mark.asyncio
+async def test_the_overview_queue_tile_says_unknown_and_not_zero_when_redis_is_down(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сломанный наблюдатель даёт НЕИЗВЕСТНОСТЬ, а не ноль.
+
+    ⚠️ Ноль читается как «очередь пуста» — то есть как ОТВЕТ на вопрос, которого
+    мы не знаем. Администратор, увидев его в аварии, решит, что рассылать нечего.
+    """
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        response = await admin_client.get(OVERVIEW_URL)
+
+    html = response.text
+    assert response.status_code == 200
+    assert _tile_value(html, TILE_QUEUE) == "—"
+    assert "title=" in _tile(html, TILE_QUEUE), (
+        "прочерк без названной причины: он читается как отказ, а причина у него есть"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_overview_errors_tile_takes_the_rolling_day_and_its_delta(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Окно суточное, дельта — к предыдущим суткам (D-40)."""
+    admin = await _admin_user(db_session)
+    now = datetime.now(timezone.utc)
+
+    for _ in range(3):
+        await _seed_send(
+            db_session, admin.id, sent_at=now - timedelta(hours=2), status="fail"
+        )
+    await _seed_send(
+        db_session, admin.id, sent_at=now - timedelta(hours=30), status="fail"
+    )
+
+    html = (await admin_client.get(OVERVIEW_URL)).text
+    tile = _tile(html, TILE_ERRORS)
+
+    assert _tile_value(html, TILE_ERRORS) == "3"
+    assert "+2" in tile, tile
+    # Рост числа ошибок успехом не является: тон дельты ИНВЕРТИРОВАН.
+    assert 'data-tone="danger"' in tile, tile
+
+
+@pytest.mark.asyncio
+async def test_the_overview_error_number_matches_the_users_own_dashboard(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Число ошибок «Обзора» совпадает с числом на дашборде того же человека.
+
+    ⚠️ ЭТО И ЕСТЬ ПРИЧИНА, ПО КОТОРОЙ ОКНО СУТОЧНОЕ, А НЕ ЧАСОВОЕ ИЗ МАКЕТА.
+    Часовое окно дало бы администратору и пользователю разные числа об одном и
+    том же периоде, и оба считали бы своё верным.
+    """
+    admin = await _admin_user(db_session)
+    now = datetime.now(timezone.utc)
+    await _seed_send(
+        db_session, admin.id, sent_at=now - timedelta(hours=3), status="fail"
+    )
+    await _seed_send(
+        db_session,
+        admin.id,
+        sent_at=now - timedelta(hours=5),
+        status="account_disconnected",
+    )
+    await _seed_send(db_session, admin.id, sent_at=now - timedelta(hours=1))
+
+    overview = (await admin_client.get(OVERVIEW_URL)).text
+    dashboard = (await admin_client.get("/dashboard")).text
+
+    assert _tile_value(overview, TILE_ERRORS) == _tile_value(dashboard, "Ошибок")
+    assert _tile_value(overview, TILE_ERRORS) == "2"
+
+
+@pytest.mark.asyncio
+async def test_the_overview_names_the_queue_time_exactly_as_the_queue_subsection_does(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Одно число — ОДНИ слова на обоих подразделах.
+
+    ⚠️ ПОДПИСЬ СРАВНИВАЕТСЯ ДОСЛОВНО, А НЕ «ПО СМЫСЛУ». Два имени одной величины
+    на двух экранах администратор прочитает как две РАЗНЫЕ величины и станет
+    искать между ними расхождение, которого нет. Слово «лаг» тут не годится ни
+    на одном из экранов: оно читается как возраст самой старой задачи, а он
+    лежит внутри конверта брокера и решением D-14 не читается вовсе.
+    """
+    account = await _seed_account(db_session, account_type="tg_user")
+    await _seed_send(
+        db_session,
+        account.user_id,
+        sent_at=datetime.now(timezone.utc) - timedelta(seconds=120),
+        messenger_type="tg_user",
+    )
+
+    client = _FakeQueuePageRedis({"telegram": [b"one", b"two"]})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        overview = (await admin_client.get(OVERVIEW_URL)).text
+        queue = (await admin_client.get("/admin/queue")).text
+
+    caption = re.search(
+        r'<span class="mono[^"]*"[^>]*>(с последней отправки по каналу[^<]*)</span>',
+        queue,
+    )
+    assert caption, "подраздел «Очередь» перестал печатать величину времени"
+
+    assert QUEUE_TIME_WORDS in overview, "«Обзор» не назвал величину времени вовсе"
+    assert caption.group(1) in overview, (
+        "«Обзор» и «Очередь» называют одно число разными словами: "
+        f"очередь печатает {caption.group(1)!r}"
+    )
+    assert "лаг" not in overview and "самой старой задачи" not in overview
+
+
+@pytest.mark.asyncio
+async def test_the_overview_answers_two_hundred_with_an_unreachable_redis(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сломанный наблюдатель не роняет «Обзор»: страница обязана открыться."""
+    await _seed_account(db_session, account_type="wa")
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        response = await admin_client.get(OVERVIEW_URL)
+
+    assert response.status_code == 200
+    assert TILE_QUEUE in response.text
+
+
+@pytest.mark.asyncio
+async def test_no_mockup_values_reached_the_overview_tiles(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Ни одно нарисованное в макете число не доехало до плиток «Обзора».
+
+    Число из макета, дожившее до прода, читается администратором как
+    ИЗМЕРЕННОЕ, и в аварии он примет решение по нарисованной цифре.
+    """
+    html = (await admin_client.get(OVERVIEW_URL)).text
+
+    for marker in ("621 000", "18 д", "4 ч", "ОШИБОК ЗА ЧАС", "Ошибок за час"):
+        assert marker not in html, marker
+
+
+# =============================================================================
+# Блок инцидентов на «Обзоре» (план 06-10, D-43…D-48)
+# =============================================================================
+#
+# ⚠️ БЛОК ПОКАЗЫВАЕТ ТОЛЬКО СЛОМАННОЕ СЕЙЧАС. Инцидент есть СОСТОЯНИЕ, а не
+# событие: он держится, пока не починено, и исчезает сам, когда неисправность
+# ушла (D-43, D-44). Строк о восстановлении здесь не бывает ни в каком виде —
+# для них понадобилась бы история, то есть трижды отклонённая таблица.
+#
+# ⚠️ СЛОМАННЫЙ НАБЛЮДАТЕЛЬ ДАЁТ ЧАСТИЧНУЮ КАРТИНУ, НАЗВАННУЮ ЧАСТИЧНОЙ.
+# Молчаливое исчезновение одного из пяти признаков — худший из исходов: блок
+# выглядит полным и таковым не является, и администратор читает «всё остальное
+# в порядке» там, где остального просто не посчитали.
+
+INCIDENTS_HEADING = "Инциденты"
+INCIDENTS_EMPTY_HEADING = "Сейчас ничего не сломано"
+INCIDENT_LINK_LABEL = "Чинить"
+
+# Пять видов и их подписи в слоте «источник» — по одному разу и здесь.
+INCIDENT_KIND_LABELS = {
+    "worker_stuck": "воркер",
+    "account_down": "аккаунт",
+    "failure_spike": "отправка",
+    "payment_stuck": "платежи",
+    "beat_silent": "планировщик",
+}
+
+
+def _incident_rows(html: str) -> list[str]:
+    """Разметка строк блока инцидентов."""
+    return [chunk.split("</div>")[0] for chunk in html.split("<div data-incident-row")[1:]]
+
+
+async def _seed_down_account(db: AsyncSession, status: str = "disconnected"):
+    """Отвалившийся аккаунт — самый дешёвый способ поднять инцидент из базы."""
+    account = await _seed_account(db, account_type="wa", status=status)
+    account.last_synced_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    await db.commit()
+    return account
+
+
+@pytest.mark.asyncio
+async def test_the_incident_board_says_nothing_is_broken_when_nothing_is(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Пустой блок — ВАЛИДНЫЙ и ожидаемый ответ, а не отсутствие данных.
+
+    ⚠️ И формулировка обязана сказать ДВЕ вещи: что всё в порядке И что список
+    чистит себя сам. Без второй администратор станет искать кнопку «закрыть»,
+    которой нет и не будет (D-44).
+    """
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert INCIDENTS_HEADING in html, "блока инцидентов на «Обзоре» нет вовсе"
+    assert INCIDENTS_EMPTY_HEADING in html
+    assert "вручную" in html, (
+        "пустое состояние не сказало, что список очищается сам: администратор "
+        "пойдёт искать кнопку «закрыть»"
+    )
+    assert not _incident_rows(html), "здоровый сервис напечатал строку инцидента"
+
+
+@pytest.mark.asyncio
+async def test_a_raised_incident_prints_a_row_with_time_text_and_a_link(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Поднятый признак печатает строку: время, подпись вида, текст и переход."""
+    account = await _seed_down_account(db_session)
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    rows = _incident_rows(html)
+    assert len(rows) == 1, rows
+    row = rows[0]
+
+    assert INCIDENT_KIND_LABELS["account_down"] in row, row
+    assert str(account.id) in row, row
+    assert INCIDENT_LINK_LABEL in row, row
+    assert f'href="/admin/users/{account.user_id}"' in row, row
+
+
+@pytest.mark.asyncio
+async def test_every_incident_kind_has_a_label_a_tone_and_a_living_route(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Все пять видов названы, окрашены и ведут по адресу, который существует.
+
+    ⚠️ АДРЕС ПРОВЕРЯЕТСЯ ПРОТИВ ЖИВЫХ МАРШРУТОВ ПРИЛОЖЕНИЯ, а не против самого
+    себя. Ссылка, совпадающая с объявлением и никуда не ведущая, — это ровно
+    то, что видит администратор в аварии: он жмёт её и получает 404 вместо
+    подраздела, в котором чинят.
+    """
+    from app.application.admin.incidents import (
+        INCIDENT_DESTINATIONS,
+        INCIDENT_KIND_ACCOUNT_DOWN,
+    )
+    from app.main import create_app
+
+    assert set(INCIDENT_DESTINATIONS) == set(INCIDENT_KIND_LABELS), (
+        "перечень видов разъехался с подписями: вид без подписи напечатал бы "
+        "строку без имени источника"
+    )
+
+    # Живые маршруты приложения — множество путей, а не догадка о них.
+    routes = {
+        getattr(route, "path", "")
+        for route in create_app(settings=test_settings).routes
+    }
+
+    for kind, root in INCIDENT_DESTINATIONS.items():
+        path = root.split("?")[0].rstrip("/")
+        # У адреса карточки пользователя путь параметризован: сравнивать его
+        # надо с шаблоном маршрута, а не с подставленным идентификатором.
+        expected = "/admin/users/{user_id}" if kind == INCIDENT_KIND_ACCOUNT_DOWN else path
+        assert expected in routes, (
+            f"вид {kind} ведёт по адресу {root!r}, которому в приложении не "
+            f"соответствует ни один маршрут"
+        )
+
+
+@pytest.mark.asyncio
+async def test_incident_rows_come_freshest_first(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Свежая авария важнее давней: первая строка отвечает «что чинить первым»."""
+    old = await _seed_down_account(db_session)
+    fresh = await _seed_account(db_session, account_type="max", status="sync_failed")
+    fresh.last_synced_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    old.last_synced_at = datetime.now(timezone.utc) - timedelta(days=3)
+    await db_session.commit()
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    rows = _incident_rows(html)
+    assert len(rows) == 2, rows
+    assert str(fresh.id) in rows[0], rows
+    assert str(old.id) in rows[1], rows
+
+
+@pytest.mark.asyncio
+async def test_a_capped_incident_board_names_its_own_ceiling(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Сработавший потолок НАЗЫВАЕТ СЕБЯ, и число приезжает подстановкой.
+
+    Молча усечённый перечень читается как «других инцидентов нет» — то есть как
+    ответ на вопрос, ради которого администратор в блок и пришёл.
+    """
+    from app.application.admin.incidents import INCIDENT_LIST_CAP
+
+    for _ in range(INCIDENT_LIST_CAP + 2):
+        await _seed_down_account(db_session)
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert len(_incident_rows(html)) == INCIDENT_LIST_CAP
+    assert f"Показаны первые {INCIDENT_LIST_CAP}" in html, (
+        "потолок сработал молча: перечень укоротился, и об этом не сказано"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_incident_board_carries_no_recovery_rows(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Зелёных строк «восстановлен» нет ни в разметке, ни в шаблоне (D-46).
+
+    Восстановление — СОБЫТИЕ, а не состояние; для него нужна история, то есть
+    трижды отклонённая таблица. Строка о восстановлении рядом со строками об
+    авариях читается как часть текущего состояния сервиса.
+    """
+    await _seed_down_account(db_session)
+
+    client = _FakeQueuePageRedis({})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    assert "осстановлен" not in html, html[:200]
+    for name in ("admin/overview.html", "admin/includes/incident_row.html"):
+        source = (TEMPLATES_ROOT / name).read_text(encoding="utf-8")
+        assert "осстановлен" not in source, name
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_redis_gives_a_partial_incident_board_that_says_so(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Частичная картина НАЗЫВАЕТСЯ частичной, а не выдаёт себя за полную.
+
+    ⚠️ Признак «воркер не забирает работу» считается из живости, а живость
+    хранится только в Redis. При недоступном Redis он не считается вовсе — и
+    молчание об этом было бы худшим исходом: блок выглядел бы полным, показывал
+    бы инциденты из базы и умалчивал, что пятого признака в нём нет.
+    """
+    await _seed_down_account(db_session)
+
+    with patch("app.services.ops_state._get_redis", return_value=None):
+        response = await admin_client.get(OVERVIEW_URL)
+
+    html = response.text
+    assert response.status_code == 200
+    assert _incident_rows(html), "инциденты из базы исчезли вместе с наблюдателем"
+    assert "картина неполная" in html, (
+        "блок не сказал, что часть признаков посчитать нечем"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stuck_worker_incident_comes_from_the_liveness_values(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Признак живости доезжает до блока ЗНАЧЕНИЯМИ через переходник «Обзора».
+
+    ⚠️ ПРИКЛАДНОЙ МОДУЛЬ ПРИЗНАКОВ КЛИЕНТОВ НЕ ЗНАЕТ И ЗНАТЬ НЕ ДОЛЖЕН: он
+    принимает уже решённую живость, и поэтому пять признаков проверяются суитой
+    без единой поднятой службы. Переходник от формы сервиса к форме модуля живёт
+    ЗДЕСЬ, на стороне потребителя.
+    """
+    account = await _seed_account(db_session, account_type="wa", status="active")
+
+    # Непустая очередь И несвежий heartbeat: работа есть, а делать её некому.
+    client = _FakeQueuePageRedis({f"wa:queue:{account.id}": [b"a", b"b"]})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get(OVERVIEW_URL)).text
+
+    rows = _incident_rows(html)
+    assert len(rows) == 1, rows
+    assert INCIDENT_KIND_LABELS["worker_stuck"] in rows[0], rows[0]
+    assert 'href="/admin/workers"' in rows[0], rows[0]
+
+
+def test_the_incident_module_still_knows_no_client_of_an_external_service():
+    """Переходник не втащил клиент брокера в прикладной модуль признаков.
+
+    Стык, за который план 06-04 отвечал прямо: если бы модуль признаков стал
+    импортировать сервис оперативного состояния, суита пяти признаков потребовала
+    бы поднятого стенда — и перестала бы ловить их регрессии на каждом прогоне.
+    """
+    source = Path("app/application/admin/incidents.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported += [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+
+    forbidden = [
+        name
+        for name in imported
+        if any(marker in name.lower() for marker in ("redis", "docker", "httpx", "ops_state"))
+    ]
+    assert not forbidden, forbidden
+
+
+# =============================================================================
+# План 06-14: сквозная проверка фазы — шесть подразделов как ОДНО целое
+# =============================================================================
+#
+# ⚠️ ЭТО НЕ ПОВТОР ТЕСТОВ ОТДЕЛЬНЫХ ПОДРАЗДЕЛОВ. Тесты выше проверяют
+# СОДЕРЖИМОЕ каждого подраздела — плитки «Обзора», строки «Очереди», плашку
+# «Логов». Обход ниже проверяет другое: что после тринадцати планов, каждый из
+# которых правил ОДИН И ТОТ ЖЕ страничный модуль и ОДИН И ТОТ ЖЕ файл стилей,
+# ни один подраздел не потерял вкладки, не сменил подсветку, не открылся
+# постороннему и не начал ронять 500 при отсутствующих внешних службах.
+#
+# ⚠️ ОБХОД ПАРАМЕТРИЗОВАН, А НЕ ЗАЦИКЛЕН, И ЭТО РАЗНИЦА ПО СУЩЕСТВУ. Цикл
+# внутри одного теста останавливается на ПЕРВОМ упавшем адресе, и о состоянии
+# остальных пяти отчёт молчит; на приёмке фазы это ровно та потеря сведений,
+# ради которой обход и заводится — «сломан один» и «сломаны все шесть» суть
+# разные диагнозы. Параметризация даёт шесть независимых случаев в отчёте.
+#
+# ⚠️ ОТЛИЧИЕ ОТ ОБХОДА ПЛАНА 06-01, СТОЯЩЕГО ВЫШЕ. Тот утверждает по ОДНОМУ
+# свойству на шесть адресов (все отвечают 200; признак активности встречается
+# один раз). Этот утверждает СОСТАВ свойств на КАЖДОМ адресе и добавляет то,
+# чего у обхода 06-01 нет и быть не могло: активная вкладка ведёт ИМЕННО на
+# текущий подраздел (счёт вхождений этого не доказывает — единственный признак
+# на чужой вкладке дал бы тот же счёт), и обе внешние службы отсутствуют
+# ОДНОВРЕМЕННО.
+
+# Тройки «адрес, ключ, подпись» — из единственного объявления перечня. Второй
+# копией шести адресов обход разъехался бы с продуктом молча.
+SUBSECTION_SWEEP = tuple(
+    pytest.param(tab["href"], tab["key"], tab["label"], id=tab["key"])
+    for tab in ADMIN_TABS
+)
+
+
+def _tabs_markup(html: str) -> str:
+    """Разметка блока вкладок отданной страницы.
+
+    Утверждения адресуются блоку, а не документу: `href="/admin/logs"` есть и в
+    ссылке строки воркера «посмотреть логи», и в плашке инцидента, — то есть
+    поиск по всей странице зеленел бы при начисто пропавших вкладках.
+    """
+    start = html.index("<nav data-subtabs")
+    return html[start : html.index("</nav>", start)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_each_subsection_still_carries_all_six_tabs(
+    admin_client: AsyncClient, url: str, key: str, label: str
+):
+    """Каждый из шести адресов отвечает 200 и несёт ПОЛНЫЙ перечень вкладок.
+
+    Потеря вкладок — самый дешёвый способ для подраздела стать недостижимым, не
+    став при этом сломанным: маршрут отвечает 200, страница рисуется, а уйти с
+    неё некуда. Обнаруживается такое только глазами, поэтому утверждение стоит
+    здесь.
+    """
+    response = await admin_client.get(url)
+    assert response.status_code == 200, url
+
+    tabs = _tabs_markup(response.text)
+    hrefs = re.findall(r'<a class="subtab" href="([^"]+)"', tabs)
+    assert hrefs == list(SUBSECTION_URLS), (
+        f"{url}: перечень вкладок разъехался с ADMIN_TABS — {hrefs}"
+    )
+    for tab in ADMIN_TABS:
+        assert tab["label"] in tabs, f"{url}: пропала подпись «{tab['label']}»"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_each_subsection_marks_its_own_tab_and_only_its_own(
+    admin_client: AsyncClient, url: str, key: str, label: str
+):
+    """Признак активности стоит РОВНО ОДИН раз и ведёт на ТЕКУЩИЙ подраздел.
+
+    ⚠️ СЧЁТ ВХОЖДЕНИЙ ЭТОГО НЕ ДОКАЗЫВАЕТ. Единственный признак, уехавший на
+    соседнюю вкладку, даёт ту же единицу — и подраздел подсвечивал бы чужое имя,
+    оставаясь зелёным. Поэтому утверждение адресуется АДРЕСУ помеченного якоря.
+    """
+    tabs = _tabs_markup((await admin_client.get(url)).text)
+
+    assert tabs.count("data-subtab-active") == 1, url
+    marked = re.findall(
+        r'<a class="subtab" href="([^"]+)" data-subtab-active', tabs
+    )
+    assert marked == [url], (
+        f"{url}: активная вкладка ведёт на {marked} — подсвечен чужой подраздел"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_each_subsection_keeps_the_admin_section_highlighted(
+    admin_client: AsyncClient, url: str, key: str, label: str
+):
+    """Раздел «Админ-панель» подсвечен в навигации шелла на каждом адресе.
+
+    Подсветка раздела и подсветка подраздела — две РАЗНЫЕ вещи на двух разных
+    признаках (`is-active` шелла против `data-subtab-active` вкладок). Потеря
+    первой означает, что администратор внутри админ-панели не видит, где он.
+    """
+    html = (await admin_client.get(url)).text
+    assert 'class="nav-item is-active"' in html, url
+    assert 'href="/admin"' in html, url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_each_subsection_is_denied_to_an_outsider(
+    authed_client: AsyncClient, url: str, key: str, label: str
+):
+    """Каждый адрес отвечает посторонним 403 — привилегия у КАЖДОГО, не у входа.
+
+    Шесть маршрутов заведены пятью разными планами. Зависимость администратора,
+    забытая на одном из них, открыла бы чужие учётные записи, чужие платежи или
+    журнал всего сервиса любому вошедшему — и остальные пять маршрутов об этом
+    молчали бы.
+    """
+    response = await authed_client.get(url)
+    assert response.status_code == 403, url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_each_subsection_survives_both_external_services_at_once(
+    admin_client: AsyncClient, url: str, key: str, label: str
+):
+    """Ни один адрес не роняет 500 при ОДНОВРЕМЕННО мёртвых Redis и источнике логов.
+
+    ⚠️ ПРОВЕРЯЕТСЯ ПОДМЕНОЙ КЛИЕНТОВ, А НЕ УДАЧЕЙ ОКРУЖЕНИЯ. В среде разработки
+    обеих служб нет по умолчанию, и тест на голом окружении зеленел бы, ничего
+    не утверждая: он не отличал бы «ветка отказа пройдена» от «ветка отказа не
+    достигнута». Подмена ИМЕНОВАННЫХ точек получения клиента — единственных в
+    обоих модулях — делает отказ ФАКТОМ прогона.
+    Обе службы гасятся ВМЕСТЕ, потому что порознь это уже проверено выше по
+    файлу: предмет здесь — что деградации не складываются в отказ страницы.
+    """
+    with patch("app.services.ops_state._get_redis", return_value=None), patch(
+        "app.services.loki_client._client", return_value=None
+    ):
+        response = await admin_client.get(url)
+
+    assert response.status_code == 200, (
+        f"{url}: отсутствие внешних служб превратилось в отказ страницы"
+    )
+    # Вкладки на месте — то есть страница ДЕГРАДИРОВАЛА, а не подменилась
+    # страницей ошибки, которая тоже могла бы отдать 200.
+    assert "<nav data-subtabs" in response.text, (
+        f"{url}: 200 отдан, но это не подраздел — вкладок в ответе нет"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url,key,label", SUBSECTION_SWEEP)
+async def test_no_subsection_leaks_the_removed_groups_directory(
+    admin_client: AsyncClient, url: str, key: str, label: str
+):
+    """Снесённый справочник групп не всплыл ни в одной ОТДАННОЙ разметке (D-05).
+
+    Страховочная сетка плана 06-01 читает ИСХОДНИКИ шаблонов и маршрутов. Она
+    не увидела бы адреса, собранного обработчиком в контекст на лету, — а
+    именно так его и вернул бы сюда невнимательный план: строкой в перечне
+    ссылок, а не выписанным в шаблоне якорем. Поэтому обход смотрит на то, что
+    ушло в браузер.
+    """
+    html = (await admin_client.get(url)).text
+    assert "groups-info" not in html, (
+        f"{url}: снесённая поверхность справочника групп вернулась в разметку"
+    )
+
+
+# =============================================================================
+# ГАРД ПРОИСХОЖДЕНИЯ НА ИЗМЕНЯЮЩИХ МАРШРУТАХ АДМИНКИ (CR-02 ревизии фазы 6)
+#
+# ⚠️ ПОЧЕМУ ГЕЙТ, А НЕ ТРИ ТЕСТА НА ТРИ ПОЧИНЕННЫХ МАРШРУТА. Дефект был не в
+# том, что забыли гард у трёх обработчиков, а в том, что ПОЛНОТУ ПЕРЕЧНЯ никто
+# не держал: правило жило перечнем из трёх имён в докстринге `is_same_origin`,
+# фаза добавила в раздел шесть изменяющих маршрутов, половина взяла гард,
+# половина — нет, и разошедшийся перечень выглядел работающим. Три точечных
+# теста закрепили бы сегодняшнее состояние и промолчали бы о СЛЕДУЮЩЕМ
+# добавленном маршруте — ровно тот чёрный список, от которого проект уже
+# отказался явно при построении гейта запретов под чужой личностью (D-23).
+#
+# Форма скопирована оттуда целиком: разбор ДЕРЕВА исходника (поиск строки
+# считал бы вхождение в докстринге, то есть объяснение роняло бы утверждение),
+# замыкающее требование «каждый найденный маршрут», и отрицательный контроль,
+# доказывающий, что гейт КРАСНЕЕТ.
+# =============================================================================
+
+ORIGIN_GUARD = "is_same_origin"
+
+# Изменяющие методы. `GET` сюда не входит намеренно: изменяющих `GET` в разделе
+# нет, а гард на чтении закрыл бы подраздел межсайтовой ссылке впустую.
+ADMIN_MUTATING_METHODS = frozenset({"post", "put", "patch", "delete"})
+
+# Число изменяющих маршрутов раздела, выписанное РУКАМИ. Без него утверждение
+# «каждый найденный несёт гард» зеленело бы и на пустом множестве найденных —
+# например, если разбор декораторов перестанет их узнавать.
+ADMIN_MUTATING_ROUTE_COUNT = 6
+
+
+def _admin_mutating_handlers(source: str) -> dict[str, ast.AsyncFunctionDef]:
+    """Обработчики изменяющих маршрутов раздела — по дереву, а не по тексту.
+
+    Узнаются оба вида объявления, живущие в модуле: `@router.post(...)` и
+    `@partials_router.post(...)`. Имя роутера НЕ фиксируется — иначе роутер,
+    заведённый будущей фазой, выпал бы из обхода молча.
+    """
+    found: dict[str, ast.AsyncFunctionDef] = {}
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            call = decorator.func if isinstance(decorator, ast.Call) else decorator
+            if isinstance(call, ast.Attribute) and call.attr in ADMIN_MUTATING_METHODS:
+                found[node.name] = node
+                break
+    return found
+
+
+def _admin_routes_without_the_origin_guard(source: str) -> set[str]:
+    """Изменяющие маршруты раздела, НЕ зовущие гард происхождения."""
+    missing = set()
+    for name, handler in _admin_mutating_handlers(source).items():
+        calls = {
+            call.func.id
+            for call in ast.walk(handler)
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+        }
+        if ORIGIN_GUARD not in calls:
+            missing.add(name)
+    return missing
+
+
+def test_the_number_of_mutating_admin_routes_is_the_declared_one():
+    """Найденных изменяющих маршрутов ровно столько, сколько выписано руками.
+
+    ⚠️ ЭТО НЕ ДУБЛИРОВАНИЕ СЛЕДУЮЩЕГО ТЕСТА, А ЕГО ОПОРА. «Каждый найденный
+    несёт гард» — утверждение, истинное и для ПУСТОГО множества найденных:
+    сломайся разбор декораторов, и гейт зеленел бы навсегда, ничего не
+    обходя.
+    """
+    handlers = _admin_mutating_handlers(
+        ADMIN_PAGES_SOURCE.read_text(encoding="utf-8")
+    )
+
+    assert len(handlers) == ADMIN_MUTATING_ROUTE_COUNT, (
+        f"изменяющих маршрутов админки найдено {len(handlers)}, объявлено "
+        f"{ADMIN_MUTATING_ROUTE_COUNT}: {sorted(handlers)}. Маршрут добавлен "
+        "или снят — решение о гарде происхождения обязано быть принято ЯВНО, "
+        "а число исправлено вместе с ним"
+    )
+
+
+def test_every_mutating_admin_route_checks_the_origin():
+    """КАЖДЫЙ изменяющий маршрут раздела сверяет источник запроса (CR-02).
+
+    ⚠️ ПОЧЕМУ ЭТОГО НЕ ЗАМЕНЯЕТ `samesite="lax"`. Умолчание cookie
+    межсайтовый POST действительно не пропускает — и ровно поэтому оно было
+    ЕДИНСТВЕННЫМ, что стояло между сторонней страницей и необратимым удалением
+    учётной записи: одна политика браузера без единого рубежа за ней, там где
+    проект в трёх соседних маршрутах требует явной серверной проверки. Правило
+    продукта не имеет права зависеть от умолчания, которое продукт не
+    выставляет и не проверяет.
+
+    Самопротиворечивость прежнего состояния названа прямо: `admin_impersonate`
+    нёс гард с доводом «без него сторонняя страница выписала бы себе токен
+    имперсонации», а СОСЕДНИЙ маршрут, удаляющий того же пользователя целиком,
+    не нёс ничего.
+    """
+    missing = _admin_routes_without_the_origin_guard(
+        ADMIN_PAGES_SOURCE.read_text(encoding="utf-8")
+    )
+
+    assert missing == set(), (
+        "изменяющий маршрут админки не сверяет источник запроса: "
+        + ", ".join(sorted(missing))
+        + ". Аутентификация проекта идёт cookie — браузер приложит её к "
+        "межсайтовой форме сам, и запрос со стороннего сайта неотличим от "
+        "своего"
+    )
+
+
+def test_control_negative_a_mutating_admin_route_without_the_guard_reddens():
+    """ЧТО ДОКАЗЫВАЕТ: гейт выше КРАСНЕЕТ на снятом вызове гарда.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ГЕЙТ БЫЛ БЫ ЗЕЛЁН ПО ПОСТРОЕНИЮ, а обнаружилось бы
+    это в тот единственный день, когда он пропустит настоящий пропуск. Довод
+    дословно тот же, которым в этом проекте снабжён гейт запретов под чужой
+    личностью, и повторяется он потому, что тот же.
+
+    Боевой файл НЕ ТРОГАЕТСЯ: подмена живёт строкой в памяти, а разборщику
+    подаётся она.
+    """
+    original = ADMIN_PAGES_SOURCE.read_text(encoding="utf-8")
+
+    # Снимается ВЕСЬ блок гарда — условие вместе с отказом и объяснением между
+    # ними. Удаление одной строки условия оставило бы висящий `return` и
+    # уронило бы РАЗБОР, а не гейт: контроль тогда «краснел» бы по чужой
+    # причине и ничего про зубы гейта не доказывал.
+    block = re.compile(
+        r"[ \t]*if not " + ORIGIN_GUARD + r"\(request\):\n"
+        r"(?:[ \t]*#.*\n)*"
+        r"[ \t]*return Response\(status_code=403\)\n"
+    )
+    stripped, removed = block.subn("", original)
+
+    assert removed == ADMIN_MUTATING_ROUTE_COUNT, (
+        f"подмена сняла {removed} блоков гарда из "
+        f"{ADMIN_MUTATING_ROUTE_COUNT} — контроль проверял бы дерево, в "
+        "котором гард местами остался, и доказывал бы меньше, чем утверждает"
+    )
+    assert ORIGIN_GUARD in stripped, (
+        "из подменённого исходника исчезло и упоминание гарда: контроль "
+        "перестал доказывать, что гейт смотрит на ВЫЗОВ, а не на текст"
+    )
+
+    missing = _admin_routes_without_the_origin_guard(stripped)
+
+    assert len(missing) == ADMIN_MUTATING_ROUTE_COUNT, (
+        "ГЕЙТ НЕ ЗАМЕТИЛ СНЯТЫЙ ГАРД у "
+        f"{ADMIN_MUTATING_ROUTE_COUNT - len(missing)} маршрутов — он зелёный "
+        "по построению, и настоящий пропуск сверки источника пройдёт мимо него"
+    )
+
+
+# ---- Тот же запрет, но по HTTP: три починенных маршрута ----
+
+FOREIGN_ORIGIN = {"Sec-Fetch-Site": "cross-site"}
+
+
+async def _seed_plain_user(admin_client: AsyncClient, db_session: AsyncSession) -> int:
+    """Обычный пользователь, над которым админка совершает действие."""
+    from app.models.user import User
+    from sqlalchemy import select
+
+    response = await admin_client.post(
+        "/api/auth/register",
+        json={
+            "email": "cr02-target@test.com",
+            "password": "testpass123",
+            "name": "Цель",
+        },
+    )
+    assert response.status_code == 201, (
+        f"регистрация цели не прошла ({response.status_code}) — утверждения "
+        "ниже проверяли бы отказ по отсутствию пользователя"
+    )
+    target = (
+        await db_session.execute(
+            select(User).where(User.email == "cr02-target@test.com")
+        )
+    ).scalar_one()
+    return target.id
+
+
+@pytest.mark.asyncio
+async def test_the_destructive_admin_actions_refuse_a_foreign_origin(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Блокировка, удаление и выдача льготы отвергают межсайтовый запрос.
+
+    ⚠️ ПРОВЕРЯЕТСЯ НЕ ТОЛЬКО КОД ОТВЕТА, НО И НЕСОСТОЯВШЕЕСЯ ДЕЙСТВИЕ. Отказ
+    этих маршрутов при удаче приходит РЕДИРЕКТОМ, и тест, смотрящий только на
+    код, не отличил бы «отвергнуто гардом» от «сделано и отвечено редиректом».
+    Предмет — что учётная запись ЖИВА, не заблокирована и без льготы.
+    """
+    from app.models.user import User
+
+    target_id = await _seed_plain_user(admin_client, db_session)
+
+    for url in (
+        f"/admin/users/{target_id}/block",
+        f"/admin/users/{target_id}/unlimited",
+        f"/admin/users/{target_id}/delete",
+    ):
+        response = await admin_client.post(
+            url, headers=FOREIGN_ORIGIN, follow_redirects=False
+        )
+        assert response.status_code == 403, (
+            f"{url} ответил {response.status_code} межсайтовому запросу — "
+            "сторонняя страница совершает действие руками вошедшего "
+            "администратора"
+        )
+
+    db_session.expire_all()
+    survivor = await db_session.get(User, target_id)
+    assert survivor is not None, (
+        "учётная запись удалена межсайтовым запросом — гард ответил 403 ПОСЛЕ "
+        "действия"
+    )
+    assert survivor.is_blocked is False, (
+        "учётная запись заблокирована межсайтовым запросом"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_destructive_admin_actions_still_work_from_the_own_page(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """ГРАНИЦА СВЕРХУ: со своей страницы те же действия по-прежнему работают.
+
+    ⚠️ БЕЗ ЭТОГО УТВЕРЖДЕНИЯ ГАРД, ОТКАЗЫВАЮЩИЙ ВСЕГДА, ПРОШЁЛ БЫ ТЕСТ ВЫШЕ и
+    отнял бы у администратора блокировку, удаление и выдачу доступа целиком —
+    то есть три критерия фазы, — оставаясь зелёным.
+    """
+    from app.models.user import User
+
+    target_id = await _seed_plain_user(admin_client, db_session)
+
+    blocked = await admin_client.post(
+        f"/admin/users/{target_id}/block",
+        headers={"Sec-Fetch-Site": "same-origin"},
+        follow_redirects=False,
+    )
+    assert blocked.status_code == 302, (
+        f"блокировка со СВОЕЙ страницы ответила {blocked.status_code} — гард "
+        "отказывает всегда и отнял у администратора критерий фазы"
+    )
+
+    db_session.expire_all()
+    target = await db_session.get(User, target_id)
+    assert target.is_blocked is True, (
+        "блокировка со своей страницы не состоялась: отказ пришёл молча, "
+        "кодом редиректа"
+    )
+
+
+# =============================================================================
+# КЛЮЧ ПАНЕЛИ ПОДТВЕРЖДЕНИЯ НЕ СОБИРАЕТСЯ ИЗ ЧУЖИХ ДАННЫХ (WR-04)
+#
+# ⚠️ ПОЧЕМУ АВТОЭКРАНИРОВАНИЯ ЗДЕСЬ НЕ ХВАТАЕТ, ХОТЯ ОНО ВКЛЮЧЕНО СПЛОШЬ.
+# Идентификатор задачи приезжал в ДВА места, которых экранирование Jinja не
+# защищает: в выражение Alpine (разметка декодируется парсером ДО того, как
+# Alpine прочитает атрибут как JavaScript, поэтому `&#39;` снова становится
+# кавычкой и закрывает строковый литерал) и в ИМЯ АТРИБУТА
+# `x-on:modal-open-…` (имена атрибутов не экранируются в принципе). Сегодня
+# идентификатор пишет постановщик и это `uuid4`, поэтому живой эксплуатации
+# нет; предмет — расхождение между заявленной моделью («разметка это
+# экранирует») и кодом, на данных, которые прикладной модуль сам считает
+# чужими и возможно испорченными.
+# =============================================================================
+
+
+HOSTILE_TASK_ID = "x' ) ; alert(1) //  x-on:click=\"evil()\" q=\""
+
+
+@pytest.mark.asyncio
+async def test_a_queue_task_id_never_reaches_a_dom_identifier(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Идентификатор задачи не участвует в ключе панели — ни в одном из двух мест.
+
+    ⚠️ УТВЕРЖДЕНИЕ СНИМАЕТСЯ С КЛЮЧА, А НЕ С ОТСУТСТВИЯ ПОДСТРОКИ В СТРАНИЦЕ.
+    Идентификатор ОБЯЗАН остаться на странице — он едет скрытым полем формы,
+    и там экранирование работает и снятие им же адресуется. Проверяется, что
+    его нет ИМЕННО в диспетчеризуемом событии и в имени атрибута обработчика.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    client = _FakeQueuePageRedis(
+        {f"wa:queue:{account.id}": [_queue_task(HOSTILE_TASK_ID)]}
+    )
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    dispatched = re.findall(r"\$dispatch\('([^']*)'\)", html)
+    assert dispatched, (
+        "ни одного диспетчеризуемого события не найдено — утверждение ниже "
+        "проверяло бы пустое множество"
+    )
+    for event in dispatched:
+        assert re.fullmatch(r"modal-open-[A-Za-z0-9-]+", event), (
+            f"ключ события собран не только из выбранных сервером величин: "
+            f"{event!r} — кавычка в нём закрывает строковый литерал Alpine"
+        )
+
+    attribute_names = re.findall(r"x-on:modal-open-([^.\s=]*)", html)
+    assert attribute_names, "ни одного обработчика открытия панели не найдено"
+    for name in attribute_names:
+        assert re.fullmatch(r"[A-Za-z0-9-]+", name), (
+            f"имя атрибута собрано из чужой величины: {name!r} — имена "
+            "атрибутов не экранируются ничем"
+        )
+
+    assert 'name="task_id"' in html, (
+        "идентификатор задачи исчез со страницы вовсе — снятие адресовать "
+        "нечем, и починка отняла само действие"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_drop_button_and_its_confirmation_panel_still_match(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """ГРАНИЦА СВЕРХУ: ключ у кнопки и у панели ОДИН И ТОТ ЖЕ.
+
+    ⚠️ БЕЗ ЭТОГО УТВЕРЖДЕНИЯ ПОЧИНКА ВЫШЕ ПРОШЛА БЫ И РАЗОРВАВ СВЯЗЬ. Формат
+    ключа читается двумя сторонами — строкой очереди и панелью подтверждения; и
+    та и другая перестали бы совпадать МОЛЧА: кнопка отправляла бы событие,
+    которого никто не слушает, и подтверждение просто не открывалось бы.
+    Проверяется на ДВУХ строках одного аккаунта — при одной строке совпали бы и
+    два разошедшихся счётчика.
+    """
+    account = await _seed_account(db_session, account_type="wa")
+    client = _FakeQueuePageRedis(
+        {
+            f"wa:queue:{account.id}": [
+                _queue_task("первая", group_name="Группа Первая"),
+                _queue_task("вторая", group_name="Группа Вторая"),
+            ]
+        }
+    )
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        html = (await admin_client.get("/admin/queue")).text
+
+    dispatched = set(re.findall(r"\$dispatch\('modal-open-([^']*)'\)", html))
+    listening = set(re.findall(r"x-on:modal-open-([^.\s=]*)\.window", html))
+
+    assert len(dispatched) == 2, (
+        f"две строки очереди дали {len(dispatched)} различных ключей: "
+        f"{sorted(dispatched)} — одна панель обслуживала бы обе задачи"
+    )
+    assert dispatched <= listening, (
+        f"кнопка шлёт событие, которого никто не слушает: "
+        f"{sorted(dispatched - listening)} — подтверждение не откроется, и "
+        "узнать об этом можно только глазами"
+    )

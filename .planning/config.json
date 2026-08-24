@@ -11,11 +11,12 @@
   "perplexity": false,
   "jina": false,
   "git": {
-    "branching_strategy": "none",
+    "branching_strategy": "phase",
     "create_tag": true,
     "phase_branch_template": "gsd/phase-{phase}-{slug}",
     "milestone_branch_template": "gsd/{milestone}-{slug}",
-    "quick_branch_template": null
+    "quick_branch_template": null,
+    "base_branch": "master"
   },
   "workflow": {
     "research": true,
@@ -51,7 +52,8 @@
     "tdd_mode": true,
     "use_worktrees": true,
     "_auto_chain_active": false,
-    "test_gate_timeout": 2400
+    "test_gate_timeout": 3000,
+    "build_command": "uv run python -m compileall -q app main.py tests"
   },
   "ship": {
     "pr_body_sections": []

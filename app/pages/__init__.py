@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.billing.subscription_period import access_is_open
 from app.config import Settings
-from app.dependencies import get_db, get_settings
+from app.dependencies import forbid_when_impersonating, get_db, get_settings
 from app.models.subscription import Subscription
 from app.pages.common import get_shell_context, get_user_from_cookie
 
@@ -17,6 +17,7 @@ from app.pages.accounts import router as accounts_router
 from app.pages.account_groups import router as account_groups_router
 from app.pages.groups import router as groups_router
 from app.pages.schedules import router as schedules_router
+from app.pages.billing import money_router as billing_money_router
 from app.pages.billing import router as billing_router
 from app.pages.history import router as history_router
 from app.pages.admin import router as admin_router
@@ -127,7 +128,23 @@ router.include_router(accounts_router, dependencies=[Depends(require_access)])
 router.include_router(account_groups_router, dependencies=[Depends(require_access)])
 router.include_router(groups_router, dependencies=[Depends(require_access)])
 router.include_router(schedules_router, dependencies=[Depends(require_access)])
+# ЧТЕНИЕ РАЗДЕЛА ОПЛАТЫ НЕ ЗАКРЫТО НИЧЕМ — ни истёкшим доступом, ни чужой
+# личностью. «Я заплатил, а доступ не открылся» есть типовое обращение, и ответ
+# на него виден именно на этом экране.
 router.include_router(billing_router)
+# ДЕНЕЖНЫЕ ИЗМЕНЯЮЩИЕ ВХОДЫ ЗАКРЫТЫ ЦЕЛИКОМ ОТ ДЕЙСТВИЙ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ
+# (D-22) — ТАК ЖЕ, КАК ИХ JSON-БЛИЗНЕЦ В `app/main.py`. Роутером, а не перечнем
+# маршрутов, потому что под чужой учётной записью здесь запрещено ВСЁ, и
+# маршрут, добавленный будущей фазой, обязан оказаться закрытым ПО УМОЛЧАНИЮ.
+# Ради этого свойства денежные входы и вынесены в свой роутер
+# (`app/pages/billing.py`): в общем они по умолчанию оказались бы разрешены.
+#
+# ⚠️ ГЕЙТ ДОСТУПА ЭТОТ РОУТЕР НЕ ТРОГАЕТ, и два решения независимы: первое
+# отвечает на вопрос «оплачено ли» (человеку с истёкшим сроком обязаны дать
+# заплатить — он стоит в `OPEN_ROUTERS`), второе — на вопрос «кто действует».
+router.include_router(
+    billing_money_router, dependencies=[Depends(forbid_when_impersonating)]
+)
 router.include_router(history_router, dependencies=[Depends(require_access)])
 router.include_router(admin_router)
 router.include_router(profile_router)

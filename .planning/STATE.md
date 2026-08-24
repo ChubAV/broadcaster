@@ -2,18 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
-current_phase: 6
-current_phase_name: Админ-панель
-status: planning
-stopped_at: Фаза 05.1 отгружена (PR #41); фаза 6 не планировалась
-last_updated: "2026-08-21T18:07:01.089Z"
-last_activity: 2026-08-21
-last_activity_desc: "Фаза 05.1 ЗАКРЫТА и отгружена. UAT 3/3 passed (вёрстка 375px: состояние paid, история из 5 строк с длинным историческим именем пакета, пятизначная цена). Verification переведена в passed (10/10 must-have, behavior_unverified 0, 1 override по форме приёмки). Security-ревизия проведена: 05.1-SECURITY.md, threats_open 0 при ASVS L1 и block_on high — 56 записей реестра, 33 закрыты по Threat Flags сводок, 18 проверены аудитором по коду, 230 тестов зелёные. Transition исполнен: ROADMAP и STATE отмечают 14/14, следующая фаза 6 «Админ-панель». Отгрузка: ветка gsd/phase-05.1-edinaya-podpiska, PR #41 в master. ⚠️ PR несёт 393 коммита — origin/master отстал с мёрджа PR #38 (фаза 04), поэтому вместе с 05.1 едет неверифицированная фаза 05 (UAT partial, VERIFICATION human_needed). Долги вне предмета фазы: 3 BLOCKER заведены как todo и адресованы фазе 6; по трассируемости требований — BILL-06 цитируется ROADMAP, но не зарегистрирован в REQUIREMENTS.md, строки Traceability отсутствуют для BILL-05, BILL-07…BILL-11, шесть REQ-ID (NOTIF-01…04, WARM-01, WARM-02) есть в теле и не в таблице"
+current_phase: 5
+current_phase_name: Тарифы
+status: "Phase 06 shipped — PR #42"
+stopped_at: Phase 06 complete, ready to plan Phase 5
+last_updated: "2026-08-24T20:21:38.262Z"
+last_activity: 2026-08-24
+last_activity_desc: Phase 06 shipped — PR #42 (branch gsd/phase-06-admin-panel → master)
+state_head: 6c65ab1511f9d82854e0ba7f9cc6c7157f750e3d
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 96
-  completed_plans: 96
+  total_plans: 110
+  completed_plans: 110
   percent: 86
 ---
 
@@ -24,13 +25,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-21)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 6 — Админ-панель
+**Current focus:** Phase 06 — Админ-панель
 
 ## Current Position
 
-Phase: 6 — Админ-панель
-Status: Phase 05.1 shipped — PR #41; Phase 6 ready to plan
-Last activity: 2026-08-21
+Phase: 5 — Тарифы
+Status: Phase 06 shipped — PR #42
+Last activity: 2026-08-24
 
 Владелец остановил UAT фазы 5 на первом же пункте: «получилась очень сложная для понимания система тарифов». Диагноз подтверждается кодом — в фазе 5 сосуществовали ДВЕ независимые системы оплаты: три тарифных плана по четырём осям лимитов (`Settings.plan_limits`) И отдельная валюта сообщений с пакетами (`Settings.message_packages`, `MessageBalance`, списание `deduct_message()`). Итоговая модель убирает счёт целиком: 3000 ₽/мес за доступ к системе, без лимитов по аккаунтам, группам и сообщениям.
 
@@ -50,7 +51,7 @@ Last activity: 2026-08-21
 
 **Velocity:**
 
-- Total plans completed: 26 (milestone v2.0)
+- Total plans completed: 40 (milestone v2.0)
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -63,6 +64,7 @@ Last activity: 2026-08-21
 | 3. Группы аккаунта | 12/12 | - | - |
 | 04 | 12 | - | - |
 | 05.1 | 14 | - | - |
+| 06 | 14 | - | - |
 
 **Recent Trend:**
 
@@ -222,6 +224,6 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-08-21
-Stopped at: Phase 05.1 complete, ready to plan Phase 6
-Resume file: None
+Last session: 2026-08-22T09:47:03.590Z
+Stopped at: Phase 06 complete, ready to plan Phase 5
+Resume file: .planning/phases/06-admin-panel/06-UI-SPEC.md

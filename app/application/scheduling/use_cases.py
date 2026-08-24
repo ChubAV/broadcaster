@@ -15,6 +15,7 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
+from app.models.user import User
 from app.services.schedule_service import compute_next_run_at
 
 logger = structlog.get_logger(__name__)
@@ -126,6 +127,41 @@ def build_dispatch_task(
     return task
 
 
+async def _user_send_verdict(
+    session: AsyncSession, user_id: int, check_limit
+) -> tuple[bool, str]:
+    """ОДИН вердикт «рассылать ли за этого пользователя» — блокировка и доступ.
+
+    ⚠️ ВЕРДИКТЫ СВЕДЕНЫ В ОДНУ ФУНКЦИЮ, ЧТОБЫ ЛЕЧЬ ПОД ОДНУ МЕМОИЗАЦИЮ. Цикл
+    сбора уже устроен так, что вердикт спрашивается один раз на пользователя, а
+    не на расписание; проверка блокировки, поставленная соседним условием ВНЕ
+    этой ветки, умножала бы запрос к базе на число расписаний в такте — на
+    сервисе с сотнями расписаний это разница между тактом и таймаутом.
+
+    БЛОКИРОВКА СПРАШИВАЕТСЯ ПЕРВОЙ и коротким замыканием: у заблокированного
+    вопрос об оплате не имеет смысла — открытый доступ ему всё равно ничего не
+    открывает (D-30, третий путь CR-01).
+
+    ⚠️ ОТСУТСТВИЕ СТРОКИ ПОЛЬЗОВАТЕЛЯ НЕ ЕСТЬ БЛОКИРОВКА И НЕ ЕСТЬ ИСКЛЮЧЕНИЕ.
+    Такой вердикт достаётся вердикту доступа, у которого он определён
+    (прецедент отсутствующей строки подписки): исключение здесь уронило бы весь
+    такт планировщика, то есть расхождение данных У ОДНОГО пользователя
+    остановило бы рассылку ВСЕМ остальным.
+
+    Кэша вердикта блокировки не заводится (D-31): это чтение строки по
+    первичному ключу, а кэш добавил бы поверхность инвалидации — новый источник
+    ошибок ради неизмеренной экономии.
+    """
+    user = await session.get(User, user_id)
+    if user is not None and user.is_blocked:
+        # Единственный след пропуска. Записи в журнал отправок НЕ делается —
+        # см. объяснение в ветке отказа ниже.
+        logger.info("schedules_skipped_user_blocked", user_id=user_id)
+        return False, "user_blocked"
+
+    return await check_limit(session, user_id, "send")
+
+
 async def collect_due_schedules(
     session: AsyncSession,
     *,
@@ -186,10 +222,23 @@ async def collect_due_schedules(
 
         user_id = ad.user_id
         if user_id not in checked_users:
-            checked_users[user_id] = await check_limit(session, user_id, "send")
+            checked_users[user_id] = await _user_send_verdict(
+                session, user_id, check_limit
+            )
 
         allowed, _reason = checked_users[user_id]
         if not allowed:
+            # Пропуск ТИХИЙ, и обе его половины несущие.
+            #
+            # Момент следующего запуска ПЕРЕСЧИТЫВАЕТСЯ — иначе оставленный в
+            # прошлом момент при разблокировке (и при возврате доступа)
+            # выстрелит всеми накопленными слотами сразу, тихой рассылкой
+            # задним числом в чужие группы. Ровно тот же механизм разобран
+            # выше, в ветке черновика.
+            #
+            # Записи в журнал отправок НЕ создаётся: журнал отражает
+            # СОВЕРШЁННЫЕ попытки отправки, а пропущенное расписание попытки не
+            # совершало — прецедент выключенной группы прямой (D-06).
             schedule.next_run_at = compute_next_run_at(
                 days_of_week=schedule.days_of_week,
                 times_of_day=schedule.times_of_day,

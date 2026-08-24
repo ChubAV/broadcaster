@@ -24,7 +24,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.analytics.send_analytics import CHART_BUCKETS_PER_DAY
 from app.models.ad import Ad
 from app.models.group import Group
-from app.models.group_info import GroupInfo
 from app.models.messenger_account import MessengerAccount
 from app.models.payment import Payment
 from app.models.schedule import Schedule
@@ -239,24 +238,11 @@ async def _move_access_expiry(db: AsyncSession, delta: timedelta) -> datetime:
     return row.expires_at
 
 
-async def _seed_group_info(
-    db: AsyncSession,
-    name: str = "Справочная группа",
-    messenger_type: str = "tg_user",
-    external_id: str = "-100777",
-) -> GroupInfo:
-    item = GroupInfo(
-        messenger_type=messenger_type,
-        external_id=external_id,
-        name=name,
-        member_count=128,
-        admin_contacts=[{"id": "1", "name": "Админ группы", "username": "chief"}],
-        raw_metadata={},
-    )
-    db.add(item)
-    await db.commit()
-    await db.refresh(item)
-    return item
+# _seed_group_info УДАЛЁН ПЛАНОМ 06-01 вместе со всеми своими потребителями:
+# экраны справочника групп снесены (D-05), и наполнять стало нечего. Сама
+# таблица `group_info`, её модель, её репозиторий и ревизия `0011` НЕ тронуты —
+# снос касается поверхности, а не хранилища, и репозиторий по-прежнему покрыт
+# tests/test_repositories/test_group_info.py.
 
 
 async def _seed_section(db: AsyncSession, section: str) -> str:
@@ -1337,8 +1323,14 @@ def test_billing_partials_are_macros_with_an_import_line():
 
 def test_billing_component_library_did_not_grow():
     """Паршалы раздела не уехали в общую библиотеку компонентов."""
+    # 14, а не 13: четырнадцатый файл — filter_chips.html, переехавший из
+    # history/includes/ планом 06-03, когда потребителей чипсов стало трое
+    # (история, «Пользователи» и «Логи» админки). Число пинуется в этом файле
+    # ДВАЖДЫ — здесь и в test_template_inventory, — и обе константы подняты
+    # тем же коммитом, что и переезд: правка задним числом на время отключила
+    # бы проверку, которая ловит молчаливое пополнение библиотеки.
     components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
-    assert len(components) == 13, [p.name for p in components]
+    assert len(components) == 14, [p.name for p in components]
 
     partials = {p.name for p in (TEMPLATES_DIR / "billing" / "includes").glob("*.html")}
     assert partials == {"payment_row.html"}, (
@@ -1910,9 +1902,17 @@ async def test_admin_pages_use_row_primitives(
 async def test_admin_no_utility_classes(
     admin_client: AsyncClient, db_session: AsyncSession
 ):
-    await _seed_group_info(db_session)
-
-    for url in ("/admin", "/admin/users", "/admin/groups-info"):
+    # Четыре новых подраздела дописаны планом 06-01 вместе с их маршрутами;
+    # адрес справочника групп тем же планом убран вместе с его экранами (D-05),
+    # и посев справочника здесь стал беспредметным.
+    for url in (
+        "/admin",
+        "/admin/users",
+        "/admin/workers",
+        "/admin/queue",
+        "/admin/logs",
+        "/admin/payments",
+    ):
         response = await admin_client.get(url)
         assert response.status_code == 200, url
         for marker in UTILITY_MARKERS:
@@ -1964,62 +1964,21 @@ async def test_admin_denied_for_regular_user(authed_client: AsyncClient):
     Утверждение идёт и по статусу, и по телу: отказ, отданный со страницей
     админки внутри, отказом не является.
     """
-    for url in ("/admin", "/admin/users", "/admin/groups-info"):
+    for url in ("/admin", "/admin/users"):
         response = await authed_client.get(url, follow_redirects=False)
         assert response.status_code != 200, url
         assert "Администрирование" not in response.text, url
         assert "data-rowhead" not in response.text, url
 
 
-@pytest.mark.asyncio
-async def test_admin_groups_info_uses_row_primitives(
-    admin_client: AsyncClient, db_session: AsyncSession
-):
-    """Справочник групп собран на строке-таблице, а не на своей вёрстке."""
-    await _seed_group_info(db_session)
-
-    response = await admin_client.get("/admin/groups-info")
-    assert response.status_code == 200
-    html = response.text
-    assert "data-row" in html
-    assert "data-rowhead" in html
-
-
-@pytest.mark.asyncio
-async def test_admin_groups_info_renders_data(
-    admin_client: AsyncClient, db_session: AsyncSession
-):
-    """Строка справочника отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
-
-    Видимая подпись раздела зафиксирована существующим покрытием
-    (tests/test_pages/test_admin_groups_info.py) и переименованию не подлежит:
-    переименования D-11 касаются пунктов основной навигации, а не заголовков
-    внутри админки.
-    """
-    item = await _seed_group_info(db_session, name="Уникальное имя справочника")
-
-    html = (await admin_client.get("/admin/groups-info")).text
-    assert "Справочник групп" in html, "видимая подпись раздела потеряна"
-    assert "Уникальное имя справочника" in html, "название группы не отрисовано"
-    assert "-100777" in html, "внешний идентификатор не отрисован"
-    assert f"/admin/groups-info/{item.id}" in html, "ссылка на карточку потеряна"
-
-
-@pytest.mark.asyncio
-async def test_admin_groups_info_escapes_external_name(
-    admin_client: AsyncClient, db_session: AsyncSession
-):
-    """T-07-03: название группы приходит из внешнего мессенджера.
-
-    Это недоверенная строка: приложение её не контролирует и проверить не
-    может. Она обязана выводиться штатным экранированием — макросам передаётся
-    текст, а не разметка.
-    """
-    await _seed_group_info(db_session, name='<img src=x onerror="alert(1)">')
-
-    html = (await admin_client.get("/admin/groups-info")).text
-    assert '<img src=x' not in html, "название группы отрисовано как разметка"
-    assert "&lt;img src=x" in html, "экранированного вывода названия нет"
+# ТРИ ТЕСТА СПРАВОЧНИКА ГРУПП УДАЛЕНЫ ПЛАНОМ 06-01 ВМЕСТЕ С ПРЕДМЕТОМ (D-05), А
+# НЕ ПЕРЕНАЦЕЛЕНЫ НА ДРУГОЙ ЭКРАН. Они утверждали про строку справочника: что
+# она собрана примитивом, что рисует реальные данные и что экранирует пришедшее
+# из мессенджера название. Экрана нет — утверждать не о чем, а тест, потерявший
+# предмет и перенацеленный, перестаёт утверждать то, ради чего был написан.
+# Вклад в проверки не потерян молча: экранирование внешних строк закрыто теми же
+# проверками на остальных поверхностях, а отсутствие снесённого адреса
+# закреплено test_groups_info_gone_from_templates_and_routes в test_admin_panel.py.
 
 
 # --- План 08, Задача 1: детальные страницы админки ---------------------------
@@ -2067,20 +2026,9 @@ async def test_admin_user_detail_renders_data(
         assert f"/admin/users/{user.id}{action}" in html, action
 
 
-@pytest.mark.asyncio
-async def test_admin_group_info_detail_renders_data(
-    admin_client: AsyncClient, db_session: AsyncSession
-):
-    """Деталь справочника групп отрисовывает реальные данные."""
-    item = await _seed_group_info(db_session, name="Уникальная деталь справочника")
-
-    response = await admin_client.get(f"/admin/groups-info/{item.id}")
-    assert response.status_code == 200
-    html = response.text
-
-    assert "Уникальная деталь справочника" in html, "название группы не отрисовано"
-    assert "-100777" in html, "внешний идентификатор не отрисован"
-    assert "Админ группы" in html, "контакт администратора не отрисован"
+# test_admin_group_info_detail_renders_data УДАЛЁН ПЛАНОМ 06-01 вместе с самой
+# карточкой справочника (D-05). Он утверждал, что карточка отрисовывает реальные
+# данные; карточки нет — утверждать не о чем.
 
 
 @pytest.mark.asyncio
@@ -2088,9 +2036,10 @@ async def test_admin_detail_pages_no_utility_classes(
     authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
 ):
     user = await _user(db_session)
-    item = await _seed_group_info(db_session)
 
-    for url in (f"/admin/users/{user.id}", f"/admin/groups-info/{item.id}"):
+    # Адрес карточки справочника вышел из обхода вместе с самой карточкой:
+    # детальных страниц админки осталась одна.
+    for url in (f"/admin/users/{user.id}",):
         response = await admin_client.get(url)
         assert response.status_code == 200, url
         for marker in UTILITY_MARKERS:
@@ -2108,13 +2057,11 @@ async def test_admin_detail_denied_for_regular_user(
     отрендеренной страницей внутри, отказом не является.
     """
     user = await _user(db_session)
-    item = await _seed_group_info(db_session)
 
-    for url in (f"/admin/users/{user.id}", f"/admin/groups-info/{item.id}"):
+    for url in (f"/admin/users/{user.id}",):
         response = await authed_client.get(url, follow_redirects=False)
         assert response.status_code != 200, url
         assert user.email not in response.text, url
-        assert "Справочная группа" not in response.text, url
 
 
 @pytest.mark.asyncio
@@ -2629,9 +2576,16 @@ def test_template_inventory():
     }
     assert not with_tables, f"элементы таблицы остались: {with_tables}"
 
-    # Библиотека компонентов Плана 02 на месте целиком (12 макросов + filters)
+    # Библиотека компонентов Плана 02 на месте целиком (12 макросов + filters),
+    # плюс четырнадцатый файл — filter_chips.html, переехавший из
+    # history/includes/ планом 06-03 вслед за вторым и третьим потребителями
+    # («Пользователи» и «Логи» админки). Второе утверждение о том же числе
+    # стоит в test_billing_component_library_did_not_grow; выборка
+    # `-k inventory` берёт только ЭТО, поэтому поднимать надо оба — иначе
+    # выборка зеленеет, а полный прогон краснеет из теста, названного по
+    # чужому разделу.
     components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
-    assert len(components) == 13, [p.name for p in components]
+    assert len(components) == 14, [p.name for p in components]
 
     # Два шелла проекта: основной и auth
     assert (TEMPLATES_DIR / "base.html").exists()
@@ -2700,9 +2654,27 @@ def _labels_in(html: str) -> set[str]:
 
 
 def _header_in(html: str) -> set[str]:
-    head = ROWHEAD_RE.search(html)
-    assert head, "шапка колонок раздела не найдена"
-    return {name for name in re.findall(r"<span>([^<]*)</span>", head.group(1)) if name}
+    """Названия колонок ВСЕХ шапок страницы, а не только первой.
+
+    ⚠️ РАНЬШЕ ЧИТАЛАСЬ ПЕРВАЯ ШАПКА, И ЭТО БЫЛА НЕЗАМЕЧЕННАЯ ДЫРА, А НЕ
+    упрощение. Пока у каждой страницы была ровно одна таблица, разница не
+    проявлялась; страница с двумя таблицами проверялась бы НАПОЛОВИНУ —
+    подписи второй таблицы попадали бы в `labels`, их колонки в `header` не
+    попадали бы, и сетка краснела бы на исправной разметке, пряча за этим
+    настоящий вопрос: подписана ли вторая таблица вовсе. Объединение читает обе
+    и делает утверждение строго сильнее, а не слабее.
+
+    Первой такой страницей стал подраздел «Воркеры»: план 06-05 разделил его на
+    блок инфраструктуры и блок воркеров аккаунтов (D-09).
+    """
+    heads = ROWHEAD_RE.findall(html)
+    assert heads, "шапка колонок раздела не найдена"
+    return {
+        name
+        for head in heads
+        for name in re.findall(r"<span>([^<]*)</span>", head)
+        if name
+    }
 
 
 @pytest.mark.asyncio
@@ -2971,7 +2943,19 @@ AD_CELL_LABELS = ("Текст", "Отправок", "Расписаний", "С�
 # подписи и на 860px стала бы значением без названия. Подпись читается элементом
 # `USER_COLUMNS` ПО ИНДЕКСУ и в шапке, и в ячейке; кортеж ниже — независимый
 # свидетель того, что обе копии совпали, а не второй источник строки.
-ADMIN_USER_CELL_LABELS = ("Регистрация", "Доступ", "Статус")
+#
+# ПЛАН 06-09 ПЕРЕПИСАЛ НАБОР КОЛОНОК ЦЕЛИКОМ (D-35, UI-контракт S5), и кортеж
+# поднят ТЕМ ЖЕ планом — иначе новые колонки приехали бы без подписей и на 860px
+# стали бы значениями без названий, ровно как предупреждает абзац выше.
+# Изменений три, и каждое — сознательный шаг, а не переименование:
+#   • «Статус» → «Состояние»: слово «статус» на этом экране занято состоянием
+#     ДОСТУПА, и две разные величины под одним словом читаются как одна;
+#   • добавлено «Аккаунтов» — число мессенджер-аккаунтов пользователя, первая и
+#     единственная новая величина строки;
+#   • «Регистрация» уехала в конец: порядок колонок задаёт UI-контракт.
+# Состав персональных данных при этом не расширен сверх названной величины
+# (T-07-02) — перевёрстка по-прежнему не основание показать больше.
+ADMIN_USER_CELL_LABELS = ("Доступ", "Состояние", "Аккаунтов", "Регистрация")
 
 
 @pytest.mark.asyncio
@@ -3359,6 +3343,29 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     "billing/includes/payment_row.html": (
         "макрос строки внутри объединения billing/balance.html"
     ),
+    # Объединение переехало вместе с шапкой: план 06-05 вынес оба блока
+    # подраздела в паршал опроса, и страница теперь только включает его внутрь
+    # контейнера опроса. Подписи ячеек проверяются там, где рисуется шапка.
+    "admin/includes/worker_row.html": (
+        "макрос строки внутри объединения admin/includes/workers_partial.html"
+    ),
+    # Подраздел «Очередь» (план 06-07) повторяет форму подраздела «Воркеры»
+    # дословно: макрос строки в своём файле, шапка — в шаблоне страницы.
+    "admin/includes/queue_row.html": (
+        "макрос строки внутри объединения admin/queue.html"
+    ),
+    # Подраздел «Пользователи» (план 06-09) — третий подряд той же формы:
+    # макрос строки в своём файле, шапка — в шаблоне страницы. Строка вынесена
+    # из самой страницы в отдельный файл вслед за воркерами и очередью: раздел,
+    # рисующий строку иначе, чем два соседних, читался бы как другой механизм.
+    "admin/includes/user_row.html": (
+        "макрос строки внутри объединения admin/users.html"
+    ),
+    # Подраздел «Платежи» (план 06-11) — четвёртый подряд той же формы: макрос
+    # строки в своём файле, шапка — в шаблоне страницы.
+    "admin/includes/payment_row.html": (
+        "макрос строки внутри объединения admin/payments.html"
+    ),
     # groups/includes/group_row.html ВЫШЕЛ из перечня планом 03-08 вместе с
     # самим шаблоном: глобальный раздел снесён (D-01). Строка группы на экране
     # аккаунта его место не занимает — она КАРТОЧНАЯ и примитив строки-таблицы
@@ -3382,7 +3389,8 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     ),
     # Класс 3: страницы-карточки без шапки колонок вовсе. На 860px нечему
     # скрываться, значит и компенсировать подписью нечего.
-    "admin/group_info_detail.html": "страница-карточка, шапки колонок нет вовсе",
+    # admin/group_info_detail.html ВЫШЕЛ из перечня планом 06-01 вместе с самим
+    # шаблоном: экраны справочника групп снесены (D-05).
     "admin/user_history_detail.html": "страница-карточка, шапки колонок нет вовсе",
     # history/detail.html ВЫШЕЛ из перечня планом 04-07: страница записи
     # перевёрстана на ПРИМИТИВ ЗАПИСИ (data-hrow) и строку-таблицу больше не
@@ -3396,12 +3404,67 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
 }
 
 
+class _QueueRowheadPipeline:
+    """Конвейер заглушки: отвечает на пару «длина + диапазон» одной очереди."""
+
+    def __init__(self):
+        self._keys: list[str] = []
+
+    def llen(self, key: str):
+        self._keys.append(key)
+        return self
+
+    def lrange(self, key: str, start: int, stop: int):
+        self._keys.append(key)
+        return self
+
+    def get(self, key: str):
+        self._keys.append(key)
+        return self
+
+    async def execute(self):
+        import json
+
+        body = json.dumps(
+            {
+                "task_id": "rowhead-task",
+                "ad_title": "Заголовок",
+                "group_name": "Группа «Барахолка»",
+            },
+            ensure_ascii=False,
+        ).encode()
+        occupied = any(key.startswith("wa:queue:") for key in self._keys)
+        return [1, [body]] if occupied else [0, []]
+
+
+class _QueueRowheadRedis:
+    """Заглушка Redis для подраздела «Очередь» — ровно одна задача в WA-очереди.
+
+    ⚠️ БЕЗ НЕЁ ЭТОТ ВХОД ТАБЛИЦЫ ЗЕЛЕНЕЛ БЫ ВАКУУМНО. Шапка колонок подраздела
+    рисуется ТОЛЬКО над непустой очередью — пустая печатает пустое состояние, у
+    которого ни шапки, ни подписей нет вовсе, и сравнение разностей сошлось бы,
+    ничего не сравнив. Очередь же живёт в Redis, которого в суите нет: подмена
+    идёт через ту же именованную точку модуля, что у подраздела «Воркеры».
+    """
+
+    def pipeline(self):
+        return _QueueRowheadPipeline()
+
+    async def llen(self, key: str) -> int:
+        return 0
+
+
 class RowheadPage(NamedTuple):
     """Вход таблицы параметризации: одна страница с шапкой колонок.
 
     unlabelled — ОЖИДАЕМАЯ разность «названия колонок шапки минус подписи»,
     объявленная явно, а не выведенная. Это и делает сетку строгой: новая колонка
     без подписи увеличивает разность и роняет тест.
+
+    ops_state — нужна ли странице подмена оперативного состояния, чтобы шапка
+    вообще отрисовалась. Признак объявлен явно, а не выведен из имени шаблона:
+    страница, которой подмена нужна и не досталась, показала бы пустое
+    состояние, и вход таблицы утверждал бы про вёрстку, которой на экране нет.
     """
 
     template: str
@@ -3410,6 +3473,7 @@ class RowheadPage(NamedTuple):
     seed: str
     unlabelled: frozenset[str]
     note: str = ""
+    ops_state: bool = False
 
 
 ROWHEAD_PAGES = (
@@ -3443,6 +3507,26 @@ ROWHEAD_PAGES = (
         "admin/user_detail.html", "/admin/users/{user_id}", True, "admin_user_detail",
         frozenset({"Аккаунт"}),
     ),
+    # Подраздел «Воркеры» (план 06-01, разделён надвое планом 06-05). Разность
+    # ПУСТА: подписаны ВСЕ колонки обеих таблиц — на 860px шапки скрываются, и
+    # «в работе» без названия колонки был бы неотличим от состояния сессии,
+    # стоящего рядом.
+    #
+    # ⚠️ ШАБЛОН НАЗВАН ПАРШАЛОМ, А АДРЕС ОСТАЛСЯ СТРАНИЧНЫМ, И ЭТО НЕ
+    # рассогласование. План 06-05 вынес ОБА блока подраздела в
+    # `admin/includes/workers_partial.html`: он же первичная отрисовка, он же
+    # ответ опроса (D-12). Шапку колонок вызывает теперь именно он — поэтому в
+    # таблице стоит он, иначе обход по шапкам не сошёлся бы. Адрес оставлен
+    # страничным намеренно: проверять подписи надо на том, что видит человек, а
+    # человек открывает страницу, а не паршал.
+    RowheadPage(
+        "admin/includes/workers_partial.html", "/admin/workers", True,
+        "admin_workers", frozenset(),
+        note=(
+            "Две таблицы на одной странице: блок инфраструктуры (D-09) и блок "
+            "воркеров аккаунтов. Подписи обязаны покрывать колонки ОБЕИХ."
+        ),
+    ),
     # ⚠️ НАБЛЮДЕНИЕ T-13-09 ПО ЭТОЙ СТРАНИЦЕ ЗАКРЫТО — И ЗАКРЫТО СНОСОМ, А НЕ
     # ДОПИСЫВАНИЕМ ПОДПИСЕЙ. Колонки «Тип» и «Описание» принадлежали истории
     # операций по балансу сообщений; журнал снят планом 05.1-05 вместе с самим
@@ -3450,18 +3534,42 @@ ROWHEAD_PAGES = (
     # SC-5, которая на этой странице оставалась ложной. Осталась одна колонка
     # без подписи — «Дата», и она освобождена НАМЕРЕННО: форматированная дата
     # самоописательна (контракт C2 UI-SPEC фазы 05.1).
+    # Подраздел «Очередь» (план 06-07). Разность ПУСТА: подписаны все четыре
+    # колонки — на 860px шапка скрывается, и «ждёт» без названия колонки было бы
+    # неотличимо от имени группы, стоящего рядом.
+    RowheadPage(
+        "admin/queue.html", "/admin/queue", True, "admin_queue", frozenset(),
+        note=(
+            "Шапка рисуется только над непустой очередью, поэтому вход требует "
+            "подмены оперативного состояния."
+        ),
+        ops_state=True,
+    ),
+    # Подраздел «Платежи» (план 06-11). Разность ПУСТА — включая «Дату»,
+    # освобождённую у раздела пользователя ниже, и это НЕ разнобой: там журнал
+    # платежей человека, где каждая строка про него самого и колонок четыре;
+    # здесь — журнал всего сервиса, где рядом с датой стоит имя ПЛАТЕЛЬЩИКА, а
+    # на 860px шапка скрывается целиком. Дата без подписи в таком соседстве
+    # читается как дата регистрации того, чьё имя напечатано следом.
+    RowheadPage(
+        "admin/payments.html", "/admin/payments", True, "admin_payments",
+        frozenset(),
+        note=(
+            "Шапка рисуется только над непустым журналом, поэтому вход требует "
+            "посева хотя бы одного платежа."
+        ),
+    ),
     RowheadPage(
         "billing/balance.html", "/billing", False, "billing",
         frozenset({"Дата"}),
     ),
     # НАБЛЮДЕНИЕ, а НЕ принятая базовая линия — та же история, что у тарифов:
     # «Канал» и «Обновлено» на 860px остаются без названия (T-13-09).
-    RowheadPage(
-        "admin/groups_info.html", "/admin/groups-info", True, "admin_groups_info",
-        frozenset({"Группа", "Канал", "Обновлено"}),
-        note="НАБЛЮДЕНИЕ для /gsd-verify-work: «Канал» и «Обновлено» не подписаны "
-        "помимо колонки названия; НЕ принятая базовая линия",
-    ),
+    # admin/groups_info.html ВЫШЕЛ из таблицы планом 06-01 вместе с самим
+    # шаблоном: экраны справочника групп снесены (D-05). Вместе с ним закрыто и
+    # НАБЛЮДЕНИЕ T-13-09 по этой странице («Канал» и «Обновлено» оставались без
+    # подписи) — закрыто СНОСОМ предмета, а не дописыванием подписей. Замены в
+    # таблице у него нет и быть не может: поверхность снята, а не переименована.
 )
 
 
@@ -3483,13 +3591,26 @@ async def _seed_rowhead_page(db: AsyncSession, seed: str) -> None:
         pass  # обычный пользователь и админ зарегистрированы фикстурами
     elif seed == "admin_user_detail":
         await _seed_account(db, type_="max")
+    elif seed == "admin_workers":
+        # ТЕЛЕГРАМ-АККАУНТ ВЫБРАН НАМЕРЕННО: у него нет отдельного воркера, и
+        # сводка живости не делает ни одного обращения к Redis. Посеяв WA или
+        # MAX, обход по выдаче начал бы стучаться в брокер, которого в суите
+        # нет, — то есть проверка вёрстки зависела бы от внешней службы.
+        await _seed_account(db, type_="tg_user")
+    elif seed == "admin_queue":
+        # WA-АККАУНТ ВЫБРАН НАМЕРЕННО: строки очереди есть только у каналов со
+        # своим списком задач, а у telegram-канала их нет вовсе (D-14) — посеяв
+        # его, страница осталась бы без шапки колонок.
+        await _seed_account(db, type_="wa")
+    elif seed == "admin_payments":
+        # Журнал подраздела показывает платежи ВСЕХ пользователей, поэтому
+        # достаточно любой одной строки: чья она — на вёрстку не влияет.
+        await _seed_payment(db)
     elif seed == "billing":
         # Шапку колонок раздела рисует ЖУРНАЛ ПЛАТЕЖЕЙ: история операций по
         # балансу сообщений снята планом 05.1-05, и посев операцией оставлял бы
         # страницу с пустым состоянием вместо шапки.
         await _seed_payment(db)
-    elif seed == "admin_groups_info":
-        await _seed_group_info(db)
     else:  # pragma: no cover — защита от опечатки в таблице параметризации
         raise AssertionError(f"неизвестное наполнение: {seed}")
 
@@ -3544,8 +3665,20 @@ def test_rowhead_pages_all_have_a_parametrization_entry():
     # (D-01), план 04-05 снял шапку с дашборда вместе с блоком последних
     # отправок. Уменьшение объявленного числа — признание СОЗНАТЕЛЬНОГО снятия;
     # молчаливое исчезновение шаблона с шапкой по-прежнему краснеет.
-    assert len(declared) == 6, (
-        f"ожидалось шесть шаблонов с шапкой колонок, объявлено {len(declared)}: "
+    #
+    # ШЕСТЬ → ШЕСТЬ, И ЭТО НЕ «БЕЗ ИЗМЕНЕНИЙ»: план 06-01 завёл подраздел
+    # «Воркеры» со своей шапкой (+1) и снёс справочник групп вместе с его
+    # шапкой (−1). Совпадение итога — арифметика двух РАЗНЫХ шагов, а не
+    # отсутствие правки; проверку держат имена в `declared`, а не число.
+    #
+    # ШЕСТЬ → СЕМЬ: план 06-07 завёл подраздел «Очередь» со своей шапкой (+1).
+    # Снятия в паре с ним нет — это чистое прибавление поверхности.
+    #
+    # СЕМЬ → ВОСЕМЬ: план 06-11 завёл журнал платежей подраздела «Платежи» со
+    # своей шапкой (+1). Снятия в паре с ним нет — это тоже чистое прибавление
+    # поверхности: до плана подраздел стоял честной пустотой без единой строки.
+    assert len(declared) == 8, (
+        f"ожидалось восемь шаблонов с шапкой колонок, объявлено {len(declared)}: "
         f"{sorted(declared)}"
     )
 
@@ -3573,8 +3706,30 @@ def test_row_templates_without_header_are_accounted_for():
     # billing/balance.html и там же проверяется на подписи. Изменение
     # объявленного числа — признание СОЗНАТЕЛЬНОГО шага; молчаливое появление
     # или исчезновение файла по-прежнему краснеет.
-    assert len(declared) == 6, (
-        f"ожидалось шесть таких шаблонов, объявлено {len(declared)}"
+    #
+    # ШЕСТЬ → ШЕСТЬ, И ЭТО НЕ «БЕЗ ИЗМЕНЕНИЙ»: план 06-01 добавил ОДИН файл
+    # первого класса (макрос строки воркера, чей исходник входит в объединение
+    # admin/workers.html) и снял ОДИН файл третьего класса (карточка справочника
+    # групп снесена, D-05). Совпадение итога — арифметика двух разных шагов.
+    #
+    # ШЕСТЬ → СЕМЬ: план 06-07 добавил ОДИН файл первого класса — макрос строки
+    # очереди, чей исходник входит в объединение admin/queue.html и там же
+    # проверяется на подписи. Снятия в паре с ним нет.
+    #
+    # СЕМЬ → ВОСЕМЬ: план 06-09 добавил ОДИН файл первого класса — макрос строки
+    # пользователя, чей исходник входит в объединение admin/users.html.
+    # Разметка строки при этом не появилась, а ПЕРЕЕХАЛА: раньше она лежала в
+    # теле самой страницы и в обход по строкам без шапки не попадала, потому что
+    # шапку рисовал тот же файл. Снятия в паре с ним нет.
+    #
+    # ВОСЕМЬ → ДЕВЯТЬ: план 06-11 добавил ОДИН файл первого класса — макрос
+    # строки платежа админского журнала, чей исходник входит в объединение
+    # admin/payments.html и там же проверяется на подписи. Он ЧЕТВЁРТЫЙ подряд
+    # той же формы (воркер, очередь, пользователь, платёж): подраздел, рисующий
+    # строку иначе, чем три соседних, читался бы как другой механизм. Снятия в
+    # паре с ним нет.
+    assert len(declared) == 9, (
+        f"ожидалось девять таких шаблонов, объявлено {len(declared)}"
     )
     # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
     # макрос row_open он не вызывает. Без второго условия разрешителя он выпал
@@ -3622,7 +3777,15 @@ async def test_rowhead_titles_are_covered_by_labels(
         follow_redirects=False,
     )
 
-    response = await client.get(page.url.format(user_id=user.id))
+    if page.ops_state:
+        from unittest.mock import patch
+
+        with patch(
+            "app.services.ops_state._get_redis", return_value=_QueueRowheadRedis()
+        ):
+            response = await client.get(page.url.format(user_id=user.id))
+    else:
+        response = await client.get(page.url.format(user_id=user.id))
     assert response.status_code == 200, (
         f"{page.template}: страница {page.url} вернула {response.status_code}"
     )
@@ -3680,7 +3843,13 @@ DIALOG_SWEEP_URLS = (
 
 DIALOG_SWEEP_ADMIN_URLS = (
     "/admin/users",
-    "/admin/groups-info",
+    # Адрес справочника групп ушёл отсюда планом 06-01 вместе с его экранами
+    # (D-05). Его место заняли подразделы админ-панели: обход требует 200, и все
+    # пять новых адресов его дают.
+    "/admin/workers",
+    "/admin/queue",
+    "/admin/logs",
+    "/admin/payments",
 )
 
 
@@ -3700,7 +3869,6 @@ async def test_no_rendered_page_calls_browser_dialog(
     account = await _seed_account(db_session, type_="max")
     for seed in ("ads", "schedules", "dashboard", "billing"):
         await _seed_rowhead_page(db_session, seed)
-    await _seed_group_info(db_session)
     # Экран групп аккаунта адресуется идентификатором и в статический перечень
     # по построению не входит; в обход он попадает вместе со своей порцией
     # прокрутки — тем же приёмом, что ответ опроса статуса аккаунта.

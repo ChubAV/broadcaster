@@ -227,43 +227,6 @@ async def test_the_admin_top_up_route_no_longer_answers(client: AsyncClient, db_
 
 
 @pytest.mark.asyncio
-async def test_admin_block_user(client: AsyncClient, db_session):
-    """Admin can block a user."""
-    await client.post("/api/auth/register", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-        "name": "Admin",
-    })
-    resp = await client.post("/api/auth/login", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-    })
-    admin_token = resp.json()["access_token"]
-    admin_headers = {"Authorization": f"Bearer {admin_token}"}
-
-    await client.post("/api/auth/register", json={
-        "email": "user@test.com",
-        "password": "userpass123",
-        "name": "User",
-    })
-
-    from app.models.user import User
-    from sqlalchemy import select
-    result = await db_session.execute(select(User).where(User.email == "user@test.com"))
-    target = result.scalar_one()
-
-    resp = await client.post(
-        f"/admin/users/{target.id}/block",
-        headers=admin_headers,
-        follow_redirects=False,
-    )
-    assert resp.status_code == 302
-
-    await db_session.refresh(target)
-    assert target.is_blocked is True
-
-
-@pytest.mark.asyncio
 async def test_admin_delete_user(client: AsyncClient, db_session):
     """Admin can delete a user."""
     await client.post("/api/auth/register", json={
@@ -538,59 +501,6 @@ async def test_the_free_access_grant_is_journaled_with_both_identities(
 
 
 @pytest.mark.asyncio
-async def test_blocked_user_cannot_login(client: AsyncClient, db_session):
-    """Blocked user gets rejected on login."""
-    from app.models.user import User
-    from app.services.auth_service import hash_password
-
-    user = User(
-        email="blocked@test.com",
-        password_hash=hash_password("pass123"),
-        name="Blocked",
-        is_blocked=True,
-    )
-    db_session.add(user)
-    await db_session.commit()
-
-    resp = await client.post("/api/auth/login", json={
-        "email": "blocked@test.com",
-        "password": "pass123",
-    })
-    assert resp.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_admin_cannot_block_self(client: AsyncClient, db_session):
-    """Admin cannot block themselves."""
-    await client.post("/api/auth/register", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-        "name": "Admin",
-    })
-    resp = await client.post("/api/auth/login", json={
-        "email": "admin@test.com",
-        "password": "adminpass123",
-    })
-    admin_token = resp.json()["access_token"]
-    admin_headers = {"Authorization": f"Bearer {admin_token}"}
-
-    from app.models.user import User
-    from sqlalchemy import select
-    result = await db_session.execute(select(User).where(User.email == "admin@test.com"))
-    admin_user = result.scalar_one()
-
-    resp = await client.post(
-        f"/admin/users/{admin_user.id}/block",
-        headers=admin_headers,
-        follow_redirects=False,
-    )
-    assert resp.status_code == 302
-
-    await db_session.refresh(admin_user)
-    assert admin_user.is_blocked is False
-
-
-@pytest.mark.asyncio
 async def test_admin_cannot_delete_self(client: AsyncClient, db_session):
     """Admin cannot delete themselves."""
     await client.post("/api/auth/register", json={
@@ -619,3 +529,72 @@ async def test_admin_cannot_delete_self(client: AsyncClient, db_session):
 
     still_exists = await db_session.get(User, admin_user.id)
     assert still_exists is not None
+
+
+# =============================================================================
+# «КТО АДМИНИСТРАТОР» — ОДНО ПРАВИЛО, А НЕ ДВА (WR-01 ревизии фазы 6)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_an_unset_admin_email_makes_nobody_an_administrator(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Незаданная настройка означает «администраторов нет» на ОБЕИХ проверках.
+
+    ⚠️ ПРЕДМЕТ — РАСХОЖДЕНИЕ ДВУХ ВЫРАЖЕНИЙ ОДНОГО ПРАВИЛА, А НЕ ПУСТОЙ АДРЕС
+    САМ ПО СЕБЕ. Страничная проверка открывалась веткой «настройка не задана —
+    прав нет»; зависимость, гейтящая ВСЕ шестнадцать маршрутов раздела, такой
+    ветки не имела и сравнивала адрес напрямую. Умолчание `admin_email` —
+    пустая строка, поэтому две проверки отвечали на один вопрос по-разному, и
+    расходились они в сторону ВЫДАЧИ доступа: маршруты раздела открыты, ссылка
+    на раздел скрыта.
+
+    Достижимость сегодня узкая — оба пути регистрации пустой адрес отвергают, —
+    и утверждение поэтому снимается с ПРЕДИКАТА, а не с живого запроса: иначе
+    оно проверяло бы валидацию регистрации, а не правило прав.
+    """
+    from app.config import Settings
+    from app.dependencies import email_is_admin
+    from app.pages.common import check_is_admin
+
+    unset = test_settings.model_copy(update={"admin_email": ""})
+
+    assert email_is_admin("", unset) is False, (
+        "при незаданной настройке пустой адрес признан административным — "
+        "любая строка с пустым адресом становится администратором на всех "
+        "маршрутах раздела"
+    )
+    assert email_is_admin(None, unset) is False
+    assert email_is_admin("anybody@test.com", unset) is False
+
+    ghost = User(email="", password_hash="x", name="Пустой адрес")
+    assert check_is_admin(ghost, unset) is False, (
+        "страничная проверка и зависимость снова разошлись"
+    )
+
+
+def test_both_admin_checks_answer_through_the_same_predicate(test_settings):
+    """Обе проверки прав дают ОДИН ответ на каждом входе — потому что предикат один.
+
+    ⚠️ ЭТО НЕ ПЕРЕСКАЗ ТЕСТА ВЫШЕ. Тот утверждает ОДИН случай (незаданная
+    настройка); этот утверждает СОГЛАСИЕ двух проверок на всём переборе — то
+    есть краснеет и на расхождении, которое будущая правка заведёт где-нибудь
+    ещё, например в регистре адреса.
+
+    Проверка `require_admin` вызывается здесь не целиком: она требует запроса и
+    сессии БД, а предмет утверждения — правило прав, а не способ добраться до
+    строки пользователя. Сравниваются РЕШАЮЩИЕ выражения обеих сторон.
+    """
+    from app.dependencies import email_is_admin
+    from app.pages.common import check_is_admin
+
+    for admin_email in ("", "admin@test.com", "ADMIN@test.com"):
+        settings = test_settings.model_copy(update={"admin_email": admin_email})
+        for email in ("", "admin@test.com", "ADMIN@test.com", "other@test.com"):
+            user = User(email=email, password_hash="x", name="U")
+            assert check_is_admin(user, settings) == email_is_admin(email, settings), (
+                "страничная проверка и зависимость разошлись при "
+                f"admin_email={admin_email!r}, email={email!r} — одно правило "
+                "снова выписано дважды"
+            )

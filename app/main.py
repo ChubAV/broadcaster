@@ -13,7 +13,12 @@ from app.logging_config import setup_logging
 from app.config import Settings, get_settings
 from app.exceptions import NotFoundError, ForbiddenError, BillingLimitError, MessengerConnectionError
 from app.database import get_engine, get_session_factory
-from app.dependencies import get_current_user_id_with_access, init_db
+from app.dependencies import (
+    forbid_when_impersonating,
+    get_current_user_id_active,
+    get_current_user_id_with_access,
+    init_db,
+)
 from app.infrastructure.uow import create_uow_factory
 from app.middleware import RequestIdMiddleware
 from app.pages.common import bind_image_url_globals
@@ -25,6 +30,7 @@ from app.routes.schedules import router as schedules_router
 from app.routes.history import router as history_router
 from app.routes.billing import router as billing_router
 from app.pages.dashboard_feed import router as dashboard_feed_router
+from app.pages.admin import partials_router as admin_partials_router
 from app.pages import router as pages_router
 
 logger = structlog.get_logger(__name__)
@@ -90,27 +96,83 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # объекте приложения выглядит совершенно обычно (T-05.1-14). Ручное «не
     # забыть» средством защиты не считается.
     app.include_router(auth_router)
+    #
+    # ⚠️ ГЕЙТОВ НА ЭТИХ РОУТЕРАХ ДВА, И ОНИ ОТВЕЧАЮТ НА РАЗНЫЕ ВОПРОСЫ.
+    # `get_current_user_id_with_access` спрашивает «оплачено ли»,
+    # `get_current_user_id_active` — «действует ли учётная запись» (CR-01,
+    # D-30). Перечни сегодня совпадают по составу, но выводить один из другого
+    # нельзя: первая же фаза, ответившая на эти вопросы по-разному, развела бы
+    # их молча. Полноту обоих держит `tests/test_pages/test_access_gate.py`
+    # тремя объявленными множествами.
+    #
+    # Блокировка стоит ПЕРВОЙ намеренно: заблокированному с истёкшим сроком
+    # осмысленно сказать «учётная запись заблокирована», а не «продлите
+    # доступ» — продление ему ничего не откроет.
     app.include_router(
-        ads_router, dependencies=[Depends(get_current_user_id_with_access)]
+        ads_router,
+        dependencies=[
+            Depends(get_current_user_id_active),
+            Depends(get_current_user_id_with_access),
+        ],
     )
     app.include_router(
-        uploads_router, dependencies=[Depends(get_current_user_id_with_access)]
+        uploads_router,
+        dependencies=[
+            Depends(get_current_user_id_active),
+            Depends(get_current_user_id_with_access),
+        ],
     )
     app.include_router(
-        accounts_router, dependencies=[Depends(get_current_user_id_with_access)]
+        accounts_router,
+        dependencies=[
+            Depends(get_current_user_id_active),
+            Depends(get_current_user_id_with_access),
+        ],
     )
     app.include_router(
-        schedules_router, dependencies=[Depends(get_current_user_id_with_access)]
+        schedules_router,
+        dependencies=[
+            Depends(get_current_user_id_active),
+            Depends(get_current_user_id_with_access),
+        ],
     )
     app.include_router(
-        history_router, dependencies=[Depends(get_current_user_id_with_access)]
+        history_router,
+        dependencies=[
+            Depends(get_current_user_id_active),
+            Depends(get_current_user_id_with_access),
+        ],
     )
-    # Денежный роутер НЕ закрывается гейтом доступа НИКОГДА: там живут и чтения
-    # раздела оплаты, и вебхук ЮKassa. Закрыть его значило бы запереть человека
-    # в продукте, где единственное открывающее действие само требует доступа, а
-    # на вебхуке — остановить приём денег отказом 402 в ответ на уведомление о
-    # состоявшемся платеже.
-    app.include_router(billing_router)
+    # Денежный роутер НЕ закрывается НИ ГЕЙТОМ ДОСТУПА, НИ БЛОКИРОВКОЙ (D-53,
+    # решение владельца). У роутера остался РОВНО ОДИН вход — вебхук ЮKassa
+    # ниже; отказ на нём есть отказ в ответ на уведомление о СОСТОЯВШЕМСЯ
+    # платеже, то есть остановленный приём денег по уже совершённым платежам,
+    # и потерянное уведомление откатом кода не возвращается.
+    #
+    # ⚠️ ПРЕЖНЯЯ РЕДАКЦИЯ ЭТОГО КОММЕНТАРИЯ УТВЕРЖДАЛА, ЧТО ЗДЕСЬ ЖИВУТ И
+    # ЧТЕНИЯ РАЗДЕЛА ОПЛАТЫ. Исходнику это больше не соответствует: читающие
+    # входы сняты вместе со всей валютой сообщений (план 05-04), а страничные
+    # маршруты оплаты живут в `app/pages/billing.py` — за гардом
+    # `get_user_from_cookie`, который заблокированного не пускает и так.
+    # Расхождение исправлено здесь и записано решением D-53: решение о денежном
+    # пути принималось по этому комментарию, и вторая фаза приняла бы его по
+    # той же ложной посылке.
+    #
+    # ⚠️ ЗАПРЕТ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ — ЕДИНСТВЕННОЕ, ЧЕМ ЭТОТ РОУТЕР ЗАКРЫТ, И
+    # ЗАКРЫТ ОН ЦЕЛИКОМ (D-22). Под чужой учётной записью запрещено ВСЁ
+    # денежное, поэтому здесь не перечень маршрутов, а роутер: маршрут,
+    # добавленный сюда будущей фазой, окажется закрыт ПО УМОЛЧАНИЮ — то
+    # направление ошибки, которое денежному пути и полагается.
+    #
+    # ⚠️ ВЕБХУК ЭТИМ НЕ ЗАДЕТ, И ИМЕННО ПОЭТОМУ ОТСУТСТВИЕ ТОКЕНА НЕ СЧИТАЕТСЯ
+    # ОТКАЗОМ. Уведомление ЮKassa о СОСТОЯВШЕМСЯ платеже приходит не от
+    # браузера и токена не несёт; зависимость пропускает запрос, у которого
+    # действующего лица нет. Обратное поведение остановило бы приём денег по
+    # уже совершённым платежам (D-53), и закреплено это отдельным тестом
+    # (`test_the_payment_webhook_without_a_token_is_not_refused`).
+    app.include_router(
+        billing_router, dependencies=[Depends(forbid_when_impersonating)]
+    )
     # Паршал живой ленты включается ОТДЕЛЬНО и ДО страничного роутера: тот
     # объявлен с зависимостью загрузки контекста шелла на каждом маршруте, а
     # ленте шелл не нужен, и при бессрочном опросе эта цена умножалась бы на
@@ -129,6 +191,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # оправдывает. Что просроченный человек видит СВОЮ ленту и не видит ничего
     # чужого, — допущенное следствие, а не упущение.
     app.include_router(dashboard_feed_router)
+    # ПАРШАЛ ОПРОСА ПОДРАЗДЕЛА «ВОРКЕРЫ» (D-12) — ВНЕ СТРАНИЧНОЙ СБОРКИ ПО ТОМУ
+    # ЖЕ ДОВОДУ, ЧТО ЖИВАЯ ЛЕНТА ВЫШЕ, и по нему же — БЕЗ гейта оплаченного
+    # доступа. Во-первых, админка целиком стоит в «не закрывается никогда»
+    # (`OPEN_ROUTERS`): администратор без оплаченного доступа обязан входить в
+    # админку, иначе чинить аварию некому. Во-вторых, права администратора
+    # висят на самом обработчике, поэтому открытым для постороннего маршрут не
+    # становится — он отвечает 403. В-третьих, опрос бессрочен, и запрос за
+    # вердиктом доступа умножался бы на число открытых вкладок каждые двадцать
+    # секунд ради ответа, который для админки заранее известен.
+    app.include_router(admin_partials_router)
     app.include_router(pages_router)
 
     @app.exception_handler(NotFoundError)
