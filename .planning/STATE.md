@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
-current_phase: 06
-current_phase_name: Админ-панель
-status: executing
-stopped_at: Phase 06 UI-SPEC approved
-last_updated: "2026-08-22T09:47:04.103Z"
-last_activity: 2026-08-22
-last_activity_desc: Phase 06 execution started
-state_head: 2b50127308c92e6c87531685eb668989a3e36488
+current_phase: 5
+current_phase_name: Тарифы
+status: planning
+stopped_at: Phase 06 complete, ready to plan Phase 5
+last_updated: "2026-08-24T18:03:38.545Z"
+last_activity: 2026-08-24
+last_activity_desc: Phase 06 complete, transitioned to Phase 5
+state_head: cbf7e3573a6ffe538fb2c490a7e19f26799e1e26
 progress:
   total_phases: 7
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 110
   completed_plans: 110
-  percent: 71
+  percent: 86
 ---
 
 # Project State
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md (updated 2026-08-21)
 
 ## Current Position
 
-Phase: 06 (Админ-панель) — EXECUTING
-Status: Executing Phase 06
-Last activity: 2026-08-22 — Phase 06 execution started
+Phase: 5 — Тарифы
+Status: Ready to plan
+Last activity: 2026-08-24 — Phase 06 complete, transitioned to Phase 5
 
 Владелец остановил UAT фазы 5 на первом же пункте: «получилась очень сложная для понимания система тарифов». Диагноз подтверждается кодом — в фазе 5 сосуществовали ДВЕ независимые системы оплаты: три тарифных плана по четырём осям лимитов (`Settings.plan_limits`) И отдельная валюта сообщений с пакетами (`Settings.message_packages`, `MessageBalance`, списание `deduct_message()`). Итоговая модель убирает счёт целиком: 3000 ₽/мес за доступ к системе, без лимитов по аккаунтам, группам и сообщениям.
 
@@ -51,7 +51,7 @@ Last activity: 2026-08-22 — Phase 06 execution started
 
 **Velocity:**
 
-- Total plans completed: 26 (milestone v2.0)
+- Total plans completed: 40 (milestone v2.0)
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -64,6 +64,7 @@ Last activity: 2026-08-22 — Phase 06 execution started
 | 3. Группы аккаунта | 12/12 | - | - |
 | 04 | 12 | - | - |
 | 05.1 | 14 | - | - |
+| 06 | 14 | - | - |
 
 **Recent Trend:**
 
@@ -224,5 +225,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-08-22T09:47:03.590Z
-Stopped at: Phase 06 UI-SPEC approved
+Stopped at: Phase 06 complete, ready to plan Phase 5
 Resume file: .planning/phases/06-admin-panel/06-UI-SPEC.md
