@@ -4,12 +4,12 @@ milestone: v2.0
 milestone_name: Redesign
 current_phase: 5
 current_phase_name: Тарифы
-status: planning
+status: "Phase 06 shipped — PR #42"
 stopped_at: Phase 06 complete, ready to plan Phase 5
-last_updated: "2026-08-24T18:03:38.545Z"
+last_updated: "2026-08-24T20:21:38.262Z"
 last_activity: 2026-08-24
-last_activity_desc: Phase 06 complete, transitioned to Phase 5
-state_head: cbf7e3573a6ffe538fb2c490a7e19f26799e1e26
+last_activity_desc: Phase 06 shipped — PR #42 (branch gsd/phase-06-admin-panel → master)
+state_head: 6c65ab1511f9d82854e0ba7f9cc6c7157f750e3d
 progress:
   total_phases: 7
   completed_phases: 6
@@ -30,8 +30,8 @@ See: .planning/PROJECT.md (updated 2026-08-21)
 ## Current Position
 
 Phase: 5 — Тарифы
-Status: Ready to plan
-Last activity: 2026-08-24 — Phase 06 complete, transitioned to Phase 5
+Status: Phase 06 shipped — PR #42
+Last activity: 2026-08-24
 
 Владелец остановил UAT фазы 5 на первом же пункте: «получилась очень сложная для понимания система тарифов». Диагноз подтверждается кодом — в фазе 5 сосуществовали ДВЕ независимые системы оплаты: три тарифных плана по четырём осям лимитов (`Settings.plan_limits`) И отдельная валюта сообщений с пакетами (`Settings.message_packages`, `MessageBalance`, списание `deduct_message()`). Итоговая модель убирает счёт целиком: 3000 ₽/мес за доступ к системе, без лимитов по аккаунтам, группам и сообщениям.
 
