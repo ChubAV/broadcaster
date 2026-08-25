@@ -1,20 +1,21 @@
 {% from "components/button.html" import button, link_button %}
-{% from "components/table.html" import row_open, row_close, cell %}
-{% from "components/badge.html" import badge %}
 {% from "components/mono.html" import mono %}
 {% from "components/modal.html" import modal %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 
-{# Следующая порция строк раздела «Аккаунты». Разметка строки и сентинела
+{# Следующая порция карточек раздела «Аккаунты». Разметка карточки и сентинела
    ИДЕНТИЧНА list.html: правится одна — синхронно правится вторая. Значения
    ниже повторяют объявленные в list.html и в partials/sync_status_card.html.
 
-   ACCOUNT_COLUMNS шапку здесь не рисует — порция приходит без шапки, — но нужен
-   как источник ПОДПИСЕЙ внутри ячеек: подпись обязана дословно повторять
-   название колонки из шапки первой страницы, иначе долиставший до второй порции
-   пользователь увидит на телефоне другие слова. #}
-{% set ACCOUNT_COLS = 'minmax(150px,2fr) 84px 112px 116px 140px 148px 148px 116px' %}
-{% set ACCOUNT_COLUMNS = ['Аккаунт', 'Групп', 'Расписаний', 'Успешность', 'Последняя отправка', 'Подключён', 'Статус', ''] %}
+   Файл ПРИЕЗЖАЕТ ВНУТРЬ контейнера сетки, заменяя собой сентинел, поэтому
+   своего контейнера не открывает: вторая сетка внутри первой встала бы одной
+   её колонкой, и вся вторая порция сжалась бы в один трек.
+
+   ACCOUNT_KEYS — источник КЛЮЧЕЙ карточки, и ключ обязан дословно повторять
+   ключ первой страницы: долиставший до второй порции пользователь иначе увидит
+   те же числа под другими словами. Ключ берётся ИНДЕКСОМ из списка; вписанный
+   на месте строкой ключ разъедется с соседним файлом молча. #}
+{% set ACCOUNT_KEYS = ['Состояние', 'Групп', 'Расписаний', 'Успешность', 'Последняя отправка', 'Подключён'] %}
 {% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
 
 {% for account in accounts %}
@@ -22,48 +23,63 @@
 {%- set attempts = stats.get('send_attempts', 0) -%}
 {%- set label = MESSENGER_LABELS.get(account.type, account.type) -%}
 {% if account.status == 'syncing' %}
-{#- ЯКОРЬ ПОДМЕНЫ. Идентификатор account-row-<id> и запрос обновления статуса
-    стоят на ОДНОМ элементе, и этот элемент заменяется целиком. Перенос
-    идентификатора на обёртку или на дочерний элемент рвёт подмену молча:
-    строка перестанет обновляться, а страница останется исправной с виду.
-    Запрос висит ТОЛЬКО на синхронизирующейся строке: у остальных статусов
-    замене неоткуда взяться, а опрос на каждой строке превратился бы в
+{#- ЯКОРЬ ПОДМЕНЫ. Идентификатор account-row-<id> сохранён ДОСЛОВНО вместе с
+    переверсткой: это точка подмены htmx, а не имя класса. Идентификатор и
+    запрос обновления статуса стоят на ОДНОМ элементе, и этот элемент
+    заменяется целиком. Перенос идентификатора на обёртку или на дочерний
+    элемент рвёт подмену молча: карточка перестанет обновляться, а страница
+    останется исправной с виду.
+    Запрос висит ТОЛЬКО на синхронизирующейся карточке: у остальных статусов
+    замене неоткуда взяться, а опрос на каждой карточке превратился бы в
     бесконечный поток запросов с каждой открытой вкладки (T-06-01). -#}
-<div data-row id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML" style="--cols: {{ ACCOUNT_COLS }}">
-  {%- call cell(grow=true) %}
-    {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
-    <span data-grow>{{ label }}</span>{{ mono('#' ~ account.id) }}
-  {%- endcall %}
-  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[1]) }}
-  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[2]) }}
-  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[3]) }}
-  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[4]) }}
-  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[5]) }}
-  {%- call cell(label=ACCOUNT_COLUMNS[6]) %}
-    {{- badge('Синхронизация...', 'warning', title='Загружаем группы из ' ~ label ~ '. Это может занять несколько минут.') -}}
-  {%- endcall %}
-  {%- call cell() %}
+<article class="acct-card" id="account-row-{{ account.id }}" hx-get="/accounts/{{ account.id }}/sync-status" hx-trigger="every 5s" hx-swap="outerHTML">
+  <div class="acct-card__head">
+    {#- Тон плашки канала приходит АТРИБУТОМ data-channel: единственное
+        объявление трёх тонов канала в проекте — [data-upbadge][data-channel] в
+        app/static/css/app.css, второй копии здесь не заводится. -#}
+    {%- if account.type in MESSENGER_LABELS %}<span class="acct-card__ch" data-upbadge data-channel="{{ account.type }}">{{ messenger_icon(account.type, size='', show_label=false) }}</span>{% endif -%}
+    <span class="acct-card__ident">
+      <span class="acct-card__chan">{{ label }}</span>
+      {{- mono('#' ~ account.id) -}}
+    </span>
+    <span class="acct-card__dot acct-card__dot--warn acct-card__dot--live"></span>
+  </div>
+  <div class="acct-card__kv">
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[0] }}</span>{{ mono('Синхронизация...', 'warn', title='Загружаем группы из ' ~ label ~ '. Это может занять несколько минут.') }}</div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[1] }}</span><span class="kv__v">—</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[2] }}</span><span class="kv__v">—</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[3] }}</span><span class="kv__v">—</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[4] }}</span><span class="kv__v">—</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[5] }}</span><span class="kv__v">—</span></div>
+  </div>
+  <div class="acct-card__actions">
     {#- Вход на экран групп аккаунта (D-02) — во всех трёх ветках статуса и во
-        всех трёх синхронных копиях строки (UI-SPEC E8 partial). -#}
+        всех трёх синхронных копиях карточки (UI-SPEC E8 partial). -#}
     {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
     <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
-  {%- endcall %}
-</div>
+  </div>
+</article>
 {% elif account.status == 'sync_failed' %}
-{{ row_open(cols=ACCOUNT_COLS) }}
-  {%- call cell(grow=true) %}
-    {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
-    <span data-grow>{{ label }}</span>{{ mono('#' ~ account.id) }}
-  {%- endcall %}
-  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[1]) }}
-  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[2]) }}
-  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[3]) }}
-  {{- cell(text='—', mono=true, muted=true, label=ACCOUNT_COLUMNS[4]) }}
-  {{- cell(text=format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M'), mono=true, muted=true, label=ACCOUNT_COLUMNS[5]) }}
-  {%- call cell(label=ACCOUNT_COLUMNS[6]) %}{{ badge('Ошибка синхронизации', 'danger') }}{% endcall %}
-  {%- call cell() %}
+<article class="acct-card" id="account-row-{{ account.id }}">
+  <div class="acct-card__head">
+    {%- if account.type in MESSENGER_LABELS %}<span class="acct-card__ch" data-upbadge data-channel="{{ account.type }}">{{ messenger_icon(account.type, size='', show_label=false) }}</span>{% endif -%}
+    <span class="acct-card__ident">
+      <span class="acct-card__chan">{{ label }}</span>
+      {{- mono('#' ~ account.id) -}}
+    </span>
+    <span class="acct-card__dot acct-card__dot--danger"></span>
+  </div>
+  <div class="acct-card__kv">
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[0] }}</span>{{ mono('Ошибка синхронизации', 'danger') }}</div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[1] }}</span><span class="kv__v">—</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[2] }}</span><span class="kv__v">—</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[3] }}</span><span class="kv__v">—</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[4] }}</span><span class="kv__v">—</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[5] }}</span><span class="kv__v">{{ format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M') }}</span></div>
+  </div>
+  <div class="acct-card__actions">
     {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
     <form method="POST" action="/accounts/{{ account.id }}/retry-sync">
       {{- button('Повторить', variant='ghost', icon='refresh', title='Повторить синхронизацию') -}}
@@ -71,39 +87,41 @@
     <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
-  {%- endcall %}
-{{ row_close() }}
+  </div>
+</article>
 {% else %}
-{{ row_open(cols=ACCOUNT_COLS) }}
-  {%- call cell(grow=true) %}
-    {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
-    <span data-grow>{{ label }}</span>{{ mono('#' ~ account.id) }}
-  {%- endcall %}
-  {{- cell(text=stats.get('groups_count', 0), mono=true, muted=true, title='Групп', label=ACCOUNT_COLUMNS[1]) }}
-  {{- cell(text=stats.get('schedules_count', 0), mono=true, muted=true, title='Расписаний', label=ACCOUNT_COLUMNS[2]) }}
-  {{- cell(text=(((stats.get('send_success', 0) / attempts) * 100)|round|int ~ '%') if attempts > 0 else '—',
-           mono=true, muted=true,
-           title=(stats.get('send_success', 0)|string ~ ' из ' ~ attempts|string) if attempts > 0 else 'Отправок не было',
-           label=ACCOUNT_COLUMNS[3]) }}
-  {{- cell(text=format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') if stats.get('last_sent_at') else '—',
-           mono=true, muted=true, label=ACCOUNT_COLUMNS[4]) }}
-  {{- cell(text=format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M'), mono=true, muted=true, label=ACCOUNT_COLUMNS[5]) }}
-  {%- call cell(label=ACCOUNT_COLUMNS[6]) %}
-    {%- if account.status == 'active' %}{{ badge('Активно', 'success') }}
-    {%- elif account.status == 'disconnected' %}{{ badge('Отключён', 'neutral') }}
-    {%- else %}{{ badge(account.status, 'warning') }}{% endif -%}
-  {%- endcall %}
-  {%- call cell() %}
+{#- Тон и слово состояния приходят ОДНОЙ И ТОЙ ЖЕ величиной — статусом
+    аккаунта; неизвестное значение падает в «предупреждение», а не в «успех». -#}
+{%- set state_tone = 'ok' if account.status == 'active' else ('muted' if account.status == 'disconnected' else 'warn') -%}
+{%- set state_word = 'Активно' if account.status == 'active' else ('Отключён' if account.status == 'disconnected' else account.status) -%}
+<article class="acct-card" id="account-row-{{ account.id }}">
+  <div class="acct-card__head">
+    {%- if account.type in MESSENGER_LABELS %}<span class="acct-card__ch" data-upbadge data-channel="{{ account.type }}">{{ messenger_icon(account.type, size='', show_label=false) }}</span>{% endif -%}
+    <span class="acct-card__ident">
+      <span class="acct-card__chan">{{ label }}</span>
+      {{- mono('#' ~ account.id) -}}
+    </span>
+    <span class="acct-card__dot acct-card__dot--{{ state_tone }}"></span>
+  </div>
+  <div class="acct-card__kv">
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[0] }}</span>{{ mono(state_word, state_tone) }}</div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[1] }}</span><span class="kv__v">{{ stats.get('groups_count', 0) }}</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[2] }}</span><span class="kv__v">{{ stats.get('schedules_count', 0) }}</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[3] }}</span><span class="kv__v" title="{{ (stats.get('send_success', 0)|string ~ ' из ' ~ attempts|string) if attempts > 0 else 'Отправок не было' }}">{{ (((stats.get('send_success', 0) / attempts) * 100)|round|int ~ '%') if attempts > 0 else '—' }}</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[4] }}</span><span class="kv__v">{{ format_datetime_for_user(stats.get('last_sent_at'), user, '%d.%m %H:%M') if stats.get('last_sent_at') else '—' }}</span></div>
+    <div class="kv"><span class="kv__k">{{ ACCOUNT_KEYS[5] }}</span><span class="kv__v">{{ format_datetime_for_user(account.created_at, user, '%d.%m.%Y %H:%M') }}</span></div>
+  </div>
+  <div class="acct-card__actions">
     {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
     <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
-  {%- endcall %}
-{{ row_close() }}
+  </div>
+</article>
 {% endif %}
-{#- Панель подтверждения стоит РЯДОМ со строкой, а не внутри неё: панель
-    позиционируется фиксированно, а внутри сетки строки она стала бы её
-    колонкой (эталон — ads/includes/ad_card.html).
+{#- Панель подтверждения стоит РЯДОМ с карточкой, а не внутри неё: панель
+    позиционируется фиксированно и прямым ребёнком сетки ячейки не занимает
+    (эталон — ads/includes/ad_card.html).
     Панель ОДНА на аккаунт и общая для всех трёх веток статуса: её разметка от
     статуса не зависит, а две панели с одним идентификатором открывались бы
     одним событием, и Tab уходил бы в невидимую копию (T-11-04).

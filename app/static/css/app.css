@@ -2429,3 +2429,129 @@ a.chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px
   .ad-card { transition: none !important; }
   .ad-card:hover { transform: none !important; }
 }
+
+/* --------------------------------------------------------------------------
+   11. Списочная страница аккаунтов (задача 260825-of5).
+
+   Раздел `isAccounts` макета (design/new_broadcaster_design.unpacked.html:877-903)
+   — КАРТОЧНАЯ СЕТКА на всех ширинах. Строку-таблицу раздел получил Планом 01-03,
+   когда одна форма списочной страницы была применена ко всем пяти разделам
+   сразу; Фаза 6 своим объёмом брала подключение аккаунтов и опрос статуса, а
+   формой списка не занималась.
+
+   Дополнение файла санкционировано задачей. Все величины — существующие
+   переменные :root раздела 1: новых цветовых констант здесь не появляется ни
+   одной, и инлайновых hex в разметке раздела тоже нет.
+
+   Тонов плашки канала здесь НЕТ И БЫТЬ НЕ МОЖЕТ: их единственное объявление —
+   [data-upbadge][data-channel] раздела 5, заведённое дашбордом. Карточка берёт
+   ТОТ ЖЕ признак, а не заводит второй; ниже — только ГЕОМЕТРИЯ плашки.
+   Кадрового набора пульсации здесь тоже нет: точка состояния берёт
+   существующий @keyframes pulse раздела 2, второго не заводится.
+   -------------------------------------------------------------------------- */
+
+/* Ширина трека и зазор перенесены из макета (unpacked.html:878): 300px — ширина,
+   ниже которой подпись канала и точка состояния перестают помещаться в одну
+   строку шапки. auto-fill, а не auto-fit: один аккаунт на широком экране обязан
+   остаться КАРТОЧКОЙ в 300px, а не растянуться на всю строку. Раздел
+   перестраивается этим правилом САМ — медиазапросов у него нет ни одного, и
+   правила строки-таблицы на 860px к нему больше не относятся. */
+[data-accounts-grid] {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px; min-width: 0;
+}
+/* Сентинел бесконечной прокрутки — ячейка сетки, а не карточка: без растяжки
+   на всю строку он встал бы очередной колонкой рядом с последней карточкой, и
+   подпись «Загрузка...» читалась бы как ещё один аккаунт. */
+[data-accounts-grid] > .empty__hint { grid-column: 1 / -1; }
+
+/* Отступ, радиус и зазор колонки — из макета (unpacked.html:880), величины взяты
+   существующими переменными. */
+.acct-card {
+  display: flex; flex-direction: column; gap: 15px; min-width: 0;
+  padding: 20px; border-radius: var(--r-2xl);
+  background: var(--surface); border: 1px solid var(--border);
+  transition: border-color .2s ease, transform .2s ease;
+}
+.acct-card:hover { border-color: var(--border-dashed); transform: translateY(-3px); }
+
+.acct-card__head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+
+/* Плашка канала: ГЕОМЕТРИЯ, и только она. Тон приходит правилами
+   [data-upbadge][data-channel] .msg раздела 5 — они объявлены выше и имеют
+   бо́льшую специфичность, поэтому фон и цвет глифа сюда не выписываются: вторая
+   копия тех же трёх тонов разъехалась бы с первой молча. Размеры — из макета
+   (unpacked.html:882): плашка 40px, глиф 19px. */
+.acct-card__ch .msg {
+  width: 40px; height: 40px; flex: none;
+  padding: 0; border-radius: var(--r-xl);
+  display: grid; place-items: center;
+}
+.acct-card__ch .msg__glyph { width: 19px; height: 19px; }
+
+/* min-width: 0 обязателен: без него flex-элемент не сжимается ниже своего
+   содержимого, и длинная подпись канала выдавила бы точку состояния из шапки. */
+.acct-card__ident {
+  display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto;
+}
+.acct-card__chan {
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--fs-lg); font-weight: 600; letter-spacing: -.01em;
+}
+
+/* Точка состояния прижата вправо ТЕМ ЖЕ приёмом, что у макета
+   (unpacked.html:891, margin-left:auto), и flex: none не даёт ей сжаться.
+   Цвет здесь не единственный носитель смысла: слово состояния стоит строкой
+   ниже, ключом «Состояние». */
+.acct-card__dot {
+  flex: none; margin-left: auto; width: 9px; height: 9px;
+  border-radius: var(--r-circle);
+}
+.acct-card__dot--ok { background: var(--ok); }
+.acct-card__dot--warn { background: var(--warn); }
+.acct-card__dot--danger { background: var(--danger); }
+.acct-card__dot--muted { background: var(--text-muted); }
+/* Пульсация у идущей синхронизации — существующий кадровый набор раздела 2. */
+.acct-card__dot--live { animation: pulse 1.4s ease-in-out infinite; }
+
+/* Тело карточки — существующий примитив .kv, поставленный СТОЛБЦОМ: у макета
+   это тот же столбец пар «ключ — значение» с зазором 7px (unpacked.html:893).
+   Вертикальный ритм .kv + .kv снимается — его заменяет gap контейнера.
+   Значение прижато вправо, как у макета (justify-content:space-between):
+   правило адресовано ПОСЛЕДНЕМУ ребёнку строки, потому что значением может быть
+   и .kv__v, и mono-метка состояния со своим тоном.
+
+   Свободное место карточки забирает ИМЕННО ЭТОТ блок (flex: 1 1 auto), и ряд
+   действий этим прижимается к низу — в сетке из карточек с разным числом
+   заполненных значений подвалы встают на одной высоте. Макет прижимает подвал
+   сам (unpacked.html:897, margin-top:auto), и ЗДЕСЬ ЭТОТ ПРИЁМ НЕПРИМЕНИМ:
+   `margin-top: auto` во всём файле объявлен ровно один раз — на виджете доступа
+   сайдбара, — и единственность закреплена проверкой
+   test_the_bottom_pinning_rides_with_the_widget_selector. Исход тот же, средство
+   другое; ровно так же обошёлся раздел 10. */
+.acct-card__kv {
+  display: flex; flex-direction: column; gap: 7px; min-width: 0; flex: 1 1 auto;
+}
+.acct-card__kv .kv + .kv { margin-top: 0; }
+.acct-card__kv .kv > :last-child { margin-left: auto; text-align: right; }
+
+/* Ряд действий подвала. Вход на экран групп забирает свободное место ряда — у
+   макета он растянут (unpacked.html:898); разрушительное действие и повтор
+   синхронизации не сжимаются. */
+.acct-card__actions {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; min-width: 0; flex: none;
+}
+.acct-card__actions > .btn:first-child { flex: 1 1 auto; justify-content: center; }
+.acct-card__actions form { flex: none; }
+/* Разрушительное наведение адресовано ФОРМЕ УДАЛЕНИЯ, а не любой ghost-кнопке
+   карточки: тот же приём, что у карточки объявления в разделе 10. */
+.acct-card__actions form[action$="/delete"] .btn:hover { color: var(--danger); }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Подъём карточки и пульсация точки — единственные движения раздела, и оба
+     декоративны: состояние несёт слово, стоящее ключом «Состояние». */
+  .acct-card { transition: none !important; }
+  .acct-card:hover { transform: none !important; }
+  .acct-card__dot--live { animation: none !important; }
+}
