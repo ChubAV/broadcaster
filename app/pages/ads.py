@@ -39,6 +39,15 @@ CAPTION_LIMIT = 1024
 # предпросмотр называет канал ТЕКСТОМ, а не иконкой (D-11: вид единый).
 MESSENGER_LABELS = {"tg_user": "Telegram", "wa": "WhatsApp", "max": "MAX"}
 
+# Порядок пилюль каналов на карточке списка. Перечень ЗАКРЫТЫЙ и по нему же
+# отбираются известные типы: у расписания с удалённым аккаунтом (issue #35)
+# типа нет вовсе, а ветка неизвестного типа в messenger_icon отдаёт
+# .msg--plain — тон пилюли ей не достаётся, и на карточке появилась бы
+# бесцветная надпись «None». Порядок объявлен явно, чтобы две карточки с одним
+# набором каналов не показывали их в разной последовательности: группировка в
+# БД порядка строк не обещает.
+CHANNEL_ORDER = ("tg_user", "wa", "max")
+
 # Один текст на два случая — «нет такой записи» и «запись чужая» (T-02G-02).
 # Разные тексты подтвердили бы существование чужого объявления по одному лишь
 # перебору идентификаторов.
@@ -57,7 +66,7 @@ SCHEDULE_ERROR_REASONS = ("account", "missing")
 
 
 async def _enrich_ads_with_stats(db: AsyncSession, ads: list[Ad]) -> None:
-    """Добавляет sends_count и schedules_count к каждому объявлению."""
+    """Добавляет sends_count, schedules_count и channels к каждому объявлению."""
     if not ads:
         return
     ad_ids = [a.id for a in ads]
@@ -75,9 +84,34 @@ async def _enrich_ads_with_stats(db: AsyncSession, ads: list[Ad]) -> None:
         .group_by(Schedule.ad_id)
     )
     sched_map = {r.ad_id: r.cnt for r in sched_result.all()}
+    # Каналы по ad_id — ТРЕТИЙ сгруппированный запрос на страницу выдачи, по
+    # форме двух соседних (T-m0b-05). Запрос НА ОБЪЯВЛЕНИЕ в цикле здесь
+    # заводить нельзя: страница отдаёт до PAGE_SIZE карточек, и цикл превратил
+    # бы один показ списка в тридцать обращений к БД.
+    # outer join: расписание с удалённым аккаунтом (issue #35) обязано остаться
+    # в счёте расписаний соседнего запроса и просто не дать канала здесь —
+    # внутреннее соединение молча выкинуло бы его строку.
+    chan_result = await db.execute(
+        select(Schedule.ad_id, MessengerAccount.type, func.count().label("cnt"))
+        .join(
+            MessengerAccount, Schedule.account_id == MessengerAccount.id, isouter=True
+        )
+        .where(Schedule.ad_id.in_(ad_ids))
+        .group_by(Schedule.ad_id, MessengerAccount.type)
+    )
+    chan_map: dict[int, dict[str, int]] = {}
+    for row in chan_result.all():
+        if row.type not in CHANNEL_ORDER:
+            continue
+        chan_map.setdefault(row.ad_id, {})[row.type] = row.cnt
     for ad in ads:
         ad.sends_count = sends_map.get(ad.id, 0) or 0
         ad.schedules_count = sched_map.get(ad.id, 0) or 0
+        # ПУСТОЙ СПИСОК, а не отсутствие поля: неизвестное имя Jinja печатает
+        # пустотой, и опечатка в шаблоне выглядела бы как «у объявления нет
+        # каналов», а не как ошибка.
+        counts = chan_map.get(ad.id, {})
+        ad.channels = [(t, counts[t]) for t in CHANNEL_ORDER if t in counts]
 
 
 @router.get("/ads/partial", response_class=HTMLResponse)

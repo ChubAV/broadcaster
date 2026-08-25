@@ -2261,3 +2261,152 @@ a.chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px
 @media (prefers-reduced-motion: reduce) {
   [data-acct-head] form[data-syncing] .btn__icon { animation: none !important; }
 }
+
+/* --------------------------------------------------------------------------
+   10. Списочная страница объявлений (задача 260825-m0b).
+
+   Раздел `isAds` макета (design/new_broadcaster_design.unpacked.html:466-518) —
+   КАРТОЧНАЯ СЕТКА на всех ширинах. Строку-таблицу раздел получил Планом 01-03,
+   когда одна форма списочной страницы была применена ко всем пяти разделам
+   сразу; Фаза 2 своим объёмом списка объявлений не касалась.
+
+   Дополнение файла санкционировано задачей. Все величины — существующие
+   переменные :root раздела 1: новых цветовых констант здесь не появляется ни
+   одной, и инлайновых hex в разметке раздела тоже нет.
+
+   Тонов пилюли канала здесь НЕТ И БЫТЬ НЕ МОЖЕТ: их единственное объявление —
+   [data-upbadge][data-channel] раздела 5, заведённое дашбордом. Карточка берёт
+   тот же признак, а не заводит второй; ниже — только раскладка пилюли внутри
+   подвала.
+   -------------------------------------------------------------------------- */
+
+/* Ширина трека и зазор перенесены из макета (unpacked.html:479): 290px —
+   ширина, ниже которой название и подпись состояния перестают помещаться в одну
+   строку шапки. auto-fill, а не auto-fit: одна карточка на широком экране
+   обязана остаться КАРТОЧКОЙ в 290px, а не растянуться на всю строку. Раздел
+   перестраивается этим правилом САМ — медиазапросов у него нет ни одного, и
+   правила строки-таблицы на 860px к нему больше не относятся. */
+[data-ads-grid] {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 16px; min-width: 0;
+}
+/* Сентинел бесконечной прокрутки — ячейка сетки, а не карточка: без растяжки
+   на всю строку он встал бы шестым столбцом рядом с пятой карточкой, и подпись
+   «Загрузка...» читалась бы как ещё одно объявление. */
+[data-ads-grid] > .empty__hint { grid-column: 1 / -1; }
+
+.ad-card {
+  display: flex; flex-direction: column; min-width: 0; overflow: hidden;
+  border-radius: var(--r-2xl);
+  background: var(--surface); border: 1px solid var(--border);
+  transition: border-color .2s ease, transform .2s ease;
+}
+.ad-card:hover { border-color: var(--border-dashed); transform: translateY(-3px); }
+
+/* Обложка ФИКСИРОВАННОЙ высоты: она не зависит от наличия вложения, иначе
+   соседние карточки сетки разъезжались бы по высоте. Штриховка собрана на
+   существующих переменных поверхностей — она же остаётся заполнителем у
+   объявления без вложений, и надписи внутри у неё нет. */
+.ad-card__cover {
+  height: 124px; flex: none; overflow: hidden;
+  background: repeating-linear-gradient(135deg,
+    var(--surface-input) 0 8px, var(--surface-pill) 8px 16px);
+}
+.ad-card__img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* flex: 1 обязателен: без него подвал короткой карточки не прижимается к низу,
+   и в сетке из карточек разной длины текста подвалы вставали бы на разной
+   высоте. */
+.ad-card__body {
+  display: flex; flex-direction: column; gap: 10px; flex: 1;
+  min-width: 0; padding: 16px;
+}
+
+.ad-card__head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* Точка состояния — ВТОРОЙ носитель того же смысла, что и подпись рядом, а не
+   единственный: цветом здесь ничего не сказано такого, чего не сказано словом. */
+.ad-card__dot {
+  flex: none; width: 7px; height: 7px; border-radius: var(--r-circle);
+}
+.ad-card__dot--ok { background: var(--ok); }
+.ad-card__dot--warn { background: var(--warn); }
+/* min-width: 0 обязателен: без него flex-элемент не сжимается ниже своего
+   содержимого, и длинное название выдавило бы подпись состояния из шапки
+   вместо того, чтобы обрезаться. Полное значение живёт в подсказке. */
+.ad-card__title {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--fs-lg); font-weight: 600; letter-spacing: -.01em;
+}
+/* Подпись состояния прижата вправо ТЕМ ЖЕ приёмом, что у макета
+   (unpacked.html:490, margin-left:auto), и flex: none не даёт ей сжаться —
+   иначе обрезалось бы слово состояния, а не название. */
+.ad-card__head > .mono { flex: none; margin-left: auto; }
+
+/* Свободное место карточки забирает ВЫДЕРЖКА ТЕКСТА, и подвал этим прижимается
+   к низу — в сетке из карточек разной длины текста подвалы встают на одной
+   высоте. Макет прижимает подвал сам (unpacked.html:493, margin-top:auto), и
+   ЗДЕСЬ ЭТОТ ПРИЁМ НЕПРИМЕНИМ: `margin-top: auto` во всём файле объявлен ровно
+   один раз — на виджете доступа сайдбара, который утаскивает за собой к низу
+   блок пользователя, — и единственность объявления закреплена проверкой
+   test_the_bottom_pinning_rides_with_the_widget_selector. Второе объявление
+   покрасило бы её, а ослаблять чужой ограничитель ради подвала карточки нельзя:
+   он ловит настоящую поломку сайдбара на всех 26 страницах. Исход тот же,
+   средство другое. */
+.ad-card__text {
+  margin: 0; min-width: 0; flex: 1 1 auto;
+  font-size: var(--fs-sm); line-height: 1.55; color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* Подвал отбит линией, как у макета (unpacked.html:493). Переносится по
+   строкам: на узкой карточке пилюли, метаданные и действия не помещаются в
+   одну. */
+.ad-card__foot {
+  display: flex; align-items: center; gap: 8px 12px;
+  flex-wrap: wrap; min-width: 0; flex: none;
+  padding-top: 12px; border-top: 1px solid var(--border-muted);
+}
+
+/* Раскладка пилюль — ТОЛЬКО раскладка: тон каждой приходит существующими
+   правилами [data-upbadge][data-channel] раздела 5. */
+.ad-card__chans {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+  flex-wrap: wrap;
+}
+/* Число расписаний канала стоит РЯДОМ с пилюлей, а не внутри неё: внутрь его
+   можно было бы положить только собственным фоном и собственным тоном, то есть
+   второй копией правил пилюли канала. Копии не заводится — примитив
+   переиспользуется как есть, а число называет себя подсказкой пилюли. */
+.ad-card__chan-count {
+  flex: none; font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: .06em; color: var(--text-muted);
+}
+
+/* Метаданные — существующий примитив .kv, поставленный В СТРОКУ: вертикальный
+   ритм .kv + .kv здесь снимается, потому что в подвале карточки три пары
+   «ключ — значение» стоят рядом, а не столбцом. Направляющая черта .kv__rule в
+   подвал не ставится: она забирает свободное место, которого здесь нет. */
+.ad-card__meta {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+  min-width: 0; flex: 1 1 auto;
+}
+.ad-card__meta .kv + .kv { margin-top: 0; }
+
+/* Действия прижаты вправо: «Изменить» стоит там же, где у макета
+   (unpacked.html:505). Удаление рядом с ним — названное отступление от макета
+   (WR-04): без него на странице не осталось бы ни одного пути удалить
+   объявление. */
+.ad-card__actions {
+  display: flex; align-items: center; gap: 4px; flex: none; margin-left: auto;
+}
+/* Разрушительное наведение адресовано ФОРМЕ УДАЛЕНИЯ, а не любой ghost-кнопке
+   карточки: тот же приём, что у строки группы в разделе 9. */
+.ad-card__actions form[action$="/delete"] .btn:hover { color: var(--danger); }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Подъём карточки на наведении — единственное движение раздела, и оно
+     декоративно: состояние, каналы и метаданные несут слова, а не движение. */
+  .ad-card { transition: none !important; }
+  .ad-card:hover { transform: none !important; }
+}
