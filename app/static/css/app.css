@@ -2295,6 +2295,25 @@ a.chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px
    «Загрузка...» читалась бы как ещё одно объявление. */
 [data-ads-grid] > .empty__hint { grid-column: 1 / -1; }
 
+/* Панель поиска раздела (unpacked.html:468-477). Собственный класс, а не макрос
+   свёрнутых фильтров: у раздела ОДНА ось отбора, и прятать одно поле за кнопку
+   «Фильтры» значило бы прятать всю панель целиком. Переносится по строкам на
+   узкой ширине — поле держит базис, кнопки и счётчик уезжают на вторую строку.
+   Ритм 24 между панелью и сеткой — шаг xl из UI-SPEC §Spacing Scale. */
+.ads-search {
+  display: flex; align-items: flex-end; gap: 9px 12px; flex-wrap: wrap;
+  min-width: 0; margin: 0 0 24px;
+  padding: 13px 14px; border-radius: var(--r-xl);
+  background: var(--surface); border: 1px solid var(--border);
+}
+/* Поле забирает свободное место панели, но не сжимается ниже 220px — ровно
+   тот же базис, что у макета (unpacked.html:469): ниже него заполнитель про
+   название и текст перестаёт читаться целиком. */
+.ads-search .field { flex: 1 1 220px; min-width: 0; }
+/* Счётчик прижат вправо ТЕМ ЖЕ приёмом, что у макета (unpacked.html:476), и
+   не сжимается: обрезаться в панели имеет право поле, а не число найденного. */
+.ads-search__count { flex: none; margin-left: auto; }
+
 .ad-card {
   display: flex; flex-direction: column; min-width: 0; overflow: hidden;
   border-radius: var(--r-2xl);

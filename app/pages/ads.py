@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -114,11 +114,43 @@ async def _enrich_ads_with_stats(db: AsyncSession, ads: list[Ad]) -> None:
         ad.channels = [(t, counts[t]) for t in CHANNEL_ORDER if t in counts]
 
 
+def _ads_filter_params(search: str) -> dict:
+    """Действующий отбор для URL сентинела бесконечной прокрутки.
+
+    Потерянный здесь отбор не роняет страницу — он молча подмешивает
+    неотобранные объявления к отобранным на второй странице выдачи.
+    """
+    params = {}
+    if search:
+        params["search"] = search
+    return params
+
+
+def _ads_conditions(user_id: int, search: str) -> list:
+    """ОДНО условие отбора на выдачу и на счёт.
+
+    Разъехавшись, счётчик показывал бы одно число, а сетка — другой набор
+    карточек. Владение стоит ПЕРВЫМ слагаемым и не заменяется поиском ни в
+    одной ветке (T-m0b-01): счёт, посчитанный шире выдачи, назвал бы
+    пользователю число чужих записей (T-m0b-03).
+
+    Поиск идёт по названию ИЛИ по тексту — макет обещает обе оси одним полем
+    (unpacked.html:471). Условие строится выражениями SQLAlchemy: строковой
+    сборки запроса здесь нет ни в одной ветке (T-m0b-02).
+    """
+    conditions = [Ad.user_id == user_id]
+    if search:
+        pattern = f"%{search}%"
+        conditions.append(or_(Ad.title.ilike(pattern), Ad.text.ilike(pattern)))
+    return conditions
+
+
 @router.get("/ads/partial", response_class=HTMLResponse)
 async def ads_partial(
     request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    search: str | None = Query(None),
     # D-15: параметр компоновки принимается и игнорируется. Строчная вёрстка
     # удалена как недостижимая, но у пользователей есть открытые вкладки, чьи
     # сентинелы всё ещё несут этот параметр в URL — удаление его из сигнатуры
@@ -130,8 +162,16 @@ async def ads_partial(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
+    # Пустая и состоящая из пробелов строка означают «отбора нет»: `?search=`
+    # и отсутствие ключа обязаны значить одно и то же — то же правило, что
+    # записано в components/filter_chips.html.
+    search = (search or "").strip()
     result = await db.execute(
-        select(Ad).where(Ad.user_id == user.id).order_by(Ad.created_at.desc()).offset(offset).limit(limit + 1)
+        select(Ad)
+        .where(*_ads_conditions(user.id, search))
+        .order_by(Ad.created_at.desc())
+        .offset(offset)
+        .limit(limit + 1)
     )
     rows = list(result.scalars().all())
     has_next = len(rows) > limit
@@ -145,6 +185,7 @@ async def ads_partial(
             "ads": ads,
             "has_next": has_next,
             "next_offset": offset + limit,
+            "filter_params": _ads_filter_params(search),
         },
     )
 
@@ -152,19 +193,36 @@ async def ads_partial(
 @router.get("/ads", response_class=HTMLResponse)
 async def ads_list(
     request: Request,
+    search: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
+    search = (search or "").strip()
+    conditions = _ads_conditions(user.id, search)
+    # Признак «отбор применён» различает ДВА пустых состояния: «объявлений нет
+    # вовсе» и «поиск ничего не нашёл» (UI-SPEC E13 `empty`). Второго запроса
+    # для этого не нужно: сам отбор отвечает на вопрос.
+    filters_active = bool(search)
+
     result = await db.execute(
-        select(Ad).where(Ad.user_id == user.id).order_by(Ad.created_at.desc()).limit(PAGE_SIZE + 1)
+        select(Ad)
+        .where(*conditions)
+        .order_by(Ad.created_at.desc())
+        .limit(PAGE_SIZE + 1)
     )
     rows = list(result.scalars().all())
     has_next = len(rows) > PAGE_SIZE
     ads = rows[:PAGE_SIZE]
     await _enrich_ads_with_stats(db, ads)
+    # Счёт — ОТДЕЛЬНЫЙ запрос по ТОМУ ЖЕ условию, а не длина отданной страницы:
+    # страница ограничена PAGE_SIZE, и её длина соврала бы на любой выдаче
+    # длиннее одной страницы, показав ровно размер страницы.
+    total = (
+        await db.execute(select(func.count()).select_from(Ad).where(*conditions))
+    ).scalar_one()
     return templates.TemplateResponse(
         "ads/list.html",
         {
@@ -175,6 +233,10 @@ async def ads_list(
             "has_next": has_next,
             "next_offset": PAGE_SIZE,
             "active_page": "ads",
+            "total": total,
+            "filters_active": filters_active,
+            "filter_search": search,
+            "filter_params": _ads_filter_params(search),
         },
     )
 

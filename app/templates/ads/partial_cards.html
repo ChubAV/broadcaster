@@ -1,8 +1,8 @@
 {# Следующая порция карточек. Сентинел ниже ИДЕНТИЧЕН сентинелу в
-   ads/list.html: он заменяет сам себя и приносит вместе с порцией новый
-   сентинел. Правится один — синхронно правится второй. #}
+   ads/list.html, включая цикл проброса отбора: он заменяет сам себя и приносит
+   вместе с порцией новый сентинел. Правится один — синхронно правится второй. #}
 {% from "ads/includes/ad_card.html" import ad_card %}
 {% for ad in ads %}{{ ad_card(ad, user) }}{% endfor %}
 {% if has_next %}
-<div hx-get="/ads/partial?offset={{ next_offset }}&limit=30" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
+<div hx-get="/ads/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
 {% endif %}
