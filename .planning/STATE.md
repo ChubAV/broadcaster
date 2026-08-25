@@ -4,10 +4,10 @@ milestone: v2.0
 milestone_name: Redesign
 status: completed
 stopped_at: Milestone v2.0 complete; no phase open
-last_updated: "2026-08-25T08:58:00.000Z"
+last_updated: "2026-08-25T14:20:00.000Z"
 last_activity: 2026-08-25
-last_activity_desc: Quick task 260825-abl — uploads narrowed to JPEG/PNG (issue #39)
-state_head: 6b4b94d
+last_activity_desc: Quick task 260825-hnf — maintenance script to recompress attachments predating issue #40 (not yet run against the bucket)
+state_head: 8838179
 progress:
   total_phases: 7
   completed_phases: 7
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 Phase: — (открытых фаз нет; веха v2.0 закрыта и заархивирована)
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-08-25 — Completed quick task 260825-d2x: issue #40, сжатие изображений при загрузке и миниатюры для интерфейса
+Last activity: 2026-08-25 — Completed quick task 260825-hnf: скрипт обслуживания: сжать и создать превью для вложений, загруженных до issue #40
 
 **Чем закрыта веха.** Тип закрытия — `override_closeout`: предзакрывающий аудит нашёл 19 пунктов, из них 15 подтверждены осознанно отложенными, 1 закрыт (сверка прослеживаемости GRP-04…GRP-06), 3 оказались артефактом сканера. Разбор — §Deferred Items ниже.
 
@@ -196,15 +196,16 @@ Decisions are logged in PROJECT.md Key Decisions table.
 
 ### Quick Tasks Completed
 
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 260803-l8h | обновить версию Baileys до v7.0.0-rc14 | 2026-08-03 | c9c2721 | [260803-l8h-baileys-v7-0-0-rc14](./quick/260803-l8h-baileys-v7-0-0-rc14/) |
-| 260803-pb6 | переделать работу с MAX под последнюю версию библиотеки maxapi-python | 2026-08-03 | 0879a75 | [260803-pb6-max-maxapi-python](./quick/260803-pb6-max-maxapi-python/) |
-| 260803-rqt | Исправить зависание MAX worker: Redis BLPOP timeout, корректный shutdown, heartbeat health-check контейнера и маскирование REDIS_URL | 2026-08-03 | 3f3b175 | [260803-rqt-max-worker-redis-blpop-timeout-shutdown-](./quick/260803-rqt-max-worker-redis-blpop-timeout-shutdown-/) |
-| 260804-8wh | исправить проблемы контейнеров MAX: ложные Redis BLPOP timeout, падение синхронизации групп на CONTACT без contactId и утечку Redis credentials в логах | 2026-08-04 | 61c4121 | [260804-8wh-max-redis-blpop-timeout-contact-contacti](./quick/260804-8wh-max-redis-blpop-timeout-contact-contacti/) |
-| 260807-pq7 | issue 35: при удалении аккаунта мессенджера расписания не удаляются, а переходят в статус приостановлено | 2026-08-07 | 95babd3 | [260807-pq7-issue-35](./quick/260807-pq7-issue-35/) |
-| 260825-abl | issue 39: разрешить загрузку изображений только в форматах JPEG и PNG — WebP ломал отправку в Telegram | 2026-08-25 | 6b4b94d | [260825-abl-issue-39-razreshit-zagruzku-tolko-teh-fo](./quick/260825-abl-issue-39-razreshit-zagruzku-tolko-teh-fo/) |
-| 260825-d2x | issue 40: сжимать изображения при загрузке и отдавать превью в интерфейс | 2026-08-25 | a33a62f | [260825-d2x-issue-40-szhimat-izobrazheniya-pri-zagru](./quick/260825-d2x-issue-40-szhimat-izobrazheniya-pri-zagru/) |
+| # | Description | Date | Commit | Status | Directory |
+|---|-------------|------|--------|--------|-----------|
+| 260803-l8h | обновить версию Baileys до v7.0.0-rc14 | 2026-08-03 | c9c2721 |  | [260803-l8h-baileys-v7-0-0-rc14](./quick/260803-l8h-baileys-v7-0-0-rc14/) |
+| 260803-pb6 | переделать работу с MAX под последнюю версию библиотеки maxapi-python | 2026-08-03 | 0879a75 |  | [260803-pb6-max-maxapi-python](./quick/260803-pb6-max-maxapi-python/) |
+| 260803-rqt | Исправить зависание MAX worker: Redis BLPOP timeout, корректный shutdown, heartbeat health-check контейнера и маскирование REDIS_URL | 2026-08-03 | 3f3b175 |  | [260803-rqt-max-worker-redis-blpop-timeout-shutdown-](./quick/260803-rqt-max-worker-redis-blpop-timeout-shutdown-/) |
+| 260804-8wh | исправить проблемы контейнеров MAX: ложные Redis BLPOP timeout, падение синхронизации групп на CONTACT без contactId и утечку Redis credentials в логах | 2026-08-04 | 61c4121 |  | [260804-8wh-max-redis-blpop-timeout-contact-contacti](./quick/260804-8wh-max-redis-blpop-timeout-contact-contacti/) |
+| 260807-pq7 | issue 35: при удалении аккаунта мессенджера расписания не удаляются, а переходят в статус приостановлено | 2026-08-07 | 95babd3 |  | [260807-pq7-issue-35](./quick/260807-pq7-issue-35/) |
+| 260825-abl | issue 39: разрешить загрузку изображений только в форматах JPEG и PNG — WebP ломал отправку в Telegram | 2026-08-25 | 6b4b94d |  | [260825-abl-issue-39-razreshit-zagruzku-tolko-teh-fo](./quick/260825-abl-issue-39-razreshit-zagruzku-tolko-teh-fo/) |
+| 260825-d2x | issue 40: сжимать изображения при загрузке и отдавать превью в интерфейс | 2026-08-25 | a33a62f |  | [260825-d2x-issue-40-szhimat-izobrazheniya-pri-zagru](./quick/260825-d2x-issue-40-szhimat-izobrazheniya-pri-zagru/) |
+| 260825-hnf | скрипт обслуживания: сжать и создать превью для вложений, загруженных до issue #40 | 2026-08-25 | 8838179 | Needs Review | [260825-hnf-skript-obsluzhivaniya-szhat-i-sozdat-pre](./quick/260825-hnf-skript-obsluzhivaniya-szhat-i-sozdat-pre/) |
 
 ## Deferred Items
 
