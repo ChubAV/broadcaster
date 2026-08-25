@@ -127,7 +127,28 @@
                вызывает imageInputs.replaceChildren(), и внутри блока вложений
                идентификатор стирался бы при первой же перерисовке плиток. #}
             <input type="hidden" id="ad-id-field" name="ad_id" value="{{ ad.id if ad else '' }}">
-            <input class="field__input" type="file" id="file-input" accept="image/*" multiple hidden>
+            {# `accept` — ТОЛЬКО подсказка файловому диалогу, а не проверка:
+               пользователь обходит её выбором «все файлы» в самом диалоге и
+               перетаскиванием файла на страницу. Авторитет поэтому остаётся за
+               серверным распознаванием по содержимому (`sniff_image` в
+               app/routes/uploads.py, вектор CR-02), а сужение диалога лишь
+               переносит типовой отказ на более ранний и более дешёвый момент:
+               неподходящий файл не доезжает до загрузки вовсе.
+
+               Список сужен не разбором форматов, а тем, что отправить обычной
+               картинкой во все три мессенджера можно ровно JPEG и PNG; разбор
+               по каждому лежит в комментарии над `_IMAGE_SIGNATURES` в
+               app/routes/uploads.py. Значение задано MIME-типами, а не
+               расширениями: `image/jpeg` покрывает .jpg, .jpeg и .jfif одним
+               пунктом, и диалог не расходится с тем, что распознаёт сервер.
+
+               Текст отказа ниже (UPLOAD_TYPE_ERROR) существует ВТОРОЙ копией не
+               по недосмотру: uploadFile() показывает свою константу на ЛЮБОМ
+               ответе 400 и `detail` из ответа сервера не читает вовсе. Поэтому
+               правка одного лишь app/routes/uploads.py оставила бы на экране
+               прежний список форматов. Совпадение копий держит render-тест в
+               tests/test_pages/test_ads_editor.py, а не дисциплина. #}
+            <input class="field__input" type="file" id="file-input" accept="image/jpeg,image/png" multiple hidden>
             <div id="upload-error"></div>
           </div>
         </div>
@@ -266,7 +287,7 @@ const TEXT_LIMIT = {{ editor.text_limit | tojson }};
 const TEXT_WARN_AT = {{ (editor.text_limit * 0.9) | round | int | tojson }};
 const CAPTION_LIMIT = {{ editor.caption_limit | tojson }};
 
-const UPLOAD_TYPE_ERROR = 'Не удалось загрузить: подойдут только изображения JPEG, PNG, WebP или GIF. Выберите другой файл.';
+const UPLOAD_TYPE_ERROR = 'Не удалось загрузить: подойдут только изображения JPEG или PNG — другие форматы принимают не все мессенджеры. Выберите другой файл.';
 const UPLOAD_LIMIT_ERROR = 'Можно прикрепить не больше ' + MAX_IMAGES + ' вложений. Удалите лишние и попробуйте снова.';
 const UPLOAD_TRANSPORT_ERROR = 'Не удалось загрузить файл. Проверьте соединение и попробуйте ещё раз.';
 

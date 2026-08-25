@@ -28,6 +28,7 @@ from app.main import create_app
 from app.models.ad import Ad
 from app.models.user import User
 from app.pages.ads import CAPTION_LIMIT, TEXT_LIMIT, TEXT_WARN_RATIO
+from app.routes.uploads import UNSUPPORTED_IMAGE_MESSAGE
 
 # Форма ключа вложения — источник правды `app/routes/uploads.py`:
 # `{user_id}/{32 hex}_{имя}`. Свой ключ строится тем же способом, что в
@@ -164,6 +165,34 @@ async def test_ads_new_renders(authed_client: AsyncClient):
     assert 'name="text"' in html
     # Форма создания уходит на свой маршрут, а не на редактирование.
     assert 'action="/ads/new"' in html
+
+
+@pytest.mark.asyncio
+async def test_editor_file_picker_offers_only_sendable_formats(
+    authed_client: AsyncClient,
+):
+    """Диалог сужен до JPEG/PNG, а текст отказа совпадает с серверной константой.
+
+    Issue #39. Утверждение идёт на ИМПОРТИРОВАННУЮ
+    ``UNSUPPORTED_IMAGE_MESSAGE``, а не на литерал в теле теста, намеренно.
+    Текст отказа существует двумя копиями: сервер отдаёт свою в ``detail``, а
+    ``uploadFile()`` в шаблоне показывает СВОЮ на любом ответе 400 и
+    ``detail`` не читает вовсе. Тест на литерале остался бы зелёным при
+    разъехавшихся копиях — он сравнивал бы шаблон сам с собой и не измерял бы
+    ничего. Сравнение с импортом делает вторую копию механически привязанной
+    к первой: правка одной без другой роняет суиту.
+
+    ``accept`` при этом обходится выбором «все файлы» и перетаскиванием — это
+    подсказка диалогу, а не проверка (T-Q39-02). Он удешевляет типовой отказ,
+    но авторитетом остаётся серверное распознавание по содержимому, и оно
+    проверяется отдельно в tests/test_routes/test_uploads.py.
+    """
+    response = await authed_client.get("/ads/new")
+
+    assert response.status_code == 200
+    html = response.text
+    assert _attr_value(html, 'id="file-input"', "accept") == "image/jpeg,image/png"
+    assert UNSUPPORTED_IMAGE_MESSAGE in html
 
 
 @pytest.mark.asyncio
