@@ -4,9 +4,9 @@ milestone: v2.0
 milestone_name: Redesign
 status: completed
 stopped_at: Milestone v2.0 complete; no phase open
-last_updated: "2026-08-25T14:20:00.000Z"
+last_updated: "2026-08-25T15:50:00.000Z"
 last_activity: 2026-08-25
-last_activity_desc: Quick task 260825-hnf — maintenance script to recompress attachments predating issue #40 (not yet run against the bucket)
+last_activity_desc: Quick task 260825-hnf — maintenance script for attachments predating issue #40; --apply run on prod, all four closure criteria met
 state_head: 8838179
 progress:
   total_phases: 7
@@ -205,7 +205,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 | 260807-pq7 | issue 35: при удалении аккаунта мессенджера расписания не удаляются, а переходят в статус приостановлено | 2026-08-07 | 95babd3 |  | [260807-pq7-issue-35](./quick/260807-pq7-issue-35/) |
 | 260825-abl | issue 39: разрешить загрузку изображений только в форматах JPEG и PNG — WebP ломал отправку в Telegram | 2026-08-25 | 6b4b94d |  | [260825-abl-issue-39-razreshit-zagruzku-tolko-teh-fo](./quick/260825-abl-issue-39-razreshit-zagruzku-tolko-teh-fo/) |
 | 260825-d2x | issue 40: сжимать изображения при загрузке и отдавать превью в интерфейс | 2026-08-25 | a33a62f |  | [260825-d2x-issue-40-szhimat-izobrazheniya-pri-zagru](./quick/260825-d2x-issue-40-szhimat-izobrazheniya-pri-zagru/) |
-| 260825-hnf | скрипт обслуживания: сжать и создать превью для вложений, загруженных до issue #40 | 2026-08-25 | 8838179 | Needs Review | [260825-hnf-skript-obsluzhivaniya-szhat-i-sozdat-pre](./quick/260825-hnf-skript-obsluzhivaniya-szhat-i-sozdat-pre/) |
+| 260825-hnf | скрипт обслуживания: сжать и создать превью для вложений, загруженных до issue #40 | 2026-08-25 | 8838179 | Verified | [260825-hnf-skript-obsluzhivaniya-szhat-i-sozdat-pre](./quick/260825-hnf-skript-obsluzhivaniya-szhat-i-sozdat-pre/) |
 
 ## Deferred Items
 
