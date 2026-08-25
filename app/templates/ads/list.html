@@ -1,34 +1,79 @@
 {% extends "base.html" %}
-{% from "components/button.html" import link_button %}
-{% from "components/card.html" import card_open, card_close %}
-{% from "components/table.html" import rowhead %}
+{% from "components/button.html" import button, link_button %}
 {% from "components/empty_state.html" import empty_state %}
-{% from "ads/includes/ad_card.html" import ad_card, AD_COLS, AD_COLUMNS %}
+{% from "components/field.html" import field %}
+{% from "components/mono.html" import mono %}
+{% from "ads/includes/ad_card.html" import ad_card %}
 
 {% block title %}Объявления — Broadcaster{% endblock %}
 
 {# Контракт «страница → шелл» (План 01): заголовок раздела и его действие
    рендерит шапка шелла. Собственного заголовка у страницы нет — он бы
-   задвоился. Планы 04-08 повторяют эту тройку блоков дословно. #}
+   задвоился. Планы 04-08 повторяют эту тройку блоков дословно.
+
+   Подзаголовка у страницы нет и не будет: макет пишет им «6 из 15 по тарифу
+   Basic» (unpacked.html:1482), а тарифных лимитов в продукте нет с Фазы 05.1 —
+   счётная модель снята целиком. Счётчик макета живёт в панели поиска, туда он
+   и поставлен. #}
 {% block page_title %}Объявления{% endblock %}
 {% block page_actions %}{{ link_button('Создать', '/ads/new', icon='plus') }}{% endblock %}
 
 {% block content %}
+{#- Панель поиска макета (unpacked.html:468-477). Рисуется ВСЕГДА, в том числе
+    при пустой выдаче: пользователь, отфильтровавший всё до нуля, обязан иметь
+    возможность снять отбор, который к этому привёл, — то же правило записано у
+    расписаний.
+
+    Собрана СУЩЕСТВУЮЩИМИ макросами библиотеки (field, button, mono): новых
+    компонентов не заводится, библиотека инвентаризуется двумя тестами, и
+    молчаливое пополнение краснеет.
+
+    Поле ищет по ДВУМ осям сразу — макет обещает обе одним полем, и заполнитель
+    перенесён из него дословно. -#}
+<form class="ads-search" method="get" action="/ads">
+  {{ field(name='search', label='Поиск', value=filter_search or '',
+           placeholder='Поиск по названию и тексту объявления', id='ads-search') }}
+  {{ button('Найти', variant='primary') }}
+  {{ link_button('Сбросить', '/ads', variant='ghost') }}
+  {#- Счётчик — mono-подпись, прижатая вправо (unpacked.html:476). Считает ВСЮ
+      выдачу, а не отданную страницу: длина страницы ограничена PAGE_SIZE. -#}
+  <span class="ads-search__count">{{ mono(total ~ ' ' ~ plural_ru(total, 'объявление', 'объявления', 'объявлений')) }}</span>
+</form>
+
 {% if ads %}
-{{ card_open() }}
-  {{ rowhead(columns=AD_COLUMNS, cols=AD_COLS) }}
-  {# Инварианты бесконечной прокрутки (ломает переверстка, а не логика):
-     - сентинел остаётся ПОСЛЕДНИМ элементом внутри ТОГО ЖЕ контейнера, что и
-       карточки: он заменяет сам себя и подтягивает следующий;
-     - разметка сентинела здесь и в partial_cards.html ИДЕНТИЧНА — правится
-       один, синхронно правится второй;
-     - цель подмены неявная (сам сентинел), явной цели в проекте нет нигде. #}
-  {% for ad in ads %}{{ ad_card(ad, user) }}{% endfor %}
-  {% if has_next %}
-  <div hx-get="/ads/partial?offset={{ next_offset }}&limit=30" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
-  {% endif %}
-{{ card_close() }}
+{# Карточная СЕТКА вместо строки-таблицы (задача 260825-m0b): раздел `isAds`
+   макета — repeat(auto-fill, minmax(290px,1fr)) на всех ширинах
+   (unpacked.html:479). Шапки колонок у сетки нет, поэтому card_open / rowhead /
+   card_close и импорты AD_COLS / AD_COLUMNS отсюда ушли.
+
+   Инварианты бесконечной прокрутки (ломает переверстка, а не логика):
+   - сентинел остаётся ПОСЛЕДНИМ элементом внутри ТОГО ЖЕ контейнера, что и
+     карточки: он заменяет сам себя и подтягивает следующий;
+   - разметка сентинела здесь и в partial_cards.html ИДЕНТИЧНА — правится
+     один, синхронно правится второй;
+   - цель подмены неявная (сам сентинел), явной цели в проекте нет нигде;
+   - цикл проброса отбора перенесён ДОСЛОВНО из schedules/list.html вместе с
+     приведением к строке и экранированием для URL: потерянный отбор не роняет
+     страницу, а молча подмешивает неотобранные объявления к отобранным. #}
+<div data-ads-grid>
+{% for ad in ads %}{{ ad_card(ad, user) }}{% endfor %}
+{% if has_next %}
+<div hx-get="/ads/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
+{% endif %}
+</div>
+{% elif filters_active %}
+{#- ДВА пустых состояния, и они различаются (UI-SPEC E13 `empty`). Это —
+    «поиск ничего не нашёл»: единственное осмысленное действие здесь снять
+    поиск, а не идти создавать ещё одно объявление. Слова и действие перенесены
+    из макета (unpacked.html:510-515). -#}
+{{ empty_state('Объявления не найдены',
+               hint='Измените запрос или сбросьте поиск',
+               action_label='СБРОСИТЬ ПОИСК',
+               action_href='/ads') }}
 {% else %}
+{#- Второе: объявлений нет ВОВСЕ. У макета такого состояния нет — в его
+    данных-примерах объявления есть всегда; слово в слово сохранено то, что
+    страница показывала до задачи. -#}
 {{ empty_state('Объявлений пока нет',
                hint='Создайте первое объявление, чтобы начать рассылки',
                action_label='Создать объявление',

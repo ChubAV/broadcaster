@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -39,6 +39,15 @@ CAPTION_LIMIT = 1024
 # предпросмотр называет канал ТЕКСТОМ, а не иконкой (D-11: вид единый).
 MESSENGER_LABELS = {"tg_user": "Telegram", "wa": "WhatsApp", "max": "MAX"}
 
+# Порядок пилюль каналов на карточке списка. Перечень ЗАКРЫТЫЙ и по нему же
+# отбираются известные типы: у расписания с удалённым аккаунтом (issue #35)
+# типа нет вовсе, а ветка неизвестного типа в messenger_icon отдаёт
+# .msg--plain — тон пилюли ей не достаётся, и на карточке появилась бы
+# бесцветная надпись «None». Порядок объявлен явно, чтобы две карточки с одним
+# набором каналов не показывали их в разной последовательности: группировка в
+# БД порядка строк не обещает.
+CHANNEL_ORDER = ("tg_user", "wa", "max")
+
 # Один текст на два случая — «нет такой записи» и «запись чужая» (T-02G-02).
 # Разные тексты подтвердили бы существование чужого объявления по одному лишь
 # перебору идентификаторов.
@@ -57,7 +66,7 @@ SCHEDULE_ERROR_REASONS = ("account", "missing")
 
 
 async def _enrich_ads_with_stats(db: AsyncSession, ads: list[Ad]) -> None:
-    """Добавляет sends_count и schedules_count к каждому объявлению."""
+    """Добавляет sends_count, schedules_count и channels к каждому объявлению."""
     if not ads:
         return
     ad_ids = [a.id for a in ads]
@@ -75,9 +84,65 @@ async def _enrich_ads_with_stats(db: AsyncSession, ads: list[Ad]) -> None:
         .group_by(Schedule.ad_id)
     )
     sched_map = {r.ad_id: r.cnt for r in sched_result.all()}
+    # Каналы по ad_id — ТРЕТИЙ сгруппированный запрос на страницу выдачи, по
+    # форме двух соседних (T-m0b-05). Запрос НА ОБЪЯВЛЕНИЕ в цикле здесь
+    # заводить нельзя: страница отдаёт до PAGE_SIZE карточек, и цикл превратил
+    # бы один показ списка в тридцать обращений к БД.
+    # outer join: расписание с удалённым аккаунтом (issue #35) обязано остаться
+    # в счёте расписаний соседнего запроса и просто не дать канала здесь —
+    # внутреннее соединение молча выкинуло бы его строку.
+    chan_result = await db.execute(
+        select(Schedule.ad_id, MessengerAccount.type, func.count().label("cnt"))
+        .join(
+            MessengerAccount, Schedule.account_id == MessengerAccount.id, isouter=True
+        )
+        .where(Schedule.ad_id.in_(ad_ids))
+        .group_by(Schedule.ad_id, MessengerAccount.type)
+    )
+    chan_map: dict[int, dict[str, int]] = {}
+    for row in chan_result.all():
+        if row.type not in CHANNEL_ORDER:
+            continue
+        chan_map.setdefault(row.ad_id, {})[row.type] = row.cnt
     for ad in ads:
         ad.sends_count = sends_map.get(ad.id, 0) or 0
         ad.schedules_count = sched_map.get(ad.id, 0) or 0
+        # ПУСТОЙ СПИСОК, а не отсутствие поля: неизвестное имя Jinja печатает
+        # пустотой, и опечатка в шаблоне выглядела бы как «у объявления нет
+        # каналов», а не как ошибка.
+        counts = chan_map.get(ad.id, {})
+        ad.channels = [(t, counts[t]) for t in CHANNEL_ORDER if t in counts]
+
+
+def _ads_filter_params(search: str) -> dict:
+    """Действующий отбор для URL сентинела бесконечной прокрутки.
+
+    Потерянный здесь отбор не роняет страницу — он молча подмешивает
+    неотобранные объявления к отобранным на второй странице выдачи.
+    """
+    params = {}
+    if search:
+        params["search"] = search
+    return params
+
+
+def _ads_conditions(user_id: int, search: str) -> list:
+    """ОДНО условие отбора на выдачу и на счёт.
+
+    Разъехавшись, счётчик показывал бы одно число, а сетка — другой набор
+    карточек. Владение стоит ПЕРВЫМ слагаемым и не заменяется поиском ни в
+    одной ветке (T-m0b-01): счёт, посчитанный шире выдачи, назвал бы
+    пользователю число чужих записей (T-m0b-03).
+
+    Поиск идёт по названию ИЛИ по тексту — макет обещает обе оси одним полем
+    (unpacked.html:471). Условие строится выражениями SQLAlchemy: строковой
+    сборки запроса здесь нет ни в одной ветке (T-m0b-02).
+    """
+    conditions = [Ad.user_id == user_id]
+    if search:
+        pattern = f"%{search}%"
+        conditions.append(or_(Ad.title.ilike(pattern), Ad.text.ilike(pattern)))
+    return conditions
 
 
 @router.get("/ads/partial", response_class=HTMLResponse)
@@ -85,6 +150,7 @@ async def ads_partial(
     request: Request,
     offset: int = Query(0, ge=0),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
+    search: str | None = Query(None),
     # D-15: параметр компоновки принимается и игнорируется. Строчная вёрстка
     # удалена как недостижимая, но у пользователей есть открытые вкладки, чьи
     # сентинелы всё ещё несут этот параметр в URL — удаление его из сигнатуры
@@ -96,8 +162,16 @@ async def ads_partial(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
+    # Пустая и состоящая из пробелов строка означают «отбора нет»: `?search=`
+    # и отсутствие ключа обязаны значить одно и то же — то же правило, что
+    # записано в components/filter_chips.html.
+    search = (search or "").strip()
     result = await db.execute(
-        select(Ad).where(Ad.user_id == user.id).order_by(Ad.created_at.desc()).offset(offset).limit(limit + 1)
+        select(Ad)
+        .where(*_ads_conditions(user.id, search))
+        .order_by(Ad.created_at.desc())
+        .offset(offset)
+        .limit(limit + 1)
     )
     rows = list(result.scalars().all())
     has_next = len(rows) > limit
@@ -111,6 +185,7 @@ async def ads_partial(
             "ads": ads,
             "has_next": has_next,
             "next_offset": offset + limit,
+            "filter_params": _ads_filter_params(search),
         },
     )
 
@@ -118,19 +193,36 @@ async def ads_partial(
 @router.get("/ads", response_class=HTMLResponse)
 async def ads_list(
     request: Request,
+    search: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return RedirectResponse(url="/login", status_code=302)
+    search = (search or "").strip()
+    conditions = _ads_conditions(user.id, search)
+    # Признак «отбор применён» различает ДВА пустых состояния: «объявлений нет
+    # вовсе» и «поиск ничего не нашёл» (UI-SPEC E13 `empty`). Второго запроса
+    # для этого не нужно: сам отбор отвечает на вопрос.
+    filters_active = bool(search)
+
     result = await db.execute(
-        select(Ad).where(Ad.user_id == user.id).order_by(Ad.created_at.desc()).limit(PAGE_SIZE + 1)
+        select(Ad)
+        .where(*conditions)
+        .order_by(Ad.created_at.desc())
+        .limit(PAGE_SIZE + 1)
     )
     rows = list(result.scalars().all())
     has_next = len(rows) > PAGE_SIZE
     ads = rows[:PAGE_SIZE]
     await _enrich_ads_with_stats(db, ads)
+    # Счёт — ОТДЕЛЬНЫЙ запрос по ТОМУ ЖЕ условию, а не длина отданной страницы:
+    # страница ограничена PAGE_SIZE, и её длина соврала бы на любой выдаче
+    # длиннее одной страницы, показав ровно размер страницы.
+    total = (
+        await db.execute(select(func.count()).select_from(Ad).where(*conditions))
+    ).scalar_one()
     return templates.TemplateResponse(
         "ads/list.html",
         {
@@ -141,6 +233,10 @@ async def ads_list(
             "has_next": has_next,
             "next_offset": PAGE_SIZE,
             "active_page": "ads",
+            "total": total,
+            "filters_active": filters_active,
+            "filter_search": search,
+            "filter_params": _ads_filter_params(search),
         },
     )
 

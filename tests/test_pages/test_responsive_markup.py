@@ -62,7 +62,17 @@ SECTION_URLS = {
 # ширинах (03-05), поэтому в перечень строк-таблиц она не попадает; её
 # собственный примитив закреплён test_account_groups_list_is_card_based по той
 # же схеме, что у расписаний.
-MIGRATED_SECTIONS = ["ads", "accounts"]
+#
+# Объявления вышли отсюда задачей 260825-m0b: список стал КАРТОЧНОЙ СЕТКОЙ на
+# всех ширинах — так его описывает раздел `isAds` канонического макета
+# (design/new_broadcaster_design.unpacked.html:479), а строку-таблицу раздел
+# получил Планом 01-03, когда одна форма списочной страницы была применена ко
+# всем пяти разделам сразу. Сетка перестраивается шириной трека сама, поэтому
+# правила 860px и подписи ячеек, компенсирующие скрывающуюся шапку, разделу
+# больше не нужны. Раздел не выпал из проверок — его собственный примитив
+# закреплён test_ads_list_is_card_based ниже, ТРЕТЬИМ по той же схеме, что у
+# расписаний и экрана групп аккаунта.
+MIGRATED_SECTIONS = ["accounts"]
 
 # Все разделы, переведённые на дизайн-систему, независимо от примитива.
 # Планы 06-08 дописывают свои сюда.
@@ -318,6 +328,281 @@ async def test_ads_card_renders_data(authed_client: AsyncClient, db_session: Asy
     assert "Уникальный заголовок объявления" in html
     assert "Скидки до 50%" in html
     assert f"/ads/{ad.id}/edit" in html
+
+
+@pytest.mark.asyncio
+async def test_ads_card_shows_channel_pills(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Канал объявления показан пилюлей; объявление без расписаний — без пилюль.
+
+    Обе половины утверждения обязательны. Без первой тест зеленел бы на разметке
+    без каналов вовсе; без второй — на пилюле, приклеенной к КАЖДОЙ карточке
+    независимо от данных, потому что на одном объявлении отличить «канал взят из
+    расписания» от «канал нарисован всегда» нечем.
+
+    Пилюля собрана на СУЩЕСТВУЮЩЕМ примитиве data-upbadge (заведён дашбордом,
+    app/static/css/app.css): второй копии тонов пилюли канала в проекте нет, и
+    признак здесь проверяется именно тот, что красит CSS.
+    """
+    await _seed_schedule(db_session, ad_title="Объявление с расписанием")
+    await _seed_ad(db_session, title="Объявление без расписаний")
+
+    html = (await authed_client.get("/ads")).text
+
+    assert html.count("data-upbadge") == 1, (
+        "пилюль канала на странице не ровно одна: расписание есть только у "
+        "одного из двух объявлений"
+    )
+    assert 'data-upbadge data-channel="wa"' in html, (
+        "канал пилюли не приехал атрибутом — тон пилюли красит CSS по нему"
+    )
+
+
+# Ключи значений карточки объявления. Это ТЕ ЖЕ ТРИ ВЕЛИЧИНЫ, что до задачи
+# 260825-m0b стояли колонками строки-таблицы: раздел сменил вид, а не состав
+# показанных данных.
+ADS_CARD_KEYS = (
+    "Отправок",
+    "Расписаний",
+    "Создано",
+)
+
+
+@pytest.mark.asyncio
+async def test_ads_list_is_card_based(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Замена вклада раздела в обход по data-row (задача 260825-m0b).
+
+    Список объявлений — карточная СЕТКА на всех ширинах, как раздел `isAds`
+    канонического макета (unpacked.html:479), поэтому примитив строки-таблицы
+    ему не подходит: на 860px её колонки скрываются, а подписей ячеек у карточек
+    нет. Утверждение положительное: у списка есть СВОЙ примитив, а не «нет
+    старого». Без него раздел просто выпал бы из проверок вместе со снятой
+    строкой параметризации.
+    """
+    await _seed_ad(db_session, title="Карточное объявление")
+
+    html = (await authed_client.get("/ads")).text
+
+    assert "data-ads-grid" in html, "контейнер карточной сетки объявлений исчез"
+    assert 'class="ad-card"' in html, "карточка объявления исчезла из разметки"
+    assert "data-row" not in html, (
+        "список объявлений вернулся к строке-таблице — на 860px её колонки "
+        "скрываются, а подписей ячеек у карточек нет"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ads_card_names_each_value(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Каждое значение карточки объявления названо своим ключом.
+
+    Сеются ДВА объявления и утверждается ЧИСЛО вхождений, а не факт: ключ,
+    проставленный одной карточке из двух, зеленил бы проверку на вхождении и
+    оставил бы половину выдачи с безымянными числами.
+    """
+    ads = [await _seed_ad(db_session, title=f"Объявление {i}") for i in range(2)]
+
+    html = (await authed_client.get("/ads")).text
+
+    for key in ADS_CARD_KEYS:
+        assert html.count(f'<span class="kv__k">{key}</span>') == len(ads), (
+            f"ключ {key!r} проставлен не во всех карточках"
+        )
+    assert "<span data-cell-label>" not in html, (
+        "подпись ячейки таблицы вернулась в карточный список — у него нет "
+        "шапки колонок, которую она компенсирует"
+    )
+
+
+async def _seed_ad_with_text(db: AsyncSession, title: str, text: str) -> Ad:
+    """Объявление с ЗАДАННЫМ текстом.
+
+    Отдельно от _seed_ad: тот ставит всем объявлениям один и тот же текст, и
+    отличить поиск по названию от поиска по тексту на нём нечем — оба нашли бы
+    всё.
+    """
+    user = await _user(db)
+    ad = Ad(user_id=user.id, title=title, text=text, images=[])
+    db.add(ad)
+    await db.commit()
+    await db.refresh(ad)
+    return ad
+
+
+@pytest.mark.asyncio
+async def test_ads_search_matches_title_and_text(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Одно поле ищет по ДВУМ осям — по названию и по тексту объявления.
+
+    Обе оси утверждаются порознь и каждая с отрицательной половиной: поиск,
+    нашедший всё, зеленил бы проверку «нашлось нужное» ровно так же, как
+    работающий.
+    """
+    await _seed_ad_with_text(db_session, "Аренда квартиры", "Тихий двор у метро")
+    await _seed_ad_with_text(db_session, "Вакансия разработчика", "Питон и фастапи")
+
+    by_title = (await authed_client.get("/ads?search=Аренда")).text
+    assert "Аренда квартиры" in by_title, "поиск не нашёл по подстроке названия"
+    assert "Вакансия разработчика" not in by_title, (
+        "поиск по названию вернул объявление, названию не отвечающее"
+    )
+
+    by_text = (await authed_client.get("/ads?search=фастапи")).text
+    assert "Вакансия разработчика" in by_text, "поиск не нашёл по подстроке ТЕКСТА"
+    assert "Аренда квартиры" not in by_text, (
+        "поиск по тексту вернул объявление, тексту не отвечающее"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ads_search_does_not_cross_ownership(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-m0b-01: поиск ДОПОЛНЯЕТ ограждение владения, а не заменяет его.
+
+    Чужое объявление не находится ни по названию, ни по тексту. Условие отбора
+    строится ОДНИМ выражением, первое слагаемое которого — владелец; потеряв
+    его, страница отдала бы чужие записи по одной лишь строке запроса.
+    """
+    user = await _user(db_session)
+    await _seed_ad_with_text(db_session, "Своё объявление", "Общее слово ромашка")
+    foreign = Ad(
+        user_id=user.id + 1000,
+        title="Чужое объявление",
+        text="Общее слово ромашка",
+        images=[],
+    )
+    db_session.add(foreign)
+    await db_session.commit()
+
+    html = (await authed_client.get("/ads?search=ромашка")).text
+
+    assert "Своё объявление" in html, "поиск не нашёл собственное объявление"
+    assert "Чужое объявление" not in html, (
+        "поиск вышел за границу владения — чужое объявление попало в выдачу"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ads_counter_counts_the_whole_result_not_the_page(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Счётчик считает ВСЮ выдачу, а не отданную страницу.
+
+    Длина страницы ограничена PAGE_SIZE, поэтому на выдаче длиннее одной
+    страницы она соврала бы — и соврала бы молча, показав ровно размер
+    страницы.
+    """
+    user = await _user(db_session)
+    db_session.add_all(
+        [
+            Ad(user_id=user.id, title=f"Объявление {i}", text="Текст", images=[])
+            for i in range(31)
+        ]
+    )
+    await db_session.commit()
+
+    html = (await authed_client.get("/ads")).text
+
+    assert "31 объявление" in html, (
+        "счётчик показал не всю выдачу — на странице ровно PAGE_SIZE карточек, "
+        "и её длина соврала бы именно этим числом"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ads_has_two_distinct_empty_states(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Пустых состояния ДВА и они РАЗЛИЧАЮТСЯ действием (UI-SPEC E13 `empty`).
+
+    Отфильтровавшему всё до нуля осмысленно предложить снять отбор, а не идти
+    создавать ещё одно объявление; у пользователя без объявлений вовсе сбрасывать
+    нечего.
+    """
+    empty = (await authed_client.get("/ads")).text
+    assert "Объявлений пока нет" in empty, "пустое состояние «объявлений нет» исчезло"
+    assert "Создать объявление" in empty, "приглашение создать первое объявление исчезло"
+
+    await _seed_ad(db_session, title="Единственное объявление")
+    not_found = (await authed_client.get("/ads?search=ничегонеподойдёт")).text
+    assert "Объявления не найдены" in not_found, (
+        "пустое состояние «поиск ничего не нашёл» исчезло"
+    )
+    assert "Объявлений пока нет" not in not_found, (
+        "два пустых состояния слились в одно — отфильтровавшему всё до нуля "
+        "предлагается создать объявление вместо сброса поиска"
+    )
+    assert "СБРОСИТЬ ПОИСК" in not_found, "сброса поиска в пустом состоянии нет"
+
+
+@pytest.mark.asyncio
+async def test_ads_search_survives_infinite_scroll(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Поиск доезжает до ВТОРОЙ порции — и в адресе сентинела, и в её составе.
+
+    Утверждаются оба, потому что ломаются они порознь: сентинел без параметра
+    отбора приносит неотобранное, а обработчик, игнорирующий параметр, приносит
+    неотобранное даже при верном адресе. Потеря не роняет страницу — она молча
+    подмешивает чужие по отбору объявления к отобранным.
+    """
+    user = await _user(db_session)
+    db_session.add_all(
+        [
+            Ad(user_id=user.id, title=f"Акция {i}", text="Текст акции", images=[])
+            for i in range(35)
+        ]
+        + [
+            Ad(user_id=user.id, title=f"Прочее {i}", text="Другой текст", images=[])
+            for i in range(5)
+        ]
+    )
+    await db_session.commit()
+
+    first = (await authed_client.get("/ads/partial?offset=0&limit=30&search=Акция")).text
+    sentinel = re.findall(r'hx-get="([^"]+)"', first)
+    assert sentinel, "сентинел исчез из первой порции"
+    assert "search=" in sentinel[-1], (
+        f"поиск потерян в адресе сентинела: {sentinel[-1]}"
+    )
+
+    second = (
+        await authed_client.get("/ads/partial?offset=30&limit=30&search=Акция")
+    ).text
+    assert second.count('class="ad-card"') == 5, (
+        "вторая порция отобрана не так, как первая: отобранных объявлений 35, "
+        "и после смещения в 30 их обязано остаться ровно пять"
+    )
+    assert "Прочее" not in second, (
+        "вторая порция подмешала объявления, отбору не отвечающие"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ads_partial_names_each_value(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Порция бесконечной прокрутки несёт те же ключи, что и первая страница.
+
+    Правка живёт в МАКРОСЕ карточки, поэтому закрывает обе поверхности разом;
+    тест доказывает это, а не проверяет второй файл на всякий случай.
+    """
+    ads = [await _seed_ad(db_session, title=f"Объявление {i}") for i in range(2)]
+
+    response = await authed_client.get("/ads/partial?offset=0&limit=30")
+    assert response.status_code == 200
+    html = response.text
+
+    for key in ADS_CARD_KEYS:
+        assert html.count(f'<span class="kv__k">{key}</span>') == len(ads), (
+            f"ключ {key!r} потерян в порции бесконечной прокрутки"
+        )
 
 
 @pytest.mark.asyncio
@@ -2939,7 +3224,15 @@ async def test_admin_user_delete_form_degrades_without_alpine(
 # Правка макроса закрывает и страницу, и её партиал прокрутки одновременно, а в
 # админке ячейки лежат в самих страницах — там правятся страницы.
 
-AD_CELL_LABELS = ("Текст", "Отправок", "Расписаний", "Создано", "Статус")
+# AD_CELL_LABELS вместе с test_ads_cell_labels_present ВЫШЛИ отсюда задачей
+# 260825-m0b — ПЯТАЯ инвентаризация строки-таблицы, снятая тем же коммитом, что
+# и четыре соседних: список объявлений переведён на карточную сетку макета
+# (unpacked.html:479-508), шапки колонок у него больше нет, а подпись ячейки
+# компенсировала именно её скрытие на 860px. Подписывать в карточке нечего —
+# каждое значение называет себя само ключом kv__k, и это закреплено
+# test_ads_card_names_each_value и test_ads_partial_names_each_value, которые
+# проверяют ровно ту же пару поверхностей (страница и порция прокрутки), что
+# проверял снятый тест. Форма снятия повторяет соседнюю, планом 04-05.
 # RECENT_CELL_LABELS вместе с test_dashboard_cell_labels_present ВЫШЛИ отсюда
 # планом 04-05: блок «Последние отправки» заменён живой лентой (DASH-03), её
 # строка не таблица и колонок не имеет вовсе — подписывать в ней нечего.
@@ -2963,38 +3256,6 @@ AD_CELL_LABELS = ("Текст", "Отправок", "Расписаний", "С�
 # Состав персональных данных при этом не расширен сверх названной величины
 # (T-07-02) — перевёрстка по-прежнему не основание показать больше.
 ADMIN_USER_CELL_LABELS = ("Доступ", "Состояние", "Аккаунтов", "Регистрация")
-
-
-@pytest.mark.asyncio
-async def test_ads_cell_labels_present(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Строка объявления несёт подписи и на странице, и в порции прокрутки."""
-    ads = [await _seed_ad(db_session, title=f"Объявление {i}") for i in range(2)]
-
-    html = (await authed_client.get("/ads")).text
-
-    for label in AD_CELL_LABELS:
-        assert html.count(f"<span data-cell-label>{label}</span>") == len(ads), (
-            f"подпись {label!r} проставлена не во всех строках"
-        )
-
-    header = _header_in(html)
-    labels = _labels_in(html)
-    assert header - labels == {"Объявление"}, (
-        "подписи разошлись с шапкой колонок: без подписи остались "
-        f"{sorted(header - labels - {'Объявление'})}"
-    )
-    assert labels - header == set(), (
-        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
-    )
-
-    response = await authed_client.get("/ads/partial?offset=0&limit=30")
-    assert response.status_code == 200
-    for label in AD_CELL_LABELS:
-        assert response.text.count(f"<span data-cell-label>{label}</span>") == len(ads), (
-            f"подпись {label!r} потеряна в порции бесконечной прокрутки"
-        )
 
 
 @pytest.mark.asyncio
@@ -3346,7 +3607,13 @@ ROWHEAD_TEMPLATES_WITHOUT_ROUTE: frozenset[str] = frozenset()
 ROW_TEMPLATES_WITHOUT_HEADER = {
     # Класс 1: макрос строки, потребляемый шаблоном с шапкой. Его исходник уже
     # входит в объединение своего списочного шаблона — подписи проверяются там.
-    "ads/includes/ad_card.html": "макрос строки внутри объединения ads/list.html",
+    #
+    # ads/includes/ad_card.html ВЫШЕЛ из перечня задачей 260825-m0b: он больше
+    # не рисует строку ВОВСЕ — карточка объявления собрана по разделу `isAds`
+    # макета (unpacked.html:481-508) и примитива строки-таблицы не несёт, а
+    # значит в обход по строкам не попадает по построению. Замены в перечне у
+    # него нет и быть не может; обещание «понятно, что означает каждое значение»
+    # переехало в test_ads_card_names_each_value.
     "billing/includes/payment_row.html": (
         "макрос строки внутри объединения billing/balance.html"
     ),
@@ -3487,7 +3754,12 @@ ROWHEAD_PAGES = (
     RowheadPage(
         "accounts/list.html", "/accounts", False, "accounts", frozenset({"Аккаунт"})
     ),
-    RowheadPage("ads/list.html", "/ads", False, "ads", frozenset({"Объявление"})),
+    # ads/list.html ВЫШЕЛ из таблицы задачей 260825-m0b: шапку колонок он больше
+    # не вызывает — список стал карточной сеткой по каноническому макету
+    # (unpacked.html:479), и компенсировать скрывающуюся на 860px шапку ему
+    # нечем, потому что шапки нет. Обещание «понятно, что означает каждое
+    # значение» переехало в test_ads_card_names_each_value.
+    #
     # schedules/list.html ВЫШЕЛ из таблицы планом 02-07: шапку колонок он больше
     # не вызывает — сводный список карточный, и компенсировать скрывающуюся на
     # 860px шапку ему нечем, потому что шапки нет. Обещание «понятно, что
@@ -3684,8 +3956,14 @@ def test_rowhead_pages_all_have_a_parametrization_entry():
     # СЕМЬ → ВОСЕМЬ: план 06-11 завёл журнал платежей подраздела «Платежи» со
     # своей шапкой (+1). Снятия в паре с ним нет — это тоже чистое прибавление
     # поверхности: до плана подраздел стоял честной пустотой без единой строки.
-    assert len(declared) == 8, (
-        f"ожидалось восемь шаблонов с шапкой колонок, объявлено {len(declared)}: "
+    #
+    # ВОСЕМЬ → СЕМЬ: задача 260825-m0b сняла шапку колонок со списка объявлений
+    # вместе с самой строкой-таблицей — раздел переведён на карточную сетку
+    # канонического макета (unpacked.html:479). Прибавления в паре со снятием
+    # нет. Уменьшение объявленного числа — признание СОЗНАТЕЛЬНОГО снятия;
+    # молчаливое исчезновение шаблона с шапкой по-прежнему краснеет.
+    assert len(declared) == 7, (
+        f"ожидалось семь шаблонов с шапкой колонок, объявлено {len(declared)}: "
         f"{sorted(declared)}"
     )
 
@@ -3735,8 +4013,15 @@ def test_row_templates_without_header_are_accounted_for():
     # той же формы (воркер, очередь, пользователь, платёж): подраздел, рисующий
     # строку иначе, чем три соседних, читался бы как другой механизм. Снятия в
     # паре с ним нет.
-    assert len(declared) == 9, (
-        f"ожидалось девять таких шаблонов, объявлено {len(declared)}"
+    #
+    # ДЕВЯТЬ → ВОСЕМЬ: задача 260825-m0b сняла ОДИН файл первого класса — макрос
+    # карточки объявления перестал рисовать строку вовсе вместе с переводом
+    # раздела на карточную сетку макета (unpacked.html:481-508). Снятие идёт ТЕМ
+    # ЖЕ коммитом, что и снятие шапки колонок с ads/list.html: разъехавшись, эти
+    # два шага оставили бы список либо со строками без шапки, либо с шапкой без
+    # строк. Прибавления в паре со снятием нет.
+    assert len(declared) == 8, (
+        f"ожидалось восемь таких шаблонов, объявлено {len(declared)}"
     )
     # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
     # макрос row_open он не вызывает. Без второго условия разрешителя он выпал
