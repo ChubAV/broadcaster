@@ -4,6 +4,9 @@ created: 2026-08-21
 source: 05.1-REVIEW.md (CR-03)
 area: auth / транспорт
 severity: critical
+audit_acknowledged:
+  milestone: v2.0
+  at: 2026-08-25
 ---
 
 # Cookie сессии выставляется без флага `secure`

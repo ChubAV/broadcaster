@@ -5,6 +5,9 @@ source: 05.1 wave-9 post-merge gate; baseline confirmed on 54a121a
 area: tests / порядок исполнения сюиты
 severity: medium
 status: pending
+audit_acknowledged:
+  milestone: v2.0
+  at: 2026-08-25
 ---
 
 # `test_image_base_url_comes_from_app_settings` красный только в полном прогоне

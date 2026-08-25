@@ -5,6 +5,9 @@ source: 05-VERIFICATION.md (раунд 9, гэп «б»), закрытие во�
 area: billing / денежный путь
 severity: medium
 status: pending
+audit_acknowledged:
+  milestone: v2.0
+  at: 2026-08-25
 ---
 
 # Правдоподобие цены в `PLAN_LIMITS` не проверяется нигде
@@ -51,8 +54,10 @@ status: pending
 
 - `app/application/billing/subscription_period.py` — `prorated_days` (абзац об
   отсутствии потолка, D-29), `_shifted_by_days`, `prorated_expiry`
+
 - `app/services/payment_service.py` — `_plan_price`, `_apply_extension`
 - `tests/test_pages/test_billing_payment_errors.py` —
   `test_a_span_that_the_calendar_can_express_is_not_capped` закрепляет ОБЕ
   границы (`"1.00"` и `"0.05"` пропорциональны и в откат НЕ уходят)
+
 - `.planning/phases/05-tarify/05-CONTEXT.md` — D-29, D-36

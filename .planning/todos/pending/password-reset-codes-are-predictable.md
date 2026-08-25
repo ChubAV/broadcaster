@@ -4,6 +4,9 @@ created: 2026-08-21
 source: 05.1-REVIEW.md (CR-02)
 area: auth / криптография
 severity: critical
+audit_acknowledged:
+  milestone: v2.0
+  at: 2026-08-25
 ---
 
 # Коды сброса пароля берутся из `random.randint` — предсказуемы
