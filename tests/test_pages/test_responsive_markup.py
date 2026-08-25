@@ -1500,6 +1500,45 @@ async def test_accounts_sync_card_names_each_value(
             )
 
 
+ACCOUNTS_SUBTITLE = "Per-account воркеры и статус сессий"
+
+
+@pytest.mark.asyncio
+async def test_accounts_page_carries_the_subtitle_from_the_layout(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Подзаголовок раздела приезжает ИЗ ШАБЛОНА страницы, а не из обработчика.
+
+    Слово взято из макета (unpacked.html:1486). Гнездо подзаголовка в шелле уже
+    существует и уже используется пятью страницами — заводить нечего,
+    переопределяется существующий блок page_subtitle.
+
+    Второе утверждение обязательно: контракт «страница → шелл» на то и заведён,
+    чтобы ни один из обработчиков раздела ради подзаголовка не правился.
+    Подзаголовок, уехавший в обработчик, работал бы точно так же — и увёл бы за
+    собой следующий, а за ним заголовок и действия.
+    """
+    await _seed_account(db_session, type_="max")
+
+    html = (await authed_client.get("/accounts")).text
+
+    assert f'<p class="head-subtitle">{ACCOUNTS_SUBTITLE}</p>' in html, (
+        "подзаголовок раздела не приехал в гнездо шелла"
+    )
+
+    page = (TEMPLATES_DIR / "accounts/list.html").read_text(encoding="utf-8")
+    assert "{% block page_subtitle %}" in page, (
+        "подзаголовок пришёл не переопределением блока шелла"
+    )
+    handler = (TEMPLATES_DIR.parent / "pages" / "accounts.py").read_text(
+        encoding="utf-8"
+    )
+    assert ACCOUNTS_SUBTITLE not in handler, (
+        "подзаголовок раздела уехал в обработчик — контракт «страница → шелл» "
+        "заведён ровно ради того, чтобы обработчики о нём не знали"
+    )
+
+
 @pytest.mark.asyncio
 async def test_accounts_sentinel_rides_inside_the_grid(
     authed_client: AsyncClient, db_session: AsyncSession
@@ -2884,15 +2923,67 @@ def test_accounts_three_files_dispatch_same_modal_event():
     )
 
 
-# ⚠️ ЗДЕСЬ СТОЯЛ test_accounts_three_files_label_the_same_columns — счёт
-# подписей ячеек по трём файлам и трём веткам статуса. Подписей ячеек в разделе
-# больше нет: он переведён на карточную сетку задачей 260825-of5, шапки колонок
-# у него нет вовсе, и компенсировать её скрытие нечем.
-#
-# Обещание не снято, а ПЕРЕЕЗЖАЕТ: счёт восстанавливается в терминах ключей
-# карточки следующим шагом той же задачи. Половина покрытия остаётся снятой
-# ровно на один шаг — дольше держать её снятой нельзя, иначе ключ, потерянный в
-# одной ветке из трёх, уехал бы незамеченным.
+# Ключ карточки берётся ИНДЕКСОМ из списка ключей. Образец заякорен на разметку
+# ключа (class="kv__k"), и якорь делает ту же работу, какую до задачи 260825-of5
+# делал отрицательный просмотр назад у образца подписи ячейки: подписи действий
+# и подписи макросов (confirm_label=, action_label=, show_label=) ключами
+# карточки не являются и по этому якорю не проходят по построению.
+KEY_BY_INDEX_RE = re.compile(
+    r'<span class="kv__k">\{\{\s*ACCOUNT_KEYS\[(\d+)\]\s*\}\}</span>'
+)
+# Ключ, вписанный на месте СТРОКОЙ: та же разметка, но без подстановки.
+KEY_LITERAL_RE = re.compile(r'<span class="kv__k">(?!\{\{)([^<]*)</span>')
+
+
+def test_accounts_three_files_key_the_same_values():
+    """Ключи карточки в трёх файлах совпадают по составу И ПО ЧИСЛУ вхождений.
+
+    Счёт вхождений, а не множество значений: в каждом файле три ветки статуса, и
+    ключ, потерянный в ОДНОЙ из них, множества не меняет — две оставшиеся ветки
+    его удержат. Именно так ключ и теряется на практике: правят одну ветку, а
+    расходится весь раздел.
+
+    Проверка идёт по ИСХОДНИКАМ трёх файлов, а не по отрендеренной странице, и
+    причина та же, по которой так устроена вся сетка Плана 11: у файла подмены
+    нет своего адреса в обходе страниц, а расхождение проявляется только в
+    момент подмены и только визуально. На широкой ширине потеря ключа не видна
+    вовсе — карточка просто становится на строку короче соседних.
+    """
+    sources = _accounts_sources()
+
+    hardcoded = {
+        rel: sorted({m.group(1) for m in KEY_LITERAL_RE.finditer(src)})
+        for rel, src in sources.items()
+    }
+    hardcoded = {rel: values for rel, values in hardcoded.items() if values}
+    assert not hardcoded, (
+        "ключи вписаны строкой вместо элемента списка ключей — трём файлам "
+        f"есть на чём разъехаться: {hardcoded}"
+    )
+
+    keys: dict[str, Counter[str]] = {}
+    for rel, src in sources.items():
+        declared = _declaration(src, "ACCOUNT_KEYS")
+        assert declared, f"{rel}: список ключей не объявлен"
+        names = ast.literal_eval(declared)
+        keys[rel] = Counter(names[int(i)] for i in KEY_BY_INDEX_RE.findall(src))
+
+    reference_file, reference = next(iter(keys.items()))
+    assert reference, f"{reference_file}: ключей нет ни одного"
+
+    divergent = {}
+    for rel, counted in keys.items():
+        if counted == reference:
+            continue
+        divergent[rel] = sorted(
+            f"{name}: {counted.get(name, 0)} вместо {reference.get(name, 0)}"
+            for name in set(counted) | set(reference)
+            if counted.get(name, 0) != reference.get(name, 0)
+        )
+    assert not divergent, (
+        f"ключи в {reference_file} — {sorted(reference.items())}, но отстали: "
+        + "; ".join(f"{rel} -> {diff}" for rel, diff in sorted(divergent.items()))
+    )
 
 
 def test_template_inventory():
