@@ -119,7 +119,15 @@ Decisions are logged in PROJECT.md Key Decisions table.
 
 ### Pending Todos
 
-None.
+Пять открытых, все подтверждены как отложенные при закрытии вехи v2.0 (`.planning/todos/pending/`):
+
+- `blocked-user-can-still-log-in.md` — **BLOCKER**, auth/доступ: блокировка пользователя не действует, вход через страничный маршрут открыт
+- `password-reset-codes-are-predictable.md` — **BLOCKER**, auth/криптография: коды сброса пароля берутся из `random.randint`
+- `session-cookie-without-secure-flag.md` — **BLOCKER**, auth/транспорт: cookie сессии выставляется без флага `secure`
+- `plan-price-credibility-bound.md` — billing/денежный путь: правдоподобие цены в `PLAN_LIMITS` не проверяется нигде
+- `full-suite-ads-editor-order-pollution.md` — tests/порядок исполнения сюиты: `test_image_base_url_comes_from_app_settings` красный только в полном прогоне
+
+⚠️ Три первых заведены ревизией кода фазы 05.1 раунда 2 и НЕ закрыты — подтверждение при закрытии вехи подавляет их в аудите, а не чинит.
 
 ### Blockers/Concerns
 
@@ -262,15 +270,17 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** v2.0 milestone complete
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** acknowledged`
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
 
 Last session: 2026-08-25
-Stopped at: Веха v2.0 завершена — 7/7 фаз, 110/110 планов. Открытых фаз нет.
+Stopped at: Веха v2.0 закрыта и заархивирована — 7/7 фаз, 110/110 планов, 41/41 требование. Открытых фаз нет.
 Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+1. **Смёржить PR #43** (`gsd/phase-05-tarify` → `master`) — коммиты закрытия вехи лежат поверх него и в `master` ещё не заведены.
+2. **Поставить тег `v2.0`** ПОСЛЕ слияния, на коммит в `master`: `git tag -a v2.0 -m "..."`. Сейчас тег НЕ создан намеренно — при squash-мерже SHA ветки в `master` не попадает, и тег указывал бы на отсутствующий там коммит. Тегов в репозитории пока нет вовсе (v1.0 тоже не тегирована).
+3. **Начать следующую веху:** `/clear`, затем `/gsd-new-milestone`. Кандидаты в состав — `.planning/PROJECT.md` §Next Milestone Goals.
