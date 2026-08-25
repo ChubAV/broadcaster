@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from sqlalchemy import select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
@@ -433,3 +434,171 @@ async def test_the_report_names_every_required_number(db_session):
 def test_the_report_survives_an_empty_run():
     """Нулевой объём «до» не приводит к делению на ноль."""
     assert "0.0%" in script.format_report(script.Report())
+
+
+# --- идемпотентность и прохибиции ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_second_apply_run_writes_nothing(db_session):
+    """Идемпотентность доказывается НУЛЁМ записей, а не совпадением счётчиков.
+
+    Счётчики совпали бы и при повторной записи тех же байтов — то есть при
+    втором пережатии уже пережатого, которое и есть потеря поколения.
+    """
+    oversized_no_thumb = "7/00000000000000000000000000000001_a.jpg"
+    within_no_thumb = "7/00000000000000000000000000000002_b.jpg"
+    oversized_with_thumb = "7/00000000000000000000000000000003_c.jpg"
+
+    store = FakeStore()
+    store.seed(oversized_no_thumb, make_jpeg((3000, 2000)))
+    store.seed(within_no_thumb, make_jpeg((800, 600)))
+    store.seed(oversized_with_thumb, make_jpeg((2600, 1800)))
+    store.seed(thumb_key(oversized_with_thumb), make_jpeg((400, 300)))
+
+    await seed_ad(db_session, [oversized_no_thumb])
+    await seed_ad(db_session, [within_no_thumb])
+    await seed_ad(db_session, [oversized_with_thumb])
+
+    first = await script.recompress_attachments(db_session, store, apply=True)
+    assert store.puts, "первый прогон обязан что-то записать, иначе тест беспредметен"
+    assert first.errors == []
+
+    store.puts.clear()
+
+    second = await script.recompress_attachments(db_session, store, apply=True)
+
+    assert store.puts == []
+    assert second.errors == []
+    assert second.processed == 0
+
+
+@pytest.mark.asyncio
+async def test_the_run_never_touches_the_database(db_session):
+    """Первый критерий закрытия заметки: ключи до и после прогона равны."""
+    from app.models.send_log import SendLog
+
+    store = FakeStore()
+    store.seed(KEY, make_jpeg((3000, 2000)))
+    await seed_ad(db_session, [KEY])
+
+    db_session.add(
+        SendLog(
+            user_id=7,
+            ad_id=1,
+            group_id=1,
+            status="ok",
+            ad_title="Заголовок",
+            ad_images=["https://cdn.example.com/bucket/" + KEY],
+        )
+    )
+    await db_session.commit()
+
+    ads_before = list((await db_session.execute(select(Ad.images))).scalars().all())
+    logs_before = list(
+        (await db_session.execute(select(SendLog.ad_images))).scalars().all()
+    )
+
+    await script.recompress_attachments(db_session, store, apply=True)
+
+    db_session.expire_all()
+    ads_after = list((await db_session.execute(select(Ad.images))).scalars().all())
+    logs_after = list(
+        (await db_session.execute(select(SendLog.ad_images))).scalars().all()
+    )
+
+    assert ads_after == ads_before
+    assert logs_after == logs_before
+
+
+@pytest.mark.asyncio
+async def test_history_only_keys_are_never_collected(db_session):
+    """Машинная форма решения D-1: источник ключей ровно один."""
+    from app.models.send_log import SendLog
+
+    history_only = "7/00000000000000000000000000000009_history.jpg"
+    await seed_ad(db_session, [KEY])
+    db_session.add(
+        SendLog(
+            user_id=7,
+            ad_id=1,
+            group_id=1,
+            status="ok",
+            ad_images=["https://cdn.example.com/bucket/" + history_only],
+        )
+    )
+    await db_session.commit()
+
+    keys = await script.collect_attachment_keys(db_session)
+
+    assert keys == [KEY]
+
+
+@pytest.mark.asyncio
+async def test_the_same_key_in_two_ads_is_processed_once(db_session):
+    """Один ключ в двух объявлениях — один объект в хранилище, одна обработка."""
+    store = FakeStore()
+    store.seed(KEY, make_jpeg((3000, 2000)))
+    await seed_ad(db_session, [KEY])
+    await seed_ad(db_session, [KEY])
+
+    report = await script.recompress_attachments(db_session, store, apply=True)
+
+    assert report.scanned == 1
+    assert report.processed == 1
+    assert len(store.puts) == 2
+
+
+# --- прохибиции, проверяемые по ИСХОДНИКУ -------------------------------------
+#
+# Запрещённые имена перечислены ЗДЕСЬ, а не комментарием внутри скрипта, и это
+# не стилевое предпочтение: прохибиция, названная внутри проверяемого файла,
+# сама себя нарушила бы для любой текстовой проверки — файл содержал бы искомую
+# строку в объяснении того, что её здесь нет. По той же причине в тексте скрипта
+# прохибиции изложены описательной прозой, без имён вызовов хранилища.
+
+_SCRIPT_SOURCE = Path(script.__file__).read_text(encoding="utf-8")
+
+_DESTRUCTIVE_STORAGE_CALLS = (
+    "delete_object",
+    "delete_objects",
+    "delete_bucket",
+    "remove_object",
+    "abort_multipart_upload",
+    ".delete(",
+)
+
+_MESSENGER_IMPORTS = (
+    "app.messengers",
+    "from app.messengers",
+    "import app.messengers",
+)
+
+_TRANSACTION_CLOSERS = (
+    "session.commit",
+    ".commit()",
+    "session.flush",
+    "session.add(",
+    "session.delete(",
+)
+
+
+def test_the_script_source_declares_no_destructive_storage_call():
+    """«Ничего не удаляет» доказывается ОТСУТСТВИЕМ пути, а не зелёным тестом.
+
+    Тест, который просто не прошёл по удаляющей ветке, доказывал бы лишь то, что
+    вход до неё не довёл. Здесь утверждается, что ветки нет вовсе.
+    """
+    for name in _DESTRUCTIVE_STORAGE_CALLS:
+        assert name not in _SCRIPT_SOURCE, name
+
+
+def test_the_script_source_declares_no_messenger_import():
+    for name in _MESSENGER_IMPORTS:
+        assert name not in _SCRIPT_SOURCE, name
+
+
+def test_the_script_never_commits_a_transaction():
+    """Сессия используется только на чтение: закрепления транзакции в файле нет."""
+    for name in _TRANSACTION_CLOSERS:
+        assert name not in _SCRIPT_SOURCE, name
