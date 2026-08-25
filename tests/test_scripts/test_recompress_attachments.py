@@ -26,7 +26,11 @@ import recompress_attachments as script  # noqa: E402
 
 from app.models.ad import Ad  # noqa: E402
 from app.services.image_keys import thumb_key  # noqa: E402
-from app.services.images import DELIVERY_MAX_EDGE, THUMB_MAX_EDGE  # noqa: E402
+from app.services.images import (  # noqa: E402
+    DELIVERY_MAX_EDGE,
+    THUMB_MAX_EDGE,
+    RebuiltImage,
+)
 from app.services.s3 import ObjectHead  # noqa: E402
 
 
@@ -207,3 +211,225 @@ async def test_the_thumbnail_is_built_under_the_derived_key(db_session):
     await script.recompress_attachments(db_session, store, apply=True)
 
     assert thumb_key(KEY) in store.objects
+
+
+# --- разбор пропусков: четыре причины, не пять --------------------------------
+
+
+def test_the_skip_breakdown_has_exactly_four_reasons():
+    """Машинная форма решения D-1: пятая причина не появится незамеченной.
+
+    Пятая причина заметки — «сохранённый адрес не разобрался в ключ» — здесь
+    беспредметна: ключи берутся только из объявлений, и обратного разбора адреса
+    в скрипте нет. Счётчик под неё был бы путём, по которому никто не пройдёт.
+    """
+    assert len(script.SKIP_REASONS) == 4
+    assert len(set(script.SKIP_REASONS)) == 4
+    assert set(script.Report().skips) == set(script.SKIP_REASONS)
+
+
+@pytest.mark.asyncio
+async def test_an_image_within_the_delivery_limit_is_not_re_encoded(db_session):
+    """Уже маленькое не пережимается, и обе причины пропуска названы.
+
+    Тест держит сразу и первую причину, и второе решение D-3: прогнать через
+    кодек снимок, который и так 800 px, значит потерять поколение, не убавив
+    веса.
+    """
+    store = FakeStore()
+    original = make_jpeg((800, 600))
+    store.seed(KEY, original)
+    store.seed(thumb_key(KEY), make_jpeg((400, 300)))
+    await seed_ad(db_session, [KEY])
+
+    report = await script.recompress_attachments(db_session, store, apply=True)
+
+    assert store.puts == []
+    assert store.objects[KEY] == original
+    assert report.skips[script.SKIP_ALREADY_WITHIN_LIMIT] == 1
+    assert report.skips[script.SKIP_THUMBNAIL_EXISTS] == 1
+    assert report.processed == 0
+
+
+@pytest.mark.asyncio
+async def test_a_thumbnail_is_built_for_an_image_within_the_limit(db_session):
+    """Вторая половина доказательства независимости решений."""
+    store = FakeStore()
+    original = make_jpeg((800, 600))
+    store.seed(KEY, original)
+    await seed_ad(db_session, [KEY])
+
+    report = await script.recompress_attachments(db_session, store, apply=True)
+
+    assert len(store.puts) == 1
+    assert store.puts[0][0] == thumb_key(KEY)
+    assert store.objects[KEY] == original
+    assert report.skips[script.SKIP_ALREADY_WITHIN_LIMIT] == 1
+    assert report.skips[script.SKIP_THUMBNAIL_EXISTS] == 0
+
+
+@pytest.mark.asyncio
+async def test_an_image_over_the_limit_with_a_thumbnail_is_only_re_encoded(db_session):
+    """Первая половина доказательства независимости решений."""
+    store = FakeStore()
+    store.seed(KEY, make_jpeg((3000, 2000)))
+    store.seed(thumb_key(KEY), make_jpeg((400, 300)))
+    await seed_ad(db_session, [KEY])
+
+    report = await script.recompress_attachments(db_session, store, apply=True)
+
+    assert len(store.puts) == 1
+    assert store.puts[0][0] == KEY
+    assert report.skips[script.SKIP_THUMBNAIL_EXISTS] == 1
+    assert report.skips[script.SKIP_ALREADY_WITHIN_LIMIT] == 0
+
+
+@pytest.mark.asyncio
+async def test_an_unsupported_format_survives_the_run_untouched(db_session):
+    """Расхождение №3: чужой формат пропускается И называется в отчёте.
+
+    issue #39 сузила приём до JPEG и PNG только 2026-08-25 — всё, что загружено
+    раньше, могло быть GIF или WebP. Такое объявление уже сегодня ломает
+    отправку в Telegram, и этот прогон может обнаружить дефект первым.
+    """
+    store = FakeStore()
+    gif_key = "7/0123456789abcdef0123456789abcdef_animation.gif"
+    original = make_gif((40, 30))
+    store.seed(gif_key, original, "image/gif")
+    await seed_ad(db_session, [gif_key])
+
+    report = await script.recompress_attachments(db_session, store, apply=True)
+
+    assert store.puts == []
+    assert store.objects[gif_key] == original
+    assert report.skips[script.SKIP_UNSUPPORTED_FORMAT] == 1
+    assert gif_key in report.unsupported_examples
+    assert gif_key in script.format_report(report)
+
+
+@pytest.mark.asyncio
+async def test_an_image_over_the_pixel_ceiling_is_skipped_without_a_full_read(db_session):
+    """Расхождение №4: потолок пикселей действует и на объект из хранилища."""
+    store = FakeStore()
+    bomb_key = "7/0123456789abcdef0123456789abcdef_bomb.png"
+    store.seed(bomb_key, make_declared_huge_png(8000, 5000), "image/png")
+    await seed_ad(db_session, [bomb_key])
+
+    report = await script.recompress_attachments(db_session, store, apply=True)
+
+    assert report.skips[script.SKIP_OVER_PIXEL_CEILING] == 1
+    assert store.puts == []
+    assert store.reads == []
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_object_costs_one_ranged_read_and_no_full_read(db_session):
+    """Машинная форма требования о трафике (T-QH-06)."""
+    store = FakeStore()
+    store.seed(KEY, make_jpeg((800, 600)))
+    store.seed(thumb_key(KEY), make_jpeg((400, 300)))
+    await seed_ad(db_session, [KEY])
+
+    await script.recompress_attachments(db_session, store, apply=False)
+
+    assert len(store.head_reads) == 1
+    assert store.head_reads[0][0] == KEY
+    assert store.reads == []
+
+
+@pytest.mark.asyncio
+async def test_a_short_header_falls_back_to_one_full_read(db_session, monkeypatch):
+    """Короткий заголовок — не повод объявить исправный снимок битым.
+
+    У JPEG маркер размеров стоит ЗА секциями метаданных, и диапазон может его не
+    захватить. Без отката отчёт врал бы ровно там, где обязан не врать.
+    """
+    monkeypatch.setattr(script, "HEAD_READ_BYTES", 8)
+    store = FakeStore()
+    store.seed(KEY, make_jpeg((3000, 2000)))
+    await seed_ad(db_session, [KEY])
+
+    report = await script.recompress_attachments(db_session, store, apply=True)
+
+    assert report.skips[script.SKIP_UNSUPPORTED_FORMAT] == 0
+    assert store.reads == [KEY]
+    assert report.processed == 1
+    assert len(store.puts) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_missing_object_is_reported_as_an_error_not_as_a_skip(db_session):
+    """Отсутствие объекта — ошибка с названным ключом, и прогон продолжается."""
+    store = FakeStore()
+    missing_key = "7/0123456789abcdef0123456789abcdef_gone.jpg"
+    store.seed(KEY, make_jpeg((3000, 2000)))
+    await seed_ad(db_session, [missing_key, KEY])
+
+    report = await script.recompress_attachments(db_session, store, apply=True)
+
+    assert all(count == 0 for count in report.skips.values())
+    assert len(report.errors) == 1
+    assert report.errors[0][0] == missing_key
+    assert report.processed == 1
+
+
+@pytest.mark.asyncio
+async def test_a_rebuilt_object_that_grew_is_not_written(db_session, monkeypatch):
+    """Пересборка, не уменьшившая объект, в хранилище не кладётся.
+
+    Настоящими пикселями ветка практически недостижима: снимок, уменьшенный до
+    1920 и перекодированный, уменьшается почти всегда. Предмет теста —
+    СРАВНЕНИЕ ПЕРЕД ЗАПИСЬЮ, а не поведение кодировщика, поэтому кодировщик и
+    подменяется двойником: искать реальный вход, который растёт, значило бы
+    проверять Pillow, а не скрипт.
+    """
+    store = FakeStore()
+    original = make_jpeg((3000, 2000))
+    store.seed(KEY, original)
+    await seed_ad(db_session, [KEY])
+
+    inflated = script.rebuild_stored_image(original, resize=True, thumbnail=True)
+
+    def _grown(content, *, resize, thumbnail):
+        return RebuiltImage(
+            delivery=b"x" * (len(content) + 1) if resize else None,
+            thumbnail=inflated.thumbnail if thumbnail else None,
+            content_type=inflated.content_type,
+        )
+
+    monkeypatch.setattr(script, "rebuild_stored_image", _grown)
+
+    report = await script.recompress_attachments(db_session, store, apply=True)
+
+    assert report.errors == []
+    assert [key for key, _, _ in store.puts] == [thumb_key(KEY)]
+    assert report.not_shrunk == 1
+    assert all(count == 0 for count in report.skips.values())
+    assert store.objects[KEY] == original
+
+
+@pytest.mark.asyncio
+async def test_the_report_names_every_required_number(db_session):
+    """Отчёт содержит всё, без чего решение о запуске с записью не принять."""
+    store = FakeStore()
+    gif_key = "7/0123456789abcdef0123456789abcdef_animation.gif"
+    store.seed(KEY, make_jpeg((3000, 2000)))
+    store.seed(gif_key, make_gif((40, 30)), "image/gif")
+    await seed_ad(db_session, [KEY, gif_key])
+
+    report = await script.recompress_attachments(db_session, store, apply=False)
+    text = script.format_report(report, apply=False)
+
+    assert "Объём до" in text
+    assert "Объём после" in text
+    assert "Экономия" in text
+    assert "%" in text
+    for reason in script.SKIP_REASONS:
+        assert reason in text
+    assert gif_key in text
+    assert "--apply" in text
+
+
+def test_the_report_survives_an_empty_run():
+    """Нулевой объём «до» не приводит к делению на ноль."""
+    assert "0.0%" in script.format_report(script.Report())
