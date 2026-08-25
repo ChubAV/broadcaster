@@ -6,6 +6,7 @@
 {% from "components/alert.html" import alert %}
 {% from "components/modal.html" import modal %}
 {% from "components/mono.html" import mono %}
+{% from "components/thumb.html" import thumb %}
 {% from "ads/includes/sched_card.html" import sched_card, sched_count_label %}
 
 {% block title %}{{ 'Редактировать' if ad else 'Создать' }} объявление — Broadcaster{% endblock %}
@@ -98,7 +99,9 @@
             <div data-media id="media-strip">
               {%- for key in (ad.images if ad and ad.images else []) %}
               <span class="media-tile">
-                <img src="{{ resolve_image_url(key) }}" alt="">
+                {#- Плитка рисуется в 96 px, поэтому спрашивается миниатюра.
+                    Запасной полноразмерный адрес приходит ИЗ МАКРОСА. -#}
+                {{ thumb(key) }}
                 {#- Именованная кнопка ОТПРАВКИ внутри настоящей формы: без
                     Alpine и без htmx она уходит POST-ом, и обработчик убирает
                     ровно этот ключ (D-12). Подтверждения нет намеренно —
@@ -282,6 +285,13 @@
 // БЕЗ ОКРУЖАЮЩИХ КАВЫЧЕК. Подстановка внутрь кавычек ломается на первой же
 // кавычке в значении и превращает данные в код (01-REVIEW.md:625-626).
 const IMAGE_BASE_URL = {{ s3_public_url() | tojson }};
+// ⚠️ ВТОРАЯ КОПИЯ ПРАВИЛА СБОРКИ АДРЕСА МИНИАТЮРЫ. Плитки после загрузки файла
+// строятся ниже узлами и макросом `components/thumb.html` воспользоваться не
+// могут — копия неизбежна. Неизбежным её РАСХОЖДЕНИЕ с серверным при этом не
+// становится: приставка приезжает сюда из того же `app/services/image_keys.py`,
+// а держит копии в step render-тест в tests/test_pages/test_ads_editor.py, а не
+// чья-то дисциплина.
+const THUMB_KEY_PREFIX = {{ THUMB_KEY_PREFIX | tojson }};
 const MAX_IMAGES = {{ editor.max_images | tojson }};
 const TEXT_LIMIT = {{ editor.text_limit | tojson }};
 const TEXT_WARN_AT = {{ (editor.text_limit * 0.9) | round | int | tojson }};
@@ -327,13 +337,19 @@ function renderImages() {
     imageInputs.replaceChildren();
     imagePaths.forEach((path, index) => {
         const url = path.startsWith('http') ? path : IMAGE_BASE_URL + '/' + path;
+        const thumbUrl = path.startsWith('http') ? path : IMAGE_BASE_URL + '/' + THUMB_KEY_PREFIX + path;
 
         const tile = document.createElement('span');
         tile.className = 'media-tile';
 
         const img = document.createElement('img');
-        img.src = url;
+        img.src = thumbUrl;
+        img.dataset.full = url;
         img.alt = '';
+        // Откат на полноразмерный адрес, тот же, что несёт серверная разметка.
+        // `{ once: true }` — и есть однократность: слушатель снимается сам, и
+        // отказ ЗАПАСНОГО адреса не запускает бесконечное переключение.
+        img.addEventListener('error', () => { img.src = img.dataset.full; }, { once: true });
 
         const remove = document.createElement('button');
         remove.type = 'submit';
@@ -387,13 +403,33 @@ function clearUploadError() {
     errorBox.replaceChildren();
 }
 
+// ⚠️ ЧИНИТ ПРЯМУЮ НЕПРАВДУ, А НЕ УЛУЧШАЕТ ФОРМУЛИРОВКУ. До issue #40 обработчик
+// показывал текст про форматы на ЛЮБОЙ ответ 400 и `detail` из тела не читал
+// вовсе. Пользователь, чей файл отвергнут по числу точек или по размеру тела,
+// читал при этом про причину, которой не было: файл у него корректного формата,
+// он это видит, и отказ читается как поломка сервиса — ровно тот класс, из-за
+// которого в шапке app/routes/uploads.py написан абзац про WebP.
+//
+// Локальная копия текста остаётся ЗАПАСНОЙ и удалению не подлежит: тело ответа
+// бывает нечитаемым (прокси отдал свою страницу, соединение оборвалось), и
+// render-тест, держащий эту копию в step с серверной константой, продолжает
+// действовать.
+async function refusalTextOf(resp) {
+    if (resp.status !== 400) { return UPLOAD_TRANSPORT_ERROR; }
+    try {
+        const body = await resp.json();
+        if (body && typeof body.detail === 'string' && body.detail) { return body.detail; }
+    } catch (e) { /* тело нечитаемо — ниже запасной текст */ }
+    return UPLOAD_TYPE_ERROR;
+}
+
 async function uploadFile(file) {
     if (imagePaths.length >= MAX_IMAGES) { showUploadError(UPLOAD_LIMIT_ERROR); return false; }
     const formData = new FormData();
     formData.append('file', file);
     try {
         const resp = await fetch('/api/uploads/image', { method: 'POST', body: formData });
-        if (!resp.ok) { showUploadError(resp.status === 400 ? UPLOAD_TYPE_ERROR : UPLOAD_TRANSPORT_ERROR); return false; }
+        if (!resp.ok) { showUploadError(await refusalTextOf(resp)); return false; }
         const data = await resp.json();
         if (!data.path) { showUploadError(UPLOAD_TRANSPORT_ERROR); return false; }
         imagePaths.push(data.path);

@@ -4,6 +4,7 @@
 {% from "components/mono.html" import mono %}
 {% from "history/includes/history_card.html" import copy_button, retry_trigger, retry_modal %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
+{% from "components/thumb.html" import thumb %}
 
 {# Страница записи истории (D-24).
 
@@ -60,10 +61,13 @@
           пор переписать или удалить, а история обязана показывать отправленное. -#}
       <span data-longtext>{{ log.ad_text }}</span>
       {% if log.ad_images %}
+      {#- Ссылка ведёт на ПОЛНОРАЗМЕРНЫЙ объект, а показывается миниатюра:
+          миниатюра — способ показать, а не то, что открывается по клику.
+          Разглядеть отправленное пользователь должен уметь целиком. -#}
       <div data-thumbs>
         {% for img in log.ad_images %}
         <a href="{{ resolve_image_url(img) }}" target="_blank" rel="noopener">
-          <img src="{{ resolve_image_url(img) }}" alt="">
+          {{ thumb(img, lazy=true) }}
         </a>
         {% endfor %}
       </div>

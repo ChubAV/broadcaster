@@ -12,6 +12,7 @@
 макроса даёт 200 с пустой страницей.
 """
 
+from pathlib import Path
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -28,7 +29,9 @@ from app.main import create_app
 from app.models.ad import Ad
 from app.models.user import User
 from app.pages.ads import CAPTION_LIMIT, TEXT_LIMIT, TEXT_WARN_RATIO
+from app.pages.common import _thumb_image_url
 from app.routes.uploads import UNSUPPORTED_IMAGE_MESSAGE
+from app.services.image_keys import THUMB_KEY_PREFIX
 
 # Форма ключа вложения — источник правды `app/routes/uploads.py`:
 # `{user_id}/{32 hex}_{имя}`. Свой ключ строится тем же способом, что в
@@ -307,6 +310,135 @@ async def test_editor_s3_public_url_global_comes_from_app_settings(
 
     assert response.status_code == 200
     assert "https://cdn.bound-to-app-settings.test/bucket" in response.text
+
+
+# --- Issue #40: интерфейс запрашивает МИНИАТЮРУ ------------------------------
+#
+# Плитка вложения рисуется в 96 px, аватарка карточки — в 32 px, а качается под
+# них полноразмерный объект. Задача даёт интерфейсу отдельный лёгкий объект и
+# оставляет полноразмерный адрес запасным — у вложений, загруженных ДО задачи,
+# миниатюры нет и не появится (D-6).
+
+CDN_BASE = "https://cdn.bound-to-app-settings.test/bucket"
+
+
+def test_thumb_image_url_prefixes_a_stored_key():
+    """Адрес миниатюры — базовый URL, слэш, приставка и ключ."""
+    assert _thumb_image_url("7/photo.jpg", CDN_BASE) == f"{CDN_BASE}/thumbs/7/photo.jpg"
+
+
+def test_thumb_image_url_rewrites_a_full_url_of_our_own_bucket():
+    """Снимок в журнале отправок хранит АДРЕСА, а не ключи.
+
+    `SendLog.ad_images` заполняется в `app/application/scheduling/use_cases.py`
+    уже готовыми адресами — именно поэтому история и админка зовут
+    `resolve_image_url`, а не `get_image_url`. Функция, знающая только про ключи,
+    тихо оставила бы историю на полноразмерных картинках, и задача закрылась бы
+    на трёх местах показа из пяти.
+    """
+    assert (
+        _thumb_image_url(f"{CDN_BASE}/7/photo.jpg", CDN_BASE)
+        == f"{CDN_BASE}/thumbs/7/photo.jpg"
+    )
+
+
+def test_thumb_image_url_leaves_a_foreign_url_alone():
+    """Для чужого объекта миниатюры не существует, и выдумывать её нельзя.
+
+    Приставка, приписанная к чужому адресу, дала бы ссылку на несуществующий
+    объект в ЧУЖОМ хранилище: картинка пропала бы совсем, а запасной адрес вёл
+    бы на неё же.
+    """
+    foreign = "https://images.example.org/bucket/7/photo.jpg"
+
+    assert _thumb_image_url(foreign, CDN_BASE) == foreign
+
+
+def test_thumb_image_url_of_empty_value_is_empty():
+    assert _thumb_image_url("", CDN_BASE) == ""
+
+
+@pytest.mark.asyncio
+async def test_thumb_image_url_global_comes_from_app_settings(
+    cdn_client: AsyncClient, db_session: AsyncSession
+):
+    """Новый глобал берёт базовый URL из настроек ПРИЛОЖЕНИЯ, как три прежних.
+
+    Тот же контракт D-21: собери он `Settings()` сам, базовый URL приезжал бы из
+    `.env` рабочего каталога мимо `create_app(settings=...)`.
+    """
+    await _seed_ad(db_session, title="С картинкой", images=["u1/photo.jpg"])
+
+    listing = await cdn_client.get("/ads")
+
+    assert listing.status_code == 200
+    assert f"{CDN_BASE}/thumbs/u1/photo.jpg" in listing.text
+
+
+@pytest.mark.asyncio
+async def test_editor_tile_asks_for_the_thumbnail_and_declares_a_fallback(
+    cdn_client: AsyncClient, db_session: AsyncSession
+):
+    """Элемент несёт ОБА адреса и однократный переключатель (D-6, P-8).
+
+    Признака «миниатюра есть» нигде не хранится: форма `Ad.images` не менялась и
+    меняться не должна. Поэтому механизм отката объявлен на самом элементе, а
+    проверяется он наличием запасного адреса и обработчика, а не обращением к
+    хранилищу — обращение на каждую картинку в списке и есть то, чего задача
+    избегает.
+    """
+    ad = await _seed_ad(db_session, title="С картинкой", images=["u1/photo.jpg"])
+
+    response = await cdn_client.get(f"/ads/{ad.id}/edit")
+
+    assert response.status_code == 200
+    html = response.text
+    tile = html[html.index('<div data-media') : html.index("</div>", html.index('<div data-media'))]
+    assert f'src="{CDN_BASE}/thumbs/u1/photo.jpg"' in tile
+    assert f'data-full="{CDN_BASE}/u1/photo.jpg"' in tile
+    # Снятие обработчика с самого себя — защита от цикла, а не микрооптимизация:
+    # без него отказ ЗАПАСНОГО адреса запускал бы бесконечное переключение.
+    assert "onerror=" in tile
+    assert "this.onerror=null" in tile
+
+
+@pytest.mark.asyncio
+async def test_editor_javascript_carries_the_thumbnail_prefix(
+    cdn_client: AsyncClient, db_session: AsyncSession
+):
+    """Копии правила сборки адреса держатся в step ТЕСТОМ, а не дисциплиной.
+
+    Плитки после загрузки файла строятся в JS и макросом воспользоваться не
+    могут, поэтому приставка существует ВТОРОЙ копией. Утверждение идёт на
+    импортированную ``THUMB_KEY_PREFIX``, а не на литерал: тест на литерале
+    сравнивал бы шаблон сам с собой и остался бы зелёным при разъехавшихся
+    копиях — по образцу
+    ``test_supported_formats_and_refusal_text_stay_in_step``.
+    """
+    ad = await _seed_ad(db_session, title="С картинкой", images=["u1/photo.jpg"])
+
+    response = await cdn_client.get(f"/ads/{ad.id}/edit")
+
+    assert response.status_code == 200
+    script = response.text[response.text.index("<script>") :]
+    assert THUMB_KEY_PREFIX in script
+
+
+def test_editor_upload_handler_reads_the_refusal_from_the_response_body():
+    """P-9: обработчик показывает `detail` сервера, а не всегда свою копию.
+
+    Сегодня `uploadFile()` показывает текст про форматы на ЛЮБОЙ ответ 400 —
+    значит, пользователь, чей файл отвергнут по числу точек или по размеру тела,
+    читает про причину, которой не было. Локальная копия при этом остаётся
+    запасной на случай нечитаемого тела, и render-тест, держащий её в step с
+    серверной константой, продолжает действовать.
+    """
+    source = (
+        Path(__file__).resolve().parents[2] / "app" / "templates" / "ads" / "form.html"
+    ).read_text(encoding="utf-8")
+
+    assert "detail" in source, "обработчик не читает detail из тела ответа"
+    assert "UPLOAD_TYPE_ERROR" in source, "запасная копия текста исчезла"
 
 
 # --- План 02-04, ADS-04: черновик создаётся автосохранением ------------------

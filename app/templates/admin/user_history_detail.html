@@ -5,6 +5,7 @@
 {% from "components/mono.html" import mono %}
 {% from "components/table.html" import row_open, row_close, cell %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
+{% from "components/thumb.html" import thumb %}
 
 {# Раскладка «подпись → значение». Приходит параметром cols в пользовательское
    свойство --cols: собственного класса под эту страницу не заводится.
@@ -86,10 +87,12 @@
   {{ card_open(title='Объявление', subtitle=log.ad_title) }}
     <span data-longtext>{{ log.ad_text }}</span>
     {% if log.ad_images %}
+    {#- Как и на пользовательском экране истории: показывается миниатюра,
+        ссылка ведёт на полноразмерный объект. -#}
     <div data-thumbs>
       {% for img in log.ad_images %}
       <a href="{{ resolve_image_url(img) }}" target="_blank" rel="noopener">
-        <img src="{{ resolve_image_url(img) }}" alt="">
+        {{ thumb(img, lazy=true) }}
       </a>
       {% endfor %}
     </div>

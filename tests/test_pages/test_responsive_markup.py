@@ -1329,8 +1329,14 @@ def test_billing_component_library_did_not_grow():
     # ДВАЖДЫ — здесь и в test_template_inventory, — и обе константы подняты
     # тем же коммитом, что и переезд: правка задним числом на время отключила
     # бы проверку, которая ловит молчаливое пополнение библиотеки.
+    #
+    # 15, а не 14: пятнадцатый файл — thumb.html, заведённый issue #40. Мест
+    # показа вложения пять, правило у них одно (спросить миниатюру, оставить
+    # полноразмерный адрес запасным), и собранное на месте пятое место
+    # унаследовало бы из этого правила ровно ничего. Обе константы подняты ТЕМ
+    # ЖЕ коммитом, что и файл, — по причине, записанной абзацем выше.
     components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
-    assert len(components) == 14, [p.name for p in components]
+    assert len(components) == 15, [p.name for p in components]
 
     partials = {p.name for p in (TEMPLATES_DIR / "billing" / "includes").glob("*.html")}
     assert partials == {"payment_row.html"}, (
@@ -2579,13 +2585,14 @@ def test_template_inventory():
     # Библиотека компонентов Плана 02 на месте целиком (12 макросов + filters),
     # плюс четырнадцатый файл — filter_chips.html, переехавший из
     # history/includes/ планом 06-03 вслед за вторым и третьим потребителями
-    # («Пользователи» и «Логи» админки). Второе утверждение о том же числе
-    # стоит в test_billing_component_library_did_not_grow; выборка
+    # («Пользователи» и «Логи» админки), плюс пятнадцатый — thumb.html из
+    # issue #40, единственный способ показать вложение. Второе утверждение о том
+    # же числе стоит в test_billing_component_library_did_not_grow; выборка
     # `-k inventory` берёт только ЭТО, поэтому поднимать надо оба — иначе
     # выборка зеленеет, а полный прогон краснеет из теста, названного по
     # чужому разделу.
     components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
-    assert len(components) == 14, [p.name for p in components]
+    assert len(components) == 15, [p.name for p in components]
 
     # Два шелла проекта: основной и auth
     assert (TEMPLATES_DIR / "base.html").exists()
