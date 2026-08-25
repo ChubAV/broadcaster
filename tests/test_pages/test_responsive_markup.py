@@ -321,6 +321,35 @@ async def test_ads_card_renders_data(authed_client: AsyncClient, db_session: Asy
 
 
 @pytest.mark.asyncio
+async def test_ads_card_shows_channel_pills(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Канал объявления показан пилюлей; объявление без расписаний — без пилюль.
+
+    Обе половины утверждения обязательны. Без первой тест зеленел бы на разметке
+    без каналов вовсе; без второй — на пилюле, приклеенной к КАЖДОЙ карточке
+    независимо от данных, потому что на одном объявлении отличить «канал взят из
+    расписания» от «канал нарисован всегда» нечем.
+
+    Пилюля собрана на СУЩЕСТВУЮЩЕМ примитиве data-upbadge (заведён дашбордом,
+    app/static/css/app.css): второй копии тонов пилюли канала в проекте нет, и
+    признак здесь проверяется именно тот, что красит CSS.
+    """
+    await _seed_schedule(db_session, ad_title="Объявление с расписанием")
+    await _seed_ad(db_session, title="Объявление без расписаний")
+
+    html = (await authed_client.get("/ads")).text
+
+    assert html.count("data-upbadge") == 1, (
+        "пилюль канала на странице не ровно одна: расписание есть только у "
+        "одного из двух объявлений"
+    )
+    assert 'data-upbadge data-channel="wa"' in html, (
+        "канал пилюли не приехал атрибутом — тон пилюли красит CSS по нему"
+    )
+
+
+@pytest.mark.asyncio
 async def test_schedules_card_renders_data(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
