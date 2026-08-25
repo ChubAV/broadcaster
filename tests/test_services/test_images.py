@@ -34,6 +34,14 @@ from app.services.images import (
 )
 
 
+# Сторона плитки, из которой набирается крупная картинка. Поэлементный обход
+# 4000x3000 на чистом Python занимает десятки секунд — это цена, которую платил
+# бы КАЖДЫЙ прогон суиты ради данных, от которых нужно одно свойство: чтобы они
+# не сжимались в ноль. Плитка строится поэлементно один раз, дальше картинка
+# набирается вставками, и стоимость перестаёт зависеть от разрешения.
+_TILE_EDGE = 64
+
+
 def _gradient(size: tuple[int, int], mode: str = "RGB") -> Image.Image:
     """Картинка с изменяющимся содержимым, а не заливка одним цветом.
 
@@ -43,10 +51,11 @@ def _gradient(size: tuple[int, int], mode: str = "RGB") -> Image.Image:
     файла весят больше самих данных.
     """
     width, height = size
-    image = Image.new(mode, size)
-    pixels = image.load()
-    for x in range(width):
-        for y in range(height):
+    tile_size = (min(width, _TILE_EDGE), min(height, _TILE_EDGE))
+    tile = Image.new(mode, tile_size)
+    pixels = tile.load()
+    for x in range(tile_size[0]):
+        for y in range(tile_size[1]):
             value = ((x * 7) % 256, (y * 11) % 256, ((x + y) * 13) % 256)
             if mode == "RGB":
                 pixels[x, y] = value
@@ -54,6 +63,14 @@ def _gradient(size: tuple[int, int], mode: str = "RGB") -> Image.Image:
                 pixels[x, y] = (*value, 255)
             else:  # pragma: no cover - режимы вне пары в тестах не строятся
                 raise AssertionError(mode)
+
+    if tile_size == size:
+        return tile
+
+    image = Image.new(mode, size)
+    for left in range(0, width, tile_size[0]):
+        for top in range(0, height, tile_size[1]):
+            image.paste(tile, (left, top))
     return image
 
 
