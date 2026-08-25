@@ -18,6 +18,7 @@
 
    Контекст: `ad` (может быть None на пустом /ads/new), `editor` (словарь из
    app/pages/ads.py). #}
+{% from "components/thumb.html" import thumb %}
 <div class="preview">
   {%- if ad and ad.title %}
   <p class="preview__title" title="{{ ad.title }}">{{ ad.title }}</p>
@@ -35,9 +36,10 @@
     {%- if ad and (ad.text or ad.images) %}
       {%- if ad.images %}
       {#- Порядок миниатюр — порядок списка ключей объявления, то есть порядок
-          загрузки и он же порядок отправки. -#}
+          загрузки и он же порядок отправки. Адрес строит МАКРОС: он же несёт
+          запасной полноразмерный адрес для вложений, у которых миниатюры нет. -#}
       <div class="preview__media">
-        {%- for key in ad.images %}<img src="{{ resolve_image_url(key) }}" alt="" loading="lazy">{% endfor -%}
+        {%- for key in ad.images %}{{ thumb(key, lazy=true) }}{% endfor -%}
       </div>
       {%- endif %}
       {%- if ad.text %}<p class="preview__text">{{ ad.text }}</p>{% endif %}

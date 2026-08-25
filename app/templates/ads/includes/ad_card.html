@@ -18,6 +18,7 @@
 {% from "components/table.html" import row_open, row_close, cell %}
 {% from "components/badge.html" import badge %}
 {% from "components/modal.html" import modal %}
+{% from "components/thumb.html" import thumb %}
 
 {% set AD_COLS = 'minmax(180px,2.2fr) minmax(0,1.6fr) 96px 104px 116px 104px 168px' %}
 {% set AD_COLUMNS = ['Объявление', 'Текст', 'Отправок', 'Расписаний', 'Создано', 'Статус', ''] %}
@@ -25,7 +26,10 @@
 {% macro ad_card(ad, user=None, cols=AD_COLS) -%}
 {{ row_open(cols=cols, id='ad-row-' ~ ad.id) }}
   {%- call cell(grow=true, title=ad.title) %}
-    {%- if ad.images and ad.images|length > 0 %}<img class="avatar" src="{{ get_image_url(ad.images[0]) }}" alt="">{% endif -%}
+    {#- Аватарка рисуется в 32 px, поэтому спрашивается миниатюра. Запасной
+        полноразмерный адрес и переключатель приходят ИЗ МАКРОСА: у объявлений,
+        загруженных до issue #40, миниатюры нет. -#}
+    {%- if ad.images and ad.images|length > 0 %}{{ thumb(ad.images[0], class='avatar') }}{% endif -%}
     <span data-grow>{{ ad.title }}</span>
   {%- endcall %}
   {#- Выдержка текста сохранена из прежней карточки: раздел меняет вид,

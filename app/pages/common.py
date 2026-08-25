@@ -25,6 +25,7 @@ from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.services.auth_service import actor_id as token_actor_id, decode_access_token
+from app.services.image_keys import THUMB_KEY_PREFIX, thumb_key
 from app.services.s3 import get_image_url
 
 _templates_dir = Path(__file__).resolve().parent.parent / "templates"
@@ -60,11 +61,69 @@ def _resolve_image_url(key: str, s3_public_url: str) -> str:
     return get_image_url(key, s3_public_url)
 
 
+def _thumb_image_url(value: str, s3_public_url: str) -> str:
+    """Адрес МИНИАТЮРЫ того же вложения (issue #40).
+
+    Интерфейс рисует вложение плиткой 96 px и аватаркой 32 px, а качает под них
+    полноразмерный объект — несколько мегабайт ради нескольких килобайт.
+    Функция строит адрес лёгкой копии, которую маршрут загрузки кладёт рядом.
+
+    ВЕТКА С ПОЛНЫМ АДРЕСОМ СУЩЕСТВУЕТ НЕ ДЛЯ СИММЕТРИИ С `_resolve_image_url`.
+    `SendLog.ad_images` хранит не ключи, а готовые АДРЕСА
+    (`app/application/scheduling/use_cases.py`) — снимок отправленного обязан
+    пережить и переписанное, и удалённое объявление. Функция, знающая только про
+    ключи, оставила бы историю и админский экран истории на полноразмерных
+    картинках, и задача закрылась бы на трёх местах показа из пяти, причём молча.
+
+    Чужое происхождение адреса — отдельный случай и отдельный ответ: миниатюры
+    для чужого объекта не существует, поэтому значение возвращается как есть.
+    Приписать приставку значило бы выдать ссылку на несуществующий объект в
+    чужом хранилище — картинка пропала бы совсем, а запасной адрес вёл бы на неё
+    же.
+    """
+    if not value:
+        return ""
+
+    if value.startswith("http://") or value.startswith("https://"):
+        prefix = s3_public_url.rstrip("/") + "/"
+        if s3_public_url and value.startswith(prefix):
+            return get_image_url(thumb_key(value[len(prefix) :]), s3_public_url)
+        return value
+
+    return get_image_url(thumb_key(value), s3_public_url)
+
+
+# Базовый URL хранилища держится МОДУЛЬНОЙ ПЕРЕМЕННОЙ, а глобалы читают её В
+# МОМЕНТ ВЫЗОВА. Прежде каждый глобал ЗАМЫКАЛ значение, и это работало ровно до
+# первого макроса, вызванного из другого макроса.
+#
+# Отказ, который здесь закрыт (issue #40). Jinja кеширует МОДУЛЬ шаблона:
+# `Template._module` создаётся при первом импорте и дальше отдаётся как есть.
+# Модуль библиотечного шаблона — это снимок его пространства имён, и в снимок
+# попадают ОБЪЕКТЫ глобалов, бывшие там на тот момент. Замкнувшая пустой
+# базовый URL функция остаётся в этом снимке навсегда, а `create_app` следующего
+# теста (или следующего приложения в процессе) переписывает `env.globals` мимо
+# него. Наблюдаемо это было так: страница списка объявлений отдавала
+# `src="/thumbs/u1/photo.jpg"` — адрес без хоста, — хотя `env.globals` в тот же
+# момент отдавал правильный, и разошлись они молча, без единого исключения.
+#
+# Чтение переменной в момент вызова снимает весь класс: снимок держит ТУ ЖЕ
+# функцию, а она смотрит на текущее значение. Контракт D-21 при этом не
+# меняется ни в чём — базовый URL по-прежнему приезжает из настроек ПРИЛОЖЕНИЯ
+# через `bind_image_url_globals`, и по-прежнему выигрывает последний
+# `create_app`.
+_s3_public_url = ""
+
+
 def _bind_image_url_globals(s3_public_url: str) -> None:
-    """Register the three image globals closed over an explicit base URL."""
-    templates.env.globals["get_image_url"] = lambda key: get_image_url(key, s3_public_url)
-    templates.env.globals["resolve_image_url"] = lambda key: _resolve_image_url(key, s3_public_url)
-    templates.env.globals["s3_public_url"] = lambda: s3_public_url
+    """Point the four image globals at the base URL the caller owns."""
+    global _s3_public_url
+    _s3_public_url = s3_public_url
+
+    templates.env.globals["get_image_url"] = lambda key: get_image_url(key, _s3_public_url)
+    templates.env.globals["resolve_image_url"] = lambda key: _resolve_image_url(key, _s3_public_url)
+    templates.env.globals["thumb_image_url"] = lambda key: _thumb_image_url(key, _s3_public_url)
+    templates.env.globals["s3_public_url"] = lambda: _s3_public_url
 
 
 def bind_image_url_globals(settings: Settings) -> None:
@@ -105,6 +164,19 @@ templates.env.globals["asset_version"] = _compute_asset_version()
 # Конструирования Settings здесь не происходит: значения — модульные константы.
 templates.env.globals["AD_STATUS_DRAFT"] = AD_STATUS_DRAFT
 templates.env.globals["AD_STATUS_PUBLISHED"] = AD_STATUS_PUBLISHED
+
+# Приставка ключа миниатюр доезжает до шаблона тем же способом и по той же
+# причине, что и константы выше: значение — модульная константа, конструирования
+# Settings здесь не происходит, поэтому глобал ставится на импорте, а не в
+# _bind_image_url_globals (там живёт только то, что зависит от настроек).
+#
+# Нужна она РОВНО ОДНОМУ месту — блоку `renderImages()` в редакторе. Плитки там
+# строятся в JS уже после ответа загрузки, макросом воспользоваться не могут, и
+# правило сборки адреса существует второй копией. Копия неизбежна, а вот
+# расхождение копий — нет: приставка приезжает в JS отсюда, то есть из того же
+# `app/services/image_keys.py`, что и серверная сборка, и render-тест это
+# закрепляет.
+templates.env.globals["THUMB_KEY_PREFIX"] = THUMB_KEY_PREFIX
 
 # Подписи каналов доезжают до шаблонов тем же способом и по той же причине:
 # строка перечня воркеров — МАКРОС, а импортированным макросам Jinja контекст
