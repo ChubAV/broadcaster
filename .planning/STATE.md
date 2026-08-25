@@ -2,20 +2,19 @@
 gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
-current_phase: 05
 current_phase_name: Тарифы
-status: "Milestone v2.0 complete — 7/7 phases"
+status: "Phase 05 shipped — PR #43"
 stopped_at: Milestone v2.0 complete; no phase open
-last_updated: "2026-08-25T06:14:49.034Z"
+last_updated: "2026-08-25T06:39:21.529Z"
 last_activity: 2026-08-25
-last_activity_desc: Phase 05 UAT passed, security verified (threats_open 0) — milestone v2.0 complete
-state_head: fcb21ee4a2821b1a7662e70d51990e25f4ec61b2
+state_head: 1c820ae7875f2824cb32ff8684970e766f2a68db
 progress:
   total_phases: 7
   completed_phases: 7
   total_plans: 110
   completed_plans: 110
   percent: 100
+current_phase: 05
 ---
 
 # Project State
@@ -30,8 +29,8 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 ## Current Position
 
 Phase: — (открытых фаз нет)
-Status: Milestone v2.0 complete — 7/7 фаз, 110/110 планов
-Last activity: 2026-08-25 — приёмка фазы 5 закрыта, ревью безопасности пройдено, веха v2.0 завершена
+Status: Phase 05 shipped — PR #43
+Last activity: 2026-08-25
 
 ⚠️ **УКАЗАТЕЛЬ ФАЗЫ ВЫСТАВЛЕН ВРУЧНУЮ, И ВОТ ПОЧЕМУ.** `phase.complete` при закрытии
 фазы 5 перевёл `current_phase` на 05.1 — следующую ПО ПОРЯДКУ СПИСКА. Фаза 05.1 закрыта
