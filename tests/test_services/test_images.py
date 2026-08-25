@@ -228,6 +228,36 @@ def test_palette_png_with_transparency_stays_png():
     assert prepared.extension == ".png"
 
 
+def test_palette_image_leaves_the_palette_before_it_is_resized():
+    """Уменьшение идёт по цветам, а не по номерам в палитре.
+
+    Pillow ОТКАЗЫВАЕТСЯ применять качественный фильтр к режиму ``P`` и всегда
+    берёт ближайшего соседа: интерполировать номера цветов бессмысленно.
+    Логотип, уменьшенный так с 2400 px, приходит с рваными краями — то есть
+    задача, затеянная ради вида и веса картинок, портила бы ровно те, у которых
+    палитра и заведена. Утверждение идёт на РЕЖИМ сохранённого изображения,
+    потому что именно смена режима до уменьшения и есть проверяемое решение.
+    """
+    prepared = prepare_upload(make_palette_png_with_transparency((2400, 1600)))
+
+    delivery = _open(prepared.delivery)
+    assert delivery.mode == "RGBA", delivery.mode
+    assert delivery.size == (DELIVERY_MAX_EDGE, 1280)
+
+
+def test_grayscale_jpeg_is_not_inflated_to_three_channels():
+    """Полутоновый снимок остаётся одноканальным.
+
+    JPEG умеет хранить его одним каналом, и приведение к RGB утроило бы вес на
+    ровном месте — прямо против того, ради чего задача затеяна.
+    """
+    payload = _encode(_gradient((800, 600)).convert("L"), "JPEG")
+
+    prepared = prepare_upload(payload)
+
+    assert _open(prepared.delivery).mode == "L"
+
+
 def test_alpha_that_survives_the_rule_keeps_its_transparency():
     """Настоящая альфа доживает до сохранённых байтов, а не заливается фоном.
 

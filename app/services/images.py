@@ -163,26 +163,43 @@ def _fit_long_edge(image: Image.Image, max_edge: int) -> Image.Image:
     return image.resize(target, Image.Resampling.LANCZOS)
 
 
-def _flatten_for_jpeg(image: Image.Image) -> Image.Image:
-    """Свести изображение к RGB, подложив под прозрачность белый фон.
+def _normalise_mode(image: Image.Image, keeps_alpha: bool) -> Image.Image:
+    """Привести режим к тому, в котором изображение будет уменьшаться и кодироваться.
 
-    Простое ``convert("RGB")`` отбросило бы канал ТИХО, и прозрачные места стали
-    бы чёрными: пользователь увидел бы это уже в чужой группе. Белый выбран
-    потому, что на нём прозрачный фон логотипа выглядит так же, как в
-    большинстве мест показа.
+    ПРИВЕДЕНИЕ ИДЁТ ДО УМЕНЬШЕНИЯ, И ЭТО НЕ ПЕРЕСТАНОВКА РАДИ ПОРЯДКА. Pillow
+    отказывается применять качественные фильтры к палитровому режиму: `resize`
+    для режимов `P` и `1` ВСЕГДА берёт ближайшего соседа, потому что
+    интерполировать номера цветов в палитре бессмысленно. Логотип, уменьшенный
+    ближайшим соседом с 1200 px до 480, приходит с рваными краями — то есть
+    задача, затеянная ради вида и веса картинок, портила бы ровно те картинки, у
+    которых палитра и заведена. После приведения к RGB/RGBA фильтр работает как
+    задумано.
+
+    Прозрачность, которая по правилу формата не сохраняется, подкладывается на
+    БЕЛЫЙ фон, а не отбрасывается: простое ``convert("RGB")`` сняло бы канал
+    тихо, и прозрачные места стали бы чёрными — увидел бы это пользователь уже в
+    чужой группе.
+
+    Режим `L` сохраняется как есть: JPEG умеет хранить полутоновое изображение
+    одним каналом, и приведение к RGB утроило бы вес чёрно-белого снимка на
+    ровном месте.
     """
-    if image.mode == "P":
-        image = image.convert("RGBA")
+    if keeps_alpha:
+        return image if image.mode == "RGBA" else image.convert("RGBA")
 
-    if "A" in image.getbands():
-        background = Image.new("RGB", image.size, (255, 255, 255))
-        background.paste(image.convert("RGBA"), mask=image.convert("RGBA").getchannel("A"))
+    has_alpha = "A" in image.getbands() or (
+        image.mode == "P" and "transparency" in image.info
+    )
+    if has_alpha:
+        rgba = image.convert("RGBA")
+        background = Image.new("RGB", rgba.size, (255, 255, 255))
+        background.paste(rgba, mask=rgba.getchannel("A"))
         return background
 
-    if image.mode != "RGB":
-        return image.convert("RGB")
+    if image.mode in ("RGB", "L"):
+        return image
 
-    return image
+    return image.convert("RGB")
 
 
 def _encode(image: Image.Image, target_format: str, quality: int) -> bytes:
@@ -195,7 +212,7 @@ def _encode(image: Image.Image, target_format: str, quality: int) -> bytes:
     """
     buffer = io.BytesIO()
     if target_format == _JPEG:
-        _flatten_for_jpeg(image).save(
+        image.save(
             buffer, format=_JPEG, quality=quality, optimize=True, progressive=True
         )
     else:
@@ -214,9 +231,10 @@ def prepare_upload(content: bytes) -> PreparedImage:
     4. для JPEG сообщить декодеру целевой размер (``draft``);
     5. декодировать;
     6. применить ориентацию из EXIF к пикселям;
-    7. определить наличие НАСТОЯЩЕЙ альфы;
-    8. уменьшить до ``DELIVERY_MAX_EDGE``, никогда не увеличивая;
-    9. выбрать формат и закодировать сжатую версию;
+    7. определить наличие НАСТОЯЩЕЙ альфы и выбрать формат;
+    8. привести режим к RGB/RGBA/L — ДО уменьшения, иначе палитровому
+       изображению не достанется качественного фильтра;
+    9. уменьшить до ``DELIVERY_MAX_EDGE``, никогда не увеличивая, и закодировать;
     10. уменьшить ЕЁ ЖЕ до ``THUMB_MAX_EDGE`` и закодировать миниатюру.
 
     Шаг 3 стоит перед шагом 5, и это единственная причина, по которой открывать
@@ -257,6 +275,7 @@ def prepare_upload(content: bytes) -> PreparedImage:
     keeps_alpha = source_format == _PNG and _has_real_alpha(image)
     target_format = _PNG if keeps_alpha else _JPEG
 
+    image = _normalise_mode(image, keeps_alpha)
     delivery_image = _fit_long_edge(image, DELIVERY_MAX_EDGE)
     delivery = _encode(delivery_image, target_format, DELIVERY_JPEG_QUALITY)
 
