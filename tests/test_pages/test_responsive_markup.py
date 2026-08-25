@@ -1438,6 +1438,183 @@ async def test_accounts_labels_come_from_column_list(
     )
 
 
+# --- Задача 260825-of5: карточная сетка раздела «Аккаунты» ------------------
+#
+# Раздел `isAccounts` макета (design/new_broadcaster_design.unpacked.html:878) —
+# КАРТОЧНАЯ СЕТКА на всех ширинах. Строку-таблицу раздел получил Планом 01-03,
+# когда одна форма списочной страницы была применена ко всем пяти разделам
+# сразу; Фаза 6 своим объёмом брала подключение аккаунтов и опрос статуса, а
+# формой списка не занималась.
+#
+# Ключи карточки — ТЕ ЖЕ ШЕСТЬ ВЕЛИЧИН, что до задачи стояли колонками: раздел
+# сменил вид, а не состав показанных данных. Порядок повторяет объявление
+# ACCOUNT_KEYS в трёх файлах раздела.
+
+ACCOUNTS_GRID_MARKER = "data-accounts-grid"
+ACCOUNTS_CARD_MARKER = 'class="acct-card"'
+
+ACCOUNT_CARD_KEYS = (
+    "Состояние",
+    "Групп",
+    "Расписаний",
+    "Успешность",
+    "Последняя отправка",
+    "Подключён",
+)
+
+
+def _kv_key(name: str) -> str:
+    """Разметка ключа карточки — ровно та, что проверяется у объявлений."""
+    return f'<span class="kv__k">{name}</span>'
+
+
+def _element_end(html: str, start: int) -> int:
+    """Индекс конца элемента `<div …>`, открытого по смещению ``start``.
+
+    Счёт по вложенности, а не «до первой закрывающей»: внутри контейнера сетки
+    лежат карточки со своими блоками, и наивный поиск объявил бы сетку
+    закрытой на первом же `</div>` внутри первой карточки.
+    """
+    depth = 0
+    for match in re.finditer(r"<div\b|</div>", html[start:]):
+        depth += 1 if match.group(0) == "<div" else -1
+        if depth == 0:
+            return start + match.end()
+    raise AssertionError("контейнер сетки не закрыт")
+
+
+@pytest.mark.asyncio
+async def test_accounts_list_is_card_based(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Замена вклада раздела в обход по строке-таблице (задача 260825-of5).
+
+    Список аккаунтов — карточная СЕТКА на всех ширинах, как раздел
+    `isAccounts` канонического макета (unpacked.html:878), поэтому примитив
+    строки-таблицы ему не подходит: на 860px её колонки скрываются, а подписей
+    ячеек у карточек нет.
+
+    Утверждение положительное: у списка есть СВОЙ примитив, а не «нет
+    старого». Без положительной половины раздел просто выпал бы из проверок
+    вместе со снятой строкой параметризации — ЧЕТВЁРТЫЙ тест этой формы после
+    расписаний, экрана групп аккаунта и объявлений.
+    """
+    await _seed_account(db_session, type_="max")
+
+    html = (await authed_client.get("/accounts")).text
+
+    assert ACCOUNTS_GRID_MARKER in html, "контейнер карточной сетки аккаунтов исчез"
+    assert ACCOUNTS_CARD_MARKER in html, "карточка аккаунта исчезла из разметки"
+    assert "data-row" not in html, (
+        "список аккаунтов вернулся к строке-таблице — на 860px её колонки "
+        "скрываются, а подписей ячеек у карточек нет"
+    )
+    assert "data-rowhead" not in html, (
+        "шапка колонок вернулась в раздел — у карточной сетки её нет"
+    )
+
+
+@pytest.mark.asyncio
+async def test_accounts_card_names_each_value(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Каждое значение карточки названо своим ключом на списочной странице.
+
+    Счёт по числу веток статуса, а не проверка «встречается хотя бы раз»:
+    ключ, потерянный в ОДНОЙ ветке из трёх, прошёл бы незамеченным — две
+    оставшиеся ветки его удержат.
+    """
+    accounts = await _seed_all_account_branches(db_session)
+
+    html = (await authed_client.get("/accounts")).text
+
+    for key in ACCOUNT_CARD_KEYS:
+        assert html.count(_kv_key(key)) == len(accounts), (
+            f"ключ {key!r} проставлен не во всех ветках статуса"
+        )
+    assert "<span data-cell-label>" not in html, (
+        "подпись ячейки таблицы вернулась в карточный список — у него нет "
+        "шапки колонок, которую она компенсирует"
+    )
+
+
+@pytest.mark.asyncio
+async def test_accounts_partial_names_each_value(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Порция бесконечной прокрутки несёт те же ключи, что и первая страница.
+
+    Карточки после первой прокрутки приходят ДРУГИМ файлом; расхождение видно
+    только тому, кто долистал.
+    """
+    accounts = await _seed_all_account_branches(db_session)
+
+    response = await authed_client.get("/accounts/partial?offset=0&limit=30")
+    assert response.status_code == 200
+    html = response.text
+
+    for key in ACCOUNT_CARD_KEYS:
+        assert html.count(_kv_key(key)) == len(accounts), (
+            f"ключ {key!r} потерян в порции бесконечной прокрутки"
+        )
+    assert "<span data-cell-label>" not in html
+
+
+@pytest.mark.asyncio
+async def test_accounts_sync_card_names_each_value(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Блок подмены по опросу статуса несёт ключи во ВСЕХ трёх состояниях.
+
+    Самая опасная из трёх поверхностей: её разметки нет на первичной
+    отрисовке, поэтому потеря ключа здесь проявится только после первого
+    опроса.
+    """
+    for status in ("active", "sync_failed", "syncing"):
+        account = await _seed_account_with_status(db_session, status)
+
+        response = await authed_client.get(f"/accounts/{account.id}/sync-status")
+        assert response.status_code == 200, status
+        html = response.text
+
+        assert ACCOUNTS_CARD_MARKER in html, (
+            f"{status}: блок подмены остался строкой-таблицей — после первого "
+            "опроса карточка в сетке подменилась бы строкой"
+        )
+        for key in ACCOUNT_CARD_KEYS:
+            assert _kv_key(key) in html, (
+                f"{status}: ключ {key!r} потерян в блоке подмены"
+            )
+
+
+@pytest.mark.asyncio
+async def test_accounts_sentinel_rides_inside_the_grid(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Сентинел прокрутки — ПОСЛЕДНИЙ элемент ВНУТРИ контейнера сетки.
+
+    Снаружи контейнера он не подтянет следующую порцию в сетку, а без растяжки
+    на всю строку встанет очередной колонкой рядом с последней карточкой, и
+    подпись «Загрузка...» прочтётся как ещё один аккаунт.
+    """
+    for _ in range(31):
+        await _seed_account(db_session, type_="max")
+
+    html = (await authed_client.get("/accounts")).text
+
+    grid_at = html.find(ACCOUNTS_GRID_MARKER)
+    assert grid_at != -1, "контейнер карточной сетки аккаунтов исчез"
+    grid_open = html.rfind("<div", 0, grid_at)
+    grid = html[grid_open : _element_end(html, grid_open)]
+
+    assert 'hx-trigger="revealed"' in grid, (
+        "сентинел бесконечной прокрутки выпал из контейнера сетки"
+    )
+    assert grid.rindex(ACCOUNTS_CARD_MARKER) < grid.index('hx-trigger="revealed"'), (
+        "сентинел стоит не последним: после него в сетке есть карточки"
+    )
+
+
 @pytest.mark.asyncio
 async def test_profile_form_contract(authed_client: AsyncClient):
     """Форма профиля сохраняет метод, маршрут и все прежние имена полей.
