@@ -31,6 +31,8 @@ from app.services.images import (
     ImageTooLarge,
     ImageUnreadable,
     prepare_upload,
+    probe_image,
+    rebuild_stored_image,
 )
 
 
@@ -432,3 +434,130 @@ def test_delivery_bytes_differ_from_the_submitted_bytes():
 
     assert prepared.delivery != payload
     assert prepared.thumbnail != payload
+
+
+# --- Соседний вход для УЖЕ ЛЕЖАЩЕГО объекта (quick 260825-hnf) ----------------
+#
+# Тот же модуль, но другой контракт: у существующего объекта ключ уже роздан, и
+# формат менять нельзя. Тесты ниже утверждают ровно те три отличия от
+# `prepare_upload`, ради которых соседний вход и заведён: формат сохраняется,
+# кодирование включается флагом, а не всегда, и размеры снимаются с заголовка
+# без полных байтов.
+
+
+def test_probe_reads_the_dimensions_from_the_header_alone():
+    """Размеры сняты с ЗАГОЛОВКА: в функцию поданы первые килобайты, не файл."""
+    payload = make_jpeg((4000, 3000))
+    probe = probe_image(payload[:4096])
+
+    assert probe.format == "JPEG"
+    assert probe.width == 4000
+    assert probe.height == 3000
+    assert probe.long_edge == 4000
+
+
+def test_probe_refuses_a_format_outside_the_pair():
+    buffer = io.BytesIO()
+    _gradient((40, 30)).convert("P", palette=Image.Palette.ADAPTIVE).save(
+        buffer, format="GIF"
+    )
+
+    with pytest.raises(ImageUnreadable):
+        probe_image(buffer.getvalue())
+
+
+def test_probe_refuses_an_image_over_the_pixel_ceiling():
+    payload = make_declared_huge_png(8000, 5000)
+
+    with pytest.raises(ImageTooLarge):
+        probe_image(payload)
+
+
+def test_a_stored_image_is_rebuilt_to_the_delivery_limit_with_a_thumbnail():
+    rebuilt = rebuild_stored_image(
+        make_jpeg((4000, 3000)), resize=True, thumbnail=True
+    )
+
+    assert max(_open(rebuilt.delivery).size) == DELIVERY_MAX_EDGE
+    assert max(_open(rebuilt.thumbnail).size) <= THUMB_MAX_EDGE
+
+
+def test_a_stored_png_without_alpha_is_rebuilt_as_png():
+    """Расхождение №1 с `prepare_upload`: формат существующего объекта не меняется.
+
+    На ЭТОМ ЖЕ входе `prepare_upload` отдаёт JPEG (см.
+    `test_png_without_real_alpha_becomes_jpeg` выше). Здесь так нельзя:
+    расширение живёт внутри уже розданного ключа, и JPEG-байты под именем на
+    `.png` воспроизвели бы issue #39.
+    """
+    rebuilt = rebuild_stored_image(
+        make_png((2400, 1800)), resize=True, thumbnail=True
+    )
+
+    assert rebuilt.content_type == "image/png"
+    assert _open(rebuilt.delivery).format == "PNG"
+    assert _open(rebuilt.thumbnail).format == "PNG"
+
+
+def test_a_stored_jpeg_stays_jpeg():
+    rebuilt = rebuild_stored_image(
+        make_jpeg((2400, 1800)), resize=True, thumbnail=True
+    )
+
+    assert rebuilt.content_type == "image/jpeg"
+    assert _open(rebuilt.delivery).format == "JPEG"
+
+
+def test_a_rebuild_without_resize_produces_no_delivery_object():
+    """Второе расхождение: пережатие включается решением вызывающего.
+
+    `None` здесь означает «не запрашивалось» и это не то же самое, что пустые
+    байты: скрипт по нему решает, писать ли под исходным ключом вообще.
+    """
+    rebuilt = rebuild_stored_image(make_jpeg((800, 600)), resize=False, thumbnail=True)
+
+    assert rebuilt.delivery is None
+    assert rebuilt.thumbnail is not None
+    assert max(_open(rebuilt.thumbnail).size) <= THUMB_MAX_EDGE
+
+
+def test_a_rebuild_without_a_thumbnail_produces_no_thumbnail_object():
+    rebuilt = rebuild_stored_image(
+        make_jpeg((3000, 2000)), resize=True, thumbnail=False
+    )
+
+    assert rebuilt.thumbnail is None
+    assert max(_open(rebuilt.delivery).size) == DELIVERY_MAX_EDGE
+
+
+def test_a_rebuilt_image_carries_no_metadata():
+    """EXIF снимается тем же `_encode`, что и на загрузке (T-QH-05)."""
+    source = _gradient((3000, 2000))
+    buffer = io.BytesIO()
+    source.save(buffer, format="JPEG", exif=Image.Exif().tobytes(), quality=95)
+
+    rebuilt = rebuild_stored_image(buffer.getvalue(), resize=True, thumbnail=True)
+
+    assert b"Exif" not in rebuilt.delivery
+
+
+def test_a_stored_palette_png_does_not_lose_its_transparency():
+    """Признак альфы нужен и здесь, где формат не меняется.
+
+    Без него палитровый PNG был бы приведён к RGB и залит белым — то есть
+    скрипт, затеянный ради экономии места, испортил бы логотип.
+    """
+    rebuilt = rebuild_stored_image(
+        make_palette_png_with_transparency((2400, 1800)),
+        resize=True,
+        thumbnail=True,
+    )
+
+    assert _open(rebuilt.delivery).mode == "RGBA"
+
+
+def test_a_stored_object_over_the_ceiling_is_refused_on_the_full_bytes():
+    with pytest.raises(ImageTooLarge):
+        rebuild_stored_image(
+            make_declared_huge_png(8000, 5000), resize=True, thumbnail=True
+        )
