@@ -288,3 +288,156 @@ def prepare_upload(content: bytes) -> PreparedImage:
         content_type=_FORMAT_CONTENT_TYPES[target_format],
         extension=_FORMAT_EXTENSIONS[target_format],
     )
+
+
+# --- Соседний вход: пересборка УЖЕ ЛЕЖАЩЕГО объекта ---------------------------
+#
+# ЧЕМ ЭТОТ ВХОД ОТЛИЧАЕТСЯ ОТ `prepare_upload` И ПОЧЕМУ РАЗНИЦА ИМЕННО ТАКАЯ.
+# `prepare_upload` обслуживает НОВУЮ загрузку, и ключ объекта в этот момент ещё
+# только сочиняется: расширение можно переписать, потому что никто его пока не
+# видел. У объекта, который уже лежит в хранилище, ключ РОЗДАН — он записан в
+# `Ad.images`, вставлен в готовые адреса внутри `SendLog.ad_images` и уходит в
+# мессенджеры. Поэтому здесь формат исходного объекта СОХРАНЯЕТСЯ: сохранить
+# JPEG-байты под именем на `.png` значило бы развести расширение с содержимым и
+# воспроизвести issue #39 (Telethon выводит тип медиа из расширения), а сменить
+# ключ значило бы осиротить адреса, уже лежащие в истории. Экономия на
+# непрозрачном PNG при этом теряется — это названная плата, а не недосмотр.
+#
+# Второе отличие: кодирование включается РЕШЕНИЕМ ВЫЗЫВАЮЩЕГО, а не происходит
+# всегда. `prepare_upload` кодирует безусловно, и это верно для входа, о котором
+# ничего не известно. Прогнать через кодек снимок, который и так 1200 px, значит
+# пережать уже сжатое: вес почти не изменится, а поколение потеряется —
+# добавятся артефакты. Поэтому оба продукта — уменьшенный объект и миниатюра —
+# запрашиваются флагами по отдельности, и «не запрашивалось» отличимо от
+# «получилось пусто».
+
+
+@dataclass(frozen=True)
+class ImageProbe:
+    """Формат и ЗАЯВЛЕННЫЕ размеры изображения, снятые с заголовка."""
+
+    format: str
+    width: int
+    height: int
+
+    @property
+    def long_edge(self) -> int:
+        return max(self.width, self.height)
+
+
+@dataclass(frozen=True)
+class RebuiltImage:
+    """Продукты пересборки существующего объекта.
+
+    ``None`` означает «не запрашивалось» и это НЕ то же самое, что пустые байты:
+    вызывающий по этому различию решает, писать ли под соответствующим ключом
+    вообще, и пустые байты он бы записал.
+    """
+
+    delivery: bytes | None
+    thumbnail: bytes | None
+    content_type: str
+
+
+def probe_image(header: bytes) -> ImageProbe:
+    """Снять формат и размеры с ЗАГОЛОВКА, не распаковывая пиксели.
+
+    Между ``Image.open()`` и возвратом нет ни одного вызова, который потребовал
+    бы пикселей, — потому функция и годится для первых килобайт объекта, а не
+    для его полного тела. Именно на этом стоит вся дисциплина трафика
+    обслуживающего прогона: объект, по которому решено ничего не делать, стоит
+    одного диапазонного чтения.
+
+    Поднимает ``ImageUnreadable``, если формат вне пары JPEG/PNG или байты не
+    разбираются, и ``ImageTooLarge``, если произведение ЗАЯВЛЕННЫХ сторон
+    превышает ``MAX_DECODED_PIXELS``. Объект в хранилище — не более доверенный
+    вход, чем тело запроса: потолок тот же и порядок тот же.
+    """
+    try:
+        with Image.open(io.BytesIO(header)) as opened:
+            source_format = opened.format
+            if source_format not in _SUPPORTED_FORMATS:
+                raise ImageUnreadable(f"unsupported format: {source_format!r}")
+
+            width, height = opened.size
+            if width * height > MAX_DECODED_PIXELS:
+                raise ImageTooLarge(f"{width}x{height} exceeds {MAX_DECODED_PIXELS}")
+
+            return ImageProbe(format=source_format, width=width, height=height)
+    except Image.DecompressionBombError as exc:
+        raise ImageTooLarge(str(exc)) from exc
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+        raise ImageUnreadable(str(exc)) from exc
+
+
+def rebuild_stored_image(
+    content: bytes, *, resize: bool, thumbnail: bool
+) -> RebuiltImage:
+    """Пересобрать объект, УЖЕ лежащий в хранилище, БЕЗ смены формата.
+
+    ПОРЯДОК ШАГОВ — ЧАСТЬ КОНТРАКТА:
+
+    1. открыть заголовок и убедиться, что формат — один из пары JPEG/PNG;
+    2. сверить потолок точек ПОВТОРНО, уже на полных байтах: заголовок,
+       прочитанный диапазонным запросом, мог заявить одно, а тело нести другое,
+       и доверять первой проверке значило бы декодировать по обещанию;
+    3. для JPEG сообщить декодеру целевой размер (``draft``);
+    4. декодировать;
+    5. применить ориентацию из EXIF к пикселям;
+    6. определить наличие настоящей альфы и привести режим;
+    7. построить запрошенное флагами.
+
+    Миниатюра строится от УЖЕ уменьшенного изображения, когда уменьшение
+    запрашивалось, и от приведённого исходного, когда нет: второго
+    декодирования исходных байтов не происходит ни при каких входах.
+
+    Вызов с обоими флагами ``False`` — ошибка вызывающего: работы для функции
+    нет, и она вернёт обе позиции пустыми.
+    """
+    try:
+        with Image.open(io.BytesIO(content)) as opened:
+            source_format = opened.format
+            if source_format not in _SUPPORTED_FORMATS:
+                raise ImageUnreadable(f"unsupported format: {source_format!r}")
+
+            width, height = opened.size
+            if width * height > MAX_DECODED_PIXELS:
+                raise ImageTooLarge(f"{width}x{height} exceeds {MAX_DECODED_PIXELS}")
+
+            if source_format == _JPEG:
+                target_edge = DELIVERY_MAX_EDGE if resize else THUMB_MAX_EDGE
+                opened.draft(None, (target_edge, target_edge))
+
+            image = ImageOps.exif_transpose(opened)
+    except Image.DecompressionBombError as exc:
+        raise ImageTooLarge(str(exc)) from exc
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
+        raise ImageUnreadable(str(exc)) from exc
+
+    # Целевой формат равен формату ИСХОДНОГО объекта и ничему другому — здесь и
+    # живёт расхождение с `prepare_upload`, разобранное в шапке раздела.
+    target_format = source_format
+
+    # Проверка альфы нужна и там, где формат не меняется. Без неё палитровый PNG
+    # был бы приведён к четырёхканальному RGBA и после пересборки мог бы
+    # ВЫРАСТИ — то есть прогон, затеянный ради экономии места, сделал бы хуже, а
+    # логотип с прозрачным фоном был бы залит белым необратимо.
+    keeps_alpha = source_format == _PNG and _has_real_alpha(image)
+    image = _normalise_mode(image, keeps_alpha)
+
+    delivery: bytes | None = None
+    delivery_image = image
+    if resize:
+        delivery_image = _fit_long_edge(image, DELIVERY_MAX_EDGE)
+        delivery = _encode(delivery_image, target_format, DELIVERY_JPEG_QUALITY)
+
+    thumbnail_bytes: bytes | None = None
+    if thumbnail:
+        thumbnail_image = _fit_long_edge(delivery_image, THUMB_MAX_EDGE)
+        thumbnail_bytes = _encode(thumbnail_image, target_format, THUMB_JPEG_QUALITY)
+
+    return RebuiltImage(
+        delivery=delivery,
+        thumbnail=thumbnail_bytes,
+        content_type=_FORMAT_CONTENT_TYPES[target_format],
+    )
