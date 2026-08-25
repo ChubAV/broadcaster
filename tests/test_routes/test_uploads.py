@@ -10,7 +10,12 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.main import create_app
-from app.routes.uploads import safe_filename, sniff_image
+from app.routes.uploads import (
+    _IMAGE_SIGNATURES,
+    UNSUPPORTED_IMAGE_MESSAGE,
+    safe_filename,
+    sniff_image,
+)
 
 
 @pytest_asyncio.fixture
@@ -79,15 +84,21 @@ def make_jpeg_bytes():
 
 
 def make_gif_bytes(version: bytes = b"89a"):
-    """Минимальные байты GIF заданной версии (``87a`` или ``89a``)."""
+    """Минимальные байты GIF заданной версии (``87a`` или ``89a``).
+
+    Вход для доказательства ОТКАЗА, а не приёма (issue #39). Построитель
+    сохранён именно потому, что отказ надо проверять на настоящих байтах
+    формата: мусор отвергается по другой причине и ничего о GIF не доказывает.
+    """
     return b"GIF" + version + b"\x01\x00\x01\x00\x00\x00\x00" + b"\x00" * 8
 
 
 def make_webp_bytes():
     """Байты WebP: ``RIFF``, четыре байта размера, затем ``WEBP``.
 
-    Байты 4..8 — длина файла; они произвольны и намеренно НЕ нулевые, чтобы
-    проверка не могла случайно опереться на них вместо метки формата.
+    Вход для доказательства ОТКАЗА, а не приёма (issue #39). Байты остаются
+    заведомо корректным WebP — иначе тест доказывал бы отказ дефектному файлу,
+    тогда как проверяется отказ безупречному.
     """
     return b"RIFF" + b"\x24\x00\x00\x00" + b"WEBP" + b"VP8 " + b"\x00" * 16
 
@@ -257,9 +268,6 @@ async def test_upload_image_with_cookie_auth(mock_s3, upload_client):
     [
         (make_png_bytes, "image/png"),
         (make_jpeg_bytes, "image/jpeg"),
-        (lambda: make_gif_bytes(b"87a"), "image/gif"),
-        (lambda: make_gif_bytes(b"89a"), "image/gif"),
-        (make_webp_bytes, "image/webp"),
     ],
 )
 def test_sniff_image_recognises_supported_formats(make_bytes, expected):
@@ -274,13 +282,64 @@ def test_sniff_image_recognises_supported_formats(make_bytes, expected):
         b"hello world",
         b"",
         b"%PDF-1.4\n%\xe2\xe3\xcf\xd3",
-        b"GIF88a" + b"\x00" * 16,  # похоже на GIF, но версия не та
-        b"RIFF" + b"\x24\x00\x00\x00" + b"WAVE" + b"\x00" * 16,  # RIFF, но не WebP
-        b"RIFF",  # обрывок: длины и метки формата нет вовсе
+        # Ни одну из трёх строк ниже распознать больше нечем, и различение
+        # версий GIF или метки внутри RIFF тут ни при чём: обоих контейнеров
+        # нет в таблице сигнатур целиком. Случаи оставлены как проверка того,
+        # что сужение таблицы не породило совпадения по чужому префиксу.
+        b"GIF88a" + b"\x00" * 16,
+        b"RIFF" + b"\x24\x00\x00\x00" + b"WAVE" + b"\x00" * 16,
+        b"RIFF",
     ],
 )
 def test_sniff_image_rejects_non_images(content):
     assert sniff_image(content) is None
+
+
+# --- Issue #39: форматы, которые не переживают ОТПРАВКУ ------------------------
+#
+# Отказ здесь наступает по причине, не имеющей отношения к CR-02: на входе
+# честные, корректные изображения. Разбор по мессенджерам — в комментарии над
+# ``_IMAGE_SIGNATURES`` в ``app/routes/uploads.py``.
+
+
+@pytest.mark.parametrize(
+    "make_bytes",
+    [
+        lambda: make_gif_bytes(b"87a"),
+        lambda: make_gif_bytes(b"89a"),
+        make_webp_bytes,
+    ],
+    ids=["gif87a", "gif89a", "webp"],
+)
+def test_sniff_image_rejects_formats_no_messenger_can_send(make_bytes):
+    """Настоящие картинки, которых не отправить обычным изображением, отвергаются.
+
+    Отдельный тест, а не дописывание в ``test_sniff_image_rejects_non_images``,
+    намеренно. Тот отвергает НЕ-изображения, и его причина — вектор CR-02:
+    содержимое способно исполниться. Здесь на входе безупречные картинки, а
+    причина другая: WebP Telethon соберёт стикером, а не фотографией, и для
+    WhatsApp ``image/webp`` — тоже mimetype стикера; GIF не является ни годной
+    статической картинкой для WhatsApp, ни фотографией для Telegram. Слив обеих
+    причин в одну параметризацию стёр бы это различие, и пропажа любой из них
+    перестала бы быть заметной.
+    """
+    assert sniff_image(make_bytes()) is None
+
+
+def test_supported_formats_and_refusal_text_stay_in_step():
+    """Таблица сигнатур и текст отказа называют одно и то же множество форматов.
+
+    Ловит расхождение, которое иначе тихо доживает до пользователя: формат
+    вернули в таблицу (или убрали из неё), а строку, которую человек читает,
+    поправить забыли. Утверждение идёт на множество ТИПОВ, а не на число
+    записей: одному формату может отвечать несколько сигнатур, и счёт записей
+    измерял бы устройство таблицы вместо набора форматов.
+    """
+    assert {mime for _, mime in _IMAGE_SIGNATURES} == {"image/jpeg", "image/png"}
+    assert "JPEG" in UNSUPPORTED_IMAGE_MESSAGE
+    assert "PNG" in UNSUPPORTED_IMAGE_MESSAGE
+    assert "WebP" not in UNSUPPORTED_IMAGE_MESSAGE
+    assert "GIF" not in UNSUPPORTED_IMAGE_MESSAGE
 
 
 @pytest.mark.asyncio
@@ -289,16 +348,13 @@ def test_sniff_image_rejects_non_images(content):
     [
         (make_png_bytes, "image/png"),
         (make_jpeg_bytes, "image/jpeg"),
-        (lambda: make_gif_bytes(b"87a"), "image/gif"),
-        (lambda: make_gif_bytes(b"89a"), "image/gif"),
-        (make_webp_bytes, "image/webp"),
     ],
 )
 @patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
 async def test_upload_accepts_each_supported_format(
     mock_s3, make_bytes, expected, upload_client, upload_auth_headers
 ):
-    """Каждый из четырёх поддерживаемых форматов принимается по содержимому."""
+    """Оба поддерживаемых формата принимаются по содержимому."""
     response = await upload_client.post(
         "/api/uploads/image",
         # Заголовок типа заведомо неверный: приём должен опираться на содержимое.
@@ -308,6 +364,38 @@ async def test_upload_accepts_each_supported_format(
 
     assert response.status_code == 200
     assert mock_s3.call_args.kwargs["content_type"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "make_bytes",
+    [
+        lambda: make_gif_bytes(b"87a"),
+        lambda: make_gif_bytes(b"89a"),
+        make_webp_bytes,
+    ],
+    ids=["gif87a", "gif89a", "webp"],
+)
+@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+async def test_upload_rejects_formats_no_messenger_can_send(
+    mock_s3, make_bytes, upload_client, upload_auth_headers
+):
+    """Issue #39: отказ наступает на ЗАГРУЗКЕ и до обращения к хранилищу.
+
+    Заголовок типа заведомо неверный: отказ, как и приём, опирается на
+    содержимое, а не на слово клиента. ``assert_not_called`` обязателен — один
+    лишь код 400 доказывает мало, его возвращает и превышение размера; смысл
+    правки в том, что такой файл в хранилище не попадает вовсе.
+    """
+    response = await upload_client.post(
+        "/api/uploads/image",
+        files={"file": ("payload.bin", make_bytes(), "application/octet-stream")},
+        headers=upload_auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == UNSUPPORTED_IMAGE_MESSAGE
+    mock_s3.assert_not_called()
 
 
 @pytest.mark.asyncio
