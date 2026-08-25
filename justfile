@@ -162,6 +162,14 @@ collect-group-info *args:
 prod-collect-group-info *args:
     docker compose -f docker-compose.prod.yml exec web uv run python scripts/collect_group_info.py {{ args }}
 
+# Recompress legacy attachments and build missing thumbnails (dry-run by default)
+recompress-attachments *args:
+    uv run python scripts/recompress_attachments.py {{ args }}
+
+# Recompress legacy attachments in prod Docker (dry-run by default)
+prod-recompress-attachments *args:
+    docker compose -f docker-compose.prod.yml exec web uv run python scripts/recompress_attachments.py {{ args }}
+
 # Stop all max-worker containers
 max-workers-stop:
     docker ps -q --filter "label=broadcaster.role=max-worker" | xargs -r docker stop
