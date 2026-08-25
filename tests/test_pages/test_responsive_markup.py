@@ -49,40 +49,47 @@ SECTION_URLS = {
     "billing": "/billing",
 }
 
-# Разделы на примитиве строки-таблицы data-row. История сюда НЕ входит: у неё
-# собственный примитив data-hrow, перестраивающийся раньше остальных (1080px).
+# ⚠️ ПЕРЕЧНЯ РАЗДЕЛОВ НА ПРИМИТИВЕ СТРОКИ-ТАБЛИЦЫ (MIGRATED_SECTIONS) БОЛЬШЕ НЕТ,
+# И ЭТО ОБЪЯВЛЕННЫЙ ИТОГ, А НЕ ПРОПАЖА. Он опустел: раздел, стоявший в нём
+# последним, вышел задачей 260825-of5. Пустую параметризацию оставлять нельзя —
+# она не краснеет, а молча ничего не проверяет, поэтому перечень снят вместе с
+# его единственным потребителем (test_list_page_has_responsive_primitives).
 #
-# Расписания вышли отсюда планом 02-07: сводный список стал КАРТОЧНЫМ на всех
-# ширинах (UI-SPEC §Responsive Contract), и таблично-строчная обработка ячеек с
-# подписями ему не нужна. Раздел не выпал из проверок — его собственный
-# примитив закреплён test_schedules_summary_list_is_card_based ниже.
+# История в перечень не входила НИКОГДА: у неё собственный примитив data-hrow,
+# перестраивающийся раньше остальных (1080px).
 #
-# Глобальный раздел «Группы» вышел отсюда планом 03-08 вместе со сносом самого
-# раздела (D-01). Его замена — экран групп аккаунта — тоже КАРТОЧНАЯ на всех
-# ширинах (03-05), поэтому в перечень строк-таблиц она не попадает; её
-# собственный примитив закреплён test_account_groups_list_is_card_based по той
-# же схеме, что у расписаний.
+# ЧЕТЫРЕ ВЫХОДА ПО ПОРЯДКУ, и у каждого — своя замена в проверках:
+#   1. Расписания, план 02-07: сводный список стал КАРТОЧНЫМ на всех ширинах
+#      (UI-SPEC §Responsive Contract). Замена — test_schedules_summary_list_is_card_based.
+#   2. Глобальный раздел «Группы», план 03-08: снесён целиком (D-01). Его
+#      замена — экран групп аккаунта, КАРТОЧНЫЙ с плана 03-05. Замена в
+#      проверках — test_account_groups_list_is_card_based.
+#   3. Объявления, задача 260825-m0b: список стал КАРТОЧНОЙ СЕТКОЙ — так его
+#      описывает раздел `isAds` макета (unpacked.html:479). Замена —
+#      test_ads_list_is_card_based.
+#   4. Аккаунты, задача 260825-of5: список стал КАРТОЧНОЙ СЕТКОЙ — так его
+#      описывает раздел `isAccounts` макета (unpacked.html:878). Замена —
+#      test_accounts_list_is_card_based.
 #
-# Объявления вышли отсюда задачей 260825-m0b: список стал КАРТОЧНОЙ СЕТКОЙ на
-# всех ширинах — так его описывает раздел `isAds` канонического макета
-# (design/new_broadcaster_design.unpacked.html:479), а строку-таблицу раздел
-# получил Планом 01-03, когда одна форма списочной страницы была применена ко
-# всем пяти разделам сразу. Сетка перестраивается шириной трека сама, поэтому
-# правила 860px и подписи ячеек, компенсирующие скрывающуюся шапку, разделу
-# больше не нужны. Раздел не выпал из проверок — его собственный примитив
-# закреплён test_ads_list_is_card_based ниже, ТРЕТЬИМ по той же схеме, что у
-# расписаний и экрана групп аккаунта.
-MIGRATED_SECTIONS = ["accounts"]
+# Общая причина у всех четырёх одна: строку-таблицу разделы получили Планом
+# 01-03, когда ОДНА форма списочной страницы была применена ко всем пяти
+# разделам сразу, а макет описывает для них карточную сетку. Сетка
+# перестраивается шириной трека сама, поэтому правила 860px и подписи ячеек,
+# компенсирующие скрывающуюся шапку, этим разделам больше не нужны.
 
 # Все разделы, переведённые на дизайн-систему, независимо от примитива.
 # Планы 06-08 дописывают свои сюда.
 #
+# Перечень стал САМОСТОЯТЕЛЬНЫМ вместе со снятием MIGRATED_SECTIONS и
+# по-прежнему СОДЕРЖИТ «Аккаунты»: проверка отсутствия utility-классов раздела
+# не ослабляется ни на шаг — она никогда и не зависела от примитива.
+#
 # «Тарифы» встали сюда планом 05-05: раздел перевёрстан по макету и собран
-# целиком из компонентов и примитивов Фазы 1. В перечень строк-таблиц
-# (MIGRATED_SECTIONS) он не входит — его собственные примитивы закреплены
-# именованными проверками test_billing_* ниже, по той же схеме, что у
-# расписаний и экрана групп аккаунта.
-CLEAN_SECTIONS = MIGRATED_SECTIONS + [
+# целиком из компонентов и примитивов Фазы 1; его собственные примитивы
+# закреплены именованными проверками test_billing_* ниже, по той же схеме, что
+# у расписаний и экрана групп аккаунта.
+CLEAN_SECTIONS = [
+    "accounts",
     "history",
     "schedules",
     "account_groups",
@@ -289,16 +296,12 @@ async def _seed_section(db: AsyncSession, section: str) -> str:
     return SECTION_URLS[section]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("section", MIGRATED_SECTIONS)
-async def test_list_page_has_responsive_primitives(
-    authed_client: AsyncClient, db_session: AsyncSession, section: str
-):
-    """Списочная страница собрана на примитивах, а не на своей вёрстке."""
-    url = await _seed_section(db_session, section)
-
-    html = (await authed_client.get(url)).text
-    assert "data-row" in html, section
+# ⚠️ ЗДЕСЬ СТОЯЛ test_list_page_has_responsive_primitives — обход по перечню
+# разделов на примитиве строки-таблицы. Он снят задачей 260825-of5 ВМЕСТЕ с
+# перечнем: перечень опустел, а пустая параметризация не краснеет — она молча
+# ничего не проверяет. Замены у него нет и быть не может: каждый из четырёх
+# вышедших разделов закреплён СВОИМ положительным примитивом (перечисление — в
+# комментарии над CLEAN_SECTIONS выше).
 
 
 @pytest.mark.asyncio
@@ -1316,23 +1319,25 @@ async def test_accounts_delete_route_unchanged(
     assert (await db_session.get(MessengerAccount, foreign.id)) is not None
 
 
-# --- План 11: подписи колонок в ячейках раздела «Аккаунты» (SC-5) -----------
+# --- Плана 11 «подписи колонок в ячейках раздела Аккаунты» БОЛЬШЕ НЕТ ---------
 #
-# На 860px шапка колонок скрывается ([data-rowhead] { display: none }), и строка
-# «12 · 3 · 87% · 09.08 14:22 · —» превращается в набор символов без смысла.
-# Подпись живёт ВНУТРИ ячейки и проявляется ровно там, где шапка исчезла.
-# Атрибут подсказки её не заменяет: на касании подсказки нет.
-
-# Подпись получает каждая колонка с непустым названием, КРОМЕ первой — она несёт
-# название самого аккаунта и уже является заголовком карточки.
-ACCOUNT_CELL_LABELS = (
-    "Групп",
-    "Расписаний",
-    "Успешность",
-    "Последняя отправка",
-    "Подключён",
-    "Статус",
-)
+# ⚠️ ЧЕТЫРЕ ПРОВЕРКИ ПОДПИСЕЙ ЯЧЕЕК РАЗДЕЛА И ПРОВЕРКА «ПОДПИСИ ПРИШЛИ ИЗ СПИСКА
+# КОЛОНОК» СНЯТЫ ЗАДАЧЕЙ 260825-of5, И ЭТО ОБЪЯВЛЕННОЕ СНЯТИЕ, А НЕ ПРОПАЖА.
+# Подписи ячеек существовали, чтобы компенсировать шапку колонок, скрывающуюся
+# на 860px. Раздел переведён на карточную сетку (unpacked.html:878): шапки
+# колонок у него нет вовсе, компенсировать нечего, и подписи ячеек в карточку
+# не переносятся.
+#
+# Обещание «понятно, что означает каждое значение» НЕ снято — оно переехало на
+# КЛЮЧИ карточки и проверяется ТЕМ ЖЕ КОММИТОМ на всех ТРЁХ поверхностях
+# раздела: test_accounts_card_names_each_value (списочная страница),
+# test_accounts_partial_names_each_value (порция бесконечной прокрутки) и
+# test_accounts_sync_card_names_each_value (блок подмены по опросу статуса).
+# Счёт по веткам статуса сохранён: ключ, потерянный в одной ветке из трёх,
+# по-прежнему краснеет.
+#
+# CELL_LABEL_RE и ROWHEAD_RE ОСТАЮТСЯ: у них есть другие потребители —
+# страховочная сетка шапок и подписей прочих разделов ниже.
 
 CELL_LABEL_RE = re.compile(r"<span data-cell-label>([^<]*)</span>")
 ROWHEAD_RE = re.compile(r"<div data-rowhead[^>]*>(.*?)</div>", re.S)
@@ -1344,98 +1349,6 @@ async def _seed_all_account_branches(db: AsyncSession) -> list[MessengerAccount]
         await _seed_account_with_status(db, status)
         for status in ("active", "sync_failed", "syncing")
     ]
-
-
-@pytest.mark.asyncio
-async def test_accounts_cell_labels_present(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Каждая ячейка списочной страницы несёт название своей колонки.
-
-    Счёт по числу веток статуса, а не проверка «встречается хотя бы раз»:
-    пропущенная ветка иначе прошла бы незамеченной — на широкой ширине подпись
-    скрыта, и увидел бы её отсутствие только пользователь на телефоне.
-    """
-    accounts = await _seed_all_account_branches(db_session)
-
-    html = (await authed_client.get("/accounts")).text
-
-    for label in ACCOUNT_CELL_LABELS:
-        assert html.count(f"<span data-cell-label>{label}</span>") == len(accounts), (
-            f"подпись {label!r} проставлена не во всех ветках статуса"
-        )
-
-
-@pytest.mark.asyncio
-async def test_accounts_partial_labels_present(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Порция бесконечной прокрутки несёт те же подписи, что и первая страница.
-
-    Строки после первой прокрутки приходят ДРУГИМ файлом; расхождение видно
-    только тому, кто долистал.
-    """
-    accounts = await _seed_all_account_branches(db_session)
-
-    response = await authed_client.get("/accounts/partial?offset=0&limit=30")
-    assert response.status_code == 200
-    html = response.text
-
-    for label in ACCOUNT_CELL_LABELS:
-        assert html.count(f"<span data-cell-label>{label}</span>") == len(accounts), (
-            f"подпись {label!r} потеряна в порции бесконечной прокрутки"
-        )
-
-
-@pytest.mark.asyncio
-async def test_accounts_sync_card_labels_present(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Блок подмены по опросу статуса несёт подписи во ВСЕХ трёх состояниях.
-
-    Самая опасная из трёх поверхностей: её разметки нет на первичной отрисовке,
-    поэтому потеря подписи здесь проявится только после первого опроса.
-    """
-    for status in ("active", "sync_failed", "syncing"):
-        account = await _seed_account_with_status(db_session, status)
-
-        response = await authed_client.get(f"/accounts/{account.id}/sync-status")
-        assert response.status_code == 200, status
-        html = response.text
-
-        for label in ACCOUNT_CELL_LABELS:
-            assert f"<span data-cell-label>{label}</span>" in html, (
-                f"{status}: подпись {label!r} потеряна в блоке подмены"
-            )
-
-
-@pytest.mark.asyncio
-async def test_accounts_labels_come_from_column_list(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Подписи и шапка колонок — один список, а не два независимых.
-
-    Переписанная вручную подпись разъедется с шапкой при первом же
-    переименовании колонки, и увидит это только пользователь на телефоне.
-    """
-    await _seed_all_account_branches(db_session)
-
-    html = (await authed_client.get("/accounts")).text
-
-    head = ROWHEAD_RE.search(html)
-    assert head, "шапка колонок раздела не найдена"
-    header = {name for name in re.findall(r"<span>([^<]*)</span>", head.group(1)) if name}
-    assert header, "шапка колонок пуста"
-
-    labels = {value for value in CELL_LABEL_RE.findall(html) if value}
-
-    assert header - labels == {"Аккаунт"}, (
-        "подписи разошлись с шапкой колонок: без подписи остались "
-        f"{sorted(header - labels - {'Аккаунт'})}"
-    )
-    assert labels - header == set(), (
-        f"подписи, которых нет в шапке колонок: {sorted(labels - header)}"
-    )
 
 
 # --- Задача 260825-of5: карточная сетка раздела «Аккаунты» ------------------
@@ -2874,11 +2787,6 @@ ACCOUNTS_SWAP_FILE = "accounts/partials/sync_status_card.html"
 
 ACCOUNTS_MODAL_EVENT = "modal-open-acc-del-"
 
-# Подпись берётся ИНДЕКСОМ из списка колонок. Отрицательный просмотр назад
-# отсекает confirm_label=, action_label= и show_label= — это не подписи ячеек.
-LABEL_BY_INDEX_RE = re.compile(r"(?<!\w)label=ACCOUNT_COLUMNS\[(\d+)\]")
-LABEL_LITERAL_RE = re.compile(r"""(?<!\w)label=(['"])([^'"]*)\1""")
-
 
 def _accounts_sources() -> dict[str, str]:
     """Исходники трёх файлов раздела. Порядок фиксирован: list.html — эталон."""
@@ -2894,27 +2802,35 @@ def _declaration(source: str, name: str) -> str | None:
     return match.group(1) if match else None
 
 
-def test_accounts_three_files_declare_same_columns():
-    """Раскладка колонок и список колонок совпадают в трёх файлах ПОСИМВОЛЬНО.
+def test_accounts_three_files_declare_same_keys():
+    """Список ключей карточки совпадает в трёх файлах ПОСИМВОЛЬНО.
 
-    Три файла рисуют одну и ту же строку. Разъехавшаяся раскладка не роняет
-    страницу: строка после подмены просто встанет по другим колонкам, и увидит
-    это только тот, кто дождался опроса.
+    Проверка та же, что держала раскладку колонок и список колонок до задачи
+    260825-of5; сменилось ОБЪЯВЛЕНИЕ, а не утверждение: раздел переведён на
+    карточную сетку, колонок у него больше нет, и синхронной величиной стал
+    список ключей ACCOUNT_KEYS.
+
+    Три файла рисуют одну и ту же карточку. Разъехавшийся список не роняет
+    страницу: карточка после подмены просто назовёт те же числа другими
+    словами, и увидит это только тот, кто дождался опроса.
     """
     sources = _accounts_sources()
 
-    for name in ("ACCOUNT_COLS", "ACCOUNT_COLUMNS"):
-        declared = {rel: _declaration(src, name) for rel, src in sources.items()}
+    declared = {rel: _declaration(src, "ACCOUNT_KEYS") for rel, src in sources.items()}
 
-        missing = sorted(rel for rel, value in declared.items() if value is None)
-        assert not missing, f"{name} не объявлен в: {missing}"
+    missing = sorted(rel for rel, value in declared.items() if value is None)
+    assert not missing, f"ACCOUNT_KEYS не объявлен в: {missing}"
 
-        reference_file, reference = next(iter(declared.items()))
-        divergent = {rel: v for rel, v in declared.items() if v != reference}
-        assert not divergent, (
-            f"{name} в {reference_file} объявлен как {reference}, но отстали: "
-            + "; ".join(f"{rel} -> {value}" for rel, value in sorted(divergent.items()))
-        )
+    reference_file, reference = next(iter(declared.items()))
+    divergent = {rel: v for rel, v in declared.items() if v != reference}
+    assert not divergent, (
+        f"ACCOUNT_KEYS в {reference_file} объявлен как {reference}, но отстали: "
+        + "; ".join(f"{rel} -> {value}" for rel, value in sorted(divergent.items()))
+    )
+
+    assert "ACCOUNT_COLS" not in "".join(sources.values()), (
+        "раскладка колонок вернулась в раздел — у карточной сетки колонок нет"
+    )
 
 
 def test_accounts_three_files_have_no_browser_dialog():
@@ -2968,57 +2884,15 @@ def test_accounts_three_files_dispatch_same_modal_event():
     )
 
 
-def test_accounts_three_files_label_the_same_columns():
-    """Подписи ячеек в трёх файлах совпадают по составу И ПО ЧИСЛУ вхождений.
-
-    Подпись, вписанная строкой на месте, разъедется с шапкой при первом же
-    переименовании колонки, и увидит это только пользователь на телефоне: на
-    широкой ширине подпись скрыта.
-
-    Счёт вхождений, а не множество значений: в каждом файле три ветки статуса, и
-    подпись, потерянная в ОДНОЙ из них, множество не меняет — две оставшиеся
-    ветки его удержат. Именно так и теряется подпись на практике: правят одну
-    ветку, а расходится весь раздел.
-    """
-    sources = _accounts_sources()
-
-    hardcoded = {
-        rel: sorted({m.group(2) for m in LABEL_LITERAL_RE.finditer(src)})
-        for rel, src in sources.items()
-    }
-    hardcoded = {rel: values for rel, values in hardcoded.items() if values}
-    assert not hardcoded, (
-        "подписи вписаны строкой вместо элемента списка колонок — шапке и "
-        f"подписям есть на чём разъехаться: {hardcoded}"
-    )
-
-    labels: dict[str, Counter[str]] = {}
-    for rel, src in sources.items():
-        declared = _declaration(src, "ACCOUNT_COLUMNS")
-        assert declared, f"{rel}: список колонок не объявлен"
-        columns = ast.literal_eval(declared)
-        labels[rel] = Counter(
-            columns[int(i)] for i in LABEL_BY_INDEX_RE.findall(src)
-        )
-
-    reference_file, reference = next(iter(labels.items()))
-    assert reference, f"{reference_file}: подписей нет ни одной"
-
-    divergent = {}
-    for rel, counted in labels.items():
-        if counted == reference:
-            continue
-        divergent[rel] = sorted(
-            f"{name}: {counted.get(name, 0)} вместо {reference.get(name, 0)}"
-            for name in set(counted) | set(reference)
-            if counted.get(name, 0) != reference.get(name, 0)
-        )
-    assert not divergent, (
-        f"подписи в {reference_file} — {sorted(reference.items())}, но отстали: "
-        + "; ".join(
-            f"{rel} -> {diff}" for rel, diff in sorted(divergent.items())
-        )
-    )
+# ⚠️ ЗДЕСЬ СТОЯЛ test_accounts_three_files_label_the_same_columns — счёт
+# подписей ячеек по трём файлам и трём веткам статуса. Подписей ячеек в разделе
+# больше нет: он переведён на карточную сетку задачей 260825-of5, шапки колонок
+# у него нет вовсе, и компенсировать её скрытие нечем.
+#
+# Обещание не снято, а ПЕРЕЕЗЖАЕТ: счёт восстанавливается в терминах ключей
+# карточки следующим шагом той же задачи. Половина покрытия остаётся снятой
+# ровно на один шаг — дольше держать её снятой нельзя, иначе ключ, потерянный в
+# одной ветке из трёх, уехал бы незамеченным.
 
 
 def test_template_inventory():
@@ -3830,14 +3704,16 @@ ROW_TEMPLATES_WITHOUT_HEADER = {
     # его место не занимает — она КАРТОЧНАЯ (ссылка с точкой статуса) и
     # примитив строки-таблицы не рисует вовсе, поэтому в обход по строкам не
     # попадает по построению.
-    # Класс 2: зеркала строки раздела «Аккаунты». Закрыты тестом синхронности
-    # Плана 11 — test_accounts_three_files_label_the_same_columns считает
-    # подписи Counter'ом, то есть краснеет и на потере подписи в одной ветке.
-    "accounts/partial_cards.html": "зеркало строки раздела, тест синхронности Плана 11",
-    "accounts/partials/sync_status_card.html": (
-        "зеркало строки раздела, тест синхронности Плана 11; открывающий тег "
-        "написан вручную, макрос row_open не вызывается"
-    ),
+    # Класс 2 — ЗЕРКАЛА СТРОКИ РАЗДЕЛА «АККАУНТЫ» — ОПУСТЕЛ ЗАДАЧЕЙ 260825-of5.
+    # Оба входа (accounts/partial_cards.html и
+    # accounts/partials/sync_status_card.html) СНЯТЫ: раздел переведён на
+    # карточную сетку макета (unpacked.html:877-903), и ни один из двух файлов
+    # больше не рисует строку ВОВСЕ — ни вызова примитива строки, ни написанного
+    # вручную признака в них не осталось, а значит в обход по строкам они не
+    # попадают по построению. Замены в перечне у них нет и быть не может;
+    # синхронность трёх файлов держат тесты test_accounts_three_files_* выше, а
+    # обещание «понятно, что означает каждое значение» переехало в три проверки
+    # test_accounts_*_names_each_value.
     # Класс 3: страницы-карточки без шапки колонок вовсе. На 860px нечему
     # скрываться, значит и компенсировать подписью нечего.
     # admin/group_info_detail.html ВЫШЕЛ из перечня планом 06-01 вместе с самим
@@ -3928,9 +3804,13 @@ class RowheadPage(NamedTuple):
 
 
 ROWHEAD_PAGES = (
-    RowheadPage(
-        "accounts/list.html", "/accounts", False, "accounts", frozenset({"Аккаунт"})
-    ),
+    # accounts/list.html ВЫШЕЛ из таблицы задачей 260825-of5: шапку колонок он
+    # больше не вызывает — список стал карточной сеткой по каноническому макету
+    # (unpacked.html:878), и компенсировать скрывающуюся на 860px шапку ему
+    # нечем, потому что шапки нет. Обещание «понятно, что означает каждое
+    # значение» переехало в test_accounts_card_names_each_value и в две парные
+    # проверки остальных поверхностей раздела.
+    #
     # ads/list.html ВЫШЕЛ из таблицы задачей 260825-m0b: шапку колонок он больше
     # не вызывает — список стал карточной сеткой по каноническому макету
     # (unpacked.html:479), и компенсировать скрывающуюся на 860px шапку ему
@@ -4035,9 +3915,10 @@ async def _seed_rowhead_page(db: AsyncSession, seed: str) -> None:
     Пустая страница рисует empty_state: и шапки, и подписей на ней нет, и
     сравнение разностей зазеленело бы вакуумно.
     """
-    if seed == "accounts":
-        await _seed_account(db, type_="max")
-    elif seed == "ads":
+    # Ветка "accounts" СНЯТА задачей 260825-of5 вместе с входом
+    # accounts/list.html: она стала недостижимой — посевать нечего для таблицы,
+    # в которой раздела больше нет.
+    if seed == "ads":
         await _seed_ad(db)
     elif seed == "schedules":
         await _seed_schedule(db)
@@ -4139,8 +4020,14 @@ def test_rowhead_pages_all_have_a_parametrization_entry():
     # канонического макета (unpacked.html:479). Прибавления в паре со снятием
     # нет. Уменьшение объявленного числа — признание СОЗНАТЕЛЬНОГО снятия;
     # молчаливое исчезновение шаблона с шапкой по-прежнему краснеет.
-    assert len(declared) == 7, (
-        f"ожидалось семь шаблонов с шапкой колонок, объявлено {len(declared)}: "
+    #
+    # СЕМЬ → ШЕСТЬ: задача 260825-of5 сняла шапку колонок со списка аккаунтов
+    # вместе с самой строкой-таблицей — раздел переведён на карточную сетку
+    # канонического макета (unpacked.html:878). Прибавления в паре со снятием
+    # нет. Уменьшение объявленного числа — признание СОЗНАТЕЛЬНОГО снятия;
+    # молчаливое исчезновение шаблона с шапкой по-прежнему краснеет.
+    assert len(declared) == 6, (
+        f"ожидалось шесть шаблонов с шапкой колонок, объявлено {len(declared)}: "
         f"{sorted(declared)}"
     )
 
@@ -4197,16 +4084,25 @@ def test_row_templates_without_header_are_accounted_for():
     # ЖЕ коммитом, что и снятие шапки колонок с ads/list.html: разъехавшись, эти
     # два шага оставили бы список либо со строками без шапки, либо с шапкой без
     # строк. Прибавления в паре со снятием нет.
-    assert len(declared) == 8, (
-        f"ожидалось восемь таких шаблонов, объявлено {len(declared)}"
+    #
+    # ВОСЕМЬ → ШЕСТЬ: задача 260825-of5 сняла ДВА файла второго класса — оба
+    # зеркала строки раздела «Аккаунты» (порция бесконечной прокрутки и блок
+    # подмены по опросу статуса) перестали рисовать строку вовсе вместе с
+    # переводом раздела на карточную сетку макета (unpacked.html:877-903).
+    # Снятие идёт ТЕМ ЖЕ коммитом, что и снятие шапки колонок с
+    # accounts/list.html: разъехавшись, эти два шага оставили бы раздел либо со
+    # строками без шапки, либо с шапкой без строк. Прибавления в паре со снятием
+    # нет; после него КЛАСС 2 перечня пуст.
+    assert len(declared) == 6, (
+        f"ожидалось шесть таких шаблонов, объявлено {len(declared)}"
     )
-    # Файл подмены попадает в перечень по написанному ВРУЧНУЮ атрибуту строки:
-    # макрос row_open он не вызывает. Без второго условия разрешителя он выпал
-    # бы, и инвентаризация из девяти файлов не сошлась бы.
-    swap = _resolve_template("accounts/partials/sync_status_card.html")
-    assert swap is not None
-    assert not _macro_call_arglists(swap, "row_open")
-    assert MANUAL_ROW_ATTR_RE.search(swap)
+    # ⚠️ ЗДЕСЬ СТОЯЛО ХВОСТОВОЕ УТВЕРЖДЕНИЕ о написанном ВРУЧНУЮ признаке строки
+    # у accounts/partials/sync_status_card.html. Оно снято задачей 260825-of5
+    # вместе с обоими входами класса 2: утверждение существовало ради
+    # разрешителя перечня, из которого файл ушёл, и на файле, строку больше не
+    # рисующем, оно проверяло бы отсутствие того, чего нет. Второе условие
+    # разрешителя (MANUAL_ROW_ATTR_RE) при этом ОСТАЁТСЯ: оно ловит любой новый
+    # файл, собравший открывающий тег строки вручную.
 
 
 @pytest.mark.asyncio
