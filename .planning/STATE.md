@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 Phase: — (открытых фаз нет; веха v2.0 закрыта и заархивирована)
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-08-25 — Completed quick task 260825-abl: issue #39, форматы загружаемых изображений
+Last activity: 2026-08-25 — Completed quick task 260825-d2x: issue #40, сжатие изображений при загрузке и миниатюры для интерфейса
 
 **Чем закрыта веха.** Тип закрытия — `override_closeout`: предзакрывающий аудит нашёл 19 пунктов, из них 15 подтверждены осознанно отложенными, 1 закрыт (сверка прослеживаемости GRP-04…GRP-06), 3 оказались артефактом сканера. Разбор — §Deferred Items ниже.
 
@@ -204,6 +204,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 | 260804-8wh | исправить проблемы контейнеров MAX: ложные Redis BLPOP timeout, падение синхронизации групп на CONTACT без contactId и утечку Redis credentials в логах | 2026-08-04 | 61c4121 | [260804-8wh-max-redis-blpop-timeout-contact-contacti](./quick/260804-8wh-max-redis-blpop-timeout-contact-contacti/) |
 | 260807-pq7 | issue 35: при удалении аккаунта мессенджера расписания не удаляются, а переходят в статус приостановлено | 2026-08-07 | 95babd3 | [260807-pq7-issue-35](./quick/260807-pq7-issue-35/) |
 | 260825-abl | issue 39: разрешить загрузку изображений только в форматах JPEG и PNG — WebP ломал отправку в Telegram | 2026-08-25 | 6b4b94d | [260825-abl-issue-39-razreshit-zagruzku-tolko-teh-fo](./quick/260825-abl-issue-39-razreshit-zagruzku-tolko-teh-fo/) |
+| 260825-d2x | issue 40: сжимать изображения при загрузке и отдавать превью в интерфейс | 2026-08-25 | a33a62f | [260825-d2x-issue-40-szhimat-izobrazheniya-pri-zagru](./quick/260825-d2x-issue-40-szhimat-izobrazheniya-pri-zagru/) |
 
 ## Deferred Items
 
