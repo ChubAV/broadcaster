@@ -1,3 +1,10 @@
+---
+audit_acknowledged:
+  milestone: v2.0
+  at: 2026-08-25
+  status: unknown
+---
+
 # GSD Debug Knowledge Base
 
 Resolved debug sessions. Used by `gsd-debugger` to surface known-pattern hypotheses at the start of new investigations.
@@ -16,4 +23,3 @@ Resolved debug sessions. Used by `gsd-debugger` to surface known-pattern hypothe
 - **Reusable pattern:** When a pinned third-party pydantic model over-declares a field as required and upstream data omits it, relax exactly that one field via a version-pinned, fail-closed, idempotent shim and rebuild every schema embedding the discriminated union — a tagged-union member failure surfaces as a confusing *two*-error message (the member's own missing-field error plus an `UnknownAttachment`-style "should be parsed by its own model" error), which points at the union, not at the fallback type.
 
 ---
-
