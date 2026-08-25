@@ -4,10 +4,10 @@ milestone: v2.0
 milestone_name: Redesign
 status: completed
 stopped_at: Milestone v2.0 complete; no phase open
-last_updated: "2026-08-25T15:50:00.000Z"
+last_updated: "2026-08-25T17:25:00.000Z"
 last_activity: 2026-08-25
-last_activity_desc: Quick task 260825-hnf — maintenance script for attachments predating issue #40; --apply run on prod, all four closure criteria met
-state_head: 8838179
+last_activity_desc: Quick task 260825-m0b — ads list rebuilt as the canonical card grid with a search toolbar; five row-table test inventories lowered in the same commit
+state_head: ba7e1d8
 progress:
   total_phases: 7
   completed_phases: 7
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 Phase: — (открытых фаз нет; веха v2.0 закрыта и заархивирована)
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-08-25 — Completed quick task 260825-hnf: скрипт обслуживания: сжать и создать превью для вложений, загруженных до issue #40
+Last activity: 2026-08-25 — Completed quick task 260825-m0b: страница ads не соответствует шаблону new_broadcaster_design.html
 
 **Чем закрыта веха.** Тип закрытия — `override_closeout`: предзакрывающий аудит нашёл 19 пунктов, из них 15 подтверждены осознанно отложенными, 1 закрыт (сверка прослеживаемости GRP-04…GRP-06), 3 оказались артефактом сканера. Разбор — §Deferred Items ниже.
 
@@ -206,6 +206,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 | 260825-abl | issue 39: разрешить загрузку изображений только в форматах JPEG и PNG — WebP ломал отправку в Telegram | 2026-08-25 | 6b4b94d |  | [260825-abl-issue-39-razreshit-zagruzku-tolko-teh-fo](./quick/260825-abl-issue-39-razreshit-zagruzku-tolko-teh-fo/) |
 | 260825-d2x | issue 40: сжимать изображения при загрузке и отдавать превью в интерфейс | 2026-08-25 | a33a62f |  | [260825-d2x-issue-40-szhimat-izobrazheniya-pri-zagru](./quick/260825-d2x-issue-40-szhimat-izobrazheniya-pri-zagru/) |
 | 260825-hnf | скрипт обслуживания: сжать и создать превью для вложений, загруженных до issue #40 | 2026-08-25 | 8838179 | Verified | [260825-hnf-skript-obsluzhivaniya-szhat-i-sozdat-pre](./quick/260825-hnf-skript-obsluzhivaniya-szhat-i-sozdat-pre/) |
+| 260825-m0b | страница ads не соответствует шаблону new_broadcaster_design.html | 2026-08-25 | ba7e1d8 |  | [260825-m0b-stranitsa-ads-ne-sootvetstvuet-shablonu-](./quick/260825-m0b-stranitsa-ads-ne-sootvetstvuet-shablonu-/) |
 
 ## Deferred Items
 
