@@ -418,6 +418,172 @@ async def test_ads_card_names_each_value(
     )
 
 
+async def _seed_ad_with_text(db: AsyncSession, title: str, text: str) -> Ad:
+    """Объявление с ЗАДАННЫМ текстом.
+
+    Отдельно от _seed_ad: тот ставит всем объявлениям один и тот же текст, и
+    отличить поиск по названию от поиска по тексту на нём нечем — оба нашли бы
+    всё.
+    """
+    user = await _user(db)
+    ad = Ad(user_id=user.id, title=title, text=text, images=[])
+    db.add(ad)
+    await db.commit()
+    await db.refresh(ad)
+    return ad
+
+
+@pytest.mark.asyncio
+async def test_ads_search_matches_title_and_text(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Одно поле ищет по ДВУМ осям — по названию и по тексту объявления.
+
+    Обе оси утверждаются порознь и каждая с отрицательной половиной: поиск,
+    нашедший всё, зеленил бы проверку «нашлось нужное» ровно так же, как
+    работающий.
+    """
+    await _seed_ad_with_text(db_session, "Аренда квартиры", "Тихий двор у метро")
+    await _seed_ad_with_text(db_session, "Вакансия разработчика", "Питон и фастапи")
+
+    by_title = (await authed_client.get("/ads?search=Аренда")).text
+    assert "Аренда квартиры" in by_title, "поиск не нашёл по подстроке названия"
+    assert "Вакансия разработчика" not in by_title, (
+        "поиск по названию вернул объявление, названию не отвечающее"
+    )
+
+    by_text = (await authed_client.get("/ads?search=фастапи")).text
+    assert "Вакансия разработчика" in by_text, "поиск не нашёл по подстроке ТЕКСТА"
+    assert "Аренда квартиры" not in by_text, (
+        "поиск по тексту вернул объявление, тексту не отвечающее"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ads_search_does_not_cross_ownership(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-m0b-01: поиск ДОПОЛНЯЕТ ограждение владения, а не заменяет его.
+
+    Чужое объявление не находится ни по названию, ни по тексту. Условие отбора
+    строится ОДНИМ выражением, первое слагаемое которого — владелец; потеряв
+    его, страница отдала бы чужие записи по одной лишь строке запроса.
+    """
+    user = await _user(db_session)
+    await _seed_ad_with_text(db_session, "Своё объявление", "Общее слово ромашка")
+    foreign = Ad(
+        user_id=user.id + 1000,
+        title="Чужое объявление",
+        text="Общее слово ромашка",
+        images=[],
+    )
+    db_session.add(foreign)
+    await db_session.commit()
+
+    html = (await authed_client.get("/ads?search=ромашка")).text
+
+    assert "Своё объявление" in html, "поиск не нашёл собственное объявление"
+    assert "Чужое объявление" not in html, (
+        "поиск вышел за границу владения — чужое объявление попало в выдачу"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ads_counter_counts_the_whole_result_not_the_page(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Счётчик считает ВСЮ выдачу, а не отданную страницу.
+
+    Длина страницы ограничена PAGE_SIZE, поэтому на выдаче длиннее одной
+    страницы она соврала бы — и соврала бы молча, показав ровно размер
+    страницы.
+    """
+    user = await _user(db_session)
+    db_session.add_all(
+        [
+            Ad(user_id=user.id, title=f"Объявление {i}", text="Текст", images=[])
+            for i in range(31)
+        ]
+    )
+    await db_session.commit()
+
+    html = (await authed_client.get("/ads")).text
+
+    assert "31 объявление" in html, (
+        "счётчик показал не всю выдачу — на странице ровно PAGE_SIZE карточек, "
+        "и её длина соврала бы именно этим числом"
+    )
+
+
+@pytest.mark.asyncio
+async def test_ads_has_two_distinct_empty_states(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Пустых состояния ДВА и они РАЗЛИЧАЮТСЯ действием (UI-SPEC E13 `empty`).
+
+    Отфильтровавшему всё до нуля осмысленно предложить снять отбор, а не идти
+    создавать ещё одно объявление; у пользователя без объявлений вовсе сбрасывать
+    нечего.
+    """
+    empty = (await authed_client.get("/ads")).text
+    assert "Объявлений пока нет" in empty, "пустое состояние «объявлений нет» исчезло"
+    assert "Создать объявление" in empty, "приглашение создать первое объявление исчезло"
+
+    await _seed_ad(db_session, title="Единственное объявление")
+    not_found = (await authed_client.get("/ads?search=ничегонеподойдёт")).text
+    assert "Объявления не найдены" in not_found, (
+        "пустое состояние «поиск ничего не нашёл» исчезло"
+    )
+    assert "Объявлений пока нет" not in not_found, (
+        "два пустых состояния слились в одно — отфильтровавшему всё до нуля "
+        "предлагается создать объявление вместо сброса поиска"
+    )
+    assert "СБРОСИТЬ ПОИСК" in not_found, "сброса поиска в пустом состоянии нет"
+
+
+@pytest.mark.asyncio
+async def test_ads_search_survives_infinite_scroll(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Поиск доезжает до ВТОРОЙ порции — и в адресе сентинела, и в её составе.
+
+    Утверждаются оба, потому что ломаются они порознь: сентинел без параметра
+    отбора приносит неотобранное, а обработчик, игнорирующий параметр, приносит
+    неотобранное даже при верном адресе. Потеря не роняет страницу — она молча
+    подмешивает чужие по отбору объявления к отобранным.
+    """
+    user = await _user(db_session)
+    db_session.add_all(
+        [
+            Ad(user_id=user.id, title=f"Акция {i}", text="Текст акции", images=[])
+            for i in range(35)
+        ]
+        + [
+            Ad(user_id=user.id, title=f"Прочее {i}", text="Другой текст", images=[])
+            for i in range(5)
+        ]
+    )
+    await db_session.commit()
+
+    first = (await authed_client.get("/ads/partial?offset=0&limit=30&search=Акция")).text
+    sentinel = re.findall(r'hx-get="([^"]+)"', first)
+    assert sentinel, "сентинел исчез из первой порции"
+    assert "search=" in sentinel[-1], (
+        f"поиск потерян в адресе сентинела: {sentinel[-1]}"
+    )
+
+    second = (
+        await authed_client.get("/ads/partial?offset=30&limit=30&search=Акция")
+    ).text
+    assert second.count('class="ad-card"') == 5, (
+        "вторая порция отобрана не так, как первая: отобранных объявлений 35, "
+        "и после смещения в 30 их обязано остаться ровно пять"
+    )
+    assert "Прочее" not in second, (
+        "вторая порция подмешала объявления, отбору не отвечающие"
+    )
+
+
 @pytest.mark.asyncio
 async def test_ads_partial_names_each_value(
     authed_client: AsyncClient, db_session: AsyncSession
