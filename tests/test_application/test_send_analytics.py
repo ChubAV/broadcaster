@@ -27,8 +27,11 @@ from app.application.analytics.send_analytics import (
     apply_history_filters,
     history_count,
     history_filter_params,
+    local_day_bounds,
+    local_day_start_utc,
     normalize_utc,
     send_metrics,
+    sliding_window_bounds,
     upcoming_sends,
 )
 from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
@@ -186,6 +189,42 @@ async def test_send_metrics_ignores_records_from_the_future(db_session):
         "запись из будущего попала в текущее окно и завысила плитку"
     )
     assert metrics.total_prev == 0
+
+
+# --- Календарные сутки читателя -----------------------------------------------
+#
+# Моменты выражаются aware-UTC (посев naive-значения лёг бы в SQLite стенными
+# часами и сравнился бы с границей как ДРУГОЙ момент), а московские и
+# нью-йоркские часы называются в докстрингах словами.
+
+
+def test_local_day_bounds_returns_four_moments_in_utc():
+    """Пара окон календарных суток: границы объявлены и все четыре — в UTC.
+
+    Тест закрепляет ФОРМУ ответа, на которую опирается запрос: `now` = 23:00
+    UTC 19 мая — это уже 02:00 20-го по Москве, поэтому текущие сутки читателя
+    начинаются 19 мая в 21:00 UTC, а «вчера до этого же времени» кончается
+    18 мая в 23:00 UTC. Возврат границ в зоне читателя вместо UTC был бы виден
+    только на бою: SQLite печатает стенные часы и ТЕРЯЕТ смещение, поэтому
+    `00:00+03:00` сравнилось бы с `sent_at` как полночь UTC.
+    """
+    user = User(email="b@test.com", password_hash="x", name="U", timezone="Europe/Moscow")
+
+    bounds = local_day_bounds(user, now=datetime(2026, 5, 19, 23, 0, tzinfo=timezone.utc))
+
+    assert bounds.current_start == datetime(2026, 5, 19, 21, 0, tzinfo=timezone.utc)
+    assert bounds.current_end == datetime(2026, 5, 19, 23, 0, tzinfo=timezone.utc)
+    assert bounds.previous_start == datetime(2026, 5, 18, 21, 0, tzinfo=timezone.utc)
+    assert bounds.previous_end == datetime(2026, 5, 18, 23, 0, tzinfo=timezone.utc)
+    assert all(
+        moment.utcoffset() == timedelta(0)
+        for moment in (
+            bounds.current_start,
+            bounds.current_end,
+            bounds.previous_start,
+            bounds.previous_end,
+        )
+    ), "граница уехала в зоне читателя — на SQLite она сравнится с другим моментом"
 
 
 # --- Три статуса --------------------------------------------------------------

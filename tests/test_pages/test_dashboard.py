@@ -14,7 +14,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.analytics.send_analytics import recent_feed
+from app.application.analytics.send_analytics import local_day_start_utc, recent_feed
 from app.constants import AD_STATUS_DRAFT, AD_STATUS_PUBLISHED
 from app.models.ad import Ad
 from app.pages.dashboard import dashboard_next_step
@@ -226,6 +226,43 @@ async def test_dashboard_tiles_split_ok_and_failed(
     assert _tile_value(body, "Отправок за сутки") == 3
     assert _tile_value(body, "Успешно") == 1
     assert _tile_value(body, "Ошибок") == 2
+
+
+@pytest.mark.asyncio
+async def test_the_dashboard_tile_counts_the_readers_calendar_day(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Плитка режется ЛОКАЛЬНОЙ полуночью читателя, а не окном в 24 часа назад.
+
+    Сценарий словами: человек в UTC+3 открывает дашборд в два часа ночи.
+    Скользящее окно вбирало весь вчерашний вечер, и плитка «сегодня»
+    показывала ему отправки, которые по его собственному календарю случились
+    ВЧЕРА, — число не сходилось ни с одним отчётом за день и не сходилось с
+    фильтром «Сегодня» в истории, который резал по той же локальной полуночи.
+
+    Границу тест берёт ТЕМ ЖЕ хелпером модуля, что и страница: посев от
+    вычисленной в тесте копии правила краснел бы не там, где дефект, а там,
+    где копия разошлась с оригиналом. Побочно это делает тест детерминированным
+    в любой час суток — час запуска сдвигает и границу, и посевы вместе.
+    """
+    user = await _current_user(db_session)
+    # Зона правится прямой записью: страница читает пользователя из cookie на
+    # КАЖДЫЙ запрос, поэтому новая зона подхватится ближайшим же рендером.
+    user.timezone = "Europe/Moscow"
+    await db_session.commit()
+
+    boundary = local_day_start_utc(user)
+    # За час ДО локальной полуночи — вчерашние 23:00 по часам читателя.
+    await _seed_send_log(db_session, user.id, sent_at=boundary - timedelta(hours=1))
+    # РОВНО в локальную полночь: нижняя граница включающая, запись сегодняшняя.
+    await _seed_send_log(db_session, user.id, sent_at=boundary)
+
+    body = _page_body((await authed_client.get("/dashboard")).text)
+
+    assert _tile_value(body, "Отправок сегодня") == 1, (
+        "в плитку «сегодня» попал вчерашний вечер: окно считается от момента "
+        "запроса, а не от локальной полуночи читателя"
+    )
 
 
 @pytest.mark.asyncio
