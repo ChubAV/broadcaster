@@ -138,7 +138,9 @@ async def test_the_systemwide_count_sums_every_user(db_session: AsyncSession):
         db_session, third.id, sent_at=NOW - timedelta(hours=3), status=STATUS_FAIL
     )
 
-    system = await send_metrics(db_session, user_id=None, bounds=sliding_window_bounds(now=NOW))
+    system = await send_metrics(
+        db_session, user_id=None, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert system.total == 3
     assert system.ok == 2
@@ -172,7 +174,9 @@ async def test_the_single_user_contract_is_unchanged_by_the_generalisation(
     await _seed(db_session, stranger.id, sent_at=NOW - timedelta(hours=1))
     await _seed(db_session, stranger.id, sent_at=NOW - timedelta(hours=30))
 
-    mine = await send_metrics(db_session, user_id=owner.id, bounds=sliding_window_bounds(now=NOW))
+    mine = await send_metrics(
+        db_session, user_id=owner.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     expected = SendMetrics(
         total=2,
@@ -210,7 +214,9 @@ async def test_the_systemwide_count_keeps_the_single_round_trip(
     engine = db_session.bind.sync_engine
     event.listen(engine, "before_cursor_execute", _record)
     try:
-        system = await send_metrics(db_session, user_id=None, bounds=sliding_window_bounds(now=NOW))
+        system = await send_metrics(
+            db_session, user_id=None, bounds=sliding_window_bounds(now=NOW)
+        )
     finally:
         event.remove(engine, "before_cursor_execute", _record)
 
@@ -236,7 +242,9 @@ async def test_the_previous_window_covers_the_same_users_as_the_current_one(
     await _seed(db_session, first.id, sent_at=NOW - timedelta(hours=30))
     await _seed(db_session, second.id, sent_at=NOW - timedelta(hours=40))
 
-    system = await send_metrics(db_session, user_id=None, bounds=sliding_window_bounds(now=NOW))
+    system = await send_metrics(
+        db_session, user_id=None, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert system.total == 2
     assert system.total_prev == 2
@@ -252,7 +260,9 @@ async def test_an_empty_journal_gives_zeroes_and_not_an_exception(
     `func.sum` над пустым набором отдаёт NULL, и плитка, получившая его,
     напечатала бы пустоту там, где верный ответ — ноль.
     """
-    system = await send_metrics(db_session, user_id=None, bounds=sliding_window_bounds(now=NOW))
+    system = await send_metrics(
+        db_session, user_id=None, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert system == SendMetrics()
     assert system.total == 0

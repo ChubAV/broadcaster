@@ -1,8 +1,16 @@
 """Юнит-покрытие модуля аналитики отправок (app/application/analytics).
 
 Модуль — единственный источник агрегатов журнала для дашборда, истории и
-Фазы 6 (D-35). Этот файл держит его контракт: окно скользящих суток, три
-статуса, охват групп, изоляция по владельцу и перенос фильтров истории.
+Фазы 6 (D-35). Этот файл держит его контракт: ДВЕ формы окна, три статуса,
+охват групп, изоляция по владельцу и перенос фильтров истории.
+
+ФОРМ ОКНА ДВЕ, И ЭТО НЕ ПЕРЕХОДНОЕ СОСТОЯНИЕ. Календарные сутки читателя, от
+его локальной полуночи до момента запроса, читают плитки дашборда: они
+отвечают на вопрос «сколько ушло СЕГОДНЯ». Скользящее окно от момента запроса
+осталось у API-сводки истории (шириной в тридцать суток) и у админского
+«Обзора»: их вопрос — «что происходит по сервису за последнее время», у него
+нет ни полуночи, ни читателя с зоной. Формула агрегации при этом ОДНА, и
+различаются вызывающие ровно объектом границ.
 
 Все посевы ставят `sent_at` ЯВНО. У колонки есть `server_default=func.now()`,
 и запись без явного времени попала бы в окно «сейчас» — то есть в текущее окно
@@ -19,6 +27,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.analytics.send_analytics import (
     FAILED_STATUSES,
     HISTORY_PERIODS,
+    # Приватная отсечка периода импортируется НАМЕРЕННО: единственность правила
+    # локальной полуночи доказывается сравнением её значения с границей плиток,
+    # а через публичный `apply_history_filters` значение наружу не выходит.
+    _period_cutoff,
     STATUS_ACCOUNT_DISCONNECTED,
     STATUS_FAIL,
     STATUS_OK,
@@ -134,7 +146,11 @@ def test_normalize_utc_passes_none_through():
     assert normalize_utc(None) is None
 
 
-# --- Окно суток ---------------------------------------------------------------
+# --- Скользящее окно суток ----------------------------------------------------
+#
+# Форма соседей дашборда: API-сводка истории и админский «Обзор». Ожидаемые
+# числа этой секции — граница, за которую правка календарных суток не заходит
+# (P-4): сдвинулись бы они, сдвинулись бы и цифры двух чужих экранов.
 
 
 @pytest.mark.asyncio
@@ -191,7 +207,7 @@ async def test_send_metrics_ignores_records_from_the_future(db_session):
 
     Оба окна были ограничены только снизу, поэтому запись с `sent_at` в
     будущем — расхождение часов Celery-воркера и базы либо явный `now` от
-    вызывающего — попадала в ТЕКУЩЕЕ окно. Плитка «Отправок за сутки» считала
+    вызывающего — попадала в ТЕКУЩЕЕ окно. Плитка «Отправок сегодня» считала
     бы отправку, которой ещё не было, а на экране это неотличимо от правды.
 
     Граница включающая: запись ровно в `now` окну принадлежит.
@@ -247,6 +263,256 @@ def test_local_day_bounds_returns_four_moments_in_utc():
             bounds.previous_end,
         )
     ), "граница уехала в зоне читателя — на SQLite она сравнится с другим моментом"
+
+
+@pytest.mark.asyncio
+async def test_the_calendar_day_window_leaves_yesterday_evening_out(db_session):
+    """Вчерашний вечер в плитку «сегодня» НЕ идёт — ради этого правка и живёт.
+
+    Сценарий словами: человек в UTC+3 открывает дашборд в два часа ночи.
+    Скользящее окно вбирало последние 24 часа и потому показывало ему в плитке
+    «сегодня» отправки вчерашнего вечера — число не сходилось ни с одним его
+    календарным отчётом и расходилось с фильтром «Сегодня» в истории, который
+    резал по локальной полуночи.
+
+    ВТОРОЕ УТВЕРЖДЕНИЕ ОБЯЗАТЕЛЬНО. Те же две записи, посчитанные скользящим
+    окном, дают два: без него тест не отличал бы новое поведение от старого и
+    остался бы зелёным при откате правки.
+    """
+    user = await _user(db_session, tz_name="Europe/Moscow")
+    now = datetime(2026, 5, 19, 23, 0, tzinfo=timezone.utc)  # 02:00 20-го по Москве
+
+    # Вчера в 23:00 по часам читателя.
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 19, 20, 0, tzinfo=timezone.utc)
+    )
+    # Сегодня в 00:30 по часам читателя.
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 19, 21, 30, tzinfo=timezone.utc)
+    )
+
+    calendar_day = await send_metrics(
+        db_session, user_id=user.id, bounds=local_day_bounds(user, now=now)
+    )
+    sliding = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=now)
+    )
+
+    assert calendar_day.total == 1, (
+        "в календарные сутки читателя попал вчерашний вечер: окно считается от "
+        "момента запроса, а не от его локальной полуночи"
+    )
+    assert sliding.total == 2, (
+        "скользящее окно перестало вбирать вчерашний вечер — тест больше не "
+        "отличает новое поведение от старого и держать его нечем"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_reader_without_a_timezone_is_cut_at_utc_midnight(db_session):
+    """Читатель без зоны режется UTC-полуночью, а naive-`now` принимается.
+
+    Значение `users.timezone` — строка из профиля, и негодная либо пустая
+    обязана давать UTC, а не пятисотку на дашборде: ветка падения живёт в
+    `_get_timezone_for_user` и остаётся ЕДИНСТВЕННЫМ источником зоны. Приём
+    `normalize_utc` над `now` проверяется здесь же — `now` приезжает и из
+    теста, и из вызывающего, и naive-значение уронило бы перевод зоны не там,
+    где это видно.
+    """
+    user = await _user(db_session, tz_name="")
+    now = datetime(2026, 5, 20, 2, 0, tzinfo=timezone.utc)
+
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 19, 23, 0, tzinfo=timezone.utc)
+    )
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 20, 0, 30, tzinfo=timezone.utc)
+    )
+
+    bounds = local_day_bounds(user, now=now)
+    metrics = await send_metrics(db_session, user_id=user.id, bounds=bounds)
+
+    assert bounds.current_start == datetime(2026, 5, 20, 0, 0, tzinfo=timezone.utc)
+    assert metrics.total == 1
+    assert local_day_bounds(user, now=now.replace(tzinfo=None)) == bounds, (
+        "naive-`now` разъехался с aware: normalize_utc из хелпера пропал"
+    )
+
+
+@pytest.mark.asyncio
+async def test_yesterday_is_counted_only_up_to_the_current_time(db_session):
+    """База дельты — вчера ДО ЭТОГО ЖЕ ВРЕМЕНИ, и верх её полуоткрыт.
+
+    Вчерашние сутки ЦЕЛИКОМ против неполных сегодняшних давали бы по утрам
+    вечную красную стрелку: она говорила бы не о падении отправок, а о том, что
+    день ещё не кончился. Момент верхней границы принадлежит следующему окну, а
+    не обоим сразу — иначе запись на стыке считалась бы дважды.
+
+    Читатель в UTC+3, на часах у него полдень.
+    """
+    user = await _user(db_session, tz_name="Europe/Moscow")
+    now = datetime(2026, 5, 20, 9, 0, tzinfo=timezone.utc)  # 12:00 по Москве
+
+    # Вчера в 11:00 по Москве — внутри «вчера до этого же времени».
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 19, 8, 0, tzinfo=timezone.utc)
+    )
+    # Вчера в 13:00 по Москве — позже текущего часа, НИ В ОДНОМ из окон.
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 19, 10, 0, tzinfo=timezone.utc)
+    )
+    # Вчера ровно в 12:00 по Москве — сам момент верхней границы.
+    await _seed_send_log(
+        db_session, user.id, sent_at=datetime(2026, 5, 19, 9, 0, tzinfo=timezone.utc)
+    )
+
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=local_day_bounds(user, now=now)
+    )
+
+    assert metrics.total == 0
+    assert metrics.total_prev == 1, (
+        "во «вчера до этого же времени» затекло то, что случилось ПОЗЖЕ текущего "
+        "часа, либо в него зачлась запись ровно на полуоткрытой верхней границе"
+    )
+
+
+@pytest.mark.asyncio
+async def test_local_midnight_belongs_to_the_current_day(db_session):
+    """Момент локальной полуночи принадлежит СЕГОДНЯШНИМ суткам.
+
+    Нижняя граница текущего окна включающая: иначе отправка ровно в полночь не
+    принадлежала бы ни одному из двух окон и исчезала бы из счёта молча.
+
+    Запись секундой раньше не попадает НИ КУДА, и это намеренно: 23:59:59 —
+    вчерашний вечер, а он лежит за верхней границей окна «вчера до этого же
+    времени», которое в полдень кончается в полдень.
+    """
+    user = await _user(db_session, tz_name="Europe/Moscow")
+    now = datetime(2026, 5, 20, 9, 0, tzinfo=timezone.utc)  # 12:00 по Москве
+    # 00:00 20 мая по Москве.
+    midnight = datetime(2026, 5, 19, 21, 0, tzinfo=timezone.utc)
+
+    await _seed_send_log(db_session, user.id, sent_at=midnight)
+    await _seed_send_log(db_session, user.id, sent_at=midnight - timedelta(seconds=1))
+
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=local_day_bounds(user, now=now)
+    )
+
+    assert metrics.total == 1
+    assert metrics.total_prev == 0
+
+
+def test_the_dashboard_day_and_the_today_filter_share_one_boundary():
+    """Дашборд и фильтр «Сегодня» берут ОДНУ границу — расхождение закрыто.
+
+    Именно это расхождение назвал докстринг модуля: два экрана отвечали про
+    разные сутки одному человеку, и объяснить разницу было нечем. Все трое
+    снимают часы сами, поэтому сравниваются на реальном `now`, а не на
+    подставленном: подставленный доказал бы согласие формул, но не то, что
+    экраны согласны В РАБОТЕ.
+    """
+    for tz_name in ("Europe/Moscow", ""):
+        user = _reader(tz_name)
+
+        assert local_day_bounds(user).current_start == local_day_start_utc(user), (
+            f"граница плиток разошлась с хелпером на зоне {tz_name!r}"
+        )
+        assert _period_cutoff("today", user) == local_day_start_utc(user), (
+            f"отсечка фильтра «Сегодня» разошлась с границей плиток на зоне "
+            f"{tz_name!r}: у одного пользователя стало два разных «сегодня»"
+        )
+
+
+def test_the_today_cutoff_has_no_second_copy_of_local_midnight():
+    """Разбор ДЕРЕВА: ветка `today` правило полуночи вызывает, а не повторяет.
+
+    Копия правила не роняет ни один тест в день, когда её заводят: обе копии
+    сперва считают одинаково. Разъезжаются они позже — при первой же правке
+    одной из них, — и с этого дня дашборд и история печатают одному человеку
+    два разных «сегодня».
+
+    ПОЧЕМУ РАЗБОР, А НЕ ПОИСК СТРОКИ. `replace(hour=0, ...)` законно живёт и в
+    `current_month_bounds_utc`, и в самом хелпере: поиск подстроки по модулю
+    считал бы их вхождения и краснел бы на исправном коде. Разбор адресует
+    утверждение РОВНО телу `_period_cutoff`.
+    """
+    import ast
+    from pathlib import Path
+
+    import app.application.analytics.send_analytics as module
+
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    cutoff = next(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_period_cutoff"
+        ),
+        None,
+    )
+    assert cutoff is not None, (
+        "_period_cutoff в модуле не найден: утверждение этого теста адресовать нечему"
+    )
+
+    called = {
+        child.func.id if isinstance(child.func, ast.Name) else child.func.attr
+        for child in ast.walk(cutoff)
+        if isinstance(child, ast.Call)
+        and isinstance(child.func, (ast.Name, ast.Attribute))
+    }
+    assert "local_day_start_utc" in called, (
+        "ветка `today` перестала вызывать общий хелпер границы суток"
+    )
+
+    hour_resets = [
+        child
+        for child in ast.walk(cutoff)
+        if isinstance(child, ast.Call)
+        and isinstance(child.func, ast.Attribute)
+        and child.func.attr == "replace"
+        and any(keyword.arg == "hour" for keyword in child.keywords)
+    ]
+    assert not hour_resets, (
+        "в `_period_cutoff` вернулась собственная копия правила локальной "
+        "полуночи — второй источник одного «сегодня»"
+    )
+
+
+def test_the_day_boundary_survives_a_dst_transition():
+    """Перевод часов не сдвигает границу суток: арифметика по СТЕННЫМ часам.
+
+    Читатель в Нью-Йорке, 9 марта 2026 года, десять утра. Перевод на летнее
+    время случился НАКАНУНЕ, 8 марта в 02:00 — то есть ПОСЛЕ вчерашней
+    полуночи: вчерашние сутки начались ещё по EST (−5), сегодняшние идут уже по
+    EDT (−4).
+
+    ГЛАВНОЕ УТВЕРЖДЕНИЕ — расстояние между началами двух суток равно 23 часам,
+    а не 24. Вычитание суток в UTC вместо стенных часов зоны отдало бы
+    `previous_start` на час раньше, то есть увело бы границу во ВЧЕРАШНИЙ
+    вечер; замечали бы это дважды в год и не там, где чинят.
+
+    Побочное следствие, которое стоит назвать вслух: вчерашний отрезок «до
+    этого же времени» в этот день на пропавший час КОРОЧЕ сегодняшнего. Это
+    правда календаря, а не дефект счёта — вчера у читателя действительно было
+    на час меньше.
+
+    Значения ниже сверены прогоном на `zoneinfo`, а не выведены на глаз.
+    """
+    user = _reader("America/New_York")
+    now = datetime(2026, 3, 9, 14, 0, tzinfo=timezone.utc)  # 10:00 EDT
+
+    bounds = local_day_bounds(user, now=now)
+
+    assert bounds.current_start == datetime(2026, 3, 9, 4, 0, tzinfo=timezone.utc)
+    assert bounds.previous_start == datetime(2026, 3, 8, 5, 0, tzinfo=timezone.utc)
+    assert bounds.previous_end == datetime(2026, 3, 8, 14, 0, tzinfo=timezone.utc)
+    assert bounds.current_start - bounds.previous_start == timedelta(hours=23), (
+        "начала суток разошлись на 24 часа: вычитание идёт в UTC, а не по стенным "
+        "часам зоны, и в день перевода граница уехала на час в позавчера"
+    )
 
 
 # --- Три статуса --------------------------------------------------------------
