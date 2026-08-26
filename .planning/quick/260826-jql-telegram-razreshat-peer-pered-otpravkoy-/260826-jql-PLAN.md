@@ -339,8 +339,8 @@ Output: `TelegramUserMessenger` разрешает peer один раз за о�
   </action>
 
   <verify>
-    <automated>uv run pytest tests/test_messengers/ tests/test_services/test_messenger_factory.py tests/test_routes/test_sync_groups.py -q 2>&amp;1 | tail -5</automated>
-    <automated>BASE=$(git log -1 --format=%H -- .planning/quick/260826-jql-telegram-razreshat-peer-pered-otpravkoy-/260826-jql-PLAN.md); test -n "$BASE"; git diff --name-only "$BASE" -- app tests alembic pyproject.toml uv.lock | sort | tr '\n' '|' | grep -qx "app/messengers/telegram_user.py|tests/test_messengers/test_telegram_user.py|"</automated>
+    <automated>uv run pytest tests/test_messengers/ tests/test_services/test_messenger_factory.py tests/test_routes/test_sync_groups.py -q</automated>
+    <automated>BASE=$(git log -1 --format=%H -- .planning/quick/260826-jql-telegram-razreshat-peer-pered-otpravkoy-/260826-jql-PLAN.md); test -n "$BASE" || { echo "PLAN.md не закоммичен — гейт диффа не имеет якоря" >&amp;2; exit 1; }; git diff --name-only "$BASE" -- app tests alembic pyproject.toml uv.lock | sort | tr '\n' '|' | grep -qx "app/messengers/telegram_user.py|tests/test_messengers/test_telegram_user.py|"</automated>
     <automated>uv run python -m compileall -q app main.py tests</automated>
     <automated>graphify update .</automated>
     <human-check>Отправить в боевом окружении объявление с ОДНОЙ картинкой в реальную Telegram-группу и убедиться, что сообщение ушло. Затем отправить объявление в группу, из которой аккаунт удалён, и убедиться, что в истории отправок стоит русский текст про потерю доступа, а не английская строка telethon.</human-check>
