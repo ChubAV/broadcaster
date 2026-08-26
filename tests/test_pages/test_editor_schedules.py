@@ -270,6 +270,78 @@ async def test_toggle_from_editor_returns_to_the_editor(
     assert (await _reload(db_session, schedule.id)).is_active is False
 
 
+def _hidden_fields_of_the_toggle_form(html: str, schedule_id: int) -> list[tuple[str, str]]:
+    """Скрытые поля формы тумблера ИМЕННО этой карточки — из отрендеренной разметки.
+
+    Поля берутся со страницы, а не собираются в тесте руками: собранный вручную
+    набор прошёл бы и при разметке, которая этих полей не рисует, и связка
+    «шаблон ↔ обработчик» осталась бы непроверенной.
+    """
+    block = re.search(
+        rf'<form[^>]*action="/schedules/{schedule_id}/toggle"[^>]*>(.*?)</form>',
+        html,
+        re.DOTALL,
+    )
+    assert block, f"формы тумблера расписания {schedule_id} в разметке нет"
+    return [
+        (m.group("name"), m.group("value"))
+        for m in re.finditer(
+            r'<input[^>]*type="hidden"[^>]*name="(?P<name>[^"]+)"[^>]*value="(?P<value>[^"]*)"',
+            block.group(1),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_toggle_does_not_fold_or_unfold_the_schedule_card(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Тумблер меняет состояние расписания и НЕ трогает разворот карточек.
+
+    Разворот — состояние СЕРВЕРНОЕ: его определяет единственный параметр адреса
+    `sched`, и обработчик переключения перезаписывал его идентификатором нажатой
+    карточки. Пользователь читал это как «тумблер нажал кнопку СВЕРНУТЬ /
+    РАЗВЕРНУТЬ»: свёрнутая карточка от нажатия разворачивалась, а развёрнутая
+    соседка схлопывалась.
+
+    Тест сквозной — он проходит путь пользователя целиком: страница, форма из
+    её разметки, POST, переход по адресу ответа. Утверждение про `is_active`
+    обязательно: без него тест остался бы зелёным и при тумблере, переставшем
+    работать вовсе.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    group = await _seed_group(db_session, owner.id, account.id)
+    first = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[group.id]
+    )
+    second = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[group.id], times=["21:00"]
+    )
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={second.id}")).text
+    fields = _hidden_fields_of_the_toggle_form(html, first.id)
+
+    response = await authed_client.post(
+        f"/schedules/{first.id}/toggle",
+        content=_form(fields),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+
+    after = (await authed_client.get(response.headers["location"])).text
+    assert f'action="/schedules/{first.id}/edit"' not in after, (
+        "свёрнутая карточка РАЗВЕРНУЛАСЬ от нажатия собственного тумблера"
+    )
+    assert f'action="/schedules/{second.id}/edit"' in after, (
+        "развёрнутая карточка СХЛОПНУЛАСЬ от нажатия тумблера соседней"
+    )
+    assert (await _reload(db_session, first.id)).is_active is False, (
+        "тумблер перестал переключать расписание"
+    )
+
+
 @pytest.mark.asyncio
 async def test_delete_from_editor_returns_to_the_editor_and_removes_the_schedule(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
