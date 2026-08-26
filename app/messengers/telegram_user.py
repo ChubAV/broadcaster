@@ -9,6 +9,7 @@ from telethon import TelegramClient
 from telethon.errors import (
     ChatWriteForbiddenError,
     ForbiddenError,
+    PeerIdInvalidError,
     SlowModeWaitError,
     UserBannedInChannelError,
 )
@@ -190,6 +191,31 @@ def cleanup_qr_session(session_id: str) -> None:
 # Messenger adapter
 # ---------------------------------------------------------------------------
 
+# Текст для ПОЛЬЗОВАТЕЛЯ, а не для разработчика: значение отсюда уезжает в
+# `group.last_error` (`app/application/scheduling/use_cases.py:483`) и в
+# `SendLog`, то есть прямо на экран истории отправок. Константа заведена вместо
+# литерала в местах возврата потому, что о потере доступа сообщают ДВА разных
+# исхода — отказ сервера PEER_ID_INVALID и неразрешимый peer после прогрева
+# кэша, — и, разъехавшись, они показали бы пользователю два разных объяснения
+# одной и той же беды.
+PEER_UNREACHABLE_MESSAGE = (
+    "Аккаунт больше не имеет доступа к этой группе — "
+    "пересинхронизируйте группы аккаунта."
+)
+
+
+class PeerUnreachableError(RuntimeError):
+    """Группа окончательно не разрешается в сущность — доступ к ней потерян.
+
+    Заведено собственным типом, потому что `get_input_entity` на недоступной
+    группе поднимает голый `ValueError`, а это ровно то же самое «аккаунт
+    больше не состоит в группе», что и ответ сервера `PeerIdInvalidError`.
+    Ловить оба исхода одной веткой через `except ValueError` было бы нельзя:
+    такая ветка проглотила бы и негодный идентификатор группы, и любой другой
+    `ValueError` из тела отправки, и выдала бы их за потерю доступа — то есть
+    посоветовала бы пересинхронизировать группы там, где это не поможет.
+    """
+
 
 class TelegramUserMessenger(BaseMessenger):
     def __init__(self, session_string: str, api_id: int, api_hash: str):
@@ -198,9 +224,44 @@ class TelegramUserMessenger(BaseMessenger):
         )
         self.log = logger.bind(messenger="telegram")
 
+    async def _resolve_peer(self, group_id: str):
+        """Разрешает идентификатор группы в сущность telethon перед отправкой.
+
+        Без этого в запрос уезжает голое число, и сервер отвечает 400
+        PEER_ID_INVALID. Причина в том, что клиент здесь создаётся заново на
+        КАЖДУЮ отправку, а `StringSession.save()` хранит только dc_id, адрес и
+        `auth_key` — соответствий `id → access_hash` в строке сессии нет. Кэш
+        сущностей у свежего клиента поэтому пуст, и telethon вынужден угадывать
+        тип peer по знаку числа: `-100…` он превращает в `PeerChannel` с
+        до-разрешением через `channels.getChannels(access_hash=0)`, прочее
+        отрицательное — в `InputPeerChat(id)` вообще без проверки. Эту догадку
+        сервер и отвергает.
+
+        Прогрев кэша стоит РОВНО один `get_dialogs()`, и повторная попытка
+        РОВНО одна. Запрос этот у свежего клиента не бесплатен, а группа,
+        потерянная навсегда, получает отправку по расписанию раз за разом:
+        прогрев без потолка превратил бы её в постоянный источник лишних
+        обращений к Telegram и приблизил бы FloodWait на аккаунте пользователя.
+        """
+        # Разбор числа стоит ВНЕ `try`: негодный идентификатор группы — это не
+        # холодный кэш, и тянуть из-за него тяжёлый `get_dialogs()` незачем.
+        peer_id = int(group_id)
+        try:
+            return await self.client.get_input_entity(peer_id)
+        except ValueError:
+            await self.client.get_dialogs()
+            try:
+                return await self.client.get_input_entity(peer_id)
+            except ValueError as e:
+                raise PeerUnreachableError(PEER_UNREACHABLE_MESSAGE) from e
+
     async def send_message(self, group_id: str, text: str, images: list[str] | None = None) -> dict:
         try:
             await self.client.connect()
+            # Разрешение стоит ОДНО на отправку и ДО ветвления на картинки/текст:
+            # разнесённое по веткам, оно дало бы до трёх прогревов кэша диалогов
+            # на одну-единственную отправку.
+            peer = await self._resolve_peer(group_id)
             if images:
                 # Download images from URLs and send as in-memory files
                 import io
@@ -217,7 +278,7 @@ class TelegramUserMessenger(BaseMessenger):
                         files.append(buf)
                 try:
                     await self.client.send_file(
-                        int(group_id), files, caption=text,
+                        peer, files, caption=text,
                         force_document=False,
                     )
                 except ForbiddenError:
@@ -225,9 +286,9 @@ class TelegramUserMessenger(BaseMessenger):
                         "send_media_forbidden_fallback_text",
                         group_id=group_id,
                     )
-                    await self.client.send_message(int(group_id), text)
+                    await self.client.send_message(peer, text)
             else:
-                await self.client.send_message(int(group_id), text)
+                await self.client.send_message(peer, text)
             return {"ok": True}
         except SlowModeWaitError as e:
             self.log.warning("send_slow_mode", group_id=group_id, wait_seconds=e.seconds, error=str(e))
@@ -235,6 +296,21 @@ class TelegramUserMessenger(BaseMessenger):
         except (ChatWriteForbiddenError, UserBannedInChannelError, ForbiddenError) as e:
             self.log.warning("send_forbidden", group_id=group_id, error=str(e))
             return {"ok": False, "error": str(e), "no_retry": True}
+        except (PeerIdInvalidError, PeerUnreachableError) as e:
+            # Порядок относительно ветки запретов выше безразличен, и это стоит
+            # сказать вслух: `PeerIdInvalidError` наследует `BadRequestError`
+            # (400), а не `ForbiddenError` (403) — пересечения между ветками нет.
+            #
+            # `no_retry` стоит потому, что peer не станет валидным сам собой:
+            # повтор пошлёт Telegram ТОТ ЖЕ отвергаемый запрос и лишь приблизит
+            # FloodWait на аккаунте.
+            #
+            # Наружу уходит КОНСТАНТА, а не `str(e)`: текст telethon несёт имя
+            # класса запроса и подсказку про ботов, а `result["error"]` — это не
+            # строка лога, а надпись на экране истории отправок. Диагностика
+            # остаётся в `log.warning` ниже, где ей и место.
+            self.log.warning("send_peer_invalid", group_id=group_id, error=str(e))
+            return {"ok": False, "error": PEER_UNREACHABLE_MESSAGE, "no_retry": True}
         except Exception as e:
             self.log.error("send_message_error", group_id=group_id, error=str(e), exc_info=True)
             return {"ok": False, "error": str(e), "no_retry": True}
