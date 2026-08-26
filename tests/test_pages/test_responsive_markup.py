@@ -2044,8 +2044,10 @@ def test_the_value_of_the_widget_wraps_instead_of_leaving_the_widget():
 def test_the_reduced_motion_rule_names_only_living_classes():
     """Правило, адресованное несуществующему классу, — мусор.
 
-    Имя заливки шкалы вычеркнуто вместе со шкалой; остальные четыре имени
-    остались нетронутыми. Следующий читатель принял бы мёртвое имя за живое.
+    Вычеркнуты ДВА имени: заливка шкалы — вместе со шкалой (план 05.1-04), точка
+    строки перечня воркеров — вместе с карточкой воркеров дашборда (задача
+    260826-6jq). Остальные три имени остались нетронутыми. Следующий читатель
+    принял бы мёртвое имя за живое.
     """
     css = APP_CSS.read_text(encoding="utf-8")
 
@@ -2056,14 +2058,38 @@ def test_the_reduced_motion_rule_names_only_living_classes():
     selectors = [s.strip() for s in rule.group(1).split("{")[0].split(",")]
 
     assert "quota-fill" not in rule.group(1)
-    assert len(selectors) == 4, f"имён в перечне не четыре: {selectors}"
+    assert "worker-row" not in rule.group(1)
+    assert len(selectors) == 3, f"имён в перечне не три: {selectors}"
     for name in (
         ".brand-mark::after",
         ".session-dot.is-online",
-        ".worker-row__dot.is-online",
         ".animate-fade-in",
     ):
         assert name in selectors, f"живое имя {name} вычеркнуто заодно"
+
+
+def test_the_dashboard_worker_list_left_no_css_behind():
+    """Правил снятого перечня воркеров в стилях не осталось.
+
+    Стили без разметки — тот же мусор, что и правило, адресованное
+    несуществующему классу: следующий читатель примет их за живые и вернёт под
+    них блок. Разбирается текст БЕЗ комментариев — объяснение снятия, оставленное
+    комментарием в `app.css`, этот тест краснить не должно.
+
+    Блок пилюли состояния сессий (`.session-pill` / `.session-dot`) проверяется
+    рядом: он живёт в ШАПКЕ ШЕЛЛА на всех 26 маршрутах, к дашборду не привязан и
+    снесённым заодно быть не должен.
+    """
+    css = _css_without_comments()
+
+    for selector in (".worker-list", ".worker-row"):
+        assert selector not in css, (
+            f"в app.css остались правила снятого перечня воркеров: {selector}"
+        )
+    for selector in (".session-pill", ".session-dot"):
+        assert selector in css, (
+            f"вместе с перечнем снесён живой блок пилюли шапки: {selector}"
+        )
 
 
 def test_the_widget_carries_no_progress_bar_at_all():
@@ -4578,7 +4604,7 @@ def test_activity_chart_columns_are_fractional_not_fixed():
 
 
 def test_dashboard_blocks_share_one_head_without_a_divider():
-    """Три блока дашборда несут ОДНУ шапку, и разделителя под ней нет.
+    """Блоки дашборда несут ОДНУ шапку, и разделителя под ней нет.
 
     `card_open(title=...)` рисует `.card__head` с `border-bottom`, которого в
     макете нет ни у одной карточки дашборда: «Ближайшие отправки» шли через
@@ -4603,12 +4629,13 @@ def test_dashboard_blocks_share_one_head_without_a_divider():
     assert "[data-feedhead]" not in css
     assert "[data-heathead]" not in css
 
-    # Перепись шапок СТРАНИЦЫ: пара «Ближайшие отправки» / «Живая лента» плюс
-    # перечень воркеров аккаунтов (DASH-05, план 04-11). Утверждение остаётся
-    # тем же по смыслу — ни один блок страницы не заводит своей шапки в обход
-    # общего атрибута, — и растёт вместе с числом блоков, а не ослабляется:
-    # собственная шапка у нового блока это число НЕ увеличила бы.
-    assert page.count("data-blockhead") == 3, "шапки блоков страницы разъехались"
+    # Перепись шапок СТРАНИЦЫ: пара «Ближайшие отправки» / «Живая лента». Третья
+    # шапка принадлежала карточке перечня воркеров и ушла вместе с ней (задача
+    # 260826-6jq). Утверждение остаётся тем же по смыслу — ни один блок страницы
+    # не заводит своей шапки в обход общего атрибута, — и следует за числом
+    # блоков, а не ослабляется: собственная шапка у нового блока это число НЕ
+    # увеличила бы.
+    assert page.count("data-blockhead") == 2, "шапки блоков страницы разъехались"
     assert "data-blockhead" in chart, "у графика своя шапка вместо общей"
 
     # Комментарии Jinja снимаются ПЕРЕД проверкой вызова. Первая редакция этого
