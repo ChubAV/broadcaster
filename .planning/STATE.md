@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
 status: completed
-stopped_at: Completed quick task 260826-9vv; no phase open
-last_updated: "2026-08-26T08:15:00.000Z"
+stopped_at: Completed quick task 260826-jql; no phase open
+last_updated: "2026-08-26T14:51:06.659Z"
 last_activity: 2026-08-26
-last_activity_desc: Quick task 260826-9vv — dashboard drops the weekly activity chart; both analytics sections that fed it (activity_chart and the already-unrendered activity_heatmap) removed with their unit tests
-state_head: a8cfebe
+last_activity_desc: "Quick task 260826-jql — Telegram: peer разрешается через get_input_entity один раз за отправку с одним прогревом кэша диалогов; одиночная картинка уходит не списком, минуя messages.uploadMedia; потеря доступа к группе отвечает русской константой с no_retry"
+state_head: 731080c
 progress:
   total_phases: 7
   completed_phases: 7
@@ -211,6 +211,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 | 260826-6jq | убрать со страницы dashboard блок «Воркеры аккаунтов» | 2026-08-26 | 884a06d |  | [260826-6jq-ubrat-so-stranitsy-dashboard-blok-otvech](./quick/260826-6jq-ubrat-so-stranitsy-dashboard-blok-otvech/) |
 | 260826-9vv | убрать со страницы dashboard блок «Активность за неделю» | 2026-08-26 | a8cfebe |  | [260826-9vv-ubrat-so-stranitsy-dashboard-blok-aktivn](./quick/260826-9vv-ubrat-so-stranitsy-dashboard-blok-aktivn/) |
 | 260826-dc0 | плитки дашборда считают календарные сутки в зоне пользователя вместо скользящих 24 часов | 2026-08-26 | a4654b9 |  | [260826-dc0-plitki-dashborda-schitayut-kalendarnye-s](./quick/260826-dc0-plitki-dashborda-schitayut-kalendarnye-s/) |
+| 260826-jql | Telegram: разрешать peer перед отправкой картинок (PeerIdInvalidError на UploadMediaRequest) | 2026-08-26 | bf2a6b5 | Needs Review | [260826-jql-telegram-razreshat-peer-pered-otpravkoy-](./quick/260826-jql-telegram-razreshat-peer-pered-otpravkoy-/) |
 
 ## Deferred Items
 
@@ -284,8 +285,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-08-25
-Stopped at: Веха v2.0 закрыта и заархивирована — 7/7 фаз, 110/110 планов, 41/41 требование. Открытых фаз нет.
+Last session: 2026-08-26
+Stopped at: Completed quick task 260826-jql (Telegram: разрешение peer перед отправкой). Веха v2.0 закрыта и заархивирована — 7/7 фаз, 110/110 планов, 41/41 требование. Открытых фаз нет.
 Resume file: None
 
 ## Operator Next Steps

@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 6
+open_count: 7
 waived_count: 1
 fixed_count: 2
-total_count: 9
-last_updated: 2026-08-26T05:45:08.562Z
+total_count: 10
+last_updated: 2026-08-26T14:50:52.666Z
 ---
 
 # Broken Windows Ledger
@@ -24,6 +24,7 @@ last_updated: 2026-08-26T05:45:08.562Z
 | 7 | 06 | unmet-truth | app/pages/admin.py |  | Первый выкат фазы 6 покажет инфраструктурный блок «Воркеров» как «отключён», пока три celery-контейнера (celery-beat, celery-worker-telegram, celery-worker-default) не перевыкачены: признак живости пишут САМИ процессы своими обработчиками beat_init/worker_init раз в 30 с (решение владельца D-52). Это отсутствие ещё не выкаченного источника, а не ложное показание, — но на экране будет выглядеть аварией, и принимающий обязан знать это до того, как посмотрит. Закрывается перевыкатом, не правкой кода | open |  | 2026-08-23T12:52:20.381Z |  |
 | 8 | 06 | unmet-truth | docker-compose.monitoring.yml |  | ПРЕД-СУЩЕСТВУЮЩЕЕ, вне предмета фазы 6 — найдено код-ревью фазы (IN-04), проверено оркестратором. Grafana проксируется наружу по /grafana/ ОБОИМИ шаблонами nginx (nginx.conf.template:65, nginx-http.conf.template:25), пароль администратора берётся как GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin} (docker-compose.monitoring.yml:37), а переменная GRAFANA_ADMIN_PASSWORD в .env.example НЕ УПОМЯНУТА ВОВСЕ. Оператор, идущий по документированной настройке, про неё не узнает, и при поднятом мониторинге Grafana доступна публично с admin/admin. Фаза 6 трогала эти шаблоны только ради HSTS; проксирование Grafana ей предшествует. Дешёвая половина починки — объявить переменную в .env.example. | open |  | 2026-08-23T16:05:35.112Z |  |
 | 9 | quick-260826-6jq | deviation | tests/test_planning/test_state_progress_matches_roadmap.py |  | ПРЕД-СУЩЕСТВУЮЩЕЕ, вне предмета быстрой задачи 260826-6jq. Тест выводит счёт планов из отметок .planning/ROADMAP.md и сверяет с progress.total_plans / progress.completed_plans во frontmatter .planning/STATE.md: выводится 0, записано 110. Оба коммита задачи (a97a583, ba169b7) не тронули .planning ни одним байтом (git diff --stat HEAD~2 HEAD -- .planning пуст). ROADMAP.md обнулён коммитом 3d1e672 'chore: archive v2.0 milestone files' — строки фаз уехали в milestones/v2.0-phases/, и выводить счёт стало не из чего. НЕ починено намеренно: правка STATE.md ради зелёного занизила бы счёт закрытой вехи до нуля, потеряв запись 110/110, которую сама STATE.md объясняет как выправленную при закрытии вехи. Решает тот, кто закрывает веху (/gsd-new-milestone или /gsd-health). | open |  | 2026-08-26T05:45:08.562Z |  |
+| 10 | quick-260826-jql | unrun-verify | app/messengers/telegram_user.py |  | Боевая проверка отправки не выполнена: объявление с одной картинкой в реальную Telegram-группу и русский текст потери доступа в истории отправок требуют живого сервера (D5, human_judgment) | open |  | 2026-08-26T14:50:52.666Z |  |
 
 ````json
 [
@@ -133,6 +134,18 @@ last_updated: 2026-08-26T05:45:08.562Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-26T05:45:08.562Z",
+    "resolved_at": null
+  },
+  {
+    "id": 10,
+    "kind": "unrun-verify",
+    "phase": "quick-260826-jql",
+    "file": "app/messengers/telegram_user.py",
+    "line": null,
+    "description": "Боевая проверка отправки не выполнена: объявление с одной картинкой в реальную Telegram-группу и русский текст потери доступа в истории отправок требуют живого сервера (D5, human_judgment)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-26T14:50:52.666Z",
     "resolved_at": null
   }
 ]
