@@ -44,26 +44,58 @@ async def test_send_text_message(messenger):
 
 @pytest.mark.asyncio
 async def test_send_message_with_image(messenger):
-    messenger.client.send_file = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.content = b"fake-image-bytes"
-    mock_response.raise_for_status = MagicMock()
-    mock_http = AsyncMock()
-    mock_http.get = AsyncMock(return_value=mock_response)
-    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-    mock_http.__aexit__ = AsyncMock(return_value=False)
+    """Одна картинка уезжает ОДИНОЧНЫМ файлом, а не списком из одного элемента.
 
-    with patch("app.messengers.telegram_user.httpx.AsyncClient", return_value=mock_http):
+    Список уводит telethon в альбомную ветку `_send_album`, где первым же
+    запросом идёт `messages.uploadMedia` — тот самый, что получал от сервера
+    400 PEER_ID_INVALID. Одиночный файл идёт через `messages.sendMedia` и
+    `uploadMedia` не будит вовсе, поэтому утверждение здесь прямое: это НЕ
+    список.
+    """
+    messenger.client.send_file = AsyncMock()
+
+    with patch(
+        "app.messengers.telegram_user.httpx.AsyncClient",
+        return_value=_http_client_returning_image_bytes(),
+    ):
         result = await messenger.send_message(
             "-100123", "Hello!", images=["https://cdn.example.com/bucket/img.jpg"]
         )
+
     assert result["ok"] is True
     messenger.client.send_file.assert_called_once()
-    # Verify BytesIO with filename was passed
-    sent_files = messenger.client.send_file.call_args[0][1]
-    assert len(sent_files) == 1
-    assert sent_files[0].name == "img.jpg"
-    assert sent_files[0].read() == b"fake-image-bytes"
+    sent = messenger.client.send_file.call_args[0][1]
+    assert not isinstance(sent, list)
+    assert sent.name == "img.jpg"
+    assert sent.read() == b"fake-image-bytes"
+
+
+@pytest.mark.asyncio
+async def test_two_images_still_go_as_an_album(messenger):
+    """Две картинки продолжают уходить списком: граница живёт между 1 и 2.
+
+    Существующий тест на ТРИ картинки этой границы не держит: перепутанное
+    сравнение «не больше единицы» вместо «ровно один» он пропустил бы, и
+    альбом из двух картинок уехал бы одиночным файлом, потеряв вторую.
+    """
+    messenger.client.send_file = AsyncMock()
+    imgs = [
+        "https://cdn.example.com/bucket/img1.jpg",
+        "https://cdn.example.com/bucket/img2.jpg",
+    ]
+
+    with patch(
+        "app.messengers.telegram_user.httpx.AsyncClient",
+        return_value=_http_client_returning_image_bytes(),
+    ):
+        result = await messenger.send_message("-100123", "Hello!", images=imgs)
+
+    assert result["ok"] is True
+    sent = messenger.client.send_file.call_args[0][1]
+    assert isinstance(sent, list)
+    assert len(sent) == 2
+    assert sent[0].name == "img1.jpg"
+    assert sent[1].name == "img2.jpg"
 
 
 @pytest.mark.asyncio
