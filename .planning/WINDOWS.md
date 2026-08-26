@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 5
+open_count: 6
 waived_count: 1
 fixed_count: 2
-total_count: 8
-last_updated: 2026-08-23T16:05:35.112Z
+total_count: 9
+last_updated: 2026-08-26T05:45:08.562Z
 ---
 
 # Broken Windows Ledger
@@ -23,6 +23,7 @@ last_updated: 2026-08-23T16:05:35.112Z
 | 6 | 06 | unmet-truth | monitoring/promtail.yml |  | Фильтр уровня подраздела «Логи» селектирует по метке потока level (app/services/loki_client.py:311, level=~"..."), которую шиппящийся monitoring/promtail.yml не создаёт ни одним правилом: relabel_configs дают container_name, stream, compose_project, compose_service, broadcaster_role, account_id; pipeline_stages — один docker:{}, разворачивающий обёртку и ничего не извлекающий из тела строки. Суита увидеть этого не могла — её потоки несут метку level, вписанную руками (tests/test_services/test_loki_client.py:103), то есть доказывает контракт клиента ПРИ наличии метки, а не появление метки в бою. Ожидаемое следствие на живом стенде: выбор любого чипа уровня даёт пустую выдачу при исправном на вид запросе. Найдено приёмкой 06-14 по репозиторию; НЕ исправлено намеренно — правка есть конфигурация сборщика плюс перевыкат мониторинга, задача приёмки кода не меняет | waived | НАХОДКА НЕ ПОДТВЕРДИЛАСЬ (проверено оркестратором): запись читает только ПЕРВУЮ стадию конвейера promtail. Дальше идут три блока match, каждый поднимает level в метку Loki — compose-сервисы (стр. 35-44), wa-worker с template Pino 10..60 в слова (стр. 46-59), max-worker (стр. 61-70). Значения сходятся с LEVEL_CHIPS клиента, обе стороны строчными. D-27 описывает конфиг верно, фильтр уровня работает. Снято, чтобы никто не чинил работающий конфиг. | 2026-08-23T12:52:09.284Z | 2026-08-23T13:18:32.360Z |
 | 7 | 06 | unmet-truth | app/pages/admin.py |  | Первый выкат фазы 6 покажет инфраструктурный блок «Воркеров» как «отключён», пока три celery-контейнера (celery-beat, celery-worker-telegram, celery-worker-default) не перевыкачены: признак живости пишут САМИ процессы своими обработчиками beat_init/worker_init раз в 30 с (решение владельца D-52). Это отсутствие ещё не выкаченного источника, а не ложное показание, — но на экране будет выглядеть аварией, и принимающий обязан знать это до того, как посмотрит. Закрывается перевыкатом, не правкой кода | open |  | 2026-08-23T12:52:20.381Z |  |
 | 8 | 06 | unmet-truth | docker-compose.monitoring.yml |  | ПРЕД-СУЩЕСТВУЮЩЕЕ, вне предмета фазы 6 — найдено код-ревью фазы (IN-04), проверено оркестратором. Grafana проксируется наружу по /grafana/ ОБОИМИ шаблонами nginx (nginx.conf.template:65, nginx-http.conf.template:25), пароль администратора берётся как GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin} (docker-compose.monitoring.yml:37), а переменная GRAFANA_ADMIN_PASSWORD в .env.example НЕ УПОМЯНУТА ВОВСЕ. Оператор, идущий по документированной настройке, про неё не узнает, и при поднятом мониторинге Grafana доступна публично с admin/admin. Фаза 6 трогала эти шаблоны только ради HSTS; проксирование Grafana ей предшествует. Дешёвая половина починки — объявить переменную в .env.example. | open |  | 2026-08-23T16:05:35.112Z |  |
+| 9 | quick-260826-6jq | deviation | tests/test_planning/test_state_progress_matches_roadmap.py |  | ПРЕД-СУЩЕСТВУЮЩЕЕ, вне предмета быстрой задачи 260826-6jq. Тест выводит счёт планов из отметок .planning/ROADMAP.md и сверяет с progress.total_plans / progress.completed_plans во frontmatter .planning/STATE.md: выводится 0, записано 110. Оба коммита задачи (a97a583, ba169b7) не тронули .planning ни одним байтом (git diff --stat HEAD~2 HEAD -- .planning пуст). ROADMAP.md обнулён коммитом 3d1e672 'chore: archive v2.0 milestone files' — строки фаз уехали в milestones/v2.0-phases/, и выводить счёт стало не из чего. НЕ починено намеренно: правка STATE.md ради зелёного занизила бы счёт закрытой вехи до нуля, потеряв запись 110/110, которую сама STATE.md объясняет как выправленную при закрытии вехи. Решает тот, кто закрывает веху (/gsd-new-milestone или /gsd-health). | open |  | 2026-08-26T05:45:08.562Z |  |
 
 ````json
 [
@@ -120,6 +121,18 @@ last_updated: 2026-08-23T16:05:35.112Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-23T16:05:35.112Z",
+    "resolved_at": null
+  },
+  {
+    "id": 9,
+    "kind": "deviation",
+    "phase": "quick-260826-6jq",
+    "file": "tests/test_planning/test_state_progress_matches_roadmap.py",
+    "line": null,
+    "description": "ПРЕД-СУЩЕСТВУЮЩЕЕ, вне предмета быстрой задачи 260826-6jq. Тест выводит счёт планов из отметок .planning/ROADMAP.md и сверяет с progress.total_plans / progress.completed_plans во frontmatter .planning/STATE.md: выводится 0, записано 110. Оба коммита задачи (a97a583, ba169b7) не тронули .planning ни одним байтом (git diff --stat HEAD~2 HEAD -- .planning пуст). ROADMAP.md обнулён коммитом 3d1e672 'chore: archive v2.0 milestone files' — строки фаз уехали в milestones/v2.0-phases/, и выводить счёт стало не из чего. НЕ починено намеренно: правка STATE.md ради зелёного занизила бы счёт закрытой вехи до нуля, потеряв запись 110/110, которую сама STATE.md объясняет как выправленную при закрытии вехи. Решает тот, кто закрывает веху (/gsd-new-milestone или /gsd-health).",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-26T05:45:08.562Z",
     "resolved_at": null
   }
 ]

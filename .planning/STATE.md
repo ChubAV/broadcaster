@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
 status: completed
-stopped_at: Milestone v2.0 complete; no phase open
-last_updated: "2026-08-25T17:25:00.000Z"
-last_activity: 2026-08-25
-last_activity_desc: Quick task 260825-m0b — ads list rebuilt as the canonical card grid with a search toolbar; five row-table test inventories lowered in the same commit
-state_head: ba7e1d8
+stopped_at: Completed quick task 260826-6jq; no phase open
+last_updated: "2026-08-26T05:46:00.000Z"
+last_activity: 2026-08-26
+last_activity_desc: Quick task 260826-6jq — dashboard drops the per-account worker card; the shell contract stops assembling the list on all 26 routes while the header session pill stays
+state_head: 884a06d
 progress:
   total_phases: 7
   completed_phases: 7
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 Phase: — (открытых фаз нет; веха v2.0 закрыта и заархивирована)
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-08-25 — Completed quick task 260825-of5: страница accounts не соответствует шаблону new_broadcaster_design.html
+Last activity: 2026-08-26 — Completed quick task 260826-6jq: убрать со страницы dashboard блок «Воркеры аккаунтов»
 
 **Чем закрыта веха.** Тип закрытия — `override_closeout`: предзакрывающий аудит нашёл 19 пунктов, из них 15 подтверждены осознанно отложенными, 1 закрыт (сверка прослеживаемости GRP-04…GRP-06), 3 оказались артефактом сканера. Разбор — §Deferred Items ниже.
 
@@ -208,6 +208,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 | 260825-hnf | скрипт обслуживания: сжать и создать превью для вложений, загруженных до issue #40 | 2026-08-25 | 8838179 | Verified | [260825-hnf-skript-obsluzhivaniya-szhat-i-sozdat-pre](./quick/260825-hnf-skript-obsluzhivaniya-szhat-i-sozdat-pre/) |
 | 260825-m0b | страница ads не соответствует шаблону new_broadcaster_design.html | 2026-08-25 | ba7e1d8 |  | [260825-m0b-stranitsa-ads-ne-sootvetstvuet-shablonu-](./quick/260825-m0b-stranitsa-ads-ne-sootvetstvuet-shablonu-/) |
 | 260825-of5 | страница accounts не соответствует шаблону new_broadcaster_design.html | 2026-08-25 | 13c6dd2 |  | [260825-of5-stranitsa-accounts-ne-sootvetstvuet-shab](./quick/260825-of5-stranitsa-accounts-ne-sootvetstvuet-shab/) |
+| 260826-6jq | убрать со страницы dashboard блок «Воркеры аккаунтов» | 2026-08-26 | 884a06d |  | [260826-6jq-ubrat-so-stranitsy-dashboard-blok-otvech](./quick/260826-6jq-ubrat-so-stranitsy-dashboard-blok-otvech/) |
 
 ## Deferred Items
 
