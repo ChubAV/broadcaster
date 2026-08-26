@@ -200,7 +200,7 @@
           {#- Множество выключенных протаскивается туда же, куда и `groups`:
               импортированный макрос контекста вызывающего не получает (D-07). -#}
           {{ sched_card(s, ad, editor.accounts, editor.groups, user,
-                        expanded=(s.id == editor.expanded_schedule_id),
+                        expanded_id=editor.expanded_schedule_id,
                         inactive_group_ids=editor.inactive_group_ids) }}
           {%- endfor %}
         </div>

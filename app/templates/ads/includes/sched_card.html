@@ -14,7 +14,9 @@
    собственные формы: сохранение (/schedules/{id}/edit), переключение
    (/schedules/{id}/toggle) и удаление (/schedules/{id}/delete). Вложенных форм
    в карточке нет — браузер молча отбрасывает внутреннюю, и кнопки перестали бы
-   работать и с JavaScript, и без него.
+   работать и с JavaScript, и без него. Форма переключения несёт СКРЫТЫМ ПОЛЕМ
+   идентификатор развёрнутой карточки: разворот — серверное состояние, и без
+   него тумблер менял бы не только состояние расписания.
 
    ПРОГРЕССИВНОЕ УЛУЧШЕНИЕ. Ни один путь карточки не требует ни Alpine, ни htmx:
    дни, группы и аккаунты — настоящие флажки и радиокнопки за подписями;
@@ -59,8 +61,14 @@
 {{- {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'}.get(account.type, account.type) }} #{{ account.id -}}
 {%- endmacro %}
 
-{% macro sched_card(s, ad, accounts, groups, user, expanded=false, inactive_group_ids=none) -%}
+{% macro sched_card(s, ad, accounts, groups, user, expanded_id=none, inactive_group_ids=none) -%}
 {%- set account = (accounts | selectattr('id', 'equalto', s.account_id) | list | first) if s.account_id else none -%}
+{#- Разворот ВЫВОДИТСЯ из идентификатора развёрнутой карточки, а не приходит
+    вторым параметром рядом с ним: два параметра об одном факте способны
+    разойтись, и расхождение дало бы ту самую пустую карточку, о которой
+    предупреждает докстринг выше. Идентификатор нужен макросу целиком — его
+    несёт форма тумблера (см. ниже). -#}
+{%- set expanded = expanded_id is not none and expanded_id == s.id -%}
 {%- set account_groups = groups | selectattr('account_id', 'equalto', s.account_id) | list if s.account_id else [] -%}
 {#- `or []` — вторая линия CR-03: строка, испорченная до отказа на входе
     (None вместо списка), не должна выключать экран владельца. -#}
@@ -113,6 +121,16 @@
         маршрут переживает выключенный Alpine (SCH-05). -#}
     <form method="post" action="/schedules/{{ s.id }}/toggle" x-data x-on:change="$el.submit()">
       <input type="hidden" name="return_to" value="editor">
+      {#- Разворот — состояние СЕРВЕРНОЕ: его определяет единственный параметр
+          адреса `sched`, который строит обработчик переключения. Без проноса
+          развёрнутой карточки через POST он подставлял бы туда идентификатор
+          НАЖАТОЙ — и тумблер разворачивал бы свёрнутую карточку, схлопывая
+          соседнюю. Поле едет рядом с `return_to`: механизм проноса состояния
+          через POST в этой форме уже есть, второго заводить незачем. Значение
+          прочтёт `_expanded_from_form` (app/pages/schedules.py). -#}
+      {%- if expanded_id is not none %}
+      <input type="hidden" name="keep_sched" value="{{ expanded_id }}">
+      {%- endif %}
       {{- toggle(name='is_active', checked=s.is_active, id='sched-toggle-' ~ s.id,
                  disabled=resume_blocked,
                  title=('Возобновить нельзя: выберите аккаунт, хотя бы одну группу, день и время.'

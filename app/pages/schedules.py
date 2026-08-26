@@ -185,6 +185,32 @@ def _clean_ints(values: list[str], low: int | None = None, high: int | None = No
     return cleaned
 
 
+def _expanded_from_form(form_data) -> int | None:
+    """Какая карточка была развёрнута в момент нажатия тумблера.
+
+    Разворот карточек в редакторе — состояние СЕРВЕРНОЕ: его определяет
+    единственный параметр адреса `sched`. Разметка проносит идентификатор
+    развёрнутой карточки через POST скрытым полем (ads/includes/sched_card.html),
+    иначе обработчик переключения подставил бы туда идентификатор НАЖАТОЙ и
+    тумблер разворачивал бы свёрнутую карточку, схлопывая соседнюю.
+
+    Коэрция здесь не формальность: это ЕДИНСТВЕННАЯ величина, приходящая из
+    формы в строку адреса, и целочисленность делает её структурно неспособной
+    этот адрес изменить — строка с `&`, `#`, переводом строки или абсолютным
+    URL до конкатенации не доходит (T-mwo-01). Отбрасывание, а не отказ, — по
+    той же причине, что названа в `_clean_ints`: испорченное поле разворота не
+    повод потерять само переключение.
+
+    Принадлежность идентификатора ЭТОМУ объявлению перепроверяет сам редактор
+    (app/pages/ads.py:361-363), поэтому чужой или несуществующий номер даёт
+    страницу без развёрнутых карточек, а не доступ к чужой записи.
+    """
+    try:
+        return int(form_data.get("keep_sched"))
+    except (TypeError, ValueError):
+        return None
+
+
 def _editor_redirect(form_data, ad_id: int | None, schedule_id: int | None = None):
     """Куда вернуть пользователя после правки расписания.
 
@@ -738,8 +764,12 @@ async def schedules_toggle(
             schedule.next_run_at = None
         await db.commit()
     form_data = await request.form()
+    # Возврат несёт разворот, БЫВШИЙ до нажатия, а не идентификатор нажатой
+    # карточки: тумблер меняет состояние расписания и ничего больше.
     return _editor_redirect(
-        form_data, schedule.ad_id if schedule else None, schedule_id
+        form_data,
+        schedule.ad_id if schedule else None,
+        _expanded_from_form(form_data),
     )
 
 
