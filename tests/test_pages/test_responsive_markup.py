@@ -21,7 +21,6 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.analytics.send_analytics import CHART_BUCKETS_PER_DAY
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
@@ -1007,22 +1006,50 @@ async def test_profile_no_utility_classes(authed_client: AsyncClient):
         assert marker not in response.text, marker
 
 
-# --- План 04-04: активность за неделю и ближайшие отправки ------------------
+# --- ЗАПРЕТ НА ВОЗВРАТ НЕДЕЛЬНОЙ АКТИВНОСТИ НА ДАШБОРД (задача 260826-9vv) ---
 #
-# Сетка 7×24 (прежнее решение D-09) снята на приёмке Фазы 4 в пользу бар-чарта
-# макета. Часовая раскладка при этом ОСТАЛАСЬ в модуле аналитики и покрыта
-# своими тестами — снят её показ на экране, а не сама раскладка.
+# Бар-чарт макета (он сменил сетку 7×24 прежнего решения D-09 на приёмке Фазы 4)
+# снят со страницы целиком: он платил за свой ответ потоковым чтением недельного
+# окна журнала отправок на КАЖДОЙ загрузке дашборда. Вместе с ним снят его
+# шаблон, его правила в стилях и обе секции модуля аналитики, кроме него никем
+# не читанные.
+#
+# Признаки блока перечислены ЗДЕСЬ ОДНИМ СПИСКОМ: три теста ниже проверяют
+# разные поверхности (разметка, шаблоны, стили), но предмет у них один, и
+# разъехавшиеся списки признаков дали бы запрет, дырявый ровно в том месте, где
+# список короче. Тем же приёмом задача 260826-6jq свела признаки перечня
+# воркеров в `WORKER_LIST_MARKERS`.
+ACTIVITY_CHART_MARKERS = (
+    "data-chart",
+    "data-chartcol",
+    "data-chartbar",
+    "data-chartdays",
+    "Активность за неделю",
+    "отправок за 6 часов",
+)
+
 
 @pytest.mark.asyncio
-async def test_dashboard_activity_chart_renders_bars_without_table_elements(
+async def test_the_dashboard_carries_no_weekly_activity_block(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """DASH-04: график построен примитивами раскладки, а не таблицей.
+    """На дашборде нет ни столбцов недельной активности, ни их карточки.
 
-    Число столбцов утверждается ЯВНО: график, потерявший сутки или долю,
-    отрисуется без единого исключения и вернёт те же 200, а пользователь увидит
-    неполную неделю. Элементы таблицы запрещены по проекту
-    (test_template_inventory), и график — самый естественный соблазн их вернуть.
+    Отправка сеется НАРОЧНО: на пустых данных блок не рисовался и раньше, и
+    запрет, поставленный без посева, прошёл бы вакуумно — он утверждал бы про
+    пустой дашборд, а не про снятый блок.
+
+    Разбирается ОТРЕНДЕРЕННЫЙ ответ, а не текст шаблона: комментарии Jinja до
+    разметки не доезжают, и объяснение снятия, оставленное в `dashboard.html`,
+    этот тест краснить не должно.
+
+    Соседи по странице проверяются ТЕМ ЖЕ ТЕСТОМ: запрет, прошедший на
+    снесённой заодно странице, запретом не является.
+
+    Запрет инлайн-заливки (D-06) переехал сюда из снятого
+    `test_dashboard_chart_bars_carry_height_but_never_inline_colour`: снятый
+    вместе со своим предметом, он оставил бы страницу без единственной проверки
+    того, что цвет на ней не выписывается инлайн-стилем.
     """
     await _seed_send_log(db_session, ad_title="Отправка недели")
 
@@ -1030,40 +1057,22 @@ async def test_dashboard_activity_chart_renders_bars_without_table_elements(
 
     assert response.status_code == 200
     html = response.text
-    assert "data-chart" in html, "график активности не отрисовался"
-    assert html.count("data-chartcol") == 7 * CHART_BUCKETS_PER_DAY, (
-        "график не 7 суток по четыре доли"
+    for marker in ACTIVITY_CHART_MARKERS:
+        assert marker not in html, (
+            f"карточка недельной активности вернулась на дашборд: {marker!r}"
+        )
+    assert "За неделю отправок не было" not in html, (
+        "пустое состояние снятого блока вернулось на дашборд"
     )
-    # Подпись у каждых суток окна ровно одна.
-    assert html.count("data-chartdays") == 1
-    for marker in ("<table", "<td", "<th ", "<thead", "<tbody"):
-        assert marker not in html, marker
-    for marker in UTILITY_MARKERS:
-        assert marker not in html, marker
+    assert 'style="background' not in html, "заливка выписана инлайн-стилем (D-06)"
 
-
-@pytest.mark.asyncio
-async def test_dashboard_chart_bars_carry_height_but_never_inline_colour(
-    authed_client: AsyncClient, db_session: AsyncSession
-):
-    """Высота столбца — инлайн-размер, цвет — атрибут.
-
-    Запрет D-06 касается инлайн-ЦВЕТА: раскрасить график без него можно только
-    признаком в атрибуте, на который обопрётся и Фаза 6. А размер по данным
-    инлайном в проекте разрешён и применяется — ровно так его задаёт
-    `components/progress.html`. Проверяется и то, и другое: подмена признака
-    заливки инлайн-цветом прошла бы молча.
-    """
-    await _seed_send_log(db_session, ad_title="Отправка недели")
-
-    html = (await authed_client.get("/dashboard")).text
-
-    assert re.search(r'data-empty="[yn]" style="height: \d+%"', html), (
-        "у столбцов нет доли высоты или признака пустоты"
+    assert "data-metrics" in html, "вместе с блоком снесена сетка суточных плиток"
+    assert "data-dashpair" in html, (
+        "вместе с блоком снесена пара «Ближайшие отправки» / «Живая лента»"
     )
-    assert 'data-empty="y"' in html, "пустые доли недели обязаны остаться видимыми"
-    assert 'data-empty="n"' in html, "заполненная доля не помечена"
-    assert 'style="background' not in html, "заливка выписана инлайн-стилем"
+    assert 'hx-get="/dashboard/feed"' in html, (
+        "вместе с блоком снесён опрос живой ленты"
+    )
 
 
 # --- План 06: раздел «Аккаунты» --------------------------------------------
@@ -2089,6 +2098,71 @@ def test_the_dashboard_worker_list_left_no_css_behind():
     for selector in (".session-pill", ".session-dot"):
         assert selector in css, (
             f"вместе с перечнем снесён живой блок пилюли шапки: {selector}"
+        )
+
+
+def test_the_activity_chart_template_is_gone():
+    """Шаблона карточки нет на диске, и его разметки нет ни в одном шаблоне дашборда.
+
+    Недостижимых шаблонов в проекте не оставляют — тем же приёмом выведены
+    `dashboard/includes/recent_send_card.html` (план 04-05) и
+    `dashboard/includes/worker_row.html` (задача 260826-6jq).
+
+    Каждый файл разбирается БЕЗ комментариев Jinja: объяснение снятия,
+    оставленное в `dashboard.html`, разметкой не является и этот тест краснить
+    не должно.
+
+    Живой сосед по каталогу проверяется тем же тестом: запрет прошёл бы и на
+    вычищенном каталоге, а из четырёх файлов снят ровно один.
+    """
+    dashboard_dir = TEMPLATES_DIR / "dashboard"
+
+    assert not (dashboard_dir / "includes" / "activity_chart.html").exists(), (
+        "шаблон карточки недельной активности вернулся на диск"
+    )
+    assert (dashboard_dir / "includes" / "feed_row.html").exists(), (
+        "вместе с карточкой снесён живой сосед по каталогу — строка ленты"
+    )
+
+    owners = {}
+    for path in [*dashboard_dir.rglob("*.html"), TEMPLATES_DIR / "dashboard.html"]:
+        source = _markup_without_comments(path)
+        hits = sorted(m for m in ACTIVITY_CHART_MARKERS if m in source)
+        if hits:
+            owners[path.relative_to(TEMPLATES_DIR).as_posix()] = hits
+
+    assert not owners, f"разметка недельной активности вернулась в шаблоны: {owners}"
+
+
+def test_the_dashboard_activity_chart_left_no_css_behind():
+    """Правил снятой карточки недельной активности в стилях не осталось.
+
+    Стили без разметки — тот же мусор, что и правило, адресованное
+    несуществующему классу: следующий читатель примет их за живые и вернёт под
+    них блок. Разбирается текст БЕЗ комментариев — объяснение снятия,
+    оставленное комментарием в `app.css`, этот тест краснить не должно.
+
+    Два запрета переехали сюда из снятого
+    `test_activity_chart_columns_are_fractional_not_fixed`: правила прежней
+    сетки 7×24 были сняты ещё при замене её столбцами, и снятые вместе со своим
+    тестом эти запреты разрешили бы вернуть сетку под видом графика — ровно то,
+    ради снятия чего их и писали.
+
+    Живые правила проверяются рядом: пара дашборда и строка ленты стоят в тех
+    же полутора сотнях строк стилей и снесёнными заодно быть не должны.
+    """
+    css = _css_without_comments()
+
+    for marker in ACTIVITY_CHART_MARKERS:
+        assert marker not in css, (
+            f"в app.css остались правила снятой карточки активности: {marker!r}"
+        )
+    assert "[data-heatscroll]" not in css, "остался контейнер прокрутки снятой сетки"
+    assert "[data-heatcell]" not in css, "остались правила снятой сетки"
+
+    for selector in ("[data-dashpair]", "[data-feedrow]"):
+        assert selector in css, (
+            f"вместе с карточкой снесён живой блок правил дашборда: {selector}"
         )
 
 
@@ -4577,39 +4651,18 @@ def test_upcoming_badge_sizes_the_messenger_glyph():
         assert f'[data-upbadge][data-channel="{channel}"] .msg' in css, channel
 
 
-def test_activity_chart_columns_are_fractional_not_fixed():
-    """Столбцы графика — ДОЛЕВЫЕ, поэтому мёртвого поля справа не возникает.
-
-    Прежняя сетка 7×24 держала ячейку в жёстких 14px при `width: max-content` и
-    занимала около четырёхсот пикселей в карточке любой ширины — справа
-    оставалась пустота в треть экрана. У долевого столбца этой болезни нет по
-    построению, и фиксированная ширина сюда вернуться не должна.
-
-    Высота контейнера ФИКСИРОВАНА намеренно: доля столбца считается процентом
-    от неё, а высота по содержимому у пустых span схлопнулась бы в ноль ровно
-    так же, как схлопывались ячейки прежней сетки.
-    """
-    css = APP_CSS.read_text(encoding="utf-8")
-
-    assert (
-        "[data-chart] { display: flex; align-items: flex-end; gap: 4px; height: 120px; }"
-        in css
-    ), "контейнер графика потерял высоту — проценты столбцов схлопнутся в ноль"
-    assert "[data-chartcol] {\n  flex: 1;" in css, "столбец перестал быть долевым"
-    # Ноль обязан остаться видимым — час без отправок не дырка в графике.
-    assert "min-height: 2px" in css
-    # Прокрутки этому блоку больше не нужно: долевой столбец влезает всегда.
-    assert "[data-heatscroll]" not in css, "остался контейнер прокрутки снятой сетки"
-    assert "[data-heatcell]" not in css, "остались правила снятой сетки"
-
-
 def test_dashboard_blocks_share_one_head_without_a_divider():
     """Блоки дашборда несут ОДНУ шапку, и разделителя под ней нет.
 
     `card_open(title=...)` рисует `.card__head` с `border-bottom`, которого в
     макете нет ни у одной карточки дашборда: «Ближайшие отправки» шли через
-    него и получали линию, а лента и график — нет, и две карточки одной пары
+    него и получали линию, а «Живая лента» — нет, и две карточки одной пары
     выглядели по-разному.
+
+    Блоков на странице осталось ДВА — пара «Ближайшие отправки» / «Живая
+    лента»: карточка недельной активности снята задачей 260826-9vv вместе со
+    своим шаблоном, а собственная её шапка жила в том шаблоне, а не здесь,
+    поэтому переписи шапок СТРАНИЦЫ её снятие не меняет.
 
     Правило ОДНО на три атрибута: до консолидации их было два с побайтово
     совпадающими телами. Сам примитив `.card__head` с разделителем остаётся —
@@ -4617,9 +4670,6 @@ def test_dashboard_blocks_share_one_head_without_a_divider():
     """
     css = APP_CSS.read_text(encoding="utf-8")
     page = (TEMPLATES_DIR / "dashboard.html").read_text(encoding="utf-8")
-    chart = (
-        TEMPLATES_DIR / "dashboard" / "includes" / "activity_chart.html"
-    ).read_text(encoding="utf-8")
 
     assert (
         "[data-blockhead] { display: flex; align-items: center; gap: 10px;"
@@ -4629,14 +4679,15 @@ def test_dashboard_blocks_share_one_head_without_a_divider():
     assert "[data-feedhead]" not in css
     assert "[data-heathead]" not in css
 
-    # Перепись шапок СТРАНИЦЫ: пара «Ближайшие отправки» / «Живая лента». Третья
-    # шапка принадлежала карточке перечня воркеров и ушла вместе с ней (задача
-    # 260826-6jq). Утверждение остаётся тем же по смыслу — ни один блок страницы
-    # не заводит своей шапки в обход общего атрибута, — и следует за числом
-    # блоков, а не ослабляется: собственная шапка у нового блока это число НЕ
-    # увеличила бы.
+    # Перепись шапок СТРАНИЦЫ: пара «Ближайшие отправки» / «Живая лента» — всё,
+    # что на ней осталось. Одна из прежних трёх принадлежала карточке перечня
+    # воркеров и ушла вместе с ней (задача 260826-6jq); шапка недельной
+    # активности в этой переписи не участвовала никогда — она жила в шаблоне
+    # своего макроса, снятом задачей 260826-9vv. Утверждение остаётся тем же по
+    # смыслу — ни один блок страницы не заводит своей шапки в обход общего
+    # атрибута, — и следует за числом блоков, а не ослабляется: собственная
+    # шапка у нового блока это число НЕ увеличила бы.
     assert page.count("data-blockhead") == 2, "шапки блоков страницы разъехались"
-    assert "data-blockhead" in chart, "у графика своя шапка вместо общей"
 
     # Комментарии Jinja снимаются ПЕРЕД проверкой вызова. Первая редакция этого
     # теста искала подстроку по сырому тексту и краснела на собственном

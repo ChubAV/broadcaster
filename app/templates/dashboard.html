@@ -2,7 +2,6 @@
 {% from "components/card.html" import card_open, card_close %}
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/mono.html" import mono %}
-{% from "dashboard/includes/activity_chart.html" import activity_chart %}
 {% from "dashboard/includes/metric_tile.html" import metric_tile %}
 {% from "dashboard/includes/upcoming_row.html" import upcoming_row %}
 
@@ -134,20 +133,21 @@
 
   </div>{#- /data-dashpair -#}
 
-  {#- Активность за неделю (DASH-04). Блок стоит ПОД парой по макету и читает
-      тот же модуль аналитики, что и плитки: агрегации считаются один раз и
-      переиспользуются.
+  {#- КАРТОЧКИ «АКТИВНОСТЬ ЗА НЕДЕЛЮ» ЗДЕСЬ БОЛЬШЕ НЕТ (задача 260826-9vv).
+      Бар-чарт отвечал на вопрос «когда система работала», но платил за ответ
+      самым дорогим чтением экрана: почасовая раскладка недельного окна журнала
+      отправок стримилась батчами на КАЖДОЙ загрузке страницы и росла вместе с
+      журналом пользователя. Владелец решил, что вопрос не стоит цены; вместе с
+      блоком снято и то чтение, и обе секции аналитики, кроме него никем не
+      читанные.
 
-      Пустота графика определяется по ПИКУ: он равен нулю тогда и только тогда,
-      когда пуст каждый столбец, и второго обхода средствами Jinja этот признак
-      не стоит. -#}
-  {% if chart_view.peak %}
-  {{ activity_chart(chart_view) }}
-  {% else %}
-  {{ empty_state('За неделю отправок не было',
-                 hint='График активности заполнится после первых отправок',
-                 action_label=next_label, action_href=next_href) }}
-  {% endif %}
+      Суточные плитки ОСТАЮТСЯ: они отвечают «что произошло за сутки» одним
+      дешёвым запросом и к недельному окну не привязаны. Вернуть карточку сюда —
+      значит вернуть потоковое чтение семи суток на путь рендера дашборда; это
+      запрещают тесты `test_the_dashboard_carries_no_weekly_activity_block`,
+      `test_the_activity_chart_template_is_gone`,
+      `test_the_dashboard_activity_chart_left_no_css_behind` и
+      `test_the_module_no_longer_carries_the_weekly_activity_surface`. -#}
 
 </div>
 {% endblock %}

@@ -3,8 +3,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import (
-    activity_chart,
-    activity_heatmap,
     recent_feed,
     send_metrics,
     upcoming_sends,
@@ -12,7 +10,6 @@ from app.application.analytics.send_analytics import (
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.pages.common import (
-    _get_timezone_for_user,
     check_is_admin,
     get_user_from_cookie,
     templates,
@@ -78,19 +75,6 @@ async def dashboard(
     # ноль в первые часы суток независимо от того, работала система ночью.
     metrics = await send_metrics(db, user_id=user.id)
 
-    # Активность за неделю (DASH-04). Таймзона приезжает СЮДА, а не берётся
-    # внутри модуля: локальный час — свойство ЧИТАТЕЛЯ экрана, и в админке
-    # Фазы 6 тот же модуль позовут с зоной администратора, а не просматриваемого
-    # пользователя.
-    #
-    # Часовая раскладка считается ОДНИМ запросом, а столбцы графика получаются
-    # её свёрткой: второго обращения к самой растущей таблице системы ради того
-    # же окна не делается. Часовая сетка при этом остаётся доступной Фазе 6 —
-    # снят её показ на этом экране, а не сама раскладка.
-    chart_view = activity_chart(
-        await activity_heatmap(db, user_id=user.id, tz=_get_timezone_for_user(user))
-    )
-
     # Ближайшие отправки (DASH-02). Пометки причин считает модуль: страница не
     # знает ни про черновик объявления, ни про статус аккаунта, ни про флаги
     # групп — иначе то же правило пришлось бы повторить в Фазе 6.
@@ -112,7 +96,6 @@ async def dashboard(
             "user": user,
             "is_admin": check_is_admin(user, settings),
             "metrics": metrics,
-            "chart_view": chart_view,
             "upcoming": upcoming,
             # Пара «подпись, адрес» для пустых состояний блоков (D-40).
             # Счётчики берутся из шелла, уже посчитанного зависимостью маршрута.
