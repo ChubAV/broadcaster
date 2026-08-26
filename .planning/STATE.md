@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 Phase: — (открытых фаз нет; веха v2.0 закрыта и заархивирована)
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-08-26 — Completed quick task 260826-9vv: убрать со страницы dashboard блок «Активность за неделю»
+Last activity: 2026-08-26 — Completed quick task 260826-dc0: плитки дашборда считают календарные сутки в зоне пользователя вместо скользящих 24 часов
 
 **Чем закрыта веха.** Тип закрытия — `override_closeout`: предзакрывающий аудит нашёл 19 пунктов, из них 15 подтверждены осознанно отложенными, 1 закрыт (сверка прослеживаемости GRP-04…GRP-06), 3 оказались артефактом сканера. Разбор — §Deferred Items ниже.
 
@@ -210,6 +210,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 | 260825-of5 | страница accounts не соответствует шаблону new_broadcaster_design.html | 2026-08-25 | 13c6dd2 |  | [260825-of5-stranitsa-accounts-ne-sootvetstvuet-shab](./quick/260825-of5-stranitsa-accounts-ne-sootvetstvuet-shab/) |
 | 260826-6jq | убрать со страницы dashboard блок «Воркеры аккаунтов» | 2026-08-26 | 884a06d |  | [260826-6jq-ubrat-so-stranitsy-dashboard-blok-otvech](./quick/260826-6jq-ubrat-so-stranitsy-dashboard-blok-otvech/) |
 | 260826-9vv | убрать со страницы dashboard блок «Активность за неделю» | 2026-08-26 | a8cfebe |  | [260826-9vv-ubrat-so-stranitsy-dashboard-blok-aktivn](./quick/260826-9vv-ubrat-so-stranitsy-dashboard-blok-aktivn/) |
+| 260826-dc0 | плитки дашборда считают календарные сутки в зоне пользователя вместо скользящих 24 часов | 2026-08-26 | a4654b9 |  | [260826-dc0-plitki-dashborda-schitayut-kalendarnye-s](./quick/260826-dc0-plitki-dashborda-schitayut-kalendarnye-s/) |
 
 ## Deferred Items
 
