@@ -54,3 +54,6 @@ AGENTS.md
 # graphify knowledge graph (generated, ~59MB — rebuild with `graphify update .`)
 graphify-out/
 **/graphify-out/
+
+# GSD run-scoped runtime state (dispatch-isolation sentinel — regenerated per run)
+.gsd/
