@@ -26,7 +26,7 @@ from app.models.send_log import SendLog
 from app.models.user import User
 
 # Подписи четырёх плиток отправок — ровно те, что рендерит dashboard.html.
-TILE_LABELS = ("Отправок за сутки", "Успешно", "Ошибок", "Групп охвачено")
+TILE_LABELS = ("Отправок сегодня", "Успешно", "Ошибок", "Групп охвачено")
 
 # Подписи счётчиков сущностей, снятые D-01. В ТЕЛЕ страницы их быть не должно;
 # в боковом меню одноимённые пункты навигации остаются и сюда не попадают —
@@ -188,42 +188,52 @@ async def test_dashboard_body_has_no_entity_counters(
 
 
 @pytest.mark.asyncio
-async def test_dashboard_tile_counts_last_day_sends(
+async def test_dashboard_tile_counts_todays_sends(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Значение плитки «Отправок за сутки» равно числу записей за сутки."""
+    """Значение плитки «Отправок сегодня» равно числу сегодняшних записей.
+
+    Посев идёт ОТ ГРАНИЦЫ СУТОК, а не от `now` минус несколько часов. Посев от
+    `now` был бы флаковым: между полуночью и тремя часами ночи по зоне читателя
+    «минус три часа» уезжает за локальную полночь, и тест краснел бы ночью на
+    исправном коде.
+    """
     user = await _current_user(db_session)
-    now = datetime.now(timezone.utc)
-    for hours in (1, 2, 3):
-        await _seed_send_log(db_session, user.id, sent_at=now - timedelta(hours=hours))
-    # За пределами окна — в плитку не попадает.
-    await _seed_send_log(db_session, user.id, sent_at=now - timedelta(hours=30))
+    boundary = local_day_start_utc(user)
+    for minutes in (1, 2, 3):
+        await _seed_send_log(
+            db_session, user.id, sent_at=boundary + timedelta(minutes=minutes)
+        )
+    # ДО границы суток — в плитку не попадает.
+    await _seed_send_log(db_session, user.id, sent_at=boundary - timedelta(hours=6))
 
     body = _page_body((await authed_client.get("/dashboard")).text)
 
-    assert _tile_value(body, "Отправок за сутки") == 3
+    assert _tile_value(body, "Отправок сегодня") == 3
 
 
 @pytest.mark.asyncio
 async def test_dashboard_tiles_split_ok_and_failed(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
+    # Посев ОТ ГРАНИЦЫ суток, а не от `now`: см. соседний тест — «минус три
+    # часа» ночью уезжает за локальную полночь и уносит запись из плитки.
     user = await _current_user(db_session)
-    now = datetime.now(timezone.utc)
-    await _seed_send_log(db_session, user.id, sent_at=now - timedelta(hours=1))
+    boundary = local_day_start_utc(user)
+    await _seed_send_log(db_session, user.id, sent_at=boundary + timedelta(minutes=1))
     await _seed_send_log(
-        db_session, user.id, sent_at=now - timedelta(hours=2), status="fail"
+        db_session, user.id, sent_at=boundary + timedelta(minutes=2), status="fail"
     )
     await _seed_send_log(
         db_session,
         user.id,
-        sent_at=now - timedelta(hours=3),
+        sent_at=boundary + timedelta(minutes=3),
         status="account_disconnected",
     )
 
     body = _page_body((await authed_client.get("/dashboard")).text)
 
-    assert _tile_value(body, "Отправок за сутки") == 3
+    assert _tile_value(body, "Отправок сегодня") == 3
     assert _tile_value(body, "Успешно") == 1
     assert _tile_value(body, "Ошибок") == 2
 
@@ -314,7 +324,7 @@ async def test_dashboard_hides_other_users_sends(
 
     body = _page_body((await authed_client.get("/dashboard")).text)
 
-    assert _tile_value(body, "Отправок за сутки") == 0
+    assert _tile_value(body, "Отправок сегодня") == 0
 
 
 @pytest.mark.asyncio

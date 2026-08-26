@@ -84,6 +84,18 @@ async def _seed_send_log(
     return log
 
 
+def _reader(tz_name: str) -> User:
+    """Читатель БЕЗ записи в базу — для проверок арифметики границ.
+
+    Границы считаются в Python (P-3), и поднимать сессию ради них значило бы
+    платить за неё в каждом прогоне: единственное, что берут хелперы границ у
+    пользователя, — значение поля зоны. Пустая строка здесь законна и означает
+    «зоны нет»: ветка падения на UTC живёт в `_get_timezone_for_user` и
+    срабатывает на любом ложном значении.
+    """
+    return User(email="reader@test.com", password_hash="x", name="U", timezone=tz_name)
+
+
 async def _seed_group(db: AsyncSession, user: User, external_id: str) -> Group:
     account = MessengerAccount(
         user_id=user.id, type="wa", credentials="creds", status="active"
@@ -134,7 +146,9 @@ async def test_send_metrics_splits_current_and_previous_window(db_session):
     for i in range(3):
         await _seed_send_log(db_session, user.id, sent_at=NOW - timedelta(hours=30 + i))
 
-    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert metrics.total == 5
     assert metrics.total_prev == 3
@@ -150,7 +164,9 @@ async def test_send_metrics_window_boundary_belongs_to_current(db_session):
         db_session, user.id, sent_at=NOW - timedelta(hours=24, seconds=1)
     )
 
-    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert metrics.total == 1
     assert metrics.total_prev == 1
@@ -161,7 +177,9 @@ async def test_send_metrics_ignores_records_older_than_two_windows(db_session):
     user = await _user(db_session)
     await _seed_send_log(db_session, user.id, sent_at=NOW - timedelta(hours=49))
 
-    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert metrics.total == 0
     assert metrics.total_prev == 0
@@ -183,7 +201,9 @@ async def test_send_metrics_ignores_records_from_the_future(db_session):
     await _seed_send_log(db_session, user.id, sent_at=NOW + timedelta(seconds=1))
     await _seed_send_log(db_session, user.id, sent_at=NOW + timedelta(days=3))
 
-    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert metrics.total == 1, (
         "запись из будущего попала в текущее окно и завысила плитку"
@@ -208,9 +228,11 @@ def test_local_day_bounds_returns_four_moments_in_utc():
     только на бою: SQLite печатает стенные часы и ТЕРЯЕТ смещение, поэтому
     `00:00+03:00` сравнилось бы с `sent_at` как полночь UTC.
     """
-    user = User(email="b@test.com", password_hash="x", name="U", timezone="Europe/Moscow")
+    user = _reader("Europe/Moscow")
 
-    bounds = local_day_bounds(user, now=datetime(2026, 5, 19, 23, 0, tzinfo=timezone.utc))
+    bounds = local_day_bounds(
+        user, now=datetime(2026, 5, 19, 23, 0, tzinfo=timezone.utc)
+    )
 
     assert bounds.current_start == datetime(2026, 5, 19, 21, 0, tzinfo=timezone.utc)
     assert bounds.current_end == datetime(2026, 5, 19, 23, 0, tzinfo=timezone.utc)
@@ -245,7 +267,9 @@ async def test_account_disconnected_counts_as_failed(db_session):
         status=STATUS_ACCOUNT_DISCONNECTED,
     )
 
-    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert metrics.total == 3
     assert metrics.ok == 1
@@ -274,7 +298,9 @@ async def test_unclassifiable_status_is_still_counted(db_session):
         db_session, user.id, sent_at=NOW - timedelta(hours=2), messenger_type=None
     )
 
-    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert metrics.total == 2
     assert metrics.ok == 1
@@ -300,7 +326,9 @@ async def test_groups_counts_distinct_group_ids(db_session):
         db_session, user.id, sent_at=NOW - timedelta(hours=3), group_id=other.id
     )
 
-    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert metrics.groups == 2
     assert metrics.total == 3
@@ -318,7 +346,9 @@ async def test_record_without_group_counts_in_total_but_not_in_groups(db_session
         db_session, user.id, sent_at=NOW - timedelta(hours=2), group_id=None
     )
 
-    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert metrics.groups == 1
     assert metrics.total == 2
@@ -332,7 +362,9 @@ async def test_empty_dataset_gives_zeros_not_none(db_session):
     """func.sum над пустым набором отдаёт NULL — наружу обязан выйти ноль."""
     user = await _user(db_session)
 
-    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert metrics == SendMetrics(0, 0, 0, 0, 0, 0, 0, 0)
     for value in (
@@ -369,7 +401,9 @@ async def test_other_users_records_are_invisible(db_session):
         group_id=stranger_group.id,
     )
 
-    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert metrics == SendMetrics(0, 0, 0, 0, 0, 0, 0, 0)
 
@@ -393,7 +427,9 @@ async def test_previous_window_fields_are_filled(db_session):
         group_id=group.id,
     )
 
-    metrics = await send_metrics(db_session, user_id=user.id, now=NOW)
+    metrics = await send_metrics(
+        db_session, user_id=user.id, bounds=sliding_window_bounds(now=NOW)
+    )
 
     assert metrics.total_prev == 2
     assert metrics.ok_prev == 1

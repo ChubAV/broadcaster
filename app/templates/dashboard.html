@@ -38,8 +38,12 @@
 <div data-stack>
 
   <div data-metrics>
+    {#- Подпись «сегодня», а не «за сутки»: окно считается от локальной полуночи
+        читателя, и в час ночи за ним стоит один час, а не сутки. Прежняя
+        подпись после смены семантики врала бы ровно в те часы, когда разница
+        между двумя окнами наибольшая. -#}
     {%- set d_total = metrics.total_delta %}
-    {{ metric_tile('Отправок за сутки', metrics.total, d_total,
+    {{ metric_tile('Отправок сегодня', metrics.total, d_total,
                    'success' if d_total > 0 else ('danger' if d_total < 0 else 'neutral')) }}
     {%- set d_ok = metrics.ok_delta %}
     {{ metric_tile('Успешно', metrics.ok, d_ok,

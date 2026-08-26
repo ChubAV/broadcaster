@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.analytics.send_analytics import send_metrics
+from app.application.analytics.send_analytics import send_metrics, sliding_window_bounds
 from app.dependencies import get_current_user_id, get_db
 from app.repositories.send_log import SendLogRepository
 
@@ -60,7 +60,14 @@ async def get_stats(
     модуль аналитики обязательным именованным аргументом, и ветки «по всем
     пользователям» там нет вовсе (T-04-41).
     """
-    metrics = await send_metrics(db, user_id=user_id, window=STATS_WINDOW)
+    # ОКНО ОСТАЁТСЯ СКОЛЬЗЯЩИМ (Q3). Плитки дашборда переехали на календарные
+    # сутки читателя, эта сводка — нет: её тридцатидневное окно отвечает на
+    # вопрос «что было за последний месяц», у которого нет ни полуночи, ни
+    # читателя с зоной, а числа маршрута — публичная поверхность, которую
+    # сдвигать молча нельзя.
+    metrics = await send_metrics(
+        db, user_id=user_id, bounds=sliding_window_bounds(window=STATS_WINDOW)
+    )
     return StatsResponse(
         total_sent=metrics.total,
         success_count=metrics.ok,
