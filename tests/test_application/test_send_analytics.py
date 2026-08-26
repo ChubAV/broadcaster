@@ -22,13 +22,8 @@ from app.application.analytics.send_analytics import (
     STATUS_ACCOUNT_DISCONNECTED,
     STATUS_FAIL,
     STATUS_OK,
-    CHART_BUCKET_HOURS,
-    CHART_BUCKETS_PER_DAY,
-    HeatmapView,
     SendMetrics,
     UpcomingSend,
-    activity_chart,
-    activity_heatmap,
     apply_history_filters,
     history_count,
     history_filter_params,
@@ -191,27 +186,6 @@ async def test_send_metrics_ignores_records_from_the_future(db_session):
         "запись из будущего попала в текущее окно и завысила плитку"
     )
     assert metrics.total_prev == 0
-
-
-@pytest.mark.asyncio
-async def test_activity_heatmap_ignores_records_from_the_future(db_session):
-    """Сетка активности тоже не принимает записи «после now».
-
-    Без верхней границы такая запись доезжала до раскладки и КЛАМПОМ
-    приписывалась последним суткам окна — то есть рисовала активность в часе, в
-    котором её ещё не было, причём в самом заметном месте сетки.
-    """
-    user = await _user(db_session)
-    await _seed_send_log(db_session, user.id, sent_at=NOW)
-    await _seed_send_log(db_session, user.id, sent_at=NOW + timedelta(days=2))
-
-    view = await activity_heatmap(
-        db_session, user_id=user.id, now=NOW, tz=timezone.utc, days=7
-    )
-
-    assert sum(sum(row) for row in view.grid) == 1, (
-        "запись из будущего попала в сетку активности"
-    )
 
 
 # --- Три статуса --------------------------------------------------------------
@@ -610,235 +584,6 @@ async def test_history_count_ignores_other_users(db_session):
     assert await history_count(db_session, user_id=user.id) == 0
 
 
-# --- activity_heatmap ---------------------------------------------------------
-#
-# Окно heatmap — СКОЛЬЗЯЩИЕ семь суток от `now` (D-12), а не календарная неделя
-# ПН-ВС макета. Поэтому все ожидания здесь считаются от `now - 7 суток`, и ни
-# одно не выписано календарной датой: тест, привязанный к фиксированному
-# понедельнику, зеленел бы ровно один день в неделю.
-
-# Короткие имена дней НЕЗАВИСИМО от локали процесса: `strftime('%a')` отдаёт
-# английские сокращения на любой машине без установленной русской локали, то
-# есть проверка через него утверждала бы не то, что видит пользователь.
-SHORT_DAYS = ("ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС")
-
-# UTC+3 круглый год: ни у одной из 12 зон проекта (app/constants.py) перехода на
-# летнее время нет, поэтому смещение в тестах постоянно.
-MOSCOW = ZoneInfo("Europe/Moscow")
-
-
-def _filled_cells(view: HeatmapView) -> dict[tuple[int, int], int]:
-    """Непустые ячейки сетки в виде {(ряд, локальный час): число}."""
-    return {
-        (row_index, hour): value
-        for row_index, row in enumerate(view.grid)
-        for hour, value in enumerate(row)
-        if value
-    }
-
-
-@pytest.mark.asyncio
-async def test_heatmap_empty_journal_gives_a_grid_of_zeros(db_session):
-    """Пустой набор данных — сетка нулей, а не пустой список.
-
-    Шаблон обходит `view.grid` рядами и ячейками; пустой список отрисовал бы
-    вместо сетки ничего, и блок «Активность за неделю» выглядел бы сломанным, а
-    не пустым.
-    """
-    user = await _user(db_session)
-
-    view = await activity_heatmap(
-        db_session, user_id=user.id, now=NOW, tz=timezone.utc
-    )
-
-    assert len(view.grid) == 7
-    assert all(len(row) == 24 for row in view.grid)
-    assert _filled_cells(view) == {}
-    assert view.peak == 0
-
-
-@pytest.mark.asyncio
-async def test_heatmap_same_records_land_in_different_cells_per_timezone(db_session):
-    """D-10: ОДИН набор записей раскладывается по локальному часу ЧИТАТЕЛЯ.
-
-    Прямая проверка того, ради чего heatmap считается в Python: запись в 23:30
-    UTC для пользователя в UTC — вечер, а для пользователя в UTC+3 — половина
-    третьего ночи СЛЕДУЮЩИХ локальных суток. Раскладка по UTC-часу показала бы
-    москвичу чужой график активности.
-    """
-    user = await _user(db_session)
-    await _seed_send_log(
-        db_session, user.id, sent_at=datetime(2026, 5, 19, 23, 30, tzinfo=timezone.utc)
-    )
-
-    in_utc = await activity_heatmap(
-        db_session, user_id=user.id, now=NOW, tz=timezone.utc
-    )
-    in_moscow = await activity_heatmap(db_session, user_id=user.id, now=NOW, tz=MOSCOW)
-
-    utc_cells = _filled_cells(in_utc)
-    moscow_cells = _filled_cells(in_moscow)
-
-    assert list(utc_cells.values()) == [1]
-    assert list(moscow_cells.values()) == [1]
-    assert next(iter(utc_cells))[1] == 23, "в UTC запись обязана попасть в час 23"
-    assert next(iter(moscow_cells))[1] == 2, "в UTC+3 запись обязана попасть в час 2"
-    assert utc_cells != moscow_cells
-
-
-@pytest.mark.asyncio
-async def test_heatmap_reads_naive_dates_without_raising(db_session):
-    """Naive-дата SQLite обрабатывается, а не роняет расчёт.
-
-    Колонка объявлена `DateTime(timezone=True)`, но SQLite отдаёт её NAIVE.
-    Сравнение naive и aware в Python поднимает TypeError, поэтому нормализация
-    обязана жить В МОДУЛЕ: без неё дефект существовал бы только на одном из двух
-    диалектов. Тест утверждает и отсутствие исключения, и попадание в нужный час.
-    """
-    user = await _user(db_session)
-    await _seed_send_log(
-        db_session, user.id, sent_at=datetime(2026, 5, 19, 7, 15, tzinfo=timezone.utc)
-    )
-
-    raw = (await db_session.execute(select(SendLog.sent_at))).scalar_one()
-    assert raw.tzinfo is None, "SQLite перестал отдавать naive — тест потерял смысл"
-
-    view = await activity_heatmap(
-        db_session, user_id=user.id, now=NOW, tz=timezone.utc
-    )
-
-    # Ряд считается от начала окна: 13.05 12:00 → 19.05 07:15 = 139 часов,
-    # 139 // 24 = 5. Ряды — сутки ОКНА, а не календарные дни (D-12).
-    assert list(_filled_cells(view)) == [(5, 7)]
-
-
-@pytest.mark.asyncio
-async def test_heatmap_row_labels_follow_the_window_not_a_fixed_monday(db_session):
-    """D-12: подписи рядов — дни ОКНА, а не ПН-ВС макета.
-
-    Окно якорится на локальную полночь читателя, поэтому ряд — календарные
-    сутки, а подпись — их день недели. Последняя подпись есть СЕГОДНЯ: именно
-    это делает её честной для столбцов графика, половина которых до якоря
-    приходилась на соседние сутки.
-    """
-    user = await _user(db_session)
-    origin = NOW.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=6)
-
-    view = await activity_heatmap(
-        db_session, user_id=user.id, now=NOW, tz=timezone.utc
-    )
-
-    expected = [
-        SHORT_DAYS[(origin + timedelta(days=i)).weekday()] for i in range(7)
-    ]
-    assert view.day_labels == expected
-    assert view.day_labels[-1] == SHORT_DAYS[NOW.weekday()], "последний ряд — сегодня"
-    # Окно начинается в четверг, поэтому фиксированная раскладка макета краснеет.
-    assert view.day_labels[0] != "ПН"
-
-
-@pytest.mark.asyncio
-async def test_heatmap_ignores_records_outside_the_window(db_session):
-    user = await _user(db_session)
-    await _seed_send_log(
-        db_session, user.id, sent_at=NOW - timedelta(days=7, hours=2)
-    )
-
-    view = await activity_heatmap(
-        db_session, user_id=user.id, now=NOW, tz=timezone.utc
-    )
-
-    assert _filled_cells(view) == {}
-
-
-@pytest.mark.asyncio
-async def test_heatmap_ignores_other_users(db_session):
-    """T-04-13: владение стоит в базовом WHERE, а не в фильтре поверх."""
-    user = await _user(db_session)
-    stranger = await _user(db_session, email="stranger-heat@test.com")
-    await _seed_send_log(db_session, stranger.id, sent_at=NOW - timedelta(hours=3))
-
-    view = await activity_heatmap(
-        db_session, user_id=user.id, now=NOW, tz=timezone.utc
-    )
-
-    assert _filled_cells(view) == {}
-    assert view.peak == 0
-
-
-@pytest.mark.asyncio
-async def test_heatmap_counts_record_without_group_or_messenger(db_session):
-    """Прохибиция плана: неклассифицируемая запись из сетки НЕ выпадает.
-
-    Отправка без `group_id` и без `messenger_type` произошла в реальный час, и
-    выбросить её ради «чистой» сетки значило бы соврать о том, работала система
-    в этот час или стояла.
-    """
-    user = await _user(db_session)
-    await _seed_send_log(
-        db_session,
-        user.id,
-        sent_at=datetime(2026, 5, 19, 9, 0, tzinfo=timezone.utc),
-        group_id=None,
-        messenger_type=None,
-    )
-
-    view = await activity_heatmap(
-        db_session, user_id=user.id, now=NOW, tz=timezone.utc
-    )
-
-    # 13.05 12:00 → 19.05 09:00 = 141 час, 141 // 24 = 5.
-    assert _filled_cells(view) == {(5, 9): 1}
-    assert view.peak == 1
-
-
-@pytest.mark.asyncio
-async def test_heatmap_cell_counts_every_send_of_the_hour_and_peak_is_the_max(
-    db_session,
-):
-    """D-11: в ячейке ВСЕ отправки часа, а пик — самый горячий час окна."""
-    user = await _user(db_session)
-    hot = datetime(2026, 5, 19, 14, 0, tzinfo=timezone.utc)
-    for minutes in (0, 17, 59):
-        await _seed_send_log(db_session, user.id, sent_at=hot + timedelta(minutes=minutes))
-    await _seed_send_log(
-        db_session, user.id, sent_at=datetime(2026, 5, 18, 5, 30, tzinfo=timezone.utc)
-    )
-
-    view = await activity_heatmap(
-        db_session, user_id=user.id, now=NOW, tz=timezone.utc
-    )
-
-    # Окно якорится на локальную полночь: начало — 14.05 00:00. 19.05 14:00 =
-    # 134-й час окна (ряд 5), 18.05 05:30 = 101-й (ряд 4). Ряд есть КАЛЕНДАРНЫЕ
-    # сутки, поэтому номер ряда равен номеру суток в окне, а не доле от часа
-    # запроса.
-    assert _filled_cells(view) == {(5, 14): 3, (4, 5): 1}
-    assert view.peak == 3
-
-
-@pytest.mark.asyncio
-async def test_heatmap_window_width_follows_the_days_argument(db_session):
-    """Ширина окна — параметр, а не константа: Фаза 6 попросит другое число."""
-    user = await _user(db_session)
-
-    view = await activity_heatmap(
-        db_session, user_id=user.id, now=NOW, tz=timezone.utc, days=3
-    )
-
-    assert len(view.grid) == 3
-    assert len(view.day_labels) == 3
-
-
-def test_heatmap_view_carries_grid_labels_and_peak():
-    """Контракт датакласса: сетка, подписи рядов и пик — три отдельных поля."""
-    view = HeatmapView(grid=[[0] * 24], day_labels=["ПН"], peak=0)
-
-    assert view.grid == [[0] * 24]
-    assert view.day_labels == ["ПН"]
-    assert view.peak == 0
-
-
 # --- upcoming_sends -----------------------------------------------------------
 #
 # Принадлежность расписания идёт через `Ad.user_id`: колонки владельца у
@@ -1176,150 +921,43 @@ def test_upcoming_send_carries_the_row_of_the_block():
     assert item.reason == ""
 
 
-# --- Свёртка часовой сетки в столбцы графика ---------------------------------
-#
-# `activity_chart` ЧИСТАЯ и синхронная: ни базы, ни фикстур, ни asyncio. Она и
-# существует затем, чтобы второго запроса за тем же окном не появилось — все
-# свойства окна (локальная зона, скользящие сутки, подписи по окну) уже держит
-# `activity_heatmap`, и эти тесты их не перепроверяют.
+# --- ЗАПРЕТ НА ВОЗВРАТ НЕДЕЛЬНОЙ АКТИВНОСТИ В МОДУЛЬ (задача 260826-9vv) -----
 
 
-def _grid(*rows: list[int]) -> HeatmapView:
-    """Сетка из явно заданных суток. Подпись ряда роли в свёртке не играет."""
-    return HeatmapView(
-        grid=[list(r) for r in rows],
-        day_labels=[f"Д{i}" for i in range(len(rows))],
-        peak=max((max(r) for r in rows), default=0),
-    )
+def test_the_module_no_longer_carries_the_weekly_activity_surface():
+    """Пяти снятых имён у модуля нет, четыре живых на месте.
 
+    Обе секции — «Heatmap активности» и «Столбцы активности за неделю» —
+    существовали ради одного экрана, и после снятия карточки дашборда
+    потребителей у них не осталось. Часовая раскладка стримила недельное окно
+    журнала отправок батчами на КАЖДОЙ загрузке страницы: снят блок — снято и
+    чтение, и вернуться оно не должно.
 
-def test_chart_folds_each_day_into_four_six_hour_buckets():
-    """Столбец есть СУММА своих шести часов, а суток — четыре столбца."""
-    day = [0] * 24
-    day[0] = 1  # первая доля
-    day[5] = 2  # тоже первая доля: 0-5 включительно
-    day[6] = 4  # вторая доля
-    day[23] = 8  # четвёртая доля
+    Проверка идёт через ОБЪЕКТЫ модуля, а не по его тексту: объяснение снятия
+    оставлено в файле комментарием, и запрет, поставленный по сырому тексту,
+    краснел бы на собственной причине.
 
-    view = activity_chart(_grid(day))
+    Этим же запретом закрыт и модуль маршрута: несуществующее имя он
+    импортировать не сможет, и любой страничный тест увидит это первым.
 
-    assert CHART_BUCKET_HOURS == 6
-    assert len(view.bars) == CHART_BUCKETS_PER_DAY
-    assert view.bars == [3, 4, 0, 8]
-
-
-def test_chart_keeps_days_separate_and_in_order():
-    """Сутки не смешиваются: столбцы идут подряд по суткам окна."""
-    first = [1] + [0] * 23
-    second = [0] * 18 + [2] * 6
-
-    view = activity_chart(_grid(first, second))
-
-    assert len(view.bars) == 2 * CHART_BUCKETS_PER_DAY
-    assert view.bars == [1, 0, 0, 0, 0, 0, 0, 12]
-
-
-def test_chart_peak_is_the_hottest_bucket_not_the_hottest_hour():
-    """Пик считается ПО СТОЛБЦАМ.
-
-    Взять пик часовой сетки значило бы мерить долю шести часов шкалой одного:
-    столбец никогда не дорос бы до полной высоты, и график читался бы ниже, чем
-    он есть.
+    Живые функции проверяются ТЕМ ЖЕ ТЕСТОМ: запрет, прошедший на вычищенном
+    заодно модуле, запретом не является — их читают дашборд, история, админка
+    и биллинг.
     """
-    day = [0] * 24
-    day[0] = 3
-    day[1] = 3  # столбец = 6, при этом самый горячий ЧАС равен трём
+    from app.application.analytics import send_analytics
 
-    view = activity_chart(_grid(day))
+    for name in (
+        "activity_heatmap",
+        "activity_chart",
+        "HeatmapView",
+        "ActivityChartView",
+        "CHART_BUCKETS_PER_DAY",
+    ):
+        assert not hasattr(send_analytics, name), (
+            f"снятая поверхность недельной активности вернулась в модуль: {name}"
+        )
 
-    assert view.peak == 6
-
-
-def test_chart_of_an_empty_window_is_zeros_not_an_empty_list():
-    """Пустое окно даёт столбцы нулей — иначе блок выглядел бы сломанным."""
-    view = activity_chart(_grid([0] * 24, [0] * 24))
-
-    assert view.bars == [0] * (2 * CHART_BUCKETS_PER_DAY)
-    assert view.peak == 0
-
-
-def test_chart_carries_the_day_labels_of_the_window():
-    """Подписи приходят ИЗ сетки: второго источника дней недели не заводится."""
-    source = _grid([0] * 24, [0] * 24)
-    source.day_labels = ["ПТ", "СБ"]
-
-    view = activity_chart(source)
-
-    assert view.day_labels == ["ПТ", "СБ"]
-    # Копия, а не тот же список: правка подписей графика не должна доставать
-    # до сетки, которую Фаза 6 может держать рядом.
-    assert view.day_labels is not source.day_labels
-
-
-# --- Сквозной порядок столбцов ------------------------------------------------
-#
-# Свёртка `activity_chart` читает столбцы СЛЕВА НАПРАВО как время. Это верно
-# ровно тогда, когда ряд сетки — календарные сутки читателя: колонка ряда есть
-# АБСОЛЮТНЫЙ локальный час (`grid[day][local.hour]`), а не смещение от начала
-# ряда. Пока окно якорилось моментом запроса, ряд начинался в произвольный час,
-# и левая часть ряда была ПОЗЖЕ правой — график шёл против времени.
-#
-# Проверки ниже держат сквозное свойство: сетка и свёртка вместе, с базой, а не
-# синтетическая сетка в чистую функцию. Пять тестов свёртки выше не могут
-# покраснеть на этом дефекте — они подают уже готовые ряды.
-
-
-@pytest.mark.asyncio
-async def test_chart_bars_run_in_chronological_order_across_local_midnight(db_session):
-    """Отправка, случившаяся РАНЬШЕ, стоит ЛЕВЕЕ — через локальную полночь тоже.
-
-    Две отправки по разные стороны полуночи читателя: 19.05 20:00 и 20.05 09:00.
-    Вторая произошла на 13 часов позже, значит её столбец обязан стоять правее.
-    При якоре окна на момент запроса (12:00) обе попадали в ОДИН ряд, и час 9
-    оказывался левее часа 20 — то есть более поздняя отправка рисовалась левее
-    более ранней.
-    """
-    user = await _user(db_session)
-    earlier = datetime(2026, 5, 19, 20, 0, tzinfo=timezone.utc)
-    later = datetime(2026, 5, 20, 9, 0, tzinfo=timezone.utc)
-    await _seed_send_log(db_session, user.id, sent_at=earlier)
-    await _seed_send_log(db_session, user.id, sent_at=later)
-
-    view = activity_chart(
-        await activity_heatmap(db_session, user_id=user.id, now=NOW, tz=timezone.utc)
-    )
-
-    filled = [i for i, value in enumerate(view.bars) if value]
-    assert len(filled) == 2, f"обе отправки обязаны стоять в РАЗНЫХ столбцах: {filled}"
-    assert filled[0] < filled[1]
-    # Ряд — календарные сутки, поэтому столбцы разъезжаются и по суткам тоже:
-    # доля 18-23 предыдущих суток и доля 6-11 текущих.
-    assert filled == [23, 25]
-
-
-@pytest.mark.asyncio
-async def test_chart_bar_falls_under_its_own_day_label(db_session):
-    """Подпись суток честна: столбец лежит под подписью ТЕХ суток, когда он был.
-
-    Подписей `days`, столбцов `days * CHART_BUCKETS_PER_DAY`, и шаблон кладёт
-    по четыре столбца на подпись. Пока ряд начинался в полдень, половина его
-    данных приходилась на СЛЕДУЮЩИЕ сутки, и подпись врала о половине столбцов.
-    """
-    user = await _user(db_session)
-    # Последние сутки окна: 20.05, среда.
-    await _seed_send_log(
-        db_session, user.id, sent_at=datetime(2026, 5, 20, 3, 0, tzinfo=timezone.utc)
-    )
-
-    grid_view = await activity_heatmap(
-        db_session, user_id=user.id, now=NOW, tz=timezone.utc
-    )
-    view = activity_chart(grid_view)
-
-    filled = [i for i, value in enumerate(view.bars) if value]
-    assert len(filled) == 1
-    day_of_bar = filled[0] // CHART_BUCKETS_PER_DAY
-    assert day_of_bar == len(view.day_labels) - 1, "отправка сегодняшних суток"
-    assert view.day_labels[day_of_bar] == SHORT_DAYS[
-        datetime(2026, 5, 20, tzinfo=timezone.utc).weekday()
-    ]
+    for name in ("send_metrics", "upcoming_sends", "recent_feed", "history_count"):
+        assert hasattr(send_analytics, name), (
+            f"вместе с недельной активностью снесена живая функция модуля: {name}"
+        )
