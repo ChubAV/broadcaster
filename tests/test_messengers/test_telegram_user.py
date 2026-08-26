@@ -1,7 +1,9 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
+from telethon.errors import ForbiddenError, PeerIdInvalidError
 from app.messengers.base import MessengerFetchError
 from app.messengers.telegram_user import (
+    PEER_UNREACHABLE_MESSAGE,
     TelegramUserMessenger,
     start_qr_auth,
     get_qr_status,
@@ -42,26 +44,58 @@ async def test_send_text_message(messenger):
 
 @pytest.mark.asyncio
 async def test_send_message_with_image(messenger):
-    messenger.client.send_file = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.content = b"fake-image-bytes"
-    mock_response.raise_for_status = MagicMock()
-    mock_http = AsyncMock()
-    mock_http.get = AsyncMock(return_value=mock_response)
-    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
-    mock_http.__aexit__ = AsyncMock(return_value=False)
+    """Одна картинка уезжает ОДИНОЧНЫМ файлом, а не списком из одного элемента.
 
-    with patch("app.messengers.telegram_user.httpx.AsyncClient", return_value=mock_http):
+    Список уводит telethon в альбомную ветку `_send_album`, где первым же
+    запросом идёт `messages.uploadMedia` — тот самый, что получал от сервера
+    400 PEER_ID_INVALID. Одиночный файл идёт через `messages.sendMedia` и
+    `uploadMedia` не будит вовсе, поэтому утверждение здесь прямое: это НЕ
+    список.
+    """
+    messenger.client.send_file = AsyncMock()
+
+    with patch(
+        "app.messengers.telegram_user.httpx.AsyncClient",
+        return_value=_http_client_returning_image_bytes(),
+    ):
         result = await messenger.send_message(
             "-100123", "Hello!", images=["https://cdn.example.com/bucket/img.jpg"]
         )
+
     assert result["ok"] is True
     messenger.client.send_file.assert_called_once()
-    # Verify BytesIO with filename was passed
-    sent_files = messenger.client.send_file.call_args[0][1]
-    assert len(sent_files) == 1
-    assert sent_files[0].name == "img.jpg"
-    assert sent_files[0].read() == b"fake-image-bytes"
+    sent = messenger.client.send_file.call_args[0][1]
+    assert not isinstance(sent, list)
+    assert sent.name == "img.jpg"
+    assert sent.read() == b"fake-image-bytes"
+
+
+@pytest.mark.asyncio
+async def test_two_images_still_go_as_an_album(messenger):
+    """Две картинки продолжают уходить списком: граница живёт между 1 и 2.
+
+    Существующий тест на ТРИ картинки этой границы не держит: перепутанное
+    сравнение «не больше единицы» вместо «ровно один» он пропустил бы, и
+    альбом из двух картинок уехал бы одиночным файлом, потеряв вторую.
+    """
+    messenger.client.send_file = AsyncMock()
+    imgs = [
+        "https://cdn.example.com/bucket/img1.jpg",
+        "https://cdn.example.com/bucket/img2.jpg",
+    ]
+
+    with patch(
+        "app.messengers.telegram_user.httpx.AsyncClient",
+        return_value=_http_client_returning_image_bytes(),
+    ):
+        result = await messenger.send_message("-100123", "Hello!", images=imgs)
+
+    assert result["ok"] is True
+    sent = messenger.client.send_file.call_args[0][1]
+    assert isinstance(sent, list)
+    assert len(sent) == 2
+    assert sent[0].name == "img1.jpg"
+    assert sent[1].name == "img2.jpg"
 
 
 @pytest.mark.asyncio
@@ -98,6 +132,165 @@ async def test_send_message_error(messenger):
     result = await messenger.send_message("-100123", "Hello!")
     assert result["ok"] is False
     assert "Flood wait" in result["error"]
+
+
+# --- Разрешение peer перед отправкой ---
+
+
+def _http_client_returning_image_bytes():
+    """Подменённый `httpx.AsyncClient`, отдающий одни и те же байты картинки.
+
+    Заведён, чтобы тесты про адресата отправки не тонули в шести строках
+    настройки загрузки: их предмет — какая сущность уехала в telethon, а не
+    какие байты приехали из S3.
+    """
+    mock_response = MagicMock()
+    mock_response.content = b"fake-image-bytes"
+    mock_response.raise_for_status = MagicMock()
+    mock_http = AsyncMock()
+    mock_http.get = AsyncMock(return_value=mock_response)
+    mock_http.__aenter__ = AsyncMock(return_value=mock_http)
+    mock_http.__aexit__ = AsyncMock(return_value=False)
+    return mock_http
+
+
+@pytest.mark.asyncio
+async def test_send_file_receives_a_resolved_peer_not_a_bare_id(messenger):
+    """Ветка картинок адресуется разрешённой сущностью, а не голым числом.
+
+    Голое число и получало от сервера 400 PEER_ID_INVALID на
+    `messages.uploadMedia`: строка сессии не хранит `access_hash`, кэш
+    сущностей у свежего клиента пуст, и telethon вынужден угадывать peer по
+    знаку числа. Сравнение идёт через `is` с объектом, который вернул
+    подменённый `get_input_entity`: фикстура отдаёт `AsyncMock`, поэтому
+    проверка «не число» была бы зелёной и на сломанном коде.
+    """
+    peer = object()
+    messenger.client.get_input_entity = AsyncMock(return_value=peer)
+    messenger.client.send_file = AsyncMock()
+
+    with patch(
+        "app.messengers.telegram_user.httpx.AsyncClient",
+        return_value=_http_client_returning_image_bytes(),
+    ):
+        result = await messenger.send_message(
+            "-100123", "Hello!", images=["https://cdn.example.com/bucket/img.jpg"]
+        )
+
+    assert result["ok"] is True
+    assert messenger.client.send_file.call_args[0][0] is peer
+
+
+@pytest.mark.asyncio
+async def test_the_text_path_sends_to_a_resolved_peer(messenger):
+    """Текстовая ветка адресуется той же разрешённой сущностью.
+
+    Текст доходит и с голым числом — `messages.sendMessage` не проверяет peer
+    так строго, как `uploadMedia`. Поэтому ветка выглядит исправной, и её
+    легко оставить с `int(group_id)`; разойдясь с остальными, она вернёт
+    исходный дефект на первом же изменении соседнего кода.
+    """
+    peer = object()
+    messenger.client.get_input_entity = AsyncMock(return_value=peer)
+    messenger.client.send_message = AsyncMock()
+
+    result = await messenger.send_message("-100123", "Hello!")
+
+    assert result["ok"] is True
+    assert messenger.client.send_message.call_args[0][0] is peer
+
+
+@pytest.mark.asyncio
+async def test_the_forbidden_media_fallback_also_uses_the_resolved_peer(messenger):
+    """Текстовый откат после `ForbiddenError` адресуется той же сущностью.
+
+    Точка отправки третья и самая незаметная: она срабатывает только в
+    группах, где запрещены медиа. Без собственного теста она остаётся с
+    голым числом, и отказ всплывает не на прогоне, а в бою и только у части
+    групп — то есть выглядит как беда конкретной группы, а не как дефект.
+    """
+    peer = object()
+    messenger.client.get_input_entity = AsyncMock(return_value=peer)
+    messenger.client.send_file = AsyncMock(
+        side_effect=ForbiddenError(request=None, message="CHAT_SEND_MEDIA_FORBIDDEN")
+    )
+    messenger.client.send_message = AsyncMock()
+
+    with patch(
+        "app.messengers.telegram_user.httpx.AsyncClient",
+        return_value=_http_client_returning_image_bytes(),
+    ):
+        result = await messenger.send_message(
+            "-100123", "Hello!", images=["https://cdn.example.com/bucket/img.jpg"]
+        )
+
+    assert result["ok"] is True
+    assert messenger.client.send_message.call_args[0][0] is peer
+
+
+@pytest.mark.asyncio
+async def test_a_cold_entity_cache_is_warmed_exactly_once(messenger):
+    """Холодный кэш сущностей прогревается одним `get_dialogs` и ровно раз.
+
+    Клиент создаётся заново на каждую отправку, поэтому кэш сущностей пуст и
+    первый `get_input_entity` законно поднимает `ValueError`. Прогрев обязан
+    стоить РОВНО один запрос: `get_dialogs()` у свежего клиента не бесплатен,
+    а отправка идёт по расписанию раз за разом.
+    """
+    peer = object()
+    messenger.client.get_input_entity = AsyncMock(side_effect=[ValueError("cold"), peer])
+    messenger.client.get_dialogs = AsyncMock(return_value=[])
+    messenger.client.send_message = AsyncMock()
+
+    result = await messenger.send_message("-100123", "Hello!")
+
+    assert result["ok"] is True
+    assert messenger.client.get_dialogs.await_count == 1
+    assert messenger.client.get_input_entity.await_count == 2
+    assert messenger.client.send_message.call_args[0][0] is peer
+
+
+@pytest.mark.asyncio
+async def test_a_peer_that_stays_unresolved_reads_as_a_lost_group(messenger):
+    """Неразрешимый peer — это «группа потеряна», а не неизвестный сбой.
+
+    `ValueError` из `get_input_entity` после прогрева типом неотличим от
+    любого другого `ValueError` в теле отправки и утекал в catch-all, показывая
+    пользователю английскую строку. Здесь же закреплён потолок прогрева:
+    второй `get_dialogs` превратил бы навсегда потерянную группу, которой
+    расписание шлёт отправку раз за разом, в источник FloodWait на аккаунте.
+    """
+    messenger.client.get_input_entity = AsyncMock(side_effect=ValueError("cold"))
+    messenger.client.get_dialogs = AsyncMock(return_value=[])
+    messenger.client.send_message = AsyncMock()
+
+    result = await messenger.send_message("-100123", "Hello!")
+
+    assert result["ok"] is False
+    assert result["no_retry"] is True
+    assert result["error"] == PEER_UNREACHABLE_MESSAGE
+    assert messenger.client.get_dialogs.await_count == 1
+    messenger.client.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_peer_id_invalid_is_not_reported_to_the_user_in_english(messenger):
+    """Отказ сервера PEER_ID_INVALID доходит до экрана по-русски.
+
+    `result["error"]` уезжает в `group.last_error` и в `SendLog`, то есть прямо
+    в историю отправок пользователя. `str(e)` от telethon несёт имя класса
+    запроса и подсказку про ботов — это строка лога, а не текст экрана.
+    Отсутствие подстроки "Peer" и есть проверка того, что наружу ушла
+    константа, а не текст библиотеки.
+    """
+    messenger.client.send_message = AsyncMock(side_effect=PeerIdInvalidError(request=None))
+
+    result = await messenger.send_message("-100123", "Hello!")
+
+    assert result["ok"] is False
+    assert result["no_retry"] is True
+    assert result["error"] == PEER_UNREACHABLE_MESSAGE
+    assert "Peer" not in result["error"]
 
 
 @pytest.mark.asyncio
