@@ -1,21 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: Redesign
-status: completed
-stopped_at: Completed quick task 260826-ojg; no phase open
-last_updated: "2026-08-26T18:10:00.000Z"
+milestone: v2.1
+milestone_name: HTMX-first
+status: planning
+last_updated: "2026-08-26T19:19:05.263Z"
 last_activity: 2026-08-26
-last_activity_desc: "Quick task 260826-ojg — issue #45: обёртка-форма внутри `.sched-card__body` объявлена flex-колонкой с промежутком родителя (16px); три слипания подблоков развёрнутой карточки расписания закрыты одним правилом"
-state_head: 12f5302
 progress:
-  total_phases: 7
-  completed_phases: 7
-  total_plans: 110
-  completed_plans: 110
-  percent: 100
-current_phase: null
-current_phase_name: ""
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -33,14 +28,10 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 
 ## Current Position
 
-Phase: — (открытых фаз нет; веха v2.0 закрыта и заархивирована)
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-08-26 — Completed quick task 260826-mwo: тумблер включения/выключения расписания на /ads/{id}/edit больше не сворачивает и не разворачивает карточки
-
-**Чем закрыта веха.** Тип закрытия — `override_closeout`: предзакрывающий аудит нашёл 19 пунктов, из них 15 подтверждены осознанно отложенными, 1 закрыт (сверка прослеживаемости GRP-04…GRP-06), 3 оказались артефактом сканера. Разбор — §Deferred Items ниже.
-
-⚠️ **Отгружено в репозиторий, но НЕ на боевую базу.** Очередь ревизий Alembic `0013`…`0020` не выкачена (D-26); выкат кода и выкат очереди неотделимы.
+Status: Defining requirements
+Last activity: 2026-08-26 — Milestone v2.1 started
 
 ## Performance Metrics
 
