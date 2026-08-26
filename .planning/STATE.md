@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Redesign
 status: completed
-stopped_at: Completed quick task 260826-jql; no phase open
-last_updated: "2026-08-26T14:51:06.659Z"
+stopped_at: Completed quick task 260826-ojg; no phase open
+last_updated: "2026-08-26T18:10:00.000Z"
 last_activity: 2026-08-26
-last_activity_desc: "Quick task 260826-jql — Telegram: peer разрешается через get_input_entity один раз за отправку с одним прогревом кэша диалогов; одиночная картинка уходит не списком, минуя messages.uploadMedia; потеря доступа к группе отвечает русской константой с no_retry"
-state_head: 731080c
+last_activity_desc: "Quick task 260826-ojg — issue #45: обёртка-форма внутри `.sched-card__body` объявлена flex-колонкой с промежутком родителя (16px); три слипания подблоков развёрнутой карточки расписания закрыты одним правилом"
+state_head: 12f5302
 progress:
   total_phases: 7
   completed_phases: 7
@@ -116,6 +116,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - Phase 5 (D-27 → AR-05-01, 2026-08-25): подписка на событие `payment.canceled` в кабинете ЮKassa принята как риск вместо включения. Цена названа: отменённый платёж остаётся `pending` навсегда, журнал платежей врёт про деньги. Код готов — снятие риска не требует правок.
 - Phase 5 (WR-07 раунда 3 → AR-05-02, 2026-08-25): монтирование `/var/run/docker.sock` в контейнер `web` переведено из диспозиции `transfer` в `accept` с акцептором `chubav`. Причина перевода — не смена оценки риска, а то, что `transfer` семь раундов держался без названного получателя и потому передачей не был. Экспозиция жива.
 - Phase 5 (T-05-66, открыт ниже порога): `Subscription.is_active` остался входом решения о доступе (`app/application/billing/subscription_period.py:148`), хотя объявленная митигация обещала перевести решение на `expires_at`. Обнаружено при этом, что НИ ОДИН путь в `app/` флаг не снимает — вход, который никакой код не может изменить.
+- Quick 260826-ojg (2026-08-26): issue #45 — обёртка-форма внутри `.sched-card__body` объявлена flex-колонкой с промежутком РОДИТЕЛЯ (16px), а не своим: `gap` действует между детьми контейнера, а подблоки лежат внутри формы сохранения, поэтому ритм тела до них не доходил. Все три дефекта скриншота — один корень. Селектор несёт `:has(.sched-card__block)`: без него правило захватило бы форму удаления и `stretch` растянул бы «УДАЛИТЬ РАСПИСАНИЕ» во всю ширину карточки. ⚠️ Зрительный результат в браузере машинной проверки не имеет — проверяется ПРАВИЛО, а не вёрстка (D7 в SUMMARY, `human_judgment: true`).
 
 ### Pending Todos
 
@@ -214,6 +215,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 | 260826-jql | Telegram: разрешать peer перед отправкой картинок (PeerIdInvalidError на UploadMediaRequest) | 2026-08-26 | bf2a6b5 | Needs Review | [260826-jql-telegram-razreshat-peer-pered-otpravkoy-](./quick/260826-jql-telegram-razreshat-peer-pered-otpravkoy-/) |
 | 260826-m5w | issue 44: на /ads/{id}/edit сжимаются и обрезаются иконки мессенджеров в шапке карточки расписания | 2026-08-26 | 41769e6 |  | [260826-m5w-posmotri-issue-44-i-isprav-problemmy-ver](./quick/260826-m5w-posmotri-issue-44-i-isprav-problemmy-ver/) |
 | 260826-mwo | на /ads/{id}/edit тумблер включения/выключения расписания сворачивал/разворачивал карточки — редирект переписывал `?sched=` | 2026-08-26 | 2111a9f |  | [260826-mwo-na-stranitse-redaktirovaniya-obyavleniya](./quick/260826-mwo-na-stranitse-redaktirovaniya-obyavleniya/) |
+| 260826-ojg | issue 45: на /ads/{id}/edit подблоки развёрнутой карточки расписания слипались — обёртка-форма гасила промежуток тела карточки | 2026-08-26 | 12f5302 |  | [260826-ojg-posmotri-issue-45-i-isprav-problemmy-ver](./quick/260826-ojg-posmotri-issue-45-i-isprav-problemmy-ver/) |
 
 ## Deferred Items
 
@@ -288,7 +290,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ## Session Continuity
 
 Last session: 2026-08-26
-Stopped at: Completed quick task 260826-jql (Telegram: разрешение peer перед отправкой). Веха v2.0 закрыта и заархивирована — 7/7 фаз, 110/110 планов, 41/41 требование. Открытых фаз нет.
+Stopped at: Completed quick task 260826-ojg (issue #45: ритм подблоков развёрнутой карточки расписания). Веха v2.0 закрыта и заархивирована — 7/7 фаз, 110/110 планов, 41/41 требование. Открытых фаз нет.
 Resume file: None
 
 ## Operator Next Steps
