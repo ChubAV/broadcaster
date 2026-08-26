@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 Phase: — (открытых фаз нет; веха v2.0 закрыта и заархивирована)
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-08-26 — Completed quick task 260826-m5w: issue 44 — на /ads/{id}/edit сжимаются и обрезаются иконки мессенджеров в шапке карточки расписания
+Last activity: 2026-08-26 — Completed quick task 260826-mwo: тумблер включения/выключения расписания на /ads/{id}/edit больше не сворачивает и не разворачивает карточки
 
 **Чем закрыта веха.** Тип закрытия — `override_closeout`: предзакрывающий аудит нашёл 19 пунктов, из них 15 подтверждены осознанно отложенными, 1 закрыт (сверка прослеживаемости GRP-04…GRP-06), 3 оказались артефактом сканера. Разбор — §Deferred Items ниже.
 
@@ -213,6 +213,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 | 260826-dc0 | плитки дашборда считают календарные сутки в зоне пользователя вместо скользящих 24 часов | 2026-08-26 | a4654b9 |  | [260826-dc0-plitki-dashborda-schitayut-kalendarnye-s](./quick/260826-dc0-plitki-dashborda-schitayut-kalendarnye-s/) |
 | 260826-jql | Telegram: разрешать peer перед отправкой картинок (PeerIdInvalidError на UploadMediaRequest) | 2026-08-26 | bf2a6b5 | Needs Review | [260826-jql-telegram-razreshat-peer-pered-otpravkoy-](./quick/260826-jql-telegram-razreshat-peer-pered-otpravkoy-/) |
 | 260826-m5w | issue 44: на /ads/{id}/edit сжимаются и обрезаются иконки мессенджеров в шапке карточки расписания | 2026-08-26 | 41769e6 |  | [260826-m5w-posmotri-issue-44-i-isprav-problemmy-ver](./quick/260826-m5w-posmotri-issue-44-i-isprav-problemmy-ver/) |
+| 260826-mwo | на /ads/{id}/edit тумблер включения/выключения расписания сворачивал/разворачивал карточки — редирект переписывал `?sched=` | 2026-08-26 | 2111a9f |  | [260826-mwo-na-stranitse-redaktirovaniya-obyavleniya](./quick/260826-mwo-na-stranitse-redaktirovaniya-obyavleniya/) |
 
 ## Deferred Items
 
