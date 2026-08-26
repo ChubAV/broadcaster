@@ -276,9 +276,23 @@ class TelegramUserMessenger(BaseMessenger):
                         buf = io.BytesIO(resp.content)
                         buf.name = filename
                         files.append(buf)
+                # Одна картинка уходит ОДИНОЧНЫМ файлом, а не списком из
+                # одного элемента. На список telethon сворачивает в альбомную
+                # ветку `_send_album` (`telethon/client/uploads.py`, около
+                # строки 540), где каждый файл сперва конвертируется в
+                # `InputPhoto` через `messages.uploadMedia` — это ПЕРВЫЙ запрос
+                # альбома, несущий peer, и именно он получал от сервера отказ.
+                # Одиночный файл идёт через `messages.sendMedia`, и
+                # `uploadMedia` не вызывается вовсе.
+                #
+                # Это ВТОРАЯ независимая мера, а не замена разрешению peer выше:
+                # разрешённый peer чинит и альбом тоже, а одиночный файл убирает
+                # с пути самый хрупкий запрос у самого частого случая — одной
+                # картинки в объявлении.
+                payload = files[0] if len(files) == 1 else files
                 try:
                     await self.client.send_file(
-                        peer, files, caption=text,
+                        peer, payload, caption=text,
                         force_document=False,
                     )
                 except ForbiddenError:
