@@ -1289,6 +1289,14 @@ HTMX_CONFIG_RE = re.compile(
 # своим хостом, поэтому ищется хвост, а не вся ссылка.
 HTMX_RUNTIME_REF = "/static/js/htmx.min.js"
 
+# То же в ИСХОДНИКЕ шаблона: там стоит вызов url_for, а не готовый путь.
+HTMX_RUNTIME_SOURCE_REF = "js/htmx.min.js"
+
+# ЕДИНСТВЕННЫЙ законный владелец ссылки на рантайм среди шаблонов (D-01).
+# Имя выписано здесь, а не выведено обходом: тест, назначающий владельцем того,
+# кого нашёл, согласился бы с переездом тега куда угодно.
+HTMX_RUNTIME_OWNER = "includes/htmx_config.html"
+
 
 def _htmx_config_of(html: str, shell: str) -> dict:
     """Блок конфигурации, вытащенный из ОТРЕНДЕРЕННОГО документа и разобранный.
@@ -1408,3 +1416,50 @@ async def test_auth_shell_carries_htmx_config(client: AsyncClient):
     html = response.text
     _assert_config_contract(_htmx_config_of(html, "auth_base.html"), "auth_base.html")
     _assert_config_precedes_runtime(html, "auth_base.html")
+
+
+@pytest.mark.asyncio
+async def test_main_shell_carries_htmx_config(authed_client: AsyncClient):
+    """base.html: тот же блок приезжает на /dashboard тем же ОДНИМ include.
+
+    Тест-близнец предыдущего, и парой они обязаны быть именно парой: шеллов в
+    проекте два, конфигурация одна, и утверждение, снятое с одной страницы,
+    ничего не говорит о второй. Подпись называет ШЕЛЛ, а не адрес — /dashboard
+    здесь представитель всех 26 страничных маршрутов под base.html.
+    """
+    response = await authed_client.get("/dashboard")
+    assert response.status_code == 200
+
+    html = response.text
+    _assert_config_contract(_htmx_config_of(html, "base.html"), "base.html")
+    _assert_config_precedes_runtime(html, "base.html")
+
+
+def test_htmx_runtime_tag_has_single_source():
+    """D-01: ссылка на рантайм htmx живёт в ШАБЛОНАХ ровно в одном файле.
+
+    Машинная форма доктрины «один источник, не вторая копия». Литеральный тег,
+    вернувшийся в шелл, означал бы, что конфигурация и рантайм снова могут
+    разъехаться: блок остался бы в include, а рантайм подгружался бы вторым
+    тегом выше него — и htmx прочитал бы умолчания, не сказав ни слова.
+
+    Обход РЕКУРСИВНЫЙ (rglob, не glob) по образцу _all_templates()
+    из test_templates/test_components.py:856-865: плоский обход не увидел бы
+    файл в подкаталоге, а именно там единственный законный владелец и живёт.
+
+    Утверждается МНОЖЕСТВО путей, а не их число: сообщение об отказе обязано
+    называть файл-нарушитель, иначе оно сообщает о расхождении счёта и
+    оставляет поиск виновника читателю.
+    """
+    templates_dir = PROJECT_ROOT / "app" / "templates"
+    owners = {
+        path.relative_to(templates_dir).as_posix()
+        for path in sorted(templates_dir.rglob("*.html"))
+        if HTMX_RUNTIME_SOURCE_REF in path.read_text(encoding="utf-8")
+    }
+
+    assert owners == {HTMX_RUNTIME_OWNER}, (
+        "ссылка на рантайм htmx перестала быть единственной в шаблонах:\n"
+        f"  найдено:  {sorted(owners)}\n"
+        f"  ожидался: [{HTMX_RUNTIME_OWNER}]"
+    )
