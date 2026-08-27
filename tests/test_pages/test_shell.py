@@ -1,6 +1,9 @@
 """Wave 0: покрытие UI-01, UI-02, UI-03, UI-06 для нового шелла (План 01-01)."""
 
 import ast
+import base64
+import hashlib
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -38,7 +41,11 @@ async def test_static_js_served(client: AsyncClient):
     for path in ("/static/js/htmx.min.js", "/static/js/alpine.min.js"):
         response = await client.get(path)
         assert response.status_code == 200, path
-        # Вендоренные рантаймы: htmx ~47.7 КБ, Alpine ~43.4 КБ
+        # Вендоренные рантаймы: htmx ~51.2 КБ (2.0.10, план 07-01 — записанная
+        # здесь прежде величина снята вместе с файлом 1.9.10, а не дополнена
+        # поправкой), Alpine ~43.4 КБ.
+        # Порог здесь грубый и таким остаётся: подлинность htmx утверждается не
+        # им, а полным SHA-384 в test_vendored_htmx_is_the_declared_artifact.
         assert len(response.content) > 10_000, path
 
 
@@ -1221,3 +1228,183 @@ def test_dashboard_page_has_no_second_source_of_the_sessions_number():
     assert "sessions_online" not in source, (
         "страница дашборда считает индикатор сама вместо чтения контракта шелла"
     )
+
+
+# --- Фаза 7 / план 07-01: рантайм htmx 2.0.10 и блок его конфигурации --------
+#
+# Три константы ниже ВЫПИСАНЫ ЗДЕСЬ, а не выведены из проверяемого артефакта.
+# Тест, считающий ожидание с того же файла, который проверяет, согласился бы с
+# любой правкой — прецедент записан у GATED_ROUTERS (test_access_gate.py:41-52).
+
+HTMX_VERSION = "2.0.10"
+
+# ЗАПИСЬ О ТОМ, ЧТО ИМЕННО ВВЕЗЕНО.
+# Файл `app/static/js/htmx.min.js` — дистрибутивный минифицированный htmx
+# 2.0.10, скачанный с https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js
+# (зеркало https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js байт-идентично).
+# Вытеснил собой 1.9.10 (47 755 Б) планом 07-01.
+#
+# Хеш стоит здесь, а НЕ атрибутом integrity на теге рантайма, и это решение
+# (D-04): тот же хеш в двух местах при рассинхроне заставил бы браузер отбросить
+# файл МОЛЧА — пользователь получил бы мёртвый интерфейс без единого сообщения.
+# Здесь рассинхрон краснеет в суите, а не у пользователя.
+#
+# ПРИ СЛЕДУЮЩЕМ ОБНОВЛЕНИИ РАНТАЙМА обе константы меняются ТЕМ ЖЕ КОММИТОМ,
+# что и сам файл. Подмена артефакта без правки этих строк — то, ради чего они
+# написаны; правка этих строк без сверки со скачанным файлом превращает запись
+# о ввезённом в запись о том, чего в репозитории нет.
+HTMX_SHA384 = "H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"
+HTMX_BYTES = 51238
+
+# Шесть ключей ВЕРХНЕГО уровня; responseHandling — ОДИН ключ, а не пять.
+# Источник — .planning/research/SUMMARY.md §«Обязательный блок конфигурации»,
+# где у каждой строки выписано последствие её пропуска.
+HTMX_CONFIG = {
+    "historyRestoreAsHxRequest": False,
+    "allowNestedOobSwaps": False,
+    "reportValidityOfForms": True,
+    "historyCacheSize": 0,
+    "selfRequestsOnly": True,
+    "responseHandling": [
+        {"code": "204", "swap": False},
+        {"code": "[23]..", "swap": True},
+        {"code": "422", "swap": True},
+        {"code": "[45]..", "swap": False, "error": True},
+        {"code": "...", "swap": False},
+    ],
+}
+
+# Пять правил В ПОРЯДКЕ. Порядок и есть предмет: правила разбираются сверху вниз
+# до первого совпадения, и "422", опустившееся ниже "[45]..", перехватывается
+# общим правилом — форма с ошибкой валидации становится мёртвой кнопкой.
+RESPONSE_HANDLING_CODES = ("204", "[23]..", "422", "[45]..", "...")
+
+# Значение атрибута многострочное, поэтому re.DOTALL обязателен.
+HTMX_CONFIG_RE = re.compile(
+    r"""<meta\s+name=["']htmx-config["']\s+content='(.*?)'\s*/?>""",
+    re.DOTALL,
+)
+
+# Путь рантайма в отрендеренном документе. url_for отдаёт АБСОЛЮТНЫЙ адрес со
+# своим хостом, поэтому ищется хвост, а не вся ссылка.
+HTMX_RUNTIME_REF = "/static/js/htmx.min.js"
+
+
+def _htmx_config_of(html: str, shell: str) -> dict:
+    """Блок конфигурации, вытащенный из ОТРЕНДЕРЕННОГО документа и разобранный.
+
+    Разбор идёт по ответу, а не по исходнику шаблона, и это несущее решение
+    (D-05). Сломанное экранирование кавычек внутри значения атрибута отбросило
+    бы ВСЕ шесть ключей в умолчания, оставив греп исходника зелёным: htmx не
+    сообщает о нечитаемой конфигурации ничем. Ловит это только json.loads
+    разобранного ответа.
+    """
+    match = HTMX_CONFIG_RE.search(html)
+    assert match, (
+        f"{shell}: блока конфигурации htmx в отрендеренном документе нет — "
+        "забытый {% include %} либо съехавший атрибут content"
+    )
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"{shell}: значение content= не разбирается как JSON ({exc}) — "
+            "все шесть ключей молча ушли бы в умолчания:\n" + match.group(1)
+        ) from exc
+
+
+def _assert_config_contract(config: dict, shell: str) -> None:
+    """Шесть ключей с их значениями и ПОРЯДОК пяти правил responseHandling."""
+    assert set(config) == set(HTMX_CONFIG), (
+        f"{shell}: состав ключей верхнего уровня разошёлся — "
+        f"лишние {sorted(set(config) - set(HTMX_CONFIG))}, "
+        f"недостающие {sorted(set(HTMX_CONFIG) - set(config))}"
+    )
+
+    for key, expected in HTMX_CONFIG.items():
+        actual = config[key]
+        # Тип сверяется отдельно от значения: в Python False == 0, и
+        # historyCacheSize, съехавший в false, прошёл бы сравнение значений.
+        assert type(actual) is type(expected), (
+            f"{shell}: у ключа {key} тип {type(actual).__name__}, "
+            f"ожидался {type(expected).__name__}"
+        )
+        assert actual == expected, (
+            f"{shell}: у ключа {key} значение {actual!r}, ожидалось {expected!r}"
+        )
+
+    codes = tuple(rule["code"] for rule in config["responseHandling"])
+    assert codes == RESPONSE_HANDLING_CODES, (
+        f"{shell}: порядок правил responseHandling {codes}, "
+        f"ожидался {RESPONSE_HANDLING_CODES}"
+    )
+    assert codes.index("422") < codes.index("[45].."), (
+        f"{shell}: правило 422 опустилось НИЖЕ общего [45].. и перехватывается "
+        "им — форма с ошибкой валидации стала для пользователя мёртвой кнопкой"
+    )
+
+
+def _assert_config_precedes_runtime(html: str, shell: str) -> None:
+    """Блок стоит ВЫШЕ тега рантайма — утверждается индексами, а не наличием.
+
+    Рантайм читает конфигурацию один раз, при разборе собственного тега: блок,
+    оказавшийся ниже, не читается вовсе и не сообщает об этом (D-02).
+    """
+    config_at = html.find("htmx-config")
+    runtime_at = html.find(HTMX_RUNTIME_REF)
+    assert config_at != -1, f"{shell}: блока конфигурации в документе нет"
+    assert runtime_at != -1, f"{shell}: тега рантайма htmx в документе нет"
+    assert config_at < runtime_at, (
+        f"{shell}: блок конфигурации ({config_at}) оказался НИЖЕ тега рантайма "
+        f"({runtime_at}) — htmx его не прочитает и не пожалуется"
+    )
+
+
+def test_vendored_htmx_is_the_declared_artifact():
+    """D-04: вендоренный рантайм — ИМЕННО тот артефакт, а не «версия 2.0.10».
+
+    Утверждений три, и ни одно не заменяет другого. Размер ловит оборванную
+    загрузку. Полный SHA-384 ловит пропатченную сборку и чужой ре-минификатор —
+    файл, отличающийся хотя бы одним байтом, гейт не проходит. Подстрока версии
+    ловит подмену соседним релизом с сохранением размера; она несёт ЗАКРЫВАЮЩУЮ
+    кавычку, поэтому ни 2.0.1, ни 2.0.101 ей не удовлетворяют.
+
+    Читается файл с диска, а не ответ HTTP: предмет — байты в репозитории.
+    Прецедент утверждения по байтам в этом же файле есть — сигнатура wOF2 у
+    шрифтов (:55).
+    """
+    path = PROJECT_ROOT / "app" / "static" / "js" / "htmx.min.js"
+    assert path.exists(), "вендоренный рантайм htmx пропал с диска"
+    payload = path.read_bytes()
+
+    assert len(payload) == HTMX_BYTES, (
+        f"размер вендоренного htmx {len(payload)} Б, объявлено {HTMX_BYTES} Б"
+    )
+
+    digest = base64.b64encode(hashlib.sha384(payload).digest()).decode("ascii")
+    assert digest == HTMX_SHA384, (
+        "SHA-384 вендоренного htmx не равен объявленному:\n"
+        f"  в репозитории: {digest}\n"
+        f"  объявлено:     {HTMX_SHA384}\n"
+        "Артефакт подменён либо константа правлена отдельно от файла."
+    )
+
+    assert f'version:"{HTMX_VERSION}"'.encode("utf-8") in payload, (
+        f'подстроки version:"{HTMX_VERSION}" в артефакте нет'
+    )
+
+
+@pytest.mark.asyncio
+async def test_auth_shell_carries_htmx_config(client: AsyncClient):
+    """auth_base.html: блок из шести ключей приезжает на /login разобранным.
+
+    Подпись называет ШЕЛЛ, а не адрес: предмет — второй шелл проекта, а /login
+    лишь одна из семи его страниц. Забытый {% include %} в ОДНОМ из двух шеллов
+    — тот самый тихий отказ, ради которого гейт читает отрендеренный HTML.
+    """
+    response = await client.get("/login")
+    assert response.status_code == 200
+
+    html = response.text
+    _assert_config_contract(_htmx_config_of(html, "auth_base.html"), "auth_base.html")
+    _assert_config_precedes_runtime(html, "auth_base.html")
