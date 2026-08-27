@@ -99,7 +99,7 @@
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 07-03-PLAN.md — инвентарный гейт 22 мест `hx-get` числом по трём механизмам и артефакт ручного обхода `07-UAT.md` (FOUND-01, QUAL-05)
+- [x] 07-03-PLAN.md — инвентарный гейт 22 мест `hx-get` числом по трём механизмам и артефакт ручного обхода `07-UAT.md` (FOUND-01, QUAL-05)
 
 **Research**: не требуется — поверхность ломающих изменений 1.x→2.x проверена побайтово и пуста (`hx-on`, `hx-ws`/`hx-sse`, расширения, `show:`, `hx-delete` — 0 вхождений каждый)
 
@@ -312,7 +312,7 @@ in-memory SQLite через `ASGITransport` без процесса и порт�
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 7. Обновление htmx до 2.0.10 | v2.1 | 2/3 | In Progress|  |
+| 7. Обновление htmx до 2.0.10 | v2.1 | 3/3 | In Progress|  |
 | 8. Фундамент, гейты, денежный потолок | v2.1 | 0/TBD | Not started | - |
 | 9. Пилот `account_groups` | v2.1 | 0/TBD | Not started | - |
 | 10. Рычаг `modal.html` | v2.1 | 0/TBD | Not started | - |
