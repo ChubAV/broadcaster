@@ -187,6 +187,77 @@ def test_version_form_is_twelve_lowercase_hex_or_dev(tmp_path):
     assert not ASSET_VERSION_RE.fullmatch(degraded)
 
 
+# --- Границы расчёта (план 07-06) ---------------------------------------------
+
+
+def test_undecodable_name_in_scope_still_yields_a_version(tmp_path):
+    # Имя файла приходит со СМОНТИРОВАННОГО ТОМА и может быть непредставимо в
+    # кодировке документа. Такое имя обязано ВОЙТИ в дайджест, а не уронить
+    # расчёт и не обрушить версию всего охвата в строку деградации: один странно
+    # названный файл не имеет права молча выключить сброс кеша всем остальным.
+    root = _seed_static(tmp_path / "static")
+    odd = root / "js" / "vendor\udcff.js"
+    odd.write_bytes(b"window.odd={};\n")
+
+    version = common._compute_asset_version(root)
+
+    assert version != DEGRADED_VERSION
+    assert ASSET_VERSION_RE.fullmatch(version), version
+
+    # Имя УЧАСТВУЕТ в дайджесте, а не выброшено из него: переименование без
+    # правки байтов версию меняет.
+    odd.rename(root / "js" / "vendor\udcfe.js")
+
+    assert common._compute_asset_version(root) != version
+
+
+def test_non_os_error_in_computation_degrades_not_raises(tmp_path, monkeypatch):
+    """Исключение НЕ ввода-вывода обязано деградировать, а не выйти наружу.
+
+    Это не придирка: расчёт вызывается на УРОВНЕ МОДУЛЯ `app/pages/common.py`, а
+    этот модуль тянет за собой всё приложение (`app/main.py` его импортирует).
+    Исключение, вышедшее наружу, обрушивает не сброс кеша, а ЗАПУСК СЕРВИСА.
+    Докстринг расчёта обещает деградацию и при ошибке чтения, и при пустом
+    охвате — фактический перехват обязан быть не уже обещанного.
+    """
+    root = _seed_static(tmp_path / "static")
+
+    def _raise_non_os_error(self):
+        raise ValueError("подставной отказ, не относящийся к вводу-выводу")
+
+    monkeypatch.setattr(Path, "read_bytes", _raise_non_os_error)
+
+    assert common._compute_asset_version(root) == DEGRADED_VERSION
+
+
+def test_uppercase_suffix_is_inside_scope(tmp_path):
+    # Файл с прописным расширением раздаётся ТЕМ ЖЕ монтированием статики, что и
+    # строчный, поэтому его подмена обязана менять версию. Граница охвата
+    # проходит по РАСШИРЕНИЮ, а не по регистру.
+    root = _seed_static(tmp_path / "static")
+    before = common._compute_asset_version(root)
+
+    loud = root / "js" / "Vendor.JS"
+    loud.write_bytes(b"window.vendor={};\n")
+
+    assert "js/Vendor.JS" in common._asset_scope(root)
+    after = common._compute_asset_version(root)
+    assert after != before
+
+    loud.write_bytes(b"window.vendor={v:2};\n")
+    assert common._compute_asset_version(root) != after
+
+    # Парное утверждение: снятие учёта регистра НЕ имеет права расширить охват на
+    # шрифты — они подключаются из таблицы стилей, и тега с `?v=` у них нет.
+    fonts = root / "fonts"
+    fonts.mkdir(parents=True, exist_ok=True)
+    (fonts / "IBM-Plex-Sans-400.WOFF2").write_bytes(b"wOF2" + b"\x00" * 64)
+
+    scope = common._asset_scope(root)
+    assert "fonts/IBM-Plex-Sans-400.WOFF2" not in scope
+    assert not [rel for rel in scope if rel.lower().endswith(".woff2")]
+
+
 # --- D-09: инвентарный гейт состава охвата ------------------------------------
 #
 # Гейт работает по НАСТОЯЩЕМУ каталогу статики — в дополнение к поведенческим
