@@ -1,17 +1,18 @@
 ---
 phase: 07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii
-reviewed: 2026-08-27T11:49:25Z
+reviewed: 2026-08-27T21:50:37Z
 depth: standard
-files_reviewed: 8
+files_reviewed: 9
 files_reviewed_list:
   - app/pages/common.py
+  - app/static/js/htmx.min.js
   - app/templates/auth_base.html
   - app/templates/base.html
   - app/templates/includes/htmx_config.html
   - tests/test_pages/test_asset_version.py
+  - tests/test_pages/test_htmx_response_contract.py
   - tests/test_pages/test_shell.py
   - tests/test_templates/test_htmx_inventory.py
-  - app/static/js/htmx.min.js
 findings:
   critical: 1
   warning: 7
@@ -20,417 +21,431 @@ findings:
 status: issues_found
 ---
 
-# Phase 7: Code Review Report
+# Phase 07: Code Review Report
 
-**Reviewed:** 2026-08-27T11:49:25Z
+**Reviewed:** 2026-08-27T21:50:37Z
 **Depth:** standard
-**Files Reviewed:** 8
+**Files Reviewed:** 9
 **Status:** issues_found
 
 ## Summary
 
-The phase does three things: swaps the vendored htmx runtime 1.9.10 → 2.0.10, extracts the
-`<meta name="htmx-config">` + runtime `<script>` pair into a single `{% include %}`, and
-rewrites `_compute_asset_version()` from an mtime read to a content hash over the static tree.
+Re-review after gap closure (plans 07-04 … 07-07). Findings are stated from a fresh
+reading of the current files; no prior finding was assumed fixed or unfixed.
 
-**What holds up under adversarial checking:**
+**Independently verified as sound (previously suspect classes now closed):**
 
-- The vendored artifact is exactly what the phase claims. Independently verified:
-  51 238 bytes, `SHA-384 = H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V`,
-  contains `version:"2.0.10"`. All three assertions in `test_vendored_htmx_is_the_declared_artifact`
-  are true against the file on disk.
-- All six config keys exist in the vendored runtime (`historyRestoreAsHxRequest`,
-  `allowNestedOobSwaps`, `reportValidityOfForms`, `historyCacheSize`, `selfRequestsOnly`,
-  `responseHandling` — each present in `htmx.min.js`), so none of them silently no-ops.
-- The config block does render above the runtime tag in **both** shells — verified by running
-  the suite (`test_auth_shell_carries_htmx_config`, `test_main_shell_carries_htmx_config` pass).
-- `allowNestedOobSwaps: false` is safe here. Traced htmx 2.0.10's `$e()`: with the flag false an
-  OOB element is only processed when `el.parentElement === null`, i.e. it must be a direct child
-  of the response fragment. All five `hx-swap-oob` sites in the project
-  (`ads/includes/autosave_response.html:19,20,34` and the root `<span>` of
-  `ads/includes/autosave.html:27`) are top-level in their response. No silent breakage of the
-  ad-editor autosave.
-- The hash is deterministic and order-independent; independently confirmed the `hx-get` inventory
-  count is genuinely 22 attribute occurrences across 22 distinct lines. No 1.x-only htmx
-  attributes remain in templates (no `hx-on`, `hx-ws`, `hx-sse`, `hx-ext`, and — importantly for
-  the `methodsThatUseUrlParams` change in 2.0 — no `hx-delete` at all).
-- No `rglob` symlink-recursion hazard on Python 3.12 (`**` does not follow symlinks — verified).
+- `app/static/js/htmx.min.js` **is** the artifact it claims to be. Measured directly:
+  51 238 bytes, SHA-384 `H5Srcfyg…sK+V`, `version:"2.0.10"` present — all three match
+  `HTMX_BYTES` / `HTMX_SHA384` / `HTMX_VERSION` in `tests/test_pages/test_shell.py:1256-1258`
+  exactly. Predecessor size claim (47 755 B for 1.9.10) also checks out against git.
+- Every factual claim the new prose makes about the runtime was re-derived from the
+  vendored bytes and holds: `localStorage` occurrences = 0, `sessionStorage` = 9;
+  `zt()` really does `sessionStorage.removeItem("htmx-history-cache")` and returns
+  when `historyCacheSize <= 0`; the config block really is read by `querySelector`
+  over the whole document and merged inside the ready wrapper (`Gn(function(){Yn();…})`),
+  so the corrected claim in `htmx_config.html:14-33` is right and the old one was wrong.
+- All six config keys exist in the 2.0.10 runtime — none is a silently-ignored typo.
+- The `responseHandling` ordering argument is correct: rules are tested top-down with
+  unanchored `RegExp`, so `"422"` above `"[45].."` is load-bearing, and `_assert_config_contract`
+  gates it by index.
+- `reportValidityOfForms: true` is safe for the one htmx-driven form: `#ad-form`
+  carries no `required`/`pattern`/`min`/`max` (checked), which `ads/form.html:50-52`
+  had already anticipated.
+- `allowNestedOobSwaps: false` does not break the four existing OOB elements: all four
+  in `ads/includes/autosave_response.html` are top-level in the response fragment, and
+  htmx's guard is `e.parentElement === null`, which holds for `<template>.content` children.
+- The three new gate suites run green (22 + 2 assertions confirmed locally).
 
-**Key concerns:** one blocker, where the phase's residual-data mitigation targets a browser
-storage that the runtime it just installed does not use, and the machine gate locks the error in.
-The remaining warnings cluster around load-bearing comments that assert facts about the vendored
-artifact which the artifact contradicts, plus one unguarded degradation path in
-`_compute_asset_version()` that can abort module import.
+**What is still wrong.** The version calculator has a silent fail-open path that
+reinstates the exact defect the phase exists to close (CR-01). The new configuration
+turns an application-*unauthored* response body into an HTML/script sink without
+disabling htmx's script execution (WR-01). Two of the new gates do not gate what
+their prose says they gate — one is blind to the codebase's own dominant idiom
+(WR-02), one is blind to htmx's official `data-` attribute alias (WR-04). One
+load-bearing prose claim is simply false and disprovable in one grep (WR-03). The
+remaining warnings are gate brittleness and duplication that contradict the project's
+own stated single-source doctrine.
 
----
+Out of review scope but worth recording: the phase's core behavioural criterion
+("22 places work on 2.0.10, no infinite-scroll cascade") is closed by manual UAT only,
+and `tests/test_templates/test_htmx_inventory.py:22-28` itself records that half as
+**open**. The green suite is not evidence for it, as that file honestly says.
 
 ## Critical Issues
 
-### CR-01: History-cache purge targets `localStorage`, but htmx 2.0.10 uses `sessionStorage` — the mitigation is aimed at the wrong store and the gate enshrines it
+### CR-01: Asset version fails open to a constant `"dev"` with no signal, silently restoring FOUND-03
 
-**File:** `app/templates/auth_base.html:61` (rationale at `:25-59`);
-`tests/test_pages/test_shell.py` (`HISTORY_CACHE_KEY` comment and
-`test_main_shell_does_not_clear_history_cache`)
+**File:** `app/pages/common.py:232-243` (and `258`)
 
-**Issue:**
+**Issue:** `_compute_asset_version` swallows `OSError` and `ValueError` and returns the
+constant `_ASSET_VERSION_DEGRADED = "dev"`, and does the same for an empty scope. It
+logs nothing, raises nothing, and exposes no runtime indicator. The value is computed
+once at import (line 258) and frozen for the process lifetime.
 
-The comment introduced by this phase in `tests/test_pages/test_shell.py` states:
+Consequences, in order of severity:
 
-> `# Ключ, под которым htmx складывает снимки страниц. Хранилище — localStorage,`
-> `# а не sessionStorage: снимок переживает и закрытие вкладки, и выход из`
-> `# системы. Имя снято по вендоренному артефакту (research/PITFALLS.md §9).`
+1. `"dev"` is **constant across restarts**. Once a deploy hits the degraded path, every
+   `<link>`/`<script>` on all five delivery sites emits `?v=dev` forever. Browsers that
+   cached `…/htmx.min.js?v=dev` keep executing the *old* runtime against a 2.x server —
+   which is FOUND-03 verbatim, the defect this phase was created to fix. The mitigation
+   has a failure mode that reproduces the bug it mitigates.
+2. It is **silent**. A single unreadable file on a mounted volume (permissions, a
+   partially-synced bind mount, a `.js` that lost read bits) collapses the version for
+   the *entire* scope. The docstring at lines 213-215 explicitly states that degradation
+   "means cache invalidation does not work" — yet nothing anywhere says so at runtime.
+3. It is **undetectable from outside**. `test_inventory_real_asset_version_is_not_degraded`
+   (`tests/test_pages/test_asset_version.py:312`) catches this in CI only. CI does not
+   run against the production volume; the one environment where the failure can actually
+   occur is the one with no check.
 
-That claim is false for the artifact the same phase vendored. Measured against both files:
+Note the internal inconsistency: the same function goes to real trouble (`surrogatepass`
+encoding, lines 239 and 219-224) so that *one* oddly-named file cannot "silently switch
+off cache-busting for everyone else" — and then lets *one* unreadable file do exactly
+that, silently.
 
-| runtime | `localStorage` refs | `sessionStorage` refs |
-|---|---|---|
-| htmx 1.9.10 (removed by this phase) | 7 | 0 |
-| htmx 2.0.10 (`app/static/js/htmx.min.js`, shipped) | **0** | **9** |
+**Fix:** log the degraded path so it is visible in the aggregated logs the project already
+runs (Loki/Promtail are configured), and name the cause:
 
-htmx 2.0.10's `zt()` (saveToHistoryCache) reads and writes
-`sessionStorage.getItem("htmx-history-cache")` / `setItem(...)`, and on
-`historyCacheSize <= 0` it calls `sessionStorage.removeItem("htmx-history-cache")`.
-The string `localStorage` does not appear anywhere in the shipped runtime. The comment's
-own justification — "снимок переживает и закрытие вкладки" — is precisely the property
-`sessionStorage` does **not** have, so the research was done against the *outgoing* 1.9.10
-runtime and never re-derived after the upgrade.
+```python
+import logging
 
-Two concrete consequences:
+logger = logging.getLogger(__name__)
 
-1. **The one-shell-only placement rests on a false premise.** `auth_base.html:39-47` argues the
-   cleanup is redundant in `base.html` because "после нулевого размера кеша ключ больше не
-   наполняется". True — but nothing in htmx 2.0.10 ever *empties* the `localStorage` key either
-   (it has no `localStorage` code path at all). The legacy 1.9.10 snapshots — which is what this
-   line exists to remove — are therefore cleared **only** when an auth-shell page renders. A user
-   who stays signed in and never hits `/login` keeps snapshots of the admin panel, the payment
-   forms and impersonated screens in `localStorage` indefinitely. That is exactly the residual
-   data QUAL-05 names.
-2. **The gate locks the defect in.** `test_main_shell_does_not_clear_history_cache` asserts
-   `response.text.count("htmx-history-cache") == 0` on `/dashboard`, so the obvious fix (run the
-   removal in both shells for a migration window) is *forbidden* by the suite. And the manual
-   DevTools check the plan defers to (07-03 UAT) will be inspecting `localStorage` — where
-   2.0.10 writes nothing — and will observe "clean" for a vacuous reason.
 
-**Fix:**
-
-Move the removal into the file that already owns the htmx pair, so both shells get it exactly
-once and the single-owner invariant the phase argues for is preserved rather than violated:
-
-```html
-{# app/templates/includes/htmx_config.html — after the <meta>, before/after the runtime tag #}
-{# МИГРАЦИОННАЯ ОЧИСТКА 1.9.10. Снимки, накопленные ПРЕЖНИМ рантаймом, лежат в
-   localStorage: 2.0.10 хранит их в sessionStorage и localStorage не трогает вовсе
-   (в артефакте ноль вхождений `localStorage`), поэтому сам он их не уберёт никогда.
-   sessionStorage при historyCacheSize=0 рантайм чистит сам (zt(): removeItem + return).
-   Строка снимается вместе с окончанием миграционного окна. #}
-<script>
-  try { localStorage.removeItem('htmx-history-cache'); } catch (error) { /* приватный режим */ }
-</script>
+def _compute_asset_version(root: Path = _static_dir) -> str:
+    try:
+        scope = _asset_scope(root)
+        if not scope:
+            logger.error(
+                "asset_version degraded to %r: scope under %s is empty — "
+                "cache-busting is OFF for every static link",
+                _ASSET_VERSION_DEGRADED,
+                root,
+            )
+            return _ASSET_VERSION_DEGRADED
+        digest = hashlib.sha256()
+        for rel in scope:
+            body = (root / rel).read_bytes()
+            digest.update(f"{rel}\0{len(body)}\0".encode("utf-8", "surrogatepass"))
+            digest.update(body)
+    except (OSError, ValueError):
+        logger.exception(
+            "asset_version degraded to %r while hashing %s — "
+            "cache-busting is OFF for every static link",
+            _ASSET_VERSION_DEGRADED,
+            root,
+        )
+        return _ASSET_VERSION_DEGRADED
+    return digest.hexdigest()[:ASSET_VERSION_LEN]
 ```
 
-Then:
-
-- delete the block from `app/templates/auth_base.html:25-62`;
-- correct the `HISTORY_CACHE_KEY` comment in `tests/test_pages/test_shell.py` to name
-  `sessionStorage` as 2.0.10's store and `localStorage` as the 1.9.10 legacy store;
-- replace `test_main_shell_does_not_clear_history_cache` with a *both-shells-exactly-once*
-  assertion (`count(...) == 1` on `/login` and on `/dashboard`), which is the invariant the
-  phase actually wants;
-- correct the 07-03 UAT step to inspect `sessionStorage` for the "new snapshots" half and
-  `localStorage` for the "legacy snapshots" half.
-
----
+Consider additionally making the degraded value non-constant (e.g. `"dev-" + uuid4().hex[:8]`)
+so a degraded container at least does not pin stale assets in returning browsers, and
+adding the value to whatever health/readiness surface exists.
 
 ## Warnings
 
-### WR-01: The `422 / swap: true` rule injects FastAPI's raw JSON validation body into the page
+### WR-01: The `422 swap:true` rule newly makes an application-unauthored body an HTML/script sink, and the config leaves `allowScriptTags`/`allowEval` on
 
-**File:** `app/templates/includes/htmx_config.html:50`
+**File:** `app/templates/includes/htmx_config.html:112` (rule), `103-116` (block)
 
-**Issue:** The rule `{"code":"422", "swap": true}` is justified (`:24-33`) by "Форма, вернувшая
-422 с текстом ошибки валидации, станет … МЁРТВОЙ КНОПКОЙ". But the application has no route that
-returns 422 with an HTML fragment: `grep -rn "422\|RequestValidationError\|exception_handler"
-app/ --include=*.py` shows no `status_code=422` anywhere and no
-`@app.exception_handler(RequestValidationError)` (`app/main.py:206-226` registers handlers for
-`NotFoundError`, `ForbiddenError`, `BillingLimitError`, `MessengerConnectionError`, `Exception`
-only). Every 422 this app can currently emit is FastAPI's default
-`{"detail":[{"type":"int_parsing","loc":["query","page"],...}]}` JSON.
+**Issue:** Before this phase there was no `responseHandling`, so htmx 1.9.10 never swapped
+a non-2xx body into the page. This phase adds `{"code":"422","swap":true,"error":true}`,
+which makes htmx parse and insert a 422 response body into the DOM.
 
-Under htmx 1.9.10 that response was caught by the default `[45]..` rule → no swap. Under the new
-config it matches `422` first → **swapped into the target element**, dumping route/parameter
-internals onto the screen, and — because the rule carries no `"error": true` — without firing
-`htmx:responseError`. The phase turned a silent no-op into a visible malformed swap.
+The file's own risk analysis (lines 71-86) reasons this through and stops one step short.
+It correctly establishes that no route in `app/` authors a 422 body, so any 422 today is
+the framework default — a Pydantic error document that echoes the offending value verbatim
+in `input`. It then states the worst case as: the user "gets machine text in a card".
+That is not the worst case. Measured against the vendored artifact:
 
-**Fix:** either add the HTML-fragment 422 handler the rule presupposes, or drop the rule until
-one exists. The handler form:
+- htmx defaults are `allowScriptTags:true` and `allowEval:true` (confirmed in the
+  artifact's defaults object), and the config block does not override either.
+- The swap path parses the body via `<template>` and, when `allowScriptTags` is true,
+  calls the script-reviving helper `D(r)` on the fragment — i.e. `<script>` elements in a
+  swapped body are re-created and **executed**.
+
+So the accurate statement is: a 422 body that the application does not control, and which
+echoes raw user input, is parsed as HTML and script-executed in the page.
+
+**Reachability today: none that I could prove**, and this is why the finding is a WARNING
+rather than a blocker. I traced every one of the 22 `hx-get` URLs and both `hx-post` sites:
+
+- All sentinel URLs take `offset`/`limit` from server-validated ints and `filter_params`
+  values through `|urlencode`, and every endpoint types those filter params as `str | None`
+  (`app/pages/history.py:590-597`, `app/pages/ads.py:151-158`, `app/pages/admin.py:1468-1474`)
+  — a `str` param cannot produce a 422.
+- `#ad-form` carries `hx-swap="none"`, so even a 422 there swaps nothing.
+
+The guard is therefore "no htmx-issued URL currently carries a user-influenced typed
+param", which is an accident of the current routes, gated by nothing. `tests/test_pages/test_htmx_response_contract.py`
+gates the *server* side of the divergence; nothing gates the *client* side.
+
+**Fix:** close the sink rather than rely on the absence of a path. Either disable script
+execution in swapped content, which costs the project nothing (no swapped fragment in this
+codebase contains a `<script>`):
+
+```html
+  "allowScriptTags": false,
+  "allowEval": false,
+```
+
+or drop `swap` from the 422 rule until FORM-08 actually lands a route that authors an HTML
+422 body — the gate at `test_htmx_response_contract.py:72` already forces that decision to
+be made in one commit. If neither is taken, correct lines 71-86 to state the real worst
+case; the current text understates it and a future reader will inherit the understatement.
+
+### WR-02: The 422 gate matches only integer literals, and the codebase's dominant idiom is the symbolic constant
+
+**File:** `tests/test_pages/test_htmx_response_contract.py:117-124`
+
+**Issue:** `_status_code_literals` flags `status_code=` only when the value is
+`ast.Constant` with `type(value.value) is int` and equal to 422. Its docstring (lines 78-88)
+declares it searches "both ways to introduce a source of the code" and forbids simplifying
+the helper. But there is a third, and in this repository a *prevailing*, form it does not
+see:
+
+```
+$ grep -rEc "status_code=status\.HTTP" app --include=*.py   →  41 occurrences
+$ grep -rEc "status_code=[0-9]"        app --include=*.py   → 136 occurrences
+```
+
+`status_code=status.HTTP_422_UNPROCESSABLE_ENTITY` parses to `ast.Attribute`, not
+`ast.Constant`, so it passes the gate silently. Likewise `HTTPException(422)` (positional)
+and `status_code=SOME_CONST`. The gate is guarding against exactly the change it cannot see:
+23% of this codebase's existing status codes are written in the invisible form, so the odds
+that the first 422 arrives in that form are high, and when it does the constant stays 0 and
+the suite stays green.
+
+**Fix:** resolve the symbolic form as well, and fail loudly on forms that cannot be resolved:
 
 ```python
-from fastapi.exceptions import RequestValidationError
+VALIDATION_STATUS_NAMES = (
+    "HTTP_422_UNPROCESSABLE_ENTITY",
+    "HTTP_422_UNPROCESSABLE_CONTENT",  # starlette >= 0.47 spelling
+)
 
-@app.exception_handler(RequestValidationError)
-async def _validation_error(request: Request, exc: RequestValidationError):
-    if request.headers.get("hx-request"):
-        return templates.TemplateResponse(
-            request, "components/form_error.html", {"detail": "Проверьте заполнение формы"},
-            status_code=422,
-        )
-    return JSONResponse({"detail": exc.errors()}, status_code=422)
+def _is_validation_code(value: ast.expr) -> bool:
+    if isinstance(value, ast.Constant) and type(value.value) is int:
+        return value.value == VALIDATION_STATUS_CODE
+    name = value.attr if isinstance(value, ast.Attribute) else getattr(value, "id", None)
+    return name in VALIDATION_STATUS_NAMES
 ```
 
-Whichever is chosen, the decision needs a gate — otherwise the rule and the server's 422 body
-diverge silently, which is the exact failure class this phase was built to close.
+and apply it to positional `HTTPException(...)` / `JSONResponse(...)` first arguments too.
 
-### WR-02: `_compute_asset_version()` can raise at module import, violating its own documented degradation contract
+### WR-03: Load-bearing claim "the project's only inline script" is false
 
-**File:** `app/pages/common.py:209` (called at `:225`)
+**File:** `app/templates/includes/htmx_config.html:118`
 
-**Issue:** The docstring states "Деградация одна и явная: и ошибка чтения, и ПУСТОЙ охват дают
-`dev`", and only `OSError` is caught. `f"{rel}\0{len(body)}\0".encode("utf-8")` raises
-`UnicodeEncodeError` (a `ValueError`, **not** an `OSError`) when a filename under the static root
-is not valid UTF-8 — `Path.as_posix()` returns a surrogate-escaped string. Reproduced:
+**Issue:** The comment opens `ЕДИНСТВЕННЫЙ ИНЛАЙН-СКРИПТ ПРОЕКТА, И ЭТО НАЗВАННОЕ
+ОТСТУПЛЕНИЕ ОТ РАМКИ ВЕХИ «БЕЗ НОВОГО JS» (D-11)`. Three other inline `<script>` blocks
+already exist in templates:
 
-```
-$ uv run python -c "...; common._compute_asset_version(Path(d))"
-RAISED UnicodeEncodeError 'utf-8' codec can't encode character '\udcff' in position 3: surrogates not allowed
-```
+- `app/templates/ads/form.html:283` — a substantial block (server values via `| tojson`, DOM tile builder)
+- `app/templates/accounts/connect_tg_user.html:71` — polling/session logic
+- `app/templates/accounts/partials/connect_status.html:34` — `setTimeout(() => window.location.href = "/accounts", 2000);`
 
-Because the call is at module scope (`:225`), the escape aborts the import of
-`app.pages.common` — which `app/main.py` imports — so the whole application fails to boot with
-an `ImportError` instead of degrading to `dev`. The precondition (a non-UTF-8 filename in
-`app/static`, e.g. from a mounted volume) is unlikely from the repo tree, which is why this is a
-warning rather than a blocker; the fix is one line and the blast radius is total.
+This is not pedantry about wording. The claim is what carries the risk framing ("a named
+departure"), and it is also implicitly what justifies scoping
+`test_history_cache_purge_touches_no_markup_sink` to this one file. In a codebase whose
+whole method is "a stated claim must be true or gated", an ungated false claim is the
+defect class the project is built to prevent — the same class WR-05 of the previous review
+and the `test_asset_version_delivery_site_count` gate were created for.
 
-**Fix:**
+**Fix:** correct the sentence to what is true and gate the number, e.g.
+`ЧЕТВЁРТЫЙ ИНЛАЙН-СКРИПТ ПРОЕКТА И ЕДИНСТВЕННЫЙ В <head> ОБОИХ ШЕЛЛОВ` plus an inventory
+gate in the shape the project already uses:
 
 ```python
-            digest.update(f"{rel}\0{len(body)}\0".encode("utf-8", "surrogateescape"))
+INLINE_SCRIPT_SITES = {
+    "includes/htmx_config.html",
+    "ads/form.html",
+    "accounts/connect_tg_user.html",
+    "accounts/partials/connect_status.html",
+}
 ```
 
-or widen the guard so the documented contract is actually the contract:
+### WR-04: The `hx-get` inventory is blind to `data-hx-get`, and says so for a wrong reason
+
+**File:** `tests/test_templates/test_htmx_inventory.py:191-194`, `201`
+
+**Issue:** `HX_GET_ATTR = re.compile(r"(?<![-\w])hx-get\s*=")`. The comment justifies the
+negative lookbehind as excluding attributes "where `hx-get` is only the tail of a name
+(`data-hx-get`)". That premise is wrong: `data-hx-get` is not an unrelated name with a
+matching tail — it is htmx's official equivalent spelling of the same attribute. The
+vendored runtime treats them as one everywhere (its own selectors read
+`"[hx-swap-oob], [data-hx-swap-oob]"`, `"[hx-trigger='restored'],[data-hx-trigger='restored']"`,
+`"[hx-history-elt],[data-hx-history-elt]"`).
+
+The consequence is the one silent hole in an otherwise well-constructed gate: a real 23rd
+place written as `data-hx-get` is invisible to the attribute count, invisible to the tag
+count, and invisible to the mechanism buckets — so all three totals stay at 22 and every
+assertion stays green while the inventory is wrong. Every other mis-shaped place in this
+gate fails *loudly* (unknown mechanism, or tag/attribute count mismatch); this one does not.
+
+**Fix:** count both spellings and keep `data-` out of the "tail of a name" story:
 
 ```python
-    except (OSError, ValueError):
-        return _ASSET_VERSION_DEGRADED
+HX_GET_ATTR = re.compile(r"(?<![-\w])(?:data-)?hx-get\s*=")
+HX_GET_TAG = re.compile(r"<[^<>]*?(?<![-\w])(?:data-)?hx-get\s*=[^<>]*>")
+REVEALED_TRIGGER_RE = re.compile(r'(?<![-\w])(?:data-)?hx-trigger="revealed"')
+POLL_TRIGGER = re.compile(r'(?<![-\w])(?:data-)?hx-trigger="every\s')
 ```
 
-### WR-03: Six comments still say the version reaches "шесть тегов" — this phase reduced it to five, and nothing gates the number
+(`REVEALED_LITERAL_OCCURRENCES` then counts regex matches rather than `str.count`.)
 
-**File:** `app/pages/common.py:151`, `:183`, `:217`;
-`tests/test_pages/test_asset_version.py:25`, `:197`, `:237`
+### WR-05: The purge gate scans prose, in the one module that defines a comment stripper for that exact reason
 
-**Issue:** Before the phase each shell carried its own htmx `<script>`, so `asset_version` was
-delivered on six tags. Collapsing the pair into one include left five:
+**File:** `tests/test_pages/test_shell.py:1687-1697`
 
-```
-app/templates/auth_base.html:23  (css/app.css)
-app/templates/auth_base.html:63  (js/alpine.min.js)
-app/templates/base.html:24       (css/app.css)
-app/templates/base.html:26       (js/alpine.min.js)
-app/templates/includes/htmx_config.html:55  (js/htmx.min.js)
-```
-
-Every comment introduced or kept by the phase still says six — including the ones that lean on
-the number as load-bearing ("значение видно в разметке на шести тегах", "Мест доставки шесть",
-"шесть тегов получили бы стабильный `?v=dev`"). Plans 07-01 and 07-02 ran in parallel waves and
-07-02 was written against the pre-merge count; nobody re-counted after the merge. This project
-treats comment/code divergence as a first-class defect elsewhere in the same files, and the
-number is the one thing here with no inventory gate.
-
-**Fix:** change all six occurrences to five, and add the count to the existing inventory gate so
-the next collapse or addition cannot pass silently:
+**Issue:** `test_history_cache_purge_touches_no_markup_sink` runs two substring assertions
+over the **raw** template source:
 
 ```python
-# tests/test_pages/test_asset_version.py
-ASSET_VERSION_DELIVERY_SITES = 5
-
-def test_asset_version_delivery_site_count():
-    templates_dir = Path(__file__).resolve().parents[2] / "app" / "templates"
-    sites = sum(
-        source.count("?v={{ asset_version }}")
-        for source in (p.read_text(encoding="utf-8") for p in templates_dir.rglob("*.html"))
-    )
-    assert sites == ASSET_VERSION_DELIVERY_SITES
+offenders = [sink for sink in MARKUP_SINKS if sink in source]
+...
+assert "request" not in source
 ```
 
-### WR-04: The D-02 ordering rationale is false for htmx 2.0.10, and the gate asserts the wrong property
+`MARKUP_SINKS` contains `"innerHTML"` and `"outerHTML"` — both are ordinary `hx-swap`
+values used elsewhere in this project (`accounts/connect_wa.html:34`,
+`accounts/connect_max.html:47`, all twelve `revealed` sentinels). The file under test is
+100+ lines of justification prose about htmx swapping. One sentence naming `hx-swap="innerHTML"`,
+or one English word "request", reds the gate with the message "a markup sink appeared" /
+"the inline script started reading the request" — accusing the script of something the
+edit did not do.
 
-**File:** `app/templates/includes/htmx_config.html:14-22`;
-`tests/test_pages/test_shell.py` (`_assert_config_precedes_runtime`)
+This is the precise false-positive class the same module already solved 340 lines earlier:
+`_without_comments` (line 1360) exists, its docstring (lines 1370-1379) argues that a gate
+which reds on prose "teaches edits to delete prose — i.e. exactly backwards", and the two
+neighbouring single-source gates both call it. This gate does not. `"request" not in source`
+is additionally over-broad by design: it fires on any substring occurrence anywhere in the
+file, not on a `request` access inside the `<script>`.
 
-**Issue:** The include's central justification reads "Рантайм читает конфигурацию ОДИН раз, при
-разборе собственного тега: блок, оказавшийся ниже тега, не читается вовсе — молча". Traced
-against the shipped artifact, that is not how 2.0.10 works:
+**Fix:** reuse the module's own stripper and narrow the scope to the script body:
+
+```python
+_INLINE_SCRIPT_RE = re.compile(r"<script(?![^>]*\ssrc=)[^>]*>(.*?)</script>", re.DOTALL)
+
+source = (PROJECT_ROOT / "app" / "templates" / LEGACY_HISTORY_CACHE_OWNER).read_text("utf-8")
+scripts = "\n".join(_INLINE_SCRIPT_RE.findall(_without_comments(source)))
+
+offenders = [sink for sink in MARKUP_SINKS if sink in scripts]
+assert not offenders, ...
+assert "request" not in scripts, ...
+```
+
+### WR-06: `allowNestedOobSwaps: false` changes semantics for five existing OOB places, and is the one config key whose consequence is not written down or gated
+
+**File:** `app/templates/includes/htmx_config.html:105`
+
+**Issue:** The file goes to considerable length to state the consequence of one key
+(`historyCacheSize`, lines 45-58: "the whole load is carried by this value; any future
+edit silently cancels the property, and a gate `_assert_config_contract` watches it").
+`allowNestedOobSwaps: false` gets no such paragraph, yet it is the key with a live
+behavioural effect on existing markup.
+
+Measured in the vendored runtime, the guard is:
 
 ```js
-var Kn=false; te().addEventListener("DOMContentLoaded",function(){Kn=true});
-function Gn(e){if(Kn||te().readyState==="complete"){e()}else{te().addEventListener("DOMContentLoaded",e)}}
-function Zn(){const e=te().querySelector('meta[name="htmx-config"]');if(e){return v(e.content)}else{return null}}
-function Yn(){const e=Zn();if(e){Q.config=le(Q.config,e)}}
-Gn(function(){Yn(); Wn(); ...})
+if (Q.config.allowNestedOobSwaps || e.parentElement === null) { …perform OOB swap… }
+else { e.removeAttribute("hx-swap-oob"); e.removeAttribute("data-hx-swap-oob"); }
 ```
 
-`Yn()` (mergeMetaConfig) runs inside `Gn()` (ready) — i.e. at **DOMContentLoaded**, not at script
-parse time. A `<meta name="htmx-config">` anywhere in the server-rendered document is read,
-above or below the runtime tag. The real safety property is "the meta is in the initial HTML,
-not injected after DOMContentLoaded"; that property is untested, while
-`_assert_config_precedes_runtime` tests a stricter one that carries no consequence.
+With the flag off, an `hx-swap-oob` element that is *not* a top-level node of the response
+fragment does not perform an out-of-band swap. It is not an error and nothing is logged —
+the attribute is stripped and the element is swapped inline instead, i.e. it lands in the
+wrong place, or nowhere when the swap style is `none`.
 
-Keeping the tags adjacent is still good practice — the problem is that a comment presented as the
-architectural reason for D-02 states a mechanism the runtime does not have, and a future
-maintainer will reason from it (e.g. concluding a `defer`-loaded runtime is unsafe, or that a
-dynamically-injected meta would work).
+The five existing places (`ads/includes/autosave_response.html:19,20,34` and the indicator
+from `ads/includes/autosave.html:28` via line 21) are all top-level today — I verified each,
+and this is why the flag is safe right now. But the property "every `hx-swap-oob` element is
+a top-level node of its response fragment" is now load-bearing for the ad editor's autosave
+(preview, summary, indicator, and the `#ad-id-field` whose loss the comment at
+`autosave_response.html:22-33` describes as "silent loss of the user's work"), and nothing
+gates it. Wrapping the two `<div>`s in a container "for tidiness" would break autosave
+silently.
 
-**Fix:** correct the comment to describe the actual constraint, and keep the ordering assertion
-but re-label it as a defensive style check, not the safety mechanism:
+**Fix:** add the missing paragraph naming the consequence, and add a gate in the project's
+existing inventory shape — e.g. assert that in every template that renders an OOB response
+fragment, each `hx-swap-oob` occurrence is at nesting depth 0 of that template, or at
+minimum inventory the five places with `OOB_SITES` so a sixth cannot appear unnoticed.
 
-```
-   Рантайм сливает мета-конфигурацию в `htmx.config` НА DOMContentLoaded
-   (`Gn(function(){Yn(); ...})` в вендоренном 2.0.10), а не при разборе своего
-   тега, поэтому требование к блоку — оказаться в ИСХОДНОМ документе, а не
-   выше тега. Пара всё равно держится вместе и одним файлом: блок, вставленный
-   скриптом ПОСЛЕ DOMContentLoaded, не читается вовсе и молчит об этом.
-```
+### WR-07: Comment stripping now exists in three non-identical copies across the new test modules
 
-### WR-05: D-07's headline benefit is not delivered — no `Cache-Control`, and Starlette's ETag is mtime-derived
+**File:** `tests/test_pages/test_shell.py:1349`; `tests/test_templates/test_htmx_inventory.py:203-204`, `226`; `tests/test_pages/test_asset_version.py:345-346`
 
-**File:** `app/pages/common.py:176-183` (claim); `app/main.py:82` (mount)
+**Issue:** Three modules landed by this phase each implement "template source without
+comments", and two of the three are not the same algorithm:
 
-**Issue:** The rewrite is justified by two symmetric claims. The FOUND-03 half — "подмена байтов
-ЛЮБОГО файла охвата меняет `?v=`" — is genuinely delivered. The D-07 half — "пересборка
-контейнера из того же дерева сбрасывала кеш всем … два контейнера из одного дерева отдают
-одинаковый `?v=`" — is not, end to end:
+- `test_shell.py:1349` — single pass, alternation: `re.compile(r"\{#.*?#\}|<!--.*?-->", re.DOTALL)`
+- `test_htmx_inventory.py:226` — two passes, Jinja then HTML, with a docstring arguing the
+  order is significant ("Jinja runs first")
+- `test_asset_version.py:372` — the same two passes, third copy
 
-- `app.mount("/static", StaticFiles(directory=...))` sets **no** `Cache-Control` header at all,
-  so there is no long-lived cache entry for the stable `?v=` to protect; browsers fall back to
-  heuristic freshness and revalidate.
-- On revalidation Starlette computes
-  `etag = md5(f"{stat.st_mtime}-{stat.st_size}")` (`starlette/responses.py:335-341`).
-  A container rebuild from the same tree changes `st_mtime` → new ETag → `200` with the full body,
-  regardless of the identical `?v=`.
+The two forms are not equivalent on interleaved delimiters (e.g. `<!-- a {# b --> c #}`
+yields `<!-- a ` under the two-pass form and ` c #}` under the alternation form), so the
+argument that "the order of stripping is significant" is true for two of the three copies
+and simply not implemented in the third.
 
-So a rebuild still re-ships `app.css` + htmx + Alpine to every returning user — the exact
-behaviour the content hash was introduced to stop. This is a correctness-of-claim gap, not a
-performance nit: a documented decision (D-07) records a benefit the deployment does not produce.
+More to the point, this contradicts the doctrine every one of these files invokes by name:
+`htmx_config.html:5-12` and `test_shell.py:1364-1367` both argue that a second copy of a
+rule "would diverge from the first exactly as two literal config blocks would (D-01)" — and
+then the helper that enforces that doctrine is itself carried in three copies.
 
-**Fix:** pair the content hash with an immutable cache policy, which is what makes a
-content-addressed `?v=` meaningful:
-
-```python
-class ImmutableStatic(StaticFiles):
-    def file_response(self, *args, **kwargs):
-        response = super().file_response(*args, **kwargs)
-        response.headers.setdefault("cache-control", "public, max-age=31536000, immutable")
-        return response
-
-app.mount("/static", ImmutableStatic(directory=str(_static_dir)), name="static")
-```
-
-If that is out of this phase's scope, strike the D-07 rebuild claim from the docstring rather
-than leaving a recorded benefit that does not exist.
-
-### WR-06: Shell divergence is only one-fifth fixed, and only the fixed fifth has a gate
-
-**File:** `app/templates/includes/htmx_config.html:5-13`; `app/templates/base.html:24,26`;
-`app/templates/auth_base.html:23,63`
-
-**Issue:** The include's premise is that the two shells' `<head>`s "совпадают построчно" and that
-literal duplication across them is the defect class ("правка, внесённая в один шелл и забытая во
-втором, дала бы пользователю РАЗНОЕ поведение"). After the phase, four of the five asset tags are
-still two literal copies each:
-
-- `app.css` link: `base.html:24` and `auth_base.html:23`
-- Alpine script: `base.html:26` and `auth_base.html:63`
-
-plus `charset`, `viewport`, `theme-color`, `color-scheme` and both `apple-mobile-web-app-*` metas.
-`test_htmx_runtime_tag_has_single_source` gates only the htmx reference, so the stated failure
-mode remains fully live for everything else, with no gate at all. The include is explicit that
-"Ссылка на таблицу стилей и тег Alpine остаются в шеллах — к этой паре они отношения не имеют",
-but the *reason* given for extracting the htmx pair (drift between two hand-maintained copies)
-applies identically to them.
-
-**Fix:** either extract the common `<head>` prelude into a second include
-(`includes/head_assets.html`) so the shells hold one line each, or extend the ownership gate to
-cover every `?v={{ asset_version }}` tag by declared owner+count so a third copy cannot appear
-unnoticed. At minimum, replace the "к этой паре они отношения не имеют" line with the real
-reason (scope of this phase) so it does not read as a claim that those tags are immune.
-
-### WR-07: The inventory gate's "place = line containing `hx-get`" heuristic reproduces the trap it warns about
-
-**File:** `tests/test_templates/test_htmx_inventory.py:169-189`, `:143`, `:278-311`
-
-**Issue:** `_hx_get_lines()` defines a place as *a line containing the substring `hx-get`*. The
-file goes to considerable length to explain why counting `hx-trigger="revealed"` occurrences is
-unsound (the prose comment at `base.html:241` makes the naive count 13), then applies the same
-substring-per-line technique to `hx-get` itself with no equivalent guard. Concrete fragilities,
-all currently latent:
-
-- Two `hx-get` attributes on one line collapse to one place. Verified none exist today, so the
-  gate is green by luck of formatting, not by construction.
-- A prose comment mentioning `hx-get` counts as a real place, and if it also contains
-  `hx-trigger="revealed"` it can mask a genuinely lost markup site — the exact substitution the
-  file's own "ЛОВУШКА СЧЁТА" section describes.
-- `_mechanism_of` requires `hx-get` and its trigger to sit on the **same** source line. A pure
-  reformat that wraps attributes reclassifies the site (`revealed` → `conditional`/`unknown`) and
-  fails the gate with a message about markup that did not change.
-- `REVEALED_LITERAL_OCCURRENCES = 13` and `assert literal - sites == 1` couple the suite to one
-  specific prose comment (`base.html:241`, a note about View Transitions). Deleting or rewording
-  that unrelated comment turns the gate red with "место молча исчезло или появилось незаявленное"
-  — blaming markup for a documentation edit.
-
-**Fix:** count attribute occurrences rather than lines, and classify per element rather than per
-line:
-
-```python
-HX_GET_ATTR = re.compile(r'\bhx-get\s*=')
-
-def _hx_get_occurrences(source: str) -> int:
-    return len(HX_GET_ATTR.findall(_strip_jinja_comments(source)))
-```
-
-and strip `{# ... #}` / `<!-- ... -->` before counting, which removes the `base.html:241`
-coupling and lets `REVEALED_LITERAL_OCCURRENCES` drop to the honest 12.
-
----
+**Fix:** hoist one implementation into a shared test helper (`tests/support/templates.py`
+or `tests/conftest.py`) and import it in all three, keeping the two-pass semantics that two
+of the three modules argue for. This also removes the cross-module private import flagged
+in IN-02.
 
 ## Info
 
-### IN-01: `_asset_scope` suffix matching is case-sensitive
+### IN-01: htmx still injects an inline `<style>` into `<head>` on every page
 
-**File:** `app/pages/common.py:169`
+**File:** `app/templates/includes/htmx_config.html:103-116`
 
-**Issue:** `path.suffix in ASSET_SCOPE_SUFFIXES` with `(".css", ".js")` silently excludes
-`.CSS`/`.JS`. On a case-insensitive filesystem (macOS dev machines) such a file would be served
-by the mount but left out of the version, so byte changes to it would not bust caches — the
-FOUND-03 failure mode, scoped to one file.
+**Issue:** `includeIndicatorStyles` is left at its default `true`, so on every page load the
+runtime calls `head.insertAdjacentHTML("beforeend", "<style>…")` to define `.htmx-indicator`
+rules. `app/static/css/app.css` defines no `.htmx-indicator` rules and no template uses the
+class — the injected style is dead weight, and it is a second inline-`<style>` source to
+account for when the deferred CSP (T-07-11) lands.
 
-**Fix:** `if path.suffix.lower() in ASSET_SCOPE_SUFFIXES and path.is_file()`.
+**Fix:** add `"includeIndicatorStyles": false` to the block (and update the "six keys" count
+in `htmx_config.html`, `test_shell.py:HTMX_CONFIG`, and the `_assert_config_contract`
+docstring together, as the file's own convention requires).
 
-### IN-02: `test_htmx_runtime_tag_has_single_source` matches the path substring anywhere in a template, including prose
+### IN-02: Cross-module import of a private helper couples the response-contract gate to a 1700-line module
 
-**File:** `tests/test_pages/test_shell.py` (`HTMX_RUNTIME_SOURCE_REF = "js/htmx.min.js"`)
+**File:** `tests/test_pages/test_htmx_response_contract.py:38`
 
-**Issue:** The gate flags any template whose source contains `js/htmx.min.js`, so a Jinja comment
-that merely *mentions* the runtime path in another template fails with "ссылка на рантайм htmx
-перестала быть единственной в шаблонах". Given how comment-dense this codebase is, that is a
-realistic false positive.
+**Issue:** `from tests.test_pages.test_shell import _htmx_config_of` imports a leading-underscore
+helper across test modules, which pulls in all of `test_shell.py`'s import-time work (regex
+compilation, `PROJECT_ROOT` resolution, fixtures) and makes the response-contract gate fail
+on any unrelated import-time breakage in a 1697-line neighbour. The single-source motive is
+right; the placement is not.
 
-**Fix:** match the tag rather than the path, e.g.
-`re.compile(r"<script[^>]*js/htmx\.min\.js")`, or strip Jinja comments before searching.
+**Fix:** move `_htmx_config_of`, `HTMX_CONFIG_RE` and the comment stripper (WR-07) into a
+shared, public test-support module and import from there in both places.
 
-### IN-03: The include's filename understates its contents
+### IN-03: Type discipline in `_assert_config_contract` stops at the top level
 
-**File:** `app/templates/includes/htmx_config.html`
+**File:** `tests/test_pages/test_shell.py:1401-1430`
 
-**Issue:** The file owns both the config `<meta>` and the runtime `<script>` — deliberately, per
-D-02 — but the name says only "config". A maintainer looking for where htmx is loaded will grep
-`<script` in the shells and find nothing. The file's own header comment explains the pairing;
-the filename does not.
+**Issue:** The helper's docstring and the config comment at `htmx_config.html:54-58` both
+advertise that the gate "checks not only the value but the TYPE, because in Python
+`False == 0`". That check is applied only to the six top-level values. Inside
+`responseHandling`, the rule dicts are compared with plain `==`, so `{"swap": 1}` and
+`{"swap": 0}` would satisfy the gate. Behaviour is unaffected (htmx tests truthiness), so
+this is informational — but the stated guarantee is broader than the implemented one, and
+in this codebase that gap is itself the tracked defect class.
 
-**Fix:** rename to `includes/htmx.html` (or `includes/htmx_runtime.html`) and update the two
-`{% include %}` sites and `HTMX_RUNTIME_OWNER` in `tests/test_pages/test_shell.py`.
+**Fix:** either extend the type check into the rule dicts, or narrow the two docstrings to
+say the type check covers the top-level keys.
 
 ---
 
-_Reviewed: 2026-08-27T11:49:25Z_
+_Reviewed: 2026-08-27T21:50:37Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
