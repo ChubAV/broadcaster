@@ -22,8 +22,10 @@ from app.pages import common
 # ФОРМА ЗНАЧЕНИЯ выписана ЗДЕСЬ числом, а не собрана из
 # `common.ASSET_VERSION_LEN`: тест, выводящий ожидание из проверяемого,
 # согласился бы с молчаливым изменением длины дайджеста. Длина есть часть
-# контракта — значение видно в каждом отрендеренном документе на шести тегах, —
-# поэтому её изменение обязано быть решением, записанным в двух местах сразу.
+# контракта — значение видно в каждом отрендеренном документе на пяти тегах
+# (число утверждается гейтом `test_asset_version_delivery_site_count` ниже, а не
+# этим комментарием), — поэтому её изменение обязано быть решением, записанным в
+# двух местах сразу.
 ASSET_VERSION_RE = re.compile(r"[0-9a-f]{12}")
 ASSET_VERSION_LEN_EXPECTED = 12
 
@@ -128,7 +130,11 @@ def test_fourth_script_file_changes_version(tmp_path):
 
 def test_utime_only_change_keeps_version(tmp_path):
     # Два контейнера, собранные из одного дерева в разное время, обязаны отдавать
-    # одинаковый `?v=`, а деплой без правок статики — не сбрасывать кеш никому (D-07).
+    # одинаковое ЗНАЧЕНИЕ `?v=` (D-07). Утверждение о том, что деплой без правок
+    # статики не сбрасывает кеш пользователям, СНЯТО планом 07-06 (WR-05): на
+    # уровне трафика оно не наступает, потому что монтирование статики заголовка
+    # политики кеширования не выставляет. Тест утверждает ровно доставленное —
+    # равенство значения, а не поведение кеша в браузере.
     root = _seed_static(tmp_path / "static")
     before = common._compute_asset_version(root)
     stamp_before = (root / "css" / "app.css").stat().st_mtime
@@ -187,6 +193,77 @@ def test_version_form_is_twelve_lowercase_hex_or_dev(tmp_path):
     assert not ASSET_VERSION_RE.fullmatch(degraded)
 
 
+# --- Границы расчёта (план 07-06) ---------------------------------------------
+
+
+def test_undecodable_name_in_scope_still_yields_a_version(tmp_path):
+    # Имя файла приходит со СМОНТИРОВАННОГО ТОМА и может быть непредставимо в
+    # кодировке документа. Такое имя обязано ВОЙТИ в дайджест, а не уронить
+    # расчёт и не обрушить версию всего охвата в строку деградации: один странно
+    # названный файл не имеет права молча выключить сброс кеша всем остальным.
+    root = _seed_static(tmp_path / "static")
+    odd = root / "js" / "vendor\udcff.js"
+    odd.write_bytes(b"window.odd={};\n")
+
+    version = common._compute_asset_version(root)
+
+    assert version != DEGRADED_VERSION
+    assert ASSET_VERSION_RE.fullmatch(version), version
+
+    # Имя УЧАСТВУЕТ в дайджесте, а не выброшено из него: переименование без
+    # правки байтов версию меняет.
+    odd.rename(root / "js" / "vendor\udcfe.js")
+
+    assert common._compute_asset_version(root) != version
+
+
+def test_non_os_error_in_computation_degrades_not_raises(tmp_path, monkeypatch):
+    """Исключение НЕ ввода-вывода обязано деградировать, а не выйти наружу.
+
+    Это не придирка: расчёт вызывается на УРОВНЕ МОДУЛЯ `app/pages/common.py`, а
+    этот модуль тянет за собой всё приложение (`app/main.py` его импортирует).
+    Исключение, вышедшее наружу, обрушивает не сброс кеша, а ЗАПУСК СЕРВИСА.
+    Докстринг расчёта обещает деградацию и при ошибке чтения, и при пустом
+    охвате — фактический перехват обязан быть не уже обещанного.
+    """
+    root = _seed_static(tmp_path / "static")
+
+    def _raise_non_os_error(self):
+        raise ValueError("подставной отказ, не относящийся к вводу-выводу")
+
+    monkeypatch.setattr(Path, "read_bytes", _raise_non_os_error)
+
+    assert common._compute_asset_version(root) == DEGRADED_VERSION
+
+
+def test_uppercase_suffix_is_inside_scope(tmp_path):
+    # Файл с прописным расширением раздаётся ТЕМ ЖЕ монтированием статики, что и
+    # строчный, поэтому его подмена обязана менять версию. Граница охвата
+    # проходит по РАСШИРЕНИЮ, а не по регистру.
+    root = _seed_static(tmp_path / "static")
+    before = common._compute_asset_version(root)
+
+    loud = root / "js" / "Vendor.JS"
+    loud.write_bytes(b"window.vendor={};\n")
+
+    assert "js/Vendor.JS" in common._asset_scope(root)
+    after = common._compute_asset_version(root)
+    assert after != before
+
+    loud.write_bytes(b"window.vendor={v:2};\n")
+    assert common._compute_asset_version(root) != after
+
+    # Парное утверждение: снятие учёта регистра НЕ имеет права расширить охват на
+    # шрифты — они подключаются из таблицы стилей, и тега с `?v=` у них нет.
+    fonts = root / "fonts"
+    fonts.mkdir(parents=True, exist_ok=True)
+    (fonts / "IBM-Plex-Sans-400.WOFF2").write_bytes(b"wOF2" + b"\x00" * 64)
+
+    scope = common._asset_scope(root)
+    assert "fonts/IBM-Plex-Sans-400.WOFF2" not in scope
+    assert not [rel for rel in scope if rel.lower().endswith(".woff2")]
+
+
 # --- D-09: инвентарный гейт состава охвата ------------------------------------
 #
 # Гейт работает по НАСТОЯЩЕМУ каталогу статики — в дополнение к поведенческим
@@ -194,7 +271,7 @@ def test_version_form_is_twelve_lowercase_hex_or_dev(tmp_path):
 # поведенческий тест не видит в принципе, потому что работает на подставном
 # каталоге: пустой glob (расчёт исправен, но охватывает ноль файлов, и версия
 # стабильна и бессмысленна) и четвёртый вендоренный файл, появившийся мимо
-# расчёта и мимо шести мест доставки версии.
+# расчёта и мимо пяти мест доставки версии.
 
 STATIC_DIR = Path(__file__).resolve().parents[2] / "app" / "static"
 
@@ -234,7 +311,7 @@ def test_inventory_scope_matches_declared_files():
 
 def test_inventory_real_asset_version_is_not_degraded():
     # Второе, независимое от множества, доказательство непустоты охвата: пустой
-    # glob на настоящем каталоге дал бы РОВНО строку деградации, и шесть тегов
+    # glob на настоящем каталоге дал бы РОВНО строку деградации, и пять тегов
     # получили бы стабильный `?v=dev`, не меняющийся ни от одной подмены.
     version = common.templates.env.globals["asset_version"]
 
@@ -243,3 +320,73 @@ def test_inventory_real_asset_version_is_not_degraded():
         f"пуст либо нечитаем: {sorted(common._asset_scope(STATIC_DIR))}"
     )
     assert ASSET_VERSION_RE.fullmatch(version), version
+
+
+# --- План 07-06: инвентарный гейт ЧИСЛА мест доставки версии -------------------
+#
+# Расчёт производит величину, а доезжает она до пользователя ровно одним
+# способом — подстановкой в адрес статики. Число таких мест было записано в шести
+# комментариях и НЕ было загейтено, поэтому его расхождение с кодом (шесть против
+# пяти — после того, как эта же фаза свела два тега рантайма в один общий) прошло
+# молча через две волны исполнения и код-ревью. Здесь число перестаёт держаться
+# комментарием и начинает держаться гейтом.
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
+
+# Подстановка версии: любое выражение вывода Jinja, несущее имя глобала.
+# Считается ВЫРАЖЕНИЕ, а не литерал `?v=`: место доставки, заведённое в иной
+# форме адреса, обязано гейт двигать, а не проезжать мимо него незамеченным.
+_DELIVERY_RE = re.compile(r"\{\{[^}]*asset_version[^}]*\}\}")
+
+# Комментарии вырезаются ДО счёта, и причина не стилевая: кодовая база несёт
+# объёмные комментарии-обоснования, и гейт, считающий прозу, краснел бы на правку
+# документации — ровно тот отказ, который ревью нашло у соседнего инвентарного
+# гейта разметки (WR-07).
+_JINJA_COMMENT_RE = re.compile(r"\{#.*?#\}", re.DOTALL)
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+# ЧИСЛО МЕСТ ДОСТАВКИ версии в разметке.
+#
+# Летопись состава:
+#   Фаза 7, закрытие разрывов (2026-08-27): число снято СЧЁТОМ по живому дереву —
+#   ровно пять: `base.html` (таблица стилей и тег Alpine), `auth_base.html` (те же
+#   два), `includes/htmx_config.html` (тег рантайма). До этой фазы было шесть, и
+#   ровно потому, что число не было загейтено, шесть комментариев продолжали
+#   называть шесть после сведения двух тегов рантайма в один общий.
+#   Тот, кто это число меняет, обязан пройти по комментариям, которые его
+#   называют, и привести их к новой величине: число есть часть контракта, видимая
+#   в каждом отрендеренном документе.
+ASSET_VERSION_DELIVERY_SITES = 5
+
+
+def _delivery_sites() -> dict[str, int]:
+    """Вернуть {относительный путь шаблона: число мест доставки версии в нём}.
+
+    Обход РЕКУРСИВНЫЙ, по образцу tests/test_templates/test_components.py: место
+    в подкаталоге (`includes/htmx_config.html`) считается наравне с местом в
+    корне, иначе гейт утверждал бы число по части дерева.
+    """
+    found: dict[str, int] = {}
+    for path in sorted(TEMPLATES_DIR.rglob("*.html")):
+        source = path.read_text(encoding="utf-8")
+        markup = _HTML_COMMENT_RE.sub("", _JINJA_COMMENT_RE.sub("", source))
+        count = len(_DELIVERY_RE.findall(markup))
+        if count:
+            found[path.relative_to(TEMPLATES_DIR).as_posix()] = count
+    return found
+
+
+def test_asset_version_delivery_site_count():
+    sites = _delivery_sites()
+    total = sum(sites.values())
+
+    # Сообщение называет места ПОИМЁННО намеренно: гейт, сообщающий одно
+    # расхождение чисел, оставляет поиск виновника читателю.
+    assert total == ASSET_VERSION_DELIVERY_SITES, (
+        f"мест доставки версии {total}, ожидалось {ASSET_VERSION_DELIVERY_SITES}; "
+        "найдено поимённо: "
+        + ", ".join(f"{rel} — {count}" for rel, count in sorted(sites.items()))
+        + ". Изменивший число обязан править эту константу ВМЕСТЕ с "
+        "комментариями, которые его называют: величина утверждается здесь, а не "
+        "декларируется там."
+    )
