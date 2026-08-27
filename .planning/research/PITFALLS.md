@@ -319,6 +319,17 @@ Starlette кодирует значения заголовков в **latin-1**.
 Каждое `hx-push-url` сохраняет снимок разметки страницы в localStorage, откуда он **переживает выход
 из системы и закрытие вкладки**.
 
+> ⚠️ **Поправка (2026-08-27, Фаза 7).** Измерение «4 и 7» выше снято с рантайма **1.9.10**, который
+> Фаза 7 УБРАЛА. Оно сохранено как история — раздел верен для того рантайма и объясняет, почему
+> `hx-push-url` не ставится на каждую форму, — но **рассуждать о хранилище по этому разделу без
+> настоящей поправки НЕЛЬЗЯ.** Для отгруженного **2.0.10** те же два счёта равны **0 и 9**:
+> `localStorage` рантайм не знает вовсе, свои снимки держит в `sessionStorage` (умирает вместе со
+> вкладкой) и при `historyCacheSize <= 0` чистит свой store **сам**, в функции `zt()`. Практическое
+> следствие для восьми последующих фаз: остаток в `localStorage` может принадлежать только прежнему
+> 1.9.10, сам он не убывает и снимается разовой миграционной строкой в
+> `app/templates/includes/htmx_config.html`. Ложная посылка, взятая отсюда без поправки, уже стоила
+> Фазе 7 блокера верификации (07-VERIFICATION.md, GAP 1).
+
 Веха объявляет `hx-push-url` одним из **четырёх свойств качества на КАЖДОЙ форме**. Следствия для
 этого продукта конкретны:
 * Админ, вошедший **под пользователем** (RFC 8693 `act`), оставляет в localStorage снимки чужих экранов.
@@ -850,7 +861,7 @@ components/modal.html                       components/filters.html
 * **htmx `hx-disabled-elt`, response handling** — `htmx.org/attributes/hx-disabled-elt/`, `htmx.org/docs/#response-handling` (HIGH)
 * **context7 `/bigskysoftware/htmx`** (v1.9.12, v2.0.4) — `selfRequestsOnly` как ломающее изменение, `hx-on` → `hx-on:`, вынос расширений (MEDIUM)
 * **Эмпирическая проверка в venv проекта** — latin-1 кодирование заголовков Starlette, отсутствие проверки CRLF, `h11.LocalProtocolError`, `httpx.AsyncClient(follow_redirects=False)` по умолчанию (HIGH — исполнено, а не прочитано)
-* **Вендоренный `app/static/js/htmx.min.js` 1.9.10** — `htmx-history-cache` в `localStorage` (HIGH)
+* **Вендоренный `app/static/js/htmx.min.js` 1.9.10** — `htmx-history-cache` в `localStorage` (HIGH). ⚠️ Относится к 1.9.10, который Фаза 7 убрала: у отгруженного 2.0.10 ключ лежит в `sessionStorage`, а `localStorage` рантайм не знает вовсе — см. поправку в §Pitfall 9
 * **Исходники проекта** — `app/pages/__init__.py` (перечни гейтов), `app/pages/auth.py` (атрибуты cookie), `app/pages/ads.py` (единственная htmx-ветка), `app/pages/billing.py` (`PendingIntentCapError`, `PAYMENT_ERROR_MESSAGES`), `app/pages/history.py` (`_claim_retry_slot`), `tests/test_pages/test_access_gate.py`, `tests/test_pages/test_impersonation_gate.py`, `tests/test_pages/test_cookie_flags.py`, `tests/conftest.py` (HIGH)
 * **Инвентаризация грепом** — `hx-target`/`hx-select`/`hx-boost`/`hx-on`/`hx-headers`/`hx-delete` = 0; `x-data` = 14 шаблонов; `|safe` = 0; CSP/X-Frame-Options = 0; `HX-Request` в тестах = 1; CSRF = 0 (HIGH)
 * **`.planning/codebase/CONCERNS.md`** — отсутствие CSRF-защиты и `.scalars().all()` без пагинации как уже зафиксированные риски (HIGH)
