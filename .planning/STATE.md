@@ -4,12 +4,12 @@ milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 07
 current_phase_name: Обновление htmx до 2.0.10 и блок конфигурации
-status: planning
+status: executing
 stopped_at: Phase 7 context gathered
-last_updated: "2026-08-27T07:19:53.601Z"
-last_activity: 2026-08-26
-last_activity_desc: "Роадмап вехи v2.1 создан: 9 фаз (7…15), 41/41 требование отображено"
-state_head: 169213890f7c61d141dc4a23b8660fb3a80b8d92
+last_updated: "2026-08-27T07:40:46.829Z"
+last_activity: 2026-08-27
+last_activity_desc: Phase 07 execution started
+state_head: ae9e6b89350bb1d5338bd59ca8e1bd7c9ce930e8
 progress:
   total_phases: 9
   completed_phases: 0
@@ -25,7 +25,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-25)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Веха v2.1 «HTMX-first». Роадмап составлен 2026-08-26: 9 фаз, **нумерация 7…15** (продолжает v2.0, закончившуюся Фазой 6). Все 41 требование вехи отображены в фазы, сирот нет. Следующее действие — планирование Фазы 7.
+**Current focus:** Phase 07 — Обновление htmx до 2.0.10 и блок конфигурации
 
 ⚠️ **Указатель фазы во frontmatter по-прежнему пуст, и это не упущение.** Роадмап существует, но ни одна фаза v2.1 ещё не спланирована: каталогов фаз нет, планов нет. Указатель ставится первым запуском `/gsd-plan-phase 7`, а не роадмаппером.
 
@@ -35,10 +35,10 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 
 ## Current Position
 
-Phase: 07 (Обновление htmx до 2.0.10 и блок конфигурации) — READY TO EXECUTE
-Plan: —
-Status: Ready to execute
-Last activity: 2026-08-26 — Роадмап вехи v2.1 создан: 9 фаз (7…15), 41/41 требование отображено
+Phase: 07 (Обновление htmx до 2.0.10 и блок конфигурации) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 07
+Last activity: 2026-08-27 — Phase 07 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -288,7 +288,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** acknowledged`
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Executing Phase 07
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity

@@ -94,8 +94,8 @@
 **Plans**: 3 плана (волна 1 — планы 01 и 02 параллельно, волна 2 — план 03)
 **Wave 1**
 
-- [ ] 07-01-PLAN.md — трассирующий срез: рантайм htmx 2.0.10, общий блок конфигурации в `includes/htmx_config.html`, оба шелла на нём, очистка ключа снимков истории в auth-шелле (FOUND-01, FOUND-02, QUAL-05)
-- [ ] 07-02-PLAN.md — `_compute_asset_version()` считает хеш содержимого охвата `**/*.css` + `**/*.js` вместо времени изменения `app.css`, плюс инвентарный гейт состава охвата (FOUND-03)
+- [x] 07-01-PLAN.md — трассирующий срез: рантайм htmx 2.0.10, общий блок конфигурации в `includes/htmx_config.html`, оба шелла на нём, очистка ключа снимков истории в auth-шелле (FOUND-01, FOUND-02, QUAL-05)
+- [x] 07-02-PLAN.md — `_compute_asset_version()` считает хеш содержимого охвата `**/*.css` + `**/*.js` вместо времени изменения `app.css`, плюс инвентарный гейт состава охвата (FOUND-03)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -312,7 +312,7 @@ in-memory SQLite через `ASGITransport` без процесса и порт�
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 7. Обновление htmx до 2.0.10 | v2.1 | 0/TBD | Not started | - |
+| 7. Обновление htmx до 2.0.10 | v2.1 | 2/3 | In Progress|  |
 | 8. Фундамент, гейты, денежный потолок | v2.1 | 0/TBD | Not started | - |
 | 9. Пилот `account_groups` | v2.1 | 0/TBD | Not started | - |
 | 10. Рычаг `modal.html` | v2.1 | 0/TBD | Not started | - |
