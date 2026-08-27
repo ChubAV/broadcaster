@@ -55,7 +55,11 @@ reading of the current files; no prior finding was assumed fixed or unfixed.
 - `allowNestedOobSwaps: false` does not break the four existing OOB elements: all four
   in `ads/includes/autosave_response.html` are top-level in the response fragment, and
   htmx's guard is `e.parentElement === null`, which holds for `<template>.content` children.
-- The three new gate suites run green (22 + 2 assertions confirmed locally).
+- All four in-scope test modules run green locally: 142 passed
+  (`test_asset_version.py`, `test_htmx_inventory.py`, `test_htmx_response_contract.py`,
+  `test_shell.py`). This confirms the gates execute and pass; it is *not* evidence
+  against the findings below, several of which are precisely about gates that stay
+  green while the property they claim to guard is false or invisible to them.
 
 **What is still wrong.** The version calculator has a silent fail-open path that
 reinstates the exact defect the phase exists to close (CR-01). The new configuration
