@@ -1297,6 +1297,11 @@ HTMX_RUNTIME_SOURCE_REF = "js/htmx.min.js"
 # кого нашёл, согласился бы с переездом тега куда угодно.
 HTMX_RUNTIME_OWNER = "includes/htmx_config.html"
 
+# Ключ, под которым htmx складывает снимки страниц. Хранилище — localStorage,
+# а не sessionStorage: снимок переживает и закрытие вкладки, и выход из
+# системы. Имя снято по вендоренному артефакту (research/PITFALLS.md §9).
+HISTORY_CACHE_KEY = "htmx-history-cache"
+
 
 def _htmx_config_of(html: str, shell: str) -> dict:
     """Блок конфигурации, вытащенный из ОТРЕНДЕРЕННОГО документа и разобранный.
@@ -1462,4 +1467,47 @@ def test_htmx_runtime_tag_has_single_source():
         "ссылка на рантайм htmx перестала быть единственной в шаблонах:\n"
         f"  найдено:  {sorted(owners)}\n"
         f"  ожидался: [{HTMX_RUNTIME_OWNER}]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_auth_shell_clears_history_cache_once(client: AsyncClient):
+    """auth_base.html: строка очистки ключа снимков истории есть, и она одна.
+
+    QUAL-05, машинная половина. Считается ЧИСЛО вхождений, а не признак
+    наличия: снятие строки будущим планом обязано ронять тест ровно так же, как
+    снятие любого из шести ключей конфигурации (D-13), а вторая копия — так же,
+    как второй литеральный блок.
+
+    ЧЕГО ЭТОТ ГЕЙТ НЕ ВИДИТ. Суита не исполняет ни строчки JS: httpx отдаёт
+    текст ответа, а не браузер с хранилищем. Утверждается НАЛИЧИЕ и
+    ЕДИНСТВЕННОСТЬ строки, а не её действие — что после выхода снимков в
+    localStorage не остаётся, проверяется глазами в DevTools и закрывается
+    артефактом плана 07-03. Называть эту половину покрытием требования нельзя.
+    """
+    response = await client.get("/login")
+    assert response.status_code == 200
+
+    assert response.text.count(HISTORY_CACHE_KEY) == 1, (
+        "строка очистки ключа снимков истории в auth-шелле встречается "
+        f"{response.text.count(HISTORY_CACHE_KEY)} раз(а), ожидалась ровно одна"
+    )
+
+
+@pytest.mark.asyncio
+async def test_main_shell_does_not_clear_history_cache(authed_client: AsyncClient):
+    """base.html: очистки в основном шелле НЕТ — она объявлена одношелльной.
+
+    Негативная половина пары (D-11). После нулевого размера кеша ключ больше не
+    наполняется, поэтому вторая копия очистки была бы не подстраховкой, а вторым
+    владельцем одного действия — ровно тем, что фаза лечит у блока конфигурации.
+    Форма «позитивное утверждение плюс отрицательное» в этом файле уже применена
+    (:58-69, шрифты и внешние хосты).
+    """
+    response = await authed_client.get("/dashboard")
+    assert response.status_code == 200
+
+    assert response.text.count(HISTORY_CACHE_KEY) == 0, (
+        "очистка ключа снимков истории появилась во ВТОРОМ шелле — одно "
+        "действие получило двух владельцев"
     )
