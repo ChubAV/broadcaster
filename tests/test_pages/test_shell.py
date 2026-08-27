@@ -1,6 +1,9 @@
 """Wave 0: покрытие UI-01, UI-02, UI-03, UI-06 для нового шелла (План 01-01)."""
 
 import ast
+import base64
+import hashlib
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -38,7 +41,11 @@ async def test_static_js_served(client: AsyncClient):
     for path in ("/static/js/htmx.min.js", "/static/js/alpine.min.js"):
         response = await client.get(path)
         assert response.status_code == 200, path
-        # Вендоренные рантаймы: htmx ~47.7 КБ, Alpine ~43.4 КБ
+        # Вендоренные рантаймы: htmx ~51.2 КБ (2.0.10, план 07-01 — записанная
+        # здесь прежде величина снята вместе с файлом 1.9.10, а не дополнена
+        # поправкой), Alpine ~43.4 КБ.
+        # Порог здесь грубый и таким остаётся: подлинность htmx утверждается не
+        # им, а полным SHA-384 в test_vendored_htmx_is_the_declared_artifact.
         assert len(response.content) > 10_000, path
 
 
@@ -1220,4 +1227,287 @@ def test_dashboard_page_has_no_second_source_of_the_sessions_number():
     )
     assert "sessions_online" not in source, (
         "страница дашборда считает индикатор сама вместо чтения контракта шелла"
+    )
+
+
+# --- Фаза 7 / план 07-01: рантайм htmx 2.0.10 и блок его конфигурации --------
+#
+# Три константы ниже ВЫПИСАНЫ ЗДЕСЬ, а не выведены из проверяемого артефакта.
+# Тест, считающий ожидание с того же файла, который проверяет, согласился бы с
+# любой правкой — прецедент записан у GATED_ROUTERS (test_access_gate.py:41-52).
+
+HTMX_VERSION = "2.0.10"
+
+# ЗАПИСЬ О ТОМ, ЧТО ИМЕННО ВВЕЗЕНО.
+# Файл `app/static/js/htmx.min.js` — дистрибутивный минифицированный htmx
+# 2.0.10, скачанный с https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js
+# (зеркало https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js байт-идентично).
+# Вытеснил собой 1.9.10 (47 755 Б) планом 07-01.
+#
+# Хеш стоит здесь, а НЕ атрибутом integrity на теге рантайма, и это решение
+# (D-04): тот же хеш в двух местах при рассинхроне заставил бы браузер отбросить
+# файл МОЛЧА — пользователь получил бы мёртвый интерфейс без единого сообщения.
+# Здесь рассинхрон краснеет в суите, а не у пользователя.
+#
+# ПРИ СЛЕДУЮЩЕМ ОБНОВЛЕНИИ РАНТАЙМА обе константы меняются ТЕМ ЖЕ КОММИТОМ,
+# что и сам файл. Подмена артефакта без правки этих строк — то, ради чего они
+# написаны; правка этих строк без сверки со скачанным файлом превращает запись
+# о ввезённом в запись о том, чего в репозитории нет.
+HTMX_SHA384 = "H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"
+HTMX_BYTES = 51238
+
+# Шесть ключей ВЕРХНЕГО уровня; responseHandling — ОДИН ключ, а не пять.
+# Источник — .planning/research/SUMMARY.md §«Обязательный блок конфигурации»,
+# где у каждой строки выписано последствие её пропуска.
+HTMX_CONFIG = {
+    "historyRestoreAsHxRequest": False,
+    "allowNestedOobSwaps": False,
+    "reportValidityOfForms": True,
+    "historyCacheSize": 0,
+    "selfRequestsOnly": True,
+    "responseHandling": [
+        {"code": "204", "swap": False},
+        {"code": "[23]..", "swap": True},
+        {"code": "422", "swap": True},
+        {"code": "[45]..", "swap": False, "error": True},
+        {"code": "...", "swap": False},
+    ],
+}
+
+# Пять правил В ПОРЯДКЕ. Порядок и есть предмет: правила разбираются сверху вниз
+# до первого совпадения, и "422", опустившееся ниже "[45]..", перехватывается
+# общим правилом — форма с ошибкой валидации становится мёртвой кнопкой.
+RESPONSE_HANDLING_CODES = ("204", "[23]..", "422", "[45]..", "...")
+
+# Значение атрибута многострочное, поэтому re.DOTALL обязателен.
+HTMX_CONFIG_RE = re.compile(
+    r"""<meta\s+name=["']htmx-config["']\s+content='(.*?)'\s*/?>""",
+    re.DOTALL,
+)
+
+# Путь рантайма в отрендеренном документе. url_for отдаёт АБСОЛЮТНЫЙ адрес со
+# своим хостом, поэтому ищется хвост, а не вся ссылка.
+HTMX_RUNTIME_REF = "/static/js/htmx.min.js"
+
+# То же в ИСХОДНИКЕ шаблона: там стоит вызов url_for, а не готовый путь.
+HTMX_RUNTIME_SOURCE_REF = "js/htmx.min.js"
+
+# ЕДИНСТВЕННЫЙ законный владелец ссылки на рантайм среди шаблонов (D-01).
+# Имя выписано здесь, а не выведено обходом: тест, назначающий владельцем того,
+# кого нашёл, согласился бы с переездом тега куда угодно.
+HTMX_RUNTIME_OWNER = "includes/htmx_config.html"
+
+# Ключ, под которым htmx складывает снимки страниц. Хранилище — localStorage,
+# а не sessionStorage: снимок переживает и закрытие вкладки, и выход из
+# системы. Имя снято по вендоренному артефакту (research/PITFALLS.md §9).
+HISTORY_CACHE_KEY = "htmx-history-cache"
+
+
+def _htmx_config_of(html: str, shell: str) -> dict:
+    """Блок конфигурации, вытащенный из ОТРЕНДЕРЕННОГО документа и разобранный.
+
+    Разбор идёт по ответу, а не по исходнику шаблона, и это несущее решение
+    (D-05). Сломанное экранирование кавычек внутри значения атрибута отбросило
+    бы ВСЕ шесть ключей в умолчания, оставив греп исходника зелёным: htmx не
+    сообщает о нечитаемой конфигурации ничем. Ловит это только json.loads
+    разобранного ответа.
+    """
+    match = HTMX_CONFIG_RE.search(html)
+    assert match, (
+        f"{shell}: блока конфигурации htmx в отрендеренном документе нет — "
+        "забытый {% include %} либо съехавший атрибут content"
+    )
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"{shell}: значение content= не разбирается как JSON ({exc}) — "
+            "все шесть ключей молча ушли бы в умолчания:\n" + match.group(1)
+        ) from exc
+
+
+def _assert_config_contract(config: dict, shell: str) -> None:
+    """Шесть ключей с их значениями и ПОРЯДОК пяти правил responseHandling."""
+    assert set(config) == set(HTMX_CONFIG), (
+        f"{shell}: состав ключей верхнего уровня разошёлся — "
+        f"лишние {sorted(set(config) - set(HTMX_CONFIG))}, "
+        f"недостающие {sorted(set(HTMX_CONFIG) - set(config))}"
+    )
+
+    for key, expected in HTMX_CONFIG.items():
+        actual = config[key]
+        # Тип сверяется отдельно от значения: в Python False == 0, и
+        # historyCacheSize, съехавший в false, прошёл бы сравнение значений.
+        assert type(actual) is type(expected), (
+            f"{shell}: у ключа {key} тип {type(actual).__name__}, "
+            f"ожидался {type(expected).__name__}"
+        )
+        assert actual == expected, (
+            f"{shell}: у ключа {key} значение {actual!r}, ожидалось {expected!r}"
+        )
+
+    codes = tuple(rule["code"] for rule in config["responseHandling"])
+    assert codes == RESPONSE_HANDLING_CODES, (
+        f"{shell}: порядок правил responseHandling {codes}, "
+        f"ожидался {RESPONSE_HANDLING_CODES}"
+    )
+    assert codes.index("422") < codes.index("[45].."), (
+        f"{shell}: правило 422 опустилось НИЖЕ общего [45].. и перехватывается "
+        "им — форма с ошибкой валидации стала для пользователя мёртвой кнопкой"
+    )
+
+
+def _assert_config_precedes_runtime(html: str, shell: str) -> None:
+    """Блок стоит ВЫШЕ тега рантайма — утверждается индексами, а не наличием.
+
+    Рантайм читает конфигурацию один раз, при разборе собственного тега: блок,
+    оказавшийся ниже, не читается вовсе и не сообщает об этом (D-02).
+    """
+    config_at = html.find("htmx-config")
+    runtime_at = html.find(HTMX_RUNTIME_REF)
+    assert config_at != -1, f"{shell}: блока конфигурации в документе нет"
+    assert runtime_at != -1, f"{shell}: тега рантайма htmx в документе нет"
+    assert config_at < runtime_at, (
+        f"{shell}: блок конфигурации ({config_at}) оказался НИЖЕ тега рантайма "
+        f"({runtime_at}) — htmx его не прочитает и не пожалуется"
+    )
+
+
+def test_vendored_htmx_is_the_declared_artifact():
+    """D-04: вендоренный рантайм — ИМЕННО тот артефакт, а не «версия 2.0.10».
+
+    Утверждений три, и ни одно не заменяет другого. Размер ловит оборванную
+    загрузку. Полный SHA-384 ловит пропатченную сборку и чужой ре-минификатор —
+    файл, отличающийся хотя бы одним байтом, гейт не проходит. Подстрока версии
+    ловит подмену соседним релизом с сохранением размера; она несёт ЗАКРЫВАЮЩУЮ
+    кавычку, поэтому ни 2.0.1, ни 2.0.101 ей не удовлетворяют.
+
+    Читается файл с диска, а не ответ HTTP: предмет — байты в репозитории.
+    Прецедент утверждения по байтам в этом же файле есть — сигнатура wOF2 у
+    шрифтов (:55).
+    """
+    path = PROJECT_ROOT / "app" / "static" / "js" / "htmx.min.js"
+    assert path.exists(), "вендоренный рантайм htmx пропал с диска"
+    payload = path.read_bytes()
+
+    assert len(payload) == HTMX_BYTES, (
+        f"размер вендоренного htmx {len(payload)} Б, объявлено {HTMX_BYTES} Б"
+    )
+
+    digest = base64.b64encode(hashlib.sha384(payload).digest()).decode("ascii")
+    assert digest == HTMX_SHA384, (
+        "SHA-384 вендоренного htmx не равен объявленному:\n"
+        f"  в репозитории: {digest}\n"
+        f"  объявлено:     {HTMX_SHA384}\n"
+        "Артефакт подменён либо константа правлена отдельно от файла."
+    )
+
+    assert f'version:"{HTMX_VERSION}"'.encode("utf-8") in payload, (
+        f'подстроки version:"{HTMX_VERSION}" в артефакте нет'
+    )
+
+
+@pytest.mark.asyncio
+async def test_auth_shell_carries_htmx_config(client: AsyncClient):
+    """auth_base.html: блок из шести ключей приезжает на /login разобранным.
+
+    Подпись называет ШЕЛЛ, а не адрес: предмет — второй шелл проекта, а /login
+    лишь одна из семи его страниц. Забытый {% include %} в ОДНОМ из двух шеллов
+    — тот самый тихий отказ, ради которого гейт читает отрендеренный HTML.
+    """
+    response = await client.get("/login")
+    assert response.status_code == 200
+
+    html = response.text
+    _assert_config_contract(_htmx_config_of(html, "auth_base.html"), "auth_base.html")
+    _assert_config_precedes_runtime(html, "auth_base.html")
+
+
+@pytest.mark.asyncio
+async def test_main_shell_carries_htmx_config(authed_client: AsyncClient):
+    """base.html: тот же блок приезжает на /dashboard тем же ОДНИМ include.
+
+    Тест-близнец предыдущего, и парой они обязаны быть именно парой: шеллов в
+    проекте два, конфигурация одна, и утверждение, снятое с одной страницы,
+    ничего не говорит о второй. Подпись называет ШЕЛЛ, а не адрес — /dashboard
+    здесь представитель всех 26 страничных маршрутов под base.html.
+    """
+    response = await authed_client.get("/dashboard")
+    assert response.status_code == 200
+
+    html = response.text
+    _assert_config_contract(_htmx_config_of(html, "base.html"), "base.html")
+    _assert_config_precedes_runtime(html, "base.html")
+
+
+def test_htmx_runtime_tag_has_single_source():
+    """D-01: ссылка на рантайм htmx живёт в ШАБЛОНАХ ровно в одном файле.
+
+    Машинная форма доктрины «один источник, не вторая копия». Литеральный тег,
+    вернувшийся в шелл, означал бы, что конфигурация и рантайм снова могут
+    разъехаться: блок остался бы в include, а рантайм подгружался бы вторым
+    тегом выше него — и htmx прочитал бы умолчания, не сказав ни слова.
+
+    Обход РЕКУРСИВНЫЙ (rglob, не glob) по образцу _all_templates()
+    из test_templates/test_components.py:856-865: плоский обход не увидел бы
+    файл в подкаталоге, а именно там единственный законный владелец и живёт.
+
+    Утверждается МНОЖЕСТВО путей, а не их число: сообщение об отказе обязано
+    называть файл-нарушитель, иначе оно сообщает о расхождении счёта и
+    оставляет поиск виновника читателю.
+    """
+    templates_dir = PROJECT_ROOT / "app" / "templates"
+    owners = {
+        path.relative_to(templates_dir).as_posix()
+        for path in sorted(templates_dir.rglob("*.html"))
+        if HTMX_RUNTIME_SOURCE_REF in path.read_text(encoding="utf-8")
+    }
+
+    assert owners == {HTMX_RUNTIME_OWNER}, (
+        "ссылка на рантайм htmx перестала быть единственной в шаблонах:\n"
+        f"  найдено:  {sorted(owners)}\n"
+        f"  ожидался: [{HTMX_RUNTIME_OWNER}]"
+    )
+
+
+@pytest.mark.asyncio
+async def test_auth_shell_clears_history_cache_once(client: AsyncClient):
+    """auth_base.html: строка очистки ключа снимков истории есть, и она одна.
+
+    QUAL-05, машинная половина. Считается ЧИСЛО вхождений, а не признак
+    наличия: снятие строки будущим планом обязано ронять тест ровно так же, как
+    снятие любого из шести ключей конфигурации (D-13), а вторая копия — так же,
+    как второй литеральный блок.
+
+    ЧЕГО ЭТОТ ГЕЙТ НЕ ВИДИТ. Суита не исполняет ни строчки JS: httpx отдаёт
+    текст ответа, а не браузер с хранилищем. Утверждается НАЛИЧИЕ и
+    ЕДИНСТВЕННОСТЬ строки, а не её действие — что после выхода снимков в
+    localStorage не остаётся, проверяется глазами в DevTools и закрывается
+    артефактом плана 07-03. Называть эту половину покрытием требования нельзя.
+    """
+    response = await client.get("/login")
+    assert response.status_code == 200
+
+    assert response.text.count(HISTORY_CACHE_KEY) == 1, (
+        "строка очистки ключа снимков истории в auth-шелле встречается "
+        f"{response.text.count(HISTORY_CACHE_KEY)} раз(а), ожидалась ровно одна"
+    )
+
+
+@pytest.mark.asyncio
+async def test_main_shell_does_not_clear_history_cache(authed_client: AsyncClient):
+    """base.html: очистки в основном шелле НЕТ — она объявлена одношелльной.
+
+    Негативная половина пары (D-11). После нулевого размера кеша ключ больше не
+    наполняется, поэтому вторая копия очистки была бы не подстраховкой, а вторым
+    владельцем одного действия — ровно тем, что фаза лечит у блока конфигурации.
+    Форма «позитивное утверждение плюс отрицательное» в этом файле уже применена
+    (:58-69, шрифты и внешние хосты).
+    """
+    response = await authed_client.get("/dashboard")
+    assert response.status_code == 200
+
+    assert response.text.count(HISTORY_CACHE_KEY) == 0, (
+        "очистка ключа снимков истории появилась во ВТОРОМ шелле — одно "
+        "действие получило двух владельцев"
     )

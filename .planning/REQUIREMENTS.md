@@ -14,7 +14,7 @@
 ### Фундамент
 
 - [ ] **FOUND-01**: htmx обновлён с 1.9.10 до 2.0.10 заменой вендоренного файла, и тест утверждает версию по содержимому файла
-- [ ] **FOUND-02**: блок конфигурации htmx из шести ключей (`responseHandling` с правилом `422` **выше** `[45]..`, `historyRestoreAsHxRequest: false`, `allowNestedOobSwaps: false`, `reportValidityOfForms: true`, `historyCacheSize: 0`, явный `selfRequestsOnly: true`) стоит в `base.html` **и** `auth_base.html` перед подключением htmx, и каждая строка утверждается тестом
+- [x] **FOUND-02**: блок конфигурации htmx из шести ключей (`responseHandling` с правилом `422` **выше** `[45]..`, `historyRestoreAsHxRequest: false`, `allowNestedOobSwaps: false`, `reportValidityOfForms: true`, `historyCacheSize: 0`, явный `selfRequestsOnly: true`) стоит в `base.html` **и** `auth_base.html` перед подключением htmx, и каждая строка утверждается тестом
 - [x] **FOUND-03**: `asset_version` пересчитывается при замене любого вендоренного JS-файла, а не только `app.css` — подмена `htmx.min.js` меняет `?v=` на его теге
 - [ ] **FOUND-04**: слой `respond()` в новом `app/pages/htmx.py` — единственное на проект объявление признака htmx; аргумент `redirect=` обязателен, поэтому обработчик без пути деградации не собирается как вызов
 - [ ] **FOUND-05**: реестр уведомлений `app/pages/notices.py` принимает КОД, а не текст; пять существующих микро-контрактов (`?error=`, `?saved=1`, `?reset=`, `?retry=`, `?sched_error=`) сведены в один `?notice=`
@@ -121,7 +121,7 @@
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | FOUND-01 | Phase 7 | Pending |
-| FOUND-02 | Phase 7 | Pending |
+| FOUND-02 | Phase 7 | Complete |
 | FOUND-03 | Phase 7 | Complete |
 | FOUND-04 | Phase 8 | Pending |
 | FOUND-05 | Phase 8 | Pending |
