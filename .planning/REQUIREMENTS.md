@@ -115,57 +115,78 @@
 
 ## Traceability
 
-Заполняется при создании роадмапа.
+Заполнено при создании роадмапа 2026-08-26. Фазы вехи v2.1 — 7…15 (нумерация продолжает v2.0,
+закончившуюся Фазой 6, и НЕ начинается заново).
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | — | Pending |
-| FOUND-02 | — | Pending |
-| FOUND-03 | — | Pending |
-| FOUND-04 | — | Pending |
-| FOUND-05 | — | Pending |
-| FOUND-06 | — | Pending |
-| FOUND-07 | — | Pending |
-| FORM-01 | — | Pending |
-| FORM-02 | — | Pending |
-| FORM-03 | — | Pending |
-| FORM-04 | — | Pending |
-| FORM-05 | — | Pending |
-| FORM-06 | — | Pending |
-| FORM-07 | — | Pending |
-| FORM-08 | — | Pending |
-| FORM-09 | — | Pending |
-| FORM-10 | — | Pending |
-| QUAL-01 | — | Pending |
-| QUAL-02 | — | Pending |
-| QUAL-03 | — | Pending |
-| QUAL-04 | — | Pending |
-| QUAL-05 | — | Pending |
-| QUAL-06 | — | Pending |
-| FETCH-01 | — | Pending |
-| FETCH-02 | — | Pending |
-| FETCH-03 | — | Pending |
-| SIGN-01 | — | Pending |
-| SIGN-02 | — | Pending |
-| SIGN-03 | — | Pending |
-| GATE-01 | — | Pending |
-| GATE-02 | — | Pending |
-| GATE-03 | — | Pending |
-| GATE-04 | — | Pending |
-| GATE-05 | — | Pending |
-| GATE-06 | — | Pending |
-| GATE-07 | — | Pending |
-| GATE-08 | — | Pending |
-| GATE-09 | — | Pending |
-| GATE-10 | — | Pending |
-| PAY-01 | — | Pending |
-| PAY-02 | — | Pending |
+| FOUND-01 | Phase 7 | Pending |
+| FOUND-02 | Phase 7 | Pending |
+| FOUND-03 | Phase 7 | Pending |
+| FOUND-04 | Phase 8 | Pending |
+| FOUND-05 | Phase 8 | Pending |
+| FOUND-06 | Phase 8 | Pending |
+| FOUND-07 | Phase 8 | Pending |
+| FORM-01 | Phase 15 | Pending |
+| FORM-02 | Phase 9 | Pending |
+| FORM-03 | Phase 11 | Pending |
+| FORM-04 | Phase 11 | Pending |
+| FORM-05 | Phase 11 | Pending |
+| FORM-06 | Phase 10 | Pending |
+| FORM-07 | Phase 11 | Pending |
+| FORM-08 | Phase 11 | Pending |
+| FORM-09 | Phase 9 | Pending |
+| FORM-10 | Phase 11 | Pending |
+| QUAL-01 | Phase 9 | Pending |
+| QUAL-02 | Phase 9 | Pending |
+| QUAL-03 | Phase 8 | Pending |
+| QUAL-04 | Phase 15 | Pending |
+| QUAL-05 | Phase 7 | Pending |
+| QUAL-06 | Phase 9 | Pending |
+| FETCH-01 | Phase 12 | Pending |
+| FETCH-02 | Phase 13 | Pending |
+| FETCH-03 | Phase 15 | Pending |
+| SIGN-01 | Phase 14 | Pending |
+| SIGN-02 | Phase 14 | Pending |
+| SIGN-03 | Phase 14 | Pending |
+| GATE-01 | Phase 8 | Pending |
+| GATE-02 | Phase 11 | Pending |
+| GATE-03 | Phase 8 | Pending |
+| GATE-04 | Phase 8 | Pending |
+| GATE-05 | Phase 8 | Pending |
+| GATE-06 | Phase 8 | Pending |
+| GATE-07 | Phase 8 | Pending |
+| GATE-08 | Phase 8 | Pending |
+| GATE-09 | Phase 15 | Pending |
+| GATE-10 | Phase 15 | Pending |
+| PAY-01 | Phase 8 | Pending |
+| PAY-02 | Phase 8 | Pending |
 
 **Coverage:**
 - v2.1 requirements: 41 total
-- Mapped to phases: 0
-- Unmapped: 41 ⚠️ (заполняется роадмаппером)
+- Mapped to phases: 41 ✓
+- Unmapped: 0 — сирот нет, дублей нет: каждое требование отображено ровно в одну фазу
+
+**Распределение по фазам** (нумерация продолжает v2.0, веха открывается Фазой 7):
+
+| Фаза | Требования | Кол-во |
+|---|---|---|
+| 7. Обновление htmx до 2.0.10 и блок конфигурации | FOUND-01, FOUND-02, FOUND-03, QUAL-05 | 4 |
+| 8. Фундамент ответа, гейты, денежный потолок | FOUND-04, FOUND-05, FOUND-06, FOUND-07, QUAL-03, GATE-01, GATE-03, GATE-04, GATE-05, GATE-06, GATE-07, GATE-08, PAY-01, PAY-02 | 14 |
+| 9. Пилот `account_groups` | FORM-02, FORM-09, QUAL-01, QUAL-02, QUAL-06 | 5 |
+| 10. Рычаг `components/modal.html` | FORM-06 | 1 |
+| 11. Массовый перевод разделов письма | FORM-03, FORM-04, FORM-05, FORM-07, FORM-08, FORM-10, GATE-02 | 7 |
+| 12. Загрузка изображений без `fetch()` | FETCH-01 | 1 |
+| 13. QR-мастер Telegram на фрагментах | FETCH-02 | 1 |
+| 14. Авторизация на htmx | SIGN-01, SIGN-02, SIGN-03 | 3 |
+| 15. Упрочнение и сводный обход 47 форм | FORM-01, FETCH-03, QUAL-04, GATE-09, GATE-10 | 5 |
+
+Требования вида «на каждой форме» отнесены к фазе, где они становятся структурно ИСТИННЫМИ
+(появляется макрос или гейт, делающий свойство свойством построения); требования вида «все 47»
+(FORM-01, FETCH-03, QUAL-04, GATE-09, GATE-10) отнесены к Фазе 15 — 47/47 наблюдаемо только
+в сводном обходе. Обоснование каждого отнесения — `.planning/ROADMAP.md` §Покрытие требований.
 
 ---
 *Requirements defined: 2026-08-26*
 *Last updated: 2026-08-26 after milestone v2.1 definition — три решения владельца по эскалациям разведки внесены: QUAL-03 (заготовка с сервера + переключение атрибута вместо «ни строки JS»), QUAL-04 (решение по каждой форме вместо `hx-push-url` на всех), PAY-01/PAY-02 (денежный долг втянут в веху, поскольку веха повышает его риск).*
+*Traceability filled: 2026-08-26 — роадмап v2.1, 9 фаз (7…15), 41/41 требование отображено.*
