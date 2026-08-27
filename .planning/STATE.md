@@ -2,9 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: HTMX-first
+current_phase: 0
+current_phase_name: роадмап составлен, ни одна фаза не спланирована
 status: planning
-last_updated: "2026-08-26T20:10:00.000Z"
+stopped_at: Phase 7 context gathered
+last_updated: "2026-08-27T06:36:48.291Z"
 last_activity: 2026-08-26
+last_activity_desc: "Роадмап вехи v2.1 создан: 9 фаз (7…15), 41/41 требование отображено"
+state_head: 6b1ed0ec787798393ec4c606580666eed0fe96f3
 progress:
   total_phases: 9
   completed_phases: 0
@@ -288,9 +293,9 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-08-26
-Stopped at: Создан роадмап вехи v2.1 «HTMX-first» — 9 фаз (7…15), 41/41 требование отображено ровно в одну фазу, прослеживаемость в `REQUIREMENTS.md` заполнена. Фаз ещё не спланировано.
-Resume file: None
+Last session: 2026-08-27T06:36:48.245Z
+Stopped at: Phase 7 context gathered
+Resume file: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-CONTEXT.md
 
 ## Operator Next Steps
 
