@@ -28,7 +28,7 @@
 | Ссылка на рантайм существует в шаблонах ровно в одном файле — `includes/htmx_config.html` | `test_shell.py::test_htmx_runtime_tag_has_single_source` |
 | Строка миграционной очистки приезжает в ОТРЕНДЕРЕННЫЙ документ ОБОИХ шеллов ровно один раз каждый, а источник её в шаблонах ровно один — `includes/htmx_config.html` | `test_shell.py::test_auth_shell_purges_the_legacy_history_cache_once`, `::test_main_shell_purges_the_legacy_history_cache_once`, `::test_legacy_history_cache_purge_has_single_source` |
 | Инлайн-скрипт очистки не зовёт ни одного стока разметки и не читает значений из запроса | `test_shell.py::test_history_cache_purge_touches_no_markup_sink` |
-| Мест `hx-get` ровно 22, разбивка по механизмам 12 / 8 / 2, вхождений строки `revealed` 13 против 12 мест | `tests/test_templates/test_htmx_inventory.py` (обе функции) |
+| Мест `hx-get` ровно 22, разбивка по механизмам 12 / 8 / 2, вхождений строки `revealed` 12 против 12 мест, тегов ровно столько же, сколько вхождений атрибута | `tests/test_templates/test_htmx_inventory.py` (все четыре функции) |
 
 ### Что закрыть машинно НЕЛЬЗЯ — и составляет предмет этого обхода
 
