@@ -24,6 +24,7 @@ import inspect
 import pytest
 from fastapi import HTTPException
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 from app.pages.htmx import (
@@ -32,6 +33,18 @@ from app.pages.htmx import (
     is_htmx,
     location_response,
     refuse,
+)
+# Помощники входа под чужой личностью берутся ИМПОРТОМ, а не второй копией.
+# `_enter` УДОСТОВЕРЯЕТСЯ, что вход состоялся: без этой проверки утверждения о
+# «действии под чужой личностью» зеленели бы на обычной админской сессии, ничего
+# не проверяя, — и вторая копия помощника рано или поздно её потеряла бы. Та же
+# доктрина единственного источника, по которой `test_htmx_response_contract.py`
+# импортирует разборщик конфигурации, а не переписывает его.
+from tests.test_pages.test_impersonation import (
+    IMPERSONATION_REFUSAL_MARK,
+    _detail_of,
+    _enter,
+    _seed_target,
 )
 
 # Адрес отказа гейта доступа. Выписан здесь строкой, а не импортирован из
@@ -42,6 +55,11 @@ ACCESS_EXPIRED_LOCATION = "/billing?expired=1"
 
 # Страница, создающая ценность, — то есть закрываемая истёкшим доступом.
 CLOSED_PAGE = "/ads"
+
+# Адрес, на который уводит отвергнутое действие под чужой личностью. Выписан
+# строкой по тому же основанию, что и адрес выше: ожидание, взятое из предмета
+# проверки, согласилось бы с любой его правкой.
+IMPERSONATION_REFUSED_LOCATION = "/dashboard?notice=impersonation_forbidden"
 
 
 def _request(headers: dict[str, str] | None = None) -> Request:
@@ -243,3 +261,116 @@ def test_the_refusal_takes_its_destination_by_keyword_only():
     parameters = inspect.signature(refuse).parameters
     assert parameters["location"].kind is inspect.Parameter.KEYWORD_ONLY
     assert parameters["without_htmx"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+# --- Пара 2: отказ действию под чужой личностью -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_an_impersonated_action_answers_a_full_reload_with_its_own_refusal(
+    admin_client: AsyncClient, db_session: AsyncSession,
+):
+    """Форма отказа под чужой личностью СВОЯ, и она сохраняется дословно.
+
+    Отказ по чужой личности обязан отличаться от отказа по правам: администратор,
+    получивший «нет прав» там, где мешает чужая личность, пойдёт чинить ПРАВА, а
+    единственное нужное ему действие — выйти из чужой учётной записи — не было бы
+    названо ни одним словом. Транспорт отказа меняется, различимость причин — нет.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    response = await admin_client.post(
+        "/profile", data={"timezone": "Europe/Moscow"}, follow_redirects=False
+    )
+
+    assert response.status_code == 403, (
+        f"форма профиля ответила {response.status_code} под чужой личностью — "
+        "форма отказа без htmx изменилась"
+    )
+    assert IMPERSONATION_REFUSAL_MARK in _detail_of(response), (
+        f"отказ не назвал причиной чужую личность: {_detail_of(response)!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_impersonated_action_answers_htmx_with_a_location_header(
+    admin_client: AsyncClient, db_session: AsyncSession, htmx_client: AsyncClient,
+):
+    """Отвергнутое действие УВОДИТ на экран, где отказ будет виден и объяснён.
+
+    ⚠️ АДРЕС ПЕРЕХОДА GET-СОВМЕСТИМЫЙ И НЕ РАВЕН ПУТИ ОТВЕРГНУТОГО ДЕЙСТВИЯ.
+    Отвергается ЗАПИСЬ, и вернуть человека на её собственный путь нельзя — тот
+    принимает только POST. Домашний экран той личности, под которой работает
+    администратор, выбран потому, что именно там видна полоса возврата в
+    администратора, то есть выход из положения, а не только его название.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    response = await htmx_client.post(
+        "/profile", data={"timezone": "Europe/Moscow"}
+    )
+
+    assert response.status_code == 204, (
+        f"форма профиля ответила {response.status_code} на запрос htmx"
+    )
+    assert response.headers.get("HX-Location") == IMPERSONATION_REFUSED_LOCATION, (
+        "ответ не несёт заголовка перехода — человек остался на прежнем экране, "
+        "а его правка тихо не сохранилась"
+    )
+    assert "detail" not in response.text, (
+        "в теле приехал машинный `detail` — форма, запрещённая FOUND-07 наравне "
+        "с редиректом"
+    )
+    assert "<!DOCTYPE" not in response.text, "в теле приехал целый документ"
+
+
+@pytest.mark.asyncio
+async def test_a_request_without_an_actor_is_refused_on_neither_transport(
+    authed_client: AsyncClient, htmx_client: AsyncClient,
+):
+    """ГРАНИЦА «ОТСУТСТВИЕ ДЕЙСТВУЮЩЕГО ЛИЦА — НЕ ОТКАЗ» НЕ СДВИНУЛАСЬ.
+
+    Запрет, срабатывающий ВСЕГДА, прошёл бы обе половины пары выше и при этом
+    закрыл бы обычному пользователю правку собственного профиля. Предикат отказа
+    вычисляется ДО развилки транспорта, поэтому новый транспорт не имеет права
+    расширить множество отвергаемых ни на один запрос.
+    """
+    response = await htmx_client.post(
+        "/profile", data={"timezone": "Europe/Moscow"}
+    )
+
+    assert "HX-Location" not in response.headers, (
+        "обычный пользователь получил заголовок перехода — запрет сработал там, "
+        "где действующего лица нет вовсе"
+    )
+    assert response.status_code == 200, (
+        f"правка собственного профиля ответила {response.status_code} — запрет "
+        "закрыл её обычному пользователю"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_machine_receiver_without_a_token_is_refused_on_neither_transport(
+    client: AsyncClient,
+):
+    """Уведомление о СОСТОЯВШЕМСЯ платеже новым транспортом тоже не задевается.
+
+    Единственный вход денежного роутера приходит не от браузера и токена не
+    несёт; отказ ему означал бы потерю уведомления о деньгах, которые УЖЕ
+    заплачены, а такая потеря откатом кода не возвращается (D-53). Утверждение
+    написано ОТ ПРОТИВНОГО: собственный гард вебхука отвечать отказом вправе —
+    предмет в том, что отказ пришёл не от запрета чужой личности.
+    """
+    response = await client.post(
+        "/api/billing/webhook",
+        json={"event": "payment.succeeded", "object": {"id": "x"}},
+    )
+
+    assert "HX-Location" not in response.headers, (
+        "вебхук отвергнут запретом чужой личности новым транспортом"
+    )
+    assert IMPERSONATION_REFUSAL_MARK not in _detail_of(response), (
+        f"вебхук отвергнут запретом чужой личности: {_detail_of(response)!r}"
+    )
