@@ -916,3 +916,759 @@ def test_both_branches_of_the_editor_action_are_extracted() -> None:
         f"— ветвь правки существующей записи адресуется идентификатором, и её "
         f"отсутствие означает, что разобрана только ветвь создания"
     )
+
+
+# --- ИНВЕНТАРЬ СВОПА, ВНЕПОЛОСНЫХ БЛОКОВ И КЛИЕНТСКОГО СОСТОЯНИЯ -------------
+#
+# Продолжение летописи чисел. Три величины ниже собраны собственным обходом
+# этого файла и сверены с планированием фазы; расхождений не было.
+
+# Целей подмены в проекте сегодня НЕ ОБЪЯВЛЕНО НИ ОДНОЙ. Ноль объявляется
+# ИМЕНОВАННОЙ КОНСТАНТОЙ, а не выводится из пустого множества: без числа
+# правила существования цели и границы клиентского состояния были бы вакуумно
+# зелёными навсегда, и первая же цель, добавленная Фазой 9, вошла бы в проект
+# ни одним правилом не проверенной. Прецедент формы — SERVER_SIDE_VALIDATION_RESPONSES.
+HX_TARGETS = 0
+
+# Внеполосных блоков шесть: три собирает ответ автосохранения редактора
+# объявлений, четвёртый — индикатор состояния, чей признак выставляется ВЕТКОЙ
+# ШАБЛОНИЗАТОРА внутри открывающего тега (обход обязан увидеть и его, иначе
+# инвентарь недосчитает один из шести), и два — внеполосная форма уведомления,
+# заведённая планом 08-04.
+OOB_BLOCKS = 6
+
+# Узлов с признаком клиентского состояния двадцать четыре. Двадцать пятое
+# текстовое вхождение имени этого атрибута живёт в Jinja-комментарии
+# компонента модального окна (образец вызова) и вырезается до счёта.
+CLIENT_STATE_NODES = 24
+
+# ⚠️ ПРАВИЛО ПОДМЕНЫ СОДЕРЖИМОГО ОТНОСИТСЯ ТОЛЬКО К ЭТИМ ДВУМ
+# ИДЕНТИФИКАТОРАМ, И ГРАНИЦА ОБЪЯВЛЕНА ПЕРЕЧНЕМ ИМЕННО ЗАТЕМ, ЧТОБЫ ЕЁ НЕ
+# РАСШИРИЛИ. Области уведомления живут в ШЕЛЛЕ и обязаны пережить любое число
+# ответов: унесённая подменой узла область лишает цели ВСЕ последующие ответы,
+# и молча — о ненайденной цели свопа браузер не сообщает ничем.
+#
+# Четыре внеполосных блока редактора объявлений подменяют УЗЕЛ осознанно: их
+# цели — собственные узлы фрагмента, который ответ собирает целиком и заменяет
+# целиком, а не общая область шелла, живущая дольше ответа. Правило,
+# распространённое на них, покраснело бы на работающем коде и было бы снято
+# первым же коммитом — то есть защищало бы ноль минут. Граница выписана словами
+# и в самом шаблоне внеполосной формы уведомления (план 08-04).
+NOTICE_REGION_IDS = ("notice", "notice-alert")
+
+HX_SWAP_OOB_ATTR = _attr_pattern("hx-swap-oob")
+HX_SWAP_OOB_TAG = _tag_pattern("hx-swap-oob")
+HX_SWAP_OOB_VALUE = _value_pattern("hx-swap-oob")
+
+HX_TARGET_ATTR = _attr_pattern("hx-target")
+HX_TARGET_TAG = _tag_pattern("hx-target")
+HX_TARGET_VALUE = _value_pattern("hx-target")
+
+HX_SWAP_VALUE = _value_pattern("hx-swap")
+ID_VALUE = _value_pattern("id")
+ID_OCCURRENCE = re.compile(r"(?<![-\w])id\s*=\s*\"([^\"]*)\"")
+
+# Признак клиентского состояния объявляется и БЕЗ значения (голым атрибутом на
+# теге формы — самая частая его форма в проекте), поэтому у него собственная
+# пара выражений: общая, требующая знака равенства, потеряла бы двадцать из
+# двадцати четырёх узлов и оставила бы границу клиентского состояния вакуумной.
+CLIENT_STATE_ATTR = re.compile(r"(?<![-\w])x-data(?![-\w])")
+CLIENT_STATE_TAG = re.compile(r"<[^<>]*?(?<![-\w])x-data(?![-\w])[^<>]*>")
+
+# Умолчание рантайма для внеполосного блока — подмена УЗЛА; значение «true»
+# есть его синоним, и приводится к нему здесь, чтобы правило содержимого
+# сравнивало способы подмены, а не написания.
+NODE_SWAP = "outerHTML"
+CONTENT_SWAP = "innerHTML"
+NO_SWAP = "none"
+
+# Открывающая ветка шаблонизатора ВНУТРИ тега — признак атрибута, собранного
+# условием. Ровно этой формой объявлен шестой внеполосный блок проекта.
+JINJA_CONDITION = re.compile(r"\{%-?\s*if\b")
+
+# Относительные формы цели («этот», «ближайший …», «следующий …») адресуют узел
+# от места объявления, а не по идентификатору: существование такой цели по
+# исходнику не проверяется и проверяться не может. Они названы ПЕРЕЧНЕМ, а не
+# пропущены остаточным признаком: незаявленная форма цели обязана быть
+# замечена, а не отнесена к относительным по тому, что не начинается с решётки.
+RELATIVE_TARGET_PREFIXES = ("this", "closest ", "find ", "next", "previous", "body", "document", "window")
+
+
+def _oob_sites(templates: list[tuple[str, str]]) -> list[Site]:
+    return _sites(templates, HX_SWAP_OOB_TAG)
+
+
+def _target_sites(templates: list[tuple[str, str]]) -> list[Site]:
+    return _sites(templates, HX_TARGET_TAG)
+
+
+def _client_state_sites(templates: list[tuple[str, str]]) -> list[Site]:
+    return _sites(templates, CLIENT_STATE_TAG)
+
+
+def _id_occurrences(templates: list[tuple[str, str]]) -> dict[str, int]:
+    """Сколько раз каждый ЛИТЕРАЛЬНЫЙ идентификатор объявлен в дереве.
+
+    Идентификаторы, собранные шаблонизатором (``{{ … }}``), из счёта исключены:
+    их значение известно только в момент рендера, и сверять с ними цель подмены
+    нечем. Граница названа в докстринге правила существования цели.
+    """
+    counts: dict[str, int] = {}
+    for _, source in templates:
+        for value in ID_OCCURRENCE.findall(_strip_comments(source)):
+            if "{{" in value or "{%" in value:
+                continue
+            counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _oob_target(tag: str) -> tuple[str, str | None]:
+    """Способ подмены внеполосного блока и идентификатор его цели.
+
+    Цель объявляется ДВУМЯ способами, и оба законны: селектором прямо в
+    значении признака (``способ:#цель``) либо собственным идентификатором
+    несущего тега. Второй способ — умолчание рантайма, и именно поэтому блок
+    без идентификатора и без селектора игнорируется молча: цели у него нет
+    вовсе, а сообщения об этом не будет ни в консоли, ни в ответе.
+    """
+    raw = _attr_value(tag, HX_SWAP_OOB_VALUE) or ""
+    head, _, selector = raw.partition(":")
+    mode = head.strip() or "true"
+    if mode.lower() == "true":
+        mode = NODE_SWAP
+    selector = selector.strip()
+    if selector:
+        return mode, selector[1:] if selector.startswith("#") else None
+    return mode, _attr_value(tag, ID_VALUE) or None
+
+
+def _swap_target_ids(templates: list[tuple[str, str]]) -> set[str]:
+    """Идентификаторы, объявленные целями подмены, — ТЕМ ЖЕ обходом.
+
+    ⚠️ ЭТИМ ГЕЙТ ЗАМКНУТ НА СЕБЯ. Множество целей собирается той же функцией,
+    которой пользуются правило существования цели, правило двух ролей и граница
+    клиентского состояния. Второй перечень целей, выписанный руками, разошёлся
+    бы с этим молча: цель, добавленная будущей фазой на узел с клиентским
+    состоянием, попала бы в разметку и не попала бы в перечень, и граница
+    осталась бы зелёной ровно там, где её впервые нарушили.
+    """
+    found: set[str] = set()
+    for site in _target_sites(templates):
+        value = (_attr_value(site.tag, HX_TARGET_VALUE) or "").strip()
+        if value.startswith("#"):
+            found.add(value[1:])
+    return found
+
+
+def _oob_target_ids(templates: list[tuple[str, str]]) -> set[str]:
+    return {
+        target
+        for site in _oob_sites(templates)
+        if (target := _oob_target(site.tag)[1]) is not None
+    }
+
+
+def _client_state_ids(templates: list[tuple[str, str]]) -> set[str]:
+    """Литеральные идентификаторы узлов с признаком клиентского состояния.
+
+    Идентификатор, СОБРАННЫЙ шаблонизатором, из множества исключён по той же
+    причине, что и в счёте объявлений: сверять с ним цель подмены нечем, его
+    значение известно только в момент рендера. Сегодня таких узлов в проекте
+    большинство (компонент отбора и компонент модального окна принимают
+    идентификатор параметром макроса), поэтому множество литеральных целей
+    клиентского состояния пусто — и именно поэтому число узлов объявлено
+    отдельной константой: без него граница была бы вакуумной дважды.
+    """
+    found: set[str] = set()
+    for site in _client_state_sites(templates):
+        own = _attr_value(site.tag, ID_VALUE)
+        if own and "{{" not in own and "{%" not in own:
+            found.add(own)
+    return found
+
+
+# --- ПРАВИЛА СВОПА И ВНЕПОЛОСНЫХ БЛОКОВ (G-7, G-9, G-10, G-11, G-12) ---------
+
+
+def _offenders_swap_is_declared(templates: list[tuple[str, str]]) -> dict[str, str]:
+    """G-7: у места отправки объявлена цель ЛИБО явное отсутствие подмены."""
+    offenders: dict[str, str] = {}
+    for site in _post_sites(templates):
+        has_target = _attr_value(site.tag, HX_TARGET_VALUE) is not None
+        swap = (_attr_value(site.tag, HX_SWAP_VALUE) or "").strip().lower()
+        if not has_target and swap != NO_SWAP:
+            offenders[site.template] = f"цели нет, способ подмены {swap!r}"
+    return offenders
+
+
+def _offenders_target_does_not_exist(templates: list[tuple[str, str]]) -> dict[str, str]:
+    """G-9: цель подмены существует в разметке."""
+    ids = _id_occurrences(templates)
+    offenders: dict[str, str] = {}
+    for site in _target_sites(templates):
+        value = (_attr_value(site.tag, HX_TARGET_VALUE) or "").strip()
+        if "{{" in value or "{%" in value:
+            continue
+        if value.startswith("#"):
+            if value[1:] not in ids:
+                offenders[f"{site.template}:{value}"] = "такого идентификатора в разметке нет"
+            continue
+        if not any(value.startswith(prefix) for prefix in RELATIVE_TARGET_PREFIXES):
+            offenders[f"{site.template}:{value}"] = "незаявленная форма цели"
+    return offenders
+
+
+def _offenders_oob_without_id(templates: list[tuple[str, str]]) -> dict[str, str]:
+    """G-10: внеполосный блок несёт идентификатор цели."""
+    return {
+        f"{site.template}:{index}": site.tag[:120]
+        for index, site in enumerate(_oob_sites(templates))
+        if _oob_target(site.tag)[1] is None
+    }
+
+
+def _offenders_id_in_two_roles(templates: list[tuple[str, str]]) -> set[str]:
+    """G-11: идентификатор не бывает целью подмены и внеполосной целью разом."""
+    return _swap_target_ids(templates) & _oob_target_ids(templates)
+
+
+def _offenders_notice_region_by_node(templates: list[tuple[str, str]]) -> dict[str, str]:
+    """Область уведомления подменяется СОДЕРЖИМЫМ, а не узлом."""
+    offenders: dict[str, str] = {}
+    for site in _oob_sites(templates):
+        mode, target = _oob_target(site.tag)
+        if target in NOTICE_REGION_IDS and mode != CONTENT_SWAP:
+            offenders[f"{site.template}:{target}"] = f"способ подмены {mode!r}"
+    return offenders
+
+
+def _offenders_client_state_is_a_target(templates: list[tuple[str, str]]) -> set[str]:
+    """G-12: узел с признаком клиентского состояния не является целью подмены."""
+    return _client_state_ids(templates) & _swap_target_ids(templates)
+
+
+def test_every_htmx_post_declares_its_swap_target_or_its_absence() -> None:
+    """G-7: объявлена цель подмены либо ЯВНОЕ её отсутствие.
+
+    Умолчание рантайма — «этот же элемент». Для формы это означает, что ответ
+    сервера подменит собой саму форму: поле ввода уедет вместе с кареткой и
+    выделением, а на пути автосохранения человек физически не сможет набрать
+    длинный текст. Умолчание, съедающее собственную форму, обязано быть
+    невыразимым — либо цель названа, либо отсутствие подмены объявлено словом.
+    """
+    offenders = _offenders_swap_is_declared(_all_templates())
+    assert not offenders, (
+        f"место отправки htmx не объявило ни цели подмены, ни явного её "
+        f"отсутствия: {offenders} — умолчание рантайма подменит форму её же "
+        f"ответом и сбросит каретку"
+    )
+
+
+def test_the_number_of_swap_targets_is_the_declared_one() -> None:
+    """Целей подмены ровно ``HX_TARGETS``, и парный контроль обхода сходится.
+
+    Число объявлено ИМЕНОВАННОЙ КОНСТАНТОЙ, хотя оно и ноль. Без него правило
+    существования цели, правило двух ролей и граница клиентского состояния
+    остались бы вакуумно зелёными навсегда: пустое множество удовлетворяет их
+    все, и отличить «целей нет» от «обход целей не находит» было бы нечем.
+    """
+    templates = _all_templates()
+    sites = _target_sites(templates)
+    assert _attribute_count(templates, HX_TARGET_ATTR) == len(sites), (
+        "число тегов, несущих цель подмены, разошлось с числом вхождений "
+        "самого атрибута — ошибка разбора границ тега"
+    )
+    assert len(sites) == HX_TARGETS, (
+        f"целей подмены найдено {len(sites)}, объявлено {HX_TARGETS}: "
+        f"{[site.template for site in sites]} — цель появилась или исчезла, а "
+        f"летопись чисел этого файла об этом не знает"
+    )
+
+
+def test_every_swap_target_points_at_an_existing_id() -> None:
+    """G-9: цель подмены существует в разметке.
+
+    Опечатка в цели даёт подмену «в никуда»: ответ приезжает, подменять нечего,
+    и НИ ОДНОГО сообщения об этом не появляется — ни в консоли, ни в ответе, ни
+    в статусе. Отличить это от «сервер ничего не вернул» на глаз нельзя.
+
+    Существование проверяется по ВСЕМУ дереву шаблонов, а не по документу,
+    который собирает конкретный маршрут: обход не разворачивает наследование и
+    включения. Цель, объявленная в шаблоне, который на этой странице не
+    подключается, здесь пройдёт — граница названа в перечне «чего гейт не
+    видит» и требует решения человека, если такой случай появится.
+    """
+    offenders = _offenders_target_does_not_exist(_all_templates())
+    assert not offenders, (
+        f"цель подмены не существует в разметке или объявлена незаявленной "
+        f"формой: {offenders} — подмена «в никуда» не сообщает о себе ничем"
+    )
+
+
+def test_the_number_of_oob_blocks_is_the_declared_one() -> None:
+    """Внеполосных блоков ровно ``OOB_BLOCKS``, и парный контроль сходится.
+
+    Шестой блок собирается ВЕТКОЙ ШАБЛОНИЗАТОРА внутри открывающего тега
+    индикатора автосохранения. Обход обязан увидеть и его: разбор, спотыкающийся
+    о ветку внутри тега, недосчитал бы один из шести, и правило идентификатора
+    ниже не проверило бы именно тот блок, который собран самым хитрым способом.
+    """
+    templates = _all_templates()
+    sites = _oob_sites(templates)
+    offenders: dict[str, str] = {}
+    for rel, source in templates:
+        body = _strip_comments(source)
+        attributes = len(HX_SWAP_OOB_ATTR.findall(body))
+        tags = len(HX_SWAP_OOB_TAG.findall(body))
+        if attributes != tags:
+            offenders[rel] = f"вхождений атрибута {attributes}, тегов {tags}"
+    assert not offenders, (
+        f"число внеполосных тегов разошлось с числом вхождений атрибута: "
+        f"{offenders} — ошибка разбора границ тега"
+    )
+    assert len(sites) == OOB_BLOCKS, (
+        f"внеполосных блоков найдено {len(sites)}, объявлено {OOB_BLOCKS}: "
+        f"{sorted({site.template for site in sites})}"
+    )
+
+    # Блок, СОБРАННЫЙ ВЕТКОЙ ШАБЛОНИЗАТОРА, утверждается отдельно и по имени.
+    # Общее число этого не доказывает: недосчитанный блок с условием и лишний
+    # блок где-то ещё дали бы ту же сумму, и инвентарь остался бы зелёным при
+    # непроверенном шестом блоке.
+    conditional = [site for site in sites if JINJA_CONDITION.search(site.tag)]
+    assert len(conditional) == 1, (
+        f"внеполосных блоков, собранных веткой шаблонизатора внутри тега, "
+        f"найдено {len(conditional)}, ожидался один (индикатор состояния "
+        f"автосохранения): {[site.template for site in conditional]} — разбор "
+        f"спотыкается о ветку внутри открывающего тега, и один из шести блоков "
+        f"ни одним правилом ниже не проверен"
+    )
+
+
+def test_every_oob_block_carries_an_id() -> None:
+    """G-10: у каждого внеполосного блока есть цель по идентификатору.
+
+    Блок без идентификатора и без селектора рантайм игнорирует МОЛЧА: он не
+    ошибка ответа и не ошибка разметки, он просто ничего не делает. Обнаружить
+    это можно только заметив, что кусок экрана перестал обновляться.
+    """
+    offenders = _offenders_oob_without_id(_all_templates())
+    assert not offenders, (
+        f"внеполосный блок не объявил цели ни идентификатором тега, ни "
+        f"селектором: {offenders} — рантайм молча его игнорирует"
+    )
+
+
+def test_no_id_is_both_a_swap_target_and_an_oob_target() -> None:
+    """G-11: идентификатор не бывает целью подмены и внеполосной целью разом.
+
+    Один узел, подменяемый и основным свопом, и внеполосным блоком того же
+    ответа, получает две подмены подряд в порядке, который разметкой не задан.
+    Вторая перетирает первую, позиция прокрутки теряется, и воспроизводится это
+    через раз.
+    """
+    conflicts = _offenders_id_in_two_roles(_all_templates())
+    assert not conflicts, (
+        f"идентификатор объявлен и целью подмены, и внеполосной целью: "
+        f"{sorted(conflicts)} — узел подменяется дважды за один ответ"
+    )
+
+
+def test_the_notice_regions_are_replaced_by_content_not_by_node() -> None:
+    """Области уведомления подменяются СОДЕРЖИМЫМ, а не узлом.
+
+    ⚠️ ПРАВИЛО ПРИМЕНЯЕТСЯ ТОЛЬКО К ИДЕНТИФИКАТОРАМ ИЗ ``NOTICE_REGION_IDS``, И
+    ЭТО ГРАНИЦА, А НЕ ПОСЛАБЛЕНИЕ. Область уведомления живёт в шелле и обязана
+    пережить любое число ответов: унесённая подменой узла один раз, она лишает
+    цели все последующие — молча, потому что о ненайденной цели свопа рантайм
+    не сообщает ничем.
+
+    Четыре внеполосных блока редактора объявлений подменяют узел ОСОЗНАННО: их
+    цели — собственные узлы фрагмента, который ответ собирает и заменяет
+    целиком. Гейт, распространённый на них, покраснел бы на работающем коде и
+    был бы снят первым же коммитом — то есть защищал бы ноль минут.
+    """
+    templates = _all_templates()
+    offenders = _offenders_notice_region_by_node(templates)
+    assert not offenders, (
+        f"внеполосный блок подменяет УЗЕЛ области уведомления, а не её "
+        f"содержимое: {offenders} — область уедет из документа, и все "
+        f"последующие ответы останутся без цели"
+    )
+
+    # ГРАНИЦА УТВЕРЖДАЕТСЯ, А НЕ ПОДРАЗУМЕВАЕТСЯ. Правило выше зелено в том
+    # числе потому, что в дереве ЕСТЬ внеполосные блоки, подменяющие узел, и
+    # оно их сознательно не трогает. Без этого утверждения нельзя отличить
+    # «граница проведена верно» от «блоков с подменой узла в проекте не
+    # осталось вовсе», а во втором случае правило снова становится вакуумным.
+    node_swaps = {
+        site.template
+        for site in _oob_sites(templates)
+        if _oob_target(site.tag)[0] == NODE_SWAP
+    }
+    assert node_swaps, (
+        "в дереве не осталось ни одного внеполосного блока, подменяющего узел "
+        "— граница правила потеряла предмет, и снимать её следует ЯВНО, вместе "
+        "с записью в летописи чисел"
+    )
+    assert not (node_swaps & {NOTICE_OOB}), (
+        f"подмена узла объявлена во внеполосной форме уведомления: {node_swaps}"
+    )
+
+
+def test_every_notice_region_is_declared_once() -> None:
+    """Каждая область уведомления объявлена в разметке ровно один раз.
+
+    Две области с одним идентификатором означают молчание на базовом пути:
+    подмена найдёт первую, а человек будет смотреть на вторую — и никакого
+    признака отказа при этом не появится.
+    """
+    ids = _id_occurrences(_all_templates())
+    offenders = {
+        region: ids.get(region, 0)
+        for region in NOTICE_REGION_IDS
+        if ids.get(region, 0) != 1
+    }
+    assert not offenders, (
+        f"область уведомления объявлена в разметке не один раз: {offenders} — "
+        f"ноль означает, что цели внеполосной подмены не существует вовсе, "
+        f"два и более — что подмена найдёт не ту область, на которую смотрит "
+        f"человек"
+    )
+
+
+def test_the_number_of_client_state_nodes_is_the_declared_one() -> None:
+    """Узлов с признаком клиентского состояния ровно ``CLIENT_STATE_NODES``.
+
+    Инвентарь, без которого граница ниже вакуумна: сломанный обход даёт пустое
+    множество узлов, пустое пересечение с целями и зелёный цвет, неотличимый от
+    соблюдённого правила.
+    """
+    templates = _all_templates()
+    sites = _client_state_sites(templates)
+    attributes = sum(
+        len(CLIENT_STATE_ATTR.findall(_strip_comments(source))) for _, source in templates
+    )
+    assert attributes == len(sites), (
+        f"вхождений признака клиентского состояния {attributes}, несущих его "
+        f"тегов {len(sites)} — ошибка разбора границ тега"
+    )
+    assert len(sites) == CLIENT_STATE_NODES, (
+        f"узлов с клиентским состоянием найдено {len(sites)}, объявлено "
+        f"{CLIENT_STATE_NODES}"
+    )
+
+
+def test_no_client_state_node_is_a_swap_target() -> None:
+    """G-12: узел с клиентским состоянием не является целью подмены.
+
+    Подмена уносит узел вместе с его клиентским состоянием: открытая панель
+    закроется, набранное в ней потеряется, а фокус уедет в начало документа.
+    Ничего из этого не является ошибкой ни для одной автоматической проверки.
+
+    ⚠️ Множество целей собирается ТЕМ ЖЕ обходом, которым проверяется правило
+    (``_swap_target_ids``), — этим гейт замкнут на себя: цель, добавленная
+    будущей фазой на узел с клиентским состоянием, краснеет сама, без правки
+    какого-либо перечня. Вложенность при этом НЕ учитывается: узел-потомок
+    узла с клиентским состоянием целью быть может, и это записано в перечне
+    «чего гейт не видит».
+    """
+    conflicts = _offenders_client_state_is_a_target(_all_templates())
+    assert not conflicts, (
+        f"целью подмены объявлен узел с признаком клиентского состояния: "
+        f"{sorted(conflicts)} — подмена унесёт узел вместе с его состоянием"
+    )
+
+
+# --- ГРУППА КОНТРОЛЯ ---------------------------------------------------------
+#
+# Зубы гейта ДОКАЗЫВАЮТСЯ, а не заявляются. Каждый случай ниже подаёт обходу
+# изменённую копию дерева шаблонов во временном каталоге и требует, чтобы
+# правило на ней покраснело. Настоящее дерево при этом не трогается ни одним
+# байтом: подстановки применяются к прочитанным исходникам, а пишется копия.
+#
+# ⚠️ ПОДСТАНОВКА ОБЯЗАНА ДОКАЗАТЬ, ЧТО ОНА ЧТО-ТО ИЗМЕНИЛА, И ЧТО ИЗМЕНИЛА
+# ИМЕННО ТО. Контроль, чей образец в шаблоне не нашёлся, «проходит» на
+# нетронутом дереве и утверждает ровно ничего — то есть притворяется
+# доказательством зубов, не будучи им. Хуже того, образец, встретившийся
+# ДВАЖДЫ, меняет не то место, что имел в виду автор, и контроль краснеет по
+# чужой причине. Поэтому ``_tree_with`` требует РОВНО ОДНОГО вхождения образца
+# и отдельно проверяет, что результат отличается от исходника.
+
+
+class Substitution(NamedTuple):
+    template: str
+    old: str
+    new: str
+
+
+def _tree_with(tmp_path: Path, *substitutions: Substitution) -> Path:
+    """Копия дерева шаблонов с подстановками, во временном каталоге."""
+    sources = dict(_all_templates())
+    for substitution in substitutions:
+        assert substitution.template in sources, (
+            f"шаблон {substitution.template} в дереве не найден: контроль "
+            f"подаёт подстановку в несуществующий файл и потому ничего не "
+            f"доказывает"
+        )
+        source = sources[substitution.template]
+        occurrences = source.count(substitution.old)
+        assert occurrences == 1, (
+            f"образец подстановки встречается в {substitution.template} "
+            f"{occurrences} раз(а), а не один: {substitution.old!r} — контроль "
+            f"меняет не то место, что имел в виду автор, либо не меняет ничего"
+        )
+        changed = source.replace(substitution.old, substitution.new)
+        assert changed != source, (
+            f"подстановка в {substitution.template} ничего не изменила: "
+            f"{substitution.old!r} → {substitution.new!r}"
+        )
+        sources[substitution.template] = changed
+
+    root = tmp_path / "templates"
+    for rel, source in sources.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+    return root
+
+
+FORM = "ads/form.html"
+AUTOSAVE_RESPONSE = "ads/includes/autosave_response.html"
+NOTICE_OOB = "includes/notice_oob.html"
+FILTERS = "components/filters.html"
+
+FORM_OPEN = '<form id="ad-form"\n          method="post"\n'
+FORM_CLOSE = 'hx-swap="none">'
+EDITOR_ACTION = "action=\"{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}\""
+EDITOR_POST = "hx-post=\"{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}\""
+
+
+def test_control_negative_a_form_without_a_method_reddens_the_gate(tmp_path: Path) -> None:
+    """Форма без метода: без JS браузеру нечем её отправить."""
+    root = _tree_with(tmp_path, Substitution(FORM, FORM_OPEN, '<form id="ad-form"\n'))
+    assert _offenders_method_and_action(_all_templates(root)), (
+        "форма с признаком отправки htmx осталась без метода, и правило "
+        "деградации этого не заметило"
+    )
+
+
+def test_control_negative_an_action_off_by_one_character_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Адрес запроса разошёлся с адресом действия на один символ."""
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            FORM,
+            EDITOR_POST,
+            "hx-post=\"{{ '/ads/' ~ ad.id ~ '/edits' if ad else '/ads/new' }}\"",
+        ),
+    )
+    assert _offenders_post_matches_action(_all_templates(root)), (
+        "адрес запроса и адрес действия разошлись на один символ, и правило "
+        "посимвольного совпадения этого не заметило — то есть путь с JS и путь "
+        "без JS ведут в разные места"
+    )
+
+
+def test_control_negative_a_post_attribute_on_a_button_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Признак отправки на кнопке: без JS это мёртвая кнопка."""
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            FORM,
+            FORM_CLOSE,
+            FORM_CLOSE + '\n      <button type="button" hx-post="/ads/new">Сохранить</button>',
+        ),
+    )
+    assert _offenders_tag_is_a_form(_all_templates(root)), (
+        "признак отправки оказался на теге кнопки, и правило тега формы этого "
+        "не заметило"
+    )
+
+
+def test_control_negative_an_action_on_a_fragment_route_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Адрес действия ведёт на маршрут, отдающий только фрагмент."""
+    root = _tree_with(
+        tmp_path,
+        Substitution(FORM, EDITOR_ACTION, 'action="/ads/partial"'),
+        Substitution(FORM, EDITOR_POST, 'hx-post="/ads/partial"'),
+    )
+    assert _offenders_action_hits_a_fragment_route(_all_templates(root)), (
+        "адрес действия увёл на маршрут фрагмента, и G-5 этого не заметил — "
+        "человек без JS получил бы голый кусок разметки со статусом 200"
+    )
+
+
+def test_control_negative_a_place_without_a_declared_swap_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Место отправки без цели и без явного отсутствия подмены."""
+    root = _tree_with(tmp_path, Substitution(FORM, '\n          ' + FORM_CLOSE, ">"))
+    assert _offenders_swap_is_declared(_all_templates(root)), (
+        "место отправки осталось без цели и без явного отсутствия подмены, и "
+        "G-7 этого не заметил — умолчание рантайма съело бы собственную форму"
+    )
+
+
+def test_control_negative_a_target_pointing_nowhere_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Цель подмены указывает на несуществующий идентификатор."""
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            FORM, FORM_CLOSE, 'hx-swap="none"\n          hx-target="#no-such-node">'
+        ),
+    )
+    assert _offenders_target_does_not_exist(_all_templates(root)), (
+        "цель подмены указала на несуществующий идентификатор, и G-9 этого не "
+        "заметил — подмена «в никуда» не сообщает о себе ничем"
+    )
+
+
+def test_control_negative_an_oob_block_without_an_id_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Внеполосный блок без идентификатора и без селектора."""
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            AUTOSAVE_RESPONSE,
+            '<div id="ad-preview" hx-swap-oob="true">',
+            '<div hx-swap-oob="true">',
+        ),
+    )
+    assert _offenders_oob_without_id(_all_templates(root)), (
+        "внеполосный блок остался без цели, и G-10 этого не заметил — рантайм "
+        "молча его игнорирует"
+    )
+
+
+def test_control_negative_one_id_in_two_roles_reddens_the_gate(tmp_path: Path) -> None:
+    """Один идентификатор объявлен и целью подмены, и внеполосной целью."""
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            FORM, FORM_CLOSE, 'hx-swap="none"\n          hx-target="#ad-preview">'
+        ),
+    )
+    assert _offenders_id_in_two_roles(_all_templates(root)), (
+        "идентификатор оказался в двух ролях сразу, и G-11 этого не заметил — "
+        "узел подменялся бы дважды за один ответ"
+    )
+
+
+def test_control_negative_a_notice_region_replaced_by_node_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Область уведомления объявлена подменой УЗЛА."""
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            NOTICE_OOB,
+            '<div hx-swap-oob="innerHTML:#notice-alert">',
+            '<div hx-swap-oob="outerHTML:#notice-alert">',
+        ),
+    )
+    assert _offenders_notice_region_by_node(_all_templates(root)), (
+        "область уведомления стала подменяться узлом, и правило содержимого "
+        "этого не заметило — область уехала бы из документа навсегда"
+    )
+
+
+def test_control_negative_a_client_state_node_as_a_target_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Узел с клиентским состоянием стал целью подмены.
+
+    Подстановка ЗАМЕНЯЕТ собранный шаблонизатором идентификатор узла на
+    литеральный, а не дописывает второй рядом. Первая редакция этого контроля
+    дописывала — и была красной: у узла оказалось ДВА признака идентификатора,
+    разбор берёт первый, первым остался собранный шаблонизатором, и правило
+    честно ответило «литеральных целей клиентского состояния нет». Контроль
+    краснел по чужой причине и доказывал не зубы гейта, а собственную
+    небрежность в выборе места подстановки.
+    """
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            FILTERS,
+            'id="{{ id }}"\n         x-data="{ open: false }"',
+            'id="filters-panel"\n         x-data="{ open: false }"',
+        ),
+        Substitution(
+            FORM, FORM_CLOSE, 'hx-swap="none"\n          hx-target="#filters-panel">'
+        ),
+    )
+    assert _offenders_client_state_is_a_target(_all_templates(root)), (
+        "целью подмены стал узел с клиентским состоянием, и G-12 этого не "
+        "заметил — подмена унесла бы узел вместе с его состоянием"
+    )
+
+
+def test_control_negative_an_extra_oob_block_reddens_the_counter(tmp_path: Path) -> None:
+    """Лишний внеполосный блок: инвентарное число обязано разойтись.
+
+    Контроль СЧЁТЧИКА, а не правила. Он доказывает, что инвентарь ловит
+    появление незаявленного блока — то есть что число собрано обходом, а не
+    списано с правил, которые новый блок как раз проходит: у добавленного здесь
+    блока и идентификатор на месте, и подмена узлом законна.
+    """
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            NOTICE_OOB,
+            '<div hx-swap-oob="innerHTML:#notice">',
+            '<div id="extra-oob" hx-swap-oob="true">лишний</div>\n'
+            '<div hx-swap-oob="innerHTML:#notice">',
+        ),
+    )
+    templates = _all_templates(root)
+    assert not _offenders_oob_without_id(templates), (
+        "добавленный блок нарушает правило идентификатора — контроль счётчика "
+        "покраснел бы по чужой причине"
+    )
+    assert len(_oob_sites(templates)) == OOB_BLOCKS + 1, (
+        "незаявленный внеполосный блок не изменил инвентарного числа — значит "
+        "число собрано не обходом"
+    )
+
+
+def test_control_positive_the_untouched_tree_keeps_every_gate_green(
+    tmp_path: Path,
+) -> None:
+    """Настоящее дерево, переписанное во временный каталог, зелено целиком.
+
+    Положительный случай нужен ровно затем, чтобы одиннадцать отрицательных
+    что-то значили: правило, красное ВСЕГДА, краснеет и на нарушении. Заодно
+    утверждается, что сама пересборка дерева во временном каталоге ничего не
+    ломает — иначе любой отрицательный контроль краснел бы от копирования, а не
+    от подстановки.
+    """
+    root = _tree_with(tmp_path)
+    templates = _all_templates(root)
+
+    assert len(templates) == len(_all_templates())
+    assert not _offenders_tag_is_a_form(templates)
+    assert not _offenders_method_and_action(templates)
+    assert not _offenders_post_matches_action(templates)
+    assert not _offenders_unknown_action(templates)
+    assert not _offenders_action_is_not_a_route(templates)
+    assert not _offenders_action_hits_a_fragment_route(templates)
+    assert not _offenders_swap_is_declared(templates)
+    assert not _offenders_target_does_not_exist(templates)
+    assert not _offenders_oob_without_id(templates)
+    assert not _offenders_id_in_two_roles(templates)
+    assert not _offenders_notice_region_by_node(templates)
+    assert not _offenders_client_state_is_a_target(templates)
+
+    assert len(_post_sites(templates)) == HX_POST_PLACES
+    assert len(_oob_sites(templates)) == OOB_BLOCKS
+    assert len(_target_sites(templates)) == HX_TARGETS
+    assert len(_client_state_sites(templates)) == CLIENT_STATE_NODES
