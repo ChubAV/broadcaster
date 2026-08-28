@@ -21,6 +21,7 @@ from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
 from app.models.subscription import Subscription
 from app.models.user import User
+from app.pages import notices
 from app.pages.common import get_shell_context
 from tests.conftest import seed_group
 
@@ -1744,4 +1745,686 @@ def test_history_cache_purge_touches_no_markup_sink():
         "страницы — необработанное исключение останавливает разбор документа "
         "целиком. Гейты доставки этого не увидят: они считают вхождения ключа, "
         "а не вызова"
+    )
+
+
+# --- FOUND-06: две области уведомления в обоих шеллах ------------------------
+
+# ЕДИНСТВЕННЫЙ законный владелец разметки областей уведомления среди шаблонов.
+# Имя выписано ЗДЕСЬ, а не выведено обходом, по тому же основанию, что и
+# HTMX_RUNTIME_OWNER выше: тест, назначающий владельцем того, кого нашёл,
+# согласился бы с переездом областей куда угодно.
+NOTICE_AREA_OWNER = "includes/notice_area.html"
+
+# Оба шелла проекта. Перечень выписан, а не собран обходом: предмет требования —
+# что канал есть у КАЖДОГО шелла, и шелл, забывший включение, обязан краснеть, а
+# не молча выпадать из собранного множества.
+NOTICE_AREA_SHELLS = ("base.html", "auth_base.html")
+
+# Идентификатор области → её признак роли и её признак живости.
+#
+# ПАРА ПРИЗНАКОВ ПРОВЕРЯЕТСЯ ЦЕЛИКОМ, А НЕ ПО ОДНОМУ. Область с role="alert" и
+# aria-live="polite" разметку проходит, а человеку даёт отказ, объявленный
+# «когда будет пауза», — то есть ровно тот исход, ради которого областей две.
+NOTICE_REGIONS = {
+    "notice": ("status", "polite"),
+    "notice-alert": ("alert", "assertive"),
+}
+
+# Включение областей в ИСХОДНИКЕ шелла. Ищется ОПЕРАТОР включения, а не имя
+# файла: шаблон, назвавший файл в комментарии-объяснении, ничего не подключает.
+_NOTICE_AREA_INCLUDE_RE = re.compile(
+    r"\{%-?\s*include\s+[\"']" + re.escape(NOTICE_AREA_OWNER) + r"[\"']"
+)
+
+
+def _notice_region(html: str, region_id: str) -> str:
+    """СОДЕРЖИМОЕ названной области уведомления из отрендеренного документа.
+
+    Читается ответ, а не исходник шаблона: предмет проверки — что получил
+    человек, а условие Jinja, съехавшее в другую ветку, оставило бы греп
+    исходника зелёным.
+
+    Совпадение НЕЖАДНОЕ и обрывается на первом закрывающем теге. Для пустой
+    области это ровно её содержимое; для непустой — открывающий тег плашки
+    вместе с её текстом, и этого довольно: утверждения ниже спрашивают наличие
+    класса плашки и наличие текста записи, а не полную вложенную разметку.
+    """
+    match = re.search(
+        rf'<div id="{re.escape(region_id)}"[^>]*>(.*?)</div>', html, re.DOTALL
+    )
+    assert match, (
+        f"области уведомления #{region_id} в документе нет вовсе — забытое "
+        "включение в одном из двух шеллов"
+    )
+    return match.group(1)
+
+
+def _assert_both_regions_present(html: str, shell: str) -> None:
+    """Обе области приехали в документ по одному разу и несут свои признаки."""
+    for region_id, (role, live) in NOTICE_REGIONS.items():
+        seen = html.count(f'id="{region_id}"')
+        assert seen == 1, (
+            f"{shell}: область #{region_id} встречается {seen} раз(а), "
+            "ожидалась ровно одна — вторая копия означала бы, что внеполосная "
+            "подмена целится в неизвестно какую из них"
+        )
+        opening = re.search(rf'<div id="{re.escape(region_id)}"[^>]*>', html)
+        assert opening, f"{shell}: открывающего тега области #{region_id} нет"
+        tag = opening.group(0)
+        assert f'role="{role}"' in tag, (
+            f"{shell}: у области #{region_id} нет признака роли {role} — {tag}"
+        )
+        assert f'aria-live="{live}"' in tag, (
+            f"{shell}: у области #{region_id} нет признака живости {live} — {tag}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_main_shell_carries_both_notice_regions(authed_client: AsyncClient):
+    """base.html: вежливая и настойчивая области приезжают на /profile.
+
+    Подпись называет ШЕЛЛ, а не адрес: /profile здесь представитель всех 26
+    страничных маршрутов под base.html. Тест-близнец по второму шеллу стоит
+    ниже, и парой они обязаны быть именно парой — шеллов два, включение одно, и
+    утверждение, снятое с одного, ничего не говорит о втором.
+    """
+    response = await authed_client.get("/profile")
+    assert response.status_code == 200
+    _assert_both_regions_present(response.text, "base.html")
+
+
+@pytest.mark.asyncio
+async def test_auth_shell_carries_both_notice_regions(client: AsyncClient):
+    """auth_base.html: те же две области приезжают на /login тем же включением.
+
+    Второй шелл получает канал НАРАВНЕ с основным, а не по остаточному
+    принципу: признак смены пароля приземляется именно здесь.
+    """
+    response = await client.get("/login")
+    assert response.status_code == 200
+    _assert_both_regions_present(response.text, "auth_base.html")
+
+
+@pytest.mark.asyncio
+async def test_without_a_code_neither_region_draws_a_banner(
+    authed_client: AsyncClient,
+):
+    """Нет кода — нет ПЛАШКИ, при том что узлы областей на месте (FOUND-06).
+
+    Утверждения здесь два, и они разные. Первое: плашки нет ни в одной области —
+    умолчание «показать» запрещено прямо, а пустая рамка сообщала бы о событии,
+    которого не было. Второе: узлы областей всё же существуют — внеполосная
+    подмена целится в них ПО ИДЕНТИФИКАТОРУ, и без стабильного узла ответ
+    приехал бы в никуда, молча.
+    """
+    response = await authed_client.get("/profile")
+    assert response.status_code == 200
+    html = response.text
+
+    _assert_both_regions_present(html, "base.html")
+    for region_id in NOTICE_REGIONS:
+        assert 'class="alert' not in _notice_region(html, region_id), (
+            f"без кода уведомления в области #{region_id} нарисована плашка — "
+            "умолчание «показать» вернулось"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_known_code_draws_in_the_polite_region_by_its_variant(
+    authed_client: AsyncClient,
+):
+    """Известный код НЕ аварийного варианта рисуется в вежливой области."""
+    record = notices.notice_for(notices.PROFILE_SAVED)
+    assert record is not None and record.variant != "error"
+
+    response = await authed_client.get(f"/profile?notice={notices.PROFILE_SAVED}")
+    assert response.status_code == 200
+    html = response.text
+
+    assert record.text in _notice_region(html, "notice"), (
+        "текст записи не попал в вежливую область"
+    )
+    assert 'class="alert' not in _notice_region(html, "notice-alert"), (
+        "запись неаварийного варианта нарисовалась в НАСТОЙЧИВОЙ области — "
+        "успех сохранения перебивал бы человека посреди чтения"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_known_error_code_draws_in_the_assertive_region(
+    authed_client: AsyncClient,
+):
+    """Известный код аварийного варианта рисуется в настойчивой области."""
+    record = notices.notice_for(notices.PAYMENT_FAILED)
+    assert record is not None and record.variant == "error"
+
+    response = await authed_client.get(f"/billing?notice={notices.PAYMENT_FAILED}")
+    assert response.status_code == 200
+    html = response.text
+
+    assert record.text in _notice_region(html, "notice-alert"), (
+        "текст записи не попал в настойчивую область"
+    )
+    assert 'class="alert' not in _notice_region(html, "notice"), (
+        "отказ нарисовался в ВЕЖЛИВОЙ области — объявление ждало бы паузы в "
+        "речи, а человек за это время нажал бы кнопку второй раз"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_auth_shell_draws_a_known_code_too(client: AsyncClient):
+    """/login?notice=… рисует плашку: второй шелл получил канал по-настоящему."""
+    record = notices.notice_for(notices.PASSWORD_RESET_DONE)
+    assert record is not None
+
+    response = await client.get(f"/login?notice={notices.PASSWORD_RESET_DONE}")
+    assert response.status_code == 200
+
+    assert record.text in _notice_region(response.text, "notice"), (
+        "экран входа не нарисовал известный код — канал во втором шелле мёртв"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_code_draws_nothing_and_never_reaches_the_document(
+    authed_client: AsyncClient,
+):
+    """T-08-08/T-08-12: чужое значение не рисует НИЧЕГО и в документ не уходит.
+
+    ⚠️ ПРЯМОЕ УТВЕРЖДЕНИЕ «ПОДСТРОКИ ТЕГА СЦЕНАРИЯ В ТЕЛЕ НЕТ» ЗДЕСЬ
+    НЕВЫРАЗИМО, И ЭТО СВОЙСТВО ДОКУМЕНТА, А НЕ ПОСЛАБЛЕНИЕ. Оба шелла несут
+    инлайн-сценарий миграционной очистки (includes/htmx_config.html), то есть
+    открывающий тег сценария без атрибутов присутствует в КАЖДОМ ответе
+    независимо от адреса. Утверждение о его отсутствии было бы красным всегда —
+    то есть не утверждением, а поломкой.
+
+    Проверяемое свойство поэтому записано ТРЕМЯ утверждениями, вместе строгими:
+    плашки нет ни в одной области; ЭКРАНИРОВАННОЙ формы присланного значения в
+    документе нет (её появление означало бы, что значение уехало в разметку и
+    спаслось лишь автоэкранированием); и число тегов сценария в ответе С
+    параметром РАВНО числу в ответе БЕЗ него — присланное значение не добавило
+    в документ ни одного узла. Последнее и есть недостижимость: вход в разметку
+    не связан со входом из адреса.
+    """
+    baseline = await authed_client.get("/profile")
+    assert baseline.status_code == 200
+
+    response = await authed_client.get("/profile?notice=%3Cscript%3E")
+    assert response.status_code == 200
+    html = response.text
+
+    for region_id in NOTICE_REGIONS:
+        assert 'class="alert' not in _notice_region(html, region_id), (
+            f"неизвестный код нарисовал плашку в области #{region_id} — реестр "
+            "перестал быть закрытым, и владелец ссылки печатает пользователю "
+            "сообщение от имени приложения"
+        )
+
+    assert "&lt;script&gt;" not in html, (
+        "присланное значение уехало в разметку и спаслось только "
+        "автоэкранированием — недостижимость подменилась экранированием"
+    )
+
+    seen = html.count("<script")
+    expected = baseline.text.count("<script")
+    assert seen == expected, (
+        f"ответ с параметром несёт {seen} тег(ов) сценария против {expected} "
+        "без него — присланное значение добавило в документ узел"
+    )
+
+
+def test_notice_area_has_single_source():
+    """D-01: разметка областей уведомления живёт в ШАБЛОНАХ ровно в одном файле.
+
+    Близнец test_htmx_runtime_tag_has_single_source и по форме, и по основанию.
+    Инвариант «ровно один раз в ОБОИХ шеллах» держится двумя разными
+    утверждениями: пара гейтов доставки выше отвечает за КАЖДЫЙ шелл, этот — за
+    ЕДИНСТВЕННОСТЬ ИСТОЧНИКА. Без него зелёная пара была бы совместима с двумя
+    литеральными копиями областей в двух шеллах — то есть ровно с тем вариантом,
+    который D-01 отверг.
+
+    Утверждается МНОЖЕСТВО путей, а не их число: сообщение об отказе обязано
+    называть файл-нарушитель.
+
+    Комментарии из исходника вырезаются общим помощником (IN-02): шаблон,
+    назвавший идентификатор области в объяснении, ничего не рисует.
+    """
+    templates_dir = PROJECT_ROOT / "app" / "templates"
+
+    owners = {
+        path.relative_to(templates_dir).as_posix()
+        for path in sorted(templates_dir.rglob("*.html"))
+        if 'id="notice"' in _without_comments(path.read_text(encoding="utf-8"))
+    }
+    assert owners == {NOTICE_AREA_OWNER}, (
+        "разметка областей уведомления перестала быть единственной в шаблонах:\n"
+        f"  найдено:  {sorted(owners)}\n"
+        f"  ожидался: [{NOTICE_AREA_OWNER}]"
+    )
+
+    found = {}
+    for path in sorted(templates_dir.rglob("*.html")):
+        count = len(
+            _NOTICE_AREA_INCLUDE_RE.findall(
+                _without_comments(path.read_text(encoding="utf-8"))
+            )
+        )
+        if count:
+            found[path.relative_to(templates_dir).as_posix()] = count
+
+    expected = {shell: 1 for shell in NOTICE_AREA_SHELLS}
+    assert found == expected, (
+        "включение областей уведомления подключено не по одному разу в каждый "
+        "из двух шеллов:\n"
+        f"  найдено:   {found}\n"
+        f"  ожидалось: {expected}"
+    )
+
+
+# --- G-23: плашки отказа сервера и обрыва связи (QUAL-03) --------------------
+#
+# ЧТО ЭТА ГРУППА ДОБАВЛЯЕТ К УЖЕ НАПИСАННОМУ В ЭТОМ ФАЙЛЕ. Версия вендоренного
+# рантайма, шесть ключей блока конфигурации и порядок пяти правил
+# responseHandling УЖЕ утверждены выше — test_vendored_htmx_is_the_declared_artifact,
+# test_auth_shell_carries_htmx_config, test_main_shell_carries_htmx_config. Здесь
+# они НЕ дублируются: второе утверждение о том же предмете не строже первого, а
+# при правке расходится с ним молча. Предмет этой группы — видимость ОТКАЗА:
+# заготовки плашек, два обработчика и различение ошибки заполнения формы от
+# аварии сервера.
+#
+# ЧЕГО ГРУППА НЕ ДОКАЗЫВАЕТ. Суита не исполняет ни строчки JS: httpx отдаёт
+# текст ответа, а не браузер с событиями. Зелёный гейт означает «строки
+# ДОСТАВЛЕНЫ в документ» и «в исходнике включения есть то, что обязано быть», а
+# не «плашка появилась при выключенной сети». Разница между этими утверждениями
+# и есть пункт 8 перечня ручного UAT.
+
+# ЕДИНСТВЕННЫЙ законный владелец заготовок и обработчиков среди шаблонов.
+FAILURE_BANNER_OWNER = "includes/htmx_error_banner.html"
+
+FAILURE_BANNER_SHELLS = ("base.html", "auth_base.html")
+
+# Идентификаторы двух заготовок. Отказ сервера и обрыв связи — РАЗНЫЕ поводы и
+# разные следующие действия человека, поэтому и плашек две.
+FAILURE_BANNER_IDS = ("htmx-failure-server", "htmx-failure-network")
+
+# Имена двух событий слоя письма. Событие отказа ОТВЕТА не возникает, когда
+# ответа не было вовсе, — его место занимает событие отказа ОТПРАВКИ. С одним
+# обработчиком выключенная сеть неотличима от сломанной кнопки (R-2).
+FAILURE_BANNER_EVENTS = ("htmx:responseError", "htmx:sendError")
+
+# Код ответа, по которому канал отличает ошибку ЗАПОЛНЕНИЯ ФОРМЫ от отказа
+# сервера. Выписан здесь строкой, а не взят из проверяемого файла: ожидание,
+# добытое из предмета проверки, согласилось бы с любой его правкой.
+VALIDATION_STATUS = "422"
+
+# Свойство ответа, которого в сценарии быть не должно: читать разрешено ТОЛЬКО
+# код состояния. Тело чужого ответа, попавшее в плашку, вынесло бы наружу
+# внутреннее устройство (T-08-20).
+RESPONSE_BODY_READ = "responseText"
+
+_FAILURE_BANNER_INCLUDE_RE = re.compile(
+    r"\{%-?\s*include\s+[\"']" + re.escape(FAILURE_BANNER_OWNER) + r"[\"']"
+)
+
+
+def _failure_banner_path() -> Path:
+    """Путь настоящего включения — единственное место, где он собирается."""
+    return PROJECT_ROOT / "app" / "templates" / FAILURE_BANNER_OWNER
+
+
+def _failure_banner_source(path: Path) -> str:
+    """Исходник включения ПО НАЗВАННОМУ ПУТИ, а не по константе модуля.
+
+    ⚠️ ПАРАМЕТР ЗДЕСЬ И ЕСТЬ ТО, ЧТО ДЕЛАЕТ ГРУППУ КОНТРОЛЯ ВОЗМОЖНОЙ.
+    Утверждения этой группы суть «строка присутствует в файле», и у таких
+    утверждений есть свой способ соврать: разбор, читающий НЕ ТОТ файл или
+    вырезающий комментарии слишком жадно, зеленеет на чём угодно. Функция,
+    принимающая путь, позволяет подать гейту ИЗМЕНЁННУЮ копию во временном
+    каталоге и потребовать красноты — то есть доказать зубы, а не объявить их.
+    Читай эта функция константу, контроль был бы невыразим.
+    """
+    return path.read_text(encoding="utf-8")
+
+
+def _failure_banner_code(path: Path) -> str:
+    """То же без комментариев: комментарий ничего не исполняет.
+
+    Вырезание обязательно и здесь, и по той же причине, что у гейтов
+    единственности (IN-02): объяснение, называющее событие или код ответа,
+    оставило бы гейт зелёным даже после того, как сама строка снята из
+    сценария. Ровно это и проверяют два отрицательных контроля ниже.
+    """
+    return _without_comments(_failure_banner_source(path))
+
+
+def _failure_banner_missing_events(path: Path) -> tuple[str, ...]:
+    """Имена событий, которых в сценарии НЕТ. Пусто — оба обработчика на месте."""
+    code = _failure_banner_code(path)
+    return tuple(name for name in FAILURE_BANNER_EVENTS if name not in code)
+
+
+def _failure_banner_markup_sinks(path: Path) -> tuple[str, ...]:
+    """Стоки разметки, найденные в исходнике включения ЦЕЛИКОМ.
+
+    Читается исходник С комментариями — намеренно, и это не оплошность: сток,
+    «объяснённый» в комментарии, приехал бы туда же одним движением правки, а
+    объяснять запрещённое собственным литералом этот проект и так не умеет
+    (урок includes/htmx_config.html). Форма и перечень скопированы у
+    test_history_cache_purge_touches_no_markup_sink.
+    """
+    source = _failure_banner_source(path)
+    return tuple(sink for sink in MARKUP_SINKS if sink in source)
+
+
+def _failure_banner_tells_validation_from_a_crash(path: Path) -> bool:
+    """Есть ли в сценарии сравнение с кодом ответа валидации."""
+    return VALIDATION_STATUS in _failure_banner_code(path)
+
+
+def _scratch_banner(tmp_path, text: str) -> Path:
+    """Изменённая копия включения во временном каталоге.
+
+    Подмена идёт по-настоящему через файловую систему, а не строкой в памяти:
+    так контроль проверяет ТОТ ЖЕ путь чтения, которым гейт ходит по боевому
+    дереву, и не может разойтись с ним из-за кодировки или переносов строк.
+    Форма скопирована из test_impersonation_gate.py.
+    """
+    scratch = tmp_path / Path(FAILURE_BANNER_OWNER).name
+    scratch.write_text(text, encoding="utf-8")
+    return scratch
+
+
+def _assert_both_banners_delivered(html: str, shell: str) -> None:
+    """Обе заготовки приехали по одному разу и приехали СКРЫТЫМИ."""
+    for banner_id in FAILURE_BANNER_IDS:
+        seen = html.count(f'id="{banner_id}"')
+        assert seen == 1, (
+            f"{shell}: заготовка #{banner_id} встречается {seen} раз(а), "
+            "ожидалась ровно одна"
+        )
+        opening = re.search(rf'<div id="{re.escape(banner_id)}"[^>]*>', html)
+        assert opening, f"{shell}: открывающего тега заготовки #{banner_id} нет"
+        assert "hidden" in opening.group(0), (
+            f"{shell}: заготовка #{banner_id} приехала ВИДИМОЙ — плашка аварии "
+            f"нарисована на исправной странице: {opening.group(0)}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_main_shell_carries_both_failure_banners(authed_client: AsyncClient):
+    """base.html: обе заготовки приезжают на /profile и приезжают скрытыми."""
+    response = await authed_client.get("/profile")
+    assert response.status_code == 200
+    _assert_both_banners_delivered(response.text, "base.html")
+
+
+@pytest.mark.asyncio
+async def test_auth_shell_carries_both_failure_banners(client: AsyncClient):
+    """auth_base.html: те же две заготовки приезжают на /login.
+
+    Второй шелл получает видимость отказа наравне с основным: форма входа ходит
+    через слой письма ровно так же, как форма оплаты.
+    """
+    response = await client.get("/login")
+    assert response.status_code == 200
+    _assert_both_banners_delivered(response.text, "auth_base.html")
+
+
+def test_the_failure_banner_carries_both_handlers():
+    """Обработчиков ДВА, а не один (R-2).
+
+    Без второго обработчика выключенная сеть неотличима от сломанной кнопки:
+    событие отказа ответа не возникает, когда ответа не было вовсе, и человек
+    жмёт кнопку в пустоту, не получая ни одного признака того, что дело в связи.
+    """
+    missing = _failure_banner_missing_events(_failure_banner_path())
+
+    assert missing == (), (
+        f"{FAILURE_BANNER_OWNER}: в сценарии нет обработчика(ов) {missing} — "
+        "видимость отказа потеряла одну из двух своих половин"
+    )
+
+
+def test_the_failure_banner_touches_no_markup_sink():
+    """Сценарий не собирает разметку и не читает из ответа ничего лишнего.
+
+    T-08-18 и T-08-20. Радиус сценария — ВСЕ страницы обоих шеллов, поэтому
+    утверждение не формальность: сток разметки здесь был бы стоком исполнения на
+    каждом экране продукта. Перечень стоков — MARKUP_SINKS, тот же, что у
+    инлайн-сценария миграционной очистки; второго ОПРЕДЕЛЕНИЯ одного запрета в
+    проекте не заводится.
+
+    Второе утверждение — сверх перечня стоков и добавлено по букве реестра
+    угроз: сценарию разрешено читать из пришедшего ответа ТОЛЬКО код состояния.
+    Тело чужого ответа, подставленное в плашку, вынесло бы наружу внутреннее
+    устройство, а человеку не сообщило бы ничего.
+
+    ЧЕГО ЭТОТ ГЕЙТ НЕ ДОКАЗЫВАЕТ. Он читает ИСХОДНИК шаблона: отсутствие стоков
+    в исходнике не есть утверждение о безопасности отрендеренного документа
+    целиком и политику безопасности содержимого не заменяет.
+    """
+    path = _failure_banner_path()
+
+    offenders = _failure_banner_markup_sinks(path)
+    assert offenders == (), (
+        f"{FAILURE_BANNER_OWNER}: появился сток разметки {offenders} — "
+        "сценарий, исполняемый на КАЖДОЙ странице, начал собирать разметку "
+        "строкой"
+    )
+
+    assert RESPONSE_BODY_READ not in _failure_banner_code(path), (
+        f"{FAILURE_BANNER_OWNER}: сценарий начал читать ТЕЛО пришедшего "
+        "ответа — плашка отказа способна вынести наружу внутреннее устройство"
+    )
+
+
+def test_the_failure_banner_tells_a_validation_answer_from_a_crash():
+    """Ответ 422 плашку аварии НЕ поднимает: различение идёт ПО КОДУ (T-08-19).
+
+    Правило "422" в блоке конфигурации несёт признак ошибки — значит корректно
+    перерисованная форма с ошибкой заполнения поднимает то же событие отказа
+    ответа, что и настоящая авария. Без раннего выхода по коду человек получал
+    бы плашку аварии на КАЖДОЙ опечатке в поле, и глаз, приученный игнорировать
+    красное, перестал бы видеть настоящую аварию.
+
+    Это прямое исполнение предписания, оставленного Фазой 7 в
+    includes/htmx_config.html абзацем «ОГРАНИЧЕНИЕ ДЛЯ ТОГО, КТО БУДЕТ ПИСАТЬ
+    ОБЩИЙ КАНАЛ ВИДИМОСТИ ОТКАЗОВ».
+    """
+    assert _failure_banner_tells_validation_from_a_crash(_failure_banner_path()), (
+        f"{FAILURE_BANNER_OWNER}: сравнение с кодом ответа {VALIDATION_STATUS} "
+        "исчезло из сценария — плашка аварии поднимается на каждой ошибке "
+        "заполнения формы"
+    )
+
+
+def test_failure_banner_has_single_source():
+    """D-01: заготовки и обработчики живут в ШАБЛОНАХ ровно в одном файле.
+
+    Близнец test_notice_area_has_single_source и по форме, и по основанию. Пара
+    гейтов доставки выше отвечает за КАЖДЫЙ шелл, этот — за ЕДИНСТВЕННОСТЬ
+    ИСТОЧНИКА: без него зелёная пара была бы совместима с двумя литеральными
+    копиями сценария в двух шеллах, то есть ровно с тем вариантом, который D-01
+    отверг.
+    """
+    templates_dir = PROJECT_ROOT / "app" / "templates"
+
+    owners = {
+        path.relative_to(templates_dir).as_posix()
+        for path in sorted(templates_dir.rglob("*.html"))
+        if FAILURE_BANNER_IDS[0]
+        in _without_comments(path.read_text(encoding="utf-8"))
+    }
+    assert owners == {FAILURE_BANNER_OWNER}, (
+        "разметка заготовок плашек перестала быть единственной в шаблонах:\n"
+        f"  найдено:  {sorted(owners)}\n"
+        f"  ожидался: [{FAILURE_BANNER_OWNER}]"
+    )
+
+    found = {}
+    for path in sorted(templates_dir.rglob("*.html")):
+        count = len(
+            _FAILURE_BANNER_INCLUDE_RE.findall(
+                _without_comments(path.read_text(encoding="utf-8"))
+            )
+        )
+        if count:
+            found[path.relative_to(templates_dir).as_posix()] = count
+
+    expected = {shell: 1 for shell in FAILURE_BANNER_SHELLS}
+    assert found == expected, (
+        "включение заготовок подключено не по одному разу в каждый из двух "
+        "шеллов:\n"
+        f"  найдено:   {found}\n"
+        f"  ожидалось: {expected}"
+    )
+
+
+def test_the_session_cookie_flag_stays_the_recorded_lax_decision():
+    """Признак межсайтовой отправки cookie сессии равен `lax` — ПО ЗАПИСИ.
+
+    Читается ЕДИНСТВЕННОЕ объявление набора атрибутов, а не заголовок ответа:
+    предмет здесь — записанное решение, а не наблюдение за одним маршрутом.
+    Наблюдение уже есть и живёт в test_cookie_flags.py; это утверждение
+    закрепляет само решение и краснеет в момент его правки, а не в момент, когда
+    правка доедет до какого-нибудь ответа.
+
+    Место — в шелл-гейте, потому что признак есть свойство ВСЕГО продукта, а не
+    одного экрана входа: он решает, уедет ли cookie с запросом, пришедшим по
+    чужой ссылке.
+    """
+    from types import SimpleNamespace
+
+    from app.pages.auth import _session_cookie_attrs
+
+    attrs = _session_cookie_attrs(SimpleNamespace(cookie_secure=False))
+
+    assert attrs["samesite"] == "lax", (
+        "признак межсайтовой отправки cookie сессии изменён: "
+        f"{attrs['samesite']!r} вместо 'lax'"
+    )
+
+
+# --- G-23, группа контроля: у гейтов выше есть зубы --------------------------
+#
+# ⚠️ ПОЧЕМУ ЭТА ГРУППА ОБЯЗАТЕЛЬНА, А НЕ ФОРМАЛЬНОСТЬ. G-23 — единственный гейт
+# фазы, чьи утверждения суть «строка присутствует в файле». Зелёными по
+# построению, как инвентарные, они быть не могут, но у них есть собственный
+# способ соврать: разбор, читающий не тот файл или вырезающий комментарии
+# слишком жадно, зеленеет на чём угодно. Проверка, не показавшая красного ни
+# разу, охраняет ноль.
+#
+# ЧТО ГРУППА ДОКАЗЫВАЕТ: гейты выше УМЕЮТ КРАСНЕТЬ — на снятом обработчике, на
+# снятом сравнении с кодом ответа и на добавленном стоке разметки, — и при этом
+# на НАСТОЯЩЕМ файле молчат. «Ловит подмену» и «ловит ТОЛЬКО подмену» — разные
+# утверждения, и доказательство зубов состоит из обоих.
+#
+# ЧЕГО ГРУППА НЕ ДОКАЗЫВАЕТ: что сценарий делает в браузере то, что написано.
+# Суита не исполняет ни строчки JS. Это пункт 8 перечня ручного UAT, и заменить
+# его контролем нельзя.
+
+
+def test_control_negative_a_removed_send_error_handler_reddens_the_gate(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: гейт ловит СНЯТЫЙ второй обработчик.
+
+    ⚠️ УПОМИНАНИЕ СОБЫТИЯ В КОММЕНТАРИИ НАМЕРЕННО ОСТАЁТСЯ. Именно так и
+    выглядит настоящая потеря: объяснение, говорящее об обоих обработчиках,
+    переживает удаление одного из них, файл продолжает УПОМИНАТЬ событие, и
+    поиск по тексту нашёл бы его. Контроль доказывает, что гейт смотрит на
+    СЦЕНАРИЙ, а не на наличие имени в файле.
+    """
+    original = _failure_banner_source(_failure_banner_path())
+    victim = FAILURE_BANNER_EVENTS[1]
+
+    stripped = "\n".join(
+        line
+        for line in original.splitlines()
+        if not (victim in line and "addEventListener" in line)
+    )
+    assert stripped != original, (
+        "подмена ничего не удалила — контроль проверял бы неизменённый исходник"
+    )
+
+    missing = _failure_banner_missing_events(_scratch_banner(tmp_path, stripped))
+
+    assert victim in missing, (
+        "ГЕЙТ НЕ ЗАМЕТИЛ СНЯТЫЙ ОБРАБОТЧИК — он зелёный по построению, и "
+        "настоящая потеря видимости обрыва связи пройдёт мимо него"
+    )
+
+
+def test_control_negative_a_removed_validation_check_reddens_the_gate(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: гейт ловит СНЯТОЕ сравнение с кодом ответа валидации.
+
+    Здесь вырезание комментариев несущее: объяснение, называющее код, остаётся
+    в файле после того, как сама ветка снята, и гейт, читающий исходник
+    целиком, согласился бы с потерей.
+    """
+    original = _failure_banner_source(_failure_banner_path())
+
+    stripped = "\n".join(
+        line
+        for line in original.splitlines()
+        if not (VALIDATION_STATUS in line and "status" in line)
+    )
+    assert stripped != original, (
+        "подмена ничего не удалила — контроль проверял бы неизменённый исходник"
+    )
+    assert VALIDATION_STATUS in stripped, (
+        "из подменённого исходника исчезло и УПОМИНАНИЕ кода: контроль "
+        "перестал доказывать, что гейт смотрит на сценарий, а не на текст"
+    )
+
+    assert not _failure_banner_tells_validation_from_a_crash(
+        _scratch_banner(tmp_path, stripped)
+    ), (
+        "ГЕЙТ НЕ ЗАМЕТИЛ СНЯТОЕ РАЗЛИЧЕНИЕ — плашка аварии на каждой ошибке "
+        "заполнения формы прошла бы мимо него"
+    )
+
+
+def test_control_negative_an_added_markup_sink_reddens_the_gate(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: гейт стоков ловит сток, добавленный в сценарий."""
+    original = _failure_banner_source(_failure_banner_path())
+    sink = MARKUP_SINKS[0]
+    assert sink not in original, (
+        "сток уже есть в настоящем файле — контроль ничего не доказал бы"
+    )
+
+    poisoned = original.replace(
+        "</script>",
+        f"  document.getElementById('htmx-failure-server').{sink} = '<b>!</b>';\n"
+        "</script>",
+    )
+    assert poisoned != original, "подмена не сработала — якорь замены не найден"
+
+    offenders = _failure_banner_markup_sinks(_scratch_banner(tmp_path, poisoned))
+
+    assert sink in offenders, (
+        "ГЕЙТ СТОКОВ НЕ ЗАМЕТИЛ ДОБАВЛЕННЫЙ СТОК — сборка разметки строкой "
+        "вернулась бы в <body> каждой страницы незамеченной"
+    )
+
+
+def test_control_positive_the_untouched_banner_keeps_the_gates_green():
+    """ЧТО ДОКАЗЫВАЕТ: на НЕИЗМЕНЁННОМ файле все три гейта молчат.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ВСЕ ТРИ ОТРИЦАТЕЛЬНЫХ ПРОШЛИ БЫ И У ГЕЙТА, КОТОРЫЙ
+    КРАСНЕЕТ ВСЕГДА. Гейт, роняющий сборку на любом дереве, не строже, а просто
+    сломан, и его сняли бы первым же коммитом.
+    """
+    path = _failure_banner_path()
+
+    assert _failure_banner_missing_events(path) == (), (
+        "гейт обработчиков краснеет на неизменённом файле — отрицательные "
+        "контроли выше ничего не доказывают"
+    )
+    assert _failure_banner_markup_sinks(path) == (), (
+        "гейт стоков краснеет на неизменённом файле — отрицательные контроли "
+        "выше ничего не доказывают"
+    )
+    assert _failure_banner_tells_validation_from_a_crash(path), (
+        "гейт различения краснеет на неизменённом файле — отрицательные "
+        "контроли выше ничего не доказывают"
     )

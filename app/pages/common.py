@@ -25,6 +25,7 @@ from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.models.user import User
+from app.pages.notices import notice_for
 from app.services.auth_service import actor_id as token_actor_id, decode_access_token
 from app.services.image_keys import THUMB_KEY_PREFIX, thumb_key
 from app.services.s3 import get_image_url
@@ -334,6 +335,25 @@ def nav_label(active_page: str | None) -> str:
 templates.env.globals["nav_items"] = NAV_ITEMS
 templates.env.globals["admin_nav_item"] = ADMIN_NAV_ITEM
 templates.env.globals["nav_label"] = nav_label
+
+
+# ЕДИНСТВЕННЫЙ ВХОД ШАБЛОНА В ЗАКРЫТЫЙ РЕЕСТР УВЕДОМЛЕНИЙ (FOUND-06).
+#
+# Глобалом, а не параметром контекста, по тому же основанию, что и константы
+# состояния объявления выше: области уведомления живут в ШЕЛЛЕ, то есть на
+# каждой из 26 страниц основного шелла и на каждом из семи экранов второго.
+# Параметром значение пришлось бы протащить через все обработчики разом, и
+# первый же забывший его обработчик молча лишил бы свою страницу канала —
+# то есть ровно тот тихий отказ, ради закрытия которого канал заводится.
+#
+# ⚠️ НАПРАВЛЕНИЕ ЗАВИСИМОСТИ ОДНОСТОРОННЕЕ. Реестр о существовании страниц не
+# знает и знать не должен: он — таблица слов, а не участник сборки экрана.
+# Обратный импорт замкнул бы кольцо и превратил бы порядок импортов в
+# предусловие работоспособности шаблонов.
+#
+# Конструирования Settings здесь не происходит: значение — функция модуля,
+# поэтому глобал ставится на импорте, а не в _bind_image_url_globals.
+templates.env.globals["notice_for"] = notice_for
 
 
 def _get_timezone_for_user(user: User | None) -> ZoneInfo:
