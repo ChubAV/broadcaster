@@ -313,12 +313,12 @@ async def _seed_two_subscription_payments(factory) -> int:
         await session.commit()
         await session.refresh(user)
 
-        for yoo_id in ("yoo_sub_a", "yoo_sub_b"):
+        for yoo_id, status in (("yoo_sub_a", "expired"), ("yoo_sub_b", "pending")):
             session.add(
                 Payment(
                     user_id=user.id,
                     yookassa_payment_id=yoo_id,
-                    status="pending",
+                    status=status,
                     amount_value="1490.00",
                     amount_currency="RUB",
                     kind="subscription",

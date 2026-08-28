@@ -1215,7 +1215,7 @@ async def test_a_canceled_intent_does_not_block_a_new_one(db_session):
 
 
 @pytest.mark.asyncio
-async def test_a_user_without_open_intents_pays_without_obstruction(db_session):
+async def test_a_user_without_an_open_intent_pays_without_obstruction(db_session):
     """Ноль незакрытых намерений — оплата проходит. Граница потолка снизу.
 
     Без этого утверждения тесты потолка доказывали бы только «когда отказывает»,
@@ -1315,6 +1315,15 @@ async def test_the_refusal_leaves_its_own_trace(db_session):
     Прежняя редакция ссылалась за обоснованием на ключ сохранённого тарифа, снятый
     планом 05.1-07 вместе с решением о плане, — довод от несуществующего соседа не
     проверяем ничем.
+
+    ⚠️ УТВЕРЖДЕНИЕ О СОСТАВЕ ПОЛЕЙ ЗАМЕНЕНО НА БОЛЕЕ СИЛЬНОЕ, А НЕ ОСЛАБЛЕНО.
+    Прежде тест требовал в записи ЧИСЛО незакрытых намерений. Считать его больше
+    некому: прикладная проверка потолка снята целиком (D-06), отказ принимает
+    ограничение схемы, и никакого подсчёта на этом пути не происходит. Теперь
+    утверждается, что записи с числом НЕТ ВОВСЕ: журнал, по которому разбирают
+    денежные жалобы, не имеет права называть величину, которой никто не
+    вычислял, — а подставленная «для сохранения поля» единица была бы именно
+    такой величиной.
     """
     user = await _user(db_session)
     await _open_intent(db_session, user, payment_id="yoo_first")
@@ -1328,7 +1337,13 @@ async def test_the_refusal_leaves_its_own_trace(db_session):
         for call in spy.warning.call_args_list
         if call.args and call.args[0] == "subscription_intent_cap_reached"
     ]
-    assert refusals, "отказ по потолку не оставил следа в журнале"
+    assert len(refusals) == 1, (
+        f"запись об отказе сделана {len(refusals)} раз(а), а отказ был один"
+    )
     fields = refusals[0].kwargs
     assert fields.get("user_id") == user.id
-    assert fields.get("open_intents") == 1, "журнал не называет числа намерений"
+    counted = [name for name, value in fields.items() if isinstance(value, int)
+               and name != "user_id"]
+    assert not counted, (
+        f"журнал называет величину, которой никто не вычислял: {counted}"
+    )
