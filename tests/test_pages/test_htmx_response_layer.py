@@ -20,19 +20,24 @@
 половина каждой пары стережёт ровно это.
 """
 import inspect
+import sys
+import types
 
 import pytest
 from fastapi import HTTPException
+from fastapi.responses import HTMLResponse
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 from app.pages.htmx import (
     HX_REQUEST_HEADER,
+    NOTICE_QUERY_KEY,
     HtmxRefusal,
     is_htmx,
     location_response,
     refuse,
+    respond,
 )
 # Помощники входа под чужой личностью берутся ИМПОРТОМ, а не второй копией.
 # `_enter` УДОСТОВЕРЯЕТСЯ, что вход состоялся: без этой проверки утверждения о
@@ -374,3 +379,158 @@ async def test_a_machine_receiver_without_a_token_is_refused_on_neither_transpor
     assert IMPERSONATION_REFUSAL_MARK not in _detail_of(response), (
         f"вебхук отвергнут запретом чужой личности: {_detail_of(response)!r}"
     )
+
+
+# --- Главный выход обработчика ------------------------------------------------
+
+# Код исхода действия, ЗАРЕГИСТРИРОВАННЫЙ в реестре уведомлений.
+KNOWN_NOTICE = "profile_saved"
+UNKNOWN_NOTICE = "нет-такого-кода"
+
+
+@pytest.fixture
+def notice_registry():
+    """Реестр кодов уведомлений — настоящий, а при его отсутствии подменный.
+
+    ⚠️ РЕЕСТР ЗАВОДИТСЯ СОСЕДНИМ ПЛАНОМ ТОЙ ЖЕ ВОЛНЫ (08-02), И ЭТИ УТВЕРЖДЕНИЯ
+    ОБЯЗАНЫ БЫТЬ ПРОВЕРЯЕМЫ ДО ЕГО ПОЯВЛЕНИЯ. Предмет здесь — не содержимое
+    реестра, а ДОГОВОР главного выхода с ним: код сверяется на СТОРОНЕ ЗАПИСИ, и
+    незнакомый код останавливает ответ ошибкой программиста, а не доезжает до
+    отрисовки. Договор проверяется одинаково на подменном и на настоящем
+    реестре, поэтому фикстура молча уступает настоящему, как только тот появится.
+
+    Пропустить утверждение до появления реестра было бы хуже некуда: невыполненная
+    проверка выглядит в отчёте так же, как выполненная.
+    """
+    try:
+        import app.pages.notices  # noqa: F401
+    except ModuleNotFoundError:
+        stand_in = types.ModuleType("app.pages.notices")
+        stand_in.notice_for = lambda code: (
+            ("Настройки сохранены.", "success") if code == KNOWN_NOTICE else None
+        )
+        sys.modules["app.pages.notices"] = stand_in
+        try:
+            yield stand_in
+        finally:
+            sys.modules.pop("app.pages.notices", None)
+    else:
+        yield sys.modules["app.pages.notices"]
+
+
+def test_the_handler_exit_cannot_be_called_without_a_degraded_path():
+    """ОБРАБОТЧИК БЕЗ ПУТИ ДЕГРАДАЦИИ НЕ СОБИРАЕТСЯ КАК ВЫЗОВ (FOUND-04).
+
+    Это несущее свойство сигнатуры, а не соглашение: «не забудьте про базовый
+    путь» соблюдается ровно до первого спешащего человека, а обязательный
+    аргумент нельзя забыть в принципе — вызов просто не состоится. Ключевой
+    аргумент (а не позиционный) выбран затем, чтобы адрес деградации нельзя было
+    подать «случайно, третьим по счёту».
+    """
+    parameters = inspect.signature(respond).parameters
+
+    assert parameters["redirect"].kind is inspect.Parameter.KEYWORD_ONLY, (
+        "адрес деградации можно подать позиционно — однажды он съедет местами "
+        "с соседним аргументом"
+    )
+    assert parameters["redirect"].default is inspect.Parameter.empty, (
+        "у адреса деградации появилось умолчание — забыть про базовый путь "
+        "снова стало возможно"
+    )
+
+    with pytest.raises(TypeError):
+        respond(_request())
+
+
+@pytest.mark.asyncio
+async def test_a_full_reload_gets_a_redirect_with_the_outcome_in_the_address():
+    """Без слоя письма исход действия едет АДРЕСОМ — как и до этой фазы."""
+    bare = await respond(_request(), redirect="/profile")
+
+    assert bare.status_code == 302
+    assert bare.headers["location"] == "/profile"
+
+
+@pytest.mark.asyncio
+async def test_the_outcome_code_is_appended_to_the_degraded_address(notice_registry):
+    """Код исхода приклеивается к адресу, а не подменяет его строку запроса.
+
+    Второй «?» в адресе превратил бы код в часть значения соседнего параметра, и
+    приземлившаяся страница не нарисовала бы плашку, ничего об этом не сказав.
+    """
+    plain = await respond(_request(), redirect="/profile", notice=KNOWN_NOTICE)
+    assert plain.headers["location"] == f"/profile?{NOTICE_QUERY_KEY}={KNOWN_NOTICE}"
+
+    with_query = await respond(
+        _request(), redirect="/ads/5/edit?tab=schedule", notice=KNOWN_NOTICE
+    )
+    assert with_query.headers["location"] == (
+        f"/ads/5/edit?tab=schedule&{NOTICE_QUERY_KEY}={KNOWN_NOTICE}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_htmx_without_a_fragment_gets_the_same_address_in_a_header(
+    notice_registry,
+):
+    """Один и тот же адрес — два транспорта, и плашку рисует ОДИН путь (D-12).
+
+    Код исхода едет АДРЕСОМ и на этом транспорте тоже. Поэтому приземлившаяся
+    страница рисует плашку тем же кодом, что и после полной перезагрузки: второй
+    механизм отрисовки не заводится и разойтись с первым не может.
+    """
+    response = await respond(
+        _request({HX_REQUEST_HEADER: "true"}), redirect="/profile", notice=KNOWN_NOTICE
+    )
+
+    assert response.status_code == 204
+    assert response.headers["HX-Location"] == (
+        f"/profile?{NOTICE_QUERY_KEY}={KNOWN_NOTICE}"
+    )
+    assert response.body == b""
+
+
+@pytest.mark.asyncio
+async def test_htmx_with_a_fragment_gets_the_fragment_and_not_a_document():
+    """Фрагмент отдаётся как есть: оболочка страницы НЕ перерисовывается."""
+
+    async def fragment():
+        return HTMLResponse("<span>сохранено</span>", status_code=200)
+
+    response = await respond(
+        _request({HX_REQUEST_HEADER: "true"}), redirect="/profile", fragment=fragment
+    )
+
+    assert response.status_code == 200
+    assert response.body.decode() == "<span>сохранено</span>"
+    assert "<!DOCTYPE" not in response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_an_unregistered_outcome_code_is_refused_on_the_writing_side(
+    notice_registry,
+):
+    """Закрытое множество кодов стережётся НА СТОРОНЕ ЗАПИСИ, а не только рисования.
+
+    Отрисовка по незнакомому коду не рисует ничего — то есть исход действия
+    ПРОПАДАЕТ молча, и обнаруживается это жалобой. Ошибка на стороне записи
+    ловит опечатку там, где её ещё можно исправить: в исходнике обработчика.
+    """
+    for hostile in (UNKNOWN_NOTICE, "", "profile_saved "):
+        with pytest.raises(ValueError):
+            await respond(_request(), redirect="/profile", notice=hostile)
+
+
+@pytest.mark.asyncio
+async def test_an_external_address_never_reaches_the_degraded_path():
+    """Внешний адрес не проходит ни одним транспортом (T-08-05, ловушка Фазы 11).
+
+    Внешний переход есть предмет отдельного заголовка и отдельной ветки, и
+    вводит их Фаза 11 вместе с формой оплаты. До тех пор внешний адрес,
+    поданный сюда по невнимательности, обязан не уехать никуда.
+    """
+    for hostile in ("https://yookassa.ru/pay/x", "//yookassa.ru/pay/x"):
+        with pytest.raises(ValueError):
+            await respond(_request({HX_REQUEST_HEADER: "true"}), redirect=hostile)
+        with pytest.raises(ValueError):
+            await respond(_request(), redirect=hostile)
