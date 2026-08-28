@@ -93,6 +93,7 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
+from app.pages import notices
 from app.pages.auth import set_session_cookie
 from app.pages.common import is_same_origin, templates
 from app.services import max_container_manager, wa_container_manager
@@ -936,9 +937,7 @@ async def admin_restart_worker(
             account_id=account.id,
             channel=account.type,
         )
-        return RedirectResponse(
-            url=f"{location}?error=no_container", status_code=302
-        )
+        return RedirectResponse(url=f"{location}?notice={notices.WORKER_NO_CONTAINER}", status_code=302)
 
     try:
         # ⚠️ В ОТДЕЛЬНОМ ПОТОКЕ, А НЕ ПРЯМО В ЦИКЛЕ СОБЫТИЙ. Менеджер синхронен и
@@ -957,9 +956,7 @@ async def admin_restart_worker(
             channel=account.type,
             error=str(e),
         )
-        return RedirectResponse(
-            url=f"{location}?error=restart_failed", status_code=302
-        )
+        return RedirectResponse(url=f"{location}?notice={notices.WORKER_RESTART_FAILED}", status_code=302)
 
     # Привилегированная операция над ЧУЖОЙ сущностью обязана оставлять след, и
     # форма следа в проекте уже есть (`free_access_toggled`): именованный ключ,

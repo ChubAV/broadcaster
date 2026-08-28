@@ -22,6 +22,7 @@ from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
+from app.pages import notices
 
 FORM_HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -102,7 +103,13 @@ def _assert_returned_to_editor(response, ad_id: int) -> None:
     """
     location = response.headers["location"]
     assert location.startswith(f"/ads/{ad_id}/edit")
-    assert "sched_error" in location
+    # Утверждение УСИЛЕНО переездом, а не ослаблено: прежде проверялось лишь
+    # присутствие собственного написания, теперь — что в адрес уехал КОД из
+    # закрытого реестра, то есть ровно тот, по которому есть что нарисовать.
+    assert (
+        f"notice={notices.SCHEDULE_ACCOUNT_GONE}" in location
+        or f"notice={notices.SCHEDULE_AD_MISSING}" in location
+    ), f"кода исхода в адресе нет: {location}"
 
 
 def _assert_indistinguishable_refusal(response) -> None:

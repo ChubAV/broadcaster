@@ -15,6 +15,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.services.schedule_rules import is_schedule_complete
 from app.services.schedule_service import compute_next_run_at
+from app.pages import notices
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 # Определение полноты живёт в НЕЙТРАЛЬНОМ модуле, от которого зависят и этот
@@ -41,12 +42,12 @@ OWNERSHIP_OK = "ok"
 OWNERSHIP_AD_DENIED = "ad"
 OWNERSHIP_ACCOUNT_DENIED = "account"
 
-# Признак отказа в строке запроса редактора. Это ПРИЗНАК, а не текст: сам текст
-# живёт константой на стороне сервера (`app/pages/ads.py`), иначе ссылка с
-# чужого сайта печатала бы в редакторе произвольное сообщение от имени
-# приложения. Причина та же, по которой `return_to` — признак, а не адрес.
-SCHED_ERROR_ACCOUNT = "account"
-SCHED_ERROR_MISSING = "missing"
+# ⚠️ ДВУХ СОБСТВЕННЫХ ПРИЗНАКОВ ОТКАЗА ЗДЕСЬ БОЛЬШЕ НЕТ. Они были ПРИЗНАКАМИ, а
+# текст к ним подбирал редактор объявлений своей парой констант — то есть у
+# одного исхода было два владельца в двух модулях. Оба сняты: обработчик пишет
+# КОД ЗАКРЫТОГО РЕЕСТРА (`app/pages/notices.py`), и слова к нему принадлежат
+# реестру. Довод «в адрес едет признак, а не текст» никуда не делся — он стал
+# свойством реестра, а не договорённостью двух файлов.
 
 # Формат значения времени: два числа через двоеточие в допустимых диапазонах.
 # Проверка стоит ДО вызова compute_next_run_at, который разбирает строку
@@ -318,16 +319,20 @@ async def _ownership_verdict(
     return OWNERSHIP_OK if own_account is not None else OWNERSHIP_ACCOUNT_DENIED
 
 
-def _editor_error_redirect(ad_id: int, reason: str) -> RedirectResponse:
-    """Вернуть пользователя В РЕДАКТОР своего объявления с признаком отказа.
+def _editor_error_redirect(ad_id: int, notice: str) -> RedirectResponse:
+    """Вернуть пользователя В РЕДАКТОР своего объявления с кодом исхода.
 
     Адрес строится из `ad_id` ПОДТВЕРЖДЁННОЙ записи — тем же способом, что и в
     `_editor_redirect`: значение поля формы в адрес не попадает ни при каких
-    условиях (T-02-23). Признак — из перечня выше, не из тела запроса.
+    условиях (T-02-23).
+
+    ⚠️ СВОБОДНОГО ЗНАЧЕНИЯ В АДРЕСЕ НЕ ОСТАЛОСЬ ВОВСЕ (T-08-27). Прежде сюда
+    приезжала строка-признак, и «она всегда из перечня выше» держалось
+    дисциплиной вызывающих. Теперь оба вызывающих подают КОНСТАНТУ ЗАКРЫТОГО
+    РЕЕСТРА, а сам код сверяется реестром на стороне отрисовки: незнакомое
+    значение не рисует ничего.
     """
-    return RedirectResponse(
-        url=f"/ads/{ad_id}/edit?sched_error={reason}", status_code=302
-    )
+    return RedirectResponse(url=f"/ads/{ad_id}/edit?notice={notice}", status_code=302)
 
 
 def _summary_query(user_id: int):
@@ -591,7 +596,7 @@ async def schedules_create(
     if verdict == OWNERSHIP_AD_DENIED:
         return RedirectResponse(url="/schedules", status_code=302)
     if verdict == OWNERSHIP_ACCOUNT_DENIED:
-        return _editor_error_redirect(ad_id, SCHED_ERROR_ACCOUNT)
+        return _editor_error_redirect(ad_id, notices.SCHEDULE_ACCOUNT_GONE)
 
     form_data = await request.form()
     # Фильтрация ДО приведения типов и ДО вычисления следующего запуска:
@@ -674,7 +679,7 @@ async def schedules_update(
         # можно вернуть в ЕГО редактор с объяснением: о чужих записях это не
         # сообщает ничего, а правки перестают исчезать молча (WR-07).
         if await _owns_ad(db, user.id, ad_id):
-            return _editor_error_redirect(ad_id, SCHED_ERROR_MISSING)
+            return _editor_error_redirect(ad_id, notices.SCHEDULE_AD_MISSING)
         return RedirectResponse(url="/schedules", status_code=302)
 
     # Владение самим расписанием проверено выше, но `ad_id` и `account_id`
@@ -685,7 +690,7 @@ async def schedules_update(
     if verdict == OWNERSHIP_AD_DENIED:
         return RedirectResponse(url="/schedules", status_code=302)
     if verdict == OWNERSHIP_ACCOUNT_DENIED:
-        return _editor_error_redirect(ad_id, SCHED_ERROR_ACCOUNT)
+        return _editor_error_redirect(ad_id, notices.SCHEDULE_ACCOUNT_GONE)
 
     form_data = await request.form()
     group_ids = _clean_ints(form_data.getlist("group_ids"))

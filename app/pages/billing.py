@@ -16,6 +16,7 @@ from app.services.payment_service import (
     PendingIntentCapError,
     create_payment,
 )
+from app.pages import notices
 from app.pages.common import (
     check_is_admin,
     get_user_from_cookie,
@@ -354,7 +355,7 @@ async def subscribe_to_plan(
         return Response(status_code=403)
 
     if not settings.yookassa_enabled:
-        return RedirectResponse(url="/billing?error=disabled", status_code=302)
+        return RedirectResponse(url=f"/billing?notice={notices.PAYMENT_DISABLED}", status_code=302)
 
     try:
         result = await create_payment(
@@ -391,10 +392,10 @@ async def subscribe_to_plan(
         # Потолок живёт ВНУТРИ создания платежа и своим шагом обработчика не
         # становится: второе место, где решается один вопрос, — ровно та
         # конструкция, за которую раздел получил два раунда правок.
-        return RedirectResponse(url="/billing?error=pending", status_code=302)
+        return RedirectResponse(url=f"/billing?notice={notices.PAYMENT_PENDING}", status_code=302)
     except PaymentCreationError:
         # Текст исключения СЮДА НЕ ПРИХОДИТ И НЕ НУЖЕН: он уже записан журналом
         # сервиса ключом `payment_create_failed`. На экран уезжает код причины,
         # а строку по нему подбирает `_payment_error_message` (T-05-47).
-        return RedirectResponse(url="/billing?error=payment", status_code=302)
+        return RedirectResponse(url=f"/billing?notice={notices.PAYMENT_FAILED}", status_code=302)
     return RedirectResponse(url=result["confirmation_url"], status_code=302)

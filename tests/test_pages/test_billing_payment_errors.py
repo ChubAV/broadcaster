@@ -54,6 +54,7 @@ from app.config import Settings
 from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.user import User
+from app.pages import notices
 from app.services.payment_service import handle_webhook
 
 BILLING_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "billing.py"
@@ -216,7 +217,7 @@ async def test_a_failed_subscription_payment_returns_the_person_with_a_reason(
     response = await _subscribe(authed_client, failing=True)
 
     assert response.status_code == 302
-    assert response.headers["location"] == "/billing?error=payment"
+    assert response.headers["location"] == f"/billing?notice={notices.PAYMENT_FAILED}"
 
 
 @pytest.mark.asyncio
@@ -274,7 +275,7 @@ async def test_the_third_party_exception_text_never_reaches_the_screen(
 
     assert SDK_FAILURE_TEXT not in response.text
     landing = await authed_client.get(response.headers["location"])
-    assert response.headers["location"] == "/billing?error=payment"
+    assert response.headers["location"] == f"/billing?notice={notices.PAYMENT_FAILED}"
     assert SDK_FAILURE_TEXT not in landing.text
 
 
@@ -313,7 +314,7 @@ async def test_subscribing_with_payments_disabled_names_the_reason(
         test_settings.yookassa_enabled = True
 
     assert response.status_code == 302
-    assert response.headers["location"] == "/billing?error=disabled"
+    assert response.headers["location"] == f"/billing?notice={notices.PAYMENT_DISABLED}"
     assert await _payments_count(db_session) == 0
 
 
@@ -438,38 +439,47 @@ async def test_the_section_without_the_parameter_prints_no_alert(
 
 
 def test_the_reason_codes_of_the_handlers_are_exactly_the_known_set():
-    """Ни одного кода в редиректе мимо отображения — и ни одного лишнего ключа.
+    """Ни одного кода в редиректе мимо РЕЕСТРА — и ни одного лишнего.
 
-    Коды выписаны в редиректах ЛИТЕРАЛАМИ намеренно: адрес обязан читаться
-    целиком в той строке, где он строится. Расхождение литерала с отображением
-    даёт молчаливый редирект без слов — ровно тот дефект, который закрывает этот
-    план, — поэтому связь держится этой регрессией, а не аккуратностью автора.
+    ⚠️ ГЕЙТ ПЕРЕЦЕЛЕН ВМЕСТЕ С ВЛАДЕЛЬЦЕМ СЛОВ, А НЕ ОСЛАБЛЕН. Прежде он держал
+    связь литерала редиректа с ЧАСТНЫМ отображением раздела; частного
+    отображения больше нет — слова принадлежат закрытому реестру
+    (`app/pages/notices.py`), общему на весь продукт. Утверждение осталось тем
+    же: расхождение того, что раздел ПИШЕТ, с тем, по чему есть что нарисовать,
+    даёт молчаливый редирект без слов — ровно тот дефект, ради которого гейт и
+    заведён.
+
+    ⚠️ КОДЫ БОЛЬШЕ НЕ ЛИТЕРАЛЫ, И ЭТО УСИЛЕНИЕ. Опечатка в литерале не падала
+    ничем и давала кнопку, вернувшую ту же страницу без единого слова; опечатка
+    в имени константы падает на импорте модуля. Поэтому обход собирает ИМЕНА
+    констант реестра, использованные в адресах раздела.
     """
-    from app.pages import billing as billing_module
-
     source = BILLING_PY.read_text(encoding="utf-8")
-    used = set(re.findall(r"/billing\?error=([a-z]+)", source))
+    used = set(re.findall(r"/billing\?notice=\{notices\.([A-Z_]+)\}", source))
 
     assert used == {
-        "payment",
-        "disabled",
-        # ⚠️ КОДОВ БЫЛО ПЯТЬ, СТАЛО ТРИ. `plan` и `downgrade` сняты планом
-        # 05.1-07 ВМЕСТЕ СО СВОИМИ ВЕТКАМИ ГАРДА: тарифов нет, выбирать не из
-        # чего, переходить некуда. Множество здесь сужено ТЕМ ЖЕ коммитом, что
-        # снял ветки, — иначе эта регрессия краснела бы по причине, к предмету
-        # правки отношения не имеющей, а её предмет ровно в том, чтобы литерал
-        # редиректа и отображение правились ОДНОВРЕМЕННО.
+        "PAYMENT_FAILED",
+        "PAYMENT_DISABLED",
+        # ⚠️ ВЕТОК БЫЛО ПЯТЬ, СТАЛО ТРИ. Две сняты планом 05.1-07 ВМЕСТЕ СО
+        # СВОИМИ ГАРДАМИ: тарифов нет, выбирать не из чего, переходить некуда.
+        # Множество здесь сужалось ТЕМ ЖЕ коммитом, что снял ветки, — иначе
+        # регрессия краснела бы по причине, к предмету правки отношения не
+        # имеющей.
         # Потолок одновременных подписочных намерений (план 05-17). Код обязан
-        # войти в ОБА места сразу — в литерал редиректа и в отображение, — иначе
-        # эта регрессия краснеет. Правка её множества и есть часть работы, а не
+        # войти в ОБА места сразу — в адрес редиректа и в реестр, — иначе эта
+        # регрессия краснеет. Правка её множества и есть часть работы, а не
         # побочный эффект: тест держит связь, которую иначе держала бы только
         # аккуратность автора.
-        "pending",
+        "PAYMENT_PENDING",
     }, used
-    for code in used:
-        assert billing_module._payment_error_message(code), code
-    assert billing_module._payment_error_message("zzz") == ""
-    assert billing_module._payment_error_message(None) == ""
+    for name in used:
+        code = getattr(notices, name)
+        assert notices.notice_for(code) is not None, (
+            f"раздел пишет код {code!r}, которого нет в реестре: человек "
+            "получил бы ту же страницу без единого слова"
+        )
+    assert notices.notice_for("zzz") is None
+    assert notices.notice_for(None) is None
 
 
 def test_the_get_handler_still_contains_no_write_path():
@@ -935,7 +945,7 @@ async def test_a_second_subscription_intent_from_the_form_is_refused_with_words(
     second = await _subscribe(authed_client, payment_id="yoo_second")
 
     assert second.status_code == 302
-    assert second.headers["location"] == "/billing?error=pending", (
+    assert second.headers["location"] == f"/billing?notice={notices.PAYMENT_PENDING}", (
         "второе намерение ушло на оплату либо вернулось без слов"
     )
     assert await _payments_count(db_session) == 1, "заведена вторая строка платежа"
@@ -968,7 +978,7 @@ async def test_a_second_intent_is_refused_while_the_first_is_fresh(
     """
     await _subscribe(authed_client, payment_id="yoo_first")
     refused = await _subscribe(authed_client, payment_id="yoo_second")
-    assert refused.headers["location"] == "/billing?error=pending"
+    assert refused.headers["location"] == f"/billing?notice={notices.PAYMENT_PENDING}"
     assert await _payments_count(db_session) == 1
 
     assert await _confirm(db_session, "yoo_first") is True

@@ -39,6 +39,7 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
 from app.models.user import User
+from app.pages import notices
 from app.pages.common import (
     check_is_admin,
     format_datetime_for_user,
@@ -949,7 +950,7 @@ async def history_retry(
         return RedirectResponse(url="/history", status_code=302)
 
     if not _claim_retry_slot(log.id):
-        return RedirectResponse(url=f"/history?retry={RETRY_BUSY}", status_code=302)
+        return RedirectResponse(url=f"/history?notice={notices.RETRY_BUSY}", status_code=302)
 
     # Признак постановки. Удержание снимается ТОЛЬКО когда задача в очередь не
     # ушла: на успешном пути окно обязано пережить ответ, иначе второе
@@ -996,15 +997,11 @@ async def history_retry(
             or not account
             or account.status != "active"
         ):
-            return RedirectResponse(
-                url=f"/history?retry={RETRY_GONE}", status_code=302
-            )
+            return RedirectResponse(url=f"/history?notice={notices.RETRY_GONE}", status_code=302)
 
         allowed, _reason = await check_access_cached(db, user.id, "send")
         if not allowed:
-            return RedirectResponse(
-                url=f"/history?retry={RETRY_ACCESS_CLOSED}", status_code=302
-            )
+            return RedirectResponse(url=f"/history?notice={notices.RETRY_ACCESS_CLOSED}", status_code=302)
 
         # Импорт ЛОКАЛЬНЫЙ и обязан таким остаться: именно он позволяет
         # подменить модуль очереди в тесте. Поднятый на уровень модуля, он
@@ -1040,7 +1037,7 @@ async def history_retry(
         if not queued:
             _release_retry_slot(log.id)
 
-    return RedirectResponse(url=f"/history?retry={RETRY_QUEUED}", status_code=302)
+    return RedirectResponse(url=f"/history?notice={notices.RETRY_QUEUED}", status_code=302)
 
 
 @router.get("/history", response_class=HTMLResponse)

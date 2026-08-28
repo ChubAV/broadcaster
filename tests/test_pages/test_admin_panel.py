@@ -29,6 +29,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.messenger_account import MessengerAccount
+from app.pages import notices
 from app.pages.admin import ADMIN_TABS
 
 ADMIN_PAGES_SOURCE = Path("app/pages/admin.py")
@@ -757,7 +758,12 @@ async def test_restart_is_refused_for_a_channel_without_a_container(
     assert response.status_code == 302
     wa_start.assert_not_called()
     max_start.assert_not_called()
-    assert "error=" in response.headers["location"]
+    # Отказ назван КОДОМ ЗАКРЫТОГО РЕЕСТРА, а не «каким-нибудь признаком»:
+    # прежняя проверка соглашалась на любое написание, лишь бы оно было, и
+    # переезд канала прошёл бы под ней незамеченным.
+    assert (
+        f"notice={notices.WORKER_NO_CONTAINER}" in response.headers["location"]
+    ), "отказ вернулся молча — кода исхода в адресе нет"
 
 
 @pytest.mark.asyncio
