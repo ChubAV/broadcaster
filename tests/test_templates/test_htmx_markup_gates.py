@@ -472,3 +472,447 @@ def test_the_post_attribute_matches_the_action_character_for_character() -> None
         f"у одной формы стало два разных адреса, и какой из них сработает, "
         f"решает наличие JS у человека"
     )
+
+
+# --- УТВЕРЖДЕНИЯ: АДРЕС ДЕЙСТВИЯ ВЕДЁТ НА ПОЛНЫЙ ДОКУМЕНТ (G-5) --------------
+#
+# Правила выше доказывают, что форма ОТПРАВИТСЯ без JS. Здесь доказывается, что
+# отправленная без JS форма приведёт человека НА СТРАНИЦУ, а не на голый кусок
+# разметки вне шелла: браузер покажет ответ маршрута целиком, и фрагмент,
+# собранный для подмены, окажется документом — без навигации, без стилей шелла
+# и без области уведомления. Статус ответа при этом двухсотый, и заметить это
+# автоматической проверкой доступности нельзя.
+
+ROUTE_METHODS = ("get", "post", "put", "patch", "delete")
+PATH_PARAM = re.compile(r"\{[^{}]*\}")
+PARAM = "{}"
+
+# Признак ПУТИ ДЕГРАДАЦИИ в обработчике страничного слоя. Оба имени объявлены
+# планом 08-01 и живут в одном модуле ответа: чтение признака запроса htmx —
+# единственное на проект, а главный выход обработчика принимает адрес
+# деградации ОБЯЗАТЕЛЬНЫМ ключевым аргументом, то есть обработчик, забывший
+# путь без JS, не собирается как вызов. Присутствие любого из двух имён в
+# достижимом коде обработчика и означает «маршрут умеет отвечать не только
+# фрагментом».
+#
+# Почему признак именно такой. Наивное «обработчик рендерит шаблон из каталога
+# фрагментов» объявило бы фрагментным маршрут автосохранения редактора — тот
+# самый, на который ведёт единственный сегодняшний адрес действия, — и гейт
+# покраснел бы на работающем коде в первый же прогон. Маршрут автосохранения
+# фрагмент отдаёт, но ТОЛЬКО запросу htmx; человеку без JS он отвечает
+# перенаправлением. Наивное «обработчик возвращает перенаправление» столь же
+# негодно с другой стороны: перенаправлением на вход отвечает КАЖДЫЙ маршрут,
+# и фрагментных маршрутов не осталось бы вовсе — пустое множество, вакуумно
+# зелёное пересечение и ровно тот дефект, который инвентарные числа этого файла
+# и заведены различать.
+DEGRADATION_MARKERS = frozenset({"is_htmx", "respond"})
+
+# Шеллов у проекта два, и собой они документы, а не фрагменты: `{% extends %}`
+# в них не встречается по построению.
+SHELL_TEMPLATES = frozenset({"base.html", "auth_base.html"})
+EXTENDS = re.compile(r"\{%-?\s*extends\b")
+
+
+class Route(NamedTuple):
+    """Объявление маршрута страничного слоя с НОРМАЛИЗОВАННЫМ путём.
+
+    Нормализация приводит имена параметров пути к безымянному виду: имя
+    параметра принадлежит обработчику, а адрес действия в шаблоне подставляет
+    на его место значение и имени не знает. Сверять их именами значило бы
+    требовать от шаблона знания сигнатуры.
+    """
+
+    method: str
+    path: str
+
+
+def _normalized(path: str) -> str:
+    return PATH_PARAM.sub(PARAM, path)
+
+
+def _document_templates() -> frozenset[str]:
+    """Шаблоны, дающие ПОЛНЫЙ документ: наследники шелла и сами шеллы.
+
+    Признак структурный, а не по имени каталога. Каталог фрагментов
+    (``includes/``, ``partials/``) — соглашение, которое соблюдается не везде:
+    порции бесконечной подгрузки лежат прямо в каталогах своих разделов
+    (``ads/partial_cards.html`` и ещё три таких же) и по имени каталога
+    фрагментами не опознаются, хотя шелла не несут и в браузере как страница
+    нечитаемы. Наследование же есть ровно тот механизм, которым документ
+    получает шелл, и обойти его, оставшись документом, нельзя.
+    """
+    documents: set[str] = set()
+    for rel, source in _all_templates():
+        if rel in SHELL_TEMPLATES or EXTENDS.search(_strip_comments(source)):
+            documents.add(rel)
+    return frozenset(documents)
+
+
+def _page_routes() -> dict[Route, bool]:
+    """Маршруты страничного слоя: объявление → «отдаёт только фрагмент».
+
+    Множество собирается РАЗБОРОМ дерева ``app/pages/**/*.py``, а не
+    объявляется перечнем. Перечень, выписанный руками, устарел бы на первом же
+    новом маршруте и молча объявил бы его неопасным.
+
+    Достижимость считается в пределах модуля: тело обработчика плюс тела
+    объявленных в том же модуле функций, чьи имена в нём упоминаются, и так
+    далее по цепочке. Этого достаточно и не случайно: разметка ответа в этом
+    проекте живёт в шаблоне, а помощник, её рендерящий, — рядом с обработчиком
+    (образец — помощник ответа опроса подключения в разделе аккаунтов).
+    """
+    routes: dict[Route, bool] = {}
+    documents = _document_templates()
+
+    for path in sorted(PAGES_DIR.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        prefixes: dict[str, str] = {}
+        template_constants: dict[str, str] = {}
+        functions: dict[str, ast.AST] = {}
+
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if not isinstance(target, ast.Name):
+                        continue
+                    value = node.value
+                    if isinstance(value, ast.Constant) and _is_template(value.value):
+                        template_constants[target.id] = value.value
+                    if (
+                        isinstance(value, ast.Call)
+                        and getattr(value.func, "id", None) == "APIRouter"
+                    ):
+                        prefix = ""
+                        for keyword in value.keywords:
+                            if keyword.arg == "prefix" and isinstance(
+                                keyword.value, ast.Constant
+                            ):
+                                prefix = keyword.value.value
+                        prefixes[target.id] = prefix
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                functions[node.name] = node
+
+        def facts(node: ast.AST, seen: frozenset[str] = frozenset()) -> tuple[set[str], bool]:
+            templates: set[str] = set()
+            degrades = False
+            names: set[str] = set()
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Constant) and _is_template(inner.value):
+                    templates.add(inner.value)
+                if isinstance(inner, ast.Name):
+                    names.add(inner.id)
+            for name in names:
+                if name in template_constants:
+                    templates.add(template_constants[name])
+                if name in DEGRADATION_MARKERS:
+                    degrades = True
+            for name in sorted(names):
+                if name in functions and name not in seen:
+                    sub_templates, sub_degrades = facts(functions[name], seen | {name})
+                    templates |= sub_templates
+                    degrades = degrades or sub_degrades
+            return templates, degrades
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for decorator in node.decorator_list:
+                if not (
+                    isinstance(decorator, ast.Call)
+                    and isinstance(decorator.func, ast.Attribute)
+                    and decorator.func.attr in ROUTE_METHODS
+                ):
+                    continue
+                router = getattr(decorator.func.value, "id", None)
+                if router not in prefixes:
+                    continue
+                if not decorator.args or not isinstance(decorator.args[0], ast.Constant):
+                    continue
+                rendered, degrades = facts(node)
+                is_fragment = (
+                    bool(rendered)
+                    and not degrades
+                    and all(name not in documents for name in rendered)
+                )
+                route = Route(
+                    decorator.func.attr.upper(),
+                    _normalized(prefixes[router] + decorator.args[0].value),
+                )
+                routes[route] = routes.get(route, False) or is_fragment
+
+    return routes
+
+
+def _is_template(value: object) -> bool:
+    return isinstance(value, str) and value.endswith(".html")
+
+
+PAGE_ROUTES = _page_routes()
+
+# Маршруты, отдающие ФРАГМЕНТ и только его: пути деградации у них нет вовсе.
+# Множество СОБРАНО обходом; число объявлено ниже отдельной константой, потому
+# что сломанный разбор дал бы пустое множество, пустое множество — вакуумно
+# зелёное пересечение с адресами действия, а зелёный цвет сломанного гейта
+# посимвольно совпадает с зелёным цветом соблюдённого правила (D-13).
+FRAGMENT_ROUTES = frozenset(route for route, fragment in PAGE_ROUTES.items() if fragment)
+
+FRAGMENT_ROUTES_DECLARED = 12
+
+
+def _to_python_expression(expression: str) -> str | None:
+    """Выражение шаблонизатора в виде, разбираемом синтаксисом Python.
+
+    Единственное различие, существенное для адреса, — знак склейки: у
+    шаблонизатора он тильда, у Python — плюс. Замена идёт ТОЛЬКО вне кавычек:
+    тильда внутри литерала есть часть пути, и подмена её плюсом молча изменила
+    бы извлечённый адрес, оставив гейт зелёным на неверном значении.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    for char in expression:
+        if quote is not None:
+            out.append(char)
+            if char == quote:
+                quote = None
+            continue
+        if char in "\"'":
+            quote = char
+            out.append(char)
+            continue
+        out.append("+" if char == "~" else char)
+    if quote is not None:
+        return None
+    return "".join(out)
+
+
+def _expression_branches(expression: str) -> tuple[str, ...] | None:
+    """ВСЕ значения, которые может дать выражение, с параметрами вместо величин.
+
+    Извлекаются ВСЕ ветви, а не первая: значение адреса действия единственной
+    сегодняшней формы есть условное выражение, и ветвей у него ДВЕ — создание и
+    правка. Гейт, взявший первую, проверил бы половину контракта и промолчал бы
+    о второй, то есть ровно о том пути, который в проекте новее.
+    """
+    source = _to_python_expression(expression.strip())
+    if source is None:
+        return None
+    try:
+        node = ast.parse(source, mode="eval").body
+    except SyntaxError:
+        return None
+    return _branches(node)
+
+
+def _branches(node: ast.AST) -> tuple[str, ...]:
+    """Ветви выражения. Всё, что не литерал и не склейка, — ПАРАМЕТР пути."""
+    if isinstance(node, ast.IfExp):
+        return _branches(node.body) + _branches(node.orelse)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return tuple(
+            left + right for left in _branches(node.left) for right in _branches(node.right)
+        )
+    if isinstance(node, ast.Constant):
+        return (node.value,) if isinstance(node.value, str) else (str(node.value),)
+    return (PARAM,)
+
+
+JINJA_EXPRESSION = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
+JINJA_STATEMENT = re.compile(r"\{%")
+
+
+def _literal_paths(raw: str) -> tuple[str, ...] | None:
+    """Пути, которые может дать значение адреса действия. ``None`` — не извлечь.
+
+    Значение разбирается на чередование текста и выражений шаблонизатора; у
+    каждого выражения берутся ВСЕ ветви, и множество путей есть их произведение
+    с окружающим текстом.
+
+    ⚠️ ГРАНИЦА, КОТОРУЮ ГЕЙТ НЕ ПЕРЕСЕКАЕТ И ПОТОМУ ЗАПРЕЩАЕТ. Путь, собранный
+    во время исполнения — склейка из величины, значение которой шаблону
+    неизвестно, — извлечению не поддаётся, и здесь возвращается ``None``. Такая
+    форма адреса действия запрещена этим же гейтом
+    (``test_no_action_is_assembled_from_an_unknown_value``): гейт, который
+    чего-то не видит, обязан требовать, чтобы этого и не было, иначе первый же
+    непроверяемый адрес станет способом обойти все правила файла разом.
+    """
+    if JINJA_STATEMENT.search(raw):
+        return None
+    variants = [""]
+    position = 0
+    for match in JINJA_EXPRESSION.finditer(raw):
+        branches = _expression_branches(match.group(1))
+        if branches is None:
+            return None
+        head = raw[position : match.start()]
+        variants = [variant + head + branch for variant in variants for branch in branches]
+        position = match.end()
+    tail = raw[position:]
+    return tuple(sorted({variant + tail for variant in variants}))
+
+
+class ActionSite(NamedTuple):
+    template: str
+    raw: str
+    paths: tuple[str, ...] | None
+
+
+def _action_sites(templates: list[tuple[str, str]]) -> list[ActionSite]:
+    """Адреса действия форм с признаком отправки htmx, вместе с их путями.
+
+    ОДИН обход собирает и адреса, и — через ``FRAGMENT_ROUTES`` — множество, с
+    которым они сверяются. Этим гейт замкнут на себя: форма, добавленная
+    будущей фазой, попадает в проверяемое множество тем же способом, что и
+    сегодняшняя, а не через отдельный перечень, который можно забыть пополнить.
+    """
+    sites: list[ActionSite] = []
+    for site in _post_sites(templates):
+        raw = _attr_value(site.tag, ACTION_VALUE) or ""
+        sites.append(ActionSite(site.template, raw, _literal_paths(raw)))
+    return sites
+
+
+def _extracted_paths(templates: list[tuple[str, str]]) -> set[str]:
+    return {
+        path for site in _action_sites(templates) if site.paths for path in site.paths
+    }
+
+
+def _offenders_unknown_action(templates: list[tuple[str, str]]) -> dict[str, str]:
+    """Адрес действия, чей путь не поддаётся извлечению из шаблона."""
+    offenders: dict[str, str] = {}
+    for site in _action_sites(templates):
+        if site.paths is None:
+            offenders[site.template] = f"{site.raw!r}: путь не извлекается"
+            continue
+        for path in site.paths:
+            if not path.startswith("/"):
+                offenders[f"{site.template}:{path}"] = "путь не начинается с корня"
+            elif any(
+                segment != PARAM and PARAM in segment for segment in path.split("/")
+            ):
+                offenders[f"{site.template}:{path}"] = (
+                    "величина подставлена внутрь сегмента, а не сегментом целиком"
+                )
+    return offenders
+
+
+def _offenders_action_is_not_a_route(templates: list[tuple[str, str]]) -> dict[str, str]:
+    declared = {route.path for route in PAGE_ROUTES if route.method == "POST"}
+    offenders: dict[str, str] = {}
+    for site in _action_sites(templates):
+        for path in site.paths or ():
+            if path not in declared:
+                offenders[f"{site.template}:{path}"] = "объявления маршрута нет"
+    return offenders
+
+
+def _offenders_action_hits_a_fragment_route(
+    templates: list[tuple[str, str]],
+) -> set[str]:
+    fragments = {route.path for route in FRAGMENT_ROUTES}
+    return _extracted_paths(templates) & fragments
+
+
+def test_the_number_of_fragment_routes_is_the_declared_one() -> None:
+    """Маршрутов, отдающих только фрагмент, ровно ``FRAGMENT_ROUTES_DECLARED``.
+
+    Инвентарное утверждение, без которого пересечение ниже вакуумно. Сломанный
+    разбор страничного слоя — опечатка в имени декоратора, потерянный префикс
+    роутера, неверно посчитанная достижимость — даёт пустое множество, пустое
+    пересечение и зелёный цвет, посимвольно совпадающий с зелёным цветом
+    соблюдённого правила. Только собственное число различает их (D-13).
+
+    Отдельно утверждается, что число НЕ НУЛЬ: ноль здесь означал бы не
+    «фрагментных маршрутов в проекте нет» — их видно глазами в разделе
+    аккаунтов и в порциях бесконечной подгрузки, — а «обход их не находит».
+    """
+    assert FRAGMENT_ROUTES_DECLARED > 0, (
+        "объявленное число фрагментных маршрутов равно нулю: в проекте они "
+        "есть, и ноль здесь означал бы сломанный разбор, а не пустое множество"
+    )
+    assert len(FRAGMENT_ROUTES) == FRAGMENT_ROUTES_DECLARED, (
+        f"фрагментных маршрутов найдено {len(FRAGMENT_ROUTES)}, объявлено "
+        f"{FRAGMENT_ROUTES_DECLARED}: {sorted(FRAGMENT_ROUTES)} — маршрут "
+        f"потерял путь деградации, приобрёл его, либо разбор страничного слоя "
+        f"перестал их находить"
+    )
+    assert len(PAGE_ROUTES) > len(FRAGMENT_ROUTES), (
+        "фрагментными опознаны ВСЕ маршруты страничного слоя — признак пути "
+        "деградации не срабатывает ни на одном обработчике"
+    )
+
+
+def test_every_action_path_is_a_declared_route() -> None:
+    """Каждый извлечённый путь адреса действия — объявленный маршрут POST.
+
+    Адрес действия, ведущий в никуда, при отключённом JS даёт четырёхсотчетвёртую
+    страницу вместо результата, и на пути с JS это не видно вовсе: там адрес
+    берётся из соседнего атрибута, и опечатка в ``action`` не проявляется ничем
+    до тех пор, пока кто-нибудь не выключит JS.
+    """
+    offenders = _offenders_action_is_not_a_route(_all_templates())
+    assert not offenders, (
+        f"адрес действия формы не соответствует ни одному объявлению маршрута "
+        f"POST страничного слоя: {offenders} — без JS такая форма уходит в "
+        f"никуда"
+    )
+
+
+def test_no_action_path_leads_to_a_fragment_route() -> None:
+    """G-5: адрес действия не ведёт на маршрут, отдающий только фрагмент.
+
+    Без JS браузер показывает ответ маршрута ЦЕЛИКОМ и как документ. Фрагмент,
+    собранный для подмены куска страницы, окажется всей страницей: без
+    навигации, без шелла и без области уведомления, со статусом 200 — то есть
+    ни один автоматический признак отказа не сработает, и увидит это только
+    человек.
+    """
+    hits = _offenders_action_hits_a_fragment_route(_all_templates())
+    assert not hits, (
+        f"адрес действия ведёт на маршрут, отдающий только фрагмент: "
+        f"{sorted(hits)} — человек без JS попадёт на голый кусок разметки вне "
+        f"шелла, и статус ответа при этом будет двухсотым"
+    )
+
+
+def test_no_action_is_assembled_from_an_unknown_value() -> None:
+    """Адрес действия обязан быть извлекаемым из шаблона.
+
+    Утверждение о ГРАНИЦЕ САМОГО ГЕЙТА, а не о разметке. Путь, собранный во
+    время исполнения из величины, значение которой шаблону неизвестно, гейт
+    прочитать не может — и потому запрещает: непроверяемый адрес был бы
+    способом обойти и правило существования маршрута, и правило полного
+    документа разом, не уронив ни одного теста.
+
+    Величина внутри пути при этом разрешена и извлекается как ПАРАМЕТР
+    СЕГМЕНТА: единственная сегодняшняя форма подставляет идентификатор
+    объявления между двумя литеральными кусками пути, и обе её ветви
+    извлекаются целиком.
+    """
+    offenders = _offenders_unknown_action(_all_templates())
+    assert not offenders, (
+        f"адрес действия не поддаётся извлечению из шаблона: {offenders} — "
+        f"такой адрес непроверяем ни одним правилом этого файла"
+    )
+
+
+def test_both_branches_of_the_editor_action_are_extracted() -> None:
+    """Из условного адреса действия извлечены ОБЕ ветви, а не первая.
+
+    Утверждение о РАЗБОРЕ, и потому отдельное от правил. Значение адреса
+    единственной сегодняшней формы есть условное выражение с двумя ветвями —
+    правка существующей записи и создание новой. Разборщик, берущий первую
+    ветвь, оставил бы вторую непроверенной ни одним правилом выше, а общий
+    счёт мест при этом остался бы верным.
+    """
+    paths = _extracted_paths(_all_templates())
+    assert len(paths) == 2, (
+        f"из адресов действия извлечено путей: {sorted(paths)} — ожидались обе "
+        f"ветви условного выражения единственной формы"
+    )
+    assert all(path.startswith("/") for path in paths)
+    assert any(PARAM in path for path in paths), (
+        f"ни один извлечённый путь не несёт параметра сегмента: {sorted(paths)} "
+        f"— ветвь правки существующей записи адресуется идентификатором, и её "
+        f"отсутствие означает, что разобрана только ветвь создания"
+    )
