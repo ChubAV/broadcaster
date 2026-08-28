@@ -22,6 +22,7 @@ from app.dependencies import (
 from app.infrastructure.uow import create_uow_factory
 from app.middleware import RequestIdMiddleware
 from app.pages.common import bind_image_url_globals
+from app.pages.htmx import HtmxRefusal, location_response
 from app.routes.auth import router as auth_router
 from app.routes.ads import router as ads_router
 from app.routes.uploads import router as uploads_router
@@ -202,6 +203,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # секунд ради ответа, который для админки заранее известен.
     app.include_router(admin_partials_router)
     app.include_router(pages_router)
+
+    # ОТКАЗ ЗАВИСИМОСТИ, АДРЕСОВАННЫЙ СЛОЮ ПИСЬМА, ПРЕВРАЩАЕТСЯ В ОТВЕТ ЗДЕСЬ —
+    # И ТОЛЬКО ЗДЕСЬ. Зависимость прервать цепочку может единственным способом,
+    # исключением, а любое `HTTPException` уходит в `JSONResponse` при ЛЮБОМ
+    # статусе, включая 2xx, — то есть в тело `{"detail": …}`, запрещённое
+    # FOUND-07 наравне с редиректом. Обработчик своего типа — единственный путь
+    # мимо этого превращения, и форма его скопирована с четырёх доменных
+    # обработчиков ниже.
+    #
+    # ⚠️ СТОИТ ВЫШЕ ОБЩЕГО ОБРАБОТЧИКА `Exception` СОЗНАТЕЛЬНО. Поиск идёт по
+    # типу, а не по порядку регистрации, поэтому перестановка ничего не сломала
+    # бы сегодня; порядок здесь удерживает ЧИТАЕМОСТЬ намерения: отказ, попавший
+    # в общий обработчик, стал бы пятисоткой, и такую правку обязано быть видно.
+    @app.exception_handler(HtmxRefusal)
+    async def htmx_refusal_handler(request: FastAPIRequest, exc: HtmxRefusal):
+        # Уровень `info`, а не `warning`: это ШТАТНЫЙ отказ по действующему
+        # правилу (истёк доступ, действие под чужой личностью), а не сбой.
+        # Сам факт отказа пишется вызывающей зависимостью своим ключом — здесь
+        # записывается только то, что он доехал до человека новым транспортом.
+        logger.info("htmx_refusal", path=request.url.path)
+        return location_response(exc.location)
 
     @app.exception_handler(NotFoundError)
     async def not_found_handler(request: FastAPIRequest, exc: NotFoundError):
