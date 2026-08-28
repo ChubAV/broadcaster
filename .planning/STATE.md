@@ -8,13 +8,13 @@ status: executing
 stopped_at: Phase 8 context gathered
 last_updated: "2026-08-28T11:33:53.999Z"
 last_activity: 2026-08-28
-last_activity_desc: Phase 08 wave 3 complete (08-06, 08-10)
+last_activity_desc: Phase 08 wave 4 complete — all 10 plans executed
 state_head: 262070ef28f2e4379b048855cd09a020bd58f866
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 17
-  completed_plans: 14
+  completed_plans: 17
   percent: 11
 ---
 
@@ -36,13 +36,13 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 ## Current Position
 
 Phase: 08 (Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок) — EXECUTING
-Plan: 8 of 10
+Plan: 10 of 10
 Total Plans in Phase: 10
-Completed Plans in Phase: 7
+Completed Plans in Phase: 10
 Status: Executing Phase 08
-Last activity: 2026-08-28 — Phase 08 wave 3 complete (08-06, 08-10)
+Last activity: 2026-08-28 — Phase 08 wave 4 complete — all 10 plans executed
 
-Progress: [███████░░░] 70%
+Progress: [██████████] 100%
 
 **Порядок исполнения:** 7 → 8 → 9 → 10 → 11 → 14 → 15; Фаза 12 (загрузка изображений) идёт параллельно Фазам 9-11, Фаза 13 (QR-мастер) — после 10 и до 14.
 
