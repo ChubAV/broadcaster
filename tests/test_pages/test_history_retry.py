@@ -846,8 +846,13 @@ async def test_retry_busy_notice_states_the_real_guarantee(
     отказ второму нажатию назван (это окно действительно гарантирует), а
     появление новой записи истории обещано УСЛОВНО.
 
-    Текст плашки берётся ИЗ САМОГО словаря модуля, а не копируется в тест:
-    копия разъехалась бы с исходником молча.
+    Текст плашки берётся ИЗ САМОГО реестра, а не копируется в тест: копия
+    разъехалась бы с исходником молча.
+
+    ⚠️ ИСТОЧНИК ТЕКСТА СМЕНИЛСЯ ПЛАНОМ 08-06, УТВЕРЖДЕНИЕ — НЕТ. Частный
+    словарь раздела снят вместе с двумя такими же; запись живёт в закрытом
+    реестре `app/pages/notices.py`, а рисует её общая область шелла. Проверяются
+    те же два свойства текста и тот же вариант плашки.
     """
     user = await _current_user(db_session)
     log = await _seed_retryable(db_session, user.id)
@@ -863,8 +868,10 @@ async def test_retry_busy_notice_states_the_real_guarantee(
     assert len(env.queued) == 1, env.queued
     assert page.status_code == 200
 
-    notice, tone = history_module.RETRY_NOTICES[history_module.RETRY_BUSY]
-    assert tone == "info", "отказ второму нажатию — не ошибка пользователя"
+    record = notices.notice_for(notices.RETRY_BUSY)
+    assert record is not None, "кода отказа второму нажатию нет в реестре"
+    notice = record.text
+    assert record.variant == "info", "отказ второму нажатию — не ошибка пользователя"
     assert notice in page.text, "плашка отказа второму нажатию не показана"
     assert "второй раз он не уйдёт" in notice, (
         "текст плашки не обещает пользователю отсутствие второй отправки — "

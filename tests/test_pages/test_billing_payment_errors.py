@@ -27,11 +27,17 @@
   (`test_services/test_payment_service.py`).
 
 ПОЧЕМУ МНОЖЕСТВО ПРИЧИН ЗАКРЫТО (T-05-46). В разметку уходит строка ИЗ
-ОТОБРАЖЕНИЯ `_payment_error_message`, а не значение параметра запроса. Владелец
-ссылки может подставить в адрес что угодно — на экран это не попадёт ни
-значением, ни атрибутом, потому что подставлять нечего: вход в разметку не
-связан со входом из адреса. Тем же приёмом закрыт признак исхода повтора
-отправки (`RETRY_NOTICES` в `app/pages/history.py`).
+ЗАКРЫТОГО РЕЕСТРА `app/pages/notices.py`, а не значение параметра запроса.
+Владелец ссылки может подставить в адрес что угодно — на экран это не попадёт
+ни значением, ни атрибутом, потому что подставлять нечего: вход в разметку не
+связан со входом из адреса.
+
+⚠️ ВЛАДЕЛЕЦ СЛОВ СМЕНИЛСЯ ПЛАНОМ 08-06, ГРАНИЦА ФАЙЛА — НЕТ. Прежде тот же
+довод держало ЧАСТНОЕ отображение раздела, и таких частных отображений в
+продукте было три: этот файл проверял одно из них. Три копии одного правила
+расходились бы при первой правке любой из них, поэтому копий не осталось: слова
+принадлежат одному реестру, а рисует их одна область шелла. Предмет ЭТОГО файла
+не изменился — он по-прежнему про ответ раздела на неудавшуюся оплату.
 
 ПОЧЕМУ ТЕКСТ ЧУЖОГО ИСКЛЮЧЕНИЯ НЕ ПОКАЗЫВАЕТСЯ (T-05-47). Прецедент R-03-09
 Фазы 3 — раскрытие текста стороннего исключения в плашке — принят владельцем
@@ -91,9 +97,50 @@ MSG_PENDING = (
 )
 
 # Признак нарисованной плашки отказа. Проверяется ИМЕННО он, а не наличие слова
-# из текста: слово может прийти из соседнего блока экрана, обёртка — только из
-# ветки показа причины.
-ALERT_MARKER = "data-payment-error"
+# из текста: слово может прийти из соседнего блока экрана, класс плашки — только
+# из отрисованной плашки.
+#
+# ⚠️ ПРИЗНАК ПЕРЕЦЕЛЕН ВМЕСТЕ С МЕСТОМ ОТРИСОВКИ. Прежним признаком была
+# СОБСТВЕННАЯ обёртка раздела (`data-payment-error`); её больше нет — исход
+# рисует общая область уведомления шелла общим макросом.
+ALERT_MARKER = 'class="alert alert--error"'
+
+# Якоря двух областей уведомления шелла (includes/notice_area.html).
+POLITE_AREA = 'id="notice"'
+ASSERTIVE_AREA = 'id="notice-alert"'
+
+
+def _notice_areas(html: str) -> str:
+    """Содержимое ОБЕИХ областей уведомления шелла — и ничего кроме него.
+
+    ⚠️ ИЗВЛЕЧЕНИЕ, А НЕ ПОИСК ПО ВСЕЙ СТРАНИЦЕ, И ЭТО НЕ ПЕДАНТИЗМ. Шелл
+    доставляет в КАЖДЫЙ документ две СКРЫТЫЕ заготовки плашки отказа сервера и
+    обрыва связи (includes/htmx_error_banner.html), и класс настойчивого
+    варианта присутствует в них ВСЕГДА. Проверка по всей странице поэтому
+    зеленела бы на пустом экране — то есть утверждала бы не то, что человеку
+    что-то сказано, а то, что шелл собран.
+
+    Границы области считаются по вложенности `div`, а не по первому `</div>`:
+    плашка внутри области сама является элементом, и наивный поиск обрезал бы
+    содержимое ровно по её закрытию.
+    """
+    parts = []
+    for anchor in (POLITE_AREA, ASSERTIVE_AREA):
+        start = html.index(anchor)
+        cursor = html.index(">", start) + 1
+        depth, scan = 1, cursor
+        while depth:
+            nxt_open = html.find("<div", scan)
+            nxt_close = html.find("</div>", scan)
+            assert nxt_close != -1, f"область {anchor} не закрыта"
+            if nxt_open != -1 and nxt_open < nxt_close:
+                depth += 1
+                scan = nxt_open + 4
+            else:
+                depth -= 1
+                scan = nxt_close + 6
+        parts.append(html[cursor : scan - 6])
+    return "\n".join(parts)
 
 
 # --- Инструменты --------------------------------------------------------------
@@ -366,24 +413,25 @@ def test_no_bare_redirect_without_a_reason_is_left_in_the_section():
 @pytest.mark.parametrize(
     "code,message",
     [
-        ("payment", MSG_PAYMENT),
-        ("disabled", MSG_DISABLED),
+        (notices.PAYMENT_FAILED, MSG_PAYMENT),
+        (notices.PAYMENT_DISABLED, MSG_DISABLED),
     ],
 )
 async def test_a_known_reason_code_prints_its_own_words(
     authed_client: AsyncClient, code: str, message: str
 ):
-    response = await authed_client.get(f"/billing?error={code}")
+    response = await authed_client.get(f"/billing?notice={code}")
 
     assert response.status_code == 200
-    assert ALERT_MARKER in response.text, "плашки отказа на экране нет"
-    assert message in response.text
+    areas = _notice_areas(response.text)
+    assert ALERT_MARKER in areas, "плашки отказа в области уведомления нет"
+    assert message in areas
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "code",
-    ["zzz_unknown_reason", "<script>alert(1)</script>", "paymentt", "PAYMENT"],
+    ["zzz_unknown_reason", "<script>alert(1)</script>", "payment_failedd", "PAYMENT_FAILED"],
 )
 async def test_an_unknown_reason_code_prints_nothing_at_all(
     authed_client: AsyncClient, code: str
@@ -391,13 +439,21 @@ async def test_an_unknown_reason_code_prints_nothing_at_all(
     """Подставить произвольный текст через адрес невозможно (T-05-46).
 
     Проверяется НЕ экранирование, а недостижимость: в разметку уходит строка из
-    закрытого отображения, поэтому значение параметра не попадает на экран ни
+    ЗАКРЫТОГО РЕЕСТРА, поэтому значение параметра не попадает на экран ни
     значением, ни атрибутом.
+
+    ⚠️ РАДИУС ЭТОГО СВОЙСТВА ВЫРОС ПЛАНОМ 08-06, И ИМЕННО ПОЭТОМУ ОНО ВАЖНЕЕ
+    ПРЕЖНЕГО. Параметр рисует плашку теперь НА КАЖДОЙ странице обоих шеллов, а
+    не на пяти экранах: сравнение ЦЕЛИКОМ по закрытому множеству и есть то
+    единственное, что не даёт владельцу ссылки написать человеку сообщение от
+    имени приложения где угодно (T-08-08).
     """
-    response = await authed_client.get(f"/billing?error={code}")
+    response = await authed_client.get(f"/billing?notice={code}")
 
     assert response.status_code == 200
-    assert ALERT_MARKER not in response.text, "неизвестный код нарисовал плашку"
+    assert ALERT_MARKER not in _notice_areas(response.text), (
+        "неизвестный код нарисовал плашку"
+    )
     assert code not in response.text, "значение параметра напечатано на экране"
 
 
@@ -410,22 +466,29 @@ async def test_the_pending_reason_prints_its_own_words(authed_client: AsyncClien
     → код причины → отображение → плашка», и разрыв ЛЮБОГО звена даёт ту самую
     возвращённую без слов страницу, которую фаза закрывала планом 05-10.
     """
-    response = await authed_client.get("/billing?error=pending")
+    response = await authed_client.get(f"/billing?notice={notices.PAYMENT_PENDING}")
 
     assert response.status_code == 200
-    assert ALERT_MARKER in response.text, "плашки отказа на экране нет"
-    assert MSG_PENDING in response.text
+    areas = _notice_areas(response.text)
+    assert ALERT_MARKER in areas, "плашки отказа в области уведомления нет"
+    assert MSG_PENDING in areas
 
 
 @pytest.mark.asyncio
 async def test_the_section_without_the_parameter_prints_no_alert(
     authed_client: AsyncClient,
 ):
-    """Парный тест: без него предыдущие зеленели бы на разметке без плашки."""
+    """Парный тест: без него предыдущие зеленели бы на разметке без плашки.
+
+    ⚠️ ОБЛАСТЬ УВЕДОМЛЕНИЯ ПРИ ЭТОМ СУЩЕСТВУЕТ ВСЕГДА, ДАЖЕ ПУСТАЯ, И ЭТО НЕ
+    ПРОТИВОРЕЧИЕ. Правило «нет кода — нет плашки» относится к ПЛАШКЕ: узел
+    области стабилен, потому что внеполосная подмена целится в него по
+    идентификатору. Проверяется поэтому пустота области, а не отсутствие узла.
+    """
     response = await authed_client.get("/billing")
 
     assert response.status_code == 200
-    assert ALERT_MARKER not in response.text
+    assert ALERT_MARKER not in _notice_areas(response.text)
 
 
 # ⚠️ `test_the_alert_stands_before_the_current_plan_block` СНЯТ ОТСЮДА, А ЕГО

@@ -393,27 +393,46 @@ SCHEDULE_ERROR_TEXT = (
 
 
 @pytest.mark.asyncio
-async def test_editor_shows_the_refusal_message_in_the_schedules_section(
+async def test_editor_shows_the_refusal_message_in_the_shared_notice_area(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
     """Формулировка контракта UI-SPEC (E4 `error`) видна и стоит ГДЕ надо.
 
-    Сообщение живёт в секции расписаний, то есть ПОСЛЕ закрытия элемента
-    `<form id="ad-form">`: внутри него оно было бы вложенной формой ровно тогда,
-    когда его поставили бы неаккуратно, и браузер молча отключил бы кнопки
-    карточек расписаний.
+    ⚠️ ТЕСТ ПЕРЕЦЕЛЕН ВМЕСТЕ С МЕСТОМ ОТРИСОВКИ (план 08-06), И УТВЕРЖДАЕТ ОН
+    БОЛЬШЕ ПРЕЖНЕГО, А НЕ МЕНЬШЕ. Прежде он назывался
+    `test_editor_shows_the_refusal_message_in_the_schedules_section` и держал
+    сообщение ПОСЛЕ закрытия `<form id="ad-form">`: поставленное внутрь, оно
+    оказалось бы вложенной формой, и браузер молча отключил бы кнопки карточек
+    расписаний. Сообщение уехало в общую область уведомления шелла, которая
+    лежит выше любого содержимого страницы, — поэтому опасность вложенности
+    снята ПО ПОСТРОЕНИЮ, а не соблюдением порядка узлов.
+
+    Проверяется теперь и то, и другое: сообщение на экране есть; оно стоит ДО
+    открытия формы объявления (то есть заведомо не внутри неё); и приходит оно
+    ИМЕННО из настойчивой области шелла, а не из вернувшегося собственного
+    блока редактора.
     """
     own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
 
-    response = await authed_client.get(f"/ads/{own_ad}/edit?sched_error=account")
+    response = await authed_client.get(
+        f"/ads/{own_ad}/edit?notice={notices.SCHEDULE_ACCOUNT_GONE}"
+    )
 
     assert response.status_code == 200
     body = response.text
     assert SCHEDULE_ERROR_TEXT in body
+    assert body.count(SCHEDULE_ERROR_TEXT) == 1, (
+        "текст отказа нарисован дважды — у редактора снова завёлся свой блок"
+    )
 
     form_open = body.index('<form id="ad-form"')
-    form_close = body.index("</form>", form_open)
-    assert body.index(SCHEDULE_ERROR_TEXT) > form_close
+    assert body.index(SCHEDULE_ERROR_TEXT) < form_open, (
+        "сообщение стоит ниже открытия формы объявления — то есть рискует "
+        "оказаться внутри неё"
+    )
+    assert body.index('id="notice-alert"') < body.index(SCHEDULE_ERROR_TEXT) < form_open, (
+        "сообщение пришло не из настойчивой области шелла"
+    )
 
 
 @pytest.mark.asyncio
@@ -442,7 +461,7 @@ async def test_editor_never_prints_the_query_value_itself(
     own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
 
     response = await authed_client.get(
-        f"/ads/{own_ad}/edit?sched_error=Ваш+аккаунт+заблокирован"
+        f"/ads/{own_ad}/edit?notice=Ваш+аккаунт+заблокирован"
     )
 
     assert response.status_code == 200
