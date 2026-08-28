@@ -1208,6 +1208,33 @@ async def test_an_unknown_payment_status_is_printed_as_it_is(
 
 
 @pytest.mark.asyncio
+async def test_an_expired_intent_is_printed_in_words(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Статус `expired` назван человеку РУССКИМ СЛОВОМ, а не сырым латинским.
+
+    ⚠️ БЕЗ ПОДПИСИ ЭТОТ СТАТУС НАПЕЧАТАЛСЯ БЫ СЫРЬЁМ, и это не гипотеза:
+    ровно так работает соседний `test_an_unknown_payment_status_is_printed_as_it_is`.
+    Статус заводится ревизией `0021` — зачисткой существующих незакрытых
+    намерений, — то есть появляется у людей, которые ничего не делали, и
+    появляется В ПРОШЛОМ, на уже созданных строках.
+
+    Слово выбрано в ряд с «проведён» / «отклонён» / «в обработке»: словарь
+    состояний общий у пользователя и администратора (D-14), и вторая пара слов
+    про то же состояние запрещена. Тон `neutral`, а не `danger`, потому что
+    строка остаётся оплачиваемой: оплата по старой ссылке будет зачтена.
+    """
+    owner = await _current_user(db_session)
+    db_session.add(_payment_row(owner.id, status="expired"))
+    await db_session.commit()
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    assert "просрочен" in body, "новый статус не назван словом"
+    assert ">expired<" not in body, "статус напечатан сырым латинским идентификатором"
+
+
+@pytest.mark.asyncio
 async def test_the_purpose_of_a_payment_has_three_sources(
     authed_client: AsyncClient, db_session: AsyncSession
 ):

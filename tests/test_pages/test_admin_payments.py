@@ -242,6 +242,32 @@ async def test_the_unclosed_payment_is_visible_and_wears_its_own_status(
 
 
 @pytest.mark.asyncio
+async def test_an_expired_intent_is_printed_in_words(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Статус `expired` назван администратору ТЕМ ЖЕ СЛОВОМ, что и человеку.
+
+    Одно состояние называется одним словом и у пользователя, и у администратора
+    (D-14): вторая пара слов про то же состояние запрещена. Здесь это не
+    формальность — администратор отвечает клиенту ТЕМИ ЖЕ словами, которые
+    видит сам, и расхождение словарей превратилось бы в расхождение ответов.
+
+    ⚠️ СОСТОЯНИЕ НЕ ОЗНАЧАЕТ ОТКАЗ. Намерение снято по сроку давности (ревизия
+    `0021`), но строка остаётся оплачиваемой: оплата по старой ссылке будет
+    зачтена. Поэтому слово нейтральное, а не «отклонён».
+    """
+    payer = await _seed_user(db_session, "stale@test.com", "Просроченный Платёж")
+    await _seed_payment(db_session, payer, status="expired")
+    await db_session.commit()
+
+    html = (await admin_client.get(PAYMENTS_URL)).text
+
+    assert "Просроченный Платёж" in html
+    assert "просрочен" in html, "новый статус не назван словом"
+    assert ">expired<" not in html, "статус напечатан сырым латинским идентификатором"
+
+
+@pytest.mark.asyncio
 async def test_amounts_go_through_the_money_global_and_junk_does_not_break_the_page(
     admin_client: AsyncClient, db_session: AsyncSession
 ):
