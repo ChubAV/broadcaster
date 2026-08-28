@@ -4,12 +4,11 @@ milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 8
 current_phase_name: Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок
-status: planning
+status: "Phase 07 shipped — PR #46"
 stopped_at: Phase 07 complete, ready to plan Phase 8
-last_updated: "2026-08-28T06:14:45.720Z"
+last_updated: "2026-08-28T06:21:45.369Z"
 last_activity: 2026-08-28
-last_activity_desc: Phase 07 complete, transitioned to Phase 8
-state_head: 17308b1b4de00bdb52ea3510dec70d0a86154c44
+state_head: f9f16cd76fe37543140c5f813c0d93907480a66c
 progress:
   total_phases: 9
   completed_phases: 1
@@ -38,7 +37,7 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 Phase: 8 — Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок
 Plan: Not started
 Status: Executing Phase 07
-Last activity: 2026-08-28 — Phase 07 complete, transitioned to Phase 8
+Last activity: 2026-08-28
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -289,7 +288,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Ready to plan
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Phase 07 shipped — PR #46
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
