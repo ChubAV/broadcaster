@@ -27,7 +27,7 @@
     "node_repair": true,
     "node_repair_budget": 2,
     "ui_phase": true,
-    "ui_safety_gate": true,
+    "ui_safety_gate": false,
     "ai_integration_phase": true,
     "api_coverage_gate": true,
     "human_verify_mode": "end-of-phase",
