@@ -13,9 +13,9 @@
 
 ### Фундамент
 
-- [ ] **FOUND-01**: htmx обновлён с 1.9.10 до 2.0.10 заменой вендоренного файла, и тест утверждает версию по содержимому файла
-- [ ] **FOUND-02**: блок конфигурации htmx из шести ключей (`responseHandling` с правилом `422` **выше** `[45]..`, `historyRestoreAsHxRequest: false`, `allowNestedOobSwaps: false`, `reportValidityOfForms: true`, `historyCacheSize: 0`, явный `selfRequestsOnly: true`) стоит в `base.html` **и** `auth_base.html` перед подключением htmx, и каждая строка утверждается тестом
-- [ ] **FOUND-03**: `asset_version` пересчитывается при замене любого вендоренного JS-файла, а не только `app.css` — подмена `htmx.min.js` меняет `?v=` на его теге
+- [x] **FOUND-01**: htmx обновлён с 1.9.10 до 2.0.10 заменой вендоренного файла, и тест утверждает версию по содержимому файла
+- [x] **FOUND-02**: блок конфигурации htmx из шести ключей (`responseHandling` с правилом `422` **выше** `[45]..`, `historyRestoreAsHxRequest: false`, `allowNestedOobSwaps: false`, `reportValidityOfForms: true`, `historyCacheSize: 0`, явный `selfRequestsOnly: true`) стоит в `base.html` **и** `auth_base.html` перед подключением htmx, и каждая строка утверждается тестом
+- [x] **FOUND-03**: `asset_version` пересчитывается при замене любого вендоренного JS-файла, а не только `app.css` — подмена `htmx.min.js` меняет `?v=` на его теге
 - [ ] **FOUND-04**: слой `respond()` в новом `app/pages/htmx.py` — единственное на проект объявление признака htmx; аргумент `redirect=` обязателен, поэтому обработчик без пути деградации не собирается как вызов
 - [ ] **FOUND-05**: реестр уведомлений `app/pages/notices.py` принимает КОД, а не текст; пять существующих микро-контрактов (`?error=`, `?saved=1`, `?reset=`, `?retry=`, `?sched_error=`) сведены в один `?notice=`
 - [ ] **FOUND-06**: OOB-область уведомлений подменяет СОДЕРЖИМОЕ (`hx-swap-oob="innerHTML:#notice"`), а не узел; заведены две области — вежливая (`role="status"`) и настойчивая (`role="alert"`); при отсутствии кода разметки нет вовсе
@@ -40,7 +40,7 @@
 - [ ] **QUAL-02**: пользователь видит, что запрос идёт — `hx-indicator` на каждой форме письма через один класс в `app.css` и один макрос, с порогом видимости через `transition-delay`
 - [ ] **QUAL-03**: отказ сервера и обрыв сети видимы пользователю — глобальные `htmx:responseError` **и** `htmx:sendError`; разметка плашки приходит с сервера заранее отрисованной скрытой заготовкой, скрипт только переключает атрибут, чем соблюдается действующее решение v2.0 «сборка узлами DOM, не строкой»
 - [ ] **QUAL-04**: по каждой форме принято и записано решение о `hx-push-url` по конвенции трёх случаев: действие меняет ЧТО показано → `hx-push-url="true"`; меняет только данные → атрибута нет; адрес известен только серверу → заголовок `HX-Push-Url`
-- [ ] **QUAL-05**: снимки страниц не остаются в браузере после выхода из системы — `historyCacheSize = 0`
+- [x] **QUAL-05**: снимки страниц не остаются в браузере после выхода из системы — `historyCacheSize = 0`
 - [ ] **QUAL-06**: после подмены фрагмента фокус возвращается на элемент с тем же `id` — клавиатура и скринридер не теряют место
 
 ### Снятие ручного JS
@@ -120,9 +120,9 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 7 | Gaps Found |
-| FOUND-02 | Phase 7 | Gaps Found |
-| FOUND-03 | Phase 7 | Gaps Found |
+| FOUND-01 | Phase 7 | Complete |
+| FOUND-02 | Phase 7 | Complete |
+| FOUND-03 | Phase 7 | Complete |
 | FOUND-04 | Phase 8 | Pending |
 | FOUND-05 | Phase 8 | Pending |
 | FOUND-06 | Phase 8 | Pending |
@@ -141,7 +141,7 @@
 | QUAL-02 | Phase 9 | Pending |
 | QUAL-03 | Phase 8 | Pending |
 | QUAL-04 | Phase 15 | Pending |
-| QUAL-05 | Phase 7 | Gaps Found |
+| QUAL-05 | Phase 7 | Complete |
 | QUAL-06 | Phase 9 | Pending |
 | FETCH-01 | Phase 12 | Pending |
 | FETCH-02 | Phase 13 | Pending |

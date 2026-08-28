@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: HTMX-first
-current_phase: 07
-current_phase_name: Обновление htmx до 2.0.10 и блок конфигурации
-status: executing
-stopped_at: Phase 7 context gathered
-last_updated: "2026-08-27T16:41:21.232Z"
-last_activity: 2026-08-27
-last_activity_desc: Phase 07 execution started
-state_head: c67a617b72f277e1fe4f58ac47be88cc572ce03b
+current_phase: 8
+current_phase_name: Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок
+status: planning
+stopped_at: Phase 07 complete, ready to plan Phase 8
+last_updated: "2026-08-28T06:14:45.720Z"
+last_activity: 2026-08-28
+last_activity_desc: Phase 07 complete, transitioned to Phase 8
+state_head: 17308b1b4de00bdb52ea3510dec70d0a86154c44
 progress:
   total_phases: 9
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 7
   completed_plans: 7
-  percent: 0
+  percent: 11
 ---
 
 # Project State
@@ -35,10 +35,10 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 
 ## Current Position
 
-Phase: 07 (Обновление htmx до 2.0.10 и блок конфигурации) — EXECUTING
-Plan: 1 of 7
+Phase: 8 — Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок
+Plan: Not started
 Status: Executing Phase 07
-Last activity: 2026-08-27 — Phase 07 execution started
+Last activity: 2026-08-28 — Phase 07 complete, transitioned to Phase 8
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -50,7 +50,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:**
 
-- Total plans completed: 110 (milestone v2.0) — ⚠️ прежнее значение 70 расходилось с суммой по фазам (13+15+12+12+30+14+14 = 110) и с frontmatter `progress.completed_plans: 110`; исправлено при закрытии вехи
+- Total plans completed: 77 (milestone v2.0) — ⚠️ прежнее значение 70 расходилось с суммой по фазам (13+15+12+12+30+14+14 = 110) и с frontmatter `progress.completed_plans: 110`; исправлено при закрытии вехи
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -65,6 +65,7 @@ Progress: [░░░░░░░░░░] 0%
 | 05.1 | 14 | - | - |
 | 06 | 14 | - | - |
 | 05 | 30 | - | - |
+| 07 | 7 | - | - |
 
 **Recent Trend:**
 
@@ -288,13 +289,13 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Executing Phase 07
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Ready to plan
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
 
 Last session: 2026-08-27T06:36:48.245Z
-Stopped at: Phase 7 context gathered
+Stopped at: Phase 07 complete, ready to plan Phase 8
 Resume file: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-CONTEXT.md
 
 ## Operator Next Steps
