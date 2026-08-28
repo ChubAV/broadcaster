@@ -250,6 +250,20 @@ def test_upgrade_rejects_a_second_open_subscription_intent(db_at_0020):
 
     Это и есть требование PAY-01: потолок становится свойством СХЕМЫ. Прикладная
     проверка две одновременные отправки пропускала обе.
+
+    ⚠️ ИМЕНИ ОГРАНИЧЕНИЯ В ТЕКСТЕ ОТКАЗА НА SQLITE НЕТ, И ЭТО ПРОВЕРЕНО, А НЕ
+    ПРЕДПОЛОЖЕНО. SQLite сообщает `UNIQUE constraint failed: payments.user_id` —
+    то есть КОЛОНКУ, а не индекс; имя индекса приводит только PostgreSQL
+    (`duplicate key value violates unique constraint "..."`). Утверждение здесь
+    поэтому написано про КОЛОНКУ: оно правдиво на том диалекте, по которому
+    идёт суита.
+
+    ⚠️ ЧИТАТЬ ПЕРЕД ПЛАНОМ 08-05. Разбор отказа «по имени ограничения» на суите
+    не заработает НИКОГДА: имени в тексте нет. Дословный прецедент проекта
+    другой и дичному тексту не доверяет вовсе — `_extend_subscription`
+    (app/services/payment_service.py) ловит `IntegrityError`, ПЕРЕЧИТЫВАЕТ
+    состояние и, если чужой строки не нашлось, поднимает тот же объект заново.
+    Этот приём диалекта не касается и переносится сюда без правок.
     """
     config, db_path = db_at_0020
 
@@ -257,8 +271,8 @@ def test_upgrade_rejects_a_second_open_subscription_intent(db_at_0020):
 
     with pytest.raises(sqlite3.IntegrityError) as failure:
         _execute(db_path, _insert(90, user_id=8, payment_id="yoo-90"))
-    assert INDEX_NAME in str(failure.value), (
-        "отказ не назвал ограничение — разобрать его по имени будет нечем"
+    assert "payments.user_id" in str(failure.value), (
+        "отказ пришёл не от нового индекса: " + str(failure.value)
     )
 
 
