@@ -94,22 +94,27 @@ async def _schedules(db_session: AsyncSession) -> list[Schedule]:
     return list((await db_session.execute(select(Schedule))).scalars().all())
 
 
-def _assert_returned_to_editor(response, ad_id: int) -> None:
+def _assert_returned_to_editor(response, ad_id: int, code: str) -> None:
     """Отказ при ПОДТВЕРЖДЁННО своём объявлении возвращает в его редактор.
 
     Ошибка по данным — не навигация: пользователь остаётся там, где набирал
     группы, дни и времена, и получает объяснение (WR-07). Адрес строится
     сервером из подтверждённой записи, поэтому проверяется он целиком.
+
+    ⚠️ КОД ИСХОДА ПРИХОДИТ ПАРАМЕТРОМ, А НЕ ПРОВЕРЯЕТСЯ «ОДНИМ ИЗ ДВУХ», И ЭТО
+    УСИЛЕНИЕ. Прежде здесь проверялось присутствие собственного написания
+    раздела — то есть ЛЮБОГО признака, лишь бы он был. Кодов теперь два, и они
+    различают отказ по АККАУНТУ и отказ по ОБЪЯВЛЕНИЮ: различать эти случаи
+    нужно журналу (человеку на экране нельзя — разные слова подтвердили бы
+    существование чужой записи перебором идентификаторов). Проверка «любой из
+    двух» согласилась бы с их перепутыванием, и различие, ради которого коды и
+    разведены, потерялось бы молча.
     """
     location = response.headers["location"]
     assert location.startswith(f"/ads/{ad_id}/edit")
-    # Утверждение УСИЛЕНО переездом, а не ослаблено: прежде проверялось лишь
-    # присутствие собственного написания, теперь — что в адрес уехал КОД из
-    # закрытого реестра, то есть ровно тот, по которому есть что нарисовать.
-    assert (
-        f"notice={notices.SCHEDULE_ACCOUNT_GONE}" in location
-        or f"notice={notices.SCHEDULE_AD_MISSING}" in location
-    ), f"кода исхода в адресе нет: {location}"
+    assert f"notice={code}" in location, (
+        f"ожидался код исхода {code!r}, а адрес отказа — {location}"
+    )
 
 
 def _assert_indistinguishable_refusal(response) -> None:
@@ -169,7 +174,7 @@ async def test_page_create_rejects_foreign_account(
 
     assert response.status_code == 302
     assert await _schedules(db_session) == []
-    _assert_returned_to_editor(response, own_ad)
+    _assert_returned_to_editor(response, own_ad, notices.SCHEDULE_ACCOUNT_GONE)
 
 
 @pytest.mark.asyncio
@@ -239,7 +244,7 @@ async def test_page_update_rejects_swapping_in_foreign_account(
     )
 
     assert response.status_code == 302
-    _assert_returned_to_editor(response, own_ad)
+    _assert_returned_to_editor(response, own_ad, notices.SCHEDULE_ACCOUNT_GONE)
     db_session.expire_all()
     stored = (
         await db_session.execute(select(Schedule).where(Schedule.id == schedule_id))
@@ -336,7 +341,7 @@ async def test_editor_path_rejects_foreign_account(
 
     assert response.status_code == 302
     assert await _schedules(db_session) == []
-    _assert_returned_to_editor(response, own_ad)
+    _assert_returned_to_editor(response, own_ad, notices.SCHEDULE_ACCOUNT_GONE)
 
 
 @pytest.mark.asyncio
@@ -490,7 +495,7 @@ async def test_update_of_a_missing_schedule_returns_to_the_own_editor(
     )
 
     assert response.status_code == 302
-    _assert_returned_to_editor(response, own_ad)
+    _assert_returned_to_editor(response, own_ad, notices.SCHEDULE_AD_MISSING)
     assert await _schedules(db_session) == []
 
 

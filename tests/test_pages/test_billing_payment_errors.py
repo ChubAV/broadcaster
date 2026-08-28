@@ -62,6 +62,7 @@ from app.models.subscription import Subscription
 from app.models.user import User
 from app.pages import notices
 from app.services.payment_service import handle_webhook
+from tests.conftest import notice_areas
 
 BILLING_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "billing.py"
 
@@ -104,43 +105,6 @@ MSG_PENDING = (
 # СОБСТВЕННАЯ обёртка раздела (`data-payment-error`); её больше нет — исход
 # рисует общая область уведомления шелла общим макросом.
 ALERT_MARKER = 'class="alert alert--error"'
-
-# Якоря двух областей уведомления шелла (includes/notice_area.html).
-POLITE_AREA = 'id="notice"'
-ASSERTIVE_AREA = 'id="notice-alert"'
-
-
-def _notice_areas(html: str) -> str:
-    """Содержимое ОБЕИХ областей уведомления шелла — и ничего кроме него.
-
-    ⚠️ ИЗВЛЕЧЕНИЕ, А НЕ ПОИСК ПО ВСЕЙ СТРАНИЦЕ, И ЭТО НЕ ПЕДАНТИЗМ. Шелл
-    доставляет в КАЖДЫЙ документ две СКРЫТЫЕ заготовки плашки отказа сервера и
-    обрыва связи (includes/htmx_error_banner.html), и класс настойчивого
-    варианта присутствует в них ВСЕГДА. Проверка по всей странице поэтому
-    зеленела бы на пустом экране — то есть утверждала бы не то, что человеку
-    что-то сказано, а то, что шелл собран.
-
-    Границы области считаются по вложенности `div`, а не по первому `</div>`:
-    плашка внутри области сама является элементом, и наивный поиск обрезал бы
-    содержимое ровно по её закрытию.
-    """
-    parts = []
-    for anchor in (POLITE_AREA, ASSERTIVE_AREA):
-        start = html.index(anchor)
-        cursor = html.index(">", start) + 1
-        depth, scan = 1, cursor
-        while depth:
-            nxt_open = html.find("<div", scan)
-            nxt_close = html.find("</div>", scan)
-            assert nxt_close != -1, f"область {anchor} не закрыта"
-            if nxt_open != -1 and nxt_open < nxt_close:
-                depth += 1
-                scan = nxt_open + 4
-            else:
-                depth -= 1
-                scan = nxt_close + 6
-        parts.append(html[cursor : scan - 6])
-    return "\n".join(parts)
 
 
 # --- Инструменты --------------------------------------------------------------
@@ -423,7 +387,7 @@ async def test_a_known_reason_code_prints_its_own_words(
     response = await authed_client.get(f"/billing?notice={code}")
 
     assert response.status_code == 200
-    areas = _notice_areas(response.text)
+    areas = notice_areas(response.text)
     assert ALERT_MARKER in areas, "плашки отказа в области уведомления нет"
     assert message in areas
 
@@ -451,7 +415,7 @@ async def test_an_unknown_reason_code_prints_nothing_at_all(
     response = await authed_client.get(f"/billing?notice={code}")
 
     assert response.status_code == 200
-    assert ALERT_MARKER not in _notice_areas(response.text), (
+    assert ALERT_MARKER not in notice_areas(response.text), (
         "неизвестный код нарисовал плашку"
     )
     assert code not in response.text, "значение параметра напечатано на экране"
@@ -469,7 +433,7 @@ async def test_the_pending_reason_prints_its_own_words(authed_client: AsyncClien
     response = await authed_client.get(f"/billing?notice={notices.PAYMENT_PENDING}")
 
     assert response.status_code == 200
-    areas = _notice_areas(response.text)
+    areas = notice_areas(response.text)
     assert ALERT_MARKER in areas, "плашки отказа в области уведомления нет"
     assert MSG_PENDING in areas
 
@@ -488,7 +452,7 @@ async def test_the_section_without_the_parameter_prints_no_alert(
     response = await authed_client.get("/billing")
 
     assert response.status_code == 200
-    assert ALERT_MARKER not in _notice_areas(response.text)
+    assert ALERT_MARKER not in notice_areas(response.text)
 
 
 # ⚠️ `test_the_alert_stands_before_the_current_plan_block` СНЯТ ОТСЮДА, А ЕГО
