@@ -4,12 +4,12 @@ milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 08
 current_phase_name: Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок
-status: "Phase 07 shipped — PR #46"
+status: executing
 stopped_at: Phase 8 context gathered
-last_updated: "2026-08-28T11:19:27.887Z"
+last_updated: "2026-08-28T11:33:53.999Z"
 last_activity: 2026-08-28
-last_activity_desc: Phase 08 planning complete
-state_head: 6c77b192c31fa4949b7ca7feffba0b143da7e3ba
+last_activity_desc: Phase 08 execution started
+state_head: 262070ef28f2e4379b048855cd09a020bd58f866
 progress:
   total_phases: 9
   completed_phases: 1
@@ -25,7 +25,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-25)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 07 — Обновление htmx до 2.0.10 и блок конфигурации
+**Current focus:** Phase 08 — Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок
 
 ⚠️ **Указатель фазы во frontmatter по-прежнему пуст, и это не упущение.** Роадмап существует, но ни одна фаза v2.1 ещё не спланирована: каталогов фаз нет, планов нет. Указатель ставится первым запуском `/gsd-plan-phase 7`, а не роадмаппером.
 
@@ -35,12 +35,12 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 
 ## Current Position
 
-Phase: 08 (Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок) — READY TO EXECUTE
-Plan: Not started
+Phase: 08 (Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок) — EXECUTING
+Plan: 1 of 10
 Total Plans in Phase: 10
 Completed Plans in Phase: 0
-Status: Ready to execute
-Last activity: 2026-08-28 — Phase 08 planning complete
+Status: Executing Phase 08
+Last activity: 2026-08-28 — Phase 08 execution started
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -291,7 +291,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Phase 07 shipped — PR #46
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Executing Phase 08
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
