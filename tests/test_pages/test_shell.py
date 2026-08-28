@@ -21,6 +21,7 @@ from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
 from app.models.subscription import Subscription
 from app.models.user import User
+from app.pages import notices
 from app.pages.common import get_shell_context
 from tests.conftest import seed_group
 
@@ -1744,4 +1745,278 @@ def test_history_cache_purge_touches_no_markup_sink():
         "страницы — необработанное исключение останавливает разбор документа "
         "целиком. Гейты доставки этого не увидят: они считают вхождения ключа, "
         "а не вызова"
+    )
+
+
+# --- FOUND-06: две области уведомления в обоих шеллах ------------------------
+
+# ЕДИНСТВЕННЫЙ законный владелец разметки областей уведомления среди шаблонов.
+# Имя выписано ЗДЕСЬ, а не выведено обходом, по тому же основанию, что и
+# HTMX_RUNTIME_OWNER выше: тест, назначающий владельцем того, кого нашёл,
+# согласился бы с переездом областей куда угодно.
+NOTICE_AREA_OWNER = "includes/notice_area.html"
+
+# Оба шелла проекта. Перечень выписан, а не собран обходом: предмет требования —
+# что канал есть у КАЖДОГО шелла, и шелл, забывший включение, обязан краснеть, а
+# не молча выпадать из собранного множества.
+NOTICE_AREA_SHELLS = ("base.html", "auth_base.html")
+
+# Идентификатор области → её признак роли и её признак живости.
+#
+# ПАРА ПРИЗНАКОВ ПРОВЕРЯЕТСЯ ЦЕЛИКОМ, А НЕ ПО ОДНОМУ. Область с role="alert" и
+# aria-live="polite" разметку проходит, а человеку даёт отказ, объявленный
+# «когда будет пауза», — то есть ровно тот исход, ради которого областей две.
+NOTICE_REGIONS = {
+    "notice": ("status", "polite"),
+    "notice-alert": ("alert", "assertive"),
+}
+
+# Включение областей в ИСХОДНИКЕ шелла. Ищется ОПЕРАТОР включения, а не имя
+# файла: шаблон, назвавший файл в комментарии-объяснении, ничего не подключает.
+_NOTICE_AREA_INCLUDE_RE = re.compile(
+    r"\{%-?\s*include\s+[\"']" + re.escape(NOTICE_AREA_OWNER) + r"[\"']"
+)
+
+
+def _notice_region(html: str, region_id: str) -> str:
+    """СОДЕРЖИМОЕ названной области уведомления из отрендеренного документа.
+
+    Читается ответ, а не исходник шаблона: предмет проверки — что получил
+    человек, а условие Jinja, съехавшее в другую ветку, оставило бы греп
+    исходника зелёным.
+
+    Совпадение НЕЖАДНОЕ и обрывается на первом закрывающем теге. Для пустой
+    области это ровно её содержимое; для непустой — открывающий тег плашки
+    вместе с её текстом, и этого довольно: утверждения ниже спрашивают наличие
+    класса плашки и наличие текста записи, а не полную вложенную разметку.
+    """
+    match = re.search(
+        rf'<div id="{re.escape(region_id)}"[^>]*>(.*?)</div>', html, re.DOTALL
+    )
+    assert match, (
+        f"области уведомления #{region_id} в документе нет вовсе — забытое "
+        "включение в одном из двух шеллов"
+    )
+    return match.group(1)
+
+
+def _assert_both_regions_present(html: str, shell: str) -> None:
+    """Обе области приехали в документ по одному разу и несут свои признаки."""
+    for region_id, (role, live) in NOTICE_REGIONS.items():
+        seen = html.count(f'id="{region_id}"')
+        assert seen == 1, (
+            f"{shell}: область #{region_id} встречается {seen} раз(а), "
+            "ожидалась ровно одна — вторая копия означала бы, что внеполосная "
+            "подмена целится в неизвестно какую из них"
+        )
+        opening = re.search(rf'<div id="{re.escape(region_id)}"[^>]*>', html)
+        assert opening, f"{shell}: открывающего тега области #{region_id} нет"
+        tag = opening.group(0)
+        assert f'role="{role}"' in tag, (
+            f"{shell}: у области #{region_id} нет признака роли {role} — {tag}"
+        )
+        assert f'aria-live="{live}"' in tag, (
+            f"{shell}: у области #{region_id} нет признака живости {live} — {tag}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_main_shell_carries_both_notice_regions(authed_client: AsyncClient):
+    """base.html: вежливая и настойчивая области приезжают на /profile.
+
+    Подпись называет ШЕЛЛ, а не адрес: /profile здесь представитель всех 26
+    страничных маршрутов под base.html. Тест-близнец по второму шеллу стоит
+    ниже, и парой они обязаны быть именно парой — шеллов два, включение одно, и
+    утверждение, снятое с одного, ничего не говорит о втором.
+    """
+    response = await authed_client.get("/profile")
+    assert response.status_code == 200
+    _assert_both_regions_present(response.text, "base.html")
+
+
+@pytest.mark.asyncio
+async def test_auth_shell_carries_both_notice_regions(client: AsyncClient):
+    """auth_base.html: те же две области приезжают на /login тем же включением.
+
+    Второй шелл получает канал НАРАВНЕ с основным, а не по остаточному
+    принципу: признак смены пароля приземляется именно здесь.
+    """
+    response = await client.get("/login")
+    assert response.status_code == 200
+    _assert_both_regions_present(response.text, "auth_base.html")
+
+
+@pytest.mark.asyncio
+async def test_without_a_code_neither_region_draws_a_banner(
+    authed_client: AsyncClient,
+):
+    """Нет кода — нет ПЛАШКИ, при том что узлы областей на месте (FOUND-06).
+
+    Утверждения здесь два, и они разные. Первое: плашки нет ни в одной области —
+    умолчание «показать» запрещено прямо, а пустая рамка сообщала бы о событии,
+    которого не было. Второе: узлы областей всё же существуют — внеполосная
+    подмена целится в них ПО ИДЕНТИФИКАТОРУ, и без стабильного узла ответ
+    приехал бы в никуда, молча.
+    """
+    response = await authed_client.get("/profile")
+    assert response.status_code == 200
+    html = response.text
+
+    _assert_both_regions_present(html, "base.html")
+    for region_id in NOTICE_REGIONS:
+        assert 'class="alert' not in _notice_region(html, region_id), (
+            f"без кода уведомления в области #{region_id} нарисована плашка — "
+            "умолчание «показать» вернулось"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_known_code_draws_in_the_polite_region_by_its_variant(
+    authed_client: AsyncClient,
+):
+    """Известный код НЕ аварийного варианта рисуется в вежливой области."""
+    record = notices.notice_for(notices.PROFILE_SAVED)
+    assert record is not None and record.variant != "error"
+
+    response = await authed_client.get(f"/profile?notice={notices.PROFILE_SAVED}")
+    assert response.status_code == 200
+    html = response.text
+
+    assert record.text in _notice_region(html, "notice"), (
+        "текст записи не попал в вежливую область"
+    )
+    assert 'class="alert' not in _notice_region(html, "notice-alert"), (
+        "запись неаварийного варианта нарисовалась в НАСТОЙЧИВОЙ области — "
+        "успех сохранения перебивал бы человека посреди чтения"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_known_error_code_draws_in_the_assertive_region(
+    authed_client: AsyncClient,
+):
+    """Известный код аварийного варианта рисуется в настойчивой области."""
+    record = notices.notice_for(notices.PAYMENT_FAILED)
+    assert record is not None and record.variant == "error"
+
+    response = await authed_client.get(f"/billing?notice={notices.PAYMENT_FAILED}")
+    assert response.status_code == 200
+    html = response.text
+
+    assert record.text in _notice_region(html, "notice-alert"), (
+        "текст записи не попал в настойчивую область"
+    )
+    assert 'class="alert' not in _notice_region(html, "notice"), (
+        "отказ нарисовался в ВЕЖЛИВОЙ области — объявление ждало бы паузы в "
+        "речи, а человек за это время нажал бы кнопку второй раз"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_auth_shell_draws_a_known_code_too(client: AsyncClient):
+    """/login?notice=… рисует плашку: второй шелл получил канал по-настоящему."""
+    record = notices.notice_for(notices.PASSWORD_RESET_DONE)
+    assert record is not None
+
+    response = await client.get(f"/login?notice={notices.PASSWORD_RESET_DONE}")
+    assert response.status_code == 200
+
+    assert record.text in _notice_region(response.text, "notice"), (
+        "экран входа не нарисовал известный код — канал во втором шелле мёртв"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_code_draws_nothing_and_never_reaches_the_document(
+    authed_client: AsyncClient,
+):
+    """T-08-08/T-08-12: чужое значение не рисует НИЧЕГО и в документ не уходит.
+
+    ⚠️ ПРЯМОЕ УТВЕРЖДЕНИЕ «ПОДСТРОКИ ТЕГА СЦЕНАРИЯ В ТЕЛЕ НЕТ» ЗДЕСЬ
+    НЕВЫРАЗИМО, И ЭТО СВОЙСТВО ДОКУМЕНТА, А НЕ ПОСЛАБЛЕНИЕ. Оба шелла несут
+    инлайн-сценарий миграционной очистки (includes/htmx_config.html), то есть
+    открывающий тег сценария без атрибутов присутствует в КАЖДОМ ответе
+    независимо от адреса. Утверждение о его отсутствии было бы красным всегда —
+    то есть не утверждением, а поломкой.
+
+    Проверяемое свойство поэтому записано ТРЕМЯ утверждениями, вместе строгими:
+    плашки нет ни в одной области; ЭКРАНИРОВАННОЙ формы присланного значения в
+    документе нет (её появление означало бы, что значение уехало в разметку и
+    спаслось лишь автоэкранированием); и число тегов сценария в ответе С
+    параметром РАВНО числу в ответе БЕЗ него — присланное значение не добавило
+    в документ ни одного узла. Последнее и есть недостижимость: вход в разметку
+    не связан со входом из адреса.
+    """
+    baseline = await authed_client.get("/profile")
+    assert baseline.status_code == 200
+
+    response = await authed_client.get("/profile?notice=%3Cscript%3E")
+    assert response.status_code == 200
+    html = response.text
+
+    for region_id in NOTICE_REGIONS:
+        assert 'class="alert' not in _notice_region(html, region_id), (
+            f"неизвестный код нарисовал плашку в области #{region_id} — реестр "
+            "перестал быть закрытым, и владелец ссылки печатает пользователю "
+            "сообщение от имени приложения"
+        )
+
+    assert "&lt;script&gt;" not in html, (
+        "присланное значение уехало в разметку и спаслось только "
+        "автоэкранированием — недостижимость подменилась экранированием"
+    )
+
+    seen = html.count("<script")
+    expected = baseline.text.count("<script")
+    assert seen == expected, (
+        f"ответ с параметром несёт {seen} тег(ов) сценария против {expected} "
+        "без него — присланное значение добавило в документ узел"
+    )
+
+
+def test_notice_area_has_single_source():
+    """D-01: разметка областей уведомления живёт в ШАБЛОНАХ ровно в одном файле.
+
+    Близнец test_htmx_runtime_tag_has_single_source и по форме, и по основанию.
+    Инвариант «ровно один раз в ОБОИХ шеллах» держится двумя разными
+    утверждениями: пара гейтов доставки выше отвечает за КАЖДЫЙ шелл, этот — за
+    ЕДИНСТВЕННОСТЬ ИСТОЧНИКА. Без него зелёная пара была бы совместима с двумя
+    литеральными копиями областей в двух шеллах — то есть ровно с тем вариантом,
+    который D-01 отверг.
+
+    Утверждается МНОЖЕСТВО путей, а не их число: сообщение об отказе обязано
+    называть файл-нарушитель.
+
+    Комментарии из исходника вырезаются общим помощником (IN-02): шаблон,
+    назвавший идентификатор области в объяснении, ничего не рисует.
+    """
+    templates_dir = PROJECT_ROOT / "app" / "templates"
+
+    owners = {
+        path.relative_to(templates_dir).as_posix()
+        for path in sorted(templates_dir.rglob("*.html"))
+        if 'id="notice"' in _without_comments(path.read_text(encoding="utf-8"))
+    }
+    assert owners == {NOTICE_AREA_OWNER}, (
+        "разметка областей уведомления перестала быть единственной в шаблонах:\n"
+        f"  найдено:  {sorted(owners)}\n"
+        f"  ожидался: [{NOTICE_AREA_OWNER}]"
+    )
+
+    found = {}
+    for path in sorted(templates_dir.rglob("*.html")):
+        count = len(
+            _NOTICE_AREA_INCLUDE_RE.findall(
+                _without_comments(path.read_text(encoding="utf-8"))
+            )
+        )
+        if count:
+            found[path.relative_to(templates_dir).as_posix()] = count
+
+    expected = {shell: 1 for shell in NOTICE_AREA_SHELLS}
+    assert found == expected, (
+        "включение областей уведомления подключено не по одному разу в каждый "
+        "из двух шеллов:\n"
+        f"  найдено:   {found}\n"
+        f"  ожидалось: {expected}"
     )
