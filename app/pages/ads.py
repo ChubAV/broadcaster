@@ -12,6 +12,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.pages.htmx import is_htmx
 # Форма ключа вложения и правило владения им живут в НЕЙТРАЛЬНОМ модуле: от него
 # зависят оба слоя, а он — ни от одного из них (WR-04). Прежние имена остаются
 # доступными здесь, поэтому точки вызова в этом файле не переписываются.
@@ -432,7 +433,10 @@ async def _save_from_editor(
     по WR-01 не принимает чужой ключ, и предпросмотр, собранный из тела запроса,
     показал бы то, чего в базе нет (ADS-06).
     """
-    is_htmx = request.headers.get("HX-Request") is not None
+    # Признак запроса htmx читается ОДНИМ на проект объявлением: вторая копия
+    # чтения означала бы, что «улучшенный» и «базовый» пути могут разойтись
+    # молча. Второе объявление ловится машинным гейтом (критерий 1 фазы).
+    htmx = is_htmx(request)
     created = ad is None
     form_data = await request.form()
 
@@ -463,7 +467,7 @@ async def _save_from_editor(
             settings.max_images_per_ad,
         )
     except HTTPException as exc:
-        if not is_htmx:
+        if not htmx:
             raise
         # UI-SPEC E2 `error`: на htmx-пути отказ остаётся В ИНДИКАТОРЕ. Ни
         # модального окна, ни общестраничного алерта: набранный текст не
@@ -514,7 +518,7 @@ async def _save_from_editor(
     await db.commit()
     await db.refresh(ad)
 
-    if is_htmx:
+    if htmx:
         response = await _autosave_response(request, db, settings, user, ad)
         if created:
             # D-03: браузер подменяет адрес без перезагрузки — дальнейшие
@@ -608,7 +612,10 @@ async def ads_create(
     # Отказ стоит ДО любой записи в модель: иначе неподтверждённый идентификатор
     # успевал бы изменить объект в сессии.
     if ad is None:
-        if request.headers.get("HX-Request") is not None:
+        # Второе место ветвления в этом файле — и оно читает признак ТЕМ ЖЕ
+        # единственным объявлением, что и первое: две копии чтения разошлись бы
+        # молча, и гейт единственности ловит появление второй.
+        if is_htmx(request):
             # Ответ несёт ad=None, то есть внеполосно ОБНУЛЯЕТ #ad-id-field:
             # идентификатор, которым владеть не удалось, не должен уехать в
             # следующий запрос ещё раз. Записи при этом не создаётся — иначе
