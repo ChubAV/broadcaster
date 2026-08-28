@@ -1,12 +1,477 @@
 # Feature Research
 
-**Domain:** SaaS for scheduled advertising posts to messenger groups
-**Researched:** 2026-08-03
-**Confidence:** HIGH for implemented state; MEDIUM for ecosystem positioning
+**Domain:** htmx-driven write interactions в серверном Jinja2-приложении (веха v2.1 «HTMX-first»)
+**Researched:** 2026-08-26
+**Confidence:** HIGH по фактам о механике htmx (проверены по CHANGELOG апстрима и по вендоренному `app/static/js/htmx.min.js`), MEDIUM по идиоматике паттернов (context7 `/bigskysoftware/htmx/v2.0.4`), LOW по «как принято в сообществе» (websearch; Tavily недоступен — ключ отвергнут)
 
-## Scope and Evidence
+## Проверенные факты о фундаменте (читать до всего остального)
 
-This is a brownfield inventory, not a proposal for a new product. “Implemented” is verified against `PROJECT.md`, the README, and the application models, routes, pages, and worker code. Market observations are limited to positioning and compliance boundaries; they do **not** create active requirements.
+Эти пять фактов сняты не с блогов, а с апстримного `CHANGELOG.md` и с файла
+`app/static/js/htmx.min.js`, который лежит в репозитории. Они определяют,
+что в вехе можно делать декларативно, а что нет.
+
+| # | Факт | Как проверен | Следствие для вехи |
+|---|------|--------------|--------------------|
+| F-1 | В вендоренном htmx **1.9.10 нет `responseHandling` вообще** (`grep -c responseHandling app/static/js/htmx.min.js` → `0`) | по файлу на диске | Декларативный свап 422 (`<meta name="htmx-config">`) на 1.9.10 **невозможен**. Либо обновление до 2.x, либо обработчик `htmx:beforeSwap` на JS — а нового JS веха не хочет. **Рендеринг ошибок валидации жёстко зависит от обновления htmx** |
+| F-2 | `hx-disabled-elt` появился в **1.9.6**, т.е. уже доступен | CHANGELOG, строка «Introduced the `hx-disabled-elt` attribute» под `## [1.9.6]` | Защита от двойной отправки от обновления **не зависит** и может делаться параллельно |
+| F-3 | В шаблонах проекта **ноль** вхождений `hx-on`, `hx-vars`, `hx-vals`, `hx-sse`, `hx-ws`, `hx-delete`, `hx-boost` | `grep -rho -- "<attr>" app/templates/` по каждому — все нули | Поверхность ломающих изменений 1.x→2.x у проекта **пустая**. Обновление — это замена одного файла, а не миграция. Оценка «дешевле принять на 79 атрибутах» (решение вехи) подтверждается фактически: править нечего вовсе |
+| F-4 | htmx 2.0.2 чинит три вещи, прямо нужные вехе: «file upload is now fixed», «request indicators are not removed when a full page redirect or refresh occurs», «elements that have been disabled for a request are properly re-enabled before snapshotting for history» | CHANGELOG, раздел `## [2.0.2] - 2024-08-12` | На 1.9.10 связка `hx-disabled-elt` + `hx-push-url` кладёт в снапшот истории **отключённую** кнопку: возврат по Back даёт мёртвую форму. Это не гипотеза, а починенный баг. Версию брать **не ниже 2.0.2**; актуальная — **2.0.10 (2026-04-21)** |
+| F-5 | htmx 2.0.7: «Update indicator style to have `visibility:hidden` for screen readers»; 2.0.5: локальный кеш истории переехал с `localStorage` на `sessionStorage` («cross-tab contamination doesn't occur») | CHANGELOG | `hx-indicator` на 1.9.10 держит спиннер в дереве доступности (`opacity:0` его не убирает) — скринридер читает «загрузка» постоянно. `hx-push-url` на 1.9.10 течёт между вкладками. Оба свойства качества вехи лечатся именно версией |
+
+**Вывод по зависимостям, который роадмапу нужен раньше остального:**
+из четырёх свойств качества вехи **три** (`hx-indicator` без утечки в скринридер,
+`hx-push-url` без межвкладочной грязи, `hx-disabled-elt` в паре с `hx-push-url`)
+и **весь рендеринг ошибок валидации** упираются в обновление htmx. Только
+`htmx:responseError` не упирается ни во что. Решение «обновлять ДО массового
+переписывания» подтверждено не аргументом «дважды править», а тем, что до
+обновления половина целевых свойств технически недостижима.
+
+---
+
+## Семь канонических паттернов письма
+
+Формат каждого: разметка → форма ответа сервера → категория → сложность →
+деградация без JS → зависимости.
+
+### P-1. Тумблер (включить/выключить группу, поставить расписание на паузу)
+
+**Сегодня в проекте** (`app/templates/account_groups/includes/group_row.html`):
+форма без submit-кнопки, Alpine ловит `change` и делает `$el.submit()`, плюс
+запасная кнопка «Применить», которую Alpine же удаляет через `x-init="$el.remove()"`.
+POST → 302 → перезагрузка всего экрана групп.
+
+**Целевая разметка:**
+
+```html
+<form method="post" action="/accounts/{{ account_id }}/groups/{{ group.id }}/toggle"
+      hx-post="/accounts/{{ account_id }}/groups/{{ group.id }}/toggle"
+      hx-trigger="change"
+      hx-target="#group-row-{{ group.id }}"
+      hx-swap="outerHTML"
+      hx-disabled-elt="find input[type=checkbox]"
+      hx-indicator="closest [data-group-row]">
+  {{ toggle(name='is_active', checked=group.is_active, id='group-toggle-' ~ group.id) }}
+  <span x-init="$el.remove()">{{ button('Применить', variant='ghost') }}</span>
+</form>
+```
+
+**Ответ сервера (200):** перерисованная строка + внеполосный счётчик + уведомление.
+
+```html
+<div data-group-row id="group-row-5" class="group-row--off">…новое состояние тумблера…</div>
+<span id="account-active-count" hx-swap-oob="true">7 из 19 активны</span>
+<div hx-swap-oob="innerHTML:#notifications">{{ alert('Группа отключена', 'success') }}</div>
+```
+
+- **Категория:** table stakes. Тумблер, перезагружающий страницу, пользователь замечает мгновенно — это самое частое действие на экране групп.
+- **Сложность:** LOW.
+- **Деградация без JS:** чистая, **но требует внимания при переписывании.** `hx-trigger="change"` делает Alpine-обработчик `x-on:change="$el.submit()"` лишним, и его **обязательно снять**: оставленный рядом с `hx-post`, он даст нативный submit И htmx-запрос — двойное переключение. Запасная кнопка «Применить» **остаётся** (без JS форма из одного чекбокса не отправляется никак — неявная отправка по Enter для неё спецификацией не предусмотрена).
+- **Фокус:** `outerHTML`-подмена строки заменяет и сам чекбокс. htmx восстанавливает фокус на элементе с **тем же `id`** после замены (CHANGELOG: «the focused element is preserved if possible after a replacement»). В проекте у тумблера уже стабильный `id='group-toggle-' ~ group.id` — условие выполнено **без правок**. Если id станет нестабильным, клавиатурный пользователь после каждого пробела теряет фокус в начало документа.
+- **Зависит от:** OOB-области уведомлений (для плашки). От обновления htmx — нет.
+
+### P-2. Удаление с подтверждением (13 мест)
+
+**Жёсткая рамка:** решение v2.0 заменило браузерный `confirm()` собственной
+панелью с **настоящей формой POST** (`app/templates/components/modal.html`).
+Паттерн обязан выжить, поэтому **`hx-confirm` в проект не входит** — он вызывает
+тот самый браузерный диалог, который уже выброшен, и не стилизуется.
+
+**Целевая разметка** (макрос `modal` получает два новых параметра):
+
+```html
+<form class="modal__form" method="post" action="{{ action }}"
+      hx-post="{{ action }}"
+      hx-target="{{ hx_target }}"          {# '#group-row-5' #}
+      hx-swap="{{ hx_swap }}"              {# 'delete' #}
+      hx-disabled-elt="find button[type=submit]"
+      x-on:htmx:after-request="if ($event.detail.successful) hide()"
+      x-on:submit="if (sending) { $event.preventDefault(); return; } sending = true">
+  …тело, скрытые поля, кнопки Отмена/Удалить…
+</form>
+```
+
+`x-on:htmx:after-request` — Alpine, уже подключённый; **нового JS нет.** События
+htmx всплывают, поэтому слушатель висит на корне модалки, а запрос делает форма внутри.
+
+**Ответ сервера (200):** тело может быть пустым — `hx-swap="delete"` удаляет цель
+независимо от ответа. Но **пустым он быть не должен**, потому что нужны две
+внеполосные операции:
+
+```html
+<div id="group-del-5" hx-swap-oob="delete"></div>
+<span id="account-active-count" hx-swap-oob="true">6 из 18 активны</span>
+<div hx-swap-oob="innerHTML:#notifications">{{ alert('Группа удалена', 'success') }}</div>
+```
+
+- **⚠️ Ловушка, которую роадмап обязан унести в требование.** Панель подтверждения
+  в проекте **сознательно стоит СНАРУЖИ удаляемой строки** (комментарий в
+  `group_row.html`: панель позиционируется фиксированно и внутри строки стала бы
+  её колонкой; плюс запрет T-11-04 — внутри заменяемого элемента панелей стало бы
+  две с одним id). Значит удаление строки **оставляет модалку сиротой в DOM**.
+  Лечится вторым узлом `hx-swap-oob="delete"` по id панели. Без него после N
+  удалений в документе N мёртвых `role="dialog"`, а фокус-ловушка Alpine
+  продолжает жить на каждом.
+- **Категория:** table stakes.
+- **Сложность:** MEDIUM (макрос `modal` — общий на 13 мест; каждый вызывающий обязан назвать `hx_target`).
+- **Деградация без JS:** чистая и **уже проверена тестами** `*_degrades_without_alpine` — без Alpine панель не открывается, форма уходит нативным POST. Дополнительно на этом пути защиты от двойной отправки нет и не будет: она держится **идемпотентностью маршрутов удаления** (`test_repeated_delete_is_harmless`). Это записанное решение v2.0, менять его веха не должна.
+- **Зависит от:** OOB-области уведомлений. От обновления htmx — нет.
+
+### P-3. Создание сущности и вставка в список
+
+```html
+<form method="post" action="/ads/new" hx-post="/ads/new"
+      hx-target="#ads-list" hx-swap="afterbegin"
+      hx-disabled-elt="find button[type=submit]"
+      hx-indicator="#create-spinner">
+```
+
+**Ответ (200):** только новая карточка + внеполосное.
+
+```html
+{% include "ads/includes/ad_card.html" %}
+<p id="ads-empty" hx-swap-oob="delete"></p>   {# снять заглушку «пусто» #}
+<span id="ads-count" hx-swap-oob="true">12</span>
+<div hx-swap-oob="innerHTML:#notifications">{{ alert('Объявление создано', 'success') }}</div>
+```
+
+- **`afterbegin` / `beforeend`, а не перерисовка списка** — это и есть содержание решения «фрагмент + OOB». Перерисовка `#ads-list` целиком теряет позицию скролла и гасит раскрытые карточки, а на этом экране уже живёт infinite scroll `hx-trigger="revealed"` — перерисовка контейнера снесла бы и сторожевой элемент подгрузки.
+- **Категория:** table stakes.
+- **Сложность:** LOW-MEDIUM (нужен отдельный паршал карточки; в проекте они уже выделены — `partial_cards`, `partial_rows`).
+- **Деградация без JS:** чистая (нативный POST → 302 на список).
+- **⚠️ Порядок сортировки.** `afterbegin` вставляет наверх безусловно. Если список отсортирован не по «новизне», вставка **соврёт о порядке** до следующей перезагрузки. Для сортированных списков честный вариант — вернуть карточку + `HX-Trigger`/OOB, перерисовывающий **только** затронутую группу, либо явно сортировать список по убыванию даты создания. Назвать в требовании.
+- **Зависит от:** OOB-области уведомлений.
+
+### P-4. Правка на месте (edit-in-place)
+
+Канонический htmx-паттерн — **два GET-фрагмента и один POST**:
+
+```html
+{# состояние «просмотр» #}
+<div id="tz-row">
+  <span>{{ user.timezone }}</span>
+  <button hx-get="/profile/timezone/edit" hx-target="#tz-row" hx-swap="outerHTML">Изменить</button>
+</div>
+
+{# состояние «правка» — тот же id #}
+<form id="tz-row" method="post" action="/profile/timezone"
+      hx-post="/profile/timezone" hx-target="#tz-row" hx-swap="outerHTML"
+      hx-disabled-elt="find button">
+  <input name="timezone" value="{{ user.timezone }}" autofocus>
+  <button type="submit">Сохранить</button>
+  <button type="button" hx-get="/profile/timezone" hx-target="#tz-row" hx-swap="outerHTML">Отмена</button>
+</form>
+```
+
+**Ответ (200):** фрагмент «просмотр» с новым значением. **Ответ (422):** фрагмент
+«правка» с текстом ошибки и **введённым пользователем значением в `value=`**.
+
+- **Категория:** **differentiator**, не table stakes. Пользователь не считает поломкой, что правка идёт через полноценную форму. Ценность в узких местах — таймзона, название объявления, имя аккаунта.
+- **Сложность:** MEDIUM. Цена не в разметке, а в том, что каждому полю нужны **три** серверных маршрута/ветки (view, edit, save) вместо одной.
+- **⚠️ Деградация без JS: НЕ чистая.** Кнопка «Изменить» — это `hx-get` без нативного эквивалента: без JS она не делает ничего. Требуется **осознанная запасная тропа**: либо `<a href="/profile/timezone/edit">` вместо кнопки (ссылка работает всегда, htmx перехватывает через `hx-get` на том же элементе), либо форма показывается сразу. Это единственный из семи паттернов, где деградация требует отдельной проектной работы, — роадмапу назвать явно.
+- **Зависит от:** обновления htmx (ветка 422). Без него правка на месте на ошибке молча ничего не делает.
+
+### P-5. Долгое действие (перезапуск воркера, ресинк групп)
+
+Механизм в проекте **уже есть**: поллинг статуса синхронизации живёт на htmx-чтении.
+Веха переводит только **запуск** действия.
+
+```html
+{# 1. запуск: обычная форма, ответ — фрагмент «выполняется» #}
+<form method="post" action="/accounts/{{ id }}/sync" hx-post="/accounts/{{ id }}/sync"
+      hx-target="#sync-{{ id }}" hx-swap="outerHTML"
+      hx-disabled-elt="find button" hx-indicator="find button">
+  {{ button('Синхронизировать') }}
+</form>
+
+{# 2. ответ 200 — самоопрашивающийся фрагмент #}
+<div id="sync-{{ id }}" hx-get="/accounts/{{ id }}/sync/status"
+     hx-trigger="every 2s" hx-target="this" hx-swap="outerHTML"
+     role="status" aria-live="polite">Синхронизация идёт…</div>
+
+{# 3. финальный ответ /sync/status — фрагмент БЕЗ hx-trigger, поллинг прекращается сам #}
+<div id="sync-{{ id }}">Готово: 19 групп, 2 новые</div>
+<span id="groups-count" hx-swap-oob="true">19</span>
+```
+
+- **Поллинг останавливается тем, что финальный фрагмент не несёт `hx-trigger`** — это канонический приём htmx (пример `progress-bar`) и он не требует ни строчки JS.
+- **Категория:** table stakes для **старта** (кнопка не должна перезагружать экран), differentiator для **прогресса в процентах**.
+- **Сложность:** MEDIUM. Разметка дешёвая, серверная часть — нет: нужен маршрут статуса, отдающий фрагмент. Часть уже существует.
+- **Деградация без JS:** старт — чисто (нативный POST → 302 на экран, где статус виден при перезагрузке). Поллинг без JS не работает **и не должен** — при выключенном JS пользователь обновляет страницу руками. Это допустимая, а не сломанная деградация.
+- **⚠️ Совместимость с существующей защитой.** Повторный запуск синхронизации защищён **внутрипроцессной заявкой**, живущей ровно столько, сколько HTTP-обработчик (решение T-03-15). `hx-disabled-elt` кладётся **поверх** неё, а не вместо: заявка остаётся единственной настоящей защитой.
+- **Зависит от:** ничего критичного. Независим.
+
+### P-6. Многошаговый мастер (Telegram QR + 2FA)
+
+**Сегодня:** 5 ручных `fetch()` на JSON, ручное переключение `hidden` у четырёх
+секций, ручной `setInterval(3000)`, ручной `btn.disabled`, ручной `showError`.
+~150 строк JS в шаблоне (`app/templates/accounts/connect_tg_user.html`).
+
+**Целевая форма — состояние мастера держит СЕРВЕР, клиент держит один `id`:**
+
+```html
+{# оболочка — единственная точка подмены на весь мастер #}
+<div id="tg-connect">
+  {# шаг 1 #}
+  <form method="post" action="/accounts/connect/tg_user/start-qr"
+        hx-post="/accounts/connect/tg_user/start-qr"
+        hx-target="#tg-connect" hx-swap="outerHTML"
+        hx-disabled-elt="find button" hx-indicator="find button">
+    {{ button('Начать подключение') }}
+  </form>
+</div>
+
+{# ответ шага 1: шаг 2 с самоопросом, session_id — в скрытом поле, не в JS-переменной #}
+<div id="tg-connect" hx-get="/accounts/connect/tg_user/qr-status?session_id={{ sid }}"
+     hx-trigger="every 3s" hx-target="this" hx-swap="outerHTML">
+  <img src="{{ qr_data_uri }}" alt="QR-код для входа">
+  <form method="post" action="/accounts/connect/tg_user/refresh-qr"
+        hx-post="/accounts/connect/tg_user/refresh-qr" hx-target="#tg-connect" hx-swap="outerHTML">
+    <input type="hidden" name="session_id" value="{{ sid }}">
+    {{ button('Обновить код') }}
+  </form>
+</div>
+
+{# ответ qr-status при 2FA: тот же id, поллинг снят, форма пароля #}
+{# ответ при успехе: HX-Location: /accounts  (личность аккаунта изменилась) #}
+```
+
+- **Категория:** **differentiator с самой высокой отдачей на вложенный час.** Пользователь получит то же самое, но проект теряет ~150 строк ручного JS, `setInterval`, ручную сборку DOM и пять JSON-контрактов. Это прямая цель вехи «снятие всех 6 ручных `fetch()`».
+- **Сложность:** **HIGH.** Единственный паттерн этого класса. Пять маршрутов меняют тип ответа (JSON → HTML-фрагмент), а `session_id` переезжает из переменной модуля в скрытое поле формы. **Это переписывание, а не украшение.**
+- **⚠️ Деградация без JS: невозможна и сегодня.** Мастер уже на 100% JS-only (без JS кнопка «Начать» не делает ничего). Веха здесь **не может регрессировать** — деградировать нечему. Требование должно сказать это прямо, иначе аудит вехи запишет ложный провал.
+- **⚠️ `session_id` в разметке.** Сегодня он живёт в переменной модуля, после переписывания попадёт в атрибут `hx-get` / `value`. Это **не** ухудшение (он и так ходил в URL запроса `qr-status?session_id=`), но требование обязано подтвердить, что идентификатор сессии подключения по-прежнему проверяется на владение на сервере.
+- **Зависит от:** ничего в вехе. Полностью независим — **хороший кандидат в отдельную фазу, идущую параллельно массовому переписыванию форм.**
+
+### P-7. Multipart-загрузка файлов с прогрессом
+
+**Сегодня:** `fetch('/api/uploads/image')` **на каждый файл по очереди**, ответ JSON
+`{path}`, ключи копятся в JS-массиве `imagePaths`, после успеха дёргается автосохранение.
+
+**Целевая разметка:**
+
+```html
+<input type="file" name="file" multiple accept="image/*"
+       hx-post="/api/uploads/image"
+       hx-encoding="multipart/form-data"
+       hx-trigger="change"
+       hx-target="#image-list" hx-swap="beforeend"
+       hx-disabled-elt="this"
+       hx-indicator="#upload-spinner">
+<div id="image-list"><!-- миниатюры --></div>
+<span id="upload-spinner" class="htmx-indicator" role="status">Загрузка…</span>
+```
+
+**Ответ (200):** миниатюра **вместе со скрытым полем-носителем ключа**, чтобы
+основная форма объявления сериализовала его без JS-массива:
+
+```html
+<figure class="thumb" id="img-{{ key|slug }}">
+  <img src="{{ url }}" alt="">
+  <input type="hidden" name="images" value="{{ key }}" form="ad-form">
+  <button type="button" hx-swap-oob="…">Убрать</button>
+</figure>
+```
+**Ответ (422):** фрагмент плашки с причиной отказа, ретаргетнутый на `#upload-error`
+через `HX-Retarget` (тип содержимого не тот, превышен лимит в 10 картинок).
+
+- **⚠️ Три отличия от сегодняшнего поведения, которые нужно решить, а не «перенести».**
+  1. htmx отправляет **все выбранные файлы одним запросом**, а не по одному. Маршрут `/api/uploads/image` обязан принять список; частичный успех («три загрузились, четвёртая отказана») перестаёт быть бесплатным — сегодня цикл `for (const file of files)` даёт его сам. Сегодняшнее свойство «успешно загруженные остаются прикреплёнными, даже если часть отвалилась» надо сохранить сознательно.
+  2. Скрытое поле с `form="ad-form"` заменяет JS-массив `imagePaths`. Атрибут `form` позволяет полю жить **вне** формы и всё равно сериализоваться.
+  3. **Прогресс в процентах требует JS.** У htmx нет декларативного прогресс-бара: событие `htmx:xhr:progress(loaded, total)` надо ловить обработчиком. Официальный пример делает это на hyperscript, которого в проекте нет.
+- **Категория:** перевод загрузки на htmx — table stakes для цели вехи (это один из шести `fetch()`). **Прогресс в процентах — differentiator, конфликтующий с рамкой «без нового JS».** Честная замена без JS — бинарный индикатор «идёт / готово» через `hx-indicator`. Роадмапу: **брать бинарный индикатор, процент отложить.**
+- **Сложность:** MEDIUM-HIGH.
+- **Деградация без JS:** сегодня отсутствует (загрузка целиком на `fetch`). Целевой вариант **улучшает** её до нуля-с-плюсом: `<input type="file">` внутри формы с `enctype="multipart/form-data"` хотя бы отправится с формой. Улучшение необязательное; главное — не записать в требование «деградация сохраняется», её здесь нет.
+- **Зависит от:** обновления htmx (**F-4: «file upload is now fixed» в 2.0.2** — на 2.0.0/2.0.1 загрузка сломана; на 1.9.10 работает, но 422-ветка отказа недостижима без JS).
+
+---
+
+## Рендеринг ошибок валидации
+
+### Что именно надо настроить (точный ответ на вопрос)
+
+По умолчанию `htmx.config.responseHandling` равен:
+
+```javascript
+[ {code:"204", swap:false},
+  {code:"[23]..", swap:true},
+  {code:"[45]..", swap:false, error:true},
+  {code:"...",   swap:false} ]
+```
+
+То есть **на 4xx и 5xx htmx не подменяет ничего и пишет ошибку в консоль.**
+Форма, вернувшая 422 с текстом ошибки, при настройках по умолчанию выглядит для
+пользователя как **полностью мёртвая кнопка**. Это самый вероятный способ
+провалить веху тихо.
+
+Два способа снять запрет:
+
+**Способ А — декларативный, требует htmx 2.x (F-1).** Одна строка в `base.html`:
+
+```html
+<meta name="htmx-config"
+      content='{"responseHandling":[
+        {"code":"204","swap":false},
+        {"code":"[23]..","swap":true},
+        {"code":"422","swap":true},
+        {"code":"[45]..","swap":false,"error":true},
+        {"code":"...","swap":false}]}'>
+```
+Порядок правил значим: `422` обязан стоять **выше** `[45]..`, иначе его перехватит
+общее правило. Нового JS — ноль. **Это тот вариант, который веха должна выбрать.**
+
+**Способ Б — на 1.9.10, требует JS:**
+
+```javascript
+document.body.addEventListener('htmx:beforeSwap', function (evt) {
+  if (evt.detail.xhr.status === 422) { evt.detail.shouldSwap = true; evt.detail.isError = false; }
+});
+```
+Работает, но добавляет скрипт — против рамки вехи. Ещё один вариант, расширение
+`response-targets` (`hx-target-4xx`, `hx-target-error`), в htmx 2.x вынесено из
+ядра в отдельный файл: это **новый вендоренный ресурс**, то есть новая единица
+поставки. Не брать без нужды.
+
+### Выбор кода: 422 против 200
+
+| | 422 | 200 |
+|---|---|---|
+| Семантика | верная: сущность непригодна к обработке | врёт: клиент видит успех |
+| Логи и метрики | отказ виден в Prometheus/Loki без разбора тела | отказ невидим |
+| Тесты | `assert resp.status_code == 422` — прямое утверждение | требует парсинга HTML |
+| Цена | одна строка конфигурации (способ А) | ноль |
+| Риск | забыли конфиг → форма мертва | забыли ничего → отказ смешался с успехом навсегда |
+
+**Рекомендация: 422.** Цена — одна строка в `base.html`, разовая; выигрыш —
+наблюдаемость отказов валидации на всех 47 формах. Плюс «форма мертва при забытом
+конфиге» — отказ **громкий** и ловится первым же тестом; «200 на ошибке» — отказ
+**тихий** и живёт годами.
+
+### Форма ответа 422
+
+```html
+{# HTTP 422, hx-target="#login-form", hx-swap="outerHTML" #}
+<form id="login-form" method="post" action="/login" hx-post="/login" …>
+  {{ alert('Неверный email или пароль', 'error') }}
+  <label for="email">EMAIL</label>
+  {# ⚠️ введённое значение ЭХОМ возвращается сервером — иначе пользователь перенабирает #}
+  <input id="email" name="email" value="{{ form.email }}" aria-invalid="true"
+         aria-describedby="email-err" autocomplete="username">
+  <p id="email-err" class="field__error">Такой адрес не зарегистрирован</p>
+  <label for="password">ПАРОЛЬ</label>
+  <input id="password" name="password" type="password" autocomplete="current-password">
+</form>
+```
+
+**Три обязательных свойства этого ответа:**
+1. **Введённое возвращается.** Сервер обязан отдать обратно всё, кроме паролей, в `value=`. Это и есть заявленный выигрыш вехи на формах авторизации: «неверный код подтверждения перестаёт терять заполненную форму». Свойство создаётся **сервером**, а не htmx: htmx лишь подменяет то, что прислали.
+2. **Цель — форма, а не страница.** `hx-target` на `#login-form` / `outerHTML`. Перерисовка всей страницы на ошибке = антипаттерн (см. ниже).
+3. **Ошибка привязана к полю.** `aria-invalid` + `aria-describedby` — иначе скринридер прочитает поле как валидное.
+
+### Ретаргетинг: когда сервер решает, куда лечь ответу
+
+`HX-Retarget` (CSS-селектор), `HX-Reswap` (стратегия), `HX-Reselect` (какую часть
+ответа взять) переопределяют `hx-target`/`hx-swap` **для конкретного ответа**.
+Полезны там, где разметка не знает исхода заранее:
+
+- Загрузка картинки: успех → `beforeend:#image-list`, отказ → `HX-Retarget: #upload-error`, `HX-Reswap: innerHTML`.
+- Действие из строки списка, отказ которого касается всего экрана (истёк доступ): `HX-Retarget: #notifications`.
+
+**Категория:** ретаргетинг — **differentiator**, а не table stakes. Он избавляет от
+дублирования атрибутов на разметке, но каждое его применение делает поведение
+невидимым в шаблоне. Использовать точечно и назвать места поимённо; массовое
+применение = разметка перестаёт объяснять, что произойдёт.
+
+### Клиентская валидация браузера
+
+htmx уважает нативную валидацию: форма с `required`/`type=email` не отправится,
+пока браузер не пропустит. В htmx **2.0.7** появился `reportValidity()` «behind a
+config flag» — сообщения браузера показываются как при нативной отправке. На
+1.9.10 этого нет: форма может тихо не отправиться. Ещё один пункт в пользу F-4.
+
+---
+
+## Четыре свойства качества вехи
+
+### Q-1. `hx-disabled-elt` — защита от двойной отправки
+
+```html
+{# на форме — блокируется кнопка, а не поля #}
+<form hx-post="/ads/new" hx-disabled-elt="find button[type=submit]">
+
+{# на одиночной кнопке #}
+<button hx-post="/accounts/{{ id }}/sync" hx-disabled-elt="this">Синхронизировать</button>
+```
+
+- **Категория: table stakes.** До вехи двойную отправку гасила сама перезагрузка страницы — окно для второго клика было узким. htmx это окно **открывает**: страница остаётся живой и отзывчивой, кнопка выглядит нажимаемой всё время запроса. То есть htmx **создаёт** проблему, которой не было, и `hx-disabled-elt` не улучшение, а компенсация.
+- **Что ломается без него:** два объявления вместо одного, два платёжных намерения (при том что «потолок одновременных платёжных намерений держится проверкой в коде, а не свойством схемы» — открытый пункт из §Active PROJECT.md: **тут двойная отправка стоит дороже всего**), две синхронизации.
+- **Сложность:** LOW. Один атрибут на форму.
+- **Что блокировать:** **кнопку submit, а не поля ввода.** Блокировка полей отнимает у пользователя возможность править текст, пока летит запрос, и на медленной сети читается как зависание.
+- **Кнопка ОТМЕНЫ в панели подтверждения не блокируется никогда** — записанное правило v2.0 («отмена разрушительного действия не имеет права быть труднее его подтверждения»). `hx-disabled-elt="find button[type=submit]"` его соблюдает, `hx-disabled-elt="find button"` — нарушает. Разница в одном селекторе; вынести в требование дословно.
+- **Зависимость:** доступен на 1.9.10 (F-2), **но в паре с `hx-push-url` до 2.0.2 кладёт в снапшот истории отключённую кнопку (F-4).** Значит: если Q-1 и Q-4 стоят на одной форме — обновление обязано быть раньше.
+
+### Q-2. `hx-indicator` — обратная связь ожидания
+
+```html
+<button hx-post="/x" hx-indicator="#spinner">Отправить</button>
+<span id="spinner" class="htmx-indicator" role="status" aria-live="polite">Сохраняем…</span>
+
+{# либо на ближайшего предка — удобно для строк списка #}
+<button hx-post="/x" hx-indicator="closest [data-group-row]">
+```
+`.htmx-indicator` по умолчанию `opacity:0`; на время запроса цель получает класс
+`.htmx-request`, и CSS-правило `.htmx-request .htmx-indicator { opacity: 1 }`
+показывает индикатор.
+
+- **Категория: table stakes.** Полная перезагрузка сама была индикатором — браузер крутил спиннер во вкладке. htmx этот сигнал **убирает**. Без замены медленное действие неотличимо от неработающей кнопки, и пользователь жмёт ещё раз (что упирается в Q-1).
+- **Сложность:** LOW на атрибуты, MEDIUM на дизайн-систему: нужен **один** класс индикатора в `app.css` и **один** макрос, а не 47 разных спиннеров.
+- **⚠️ Порог видимости.** Индикатор, мигающий на 80 мс, читается как дефект. Идиома — задержать появление в CSS (`transition-delay`), а не показывать сразу. Дизайн-решение, не htmx-решение.
+- **⚠️ Доступность (F-5).** На 1.9.10 `opacity:0` **оставляет индикатор в дереве доступности**: скринридер читает «Сохраняем…» постоянно. htmx 2.0.7 сменил стиль на `visibility:hidden`. То есть **доступный индикатор технически требует 2.0.7+**, иначе нужен свой CSS поверх.
+- **Зависимость:** атрибут работает везде; **доступность — от обновления**.
+
+### Q-3. Глобальный `htmx:responseError` — htmx молчит на 500
+
+```html
+{# в base.html, рядом с подключением htmx — единственный новый скрипт вехи #}
+<script>
+  document.body.addEventListener('htmx:responseError', function (evt) {
+    var box = document.getElementById('notifications');
+    if (!box) return;
+    box.replaceChildren();                      // сборка узлами DOM, не строкой (решение v2.0)
+    var d = document.createElement('div');
+    d.className = 'alert alert--error';
+    d.setAttribute('role', 'alert');
+    d.textContent = evt.detail.xhr.status === 403
+      ? 'Нет доступа. Обновите страницу и войдите заново.'
+      : 'Не удалось выполнить действие. Попробуйте ещё раз.';
+    box.appendChild(d);
+  });
+  document.body.addEventListener('htmx:sendError', /* та же обработка: сеть недоступна */);
+</script>
+```
+
+- **Категория: table stakes, и самое опасное из четырёх.** До вехи 500 давал страницу ошибки — грубо, но **видимо**. С htmx 500 не даёт **ничего**: кнопка нажалась, ничего не изменилось, в консоли строчка, которую пользователь не читает. Это прямой регресс относительно сегодняшнего поведения, а не упущенное улучшение.
+- **Что ломается без него:** просроченная подписка (403 от `require_access`), истёкшая сессия (401), упавший воркер (500), пропавшая сеть — всё выглядит одинаково: «кнопка не работает».
+- **Сложность:** LOW (один обработчик на приложение).
+- **⚠️ `htmx:sendError` — отдельное событие.** `htmx:responseError` не срабатывает, когда ответа **не было вовсе** (обрыв сети). Нужны **оба**, иначе офлайн — снова тишина. Частая недоделка; вынести в требование.
+- **⚠️ Рамка «без нового JS» здесь неисполнима.** Декларативного способа показать ошибку 5xx у htmx нет — сервер, вернувший 500, по определению не вернул фрагмент. **Это единственный обязательный новый скрипт вехи**, и требование должно разрешить его явно, иначе исполнитель будет искать несуществующий обходной путь.
+- **⚠️ Сборка узлами DOM, не строкой** — действующее решение v2.0, закреплённое машинной проверкой (`innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write` — 0 вхождений). Обработчик обязан ей подчиниться, иначе покрасит гейт.
+- **Зависимость:** ни от чего. Может (и должен) появиться **первым**, ещё до массового переписывания форм — тогда все последующие формы приземляются в уже работающую сеть безопасности.
+
+### Q-4. `hx-push-url` — адрес переживает Back и перезагрузку
+
+```html
+<form hx-post="/ads/new" hx-push-url="true" …>
+```
+или заголовком с сервера (в проекте **уже применяется** — `app/pages/ads.py:522`,
+`response.headers["HX-Push-Url"] = f"/ads/{ad.id}/edit"`).
+
+- **Категория: смешанная, и это надо разделить в требованиях.**
+  - **Table stakes** для действий, **меняющих адрес по смыслу**: создание черновика (`/ads/new` → `/ads/42/edit`), применение фильтров истории, переключение подраздела. Без этого F5 отбрасывает пользователя назад, а Back ведёт не туда.
+  - **Анти-фича** для действий, адрес **не меняющих**: тумблер группы, удаление строки, сохранение профиля. `hx-push-url="true"` на тумблере набивает историю фантомными записями — 10 переключений = 10 нажатий Back до выхода с экрана. **Это не «забыли добавить», это «добавили лишнее».**
+- **Сложность:** LOW технически, MEDIUM по решению: цена в том, чтобы **на каждой из 47 форм ответить «меняет ли это действие адрес»**. Формулировка вехи «четыре свойства качества на каждой форме» здесь читается опасно — при буквальном прочтении получится история из мусора.
+- **⚠️ Снапшот истории.** `hx-push-url` снимает снапшот DOM **до** запроса и кладёт в кеш; Back восстанавливает его. Следствия: (а) до htmx 2.0.2 в снапшот попадали **отключённые** элементы (F-4) — Back давал мёртвую форму; (б) до 2.0.5 кеш жил в `localStorage` и **тёк между вкладками**; (в) при промахе кеша htmx запрашивает URL с заголовком `HX-History-Restore-Request`, и сервер обязан отдать **полную страницу**, а не фрагмент — иначе Back покажет обрывок. Пункт (в) — серверное требование, не клиентское.
+- **Зависимость:** **от обновления htmx (F-4, F-5) и от того, что каждый маршрут умеет отдавать полную страницу по GET.** Второе в проекте выполнено (все страницы серверные).
+
+---
 
 ## Feature Landscape
 
@@ -14,106 +479,198 @@ This is a brownfield inventory, not a proposal for a new product. “Implemented
 
 | Feature | Why Expected | Complexity | Notes |
 |---------|--------------|------------|-------|
-| Account registration, email verification, JWT login, password reset | A SaaS customer needs a secure self-service entry point. | MEDIUM | **Implemented.** Recorded in `PROJECT.md`; auth pages and API routes exist. |
-| Connect and manage messenger accounts | Sending must originate from a customer-controlled account. | HIGH | **Implemented.** Telegram QR/userbot, WhatsApp worker and MAX worker connection flows are present. |
-| Synchronize, inspect, and select destination groups | Users cannot schedule reliable posts without selecting the actual groups available to each connected account. | HIGH | **Implemented.** Groups are synced per account and stored with messenger type. |
-| Create and maintain reusable ads with images | Reusable text-and-media content is the minimum authoring workflow for recurring ads. | MEDIUM | **Implemented.** Ad records contain title, text, active state, and S3/MinIO-backed image URLs. |
-| Recurring scheduling with days, times, pause/resume, and timezone | The product’s core promise is automatic posting at the intended local time. | HIGH | **Implemented.** Schedules persist group IDs, weekdays, times, timezone, active flag, and `next_run_at`. |
-| Automated execution and per-destination outcomes | Scheduled work has to run without an open browser and show whether each group was reached. | HIGH | **Implemented.** Celery dispatches Telegram tasks and account-specific Redis queues for WhatsApp/MAX; `SendLog` records status, task ID, errors, and snapshots. |
-| Searchable delivery history and basic account/dashboard statistics | Operators need to diagnose failed sends and verify work happened. | MEDIUM | **Implemented.** History is filterable by status, messenger, account, and 7/30-day period; dashboard/account views show counts and recent results. |
-| Usage limits, message balance, subscriptions, and admin controls | A multi-tenant paid product needs an enforceable service boundary and support tooling. | HIGH | **Implemented.** Free/Basic/Pro limits, atomic send deductions, transaction history, subscriptions, and administration are documented and present. |
+| Контракт «фрагмент + OOB» на каждой форме | Действие меняет то, чего касается, и ничего больше; скролл и раскрытые карточки сохраняются | MEDIUM | Механизм не новый — `hx-swap-oob` уже в 5 местах. Дорого не в разметке, а в 47 паршалах и 35 обработчиках, которым нужна двойная ветка ответа |
+| Двойной ответ по `HX-Request`: фрагмент для htmx, 302 для нативного POST | Рамка вехи: деградация без JS сохраняется | MEDIUM-HIGH | **Главная серверная цена всей вехи.** 35 обработчиков в `app/pages/`, 127 `RedirectResponse`. Каждому нужны ДВЕ ветки и ДВА теста (htmx-путь и no-JS-путь) |
+| OOB-область уведомлений в `base.html` вместо `?saved=1` | Обратная связь без перезагрузки; сегодня её носят query-параметры редиректа | LOW-MEDIUM | ⚠️ **Область обязана существовать в DOM с загрузки и меняться ВНУТРИ**: `hx-swap-oob="innerHTML:#notifications"`, НЕ `hx-swap-oob="true"` на самой live-области. Замена узла live-региона скринридер **не озвучивает** — он видит новый элемент, а не изменение текста. `alert.html` уже даёт `role="alert"`/`role="status"` — правильные роли, менять не нужно |
+| `hx-disabled-elt` (Q-1) | htmx открывает окно двойного клика, которого перезагрузка не давала | LOW | Только submit-кнопка; кнопка Отмены — никогда |
+| `hx-indicator` (Q-2) | htmx убирает спиннер вкладки — единственный сигнал «идёт» | LOW + MEDIUM на дизайн-систему | Один класс, один макрос. Доступность требует 2.0.7+ |
+| Глобальные `htmx:responseError` + `htmx:sendError` (Q-3) | Без них 500 и обрыв сети = абсолютная тишина. Прямой регресс к сегодняшнему | LOW | Единственный оправданный новый скрипт вехи. Нужны ОБА события |
+| Свап 422 + возврат введённого (валидация) | Форма, потерявшая набранное, — самая заметная поломка из всех | MEDIUM | Клиент: одна строка `htmx-config`. Сервер: каждая ветка ошибки эхом возвращает `value=` |
+| `hx-push-url` там, где адрес меняется по смыслу | F5 и Back обязаны попадать туда же | LOW | Только для меняющих адрес; см. анти-фичи |
+| Тумблер без перезагрузки (P-1) | Самое частое действие на экране групп | LOW | Снять Alpine `x-on:change`, оставить запасную кнопку |
+| Удаление с подтверждением без перезагрузки (P-2) | 13 мест | MEDIUM | ⚠️ Модалка живёт СНАРУЖИ строки → нужен второй OOB-узел `hx-swap-oob="delete"` по id панели |
+| Создание с вставкой в список (P-3) | Созданное появляется на месте | LOW-MEDIUM | `afterbegin`/`beforeend`, не перерисовка контейнера |
+| Старт долгого действия без перезагрузки (P-5) | Ресинк/перезапуск воркера | MEDIUM | Поллинг статуса уже есть; `hx-disabled-elt` — ПОВЕРХ внутрипроцессной заявки T-03-15 |
+| Формы авторизации: ошибка перерисовывает форму, успех — `HX-Location` | Заявленный выигрыш вехи именно здесь | MEDIUM | 9 форм. Успех фрагментом отдать нельзя — меняется cookie |
 
 ### Differentiators (Competitive Advantage)
 
 | Feature | Value Proposition | Complexity | Notes |
 |---------|-------------------|------------|-------|
-| One recurring-ad workflow across Telegram, WhatsApp, and MAX group destinations | A small business or agency avoids rebuilding the same recurring campaign separately for each supported messenger. | HIGH | **Implemented.** This is the clearest product differentiator; each channel has a dedicated adapter/worker path. |
-| Group-first targeting rather than a customer-contact CRM | Directly supports the stated use case—posting advertising content into groups where the account participates—without requiring lead import or customer data management. | MEDIUM | **Implemented.** Schedules target stored group IDs, not a contact audience database. |
-| Per-account WhatsApp and MAX worker isolation | Separates account session/lifecycle concerns and limits one unstable external session’s blast radius. | HIGH | **Implemented.** Dynamic account-specific containers and Redis queues are part of the current deployment model. |
-| Immutable-looking send context in history | Ad title/text/images, group name, messenger type, error, and task ID stay visible even if the live ad or group later changes. | MEDIUM | **Implemented.** `SendLog` carries content and group snapshots; valuable for support and billing disputes. |
-| Built-in operations visibility | Prometheus, Grafana, and Loki make the scheduled-service workload operable without an external observability product. | MEDIUM | **Implemented.** This is an operational differentiator rather than a customer-facing marketing-suite feature. |
+| Мастер Telegram QR на htmx-фрагментах (P-6) | Минус ~150 строк ручного JS, минус `setInterval`, минус 5 JSON-контрактов; состояние переезжает на сервер | HIGH | Наибольшая отдача на час. Полностью независим — кандидат в отдельную параллельную фазу |
+| Правка на месте (P-4) | Убирает переход на форму ради одного поля (таймзона, название) | MEDIUM | Единственный паттерн, где деградация требует **отдельной проектной работы** (кнопка `hx-get` без JS мертва → делать ссылкой) |
+| `HX-Retarget`/`HX-Reswap` для исходо-зависимых ответов | Убирает дублирование атрибутов там, где разметка не знает исхода | LOW | Точечно и поимённо. Массово — разметка перестаёт объяснять поведение |
+| Загрузка картинок фрагментами вместо `fetch`+JSON | Снимает JS-массив `imagePaths` и ручную сборку миниатюр | MEDIUM-HIGH | Все файлы уходят ОДНИМ запросом — частичный успех надо сохранять сознательно |
+| Восстановление фокуса на элементе с тем же `id` после свапа | Клавиатурный пользователь не теряет место после каждого действия | LOW | htmx делает это сам; цена — **стабильные `id`**. У тумблера групп уже есть |
+| Прогресс в процентах на загрузке (`htmx:xhr:progress`) | Точнее бинарного «идёт» | MEDIUM | ⚠️ **Требует JS-обработчика — конфликтует с рамкой вехи.** Отложить; брать бинарный `hx-indicator` |
+| Единый макрос-обёртка формы, раздающий 4 свойства качества | 47 форм не разъедутся в 47 диалектов | LOW | Дешевле и надёжнее ревью каждой формы. `inherit` для `hx-indicator`/`hx-disabled-elt` — с htmx 2.0.5+ |
 
 ### Anti-Features (Commonly Requested, Often Problematic)
 
 | Feature | Why Requested | Why Problematic | Alternative |
 |---------|---------------|-----------------|-------------|
-| Unrestricted contact-list bulk messaging / scraping | It appears to increase reach quickly. | It changes a group-posting scheduler into a CRM/recipient-data product and raises consent, privacy, and platform-policy risk. WhatsApp’s policy materials and Telegram’s Spam FAQ make abuse/account restrictions a material concern. | Preserve customer-controlled group targeting; treat any future recipient messaging as a separately validated compliance product. |
-| “Send everywhere now” with no account/group health gate | It reduces clicks in the UI. | It hides external permissions, session state, slow-mode/rate limits, and group removal failures—the exact states that need visible outcomes. | Keep account status, group sync, scheduled dispatch, and per-send logs as explicit workflow stages. |
-| Full omnichannel CRM, shared inbox, chatbot, and AI-content suite | Adjacent marketing tools bundle these functions. | They require a different data model, inbound-message ownership, consent model, support workflow, and policy review; none is an active requirement. | Maintain the focused recurring group-posting workflow; assess such products only after a separate discovery decision. |
-| Cross-tenant agency/client workspaces and approval chains | Agencies often request client collaboration. | Roles, ownership, auditability, white-labeling, and content approvals substantially expand the tenancy model. | Current admins manage operational data; scope a client-workspace capability only when it becomes an active requirement. |
+| **Оптимистичный UI** (тумблер переключается до ответа) | «Мгновенно» | У htmx **нет отката**. Отказ сервера оставляет интерфейс, который **врёт** о состоянии; смешение с Alpine рассинхронизирует значения. Для рассылок цена прямая: пользователь думает, что группа выключена, а туда уходит объявление | Подтверждение сервером: `hx-indicator` на время запроса, `outerHTML`-подмена строки по факту. 50-150 мс на локальном сервере честнее вранья |
+| **Тосты через `HX-Trigger`** | Красиво, «как в SPA» | Новый JS-компонент, не деградирует без JS, требует своего таймера и стека, дублирует уже существующий `alert.html`. Прямо противоречит записанному решению вехи | OOB-подмена **содержимого** серверной области уведомлений. Ноль скрипта, те же роли ARIA |
+| **Спам уведомлениями** (плашка на каждый успех, включая тумблер) | «Пользователь должен знать» | При переключении 19 групп подряд — 19 плашек. Уведомление о том, что и так видно на экране, — шум, а после третьего его перестают читать | Плашка **только** там, где результат невидим: удаление, отказ, долгое действие, смена состояния вне экрана. Тумблер и правка на месте говорят сами за себя |
+| **Свап всей страницы на каждое действие** (`hx-target="body"`) | Проще: одна ветка ответа | Теряет скролл, гасит раскрытые карточки, ломает сторожевой элемент infinite scroll, сносит модалку под курсором — и при этом всё равно медленнее полной перезагрузки, потому что вдобавок парсит | Фрагмент + OOB. Это уже записанное решение вехи; таблица здесь фиксирует **почему** |
+| **`hx-confirm`** | Одна строка вместо макроса `modal` | Вызывает **браузерный `confirm()`** — ровно то, что решение v2.0 выбросило: не стилизуется, ломает деградацию | Существующая панель `components/modal.html` с настоящей формой POST |
+| **`hx-push-url` на каждой форме** (буквальное чтение цели вехи) | «Четыре свойства на каждой форме» | Тумблер и удаление адрес не меняют. 10 переключений = 10 фантомных записей истории и 10 нажатий Back | Только действия, меняющие адрес по смыслу. Требование сформулировать как «на каждой форме **принято решение** о `hx-push-url`», а не «`hx-push-url` есть» |
+| **`hx-boost`** | «Заодно и навигация» | Явно вне объёма вехи; смешивает ось навигации с осью письма и размывает критерий готовности | Не трогать. Ссылки остаются полной перезагрузкой |
+| **Расширение `response-targets`** | `hx-target-4xx` выглядит аккуратнее конфига | В htmx 2.x вынесено из ядра — **новый вендоренный файл**, новая единица поставки и версионирования ради того, что делает одна строка `htmx-config` | `responseHandling` в `<meta>` + точечный `HX-Retarget` |
+| **Снятие Alpine «раз уж мы тут»** | Меньше зависимостей | Явно вне объёма; 14 шаблонов с `x-data`. Alpine к тому же **нужен** htmx-паттернам вехи (закрытие модалки по `htmx:after-request` — без него понадобился бы новый JS) | Оставить. Alpine и htmx здесь дополняют друг друга |
+| **Полный отказ от `RedirectResponse`** | «Все 127 — в фрагменты» | Ветка без htmx **обязана** остаться редиректом (PRG). Сносить их — сносить деградацию | Редиректы остаются в ветке «`HX-Request` отсутствует» |
+
+---
 
 ## Feature Dependencies
 
 ```
-Authenticated user
-    └──requires──> Messenger account connection
-                         └──requires──> Account session/worker health
-                         └──enables──> Group synchronization
-                                             └──enables──> Group selection
+[Обновление htmx 1.9.10 → 2.0.x (>= 2.0.2, брать 2.0.10)]
+    ├──requires──> [Свап 422 через <meta htmx-config> (декларативно)]
+    │                   └──requires──> [Ошибки валидации на формах]
+    │                                       └──requires──> [9 форм авторизации]
+    │                                       └──requires──> [Правка на месте P-4]
+    ├──requires──> [hx-indicator, доступный для скринридеров (2.0.7)]
+    ├──requires──> [hx-push-url без утечки между вкладками (2.0.5)]
+    ├──requires──> [hx-disabled-elt + hx-push-url в паре (2.0.2)]
+    └──requires──> [Загрузка файлов P-7 на 2.x (2.0.2)]
 
-Reusable ad (text + optional images) ──together with──> Group selection
-    └──enables──> Recurring schedule (days, times, timezone)
-                         └──requires──> Background dispatcher
-                                              └──creates──> Per-group send log
-                                                                  └──feeds──> History and dashboard statistics
+[Глобальный htmx:responseError + htmx:sendError]  ← НИ ОТ ЧЕГО НЕ ЗАВИСИТ
+    └──enables──> [все остальные паттерны падают ГРОМКО, а не тихо]
 
-Message balance/subscription ──gates──> Scheduled dispatch
+[OOB-область уведомлений в base.html]
+    └──requires──> [ничего]
+    └──enables──> [P-1 тумблер] [P-2 удаление] [P-3 создание] [P-5 долгое действие]
+
+[Двойной ответ по HX-Request (фрагмент | 302)]
+    └──requires──> [ничего]
+    └──enables──> [ВСЕ 47 форм; это несущая конструкция вехи]
+
+[Макрос-обёртка формы, раздающий 4 свойства качества]
+    └──requires──> [Обновление htmx]  (для inherit — 2.0.5+)
+    └──enables──> [массовое переписывание 47 форм без разъезда диалектов]
+
+[P-6 мастер Telegram QR]  ← ПОЛНОСТЬЮ НЕЗАВИСИМ, можно вести параллельно
+
+[hx-push-url на каждой форме] ──conflicts──> [P-1 тумблер] [P-2 удаление]
+[Оптимистичный UI]           ──conflicts──> [Подтверждение сервером]
+[Тосты через HX-Trigger]     ──conflicts──> [Рамка «без нового JS»] [alert.html]
+[hx-confirm]                 ──conflicts──> [Панель подтверждения v2.0]
 ```
 
 ### Dependency Notes
 
-- **Schedules require a valid ad, messenger account, and selected groups:** those identifiers are persisted on every schedule; the platform cannot calculate useful work without all three.
-- **Group selection requires account connection and synchronization:** groups are messenger-account resources, not user-entered destination strings.
-- **History requires execution, not merely a schedule:** a `SendLog` is created by dispatch/send processing and contains the observed result and snapshot data.
-- **Billing gates dispatch:** the worker checks/deducts message balance around sending, so billing consistency is a core workflow dependency, not just a pricing-page concern.
-- **Multi-messenger is not a superficial toggle:** Telegram uses Celery-delivered work while WhatsApp and MAX use per-account Redis queues/workers; connector lifecycle remains part of delivery behavior.
+- **Ошибки валидации требуют обновления htmx.** Не «удобнее после», а **невозможны до**: в вендоренном 1.9.10 механизма `responseHandling` нет физически (F-1), а единственная альтернатива — обработчик `htmx:beforeSwap` — это новый JS, запрещённый рамкой вехи. Из этого следует порядок фаз: обновление → валидация → формы авторизации.
+- **`htmx:responseError` не зависит ни от чего и должен идти первым.** Пока его нет, каждая переписанная форма может отказывать беззвучно, и отладка вехи ведётся вслепую. Поставленный до массового переписывания, он превращает любую ошибку исполнения в видимое событие.
+- **OOB-область уведомлений — предпосылка для четырёх паттернов из семи.** P-1, P-2, P-3, P-5 отдают плашку внеполосно. До её появления они технически работают, но пользователь не получает обратной связи о результате — то есть отгружать их раньше неё бессмысленно.
+- **Двойной ответ по `HX-Request` — не свойство отдельной формы, а свойство обработчика.** 35 обработчиков, 127 редиректов. Это самая большая единица работы вехи, и она распределена по всем фазам, а не сосредоточена в одной. Требование должно закрепить **форму** двойной ветки (общий помощник/декоратор), иначе она будет написана 35 раз по-разному.
+- **`hx-disabled-elt` и `hx-push-url` конфликтуют на htmx до 2.0.2** (отключённый элемент попадал в снапшот истории). Если обе фичи ставятся на одну форму, обновление обязано быть раньше. Поскольку обе — цели вехи, это ещё одно подтверждение порядка «обновление первым».
+- **`hx-push-url` конфликтует с P-1 и P-2 по смыслу, а не технически.** Тумблер и удаление адрес не меняют; `hx-push-url` там — вред. Требование должно быть сформулировано как принятое решение по каждой форме, иначе буквальное «на каждой форме» даст мусорную историю.
+- **Мастер QR (P-6) полностью независим.** Не касается ни одной из 47 форм, ни OOB-области, ни двойного ответа (у него сегодня деградации нет). Его можно вести параллельно основному потоку — это единственный крупный кусок вехи с таким свойством.
+- **Alpine остаётся зависимостью htmx-паттернов, а не мешает им.** Закрытие панели подтверждения после успешного удаления делается `x-on:htmx:after-request` на корне модалки. Решение «Alpine не снимается» тут не просто не мешает — оно **экономит** новый скрипт.
 
-## Product Definition for the Current Brownfield State
+---
 
-### Present Product (implemented)
+## MVP Definition
 
-- [x] Identity and account recovery — necessary to operate a customer SaaS safely.
-- [x] Messenger account connection and group synchronization — defines valid destinations.
-- [x] Ad/media authoring — defines reusable outbound content.
-- [x] Timezone-aware recurring schedules and background execution — delivers the core value.
-- [x] Per-group send logs, history filters, and dashboard/account statistics — makes execution inspectable.
-- [x] Subscription/message-balance controls, administration, and monitoring — supports sustainable operation.
+### Launch With (обязательный минимум вехи)
 
-### Not Active Requirements (possible future scope only)
+- [ ] **Обновление htmx до 2.0.x (не ниже 2.0.2, брать 2.0.10)** — без него недостижимы валидация и три свойства качества из четырёх. Поверхность ломающих изменений в проекте пуста (F-3), поэтому это замена файла, а не миграция
+- [ ] **Глобальные `htmx:responseError` + `htmx:sendError`** — без них веха отлаживается вслепую, а 500 и обрыв сети выглядят как неработающая кнопка. Ставить **до** переписывания форм
+- [ ] **OOB-область уведомлений в `base.html`** поверх `alert.html`, с подменой **содержимого** (`innerHTML:#notifications`), а не узла
+- [ ] **Общая форма двойного ответа** по `HX-Request` (фрагмент | 302) — один помощник, а не 35 копий
+- [ ] **Свап 422 одной строкой `htmx-config`** + правило «введённое возвращается эхом»
+- [ ] **Макрос-обёртка формы**, раздающий `hx-disabled-elt` и `hx-indicator` по умолчанию
+- [ ] **P-1 тумблер, P-2 удаление, P-3 создание** — три паттерна покрывают большинство из 47 форм
+- [ ] **9 форм авторизации**: 422 + перерисовка формы без потери введённого, успех — `HX-Location`
+- [ ] **`hx-push-url` — решение принято по каждой форме** (не «поставлено везде»)
 
-- [ ] Calendar/queue visual planning and campaign-level reporting — adjacent scheduling UX; no active requirement or implementation was found.
-- [ ] Formal approval workflow, agency/client workspaces, and role granularity — plausible agency extension, but materially changes tenancy and has not been requested.
-- [ ] Official-API-specific consent/template management for one-to-one marketing — compliance-sensitive and distinct from the current group-posting model.
-- [ ] CRM, unified inbound inbox, chatbot, AI generation, or cross-channel analytics — broad marketing-suite capabilities deliberately not inferred from competitor feature lists.
+### Add After Validation (в пределах вехи, после того как основной поток работает)
+
+- [ ] **P-6 мастер Telegram QR** — независим, ведётся параллельно; снимает 5 из 6 ручных `fetch()`
+- [ ] **P-7 загрузка картинок** — шестой `fetch()`; бинарный индикатор, не процент
+- [ ] **P-5 старт долгих действий** — поллинг статуса уже существует, переводится только запуск
+- [ ] **Точечный `HX-Retarget`** там, где исход не известен разметке (загрузка, отказ доступа)
+
+### Future Consideration (за вехой)
+
+- [ ] **P-4 правка на месте** — differentiator; требует отдельной проектной работы по деградации и трёх серверных веток на поле. Брать после того, как все 47 форм переведены
+- [ ] **Прогресс загрузки в процентах** — требует JS-обработчика `htmx:xhr:progress`, конфликтует с рамкой «без нового JS»
+- [ ] **`hx-boost`** — явно вне объёма
+- [ ] **Морфинг-свап (`idiomorph`)** вместо `outerHTML` для сохранения каретки в текстовых полях — новый вендоренный файл; сегодня обходится `hx-swap="none"` + OOB (уже применено в автосохранении)
+
+---
 
 ## Feature Prioritization Matrix
 
-This matrix records the importance of current capabilities; it is **not** a new build backlog.
+| Feature | User Value | Implementation Cost | Priority |
+|---------|------------|---------------------|----------|
+| Обновление htmx до 2.0.x | LOW (напрямую невидимо) | LOW (поверхность пуста) | **P1** — разблокирует остальное |
+| `htmx:responseError` + `sendError` | HIGH | LOW | **P1** |
+| OOB-область уведомлений | HIGH | LOW-MEDIUM | **P1** |
+| Двойной ответ по `HX-Request` | HIGH (деградация жива) | **HIGH** (35 обработчиков) | **P1** |
+| Свап 422 + возврат введённого | HIGH | MEDIUM | **P1** |
+| `hx-disabled-elt` | MEDIUM (виден только при сбое) | LOW | **P1** |
+| `hx-indicator` | HIGH | LOW + MEDIUM на CSS | **P1** |
+| P-1 тумблер | HIGH | LOW | **P1** |
+| P-2 удаление с подтверждением | HIGH | MEDIUM | **P1** |
+| P-3 создание с вставкой | HIGH | LOW-MEDIUM | **P1** |
+| 9 форм авторизации | HIGH | MEDIUM | **P1** |
+| `hx-push-url` (там, где к месту) | MEDIUM | LOW | **P1** |
+| P-6 мастер QR | MEDIUM (для пользователя) / HIGH (для кода) | HIGH | **P2** |
+| P-5 старт долгих действий | MEDIUM | MEDIUM | **P2** |
+| P-7 загрузка картинок | MEDIUM | MEDIUM-HIGH | **P2** |
+| Макрос-обёртка формы | LOW напрямую / HIGH для однородности | LOW | **P2** (но чем раньше, тем дешевле) |
+| Точечный `HX-Retarget` | LOW | LOW | **P2** |
+| P-4 правка на месте | MEDIUM | MEDIUM | **P3** |
+| Прогресс в процентах | LOW | MEDIUM + нарушение рамки | **P3** |
 
-| Feature | User Value | Implementation Cost | Current Priority / State |
-|---------|------------|---------------------|--------------------------|
-| Account connection plus group sync | HIGH | HIGH | P1 — implemented |
-| Ad/media authoring | HIGH | MEDIUM | P1 — implemented |
-| Timezone-aware recurring schedules | HIGH | HIGH | P1 — implemented |
-| Reliable dispatch with send logs | HIGH | HIGH | P1 — implemented |
-| Balance/subscription enforcement | HIGH | HIGH | P1 — implemented |
-| Three-messenger delivery | HIGH | HIGH | P2 differentiator — implemented |
-| Operations monitoring | MEDIUM | MEDIUM | P2 — implemented |
-| CRM/inbox/AI/approval suite | UNCERTAIN | HIGH | P3 — future-only, no requirement |
+**Priority key:** P1 — обязательно для вехи; P2 — в вехе, после того как основной поток работает; P3 — за вехой.
 
-**Priority key:** P1 = indispensable to the documented core value; P2 = valuable implemented differentiation; P3 = intentionally uncommitted future scope.
+---
 
-## Ecosystem Positioning
+## Совместимость с деградацией без JS — сводка по паттернам
 
-Comparable marketing automation products commonly market centralized campaign authoring, scheduling, multi-account/channel handling, analytics, and collaboration. Broadcaster already covers the subset aligned with its declared value: reusable ads, connected accounts/groups, recurring time-based execution, and per-send history. It should not be evaluated as incomplete merely because it does not offer a contact CRM, shared inbox, AI authoring, or approval boards—those solve different workflows and would require explicit product validation.
+Прямой ответ на quality gate: какие паттерны деградируют сами, а каким нужна отдельная тропа.
+
+| Паттерн | Деградирует чисто? | Что именно нужно сделать |
+|---------|--------------------|--------------------------|
+| P-1 тумблер | ✅ да | Снять Alpine `x-on:change` (иначе двойная отправка); **оставить** запасную кнопку «Применить» — без неё форма из одного чекбокса не отправляется вовсе |
+| P-2 удаление | ✅ да, **уже покрыто тестами** `*_degrades_without_alpine` | Ничего нового. Защита от повтора на no-JS-пути — идемпотентность маршрута, а не разметка |
+| P-3 создание | ✅ да | Ветка без `HX-Request` возвращает 302 на список |
+| P-4 правка на месте | ❌ **нет** | Кнопка «Изменить» — это `hx-get`, без JS мертва. **Нужна осознанная тропа:** `<a href="…/edit">` вместо `<button>` |
+| P-5 долгое действие | ⚠️ частично | Старт деградирует (нативный POST → 302). **Поллинг без JS не работает и не должен** — пользователь обновляет страницу. Записать как принятую, а не сломанную деградацию |
+| P-6 мастер QR | ❌ **и сегодня нет** | Деградировать нечему: мастер уже 100% JS-only. Веха **не может здесь регрессировать** — назвать прямо, иначе аудит запишет ложный провал |
+| P-7 загрузка файлов | ❌ **и сегодня нет** | Сегодня целиком на `fetch`. Целевой вариант необязательно, но может **улучшить** до «input в форме с `enctype`». Не записывать «деградация сохраняется» — её нет |
+| Формы авторизации | ✅ да | Без JS — нативный POST → 302 (как сегодня). С JS — 422 на ошибке, `HX-Location` на успехе |
+| Уведомления (OOB) | ✅ да | На no-JS-пути обратную связь несут прежние query-параметры редиректа. **Оба канала живут одновременно**, и `alert.html` обслуживает оба |
+
+---
 
 ## Sources
 
-- Internal implementation evidence: [`PROJECT.md`](/root/broadcaster/.planning/PROJECT.md), [`README.md`](/root/broadcaster/README.md), [`Schedule`](/root/broadcaster/app/models/schedule.py), [`SendLog`](/root/broadcaster/app/models/send_log.py), [`Celery tasks`](/root/broadcaster/app/worker/tasks.py), and [`history pages`](/root/broadcaster/app/pages/history.py). **HIGH** confidence for implemented-state claims.
-- [WhatsApp Business Policy](https://whatsappbusiness.com/policy/) and [WhatsApp’s business-chat announcement](https://about.fb.com/news/2025/04/ways-to-manage-your-businesses-chats-on-whatsapp/). **MEDIUM** confidence for compliance-boundary observations; policy interpretation should be revisited before any recipient-messaging feature.
-- [Telegram Spam FAQ](https://telegram.org/faq_spam) and [Telegram FAQ](https://telegram.org/faq). **MEDIUM** confidence for account-risk observations.
-- Public competitor marketing pages found through web research. **MEDIUM** confidence for broad ecosystem positioning only; no feature is inferred as a requirement from them.
+**HIGH confidence — проверено прямым чтением исходника, не через провайдера:**
+- `app/static/js/htmx.min.js` (вендоренный htmx 1.9.10) — отсутствие `responseHandling`, наличие `disabled-elt` и `selfRequestsOnly`
+- `https://raw.githubusercontent.com/bigskysoftware/htmx/master/CHANGELOG.md` — версии появления `hx-disabled-elt` (1.9.6), правки 2.0.2 / 2.0.5 / 2.0.7, последний релиз 2.0.10 (2026-04-21)
+- Шаблоны проекта: `components/modal.html`, `components/alert.html`, `account_groups/includes/group_row.html`, `ads/form.html`, `ads/includes/autosave_response.html`, `accounts/connect_tg_user.html` — действующие паттерны, решения и их обоснования
+- Инвентаризация грепом по `app/templates/`: нулевая поверхность ломающих изменений 1.x→2.x
+- `.planning/PROJECT.md` §Current Milestone, §Key Decisions — рамки и уже принятые решения
+
+**MEDIUM confidence — context7 `/bigskysoftware/htmx/v2.0.4`** (тир получен `gsd_run query classify-confidence --provider context7`):
+- `hx-swap-oob`, `hx-swap` значения и модификаторы, `hx-disabled-elt`, `hx-indicator`, `htmx:responseError`, `htmx:beforeSwap`, `responseHandling`, `HX-Location`/`HX-Reswap`
+- Канонические примеры: `delete-row`, `edit-row`, `progress-bar`, `file-upload`
+
+**LOW confidence — websearch / webfetch** (тир получен `gsd_run query classify-confidence --provider websearch`; **Tavily недоступен — ключ отвергнут сервером**):
+- `https://htmx.org/migration-guide-htmx-1/` — перечень ломающих изменений
+- `https://htmx.org/docs/`, `https://htmx.org/reference/`, `https://htmx.org/attributes/hx-swap/`, `https://htmx.org/attributes/hx-disabled-elt/`, `https://htmx.org/extensions/response-targets/`
+- Практика сообщества: 422 для валидации, прогрессивное улучшение форм, антипаттерны оптимистичного UI и тостов, поведение aria-live при замене узла
+
+**Gaps (честно названные):**
+- Не проверено на стенде, что `hx-swap-oob="delete"` по id панели подтверждения действительно снимает осиротевшую модалку — вывод следует из документации `hx-swap` («delete: deletes the target element regardless of the response») и правил OOB, но браузерного стенда в суите нет. **Проверить в первой же фазе, где появляется P-2.**
+- Точная версия появления `htmx.config.responseHandling` в CHANGELOG не названа; установлено лишь, что в 1.9.10 её нет, а в 2.0.4 есть. Для решения вехи этого достаточно.
+- Совместное поведение `hx-push-url` и `HX-Push-Url` (заголовок уже используется в `app/pages/ads.py`) при одновременном применении не проверялось.
 
 ---
-*Feature research for: Broadcaster — scheduled advertising posts to messenger groups*
-*Researched: 2026-08-03*
+*Feature research for: htmx-driven write interactions, milestone v2.1 «HTMX-first»*
+*Researched: 2026-08-26*
+

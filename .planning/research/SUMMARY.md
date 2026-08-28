@@ -1,186 +1,377 @@
 # Project Research Summary
 
 **Project:** Broadcaster
-**Domain:** Brownfield SaaS for scheduled advertising posts to Telegram, WhatsApp, and MAX groups
-**Researched:** 2026-08-03
-**Confidence:** MEDIUM-HIGH
+**Domain:** Brownfield server-rendered SaaS (FastAPI + Jinja2 + Alpine), перевод слоя ПИСЬМА на htmx с обязательной деградацией без JS
+**Milestone:** v2.1 «HTMX-first»
+**Researched:** 2026-08-26
+**Confidence:** HIGH
 
 ## Executive Summary
 
-Broadcaster is an implemented multi-messenger, group-first advertising scheduler for small businesses and agencies. Its control plane is a Python/FastAPI modular monolith backed by PostgreSQL, while Celery/Redis coordinate scheduled delivery. Telegram sends run through Telethon in the Python worker; WhatsApp and MAX use isolated, account-specific workers. The validated product already includes identity, account connection and group sync, reusable ad/media authoring, timezone-aware recurring schedules, delivery history, usage/billing controls, administration, and operational tooling.
+Веха не вводит новую архитектуру — она **обобщает четыре уже написанных вручную решения в один именованный слой** и применяет его к 36 обработчикам письма. `app/pages/ads.py::_save_from_editor` уже содержит ровно ту развилку, которую нужно размножить (`HX-Request` в начале, ветвление на выходах); `schedules._editor_redirect` — это будущий аргумент `redirect=`; `accounts._connect_status` — это будущий `render_macro()`; `ads/includes/autosave_response.html` — это конвенция «фрагмент + OOB». Сверх того, самый недооценённый факт исследования: **этап «сделать карточки независимо рендерящимися» для продуктовой части УЖЕ ВЫПОЛНЕН вехой v2.0** — 5 из 5 продуктовых списков несут стабильный `id` и собираются одним макросом. Планировщику не нужна фаза «извлечь фрагменты», нужна фаза «подключить существующие».
 
-The recommended path is to preserve this topology rather than re-platform or expand into an adjacent CRM, inbox, AI-content, or one-to-one marketing product. If a future milestone elects to improve the present system, start at the durable delivery boundary: assign every schedule occurrence/group send a stable identity, make claiming, publication, completion projection, and billing idempotent, then add explicit retry/recovery and observability. This order controls the highest-value risk: an external send can be duplicated, lost, or charged inconsistently at the PostgreSQL/Redis/worker boundary.
+Отсюда меняется профиль риска. Главная опасность вехи — **не «сработает ли подход», а тихое расхождение 36 копий одного решения и целый класс дефектов, зелёный по построению**. Три факта задают всю форму роадмапа. Первый: 302 внутри htmx-запроса не ошибка, а зелёный 200 с полным документом внутри карточки — и ни один существующий тест его не увидит, потому что `conftest.py` ставит `follow_redirects=False` (строки 91 и 260), а `HX-Request` встречается во всей суите ровно **один раз** на 131 файл и ~1700 тестов. Второй: htmx 2.x по умолчанию **не свопает 4xx/5xx вовсе** — то есть без глобального обработчика ошибок отказ выглядит как мёртвая кнопка, что является прямым регрессом относительно сегодняшнего поведения, а не упущенным улучшением. Третий: механизма `responseHandling` в вендоренном 1.9.10 физически нет (`grep` → 0), поэтому обновление htmx — не «удобнее сначала», а **условие достижимости половины целей вехи**.
 
-The major operating risks are platform enforcement and session failures, ambiguous external outcomes, timezone/DST behavior, account-worker backlog, sensitive session/media exposure, and dashboards that do not reveal late delivery. Mitigation is conditional future work, not an assertion of an active requirement: durable outbox/settlement records, classified connector errors and pacing, defined calendar semantics, per-account health/queue-lag signals, secret/data controls, and end-to-end delivery SLOs.
+Рекомендуемый порядок поэтому жёсткий: обновление htmx отдельным первым планом → фундамент (слой `respond()`, канал уведомлений, глобальные обработчики, **и машинные гейты ДО первой переведённой формы**) → дешёвый пилот на `account_groups` → рычаг `modal.html` (1 правка ⇒ 16 мест) → массовое переписывание по разделам → QR-мастер → авторизация последней. Тринадцать из девятнадцати найденных ловушек требуют работы в фундаменте, и в подавляющем большинстве это ГЕЙТ. Фаза фундамента здесь не «красота», а условие того, чтобы фаза массового переписывания не размножила дефект в 47 экземплярах.
+
+---
+
+## Разрешённые противоречия
+
+Три вещи требуют решения владельца до старта роадмапа. Первая разрешена здесь; две — эскалации по формулировкам, уже записанным в §Current Milestone.
+
+### R-1. `jinja2-fragments` против `respond()` — ОДНА рекомендация
+
+**Противоречие:** STACK.md рекомендует добавить `jinja2-fragments==1.12.0` как слой рендеринга фрагментов. ARCHITECTURE.md его прямо отвергает и предлагает тонкий `respond()` в новом `app/pages/htmx.py`.
+
+**Решение: `respond()` в `app/pages/htmx.py`. `jinja2-fragments` НЕ добавляется. Веха не получает ни одной новой Python-зависимости.**
+
+Четыре довода, в порядке веса:
+
+1. **`jinja2-fragments` требует `{% block %}`, а проект принуждает МАКРОСЫ двумя машинными гейтами** — `test_macros_take_no_context` и `test_components_are_documented_macros` (`tests/test_templates/test_components.py:599, 617`). Переход на блоки — это не «добавить зависимость», а переучить действующую конвенцию и переписать 5 готовых макросов строк/карточек. Цена — переучивание нормы; выгода — ноль, потому что макросы уже дают ровно ту же независимую отрисовку.
+2. **Главный довод STACK.md опровергается счётом ARCHITECTURE.md.** STACK.md обосновывает пакет тем, что альтернатива означает «изобрести ~60–100 новых крошечных файлов шаблонов». Фактический счёт по коду — **~20 новых файлов** (13 `*_response.html` + 5 фрагментов QR + 1 upload), потому что 5 из 5 продуктовых списков уже имеют макрос и стабильный `id`. Оценка, на которой стоял выбор, оказалась завышена в 3–5 раз.
+3. **`jinja2-fragments` не решает трудную часть задачи.** Труднее всего в вехе — не «отрендерить кусок», а ветвление 36 обработчиков с разнородными выходами (`RedirectResponse`, `TemplateResponse`, `HTMLResponse`, голый `Response(403)`, `HTTPException(302)`; у `history_retry` семь выходов). `respond()` это решает и делает `redirect=` **обязательным аргументом**, то есть деградация становится свойством ТИПА вызова, а не дисциплины. `jinja2-fragments` этой поверхности не касается вовсе.
+4. **Побочные издержки пакета реальны:** ответы с `block_names` — это `HTMLResponse`, а не `_TemplateResponse`, то есть `response.template`/`response.context` перестают интроспектироваться; плюс скрытый футган «`enable_async=True` → `run_until_complete` внутри работающего event loop».
+
+**Что из рекомендации STACK.md сохраняется:** helper `is_htmx()` (STACK и ARCHITECTURE согласны — переезжает в `app/pages/htmx.py` как `hx_request()`), вердикт «Playwright не добавлять», весь разбор htmx 2.x, файл `2.0.10` и вся таблица «что НЕ добавлять». Отвергается ровно одна строка — Python-пакет.
+
+### R-2. «Без нового JS» — рамка неисполнима как записана
+
+**Как записано:** «Канал уведомлений — OOB-область в `base.html` поверх существующего `alert.html`, **без нового JS**» + «глобальный обработчик `htmx:responseError`» в одном списке целей.
+
+**Что нашло исследование:** эти две строки противоречат друг другу. Сервер, вернувший 500, по определению не вернул фрагмент — декларативного способа показать такой отказ у htmx нет. Более того, FEATURES.md показывает, что **нужны ДВА события, а не одно**: `htmx:responseError` не срабатывает, когда ответа не было вовсе (обрыв сети), это `htmx:sendError`. Без второго офлайн неотличим от сломанной кнопки.
+
+**Рекомендуемая амендированная формулировка:**
+> Канал уведомлений — OOB-область в `base.html` поверх существующего `alert.html`, **без нового JS в потоке успеха и штатного отказа**. Единственный новый скрипт вехи — глобальные обработчики `htmx:responseError` **и** `htmx:sendError` в `base.html`/`auth_base.html`; они обязаны подчиняться действующему решению v2.0 «сборка узлами DOM, не строкой» (гейт `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write` = 0). PITFALLS.md предлагает ещё более строгую форму, соблюдающую оба правила разом: **разметка плашки приходит с сервера заранее отрисованной скрытой заготовкой, JS только переключает атрибут**.
+
+Без явного разрешения исполнитель будет искать несуществующий обходной путь — и, вероятнее всего, найдёт тосты через `HX-Trigger`, которые у этого продукта роняют ответ в **500 на первом же русском тексте** (Starlette кодирует значения заголовков в latin-1 — проверено эмпирически в venv проекта).
+
+### R-3. `hx-push-url` на каждой форме — анти-фича как записана
+
+**Как записано:** «Четыре свойства качества на каждой форме: `hx-disabled-elt`, `hx-indicator`, глобальный `htmx:responseError`, `hx-push-url`».
+
+**Что нашло исследование — два независимых довода:**
+
+* **UX (FEATURES.md, PITFALLS 17).** Тумблер, удаление строки и сохранение профиля адрес не меняют. 10 переключений = 10 фантомных записей истории и 10 нажатий Back до выхода с экрана. Хуже: `hx-push-url` на тумблере кладёт в адрес `/schedules/5/toggle` — Back ведёт на POST-маршрут, F5 предлагает повторить отправку, и человек нажмёт «да». Это не «забыли добавить», это «добавили лишнее».
+* **Безопасность (PITFALLS 9, проверено по вендоренному файлу).** Ключ `htmx-history-cache`, хранилище — **localStorage**, а не sessionStorage; умолчание `historyCacheSize` = 10. Каждое `hx-push-url` кладёт снимок разметки страницы на диск, **переживающий выход из системы и закрытие вкладки**. Для этого продукта конкретно: админ, вошедший под пользователем (имперсонация), оставляет снимки чужих экранов; страница платежей оставляет суммы, даты и идентификаторы ЮKassa. Восстановительная стоимость — LOW технически, **HIGH по последствиям, если уже в проде**: данные, попавшие в браузеры пользователей, не отзываются.
+
+**Рекомендуемая амендированная формулировка:**
+> Четвёртое свойство качества — **«по каждой форме принято и записано решение о `hx-push-url`»**, а не «`hx-push-url` стоит». Конвенция трёх случаев: (1) действие меняет ЧТО показано → `hx-push-url="true"`; (2) действие меняет ДАННЫЕ, но не адрес → `hx-push-url` НЕТ; (3) адрес известен только серверу → заголовок `HX-Push-Url` (действующий прецедент — `app/pages/ads.py:522`). Независимо от решения по формам, **`historyCacheSize = 0` landing-ится в фазе фундамента** — одна строка, снимающая класс целиком, ценой перезапроса страницы при Back.
+
+---
+
+## Reconciled Inventory
+
+Единственный набор чисел для роадмаппера. Расхождения между исследователями разрешены здесь.
+
+| Величина | Значение | Основание / разрешение расхождения |
+|---|---|---|
+| **POST-обработчиков в `app/pages/`** | **36** | STACK/FEATURES/PROJECT.md говорят 35, ARCHITECTURE — 36. Верно **36**: 35 `@router.post` + 1 `@money_router.post` в `billing.py:316`. Расхождение — цена одного `grep` по `_router\.post` против `router\.post`. Пропущенный — **денежный**, что делает ошибку значимой |
+| **`RedirectResponse` в `app/pages/`** | **127** | Согласовано всеми |
+| **Форм в шаблонах** | **47** | 25 продуктовых + 9 auth + 6 admin + 1 имперсонация + 6 в дублях `accounts/*` |
+| **Файлов шаблонов с формами** | **27** | из 79 шаблонов всего |
+| **Существующих `hx-*` атрибутов** | **79** в 22 шаблонах | 25 `hx-swap`, 24 `hx-trigger`, 22 `hx-get`, 5 `hx-swap-oob`, 2 `hx-post`, 1 `hx-sync`. `hx-target`, `hx-on`, `hx-vals`, `hx-delete`, `hx-boost`, `hx-ext`, `hx-select` — **0 вхождений каждый** |
+| **Ручных `fetch()`** | **6** в 2 шаблонах | `ads/form.html` ×1, `accounts/connect_tg_user.html` ×5 |
+| **Тестов, утверждающих `status_code == 302`** | **160** утверждений в ~30 файлах | Каждое обязано стать ПАРОЙ, а не быть заменено. Правильная форма — параметризованный обход, а не 320 функций |
+| **`HX-Request` во всей суите** | **1** вхождение на 131 файл / ~1700 тестов | Ключевое число вехи (см. R-5) |
+| **Новых файлов шаблонов (оценка)** | **~20** | 13 `*_response.html` (класс A минус 2 готовых в `ads/`) + 5 фрагментов QR + 1 `upload_response.html` + макрос `oob()` |
+| **Новых Python-модулей** | **2** | `app/pages/htmx.py` (~120 строк), `app/pages/notices.py` (~80 строк) |
+| **Новых Python-зависимостей** | **0** | см. R-1 |
+| **Роутеров изменяется** | **9** из 14 | `account_groups`, `accounts`, `admin`, `ads`, `auth`, `billing`, `history`, `profile`, `schedules` |
+| **Шаблонов с `x-data`** | **14** | из них 8 — прямые кандидаты в цели `hx-target` (Pitfall 13) |
+| **Мест подтверждения через `modal.html`** | **16** мест / 10 потребителей, **1 файл** | Наивысший рычаг вехи |
+| **Правок на одно действие в `accounts/*`** | **9** (3 файла × 3 ветки статуса) | Наибольший радиус в проекте |
+
+**Классификация 36 обработчиков по ФОРМЕ ответа** (главный вход роадмаппера — «фрагмент» не универсальный ответ):
+
+| Класс | Ответ на htmx-пути | Кол-во |
+|---|---|---|
+| A. Правка на месте | фрагмент + OOB | **15** |
+| B. Навигационные | `HX-Location` (204) | **5** |
+| C. Смена личности | ошибка → фрагмент формы; успех → `HX-Redirect` | **10** |
+| D. Внешний адрес | **`HX-Redirect`, НЕ `HX-Location`** | **1** (`/billing/subscribe`) |
+| E. Многошаговый мастер | фрагмент шага | **5** |
+
+---
 
 ## Key Findings
 
 ### Recommended Stack
 
-The implemented stack is well matched to the workload and should remain the baseline. PostgreSQL is the durable authority for product and audit state; Redis is transport/cache state only; S3-compatible storage holds advertisement images. Retain the modular monolith and account-isolated connector workers instead of introducing microservices or a separate SPA without a validated product need. Preserve locked dependencies and upgrade only with contract and integration coverage.
+**Меняется ровно один файл на диске и ноль строк в `pyproject.toml`.** Вендоренный `app/static/js/htmx.min.js` заменяется с 1.9.10 на **2.0.10** (npm `dist-tags.latest`, опубликован 2026-04-21, 51 238 байт, embedded `version:"2.0.10"`, SHA-384 `H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V`, источник — jsDelivr, зеркало unpkg байт-идентично). Полный список из 10 ломающих изменений 1.x→2.x проверен против этого репозитория: **не срабатывает ни одно** — `hx-on`, `hx-ws`/`hx-sse`, расширения, `show:`-модификатор, `hx-delete` — везде 0 вхождений. Миграция буквально есть замена одного файла.
 
 **Core technologies:**
+- **htmx 2.0.10** (вендоренный, без npm) — слой письма; версия обязана быть ≥2.0.2 («file upload is now fixed», индикаторы и снапшот истории), ≥2.0.5 (кеш истории, `inherit`), ≥2.0.7 (`reportValidityOfForms`, `visibility:hidden` для индикаторов)
+- **`app/pages/htmx.py`** (новый модуль, не зависимость) — `hx_request()`, `respond()`, `render_macro()`
+- **`app/pages/notices.py`** (новый модуль) — закрытый реестр «код → (текст, variant)»; ≥8 кодов уже существуют в разбросанном виде
+- **Существующие `pytest` + `httpx.AsyncClient` + `html.parser` из stdlib** — весь тестовый арсенал вехи; **никакого Playwright, никакого BeautifulSoup**
 
-- **Python 3.12, FastAPI 0.129.0, and Jinja2 3.1.6:** existing control plane and server-rendered UI — avoids needless frontend/runtime expansion.
-- **SQLAlchemy async 2.0.46 with asyncpg and PostgreSQL 16:** transactional source of truth for schedules, accounts, balances, and history.
-- **Celery 5.6.2 with Redis 7:** periodic dispatch and short identifier-based work messages — not a durable business record or media transport.
-- **Telethon 1.42.0:** Telegram user-account integration — keep behind the existing adapter/pool and preserve explicit flood/session failure handling.
-- **Baileys 7.0.0-rc.9 and pymax/maxapi-python:** WhatsApp/MAX account workers — keep each account's session and process isolated; pin/test protocol-worker versions before upgrades.
-- **Docker Compose/Nginx plus Prometheus, Grafana, and Loki:** current deployment and operational boundary — replace floating monitoring tags when the deployment baseline is next intentionally changed.
+⚠️ **Ловушка кэш-бастинга, найденная в коде.** `app/pages/common.py:142` считает `asset_version` **только по mtime `app.css`**. Замена `htmx.min.js` не меняет `?v=…` на `<script>` — и каждый вернувшийся пользователь остаётся на htmx 1.9.10 против сервера, говорящего на контракте 2.x. Фаза обновления обязана расширить `_compute_asset_version()` на mtime JS-файлов (3 строки, делает класс дефекта невозможным), а не «не забыть тронуть css».
 
 ### Expected Features
 
-The table-stakes workflow is already implemented: authentication and recovery; messenger account connection; group synchronization/selection; reusable text/image ads; recurring, timezone-aware schedules; automated per-group delivery records; searchable history and dashboard statistics; balance/subscription controls; admin support; and baseline monitoring. The current differentiator is one group-posting workflow across Telegram, WhatsApp, and MAX, with account-specific worker isolation and content/group snapshots for support and billing evidence.
+**Must have (table stakes):**
+- Двойной ответ по `HX-Request` (фрагмент | 302) — **несущая конструкция вехи**, 36 обработчиков
+- Контракт «фрагмент + OOB» на каждой форме; `hx-target` — id конкретной строки/карточки, никогда не класс
+- OOB-область уведомлений в `base.html` с подменой **содержимого** (`hx-swap-oob="innerHTML:#notice"`), а не узла — замену узла live-области скринридер не озвучивает
+- Глобальные `htmx:responseError` **+ `htmx:sendError`** (см. R-2)
+- Свап 422 + **эхо-возврат введённого** в `value=` — это и есть заявленный выигрыш на формах авторизации; свойство создаётся СЕРВЕРОМ, htmx лишь подменяет присланное
+- `hx-disabled-elt` — **только `find button[type=submit]`**, никогда `find button`: кнопка Отмены в панели подтверждения не блокируется никогда (записанное решение v2.0)
+- `hx-indicator` — один класс в `app.css` и один макрос, а не 47 спиннеров; порог видимости через `transition-delay`
+- P-1 тумблер, P-2 удаление с подтверждением (13 мест), P-3 создание с вставкой (`afterbegin`, не перерисовка контейнера)
+- 9 форм авторизации: ошибка → 422 + перерисовка формы, успех → полная навигация
 
-**Validated table stakes:**
+**Should have (differentiators):**
+- **Мастер Telegram QR на фрагментах** — наибольшая отдача на вложенный час: минус ~150 строк JS, минус `setInterval`, минус 5 JSON-контрактов, состояние переезжает на сервер. **Полностью независим — единственный крупный кусок вехи, который можно вести параллельно**
+- Загрузка изображений фрагментами вместо `fetch`+JSON — снимает JS-массив `imagePaths`; тоже независим
+- Единый макрос-обёртка формы, раздающий свойства качества — дешевле и надёжнее ревью 47 форм
+- Точечный `HX-Retarget`/`HX-Reswap` — поимённо, не массово: каждое применение делает поведение невидимым в шаблоне
+- Восстановление фокуса на элементе с тем же `id` после свапа — htmx делает сам, цена — стабильные `id` (уже есть)
 
-- Identity, recovery, and authenticated SaaS access.
-- Connected messenger accounts, synchronized groups, ad/media authoring, and recurring schedules.
-- Automated per-destination execution, history, balance/subscription enforcement, administration, and monitoring.
+**Defer (за веху):**
+- **P-4 правка на месте** — единственный паттерн, где деградация требует отдельной проектной работы (кнопка `hx-get` без JS мертва → делать `<a href>`); брать после того, как 47 форм переведены
+- **Прогресс загрузки в процентах** — требует JS-обработчика `htmx:xhr:progress`, прямо конфликтует с рамкой; брать бинарный `hx-indicator`
+- `hx-boost`, снятие Alpine, морфинг-свап (`idiomorph`/`alpine-morph` = новый вендоренный файл при правиле «внешних ресурсов 0»)
 
-**Validated differentiators:**
-
-- One recurring-ad workflow spanning Telegram, WhatsApp, and MAX group destinations.
-- Group-first targeting, account-scoped connector isolation, and snapshot-rich send logs.
-
-**Future-only / defer unless activated:**
-
-- Calendar/campaign planning UX and expanded reporting.
-- Agency/client workspaces, approval chains, or finer roles.
-- One-to-one marketing consent/template management.
-- CRM, shared inbox, chatbots, AI content generation, or broad cross-channel analytics.
+**Явные анти-фичи** (не «не сделали», а «решено не делать»): оптимистичный UI (у htmx нет отката — для рассылок цена прямая: пользователь думает, что группа выключена, а туда уходит объявление); тосты через `HX-Trigger` (500 на кириллице + не деградируют); `hx-confirm` (вызывает браузерный `confirm()`, выброшенный в v2.0); свап всей страницы; расширение `response-targets`; спам плашками на каждый успех; полный отказ от `RedirectResponse`.
 
 ### Architecture Approach
 
-Keep the existing control-plane/delivery-plane split. HTTP pages/routes remain thin over application use cases, services, repositories, and an async unit of work. The scheduling use case should remain the authoritative seam for due occurrence collection and single-send orchestration; adapters own platform error classification; workers own queueing, pacing, retry mechanics, and result consumption. The missing future guardrail is a durable, immutable delivery command/outbox that bridges schedule claim, queue publication, result projection, and billing.
+Один новый модуль `app/pages/htmx.py` держит **единственное на проект объявление признака htmx** и функцию `respond(request, *, redirect: str, fragment=None, oob=(), notice=None, external=False, status_code=200)`. Три ветки: не-htmx → `RedirectResponse(redirect + "?notice=<code>")`; htmx + фрагмент → `HTMLResponse(макрос + OOB-куски + OOB-уведомление)`; htmx без фрагмента → `HX-Location` (или `HX-Redirect` при `external=True`). **`redirect=` обязателен** — обработчик без него не собирается как вызов, то есть деградация принуждается типом. `notice` — КОД из закрытого реестра, а не текст: правило уже дважды написано в проекте (`billing._payment_error_message`, `SCHEDULE_ERROR_REASONS`) с выписанным обоснованием «владелец ссылки не должен уметь сообщить пользователю о событии, которого не было».
 
 **Major components:**
+1. **`app/pages/htmx.py`** — `hx_request()`, `respond()`, `render_macro()` (переезд `accounts._connect_status`)
+2. **`app/pages/notices.py`** — `NOTICES: dict[str, Notice]` + `resolve_notice(code)`; сводит **пять независимых микро-контрактов** (`?error=`/`?saved=1`/`?reset=`/`?retry=`/`?sched_error=`) в один. Это самостоятельная ценность, независимая от htmx
+3. **`#notice` в `base.html`** — внутри `<div data-main>`, между `<header>` и `<div data-body>`, СНАРУЖИ `{% block content %}` (иначе дочерний шаблон мог бы её молча переопределить). `aria-live` — на самом озвучиваемом элементе. **Нет кода — нет разметки вовсе.** В `auth_base.html` НЕ дублируется — там уже свой канал внутри формы
+4. **`*_response.html`** — конвенция ответа (главный фрагмент без OOB, далее побочные листья с `hx-swap-oob="true"`; уведомление дописывает `respond()`, чтобы 36 обработчиков не носили 36 копий)
+5. **`includes/oob.html::oob(id)`** — макрос побочной области через `{% call %}`, единая сигнатура для гейта
 
-1. **FastAPI/Jinja control plane** — user/admin UI, APIs, authorization, configuration, and lifecycle requests.
-2. **PostgreSQL and S3-compatible storage** — durable business/audit state and advertisement image objects.
-3. **Celery Beat/default/Telegram workers and Redis** — schedule scanning, routed work, and connector-result coordination.
-4. **Messenger adapters and per-account WA/MAX containers** — account sessions, group sync, pacing, sends, and protocol-specific outcomes.
-5. **Result projection, billing, and operations** — immutable send evidence, balance settlement, structured logs, metrics, dashboards, and alerts.
+**Названные архитектурные риски:**
+- **`load_shell_context` наливает `request.state.shell` ДО обработчика**, то есть до `db.commit()`. Счётчики навигации на htmx-пути **протухшие**. Рекомендация: `respond()` перезапрашивает `get_shell_context()` после коммита, но **только для действий, реально двигающих счётчик** (создание/удаление объявления, аккаунта, расписания; toggle — нет).
+- **OOB не приезжает, если htmx не свопает.** Три реальных места: `Response(403)` гарда `is_same_origin` (4 файла), `TemplateResponse(status_code=400)` в `profile.py:82`, и `HTTPException(302)` гейта `require_access` — последний свопнет **всю страницу `/billing`** внутрь `#row-42`. Это причина, по которой в объёме два артефакта, а не один: конфиг `responseHandling` **и** глобальный обработчик; плюс отдельная правка `require_access` (одно место — зависимость общая на 6 роутеров).
+- **`/billing/subscribe` — единственный обработчик, где `HX-Location` СЛОМАЕТ работающий платёж:** он делает AJAX-GET, а htmx 2.x несёт `selfRequestsOnly: true` и заблокирует межсайтовый запрос сам. Обязан быть `HX-Redirect` (`billing.py:400`).
+- **`HX-Location` через границу шеллов.** 5 успешных путей авторизации ведут из `auth_base.html` в `base.html`; оформление переживает (общий css и скрипты), не переживают `<title>` и `<meta name="htmx-config">`. **Рекомендация: `HX-Redirect` для этих пяти; `HX-Location` — только для `/impersonation/stop`, остающегося внутри `base.html`.** Выигрыш вехи заявлен в ОШИБКЕ, а не в успехе — на успехе полная навигация ничего не отнимает.
 
 ### Critical Pitfalls
 
-1. **Duplicate, lost, or uncertain sends** — introduce a stable delivery ID, database uniqueness, durable outbox/inbox or acknowledged transport, idempotent completion/billing, and crash-injection verification before increasing retries or throughput.
-2. **Billing and delivery drift** — authorize/reserve or settle each destination against the durable delivery ID; do not treat cached balance checks as final authorization; reconcile successful sends to exactly one balance transaction.
-3. **Platform enforcement and connector health** — classify permanent vs transient errors, retain pacing, expose re-auth/group-health states, and do not retry policy/session failures indiscriminately.
-4. **Unseen account-worker backlog and late delivery** — track worker heartbeat, queue age, retries, terminal outcomes, and due-to-terminal lateness; alert and expose useful customer status.
-5. **Credential/content/media exposure** — protect sessions at rest, restrict Docker/backup/volume access, redact logs, validate tenant ownership, and review object access policy.
+1. **302 внутри htmx-запроса подменяет фрагмент ЦЕЛОЙ страницей.** XHR следует за редиректом прозрачно — htmx получает 200 и вставляет `<!DOCTYPE>`, шапку, меню и **второй экземпляр OOB-области с тем же id** внутрь карточки. Особенно ядовиты редиректы ОТКАЗА (`?error=pending`, `?expired=1`): текст верный, экран мусорный. → AST-гейт «множество обработчиков с `RedirectResponse` == множество, читающее `HX-Request`», написанный **до первой формы**.
+2. **Зелёная суита при сломанном браузере.** `follow_redirects=False` в `conftest.py:91,260` делает весь класс №1 зелёным **по построению и навсегда**; `HX-Request` во всей суите — 1 вхождение. → Фикстура `htmx_client`, парные тесты, гейт парности по исходнику. См. R-5.
+3. **htmx молчит на 4xx/5xx.** Умолчание 2.x — `swap:false, error:true`. Штатный частый отказ (потолок платёжных намерений, окно удержания повтора, истёкший доступ), переведённый «в лоб» в 4xx, станет мёртвой кнопкой — и следующим действием человека будет повторное нажатие, **то есть ровно то, из-за чего потолок и заводили**. → Решение о кодах: **штатный бизнес-отказ отвечает 200 + фрагмент с плашкой**; 4xx/5xx остаются за настоящими сбоями; 422 — за валидацией формы, с явным правилом в `responseHandling`.
+4. **Alpine теряет состояние на свапе — и цели свапа в этом проекте ИМЕННО корни `x-data`.** Пересечение по построению: 14 шаблонов с `x-data`, и среди них ровно те, что становятся `hx-target` по контракту. Раскрытая карточка расписания схлопывается, панель подтверждения при ОТКАЗЕ удаления возвращается закрытой (человек не понимает, почему нажатие ничего не дало). → Правило: **состояние, переживающее действие, живёт НАД целью свапа**; прецедент серверного представления уже есть (`?sched=` в `ads_edit`). Гейт: тег с `x-data` и `id`, совпадающим с каким-либо `hx-target`, роняет тест.
+5. **`hx-target` по умолчанию — САМ элемент.** Форма без явной цели заменяет собственное содержимое ответом и исчезает вместе со своим `hx-post`. Второй отправки уже не будет. В UAT читается как успех. При этом в проекте **0 вхождений `hx-target`** — ни одного прецедента, ни одного теста, а веха вводит его сразу на 47 формах. → Гейт: каждый `hx-post` несёт **либо** явный `hx-target`, **либо** явный `hx-swap="none"`; третьего не дано.
+6. **Кириллица в `HX-*` роняет ответ в 500.** Проверено эмпирически в venv: Starlette кодирует заголовки в latin-1. Продукт русскоязычный целиком. Упадёт не в тесте, а у первого пользователя, назвавшего объявление по-русски. → `HX-*` собираются только из ASCII-констант и целых id; AST-гейт на правый операнд присваивания. Это второй, независимый довод в пользу уже принятого решения «OOB-область, а не тосты» — и его стоит записать, иначе решение отменят по первому доводу, не зная про второй.
 
-Timezone/DST semantics are also a material correctness risk whenever recurrence or schedule UX changes: document the chosen policy, display local and UTC next runs, and test IANA-zone transition cases.
+---
 
 ## Implications for Roadmap
 
-This is a suggested reliability-improvement sequence only. `PROJECT.md` has no active new requirements, so none of these phases should be treated as approved implementation scope until a milestone activates them.
+Девять фаз. Три из них (обновление, загрузка изображений, QR-мастер) не имеют общих файлов с основным потоком и могут вестись параллельно указанным порядком зависимостей.
 
-### Phase 1: Delivery Identity and Durable Dispatch Foundation
+### Phase 1: Обновление htmx 1.9.10 → 2.0.10 + блок конфигурации
+**Rationale:** блокирует всё остальное. `responseHandling` в 1.9.10 **физически отсутствует**, а значит контракт «ошибка перерисовывает форму» не собирается вовсе; три свойства качества из четырёх упираются в 2.0.2/2.0.5/2.0.7. Ревизия 79 существующих атрибутов дешевле сейчас, чем на нескольких сотнях новых. Отдельным планом — потому что это **единственный шаг вехи, который не может проверить ни один машинный тест**.
+**Delivers:** один вендоренный файл; расширенный `_compute_asset_version()`; блок конфигурации (см. ниже) в `base.html` и `auth_base.html`; `test_shell.py` утверждает `version:"2.0.10"` и каждую строку конфига.
+**Avoids:** тихие изменения 2.x (Pitfall 14); кэш-бастинг только по `app.css`.
+**Manual UAT (обязателен, машина не увидит):** ручной обход **22 существующих `hx-get`-мест**; отдельно — каскад infinite scroll `hx-trigger="revealed"` после смены `scrollBehavior` на `'instant'` (подгруженный блок может мгновенно оказаться «revealed» и запустить следующую подгрузку).
 
-**Rationale:** Every later reliability improvement depends on distinguishing one logical schedule occurrence/group delivery from retries and projections.
+### Phase 2: Фундамент — слой ответа, канал уведомлений, гейты
+**Rationale:** тринадцать из девятнадцати ловушек требуют работы здесь, и в большинстве это ГЕЙТ, обязанный существовать **до первой переведённой формы**. Фаза 2 — не красота, а условие того, чтобы Фаза 5 не размножила дефект в 47 экземплярах.
+**Delivers:** `app/pages/htmx.py` + `app/pages/notices.py`; `#notice` (polite/`role=status`) и вторая область для отказов (assertive/`role=alert`) в `base.html`; макрос `oob(id)`; глобальные `htmx:responseError` + `htmx:sendError`; правка `require_access` и зависимости имперсонации (отвечают `HX-Location` на `HX-Request`); фикстура `htmx_client`; **весь пакет машинных гейтов** (см. R-5); утверждение `samesite == "lax"` в `test_cookie_flags.py` как записанное решение.
+**Note:** канал уведомлений можно завести **на сегодняшних редиректах** — свести пять написаний кода в один `?notice=` ещё до появления первого `hx-post`. Это даёт независимо проверяемую ценность и снижает риск пилота.
+**Avoids:** Pitfalls 1–10, 15, 16, 19.
 
-**Delivers:** A schema-backed immutable delivery identity; unique occurrence/group invariant; transactional schedule claim/lease and outbox/publisher path; versioned connector payload carrying the delivery ID.
+### Phase 3: Пилот — `account_groups` (2 обработчика)
+**Rationale:** наименьшая поверхность, на которой контракт проверяется ЦЕЛИКОМ. Готовый `id="group-row-N"`, готовый макрос, готовый `partial_cards`, два действия, один шаблон. Гейты получают зубы здесь — дальше они держат остальные 34.
+**Delivers:** первые два `*_response.html`; доказанный сквозной контракт «фрагмент + OOB + notice + деградация + `hx-disabled-elt` + `hx-indicator` + решение о `hx-push-url`».
 
-**Addresses:** Existing scheduled multi-group dispatch, send history, and multi-messenger delivery.
+### Phase 4: Рычаг — `components/modal.html`
+**Rationale:** **1 правка ⇒ 16 мест подтверждения / 10 потребителей.** Единственное место в проекте, где одна строка закрывает шестнадцать, и она разгружает все последующие разделы.
+**Delivers:** `hx-post`/`hx-target`/`hx-swap`/`hx-disabled-elt` в макросе; закрытие панели через `x-on:htmx:after-request` (существующий Alpine — нового JS нет); **второй OOB-узел `hx-swap-oob="delete"` по id самой панели** — она сознательно стоит СНАРУЖИ удаляемой строки, и без этого узла после N удалений в документе N мёртвых `role="dialog"` с живыми фокус-ловушками; расширенные `test_modal_guard_is_inherited_by_every_consumer` и `test_modal_site_inventory`.
 
-**Avoids:** Commit-to-publish loss, Beat overlap duplicates, destructive Redis-pop ambiguity, and duplicate `SendLog` records.
+### Phase 5: Массовое переписывание по разделам
+**Rationale:** после Фазы 4 разделы независимы — разные файлы, разные тесты, ноль общих правок. Порядок внутри: `schedules` + `ads` → `admin` → `accounts` **последним** (3 шаблона с `x-data`, 9 правок на действие, тройная копия разметки). Денежная форма (`billing`) — **не первой**, после отработки контракта.
+**Delivers:** 15 обработчиков класса A + 5 класса B; `admin/includes/*` получают `id` и макросы (3 файла обязательно); ~13 `*_response.html`; 160 утверждений `302` становятся парами.
 
-### Phase 2: Idempotent Settlement, Billing Integrity, and Connector Retry Contract
+### Phase 6: Загрузка изображений (параллельна, начиная с Фазы 2)
+**Rationale:** единственный поток, не касающийся ни `app/pages/`, ни оболочки — живёт в `app/routes/uploads.py` + `ads/form.html`, целится в существующий `#media-strip`. Может идти отдельным исполнителем с первого дня.
+**Delivers:** минус 1 `fetch()`, минус ~70 строк JS; скрытое поле с атрибутом `form="ad-form"` вместо JS-массива `imagePaths`; бинарный `hx-indicator` (не процент).
+**Три решения, а не переносы:** htmx шлёт **все файлы одним запросом** — сегодняшнее свойство «успешно загруженные остаются прикреплёнными, даже если часть отвалилась» надо сохранить сознательно; API-гейт `get_current_user_id_with_access` отвечает JSON, а htmx на 4xx не свопает — отказ доступа станет полностью невидимым; **куда переезжает маршрут (`app/routes/` ↔ `app/pages/`) — РЕШЕНИЕ, записываемое в двух гейтах сразу**, а не правка перечня ради зелени.
 
-**Rationale:** Once a durable identity exists, all channels can safely distinguish terminal, retryable, and uncertain outcomes before retry policy is changed.
+### Phase 7: QR-мастер Telegram (5 обработчиков)
+**Rationale:** после Фаз 1–4 (нужен готовый `respond()` и отлаженные гейты опроса), но до авторизации. Пять обработчиков над **живой сессией Telethon** — дешёвого отката нет, механической правкой не обойтись.
+**Delivers:** минус 5 `fetch()`, минус `setInterval`, минус ручное переключение `hidden`; состояние мастера переезжает на сервер, `session_id` — в скрытое поле (сервер обязан по-прежнему проверять владение).
+**Важно записать прямо:** деградации без JS здесь нет **и сегодня** — мастер уже 100% JS-only. Веха здесь **не может регрессировать**; без явной записи аудит вехи запишет ложный провал.
+**Гейт:** остановка поллинга — ответом без `hx-trigger` (обобщение существующих `test_sync_polling_stops`), а не JS-таймером.
 
-**Delivers:** Insert-once result projection; delivery-to-transaction reconciliation; defined charge event/reservation or atomic authorization; explicit Telegram retry behavior; normalized outcome certainty and provider correlation where available.
+### Phase 8: Авторизация (9 форм + `/impersonation/stop`) — осознанно последняя
+**Rationale:** три независимых довода. (а) Второй шелл `auth_base.html` — другая конвенция, `#notice` туда не приходит. (б) Успех меняет cookie личности и пересекает границу шеллов. (в) **Сломанный вход блокирует ВЕСЬ ручной UAT остальных фаз** — ставить после того, как всё остальное подтверждено руками.
+**Delivers:** 422 + эхо-возврат введённого (заявленный выигрыш вехи); `HX-Redirect` на 5 путях через границу шеллов, `HX-Location` — только для `/impersonation/stop`.
 
-**Addresses:** Per-group outcomes, balance/subscription enforcement, Telegram/WA/MAX delivery paths.
-
-**Avoids:** Double charging, unbilled success, retry-caused duplicate sends, and treating a timeout as proof of non-delivery.
-
-### Phase 3: Scheduling Correctness and Delivery-State UX
-
-**Rationale:** Users need a truthful schedule/delivery lifecycle after the underlying command model is reliable.
-
-**Delivers:** Documented DST policy, recurrence input validation, local/UTC next-run visibility, and customer-visible pending/terminal/uncertain states with actionable connector errors.
-
-**Addresses:** Current timezone schedules, account/group status, history, and dashboards.
-
-**Avoids:** Wrong-time sends, ambiguous “scheduled” or generic “failed” states, and harmful blind retries.
-
-### Phase 4: Account-Worker Resilience and Operational SLOs
-
-**Rationale:** Reliable settlement states make queue age, heartbeat, retry exhaustion, and lateness measurable and recoverable.
-
-**Delivers:** Bounded worker lifecycle/re-auth recovery, stale-heartbeat and per-account queue-lag detection, end-to-end delivery metrics, dashboards, alerts, and recovery rehearsal.
-
-**Addresses:** Existing WA/MAX isolation, monitoring, and support operations.
-
-**Avoids:** Healthy-web/failed-delivery blind spots, stuck account containers, and unbounded late schedules.
-
-### Phase 5: Security and Data-Governance Hardening
-
-**Rationale:** Existing session credentials and customer content are high-impact assets; hardening should precede enterprise expansion or broader data-sharing scope.
-
-**Delivers:** Verified secret-at-rest protection, session revocation/rotation, least-privilege worker/backup/storage access, log redaction/retention, and tenant-isolation tests.
-
-**Addresses:** Existing connected accounts, ad assets, history, and administrative operations.
-
-**Avoids:** Account takeover, cross-tenant exposure, public-media leakage, and sensitive-log/backup disclosure.
+### Phase 9: Упрочнение и сводный обход
+**Delivers:** обход всех 47 форм на предмет деградации; переименование `*_degrades_without_alpine` → добавление парных `*_degrades_without_htmx` (оставить прежнее имя с htmx-утверждениями = файл, чьё имя врёт про предмет); доступность (фокус, две live-области); ручной UAT на длинных списках; сводка решений по `hx-push-url`; гейт `test_no_manual_fetch_remains`.
 
 ### Phase Ordering Rationale
 
-- The architecture explicitly requires delivery identity and durable dispatch before retries, concurrency, billing changes, or scaling; otherwise those changes amplify duplicate/lost-send risk.
-- Settlement and billing follow the delivery identity because they share the same idempotency boundary.
-- UX correctness and SLOs become trustworthy only after delivery states are durable and reconciled.
-- Security is independent enough to be pulled forward if risk assessment requires it, but should not be coupled to unvalidated product expansion.
-- No feature-suite phase is recommended: proposed CRM, inbox, AI, collaboration, and recipient-messaging work is future-only and requires separate discovery/compliance validation.
+- **Обновление htmx идёт РАНЬШЕ глобального обработчика ошибок** — три исследователя сходятся, и довод жёсткий: `responseHandling` в 1.9.10 отсутствует физически, а обработчик `htmx:beforeSwap` как обходной путь — это новый JS, запрещённый рамкой. Обратный порядок был бы технически допустим (обработчик ни от чего не зависит), но потребовал бы дважды трогать `base.html` и оставил бы окно, где 4xx недостижимы. **Оба живут в первых двух фазах и до первой формы — это главное.**
+- **Пилот — `account_groups`, и это разрешает кажущийся конфликт исследователей.** ARCHITECTURE предлагает его по дешевизне; PITFALLS запрещает начинать с `accounts` (плотный Alpine, QR, загрузка) и с `billing` (деньги без индекса) и требует «раздел с простыми изменяющими формами». `account_groups` — **не** `accounts`: это один шаблон, два действия, и панель подтверждения там сознательно стоит СНАРУЖИ удаляемой строки, то есть цель свапа уже удовлетворяет правилу границы Alpine. Единственная проверка первого плана: убедиться, что сам `#group-row-N` не несёт `x-data`; если несёт — поднять `x-data` на обёртку прямо в пилоте, дёшево и на двух формах.
+- **Три потока параллельны:** загрузка изображений — с первого дня; QR-мастер — после Фазы 4; всё остальное последовательно.
+- **`accounts` и `billing` — последние в массовом переписывании,** по цене ошибки, а не по объёму.
 
 ### Research Flags
 
-Phases likely needing deeper research during planning:
+Фазы, которым при планировании нужен `--research-phase`:
+- **Phase 7 (QR-мастер):** машина состояний над живой сессией Telethon; окно между `qr-status` и `complete` требует **продуктового решения**, а не механической правки. Пять маршрутов меняют тип ответа JSON → HTML.
+- **Phase 6 (загрузка):** три поведенческих отличия (один запрос вместо N, судьба частичного успеха, переезд гейта между двумя поверхностями) — это решения, а не перенос.
+- **Phase 8 (авторизация):** взаимодействие смены cookie личности с частичным свапом через границу двух шеллов; поведение `hx-push-url` вместе с уже применяемым заголовком `HX-Push-Url` не проверялось никем.
 
-- **Phase 1:** Database/outbox/lease design and the actual Celery/Redis/WA/MAX contract need repository-specific migration and crash-recovery research.
-- **Phase 2:** Messenger idempotency guarantees, outcome certainty, pricing settlement, and provider receipt capabilities differ by channel.
-- **Phase 3:** DST policy is a product decision; supported IANA zones and calendar behavior need explicit validation.
-- **Phase 5:** Encryption/key management, data retention, storage access, and privacy obligations depend on the deployment and customer context not established in current research.
+Фазы со стандартными, уже отработанными в проекте паттернами (исследование можно пропустить):
+- **Phase 1** — верифицировано побайтово; поверхность ломающих изменений пуста.
+- **Phase 3, 4, 5** — паттерны сняты с действующего кода (`_save_from_editor`, `autosave_response.html`, `_editor_redirect`), гейты имеют прямые прецеденты (`test_access_gate.py`, `test_impersonation_gate.py`, `test_components.py`).
 
-Phases with standard patterns (may skip a separate research phase after code inspection):
+---
 
-- **Phase 4:** Prometheus/Grafana/Loki alerting and heartbeat/queue-lag monitoring use established patterns, though metric names and thresholds must be derived from actual workloads.
+## Обязательный блок конфигурации (Фаза 1)
+
+Одна вставка в `<head>` **обоих** шеллов (`base.html` и `auth_base.html`), **перед** `<script src=…htmx…>`. Каждая строка с последствием пропуска.
+
+```html
+<meta name="htmx-config" content='{
+  "historyRestoreAsHxRequest": false,
+  "allowNestedOobSwaps": false,
+  "reportValidityOfForms": true,
+  "historyCacheSize": 0,
+  "selfRequestsOnly": true,
+  "responseHandling": [
+    {"code":"204", "swap": false},
+    {"code":"[23]..", "swap": true},
+    {"code":"422", "swap": true},
+    {"code":"[45]..", "swap": false, "error": true},
+    {"code":"...", "swap": false}
+  ]
+}'>
+```
+
+| Ключ | Умолчание 2.x | Что произойдёт, если строку не поставить |
+|---|---|---|
+| `responseHandling` с правилом `422` **выше** `[45]..` | 4xx не свопаются вовсе | Форма, вернувшая 422 с текстом ошибки, для пользователя выглядит как **полностью мёртвая кнопка**. Самый вероятный способ провалить веху тихо. Порядок значим: `422` ниже `[45]..` перехватывается общим правилом |
+| `historyRestoreAsHxRequest: false` | `true` | Документация htmx дословно: «должно быть выключено, если `HX-Request` используется для частичных ответов». Проект делает ровно это в 4 местах. На промахе кеша истории htmx пошлёт `HX-Request: true` на **полностраничную** навигацию и получит фрагмент редактора объявлений в качестве всего документа |
+| `allowNestedOobSwaps: false` | `true` | Карточка-паршал переиспользуется и как OOB-цель, и внутри большего фрагмента. С умолчанием внутренний `hx-swap-oob` срабатывает и когда больший фрагмент — основной ответ, **и удаляет элемент из DOM** |
+| `reportValidityOfForms: true` | `false` | Пользователь жмёт «Сохранить» на форме с пустым `required` и получает **тишину**: htmx блокирует отправку, но нативный пузырёк валидации не показывает. Путь БЕЗ JS пузырёк показывает — инверсия деградации |
+| `historyCacheSize: 0` | `10` | Снимки страниц (админка, платежи, экраны под имперсонацией) остаются в **localStorage**, переживая выход из системы и закрытие вкладки. Восстановление — LOW технически, **HIGH по последствиям в проде**: данные в чужих браузерах не отзываются |
+| `selfRequestsOnly: true` (выписать ЯВНО) | `true` | Умолчание верное, но выписать нужно, чтобы его **не открутили** при отладке: это единственное новое средство защиты, полученное вехой бесплатно. Оно же **принуждает** `/billing/subscribe` уходить `HX-Redirect`, а не `HX-Location` — иначе htmx заблокирует межсайтовый запрос к ЮKassa сам |
+
+Гейт: `test_shell.py` читает `base.html` и утверждает каждую строку. Строка, снятая будущим планом, роняет тест.
+
+---
+
+## R-5. Проблема верификации — риск первого класса
+
+**Не «мало тестов», а «весь класс дефектов зелёный по построению»:** `follow_redirects=False` в `tests/conftest.py:91` и `:260`; `HX-Request` — **1 вхождение на 131 файл и ~1700 тестов**; httpx не читает `hx-target`, не свопает, не собирает OOB, не инициализирует Alpine. После вехи «все 47 форм на htmx» суита продолжит проверять путь, которым не пойдёт ни один пользователь с включённым JS.
+
+### Машинные гейты — консолидированный список (все строятся БЕЗ браузера)
+
+Прецедент в проекте есть и отработан: `test_access_gate.py` и `test_impersonation_gate.py` читают ИСХОДНИК и утверждают инвентари явными числами (`ROW_DELETE_PLACES = 12`, `MODAL_PLACES = 16`), так что молчаливое появление или исчезновение места краснеет.
+
+| # | Гейт | Что утверждает | Фаза |
+|---|---|---|---|
+| G-1 | `test_write_handlers_go_through_respond` | каждый обработчик под `@router.post` содержит `respond(` либо стоит в явном перечне исключений с обоснованием. **Самый важный — именно он не даёт 36 копиям разъехаться** | 2 |
+| G-2 | парность редиректа | множество обработчиков с `RedirectResponse` == множество, читающее `HX-Request` | 2 |
+| G-3 | `test_every_form_keeps_method_and_action` | у каждого `<form>` с `hx-post` есть `method="post"` и непустой `action` | 2 |
+| G-4 | `test_hx_post_matches_action` | `hx-post` == `action` посимвольно. **Сильнейшее одиночное утверждение вехи:** делает «htmx только перехватывает» свойством исходника, а не намерения | 2 |
+| G-5 | `action` ⊆ маршруты, отдающие ПОЛНЫЙ документ | `action="/ads/5/row"` без JS уводит на голый `<tr>` | 2 |
+| G-6 | тег с `hx-post` обязан быть `<form>` | кнопка `hx-post` вне формы без JS мертва | 2 |
+| G-7 | `hx-target` **или** `hx-swap="none"` на каждом `hx-post` | умолчание `this` съедает собственную форму | 2 |
+| G-8 | `hx-disabled-elt` + `hx-indicator` на каждом `hx-post` | тот же обход, одно правило | 2 |
+| G-9 | `test_hx_target_points_at_an_existing_id` | опечатка в цели = своп «в никуда» без единой ошибки | 2 |
+| G-10 | `test_every_oob_block_carries_an_id` | OOB без `id` htmx тихо игнорирует | 2 |
+| G-11 | id не может быть одновременно `hx-target` и OOB-целью | конфликт свапов, потеря прокрутки | 2 |
+| G-12 | граница Alpine | тег с `x-data` и `id`, совпадающим с каким-либо `hx-target`, роняет тест (множество целей собирается тем же обходом — гейт замкнут на себя) | 2 |
+| G-13 | AST: правый операнд `response.headers["HX-*"]` — литерал или f-строка с ЦЕЛЫМИ | кириллица → 500; пользовательский ввод → открытый редирект и инъекция заголовка | 2 |
+| G-14 | `\|safe` и `Markup(` в `app/templates/**` == 0; `autoescape=True` — утверждение | OOB расширяет радиус XSS на ЛЮБУЮ область страницы, включая шапку | 2 |
+| G-15 | `hx-vals` со значением, содержащим `{{` вне `\| tojson` — падает; `hx-vals='js:'` и `hx-on:` запрещены | второй слой экранирования, который autoescape не закрывает; `allowEval` при отсутствующей CSP | 2 |
+| G-16 | `test_notice_region_is_declared_once` + `test_notice_codes_are_closed` | две области с одним id / код без текста = молчание на базовом пути | 2 |
+| G-17 | третья группа `-k htmx` в `test_access_gate.py` | закрытый маршрут на `HX-Request` отвечает `HX-Location`, а не 302 и не JSON | 2 |
+| G-18 | опасные маршруты: серверное удержание существует **независимо** от `hx-disabled-elt`; `hx-sync` с `queue` на них запрещён | форма перечня — `test_impersonation_gate.py` | 2 |
+| G-19 | `hx-push-url` не стоит на маршрутах из перечня «изменяет данные» | Back на POST, F5 «повторить отправку» | 2 |
+| G-20 | гейт парности тестов | маршруты с htmx-веткой ⊆ маршруты, покрытые тестом с `HX-Request` | 2 |
+| G-21 | `test_polling_fragments_declare_their_stop` | каждый фрагмент с `hx-trigger="every "` имеет парный без него | 2/7 |
+| G-22 | `test_no_manual_fetch_remains` | `fetch(` в `app/templates/` == 0 — закрывает цель вехи так же, как греп-гейт закрыл возврат снятых имён | 9 |
+| G-23 | `test_shell.py`: `version:"2.0.10"`, каждая строка конфига, оба обработчика ошибок, обе `aria-live`-области, `samesite == "lax"` | замена вендоренного файла и правка `base.html` не проверяются больше ничем | 1/2 |
+
+Плюс **фикстура `htmx_client`** (`HX-Request: true` + `follow_redirects=True`) и **парные тесты** на каждый переведённый маршрут: без заголовка → 302, с заголовком → 200 и `assert "<!DOCTYPE" not in response.text`. Последняя строка ловит весь Pitfall 1 одним утверждением.
+
+### Что НЕ доказуемо без браузера → именованные пункты ручного UAT
+
+Проект уже принял этот класс ограничения по прецеденту (браузерного стенда нет, ограничение записано в PROJECT.md для адаптивности админки и закрыто ручным UAT). Playwright **не добавляется**: ~1700 тестов идут на in-memory SQLite через `ASGITransport` без процесса и портов; браузерный стенд — это живой uvicorn, реальная БД, бинарники в CI и в Docker-сборке, вторая суита и флак — новая операционная поверхность на вехе, чья премиса «ни build-шага, ни новой инфраструктуры». Если стенд когда-нибудь оправдан — это **своя веха со своим решением**, а не строка, протащенная внутрь этой.
+
+Обязательные ручные пункты:
+1. **Замена `htmx.min.js` вообще** — суита не исполняет JS ни строчки; «зелено» здесь не значит ничего.
+2. **22 существующих `hx-get`-места** после обновления; отдельно — каскад infinite scroll при `scrollBehavior: 'instant'`.
+3. **Своп действительно произошёл и в тот элемент**; **OOB-счётчик приземлился куда задумано**.
+4. **`hx-swap-oob="delete"` по id панели подтверждения действительно снимает осиротевшую модалку** — вывод следует из документации, но не проверен. **Проверить в Фазе 4, где P-2 появляется впервые.**
+5. **Alpine после свапа:** переинициализация, порядок относительно `htmx:afterSwap`, утечка слушателей после десятков действий без перезагрузки. **Самый острый остаточный риск вехи.**
+6. **`hx-indicator` / `hx-disabled-elt` визуально** и реальная защита от двойного клика.
+7. **`hx-push-url` действительно меняет адрес**; Back и F5 на переведённых экранах.
+8. **Глобальный обработчик ошибок срабатывает** — при 500 и при выключенной сети.
+9. **Атрибуты, собранные Jinja-условием** (`{% if %}hx-post{% endif %}`) — известная слепая зона гейтов разметки; закрывается либо запретом такой формы, либо этим пунктом. Границы каждого гейта выписываются в докстринге файла — как это уже сделано в `test_impersonation_gate.py`.
+
+---
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | MEDIUM | Exact current dependencies/topology are repository-verified; future upgrade and external-library advice relies on official documentation/current ecosystem evidence. |
-| Features | HIGH | Implemented-state claims are verified from project documentation and inspected models/routes/workers; positioning is only medium-confidence context. |
-| Architecture | HIGH | Current topology and delivery-flow gaps were inspected directly; general reliability guidance is medium-confidence. |
-| Pitfalls | HIGH | Failure modes derive from observed scheduler, Redis, worker, billing, and credential-handling paths; platform-policy interpretation is medium-confidence. |
+| Stack | **HIGH** | Каждый номер версии снят с registry API npm/PyPI; dist-файл скачан, `cmp`-сверен с зеркалом, embedded-версия и SHA-384 проверены локально. Единственное суждение (а не факт) — «не добавлять Playwright», и оно MEDIUM-HIGH |
+| Features | **HIGH** по механике, **LOW** по идиоматике сообщества | Пять фундаментальных фактов сняты с апстримного CHANGELOG и с вендоренного файла на диске, не с блогов. Раздел «как принято» — websearch, **Tavily недоступен (ключ отвергнут сервером)**, помечен LOW отдельно |
+| Architecture | **HIGH** | Все интеграционные точки сняты чтением `app/pages/`, `app/templates/`, `tests/`; счёты воспроизводимы грепом. Слабое место — расхождение 35/36, разрешено выше |
+| Pitfalls | **HIGH** | Три ключевых факта проверены **эмпирически исполнением в venv проекта**, а не прочитаны: latin-1 у заголовков Starlette, отсутствие проверки CRLF, `localStorage` для `htmx-history-cache` в вендоренном файле. Websearch-часть (htmx + Alpine) — LOW, использована только для сигнатур отказа |
 
-**Overall confidence:** MEDIUM-HIGH. The present product inventory and technical-risk ordering are well supported; no future product scope has been validated.
+**Overall confidence: HIGH.**
 
 ### Gaps to Address
 
-- **Production behavior evidence:** Current research did not establish real queue volumes, delivery latency, incident history, or actual platform-account enforcement rates. Baseline these before choosing scale thresholds/SLO targets.
-- **Delivery semantics:** Provider receipt/idempotency behavior and exact accepted-vs-delivered meaning need connector-specific verification before promising exactly-once or delivery guarantees.
-- **Billing policy:** The business rule for reservation, unsuccessful/uncertain sends, refunds, and reconciliation exceptions needs explicit product/finance ownership before implementation.
-- **Security deployment controls:** Encryption, key rotation, backup access, Docker socket restrictions, and S3 policy may exist outside the inspected code and need an environment review.
-- **Timezone policy:** The intended behavior for ambiguous/nonexistent local time has not been set; decide it before schedule behavior changes.
-- **Compliance:** Group-posting policy posture and any future recipient-messaging capability require legal/policy review; no such expansion is implied by current research.
+- **`hx-swap-oob="delete"` по id осиротевшей панели подтверждения** — не проверено на стенде, вывод из документации. → Ручной UAT в Фазе 4, первым пунктом.
+- **Alpine внутри htmx-свапа** — переинициализация, порядок относительно `htmx:afterSwap`, утечка слушателей. Не наблюдаемо с сервера в принципе. → Правило границы + гейт G-12 закрывают структуру; поведение — ручной UAT в каждой фазе, где переводится раздел с `x-data`.
+- **`hx-push-url` вместе с заголовком `HX-Push-Url`** (уже применяется в `ads.py:522`) — совместное поведение не проверял никто. → Именованный пункт при планировании Фазы 5.
+- **Несёт ли `#group-row-N` атрибут `x-data`** — от этого зависит, чист ли выбранный пилот. → Первая проверка первого плана Фазы 3; если несёт, `x-data` поднимается на обёртку прямо там, на двух формах.
+- **`respond()` и протухшие `nav_counts`** — рекомендация «перезапрашивать только для действий, двигающих счётчик» требует перечня таких действий. → Составить в Фазе 2, закрепить гейтом.
+- **Куда переезжает `/api/uploads/image`** (`app/routes/` ↔ `app/pages/`) — решение, а не правка перечня; затрагивает **оба** гейта сразу. → Фаза 6, требует явного решения.
+- **Точная версия появления `responseHandling`** в CHANGELOG не названа; установлено лишь, что в 1.9.10 её нет, а в 2.0.4 есть. Для решения вехи этого достаточно.
+
+### Cross-milestone escalations
+
+Пункты, выходящие за веху, но чей риск веха **повышает**. Каждый уже записан в §Active PROJECT.md — здесь названа новая величина риска.
+
+1. **⚠️ Частичный уникальный индекс на `payments` («не более одного незакрытого подписочного намерения») НЕ построен.** Потолок держится проверкой в коде (`PendingIntentCapError`), а не свойством схемы, — и две ОДНОВРЕМЕННЫЕ отправки проходят её обе. **htmx делает одновременность дешевле: без перезагрузки страницы кнопка оплаты остаётся живой и нажимаемой.** До вехи узкое окно между кликом и перезагрузкой было де-факто защитой; веха его убирает, а `hx-disabled-elt` — клиентское свойство и защитой не является. Восстановление после дефекта — ручной возврат через ЮKassa и поддержка. **Приоритет пункта повышается вехой; сказать роадмапперу вслух.**
+2. **Долг `cookie_secure` (BLOCKER в §Active).** Единственная действующая защита от CSRF — `SameSite=Lax` (токенов в проекте 0). Переход на `hx-post` посадку **не ухудшает, а слегка улучшает** (кросс-сайтовый XHR упирается ещё и в CORS и в `selfRequestsOnly`), но любое будущее ужесточение упрётся в выключенный флаг. Утверждение `samesite == "lax"` заводится в Фазе 2 как **записанное решение**, а не наблюдение.
+3. **Выкат очереди ревизий `0013`…`0020`** (D-26) — веха ложится поверх невыкаченной схемы; связи с htmx нет, но условие «отгруженное работает» остаётся неисполненным.
+4. **Правило «`HX-Request` — не защита».** Заголовок ставит кто угодно; опасен тем, что ВЫГЛЯДИТ как проверка и вытеснит настоящую. Конвенция: читается только в ветвлении формы ответа; гейты G-1/G-2 это и утверждают.
+5. **Правило «перечень гейта меняется вместе с обоснованием».** `test_access_gate.py` утверждает **равенство** множеств, а не вложенность, — новый фрагментный роутер УРОНИТ тест, пока его не классифицируют. Опасность не в обходе, а в соблазне «дописать имя, чтобы позеленело». Обнаруживается такой дефект деньгами или рассылкой от чужого имени.
+
+---
 
 ## Sources
 
 ### Primary (HIGH confidence)
-
-- [PROJECT.md](../PROJECT.md) — validated current product scope, constraints, and no active new requirements.
-- [STACK.md](STACK.md) — locked stack and deployment inventory.
-- [FEATURES.md](FEATURES.md) — implemented feature inventory, dependencies, and future-only scope.
-- [ARCHITECTURE.md](ARCHITECTURE.md) — observed topology, data flow, boundaries, and build-order implications.
-- [PITFALLS.md](PITFALLS.md) — code-observed failure modes, safeguards, and verification topics.
+- `bigskysoftware/htmx@master`: `www/content/migration-guide-htmx-1.md`, `CHANGELOG.md`, `www/content/reference.md`, `www/content/docs.md`, `www/content/attributes/hx-swap-oob.md`, `www/content/headers/hx-location.md` — полный список ломающих изменений, умолчания конфига, семантика `responseHandling`, предупреждение о вложенных OOB для шаблон-фрагментных архитектур
+- `registry.npmjs.org/htmx.org`, `data.jsdelivr.com`, скачанные dist-файлы с jsDelivr и unpkg — `dist-tags.latest = 2.0.10`, размер, embedded-версия, SHA-384, `cmp`-идентичность зеркал
+- `pypi.org/pypi/jinja2-fragments/json` + исходники `jinja2_fragments/{starlette.py,__init__.py}` — прочитаны напрямую при оценке отвергнутого варианта
+- **Эмпирическое исполнение в venv проекта** — latin-1 у заголовков Starlette, отсутствие проверки CRLF, `h11.LocalProtocolError`, умолчание `follow_redirects` в httpx
+- **Вендоренный `app/static/js/htmx.min.js` 1.9.10** — отсутствие `responseHandling` (0 вхождений), `htmx-history-cache` в `localStorage`
+- **Исходники репозитория** — `app/pages/{__init__,common,ads,schedules,accounts,account_groups,billing,history,auth,profile}.py`, `app/routes/uploads.py`, `app/templates/**` (79 шаблонов), `tests/conftest.py:91,260`, `tests/test_pages/{test_access_gate,test_impersonation_gate,test_cookie_flags,test_shell}.py`, `tests/test_templates/test_components.py`
+- **Инвентаризация грепом** по `app/templates/`, `app/pages/`, `tests/` — все числа раздела Reconciled Inventory
+- `.planning/PROJECT.md` §Current Milestone, §Key Decisions, §Active; `.planning/codebase/CONCERNS.md`
 
 ### Secondary (MEDIUM confidence)
+- context7 `/bigskysoftware/htmx` (v1.9.12, v2.0.4) — `hx-swap-oob`, `hx-disabled-elt`, `hx-indicator`, `htmx:responseError`, `responseHandling`, канонические примеры `delete-row`, `edit-row`, `progress-bar`, `file-upload`
+- context7 `/sponsfreixes/jinja2-fragments` — интеграция с FastAPI
+- `github.com/bigskysoftware/htmx/discussions/680` — практика тестирования htmx-приложений
 
-- Official FastAPI, SQLAlchemy, Celery, Docker Compose, Telethon, Baileys, AWS S3, WhatsApp, and Telegram documentation cited in the four detailed research files — framework behavior, integration constraints, and platform-policy context.
+### Tertiary (LOW confidence — требует подтверждения)
+- ⚠️ **Tavily недоступен (ключ отвергнут API)** — веб-часть выполнена встроенным WebSearch, и её доля помечена LOW отдельно от фактов, снятых по коду и официальной документации
+- `alpinejs/alpine#3985`, `htmx#2931`, `v1.htmx.org/extensions/alpine-morph/` — взаимодействие htmx и Alpine; использовано **только для сигнатур отказа**, не для решений
+- `rafa.ee/articles/progressive-enhanced-forms-htmx/`, `oliverjam.es/articles/progressive-enhancement-htmx` — прогрессивное улучшение форм
+- Практика сообщества: 422 для валидации, антипаттерны оптимистичного UI и тостов, поведение `aria-live` при замене узла
 
 ---
-*Research completed: 2026-08-03*
-*Ready for roadmap: yes — as a current-state/reliability decision aid, not a declaration of active implementation requirements.*
+*Research completed: 2026-08-26*
+*Ready for roadmap: yes — при условии, что владелец вынес решение по R-2 и R-3*

@@ -21,7 +21,12 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>{% block title %}Broadcaster{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', path='/css/app.css') }}?v={{ asset_version }}">
-    <script src="{{ url_for('static', path='/js/htmx.min.js') }}?v={{ asset_version }}"></script>
+    {% include "includes/htmx_config.html" %}
+    {# Миграционная очистка ключа снимков истории уехала отсюда во включение
+       выше — к тому же владельцу, что и пара «конфигурация + рантайм»
+       (includes/htmx_config.html). Основание: остаток прежнего рантайма обязан
+       сниматься на КАЖДОМ шелле, а не только при заходе на экран входа —
+       пользователь, из системы не выходящий, не терял бы его никогда. #}
     <script defer src="{{ url_for('static', path='/js/alpine.min.js') }}?v={{ asset_version }}"></script>
 </head>
 <body>

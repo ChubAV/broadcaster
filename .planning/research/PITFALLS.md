@@ -1,239 +1,876 @@
 # Pitfalls Research
 
-**Domain:** SaaS for scheduled advertising posts to Telegram, WhatsApp, and MAX groups
-**Researched:** 2026-08-03
-**Confidence:** HIGH for code-observed failure modes; MEDIUM for platform-policy interpretation
+**Domain:** добавление слоя ПИСЬМА на htmx в действующее серверное Jinja2-приложение (веха v2.1 «HTMX-first»)
+**Researched:** 2026-08-26
+**Confidence:** HIGH по механике htmx и по фактам этого репозитория (проверены по вендоренному `app/static/js/htmx.min.js`, по официальному migration guide и ЭМПИРИЧЕСКИ в venv проекта), MEDIUM по идиоматике (context7 `/bigskysoftware/htmx`), LOW по «как принято в сообществе» (websearch; Tavily недоступен — ключ отвергнут)
 
-## Scope and Evidence
+**Условные имена фаз** (роадмаппер подставит свои):
+* **A — Фундамент** — обновление htmx 1.9.10 → 2.x, контракт ответа, OOB-область в `base.html`, глобальные обработчики, гейты
+* **B — Массовое переписывание** — 47 форм по разделам
+* **C — Финальное упрочнение** — доступность, history/localStorage, тестовые гейты, UAT
 
-This is a brownfield risk register, not a statement that an incident has occurred or a request to expand scope. “Current control” refers only to behavior inspected in the repository. “Phase to address” names a future *roadmap topic* that should be included only if the roadmap elects to improve that risk.
+---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Platform enforcement or account limitation treated as an ordinary transient failure
+### Pitfall 1: 302 внутри htmx-запроса подменяет фрагмент ЦЕЛОЙ страницей
 
 **What goes wrong:**
-An account is restricted, logged out, removed from a group, or receives platform rate limits after advertising activity. Retrying indistinguishably can worsen the restriction and leave schedules appearing active while messages no longer reach their destinations.
+`XMLHttpRequest` следует за редиректом ПРОЗРАЧНО — htmx кода 302 не видит вовсе. Он получает 200 и тело
+страницы-адресата и кладёт его в `hx-target`. Форма, чей обработчик остался с `RedirectResponse(url="/billing?error=pending")`,
+вставляет внутрь карточки полный документ: `<!DOCTYPE html>`, шапку, боковое меню, второй экземпляр
+подвала — и второй экземпляр OOB-области уведомлений с тем же `id`.
+
+В проекте **127 `RedirectResponse`** и **35 POST-обработчиков в `app/pages/`**. Пока форма не переведена
+на htmx, редирект — правильный ответ; в момент, когда на форму вешается `hx-post`, тот же самый
+обработчик становится источником этого дефекта. Это НЕ ошибка — это зелёный 200, и ни один
+существующий тест его не увидит (см. Pitfall 22).
+
+Отдельно опасны редиректы ОТКАЗА, потому что они выглядят как работающая обратная связь:
+`/billing?error=pending` (потолок платёжных намерений), `/billing?expired=1` (гейт доступа),
+`/ads` (не подтверждено владение объявлением). Пользователь увидит нужный текст — внутри вложенной
+копии страницы.
 
 **Why it happens:**
-The product sends through external accounts and protocols whose policy, group-admin decisions, reputation signals, and session lifecycle are outside its control. The current code correctly marks some forbidden/session failures as non-retryable and records group errors, but delivery cannot be guaranteed by the scheduler.
+POST→302→GET — единственный способ, которым это приложение отвечало на письмо все прошлые вехи.
+Разработчик вешает `hx-post` на форму и считает работу сделанной: ответ приходит, что-то отрисовывается.
 
 **How to avoid:**
-Preserve per-account/group health, classify permanent versus retryable errors, pace sends per account, pause or surface unhealthy destinations, and keep a support/re-auth path. Do not market the service as a way to bypass platform policies. Before any future one-to-one WhatsApp capability, design consent, opt-out, template, category, and policy-review controls separately; those rules are not automatically satisfied by the current group workflow.
+1. **Правило ветвления, а не правило маршрута** (форма уже существует в проекте — `app/pages/ads.py:435`,
+   `is_htmx = request.headers.get("HX-Request") is not None`): один обработчик, две ветки, базовая
+   ветка редиректа НИКОГДА не удаляется.
+2. **Гейт по исходнику** — `tests/test_pages/test_htmx_write_contract.py` по образцу
+   `test_impersonation_gate.py`: AST-обход `app/pages/**/*.py`, множество POST-обработчиков, у которых
+   в теле есть `RedirectResponse`, обязано СОВПАДАТЬ с множеством обработчиков, у которых есть чтение
+   `HX-Request`. Обработчик, добавленный будущим планом с одной веткой из двух, роняет тест. Зубы гейта
+   доказываются подачей разборщику изменённой копии исходника — приём в проекте установлен.
+3. **`follow_redirects=True` в htmx-тестах** — иначе см. Pitfall 22.
 
 **Warning signs:**
-Growing `forbidden`, session-unavailable, slow-mode/rate-limit, or sync-failed errors; repeated account reconnections; a sharp success-rate drop for one account; user reports of blocks or removed group access.
+* В свапнутой области появился второй `<nav>`, вторая кнопка «Выйти», второй индикатор автосохранения
+* `document.querySelectorAll('#notification-region').length > 1`
+* Ответ на `hx-post` длиннее 5 КБ там, где ожидалась строка таблицы
 
-**Phase to address:**
-Connector health and delivery reliability, if a future roadmap phase changes sending behavior or platform integrations.
+**Phase to address:** **A** (контракт ответа + гейт), проверка — на каждой форме в **B**
 
 ---
 
-### Pitfall 2: Duplicate or lost sends at the scheduler/queue boundary
+### Pitfall 2: `hx-target` по умолчанию — САМ элемент; форма съедает собственный ответ
 
 **What goes wrong:**
-The same scheduled group post can be dispatched twice, retried after it was accepted by a messenger, or recorded/charged twice. Conversely, a worker can pop a queue/result item and crash before the outcome reaches the database, making a delivered or failed send invisible.
+Умолчание htmx — `hx-target="this"`, `hx-swap="innerHTML"`. `<form hx-post="/ads/5/delete">` без явного
+`hx-target` заменяет СОДЕРЖИМОЕ ФОРМЫ ответом. Форма исчезает вместе с полями, кнопкой и — что важнее —
+вместе с собственным `hx-post`. Второй отправки уже не будет, потому что элемента, который её делал, нет.
+При этом на глаз «что-то произошло», и в UAT это читается как успех.
+
+**Особенность этого репозитория:** `hx-target` в шаблонах — **0 вхождений**. `hx-select` — 0. `hx-boost` — 0.
+Все 22 существующих `hx-get` живут на умолчании. То есть у проекта НЕТ ни одной строки прецедента и ни
+одного теста, закрепляющего правильность цели, а веха вводит `hx-target` сразу на 47 формах.
 
 **Why it happens:**
-The execution path crosses database commits, Celery/Redis queues, per-account workers, and external messenger calls. The scheduler advances `next_run_at` before dispatch; WA/MAX consumers use Redis `BLPOP`, retry by re-enqueueing, and their result processors use destructive `LPOP` before committing database writes. `SendLog.task_id` is indexed but has no uniqueness constraint or observed “already processed” guard. An external API can succeed immediately before a process failure or timeout makes the caller uncertain.
+Умолчание не ошибается — оно тихо делает не то. В `hx-get`-сценариях чтения (ленивая подгрузка карточки)
+умолчание `this` как раз верное, поэтому привычка «цель не указываю» в проекте уже сформирована.
 
 **How to avoid:**
-Treat delivery as at-least-once. Persist a stable dispatch ID before enqueueing; enforce an idempotency key/unique invariant for one logical schedule occurrence + group; make result consumption recoverable (acknowledged stream or durable inbox/outbox); reconcile pending dispatches; and make retries consult the recorded terminal state before sending or billing. Test crashes at every boundary, including after messenger acceptance and before DB commit.
+* **Конвенция:** каждый `hx-post` НЕСЁТ явный `hx-target` ЛИБО явный `hx-swap="none"`. Третьего не дано.
+  Прецедент `hx-swap="none"` в проекте есть — `app/templates/ads/form.html:68`.
+* **Гейт по разметке:** `tests/test_templates/test_htmx_write_attributes.py` — обход `app/templates/**/*.html`
+  регулярным выражением по тегам, несущим `hx-post`; у каждого обязаны быть `hx-target` или `hx-swap="none"`.
+  Тот же гейт закрывает `hx-disabled-elt` и `hx-indicator` (Pitfall 12).
+* `hx-target` указывается **id-селектором конкретной карточки/строки**, а не классом: класс на списке
+  найдёт первый элемент, а не свой.
 
-**Warning signs:**
-Two successful `SendLog` rows with the same task/logical occurrence; a report of duplicate group content; queue/result depth drops without matching logs; balances and successful sends diverge; schedules repeatedly due after Beat overlap or restart.
+**Warning signs:** после первого действия кнопка перестаёт реагировать; форма визуально «схлопнулась»
 
-**Phase to address:**
-Dispatch idempotency and reconciliation—before adding volume, channels, retry changes, or billing changes.
+**Phase to address:** **A** (конвенция + гейт разметки), исполнение — **B**
 
 ---
 
-### Pitfall 3: Timezone and daylight-saving behavior surprises users
+### Pitfall 3: кириллица в значении заголовка `HX-*` роняет ответ в 500
 
 **What goes wrong:**
-An ad fires an hour early/late around a daylight-saving transition, skips a nonexistent local time, or appears not to run because the user selected no days/times. The business impact is higher than for a normal reminder because the user is paying for advertising timing.
+Проверено эмпирически в venv этого проекта:
+
+```
+Response().headers["HX-Trigger"] = '{"notify":{"msg":"Объявление сохранено"}}'
+→ UnicodeEncodeError: 'latin-1' codec can't encode characters in position 18-27
+```
+
+Starlette кодирует значения заголовков в **latin-1**. Продукт — русскоязычный целиком: заголовки
+объявлений, имена групп, тексты ошибок, названия воркеров. ЛЮБАЯ попытка передать сообщение
+пользователю через `HX-Trigger`, `HX-Location` (с русским query-параметром) или `HX-Push-Url`
+кончается 500 — не в тесте, а у первого пользователя, назвавшего объявление по-русски.
 
 **Why it happens:**
-Schedules combine local weekday/time inputs with a stored IANA timezone and convert the next occurrence to UTC. That is the correct broad model, but Python’s construction of local datetimes must have explicitly tested semantics for ambiguous and nonexistent civil times. The current `compute_next_run_at` is deliberately simple: it creates local candidate datetimes and selects the first strictly future time; it does not document a DST policy. Empty day/time arrays result in `next_run_at = None`.
+Тосты через `HX-Trigger` — самый рекламируемый в сообществе способ показать уведомление, и он выглядит
+дешевле, чем OOB-область. Ограничение latin-1 нигде не написано и в англоязычной разработке не всплывает.
 
 **How to avoid:**
-State the product rule for DST (for example, whether the first/second repeated time is used and what happens to skipped times), validate schedule input, render the next run in both user-local time and UTC, recalculate after edits/account changes, and include boundary tests for supported zones. Avoid hard-coding offset calculations.
+Решение вехи «уведомления — OOB-область в `base.html`, а НЕ тосты через `HX-Trigger`» уже принято по
+другому доводу (деградация без JS). **Здесь у него появляется второй, жёсткий довод — и его стоит
+записать в решение**, иначе при первом соблазне «а тут быстрее заголовком» отменят по первому доводу,
+не зная про второй.
 
-**Warning signs:**
-Support reports localized to DST weekends; a mismatch between rendered `next_run_at` and expected wall time; active schedules with `next_run_at` null; recurring sends one hour apart from the user’s expectation.
+* **Конвенция:** значения `HX-*` собираются ТОЛЬКО из серверных констант ASCII и целых идентификаторов.
+  Никакого пользовательского и никакого локализованного текста.
+* **Гейт по исходнику:** в `test_htmx_write_contract.py` — AST-проверка, что каждое присваивание в
+  `response.headers["HX-*"]` имеет правым операндом либо строковый литерал, либо f-строку, все
+  подстановки которой — целые (`ad.id`, `log_id`). Форма проверки «значение из замкнутого множества»
+  в проекте есть — `PAYMENT_ERROR_MESSAGES` / `_payment_error_message`.
 
-**Phase to address:**
-Scheduling correctness, if calendars, new recurrence rules, or timezone UX are changed.
+**Warning signs:** 500 на сохранении объявления с русским заголовком; в логах `UnicodeEncodeError` из
+`starlette/datastructures.py`
+
+**Phase to address:** **A** — до того, как появится первый `HX-*`-заголовок в новом коде
 
 ---
 
-### Pitfall 4: Balance, quota, and delivery fall out of sync
+### Pitfall 4: пользовательский ввод в `HX-Location` / `HX-Redirect` — инъекция заголовка и открытый редирект
 
 **What goes wrong:**
-A customer receives more sends than their balance permits, is charged more than once for a logical delivery, or sees a stale “allowed” result when a large due batch fans out across groups.
+Проверено эмпирически: Starlette **НЕ отвергает** CRLF в значении заголовка —
+`headers["HX-Location"] = "/ads\r\nX-Evil: 1"` доезжает до `raw_headers` как есть. Отвергает уже h11
+(`LocalProtocolError: Illegal header value`), то есть в лучшем случае это 500 с оборванным ответом,
+а не response splitting. Но защиты на уровне фреймворка НЕТ, и от реализации HTTP в ASGI-сервере
+(проект тянет `uvicorn[standard]`, то есть httptools) зависит, останется ли это DoS.
+
+Второй, более вероятный дефект — **открытый редирект**. Веха переводит 9 форм авторизации, и успех
+уходит `HX-Location`. Классическая надстройка над логином — `?next=`. Сегодня параметра `next` в
+`app/pages/*.py` **нет ни одного** (проверено). Он появится ровно тогда, когда «после входа возвращать
+туда, откуда пришёл» станет очевидной задачей — и `HX-Location: {{ next }}` уведёт человека на чужой
+домен ПОСЛЕ успешного входа, то есть с только что выданной cookie в браузере.
 
 **Why it happens:**
-There is a good current control: `deduct_message` performs a conditional atomic decrement and writes a balance transaction. However, allowance is first cached per user and checked while scheduling, then messages are sent externally, and the decrement return value is not used to prevent a later successful send from remaining successful. Multiple group tasks can therefore be authorized from one cached pre-check; duplicate result processing would also create another deduction absent a task-id uniqueness/reconciliation rule.
+`HX-Location` выглядит как «просто редирект», а привычка проверять адрес назначения нарабатывается
+на `RedirectResponse`, где та же дыра тоже есть, но её там пока не завели.
 
 **How to avoid:**
-Define the charge event explicitly (normally one successfully accepted group send), reserve or atomically authorize each unit before dispatch, associate every reservation/settlement with the durable dispatch ID, make settlement idempotent, invalidate/check cache only as an optimization rather than authorization truth, and provide a reconciliation report for delivery logs versus balance transactions.
+* **Конвенция:** адрес в `HX-Location`/`HX-Redirect` берётся из `request.url_for()` или из литерала.
+  Строка из запроса не попадает туда никогда.
+* Если `?next=` всё-таки заводится — **белый список путей**, а не проверка префикса `/`
+  (`//evil.com` начинается с `/`). Форма «неизвестный код даёт пустую строку» в проекте установлена
+  (`_payment_error_message`) — применить её же к назначению.
+* Гейт из Pitfall 3 закрывает и это одним утверждением: правый операнд `HX-*`-присваивания —
+  литерал или f-строка с целыми.
 
-**Warning signs:**
-Negative/incorrect balances, more successful log rows than billable balance transactions, clusters of sends immediately around a balance boundary, or repeated transactions associated with one task ID.
+**Warning signs:** в `HX-Location` встречается имя переменной формы; 500 с `LocalProtocolError`
 
-**Phase to address:**
-Billing and dispatch integrity—before changing pricing, quotas, or batch throughput.
+**Phase to address:** **A** (гейт), повторная проверка — при переводе форм авторизации в **B**
 
 ---
 
-### Pitfall 5: Per-account worker lifecycle becomes an unobserved delivery bottleneck
+### Pitfall 5: канал уведомлений теряет белый список кодов и становится каналом XSS
 
 **What goes wrong:**
-WA/MAX queues build up because a container cannot start, has lost its session, exits after idle, or repeatedly reconnects. The main app remains healthy while messages are delayed indefinitely or a newly queued task waits for the container manager cycle.
+Сегодня обратная связь идёт `?error=pending` → страница-адресат подбирает строку по коду, и
+**неизвестный код печатает ПУСТУЮ строку** — это записанное решение (`_payment_error_message`,
+докстринг: «владелец ссылки не должен уметь сообщить пользователю о событии, которого не было»).
+Когда обратная связь переезжает в OOB-область, которую рисует САМ POST-обработчик, соблазн очевиден:
+передать в шаблон готовый текст, а не код.
 
-**Why it happens:**
-The isolation model intentionally uses a container, session volume, heartbeat, queue, retry delays, and idle shutdown per account. This reduces cross-account blast radius but introduces orchestration state that the main process cannot infer merely from “schedule due.” The current workers have rate limiting, reconnect attempts, heartbeats, cleanup, and container management, but no code-observed end-to-end alert tying queue age, heartbeat freshness, account status, and delivery latency together.
+Два следствия, оба тихие:
+1. Свойство «неизвестный код печатает пустую строку» исчезает — не отменяется решением, а испаряется
+   вместе с механизмом, который его нёс.
+2. В текст начинают попадать пользовательские и СТОРОННИЕ данные. У проекта уже есть принятое решение
+   показывать владельцу аккаунта **текст стороннего исключения httpx** в плашке ошибки синхронизации
+   (R-03-09, решение владельца). Пока эта плашка рендерится Jinja с автоэкранированием — она безопасна.
+   Стоит появиться `|safe` в OOB-области ради «переноса строки в сообщении» — и текст, пришедший от
+   стороннего сервера, исполняется в браузере владельца.
+
+**Дополнительно, специфично для `hx-swap-oob`:** OOB-фрагмент вставляется в документ по своему `id` вне
+зависимости от того, куда целился запрос. Значит компрометация ОДНОГО обработчика достаёт до ЛЮБОЙ
+области страницы, включая шапку и меню. `hx-swap-oob` расширяет радиус поражения XSS; экранирование от
+этого не спасает — спасает только то, что его не отключили.
 
 **How to avoid:**
-Use a lifecycle state machine with bounded startup/reconnect failure, inspect heartbeat age and queue age, alert on stuck/absent consumers, expose worker health and queue lag beside customer-visible status, and rehearse restart/re-auth/replay recovery. Keep account-scoped rate limits; do not scale consumers for the same account without preserving ordering/session safety.
+* **Конвенция:** OOB-область уведомлений принимает **код**, а не текст. Отображение «код → строка»
+  живёт в одном месте на сервере, неизвестный код даёт пустую область. Прямой перенос
+  `PAYMENT_ERROR_MESSAGES` на весь продукт.
+* **Гейт по разметке:** `|safe` и `Markup(` в шаблонах — **0 вхождений** сегодня (проверено; единственное
+  упоминание autoescape — комментарий в `account_groups/list.html:110`). Закрепить нулём:
+  `test_components.py` уже читает шаблоны как текст; добавить утверждение «`|safe` в
+  `app/templates/**` не встречается». Прецедент нулевого гейта в проекте есть —
+  `innerHTML`/`outerHTML`/`insertAdjacentHTML` = 0.
+* `Jinja2Templates` FastAPI включает `autoescape` по умолчанию — **зафиксировать это утверждением**,
+  а не считать данностью: одна строка `Environment(autoescape=False)` в будущем плане снимает защиту
+  во всех 79 шаблонах разом.
 
-**Warning signs:**
-Increasing `wa:max:queue:<account>` length, missing/stale heartbeat, endpoint key churn, sync failures, containers restarting, or a gap between due schedule time and `SendLog.sent_at`.
+**Warning signs:** в сигнатуре обработчика появился параметр `message: str`; в шаблоне OOB-области —
+`|safe`; текст ошибки в плашке содержит `<`
 
-**Phase to address:**
-Worker lifecycle observability and resilience, if operational scale/reliability work is prioritized.
+**Phase to address:** **A** (устройство области + гейт `|safe`), применение — **B**
 
 ---
 
-### Pitfall 6: Messenger credentials, advertising content, and assets are treated as ordinary application data
+### Pitfall 6: `hx-vals` — второй слой экранирования, который автоэкранирование Jinja НЕ закрывает
 
 **What goes wrong:**
-A database backup, overly broad admin/log access, exposed session volume, or public media configuration exposes a Telegram session string, a WhatsApp/MAX session, customer ad copy, group names, or uploaded images. Compromise of a connected account can lead to spam, account loss, and customer harm.
-
-**Why it happens:**
-Messenger sessions are authentication material. The inspected `MessengerAccount` model stores `credentials` and `session_data` as text, and account pages assign session strings/phone values directly. This review found no application-level field encryption in those paths; deployment-level encryption may exist but was not verified. Image delivery derives URLs from an `s3_public_url` configuration, so access policy must be intentional. Worker logs also include task/group identifiers and shortened message captions.
+`hx-vals='{"title": "{{ ad.title }}"}'` выглядит безопасно: Jinja экранирует `"` в `&#34;`. Но htmx читает
+атрибут через `getAttribute()`, то есть получает уже РАСКОДИРОВАННУЮ строку — с настоящей кавычкой — и
+парсит её как JSON. Заголовок объявления `Скидка 50" на всё` ломает JSON и в зависимости от содержимого
+добавляет в запрос ЛИШНИЙ параметр с управляемым именем. Автоэкранирование HTML корректно и при этом
+бесполезно: слоёв два, а закрыт один.
 
 **How to avoid:**
-Encrypt session secrets at rest with managed/key-rotatable encryption, narrowly restrict DB/backups/worker volumes and Docker access, redact credentials and ad text from logs, set retention/deletion rules, use least-privilege storage access (private objects with controlled URLs when appropriate), and force re-auth/revoke sessions on account deletion or suspected exposure. Validate cross-tenant authorization for every account, group, history, and asset operation.
+* **Конвенция:** содержимое `hx-vals` собирается ТОЛЬКО фильтром `tojson`:
+  `hx-vals='{{ {"title": ad.title} | tojson }}'`. Ручная сборка JSON-строки в шаблоне запрещена.
+* **Гейт по разметке:** в `test_htmx_write_attributes.py` — `hx-vals`, значение которого содержит `{{`
+  вне `| tojson`, роняет тест.
+* `hx-vals='js:...'` **запрещено**: требует `allowEval`, не деградирует и невидимо для гейта v2.0
+  о запрете строковой сборки разметки.
 
-**Warning signs:**
-Session strings/QR payloads in logs, unexpected account activity, public object listing/access, credentials present in backups or support exports, cross-tenant IDs returning data, or long-lived sessions surviving an intended revocation.
+**Warning signs:** в шаблоне `hx-vals='{"` ; в запросе появился параметр, которого нет в форме
 
-**Phase to address:**
-Security and data-governance hardening, before enterprise expansion or any broader data-sharing feature.
+**Phase to address:** **A** (конвенция + гейт), применение — **B**
 
 ---
 
-### Pitfall 7: Aggregate metrics hide a broken delivery path
+### Pitfall 7: гейты доступа НЕ обходятся фрагментом — но их ОТКАЗ становится нечитаемым
 
-**What goes wrong:**
-Prometheus/Grafana/Loki are available, but a delivery outage is noticed from customers rather than alerts because only broad counts are visible. A growing backlog, stale worker heartbeat, repeated retry, policy rejection, or late execution can be masked by a still-healthy web service.
+**Прямой ответ на вопрос:** нет, возврат фрагмента **не обходит** ни `require_access`, ни зависимость
+запрета имперсонации. Оба навешены зависимостями (`router.include_router(ads_router, dependencies=[Depends(require_access)])`,
+`app/pages/__init__.py:126-148`), то есть срабатывают ДО обработчика и независимо от типа ответа.
+Тип ответа на это влиять не может в принципе.
 
-**Why it happens:**
-The current business metrics aggregate active schedules/users and total send-log counts by messenger/status. They do not, in inspected code, model freshness, queue depth/age, dispatch-to-send latency, retry count, result-consumer loss, or expected-versus-actual occurrences. Logs have task IDs, but an end-to-end correlation/alert contract is not documented.
+**What goes wrong — другое:**
+
+1. **Отказ гейта доступа — это 302 на `/billing?expired=1`.** Внутри htmx-запроса это Pitfall 1 в чистом
+   виде: htmx следует за редиректом и вставляет ПОЛНУЮ страницу тарифов внутрь карточки объявления.
+   Человек с истёкшим доступом получает не «оплатите», а визуальный мусор.
+2. **Отказ API-гейта — это JSON.** Шесть ручных `fetch()` переезжают на HTML-фрагменты; `/api/uploads/image`
+   живёт в `app/routes/uploads.py` и закрыт `get_current_user_id_with_access`, чей отказ — JSON с кодом.
+   На 4xx htmx по умолчанию **не свапает вовсе** (Pitfall 21) — то есть отказ доступа станет полностью
+   невидимым.
+3. **Новый фрагментный роутер, добавленный мимо перечня.** Здесь гейты как раз работают ЗА нас:
+   `test_access_gate.py::test_pages_gate_covers_exactly_the_declared_routers` утверждает
+   `set(included) == GATED_ROUTERS | OPEN_ROUTERS` — объединение, а не подмножество. Роутер, заведённый
+   планом вехи под фрагменты, УРОНИТ тест, пока его не классифицируют явно. То же у
+   `test_impersonation_gate.py::test_every_mutating_route_is_classified` на 49 изменяющих маршрутах.
+   Опасность не в обходе, а в **соблазне «дописать роутер в перечень, чтобы тест позеленел»** без
+   решения о том, закрыт он или открыт.
 
 **How to avoid:**
-Define SLOs around the project success metric—scheduled sends completed at the intended time—then emit metrics/alerts for due schedules, dispatches, queue lag, worker heartbeat, retries, terminal outcomes, lateness, and reconciliation gaps. Keep high-cardinality identifiers in logs/traces rather than metric labels.
+* **`require_access` учится отвечать htmx-запросу.** Отказ смотрит на `HX-Request` и отдаёт
+  `HX-Location: /billing?expired=1` (ASCII-путь — см. Pitfall 3) вместо 302. **Одно место, одна правка** —
+  зависимость общая на 6 роутеров. То же для зависимости запрета имперсонации.
+* **Тест на каждой поверхности:** параметризованный обход — на htmx-запрос к закрытому маршруту
+  приходит `HX-Location`, а не 302 и не JSON. Форма «файл держит обе поверхности, чтобы перечень
+  нельзя было расширить на одной, забыв про другую» в `test_access_gate.py` уже есть — дополнить её
+  третьей группой `-k htmx`, а не заводить новый файл.
+* **Правило вехи:** перенос маршрута из `app/routes/` в `app/pages/` (или наоборот) — РЕШЕНИЕ,
+  записываемое в двух гейтах сразу, а не правка перечня ради зелени.
 
-**Warning signs:**
-Flat success totals alongside increased queue depth, long delay from `next_run_at` to `sent_at`, high retry/reconnect activity, absence of results during business hours, or a sudden channel-specific success-rate drop.
+**Warning signs:** гейт-тест покраснел, и первое действие — добавить имя в множество; истёкший
+пользователь видит вложенную страницу тарифов; загрузка изображения молча ничего не делает
 
-**Phase to address:**
-Operational observability and SLOs, before increased customer volume or stricter reliability commitments.
+**Phase to address:** **A** (правка зависимостей + третья группа в гейт-тесте) — ДО массового
+переписывания, иначе каждая форма унаследует дефект
+
+---
+
+### Pitfall 8: CSRF — `SameSite=Lax` держит и после перехода на XHR, но три способа её снять появляются именно сейчас
+
+**Текущая посадка (проверено):** CSRF-токенов в проекте **0**. Cookie сессии:
+`httponly=True, samesite="lax", secure=settings.cookie_secure` (`app/pages/auth.py`), умолчание
+`cookie_secure` — выключено (аварийный выключатель под HTTP-only nginx; долг известен и назван).
+`.planning/codebase/CONCERNS.md` уже помечает отсутствие CSRF риском.
+
+**Ответ по существу:** переход POST-форм на `hx-post` **посадку не ухудшает, а слегка улучшает**.
+`SameSite=Lax` не отправляет cookie при кросс-сайтовой отправке формы (не top-level GET-навигация) —
+это и сегодня основная защита. Кросс-сайтовый XHR/fetch к чужому origin вдобавок упирается в CORS
+(ответ не читается) и, с htmx 2.x, в `selfRequestsOnly: true` на своей стороне. Отдельный CSRF-токен
+веха не обязана вводить.
+
+**What goes wrong — три способа это сломать, и все три вводятся именно этой вехой:**
+1. **Ослабление `SameSite` до `none`.** Понадобится, если что-то встроят во фрейм. `none` требует
+   `secure` — а `cookie_secure` по умолчанию ВЫКЛЮЧЕН, то есть комбинация даст молча не сохраняемую
+   cookie (человеку это видно как «пароль не подходит» — ровно тот дефект, ради которого выключатель
+   и заводили).
+2. **Проверка `HX-Request` как «защиты от CSRF».** Заголовок — не защита: он лишь не ставится
+   кросс-сайтовой формой, но и не является доказательством. Опасно то, что он ВЫГЛЯДИТ как проверка
+   и вытеснит настоящую.
+3. **`selfRequestsOnly` откручивают обратно в `false`** при обновлении на 2.x, потому что что-то
+   перестало работать (см. Pitfall 17).
+
+**How to avoid:**
+* **Тест-утверждение:** `tests/test_pages/test_cookie_flags.py` уже сверяет НАБОРЫ атрибутов cookie.
+  Добавить туда утверждение `samesite == "lax"` как ЗАПИСАННОЕ решение, а не как наблюдение — тогда
+  смена на `none` станет правкой в двух местах.
+* **Конвенция:** `HX-Request` используется ТОЛЬКО для выбора формы ответа. Ни одна проверка
+  безопасности на него не смотрит. Гейт из Pitfall 1 это и закрепляет: чтение `HX-Request` встречается
+  только в ветвлении ответа.
+* **Закрыть долг `cookie_secure`** (он и так в §Active как BLOCKER) — иначе любое будущее ужесточение
+  упрётся в выключенный флаг.
+* **Не откручивать `selfRequestsOnly`.** Если внешний адрес действительно нужен — точечный
+  `htmx:validateUrl`, а не глобальное `false`.
+
+**Warning signs:** в diff появилось `samesite="none"`; в обработчике `if not request.headers.get("HX-Request"): raise`;
+в `base.html` появился `htmx.config.selfRequestsOnly = false`
+
+**Phase to address:** **A** (утверждение о `samesite` + конвенция), долг `secure` — **C** или отдельный todo
+
+---
+
+### Pitfall 9: `hx-push-url` кладёт снимок страницы в **localStorage** — включая админку и имперсонацию
+
+**What goes wrong:**
+Проверено по вендоренному `app/static/js/htmx.min.js`: ключ `htmx-history-cache`, хранилище —
+**localStorage** (не sessionStorage), 4 и 7 вхождений соответственно. Умолчание `historyCacheSize` — 10.
+Каждое `hx-push-url` сохраняет снимок разметки страницы в localStorage, откуда он **переживает выход
+из системы и закрытие вкладки**.
+
+> ⚠️ **Поправка (2026-08-27, Фаза 7).** Измерение «4 и 7» выше снято с рантайма **1.9.10**, который
+> Фаза 7 УБРАЛА. Оно сохранено как история — раздел верен для того рантайма и объясняет, почему
+> `hx-push-url` не ставится на каждую форму, — но **рассуждать о хранилище по этому разделу без
+> настоящей поправки НЕЛЬЗЯ.** Для отгруженного **2.0.10** те же два счёта равны **0 и 9**:
+> `localStorage` рантайм не знает вовсе, свои снимки держит в `sessionStorage` (умирает вместе со
+> вкладкой) и при `historyCacheSize <= 0` чистит свой store **сам**, в функции `zt()`. Практическое
+> следствие для восьми последующих фаз: остаток в `localStorage` может принадлежать только прежнему
+> 1.9.10, сам он не убывает и снимается разовой миграционной строкой в
+> `app/templates/includes/htmx_config.html`. Ложная посылка, взятая отсюда без поправки, уже стоила
+> Фазе 7 блокера верификации (07-VERIFICATION.md, GAP 1).
+
+Веха объявляет `hx-push-url` одним из **четырёх свойств качества на КАЖДОЙ форме**. Следствия для
+этого продукта конкретны:
+* Админ, вошедший **под пользователем** (RFC 8693 `act`), оставляет в localStorage снимки чужих экранов.
+* Страница платежей и история платежей (суммы, даты, идентификаторы ЮKassa) остаются на диске.
+* Админские подразделы «Пользователи», «Платежи», «Логи» — то же самое.
+
+Это не XSS и не утечка по сети — это данные, доступные любому следующему человеку за тем же браузером
+и любому скрипту на том же origin.
+
+**Why it happens:**
+`hx-push-url` продаётся как UX-свойство («Back работает»), а его побочный эффект — кеш в localStorage —
+в описании атрибута не написан; он написан в разделе безопасности, который читают отдельно.
+
+**How to avoid:**
+* **Решение вехи, которого сейчас нет:** `hx-push-url` ставится там, где адрес ДЕЙСТВИТЕЛЬНО меняется
+  (создание объявления — прецедент `HX-Push-Url` в `app/pages/ads.py:522`), а не «на каждой форме».
+  Тумблер расписания адрес не меняет — `hx-push-url` на нём вреден дважды (Pitfall 19).
+* **`htmx.config.historyCacheSize = 0`** в `base.html` — одна строка, снимает класс целиком, ценой
+  перезапроса страницы при Back. Для продукта с деньгами и имперсонацией цена приемлема.
+* Либо точечно `hx-history="false"` на `<body>` шаблонов админки, биллинга и любой страницы под `act`.
+* **Гейт по разметке:** `test_shell.py` уже читает `base.html` — добавить утверждение о наличии
+  выбранной строки конфигурации. Строка, снятая будущим планом, роняет тест.
+
+**Warning signs:** `localStorage.getItem('htmx-history-cache')` непуст после выхода;
+в снимке видно чужое имя пользователя
+
+**Phase to address:** **A** (конфигурация в `base.html`), пересмотр объёма `hx-push-url` — **A**, проверка — **C**
+
+---
+
+### Pitfall 10: «форма работает без JS» тихо становится ложью — пять способов
+
+Это самый вероятный класс регрессии вехи: **рамка объявлена, тесты `*_degrades_without_alpine`
+существуют в 4 файлах, но они проверяют ALPINE-деградацию, а не HTMX-деградацию**. Форма, у которой
+`action` уехал на фрагментный маршрут, эти тесты пройдёт.
+
+| # | Способ | Как выглядит | Как ловится в CI |
+|---|--------|--------------|------------------|
+| 10.1 | `action` указывает на фрагментный маршрут | `action="/ads/5/row"` — без JS браузер уходит на голый `<tr>` без шапки, стилей и навигации | **Гейт разметки:** множество значений `action` ⊆ множество маршрутов, отдающих ПОЛНЫЙ документ. Реализуемо AST-обходом `app/pages/**` + разбором шаблонов; форма гейта — `test_access_gate.py` |
+| 10.2 | `action` ИСЧЕЗ, остался только `hx-post` | без JS кнопка ничего не делает | **Гейт разметки:** каждый тег с `hx-post` — это `<form>`, у которого есть `method="post"` и непустой `action`. Одно регулярное выражение по `app/templates/**/*.html` |
+| 10.3 | Кнопка `hx-post` ВНЕ формы | `<button hx-post="/schedules/5/toggle">` в строке таблицы — без JS мёртвая | Тот же гейт 10.2 (тег с `hx-post` обязан быть `<form>`). Проект уже прошёл этот урок на `confirm()` → панель подтверждения с настоящей формой POST (14 мест) |
+| 10.4 | `hx-vals` несёт то, чего форма не шлёт | htmx-путь передаёт `ad_id`, базовый — нет; сервер валится или создаёт сироту | **Гейт разметки:** ключи `hx-vals` ⊆ имена `<input name=...>` внутри той же формы. Разбор шаблона, без браузера |
+| 10.5 | Скрытое поле заполняется JS | `<input type="hidden" id="ad-id-field">` — заполнено OOB-ответом; без JS пусто | **Тест поведения:** POST на `action` формы БЕЗ этого поля обязан быть осмысленным (создание, а не 500). Прецедент в проекте есть — `autosave_response.html:34` заполняет `#ad-id-field` внеполосно, и базовый путь `/ads/new` без него работает |
+| 10.6 | Обработчик перестал отдавать ветку редиректа | «убрал мёртвый код» | **Гейт Pitfall 1** (два множества обработчиков должны совпасть) |
+
+**Отдельный подпункт:** тесты `*_degrades_without_alpine` придётся ПЕРЕИМЕНОВАТЬ или дополнить
+парой `*_degrades_without_htmx`. Оставить прежнее имя, добавив в него htmx-утверждения, значит
+получить файл, чьё имя врёт про предмет — ровно тот дефект, который проект ловит в других местах.
+
+**Phase to address:** гейты — **A** (иначе первая же форма в **B** проскочит), исполнение — **B**,
+сводный обход всех 47 форм — **C**
+
+---
+
+### Pitfall 11: `hx-disabled-elt` принимают за защиту от двойной отправки
+
+**What goes wrong:**
+`hx-disabled-elt` — **клиентское** свойство: htmx сериализует запрос, затем ставит `disabled`, затем
+снимает по завершении. Оно закрывает нетерпеливый двойной клик и НЕ закрывает ничего больше:
+отключённый JS, повтор из devtools, обрыв ответа и повторное нажатие, две вкладки, Back+повтор.
+Снятие POST→302→GET убирает и защиту от F5 (браузер перестаёт предупреждать «повторить отправку»,
+потому что адрес не менялся) — но она и была слабой.
+
+**Специфика денег и рассылки в этом продукте:**
+* **ЮKassa.** Потолок одновременных намерений уже есть — `PendingIntentCapError` ВНУТРИ создания платежа
+  (не шагом обработчика, сознательно). Но **частичный уникальный индекс «не более одного незакрытого
+  подписочного намерения» НЕ построен** — это записанный открытый пункт §Active. То есть защита держится
+  проверкой в коде, а не свойством схемы, и две ОДНОВРЕМЕННЫЕ отправки её проходят обе.
+  htmx делает одновременность дешевле: без перезагрузки страницы кнопка остаётся живой и нажимаемой.
+* **Повтор рассылки.** `_claim_retry_slot` / `_release_retry_slot` (`app/pages/history.py:538`) —
+  удержание с TTL, **переживающее ответ**, и в докстринге прямо сказано «в том числе при выключенном
+  JavaScript». Это правильный образец, и его стоит назвать образцом вехи.
+* **Синхронизация групп** — внутрипроцессная заявка, освобождаемая в `finally` (T-03-15).
+
+**How to avoid:**
+* **Конвенция «два замка»:** `hx-disabled-elt` — обязателен (см. гейт Pitfall 2), но он объявляется
+  свойством UX, а не безопасности. Серверная защита обязана существовать НЕЗАВИСИМО и покрываться
+  тестом без `HX-Request`.
+* **Гейт по исходнику:** множество опасных маршрутов (создание платежа, повтор отправки, удаление,
+  синхронизация, блокировка) выписано в тесте ЯВНО, и для каждого утверждается наличие серверного
+  удержания/потолка. Форма — `test_impersonation_gate.py` (перечень выписан в тесте, а не выведен
+  из исходника).
+* **Построить частичный уникальный индекс** вместе с ближайшей ревизией по `payments` — распоряжение
+  уже записано в §Active; веха htmx повышает его приоритет, и это стоит сказать роадмапперу вслух.
+
+**Warning signs:** в PR добавлен `hx-disabled-elt` и удалена серверная проверка; два `payments` со
+статусом `pending` у одного пользователя
+
+**Phase to address:** конвенция — **A**, перевод денежной формы — **B** (и НЕ первым, а после
+отработки контракта на безопасном разделе), индекс — **C** или отдельный todo
+
+---
+
+### Pitfall 12: `hx-sync="this:queue last"` на денежной форме означает «нажми дважды — заплатишь дважды»
+
+**What goes wrong:**
+Проект уже применяет `hx-sync="this:queue last"` — на форме автосохранения объявления
+(`ads/form.html:67`), и там это ПРАВИЛЬНО: наложение автосохранения и «Сохранить» разрешается очередью,
+а не отменой, иначе замещающий запрос уходил бы с пустым скрытым полем и порождал сироту-черновик
+(записано решением, покрыто `test_save_during_autosave_overlap_lands_in_one_published_ad`).
+
+Опасность — в **копировании этой строки на все 47 форм** как «проверенного паттерна». `queue last`
+означает «второй запрос НЕ отменяет первый, а выполняется ПОСЛЕ него». На форме создания платежа это
+буквально два создания намерения подряд. На форме повтора рассылки — две задачи в очереди.
+
+**How to avoid:**
+* **Конвенция по семантике действия, а не по образцу:**
+  * идемпотентное, повторяемое, последняя запись побеждает (автосохранение, фильтры) → `queue last`;
+  * НЕидемпотентное (платёж, повтор, удаление, блокировка) → `hx-sync="this:drop"` **плюс** серверное
+    удержание (Pitfall 11). `drop` отбрасывает второй запрос, пока первый в полёте — ровно нужное.
+* **Гейт по разметке:** формы из перечня опасных маршрутов (тот же перечень, что в Pitfall 11) не
+  имеют права нести `queue`. Проверяется чтением шаблона.
+
+**Warning signs:** `hx-sync="this:queue last"` встречается более чем в одном шаблоне и без объяснения
+в комментарии рядом
+
+**Phase to address:** **A** (конвенция + гейт), применение — **B**
+
+---
+
+### Pitfall 13: Alpine теряет состояние на свапе — и свапаемые фрагменты в этом проекте ИМЕННО корни `x-data`
+
+**What goes wrong:**
+`x-data` — корень компонента Alpine. htmx заменяет узел; новый узел Alpine инициализирует ЗАНОВО, со
+значениями по умолчанию из атрибута. Всё, что пользователь наменял в состоянии, исчезает.
+
+**Это не гипотеза — это пересечение по построению.** 14 шаблонов с `x-data` (проверено), и среди них
+ровно те, что становятся целями `hx-target` по контракту вехи («`hx-target` на конкретную
+карточку/строку»):
+
+```
+account_groups/includes/group_row.html      ads/includes/ad_card.html
+schedules/includes/schedule_row.html        ads/includes/sched_card.html
+history/includes/history_card.html          admin/includes/queue_row.html
+accounts/partials/sync_status_card.html     admin/includes/worker_row.html
+components/modal.html                       components/filters.html
+```
+
+Конкретные сигнатуры отказа:
+1. **Карточка схлопывается после действия.** Раскрытая карточка расписания (`sched_card.html`) после
+   тумблера возвращается свёрнутой — потому что `x-data="{ open: true }"` отрисовано сервером как
+   `open: false`. Симптом читается как «страница дёрнулась», а не как дефект.
+2. **Панель подтверждения (`components/modal.html`) остаётся открытой или исчезает вместе со строкой.**
+   Панель живёт ВНУТРИ свапаемой строки. Успешное удаление свапает строку → панель уходит вместе с ней
+   (это как раз хорошо). Отказ удаления возвращает строку → панель закрыта, и человек не понимает,
+   почему нажатие ничего не дало.
+3. **Фильтры (`components/filters.html`) сбрасываются** при OOB-обновлении соседней области, если
+   OOB задел общего предка.
+4. **Утечка слушателей.** Alpine вешает слушатели на `document` (`@click.outside`, `@keydown.escape`).
+   Alpine 3 снимает их через `MutationObserver` на удалении узла — при штатном `hx-swap` это работает.
+   Утечка возникает, когда узел удаляют МИМО обоих (`element.remove()` в ручном JS) или когда
+   `x-data` вложен в OOB-цель, заменяемую вместе с предком в том же ответе — порядок снятия/навешивания
+   не гарантирован.
+5. **Порядок инициализации.** `htmx:afterSwap` может отработать РАНЬШЕ, чем Alpine дошёл до нового
+   поддерева (Alpine реагирует на мутации асинхронно). Код в `htmx:afterSwap`, обращающийся к
+   `$data`/`Alpine.$data(el)`, получает `undefined` — плавающий дефект, воспроизводимый под нагрузкой.
+
+**How to avoid:**
+* **Правило вехи, которое надо принять явно: состояние Alpine, ПЕРЕЖИВАЮЩЕЕ действие, живёт НАД целью
+  свапа, а не внутри неё.** Раскрытость карточки — либо серверное свойство (в проекте прецедент есть:
+  `sched: int | None = Query(None)` в `ads_edit`, «какая карточка отрендерена развёрнутой» — базовый
+  путь без JS), либо `x-data` поднимается на обёртку, а свапается внутренность.
+* **Не тянуть `alpine-morph`/`idiomorph`.** Это новая зависимость и новый вендоренный файл при правиле
+  «внешних ресурсов 0, build-шага нет». Дешевле держать состояние снаружи цели.
+* **Конвенция:** элемент, несущий `hx-target`-id, НЕ несёт `x-data` — и наоборот.
+* **Гейт по разметке:** `test_htmx_alpine_boundary.py` — обход шаблонов; тег, у которого одновременно
+  есть `x-data` и `id`, совпадающий с каким-либо `hx-target` в проекте, роняет тест. Множество
+  `hx-target`-селекторов собирается тем же обходом, то есть гейт замкнут на себя и не требует перечня.
+* **Конвенция:** в `htmx:afterSwap` не обращаться к состоянию Alpine. Обмен идёт через DOM-атрибуты
+  и события, а не через `$data`.
+
+**Warning signs:** раскрытая карточка схлопывается после действия; `Alpine.$data(...)` возвращает
+`undefined` в обработчике свапа; после N действий страница тормозит (утечка слушателей)
+
+**Phase to address:** **A** (правило границы + гейт), перепланировка конкретных шаблонов — **B**
+по разделам; раздел с самым плотным Alpine (`accounts` — 3 шаблона) переводить НЕ первым
+
+---
+
+### Pitfall 14: обновление htmx 1.9.10 → 2.x — то, что меняется ТИХО
+
+Официальный migration guide перечисляет 9 ломающих изменений. Для этого репозитория (79 `hx-*`
+атрибутов, infinite scroll, 0 расширений, 0 `hx-on`) большинство безобидны. Опасны те, что **не
+падают, а меняют поведение**:
+
+| Изменение | Громко или тихо | Влияние на этот проект |
+|---|---|---|
+| `htmx.config.scrollBehavior`: `'smooth'` → `'instant'` | **ТИХО** | Прокрутка после свапа перестаёт быть плавной. Само по себе мелочь, но на **infinite scroll `hx-trigger="revealed"`** мгновенная прокрутка может вызвать каскад: подгруженный блок мгновенно оказывается «revealed», и следующая подгрузка стартует сразу. Проверить руками на истории/дашборде |
+| `selfRequestsOnly`: `false` → **`true`** | **ТИХО** (запрос просто не уходит) | В проекте внешних адресов в `hx-*` нет (внешних ресурсов 0), то есть по факту безопасно. Но **это же изменение — единственное новое средство защиты, которое веха получает бесплатно**; главная опасность — открутить его обратно, отлаживая что-то другое |
+| `responseHandling` (НОВОЕ в 2.x) | Меняет умолчание | 4xx/5xx: **свапа нет, только `htmx:responseError`**. 204: тишина без ошибки. Это делает глобальный обработчик ошибок ОБЯЗАТЕЛЬНЫМ (Pitfall 17), а не «свойством качества» |
+| DELETE: параметры в URL, а не в теле | Тихо (параметры теряются) | `hx-delete` в проекте **0**. Веха обязана этого не менять: конвенция — только `hx-post`, потому что `<form method="delete">` не существует и любой `hx-delete` немедленно ломает деградацию |
+| `hx-on="evt: code"` → `hx-on:kebab-event` | **Громко** (не сработает) | `hx-on` в проекте **0** — проходим мимо. Заодно: `hx-on:` вводить и не начинать (Pitfall 6, требует `allowEval`, невидим гейту v2.0 о строковой сборке) |
+| Расширения вынесены из ядра, `hx-ws`/`hx-sse` удалены | Громко | В проекте 0 — не касается |
+| `makeFragment` всегда возвращает `DocumentFragment`; API расширений | Громко | Своего JS вокруг htmx-API в проекте нет — не касается |
+| IE не поддерживается | — | Не касается |
+
+**Дополнительный тихий пункт, не из guide:** после замены файла `app/static/js/htmx.min.js` **все
+существующие тесты останутся зелёными**, потому что суита не исполняет JavaScript вовсе. Обновление —
+единственный шаг вехи, который вообще НЕ проверяется автоматически.
+
+**How to avoid:**
+* **Обновление — ОТДЕЛЬНЫЙ план с ручным UAT-обходом 22 существующих `hx-get`-мест.** Список
+  конечен и снимается грепом; сделать его чек-листом приёмки плана.
+* **Тест на версию:** `test_shell.py` (уже читает `base.html` и статику) — утверждение, что в
+  `app/static/js/htmx.min.js` встречается строка версии `2.`, и что подключён именно этот файл.
+  Прецедент проверки по хосту каждого `script`/`link` в проекте есть.
+* **Явные значения конфигурации в `base.html`** вместо умолчаний для того, что важно:
+  `historyCacheSize` (Pitfall 9), `selfRequestsOnly` (оставить `true` записью, а не молчанием).
+
+**Warning signs:** после обновления infinite scroll подгружает всё сразу; ни один тест не покраснел
+
+**Phase to address:** **A**, ПЕРВЫМ планом вехи (решение уже принято) — и именно потому, что он
+непроверяем машиной, а значит должен быть изолирован
+
+---
+
+### Pitfall 15: htmx молчит на 4xx/5xx — интерфейс «ничего не делает»
+
+**What goes wrong:**
+Умолчание 2.x: `{code:"[45]..", swap:false, error:true}`. Ошибка сервера — это **отсутствие изменений
+на экране** плюс событие в консоли. Сегодня это невозможно: 500 показывает страницу ошибки, 302 уводит
+на плашку. Веха убирает оба сигнала разом.
+
+Хуже всего это на путях, где отказ ШТАТЕН и част: потолок платёжных намерений, окно удержания повтора,
+истёкший доступ, отказ владения объявлением. Все они сегодня отвечают редиректом с кодом причины.
+Переведённые «в лоб» в 4xx, они станут мёртвой кнопкой — и следующим действием человека будет повторное
+нажатие, то есть ровно то, из-за чего потолок и заводили (это дословно записано в комментарии
+`app/pages/billing.py`).
+
+**How to avoid:**
+* **Решение о кодах:** штатный отказ по бизнес-правилу отвечает **200 + фрагмент с плашкой**, а не 4xx.
+  4xx/5xx остаётся за настоящими сбоями. Это не «врать кодом» — фрагмент есть корректное представление
+  результата обработки; а машинные поверхности (JSON-API) кодами уже отвечают отдельно.
+* **Глобальный обработчик `htmx:responseError` в `base.html`** — на неожиданное. Пишет в OOB-область
+  уведомлений (уже существующую), НЕ строкой (запрет v2.0 на строковую сборку разметки) — а через
+  раскрытие заранее отрисованного сервером скрытого блока-заготовки. **Это способ соблюсти оба
+  правила сразу**: разметка приходит с сервера, JS только переключает атрибут.
+* **Плюс `htmx:sendError`** — обрыв сети; иначе «нет интернета» неотличимо от «кнопка сломана».
+* **Гейт:** `test_shell.py` утверждает наличие обоих обработчиков в `base.html`.
+
+**Warning signs:** нажатие не даёт ничего; в консоли `htmx:responseError`; UAT-пункт «нажал — ничего»
+
+**Phase to address:** **A** (обработчики + решение о кодах), соблюдение — **B**
+
+---
+
+### Pitfall 16: фокус уезжает в никуда, скринридер молчит
+
+**What goes wrong:**
+`innerHTML`-свап уничтожает узел, на котором стоял фокус. Браузер переносит фокус на `<body>`.
+Пользователь клавиатуры после каждого действия оказывается в начале документа; пользователь скринридера
+не получает НИЧЕГО — визуально плашка появилась, в дереве доступности события не было.
+
+**How to avoid:**
+* **OOB-область уведомлений несёт `aria-live="polite"` (`role="status"`) и существует в разметке
+  ВСЕГДА**, пустой. Живая область, ДОБАВЛЯЕМАЯ в документ вместе с сообщением, не объявляется —
+  браузер обязан наблюдать её ДО изменения содержимого. Это самая частая ошибка реализации.
+  **Прецедент в проекте уже есть и правильный:** `ads/includes/autosave.html:28` —
+  `aria-live="polite" role="status"` на индикаторе автосохранения, который живёт постоянно.
+* **Отказ — `role="alert"`/`aria-live="assertive"`, успех — `polite`.** Значит областей ДВЕ, а не одна
+  с меняющейся ролью: смена роли на живой области объявляется ненадёжно.
+* **Фокус:** после свапа строки/карточки фокус ставится на её эквивалент. Дешевле всего — `autofocus`
+  на возвращаемом сервером фрагменте (браузер переносит фокус при вставке) либо `hx-swap`-модификатор
+  `focus-scroll`. Ручной JS не нужен.
+* **Гейт:** `test_shell.py` — обе области присутствуют в `base.html` с нужными атрибутами;
+  `test_htmx_write_attributes.py` — OOB-фрагменты уведомлений целятся в их `id`.
+
+**Warning signs:** Tab после действия начинается с начала страницы; VoiceOver/NVDA молчит
+
+**Phase to address:** **A** (устройство областей), обход — **C**
+
+---
+
+### Pitfall 17: адрес в строке браузера расходится с экраном
+
+**What goes wrong:**
+`hx-push-url` вразнобой даёт две симметричные беды:
+* **Поставлен там, где не надо:** тумблер расписания пушит `/schedules/5/toggle` — Back возвращает на
+  POST-маршрут, F5 отправляет POST повторно (браузер спросит — и человек нажмёт «да»).
+* **Не поставлен там, где надо:** десять действий подряд, потом F5 — экран возвращается в состояние
+  до всех десяти. Особенно заметно на фильтрах истории и на редакторе объявления, где раскрытая
+  карточка расписания уже имеет серверное представление (`?sched=`).
+
+**How to avoid:**
+* **Конвенция трёх случаев:**
+  1. действие меняет ЧТО показано (фильтр, страница списка, раскрытая карточка) → `hx-push-url="true"`;
+  2. действие меняет ДАННЫЕ, но не адрес (тумблер, удаление строки, сохранение) → `hx-push-url` НЕТ;
+  3. действие меняет личность или контекст (вход, создание объявления) → `HX-Push-Url`/`HX-Location`
+     с сервера, потому что адрес известен только серверу (прецедент — `app/pages/ads.py:522`).
+* **Правило состояния:** всё, что должно пережить F5, обязано иметь СЕРВЕРНОЕ представление в адресе.
+  Прецедент `?sched=` уже есть и заодно является базовым путём без JS — та же строка решает две задачи.
+* **Гейт по разметке:** `hx-push-url` на теге, чей `hx-post` ведёт на маршрут из перечня «изменяет
+  данные», роняет тест.
+
+**Warning signs:** в адресной строке `/toggle`; F5 предлагает повторить отправку; после F5 фильтры сброшены
+
+**Phase to address:** конвенция — **A**, применение — **B**, обход адресов — **C**
+
+---
+
+### Pitfall 18: потеря позиции прокрутки и раскрытых карточек
+
+**What goes wrong:**
+Перерисовка контейнера списка целиком возвращает прокрутку наверх и гасит раскрытые карточки.
+На **infinite scroll** это особенно дорого: подгруженные страницы истории исчезают, и человек теряет
+всё, что доскроллил.
+
+**Решение уже принято** («фрагмент + OOB, а не перерисовка контейнера») — здесь важно назвать, где оно
+ломается на практике:
+* **OOB, задевающий предка цели.** Обновление счётчика через OOB безопасно; обновление ОБЁРТКИ списка
+  ради счётчика — нет. OOB-цели обязаны быть листьями (счётчик, плашка, бейдж), а не контейнерами.
+* **Список после удаления строки.** Соблазн — перерисовать список, чтобы пересчитать нумерацию и
+  пустое состояние. Правильно: `hx-swap="outerHTML"` на самой строке + OOB-счётчик + OOB-блок пустого
+  состояния как отдельный лист.
+* **`hx-swap` с `settle`/`scroll`-модификаторами по умолчанию** — на 2.x прокрутка стала мгновенной
+  (Pitfall 14).
+
+**Гейт:** id, встречающийся и как `hx-target`, и как `hx-swap-oob`-цель, — конфликт; выявляется тем же
+обходом шаблонов, что в Pitfall 13.
+
+**Phase to address:** контракт — **A**, каждая форма — **B**, ручной UAT на длинных списках — **C**
+
+---
+
+### Pitfall 19: зелёная httpx-суита, сломанный браузер
+
+**What goes wrong — и это измерено, а не предположено:**
+
+1. **`follow_redirects=False`** — умолчание httpx И явная установка в `tests/conftest.py:91,260`.
+   Тест утверждает `status_code == 302` и `headers["location"]`. Браузер и htmx следуют за редиректом.
+   **То есть весь класс Pitfall 1 суита не видит ПО ПОСТРОЕНИЮ и будет зелёным вечно.**
+2. **`HX-Request` встречается во ВСЕЙ суите ровно 1 раз** (131 файл, ~1700 тестов). Значит все
+   существующие тесты письма исполняют НЕ-htmx-ветку. После вехи «все 47 форм на htmx» суита продолжит
+   проверять путь, которым не пойдёт ни один пользователь с включённым JS.
+3. **httpx не исполняет htmx.** Он не читает `hx-target`, не делает свап, не собирает OOB, не
+   инициализирует Alpine. Неверный `hx-target`, конфликт OOB-id, потерянное состояние Alpine,
+   неработающий `hx-disabled-elt` — ничего из этого не наблюдаемо.
+4. **Замена `htmx.min.js` не проверяется ничем.**
+
+**How to avoid (без браузерного стенда — его в проекте нет и веха его не вводит):**
+* **Парные тесты.** Каждый переведённый маршрут получает ДВА теста: без `HX-Request` (редирект,
+  деградация) и с `HX-Request` (фрагмент). Утверждение о ФОРМЕ ответа: htmx-ответ **не содержит**
+  `<!DOCTYPE`/`<html`. Это одной строкой ловит весь Pitfall 1.
+* **`follow_redirects=True` в htmx-тестах** — иначе тест «фрагмент, а не документ» пройдёт на 302,
+  у которого тела нет вовсе.
+* **Фикстура `htmx_client`** в `conftest.py`, добавляющая `HX-Request: true` и `follow_redirects=True`.
+  Без неё каждый автор будет забывать заголовок, и парность выродится в дубль.
+* **Гейт парности по исходнику:** множество маршрутов, у которых есть htmx-ветка (из гейта Pitfall 1),
+  ⊆ множество маршрутов, упомянутых в тестах с `HX-Request`. Форма — `test_access_gate.py`.
+* **Гейты РАЗМЕТКИ вместо браузера.** Всё, что в Pitfall 2/6/10/13/17/18 названо «гейт по разметке», —
+  это чтение `app/templates/**/*.html` как текста. Браузер для них не нужен, а покрывают они ровно тот
+  класс, который httpx не видит. Прецедент чтения шаблонов в суите есть
+  (`test_templates/test_components.py`, `test_pages/test_responsive_markup.py`).
+* **Названные границы.** То, что гейты разметки НЕ видят, выписывается в докстринге файла —
+  как это сделано в `test_impersonation_gate.py`. Минимум две границы известны заранее:
+  атрибуты, собранные Jinja-условием (`{% if %}hx-post{% endif %}`), и порядок инициализации
+  Alpine относительно свапа. Обе закрываются либо запретом формы, либо ручным UAT-пунктом.
+
+**Warning signs:** PR переводит форму на htmx, суита зелёная, ни один тест не изменён;
+в новом тесте есть `assert response.status_code == 302` рядом с `hx-post`
+
+**Phase to address:** фикстура + гейт парности — **A** (до первой формы), парные тесты — **B**,
+сводный обход границ — **C**
+
+---
 
 ## Technical Debt Patterns
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Redis lists with `BLPOP`/`LPOP` as the only work/result transport | Simple queue code and low operational overhead. | No acknowledgement/in-flight recovery; worker or result-processor crashes create duplicate/lost-state ambiguity. | Only while accompanied by a documented reconciliation process; not acceptable for an exactly-once billing claim. |
-| Task ID recorded but not uniquely constrained | Cheap troubleshooting correlation. | Cannot make result settlement or duplicate prevention deterministic. | Never for billable terminal delivery records once retries/crash recovery are enabled. |
-| A TTL balance cache used before batch fan-out | Fewer database reads. | A stale authorization decision can permit more tasks than balance can cover. | As a display/read optimization, not as the only authorization or settlement guard. |
-| One simple recurrence calculator | Easy to reason about for weekly schedules. | DST policy and complex recurrence expectations remain implicit. | Appropriate for the current narrow recurrence model if DST behavior is tested and disclosed. |
-| Plain text session fields relying on deployment security | Fast integration with connector libraries. | A database/backup/support-access incident becomes messenger-account compromise. | Only temporarily with strong compensating encryption and access controls verified; otherwise avoid. |
+| Оставить `RedirectResponse` в обработчике и «пусть htmx сам разберётся» | Форма переводится за одну строку | Полный документ внутри карточки; дефект зелёный в суите (Pitfall 1, 19) | **Никогда** |
+| Уведомления через `HX-Trigger` вместо OOB-области | Не надо трогать `base.html` | 500 на кириллице (проверено), новый JS-компонент, отмена деградации | **Никогда** — решение вехи уже противоположное, здесь у него второй довод |
+| `hx-push-url` на всех 47 формах, как объявлено «свойством качества» | Единообразие, один чек-лист | Снимки страниц админки/биллинга/имперсонации в localStorage; Back на POST-маршрут (Pitfall 9, 17) | Только вместе с `historyCacheSize = 0` |
+| Копировать `hx-sync="this:queue last"` с формы автосохранения | Проверенный в проекте паттерн | Двойной платёж, дубль рассылки (Pitfall 12) | Только на идемпотентных формах |
+| `hx-on:` вместо серверного ветвления | Экономит маршрут | Требует `allowEval`, невидим гейту v2.0 о строковой сборке, не деградирует | **Никогда** в этой вехе |
+| Вендорить `alpine-morph`/`idiomorph` ради сохранения состояния | Состояние Alpine переживает свап | Новый вендоренный файл при правиле «внешних ресурсов 0»; morph — отдельный класс дефектов | Только если правило границы (Pitfall 13) окажется неисполнимым, и тогда — отдельным решением |
+| Добавить новый роутер в `GATED_ROUTERS`, чтобы гейт-тест позеленел | 30 секунд | Классификация без решения; в следующий раз так же добавят денежный маршрут (Pitfall 7) | **Никогда** |
+| Дополнить `*_degrades_without_alpine` htmx-утверждениями, не переименовывая | Не плодить файлы | Имя файла врёт про предмет; при снятии Alpine утверждения про htmx уедут вместе с файлом | Только с переименованием |
+| Отвечать 4xx на штатный бизнес-отказ | «Честный код» | Мёртвая кнопка; повторное нажатие — то, из-за чего потолок и заводили (Pitfall 15) | Только если глобальный обработчик уже показывает эти отказы человеку |
+
+---
 
 ## Integration Gotchas
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| Telegram userbot / Telethon | Treating a user account as an unlimited broadcast credential; retrying spam/forbidden errors. | Respect platform limits and group permissions; classify permanent errors, surface account health, and require re-auth when sessions fail. |
-| WhatsApp / Baileys | Equating a working QR session with policy authorization or assuming a transient network error means no message was delivered. | Preserve task identity across retries, pace per account, distinguish uncertain delivery, and apply the relevant WhatsApp policy before any user-contact messaging feature. |
-| MAX / pymax | Assuming a separate worker removes all lifecycle/session risk. | Monitor session, queue, heartbeat, and container state jointly; preserve account-scoped serialization and recovery paths. |
-| Redis | Using destructive pops without a durable in-flight/acknowledged record. | Use a durable inbox/outbox, streams/consumer acknowledgements, or an equivalent replay/reconciliation design. |
-| S3-compatible image storage | Treating a public URL as authorization and retrying without validating object availability. | Verify bucket/object ACLs, use controlled URLs when needed, and make media failures visible in the per-send result. |
-| YooKassa / billing provider | Trusting the redirect/return page as final payment state. | Process authenticated provider notifications idempotently and reconcile payment IDs to balance transactions. |
+| **htmx ↔ Alpine (14 шаблонов)** | `x-data` на том же узле, что и цель свапа | Состояние живёт НАД целью либо в адресе; гейт «`x-data` и `hx-target`-id не совпадают» |
+| **htmx ↔ Alpine** | Чтение `Alpine.$data()` в `htmx:afterSwap` | Обмен через DOM-атрибуты и события; Alpine доходит до нового поддерева асинхронно |
+| **htmx ↔ `require_access`** | Считать, что фрагмент обходит гейт (не обходит) — и не заметить, что отказ стал 302 внутри свапа | Зависимость учится отвечать `HX-Location` на `HX-Request`; третья группа `-k htmx` в `test_access_gate.py` |
+| **htmx ↔ гейт имперсонации** | Добавить фрагментный маршрут и «дописать в перечень» | `test_every_mutating_route_is_classified` требует РЕШЕНИЯ; перечень меняется вместе с обоснованием |
+| **htmx ↔ Starlette-заголовки** | Русский текст или пользовательский ввод в `HX-*` | Только ASCII-константы и целые id; AST-гейт на правый операнд присваивания |
+| **htmx ↔ ЮKassa** | `hx-disabled-elt` вместо серверного потолка; `queue last` на форме оплаты | `hx-sync="this:drop"` + `PendingIntentCapError` + построить частичный уникальный индекс |
+| **htmx ↔ Celery (повтор рассылки)** | Клиентская блокировка кнопки | `_claim_retry_slot` — образец: удержание с TTL, переживающее ответ, работает без JS |
+| **htmx ↔ S3/MinIO (`/api/uploads/image`)** | Переписать `fetch()` на `hx-post`, оставив JSON-ответ и API-гейт | Решить, куда переезжает маршрут; оба гейта (страничный и API) обязаны быть переписаны одним решением |
+| **htmx ↔ QR-поток Telegram** | Поллинг `hx-get` на `qr-status` без остановки | Остановка поллинга — ответом с `hx-swap-oob`, снимающим `hx-trigger`, а не JS-таймером; поллинг статуса синхронизации в проекте уже есть — взять его форму |
+| **htmx ↔ localStorage** | `hx-push-url` включён, кеш истории не тронут | `historyCacheSize = 0` или `hx-history="false"` на чувствительных страницах |
+
+---
 
 ## Performance Traps
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| One due-schedule query expands every group into in-memory tasks | Beat runs take longer and Redis receives large bursts; next checks overlap. | Bound due batches, lock/claim schedule occurrences, and observe dispatch duration/backlog. | At a single large schedule or when many schedules become due in the same interval; exact threshold depends on groups per schedule and worker capacity. |
-| Per-account serialized sending plus fixed low rate limits | Queue age grows even though container health is green. | Forecast capacity per account, show planned/actual delay, retain pacing as a safety control. | Whenever a schedule’s group fan-out exceeds what its account can send during the desired window. |
-| Requeueing delayed tasks back into the same list | Workers repeatedly pop/requeue not-yet-ready work, creating churn and potentially delaying fresh work. | Use a delayed-queue mechanism or scheduled retry store; monitor retry queue age. | Under sustained rate limits or external outages. |
-| Database scans/aggregations for every metrics update | Metrics loop adds DB load as send-log history grows. | Index/aggregate deliberately and measure the metrics job. | At materially larger history volume; do not pre-optimize until metrics show it. |
-| One global results list per messenger | A noisy account can delay reconciliation for others; a poison result can affect batch processing. | Partition/stream by account or robustly isolate failures and alert on per-account lag. | With many simultaneously active accounts or a prolonged connector outage. |
+| OOB-область пересчитывает агрегаты на каждое действие | Каждый тумблер расписания тянет `COUNT(*)` по всей истории | OOB-счётчики берут дельту либо не обновляются вовсе; тяжёлое — по явному запросу | Уже на сотнях записей истории — а `.planning/codebase/CONCERNS.md` называет `.scalars().all()` без пагинации существующей проблемой |
+| Каскад infinite scroll после `scrollBehavior: 'instant'` | При открытии истории подгружаются все страницы разом | Проверить `hx-trigger="revealed"` вручную после обновления на 2.x; при необходимости `revealed once` + якорь-загрузчик | Сразу после обновления htmx, на списке длиннее одного экрана |
+| Автосохранение × `keyup changed delay:2s` × новые формы | Запрос на каждую паузу в наборе на каждой форме | `delay` и `queue last` — только там, где автосохранение действительно нужно; остальные формы шлют по `submit` | При переводе форм «по образцу `ads/form.html`» |
+| Утечка слушателей Alpine при многократном свапе одной строки | Страница тормозит после десятков действий без перезагрузки | Правило границы (Pitfall 13); не удалять узлы мимо htmx | Через несколько минут активной работы со списком |
+| Рост `_RETRY_IN_FLIGHT` / реестров удержаний | Память процесса растёт | Уборка просроченных на входе — в `_claim_retry_slot` уже реализована; при копировании образца скопировать И уборку | На нескольких воркерах uvicorn удержание внутрипроцессное вообще не общее — назвать это границей |
+
+---
 
 ## Security Mistakes
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Persisting messenger sessions without verified encryption/access controls | Account takeover and unauthorized posting. | Encrypt secrets at rest, restrict worker/session volumes and backup access, rotate/revoke sessions. |
-| Logging message previews or identifiers without a data classification/retention policy | Leakage of customer campaign content and group metadata. | Redact/minimize logs, protect Loki access, and set retention/export controls. |
-| Assuming public object URLs are safe because keys are random | Media can be shared indefinitely or discovered through logs/referrers. | Review bucket policy; prefer controlled delivery where confidentiality matters. |
-| Failing to enforce tenant ownership on every indirect identifier | One customer can manipulate another customer’s account/group/schedule/history. | Use ownership checks at API/use-case boundaries and cross-tenant authorization tests. |
-| Reusing a weak/shared JWT secret or overlong session handling | Impersonation and persistent access after compromise. | Rotate a high-entropy secret, protect cookies/tokens, expire/revoke appropriately, and audit admin access. |
+| Пользовательский ввод в `HX-Location`/`HX-Redirect` | Открытый редирект сразу после выдачи cookie; инъекция заголовка (Starlette CRLF не отвергает, h11 отвергает → 500) | AST-гейт: правый операнд `HX-*`-присваивания — литерал или f-строка с целыми |
+| Кириллица в `HX-*` | 500 у первого русскоязычного пользователя (проверено) | Тот же гейт; уведомления — OOB-областью, а не заголовком |
+| `|safe` в OOB-области уведомлений | Текст стороннего исключения httpx (показ владельцу — принятое решение R-03-09) становится исполняемым | Гейт «`|safe` в `app/templates/**` = 0» по образцу нулевого гейта `innerHTML` |
+| Отключение автоэкранирования Jinja | XSS во всех 79 шаблонах одной строкой | Утверждение о `autoescape=True` в `test_components.py` |
+| `hx-vals` с ручной сборкой JSON | Управляемый параметр в запросе (Jinja экранирует HTML, не JSON) | Только `| tojson`; гейт на `hx-vals` с `{{` вне `tojson` |
+| `hx-swap-oob` из скомпрометированного обработчика | Радиус XSS расширяется на ЛЮБУЮ область страницы, включая шапку | Экранирование + запрет `|safe` + OOB-цели только листья |
+| `htmx.config.selfRequestsOnly = false` (откат умолчания 2.x) | Снимается единственная новая защита, полученная бесплатно | Значение выписано в `base.html` явно; `test_shell.py` его читает |
+| `hx-push-url` + кеш истории в localStorage | Снимки чужих экранов под имперсонацией и страниц с деньгами переживают выход | `historyCacheSize = 0` либо `hx-history="false"` |
+| `samesite="lax"` → `none` | Снимается ЕДИНСТВЕННАЯ действующая защита от CSRF (токенов в проекте 0) | Утверждение `samesite == "lax"` в `test_cookie_flags.py`; закрыть долг `cookie_secure` |
+| `HX-Request` как проверка безопасности | Заголовок ставит кто угодно; вытесняет настоящую проверку | Конвенция: `HX-Request` читается только в ветвлении ответа; гейт Pitfall 1 это и утверждает |
+| `hx-on:` / `hx-vals='js:'` | Требуют `allowEval`; при отсутствии CSP (в проекте её нет) — новый класс инлайн-скрипта, невидимый гейту v2.0 | Запретить обе формы гейтом разметки |
+
+---
 
 ## UX Pitfalls
 
 | Pitfall | User Impact | Better Approach |
 |---------|-------------|-----------------|
-| Showing “scheduled” without the exact next local time, timezone, and account/group count | Users assume a post will occur when it may be paused, empty, late, or unsendable. | Display next run in the chosen timezone, UTC where useful, status, and destination count. |
-| Hiding policy/session/group-permission failures behind generic “failed” status | Customers retry blindly and may damage account health. | Use actionable classified errors: re-authenticate, re-sync, removed from group, rate limited, policy/support review. |
-| Treating a queued task as delivered | Users cannot distinguish accepted, pending, delivered/failed, or uncertain outcomes. | Model visible lifecycle states and explain retries/late delivery. |
-| Recording history but not allowing reconciliation from a schedule occurrence to every group send | Agencies cannot prove what happened or resolve billing disputes. | Keep stable occurrence/task IDs and link schedule, destinations, attempts, terminal status, and transaction. |
+| Молчание на 4xx/5xx | Кнопка «сломана»; следующее действие — нажать ещё раз | Штатный отказ = 200 + фрагмент; глобальные `htmx:responseError` и `htmx:sendError` раскрывают серверную заготовку |
+| Форма свапает ответ в саму себя (умолчание `hx-target="this"`) | Форма исчезает, второго действия нет | Явный `hx-target` или `hx-swap="none"` — гейт |
+| Раскрытая карточка схлопывается после действия | «Страница дёргается», потеря места в длинном редакторе | Раскрытость — серверное свойство (`?sched=`), а не `x-data` внутри цели |
+| Прокрутка наверх после действия в бесконечном списке | Потеряно всё доскролленное | Свап строки, а не контейнера; OOB-цели — листья |
+| `hx-push-url` на изменяющем маршруте | Back ведёт на POST; F5 предлагает повторить отправку | Конвенция трёх случаев (Pitfall 17) |
+| Нет `hx-indicator` | Долгая операция (синхронизация групп, создание платежа) выглядит как зависание | Индикатор обязателен вместе с `hx-disabled-elt` — один гейт на оба |
+| Фокус улетает на `<body>` | Клавиатурная работа рвётся после каждого действия | `autofocus` на возвращаемом фрагменте / `focus-scroll` |
+| Скринридер не объявляет результат | Незрячий пользователь не знает, произошло ли что-то | Две постоянные `aria-live`-области (`polite` + `assertive`), созданные ДО первого сообщения |
+| Отказ показан внутри вложенной копии страницы | Текст правильный, экран мусорный | Pitfall 1 |
+| Свободный текст ошибки вместо кода | Владелец ссылки может «сообщить о событии, которого не было» | Область принимает код; неизвестный код — пустая область |
+
+---
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **Scheduled dispatch:** verify one logical schedule occurrence cannot be claimed by concurrent Beat/worker processes twice and is recoverable after a crash.
-- [ ] **Retries:** verify an external send that succeeds just before a timeout is not posted/charged again on retry.
-- [ ] **WA/MAX result processing:** verify a result popped from Redis is durably recorded or replayed after a process/database failure.
-- [ ] **Billing:** verify multi-group fan-out at a one-message balance boundary has a defined, tested outcome and no unbilled success.
-- [ ] **Timezone scheduling:** verify selected zones on DST spring-forward/fall-back boundaries and empty recurrence input behavior.
-- [ ] **Account lifecycle:** verify re-auth, logout/ban, container restart, idle shutdown, and group re-sync reach a visible customer and operator state.
-- [ ] **Media:** verify each stored image remains reachable to the connector at execution time and storage access matches data sensitivity.
-- [ ] **Observability:** verify alerts cover late schedules, queue age, stale heartbeat, retry exhaustion, and channel-specific delivery-rate drops—not only web uptime.
+- [ ] **Переведённая форма:** часто нет ветки редиректа — проверить, что POST без `HX-Request` всё ещё отвечает 302
+- [ ] **Переведённая форма:** часто нет `hx-target`/`hx-swap="none"` — проверить, что ответ не свапается в саму форму
+- [ ] **Переведённая форма:** часто `action` уехал на фрагментный маршрут — проверить, что `action` отдаёт ПОЛНЫЙ документ
+- [ ] **Переведённая форма:** часто нет `hx-disabled-elt`+`hx-indicator` — гейт разметки
+- [ ] **Ответ-фрагмент:** часто содержит `<html>` из-за 302 — утверждение `"<!DOCTYPE" not in response.text` в парном тесте
+- [ ] **OOB-область:** часто создаётся вместе с сообщением — проверить, что пустая область есть в `base.html` при первой загрузке
+- [ ] **OOB-цель:** часто контейнер, а не лист — проверить, что она не является предком `hx-target`
+- [ ] **Карточка/строка с `x-data`:** часто она же цель свапа — гейт границы Alpine
+- [ ] **Денежная форма:** часто `queue last` вместо `drop` и без серверного потолка
+- [ ] **Повтор рассылки:** часто клиентская блокировка вместо удержания, переживающего ответ
+- [ ] **Новый фрагментный маршрут:** часто вписан в гейт-перечень без решения о том, закрыт он или открыт
+- [ ] **`HX-*`-заголовок:** часто с русским текстом — упадёт только у пользователя, не в тесте
+- [ ] **Обновление htmx 2.x:** часто «сделано», потому что суита зелёная — она не исполняет JS вовсе
+- [ ] **Тест переведённой формы:** часто без `HX-Request` — проверяет ветку, которой пользователь не пойдёт
+- [ ] **Тест переведённой формы:** часто с `follow_redirects=False` — не видит подмену фрагмента документом
+- [ ] **`*_degrades_without_alpine`:** часто считают, что он покрывает и htmx-деградацию — не покрывает
+- [ ] **`hx-push-url`:** часто включён без правки `historyCacheSize` — снимки в localStorage
+- [ ] **Загрузка изображения:** часто переписана на `hx-post`, но гейт остался API-шным — отказ доступа невидим
+
+---
 
 ## Recovery Strategies
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Platform account limitation | HIGH | Stop automatic retries for the affected account, preserve error evidence, guide re-auth/appeal per platform process, re-sync groups, and do not replay uncertain sends without customer review. |
-| Duplicate or uncertain delivery | HIGH | Quarantine the logical occurrence, deduplicate by stable dispatch ID and messenger receipt when available, correct logs/balance transaction idempotently, and explain the outcome to the customer. |
-| Result lost after Redis pop | MEDIUM | Identify pending dispatches without terminal records, replay from durable source once implemented or reconcile manually from worker/messenger logs, then repair history/balance. |
-| Worker/container unavailable | MEDIUM | Alert from heartbeat/queue age, restart only the affected account worker, validate session/group health, and drain/reconcile pending work at safe pacing. |
-| Wrong local send time | MEDIUM | Pause the schedule, preserve the occurrence audit, correct timezone/recurrence, communicate whether a compensating send is appropriate, and add a regression test. |
-| Credential/data exposure | HIGH | Revoke sessions, rotate secrets/keys, restrict compromised storage/log/backups, assess affected data, notify/act under applicable obligations, and audit access. |
+| 302 внутри свапа (Pitfall 1) | **LOW**, если пойман гейтом; **MEDIUM**, если пойман в UAT после 20 форм | Гейт написать ДО первой формы; иначе — обход всех переведённых обработчиков с добавлением htmx-ветки, по одному коммиту на маршрут |
+| Кириллица в `HX-*` (Pitfall 3) | **LOW** | Заменить заголовок на OOB-область; гейт не даст вернуться |
+| Утечка снимков в localStorage (Pitfall 9) | **LOW** технически, **HIGH** по последствиям, если уже в проде | Одна строка конфигурации; данные, попавшие в браузеры пользователей, не отзываются — поэтому это **A**, а не **C** |
+| Потеря состояния Alpine (Pitfall 13) | **MEDIUM** — переверстка шаблона | Поднять `x-data` над целью; в тяжёлом случае — перенести состояние в адрес (`?sched=` как прецедент) |
+| Двойной платёж (Pitfall 11, 12) | **HIGH** — ручной возврат через ЮKassa, поддержка | Потолок уже в коде; построить частичный уникальный индекс; `hx-sync="this:drop"` |
+| Дубль рассылки | **HIGH** — сообщения ушли в группы, отозвать нельзя | Удержание `_claim_retry_slot` уже есть — не сломать его при переводе формы |
+| Сломанная деградация без JS (Pitfall 10) | **MEDIUM** — обход 47 форм | Гейты разметки дают полный список за один прогон; чинится механически |
+| Молчание на ошибках (Pitfall 15) | **LOW** | Глобальные обработчики в `base.html` — одно место |
+| Обновление htmx сломало infinite scroll (Pitfall 14) | **LOW** | Изолированный план обновления с ручным чек-листом 22 мест; откат — замена одного вендоренного файла |
+| Гейт-перечень расширен без решения (Pitfall 7) | **HIGH** — обнаруживается деньгами или рассылкой от чужого имени | Ревизия перечней; правило «перечень меняется вместе с обоснованием в двух местах» |
+
+---
 
 ## Pitfall-to-Phase Mapping
 
-These are recommended research/verification topics, not pre-approved roadmap phases.
-
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| Platform enforcement/account health | Connector reliability | Simulate rate-limit, forbidden, logged-out, and sync-failed responses; ensure pacing, non-retry classification, visible status, and safe recovery. |
-| Duplicate/lost send | Dispatch idempotency and reconciliation | Crash-injection tests around claim, enqueue, external acceptance, result publish, and DB commit; assert exactly one terminal settlement per dispatch ID. |
-| Timezone/DST errors | Scheduling correctness | Table-driven tests across supported IANA zones and both DST transitions; compare displayed local next run with UTC execution. |
-| Billing mismatch | Billing and dispatch integrity | Concurrent/fan-out tests at the balance boundary; reconcile every success to exactly one transaction and prove duplicate results are harmless. |
-| Worker lifecycle backlog | Worker resilience and observability | Kill/restart a worker, expire heartbeat, create backlog, and verify bounded recovery plus alerts and customer-visible state. |
-| Credential/data exposure | Security/data governance | Secret-at-rest and authorization review; test tenant isolation, log redaction, session revocation, storage policy, and backup access. |
-| Silent late/outage detection | Operational SLOs | Alert tests for queue age, heartbeat freshness, retry exhaustion, and percentile lateness from due time to terminal outcome. |
+| 1. 302 внутри свапа | **A** | AST-гейт: множество обработчиков с `RedirectResponse` == множество с чтением `HX-Request`; зубы гейта доказаны на изменённой копии исходника |
+| 2. Умолчание `hx-target` | **A** (гейт), **B** (исполнение) | Гейт разметки: каждый `hx-post` несёт `hx-target` или `hx-swap="none"` |
+| 3. Кириллица в `HX-*` | **A** | AST-гейт на правый операнд `HX-*`-присваивания |
+| 4. Инъекция/открытый редирект в `HX-Location` | **A** | Тот же гейт + отсутствие `?next=` без белого списка |
+| 5. Свободный текст и `|safe` в уведомлениях | **A** (устройство), **B** (применение) | Гейт `|safe` = 0; утверждение об `autoescape=True` |
+| 6. `hx-vals` и второй слой экранирования | **A** (гейт), **B** | Гейт: `hx-vals` с `{{` вне `| tojson` роняет тест |
+| 7. Отказ гейтов внутри свапа | **A** | Третья группа `-k htmx` в `test_access_gate.py`: закрытый маршрут отвечает `HX-Location`, а не 302/JSON |
+| 8. CSRF-посадка и `SameSite` | **A** | `test_cookie_flags.py`: `samesite == "lax"` как утверждение; `selfRequestsOnly` выписан в `base.html` |
+| 9. Снимки страниц в localStorage | **A** | `test_shell.py`: `historyCacheSize`/`hx-history` присутствует в `base.html` |
+| 10. Деградация без JS (6 способов) | **A** (гейты), **B** (исполнение), **C** (обход 47 форм) | Гейты разметки 10.1–10.5 + гейт 10.6 = гейт 1; переименование `*_degrades_without_*` |
+| 11. `hx-disabled-elt` вместо серверной защиты | **A** (конвенция), **B** (денежная форма — не первой) | Гейт: для каждого маршрута из перечня опасных утверждается серверное удержание |
+| 12. `hx-sync="queue last"` на неидемпотентном | **A** (гейт), **B** | Гейт: опасные маршруты не несут `queue` |
+| 13. Alpine теряет состояние на свапе | **A** (правило границы + гейт), **B** (по разделам) | Гейт: узел с `x-data` не является целью `hx-target` |
+| 14. Тихие изменения htmx 2.x | **A**, ПЕРВЫМ планом | Ручной чек-лист 22 существующих `hx-get`-мест; `test_shell.py` утверждает версию `2.` |
+| 15. Молчание на 4xx/5xx | **A** (обработчики), **B** (коды ответов) | `test_shell.py`: `htmx:responseError` и `htmx:sendError` в `base.html` |
+| 16. Фокус и скринридер | **A** (области), **C** (обход) | `test_shell.py`: две постоянные `aria-live`-области с нужными ролями |
+| 17. Расхождение адреса и экрана | **A** (конвенция), **B**, **C** | Гейт: `hx-push-url` не стоит на изменяющих маршрутах |
+| 18. Прокрутка и раскрытые карточки | **A** (контракт), **B**, **C** (UAT на длинных списках) | Гейт: id не может быть одновременно `hx-target` и OOB-целью |
+| 19. Зелёная суита, сломанный браузер | **A** (фикстура `htmx_client` + гейт парности), **B** (парные тесты), **C** (границы) | Гейт: маршруты с htmx-веткой ⊆ маршруты, покрытые тестом с `HX-Request`; докстринг с названными границами |
+
+**Следствие для порядка фаз:** тринадцать из девятнадцати пунктов требуют работы в **A** — и в
+подавляющем большинстве это ГЕЙТ, который обязан существовать ДО первой переведённой формы. Фаза A
+здесь не «фундамент ради красоты», а условие того, чтобы фаза B не размножила дефект в 47 экземплярах.
+Внутри A обновление htmx (Pitfall 14) идёт первым и отдельным планом именно потому, что оно
+непроверяемо машиной.
+
+**Рекомендация по порядку разделов в B:** НЕ начинать с `accounts` (3 шаблона с `x-data`, QR-поток,
+загрузка) и НЕ начинать с `billing` (деньги, потолок без индекса). Первым — раздел с простыми
+изменяющими формами и без Alpine, чтобы контракт «фрагмент + OOB» и гейты отработали на дешёвой цене
+ошибки.
+
+---
 
 ## Sources
 
-- Internal implementation evidence: [`PROJECT.md`](/root/broadcaster/.planning/PROJECT.md), [`scheduling use cases`](/root/broadcaster/app/application/scheduling/use_cases.py), [`worker tasks`](/root/broadcaster/app/worker/tasks.py), [`schedule service`](/root/broadcaster/app/services/schedule_service.py), [`billing service`](/root/broadcaster/app/services/billing_service.py), [`WA worker`](/root/broadcaster/wa_worker/index.js), [`MAX worker`](/root/broadcaster/max_worker/main.py), [`container manager`](/root/broadcaster/app/services/wa_container_manager.py), and [`metrics`](/root/broadcaster/app/metrics.py). **HIGH** confidence for code-observed statements.
-- [Celery task documentation](https://docs.celeryq.dev/en/stable/userguide/tasks.html) and [Celery FAQ](https://docs.celeryq.dev/en/stable/faq.html). **MEDIUM** confidence; official guidance establishes the retry/idempotency model but does not audit this application.
-- [WhatsApp Business Messaging Policy](https://whatsappbusiness.com/policy/). **MEDIUM** confidence; current official policy says policy violations, negative feedback, low quality, or unauthorized scaled messaging can limit/remove access, and specifies opt-in/template rules for the Business Platform.
-- [Telegram Spam FAQ](https://telegram.org/faq_spam). **MEDIUM** confidence; current official guidance confirms reports/unwanted group advertising can lead to temporary or longer account limitations.
+* **Официальный migration guide htmx 1.x → 2.x** — `bigskysoftware/htmx`, `www/content/migration-guide-htmx-1.md` (HIGH)
+* **htmx security documentation** — `htmx.org/docs/#security` (HIGH)
+* **htmx response headers / config reference** — `htmx.org/reference/#response_headers`, `#config` (HIGH)
+* **htmx `hx-disabled-elt`, response handling** — `htmx.org/attributes/hx-disabled-elt/`, `htmx.org/docs/#response-handling` (HIGH)
+* **context7 `/bigskysoftware/htmx`** (v1.9.12, v2.0.4) — `selfRequestsOnly` как ломающее изменение, `hx-on` → `hx-on:`, вынос расширений (MEDIUM)
+* **Эмпирическая проверка в venv проекта** — latin-1 кодирование заголовков Starlette, отсутствие проверки CRLF, `h11.LocalProtocolError`, `httpx.AsyncClient(follow_redirects=False)` по умолчанию (HIGH — исполнено, а не прочитано)
+* **Вендоренный `app/static/js/htmx.min.js` 1.9.10** — `htmx-history-cache` в `localStorage` (HIGH). ⚠️ Относится к 1.9.10, который Фаза 7 убрала: у отгруженного 2.0.10 ключ лежит в `sessionStorage`, а `localStorage` рантайм не знает вовсе — см. поправку в §Pitfall 9
+* **Исходники проекта** — `app/pages/__init__.py` (перечни гейтов), `app/pages/auth.py` (атрибуты cookie), `app/pages/ads.py` (единственная htmx-ветка), `app/pages/billing.py` (`PendingIntentCapError`, `PAYMENT_ERROR_MESSAGES`), `app/pages/history.py` (`_claim_retry_slot`), `tests/test_pages/test_access_gate.py`, `tests/test_pages/test_impersonation_gate.py`, `tests/test_pages/test_cookie_flags.py`, `tests/conftest.py` (HIGH)
+* **Инвентаризация грепом** — `hx-target`/`hx-select`/`hx-boost`/`hx-on`/`hx-headers`/`hx-delete` = 0; `x-data` = 14 шаблонов; `|safe` = 0; CSP/X-Frame-Options = 0; `HX-Request` в тестах = 1; CSRF = 0 (HIGH)
+* **`.planning/codebase/CONCERNS.md`** — отсутствие CSRF-защиты и `.scalars().all()` без пагинации как уже зафиксированные риски (HIGH)
+* **websearch: htmx + Alpine** — [alpinejs/alpine #3985](https://github.com/alpinejs/alpine/discussions/3985), [htmx #2931](https://github.com/bigskysoftware/htmx/discussions/2931), [htmx alpine-morph](https://v1.htmx.org/extensions/alpine-morph/) (LOW — сообщество, использовано только для сигнатур отказа)
+* **websearch: progressive enhancement с htmx** — [rafa.ee](https://www.rafa.ee/articles/progressive-enhanced-forms-htmx/), [oliverjam.es](https://oliverjam.es/articles/progressive-enhancement-htmx) (LOW)
+
+⚠️ **Tavily недоступен** (ключ отвергнут API) — веб-часть исследования выполнена встроенным WebSearch,
+и её доля помечена LOW отдельно от фактов, снятых по коду и официальной документации.
 
 ---
-*Pitfalls research for: Broadcaster — scheduled advertising posts to messenger groups*
-*Researched: 2026-08-03*
+*Pitfalls research for: добавление слоя письма на htmx в действующее серверное Jinja2-приложение (Broadcaster v2.1)*
+*Researched: 2026-08-26*
