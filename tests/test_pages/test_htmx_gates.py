@@ -496,6 +496,21 @@ def _unclassified(
     }
 
 
+def _converted_with_own_redirect(sources: dict[str, str]) -> set[str]:
+    """Переведённые обработчики, у которых ОСТАЛОСЬ собственное решение о форме.
+
+    Предмет G-2. Вынесен в помощник, а не написан выражением внутри теста,
+    ровно затем, чтобы контроль в конце файла проверял ТУ ЖЕ проверку, а не
+    вторую её копию: две копии одного условия разъехались бы молча, и контроль
+    доказывал бы зубы не у того гейта, который стоит в сюите.
+    """
+    return {
+        key
+        for key, handler in _post_handlers(sources).items()
+        if handler.calls_respond and handler.builds_own_redirect
+    }
+
+
 def _backlog(sources: dict[str, str], *, never: dict[str, str] | None = None) -> set[str]:
     """Обработчики, ФАКТИЧЕСКИ ещё не переведённые на слой ответа.
 
@@ -759,13 +774,7 @@ def test_no_converted_handler_builds_its_own_redirect():
     контролем — он подаёт разборщику ровно тот исходник, который Фаза 9 могла бы
     написать.
     """
-    handlers = _post_handlers(_pages_sources())
-
-    both = sorted(
-        key
-        for key, handler in handlers.items()
-        if handler.calls_respond and handler.builds_own_redirect
-    )
+    both = sorted(_converted_with_own_redirect(_pages_sources()))
 
     assert not both, (
         "обработчик идёт через слой ответа И строит редирект сам:\n  "
@@ -831,4 +840,683 @@ def test_no_post_route_is_declared_in_a_form_the_gate_cannot_see():
         "одно из трёх множеств и окажется решающим форму ответа мимо слоя ПО "
         "УМОЛЧАНИЮ. Научите `_post_handlers` этой форме прежде, чем ею "
         "пользоваться"
+    )
+
+
+# =============================================================================
+# ГЕЙТ G-13: БЕЗОПАСНОСТЬ ПРАВОГО ОПЕРАНДА ЗАПИСИ ЗАГОЛОВКА `HX-*`
+#
+# ЧТО ИМЕННО ЗАКРЫВАЕТ ЭТО ПРАВИЛО — ТРИ УГРОЗЫ ПОИМЁННО, А НЕ «БЕЗОПАСНОСТЬ
+# ВООБЩЕ»:
+#
+#   1. ИНЪЕКЦИЯ ЗАГОЛОВКА (T-08-01). Перевод строки внутри значения дописывает в
+#      ответ ЛЮБОЙ заголовок, в том числе `Set-Cookie`.
+#   2. ПАДЕНИЕ НА КОДИРОВАНИИ (T-08-02). Значения заголовков кодируются в
+#      latin-1; кириллица в них роняет ответ пятисоткой — и роняет его у ВСЕХ,
+#      а не у того, кто её принёс.
+#   3. ОТКРЫТЫЙ РЕДИРЕКТ (T-08-05). Заголовок перехода есть готовый примитив
+#      увода с сайта: браузер уходит по нему молча.
+#
+# ⚠️ ВСЕ ТРИ ЗАКРЫВАЮТСЯ ОДНИМ СВОЙСТВОМ, И ИМЕННО ОНО ЗДЕСЬ УТВЕРЖДАЕТСЯ:
+# значение заголовка не может прийти от клиента НИ ОДНИМ ПУТЁМ. Проверять
+# отдельно перевод строки, отдельно кириллицу и отдельно чужой узел значило бы
+# вести перечень известных написаний беды; запрет на ИСТОЧНИК закрывает и те
+# написания, которых ещё не придумали.
+#
+# ⚠️ ЧЕГО ЭТО ПРАВИЛО НЕ ВИДИТ. Значение, собранное вспомогательной функцией
+# СОСЕДНЕГО модуля, разбором дерева не прослеживается: в месте записи стоит
+# вызов, а что внутри — вопрос к другому файлу и к другому дереву. Разрешить
+# вызовы КЛАССОМ значило бы открыть ровно ту дыру, ради которой правило
+# написано, — поэтому единственный сегодняшний вызов выписан ПОИМЁННО, одной
+# записью с обоснованием (`SAFE_BY_NAME`), и безопасность его доказывается не
+# разбором дерева, а рантайм-проверкой, у которой есть собственные тесты.
+# Родственные невидимые формы — запись через `headers.update(переменная)` и
+# ключ, собранный вычислением: обеих в проекте нет, и появление любой из них
+# обязано сопровождаться обучением этого разборщика.
+# =============================================================================
+
+# Имена, которыми в этом проекте зовут объект входящего запроса. Присутствие
+# любого из них в поддереве правого операнда означает, что значение заголовка
+# ответа МОЖЕТ прийти от клиента.
+REQUEST_OBJECT_NAMES = frozenset({"request", "req", "websocket"})
+
+# Узлы, из которых имеет право состоять подстановка внутри f-строки. Вызов,
+# индексация, арифметика и сравнение сюда НЕ входят: за каждым из них стоит
+# вычисление, чей источник по этому дереву не прослеживается.
+_INERT_NODES = (
+    ast.JoinedStr,
+    ast.FormattedValue,
+    ast.Constant,
+    ast.Name,
+    ast.Attribute,
+    ast.Load,
+)
+
+
+# ⚠️ ИСКЛЮЧЕНИЕ ВЫПИСАНО ЗАПИСЬЮ, А НЕ РАЗРЕШЕНО КЛАССОМ, И РАЗНИЦА ЗДЕСЬ
+# НЕСУЩАЯ. «Разрешить вызовы» открыло бы дыру шириной в правило; «разрешить
+# ЭТОТ вызов, потому что вот доказательство» оставляет дыру шириной в одну
+# строку, и следующая такая строка потребует написать своё доказательство.
+SAFE_BY_NAME: dict[str, str] = {
+    "app/pages/htmx.py::location_response": (
+        "значение приходит ПАРАМЕТРОМ, и безопасность его доказывается не "
+        "разбором дерева, а рантайм-проверкой локального пути того же модуля "
+        "(`_local_path`): она отвергает схему, протокол-относительный адрес, "
+        "обратную косую черту, управляющий символ и любой символ вне ASCII — "
+        "то есть все три угрозы разом, и у неё есть собственные тесты "
+        "(план 08-01). Разбор дерева здесь бессилен по существу: в месте "
+        "записи стоит имя параметра, а значения ему подают вызывающие"
+    ),
+}
+
+
+@dataclass(eq=False)
+class _HeaderWrite:
+    """Одно место записи заголовка ответа с приставкой `HX-`."""
+
+    module: str
+    lineno: int
+    function: str
+    header: str
+    operand: ast.AST
+
+    @property
+    def key(self) -> str:
+        return f"{self.module}::{self.function}"
+
+    @property
+    def where(self) -> str:
+        return f"{self.module}:{self.lineno} ({self.function}, {self.header})"
+
+
+def _module_string_constants(tree: ast.Module) -> dict[str, str]:
+    """Строковые константы УРОВНЯ МОДУЛЯ: имя → значение.
+
+    Нужны затем, чтобы имя заголовка, объявленное константой, узнавалось
+    наравне с литералом: `headers={HX_LOCATION_HEADER: ...}` есть та же запись,
+    что и `headers={"HX-Location": ...}`, и разборщик, знающий только литерал,
+    был бы слеп ровно к той форме, которую проект считает правильной.
+    """
+    constants: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            constants[target.id] = node.value.value
+    return constants
+
+
+def _shared_header_constants(sources: dict[str, str]) -> dict[str, str]:
+    """Константы имён заголовков `HX-*`, объявленные ГДЕ УГОДНО в приложении.
+
+    Собираются по всему приложению, а не по одному модулю: константа, ввезённая
+    из слоя ответа в соседний модуль, приезжает туда именем, и разбор «по
+    текущему файлу» перестал бы узнавать её ровно в тот момент, когда запись
+    заголовка переедет из слоя ответа наружу.
+    """
+    shared: dict[str, str] = {}
+    for module, text in sources.items():
+        for name, value in _module_string_constants(_parse(module, text)).items():
+            if value.upper().startswith(HX_HEADER_PREFIX.upper()):
+                shared[name] = value
+    return shared
+
+
+def _header_name(
+    node: ast.AST, local: dict[str, str], shared: dict[str, str]
+) -> str | None:
+    """Имя заголовка, записанное этим узлом-ключом, — либо `None`.
+
+    Узнаются три написания ключа: литерал, голое имя константы и обращение к
+    ней через модуль. Ключ, собранный вычислением, не узнаётся — это названная
+    граница правила (см. шапку группы).
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return local.get(node.id) or shared.get(node.id)
+    if isinstance(node, ast.Attribute):
+        return local.get(node.attr) or shared.get(node.attr)
+    return None
+
+
+def _enclosing_function(tree: ast.Module, lineno: int) -> str:
+    """Имя ближайшей объемлющей функции — или `<модуль>`, если её нет.
+
+    Нужно для ключа исключения: `SAFE_BY_NAME` называет МЕСТО записи, а не
+    модуль целиком, — иначе одна выписанная строчка разрешала бы всему файлу.
+    """
+    best: str | None = None
+    best_span: int | None = None
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        end = getattr(node, "end_lineno", None)
+        if end is None or not (node.lineno <= lineno <= end):
+            continue
+        span = end - node.lineno
+        if best_span is None or span < best_span:
+            best, best_span = node.name, span
+    return best or "<модуль>"
+
+
+def _header_writes(sources: dict[str, str]) -> list[_HeaderWrite]:
+    """Каждое место, где значение присваивается заголовку ответа `HX-*`.
+
+    Узнаются ОБЕ формы записи, и обе обязаны быть видны — закрыв одну, правка
+    ушла бы второй:
+
+      * подписка (`response.headers["HX-…"] = …`);
+      * ключ в литерале словаря заголовков (`headers={"HX-…": …}`).
+
+    Разбор по дереву, а не грепом: приставка заголовка называется словами в
+    обоснованиях соседних модулей — в том числе в комментарии редактора
+    объявлений, где записано, ПОЧЕМУ заголовок ставится только при создании, —
+    и текстовый поиск посчитал бы эти строки местами записи.
+    """
+    writes: list[_HeaderWrite] = []
+    shared = _shared_header_constants(sources)
+
+    for module, text in sources.items():
+        tree = _parse(module, text)
+        local = _module_string_constants(tree)
+
+        def _record(key_node: ast.AST, operand: ast.AST) -> None:
+            name = _header_name(key_node, local, shared)
+            if name is None:
+                return
+            if not name.upper().startswith(HX_HEADER_PREFIX.upper()):
+                return
+            writes.append(
+                _HeaderWrite(
+                    module=module,
+                    lineno=key_node.lineno,
+                    function=_enclosing_function(tree, key_node.lineno),
+                    header=name,
+                    operand=operand,
+                )
+            )
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Subscript):
+                        _record(target.slice, node.value)
+            elif isinstance(node, ast.Dict):
+                for key_node, value in zip(node.keys, node.values):
+                    if key_node is not None:
+                        _record(key_node, value)
+
+    return sorted(writes, key=lambda write: (write.module, write.lineno))
+
+
+def _operand_is_safe(write: _HeaderWrite, local: dict[str, str]) -> bool:
+    """Принадлежит ли правый операнд разрешённому множеству ФОРМ.
+
+    Разрешены ровно три формы, и каждая — по причине, а не по привычке:
+
+      * СТРОКОВЫЙ ЛИТЕРАЛ — значение записано в исходнике целиком;
+      * F-СТРОКА, все подстановки которой инертны (имена и обращения к
+        атрибутам, без вызовов и без индексации) — значение собрано из объектов
+        приложения, а не из строки запроса;
+      * ИМЯ МОДУЛЬНОЙ КОНСТАНТЫ того же модуля — тот же литерал, названный.
+
+    Всё остальное — вызов, конкатенация, индексация, тернарник — небезопасно ПО
+    УМОЛЧАНИЮ: за каждым стоит вычисление, чей источник по этому дереву не
+    прослеживается. Ошибаться такому правилу полагается именно в эту сторону.
+    """
+    operand = write.operand
+
+    if isinstance(operand, ast.Constant) and isinstance(operand.value, str):
+        return True
+    if isinstance(operand, ast.Name) and operand.id in local:
+        return True
+    if isinstance(operand, ast.JoinedStr):
+        return all(isinstance(node, _INERT_NODES) for node in ast.walk(operand))
+    return False
+
+
+def _unsafe_header_writes(sources: dict[str, str]) -> list[_HeaderWrite]:
+    """Места записи, чей операнд не разрешён ни формой, ни поимённой записью."""
+    unsafe: list[_HeaderWrite] = []
+    for write in _header_writes(sources):
+        local = _module_string_constants(_parse(write.module, sources[write.module]))
+        if _operand_is_safe(write, local):
+            continue
+        if write.key in SAFE_BY_NAME:
+            continue
+        unsafe.append(write)
+    return unsafe
+
+
+def _writes_touching_the_request(sources: dict[str, str]) -> list[_HeaderWrite]:
+    """Места записи, в поддереве операнда которых есть объект входящего запроса.
+
+    ⚠️ ЭТО УТВЕРЖДЕНИЕ ДЕЙСТВУЕТ И НА ПОИМЁННОЕ ИСКЛЮЧЕНИЕ. Выписанная запись
+    освобождает место от требования к ФОРМЕ операнда — но не от запрета на его
+    ИСТОЧНИК: значение, пришедшее от клиента, остаётся запрещённым везде.
+    """
+    touching: list[_HeaderWrite] = []
+    for write in _header_writes(sources):
+        names = {
+            node.id for node in ast.walk(write.operand) if isinstance(node, ast.Name)
+        }
+        if names & REQUEST_OBJECT_NAMES:
+            touching.append(write)
+    return touching
+
+
+def test_the_number_of_header_writes_is_the_declared_one():
+    """Число мест записи заголовка `HX-*` равно выписанному.
+
+    ⚠️ БЕЗЗВУЧНО ВЫРОСШЕЕ ЧИСЛО ОЗНАЧАЕТ, ЧТО ПОЯВИЛОСЬ МЕСТО, ГДЕ ПРИЛОЖЕНИЕ
+    ДИКТУЕТ БРАУЗЕРУ ПОВЕДЕНИЕ, а решения о безопасности его значения никто не
+    принимал. Утверждения о форме операнда поймали бы это и сами, но по числу
+    видно СРАЗУ, что именно произошло.
+    """
+    writes = _header_writes(_app_sources())
+    listing = "\n".join(f"  {write.where}" for write in writes) or "  (нет)"
+
+    assert len(writes) == HX_HEADER_WRITES, (
+        f"мест записи заголовка {HX_HEADER_PREFIX}* в {APP_DIRECTORY}/ стало "
+        f"{len(writes)}, а объявлено {HX_HEADER_WRITES}:\n{listing}\n"
+        "Каждое такое место диктует браузеру поведение значением, которое "
+        "уезжает клиенту. Обнови число ВМЕСТЕ с решением о безопасности "
+        "операнда нового места"
+    )
+
+
+def test_every_header_write_has_a_safe_right_operand():
+    """G-13: правый операнд каждой записи принадлежит разрешённому множеству форм.
+
+    Разрешённых форм три (литерал, f-строка с инертными подстановками, имя
+    модульной константы); всё прочее обязано быть выписано ПОИМЁННО с
+    обоснованием. Второе утверждение снимает несвежие исключения: запись,
+    пережившая своё место, разрешала бы что-то, чего уже нет, — и первое же
+    совпадение имён вернуло бы разрешение к жизни молча.
+    """
+    sources = _app_sources()
+    unsafe = _unsafe_header_writes(sources)
+
+    assert not unsafe, (
+        "правый операнд записи заголовка не принадлежит разрешённому множеству "
+        "форм:\n  "
+        + "\n  ".join(write.where for write in unsafe)
+        + "\n\nЧТО ДЕЛАТЬ. Соберите значение литералом или f-строкой, все "
+        "подстановки которой — имена и обращения к атрибутам приложения; либо "
+        "выпишите место в SAFE_BY_NAME с ДОКАЗАТЕЛЬСТВОМ его безопасности "
+        "(рантайм-проверка со своими тестами). Вызов, конкатенация и "
+        "индексация небезопасны по умолчанию: их источник по дереву не "
+        "прослеживается"
+    )
+
+    declared_places = {write.key for write in _header_writes(sources)}
+    stale = set(SAFE_BY_NAME) - declared_places
+    assert not stale, (
+        f"поимённое исключение пережило своё место записи: {sorted(stale)}. "
+        "Снимите запись — иначе она молча разрешит первое же место, которое "
+        "совпадёт с ней именем"
+    )
+
+    unexplained = {key for key, reason in SAFE_BY_NAME.items() if not reason.strip()}
+    assert not unexplained, (
+        f"поимённое исключение не снабжено доказательством: {sorted(unexplained)}"
+    )
+
+
+def test_no_header_write_touches_the_incoming_request():
+    """НАСТОЯЩЕЕ СВОЙСТВО БЕЗОПАСНОСТИ: значение заголовка не приходит от клиента.
+
+    Этим утверждением закрываются РАЗОМ инъекция заголовка, падение ответа на
+    кодировании кириллицы и открытый редирект (T-08-01, T-08-02, T-08-05) — не
+    перечнем известных написаний беды, а запретом на её ИСТОЧНИК.
+    """
+    touching = _writes_touching_the_request(_app_sources())
+
+    assert not touching, (
+        "в поддереве правого операнда записи заголовка есть объект входящего "
+        "запроса:\n  "
+        + "\n  ".join(write.where for write in touching)
+        + "\n\nЗначение заголовка ответа НЕ ИМЕЕТ ПРАВА приходить от клиента ни "
+        "одним путём: перевод строки в нём дописывает в ответ чужие заголовки, "
+        "кириллица роняет ответ пятисоткой, а адрес со схемой уводит человека "
+        "с сайта молча"
+    )
+
+
+# =============================================================================
+# КОНТРОЛИ: доказательство того, что гейты КРАСНЕЮТ (`-k control`)
+#
+# ⚠️ ЗАЧЕМ ОНИ, ЕСЛИ ВЫШЕ УЖЕ ТРИНАДЦАТЬ ТЕСТОВ. Обход тридцати шести
+# обработчиков и девяноста с лишним модулей, зелёный ПО ПОСТРОЕНИЮ, создаёт
+# уверенность вместо проверки, и обнаруживается это в тот единственный день,
+# когда он пропускает настоящее нарушение. Тринадцать утверждений выше говорят
+# «сегодня всё сходится»; контроли ниже говорят «а когда перестанет — я это
+# увижу». Это разные высказывания, и второе не следует из первого (T-08-30).
+#
+# ⚠️ КАЖДЫЙ ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ НЕСЁТ УТВЕРЖДЕНИЕ «ПОДМЕНА ЧТО-ТО ИЗМЕНИЛА».
+# Контроль, чья подмена не приземлилась (промахнулась мимо якоря, попала не в
+# тот модуль), выглядит точно так же, как контроль, доказавший зубы: он зелёный.
+# Без этой пары утверждений доказательство доказывало бы само себя — фаза уже
+# ловила ровно такой промах.
+#
+# НИ ОДИН КОНТРОЛЬ НЕ ТРОГАЕТ ФАЙЛОВ ПРОЕКТА. Изменённый исходник пишется во
+# ВРЕМЕННЫЙ файл (`tmp_path`) и оттуда подаётся разборщику; боевое дерево
+# читается только на чтение.
+# =============================================================================
+
+# Модуль, в который контроли кладут подмену. Выбран потому, что объявляет
+# POST-обработчик и не объявляет ни одной записи заголовка: подмена в нём видна
+# ОБЕИМ группам гейтов и ни одной из них не мешает.
+SCRATCH_MODULE = "app/pages/profile.py"
+
+
+def _sources_with(
+    tmp_path, sources: dict[str, str], module: str, text: str
+) -> dict[str, str]:
+    """Копия поданных исходников, в которой ОДИН модуль подменён — через файл.
+
+    Подмена идёт по-настоящему через файловую систему, а не строкой в памяти:
+    так контроль проверяет тот же путь чтения, которым гейт ходит по боевому
+    дереву, и не может разойтись с ним из-за кодировки или переносов строк.
+    """
+    scratch = tmp_path / module.replace("/", "_")
+    scratch.write_text(text, encoding="utf-8")
+
+    updated = dict(sources)
+    updated[module] = scratch.read_text(encoding="utf-8")
+    return updated
+
+
+def test_control_positive_the_untouched_source_tree_keeps_every_gate_green():
+    """ЧТО ДОКАЗЫВАЕТ: на НЕИЗМЕНЁННОМ дереве молчат ВСЕ гейты файла.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ВСЕ ОТРИЦАТЕЛЬНЫЕ ПРОШЛИ БЫ И У ГЕЙТА, КОТОРЫЙ
+    КРАСНЕЕТ ВСЕГДА. «Ловит нарушение» и «ловит ТОЛЬКО нарушение» — разные
+    утверждения, и доказательство зубов состоит из обоих: гейт, роняющий сборку
+    на любом дереве, был бы не строже, а просто сломан, и его сняли бы первым же
+    коммитом.
+    """
+    pages = _pages_sources()
+    app = _app_sources()
+
+    assert _unclassified(pages) == set(), "G-1 краснеет на неизменённом дереве"
+    assert _converted_with_own_redirect(pages) == set(), (
+        "G-2 краснеет на неизменённом дереве"
+    )
+    assert len(_backlog(pages)) == NOT_YET_CONVERTED_COUNT, (
+        "счётчик отставания краснеет на неизменённом дереве"
+    )
+    assert len(_header_read_sites(app)) == HX_HEADER_READS, (
+        "счётчик чтений признака краснеет на неизменённом дереве"
+    )
+    assert len(_header_writes(app)) == HX_HEADER_WRITES, (
+        "счётчик записей заголовка краснеет на неизменённом дереве"
+    )
+    assert _unsafe_header_writes(app) == [], (
+        "G-13 краснеет на неизменённом дереве"
+    )
+    assert _writes_touching_the_request(app) == [], (
+        "запрет на источник значения краснеет на неизменённом дереве"
+    )
+
+
+def test_control_negative_an_undeclared_new_post_handler_reddens_the_completeness(
+    tmp_path,
+):
+    """ЧТО ДОКАЗЫВАЕТ: G-1 ловит обработчик, о котором не знает ни одно множество.
+
+    Это случай, РАДИ КОТОРОГО гейт и существует: обработчик, добавленный будущей
+    фазой. При чёрном списке он решал бы форму ответа мимо слоя ПО УМОЛЧАНИЮ, и
+    человек без JavaScript узнал бы об этом пустым экраном.
+    """
+    original = _pages_sources()[SCRATCH_MODULE]
+    addition = (
+        '\n\n@router.post("/profile/a-route-some-future-phase-will-add")\n'
+        "async def a_route_some_future_phase_will_add(request: Request):\n"
+        "    return None\n"
+    )
+    sources = _sources_with(tmp_path, _pages_sources(), SCRATCH_MODULE, original + addition)
+
+    key = f"{SCRATCH_MODULE}::a_route_some_future_phase_will_add"
+    assert key in _post_handlers(sources), (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: разборщик не увидел добавленного обработчика, "
+        "и утверждение ниже доказывало бы не зубы гейта, а промах контроля"
+    )
+
+    assert key in _unclassified(sources), (
+        "ЗАМЫКАЮЩЕЕ УТВЕРЖДЕНИЕ ПОЛНОТЫ НЕ ЗАМЕТИЛО НОВЫЙ POST-ОБРАБОТЧИК — "
+        "гейт выродился в чёрный список, и обработчик будущей фазы окажется "
+        "решающим форму ответа мимо слоя по умолчанию"
+    )
+
+
+def test_control_negative_a_handler_that_left_the_response_layer_reddens_g1(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: G-1 ловит СНЯТУЮ зависимость обработчика от слоя ответа.
+
+    Контроль двухшаговый, и оба шага нужны: сперва разборщику подаётся
+    обработчик, ходящий через `respond()` (гейт молчит — так выглядит работа
+    Фазы 9), затем ТОТ ЖЕ обработчик с той же подписью, но строящий редирект
+    сам. Один шаг доказал бы только половину: «краснеет» без «зеленел до этого»
+    неотличимо от гейта, который краснеет всегда.
+    """
+    original = _pages_sources()[SCRATCH_MODULE]
+    key = f"{SCRATCH_MODULE}::a_route_phase_nine_converted"
+
+    converted = (
+        '\n\n@router.post("/profile/a-route-phase-nine-converted")\n'
+        "async def a_route_phase_nine_converted(request: Request):\n"
+        '    return await respond(request, redirect="/profile")\n'
+    )
+    with_layer = _sources_with(
+        tmp_path, _pages_sources(), SCRATCH_MODULE, original + converted
+    )
+
+    assert key in _converted(with_layer), (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: обработчик, зовущий слой ответа, не признан "
+        "переведённым — второй шаг доказывал бы промах контроля"
+    )
+    assert key not in _unclassified(with_layer), (
+        "G-1 краснеет на обработчике, КОТОРЫЙ ИДЁТ через слой ответа, — значит "
+        "он краснеет не на том"
+    )
+
+    stripped = (
+        '\n\n@router.post("/profile/a-route-phase-nine-converted")\n'
+        "async def a_route_phase_nine_converted(request: Request):\n"
+        '    return RedirectResponse(url="/profile", status_code=302)\n'
+    )
+    without_layer = _sources_with(
+        tmp_path, _pages_sources(), SCRATCH_MODULE, original + stripped
+    )
+
+    assert key not in _converted(without_layer), (
+        "ВТОРАЯ ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: обработчик без вызова слоя ответа всё "
+        "ещё признан переведённым"
+    )
+    assert key in _unclassified(without_layer), (
+        "ГЕЙТ НЕ ЗАМЕТИЛ СНЯТУЮ ЗАВИСИМОСТЬ ОТ СЛОЯ ОТВЕТА — обработчик, "
+        "переставший ходить через `respond()`, прошёл мимо классификации, и "
+        "путь деградации перестал быть обязательным молча"
+    )
+
+
+def test_control_negative_a_converted_handler_with_its_own_redirect_reddens_g2(
+    tmp_path,
+):
+    """ЧТО ДОКАЗЫВАЕТ: G-2 краснеет на ВТОРОМ решении о форме ответа.
+
+    ⚠️ ЭТОТ КОНТРОЛЬ ЕДИНСТВЕННЫЙ, КТО СЕГОДНЯ ДОКАЗЫВАЕТ ЗУБЫ G-2. Само
+    утверждение проходит вакуумно: до Фазы 9 переведённых обработчиков нет, и
+    отличить «ловит» от «не смотрит» без подмены нечем. Здесь разборщику
+    подаётся ровно тот исходник, который Фаза 9 могла бы написать по
+    невнимательности.
+    """
+    original = _pages_sources()[SCRATCH_MODULE]
+    key = f"{SCRATCH_MODULE}::a_route_with_two_decisions"
+
+    addition = (
+        '\n\n@router.post("/profile/a-route-with-two-decisions")\n'
+        "async def a_route_with_two_decisions(request: Request, ok: bool):\n"
+        "    if ok:\n"
+        '        return RedirectResponse(url="/profile", status_code=302)\n'
+        '    return await respond(request, redirect="/profile")\n'
+    )
+    sources = _sources_with(
+        tmp_path, _pages_sources(), SCRATCH_MODULE, original + addition
+    )
+
+    assert key in _converted(sources), (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: обработчик не признан переведённым, и "
+        "утверждение ниже проверяло бы пустое множество"
+    )
+
+    assert key in _converted_with_own_redirect(sources), (
+        "G-2 НЕ ЗАМЕТИЛ ВТОРОГО РЕШЕНИЯ О ФОРМЕ ОТВЕТА — обработчик ходит через "
+        "слой ответа и строит редирект сам, а какое из двух решений исполнится, "
+        "зависит от ветки выполнения"
+    )
+
+
+def test_control_negative_a_second_reading_of_the_header_reddens_the_singleness(
+    tmp_path,
+):
+    """ЧТО ДОКАЗЫВАЕТ: счётчик чтений ловит ВТОРОЕ чтение признака htmx.
+
+    Это тот самый дефект, ради которого критерий 1 фазы и написан: скопированная
+    строка чтения заголовка, из-за которой путь со слоем письма и путь без него
+    расходятся молча.
+    """
+    original = _app_sources()[SCRATCH_MODULE]
+    addition = (
+        '\n\n@router.post("/profile/a-second-reading")\n'
+        "async def a_second_reading(request: Request):\n"
+        f'    return bool(request.headers.get("{HX_REQUEST_HEADER_NAME}"))\n'
+    )
+    sources = _sources_with(tmp_path, _app_sources(), SCRATCH_MODULE, original + addition)
+
+    sites = _header_read_sites(sources)
+    modules = {module for module, _ in sites}
+
+    assert SCRATCH_MODULE in modules, (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: второе чтение признака не найдено в модуле, "
+        "куда его положили"
+    )
+    assert len(sites) > HX_HEADER_READS, (
+        "СЧЁТЧИК ЧТЕНИЙ НЕ ЗАМЕТИЛ ВТОРОГО ЧТЕНИЯ ПРИЗНАКА — единственность "
+        "решения о форме ответа перестала быть утверждением и стала надеждой"
+    )
+
+
+def test_control_negative_a_header_written_from_the_query_string_reddens_the_gate(
+    tmp_path,
+):
+    """ЧТО ДОКАЗЫВАЕТ: G-13 ловит значение заголовка, ПРИШЕДШЕЕ ОТ КЛИЕНТА.
+
+    Это главная угроза правила: строка запроса едет в заголовок ответа, и вместе
+    с ней едут инъекция заголовка, кириллица и увод на чужой сайт (T-08-01,
+    T-08-02, T-08-05).
+    """
+    original = _app_sources()[SCRATCH_MODULE]
+    addition = (
+        '\n\n@router.post("/profile/a-header-from-the-query-string")\n'
+        "async def a_header_from_the_query_string(request: Request):\n"
+        "    response = Response()\n"
+        '    response.headers["HX-Push-Url"] = request.query_params["next"]\n'
+        "    return response\n"
+    )
+    sources = _sources_with(tmp_path, _app_sources(), SCRATCH_MODULE, original + addition)
+
+    written_here = [
+        write for write in _header_writes(sources) if write.module == SCRATCH_MODULE
+    ]
+    assert written_here, (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: разборщик не увидел добавленного места записи "
+        "заголовка, и утверждения ниже доказывали бы промах контроля"
+    )
+
+    assert [write.where for write in _writes_touching_the_request(sources)], (
+        "ГЕЙТ НЕ ЗАМЕТИЛ, ЧТО ЗНАЧЕНИЕ ЗАГОЛОВКА ПРИШЛО ОТ КЛИЕНТА — правило "
+        "закрывает три угрозы запретом на ИСТОЧНИК, и без этой проверки оно не "
+        "закрывает ни одной"
+    )
+    assert [write.where for write in _unsafe_header_writes(sources)], (
+        "ГЕЙТ ПРИЗНАЛ ИНДЕКСАЦИЮ СТРОКИ ЗАПРОСА РАЗРЕШЁННОЙ ФОРМОЙ ОПЕРАНДА"
+    )
+
+
+def test_control_negative_a_header_assembled_from_cyrillic_text_reddens_the_gate(
+    tmp_path,
+):
+    """ЧТО ДОКАЗЫВАЕТ: G-13 ловит значение, СОБРАННОЕ КОНКАТЕНАЦИЕЙ с текстом.
+
+    ⚠️ ЭТОТ КОНТРОЛЬ ПРО ДРУГУЮ ПОЛОВИНУ ПРАВИЛА, ЧЕМ ПРЕДЫДУЩИЙ. Там источник
+    значения — клиент; здесь источник свой, а беда в ФОРМЕ: кириллица в значении
+    заголовка роняет ответ пятисоткой на кодировании в latin-1, и роняет его у
+    всех сразу. Поэтому по этому каналу едет КОД уведомления, а не его текст.
+    """
+    original = _app_sources()[SCRATCH_MODULE]
+    addition = (
+        '\n\n@router.post("/profile/a-header-assembled-from-text")\n'
+        "async def a_header_assembled_from_text(request: Request):\n"
+        "    response = Response()\n"
+        '    response.headers["HX-Push-Url"] = "/profile?notice=" + "Сохранено"\n'
+        "    return response\n"
+    )
+    sources = _sources_with(tmp_path, _app_sources(), SCRATCH_MODULE, original + addition)
+
+    written_here = [
+        write for write in _header_writes(sources) if write.module == SCRATCH_MODULE
+    ]
+    assert written_here, (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: разборщик не увидел добавленного места записи"
+    )
+    assert not _writes_touching_the_request(sources), (
+        "КОНТРОЛЬ ПРОВЕРЯЕТ НЕ ТО: значение собрано из литералов и объекта "
+        "запроса не касается — красноту обязано давать правило ФОРМЫ, а не "
+        "правило источника"
+    )
+
+    unsafe = {write.module for write in _unsafe_header_writes(sources)}
+    assert SCRATCH_MODULE in unsafe, (
+        "ГЕЙТ ПРИЗНАЛ КОНКАТЕНАЦИЮ РАЗРЕШЁННОЙ ФОРМОЙ ОПЕРАНДА — кириллица в "
+        "значении заголовка уронит ответ пятисоткой, и увидеть это можно будет "
+        "только по проводу"
+    )
+
+
+def test_control_negative_a_third_header_write_reddens_the_counter(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: счётчик мест записи краснеет САМ ПО СЕБЕ.
+
+    Подменённое место БЕЗОПАСНО по форме (литерал), поэтому правила операнда
+    молчат — краснеет только счёт. Без этого различения нельзя было бы сказать,
+    есть ли у счётчика собственные зубы или он всегда прячется за правилом
+    операнда: появление нового места, где приложение диктует браузеру поведение,
+    обязано быть решением, а не следствием.
+    """
+    original = _app_sources()[SCRATCH_MODULE]
+    addition = (
+        '\n\n@router.post("/profile/a-third-place-of-writing")\n'
+        "async def a_third_place_of_writing(request: Request):\n"
+        "    response = Response()\n"
+        '    response.headers["HX-Push-Url"] = "/profile"\n'
+        "    return response\n"
+    )
+    sources = _sources_with(tmp_path, _app_sources(), SCRATCH_MODULE, original + addition)
+
+    writes = _header_writes(sources)
+
+    assert any(write.module == SCRATCH_MODULE for write in writes), (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: третье место записи не найдено"
+    )
+    assert _unsafe_header_writes(sources) == [], (
+        "КОНТРОЛЬ ПРОВЕРЯЕТ НЕ ТО: подменённое место обязано быть БЕЗОПАСНЫМ по "
+        "форме, иначе краснота придёт от правила операнда, а не от счётчика"
+    )
+    assert len(writes) != HX_HEADER_WRITES, (
+        "СЧЁТЧИК МЕСТ ЗАПИСИ НЕ ЗАМЕТИЛ ТРЕТЬЕГО МЕСТА — новое место, где "
+        "приложение диктует браузеру поведение, появилось бы молча"
     )
