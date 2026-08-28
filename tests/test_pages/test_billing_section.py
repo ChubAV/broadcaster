@@ -49,6 +49,7 @@ from app.constants import PAYMENT_LIST_CAP, SUBSCRIPTION_DESCRIPTION
 from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.user import User
+from app.pages import notices
 from app.pages.common import templates
 
 BILLING_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "billing.py"
@@ -1000,26 +1001,54 @@ def test_the_handler_never_reads_the_redirect_flag():
 
     assert 'query_params.get("expired")' not in body
     assert "query_params.get('expired')" not in body
-    assert body.count("query_params") == 1, (
-        "обработчик читает больше одного параметра адреса"
+    # ⚠️ БЫЛО «НЕ БОЛЬШЕ ОДНОГО», СТАЛО «НИ ОДНОГО», И ЭТО УСИЛЕНИЕ, А НЕ ПРАВКА
+    # ЧИСЛА ПОД КОД. Единственный параметр, который обработчик читал, — код
+    # исхода нажатой кнопки; читать его самостоятельно больше не нужно и не
+    # разрешено: код разрешается в слова РОВНО В ОДНОМ месте продукта —
+    # областью уведомления шелла по закрытому реестру. Ноль здесь и есть
+    # машинная форма утверждения «второго места разрешения кода в текст нет».
+    assert body.count("query_params") == 0, (
+        "обработчик снова читает параметр адреса — второе место разрешения "
+        "кода в текст расходится с первым молча"
     )
 
 
 @pytest.mark.asyncio
-async def test_the_outcome_of_the_last_action_wins_over_the_background_notice(
+async def test_the_outcome_and_the_background_notice_no_longer_compete(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Две плашки подряд читаются как две разные беды — рисуется одна.
+    """Двум плашкам больше не за что конкурировать — и обе видны по одному разу.
 
-    Исход только что нажатой кнопки важнее фонового состояния: человек нажал
-    «Оплатить» и получил отказ, и именно про отказ он и спрашивает.
+    ⚠️ ТЕСТ ПЕРЕЦЕЛЕН ВМЕСТЕ СО СВОИМ ПРЕДМЕТОМ (план 08-06), А НЕ ОСЛАБЛЕН.
+    Прежде он назывался `test_the_outcome_of_the_last_action_wins_over_the_
+    background_notice` и утверждал ПРИОРИТЕТ: исход нажатой кнопки гасил
+    объяснение закрытого доступа. Приоритет существовал потому, что обе плашки
+    рисовались В ОДНОМ месте карточки и читались подряд как две разные беды.
+    Места стало два: исход действия рисует общая область уведомления шелла,
+    состояние доступа — карточка раздела. Гасить теперь нечего и нечем.
+
+    Утверждение от этого не убыло, а прибыло: прежде проверялось, что одна из
+    двух вещей СКРЫТА, теперь — что ОБЕ сказаны, и каждая ровно один раз.
+    Двойная отрисовка исхода (в области и в карточке) была бы ровно тем
+    дефектом, ради снятия которого частные места отрисовки и убраны.
     """
     await _move_access_expiry(db_session, days=-3)
 
-    body = _body((await authed_client.get("/billing?error=payment")).text)
+    body = _body(
+        (await authed_client.get(f"/billing?notice={notices.PAYMENT_FAILED}")).text
+    )
 
-    assert "Не удалось начать оплату" in body
-    assert NOTICE_NEVER_PAID not in body, "фоновая плашка нарисована второй"
+    assert body.count("Не удалось начать оплату") == 1, (
+        "исход действия нарисован не один раз: либо потерян, либо задвоен "
+        "вторым местом отрисовки"
+    )
+    assert NOTICE_NEVER_PAID in body, (
+        "объяснение закрытого доступа исчезло вместе со снятым приоритетом — "
+        "человеку перестали говорить, почему он сюда попал"
+    )
+    assert body.index("Не удалось начать оплату") < body.index(NOTICE_NEVER_PAID), (
+        "исход только что нажатой кнопки читается ПОЗЖЕ фонового состояния"
+    )
 
 
 @pytest.mark.asyncio
@@ -1445,7 +1474,10 @@ def test_the_long_package_name_wraps_inside_the_row_instead_of_scrolling():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "url,marker",
-    [("/billing?error=payment", "Не удалось начать оплату"), ("/billing", NOTICE_NEVER_PAID)],
+    [
+        (f"/billing?notice={notices.PAYMENT_FAILED}", "Не удалось начать оплату"),
+        ("/billing", NOTICE_NEVER_PAID),
+    ],
 )
 async def test_the_notice_stands_before_the_access_panel(
     authed_client: AsyncClient, db_session: AsyncSession, url: str, marker: str

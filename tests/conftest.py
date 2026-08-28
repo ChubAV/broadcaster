@@ -300,3 +300,51 @@ async def admin_client(client, test_settings):
         follow_redirects=False,
     )
     return client
+
+
+# --- Области уведомления шелла ------------------------------------------------
+#
+# ⚠️ ХЕЛПЕР ЖИВЁТ ЗДЕСЬ, А НЕ КОПИЕЙ В КАЖДОМ ФАЙЛЕ, И ЭТО НЕ УДОБСТВО.
+# Областей уведомления на проект две, разметка у них одна
+# (`includes/notice_area.html`), и разбирать её будут все, кто проверяет исход
+# действия. Вторая копия разбора разошлась бы с первой ровно на том экране, про
+# который забыли, — тем же способом, каким расходились три частных реестра слов
+# до плана 08-06.
+#
+# Импортируется как `from tests.conftest import notice_areas`.
+
+POLITE_AREA_ANCHOR = 'id="notice"'
+ASSERTIVE_AREA_ANCHOR = 'id="notice-alert"'
+
+
+def notice_areas(html: str) -> str:
+    """Содержимое ОБЕИХ областей уведомления шелла — и ничего кроме него.
+
+    ⚠️ ИЗВЛЕЧЕНИЕ, А НЕ ПОИСК ПО ВСЕЙ СТРАНИЦЕ, И ЭТО НЕ ПЕДАНТИЗМ. Шелл
+    доставляет в КАЖДЫЙ документ две СКРЫТЫЕ заготовки плашки — отказа сервера
+    и обрыва связи (`includes/htmx_error_banner.html`), — и класс настойчивого
+    варианта присутствует в них ВСЕГДА. Проверка «плашка нарисована» по всему
+    документу поэтому зеленела бы на пустом экране: она утверждала бы не то, что
+    человеку что-то сказано, а то, что шелл собран.
+
+    Границы области считаются ПО ВЛОЖЕННОСТИ `div`, а не по первому `</div>`:
+    плашка внутри области сама является элементом, и наивный поиск обрезал бы
+    содержимое ровно по её закрытию, то есть терял бы её целиком.
+    """
+    parts = []
+    for anchor in (POLITE_AREA_ANCHOR, ASSERTIVE_AREA_ANCHOR):
+        start = html.index(anchor)
+        cursor = html.index(">", start) + 1
+        depth, scan = 1, cursor
+        while depth:
+            nxt_open = html.find("<div", scan)
+            nxt_close = html.find("</div>", scan)
+            assert nxt_close != -1, f"область {anchor} не закрыта"
+            if nxt_open != -1 and nxt_open < nxt_close:
+                depth += 1
+                scan = nxt_open + 4
+            else:
+                depth -= 1
+                scan = nxt_close + 6
+        parts.append(html[cursor : scan - 6])
+    return "\n".join(parts)

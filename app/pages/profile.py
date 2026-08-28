@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings
 from app.constants import TIMEZONE_CHOICES, VALID_TIMEZONES
 from app.dependencies import forbid_when_impersonating, get_db, get_settings
+from app.pages import notices
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
 
 
@@ -67,7 +68,13 @@ async def profile_post(
         user.timezone = timezone
         db.add(user)
         await db.commit()
-        return RedirectResponse(url="/profile?saved=1", status_code=302)
+        # ⚠️ ЭТОТ ИСХОД ВПЕРВЫЕ СТАНОВИТСЯ ВИДИМЫМ. Прежнее написание было
+        # БУЛЕВЫМ признаком и не рисовалось НИ В ОДНОМ шаблоне продукта:
+        # человек сохранял часовой пояс — то есть менял время, В КОТОРОЕ УХОДЯТ
+        # ЕГО РАССЫЛКИ, — и получал ту же страницу молча, неотличимо от
+        # «ничего не произошло». Код реестра рисуется общей областью шелла,
+        # поэтому сохранение наконец отвечает.
+        return RedirectResponse(url=f"/profile?notice={notices.PROFILE_SAVED}", status_code=302)
 
     return templates.TemplateResponse(
         "profile.html",

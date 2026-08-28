@@ -27,11 +27,17 @@
   (`test_services/test_payment_service.py`).
 
 ПОЧЕМУ МНОЖЕСТВО ПРИЧИН ЗАКРЫТО (T-05-46). В разметку уходит строка ИЗ
-ОТОБРАЖЕНИЯ `_payment_error_message`, а не значение параметра запроса. Владелец
-ссылки может подставить в адрес что угодно — на экран это не попадёт ни
-значением, ни атрибутом, потому что подставлять нечего: вход в разметку не
-связан со входом из адреса. Тем же приёмом закрыт признак исхода повтора
-отправки (`RETRY_NOTICES` в `app/pages/history.py`).
+ЗАКРЫТОГО РЕЕСТРА `app/pages/notices.py`, а не значение параметра запроса.
+Владелец ссылки может подставить в адрес что угодно — на экран это не попадёт
+ни значением, ни атрибутом, потому что подставлять нечего: вход в разметку не
+связан со входом из адреса.
+
+⚠️ ВЛАДЕЛЕЦ СЛОВ СМЕНИЛСЯ ПЛАНОМ 08-06, ГРАНИЦА ФАЙЛА — НЕТ. Прежде тот же
+довод держало ЧАСТНОЕ отображение раздела, и таких частных отображений в
+продукте было три: этот файл проверял одно из них. Три копии одного правила
+расходились бы при первой правке любой из них, поэтому копий не осталось: слова
+принадлежат одному реестру, а рисует их одна область шелла. Предмет ЭТОГО файла
+не изменился — он по-прежнему про ответ раздела на неудавшуюся оплату.
 
 ПОЧЕМУ ТЕКСТ ЧУЖОГО ИСКЛЮЧЕНИЯ НЕ ПОКАЗЫВАЕТСЯ (T-05-47). Прецедент R-03-09
 Фазы 3 — раскрытие текста стороннего исключения в плашке — принят владельцем
@@ -54,7 +60,9 @@ from app.config import Settings
 from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.user import User
+from app.pages import notices
 from app.services.payment_service import handle_webhook
+from tests.conftest import notice_areas
 
 BILLING_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "billing.py"
 
@@ -90,9 +98,13 @@ MSG_PENDING = (
 )
 
 # Признак нарисованной плашки отказа. Проверяется ИМЕННО он, а не наличие слова
-# из текста: слово может прийти из соседнего блока экрана, обёртка — только из
-# ветки показа причины.
-ALERT_MARKER = "data-payment-error"
+# из текста: слово может прийти из соседнего блока экрана, класс плашки — только
+# из отрисованной плашки.
+#
+# ⚠️ ПРИЗНАК ПЕРЕЦЕЛЕН ВМЕСТЕ С МЕСТОМ ОТРИСОВКИ. Прежним признаком была
+# СОБСТВЕННАЯ обёртка раздела (`data-payment-error`); её больше нет — исход
+# рисует общая область уведомления шелла общим макросом.
+ALERT_MARKER = 'class="alert alert--error"'
 
 
 # --- Инструменты --------------------------------------------------------------
@@ -216,7 +228,7 @@ async def test_a_failed_subscription_payment_returns_the_person_with_a_reason(
     response = await _subscribe(authed_client, failing=True)
 
     assert response.status_code == 302
-    assert response.headers["location"] == "/billing?error=payment"
+    assert response.headers["location"] == f"/billing?notice={notices.PAYMENT_FAILED}"
 
 
 @pytest.mark.asyncio
@@ -274,7 +286,7 @@ async def test_the_third_party_exception_text_never_reaches_the_screen(
 
     assert SDK_FAILURE_TEXT not in response.text
     landing = await authed_client.get(response.headers["location"])
-    assert response.headers["location"] == "/billing?error=payment"
+    assert response.headers["location"] == f"/billing?notice={notices.PAYMENT_FAILED}"
     assert SDK_FAILURE_TEXT not in landing.text
 
 
@@ -313,7 +325,7 @@ async def test_subscribing_with_payments_disabled_names_the_reason(
         test_settings.yookassa_enabled = True
 
     assert response.status_code == 302
-    assert response.headers["location"] == "/billing?error=disabled"
+    assert response.headers["location"] == f"/billing?notice={notices.PAYMENT_DISABLED}"
     assert await _payments_count(db_session) == 0
 
 
@@ -365,24 +377,25 @@ def test_no_bare_redirect_without_a_reason_is_left_in_the_section():
 @pytest.mark.parametrize(
     "code,message",
     [
-        ("payment", MSG_PAYMENT),
-        ("disabled", MSG_DISABLED),
+        (notices.PAYMENT_FAILED, MSG_PAYMENT),
+        (notices.PAYMENT_DISABLED, MSG_DISABLED),
     ],
 )
 async def test_a_known_reason_code_prints_its_own_words(
     authed_client: AsyncClient, code: str, message: str
 ):
-    response = await authed_client.get(f"/billing?error={code}")
+    response = await authed_client.get(f"/billing?notice={code}")
 
     assert response.status_code == 200
-    assert ALERT_MARKER in response.text, "плашки отказа на экране нет"
-    assert message in response.text
+    areas = notice_areas(response.text)
+    assert ALERT_MARKER in areas, "плашки отказа в области уведомления нет"
+    assert message in areas
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "code",
-    ["zzz_unknown_reason", "<script>alert(1)</script>", "paymentt", "PAYMENT"],
+    ["zzz_unknown_reason", "<script>alert(1)</script>", "payment_failedd", "PAYMENT_FAILED"],
 )
 async def test_an_unknown_reason_code_prints_nothing_at_all(
     authed_client: AsyncClient, code: str
@@ -390,13 +403,21 @@ async def test_an_unknown_reason_code_prints_nothing_at_all(
     """Подставить произвольный текст через адрес невозможно (T-05-46).
 
     Проверяется НЕ экранирование, а недостижимость: в разметку уходит строка из
-    закрытого отображения, поэтому значение параметра не попадает на экран ни
+    ЗАКРЫТОГО РЕЕСТРА, поэтому значение параметра не попадает на экран ни
     значением, ни атрибутом.
+
+    ⚠️ РАДИУС ЭТОГО СВОЙСТВА ВЫРОС ПЛАНОМ 08-06, И ИМЕННО ПОЭТОМУ ОНО ВАЖНЕЕ
+    ПРЕЖНЕГО. Параметр рисует плашку теперь НА КАЖДОЙ странице обоих шеллов, а
+    не на пяти экранах: сравнение ЦЕЛИКОМ по закрытому множеству и есть то
+    единственное, что не даёт владельцу ссылки написать человеку сообщение от
+    имени приложения где угодно (T-08-08).
     """
-    response = await authed_client.get(f"/billing?error={code}")
+    response = await authed_client.get(f"/billing?notice={code}")
 
     assert response.status_code == 200
-    assert ALERT_MARKER not in response.text, "неизвестный код нарисовал плашку"
+    assert ALERT_MARKER not in notice_areas(response.text), (
+        "неизвестный код нарисовал плашку"
+    )
     assert code not in response.text, "значение параметра напечатано на экране"
 
 
@@ -409,22 +430,29 @@ async def test_the_pending_reason_prints_its_own_words(authed_client: AsyncClien
     → код причины → отображение → плашка», и разрыв ЛЮБОГО звена даёт ту самую
     возвращённую без слов страницу, которую фаза закрывала планом 05-10.
     """
-    response = await authed_client.get("/billing?error=pending")
+    response = await authed_client.get(f"/billing?notice={notices.PAYMENT_PENDING}")
 
     assert response.status_code == 200
-    assert ALERT_MARKER in response.text, "плашки отказа на экране нет"
-    assert MSG_PENDING in response.text
+    areas = notice_areas(response.text)
+    assert ALERT_MARKER in areas, "плашки отказа в области уведомления нет"
+    assert MSG_PENDING in areas
 
 
 @pytest.mark.asyncio
 async def test_the_section_without_the_parameter_prints_no_alert(
     authed_client: AsyncClient,
 ):
-    """Парный тест: без него предыдущие зеленели бы на разметке без плашки."""
+    """Парный тест: без него предыдущие зеленели бы на разметке без плашки.
+
+    ⚠️ ОБЛАСТЬ УВЕДОМЛЕНИЯ ПРИ ЭТОМ СУЩЕСТВУЕТ ВСЕГДА, ДАЖЕ ПУСТАЯ, И ЭТО НЕ
+    ПРОТИВОРЕЧИЕ. Правило «нет кода — нет плашки» относится к ПЛАШКЕ: узел
+    области стабилен, потому что внеполосная подмена целится в него по
+    идентификатору. Проверяется поэтому пустота области, а не отсутствие узла.
+    """
     response = await authed_client.get("/billing")
 
     assert response.status_code == 200
-    assert ALERT_MARKER not in response.text
+    assert ALERT_MARKER not in notice_areas(response.text)
 
 
 # ⚠️ `test_the_alert_stands_before_the_current_plan_block` СНЯТ ОТСЮДА, А ЕГО
@@ -438,38 +466,47 @@ async def test_the_section_without_the_parameter_prints_no_alert(
 
 
 def test_the_reason_codes_of_the_handlers_are_exactly_the_known_set():
-    """Ни одного кода в редиректе мимо отображения — и ни одного лишнего ключа.
+    """Ни одного кода в редиректе мимо РЕЕСТРА — и ни одного лишнего.
 
-    Коды выписаны в редиректах ЛИТЕРАЛАМИ намеренно: адрес обязан читаться
-    целиком в той строке, где он строится. Расхождение литерала с отображением
-    даёт молчаливый редирект без слов — ровно тот дефект, который закрывает этот
-    план, — поэтому связь держится этой регрессией, а не аккуратностью автора.
+    ⚠️ ГЕЙТ ПЕРЕЦЕЛЕН ВМЕСТЕ С ВЛАДЕЛЬЦЕМ СЛОВ, А НЕ ОСЛАБЛЕН. Прежде он держал
+    связь литерала редиректа с ЧАСТНЫМ отображением раздела; частного
+    отображения больше нет — слова принадлежат закрытому реестру
+    (`app/pages/notices.py`), общему на весь продукт. Утверждение осталось тем
+    же: расхождение того, что раздел ПИШЕТ, с тем, по чему есть что нарисовать,
+    даёт молчаливый редирект без слов — ровно тот дефект, ради которого гейт и
+    заведён.
+
+    ⚠️ КОДЫ БОЛЬШЕ НЕ ЛИТЕРАЛЫ, И ЭТО УСИЛЕНИЕ. Опечатка в литерале не падала
+    ничем и давала кнопку, вернувшую ту же страницу без единого слова; опечатка
+    в имени константы падает на импорте модуля. Поэтому обход собирает ИМЕНА
+    констант реестра, использованные в адресах раздела.
     """
-    from app.pages import billing as billing_module
-
     source = BILLING_PY.read_text(encoding="utf-8")
-    used = set(re.findall(r"/billing\?error=([a-z]+)", source))
+    used = set(re.findall(r"/billing\?notice=\{notices\.([A-Z_]+)\}", source))
 
     assert used == {
-        "payment",
-        "disabled",
-        # ⚠️ КОДОВ БЫЛО ПЯТЬ, СТАЛО ТРИ. `plan` и `downgrade` сняты планом
-        # 05.1-07 ВМЕСТЕ СО СВОИМИ ВЕТКАМИ ГАРДА: тарифов нет, выбирать не из
-        # чего, переходить некуда. Множество здесь сужено ТЕМ ЖЕ коммитом, что
-        # снял ветки, — иначе эта регрессия краснела бы по причине, к предмету
-        # правки отношения не имеющей, а её предмет ровно в том, чтобы литерал
-        # редиректа и отображение правились ОДНОВРЕМЕННО.
+        "PAYMENT_FAILED",
+        "PAYMENT_DISABLED",
+        # ⚠️ ВЕТОК БЫЛО ПЯТЬ, СТАЛО ТРИ. Две сняты планом 05.1-07 ВМЕСТЕ СО
+        # СВОИМИ ГАРДАМИ: тарифов нет, выбирать не из чего, переходить некуда.
+        # Множество здесь сужалось ТЕМ ЖЕ коммитом, что снял ветки, — иначе
+        # регрессия краснела бы по причине, к предмету правки отношения не
+        # имеющей.
         # Потолок одновременных подписочных намерений (план 05-17). Код обязан
-        # войти в ОБА места сразу — в литерал редиректа и в отображение, — иначе
-        # эта регрессия краснеет. Правка её множества и есть часть работы, а не
+        # войти в ОБА места сразу — в адрес редиректа и в реестр, — иначе эта
+        # регрессия краснеет. Правка её множества и есть часть работы, а не
         # побочный эффект: тест держит связь, которую иначе держала бы только
         # аккуратность автора.
-        "pending",
+        "PAYMENT_PENDING",
     }, used
-    for code in used:
-        assert billing_module._payment_error_message(code), code
-    assert billing_module._payment_error_message("zzz") == ""
-    assert billing_module._payment_error_message(None) == ""
+    for name in used:
+        code = getattr(notices, name)
+        assert notices.notice_for(code) is not None, (
+            f"раздел пишет код {code!r}, которого нет в реестре: человек "
+            "получил бы ту же страницу без единого слова"
+        )
+    assert notices.notice_for("zzz") is None
+    assert notices.notice_for(None) is None
 
 
 def test_the_get_handler_still_contains_no_write_path():
@@ -935,7 +972,7 @@ async def test_a_second_subscription_intent_from_the_form_is_refused_with_words(
     second = await _subscribe(authed_client, payment_id="yoo_second")
 
     assert second.status_code == 302
-    assert second.headers["location"] == "/billing?error=pending", (
+    assert second.headers["location"] == f"/billing?notice={notices.PAYMENT_PENDING}", (
         "второе намерение ушло на оплату либо вернулось без слов"
     )
     assert await _payments_count(db_session) == 1, "заведена вторая строка платежа"
@@ -968,7 +1005,7 @@ async def test_a_second_intent_is_refused_while_the_first_is_fresh(
     """
     await _subscribe(authed_client, payment_id="yoo_first")
     refused = await _subscribe(authed_client, payment_id="yoo_second")
-    assert refused.headers["location"] == "/billing?error=pending"
+    assert refused.headers["location"] == f"/billing?notice={notices.PAYMENT_PENDING}"
     assert await _payments_count(db_session) == 1
 
     assert await _confirm(db_session, "yoo_first") is True
