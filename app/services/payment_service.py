@@ -54,7 +54,8 @@ STATUS_EXPIRED = "expired"
 # обязан находить и то место, которое о нём рассуждает, а не только два места,
 # которые его объявляют. Что объявление модели ДЕЙСТВУЮЩЕЕ — то есть потолок
 # существует в схеме, поднятой из моделей, — закреплено
-# `test_a_second_open_intent_is_refused_by_the_schema`.
+# `test_a_second_open_intent_is_refused_by_the_schema`; что два объявления не
+# разошлись — `test_the_two_sources_of_the_schema_declare_one_predicate`.
 #
 # ⚠️ КОДОМ ОНА НЕ ЧИТАЕТСЯ, И ЭТО РЕШЕНИЕ, А НЕ НЕДОДЕЛКА. Различать свой отказ
 # ПО ИМЕНИ ограничения нельзя: SQLite сообщает
@@ -576,7 +577,11 @@ async def create_payment(
     из ревизии копированием, а не пересказом: для SQLite он есть ТЕКСТ, и два
     написания, отличающиеся пробелом, дали бы два разных ограничения под одним
     именем. Что потолок ДЕЙСТВУЕТ в схеме из моделей, закреплено
-    `test_a_second_open_intent_is_refused_by_the_schema`.
+    `test_a_second_open_intent_is_refused_by_the_schema` и
+    `test_the_cap_exists_in_the_schema_built_from_models`; что два источника схемы
+    не разошлись молча — `test_the_two_sources_of_the_schema_declare_one_predicate`,
+    чьи зубы доказаны подделкой с изменённым пробелом
+    (`test_the_comparison_reddens_on_a_single_changed_space`).
 
     ПОРЯДОК ЗДЕСЬ ТЕПЕРЬ РАЗНЫЙ ДЛЯ ДВУХ ПРЕДМЕТОВ ПОКУПКИ, И ЭТО РЕШЕНИЕ:
     подписка идёт «уборка → резерв → сеть → дозапись» (D-05), пакет остаётся на
