@@ -51,6 +51,7 @@ from app.models.send_log import SendLog
 from app.services.payment_service import (
     PENDING_INTENT_TTL_HOURS,
     STATUS_CANCELED,
+    STATUS_EXPIRED,
     STATUS_PENDING,
 )
 
@@ -354,6 +355,51 @@ async def test_a_terminal_status_clears_the_payment_incident(db_session):
     payment.status = STATUS_CANCELED
     await db_session.flush()
     assert await _collect(db_session) == ()
+
+
+@pytest.mark.asyncio
+async def test_an_expired_intent_does_not_raise_the_payment_incident(db_session):
+    """Снятое по сроку давности намерение — штатный исход, а не денежная аномалия.
+
+    ⚠️ УЛИКА В ТОМ, ЧТО ДВА ПОРОГА СОВПАДАЮТ ПО ПОСТРОЕНИЮ. Уборка
+    `_expire_stale_intents` переводит намерение в `expired` ровно тогда, когда
+    оно старше `PENDING_INTENT_TTL_HOURS`, и залипание считается ОТ ТОЙ ЖЕ
+    константы. Значит каждая благополучно снятая строка старше порога залипания
+    по построению — и признак, заданный ДОПОЛНЕНИЕМ терминальных статусов,
+    поднимал бы на ней постоянный инцидент, а массовый перевод строк ревизией
+    `0021` дал бы разовый залп, вытесняющий настоящие залипшие платежи из
+    первых `INCIDENT_LIST_CAP` записей.
+
+    Тест краснеет на возврате дополнения: он и написан затем, чтобы прежняя
+    форма условия не вернулась молча.
+    """
+    await _seed_payment(
+        db_session,
+        payment_id=1,
+        status=STATUS_EXPIRED,
+        created_at=NOW - timedelta(hours=PENDING_INTENT_TTL_HOURS + 1),
+    )
+    assert await _collect(db_session) == ()
+
+
+@pytest.mark.asyncio
+async def test_a_stale_pending_intent_still_raises_the_payment_incident(db_session):
+    """Зубы правки: признак погашен ТОЧЕЧНО, а не целиком.
+
+    Правка, вычеркнувшая денежный признак вовсе, прошла бы как исправление —
+    соседний тест позеленел бы вместе с ней. Эта строка того же возраста, но в
+    наблюдаемом статусе, и инцидент по ней обязан подниматься с прежним
+    `subject_id`.
+    """
+    await _seed_payment(
+        db_session,
+        payment_id=1,
+        status=STATUS_PENDING,
+        created_at=NOW - timedelta(hours=PENDING_INTENT_TTL_HOURS + 1),
+    )
+    incidents = await _collect(db_session)
+    assert _kinds(incidents) == [INCIDENT_KIND_PAYMENT_STUCK]
+    assert incidents[0].subject_id == 1
 
 
 # --- Признак 5: планировщик не дышит (D-45.5) ---------------------------------
