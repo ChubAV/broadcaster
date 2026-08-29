@@ -1,10 +1,12 @@
 ---
 phase: 08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy
-reviewed: 2026-08-28T00:00:00Z
+reviewed: 2026-08-29T10:05:00Z
 depth: standard
-files_reviewed: 54
+files_reviewed: 59
 files_reviewed_list:
   - alembic/versions/0021_payments_open_intent_index.py
+  - app/application/admin/incidents.py
+  - app/application/admin/payments_query.py
   - app/dependencies.py
   - app/main.py
   - app/models/payment.py
@@ -33,7 +35,9 @@ files_reviewed_list:
   - app/templates/includes/notice_oob.html
   - tests/conftest.py
   - tests/test_application/declared_invariants_without_witness.txt
+  - tests/test_application/test_admin_payments.py
   - tests/test_application/test_declared_invariants.py
+  - tests/test_application/test_incidents.py
   - tests/test_infra/__init__.py
   - tests/test_infra/test_web_service_is_single_process.py
   - tests/test_migrations/test_0021_payments_open_intent_index.py
@@ -55,419 +59,492 @@ files_reviewed_list:
   - tests/test_services/test_payment_concurrency.py
   - tests/test_services/test_payment_intent_cap.py
   - tests/test_services/test_payment_service.py
+  - tests/test_services/test_payment_status_vocabulary.py
   - tests/test_templates/test_htmx_inventory.py
   - tests/test_templates/test_htmx_markup_gates.py
   - tests/test_templates/test_htmx_markup_security.py
 findings:
   critical: 1
-  warning: 8
-  info: 4
-  total: 13
+  warning: 9
+  info: 7
+  total: 17
 status: issues_found
 ---
 
-# Phase 08: Code Review Report
+# Фаза 08: отчёт код-ревью
 
-**Reviewed:** 2026-08-28
+**Reviewed:** 2026-08-29T10:05:00Z
 **Depth:** standard
-**Files Reviewed:** 54
+**Files Reviewed:** 59
 **Status:** issues_found
 
 ## Summary
 
-Reviewed the four waves of Phase 08: the response layer (`app/pages/htmx.py`), the closed
-notice registry (`app/pages/notices.py`), the notice surface templates, and the money cap
-(migration `0021` + rewritten `create_payment`). Cross-referenced every consumer of the new
-`expired` payment status, every writer of the new `?notice=` channel, and both transports of
-`refuse()`.
+Просмотрены денежный путь (`payment_service.py`, `incidents.py`, `payments_query.py`,
+ревизия `0021`, модель платежа), слой ответа (`htmx.py`, `main.py`, `dependencies.py`,
+`pages/__init__.py`), реестр уведомлений и его разметка, восемь правленных
+обработчиков и семь шаблонов, а также пакет новых гейтов.
 
-The most serious defect is a **cross-module consequence of the new fourth payment status**.
-`expired` was deliberately kept out of `TERMINAL_STATUSES` so that a swept intent stays payable —
-but two *pre-existing* readers of "unclosed payment" are defined as `status NOT IN
-TERMINAL_STATUSES` and were not updated. Every row the migration backfill or the lazy sweep
-expires is, by construction, older than the stuck-payment threshold, so it becomes a permanent
-false "payment stuck" incident on the admin overview and is listed under the admin filter chip
-labelled "В обработке" while the same row prints as "просрочен". Because the incident block is
-capped at 20 and sorted newest-first, accumulating expired intents can push genuinely stuck
-payments out of view. Neither `app/application/admin/incidents.py` nor
-`app/application/admin/payments_query.py` is in the phase diff, and no test covers the
-interaction.
+Подмножества суиты, прогнанные под ревью, зелёные:
+`tests/test_services` + `tests/test_models` + `tests/test_migrations` +
+`tests/test_application` — 511 passed; `tests/test_templates` + `tests/test_infra` —
+126 passed. `ruff --select F401,F811,F841,E711,E712,B006` по всем правленным
+модулям приложения — чисто. Полный прогон `tests/test_pages` не уложился в лимит
+времени ревью и в отчёте не засчитан.
 
-Secondary findings concentrate on the money path (an `IntegrityError` classifier that cannot
-actually distinguish a foreign rejection when the user already has an open intent; a
-money-without-goods window that the docstring claims is closed but is not) and on the response
-layer being entirely unreachable from `app/` while the twelve notice writers bypass every
-validation the layer provides.
+Ключевые замечания:
 
-The `is_htmx` empty-header decision and the name-free `IntegrityError` handling were excluded
-from review per the phase brief. Machine gates were judged as gates.
+1. **Денежный путь.** Перевод потолка в схему сделан аккуратно (порядок
+   «уборка → резерв → сеть → дозапись», savepoint, перечитывание состояния вместо
+   разбора текста драйвера), но **окно отказа охватывает только вызов SDK**.
+   Любой сбой ПОСЛЕ успешного ответа ЮKassa оставляет резерв в `pending`, а новый
+   частичный уникальный индекс превращает это в 24-часовую блокировку оплаты для
+   конкретного человека без единого пути восстановления (CR-01).
+2. **Слой ответа полу-подключён.** `respond()` — центральная функция фазы —
+   не имеет НИ ОДНОГО вызова в `app/`; вместе с ней мертвы `_glue_notice`,
+   `_notice_oob` и шаблон `includes/notice_oob.html`. Все двенадцать
+   обработчиков продолжают собирать `RedirectResponse(302)` руками (WR-01).
+3. **Утверждения комментариев расходятся с деревом.** Заявление «частных
+   реестров не осталось ни одного» неверно: `QUEUE_DROP_RESULTS`
+   (`app/pages/admin.py:288`) жив и работает по прежней схеме (WR-06). Гейт
+   словаря статусов, на который прямо ссылается новая положительная выборка
+   `AWAITING_STATUSES`, уже, чем обещает его читатель: `alembic/` и голый SQL вне
+   области (WR-07).
+4. **Фикстура теста ревизии `0021` не воспроизводит боевую схему** — во внешнем
+   ключе `payments.user_id → users.id ON DELETE CASCADE` нет вовсе, поэтому
+   утверждение «пересоздание таблицы ничего не потеряло» не покрывает главный
+   риск batch-режима (WR-08).
+
+## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: The new `expired` status silently matches "unclosed payment" and manufactures false stuck-payment incidents
+### CR-01: отказ ПОСЛЕ успешного вызова ЮKassa запирает человека от оплаты на 24 часа
 
-**File:** `app/services/payment_service.py:50,78`; `alembic/versions/0021_payments_open_intent_index.py:150`; consumers at `app/application/admin/incidents.py:434,447,475,631,635,669` and `app/application/admin/payments_query.py:105`
-
+**File:** `app/services/payment_service.py:721-808`
 **Issue:**
-`STATUS_EXPIRED` is deliberately excluded from `TERMINAL_STATUSES` (`payment_service.py:78`) so a
-swept intent stays payable. But the project's single definition of "payment is not closed" is:
+`try/except Exception` охватывает РОВНО `YooPayment.create(...)` (строки 721-769).
+Всё, что стоит после него, не защищено:
 
 ```python
-# app/application/admin/incidents.py:434
-def unclosed_payment_clause():
-    return Payment.status.not_in(tuple(TERMINAL_STATUSES))
+771  if reserved is not None:
+772      reserved.yookassa_payment_id = payment.id
+778      await db.commit()          # ← вне try
+...
+805  return {
+806      "confirmation_url": payment.confirmation.confirmation_url,   # ← вне try
+807      "payment_id": payment.id,
+808  }
 ```
 
-`'expired'` is not in `{'succeeded', 'canceled'}`, so every expired row matches. That clause has
-two live readers, both of which now misreport:
+Сценарий: SDK ответил успехом, платёж у ЮKassa создан, а `db.commit()` на строке
+778 упал (обрыв соединения с БД, statement timeout, дедлок) либо
+`payment.confirmation` оказался `None`. Тогда:
 
-1. **False stuck-payment incidents (money-grade alarm).**
-   `unclosed_payments_stmt` (`incidents.py:475`) selects unclosed rows with
-   `Payment.created_at <= payment_stuck_before(now)`, and `payment_stuck_before`
-   (`incidents.py:447`) is `now - PENDING_INTENT_TTL_HOURS` — the *same* 24 h constant the sweep
-   uses. Therefore **every row `_expire_stale_intents` gasses is, by construction, already past
-   the stuck threshold**, and `detect_payment_stuck` (`incidents.py:385`) raises an incident for
-   it on the very next admin overview load. The incident never clears, because `expired` is not
-   terminal by design. Migration `0021`'s backfill (`0021:150`) mass-converts rows to `expired`,
-   so this fires as an incident flood on the first admin page view after deploy — exactly the
-   "число переведённых строк пишется в журнал" event the revision documents, but surfaced as an
-   operational alarm nobody decided to raise.
+* исключение уходит наверх мимо `PaymentCreationError`, поэтому
+  `subscribe_to_plan` (`app/pages/billing.py:311-351`) его НЕ ловит — человек
+  получает 500 и адрес оплаты не получает вовсе;
+* ветка гашения резерва (`reserved.status = STATUS_EXPIRED`, строки 743-745)
+  живёт ВНУТРИ `except` вокруг SDK и на этом пути не исполняется;
+* строка остаётся `kind='subscription' AND status='pending'`, то есть ПОД
+  предикатом `uq_payments_open_subscription_intent`;
+* следующая попытка того же человека начинается с `_expire_stale_intents`
+  (строка 635), но строке пять минут от роду — под срок давности
+  `PENDING_INTENT_TTL_HOURS = 24` она не подпадает, уборка её не трогает, и
+  вставка нового резерва отвергается индексом → `PendingIntentCapError` →
+  плашка «Предыдущая оплата ещё не завершена».
 
-2. **Real incidents get hidden.** `incidents.py:669/675` truncates to `INCIDENT_LIST_CAP = 20`
-   after sorting newest-first. Freshly expired intents (25 h old) sort *above* genuinely stuck
-   payments (weeks old), so accumulating expired intents evict real money incidents from the
-   block that exists precisely to surface them.
+Итог: транзиентный сбой БД превращается в **24 часа невозможности заплатить**
+для этого пользователя. Ни самообслуживания, ни админского инструмента снятия
+намерения в продукте нет (ветка `expired` проставляется только приложением на
+своём же пути и ревизией `0021`). Это ровно то состояние, которое докстринг
+`_reserve_subscription_intent` объявляет невозможным («локальная строка без
+удалённого платежа восстановима — она гасится в `expired`»): для отказа SDK это
+правда, для отказа ПОСЛЕ SDK — нет.
 
-3. **Contradictory admin filter.** `PAYMENT_STATUS_FILTERS["unclosed"]` is labelled
-   `"В обработке"` (`payments_query.py:105`) and is backed by the same clause, so expired rows are
-   returned under "in processing" while `app/templates/admin/payments.html:39` renders them as
-   `просрочен`. The phase's own D-14 rule ("one state is called by one word for user and admin")
-   is violated by the filter, not by the label.
-
-This is the failure mode `unclosed_payment_clause`'s own docstring predicted ("достаточно, чтобы
-платёжный провайдер завёл четвёртый статус") — inverted: *we* added the fourth status, and the
-`NOT IN` form absorbed it silently. No test in the phase covers it; `test_admin_payments.py`
-only asserts the new label renders.
-
-**Fix:** Introduce an explicit "open intent" set and make the incident/filter readers use it,
-rather than deriving "unclosed" from the complement of `TERMINAL_STATUSES`:
+**Fix:** расширить окно гашения резерва на весь участок «после сети», а не
+только на вызов SDK:
 
 ```python
-# app/services/payment_service.py
-TERMINAL_STATUSES = frozenset({STATUS_SUCCEEDED, STATUS_CANCELED})
-# Статусы, из которых платёж ещё МОЖЕТ выйти сам, — то есть за которыми
-# администратор наблюдает как за незакрытыми. `expired` сюда НЕ входит:
-# строка погашена решением приложения, наблюдать за ней нечего, хотя
-# оплачиваемой она остаётся (см. TERMINAL_STATUSES).
-AWAITING_STATUSES = frozenset({STATUS_PENDING})
+    try:
+        payment = YooPayment.create({...}, idempotency_key)
+    except Exception as exc:
+        await _expire_reserve(db, reserved)
+        logger.error("payment_create_failed", ...)
+        raise PaymentCreationError("ЮKassa не создала платёж") from exc
 
-# app/application/admin/incidents.py
-def unclosed_payment_clause():
-    return Payment.status.in_(tuple(AWAITING_STATUSES))
+    try:
+        if reserved is not None:
+            reserved.yookassa_payment_id = payment.id
+            await db.commit()
+        else:
+            ...
+        confirmation_url = payment.confirmation.confirmation_url
+    except Exception as exc:
+        # Резерв обязан быть погашен и здесь: платёж у ЮKassa создан, но человеку
+        # не отдан, а `pending` запер бы его на PENDING_INTENT_TTL_HOURS.
+        await _expire_reserve(db, reserved)
+        logger.error("payment_link_failed", user_id=user_id,
+                     yookassa_id=getattr(payment, "id", None),
+                     error_type=type(exc).__name__)
+        raise PaymentCreationError("ЮKassa не создала платёж") from exc
 ```
 
-and add a regression asserting that a row in `STATUS_EXPIRED` produces **no**
-`INCIDENT_KIND_PAYMENT_STUCK` and does **not** appear under the `unclosed` chip. If the product
-decision is instead that expired intents *should* be visible to the admin, add a fourth chip with
-its own label and exclude them from the incident detector — but the current state (incident yes,
-label "просрочен", filter "В обработке") is three answers to one question.
+где `_expire_reserve` — уже существующие три строки 743-745, вынесенные в
+хелпер (он должен пережить и падение самого гашения: обернуть в свой
+`try/except` с записью в журнал, чтобы исходная причина не потерялась).
+
+---
 
 ## Warnings
 
-### WR-01: `_is_open_intent_conflict` cannot distinguish a foreign `IntegrityError` when the user already has an open intent
+### WR-01: `respond()` и вся htmx-половина канала уведомлений не имеют ни одного вызова в `app/`
 
-**File:** `app/services/payment_service.py:304-348`, used at `app/services/payment_service.py:405-424`
+**File:** `app/pages/htmx.py:209-367`, `app/templates/includes/notice_oob.html`
+**Issue:**
+Проверка по дереву:
 
-**Issue:** The classifier answers "was this our cap?" by counting rows matching the index
-predicate. That is correct only in the direction the docstring tests
-(`test_a_foreign_rejection_is_not_swallowed`: *no* pending row ⇒ re-raise). In the opposite
-direction it is unconditionally wrong: if the user has an open pending subscription intent, **any**
-`IntegrityError` raised by the reserve insert — FK violation on `user_id`, a `NOT NULL` violation
-introduced by a future column, a unique violation on `yookassa_payment_id` — is reported as
-`PendingIntentCapError`, and the user is told "предыдущая оплата ещё не завершена". The docstring
-explicitly claims the opposite ("ПОЧЕМУ ОТВЕТ ОБЯЗАН БЫТЬ ТОЧНЫМ. Чужой отказ, принятый за свой,
-показал бы человеку … и настоящая поломка осталась бы незамеченной"). The implementation
-guarantees exactly that outcome for the common case, and the log line
-`subscription_intent_cap_reached` will hide the real fault.
-
-**Fix:** Narrow the classification with the facts already available at the raise site, and log the
-original exception so the misclassification is at least diagnosable:
-
-```python
-except IntegrityError as rejection:
-    if not await _is_open_intent_conflict(db, user_id):
-        raise
-    logger.warning(
-        "subscription_intent_cap_reached",
-        user_id=user_id,
-        # Отказ различается перечитыванием состояния, а не текстом драйвера;
-        # текст всё же пишется в ЖУРНАЛ, чтобы чужой отказ, совпавший с
-        # открытым намерением, не остался невидимым.
-        rejection_type=type(rejection.orig).__name__,
-        rejection=str(rejection.orig),
-    )
-    raise PendingIntentCapError(...) from rejection
+```
+$ grep -rn "from app.pages.htmx import" app/
+app/dependencies.py:385:    from app.pages.htmx import refuse
+app/main.py:25:from app.pages.htmx import HtmxRefusal, location_response
+app/pages/__init__.py:12:from app.pages.htmx import refuse
+app/pages/ads.py:15:from app.pages.htmx import is_htmx
+$ grep -rn "\brespond\b" app/ | grep -v htmx.py
+(пусто)
 ```
 
-Additionally, on PostgreSQL (the production dialect) the constraint name *is* available via
-`rejection.orig.diag.constraint_name`; using it when present, and falling back to the state re-read
-on SQLite, removes the false positive on the dialect where it matters without breaking the suite.
+Таким образом мертвы в продакшене: `respond()` (305-367), `_glue_notice`
+(251-283), `_notice_oob` (217-248), `_require_registered_notice` (180-206),
+`NOTICE_OOB_TEMPLATE` (209), `NOTICE_QUERY_KEY` (45) и весь шаблон
+`includes/notice_oob.html`. Ни один из тринадцати обработчиков, пишущих код
+исхода, через слой не проходит — все тринадцать собирают адрес и
+`RedirectResponse(..., status_code=302)` руками (см. WR-02).
 
-### WR-02: The "money without goods" window is not closed by reserve-before-network; the docstring says it is
+Следствия, а не только эстетика:
 
-**File:** `app/services/payment_service.py:744-751` (write-back), docstring claim at `app/services/payment_service.py:369-381`
+* сверка кода с реестром (`_require_registered_notice`) на боевом пути НЕ
+  выполняется ни разу — она живёт только внутри `respond()`;
+* приклейка внеполосного блока (единственный способ показать исход
+  человеку, оставшемуся на странице благодаря htmx) недостижима, поэтому
+  форма редактора объявлений (`ads/form.html:64`, `hx-post`) исход действия
+  показать по-прежнему не может;
+* 400 строк логики и один шаблон проверяются исключительно тестами — то есть
+  «покрыты» без единого потребителя.
 
-**Issue:** The reserve row is committed before `YooPayment.create` (good), but the row is linked to
-the remote payment only *after* the network call returns:
+**Fix:** либо перевести обработчики на `respond()` (тогда `respond` перестанет
+быть мёртвым и приклейка заработает), либо, если перевод отложен решением фазы,
+пометить это явным `HOLD_NOT_BUILT_YET`-подобным реестром в гейте htmx и
+удалить `_glue_notice`/`_notice_oob`/`notice_oob.html` до момента, когда у них
+появится вызывающий. Сегодня существует и то, и другое: строки есть, потребителя
+нет, а тесты создают впечатление работающего канала.
 
-```python
-reserved.yookassa_payment_id = payment.id
-await db.commit()
-```
+### WR-02: ключ строки запроса `notice` объявлен константой, но выписан литералом в 15 местах
 
-If the process dies, the connection drops, or that `commit()` fails between YooKassa creating the
-payment and this write-back, the remote payment exists and the local row is `pending` with
-`yookassa_payment_id IS NULL`. `handle_webhook` matches on `yookassa_payment_id`
-(`payment_service.py:~875`), finds nothing, logs `webhook_payment_not_found` and returns `False` —
-the user pays and never gets the month. The `idempotency_key` (`payment_service.py:661`) is a fresh
-`uuid4()` that is never persisted, so there is no reconciliation key to recover from either. The
-docstring asserts "локальная строка без удалённого платежа восстановима … удалённый платёж без
-локальной строки — НЕТ", implying the second case is eliminated; it is only narrowed.
+**File:** `app/pages/htmx.py:45`, `app/dependencies.py:323`,
+`app/pages/billing.py:309,346,351`, `app/pages/auth.py:813`,
+`app/pages/profile.py:77`, `app/pages/history.py:911,958,962,998`,
+`app/pages/admin.py:926,945`, `app/pages/schedules.py:335`,
+`app/templates/includes/notice_area.html:61`
+**Issue:** `NOTICE_QUERY_KEY = "notice"` (htmx.py:45) используется ровно один
+раз — в мёртвом `_with_notice`. Все тринадцать реальных мест записи набирают
+`?notice=` / `&notice=` литералом, а чтение в шаблоне — `request.query_params.get('notice')`.
+Модуль, чей докстринг требует единственного объявления признака заголовка,
+собственный ключ канала размножил в пятнадцати точках. Переименование ключа
+сегодня — правка пятнадцати файлов, из которых один шаблон и один
+`app/dependencies.py` не связаны с пакетом `app.pages` вовсе.
+**Fix:** провести запись через `respond()` (см. WR-01), а чтение — через
+шаблонный глобал, принимающий `Request`, например
+`templates.env.globals["notice_from"] = lambda request: notice_for(request.query_params.get(NOTICE_QUERY_KEY))`,
+и заменить строку 61 на `{% set notice = notice_from(request) %}`.
 
-**Fix:** Persist the correlation key on the reserve row before the network call so the pair is
-always recoverable, e.g. store `idempotency_key` in a column and add it to the webhook lookup
-fallback, or generate the payment id client-side. At minimum, correct the docstring so the
-remaining window is named (the phase's own doctrine is "цена размена названа, а не замолчана"), and
-add a `payment_reserve_unlinked` log key on the write-back failure path.
-
-### WR-03: The entire response layer is unreachable from `app/`; all twelve notice writers bypass its validation
-
-**File:** `app/pages/htmx.py:180-367`; writers at `app/pages/billing.py:309,346,351`, `app/pages/history.py:911,958,962,998`, `app/pages/admin.py:926,945`, `app/pages/profile.py:77`, `app/pages/auth.py:813`, `app/pages/schedules.py:335`
-
-**Issue:** `respond()` — declared "ГЛАВНЫЙ выход обработчика" and the sole enforcement point for the
-mandatory degraded path — has **zero call sites in `app/`** (`NOT_YET_CONVERTED_COUNT = 36` in
-`tests/test_pages/test_htmx_gates.py:236` confirms 36/36 handlers unconverted). Everything reachable
-only through it is therefore dead in production: `_require_registered_notice`, `_notice_oob`,
-`_glue_notice`, `_with_notice`, `NOTICE_QUERY_KEY`, `NOTICE_OOB_TEMPLATE`, and the whole
-`includes/notice_oob.html` template. Consequences:
-
-* The registry check at write time (`_require_registered_notice`, `htmx.py:180`) never runs on any
-  real redirect — the check exists precisely to catch the typo that degrades silently.
-* `_local_path` (`htmx.py:89`) never validates any real redirect target.
-* The query key is declared once (`NOTICE_QUERY_KEY = "notice"`, `htmx.py:45`) and then hardcoded
-  as the literal `?notice=` in twelve f-strings — the single-spelling doctrine the module argues
-  for is not actually in force at any writer.
-* The OOB channel (`notice_oob.html`) is exercised only by tests; its behaviour in a real browser
-  is unverified.
-
-This is defensible as staged work, but it should be recorded as a known gap rather than read as
-"the notice channel is wired".
-
-**Fix:** At minimum, route the twelve writers through a shared helper so the query key and the
-registry check have one owner today, without waiting for the htmx cutover:
-
-```python
-# app/pages/htmx.py
-def notice_redirect(path: str, notice: str) -> RedirectResponse:
-    """302 с кодом исхода — единственная сборка на не-htmx пути."""
-    _require_registered_notice(notice)
-    return RedirectResponse(url=_with_notice(path, notice), status_code=302)
-```
-
-### WR-04: The impersonation notice code is written as a raw string literal, violating the registry's own rule
+### WR-03: код исхода в `IMPERSONATION_REFUSED_LOCATION` — сырой литерал, не проверяемый в рантайме
 
 **File:** `app/dependencies.py:323`
-
 **Issue:**
 ```python
 IMPERSONATION_REFUSED_LOCATION = "/dashboard?notice=impersonation_forbidden"
 ```
-`app/pages/notices.py:44-48` states the rule explicitly: "КОД ЕДЕТ КОНСТАНТОЙ, А НЕ ЛИТЕРАЛОМ …
-опечатка в литерале даёт молчаливое «плашки нет»". This is the one place in the codebase that
-breaks it, and it is the *worst* place to break it: the code travels via `refuse()`, which does
-**not** call `_require_registered_notice`, so a typo produces a silent no-banner degradation with
-no test and no log. The comment above the constant even anticipates this ("ДО ЭТОГО МОМЕНТА
-ДЕГРАДАЦИЯ ТИХАЯ") but the constant was never converted after 08-02 registered the code.
+Все остальные двенадцать мест записи подают `notices.<CONSTANT>`; здесь код
+набран руками. Реестр закрыт, поэтому опечатка в этом литерале даёт МОЛЧАЛИВОЕ
+«плашки нет вовсе» — ровно тот дефект, ради которого модуль `notices.py`
+требует констант (его собственный докстринг: «опечатка в литерале даёт
+молчаливое „плашки нет“»). Ни `refuse()`, ни `location_response()` код не
+сверяют — сверка есть только в мёртвом `respond()` (WR-01). Комментарий над
+строкой ссылается на «соседний план 08-02», который уже отгружен, то есть
+объяснение устарело в том же коммите.
 
-The stated reason for not importing (`app.pages` circular import) is real for `app.pages.htmx`, but
-`app.pages.notices` imports nothing from the app; a deferred module-level import inside the
-function — the pattern already used for `refuse` two lines below — resolves it.
+Смягчающее обстоятельство: гейт `tests/test_pages/test_notices_channel.py::test_every_written_notice_code_is_registered`
+ловит эту форму через `WRITTEN_LITERAL`, так что сегодня опечатка покраснела бы
+в суите. Защита при этом остаётся тестовой, а не структурной.
 
-**Fix:**
+**Fix:** отложенный импорт уже применён в этой же функции (строка 385) —
+использовать его и для реестра:
+
 ```python
 def _impersonation_refused_location() -> str:
     from app.pages.notices import IMPERSONATION_FORBIDDEN
-    return f"/dashboard?notice={IMPERSONATION_FORBIDDEN}"
+    return f"/dashboard?{NOTICE_QUERY_KEY}={IMPERSONATION_FORBIDDEN}"
 ```
-or assert the code's membership in the registry from `tests/test_pages/test_notices_registry.py`.
 
-### WR-05: `_with_notice` drops the notice on any fragment-bearing or already-parameterised target
+### WR-04: отказ авторизации отвечает кодом 204 при наличии заголовка `HX-Request` — в том числе на JSON-роутере
 
-**File:** `app/pages/htmx.py:301-302`
+**File:** `app/dependencies.py:395-402`, `app/main.py:174-176`, `app/pages/htmx.py:133-149`
+**Issue:** `forbid_when_impersonating` — зависимость запрета действий под чужой
+личностью. После правки её отказ выглядит так:
 
+* без `HX-Request` → `403` + `detail` (как было);
+* с `HX-Request` → `HtmxRefusal` → обработчик в `app/main.py:218-225` →
+  `location_response(...)` → **`204 No Content`**.
+
+Заголовок пишет клиент, а не приложение: любой запрос, добавивший
+`HX-Request: true`, получает на отвергнутое денежное действие статус
+УСПЕХА-без-тела. Сама операция при этом заблокирована (отказ поднимается до
+обработчика), то есть обхода авторизации нет; проблема в семантике ответа для
+потребителей, читающих статус: `if (response.ok) { ... }` прочитает отказ как
+успех.
+
+Радиус шире страничного слоя: `app/main.py:174-176` вешает ту же зависимость на
+`billing_router` — JSON-роутер `/api/billing`. Сегодня на нём одна ручка
+(`POST /webhook`), и она отказ не получает (у уведомления ЮKassa нет
+действующего лица, `_actor_id(...) is None` → ранний `return`). Но любая
+следующая JSON-ручка, добавленная в этот роутер, унаследует HTML-транспорт
+отказа вместе с заголовком `HX-Location` в JSON-ответе.
+
+**Fix:** ограничить развилку транспорта страничным слоем — например, вынести
+htmx-ветку в отдельную зависимость `forbid_when_impersonating_page`, оставив на
+`app/main.py` прежнюю чисто-403 версию; либо отвечать `403` с заголовком
+`HX-Location` вместо `204` (htmx обрабатывает `HX-Location` до разбора
+`responseHandling`, проверено в `app/static/js/htmx.min.js`, функция `Vn`), тогда
+статус остаётся честным отказом на обоих транспортах.
+
+### WR-05: `is_htmx` считает признаком любое непустое значение, включая `"false"`
+
+**File:** `app/pages/htmx.py:48-67`
 **Issue:**
 ```python
-separator = "&" if "?" in redirect else "?"
-return _local_path(f"{redirect}{separator}{NOTICE_QUERY_KEY}={notice}")
+return bool(request.headers.get(HX_REQUEST_HEADER))
 ```
-Two latent failures for future callers:
-* **Fragment.** `respond(request, redirect="/ads/7/edit#sched", notice=...)` yields
-  `/ads/7/edit#sched?notice=x`. The notice becomes part of the fragment, is never sent to the
-  server, and the banner silently does not render — the exact silent-outcome class the phase exists
-  to eliminate.
-* **Duplicate parameter.** If `redirect` already carries `?notice=…` (e.g. a caller reusing
-  `IMPERSONATION_REFUSED_LOCATION`), the second value is appended and
-  `request.query_params.get('notice')` returns the **first** one, so the argument is silently ignored.
-
-**Fix:** Split on the fragment and refuse a pre-existing key:
-
+`HX-Request: false`, `HX-Request: 0`, `HX-Request: no` — все дают `True`.
+Единственное объявление признака на проект, от которого зависят обе развилки
+транспорта (`refuse`) и весь путь редактора объявлений (`app/pages/ads.py:435,614`),
+принимает решение по факту присутствия заголовка, а не по его значению. Прокси,
+нормализующий заголовки, или клиент, явно объявивший `HX-Request: false`,
+получит htmx-ветку.
+**Fix:**
 ```python
-path, sep, fragment = redirect.partition("#")
-if f"{NOTICE_QUERY_KEY}=" in path:
-    raise ValueError("адрес приземления уже несёт код исхода: второй был бы проигнорирован")
-separator = "&" if "?" in path else "?"
-return _local_path(f"{path}{separator}{NOTICE_QUERY_KEY}={notice}{sep}{fragment}")
+return request.headers.get(HX_REQUEST_HEADER, "").strip().lower() == "true"
+```
+(htmx всегда шлёт строку `true`; см. `htmx.min.js`).
+
+### WR-06: четвёртый частный реестр уведомлений жив, вопреки утверждениям комментариев
+
+**File:** `app/pages/admin.py:278-300`, `app/templates/admin/queue.html:28-37`,
+`app/pages/billing.py:84-95`, `app/pages/notices.py:4-8`
+**Issue:** Комментарий `app/pages/billing.py:93-95` утверждает:
+
+> «Три частных реестра — этот, реестр исхода повтора и реестр отказа перезапуска
+> воркера — держали одно правило тремя копиями… **Копий не осталось ни одной**.»
+
+Копия осталась. `QUEUE_DROP_RESULTS` (`app/pages/admin.py:288-300`) — словарь
+`код → (текст, вариант)`, читаемый обработчиком `admin_queue` из
+`?result=` (`app/pages/admin.py:962,1041,1055`) и рисуемый собственным
+`{% if drop_result %}{{ alert(...) }}` в `admin/queue.html:34-36`. Это ровно та
+форма, которую фаза объявила снятой: свой ключ адреса, свой словарь слов, своя
+плашка вне общей области шелла. То же касается зачина докстринга
+`app/pages/notices.py:4-8` («таких владельцев было пять») — их было шесть.
+
+Практический вред: страница `/admin/queue` теперь несёт ДВА независимых канала
+исхода (общую область шелла и свой `drop_result`), и следующий читатель, ищущий
+«где рисуются исходы админки», найдёт один из двух.
+
+**Fix:** либо перенести четыре записи `QUEUE_DROP_RESULTS` в `app/pages/notices.py`
+и снять `?result=`-ветку так же, как снята `?error=`-ветка воркеров, либо
+исправить три комментария, назвав оставшийся реестр поимённо и записав причину,
+по которой он остался (сегодня они утверждают неправду, и гейт
+`test_no_retired_query_key_remains` её не ловит — `result` в
+`RETIRED_QUERY_KEYS` не входит).
+
+### WR-07: гейт словаря статусов уже, чем несущее его утверждение — `alembic/` и голый SQL вне области
+
+**File:** `tests/test_services/test_payment_status_vocabulary.py:137-184,391-474`,
+`app/application/admin/incidents.py:437-441`,
+`alembic/versions/0021_payments_open_intent_index.py:148-162`
+**Issue:** Докстринг `unclosed_payment_clause` объявляет положительную выборку
+безопасной, ссылаясь на гейт:
+
+> «словарь колонки `payments.status` ЗАКРЫТ и принадлежит нам, писатели статуса
+> живут только в `app/services/payment_service.py`, и это УТВЕРЖДАЕТСЯ гейтом
+> `tests/test_services/test_payment_status_vocabulary.py`».
+
+Гейт этого не утверждает. `_app_sources()` обходит только `APP_DIR.rglob("*.py")`
+(строки 137-138, 174-184) — каталог `alembic/` вне области. Форм записи
+распознаётся пять, и все они ORM-ные: конструктор `Payment(...)`,
+`update/insert(Payment).values(status=...)`, присваивание `.status = "..."`,
+`set_committed_value(..., "status", ...)`, умолчание колонки модели. Голый SQL
+(`sa.text("UPDATE payments SET status = ...")`, `session.execute(text(...))`)
+не распознаётся ни одной формой.
+
+Это не гипотетическая дыра: ревизия `0021` (строки 148-162) ПРЯМО СЕЙЧАС пишет
+`status = 'expired'` голым SQL, вне области гейта. Сегодня слово совпадает с
+`STATUS_EXPIRED`, но именно этот путь записи гейт не охраняет, а вся
+безопасность новой положительной выборки `AWAITING_STATUSES` на нём и держится:
+статус, попавший в колонку мимо перечисления, МОЛЧА исчезнет и из чипса
+«В обработке», и из признака залипшего платежа.
+
+**Fix:** расширить `_app_sources()` (или добавить второй обход) на
+`alembic/versions/*.py` и добавить шестую форму — текстовый поиск
+`SET\s+status\s*=\s*'([a-z_]+)'` и `status\s*=\s*'([a-z_]+)'` внутри
+`sa.text(...)`/`text(...)` — с утверждением, что каждое найденное слово входит в
+`_declared_statuses(...)`. Контроль-подделку добавить рядом с остальными пятью.
+
+### WR-08: фикстура теста ревизии `0021` не воспроизводит боевую схему — внешнего ключа в ней нет
+
+**File:** `tests/test_migrations/test_0021_payments_open_intent_index.py:66-87,410-425`
+**Issue:** `PAYMENTS_AT_0020` — рукописный DDL, объявленный как «таблица платежей
+в том виде, в каком её застаёт ревизия `0021`». В нём:
+
+```sql
+user_id INTEGER NOT NULL,        -- ← ни REFERENCES users(id), ни ON DELETE CASCADE
 ```
 
-### WR-06: `htmx_client` mutates and returns the shared `client` object, silently converting any co-requested `client` into an htmx client
+тогда как модель (`app/models/payment.py:61-63`) объявляет
+`ForeignKey("users.id", ondelete="CASCADE")`. Таблицы `users` в фикстуре нет
+вовсе, `PRAGMA foreign_keys` не включается.
 
-**File:** `tests/conftest.py:66-102` (mutation at `100-101`)
+`op.batch_alter_table` в SQLite ПЕРЕСОЗДАЁТ таблицу по отражённой схеме — это
+единственная операция ревизии, способная потерять ограничение. Тест
+`test_the_unique_index_on_the_payment_id_survives_the_batch_recreate` (410-425)
+проверяет выживание индекса и заявлен докстрингом ревизии (строки 179-183) как
+доказательство безопасности пересоздания. Про внешний ключ с каскадом — то есть
+про ограничение, от которого напрямую зависит удаление пользователя и
+рассуждение `payment_ledger` («внешний ключ платежа объявлен с каскадным
+удалением») — не проверяется ничего, потому что в фикстуре его нет.
 
-**Issue:**
-```python
-client.headers["HX-Request"] = "true"
-client.follow_redirects = True
-return client
-```
-The fixture returns the *same* object as `client`. Composition with `authed_client` is the stated
-goal and works, but the side effect is unbounded: any test whose signature contains both `client`
-and `htmx_client` — or which uses a helper that takes `client` — silently loses its non-htmx
-baseline **and** its `follow_redirects=False` default. A test intending to assert "the non-htmx
-path still returns 302" would then observe a followed 200 and pass for the wrong reason. There is
-no guard preventing this composition.
+Боевой диалект PostgreSQL batch-режим в пересоздание не превращает, поэтому
+непосредственный риск низкий; но утверждение теста шире, чем его предмет, и
+следующая batch-правка `payments` унаследует ложную уверенность.
 
-**Fix:** Either make the fixture return a distinct client, or add an explicit incompatibility guard:
+**Fix:** довести фикстуру до боевой формы — добавить `CREATE TABLE users(...)`,
+объявить `user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE`,
+включить `PRAGMA foreign_keys=ON` и добавить утверждение
+`PRAGMA foreign_key_list(payments)` после `upgrade()`, проверяющее, что запись
+FK и её `on_delete` пережили пересоздание.
 
-```python
-@pytest_asyncio.fixture
-async def htmx_client(client, request):
-    assert "client" not in request.fixturenames or _only_via_htmx(request), (
-        "тест просит и `client`, и `htmx_client` — это ОДИН объект, и не-htmx "
-        "путь в нём уже недоступен"
-    )
-```
-At minimum, state the hazard in the docstring alongside the composition benefit.
+### WR-09: любой код реестра рисуется на ЛЮБОЙ странице по одной ссылке
 
-### WR-07: Both authorization gates deny by calling a function that must never return, with no `raise` at the call site
+**File:** `app/templates/includes/notice_area.html:61-63`,
+`app/templates/base.html:233-234`, `app/templates/auth_base.html:41-49`
+**Issue:** До фазы каждый признак исхода читался ровно одним обработчиком:
+`?retry=` только `/history`, `?error=` только `/billing`, `?restart_error=`
+только `/admin/workers`. Теперь `notice_area.html` включён в оба шелла и
+разрешает КАЖДЫЙ из тринадцати кодов на КАЖДОЙ из 33 страниц:
 
-**File:** `app/pages/__init__.py:117-124`, `app/dependencies.py:389-396`
+* `https://<host>/login?notice=password_reset_done` — «Пароль успешно изменён.
+  Войдите с новым паролем.» показывается любому, кто перешёл по присланной
+  ссылке, включая того, у кого пароль никто не менял;
+* `https://<host>/dashboard?notice=payment_pending` — «Предыдущая оплата ещё не
+  завершена…» на экране человека, ничего не оплачивавшего.
 
-**Issue:**
-```python
-if not access_is_open(subscription, datetime.now(timezone.utc)):
-    refuse(request, location=..., without_htmx=HTTPException(...))
-# ← нет `raise`, нет `return`; исполнение продолжается, если refuse вернётся
-```
-`refuse` is annotated `NoReturn` and both branches raise today, so the behaviour is correct. But
-the *deny* path of an access gate and of the impersonation gate is now a bare expression statement:
-if a future edit adds any early-return branch to `refuse` (e.g. "if the request is a poll, do
-nothing"), both gates fall through and grant access, with no syntax error, no type error at
-runtime, and no visible diff at the call site. `NoReturn` is not enforced at runtime and the project
-does not run a type checker in CI (no `mypy`/`ruff` in the environment).
+Тексты закрыты реестром и не содержат ни ссылок, ни разметки, поэтому XSS и
+подстановки произвольного текста тут нет — модуль это разбирает верно. Но
+поверхность социальной инженерии выросла: сообщение ОТ ИМЕНИ ПРИЛОЖЕНИЯ на
+подлинном домене теперь выбирается владельцем ссылки, а не действием человека.
+Особенно чувствителен `password_reset_done` на экране входа — классическая
+приманка «ваш пароль сменили, войдите заново».
 
-**Fix:** Make the control flow local and explicit — the gate should be readable as a refusal without
-reading the callee:
-
-```python
-raise refuse_error(request, location=..., without_htmx=HTTPException(...))
-```
-(i.e. have the helper *build and return* the exception, and let the caller `raise` it), or add a
-defensive `raise AssertionError(...)` immediately after the `refuse(...)` call, plus a gate test
-that asserts every call site of `refuse` is either `raise`d or immediately followed by an
-unconditional raise.
-
-### WR-08: Nested ARIA live regions — the notice areas and the `alert` macro both declare a role
-
-**File:** `app/templates/includes/notice_area.html:62-63` with `app/templates/components/alert.html:10`
-
-**Issue:** The outer area declares `role="status" aria-live="polite"` (or `role="alert"
-aria-live="assertive"`), and the macro rendered *inside* it declares its own
-`role="{{ 'alert' if variant == 'error' else 'status' }}"`. Nesting a live region inside a live
-region is an ARIA anti-pattern: assistive technology may announce the message twice, or treat the
-inner role as the authoritative one, defeating the file's own stated design ("признак живости
-объявлен НА УЗЛЕ"). The same nesting exists in `includes/htmx_error_banner.html` (a wrapper `div`
-around `alert(...)`).
-
-**Fix:** Give the macro a way to render without its own role when it is placed inside a declared
-live region:
-
-```jinja
-{% macro alert(message, variant='error', role=None) -%}
-<div class="alert alert--{{ variant }}"{% if role %} role="{{ role }}"{% endif %}>{{ message }}</div>
-{%- endmacro %}
-```
-and call it as `{{ alert(notice.text, notice.variant) }}` from the areas (no role) while standalone
-call sites keep passing one. Verify with the existing markup gates that the role count per area
-stays at one.
+**Fix:** сделать код исхода одноразовым и серверным, а не адресным: писать его в
+`Set-Cookie` (`HttpOnly`, `Max-Age=30`, `SameSite=Lax`) и удалять при отрисовке —
+тогда плашка появляется только после РЕАЛЬНОГО редиректа, а ссылка её не
+рисует. Более дешёвая мера: объявить в реестре допустимый путь приземления для
+каждой записи (`Notice(..., landing="/login")`) и рисовать плашку, только если
+`request.url.path` совпал.
 
 ## Info
 
-### IN-01: The money-perimeter gate asserts a decorative constant, not the hold
+### IN-01: результат `_with_notice` на строке 362 выбрасывается — проверка выглядит мёртвым кодом
 
-**File:** `tests/test_pages/test_money_perimeter_gate.py:121,416-449`
+**File:** `app/pages/htmx.py:358-362`
+**Issue:** `_with_notice(redirect, notice)` вызывается как самостоятельное
+выражение ради побочного эффекта — `ValueError` из `_local_path`. Комментарий
+это объясняет, но статические анализаторы и читатель видят строку без эффекта;
+первый же «уборщик мёртвого кода» её снимет.
+**Fix:** выделить намерение в имя: `_reject_unusable_path(_with_notice(redirect, notice))`
+или `_local_path(_with_notice(redirect, notice))  # noqa: B018` с явной функцией
+`assert_local(...)`.
 
-**Issue:** `MONEY_HOLD = "OPEN_INTENT_INDEX_NAME"`, and the check is "an `ast.Assign` to that name
-exists in `payment_service.py`". That constant is documented as never read by code
-(`app/services/payment_service.py:60-65`). Deleting the actual `Index(...)` from
-`app/models/payment.py:__table_args__` — i.e. removing the cap from the schema the suite builds —
-leaves this gate green. The gate acknowledges the delegation and
-`tests/test_models/test_payment_open_intent_index.py` does cover the real index, so this is a
-documentation/naming issue rather than a coverage hole.
+### IN-02: `htmx_client` мутирует общий объект `client` и глобально включает следование редиректам
 
-**Fix:** Rename the assertion (`test_the_money_hold_is_named_in_the_source`) so the green does not
-read as "the hold exists", or import the index name check from the model test.
+**File:** `tests/conftest.py:65-101`
+**Issue:** Фикстура ставит `client.headers["HX-Request"]` и
+`client.follow_redirects = True` на ТОТ ЖЕ объект, который отдают `client`,
+`authed_client`, `admin_client`, `expired_client`. Тест, запросивший
+`htmx_client` и `client` одновременно, получает один и тот же
+htmx-настроенный клиент, а умолчание проекта (`follow_redirects=False`)
+переключается для всего теста целиком. Свойство названо в докстринге, но
+ловушка остаётся: тест, который «просто хотел проверить 302», позеленеет на 200
+чужой страницы.
+**Fix:** либо вернуть КОПИЮ клиента с наложенными настройками, либо
+переименовать фикстуру в `client_as_htmx` и добавить утверждение в
+`test_shell.py`, что ни один тест не берёт обе фикстуры сразу.
 
-### IN-02: Migration `0021` tie-break has dialect-divergent NULL ordering
+### IN-03: `notice_areas()` считает вложенность по подстроке `<div`
 
-**File:** `alembic/versions/0021_payments_open_intent_index.py:158`
+**File:** `tests/conftest.py:334-350`
+**Issue:** `html.find("<div", scan)` совпадёт и с `<divider>`, и с текстом
+`&lt;div` после экранирования, и с подстрокой внутри значения атрибута. Сегодня
+разметка областей проста и совпадений нет, но хелпер объявлен общим для всех
+будущих проверок исхода.
+**Fix:** считать по `re.finditer(r"<div\b|</div>", html)` либо разобрать область
+`html.parser`-ом (стандартная библиотека, новой зависимости не требует).
 
-**Issue:** `ORDER BY keeper.created_at DESC, keeper.id DESC` sorts NULLs first on PostgreSQL and
-last on SQLite. A row with `created_at IS NULL` would be *kept* on production and *expired* in the
-round-trip test. `Payment.created_at` is `NOT NULL` with a server default, so this is unreachable
-today — but the revision reasons carefully about exactly this class of divergence elsewhere
-(lines 139-147) and this instance is not named.
+### IN-04: частичный индекс `0021` вырождается в полный на любом третьем диалекте
 
-**Fix:** Make the intent explicit and dialect-independent, e.g. `ORDER BY keeper.created_at IS NULL,
-keeper.created_at DESC, keeper.id DESC`, or name the assumption in the docstring.
+**File:** `alembic/versions/0021_payments_open_intent_index.py:194-201`
+**Issue:** `op.create_index(..., unique=True, sqlite_where=..., postgresql_where=...)`
+— предикат объявлен только для двух диалектов. На любом другом (MySQL, MSSQL)
+Alembic создаст УНИКАЛЬНЫЙ индекс по всей колонке `user_id`, то есть ровно то
+состояние, которое докстринг ревизии (строки 54-59) называет «заперло бы
+человека навсегда: ни одного второго платежа». Проект сегодня ходит только на
+PostgreSQL и SQLite, поэтому это заметка на будущее, а не действующий дефект.
+**Fix:** добавить в `upgrade()` явный отказ:
+`if op.get_bind().dialect.name not in ("postgresql", "sqlite"): raise NotImplementedError(...)`.
 
-### IN-03: `respond()` raises after the handler's side effects when the fragment is not HTML
+### IN-05: в `QUEUE_DROP_RESULTS` один ключ набран литералом, три — константами
 
-**File:** `app/pages/htmx.py:364-367` with `_glue_notice` at `251-283`
+**File:** `app/pages/admin.py:288-300`, `app/pages/admin.py:1111`
+**Issue:** `"unknown_account"` выписан строкой и в словаре, и в адресе редиректа
+(строка 1111), тогда как `DROP_REMOVED`, `DROP_MISSING`, `DROP_UNAVAILABLE` —
+константы. Опечатка в одном из двух вхождений даёт молчаливое «плашки нет».
+**Fix:** завести `DROP_UNKNOWN_ACCOUNT = "unknown_account"` рядом с тремя
+соседями (или снять реестр целиком по WR-06).
 
-**Issue:** The fragment is awaited (and therefore the handler's commit has already happened) before
-`_glue_notice` validates the content type. A non-HTML fragment turns a *successful* mutation into a
-500 for the user. The "loud refusal" rationale is sound for the developer, but the failure mode
-should be named: the write is not rolled back.
+### IN-06: запись `htmx_refusal` не называет, какое правило отвергло запрос
 
-**Fix:** Validate the fragment's declared content type before invoking it where possible, or state
-in the docstring that the raise happens after the write and the user sees a 500 on a completed
-action.
+**File:** `app/main.py:218-225`
+**Issue:** Обработчик пишет `logger.info("htmx_refusal", path=...)` — без
+указания зависимости (`require_access` или `forbid_when_impersonating`) и без
+`location`. Комментарий рассчитывает на то, что «сам факт отказа пишется
+вызывающей зависимостью своим ключом», но связать две записи в потоке логов
+можно только по `request_id`, а `path` дублирует уже связанные поля
+`RequestIdMiddleware`. Запись в текущем виде не добавляет ничего, кроме шума.
+**Fix:** добавить `location=exc.location` (адрес отличает два правила
+однозначно) либо снять запись как избыточную.
 
-### IN-04: The htmx failure banners are never re-hidden
+### IN-07: сценарий плашек отказа перерегистрирует слушателей при каждой навигации по `HX-Location`
 
-**File:** `app/templates/includes/htmx_error_banner.html:82-90`
-
-**Issue:** `removeAttribute('hidden')` is one-way. After a single transient failure the red banner
-stays on the page for the rest of the session, including after every subsequent successful action —
-so "красное на экране" stops correlating with "что-то сломано", which is the exact
-desensitisation the file's own comment warns about for the 422 case. The decision is recorded as an
-accepted plan assumption, so this is a reminder rather than a defect.
-
-**Fix:** Re-hide both banners on `htmx:afterRequest` with a successful `xhr.status`, or record the
-follow-up explicitly in the phase backlog.
+**File:** `app/templates/includes/htmx_error_banner.html:76-86`
+**Issue:** `HX-Location` заставляет htmx подменить содержимое `<body>` целиком
+(`Nn("get", …)` в `htmx.min.js`), а при `allowScriptTags:true` пришедший
+`<script>` исполняется заново и добавляет вторую пару слушателей на тот же
+`document.body`, который подменой не уносится. Обработчики идемпотентны (снимают
+атрибут `hidden`), поэтому видимого дефекта нет, но число слушателей растёт с
+каждым отказом гейта доступа.
+**Fix:** обернуть регистрацию признаком:
+`if (!document.body.dataset.htmxFailureBound) { document.body.dataset.htmxFailureBound = '1'; ... }`.
 
 ---
 
-_Reviewed: 2026-08-28_
+_Reviewed: 2026-08-29T10:05:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
