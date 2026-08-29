@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 08
-current_phase_name: Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок
+current_phase_name: fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy
 status: executing
 stopped_at: Phase 8 context gathered
-last_updated: "2026-08-28T11:33:53.999Z"
+last_updated: "2026-08-29T05:48:52.452Z"
 last_activity: 2026-08-28
 last_activity_desc: Phase 08 wave 4 complete — all 10 plans executed
-state_head: 262070ef28f2e4379b048855cd09a020bd58f866
+state_head: beb13ff468fb7c1111f513cf263faaae4323f6c5
 progress:
   total_phases: 9
   completed_phases: 1
-  total_plans: 17
+  total_plans: 18
   completed_plans: 17
   percent: 11
 ---
@@ -35,11 +35,11 @@ See: .planning/PROJECT.md (updated 2026-08-25)
 
 ## Current Position
 
-Phase: 08 (Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок) — EXECUTING
+Phase: 08 (fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy) — READY TO EXECUTE
 Plan: 10 of 10
-Total Plans in Phase: 10
+Total Plans in Phase: 11
 Completed Plans in Phase: 10
-Status: Executing Phase 08
+Status: Ready to execute
 Last activity: 2026-08-28 — Phase 08 wave 4 complete — all 10 plans executed
 
 Progress: [██████████] 100%
@@ -291,7 +291,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Executing Phase 08
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Ready to execute
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
