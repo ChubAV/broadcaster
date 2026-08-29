@@ -86,11 +86,30 @@ status: issues_found
 обработчиков и семь шаблонов, а также пакет новых гейтов.
 
 Подмножества суиты, прогнанные под ревью, зелёные:
-`tests/test_services` + `tests/test_models` + `tests/test_migrations` +
-`tests/test_application` — 511 passed; `tests/test_templates` + `tests/test_infra` —
-126 passed. `ruff --select F401,F811,F841,E711,E712,B006` по всем правленным
-модулям приложения — чисто. Полный прогон `tests/test_pages` не уложился в лимит
-времени ревью и в отчёте не засчитан.
+
+* `tests/test_services` + `tests/test_models` + `tests/test_migrations` +
+  `tests/test_application` — **511 passed**;
+* `tests/test_templates` + `tests/test_infra` — **126 passed**;
+* шесть новых файлов страничного слоя (`test_htmx_gates.py`,
+  `test_money_perimeter_gate.py`, `test_notices_registry.py`,
+  `test_notices_channel.py`, `test_notices_surface.py`,
+  `test_htmx_response_layer.py`) — **122 passed**.
+
+`ruff --select F401,F811,F841,E711,E712,B006` по всем правленным модулям
+приложения — чисто.
+
+⚠️ ПОЛНЫЙ ПРОГОН `tests/test_pages` В ОТЧЁТЕ НЕ ЗАСЧИТАН: он дважды не уложился
+в лимит времени ревью (снят по SIGTERM, вывод pytest остался в буфере). Не
+проверены под ревью ПРЕЖНИЕ файлы каталога, затронутые фазой косвенно, —
+`test_admin_panel.py`, `test_admin_payments.py`, `test_billing_payment_errors.py`,
+`test_billing_section.py`, `test_history_retry.py`, `test_password_reset.py`,
+`test_schedule_ownership.py`, `test_shell.py`. Зелёный цвет по ним НЕ утверждается.
+
+⚠️ ЗЕЛЁНАЯ СУИТА НИ ОДНОГО НАБЛЮДЕНИЯ НИЖЕ НЕ СНИМАЕТ, и по двум из них она —
+свидетельство ОБВИНЕНИЯ, а не защиты. WR-01: 122 теста слоя ответа зелены при
+нуле вызовов `respond()` в `app/` — то есть суита утверждает работоспособность
+канала, у которого нет ни одного потребителя. WR-07: гейт словаря статусов
+зелен именно потому, что путь записи голым SQL в его область не входит.
 
 Ключевые замечания:
 
