@@ -1977,6 +1977,154 @@ def _macro_callers(
     return tuple(sorted(found))
 
 
+# --- КНОПКА ОТКАЗА НЕ БЛОКИРУЕТСЯ НИКОГДА (QUAL-01) --------------------------
+#
+# Записанное решение ревизии 2.0: «кнопка Отмены в панели подтверждения не
+# блокируется никогда». До этого плана оно жило комментарием в шапке компонента
+# панели — то есть держалось внимательностью читателя. Ниже оно становится
+# машинным правилом с доказанными зубами.
+
+# Признак кнопки отказа в панели подтверждения. Опорой выбран `x-ref`, а не
+# подпись: подпись — параметр макроса и переводится, а ссылка на элемент есть
+# контракт с обработчиками панели (начальный фокус, ловушка фокуса).
+CANCEL_REF = 'x-ref="cancel"'
+CANCEL_BUTTON_TYPE = 'type="button"'
+SUBMIT_BUTTON_TYPE = 'type="submit"'
+
+# Ограничитель селектора, сужающий его до кнопок ОТПРАВКИ. Кнопка отказа его не
+# удовлетворяет, потому что несёт другой тип.
+SUBMIT_ONLY_QUALIFIER = "[type=submit]"
+
+BUTTON_TAG = re.compile(r"<\s*button\b[^<>]*>")
+
+# Файл панели подтверждения и опорные строки её контроля. Строка подстановки
+# выбрана ЗА УНИКАЛЬНОСТЬ в файле: `_tree_with` требует ровно одного вхождения,
+# а сам по себе тип кнопки встречается в шапке компонента ещё и образцом вызова.
+CONFIRMATION_COMPONENT = "components/modal.html"
+CANCEL_BUTTON_MARKER = f"{CANCEL_BUTTON_TYPE} {CANCEL_REF}"
+DISABLED_CANCEL_MARKER = f"{SUBMIT_BUTTON_TYPE} {CANCEL_REF}"
+
+
+def _cancel_button_sites(templates: list[tuple[str, str]]) -> list[Site]:
+    """Места кнопки отказа: теги кнопок, несущие ссылку на элемент отказа."""
+    found: list[Site] = []
+    for rel, source in templates:
+        for tag in BUTTON_TAG.findall(_strip_comments(source)):
+            if CANCEL_REF in tag:
+                found.append(Site(rel, tag))
+    return found
+
+
+def _caller_argument_values(source: str, argument: str) -> tuple[str, ...]:
+    """Значения, ПЕРЕДАВАЕМЫЕ вызывающим параметром ``argument``.
+
+    Разбор идёт по исходнику вызывающего, а не по отрендеренной разметке: файл,
+    печатающий атрибут, значения не знает вовсе — его передают отсюда. Кавычки
+    любого вида, комментарии вырезаны до разбора.
+    """
+    pattern = re.compile(
+        rf"(?<![-\w]){re.escape(argument)}\s*=\s*(\"([^\"]*)\"|'([^']*)')"
+    )
+    return tuple(
+        match.group(2) if match.group(2) is not None else match.group(3)
+        for match in pattern.finditer(_strip_comments(source))
+    )
+
+
+def _covers_the_cancel_button(selector: str) -> bool:
+    """Способен ли селектор блокировки накрыть кнопку отказа.
+
+    Проверка КОНКРЕТНА и разбора CSS не требует: кнопка отказа есть
+    ``<button type="button">``. Селектор её не накрывает, если он не упоминает
+    кнопок вовсе (случай ``find input[type=checkbox]``) либо ограничен типом
+    отправки (``find button[type=submit]``). Всё остальное — накрывает, и это
+    осознанно строже: селектор, о котором нельзя сказать «точно нет»,
+    приравнивается к «да».
+    """
+    return "button" in selector and SUBMIT_ONLY_QUALIFIER not in selector
+
+
+def _offenders_cancel_is_disabled(templates: list[tuple[str, str]]) -> dict[str, str]:
+    """QUAL-01: ни один действующий селектор блокировки не накрывает отказ.
+
+    Проверяются ТРИ множества селекторов и, отдельно, сама кнопка. Разбор
+    каждого множества назван в докстринге правила; здесь только исполнение.
+    """
+    sources = dict(templates)
+    offenders: dict[str, str] = {}
+
+    # (0) САМА КНОПКА. Без этой половины правило проверяло бы селекторы против
+    # кнопки, которая тем временем стала submit-кнопкой, — и осталось бы
+    # зелёным.
+    cancels = _cancel_button_sites(templates)
+    if not cancels:
+        offenders["<кнопка отказа>"] = (
+            "кнопки отказа в дереве нет ни одной — правило зелено по построению, "
+            "и отличить это от соблюдения нечем"
+        )
+    for site in cancels:
+        if CANCEL_BUTTON_TYPE not in site.tag:
+            offenders[f"{site.template}:тип кнопки отказа"] = (
+                f"кнопка отказа перестала быть кнопкой типа «button»: "
+                f"{site.tag[:120]} — она попала под общее умолчание блокировки"
+            )
+
+    for site in _post_sites(templates):
+        value = _attr_value(site.tag, HX_DISABLED_ELT_VALUE)
+        if value is None:
+            # Отсутствие атрибута — предмет ОБЩЕГО правила блокировки, а не
+            # этого: накрыть кнопку отказа нечем, если селектора нет вовсе.
+            continue
+
+        # (2) ПАРАМЕТРИЧЕСКОЕ значение: место обязано быть записью перечня.
+        if "{{" in value or "{%" in value:
+            if site.template not in DISABLED_ELT_EXCEPTIONS:
+                offenders[f"{site.template}:значение"] = (
+                    f"селектор блокировки приходит извне ({value!r}), а записи о "
+                    f"месте в перечне исключений нет: какой селектор здесь "
+                    f"действует, не знает никто"
+                )
+            continue
+
+        # (1) ЛИТЕРАЛЬНОЕ значение: обязано быть общим умолчанием.
+        if value.strip() != DISABLED_ELT_DEFAULT:
+            offenders[f"{site.template}:литерал"] = (
+                f"{value!r} вместо общего умолчания {DISABLED_ELT_DEFAULT!r}"
+            )
+
+    # (3) ЗНАЧЕНИЯ, ПЕРЕДАВАЕМЫЕ ВЫЗЫВАЮЩИМИ. Множество вызывающих берётся из
+    # ОБЪЯВЛЕННОГО поля записи, уже сверенного со сканером `_macro_callers`
+    # отдельным утверждением перечня: второго сканера здесь не заводится.
+    for template, entry in DISABLED_ELT_EXCEPTIONS.items():
+        for caller in entry.callers:
+            source = sources.get(caller)
+            if source is None:
+                offenders[f"{template}:{caller}"] = (
+                    "объявленного вызывающего нет в дереве шаблонов"
+                )
+                continue
+            passed = _caller_argument_values(source, DISABLED_ELT_ARGUMENT)
+            if not passed:
+                offenders[f"{template}:{caller}"] = (
+                    "вызывающий объявлен передающим свой селектор, но ни одного "
+                    "значения в его исходнике не разобрано"
+                )
+                continue
+            for selector in passed:
+                if selector not in entry.reason:
+                    offenders[f"{template}:{caller}:{selector}"] = (
+                        "селектор действует, а обоснование записи его не "
+                        "называет: решения о нём никто не записывал"
+                    )
+                if _covers_the_cancel_button(selector):
+                    offenders[f"{template}:{caller}:{selector}"] = (
+                        "селектор, переданный вызывающим, способен накрыть "
+                        "кнопку отказа"
+                    )
+
+    return offenders
+
+
 def _offenders_disabled_elt(templates: list[tuple[str, str]]) -> dict[str, str]:
     """На каждом месте отправки объявлена цель блокировки повторной отправки.
 
