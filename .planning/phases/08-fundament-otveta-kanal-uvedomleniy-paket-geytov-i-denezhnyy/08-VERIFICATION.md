@@ -1,100 +1,86 @@
 ---
 phase: 08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy
-verified: 2026-08-28T23:05:00Z
-status: gaps_found
+verified: 2026-08-29T10:40:00Z
+status: human_needed
 score: 5/5 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
-gaps:
-  - truth: "Четвёртый статус `expired` не имеет права молча попасть в определение «незакрытый платёж»: цена решения D-01 объявлена ЗАКРЫТОЙ (одно слово в словаре статусов + русская подпись в истории), а фактически осталась неоплаченная третья часть"
-    status: failed
-    reason: >-
-      `STATUS_EXPIRED` сознательно оставлен вне `TERMINAL_STATUSES`
-      (`app/services/payment_service.py:78` = `{succeeded, canceled}`), чтобы снятое
-      намерение оставалось оплачиваемым. Но единственное на проект определение
-      «платёж не закрыт» — ДОПОЛНЕНИЕ этого множества
-      (`app/application/admin/incidents.py:434`,
-      `Payment.status.not_in(tuple(TERMINAL_STATUSES))`), и оно не поправлено.
-      Проверено в процессе: `expired in TERMINAL_STATUSES → False`, а
-      `payment_stuck_before(now)` (`incidents.py:447`) и порог уборки
-      (`payment_service.py:229`) считаются от ОДНОЙ константы
-      `PENDING_INTENT_TTL_HOURS` и дают ОДИН И ТОТ ЖЕ момент (сверено запуском:
-      `2026-08-27 00:00:00+00:00` == `2026-08-27 00:00:00+00:00`). Значит каждая
-      строка, которую `_expire_stale_intents` переводит в `expired`, ПО ПОСТРОЕНИЮ
-      уже старше порога залипания и поднимает постоянный инцидент
-      `payment_stuck` на первой же загрузке «Обзора». Бэкфилл ревизии `0021`
-      (`0021:150`) переводит строки массово — то есть это разовый ЗАЛП инцидентов
-      после наката, а `INCIDENT_LIST_CAP = 20` с сортировкой от свежих вытесняет
-      из блока настоящие залипшие платежи. Второй читатель того же условия —
-      `PAYMENT_STATUS_FILTERS["unclosed"]` (`app/application/admin/payments_query.py:105`)
-      с подписью «В обработке» — возвращает строки, которые
-      `app/templates/admin/payments.html:39` печатает как «просрочен».
-      Ни один файл-потребитель не входит в диф фазы, ни один тест взаимодействие
-      не покрывает. Докстринг `unclosed_payment_clause` (`incidents.py:425-432`)
-      этот отказ ПРЕДСКАЗАЛ дословно («достаточно, чтобы платёжный провайдер завёл
-      четвёртый статус») — четвёртый статус завели мы сами, и форма `NOT IN`
-      поглотила его молча.
-    artifacts:
-      - path: "app/application/admin/incidents.py"
-        issue: "`unclosed_payment_clause` (строка 434) определяет незакрытость как дополнение `TERMINAL_STATUSES` и потому включает `expired`; `detect_payment_stuck` (385) поднимает по такой строке постоянный инцидент"
-      - path: "app/application/admin/payments_query.py"
-        issue: "чипс `unclosed` с подписью «В обработке» (строка 105) возвращает строки, печатаемые как «просрочен»"
-      - path: "app/services/payment_service.py"
-        issue: "нет отдельного множества «статусы, за которыми администратор наблюдает»; `TERMINAL_STATUSES` (78) обслуживает два разных вопроса"
-    missing:
-      - "Явное множество наблюдаемых статусов (например `AWAITING_STATUSES = frozenset({STATUS_PENDING})`) в `app/services/payment_service.py` рядом с `TERMINAL_STATUSES`, с комментарием, ПОЧЕМУ вопросов два, а не один"
-      - "`unclosed_payment_clause` переведён на положительный отбор по этому множеству вместо дополнения терминальных"
-      - "Регрессия: строка в `STATUS_EXPIRED` НЕ порождает `INCIDENT_KIND_PAYMENT_STUCK` и НЕ приходит под чипсом `unclosed`"
-      - "Либо — если продуктовое решение обратное — отдельный четвёртый чипс со своей подписью и явное исключение `expired` из признака инцидента; сегодняшнее состояние даёт ТРИ разных ответа на один вопрос (инцидент есть, подпись «просрочен», фильтр «В обработке»)"
-      - "Строка о фактической цене решения D-01 в `08-CONTEXT.md`: цена оказалась не двухчастной"
+re_verification:
+  previous_status: gaps_found
+  previous_score: 5/5
+  gaps_closed:
+    - "Четвёртый статус `expired` молча попадал в определение «незакрытый платёж», потому что определение было ДОПОЛНЕНИЕМ терминальных статусов (G-08-1)"
+  gaps_remaining: []
+  regressions: []
+gaps: []
 deferred: []
-records_to_correct:
-  - record: "D-06 в 08-CONTEXT.md (строки 130-140)"
-    says: "`PendingIntentCapError` поднимается из разбора `IntegrityError` ПО ИМЕНИ ограничения"
-    code_does: "различение перечитыванием состояния (`_is_open_intent_conflict`), имя ограничения не разбирается нигде"
-  - record: "08-05-PLAN.md — must_haves.truths «Отказ ограничения различается ПО ИМЕНИ ограничения»"
-    says: "разбор по имени"
-    code_does: "перечитывание состояния; чужой отказ поднимается тем же объектом"
-  - record: "08-05-PLAN.md — must_haves.key_links, `create_payment → 0021` via «разбор IntegrityError по имени ограничения»"
-    says: "связь через разбор имени"
-    code_does: "константа `OPEN_INTENT_INDEX_NAME` в исходнике есть (совпадение паттерна сохраняется), но описанный механизм не реализован"
-  - record: "08-05-PLAN.md:676 — строка threat-register T-08-25"
-    says: "различение по ИМЕНИ ограничения"
-    code_does: "различение перечитыванием состояния"
+behavior_unverified_items: []
+coincidental_reliance_items: []
 human_verification:
-  - test: "Действие отвергнуть гейтом доступа (истёкшая подписка) и запретом действий под чужой личностью в ЖИВОМ браузере с включённым JavaScript"
-    expected: "Браузер уходит по `HX-Location` и на приземлившемся экране видно СЛОВО об отказе (плашка из области `#notice` / `#notice-alert`), а не тишина и не прежний экран"
-    why_human: "Прохибиция FOUND-07 объявлена `verification: judgment` (пункт `D7` блока coverage плана 08-01). Тест доказывает, что заголовок ОТПРАВЛЕН и тело не документ и не JSON; что браузер по нему уходит и что человек видит слово — httpx не воспроизводит"
-  - test: "Пункт 8 ручного UAT вехи: вызвать ответ 500 на действии htmx, затем выключить сеть и повторить действие"
-    expected: "На 500 показывается плашка `#htmx-failure-server`, при обрыве связи — `#htmx-failure-network`; на ответе 422 плашка аварии НЕ поднимается"
-    why_human: "Роадмап объявляет это ручным UAT дословно (критерий 3: «Фактическое срабатывание при 500 и при выключенной сети — ручной UAT, пункт 8»). Браузерный стенд отклонён на уровне вехи (Deferred Ideas: `E2E-01`)"
+  - test: "Действие, отвергнутое гейтом доступа (истёкшая подписка), и действие под чужой личностью — в ЖИВОМ браузере с включённым JavaScript"
+    expected: "Браузер уходит по `HX-Location`, и на приземлившемся экране видно СЛОВО об отказе (область `#notice` / `#notice-alert`), а не тишина и не прежний экран"
+    why_human: "Прохибиция FOUND-07 объявлена `verification: judgment` (пункт `D7` блока coverage плана 08-01). Машинно доказано, что заголовок отправлен, статус 204 и тела нет; что браузер по нему уходит и что человек видит слово — httpx не воспроизводит"
+  - test: "Пункт 8 ручного UAT вехи: вызвать ответ 500 на действии htmx; затем выключить сеть и повторить действие; затем отправить форму, отдающую 422"
+    expected: "На 500 показывается плашка `#htmx-failure-server`, при обрыве связи — `#htmx-failure-network`, на 422 плашка аварии НЕ поднимается"
+    why_human: "ROADMAP объявляет это ручным UAT дословно (критерий 3). Суита не исполняет ни строчки JS; браузерный стенд отклонён на уровне вехи (`E2E-01`)"
   - test: "Пройти пять экранов, с которых плашка ПЕРЕЕХАЛА в общую область шелла: `/billing` (карточка баланса), редактор объявления, `/history`, профиль, вход"
     expected: "Исход действия читается в новой общей области, не потерялся и не оторвался от предмета; ошибка ЗАПОЛНЕНИЯ формы по-прежнему стоит рядом с полем"
     why_human: "D-12 называет это видимым изменением и предметом ручной проверки; расположение и читаемость машинно не доказуемы"
   - test: "Подтвердить границу пакета гейтов: четыре обычных HTML-атрибута `onclick`/`onsubmit` в `connect_tg_user.html` и `connect_max.html` оставлены вне инвентаря до Фаз 12/13"
     expected: "Решение о границе подтверждено человеком либо отменено в пользу убывающего счётчика уже сейчас"
-    why_human: "Пункт `D8` блока coverage плана 08-09, `human_judgment: true` — это решение о ГРАНИЦЕ правила, а не проверяемое свойство"
+    why_human: "Пункт `D8` блока coverage плана 08-09, `human_judgment: true` — решение о ГРАНИЦЕ правила, а не проверяемое свойство"
   - test: "Решить судьбу плашек аварии, которые не прячутся обратно (`removeAttribute('hidden')` односторонний)"
     expected: "Либо плашки снимаются на успешном `htmx:afterRequest`, либо пункт записан в бэклог явным решением"
-    why_human: "Записано как принятое допущение плана (IN-04 ревизии). После одного сбоя красное остаётся на экране до конца сессии — ровно та десенсибилизация, от которой файл предостерегает сам"
+    why_human: "Записано как принятое допущение плана (IN-04 ревизии). После одного сбоя красное остаётся на экране до конца сессии"
+  - test: "Прочитать чипс «В обработке» журнала платежей на данных, где есть строки `expired` (D8 плана 08-11)"
+    expected: "Администратор не удивляется отсутствию просроченных под чипсом; подпись чипса и подпись строки называют разные состояния разными словами"
+    why_human: "Состав выдачи закреплён машинно (`test_the_ledger_selects_unclosed_payments_by_the_declared_awaiting_set`), но ЧИТАЕМОСТЬ экрана — суждение"
+  - test: "Прочитать приведённые к коду записи D-06 (`08-CONTEXT.md`, `08-05-PLAN.md`) рядом с `_is_open_intent_conflict` (D9 плана 08-11)"
+    expected: "Новая формулировка не просто присутствует, а ГОВОРИТ ТО ЖЕ, что делает код"
+    why_human: "Греп доказывает присутствие формулировки, а не её адекватность механизму — ровно то суждение, чей промах породил Разрыв записей"
+  - test: "Решить судьбу CR-01 (`app/services/payment_service.py:721-808`): дозапись `yookassa_payment_id` и `commit` после успешного `YooPayment.create` стоят ВНЕ защиты `try/except`"
+    expected: "Либо пост-сетевая дозапись получает свою защиту (резерв гасится в `expired` так же, как при отказе SDK), либо пункт записан в бэклог явным решением с названной ценой"
+    why_human: "Ни один критерий фазы это не покрывает: потолок работает, деньги не теряются (ссылка на оплату человеку не выдаётся). Цена — временная (≤ `PENDING_INTENT_TTL_HOURS` = 24 ч) невозможность начать новую оплату для одного человека при редком сбое СУБД в двухстрочном окне. Продуктовое решение «чинить сейчас или записать» — за владельцем"
+  - test: "Решить судьбу ЧЕТВЁРТОГО частного реестра `QUEUE_DROP_RESULTS` (`app/pages/admin.py:288`) и его микро-контракта `?result=` на `/admin/queue`"
+    expected: "Либо реестр сводится в `app/pages/notices.py` вместе с переводом `?result=` в `?notice=`, либо комментарий `app/pages/billing.py:93-95` («Три частных реестра… Копий не осталось ни одной») правится по факту"
+    why_human: "FOUND-05 называет ПЯТЬ снимаемых микро-контрактов поимённо, и `?result=` в их числе нет — он заведён Фазой 6 (`5b73c4e`) и в букву критерия 2 не входит. Но запись фазы утверждает большее, чем сделано, а это ровно тот класс расхождения «записи против кода», который фаза правила у себя сама (D-06)"
 unverified_prohibitions_note: >-
-  Все 19 прохибиций фазы объявлены `verification: judgment` и `status: resolved`.
-  Прогон автономный, поэтому вердикт LLM-судьи ниже НЕ АВТОРИТЕТЕН: пункты
-  помечены `unverified-prohibition — human review recommended` и подлежат
-  человеческому разбору на чекпойнте конца фазы.
+  Все 24 прохибиции фазы (19 в планах 08-01…08-10 плюс 5 в плане-закрытии 08-11)
+  объявлены `verification: judgment` и `status: resolved`. Прогон автономный,
+  поэтому вердикт LLM-судьи НЕ АВТОРИТЕТЕН: пункты помечены
+  `unverified-prohibition — human review recommended` и подлежат человеческому
+  разбору на чекпойнте конца фазы.
 ---
 
-# Phase 8: Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок — отчёт верификации
+# Phase 8: Фундамент ответа, канал уведомлений, пакет гейтов и денежный потолок — отчёт повторной верификации
 
-**Цель фазы:** контракт двойного ответа, канал обратной связи и машинные гейты существуют
-ДО того, как переведена первая форма — чтобы массовое переписывание не размножило дефект
-в 47 экземплярах.
+**Цель фазы:** контракт двойного ответа, канал обратной связи и машинные гейты
+существуют ДО того, как переведена первая форма — чтобы массовое переписывание не
+размножило дефект в 47 экземплярах.
 
-**Проверено:** 2026-08-28
-**Статус:** `gaps_found` — все пять критериев успеха подтверждены, но фаза внесла
-подтверждённую регрессию в смежный денежный узел, не покрытую ни одним критерием,
-ни одним тестом и ни одной последующей фазой вехи.
-**Повторная верификация:** нет — первичная.
+**Проверено:** 2026-08-29
+**Статус:** `human_needed` — все пять критериев успеха подтверждены машинно,
+Разрыв G-08-1 закрыт по коду, новых блокирующих разрывов не найдено; открытыми
+остаются девять пунктов, требующих человека, и 24 прохибиции судейского уровня.
+**Повторная верификация:** ДА — после плана закрытия разрыва 08-11.
+
+---
+
+## Закрытие Разрыва G-08-1 — проверено по коду, а не по SUMMARY
+
+| Что требовалось (`missing` прошлого отчёта) | Что найдено в коде | Статус |
+|---|---|---|
+| Явное множество наблюдаемых статусов рядом с `TERMINAL_STATUSES` с комментарием, ПОЧЕМУ вопросов два | `AWAITING_STATUSES = frozenset({STATUS_PENDING})`, `app/services/payment_service.py:104`; над ним 20 строк обоснования, называющих оба вопроса и оба читателя | ✓ ЗАКРЫТО |
+| `unclosed_payment_clause` переведён на положительный отбор | `app/application/admin/incidents.py:449` → `Payment.status.in_(tuple(AWAITING_STATUSES))`. Проверено ИСПОЛНЕНИЕМ: скомпилированное выражение `payments.status IN ('pending')`, оператор `in_op`, `expired in AWAITING_STATUSES → False` | ✓ ЗАКРЫТО |
+| Регрессия: `expired` НЕ порождает `INCIDENT_KIND_PAYMENT_STUCK` и НЕ приходит под чипсом `unclosed` | `tests/test_application/test_incidents.py:361` (`test_an_expired_intent_does_not_raise_the_payment_incident`) + `:386` (парный положительный на `pending`); `tests/test_application/test_admin_payments.py:309` и `:475`. Прогнаны мной: **61 passed** | ✓ ЗАКРЫТО |
+| Строка о фактической цене D-01 в `08-CONTEXT.md` | `08-CONTEXT.md:64-80` — блок «⚠️ ТРЕТИЙ ПУНКТ ЦЕНЫ ПРИ ПРИНЯТИИ НАЗВАН НЕ БЫЛ, И ВОТ ОН», включая общее правило («новый член перечисления обязан быть КЛАССИФИЦИРОВАН во всех множествах») и ссылку на гейт | ✓ ЗАКРЫТО |
+| Сверх перечня: пятый статус нельзя завести молча | `tests/test_services/test_payment_status_vocabulary.py` — 10 тестов: разбиение объявленных `STATUS_*` на три группы с поимённо названным остатком, закрытость колонки по пяти формам записи, привязка умолчания модели к значению `STATUS_PENDING`, три контрольных случая на зубы | ✓ ДОСТАВЛЕНО |
+| Записи фазы, разошедшиеся с кодом по D-06 | 6 мест приведены к коду (`08-05-PLAN.md:31,47,59,123,758`, `08-CONTEXT.md:150`), каждое помечено источником правки; седьмое (`08-05-PLAN.md`, предписывающий текст исполненной задачи) оставлено дословно и аннотировано | ✓ ДОСТАВЛЕНО |
+
+**Проверка на регрессию замысла:** `_claim_payment` (`payment_service.py:812`)
+по-прежнему спрашивает ДОПОЛНЕНИЕ терминальных — просроченное намерение осталось
+оплачиваемым. `TERMINAL_STATUSES` не переписано, а рядом заведено второе
+множество. Ровно то, чего требовал прошлый отчёт: два вопроса — два множества.
 
 ---
 
@@ -102,322 +88,249 @@ unverified_prohibitions_note: >-
 
 ### Наблюдаемые истины (пять критериев успеха ROADMAP)
 
-| # | Критерий | Статус | Свидетельство |
+| # | Критерий | Статус | Свидетельство (проверено мной) |
 |---|---|---|---|
-| 1 | Признак htmx объявлен РОВНО ОДИН раз: `respond()` с обязательным `redirect=`; гейт утверждает совпадение множеств (G-1/G-2) | ✓ VERIFIED | `grep -rn "HX-Request" app/` → **1** вхождение, `app/pages/htmx.py:33`. `respond()` (`htmx.py:305`) объявлен с `*`-разделителем и `redirect: str` без умолчания — вызов без него не собирается; закреплено `test_the_handler_exit_cannot_be_called_without_a_degraded_path`. G-1 (`test_every_post_handler_is_classified`, `test_the_three_sets_do_not_overlap`), G-2 (`test_no_converted_handler_builds_its_own_redirect`), единственность (`test_the_header_is_read_in_exactly_one_place`) — прогнаны мной, зелёные. Вторая клауза реализована ЗАМЕНОЙ — см. «Отступление 1» ниже |
-| 2 | Пять микро-контрактов сведены в один `?notice=` по коду закрытого реестра; OOB подменяет СОДЕРЖИМОЕ; две области; без кода разметки нет | ✓ VERIFIED | `grep -rEn '[?&](error\|saved\|reset\|retry\|sched_error)=' app/` → **0**. `app/pages/notices.py` — 14 кодов, собран из кортежа пар, `_index` роняет ИМПОРТ на дубле; `notice_for` сравнивает целиком по закрытому множеству. 12 мест записи `?notice=` (auth 1, billing 3, admin 2, profile 1, history 4, schedules 1). `notice_area.html:61-62` — `role="status"/aria-live="polite"` и `role="alert"/aria-live="assertive"`, содержимое под `{% if notice %}`. `notice_oob.html` — `hx-swap-oob="innerHTML:#notice"` / `innerHTML:#notice-alert`. Трёх частных реестров (`RETRY_NOTICES`, `PAYMENT_ERROR_MESSAGES`, `SCHEDULE_ERROR_REASONS`) в дереве нет ни одного вхождения. Ценность работает на СЕГОДНЯШНИХ редиректах: область читает `request.query_params.get('notice')` при полной перезагрузке |
-| 3 | Отказ сервера, обрыв сети и просроченный доступ видимы и не мусорят экран (машинная часть) | ✓ VERIFIED | `require_access` (`app/pages/__init__.py:118`) и `forbid_when_impersonating` (`app/dependencies.py:395`) зовут `refuse()`; `HtmxRefusal` превращается в 204 + `HX-Location` обработчиком `app/main.py:219` — минуя `JSONResponse` FastAPI. Статус 204: тела нет ПО ОПРЕДЕЛЕНИЮ. `htmx_error_banner.html:73-83` — две заранее отрисованные скрытые заготовки, два обработчика (`htmx:responseError` + `htmx:sendError`), скрипт делает только `removeAttribute('hidden')`; ни `innerHTML`, ни `outerHTML`, ни `insertAdjacentHTML`, ни `document.write` — решение v2.0 «узлами DOM, не строкой» не нарушено. 422 отсекается явной проверкой. **Фактическое срабатывание при 500 и при выключенной сети — ручной UAT, пункт 8** (объявлено самим роадмапом, вынесено в раздел ручной проверки) |
-| 4 | Ни одна форма не может быть переведена мимо контракта: 13 машинных гейтов + фикстура `htmx_client` с парным тестом | ✓ VERIFIED | 13 гейтов на месте: G-3…G-6 деградация (`test_only_a_form_tag_carries_the_post_attribute`, `..._keeps_its_method_and_action`, `..._matches_the_action_character_for_character`, `test_no_action_path_leads_to_a_fragment_route`), G-7/G-9/G-10/G-11 своп (`..._declares_its_swap_target_or_its_absence`, `..._points_at_an_existing_id`, `..._oob_block_carries_an_id`, `test_no_id_is_both_a_swap_target_and_an_oob_target`), G-12 граница Alpine (`test_no_client_state_node_is_a_swap_target`), G-13 AST (`test_every_header_write_has_a_safe_right_operand`, `test_no_header_write_touches_the_incoming_request`), G-14/G-15 безопасность шаблонов (`test_no_template_removes_automatic_escaping`, `test_no_application_module_builds_safe_markup`, `test_request_param_attributes_go_through_json_serialisation`, `test_no_markup_declares_request_parameters_or_event_handlers`), G-23 шелл (`test_shell.py`: версия 2.0.10, шесть ключей конфига с порядком правил, оба обработчика, обе области, `samesite == "lax"`). Фикстура `htmx_client` (`tests/conftest.py:66`, `HX-Request: true` + `follow_redirects=True`) существует и работает; образец пары — `test_a_closed_route_answers_a_full_reload_with_a_redirect` (302) / `test_a_closed_route_answers_htmx_with_a_location_header` (`HX-Location`, `"<!DOCTYPE" not in text`). Зубы каждого гейта доказаны группой `-k control` — 20+ отрицательных случаев |
-| 5 | Второй одновременный запрос оплаты не создаёт второго незакрытого намерения | ✓ VERIFIED | Частичный уникальный индекс `uq_payments_open_subscription_intent` объявлен ДВАЖДЫ: ревизией `0021` (`sqlite_where`/`postgresql_where` от одного литерала `OPEN_INTENT_PREDICATE`) и `Payment.__table_args__` (`app/models/payment.py:50-56`) — предикаты сверяются символ в символ. Порядок в `create_payment` — резерв (`_reserve_subscription_intent`, `commit` до сети) → `YooPayment.create` → дозапись id; отказ схемы приходит ДО денег. Прикладной проверки потолка нет. Удержание на пути рассылки — `_RETRY_IN_FLIGHT`/`_claim_retry_slot` (`app/pages/history.py:370,497`), от `hx-disabled-elt` не зависит; неявное условие («один процесс, одна реплика») стало машинным (`tests/test_infra/test_web_service_is_single_process.py`, `docker-compose.prod.yml` — `command: uv run uvicorn ...` без `--workers`, без `deploy.replicas`). Запрет `hx-sync` с `queue` на периметре — `test_no_perimeter_route_carries_a_queued_request_sync`, при этом осознанная очередь `/ads/new` гейт не роняет (`test_control_positive_a_queued_request_outside_the_perimeter_keeps_the_gate_green`) |
+| 1 | Признак htmx объявлен РОВНО ОДИН раз: `respond()` с обязательным `redirect=`; гейт утверждает совпадение множеств (G-1/G-2) | ✓ VERIFIED | `grep -rn "HX-Request" app/` → **1** вхождение (`app/pages/htmx.py:33`). `respond()` (`htmx.py:305`) объявлен с `*` и `redirect: str` без умолчания; закреплено `test_the_handler_exit_cannot_be_called_without_a_degraded_path`. G-1/G-2 и `test_the_header_is_read_in_exactly_one_place` — прогнаны, зелёные. Вторая клауза реализована ЗАМЕНОЙ на тройку утверждений — см. «Отступление 1» |
+| 2 | Пять микро-контрактов сведены в один `?notice=` по коду закрытого реестра; OOB подменяет СОДЕРЖИМОЕ; две области; без кода разметки нет | ✓ VERIFIED | `grep -rEn '[?&](error\|saved\|reset\|retry\|sched_error)=' app/` → **0**. `app/pages/notices.py`: 14 кодов, собран из кортежа пар, `_index` роняет ИМПОРТ на дубле, `notice_for` сравнивает целиком по закрытому множеству. 12 мест записи `?notice=` (auth 1, billing 3, admin 2, profile 1, history 4, schedules 1). `notice_area.html:61-62` — `role="status"/aria-live="polite"` и `role="alert"/aria-live="assertive"`, плашка под `{% if notice %}`. `notice_oob.html` — `hx-swap-oob="innerHTML:#notice"` / `innerHTML:#notice-alert`. Области включены в ОБА шелла (`base.html:238`, `auth_base.html:45`), `notice_for` зарегистрирован глобалью Jinja (`common.py:356`) — ценность работает на СЕГОДНЯШНИХ редиректах. Граница: `?result=` админской очереди в критерий не входит — см. «Предупреждение 2» |
+| 3 | Отказ сервера, обрыв сети и просроченный доступ видимы и не мусорят экран (машинная часть) | ✓ VERIFIED | `require_access` (`app/pages/__init__.py:118`) и `forbid_when_impersonating` (`app/dependencies.py:395`) зовут `refuse()`; `HtmxRefusal` превращается в **204 + `HX-Location`** обработчиком `app/main.py:219`, минуя `JSONResponse` FastAPI. У 204 тела нет ПО ОПРЕДЕЛЕНИЮ — «не JSON» стало свойством статуса. `htmx_error_banner.html:73-83` — две заранее отрисованные скрытые заготовки, два обработчика (`htmx:responseError` + `htmx:sendError`), скрипт делает только `removeAttribute('hidden')`; ни `innerHTML`, ни `outerHTML`, ни `insertAdjacentHTML`, ни `document.write` — решение v2.0 «узлами DOM, не строкой» не нарушено. 422 отсекается явной проверкой. **Фактическое срабатывание при 500 и при выключенной сети объявлено ручным UAT самим ROADMAP** и вынесено в раздел человеческой проверки, поэтому счёт не снижает |
+| 4 | Ни одна форма не может быть переведена мимо контракта: 13 машинных гейтов + фикстура `htmx_client` с парным тестом | ✓ VERIFIED | Прогнаны мной: `test_htmx_gates.py`, `test_htmx_response_layer.py`, `test_htmx_response_contract.py`, `test_notices_*`, `test_shell.py`, `test_money_perimeter_gate.py`, `test_access_gate.py`, `test_impersonation_gate.py`, `test_htmx_preserved.py` → **321 passed, exit 0**; `test_htmx_inventory.py` → 19 passed; `test_htmx_markup_gates.py` + `test_htmx_markup_security.py` → в составе 94 passed. Метки гейтов найдены в исходниках тестов: G-1…G-7, G-9…G-15, G-23 (13 гейтов пакета + G-1/G-2 критерия 1), плюс G-21/G-22 (GATE-08) в `test_htmx_inventory.py`. Машинные факты GATE-07 перепроверены прямым счётом: `\|safe` == 0, `Markup(` == 0, `hx-vals` мимо `tojson` == 0, `hx-on` == 0. Фикстура `htmx_client` (`tests/conftest.py:65`, `HX-Request: true` + `follow_redirects=True`) существует; парный тест — `test_a_closed_route_answers_a_full_reload_with_a_redirect` (302) / `test_a_closed_route_answers_htmx_with_a_location_header` (204, `"<!DOCTYPE" not in text`, `text == ""`). Про «200 против 204» — «Отступление 2» |
+| 5 | Второй одновременный запрос оплаты не создаёт второго незакрытого намерения | ✓ VERIFIED | Частичный уникальный индекс `uq_payments_open_subscription_intent` объявлен ДВАЖДЫ: ревизией `0021` (`sqlite_where`/`postgresql_where` от одного литерала `OPEN_INTENT_PREDICATE`, строки 199-200) и `Payment.__table_args__` (`app/models/payment.py:51-58`); предикаты совпадают символ в символ, равенство четырёх вхождений закреплено `test_payment_open_intent_index.py`. Порядок в `create_payment`: уборка → резерв (`commit` ДО сети) → `YooPayment.create` → дозапись id; отказ схемы приходит ДО денег. Удержание на пути рассылки — `_RETRY_IN_FLIGHT`/`_claim_retry_slot` (`app/pages/history.py:370,497`), от `hx-disabled-elt` не зависит; его неявное предусловие («один процесс, одна реплика») СТАЛО МАШИННЫМ (`tests/test_infra/test_web_service_is_single_process.py`, 4 контрольных случая; `docker-compose.prod.yml:103` — без `--workers`, без `deploy.replicas`). Запрет `hx-sync` с `queue` на периметре — `test_no_perimeter_route_carries_a_queued_request_sync`, при этом осознанная очередь вне периметра гейт не роняет. Прогнаны: `test_payment_intent_cap.py`, `test_payment_concurrency.py`, `test_0021_*`, `test_payment_open_intent_index.py` → **94 passed**. Про CR-01 — «Предупреждение 1» |
 
 **Счёт:** 5/5 критериев подтверждены (0 present-but-behavior-unverified).
 
-> Счёт относится к пяти критериям ROADMAP. Разрыв, найденный ниже, не опровергает
-> ни одного из них — он лежит ВНЕ их буквы и потому не понижает счёт, но блокирует
-> фазу отдельным основанием (см. «Разрывы»).
+> `behavior_unverified: 0` — не потому, что поведение не проверялось, а потому,
+> что единственная поведенческая часть, не покрытая тестом (срабатывание плашек
+> при 500 и при обрыве сети), объявлена ручным UAT САМИМ ROADMAP внутри текста
+> критерия 3. Она числится в разделе человеческой проверки пунктом 2, а не
+> отдельным `behavior_unverified_items`, чтобы не считать один и тот же пункт
+> дважды.
+
+---
 
 ### Отступления, признанные соблюдением ЗАМЫСЛА
 
-**Отступление 1 — вторая клауза критерия 1 реализована заменой (план 08-07, обоснование абзацем).**
-Буквальное «множество обработчиков с `RedirectResponse` совпадает с множеством, читающим
-`HX-Request`» НЕСОВМЕСТИМО с FOUND-04: читателей заголовка ровно один по построению, и
-равенство было бы либо ложью, либо требованием 36 чтений. Реализовано тройкой
-G-1 + G-2 + `HX_HEADER_READS == 1`, что утверждает ровно то, ради чего клауза написана:
-каждый POST-обработчик слоя страниц либо идёт через `respond()`, либо стоит в одном из ДВУХ
-явных перечней, и объединение трёх множеств РАВНО множеству, найденному обходом.
-Замысел соблюдён, замена документирована. **PASSED.**
+**Отступление 1 — буквальное равенство множеств критерия 1 заменено тройкой
+утверждений.** Критерий просит машинно утвердить, что множество обработчиков с
+`RedirectResponse` СОВПАДАЕТ с множеством, читающим `HX-Request`. Это
+противоречит соседнему требованию той же фазы: FOUND-04 требует, чтобы признак
+читался РОВНО ОДИН РАЗ, — значит правое множество по построению одноэлементно и
+с 36 обработчиками не совпадёт НИ В ОДНОЙ реализации, удовлетворяющей FOUND-04.
+Противоречие названо в шапке `tests/test_pages/test_htmx_gates.py` (строки 42-63)
+до того, как я его нашёл, и смысл сохранён контрапозицией: (а) признак читается
+ровно в одном месте, (б) каждый POST-обработчик либо идёт через `respond()`, либо
+стоит в объявленном перечне, (в) переведённый обработчик не строит редирект сам.
+**Принято как соблюдение замысла.**
 
-**Отступление 2 — D-06 исполнен против своей буквы (известное, документированное).**
-Решение предписывало разбор `IntegrityError` ПО ИМЕНИ ограничения. На SQLite — диалекте
-всей суиты — это неисполнимо: драйвер называет КОЛОНКУ (`UNIQUE constraint failed:
-payments.user_id`), имя индекса приводит только PostgreSQL. Разбор по имени зеленел бы на
-бою и молча не срабатывал на всех ~2600 тестах, то есть потолок ВЫГЛЯДЕЛ БЫ покрытым.
-Применена диалект-независимая идиома проекта (`_extend_subscription`): поймать → перечитать
-состояние → при чужом отказе поднять ТОТ ЖЕ объект. Механизм проверен
-`test_the_verdict_does_not_depend_on_the_driver_text` и `test_a_foreign_rejection_is_not_swallowed`.
-**PASSED. Править следует ЗАПИСИ, а не код** — их перечень в `records_to_correct` фронтматтера.
+**Отступление 2 — `204`, а не `200`, в парном тесте критерия 4.** Критерий и
+GATE-01 говорят «с заголовком → 200». Реализовано 204: у него тела нет ПО
+ОПРЕДЕЛЕНИЮ, поэтому «не JSON» становится свойством статуса, а не обещанием кода.
+Обоснование выписано в `location_response` (`htmx.py:133-150`), включая проверку
+по вендоренному 2.0.10, что слой письма читает `HX-Location` ДО применения правил
+`responseHandling`. Проверяемая часть требования («не 302, документа в теле нет»)
+утверждена сильнее, чем просил критерий: `response.text == ""`. **Принято как
+соблюдение замысла.**
 
-**Отступление 3 — пять арифметически неверных критериев приёмки исполнены по замыслу.**
-Проверены поимённо: `POST_HANDLERS = 36`, а не 35 (35 × `@router.post` + одно
-`@money_router.post` в `billing.py`; гейт ловит атрибут `.post` на ЛЮБОМ объекте, иначе
-потерял бы именно ДЕНЕЖНОЕ объявление); `HX_HEADER_WRITES = 2`, а не 1 (второе — собственный
-`HX-Location` слоя ответа); `OOB_BLOCKS = 6`, а не 4 (четыре редактора + две ветки
-`notice_oob.html`). Все три числа выписаны литералом с объяснением расхождения прямо над
-константой. Замысел («собственное число ловит и пустоту, и сломанный обход», D-13) соблюдён.
-**PASSED.**
-
-**Отступление 4 — `is_htmx` считает ПУСТОЕ значение заголовка отсутствием признака.**
-`bool(...)` вместо прежнего `is not None` в `ads.py`. Обоснование в докстринге:
-слой письма присылает `true` и пустоты не присылает никогда, а «пустая строка есть признак»
-означало бы включение ветки htmx запросом, ничего о ней не сказавшим. Предикат авторизации
-не затронут ни на одном пути. **PASSED.**
-
-**Отступление 5 — GATE-08 судим по тому, что роадмап относит к ЭТОЙ фазе.**
-Клауза `test_no_manual_fetch_remains` написана в форме убывающего счётчика
-(`MANUAL_FETCH_PLACES = 6`, `MANUAL_FETCH_CEILING_AT_PHASE_08 = 6`, три утверждения: рост
-факта, падение факта, рост объявления — каждое со своим текстом отказа). Финальное
-`fetch( == 0` принадлежит FETCH-03 в Фазе 15 по примечанию роадмапа. Прохибиция плана 08-09
-(«MUST NOT записать клаузу так, чтобы она краснела до Фазы 13») соблюдена: гейт зелёный
-сегодня и краснеет только на регрессии. **PASSED.**
-
-**Отступление 6 — гейт трассера 08-01 закрыт машинной переверификацией самим исполнителем.**
-Исполнитель сослался на `human_verify_mode: "end-of-phase"` и `mode: yolo` и пометил это
-собственным суждением, а не одобрением пользователя. Формально корректно для режима;
-человеческий пункт при этом НЕ ПОТЕРЯН — он выжил как пункт `D7` блока coverage и вынесен
-в раздел ручной проверки этого отчёта. **Принято.**
+**Отступление 3 — `respond()` сегодня не имеет НИ ОДНОГО производственного
+вызова, и G-2 проходит вакуумно.** Проверено: `respond` импортируется только из
+`tests/`, все 12 мест записи `?notice=` собирают `RedirectResponse(302)` руками.
+Это НЕ дефект, а буква цели фазы: контракт обязан существовать *ДО* того, как
+переведена первая форма, — первый перевод объявлен Фазой 9 («пилот на
+`account_groups`»). Вакуумность G-2 названа в шапке гейта прямым текстом, его
+предмет собирается ТЕМ ЖЕ обходом, который даёт 36 (сломанный разбор даёт красный,
+а не зелёный ноль), а зубы доказаны контролем
+`test_control_negative_a_converted_handler_with_its_own_redirect_reddens_g2`.
+То же относится к GATE-01 («каждый переведённый маршрут покрыт парой») — множество
+переведённых пусто, фикстура и образец пары существуют. **Принято.**
 
 ---
 
 ### Требуемые артефакты
 
-| Артефакт | Назначение | Статус | Детали |
+| Артефакт | Что обязан давать | Статус | Детали |
 |---|---|---|---|
-| `app/pages/htmx.py` | Слой ответа: единственное чтение, `respond()`, `refuse()`, `location_response()` | ✓ VERIFIED | 27.8 КБ; `is_htmx`, `HtmxRefusal`, `_local_path`, `location_response`, `refuse`, `_require_registered_notice`, `_notice_oob`, `_glue_notice`, `_with_notice`, `respond`. Импортируется из `__init__.py`, `dependencies.py`, `main.py`, `ads.py` |
-| `app/pages/notices.py` | Закрытый реестр 14 кодов | ✓ VERIFIED | 20.5 КБ; сборка из кортежа пар, `_index` роняет импорт на дубле, `notice_for`/`has_code`. Кода `expired` НЕТ (D-11) |
-| `app/templates/includes/notice_area.html` | Две `aria-live`-области | ✓ VERIFIED | Подключён в `base.html:238` и `auth_base.html:45`, по одному разу |
-| `app/templates/includes/notice_oob.html` | Внеполосная форма `innerHTML:` | ✓ VERIFIED | Рендерится из `htmx.py::_notice_oob` (не включается в страницы) |
-| `app/templates/includes/htmx_error_banner.html` | Скрытые заготовки + два обработчика | ✓ VERIFIED | Подключён в `base.html:242` и `auth_base.html:49` |
-| `alembic/versions/0021_payments_open_intent_index.py` | Индекс + зачистка + nullable | ✓ VERIFIED | 18.3 КБ; зачистка ДО индекса, `MAX(created_at)`/`MAX(id)`, число строк в журнал наката, предупреждение в журнал отката, литералы строками |
-| `app/models/payment.py` | Второй источник схемы | ✓ VERIFIED | `__table_args__` c `Index("uq_payments_open_subscription_intent", ...)`, `sqlite_where`/`postgresql_where` тем же литералом; `yookassa_payment_id` — `unique=True, index=True, nullable=True` |
-| `app/services/payment_service.py` | Резерв → сеть → дозапись, уборка, `expired` | ✓ VERIFIED | `STATUS_EXPIRED`, `OPEN_INTENT_INDEX_NAME`, `_stale_subscription_intents` (строго `== STATUS_PENDING`), `_expire_stale_intents`, `_is_open_intent_conflict`, `_reserve_subscription_intent` |
-| `tests/conftest.py::htmx_client` | Фикстура пары | ✓ VERIFIED | Строки 66-102 |
-| `tests/test_pages/test_htmx_gates.py` | G-1/G-2/G-13 | ✓ VERIFIED | 95.9 КБ, 7 контрольных отрицательных случаев |
-| `tests/test_templates/test_htmx_markup_gates.py` | G-3…G-7, G-9…G-12 | ✓ VERIFIED | 104.8 КБ, 11 контрольных случаев |
-| `tests/test_templates/test_htmx_markup_security.py` | G-14/G-15 | ✓ VERIFIED | 53.6 КБ, 4 отрицательных + 2 положительных контроля |
-| `tests/test_templates/test_htmx_inventory.py` | G-21/G-22 | ✓ VERIFIED | 92.3 КБ, `POLL_PLACES = 8`, `MANUAL_FETCH_PLACES = 6` |
-| `tests/test_pages/test_money_perimeter_gate.py` | G-18 | ✓ VERIFIED | 64.0 КБ, `PERIMETER_ROUTES = 5`, `HOLD_REQUIRED`/`HOLD_NOT_BUILT_YET` с обоснованием на запись |
-| `tests/test_infra/test_web_service_is_single_process.py` | Гейт артефакта развёртывания | ✓ VERIFIED | 28.8 КБ; `tests/test_infra/__init__.py` на месте |
-| `app/application/admin/incidents.py` | (потребитель нового статуса) | ✗ НЕ ОБНОВЛЁН | Не входит в диф фазы; см. «Разрывы» |
-| `app/application/admin/payments_query.py` | (потребитель нового статуса) | ✗ НЕ ОБНОВЛЁН | Не входит в диф фазы; см. «Разрывы» |
+| `app/pages/htmx.py` | Слой ответа: единственное чтение `HX-Request`, `respond()`, `refuse()`, OOB-приклейка | ✓ VERIFIED | 367 строк; `is_htmx` — единственный читатель; `_local_path` отвергает внешний адрес, обратную косую, управляющий символ и не-ASCII; `refuse` и `location_response` подключены в `app/main.py`, `app/pages/__init__.py`, `app/dependencies.py` |
+| `app/pages/notices.py` | Закрытый реестр из 14 кодов | ✓ VERIFIED | Кортеж пар + `_index` с `ValueError` на дубле; `notice_for` подключён глобалью Jinja (`app/pages/common.py:356`) и читается обеими областями |
+| `app/templates/includes/notice_area.html` | Две области, пустые без кода | ✓ VERIFIED | Включена в `base.html:238` и `auth_base.html:45` |
+| `app/templates/includes/notice_oob.html` | `innerHTML:#notice` / `innerHTML:#notice-alert` | ⚠️ ORPHANED (по замыслу) | Рендерится только из `htmx.py::_notice_oob`, который зовётся только из `respond()`, у которого нет производственных вызовов. Отступление 3 |
+| `app/templates/includes/htmx_error_banner.html` | Две скрытые заготовки + два обработчика | ✓ VERIFIED | Включён в оба шелла; `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write` == 0 |
+| `alembic/versions/0021_payments_open_intent_index.py` | Зачистка, снятие `NOT NULL`, частичный уникальный индекс | ✓ VERIFIED | `OPEN_INTENT_PREDICATE` один литерал на два диалекта; бэкфилл переводит лишние строки в `expired`; `test_0021_*` зелёный |
+| `app/services/payment_service.py` | Резерв до сети, `TERMINAL_STATUSES`, `AWAITING_STATUSES`, уборка | ✓ VERIFIED | Два множества, два вопроса; `_expire_stale_intents` зеркалит предикат индекса |
+| `app/application/admin/incidents.py` | `unclosed_payment_clause` на положительном отборе | ✓ VERIFIED | Проверено исполнением, не грепом |
+| `tests/test_services/test_payment_status_vocabulary.py` | Гейт словаря статусов | ✓ VERIFIED | 10 тестов, 3 контроля; область `app/**/*.py`, граница названа (см. ниже) |
+| `tests/conftest.py::htmx_client` | Фикстура запроса от слоя письма | ✓ VERIFIED | Возвращает ТОТ ЖЕ объект клиента, складывается с `authed_client`/`expired_client` |
+| `tests/test_infra/test_web_service_is_single_process.py` | Предусловие удержания рассылки стало машинным | ✓ VERIFIED | 4 теста + 5 контролей; сверяется с `docker-compose.prod.yml` |
 
 ### Проверка ключевых связей
 
-| Откуда | Куда | Через что | Статус | Детали |
-|---|---|---|---|---|
-| `app/pages/__init__.py::require_access` | `htmx.py::refuse` | единственный выход отказа зависимости | ✓ WIRED | строка 118 |
-| `app/dependencies.py::forbid_when_impersonating` | `htmx.py::refuse` | тот же выход | ✓ WIRED | строки 385, 395 (отложенный импорт против кольца) |
-| `app/main.py` | `htmx.py::HtmxRefusal` | обработчик исключения → 204 + `HX-Location` | ✓ WIRED | строки 25, 219-226 |
-| `app/pages/ads.py` | `htmx.py::is_htmx` | оба чтения сведены к одному объявлению | ✓ WIRED | строки 15, 438, 617 |
-| `base.html` / `auth_base.html` | `includes/notice_area.html` | включение областей в оба шелла | ✓ WIRED | `base.html:238`, `auth_base.html:45` |
-| `app/pages/common.py` | `notices.py::notice_for` | Jinja-глобаль — единственный вход шаблона в реестр | ✓ WIRED | глобаль зарегистрирована, `notice_area.html:60` её зовёт |
-| `htmx.py::respond` | `includes/notice_oob.html` | приклейка внеполосного блока к фрагменту | ✓ WIRED | `NOTICE_OOB_TEMPLATE`, `_notice_oob`, `_glue_notice` |
-| 12 обработчиков | `notices.py` | код пишется КОНСТАНТОЙ реестра | ✓ WIRED | `notices.RETRY_*`, `notices.PAYMENT_*`, `notices.WORKER_*`, `notices.PROFILE_SAVED`, `notices.PASSWORD_RESET_DONE` |
-| `0021` | `models/payment.py` | один индекс двумя источниками, предикаты символ в символ | ✓ WIRED | `test_the_two_sources_of_the_schema_declare_one_predicate` |
-| `money_perimeter_gate` | `history.py::_claim_retry_slot` | удержание пути рассылки | ✓ WIRED | `RETRY_HOLD = "_claim_retry_slot"` |
-| `money_perimeter_gate` | `payment_service.py` | удержание денежного пути | ⚠️ PARTIAL | `MONEY_HOLD = "OPEN_INTENT_INDEX_NAME"` — гейт утверждает наличие ПРИСВОЕНИЯ КОНСТАНТЕ, а не самого индекса; удаление `Index(...)` из модели оставило бы этот гейт зелёным. Настоящий индекс покрыт `tests/test_models/test_payment_open_intent_index.py`, дыры в охвате нет — вопрос именования (IN-01 ревизии) |
-| `htmx.py::respond` | обработчики `app/` | вызов из продуктового кода | ⚠️ ORPHANED (осознанно) | `respond()` не вызывается из `app/` ни разу: `NOT_YET_CONVERTED_COUNT = 36` из 36. Это ПРАВИЛО ГРАНИЦЫ фазы («заводится контракт, не переводятся формы»), а не незавершённость. Слой доказан работой в тестах (33 вызова в трёх файлах). Записано ниже предупреждением |
+| Откуда | Куда | Через что | Статус |
+|---|---|---|---|
+| `app/pages/__init__.py::require_access` | `app/pages/htmx.py::refuse` | вызов `refuse(...)` с `without_htmx=HTTPException(302)` | ✓ WIRED |
+| `app/dependencies.py::forbid_when_impersonating` | `app/pages/htmx.py::refuse` | отложенный импорт (кольцо импортов названо в комментарии) + вызов | ✓ WIRED |
+| `app/pages/htmx.py::HtmxRefusal` | `app/main.py::htmx_refusal_handler` | `@app.exception_handler(HtmxRefusal)` → `location_response` (204 + `HX-Location`) | ✓ WIRED |
+| 12 обработчиков `?notice=` | `app/pages/notices.py` | код едет КОНСТАНТОЙ модуля (`notices.PAYMENT_FAILED` и т.д.), не литералом | ✓ WIRED |
+| `notice_area.html` | `app/pages/notices.py::notice_for` | глобаль Jinja, зарегистрированная в `app/pages/common.py:356` | ✓ WIRED |
+| `app/application/admin/incidents.py::unclosed_payment_clause` | `app/services/payment_service.py::AWAITING_STATUSES` | положительный отбор `Payment.status.in_(tuple(AWAITING_STATUSES))` | ✓ WIRED |
+| `app/application/admin/payments_query.py::PAYMENT_STATUS_FILTERS` | `unclosed_payment_clause` | ОБЪЕКТ, а не копия; тождество закреплено `test_the_unclosed_chip_reuses_the_single_declared_rule_instead_of_a_copy` | ✓ WIRED |
+| `app/models/payment.py::__table_args__` | `alembic/0021::OPEN_INTENT_PREDICATE` | предикат скопирован символ в символ; равенство четырёх вхождений утверждается машинно | ✓ WIRED |
+| `app/pages/htmx.py::_notice_oob` | `includes/notice_oob.html` | рендер шаблона из слоя ответа | ⚠️ WIRED, но недостижим из production (Отступление 3) |
 
-### Трассировка потока данных
+### Трассировка потока данных (уровень 4)
 
-| Артефакт | Величина | Источник | Настоящие данные | Статус |
+| Артефакт | Переменная | Источник | Реальные данные | Статус |
 |---|---|---|---|---|
-| `notice_area.html` | `notice` | `notice_for(request.query_params.get('notice'))` — закрытый реестр `notices.py` | да | ✓ FLOWING |
-| `notice_oob.html` | `notice` | запись реестра, переданная `htmx.py::_notice_oob` | да | ✓ FLOWING |
-| `htmx_error_banner.html` | текст плашки | литерал шаблона, отрисованный на сервере (по замыслу QUAL-03) | н/п — заготовка | ✓ FLOWING |
-| `admin/payments.html` | подпись `expired` | `PAY_LABELS` + `Payment.status` из БД | да | ✓ FLOWING |
-| `billing/balance.html` | подпись `expired` | то же | да | ✓ FLOWING |
+| `notice_area.html` | `notice` | `notice_for(request.query_params.get('notice'))` — закрытый реестр, сравнение целиком | Да, на сегодняшних 302 | ✓ FLOWING |
+| `admin/payments.html` (чипс `unclosed`) | выборка | `PAYMENT_STATUS_FILTERS["unclosed"]` → `unclosed_payment_clause()` → SQL `status IN ('pending')` | Да, проверено компиляцией выражения | ✓ FLOWING |
+| «Обзор» админки, признак `payment_stuck` | `detect_payment_stuck` | тот же `unclosed_payment_clause` + `payment_stuck_before` | Да; строки `expired` больше не попадают | ✓ FLOWING |
+| `htmx_error_banner.html` | заготовки плашек | отрисованы сервером, скрыты атрибутом; наполнение приходит от макроса `components/alert.html` | Да (доставка); переключение — JS, проверяется руками | ✓ FLOWING |
 
 ### Поведенческие проверки
 
 | Поведение | Команда | Результат | Статус |
 |---|---|---|---|
-| Слой ответа: обе пары отказа, `respond()`, `_local_path` | `uv run pytest tests/test_pages/test_htmx_response_layer.py -q` | 20 passed | ✓ PASS |
-| G-1/G-2/G-13 + гейты разметки с контролем | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_templates/test_htmx_markup_gates.py -q -p no:randomly` | 54 passed | ✓ PASS |
-| G-14/G-15, G-21/G-22, G-18, гейт развёртывания | `uv run pytest tests/test_templates/test_htmx_markup_security.py tests/test_templates/test_htmx_inventory.py tests/test_pages/test_money_perimeter_gate.py tests/test_infra/ -q -p no:randomly` | 55 passed | ✓ PASS |
-| Реестр, поверхность, канал, потолок, два источника схемы, round-trip `0021` | `uv run pytest tests/test_pages/test_notices_registry.py tests/test_pages/test_notices_surface.py tests/test_pages/test_notices_channel.py tests/test_services/test_payment_intent_cap.py tests/test_models/test_payment_open_intent_index.py tests/test_migrations/test_0021_payments_open_intent_index.py -q -p no:randomly` | 108 passed | ✓ PASS |
-| G-23: области, плашки, конфиг, `samesite` | `uv run pytest tests/test_pages/test_shell.py -q -k "notice or banner or failure or samesite or aria or live or config"` | 15 passed, 122 deselected | ✓ PASS |
-| Единственность чтения признака | `grep -rn "HX-Request" app/ --include=*.py --include=*.html` | 1 (`app/pages/htmx.py:33`) | ✓ PASS |
-| Пять снятых написаний | `grep -rEn '[?&](error\|saved\|reset\|retry\|sched_error)=' app/` | 0 | ✓ PASS |
-| Совпадение порога уборки и порога залипания (проверка разрыва) | `python -c "..."` над `PENDING_INTENT_TTL_HOURS` и `payment_stuck_before` | оба дают `2026-08-27 00:00:00+00:00`; `expired in TERMINAL_STATUSES → False` | ✗ FAIL (см. «Разрывы») |
+| Гейты фазы 8 зелёные на настоящем дереве | `uv run pytest tests/test_pages/{test_htmx_gates,test_htmx_response_layer,test_htmx_response_contract,test_notices_registry,test_notices_channel,test_notices_surface,test_shell,test_money_perimeter_gate,test_access_gate,test_impersonation_gate,test_htmx_preserved}.py -q` | `321 passed` за 776 с, exit 0 | ✓ PASS |
+| Закрытие G-08-1 держится регрессиями | `uv run pytest tests/test_services/test_payment_status_vocabulary.py tests/test_application/test_incidents.py tests/test_application/test_admin_payments.py -q` | `61 passed`, exit 0 | ✓ PASS |
+| Денежный потолок и ревизия 0021 | `uv run pytest tests/test_services/test_payment_intent_cap.py tests/test_services/test_payment_concurrency.py tests/test_models/... tests/test_migrations/... tests/test_templates/test_htmx_markup_*.py -q` | `94 passed`, exit 0 | ✓ PASS |
+| Инвентарь и гейты опроса (GATE-08) | `uv run pytest tests/test_templates/test_htmx_inventory.py -q` | `19 passed`, exit 0 | ✓ PASS |
+| «Незакрыт» отбирается ПОЛОЖИТЕЛЬНО | `python -c "unclosed_payment_clause().compile(literal_binds)"` | `payments.status IN ('pending')`, оператор `in_op`, `expired in AWAITING_STATUSES → False` | ✓ PASS |
+| Признак htmx читается ровно один раз | `grep -rn "HX-Request" app/` | 1 вхождение, `app/pages/htmx.py:33` | ✓ PASS |
+| Пять снятых микро-контрактов | `grep -rEn '[?&](error\|saved\|reset\|retry\|sched_error)=' app/` | 0 | ✓ PASS |
+| Безопасность разметки (GATE-07) | `grep` по `app/templates/` и `app/**/*.py` | `\|safe` 0, `Markup(` 0, `hx-vals` мимо `tojson` 0, `hx-on` 0 | ✓ PASS |
+| Срабатывание плашек при 500 / обрыве сети | — | Требует браузера с JS | ? SKIP → ручная проверка, пункт 2 |
 
-**Итого перепроверено собственным прогоном: 252 теста, все зелёные.** Полная суита
-(2574 passed) и кросс-фазовая регрессия Фазы 7 (235 passed) установлены оркестратором;
-выборочная перепроверка их не опровергла.
+Полная суита не перезапускалась: она уже прогнана зелёной на этом же коде
+(2589 passed, exit 0), а её повтор занял бы ~33 минуты без нового свидетельства.
+Вместо неё запущены целевые прогоны выше — суммарно **495 тестов, 0 отказов**.
 
-### Исполнение проб
+### Исполнение проб (probes)
 
-Проб вида `scripts/*/tests/probe-*.sh` в проекте нет, и ни один план фазы их не объявляет —
-раздел неприменим.
+| Проба | Команда | Результат | Статус |
+|---|---|---|---|
+| — | — | В проекте нет каталога `scripts/*/tests/probe-*.sh`; ни один PLAN/SUMMARY фазы проб не объявляет | ? SKIP (проб нет) |
 
 ### Покрытие требований
 
-| Требование | План-источник | Статус | Свидетельство |
+| Требование | План(ы) | Статус | Свидетельство |
 |---|---|---|---|
-| FOUND-04 | 08-01, 08-07 | ✓ SATISFIED | Одно чтение `HX-Request`; `respond(*, redirect)` без умолчания; G-1 и `HX_HEADER_READS == 1` |
-| FOUND-05 | 08-02, 08-06 | ✓ SATISFIED | `notices.py` принимает КОД; пять написаний → ноль; 12 мест пишут один `?notice=` |
-| FOUND-06 | 08-04 | ✓ SATISFIED | `innerHTML:#notice` / `innerHTML:#notice-alert`; две области `status`/`alert`; без кода разметки нет |
-| FOUND-07 | 08-01, 08-04 | ✓ SATISFIED (машинно) | `refuse()` → 204 + `HX-Location`, ни 302, ни JSON, на обоих отказах. **Видимость на приземлившемся экране — ручной пункт D7** |
-| QUAL-03 | 08-04 | ✓ SATISFIED (машинно) | Два обработчика, заготовка с сервера, только переключение атрибута, 422 отсечён. **Фактическое срабатывание — ручной UAT, пункт 8** |
-| GATE-01 | 08-01 | ✓ SATISFIED | Фикстура `htmx_client` + образец пары на двух отказах, прогнан |
-| GATE-03 | 08-07 | ✓ SATISFIED | G-1/G-2 с двумя раздельными перечнями и убывающим счётчиком; зубы доказаны контролем |
-| GATE-04 | 08-08 | ✓ SATISFIED | Четыре гейта деградации + сверка `action` с объявленными маршрутами и с фрагментными |
-| GATE-05 | 08-08 | ✓ SATISFIED | Четыре гейта свопа; граница «`innerHTML` только для областей уведомления» соблюдена — четыре OOB редактора не покраснели |
-| GATE-06 | 08-08 | ✓ SATISFIED | `CLIENT_STATE_NODES = 24`, множество целей собирается тем же обходом |
-| GATE-07 | 08-07, 08-09 | ✓ SATISFIED | G-13 AST на правый операнд; `\|safe`/`Markup(` == 0; `autoescape` утверждён тестом; `hx-vals` только через `\| tojson`; `hx-on:` запрещён |
-| GATE-08 | 08-04, 08-09 | ✓ SATISFIED (в объёме этой фазы) | `test_shell.py` держит версию, шесть ключей конфига с порядком правил, оба обработчика, обе области, `samesite`; G-21 останов опроса; G-22 убывающий счётчик. Финальное `fetch( == 0` — FETCH-03, Фаза 15, по примечанию роадмапа |
-| PAY-01 | 08-03, 08-05 | ✓ SATISFIED (буква требования) | Индекс построен в обоих источниках схемы; прикладная проверка снята; отказ до сети. ⚠️ Последствие нового статуса вышло за периметр — см. «Разрывы» |
-| PAY-02 | 08-10 | ✓ SATISFIED | Удержание на обоих путях независимо от `hx-disabled-elt`; запрет `queue` на периметре гейтом; периметр собран обходом и замкнут на себя |
+| FOUND-04 | 08-01 | ✓ SATISFIED | `app/pages/htmx.py::respond()` с обязательным `redirect=`; единственное чтение признака |
+| FOUND-05 | 08-02, 08-06 | ✓ SATISFIED | Реестр из 14 кодов; пять поимённо названных микро-контрактов == 0 вхождений; 12 мест записи `?notice=` |
+| FOUND-06 | 08-04 | ✓ SATISFIED | `innerHTML:#notice` / `innerHTML:#notice-alert`; две области с `role`/`aria-live`; плашки нет без кода |
+| FOUND-07 | 08-01 | ✓ SATISFIED (машинно) | 204 + `HX-Location` на обоих отказах, мимо `JSONResponse`. Живой браузер — ручная проверка, пункт 1 |
+| QUAL-03 | 08-04 | ✓ SATISFIED (машинно) | Две скрытые заготовки с сервера, оба обработчика, только `removeAttribute`. Срабатывание — ручная проверка, пункт 2 |
+| GATE-01 | 08-01 | ✓ SATISFIED | Фикстура + образец пары (302 / 204 без документа). Множество переведённых маршрутов пусто — Отступление 3 |
+| GATE-03 | 08-07 | ✓ SATISFIED | G-1/G-2 + `HX_HEADER_READS == 1`; равенство множеств заменено контрапозицией — Отступление 1 |
+| GATE-04 | 08-08 | ✓ SATISFIED | G-3…G-6 деградации |
+| GATE-05 | 08-08 | ✓ SATISFIED | G-7/G-9/G-10/G-11 свопа |
+| GATE-06 | 08-08 | ✓ SATISFIED | G-12 границы Alpine |
+| GATE-07 | 08-07, 08-09 | ✓ SATISFIED | G-13/G-14/G-15 + прямой счёт `\|safe`/`Markup(`/`hx-vals`/`hx-on` == 0 |
+| GATE-08 | 08-04, 08-09 | ✓ SATISFIED | G-23 (`test_shell.py`: версия 2.0.10, шесть ключей конфига с порядком правил, оба обработчика, обе области, `samesite == "lax"`), G-21 (останов опроса) и G-22 (убывающий счётчик ручной сборки) в `test_htmx_inventory.py` |
+| PAY-01 | 08-03, 08-05, 08-11 | ✓ SATISFIED | Частичный уникальный индекс в двух объявлениях; словарь статусов закрыт гейтом; «незакрыт» на положительном отборе |
+| PAY-02 | 08-10 | ✓ SATISFIED | Удержания на обоих путях + запрет `hx-sync` с `queue` гейтом периметра |
 
-**Осиротевших требований нет.** `.planning/REQUIREMENTS.md:186` объявляет для Фазы 8
-ровно 14 идентификаторов; объединение `requirements-completed` десяти SUMMARY даёт те же
-14 (план 08-03 объявил `[]`, передав PAY-01 плану 08-05, который его закрыл). GATE-02
-(Фаза 11), GATE-09/GATE-10 (Фаза 15), QUAL-01/02/04 (Фазы 9-15) этой фазе не принадлежат
-и здесь не проверялись.
+**Осиротевших требований нет:** ROADMAP объявляет 14 ID, планы фазы объявляют
+ровно те же 14, `requirements-completed` суммарно по SUMMARY покрывает все 14.
 
-> **Внимание при обновлении `REQUIREMENTS.md`:** PAY-01 не следует помечать `Complete`,
-> пока разрыв ниже не закрыт. Буква требования выполнена, но последствие введённого им
-> статуса лежит непокрытым — ровно та форма, в которой Фаза 7 уже потребовала
-> различать «закрытую машинную половину» от неисполненной.
-
-### Покрытие решений
-
-Все 16 решений `08-CONTEXT.md` (D-01…D-16) найдены в отгруженных артефактах:
-D-01 `STATUS_EXPIRED` вне терминальных; D-02 ленивая уборка в `create_payment`;
-D-03 «выживает новейшее» в `0021`; D-04 `PENDING_INTENT_TTL_HOURS = 24` с переписанным
-обоснованием (`payment_service.py:94-106`); D-05 резерв до сети; D-06 прикладной проверки
-нет (механизм различения заменён — см. Отступление 2); D-07 гейт `docker-compose.prod.yml`;
-D-08 периметр обходом; D-09 ноль снятых написаний; D-10 плоские `snake_case` из пар с
-гейтом уникальности; D-11 `expired` вне реестра и не читается в `/billing`; D-12 общая
-область шелла; D-13 собственные числа инвентарей; D-14 два раздельных перечня; D-15 два
-выхода `htmx.py`; D-16 фикстура с парами.
-**Не соблюдённых решений: 0.** Гейт не блокирующий; расхождение только по МЕХАНИЗМУ D-06,
-и оно документировано исполнителем как правка записей, а не кода.
+ℹ️ В `.planning/REQUIREMENTS.md` все 14 строк Фазы 8 всё ещё стоят как `Pending`,
+тогда как строки Фазы 7 — `Complete`. Это нормальное состояние ДО запечатывания
+фазы (Фаза 7 получила `Complete` на своём завершении), но при запечатывании
+таблицу обязано обновить, иначе следующая фаза унаследует расхождение.
 
 ### Найденные анти-паттерны
 
 | Файл | Строка | Паттерн | Серьёзность | Влияние |
 |---|---|---|---|---|
-| — | — | `TBD` / `FIXME` / `XXX` | — | **0 вхождений** во всех 28 файлах приложения и во всех 13 новых тестовых файлах |
-| — | — | `pytest.mark.skip` / `xfail` | — | **0 вхождений** в тестах фазы |
-| `app/services/payment_service.py` | 304-348, 405-424 | Классификатор `_is_open_intent_conflict` точен только в одну сторону | ⚠️ Warning | При уже существующем открытом намерении ЛЮБОЙ `IntegrityError` вставки резерва (FK, будущий `NOT NULL`) будет объявлен `PendingIntentCapError`, и человек прочтёт «предыдущая оплата не завершена» на посторонней поломке. Докстринг утверждает обратное («ОТВЕТ ОБЯЗАН БЫТЬ ТОЧНЫМ»). Исходное исключение в журнал не пишется — отладить нечем. Радиус узок (нужно совпадение чужого отказа с открытым намерением), денег не теряет. Дешёвая правка: писать `type(rejection.orig).__name__` и `str(rejection.orig)` в `subscription_intent_cap_reached` |
-| `app/services/payment_service.py` | ~744-751 и докстринг 369-381 | Окно «деньги без товара» СУЖЕНО, но не закрыто; докстринг говорит «закрыто» | ⚠️ Warning | Падение процесса между возвратом `YooPayment.create` и дозаписью `yookassa_payment_id` оставляет удалённый платёж без соответствия: `handle_webhook` ищет по `yookassa_payment_id`, не находит, пишет `webhook_payment_not_found` и не начисляет. `idempotency_key` — свежий `uuid4()`, нигде не сохраняется, ключа сверки нет. Фаза окно СУЗИЛА (до неё вся вставка стояла после сети), поэтому это не регрессия. Но доктрина фазы — «цена размена названа, а не замолчана», и здесь цена не названа. Минимум: поправить докстринг и завести ключ журнала на отказ дозаписи |
-| `app/pages/htmx.py` | 301-302 | `_with_notice` не разбирает фрагмент адреса и не отвергает уже присутствующий ключ | ⚠️ Warning | `redirect="/ads/7/edit#sched"` дал бы `/ads/7/edit#sched?notice=x` — код уехал бы во фрагмент, на сервер не пришёл, плашка молча не нарисовалась. Сегодня недостижимо (вызовов `respond()` из `app/` нет), но это ЗАРЯЖЕННАЯ ловушка ровно для Фаз 9-15, ради которых слой и написан |
-| `tests/conftest.py` | 66-102 | `htmx_client` мутирует и возвращает ТОТ ЖЕ объект, что и `client` | ⚠️ Warning | Складываемость с `authed_client` — заявленная цель и работает. Но тест, запросивший обе фикстуры, теряет не-htmx базу И `follow_redirects=False`; утверждение «без заголовка → 302» позеленело бы на 200 по чужой причине. Ограждения нет. Минимум — назвать опасность в докстринге |
-| `app/pages/__init__.py`, `app/dependencies.py` | 118, 395 | Отказ — голое выражение-вызов без `raise` в точке вызова | ⚠️ Warning | Сегодня верно (`refuse` помечен `NoReturn`, обе ветки бросают). Но `NoReturn` не проверяется в рантайме, типизатора в CI нет; будущая ранняя ветка `return` внутри `refuse` открыла бы ОБА гейта авторизации без синтаксической ошибки и без заметного дифа |
-| `app/templates/includes/notice_area.html` + `components/alert.html` | 61-62 / 10 | Вложенные `aria-live`-области: и область, и макрос объявляют `role` | ⚠️ Warning | Живая область внутри живой области — анти-паттерн ARIA: сообщение может объявляться дважды либо внутренняя роль возьмёт верх, что противоречит замыслу файла. Та же вложенность в `htmx_error_banner.html` |
-| `alembic/versions/0021_...py` | 158 | `ORDER BY created_at DESC, id DESC` — NULL сортируются по-разному в двух диалектах | ℹ️ Info | Недостижимо (`created_at` — `NOT NULL` с серверным умолчанием), но ревизия тщательно рассуждает ровно об этом классе расхождений в других местах, а этот случай не назван |
-| `app/pages/htmx.py` | 364-367 | `_glue_notice` проверяет тип содержимого ПОСЛЕ `await fragment()` | ℹ️ Info | Фрагмент не-HTML превращает УСПЕШНУЮ мутацию в 500 для человека; запись не откатывается. Громкий отказ разработчику обоснован, но режим отказа стоит назвать в докстринге |
-| `app/templates/includes/htmx_error_banner.html` | 76-85 | Плашки не прячутся обратно | ℹ️ Info | `removeAttribute('hidden')` односторонний: после одного сбоя красное остаётся до конца сессии, и «красное на экране» перестаёт значить «что-то сломано» — та же десенсибилизация, от которой файл предостерегает для 422. Записано как принятое допущение плана; вынесено в ручную проверку |
-| `tests/test_pages/test_money_perimeter_gate.py` | 121, 416-449 | `MONEY_HOLD = "OPEN_INTENT_INDEX_NAME"` — утверждается присвоение константе, не индекс | ℹ️ Info | Удаление `Index(...)` из модели оставило бы гейт зелёным. Дыры в охвате нет (`tests/test_models/test_payment_open_intent_index.py` покрывает настоящий индекс) — вопрос имени, читающегося как «удержание существует» |
-| `app/dependencies.py` | 323 | Код уведомления записан ЛИТЕРАЛОМ, а не константой реестра | ℹ️ Info | `IMPERSONATION_REFUSED_LOCATION = "/dashboard?notice=impersonation_forbidden"` — единственное место, нарушающее правило «код едет константой». Риск опечатки, однако, ЗАКРЫТ машинно: `test_every_written_notice_code_is_registered` обходит `APP_DIR.rglob("*.py")`, то есть видит и `dependencies.py`. Понижено с предупреждения до сведения |
-
-**Блокирующих анти-паттернов не найдено.** Ни одного неотсылочного маркера долга во всех
-файлах фазы — редкий и заслуживающий упоминания результат для 54 тронутых файлов.
+| — | — | `TBD`/`FIXME`/`XXX` по 59 файлам дифа фазы (`git diff --name-only master...HEAD`) | — | **0 вхождений** |
+| — | — | `TODO`/`HACK`/`PLACEHOLDER` там же | — | **0 вхождений** |
+| `app/services/payment_service.py` | 771-778 | Дозапись после сети вне защиты — см. Предупреждение 1 | ⚠️ Warning | Редкий сбой СУБД оставляет резерв `pending` под индексом на ≤24 ч |
+| `app/pages/admin.py` | 288 | Четвёртый частный реестр «код → текст (+вариант)» — см. Предупреждение 2 | ⚠️ Warning | Запись фазы утверждает больше, чем сделано |
+| `app/pages/billing.py` | 93-95 | Комментарий «Копий не осталось ни одной» неверен по факту | ⚠️ Warning | То же |
+| `.planning/.../08-CONTEXT.md` | 320 | В блоке «Claude's Discretion» уцелела формулировка «разбор `IntegrityError` по имени ограничения» | ℹ️ Info | Это ВЫДАННАЯ ЛАТИТУДА, а не утверждение о доставленном коде; по правилу различения плана 08-11 правке не подлежит, но аннотации не получила |
 
 ---
 
-## Разрывы
+## Предупреждения (не блокируют критерии, требуют решения человека)
 
-### Разрыв 1 (БЛОКИРУЮЩИЙ) — четвёртый статус молча попал в определение «незакрытый платёж»
+### Предупреждение 1 — CR-01: дозапись после успешной сети стоит вне защиты
 
-Найдено ревизией кода, **подтверждено оркестратором независимо и подтверждено мной в третий
-раз — чтением кода и запуском**. Формулировка, свидетельства и состав правки — в блоке
-`gaps` фронтматтера.
+Проверено по коду, а не по отчёту ревью. `create_payment`
+(`app/services/payment_service.py`) устроен так:
 
-**Почему это БЛОКИРУЕТ фазу, а не «следующая работа».** Разбирал по четырём вопросам:
+1. `_expire_stale_intents` → `_reserve_subscription_intent` → `commit` (строка ~636);
+2. `YooPayment.create` **внутри** `try/except Exception` (721-770); на отказе резерв
+   гасится в `expired` и коммитится — это и делает следующую попытку возможной;
+3. `reserved.yookassa_payment_id = payment.id; await db.commit()` (771-778) — **вне
+   всякой защиты**, как и `return` ниже.
 
-1. **Опровергает ли он критерий успеха?** Нет. Потолок построен, отказ приходит до денег,
-   удержание есть на обоих путях, `hx-sync queue` запрещён гейтом. Критерий 5 стоит.
-   Именно поэтому счёт остаётся 5/5, а не 4/5: подменять счёт критериев дефектом,
-   лежащим вне их буквы, значило бы врать в обе стороны сразу.
-2. **Внесла ли его ЭТА фаза?** Да, целиком. `expired` не существовал до неё. Дефект
-   не унаследован и не найден «заодно»: это прямое последствие D-01, и наступает оно
-   в тот момент, когда наступит бэкфилл ревизии `0021`.
-3. **Названа ли его цена решением?** **Нет — и это решающее.** D-01 объявляет цену
-   ЗАКРЫТЫМ списком из двух пунктов: «одно новое слово в словаре статусов и обязательная
-   русская подпись в истории платежей». Оба пункта уплачены. Третьего пункта — «каждый
-   читатель, определяющий незакрытость ДОПОЛНЕНИЕМ терминальных, молча получает четвёртый
-   член» — в решении нет, и он не уплачен. Фаза, чья сквозная доктрина — «цена размена
-   названа, а не замолчана» (и которая честно называет цену в D-02, D-03, D-09, D-12),
-   здесь цену не назвала. Это разрыв не в коде, а в ПОЛНОТЕ принятого решения, и он
-   принадлежит фазе, которая решение принимала.
-4. **Закроет ли его какая-нибудь следующая фаза сама?** Нет. Прошёл цели и критерии
-   Фаз 9-15: пилот `account_groups`, рычаг `modal.html`, массовый перевод разделов,
-   загрузка изображений, мастер Telegram, авторизация, упрочнение. Ни одна не называет
-   ни признак инцидента, ни семантику статусов платежа. Перенос в `deferred` был бы не
-   отсрочкой, а потерей.
+Если коммит шага 3 упадёт (транзиентный отказ СУБД), исключение уйдёт наружу
+пятисоткой, а строка останется `pending` с `NULL` в идентификаторе — то есть
+под предикатом нового частичного индекса.
 
-**Отягчающие обстоятельства.** Ревизия `0021` СТРОГО ОДНОСТОРОННЯЯ: `downgrade` снимает
-индекс, но не восстанавливает статусы, «какие строки были переведены, ревизия нигде не
-сохраняет». То есть после наката множество ложных инцидентов невозможно вычислить
-постфактум — их нельзя ни отфильтровать по признаку «переведено миграцией», ни откатить.
-Пострадавший механизм — не косметика, а блок, СУЩЕСТВУЮЩИЙ РОВНО ДЛЯ ТОГО, чтобы показывать
-денежные инциденты; `INCIDENT_LIST_CAP = 20` с сортировкой от свежих превращает залп
-25-часовых `expired` в вытеснение настоящих залипших платежей недельной давности.
-И, наконец, докстринг `unclosed_payment_clause` предсказал этот отказ ДОСЛОВНО — то есть
-проект уже знал, чего бояться, и всё равно прошёл мимо.
+**Почему это НЕ разрыв критерия 5.** Потолок работает ровно так, как объявлено:
+второго незакрытого намерения не появляется. Деньги не теряются — ссылку на
+оплату человек в этом сценарии не получает вовсе. Ущерб ограничен и
+самоизлечивается: на следующей попытке первым делом идёт `_expire_stale_intents`,
+и через `PENDING_INTENT_TTL_HOURS` = 24 ч зависший резерв снимается сам. До этого
+человек получает не тишину, а плашку `payment_pending` («Предыдущая оплата ещё не
+завершена — дождитесь её результата или попробуйте позже»).
 
-**Смягчающие обстоятельства (почему это не «авария», а разрыв).** Бой стоит на ревизии
-`0012`, очередь `0013`…`0021` не выкачена, деплоя перед Фазами 9-15 не предвидится, и в
-суите дефект не проявляется (уборка срабатывает только на создании подписочного платежа).
-Правка мала и локальна: одно множество в `payment_service.py`, один положительный отбор
-вместо дополнения в `incidents.py`, одна регрессия. Дешевле всего она СЕЙЧАС, пока
-контекст решения загружен, — а не через шесть фаз, когда `expired` обрастёт читателями.
+**Почему это всё же названо.** Радиус — денежный путь, окно — две строки, и
+формулировка «локальная строка без удалённого платежа восстановима» из
+`app/models/payment.py` в ЭТОМ сценарии перестаёт быть верной автоматически:
+восстановление здесь делает не код отказа, а уборка через сутки. Ни один
+последующий этап вехи (Фазы 9-15) этого не касается. Решение — пункт 8 раздела
+человеческой проверки.
 
-**Рекомендация:** закрыть разрыв планом-закрытием (`/gsd-plan-phase --gaps`) до Фазы 9.
-Правку в объёме одной задачи, без переоткрытия D-01: решение о четвёртом статусе остаётся
-в силе, доплачивается его неназванная часть.
+### Предупреждение 2 — четвёртый частный реестр уведомлений пережил фазу
 
----
+`QUEUE_DROP_RESULTS` (`app/pages/admin.py:288`) — словарь `код → (текст, вариант)`
+той же формы, что три сведённых, со своим микро-контрактом `?result=`
+(`admin.py:1143`), своим чтением (`admin.py:1041`) и своей отрисовкой мимо общей
+области (`app/templates/admin/queue.html:34-35`).
 
-## Предупреждения, не блокирующие фазу
+**Букву критерия 2 это не нарушает:** FOUND-05 и критерий 2 называют ПЯТЬ
+снимаемых написаний поимённо, и `?result=` среди них нет. Проверено по истории:
+он заведён Фазой 6 (`5b73c4e`), а не этой фазой.
 
-1. **`respond()` не вызывается из `app/` ни разу** (36 из 36 обработчиков не переведены).
-   Это ПРАВИЛО ГРАНИЦЫ фазы, объявленное в `08-CONTEXT.md` прямым текстом, а не
-   незавершённость, и убывающий счётчик `NOT_YET_CONVERTED_COUNT` сделан ровно затем,
-   чтобы это состояние было ВИДНО числом. Но следствие записать честно надо: сегодня
-   `_require_registered_notice`, `_local_path`, `_with_notice`, `_glue_notice` и
-   `notice_oob.html` живут только в тестах, а двенадцать настоящих редиректов собирают
-   `?notice=` литералом мимо всей проверки слоя. Гейт полноты кодов
-   (`test_every_written_notice_code_is_registered`) эту щель закрывает по ГЛАВНОМУ риску
-   (незарегистрированный код), поэтому это предупреждение, а не разрыв. Дешёвый шаг, если
-   захочется владелец ключа уже сегодня: `notice_redirect(path, notice)` в `htmx.py`, через
-   который проходят все двенадцать.
-2. **Записи фазы разошлись с кодом по механизму D-06** — перечень в `records_to_correct`.
-   Править следует ЗАПИСИ, не код: механизм, который они описывают, неисполним на диалекте,
-   которым идёт вся суита. `08-05-SUMMARY.md:224,299` уже просит об этом; просьбу следует
-   исполнить, а не оставить в SUMMARY.
-3. **Прохибиции: 19 из 19 — `verification: judgment`.** Прогон автономный, поэтому мой
-   вердикт по ним НЕ АВТОРИТЕТЕН и они помечены
-   `unverified-prohibition — human review recommended`. Мой (несудейский) разбор: 18 из 19
-   выглядят соблюдёнными по коду; **одна требует внимания человека** — прохибиция плана
-   08-05 «MUST NOT принять деньги, не выдав доступ: ни один путь отказа не имеет права
-   оставить у ЮKassa живой платёж, которому в нашей базе не соответствует ПРИНИМАЕМАЯ
-   строка». Окно между `YooPayment.create` и дозаписью `yookassa_payment_id` фазой СУЖЕНО,
-   но не устранено (см. таблицу анти-паттернов). Формально прохибиция говорит «ни один
-   путь ОТКАЗА» — а здесь путь не отказа, а падения процесса, — поэтому буква её не
-   нарушена; но замысел («деньги не принимаются без товара») закрыт не полностью, и
-   докстринг это переобещает.
+**Но запись фазы утверждает большее, чем сделано.** `app/pages/billing.py:93-95`
+говорит: «Три частных реестра… Копий не осталось ни одной», а докстринг
+`app/pages/notices.py:4-8` считает прежних владельцев пятью, из которых частных
+реестров три. Четвёртый — вот он. Это ровно тот класс расхождения «записи против
+кода», который фаза правила у себя сама (D-06, шесть исправленных мест). Решение
+— пункт 9 раздела человеческой проверки.
+
+### Проверенные и снятые леды ревью
+
+- **WR-07** (гейт словаря статусов не видит `alembic/`, а `0021` пишет `'expired'`
+  через `sa.text`) — **снят**: граница выписана в докстринге гейта
+  (`tests/test_services/test_payment_status_vocabulary.py:54-58`) прямым текстом,
+  с называнием ревизии и причины. Это объявленная область, а не пропуск.
+- **WR-04** (отказ авторизации отвечает 204 при `HX-Request`, включая JSON-роутер)
+  — **снят как не влияющий на критерий 3**: `forbid_when_impersonating` навешен на
+  `billing_router` (`app/main.py:175`), `billing_money_router`
+  (`app/pages/__init__.py:163`) и два маршрута `auth`. Машинный клиент заголовка
+  `HX-Request` не присылает, поэтому ветка 204 для него недостижима; форма отказа
+  без htmx (`403` + `detail`) сохранена параметром `without_htmx`. Оставляю как
+  наблюдение, не как разрыв.
+- **WR-01** (`respond()` без производственных вызовов) — **подтверждён фактически,
+  но это буква цели фазы, а не дефект**: см. Отступление 3.
 
 ---
 
 ## Сводка
 
-Фаза сделала то, ради чего стояла в роадмапе. Контракт двойного ответа существует
-единственным объявлением; канал обратной связи сведён из пяти написаний в одно и работает
-уже на сегодняшних редиректах, без всякого htmx; тринадцать машинных гейтов стоят и — что
-важнее — доказали зубы двадцатью с лишним контрольными случаями, а не заявили их; денежный
-потолок стал свойством схемы в обоих её источниках. Инженерное качество высокое: ни одного
-неотсылочного маркера долга на 54 файла, каждое расхождение с планом названо и обосновано,
-пять арифметически неверных критериев приёмки исправлены по замыслу вместо тихого
-подгона под букву, а неисполнимое решение D-06 заменено работающей идиомой с честной
-пометкой «править записи, не код». Пять критериев успеха подтверждены полностью.
+Разрыв G-08-1 закрыт не декларацией, а кодом: положительный отбор проверен
+исполнением скомпилированного выражения, обе регрессии и десять тестов нового
+гейта прогнаны, `_claim_payment` действительно не тронут — просроченное
+намерение осталось оплачиваемым. Пять критериев успеха ROADMAP подтверждены,
+495 целевых тестов зелёные, ни одного маркера долга в 59 файлах дифа фазы.
 
-Блокирует фазу один разрыв, и лежит он не в том, что фаза построила, а в том, чего она о
-своей постройке не досказала. Четвёртый статус платежа объявил свою цену закрытым списком
-из двух пунктов; третий, неназванный, состоит в том, что единственное на проект определение
-«незакрытый платёж» задано ДОПОЛНЕНИЕМ терминальных статусов и потому поглотило новичка
-молча — превратив каждую благополучно снятую строку в постоянный денежный инцидент и
-вытеснив настоящие из блока, который ради них и существует. Проверено запуском: порог
-уборки и порог залипания — это буквально одна константа, поэтому совпадение не случайно,
-а неизбежно. Ревизия односторонняя, поэтому после наката отличить ложные инциденты от
-настоящих будет нечем. Правка мала, локальна и сегодня дешевле, чем когда-либо потом.
-
-Кроме этого фазе остаются пять пунктов ручной проверки — два из них объявлены ручными самим
-роадмапом и контекстом, два пришли человеческими суждениями исполнителей (`D7`, `D8`), один
-касается плашек, которые не прячутся обратно.
+Блокирующих разрывов нет. Фаза не может быть объявлена `passed` только потому,
+что открытыми остаются девять пунктов, требующих человека: два из них ROADMAP и
+планы объявили ручными заранее (живой отказ доступа, пункт 8 UAT), три — решения
+о границах, принятые как допущения, два — судейские пункты плана 08-11, и два
+новых, поднятых этой верификацией (CR-01 и четвёртый частный реестр). Сверх них
+— 24 прохибиции судейского уровня, чей автономный вердикт не авторитетен.
 
 ---
 
-_Проверено: 2026-08-28_
-_Верификатор: Claude (gsd-verifier)_
+_Проверено: 2026-08-29_
+_Верификатор: Claude (gsd-verifier), повторная верификация после плана 08-11_
