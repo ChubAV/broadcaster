@@ -1758,8 +1758,14 @@ def test_billing_component_library_did_not_grow():
     # полноразмерный адрес запасным), и собранное на месте пятое место
     # унаследовало бы из этого правила ровно ничего. Обе константы подняты ТЕМ
     # ЖЕ коммитом, что и файл, — по причине, записанной абзацем выше.
+    #
+    # 16, а не 15: шестнадцатый файл — form_wrapper.html, заведённый Фазой 9
+    # (план 09-01). Форм, которые веха переводит на слой письма, сорок семь, а
+    # свойства качества у них одни и те же (цель блокировки повторной отправки и
+    # индикатор «запрос идёт»); собранные на месте, они разъехались бы сорока
+    # семью способами. Обе константы подняты ТЕМ ЖЕ коммитом, что и файл.
     components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
-    assert len(components) == 15, [p.name for p in components]
+    assert len(components) == 16, [p.name for p in components]
 
     partials = {p.name for p in (TEMPLATES_DIR / "billing" / "includes").glob("*.html")}
     assert partials == {"payment_row.html"}, (
@@ -3118,8 +3124,12 @@ def test_template_inventory():
     # `-k inventory` берёт только ЭТО, поэтому поднимать надо оба — иначе
     # выборка зеленеет, а полный прогон краснеет из теста, названного по
     # чужому разделу.
+    #
+    # Плюс шестнадцатый — form_wrapper.html, макрос-обёртка htmx-формы Фазы 9
+    # (план 09-01): одно место, раздающее свойства качества сорока семи формам
+    # вехи вместо сорока семи собранных на месте копий.
     components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
-    assert len(components) == 15, [p.name for p in components]
+    assert len(components) == 16, [p.name for p in components]
 
     # Два шелла проекта: основной и auth
     assert (TEMPLATES_DIR / "base.html").exists()

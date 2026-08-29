@@ -24,11 +24,19 @@
 
 {% from "components/avatar.html" import avatar %}
 {% from "components/button.html" import button %}
+{% from "components/form_wrapper.html" import form_wrapper %}
 {% from "components/modal.html" import modal %}
 {% from "components/mono.html" import mono %}
 {% from "components/toggle.html" import toggle %}
 
-{% macro group_row(group, account_id, schedules_count=0, user=None) -%}
+{#- ⚠️ `with_modal` — ПАРАМЕТР ОТВЕТА, А НЕ УКРАШЕНИЕ ВЫЗОВА. Своп `outerHTML`
+    вставляет ВЕСЬ ответ целиком, поэтому третий вызов этого макроса — из
+    шаблона ответа тумблера — обязан прийти без панели подтверждения: иначе в
+    документе оказались бы ДВЕ панели с одним `id="group-del-N"` и двумя живыми
+    ловушками фокуса, подтверждение открывало бы то одну, то другую, и
+    воспроизводилось бы это через раз (T-11-04). Умолчание `true` оставляет обе
+    первичные отрисовки — страницу и порцию прокрутки — прежними. -#}
+{% macro group_row(group, account_id, schedules_count=0, user=None, with_modal=true) -%}
 <div data-group-row id="group-row-{{ group.id }}"{% if not group.is_active %} class="group-row--off"{% endif %}>
   {{- avatar(group.name, size=32) -}}
   <span class="group-row__name" data-grow title="{{ group.name }}">{{ group.name }}</span>
@@ -68,13 +76,43 @@
       Alpine: при живом Alpine поведение не меняется — тумблер отправляет
       форму сразу, — а при неподнявшемся Alpine кнопка остаётся на месте.
       `<noscript>` тут не годится: он спасает от выключенного JS, но не от
-      единственного реального сценария — JS включён, а Alpine не загрузился. -#}
-  <form method="post" action="/accounts/{{ account_id }}/groups/{{ group.id }}/toggle"
-        x-data x-on:change="$el.submit()">
+      единственного реального сценария — JS включён, а Alpine не загрузился.
+
+      ⚠️ ФАЗА 9: ОТПРАВКУ ПО ИЗМЕНЕНИЮ ЗАБРАЛ `hx-trigger="change"`, А ПРЕЖНИЙ
+      ПЕРЕХВАТ Alpine ПО ЭТОМУ ЖЕ СОБЫТИЮ СНЯТ (D-05). Держать оба значило бы
+      отправлять форму дважды на одно нажатие: событие изменения всплывает от
+      чекбокса к форме, и его увидели бы оба перехвата. Свойство, ради которого
+      перехват стоял на САМОЙ форме, не изменилось — оно просто объявлено
+      другим механизмом.
+
+      ⚠️ ИМЯ СНЯТОГО АТРИБУТА ЗДЕСЬ НЕ НАБРАНО ЛИТЕРАЛОМ НАМЕРЕННО. Снятие
+      проверяется грепом по этому файлу, и проза, называющая атрибут дословно,
+      удовлетворила бы греп сама — то есть проверка зеленела бы на комментарии
+      о снятии вместо самого снятия.
+
+      ⚠️ УСЛОВИЕ СНЯТИЯ КНОПКИ «ПРИМЕНИТЬ» ПЕРЕЕХАЛО С ЖИВОГО Alpine НА ЖИВОЙ
+      htmx (D-07), И ЭТО НЕ ПЕРЕИМЕНОВАНИЕ. Отправляет форму теперь htmx, а не
+      Alpine; прежняя привязка оставила бы тумблер вовсе без способа
+      отправиться в мире «Alpine жив, htmx мёртв» — кнопку сняли бы, а замены
+      ей не появилось бы. Спросить про htmx в момент `x-init` можно: htmx
+      подключён БЛОКИРУЮЩЕ в <head> (includes/htmx_config.html), Alpine — с
+      `defer` (base.html), поэтому к моменту разбора Alpine про htmx уже всё
+      известно.
+
+      ⚠️ ГОЛЫЙ `x-data` ПЕРЕЕХАЛ С ФОРМЫ НА ЭТОТ ЖЕ `<span>`, И ЭТО ВЫНУЖДЕННО.
+      Тег формы уехал в макрос-обёртку и собственного признака клиентского
+      состояния больше не несёт, а `x-init` обрабатывается Alpine ТОЛЬКО внутри
+      области компонента — областью же была именно форма. Без переезда кнопка
+      «Применить» не снималась бы никогда и оставалась бы на экране при живом
+      htmx. Инвентарь при этом не двигается: минус один узел на форме, плюс
+      один здесь, и `x-init` регулярка инвентаря не считает. -#}
+  {% call form_wrapper(action='/accounts/' ~ account_id ~ '/groups/' ~ group.id ~ '/toggle',
+                       target='#group-row-' ~ group.id, swap='outerHTML', trigger='change',
+                       disabled_elt='find input[type=checkbox]') %}
     {{- toggle(name='is_active', checked=group.is_active, id='group-toggle-' ~ group.id,
                title='Отключить' if group.is_active else 'Включить') -}}
-    <span x-init="$el.remove()">{{- button('Применить', variant='ghost') -}}</span>
-  </form>
+    <span x-data x-init="if (window.htmx) $el.remove()">{{- button('Применить', variant='ghost') -}}</span>
+  {% endcall %}
   {#- Мгновенный крестик макета заменён панелью подтверждения — правило Фазы 1:
       подтверждают разрушительное, а не обратимое (тумблер рядом обходится без
       подтверждения именно поэтому).
@@ -101,10 +139,12 @@
     method="post" передан явно, хотя совпадает с умолчанием макроса: маршрут и
     метод удаления — контракт с обработчиком, и он обязан читаться грепом по
     этому файлу, а не только по отрендеренной странице. -#}
+{%- if with_modal %}
 {{ modal(id='group-del-' ~ group.id,
          title='Удалить группу?',
          action='/accounts/' ~ account_id ~ '/groups/' ~ group.id ~ '/delete',
          confirm_label='Удалить',
          method="post",
          body=group.name ~ ' — группа исчезнет из всех расписаний; следующая синхронизация вернёт её как новую') }}
+{%- endif %}
 {%- endmacro %}

@@ -452,6 +452,223 @@ async def test_toggle_without_session_goes_to_login(
     assert group.is_active is True
 
 
+# --- Тумблер на двух транспортах (Фаза 9, план 09-01) -------------------------
+#
+# Пары написаны по идиоме SP-3 (D-16 Фазы 8): у каждого утверждения о фрагменте
+# есть половина, утверждающая, что БЕЗ признака htmx тот же маршрут отвечает
+# по-прежнему. Половина без htmx зовёт `follow_redirects=False` ЯВНО: умолчание
+# фикстуры `htmx_client` — `True`, и редирект, пришедший вместо фрагмента,
+# приехал бы к тесту кодом 200 и телом чужой страницы.
+
+
+@pytest.mark.asyncio
+async def test_toggle_degrades_without_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Без признака htmx тумблер отвечает ПРЕЖНИМ перенаправлением на экран.
+
+    Половина пары, охраняющая путь деградации. Перевод обработчика на слой
+    ответа не имеет права поменять ответ человеку без JavaScript: он по-прежнему
+    обязан получить 302 на экран групп, а не фрагмент строки, который браузер
+    показал бы ему как целый документ со статусом 200.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа деградации тумблера")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/toggle", follow_redirects=False
+    )
+
+    assert response.status_code == 302, (
+        f"запрос без признака htmx получил {response.status_code} — путь "
+        "деградации перестал быть прежним"
+    )
+    assert response.headers["location"] == f"/accounts/{account.id}/groups"
+
+    await db_session.refresh(group)
+    assert group.is_active is False, "переключение на базовом пути не состоялось"
+
+
+@pytest.mark.asyncio
+async def test_toggle_returns_the_row_fragment(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """С признаком htmx тумблер отвечает ФРАГМЕНТОМ строки и внеполосным счётчиком.
+
+    Несущее утверждение второй половины — `"<!DOCTYPE" not in response.text`:
+    редирект, случайно доехавший до запроса htmx, придёт к тесту кодом 200 и
+    телом целой страницы (`htmx_client` следует ему НЕЗАМЕТНО, как браузер), и
+    отличить его от фрагмента можно только по отсутствию документа.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа фрагмента")
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/toggle"
+    )
+
+    assert response.status_code == 200, (
+        f"запрос htmx получил {response.status_code} вместо фрагмента"
+    )
+    assert "<!DOCTYPE" not in response.text, (
+        "в теле приехал целый документ: обработчик ответил перенаправлением, а "
+        "клиент незаметно по нему прошёл — ровно то, чего не видит человек"
+    )
+    assert f'id="group-row-{group.id}"' in response.text, (
+        "во фрагменте нет строки группы — цели подмены #group-row-N подменять "
+        "будет нечем, и рантайм промолчит об этом"
+    )
+    assert 'hx-swap-oob="innerHTML:#account-groups-count"' in response.text, (
+        "во фрагменте нет внеполосного узла линейки счётчика — число активных "
+        "групп молча разъедется с состоянием строк"
+    )
+
+    await db_session.refresh(group)
+    assert group.is_active is False, "переключение на пути htmx не состоялось"
+
+
+@pytest.mark.asyncio
+async def test_toggle_fragment_carries_no_second_modal(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Во фрагменте НЕТ второй панели подтверждения (T-11-04).
+
+    Своп `outerHTML` вставляет ВЕСЬ ответ. Строка, собранная тем же макросом с
+    панелью, принесла бы вторую панель с тем же идентификатором и второй живой
+    ловушкой фокуса: подтверждение удаления открывало бы то одну, то другую, и
+    воспроизводилось бы это через раз.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа без второй панели")
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/toggle"
+    )
+
+    assert response.status_code == 200
+    assert f'id="group-del-{group.id}"' not in response.text, (
+        "фрагмент принёс вторую панель подтверждения с тем же идентификатором"
+    )
+
+
+@pytest.mark.asyncio
+async def test_toggle_fragment_keeps_the_toggle_id(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Чекбокс несёт ТОТ ЖЕ стабильный идентификатор и в ответе (QUAL-06).
+
+    Механизм восстановления фокуса htmx ищет в присланной разметке элемент с
+    ТЕМ ЖЕ `id`, что был у активного до свапа. Идентификатор, собранный только
+    первичной отрисовкой, лишил бы механизм предмета — и разметка, а не код,
+    есть то единственное, что здесь можно утверждать машинно.
+
+    ⚠️ ФАКТИЧЕСКИЙ возврат фокуса этим НЕ доказывается и доказан здесь быть не
+    может: `hx-disabled-elt` снимает блокировку ПОСЛЕ свапа, и активным
+    элементом на момент свапа успевает стать `<body>` (09-RESEARCH §4.3).
+    Проверка вынесена в ручной UAT с записанным ожиданием «сегодня нет».
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа стабильного id")
+
+    first = (await htmx_client.get(f"/accounts/{account.id}/groups")).text
+    assert f'id="group-toggle-{group.id}"' in first, (
+        "первичная отрисовка не несёт стабильного идентификатора чекбокса"
+    )
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/toggle"
+    )
+
+    # ⚠️ ПОЛОВИНА «ЭТО ФРАГМЕНТ» ЗДЕСЬ ОБЯЗАТЕЛЬНА, А НЕ ИЗБЫТОЧНА. Без неё
+    # утверждение зелено ПО ПОСТРОЕНИЮ: `htmx_client` следует редиректу
+    # незаметно, и целая страница экрана групп несёт тот же идентификатор
+    # чекбокса. Тест доказывал бы наличие разметки на странице, о которой и без
+    # него всё известно, а про ответ тумблера не утверждал бы ничего.
+    assert "<!DOCTYPE" not in response.text, (
+        "в теле приехал целый документ, а не фрагмент — идентификатор ниже "
+        "нашёлся бы в нём и без всякого механизма восстановления фокуса"
+    )
+    assert f'id="group-toggle-{group.id}"' in response.text, (
+        "в разметке фрагмента идентификатор чекбокса пропал — восстанавливать "
+        "фокус механизму htmx будет не на что"
+    )
+
+
+@pytest.mark.asyncio
+async def test_foreign_toggle_goes_to_location(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Чужая и НЕСУЩЕСТВУЮЩАЯ группа отвечают ОДИНАКОВО (D-13).
+
+    Утверждение о НЕОТЛИЧИМОСТИ, поэтому два ответа сравниваются между собой, а
+    не с константой по отдельности: различимый отказ сообщал бы, какие
+    идентификаторы заняты чужими группами, — то есть перебором по адресу можно
+    было бы составить карту чужих данных, не получив ни одной строки (T-9-02).
+    """
+    account = await _seed_account(db_session)
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Чужая группа перехода", user_id=foreign_user.id
+    )
+
+    foreign = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{foreign_group.id}/toggle"
+    )
+    missing = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{foreign_group.id + 100000}/toggle"
+    )
+
+    assert foreign.status_code == 204, (
+        f"чужая группа ответила {foreign.status_code} вместо перехода"
+    )
+    assert foreign.headers["HX-Location"] == f"/accounts/{account.id}/groups"
+    assert not foreign.content, "у ответа 204 появилось тело"
+
+    assert missing.status_code == foreign.status_code, (
+        "несуществующая группа отличима от чужой по коду ответа"
+    )
+    assert missing.headers.get("HX-Location") == foreign.headers["HX-Location"], (
+        "несуществующая группа отличима от чужой по адресу перехода"
+    )
+    assert missing.content == foreign.content, (
+        "несуществующая группа отличима от чужой по телу ответа"
+    )
+
+    await db_session.refresh(foreign_group)
+    assert foreign_group.is_active is True, "переключилась чужая группа"
+
+
+@pytest.mark.asyncio
+async def test_toggle_does_not_trust_the_account_id_from_the_url_over_htmx(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Пара к `test_toggle_does_not_trust_the_account_id_from_the_url` (T-9-01).
+
+    Тройной `WHERE` вычисляется ДО развилки транспорта, и новый транспорт не
+    имеет права его ослабить: свой аккаунт в адресе и своя группа — но группа
+    принадлежит ДРУГОМУ аккаунту.
+    """
+    first = await _seed_account(db_session, type_="wa")
+    second = await _seed_account(db_session, type_="tg_user")
+    group_of_second = await _seed_group(db_session, second, "Группа второго аккаунта")
+
+    response = await htmx_client.post(
+        f"/accounts/{first.id}/groups/{group_of_second.id}/toggle"
+    )
+
+    assert response.status_code == 204, (
+        f"адрес чужого для группы аккаунта ответил {response.status_code} — "
+        "фрагментный транспорт ослабил тройной WHERE"
+    )
+    assert response.headers["HX-Location"] == f"/accounts/{first.id}/groups"
+
+    await db_session.refresh(group_of_second)
+    assert group_of_second.is_active is True, (
+        "группа переключилась через адрес чужого для неё аккаунта"
+    )
+
+
 # --- Базовый путь без JS и вход на экран --------------------------------------
 
 
@@ -459,10 +676,17 @@ async def test_toggle_without_session_goes_to_login(
 async def test_toggle_is_a_real_post_form(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """D-09: без Alpine тумблер остаётся настоящей формой POST.
+    """D-09: без JS тумблер остаётся настоящей формой POST.
 
     Перехват висит на САМОЙ форме: не навесится — форма уйдёт POST-ом на тот же
     маршрут. Кнопка-триггер вне формы такого пути не оставила бы.
+
+    ⚠️ ПРЕДМЕТ ПЕРВОЙ ПОЛОВИНЫ СМЕНИЛ МЕХАНИЗМ, А НЕ СМЫСЛ (Фаза 9, план 09-01).
+    Отправку по изменению чекбокса забрал `hx-trigger="change"`
+    (`components/form_wrapper.html`), а прежний перехват Alpine `x-on:change`
+    снят (D-05): держать оба значило бы отправлять форму дважды на одно нажатие.
+    Утверждается по-прежнему то же свойство — перехват объявлен на САМОЙ форме,
+    а не кнопкой-триггером вне её.
     """
     account = await _seed_account(db_session)
     group = await _seed_group(db_session, account, "Группа деградации")
@@ -476,7 +700,11 @@ async def test_toggle_is_a_real_post_form(
     assert form_match, "тумблер не обёрнут формой на маршрут переключения"
     opening = form_match.group(0)
     assert 'method="post"' in opening.lower(), "форма тумблера не POST"
-    assert "x-on:change" in opening, "перехват отправки навешен не на саму форму"
+    assert 'hx-trigger="change"' in opening, (
+        "перехват отправки объявлен не на самой форме: без него изменение "
+        "чекбокса не отправляет ничего, а кнопка-триггер вне формы не оставила "
+        "бы базового пути вовсе"
+    )
 
     # Перехвата на форме для базового пути НЕДОСТАТОЧНО, и прежняя редакция
     # теста этого не ловила: форма, внутри которой один лишь чекбокс, без JS не
