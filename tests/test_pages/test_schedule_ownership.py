@@ -22,6 +22,7 @@ from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
+from app.pages import notices
 
 FORM_HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -93,16 +94,27 @@ async def _schedules(db_session: AsyncSession) -> list[Schedule]:
     return list((await db_session.execute(select(Schedule))).scalars().all())
 
 
-def _assert_returned_to_editor(response, ad_id: int) -> None:
+def _assert_returned_to_editor(response, ad_id: int, code: str) -> None:
     """Отказ при ПОДТВЕРЖДЁННО своём объявлении возвращает в его редактор.
 
     Ошибка по данным — не навигация: пользователь остаётся там, где набирал
     группы, дни и времена, и получает объяснение (WR-07). Адрес строится
     сервером из подтверждённой записи, поэтому проверяется он целиком.
+
+    ⚠️ КОД ИСХОДА ПРИХОДИТ ПАРАМЕТРОМ, А НЕ ПРОВЕРЯЕТСЯ «ОДНИМ ИЗ ДВУХ», И ЭТО
+    УСИЛЕНИЕ. Прежде здесь проверялось присутствие собственного написания
+    раздела — то есть ЛЮБОГО признака, лишь бы он был. Кодов теперь два, и они
+    различают отказ по АККАУНТУ и отказ по ОБЪЯВЛЕНИЮ: различать эти случаи
+    нужно журналу (человеку на экране нельзя — разные слова подтвердили бы
+    существование чужой записи перебором идентификаторов). Проверка «любой из
+    двух» согласилась бы с их перепутыванием, и различие, ради которого коды и
+    разведены, потерялось бы молча.
     """
     location = response.headers["location"]
     assert location.startswith(f"/ads/{ad_id}/edit")
-    assert "sched_error" in location
+    assert f"notice={code}" in location, (
+        f"ожидался код исхода {code!r}, а адрес отказа — {location}"
+    )
 
 
 def _assert_indistinguishable_refusal(response) -> None:
@@ -162,7 +174,7 @@ async def test_page_create_rejects_foreign_account(
 
     assert response.status_code == 302
     assert await _schedules(db_session) == []
-    _assert_returned_to_editor(response, own_ad)
+    _assert_returned_to_editor(response, own_ad, notices.SCHEDULE_ACCOUNT_GONE)
 
 
 @pytest.mark.asyncio
@@ -232,7 +244,7 @@ async def test_page_update_rejects_swapping_in_foreign_account(
     )
 
     assert response.status_code == 302
-    _assert_returned_to_editor(response, own_ad)
+    _assert_returned_to_editor(response, own_ad, notices.SCHEDULE_ACCOUNT_GONE)
     db_session.expire_all()
     stored = (
         await db_session.execute(select(Schedule).where(Schedule.id == schedule_id))
@@ -329,7 +341,7 @@ async def test_editor_path_rejects_foreign_account(
 
     assert response.status_code == 302
     assert await _schedules(db_session) == []
-    _assert_returned_to_editor(response, own_ad)
+    _assert_returned_to_editor(response, own_ad, notices.SCHEDULE_ACCOUNT_GONE)
 
 
 @pytest.mark.asyncio
@@ -386,27 +398,46 @@ SCHEDULE_ERROR_TEXT = (
 
 
 @pytest.mark.asyncio
-async def test_editor_shows_the_refusal_message_in_the_schedules_section(
+async def test_editor_shows_the_refusal_message_in_the_shared_notice_area(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
     """Формулировка контракта UI-SPEC (E4 `error`) видна и стоит ГДЕ надо.
 
-    Сообщение живёт в секции расписаний, то есть ПОСЛЕ закрытия элемента
-    `<form id="ad-form">`: внутри него оно было бы вложенной формой ровно тогда,
-    когда его поставили бы неаккуратно, и браузер молча отключил бы кнопки
-    карточек расписаний.
+    ⚠️ ТЕСТ ПЕРЕЦЕЛЕН ВМЕСТЕ С МЕСТОМ ОТРИСОВКИ (план 08-06), И УТВЕРЖДАЕТ ОН
+    БОЛЬШЕ ПРЕЖНЕГО, А НЕ МЕНЬШЕ. Прежде он назывался
+    `test_editor_shows_the_refusal_message_in_the_schedules_section` и держал
+    сообщение ПОСЛЕ закрытия `<form id="ad-form">`: поставленное внутрь, оно
+    оказалось бы вложенной формой, и браузер молча отключил бы кнопки карточек
+    расписаний. Сообщение уехало в общую область уведомления шелла, которая
+    лежит выше любого содержимого страницы, — поэтому опасность вложенности
+    снята ПО ПОСТРОЕНИЮ, а не соблюдением порядка узлов.
+
+    Проверяется теперь и то, и другое: сообщение на экране есть; оно стоит ДО
+    открытия формы объявления (то есть заведомо не внутри неё); и приходит оно
+    ИМЕННО из настойчивой области шелла, а не из вернувшегося собственного
+    блока редактора.
     """
     own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
 
-    response = await authed_client.get(f"/ads/{own_ad}/edit?sched_error=account")
+    response = await authed_client.get(
+        f"/ads/{own_ad}/edit?notice={notices.SCHEDULE_ACCOUNT_GONE}"
+    )
 
     assert response.status_code == 200
     body = response.text
     assert SCHEDULE_ERROR_TEXT in body
+    assert body.count(SCHEDULE_ERROR_TEXT) == 1, (
+        "текст отказа нарисован дважды — у редактора снова завёлся свой блок"
+    )
 
     form_open = body.index('<form id="ad-form"')
-    form_close = body.index("</form>", form_open)
-    assert body.index(SCHEDULE_ERROR_TEXT) > form_close
+    assert body.index(SCHEDULE_ERROR_TEXT) < form_open, (
+        "сообщение стоит ниже открытия формы объявления — то есть рискует "
+        "оказаться внутри неё"
+    )
+    assert body.index('id="notice-alert"') < body.index(SCHEDULE_ERROR_TEXT) < form_open, (
+        "сообщение пришло не из настойчивой области шелла"
+    )
 
 
 @pytest.mark.asyncio
@@ -435,7 +466,7 @@ async def test_editor_never_prints_the_query_value_itself(
     own_ad = await _seed_ad(db_session, owner.id, "Своё объявление")
 
     response = await authed_client.get(
-        f"/ads/{own_ad}/edit?sched_error=Ваш+аккаунт+заблокирован"
+        f"/ads/{own_ad}/edit?notice=Ваш+аккаунт+заблокирован"
     )
 
     assert response.status_code == 200
@@ -464,7 +495,7 @@ async def test_update_of_a_missing_schedule_returns_to_the_own_editor(
     )
 
     assert response.status_code == 302
-    _assert_returned_to_editor(response, own_ad)
+    _assert_returned_to_editor(response, own_ad, notices.SCHEDULE_AD_MISSING)
     assert await _schedules(db_session) == []
 
 

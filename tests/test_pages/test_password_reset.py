@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.models.user import User
 from app.models.email_verification import EmailVerificationCode
+from app.pages import notices
 from app.services.auth_service import hash_password
 
 
@@ -159,7 +160,10 @@ async def test_complete_password_reset(
     )
     assert response.status_code == 302
     assert "/login" in response.headers.get("location", "")
-    assert "reset=success" in response.headers.get("location", "")
+    # АДРЕС СМЕНИЛСЯ, УТВЕРЖДЕНИЕ — НЕТ: исход по-прежнему обязан доехать до
+    # человека, но едет он ОБЩИМ параметром и кодом закрытого реестра, а не
+    # собственным написанием этого одного экрана.
+    assert f"notice={notices.PASSWORD_RESET_DONE}" in response.headers.get("location", "")
 
     # Step 4: Login with new password
     response = await client.post(

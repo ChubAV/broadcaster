@@ -1,6 +1,15 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -9,12 +18,70 @@ from app.database import Base
 class Payment(Base):
     __tablename__ = "payments"
 
+    # НЕ БОЛЕЕ ОДНОГО НЕЗАКРЫТОГО ПОДПИСОЧНОГО НАМЕРЕНИЯ НА ПОЛЬЗОВАТЕЛЯ —
+    # СВОЙСТВО СХЕМЫ (ревизия 0021, требование PAY-01).
+    #
+    # Объявление живёт ЗДЕСЬ ТОЖЕ, а не только в ревизии, и это не дубликат:
+    # тестовая суита строит схему `Base.metadata.create_all` (tests/conftest.py)
+    # и о существовании Alembic не знает ВОВСЕ. Ограничение, объявленное лишь
+    # ревизией, в среде, поднятой из моделей, отсутствовало бы физически — то
+    # есть суита не проверяла бы потолок ни одним тестом ровно там, где
+    # прикладная проверка потолка снята. Тот же довод и та же форма, что у
+    # `uq_subscriptions_active_user` в app/models/subscription.py.
+    #
+    # Индекс ЧАСТИЧНЫЙ: запрещено второе НЕЗАКРЫТОЕ намерение, а не второй
+    # платёж. Уникальность по пользователю целиком заперла бы его навсегда — ни
+    # одного второго платежа, ни проведённого, ни за пакет сообщений.
+    #
+    # `expired` предикатом ИСКЛЮЧЁН НАМЕРЕННО. Просроченное намерение остаётся
+    # ОПЛАЧИВАЕМЫМ и ЗАЧИСЛЯЕМЫМ (`expired` не входит в `TERMINAL_STATUSES`,
+    # поэтому `_claim_payment` выигрывает заявку на такой строке), а ленивая
+    # уборка `_expire_stale_intents` пользуется ровно этим: она выводит
+    # просроченную строку ИЗ-ПОД предиката, не удаляя её и не делая
+    # неоплачиваемой.
+    #
+    # ⚠️ ПРЕДИКАТ СКОПИРОВАН ИЗ `OPEN_INTENT_PREDICATE` РЕВИЗИИ 0021 СИМВОЛ В
+    # СИМВОЛ. Для SQLite предикат частичного индекса есть ТЕКСТ: запись без
+    # пробелов вокруг знака равенства и запись с пробелами суть РАЗНЫЕ
+    # ограничения под одним именем. Поэтому строка взята из
+    # `OPEN_INTENT_PREDICATE` ревизии КОПИРОВАНИЕМ, а не пересказом, а равенство
+    # всех четырёх вхождений (два здесь, два в ревизии) утверждается машинно —
+    # tests/test_models/test_payment_open_intent_index.py.
+    __table_args__ = (
+        Index(
+            "uq_payments_open_subscription_intent",
+            "user_id",
+            unique=True,
+            sqlite_where=text("kind = 'subscription' AND status = 'pending'"),
+            postgresql_where=text("kind = 'subscription' AND status = 'pending'"),
+        ),
+    )
+
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    yookassa_payment_id: Mapped[str] = mapped_column(
-        String(255), unique=True, index=True
+    # ⚠️ ЗНАЧЕНИЕ ОТСУТСТВУЕТ РОВНО В ОДНОМ СОСТОЯНИИ — РЕЗЕРВ. Так называется
+    # строка-намерение, вставленная ДО обращения к ЮKassa: порядок «резерв →
+    # сеть → дозапись» вводит план 08-05, а колонку под него открывает ревизия
+    # `0021`. Раньше строка вставлялась ПОСЛЕ создания платежа, и проигравший
+    # гонку узнавал об отказе потолка уже после того, как деньги двинулись, —
+    # записать его было некуда.
+    #
+    # ⚠️ УНИКАЛЬНОСТЬ СОХРАНЯЕТСЯ, И ЭТО НЕСУЩЕЕ СВОЙСТВО, А НЕ ОСТАТОК. Она
+    # защищает от повторной обработки одного уведомления. Резервам она не
+    # мешает: оба диалекта считают `NULL` РАЗЛИЧНЫМИ, поэтому несколько
+    # резервных строк сосуществуют, а второе незакрытое намерение отвергает
+    # НОВЫЙ частичный индекс `uq_payments_open_subscription_intent`, а не этот.
+    #
+    # ЗЕРКАЛЬНОЕ РАССУЖДЕНИЕ К T-05-49, ВЫПИСАННОЕ ПРЯМО: под индексом опасность
+    # ПОМЕНЯЛА СТОРОНУ. Локальная строка без удалённого платежа восстановима —
+    # она гасится в `expired` и остаётся следом попытки; удалённый платёж без
+    # локальной строки НЕТ: уведомление о нём приедет на ненайденную строку,
+    # `handle_webhook` вернёт `webhook_payment_not_found` и не начислит ничего.
+    # Деньги приняты, доступ не выдан, молча.
+    yookassa_payment_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, index=True, nullable=True
     )
     status: Mapped[str] = mapped_column(String(50), default="pending")
     amount_value: Mapped[str] = mapped_column(String(50))

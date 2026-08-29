@@ -22,6 +22,7 @@ from app.services.auth_service import (
 )
 from app.services.email_service import send_verification_email, send_password_reset_email
 from app.services.subscription_service import start_trial
+from app.pages import notices
 from app.pages.common import is_same_origin, templates
 
 logger = structlog.get_logger(__name__)
@@ -803,7 +804,13 @@ async def forgot_password_reset(
     user.password_hash = hash_password(password)
     await db.commit()
 
-    response = RedirectResponse(url="/login?reset=success", status_code=302)
+    # ИСХОД ЕДЕТ ОДНИМ ПАРАМЕТРОМ И КОДОМ ИЗ РЕЕСТРА (FOUND-05). Прежде здесь
+    # стояло СОБСТВЕННОЕ написание, а слова к нему набирались прямо в разметке
+    # экрана входа — то есть у одного исхода были и свой канал, и свой владелец
+    # слов. Не осталось ни того, ни другого: код выбирает запись реестра
+    # (`app/pages/notices.py`), а рисует её общая область шелла — та же, что и
+    # на всех остальных экранах обоих шеллов.
+    response = RedirectResponse(url=f"/login?notice={notices.PASSWORD_RESET_DONE}", status_code=302)
     return response
 
 

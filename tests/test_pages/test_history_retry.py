@@ -41,6 +41,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.send_log import SendLog
 from app.models.user import User
 from app.pages import history as history_module
+from app.pages import notices
 from app.pages.history import RETRY_TASK_NAME
 
 HISTORY_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "history.py"
@@ -824,7 +825,7 @@ async def test_two_sequential_retries_queue_exactly_one_task(
         f"намерение пользователя обернулось несколькими необратимыми "
         f"отправками — {env.queued}"
     )
-    assert f"retry={history_module.RETRY_BUSY}" in second.headers["location"]
+    assert f"notice={notices.RETRY_BUSY}" in second.headers["location"]
 
 
 @pytest.mark.asyncio
@@ -845,8 +846,13 @@ async def test_retry_busy_notice_states_the_real_guarantee(
     отказ второму нажатию назван (это окно действительно гарантирует), а
     появление новой записи истории обещано УСЛОВНО.
 
-    Текст плашки берётся ИЗ САМОГО словаря модуля, а не копируется в тест:
-    копия разъехалась бы с исходником молча.
+    Текст плашки берётся ИЗ САМОГО реестра, а не копируется в тест: копия
+    разъехалась бы с исходником молча.
+
+    ⚠️ ИСТОЧНИК ТЕКСТА СМЕНИЛСЯ ПЛАНОМ 08-06, УТВЕРЖДЕНИЕ — НЕТ. Частный
+    словарь раздела снят вместе с двумя такими же; запись живёт в закрытом
+    реестре `app/pages/notices.py`, а рисует её общая область шелла. Проверяются
+    те же два свойства текста и тот же вариант плашки.
     """
     user = await _current_user(db_session)
     log = await _seed_retryable(db_session, user.id)
@@ -862,8 +868,10 @@ async def test_retry_busy_notice_states_the_real_guarantee(
     assert len(env.queued) == 1, env.queued
     assert page.status_code == 200
 
-    notice, tone = history_module.RETRY_NOTICES[history_module.RETRY_BUSY]
-    assert tone == "info", "отказ второму нажатию — не ошибка пользователя"
+    record = notices.notice_for(notices.RETRY_BUSY)
+    assert record is not None, "кода отказа второму нажатию нет в реестре"
+    notice = record.text
+    assert record.variant == "info", "отказ второму нажатию — не ошибка пользователя"
     assert notice in page.text, "плашка отказа второму нажатию не показана"
     assert "второй раз он не уйдёт" in notice, (
         "текст плашки не обещает пользователю отсутствие второй отправки — "
@@ -1030,7 +1038,7 @@ async def test_retry_becomes_possible_again_after_the_cooldown_window(
             f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
         )
 
-    assert f"retry={history_module.RETRY_QUEUED}" in response.headers["location"]
+    assert f"notice={notices.RETRY_QUEUED}" in response.headers["location"]
     # Ассерт называет, ЧТО поставлено, а не только сколько: после истечения окна
     # вторая задача обязана быть повтором ТОЙ ЖЕ записи, а не чем угодно.
     assert [call.kwargs["args"] for call in env.queued] == [
@@ -1064,7 +1072,7 @@ async def test_a_refused_retry_arms_no_cooldown(
         )
 
         assert env.queued == [], "черновик попал в очередь"
-        assert f"retry={history_module.RETRY_GONE}" in refused.headers["location"]
+        assert f"notice={notices.RETRY_GONE}" in refused.headers["location"]
         assert log.id not in history_module._RETRY_IN_FLIGHT, (
             "отказ предпроверки оставил окно удержания — пользователь, "
             "исправивший причину, вынужден ждать за несостоявшуюся отправку"
@@ -1077,7 +1085,7 @@ async def test_a_refused_retry_arms_no_cooldown(
             f"/history/{log.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
         )
 
-    assert f"retry={history_module.RETRY_QUEUED}" in accepted.headers["location"]
+    assert f"notice={notices.RETRY_QUEUED}" in accepted.headers["location"]
     assert len(env.queued) == 1, (
         "повтор после устранения причины отказа не прошёл — окно армировалось "
         f"на пути, который до очереди не дошёл: {env.queued}"
@@ -1102,7 +1110,7 @@ async def test_an_access_refusal_arms_no_cooldown(
         )
 
     assert env.queued == []
-    assert f"retry={history_module.RETRY_ACCESS_CLOSED}" in response.headers["location"]
+    assert f"notice={notices.RETRY_ACCESS_CLOSED}" in response.headers["location"]
     assert log.id not in history_module._RETRY_IN_FLIGHT, (
         "отказ по доступу оставил окно удержания"
     )
@@ -1132,7 +1140,7 @@ async def test_retry_cooldown_is_keyed_per_record(
             f"/history/{second.id}/retry", headers=SAME_ORIGIN, follow_redirects=False
         )
 
-    assert f"retry={history_module.RETRY_QUEUED}" in response.headers["location"]
+    assert f"notice={notices.RETRY_QUEUED}" in response.headers["location"]
     # По одной задаче НА КАЖДУЮ запись, и это сильнее простого счёта: ассерт
     # называет обе записи поимённо, поэтому две постановки по одной и той же
     # записи его не удовлетворят.
@@ -1793,7 +1801,7 @@ async def test_retry_of_a_draft_ad_does_not_reach_the_queue(
 
     assert response.status_code == 302
     assert env.queued == [], "черновик не имеет права попасть в очередь"
-    assert f"retry={history_module.RETRY_GONE}" in response.headers["location"]
+    assert f"notice={notices.RETRY_GONE}" in response.headers["location"]
 
 
 @pytest.mark.asyncio
@@ -1814,7 +1822,7 @@ async def test_retry_into_a_switched_off_group_does_not_reach_the_queue(
 
     assert response.status_code == 302
     assert env.queued == [], "выключенная группа не имеет права получить отправку"
-    assert f"retry={history_module.RETRY_GONE}" in response.headers["location"]
+    assert f"notice={notices.RETRY_GONE}" in response.headers["location"]
 
 
 @pytest.mark.asyncio

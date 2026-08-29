@@ -9,6 +9,7 @@ from app.config import Settings
 from app.dependencies import forbid_when_impersonating, get_db, get_settings
 from app.models.subscription import Subscription
 from app.pages.common import get_shell_context, get_user_from_cookie
+from app.pages.htmx import refuse
 
 from app.pages.auth import router as auth_router
 from app.pages.dashboard import router as dashboard_router
@@ -80,7 +81,19 @@ async def require_access(
     ⚠️ ПАРАМЕТР `?expired=1` — АРТЕФАКТ РЕДИРЕКТА, А НЕ ВХОД ОБРАБОТЧИКА.
     Читать его в `/billing` запрещено (UI-контракт, E2): состояние доступа
     известно серверу из строки подписки, и решать по параметру адресной строки,
-    что показать, значило бы отдать этот вопрос владельцу ссылки.
+    что показать, значило бы отдать этот вопрос владельцу ссылки. Решение
+    ПЕРЕЕЗЖАЕТ НА НОВЫЙ КАНАЛ ВМЕСТЕ С АДРЕСОМ (D-11): тот же адрес уезжает в
+    заголовок перехода целиком, и `expired` кодом уведомления не становится —
+    иначе вопрос «закрыт ли доступ» снова оказался бы у владельца ссылки.
+
+    ⚠️ У ОТКАЗА ТЕПЕРЬ ДВА ТРАНСПОРТА, А РЕШЕНИЕ О ДОСТУПЕ ПО-ПРЕЖНЕМУ ОДНО.
+    Человеку, пришедшему полной перезагрузкой, отказ приезжает ровно тем же
+    редиректом, что и до этой правки; человеку со слоем письма — заголовком
+    перехода, потому что редирект слой письма отрабатывает НЕЗАМЕТНО и человек
+    остаётся на прежнем экране, не узнав об отказе ни слова (FOUND-07). Развилка
+    транспорта стоит СТРОГО ПОСЛЕ вердикта `access_is_open`: предикат один,
+    вычисляется он до неё, и от заголовка запроса не зависит ничем. Обе ветки
+    остаются `raise` по доводу абзацем выше.
 
     ⚠️ ЗАПРОС ПОДПИСКИ ПОВТОРЯЕТ `get_shell_context` ДОСЛОВНО
     (`app/pages/common.py`): те же три условия, та же сортировка, тот же
@@ -102,8 +115,12 @@ async def require_access(
     ).scalar_one_or_none()
 
     if not access_is_open(subscription, datetime.now(timezone.utc)):
-        raise HTTPException(
-            status_code=302, headers={"location": ACCESS_EXPIRED_LOCATION}
+        refuse(
+            request,
+            location=ACCESS_EXPIRED_LOCATION,
+            without_htmx=HTTPException(
+                status_code=302, headers={"location": ACCESS_EXPIRED_LOCATION}
+            ),
         )
 
 
