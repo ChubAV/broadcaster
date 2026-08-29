@@ -1281,6 +1281,183 @@ async def test_repeated_delete_is_harmless(
 
 
 @pytest.mark.asyncio
+async def test_repeated_delete_is_harmless_over_htmx(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Вторая половина пары к `test_repeated_delete_is_harmless` (T-9-07).
+
+    ⚠️ УТВЕРЖДАЕТСЯ ПОБАЙТОВОЕ РАВЕНСТВО ДВУХ ОТВЕТОВ, А НЕ СОВПАДЕНИЕ КАЖДОГО
+    С КОНСТАНТОЙ. Тело ответа удаления собирается из `group_id` ПУТИ, а не из
+    найденной строки, поэтому найденная и уже удалённая группа обязаны отвечать
+    неотличимо. Различимый ответ сообщал бы, какие идентификаторы заняты
+    существующими группами: карту чужих данных можно было бы составить
+    перебором по адресу, не получив ни одной строки.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа двойного удаления htmx")
+
+    first = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete"
+    )
+    second = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete"
+    )
+
+    # ⚠️ ПОЛОВИНА «ЭТО НЕ ЦЕЛЫЙ ДОКУМЕНТ» ЗДЕСЬ ОБЯЗАТЕЛЬНА, А НЕ ИЗБЫТОЧНА.
+    # Без неё утверждение о равенстве зелено ПО ПОСТРОЕНИЮ: `htmx_client`
+    # следует перенаправлению НЕЗАМЕТНО, и оба ответа оказались бы одной и той
+    # же целой страницей экрана групп — равной себе самой и не говорящей об
+    # ответе удаления ничего.
+    assert "<!DOCTYPE" not in first.text, (
+        "в теле приехал целый документ: обработчик ответил перенаправлением, а "
+        "клиент незаметно по нему прошёл"
+    )
+    assert first.status_code == second.status_code, (
+        "повторное удаление отличимо от первого по коду ответа"
+    )
+    assert first.content == second.content, (
+        "повторное удаление отличимо от первого по телу ответа"
+    )
+    assert first.headers.get("HX-Location") == second.headers.get("HX-Location"), (
+        "повторное удаление отличимо от первого по адресу перехода"
+    )
+    assert (await db_session.get(Group, group.id)) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_degrades_without_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Без признака htmx удаление отвечает ПРЕЖНИМ перенаправлением (SP-3).
+
+    Половина пары, охраняющая путь деградации. Перевод обработчика на слой
+    ответа не имеет права поменять ответ человеку без JavaScript: он по-прежнему
+    обязан получить 302 на экран групп. Половина без htmx зовёт
+    `follow_redirects=False` ЯВНО.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа деградации удаления")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 302, (
+        f"запрос без признака htmx получил {response.status_code} — путь "
+        "деградации перестал быть прежним"
+    )
+    assert response.headers["location"] == f"/accounts/{account.id}/groups"
+    assert (await db_session.get(Group, group.id)) is None, (
+        "удаление на базовом пути не состоялось"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_returns_oob_nodes(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """С признаком htmx удаление отвечает ТРЕМЯ внеполосными узлами (D-11, D-02).
+
+    Основной цели свопа у ответа нет вовсе: форма панели идёт `hx-swap="none"`,
+    и всё едет внеполосно — снятие строки, снятие ОСИРОТЕВШЕЙ панели
+    подтверждения и линейка счётчика.
+
+    ⚠️ СНЯТИЕ ПАНЕЛИ ЗДЕСЬ НЕ УКРАШЕНИЕ. Панель сознательно стоит СНАРУЖИ
+    удаляемой строки (T-11-04), поэтому вместе со строкой она не уезжает: без
+    второго узла после N удалений в документе копятся N панелей `role="dialog"`
+    с живыми ловушками фокуса.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(db_session, account, ["Первая", "Вторая"])
+    target = seeded[0]
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{target.id}/delete"
+    )
+
+    assert response.status_code == 200, (
+        f"запрос htmx получил {response.status_code} вместо фрагмента"
+    )
+    assert "<!DOCTYPE" not in response.text, (
+        "в теле приехал целый документ: обработчик ответил перенаправлением, а "
+        "клиент незаметно по нему прошёл — ровно то, чего не видит человек"
+    )
+    assert f'id="group-row-{target.id}"' in response.text, (
+        "в ответе нет узла снятия строки — строка удалённой группы осталась бы "
+        "на экране до перезагрузки"
+    )
+    assert f'id="group-del-{target.id}"' in response.text, (
+        "в ответе нет узла снятия панели подтверждения — осиротевшая панель "
+        "останется в документе с живой ловушкой фокуса"
+    )
+    assert response.text.count('hx-swap-oob="delete"') == 2, (
+        "внеполосных снятий в ответе не два: строка и панель обязаны сниматься "
+        "каждая своим узлом"
+    )
+    assert 'hx-swap-oob="innerHTML:#account-groups-count"' in response.text, (
+        "в ответе нет внеполосного узла линейки счётчика — число активных групп "
+        "молча разъедется с составом строк"
+    )
+
+    assert (await db_session.get(Group, target.id)) is None
+
+
+@pytest.mark.asyncio
+async def test_last_group_goes_to_location(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Опустевший список закрывается переходом, а не вторым пустым состоянием (D-09).
+
+    Три различимых пустых состояния живут в `account_groups/list.html` в ОДНОМ
+    экземпляре. Второй их отрисовкой во фрагменте они разошлись бы молча, и
+    человек видел бы разный экран в зависимости от того, как он на него попал.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Единственная группа")
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete"
+    )
+
+    assert response.status_code == 204, (
+        f"удаление последней группы ответило {response.status_code} вместо "
+        "перехода на опустевший список"
+    )
+    assert response.headers["HX-Location"] == f"/accounts/{account.id}/groups"
+    assert not response.content, "у ответа 204 появилось тело"
+
+
+@pytest.mark.asyncio
+async def test_delete_does_not_trust_the_account_id_from_the_url_over_htmx(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Пара к `test_delete_does_not_trust_the_account_id_from_the_url` (T-9-07).
+
+    Тройной `WHERE` вычисляется ДО развилки транспорта, и новый транспорт не
+    имеет права его ослабить: свой аккаунт в адресе и своя группа — но группа
+    принадлежит ДРУГОМУ аккаунту. Ответ при этом неотличим от успешного
+    удаления последней группы в этом аккаунте: ветвление считается по числам
+    аккаунта из адреса, а не по факту нахождения строки (D-04).
+    """
+    first = await _seed_account(db_session, type_="wa")
+    second = await _seed_account(db_session, type_="tg_user")
+    group_of_second = await _seed_group(db_session, second, "Группа второго аккаунта")
+
+    response = await htmx_client.post(
+        f"/accounts/{first.id}/groups/{group_of_second.id}/delete"
+    )
+
+    assert response.status_code == 204, (
+        f"адрес чужого для группы аккаунта ответил {response.status_code} — "
+        "фрагментный транспорт ослабил тройной WHERE"
+    )
+    assert response.headers["HX-Location"] == f"/accounts/{first.id}/groups"
+    assert (await db_session.get(Group, group_of_second.id)) is not None, (
+        "группа удалена через адрес чужого для неё аккаунта"
+    )
+
+
+@pytest.mark.asyncio
 async def test_delete_of_a_group_in_no_schedule_works(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
