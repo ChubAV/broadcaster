@@ -5,11 +5,11 @@ milestone_name: HTMX-first
 current_phase: 9
 current_phase_name: Пилот на `account_groups` — сквозной контракт формы
 status: planning
-stopped_at: Phase 08 complete, ready to plan Phase 9
-last_updated: "2026-08-29T11:08:53.059Z"
+stopped_at: Phase 9 context gathered
+last_updated: "2026-08-29T13:52:54.509Z"
 last_activity: 2026-08-29
 last_activity_desc: Phase 08 complete, transitioned to Phase 9
-state_head: 93f43790b8cf8f7fbceb41316db5e7f569e939f6
+state_head: 79540758a881ddca7c7d7ee0758a45f2d25b5ccd
 progress:
   total_phases: 9
   completed_phases: 2
@@ -313,9 +313,9 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-08-29T11:10:00Z
-Stopped at: Phase 08 complete, ready to plan Phase 9
-Resume file: None
+Last session: 2026-08-29T13:52:54.288Z
+Stopped at: Phase 9 context gathered
+Resume file: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-CONTEXT.md
 
 ## Operator Next Steps
 
