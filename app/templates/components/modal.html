@@ -76,6 +76,26 @@
    test_only_known_non_dialog_submit_handlers_remain, и второй такой обработчик,
    где бы он ни появился, её покрасил бы.
 
+   ПРИЗНАК ОТПРАВКИ htmx — ОПЦИОНАЛЬНЫЙ ПАРАМЕТР `hx_post`, И ЕГО УМОЛЧАНИЕ НЕ
+   ДВИГАЕТСЯ (Фаза 9, план 09-02, D-01). При `hx_post=false` — а это умолчание —
+   разметка панели не меняется НИ НА СИМВОЛ: пятнадцать сегодняшних мест
+   подтверждения рендерятся байт-в-байт как до правки. Признак получает ровно
+   одно место — удаление группы аккаунта, — и это граница, а не полумера.
+
+   ПОЧЕМУ ПАРАМЕТР, А НЕ ПРАВКА НА ВСЕ ШЕСТНАДЦАТЬ МЕСТ. Правка, расходящаяся
+   на десять потребителей разом, ушла бы в проект ДО того, как контракт ответа
+   подтверждён руками: у панели подтверждения нет ни одного шипнутого
+   htmx-пути, и первое же расхождение обнаружилось бы сразу в шестнадцати
+   местах. Перевод всех мест — предмет ОТДЕЛЬНОЙ фазы (FORM-06), у которой
+   тогда останется предмет: сегодняшнее умолчание.
+
+   ПОЧЕМУ У ЭТОЙ ФОРМЫ НЕТ ЦЕЛИ ПОДМЕНЫ, А ЕСТЬ `hx-swap="none"`. Ответ
+   удаления не подменяет ничего собой: он несёт только внеполосные узлы. При
+   `hx-target` этот макрос обязан был бы знать цель КАЖДОГО из шестнадцати
+   мест подтверждения, и «одна правка» превратилась бы в шестнадцать разных
+   вызовов — то есть ровно в то, ради чего свойства формы собраны в одном
+   месте.
+
    Импорт: {% from "components/modal.html" import modal %} #}
 
 {# Значения по умолчанию записаны двойными кавычками намеренно: метод формы
@@ -89,7 +109,7 @@
     новые атрибуты. Все вызовы проекта передают сюда первичные ключи и
     позиции — то есть цифры; величина, пришедшая от пользователя или из тела
     внешней очереди, ключом панели быть не может (WR-04 ревизии фазы 6). -#}
-{% macro modal(id, title, action, confirm_label, body=None, cancel_label="Отмена", confirm_variant="danger", method="post") -%}
+{% macro modal(id, title, action, confirm_label, body=None, cancel_label="Отмена", confirm_variant="danger", method="post", hx_post=false) -%}
 <div class="modal" id="{{ id }}" x-cloak
      x-data="{
        open: false,
@@ -109,9 +129,11 @@
   <div class="modal__panel" x-ref="panel" tabindex="-1">
     <h2 class="modal__title" id="{{ id }}-title">{{ title }}</h2>
     <form class="modal__form" method="{{ method }}" action="{{ action }}"
-          x-on:submit="if (sending) { $event.preventDefault(); return; } sending = true">
+          x-on:submit="if (sending) { $event.preventDefault(); return; } sending = true"
+          {%- if hx_post %} hx-post="{{ action }}" hx-swap="none" hx-disabled-elt="find button[type=submit]" hx-indicator="find .form-busy"{% endif %}>
       {%- if body %}<p class="modal__text">{{ body }}</p>{% endif %}
       {%- if caller is defined %}{{ caller() }}{% endif %}
+      {%- if hx_post %}<span class="form-busy" aria-hidden="true"></span>{% endif %}
       <div class="modal__actions">
         <button class="btn btn--ghost" type="button" x-ref="cancel" x-on:click="hide()"><span class="btn__label">{{ cancel_label }}</span></button>
         <button class="btn btn--{{ confirm_variant }}" type="submit" x-bind:disabled="sending" x-bind:aria-busy="sending"><span class="btn__label">{{ confirm_label }}</span></button>
