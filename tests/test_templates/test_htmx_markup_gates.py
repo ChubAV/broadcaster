@@ -1625,6 +1625,10 @@ FORM = "ads/form.html"
 AUTOSAVE_RESPONSE = "ads/includes/autosave_response.html"
 NOTICE_OOB = "includes/notice_oob.html"
 FILTERS = "components/filters.html"
+COUNT_RULE_OOB = "account_groups/partials/count_rule_oob.html"
+
+COUNT_RULE_OOB_OPEN = '<div hx-swap-oob="innerHTML:#account-groups-count">'
+COUNT_RULE_OOB_CLOSE = "{% endif %}</div>"
 
 FORM_OPEN = '<form id="ad-form"\n          method="post"\n'
 FORM_CLOSE = 'hx-swap="none">'
@@ -1825,6 +1829,58 @@ def test_control_negative_an_extra_oob_block_reddens_the_counter(tmp_path: Path)
     assert len(_oob_sites(templates)) == OOB_BLOCKS + 1, (
         "незаявленный внеполосный блок не изменил инвентарного числа — значит "
         "число собрано не обходом"
+    )
+
+
+def test_control_negative_a_nested_oob_node_reddens_the_gate(tmp_path: Path) -> None:
+    """Внеполосный узел завёрнут в чужой тег и перестал быть верхнеуровневым.
+
+    Подстановка оборачивает узел линейки счётчика в обычный `<div>` — то есть
+    делает ровно то, что сделал бы автор, решивший «привести ответ к одному
+    корню». Рантайм при `allowNestedOobSwaps: false` снимет с такого узла
+    признак внеполосной подмены и не свопнет вовсе, БЕЗ единого признака отказа:
+    ни в консоли, ни в статусе, ни в теле. Счётчик групп просто перестал бы
+    обновляться, и поймать это мог бы только глаз.
+    """
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            COUNT_RULE_OOB,
+            COUNT_RULE_OOB_OPEN,
+            '<div class="wrap">' + COUNT_RULE_OOB_OPEN,
+        ),
+        Substitution(
+            COUNT_RULE_OOB, COUNT_RULE_OOB_CLOSE, COUNT_RULE_OOB_CLOSE + "</div>"
+        ),
+    )
+    assert _offenders_oob_not_top_level(_all_templates(root)), (
+        "внеполосный узел оказался завёрнут в чужой тег, и правило верхнего "
+        "уровня этого не заметило — рантайм снял бы с него признак подмены "
+        "молча, и счётчик групп перестал бы обновляться без признака отказа"
+    )
+
+
+def test_control_negative_a_long_lived_region_replaced_by_node_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Долгоживущая область объявлена подменой УЗЛА, а не содержимого.
+
+    Подстановка переводит линейку счётчика на умолчание рантайма — подмену узла
+    по собственному идентификатору. Первый же ответ унёс бы обёртку
+    `#account-groups-count` из документа и поставил бы на её место присланный
+    узел; ВСЕ последующие ответы экрана остались бы без цели, и молча.
+    """
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            COUNT_RULE_OOB,
+            COUNT_RULE_OOB_OPEN,
+            '<div id="account-groups-count" hx-swap-oob="true">',
+        ),
+    )
+    assert _offenders_notice_region_by_node(_all_templates(root)), (
+        "долгоживущая область стала подменяться узлом, и правило содержимого "
+        "этого не заметило — область уехала бы из документа навсегда"
     )
 
 
