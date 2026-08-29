@@ -2120,6 +2120,167 @@ def test_every_swap_target_points_at_an_existing_id() -> None:
     )
 
 
+def test_every_parametric_swap_target_carries_a_reason() -> None:
+    """У каждой записи перечня параметрических целей написано, ПОЧЕМУ она в нём.
+
+    Первое из утверждений идиомы SP-1. Перечень, у которого не написано, почему
+    кто-то в него входит, через фазу превращается в «наверное, так надо», и
+    снять из него запись становится страшнее, чем добавить.
+    """
+    unexplained = {
+        template
+        for template, entry in PARAMETRIC_SWAP_TARGETS.items()
+        if not entry.reason.strip()
+    }
+    assert not unexplained, (
+        f"цель подмены объявлена невидимой для правил без обоснования: "
+        f"{sorted(unexplained)} — читатель через фазу не отличит принятое "
+        f"решение от забытой работы"
+    )
+
+
+def test_the_number_of_parametric_swap_targets_is_the_declared_one() -> None:
+    """Записей ровно ``PARAMETRIC_SWAP_TARGETS_DECLARED`` (второе утверждение SP-1).
+
+    Каждая запись объявляет цель подмены НЕВИДИМОЙ сразу для трёх правил:
+    существования цели (G-9), двух ролей (G-11) и границы клиентского состояния
+    (G-12). Молчаливый рост этого числа есть молчаливое ослабление гейта втрое.
+    """
+    assert len(PARAMETRIC_SWAP_TARGETS) == PARAMETRIC_SWAP_TARGETS_DECLARED, (
+        f"параметрических целей в перечне {len(PARAMETRIC_SWAP_TARGETS)}, "
+        f"объявлено {PARAMETRIC_SWAP_TARGETS_DECLARED}: "
+        f"{sorted(PARAMETRIC_SWAP_TARGETS)} — из-под трёх правил выведена цель, "
+        f"о которой решения никто не принимал"
+    )
+
+
+def test_every_declared_parametric_target_is_actually_parametric() -> None:
+    """НЕСУЩЕЕ утверждение SP-1: запись правда в исключаемом положении.
+
+    Значение ``hx-target`` в объявленном файле обязано СОДЕРЖАТЬ выражение
+    шаблонизатора. Запись, чьё место однажды получило ЛИТЕРАЛЬНУЮ цель, осталась
+    бы выведенной из-под трёх правил молча — ровно то, что SP-1 называет
+    «устаревшая запись живёт вечно»: цель стала проверяемой, а перечень
+    продолжает объявлять её невидимой.
+    """
+    templates = _all_templates()
+    by_template = {site.template: site for site in _target_sites(templates)}
+
+    offenders: dict[str, str] = {}
+    for template in PARAMETRIC_SWAP_TARGETS:
+        site = by_template.get(template)
+        if site is None:
+            offenders[template] = "места объявления цели подмены в файле больше нет"
+            continue
+        value = _attr_value(site.tag, HX_TARGET_VALUE) or ""
+        if "{{" not in value and "{%" not in value:
+            offenders[template] = (
+                f"значение цели ЛИТЕРАЛЬНО ({value!r}) — она извлекается, "
+                f"проверяется правилами, и объявлять её невидимой больше не за что"
+            )
+
+    assert not offenders, (
+        f"запись перечня параметрических целей НЕ находится в исключаемом "
+        f"положении: {offenders} — перечень выводит из-под трёх правил цель, "
+        f"которая этим правилам подчиняется"
+    )
+
+
+def test_every_declared_parametric_caller_actually_calls_the_macro() -> None:
+    """Объявленные вызывающие СОВПАДАЮТ с измеренными: забытый краснеет, лишний тоже.
+
+    ⚠️ БЕЗ ЭТОГО УТВЕРЖДЕНИЯ ПОЛЕ ``callers`` БЫЛО БЫ ПРОЗОЙ. Оно единственное,
+    чем правило доходит до вызывающего: макрос-обёртка прячет личность места
+    вызова от разборщика, и файл, реально объявляющий цель, ни в одно множество
+    гейта сам по себе не попадает. Множество измеряется ЕДИНСТВЕННЫМ на фазу
+    сканером ``_macro_callers`` — второго резолвера не заводится, потому что два
+    разошлись бы молча, и каждое правило говорило бы о своём дереве.
+    """
+    templates = _all_templates()
+
+    offenders: dict[str, str] = {}
+    for template, entry in PARAMETRIC_SWAP_TARGETS.items():
+        measured = set(_macro_callers(templates, entry.macro, TARGET_ARGUMENT))
+        if measured != set(entry.callers):
+            offenders[template] = (
+                f"объявленные вызывающие {sorted(entry.callers)} разошлись с "
+                f"измеренными {sorted(measured)}"
+            )
+
+    assert not offenders, (
+        f"множество вызывающих записи разошлось с измеренным: {offenders} — "
+        f"поле callers перестало быть проверяемым фактом, а на нём держится "
+        f"единственный путь правил гейта до вызывающего"
+    )
+
+
+def test_every_swap_target_is_either_literal_or_declared_parametric() -> None:
+    """НЕСУЩЕЕ правило: каждое МЕСТО цели разложено в один из трёх разрядов.
+
+    ⚠️ АРИФМЕТИКА СЧИТАЕТ МЕСТА С ОБЕИХ СТОРОН, И ЭТО НЕ ПРИДИРКА. Сложение
+    «мест столько же, сколько идентификаторов плюс записей перечня» складывало
+    бы РАЗНЫЕ ЕДИНИЦЫ: слева места (список), справа идентификаторы (множество)
+    и файлы (ключи словаря). Две цели на один и тот же литеральный `id` или два
+    параметрических места в одном файле дали бы ложный красный. На этой фазе
+    равенство сошлось бы случайно; правило же писано для Фаз 10-15, где мест
+    станут десятки.
+
+    Разрядов ТРИ, и незаявленная форма значения обязана быть ЗАМЕЧЕНА, а не
+    отнесена к остатку: значение, не начинающееся ни с решётки, ни с
+    объявленного относительного префикса и не содержащее выражения
+    шаблонизатора, — это цель, о которой гейт не знает ничего.
+
+    ⚠️ ГРАНИЦА НАЗЫВАЕТСЯ ЧЕСТНО: КЛЮЧ ПЕРЕЧНЯ — ФАЙЛ. Два параметрических
+    места в ОДНОМ файле покрываются одной записью. Фаза 10, если заведёт
+    второе, обязана эту границу пересмотреть — и это записано ЗДЕСЬ.
+    """
+    templates = _all_templates()
+    sites = _target_sites(templates)
+    ranks = _classified_target_sites(templates)
+
+    # Разряды не пересекаются и покрывают ВСЕ места: сумма трёх заявленных
+    # разрядов равна числу мест только тогда, когда остаток пуст.
+    assert not ranks["unknown"], (
+        f"значение цели подмены не отнесено ни к одному заявленному разряду: "
+        f"{[site.template for site in ranks['unknown']]} — незаявленная форма "
+        f"значения обязана быть замечена, а не отнесена к остатку"
+    )
+    assert (
+        len(ranks["literal"]) + len(ranks["relative"]) + len(ranks["parametric"])
+        == len(sites)
+    ), (
+        f"разряды не покрывают мест цели: литеральных {len(ranks['literal'])}, "
+        f"относительных {len(ranks['relative'])}, параметрических "
+        f"{len(ranks['parametric'])}, всего мест {len(sites)}"
+    )
+
+    # Границы разряда относительных целей проверяются ЗДЕСЬ, а не только внутри
+    # разборщика: перечень префиксов, молча расширенный, перевёл бы в
+    # относительные цель, существование которой можно было бы проверить.
+    for site in ranks["relative"]:
+        value = (_attr_value(site.tag, HX_TARGET_VALUE) or "").strip()
+        assert any(value.startswith(prefix) for prefix in RELATIVE_TARGET_PREFIXES), (
+            f"{site.template}: значение {value!r} отнесено к относительным, но "
+            f"ни одного объявленного префикса не несёт"
+        )
+    for site in ranks["literal"] + ranks["parametric"]:
+        value = (_attr_value(site.tag, HX_TARGET_VALUE) or "").strip()
+        assert not any(
+            value.startswith(prefix) for prefix in RELATIVE_TARGET_PREFIXES
+        ), (
+            f"{site.template}: значение {value!r} попало в чужой разряд, хотя "
+            f"начинается с объявленного относительного префикса"
+        )
+
+    offenders = _offenders_undeclared_parametric_target(templates)
+    assert not offenders, (
+        f"место цели подмены печатает её параметром макроса и в перечне не "
+        f"объявлено: {offenders} — цель подмены вошла в проект, и ни одно "
+        f"правило её не проверяет: ни существование (G-9), ни две роли (G-11), "
+        f"ни граница клиентского состояния (G-12)"
+    )
+
+
 def test_the_number_of_oob_blocks_is_the_declared_one() -> None:
     """Внеполосных блоков ровно ``OOB_BLOCKS``, и парный контроль сходится.
 
@@ -2493,6 +2654,34 @@ def test_control_negative_one_id_in_two_roles_reddens_the_gate(tmp_path: Path) -
     assert _offenders_id_in_two_roles(_all_templates(root)), (
         "идентификатор оказался в двух ролях сразу, и G-11 этого не заметил — "
         "узел подменялся бы дважды за один ответ"
+    )
+
+
+def test_control_negative_an_undeclared_parametric_target_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Второе параметрическое место цели появилось в НЕОБЪЯВЛЕННОМ файле.
+
+    Подстановка делает ровно то, что сделает первая же фаза, переводящая
+    очередную форму на общий макрос: цель начинает печататься выражением. Такая
+    цель в множество литеральных не попадает вовсе, и без записи в перечне о ней
+    молчат ВСЕ ТРИ правила — существования (G-9), двух ролей (G-11) и границы
+    клиентского состояния (G-12).
+
+    Цена нарушения названа последствием, а не фактом: цель подмены вошла в
+    проект, и ни одно правило её не проверяет. Опечатка в ней дала бы подмену «в
+    никуда», о которой рантайм не сообщает ничем.
+    """
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            FORM, FORM_CLOSE, 'hx-swap="none"\n          hx-target="{{ preview }}">'
+        ),
+    )
+    assert _offenders_undeclared_parametric_target(_all_templates(root)), (
+        "параметрическая цель подмены появилась в необъявленном файле, и "
+        "несущее правило этого не заметило — цель вошла в проект, и ни одно "
+        "правило её не проверяет"
     )
 
 
