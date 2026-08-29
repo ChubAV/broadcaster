@@ -191,7 +191,6 @@ NEVER_RESPONDS: dict[str, str] = {}
 # отказа — один текст на два разных события лгал бы в одном из них.
 NOT_YET_CONVERTED: frozenset[str] = frozenset(
     {
-        "app/pages/account_groups.py::account_groups_toggle",
         "app/pages/account_groups.py::account_groups_delete",
         "app/pages/accounts.py::accounts_connect_tg_user_start_qr",
         "app/pages/accounts.py::accounts_connect_tg_user_refresh_qr",
@@ -232,7 +231,17 @@ NOT_YET_CONVERTED: frozenset[str] = frozenset(
 
 # То же число константой. Утверждений на него ДВА, и они про РАЗНЫЕ события:
 # рост означает регрессию, падение означает прогресс вехи.
-NOT_YET_CONVERTED_COUNT = 36
+#
+# ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, а не молчаливая правка):
+#   36 → 35, Фаза 9, план 09-01: снят
+#   `app/pages/account_groups.py::account_groups_toggle` — первый обработчик
+#   вехи, переведённый на слой ответа. ⚠️ ЭТО ДВИЖЕНИЕ СЧЁТЧИКА ПРОГРЕССА ВЕХИ,
+#   А НЕ ПРАВКА ТЕСТА ПОД РЕАЛИЗАЦИЮ: текст отказа
+#   `test_the_backlog_matches_the_declared_count` написан заранее и прямо
+#   требует опустить число и снять переведённый обработчик из перечня. Вместе с
+#   этим движением у G-2 (`test_no_converted_handler_builds_its_own_redirect`)
+#   ВПЕРВЫЕ появляется предмет: до Фазы 9 множество переведённых было пусто.
+NOT_YET_CONVERTED_COUNT = 35
 
 
 # =============================================================================
