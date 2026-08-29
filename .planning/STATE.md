@@ -6,10 +6,10 @@ current_phase: 09
 current_phase_name: Пилот на `account_groups` — сквозной контракт формы
 status: executing
 stopped_at: Phase 9 context gathered
-last_updated: "2026-08-29T15:33:29.552Z"
+last_updated: "2026-08-29T15:40:00.372Z"
 last_activity: 2026-08-29
-last_activity_desc: Phase 08 complete, transitioned to Phase 9
-state_head: 7f21676df1638a8cb5d43651fdfbf09fb26bee92
+last_activity_desc: Phase 09 execution started
+state_head: df3ac95856b084cdf0ccacc3ad3168db9b4c1d33
 progress:
   total_phases: 9
   completed_phases: 2
@@ -25,7 +25,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-29)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 9 — Пилот на `account_groups`: сквозной контракт формы
+**Current focus:** Phase 09 — Пилот на `account_groups` — сквозной контракт формы
 
 **Пройдено в вехе v2.1: Фазы 7 и 8** (18 планов). Фаза 8 закрыта 2026-08-29 — 11/11 планов, верификация `passed`, UAT 9/9, `threats_open: 0`.
 
@@ -35,12 +35,12 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 09 (Пилот на `account_groups` — сквозной контракт формы) — READY TO EXECUTE
-Plan: Not started
+Phase: 09 (Пилот на `account_groups` — сквозной контракт формы) — EXECUTING
+Plan: 1 of 4
 Total Plans in Phase: 4
 Completed Plans in Phase: 0
-Status: Ready to execute
-Last activity: 2026-08-29 — Phase 08 complete, transitioned to Phase 9
+Status: Executing Phase 09
+Last activity: 2026-08-29 — Phase 09 execution started
 
 Progress: [████████████████████] 18/18 plans (100%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7 и 8); Фазы 9…15 ещё не спланированы. По фазам вехи: 2/9 (22%).
 
@@ -308,7 +308,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Ready to execute
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Executing Phase 09
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
