@@ -593,6 +593,12 @@ COMPONENT_CALLS = [
     ("components/avatar.html", "avatar", ("Имя",), {}),
     ("components/alert.html", "alert", ("Сообщение",), {}),
     ("components/modal.html", "modal", (), MODAL_ARGS),
+    # ⚠️ Обёртка htmx-формы попадает под рамку каталога компонентов
+    # (test_components_are_documented_macros) САМА, а под ЭТОТ перечень — НЕТ:
+    # он выписан руками, и новый макрос в него сам не приходит.
+    # Вызов прямой (без блока) намеренно: он проверяет ветку
+    # `caller is defined`, без которой макрос упал бы вне `{% call %}`.
+    ("components/form_wrapper.html", "form_wrapper", (), {"action": "/x"}),
 ]
 
 

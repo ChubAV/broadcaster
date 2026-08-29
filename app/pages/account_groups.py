@@ -26,6 +26,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.pages.htmx import respond
 from app.repositories.schedule import ScheduleRepository
 
 router = APIRouter(tags=["pages"])
@@ -106,6 +107,49 @@ async def _schedule_counts(
     return counts
 
 
+async def _group_counts(
+    db: AsyncSession, user_id: int, account_id: int
+) -> tuple[int, int]:
+    """Числа линейки счётчика: `(active_groups, total_groups)`.
+
+    ДВА ВЫДЕЛЕННЫХ ЗАПРОСА ПОДСЧЁТА (D-04). Считать по загруженной странице
+    нельзя: при 35 группах страница знает про 30 и линейка сказала бы «из 30» —
+    соврала бы ровно там, где список перестал помещаться на экран, то есть там,
+    где цена вранья наибольшая. Поиск в подсчёт НЕ входит: линейка описывает
+    аккаунт целиком, а не текущую выдачу.
+
+    ⚠️ ПОМОЩНИК ЖИВЁТ В ЭТОМ ЖЕ МОДУЛЕ, И ЭТО НЕ ВОПРОС ВКУСА. Признак пути
+    деградации гейта (tests/test_templates/test_htmx_markup_gates.py) считает
+    достижимость по цепочке функций ВНУТРИ модуля; помощник, вынесенный наружу,
+    унёс бы с собой имя шаблона ответа, и классификация маршрута поехала бы.
+
+    Зовут его и страница, и оба обработчика экрана: вторая копия этих двух
+    запросов разошлась бы с первой при первой же правке, и линейка после
+    действия отличалась бы от линейки после перезагрузки — молча.
+    """
+    total_groups = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(Group)
+            .where(Group.user_id == user_id, Group.account_id == account_id)
+        )
+        or 0
+    )
+    active_groups = int(
+        await db.scalar(
+            select(func.count())
+            .select_from(Group)
+            .where(
+                Group.user_id == user_id,
+                Group.account_id == account_id,
+                Group.is_active.is_(True),
+            )
+        )
+        or 0
+    )
+    return active_groups, total_groups
+
+
 @router.get("/accounts/{account_id}/groups", response_class=HTMLResponse)
 async def account_groups_page(
     request: Request,
@@ -135,31 +179,10 @@ async def account_groups_page(
     has_next = len(rows) > PAGE_SIZE
     groups = rows[:PAGE_SIZE]
 
-    # ДВА ВЫДЕЛЕННЫХ ЗАПРОСА ПОДСЧЁТА (D-04). Считать по загруженной странице
-    # нельзя: при 35 группах страница знает про 30 и линейка сказала бы «из 30»
-    # — соврала бы ровно там, где список перестал помещаться на экран, то есть
-    # там, где цена вранья наибольшая. Поиск в подсчёт НЕ входит: линейка
-    # описывает аккаунт целиком, а не текущую выдачу.
-    total_groups = int(
-        await db.scalar(
-            select(func.count())
-            .select_from(Group)
-            .where(Group.user_id == user.id, Group.account_id == account_id)
-        )
-        or 0
-    )
-    active_groups = int(
-        await db.scalar(
-            select(func.count())
-            .select_from(Group)
-            .where(
-                Group.user_id == user.id,
-                Group.account_id == account_id,
-                Group.is_active.is_(True),
-            )
-        )
-        or 0
-    )
+    # Числа линейки приходят ДВУМЯ ВЫДЕЛЕННЫМИ ЗАПРОСАМИ ПОДСЧЁТА (D-04) —
+    # обоснование целиком лежит в докстринге помощника, который зовут и страница,
+    # и оба обработчика экрана.
+    active_groups, total_groups = await _group_counts(db, user.id, account_id)
 
     return templates.TemplateResponse(
         "account_groups/list.html",
@@ -304,9 +327,29 @@ async def account_groups_toggle(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Переключение группы — первый обработчик вехи, идущий через слой ответа.
+
+    ⚠️ СОБСТВЕННОГО ОТВЕТА-ПЕРЕНАПРАВЛЕНИЯ ЗДЕСЬ НЕТ НИ В ОДНОЙ ВЕТКЕ, ВКЛЮЧАЯ
+    «НЕТ СЕССИИ», И ЭТО ТРЕБОВАНИЕ, А НЕ АККУРАТНОСТЬ. Гейт G-2
+    (tests/test_pages/test_htmx_gates.py::test_no_converted_handler_builds_its_own_redirect)
+    считает нарушением ЛЮБУЮ собственную сборку перенаправления — и класс
+    ответа, и статус 302 где угодно в теле — у обработчика, который вдобавок
+    зовёт `respond()`: два решения об одной форме ответа означают, что какое из
+    них исполнится, решает ветка, — то есть путь деградации снова перестаёт быть
+    обязательным. Форма 302 при этом не теряется: её строит сам слой ответа, тем
+    же кодом и на том же адресе.
+
+    ⚠️ Имена класса ответа и статуса набраны здесь СЛОВАМИ, а не литералами:
+    отсутствие собственного перенаправления проверяется в том числе грепом по
+    телу этого обработчика, и докстринг, набравший их дословно, удовлетворил бы
+    греп сам.
+
+    Вердикт доступа вычисляется ДО развилки транспорта: заголовок запроса
+    меняет только ФОРМУ ответа, но не то, что человеку позволено (T-9-05).
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
     # ТРОЙНОЙ WHERE. Проверка владельца одна не закрывает вход: свою группу
     # можно адресовать через свой ЖЕ, но другой аккаунт, и связка «группа
@@ -319,17 +362,65 @@ async def account_groups_toggle(
         )
     )
     group = result.scalar_one_or_none()
-    if group:
-        # ИНВЕРСИЯ, а не установка: действие обратимо одним нажатием и потому
-        # обходится без панели подтверждения (D-08). Обработчик, жёстко
-        # ставящий False, оставил бы пользователя без способа включить группу.
-        group.is_active = not group.is_active
-        await db.commit()
+    if group is None:
+        # ЧУЖАЯ И НЕСУЩЕСТВУЮЩАЯ ГРУППА ИДУТ ОДНОЙ ВЕТКОЙ И ОСТАЮТСЯ
+        # НЕОТЛИЧИМЫМИ (D-13, T-9-02). Различимый отказ сообщал бы, какие
+        # идентификаторы заняты чужими группами: карту чужих данных можно было
+        # бы составить перебором по адресу, не получив ни одной строки.
+        # Фрагмента нет, поэтому слой отвечает 302 без htmx и 204 с заголовком
+        # перехода — с ним.
+        return await respond(request, redirect=f"/accounts/{account_id}/groups")
+
+    # ИНВЕРСИЯ, а не установка: действие обратимо одним нажатием и потому
+    # обходится без панели подтверждения (D-08). Обработчик, жёстко
+    # ставящий False, оставил бы пользователя без способа включить группу.
+    #
+    # ⚠️ ОНА ЖЕ ДЕЛАЕТ ПОВТОРНОЕ НАЖАТИЕ БЕЗВРЕДНЫМ (QUAL-01). Два запроса дают
+    # два инвертирования и НИ ОДНОЙ новой строки; единица записи — один `commit`
+    # одной строки под тройным `WHERE`. Клиентская блокировка повторной отправки
+    # (`hx-disabled-elt`) серверной защитой НЕ является и таковой не
+    # объявляется (PAY-02) — она убирает второе нажатие у человека, а не второй
+    # запрос у злоумышленника.
+    group.is_active = not group.is_active
+    await db.commit()
 
     # D-05: состав расписаний маршрут не читает и не пишет. Выключенная группа
     # пропускается при диспетчеризации, а не вычищается из Schedule.group_ids —
     # иначе включение группы обратно не вернуло бы её в рассылку.
-    return RedirectResponse(url=f"/accounts/{account_id}/groups", status_code=302)
+
+    async def _fragment() -> HTMLResponse:
+        """Строка группы плюс внеполосный узел линейки счётчика.
+
+        ⚠️ ФУНКЦИЯ НУЛЬАРНАЯ И АСИНХРОННАЯ: слой ответа делает `await
+        fragment()`, и `lambda`, возвращающая готовый ответ, ему не подошла бы.
+        Отложенность здесь несущая — на пути без htmx разметка не собирается
+        вовсе, то есть два лишних запроса подсчёта не выполняются.
+
+        Число расписаний берётся ТЕМ ЖЕ помощником, что и на странице: второй
+        экземпляр ограничения владельца через связь с объявлением разъехался бы
+        с первым, и чужое расписание завышало бы подпись строки.
+        """
+        schedules_count = (await _schedule_counts(db, user.id, [group.id])).get(
+            group.id, 0
+        )
+        active_groups, total_groups = await _group_counts(db, user.id, account_id)
+        html = templates.env.get_template(
+            "account_groups/partials/toggle_response.html"
+        ).render(
+            group=group,
+            account_id=account_id,
+            schedules_count=schedules_count,
+            user=user,
+            active_groups=active_groups,
+            total_groups=total_groups,
+        )
+        return HTMLResponse(html)
+
+    # `notice` НЕ передаётся (D-10): исход виден в самой строке и в счётчике,
+    # а плашка на каждый успех превратила бы обратную связь в шум.
+    return await respond(
+        request, redirect=f"/accounts/{account_id}/groups", fragment=_fragment
+    )
 
 
 @router.post("/accounts/{account_id}/groups/{group_id}/delete")
