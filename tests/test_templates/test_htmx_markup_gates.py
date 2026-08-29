@@ -1759,6 +1759,19 @@ COUNT_RULE_OOB = "account_groups/partials/count_rule_oob.html"
 COUNT_RULE_OOB_OPEN = '<div hx-swap-oob="innerHTML:#account-groups-count">'
 COUNT_RULE_OOB_CLOSE = "{% endif %}</div>"
 
+WRAPPER = "components/form_wrapper.html"
+WRAPPER_QUALITY_ATTRS = (
+    'hx-disabled-elt="{{ disabled_elt }}" hx-indicator="find .form-busy">'
+)
+
+# Опорные строки правил индикатора. Каждая выбрана ЗА УНИКАЛЬНОСТЬ в файле
+# стилей: `_css_with` требует ровно одного вхождения, а само имя класса
+# встречается и в комментарии раздела, и в обоих правилах.
+CSS_INDICATOR_RESTING_OPEN = ".form-busy {\n  flex: none;"
+CSS_INDICATOR_RESTING_TRANSITION = (
+    "transition: opacity .12s linear 0s, visibility 0s linear .12s;"
+)
+
 FORM_OPEN = '<form id="ad-form"\n          method="post"\n'
 FORM_CLOSE = 'hx-swap="none">'
 EDITOR_ACTION = "action=\"{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}\""
@@ -2010,6 +2023,85 @@ def test_control_negative_a_long_lived_region_replaced_by_node_reddens_the_gate(
     assert _offenders_notice_region_by_node(_all_templates(root)), (
         "долгоживущая область стала подменяться узлом, и правило содержимого "
         "этого не заметило — область уехала бы из документа навсегда"
+    )
+
+
+def test_control_negative_a_post_without_a_disabled_elt_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Место отправки потеряло объявление цели блокировки.
+
+    ⚠️ КОНТРОЛЬ РАБОТАЕТ ИМЕННО ПОТОМУ, ЧТО ЗАПИСЬ С НЕПУСТЫМИ `callers` СНИМАЕТ
+    ТОЛЬКО ПРОВЕРКУ ЗНАЧЕНИЯ, А НЕ ПРОВЕРКУ НАЛИЧИЯ. Выводи запись место
+    целиком — оба сегодняшних места отправки оказались бы выведенными, правило
+    зеленело бы на пустом множестве, и эта подстановка не покраснела бы ни на
+    чём: контроль притворялся бы доказательством зубов, не будучи им.
+
+    Цена нарушения: двойное нажатие уходит на сервер дважды. На пути тумблера
+    оно безвредно (обработчик инвертирует), но правило раздаётся макросом на все
+    сорок семь форм вехи, и на денежном пути это была бы вторая запись.
+    """
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            WRAPPER, WRAPPER_QUALITY_ATTRS, 'hx-indicator="find .form-busy">'
+        ),
+    )
+    assert _offenders_disabled_elt(_all_templates(root)), (
+        "место отправки осталось без объявленной цели блокировки, и общее "
+        "правило этого не заметило — двойное нажатие ушло бы на сервер дважды"
+    )
+
+
+def test_control_negative_the_runtime_indicator_class_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Класс индикатора назван именем рантайма.
+
+    ⚠️ КОНТРОЛЬ ПОДАЁТ ИЗМЕНЁННУЮ КОПИЮ ФАЙЛА СТИЛЕЙ, А НЕ ДЕРЕВА ШАБЛОНОВ, И
+    БЕЗ НЕГО ОБА ПРАВИЛА ИНДИКАТОРА ЗЕЛЕНЫ ПО ПОСТРОЕНИЮ: `_tree_with` подменяет
+    только шаблоны, а эти правила читают стили. Ровно затем `_app_css` и
+    принимает путь параметром — по той же причине, по которой его принимает
+    `_all_templates`.
+
+    Цена нарушения: рантайм дописывает СВОЙ стиль для этого имени в конец
+    документа, то есть ПОСЛЕ файла стилей проекта, и при равной специфичности
+    выигрывает. Порог 300 мс пропал бы молча — индикатор мигал бы на каждое
+    нажатие, и признака отказа не было бы никакого.
+    """
+    css = _app_css(
+        _css_with(
+            tmp_path,
+            CSS_INDICATOR_RESTING_OPEN,
+            ".htmx-indicator {\n  flex: none;",
+        )
+    )
+    assert _offenders_runtime_indicator_class(css), (
+        "класс индикатора получил имя рантайма, и правило этого не заметило — "
+        "собственный стиль рантайма приехал бы последним и съел порог"
+    )
+
+
+def test_control_negative_a_threshold_on_the_resting_rule_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """Задержка появления перенесена в правило ПОКОЯ.
+
+    Цена нарушения: задержка, записанная в базовом правиле, задерживает и
+    ОБРАТНЫЙ ход — индикатор висит ещё 300 мс ПОСЛЕ ответа, то есть врёт о
+    состоянии запроса ровно в тот момент, когда запроса уже нет.
+    """
+    css = _app_css(
+        _css_with(
+            tmp_path,
+            CSS_INDICATOR_RESTING_TRANSITION,
+            "transition: opacity .12s linear .3s, visibility 0s linear .12s;",
+        )
+    )
+    assert _offenders_indicator_threshold(css), (
+        "порог появления оказался в правиле покоя, и правило этого не заметило "
+        "— индикатор висел бы ещё 300 мс после ответа и врал бы о состоянии "
+        "запроса"
     )
 
 
