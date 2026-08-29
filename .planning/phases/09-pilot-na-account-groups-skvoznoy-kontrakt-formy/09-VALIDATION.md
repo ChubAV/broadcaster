@@ -47,25 +47,28 @@ created: 2026-08-29
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| TBD | TBD | TBD | FORM-02 | — | тумблер без htmx → 302 на экран групп (деградация) | route | `uv run pytest tests/test_pages/test_account_groups.py -k degrades_without_htmx -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | FORM-02 | T-9-01 | повторное удаление безвредно и не выдаёт чужие `id` | route | `uv run pytest tests/test_pages/test_account_groups.py -k repeated_delete_is_harmless -x` | ✅ (переезжает дословно, D-04) | ⬜ pending |
-| TBD | TBD | TBD | FORM-02 | — | `hx-post` == `action` посимвольно; тег `<form>`; `method="post"`; `action` ведёт на маршрут полного документа (GATE-04) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -q` | ✅ (требует §2.5 разведки) | ⬜ pending |
-| TBD | TBD | TBD | FORM-02 | — | тумблер: 200 + фрагмент с `id="group-row-N"`, без `<!DOCTYPE` | integration | `uv run pytest tests/test_pages/test_account_groups.py -k returns_the_row_fragment -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | FORM-02 | — | удаление: OOB-узлы снятия строки и панели + счётчик | integration | `uv run pytest tests/test_pages/test_account_groups.py -k delete_returns_oob_nodes -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | FORM-02 | — | опустевший список → 204 + `HX-Location` (D-09) | integration | `uv run pytest tests/test_pages/test_account_groups.py -k last_group_goes_to_location -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | FORM-02 | T-9-02 | чужая/несуществующая группа → 204 + `HX-Location`; «нет такой» и «чужая» неотличимы (D-13) | integration | `uv run pytest tests/test_pages/test_account_groups.py -k foreign_toggle_goes_to_location -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | FORM-02 | — | ответ тумблера НЕ несёт второй панели подтверждения (⚠️ §4.4(1) — `outerHTML` вставляет весь ответ) | integration | `uv run pytest tests/test_pages/test_account_groups.py -k fragment_carries_no_second_modal -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | FORM-02 | — | OOB-узлы стоят на верхнем уровне ответа (⚠️ §4.4(2) — `allowNestedOobSwaps: false`) | template gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k oob_nodes_are_top_level -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | FORM-09 | — | новый макрос-обёртка — документированный, без контекста, без `\|safe` | gate | `uv run pytest tests/test_templates/test_components.py -q` | ✅ частично (запись в `COMPONENT_CALLS`) | ⬜ pending |
-| TBD | TBD | TBD | FORM-09 | — | каждый `hx-post` рождён макросом; перечень исключений утверждается ЧИСЛОМ (D-03) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k born_of_a_macro -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | QUAL-01 | — | `hx-disabled-elt` присутствует и целится как объявлено; исключения перечнем с числом (D-06) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k disabled_elt -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | QUAL-01 | — | кнопка Отмены панели подтверждения не блокируется никогда | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k cancel_is_never_disabled -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | QUAL-02 | — | `hx-indicator` присутствует; класс и `transition-delay` в `app.css`; имя класса ≠ `htmx-indicator` (⚠️ Pitfall 3) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k indicator -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | QUAL-06 | — | чекбокс несёт стабильный `id` в разметке фрагмента | integration | `uv run pytest tests/test_pages/test_account_groups.py -k fragment_keeps_the_toggle_id -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | — | — | восемь инвентарных чисел сдвинуты (§3 разведки, включая литерал `len(paths) == 2` → 3) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_pages/test_htmx_gates.py -q` | ✅ (числа править) | ⬜ pending |
-| TBD | TBD | TBD | — | T-9-03 | G-2: у переведённых обработчиков нет собственного `RedirectResponse` (§5.7) | gate | `uv run pytest tests/test_pages/test_htmx_gates.py -k own_redirect -x` | ✅ (впервые с предметом) | ⬜ pending |
-| TBD | TBD | TBD | — | — | D-08: внутри цели свапа допустим только голый `x-data` без выражения | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k client_state -x` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | — | — | G-11 разрешён перечнем исключений; каждая запись фактически лежит в пересечении (третий тест, §1.3) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k both_roles -x` | ❌ W0 | ⬜ pending |
+| 09-01-T1 | 09-01 | 1 | FORM-02 | — | тумблер без htmx → 302 на экран групп (деградация) | route | `uv run pytest tests/test_pages/test_account_groups.py -k degrades_without_htmx -x` | ❌ W0 | ⬜ pending |
+| 09-02-T1 | 09-02 | 2 | FORM-02 | T-9-07 | повторное удаление безвредно и не выдаёт чужие `id` | route | `uv run pytest tests/test_pages/test_account_groups.py -k repeated_delete_is_harmless -x` | ✅ (переезжает дословно, D-04) | ⬜ pending |
+| 09-01-T1, 09-02-T1 | 09-01, 09-02 | 1, 2 | FORM-02 | — | `hx-post` == `action` посимвольно; тег `<form>`; `method="post"`; `action` ведёт на маршрут полного документа (GATE-04) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -q` | ✅ (требует `MACRO_DEFINITION_SITES` и γ1) | ⬜ pending |
+| 09-01-T1 | 09-01 | 1 | FORM-02 | — | тумблер: 200 + фрагмент с `id="group-row-N"`, без `<!DOCTYPE` | integration | `uv run pytest tests/test_pages/test_account_groups.py -k returns_the_row_fragment -x` | ❌ W0 | ⬜ pending |
+| 09-02-T1 | 09-02 | 2 | FORM-02 | — | удаление: OOB-узлы снятия строки и панели + счётчик | integration | `uv run pytest tests/test_pages/test_account_groups.py -k delete_returns_oob_nodes -x` | ❌ W0 | ⬜ pending |
+| 09-02-T1 | 09-02 | 2 | FORM-02 | T-9-10 | опустевший список → 204 + `HX-Location` (D-09) | integration | `uv run pytest tests/test_pages/test_account_groups.py -k last_group_goes_to_location -x` | ❌ W0 | ⬜ pending |
+| 09-01-T1 | 09-01 | 1 | FORM-02 | T-9-02 | чужая/несуществующая группа → 204 + `HX-Location`; «нет такой» и «чужая» неотличимы (D-13) | integration | `uv run pytest tests/test_pages/test_account_groups.py -k foreign_toggle_goes_to_location -x` | ❌ W0 | ⬜ pending |
+| 09-01-T1 | 09-01 | 1 | FORM-02 | T-9-01 | фрагментный путь не ослабил тройной `WHERE`: `account_id` из URL не доверяется | route | `uv run pytest tests/test_pages/test_account_groups.py -k does_not_trust_the_account_id -x` | ⚠️ есть, нужна пара под `htmx_client` | ⬜ pending |
+| 09-01-T1 | 09-01 | 1 | FORM-02 | — | ответ тумблера НЕ несёт второй панели подтверждения (⚠️ `outerHTML` вставляет весь ответ) | integration | `uv run pytest tests/test_pages/test_account_groups.py -k fragment_carries_no_second_modal -x` | ❌ W0 | ⬜ pending |
+| 09-01-T2 | 09-01 | 1 | FORM-02 | — | OOB-узлы стоят на верхнем уровне ответа (⚠️ `allowNestedOobSwaps: false`) | template gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k top_level -x` | ❌ W0 | ⬜ pending |
+| 09-01-T2 | 09-01 | 1 | FORM-02 | — | долгоживущая область подменяется СОДЕРЖИМЫМ, а не узлом (D-12) | template gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k long_lived_region -x` | ❌ W0 | ⬜ pending |
+| 09-01-T1 | 09-01 | 1 | FORM-09 | — | новый макрос-обёртка — документированный, без контекста, без `\|safe`; запись в `COMPONENT_CALLS` | gate | `uv run pytest tests/test_templates/test_components.py -q` | ✅ частично | ⬜ pending |
+| 09-03-T1 | 09-03 | 3 | FORM-09 | T-9-12 | каждый `hx-post` рождён компонентным макросом; перечень исключений утверждается ЧИСЛОМ (D-03) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k born_of_a_component_macro -x` | ❌ W0 | ⬜ pending |
+| 09-01-T3 | 09-01 | 1 | QUAL-01 | — | `hx-disabled-elt` присутствует и целится как объявлено; исключения перечнем с числом, обоснование называет цену отмены QUAL-06 (D-06) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k disabled_elt -x` | ❌ W0 | ⬜ pending |
+| 09-02-T3 | 09-02 | 2 | QUAL-01 | — | кнопка Отмены панели подтверждения не блокируется никогда | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k cancel_is_never_disabled -x` | ❌ W0 | ⬜ pending |
+| 09-01-T3 | 09-01 | 1 | QUAL-02 | — | `hx-indicator` присутствует; класс и порог в `app.css`; имя класса ≠ `htmx-indicator` (⚠️ Pitfall 3) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k indicator -x` | ❌ W0 | ⬜ pending |
+| 09-01-T1 | 09-01 | 1 | QUAL-06 | — | чекбокс несёт стабильный `id` в разметке фрагмента | integration | `uv run pytest tests/test_pages/test_account_groups.py -k fragment_keeps_the_toggle_id -x` | ❌ W0 | ⬜ pending |
+| 09-04-T1 | 09-04 | 3 | QUAL-02 | T-9-15 | плашка обрыва связи называет расхождение экрана с сервером (D-16) | gate | `uv run pytest tests/test_pages/test_shell.py -k network_banner_names -x` | ❌ W0 | ⬜ pending |
+| 09-03-T3 | 09-03 | 3 | — | T-9-14 | восемь инвентарных чисел сдвинуты, четыре подтверждены неподвижными (включая литерал `len(paths)`) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_pages/test_htmx_gates.py -q` | ✅ (числа править) | ⬜ pending |
+| 09-01-T1, 09-02-T1 | 09-01, 09-02 | 1, 2 | — | T-9-03 | G-2: у переведённых обработчиков нет собственного `RedirectResponse` | gate | `uv run pytest tests/test_pages/test_htmx_gates.py -k own_redirect -x` | ✅ (впервые с предметом) | ⬜ pending |
+| 09-03-T2 | 09-03 | 3 | — | T-9-13 | D-08: внутри шаблона, объявляющего цель подмены, допустим только голый `x-data` | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k client_state_expression -x` | ❌ W0 | ⬜ pending |
+| 09-02-T2 | 09-02 | 2 | — | T-9-09 | G-11 закрыт ИЗМЕРЕНИЕМ; выбранная ветвь несёт третий тест, не дающий перечню превратиться в ложь | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -k "two_role or parametric" -q` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -73,16 +76,23 @@ created: 2026-08-29
 
 ## Wave 0 Requirements
 
-Каркаса тестов заводить **не нужно**: фреймворк, фикстуры (`htmx_client`) и обе парные спецификации уже существуют. Wave 0 — это недостающие УТВЕРЖДЕНИЯ, а не инфраструктура.
+Каркаса тестов заводить **не нужно**: фреймворк, фикстуры (`htmx_client`) и обе парные спецификации уже существуют. Wave 0 — это недостающие УТВЕРЖДЕНИЯ, а не инфраструктура. Каждый пункт привязан к задаче, внутри которой он пишется **до** правки предмета (TDD-порядок: число и пара двигаются первыми, разметка делает их зелёными).
 
-- [ ] `tests/test_pages/test_account_groups.py` — пары `htmx_client` для `account_groups_toggle` и `account_groups_delete` по канонической форме D-16 Фазы 8
-- [ ] `tests/test_pages/test_account_groups.py` — «OOB-узлы верхнего уровня» и «ответ тумблера без второй панели»
-- [ ] `tests/test_templates/test_htmx_markup_gates.py` — переписать `test_toggle_is_a_real_post_form` под `hx-trigger="change"` (⚠️ Pitfall 9 — сегодня тест требует `x-on:change`, который снимает D-05), сохранив предмет
-- [ ] `tests/test_templates/test_htmx_markup_gates.py` — перечни и числа исключений: G-11 (§1.3), `hx-disabled-elt` (D-06), «рождён макросом» (D-03), места определения макросов (§2.5 β)
-- [ ] `tests/test_templates/test_htmx_markup_gates.py` — гейт D-08 (граница Alpine) плюс его случай контроля
-- [ ] `tests/test_templates/test_components.py:576-596` — запись нового макроса в `COMPONENT_CALLS`
-- [ ] Восемь инвентарных чисел (§3 разведки), включая литерал `len(paths) == 2` → 3 в `test_htmx_markup_gates.py:908`
-- [ ] Случаи контроля на каждое новое правило — без них правило зелено по построению (раздел «ГРУППА КОНТРОЛЯ», `test_htmx_markup_gates.py:1382-1409`)
+- [ ] **09-01-T1** — `tests/test_pages/test_account_groups.py`: пары `htmx_client` для `account_groups_toggle` по канонической форме D-16 Фазы 8; «ответ тумблера без второй панели»; «фрагмент несёт `id` чекбокса»; пара к `test_toggle_does_not_trust_the_account_id_from_the_url`
+- [ ] **09-01-T1** — `tests/test_templates/test_htmx_markup_gates.py`: переписать `test_toggle_is_a_real_post_form` под `hx-trigger="change"` (⚠️ Pitfall 9), сохранив вторую половину дословно
+- [ ] **09-01-T1** — перечень `MACRO_DEFINITION_SITES` (§2.5 β) с числом, обоснованием и компенсацией `test_every_macro_definition_site_is_a_component`
+- [ ] **09-01-T1** — запись нового макроса в `COMPONENT_CALLS` (`tests/test_templates/test_components.py:576-596`)
+- [ ] **09-01-T2** — «OOB-узлы верхнего уровня» и «долгоживущая область подменяется содержимым» (D-12) + два контроля
+- [ ] **09-01-T3** — перечень `DISABLED_ELT_EXCEPTIONS` (D-06) с числом и ценой отмены QUAL-06 словами; два гейта индикатора + контроль
+- [ ] **09-02-T1** — пары `htmx_client` для `account_groups_delete`; «удаление последней группы → 204 + `HX-Location`»; пара к `test_delete_does_not_trust_the_account_id_from_the_url`
+- [ ] **09-02-T2** — G-11: измерение пересечения и по его результату — `ID_IN_TWO_ROLES_BY_DESIGN` (§1.3) либо `PARAMETRIC_SWAP_TARGETS` с несущим правилом «цель либо литеральная, либо объявленная параметрическая»
+- [ ] **09-02-T3** — гейт «кнопка Отмены не блокируется никогда» + контроль
+- [ ] **09-03-T1** — перечень `MACRO_BORN_EXCEPTIONS` (D-03) с числом + контроль
+- [ ] **09-03-T2** — гейт D-08 (граница Alpine, вариант D-08a) + контроль
+- [ ] **09-03-T3** — восемь инвентарных чисел, включая литерал `len(paths)` в `test_htmx_markup_gates.py:909`; положительный контроль читает все новые константы
+- [ ] **09-04-T1** — `tests/test_pages/test_shell.py`: `test_the_network_banner_names_the_screen_server_divergence` с ожиданием, выписанным строкой в тесте
+
+⚠️ **Случаи контроля на каждое новое правило обязательны** (раздел «ГРУППА КОНТРОЛЯ», `test_htmx_markup_gates.py:1383-1434`): без них правило зелено по построению и не доказывает ничего. `_tree_with` несёт двойной предохранитель — образец подстановки обязан встретиться ровно один раз, и результат обязан отличаться от исходника.
 
 ---
 
