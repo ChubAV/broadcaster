@@ -1091,30 +1091,60 @@ async def test_schedule_count_ignores_foreign_schedules(
     assert "в 1 расписании" in html, "подпись завышена чужим расписанием"
 
 
-# --- Синхронность двух разметок сентинела ------------------------------------
+# --- Единственность источника разметки сентинела ------------------------------
+
+SENTINEL_SOURCE = "account_groups/includes/sentinel.html"
+
+# Места, зовущие сентинел: страница, порция прокрутки и ответ удаления. Перечень
+# выписан здесь, а не выведен обходом: место, ПЕРЕСТАВШЕЕ звать общий макрос,
+# обязано быть замечено, а обход, собирающий вызывающих по факту вызова, о таком
+# месте промолчал бы — оно просто выпало бы из собранного множества.
+SENTINEL_CALLERS = (
+    "account_groups/list.html",
+    "account_groups/partial_cards.html",
+    "account_groups/partials/delete_response.html",
+)
 
 
-@pytest.mark.asyncio
-async def test_sentinel_markup_is_identical_in_both_templates():
-    """Сентинел страницы и сентинел порции — одна и та же строка разметки.
+def test_the_sentinel_markup_has_exactly_one_source():
+    """Разметка сентинела существует в дереве ровно в ОДНОМ файле (план 09-05).
 
-    Расхождение проявляется только у того, кто долистал до второй порции:
-    первая страница остаётся исправной.
+    ⚠️ ЧТО ИМЕННО УСИЛИЛОСЬ И ПОЧЕМУ ПРЕЖНЯЯ ФОРМА ЗАКРЫТА. Прежде здесь стояло
+    `test_sentinel_markup_is_identical_in_both_templates`: оно сравнивало ДВЕ
+    копии разметки строка в строку и говорило ровно то, что копий две и они
+    совпадают. Утверждение было верно ровно до появления ТРЕТЬЕГО места
+    отрисовки — ответа удаления. Попарное сравнение двух файлов при трёх копиях
+    осталось бы ЗЕЛЁНЫМ и при разъехавшейся третьей, то есть перестало бы быть
+    утверждением о единственности, не покраснев ни разу. Прежнее имя сохранить
+    нельзя: оно говорит о двух копиях, которых больше нет.
+
+    Теперь копий нет вовсе, и это утверждается СЧЁТОМ ФАЙЛОВ, несущих разметку,
+    плюс проверкой, что все три места зовут один и тот же источник.
     """
-    page = (TEMPLATES_DIR / "account_groups" / "list.html").read_text(encoding="utf-8")
-    partial = (TEMPLATES_DIR / "account_groups" / "partial_cards.html").read_text(
-        encoding="utf-8"
+    carriers = sorted(
+        path.relative_to(TEMPLATES_DIR).as_posix()
+        for path in TEMPLATES_DIR.rglob("*.html")
+        if "group-list-sentinel" in _sentinel_ids(path.read_text(encoding="utf-8"))
     )
 
-    page_sentinel = [line.strip() for line in page.splitlines() if "hx-get=" in line]
-    partial_sentinel = [
-        line.strip() for line in partial.splitlines() if "hx-get=" in line
-    ]
-
-    assert page_sentinel, "сентинел исчез из list.html"
-    assert page_sentinel == partial_sentinel, (
-        "разметка сентинела разошлась между страницей и порцией прокрутки"
+    assert carriers == [SENTINEL_SOURCE], (
+        f"разметка сентинела списка групп лежит в файлах {carriers}, а обязана "
+        f"лежать ровно в одном ({SENTINEL_SOURCE}) — копии разъезжаются молча, "
+        f"и видит это только тот, кто долистал до второй порции"
     )
+
+    for caller in SENTINEL_CALLERS:
+        source = (TEMPLATES_DIR / caller).read_text(encoding="utf-8")
+        assert SENTINEL_SOURCE in source and "sentinel(" in source, (
+            f"{caller} перестал звать общий макрос сентинела — место отрисовки "
+            f"обзавелось собственной разметкой курсора"
+        )
+
+    for screen in ("account_groups/list.html", "account_groups/partial_cards.html"):
+        source = (TEMPLATES_DIR / screen).read_text(encoding="utf-8")
+        assert not _sentinel_ids(source), (
+            f"в {screen} вернулась собственная разметка сентинела"
+        )
 
 
 # =============================================================================
@@ -2722,6 +2752,13 @@ async def test_the_delete_response_repairs_the_sentinel_only_over_htmx(
     Половина пары SP-3: путь деградации не тронут вовсе, и присланное поле его
     не переключает — без признака htmx ответом остаётся прежнее
     перенаправление, даже если поле в теле есть.
+
+    ⚠️ ПРИЗНАК htmx СНИМАЕТСЯ ЯВНО ПУСТЫМ ЗНАЧЕНИЕМ ЗАГОЛОВКА, А НЕ ВЫБОРОМ
+    ФИКСТУРЫ, И ЭТО ВЫНУЖДЕННО. `htmx_client` возвращает ТОТ ЖЕ объект клиента,
+    что и `authed_client` (см. её докстринг: складываемость фикстур — несущее
+    свойство), поэтому в тесте, запросившем обе, запроса без признака не бывает
+    вовсе. Пустое значение считается отсутствием признака ЯВНО и по объявлению
+    (`app/pages/htmx.py::is_htmx`), а не по совпадению.
     """
     account = await _seed_account(db_session)
     await _seed_many(
@@ -2758,6 +2795,7 @@ async def test_the_delete_response_repairs_the_sentinel_only_over_htmx(
     degraded = await authed_client.post(
         f"/accounts/{account.id}/groups/{neighbour}/delete",
         data={"rendered_rows": len(rendered)},
+        headers={"HX-Request": ""},
         follow_redirects=False,
     )
     assert degraded.status_code == 302, (

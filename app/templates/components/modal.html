@@ -89,6 +89,22 @@
    местах. Перевод всех мест — предмет ОТДЕЛЬНОЙ фазы (FORM-06), у которой
    тогда останется предмет: сегодняшнее умолчание.
 
+   ДОПОЛНИТЕЛЬНЫЕ ДАННЫЕ ЗАПРОСА — ОПЦИОНАЛЬНЫЙ ПАРАМЕТР `hx_include` (Фаза 9,
+   план 09-05). Потребитель у него ровно ОДИН — удаление группы аккаунта, — и
+   он забирает из ЖИВОГО документа число строк, которые экран показывает прямо
+   сейчас: без него ответ удаления не может починить курсор бесконечной
+   прокрутки, потому что сервер не знает, докуда список дочитан. Значение
+   читается В МОМЕНТ ЗАПРОСА, и именно поэтому число, запечённое при отрисовке
+   строки, сюда не годится: строка первой порции и строка второй дали бы разные
+   ответы на одно и то же действие. При непереданном параметре — а это
+   умолчание — разметка панели не меняется ни на символ.
+
+   ⚠️ НАСЛЕДОВАНИЕ ЭТОГО ПРИЗНАКА С ПРЕДКА ЗАПРЕЩЕНО И ЗАПРЕЩЕНО ОСОЗНАННО.
+   Признак читается рантаймом по ближайшему предку, поэтому навешенный на
+   контейнер списка он молча прицепил бы поле ко ВСЕМ htmx-запросам внутри
+   списка, включая тумблер, — невидимо на месте вызова. Фазы 10-15 унаследовали
+   бы наследование, которого не объявляли.
+
    ПОЧЕМУ У ЭТОЙ ФОРМЫ НЕТ ЦЕЛИ ПОДМЕНЫ, А ЕСТЬ `hx-swap="none"`. Ответ
    удаления не подменяет ничего собой: он несёт только внеполосные узлы. При
    `hx-target` этот макрос обязан был бы знать цель КАЖДОГО из шестнадцати
@@ -109,7 +125,7 @@
     новые атрибуты. Все вызовы проекта передают сюда первичные ключи и
     позиции — то есть цифры; величина, пришедшая от пользователя или из тела
     внешней очереди, ключом панели быть не может (WR-04 ревизии фазы 6). -#}
-{% macro modal(id, title, action, confirm_label, body=None, cancel_label="Отмена", confirm_variant="danger", method="post", hx_post=false) -%}
+{% macro modal(id, title, action, confirm_label, body=None, cancel_label="Отмена", confirm_variant="danger", method="post", hx_post=false, hx_include=None) -%}
 <div class="modal" id="{{ id }}" x-cloak
      x-data="{
        open: false,
@@ -130,7 +146,7 @@
     <h2 class="modal__title" id="{{ id }}-title">{{ title }}</h2>
     <form class="modal__form" method="{{ method }}" action="{{ action }}"
           x-on:submit="if (sending) { $event.preventDefault(); return; } sending = true"
-          {%- if hx_post %} hx-post="{{ action }}" hx-swap="none" hx-disabled-elt="find button[type=submit]" hx-indicator="find .form-busy"{% endif %}>
+          {%- if hx_post %} hx-post="{{ action }}" hx-swap="none" hx-disabled-elt="find button[type=submit]" hx-indicator="find .form-busy"{% if hx_include %} hx-include="{{ hx_include }}"{% endif %}{% endif %}>
       {%- if body %}<p class="modal__text">{{ body }}</p>{% endif %}
       {%- if caller is defined %}{{ caller() }}{% endif %}
       {%- if hx_post %}<span class="form-busy" aria-hidden="true"></span>{% endif %}
