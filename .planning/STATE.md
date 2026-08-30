@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 09
 current_phase_name: Пилот на `account_groups` — сквозной контракт формы
 status: executing
-stopped_at: Phase 09 — все 9 планов исполнены; верификация gaps_found (DIV-09-01, DIV-09-02)
-last_updated: "2026-08-30T18:15:19.721Z"
+stopped_at: Completed 09-10-PLAN.md
+last_updated: "2026-08-30T20:36:51.249Z"
 last_activity: 2026-08-30
-last_activity_desc: Phase 09 plan 09-09 complete — обход проведён, решение D-06 применено (option-b), два расхождения записаны
-state_head: 005b25a7f094c9fbdbd754db1aeb4810f49dc05a
+last_activity_desc: Phase 09 execution started
+state_head: e3489dd671ccd0e6ca299a7c2ed88a99af2902c9
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 30
-  completed_plans: 27
+  completed_plans: 28
   percent: 22
 ---
 
@@ -25,7 +25,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-29)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 09 — Пилот на account_groups — сквозной контракт формы
+**Current focus:** Phase 09 — Пилот на `account_groups` — сквозной контракт формы
 
 **Пройдено в вехе v2.1: Фазы 7 и 8** (18 планов). Фаза 8 закрыта 2026-08-29 — 11/11 планов, верификация `passed`, UAT 9/9, `threats_open: 0`.
 
@@ -35,12 +35,12 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 09 (Пилот на `account_groups` — сквозной контракт формы) — READY TO EXECUTE
-Plan: 9 of 9
+Phase: 09 (Пилот на `account_groups` — сквозной контракт формы) — EXECUTING
+Plan: 2 of 12
 Total Plans in Phase: 12
 Completed Plans in Phase: 9
-Status: Phase 09 — исполнение завершено, верификация `gaps_found`
-Last activity: 2026-08-30 — Phase 09 plan 09-09 complete (обход, решение D-06, два расхождения)
+Status: Ready to execute
+Last activity: 2026-08-30 — Phase 09 execution started
 
 Progress: [████████████████████] 27/27 plans ([██░░░░░░░░] 22%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: 2/9 (22%) — Фаза 09 НЕ засчитана: верификация `gaps_found`.
 
@@ -87,6 +87,7 @@ Progress: [████████████████████] 27/27 p
 |------|----------|-------|-------|
 | Phase 05 P21 | 38min | 3 tasks | 3 files |
 | Phase 05.1 P02 | 21min | 2 tasks | 2 files |
+| Phase 09 P10 | 1h 33m | 4 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -142,6 +143,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - Phase 08: одиночность процесса приложения стала МАШИННЫМ фактом (`tests/test_infra/test_web_service_is_single_process.py`) — удержание `_RETRY_IN_FLIGHT` верно ровно при одном процессе, и это свойство развёртывания, а не кода.
 - Phase 08 (UAT 2026-08-29): 9/9 пунктов ручной проверки закрыты `pass`; четыре из них — решения владельца об ОТКЛАДЫВАНИИ (плашки аварии не прячутся обратно, CR-01, четвёртый реестр `QUEUE_DROP_RESULTS`, граница пакета гейтов). Перечень — PROJECT.md §Active.
 - Phase 08 (безопасность 2026-08-29): `08-SECURITY.md` собран из `<threat_model>` одиннадцати планов — 52 строки реестра, `threats_open: 0` при ASVS L1 и `block_on: high`, 7 принятых рисков (R-08-01…R-08-07).
+- [Phase 09]: План 09-10: владелец выбрал ветвь record-kind — макрос-обёртка печатает цель блокировки только при переданном значении, вызов формы тумблера передаёт пустую цель — Тег макроса правится дешевле всего, пока его использует ОДНА форма; после Фазы 11, раздающей макрос сорока семи формам, та же правка задела бы каждую. Измеренная цена варианта real-target (отмена QUAL-06, измерение 3.3) не принята
+- [Phase 09]: План 09-10: обе строки консоли расхождений DIV-09-01 и DIV-09-02 НАБЛЮДЕНЫ в живом браузере до правки (Chrome / macOS, 2026-08-30) — Чтение исходника при приёмке 09-09 подтверждено глазом: РАСХ-2 существует, вариант no-divergence отпал по факту. Повторное наблюдение ПОСЛЕ правки не проводилось и остаётся предметом приёмки фазы
 
 ### Pending Todos
 
@@ -320,9 +323,9 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-08-29T13:52:54.288Z
-Stopped at: Phase 9 context gathered
-Resume file: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-CONTEXT.md
+Last session: 2026-08-30T20:36:49.474Z
+Stopped at: Completed 09-10-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 
