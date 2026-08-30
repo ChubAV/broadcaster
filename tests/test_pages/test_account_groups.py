@@ -23,7 +23,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 from httpx import AsyncClient
@@ -2848,3 +2848,219 @@ async def test_the_sentinel_carries_a_stable_id_in_both_templates(
         f"{in_response} против {on_page} — починка курсора целится в узел, "
         f"которого в документе нет, и рантайм промолчит об этом"
     )
+
+
+# =============================================================================
+# План 09-05, Задача 3: новое поле не тронуло ни деградацию, ни неотличимость
+# =============================================================================
+#
+# Поле `rendered_rows` существует ТОЛЬКО на пути htmx: живой документ несёт его
+# скрытым полем внутри сентинела, а человек без JavaScript отправляет ту же
+# форму без него. Обе половины закрепляются машинно — и обе именно здесь, а не
+# рассуждением о том, что «сервер и так проверит».
+
+
+def _search_param(url: str) -> list[str] | None:
+    """Строка поиска, доехавшая до адреса подгрузки, — или None, если её нет."""
+    return parse_qs(urlsplit(url).query).get("search")
+
+
+@pytest.mark.asyncio
+async def test_the_delete_degrades_without_the_rendered_rows_field(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Без признака htmx и без нового поля удаление отвечает как прежде.
+
+    Половина пары SP-3 к тестам починки курсора: поле, заведённое ради htmx,
+    не имеет права стать обязательным. Фикстура здесь ОДНА намеренно —
+    `htmx_client` возвращает тот же объект клиента и выставил бы признак htmx
+    всему тесту.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа деградации курсора")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 302, (
+        f"запрос без признака htmx и без поля числа строк получил "
+        f"{response.status_code} — путь деградации стал требовать поля, "
+        f"которого у человека без JavaScript нет вовсе"
+    )
+    assert response.headers["location"] == f"/accounts/{account.id}/groups"
+    assert not response.text, (
+        "на пути деградации собралось тело фрагмента — страница и так "
+        "перестраивается целиком"
+    )
+    assert (await db_session.get(Group, group.id)) is None, (
+        "удаление на базовом пути не состоялось"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_repaired_sentinel_keeps_the_search_filter(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Починенный сентинел дочитывает ОТФИЛЬТРОВАННУЮ выдачу, а не весь список.
+
+    Потерянная строка поиска не роняет страницу и не меняет кода ответа: она
+    молча подмешивает к найденному остальной список аккаунта, и человек видит в
+    выдаче поиска чужие по смыслу строки.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(
+        db_session, account, [f"Альфа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+    await _seed_many(db_session, account, [f"Бета {i:02d}" for i in range(5)])
+
+    page = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": "Альфа"}
+        )
+    ).text
+
+    # НЕВАКУУМНОСТЬ ПЕРВЫМ ДЕЛОМ: без сентинела на странице сравнивать было бы
+    # нечего, и утверждение о фильтре стало бы зелёным по построению.
+    page_sentinels = _sentinels(page)
+    assert page_sentinels, (
+        "сентинела нет на отфильтрованной странице — поиск отсёк выдачу до "
+        "размера страницы, и утверждение о фильтре сравнивать не с чем"
+    )
+    assert _search_param(page_sentinels[0]) == ["Альфа"], (
+        f"строка поиска не доехала до адреса сентинела страницы: "
+        f"{page_sentinels[0]}"
+    )
+
+    rendered = _row_ids(page)
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{rendered[0]}/delete",
+        data={"rendered_rows": len(rendered), "search": "Альфа"},
+    )
+    repaired = _sentinels(response.text)
+    assert repaired, "ответ удаления не принёс починенного сентинела"
+
+    assert _search_param(repaired[0]) == _search_param(page_sentinels[0]), (
+        f"после удаления сентинел дочитывает НЕотфильтрованный список: "
+        f"{repaired[0]} против {page_sentinels[0]} — в выдаче поиска появятся "
+        f"строки, которых человек не искал"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_delete_response_is_indistinguishable_for_a_foreign_and_a_missing_group(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """D-04 (в редакции D-04-A): чужая и несуществующая группа отвечают одинаково.
+
+    ⚠️ ПОСЕВ «ЧУЖАЯ ГРУППА ЕСТЬ, СВОИХ НЕТ» ЗАПРЕЩЁН, И ЭТО ЛОВУШКА, А НЕ
+    ПРИДИРКА. Он уводит ОБА запроса в ветку опустевшего списка — она отвечает
+    переходом с ПУСТЫМ телом, и тогда два пустых тела равны побайтово, два
+    статуса равны, два заголовка равны, а фрагмент не собирается ни разу.
+    Ровно этот отказ фаза уже допустила однажды (09-REVIEW.md §WR-04:
+    `first=204 body=b'' second=204 body=b''`). Поэтому у действующего человека
+    заведены СВОИ группы, и после обоих запросов у него остаётся не меньше
+    одной: ни один из двух запросов ничего не удаляет.
+
+    ⚠️ ПОРЯДОК УТВЕРЖДЕНИЙ ВАЖНЕЕ САМОГО СРАВНЕНИЯ. Достижение фрагментной
+    ветки утверждается ПЕРВЫМ исполняемым утверждением; без него равенство тел
+    вакуумно.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+    rendered_rows = PAGE_SIZE
+
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Чужая группа", user_id=foreign_user.id
+    )
+    missing_id = max([group.id for group in seeded] + [foreign_group.id]) + 1000
+
+    body = {"rendered_rows": rendered_rows}
+    foreign = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{foreign_group.id}/delete", data=body
+    )
+    missing = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{missing_id}/delete", data=body
+    )
+
+    # ПЕРВОЕ ИСПОЛНЯЕМОЕ УТВЕРЖДЕНИЕ — О ДОСТИГНУТОЙ ФРАГМЕНТНОЙ ВЕТКЕ.
+    assert foreign.status_code == 200, (
+        f"фрагментная ветка не достигнута: ответ {foreign.status_code} вместо "
+        f"200 — без неё равенство тел ниже вакуумно, потому что сравнивало бы "
+        f"два пустых тела ветки перехода"
+    )
+    assert f'id="group-row-{foreign_group.id}"' in foreign.text, (
+        "в теле первого ответа нет узла снятия строки — сравнивать нечего, и "
+        "равенство тел ниже было бы зелено по построению"
+    )
+
+    assert missing.status_code == foreign.status_code, (
+        "чужая и несуществующая группа различимы по коду ответа"
+    )
+    assert missing.headers.get("HX-Location") == foreign.headers.get("HX-Location"), (
+        "чужая и несуществующая группа различимы по адресу перехода"
+    )
+
+    # ⚠️ ПОДСТАНОВКА ИДЕНТИФИКАТОРА ЗАКОННА, И ВОТ ПОЧЕМУ. Он приходит из ПУТИ,
+    # то есть назван САМИМ спрашивающим; два разных случая одним и тем же
+    # идентификатором не адресуются в принципе. Подставляются ровно два якоря, а
+    # не всякое вхождение числа, — иначе замена задела бы соседние величины.
+    substituted = foreign.text.replace(
+        f'id="group-row-{foreign_group.id}"', f'id="group-row-{missing_id}"'
+    ).replace(f'id="group-del-{foreign_group.id}"', f'id="group-del-{missing_id}"')
+
+    assert substituted == missing.text, (
+        "чужая и несуществующая группа различимы ПО ТЕЛУ ответа — по ответу "
+        "можно составить карту чужих идентификаторов перебором по адресу, не "
+        "получив ни одной строки"
+    )
+    assert (await db_session.get(Group, foreign_group.id)) is not None, (
+        "чужая группа удалена"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_non_positive_rendered_rows_does_not_build_a_sentinel(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Ноль и отрицательное число строк не строят курсор вовсе (T-09-05-01).
+
+    Величина приходит от НЕДОВЕРЕННОГО клиента. Отрицательное смещение в адресе
+    подгрузки — это либо отказ маршрута (`offset` объявлен неотрицательным),
+    либо молча съехавшая выдача; ни то ни другое не должно стать следствием
+    присланного числа.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+
+    for value, victim in ((0, seeded[0]), (-5, seeded[1])):
+        response = await htmx_client.post(
+            f"/accounts/{account.id}/groups/{victim.id}/delete",
+            data={"rendered_rows": value},
+        )
+
+        assert response.status_code == 200, (
+            f"rendered_rows={value} уронил обработчик: {response.status_code}"
+        )
+        assert response.text.count("hx-swap-oob") == 3, (
+            f"при rendered_rows={value} ответ несёт "
+            f"{response.text.count('hx-swap-oob')} внеполосных узла вместо "
+            f"трёх — курсор построен по вырожденному числу"
+        )
+        assert not _sentinels(response.text), (
+            f"при rendered_rows={value} ответ подменил сентинел"
+        )
+        assert "offset=-" not in response.text, (
+            f"при rendered_rows={value} в адрес подгрузки уехало отрицательное "
+            f"смещение — маршрут ответит отказом, и список молча оборвётся"
+        )
+        assert (await db_session.get(Group, victim.id)) is None, (
+            f"при rendered_rows={value} удаление не состоялось — вырожденное "
+            f"число повлияло на действие, а не только на курсор"
+        )
