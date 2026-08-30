@@ -6,14 +6,14 @@ current_phase: 09
 current_phase_name: Пилот на `account_groups` — сквозной контракт формы
 status: executing
 stopped_at: Phase 9 context gathered
-last_updated: "2026-08-29T15:40:00.372Z"
+last_updated: "2026-08-30T06:41:29.059Z"
 last_activity: 2026-08-29
 last_activity_desc: Phase 09 execution started
-state_head: df3ac95856b084cdf0ccacc3ad3168db9b4c1d33
+state_head: 21cbc6af787f8a98c072fa1ad40daa72f7554fb9
 progress:
   total_phases: 9
   completed_phases: 2
-  total_plans: 22
+  total_plans: 27
   completed_plans: 22
   percent: 22
 ---
@@ -35,11 +35,11 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 09 (Пилот на `account_groups` — сквозной контракт формы) — EXECUTING
+Phase: 09 (Пилот на `account_groups` — сквозной контракт формы) — READY TO EXECUTE
 Plan: 1 of 4
-Total Plans in Phase: 4
+Total Plans in Phase: 9
 Completed Plans in Phase: 0
-Status: Executing Phase 09
+Status: Ready to execute
 Last activity: 2026-08-29 — Phase 09 execution started
 
 Progress: [████████████████████] 18/18 plans (100%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7 и 8); Фазы 9…15 ещё не спланированы. По фазам вехи: 2/9 (22%).
@@ -308,7 +308,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Executing Phase 09
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Ready to execute
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
