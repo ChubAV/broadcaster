@@ -175,17 +175,15 @@
     он будет так же, как молчит о ненайденной цели любого другого свопа.
     Абзац написан затем, чтобы следующий читатель, увидев пустой div в
     отрендеренном документе, не снял его как мусор и не сломал этим подмену
-    счётчика на обоих действиях экрана. -#}
-<div id="account-groups-count">
-{% if total_groups %}
-<div class="count-rule">
-  {{ mono(active_groups ~ ' ' ~ plural_ru(active_groups, 'активная', 'активные', 'активных') ~
-          ' из ' ~ total_groups ~ ' ' ~ plural_ru(total_groups, 'группы', 'групп', 'групп')) }}
-  <span class="count-rule__line" aria-hidden="true"></span>
-  {{ mono('ВЫКЛЮЧЕННЫЕ ГРУППЫ ПРОПУСКАЮТСЯ ПРИ РАССЫЛКЕ', upper=true) }}
-</div>
-{% endif %}
-</div>
+    счётчика на обоих действиях экрана.
+
+    ⚠️ РАЗМЕТКА ВНУТРИ ОБЩАЯ С ВНЕПОЛОСНЫМ УЗЛОМ ОТВЕТОВ И ПРАВИТСЯ В ОДНОМ
+    МЕСТЕ — account_groups/includes/count_rule.html (план 09-07, WARN-1/WR-01).
+    До этого страница несла собственную копию, и правка формулировки здесь
+    разводила линейку после действия с линейкой после перезагрузки молча.
+    Правило `test_the_counter_rule_markup_has_exactly_one_source` краснеет и на
+    возвращённой сюда копии, и на потерянном включении. -#}
+<div id="account-groups-count">{% include "account_groups/includes/count_rule.html" %}</div>
 
 {% if groups %}
 {{ card_open() }}
