@@ -5,15 +5,15 @@ milestone_name: HTMX-first
 current_phase: 09
 current_phase_name: Пилот на `account_groups` — сквозной контракт формы
 status: executing
-stopped_at: "Phase 09 — все 9 планов исполнены; верификация gaps_found (DIV-09-01, DIV-09-02)"
-last_updated: "2026-08-30T17:15:24.000Z"
+stopped_at: Phase 09 — все 9 планов исполнены; верификация gaps_found (DIV-09-01, DIV-09-02)
+last_updated: "2026-08-30T18:15:19.721Z"
 last_activity: 2026-08-30
-last_activity_desc: "Phase 09 plan 09-09 complete — обход проведён, решение D-06 применено (option-b), два расхождения записаны"
-state_head: d42e383aa6a269c13b800bf61557e8f484d1be1d
+last_activity_desc: Phase 09 plan 09-09 complete — обход проведён, решение D-06 применено (option-b), два расхождения записаны
+state_head: 005b25a7f094c9fbdbd754db1aeb4810f49dc05a
 progress:
   total_phases: 9
   completed_phases: 2
-  total_plans: 27
+  total_plans: 30
   completed_plans: 27
   percent: 22
 ---
@@ -35,9 +35,9 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 09 (Пилот на account_groups — сквозной контракт формы) — EXECUTING
+Phase: 09 (Пилот на `account_groups` — сквозной контракт формы) — READY TO EXECUTE
 Plan: 9 of 9
-Total Plans in Phase: 9
+Total Plans in Phase: 12
 Completed Plans in Phase: 9
 Status: Phase 09 — исполнение завершено, верификация `gaps_found`
 Last activity: 2026-08-30 — Phase 09 plan 09-09 complete (обход, решение D-06, два расхождения)
@@ -315,7 +315,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Executing Phase 09
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Ready to execute
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
