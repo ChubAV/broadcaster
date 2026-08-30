@@ -2444,10 +2444,26 @@ def _declaration(body: str, prop: str) -> str | None:
     return None
 
 
-def _is_zero(time: str | None) -> bool:
+def _seconds(time: str | None) -> float:
+    """Время CSS в секундах. Непроставленное время — ноль.
+
+    Единицы приводятся ЗДЕСЬ, а не сравнением строк, потому что `300ms` и `.3s`
+    — одна и та же величина, записанная двумя способами. Сверка порога,
+    сделанная посимвольно, покраснела бы на косметической перезаписи и
+    промолчала бы там, где величина действительно уехала.
+    """
     if time is None:
-        return True
-    return float(time.rstrip("ms").rstrip("s") or 0) == 0
+        return 0.0
+    raw = time.strip()
+    if raw.endswith("ms"):
+        return float(raw[:-2] or 0) / 1000
+    if raw.endswith("s"):
+        return float(raw[:-1] or 0)
+    return float(raw or 0)
+
+
+def _is_zero(time: str | None) -> bool:
+    return _seconds(time) == 0
 
 
 def _offenders_runtime_indicator_class(css: str) -> dict[str, str]:
@@ -2530,6 +2546,26 @@ def _offenders_indicator_threshold(css: str) -> dict[str, str]:
             "задержка появления записана в правиле ПОКОЯ — она задержит и "
             "обратный ход, и индикатор повиснет ещё на порог ПОСЛЕ ответа"
         )
+
+    # ⚠️ ВЕЛИЧИНА ПОРОГА СВЕРЯЕТСЯ С ЗАПИСАННЫМ РЕШЕНИЕМ, А НЕ ТОЛЬКО НА
+    # НЕНУЛЕВОСТЬ, И БЕРЁТСЯ ОНА ИЗ ТЕЛА ПРАВИЛА СОСТОЯНИЯ «ЗАПРОС ИДЁТ».
+    # Счёт вхождений строки задержки по всему файлу стилей для этого НЕ
+    # годится и заводиться не должен: он считает и чужие задержки тоже,
+    # поэтому остаётся равным ровно тогда, когда порог индикатора уехал.
+    #
+    # Сверяются ОБЕ переключаемые величины: у них одно записанное решение, и
+    # разъехавшись, они дали бы индикатор, у которого одна половина появляется
+    # раньше другой.
+    if busy is not None:
+        for prop in ("opacity", "visibility"):
+            actual = _transition_delay(busy, prop)
+            if _seconds(actual) != _seconds(INDICATOR_VISIBILITY_THRESHOLD):
+                offenders[f"{busy_selector} [{prop}]"] = (
+                    f"порог появления {actual!r} разошёлся с записанным "
+                    f"решением {INDICATOR_VISIBILITY_THRESHOLD!r} (D-15): цена "
+                    f"обеих границ названа замерами, и менять величину без "
+                    f"новых замеров ручного обхода запрещено"
+                )
     return offenders
 
 
@@ -3240,10 +3276,10 @@ def test_the_indicator_class_is_self_sufficient(tmp_path: Path) -> None:
     )
 
 
-def test_the_indicator_class_carries_a_visibility_threshold() -> None:
+def test_the_indicator_class_carries_a_visibility_threshold(tmp_path: Path) -> None:
     """У индикатора есть порог появления, и он висит на состоянии «запрос идёт».
 
-    Утверждаются ТРИ вещи, и каждая — следствие проверенного факта:
+    Утверждаются ЧЕТЫРЕ вещи, и каждая — следствие проверенного факта:
 
     1. Селектор состояния СОСТАВНОЙ (``.<класс>.<класс-рантайма>``), а не
        потомковый. Рантайм вешает свой класс на САМ узел индикатора, найденный
@@ -3257,12 +3293,38 @@ def test_the_indicator_class_carries_a_visibility_threshold() -> None:
     3. У ПОКОЯ задержки появления нет — иначе она задержала бы и обратный ход, и
        индикатор висел бы ещё на порог ПОСЛЕ ответа, то есть врал бы о
        состоянии запроса.
+    4. ФАКТИЧЕСКАЯ величина задержки равна записанному решению (D-15), и равна
+       она у ОБЕИХ переключаемых величин. Ненулевости мало: уехавший на
+       полсекунды порог ненулевой ровно так же, а читается уже как «кнопка не
+       сработала».
+
+    ⚠️ ВЕЛИЧИНА БЕРЁТСЯ ИЗ ТЕЛА ПРАВИЛА, А НЕ СЧЁТОМ ВХОЖДЕНИЙ ПО ФАЙЛУ.
+    Счёт вхождений строки задержки по всему файлу стилей считает и чужие
+    задержки тоже — он остался бы равным ровно в тот момент, когда порог
+    индикатора уехал, то есть утверждал бы неподвижность чужих величин.
+
+    ⚠️ ЗУБЫ ДОКАЗЫВАЮТСЯ ПОДСТАНОВКОЙ ЗДЕСЬ ЖЕ, А НЕ ДВАДЦАТЬ ВТОРЫМ
+    КОНТРОЛЕМ: число контролей объявлено и утверждается. Живой файл стилей не
+    правится вовсе.
     """
     offenders = _offenders_indicator_threshold(_app_css())
     assert not offenders, (
         f"порог видимости индикатора объявлен неверно: {offenders} — индикатор "
         f"либо мигает на каждое нажатие, либо врёт о состоянии запроса после "
         f"ответа, либо его правило не срабатывает вовсе"
+    )
+
+    moved = _app_css(
+        _css_with(
+            tmp_path,
+            CSS_INDICATOR_BUSY_TRANSITION,
+            "transition: opacity .12s linear .45s, visibility 0s linear .45s;",
+        )
+    )
+    assert _offenders_indicator_threshold(moved), (
+        "порог индикатора уехал с записанного решения, и правило этого не "
+        "заметило — значит оно утверждает ненулевость, а не величину, и "
+        "зелёный цвет о величине не говорит ничего"
     )
 
 
@@ -4065,6 +4127,12 @@ CSS_INDICATOR_RESTING_OPEN = ".form-busy {\n  flex: none;"
 CSS_INDICATOR_RESTING_BOX = "  flex: none; display: inline-block;"
 CSS_INDICATOR_RESTING_TRANSITION = (
     "transition: opacity .12s linear 0s, visibility 0s linear .12s;"
+)
+# Опора сверки порога с записанным решением: тело правила состояния «запрос
+# идёт» целиком, потому что переключаются ОБЕ величины и уехать они обязаны
+# вместе — подстановка, двигающая одну, доказала бы половину.
+CSS_INDICATOR_BUSY_TRANSITION = (
+    "transition: opacity .12s linear .3s, visibility 0s linear .3s;"
 )
 
 FORM_OPEN = '<form id="ad-form"\n          method="post"\n'
