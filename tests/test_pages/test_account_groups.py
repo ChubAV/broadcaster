@@ -36,6 +36,13 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
 
+# Размер страницы берётся у обработчика, а не выписывается сюда числом: посев
+# «страница плюс хвост» обязан оставаться посевом «страница плюс хвост» и после
+# того, как экран когда-нибудь сменит размер страницы. Соседние тесты файла
+# сеют 35 строк литералом — они писались до появления курсорных утверждений и
+# переписывать их эта задача не обязана.
+from app.pages.account_groups import PAGE_SIZE
+
 # Якорь строки списка. Утверждать порядок по именам групп нельзя: у двух групп
 # с одинаковым именем они совпадают, а различить нужно именно строки.
 GROUP_ROW_RE = re.compile(r'id="group-row-(\d+)"')
@@ -2487,3 +2494,319 @@ async def test_polled_block_is_declared_exactly_once():
     assert "syncing" in source, "объявление опроса не обусловлено статусом"
     assert "group-del-" not in source, "панель подтверждения попала в блок подмены"
     assert "aria-live" in source, "завершение синхронизации не будет объявлено"
+
+
+# =============================================================================
+# План 09-05, Задача 1: курсор бесконечной прокрутки переживает удаление
+# =============================================================================
+#
+# ЧТО ЗДЕСЬ ЗАКРЕПЛЯЕТСЯ И ПОЧЕМУ ЭТО НЕ ВИДНО НИ ПО КОДУ ОТВЕТА, НИ ГЛАЗОМ.
+# Перевод удаления на фрагментный ответ (план 09-02) убрал полную перестройку
+# страницы, а вместе с ней — единственное, что чинило курсор бесконечной
+# прокрутки. Сентинел несёт АБСОЛЮТНОЕ смещение, запечённое в его адресе при
+# отрисовке; ответ удаления снимает строку, снимает панель и обновляет линейку,
+# но сентинела не касается. На 35 группах удаление первой строки делает
+# тридцать первую неотрисовываемой НИ ОДНОЙ из двух порций: статус 200, консоль
+# чистая, линейка честно говорит «34 групп», а на экране их 33.
+#
+# Обратная половина того же отказа — задвоение: курсор, уехавший назад там, где
+# с экрана ничего не снялось, отрисует одну строку ВТОРОЙ РАЗ. Обе половины
+# утверждаются, потому что починка «вычитать всегда единицу» лечит первую и
+# заводит вторую.
+
+# Тег сентинела целиком: идентификатор у него обязан быть, и он обязан быть
+# ОДНИМ И ТЕМ ЖЕ во всех трёх местах отрисовки. Признак срабатывания взят
+# якорем, а не идентификатор: тест, ищущий сразу идентификатор, не отличил бы
+# «сентинела нет вовсе» от «сентинел без идентификатора».
+SENTINEL_TAG_RE = re.compile(r'<[^<>]*hx-trigger="revealed"[^<>]*>')
+ID_IN_TAG_RE = re.compile(r'id="([^"]*)"')
+
+
+def _sentinel_ids(html: str) -> list[str]:
+    """Идентификаторы всех сентинелов разметки — по одному на тег."""
+    return [
+        found.group(1)
+        for tag in SENTINEL_TAG_RE.findall(html)
+        if (found := ID_IN_TAG_RE.search(tag))
+    ]
+
+
+def _scroll_read_on_url(page_html: str, delete_response: str) -> str:
+    """Адрес, по которому ЖИВОЙ документ пойдёт дочитывать список после ответа.
+
+    ⚠️ ПОМОЩНИК МОДЕЛИРУЕТ ДОКУМЕНТ, А НЕ ЧИТАЕТ АДРЕС ИЗ ОТВЕТА НАПРЯМУЮ, И
+    ЭТО НЕ ПОБЛАЖКА ТЕСТУ. Узел, который никто не подменил, остаётся стоять со
+    своим прежним адресом — ровно так отказ и воспроизводится в живом браузере.
+    Тест, читающий адрес только из ответа, на дереве без починки свалился бы
+    раньше утверждения об объединении и сообщил бы «в ответе нет сентинела»
+    вместо названных поимённо потерянных групп, то есть обвинил бы не то.
+    """
+    repaired = _sentinels(delete_response)
+    if repaired:
+        assert len(repaired) == 1, (
+            f"ответ удаления принёс не один адрес дочитывания, а {len(repaired)}: "
+            f"{repaired} — документ подменит сентинел дважды, и какой адрес "
+            f"останется, разметкой не задано"
+        )
+        return repaired[0]
+    on_page = _sentinels(page_html)
+    assert on_page, (
+        "сентинела нет ни в ответе удаления, ни на самой странице — дочитывать "
+        "список документу нечем, и посев теста короче страницы"
+    )
+    return on_page[0]
+
+
+@pytest.mark.asyncio
+async def test_the_scroll_cursor_survives_a_fragment_delete(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """CR-01: после фрагментного удаления список не теряет ни одной группы.
+
+    Объединение того, что уже отрисовано, и того, что дочитает сентинел,
+    обязано покрывать ВЕСЬ оставшийся список — без потерь и без повторов.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    rendered = _row_ids(page)
+    assert len(rendered) == PAGE_SIZE, (
+        f"страница отрисовала {len(rendered)} строк вместо {PAGE_SIZE} — посев "
+        "не создаёт условия, ради которого тест написан"
+    )
+    target = rendered[0]
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{target}/delete",
+        data={"rendered_rows": len(rendered)},
+    )
+    assert response.status_code == 200, (
+        f"запрос htmx получил {response.status_code} вместо фрагмента"
+    )
+
+    rest = await authed_client.get(_scroll_read_on_url(page, response.text))
+    assert rest.status_code == 200
+
+    on_screen = [group_id for group_id in rendered if group_id != target]
+    read_on = _row_ids(rest.text)
+    alive = {group.id for group in seeded} - {target}
+
+    lost = sorted(alive - (set(on_screen) | set(read_on)))
+    doubled = sorted(set(on_screen) & set(read_on))
+
+    assert not lost, (
+        f"после удаления строки список потерял группы: {lost} — их не "
+        f"отрисовала ни первая страница, ни порция, которую дочитает сентинел; "
+        f"человек не увидит их до перезагрузки, а линейка счётчика продолжит "
+        f"их считать"
+    )
+    assert not doubled, (
+        f"после удаления строка показана дважды: {doubled} — курсор уехал "
+        f"дальше, чем документ снял с экрана"
+    )
+    assert set(on_screen) | set(read_on) == alive, (
+        "объединение отрисованного и дочитанного не равно оставшемуся списку"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_no_op_delete_does_not_double_a_row(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Холостое удаление не двигает курсор ни на единицу (D-04-A, QUAL-01).
+
+    Обе половины класса «строка не найдена», достижимые с живого экрана,
+    проверяются в одном теле: чужая группа и уже удалённая. Третья половина —
+    вовсе несуществующий идентификатор — покрыта задачей 3.
+
+    ⚠️ ЭТОТ ТЕСТ — ЕДИНСТВЕННОЕ, ЧТО СТОИТ МЕЖДУ ПОЧИНКОЙ КУРСОРА И ЕЁ
+    ЗЕРКАЛЬНЫМ ОТКАЗОМ. Починка «вычитать единицу всегда» чинит потерю строки и
+    заводит её задвоение: на холостом пути внеполосное снятие не находит узла,
+    на экране остаются все отрисованные строки, а курсор уезжает назад.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+    alive = {group.id for group in seeded}
+
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Чужая группа", user_id=foreign_user.id
+    )
+
+    # --- (а) идентификатор ЧУЖОЙ группы --------------------------------------
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    rendered = _row_ids(page)
+
+    foreign = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{foreign_group.id}/delete",
+        data={"rendered_rows": len(rendered)},
+    )
+    assert foreign.status_code == 200, (
+        f"холостое удаление получило {foreign.status_code} вместо фрагмента"
+    )
+
+    rest = await authed_client.get(_scroll_read_on_url(page, foreign.text))
+    read_on = _row_ids(rest.text)
+
+    doubled = sorted(set(rendered) & set(read_on))
+    assert not doubled, (
+        f"строка показана дважды после удаления, которое ничего не удалило: "
+        f"{doubled} — курсор уехал назад там, где с экрана не снялось ни одной "
+        f"строки"
+    )
+    assert set(rendered) | set(read_on) == alive, (
+        "холостое удаление сдвинуло состав списка: объединение отрисованного и "
+        "дочитанного не равно всем группам аккаунта"
+    )
+    assert (await db_session.get(Group, foreign_group.id)) is not None, (
+        "холостое удаление снесло чужую группу"
+    )
+
+    # --- (б) идентификатор УЖЕ УДАЛЁННОЙ группы ------------------------------
+    victim = rendered[0]
+    first = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{victim}/delete",
+        data={"rendered_rows": len(rendered)},
+    )
+    assert first.status_code == 200
+
+    page_again = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    rendered_again = _row_ids(page_again)
+
+    repeat = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{victim}/delete",
+        data={"rendered_rows": len(rendered_again)},
+    )
+    assert repeat.status_code == 200
+
+    rest_again = await authed_client.get(
+        _scroll_read_on_url(page_again, repeat.text)
+    )
+    read_on_again = _row_ids(rest_again.text)
+
+    doubled_again = sorted(set(rendered_again) & set(read_on_again))
+    assert not doubled_again, (
+        f"строка показана дважды после повторного удаления уже удалённой "
+        f"группы: {doubled_again}"
+    )
+    assert set(rendered_again) | set(read_on_again) == alive - {victim}, (
+        "повторное удаление сдвинуло состав списка"
+    )
+
+    # Наличие четвёртого узла НЕ ЗАВИСИТ от того, нашлась ли строка: иначе само
+    # его присутствие стало бы признаком состоявшегося удаления, и
+    # неотличимость сломалась бы с другой стороны (T-09-05-06).
+    assert foreign.text.count("hx-swap-oob") == 4, (
+        f"на холостом пути внеполосных узлов "
+        f"{foreign.text.count('hx-swap-oob')}, а не четыре — по наличию "
+        f"четвёртого узла стало бы видно, состоялось ли удаление"
+    )
+    assert repeat.text.count("hx-swap-oob") == 4, (
+        f"на повторном удалении внеполосных узлов "
+        f"{repeat.text.count('hx-swap-oob')}, а не четыре"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_delete_response_repairs_the_sentinel_only_over_htmx(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Четвёртый узел приезжает ТОЛЬКО когда документ прислал своё число строк.
+
+    Половина пары SP-3: путь деградации не тронут вовсе, и присланное поле его
+    не переключает — без признака htmx ответом остаётся прежнее
+    перенаправление, даже если поле в теле есть.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    rendered = _row_ids(page)
+    target, neighbour = rendered[0], rendered[1]
+
+    without_field = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{target}/delete"
+    )
+    assert without_field.status_code == 200
+    assert without_field.text.count("hx-swap-oob") == 3, (
+        f"без поля числа отрисованных строк ответ несёт "
+        f"{without_field.text.count('hx-swap-oob')} внеполосных узла вместо "
+        f"трёх — сервер починил курсор по числу, которого ему не присылали"
+    )
+    assert not _sentinels(without_field.text), (
+        "без поля числа отрисованных строк ответ подменил сентинел — смещение "
+        "взято ниоткуда"
+    )
+    assert f'id="group-row-{target}"' in without_field.text, (
+        "узел снятия строки пропал: три прежних узла обязаны остаться на месте"
+    )
+    assert f'id="group-del-{target}"' in without_field.text, (
+        "узел снятия панели подтверждения пропал"
+    )
+    assert 'hx-swap-oob="innerHTML:#account-groups-count"' in without_field.text, (
+        "узел линейки счётчика пропал"
+    )
+
+    degraded = await authed_client.post(
+        f"/accounts/{account.id}/groups/{neighbour}/delete",
+        data={"rendered_rows": len(rendered)},
+        follow_redirects=False,
+    )
+    assert degraded.status_code == 302, (
+        f"запрос без признака htmx получил {degraded.status_code} — присланное "
+        "число строк переключило путь деградации на фрагментный ответ"
+    )
+    assert degraded.headers["location"] == f"/accounts/{account.id}/groups"
+    assert not _sentinels(degraded.text), (
+        "на пути деградации собрался четвёртый внеполосный узел — страница и "
+        "так перестраивается целиком вместе с сентинелом"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_sentinel_carries_a_stable_id_in_both_templates(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Идентификатор сентинела ОДИН И ТОТ ЖЕ во всех трёх местах отрисовки.
+
+    Без стабильного идентификатора ответу удаления некуда целиться: узел,
+    названный по-разному на странице и в порции, чинился бы через раз — ровно у
+    того, кто долистал.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(
+        db_session, account, [f"Группа {i:03d}" for i in range(PAGE_SIZE * 2 + 5)]
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    portion = (await authed_client.get(_sentinels(page)[0])).text
+    rendered = _row_ids(page)
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{rendered[0]}/delete",
+        data={"rendered_rows": len(rendered)},
+    )
+
+    on_page = _sentinel_ids(page)
+    in_portion = _sentinel_ids(portion)
+    in_response = _sentinel_ids(response.text)
+
+    assert on_page == ["group-list-sentinel"], (
+        f"сентинел страницы не несёт стабильного идентификатора: {on_page}"
+    )
+    assert in_portion == on_page, (
+        f"идентификатор сентинела в порции прокрутки разошёлся со страницей: "
+        f"{in_portion} против {on_page}"
+    )
+    assert in_response == on_page, (
+        f"идентификатор сентинела в ответе удаления разошёлся со страницей: "
+        f"{in_response} против {on_page} — починка курсора целится в узел, "
+        f"которого в документе нет, и рантайм промолчит об этом"
+    )
