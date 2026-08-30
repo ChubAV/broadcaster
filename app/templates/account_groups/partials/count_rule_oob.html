@@ -32,11 +32,19 @@
    видел бы РАЗНУЮ линейку в зависимости от того, что он нажал. От этого же
    зависит арифметика инвентаря внеполосных блоков: обход считает ФАЙЛЫ.
 
+   ⚠️ И ТЕПЕРЬ ИСТОЧНИК ОДИН НЕ ТОЛЬКО У ДВУХ ОТВЕТОВ, НО И У СТРАНИЦЫ
+   (план 09-07, WARN-1 / WR-01). Разметка линейки переехала в
+   account_groups/includes/count_rule.html, и включают её ОБА места отрисовки —
+   этот узел и account_groups/list.html. До переезда гарантия единственного
+   источника была заявлена целиком, а выполнялась только между ответами:
+   страница несла ТРЕТЬЮ, никем не охраняемую копию. Теперь заявленное
+   совпадает с выполняемым, и это закреплено машинно —
+   `test_the_counter_rule_markup_has_exactly_one_source`.
+
+   ⚠️ ПРИЗНАК ВНЕПОЛОСНОЙ ПОДМЕНЫ ОСТАЛСЯ ЗДЕСЬ, НА ЭТОМ ТЕГЕ. Включаемый файл
+   его не несёт и нести не должен: он СОДЕРЖИМОЕ, а внеполосным узел делает
+   включающий. Переезд признака внутрь включения сдвинул бы инвентарь
+   внеполосных блоков, не изменив ничего по существу.
+
    Ожидаемые переменные: `active_groups`, `total_groups`. #}
-{% from "components/mono.html" import mono %}
-<div hx-swap-oob="innerHTML:#account-groups-count">{% if total_groups %}<div class="count-rule">
-  {{ mono(active_groups ~ ' ' ~ plural_ru(active_groups, 'активная', 'активные', 'активных') ~
-          ' из ' ~ total_groups ~ ' ' ~ plural_ru(total_groups, 'группы', 'групп', 'групп')) }}
-  <span class="count-rule__line" aria-hidden="true"></span>
-  {{ mono('ВЫКЛЮЧЕННЫЕ ГРУППЫ ПРОПУСКАЮТСЯ ПРИ РАССЫЛКЕ', upper=true) }}
-</div>{% endif %}</div>
+<div hx-swap-oob="innerHTML:#account-groups-count">{% include "account_groups/includes/count_rule.html" %}</div>

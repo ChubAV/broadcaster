@@ -3471,7 +3471,14 @@ FILTERS = "components/filters.html"
 COUNT_RULE_OOB = "account_groups/partials/count_rule_oob.html"
 
 COUNT_RULE_OOB_OPEN = '<div hx-swap-oob="innerHTML:#account-groups-count">'
-COUNT_RULE_OOB_CLOSE = "{% endif %}</div>"
+# ⚠️ ЗАКРЫВАЮЩАЯ ОПОРА ПЕРЕЕХАЛА С ВЕТКИ НА ВКЛЮЧЕНИЕ (план 09-07). Разметка
+# линейки уехала в общий источник, и ветки «групп нет» в этом файле больше нет:
+# прежняя опора не встретилась бы здесь ни разу, а `_tree_with` требует ровно
+# одного вхождения — контроль вложенного узла упал бы на подстановке, а не на
+# правиле, и выглядело бы это отказом гейта.
+COUNT_RULE_OOB_CLOSE = (
+    '{% include "account_groups/includes/count_rule.html" %}</div>'
+)
 
 WRAPPER = "components/form_wrapper.html"
 WRAPPER_QUALITY_ATTRS = (
@@ -3974,6 +3981,14 @@ def test_control_positive_the_untouched_tree_keeps_every_gate_green(
     assert not _offenders_cancel_is_disabled(templates)
     assert not _offenders_macro_born(templates)
     assert not _offenders_client_state_expression(templates)
+
+    # ⚠️ СБОРЩИК ЕДИНСТВЕННОГО ИСТОЧНИКА ЛИНЕЙКИ ЧИТАЕТСЯ ЗДЕСЬ ПОИМЁННО
+    # (план 09-07). Отрицательного контроля через `_tree_with` у его правила нет
+    # по записанному решению — красным его наблюдали на настоящем дереве, — и
+    # без этой строки правило осталось бы вне круга положительного контроля:
+    # сборщик, переставший что-либо находить, дал бы пустой список, а пустой
+    # список «не больше одного» так же, как единственный источник.
+    assert _count_rule_markup_sources(templates) == [COUNT_RULE_MARKUP_SOURCE]
 
     assert len(_post_sites(templates)) == HX_POST_PLACES
     assert len(_oob_sites(templates)) == OOB_BLOCKS
