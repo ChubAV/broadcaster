@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 09
 current_phase_name: Пилот на `account_groups` — сквозной контракт формы
 status: executing
-stopped_at: Phase 9 context gathered
-last_updated: "2026-08-30T10:11:36.191Z"
+stopped_at: "Phase 09 — все 9 планов исполнены; верификация gaps_found (DIV-09-01, DIV-09-02)"
+last_updated: "2026-08-30T17:15:24.000Z"
 last_activity: 2026-08-30
-last_activity_desc: Phase 09 execution started
-state_head: a850926b938d292ae2f8c91bea4ef12f771b8877
+last_activity_desc: "Phase 09 plan 09-09 complete — обход проведён, решение D-06 применено (option-b), два расхождения записаны"
+state_head: d42e383aa6a269c13b800bf61557e8f484d1be1d
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 26
+  completed_plans: 27
   percent: 22
 ---
 
@@ -36,13 +36,20 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 09 (Пилот на account_groups — сквозной контракт формы) — EXECUTING
-Plan: 1 of 9
+Plan: 9 of 9
 Total Plans in Phase: 9
-Completed Plans in Phase: 0
-Status: Executing Phase 09
-Last activity: 2026-08-30 — Phase 09 execution started
+Completed Plans in Phase: 9
+Status: Phase 09 — исполнение завершено, верификация `gaps_found`
+Last activity: 2026-08-30 — Phase 09 plan 09-09 complete (обход, решение D-06, два расхождения)
 
-Progress: [████████████████████] 18/18 plans ([██░░░░░░░░] 22%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7 и 8); Фазы 9…15 ещё не спланированы. По фазам вехи: 2/9 (22%).
+Progress: [████████████████████] 27/27 plans ([██░░░░░░░░] 22%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: 2/9 (22%) — Фаза 09 НЕ засчитана: верификация `gaps_found`.
+
+⚠️ **Фаза 09 исполнена, но не закрыта.** Все девять планов имеют сводки, суита зелена (2649 passed), ручной обход проведён 2026-08-30 (Chrome / macOS) и допущения A1, A3, A5 закрыты измерением. Закрыть фазу мешают ДВА расхождения одного рода — объявленный селектор против дерева, которого нет:
+
+- **DIV-09-01** — `hx-include='#group-list-sentinel'` на панели подтверждения при отсутствующем сентинеле (у аккаунта с ≤30 группами его нет никогда). Увидена ГЛАЗОМ на обходе.
+- **DIV-09-02** — `hx-disabled-elt="find button[type=submit]"` формы тумблера при кнопке, снятой Alpine. Регрессия ветки `option-b`, найдена ЧТЕНИЕМ исходника при приёмке; наблюдения глазом ещё ждёт.
+
+Обе записаны в `09-UAT.md` §«Расхождения обхода» и `09-VERIFICATION.md` `walkthrough_divergences`. Ни данным, ни действию вреда нет — вред в потере признака «200 и чистая консоль». **Следующий вход: `/gsd-plan-phase 09 --gaps`.**
 
 **Порядок исполнения:** 7 → 8 → 9 → 10 → 11 → 14 → 15; Фаза 12 (загрузка изображений) идёт параллельно Фазам 9-11, Фаза 13 (QR-мастер) — после 10 и до 14.
 
