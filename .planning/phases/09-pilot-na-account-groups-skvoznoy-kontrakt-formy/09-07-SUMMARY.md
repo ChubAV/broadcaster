@@ -506,6 +506,14 @@ None — внешних сервисов план не затрагивает.
   обосновании новой записи.
 - **Открытых блокеров нет.**
 
+## Self-Check: PASSED
+
+- `app/templates/account_groups/includes/count_rule.html` — FOUND on disk.
+- `.planning/phases/09-.../09-07-SUMMARY.md` — FOUND on disk.
+- Коммиты `7771ac8`, `4a8c195`, `cf348cf`, `879f93f` — FOUND в `git log`.
+- `uv run pytest tests/test_templates/test_htmx_markup_gates.py -q` — 68 passed.
+- `git status --short` — чисто; незакоммиченного и неотслеживаемого нет.
+
 ---
 *Phase: 09-pilot-na-account-groups-skvoznoy-kontrakt-formy*
 *Completed: 2026-08-30*
