@@ -9,10 +9,13 @@
    прокрутки их не пересчитывает. #}
 
 {% from "account_groups/includes/group_row.html" import group_row %}
-{% for group in groups %}{{ group_row(group, account_id, schedule_counts.get(group.id, 0), user) }}{% endfor %}
-{# Сентинел ИДЕНТИЧЕН тому, что в list.html, вместе с циклом проброса
-   параметров: правится один — синхронно правится второй (T-04-01, T-03-21).
-   Закреплено test_sentinel_markup_is_identical_in_both_templates. #}
+{% from "account_groups/includes/sentinel.html" import sentinel %}
+{% for group in groups %}{{ group_row(group, account_id, schedule_counts.get(group.id, 0), user, filter_search=(filter_params|default({})).get('search', '')) }}{% endfor %}
+{# Сентинел приходит из ЕДИНОГО ИСТОЧНИКА — того же макроса, что зовёт
+   list.html (план 09-05). Прежде здесь стояла вторая копия разметки вместе с
+   циклом проброса параметров, и синхронность держалась сравнением строк двух
+   файлов; с появлением третьего места отрисовки (ответ удаления) попарное
+   сравнение перестало бы быть утверждением о единственности. #}
 {% if has_next %}
-<div hx-get="/accounts/{{ account_id }}/groups/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
+{{ sentinel(account_id, next_offset, filter_params) }}
 {% endif %}

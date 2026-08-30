@@ -8,6 +8,7 @@
 {% from "components/mono.html" import mono %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 {% from "account_groups/includes/group_row.html" import group_row %}
+{% from "account_groups/includes/sentinel.html" import sentinel %}
 
 {% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
 {% set account_label = MESSENGER_LABELS.get(account.type, account.type) ~ ' #' ~ account.id %}
@@ -191,15 +192,17 @@
   {# Инварианты бесконечной прокрутки (ломает перевёрстка, а не логика):
      - сентинел остаётся ПОСЛЕДНИМ элементом внутри ТОГО ЖЕ контейнера, что и
        строки: он заменяет сам себя и подтягивает следующий;
-     - разметка сентинела здесь и в partial_cards.html ИДЕНТИЧНА;
-     - цикл проброса параметров переносится ДОСЛОВНО вместе с приведением к
-       строке и экранированием для URL: потерянная строка поиска не роняет
+     - разметка сентинела здесь и в partial_cards.html — ОДИН МАКРОС, а не две
+       согласованные копии (план 09-05): копии разъезжались бы молча, и видел
+       бы это только тот, кто долистал до второй порции;
+     - цикл проброса параметров живёт ВНУТРИ этого макроса вместе с приведением
+       к строке и экранированием для URL: потерянная строка поиска не роняет
        страницу, а молча подмешивает к найденному остальной список аккаунта
        (T-04-01, T-03-21). #}
   <div data-group-list>
-    {% for group in groups %}{{ group_row(group, account_id, schedule_counts.get(group.id, 0), user) }}{% endfor %}
+    {% for group in groups %}{{ group_row(group, account_id, schedule_counts.get(group.id, 0), user, filter_search=filter_search) }}{% endfor %}
     {% if has_next %}
-<div hx-get="/accounts/{{ account_id }}/groups/partial?offset={{ next_offset }}&limit=30{% for k, v in (filter_params|default({})).items() %}&{{ k }}={{ v|string|urlencode }}{% endfor %}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
+{{ sentinel(account_id, next_offset, filter_params) }}
     {% endif %}
   </div>
 {{ card_close() }}
