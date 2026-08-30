@@ -3064,3 +3064,187 @@ async def test_a_non_positive_rendered_rows_does_not_build_a_sentinel(
             f"при rendered_rows={value} удаление не состоялось — вырожденное "
             f"число повлияло на действие, а не только на курсор"
         )
+
+
+# =============================================================================
+# План 09-06, Задача 1: ветка «список опустел» решается ПО ТЕКУЩЕЙ ВЫДАЧЕ
+# =============================================================================
+#
+# WR-06 / WARN-6. Ветвление, считанное по числам АККАУНТА, оставляло человека
+# перед ПУСТОЙ КАРТОЧКОЙ БЕЗ ВЫХОДА: поиск сузил выдачу до одной строки, человек
+# её удалил, `total_groups` остался больше нуля — и ответ снял строку на месте
+# фрагментом. Три различимых пустых состояния живут в `account_groups/list.html`
+# и во фрагмент не приезжают (D-09), поэтому на экране не оставалось ни ветви
+# «Группы не найдены», ни кнопки «Сбросить»: вернуться к неотфильтрованному
+# списку можно было только правкой адреса.
+#
+# Тот же по форме отказ у удаления последней строки ТЕКУЩЕЙ ПОРЦИИ при непустых
+# следующих страницах здесь НЕ закрывается и закрываться не должен: выдача не
+# пуста, фрагментная ветка верна, а курсор чинит четвёртый внеполосный узел
+# плана 09-05.
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_last_matched_row_lands_on_the_empty_state(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Удаление ПОСЛЕДНЕЙ НАЙДЕННОЙ строки закрывается переходом, несущим фильтр.
+
+    ⚠️ НЕВАКУУМНОСТЬ УТВЕРЖДАЕТСЯ ОТДЕЛЬНО: после удаления в аккаунте ОСТАЮТСЯ
+    другие группы. Без этой половины тест зеленел бы и на прежней ветке по
+    числам аккаунта — та тоже отвечает переходом, когда групп не осталось вовсе,
+    и утверждение не сказало бы о починке ничего.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, ["Бета один", "Бета два", "Бета три"])
+    alpha = await _seed_group(db_session, account, "Альфа единственная")
+
+    page = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": "Альфа"}
+        )
+    ).text
+    rendered = _row_ids(page)
+    assert rendered == [alpha.id], (
+        f"поиск отвечает не ровно одной строке ({rendered}) — посев не создаёт "
+        f"условия, ради которого тест написан"
+    )
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{alpha.id}/delete",
+        data={"rendered_rows": len(rendered), "search": "Альфа"},
+    )
+
+    assert response.status_code == 204, (
+        f"удаление последней НАЙДЕННОЙ строки ответило {response.status_code} "
+        f"вместо перехода: человек остался перед пустой карточкой без ветви "
+        f"«Группы не найдены» и без кнопки «Сбросить» — вернуться к полному "
+        f"списку можно только правкой адреса"
+    )
+    assert not response.content, "у ответа 204 появилось тело"
+
+    location = response.headers["HX-Location"]
+    assert _search_param(location) == ["Альфа"], (
+        f"адрес перехода не несёт строки поиска: {location} — человек "
+        f"приземляется на НЕотфильтрованный список и не видит, что его поиск "
+        f"больше ничему не отвечает"
+    )
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(Group).where(Group.account_id == account.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(remaining) == 3, (
+        f"в аккаунте осталось {len(remaining)} групп вместо трёх — утверждение "
+        f"о ветке вакуумно: она совпала бы со старой веткой «групп не осталось "
+        f"вовсе»"
+    )
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_last_matched_row_degrades_with_the_filter(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Путь деградации сохраняет фильтр: перенаправление несёт ту же строку.
+
+    Фикстура здесь ОДНА намеренно — `htmx_client` возвращает тот же объект
+    клиента и выставил бы признак htmx всему тесту.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, ["Бета один", "Бета два"])
+    alpha = await _seed_group(db_session, account, "Альфа единственная")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{alpha.id}/delete",
+        data={"search": "Альфа"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302, (
+        f"запрос без признака htmx получил {response.status_code} — путь "
+        f"деградации перестал быть прежним"
+    )
+    assert _search_param(response.headers["location"]) == ["Альфа"], (
+        f"перенаправление после удаления потеряло строку поиска: "
+        f"{response.headers['location']} — человек без JavaScript приземляется "
+        f"на НЕотфильтрованный список"
+    )
+    assert (await db_session.get(Group, alpha.id)) is None, (
+        "удаление на базовом пути не состоялось"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_delete_branch_does_not_reveal_a_foreign_group_under_search(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Под активным поиском чужая и несуществующая группа отвечают одинаково.
+
+    Смена условия ветвления не имеет права завести различимость: у ЧУЖОЙ и у
+    НЕСУЩЕСТВУЮЩЕЙ группы текущая выдача не меняется ни на строку, значит и
+    ветка у них та же, какой она была бы у соседнего успешного удаления в том же
+    аккаунте (D-04 в редакции D-04-A, T-9-10).
+
+    ⚠️ ПОРЯДОК УТВЕРЖДЕНИЙ ВАЖНЕЕ САМОГО СРАВНЕНИЯ: достижение фрагментной ветки
+    утверждается ПЕРВЫМ исполняемым утверждением, иначе равенство тел вакуумно.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, ["Альфа один", "Альфа два", "Альфа три"]
+    )
+
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Альфа чужая", user_id=foreign_user.id
+    )
+    missing_id = max([group.id for group in seeded] + [foreign_group.id]) + 1000
+
+    body = {"rendered_rows": len(seeded), "search": "Альфа"}
+    foreign = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{foreign_group.id}/delete", data=body
+    )
+    missing = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{missing_id}/delete", data=body
+    )
+
+    # ПЕРВОЕ ИСПОЛНЯЕМОЕ УТВЕРЖДЕНИЕ — О ДОСТИГНУТОЙ ФРАГМЕНТНОЙ ВЕТКЕ.
+    assert foreign.status_code == 200, (
+        f"фрагментная ветка под поиском не достигнута: ответ "
+        f"{foreign.status_code} вместо 200 — равенство тел ниже сравнивало бы "
+        f"два пустых тела ветки перехода"
+    )
+    assert f'id="group-row-{foreign_group.id}"' in foreign.text, (
+        "в теле первого ответа нет узла снятия строки — сравнивать нечего, и "
+        "равенство тел ниже было бы зелено по построению"
+    )
+
+    assert missing.status_code == foreign.status_code, (
+        "под активным поиском чужая и несуществующая группа различимы по коду "
+        "ответа"
+    )
+    assert missing.headers.get("HX-Location") == foreign.headers.get("HX-Location"), (
+        "под активным поиском чужая и несуществующая группа различимы по адресу "
+        "перехода"
+    )
+
+    # Подстановка идентификатора законна: он приходит из ПУТИ, то есть назван
+    # САМИМ спрашивающим, и двумя разными случаями один и тот же идентификатор
+    # не адресуется (тот же приём, что в плане 09-05, задача 3).
+    substituted = foreign.text.replace(
+        f'id="group-row-{foreign_group.id}"', f'id="group-row-{missing_id}"'
+    ).replace(f'id="group-del-{foreign_group.id}"', f'id="group-del-{missing_id}"')
+
+    assert substituted == missing.text, (
+        "под активным поиском чужая и несуществующая группа различимы ПО ТЕЛУ "
+        "ответа — по ответу можно составить карту чужих идентификаторов "
+        "перебором по адресу, не получив ни одной строки"
+    )
+    assert (await db_session.get(Group, foreign_group.id)) is not None, (
+        "холостое удаление снесло чужую группу"
+    )
