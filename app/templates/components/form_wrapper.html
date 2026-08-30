@@ -71,17 +71,37 @@
      человека, а не второй запрос у злоумышленника. Идемпотентность обработчика
      обеспечивается самим обработчиком.
 
+   * ⚠️ `sync` — СТРАТЕГИЯ НАЛОЖЕНИЯ ЗАПРОСОВ, И ЕЁ ВЫБИРАЕТ ВЫЗЫВАЮЩИЙ, А НЕ
+     ЭТОТ ФАЙЛ. Умолчание — `None`, то есть атрибута нет вовсе и разметка
+     сорока шести остальных форм вехи не двигается ни на символ (приём
+     умолчания `hx_post` компонента панели подтверждения). Раздать стратегию
+     всем формам этот макрос НЕ ИМЕЕТ ПРАВА: решение о ней принимается на
+     форму, а не на веху, — сегодня его принял владелец ровно для одной формы
+     (тумблер экрана групп, план 09-09), и унаследовать его сорок семь форм не
+     должны.
+
+     ⚠️ ГРАНИЦА ЗНАЧЕНИЯ НАЗВАНА ЗДЕСЬ, А НЕ ОСТАВЛЕНА НА ДОГАДКУ. Гейт
+     денежного периметра Фазы 8
+     (`tests/test_pages/test_money_perimeter_gate.py`,
+     `test_no_perimeter_route_carries_a_queued_request_sync` и
+     `test_no_opaque_address_declares_a_request_queue`) запрещает на маршрутах
+     периметра и на непрозрачном адресе значение, называющее ОЧЕРЕДЬ, — а
+     `action` этого макроса непрозрачен по построению (собран из переменной).
+     Отмена запрета не задета прямым текстом гейта, но вызывающий, передавший
+     сюда очередь, покраснеет на непрозрачном адресе — и это правильно.
+
    Совместимость с блочным и не-блочным вызовом обязательна
    (`{%- if caller is defined %}`, приём компонента модального окна): без неё
    test_macros_take_no_context упадёт на прямом вызове макроса.
 
    Импорт: {% from "components/form_wrapper.html" import form_wrapper %} #}
 
-{% macro form_wrapper(action, target=None, swap=None, trigger=None, disabled_elt='find button[type=submit]') -%}
+{% macro form_wrapper(action, target=None, swap=None, trigger=None, disabled_elt='find button[type=submit]', sync=None) -%}
 <form method="post" action="{{ action }}" hx-post="{{ action }}"
       {%- if target %} hx-target="{{ target }}" hx-swap="{{ swap or 'outerHTML' }}"
       {%- else %} hx-swap="none"{% endif %}
       {%- if trigger %} hx-trigger="{{ trigger }}"{% endif %}
+      {%- if sync %} hx-sync="{{ sync }}"{% endif %}
       hx-disabled-elt="{{ disabled_elt }}" hx-indicator="find .form-busy">
   {%- if caller is defined %}{{ caller() }}{% endif %}
   <span class="form-busy" aria-hidden="true"></span>
