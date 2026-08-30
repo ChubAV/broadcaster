@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 09
-current_phase_name: Пилот на account_groups — сквозной контракт формы
+current_phase_name: Пилот на `account_groups` — сквозной контракт формы
 status: executing
 stopped_at: Phase 9 context gathered
-last_updated: "2026-08-30T07:19:56.808Z"
+last_updated: "2026-08-30T10:11:36.191Z"
 last_activity: 2026-08-30
 last_activity_desc: Phase 09 execution started
-state_head: 8a77b4e0a37d37b66061bf8094ffcc15428e702f
+state_head: a850926b938d292ae2f8c91bea4ef12f771b8877
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 27
-  completed_plans: 22
+  completed_plans: 25
   percent: 22
 ---
 
@@ -42,7 +42,7 @@ Completed Plans in Phase: 0
 Status: Executing Phase 09
 Last activity: 2026-08-30 — Phase 09 execution started
 
-Progress: [████████████████████] 18/18 plans (100%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7 и 8); Фазы 9…15 ещё не спланированы. По фазам вехи: 2/9 (22%).
+Progress: [████████████████████] 18/18 plans ([██░░░░░░░░] 22%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7 и 8); Фазы 9…15 ещё не спланированы. По фазам вехи: 2/9 (22%).
 
 **Порядок исполнения:** 7 → 8 → 9 → 10 → 11 → 14 → 15; Фаза 12 (загрузка изображений) идёт параллельно Фазам 9-11, Фаза 13 (QR-мастер) — после 10 и до 14.
 
