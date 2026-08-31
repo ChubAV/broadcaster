@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 09
 current_phase_name: Пилот на `account_groups` — сквозной контракт формы
 status: executing
-stopped_at: Completed 09-10-PLAN.md
-last_updated: "2026-08-30T20:36:51.249Z"
+stopped_at: Completed 09-11-PLAN.md
+last_updated: "2026-08-31T04:21:52.782Z"
 last_activity: 2026-08-30
 last_activity_desc: Phase 09 execution started
-state_head: e3489dd671ccd0e6ca299a7c2ed88a99af2902c9
+state_head: e70d324de3dd72254d2d9c6fdb612aeaa689e82c
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 30
-  completed_plans: 28
+  completed_plans: 29
   percent: 22
 ---
 
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 09 (Пилот на `account_groups` — сквозной контракт формы) — EXECUTING
-Plan: 2 of 12
+Plan: 3 of 12
 Total Plans in Phase: 12
 Completed Plans in Phase: 9
 Status: Ready to execute
@@ -88,6 +88,7 @@ Progress: [████████████████████] 27/27 p
 | Phase 05 P21 | 38min | 3 tasks | 3 files |
 | Phase 05.1 P02 | 21min | 2 tasks | 2 files |
 | Phase 09 P10 | 1h 33m | 4 tasks | 4 files |
+| Phase 09 P11 | 6h 59m | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -145,6 +146,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - Phase 08 (безопасность 2026-08-29): `08-SECURITY.md` собран из `<threat_model>` одиннадцати планов — 52 строки реестра, `threats_open: 0` при ASVS L1 и `block_on: high`, 7 принятых рисков (R-08-01…R-08-07).
 - [Phase 09]: План 09-10: владелец выбрал ветвь record-kind — макрос-обёртка печатает цель блокировки только при переданном значении, вызов формы тумблера передаёт пустую цель — Тег макроса правится дешевле всего, пока его использует ОДНА форма; после Фазы 11, раздающей макрос сорока семи формам, та же правка задела бы каждую. Измеренная цена варианта real-target (отмена QUAL-06, измерение 3.3) не принята
 - [Phase 09]: План 09-10: обе строки консоли расхождений DIV-09-01 и DIV-09-02 НАБЛЮДЕНЫ в живом браузере до правки (Chrome / macOS, 2026-08-30) — Чтение исходника при приёмке 09-09 подтверждено глазом: РАСХ-2 существует, вариант no-divergence отпал по факту. Повторное наблюдение ПОСЛЕ правки не проводилось и остаётся предметом приёмки фазы
+- [Phase 09]: Решение владельца по DIV-09-01 — ветвь `conditional-include`: объявление включаемых данных панели подтверждения стало условным (параметр has_sentinel у макроса строки, умолчание «сентинела нет») — Правка мелкая и обратимая: контракт сентинела и арифметика починки курсора CR-01 не двигаются ни на символ. Вариант always-present-cursor отклонён владельцем как costly — он снимает совпадение «число отрисованных строк = смещение следующей порции», на котором стоит арифметика починки, шипнутой планом 09-05; вариант defer отклонён потому, что строка осталась бы в консоли на каждое удаление у большинства аккаунтов
+- [Phase 09]: Второе следствие DIV-09-01 не закрывается сужением правила: оформлено именованным перечнем INCLUDE_TARGET_EXCEPTIONS по идиоме SP-1, назначенная фаза — Фаза 15 — Сужение правила до первого положения экрана владельцем отклонено прямым текстом с причиной «правило теряет зубы на втором положении навсегда, и следующее такое же расхождение там пройдёт молча». Запись несёт обоснование, положение экрана, назначенную фазу, отдельно утверждаемую константу и три утверждения идиомы, третье из которых краснеет при устаревании записи
 
 ### Pending Todos
 
@@ -323,8 +326,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-08-30T20:36:49.474Z
-Stopped at: Completed 09-10-PLAN.md
+Last session: 2026-08-31T04:21:22.100Z
+Stopped at: Completed 09-11-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
