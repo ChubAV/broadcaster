@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 11
+open_count: 14
 waived_count: 1
 fixed_count: 2
-total_count: 14
-last_updated: 2026-08-31T04:22:02.108Z
+total_count: 17
+last_updated: 2026-08-31T07:43:12.216Z
 ---
 
 # Broken Windows Ledger
@@ -29,6 +29,9 @@ last_updated: 2026-08-31T04:22:02.108Z
 | 12 | 09 | unrun-verify | app/templates/account_groups/includes/group_row.html |  | Строка консоли 7.1 (hx-include) после правки плана 09-11 в браузере повторно НЕ наблюдалась — снятие DIV-09-01 утверждается машинным правилом, а не глазом | open |  | 2026-08-31T04:22:01.251Z |  |
 | 13 | 09 | deviation | tests/test_pages/test_account_groups.py |  | Второе следствие DIV-09-01 остаётся открытым под записью INCLUDE_TARGET_EXCEPTIONS['group-list-sentinel'], назначенная фаза — Фаза 15 | open |  | 2026-08-31T04:22:01.682Z |  |
 | 14 | 09 | deviation | tests/test_pages/test_admin_panel.py |  | DEF-09-01: test_the_overview_error_number_matches_the_users_own_dashboard краснеет в окно 00:00-05:00 из-за расхождения суточного и календарного окон; к правке плана 09-11 не относится | open |  | 2026-08-31T04:22:02.108Z |  |
+| 15 | 09 | todo | .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/deferred-items.md |  | DEF-09-02 — «Отмена» панели подтверждения закрывает панель, но летящий запрос удаления не отменяет; назначенная Фаза 10 | open |  | 2026-08-31T07:43:11.328Z |  |
+| 16 | 09 | deviation | .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md |  | Проверка 6.3 второго круга снята в две части (Slow 3G в полёте, Offline после отказа) — отступление от порядка шагов UAT, оговорка О-1 | open |  | 2026-08-31T07:43:11.798Z |  |
+| 17 | 09 | deviation | .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md |  | Стенд UAT9- не был убран владельцем: сообщено groups=0, измерено groups=32 accounts=2; уборка выполнена исполнителем, оговорка О-4 | open |  | 2026-08-31T07:43:12.216Z |  |
 
 ````json
 [
@@ -198,6 +201,42 @@ last_updated: 2026-08-31T04:22:02.108Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-31T04:22:02.108Z",
+    "resolved_at": null
+  },
+  {
+    "id": 15,
+    "kind": "todo",
+    "phase": "09",
+    "file": ".planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/deferred-items.md",
+    "line": null,
+    "description": "DEF-09-02 — «Отмена» панели подтверждения закрывает панель, но летящий запрос удаления не отменяет; назначенная Фаза 10",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-31T07:43:11.328Z",
+    "resolved_at": null
+  },
+  {
+    "id": 16,
+    "kind": "deviation",
+    "phase": "09",
+    "file": ".planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md",
+    "line": null,
+    "description": "Проверка 6.3 второго круга снята в две части (Slow 3G в полёте, Offline после отказа) — отступление от порядка шагов UAT, оговорка О-1",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-31T07:43:11.798Z",
+    "resolved_at": null
+  },
+  {
+    "id": 17,
+    "kind": "deviation",
+    "phase": "09",
+    "file": ".planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md",
+    "line": null,
+    "description": "Стенд UAT9- не был убран владельцем: сообщено groups=0, измерено groups=32 accounts=2; уборка выполнена исполнителем, оговорка О-4",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-31T07:43:12.216Z",
     "resolved_at": null
   }
 ]

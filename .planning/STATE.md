@@ -5,11 +5,11 @@ milestone_name: HTMX-first
 current_phase: 09
 current_phase_name: Пилот на `account_groups` — сквозной контракт формы
 status: executing
-stopped_at: Completed 09-11-PLAN.md
-last_updated: "2026-08-31T04:21:52.782Z"
+stopped_at: Completed 09-12-PLAN.md
+last_updated: "2026-08-31T07:42:19.157Z"
 last_activity: 2026-08-30
 last_activity_desc: Phase 09 execution started
-state_head: e70d324de3dd72254d2d9c6fdb612aeaa689e82c
+state_head: 02ea96876073178c8b881b5803a316007c0bb1d4
 progress:
   total_phases: 9
   completed_phases: 2
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 09 (Пилот на `account_groups` — сквозной контракт формы) — EXECUTING
-Plan: 3 of 12
+Plan: 4 of 12
 Total Plans in Phase: 12
 Completed Plans in Phase: 9
 Status: Ready to execute
@@ -89,6 +89,7 @@ Progress: [████████████████████] 27/27 p
 | Phase 05.1 P02 | 21min | 2 tasks | 2 files |
 | Phase 09 P10 | 1h 33m | 4 tasks | 4 files |
 | Phase 09 P11 | 6h 59m | 3 tasks | 6 files |
+| Phase 09 P12 | 2h 31m | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -326,8 +327,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-08-31T04:21:22.100Z
-Stopped at: Completed 09-11-PLAN.md
+Last session: 2026-08-31T07:42:18.977Z
+Stopped at: Completed 09-12-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
