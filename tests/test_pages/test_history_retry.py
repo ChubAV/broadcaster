@@ -1430,7 +1430,22 @@ async def test_retry_confirmation_panel_carries_a_real_form(
 
     start = html.find(f'id="history-retry-{log.id}"')
     assert start != -1, "панели подтверждения повтора в разметке нет"
-    panel = html[start : start + 2000]
+
+    # ⚠️ ОКНО ВЫРЕЗАЕТСЯ ДО СЛЕДУЮЩЕЙ ПАНЕЛИ, А НЕ НА ФИКСИРОВАННУЮ ДЛИНУ
+    # (план 09-13). Прежде здесь стояло `html[start : start + 2000]`, и число
+    # это держалось на сегодняшней длине макроса окна подтверждения: добавка
+    # `scroll-lock` удлинила выражение Alpine на сотню символов, и кнопка
+    # отправки уехала ЗА окно — тест покраснел на разметке, которая исправна.
+    # Граница по следующей панели описывает ровно то, что тест имеет в виду:
+    # «эта панель, и не соседняя».
+    #
+    # ⚠️ ГРАНИЦА ИЩЕТСЯ КОРНЕМ ПАНЕЛИ, А НЕ ПРЕФИКСОМ ЕЁ ИМЕНИ. Заголовок той же
+    # панели несёт `id="history-retry-{N}-title"`, то есть тот же префикс:
+    # поиск по префиксу обрезал бы окно на СОБСТВЕННОМ заголовке панели, и
+    # форма снова оказалась бы за границей. Корень — цифры и закрывающая
+    # кавычка сразу за ними.
+    following = re.compile(r'id="history-retry-\d+"').search(html, start + 1)
+    panel = html[start : following.start() if following else len(html)]
     assert 'method="post"' in panel, panel[:400]
     assert f'action="/history/{log.id}/retry"' in panel, panel[:400]
     assert 'type="submit"' in panel, panel[:400]
