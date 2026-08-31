@@ -1,9 +1,9 @@
 ---
-status: diagnosed
+status: passed
 phase: 09-pilot-na-account-groups-skvoznoy-kontrakt-formy
 source: [09-VALIDATION.md, 09-RESEARCH.md, ROADMAP.md]
 created: 2026-08-29
-updated: 2026-08-30
+updated: 2026-08-31
 walkthrough:
   date: 2026-08-30
   browser: Chrome
@@ -11,6 +11,21 @@ walkthrough:
   stand: "UAT9- (account_id=50, 40 групп, 30 активных)"
   answer_3_3: "нет"
   divergences: 1
+walkthrough_2:
+  date: 2026-08-31
+  browser: Chrome
+  os: macOS
+  after_plans: [09-09, 09-10, 09-11]
+  stand: "UAT9- (два аккаунта: крупный для 3.5-Б, с числом групп не больше размера страницы для 7.3)"
+  checks: [3.3-Б, 6.2-Б, 3.5-Б, 6.3, 7.3]
+  answer_3_3: "да"
+  row_written_out_3_5: "UAT9-g048"
+  requests_6_2: 1
+  console_lines_7_3: 0
+  divergences: 0
+  observations_beyond_checks: [DEF-09-02]
+  outstanding: "INCLUDE_TARGET_EXCEPTIONS['group-list-sentinel'] — Фаза 15"
+  stand_removed: "UAT9- rows: groups=0 accounts=0 (проверено исполнителем плана 09-12)"
 ---
 
 # Фаза 9 — ручной обход: своп, внеполосные узлы, индикатор и защита от двойного нажатия
