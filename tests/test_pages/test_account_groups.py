@@ -5474,3 +5474,148 @@ async def test_the_trigger_form_body_lands_on_the_filtered_listing(
     assert (await db_session.get(Group, alpha.id)) is None, (
         "удаление на базовом пути не состоялось"
     )
+
+
+# =============================================================================
+# План 09-15, Задача 3: МАРШРУТ ПОРЦИИ НЕ ОТВЕЧАЕТ ЦЕЛЫМ ДОКУМЕНТОМ (WR-04)
+# =============================================================================
+#
+# ЧТО ЗДЕСЬ ЗАКРЕПЛЯЕТСЯ. Ответ маршрута порции приезжает В СЕРЕДИНУ
+# СУЩЕСТВУЮЩЕГО ДОКУМЕНТА: сентинел подменяет им себя. Обе ветки отказа
+# отвечали собственным перенаправлением — на адрес входа при истёкшей сессии и
+# на список аккаунтов при чужом аккаунте.
+#
+# ПОЧЕМУ ЭТО ОТКАЗ, А НЕ АККУРАТНОСТЬ. XHR следует за перенаправлением
+# ПРОЗРАЧНО: слой письма получает 200 и ЦЕЛЫЙ документ страницы входа — и
+# вклеивает его в середину списка. В документе оказывается вторая форма входа и
+# ВТОРОЙ НАБОР ИДЕНТИФИКАТОРОВ, то есть уникальность `id` документа ломается тем
+# же способом, что и в CR-01, — а на ней стоит КАЖДЫЙ `hx-target` и КАЖДЫЙ
+# `hx-swap-oob` экрана. Признак отказа тот же молчаливый: 200 и чистая консоль.
+#
+# СОСЕДНИЙ МАРШРУТ ОТВЕРГАЕТ РОВНО ЭТО ПРЯМЫМ ТЕКСТОМ. `account_groups_sync_status`
+# отвечает на отказ ПУСТЫМ ответом и объясняет почему: «редирект на страницу
+# входа вернул бы в подменяемый блок целую страницу логина». Фрагментному
+# маршруту досталось то же правило, а не другое.
+#
+# ПОЧЕМУ ПРАВИЛО РАЗЛОЖЕНО НА ЧЕТЫРЕ ФУНКЦИИ, А НЕ СОБРАНО В ОДНУ. Фикстура
+# `htmx_client` возвращает ТОТ ЖЕ объект клиента, что и `client`, и выставляет
+# признак htmx всему тесту; «с признаком» и «без признака» в одной функции
+# неисполнимы. Все четыре отбираются одним `-k "portion_route_never_answers"`.
+
+
+@pytest.mark.asyncio
+async def test_the_portion_route_never_answers_with_a_whole_document(
+    htmx_client: AsyncClient, db_session: AsyncSession, auth_headers: dict
+):
+    """НЕСУЩЕЕ: истёкшая сессия не приносит в середину списка документ (WR-04).
+
+    ⚠️ `htmx_client` СЛЕДУЕТ ЗА ПЕРЕНАПРАВЛЕНИЕМ НЕЗАМЕТНО, КАК БРАУЗЕР, И В
+    ЭТОМ ВЕСЬ ПРЕДМЕТ. Собственное перенаправление маршрута придёт сюда кодом
+    200 и телом страницы входа — ровно тем, что слой письма вклеит в список.
+    Отличить его от честного фрагмента можно только по отсутствию документа.
+    """
+    account = await _seed_account(db_session)
+    await _seed_group(db_session, account, "Группа истёкшей сессии")
+
+    response = await htmx_client.get(
+        f"/accounts/{account.id}/groups/partial?limit=30"
+    )
+
+    assert "<!DOCTYPE" not in response.text, (
+        "в середину списка приехал ЦЕЛЫЙ ДОКУМЕНТ: маршрут ответил собственным "
+        "перенаправлением, слой письма прошёл по нему прозрачно и получил "
+        "страницу входа — вместе со вторым набором идентификаторов и второй "
+        "формой входа. Уникальность id документа ломается тем же способом, что "
+        "и в CR-01, а на ней стоит каждый hx-target и каждый hx-swap-oob экрана"
+    )
+    assert response.status_code == 204, (
+        f"отказ пришёл кодом {response.status_code}: переход обязан сообщаться "
+        f"ЗАГОЛОВКОМ, а не телом"
+    )
+    assert response.headers["HX-Location"] == "/login"
+    assert not response.content, "у ответа 204 появилось тело"
+
+
+@pytest.mark.asyncio
+async def test_the_portion_route_never_answers_a_foreign_account_with_a_document(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Вторая ветка отказа идёт ТЕМ ЖЕ путём, а не остаётся единственной своей.
+
+    Чужой аккаунт — второе собственное перенаправление маршрута (на список
+    аккаунтов). Оставить переведённой одну ветку значило бы починить половину
+    отказа: вторая продолжила бы вклеивать целый документ в середину списка.
+    """
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    await _seed_group(
+        db_session, foreign_account, "Чужая группа порции", user_id=foreign_user.id
+    )
+
+    response = await htmx_client.get(
+        f"/accounts/{foreign_account.id}/groups/partial?limit=30"
+    )
+
+    assert "<!DOCTYPE" not in response.text, (
+        "в середину списка приехал ЦЕЛЫЙ ДОКУМЕНТ на ветке чужого аккаунта: "
+        "переведена только половина отказа"
+    )
+    assert response.status_code == 204, (
+        f"отказ по чужому аккаунту пришёл кодом {response.status_code}"
+    )
+    assert response.headers["HX-Location"] == "/accounts"
+    assert "Чужая группа порции" not in response.text
+    assert not _row_ids(response.text)
+
+
+@pytest.mark.asyncio
+async def test_the_portion_route_never_answers_a_request_without_htmx_with_a_fragment(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict
+):
+    """ПУТЬ ДЕГРАДАЦИИ НЕ ДВИНУЛСЯ: без признака htmx отказ — прежние 302.
+
+    Половина пары по идиоме SP-3. Перевод обеих веток на слой ответа не имеет
+    права поменять ответ человеку без JavaScript: он по-прежнему обязан
+    получить перенаправление на адрес входа, а не пустой ответ и не фрагмент.
+    """
+    account = await _seed_account(db_session)
+
+    response = await client.get(
+        f"/accounts/{account.id}/groups/partial?limit=30", follow_redirects=False
+    )
+
+    assert response.status_code == 302, (
+        f"запрос без признака htmx получил {response.status_code} — путь "
+        f"деградации маршрута порции перестал быть прежним"
+    )
+    assert response.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_the_portion_route_never_answers_a_happy_request_with_a_redirect(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """СЧАСТЛИВЫЙ ПУТЬ НЕ ТРОНУТ: порция своего аккаунта отдаёт строки и курсор.
+
+    ⚠️ БЕЗ ЭТОЙ ПОЛОВИНЫ ПЕРЕВОД ОБЕИХ ВЕТОК НА СЛОЙ ОТВЕТА БЫЛ БЫ ПРОВЕРЕН
+    ТОЛЬКО НА ОТКАЗАХ. Обработчик, ушедший в слой ответа целиком, отвечал бы 204
+    и на успешный запрос — и прокрутка молча перестала бы дочитывать список. До
+    этого правила ни один тест файла не звал маршрут порции С ПРИЗНАКОМ htmx.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(35)]
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    response = await htmx_client.get(_sentinels(page)[0])
+
+    assert response.status_code == 200, (
+        f"счастливый путь порции ответил {response.status_code} вместо строк"
+    )
+    assert "<!DOCTYPE" not in response.text, (
+        "порция своего аккаунта приехала целым документом"
+    )
+    assert _row_ids(response.text) == [group.id for group in seeded[30:]], (
+        "порция отдала не продолжение списка"
+    )
