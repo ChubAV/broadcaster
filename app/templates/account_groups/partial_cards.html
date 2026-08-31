@@ -10,7 +10,13 @@
 
 {% from "account_groups/includes/group_row.html" import group_row %}
 {% from "account_groups/includes/sentinel.html" import sentinel %}
-{% for group in groups %}{{ group_row(group, account_id, schedule_counts.get(group.id, 0), user, filter_search=(filter_params|default({})).get('search', '')) }}{% endfor %}
+{#- `has_sentinel` — ТО ЖЕ УСЛОВИЕ, под которым ниже рисуется узел курсора, и
+    передаётся оно ЗДЕСЬ по той же причине, что и в list.html: знает его
+    отрисовщик порции, а не строка (план 09-11, решение владельца
+    `conditional-include`). У ПОСЛЕДНЕЙ порции условие ложно, и её строки
+    включаемых данных не объявляют вовсе — объявлять нечего, узла курсора после
+    неё в документе нет. -#}
+{% for group in groups %}{{ group_row(group, account_id, schedule_counts.get(group.id, 0), user, filter_search=(filter_params|default({})).get('search', ''), has_sentinel=has_next) }}{% endfor %}
 {# Сентинел приходит из ЕДИНОГО ИСТОЧНИКА — того же макроса, что зовёт
    list.html (план 09-05). Прежде здесь стояла вторая копия разметки вместе с
    циклом проброса параметров, и синхронность держалась сравнением строк двух

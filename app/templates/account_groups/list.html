@@ -198,7 +198,13 @@
        страницу, а молча подмешивает к найденному остальной список аккаунта
        (T-04-01, T-03-21). #}
   <div data-group-list>
-    {% for group in groups %}{{ group_row(group, account_id, schedule_counts.get(group.id, 0), user, filter_search=filter_search) }}{% endfor %}
+    {#- `has_sentinel` — ТО ЖЕ САМОЕ УСЛОВИЕ, что рисует узел курсора тремя
+        строками ниже, и передаётся оно ЗДЕСЬ потому, что знает его отрисовщик
+        списка, а не строка (план 09-11, решение владельца `conditional-include`).
+        Панель подтверждения строки объявляет включаемые данные селектором,
+        называющим сентинел; без этого признака она объявляла бы его и там, где
+        узла нет. -#}
+    {% for group in groups %}{{ group_row(group, account_id, schedule_counts.get(group.id, 0), user, filter_search=filter_search, has_sentinel=has_next) }}{% endfor %}
     {% if has_next %}
 {{ sentinel(account_id, next_offset, filter_params) }}
     {% endif %}
