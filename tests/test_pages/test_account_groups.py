@@ -799,10 +799,15 @@ async def test_page_shows_thirty_rows_and_a_sentinel(
 
     html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
 
-    assert len(_row_ids(html)) == 30, "страница отдала не 30 строк"
+    rows = _row_ids(html)
+    assert len(rows) == 30, "страница отдала не 30 строк"
     sentinels = _sentinels(html)
     assert len(sentinels) == 1, f"сентинел не единственный: {sentinels}"
-    assert "offset=30" in sentinels[0], sentinels[0]
+    # ⚠️ УТВЕРЖДАЕТСЯ КЛЮЧ ПОСЛЕДНЕЙ ОТРИСОВАННОЙ СТРОКИ, А НЕ ЧИСЛО
+    # ОТРИСОВАННЫХ (план 09-13, решение владельца `keyset`). Форма строже
+    # прежней: прежнее `offset=30` зеленело бы и на курсоре, указывающем не на
+    # ту строку, — оно утверждало ЧИСЛО, а не связь с документом.
+    assert f"after_id={rows[-1]}" in sentinels[0], sentinels[0]
     assert "limit=30" in sentinels[0], sentinels[0]
 
 
@@ -840,7 +845,7 @@ async def test_partial_of_a_foreign_account_leaks_nothing(
     )
 
     response = await authed_client.get(
-        f"/accounts/{foreign_account.id}/groups/partial?offset=0&limit=30",
+        f"/accounts/{foreign_account.id}/groups/partial?limit=30",
         follow_redirects=False,
     )
 
@@ -861,7 +866,7 @@ async def test_partial_without_session_goes_to_login(
     account = await _seed_account(db_session)
 
     response = await client.get(
-        f"/accounts/{account.id}/groups/partial?offset=0&limit=30",
+        f"/accounts/{account.id}/groups/partial?limit=30",
         follow_redirects=False,
     )
 
@@ -870,7 +875,12 @@ async def test_partial_without_session_goes_to_login(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("query", ["offset=-1&limit=30", "offset=0&limit=101"])
+# ⚠️ ПАРАМЕТРЫ ПЕРЕМЕРЕНЫ ПОД НОВУЮ ФОРМУ КУРСОРА (план 09-13, `keyset`):
+# прежние `offset=-1` и `offset=0` называли параметр, которого у маршрута
+# больше нет, и FastAPI молча пропускал бы их как неизвестные — правило
+# зеленело бы на 200 вместо 422, ничего не проверяя. Курсор объявлен
+# `Query(None, ge=1)`, поэтому вырожденный ключ отвергается ДО обращения к базе.
+@pytest.mark.parametrize("query", ["after_id=0&limit=30", "after_id=1&limit=101"])
 async def test_partial_rejects_bad_pagination_params(
     authed_client: AsyncClient, db_session: AsyncSession, query: str
 ):
@@ -986,13 +996,17 @@ async def test_partial_carries_no_counter_line(
 ):
     """Паршал прокрутки линейку не трогает — у неё не бывает промежуточных чисел."""
     account = await _seed_account(db_session)
-    await _seed_many(db_session, account, [f"Активная {i:02d}" for i in range(32)])
+    active = await _seed_many(
+        db_session, account, [f"Активная {i:02d}" for i in range(32)]
+    )
     await _seed_many(
         db_session, account, [f"Выключенная {i}" for i in range(3)], active=False
     )
 
+    # Ключ ТРИДЦАТОЙ строки — то, что несёт сентинел первой страницы после
+    # плана 09-13: порция добирает строки строго больше него.
     response = await authed_client.get(
-        f"/accounts/{account.id}/groups/partial?offset=30&limit=30"
+        f"/accounts/{account.id}/groups/partial?after_id={active[29].id}&limit=30"
     )
 
     # Положительное утверждение первым: без него тест зеленел бы на пустом теле
@@ -1096,14 +1110,20 @@ async def test_schedule_count_ignores_foreign_schedules(
 
 SENTINEL_SOURCE = "account_groups/includes/sentinel.html"
 
-# Места, зовущие сентинел: страница, порция прокрутки и ответ удаления. Перечень
-# выписан здесь, а не выведен обходом: место, ПЕРЕСТАВШЕЕ звать общий макрос,
-# обязано быть замечено, а обход, собирающий вызывающих по факту вызова, о таком
-# месте промолчал бы — оно просто выпало бы из собранного множества.
+# Места, зовущие сентинел: страница и порция прокрутки. Перечень выписан здесь,
+# а не выведен обходом: место, ПЕРЕСТАВШЕЕ звать общий макрос, обязано быть
+# замечено, а обход, собирающий вызывающих по факту вызова, о таком месте
+# промолчал бы — оно просто выпало бы из собранного множества.
+#
+# ЛЕТОПИСЬ ПЕРЕЧНЯ: 3 → 2, Фаза 9, план 09-13, решение владельца `keyset` —
+# ответ удаления перестал отрисовывать курсор ВОВСЕ. Причина названа предметно:
+# курсор стал ключом последней отрисованной строки, поэтому удаление любой уже
+# отрисованной строки его не двигает, и чинить внеполосным узлом нечего. Запись
+# сдвинута ЗДЕСЬ, а не подогнана молча: выпавшее из перечня место обязано быть
+# отличимо от места, которое просто перестали проверять.
 SENTINEL_CALLERS = (
     "account_groups/list.html",
     "account_groups/partial_cards.html",
-    "account_groups/partials/delete_response.html",
 )
 
 
@@ -2794,8 +2814,7 @@ async def test_a_no_op_delete_does_not_double_a_row(
     rendered = _row_ids(page)
 
     foreign = await htmx_client.post(
-        f"/accounts/{account.id}/groups/{foreign_group.id}/delete",
-        data={"rendered_rows": len(rendered)},
+        f"/accounts/{account.id}/groups/{foreign_group.id}/delete"
     )
     assert foreign.status_code == 200, (
         f"холостое удаление получило {foreign.status_code} вместо фрагмента"
@@ -2821,8 +2840,7 @@ async def test_a_no_op_delete_does_not_double_a_row(
     # --- (б) идентификатор УЖЕ УДАЛЁННОЙ группы ------------------------------
     victim = rendered[0]
     first = await htmx_client.post(
-        f"/accounts/{account.id}/groups/{victim}/delete",
-        data={"rendered_rows": len(rendered)},
+        f"/accounts/{account.id}/groups/{victim}/delete"
     )
     assert first.status_code == 200
 
@@ -2830,8 +2848,7 @@ async def test_a_no_op_delete_does_not_double_a_row(
     rendered_again = _row_ids(page_again)
 
     repeat = await htmx_client.post(
-        f"/accounts/{account.id}/groups/{victim}/delete",
-        data={"rendered_rows": len(rendered_again)},
+        f"/accounts/{account.id}/groups/{victim}/delete"
     )
     assert repeat.status_code == 200
 
@@ -2849,29 +2866,45 @@ async def test_a_no_op_delete_does_not_double_a_row(
         "повторное удаление сдвинуло состав списка"
     )
 
-    # Наличие четвёртого узла НЕ ЗАВИСИТ от того, нашлась ли строка: иначе само
-    # его присутствие стало бы признаком состоявшегося удаления, и
-    # неотличимость сломалась бы с другой стороны (T-09-05-06).
-    assert foreign.text.count("hx-swap-oob") == 4, (
+    # Число внеполосных узлов НЕ ЗАВИСИТ от того, нашлась ли строка: иначе оно
+    # само стало бы признаком состоявшегося удаления, и неотличимость сломалась
+    # бы с другой стороны (T-09-05-06).
+    #
+    # ЛЕТОПИСЬ ЧИСЛА: 4 → 3, Фаза 9, план 09-13, решение владельца `keyset` —
+    # четвёртый узел (починка курсора) снят вместе с задачей, которую решал.
+    # Утверждение НЕ ослаблено: оно по-прежнему говорит, что число одинаково у
+    # найденной и у ненайденной строки, и краснеет при возврате условной сборки.
+    assert foreign.text.count("hx-swap-oob") == 3, (
         f"на холостом пути внеполосных узлов "
-        f"{foreign.text.count('hx-swap-oob')}, а не четыре — по наличию "
-        f"четвёртого узла стало бы видно, состоялось ли удаление"
+        f"{foreign.text.count('hx-swap-oob')}, а не три — по их числу стало бы "
+        f"видно, состоялось ли удаление"
     )
-    assert repeat.text.count("hx-swap-oob") == 4, (
+    assert repeat.text.count("hx-swap-oob") == 3, (
         f"на повторном удалении внеполосных узлов "
-        f"{repeat.text.count('hx-swap-oob')}, а не четыре"
+        f"{repeat.text.count('hx-swap-oob')}, а не три"
     )
 
 
 @pytest.mark.asyncio
-async def test_the_delete_response_repairs_the_sentinel_only_over_htmx(
+async def test_the_delete_response_never_carries_a_scroll_cursor(
     authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
 ):
-    """Четвёртый узел приезжает ТОЛЬКО когда документ прислал своё число строк.
+    """Ответ удаления не несёт узла курсора НИ ПРИ КАКОМ теле запроса.
 
-    Половина пары SP-3: путь деградации не тронут вовсе, и присланное поле его
+    ⚠️ ПРАВИЛО ОБРАЩЕНО ПЛАНОМ 09-13 (решение владельца `keyset`), А НЕ СНЯТО, И
+    ЭТО НАЗЫВАЕТСЯ ЗДЕСЬ ПРЯМО. Прежде оно звалось
+    `test_the_delete_response_repairs_the_sentinel_only_over_htmx` и
+    утверждало, что четвёртый узел приезжает ТОЛЬКО когда документ прислал своё
+    число отрисованных строк. Числа документ больше не шлёт, и правило в прежней
+    форме зеленело бы на любом дереве — включая дерево, куда четвёртый узел
+    вернули. Теперь утверждается СИЛЬНОЕ: узла курсора в ответе нет ВООБЩЕ, и
+    подослать его нельзя ничем — ни прежним полем, ни любым другим телом.
+    Правило краснеет ровно тогда, когда в контракт возвращается величина,
+    снимаемая в один момент и применяемая в другой (CR-01).
+
+    Половина пары SP-3: путь деградации не тронут вовсе, и присланное тело его
     не переключает — без признака htmx ответом остаётся прежнее
-    перенаправление, даже если поле в теле есть.
+    перенаправление.
 
     ⚠️ ПРИЗНАК htmx СНИМАЕТСЯ ЯВНО ПУСТЫМ ЗНАЧЕНИЕМ ЗАГОЛОВКА, А НЕ ВЫБОРОМ
     ФИКСТУРЫ, И ЭТО ВЫНУЖДЕННО. `htmx_client` возвращает ТОТ ЖЕ объект клиента,
@@ -2887,30 +2920,41 @@ async def test_the_delete_response_repairs_the_sentinel_only_over_htmx(
 
     page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
     rendered = _row_ids(page)
-    target, neighbour = rendered[0], rendered[1]
+    target, neighbour, third = rendered[0], rendered[1], rendered[2]
 
-    without_field = await htmx_client.post(
-        f"/accounts/{account.id}/groups/{target}/delete"
-    )
-    assert without_field.status_code == 200
-    assert without_field.text.count("hx-swap-oob") == 3, (
-        f"без поля числа отрисованных строк ответ несёт "
-        f"{without_field.text.count('hx-swap-oob')} внеполосных узла вместо "
-        f"трёх — сервер починил курсор по числу, которого ему не присылали"
-    )
-    assert not _sentinels(without_field.text), (
-        "без поля числа отрисованных строк ответ подменил сентинел — смещение "
-        "взято ниоткуда"
-    )
-    assert f'id="group-row-{target}"' in without_field.text, (
-        "узел снятия строки пропал: три прежних узла обязаны остаться на месте"
-    )
-    assert f'id="group-del-{target}"' in without_field.text, (
-        "узел снятия панели подтверждения пропал"
-    )
-    assert 'hx-swap-oob="innerHTML:#account-groups-count"' in without_field.text, (
-        "узел линейки счётчика пропал"
-    )
+    # ДВА ТЕЛА: пустое и несущее ПРЕЖНЕЕ, СНЯТОЕ ПОЛЕ. Второе — не украшение:
+    # оно доказывает, что вернуть починку курсора ПОДСУНУТЫМ полем нельзя.
+    # Правило, проверившее только пустое тело, зеленело бы и на обработчике,
+    # который снятое поле всё ещё читает.
+    for label, victim, body in (
+        ("пустом", target, None),
+        ("несущем снятое поле", third, {"rendered_rows": 30}),
+    ):
+        response = await htmx_client.post(
+            f"/accounts/{account.id}/groups/{victim}/delete", data=body
+        )
+        assert response.status_code == 200, (
+            f"при {label} теле ответ {response.status_code} вместо фрагмента"
+        )
+        assert response.text.count("hx-swap-oob") == 3, (
+            f"при {label} теле ответ несёт "
+            f"{response.text.count('hx-swap-oob')} внеполосных узла вместо трёх "
+            f"— в ответе появился узел, которого контракт не предусматривает"
+        )
+        assert not _sentinels(response.text), (
+            f"при {label} теле ответ подменил сентинел — починка курсора "
+            f"вернулась в контракт, а вместе с ней и класс отказа CR-01"
+        )
+        assert f'id="group-row-{victim}"' in response.text, (
+            f"при {label} теле узел снятия строки пропал: три узла обязаны "
+            f"остаться на месте"
+        )
+        assert f'id="group-del-{victim}"' in response.text, (
+            f"при {label} теле узел снятия панели подтверждения пропал"
+        )
+        assert 'hx-swap-oob="innerHTML:#account-groups-count"' in response.text, (
+            f"при {label} теле узел линейки счётчика пропал"
+        )
 
     degraded = await authed_client.post(
         f"/accounts/{account.id}/groups/{neighbour}/delete",
@@ -2920,7 +2964,7 @@ async def test_the_delete_response_repairs_the_sentinel_only_over_htmx(
     )
     assert degraded.status_code == 302, (
         f"запрос без признака htmx получил {degraded.status_code} — присланное "
-        "число строк переключило путь деградации на фрагментный ответ"
+        "тело переключило путь деградации на фрагментный ответ"
     )
     assert degraded.headers["location"] == f"/accounts/{account.id}/groups"
     assert not _sentinels(degraded.text), (
@@ -2933,11 +2977,19 @@ async def test_the_delete_response_repairs_the_sentinel_only_over_htmx(
 async def test_the_sentinel_carries_a_stable_id_in_both_templates(
     authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
 ):
-    """Идентификатор сентинела ОДИН И ТОТ ЖЕ во всех трёх местах отрисовки.
+    """Идентификатор сентинела ОДИН И ТОТ ЖЕ в обоих местах отрисовки.
 
-    Без стабильного идентификатора ответу удаления некуда целиться: узел,
-    названный по-разному на странице и в порции, чинился бы через раз — ровно у
-    того, кто долистал.
+    Без стабильного идентификатора узел, названный по-разному на странице и в
+    порции, подменял бы себя через раз — ровно у того, кто долистал.
+
+    ⚠️ ТРЕТЬЕ МЕСТО ОТРИСОВКИ СНЯТО ПЛАНОМ 09-13 (решение владельца `keyset`), И
+    УТВЕРЖДЕНИЕ О НЁМ НЕ УБРАНО, А ОБРАЩЕНО. Прежде здесь требовалось, чтобы
+    ответ удаления нёс ТОТ ЖЕ идентификатор — иначе починка курсора целилась бы
+    в узел, которого в документе нет, и рантайм промолчал бы. Теперь требуется
+    обратное и не менее строго: ответ удаления не несёт узла курсора ВОВСЕ.
+    Утверждение краснеет, если четвёртый узел вернётся в дерево, — то есть если
+    вернётся и величина, которую можно снять в один момент и применить в
+    другой (CR-01).
     """
     account = await _seed_account(db_session)
     await _seed_many(
@@ -2948,8 +3000,7 @@ async def test_the_sentinel_carries_a_stable_id_in_both_templates(
     portion = (await authed_client.get(_sentinels(page)[0])).text
     rendered = _row_ids(page)
     response = await htmx_client.post(
-        f"/accounts/{account.id}/groups/{rendered[0]}/delete",
-        data={"rendered_rows": len(rendered)},
+        f"/accounts/{account.id}/groups/{rendered[0]}/delete"
     )
 
     on_page = _sentinel_ids(page)
@@ -2963,10 +3014,11 @@ async def test_the_sentinel_carries_a_stable_id_in_both_templates(
         f"идентификатор сентинела в порции прокрутки разошёлся со страницей: "
         f"{in_portion} против {on_page}"
     )
-    assert in_response == on_page, (
-        f"идентификатор сентинела в ответе удаления разошёлся со страницей: "
-        f"{in_response} против {on_page} — починка курсора целится в узел, "
-        f"которого в документе нет, и рантайм промолчит об этом"
+    assert in_response == [], (
+        f"ответ удаления принёс узел курсора {in_response} — курсор снова "
+        f"чинится подменой, то есть в контракт вернулась величина, снимаемая в "
+        f"один момент и применяемая в другой (CR-01). При ключевом курсоре "
+        f"чинить нечего: удаление уже отрисованной строки его не двигает"
     )
 
 
@@ -3019,14 +3071,24 @@ async def test_the_delete_degrades_without_the_rendered_rows_field(
 
 
 @pytest.mark.asyncio
-async def test_the_repaired_sentinel_keeps_the_search_filter(
+async def test_the_scroll_cursor_keeps_the_search_filter_after_a_delete(
     authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
 ):
-    """Починенный сентинел дочитывает ОТФИЛЬТРОВАННУЮ выдачу, а не весь список.
+    """Курсор дочитывает ОТФИЛЬТРОВАННУЮ выдачу и после удаления.
 
     Потерянная строка поиска не роняет страницу и не меняет кода ответа: она
     молча подмешивает к найденному остальной список аккаунта, и человек видит в
     выдаче поиска чужие по смыслу строки.
+
+    ⚠️ ИМЯ И ФОРМА ПРАВИЛА СДВИНУТЫ ПЛАНОМ 09-13 (решение владельца `keyset`), А
+    ПРЕДМЕТ СОХРАНЁН ЦЕЛИКОМ, И ЭТО НАЗЫВАЕТСЯ ЗДЕСЬ ПРЯМО. Прежде правило
+    звалось `test_the_repaired_sentinel_keeps_the_search_filter` и утверждало,
+    что ПОЧИНЕННЫЙ ответом удаления сентинел несёт тот же фильтр. Починки
+    больше нет; правило с прежним именем стало бы утверждением о несуществующем
+    узле, то есть зелёным по построению — ровно та форма отказа, против которой
+    заведён этот круг. Спрашивается теперь то же самое, но у ДОКУМЕНТА: узел
+    курсора удаление переживает нетронутым, и дочитывание ПОСЛЕ удаления обязано
+    вернуть строки только отфильтрованной выдачи.
     """
     account = await _seed_account(db_session)
     await _seed_many(
@@ -3055,15 +3117,27 @@ async def test_the_repaired_sentinel_keeps_the_search_filter(
     rendered = _row_ids(page)
     response = await htmx_client.post(
         f"/accounts/{account.id}/groups/{rendered[0]}/delete",
-        data={"rendered_rows": len(rendered), "search": "Альфа"},
+        data={"search": "Альфа"},
     )
-    repaired = _sentinels(response.text)
-    assert repaired, "ответ удаления не принёс починенного сентинела"
+    assert response.status_code == 200, (
+        f"фрагментная ветка не достигнута: {response.status_code}"
+    )
+    assert not _sentinels(response.text), (
+        "ответ удаления принёс узел курсора — курсор снова чинится подменой, и "
+        "вместе с починкой возвращается величина, снимаемая в один момент и "
+        "применяемая в другой (CR-01)"
+    )
 
-    assert _search_param(repaired[0]) == _search_param(page_sentinels[0]), (
-        f"после удаления сентинел дочитывает НЕотфильтрованный список: "
-        f"{repaired[0]} против {page_sentinels[0]} — в выдаче поиска появятся "
-        f"строки, которых человек не искал"
+    # Документ дочитывает СВОИМ узлом, который удаление не тронуло.
+    rest = await authed_client.get(page_sentinels[0])
+    assert rest.status_code == 200
+    assert _row_ids(rest.text), (
+        "дочитывание после удаления не вернуло ни одной строки — утверждение о "
+        "фильтре ниже стало бы вакуумным"
+    )
+    assert "Бета" not in rest.text, (
+        f"после удаления курсор дочитал НЕотфильтрованный список: в выдаче "
+        f"поиска «Альфа» появились строки «Бета» — {page_sentinels[0]}"
     )
 
 
@@ -3144,46 +3218,57 @@ async def test_the_delete_response_is_indistinguishable_for_a_foreign_and_a_miss
 
 
 @pytest.mark.asyncio
-async def test_a_non_positive_rendered_rows_does_not_build_a_sentinel(
-    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+async def test_a_degenerate_cursor_is_rejected_before_the_database(
+    authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Ноль и отрицательное число строк не строят курсор вовсе (T-09-05-01).
+    """Вырожденный ключ курсора отвергается ДО обращения к базе (T-09-13-01).
 
-    Величина приходит от НЕДОВЕРЕННОГО клиента. Отрицательное смещение в адресе
-    подгрузки — это либо отказ маршрута (`offset` объявлен неотрицательным),
-    либо молча съехавшая выдача; ни то ни другое не должно стать следствием
-    присланного числа.
+    ⚠️ ПРАВИЛО ПЕРЕНАЦЕЛЕНО ПЛАНОМ 09-13 (решение владельца `keyset`), А НЕ
+    СНЯТО, И КЛАСС УГРОЗЫ У НЕГО ТОТ ЖЕ. Прежде оно звалось
+    `test_a_non_positive_rendered_rows_does_not_build_a_sentinel` и утверждало,
+    что ноль и отрицательное ЧИСЛО ОТРИСОВАННЫХ СТРОК не строят курсор вовсе
+    (T-09-05-01). Поля этого в контракте больше нет, и правило в прежней форме
+    зеленело бы на любом дереве — то есть перестало бы отличать закрытую угрозу
+    от отменённой. Недоверенная величина курсора никуда не делась, она сменила
+    ФОРМУ: теперь это `after_id` в адресе порции. Спрашивается ровно то же —
+    вырожденная величина не должна ни уронить обработчик, ни молча оборвать
+    список.
+
+    Ключ объявлен `Query(None, ge=1)`, поэтому ноль и отрицательное значение
+    отвергаются маршрутом, а не превращаются в тихо съехавшую выдачу. Отсутствие
+    ключа — законный случай: он означает «с начала списка», и выдача при нём
+    полная, а не пустая.
     """
     account = await _seed_account(db_session)
     seeded = await _seed_many(
         db_session, account, [f"Группа {i:02d}" for i in range(PAGE_SIZE + 5)]
     )
 
-    for value, victim in ((0, seeded[0]), (-5, seeded[1])):
-        response = await htmx_client.post(
-            f"/accounts/{account.id}/groups/{victim.id}/delete",
-            data={"rendered_rows": value},
+    for value in (0, -5):
+        response = await authed_client.get(
+            f"/accounts/{account.id}/groups/partial?after_id={value}&limit=30",
+            follow_redirects=False,
+        )
+        assert response.status_code == 422, (
+            f"after_id={value} принят маршрутом ({response.status_code}) — "
+            f"вырожденный ключ дошёл бы до выборки, и список оборвался бы молча"
+        )
+        assert not _row_ids(response.text), (
+            f"после отказа при after_id={value} в теле оказались строки"
         )
 
-        assert response.status_code == 200, (
-            f"rendered_rows={value} уронил обработчик: {response.status_code}"
-        )
-        assert response.text.count("hx-swap-oob") == 3, (
-            f"при rendered_rows={value} ответ несёт "
-            f"{response.text.count('hx-swap-oob')} внеполосных узла вместо "
-            f"трёх — курсор построен по вырожденному числу"
-        )
-        assert not _sentinels(response.text), (
-            f"при rendered_rows={value} ответ подменил сентинел"
-        )
-        assert "offset=-" not in response.text, (
-            f"при rendered_rows={value} в адрес подгрузки уехало отрицательное "
-            f"смещение — маршрут ответит отказом, и список молча оборвётся"
-        )
-        assert (await db_session.get(Group, victim.id)) is None, (
-            f"при rendered_rows={value} удаление не состоялось — вырожденное "
-            f"число повлияло на действие, а не только на курсор"
-        )
+    # АНТИВАКУУМ: отсутствие ключа — не отказ, а «с начала списка». Без этого
+    # утверждения правило зеленело бы и на маршруте, отвергающем ВСЁ подряд.
+    full = await authed_client.get(
+        f"/accounts/{account.id}/groups/partial?limit=30"
+    )
+    assert full.status_code == 200, (
+        f"порция без ключа получила {full.status_code} — «с начала списка» "
+        f"перестало быть законным случаем"
+    )
+    assert _row_ids(full.text) == [group.id for group in seeded[:PAGE_SIZE]], (
+        "порция без ключа вернула не начало списка"
+    )
 
 
 # =============================================================================

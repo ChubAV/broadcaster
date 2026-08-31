@@ -154,6 +154,25 @@
    ответы на одно и то же действие. При непереданном параметре — а это
    умолчание — разметка панели не меняется ни на символ.
 
+   ⚠️ ЕДИНСТВЕННЫЙ ВЫЗЫВАЮЩИЙ ПЕРЕСТАЛ ПЕРЕДАВАТЬ `hx_include` ПЛАНОМ 09-13
+   (решение владельца `keyset`): курсор прокрутки экрана групп стал ключом
+   последней отрисованной строки, и включать с живого документа стало нечего.
+   САМ ПАРАМЕТР ОСТАЁТСЯ — он рычаг Фазы 10, и снятие его задело бы
+   шестнадцать мест подтверждения ради формы, у которой сегодня нет ни одного
+   потребителя. Умолчание оставляет все шестнадцать байт-в-байт прежними.
+
+   ⚠️ ПРИЗНАК ОТКРЫТОЙ ПАНЕЛИ ПОДНИМАЕТСЯ НА ЭЛЕМЕНТ ДОКУМЕНТА (план 09-13,
+   добавка `scroll-lock` решением владельца). Панель объявлена
+   `position: fixed; inset: 0` и прокрутку тела сама по себе не блокирует,
+   поэтому список за ней продолжал прокручиваться — а вместе с прокруткой
+   срабатывал `hx-trigger="revealed"` сентинела и порция улетала в полёте.
+   Признак снимает `hide()` и поднимает `show()`, то есть тот же Alpine, что
+   уже управляет показом; новых файлов JS добавка не заводит. ⚠️ ДОБАВКА
+   ЗАКРЫВАЕТ ОДИН ПУТЬ К ОКНУ, А НЕ ОКНО, и самостоятельным закрытием CR-01 не
+   является — это записано владельцем при выборе. Запрос порции может лететь и
+   с момента ДО открытия панели; класс отказа закрывает форма курсора, а не эта
+   добавка.
+
    ⚠️ НАСЛЕДОВАНИЕ ЭТОГО ПРИЗНАКА С ПРЕДКА ЗАПРЕЩЕНО И ЗАПРЕЩЕНО ОСОЗНАННО.
    Признак читается рантаймом по ближайшему предку, поэтому навешенный на
    контейнер списка он молча прицепил бы поле ко ВСЕМ htmx-запросам внутри
@@ -186,8 +205,8 @@
        open: false,
        opener: null,
        sending: false,
-       show() { this.sending = false; this.opener = document.activeElement; this.open = true; this.$nextTick(() => this.$refs.cancel.focus()); },
-       hide() { if (!this.open) return; this.open = false; const back = this.opener; this.opener = null; if (back && back.focus) this.$nextTick(() => back.focus()); },
+       show() { this.sending = false; this.opener = document.activeElement; this.open = true; document.documentElement.classList.add('is-modal-open'); this.$nextTick(() => this.$refs.cancel.focus()); },
+       hide() { if (!this.open) return; this.open = false; document.documentElement.classList.remove('is-modal-open'); const back = this.opener; this.opener = null; if (back && back.focus) this.$nextTick(() => back.focus()); },
        items() { return Array.from(this.$refs.panel.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])')).filter(el => el.offsetParent !== null); },
        trap(e) { const f = this.items(); if (!f.length) return; const last = f.length - 1; const i = f.indexOf(document.activeElement); let next; if (e.shiftKey) { next = (i === 0 || i === -1) ? f[last] : f[i - 1]; } else { next = (i === -1 || i === last) ? f[0] : f[i + 1]; } next.focus(); }
      }"
