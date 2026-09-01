@@ -1,0 +1,16 @@
+{
+  "orchestrator_root": "/source/broadcaster",
+  "worktrees": [
+    {
+      "agent_id": "agent-a217c9b7b59eb5230",
+      "worktree_path": "/source/broadcaster/.claude/worktrees/agent-a217c9b7b59eb5230",
+      "branch": "worktree-agent-a217c9b7b59eb5230",
+      "expected_base": "6d42a3cafcea4c69b0e2db1a6872d20520da486d",
+      "files_modified": [
+        "app/templates/components/modal.html",
+        "app/static/css/app.css",
+        "tests/test_templates/test_components.py"
+      ]
+    }
+  ]
+}

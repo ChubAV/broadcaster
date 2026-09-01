@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 09
-current_phase_name: Пилот на `account_groups` — сквозной контракт формы
+current_phase_name: Пилот на account_groups — сквозной контракт формы
 status: executing
 stopped_at: Completed 09-12-PLAN.md
-last_updated: "2026-09-01T06:26:49.876Z"
-last_activity: 2026-08-31
+last_updated: "2026-09-01T06:52:34.563Z"
+last_activity: 2026-09-01
 last_activity_desc: Phase 09 execution started
-state_head: 02c8845755f4653256efa6d8ce9788a2fb822f1f
+state_head: 6d42a3cafcea4c69b0e2db1a6872d20520da486d
 progress:
   total_phases: 9
   completed_phases: 2
@@ -25,7 +25,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-29)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 09 — Пилот на `account_groups` — сквозной контракт формы
+**Current focus:** Phase 09 — Пилот на account_groups — сквозной контракт формы
 
 **Пройдено в вехе v2.1: Фазы 7 и 8** (18 планов). Фаза 8 закрыта 2026-08-29 — 11/11 планов, верификация `passed`, UAT 9/9, `threats_open: 0`.
 
@@ -35,12 +35,12 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 09 (Пилот на `account_groups` — сквозной контракт формы) — READY TO EXECUTE
-Plan: 1 of 16
+Phase: 09 (Пилот на account_groups — сквозной контракт формы) — EXECUTING
+Plan: 1 of 20
 Total Plans in Phase: 20
 Completed Plans in Phase: 9
-Status: Ready to execute
-Last activity: 2026-08-31 — Phase 09 execution started
+Status: Executing Phase 09
+Last activity: 2026-09-01 — Phase 09 execution started
 
 Progress: [████████████████████] 27/27 plans ([██░░░░░░░░] 22%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: 2/9 (22%) — Фаза 09 НЕ засчитана: верификация `gaps_found`.
 
@@ -322,7 +322,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Ready to execute
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Executing Phase 09
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity

@@ -1,0 +1,90 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-01T07:53:38.658Z",
+  "phase": "09",
+  "phase_name": "Пилот на `account_groups` — сквозной контракт формы",
+  "phase_dir": ".planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy",
+  "plan": 17,
+  "task": 3,
+  "total_tasks": 3,
+  "status": "paused",
+  "run_mode": "/gsd-execute-phase 09 --gaps-only",
+  "completed_tasks": [
+    {
+      "id": 1,
+      "name": "Поведенческое правило сноса (RED)",
+      "status": "done",
+      "commit": "2f9875f",
+      "note": "RED_SHA. Нагруженное подмножество вернуло ровно 1 (2 failed), зелёное 0 (3 passed), остаток 0 (52 passed), git diff --stat app/ пуст."
+    },
+    {
+      "id": 2,
+      "name": "РЕШЕНИЕ ВЛАДЕЛЬЦА — класс механизма блокировки прокрутки",
+      "status": "done",
+      "commit": null,
+      "note": "checkpoint:decision gate=blocking-human. Владелец ответил `destroy-guard`. Ответ передан исполнителю дословно."
+    },
+    {
+      "id": 3,
+      "name": "Применение ветви destroy-guard + цветовой переход на RED_SHA",
+      "status": "in_progress",
+      "progress": "Субагент a217c9b7b59eb5230 выполнял задачу в своём worktree на момент паузы; app/templates/components/modal.html был изменён и НЕ закоммичен."
+    }
+  ],
+  "remaining_tasks": [
+    {"id": "09-17-t3", "name": "Завершить задачу 3 плана 09-17 и закоммитить SUMMARY.md (сейчас status: halted)", "status": "in_progress"},
+    {"id": "09-17-merge", "name": "Слить worktree волны 1 через worktree.cleanup-wave по манифесту", "status": "not_started"},
+    {"id": "09-18", "name": "Волна 2 — CR-02/WR-01/WR-02: ответ тумблера теряет поле search", "status": "not_started"},
+    {"id": "09-19", "name": "Волна 3 — WR-04/WR-05: граница окна теста + отложенные пункты", "status": "not_started"},
+    {"id": "09-20", "name": "Волна 4 — пересдача UAT (checkpoint:human-action, blocking-human) + бухгалтерия круга", "status": "not_started"},
+    {"id": "tail", "name": "Хвостовые гейты: aggregate_results → code_review_gate → regression_gate → verify_phase_goal → update_roadmap", "status": "not_started"}
+  ],
+  "blockers": [
+    {
+      "description": "Субагент gsd-executor a217c9b7b59eb5230 был ЖИВ на момент паузы (запущен ~11 мин, выполнял задачу 3 плана 09-17). Он не остановлен. Его коммиты уходят на ветку worktree-agent-a217c9b7b59eb5230 и НЕ слиты в ветку фазы.",
+      "type": "technical",
+      "workaround": "При возобновлении: сперва проверить состояние worktree (git -C .claude/worktrees/agent-a217c9b7b59eb5230 log --oneline -5 и status --porcelain). Если SUMMARY.md переписан из status: halted и закоммичен — слить через worktree.cleanup-wave по манифесту. Если задача 3 не дошла до коммита — перезапустить план 09-17 с задачи 3 (ветвь уже выбрана: destroy-guard), НЕ спавня свежий isolation=worktree агент (он форкнется от 6d42a3c и потеряет RED_SHA)."
+    },
+    {
+      "description": "Манифест волны жил в /tmp/gsd-worktree-wave-GEwQvp.json — эфемерно, не переживёт перезагрузку. worktree.cleanup-wave отказывается работать без манифеста и запрещает широкий обход worktree.",
+      "type": "technical",
+      "workaround": "Долговечная копия сохранена и закоммичена: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/.worktree-wave-manifest.json — передавать её в --manifest."
+    }
+  ],
+  "async_jobs": [],
+  "human_actions_pending": [
+    {
+      "action": "Пересдать 09-UAT.md 3.1 / 3.2 / 3.3-Б и ЗАНОВО 3.5 на механизме keyset, плюс новый шаг — прокрутить страницу ПОСЛЕ успешного удаления и долистать до сентинела",
+      "context": "План 09-20, задача 2 — checkpoint:human-action gate=blocking-human. Живой браузер; ни один инструмент проекта эту половину не закрывает. Прежние отметки сняты на механизме абсолютного смещения, который план 09-13 удалил из дерева.",
+      "blocking": true
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "Ветвь CR-01 — `destroy-guard` (второй путь снятия признака на ветви сноса узла, под несущей проверкой if (this.open))",
+      "rationale": "Названа списком missing: отчёта верификации ПЕРВОЙ и ревизией независимо. Правка — одно поле объекта x-data в одном файле; разметка, сигнатура макроса и таблица стилей не двигаются. Число путей снятия становится равно числу путей ухода узла — класс отказа закрывается счётом. Побочная починка добавки (список за панелью не едет) сохраняется. Решение рейтингуется one-way: класс уедет во все 16 мест подтверждения одной правкой Фазы 10.",
+      "phase": "09"
+    },
+    {
+      "decision": "Волны исполняются строго последовательно 09-17 → 09-18 → 09-19 → 09-20, по frontmatter планов, а НЕ по карте waves из phase-plan-index",
+      "rationale": "phase-plan-index схлопывает все четыре gap-плана в волну 1, хотя frontmatter объявляет wave: 1..4 и цепочку depends_on 17→18→19→20 (индекс, судя по всему, не разрешает короткую форму id вида depends_on: [\"17\"]). Независимо от этого 09-17 и 09-19 оба правят tests/test_templates/test_components.py — проверка пересечения files_modified всё равно обязана их сериализовать.",
+      "phase": "09"
+    },
+    {
+      "decision": "Продолжение остановленного на чекпойнте плана — через SendMessage в ТОТ ЖЕ агент, а не свежий Agent(isolation=\"worktree\")",
+      "rationale": "worktree держит RED_SHA (2f9875f), а свежий worktree форкается от живого HEAD (6d42a3c), где этого коммита нет; задача 3 обязана исполнять цветовой переход именно на RED_SHA. Слить SUMMARY.md со status: halted в ветку фазы ради свежего агента было бы неверно.",
+      "phase": "09"
+    },
+    {
+      "decision": "Изоляция исполнителей — harness-worktree",
+      "rationale": "dispatch-isolation вернул harness-worktree с harnessFlag isolation=\"worktree\"; worktree.base-check дал shouldDegrade=false (reason: baseref-head), submodules отсутствуют, поэтому USE_WORKTREES_FOR_PLAN=true для всех четырёх планов.",
+      "phase": "09"
+    }
+  ],
+  "uncommitted_files": [
+    ".planning/milestone.lock (untracked, существовал до этой сессии — не трогался)",
+    "app/templates/components/modal.html — ВНУТРИ worktree agent-a217c9b7b59eb5230, не в основном дереве: незакоммиченная правка живого субагента"
+  ],
+  "next_action": "Проверить состояние worktree .claude/worktrees/agent-a217c9b7b59eb5230 (log + status --porcelain) и решить: слить волну 1 через worktree.cleanup-wave --manifest .planning/phases/09-.../.worktree-wave-manifest.json, либо доисполнить задачу 3 плана 09-17 по уже выбранной ветви destroy-guard.",
+  "context_notes": "Четвёртый круг закрытия гейпов Фазы 09, запущен как /gsd-execute-phase 09 --gaps-only. Все четыре незавершённых плана несут gap_closure: true. Волна 1 (09-17) дошла до задачи 3: правило заведено и КРАСНОЕ (teardown: raised=True, has_destroy=False, still_locked_after_teardown=True, repeat_matches=True; sibling: то же, repeat_matches=None) — замер планировщика на HEAD 4fe89da воспроизведён поле в поле. Владелец назвал ветвь destroy-guard, исполнитель её применял. Хвостовые гейты фазы (aggregate → code-review → regression → verify) ещё НЕ запускались; verification status на момент паузы — gaps_found. Режимы: auto-mode false, MVP false, TDD true (гейт tdd.review-checkpoint остаётся совещательным, т.к. MVP+TDD не выполняется одновременно), капабилити code-review активна."
+}
