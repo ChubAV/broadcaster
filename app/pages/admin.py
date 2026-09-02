@@ -96,6 +96,10 @@ from app.models.subscription import Subscription
 from app.pages import notices
 from app.pages.auth import set_session_cookie
 from app.pages.common import is_same_origin, templates
+# Первый вызов слоя ответа в этом модуле (план 10-03). Адрес деградации у
+# `respond` объявлен ОБЯЗАТЕЛЬНЫМ ключевым аргументом: обработчик, забывший путь
+# без JavaScript, не собирается как вызов.
+from app.pages.htmx import respond
 from app.services import max_container_manager, wa_container_manager
 from app.services.auth_service import (
     IMPERSONATION_EXPIRE_MINUTES,
@@ -911,7 +915,7 @@ async def admin_restart_worker(
             admin_user_id=admin.id,
             account_id=account_id,
         )
-        return RedirectResponse(url=location, status_code=302)
+        return await respond(request, redirect=location)
 
     manager = WORKER_RESTART_MANAGERS.get(account.type)
     if manager is None:
@@ -923,7 +927,9 @@ async def admin_restart_worker(
             account_id=account.id,
             channel=account.type,
         )
-        return RedirectResponse(url=f"{location}?notice={notices.WORKER_NO_CONTAINER}", status_code=302)
+        return await respond(
+            request, redirect=location, notice=notices.WORKER_NO_CONTAINER
+        )
 
     try:
         # ⚠️ В ОТДЕЛЬНОМ ПОТОКЕ, А НЕ ПРЯМО В ЦИКЛЕ СОБЫТИЙ. Менеджер синхронен и
@@ -942,7 +948,9 @@ async def admin_restart_worker(
             channel=account.type,
             error=str(e),
         )
-        return RedirectResponse(url=f"{location}?notice={notices.WORKER_RESTART_FAILED}", status_code=302)
+        return await respond(
+            request, redirect=location, notice=notices.WORKER_RESTART_FAILED
+        )
 
     # Привилегированная операция над ЧУЖОЙ сущностью обязана оставлять след, и
     # форма следа в проекте уже есть (`free_access_toggled`): именованный ключ,
@@ -953,7 +961,7 @@ async def admin_restart_worker(
         account_id=account.id,
         channel=account.type,
     )
-    return RedirectResponse(url=location, status_code=302)
+    return await respond(request, redirect=location)
 
 
 @router.get("/queue", response_class=HTMLResponse)
@@ -1107,9 +1115,18 @@ async def admin_drop_task(
             account_id=account_id,
             channel=account.type if account else None,
         )
-        return RedirectResponse(
-            url=f"{location}?result=unknown_account", status_code=302
-        )
+        # ⚠️ КЛЮЧ ИСХОДА ЕДЕТ ЧАСТЬЮ СТРОКИ АДРЕСА, А КОД РЕЕСТРА НЕ ПЕРЕДАЁТСЯ,
+        # И ЭТО РЕШЕНИЕ, А НЕ НЕДОСМОТР (D-07). Этот ключ — ШЕСТОЙ частный
+        # микро-контракт адресной строки, уцелевший после свода Фазы 8: в
+        # пятёрку, названную сводом, он не входил, у него своё место отрисовки на
+        # странице подраздела и свой закрытый словарь исходов. Переданный
+        # параметром кода, он уронил бы вызов на незарегистрированном коде — то
+        # есть свод пришлось бы делать здесь и мимоходом.
+        # ⚠️ КЛЮЧ НЕ СЧИТАЕТСЯ СВЕДЁННЫМ. Свод отдан Фазе 11, разделу
+        # администрирования; Фаза 10 остаётся рычагом, а не уборкой канала
+        # уведомлений. Без этой строки следующий читатель принял бы умолчание за
+        # завершённую работу.
+        return await respond(request, redirect=f"{location}?result=unknown_account")
 
     outcome = await drop_task(
         account.type, account.id, task_id, QUEUE_READ_LIMIT
@@ -1124,9 +1141,7 @@ async def admin_drop_task(
             task_id=task_id,
             outcome=outcome,
         )
-        return RedirectResponse(
-            url=f"{location}?result={outcome}", status_code=302
-        )
+        return await respond(request, redirect=f"{location}?result={outcome}")
 
     # Привилегированная операция над ЧУЖОЙ сущностью обязана оставлять след, и
     # форма следа в проекте уже есть (`worker_restarted`): именованный ключ, все
@@ -1139,9 +1154,7 @@ async def admin_drop_task(
         channel=account.type,
         task_id=task_id,
     )
-    return RedirectResponse(
-        url=f"{location}?result={DROP_REMOVED}", status_code=302
-    )
+    return await respond(request, redirect=f"{location}?result={DROP_REMOVED}")
 
 
 @router.get("/logs", response_class=HTMLResponse)
@@ -1846,15 +1859,13 @@ async def admin_delete_user(
 
     target_user = await db.get(User, user_id)
     if not target_user:
-        return RedirectResponse(url="/admin/users", status_code=302)
+        return await respond(request, redirect="/admin/users")
 
     # Don't allow admin to delete themselves
     if target_user.id == admin.id:
-        return RedirectResponse(
-            url=f"/admin/users/{user_id}", status_code=302
-        )
+        return await respond(request, redirect=f"/admin/users/{user_id}")
 
     await db.delete(target_user)
     await db.commit()
 
-    return RedirectResponse(url="/admin/users", status_code=302)
+    return await respond(request, redirect="/admin/users")
