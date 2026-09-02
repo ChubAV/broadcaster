@@ -170,6 +170,105 @@ async def test_the_admin_enters_as_the_user_from_the_card(
     )
 
 
+# Признак запроса от слоя письма. Литерал стоит здесь по тому же основанию, что
+# выписано у фикстуры `htmx_client`: единственность, которую держит веха, — это
+# единственность ЧТЕНИЯ признака ПРИЛОЖЕНИЕМ; здесь признак ПИШЕТСЯ, и пишущая
+# сторона — клиент, в продукте это сам слой письма в браузере.
+HTMX_REQUEST = {"HX-Request": "true"}
+
+
+@pytest.mark.asyncio
+async def test_impersonation_over_htmx_keeps_both_the_location_and_the_cookie(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """ТРОЙНАЯ пара: заголовок перехода, cookie личности и ФАКТИЧЕСКАЯ смена лица.
+
+    ⚠️ ТРИ ФАКТА УТВЕРЖДАЮТСЯ ОДНИМ ТЕСТОМ, И ЭТО НЕ ЭКОНОМИЯ ФАЙЛА. Ветка
+    перехода собирает НОВЫЙ ответ со статусом 204; cookie, навешенная на
+    выброшенный редирект, не уедет никуда. Тест, проверяющий ТОЛЬКО заголовок
+    перехода, остался бы при этом ЗЕЛЁНЫМ — а вход молча не состоялся бы:
+    администратор остался бы собой, и экран выглядел бы так, будто всё удалось.
+    Это самая привилегированная операция продукта, и её отказ не роняет запрос, а
+    делает вид, что сработал.
+
+    Третья половина существует потому, что первые две зелены и при cookie,
+    выставленной с негодными атрибутами: пара, не проверившая ДЕЙСТВИЕ под новой
+    cookie, доказывает передачу заголовка, а не смену личности.
+
+    ⚠️ МЕЖДУ ПОЛОВИНАМИ АДМИНИСТРАТОР ВОЗВРАЩАЕТСЯ К СЕБЕ, и это часть предмета,
+    а не уборка: после первой половины клиент уже несёт cookie чужой личности, а
+    вложенный вход отвергается зависимостью запрета (D-22). Без возврата вторая
+    половина проверяла бы отказ, а не переход.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+
+    # --- половина деградации: прежний ответ на прежний адрес, cookie на нём ---
+    without = await _impersonate(admin_client, target_id)
+
+    assert without.status_code == 302, (
+        f"путь деградации ответил {without.status_code} вместо 302 — "
+        "администратор без JavaScript остался бы без входа"
+    )
+    assert without.headers["location"] == "/dashboard"
+    assert "access_token" in _session_cookies(without), (
+        "путь деградации не выставил cookie личности — вход не состоялся бы и "
+        "здесь"
+    )
+    assert _act_of(without) is not None, (
+        "cookie пути деградации не несёт признака действующего лица: это "
+        "обычная сессия, а не имперсонация"
+    )
+
+    # --- возврат администратора к себе ---
+    back = await admin_client.post(
+        "/login",
+        data={"email": test_settings.admin_email, "password": PASSWORD},
+        follow_redirects=False,
+    )
+    assert back.status_code == 302, (
+        "администратор не вернулся к себе — вторая половина проверяла бы отказ "
+        "вложенного входа, а не переход"
+    )
+
+    # --- половина htmx: 204, заголовок перехода, тела нет, cookie НА ЭТОМ ЖЕ ---
+    #
+    # `follow_redirects=True` — часть предмета: ответ 302 пришёл бы сюда кодом
+    # 200 и телом чужого документа, и утверждение о 204 позеленеть не может.
+    with_layer = await admin_client.post(
+        f"/admin/users/{target_id}/impersonate",
+        headers=HTMX_REQUEST,
+        follow_redirects=True,
+    )
+
+    assert with_layer.status_code == 204, (
+        f"слою письма ответили {with_layer.status_code} вместо 204 — панель "
+        "подтверждения осталась бы открытой, а переход не состоялся бы"
+    )
+    assert with_layer.headers["HX-Location"] == "/dashboard", (
+        "заголовок перехода не назвал адрес приземления пути деградации"
+    )
+    assert with_layer.text == "", "у ответа 204 появилось тело"
+    assert "access_token" in _session_cookies(with_layer), (
+        "COOKIE ЛИЧНОСТИ ПОТЕРЯНА НА ОТВЕТЕ 204. Она навешена на выброшенный "
+        "редирект, а человеку уехал другой объект — вход молча не состоялся, и "
+        "заголовок перехода об этом не говорит ничего"
+    )
+    assert _act_of(with_layer) is not None, (
+        "cookie ответа 204 не несёт признака действующего лица — под чужой "
+        "личностью администратор не оказался"
+    )
+
+    # --- третья половина: личность ДЕЙСТВИТЕЛЬНО сменилась ---
+    page = await admin_client.get("/dashboard")
+
+    assert page.status_code == 200
+    assert f'<span class="user-name">{TARGET_NAME}</span>' in page.text, (
+        "следующий запрос под полученной cookie видит НЕ ТУ личность: заголовок "
+        "перехода приехал, а вход не состоялся — ровно тот отказ, ради которого "
+        "пара написана тройной"
+    )
+
+
 @pytest.mark.asyncio
 async def test_the_impersonation_token_carries_the_short_lifetime(
     admin_client: AsyncClient, db_session: AsyncSession

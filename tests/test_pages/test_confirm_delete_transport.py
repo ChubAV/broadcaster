@@ -80,6 +80,7 @@ from app.services.ops_state import (
 # расхождения, из-за которого в проекте единственный источник у запуска
 # интерпретатора JS и у разбора областей уведомления.
 from tests.test_pages.test_admin_panel import _FakeQueuePageRedis, _queue_task
+from tests.test_pages.test_editor_schedules import _seed_schedule
 from tests.test_pages.test_history_retry import _retry_env, _seed_log, _seed_retryable
 
 PASSWORD = "testpass123"
@@ -512,6 +513,70 @@ async def _arrange_missing_user(client, db, settings, identity) -> _Arranged:
 
 
 # =============================================================================
+# Посев: вход администратора под личностью пользователя
+# =============================================================================
+
+_impersonated_sequence = itertools.count(1)
+
+
+async def _seed_impersonation_target(db: AsyncSession) -> User:
+    target = User(
+        email=f"target{next(_impersonated_sequence)}@test.com",
+        password_hash="x",
+        name="Целевой",
+        timezone="UTC",
+    )
+    db.add(target)
+    await db.commit()
+    await db.refresh(target)
+    return target
+
+
+async def _arrange_impersonate(client, db, settings, identity) -> _Arranged:
+    target = await _seed_impersonation_target(db)
+    return _Arranged(url=f"/admin/users/{target.id}/impersonate")
+
+
+async def _arrange_impersonate_self(client, db, settings, identity) -> _Arranged:
+    admin = await _current_user(db, identity, settings)
+    return _Arranged(
+        url=f"/admin/users/{admin.id}/impersonate", landing_args={"user_id": admin.id}
+    )
+
+
+async def _arrange_missing_impersonation_target(
+    client, db, settings, identity
+) -> _Arranged:
+    return _Arranged(url="/admin/users/987654/impersonate")
+
+
+# =============================================================================
+# Посев: удаление расписания из редактора объявления — ЕДИНСТВЕННЫЙ ФРАГМЕНТНЫЙ
+#
+# ⚠️ ЭТА ЗАПИСЬ НЕ ПРАВИТ НИ ОДНОГО ОБРАБОТЧИКА: маршрут переведён планом 10-01.
+# Она включает единственный фрагментный путь фазы в ОБЩИЙ обход, чтобы число
+# маршрутов подтверждения было ПОЛНЫМ. Перечень, накрывающий семь из восьми,
+# молчал бы о восьмом ровно так же, как молчали бы восемь отдельных функций, —
+# то есть терял бы ровно то свойство, ради которого обход и заведён.
+# =============================================================================
+
+
+async def _arrange_editor_schedule_delete(client, db, settings, identity) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    ad = await _seed_ad(db, user.id)
+    account = await _seed_account(db, user.id)
+    schedule = await _seed_schedule(db, ad.id, account.id)
+    # Второе расписание оставляет экран НЕПУСТЫМ: на последнем маршрут уходит в
+    # ветку перехода (D-04), и фрагмента у него не было бы вовсе.
+    await _seed_schedule(db, ad.id, account.id)
+    return _Arranged(
+        url=f"/schedules/{schedule.id}/delete",
+        data={"return_to": "editor", "ad_id": str(ad.id)},
+        landing_args={"ad_id": ad.id},
+    )
+
+
+# =============================================================================
 # ПЕРЕЧЕНЬ МАРШРУТОВ ПОДТВЕРЖДЕНИЯ — ОДНА ЗАПИСЬ НА МАРШРУТ
 # =============================================================================
 #
@@ -685,6 +750,49 @@ CONFIRMED_DELETE_ROUTES: tuple[_Route, ...] = (
         missing_identifier=_arrange_missing_user,
         missing_identifier_landing="/admin/users",
     ),
+    _Route(
+        key="app/pages/admin.py::admin_impersonate",
+        name="вход администратора под личностью пользователя",
+        identity="admin",
+        htmx_form=LOCATION,
+        # ⚠️ ЗДЕСЬ ОБХОД УТВЕРЖДАЕТ ТОЛЬКО ТРАНСПОРТ. Cookie личности и
+        # ФАКТИЧЕСКАЯ смена лица утверждаются ТРОЙНОЙ парой в
+        # `tests/test_pages/test_impersonation.py`: заголовок перехода приезжает
+        # и при потерянной cookie, и обход, проверяющий один транспорт, об этом
+        # промолчал бы. Два разных предмета — два разных правила.
+        outcomes=(
+            _Outcome(
+                name="успех",
+                arrange=_arrange_impersonate,
+                landing="/dashboard",
+            ),
+            _Outcome(
+                name="нельзя-войти-под-собой",
+                arrange=_arrange_impersonate_self,
+                landing="/admin/users/{user_id}",
+            ),
+        ),
+        missing_identifier=_arrange_missing_impersonation_target,
+        missing_identifier_landing="/admin/users",
+    ),
+    _Route(
+        key="app/pages/schedules.py::schedules_delete",
+        name="удаление расписания из редактора объявления",
+        identity="user",
+        # ЕДИНСТВЕННЫЙ фрагментный маршрут фазы: действие убирает строку с
+        # экрана, который ОСТАЁТСЯ, а прокрутки в редакторе нет — ключи карточки
+        # и панели первичные, сдвигаться нечему. Обход ветвится по ЭТОМУ ПОЛЮ, а
+        # не по имени маршрута.
+        htmx_form=FRAGMENT,
+        outcomes=(
+            _Outcome(
+                name="успех",
+                arrange=_arrange_editor_schedule_delete,
+                landing="/ads/{ad_id}/edit",
+            ),
+        ),
+        session_landing="/login",
+    ),
 )
 
 # ⚠️ ЧИСЛО МАРШРУТОВ. Считает ЗАПИСИ перечня: одна запись = один маршрут.
@@ -702,7 +810,16 @@ CONFIRMED_DELETE_ROUTES: tuple[_Route, ...] = (
 #   снятия задачи четыре — и все они живут ПОЛЕМ «список ожидаемых исходов»
 #   внутри СВОЕЙ записи. Длина перечня после этой задачи равна ШЕСТИ, а число
 #   случаев обхода — заметно больше; сличать их между собой ЗАПРЕЩЕНО.
-CONFIRMED_DELETE_ROUTES_DECLARED = 6
+#
+#   6 → 8, Фаза 10, план 10-03, задача 3: заведены ДВЕ записи — вход
+#   администратора под личностью пользователя и удаление расписания из редактора
+#   объявления. Вторая НЕ ПРАВИТ ОБРАБОТЧИКА (он переведён планом 10-01) и стоит
+#   здесь затем, чтобы перечень накрывал ВСЕ маршруты фазы: у неё своя ожидаемая
+#   форма ответа — фрагмент вместо перехода, — и обход ветвится по полю записи.
+#   ⚠️ ВОСЕМЬ — ЭТО ВСЕ МАРШРУТЫ ПОДТВЕРЖДЕНИЯ ФАЗЫ. Появление девятого без
+#   записи КРАСНЕЕТ, и это и есть то свойство, ради которого обход собран одним
+#   модулем, а не восемью функциями по файлам разделов.
+CONFIRMED_DELETE_ROUTES_DECLARED = 8
 
 # ⚠️ ЧИСЛО СЛУЧАЕВ ОБХОДА. Считает ПАРЫ «маршрут × ожидаемый исход» — ДРУГОЕ
 # МНОЖЕСТВО, чем число выше. Маршрут с четырьмя кодами исхода даёт четыре случая
@@ -723,7 +840,21 @@ CONFIRMED_DELETE_ROUTES_DECLARED = 6
 #   `AssertionError: случаев обхода (пар «маршрут × исход») стало 15, а объявлено
 #   2. ⚠️ ЭТО НЕ ЧИСЛО МАРШРУТОВ: их 6 …` — то есть сумма НЕ складывалась в уме,
 #   и её назвал сам отказ.
-CONFIRMED_DELETE_OUTCOME_CASES_DECLARED = 15
+#
+#   15 → 18, Фаза 10, план 10-03, задача 3. Прибавка три: успех и «нельзя войти
+#   под собой» у входа под пользователем, успех у единственного фрагментного
+#   маршрута фазы. Число ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно:
+#   `AssertionError: случаев обхода (пар «маршрут × исход») стало 18, а объявлено
+#   15. ⚠️ ЭТО НЕ ЧИСЛО МАРШРУТОВ: их 8 …`.
+#
+#   ⚠️ ОБА ЧИСЛА ФАЗЫ ЗАКРЫТЫ И БОЛЬШЕ НЕ ДВИГАЮТСЯ. Их предметы названы РАЗНЫМИ
+#   фразами намеренно: выше — МАРШРУТЫ ПОДТВЕРЖДЕНИЯ (сколько мест продукта
+#   стоит за панелью), здесь — СЛУЧАИ ОБХОДА, то есть пары «маршрут × ожидаемый
+#   исход» (сколько различимых ответов эти места дают). Числа не равны потому,
+#   что маршрут с четырьмя кодами исхода даёт четыре случая при ОДНОЙ записи
+#   перечня; две летописи с одинаковой формулировкой были бы приглашением
+#   следующей фазе свести их в одно.
+CONFIRMED_DELETE_OUTCOME_CASES_DECLARED = 18
 
 
 def _outcome_cases() -> list[tuple[_Route, _Outcome]]:
@@ -839,6 +970,12 @@ async def test_every_confirmed_delete_route_answers_both_transports(
         f"{route.name}: адрес деградации {without.headers['location']!r} не "
         f"совпал с ожидаемым {expected!r} ПОСИМВОЛЬНО"
     )
+
+    # ⚠️ ЛИЧНОСТЬ ВОССТАНАВЛИВАЕТСЯ ПЕРЕД ВТОРОЙ ПОЛОВИНОЙ, И ЭТО ПРЕДМЕТ, А НЕ
+    # УБОРКА. Один из маршрутов обхода МЕНЯЕТ ЛИЧНОСТЬ: после его половины
+    # деградации клиент несёт cookie чужого лица, а вложенный вход отвергается
+    # зависимостью запрета — вторая половина проверяла бы отказ, а не переход.
+    await _identify(client, route.identity, test_settings)
 
     arranged = await outcome.arrange(client, db_session, test_settings, route.identity)
     expected = outcome.expected_landing(arranged)
