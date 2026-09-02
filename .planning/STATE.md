@@ -4,12 +4,12 @@ milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 10
 current_phase_name: Рычаг `components/modal.html`
-status: "Phase 09 shipped — PR #47"
+status: executing
 stopped_at: Phase 10 context gathered
-last_updated: "2026-09-02T19:16:45.061Z"
+last_updated: "2026-09-02T19:20:37.343Z"
 last_activity: 2026-09-02
-last_activity_desc: Phase 10 planning complete
-state_head: a351f24b87a51311e606038e21a6d72dd6b1f3ed
+last_activity_desc: Phase 10 execution started
+state_head: 7c1041df40f0b9302d83dee0c82d9eb05e163e23
 progress:
   total_phases: 9
   completed_phases: 3
@@ -25,7 +25,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-29)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 09 — Пилот на account_groups — сквозной контракт формы
+**Current focus:** Phase 10 — Рычаг `components/modal.html`
 
 **Пройдено в вехе v2.1: Фазы 7 и 8** (18 планов). Фаза 8 закрыта 2026-08-29 — 11/11 планов, верификация `passed`, UAT 9/9, `threats_open: 0`.
 
@@ -35,12 +35,12 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 10 (Рычаг `components/modal.html`) — READY TO EXECUTE
-Plan: 20 of 20
+Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
+Plan: 1 of 4
 Total Plans in Phase: 4
 Completed Plans in Phase: 20
-Status: Фаза 09 ЗАКРЫТА — все хвостовые гейты зелены
-Last activity: 2026-09-02 — Phase 10 planning complete
+Status: Executing Phase 10
+Last activity: 2026-09-02 — Phase 10 execution started
 
 Progress: [████████████████████] 38/38 plans ([██░░░░░░░░] 22%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
 
@@ -324,7 +324,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Phase 09 shipped — PR #47
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Executing Phase 10
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
