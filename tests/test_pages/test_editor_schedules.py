@@ -20,6 +20,7 @@ tests/test_pages/test_editor_schedules.py -q` завершается с кодо
 """
 
 import re
+from pathlib import Path
 from urllib.parse import urlencode
 
 import pytest
@@ -29,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import AD_STATUS_PUBLISHED
+from app.pages.common import templates
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
@@ -1423,4 +1425,481 @@ async def test_group_counter_agrees_with_the_rendered_rows(
     assert total_shown == len(rows) == 3, "знаменатель разошёлся с видимым списком"
     assert chosen_shown == sum("checked" in row for row in rows) == 2, (
         "числитель разошёлся с отмеченными строками"
+    )
+
+
+# --- Фаза 10, план 10-01: единственный ФРАГМЕНТНЫЙ путь фазы ------------------
+#
+# ПОЧЕМУ ЭТОТ МАРШРУТ И ТОЛЬКО ОН (D-09). Из восьми обработчиков за панелями
+# подтверждения фрагментом отвечает РОВНО ОДИН — удаление расписания из
+# редактора объявления. Прокрутки в редакторе нет, `id="sched-{id}"` карточки и
+# ключ панели `sched-del-{id}` собраны из ПЕРВИЧНОГО КЛЮЧА, а не из позиции
+# строки, — сдвигаться нечему. Семь остальных уходят в ветку `HX-Location`, и
+# основание у каждого измерено, а не предположено (D-06, D-08).
+#
+# ⚠️ ПАРА «БЕЗ ЗАГОЛОВКА → 302 / С ЗАГОЛОВКОМ → ФРАГМЕНТ» — НЕСУЩАЯ ФОРМА, А НЕ
+# ДУБЛИРОВАНИЕ. Вторая половина утверждает ОТСУТСТВИЕ ДОКУМЕНТА в теле
+# (`"<!DOCTYPE" not in response.text`): фикстура `htmx_client` идёт
+# `follow_redirects=True`, поэтому обработчик, забывший путь письма и ответивший
+# редиректом, приехал бы к тесту кодом 200 и телом ЧУЖОЙ СТРАНИЦЫ — и без этой
+# половины тест позеленел бы на нём (GATE-01, D-16 Фазы 8).
+
+
+def _editor_delete_body(ad: Ad) -> str:
+    """Тело, которое шлют ОБЕ формы пути удаления расписания из редактора.
+
+    ⚠️ СОБИРАЕТСЯ ЗДЕСЬ ОДИН РАЗ И НАМЕРЕННО: тест, пославший НЕ ТО, что шлёт
+    разметка, проверяет маршрут, которым не идёт ни один пользователь. Оба поля
+    — признак возврата и контекст экрана — стоят в обеих формах карточки
+    расписания (`ads/includes/sched_card.html`); равенство наборов держит
+    правило `test_both_editor_delete_forms_post_the_same_field_names`.
+    """
+    return _form([("return_to", "editor"), ("ad_id", str(ad.id))])
+
+
+def _oob_top_level_tags(body: str) -> list[str]:
+    """Открывающие теги ВЕРХНЕГО УРОВНЯ тела фрагментного ответа.
+
+    Разбор нарочно грубый — по началу строки: тело фрагментного ответа обязано
+    быть плоским (`allowNestedOobSwaps: false` в блоке конфигурации), и
+    разборщик, умеющий во вложенность, скрыл бы ровно тот отказ, ради которого
+    правило существует.
+    """
+    return [
+        line for line in body.splitlines() if line.startswith("<") and "id=" in line
+    ]
+
+
+@pytest.mark.asyncio
+async def test_editor_delete_degrades_without_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Путь деградации не тронут: без заголовка htmx — прежний 302 на прежний адрес.
+
+    Перевод обработчика на слой ответа обязан оставить человека без JavaScript
+    ровно там, где он был: подтверждение остаётся настоящей формой POST, а ответ
+    — перенаправлением в редактор объявления.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await authed_client.post(
+        f"/schedules/{schedule.id}/delete",
+        content=_editor_delete_body(ad),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == f"/ads/{ad.id}/edit"
+
+
+@pytest.mark.asyncio
+async def test_editor_delete_returns_oob_nodes(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Ответ htmx-пути — ФРАГМЕНТ из трёх внеполосных узлов, а не документ."""
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete",
+        content=_editor_delete_body(ad),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert "<!DOCTYPE" not in response.text, (
+        "обработчик ответил документом — значит слой письма его не увидел и "
+        "фикстура прошла по редиректу"
+    )
+    body = response.text
+    assert f'id="sched-{schedule.id}"' in body, "узла снятия карточки в ответе нет"
+    assert f'id="sched-del-{schedule.id}"' in body, "узла снятия панели в ответе нет"
+    assert 'hx-swap-oob="innerHTML:#sched-count"' in body, (
+        "линейка счётчика не приезжает подменой СОДЕРЖИМОГО долгоживущей области"
+    )
+    removals = body.count('hx-swap-oob="delete"')
+    assert removals == 2, (
+        f"узлов снятия в ответе {removals}, ожидалось два (карточка и "
+        f"осиротевшая панель): {body!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_orphaned_panel_is_removed_by_its_own_oob_node(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Панель снимает СОБСТВЕННЫЙ узел, а не узел карточки (критерий 2 фазы).
+
+    Панель подтверждения сознательно стоит СНАРУЖИ удаляемой карточки (T-11-04):
+    внутри неё она стала бы её блоком и после первой же подмены задвоилась бы.
+    Снаружи она вместе с карточкой и НЕ УЕЗЖАЕТ — без отдельного узла снятия
+    после N удалений в документе копятся N узлов `role="dialog"`, каждый с живой
+    ловушкой фокуса и живым обработчиком Escape, и признака отказа нет ни
+    одного: ни в консоли, ни в статусе, ни в теле.
+
+    Правило существует потому, что критерий 2 фазы — про ВТОРОЙ УЗЕЛ, а не про
+    факт наличия ответа: тест на присутствие тела зеленел бы и без него.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete",
+        content=_editor_delete_body(ad),
+        headers=FORM_HEADERS,
+    )
+
+    tags = _oob_top_level_tags(response.text)
+    card = [tag for tag in tags if f'id="sched-{schedule.id}"' in tag]
+    panel = [tag for tag in tags if f'id="sched-del-{schedule.id}"' in tag]
+
+    assert len(card) == 1, f"узел снятия карточки не один: {card}"
+    assert len(panel) == 1, f"узел снятия панели не один: {panel}"
+    assert card[0] != panel[0], (
+        "снятие карточки и снятие панели оказались одним узлом — осиротевшая "
+        "панель осталась бы в документе"
+    )
+    for tag in (card[0], panel[0]):
+        assert 'hx-swap-oob="delete"' in tag, (
+            f"узел верхнего уровня не несёт признака снятия: {tag!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_last_schedule_goes_to_location(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Опустевший редактор закрывается ПЕРЕХОДОМ, а не второй отрисовкой (D-04).
+
+    Второго экземпляра пустого состояния во фрагменте не заводится: ветка
+    «расписаний пока нет» живёт в `ads/form.html` в ОДНОМ экземпляре, и второй
+    её отрисовкой она разошлась бы с первой молча.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete",
+        content=_editor_delete_body(ad),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 204
+    assert response.headers["HX-Location"] == f"/ads/{ad.id}/edit"
+    assert response.text == "", "у ответа 204 тела нет по определению"
+    assert await _all_schedules(db_session) == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_editor_delete_is_harmless(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Повтор БЕЗВРЕДЕН и НЕОТЛИЧИМ — и это два разных утверждения.
+
+    Безвредность: единица записи — ОДИН commit одной строки под `WHERE` со
+    связью `Ad.user_id`; второй запрос второй записи не создаёт и не удаляет
+    ничего сверх.
+    ⚠️ `hx-disabled-elt` СЕРВЕРНОЙ ЗАЩИТОЙ НЕ ЯВЛЯЕТСЯ и таковой здесь не
+    объявляется: он блокирует кнопку в документе, а не маршрут на сервере. Два
+    одновременных подтверждения дают одно удаление и один безвредный холостой
+    путь, а не две записи.
+
+    Неотличимость: тело собирается из `schedule_id` ПУТИ, а не из найденной
+    строки, и ветви по факту удаления в шаблоне ответа нет. Иначе НАЛИЧИЕ узла
+    стало бы признаком того, что удаление состоялось, и карту чужих
+    идентификаторов можно было бы составить перебором.
+
+    ⚠️ ЦЕНА НЕОТЛИЧИМОСТИ НАЗЫВАЕТСЯ ЧИСЛОМ, А НЕ СЛОВОМ «МОЛЧА»: холостой путь
+    шлёт ДВА узла, чьих целей в документе нет, то есть ДВЕ строки
+    `htmx:oobErrorNoTarget` в консоли на запрос (измерено Фазой 9 по
+    вендоренному рантайму 2.0.10). Признак «200 и чистая консоль» на этом пути
+    теряется; остаток наследуется перечнем `OOB_TARGET_EXCEPTIONS` с назначенной
+    Фазой 15.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    survivor = await _seed_schedule(db_session, ad.id, account.id)
+
+    body = _editor_delete_body(ad)
+    first = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete", content=body, headers=FORM_HEADERS
+    )
+    after_first = await _all_schedules(db_session)
+
+    second = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete", content=body, headers=FORM_HEADERS
+    )
+    after_second = await _all_schedules(db_session)
+
+    assert second.status_code == first.status_code
+    assert second.text == first.text, (
+        "повторный ответ отличим от первого — по нему видно, состоялось ли "
+        "удаление, и чужие идентификаторы перебираются по этому различию"
+    )
+    assert [s.id for s in after_first] == [survivor.id]
+    assert [s.id for s in after_second] == [survivor.id], (
+        "повтор тронул строки: единица записи перестала быть одним commit-ом"
+    )
+
+
+@pytest.mark.asyncio
+async def test_editor_delete_does_not_trust_the_schedule_of_another_owner(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Чужое расписание НЕ удаляется, и ответ на него неотличим от несуществующего.
+
+    Неотличимость проверяется СРАВНЕНИЕМ ДВУХ ОТВЕТОВ, а не глазами: чужой
+    идентификатор и заведомо несуществующий обязаны давать один и тот же ответ,
+    иначе перебор по адресу составил бы карту занятых идентификаторов, не
+    получив ни одной строки (T-10-01, T-10-07).
+    """
+    stranger = await _stranger(db_session)
+    foreign_ad = await _seed_ad(db_session, stranger.id, "Чужое объявление")
+    foreign_account = await _seed_account(db_session, stranger.id)
+    foreign = await _seed_schedule(db_session, foreign_ad.id, foreign_account.id)
+
+    body = _form([("return_to", "editor")])
+    on_foreign = await htmx_client.post(
+        f"/schedules/{foreign.id}/delete", content=body, headers=FORM_HEADERS
+    )
+    on_missing = await htmx_client.post(
+        "/schedules/98765/delete", content=body, headers=FORM_HEADERS
+    )
+
+    assert [s.id for s in await _all_schedules(db_session)] == [foreign.id], (
+        "чужая строка расписания удалена — тройной скоуп выборки перестал "
+        "ограничивать её владельцем"
+    )
+    assert on_foreign.status_code == on_missing.status_code
+    assert on_foreign.text == on_missing.text
+    assert on_foreign.headers.get("HX-Location") == on_missing.headers.get(
+        "HX-Location"
+    ), "чужой идентификатор отличим от несуществующего по адресу приземления"
+
+
+# --- Фаза 10, план 10-01, задача 3: ветка деградации и неотличимость ----------
+#
+# ⚠️ ПРАВИЛА НИЖЕ УТВЕРЖДАЮТ ПОВЕДЕНИЕ, А НЕ ВХОЖДЕНИЕ СТРОКИ, и это следствие
+# измерения, а не вкуса. Ревизия Фазы 9 нашла ДВА расхождения (DIV-09-01 и
+# DIV-09-02) ровно там, где машинные правила были зелены: разметочное правило
+# зеленеет на присутствии подстроки, которую соседний путь не исполняет.
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
+SCHED_CARD_TEMPLATE = "ads/includes/sched_card.html"
+SCHED_DELETE_RESPONSE_TEMPLATE = "ads/partials/sched_delete_response.html"
+
+HIDDEN_FIELD_RE = re.compile(
+    r'<input[^>]*type="hidden"[^>]*name="([^"]+)"', re.S
+)
+FORM_TAG_RE = re.compile(r"<form\b[^>]*>", re.S)
+
+# Число форм-ТРИГГЕРОВ подтверждения в дереве. Значение поставлено ПРОГОНОМ, а не
+# выведено: обход `x-on:submit.prevent` по всем шаблонам дал 18 — ровно столько
+# же, сколько мест подтверждения насчитывает инвентарь панели (`MODAL_PLACES`).
+#
+# ⚠️ КОНСТАНТА ЗАВЕДЕНА ПРОТИВ ВАКУУМА, А НЕ ДЛЯ ОТЧЁТНОСТИ. Правило ниже
+# утверждает ОТСУТСТВИЕ признака отправки на этих формах; разборщик, вернувший
+# пустое множество, дал бы зелёный цвет, посимвольно совпадающий с зелёным
+# цветом соблюдённого правила.
+TRIGGER_FORMS_DECLARED = 18
+
+
+def _template_text(rel: str) -> str:
+    return (TEMPLATES_DIR / rel).read_text(encoding="utf-8")
+
+
+def _all_template_sources() -> list[tuple[str, str]]:
+    return [
+        (path.relative_to(TEMPLATES_DIR).as_posix(), path.read_text(encoding="utf-8"))
+        for path in sorted(TEMPLATES_DIR.rglob("*.html"))
+    ]
+
+
+def _delete_trigger_form(source: str) -> str:
+    """Форма-ТРИГГЕР удаления расписания целиком — от открывающего тега до конца."""
+    start = source.index('<form method="post" action="/schedules/{{ s.id }}/delete"')
+    return source[start : source.index("</form>", start)]
+
+
+def _delete_panel_slot(source: str) -> str:
+    """Слот скрытых полей БЛОЧНОГО вызова панели подтверждения удаления."""
+    start = source.index("{% call modal(id='sched-del-")
+    return source[start : source.index("{% endcall %}", start)]
+
+
+@pytest.mark.asyncio
+async def test_both_editor_delete_forms_post_the_same_field_names():
+    """Обе формы пути удаления шлют ОДИН И ТОТ ЖЕ набор имён полей.
+
+    Правило существует потому, что ровно этот разъезд Фаза 9 поймала
+    расхождением WR-03: поле несла только форма панели, и путь БЕЗ Alpine
+    приезжал на сервер без него — обработчик считал ветку по другому состоянию,
+    чем видел перед собой человек. Отказ обязан называть разошедшиеся имена, а
+    не только факт расхождения: «наборы не равны» не говорит, какой путь чего
+    лишился.
+    """
+    source = _template_text(SCHED_CARD_TEMPLATE)
+    trigger = set(HIDDEN_FIELD_RE.findall(_delete_trigger_form(source)))
+    panel = set(HIDDEN_FIELD_RE.findall(_delete_panel_slot(source)))
+
+    assert trigger, "в форме-триггере удаления не нашлось ни одного скрытого поля"
+    assert panel, "в слоте панели подтверждения не нашлось ни одного скрытого поля"
+    assert trigger == panel, (
+        "наборы полей двух форм пути удаления разошлись — путь деградации "
+        "приедет на сервер с другим состоянием, чем путь htmx: "
+        f"только в триггере {sorted(trigger - panel)}; "
+        f"только в панели {sorted(panel - trigger)}"
+    )
+
+
+def test_the_trigger_form_never_carries_the_htmx_post():
+    """Ни одна форма-ТРИГГЕР в дереве не несёт признака отправки htmx (D-03).
+
+    Все места диспетчеризации остаются ЧИСТЫМ путём деградации: без Alpine форма
+    уходит обычным POST-ом, с Alpine — открывает панель. Признак отправки живёт
+    ТОЛЬКО на форме панели подтверждения, и это граница, а не полумера: триггер,
+    получивший его, слал бы запрос ВМЕСТО открытия панели — то есть выполнял бы
+    необратимое действие без подтверждения.
+    """
+    triggers: list[tuple[str, str]] = []
+    for rel, source in _all_template_sources():
+        for tag in FORM_TAG_RE.findall(source):
+            if "x-on:submit.prevent" in tag:
+                triggers.append((rel, tag))
+
+    assert len(triggers) == TRIGGER_FORMS_DECLARED, (
+        f"форм-триггеров подтверждения найдено {len(triggers)}, объявлено "
+        f"{TRIGGER_FORMS_DECLARED} — место диспетчеризации молча исчезло или "
+        f"появилось незаявленное: {sorted(rel for rel, _ in triggers)}"
+    )
+
+    carrying = [(rel, tag) for rel, tag in triggers if "hx-post" in tag]
+    assert not carrying, (
+        "форма-триггер несёт признак отправки htmx — подтверждённое действие "
+        "ушло бы на сервер ВМЕСТО открытия панели подтверждения: "
+        + "; ".join(f"{rel} -> {tag!r}" for rel, tag in carrying)
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_editor_delete_address_is_the_same_on_both_transports(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Адрес приземления ПОСИМВОЛЬНО один и тот же на обоих транспортах.
+
+    Он же уезжает перенаправлением человеку без JavaScript, он же — заголовком
+    перехода. Два независимо собранных адреса разошлись бы МОЛЧА, и путь
+    деградации уводил бы на сводный список там, где путь htmx остаётся в
+    редакторе. Тело формы в обоих запросах одно — иначе сравнивались бы два
+    разных вопроса.
+
+    ⚠️ ФИКСТУРА `htmx_client` ЗДЕСЬ НЕ ЗАПРАШИВАЕТСЯ, И ЭТО ВЫНУЖДЕННО, А НЕ
+    НЕБРЕЖНОСТЬ. Она возвращает ТОТ ЖЕ объект клиента и ставит признак htmx на
+    НЕГО — свойство несущее, оно и позволяет складывать её с фикстурами
+    аутентификации. Но у пары «оба транспорта В ОДНОМ ТЕСТЕ» цена его обратная:
+    запрошенная рядом, фикстура пометила бы и запрос, который обязан прийти БЕЗ
+    признака, и половина деградации молча превратилась бы во вторую половину
+    htmx. Поймано прогоном: запрос без JavaScript вернул 200 вместо 302.
+    Поэтому признак ставится ЗДЕСЬ и ровно на один запрос из двух.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    first = await _seed_schedule(db_session, ad.id, account.id)
+    second = await _seed_schedule(db_session, ad.id, account.id)
+    body = _editor_delete_body(ad)
+
+    degraded = await authed_client.post(
+        f"/schedules/{first.id}/delete",
+        content=body,
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    over_htmx = await authed_client.post(
+        f"/schedules/{second.id}/delete",
+        content=body,
+        headers={**FORM_HEADERS, "HX-Request": "true"},
+    )
+
+    assert degraded.status_code == 302
+    assert over_htmx.status_code == 204
+    assert degraded.headers["location"] == over_htmx.headers["HX-Location"], (
+        "адрес приземления разошёлся между транспортами: без JavaScript "
+        f"{degraded.headers['location']!r}, через htmx "
+        f"{over_htmx.headers['HX-Location']!r}"
+    )
+
+
+def test_control_negative_a_conditional_removal_node_reddens_the_gate():
+    """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ безусловности узлов снятия.
+
+    Несущее правило (`test_editor_delete_returns_oob_nodes`) утверждает, что в
+    ответе есть ОБА узла снятия. Зелёным оно обязано быть потому, что узлы
+    БЕЗУСЛОВНЫ, а не потому, что на счастливом пути условие сложилось удачно.
+    Контроль подставляет в прочитанный исходник ветвь по факту удаления и
+    требует, чтобы правило на подделке ПОКРАСНЕЛО.
+
+    ⚠️ ДВОЙНОЙ ПРЕДОХРАНИТЕЛЬ (образец — `_xdata_with_dead_teardown`): контроль
+    отдельно доказывает, что подстановка ЧТО-ТО изменила и ИМЕННО ТО. Иначе
+    неудавшаяся замена дала бы «правило покраснело» на нетронутом исходнике —
+    или, того хуже, зелёный цвет, неотличимый от соблюдения.
+    """
+    source = _template_text(SCHED_DELETE_RESPONSE_TEMPLATE)
+    panel_node = '<div id="sched-del-{{ schedule_id }}" hx-swap-oob="delete"></div>'
+
+    assert source.count(panel_node) == 1, (
+        "образец узла снятия панели встречается в источнике не один раз — "
+        "подстановка контроля перестала быть однозначной"
+    )
+    forged = source.replace(
+        panel_node, "{% if deleted %}" + panel_node + "{% endif %}"
+    )
+    assert forged != source, "подстановка контроля ничего не изменила"
+
+    honest = templates.env.from_string(source).render(schedule_id=7, schedules_count=2)
+    faked = templates.env.from_string(forged).render(
+        schedule_id=7, schedules_count=2, deleted=False
+    )
+
+    # Первый предохранитель: несущее свойство на НАСТОЯЩЕМ источнике держится.
+    assert honest.count('hx-swap-oob="delete"') == 2, (
+        "на настоящем источнике узлов снятия не два — контроль сравнивал бы "
+        f"подделку с уже сломанным образцом: {honest!r}"
+    )
+    # Второй: подделка снимает ИМЕННО узел панели, а не что-нибудь ещё.
+    assert 'id="sched-del-7"' not in faked, "подстановка не убрала узел панели"
+    assert 'id="sched-7"' in faked, (
+        "подстановка задела узел снятия карточки — контроль доказывал бы не то "
+        "свойство, которое объявил"
+    )
+    assert faked.count('hx-swap-oob="delete"') == 1, (
+        "правило присутствия обоих узлов НЕ ПОКРАСНЕЛО на подделке: ветвь по "
+        "факту удаления прошла бы в дерево незамеченной, и НАЛИЧИЕ узла стало "
+        "бы признаком того, что удаление состоялось"
     )
