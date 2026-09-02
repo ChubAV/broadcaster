@@ -1,21 +1,18 @@
 {
   "orchestrator_root": "/source/broadcaster",
-  "wave": 3,
-  "plan": "09-19",
+  "wave": 4,
+  "plan": "09-20",
   "worktrees": [
     {
-      "agent_id": "agent-a95e5bbd20e898248",
-      "worktree_path": "/source/broadcaster/.claude/worktrees/agent-a95e5bbd20e898248",
-      "branch": "worktree-agent-a95e5bbd20e898248",
-      "expected_base": "c70b17f505c1be5b913aa7893611445183fcbe56",
+      "agent_id": "agent-ab25b9d9d65598012",
+      "worktree_path": "/source/broadcaster/.claude/worktrees/agent-ab25b9d9d65598012",
+      "branch": "worktree-agent-ab25b9d9d65598012",
+      "expected_base": "d02cbb19b21c20cdc849a9906e90d1531c0f93b2",
       "files_modified": [
-        "tests/test_pages/test_history_retry.py",
-        "app/templates/includes/htmx_error_banner.html",
-        "tests/test_pages/test_shell.py",
-        "tests/conftest.py",
-        "tests/test_templates/test_components.py",
-        ".planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/deferred-items.md",
-        "graphify-out/"
+        ".planning/REQUIREMENTS.md",
+        ".planning/WINDOWS.md",
+        ".planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md",
+        ".planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-20-SUMMARY.md"
       ]
     }
   ]
