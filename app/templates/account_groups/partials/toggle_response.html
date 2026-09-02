@@ -23,8 +23,22 @@
    ПРИСЫЛАТЬ ВОВСЕ. Панель печатает `group.name`, а тумблер имени не меняет:
    оставшаяся на странице панель говорит ровно то же, что сказала бы новая.
 
+   ⚠️ ЭТО ТРЕТЬЕ МЕСТО ОТРИСОВКИ ФОРМЫ УДАЛЕНИЯ, И СТРОКУ ПОИСКА ОНО ПЕЧАТАЕТ
+   НАРАВНЕ С ДВУМЯ ПЕРВЫМИ (CR-02, план 09-18). До этого плана вызов макроса
+   шёл без `filter_search`, макрос печатал своё умолчание — пустую строку, — и
+   форма удаления ПЕРЕКЛЮЧЁННОЙ строки уезжала к человеку без фильтра. Цена
+   достижима в мире, названном фазой поимённо («Alpine мёртв, htmx жив»,
+   `app/pages/account_groups.py`): форма-триггер уходит обычным POST-ом, человек
+   приземляется на НЕотфильтрованный список, а ветка «выдача опустела» решается
+   по ВСЕМУ АККАУНТУ вместо той выдачи, которую он видел, — то есть починка
+   WR-06 на этом пути не срабатывает в принципе.
+
+   Мест отрисовки формы удаления ТРИ, и число это объявлено и утверждается
+   правилом (`DELETE_FORM_RENDER_SITES` в tests/test_pages/test_account_groups.py):
+   четвёртое, заведённое молча, обязано покраснеть.
+
    Ожидаемые переменные: `group`, `account_id`, `schedules_count`, `user`,
-   `active_groups`, `total_groups`. #}
+   `active_groups`, `total_groups`, `filter_search`. #}
 {% from "account_groups/includes/group_row.html" import group_row %}
-{{ group_row(group, account_id, schedules_count, user, with_modal=false) }}
+{{ group_row(group, account_id, schedules_count, user, with_modal=false, filter_search=filter_search) }}
 {% include "account_groups/partials/count_rule_oob.html" %}
