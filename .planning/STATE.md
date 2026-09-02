@@ -2,17 +2,18 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: HTMX-first
-current_phase: 09
-current_phase_name: Пилот на account_groups — сквозной контракт формы (ЗАКРЫТА 2026-09-02)
+current_phase: 10
+current_phase_name: Рычаг `components/modal.html`
 status: "Phase 09 shipped — PR #47"
 stopped_at: Phase 10 context gathered
-last_updated: "2026-09-02T18:14:01.649Z"
+last_updated: "2026-09-02T19:16:45.061Z"
 last_activity: 2026-09-02
-state_head: 9f3c59e0db473c1fe8ccdedeb82b8a38917d95cc
+last_activity_desc: Phase 10 planning complete
+state_head: a351f24b87a51311e606038e21a6d72dd6b1f3ed
 progress:
   total_phases: 9
   completed_phases: 3
-  total_plans: 38
+  total_plans: 42
   completed_plans: 38
   percent: 33
 ---
@@ -34,12 +35,12 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 09 (Пилот на account_groups — сквозной контракт формы) — ✅ COMPLETE (2026-09-02, верификация `passed` 18/18, круг 5)
+Phase: 10 (Рычаг `components/modal.html`) — READY TO EXECUTE
 Plan: 20 of 20
-Total Plans in Phase: 20
+Total Plans in Phase: 4
 Completed Plans in Phase: 20
 Status: Фаза 09 ЗАКРЫТА — все хвостовые гейты зелены
-Last activity: 2026-09-02
+Last activity: 2026-09-02 — Phase 10 planning complete
 
 Progress: [████████████████████] 38/38 plans ([██░░░░░░░░] 22%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
 
