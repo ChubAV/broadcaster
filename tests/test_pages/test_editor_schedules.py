@@ -1424,3 +1424,265 @@ async def test_group_counter_agrees_with_the_rendered_rows(
     assert chosen_shown == sum("checked" in row for row in rows) == 2, (
         "числитель разошёлся с отмеченными строками"
     )
+
+
+# --- Фаза 10, план 10-01: единственный ФРАГМЕНТНЫЙ путь фазы ------------------
+#
+# ПОЧЕМУ ЭТОТ МАРШРУТ И ТОЛЬКО ОН (D-09). Из восьми обработчиков за панелями
+# подтверждения фрагментом отвечает РОВНО ОДИН — удаление расписания из
+# редактора объявления. Прокрутки в редакторе нет, `id="sched-{id}"` карточки и
+# ключ панели `sched-del-{id}` собраны из ПЕРВИЧНОГО КЛЮЧА, а не из позиции
+# строки, — сдвигаться нечему. Семь остальных уходят в ветку `HX-Location`, и
+# основание у каждого измерено, а не предположено (D-06, D-08).
+#
+# ⚠️ ПАРА «БЕЗ ЗАГОЛОВКА → 302 / С ЗАГОЛОВКОМ → ФРАГМЕНТ» — НЕСУЩАЯ ФОРМА, А НЕ
+# ДУБЛИРОВАНИЕ. Вторая половина утверждает ОТСУТСТВИЕ ДОКУМЕНТА в теле
+# (`"<!DOCTYPE" not in response.text`): фикстура `htmx_client` идёт
+# `follow_redirects=True`, поэтому обработчик, забывший путь письма и ответивший
+# редиректом, приехал бы к тесту кодом 200 и телом ЧУЖОЙ СТРАНИЦЫ — и без этой
+# половины тест позеленел бы на нём (GATE-01, D-16 Фазы 8).
+
+
+def _oob_top_level_tags(body: str) -> list[str]:
+    """Открывающие теги ВЕРХНЕГО УРОВНЯ тела фрагментного ответа.
+
+    Разбор нарочно грубый — по началу строки: тело фрагментного ответа обязано
+    быть плоским (`allowNestedOobSwaps: false` в блоке конфигурации), и
+    разборщик, умеющий во вложенность, скрыл бы ровно тот отказ, ради которого
+    правило существует.
+    """
+    return [
+        line for line in body.splitlines() if line.startswith("<") and "id=" in line
+    ]
+
+
+@pytest.mark.asyncio
+async def test_editor_delete_degrades_without_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Путь деградации не тронут: без заголовка htmx — прежний 302 на прежний адрес.
+
+    Перевод обработчика на слой ответа обязан оставить человека без JavaScript
+    ровно там, где он был: подтверждение остаётся настоящей формой POST, а ответ
+    — перенаправлением в редактор объявления.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await authed_client.post(
+        f"/schedules/{schedule.id}/delete",
+        content=_form([("return_to", "editor")]),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == f"/ads/{ad.id}/edit"
+
+
+@pytest.mark.asyncio
+async def test_editor_delete_returns_oob_nodes(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Ответ htmx-пути — ФРАГМЕНТ из трёх внеполосных узлов, а не документ."""
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete",
+        content=_form([("return_to", "editor")]),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert "<!DOCTYPE" not in response.text, (
+        "обработчик ответил документом — значит слой письма его не увидел и "
+        "фикстура прошла по редиректу"
+    )
+    body = response.text
+    assert f'id="sched-{schedule.id}"' in body, "узла снятия карточки в ответе нет"
+    assert f'id="sched-del-{schedule.id}"' in body, "узла снятия панели в ответе нет"
+    assert 'hx-swap-oob="innerHTML:#sched-count"' in body, (
+        "линейка счётчика не приезжает подменой СОДЕРЖИМОГО долгоживущей области"
+    )
+    removals = body.count('hx-swap-oob="delete"')
+    assert removals == 2, (
+        f"узлов снятия в ответе {removals}, ожидалось два (карточка и "
+        f"осиротевшая панель): {body!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_orphaned_panel_is_removed_by_its_own_oob_node(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Панель снимает СОБСТВЕННЫЙ узел, а не узел карточки (критерий 2 фазы).
+
+    Панель подтверждения сознательно стоит СНАРУЖИ удаляемой карточки (T-11-04):
+    внутри неё она стала бы её блоком и после первой же подмены задвоилась бы.
+    Снаружи она вместе с карточкой и НЕ УЕЗЖАЕТ — без отдельного узла снятия
+    после N удалений в документе копятся N узлов `role="dialog"`, каждый с живой
+    ловушкой фокуса и живым обработчиком Escape, и признака отказа нет ни
+    одного: ни в консоли, ни в статусе, ни в теле.
+
+    Правило существует потому, что критерий 2 фазы — про ВТОРОЙ УЗЕЛ, а не про
+    факт наличия ответа: тест на присутствие тела зеленел бы и без него.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete",
+        content=_form([("return_to", "editor")]),
+        headers=FORM_HEADERS,
+    )
+
+    tags = _oob_top_level_tags(response.text)
+    card = [tag for tag in tags if f'id="sched-{schedule.id}"' in tag]
+    panel = [tag for tag in tags if f'id="sched-del-{schedule.id}"' in tag]
+
+    assert len(card) == 1, f"узел снятия карточки не один: {card}"
+    assert len(panel) == 1, f"узел снятия панели не один: {panel}"
+    assert card[0] != panel[0], (
+        "снятие карточки и снятие панели оказались одним узлом — осиротевшая "
+        "панель осталась бы в документе"
+    )
+    for tag in (card[0], panel[0]):
+        assert 'hx-swap-oob="delete"' in tag, (
+            f"узел верхнего уровня не несёт признака снятия: {tag!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_last_schedule_goes_to_location(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Опустевший редактор закрывается ПЕРЕХОДОМ, а не второй отрисовкой (D-04).
+
+    Второго экземпляра пустого состояния во фрагменте не заводится: ветка
+    «расписаний пока нет» живёт в `ads/form.html` в ОДНОМ экземпляре, и второй
+    её отрисовкой она разошлась бы с первой молча.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete",
+        content=_form([("return_to", "editor")]),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 204
+    assert response.headers["HX-Location"] == f"/ads/{ad.id}/edit"
+    assert response.text == "", "у ответа 204 тела нет по определению"
+    assert await _all_schedules(db_session) == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_editor_delete_is_harmless(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Повтор БЕЗВРЕДЕН и НЕОТЛИЧИМ — и это два разных утверждения.
+
+    Безвредность: единица записи — ОДИН commit одной строки под `WHERE` со
+    связью `Ad.user_id`; второй запрос второй записи не создаёт и не удаляет
+    ничего сверх.
+    ⚠️ `hx-disabled-elt` СЕРВЕРНОЙ ЗАЩИТОЙ НЕ ЯВЛЯЕТСЯ и таковой здесь не
+    объявляется: он блокирует кнопку в документе, а не маршрут на сервере. Два
+    одновременных подтверждения дают одно удаление и один безвредный холостой
+    путь, а не две записи.
+
+    Неотличимость: тело собирается из `schedule_id` ПУТИ, а не из найденной
+    строки, и ветви по факту удаления в шаблоне ответа нет. Иначе НАЛИЧИЕ узла
+    стало бы признаком того, что удаление состоялось, и карту чужих
+    идентификаторов можно было бы составить перебором.
+
+    ⚠️ ЦЕНА НЕОТЛИЧИМОСТИ НАЗЫВАЕТСЯ ЧИСЛОМ, А НЕ СЛОВОМ «МОЛЧА»: холостой путь
+    шлёт ДВА узла, чьих целей в документе нет, то есть ДВЕ строки
+    `htmx:oobErrorNoTarget` в консоли на запрос (измерено Фазой 9 по
+    вендоренному рантайму 2.0.10). Признак «200 и чистая консоль» на этом пути
+    теряется; остаток наследуется перечнем `OOB_TARGET_EXCEPTIONS` с назначенной
+    Фазой 15.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    survivor = await _seed_schedule(db_session, ad.id, account.id)
+
+    body = _form([("return_to", "editor")])
+    first = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete", content=body, headers=FORM_HEADERS
+    )
+    after_first = await _all_schedules(db_session)
+
+    second = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete", content=body, headers=FORM_HEADERS
+    )
+    after_second = await _all_schedules(db_session)
+
+    assert second.status_code == first.status_code
+    assert second.text == first.text, (
+        "повторный ответ отличим от первого — по нему видно, состоялось ли "
+        "удаление, и чужие идентификаторы перебираются по этому различию"
+    )
+    assert [s.id for s in after_first] == [survivor.id]
+    assert [s.id for s in after_second] == [survivor.id], (
+        "повтор тронул строки: единица записи перестала быть одним commit-ом"
+    )
+
+
+@pytest.mark.asyncio
+async def test_editor_delete_does_not_trust_the_schedule_of_another_owner(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Чужое расписание НЕ удаляется, и ответ на него неотличим от несуществующего.
+
+    Неотличимость проверяется СРАВНЕНИЕМ ДВУХ ОТВЕТОВ, а не глазами: чужой
+    идентификатор и заведомо несуществующий обязаны давать один и тот же ответ,
+    иначе перебор по адресу составил бы карту занятых идентификаторов, не
+    получив ни одной строки (T-10-01, T-10-07).
+    """
+    stranger = await _stranger(db_session)
+    foreign_ad = await _seed_ad(db_session, stranger.id, "Чужое объявление")
+    foreign_account = await _seed_account(db_session, stranger.id)
+    foreign = await _seed_schedule(db_session, foreign_ad.id, foreign_account.id)
+
+    body = _form([("return_to", "editor")])
+    on_foreign = await htmx_client.post(
+        f"/schedules/{foreign.id}/delete", content=body, headers=FORM_HEADERS
+    )
+    on_missing = await htmx_client.post(
+        "/schedules/98765/delete", content=body, headers=FORM_HEADERS
+    )
+
+    assert [s.id for s in await _all_schedules(db_session)] == [foreign.id], (
+        "чужая строка расписания удалена — тройной скоуп выборки перестал "
+        "ограничивать её владельцем"
+    )
+    assert on_foreign.status_code == on_missing.status_code
+    assert on_foreign.text == on_missing.text
+    assert on_foreign.headers.get("HX-Location") == on_missing.headers.get(
+        "HX-Location"
+    ), "чужой идентификатор отличим от несуществующего по адресу приземления"

@@ -597,7 +597,7 @@ def test_modal_hands_the_sending_state_back_on_the_htmx_path():
     подтверждения без htmx-признака обязаны рендериться байт-в-байт как до
     правки (D-01), и признак, выехавший из своей ветки, нарушил бы это молча.
     """
-    over_htmx = render("components/modal.html", "modal", hx_post=True, **MODAL_ARGS)
+    over_htmx = render("components/modal.html", "modal", **MODAL_ARGS)
     form = _form_tag(over_htmx)
 
     reset = HTMX_RESET_ATTR_RE.search(form)
@@ -611,11 +611,57 @@ def test_modal_hands_the_sending_state_back_on_the_htmx_path():
         f"признак завершения запроса не сбрасывает состояние отправки: {expression!r}"
     )
 
-    default = render("components/modal.html", "modal", **MODAL_ARGS)
-    assert not HTMX_RESET_ATTR_RE.search(default), (
-        "признак просочился в УМОЛЧАНИЕ: пятнадцать мест подтверждения без "
-        "htmx-признака обязаны рендериться байт-в-байт как до правки, а "
-        f"рендерятся иначе: {_form_tag(default)!r}"
+
+# ⚠️ РЕНДЕРНАЯ ПОЛОВИНА КРИТЕРИЯ 1 ФАЗЫ 10 (D-14). Два правила ниже по файлу —
+# `test_modal_guard_is_inherited_by_every_consumer` и `test_modal_site_inventory`
+# — читают ИСХОДНИКИ шаблонов. Это правило ИСПОЛНЯЕТ рендер макроса без единого
+# дополнительного аргумента и смотрит на ОТРЕНДЕРЕННУЮ разметку. Предметы
+# разные, поэтому правило заведено НОВЫМ, а не влито в них: слитое дало бы
+# одному правилу два предмета и потеряло бы различимость отказа.
+#
+# ⚠️ ЭТО МАШИННАЯ ПРОВЕРКА ТОГО, ЧТО «ОДНА ПРАВКА» РАСХОДИТСЯ НА ВСЕХ. До Фазы 10
+# набор свойств качества приезжал только тому вызывающему, который ПЕРЕДАЛ
+# признак отправки; правило, рендерящее макрос без аргументов, на том состоянии
+# КРАСНОЕ. Зелёное оно означает ровно одно: htmx приходит ко всем 18 местам
+# подтверждения из макроса, а не из дисциплины вызывающих.
+PANEL_SENDING_STATE_ATTRS = (
+    'hx-post="/ads/1/delete"',
+    'hx-swap="none"',
+    'hx-disabled-elt="find button[type=submit]"',
+    'hx-indicator="find .form-busy"',
+)
+
+
+def test_the_panel_hands_the_sending_state_to_every_call_site():
+    """Набор свойств качества приходит вызывающему БЕЗ ЕДИНОГО АРГУМЕНТА.
+
+    ⚠️ АДРЕС ОТПРАВКИ ПЕЧАТАЕТ ТУ ЖЕ ПЕРЕМЕННУЮ, ЧТО И `action` ФОРМЫ, и
+    посимвольное их равенство утверждается здесь, а не проверяется глазами:
+    два разных выражения с одинаковым результатом считаются нарушением
+    осознанно — иначе маршрут htmx-пути и маршрут пути деградации разъехались
+    бы молча.
+    """
+    out = render("components/modal.html", "modal", **MODAL_ARGS)
+    form = _form_tag(out)
+
+    missing = [attr for attr in PANEL_SENDING_STATE_ATTRS if attr not in form]
+    assert not missing, (
+        "макрос панели раздаёт свойства качества не всем вызывающим — без "
+        f"аргументов не приехало: {missing}; тег формы: {form!r}"
+    )
+
+    assert f'action="{MODAL_ARGS["action"]}"' in form, (
+        "форма панели перестала быть настоящей формой POST: путь деградации "
+        "лишился адреса"
+    )
+
+    assert '<span class="form-busy" aria-hidden="true"></span>' in out, (
+        "узел индикатора приходит не всем панелям — часть мест подтверждения "
+        "осталась бы без порога видимости, а высоты панелей разъехались бы"
+    )
+
+    assert "{%" not in form and "{{" not in form, (
+        f"в отрендеренном теге формы осталась конструкция шаблонизатора: {form!r}"
     )
 
 
