@@ -21,9 +21,10 @@
 import itertools
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 from httpx import AsyncClient
@@ -35,6 +36,13 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
+
+# Размер страницы берётся у обработчика, а не выписывается сюда числом: посев
+# «страница плюс хвост» обязан оставаться посевом «страница плюс хвост» и после
+# того, как экран когда-нибудь сменит размер страницы. Соседние тесты файла
+# сеют 35 строк литералом — они писались до появления курсорных утверждений и
+# переписывать их эта задача не обязана.
+from app.pages.account_groups import PAGE_SIZE
 
 # Якорь строки списка. Утверждать порядок по именам групп нельзя: у двух групп
 # с одинаковым именем они совпадают, а различить нужно именно строки.
@@ -324,17 +332,30 @@ async def test_toggle_inverts_is_active_and_redirects(
 async def test_double_toggle_returns_the_group_to_its_initial_state(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Маршрут ИНВЕРТИРУЕТ, а не устанавливает: действие обратимо (D-08).
+    """Действие ОБРАТИМО одним нажатием (D-08): выключить и включить обратно.
 
     Обработчик, жёстко ставящий `is_active = False`, прошёл бы предыдущий тест
     и провалил этот — включить группу обратно стало бы нечем.
+
+    ⚠️ ОЖИДАНИЕ ЭТОГО ТЕСТА ИЗМЕНЕНО ПЛАНОМ 09-15, И ПРИЧИНА НАЗЫВАЕТСЯ ЗДЕСЬ, А
+    НЕ ОСТАЁТСЯ НА ДОГАДКУ. Прежняя редакция слала ДВА ОДИНАКОВЫХ ПУСТЫХ тела и
+    ожидала возврата в исходное состояние — то есть утверждала не обратимость
+    ДЕЙСТВИЯ, а слепую ИНВЕРСИЮ хранимого значения. Инверсия снята (WR-02): в
+    мире «Alpine жив, htmx мёртв» она приводила группу в состояние, ОБРАТНОЕ
+    показанному человеку. Обработчик берёт состояние ИЗ ТЕЛА ФОРМЫ, поэтому
+    обратимость исполняется так, как её исполняет человек: сперва тело со снятым
+    чекбоксом, затем тело с поднятым. Свойство, ради которого тест написан, не
+    изменилось — изменился способ его исполнить. Число тестов файла, чьё ожидание
+    сдвинула эта смена семантики, — ОДИН, и это он.
     """
     account = await _seed_account(db_session)
     group = await _seed_group(db_session, account, "Группа двойного нажатия")
 
-    for _ in range(2):
+    for body in ({}, {"is_active": "1"}):
         response = await authed_client.post(
-            f"/accounts/{account.id}/groups/{group.id}/toggle", follow_redirects=False
+            f"/accounts/{account.id}/groups/{group.id}/toggle",
+            data=body,
+            follow_redirects=False,
         )
         assert response.status_code == 302
 
@@ -452,6 +473,223 @@ async def test_toggle_without_session_goes_to_login(
     assert group.is_active is True
 
 
+# --- Тумблер на двух транспортах (Фаза 9, план 09-01) -------------------------
+#
+# Пары написаны по идиоме SP-3 (D-16 Фазы 8): у каждого утверждения о фрагменте
+# есть половина, утверждающая, что БЕЗ признака htmx тот же маршрут отвечает
+# по-прежнему. Половина без htmx зовёт `follow_redirects=False` ЯВНО: умолчание
+# фикстуры `htmx_client` — `True`, и редирект, пришедший вместо фрагмента,
+# приехал бы к тесту кодом 200 и телом чужой страницы.
+
+
+@pytest.mark.asyncio
+async def test_toggle_degrades_without_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Без признака htmx тумблер отвечает ПРЕЖНИМ перенаправлением на экран.
+
+    Половина пары, охраняющая путь деградации. Перевод обработчика на слой
+    ответа не имеет права поменять ответ человеку без JavaScript: он по-прежнему
+    обязан получить 302 на экран групп, а не фрагмент строки, который браузер
+    показал бы ему как целый документ со статусом 200.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа деградации тумблера")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/toggle", follow_redirects=False
+    )
+
+    assert response.status_code == 302, (
+        f"запрос без признака htmx получил {response.status_code} — путь "
+        "деградации перестал быть прежним"
+    )
+    assert response.headers["location"] == f"/accounts/{account.id}/groups"
+
+    await db_session.refresh(group)
+    assert group.is_active is False, "переключение на базовом пути не состоялось"
+
+
+@pytest.mark.asyncio
+async def test_toggle_returns_the_row_fragment(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """С признаком htmx тумблер отвечает ФРАГМЕНТОМ строки и внеполосным счётчиком.
+
+    Несущее утверждение второй половины — `"<!DOCTYPE" not in response.text`:
+    редирект, случайно доехавший до запроса htmx, придёт к тесту кодом 200 и
+    телом целой страницы (`htmx_client` следует ему НЕЗАМЕТНО, как браузер), и
+    отличить его от фрагмента можно только по отсутствию документа.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа фрагмента")
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/toggle"
+    )
+
+    assert response.status_code == 200, (
+        f"запрос htmx получил {response.status_code} вместо фрагмента"
+    )
+    assert "<!DOCTYPE" not in response.text, (
+        "в теле приехал целый документ: обработчик ответил перенаправлением, а "
+        "клиент незаметно по нему прошёл — ровно то, чего не видит человек"
+    )
+    assert f'id="group-row-{group.id}"' in response.text, (
+        "во фрагменте нет строки группы — цели подмены #group-row-N подменять "
+        "будет нечем, и рантайм промолчит об этом"
+    )
+    assert 'hx-swap-oob="innerHTML:#account-groups-count"' in response.text, (
+        "во фрагменте нет внеполосного узла линейки счётчика — число активных "
+        "групп молча разъедется с состоянием строк"
+    )
+
+    await db_session.refresh(group)
+    assert group.is_active is False, "переключение на пути htmx не состоялось"
+
+
+@pytest.mark.asyncio
+async def test_toggle_fragment_carries_no_second_modal(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Во фрагменте НЕТ второй панели подтверждения (T-11-04).
+
+    Своп `outerHTML` вставляет ВЕСЬ ответ. Строка, собранная тем же макросом с
+    панелью, принесла бы вторую панель с тем же идентификатором и второй живой
+    ловушкой фокуса: подтверждение удаления открывало бы то одну, то другую, и
+    воспроизводилось бы это через раз.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа без второй панели")
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/toggle"
+    )
+
+    assert response.status_code == 200
+    assert f'id="group-del-{group.id}"' not in response.text, (
+        "фрагмент принёс вторую панель подтверждения с тем же идентификатором"
+    )
+
+
+@pytest.mark.asyncio
+async def test_toggle_fragment_keeps_the_toggle_id(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Чекбокс несёт ТОТ ЖЕ стабильный идентификатор и в ответе (QUAL-06).
+
+    Механизм восстановления фокуса htmx ищет в присланной разметке элемент с
+    ТЕМ ЖЕ `id`, что был у активного до свапа. Идентификатор, собранный только
+    первичной отрисовкой, лишил бы механизм предмета — и разметка, а не код,
+    есть то единственное, что здесь можно утверждать машинно.
+
+    ⚠️ ФАКТИЧЕСКИЙ возврат фокуса этим НЕ доказывается и доказан здесь быть не
+    может: `hx-disabled-elt` снимает блокировку ПОСЛЕ свапа, и активным
+    элементом на момент свапа успевает стать `<body>` (09-RESEARCH §4.3).
+    Проверка вынесена в ручной UAT с записанным ожиданием «сегодня нет».
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа стабильного id")
+
+    first = (await htmx_client.get(f"/accounts/{account.id}/groups")).text
+    assert f'id="group-toggle-{group.id}"' in first, (
+        "первичная отрисовка не несёт стабильного идентификатора чекбокса"
+    )
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/toggle"
+    )
+
+    # ⚠️ ПОЛОВИНА «ЭТО ФРАГМЕНТ» ЗДЕСЬ ОБЯЗАТЕЛЬНА, А НЕ ИЗБЫТОЧНА. Без неё
+    # утверждение зелено ПО ПОСТРОЕНИЮ: `htmx_client` следует редиректу
+    # незаметно, и целая страница экрана групп несёт тот же идентификатор
+    # чекбокса. Тест доказывал бы наличие разметки на странице, о которой и без
+    # него всё известно, а про ответ тумблера не утверждал бы ничего.
+    assert "<!DOCTYPE" not in response.text, (
+        "в теле приехал целый документ, а не фрагмент — идентификатор ниже "
+        "нашёлся бы в нём и без всякого механизма восстановления фокуса"
+    )
+    assert f'id="group-toggle-{group.id}"' in response.text, (
+        "в разметке фрагмента идентификатор чекбокса пропал — восстанавливать "
+        "фокус механизму htmx будет не на что"
+    )
+
+
+@pytest.mark.asyncio
+async def test_foreign_toggle_goes_to_location(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Чужая и НЕСУЩЕСТВУЮЩАЯ группа отвечают ОДИНАКОВО (D-13).
+
+    Утверждение о НЕОТЛИЧИМОСТИ, поэтому два ответа сравниваются между собой, а
+    не с константой по отдельности: различимый отказ сообщал бы, какие
+    идентификаторы заняты чужими группами, — то есть перебором по адресу можно
+    было бы составить карту чужих данных, не получив ни одной строки (T-9-02).
+    """
+    account = await _seed_account(db_session)
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Чужая группа перехода", user_id=foreign_user.id
+    )
+
+    foreign = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{foreign_group.id}/toggle"
+    )
+    missing = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{foreign_group.id + 100000}/toggle"
+    )
+
+    assert foreign.status_code == 204, (
+        f"чужая группа ответила {foreign.status_code} вместо перехода"
+    )
+    assert foreign.headers["HX-Location"] == f"/accounts/{account.id}/groups"
+    assert not foreign.content, "у ответа 204 появилось тело"
+
+    assert missing.status_code == foreign.status_code, (
+        "несуществующая группа отличима от чужой по коду ответа"
+    )
+    assert missing.headers.get("HX-Location") == foreign.headers["HX-Location"], (
+        "несуществующая группа отличима от чужой по адресу перехода"
+    )
+    assert missing.content == foreign.content, (
+        "несуществующая группа отличима от чужой по телу ответа"
+    )
+
+    await db_session.refresh(foreign_group)
+    assert foreign_group.is_active is True, "переключилась чужая группа"
+
+
+@pytest.mark.asyncio
+async def test_toggle_does_not_trust_the_account_id_from_the_url_over_htmx(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Пара к `test_toggle_does_not_trust_the_account_id_from_the_url` (T-9-01).
+
+    Тройной `WHERE` вычисляется ДО развилки транспорта, и новый транспорт не
+    имеет права его ослабить: свой аккаунт в адресе и своя группа — но группа
+    принадлежит ДРУГОМУ аккаунту.
+    """
+    first = await _seed_account(db_session, type_="wa")
+    second = await _seed_account(db_session, type_="tg_user")
+    group_of_second = await _seed_group(db_session, second, "Группа второго аккаунта")
+
+    response = await htmx_client.post(
+        f"/accounts/{first.id}/groups/{group_of_second.id}/toggle"
+    )
+
+    assert response.status_code == 204, (
+        f"адрес чужого для группы аккаунта ответил {response.status_code} — "
+        "фрагментный транспорт ослабил тройной WHERE"
+    )
+    assert response.headers["HX-Location"] == f"/accounts/{first.id}/groups"
+
+    await db_session.refresh(group_of_second)
+    assert group_of_second.is_active is True, (
+        "группа переключилась через адрес чужого для неё аккаунта"
+    )
+
+
 # --- Базовый путь без JS и вход на экран --------------------------------------
 
 
@@ -459,10 +697,17 @@ async def test_toggle_without_session_goes_to_login(
 async def test_toggle_is_a_real_post_form(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """D-09: без Alpine тумблер остаётся настоящей формой POST.
+    """D-09: без JS тумблер остаётся настоящей формой POST.
 
     Перехват висит на САМОЙ форме: не навесится — форма уйдёт POST-ом на тот же
     маршрут. Кнопка-триггер вне формы такого пути не оставила бы.
+
+    ⚠️ ПРЕДМЕТ ПЕРВОЙ ПОЛОВИНЫ СМЕНИЛ МЕХАНИЗМ, А НЕ СМЫСЛ (Фаза 9, план 09-01).
+    Отправку по изменению чекбокса забрал `hx-trigger="change"`
+    (`components/form_wrapper.html`), а прежний перехват Alpine `x-on:change`
+    снят (D-05): держать оба значило бы отправлять форму дважды на одно нажатие.
+    Утверждается по-прежнему то же свойство — перехват объявлен на САМОЙ форме,
+    а не кнопкой-триггером вне её.
     """
     account = await _seed_account(db_session)
     group = await _seed_group(db_session, account, "Группа деградации")
@@ -476,7 +721,11 @@ async def test_toggle_is_a_real_post_form(
     assert form_match, "тумблер не обёрнут формой на маршрут переключения"
     opening = form_match.group(0)
     assert 'method="post"' in opening.lower(), "форма тумблера не POST"
-    assert "x-on:change" in opening, "перехват отправки навешен не на саму форму"
+    assert 'hx-trigger="change"' in opening, (
+        "перехват отправки объявлен не на самой форме: без него изменение "
+        "чекбокса не отправляет ничего, а кнопка-триггер вне формы не оставила "
+        "бы базового пути вовсе"
+    )
 
     # Перехвата на форме для базового пути НЕДОСТАТОЧНО, и прежняя редакция
     # теста этого не ловила: форма, внутри которой один лишь чекбокс, без JS не
@@ -563,10 +812,15 @@ async def test_page_shows_thirty_rows_and_a_sentinel(
 
     html = (await authed_client.get(f"/accounts/{account.id}/groups")).text
 
-    assert len(_row_ids(html)) == 30, "страница отдала не 30 строк"
+    rows = _row_ids(html)
+    assert len(rows) == 30, "страница отдала не 30 строк"
     sentinels = _sentinels(html)
     assert len(sentinels) == 1, f"сентинел не единственный: {sentinels}"
-    assert "offset=30" in sentinels[0], sentinels[0]
+    # ⚠️ УТВЕРЖДАЕТСЯ КЛЮЧ ПОСЛЕДНЕЙ ОТРИСОВАННОЙ СТРОКИ, А НЕ ЧИСЛО
+    # ОТРИСОВАННЫХ (план 09-13, решение владельца `keyset`). Форма строже
+    # прежней: прежнее `offset=30` зеленело бы и на курсоре, указывающем не на
+    # ту строку, — оно утверждало ЧИСЛО, а не связь с документом.
+    assert f"after_id={rows[-1]}" in sentinels[0], sentinels[0]
     assert "limit=30" in sentinels[0], sentinels[0]
 
 
@@ -604,7 +858,7 @@ async def test_partial_of_a_foreign_account_leaks_nothing(
     )
 
     response = await authed_client.get(
-        f"/accounts/{foreign_account.id}/groups/partial?offset=0&limit=30",
+        f"/accounts/{foreign_account.id}/groups/partial?limit=30",
         follow_redirects=False,
     )
 
@@ -625,7 +879,7 @@ async def test_partial_without_session_goes_to_login(
     account = await _seed_account(db_session)
 
     response = await client.get(
-        f"/accounts/{account.id}/groups/partial?offset=0&limit=30",
+        f"/accounts/{account.id}/groups/partial?limit=30",
         follow_redirects=False,
     )
 
@@ -634,7 +888,12 @@ async def test_partial_without_session_goes_to_login(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("query", ["offset=-1&limit=30", "offset=0&limit=101"])
+# ⚠️ ПАРАМЕТРЫ ПЕРЕМЕРЕНЫ ПОД НОВУЮ ФОРМУ КУРСОРА (план 09-13, `keyset`):
+# прежние `offset=-1` и `offset=0` называли параметр, которого у маршрута
+# больше нет, и FastAPI молча пропускал бы их как неизвестные — правило
+# зеленело бы на 200 вместо 422, ничего не проверяя. Курсор объявлен
+# `Query(None, ge=1)`, поэтому вырожденный ключ отвергается ДО обращения к базе.
+@pytest.mark.parametrize("query", ["after_id=0&limit=30", "after_id=1&limit=101"])
 async def test_partial_rejects_bad_pagination_params(
     authed_client: AsyncClient, db_session: AsyncSession, query: str
 ):
@@ -750,13 +1009,17 @@ async def test_partial_carries_no_counter_line(
 ):
     """Паршал прокрутки линейку не трогает — у неё не бывает промежуточных чисел."""
     account = await _seed_account(db_session)
-    await _seed_many(db_session, account, [f"Активная {i:02d}" for i in range(32)])
+    active = await _seed_many(
+        db_session, account, [f"Активная {i:02d}" for i in range(32)]
+    )
     await _seed_many(
         db_session, account, [f"Выключенная {i}" for i in range(3)], active=False
     )
 
+    # Ключ ТРИДЦАТОЙ строки — то, что несёт сентинел первой страницы после
+    # плана 09-13: порция добирает строки строго больше него.
     response = await authed_client.get(
-        f"/accounts/{account.id}/groups/partial?offset=30&limit=30"
+        f"/accounts/{account.id}/groups/partial?after_id={active[29].id}&limit=30"
     )
 
     # Положительное утверждение первым: без него тест зеленел бы на пустом теле
@@ -856,30 +1119,66 @@ async def test_schedule_count_ignores_foreign_schedules(
     assert "в 1 расписании" in html, "подпись завышена чужим расписанием"
 
 
-# --- Синхронность двух разметок сентинела ------------------------------------
+# --- Единственность источника разметки сентинела ------------------------------
+
+SENTINEL_SOURCE = "account_groups/includes/sentinel.html"
+
+# Места, зовущие сентинел: страница и порция прокрутки. Перечень выписан здесь,
+# а не выведен обходом: место, ПЕРЕСТАВШЕЕ звать общий макрос, обязано быть
+# замечено, а обход, собирающий вызывающих по факту вызова, о таком месте
+# промолчал бы — оно просто выпало бы из собранного множества.
+#
+# ЛЕТОПИСЬ ПЕРЕЧНЯ: 3 → 2, Фаза 9, план 09-13, решение владельца `keyset` —
+# ответ удаления перестал отрисовывать курсор ВОВСЕ. Причина названа предметно:
+# курсор стал ключом последней отрисованной строки, поэтому удаление любой уже
+# отрисованной строки его не двигает, и чинить внеполосным узлом нечего. Запись
+# сдвинута ЗДЕСЬ, а не подогнана молча: выпавшее из перечня место обязано быть
+# отличимо от места, которое просто перестали проверять.
+SENTINEL_CALLERS = (
+    "account_groups/list.html",
+    "account_groups/partial_cards.html",
+)
 
 
-@pytest.mark.asyncio
-async def test_sentinel_markup_is_identical_in_both_templates():
-    """Сентинел страницы и сентинел порции — одна и та же строка разметки.
+def test_the_sentinel_markup_has_exactly_one_source():
+    """Разметка сентинела существует в дереве ровно в ОДНОМ файле (план 09-05).
 
-    Расхождение проявляется только у того, кто долистал до второй порции:
-    первая страница остаётся исправной.
+    ⚠️ ЧТО ИМЕННО УСИЛИЛОСЬ И ПОЧЕМУ ПРЕЖНЯЯ ФОРМА ЗАКРЫТА. Прежде здесь стояло
+    `test_sentinel_markup_is_identical_in_both_templates`: оно сравнивало ДВЕ
+    копии разметки строка в строку и говорило ровно то, что копий две и они
+    совпадают. Утверждение было верно ровно до появления ТРЕТЬЕГО места
+    отрисовки — ответа удаления. Попарное сравнение двух файлов при трёх копиях
+    осталось бы ЗЕЛЁНЫМ и при разъехавшейся третьей, то есть перестало бы быть
+    утверждением о единственности, не покраснев ни разу. Прежнее имя сохранить
+    нельзя: оно говорит о двух копиях, которых больше нет.
+
+    Теперь копий нет вовсе, и это утверждается СЧЁТОМ ФАЙЛОВ, несущих разметку,
+    плюс проверкой, что все три места зовут один и тот же источник.
     """
-    page = (TEMPLATES_DIR / "account_groups" / "list.html").read_text(encoding="utf-8")
-    partial = (TEMPLATES_DIR / "account_groups" / "partial_cards.html").read_text(
-        encoding="utf-8"
+    carriers = sorted(
+        path.relative_to(TEMPLATES_DIR).as_posix()
+        for path in TEMPLATES_DIR.rglob("*.html")
+        if "group-list-sentinel" in _sentinel_ids(path.read_text(encoding="utf-8"))
     )
 
-    page_sentinel = [line.strip() for line in page.splitlines() if "hx-get=" in line]
-    partial_sentinel = [
-        line.strip() for line in partial.splitlines() if "hx-get=" in line
-    ]
-
-    assert page_sentinel, "сентинел исчез из list.html"
-    assert page_sentinel == partial_sentinel, (
-        "разметка сентинела разошлась между страницей и порцией прокрутки"
+    assert carriers == [SENTINEL_SOURCE], (
+        f"разметка сентинела списка групп лежит в файлах {carriers}, а обязана "
+        f"лежать ровно в одном ({SENTINEL_SOURCE}) — копии разъезжаются молча, "
+        f"и видит это только тот, кто долистал до второй порции"
     )
+
+    for caller in SENTINEL_CALLERS:
+        source = (TEMPLATES_DIR / caller).read_text(encoding="utf-8")
+        assert SENTINEL_SOURCE in source and "sentinel(" in source, (
+            f"{caller} перестал звать общий макрос сентинела — место отрисовки "
+            f"обзавелось собственной разметкой курсора"
+        )
+
+    for screen in ("account_groups/list.html", "account_groups/partial_cards.html"):
+        source = (TEMPLATES_DIR / screen).read_text(encoding="utf-8")
+        assert not _sentinel_ids(source), (
+            f"в {screen} вернулась собственная разметка сентинела"
+        )
 
 
 # =============================================================================
@@ -1050,6 +1349,281 @@ async def test_repeated_delete_is_harmless(
     assert first.status_code == 302
     assert second.status_code == 302
     assert second.headers["location"] == f"/accounts/{account.id}/groups"
+
+
+@pytest.mark.asyncio
+async def test_repeated_delete_is_harmless_over_htmx(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Вторая половина пары к `test_repeated_delete_is_harmless` (T-9-07).
+
+    ⚠️ УТВЕРЖДАЕТСЯ ПОБАЙТОВОЕ РАВЕНСТВО ДВУХ ОТВЕТОВ, А НЕ СОВПАДЕНИЕ КАЖДОГО
+    С КОНСТАНТОЙ. Тело ответа удаления собирается из `group_id` ПУТИ, а не из
+    найденной строки, поэтому найденная и уже удалённая группа обязаны отвечать
+    неотличимо. Различимый ответ сообщал бы, какие идентификаторы заняты
+    существующими группами: карту чужих данных можно было бы составить
+    перебором по адресу, не получив ни одной строки.
+
+    ⚠️ ЧТО ЗДЕСЬ БЫЛО ПОЧИНЕНО И ПОЧЕМУ ЭТО ЗАПИСАНО, А НЕ ПРОСТО ИСПРАВЛЕНО
+    (WARN-4 / WR-04). Прежняя редакция сеяла ОДНУ группу: обе отправки уводили
+    список в ноль строк, обе уходили в ветку перехода с ПУСТЫМ телом, и все
+    четыре утверждения удовлетворялись тривиально — сравнивались два пустых
+    тела. Инструментированный прогон обзора: `first=204 body=b'' second=204
+    body=b''`. Охраняемое свойство («тело собирается из `group_id` ПУТИ, а не из
+    найденной строки») не исполнялось НИ РАЗУ, то есть тест был зелен ПО
+    ПОСТРОЕНИЮ и доехал таким до отгрузки. Приём, которым это теперь исключено,
+    один и он назван: ДОСТИЖЕНИЕ ФРАГМЕНТНОЙ ВЕТКИ УТВЕРЖДАЕТСЯ ПОЛОЖИТЕЛЬНО И
+    РАНЬШЕ ЛЮБОГО СРАВНЕНИЯ ТЕЛ.
+
+    ⚠️ СМЕНА КОНТРАКТА ПОСЛЕ ПЛАНА 09-05 — ЭТО ВТОРАЯ ПРАВКА, И ОНА ВАЖНЕЕ
+    ПЕРВОЙ. Ответ несёт ЧЕТВЁРТЫЙ внеполосный узел — починку курсора со
+    смещением `rendered_rows` минус число снятых с экрана строк. Отсюда три
+    вещи:
+
+    1. РАВЕНСТВО ПЕРЕНОСИТСЯ НА ПАРУ ОТПРАВОК, ОБЕ ИЗ КОТОРЫХ ЛЕЖАТ В КЛАССЕ
+       «СТРОКА НЕ НАЙДЕНА» (чужая, несуществующая, уже удалённая) — и это и есть
+       охраняемое свойство D-04 в редакции амендмента D-04-A, а не его прокси.
+    2. НАСТОЯЩИЙ ПОВТОР В ЖИВОМ ДОКУМЕНТЕ ИДЁТ С УМЕНЬШЕННЫМ `rendered_rows`:
+       второе нажатие читает число из УЖЕ ПОДМЕНЁННОГО сентинела, то есть шлёт
+       `R − 1`. На нём равенство держится побайтово, и это утверждается
+       ОТДЕЛЬНО, а не подразумевается.
+    3. ПРЕЖНЯЯ ФОРМА — «первый ответ равен повтору при ОДНОМ И ТОМ ЖЕ теле» —
+       БОЛЬШЕ НЕ УТВЕРЖДАЕТСЯ, и это смена контракта, а не смягчение. При
+       искусственно неизменном `rendered_rows` первая отправка снимает строку
+       (смещение `R − 1`), а вторая не снимает ничего (смещение `R`), и
+       расхождение ВЕРНО: одинаковое число отрисованных строк после разного
+       числа снятых означает разное состояние экрана. Прежнее равенство
+       держалось на совпадении, которого до четвёртого узла просто не могло не
+       быть. Разбор целиком — `09-05-PLAN.md` §`<cursor_repair_vs_d04>`.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, ["Первая двойного удаления", "Вторая двойного удаления"]
+    )
+    target = seeded[0]
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    rendered = _row_ids(page)
+    assert len(rendered) >= 2, (
+        f"страница отрисовала {len(rendered)} строк — посев короче двух, и обе "
+        f"отправки ушли бы в ветку перехода с пустым телом: ровно тот отказ, "
+        f"ради починки которого тест переписан"
+    )
+
+    # (1) УДАЛЕНИЕ: живой документ шлёт своё число отрисованных строк.
+    first = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{target.id}/delete",
+        data={"rendered_rows": len(rendered)},
+    )
+    # (2) НАСТОЯЩИЙ ПОВТОР: второе нажатие читает число из уже подменённого
+    # сентинела, поэтому шлёт УМЕНЬШЕННОЕ на снятую строку.
+    repeat = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{target.id}/delete",
+        data={"rendered_rows": len(rendered) - 1},
+    )
+    # (3) ТРЕТЬЯ ОТПРАВКА С ТЕМ ЖЕ ТЕЛОМ, ЧТО И (2): пара, между которой
+    # сравниваются тела, обязана идти с ОДНИМ И ТЕМ ЖЕ телом — различие
+    # ответов, полученное от разного тела, о неотличимости не сказало бы ничего.
+    repeat_again = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{target.id}/delete",
+        data={"rendered_rows": len(rendered) - 1},
+    )
+
+    # ⚠️ ПЕРВОЕ ИСПОЛНЯЕМОЕ УТВЕРЖДЕНИЕ — О ДОСТИГНУТОЙ ФРАГМЕНТНОЙ ВЕТКЕ.
+    # Без него всякое равенство тел ниже ВАКУУМНО: ветка перехода отвечает
+    # пустым телом, два пустых тела равны побайтово, и охраняемое свойство не
+    # исполняется ни разу — ровно тот отказ, что доехал до отгрузки (WR-04).
+    assert first.status_code == 200, (
+        f"фрагментная ветка не достигнута: ответ {first.status_code} вместо "
+        f"200 — сравнения тел ниже сравнивали бы два ПУСТЫХ тела ветки "
+        f"перехода, и утверждение о неотличимости было бы зелено по построению"
+    )
+    assert f'id="group-row-{target.id}"' in first.text, (
+        "в теле первого ответа нет узла снятия строки — сравнивать нечего, и "
+        "равенство тел ниже было бы вакуумным"
+    )
+
+    # ⚠️ ПОЛОВИНА «ЭТО НЕ ЦЕЛЫЙ ДОКУМЕНТ» ЗДЕСЬ ОБЯЗАТЕЛЬНА, А НЕ ИЗБЫТОЧНА.
+    # `htmx_client` следует перенаправлению НЕЗАМЕТНО, и ответы оказались бы
+    # одной и той же целой страницей экрана групп — равной себе самой и не
+    # говорящей об ответе удаления ничего.
+    for name, response in (
+        ("первый", first),
+        ("повтор", repeat),
+        ("третий", repeat_again),
+    ):
+        assert "<!DOCTYPE" not in response.text, (
+            f"в теле ({name}) приехал целый документ: обработчик ответил "
+            f"перенаправлением, а клиент незаметно по нему прошёл"
+        )
+
+    # РАВЕНСТВО — ВНУТРИ КЛАССА «СТРОКА НЕ НАЙДЕНА»: обе отправки идут по уже
+    # удалённой группе и с одним и тем же телом. Это и есть охраняемое
+    # свойство D-04 в редакции D-04-A, а не его прокси.
+    assert repeat.status_code == repeat_again.status_code, (
+        "две отправки по уже удалённой группе различимы по коду ответа"
+    )
+    assert repeat.content == repeat_again.content, (
+        "две отправки по уже удалённой группе различимы по телу ответа — по "
+        "ответу можно было бы узнать, какие идентификаторы заняты чужими "
+        "группами"
+    )
+    assert repeat.headers.get("HX-Location") == repeat_again.headers.get(
+        "HX-Location"
+    ), "две отправки по уже удалённой группе различимы по адресу перехода"
+
+    # НАСТОЯЩИЙ ПОВТОР — ОТДЕЛЬНЫМ УТВЕРЖДЕНИЕМ. Именно так пара «нажал —
+    # нажал ещё раз» выглядит в живом документе: число отрисованных строк
+    # приезжает уменьшенным, и смещение курсора сходится.
+    assert repeat.status_code == first.status_code, (
+        "повторное нажатие в живом документе отличимо от первого по коду ответа"
+    )
+    assert repeat.content == first.content, (
+        "повторное нажатие в живом документе отличимо от первого по телу "
+        "ответа: число отрисованных строк приезжает уменьшенным на снятую "
+        "строку, поэтому смещение починенного курсора обязано сойтись"
+    )
+    assert repeat.headers.get("HX-Location") == first.headers.get("HX-Location"), (
+        "повторное нажатие в живом документе отличимо от первого по адресу "
+        "перехода"
+    )
+
+    assert (await db_session.get(Group, target.id)) is None, (
+        "группа не удалена первой отправкой либо вернулась после повторных"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_degrades_without_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Без признака htmx удаление отвечает ПРЕЖНИМ перенаправлением (SP-3).
+
+    Половина пары, охраняющая путь деградации. Перевод обработчика на слой
+    ответа не имеет права поменять ответ человеку без JavaScript: он по-прежнему
+    обязан получить 302 на экран групп. Половина без htmx зовёт
+    `follow_redirects=False` ЯВНО.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа деградации удаления")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 302, (
+        f"запрос без признака htmx получил {response.status_code} — путь "
+        "деградации перестал быть прежним"
+    )
+    assert response.headers["location"] == f"/accounts/{account.id}/groups"
+    assert (await db_session.get(Group, group.id)) is None, (
+        "удаление на базовом пути не состоялось"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_returns_oob_nodes(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """С признаком htmx удаление отвечает ТРЕМЯ внеполосными узлами (D-11, D-02).
+
+    Основной цели свопа у ответа нет вовсе: форма панели идёт `hx-swap="none"`,
+    и всё едет внеполосно — снятие строки, снятие ОСИРОТЕВШЕЙ панели
+    подтверждения и линейка счётчика.
+
+    ⚠️ СНЯТИЕ ПАНЕЛИ ЗДЕСЬ НЕ УКРАШЕНИЕ. Панель сознательно стоит СНАРУЖИ
+    удаляемой строки (T-11-04), поэтому вместе со строкой она не уезжает: без
+    второго узла после N удалений в документе копятся N панелей `role="dialog"`
+    с живыми ловушками фокуса.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(db_session, account, ["Первая", "Вторая"])
+    target = seeded[0]
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{target.id}/delete"
+    )
+
+    assert response.status_code == 200, (
+        f"запрос htmx получил {response.status_code} вместо фрагмента"
+    )
+    assert "<!DOCTYPE" not in response.text, (
+        "в теле приехал целый документ: обработчик ответил перенаправлением, а "
+        "клиент незаметно по нему прошёл — ровно то, чего не видит человек"
+    )
+    assert f'id="group-row-{target.id}"' in response.text, (
+        "в ответе нет узла снятия строки — строка удалённой группы осталась бы "
+        "на экране до перезагрузки"
+    )
+    assert f'id="group-del-{target.id}"' in response.text, (
+        "в ответе нет узла снятия панели подтверждения — осиротевшая панель "
+        "останется в документе с живой ловушкой фокуса"
+    )
+    assert response.text.count('hx-swap-oob="delete"') == 2, (
+        "внеполосных снятий в ответе не два: строка и панель обязаны сниматься "
+        "каждая своим узлом"
+    )
+    assert 'hx-swap-oob="innerHTML:#account-groups-count"' in response.text, (
+        "в ответе нет внеполосного узла линейки счётчика — число активных групп "
+        "молча разъедется с составом строк"
+    )
+
+    assert (await db_session.get(Group, target.id)) is None
+
+
+@pytest.mark.asyncio
+async def test_last_group_goes_to_location(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Опустевший список закрывается переходом, а не вторым пустым состоянием (D-09).
+
+    Три различимых пустых состояния живут в `account_groups/list.html` в ОДНОМ
+    экземпляре. Второй их отрисовкой во фрагменте они разошлись бы молча, и
+    человек видел бы разный экран в зависимости от того, как он на него попал.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Единственная группа")
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete"
+    )
+
+    assert response.status_code == 204, (
+        f"удаление последней группы ответило {response.status_code} вместо "
+        "перехода на опустевший список"
+    )
+    assert response.headers["HX-Location"] == f"/accounts/{account.id}/groups"
+    assert not response.content, "у ответа 204 появилось тело"
+
+
+@pytest.mark.asyncio
+async def test_delete_does_not_trust_the_account_id_from_the_url_over_htmx(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Пара к `test_delete_does_not_trust_the_account_id_from_the_url` (T-9-07).
+
+    Тройной `WHERE` вычисляется ДО развилки транспорта, и новый транспорт не
+    имеет права его ослабить: свой аккаунт в адресе и своя группа — но группа
+    принадлежит ДРУГОМУ аккаунту. Ответ при этом неотличим от успешного
+    удаления последней группы в этом аккаунте: ветвление считается по числам
+    аккаунта из адреса, а не по факту нахождения строки (D-04).
+    """
+    first = await _seed_account(db_session, type_="wa")
+    second = await _seed_account(db_session, type_="tg_user")
+    group_of_second = await _seed_group(db_session, second, "Группа второго аккаунта")
+
+    response = await htmx_client.post(
+        f"/accounts/{first.id}/groups/{group_of_second.id}/delete"
+    )
+
+    assert response.status_code == 204, (
+        f"адрес чужого для группы аккаунта ответил {response.status_code} — "
+        "фрагментный транспорт ослабил тройной WHERE"
+    )
+    assert response.headers["HX-Location"] == f"/accounts/{first.id}/groups"
+    assert (await db_session.get(Group, group_of_second.id)) is not None, (
+        "группа удалена через адрес чужого для неё аккаунта"
+    )
 
 
 @pytest.mark.asyncio
@@ -1560,6 +2134,15 @@ async def test_no_per_group_sync_action_on_the_screen(
     Протокола синхронизации одной группы у воркеров не существует, а протоколы
     фаза не трогает. Нарисованная кнопка вела бы на несуществующий маршрут —
     отказ, который пользователь прочитал бы как поломку своей группы.
+
+    ⚠️ ОДНО СЛОВО `sync` НА ДВА РАЗНЫХ ПРЕДМЕТА, И РАЗЛИЧАТЬ ИХ ПРАВИЛО ОБЯЗАНО
+    (план 09-09). Строка группы несёт `hx-sync="this:drop"` — стратегию
+    наложения ЗАПРОСОВ htmx, выбранную владельцем взамен блокировки чекбокса, —
+    и голая проверка вхождения подстроки покраснела бы на ней, не имея к
+    предмету правила никакого отношения. Значение этого атрибута снимается со
+    строки ПЕРЕД проверкой, но снимается не молча: адрес, спрятанный в него,
+    краснеет отдельным утверждением ниже, поэтому вывести действие
+    синхронизации группы из-под правила, записав его в `hx-sync`, нельзя.
     """
     account = await _seed_account(db_session)
     group = await _seed_group(db_session, account, "Барахолка Северного района")
@@ -1570,7 +2153,19 @@ async def test_no_per_group_sync_action_on_the_screen(
         "на экране есть действие синхронизации отдельной группы"
     )
     row = _row_html(html, group.id)
-    assert "sync" not in row, f"в строке группы осталось действие синхронизации: {row}"
+
+    request_sync = re.findall(r'\shx-sync="([^"]*)"', row)
+    for value in request_sync:
+        assert "/" not in value, (
+            f"в стратегии наложения запросов спрятан адрес: {value!r} — правило "
+            f"снимает это значение со строки и таким способом обойдено быть не "
+            f"может"
+        )
+    row_without_request_sync = re.sub(r'\shx-sync="[^"]*"', "", row)
+
+    assert "sync" not in row_without_request_sync, (
+        f"в строке группы осталось действие синхронизации: {row}"
+    )
 
 
 # --- Плашка результата: успех -------------------------------------------------
@@ -2082,3 +2677,3725 @@ async def test_polled_block_is_declared_exactly_once():
     assert "syncing" in source, "объявление опроса не обусловлено статусом"
     assert "group-del-" not in source, "панель подтверждения попала в блок подмены"
     assert "aria-live" in source, "завершение синхронизации не будет объявлено"
+
+
+# =============================================================================
+# План 09-05, Задача 1: курсор бесконечной прокрутки переживает удаление
+# =============================================================================
+#
+# ЧТО ЗДЕСЬ ЗАКРЕПЛЯЕТСЯ И ПОЧЕМУ ЭТО НЕ ВИДНО НИ ПО КОДУ ОТВЕТА, НИ ГЛАЗОМ.
+# Перевод удаления на фрагментный ответ (план 09-02) убрал полную перестройку
+# страницы, а вместе с ней — единственное, что чинило курсор бесконечной
+# прокрутки. Сентинел несёт АБСОЛЮТНОЕ смещение, запечённое в его адресе при
+# отрисовке; ответ удаления снимает строку, снимает панель и обновляет линейку,
+# но сентинела не касается. На 35 группах удаление первой строки делает
+# тридцать первую неотрисовываемой НИ ОДНОЙ из двух порций: статус 200, консоль
+# чистая, линейка честно говорит «34 групп», а на экране их 33.
+#
+# Обратная половина того же отказа — задвоение: курсор, уехавший назад там, где
+# с экрана ничего не снялось, отрисует одну строку ВТОРОЙ РАЗ. Обе половины
+# утверждаются, потому что починка «вычитать всегда единицу» лечит первую и
+# заводит вторую.
+
+# Тег сентинела целиком: идентификатор у него обязан быть, и он обязан быть
+# ОДНИМ И ТЕМ ЖЕ во всех трёх местах отрисовки. Признак срабатывания взят
+# якорем, а не идентификатор: тест, ищущий сразу идентификатор, не отличил бы
+# «сентинела нет вовсе» от «сентинел без идентификатора».
+SENTINEL_TAG_RE = re.compile(r'<[^<>]*hx-trigger="revealed"[^<>]*>')
+ID_IN_TAG_RE = re.compile(r'id="([^"]*)"')
+
+
+def _sentinel_ids(html: str) -> list[str]:
+    """Идентификаторы всех сентинелов разметки — по одному на тег."""
+    return [
+        found.group(1)
+        for tag in SENTINEL_TAG_RE.findall(html)
+        if (found := ID_IN_TAG_RE.search(tag))
+    ]
+
+
+def _scroll_read_on_url(page_html: str, delete_response: str) -> str:
+    """Адрес, по которому ЖИВОЙ документ пойдёт дочитывать список после ответа.
+
+    ⚠️ ПОМОЩНИК МОДЕЛИРУЕТ ДОКУМЕНТ, А НЕ ЧИТАЕТ АДРЕС ИЗ ОТВЕТА НАПРЯМУЮ, И
+    ЭТО НЕ ПОБЛАЖКА ТЕСТУ. Узел, который никто не подменил, остаётся стоять со
+    своим прежним адресом — ровно так отказ и воспроизводится в живом браузере.
+    Тест, читающий адрес только из ответа, на дереве без починки свалился бы
+    раньше утверждения об объединении и сообщил бы «в ответе нет сентинела»
+    вместо названных поимённо потерянных групп, то есть обвинил бы не то.
+    """
+    repaired = _sentinels(delete_response)
+    if repaired:
+        assert len(repaired) == 1, (
+            f"ответ удаления принёс не один адрес дочитывания, а {len(repaired)}: "
+            f"{repaired} — документ подменит сентинел дважды, и какой адрес "
+            f"останется, разметкой не задано"
+        )
+        return repaired[0]
+    on_page = _sentinels(page_html)
+    assert on_page, (
+        "сентинела нет ни в ответе удаления, ни на самой странице — дочитывать "
+        "список документу нечем, и посев теста короче страницы"
+    )
+    return on_page[0]
+
+
+@pytest.mark.asyncio
+async def test_the_scroll_cursor_survives_a_fragment_delete(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """CR-01: после фрагментного удаления список не теряет ни одной группы.
+
+    Объединение того, что уже отрисовано, и того, что дочитает сентинел,
+    обязано покрывать ВЕСЬ оставшийся список — без потерь и без повторов.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    rendered = _row_ids(page)
+    assert len(rendered) == PAGE_SIZE, (
+        f"страница отрисовала {len(rendered)} строк вместо {PAGE_SIZE} — посев "
+        "не создаёт условия, ради которого тест написан"
+    )
+    target = rendered[0]
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{target}/delete",
+        data={"rendered_rows": len(rendered)},
+    )
+    assert response.status_code == 200, (
+        f"запрос htmx получил {response.status_code} вместо фрагмента"
+    )
+
+    rest = await authed_client.get(_scroll_read_on_url(page, response.text))
+    assert rest.status_code == 200
+
+    on_screen = [group_id for group_id in rendered if group_id != target]
+    read_on = _row_ids(rest.text)
+    alive = {group.id for group in seeded} - {target}
+
+    lost = sorted(alive - (set(on_screen) | set(read_on)))
+    doubled = sorted(set(on_screen) & set(read_on))
+
+    assert not lost, (
+        f"после удаления строки список потерял группы: {lost} — их не "
+        f"отрисовала ни первая страница, ни порция, которую дочитает сентинел; "
+        f"человек не увидит их до перезагрузки, а линейка счётчика продолжит "
+        f"их считать"
+    )
+    assert not doubled, (
+        f"после удаления строка показана дважды: {doubled} — курсор уехал "
+        f"дальше, чем документ снял с экрана"
+    )
+    assert set(on_screen) | set(read_on) == alive, (
+        "объединение отрисованного и дочитанного не равно оставшемуся списку"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_no_op_delete_does_not_double_a_row(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Холостое удаление не двигает курсор ни на единицу (D-04-A, QUAL-01).
+
+    Обе половины класса «строка не найдена», достижимые с живого экрана,
+    проверяются в одном теле: чужая группа и уже удалённая. Третья половина —
+    вовсе несуществующий идентификатор — покрыта задачей 3.
+
+    ⚠️ ЭТОТ ТЕСТ — ЕДИНСТВЕННОЕ, ЧТО СТОИТ МЕЖДУ ПОЧИНКОЙ КУРСОРА И ЕЁ
+    ЗЕРКАЛЬНЫМ ОТКАЗОМ. Починка «вычитать единицу всегда» чинит потерю строки и
+    заводит её задвоение: на холостом пути внеполосное снятие не находит узла,
+    на экране остаются все отрисованные строки, а курсор уезжает назад.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+    alive = {group.id for group in seeded}
+
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Чужая группа", user_id=foreign_user.id
+    )
+
+    # --- (а) идентификатор ЧУЖОЙ группы --------------------------------------
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    rendered = _row_ids(page)
+
+    foreign = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{foreign_group.id}/delete"
+    )
+    assert foreign.status_code == 200, (
+        f"холостое удаление получило {foreign.status_code} вместо фрагмента"
+    )
+
+    rest = await authed_client.get(_scroll_read_on_url(page, foreign.text))
+    read_on = _row_ids(rest.text)
+
+    doubled = sorted(set(rendered) & set(read_on))
+    assert not doubled, (
+        f"строка показана дважды после удаления, которое ничего не удалило: "
+        f"{doubled} — курсор уехал назад там, где с экрана не снялось ни одной "
+        f"строки"
+    )
+    assert set(rendered) | set(read_on) == alive, (
+        "холостое удаление сдвинуло состав списка: объединение отрисованного и "
+        "дочитанного не равно всем группам аккаунта"
+    )
+    assert (await db_session.get(Group, foreign_group.id)) is not None, (
+        "холостое удаление снесло чужую группу"
+    )
+
+    # --- (б) идентификатор УЖЕ УДАЛЁННОЙ группы ------------------------------
+    victim = rendered[0]
+    first = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{victim}/delete"
+    )
+    assert first.status_code == 200
+
+    page_again = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    rendered_again = _row_ids(page_again)
+
+    repeat = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{victim}/delete"
+    )
+    assert repeat.status_code == 200
+
+    rest_again = await authed_client.get(
+        _scroll_read_on_url(page_again, repeat.text)
+    )
+    read_on_again = _row_ids(rest_again.text)
+
+    doubled_again = sorted(set(rendered_again) & set(read_on_again))
+    assert not doubled_again, (
+        f"строка показана дважды после повторного удаления уже удалённой "
+        f"группы: {doubled_again}"
+    )
+    assert set(rendered_again) | set(read_on_again) == alive - {victim}, (
+        "повторное удаление сдвинуло состав списка"
+    )
+
+    # Число внеполосных узлов НЕ ЗАВИСИТ от того, нашлась ли строка: иначе оно
+    # само стало бы признаком состоявшегося удаления, и неотличимость сломалась
+    # бы с другой стороны (T-09-05-06).
+    #
+    # ЛЕТОПИСЬ ЧИСЛА: 4 → 3, Фаза 9, план 09-13, решение владельца `keyset` —
+    # четвёртый узел (починка курсора) снят вместе с задачей, которую решал.
+    # Утверждение НЕ ослаблено: оно по-прежнему говорит, что число одинаково у
+    # найденной и у ненайденной строки, и краснеет при возврате условной сборки.
+    assert foreign.text.count("hx-swap-oob") == 3, (
+        f"на холостом пути внеполосных узлов "
+        f"{foreign.text.count('hx-swap-oob')}, а не три — по их числу стало бы "
+        f"видно, состоялось ли удаление"
+    )
+    assert repeat.text.count("hx-swap-oob") == 3, (
+        f"на повторном удалении внеполосных узлов "
+        f"{repeat.text.count('hx-swap-oob')}, а не три"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_delete_response_never_carries_a_scroll_cursor(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Ответ удаления не несёт узла курсора НИ ПРИ КАКОМ теле запроса.
+
+    ⚠️ ПРАВИЛО ОБРАЩЕНО ПЛАНОМ 09-13 (решение владельца `keyset`), А НЕ СНЯТО, И
+    ЭТО НАЗЫВАЕТСЯ ЗДЕСЬ ПРЯМО. Прежде оно звалось
+    `test_the_delete_response_repairs_the_sentinel_only_over_htmx` и
+    утверждало, что четвёртый узел приезжает ТОЛЬКО когда документ прислал своё
+    число отрисованных строк. Числа документ больше не шлёт, и правило в прежней
+    форме зеленело бы на любом дереве — включая дерево, куда четвёртый узел
+    вернули. Теперь утверждается СИЛЬНОЕ: узла курсора в ответе нет ВООБЩЕ, и
+    подослать его нельзя ничем — ни прежним полем, ни любым другим телом.
+    Правило краснеет ровно тогда, когда в контракт возвращается величина,
+    снимаемая в один момент и применяемая в другой (CR-01).
+
+    Половина пары SP-3: путь деградации не тронут вовсе, и присланное тело его
+    не переключает — без признака htmx ответом остаётся прежнее
+    перенаправление.
+
+    ⚠️ ПРИЗНАК htmx СНИМАЕТСЯ ЯВНО ПУСТЫМ ЗНАЧЕНИЕМ ЗАГОЛОВКА, А НЕ ВЫБОРОМ
+    ФИКСТУРЫ, И ЭТО ВЫНУЖДЕННО. `htmx_client` возвращает ТОТ ЖЕ объект клиента,
+    что и `authed_client` (см. её докстринг: складываемость фикстур — несущее
+    свойство), поэтому в тесте, запросившем обе, запроса без признака не бывает
+    вовсе. Пустое значение считается отсутствием признака ЯВНО и по объявлению
+    (`app/pages/htmx.py::is_htmx`), а не по совпадению.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    rendered = _row_ids(page)
+    target, neighbour, third = rendered[0], rendered[1], rendered[2]
+
+    # ДВА ТЕЛА: пустое и несущее ПРЕЖНЕЕ, СНЯТОЕ ПОЛЕ. Второе — не украшение:
+    # оно доказывает, что вернуть починку курсора ПОДСУНУТЫМ полем нельзя.
+    # Правило, проверившее только пустое тело, зеленело бы и на обработчике,
+    # который снятое поле всё ещё читает.
+    for label, victim, body in (
+        ("пустом", target, None),
+        ("несущем снятое поле", third, {"rendered_rows": 30}),
+    ):
+        response = await htmx_client.post(
+            f"/accounts/{account.id}/groups/{victim}/delete", data=body
+        )
+        assert response.status_code == 200, (
+            f"при {label} теле ответ {response.status_code} вместо фрагмента"
+        )
+        assert response.text.count("hx-swap-oob") == 3, (
+            f"при {label} теле ответ несёт "
+            f"{response.text.count('hx-swap-oob')} внеполосных узла вместо трёх "
+            f"— в ответе появился узел, которого контракт не предусматривает"
+        )
+        assert not _sentinels(response.text), (
+            f"при {label} теле ответ подменил сентинел — починка курсора "
+            f"вернулась в контракт, а вместе с ней и класс отказа CR-01"
+        )
+        assert f'id="group-row-{victim}"' in response.text, (
+            f"при {label} теле узел снятия строки пропал: три узла обязаны "
+            f"остаться на месте"
+        )
+        assert f'id="group-del-{victim}"' in response.text, (
+            f"при {label} теле узел снятия панели подтверждения пропал"
+        )
+        assert 'hx-swap-oob="innerHTML:#account-groups-count"' in response.text, (
+            f"при {label} теле узел линейки счётчика пропал"
+        )
+
+    degraded = await authed_client.post(
+        f"/accounts/{account.id}/groups/{neighbour}/delete",
+        data={"rendered_rows": len(rendered)},
+        headers={"HX-Request": ""},
+        follow_redirects=False,
+    )
+    assert degraded.status_code == 302, (
+        f"запрос без признака htmx получил {degraded.status_code} — присланное "
+        "тело переключило путь деградации на фрагментный ответ"
+    )
+    assert degraded.headers["location"] == f"/accounts/{account.id}/groups"
+    assert not _sentinels(degraded.text), (
+        "на пути деградации собрался четвёртый внеполосный узел — страница и "
+        "так перестраивается целиком вместе с сентинелом"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_sentinel_carries_a_stable_id_in_both_templates(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Идентификатор сентинела ОДИН И ТОТ ЖЕ в обоих местах отрисовки.
+
+    Без стабильного идентификатора узел, названный по-разному на странице и в
+    порции, подменял бы себя через раз — ровно у того, кто долистал.
+
+    ⚠️ ТРЕТЬЕ МЕСТО ОТРИСОВКИ СНЯТО ПЛАНОМ 09-13 (решение владельца `keyset`), И
+    УТВЕРЖДЕНИЕ О НЁМ НЕ УБРАНО, А ОБРАЩЕНО. Прежде здесь требовалось, чтобы
+    ответ удаления нёс ТОТ ЖЕ идентификатор — иначе починка курсора целилась бы
+    в узел, которого в документе нет, и рантайм промолчал бы. Теперь требуется
+    обратное и не менее строго: ответ удаления не несёт узла курсора ВОВСЕ.
+    Утверждение краснеет, если четвёртый узел вернётся в дерево, — то есть если
+    вернётся и величина, которую можно снять в один момент и применить в
+    другой (CR-01).
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(
+        db_session, account, [f"Группа {i:03d}" for i in range(PAGE_SIZE * 2 + 5)]
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    portion = (await authed_client.get(_sentinels(page)[0])).text
+    rendered = _row_ids(page)
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{rendered[0]}/delete"
+    )
+
+    on_page = _sentinel_ids(page)
+    in_portion = _sentinel_ids(portion)
+    in_response = _sentinel_ids(response.text)
+
+    assert on_page == ["group-list-sentinel"], (
+        f"сентинел страницы не несёт стабильного идентификатора: {on_page}"
+    )
+    assert in_portion == on_page, (
+        f"идентификатор сентинела в порции прокрутки разошёлся со страницей: "
+        f"{in_portion} против {on_page}"
+    )
+    assert in_response == [], (
+        f"ответ удаления принёс узел курсора {in_response} — курсор снова "
+        f"чинится подменой, то есть в контракт вернулась величина, снимаемая в "
+        f"один момент и применяемая в другой (CR-01). При ключевом курсоре "
+        f"чинить нечего: удаление уже отрисованной строки его не двигает"
+    )
+
+
+# =============================================================================
+# План 09-05, Задача 3: новое поле не тронуло ни деградацию, ни неотличимость
+# =============================================================================
+#
+# Поле `rendered_rows` существует ТОЛЬКО на пути htmx: живой документ несёт его
+# скрытым полем внутри сентинела, а человек без JavaScript отправляет ту же
+# форму без него. Обе половины закрепляются машинно — и обе именно здесь, а не
+# рассуждением о том, что «сервер и так проверит».
+
+
+def _search_param(url: str) -> list[str] | None:
+    """Строка поиска, доехавшая до адреса подгрузки, — или None, если её нет."""
+    return parse_qs(urlsplit(url).query).get("search")
+
+
+@pytest.mark.asyncio
+async def test_the_delete_degrades_without_the_rendered_rows_field(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Без признака htmx и без нового поля удаление отвечает как прежде.
+
+    Половина пары SP-3 к тестам починки курсора: поле, заведённое ради htmx,
+    не имеет права стать обязательным. Фикстура здесь ОДНА намеренно —
+    `htmx_client` возвращает тот же объект клиента и выставил бы признак htmx
+    всему тесту.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа деградации курсора")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/delete", follow_redirects=False
+    )
+
+    assert response.status_code == 302, (
+        f"запрос без признака htmx и без поля числа строк получил "
+        f"{response.status_code} — путь деградации стал требовать поля, "
+        f"которого у человека без JavaScript нет вовсе"
+    )
+    assert response.headers["location"] == f"/accounts/{account.id}/groups"
+    assert not response.text, (
+        "на пути деградации собралось тело фрагмента — страница и так "
+        "перестраивается целиком"
+    )
+    assert (await db_session.get(Group, group.id)) is None, (
+        "удаление на базовом пути не состоялось"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_scroll_cursor_keeps_the_search_filter_after_a_delete(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Курсор дочитывает ОТФИЛЬТРОВАННУЮ выдачу и после удаления.
+
+    Потерянная строка поиска не роняет страницу и не меняет кода ответа: она
+    молча подмешивает к найденному остальной список аккаунта, и человек видит в
+    выдаче поиска чужие по смыслу строки.
+
+    ⚠️ ИМЯ И ФОРМА ПРАВИЛА СДВИНУТЫ ПЛАНОМ 09-13 (решение владельца `keyset`), А
+    ПРЕДМЕТ СОХРАНЁН ЦЕЛИКОМ, И ЭТО НАЗЫВАЕТСЯ ЗДЕСЬ ПРЯМО. Прежде правило
+    звалось `test_the_repaired_sentinel_keeps_the_search_filter` и утверждало,
+    что ПОЧИНЕННЫЙ ответом удаления сентинел несёт тот же фильтр. Починки
+    больше нет; правило с прежним именем стало бы утверждением о несуществующем
+    узле, то есть зелёным по построению — ровно та форма отказа, против которой
+    заведён этот круг. Спрашивается теперь то же самое, но у ДОКУМЕНТА: узел
+    курсора удаление переживает нетронутым, и дочитывание ПОСЛЕ удаления обязано
+    вернуть строки только отфильтрованной выдачи.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(
+        db_session, account, [f"Альфа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+    await _seed_many(db_session, account, [f"Бета {i:02d}" for i in range(5)])
+
+    page = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": "Альфа"}
+        )
+    ).text
+
+    # НЕВАКУУМНОСТЬ ПЕРВЫМ ДЕЛОМ: без сентинела на странице сравнивать было бы
+    # нечего, и утверждение о фильтре стало бы зелёным по построению.
+    page_sentinels = _sentinels(page)
+    assert page_sentinels, (
+        "сентинела нет на отфильтрованной странице — поиск отсёк выдачу до "
+        "размера страницы, и утверждение о фильтре сравнивать не с чем"
+    )
+    assert _search_param(page_sentinels[0]) == ["Альфа"], (
+        f"строка поиска не доехала до адреса сентинела страницы: "
+        f"{page_sentinels[0]}"
+    )
+
+    rendered = _row_ids(page)
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{rendered[0]}/delete",
+        data={"search": "Альфа"},
+    )
+    assert response.status_code == 200, (
+        f"фрагментная ветка не достигнута: {response.status_code}"
+    )
+    assert not _sentinels(response.text), (
+        "ответ удаления принёс узел курсора — курсор снова чинится подменой, и "
+        "вместе с починкой возвращается величина, снимаемая в один момент и "
+        "применяемая в другой (CR-01)"
+    )
+
+    # Документ дочитывает СВОИМ узлом, который удаление не тронуло.
+    rest = await authed_client.get(page_sentinels[0])
+    assert rest.status_code == 200
+    assert _row_ids(rest.text), (
+        "дочитывание после удаления не вернуло ни одной строки — утверждение о "
+        "фильтре ниже стало бы вакуумным"
+    )
+    assert "Бета" not in rest.text, (
+        f"после удаления курсор дочитал НЕотфильтрованный список: в выдаче "
+        f"поиска «Альфа» появились строки «Бета» — {page_sentinels[0]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_delete_response_is_indistinguishable_for_a_foreign_and_a_missing_group(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """D-04 (в редакции D-04-A): чужая и несуществующая группа отвечают одинаково.
+
+    ⚠️ ПОСЕВ «ЧУЖАЯ ГРУППА ЕСТЬ, СВОИХ НЕТ» ЗАПРЕЩЁН, И ЭТО ЛОВУШКА, А НЕ
+    ПРИДИРКА. Он уводит ОБА запроса в ветку опустевшего списка — она отвечает
+    переходом с ПУСТЫМ телом, и тогда два пустых тела равны побайтово, два
+    статуса равны, два заголовка равны, а фрагмент не собирается ни разу.
+    Ровно этот отказ фаза уже допустила однажды (09-REVIEW.md §WR-04:
+    `first=204 body=b'' second=204 body=b''`). Поэтому у действующего человека
+    заведены СВОИ группы, и после обоих запросов у него остаётся не меньше
+    одной: ни один из двух запросов ничего не удаляет.
+
+    ⚠️ ПОРЯДОК УТВЕРЖДЕНИЙ ВАЖНЕЕ САМОГО СРАВНЕНИЯ. Достижение фрагментной
+    ветки утверждается ПЕРВЫМ исполняемым утверждением; без него равенство тел
+    вакуумно.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+    rendered_rows = PAGE_SIZE
+
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Чужая группа", user_id=foreign_user.id
+    )
+    missing_id = max([group.id for group in seeded] + [foreign_group.id]) + 1000
+
+    body = {"rendered_rows": rendered_rows}
+    foreign = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{foreign_group.id}/delete", data=body
+    )
+    missing = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{missing_id}/delete", data=body
+    )
+
+    # ПЕРВОЕ ИСПОЛНЯЕМОЕ УТВЕРЖДЕНИЕ — О ДОСТИГНУТОЙ ФРАГМЕНТНОЙ ВЕТКЕ.
+    assert foreign.status_code == 200, (
+        f"фрагментная ветка не достигнута: ответ {foreign.status_code} вместо "
+        f"200 — без неё равенство тел ниже вакуумно, потому что сравнивало бы "
+        f"два пустых тела ветки перехода"
+    )
+    assert f'id="group-row-{foreign_group.id}"' in foreign.text, (
+        "в теле первого ответа нет узла снятия строки — сравнивать нечего, и "
+        "равенство тел ниже было бы зелено по построению"
+    )
+
+    assert missing.status_code == foreign.status_code, (
+        "чужая и несуществующая группа различимы по коду ответа"
+    )
+    assert missing.headers.get("HX-Location") == foreign.headers.get("HX-Location"), (
+        "чужая и несуществующая группа различимы по адресу перехода"
+    )
+
+    # ⚠️ ПОДСТАНОВКА ИДЕНТИФИКАТОРА ЗАКОННА, И ВОТ ПОЧЕМУ. Он приходит из ПУТИ,
+    # то есть назван САМИМ спрашивающим; два разных случая одним и тем же
+    # идентификатором не адресуются в принципе. Подставляются ровно два якоря, а
+    # не всякое вхождение числа, — иначе замена задела бы соседние величины.
+    substituted = foreign.text.replace(
+        f'id="group-row-{foreign_group.id}"', f'id="group-row-{missing_id}"'
+    ).replace(f'id="group-del-{foreign_group.id}"', f'id="group-del-{missing_id}"')
+
+    assert substituted == missing.text, (
+        "чужая и несуществующая группа различимы ПО ТЕЛУ ответа — по ответу "
+        "можно составить карту чужих идентификаторов перебором по адресу, не "
+        "получив ни одной строки"
+    )
+    assert (await db_session.get(Group, foreign_group.id)) is not None, (
+        "чужая группа удалена"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_degenerate_cursor_is_rejected_before_the_database(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Вырожденный ключ курсора отвергается ДО обращения к базе (T-09-13-01).
+
+    ⚠️ ПРАВИЛО ПЕРЕНАЦЕЛЕНО ПЛАНОМ 09-13 (решение владельца `keyset`), А НЕ
+    СНЯТО, И КЛАСС УГРОЗЫ У НЕГО ТОТ ЖЕ. Прежде оно звалось
+    `test_a_non_positive_rendered_rows_does_not_build_a_sentinel` и утверждало,
+    что ноль и отрицательное ЧИСЛО ОТРИСОВАННЫХ СТРОК не строят курсор вовсе
+    (T-09-05-01). Поля этого в контракте больше нет, и правило в прежней форме
+    зеленело бы на любом дереве — то есть перестало бы отличать закрытую угрозу
+    от отменённой. Недоверенная величина курсора никуда не делась, она сменила
+    ФОРМУ: теперь это `after_id` в адресе порции. Спрашивается ровно то же —
+    вырожденная величина не должна ни уронить обработчик, ни молча оборвать
+    список.
+
+    Ключ объявлен `Query(None, ge=1)`, поэтому ноль и отрицательное значение
+    отвергаются маршрутом, а не превращаются в тихо съехавшую выдачу. Отсутствие
+    ключа — законный случай: он означает «с начала списка», и выдача при нём
+    полная, а не пустая.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+
+    for value in (0, -5):
+        response = await authed_client.get(
+            f"/accounts/{account.id}/groups/partial?after_id={value}&limit=30",
+            follow_redirects=False,
+        )
+        assert response.status_code == 422, (
+            f"after_id={value} принят маршрутом ({response.status_code}) — "
+            f"вырожденный ключ дошёл бы до выборки, и список оборвался бы молча"
+        )
+        assert not _row_ids(response.text), (
+            f"после отказа при after_id={value} в теле оказались строки"
+        )
+
+    # АНТИВАКУУМ: отсутствие ключа — не отказ, а «с начала списка». Без этого
+    # утверждения правило зеленело бы и на маршруте, отвергающем ВСЁ подряд.
+    full = await authed_client.get(
+        f"/accounts/{account.id}/groups/partial?limit=30"
+    )
+    assert full.status_code == 200, (
+        f"порция без ключа получила {full.status_code} — «с начала списка» "
+        f"перестало быть законным случаем"
+    )
+    assert _row_ids(full.text) == [group.id for group in seeded[:PAGE_SIZE]], (
+        "порция без ключа вернула не начало списка"
+    )
+
+
+# =============================================================================
+# План 09-06, Задача 1: ветка «список опустел» решается ПО ТЕКУЩЕЙ ВЫДАЧЕ
+# =============================================================================
+#
+# WR-06 / WARN-6. Ветвление, считанное по числам АККАУНТА, оставляло человека
+# перед ПУСТОЙ КАРТОЧКОЙ БЕЗ ВЫХОДА: поиск сузил выдачу до одной строки, человек
+# её удалил, `total_groups` остался больше нуля — и ответ снял строку на месте
+# фрагментом. Три различимых пустых состояния живут в `account_groups/list.html`
+# и во фрагмент не приезжают (D-09), поэтому на экране не оставалось ни ветви
+# «Группы не найдены», ни кнопки «Сбросить»: вернуться к неотфильтрованному
+# списку можно было только правкой адреса.
+#
+# Тот же по форме отказ у удаления последней строки ТЕКУЩЕЙ ПОРЦИИ при непустых
+# следующих страницах здесь НЕ закрывается и закрываться не должен: выдача не
+# пуста, фрагментная ветка верна, а курсор чинит четвёртый внеполосный узел
+# плана 09-05.
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_last_matched_row_lands_on_the_empty_state(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Удаление ПОСЛЕДНЕЙ НАЙДЕННОЙ строки закрывается переходом, несущим фильтр.
+
+    ⚠️ НЕВАКУУМНОСТЬ УТВЕРЖДАЕТСЯ ОТДЕЛЬНО: после удаления в аккаунте ОСТАЮТСЯ
+    другие группы. Без этой половины тест зеленел бы и на прежней ветке по
+    числам аккаунта — та тоже отвечает переходом, когда групп не осталось вовсе,
+    и утверждение не сказало бы о починке ничего.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, ["Бета один", "Бета два", "Бета три"])
+    alpha = await _seed_group(db_session, account, "Альфа единственная")
+
+    page = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": "Альфа"}
+        )
+    ).text
+    rendered = _row_ids(page)
+    assert rendered == [alpha.id], (
+        f"поиск отвечает не ровно одной строке ({rendered}) — посев не создаёт "
+        f"условия, ради которого тест написан"
+    )
+
+    response = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{alpha.id}/delete",
+        data={"rendered_rows": len(rendered), "search": "Альфа"},
+    )
+
+    assert response.status_code == 204, (
+        f"удаление последней НАЙДЕННОЙ строки ответило {response.status_code} "
+        f"вместо перехода: человек остался перед пустой карточкой без ветви "
+        f"«Группы не найдены» и без кнопки «Сбросить» — вернуться к полному "
+        f"списку можно только правкой адреса"
+    )
+    assert not response.content, "у ответа 204 появилось тело"
+
+    location = response.headers["HX-Location"]
+    assert _search_param(location) == ["Альфа"], (
+        f"адрес перехода не несёт строки поиска: {location} — человек "
+        f"приземляется на НЕотфильтрованный список и не видит, что его поиск "
+        f"больше ничему не отвечает"
+    )
+
+    remaining = (
+        (
+            await db_session.execute(
+                select(Group).where(Group.account_id == account.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(remaining) == 3, (
+        f"в аккаунте осталось {len(remaining)} групп вместо трёх — утверждение "
+        f"о ветке вакуумно: она совпала бы со старой веткой «групп не осталось "
+        f"вовсе»"
+    )
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_last_matched_row_degrades_with_the_filter(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Путь деградации сохраняет фильтр: перенаправление несёт ту же строку.
+
+    Фикстура здесь ОДНА намеренно — `htmx_client` возвращает тот же объект
+    клиента и выставил бы признак htmx всему тесту.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, ["Бета один", "Бета два"])
+    alpha = await _seed_group(db_session, account, "Альфа единственная")
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{alpha.id}/delete",
+        data={"search": "Альфа"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302, (
+        f"запрос без признака htmx получил {response.status_code} — путь "
+        f"деградации перестал быть прежним"
+    )
+    assert _search_param(response.headers["location"]) == ["Альфа"], (
+        f"перенаправление после удаления потеряло строку поиска: "
+        f"{response.headers['location']} — человек без JavaScript приземляется "
+        f"на НЕотфильтрованный список"
+    )
+    assert (await db_session.get(Group, alpha.id)) is None, (
+        "удаление на базовом пути не состоялось"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_delete_branch_does_not_reveal_a_foreign_group_under_search(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Под активным поиском чужая и несуществующая группа отвечают одинаково.
+
+    Смена условия ветвления не имеет права завести различимость: у ЧУЖОЙ и у
+    НЕСУЩЕСТВУЮЩЕЙ группы текущая выдача не меняется ни на строку, значит и
+    ветка у них та же, какой она была бы у соседнего успешного удаления в том же
+    аккаунте (D-04 в редакции D-04-A, T-9-10).
+
+    ⚠️ ПОРЯДОК УТВЕРЖДЕНИЙ ВАЖНЕЕ САМОГО СРАВНЕНИЯ: достижение фрагментной ветки
+    утверждается ПЕРВЫМ исполняемым утверждением, иначе равенство тел вакуумно.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, ["Альфа один", "Альфа два", "Альфа три"]
+    )
+
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Альфа чужая", user_id=foreign_user.id
+    )
+    missing_id = max([group.id for group in seeded] + [foreign_group.id]) + 1000
+
+    body = {"rendered_rows": len(seeded), "search": "Альфа"}
+    foreign = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{foreign_group.id}/delete", data=body
+    )
+    missing = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{missing_id}/delete", data=body
+    )
+
+    # ПЕРВОЕ ИСПОЛНЯЕМОЕ УТВЕРЖДЕНИЕ — О ДОСТИГНУТОЙ ФРАГМЕНТНОЙ ВЕТКЕ.
+    assert foreign.status_code == 200, (
+        f"фрагментная ветка под поиском не достигнута: ответ "
+        f"{foreign.status_code} вместо 200 — равенство тел ниже сравнивало бы "
+        f"два пустых тела ветки перехода"
+    )
+    assert f'id="group-row-{foreign_group.id}"' in foreign.text, (
+        "в теле первого ответа нет узла снятия строки — сравнивать нечего, и "
+        "равенство тел ниже было бы зелено по построению"
+    )
+
+    assert missing.status_code == foreign.status_code, (
+        "под активным поиском чужая и несуществующая группа различимы по коду "
+        "ответа"
+    )
+    assert missing.headers.get("HX-Location") == foreign.headers.get("HX-Location"), (
+        "под активным поиском чужая и несуществующая группа различимы по адресу "
+        "перехода"
+    )
+
+    # Подстановка идентификатора законна: он приходит из ПУТИ, то есть назван
+    # САМИМ спрашивающим, и двумя разными случаями один и тот же идентификатор
+    # не адресуется (тот же приём, что в плане 09-05, задача 3).
+    substituted = foreign.text.replace(
+        f'id="group-row-{foreign_group.id}"', f'id="group-row-{missing_id}"'
+    ).replace(f'id="group-del-{foreign_group.id}"', f'id="group-del-{missing_id}"')
+
+    assert substituted == missing.text, (
+        "под активным поиском чужая и несуществующая группа различимы ПО ТЕЛУ "
+        "ответа — по ответу можно составить карту чужих идентификаторов "
+        "перебором по адресу, не получив ни одной строки"
+    )
+    assert (await db_session.get(Group, foreign_group.id)) is not None, (
+        "холостое удаление снесло чужую группу"
+    )
+
+
+# =============================================================================
+# Объявленные включаемые данные против отрисованного документа (DIV-09-01)
+# =============================================================================
+#
+# ⚠️ ПРАВИЛО ПОВЕДЕНЧЕСКОЕ, А НЕ СКАНИРУЮЩЕЕ ИСХОДНИК, И ЭТО НЕ ВЫБОР СТИЛЯ.
+# Узел, на который целится объявление включаемых данных, рисуется УСЛОВИЕМ
+# обработчика («есть следующая порция»), а само объявление печатается
+# БЕЗУСЛОВНО. По тексту шаблонов узнать, стоят ли они рядом на живом экране,
+# нельзя в принципе: оба фрагмента разметки в исходнике есть всегда. Поэтому
+# документ рисуется НАСТОЯЩИМ обработчиком, и селекторы сверяются с
+# идентификаторами ТОГО ЖЕ документа.
+#
+# Вреда данным у разрыва нет — это проверено по коду: число отрисованных строк
+# приходит пустым, смещение не собирается, четвёртый внеполосный узел не
+# отправляется. Вред другой: разрешатель селекторов при нуле совпадений
+# возвращает детачнутый узел и пишет строку в консоль на КАЖДОЕ удаление, а на
+# признак «ответ 200 и ЧИСТАЯ КОНСОЛЬ» обход опирается в трёх местах.
+
+# Значение объявления включаемых данных — как оно стоит в ОТРИСОВАННОМ
+# документе.
+INCLUDE_ATTR_RE = re.compile(r'hx-include="([^"]*)"')
+
+# Селектор, называющий ИДЕНТИФИКАТОР, — и только он. Селектор по классу, по
+# атрибуту или с префиксом обхода дерева идентификатора не называет, и сверять
+# его с множеством идентификаторов документа значило бы сравнивать разные
+# величины: правило переехало бы на другой предмет и молча зеленело.
+ID_SELECTOR_RE = re.compile(r"^#([A-Za-z][\w:.-]*)$")
+
+# Идентификатор узла документа. Граница слева обязательна: без неё
+# `data-group-id="5"` прочиталось бы как идентификатор `5`, и множество
+# идентификаторов документа распухло бы вымышленными узлами — то есть правило
+# зеленело бы ровно там, где узла на самом деле нет.
+DOCUMENT_ID_RE = re.compile(r'(?<![\w-])id="([^"]*)"')
+
+# ⚠️ ЧИСЛО ОБЪЯВЛЕНИЙ ВЫПИСАНО ОТДЕЛЬНЫМ УТВЕРЖДЕНИЕМ НАМЕРЕННО (идиома SP-1).
+# Без него правило зеленело бы от того, что разборщик перестал находить
+# объявления ВОВСЕ, — то есть молчало бы громче всего там, где сломалось
+# сильнее всего: разность пустого множества с любым другим пуста.
+#
+# ⚠️ ЧИСЛО ПЕРЕМЕРЕНО ПЛАНОМ 09-11 ПОСЛЕ ПРАВКИ, И МЕСТО ИЗМЕРЕНИЯ ПЕРЕЕХАЛО.
+# ЛЕТОПИСЬ:
+#   3, план 09-11, задача 1 — измерено на СПИСКЕ КОРОЧЕ СТРАНИЦЫ: объявление
+#     печаталось БЕЗУСЛОВНО, поэтому три строки давали три объявления при
+#     полном отсутствии цели в документе. Это и было предъявленным DIV-09-01.
+#   3 → 30, план 09-11, задача 3 — ветвь владельца `conditional-include`
+#     сделала объявление условным, и на списке короче страницы объявлений не
+#     стало ВОВСЕ (см. INCLUDE_DECLARATIONS_ON_A_SHORT_LIST ниже). Антивакуумное
+#     утверждение обязано жить там, где объявления ЕСТЬ, иначе оно перестаёт
+#     быть антивакуумным: измерение переехало на страницу КРУПНОГО аккаунта, где
+#     следующая порция есть и узел курсора в документе стоит.
+#
+# Число ИЗМЕРЕНО на живом дереве, а не выведено ожиданием: страница крупного
+# аккаунта рисует полную страницу строк, и панель подтверждения строки —
+# единственное место экрана, объявляющее включаемые данные. С сегодняшним
+# размером страницы оно совпадает, но выведено НЕ из него: сменившийся размер
+# страницы обязан покраснеть здесь и быть перемеренным осознанно, а не
+# подстроиться молча.
+#
+#   30 → 0, план 09-13, задача 4, решение владельца `keyset` — ПРЕДМЕТ СНЯТ.
+#     Курсор прокрутки стал ключом последней отрисованной строки, поэтому
+#     панели подтверждения нечего включать из живого документа: объявление
+#     снято с вызова панели, и объявлений включаемых данных на экране групп не
+#     осталось НИ ОДНОГО. Число перемерено прогоном на отгруженном дереве.
+#
+# ⚠️ ОБНУЛИВШИЙСЯ ПРЕДМЕТ ДЕЛАЕТ ПРАВИЛО ВАКУУМНЫМ, И ЭТО ЗАКРЫТО ДВУМЯ
+# ПОЛОВИНАМИ, А НЕ ОДНОЙ. Правило вида «объявленное достижимо» на дереве без
+# объявлений зеленеет ВСЕГДА: разность пустого множества с любым пуста. Такое
+# правило перестаёт отличать ЗАКРЫТУЮ запись от ТИХО ОТМЕНЁННОЙ — то есть
+# становится ровно той формой отказа, ради поимки которой круг и собран
+# (цена WARN-4 первого круга уже оплачена однажды). Поэтому:
+#   (а) антивакуум ПЕРЕЕХАЛ на ПОДСТАВЛЕННОЕ дерево — см.
+#       SUBSTITUTED_INCLUDE_DECLARATIONS_MEASURED ниже;
+#   (б) у правила заведён свой отрицательный контроль
+#       test_control_negative_an_include_declaration_without_a_target_reddens_the_gate.
+# Ни одна из половин не факультативна: (а) без (б) утверждает, что предмет
+# найдётся, но не что правило на нём краснеет; (б) без (а) доказывает зубы на
+# синтетике, не измерив предмета. Обе проверяются гейтом плана, а не поручены
+# прозой.
+#
+# ⚠️ ПРАВИЛО ОСТАЁТСЯ ЗАРЯЖЕННЫМ НА ФАЗУ 15, раздающую формы массово: вернувшееся
+# в дерево объявление включаемых данных немедленно поднимет это число, и решение
+# о нём придётся принять, а не обнаружить через фазу.
+INCLUDE_DECLARATIONS_MEASURED = 0
+
+# ⚠️ ЧИСЛО ОБЪЯВЛЕНИЙ НА ПОДСТАВЛЕННОМ ДЕРЕВЕ — ВТОРАЯ ПОЛОВИНА ЗАМЕНЫ (идиома
+# SP-1). Заведено планом 09-13, задача 4, и вот ПОЧЕМУ: живого предмета у
+# правила в дереве больше нет, а правило обязано остаться способным отличать
+# достижимое объявление от недостижимого. Поэтому антивакуум снимается с
+# дерева, ПОДСТАВЛЕННОГО существующим механизмом подстановки этого файла
+# (`re.subn` по живой странице — тот же приём, которым собирается склейка
+# `glued`), а живое дерево при доказательстве не правится ни на символ.
+#
+# Значение ПОСТАВЛЕНО ИЗМЕРЕНИЕМ на подставленном дереве, а не ожиданием и не
+# переносом прежних тридцати. ⚠️ И ИЗМЕРЕНИЕ ЭТО СРАЗУ ЖЕ ОПРАВДАЛО СЕБЯ:
+# ожидание было «тридцать, по числу строк страницы», а прогон вернул ШЕСТЬДЕСЯТ.
+# Подстановка идёт на КАЖДОЕ место, отправляющее POST, а таких у строки ДВА —
+# форма тумблера и форма панели подтверждения. Ровно это и есть причина, по
+# которой числа в этом дереве ставятся прогоном, а не арифметикой: число,
+# выведенное умножением «строк на единицу», зеленело бы и на дереве, где
+# подстановка попала не туда.
+#
+# ЛЕТОПИСЬ: 0 → 60, Фаза 9, план 09-13, задача 4 — константа заведена вместе с
+# переездом антивакуума на подставленное дерево.
+SUBSTITUTED_INCLUDE_DECLARATIONS_MEASURED = 60
+
+# ⚠️ НОЛЬ ЗДЕСЬ — САМО СОДЕРЖАНИЕ ПОЧИНКИ, А НЕ ОТСУТСТВИЕ ИЗМЕРЕНИЯ. У списка
+# короче страницы узла курсора нет НИКОГДА, и строка, узнавшая об этом от
+# отрисовщика, не объявляет включаемые данные вовсе. Утверждается это числом, а
+# не молчанием: вернувшееся сюда объявление означает, что признак перестал
+# доезжать до вызова панели, и строка в консоли вернулась на КАЖДОЕ удаление —
+# ровно то расхождение, которое план 09-11 закрывал.
+#
+# Вместе с INCLUDE_DECLARATIONS_MEASURED эти два числа утверждают свойство
+# сильнее исходного: объявление появляется РОВНО ТОГДА, когда цель есть.
+INCLUDE_DECLARATIONS_ON_A_SHORT_LIST = 0
+
+
+@dataclass(frozen=True)
+class IncludeTargetException:
+    """Положение экрана, в котором объявленная цель включаемых данных недостижима.
+
+    ``position`` — то самое положение, названное словами: запись обязана
+    сообщать, ГДЕ объявление остаётся без цели, иначе следующий читатель примет
+    её за общее разрешение расходиться.
+    ``assigned_phase`` — фаза, которой отступление назначено. Запись без
+    назначенной фазы есть бессрочный долг, а не принятое решение.
+    ``reason`` — обоснование.
+    """
+
+    position: str
+    assigned_phase: str
+    reason: str
+
+
+# ⚠️ ПЕРЕЧЕНЬ ОБЪЯВЛЕН, А НЕ ВЫВЕДЕН ИЗ ФАКТА РАСХОЖДЕНИЯ, И ЭТО СУТЬ ФОРМЫ
+# (идиома SP-1, источник — tests/test_pages/test_impersonation_gate.py). Правило
+# ниже могло бы просто вычесть недостижимое из проверяемого — и тогда КАЖДОЕ
+# следующее такое же расхождение попало бы под исключение молча, в тот же миг,
+# как появилось. Здесь у записи написано, ПОЧЕМУ она есть и КОГДА закроется, и
+# добавление новой требует написать причину — то есть принять решение.
+#
+# ⚠️ ЗАПИСЬ ЗАВЕДЕНА РЕШЕНИЕМ ВЛАДЕЛЬЦА, А НЕ ПРИЁМКОЙ (план 09-11, задача 2,
+# ответ `conditional-include`). Сужение правила до первого положения экрана
+# владельцем отклонено прямым текстом: правило потеряло бы зубы на втором
+# положении навсегда, и следующее такое же расхождение там прошло бы молча.
+INCLUDE_TARGET_EXCEPTIONS: dict[str, IncludeTargetException] = {}
+
+# ⚠️ ЗАПИСЬ `group-list-sentinel` ЗАКРЫТА ПЛАНОМ 09-13, А НЕ УДАЛЕНА МОЛЧА, И
+# ПРЕЖНИЙ ЕЁ ТЕКСТ СОХРАНЁН НИЖЕ ЦЕЛИКОМ. ПРЕДМЕТ СНЯТ, А НЕ ОТЛОЖЕН:
+# объявлений включаемых данных в дереве не осталось ни одного, поэтому
+# отступление закрыто ЗДЕСЬ, а не перенесено в назначенную ему Фазу 15.
+# Назначенная фаза обязана увидеть, ЧТО именно ей назначалось и почему это
+# перестало существовать, — иначе закрытие неотличимо от тихой отмены.
+#
+# ⚠️ ОБСТОЯТЕЛЬСТВО, ИЗМЕНИВШЕЕ РЕШЕНИЕ, НАЗЫВАЕТСЯ ПРЯМО. Прежняя запись
+# объясняла, что закрыть ОБА следствия DIV-09-01 разом мог только вариант
+# `always-present-cursor`, и он отклонён владельцем как `costly` — он снимал
+# совпадение «число отрисованных строк = смещение следующей порции». Ветвь
+# `keyset` плана 09-13 снимает то же совпадение, и владелец пересмотрел отказ
+# СОЗНАТЕЛЬНО: та самая арифметика оказалась источником зеркального отказа
+# CR-01, доказанного исполнением (задача 1, коммит RED), и «не трогать её»
+# перестало быть безрисковым выбором.
+#
+# --- ПРЕЖНИЙ ТЕКСТ ЗАПИСИ, СОХРАНЁННЫЙ ДОСЛОВНО ---------------------------
+#
+# INCLUDE_TARGET_EXCEPTIONS: dict[str, IncludeTargetException] = {
+#     "group-list-sentinel": IncludeTargetException(
+#         position=(
+#             "долистали до конца: последняя порция пришла без узла курсора, а "
+#             "строки ПЕРВОЙ порции сохранили объявление, поставленное при их "
+#             "отрисовке"
+#         ),
+#         assigned_phase="Фаза 15 — Упрочнение и сводный обход 47 форм",
+#         reason=(
+#             "ВТОРОЕ СЛЕДСТВИЕ DIV-09-01, ОСТАВЛЕННОЕ ОТКРЫТЫМ СОЗНАТЕЛЬНО И "
+#             "РЕШЕНИЕМ ВЛАДЕЛЬЦА, А НЕ НЕЗАМЕЧЕННОЕ. Ветвь `conditional-include` "
+#             "ставит признак ПРИ ОТРИСОВКЕ строки, а узел курсора уходит из "
+#             "документа ПОЗЖЕ — когда человек долистал до конца и последняя "
+#             "порция пришла без него. Строки первой порции переписать задним "
+#             "числом отрисовщику нечем, и объявление на них остаётся. Первое и "
+#             "основное следствие — аккаунт с числом групп не больше размера "
+#             "страницы, где узла нет НИКОГДА и строка в консоли валилась на "
+#             "КАЖДОЕ удаление — закрыто целиком: там объявления больше нет вовсе. "
+#             "ЗАКРЫТЬ ОБА РАЗОМ МОГ ТОЛЬКО ВАРИАНТ `always-present-cursor`, И ОН "
+#             "ОТКЛОНЁН ВЛАДЕЛЬЦЕМ С ПРИЧИНОЙ: он `costly` — меняет контракт узла, "
+#             "который несут три места отрисовки и ответ удаления, и снимает "
+#             "совпадение «число отрисованных строк = смещение следующей порции», "
+#             "на котором стоит вся арифметика починки курсора CR-01, шипнутой "
+#             "планом 09-05. Переигрывать её в круге закрытия расхождений, в конце "
+#             "фазы, на арифметике, которую предыдущий план чинил, признано "
+#             "рискованным. Вариант `defer` отклонён потому, что строка осталась бы "
+#             "в консоли на каждое удаление у большинства аккаунтов. "
+#             "ВРЕДА ДАННЫМ У ОСТАТКА НЕТ, и это проверено по коду: число "
+#             "отрисованных строк приходит пустым, смещение не собирается, "
+#             "четвёртый внеполосный узел не отправляется — что КОРРЕКТНО, чинить "
+#             "нечего, узла курсора в документе нет. Остаётся строка в консоли, то "
+#             "есть потерянный диагностический признак, и остаётся она на "
+#             "положении, которого достигает не каждый пользователь."
+#         ),
+#     ),
+# }
+#
+# # ⚠️ ЧИСЛО ВЫПИСАНО ОТДЕЛЬНОЙ КОНСТАНТОЙ НАМЕРЕННО (второе утверждение SP-1).
+# # Беззвучно выросшее означает, что объявленная цель разошлась с документом ещё
+# # где-то, а решения об этом никто не принимал; беззвучно упавшее — что
+# # отступление закрыто, и это обязано быть записано следующей строкой летописи, а
+# # не обнаружено через фазу.
+# #
+# # ЛЕТОПИСЬ:
+# #   0 → 1, Фаза 9, план 09-11 — второе следствие DIV-09-01, назначено Фазе 15.
+#
+# --- КОНЕЦ СОХРАНЁННОГО ТЕКСТА --------------------------------------------
+
+#   1 → 0, Фаза 9, план 09-13, задача 4 — ПРЕДМЕТ СНЯТ, А НЕ ОТЛОЖЕН:
+#     объявлений включаемых данных в дереве не осталось ни одного, поэтому
+#     отступление закрыто планом 09-13, а не перенесено в Фазу 15. Прежний
+#     текст записи сохранён комментарием выше целиком.
+INCLUDE_TARGET_EXCEPTIONS_DECLARED = 0
+
+
+def _include_selectors(html: str) -> set[str]:
+    """Идентификаторы, названные объявлениями включаемых данных документа.
+
+    Возвращаются ТОЛЬКО селекторы вида «по идентификатору», без ведущего
+    символа. Селекторы иного вида в выборку не попадают: о них это правило не
+    утверждает ничего и утверждать не может.
+    """
+    return {
+        found.group(1)
+        for value in INCLUDE_ATTR_RE.findall(html)
+        if (found := ID_SELECTOR_RE.match(value.strip()))
+    }
+
+
+def _with_include_declarations(html: str, target: str) -> tuple[str, int]:
+    """ПОДСТАВЛЕННОЕ дерево: объявления включаемых данных возвращены на место.
+
+    ⚠️ ПОМОЩНИК ЗАВЕДЁН ПЛАНОМ 09-13, ЗАДАЧА 4, И ВОТ ЗАЧЕМ. Ветвь владельца
+    `keyset` сняла объявления включаемых данных с дерева целиком, и правило о
+    их достижимости осталось БЕЗ ПРЕДМЕТА — на живом дереве оно зеленеет
+    всегда. Чтобы правило сохранило способность отличать достижимое объявление
+    от недостижимого, предмет ему подставляется: объявление возвращается на
+    КАЖДОЕ место подтверждения полученной с экрана страницы.
+
+    ⚠️ ПОДСТАВЛЯЕТСЯ СТРОКА ОТВЕТА, А НЕ ФАЙЛ НА ДИСКЕ: живое дерево при
+    доказательстве зубов не правится ни на символ. Возвращается ещё и ЧИСЛО
+    подстановок — механизм, переставший попадать в места подтверждения, обязан
+    быть отличим от дерева, где мест не осталось.
+    """
+    return re.subn(r'(?<![-\w])hx-post="', f'hx-include="#{target}" hx-post="', html)
+
+
+def _document_ids(html: str) -> set[str]:
+    """Идентификаторы всех узлов документа."""
+    return set(DOCUMENT_ID_RE.findall(html))
+
+
+@pytest.mark.asyncio
+async def test_no_declared_include_selector_names_an_id_the_document_lacks(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Каждый объявленный источник включаемых данных есть В ЭТОМ ЖЕ документе.
+
+    Утверждается на ОБОИХ достижимых с экрана положениях, и одного мало:
+
+    * у аккаунта с числом групп не больше размера страницы сентинела нет
+      НИКОГДА — это основной путь в бою, а не край случая;
+    * у аккаунта крупнее сентинел на первой странице есть, но после
+      долистывания до конца уходит из документа насовсем — дальше то же самое.
+
+    Правило, закрывшее только первое, оставило бы второе молчаливым.
+
+    ⚠️ ГРАНИЦА МОДЕЛИ ВТОРОГО ПОЛОЖЕНИЯ НАЗВАНА ПРЯМЫМ ТЕКСТОМ. Склейка
+    «страница, в которой узел сентинела заменён телом последней порции»
+    ПОДРАЖАЕТ подмене `outerHTML`, а не исполняет её: рантайма здесь нет, и
+    тест проверяет СООТНОШЕНИЕ объявлений с идентификаторами получившегося
+    документа, а не работу механизма подмены. Того, что рантайм действительно
+    подменит узел именно так, это утверждение не доказывает и доказать не
+    может — доказано оно отдельно, тестами самого сентинела.
+
+    ⚠️ ГДЕ ЖИВЁТ АНТИВАКУУМ ПОСЛЕ ПРАВКИ ПЛАНА 09-11 — НАЗВАНО ЗДЕСЬ, А НЕ
+    ОСТАВЛЕНО НА ДОГАДКУ. Ветвь владельца `conditional-include` сделала
+    объявление УСЛОВНЫМ, и на первом положении экрана объявлений не стало вовсе:
+    там утверждение о достижимости зелено по построению, и притворяться иначе
+    нечестно. Поэтому антивакуум держат ТРИ утверждения, а не молчание:
+    измеренное число объявлений на КРУПНОМ аккаунте (их там полная страница),
+    измеренный НОЛЬ на коротком списке — это и есть содержание починки, — и
+    отрицательный контроль помощников на синтетической разметке: он ловит
+    сломавшийся разборщик независимо от дерева.
+
+    ⚠️ ВТОРОЕ ПОЛОЖЕНИЕ ЗЕЛЕНЕЕТ ЧЕРЕЗ ИМЕНОВАННЫЙ ПЕРЕЧЕНЬ, А НЕ ЧЕРЕЗ СНЯТОЕ
+    УТВЕРЖДЕНИЕ. Недостижимая цель принимается ТОЛЬКО если она записана в
+    ``INCLUDE_TARGET_EXCEPTIONS`` — с обоснованием, назначенной фазой и отдельно
+    утверждаемым числом. Любая ДРУГАЯ недостижимая цель здесь краснеет, как и
+    краснела: правило не сужено ни на одно из двух положений экрана.
+    """
+    # --- Отрицательный контроль помощников: правило не переезжает на другой
+    #     предмет. Селектор, идентификатора не называющий, в выборку не
+    #     попадает — иначе разность множеств распухла бы селекторами, о
+    #     достижимости которых правило не утверждает ничего.
+    mixed = (
+        '<form hx-include="#real-node"></form>'
+        '<form hx-include="closest form"></form>'
+        '<form hx-include=".form-busy"></form>'
+        '<div id="real-node" data-group-id="777"></div>'
+    )
+    assert _include_selectors(mixed) == {"real-node"}, (
+        "выборка объявлений собрала не только селекторы по идентификатору: "
+        f"{_include_selectors(mixed)} — правило будет сравнивать разные "
+        f"величины и краснеть на том, о чём не утверждает"
+    )
+    assert _document_ids(mixed) == {"real-node"}, (
+        f"множество идентификаторов документа собрано неверно: "
+        f"{_document_ids(mixed)} — граница слева в разборщике идентификатора "
+        f"потеряна, и документ «несёт» узлы, которых у него нет"
+    )
+
+    # --- Положение 1: сентинела нет НИКОГДА -------------------------------
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, [f"Группа {i:02d}" for i in range(3)])
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    assert len(_row_ids(page)) == 3, (
+        f"страница отрисовала {len(_row_ids(page))} строк вместо трёх — посев "
+        f"не создаёт положения «список короче страницы», ради которого "
+        f"утверждение написано"
+    )
+    assert not _sentinel_ids(page), (
+        "у списка короче страницы в документе оказался сентинел — посев не "
+        "даёт первого положения экрана"
+    )
+
+    declarations = INCLUDE_ATTR_RE.findall(page)
+    assert len(declarations) == INCLUDE_DECLARATIONS_ON_A_SHORT_LIST, (
+        f"объявлений включаемых данных на коротком списке {len(declarations)}, "
+        f"а измерено было {INCLUDE_DECLARATIONS_ON_A_SHORT_LIST}: у списка "
+        f"короче страницы узла курсора нет НИКОГДА, и строка, узнавшая об этом "
+        f"от отрисовщика, объявлять включаемые данные не должна вовсе. "
+        f"Вернувшееся объявление означает, что признак has_sentinel перестал "
+        f"доезжать до вызова панели, и строка в консоли вернулась на КАЖДОЕ "
+        f"удаление — ровно то расхождение, которое план 09-11 закрывал"
+    )
+
+    unreachable = _include_selectors(page) - _document_ids(page)
+    assert not unreachable, (
+        f"панель подтверждения объявляет источник включаемых данных, которого "
+        f"документ не несёт: {sorted(unreachable)} — положение экрана «список "
+        f"короче страницы, сентинела нет никогда». Разрешатель селекторов "
+        f"вернёт детачнутый узел и напишет строку в консоль на КАЖДОЕ удаление "
+        f"на этом экране, и опорный признак обхода «ответ 200 и чистая "
+        f"консоль» перестанет работать на основном пути в бою"
+    )
+
+    # --- Положение 2: долистали до конца ----------------------------------
+    big = await _seed_account(db_session)
+    await _seed_many(
+        db_session, big, [f"Хвост {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+
+    big_page = (await authed_client.get(f"/accounts/{big.id}/groups")).text
+    urls = _sentinels(big_page)
+    assert len(urls) == 1, (
+        f"на странице крупного аккаунта адресов дочитывания {len(urls)}, а не "
+        f"один — посев не даёт положения «есть следующая порция»"
+    )
+
+    # --- ЖИВОЕ ДЕРЕВО: ОБЪЯВЛЕНИЙ НЕТ НИ ОДНОГО, И ЭТО ИЗМЕРЕНО --------
+    #
+    # ⚠️ ЗДЕСЬ ЖИЛ АНТИВАКУУМ ДО ПЛАНА 09-13, И ОН ОТСЮДА ПЕРЕЕХАЛ, А НЕ ПРОПАЛ.
+    # Прежде это было единственное положение экрана, где объявления есть по
+    # замыслу, и число `INCLUDE_DECLARATIONS_MEASURED = 30` держало правило от
+    # вакуума. Ветвь владельца `keyset` сняла объявления с дерева целиком,
+    # поэтому здесь теперь утверждается ИЗМЕРЕННЫЙ НОЛЬ — факт о дереве, а не
+    # молчание, — а антивакуум держит ПОДСТАВЛЕННОЕ дерево ниже.
+    big_declarations = INCLUDE_ATTR_RE.findall(big_page)
+    assert len(big_declarations) == INCLUDE_DECLARATIONS_MEASURED, (
+        f"объявлений включаемых данных на странице крупного аккаунта "
+        f"{len(big_declarations)}, а измерено было "
+        f"{INCLUDE_DECLARATIONS_MEASURED}: объявление вернулось в дерево, и "
+        f"решения об этом никто не принимал — либо ушло вместе с чем-то ещё"
+    )
+
+    unreachable_on_a_full_page = _include_selectors(big_page) - _document_ids(
+        big_page
+    )
+    assert not unreachable_on_a_full_page, (
+        f"панель подтверждения объявляет источник включаемых данных, которого "
+        f"документ не несёт: {sorted(unreachable_on_a_full_page)}"
+    )
+
+    # --- ПОДСТАВЛЕННОЕ ДЕРЕВО: ЗДЕСЬ ЖИВЁТ АНТИВАКУУМ (половина «а») ------
+    #
+    # ⚠️ ЖИВОЕ ДЕРЕВО ПРИ ЭТОМ НЕ ПРАВИТСЯ НИ НА СИМВОЛ: подстановка идёт по
+    # строке ответа, уже полученного с экрана. Без этой половины правило на
+    # дереве без объявлений зеленело бы ВСЕГДА — разность пустого множества с
+    # любым пуста, — то есть перестало бы отличать закрытую запись от тихо
+    # отменённой.
+    substituted, substituted_count = _with_include_declarations(
+        big_page, "group-list-sentinel"
+    )
+    assert substituted_count == SUBSTITUTED_INCLUDE_DECLARATIONS_MEASURED, (
+        f"подстановка вернула {substituted_count} объявлений вместо измеренных "
+        f"{SUBSTITUTED_INCLUDE_DECLARATIONS_MEASURED} — механизм подстановки "
+        f"перестал попадать в места подтверждения, и утверждения ниже говорили "
+        f"бы не о том документе"
+    )
+    substituted_declarations = _include_selectors(substituted)
+    assert substituted_declarations, (
+        "на ПОДСТАВЛЕННОМ дереве объявлений включаемых данных не найдено ни "
+        "одного — правило зелено ПО ПОСТРОЕНИЮ и о достижимости не утверждает "
+        "ничего"
+    )
+
+    unreachable_substituted = substituted_declarations - _document_ids(substituted)
+    assert not unreachable_substituted, (
+        f"на подставленном дереве объявленный источник недостижим: "
+        f"{sorted(unreachable_substituted)} — узел курсора на странице крупного "
+        f"аккаунта СТОИТ, значит недостижимость может взяться только из "
+        f"потерянного идентификатора, и правило ловит именно её"
+    )
+
+
+def _last_portion_glued_in(big_page: str, portion: str) -> str:
+    """Документ, каким он станет ПОСЛЕ долистывания до конца.
+
+    Узел курсора подменяется телом последней порции — той, что пришла без
+    собственного адреса дочитывания. Подражание подмене `outerHTML`, а не её
+    исполнение: рантайма у суиты нет, и утверждается СООТНОШЕНИЕ объявлений с
+    идентификаторами получившегося документа.
+    """
+    glued, replaced = re.subn(
+        r'<div id="group-list-sentinel".*?</div>',
+        lambda _: portion,
+        big_page,
+        flags=re.S,
+    )
+    assert replaced == 1, (
+        f"узел сентинела на странице подменён {replaced} раз вместо одного — "
+        f"склейка не воспроизводит документ после долистывания"
+    )
+    return glued
+
+
+@pytest.mark.asyncio
+async def test_control_negative_an_include_declaration_without_a_target_reddens_the_gate(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ЗУБЫ ПРАВИЛА включаемых данных: объявление без цели обязано КРАСНИТЬ.
+
+    ⚠️ ВТОРАЯ ПОЛОВИНА ЗАМЕНЫ, И БЕЗ НЕЁ ПЕРВАЯ НЕ ЗАКРЫВАЕТ НИЧЕГО (план
+    09-13, задача 4). Ветвь владельца `keyset` сняла с дерева объявления
+    включаемых данных целиком, и правило
+    `test_no_declared_include_selector_names_an_id_the_document_lacks` на живом
+    дереве стало зелёным по построению. Измеренный антивакуум на подставленном
+    дереве говорит, что предмет НАЙДЁТСЯ; этот контроль говорит, что правило на
+    нём КРАСНЕЕТ. Два разных высказывания, и второе из первого не следует.
+
+    ⚠️ ЖИВОЕ ДЕРЕВО ПРИ ДОКАЗАТЕЛЬСТВЕ НЕ ПРАВИТСЯ. Подставляется строка
+    ответа, уже полученного с экрана, а не файл на диске.
+
+    ВОСПРОИЗВОДИТСЯ ИМЕННО ТОТ ОТКАЗ, КОТОРЫЙ ФАЗА ЛОВИЛА ЖИВЬЁМ (DIV-09-01,
+    второе следствие): объявление, поставленное строке при отрисовке, остаётся
+    на ней и после того, как узел курсора ушёл из документа насовсем.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(
+        db_session, account, [f"Хвост {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+
+    big_page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    urls = _sentinels(big_page)
+    assert len(urls) == 1, (
+        f"на странице крупного аккаунта адресов дочитывания {len(urls)}, а не "
+        f"один — посев не даёт положения «есть следующая порция»"
+    )
+
+    portion = (await authed_client.get(urls[0])).text
+    assert not _sentinels(portion), (
+        "последняя порция принесла собственный адрес дочитывания — посев не "
+        "доводит экран до положения «долистали до конца»"
+    )
+
+    substituted, count = _with_include_declarations(big_page, "group-list-sentinel")
+    assert count == SUBSTITUTED_INCLUDE_DECLARATIONS_MEASURED, (
+        f"подстановка вернула {count} объявлений вместо измеренных "
+        f"{SUBSTITUTED_INCLUDE_DECLARATIONS_MEASURED}"
+    )
+
+    # ДО долистывания цель В ДОКУМЕНТЕ ЕСТЬ — правило зелено, и это половина
+    # утверждения «краснеет ТОЛЬКО на нарушении».
+    assert not (_include_selectors(substituted) - _document_ids(substituted)), (
+        "подставленное дерево краснит правило ещё ДО долистывания — контроль "
+        "доказывал бы не то: краснота взялась бы из подстановки, а не из "
+        "ушедшей цели"
+    )
+
+    # ПОСЛЕ долистывания узел курсора ушёл, а объявления на строках первой
+    # порции остались — правило ОБЯЗАНО покраснеть.
+    glued = _last_portion_glued_in(substituted, portion)
+    unreachable = _include_selectors(glued) - _document_ids(glued)
+    assert unreachable == {"group-list-sentinel"}, (
+        f"правило включаемых данных НЕ покраснело на дереве, где объявление "
+        f"называет идентификатор, которого документ не несёт: недостижимых "
+        f"целей {sorted(unreachable)}. Значит зубов у правила нет, и его "
+        f"зелёный цвет на живом дереве не означает ничего"
+    )
+
+
+# =============================================================================
+# Перечень исключений цели включаемых данных — три утверждения идиомы SP-1
+# =============================================================================
+#
+# Образец формы — tests/test_pages/test_impersonation_gate.py (ALLOWED_ROUTES,
+# MUTATING_ROUTE_COUNT, test_every_allowed_route_carries_a_reason), записанный
+# в 09-PATTERNS.md §Shared Patterns → SP-1. Форма берётся оттуда, а не
+# изобретается заново: перечень без этих трёх утверждений — декорация, которая
+# через фазу читается как список без основания.
+
+
+def test_every_include_target_exception_carries_a_reason_and_a_phase():
+    """У каждой записи написана ПРИЧИНА и названа ФАЗА, а не пустая строка.
+
+    Перечень, у которого не написано, почему цель разрешено объявлять там, где
+    её нет, через фазу превращается в «наверное, так надо», и снять из него
+    запись становится страшнее, чем добавить.
+
+    Назначенная фаза утверждается наравне с обоснованием, и это не
+    формальность: запись без названной фазы есть БЕССРОЧНЫЙ долг, а не принятое
+    решение. Ровно этим долговой маркер и отличается от объявленного
+    отступления.
+    """
+    unexplained = {
+        target
+        for target, entry in INCLUDE_TARGET_EXCEPTIONS.items()
+        if not entry.reason.strip() or not entry.position.strip()
+    }
+    assert not unexplained, (
+        f"цель включаемых данных выведена из-под общего правила без "
+        f"обоснования или без названного положения экрана: "
+        f"{sorted(unexplained)} — читатель через фазу не отличит принятое "
+        f"решение от забытой работы"
+    )
+
+    undated = {
+        target
+        for target, entry in INCLUDE_TARGET_EXCEPTIONS.items()
+        if not entry.assigned_phase.strip()
+    }
+    assert not undated, (
+        f"отступлению не назначена фаза: {sorted(undated)} — бессрочный долг "
+        f"под видом объявленного отступления"
+    )
+
+
+def test_the_number_of_include_target_exceptions_is_the_declared_one():
+    """Исключений ровно ``INCLUDE_TARGET_EXCEPTIONS_DECLARED`` (второе из трёх).
+
+    Правило достижимости объявленной цели живёт на ДВУХ положениях экрана.
+    Молчаливый рост этого числа означает, что объявленная цель разошлась с
+    документом ещё где-то, а решения об этом никто не принимал; молчаливое
+    падение — что отступление закрыто, и записать это обязана следующая строка
+    летописи, а не следующая фаза, обнаружившая перечень пустым.
+    """
+    assert len(INCLUDE_TARGET_EXCEPTIONS) == INCLUDE_TARGET_EXCEPTIONS_DECLARED, (
+        f"исключений цели включаемых данных в перечне "
+        f"{len(INCLUDE_TARGET_EXCEPTIONS)}, объявлено "
+        f"{INCLUDE_TARGET_EXCEPTIONS_DECLARED}: "
+        f"{sorted(INCLUDE_TARGET_EXCEPTIONS)} — из-под общего правила выведена "
+        f"цель, о которой решения никто не принимал"
+    )
+
+
+@pytest.mark.asyncio
+async def test_every_include_target_exception_is_actually_unreachable(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """НЕСУЩЕЕ, третье утверждение SP-1: запись правда в исключаемом положении.
+
+    Краснеет в трёх случаях, и каждый — свой вид устаревания перечня:
+
+    * цель, названная записью, в объявлениях документа НЕ ВСТРЕЧАЕТСЯ вовсе —
+      запись стала фантомной, и исключение прикрывает то, чего нет;
+    * цель ДОСТИЖИМА на положении «долистали до конца» — значит отступление
+      закрыто (например, Фазой 15), и запись обязана уйти вместе с числом, а не
+      остаться выводить из-под правила подчиняющееся ему место;
+    * цель недостижима УЖЕ НА ПЕРВИЧНОЙ отрисовке крупного аккаунта — а это
+      положение запись не покрывает и покрывать не должна: там узел курсора в
+      документе стоит, и недостижимость означала бы, что сломался
+      идентификатор, а не что сработало принятое отступление.
+
+    Без этого утверждения перечень был бы декорацией: устаревшая запись жила бы
+    вечно и молча выводила бы из-под правила положение, которое правилу
+    подчиняется.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(
+        db_session, account, [f"Хвост {i:02d}" for i in range(PAGE_SIZE + 5)]
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    portion = (await authed_client.get(_sentinels(page)[0])).text
+    glued, replaced = re.subn(
+        r'<div id="group-list-sentinel".*?</div>',
+        lambda _: portion,
+        page,
+        flags=re.S,
+    )
+    assert replaced == 1, (
+        f"узел сентинела на странице подменён {replaced} раз вместо одного — "
+        f"склейка не воспроизводит документ после долистывания, и утверждения "
+        f"ниже говорили бы не о том документе"
+    )
+
+    declared_on_page = _include_selectors(page)
+    unreachable_on_page = declared_on_page - _document_ids(page)
+    unreachable_when_read_to_the_end = _include_selectors(glued) - _document_ids(
+        glued
+    )
+
+    offenders: dict[str, str] = {}
+    for target in INCLUDE_TARGET_EXCEPTIONS:
+        if target not in declared_on_page:
+            offenders[target] = (
+                "цель не объявлена ни одним узлом первичной отрисовки — запись "
+                "фантомная и прикрывает то, чего в документе нет"
+            )
+        elif target in unreachable_on_page:
+            offenders[target] = (
+                "цель недостижима УЖЕ на первичной отрисовке крупного "
+                "аккаунта, где узел курсора обязан стоять — это не принятое "
+                "отступление, а потерянный идентификатор"
+            )
+        elif target not in unreachable_when_read_to_the_end:
+            offenders[target] = (
+                "цель ДОСТИЖИМА и после долистывания до конца — отступление "
+                "закрыто, и запись обязана уйти вместе с объявленным числом"
+            )
+
+    assert not offenders, (
+        "перечень исключений цели включаемых данных устарел:\n  "
+        + "\n  ".join(
+            f"{target}: {why}" for target, why in sorted(offenders.items())
+        )
+    )
+
+
+# =============================================================================
+# План 09-13, Задача 1: ЧЕРЕДОВАНИЕ порции и удаления становится ИСПОЛНЯЕМЫМ
+# =============================================================================
+#
+# ЧТО ЗДЕСЬ ЗАКРЕПЛЯЕТСЯ И ПОЧЕМУ ЭТОГО НЕ ЛОВИТ НИ ОДНО ПРЕЖНЕЕ ПРАВИЛО.
+# Починка курсора (план 09-05) сняла молчаливую ПОТЕРЮ группы четвёртым
+# внеполосным узлом. Узел работает — и вносит ЗЕРКАЛЬНЫЙ отказ (CR-01,
+# 09-VERIFICATION.md, gap 1). Число отрисованных строк снимается из ЖИВОГО
+# документа в момент ОТПРАВКИ запроса удаления (его забирает `hx-include` формы
+# панели подтверждения), а применяется к тому узлу курсора, который существует
+# в момент ПРИМЕНЕНИЯ ответа. Это РАЗНЫЕ МОМЕНТЫ, и тождество узла между ними
+# не утверждается ни кодом, ни гейтом.
+#
+# ОКНО МЕЖДУ ЭТИМИ МОМЕНТАМИ ДОСТИЖИМО, И ЭТО ПРОЧИТАНО, А НЕ ВЫВЕДЕНО.
+# `.modal` объявлен `position: fixed; inset: 0` БЕЗ блокировки прокрутки тела
+# (app/static/css/app.css:941-943), поэтому список за открытой панелью
+# подтверждения продолжает прокручиваться; `hx-trigger="revealed"` сентинела
+# срабатывает В ПОЛЁТЕ, порция приезжает и двигает узел курсора ВПЕРЁД; ответ
+# удаления затем тащит его НАЗАД — к числу, снятому в другой момент, — и порция
+# уже видимых строк приезжает ВТОРИЧНО, с задвоенными `id="group-row-N"` и
+# `id="group-del-N"`.
+#
+# ПОЧЕМУ ОБА ОХРАНЯЮЩИХ ПРАВИЛА ЭТО ПРОПУСКАЮТ.
+# `test_the_scroll_cursor_survives_a_fragment_delete` и
+# `test_a_no_op_delete_does_not_double_a_row` исполняют ТОЛЬКО
+# ПОСЛЕДОВАТЕЛЬНЫЙ случай: запрос, ответ, потом чтение порции. Порядок, в
+# котором отказ и живёт, не исполняет ни один — и это содержание gap 1, а не
+# придирка к формулировке.
+#
+# ЗАДВОЕННЫЙ `id` — НЕ КОСМЕТИКА. На единственности идентификаторов документа
+# стоит КАЖДЫЙ `hx-target` и КАЖДЫЙ `hx-swap-oob` экрана: рантайм целится в
+# первый попавшийся из двух, и какой это будет, разметкой не задано. Признак
+# отказа тот же МОЛЧАЛИВЫЙ, ради поимки которого пилот и брался: 200, чистая
+# консоль, честный счётчик. Фазы 10-11 наследуют этот образец на десять
+# потребителей.
+#
+# --- КРУГ КОНТРОЛЕЙ ФАЙЛА: ПРАВИЛО → ЕГО КОНТРОЛЬ ----------------------------
+#
+# Перечень выписан затем, чтобы «правило без контроля» было ВИДНО списком, а не
+# обнаруживалось пересчётом. Правило, у которого контроля нет, доказывает ровно
+# ничего: красным оно не бывало никогда, и отличить его зубы от его слепоты
+# нечем.
+#
+#   test_an_interleaved_portion_and_delete_never_double_a_row (09-13)
+#     → test_control_positive_the_reverse_order_keeps_the_document_whole
+#   test_no_declared_include_selector_names_an_id_the_document_lacks (09-11,
+#   предмет обнулён 09-13)
+#     → test_control_negative_an_include_declaration_without_a_target_reddens_the_gate
+#   test_every_claim_about_a_missing_oob_target_names_the_runtime_event (09-14)
+#     → test_control_negative_a_claim_site_without_the_runtime_event_reddens_the_gate
+#
+# --- ЧИСЛО КОНТРОЛЕЙ ФАЙЛА: 3 ------------------------------------------------
+#
+# Один положительный и два отрицательных. Число записано ЗДЕСЬ затем,
+# что контроль, добавленный молча, неотличим от контроля, добавленного ВМЕСТО
+# правила: список выше говорит, у КАКОГО правила контроль есть, а число
+# говорит, сколько их всего, — и разойтись эти две записи обязаны заметно.
+#
+# ЛЕТОПИСЬ ЧИСЛА: 0 → 1, Фаза 9, план 09-13, задача 1 — у файла заведён ПЕРВЫЙ
+# контроль, и число выписано, чтобы следующие контроли не появлялись молча. До
+# этой задачи блока в файле не было ВОВСЕ: `grep -c "def test_control"` давал
+# `0`, и единственный такой блок в проекте стоял один —
+# tests/test_templates/test_htmx_markup_gates.py:4521, откуда форма записи и
+# взята целиком.
+#
+# ЛЕТОПИСЬ ЧИСЛА: 1 → 2, Фаза 9, план 09-13, задача 4 — ветвь владельца
+# `keyset` обнулила предмет правила включаемых данных
+# (`INCLUDE_DECLARATIONS_MEASURED` 30 → 0), и правило, зеленеющее на любом
+# дереве, обязано было получить свои зубы:
+# `test_control_negative_an_include_declaration_without_a_target_reddens_the_gate`.
+# Это ВТОРАЯ половина замены; первая — переезд антивакуума на подставленное
+# дерево (`SUBSTITUTED_INCLUDE_DECLARATIONS_MEASURED`). Ни одна из половин не
+# факультативна, и обе проверяются гейтом плана.
+#
+# ЛЕТОПИСЬ ЧИСЛА: 2 → 3, Фаза 9, план 09-14, задача 1 — у нового правила
+# `test_every_claim_about_a_missing_oob_target_names_the_runtime_event` заведены
+# свои зубы:
+# `test_control_negative_a_claim_site_without_the_runtime_event_reddens_the_gate`.
+# Движение это было ОБЪЯВЛЕНО ЗАРАНЕЕ строкой ниже, оставленной планом 09-13, и
+# оно её закрывает. Число поставлено ИЗМЕРЕНИЕМ, а не арифметикой:
+# `grep -c "^def test_control\|^async def test_control"` по этому файлу.
+#
+# --- ЗАКРЫТАЯ ЗАПИСЬ ПЛАНА 09-13, СОХРАНЁННАЯ ДОСЛОВНО ------------------------
+#
+# ⚠️ ЧИСЛО ДВИНЕТСЯ ЕЩЁ ОДИН РАЗ В ЭТОМ ЖЕ КРУГЕ, И ДВИЖЕНИЕ ОБЯЗАНО ПОЛУЧИТЬ
+# СВОЮ СТРОКУ ЛЕТОПИСИ, а не пройти молча: задача 1 плана 09-14
+# (`test_control_negative_a_claim_site_without_the_runtime_event_reddens_the_gate`).
+#
+# --- КОНЕЦ ЗАКРЫТОЙ ЗАПИСИ ---------------------------------------------------
+#
+# ⚠️ МЕХАНИЗМ ПОДМЕНЫ: контроли этого файла подают ПОДСТАВЛЕННОЕ дерево
+# существующими помощниками, а ЖИВОЕ дерево при доказательстве зубов не
+# правится ни на символ. Положительный контроль ниже подставляет не дерево, а
+# ПОРЯДОК ПРИМЕНЕНИЯ двух ответов: он утверждает, что правило ловит ТОЛЬКО
+# нарушение. «Ловит нарушение» и «ловит только нарушение» суть разные
+# высказывания, и второе из первого не следует.
+
+# Число строк, которое возвращает порция бесконечной прокрутки на посеве этих
+# двух тестов. Значение ИЗМЕРЕНО НА ЖИВОМ ДЕРЕВЕ (идиома SP-1, 09-PATTERNS.md),
+# а не выведено ожиданием: адрес, который несёт страница
+# (`/accounts/N/groups/partial?offset=30&limit=30`), вернул 30 строк, и
+# следующий адрес пришёл со смещением 60.
+#
+# ПОЧЕМУ ЧИСЛО ВЫПИСАНО ОТДЕЛЬНО, А НЕ ПРИРАВНЕНО К `PAGE_SIZE`. Приравненное,
+# оно молчало бы: размер страницы и размер порции совпадают сегодня ПО
+# ПОСТРОЕНИЮ — оба берутся из одного значения, — но это свойство маршрута, а не
+# закон. Сменившийся размер обязан ПОКРАСНЕТЬ здесь и быть перемеренным
+# осознанно; приравненное число поехало бы вслед за предметом и перестало бы
+# утверждать что-либо вовсе.
+INTERLEAVED_PORTION_ROWS_MEASURED = 30
+
+# Предел числа дочитываний в модели документа. Живой список конечен, и цепочка
+# адресов обязана оборваться ответом без сентинела; предел стоит затем, чтобы
+# курсор, зациклившийся на месте, дал ВНЯТНЫЙ отказ, а не висящий тест.
+READ_TO_THE_END_LIMIT = 10
+
+# Узел курсора целиком — от открывающего тега до парного закрытия. Нужен затем,
+# что `_sentinels` даёт только АДРЕС, а `hx-include` снимает с узла ПОЛЯ, и
+# именно поля уезжают на сервер в момент отправки.
+CURSOR_NODE_RE = re.compile(r'<div[^<>]*id="group-list-sentinel".*?</div>', re.S)
+CURSOR_FIELD_RE = re.compile(r'<input[^<>]*name="([^"]+)"[^<>]*value="([^"]*)"')
+
+
+def _cursor_fields(html: str) -> dict[str, str]:
+    """Поля, которые `hx-include` СНИМЕТ с узла курсора в момент ОТПРАВКИ.
+
+    ⚠️ ЧИТАЕТСЯ ИМЕННО ДОКУМЕНТ, А НЕ ВЫПИСЫВАЕТСЯ ЧИСЛО РУКАМИ, И ЭТО НЕСУЩЕЕ
+    СВОЙСТВО ЭТИХ ДВУХ ТЕСТОВ. Соседние правила файла шлют `len(rendered)`
+    литералом — они утверждают арифметику ответа и вправе так делать. Здесь же
+    предметом является САМО СНЯТИЕ величины с живого документа, поэтому тест
+    обязан взять ровно то, что взял бы рантайм: сменится форма курсора —
+    сменится и то, что уедет на сервер, а утверждения ниже говорят об
+    идентификаторах и переживут смену.
+    """
+    node = CURSOR_NODE_RE.search(html)
+    if not node:
+        return {}
+    return dict(CURSOR_FIELD_RE.findall(node.group(0)))
+
+
+async def _read_to_the_end(client: AsyncClient, read_on_url: str) -> list[int]:
+    """Строки, которые документ дочитает по цепочке адресов ДО КОНЦА списка.
+
+    ⚠️ ЭТО НЕ ВТОРОЙ `_scroll_read_on_url`, И НАЗНАЧЕНИЕ У НИХ РАЗНОЕ. Тот
+    отвечает на вопрос «КАКОЙ адрес документ понесёт после ответа удаления»;
+    этот — на вопрос «что документ ПОКАЖЕТ, если человек долистает до конца».
+    Одного дочитывания для второго вопроса не хватает: после чередования
+    документ показывает две порции, и остаток списка приезжает третьей.
+    Утверждение «ни одна строка не потеряна» без дочитывания до конца было бы
+    высказыванием о произвольно выбранной середине.
+
+    Возвращается СПИСОК, а не множество: повтор внутри самой цепочки — такой же
+    отказ, как повтор между цепочкой и экраном, и множество его бы съело.
+    """
+    seen: list[int] = []
+    visited: list[str] = []
+    while read_on_url is not None:
+        assert read_on_url not in visited, (
+            f"цепочка дочитывания зациклилась на адресе {read_on_url}: "
+            f"курсор не двигается вперёд, и список до конца не дочитывается "
+            f"никогда — пройдено {visited}"
+        )
+        assert len(visited) < READ_TO_THE_END_LIMIT, (
+            f"цепочка дочитывания не оборвалась за {READ_TO_THE_END_LIMIT} "
+            f"шагов: пройдено {visited}"
+        )
+        visited.append(read_on_url)
+
+        response = await client.get(read_on_url)
+        assert response.status_code == 200, (
+            f"дочитывание по адресу {read_on_url} получило "
+            f"{response.status_code} вместо порции"
+        )
+        seen.extend(_row_ids(response.text))
+
+        following = _sentinels(response.text)
+        assert len(following) <= 1, (
+            f"порция по адресу {read_on_url} принесла не один адрес "
+            f"дочитывания, а {len(following)}: {following} — какой из них "
+            f"останется в документе, разметкой не задано"
+        )
+        read_on_url = following[0] if following else None
+    return seen
+
+
+@pytest.mark.asyncio
+async def test_an_interleaved_portion_and_delete_never_double_a_row(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """CR-01: чередование порции и удаления не задваивает и не теряет строк.
+
+    ПОРЯДОК, В КОТОРОМ ОТКАЗ И ЖИВЁТ: порция применяется ПОСЛЕ снятия величины
+    курсора и ДО применения ответа удаления.
+
+    ⚠️ ВЕЛИЧИНА КУРСОРА СНИМАЕТСЯ ОДИН РАЗ И БОЛЬШЕ НЕ ПЕРЕЧИТЫВАЕТСЯ — В ЭТОМ
+    ВСЯ СУТЬ ЧЕРЕДОВАНИЯ. Живой документ отдаёт `hx-include`-у то, что стоит в
+    узле курсора В МОМЕНТ НАЖАТИЯ; приехавшая следом порция этот узел подменяет,
+    но отправленный запрос уже несёт прежнее значение. Тест, перечитавший
+    величину после порции, проверял бы не тот мир и зеленел бы на сломанном
+    дереве.
+
+    ⚠️ УТВЕРЖДЕНИЯ СФОРМУЛИРОВАНЫ ОБ ИДЕНТИФИКАТОРАХ, А НЕ О ЧИСЛЕ СМЕЩЕНИЯ, И
+    ЭТО СДЕЛАНО НАМЕРЕННО. Форма курсора — предмет решения владельца (план
+    09-13, задача 2); утверждение о числе пришлось бы переписывать вместе с
+    формой, то есть починка доказывалась бы правкой теста, а не переходом
+    цвета.
+
+    Браузера у суиты нет, поэтому применение ответов моделируется явно: список
+    идентификаторов, которые документ показывает, и ОДИН адрес дочитывания,
+    который документ несёт сейчас.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session,
+        account,
+        [f"Группа {i:02d}" for i in range(PAGE_SIZE * 2 + 5)],
+    )
+
+    # --- АНТИВАКУУМ ПЕРВЫМИ ИСПОЛНЯЕМЫМИ УТВЕРЖДЕНИЯМИ ------------------------
+    # Без них правило зеленело бы от пустого посева, то есть молчало бы громче
+    # всего там, где сломалось сильнее всего.
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    rendered = _row_ids(page)
+    assert len(rendered) == PAGE_SIZE, (
+        f"страница отрисовала {len(rendered)} строк вместо {PAGE_SIZE} — посев "
+        "не создаёт условия, ради которого тест написан"
+    )
+
+    on_page = _sentinels(page)
+    assert len(on_page) == 1, (
+        f"страница несёт {len(on_page)} адресов дочитывания вместо одного: "
+        f"{on_page} — чередовать нечего"
+    )
+    document_read_on_url = on_page[0]
+
+    # Величина курсора снимается СО СТРАНИЦЫ и больше не перечитывается.
+    captured_cursor_fields = _cursor_fields(page)
+
+    # --- ПОРЦИЯ ПРИЕЗЖАЕТ В ПОЛЁТЕ -------------------------------------------
+    portion_response = await authed_client.get(document_read_on_url)
+    assert portion_response.status_code == 200, (
+        f"порция по адресу {document_read_on_url} получила "
+        f"{portion_response.status_code}"
+    )
+    portion = _row_ids(portion_response.text)
+    assert INTERLEAVED_PORTION_ROWS_MEASURED > 0, (
+        "измеренное число строк порции обнулилось: правило ниже стало бы "
+        "вакуумным и зеленело бы на любом дереве"
+    )
+    assert len(portion) == INTERLEAVED_PORTION_ROWS_MEASURED, (
+        f"порция вернула {len(portion)} строк вместо измеренных "
+        f"{INTERLEAVED_PORTION_ROWS_MEASURED} — число перемеряется осознанно, "
+        f"а не подгоняется под новое дерево"
+    )
+
+    # --- ОТВЕТ УДАЛЕНИЯ НА ВЕЛИЧИНЕ, СНЯТОЙ РАНЬШЕ ---------------------------
+    # Цель — ПЕРВАЯ отрисованная строка: удаление НАД курсором есть тот случай,
+    # ради которого починка курсора и заводилась.
+    target = rendered[0]
+    delete = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{target}/delete",
+        data=captured_cursor_fields,
+    )
+    assert delete.status_code == 200, (
+        f"запрос htmx получил {delete.status_code} вместо фрагмента"
+    )
+    assert f'id="group-row-{target}"' in delete.text, (
+        "ответ удаления не несёт узла снятия строки — применять нечего, и "
+        "утверждения ниже говорили бы не о том документе"
+    )
+
+    # Применение ответа удаления: узел, который никто не подменил, остаётся
+    # стоять со своим прежним адресом. Тело порции подаётся туда, где помощник
+    # ждёт тело страницы, — документ к этому моменту показывает именно порцию.
+    document_read_on_url = _scroll_read_on_url(portion_response.text, delete.text)
+    read_on = await _read_to_the_end(authed_client, document_read_on_url)
+
+    on_screen = [group_id for group_id in rendered if group_id != target]
+    document_before_reading = set(on_screen) | set(portion)
+    shown = on_screen + portion + read_on
+    alive = {group.id for group in seeded} - {target}
+
+    # --- (а) ПОВТОРОВ НЕТ ----------------------------------------------------
+    doubled = sorted({group_id for group_id in shown if shown.count(group_id) > 1})
+    assert not doubled, (
+        f"документ показывает одни и те же строки дважды: {doubled} — на "
+        f"каждую из них в документе стоят два узла с одним `id` "
+        f"(`group-row-N` и `group-del-N`), и каждый `hx-target` и каждый "
+        f"`hx-swap-oob` экрана после этого целятся в ПЕРВЫЙ ПОПАВШИЙСЯ из "
+        f"двух: какой это будет, разметкой не задано. Курсор уехал НАЗАД к "
+        f"числу, снятому до приезда порции, и порция уже видимых строк "
+        f"приехала вторично"
+    )
+
+    # --- (б) КУРСОР НЕ УЕХАЛ НАЗАД -------------------------------------------
+    assert read_on, (
+        f"адрес дочитывания {document_read_on_url} не вернул ни одной строки, "
+        f"хотя список длиннее показанного — утверждение о курсоре осталось бы "
+        f"без предмета"
+    )
+    assert read_on[0] not in document_before_reading, (
+        f"курсор уехал НАЗАД: адрес дочитывания {document_read_on_url} вернул "
+        f"первой строку {read_on[0]}, которая в документе УЖЕ СТОИТ. Величина, "
+        f"снятая в момент отправки, применена к узлу другого момента"
+    )
+
+    # --- (в) НИ ОДНА СТРОКА НЕ ПОТЕРЯНА --------------------------------------
+    lost = sorted(alive - set(shown))
+    assert not lost, (
+        f"после чередования список потерял группы: {lost} — их не отрисовала "
+        f"ни страница, ни приехавшая порция, ни дочитывание до конца; человек "
+        f"не увидит их до перезагрузки, а линейка счётчика продолжит их "
+        f"считать"
+    )
+    assert set(shown) == alive, (
+        f"объединение отрисованного, приехавшей порции и дочитанного не равно "
+        f"оставшемуся списку: лишние {sorted(set(shown) - alive)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_control_positive_the_reverse_order_keeps_the_document_whole(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Положительный контроль: обратный порядок применения ответов безвреден.
+
+    ⚠️ ЭТОТ ПОРЯДОК СЕГОДНЯ БЕЗВРЕДЕН, И КОНТРОЛЬ ЗЕЛЕН ДО ПРАВКИ. Он
+    существует затем, чтобы правило выше нельзя было зазеленить починкой,
+    ломающей второй порядок: «ловит нарушение» и «ловит ТОЛЬКО нарушение» суть
+    разные высказывания, и второе из первого не следует.
+
+    Ответ удаления применяется ПЕРВЫМ. Устаревший ответ порции целит в узел,
+    который ответ удаления уже подменил, и в документ не входит ни одной
+    строкой — ровно так рантайм и поступает с внеполосным свопом по
+    отсоединённому узлу.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session,
+        account,
+        [f"Группа {i:02d}" for i in range(PAGE_SIZE * 2 + 5)],
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    rendered = _row_ids(page)
+    assert len(rendered) == PAGE_SIZE, (
+        f"страница отрисовала {len(rendered)} строк вместо {PAGE_SIZE} — посев "
+        "не создаёт условия, ради которого контроль написан"
+    )
+
+    on_page = _sentinels(page)
+    assert len(on_page) == 1, (
+        f"страница несёт {len(on_page)} адресов дочитывания вместо одного: "
+        f"{on_page}"
+    )
+    captured_cursor_fields = _cursor_fields(page)
+
+    # Порция ВЫЧИСЛЯЕТСЯ до удаления, но в документ НЕ входит: её своп целит в
+    # узел, который ответ удаления подменит раньше.
+    stale_portion = _row_ids((await authed_client.get(on_page[0])).text)
+    assert len(stale_portion) == INTERLEAVED_PORTION_ROWS_MEASURED, (
+        f"устаревшая порция вернула {len(stale_portion)} строк вместо "
+        f"измеренных {INTERLEAVED_PORTION_ROWS_MEASURED} — контроль потерял "
+        f"предмет: отбрасывать стало нечего"
+    )
+
+    target = rendered[0]
+    delete = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{target}/delete",
+        data=captured_cursor_fields,
+    )
+    assert delete.status_code == 200, (
+        f"запрос htmx получил {delete.status_code} вместо фрагмента"
+    )
+
+    # Ответ удаления применяется к документу ПЕРВЫМ — то есть к странице.
+    document_read_on_url = _scroll_read_on_url(page, delete.text)
+    read_on = await _read_to_the_end(authed_client, document_read_on_url)
+
+    on_screen = [group_id for group_id in rendered if group_id != target]
+    shown = on_screen + read_on
+    alive = {group.id for group in seeded} - {target}
+
+    doubled = sorted({group_id for group_id in shown if shown.count(group_id) > 1})
+    assert not doubled, (
+        f"обратный порядок задвоил строки: {doubled} — починка, зеленящая "
+        f"чередование, сломала порядок, который был исправен"
+    )
+
+    lost = sorted(alive - set(shown))
+    assert not lost, (
+        f"обратный порядок потерял группы: {lost} — отброшенная устаревшая "
+        f"порция унесла с собой строки, до которых документ больше не дойдёт"
+    )
+    assert set(shown) == alive, (
+        f"объединение отрисованного и дочитанного не равно оставшемуся списку: "
+        f"лишние {sorted(set(shown) - alive)}"
+    )
+
+
+# =============================================================================
+# ПРАВИЛО 09-14: МЕСТО, РАССУЖДАЮЩЕЕ О НЕНАЙДЕННОЙ ЦЕЛИ ВНЕПОЛОСНОГО УЗЛА,
+# ОБЯЗАНО НАЗЫВАТЬ СОБЫТИЕ РАНТАЙМА ПОИМЁННО.
+# =============================================================================
+#
+# ⚠️ ИМЯ СОБЫТИЯ ПРИХОДИТ ИЗ ВЕНДОРЕННОГО РАНТАЙМА И ПРОВЕРЕНО ЧТЕНИЕМ
+# `app/static/js/htmx.min.js` (`version:"2.0.10"`) ПРИ ИСПОЛНЕНИИ ПЛАНА 09-14, а
+# не набрано по памяти. Цепочка прочитана целиком, и вот она дословно:
+#
+#   1. ветка внеполосной подмены, у которой цель НЕ РАЗРЕШИЛАСЬ:
+#        else{o.parentNode.removeChild(o);
+#             fe(te().body,"htmx:oobErrorNoTarget",{content:o,target:n})}
+#      — узел СНИМАЕТСЯ из ответа, и поднимается событие;
+#   2. function fe(e,t,n){ae(e,t,le({error:t},n))}
+#      — подъём идёт с полем признака ошибки, равным ИМЕНИ события;
+#   3. function ae(e,t,n){...if(n.error){H(n.error+(n.target?", "+n.target:""));
+#        ae(e,"htmx:error",{errorInfo:n})}...}
+#      — непустое поле признака ошибки заводит вызов `H`;
+#   4. function H(e){console.error(e)}
+#      — `H` и есть `console.error`.
+#
+# ⚠️ СОСЕДНЯЯ ВЕТКА РАНТАЙМА — ВЛОЖЕННЫЙ ВНЕПОЛОСНЫЙ УЗЕЛ ПРИ
+# `allowNestedOobSwaps: false` — МОЛЧИТ ПО-НАСТОЯЩЕМУ, и это прочитано ТАМ ЖЕ:
+#   else{e.removeAttribute("hx-swap-oob");e.removeAttribute("data-hx-swap-oob")}
+# — признак снимается, события нет. Проза, рассуждающая о ВЛОЖЕННОМ узле,
+# утверждает верное, предметом этого правила не является и им не правится.
+# Различие названо здесь затем, чтобы следующий читатель не «исправил» верное
+# заодно с неверным.
+#
+# Второе объявление имени события в тестах означало бы, что две проверки говорят
+# о РАЗНЫХ событиях. Поэтому имя объявлено ровно один раз и берётся отсюда.
+OOB_RUNTIME_EVENT = "htmx:oobErrorNoTarget"
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# ⚠️ ПЕРЕЧЕНЬ МЕСТ ВЫПИСАН РУКАМИ, А НЕ ВЫВЕДЕН ПОИСКОМ ПО САМОЙ ПРОЗЕ (идиома
+# SP-1, образец — соседний INCLUDE_TARGET_EXCEPTIONS). Правило, выводящее
+# предмет проверки ИЗ ПРОВЕРЯЕМОЙ ПРОЗЫ, согласилось бы с любой её
+# переформулировкой: достаточно переписать фразу другими словами, и место
+# перестало бы попадать в выборку — то есть правило зеленело бы ровно от того
+# действия, ради поимки которого заведено. Здесь у перечня написано, ПОЧЕМУ
+# каждое место в нём, и добавление нового требует прочитать файл, а не подобрать
+# образец.
+#
+# ⚠️ ЧИСЛО МЕСТ — ШЕСТЬ, А НЕ ЧЕТЫРЕ, И РАСХОЖДЕНИЕ НАЗЫВАЕТСЯ ЗДЕСЬ, А НЕ
+# ПРЯЧЕТСЯ. Отчёт верификации (09-VERIFICATION.md, gap 2) и план 09-14 набирают
+# «ЧЕТЫРЕ места» и перечисляют их тремя путями, один из которых указан по
+# номерам строк ДО плана 09-13. Перечень ниже поставлен ИЗМЕРЕНИЕМ на отгруженном
+# дереве (обход `app/` по прозе о ненайденной цели), и измерение вернуло ШЕСТЬ
+# мест в ШЕСТИ файлах. Два из них — области уведомления шелла, то есть тот самый
+# канал обратной связи, на который Фазы 10-15 переводят все 47 форм: оставить
+# ложную гарантию именно там значило бы починить узкое место и сохранить широкое.
+OOB_SILENCE_CLAIM_SITES: tuple[str, ...] = (
+    # «по несуществующему идентификатору внеполосное снятие не находит узла и
+    # не делает НИЧЕГО» — шапка ответа удаления, на которой стоит D-04-A.
+    "app/templates/account_groups/partials/delete_response.html",
+    # «унесённая один раз, она лишает цели ВСЕ последующие, и молча» — узел
+    # линейки счётчика, общий для ответов тумблера и удаления.
+    "app/templates/account_groups/partials/count_rule_oob.html",
+    # «молчать об этом он будет так же, как молчит о ненайденной цели любого
+    # другого свопа» — УСИЛЕННАЯ форма того же утверждения, абзац про постоянную
+    # обёртку линейки.
+    "app/templates/account_groups/list.html",
+    # «молчать об этом браузер будет так же, как молчит о ненайденной цели
+    # любого другого свопа» — область уведомления шелла.
+    "app/templates/includes/notice_area.html",
+    # «и молча, потому что о ненайденной цели свопа браузер не сообщает ничем» —
+    # самая категоричная форма утверждения во всём дереве.
+    "app/templates/includes/notice_oob.html",
+    # докстринг `_fragment` обработчика удаления: «не находит узла и не делает
+    # ничего — молча и безвредно».
+    "app/pages/account_groups.py",
+)
+
+# ⚠️ ЧИСЛО ВЫПИСАНО ОТДЕЛЬНЫМ УТВЕРЖДЕНИЕМ НАМЕРЕННО (второе утверждение идиомы
+# SP-1). Беззвучно упавшее означает, что место рассуждения снято, а решения об
+# этом никто не принимал: правило, зеленеющее от опустевшего перечня, молчит
+# громче всего там, где сломалось сильнее всего. Беззвучно выросшее означает, что
+# место заведено без чтения рантайма.
+#
+# ЛЕТОПИСЬ: 0 → 6, Фаза 9, план 09-14, задача 1 — перечень заведён; число
+# поставлено обходом дерева, а не переписано из отчёта верификации (тот называет
+# четыре).
+OOB_SILENCE_CLAIM_SITES_DECLARED = 6
+
+OOB_ATTR_RE = re.compile(r'hx-swap-oob="([^"]*)"')
+OOB_TARGET_SELECTOR_RE = re.compile(r"#([A-Za-z][-\w]*)")
+LITERAL_ID_RE = re.compile(r'id="([A-Za-z][-\w]*)"')
+NAMED_TEMPLATE_RE = re.compile(r'"([\w][\w/.-]*\.html)"')
+
+
+def _claim_site_sources() -> dict[str, str]:
+    """Исходники мест перечня, прочитанные с диска.
+
+    Читаются именно ИСХОДНИКИ, а не отрендеренный документ: предмет правила —
+    ПРОЗА (комментарии шаблонов и докстринги модуля), которой в ответе сервера
+    нет вовсе.
+    """
+    return {
+        site: (REPO_ROOT / site).read_text(encoding="utf-8")
+        for site in OOB_SILENCE_CLAIM_SITES
+    }
+
+
+def _oob_targeted_ids() -> set[str]:
+    """Идентификаторы, в которые целятся внеполосные подмены дерева шаблонов."""
+    targeted: set[str] = set()
+    for path in TEMPLATES_DIR.rglob("*.html"):
+        for value in OOB_ATTR_RE.findall(path.read_text(encoding="utf-8")):
+            targeted.update(OOB_TARGET_SELECTOR_RE.findall(value))
+    return targeted
+
+
+def _templates_printing_an_oob_node() -> set[str]:
+    """Шаблоны, печатающие признак внеполосной подмены."""
+    return {
+        path.relative_to(TEMPLATES_DIR).as_posix()
+        for path in TEMPLATES_DIR.rglob("*.html")
+        if "hx-swap-oob" in path.read_text(encoding="utf-8")
+    }
+
+
+def _sites_not_naming_the_runtime_event(sources: dict[str, str]) -> set[str]:
+    """Места, чья проза о ненайденной цели не называет события рантайма."""
+    return {
+        site for site, source in sources.items() if OOB_RUNTIME_EVENT not in source
+    }
+
+
+def _sites_that_are_not_places_of_oob_reasoning(sources: dict[str, str]) -> set[str]:
+    """Места перечня, которые перестали быть местами внеполосной подмены.
+
+    Место РЕАЛЬНО, если оно печатает признак внеполосной подмены, либо несёт
+    идентификатор области, в которую такая подмена целится, либо называет по
+    имени шаблон, который такой узел печатает. Запись о месте, переставшем быть
+    местом, обязана краснеть, а не превращаться в мёртвую строку.
+    """
+    targeted = _oob_targeted_ids()
+    printing = _templates_printing_an_oob_node()
+    astray: set[str] = set()
+    for site, source in sources.items():
+        prints_the_attribute = "hx-swap-oob" in source
+        carries_a_targeted_id = bool(set(LITERAL_ID_RE.findall(source)) & targeted)
+        names_a_printing_template = bool(
+            set(NAMED_TEMPLATE_RE.findall(source)) & printing
+        )
+        if not (
+            prints_the_attribute or carries_a_targeted_id or names_a_printing_template
+        ):
+            astray.add(site)
+    return astray
+
+
+def _with_the_runtime_event_planted(
+    sources: dict[str, str],
+) -> tuple[dict[str, str], int]:
+    """ПОДСТАВЛЕННОЕ дерево: событие названо в КАЖДОМ месте перечня.
+
+    ⚠️ ПОДСТАВЛЯЕТСЯ ПРОЧИТАННАЯ СТРОКА, А НЕ ФАЙЛ НА ДИСКЕ: живое дерево при
+    доказательстве зубов не правится ни на символ. Механизм тот же, которым
+    подставляют соседние помощники файла (`_with_include_declarations`,
+    `_last_portion_glued_in`) — подстановка в прочитанный текст; свой помощник
+    заведён потому, что те подставляют ОТВЕТ, а предмет этого правила —
+    ИСХОДНИКИ.
+
+    Возвращается ещё и ЧИСЛО досаженных мест: подстановка, ничего не изменившая,
+    «проходит» на нетронутом дереве и утверждает ровно ничего.
+    """
+    planted: dict[str, str] = {}
+    added = 0
+    for site, source in sources.items():
+        if OOB_RUNTIME_EVENT in source:
+            planted[site] = source
+            continue
+        planted[site] = f"{source}\nПОДСТАВЛЕНО КОНТРОЛЕМ: {OOB_RUNTIME_EVENT}\n"
+        added += 1
+    return planted, added
+
+
+def test_every_claim_about_a_missing_oob_target_names_the_runtime_event():
+    """Проза о ненайденной цели внеполосного узла называет событие ПОИМЁННО.
+
+    ⚠️ ПРЕДМЕТ ПРАВИЛА — УТВЕРЖДЕНИЕ О ВЕНДОРЕННОМ РАНТАЙМЕ, А НЕ ФОРМУЛИРОВКА.
+    Внеполосный узел, чью цель htmx 2.0.10 не разрешил, СНИМАЕТСЯ из ответа, и
+    рантайм поднимает `htmx:oobErrorNoTarget` — а подъём события с полем признака
+    ошибки заканчивается `console.error` (цепочка выписана дословно у константы
+    OOB_RUNTIME_EVENT). Проза, утверждающая обратное, не «неточна»: она отдаёт
+    следующему читателю ГАРАНТИЮ, которой рантайм не исполняет.
+
+    ⚠️ ЦЕНА ЭТОГО ИМЕННО ЗДЕСЬ. Приёмочный признак обхода вехи — «ответ 200 И
+    ЧИСТАЯ КОНСОЛЬ», и Фазы 10-15 наследуют его как свой. Холостой путь удаления
+    (чужая, несуществующая, УЖЕ УДАЛЁННАЯ группа) шлёт два узла с отсутствующей
+    целью, то есть две строки `console.error` на запрос, а достижим он ровно тем
+    повторным запросом, ради безвредности которого неотличимость и заведена.
+
+    ⚠️ ЧЕГО ЭТО ПРАВИЛО НЕ ВИДИТ — ВЫПИСАНО ЗДЕСЬ, А НЕ ОСТАВЛЕНО НА ДОГАДКУ
+    (образец — шапка tests/test_pages/test_money_perimeter_gate.py). Правило
+    видит РОВНО файлы перечня OOB_SILENCE_CLAIM_SITES и ничего кроме них. Новое
+    рассуждение о ненайденной цели, заведённое в ЛЮБОМ другом файле, ему
+    невидимо: перечень выписан руками намеренно (иначе правило соглашалось бы с
+    переформулировкой), и цена этого выбора — ровно эта слепая зона. Закрытие
+    границы — предмет ФАЗЫ 15 («Упрочнение и сводный обход 47 форм»), чей SC5
+    называет поимённо известную слепую зону гейтов разметки и где инвентари
+    закрываются сводно; ту же фазу несёт соседняя запись OOB_TARGET_EXCEPTIONS.
+    До тех пор граница НАЗВАНА, а не закрыта молчанием.
+
+    ⚠️ ЧЕГО ПРАВИЛО НЕ ТРЕБУЕТ. Оно не требует конкретной формулировки и не
+    запрещает слова «безвредно»: вреда ДАННЫМ и ДОКУМЕНТУ у ненайденной цели
+    действительно нет. Требуется одно — чтобы название события стояло там, где о
+    событии рассуждают, и читатель мог проверить утверждение по рантайму сам.
+    """
+    # (1) АНТИВАКУУМ. Без него правило зеленело бы от опустевшего перечня.
+    assert OOB_SILENCE_CLAIM_SITES_DECLARED > 0, (
+        "перечень мест объявлен пустым — правило стало бы зелёным по построению "
+        "и молчало бы громче всего там, где сломалось сильнее всего"
+    )
+    assert len(OOB_SILENCE_CLAIM_SITES) == OOB_SILENCE_CLAIM_SITES_DECLARED, (
+        f"мест в перечне {len(OOB_SILENCE_CLAIM_SITES)}, а объявлено "
+        f"{OOB_SILENCE_CLAIM_SITES_DECLARED}: место заведено или снято — обнови "
+        f"число вместе с решением о нём и допиши строку летописи"
+    )
+    assert len(set(OOB_SILENCE_CLAIM_SITES)) == len(OOB_SILENCE_CLAIM_SITES), (
+        "в перечне есть повтор: одно место, посчитанное дважды, завышает число "
+        "и прикрывает снятое место"
+    )
+    absent = sorted(
+        site for site in OOB_SILENCE_CLAIM_SITES if not (REPO_ROOT / site).is_file()
+    )
+    assert not absent, (
+        f"место перечня не существует на диске: {absent} — правило читало бы "
+        f"пустоту и зеленело бы на ней"
+    )
+
+    sources = _claim_site_sources()
+    empty = sorted(site for site, source in sources.items() if not source.strip())
+    assert not empty, f"место перечня пусто: {empty}"
+
+    # (2) НЕСУЩЕЕ УТВЕРЖДЕНИЕ.
+    silent = _sites_not_naming_the_runtime_event(sources)
+    assert not silent, (
+        "проза рассуждает о ненайденной цели внеполосного узла, НЕ НАЗЫВАЯ "
+        f"события рантайма `{OOB_RUNTIME_EVENT}`:\n  "
+        + "\n  ".join(sorted(silent))
+        + "\n\nСЛЕДСТВИЕ, НАЗВАННОЕ ПРЯМЫМ ТЕКСТОМ: приёмочный признак вехи "
+        "«ответ 200 И ЧИСТАЯ КОНСОЛЬ» обоснован в этих файлах утверждением, "
+        "которого вендоренный рантайм НЕ ИСПОЛНЯЕТ — узел с неразрешимой целью "
+        "снимается из ответа и поднимает событие, а подъём события с признаком "
+        "ошибки печатает строку в консоль. Фазы 10-15 наследуют этот признак как "
+        "свой приёмочный, и следующий автор внеполосного узла с иногда "
+        "отсутствующей целью унаследует отсюда ложную гарантию тишины."
+    )
+
+    # (3) МЕСТО РЕАЛЬНО, А НЕ ОСТАЛОСЬ МЁРТВОЙ СТРОКОЙ ПЕРЕЧНЯ.
+    astray = _sites_that_are_not_places_of_oob_reasoning(sources)
+    assert not astray, (
+        "место перечня перестало быть местом внеполосной подмены — оно не "
+        "печатает признака, не несёт цели внеполосного узла и не называет "
+        f"шаблона, который такой узел печатает:\n  {sorted(astray)}\n"
+        "Запись о месте, которое перестало быть местом, обязана краснеть, а не "
+        "превращаться в мёртвую строку."
+    )
+
+
+def test_control_negative_a_claim_site_without_the_runtime_event_reddens_the_gate():
+    """ЗУБЫ ПРАВИЛА: место без названия события обязано КРАСНИТЬ.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ПРАВИЛО ДОКАЗЫВАЕТ РОВНО НИЧЕГО: зелёное правило,
+    красным не бывавшее ни разу, неотличимо от слепого. Контроль подаёт
+    ПОДСТАВЛЕННОЕ дерево, в котором событие названо ВЕЗДЕ (иначе краснота
+    взялась бы не из вырезанного названия, а из остатков живой прозы), и режет
+    название из ОДНОГО места.
+
+    ⚠️ ЖИВОЕ ДЕРЕВО ПРИ ДОКАЗАТЕЛЬСТВЕ НЕ ПРАВИТСЯ НИ НА СИМВОЛ, и это
+    утверждается ЗДЕСЬ ЖЕ, последним утверждением, а не поручается прозе.
+
+    ⚠️ КОНТРОЛЬ ЗЕЛЕН И ДО ПРАВКИ ПРОЗЫ, И ПОСЛЕ НЕЁ, И ЭТО НАМЕРЕННО. Он
+    доказывает СВОЙСТВО ПРАВИЛА, а не состояние дерева: досадка названия делает
+    его высказывание одинаковым по обе стороны перехода цвета задачи 2.
+    """
+    sources = _claim_site_sources()
+    planted, added = _with_the_runtime_event_planted(sources)
+
+    assert len(planted) == len(sources), (
+        "подстановка потеряла место перечня — контроль доказывал бы не то"
+    )
+    assert added <= len(sources), "подстановка досадила больше мест, чем их есть"
+    assert not _sites_not_naming_the_runtime_event(planted), (
+        "правило краснеет на дереве, где событие названо ВЕЗДЕ: краснота ниже "
+        "взялась бы не из вырезанного названия, и контроль утверждал бы не то"
+    )
+
+    victim = OOB_SILENCE_CLAIM_SITES[0]
+    cut, removed = re.subn(re.escape(OOB_RUNTIME_EVENT), "", planted[victim])
+    assert removed > 0, (
+        f"из `{victim}` нечего было вырезать — подстановка ничего не изменила, "
+        f"и контроль «проходит» на дереве, которого не трогал"
+    )
+
+    reddened = dict(planted)
+    reddened[victim] = cut
+    silent = _sites_not_naming_the_runtime_event(reddened)
+    assert silent == {victim}, (
+        f"правило НЕ покраснело на дереве, где название события вырезано из "
+        f"`{victim}`: молчащих мест {sorted(silent)} вместо ровно одного. "
+        f"Правило без зубов зелено по построению."
+    )
+
+    assert (REPO_ROOT / victim).read_text(encoding="utf-8") == sources[victim], (
+        f"живое дерево изменилось при доказательстве зубов: `{victim}` на диске "
+        f"больше не равен прочитанному — контроль правит то, что проверяет"
+    )
+
+
+# =============================================================================
+# ЗАПИСЬ 09-14: ВНЕПОЛОСНЫЕ УЗЛЫ, ЧЬЯ ЦЕЛЬ БЫВАЕТ ОТСУТСТВУЮЩЕЙ.
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class OobTargetException:
+    """Внеполосный узел, чья цель на достижимом пути бывает отсутствующей.
+
+    ``where_printed`` — относительный путь файла, ПЕЧАТАЮЩЕГО узел: запись,
+    не сообщающая, где узел живёт, через фазу превращается в общее разрешение
+    расходиться.
+    ``assigned_phase`` — фаза, которой отступление назначено. Запись без
+    назначенной фазы есть бессрочный долг, а не принятое решение.
+    ``reason`` — обоснование: почему узел уезжает безусловно и чем за это
+    платят.
+    """
+
+    where_printed: str
+    assigned_phase: str
+    reason: str
+
+
+# ⚠️ ПЕРЕЧЕНЬ ОБЪЯВЛЕН, А НЕ ВЫВЕДЕН ИЗ ФАКТА РАСХОЖДЕНИЯ (идиома SP-1, образец —
+# соседний INCLUDE_TARGET_EXCEPTIONS, второй образец в проекте —
+# DISABLED_ELT_EXCEPTIONS в tests/test_templates/test_htmx_markup_gates.py).
+# Правило, ВЫЧИТАЮЩЕЕ недостижимое из проверяемого, приняло бы каждое следующее
+# такое же расхождение молча — в тот же миг, как оно появилось. Здесь у записи
+# написано, ПОЧЕМУ она есть и КОГДА закроется, и добавление новой требует
+# написать причину, то есть принять решение.
+#
+# ⚠️ КЛЮЧ НЕСЁТ ПОДСТАНОВОЧНУЮ ЧАСТЬ `{group_id}` РОВНО В ТОЙ ФОРМЕ, В КАКОЙ ЕЁ
+# ПЕЧАТАЕТ ШАБЛОН (`id="group-row-{{ group_id }}"`). Ключ с конкретным числом
+# описывал бы один запрос, а не узел.
+_IDLE_DELETE_REASON = (
+    "УЗЕЛ УЕЗЖАЕТ И ТОГДА, КОГДА ТРОЙНОЙ `WHERE` НЕ НАШЁЛ СТРОКИ, И ЭТОГО "
+    "ТРЕБУЕТ НЕОТЛИЧИМОСТЬ (D-04-A, T-09-05-06). Условная сборка сделала бы "
+    "НАЛИЧИЕ узла признаком того, что удаление состоялось, — то есть закрыла "
+    "бы консоль ценой того самого свойства, ради которого ответ собирается из "
+    "`group_id` ПУТИ. "
+    "ЦЕНА НАЗВАНА ЧИСЛОМ: холостой путь удаления шлёт ДВА таких узла, то есть "
+    "ДВЕ строки `htmx:oobErrorNoTarget` в консоли на запрос (имя события "
+    "проверено чтением вендоренного app/static/js/htmx.min.js 2.0.10, цепочка "
+    "выписана у константы OOB_RUNTIME_EVENT). "
+    "ДОСТИЖИМОСТЬ НАЗВАНА ЧЕСТНО: путь достижим повторной отправкой формы и "
+    "кнопкой «назад» — ровно тем повторным запросом, ради безвредности "
+    "которого неотличимость и заведена (исполняется "
+    "test_repeated_delete_is_harmless_over_htmx), — а также удалением чужой, "
+    "несуществующей и уже удалённой группы. "
+    "ВРЕДА ДАННЫМ И ДОКУМЕНТУ НЕТ: строк в базе холостой запрос не трогает, "
+    "документ не портит, границ привилегий не пересекает. Вред — в потере "
+    "ДИАГНОСТИЧЕСКОГО признака «ответ 200 И ЧИСТАЯ КОНСОЛЬ», на котором стоит "
+    "приёмка вехи и который Фазы 10-15 наследуют как свой приёмочный: "
+    "следующий отказ, чьим единственным следом была бы строка в консоли, "
+    "утонет в этих."
+)
+
+# ⚠️ ЗАПИСИ ЗАПОЛНЕНЫ ПО ИЗМЕРЕНИЮ, А НЕ ПО ОЖИДАНИЮ. Прогон предыдущего
+# коммита (RED) назвал узлы холостого пути поимённо: `group-row-N` и
+# `group-del-N`. Узла линейки счётчика в разности НЕ ОКАЗАЛОСЬ, и это верно —
+# область `id="account-groups-count"` в документе есть всегда; записывать её
+# сюда значило бы объявить отступлением то, чего нет.
+#
+# ⚠️ ЧЕТВЁРТОГО УЗЛА (ветвь `declared-cursor`) В ДЕРЕВЕ НЕТ: план 09-13 снял его
+# целиком вместе с задачей, которую тот решал (решение владельца `keyset`).
+# Поэтому записей ДВЕ, а не три, и число это поставлено прогоном по отгруженному
+# дереву, а не арифметикой плана 09-14.
+OOB_TARGET_EXCEPTIONS: dict[str, OobTargetException] = {
+    "group-row-{group_id}": OobTargetException(
+        where_printed="app/templates/account_groups/partials/delete_response.html",
+        assigned_phase="Фаза 15 — Упрочнение и сводный обход 47 форм",
+        reason=(
+            "СНЯТИЕ СТРОКИ УДАЛЁННОЙ ГРУППЫ. " + _IDLE_DELETE_REASON
+        ),
+    ),
+    "group-del-{group_id}": OobTargetException(
+        where_printed="app/templates/account_groups/partials/delete_response.html",
+        assigned_phase="Фаза 15 — Упрочнение и сводный обход 47 форм",
+        reason=(
+            "СНЯТИЕ ОСИРОТЕВШЕЙ ПАНЕЛИ ПОДТВЕРЖДЕНИЯ. Панель сознательно стоит "
+            "СНАРУЖИ удаляемой строки (внутри она задвоилась бы после первой же "
+            "подмены, T-11-04), поэтому вместе со строкой не уезжает и снимается "
+            "отдельным узлом; без него после N удалений в документе копятся N "
+            "живых панелей `role=\"dialog\"`. " + _IDLE_DELETE_REASON
+        ),
+    ),
+}
+
+# ⚠️ ЧИСЛО ВЫПИСАНО ОТДЕЛЬНОЙ КОНСТАНТОЙ НАМЕРЕННО (второе утверждение идиомы
+# SP-1). Беззвучно выросшее означает, что внеполосный узел с иногда
+# отсутствующей целью завёлся, а решения о нём никто не принимал; беззвучно
+# упавшее — что отступление закрыто, и это обязано быть записано строкой
+# летописи, а не обнаружено через фазу.
+#
+# ЛЕТОПИСЬ:
+#   0 → 0, Фаза 9, план 09-14, задача 3 (RED) — перечень объявлен ПУСТЫМ
+#     намеренно, чтобы поведенческое утверждение ниже покраснело на отгруженном
+#     дереве и НАЗВАЛО узлы, которые холостой путь действительно шлёт. Число
+#     ставится ИЗМЕРЕНИЕМ, а не арифметикой плана.
+#   0 → 2, Фаза 9, план 09-14, задача 3 (GREEN) — прогон назвал `group-row-N` и
+#     `group-del-N`. ДВА, а не три: четвёртый узел (ветвь `declared-cursor`) снят
+#     из дерева планом 09-13 целиком. И не три в другую сторону: узел линейки
+#     счётчика в разность не попал — его область в документе есть всегда.
+OOB_TARGET_EXCEPTIONS_DECLARED = 2
+
+# Тег с признаком внеполосной подмены целиком: значение признака и собственный
+# идентификатор узла снимаются с ОДНОГО тега, а не с документа — иначе цель
+# соседнего узла засчиталась бы этому.
+OOB_TAG_RE = re.compile(r'<[^<>]*hx-swap-oob="[^"]*"[^<>]*>')
+
+
+def _oob_targets(html: str) -> tuple[set[str], int]:
+    """Идентификаторы, в которые целятся внеполосные узлы ЭТОГО ответа.
+
+    У подмены содержимого цель названа селектором (`innerHTML:#area`); у
+    подмены и снятия по умолчанию цель — СОБСТВЕННЫЙ идентификатор узла.
+    Возвращается ещё и число увиденных узлов: узел, у которого цель определить
+    не удалось, обязан быть отличим от отсутствующего узла.
+    """
+    targets: set[str] = set()
+    seen = 0
+    for tag in OOB_TAG_RE.findall(html):
+        seen += 1
+        value = OOB_ATTR_RE.search(tag)
+        named = OOB_TARGET_SELECTOR_RE.findall(value.group(1)) if value else []
+        if named:
+            targets.update(named)
+            continue
+        own = ID_IN_TAG_RE.search(tag)
+        if own:
+            targets.add(own.group(1))
+    return targets, seen
+
+
+def test_the_number_of_oob_target_exceptions_is_the_declared_one():
+    """ПЕРВОЕ утверждение идиомы SP-1: число записей — объявленное.
+
+    Оно же антивакуум: перечень, опустевший молча, оставил бы правило ниже
+    зелёным ровно тогда, когда узлов с отсутствующей целью не стало, — и
+    неотличимым от перечня, чьи записи тихо отменили.
+    """
+    assert len(OOB_TARGET_EXCEPTIONS) == OOB_TARGET_EXCEPTIONS_DECLARED, (
+        f"записей в перечне {len(OOB_TARGET_EXCEPTIONS)}, а объявлено "
+        f"{OOB_TARGET_EXCEPTIONS_DECLARED}: отступление заведено или закрыто — "
+        f"обнови число вместе с решением о нём и допиши строку летописи"
+    )
+    assert OOB_TARGET_EXCEPTIONS_DECLARED > 0, (
+        "перечень внеполосных узлов с иногда отсутствующей целью объявлен "
+        "ПУСТЫМ, а холостой путь удаления такие узлы шлёт: остаток приёмочного "
+        "признака «200 и чистая консоль» перестал быть названным, и Фазы 10-15 "
+        "наследуют признак, чей остаток никем не записан"
+    )
+
+
+def test_every_oob_target_exception_carries_a_reason_and_an_assigned_phase():
+    """ВТОРОЕ утверждение идиомы SP-1: у записи есть обоснование и фаза.
+
+    Запись без назначенной фазы есть бессрочный долг, а не принятое решение;
+    запись без обоснования через фазу читается как «наверное, забыли».
+    Дополнительно проверяется, что названный файл СУЩЕСТВУЕТ и действительно
+    печатает узел с этим идентификатором: запись, указывающая в пустоту,
+    погасила бы будущее настоящее расхождение.
+    """
+    unexplained = sorted(
+        key
+        for key, record in OOB_TARGET_EXCEPTIONS.items()
+        if not record.reason.strip() or not record.assigned_phase.strip()
+    )
+    assert not unexplained, (
+        "запись перечня не снабжена обоснованием или назначенной фазой:\n  "
+        + "\n  ".join(unexplained)
+    )
+
+    astray = []
+    for key, record in OOB_TARGET_EXCEPTIONS.items():
+        printer = REPO_ROOT / record.where_printed
+        if not printer.is_file():
+            astray.append(f"{key}: файл {record.where_printed} не существует")
+            continue
+        printed = f'id="{key.replace("{group_id}", "{{ group_id }}")}"'
+        if printed not in printer.read_text(encoding="utf-8"):
+            astray.append(
+                f"{key}: {record.where_printed} не печатает узла {printed} — "
+                f"запись устарела и гасит будущее расхождение"
+            )
+    assert not astray, "\n  ".join([""] + astray)
+
+
+@pytest.mark.asyncio
+async def test_the_idle_delete_path_really_ships_the_recorded_nodes(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """ТРЕТЬЕ, НЕСУЩЕЕ утверждение идиомы SP-1: отступление РЕАЛЬНО.
+
+    ⚠️ УТВЕРЖДЕНИЕ ПОВЕДЕНЧЕСКОЕ, А НЕ ТЕКСТОВОЕ, И ЭТО СУТЬ (образец —
+    `test_every_disabled_elt_exception_is_actually_an_exception`). Запись,
+    проверяемая только по своему тексту, неотличима от защитной оговорки: она
+    остаётся зелёной и после того, как узел перестал приезжать. Здесь
+    исполняется ХОЛОСТОЙ путь удаления, и множество внеполосных целей, которых
+    В ДОКУМЕНТЕ НЕТ, сверяется с множеством ключей перечня.
+
+    ⚠️ ЦЕЛЬ ЛИНЕЙКИ СЧЁТЧИКА ОТСЕИВАЕТСЯ САМА, А НЕ ИСКЛЮЧАЕТСЯ РУКАМИ. Область
+    `#account-groups-count` в документе ЕСТЬ всегда, поэтому в разность она не
+    попадает; ушедшая из документа обёртка немедленно поднимет число и потребует
+    решения — то есть правило заряжено и на неё.
+
+    ⚠️ ПЕРВОЕ ИСПОЛНЯЕМОЕ УТВЕРЖДЕНИЕ — О ДОСТИГНУТОЙ ФРАГМЕНТНОЙ ВЕТКЕ (WR-04).
+    Ветка перехода отвечает ПУСТЫМ телом, а разность пустого множества с любым
+    пуста: без этой проверки сверка множеств ниже была бы зелена по построению.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(
+        db_session, account, ["Первая холостого пути", "Вторая холостого пути"]
+    )
+
+    # ЧУЖАЯ группа: тройной `WHERE` её не найдёт, удалять будет нечего, а
+    # идентификатора её в документе нет. Это и есть холостой путь.
+    foreign = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Чужая группа", user_id=foreign.id
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    on_screen = _document_ids(page)
+    assert len(_row_ids(page)) >= 2, (
+        f"страница отрисовала {len(_row_ids(page))} строк — посев короче двух, и "
+        f"холостой запрос ушёл бы в ветку перехода с пустым телом"
+    )
+    assert f"group-row-{foreign_group.id}" not in on_screen, (
+        "идентификатор чужой группы оказался В ДОКУМЕНТЕ — посев не даёт "
+        "холостого пути, и разность ниже ничего не показала бы"
+    )
+
+    idle = await htmx_client.post(
+        f"/accounts/{account.id}/groups/{foreign_group.id}/delete"
+    )
+    assert idle.status_code == 200, (
+        f"фрагментная ветка не достигнута: ответ {idle.status_code} вместо 200 — "
+        f"сверка множеств ниже шла бы по ПУСТОМУ телу ветки перехода и была бы "
+        f"зелена по построению"
+    )
+    assert "<!DOCTYPE" not in idle.text, (
+        "в теле приехал целый документ: обработчик ответил перенаправлением, а "
+        "клиент незаметно по нему прошёл"
+    )
+
+    targets, seen = _oob_targets(idle.text)
+    assert seen > 0, "холостой ответ не несёт ни одного внеполосного узла"
+    assert len(targets) == seen, (
+        f"у {seen - len(targets)} внеполосных узлов ответа цель определить не "
+        f"удалось: узел без селектора и без собственного идентификатора не "
+        f"целится никуда, и разность ниже его не увидит"
+    )
+
+    unresolved = targets - on_screen
+    recorded = {
+        key.format(group_id=foreign_group.id) for key in OOB_TARGET_EXCEPTIONS
+    }
+
+    stale = recorded - unresolved
+    assert not stale, (
+        f"ЗАПИСАННЫЙ УЗЕЛ ПЕРЕСТАЛ ПРИЕЗЖАТЬ — ЗАПИСЬ УСТАРЕЛА: {sorted(stale)}. "
+        f"Перечень описывает отгруженное дерево, а не то, что было до него: "
+        f"закрытое отступление обязано быть снято строкой летописи, а не "
+        f"оставлено гасить будущее расхождение."
+    )
+    unrecorded = unresolved - recorded
+    assert not unrecorded, (
+        f"ПРИЕХАЛ УЗЕЛ, КОТОРОГО В ПЕРЕЧНЕ НЕТ: {sorted(unrecorded)}. Заведи "
+        f"запись с обоснованием и назначенной фазой — или объясни, почему цель "
+        f"этого узла есть ВСЕГДА. Молча такой узел проходить не должен: каждый "
+        f"из них есть строка `htmx:oobErrorNoTarget` в консоли на запрос, а на "
+        f"чистой консоли стоит приёмочный признак вехи, наследуемый Фазами "
+        f"10-15."
+    )
+
+
+# =============================================================================
+# План 09-15, Задача 1: ТУМБЛЕР ПРИВОДИТ ГРУППУ В ПОКАЗАННОЕ СОСТОЯНИЕ (WR-02)
+# =============================================================================
+#
+# ЧТО ЗДЕСЬ ЗАКРЕПЛЯЕТСЯ И ПОЧЕМУ ЭТОГО НЕ ЛОВИЛО НИ ОДНО ПРЕЖНЕЕ ПРАВИЛО.
+# Обработчик переключения ИНВЕРТИРОВАЛ хранимое значение и присланного состояния
+# чекбокса не читал вовсе. Пока Alpine снимал кнопку «Применить» БЕЗУСЛОВНО, одно
+# изменение равнялось одной отправке и одной инверсии, и разница была невидима.
+# План 09-07 сделал снятие УСЛОВНЫМ и перенёс автоотправку на признак htmx — то
+# есть завёл достижимый мир «Alpine жив, htmx мёртв»: кнопка «Применить»
+# выживает, автоотправки нет, и человек переключает чекбокс СКОЛЬКО УГОДНО РАЗ до
+# нажатия. Чётное число переключений плюс нажатие давало состояние, ОБРАТНОЕ
+# тому, что человек видит на экране.
+#
+# ЦЕНА ОТКАЗА НАЗЫВАЕТСЯ, А НЕ ОБЪЯВЛЯЕТСЯ КОСМЕТИКОЙ. По D-05 тумблер есть
+# ЕДИНСТВЕННЫЙ способ исключить группу из рассылки, не удаляя её. Обратное
+# состояние означает сообщения в чат, который человек считает выключенным, — и ни
+# одного признака отказа: ответ 200, консоль чистая, счётчик честный.
+#
+# ПРЕЖНЕЕ ОБОСНОВАНИЕ ИНВЕРСИИ НЕ ВЫЧЁРКИВАЕТСЯ, А НАЗЫВАЕТСЯ ОПИСЫВАЮЩИМ СНЯТУЮ
+# ФОРМУ (образец — записи D-30 и D-32 .planning/STATE.md). Оно стояло в
+# `app/pages/account_groups.py` и держало ДВА свойства: обратимость действия
+# (D-08) и безвредность повторного нажатия (QUAL-01). Оба сохранены и держатся
+# теперь другим свойством — ИДЕМПОТЕНТНОСТЬЮ ПРИСВОЕНИЯ, — и это утверждается
+# ниже отдельным тестом, а не заявляется.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("was_active", [True, False])
+@pytest.mark.parametrize(
+    "body,expected",
+    [({"is_active": "1"}, True), ({}, False)],
+    ids=["checkbox-on", "checkbox-off"],
+)
+async def test_the_toggle_honours_the_posted_state(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    was_active: bool,
+    body: dict,
+    expected: bool,
+):
+    """Присланное состояние ПРИМЕНЯЕТСЯ, а хранимое не инвертируется (WR-02).
+
+    Четыре случая: оба направления на обоих стартовых состояниях. Утверждение
+    ровно в том, что исход НЕ ЗАВИСИТ от прежнего значения — обработчик,
+    инвертирующий вслепую, зеленеет на половине случаев и краснеет на второй.
+
+    ⚠️ СНЯТЫЙ ЧЕКБОКС НЕ ШЛЁТ НИЧЕГО, И ЭТО НЕ УПРОЩЕНИЕ ПОСЕВА. Именно так его
+    шлёт браузер: `components/toggle.html` печатает обычный флажок с именем
+    `is_active` и значением `1`, а НЕвыбранный флажок в тело формы не попадает
+    вовсе. Поэтому «выключено» здесь набрано ПУСТЫМ телом, а не парой
+    `is_active=0`, которой разметка не производит.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(
+        db_session, account, "Группа присланного состояния", is_active=was_active
+    )
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/toggle",
+        data=body,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    await db_session.refresh(group)
+    assert group.is_active is expected, (
+        f"группа была is_active={was_active}, тело формы несло {body or 'ничего'}, "
+        f"а стала is_active={group.is_active} вместо {expected}: обработчик "
+        f"ИНВЕРТИРУЕТ хранимое вместо того, чтобы применить ПОКАЗАННОЕ человеку"
+    )
+
+
+@pytest.mark.asyncio
+async def test_two_toggles_and_a_submit_land_on_what_the_control_shows(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """НЕСУЩЕЕ УТВЕРЖДЕНИЕ: мир «Alpine жив, htmx мёртв» исполняется (WR-02).
+
+    Человек видит выключенную группу. Кнопка «Применить» на экране ЕСТЬ — Alpine
+    поднялся и снял бы её только при живом htmx, а htmx не доехал. Человек
+    включает чекбокс и выключает обратно (на экране снова ВЫКЛЮЧЕНО), затем
+    нажимает «Применить»: уходит ОДИН запрос с телом БЕЗ значения чекбокса.
+
+    ⚠️ ГРУППА ОБЯЗАНА ОСТАТЬСЯ ВЫКЛЮЧЕННОЙ. Слепая инверсия включила бы её — и
+    человек, только что своими руками выключивший группу, продолжил бы слать в
+    неё рассылку, не получив ни одного признака отказа. По D-05 другого способа
+    исключить группу из рассылки, не удаляя её, у него нет.
+
+    ⚠️ ЧЁТНОЕ ЧИСЛО ПЕРЕКЛЮЧЕНИЙ ЗДЕСЬ НЕ ИМИТИРУЕТСЯ ЗАПРОСАМИ, И ЭТО СУТЬ
+    ПОСЕВА. Переключения чекбокса живут В БРАУЗЕРЕ и на сервер не уезжают: их
+    следом является РОВНО ОДНО тело формы, и именно его исполняет тест. Посев,
+    шлющий два запроса, воспроизвёл бы другой мир — тот, в котором htmx жив.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(
+        db_session, account, "Группа выключенная человеком", is_active=False
+    )
+
+    # Одно нажатие «Применить» после ЧЁТНОГО числа переключений: тело формы
+    # несёт то, что показано, — то есть не несёт значения чекбокса вовсе.
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/toggle",
+        data={},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    await db_session.refresh(group)
+    assert group.is_active is False, (
+        "чётное число переключений плюс нажатие «Применить» включило группу, "
+        "которую человек видит ВЫКЛЮЧЕННОЙ: обработчик инвертирует хранимое "
+        "вместо того, чтобы применить показанное. По D-05 тумблер — единственный "
+        "способ исключить группу из рассылки без удаления, поэтому цена этого — "
+        "сообщения в чат, который человек считает выключенным"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_toggle_is_idempotent_on_a_repeated_post(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """QUAL-01: повтор ТОГО ЖЕ тела даёт то же состояние и ни одной новой строки.
+
+    ⚠️ ЭТО УТВЕРЖДЕНИЕ ПРЯМО ЗАМЕЩАЕТ ТО, ЧТО РАНЬШЕ ДАВАЛА ИНВЕРСИЯ. Инверсия
+    делала повторное нажатие «безвредным» в том смысле, что второй запрос не
+    создавал второй записи, — но состояние он МЕНЯЛ. Присвоение идемпотентно в
+    полном смысле: второй запрос не создаёт записи И не двигает состояния.
+    Клиентская блокировка повторной отправки серверной защитой не является
+    (PAY-02) и здесь не проверяется.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(
+        db_session, account, "Группа повторного тела", is_active=False
+    )
+    before = len(
+        (
+            await db_session.execute(
+                select(Group).where(Group.account_id == account.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    for attempt in (1, 2):
+        response = await authed_client.post(
+            f"/accounts/{account.id}/groups/{group.id}/toggle",
+            data={"is_active": "1"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302, f"попытка {attempt}"
+        await db_session.refresh(group)
+        assert group.is_active is True, (
+            f"после попытки {attempt} группа is_active={group.is_active}: "
+            f"присвоение присланного значения обязано быть идемпотентным, иначе "
+            f"защита от второго нажатия снова зависит от инверсии"
+        )
+
+    after = len(
+        (
+            await db_session.execute(
+                select(Group).where(Group.account_id == account.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert after == before, (
+        f"повторный запрос переключения создал новую строку ({before} → {after})"
+    )
+
+
+# =============================================================================
+# План 09-15, Задача 2: ОБЕ ФОРМЫ ПУТИ УДАЛЕНИЯ ШЛЮТ ОДИН НАБОР ПОЛЕЙ (WR-03)
+# =============================================================================
+#
+# ЧТО ЗДЕСЬ ЗАКРЕПЛЯЕТСЯ. У строки группы ДВЕ формы, ведущие на один и тот же
+# адрес удаления: форма-триггер (базовый путь — без Alpine она уходит обычным
+# POST-ом) и форма панели подтверждения (путь с Alpine и htmx). Скрытое поле
+# строки поиска несла ТОЛЬКО вторая.
+#
+# ЦЕНА РАСХОЖДЕНИЯ — ДВЕ, И ВТОРАЯ ХУЖЕ ПЕРВОЙ.
+#   1. Адрес приземления. Человек без Alpine приземлялся на НЕотфильтрованный
+#      список: он искал, удалил найденное — и увидел весь список аккаунта.
+#   2. ВЕТКА РЕШЕНИЯ. `_current_listing_has_a_row(..., search=None)` спрашивает
+#      про ВЕСЬ АККАУНТ вместо той выдачи, которую человек видел, — то есть
+#      починка WR-06 («выдача опустела» закрывается переходом) на базовом пути
+#      сработать не может в принципе: пока в аккаунте есть другие группы, ветка
+#      всегда фрагментная.
+#
+# ПОЧЕМУ РАВЕНСТВО УТВЕРЖДАЕТСЯ ПРАВИЛОМ, А НЕ СОВПАДЕНИЕМ РАЗМЕТКИ. Две формы
+# стоят в РАЗНЫХ местах шаблона и правятся порознь; разъехавшись однажды, они
+# разъедутся снова. Правило краснеет на самом расхождении, а не на его
+# следствии, — и называет разность множеств прямым текстом.
+
+# Число имён полей, которые шлёт форма пути удаления. ИЗМЕРЕНО НА ЖИВОМ ДЕРЕВЕ
+# (идиома SP-1, 09-PATTERNS.md) прямым рендером макроса строки: форма панели
+# подтверждения несёт ровно одно имя — скрытое поле строки поиска; кнопки
+# `components/button.html` печатают `name` только при переданном параметре, а
+# ни одна из двух форм его не передаёт.
+#
+# ПОЧЕМУ ЧИСЛО ВЫПИСАНО, А НЕ ВЫВЕДЕНО ИЗ ДЛИНЫ МНОЖЕСТВА. Без него правило
+# зеленело бы ВАКУУМОМ на разборщике, потерявшем обе формы разом: пустое
+# множество равно пустому.
+DELETE_FORM_FIELD_NAMES_MEASURED = 1
+
+FORM_BLOCK_RE = re.compile(r"<form\b[^>]*>.*?</form>", re.S)
+FORM_FIELD_NAME_RE = re.compile(
+    r'<(?:input|select|textarea|button)\b[^>]*\bname="([^"]*)"'
+)
+FORM_INPUT_PAIR_RE = re.compile(
+    r'<input\b[^>]*\bname="([^"]*)"[^>]*\bvalue="([^"]*)"'
+)
+
+
+def _delete_forms(html: str, account_id: int, group_id: int) -> tuple[str, str]:
+    """Обе формы удаления одной строки: `(форма-триггер, форма панели)`.
+
+    ⚠️ ГРАНИЦА РАЗБОРЩИКА НАЗЫВАЕТСЯ ЗДЕСЬ, А НЕ ОСТАЁТСЯ НА ДОГАДКУ (образец —
+    соседние сканеры этого файла). Разборщик НЕ ПОДДЕРЖИВАЕТ ВЛОЖЕННЫХ ФОРМ:
+    он режет по первому `</form>` после открывающего тега. В дереве вложенных
+    форм сегодня нет — спецификация HTML их и не допускает, — но Фаза 10,
+    доводящая число мест подтверждения до шестнадцати, обязана эту границу
+    пересмотреть, если хоть одно из них соберёт разметку иначе.
+
+    Форма-триггер отличается от формы панели ПОЛОЖЕНИЕМ В ДОКУМЕНТЕ, а не
+    классом: панель сознательно стоит СНАРУЖИ строки-карточки (T-11-04), и это
+    свойство уже охраняет `test_confirm_panel_lives_outside_the_row`. Опираться
+    на `class="modal__form"` значило бы связать правило с оформлением панели.
+    """
+    action = f'action="/accounts/{account_id}/groups/{group_id}/delete"'
+    forms = [
+        match.group(0)
+        for match in FORM_BLOCK_RE.finditer(html)
+        if action in match.group(0)[: match.group(0).index(">") + 1]
+    ]
+    assert len(forms) == 2, (
+        f"форм на адрес удаления группы {group_id} найдено {len(forms)}, а не "
+        f"две: разборщик потерял форму — и любое сравнение множеств ниже стало "
+        f"бы зелёным по построению"
+    )
+    row = _row_html(html, group_id)
+    inside = [form for form in forms if form in row]
+    outside = [form for form in forms if form not in row]
+    assert len(inside) == 1 and len(outside) == 1, (
+        f"внутри строки {group_id} форм удаления {len(inside)}, снаружи "
+        f"{len(outside)}: разложить их на триггер и панель нечем"
+    )
+    return inside[0], outside[0]
+
+
+def _form_field_names(form_html: str) -> set[str]:
+    """Множество ИМЁН полей, которые форма отправляет на сервер."""
+    return set(FORM_FIELD_NAME_RE.findall(form_html))
+
+
+def _form_body(form_html: str) -> dict[str, str]:
+    """Тело формы ТАК, КАК ЕГО ШЛЁТ РАЗМЕТКА: пары «имя → значение».
+
+    Читаются только `<input>`: кнопки обеих форм имени не несут, а кнопка без
+    имени в тело не попадает.
+    """
+    return dict(FORM_INPUT_PAIR_RE.findall(form_html))
+
+
+@pytest.mark.asyncio
+async def test_both_delete_forms_post_the_same_field_names(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """НЕСУЩЕЕ: обе формы пути удаления шлют ОДИН И ТОТ ЖЕ набор имён (WR-03).
+
+    ⚠️ ПОРЯДОК УТВЕРЖДЕНИЙ ЗДЕСЬ ЧАСТЬ ПРЕДМЕТА. Сперва АНТИВАКУУМНОЕ — обе
+    формы найдены и форма панели несёт ровно `DELETE_FORM_FIELD_NAMES_MEASURED`
+    имён, число строго больше нуля. Только потом НЕСУЩЕЕ — множества равны.
+    Без первой половины правило зеленело бы на разборщике, потерявшем обе формы
+    разом: пустое множество равно пустому.
+
+    Число сверяется на форме ПАНЕЛИ намеренно: её набор полей и есть тот
+    эталон, до которого форма-триггер обязана дотянуться, и вакуум ловится
+    именно на нём. Равенство ниже переносит это число и на вторую форму.
+
+    ⚠️ ЭТО ПОЛОВИНА ПАРЫ, А НЕ ПРАВИЛО ЦЕЛОГО ПРЕДМЕТА (план 09-18, CR-02). Его
+    предмет — ДВА места отрисовки СТРАНИЦЫ; мест же отрисовки той же формы ТРИ,
+    и третье — ответ тумблера — сюда не входит и входить не может: разметка
+    страницы его не содержит. Третье место накрывает
+    `test_the_toggle_response_renders_the_delete_form_with_the_same_field_names`,
+    а само ЧИСЛО мест сторожит
+    `test_the_number_of_delete_form_render_sites_is_the_declared_one`.
+
+    ⚠️ ИМЯ ЭТОГО ПРАВИЛА НЕ МЕНЯЕТСЯ, ХОТЯ ПРЕДМЕТ ПАРЫ ШИРЕ ЕГО ОКНА. Команда
+    свидетельств в `.planning/REQUIREMENTS.md` выбирает его ПОДСТРОКОЙ, и
+    переименование молча вывело бы правило из выборки — то есть закрыло бы
+    дефект удалением записи о нём.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа двух форм")
+
+    html = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": "Группа"}
+        )
+    ).text
+
+    trigger, panel = _delete_forms(html, account.id, group.id)
+    panel_names = _form_field_names(panel)
+    trigger_names = _form_field_names(trigger)
+
+    # --- АНТИВАКУУМ ---------------------------------------------------------
+    assert DELETE_FORM_FIELD_NAMES_MEASURED > 0, (
+        "измеренное число имён обнулилось — правило ниже стало бы вакуумным"
+    )
+    assert len(panel_names) == DELETE_FORM_FIELD_NAMES_MEASURED, (
+        f"форма панели подтверждения шлёт {len(panel_names)} имён "
+        f"({sorted(panel_names)}) вместо измеренных "
+        f"{DELETE_FORM_FIELD_NAMES_MEASURED}: эталон сдвинулся, и его надо "
+        f"ПЕРЕМЕРИТЬ осознанно, а не подогнать"
+    )
+
+    # --- НЕСУЩЕЕ ------------------------------------------------------------
+    assert trigger_names == panel_names, (
+        f"наборы имён двух форм удаления РАЗОШЛИСЬ.\n"
+        f"  форма-триггер (базовый путь): {sorted(trigger_names)}\n"
+        f"  форма панели подтверждения:   {sorted(panel_names)}\n"
+        f"  разность: {sorted(panel_names ^ trigger_names)}\n"
+        f"СЛЕДСТВИЕ, А НЕ КОСМЕТИКА: путь без Alpine приземляется на список, "
+        f"который человек не фильтровал, а ветка «выдача опустела» решается по "
+        f"ВСЕМУ АККАУНТУ вместо той выдачи, которую человек видел, — то есть "
+        f"починка WR-06 на базовом пути сработать не может."
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_trigger_form_body_lands_on_the_filtered_listing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ПОВЕДЕНЧЕСКАЯ половина WR-03: базовый путь приземляется на ТУ выдачу.
+
+    Разметочное правило выше ловит расхождение наборов полей; оно НЕ ловит
+    того, что из расхождения следует. Здесь тело формы-триггера берётся ТАК,
+    КАК ЕГО ШЛЁТ РАЗМЕТКА, и уходит базовым путём — без признака htmx, как у
+    человека, к которому Alpine не доехал.
+
+    ⚠️ ФИКСТУРА ЗДЕСЬ ОДНА НАМЕРЕННО: `htmx_client` возвращает тот же объект
+    клиента и выставил бы признак htmx всему тесту.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, ["Бета один", "Бета два", "Бета три"])
+    alpha = await _seed_group(db_session, account, "Альфа единственная")
+
+    page = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": "Альфа"}
+        )
+    ).text
+    assert _row_ids(page) == [alpha.id], (
+        f"поиск отвечает не ровно одной строке ({_row_ids(page)}) — посев не "
+        f"создаёт условия, ради которого тест написан"
+    )
+
+    trigger, _panel = _delete_forms(page, account.id, alpha.id)
+    body = _form_body(trigger)
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{alpha.id}/delete",
+        data=body,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302, (
+        f"базовый путь получил {response.status_code} — путь деградации "
+        f"перестал быть прежним"
+    )
+    assert _search_param(response.headers["location"]) == ["Альфа"], (
+        f"тело формы-триггера ({body or 'пусто'}) не донесло строки поиска: "
+        f"адрес приземления {response.headers['location']} — человек без Alpine "
+        f"попадает на НЕотфильтрованный список, а ветка «выдача опустела» "
+        f"решается по всему аккаунту вместо той выдачи, что он видел"
+    )
+    assert (await db_session.get(Group, alpha.id)) is None, (
+        "удаление на базовом пути не состоялось"
+    )
+
+
+# =============================================================================
+# План 09-18, Задача 1: ТРЕТЬЕ МЕСТО ОТРИСОВКИ ФОРМЫ УДАЛЕНИЯ (CR-02, WR-01)
+# =============================================================================
+#
+# ЧТО ЗДЕСЬ ЗАКРЕПЛЯЕТСЯ. Правило выше читает РАЗМЕТКУ СТРАНИЦЫ, а мест
+# отрисовки той же формы удаления ТРИ: страница (`list.html`), порция
+# бесконечной прокрутки (`partial_cards.html`) и ОТВЕТ ТУМБЛЕРА
+# (`toggle_response.html`). Третье в предмет соседа не входит — и потому сосед
+# ЗЕЛЁН на дереве, где симметрия сломана. Это образец «зелено по построению»,
+# цену которого фаза уже оплатила однажды (WARN-4 первого круга).
+#
+# ИЗМЕРЕНО ПРОГОНОМ, А НЕ ВЫВЕДЕНО ЧТЕНИЕМ (09-VERIFICATION.md, гейп 2):
+# страница с `?search=Альфа` отдаёт два скрытых поля со значением `Альфа`, а
+# htmx-ответ тумблера ТОЙ ЖЕ строки — одно и ПУСТОЕ (`value=""`). Имена полей
+# при этом СОВПАДАЮТ: поле в ответе есть, оно ничего не несёт. Поэтому правило
+# третьего места утверждает не только набор имён, но и ЗНАЧЕНИЕ — на одном
+# равенстве множеств оно было бы зелено ровно на сломанном дереве.
+#
+# ЦЕНА РАСХОЖДЕНИЯ ТА ЖЕ, ЧТО У WR-03, И ДОСТИЖИМА ОНА В МИРЕ, НАЗВАННОМ ФАЗОЙ
+# ПОИМЁННО, — «Alpine мёртв, htmx жив» (`account_groups.py:474-480`). При
+# мёртвом Alpine перехват отправки не навешивается, форма-триггер переключённой
+# строки уходит обычным POST-ом БЕЗ строки поиска, и дальше: человек
+# приземляется на НЕотфильтрованный список, а ветка «выдача опустела» решается
+# `_current_listing_has_a_row` по ВСЕМУ АККАУНТУ вместо той выдачи, которую он
+# видел, — то есть починка WR-06 на этом пути сработать не может в принципе.
+#
+# ПОЧЕМУ ПАРА, А НЕ ПЕРЕИМЕНОВАНИЕ СОСЕДА. Команда свидетельств
+# `.planning/REQUIREMENTS.md` выбирает `test_both_delete_forms_post_the_same_
+# field_names` ПОДСТРОКОЙ: переименование молча вывело бы правило из выборки,
+# то есть закрыло бы дефект удалением записи о нём. Сосед остаётся правилом
+# СТРАНИЦЫ, третье место получает собственное правило, а число мест отрисовки
+# объявляется и утверждается отдельно.
+
+# ⚠️ ПЕРЕЧЕНЬ МЕСТ ОТРИСОВКИ ОБЪЯВЛЕН, А НЕ ВЫВЕДЕН ИЗ ДЕРЕВА (идиома SP-1,
+# образец — соседний OOB_TARGET_EXCEPTIONS). Правило, берущее число из самого
+# дерева, приняло бы каждое следующее новое место МОЛЧА — ровно тем способом,
+# каким третье место и осталось непокрытым: оно завелось планом 09-06, а
+# правило равенства наборов полей, написанное планом 09-15, о нём не узнало.
+# У каждой записи написано, ПОЧЕМУ место в перечне, и добавление нового требует
+# прочитать файл, а не подобрать образец.
+DELETE_FORM_RENDER_SITES: dict[str, str] = {
+    "app/templates/account_groups/list.html": (
+        "СТРАНИЦА — первичная отрисовка списка. Строка поиска приезжает сюда "
+        "величиной контекста `filter_search` обработчика страницы."
+    ),
+    "app/templates/account_groups/partial_cards.html": (
+        "ПОРЦИЯ БЕСКОНЕЧНОЙ ПРОКРУТКИ — дочитывание списка сентинелом. Строка "
+        "поиска приезжает сюда из `filter_params` маршрута порции."
+    ),
+    "app/templates/account_groups/partials/toggle_response.html": (
+        "ОТВЕТ ТУМБЛЕРА — подмена ОДНОЙ переключённой строки (`with_modal="
+        "false`, панели подтверждения в нём нет по построению, T-11-04). "
+        "Третье место и есть предмет CR-02: до плана 09-18 строка поиска сюда "
+        "не приезжала вовсе, и форма удаления переключённой строки печатала "
+        "пустое значение."
+    ),
+}
+
+# ⚠️ ЧИСЛО ВЫПИСАНО ОТДЕЛЬНОЙ КОНСТАНТОЙ НАМЕРЕННО (второе утверждение идиомы
+# SP-1). Беззвучно выросшее означает, что ЧЕТВЁРТОЕ место отрисовки заведено, а
+# правило третьего места о нём не узнало — то есть окно правила снова уехало
+# уже́ предмета, и следующий круг узнает об этом ревизией ПОСЛЕ отгрузки.
+# Беззвучно упавшее означает, что место снято, и это обязано быть записано
+# строкой летописи, а не обнаружено через фазу.
+#
+# ЛЕТОПИСЬ: 0 → 3, Фаза 9, план 09-18, задача 1 — перечень заведён; число
+# поставлено обходом дерева шаблонов по вызовам макроса строки группы.
+DELETE_FORM_RENDER_SITES_DECLARED = 3
+
+# Вызов макроса строки группы — но НЕ его объявление. Объявление отличается от
+# вызова единственным словом перед именем, и ровно оно здесь и отсекается:
+# перечислять определяющий файл в местах отрисовки значило бы засчитать макросу
+# самого себя.
+GROUP_ROW_CALL_RE = re.compile(r"(?<!macro )\bgroup_row\(")
+
+
+def _delete_form_render_sites() -> set[str]:
+    """Файлы дерева шаблонов, ВЫЗЫВАЮЩИЕ макрос строки группы.
+
+    Место отрисовки формы удаления и есть место вызова макроса: обе формы пути
+    удаления живут ВНУТРИ него и отдельно от него не печатаются нигде — это
+    проверяется третьим утверждением правила ниже, а не предполагается.
+
+    ⚠️ ГРАНИЦА СКАНЕРА НАЗЫВАЕТСЯ ЗДЕСЬ, А НЕ ОСТАЁТСЯ НА ДОГАДКУ. Он видит
+    РОВНО дерево `app/templates/`: вызов макроса из питоновского кода ему
+    невидим. В дереве такого вызова сегодня нет — строку собирает только Jinja,
+    — но Фаза 10, раздающая `hx_post` шестнадцати местам подтверждения, обязана
+    эту границу пересмотреть, если хоть одно из них соберёт разметку иначе.
+    """
+    return {
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in TEMPLATES_DIR.rglob("*.html")
+        if GROUP_ROW_CALL_RE.search(path.read_text(encoding="utf-8"))
+    }
+
+
+def _delete_trigger_form(html: str, account_id: int, group_id: int) -> str:
+    """ЕДИНСТВЕННАЯ форма на адрес удаления — разборщик для ФРАГМЕНТА.
+
+    Соседний `_delete_forms` требует РОВНО ДВУХ форм и раскладывает их на
+    триггер и панель по положению в документе. На ответе тумблера он обязан
+    краснеть, и это верно: панели подтверждения там нет ПО ПОСТРОЕНИЮ
+    (`with_modal=false`, T-11-04). Поэтому у фрагмента свой разборщик, а
+    существующий не ослабляется — ослабленный, он перестал бы ловить пропажу
+    панели на СТРАНИЦЕ.
+
+    ⚠️ ГРАНИЦА РАЗБОРЩИКА НАЗЫВАЕТСЯ ЗДЕСЬ, А НЕ ОСТАЁТСЯ НА ДОГАДКУ (образец —
+    `_delete_forms`). Разборщик НЕ ПОДДЕРЖИВАЕТ ВЛОЖЕННЫХ ФОРМ: он режет по
+    первому `</form>` после открывающего тега. В дереве вложенных форм сегодня
+    нет — спецификация HTML их и не допускает, — но Фаза 10, доводящая число
+    мест подтверждения до шестнадцати, обязана эту границу пересмотреть, если
+    хоть одно из них соберёт разметку иначе.
+    """
+    action = f'action="/accounts/{account_id}/groups/{group_id}/delete"'
+    forms = [
+        match.group(0)
+        for match in FORM_BLOCK_RE.finditer(html)
+        if action in match.group(0)[: match.group(0).index(">") + 1]
+    ]
+    assert len(forms) == 1, (
+        f"форм на адрес удаления группы {group_id} найдено {len(forms)}, а не "
+        f"одна: ноль означает, что разборщик потерял форму — и любое сравнение "
+        f"ниже стало бы зелёным по построению; больше одной — что в ответ "
+        f"тумблера приехала вторая панель подтверждения (T-11-04)"
+    )
+    return forms[0]
+
+
+def _toggle_form(html: str, account_id: int, group_id: int) -> str:
+    """ЕДИНСТВЕННАЯ форма на адрес переключения строки.
+
+    Заведена затем, что тело формы тумблера нужно ДВУМ правилам ниже, и оба
+    берут его ТАК, КАК ЕГО ШЛЁТ РАЗМЕТКА, а не набирают литералом: правило,
+    подставляющее строку поиска руками, зеленело бы на форме, которая её не
+    несёт, — то есть ровно там, где сломано.
+
+    Граница та же, что у `_delete_trigger_form`: вложенных форм разборщик не
+    поддерживает, в дереве их нет.
+    """
+    action = f'action="/accounts/{account_id}/groups/{group_id}/toggle"'
+    forms = [
+        match.group(0)
+        for match in FORM_BLOCK_RE.finditer(html)
+        if action in match.group(0)[: match.group(0).index(">") + 1]
+    ]
+    assert len(forms) == 1, (
+        f"форм на адрес переключения группы {group_id} найдено {len(forms)}, а "
+        f"не одна: брать тело формы тумблера неоткуда"
+    )
+    return forms[0]
+
+
+def test_the_number_of_delete_form_render_sites_is_the_declared_one():
+    """ЗУБЫ У ОБЪЯВЛЕННОГО ЧИСЛА: мест отрисовки ровно столько, сколько сказано.
+
+    ⚠️ ЭТО ПРАВИЛО НИЧЕГО НЕ ЧИНИТ, И В ЭТОМ ЕГО СМЫСЛ. Оно сторожит ОКНО
+    соседних правил: правило равенства наборов полей накрывает страницу,
+    правило третьего места — ответ тумблера, и вместе они равны предмету РОВНО
+    до тех пор, пока мест отрисовки три. Четвёртое место, заведённое молча,
+    вернуло бы фазу в то же положение, из которого её вытащил CR-02: правило
+    зелено, симметрии нет, узнают об этом ревизией после отгрузки.
+
+    Порядок утверждений: сперва АНТИВАКУУМНОЕ (число объявлено, оно строго
+    больше нуля, перечень ему равен, файлы существуют), затем НЕСУЩЕЕ (обход
+    дерева даёт РОВНО объявленный перечень).
+    """
+    # --- АНТИВАКУУМ ---------------------------------------------------------
+    assert DELETE_FORM_RENDER_SITES_DECLARED > 0, (
+        "число мест отрисовки объявлено нулём — правило ниже стало бы зелёным "
+        "по построению и молчало бы громче всего там, где сломалось сильнее"
+    )
+    assert len(DELETE_FORM_RENDER_SITES) == DELETE_FORM_RENDER_SITES_DECLARED, (
+        f"мест в перечне {len(DELETE_FORM_RENDER_SITES)}, а объявлено "
+        f"{DELETE_FORM_RENDER_SITES_DECLARED}: место заведено или снято — "
+        f"обнови число вместе с решением о нём и допиши строку летописи"
+    )
+    unexplained = sorted(
+        site for site, reason in DELETE_FORM_RENDER_SITES.items() if not reason.strip()
+    )
+    assert not unexplained, (
+        "место перечня не снабжено обоснованием — запись без него через фазу "
+        f"читается как «наверное, забыли»:\n  {unexplained}"
+    )
+    absent = sorted(
+        site for site in DELETE_FORM_RENDER_SITES if not (REPO_ROOT / site).is_file()
+    )
+    assert not absent, (
+        f"место перечня не существует на диске: {absent} — правило читало бы "
+        f"пустоту и зеленело бы на ней"
+    )
+
+    # --- НЕСУЩЕЕ ------------------------------------------------------------
+    found = _delete_form_render_sites()
+    declared = set(DELETE_FORM_RENDER_SITES)
+    assert found == declared, (
+        f"перечень мест отрисовки формы удаления РАЗОШЁЛСЯ с деревом.\n"
+        f"  объявлено: {sorted(declared)}\n"
+        f"  найдено:   {sorted(found)}\n"
+        f"  разность:  {sorted(found ^ declared)}\n"
+        f"СЛЕДСТВИЕ, А НЕ УЧЁТ: окно правил симметрии равно предмету ровно "
+        f"до тех пор, пока мест столько же. Место, заведённое молча, печатает "
+        f"форму удаления, которую не проверяет ни одно правило."
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_toggle_response_renders_the_delete_form_with_the_same_field_names(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """НЕСУЩЕЕ ПРАВИЛО ТРЕТЬЕГО МЕСТА ОТРИСОВКИ (CR-02).
+
+    Половина ПАРЫ к `test_both_delete_forms_post_the_same_field_names`. Тот
+    читает разметку СТРАНИЦЫ и накрывает два места отрисовки из трёх; здесь
+    накрывается третье — ОТВЕТ ТУМБЛЕРА. Пара, а не переименование соседа:
+    команда свидетельств `.planning/REQUIREMENTS.md` выбирает его имя
+    подстрокой, и переименование молча вывело бы правило из выборки.
+
+    ⚠️ РАВЕНСТВА ИМЁН ЗДЕСЬ НЕДОСТАТОЧНО, И ЭТО ИЗМЕРЕНО, А НЕ ПРЕДПОЛОЖЕНО.
+    Скрытое поле в ответе ЕСТЬ — оно печатается тем же макросом, — но несёт
+    ПУСТОЕ значение, потому что до плана 09-18 строке поиска неоткуда было
+    приехать в третье место отрисовки. Правило, сверяющее только множества
+    имён, зеленело бы ровно на сломанном дереве.
+
+    ⚠️ ФИКСТУРА ЗДЕСЬ ОДНА НАМЕРЕННО: `htmx_client` возвращает ТОТ ЖЕ объект
+    клиента и выставил бы признак htmx всему тесту, а страница нужна такой,
+    какой её видит человек. Признак ставится ОДНОМУ запросу заголовком —
+    образец соседний, `test_the_delete_response_never_carries_a_scroll_cursor`.
+    """
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Альфа третьего места")
+
+    page = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": "Альфа"}
+        )
+    ).text
+    _trigger, panel = _delete_forms(page, account.id, group.id)
+    panel_names = _form_field_names(panel)
+
+    fragment = await authed_client.post(
+        f"/accounts/{account.id}/groups/{group.id}/toggle",
+        data=_form_body(_toggle_form(page, account.id, group.id)),
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+
+    # --- АНТИВАКУУМ ---------------------------------------------------------
+    assert fragment.status_code == 200, (
+        f"фрагментная ветка не достигнута: ответ {fragment.status_code} вместо "
+        f"200 — сравнивать ниже было бы нечего"
+    )
+    assert "<!DOCTYPE" not in fragment.text, (
+        "в теле приехал ЦЕЛЫЙ ДОКУМЕНТ, а не фрагмент: формы ниже нашлись бы в "
+        "нём и без всякого третьего места отрисовки"
+    )
+    assert DELETE_FORM_FIELD_NAMES_MEASURED > 0, (
+        "измеренное число имён обнулилось — правило ниже стало бы вакуумным"
+    )
+    assert len(panel_names) == DELETE_FORM_FIELD_NAMES_MEASURED, (
+        f"форма панели подтверждения на СТРАНИЦЕ шлёт {len(panel_names)} имён "
+        f"({sorted(panel_names)}) вместо измеренных "
+        f"{DELETE_FORM_FIELD_NAMES_MEASURED}: эталон сдвинулся, и его надо "
+        f"ПЕРЕМЕРИТЬ осознанно, а не подогнать"
+    )
+
+    response_form = _delete_trigger_form(fragment.text, account.id, group.id)
+    response_names = _form_field_names(response_form)
+    response_body = _form_body(response_form)
+
+    # --- НЕСУЩЕЕ: НАБОР ИМЁН ------------------------------------------------
+    assert response_names == panel_names, (
+        f"наборы имён РАЗОШЛИСЬ между страницей и ОТВЕТОМ ТУМБЛЕРА.\n"
+        f"  форма панели на странице: {sorted(panel_names)}\n"
+        f"  форма в ответе тумблера:  {sorted(response_names)}\n"
+        f"  разность: {sorted(panel_names ^ response_names)}\n"
+        f"СЛЕДСТВИЕ, А НЕ КОСМЕТИКА: переключённая строка теряет строку "
+        f"поиска, путь без Alpine приземляется на список, который человек не "
+        f"фильтровал, а ветка «выдача опустела» решается по ВСЕМУ АККАУНТУ "
+        f"вместо той выдачи, которую он видел."
+    )
+
+    # --- НЕСУЩЕЕ: ЗНАЧЕНИЕ --------------------------------------------------
+    assert response_body.get("search") == "Альфа", (
+        f"форма удаления в ОТВЕТЕ ТУМБЛЕРА несёт строку поиска "
+        f"{response_body.get('search')!r} вместо 'Альфа': тело ответа "
+        f"{response_body or 'пусто'}. Имя поля на месте, ЗНАЧЕНИЯ нет — "
+        f"третье место отрисовки печатает умолчание макроса, потому что до "
+        f"него величине неоткуда приехать. Равенство имён выше от этого "
+        f"зелено, и именно так дефект и дожил до ревизии (CR-02)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_toggle_response_trigger_form_body_lands_on_the_filtered_listing(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ПОВЕДЕНЧЕСКАЯ половина CR-02: тело формы ИЗ ОТВЕТА приземляется туда же.
+
+    Разметочное правило выше ловит пустое значение; оно НЕ ловит того, что из
+    пустого значения следует. Здесь тело формы-триггера берётся ИЗ ОТВЕТА
+    ТУМБЛЕРА так, как его шлёт разметка, и уходит БАЗОВЫМ путём — как у
+    человека, к которому Alpine не доехал, а htmx доехал.
+
+    Цепочка проверяется целиком: форма тумблера на странице → обработчик
+    тумблера → ответ тумблера → форма удаления В ОТВЕТЕ → обработчик удаления.
+    Рвётся она в любом звене одинаково молча.
+
+    ⚠️ ФИКСТУРА ЗДЕСЬ ОДНА НАМЕРЕННО: `htmx_client` выставил бы признак htmx
+    ВСЕМУ тесту, а вторая половина нужна БЕЗ него. Признак ставится одному
+    запросу заголовком.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, ["Бета один", "Бета два", "Бета три"])
+    alpha = await _seed_group(db_session, account, "Альфа единственная")
+
+    page = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": "Альфа"}
+        )
+    ).text
+    assert _row_ids(page) == [alpha.id], (
+        f"поиск отвечает не ровно одной строке ({_row_ids(page)}) — посев не "
+        f"создаёт условия, ради которого тест написан"
+    )
+
+    fragment = await authed_client.post(
+        f"/accounts/{account.id}/groups/{alpha.id}/toggle",
+        data=_form_body(_toggle_form(page, account.id, alpha.id)),
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert fragment.status_code == 200, (
+        f"фрагментная ветка не достигнута: {fragment.status_code} — тела формы "
+        f"удаления, которое ниже уходит на сервер, взять неоткуда"
+    )
+
+    body = _form_body(_delete_trigger_form(fragment.text, account.id, alpha.id))
+
+    response = await authed_client.post(
+        f"/accounts/{account.id}/groups/{alpha.id}/delete",
+        data=body,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302, (
+        f"базовый путь получил {response.status_code} — путь деградации "
+        f"перестал быть прежним"
+    )
+    assert _search_param(response.headers["location"]) == ["Альфа"], (
+        f"тело формы удаления ИЗ ОТВЕТА ТУМБЛЕРА ({body or 'пусто'}) не "
+        f"донесло строки поиска: адрес приземления "
+        f"{response.headers['location']} — человек, переключивший строку без "
+        f"Alpine, приземляется на НЕотфильтрованный список"
+    )
+    assert (await db_session.get(Group, alpha.id)) is None, (
+        "удаление на базовом пути не состоялось"
+    )
+
+    landing = await authed_client.get(response.headers["location"])
+    assert landing.status_code == 200, (
+        f"адрес приземления отвечает {landing.status_code} — проверить, что "
+        f"человек попал на пустую выдачу, нечем"
+    )
+    assert _row_ids(landing.text) == [], (
+        f"на адресе приземления {response.headers['location']} остались строки "
+        f"{_row_ids(landing.text)}: удалив единственную найденную строку, "
+        f"человек попал не на экран «Группы не найдены» с кнопкой «Сбросить», а "
+        f"на выдачу чужого поиска — починка WR-06 на этом пути не сработала"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_toggle_landing_address_carries_the_search_filter(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """WR-01: адрес приземления тумблера приходит из ЕДИНОГО источника.
+
+    Докстринг `_screen_url` (`account_groups.py:68-74`) требует единого
+    источника ПРЯМЫМ ТЕКСТОМ: «адрес после действия и адрес после перезагрузки
+    обязаны приходить из одного источника, иначе они разъедутся молча». Оба
+    выхода тумблера собирали адрес f-строкой мимо помощника, и разъехались они
+    ровно так — молча. ИЗМЕРЕНО ревизией: POST без признака htmx со страницы
+    `?search=Альфа` давал `302 → /accounts/1/groups`.
+
+    ⚠️ ВТОРАЯ ПОЛОВИНА — НЕОТЛИЧИМОСТЬ (D-13, T-9-02), И ОНА ЗДЕСЬ НЕ ДЛЯ
+    ПОЛНОТЫ. Перевод на общий источник обязан сделать ветки МЕНЕЕ различимыми,
+    а не более: чужая и несуществующая группа идут ОДНОЙ веткой и получают ОДИН
+    И ТОТ ЖЕ адрес — тот же, что получила бы найденная. Различимым ответ стал бы
+    ровно тогда, когда ветки собирали бы адрес по-разному.
+
+    ⚠️ ФИКСТУРА ОДНА: весь тест идёт БАЗОВЫМ путём, и признак htmx не ставится
+    ни одному запросу.
+    """
+    account = await _seed_account(db_session)
+    await _seed_many(db_session, account, ["Бета один", "Бета два"])
+    alpha = await _seed_group(db_session, account, "Альфа приземления")
+
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    foreign_group = await _seed_group(
+        db_session, foreign_account, "Чужая группа тумблера", user_id=foreign_user.id
+    )
+    missing_id = max(alpha.id, foreign_group.id) + 1000
+
+    page = (
+        await authed_client.get(
+            f"/accounts/{account.id}/groups", params={"search": "Альфа"}
+        )
+    ).text
+    body = _form_body(_toggle_form(page, account.id, alpha.id))
+
+    async def _toggle(group_id: int):
+        return await authed_client.post(
+            f"/accounts/{account.id}/groups/{group_id}/toggle",
+            data=body,
+            follow_redirects=False,
+        )
+
+    found = await _toggle(alpha.id)
+
+    # --- АНТИВАКУУМ ---------------------------------------------------------
+    assert _row_ids(page) == [alpha.id], (
+        f"поиск отвечает не ровно одной строке ({_row_ids(page)}) — посев не "
+        f"создаёт условия, ради которого тест написан"
+    )
+    assert found.status_code == 302, (
+        f"базовый путь тумблера получил {found.status_code} — путь деградации "
+        f"перестал быть прежним, и адрес приземления сравнивать не с чем"
+    )
+
+    # --- НЕСУЩЕЕ ------------------------------------------------------------
+    assert _search_param(found.headers["location"]) == ["Альфа"], (
+        f"тело формы тумблера ({body or 'пусто'}) не донесло строки поиска до "
+        f"адреса приземления: {found.headers['location']}. Адрес после "
+        f"действия и адрес после перезагрузки РАЗОШЛИСЬ — ровно то, что "
+        f"докстринг `_screen_url` запрещает прямым текстом; человек без Alpine "
+        f"приземляется на НЕотфильтрованный список, а ветка «выдача опустела» "
+        f"решается по всему аккаунту вместо той выдачи, что он видел"
+    )
+
+    # --- НЕОТЛИЧИМОСТЬ НЕ ОСЛАБЛЕНА -----------------------------------------
+    foreign = await _toggle(foreign_group.id)
+    missing = await _toggle(missing_id)
+
+    assert foreign.status_code == missing.status_code == found.status_code, (
+        f"ветки различимы по коду ответа: найденная {found.status_code}, чужая "
+        f"{foreign.status_code}, несуществующая {missing.status_code}"
+    )
+    assert (
+        foreign.headers["location"]
+        == missing.headers["location"]
+        == found.headers["location"]
+    ), (
+        f"перевод выходов на единый источник СДЕЛАЛ ветки различимыми:\n"
+        f"  найденная:      {found.headers['location']}\n"
+        f"  чужая:          {foreign.headers['location']}\n"
+        f"  несуществующая: {missing.headers['location']}\n"
+        f"По адресу приземления можно составить карту чужих идентификаторов "
+        f"перебором, не получив ни одной строки (D-13, T-9-02)."
+    )
+    assert (await db_session.get(Group, foreign_group.id)) is not None, (
+        "чужая группа исчезла — тройной WHERE перестал держать владение"
+    )
+    await db_session.refresh(foreign_group)
+    assert foreign_group.is_active is True, "чужая группа переключена"
+
+
+# =============================================================================
+# План 09-18, Задача 3: ПРОЗА О МЕХАНИЗМЕ ИДЕМПОТЕНТНОСТИ ТУМБЛЕРА (WR-02)
+# =============================================================================
+#
+# ЧТО ЗДЕСЬ ЗАКРЕПЛЯЕТСЯ. Абзац `group_row.html` стоит ровно над вызовом
+# макроса-обёртки с пустой целью блокировки и является ЗАПИСАННЫМ ОБОСНОВАНИЕМ
+# снятия клиентской блокировки. Он утверждал, что обработчик ИНВЕРТИРУЕТ
+# `is_active`, — а инверсии у обработчика нет с плана 09-15: он ПРИСВАИВАЕТ
+# присланное значение. Читатель Фазы 10, решающий тот же вопрос для сорока
+# шести оставшихся форм, прочёл бы здесь свойство, которого у кода нет.
+#
+# ЭТО НЕ СТИЛИСТИКА, И ЦЕНА НАЗЫВАЕТСЯ ПРЯМО. Довод «инверсия не создаёт второй
+# записи» СЛАБЕЕ того, что даёт присвоение: инверсия давала безвредность только
+# в ПАРЕ нажатий, присвоение даёт идемпотентность в полном смысле. То есть
+# проза одновременно занижала реальную гарантию и называла её не тем
+# механизмом.
+#
+# ПОЧЕМУ ПРАВИЛО, А НЕ ЕДИНИЧНАЯ ПРАВКА. Правка чинит ОДНО место и оставляет
+# КЛАСС, а класс наследуют Фазы 10-15: летопись фазы — записанное обоснование
+# решений, и обоснование, описывающее снятую форму, отменяет решение молча.
+# Правило краснеет на самом расхождении, а не на его следствии.
+
+# ⚠️ ЧИСЛО МЕСТ ПРОЗЫ ИЗМЕРЕНО ПО ДЕРЕВУ (идиома SP-1, 09-PATTERNS.md), А НЕ
+# ВЫВЕДЕНО ИЗ ДЛИНЫ ВЫБОРКИ. Без него правило зеленело бы ВАКУУМОМ на сканере,
+# потерявшем все места разом: пустое множество нарушений равно пустому. Обход
+# области приложения по абзацам, рассуждающим о механизме безвредности
+# повторного нажатия ТУМБЛЕРА, вернул ДВА места: абзац обоснования снятия
+# клиентской блокировки в `group_row.html` и комментарий присвоения состояния в
+# `account_groups.py`.
+#
+# ЛЕТОПИСЬ: 0 → 2, Фаза 9, план 09-18, задача 3 — число поставлено обходом
+# дерева, а не арифметикой плана.
+TOGGLE_CLAIM_SITES_MEASURED = 2
+
+# ⚠️ ОБЛАСТЬ СКАНИРОВАНИЯ — ТОЛЬКО `app/`, И ЭТО НЕ ЭКОНОМИЯ. Константы самого
+# правила живут в `tests/` и набирают ровно те слова, которые правило ищет:
+# область шире втянула бы правило в собственную выборку, и оно рассуждало бы о
+# себе.
+TOGGLE_CLAIM_SCOPE_TEMPLATES = "app/templates/account_groups"
+TOGGLE_CLAIM_SCOPE_MODULE = "app/pages/account_groups.py"
+
+# Абзац прозы: комментарий Jinja целиком либо непрерывный пробег строк-#
+# питоновского модуля. Границы предметны, а не удобны — проза этого проекта
+# набирается именно такими блоками, и утверждение, растянутое на весь файл,
+# засчитало бы летописную рамку одного абзаца совсем другому.
+JINJA_COMMENT_BLOCK_RE = re.compile(r"\{#.*?#\}", re.S)
+
+# Место РАССУЖДАЕТ О ПРЕДМЕТЕ, если говорит и о тумблере, и об идемпотентности.
+# Обе половины обязательны: без первой в выборку попадает безвредность
+# повторного УДАЛЕНИЯ, без второй — любой абзац о тумблере вообще.
+TOGGLE_SUBJECT_RE = re.compile(r"тумблер|is_active", re.I)
+TOGGLE_IDEMPOTENCY_RE = re.compile(r"идемпотентн", re.I)
+
+# ДЕЙСТВУЮЩАЯ форма — присвоение присланного значения; СНЯТАЯ — инверсия
+# хранимого. Основы, а не целые слова: проза склоняет их обе.
+TOGGLE_ACTING_FORM_RE = re.compile(r"присв", re.I)
+TOGGLE_REMOVED_FORM_RE = re.compile(r"инвер", re.I)
+
+# ЛЕТОПИСНАЯ РАМКА — указание НОМЕРА ПЛАНА рядом с упоминанием снятой формы.
+# Одной даты измерения мало: `08-30` в этом дереве есть, и рамкой она не
+# является. Требуется именно слово «план» перед номером.
+CHRONICLE_FRAME_RE = re.compile(r"план\w*\s+\d{2}-\d{2}", re.I)
+
+# Абзац, который ПОДСТАВЛЯЕТ отрицательный контроль. Набран так, чтобы попадать
+# в выборку сканера (тумблер + идемпотентность) и нарушать обе половины
+# несущего утверждения: действующей формы не называет, снятую называет без
+# летописной рамки.
+TOGGLE_CLAIM_CONTROL_BLOCK = (
+    "ПОДСТАВЛЕНО КОНТРОЛЕМ: идемпотентность тумблера держит сам обработчик — "
+    "он ИНВЕРТИРУЕТ is_active одной строкой под тройным ограничением."
+)
+
+
+def _prose_blocks(path: Path) -> list[str]:
+    """Абзацы прозы файла: комментарии Jinja либо пробеги строк-# модуля."""
+    source = path.read_text(encoding="utf-8")
+    if path.suffix == ".html":
+        return JINJA_COMMENT_BLOCK_RE.findall(source)
+
+    blocks: list[str] = []
+    run: list[str] = []
+    for line in source.splitlines():
+        if line.strip().startswith("#"):
+            run.append(line)
+            continue
+        if run:
+            blocks.append("\n".join(run))
+            run = []
+    if run:
+        blocks.append("\n".join(run))
+    return blocks
+
+
+def _toggle_claim_blocks() -> dict[str, list[str]]:
+    """Абзацы области приложения, рассуждающие о безвредности второго нажатия.
+
+    ⚠️ ЧЕГО СКАНЕР НЕ ВИДИТ — ВЫПИСАНО ЗДЕСЬ, А НЕ ОСТАВЛЕНО НА ДОГАДКУ
+    (образец — шапка `test_every_claim_about_a_missing_oob_target_names_the_
+    runtime_event`). Он видит РОВНО `app/templates/account_groups/` и
+    `app/pages/account_groups.py`; питоновские ДОКСТРИНГИ в выборку не входят —
+    предмет находки WR-02 живёт в комментариях, а докстринг обработчика
+    тумблера об идемпотентности не рассуждает вовсе. Рассуждение о том же
+    механизме, заведённое в ЛЮБОМ другом файле или в докстринге, правилу
+    невидимо. Закрытие границы — предмет Фазы 15 («Упрочнение и сводный обход
+    47 форм»), где инвентари закрываются сводно; до тех пор граница НАЗВАНА, а
+    не закрыта молчанием.
+    """
+    paths = sorted((REPO_ROOT / TOGGLE_CLAIM_SCOPE_TEMPLATES).rglob("*.html"))
+    paths.append(REPO_ROOT / TOGGLE_CLAIM_SCOPE_MODULE)
+
+    claims: dict[str, list[str]] = {}
+    for path in paths:
+        blocks = [
+            block
+            for block in _prose_blocks(path)
+            if TOGGLE_SUBJECT_RE.search(block) and TOGGLE_IDEMPOTENCY_RE.search(block)
+        ]
+        if blocks:
+            claims[path.relative_to(REPO_ROOT).as_posix()] = blocks
+    return claims
+
+
+def _claims_not_naming_the_acting_form(claims: dict[str, list[str]]) -> set[str]:
+    """Места, чья проза о механизме НЕ называет действующей формы."""
+    return {
+        site
+        for site, blocks in claims.items()
+        if any(not TOGGLE_ACTING_FORM_RE.search(block) for block in blocks)
+    }
+
+
+def _claims_naming_the_removed_form_unframed(
+    claims: dict[str, list[str]],
+) -> set[str]:
+    """Места, называющие СНЯТУЮ форму БЕЗ летописной рамки.
+
+    ⚠️ ГРАНИЦА ПРОВЕРКИ ГРУБА, И ЭТО СКАЗАНО ЗДЕСЬ. Рамкой засчитывается ЛЮБОЕ
+    указание номера плана в том же абзаце — правило не разбирает, к снятой ли
+    форме оно относится. Оно ловит класс «утверждение о снятом механизме
+    выдаётся за действующее», а не редактуру: сузить его до предложения значило
+    бы связать правило с формулировкой, а не с предметом.
+    """
+    return {
+        site
+        for site, blocks in claims.items()
+        if any(
+            TOGGLE_REMOVED_FORM_RE.search(block) and not CHRONICLE_FRAME_RE.search(block)
+            for block in blocks
+        )
+    }
+
+
+def test_every_claim_about_the_toggle_names_the_mechanism_the_handler_has():
+    """Проза о безвредности второго нажатия называет ДЕЙСТВУЮЩИЙ механизм.
+
+    ⚠️ ПРЕДМЕТ ПРАВИЛА — ЗАПИСАННОЕ ОБОСНОВАНИЕ, А НЕ ФОРМУЛИРОВКА. Абзац
+    `group_row.html` — обоснование снятия клиентской блокировки, а комментарий
+    `account_groups.py` — обоснование присвоения присланного состояния. Обоснование,
+    описывающее СНЯТУЮ форму, отменяет решение молча: читатель Фазы 10 применит
+    его к сорока шести оставшимся формам, не узнав, что механизма нет.
+
+    ⚠️ ЧЕГО ПРАВИЛО НЕ ТРЕБУЕТ. Оно не запрещает говорить о снятой форме и не
+    требует конкретной формулировки. Требуется одно: чтобы место называло ту
+    форму, которая у обработчика ЕСТЬ, а снятую упоминало в летописной рамке —
+    рядом с номером плана, которым она снята. Летопись фазы — не украшение:
+    прежнее обоснование не вычёркивается, а называется описывающим снятое
+    (образец — `app/pages/account_groups.py`, записи D-30 и D-32 STATE.md).
+
+    Порядок утверждений: сперва АНТИВАКУУМНОЕ (мест найдено ровно
+    `TOGGLE_CLAIM_SITES_MEASURED`, число строго больше нуля), затем НЕСУЩЕЕ.
+    """
+    claims = _toggle_claim_blocks()
+    found = sum(len(blocks) for blocks in claims.values())
+
+    # --- АНТИВАКУУМ ---------------------------------------------------------
+    assert TOGGLE_CLAIM_SITES_MEASURED > 0, (
+        "измеренное число мест прозы обнулилось — правило ниже стало бы "
+        "вакуумным: пустое множество нарушений равно пустому"
+    )
+    assert found == TOGGLE_CLAIM_SITES_MEASURED, (
+        f"мест прозы о механизме идемпотентности тумблера найдено {found}, а "
+        f"измерено {TOGGLE_CLAIM_SITES_MEASURED} ({sorted(claims)}): место "
+        f"заведено или снято — ПЕРЕМЕРЬ осознанно и допиши строку летописи. "
+        f"Число, подогнанное под выборку, гасит ровно тот отказ, ради поимки "
+        f"которого правило заведено."
+    )
+
+    # --- НЕСУЩЕЕ ------------------------------------------------------------
+    silent = _claims_not_naming_the_acting_form(claims)
+    assert not silent, (
+        "проза рассуждает о том, чем обработчик тумблера обеспечивает "
+        "безвредность второго нажатия, НЕ НАЗЫВАЯ действующего механизма — "
+        "присвоения присланного значения:\n  "
+        + "\n  ".join(sorted(silent))
+        + "\n\nСЛЕДСТВИЕ, НАЗВАННОЕ ПРЯМЫМ ТЕКСТОМ: обработчик ПРИСВАИВАЕТ "
+        "`is_active` присланное значение с плана 09-15 и инверсии не делает. "
+        "Место, стоящее над вызовом макроса-обёртки, есть ЗАПИСАННОЕ "
+        "ОБОСНОВАНИЕ снятия клиентской блокировки, и читатель Фазы 10, "
+        "решающий тот же вопрос для сорока шести оставшихся форм, унаследует "
+        "отсюда свойство, которого у кода нет. Хуже того, довод об инверсии "
+        "ЗАНИЖАЕТ реальную гарантию: инверсия давала безвредность только в "
+        "паре нажатий, присвоение даёт идемпотентность в полном смысле."
+    )
+
+    unframed = _claims_naming_the_removed_form_unframed(claims)
+    assert not unframed, (
+        "проза называет СНЯТУЮ форму (инверсию хранимого) БЕЗ летописной "
+        "рамки — без указания плана, которым форма снята:\n  "
+        + "\n  ".join(sorted(unframed))
+        + "\n\nПрежнее обоснование не вычёркивается, а НАЗЫВАЕТСЯ описывающим "
+        "снятое: стёртое, оно закрывает дефект удалением записи о нём; "
+        "оставленное без рамки — выдаёт снятый механизм за действующий."
+    )
+
+
+def test_control_negative_a_claim_site_naming_the_removed_form_reddens():
+    """ЗУБЫ ПРАВИЛА: место, называющее снятую форму, обязано КРАСНИТЬ.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ПРАВИЛО ДОКАЗЫВАЕТ РОВНО НИЧЕГО: зелёное правило,
+    красным не бывавшее ни разу, неотличимо от слепого — стандарт, который тот
+    же круг применяет к собственным правилам.
+
+    ⚠️ ПОДСТАВЛЯЕТСЯ ПРОЧИТАННЫЙ ТЕКСТ, А НЕ ФАЙЛ НА ДИСКЕ: живое дерево при
+    доказательстве зубов не правится ни на символ, и это утверждается ЗДЕСЬ ЖЕ,
+    последним утверждением, а не поручается прозе.
+
+    ⚠️ ДВОЙНОЙ ПРЕДОХРАНИТЕЛЬ ПОДСТАНОВКИ ОБЯЗАТЕЛЕН. Первый: подставляемый
+    абзац обязан САМ попадать в выборку сканера — иначе контроль подал бы
+    правилу текст, которого оно не видит, и «прошёл» бы на дереве, которого не
+    трогал. Второй: подставленное дерево обязано отличаться от исходного.
+
+    ⚠️ КОНТРОЛЬ ЗЕЛЕН И ДО ПРАВКИ ПРОЗЫ, И ПОСЛЕ НЕЁ, И ЭТО НАМЕРЕННО. Он
+    доказывает СВОЙСТВО ПРАВИЛА, а не состояние дерева: досадка действующей
+    формы во ВСЕ места делает его высказывание одинаковым по обе стороны
+    перехода цвета.
+    """
+    claims = _toggle_claim_blocks()
+    assert claims, "выборка пуста — контролю нечего подставлять"
+
+    # ПЕРВЫЙ ПРЕДОХРАНИТЕЛЬ: подставляемый абзац виден сканеру и нарушает обе
+    # половины несущего утверждения.
+    assert TOGGLE_SUBJECT_RE.search(TOGGLE_CLAIM_CONTROL_BLOCK) and (
+        TOGGLE_IDEMPOTENCY_RE.search(TOGGLE_CLAIM_CONTROL_BLOCK)
+    ), "подставляемый абзац не попадает в выборку сканера — контроль слеп"
+    assert not TOGGLE_ACTING_FORM_RE.search(TOGGLE_CLAIM_CONTROL_BLOCK), (
+        "подставляемый абзац называет действующую форму — краснеть ему не с чего"
+    )
+    assert TOGGLE_REMOVED_FORM_RE.search(TOGGLE_CLAIM_CONTROL_BLOCK) and not (
+        CHRONICLE_FRAME_RE.search(TOGGLE_CLAIM_CONTROL_BLOCK)
+    ), "подставляемый абзац несёт летописную рамку — он был бы законен"
+
+    # ПОДСТАВЛЕННОЕ ДЕРЕВО: действующая форма названа ВЕЗДЕ, и всякое
+    # упоминание снятой обрамлено. Иначе краснота ниже взялась бы не из
+    # подставленного абзаца, а из остатков живой прозы.
+    planted = {
+        site: [
+            f"{block}\nПОДСТАВЛЕНО КОНТРОЛЕМ: обработчик ПРИСВАИВАЕТ присланное "
+            f"значение (план 09-18)."
+            for block in blocks
+        ]
+        for site, blocks in claims.items()
+    }
+
+    # ВТОРОЙ ПРЕДОХРАНИТЕЛЬ: подстановка действительно что-то изменила.
+    assert planted != claims, (
+        "подстановка ничего не изменила — контроль «проходит» на дереве, "
+        "которого не трогал"
+    )
+    assert not _claims_not_naming_the_acting_form(planted), (
+        "правило краснеет на дереве, где действующая форма названа ВЕЗДЕ: "
+        "краснота ниже взялась бы не из подставленного абзаца"
+    )
+    assert not _claims_naming_the_removed_form_unframed(planted), (
+        "правило краснеет на дереве, где всякое упоминание снятой формы "
+        "обрамлено: краснота ниже взялась бы не из подставленного абзаца"
+    )
+
+    victim = sorted(claims)[0]
+    reddened = {site: list(blocks) for site, blocks in planted.items()}
+    reddened[victim] = reddened[victim] + [TOGGLE_CLAIM_CONTROL_BLOCK]
+
+    silent = _claims_not_naming_the_acting_form(reddened)
+    assert silent == {victim}, (
+        f"правило НЕ покраснело на дереве, где в `{victim}` возвращена "
+        f"формулировка о снятой форме: мест без действующего механизма "
+        f"{sorted(silent)} вместо ровно одного. Правило без зубов зелено по "
+        f"построению."
+    )
+    unframed = _claims_naming_the_removed_form_unframed(reddened)
+    assert unframed == {victim}, (
+        f"вторая половина несущего утверждения слепа: мест, называющих снятую "
+        f"форму без летописной рамки, {sorted(unframed)} вместо ровно одного"
+    )
+
+    assert _toggle_claim_blocks() == claims, (
+        "живое дерево изменилось при доказательстве зубов — контроль правит то, "
+        "что проверяет"
+    )
+
+
+# =============================================================================
+# План 09-15, Задача 3: МАРШРУТ ПОРЦИИ НЕ ОТВЕЧАЕТ ЦЕЛЫМ ДОКУМЕНТОМ (WR-04)
+# =============================================================================
+#
+# ЧТО ЗДЕСЬ ЗАКРЕПЛЯЕТСЯ. Ответ маршрута порции приезжает В СЕРЕДИНУ
+# СУЩЕСТВУЮЩЕГО ДОКУМЕНТА: сентинел подменяет им себя. Обе ветки отказа
+# отвечали собственным перенаправлением — на адрес входа при истёкшей сессии и
+# на список аккаунтов при чужом аккаунте.
+#
+# ПОЧЕМУ ЭТО ОТКАЗ, А НЕ АККУРАТНОСТЬ. XHR следует за перенаправлением
+# ПРОЗРАЧНО: слой письма получает 200 и ЦЕЛЫЙ документ страницы входа — и
+# вклеивает его в середину списка. В документе оказывается вторая форма входа и
+# ВТОРОЙ НАБОР ИДЕНТИФИКАТОРОВ, то есть уникальность `id` документа ломается тем
+# же способом, что и в CR-01, — а на ней стоит КАЖДЫЙ `hx-target` и КАЖДЫЙ
+# `hx-swap-oob` экрана. Признак отказа тот же молчаливый: 200 и чистая консоль.
+#
+# СОСЕДНИЙ МАРШРУТ ОТВЕРГАЕТ РОВНО ЭТО ПРЯМЫМ ТЕКСТОМ. `account_groups_sync_status`
+# отвечает на отказ ПУСТЫМ ответом и объясняет почему: «редирект на страницу
+# входа вернул бы в подменяемый блок целую страницу логина». Фрагментному
+# маршруту досталось то же правило, а не другое.
+#
+# ПОЧЕМУ ПРАВИЛО РАЗЛОЖЕНО НА ЧЕТЫРЕ ФУНКЦИИ, А НЕ СОБРАНО В ОДНУ. Фикстура
+# `htmx_client` возвращает ТОТ ЖЕ объект клиента, что и `client`, и выставляет
+# признак htmx всему тесту; «с признаком» и «без признака» в одной функции
+# неисполнимы. Все четыре отбираются одним `-k "portion_route_never_answers"`.
+
+
+@pytest.mark.asyncio
+async def test_the_portion_route_never_answers_with_a_whole_document(
+    htmx_client: AsyncClient, db_session: AsyncSession, auth_headers: dict
+):
+    """НЕСУЩЕЕ: истёкшая сессия не приносит в середину списка документ (WR-04).
+
+    ⚠️ `htmx_client` СЛЕДУЕТ ЗА ПЕРЕНАПРАВЛЕНИЕМ НЕЗАМЕТНО, КАК БРАУЗЕР, И В
+    ЭТОМ ВЕСЬ ПРЕДМЕТ. Собственное перенаправление маршрута придёт сюда кодом
+    200 и телом страницы входа — ровно тем, что слой письма вклеит в список.
+    Отличить его от честного фрагмента можно только по отсутствию документа.
+    """
+    account = await _seed_account(db_session)
+    await _seed_group(db_session, account, "Группа истёкшей сессии")
+
+    response = await htmx_client.get(
+        f"/accounts/{account.id}/groups/partial?limit=30"
+    )
+
+    assert "<!DOCTYPE" not in response.text, (
+        "в середину списка приехал ЦЕЛЫЙ ДОКУМЕНТ: маршрут ответил собственным "
+        "перенаправлением, слой письма прошёл по нему прозрачно и получил "
+        "страницу входа — вместе со вторым набором идентификаторов и второй "
+        "формой входа. Уникальность id документа ломается тем же способом, что "
+        "и в CR-01, а на ней стоит каждый hx-target и каждый hx-swap-oob экрана"
+    )
+    assert response.status_code == 204, (
+        f"отказ пришёл кодом {response.status_code}: переход обязан сообщаться "
+        f"ЗАГОЛОВКОМ, а не телом"
+    )
+    assert response.headers["HX-Location"] == "/login"
+    assert not response.content, "у ответа 204 появилось тело"
+
+
+@pytest.mark.asyncio
+async def test_the_portion_route_never_answers_a_foreign_account_with_a_document(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """Вторая ветка отказа идёт ТЕМ ЖЕ путём, а не остаётся единственной своей.
+
+    Чужой аккаунт — второе собственное перенаправление маршрута (на список
+    аккаунтов). Оставить переведённой одну ветку значило бы починить половину
+    отказа: вторая продолжила бы вклеивать целый документ в середину списка.
+    """
+    foreign_user = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=foreign_user.id)
+    await _seed_group(
+        db_session, foreign_account, "Чужая группа порции", user_id=foreign_user.id
+    )
+
+    response = await htmx_client.get(
+        f"/accounts/{foreign_account.id}/groups/partial?limit=30"
+    )
+
+    assert "<!DOCTYPE" not in response.text, (
+        "в середину списка приехал ЦЕЛЫЙ ДОКУМЕНТ на ветке чужого аккаунта: "
+        "переведена только половина отказа"
+    )
+    assert response.status_code == 204, (
+        f"отказ по чужому аккаунту пришёл кодом {response.status_code}"
+    )
+    assert response.headers["HX-Location"] == "/accounts"
+    assert "Чужая группа порции" not in response.text
+    assert not _row_ids(response.text)
+
+
+@pytest.mark.asyncio
+async def test_the_portion_route_never_answers_a_request_without_htmx_with_a_fragment(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict
+):
+    """ПУТЬ ДЕГРАДАЦИИ НЕ ДВИНУЛСЯ: без признака htmx отказ — прежние 302.
+
+    Половина пары по идиоме SP-3. Перевод обеих веток на слой ответа не имеет
+    права поменять ответ человеку без JavaScript: он по-прежнему обязан
+    получить перенаправление на адрес входа, а не пустой ответ и не фрагмент.
+    """
+    account = await _seed_account(db_session)
+
+    response = await client.get(
+        f"/accounts/{account.id}/groups/partial?limit=30", follow_redirects=False
+    )
+
+    assert response.status_code == 302, (
+        f"запрос без признака htmx получил {response.status_code} — путь "
+        f"деградации маршрута порции перестал быть прежним"
+    )
+    assert response.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_the_portion_route_never_answers_a_happy_request_with_a_redirect(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession
+):
+    """СЧАСТЛИВЫЙ ПУТЬ НЕ ТРОНУТ: порция своего аккаунта отдаёт строки и курсор.
+
+    ⚠️ БЕЗ ЭТОЙ ПОЛОВИНЫ ПЕРЕВОД ОБЕИХ ВЕТОК НА СЛОЙ ОТВЕТА БЫЛ БЫ ПРОВЕРЕН
+    ТОЛЬКО НА ОТКАЗАХ. Обработчик, ушедший в слой ответа целиком, отвечал бы 204
+    и на успешный запрос — и прокрутка молча перестала бы дочитывать список. До
+    этого правила ни один тест файла не звал маршрут порции С ПРИЗНАКОМ htmx.
+    """
+    account = await _seed_account(db_session)
+    seeded = await _seed_many(
+        db_session, account, [f"Группа {i:02d}" for i in range(35)]
+    )
+
+    page = (await authed_client.get(f"/accounts/{account.id}/groups")).text
+    response = await htmx_client.get(_sentinels(page)[0])
+
+    assert response.status_code == 200, (
+        f"счастливый путь порции ответил {response.status_code} вместо строк"
+    )
+    assert "<!DOCTYPE" not in response.text, (
+        "порция своего аккаунта приехала целым документом"
+    )
+    assert _row_ids(response.text) == [group.id for group in seeded[30:]], (
+        "порция отдала не продолжение списка"
+    )

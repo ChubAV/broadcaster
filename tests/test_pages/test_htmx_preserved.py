@@ -168,18 +168,30 @@ def _sentinel_urls(html: str) -> list[str]:
     return SENTINEL_RE.findall(html)
 
 
-def _sentinel_offset(html: str) -> int:
-    """Смещение следующего сентинела.
+# Курсор бесконечной прокрутки: ИМЯ параметра и его величина. Форм у курсора в
+# проекте ДВЕ, и обе законны:
+#   * `offset` — порядковый номер первой недочитанной строки (разделы объявлений,
+#     расписаний, истории, аккаунтов);
+#   * `after_id` — КЛЮЧ последней отрисованной строки (экран групп аккаунта,
+#     план 09-13, решение владельца `keyset`).
+# Утверждение цепочки одно на обе формы: следующий курсор СТРОГО БОЛЬШЕ
+# нынешнего. Тест, знающий только про `offset`, на второй форме краснел бы «нет
+# смещения» — то есть обвинял бы форму вместо разорванной цепочки.
+CURSOR_RE = re.compile(r"(?:offset|after_id)=(\d+)")
+CURSOR_NAME_RE = re.compile(r"(offset|after_id)=\d+")
 
-    Извлекается регулярным выражением по URL, а не сравнением строки целиком:
-    URL меняется (из него уходит параметр компоновки), и тест обязан пережить
-    это изменение. Поэтому утверждается отношение «больше», а не значение.
-    """
+
+def _sentinel_cursor(html: str) -> tuple[str, int]:
+    """Имя и величина курсора последнего сентинела ответа."""
     urls = _sentinel_urls(html)
     assert urls, f"сентинел бесконечной прокрутки не найден в ответе:\n{html[:800]}"
-    match = re.search(r"offset=(\d+)", urls[-1])
-    assert match, f"в URL сентинела нет смещения: {urls[-1]}"
-    return int(match.group(1))
+    name = CURSOR_NAME_RE.search(urls[-1])
+    value = CURSOR_RE.search(urls[-1])
+    assert name and value, (
+        f"в URL сентинела нет курсора ни одной из известных форм "
+        f"(`offset`, `after_id`): {urls[-1]}"
+    )
+    return name.group(1), int(value.group(1))
 
 
 # --- UI-05: цепочка бесконечной прокрутки -----------------------------------
@@ -191,19 +203,42 @@ def _sentinel_offset(html: str) -> int:
 async def test_infinite_scroll_chain(
     authed_client: AsyncClient, db_session: AsyncSession, section: str
 ):
-    """Вторая страница выдачи несёт следующий сентинел с бо́льшим смещением.
+    """Вторая страница выдачи несёт следующий сентинел с бо́льшим курсором.
 
     Проверяется именно вторая страница: разрыв цепочки невидим на первом экране,
     а на малом объёме тестовых данных прокрутки может не быть вовсе.
+
+    ⚠️ ВТОРАЯ СТРАНИЦА БЕРЁТСЯ ПО АДРЕСУ, КОТОРЫЙ ДАЛА ПЕРВАЯ, А НЕ СОБИРАЕТСЯ
+    ТЕСТОМ (план 09-13). Прежде тест собирал адрес сам — `?offset={PAGE}` — и
+    тем самым знал форму курсора за раздел. Форм стало ДВЕ, и собранный тестом
+    адрес на экране групп попал бы в НЕИЗВЕСТНЫЙ маршруту параметр: тот молча
+    вернул бы ПЕРВУЮ страницу, а тест сообщил бы «в URL сентинела нет
+    смещения» — то есть обвинил бы форму вместо разорванной цепочки. Теперь
+    тест идёт по цепочке ровно так, как по ней идёт документ, и утверждает
+    единственное, что цепочка обязана давать при любой форме курсора: следующий
+    курсор СТРОГО БОЛЬШЕ нынешнего, и ФОРМА его по дороге не меняется.
     """
     base = await _seed_section(db_session, section)
 
-    response = await authed_client.get(
-        f"{base}/partial?offset={PAGE}&limit={PAGE}&layout=cards"
-    )
-    assert response.status_code == 200, section
+    first = await authed_client.get(f"{base}/partial?limit={PAGE}&layout=cards")
+    assert first.status_code == 200, section
+    first_name, first_value = _sentinel_cursor(first.text)
 
-    assert _sentinel_offset(response.text) > PAGE, section
+    response = await authed_client.get(_sentinel_urls(first.text)[-1])
+    assert response.status_code == 200, section
+    second_name, second_value = _sentinel_cursor(response.text)
+
+    assert second_name == first_name, (
+        f"{section}: форма курсора сменилась по дороге — первая страница дала "
+        f"`{first_name}`, вторая `{second_name}`; документ понесёт адрес, "
+        f"который маршрут прочитает не тем параметром"
+    )
+    assert second_value > first_value, (
+        f"{section}: курсор не продвинулся — первая страница дала "
+        f"`{first_name}={first_value}`, вторая `{second_name}={second_value}`. "
+        f"Цепочка прокрутки замкнулась на месте, и список дочитывается вечно "
+        f"одними и теми же строками"
+    )
 
 
 @pytest.mark.asyncio
