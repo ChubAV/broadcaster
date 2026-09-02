@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 12
+open_count: 15
 waived_count: 1
 fixed_count: 4
-total_count: 17
-last_updated: 2026-09-02T14:59:42.909Z
+total_count: 20
+last_updated: 2026-09-02T15:03:33.140Z
 ---
 
 # Broken Windows Ledger
@@ -32,6 +32,9 @@ last_updated: 2026-09-02T14:59:42.909Z
 | 15 | 09 | todo | .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/deferred-items.md |  | DEF-09-02 — «Отмена» панели подтверждения закрывает панель, но летящий запрос удаления не отменяет; назначенная Фаза 10 | open |  | 2026-08-31T07:43:11.328Z |  |
 | 16 | 09 | deviation | .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md |  | Проверка 6.3 второго круга снята в две части (Slow 3G в полёте, Offline после отказа) — отступление от порядка шагов UAT, оговорка О-1 | open |  | 2026-08-31T07:43:11.798Z |  |
 | 17 | 09 | deviation | .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md |  | Стенд UAT9- не был убран владельцем: сообщено groups=0, измерено groups=32 accounts=2; уборка выполнена исполнителем, оговорка О-4 | open |  | 2026-08-31T07:43:12.216Z |  |
+| 18 | 09 | unrun-verify | .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md |  | Оговорка О-6 четвёртого круга: название последней видимой строки (шаг 4.1.9) владелец дословно НЕ транскрибировал; сверка 4.1.14 проведена и расхождений не дала, но повторяемость шага ограничена — следующий обход не сможет опереться на выписанное имя | open |  | 2026-09-02T15:03:20.319Z |  |
+| 19 | 09 | unrun-verify | .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md |  | Оговорка О-7 четвёртого круга: у шагов 4.1.11 и 4.1.12 нет литеральных значений (вкладка закрыта до транскрипции) — прямого ответа про прокрутку после удаления и вывода document.documentElement.className в отметке НЕТ, стоит вердикт владельца. Литералы не сочинены. Механизм компенсаторно измерен буквальными выражениями шагом 4.2.6 на более опасной ветке | open |  | 2026-09-02T15:03:26.333Z |  |
+| 20 | 09 | deviation | .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md |  | Оговорка О-8 четвёртого круга: обход проведён на ПРОДЕ https://broadcaster.all-torgi.ru (аккаунт 53), а не на localhost по букве раздела «Как привести стенд»; посев и уборка шли против БОЕВОЙ базы 192.168.0.9:5432/broadcaster. Поколение дерева подтверждено тремя пробами в консоли; стенд убран и проверен машинно (UAT9- rows: groups=0 accounts=0) | open |  | 2026-09-02T15:03:33.140Z |  |
 
 ````json
 [
@@ -237,6 +240,42 @@ last_updated: 2026-09-02T14:59:42.909Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-31T07:43:12.216Z",
+    "resolved_at": null
+  },
+  {
+    "id": 18,
+    "kind": "unrun-verify",
+    "phase": "09",
+    "file": ".planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md",
+    "line": null,
+    "description": "Оговорка О-6 четвёртого круга: название последней видимой строки (шаг 4.1.9) владелец дословно НЕ транскрибировал; сверка 4.1.14 проведена и расхождений не дала, но повторяемость шага ограничена — следующий обход не сможет опереться на выписанное имя",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-02T15:03:20.319Z",
+    "resolved_at": null
+  },
+  {
+    "id": 19,
+    "kind": "unrun-verify",
+    "phase": "09",
+    "file": ".planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md",
+    "line": null,
+    "description": "Оговорка О-7 четвёртого круга: у шагов 4.1.11 и 4.1.12 нет литеральных значений (вкладка закрыта до транскрипции) — прямого ответа про прокрутку после удаления и вывода document.documentElement.className в отметке НЕТ, стоит вердикт владельца. Литералы не сочинены. Механизм компенсаторно измерен буквальными выражениями шагом 4.2.6 на более опасной ветке",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-02T15:03:26.333Z",
+    "resolved_at": null
+  },
+  {
+    "id": 20,
+    "kind": "deviation",
+    "phase": "09",
+    "file": ".planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md",
+    "line": null,
+    "description": "Оговорка О-8 четвёртого круга: обход проведён на ПРОДЕ https://broadcaster.all-torgi.ru (аккаунт 53), а не на localhost по букве раздела «Как привести стенд»; посев и уборка шли против БОЕВОЙ базы 192.168.0.9:5432/broadcaster. Поколение дерева подтверждено тремя пробами в консоли; стенд убран и проверен машинно (UAT9- rows: groups=0 accounts=0)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-02T15:03:33.140Z",
     "resolved_at": null
   }
 ]
