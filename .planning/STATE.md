@@ -327,9 +327,13 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-08-31T07:42:18.977Z
-Stopped at: Completed 09-12-PLAN.md
-Resume file: None
+Last session: 2026-09-02
+Stopped at: Сессия возобновлена по HANDOFF.json — 4-й круг закрытия гейпов Фазы 09, план 09-17 задача 3/3
+Resume file: `.planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/.continue-here.md` (+ `.planning/HANDOFF.json`)
+
+**Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
+
+**Отклонение диспатча, принятое владельцем 2026-09-02:** задача 3 доисполняется субагентом БЕЗ `isolation="worktree"`, работающим в СУЩЕСТВУЮЩЕМ worktree `agent-a217c9b7b59eb5230`. Основание: гейт `executor-isolation-dispatch` требует `isolation="worktree"` для `gsd-executor`, но свежий worktree форкается от `bb9113e`, где нет ни `2f9875f`, ни заведённого им тест-файла (+396) — гринить было бы нечего. Обе записанные развилки `.continue-here.md` при этом соблюдены: основное дерево не трогается, SUMMARY со `status: halted` в ветку фазы не сливается.
 
 ## Operator Next Steps
 
