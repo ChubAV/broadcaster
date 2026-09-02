@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 14
+open_count: 12
 waived_count: 1
-fixed_count: 2
+fixed_count: 4
 total_count: 17
-last_updated: 2026-08-31T07:43:12.216Z
+last_updated: 2026-09-02T14:59:42.909Z
 ---
 
 # Broken Windows Ledger
@@ -26,8 +26,8 @@ last_updated: 2026-08-31T07:43:12.216Z
 | 9 | quick-260826-6jq | deviation | tests/test_planning/test_state_progress_matches_roadmap.py |  | ПРЕД-СУЩЕСТВУЮЩЕЕ, вне предмета быстрой задачи 260826-6jq. Тест выводит счёт планов из отметок .planning/ROADMAP.md и сверяет с progress.total_plans / progress.completed_plans во frontmatter .planning/STATE.md: выводится 0, записано 110. Оба коммита задачи (a97a583, ba169b7) не тронули .planning ни одним байтом (git diff --stat HEAD~2 HEAD -- .planning пуст). ROADMAP.md обнулён коммитом 3d1e672 'chore: archive v2.0 milestone files' — строки фаз уехали в milestones/v2.0-phases/, и выводить счёт стало не из чего. НЕ починено намеренно: правка STATE.md ради зелёного занизила бы счёт закрытой вехи до нуля, потеряв запись 110/110, которую сама STATE.md объясняет как выправленную при закрытии вехи. Решает тот, кто закрывает веху (/gsd-new-milestone или /gsd-health). | open |  | 2026-08-26T05:45:08.562Z |  |
 | 10 | quick-260826-jql | unrun-verify | app/messengers/telegram_user.py |  | Боевая проверка отправки не выполнена: объявление с одной картинкой в реальную Telegram-группу и русский текст потери доступа в истории отправок требуют живого сервера (D5, human_judgment) | open |  | 2026-08-26T14:50:52.666Z |  |
 | 11 | 07 | unrun-verify | .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-UAT.md |  | Ручной обход 07-UAT.md создан, отметки НЕ заполнены: поведенческие половины FOUND-01 и QUAL-05 закрываются глазами на приёмке фазы. Процедура пункта 1 была НЕИСПОЛНИМА как написана (отправляла наблюдать ключ в localStorage, где отгруженный 2.0.10 его не держит) и исправлена планом 07-04: предмет записи перестал быть недостижимым, но запись остаётся ОТКРЫТОЙ — закрывает её человек, прошедший обход | open |  | 2026-08-27T10:23:15.664Z |  |
-| 12 | 09 | unrun-verify | app/templates/account_groups/includes/group_row.html |  | Строка консоли 7.1 (hx-include) после правки плана 09-11 в браузере повторно НЕ наблюдалась — снятие DIV-09-01 утверждается машинным правилом, а не глазом | open |  | 2026-08-31T04:22:01.251Z |  |
-| 13 | 09 | deviation | tests/test_pages/test_account_groups.py |  | Второе следствие DIV-09-01 остаётся открытым под записью INCLUDE_TARGET_EXCEPTIONS['group-list-sentinel'], назначенная фаза — Фаза 15 | open |  | 2026-08-31T04:22:01.682Z |  |
+| 12 | 09 | unrun-verify | app/templates/account_groups/includes/group_row.html |  | Строка консоли 7.1 (hx-include) после правки плана 09-11 в браузере повторно НЕ наблюдалась — снятие DIV-09-01 утверждается машинным правилом, а не глазом | fixed |  | 2026-08-31T04:22:01.251Z | 2026-09-02T14:59:39.889Z |
+| 13 | 09 | deviation | tests/test_pages/test_account_groups.py |  | Второе следствие DIV-09-01 остаётся открытым под записью INCLUDE_TARGET_EXCEPTIONS['group-list-sentinel'], назначенная фаза — Фаза 15 | fixed |  | 2026-08-31T04:22:01.682Z | 2026-09-02T14:59:42.909Z |
 | 14 | 09 | deviation | tests/test_pages/test_admin_panel.py |  | DEF-09-01: test_the_overview_error_number_matches_the_users_own_dashboard краснеет в окно 00:00-05:00 из-за расхождения суточного и календарного окон; к правке плана 09-11 не относится | open |  | 2026-08-31T04:22:02.108Z |  |
 | 15 | 09 | todo | .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/deferred-items.md |  | DEF-09-02 — «Отмена» панели подтверждения закрывает панель, но летящий запрос удаления не отменяет; назначенная Фаза 10 | open |  | 2026-08-31T07:43:11.328Z |  |
 | 16 | 09 | deviation | .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-UAT.md |  | Проверка 6.3 второго круга снята в две части (Slow 3G в полёте, Offline после отказа) — отступление от порядка шагов UAT, оговорка О-1 | open |  | 2026-08-31T07:43:11.798Z |  |
@@ -174,10 +174,10 @@ last_updated: 2026-08-31T07:43:12.216Z
     "file": "app/templates/account_groups/includes/group_row.html",
     "line": null,
     "description": "Строка консоли 7.1 (hx-include) после правки плана 09-11 в браузере повторно НЕ наблюдалась — снятие DIV-09-01 утверждается машинным правилом, а не глазом",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-08-31T04:22:01.251Z",
-    "resolved_at": null
+    "resolved_at": "2026-09-02T14:59:39.889Z"
   },
   {
     "id": 13,
@@ -186,10 +186,10 @@ last_updated: 2026-08-31T07:43:12.216Z
     "file": "tests/test_pages/test_account_groups.py",
     "line": null,
     "description": "Второе следствие DIV-09-01 остаётся открытым под записью INCLUDE_TARGET_EXCEPTIONS['group-list-sentinel'], назначенная фаза — Фаза 15",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-08-31T04:22:01.682Z",
-    "resolved_at": null
+    "resolved_at": "2026-09-02T14:59:42.909Z"
   },
   {
     "id": 14,
