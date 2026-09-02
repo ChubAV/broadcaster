@@ -23,7 +23,7 @@ from app.models.subscription import Subscription
 from app.models.user import User
 from app.pages import notices
 from app.pages.common import get_shell_context
-from tests.conftest import seed_group
+from tests.conftest import run_node_script, seed_group
 
 
 # --- UI-01: своя статика вместо CDN -----------------------------------------
@@ -2183,6 +2183,89 @@ def _scratch_banner(tmp_path, text: str) -> Path:
     return scratch
 
 
+# --- Число регистраций обработчиков (WR-05, план 09-19) -----------------------
+#
+# ⚠️ ЧТО ЗДЕСЬ ИЗМЕРЯЕТСЯ И ПОЧЕМУ ЭТО НЕ СЛЕДУЕТ ИЗ РАЗМЕТКИ. `allowScriptTags`
+# в проекте остаётся умолчанием `true` (`includes/htmx_config.html:87`, и
+# мета-блок конфигурации его не переопределяет), а переход `HX-Location`
+# (`app/pages/htmx.py`) документ НЕ ПЕРЕЗАГРУЖАЕТ: он забирает страницу
+# запросом и вклеивает её. Значит инлайн-сценарий этого включения исполняется
+# ЗАНОВО на каждом таком переходе и вешает слушателей ещё раз. Оба обработчика
+# идемпотентны (`removeAttribute('hidden')`), поэтому видимого отказа нет — но
+# канал этот ОБЩИЙ для обеих оболочек и для всех сорока семи форм вехи, и число
+# слушателей на живом узле тела документа росло бы всю сессию (T-09-19-01).
+#
+# ⚠️ ЧТО ПРАВИЛО ДОКАЗЫВАЕТ, А ЧТО НЕТ. Оно доказывает, что ПОВТОРНОЕ
+# ИСПОЛНЕНИЕ сценария не удваивает регистраций. Оно НЕ доказывает, что узел
+# тела переживает подмену в браузере: ревизия назвала эту неопределённость
+# прямо, и правило шире неё не становится. Замер счётчиком регистраций в живом
+# браузере остаётся человеку — проверка 4.2 плана 09-20.
+
+# ⚠️ ЧИСЛО ИЗМЕРЕНО ПО ДЕРЕВУ, А НЕ ВЗЯТО ИЗ ПАМЯТИ (идиома SP-1,
+# 09-PATTERNS.md): в сценарии включения ровно два вызова регистрации — по
+# одному на каждое из имён FAILURE_BANNER_EVENTS. Без этого числа правило
+# «после двух исполнений столько же, сколько после одного» зеленело бы ВАКУУМОМ
+# — на сценарии, не вешающем НИЧЕГО: ноль равен нулю.
+FAILURE_BANNER_HANDLERS_MEASURED = 2
+
+# Гарнир регистраций: стаб-узел тела документа со счётчиком. Стаб неймитирующий
+# ровно там, где предмет, — счётчик настоящий; всё остальное (поиск узла по
+# идентификатору, снятие атрибута) предметом не является и стабится.
+FAILURE_BANNER_REGISTRATION_HARNESS = """
+'use strict';
+const SOURCE = __SOURCE__;
+const RUNS = __RUNS__;
+let registrations = 0;
+const body = {
+  dataset: {},
+  addEventListener: function () { registrations += 1; }
+};
+globalThis.document = {
+  body: body,
+  getElementById: function () { return { removeAttribute: function () {} }; }
+};
+const script = new Function(SOURCE);
+for (let i = 0; i < RUNS; i += 1) { script(); }
+process.stdout.write(JSON.stringify({ registrations: registrations }));
+"""
+
+_BANNER_SCRIPT_RE = re.compile(r"<script>(.*?)</script>", re.DOTALL)
+
+# Узел, к которому вешаются слушатели, и узел, на котором стои́т признак
+# однократности. Разбирается ПРИЁМНИК вызова, а не факт вхождения строки:
+# предмет правила — совпадение двух узлов, а не наличие двух слов.
+_LISTENER_HOST_RE = re.compile(r"([A-Za-z_$][\w.$]*)\.addEventListener\s*\(")
+_GUARD_HOST_RE = re.compile(r"([A-Za-z_$][\w.$]*)\.dataset\s*\.\s*(\w+)")
+
+
+def _failure_banner_script(path: Path) -> str:
+    """Исходник инлайн-сценария включения — и ничего кроме него.
+
+    Путь параметром — по той же причине, что у ``_failure_banner_source``:
+    иначе подать гейту изменённую копию и потребовать красноты было бы
+    невозможно.
+    """
+    found = _BANNER_SCRIPT_RE.findall(_failure_banner_source(path))
+    assert len(found) == 1, (
+        f"{FAILURE_BANNER_OWNER}: блоков сценария в файле {len(found)}, а не "
+        "один — разборщик рассчитан на единственный, и выбор блока стал бы "
+        "молчаливым"
+    )
+    return found[0]
+
+
+def _failure_banner_registration_count(path: Path, runs: int = 2) -> int:
+    """Число регистраций обработчиков после ``runs`` исполнений сценария.
+
+    Исполняется исходник ПО НАЗВАННОМУ ПУТИ — ровно затем, чтобы контроль мог
+    подать изменённую копию и потребовать удвоения.
+    """
+    harness = FAILURE_BANNER_REGISTRATION_HARNESS.replace(
+        "__SOURCE__", json.dumps(_failure_banner_script(path))
+    ).replace("__RUNS__", str(runs))
+    return run_node_script(harness)["registrations"]
+
+
 def _assert_both_banners_delivered(html: str, shell: str) -> None:
     """Обе заготовки приехали по одному разу и приехали СКРЫТЫМИ."""
     for banner_id in FAILURE_BANNER_IDS:
@@ -2231,6 +2314,130 @@ def test_the_failure_banner_carries_both_handlers():
     assert missing == (), (
         f"{FAILURE_BANNER_OWNER}: в сценарии нет обработчика(ов) {missing} — "
         "видимость отказа потеряла одну из двух своих половин"
+    )
+
+
+def test_the_failure_banner_registers_its_handlers_once_per_body():
+    """ПОВЕДЕНЧЕСКОЕ: два исполнения сценария дают столько же регистраций.
+
+    Переход `HX-Location` документ не перезагружает, а вклеивает страницу
+    запросом — сценарий исполняется ЗАНОВО. Без признака однократности число
+    слушателей на живом узле тела документа росло бы всю сессию, а канал этот
+    общий для обеих оболочек и для всех сорока семи форм вехи (WR-05,
+    T-09-19-01).
+
+    ⚠️ АНТИВАКУУМНОЕ УТВЕРЖДЕНИЕ СТОИ́Т ПЕРВЫМ. Без него правило зеленело бы на
+    сценарии, не вешающем НИЧЕГО: после двух исполнений ноль равен нулю после
+    одного, и «регистрация однократна» было бы неотличимо от «регистрации нет».
+
+    ⚠️ ЧЕГО ЭТО ПРАВИЛО НЕ ДОКАЗЫВАЕТ: что узел тела переживает подмену в
+    БРАУЗЕРЕ. Ревизия назвала эту неопределённость прямо; замер счётчиком
+    регистраций в живом браузере — проверка 4.2 плана 09-20.
+    """
+    path = _failure_banner_path()
+
+    after_one = _failure_banner_registration_count(path, runs=1)
+    assert after_one == FAILURE_BANNER_HANDLERS_MEASURED > 0, (
+        f"{FAILURE_BANNER_OWNER}: одно исполнение сценария дало {after_one} "
+        f"регистраций, а измерено {FAILURE_BANNER_HANDLERS_MEASURED} — правило "
+        "об однократности проверяло бы сценарий, который вешает не то число "
+        "обработчиков (или не вешает ни одного)"
+    )
+
+    after_two = _failure_banner_registration_count(path, runs=2)
+    assert after_two == FAILURE_BANNER_HANDLERS_MEASURED, (
+        f"{FAILURE_BANNER_OWNER}: два исполнения сценария дали {after_two} "
+        f"регистраций вместо {FAILURE_BANNER_HANDLERS_MEASURED} — на каждом "
+        "переходе HX-Location общий канал видимости отказа вешает слушателей "
+        "ЗАНОВО, и число их растёт всю сессию"
+    )
+
+
+def test_the_failure_banner_guard_lives_on_the_node_it_wires():
+    """Признак однократности стои́т на ТОМ ЖЕ узле, к которому вешаются слушатели.
+
+    ⚠️ ЭТО НЕ ПЕДАНТИЗМ, А ОТДЕЛЬНАЯ УГРОЗА (T-09-19-02). Признак, поставленный
+    на документ или на окно, пережил бы подмену узла тела и оставил бы НОВЫЙ
+    узел без обработчиков ВОВСЕ — человек перестал бы видеть отказы, и отказ
+    этот громче исходного накопления. Признак на самом узле означает: подмена
+    узла снимает и признак, и регистрация происходит ровно один раз на ЖИВОЙ
+    узел.
+
+    Разбирается ПРИЁМНИК вызова, а не факт вхождения слова: предмет — совпадение
+    двух узлов, а не наличие двух строк.
+    """
+    code = _failure_banner_code(_failure_banner_path())
+
+    listener_hosts = _LISTENER_HOST_RE.findall(code)
+    assert len(listener_hosts) == FAILURE_BANNER_HANDLERS_MEASURED, (
+        f"{FAILURE_BANNER_OWNER}: вызовов регистрации в сценарии "
+        f"{len(listener_hosts)}, а измерено {FAILURE_BANNER_HANDLERS_MEASURED} "
+        "— правило о совпадении узлов проверяло бы не тот сценарий"
+    )
+
+    guards = _GUARD_HOST_RE.findall(code)
+    assert guards, (
+        f"{FAILURE_BANNER_OWNER}: признака однократности в сценарии НЕТ — "
+        "обработчики вешаются заново на каждом переходе HX-Location (WR-05)"
+    )
+
+    flags = {name for _host, name in guards}
+    assert len(flags) == 1, (
+        f"{FAILURE_BANNER_OWNER}: признаков однократности в сценарии несколько "
+        f"({sorted(flags)}) — проверка и присвоение разъехались бы молча"
+    )
+
+    guard_hosts = {host for host, _name in guards}
+    assert guard_hosts == set(listener_hosts), (
+        f"{FAILURE_BANNER_OWNER}: признак однократности стои́т на "
+        f"{sorted(guard_hosts)}, а слушатели вешаются на "
+        f"{sorted(set(listener_hosts))} — подмена узла снимет слушателей, но "
+        "НЕ снимет признак, и новый узел останется без обработчиков вовсе "
+        "(T-09-19-02)"
+    )
+
+
+def test_control_negative_an_unguarded_banner_accumulates_listeners(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило однократности зелено ПРИЗНАКОМ, а не вакуумом.
+
+    Тот же замер на подставленной копии БЕЗ признака обязан дать удвоенное
+    число. Без этого контроля правило выше было бы совместимо с гарниром,
+    который исполняет сценарий один раз вместо двух, — и «однократность»
+    доказывалась бы ошибкой замера.
+    """
+    original = _failure_banner_source(_failure_banner_path())
+
+    negation = re.search(r"!\s*[A-Za-z_$][\w.$]*\.dataset\s*\.\s*\w+", original)
+    assert negation, (
+        "в настоящем файле нет проверки признака однократности — подставлять "
+        "нечего, и контроль ничего не доказал бы"
+    )
+
+    # Двойной предохранитель подстановки: якорь встречается ровно один раз, и
+    # результат отличается от исходника. Условие обращается в заведомо истинное,
+    # а не вырезается вместе с телом: снятым обязан быть ПРИЗНАК, а не
+    # регистрация.
+    anchor = negation.group(0)
+    assert original.count(anchor) == 1, (
+        f"якорь замены {anchor!r} встречается не один раз — подмена задела бы "
+        "чужую разметку"
+    )
+    unguarded = original.replace(anchor, "true")
+    assert unguarded != original, "подмена не сработала — якорь замены не найден"
+    assert unguarded.count("addEventListener") == FAILURE_BANNER_HANDLERS_MEASURED, (
+        "из подставленной копии исчезли вызовы регистрации: контроль перестал "
+        "доказывать накопление и стал доказывать пустоту"
+    )
+
+    doubled = _failure_banner_registration_count(
+        _scratch_banner(tmp_path, unguarded), runs=2
+    )
+
+    assert doubled == 2 * FAILURE_BANNER_HANDLERS_MEASURED, (
+        "КОПИЯ БЕЗ ПРИЗНАКА НЕ НАКОПИЛА СЛУШАТЕЛЕЙ: два исполнения дали "
+        f"{doubled} регистраций вместо {2 * FAILURE_BANNER_HANDLERS_MEASURED} "
+        "— значит замер не считает регистрации, и зелёное правило однократности "
+        "выше не доказывает ничего"
     )
 
 
