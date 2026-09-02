@@ -1414,6 +1414,45 @@ async def test_retry_launcher_survives_the_infinite_scroll_partial(
 # --- панель подтверждения -----------------------------------------------------
 
 
+def _retry_panel_form(html: str, log_id: int) -> str:
+    """Тело СОБСТВЕННОЙ формы панели подтверждения повтора — и ничего больше.
+
+    ⚠️ КОРЕНЬ ПАНЕЛИ ИЩЕТСЯ ЦЕЛИКОМ, А НЕ ПРЕФИКСОМ ЕЁ ИМЕНИ. Заголовок той же
+    панели несёт `id="history-retry-{N}-title"`, то есть тот же префикс: поиск
+    по префиксу нашёл бы СОБСТВЕННЫЙ заголовок панели. Корень — цифры и
+    закрывающая кавычка сразу за ними.
+
+    ⚠️ ПОИСК СОБСТВЕННОЙ ФОРМЫ ОГРАНИЧЕН СЛЕДУЮЩИМ КОРНЕМ ОКНА, И ЭТО НЕ ТО ЖЕ
+    САМОЕ, ЧТО ОКНО ДО СЛЕДУЮЩЕЙ ПАНЕЛИ. Возвращается тело формы ЭТОЙ панели;
+    граница нужна лишь затем, чтобы отсутствие собственной формы стало ОТКАЗОМ,
+    а не молчаливым захватом формы следующего окна. Без границы панель,
+    потерявшая форму, вернула бы чужую — ровно то, что здесь и запрещается.
+    """
+    start = html.find(f'id="history-retry-{log_id}"')
+    assert start != -1, (
+        "КОРНЯ ПАНЕЛИ подтверждения повтора в разметке нет: искали "
+        f'id="history-retry-{log_id}"'
+    )
+
+    following_modal = html.find('<div class="modal"', start)
+    limit = following_modal if following_modal != -1 else len(html)
+
+    form_start = html.find('<form class="modal__form"', start, limit)
+    assert form_start != -1, (
+        "У ПАНЕЛИ ПОВТОРА НЕТ СОБСТВЕННОЙ ФОРМЫ: корень "
+        f'id="history-retry-{log_id}" в разметке есть, а `<form '
+        'class="modal__form"` внутри него — нет'
+    )
+
+    form_end = html.find("</form>", form_start, limit)
+    assert form_end != -1, (
+        "СОБСТВЕННАЯ ФОРМА ПАНЕЛИ ПОВТОРА НЕ ЗАКРЫТА: открывающий тег внутри "
+        f'корня id="history-retry-{log_id}" есть, `</form>` за ним — нет'
+    )
+
+    return html[form_start:form_end]
+
+
 @pytest.mark.asyncio
 async def test_retry_confirmation_panel_carries_a_real_form(
     authed_client: AsyncClient, db_session: AsyncSession
@@ -1428,9 +1467,6 @@ async def test_retry_confirmation_panel_carries_a_real_form(
 
     html = (await authed_client.get("/history")).text
 
-    start = html.find(f'id="history-retry-{log.id}"')
-    assert start != -1, "панели подтверждения повтора в разметке нет"
-
     # ⚠️ ОКНО ВЫРЕЗАЕТСЯ ДО СЛЕДУЮЩЕЙ ПАНЕЛИ, А НЕ НА ФИКСИРОВАННУЮ ДЛИНУ
     # (план 09-13). Прежде здесь стояло `html[start : start + 2000]`, и число
     # это держалось на сегодняшней длине макроса окна подтверждения: добавка
@@ -1439,16 +1475,97 @@ async def test_retry_confirmation_panel_carries_a_real_form(
     # Граница по следующей панели описывает ровно то, что тест имеет в виду:
     # «эта панель, и не соседняя».
     #
-    # ⚠️ ГРАНИЦА ИЩЕТСЯ КОРНЕМ ПАНЕЛИ, А НЕ ПРЕФИКСОМ ЕЁ ИМЕНИ. Заголовок той же
-    # панели несёт `id="history-retry-{N}-title"`, то есть тот же префикс:
-    # поиск по префиксу обрезал бы окно на СОБСТВЕННОМ заголовке панели, и
-    # форма снова оказалась бы за границей. Корень — цифры и закрывающая
-    # кавычка сразу за ними.
-    following = re.compile(r'id="history-retry-\d+"').search(html, start + 1)
-    panel = html[start : following.start() if following else len(html)]
+    # ⚠️ ЛЕТОПИСЬ, ПЛАН 09-19 (WR-04). Абзац выше описывает СНЯТУЮ форму окна и
+    # оставлен как есть: правка была вынужденной и намерение формулировала
+    # верно. Реализация ему не соответствовала. Граница по СЛЕДУЮЩЕЙ панели
+    # уехала НАРУЖУ предмета: между панелью N и панелью N+1 лежит строка N+1 со
+    # своей формой-триггером повтора, и два утверждения из трёх (`method="post"`
+    # и `type="submit"`) стали удовлетворимы ЧУЖОЙ разметкой — панель,
+    # потерявшая собственную форму, оставляла их зелёными. Сегодня окно режется
+    # по СОБСТВЕННОЙ форме панели, и все три утверждения говорят об одной и той
+    # же форме; доказано отрицательным контролем ниже.
+    panel = _retry_panel_form(html, log.id)
     assert 'method="post"' in panel, panel[:400]
     assert f'action="/history/{log.id}/retry"' in panel, panel[:400]
     assert 'type="submit"' in panel, panel[:400]
+
+
+@pytest.mark.asyncio
+async def test_control_negative_a_panel_without_its_own_form_reddens(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ЧТО ДОКАЗЫВАЕТ: окно режется по СОБСТВЕННОЙ форме проверяемой панели.
+
+    Без этого контроля правило доказывало бы наличие формы у СОСЕДНЕЙ строки:
+    между панелью N и панелью N+1 в разметке лежит строка N+1 со своей
+    формой-триггером повтора, и утверждения `method="post"` и `type="submit"`
+    удовлетворимы ею — панель, потерявшая собственную форму, оставила бы их
+    зелёными (WR-04).
+
+    Подставленный документ собирается из настоящего: у проверяемой панели
+    вырезана СОБСТВЕННАЯ форма, разметка соседней строки не тронута.
+    """
+    user = await _current_user(db_session)
+    log, ad, group, _account = await _seed_retryable_with_ids(db_session, user.id)
+    neighbour = await _seed_log(
+        db_session, user.id, ad_id=ad.id, group_id=group.id
+    )
+
+    html = (await authed_client.get("/history")).text
+
+    # Проверяемой берётся та панель, за которой в документе ЕЩЁ ЕСТЬ соседняя:
+    # контроль обязан воспроизводить ровно ту разметку, на которой правило
+    # зеленело не по своей причине.
+    positions = {
+        candidate: html.find(f'id="history-retry-{candidate}"')
+        for candidate in (log.id, neighbour.id)
+    }
+    assert -1 not in positions.values(), "в документе нет обеих панелей повтора"
+    target = min(positions, key=positions.get)
+    other = neighbour.id if target == log.id else log.id
+
+    start = positions[target]
+    form_start = html.find('<form class="modal__form"', start)
+    assert form_start != -1, (
+        "у панели нет собственной формы уже в НАСТОЯЩЕМ документе — контроль "
+        "ничего не доказал бы"
+    )
+    form_end = html.find("</form>", form_start) + len("</form>")
+    own_form = html[form_start:form_end]
+
+    # Двойной предохранитель подстановки: якорь встречается ровно один раз, и
+    # результат отличается от исходника.
+    assert html.count(own_form) == 1, (
+        "якорь замены встречается не один раз — подмена задела бы чужую "
+        "разметку, и контроль доказывал бы не то"
+    )
+    doctored = html.replace(own_form, "")
+    assert doctored != html, "подмена не сработала — якорь замены не найден"
+
+    # Разметка соседней строки на месте: именно ею два утверждения из трёх и
+    # удовлетворялись бы, если окно уехало за границу панели.
+    assert f'action="/history/{other}/retry"' in doctored, (
+        "из подменённого документа исчезла и разметка соседней строки — "
+        "контроль перестал воспроизводить условие, ради которого собран"
+    )
+    assert 'method="post"' in doctored[start:], (
+        "в подменённом документе за проверяемой панелью не осталось чужой "
+        "формы — контроль перестал доказывать смещение окна"
+    )
+
+    try:
+        _retry_panel_form(doctored, target)
+    except AssertionError as exc:
+        assert "СОБСТВЕННОЙ ФОРМЫ" in str(exc), (
+            "окно упало не на том: контроль требует отказа именно по "
+            f"отсутствию собственной формы панели, а получил: {exc}"
+        )
+    else:
+        pytest.fail(
+            "ОКНО МОЛЧА ВЕРНУЛО ЧУЖУЮ РАЗМЕТКУ: панель без собственной формы "
+            "не уронила правило, а значит правило доказывает наличие формы у "
+            "СОСЕДНЕЙ строки, а не у проверяемой панели (WR-04)"
+        )
 
 
 @pytest.mark.asyncio

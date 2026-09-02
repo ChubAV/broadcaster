@@ -11,8 +11,6 @@
 
 import json
 import re
-import shutil
-import subprocess
 from html import unescape
 from pathlib import Path
 from typing import NamedTuple
@@ -20,6 +18,7 @@ from typing import NamedTuple
 import pytest
 
 from app.pages.common import templates
+from tests.conftest import run_node_script
 
 ENV = templates.env
 TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
@@ -1400,15 +1399,22 @@ APP_CSS = TEMPLATES_DIR.parent / "static" / "css" / "app.css"
 # положительного контроля, а не оставлена читателю.
 SCROLL_LOCK_CLASS = "is-modal-open"
 
-# Интерпретатор JS НОВОЙ ЗАВИСИМОСТЬЮ НЕ ЯВЛЯЕТСЯ: на нём собран `wa_worker/`,
-# и `justfile` несёт его рецепты (`wa-worker-build`, `wa-workers`).
-NODE_BIN = "node"
+# ⚠️ ИМЯ ИНТЕРПРЕТАТОРА (`NODE_BIN`) ПЕРЕЕХАЛО В `tests/conftest.py` ПЛАНОМ
+# 09-19 — вместе с самим запуском. Имя интерпретатора есть свойство ЗАПУСКА, а
+# не свойство панели подтверждения, и второй его экземпляр разошёлся бы с
+# первым молча. Здесь он больше не объявляется; собственного вызова подпроцесса
+# в файле не остаётся.
 
 MODAL_XDATA_RE = re.compile(r'x-data="(\{.*?\})"', re.DOTALL)
 
+# ⚠️ ГАРНИР ПОЛУЧАЕТ ПАВЛОАД ПОДСТАНОВКОЙ, А НЕ СТАНДАРТНЫМ ВВОДОМ (план
+# 09-19). Общий запуск `run_node_script` принимает ровно исходник и потоков в
+# подпроцесс не открывает: стандартный ввод был бы вторым каналом, о котором
+# знал бы один вызывающий из двух. Образец подстановки — `__PAYLOAD__`,
+# встречается ровно один раз, и единственность утверждается в `_run_modal_lifecycle`.
 MODAL_LIFECYCLE_HARNESS = """
 'use strict';
-const payload = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+const payload = __PAYLOAD__;
 const LOCK = payload.lock;
 const EXPRESSION = payload.expression;
 
@@ -1557,42 +1563,22 @@ def _xdata_with_dead_teardown(expression: str) -> str:
 def _run_modal_lifecycle(expression: str, scenario: str) -> dict:
     """Исполнить сценарий жизненного цикла панели в интерпретаторе JS.
 
-    ⚠️ ОТСУТСТВИЕ ИНТЕРПРЕТАТОРА РОНЯЕТ ПРАВИЛО ГРОМКО, А НЕ ПРОПУСКАЕТ ЕГО.
-    ``pytest.skip`` здесь не применяется НИ ПРИ КАКОЙ причине: пропущенное
-    правило неотличимо от зелёного, и фаза оплатила этот класс однажды (WARN-4
-    первого круга). Интерпретатор новой зависимостью не является — на нём
-    собран ``wa_worker/``, и ``justfile`` несёт его рецепты.
+    ⚠️ ЗАПУСК ОБЩИЙ, А НЕ СОБСТВЕННЫЙ (план 09-19). Подпроцесс поднимает
+    ``tests.conftest.run_node_script`` — единственный на проект. Там же живёт и
+    причина, по которой отсутствие интерпретатора РОНЯЕТ правило, а не
+    пропускает его: ``pytest.skip`` не применяется ни при какой причине, потому
+    что пропущенное правило неотличимо от зелёного (WARN-4 первого круга).
+    Здесь остаётся ровно то, что принадлежит ПАНЕЛИ: сборка павлоада и выбор
+    сценария.
     """
-    if shutil.which(NODE_BIN) is None:
-        pytest.fail(
-            f"интерпретатор JS `{NODE_BIN}` не найден в PATH, и правило сноса "
-            "панели исполнить нечем. Пропуск здесь запрещён: пропущенное "
-            "правило неотличимо от зелёного. Интерпретатор в проекте уже "
-            "есть — на нём собран wa_worker/, рецепты justfile: "
-            "wa-worker-build, wa-workers"
-        )
     payload = json.dumps(
         {"expression": expression, "scenario": scenario, "lock": SCROLL_LOCK_CLASS}
     )
-    proc = subprocess.run(
-        [NODE_BIN, "-e", MODAL_LIFECYCLE_HARNESS],
-        input=payload,
-        capture_output=True,
-        text=True,
-        timeout=60,
+    assert MODAL_LIFECYCLE_HARNESS.count("__PAYLOAD__") == 1, (
+        "образец подстановки павлоада встречается в гарнире не один раз — "
+        "подстановка стала бы молчаливой"
     )
-    if proc.returncode != 0:
-        pytest.fail(
-            f"гарнир жизненного цикла панели вернул код {proc.returncode} на "
-            f"сценарии {scenario!r}; вывод ошибки:\n{proc.stderr.strip()}"
-        )
-    try:
-        return json.loads(proc.stdout.strip())
-    except json.JSONDecodeError:  # pragma: no cover — диагностический путь
-        pytest.fail(
-            "гарнир не вернул вердикт разбираемой строкой; получено: "
-            f"{proc.stdout.strip()!r}"
-        )
+    return run_node_script(MODAL_LIFECYCLE_HARNESS.replace("__PAYLOAD__", payload))
 
 
 def test_the_panel_raises_the_scroll_lock_when_it_opens():
