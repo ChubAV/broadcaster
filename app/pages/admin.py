@@ -1749,11 +1749,11 @@ async def admin_impersonate(
             admin_user_id=admin.id,
             target_user_id=user_id,
         )
-        return RedirectResponse(url="/admin/users", status_code=302)
+        return await respond(request, redirect="/admin/users")
 
     if target_user.id == admin.id:
         logger.warning("impersonation_self_refused", admin_user_id=admin.id)
-        return RedirectResponse(url=f"/admin/users/{user_id}", status_code=302)
+        return await respond(request, redirect=f"/admin/users/{user_id}")
 
     token = create_access_token(
         target_user.id,
@@ -1762,10 +1762,20 @@ async def admin_impersonate(
         actor_id=admin.id,
     )
 
+    # ⚠️ ПОРЯДОК ЗДЕСЬ НЕСУЩИЙ: СНАЧАЛА БЕРЁТСЯ РЕЗУЛЬТАТ СЛОЯ ОТВЕТА, И ТОЛЬКО
+    # ПОТОМ НА ЭТОТ ЖЕ ОБЪЕКТ НАВЕШИВАЕТСЯ COOKIE. Ветка перехода собирает НОВЫЙ
+    # ответ со статусом 204; cookie, навешенная на отдельно собранное
+    # перенаправление, не уехала бы никуда — и отказ был бы МОЛЧАЛИВЫМ: браузер
+    # ушёл бы по заголовку перехода, администратор остался бы собой, а экран
+    # выглядел бы так, будто вход состоялся. Тест, проверяющий ТОЛЬКО заголовок
+    # перехода, остался бы при этом зелёным, поэтому пара утверждений написана
+    # ТРОЙНОЙ (`tests/test_pages/test_impersonation.py`): заголовок, cookie и
+    # ФАКТИЧЕСКАЯ смена лица следующим запросом.
+    #
     # ЕДИНСТВЕННАЯ ФУНКЦИЯ УСТАНОВКИ (план 06-02). Собственный `set_cookie`
     # здесь означал бы второй набор атрибутов рядом с первым, и возврат,
     # ходящий через ту же функцию, не сопоставил бы с ним свою перезапись.
-    response = RedirectResponse(url="/dashboard", status_code=302)
+    response = await respond(request, redirect="/dashboard")
     set_session_cookie(response, token, settings)
 
     # СЛЕД ОБЯЗАТЕЛЕН И НАЗЫВАЕТ ОБОИХ (D-24). Это единственная операция
