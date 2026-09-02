@@ -1443,6 +1443,18 @@ async def test_group_counter_agrees_with_the_rendered_rows(
 # половины тест позеленел бы на нём (GATE-01, D-16 Фазы 8).
 
 
+def _editor_delete_body(ad: Ad) -> str:
+    """Тело, которое шлют ОБЕ формы пути удаления расписания из редактора.
+
+    ⚠️ СОБИРАЕТСЯ ЗДЕСЬ ОДИН РАЗ И НАМЕРЕННО: тест, пославший НЕ ТО, что шлёт
+    разметка, проверяет маршрут, которым не идёт ни один пользователь. Оба поля
+    — признак возврата и контекст экрана — стоят в обеих формах карточки
+    расписания (`ads/includes/sched_card.html`); равенство наборов держит
+    правило `test_both_editor_delete_forms_post_the_same_field_names`.
+    """
+    return _form([("return_to", "editor"), ("ad_id", str(ad.id))])
+
+
 def _oob_top_level_tags(body: str) -> list[str]:
     """Открывающие теги ВЕРХНЕГО УРОВНЯ тела фрагментного ответа.
 
@@ -1473,7 +1485,7 @@ async def test_editor_delete_degrades_without_htmx(
 
     response = await authed_client.post(
         f"/schedules/{schedule.id}/delete",
-        content=_form([("return_to", "editor")]),
+        content=_editor_delete_body(ad),
         headers=FORM_HEADERS,
         follow_redirects=False,
     )
@@ -1497,7 +1509,7 @@ async def test_editor_delete_returns_oob_nodes(
 
     response = await htmx_client.post(
         f"/schedules/{schedule.id}/delete",
-        content=_form([("return_to", "editor")]),
+        content=_editor_delete_body(ad),
         headers=FORM_HEADERS,
     )
 
@@ -1545,7 +1557,7 @@ async def test_the_orphaned_panel_is_removed_by_its_own_oob_node(
 
     response = await htmx_client.post(
         f"/schedules/{schedule.id}/delete",
-        content=_form([("return_to", "editor")]),
+        content=_editor_delete_body(ad),
         headers=FORM_HEADERS,
     )
 
@@ -1584,7 +1596,7 @@ async def test_the_last_schedule_goes_to_location(
 
     response = await htmx_client.post(
         f"/schedules/{schedule.id}/delete",
-        content=_form([("return_to", "editor")]),
+        content=_editor_delete_body(ad),
         headers=FORM_HEADERS,
     )
 
@@ -1628,7 +1640,7 @@ async def test_repeated_editor_delete_is_harmless(
     schedule = await _seed_schedule(db_session, ad.id, account.id)
     survivor = await _seed_schedule(db_session, ad.id, account.id)
 
-    body = _form([("return_to", "editor")])
+    body = _editor_delete_body(ad)
     first = await htmx_client.post(
         f"/schedules/{schedule.id}/delete", content=body, headers=FORM_HEADERS
     )
