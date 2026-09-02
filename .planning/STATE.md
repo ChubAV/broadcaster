@@ -3,19 +3,19 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 09
-current_phase_name: Пилот на account_groups — сквозной контракт формы
-status: executing
-stopped_at: Completed 09-12-PLAN.md
-last_updated: "2026-09-01T06:52:34.563Z"
-last_activity: 2026-09-01
-last_activity_desc: Phase 09 execution started
-state_head: 6d42a3cafcea4c69b0e2db1a6872d20520da486d
+current_phase_name: Пилот на account_groups — сквозной контракт формы (ЗАКРЫТА 2026-09-02)
+status: phase_complete
+stopped_at: Фаза 09 закрыта — хвостовые гейты пройдены, верификация passed
+last_updated: "2026-09-02T16:30:00.000Z"
+last_activity: 2026-09-02
+last_activity_desc: Phase 09 complete — verification passed 18/18, five requirements moved to Complete
+state_head: 042b8be841cc8e1cfadd360e51f04466cee191e0
 progress:
   total_phases: 9
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 38
   completed_plans: 38
-  percent: 22
+  percent: 33
 ---
 
 # Project State
@@ -35,14 +35,14 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 09 (Пилот на account_groups — сквозной контракт формы) — EXECUTING
+Phase: 09 (Пилот на account_groups — сквозной контракт формы) — ✅ COMPLETE (2026-09-02, верификация `passed` 18/18, круг 5)
 Plan: 20 of 20
 Total Plans in Phase: 20
 Completed Plans in Phase: 20
-Status: Executing Phase 09 — четвёртый круг закрытия гейпов исполнен, идут хвостовые гейты
-Last activity: 2026-09-02 — волна 4 (план 09-20) слита; ручной обход проведён владельцем, расхождений ноль
+Status: Фаза 09 ЗАКРЫТА — все хвостовые гейты зелены
+Last activity: 2026-09-02 — верификация `passed` 18/18; пять требований переведены в Complete
 
-Progress: [████████████████████] 38/38 plans ([██░░░░░░░░] 22%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: 2/9 (22%) — Фаза 09 НЕ засчитана: верификация `gaps_found`.
+Progress: [████████████████████] 38/38 plans ([██░░░░░░░░] 22%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
 
 ⚠️ **Фаза 09 исполнена, но не закрыта.** Все девять планов имеют сводки, суита зелена (2649 passed), ручной обход проведён 2026-08-30 (Chrome / macOS) и допущения A1, A3, A5 закрыты измерением. Закрыть фазу мешают ДВА расхождения одного рода — объявленный селектор против дерева, которого нет:
 
