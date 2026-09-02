@@ -5,10 +5,10 @@ milestone_name: HTMX-first
 current_phase: 09
 current_phase_name: Пилот на account_groups — сквозной контракт формы (ЗАКРЫТА 2026-09-02)
 status: "Phase 09 shipped — PR #47"
-stopped_at: Фаза 09 закрыта — хвостовые гейты пройдены, верификация passed
-last_updated: "2026-09-02T16:58:50.920Z"
+stopped_at: Phase 10 context gathered
+last_updated: "2026-09-02T18:14:01.649Z"
 last_activity: 2026-09-02
-state_head: ec9a7dacb10d38a2b38a3946a201041eb5f4d6c1
+state_head: 9f3c59e0db473c1fe8ccdedeb82b8a38917d95cc
 progress:
   total_phases: 9
   completed_phases: 3
@@ -328,9 +328,9 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-02
-Stopped at: Сессия возобновлена по HANDOFF.json — 4-й круг закрытия гейпов Фазы 09, план 09-17 задача 3/3
-Resume file: `.planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/.continue-here.md` (+ `.planning/HANDOFF.json`)
+Last session: 2026-09-02T18:14:01.383Z
+Stopped at: Phase 10 context gathered
+Resume file: .planning/phases/10-rychag-components-modal-html/10-CONTEXT.md
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
 
