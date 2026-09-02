@@ -36,6 +36,11 @@ from app.messengers.base import MessengerFetchError
 from app.messengers.max import MaxMessenger
 from app.messengers.whatsapp import WhatsAppMessenger
 from app.pages.common import check_is_admin, get_user_from_cookie, templates
+# Первый вызов слоя ответа в этом модуле (план 10-03). До него слой звали только
+# из модуля групп аккаунта; адрес деградации у `respond` объявлен ОБЯЗАТЕЛЬНЫМ
+# ключевым аргументом, поэтому обработчик, забывший путь без JavaScript, не
+# собирается как вызов.
+from app.pages.htmx import respond
 
 # Разметка ответов опроса статуса подключения живёт в шаблоне, а не в строках
 # обработчика (План 08). До этого она собиралась конкатенацией и несла
@@ -988,8 +993,29 @@ async def accounts_delete(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Удаление аккаунта мессенджера из карточки списка. Необратимо.
+
+    ⚠️ ФОРМА ОТВЕТА — ПЕРЕХОД, И ЭТО ОБЪЯВЛЕННОЕ ИЗЪЯТИЕ, А НЕ КЛАСС ДЕЙСТВИЯ.
+    Действие убирает строку с экрана, который ОСТАЁТСЯ, то есть по правилу
+    выбора формы ответа принадлежало бы фрагментному пути. Основание изъятия
+    ИЗМЕРЕНО: обе копии разметки порции раздела просят следующую порцию
+    СМЕЩЁННЫМ курсором, и фрагментное удаление сдвинуло бы список — следующая
+    порция пропустила бы ровно одну карточку. Изъятие записано перечнем с
+    обоснованием, фазой-снимателем и условием снятия
+    (`OFFSET_CURSOR_EXCEPTIONS` в `tests/test_pages/test_htmx_gates.py`), а не
+    оставлено умолчанием: снять его можно ТОЛЬКО вместе с переводом курсора на
+    ключ последней строки.
+
+    ⚠️ СОБСТВЕННОГО ОТВЕТА-ПЕРЕНАПРАВЛЕНИЯ ЗДЕСЬ НЕТ НИ В ОДНОЙ ВЕТКЕ, ВКЛЮЧАЯ
+    «НЕТ СЕССИИ» (G-2): два решения об одной форме ответа означают, что какое из
+    них исполнится, решает ветка, — то есть путь деградации снова перестаёт быть
+    обязательным. Форма 302 при этом не теряется, её строит сам слой ответа.
+
+    Код исхода на успехе НЕ выдаётся (D-03): исчезнувшая карточка и есть ответ,
+    а плашка на каждый успех превратила бы обратную связь в шум.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
     await delete_account(db, user.id, account_id)
-    return RedirectResponse(url="/accounts", status_code=302)
+    return await respond(request, redirect="/accounts")

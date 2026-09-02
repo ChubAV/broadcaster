@@ -47,6 +47,10 @@ from app.pages.common import (
     is_same_origin,
     templates,
 )
+# Первый вызов слоя ответа в этом модуле (план 10-03): адрес деградации объявлен
+# у него ОБЯЗАТЕЛЬНЫМ ключевым аргументом, а код исхода едет ПАРАМЕТРОМ — адрес с
+# кодом собирает сам слой, и второй сборки его в этом файле не остаётся.
+from app.pages.htmx import respond
 from app.services.billing_cache import check_access_cached
 
 logger = structlog.get_logger(__name__)
@@ -888,10 +892,23 @@ async def history_retry(
 
     ОТВЕТ — ПЕРЕНАПРАВЛЕНИЕ. Оно же закрывает повтор по обновлению страницы и
     по кнопке возврата браузера.
+
+    ⚠️ ФОРМУ ОТВЕТА РЕШАЕТ СЛОЙ ОТВЕТА, А НЕ ЭТОТ ОБРАБОТЧИК (план 10-03).
+    Человеку без JavaScript уезжает прежнее перенаправление на прежний адрес; на
+    запрос от слоя письма уходит переход на ТОТ ЖЕ адрес с ТЕМ ЖЕ кодом исхода.
+    Код едет ПАРАМЕТРОМ, а не приклеивается к строке адреса руками: сборка
+    адреса с кодом на проект одна, и второй в этом файле не осталось. Новых
+    кодов перевод не завёл — все четыре выдаются там же, где выдавались.
+
+    ⚠️ СЕРВЕРНОЕ УДЕРЖАНИЕ СТОИТ ДО РАЗВИЛКИ ТРАНСПОРТА И ПЕРЕЖИВАЕТ ОБЕ ЕЁ
+    ВЕТКИ. Всё, что сказано выше про окно, остаётся верным дословно: фаза меняет
+    ФОРМУ ОТВЕТА, а не предикат и не момент, в который окно армируется. Защита от
+    второго нажатия по-прежнему держится окном, а не панелью подтверждения — и
+    тем более не признаком запроса.
     """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
     # Гард источника — ОБЩИЙ на проект (app/pages/common.py). Здесь он жил
     # приватной копией с плана 04-10: тогда потребитель был один. С появлением
@@ -902,13 +919,13 @@ async def history_retry(
 
     log = await db.get(SendLog, log_id)
     if not log or log.user_id != user.id:
-        return RedirectResponse(url="/history", status_code=302)
+        return await respond(request, redirect="/history")
 
     if log.status == STATUS_OK:
-        return RedirectResponse(url="/history", status_code=302)
+        return await respond(request, redirect="/history")
 
     if not _claim_retry_slot(log.id):
-        return RedirectResponse(url=f"/history?notice={notices.RETRY_BUSY}", status_code=302)
+        return await respond(request, redirect="/history", notice=notices.RETRY_BUSY)
 
     # Признак постановки. Удержание снимается ТОЛЬКО когда задача в очередь не
     # ушла: на успешном пути окно обязано пережить ответ, иначе второе
@@ -955,11 +972,15 @@ async def history_retry(
             or not account
             or account.status != "active"
         ):
-            return RedirectResponse(url=f"/history?notice={notices.RETRY_GONE}", status_code=302)
+            return await respond(
+                request, redirect="/history", notice=notices.RETRY_GONE
+            )
 
         allowed, _reason = await check_access_cached(db, user.id, "send")
         if not allowed:
-            return RedirectResponse(url=f"/history?notice={notices.RETRY_ACCESS_CLOSED}", status_code=302)
+            return await respond(
+                request, redirect="/history", notice=notices.RETRY_ACCESS_CLOSED
+            )
 
         # Импорт ЛОКАЛЬНЫЙ и обязан таким остаться: именно он позволяет
         # подменить модуль очереди в тесте. Поднятый на уровень модуля, он
@@ -995,7 +1016,7 @@ async def history_retry(
         if not queued:
             _release_retry_slot(log.id)
 
-    return RedirectResponse(url=f"/history?notice={notices.RETRY_QUEUED}", status_code=302)
+    return await respond(request, redirect="/history", notice=notices.RETRY_QUEUED)
 
 
 @router.get("/history", response_class=HTMLResponse)
