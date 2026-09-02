@@ -2595,7 +2595,7 @@ STATIC_JS_DIR = TEMPLATES_DIR.parent / "static" / "js"
 # Оба вендорены, то есть лежат в дереве файлами, а не приезжают сборщиком: у
 # проекта нет ни build-шага, ни менеджера пакетов на стороне разметки, и
 # «новая строка JS» здесь означает буквально новый файл в этом каталоге.
-VENDORED_JS_FILES = frozenset()
+VENDORED_JS_FILES = frozenset({"alpine.min.js", "htmx.min.js"})
 
 
 def _vendored_js_files(directory: Path | None = None) -> set[str]:

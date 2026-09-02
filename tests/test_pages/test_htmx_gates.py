@@ -1396,7 +1396,7 @@ FRAGMENT_RESPONSE_HANDLERS: frozenset[str] = frozenset(
 #   этот счёт вырос на ЕДИНИЦУ: семеро из восьми ушли в ветку перехода. Два
 #   числа считают разные множества, и приводить их к согласию правкой одного
 #   нельзя.
-FRAGMENT_RESPONSE_HANDLERS_DECLARED = 2
+FRAGMENT_RESPONSE_HANDLERS_DECLARED = 3
 
 
 def _hands_a_fragment(function: ast.AST) -> bool:
