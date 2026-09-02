@@ -20,6 +20,7 @@ tests/test_pages/test_editor_schedules.py -q` завершается с кодо
 """
 
 import re
+from pathlib import Path
 from urllib.parse import urlencode
 
 import pytest
@@ -29,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import AD_STATUS_PUBLISHED
+from app.pages.common import templates
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
@@ -1698,3 +1700,206 @@ async def test_editor_delete_does_not_trust_the_schedule_of_another_owner(
     assert on_foreign.headers.get("HX-Location") == on_missing.headers.get(
         "HX-Location"
     ), "чужой идентификатор отличим от несуществующего по адресу приземления"
+
+
+# --- Фаза 10, план 10-01, задача 3: ветка деградации и неотличимость ----------
+#
+# ⚠️ ПРАВИЛА НИЖЕ УТВЕРЖДАЮТ ПОВЕДЕНИЕ, А НЕ ВХОЖДЕНИЕ СТРОКИ, и это следствие
+# измерения, а не вкуса. Ревизия Фазы 9 нашла ДВА расхождения (DIV-09-01 и
+# DIV-09-02) ровно там, где машинные правила были зелены: разметочное правило
+# зеленеет на присутствии подстроки, которую соседний путь не исполняет.
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
+SCHED_CARD_TEMPLATE = "ads/includes/sched_card.html"
+SCHED_DELETE_RESPONSE_TEMPLATE = "ads/partials/sched_delete_response.html"
+
+HIDDEN_FIELD_RE = re.compile(
+    r'<input[^>]*type="hidden"[^>]*name="([^"]+)"', re.S
+)
+FORM_TAG_RE = re.compile(r"<form\b[^>]*>", re.S)
+
+# Число форм-ТРИГГЕРОВ подтверждения в дереве. Значение поставлено ПРОГОНОМ, а не
+# выведено: обход `x-on:submit.prevent` по всем шаблонам дал 18 — ровно столько
+# же, сколько мест подтверждения насчитывает инвентарь панели (`MODAL_PLACES`).
+#
+# ⚠️ КОНСТАНТА ЗАВЕДЕНА ПРОТИВ ВАКУУМА, А НЕ ДЛЯ ОТЧЁТНОСТИ. Правило ниже
+# утверждает ОТСУТСТВИЕ признака отправки на этих формах; разборщик, вернувший
+# пустое множество, дал бы зелёный цвет, посимвольно совпадающий с зелёным
+# цветом соблюдённого правила.
+TRIGGER_FORMS_DECLARED = 18
+
+
+def _template_text(rel: str) -> str:
+    return (TEMPLATES_DIR / rel).read_text(encoding="utf-8")
+
+
+def _all_template_sources() -> list[tuple[str, str]]:
+    return [
+        (path.relative_to(TEMPLATES_DIR).as_posix(), path.read_text(encoding="utf-8"))
+        for path in sorted(TEMPLATES_DIR.rglob("*.html"))
+    ]
+
+
+def _delete_trigger_form(source: str) -> str:
+    """Форма-ТРИГГЕР удаления расписания целиком — от открывающего тега до конца."""
+    start = source.index('<form method="post" action="/schedules/{{ s.id }}/delete"')
+    return source[start : source.index("</form>", start)]
+
+
+def _delete_panel_slot(source: str) -> str:
+    """Слот скрытых полей БЛОЧНОГО вызова панели подтверждения удаления."""
+    start = source.index("{% call modal(id='sched-del-")
+    return source[start : source.index("{% endcall %}", start)]
+
+
+@pytest.mark.asyncio
+async def test_both_editor_delete_forms_post_the_same_field_names():
+    """Обе формы пути удаления шлют ОДИН И ТОТ ЖЕ набор имён полей.
+
+    Правило существует потому, что ровно этот разъезд Фаза 9 поймала
+    расхождением WR-03: поле несла только форма панели, и путь БЕЗ Alpine
+    приезжал на сервер без него — обработчик считал ветку по другому состоянию,
+    чем видел перед собой человек. Отказ обязан называть разошедшиеся имена, а
+    не только факт расхождения: «наборы не равны» не говорит, какой путь чего
+    лишился.
+    """
+    source = _template_text(SCHED_CARD_TEMPLATE)
+    trigger = set(HIDDEN_FIELD_RE.findall(_delete_trigger_form(source)))
+    panel = set(HIDDEN_FIELD_RE.findall(_delete_panel_slot(source)))
+
+    assert trigger, "в форме-триггере удаления не нашлось ни одного скрытого поля"
+    assert panel, "в слоте панели подтверждения не нашлось ни одного скрытого поля"
+    assert trigger == panel, (
+        "наборы полей двух форм пути удаления разошлись — путь деградации "
+        "приедет на сервер с другим состоянием, чем путь htmx: "
+        f"только в триггере {sorted(trigger - panel)}; "
+        f"только в панели {sorted(panel - trigger)}"
+    )
+
+
+def test_the_trigger_form_never_carries_the_htmx_post():
+    """Ни одна форма-ТРИГГЕР в дереве не несёт признака отправки htmx (D-03).
+
+    Все места диспетчеризации остаются ЧИСТЫМ путём деградации: без Alpine форма
+    уходит обычным POST-ом, с Alpine — открывает панель. Признак отправки живёт
+    ТОЛЬКО на форме панели подтверждения, и это граница, а не полумера: триггер,
+    получивший его, слал бы запрос ВМЕСТО открытия панели — то есть выполнял бы
+    необратимое действие без подтверждения.
+    """
+    triggers: list[tuple[str, str]] = []
+    for rel, source in _all_template_sources():
+        for tag in FORM_TAG_RE.findall(source):
+            if "x-on:submit.prevent" in tag:
+                triggers.append((rel, tag))
+
+    assert len(triggers) == TRIGGER_FORMS_DECLARED, (
+        f"форм-триггеров подтверждения найдено {len(triggers)}, объявлено "
+        f"{TRIGGER_FORMS_DECLARED} — место диспетчеризации молча исчезло или "
+        f"появилось незаявленное: {sorted(rel for rel, _ in triggers)}"
+    )
+
+    carrying = [(rel, tag) for rel, tag in triggers if "hx-post" in tag]
+    assert not carrying, (
+        "форма-триггер несёт признак отправки htmx — подтверждённое действие "
+        "ушло бы на сервер ВМЕСТО открытия панели подтверждения: "
+        + "; ".join(f"{rel} -> {tag!r}" for rel, tag in carrying)
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_editor_delete_address_is_the_same_on_both_transports(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Адрес приземления ПОСИМВОЛЬНО один и тот же на обоих транспортах.
+
+    Он же уезжает перенаправлением человеку без JavaScript, он же — заголовком
+    перехода. Два независимо собранных адреса разошлись бы МОЛЧА, и путь
+    деградации уводил бы на сводный список там, где путь htmx остаётся в
+    редакторе. Тело формы в обоих запросах одно — иначе сравнивались бы два
+    разных вопроса.
+
+    ⚠️ ФИКСТУРА `htmx_client` ЗДЕСЬ НЕ ЗАПРАШИВАЕТСЯ, И ЭТО ВЫНУЖДЕННО, А НЕ
+    НЕБРЕЖНОСТЬ. Она возвращает ТОТ ЖЕ объект клиента и ставит признак htmx на
+    НЕГО — свойство несущее, оно и позволяет складывать её с фикстурами
+    аутентификации. Но у пары «оба транспорта В ОДНОМ ТЕСТЕ» цена его обратная:
+    запрошенная рядом, фикстура пометила бы и запрос, который обязан прийти БЕЗ
+    признака, и половина деградации молча превратилась бы во вторую половину
+    htmx. Поймано прогоном: запрос без JavaScript вернул 200 вместо 302.
+    Поэтому признак ставится ЗДЕСЬ и ровно на один запрос из двух.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    first = await _seed_schedule(db_session, ad.id, account.id)
+    second = await _seed_schedule(db_session, ad.id, account.id)
+    body = _editor_delete_body(ad)
+
+    degraded = await authed_client.post(
+        f"/schedules/{first.id}/delete",
+        content=body,
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    over_htmx = await authed_client.post(
+        f"/schedules/{second.id}/delete",
+        content=body,
+        headers={**FORM_HEADERS, "HX-Request": "true"},
+    )
+
+    assert degraded.status_code == 302
+    assert over_htmx.status_code == 204
+    assert degraded.headers["location"] == over_htmx.headers["HX-Location"], (
+        "адрес приземления разошёлся между транспортами: без JavaScript "
+        f"{degraded.headers['location']!r}, через htmx "
+        f"{over_htmx.headers['HX-Location']!r}"
+    )
+
+
+def test_control_negative_a_conditional_removal_node_reddens_the_gate():
+    """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ безусловности узлов снятия.
+
+    Несущее правило (`test_editor_delete_returns_oob_nodes`) утверждает, что в
+    ответе есть ОБА узла снятия. Зелёным оно обязано быть потому, что узлы
+    БЕЗУСЛОВНЫ, а не потому, что на счастливом пути условие сложилось удачно.
+    Контроль подставляет в прочитанный исходник ветвь по факту удаления и
+    требует, чтобы правило на подделке ПОКРАСНЕЛО.
+
+    ⚠️ ДВОЙНОЙ ПРЕДОХРАНИТЕЛЬ (образец — `_xdata_with_dead_teardown`): контроль
+    отдельно доказывает, что подстановка ЧТО-ТО изменила и ИМЕННО ТО. Иначе
+    неудавшаяся замена дала бы «правило покраснело» на нетронутом исходнике —
+    или, того хуже, зелёный цвет, неотличимый от соблюдения.
+    """
+    source = _template_text(SCHED_DELETE_RESPONSE_TEMPLATE)
+    panel_node = '<div id="sched-del-{{ schedule_id }}" hx-swap-oob="delete"></div>'
+
+    assert source.count(panel_node) == 1, (
+        "образец узла снятия панели встречается в источнике не один раз — "
+        "подстановка контроля перестала быть однозначной"
+    )
+    forged = source.replace(
+        panel_node, "{% if deleted %}" + panel_node + "{% endif %}"
+    )
+    assert forged != source, "подстановка контроля ничего не изменила"
+
+    honest = templates.env.from_string(source).render(schedule_id=7, schedules_count=2)
+    faked = templates.env.from_string(forged).render(
+        schedule_id=7, schedules_count=2, deleted=False
+    )
+
+    # Первый предохранитель: несущее свойство на НАСТОЯЩЕМ источнике держится.
+    assert honest.count('hx-swap-oob="delete"') == 2, (
+        "на настоящем источнике узлов снятия не два — контроль сравнивал бы "
+        f"подделку с уже сломанным образцом: {honest!r}"
+    )
+    # Второй: подделка снимает ИМЕННО узел панели, а не что-нибудь ещё.
+    assert 'id="sched-del-7"' not in faked, "подстановка не убрала узел панели"
+    assert 'id="sched-7"' in faked, (
+        "подстановка задела узел снятия карточки — контроль доказывал бы не то "
+        "свойство, которое объявил"
+    )
+    assert faked.count('hx-swap-oob="delete"') == 1, (
+        "правило присутствия обоих узлов НЕ ПОКРАСНЕЛО на подделке: ветвь по "
+        "факту удаления прошла бы в дерево незамеченной, и НАЛИЧИЕ узла стало "
+        "бы признаком того, что удаление состоялось"
+    )
