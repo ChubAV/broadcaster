@@ -1609,6 +1609,25 @@ APP_CSS = TEMPLATES_DIR.parent / "static" / "css" / "app.css"
 # положительного контроля, а не оставлена читателю.
 SCROLL_LOCK_CLASS = "is-modal-open"
 
+# --- ПЛОЩАДКА ПРИЗЕМЛЕНИЯ ФОКУСА (Фаза 10, план 10-02, D-11) -----------------
+#
+# ⚠️ ПЛОЩАДКА ВЫБРАНА ОДИН РАЗ НА ВСЕ 18 МЕСТ ПОДТВЕРЖДЕНИЯ, И ПАРАМЕТРОМ
+# МАКРОСА ОНА НЕ СТАНОВИТСЯ: 18 вызовов получили бы по решению — ровно та форма,
+# которую D-11 Фазы 9 уже отверг для цели свопа. Величина живёт в объекте
+# клиентского состояния ОДИН раз и утверждается правилом
+# `test_the_focus_landing_is_declared_once_and_called_twice`.
+#
+# ⚠️ ИМЯ ИЗМЕРЕНО ПО ШЕЛЛУ, А НЕ ВЗЯТО ИЗ ПАМЯТИ (идиома SP-1, 09-PATTERNS.md).
+# Разъехавшись с включаемым файлом области уведомлений, эта константа заставила
+# бы правила ниже проверять НЕСУЩЕСТВУЮЩУЮ площадку и зеленеть вакуумом; сверка
+# исполняется правилом `test_the_landing_region_exists_in_the_shell_of_both_apps`,
+# а не оставлена читателю.
+FOCUS_LANDING_ID = "notice"
+
+# Включаемый файл областей уведомления и оба шелла, которые его подключают.
+NOTICE_AREA = "includes/notice_area.html"
+APP_SHELLS = ("base.html", "auth_base.html")
+
 # ⚠️ ИМЯ ИНТЕРПРЕТАТОРА (`NODE_BIN`) ПЕРЕЕХАЛО В `tests/conftest.py` ПЛАНОМ
 # 09-19 — вместе с самим запуском. Имя интерпретатора есть свойство ЗАПУСКА, а
 # не свойство панели подтверждения, и второй его экземпляр разошёлся бы с
@@ -1627,6 +1646,9 @@ MODAL_LIFECYCLE_HARNESS = """
 const payload = __PAYLOAD__;
 const LOCK = payload.lock;
 const EXPRESSION = payload.expression;
+const AFTER_REQUEST = payload.after_request;
+const LANDING_ID = payload.landing_id;
+const LANDING_PRESENT = payload.landing_present;
 
 function makeClassList() {
   const own = new Set();
@@ -1637,23 +1659,84 @@ function makeClassList() {
   };
 }
 
+// ⚠️ ГАРНИР ВЕДЁТ ЗАПИСЬ ПОСЛЕДНЕГО СФОКУСИРОВАННОГО ИМЕНИ, А НЕ БУЛЕВО
+// «фокус двигался». Правило обязано отличать «фокус ПРИЕХАЛ НА ПЛОЩАДКУ» от
+// «фокус не двигался вовсе»: у отсоединённого открывателя метод фокусировки
+// ЕСТЬ, вызов не падает и не делает НИЧЕГО, — и булево «метод вызван» зеленело
+// бы ровно на том дефекте, ради которого правило заводится (Landmine 2).
+let focused = null;
+// Отдельная запись ПОПЫТОК фокусировки — только для внятного текста отказа:
+// «вызов был, а фокус не сдвинулся» и «вызова не было вовсе» есть два разных
+// дефекта, и вердикт обязан их различать.
+let attempted = [];
+
+// ⚠️ ПОДСТАВНОЙ УЗЕЛ НЕСЁТ ТРИ ВЕЩИ, И ВСЕ ТРИ — ПРЕДМЕТ. Опознаваемое имя
+// (иначе вердикт не различает узлы), НАСТОЯЩИЙ признак присутствия в документе
+// (ветвление возврата фокуса спрашивает именно его) и метод фокусировки,
+// ведущий себя КАК В БРАУЗЕРЕ.
+//
+// ⚠️ ФОКУСИРОВКА ОТСОЕДИНЁННОГО УЗЛА НЕ ДЕЛАЕТ НИЧЕГО, И ЭТО НЕ УПРОЩЕНИЕ, А
+// САМ ПРЕДМЕТ (Landmine 2). Метод у такого узла ЕСТЬ, вызов не падает — и фокус
+// молча остаётся там, где был. Стаб, записывающий имя независимо от присутствия,
+// имитировал бы успех там, где в браузере не происходит ничего, и правила ниже
+// зеленели бы на сегодняшнем дефекте.
+function makeNode(name, connected) {
+  return {
+    name: name,
+    isConnected: connected,
+    focus() {
+      attempted.push(name);
+      if (!this.isConnected) { return; }
+      focused = name;
+    }
+  };
+}
+
 const documentElement = { classList: makeClassList() };
+// Площадка приземления и тело документа — два разных узла с разными именами:
+// вердикт «фокус на теле документа» и вердикт «фокус на площадке» обязаны быть
+// различимы, потому что первый и есть сегодняшний дефект.
+const landing = makeNode('landing', true);
+const body = makeNode('body', true);
+
 globalThis.document = {
   documentElement: documentElement,
-  activeElement: { focus() {} }
+  activeElement: body,
+  // ⚠️ РАЗРЕШЕНИЕ УЗЛА ПО ИДЕНТИФИКАТОРУ ОТВЕЧАЕТ ТОЛЬКО НА ЗАЯВЛЕННЫЙ
+  // ИДЕНТИФИКАТОР. Стаб, отдающий узел на ЛЮБОЙ идентификатор, зеленел бы и на
+  // панели, приземляющейся куда попало; отсутствие площадки выражается
+  // признаком LANDING_PRESENT и служит отрицательным контролем.
+  getElementById(id) {
+    if (LANDING_PRESENT && id === LANDING_ID) { return landing; }
+    return null;
+  }
 };
 
-function reset() { documentElement.classList = makeClassList(); }
+function reset() {
+  documentElement.classList = makeClassList();
+  focused = null;
+  attempted = [];
+  document.activeElement = body;
+}
 function locked() { return documentElement.classList.contains(LOCK); }
 
 function build() {
   const panel = (new Function('return (' + EXPRESSION + ');'))();
   panel.$nextTick = function (fn) { fn(); };
   panel.$refs = {
-    cancel: { focus() {} },
+    cancel: makeNode('cancel', true),
     panel: { querySelectorAll() { return []; } }
   };
   return panel;
+}
+
+// ⚠️ ВЫРАЖЕНИЕ АТРИБУТА ИСПОЛНЯЕТСЯ ТЕМ ЖЕ СПОСОБОМ, ЧТО И У РАНТАЙМА ALPINE:
+// телом функции с областью видимости объекта клиентского состояния. Вызов
+// метода объекта напрямую проверял бы НЕ ТО — предмет здесь ветвь, записанная
+// в АТРИБУТЕ, а не тело `hide()`.
+function afterRequest(panel, successful) {
+  const handler = new Function('$event', 'with (this) { ' + AFTER_REQUEST + ' }');
+  handler.call(panel, { detail: { successful: successful } });
 }
 
 // СНОС УЗЛА выражается вызовом того метода объекта, который рантайм Alpine
@@ -1705,7 +1788,111 @@ function scenarioSibling() {
   };
 }
 
-const SCENARIOS = { raise: scenarioRaise, teardown: scenarioTeardown, sibling: scenarioSibling };
+// --- СЦЕНАРИИ ФАЗЫ 10: ФОКУС И ВЕТВЬ ПО УСПЕШНОСТИ ОБМЕНА -------------------
+//
+// ⚠️ ОТКРЫВАТЕЛЬ ЗДЕСЬ ОТСОЕДИНЁН ОТ ДОКУМЕНТА НАМЕРЕННО, И ЭТО НЕ КРАЙНИЙ
+// СЛУЧАЙ, А ФРАГМЕНТНЫЙ ПУТЬ ФАЗЫ ДОСЛОВНО: кнопка, открывшая панель, уезжает
+// внеполосным узлом ВМЕСТЕ со своей строкой. Метод фокусировки у такого узла
+// остаётся, и панель, спрашивающая наличие метода, «возвращает» на него фокус
+// вызовом, который не делает ничего.
+
+function scenarioFocusAfterHide() {
+  const runs = [];
+  for (let i = 0; i < 2; i++) {
+    reset();
+    const panel = build();
+    document.activeElement = makeNode('opener', false);
+    panel.show();
+    const opener_has_focus_method = typeof panel.opener.focus === 'function';
+    const opener_connected = panel.opener.isConnected;
+    panel.hide();
+    runs.push({
+      focused: focused,
+      attempted: attempted.slice(),
+      opener_has_focus_method: opener_has_focus_method,
+      opener_connected: opener_connected,
+      open_after: panel.open
+    });
+  }
+  const same = JSON.stringify(runs[0]) === JSON.stringify(runs[1]);
+  return Object.assign({}, runs[1], { repeat_matches: same });
+}
+
+function scenarioFocusAfterTeardown() {
+  const runs = [];
+  for (let i = 0; i < 2; i++) {
+    reset();
+    const panel = build();
+    document.activeElement = makeNode('opener', false);
+    panel.show();
+    // ⚠️ `hide()` НЕ ЗОВЁТСЯ ВОВСЕ — И В ЭТОМ ВЕСЬ СЦЕНАРИЙ. На фрагментном
+    // пути событие после запроса приходит ПОСЛЕ свопа, то есть после того, как
+    // внеполосный узел уже снял панель вместе с её формой.
+    const has = hasTeardown(panel);
+    teardown(panel);
+    runs.push({
+      focused: focused,
+      attempted: attempted.slice(),
+      has_destroy: has,
+      still_locked_after_teardown: locked(),
+      open_after: panel.open
+    });
+  }
+  const same = JSON.stringify(runs[0]) === JSON.stringify(runs[1]);
+  return Object.assign({}, runs[1], { repeat_matches: same });
+}
+
+function scenarioFocusSibling() {
+  reset();
+  const open_panel = build();
+  const closed_panel = build();
+  document.activeElement = makeNode('opener', true);
+  open_panel.show();
+  const focused_before = focused;
+  const has = hasTeardown(closed_panel);
+  teardown(closed_panel);
+  return {
+    focused_before: focused_before,
+    focused_after: focused,
+    attempted: attempted.slice(),
+    has_destroy: has,
+    still_locked_after_teardown: locked(),
+    repeat_matches: null
+  };
+}
+
+function scenarioExchange() {
+  const runs = [];
+  for (let i = 0; i < 2; i++) {
+    reset();
+    const good = build();
+    good.show();
+    good.sending = true;
+    afterRequest(good, true);
+    const success = { open: good.open, sending: good.sending, locked: locked() };
+
+    reset();
+    const bad = build();
+    bad.show();
+    bad.sending = true;
+    afterRequest(bad, false);
+    const failure = { open: bad.open, sending: bad.sending, locked: locked() };
+
+    runs.push({ success: success, failure: failure });
+  }
+  const same = JSON.stringify(runs[0]) === JSON.stringify(runs[1]);
+  return Object.assign({}, runs[1], { repeat_matches: same });
+}
+
+const SCENARIOS = {
+  raise: scenarioRaise,
+  teardown: scenarioTeardown,
+  sibling: scenarioSibling,
+  focus_after_hide: scenarioFocusAfterHide,
+  focus_after_teardown: scenarioFocusAfterTeardown,
+  focus_untouched_by_closed_sibling: scenarioFocusSibling,
+  exchange: scenarioExchange
+};
 const run = SCENARIOS[payload.scenario];
 if (!run) {
   console.error('неизвестный сценарий: ' + payload.scenario);
@@ -1719,6 +1906,48 @@ process.stdout.write(JSON.stringify(run()));
 # одноимённый объявленный раньше, — поэтому подстановка остаётся действенной и
 # после того, как настоящий путь снятия в выражении появится.
 DEAD_TEARDOWN = "destroy() { this.open = false; }"
+
+# Подставленный путь снятия БЕЗ СТРАЖА СОБСТВЕННОГО СОСТОЯНИЯ, приземляющий
+# фокус безусловно (Фаза 10, план 10-02). Он выражает ровно тот дефект, от
+# которого стои́т `if (this.open)` в ветви сноса: снос ЗАКРЫТОЙ соседки уводит
+# фокус у ОТКРЫТОЙ панели.
+#
+# ⚠️ ПОДСТАНОВКА НЕ НАЗЫВАЕТ ВНУТРЕННЕГО ИМЕНИ МЕТОДА ПРИЗЕМЛЕНИЯ НАМЕРЕННО:
+# она приземляет фокус САМА, по идентификатору площадки. Названный здесь метод
+# привязал бы контроль к устройству объекта, и переименование внутри макроса
+# ломало бы контроль, а выглядело бы это отказом правила.
+UNGUARDED_TEARDOWN = (
+    "destroy() { this.open = false; "
+    "document.documentElement.classList.remove('is-modal-open'); "
+    "const home = document.getElementById('__LANDING__'); "
+    "if (home) home.focus(); }"
+)
+
+
+def _xdata_with_unguarded_teardown(expression: str) -> str:
+    """Подставленное выражение, чей путь сноса СТРАЖА НЕ ИМЕЕТ.
+
+    Тот же двойной предохранитель и тот же приём последнего ключа объектного
+    литерала, что и у ``_xdata_with_dead_teardown``: ключ, объявленный ПОСЛЕДНИМ,
+    побеждает одноимённый объявленный раньше, поэтому подстановка остаётся
+    действенной и после того, как настоящий страж в выражении появится.
+    """
+    poisoned_body = UNGUARDED_TEARDOWN.replace("__LANDING__", FOCUS_LANDING_ID)
+    source = expression.strip()
+    assert source.endswith("}"), (
+        "выражение x-data не кончается закрывающей скобкой объектного литерала: "
+        "контроль подставляет не туда и потому не доказывает ничего"
+    )
+    assert poisoned_body not in source, (
+        "путь снятия без стража уже стоит в выражении — подстановка ничего не "
+        "добавляет, и контроль зелен по построению"
+    )
+    poisoned = source[:-1] + ", " + poisoned_body + " }"
+    assert poisoned != source, "подстановка ничего не изменила"
+    assert poisoned.count(poisoned_body) == 1, (
+        "путь снятия без стража встречается в подставленном выражении не один раз"
+    )
+    return poisoned
 
 
 def _modal_xdata_expression(html_source: str) -> str:
@@ -1770,7 +1999,33 @@ def _xdata_with_dead_teardown(expression: str) -> str:
     return poisoned
 
 
-def _run_modal_lifecycle(expression: str, scenario: str) -> dict:
+def _modal_after_request_expression(html_source: str) -> str:
+    """Выражение атрибута события завершения запроса из ОТРИСОВАННОЙ разметки.
+
+    ⚠️ ПРЕДМЕТ — ИМЕННО АТРИБУТ, А НЕ ТЕЛО `hide()`. Ветвь по успешности обмена
+    живёт в выражении атрибута формы, и правило, зовущее метод объекта напрямую,
+    проверяло бы не то место: панель, потерявшая ветвь в атрибуте, закрывалась бы
+    на ЛЮБОМ завершении запроса, а метод при этом оставался бы прежним.
+
+    Граница разборщика та же, что у `_modal_xdata_expression`: ОДНО выражение на
+    поданную разметку, и это утверждается числом найденных вхождений.
+    """
+    found = HTMX_RESET_ATTR_RE.findall(html_source)
+    assert len(found) == 1, (
+        f"в поданной разметке {len(found)} выражений завершения запроса, а не "
+        "одно: разборщик рассчитан на одну панель, и выбор вхождения стал бы "
+        "молчаливым"
+    )
+    return unescape(found[0])
+
+
+def _run_modal_lifecycle(
+    expression: str,
+    scenario: str,
+    *,
+    after_request: str = "",
+    landing_present: bool = True,
+) -> dict:
     """Исполнить сценарий жизненного цикла панели в интерпретаторе JS.
 
     ⚠️ ЗАПУСК ОБЩИЙ, А НЕ СОБСТВЕННЫЙ (план 09-19). Подпроцесс поднимает
@@ -1780,9 +2035,23 @@ def _run_modal_lifecycle(expression: str, scenario: str) -> dict:
     что пропущенное правило неотличимо от зелёного (WARN-4 первого круга).
     Здесь остаётся ровно то, что принадлежит ПАНЕЛИ: сборка павлоада и выбор
     сценария.
+
+    ⚠️ ДВА ВХОДА ПРИБАВЛЕНЫ ФАЗОЙ 10 (план 10-02) И ОБА НЕОБЯЗАТЕЛЬНЫ С
+    УМОЛЧАНИЕМ, ОСТАВЛЯЮЩИМ ТРИ ДЕЙСТВУЮЩИХ СЦЕНАРИЯ БАЙТ-В-БАЙТ ПРЕЖНИМИ:
+    ``after_request`` нужен только сценарию ветви обмена, ``landing_present`` —
+    только отрицательному контролю площадки. Вердикты правил блокировки
+    прокрутки расширением не двигаются, и это утверждается прогоном ДО и ПОСЛЕ,
+    а не обещается здесь.
     """
     payload = json.dumps(
-        {"expression": expression, "scenario": scenario, "lock": SCROLL_LOCK_CLASS}
+        {
+            "expression": expression,
+            "scenario": scenario,
+            "lock": SCROLL_LOCK_CLASS,
+            "after_request": after_request,
+            "landing_id": FOCUS_LANDING_ID,
+            "landing_present": landing_present,
+        }
     )
     assert MODAL_LIFECYCLE_HARNESS.count("__PAYLOAD__") == 1, (
         "образец подстановки павлоада встречается в гарнире не один раз — "
@@ -1903,6 +2172,315 @@ def test_control_negative_a_panel_without_a_teardown_path_stays_locked():
         "гарнир сообщил «отперто» о выражении, у которого пути снятия на ветви "
         "сноса нет: он доказывает не свойство компонента, а собственную "
         f"работоспособность; вердикт: {verdict}"
+    )
+
+
+# --- ВЕТВЬ ПО УСПЕШНОСТИ ОБМЕНА И ПРИЗЕМЛЕНИЕ ФОКУСА (план 10-02) ------------
+#
+# ⚠️ ПРАВИЛА НИЖЕ ИСПОЛНЯЮТ ВЫРАЖЕНИЯ, А НЕ ИЩУТ В НИХ ПОДСТРОКУ. Разметочная
+# половина допустима только как ДОПОЛНЕНИЕ к поведенческой: правило на вхождении
+# строки в этом дереве уже признано недостаточным (план 09-17, WR-03 четвёртого
+# круга) — и признано на ЭТОМ ЖЕ объекте. Панель, у которой ветвь стои́т в
+# атрибуте текстуально, но фокус никуда не едет, зеленела бы у разметочного
+# правила посимвольно так же, как исправная.
+
+
+def test_the_panel_closes_only_on_a_successful_exchange():
+    """НЕСУЩЕЕ: панель уходит на успехе и ОСТАЁТСЯ на отказе (D-12).
+
+    Цена безусловного закрытия названа вехой поимённо и запрещена ею же под
+    именем «оптимистичный UI»: при 500 и при обрыве сети панель ушла бы,
+    действие выполнено НЕ было, а экран выглядел бы так, будто всё получилось.
+    Оставшаяся открытой панель — ЖЕЛАЕМОЕ поведение: поверх неё встаёт плашка
+    аварии QUAL-03, и повторить можно, не открывая панель заново.
+
+    ⚠️ ВЕТВЬ ЧИТАЕТ ПРИЗНАК УСПЕШНОСТИ СОБЫТИЯ, А НЕ СОБСТВЕННОЕ УСЛОВИЕ ПО КОДУ
+    ОТВЕТА. Собственное условие было бы ВТОРЫМ определением успеха в проекте,
+    молча расходящимся с правилами `responseHandling` блока конфигурации Фазы 7.
+    Разметочная половина ниже утверждает именно это — не «есть ветвь», а «ветвь
+    спрашивает признак события».
+
+    Вперёд совместимо с FORM-08 Фазы 11: 422 есть неуспех, и панель с ошибкой
+    заполнения закрыться не может по построению.
+    """
+    rendered = _modal_block()
+    expression = _modal_after_request_expression(rendered)
+
+    # Разметочная половина: предмет ветвления — признак успешности СОБЫТИЯ.
+    assert "detail.successful" in expression, (
+        "выражение завершения запроса не читает признак успешности события — "
+        "либо ветви нет вовсе, либо заведено ВТОРОЕ определение успеха по коду "
+        f"ответа, молча расходящееся с блоком конфигурации: {expression!r}"
+    )
+    assert "hide()" in expression, (
+        f"выражение завершения запроса панель не закрывает вовсе: {expression!r}"
+    )
+
+    # Поведенческая половина: обе ветви ИСПОЛНЯЮТСЯ.
+    verdict = _run_modal_lifecycle(
+        _modal_xdata_expression(rendered),
+        "exchange",
+        after_request=expression,
+    )
+
+    assert verdict["success"]["open"] is False, (
+        "после УСПЕШНОГО обмена панель осталась открытой — подтверждённое "
+        f"действие выполнено, а окно висит поверх результата; вердикт: {verdict}"
+    )
+    assert verdict["success"]["locked"] is False, (
+        "после успешного обмена признак блокировки прокрутки остался на "
+        f"документе: закрытие прошло мимо снятия признака; вердикт: {verdict}"
+    )
+    assert verdict["failure"]["open"] is True, (
+        "при НЕУСПЕШНОМ обмене панель закрылась: действие выполнено не было, а "
+        "экран выглядит так, будто всё получилось — оптимистичный UI, "
+        f"запрещённый вехой поимённо; вердикт: {verdict}"
+    )
+    assert verdict["failure"]["locked"] is True, (
+        "при неуспешном обмене панель осталась открытой, а признак блокировки "
+        f"прокрутки с документа снялся — состояние разъехалось: {verdict}"
+    )
+    assert verdict["success"]["sending"] is False, (
+        "сброс признака отправки не произошёл на успехе — кнопка подтверждения "
+        f"осталась бы занятой: {verdict}"
+    )
+    assert verdict["failure"]["sending"] is False, (
+        "сброс признака отправки не произошёл на ОТКАЗЕ, а это единственный "
+        "путь, на котором он виден человеку: рантайм снимает свою блокировку, и "
+        "на экране остаётся включённая праздная кнопка с признаком занятости; "
+        f"вердикт: {verdict}"
+    )
+    assert verdict["repeat_matches"] is True, (
+        f"повторное исполнение сценария обмена дало ДРУГОЙ исход: {verdict}"
+    )
+
+
+def test_the_panel_lands_the_focus_when_its_opener_left_the_document():
+    """НЕСУЩЕЕ: ветвление спрашивает ПРИСУТСТВИЕ узла, а не наличие метода.
+
+    Сегодняшняя форма (`if (back && back.focus)`) на фрагментном пути ЛОЖНА и
+    ложна молча: открыватель — кнопка удаления той самой строки — уезжает
+    внеполосным узлом ответа, метод фокусировки у отсоединённого узла остаётся,
+    вызов не падает и НЕ ДЕЛАЕТ НИЧЕГО. Фокус остаётся на теле документа, и
+    обход по Tab начинается сначала на каждом подтверждённом действии.
+
+    ⚠️ ПРАВИЛО ОТЛИЧАЕТ «ФОКУС УШЁЛ НА ПЛОЩАДКУ» ОТ «ФОКУС НЕ ДВИГАЛСЯ», и
+    отличает вердиктом с ИМЕНЕМ узла, а не булевым «метод вызван». Булево
+    зеленело бы ровно на том дефекте, ради которого правило заведено.
+    """
+    verdict = _run_modal_lifecycle(
+        _modal_xdata_expression(_modal_block()),
+        "focus_after_hide",
+        landing_present=True,
+    )
+
+    assert verdict["opener_has_focus_method"] is True, (
+        "у подставного открывателя нет метода фокусировки — сценарий проверял "
+        "бы не тот случай: весь предмет правила в том, что метод ЕСТЬ, а узла в "
+        f"документе НЕТ; вердикт: {verdict}"
+    )
+    assert verdict["opener_connected"] is False, (
+        "подставной открыватель присутствует в документе — сценарий беспредметен: "
+        f"проверяется ветвь ОТСУТСТВИЯ открывателя; вердикт: {verdict}"
+    )
+    assert verdict["focused"] == "landing", (
+        "после закрытия панели фокус НЕ приземлился на область уведомлений: "
+        "ветвление возврата спрашивает наличие метода вместо присутствия узла в "
+        "документе, вызов фокусировки отсоединённого узла не делает ничего, и "
+        f"фокус молча остался на теле документа; вердикт: {verdict}"
+    )
+    assert verdict["repeat_matches"] is True, (
+        f"повторное исполнение сценария дало ДРУГОЙ исход: {verdict}"
+    )
+
+
+def test_the_teardown_lands_the_focus_too():
+    """НЕСУЩЕЕ: приземление живёт и на ВТОРОМ пути ухода узла (Landmine 1).
+
+    Обязательство, повешенное только на `hide()`, на фрагментном пути не
+    работает ВОВСЕ: событие после запроса приходит ПОСЛЕ свопа, то есть после
+    того, как внеполосный узел уже снял панель вместе с её формой. Ровно на этом
+    абзаце споткнулся план 09-13 — он повесил обязательство на `hide()`, не
+    прочитав, что второго пути ухода узла тот не покрывает.
+
+    Сценарий `hide()` не зовёт НИ РАЗУ: панель открывается и СНОСИТСЯ.
+    """
+    verdict = _run_modal_lifecycle(
+        _modal_xdata_expression(_modal_block()),
+        "focus_after_teardown",
+        landing_present=True,
+    )
+
+    assert verdict["has_destroy"] is True, (
+        "у объекта x-data панели нет пути снятия на ветви сноса узла — "
+        f"приземлять фокус на фрагментном пути нечем; вердикт: {verdict}"
+    )
+    assert verdict["still_locked_after_teardown"] is False, (
+        "снос узла оставил признак блокировки прокрутки — расширение гарнира "
+        f"задело действующее свойство: {verdict}"
+    )
+    assert verdict["focused"] == "landing", (
+        "снос узла панели фокус НЕ приземлил: обязательство висит только на "
+        "`hide()`, который на фрагментном пути не вызывается вовсе, — и после "
+        "подтверждённого удаления фокус остаётся на теле документа; вердикт: "
+        f"{verdict}"
+    )
+    assert verdict["repeat_matches"] is True, (
+        f"повторное исполнение сценария сноса дало ДРУГОЙ исход: {verdict}"
+    )
+
+
+def test_the_teardown_of_a_closed_panel_never_moves_the_focus():
+    """ПРОВЕРКА СОБСТВЕННОГО СОСТОЯНИЯ: снос ЗАКРЫТОЙ соседки фокуса не трогает.
+
+    Страж собственного состояния в ветви сноса — РАЗЛИЧИТЕЛЬ, а не украшение:
+    подмена строки сносит закрытые панели ПОСТОЯННО, и без стража каждая из них
+    уводила бы фокус у ОТКРЫТОЙ — включая административные подтверждения.
+    Зеркало правила блокировки прокрутки
+    (`test_the_teardown_of_a_closed_panel_keeps_an_open_sibling_locked`) на
+    втором обязательстве той же ветви.
+    """
+    verdict = _run_modal_lifecycle(
+        _modal_xdata_expression(_modal_block()),
+        "focus_untouched_by_closed_sibling",
+        landing_present=True,
+    )
+
+    assert verdict["has_destroy"] is True, (
+        "у объекта x-data панели нет пути снятия на ветви сноса, поэтому "
+        "утверждение о защите фокуса открытой соседки проверяло бы "
+        f"отсутствующий механизм; вердикт: {verdict}"
+    )
+    assert verdict["still_locked_after_teardown"] is True, (
+        "снос ЗАКРЫТОЙ соседки снял блокировку у ОТКРЫТОЙ — страж собственного "
+        f"состояния потерян; вердикт: {verdict}"
+    )
+    assert verdict["focused_after"] == verdict["focused_before"], (
+        "снос ЗАКРЫТОЙ соседней панели УВЁЛ фокус у открытой: приземление "
+        "поставлено мимо стража собственного состояния, и каждая подмена строки "
+        f"выдёргивает человека из открытого им окна; вердикт: {verdict}"
+    )
+
+    # ⚠️ ЗУБЫ ДОКАЗЫВАЮТСЯ ЗДЕСЬ ЖЕ, А НЕ ЗАЯВЛЯЮТСЯ. Утверждение выше зелено и
+    # на дереве, где приземления нет ВОВСЕ, — и таким оно было ДО правки этого
+    # плана. Подстановка снимает страж и обязана его покрасить: без неё правило
+    # неотличимо от собственного отсутствия.
+    poisoned = _run_modal_lifecycle(
+        _xdata_with_unguarded_teardown(_modal_xdata_expression(_modal_block())),
+        "focus_untouched_by_closed_sibling",
+        landing_present=True,
+    )
+    assert poisoned["focused_after"] != poisoned["focused_before"], (
+        "выражение, чей путь сноса стража СОБСТВЕННОГО СОСТОЯНИЯ не имеет, "
+        "фокуса у открытой панели не увело — правило выше не отличает "
+        f"защищённый путь снятия от незащищённого; вердикт: {poisoned}"
+    )
+
+
+def test_control_negative_a_panel_landing_on_a_missing_region_reddens_the_gate():
+    """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ: гарнир обязан уметь сказать «не приземлился».
+
+    Тот же гарнир на стаб-документе БЕЗ площадки обязан сообщить, что фокус на
+    площадку не приехал, — иначе оба несущих правила выше доказывают
+    работоспособность гарнира, а не свойство компонента.
+
+    ⚠️ ДВОЙНОЙ ПРЕДОХРАНИТЕЛЬ, ПО ОБРАЗЦУ `_xdata_with_dead_teardown`: контроль
+    отдельно утверждает, что на документе С площадкой тот же сценарий даёт
+    ДРУГОЙ вердикт. Без этого утверждения контроль был бы зелен по построению —
+    например, на панели, которая фокуса не двигает никогда.
+    """
+    expression = _modal_xdata_expression(_modal_block())
+
+    for scenario in ("focus_after_hide", "focus_after_teardown"):
+        with_region = _run_modal_lifecycle(
+            expression, scenario, landing_present=True
+        )
+        without_region = _run_modal_lifecycle(
+            expression, scenario, landing_present=False
+        )
+
+        assert with_region["focused"] == "landing", (
+            f"сценарий {scenario} не приземляет фокус и на документе С "
+            f"площадкой — контроль ничего не различает: {with_region}"
+        )
+        assert without_region["focused"] != "landing", (
+            f"гарнир сообщил «приземлился» о документе, в котором площадки НЕТ "
+            f"({scenario}): он доказывает собственную работоспособность, а не "
+            f"свойство компонента; вердикт: {without_region}"
+        )
+        assert without_region["focused"] != with_region["focused"], (
+            f"вердикт сценария {scenario} не зависит от наличия площадки — "
+            "правила выше зелены вакуумом"
+        )
+
+
+def test_the_landing_region_exists_in_the_shell_of_both_apps():
+    """Площадка существует в шелле и ПРОГРАММНО ФОКУСИРУЕМА.
+
+    Без этого правила приземление ехало бы в пустоту ровно там, где панель как
+    раз и открыта: область, исчезнувшая или переехавшая, оставила бы фокус на
+    теле документа МОЛЧА — вызов фокусировки не состоялся бы вовсе, а в консоли
+    не появилось бы ни слова.
+
+    ⚠️ ПРИЗНАК ФОКУСИРУЕМОСТИ ОБЯЗАН СТОЯТЬ ИМЕННО НА ВЕЖЛИВОЙ ОБЛАСТИ, А НЕ НА
+    ЕЁ СОСЕДКЕ. Площадка выбирается ОДНА: вторая фокусируемая область немедленно
+    поставила бы вопрос, какая из них площадка, и ответ разошёлся бы с объектом
+    клиентского состояния молча.
+    """
+    source = _template_source(NOTICE_AREA)
+
+    region = re.search(
+        rf'<div id="{re.escape(FOCUS_LANDING_ID)}"[^>]*>', source
+    )
+    assert region, (
+        f"области с идентификатором {FOCUS_LANDING_ID!r} в шелле нет: панель "
+        "приземляет фокус в пустоту, и молча"
+    )
+    assert 'role="status"' in region.group(0), (
+        "площадка приземления перестала быть ВЕЖЛИВОЙ областью: "
+        f"{region.group(0)!r}"
+    )
+    assert 'tabindex="-1"' in region.group(0), (
+        "область уведомлений не несёт признака программной фокусируемости: "
+        "вызов фокусировки на ней не делает ничего, и фокус после "
+        f"подтверждённого удаления остаётся на теле документа; {region.group(0)!r}"
+    )
+
+    alert_region = re.search(r'<div id="notice-alert"[^>]*>', source)
+    assert alert_region, "настойчивая область уведомления пропала из шелла"
+    assert "tabindex" not in alert_region.group(0), (
+        "признак фокусируемости появился и на НАСТОЙЧИВОЙ области — площадок "
+        "стало две, и какая из них площадка, не говорит ничто: "
+        f"{alert_region.group(0)!r}"
+    )
+
+    for shell in APP_SHELLS:
+        assert NOTICE_AREA in _template_source(shell), (
+            f"шелл {shell} перестал подключать область уведомлений — площадки "
+            "приземления на его страницах нет вовсе"
+        )
+
+
+def test_the_focus_landing_is_declared_once_and_called_twice():
+    """Площадка объявлена в объекте ОДИН раз и зовётся из ОБЕИХ ветвей.
+
+    Два независимо выписанных приземления разошлись бы молча, и половина из 18
+    мест приземлялась бы в одно место, половина — в другое. Правило читает
+    ОТРЕНДЕРЕННОЕ выражение, а не шаблон: предмет — то, что доезжает до
+    браузера.
+    """
+    expression = _modal_xdata_expression(_modal_block())
+
+    literal = f"'{FOCUS_LANDING_ID}'"
+    assert expression.count(literal) == 1, (
+        f"идентификатор площадки {literal} встречается в выражении клиентского "
+        f"состояния {expression.count(literal)} раз(а), а не один: приземление "
+        "выписано независимо в двух ветвях, и разойтись они могут молча — "
+        f"выражение: {expression!r}"
+    )
+    assert "isConnected" in expression, (
+        "ветвление возврата фокуса не спрашивает присутствия открывателя в "
+        f"документе: {expression!r}"
     )
 
 
