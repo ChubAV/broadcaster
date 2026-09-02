@@ -7,7 +7,7 @@
       "agent_id": "agent-ab9f287b9d0f5c5c9",
       "worktree_path": "/source/broadcaster/.claude/worktrees/agent-ab9f287b9d0f5c5c9",
       "branch": "worktree-agent-ab9f287b9d0f5c5c9",
-      "expected_base": "2b39c1b",
+      "expected_base": "2b39c1b47dddcd10331ca185752b9b3d32cc60da",
       "files_modified": [
         "app/pages/account_groups.py",
         "app/templates/account_groups/includes/group_row.html",
