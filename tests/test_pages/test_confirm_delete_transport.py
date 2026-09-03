@@ -64,6 +64,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ad import Ad
+from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
@@ -85,6 +86,19 @@ from app.services.ops_state import (
 from tests.test_pages.test_admin_panel import _FakeQueuePageRedis, _queue_task
 from tests.test_pages.test_editor_schedules import _seed_schedule
 from tests.test_pages.test_history_retry import _retry_env, _seed_log, _seed_retryable
+
+# ⚠️ ПОСЕВ ФАЗЫ 9 ВВОЗИТСЯ ПОД ПСЕВДОНИМАМИ, И ЭТО НЕ УКРАШЕНИЕ ИМЁН. Имя
+# `_seed_account` в ЭТОМ модуле уже занято посевом аккаунта мессенджера с ДРУГОЙ
+# сигнатурой (`(db, user_id, *, account_type)` против `(db, type_, user_id)`);
+# ввоз под настоящим именем молча перекрыл бы первое, и половина расстановок
+# поехала бы не тем посевом — с перепутанными местами позиционными аргументами,
+# то есть без единого признака отказа в тексте самих расстановок. Основание то же,
+# по которому ввозятся, а не переписываются двойники выше: второй экземпляр посева
+# разошёлся бы с первым молча.
+from tests.test_pages.test_account_groups import (
+    _seed_account as _seed_groups_account,
+    _seed_group as _seed_account_group,
+)
 
 PASSWORD = "testpass123"
 
@@ -657,6 +671,138 @@ async def _arrange_editor_schedule_delete(client, db, settings, identity) -> _Ar
 
 
 # =============================================================================
+# Посев: удаление группы аккаунта — ВТОРОЙ ФРАГМЕНТНЫЙ МАРШРУТ ПЕРЕЧНЯ
+#
+# ⚠️ ЭТА ЗАПИСЬ НЕ ПРАВИТ ОБРАБОТЧИКА НИ НА СИМВОЛ: маршрут переведён и обойдён
+# руками ФАЗОЙ 9. Он появляется здесь только сейчас потому, что Фаза 10 объявила
+# СВОИМИ восемь маршрутов подтверждения и девятый, унаследованный, в перечень не
+# попал — то есть модуль, объявляющий себя местом, где «маршрут, добавленный за
+# панелью подтверждения, краснеет», о нём молчал ровно так же, как молчали бы
+# восемь отдельных функций. Прибавка есть закрытие УНАСЛЕДОВАННОЙ ДЫРЫ ОБХОДА, а
+# не новая работа продукта.
+# =============================================================================
+
+# Несуществующий аккаунт отдельных утверждений обхода. ЛИТЕРАЛ ЗДЕСЬ НЕСУЩИЙ:
+# адрес приземления этого маршрута собирается из аккаунта ПУТИ
+# (`_screen_url(account_id, term)`), а параметризованные правила несуществующего
+# идентификатора и чужого владельца сличают его с ОБЪЯВЛЕННЫМ полем записи
+# (`missing_identifier_landing`) — то есть с литералом, известным ДО прогона.
+# Аккаунт, посеянный на прогоне, номера заранее не имеет, и адрес приземления
+# объявить было бы нечем.
+MISSING_ACCOUNT_GROUPS_ACCOUNT = 987654
+MISSING_ACCOUNT_GROUPS_LANDING = f"/accounts/{MISSING_ACCOUNT_GROUPS_ACCOUNT}/groups"
+
+
+async def _listing_rows(db: AsyncSession, user_id: int, account_id: int) -> int:
+    """Сколько строк в НЕОТФИЛЬТРОВАННОЙ выдаче аккаунта — ЗАПРОСОМ К БАЗЕ.
+
+    ⚠️ АНТИВАКУУМ РАССТАНОВОК СНИМАЕТСЯ ЗДЕСЬ, А НЕ ВЫВОДИТСЯ ИЗ ОТВЕТА. Ветку
+    ответа этого маршрута выбирает состояние ВЫДАЧИ, а не исход поиска строки
+    (`_current_listing_has_a_row`): расстановка, у которой выдача опустела
+    случайно, проверяла бы ветку перехода под именем фрагментной — и наоборот.
+    Выводить состояние базы из ответа значило бы проверять утверждение самим
+    утверждением.
+    """
+    rows = (
+        await db.execute(
+            select(Group).where(
+                Group.user_id == user_id, Group.account_id == account_id
+            )
+        )
+    ).scalars().all()
+    return len(rows)
+
+
+async def _arrange_account_group_delete(client, db, settings, identity) -> _Arranged:
+    """УСПЕХ ФРАГМЕНТНОЙ ВЕТКИ: адресуется одна из ДВУХ строк выдачи.
+
+    Вторая группа оставляет выдачу НЕПУСТОЙ — тот же приём и по той же причине,
+    что у расстановки удаления расписания: на последней строке маршрут уходит в
+    ветку перехода, и «фрагментная половина» проверяла бы переход.
+
+    Владелец передаётся посеву Фазы 9 ЯВНО: его собственный посев разрешает
+    владельца сам (по адресу `testuser@test.com`), и два независимых разрешения
+    разошлись бы молча — строки достались бы не тому пользователю, под которым
+    ходит обход.
+    """
+    user = await _current_user(db, identity, settings)
+    account = await _seed_groups_account(db, user_id=user.id)
+    group = await _seed_account_group(db, account, "Альфа", user_id=user.id)
+    await _seed_account_group(db, account, "Бета", user_id=user.id)
+
+    rows = await _listing_rows(db, user.id, account.id)
+    assert rows >= 2, (
+        f"в выдаче аккаунта {account.id} строк {rows}, а нужно НЕ МЕНЕЕ ДВУХ: "
+        "после удаления адресуемой выдача обязана остаться непустой, иначе "
+        "маршрут уходит в ветку перехода и фрагментная половина проверяет переход"
+    )
+    return _Arranged(
+        # ⚠️ ТЕЛО НЕСЁТ ПРИЗНАК ФИЛЬТРА ПОИСКА В ТОМ ВИДЕ, В КАКОМ ЕГО ШЛЁТ
+        # РАЗМЕТКА СТРОКИ. Контекст экрана приходит скрытым полем `search` обеих
+        # форм пути удаления (D-02, WR-03 плана 09-15); расстановка, отправившая
+        # ПУСТОЕ тело, проверяла бы не тот путь, которым ходит продукт.
+        url=f"/accounts/{account.id}/groups/{group.id}/delete",
+        data={"search": ""},
+        landing_args={"account_id": account.id},
+    )
+
+
+async def _arrange_account_group_last(client, db, settings, identity) -> _Arranged:
+    """ОПУСТЕВШАЯ ВЫДАЧА: адресуется РОВНО ОДНА строка, и после неё не остаётся
+    ничего — маршрут закрывается переходом на экран групп аккаунта (D-09).
+    """
+    user = await _current_user(db, identity, settings)
+    account = await _seed_groups_account(db, user_id=user.id)
+    group = await _seed_account_group(db, account, "Единственная", user_id=user.id)
+
+    rows = await _listing_rows(db, user.id, account.id)
+    assert rows == 1, (
+        f"в выдаче аккаунта {account.id} строк {rows}, а нужна РОВНО ОДНА: при "
+        "второй строке выдача не опустеет, и расстановка проверяла бы "
+        "фрагментную ветку под именем ветки перехода"
+    )
+    return _Arranged(
+        url=f"/accounts/{account.id}/groups/{group.id}/delete",
+        data={"search": ""},
+        landing_args={"account_id": account.id},
+    )
+
+
+async def _arrange_missing_account_group(client, db, settings, identity) -> _Arranged:
+    return _Arranged(
+        url=(
+            f"/accounts/{MISSING_ACCOUNT_GROUPS_ACCOUNT}"
+            f"/groups/{MISSING_ACCOUNT_GROUPS_ACCOUNT}/delete"
+        ),
+        data={"search": ""},
+    )
+
+
+async def _arrange_foreign_account_group(client, db, settings, identity):
+    """ЧУЖАЯ СТРОКА ЖИВАЯ, а адресуется она через аккаунт, которого нет.
+
+    ⚠️ ПОЧЕМУ АККАУНТ В АДРЕСЕ НЕ ЧУЖОЙ, А НЕСУЩЕСТВУЮЩИЙ. Тройной `WHERE`
+    обработчика сличает и владельца, и аккаунт, поэтому строка не находится в
+    обоих случаях одинаково; а вот АДРЕС ПРИЗЕМЛЕНИЯ собирается из аккаунта
+    ПУТИ, и параметризованное правило сличает его с объявленным литералом записи.
+    Номер чужого аккаунта известен только на прогоне — объявить им поле записи
+    нечем. Предмет правила от этого не меняется: чужая группа ЖИВАЯ, ответ обязан
+    быть неотличим от ответа того же аккаунта на любой другой вход, а строка —
+    уцелеть.
+    """
+    stranger = await _foreign_user(db)
+    account = await _seed_groups_account(db, user_id=stranger.id)
+    group = await _seed_account_group(db, account, "Чужая", user_id=stranger.id)
+    return _Arranged(
+        url=(
+            f"/accounts/{MISSING_ACCOUNT_GROUPS_ACCOUNT}"
+            f"/groups/{group.id}/delete"
+        ),
+        data={"search": ""},
+    ), (Group, group.id)
+
+
+# =============================================================================
 # ПЕРЕЧЕНЬ МАРШРУТОВ ПОДТВЕРЖДЕНИЯ — ОДНА ЗАПИСЬ НА МАРШРУТ
 # =============================================================================
 #
@@ -871,6 +1017,45 @@ CONFIRMED_DELETE_ROUTES: tuple[_Route, ...] = (
                 landing="/ads/{ad_id}/edit",
             ),
         ),
+        session_landing="/login",
+    ),
+    _Route(
+        key="app/pages/account_groups.py::account_groups_delete",
+        name="удаление группы аккаунта",
+        identity="user",
+        # ВТОРОЙ фрагментный маршрут перечня. Действие снимает строку с экрана,
+        # который ОСТАЁТСЯ, тремя внеполосными узлами (снятие строки, снятие
+        # осиротевшей панели, содержимое линейки счётчика).
+        htmx_form=FRAGMENT,
+        # ⚠️ ОДИН ИСХОД, А НЕ ДВА, И ЭТО РЕШЕНИЕ, ПРИНЯТОЕ ПО ДОКТРИНЕ МОДУЛЯ, А
+        # НЕ НЕДОСМОТР. Обработчик отвечает ДВУМЯ формами: фрагментом, пока в
+        # текущей выдаче осталась хотя бы одна строка, и переходом, когда выдача
+        # опустела (D-09). Вторая форма ИСХОДОМ ДЕЙСТВИЯ НЕ ЯВЛЯЕТСЯ: исход
+        # действия здесь один — группа удалена, — кодов исхода маршрут не выдаёт
+        # вовсе (`notice` не передаётся, D-10), и различает две формы СОСТОЯНИЕ
+        # ЭКРАНА, а не результат удаления. Это ровно тот класс, который шапка
+        # модуля держит ОТДЕЛЬНЫМИ утверждениями, в счёт исходов не входящими
+        # («свойство ТРАНСПОРТА, а не исход действия»): подмешай его в список
+        # исходов — и «сколько кодов исхода выдаёт маршрут» превратилось бы в
+        # «сколько проверок мы написали». Ветка опустевшей выдачи накрыта своим
+        # правилом ниже, обеими половинами пары.
+        #
+        # ⚠️ И ВТОРАЯ ПРИЧИНА, ИЗМЕРЕННАЯ, А НЕ ДОКТРИНАЛЬНАЯ: поле ожидаемой
+        # формы ответа (`htmx_form`) живёт у ЗАПИСИ, а не у исхода, и
+        # параметризованный обход ветвится по нему. Исход с другой формой ответа
+        # внутри одной записи обход бы УРОНИЛ — а расширять структуру записи на
+        # ходу здесь запрещено. Ограничение записано ОКНОМ 43 `.planning/WINDOWS.md`
+        # и передано дальше; структура не правится, обход не правится.
+        outcomes=(
+            _Outcome(
+                name="успех",
+                arrange=_arrange_account_group_delete,
+                landing="/accounts/{account_id}/groups",
+            ),
+        ),
+        missing_identifier=_arrange_missing_account_group,
+        missing_identifier_landing=MISSING_ACCOUNT_GROUPS_LANDING,
+        foreign_owner=_arrange_foreign_account_group,
         session_landing="/login",
     ),
 )
