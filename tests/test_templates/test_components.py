@@ -1261,12 +1261,24 @@ PANEL_MARKUP_MARKERS = ("modal__form", "modal__actions", "modal__panel")
 # Значение поэтому выписано ЦЕЛИКОМ, и ветвь входит в охраняемое: потеряв её,
 # панель начнёт закрываться на любом завершении запроса, и краснеть это обязано
 # ЗДЕСЬ ТОЖЕ, а не только у поведенческого правила.
+# ⚠️ ЗНАЧЕНИЕ СДВИНУЛОСЬ ВТОРИЧНО (план 10-05), И ОСНОВАНИЕ АБЗАЦА ВЫШЕ ОТ ЭТОГО
+# НЕ ИЗМЕНИЛОСЬ. Ветвь, заведённая планом 10-02, была МЕРТВА на транспорте
+# перехода — признак успешности события на нём не присваивается вовсе (гейп 1
+# отчёта верификации фазы), — и к ней прибавлен ЯВНЫЙ дизъюнкт транспорта. Он
+# входит в охраняемое ровно по той же причине, что и первый: панель, потерявшая
+# его, снова перестанет закрываться на 16 из 18 мест, и покраснеть это обязано
+# ЗДЕСЬ ТОЖЕ. Форма записана ЭКРАНИРОВАННОЙ, потому что набор сличается с СЫРОЙ
+# строкой шаблона, а не с отрисованной разметкой.
 PANEL_QUALITY_SOURCE_PROPERTIES = (
     'hx-post="{{ action }}"',
     'hx-swap="none"',
     'hx-disabled-elt="find button[type=submit]"',
     'hx-indicator="find .form-busy"',
-    'x-on:htmx:after-request="sending = false; if ($event.detail.successful) hide()"',
+    (
+        'x-on:htmx:after-request="sending = false; '
+        "if ($event.detail.successful || ($event.detail.xhr &amp;&amp; "
+        "$event.detail.xhr.getResponseHeader('HX-Location'))) hide()\""
+    ),
 )
 
 
@@ -1756,9 +1768,117 @@ function build() {
 // телом функции с областью видимости объекта клиентского состояния. Вызов
 // метода объекта напрямую проверял бы НЕ ТО — предмет здесь ветвь, записанная
 // в АТРИБУТЕ, а не тело `hide()`.
-function afterRequest(panel, successful) {
+//
+// ⚠️ ИСТОЧНИК ОБЪЕКТА СОБЫТИЯ СМЕНЁН ФАЗОЙ 10 (план 10-05), СПОСОБ ИСПОЛНЕНИЯ —
+// НЕТ. Прежде функция принимала БУЛЕВО и собирала объект события сама
+// (`{ detail: { successful: successful } }`) — форму, которой рантайм на
+// транспорте перехода НЕ ПРОИЗВОДИТ: правило, кормимое ею, зеленело в вакууме и
+// отличить исправную панель от мёртвой ветви не могло (гейп 1 отчёта
+// верификации фазы). Теперь функция принимает ГОТОВЫЙ `detail` целиком, а формы
+// его объявлены `EVENT_SHAPES` ниже и сняты с вендоренного бандла. Обоснование
+// абзаца выше остаётся верным ЦЕЛИКОМ и не переписывается.
+function afterRequest(panel, detail) {
   const handler = new Function('$event', 'with (this) { ' + AFTER_REQUEST + ' }');
-  handler.call(panel, { detail: { successful: successful } });
+  handler.call(panel, { detail: detail });
+}
+
+// --- ЧЕТЫРЕ РЕАЛЬНЫЕ ФОРМЫ СОБЫТИЯ ЗАВЕРШЕНИЯ ЗАПРОСА (план 10-05) ----------
+//
+// ⚠️ СОСТАВ СНЯТ С ВЕНДОРЕННОГО БАНДЛА `app/static/js/htmx.min.js` (htmx
+// 2.0.10) КОМАНДАМИ ВЫДЕРЖЕК, А НЕ ВЫВЕДЕН ИЗ ДОКУМЕНТАЦИИ. Измерено:
+//
+//   [1] объект события собирается ДО отправки запроса —
+//       `const T={xhr:g,target:u,requestConfig:C,etc:i,boosted:$,select:F,
+//       pathInfo:{…}}` — значит `xhr` в нём есть ВСЕГДА, а ключа признака
+//       успешности нет ВОВСЕ до присваивания;
+//   [2] присваивание в бандле ЕДИНСТВЕННОЕ (`s.count('e.successful=') == 1`),
+//       стои́т на смещении 48145 — `e.target=r;e.failed=a;e.successful=!a` — и
+//       стои́т ПОСЛЕ раннего возврата ветки перехода в обработчике ответа `Vn`
+//       (`if(T(n,/HX-Location:/i)){…Nn("get",e,s);return}`);
+//   [3] на несостоявшемся обмене событие летит из `g.onerror`, `g.onabort` и
+//       `g.ontimeout` с ТЕМ ЖЕ объектом, а `Vn` не вызывается вовсе.
+//
+// ⚠️ ОТСУТСТВИЕ КЛЮЧА ВОСПРОИЗВОДИТСЯ ОТСУТСТВИЕМ, А НЕ ЛОЖЬЮ, И ЭТО НЕСУЩЕЕ.
+// Булево `false` прошло бы через ветвь по коду ответа идентично, а через ветвь
+// с признаком события — НЕТ; гарнир, подменяющий одно другим, снова стерёг бы
+// не то. Единственность ключа утверждается полем вердикта
+// `successful_key_present`, а не оставляется читателю.
+const EVENT_SHAPES = {
+  // ТРАНСПОРТ ПЕРЕХОДА: ответ `location_response()` (app/pages/htmx.py:133-150)
+  // — 204 + заголовок перехода. Сработал ранний возврат [2]: ключа признака
+  // успешности НЕТ.
+  location: function () {
+    return {
+      xhr: {
+        status: 204,
+        getResponseHeader: function (name) {
+          return name === 'HX-Location' ? '/ads' : null;
+        }
+      }
+    };
+  },
+  // ФРАГМЕНТНЫЙ ТРАНСПОРТ: своп состоялся, признаки присвоены ветвью [2].
+  fragment: function () {
+    return {
+      successful: true,
+      failed: false,
+      xhr: {
+        status: 200,
+        getResponseHeader: function () { return null; }
+      }
+    };
+  },
+  // ОТКАЗ СЕРВЕРА: заголовка перехода нет, ранний возврат не сработал, признаки
+  // присвоены ветвью [2] штатно — ложью.
+  refused: function () {
+    return {
+      successful: false,
+      failed: true,
+      xhr: {
+        status: 500,
+        getResponseHeader: function () { return null; }
+      }
+    };
+  },
+  // НЕСОСТОЯВШИЙСЯ ОБМЕН: обрыв сети, отмена, таймаут — событие из обработчиков
+  // отказа транспорта [3]. Обработчик ответа не вызывался, ключа признака
+  // успешности НЕТ; код ответа равен нулю, чтение заголовка даёт пустоту.
+  never_completed: function () {
+    return {
+      xhr: {
+        status: 0,
+        getResponseHeader: function () { return null; }
+      }
+    };
+  }
+};
+
+// ⚠️ ОСНАСТКА ЗАПИСЫВАЕТ ИМЯ ОТРАБОТАВШЕЙ ВЕТВИ, А НЕ ИТОГОВУЮ ПОЗИЦИЮ ФОКУСА
+// (WR-07 ревизии фазы). Две ветви ухода узла, неразличимые для теста, оставляют
+// запись шапки непроверяемой и взаимозаменяемой: правило обязано утверждать,
+// КАКАЯ ИЗ ДВУХ отработала. Подмена происходит ДО исполнения выражения, потому
+// что выражение разрешает имя метода на объекте в момент вызова.
+//
+// ⚠️ ПЕРЕЧЕНЬ ИМЁН НА ВОПРОС «ОТРАБОТАЛА ЛИ ВЕТВЬ СНОСА ИЛИ ОКАЗАЛАСЬ ПУСТОЙ
+// ОПЕРАЦИЕЙ» НЕ ОТВЕЧАЕТ, а правило атрибуции обязано отвечать: страж
+// собственного состояния (`if (this.open)`) делает снос закрытой панели пустым.
+// Поэтому оснастка ведёт ВТОРУЮ запись — состояние панели ПЕРЕД каждым вызовом.
+function spyBranches(panel) {
+  const names = [];
+  const openBefore = {};
+  const realHide = panel.hide;
+  const realDestroy = panel.destroy;
+  panel.hide = function () {
+    names.push('hide');
+    openBefore.hide = this.open;
+    return realHide.call(this);
+  };
+  panel.destroy = function () {
+    names.push('destroy');
+    openBefore.destroy = this.open;
+    return realDestroy.call(this);
+  };
+  return { names: names, openBefore: openBefore };
 }
 
 // СНОС УЗЛА выражается вызовом того метода объекта, который рантайм Alpine
@@ -1890,17 +2010,82 @@ function scenarioExchange() {
     const good = build();
     good.show();
     good.sending = true;
-    afterRequest(good, true);
+    afterRequest(good, { successful: true });
     const success = { open: good.open, sending: good.sending, locked: locked() };
 
     reset();
     const bad = build();
     bad.show();
     bad.sending = true;
-    afterRequest(bad, false);
+    afterRequest(bad, { successful: false });
     const failure = { open: bad.open, sending: bad.sending, locked: locked() };
 
     runs.push({ success: success, failure: failure });
+  }
+  const same = JSON.stringify(runs[0]) === JSON.stringify(runs[1]);
+  return Object.assign({}, runs[1], { repeat_matches: same });
+}
+
+// --- СЦЕНАРИЙ ТРАНСПОРТОВ (план 10-05) --------------------------------------
+//
+// Прогоняет ОДНУ названную форму события из `EVENT_SHAPES` через выражение
+// атрибута и возвращает вердикт, снятый ДО сноса узла, плюс отдельную запись о
+// самом сносе. Порядок несущий: снос ЗАКРЫВАЕТ ещё открытую панель, и вердикт,
+// снятый после него, показывал бы закрытой панель, которая на отказе обязана
+// остаться открытой.
+function scenarioTransports() {
+  const shapeName = payload.event_shape;
+  const make = EVENT_SHAPES[shapeName];
+  if (!make) {
+    console.error('неизвестная форма события: ' + shapeName);
+    process.exit(2);
+  }
+  const runs = [];
+  for (let i = 0; i < 2; i++) {
+    reset();
+    const panel = build();
+    panel.show();
+    // Признак отправки встаёт так же, как его ставит перехват отправки формы:
+    // сброс его — предмет утверждения на ВСЕХ четырёх формах.
+    panel.sending = true;
+    const spy = spyBranches(panel);
+    const detail = make();
+    const key_present = Object.prototype.hasOwnProperty.call(detail, 'successful');
+
+    // ⚠️ ИСКЛЮЧЕНИЕ ЛОВИТСЯ И ЕДЕТ В ВЕРДИКТ ПОЛЕМ, А НЕ ПРОГЛАТЫВАЕТСЯ:
+    // выражение, упавшее внутри слушателя, оставило бы панель открытой — то
+    // есть выглядело бы РОВНО как исправное поведение на путях отказа.
+    let threw = null;
+    try {
+      afterRequest(panel, detail);
+    } catch (e) {
+      threw = String((e && e.message) || e);
+    }
+
+    const verdict = {
+      open: panel.open,
+      sending: panel.sending,
+      locked: locked(),
+      branches: spy.names.slice(),
+      successful_key_present: key_present,
+      threw: threw
+    };
+
+    // Снос узла ПОСЛЕ события — тем же вызовом, каким его делает рантайм
+    // клиентского состояния из колбэка наблюдателя мутаций.
+    const open_at_teardown = panel.open;
+    teardown(panel);
+    verdict.teardown = {
+      branches: spy.names.slice(),
+      open_at_call: open_at_teardown,
+      // Пустая операция — это НЕ «ветвь не звалась»: она звалась и вышла на
+      // собственном страже состояния. Различие утверждается полем, а не
+      // выводится из перечня имён.
+      was_a_noop: open_at_teardown === false,
+      open: panel.open,
+      locked: locked()
+    };
+    runs.push(verdict);
   }
   const same = JSON.stringify(runs[0]) === JSON.stringify(runs[1]);
   return Object.assign({}, runs[1], { repeat_matches: same });
@@ -1913,7 +2098,8 @@ const SCENARIOS = {
   focus_after_hide: scenarioFocusAfterHide,
   focus_after_teardown: scenarioFocusAfterTeardown,
   focus_untouched_by_closed_sibling: scenarioFocusSibling,
-  exchange: scenarioExchange
+  exchange: scenarioExchange,
+  transports: scenarioTransports
 };
 const run = SCENARIOS[payload.scenario];
 if (!run) {
@@ -2047,6 +2233,7 @@ def _run_modal_lifecycle(
     *,
     after_request: str = "",
     landing_present: bool = True,
+    event_shape: str = "",
 ) -> dict:
     """Исполнить сценарий жизненного цикла панели в интерпретаторе JS.
 
@@ -2064,6 +2251,13 @@ def _run_modal_lifecycle(
     только отрицательному контролю площадки. Вердикты правил блокировки
     прокрутки расширением не двигаются, и это утверждается прогоном ДО и ПОСЛЕ,
     а не обещается здесь.
+
+    ⚠️ ТРЕТИЙ ВХОД ПРИБАВЛЕН ПЛАНОМ 10-05 ТОЙ ЖЕ ФОРМОЙ И С ТЕМ ЖЕ
+    ОБЯЗАТЕЛЬСТВОМ: ``event_shape`` называет форму события из ``EVENT_SHAPES`` и
+    нужен ТОЛЬКО сценарию транспортов; умолчание оставляет все действующие
+    сценарии байт-в-байт прежними. Неизменность их вердиктов утверждена
+    прогоном ДО правки (``10 passed, 54 deselected`` по фильтру правил фокуса и
+    блокировки прокрутки) и тем же прогоном ПОСЛЕ.
     """
     payload = json.dumps(
         {
@@ -2073,6 +2267,7 @@ def _run_modal_lifecycle(
             "after_request": after_request,
             "landing_id": FOCUS_LANDING_ID,
             "landing_present": landing_present,
+            "event_shape": event_shape,
         }
     )
     assert MODAL_LIFECYCLE_HARNESS.count("__PAYLOAD__") == 1, (
@@ -2274,6 +2469,139 @@ def test_the_panel_closes_only_on_a_successful_exchange():
     )
     assert verdict["repeat_matches"] is True, (
         f"повторное исполнение сценария обмена дало ДРУГОЙ исход: {verdict}"
+    )
+
+
+# --- ТРАНСПОРТЫ ЗАВЕРШЕНИЯ ЗАПРОСА (план 10-05, закрытие гейпа 1) ------------
+#
+# ⚠️ ЧЕМ ЭТИ ПРАВИЛА ОТЛИЧАЮТСЯ ОТ ПРЕЖНИХ: они кормят гарнир формами события,
+# СНЯТЫМИ С ВЕНДОРЕННОГО БАНДЛА, а не синтезированными из булева. Прежняя
+# поведенческая половина исполняла `{ detail: { successful: … } }` — форму,
+# которой рантайм на транспорте перехода не производит ВОВСЕ, — и потому была
+# зелена независимо от исправности предмета. Это и есть предмет гейпа 1 отчёта
+# верификации фазы.
+
+# ⚠️ ДОСЛОВНО СЕГОДНЯШНЕЕ (до правки плана 10-05) ВЫРАЖЕНИЕ — ЛИТЕРАЛОМ, А НЕ
+# ЧТЕНИЕМ ИЗ ШАБЛОНА: после правки его в шаблоне не будет, и контроль,
+# читающий шаблон, стал бы контролировать сам себя. Литерал сличается с
+# прочитанным из шаблона на НЕРАВЕНСТВО — подстановка обязана доказать, что
+# изменила что-то, и что изменила ИМЕННО ТО (идиома двойного предохранителя
+# `_xdata_with_dead_teardown`).
+SUCCESSFUL_ONLY_BRANCH = "sending = false; if ($event.detail.successful) hide()"
+
+
+def test_the_panel_closes_on_the_location_transport():
+    """НЕСУЩЕЕ: панель закрывается на транспорте `HX-Location` (16 из 18 мест).
+
+    Критерий 3 роадмапа называет механизм закрытия ПОИМЁННО
+    (`x-on:htmx:after-request`), а на транспорте, которым `respond()` отвечает на
+    ВСЕХ нефрагментных ветках, он не работал: обработчик ответа htmx рано
+    возвращается из ветки заголовка перехода, единственное присваивание признака
+    успешности стои́т ПОСЛЕ этого возврата, и `$event.detail.successful` есть
+    `undefined`. Уборка целиком зависела от свопа тела документа по follow-up
+    GET — не доехал своп, и панель осталась висеть поверх устаревшего экрана с
+    блокировкой прокрутки на корневом элементе.
+
+    ⚠️ ФОРМА СОБЫТИЯ ЗДЕСЬ РЕАЛЬНАЯ, А НЕ СИНТЕЗИРОВАННАЯ, и ключа признака
+    успешности в ней НЕТ ВОВСЕ — не `false`, а отсутствует. Это утверждается
+    полем вердикта, а не оставляется на веру: гарнир, подменяющий отсутствие
+    ложью, стерёг бы не то.
+
+    ⚠️ РАЗМЕТОЧНАЯ ПОЛОВИНА ЗДЕСЬ МЕХАНИЗМО-НЕЗАВИСИМА: она утверждает, что
+    выражение читает величину, выставляемую рантаймом на ОБОИХ транспортах, то
+    есть обращается к объекту запроса события. Утверждение верно при любой из
+    двух ветвей, рассмотренных на останове владельца.
+    """
+    rendered = _modal_block()
+    expression = _modal_after_request_expression(rendered)
+
+    assert "detail.xhr" in expression, (
+        "выражение завершения запроса не обращается к объекту запроса события: "
+        "оно читает только признак успешности, которого на транспорте перехода "
+        "не существует, и ветвь закрытия мертва на 16 из 18 мест подтверждения; "
+        f"выражение: {expression!r}"
+    )
+
+    verdict = _run_modal_lifecycle(
+        _modal_xdata_expression(rendered),
+        "transports",
+        after_request=expression,
+        event_shape="location",
+    )
+
+    assert verdict["successful_key_present"] is False, (
+        "форма события транспорта перехода несёт ключ признака успешности — "
+        "гарнир подаёт форму, которой рантайм на этом пути НЕ ПРОИЗВОДИТ, и "
+        f"правило снова зелено в вакууме; вердикт: {verdict}"
+    )
+    assert verdict["threw"] is None, (
+        "выражение завершения запроса упало исключением внутри слушателя: "
+        "панель осталась бы открытой, и выглядело бы это как исправное "
+        f"поведение; вердикт: {verdict}"
+    )
+    assert verdict["open"] is False, (
+        "на транспорте `HX-Location` панель ОСТАЛАСЬ ОТКРЫТОЙ: механизм, "
+        "названный критерием 3 поимённо, на 16 из 18 мест подтверждения не "
+        f"работает, и уборка целиком зависит от свопа тела документа; {verdict}"
+    )
+    assert verdict["locked"] is False, (
+        "панель закрылась, а признак блокировки прокрутки остался на корневом "
+        f"элементе: экран остался неспособным прокручиваться; вердикт: {verdict}"
+    )
+    assert verdict["sending"] is False, (
+        "сброс признака отправки на транспорте перехода не произошёл: кнопка "
+        f"подтверждения осталась бы занятой; вердикт: {verdict}"
+    )
+    assert verdict["repeat_matches"] is True, (
+        f"повторное исполнение сценария транспорта дало ДРУГОЙ исход: {verdict}"
+    )
+
+
+def test_control_negative_the_successful_only_branch_is_dead_on_the_location_transport():
+    """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ: правило выше УМЕЕТ КРАСНЕТЬ на прежнем выражении.
+
+    Гейт, зелёный на сегодняшнем дереве, гейтом не является — именно этим
+    критерий 3 и был провален в первый раз: правило
+    `test_the_panel_closes_only_on_a_successful_exchange` зеленело на форме
+    события, которой рантайм на доминирующем транспорте не производит.
+
+    Контроль подставляет выражение, ДОСЛОВНО равное прежнему, и обязан получить
+    панель, ОСТАВШУЮСЯ открытой: ветвь по одному лишь признаку успешности на
+    этом транспорте МЕРТВА. Подстановка сличается с прочитанным из шаблона на
+    неравенство — иначе контроль контролировал бы сам себя.
+    """
+    rendered = _modal_block()
+    live = _modal_after_request_expression(rendered)
+
+    assert live != SUCCESSFUL_ONLY_BRANCH, (
+        "выражение шаблона ДОСЛОВНО равно прежнему: правка ветви не "
+        "приземлилась, и контроль ниже подставляет то же самое, что уже стои́т "
+        f"в шаблоне — доказывать ему нечего; выражение: {live!r}"
+    )
+
+    verdict = _run_modal_lifecycle(
+        _modal_xdata_expression(rendered),
+        "transports",
+        after_request=SUCCESSFUL_ONLY_BRANCH,
+        event_shape="location",
+    )
+
+    assert verdict["open"] is True, (
+        "прежняя ветвь ЗАКРЫЛА панель на форме события транспорта перехода — "
+        "значит гарнир подаёт не ту форму, и несущее правило выше зелено в "
+        f"вакууме; вердикт: {verdict}"
+    )
+    assert verdict["locked"] is True, (
+        "прежняя ветвь панель не закрыла, а признак блокировки прокрутки с "
+        f"корневого элемента всё же снялся — состояние разъехалось: {verdict}"
+    )
+    assert verdict["branches"] == [], (
+        "прежняя ветвь отработала ветвью ухода узла на транспорте перехода — "
+        f"мёртвой она не была, и предмет гейпа 1 назван неверно: {verdict}"
+    )
+    assert verdict["sending"] is False, (
+        "сброс признака отправки у прежнего выражения не произошёл — контроль "
+        f"подставил не то выражение: {verdict}"
     )
 
 
