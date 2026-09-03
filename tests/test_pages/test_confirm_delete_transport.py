@@ -54,6 +54,7 @@
 import contextlib
 import itertools
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from typing import Awaitable, Callable
 from unittest.mock import patch
 
@@ -64,6 +65,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
+from app.models.schedule import Schedule
 from app.models.user import User
 from app.pages import history as history_module
 from app.pages import notices
@@ -172,6 +174,83 @@ class _Route:
 # Ожидаемая форма ответа на транспорте htmx.
 LOCATION = "ожидается 204 и заголовок перехода"
 FRAGMENT = "ожидается 200 и фрагмент"
+
+
+# Теги, у которых закрывающей половины нет: без них счётчик вложенности уехал бы
+# вниз на первом же `<br>` и «верхний уровень» перестал бы быть верхним.
+_VOID_TAGS = frozenset(
+    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+     "param", "source", "track", "wbr"}
+)
+
+
+class _OobNodes(HTMLParser):
+    """Разбор РАЗМЕТКИ ответа: идентификаторы внеполосных узлов ВЕРХНЕГО уровня.
+
+    ⚠️ РАЗБОР, А НЕ ПОИСК ПОДСТРОКИ. Сличение ответов по вхождению текста
+    зеленело бы на любом совпадении: строка `sched-7` встречается и в теле
+    линейки счётчика, и в чужой разметке, приехавшей вложенным включением.
+    Предмет сличения — именно УЗЕЛ, несущий признак внеполосной подмены, и
+    именно на верхнем уровне ответа: вложенный узел с тем же признаком был бы
+    ДРУГИМ свойством (рантайм применяет внеполосные узлы верхнего уровня), и
+    подмешивание его в множество сделало бы отказ неразличимым.
+
+    ⚠️ ИДЕНТИФИКАТОР УЗЛА — ЭТО `id`, А ГДЕ ЕГО НЕТ, ЦЕЛЬ ИЗ ЗНАЧЕНИЯ ПРИЗНАКА.
+    Узел счётчика адресует цель селектором внутри `hx-swap-oob`
+    (`innerHTML:#sched-count`) и собственного `id` не несёт вовсе; выбросив его,
+    множество перестало бы называть все три узла ответа. Узел, у которого нет ни
+    того, ни другого, НЕ пропускается молча — он попадает в множество особой
+    записью, потому что молчаливый пропуск и есть тот отказ, от которого стои́т
+    весь этот разбор.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.depth = 0
+        self.ids: set[str] = set()
+
+    def _record(self, tag: str, attrs) -> None:
+        attributes = dict(attrs)
+        if "hx-swap-oob" not in attributes:
+            return
+        node_id = attributes.get("id")
+        if node_id:
+            self.ids.add(node_id)
+            return
+        value = attributes.get("hx-swap-oob") or ""
+        if ":" in value:
+            self.ids.add(value.split(":", 1)[1])
+            return
+        self.ids.add(f"<{tag} без идентификатора: hx-swap-oob={value!r}>")
+
+    def handle_starttag(self, tag, attrs):
+        if self.depth == 0:
+            self._record(tag, attrs)
+        if tag not in _VOID_TAGS:
+            self.depth += 1
+
+    def handle_startendtag(self, tag, attrs):
+        if self.depth == 0:
+            self._record(tag, attrs)
+
+    def handle_endtag(self, tag):
+        if tag not in _VOID_TAGS:
+            self.depth = max(0, self.depth - 1)
+
+
+def _oob_node_ids(body: str) -> set[str]:
+    """МНОЖЕСТВО идентификаторов внеполосных узлов верхнего уровня ответа.
+
+    ⚠️ МНОЖЕСТВО, А НЕ СПИСОК, И ЭТО РЕШЕНИЕ, А НЕ УДОБСТВО. Порядок внеполосных
+    узлов в ответе НЕ ОБЪЯВЛЕН свойством контракта ни одной записью проекта —
+    ни шапкой шаблона ответа, ни докстрингом обработчика, — и утверждать его
+    значило бы завести контракт, которого нет, а потом чинить перестановку строк
+    шаблона как регресс.
+    """
+    parser = _OobNodes()
+    parser.feed(body)
+    parser.close()
+    return parser.ids
 
 
 # =============================================================================
@@ -1147,3 +1226,281 @@ async def test_the_branch_without_a_session_answers_both_transports(
     )
     assert with_layer.headers["HX-Location"] == route.session_landing
     assert with_layer.text == ""
+
+
+# =============================================================================
+# РЕБРО ИДЕМПОТЕНТНОСТИ (FORM-06): ПОВТОРНОЕ ПОДТВЕРЖДЁННОЕ УДАЛЕНИЕ
+# =============================================================================
+#
+# ⚠️ ЭТО ОТДЕЛЬНОЕ УТВЕРЖДЕНИЕ ОБХОДА, И В СЧЁТ ИСХОДОВ ОНО НЕ ВХОДИТ. Повтор
+# не является ИСХОДОМ маршрута: исход — это различимый ответ ДЕЙСТВИЯ, а повтор
+# есть свойство ТРАНСПОРТА («что происходит, если это выполнится дважды на том
+# же входе»). Подмешивание его в счёт случаев сделало бы сличение числа случаев
+# неисполнимым — ровно по тому же основанию, по которому в счёт не входят чужой
+# и несуществующий идентификатор и ветка «нет сессии».
+#
+# ⚠️ ЧЕМ ЭТО ОТЛИЧАЕТСЯ ОТ ДЕЙСТВУЮЩЕГО ПРАВИЛА НЕСУЩЕСТВУЮЩЕГО ИДЕНТИФИКАТОРА
+# (`test_a_missing_identifier_is_answered_exactly_like_a_success`) — ЧИТАТЬ ДО
+# ТОГО, КАК СНИМАТЬ ОДНО ИЗ ДВУХ КАК ДУБЛИКАТ. Там идентификатор НЕ СУЩЕСТВОВАЛ
+# НИКОГДА, правило параметризовано маршрутами ПЕРЕХОДА и утверждает 204 с
+# заголовком перехода и пустым телом. Здесь строка СУЩЕСТВОВАЛА И БЫЛА УДАЛЕНА
+# ПРЕДЫДУЩИМ ЗАПРОСОМ ЭТОГО ЖЕ ЧЕЛОВЕКА, предмет — ЕДИНСТВЕННЫЙ ФРАГМЕНТНЫЙ
+# маршрут фазы, и ответ есть 200 с телом. Совпадение двух ответов между собой
+# ничего не говорит о совпадении с ответом на никогда не существовавший
+# идентификатор, и наоборот: два разных предмета — два разных правила.
+
+
+def _the_fragment_route() -> _Route:
+    """ЕДИНСТВЕННЫЙ фрагментный маршрут фазы — предмет правила ниже.
+
+    Ветвление идёт по ПОЛЮ ЗАПИСИ (`htmx_form`), а не по имени маршрута: имя
+    сменилось бы правкой строки, и правило молча перестало бы иметь предмет.
+    """
+    fragment_routes = [
+        route for route in CONFIRMED_DELETE_ROUTES if route.htmx_form is FRAGMENT
+    ]
+    assert len(fragment_routes) == 1, (
+        "фрагментных маршрутов в перечне "
+        f"{len(fragment_routes)}: {[route.key for route in fragment_routes]}. "
+        "Правило написано на ЕДИНСТВЕННЫЙ такой маршрут; появление второго "
+        "означает, что решение о его форме ответа принято, а о неотличимости "
+        "его повтора — нет"
+    )
+    return fragment_routes[0]
+
+
+def _addressed_schedule_id(arranged: _Arranged) -> int:
+    """Идентификатор адресуемой строки — ИЗ АДРЕСА расстановки.
+
+    Расстановка отдаёт идентификатор только адресом, и это не обходной путь:
+    второй посев ради того, чтобы «узнать номер», был бы ВТОРОЙ КОПИЕЙ посева,
+    а он несёт несущую тонкость (второе расписание оставляет экран непустым,
+    иначе маршрут ушёл бы в ветку перехода и фрагмента не было бы вовсе).
+    """
+    parts = arranged.url.strip("/").split("/")
+    assert parts[0] == "schedules" and parts[-1] == "delete", (
+        f"адрес расстановки {arranged.url!r} перестал быть адресом удаления "
+        "расписания — идентификатор из него читать больше нельзя"
+    )
+    return int(parts[1])
+
+
+def _expected_oob_ids(schedule_id: int) -> set[str]:
+    """Три внеполосных узла ответа, названные ПОИМЁННО по разметке.
+
+    Два из трёх СОБИРАЮТСЯ ИЗ ИДЕНТИФИКАТОРА ПОСЕВА, а не выписаны литералами:
+    литерал разошёлся бы с посевом при первом же изменении последовательности
+    идентификаторов, и правило зеленело бы на чужих узлах.
+
+    ⚠️ ТРЕТИЙ — СТАТИЧЕСКИЙ СЕЛЕКТОР, И ЭТО ИЗМЕРЕННЫЙ ФАКТ РАЗМЕТКИ, А НЕ
+    ПОСЛАБЛЕНИЕ. Узел линейки счётчика адресует цель `innerHTML:#sched-count` и
+    от идентификатора удаляемой строки НЕ ЗАВИСИТ ВОВСЕ (`ads/partials/
+    sched_delete_response.html`): собирать его «из посева» было бы нечем, а
+    расхождения с посевом у него быть не может по построению.
+    """
+    return {f"sched-{schedule_id}", f"sched-del-{schedule_id}", "#sched-count"}
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_confirmed_delete_on_the_fragment_route_answers_the_same_shape(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Повтор подтверждённого удаления отвечает ТОЙ ЖЕ формой, что и первое.
+
+    ⚠️ КАКОЕ РЕБРО ЭТО РАЗРЕШАЕТ. Идемпотентность отката-фолбэка FORM-06 — проба
+    «что происходит, если это выполнится дважды на том же входе». Обработчик
+    удаления расписания ОБЪЯВЛЯЕТ о себе неотличимость повтора и выписывает, чем
+    именно она достигается (`_ad_id_from_form`: «на повторном запросе строки уже
+    нет, `ad_id` становится неизвестен, и обработчик уходил в ветку перехода
+    вместо ветки фрагмента»), — но до этого правила её не утверждало НИЧТО.
+
+    ⚠️ ПОЧЕМУ ПРЕДМЕТ ИМЕННО ФРАГМЕНТНЫЙ МАРШРУТ. Он ЕДИНСТВЕННЫЙ, где повтор
+    ПЕРЕВЫСТАВЛЯЕТ внеполосные узлы снятия по идентификатору, которого в
+    документе уже нет. На маршрутах перехода тела нет вовсе, и сличать там
+    нечего, кроме статуса и адреса (это делает соседнее параметризованное
+    правило).
+
+    ⚠️ ЧЕМ ЭТО ОТЛИЧАЕТСЯ ОТ ПРАВИЛА НЕСУЩЕСТВУЮЩЕГО ИДЕНТИФИКАТОРА — см. абзац
+    над разделом. Коротко: там идентификатор не существовал НИКОГДА и ответ есть
+    переход; здесь строка СУЩЕСТВОВАЛА И БЫЛА УДАЛЕНА, а ответ есть фрагмент.
+
+    ⚠️ ПРАВИЛО ЗЕЛЕНО ПЕРВЫМ ЖЕ ПРОГОНОМ, И ЭТО ОЖИДАЕМО: свойство сегодня
+    ДЕРЖИТСЯ. Зубы ему даёт не переход цвета, а отрицательный контроль ниже.
+    """
+    route = _the_fragment_route()
+    outcome = route.outcomes[0]
+    await _identify(client, route.identity, test_settings)
+
+    arranged = await outcome.arrange(client, db_session, test_settings, route.identity)
+    schedule_id = _addressed_schedule_id(arranged)
+
+    # АНТИВАКУУМ ДО: адресуемая строка ЕСТЬ. Состояние читается ЗАПРОСОМ К БАЗЕ,
+    # а не выводится из ответа: ответ и есть предмет сличения, и выводить из него
+    # состояние базы значило бы проверять утверждение самим утверждением.
+    db_session.expire_all()
+    assert await db_session.get(Schedule, schedule_id) is not None, (
+        f"адресуемого расписания {schedule_id} не было в базе ДО первого "
+        "запроса — тогда «повтор» неотличим от второй попытки первого, и "
+        "правило утверждало бы не то, чем называется"
+    )
+
+    # ⚠️ ОБА ЗАПРОСА — ВНУТРИ ОДНОГО ВХОЖДЕНИЯ В МЕНЕДЖЕР ПОДМЕН. У фрагментного
+    # маршрута подмен нет и менеджер пуст, но форма обращения остаётся общей:
+    # ветка «если подмены есть» означала бы, что половина случаев идёт другим
+    # путём (записанное основание поля `context`).
+    with arranged.context():
+        first = await client.post(
+            arranged.url,
+            data=arranged.data,
+            headers=HTMX_HEADERS,
+            follow_redirects=True,
+        )
+        # АНТИВАКУУМ ПОСЛЕ: строки НЕТ, то есть второй запрос действительно
+        # ПОВТОР, а не вторая попытка первого.
+        db_session.expire_all()
+        after_first = await db_session.get(Schedule, schedule_id)
+        repeat = await client.post(
+            arranged.url,
+            data=arranged.data,
+            headers=HTMX_HEADERS,
+            follow_redirects=True,
+        )
+
+    assert after_first is None, (
+        f"расписание {schedule_id} осталось в базе ПОСЛЕ первого запроса — "
+        "второй запрос не является повтором удаления, и вся форма правила "
+        "разговаривает не о том предмете"
+    )
+
+    assert first.status_code == 200, (
+        f"первое удаление ответило {first.status_code} вместо 200 — предметом "
+        "сличения перестал быть фрагментный ответ"
+    )
+    assert repeat.status_code == first.status_code, (
+        f"повтор ответил {repeat.status_code}, а первое удаление "
+        f"{first.status_code} — ответы РАЗЛИЧИМЫ уже статусом"
+    )
+    assert DOCUMENT_MARK not in first.text, (
+        "в ответе на первое удаление приехал ЦЕЛЫЙ ДОКУМЕНТ"
+    )
+    assert DOCUMENT_MARK not in repeat.text, (
+        "в ответе на повтор приехал ЦЕЛЫЙ ДОКУМЕНТ — значит обработчик ушёл в "
+        "ветку перехода, а первое удаление уходило в ветку фрагмента"
+    )
+
+    first_ids = _oob_node_ids(first.text)
+    repeat_ids = _oob_node_ids(repeat.text)
+    expected = _expected_oob_ids(schedule_id)
+
+    # АНТИВАКУУМ МНОЖЕСТВА: пустое множество, равное пустому, зеленело бы
+    # независимо от предмета.
+    assert first_ids == expected, (
+        f"внеполосные узлы первого удаления {sorted(first_ids)} не совпали с "
+        f"ожидаемыми {sorted(expected)} — три узла ответа названы поимённо по "
+        "разметке `ads/partials/sched_delete_response.html`"
+    )
+    assert repeat_ids == first_ids, (
+        f"внеполосные узлы повтора {sorted(repeat_ids)} отличны от узлов "
+        f"первого удаления {sorted(first_ids)}. Различимость ответов позволяет "
+        "ПЕРЕЧИСЛЯТЬ занятые идентификаторы, ничего не удаляя (T-10-34)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_control_negative_a_shifted_identifier_reddens_the_sameness_check(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ: другой идентификатор даёт ДРУГОЕ множество.
+
+    ⚠️ ЧТО ИМЕННО ДОКАЗЫВАЕТСЯ. Что сличение множеств внеполосных узлов НЕ
+    ТРИВИАЛЬНО: правило, сличающее величины, которые совпадают всегда, зелено
+    независимо от предмета — и именно такой зелени в этой партии не остаётся.
+    Правило выше зелено первым же прогоном, перехода цвета у него нет, и зубы
+    ему даёт этот контроль.
+
+    ⚠️ ПОЧЕМУ ЗДЕСЬ ПОСЕЯНА ТРЕТЬЯ СТРОКА. Действующая расстановка сеет ДВЕ, и
+    удаление второй оставило бы объявление без расписаний вовсе — обработчик
+    ушёл бы в ветку перехода (D-04), ответил бы 204 без тела, и множество
+    оказалось бы ПУСТЫМ. Сличение «три узла против ничего» доказывает смену
+    ВЕТКИ, а не чувствительность к идентификатору, то есть ровно тот класс
+    вакуумной зелени, ради которого контроль и заведён. Третья строка держит
+    третий запрос НА ТОЙ ЖЕ ФРАГМЕНТНОЙ ВЕТКЕ: форма ответа та же, различаться
+    обязаны ИМЕННО идентификаторы. Второй расстановки при этом не заводится —
+    сеялка та же (`_seed_schedule`), объявление и аккаунт те же.
+    """
+    route = _the_fragment_route()
+    outcome = route.outcomes[0]
+    await _identify(client, route.identity, test_settings)
+
+    arranged = await outcome.arrange(client, db_session, test_settings, route.identity)
+    schedule_id = _addressed_schedule_id(arranged)
+    ad_id = arranged.landing_args["ad_id"]
+
+    db_session.expire_all()
+    others = (
+        await db_session.execute(
+            select(Schedule)
+            .where(Schedule.ad_id == ad_id, Schedule.id != schedule_id)
+            .order_by(Schedule.id)
+        )
+    ).scalars().all()
+    assert others, (
+        f"у объявления {ad_id} нет ВТОРОГО посеянного расписания — контролю "
+        "нечего адресовать, и он выродился бы в повторение несущего правила"
+    )
+    other = others[0]
+    await _seed_schedule(db_session, ad_id, other.account_id)
+
+    other_url = f"/schedules/{other.id}/delete"
+    # КОНТРОЛЬ ОБЯЗАН ДОКАЗАТЬ, ЧТО ИЗМЕНИЛ ЧТО-ТО И ИМЕННО ТО: адрес третьего
+    # запроса сличается с адресом первых двух на НЕРАВЕНСТВО ДО отправки.
+    assert other_url != arranged.url, (
+        f"адрес контроля {other_url!r} совпал с адресом первых двух запросов — "
+        "контроль подставил ТО ЖЕ САМОЕ и доказывать ему нечего"
+    )
+
+    with arranged.context():
+        first = await client.post(
+            arranged.url,
+            data=arranged.data,
+            headers=HTMX_HEADERS,
+            follow_redirects=True,
+        )
+        repeat = await client.post(
+            arranged.url,
+            data=arranged.data,
+            headers=HTMX_HEADERS,
+            follow_redirects=True,
+        )
+        shifted = await client.post(
+            other_url,
+            data=arranged.data,
+            headers=HTMX_HEADERS,
+            follow_redirects=True,
+        )
+
+    repeat_ids = _oob_node_ids(repeat.text)
+    shifted_ids = _oob_node_ids(shifted.text)
+
+    assert shifted.status_code == repeat.status_code == 200, (
+        f"контроль ответил {shifted.status_code}, повтор "
+        f"{repeat.status_code} — ответы разошлись ВЕТКОЙ, и различие множеств "
+        "доказывало бы смену ветки, а не чувствительность к идентификатору"
+    )
+    assert repeat_ids, (
+        "множество внеполосных узлов повтора ПУСТО — сличение пустого с "
+        "непустым зелено независимо от предмета"
+    )
+    assert shifted_ids, (
+        "множество внеполосных узлов контроля ПУСТО — см. выше"
+    )
+    assert shifted_ids != repeat_ids, (
+        f"ответ на ДРУГОЙ идентификатор дал ТО ЖЕ множество {sorted(shifted_ids)}, "
+        f"что и повтор {sorted(repeat_ids)}. Значит сличение множеств совпадает "
+        "ВСЕГДА, и несущее правило зелено независимо от предмета"
+    )
+    assert shifted_ids == _expected_oob_ids(other.id), (
+        f"внеполосные узлы контроля {sorted(shifted_ids)} не совпали с "
+        f"ожидаемыми для расписания {other.id} — контроль изменил ЧТО-ТО, но не "
+        "то, что называется"
+    )
