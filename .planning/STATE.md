@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 10
-current_phase_name: Рычаг `components/modal.html`
+current_phase_name: rychag-components-modal-html
 status: executing
 stopped_at: Phase 10 context gathered
-last_updated: "2026-09-02T19:20:37.343Z"
+last_updated: "2026-09-03T07:22:02.198Z"
 last_activity: 2026-09-02
 last_activity_desc: Phase 10 execution started
-state_head: 7c1041df40f0b9302d83dee0c82d9eb05e163e23
+state_head: 3d5b63200d92f51da675fb2b7b8f364cc784752f
 progress:
   total_phases: 9
   completed_phases: 3
-  total_plans: 42
+  total_plans: 45
   completed_plans: 42
   percent: 33
 ---
@@ -35,11 +35,11 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
+Phase: 10 (rychag-components-modal-html) — READY TO EXECUTE
 Plan: 1 of 4
-Total Plans in Phase: 4
+Total Plans in Phase: 7
 Completed Plans in Phase: 20
-Status: Executing Phase 10
+Status: Ready to execute
 Last activity: 2026-09-02 — Phase 10 execution started
 
 Progress: [████████████████████] 38/38 plans ([██░░░░░░░░] 22%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
@@ -324,7 +324,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Executing Phase 10
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Ready to execute
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
