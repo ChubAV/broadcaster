@@ -594,9 +594,21 @@
 
    Импорт: {% from "components/modal.html" import modal %} #}
 
-{# Значения по умолчанию записаны двойными кавычками намеренно: метод формы
-   должен быть виден в файле дословно как method="post" — модалка не имеет
-   права незаметно съехать на GET. #}
+{# ГЛАГОЛ ФОРМЫ — ЛИТЕРАЛ, А НЕ ПАРАМЕТР (Фаза 10, план 10-09, WR-03).
+   Обоснование прежней записи остаётся верным по СУТИ: метод формы должен быть
+   виден в файле дословно как method="post" — панель не имеет права незаметно
+   съехать на GET. Изменился ПРЕДМЕТ обоснования.
+   ⚠️ ПРЕЖНЯЯ ФОРМУЛИРОВКА — «значения по умолчанию записаны двойными кавычками
+   намеренно» — ОПРОВЕРГНУТА В ЧАСТИ МЕХАНИЗМА, а не вычеркнута: умолчания
+   параметра, о котором она говорила, больше нет. Единственное достижимое
+   следствие того параметра было разрушительным: адрес htmx-запроса макрос
+   печатает БЕЗУСЛОВНО и глаголом формы не управляется вовсе, поэтому
+   вызывающий, передавший другой глагол, разводил базовый путь и улучшенный на
+   удалении — и видно это было бы ТОЛЬКО тому, у кого JavaScript отключён.
+   Теперь глагол печатается литералом, а пара «панель ↔ макрос-обёртка»
+   удерживается гейтом сличения копий (D-16), безусловность печати — набором
+   безусловных свойств открывающего тега. Ни то ни другое не помнится читателем:
+   правило `test_the_panel_verb_is_a_literal_and_not_a_parameter`. #}
 {#- ⚠️ `id` ОБЯЗАН БЫТЬ ВЕЛИЧИНОЙ, ВЫБРАННОЙ СЕРВЕРОМ, — ЭТО ТРЕБОВАНИЕ К
     ВЫЗЫВАЮЩЕМУ, А НЕ ПОЖЕЛАНИЕ. Он подставляется в ИМЯ АТРИБУТА
     (`x-on:modal-open-{{ id }}.window`), а имена атрибутов не экранируются
@@ -605,7 +617,7 @@
     новые атрибуты. Все вызовы проекта передают сюда первичные ключи и
     позиции — то есть цифры; величина, пришедшая от пользователя или из тела
     внешней очереди, ключом панели быть не может (WR-04 ревизии фазы 6). -#}
-{% macro modal(id, title, action, confirm_label, body=None, cancel_label="Отмена", confirm_variant="danger", method="post") -%}
+{% macro modal(id, title, action, confirm_label, body=None, cancel_label="Отмена", confirm_variant="danger") -%}
 <div class="modal" id="{{ id }}" x-cloak
      x-data="{
        open: false,
@@ -626,7 +638,7 @@
   <div class="modal__overlay" x-on:click="if (sending) return; hide()"></div>
   <div class="modal__panel" x-ref="panel" tabindex="-1">
     <h2 class="modal__title" id="{{ id }}-title">{{ title }}</h2>
-    <form class="modal__form" method="{{ method }}" action="{{ action }}"
+    <form class="modal__form" method="post" action="{{ action }}"
           x-on:submit="if (sending) { $event.preventDefault(); return; } sending = true"
           x-on:htmx:after-request="sending = false; if ($event.detail.successful || ($event.detail.xhr &amp;&amp; $event.detail.xhr.getResponseHeader('HX-Location'))) hide()" hx-post="{{ action }}" hx-swap="none" hx-disabled-elt="find button[type=submit]" hx-indicator="find .form-busy">
       {%- if body %}<p class="modal__text">{{ body }}</p>{% endif %}
