@@ -68,6 +68,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
 from app.pages import history as history_module
+from app.pages.common import templates
 from app.pages import notices
 from app.services.ops_state import (
     DROP_MISSING,
@@ -1863,6 +1864,186 @@ async def test_the_fragment_branch_needs_the_editor_flag(
         f"{sorted(_expected_oob_ids(schedule_id))}"
     )
     assert DOCUMENT_MARK not in with_flag.text
+
+# =============================================================================
+# ТРЕТИЙ УЗЕЛ ОТВЕТА — ЛИНЕЙКА СЧЁТЧИКА (`WR-05`)
+# =============================================================================
+#
+# ⚠️ ЧТО ЗДЕСЬ ПРЕДМЕТ, А ЧТО НЕТ. Предмет — СООТВЕТСТВИЕ ЗАПИСИ ПОВЕДЕНИЮ.
+# Перечень изъятий докстринга сборки фрагмента называл ДВА узла ответа из ТРЁХ и
+# заканчивался принципом, который сам же нарушал: «дефект был бы в том, чтобы
+# утверждать прозой ШИРЕ поведения». Третий узел — линейка счётчика — адресуется
+# СТАТИЧЕСКИМ селектором `#sched-count`, а число считается для объявления,
+# ВЛАДЕЮЩЕГО удалённой строкой. Правило ниже превращает это из прозы в
+# ИЗМЕРЕННЫЙ ФАКТ и стережёт перечень от возвращения к неполноте.
+#
+# ⚠️ ПРАВИЛО УТВЕРЖДАЕТ ФАКТ, А НЕ ОСУЖДАЕТ ЕГО. Кросс-объявленческое удаление
+# границ привилегий НЕ пересекает (оба объявления принадлежат одному владельцу),
+# а после гейта развилки (`WR-01`, задача 2 этого же плана) собрать такое
+# обращение из интерфейса нельзя вовсе: признак возврата и поле контекста несут
+# ОБЕ формы пути удаления, и разметка не даёт послать удаление строки чужого
+# объявления с экрана своего. Остаётся собранное руками тело запроса.
+
+
+async def _seed_second_ad_with_schedules(
+    db: AsyncSession, user_id: int, count: int
+) -> tuple[Ad, int]:
+    """ВТОРОЕ объявление того же владельца и `count` расписаний к нему.
+
+    Своих моделей и своего посева не заводится: объявление сеет `_seed_ad`,
+    аккаунт — `_seed_account`, расписание — ввезённый `_seed_schedule`. Вторая
+    копия любого из них разошлась бы с первой молча.
+
+    Возвращает объявление и идентификатор ОДНОЙ из его строк — правилу нужны обе
+    величины: первая называет объявление, вторая адресует запрос.
+    """
+    ad = await _seed_ad(db, user_id)
+    account = await _seed_account(db, user_id)
+    first_schedule_id = None
+    for _ in range(count):
+        schedule = await _seed_schedule(db, ad.id, account.id)
+        if first_schedule_id is None:
+            first_schedule_id = schedule.id
+    assert first_schedule_id is not None, (
+        "второе объявление посеяно БЕЗ расписаний — адресовать запросу нечего"
+    )
+    return ad, first_schedule_id
+
+
+async def _schedule_count_of(db: AsyncSession, ad_id: int) -> int:
+    db.expire_all()
+    return len(
+        (
+            await db.execute(select(Schedule.id).where(Schedule.ad_id == ad_id))
+        ).scalars().all()
+    )
+
+
+COUNTER_OOB_OPEN = '<div hx-swap-oob="innerHTML:#sched-count">'
+
+
+def _counter_line_of(body: str) -> str:
+    """ЦЕЛЫЙ текст линейки счётчика из третьего внеполосного узла ответа.
+
+    ⚠️ СЛИЧАЕТСЯ ЦЕЛОЕ, А НЕ ПОДСТРОКА, И ЭТО РЕШЕНИЕ. Линейка печатает число
+    ЦИФРОЙ И СЛОВОМ через правило склонения
+    (`ads/includes/sched_count_rule.html`), и сличение «есть ли в теле „2“»
+    зеленело бы на «12», найденной внутри «12 расписаний» ЧУЖОГО объявления.
+    """
+    assert COUNTER_OOB_OPEN in body, (
+        "в ответе нет узла линейки счётчика — сличать нечего, и правило "
+        f"утверждало бы не о том предмете. Тело: {body[:200]!r}"
+    )
+    start = body.index(COUNTER_OOB_OPEN) + len(COUNTER_OOB_OPEN)
+    end = body.index("</div>", start)
+    return body[start:end].strip()
+
+
+def _rendered_counter_line(count: int) -> str:
+    """Линейка, отрисованная ТЕМ ЖЕ шаблоном на заданном числе.
+
+    Ожидание собирается ШАБЛОНОМ, а не литералом: литерал разошёлся бы с
+    разметкой при первой же правке формулировки, и правило краснело бы на
+    редактуре текста вместо предмета.
+    """
+    return (
+        templates.env.get_template("ads/includes/sched_count_rule.html")
+        .render(schedules_count=count)
+        .strip()
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_counter_node_belongs_to_the_ad_named_by_the_request(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Линейка счётчика несёт число объявления, ВЛАДЕЮЩЕГО удалённой строкой.
+
+    ⚠️ РАССТАНОВКА ВОСПРОИЗВОДИТ ИМЕННО ТОТ СЛУЧАЙ, КОТОРЫЙ ОПИСЫВАЕТ ПЕРЕЧЕНЬ
+    ИЗЪЯТИЙ. У одного владельца два объявления: A (экран, на котором человек
+    стои́т — его называет ПОЛЕ КОНТЕКСТА) и B (объявление, которому принадлежит
+    удаляемая строка — его называет АДРЕС ЗАПРОСА). Приоритет у найденной
+    строки, поэтому счёт идёт по B; цель третьего узла — статический селектор,
+    поэтому в документе, открытом на A, это число встанет в ЕГО линейку и
+    переживёт запрос до перезагрузки.
+
+    ⚠️ АНТИВАКУУМ ЧИСЛОМ, И ЕГО ДВЕ ПОЛОВИНЫ. Числа расписаний у A и B обязаны
+    быть РАЗНЫМИ и ДО запроса, и ПОСЛЕ него. Равные числа ПОСЛЕ удаления сделали
+    бы вердикт неотличимым от вердикта на правильном объявлении, и правило
+    зеленело бы независимо от предмета — поэтому у B посеяно ЧЕТЫРЕ строки, а не
+    три: после удаления у него остаётся три против двух у A.
+
+    ⚠️ ПРАВИЛО ЗЕЛЕНО ПЕРВЫМ ЖЕ ПРОГОНОМ, И ЭТО ОЖИДАЕМО: оно утверждает
+    СЕГОДНЯШНЕЕ поведение, а предмет задачи — ЗАПИСЬ. Зубы ему даёт не переход
+    цвета, а мутация обработчика (счёт по объявлению из найденной строки заменён
+    на счёт по полю формы) — на ней правило обязано покраснеть, и её вывод
+    приведён в сводке плана.
+    """
+    route = _the_fragment_route()
+    outcome = route.outcomes[0]
+    await _identify(client, route.identity, test_settings)
+
+    arranged = await outcome.arrange(client, db_session, test_settings, route.identity)
+    ad_a_id = arranged.landing_args["ad_id"]
+    user = await _current_user(db_session, route.identity, test_settings)
+    ad_b, ad_b_schedule_id = await _seed_second_ad_with_schedules(
+        db_session, user.id, 4
+    )
+    # ⚠️ ИДЕНТИФИКАТОР СНИМАЕТСЯ СРАЗУ, ДО ПЕРВОГО СЧЁТА. Счёт сбрасывает
+    # состояние сессии (`expire_all`), и обращение к атрибуту объекта ПОСЛЕ
+    # него потребовало бы синхронной подгрузки вне гринлета — отказ, не имеющий
+    # отношения к предмету правила.
+    ad_b_id = ad_b.id
+
+    a_before = await _schedule_count_of(db_session, ad_a_id)
+    b_before = await _schedule_count_of(db_session, ad_b_id)
+    assert a_before != b_before, (
+        f"у объявления A {a_before} расписаний и у B {b_before} — числа СОВПАЛИ "
+        "ещё до запроса, и вердикт правила был бы неотличим от вердикта на "
+        "правильном объявлении"
+    )
+
+    with arranged.context():
+        response = await client.post(
+            f"/schedules/{ad_b_schedule_id}/delete",
+            content=f"return_to={RETURN_TO_EDITOR_VALUE}&ad_id={ad_a_id}",
+            headers={**HTMX_HEADERS, **FORM_CONTENT_TYPE},
+            follow_redirects=True,
+        )
+
+    assert response.status_code == 200, (
+        f"кросс-объявленческое удаление ответило {response.status_code} вместо "
+        "200 — предметом сличения перестал быть фрагментный ответ"
+    )
+
+    a_after = await _schedule_count_of(db_session, ad_a_id)
+    b_after = await _schedule_count_of(db_session, ad_b_id)
+    assert (a_after, b_after) == (a_before, b_before - 1), (
+        f"после запроса у A стало {a_after} расписаний (было {a_before}), у B "
+        f"{b_after} (было {b_before}) — удалена не та строка, о которой "
+        "говорит правило"
+    )
+    assert a_after != b_after, (
+        f"после удаления числа сравнялись ({a_after}) — вердикт «линейка несёт "
+        "число B» стал неотличим от «линейка несёт число A», и правило зелено "
+        "независимо от предмета"
+    )
+
+    observed = _counter_line_of(response.text)
+    expected_b = _rendered_counter_line(b_after)
+    expected_a = _rendered_counter_line(a_after)
+    assert expected_a != expected_b, (
+        f"шаблон линейки отрисовал ОДИНАКОВЫЙ текст на {a_after} и {b_after} "
+        f"({expected_b!r}) — сличение текста перестало различать объявления"
+    )
+    assert observed == expected_b, (
+        f"линейка ответа {observed!r} не совпала с линейкой объявления B "
+        f"({b_after} расписаний, {expected_b!r}). Линейка объявления A — "
+        f"{expected_a!r}. ⚠️ Число считается для объявления, ВЛАДЕЮЩЕГО "
+        "удалённой строкой, а цель узла — статический селектор `#sched-count`: "
+        "именно это и перечисляет расширенный перечень изъятий докстринга "
+        "сборки фрагмента"
+    )
 
 # =============================================================================
 # ТРЕТЬЕ МНОЖЕСТВО МОДУЛЯ: МАРШРУТЫ, ИЗЪЯТЫЕ ИЗ ПРАВИЛА НЕОТЛИЧИМОСТИ ПОВТОРА
