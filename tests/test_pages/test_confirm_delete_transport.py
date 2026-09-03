@@ -1744,6 +1744,127 @@ async def test_the_landing_screen_is_never_assembled_from_a_rejected_context_fie
 
 
 # =============================================================================
+# РАЗВИЛКА ФОРМЫ ОТВЕТА И АДРЕС ПРИЗЕМЛЕНИЯ ЧИТАЮТ ОДИН ПРИЗНАК — `WR-01`
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_the_fragment_branch_needs_the_editor_flag(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Запрос БЕЗ признака возврата приземляет ОБА транспорта на один экран.
+
+    ⚠️ ПРЕДМЕТ ПРАВИЛА — НЕ КОД 204, А СХОЖДЕНИЕ ДВУХ ТРАНСПОРТОВ НА ОДНОМ
+    ЭКРАНЕ. Утверждение об одном коде зеленело бы и при двух РАЗНЫХ адресах,
+    поэтому адрес заголовка перехода сличается с адресом перенаправления
+    ПОСИМВОЛЬНО.
+
+    ⚠️ ЧТО ИМЕННО БЫЛО СЛОМАНО. `_editor_url` отдаёт адрес редактора ТОЛЬКО при
+    признаке возврата, иначе сводный список. Развилка формы ответа строкой ниже
+    спрашивала СОВСЕМ ДРУГОЕ — остались ли у объявления строки расписания — и
+    признака возврата не читала вовсе. Запрос с ЖИВЫМ идентификатором строки и
+    без признака возврата получал: на пути деградации — 302 на сводный список,
+    на пути htmx — 200 и фрагмент РЕДАКТОРА. Ни один из трёх внеполосных узлов
+    ответа на сводном списке цели не находит (`schedules/list.html` печатает
+    своё число собственной разметкой `<p class="sched-count">`), то есть путь
+    htmx получал ответ, который некуда приземлить, а удалённая строка оставалась
+    на экране. Это ровно тот класс молчаливого расхождения, ради невозможности
+    которого `_editor_url` и был заведён: адрес собирался один раз, а ВЕТКА —
+    по-прежнему дважды.
+
+    ⚠️ АНТИВАКУУМ НЕСУЩИЙ, А НЕ ГИГИЕНИЧЕСКИЙ. Без него правило зеленело бы на
+    обработчике, у которого фрагментной ветки не осталось ВОВСЕ, — то есть на
+    удалении предмета вместо его починки.
+
+    ⚠️ СОСТОЯНИЕ ГОТОВИТСЯ ЗАНОВО ДЛЯ КАЖДОЙ ПОЛОВИНЫ: подтверждённое удаление
+    необратимо, и вторая половина, пришедшая на уже изменённое состояние,
+    проверяла бы не тот исход, который названа проверять (форма соседнего
+    обхода, перенята дословно).
+    """
+    route = _the_fragment_route()
+    outcome = route.outcomes[0]
+    await _identify(client, route.identity, test_settings)
+
+    # ПОЛОВИНА HTMX: живая строка, ПУСТОЕ тело — признака возврата нет.
+    arranged = await outcome.arrange(client, db_session, test_settings, route.identity)
+    with arranged.context():
+        with_layer = await client.post(
+            arranged.url,
+            content="",
+            headers={**HTMX_HEADERS, **FORM_CONTENT_TYPE},
+            follow_redirects=True,
+        )
+
+    layer_landing = with_layer.headers.get("HX-Location", "")
+    layer_oob = _oob_node_ids(with_layer.text)
+    assert with_layer.status_code == 204, (
+        f"без признака возврата путь htmx ответил {with_layer.status_code} "
+        f"вместо 204, адрес приземления {layer_landing!r}, внеполосные узлы "
+        f"{sorted(layer_oob)}. Код 200 здесь означает, что развилка выдала "
+        "ФРАГМЕНТ РЕДАКТОРА запросу, чей адрес приземления есть сводный список"
+    )
+    assert layer_landing == SUMMARY_SCREEN, (
+        f"заголовок перехода {layer_landing!r} не равен {SUMMARY_SCREEN!r}"
+    )
+    assert with_layer.text == "", (
+        "у ответа 204 появилось тело — у этого статуса тела нет по определению"
+    )
+    assert not layer_oob, (
+        f"ответ без признака возврата принёс внеполосные узлы "
+        f"{sorted(layer_oob)}, целей которых на сводном списке нет"
+    )
+    assert DOCUMENT_MARK not in with_layer.text
+
+    # ПОЛОВИНА ДЕГРАДАЦИИ: то же обращение без признака слоя письма.
+    await _identify(client, route.identity, test_settings)
+    degraded_arranged = await outcome.arrange(
+        client, db_session, test_settings, route.identity
+    )
+    with degraded_arranged.context():
+        without = await client.post(
+            degraded_arranged.url,
+            content="",
+            headers=FORM_CONTENT_TYPE,
+            follow_redirects=False,
+        )
+
+    assert without.status_code == 302, (
+        f"путь деградации ответил {without.status_code} вместо 302 — человек "
+        "без JavaScript остался бы без ответа"
+    )
+    assert without.headers["location"] == layer_landing, (
+        f"адрес деградации {without.headers['location']!r} и заголовок перехода "
+        f"{layer_landing!r} НЕ СОВПАЛИ ПОСИМВОЛЬНО — два транспорта одного "
+        "действия приземляют человека на РАЗНЫЕ экраны, и ни один из них не "
+        "видит расхождения в одиночку"
+    )
+
+    # АНТИВАКУУМ: фрагментная ветка не удалена, а загейтирована. С признаком
+    # возврата и годным полем контекста ответ прежний — 200 и ТРИ узла.
+    await _identify(client, route.identity, test_settings)
+    gated = await outcome.arrange(client, db_session, test_settings, route.identity)
+    schedule_id = _addressed_schedule_id(gated)
+    with gated.context():
+        with_flag = await client.post(
+            gated.url,
+            data=gated.data,
+            headers=HTMX_HEADERS,
+            follow_redirects=True,
+        )
+
+    assert with_flag.status_code == 200, (
+        f"с признаком возврата фрагментный маршрут ответил "
+        f"{with_flag.status_code} вместо 200 — фрагментной ветки не осталось "
+        "вовсе, то есть предмет удалён, а не починен"
+    )
+    assert _oob_node_ids(with_flag.text) == _expected_oob_ids(schedule_id), (
+        f"с признаком возврата внеполосные узлы стали "
+        f"{sorted(_oob_node_ids(with_flag.text))} вместо "
+        f"{sorted(_expected_oob_ids(schedule_id))}"
+    )
+    assert DOCUMENT_MARK not in with_flag.text
+
+# =============================================================================
 # ТРЕТЬЕ МНОЖЕСТВО МОДУЛЯ: МАРШРУТЫ, ИЗЪЯТЫЕ ИЗ ПРАВИЛА НЕОТЛИЧИМОСТИ ПОВТОРА
 # =============================================================================
 #
