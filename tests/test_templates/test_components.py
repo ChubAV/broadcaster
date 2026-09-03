@@ -1683,6 +1683,7 @@ const EXPRESSION = payload.expression;
 const AFTER_REQUEST = payload.after_request;
 const LANDING_ID = payload.landing_id;
 const LANDING_PRESENT = payload.landing_present;
+const DISMISSAL = payload.dismissal;
 
 function makeClassList() {
   const own = new Set();
@@ -2086,6 +2087,69 @@ function scenarioTransports() {
   return Object.assign({}, runs[1], { repeat_matches: same });
 }
 
+// --- СЦЕНАРИЙ УХОДА ПАНЕЛИ ПО ВОЛЕ ЧЕЛОВЕКА (план 10-07, DEF-09-02) ---------
+//
+// Исполняет ВЫРАЖЕНИЕ пути ухода телом функции с областью видимости объекта
+// клиентского состояния — тем же способом, каким рантайм клиентского состояния
+// исполняет атрибуты, и тем же, каким это делает сценарий транспортов. Вызов
+// `panel.hide()` напрямую проверял бы НЕ ТО: предмет здесь ветвь, записанная в
+// АТРИБУТЕ, а не тело `hide()` — панель, потерявшая гейт в атрибуте, уходила бы
+// во время летящего запроса, а метод при этом оставался бы прежним.
+//
+// ⚠️ ПРИЗНАК ОТПРАВКИ ВЫСТАВЛЯЕТСЯ ТАК ЖЕ, КАК ЕГО СТАВИТ ПЕРЕХВАТ ОТПРАВКИ
+// ФОРМЫ, — присваиванием тому же полю того же объекта.
+//
+// ⚠️ НЕОБЯЗАТЕЛЬНАЯ ФОРМА СОБЫТИЯ ПРОГОНЯЕТСЯ ДО ИСПОЛНЕНИЯ ВЫРАЖЕНИЯ и служит
+// ровно одному — доказать, что гейт НЕ ЛОВУШКА: панель, пережившая ОТКАЗ
+// СЕРВЕРА, обязана снова уходить по каждому из трёх путей. Состояние панели
+// сразу после обмена едет в вердикт отдельным полем `exchange`, а не выводится
+// из имени формы: без него утверждение «после отказа панель осталась открытой,
+// и признак отправки сброшен» держалось бы на вере.
+function scenarioDismissal() {
+  const runs = [];
+  for (let i = 0; i < 2; i++) {
+    reset();
+    const panel = build();
+    panel.show();
+    panel.sending = payload.sending;
+    let exchange = null;
+    if (payload.event_shape) {
+      const make = EVENT_SHAPES[payload.event_shape];
+      if (!make) {
+        console.error('неизвестная форма события: ' + payload.event_shape);
+        process.exit(2);
+      }
+      afterRequest(panel, make());
+      exchange = { open: panel.open, sending: panel.sending, locked: locked() };
+    }
+    const focused_before = focused;
+    const spy = spyBranches(panel);
+    // ⚠️ ИСКЛЮЧЕНИЕ ЛОВИТСЯ И ЕДЕТ В ВЕРДИКТ ПОЛЕМ, А НЕ ПРОГЛАТЫВАЕТСЯ:
+    // выражение, упавшее внутри слушателя, оставило бы панель открытой — то
+    // есть выглядело бы РОВНО как исправно сработавший гейт.
+    let threw = null;
+    try {
+      const handler = new Function('with (this) { ' + DISMISSAL + ' }');
+      handler.call(panel);
+    } catch (e) {
+      threw = String((e && e.message) || e);
+    }
+    runs.push({
+      open: panel.open,
+      locked: locked(),
+      focused: focused,
+      focused_before: focused_before,
+      attempted: attempted.slice(),
+      sending: panel.sending,
+      branches: spy.names.slice(),
+      exchange: exchange,
+      threw: threw
+    });
+  }
+  const same = JSON.stringify(runs[0]) === JSON.stringify(runs[1]);
+  return Object.assign({}, runs[1], { repeat_matches: same });
+}
+
 const SCENARIOS = {
   raise: scenarioRaise,
   teardown: scenarioTeardown,
@@ -2093,7 +2157,8 @@ const SCENARIOS = {
   focus_after_hide: scenarioFocusAfterHide,
   focus_after_teardown: scenarioFocusAfterTeardown,
   focus_untouched_by_closed_sibling: scenarioFocusSibling,
-  transports: scenarioTransports
+  transports: scenarioTransports,
+  dismissal: scenarioDismissal
 };
 const run = SCENARIOS[payload.scenario];
 if (!run) {
@@ -2221,6 +2286,114 @@ def _modal_after_request_expression(html_source: str) -> str:
     return unescape(found[0])
 
 
+# --- ПУТИ УХОДА ПАНЕЛИ ПО ВОЛЕ ЧЕЛОВЕКА (Фаза 10, план 10-07, DEF-09-02) -----
+#
+# ⚠️ МНОЖЕСТВО ЗДЕСЬ ДРУГОЕ, ЧЕМ У БУХГАЛТЕРИИ ПРИЗЕМЛЕНИЯ ФОКУСА, И СПУТАТЬ ИХ
+# ЛЕГКО. Там считаются ПУТИ УХОДА УЗЛА ИЗ ДОКУМЕНТА, и их ДВА (человек закрыл
+# и внеполосный узел унёс корень). Здесь считаются ПУТИ УХОДА ПАНЕЛИ ПО ВОЛЕ
+# ЧЕЛОВЕКА, и их ТРИ: клавиша выхода на окне, щелчок по оверлею и кнопка отказа.
+# Привести два числа к согласию НЕЛЬЗЯ, и это не небрежность: множества разные,
+# и второе не подмножество первого — все три пути человека ведут в ОДНУ ветвь
+# ухода узла (`hide()`), а второй путь ухода узла воли человека не спрашивает
+# вовсе.
+DISMISSAL_ESCAPE_RE = re.compile(r'x-on:keydown\.escape\.window\s*=\s*"([^"]*)"')
+DISMISSAL_CLICK_RE = re.compile(r'x-on:click\s*=\s*"([^"]*)"')
+
+OVERLAY_MARKER = 'class="modal__overlay"'
+CANCEL_MARKER = 'x-ref="cancel"'
+CONFIRM_MARKER = 'type="submit"'
+
+
+def _modal_overlay_tag(html_source: str) -> str:
+    """Тег узла оверлея панели целиком — от «<div» до «>»."""
+    at = html_source.index(OVERLAY_MARKER)
+    start = html_source.rindex("<div", 0, at)
+    return html_source[start : html_source.index(">", start) + 1]
+
+
+def _modal_cancel_button_tag(html_source: str) -> str:
+    """Тег кнопки ОТКАЗА целиком — ДЕЙСТВУЮЩИМ разборщиком тега по маркеру.
+
+    ⚠️ ОБЁРТКА ТОНКАЯ НАМЕРЕННО: своего разборщика тегов здесь не заводится и
+    второй копии логики извлечения не появляется. Имя нужно затем, чтобы предмет
+    правила доступности был назван ИМЕНЕМ, а не выражением с маркером внутри
+    тела правила: записанный контракт («отмена разрушительного действия не имеет
+    права быть труднее его подтверждения», шапка `components/modal.html`) и
+    угроза T-10-41 говорят про ИМЕННО ЭТУ кнопку, и в коде это обязано быть
+    видно так же ясно, как в записи.
+    """
+    return _button_tag(html_source, CANCEL_MARKER)
+
+
+def _modal_confirm_button_tag(html_source: str) -> str:
+    """Тег кнопки ПОДТВЕРЖДЕНИЯ целиком — тем же разборщиком по маркеру.
+
+    Нужен ровно для одного — доказать АСИММЕТРИЮ: привязка отключённости в
+    файле присутствует ЗАКОННО (у этой кнопки, в селекторе отключения на форме
+    и в перечислителе фокусируемых узлов), и счёт вхождений по файлу её от
+    привязки на кнопке отказа не отличает.
+    """
+    return _button_tag(html_source, CONFIRM_MARKER)
+
+
+def _one_attribute(pattern: "re.Pattern[str]", tag: str, what: str) -> str:
+    """Единственное вхождение атрибута в поданном теге — иначе отказ.
+
+    Граница та же, что у `_modal_xdata_expression`: ОДНА панель на поданную
+    разметку. Разборщик, молча выбравший одно вхождение из двух, проверял бы не
+    ту панель.
+    """
+    found = pattern.findall(tag)
+    assert len(found) == 1, (
+        f"в теге {what} найдено {len(found)} выражений вместо одного: выбор "
+        f"вхождения стал бы молчаливым; тег: {tag!r}"
+    )
+    return unescape(found[0])
+
+
+def _modal_dismissal_expressions(html_source: str) -> dict[str, str]:
+    """Выражения ТРЁХ путей ухода панели по воле человека, по имени пути.
+
+    Разбор идёт по ОТРИСОВАННОЙ разметке, а не по исходнику шаблона: браузер
+    получает именно её.
+
+    ⚠️ ЧИСЛО НАЙДЕННОГО УТВЕРЖДАЕТСЯ ЗДЕСЬ, А НЕ ОСТАВЛЯЕТСЯ ЧИТАТЕЛЮ.
+    Разборщик, молча вернувший два пути вместо трёх, сделал бы инвентарь
+    (`test_every_dismissal_path_of_the_panel_is_gated_on_the_in_flight_state`)
+    ВАКУУМНО ЗЕЛЁНЫМ: обход по двум найденным сошёлся бы сам с собой, а третий
+    путь остался бы негейтированным и невидимым.
+    """
+    root_escape = DISMISSAL_ESCAPE_RE.findall(html_source)
+    assert len(root_escape) == 1, (
+        f"в поданной разметке {len(root_escape)} выражений пути клавиши выхода, "
+        "а не одно: разборщик рассчитан на одну панель, и выбор вхождения стал "
+        "бы молчаливым"
+    )
+
+    pairs = [
+        ("escape", unescape(root_escape[0])),
+        (
+            "overlay",
+            _one_attribute(
+                DISMISSAL_CLICK_RE, _modal_overlay_tag(html_source), "оверлея"
+            ),
+        ),
+        (
+            "cancel",
+            _one_attribute(
+                DISMISSAL_CLICK_RE, _modal_cancel_button_tag(html_source),
+                "кнопки отказа",
+            ),
+        ),
+    ]
+    names = [name for name, _ in pairs]
+    assert len(names) == 3 and len(set(names)) == 3, (
+        f"разборщик вернул {len(names)} путей ухода с именами {names}: "
+        "утверждения ниже обходили бы не то множество"
+    )
+    return dict(pairs)
+
+
 def _run_modal_lifecycle(
     expression: str,
     scenario: str,
@@ -2228,6 +2401,8 @@ def _run_modal_lifecycle(
     after_request: str = "",
     landing_present: bool = True,
     event_shape: str = "",
+    dismissal: str = "",
+    sending: bool = False,
 ) -> dict:
     """Исполнить сценарий жизненного цикла панели в интерпретаторе JS.
 
@@ -2252,6 +2427,16 @@ def _run_modal_lifecycle(
     сценарии байт-в-байт прежними. Неизменность их вердиктов утверждена
     прогоном ДО правки (``10 passed, 54 deselected`` по фильтру правил фокуса и
     блокировки прокрутки) и тем же прогоном ПОСЛЕ.
+
+    ⚠️ ЧЕТВЁРТЫЙ И ПЯТЫЙ ВХОДЫ ПРИБАВЛЕНЫ ПЛАНОМ 10-07 ТОЙ ЖЕ ФОРМОЙ И С ТЕМ ЖЕ
+    ОБЯЗАТЕЛЬСТВОМ: ``dismissal`` подаёт ВЫРАЖЕНИЕ пути ухода панели по воле
+    человека, ``sending`` — значение признака отправки, и нужны они ТОЛЬКО
+    сценарию ухода; умолчания оставляют все действующие сценарии байт-в-байт
+    прежними. Неизменность их вердиктов утверждена прогоном ДО правки
+    (``18 passed, 53 deselected`` по фильтру правил блокировки прокрутки,
+    приземления фокуса и транспортов) и тем же прогоном ПОСЛЕ.
+    ``event_shape`` сценарий ухода ПЕРЕИСПОЛЬЗУЕТ, а не дублирует: формы события
+    у него общие с транспортами, своих он не заводит.
     """
     payload = json.dumps(
         {
@@ -2262,6 +2447,8 @@ def _run_modal_lifecycle(
             "landing_id": FOCUS_LANDING_ID,
             "landing_present": landing_present,
             "event_shape": event_shape,
+            "dismissal": dismissal,
+            "sending": sending,
         }
     )
     assert MODAL_LIFECYCLE_HARNESS.count("__PAYLOAD__") == 1, (
@@ -2920,6 +3107,127 @@ def test_control_negative_an_unconditional_close_reddens_both_failure_transports
             f"на форме отказа {shape} безусловное закрытие оставило признак "
             f"блокировки прокрутки: подстановка сработала наполовину; {control}"
         )
+
+
+# --- УХОД ПАНЕЛИ ПО ВОЛЕ ЧЕЛОВЕКА ВО ВРЕМЯ ЛЕТЯЩЕГО ЗАПРОСА (план 10-07) ----
+#
+# Предмет — `DEF-09-02`, находка ручного обхода Фазы 9 с назначенной Фазой 10.
+# Человек, нажавший уход на медленной сети, считает, что отменил удаление, — а
+# удаление происходит: уход панели летящего запроса НЕ ОТМЕНЯЕТ. Фаза 10
+# РАСШИРИЛА предмет с одного места до 18, раздав признак отправки всем панелям
+# подтверждения и не спросив его ни на одном пути ухода.
+
+# ⚠️ ДОСЛОВНО СЕГОДНЯШНЕЕ (до правки плана 10-07) ВЫРАЖЕНИЕ ПУТИ УХОДА —
+# ЛИТЕРАЛОМ, А НЕ ЧТЕНИЕМ ИЗ ШАБЛОНА: после правки его там не будет, и контроль,
+# читающий шаблон, стал бы контролировать сам себя. Литерал сличается с
+# прочитанным из шаблона на НЕРАВЕНСТВО — подстановка обязана доказать, что
+# изменила что-то, и что изменила ИМЕННО ТО (идиома двойного предохранителя
+# `_xdata_with_dead_teardown`).
+UNGATED_DISMISSAL = "hide()"
+
+
+def _dismissal_verdict(
+    expression: str,
+    *,
+    sending: bool,
+    after_request: str = "",
+    event_shape: str = "",
+) -> dict:
+    """Вердикт сценария ухода на поданном выражении и признаке отправки."""
+    rendered = _modal_block()
+    return _run_modal_lifecycle(
+        _modal_xdata_expression(rendered),
+        "dismissal",
+        dismissal=expression,
+        sending=sending,
+        after_request=after_request,
+        event_shape=event_shape,
+    )
+
+
+def test_the_panel_refuses_dismissal_while_the_request_is_in_flight():
+    """НЕСУЩЕЕ (DEF-09-02): панель не уходит, пока необратимый запрос летит.
+
+    Цена отказа названа поимённо в отчёте верификации фазы и в независимом
+    разборе ревизии (§WR-09): запрос продолжается против компонента, чьё
+    собственное состояние уже ложно, доходит до сервера и выполняет необратимое
+    действие, — а на маршрутах, не выдающих плашки на успех (D-03), человек не
+    получает НИКАКОГО сигнала о том, что оно произошло.
+
+    ⚠️ ТРИ УТВЕРЖДЕНИЯ О СОСТОЯНИИ, А НЕ ОДНО. Панель, «оставшаяся открытой» с
+    уже снятым признаком блокировки прокрутки, есть ТРЕТЬЕ состояние — и оно
+    молчаливое: на экране всё выглядит исправно, а страница за панелью снова
+    прокручивается. Фокус, уехавший с кнопки отказа при оставшейся панели, есть
+    четвёртое.
+
+    ⚠️ ИСПОЛНЯЕТСЯ ВЫРАЖЕНИЕ АТРИБУТА, А НЕ МЕТОД ОБЪЕКТА: предмет здесь ветвь,
+    записанная в АТРИБУТЕ. Правило, зовущее `hide()` напрямую, зеленело бы на
+    панели, у которой гейта в атрибуте нет вовсе.
+    """
+    expressions = _modal_dismissal_expressions(_modal_block())
+    verdict = _dismissal_verdict(expressions["escape"], sending=True)
+
+    assert verdict["threw"] is None, (
+        "выражение пути ухода упало исключением внутри слушателя: панель "
+        "осталась бы открытой, и выглядело бы это РОВНО как исправно "
+        f"сработавший гейт; вердикт: {verdict}"
+    )
+    assert verdict["open"] is True, (
+        "панель УШЛА С ЭКРАНА во время летящего необратимого запроса: человек "
+        "считает действие отменённым, а оно происходит — и это верно на всех 18 "
+        f"местах подтверждения сразу; вердикт: {verdict}"
+    )
+    assert verdict["locked"] is True, (
+        "панель осталась открытой, а признак блокировки прокрутки с корневого "
+        "элемента снялся — состояние разъехалось, и за открытой панелью снова "
+        f"прокручивается страница; вердикт: {verdict}"
+    )
+    assert verdict["focused"] == verdict["focused_before"], (
+        "панель осталась открытой, а фокус уехал с кнопки отказа: ветвь "
+        "приземления отработала при неушедшей панели, и обход по клавише "
+        f"табуляции начинается вне панели; вердикт: {verdict}"
+    )
+    assert verdict["sending"] is True, (
+        "признак отправки сбросился САМИМ путём ухода: следующий уход прошёл бы "
+        f"гейт, хотя запрос всё ещё летит; вердикт: {verdict}"
+    )
+    assert verdict["repeat_matches"] is True, (
+        f"повторное исполнение сценария ухода дало ДРУГОЙ исход: {verdict}"
+    )
+
+
+def test_control_negative_an_ungated_dismissal_reddens_the_gate():
+    """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ: правило выше УМЕЕТ КРАСНЕТЬ.
+
+    Гейт, зелёный на сегодняшнем дереве, гейтом не является. Контроль
+    подставляет выражение, ДОСЛОВНО равное сегодняшнему, и обязан получить
+    панель, УШЕДШУЮ С ЭКРАНА при истинном признаке отправки. Подстановка
+    сличается с прочитанным из шаблона на неравенство — иначе контроль
+    контролировал бы сам себя.
+    """
+    live = _modal_dismissal_expressions(_modal_block())
+
+    assert live["escape"] != UNGATED_DISMISSAL, (
+        "выражение пути клавиши выхода ДОСЛОВНО равно сегодняшнему: гейт не "
+        "приземлился, и контроль ниже подставляет то же самое, что уже стои́т в "
+        f"шаблоне — доказывать ему нечего; выражение: {live['escape']!r}"
+    )
+
+    control = _dismissal_verdict(UNGATED_DISMISSAL, sending=True)
+
+    assert control["open"] is False, (
+        "негейтированное выражение НЕ закрыло панель при истинном признаке "
+        "отправки: значит гарнир не исполняет выражение вовсе, и несущее "
+        f"правило выше зелено в вакууме; вердикт: {control}"
+    )
+    assert control["branches"] == ["hide"], (
+        "негейтированное выражение ушло НЕ ветвью закрытия: подстановка "
+        f"сработала не так, как сегодняшнее выражение; вердикт: {control}"
+    )
+    assert control["locked"] is False, (
+        "негейтированное выражение панель закрыло, а признак блокировки "
+        f"прокрутки не снялся: подстановка сработала наполовину; {control}"
+    )
 
 
 def test_the_panel_lands_the_focus_when_its_opener_left_the_document():
