@@ -1,10 +1,8 @@
 ---
 phase: 10-rychag-components-modal-html
-reviewed: 2026-09-03T22:51:14Z
+reviewed: 2026-09-04T00:00:00Z
 depth: standard
-head: 0ea886d
-diff_base: 576cef07
-files_reviewed: 26
+files_reviewed: 27
 files_reviewed_list:
   - app/pages/accounts.py
   - app/pages/admin.py
@@ -27,519 +25,516 @@ files_reviewed_list:
   - tests/test_pages/test_editor_schedules.py
   - tests/test_pages/test_history_retry.py
   - tests/test_pages/test_htmx_gates.py
+  - tests/test_pages/test_hx_location_destinations.py
   - tests/test_pages/test_impersonation.py
   - tests/test_pages/test_notices_channel.py
+  - tests/test_planning/test_requirement_completion_follows_verification.py
   - tests/test_templates/test_components.py
   - tests/test_templates/test_htmx_inventory.py
   - tests/test_templates/test_htmx_markup_gates.py
 findings:
-  critical: 3
-  warning: 6
-  info: 0
-  total: 9
+  critical: 1
+  warning: 8
+  info: 4
+  total: 13
 status: issues_found
 ---
 
-# Phase 10: Code Review Report
+# Фаза 10: отчёт ревизии кода
 
-**Reviewed:** 2026-09-03T22:51:14Z
-**Depth:** standard
-**Files Reviewed:** 26
-**Status:** issues_found
+**Ревизия:** 2026-09-04
+**Глубина:** standard
+**Файлов просмотрено:** 27 (5 модулей страничного слоя, 12 шаблонов, 11 модулей суиты; один файл конфигурации перечислен дважды — общее число уникальных путей 28)
+**Статус:** issues_found
 
-## Summary
+## Сводка
 
-This round re-checked the six findings of the prior review against the code at
-`0ea886d` and then reviewed the phase's own delta (`576cef07..HEAD`) adversarially.
+Проверены: перевод компонента `components/modal.html` на безусловный htmx во всех
+18 местах подтверждения; фрагментный ответ удаления расписания
+(`ads/partials/sched_delete_response.html` + `ads/includes/sched_count_rule.html`);
+перевод шести обработчиков на слой ответа `respond()`; граница `ID_MAX` с тремя
+псевдонимами в `app/pages/schedules.py`; IIFE-обёртка инлайн-скрипта редактора;
+три новых модуля суиты.
 
-**Prior-round disposition (verified against current code, not against the plans):**
+Прогон затронутых модулей суиты — зелёный (`210 passed`), поэтому ревизия шла не
+за красным, а за расхождением между тем, что код ДЕЛАЕТ, и тем, что о нём
+записано, плюс за формами, которые покраснеют не сейчас.
 
-| Prior | Verdict | Evidence |
-| --- | --- | --- |
-| `CR-01` (blocker) — `_ad_id_from_form` bounded type, not magnitude | **Closed for the field it named, but the route it was reproduced on still 500s.** See `CR-01` below. | `app/pages/schedules.py:305-307` now clamps `1 .. _AD_ID_MAX`; reproduced 500 remains on the same route via the path id. |
-| `WR-01` — response shape decided by a different predicate than the landing address | **Closed.** Both now read the single `returns_to_editor` value. | `app/pages/schedules.py:998,1003,1008` |
-| `WR-02` — docs claimed a focus-landing payoff on a failure path that did not exist | **Closed** as prose; the underlying accessibility hole is now stated but shipped. See `WR-03`. | `app/templates/includes/notice_area.html:95-115` |
-| `WR-03` — form verb parameter live while the submit attribute was hardcoded | **Closed.** `method` parameter removed from the signature; all five callers updated. | `app/templates/components/modal.html:656,677` |
-| `WR-04` — after-request handler fires on ANY htmx request from the block-call slot | **Not closed — mitigated by a markup-only inventory, and the blast radius grew 1 → 18 in this same phase.** See `WR-01`. | `app/templates/components/modal.html:275-281,679` |
-| `WR-05` — `_fragment` docstring's exclusion list covered two of three response nodes | **Closed for the docstring; the register the docstring points at contains none of the three nodes.** See `WR-02`. | `tests/test_pages/test_account_groups.py:4897-4933` |
+Главная находка одна и она блокирующая: новый модуль
+`tests/test_planning/test_requirement_completion_follows_verification.py` вшил в
+два отрицательных контроля СЕГОДНЯШНЕЕ переходное состояние записи фазы
+(`Phase 10 → gaps_found`, `Phase 11 → отчёта нет`). Прогон `just test` — то есть
+собственный гейт проекта — покраснеет ровно в тот момент, когда фаза достигнет
+своей цели и её отчёт станет `passed`.
 
-**New findings.** The phase converted eight handlers from `RedirectResponse` to
-`respond()` and made `hx-post` unconditional on all 18 confirm sites. That
-combination turned nine POST routes into `204 + HX-Location` responses whose
-follow-up GET replaces `document.body` — a transport that, before this phase,
-only reached the account-groups screens. Three defects follow from that and from
-an incomplete application of the phase's own `CR-01` fix. All three criticals
-were reproduced by running the application, not inferred.
+Остальные восемь предупреждений — расхождения записи с кодом (комментарий
+утверждает единственность чтения там, где чтений два), названная-но-не-закрытая
+кросс-объявленческая линейка счётчика, слепые зоны двух новых гейтов, отказ
+валидации сырым JSON на пути без JavaScript и приземление фокуса в заведомо
+пустую область.
 
----
+## Критические
 
-## Critical Issues
+### CR-01: отрицательные контроли гейта требований вшили переходное состояние записи — прогон покраснеет при закрытии фазы
 
-### CR-01: The route the closed blocker was reproduced on still returns HTTP 500 — the fix bounded the form field but not the path identifier
+**Файл:** `tests/test_planning/test_requirement_completion_follows_verification.py:304-345`, `:330-370`
+**Класс:** BLOCKER
 
-**File:** `app/pages/schedules.py:967` (query), `app/pages/schedules.py:951-957` (signature)
-
-**Issue:**
-The closed blocker was reproduced as "`POST /schedules/{id}/delete`, body
-`return_to=editor&ad_id=` and twenty-five nines" — and the fix
-(`_ad_id_from_form`, lines 301-307) bounds exactly that field. But the *same
-handler*, twenty-six lines earlier, feeds an unbounded path parameter into the
-same kind of comparison:
+**Проблема.** Оба отрицательных контроля читают ЖИВОЕ дерево `.planning/` и
+утверждают его текущие значения дословно:
 
 ```python
-schedule_id: int,            # line 954 — no bound
+# :304  test_control_negative_a_premature_completion_reddens_the_rule
+doctored = _with_status(original, "FORM-06", COMPLETED_STATUS)
+premature = premature_completions(doctored, PLANNING_ROOT)
+assert len(premature) == 1
+assert only.verdict == "gaps_found"        # ← вшито состояние Фазы 10
+```
+
+```python
+# :330  test_control_negative_two_premature_completions_are_both_named
+absent = next(item for item in premature if item.requirement == "FORM-03")
+assert absent.verdict is None              # ← вшито ОТСУТСТВИЕ отчёта Фазы 11
+assert "НЕТ ВОВСЕ" in str(absent)
+```
+
+Проверено на дереве: `.planning/REQUIREMENTS.md:136` даёт `| FORM-06 | Phase 10 |
+Gaps Found |`, а `10-VERIFICATION.md` несёт `status: gaps_found`. Как только
+следующий круг верификации запишет `status: passed` — а это и есть объявленная
+цель Фазы 10, — `premature_completions` вернёт пустой список, и оба утверждения
+(`len(premature) == 1`, `only.verdict == "gaps_found"`) упадут. Симметрично
+второй контроль упадёт, как только у Фазы 11 появится ЛЮБОЙ отчёт верификации.
+
+То есть модуль, заведённый ради принуждения регламента, ломает `just test`
+именно в момент штатного продвижения проекта — и чинить его придётся правкой
+утверждений, что через один круг превратит его в тест, который «принято
+подгонять». Это ровно тот класс отказа, который сам же файл осуждает в своей
+шапке («хрупкое правило отключают, и вместе с ним отключается свойство»).
+
+**Исправление.** Отрицательные контроли обязаны питаться СИНТЕТИЧЕСКОЙ записью,
+а не живым деревом. Функция `premature_completions(requirements_text,
+planning_root)` уже принимает оба входа параметрами — второй нужно так же
+подменить, а не читать `PLANNING_ROOT`:
+
+```python
+def _fake_planning_root(tmp_path: Path, verdicts: dict[str, str | None]) -> Path:
+    """Дерево отчётов, собранное ПОД контроль: фаза → вердикт (None — отчёта нет)."""
+    for phase, verdict in verdicts.items():
+        if verdict is None:
+            continue
+        d = tmp_path / "phases" / f"{phase}-synthetic"
+        d.mkdir(parents=True)
+        (d / f"{phase}-VERIFICATION.md").write_text(
+            f"---\nphase: {phase}-synthetic\nstatus: {verdict}\n---\n", encoding="utf-8"
+        )
+    return tmp_path
+
+
+def test_control_negative_a_premature_completion_reddens_the_rule(tmp_path):
+    text = "| SYN-01 | Phase 42 | Complete |\n"
+    root = _fake_planning_root(tmp_path, {"42": "gaps_found"})
+    premature = premature_completions(text, root)
+    assert len(premature) == 1
+    assert premature[0].verdict == "gaps_found"
+```
+
+Несущее правило
+`test_no_requirement_is_marked_complete_before_its_phase_verification_passed`
+при этом остаётся на живом дереве — оно и должно на нём стоять; переезжают
+только КОНТРОЛИ, чей предмет — зубы разборщика, а не состояние записи.
+
+## Предупреждения
+
+### WR-01: комментарий утверждает единственность чтения признака возврата, а чтений два
+
+**Файл:** `app/pages/schedules.py:1061-1071` (и `:402` внутри `_editor_url`)
+**Класс:** WARNING
+
+**Проблема.** Комментарий в `schedules_delete` заявляет:
+
+```python
+# ПРИЗНАК ВОЗВРАТА ЧИТАЕТСЯ ОДИН РАЗ И УЧАСТВУЕТ В ОБОИХ РЕШЕНИЯХ — И В
+# СБОРКЕ АДРЕСА, И В ВЫБОРЕ ФОРМЫ ОТВЕТА (`WR-01`).
+returns_to_editor = form_data.get("return_to") == RETURN_TO_EDITOR
 ...
-result = await db.execute(   # line 967
-    select(Schedule)
-    .join(Ad, Schedule.ad_id == Ad.id)
-    .where(Schedule.id == schedule_id, Ad.user_id == user.id)
-)
+screen_url = _editor_url(form_data, ad_id)
 ```
 
-Reproduced against the running app (authenticated session, no htmx header):
-
-```
-POST /schedules/9999999999999999999999999/delete
-  body: return_to=editor&ad_id=1
-→ 500  OverflowError: Python int too large to convert to SQLite INTEGER
-       at app/pages/schedules.py:967
-```
-
-This is the identical failure mode, the identical driver exception, the identical
-route, and the identical stated invariant — the module's own rule, written at
-`app/pages/schedules.py:37-47`, is that an out-of-column-range value is discarded
-*before* the query so it "does not crash the query in the driver". The rule is
-enforced at one call site out of five in the file.
-
-The docstring at `app/pages/schedules.py:270-293` makes this worse rather than
-better: it asserts, in point (в), that the bound is taken "по верхней границе
-КОЛОНКИ" and "СТОИТ ДО ЗАПРОСА", and in point (г) names the reproducing request
-by route. A reader is told the route is covered. It is not.
-
-The guarding test never probes the path id — `MISSING_SCHEDULE_URL` is hardcoded
-to `"/schedules/999999/delete"`
-(`tests/test_pages/test_confirm_delete_transport.py:2272`), safely inside int32,
-so the whole `UNUSABLE_AD_ID_VALUES` matrix runs against an in-range path.
-
-**Fix:** Reject out-of-column-range identifiers at the boundary rather than at one
-hand-picked field. Either constrain the path parameter declaratively —
+Но `_editor_url` НЕ получает вычисленное значение — он читает форму заново:
 
 ```python
-from fastapi import Path
-
-AD_ID_MAX = 2_147_483_647  # promote _AD_ID_MAX to the module's public bound
-
-@router.post("/schedules/{schedule_id}/delete")
-async def schedules_delete(
-    request: Request,
-    schedule_id: int = Path(..., ge=1, le=AD_ID_MAX),
-    ...
-):
+# app/pages/schedules.py:402
+if form_data.get("return_to") == RETURN_TO_EDITOR and ad_id is not None:
 ```
 
-— which turns the 500 into FastAPI's 422 before the handler body runs, or add a
-single shared coercion helper used by every identifier that reaches a comparison,
-and extend `UNUSABLE_AD_ID_VALUES` coverage to the *path* as well as the body:
+Итого два независимых чтения одного поля управляют двумя связанными решениями —
+ровно та форма, которую комментарий объявляет закрытой. Сегодня они совпадают
+(`form_data` — один и тот же объект), поэтому дефекта поведения нет; дефект — в
+том, что запись обещает механическую гарантию, которой в коде нет: следующая
+правка, добавившая в `_editor_url` ещё одно условие или сменившая источник
+признака, разведёт ветку ответа и адрес приземления МОЛЧА — то есть вернёт
+дословно тот отказ, который абзац этого же обработчика описывает как
+«измеренное следствие расхождения».
+
+**Исправление.** Передавать уже вычисленный предикат, а не форму:
 
 ```python
-MISSING_SCHEDULE_URL = "/schedules/999999/delete"
-OUT_OF_RANGE_SCHEDULE_URL = "/schedules/" + "9" * 25 + "/delete"   # currently 500
+def _editor_url(returns_to_editor: bool, ad_id: int | None,
+                schedule_id: int | None = None) -> str:
+    if returns_to_editor and ad_id is not None:
+        url = f"/ads/{ad_id}/edit"
+        if schedule_id is not None:
+            url += f"?sched={schedule_id}#sched-{schedule_id}"
+        return url
+    return "/schedules"
 ```
 
----
+и в `_editor_redirect` вычислять признак один раз тем же выражением. Тогда
+утверждение комментария становится свойством сигнатуры, а не памятью читателя.
 
-### CR-02: Four sibling routes in the same file carry the identical unbounded-identifier 500
+### WR-02: третий внеполосный узел ставит в линейку счётчика число ЧУЖОГО объявления — дефект задокументирован и закреплён тестом как норма
 
-**File:** `app/pages/schedules.py:730` (`ad_id`), `:737` (`account_id`), `:822` (`schedule_id`), `:823` (`ad_id`), `:826` (`account_id`), `:903` (`schedule_id`)
+**Файл:** `app/pages/schedules.py:1112-1176` (`_fragment`, `:1174`), `app/templates/ads/partials/sched_delete_response.html:73`, `tests/test_pages/test_confirm_delete_transport.py:3231-3311`
+**Класс:** WARNING
 
-**Issue:**
-`_AD_ID_MAX` was introduced as a module-level rule but applied to one helper. Every
-other identifier in the module that reaches a SQL comparison is still `int` with no
-magnitude bound. All four reproduced against the running app:
-
-| Request | Result | Crash site |
-| --- | --- | --- |
-| `POST /schedules/new` body `ad_id=<25 nines>` | **500** OverflowError | `schedules.py:476` via `_ownership_verdict` → `_owns_ad` |
-| `POST /schedules/new` body `ad_id=<valid>&account_id=<25 nines>` | **500** OverflowError | `schedules.py:476` |
-| `POST /schedules/<25 nines>/edit` body `ad_id=<valid>` | **500** OverflowError | `schedules.py:834` |
-| `POST /schedules/<25 nines>/toggle` | **500** OverflowError | `schedules.py:911` |
-
-The module's own comment (`:37-47`) declares this exact behaviour forbidden on a
-"форменный POST" and cites `T-02-24` / `T-02-25`. On PostgreSQL these surface as
-`DataError` out of int32 range, per the same comment — i.e. production is affected
-identically, not just the SQLite suite.
-
-Two of these are worse than the delete route, because `_ownership_verdict` runs
-*before* any write and the 500 therefore aborts the ownership decision itself: the
-failure mode is "authorization check crashed", not "lookup returned nothing".
-
-**Fix:** Apply one bound at one place rather than five. Declare the column bound
-once and use FastAPI's own validation on every identifier that reaches SQL:
+**Проблема.** Узел `#sched-count` адресован СТАТИЧЕСКИМ селектором, а число
+считается по `ad_id`, снятому с НАЙДЕННОЙ строки расписания:
 
 ```python
-# app/pages/schedules.py
-ID_MAX = 2_147_483_647          # upper bound of the identifier COLUMN (int32)
-AdId = Annotated[int, Path(ge=1, le=ID_MAX)]
-AdIdForm = Annotated[int, Form(ge=1, le=ID_MAX)]
-AccountIdForm = Annotated[int | None, Form(ge=1, le=ID_MAX)]
+schedules_count=await _ad_schedule_count(db, user.id, ad_id)
 ```
 
-then use `AdIdForm` / `AccountIdForm` / `AdId` in `schedules_create`,
-`schedules_update`, `schedules_toggle` and `schedules_delete`. A `422` on a
-hand-crafted body is the outcome the module already says it wants; nothing
-reachable from the UI changes, because every id the UI sends is a real primary key.
+Если запрос называет адресом расписание объявления B, а полем контекста — экран
+объявления A, в документ, открытый на A, приезжает число расписаний B и
+переживает запрос до перезагрузки. Это ровно то, что закрепляет
+`test_the_counter_node_belongs_to_the_ad_named_by_the_request` — тест
+УТВЕРЖДАЕТ дефектное поведение как ожидаемое, а сам обработчик называет предмет
+`WR-05` «ЗАПИСЬЮ, а не поведением».
 
-Then add a gate that scans `app/pages/schedules.py` for identifier parameters
-lacking a bound, so the sixth one does not ship unbounded either.
+Из интерфейса случай недостижим (обе формы пути шлют `ad.id` своего экрана), и
+границ привилегий он не пересекает — выборки скоуплены `Ad.user_id`. Но
+объявление «предмет есть запись» неверно: предмет — поведение, у него есть
+воспроизводимый вход, и он оставлен в коде.
 
----
+**Исправление.** Сделать цель третьего узла зависимой от объявления, о котором
+запрос говорит, — тогда несовпадение перестаёт быть выразимым:
 
-### CR-03: The new `HX-Location` transport re-executes the ad-editor's inline script, killing all of the editor's JavaScript after a routine delete
-
-**File:** `app/pages/schedules.py:1042` (the response), `app/templates/ads/form.html:307-322` (the victim)
-
-**Issue:**
-Before this phase, `schedules_delete` returned a plain `302`
-(`git show 576cef07:app/pages/schedules.py`) — a full document navigation. It now
-returns `204 + HX-Location`, verified end to end:
-
-```
-POST /schedules/1/delete   (HX-Request: true, return_to=editor, ad_id=1)
-→ 204   HX-Location: /ads/1/edit   body length 0
-```
-
-That is the redirect branch — the one taken when the ad has **no schedules left**,
-i.e. the ordinary "delete my only schedule" flow.
-
-htmx 2.0.10 handles `HX-Location` by issuing a GET and swapping the response into
-`document.body` with `innerHTML` (`app/static/js/htmx.min.js`:
-`s.push=s.push??"true";Nn("get",e,s);return`), and it **re-executes every
-`<script>` in the swapped content** (`function D(e){Array.from(e.querySelectorAll("script")).forEach(...)}`,
-gated on `allowScriptTags:true`, which this project leaves at the default —
-`app/templates/includes/htmx_config.html:87` says so explicitly).
-
-The swapped-in page is `/ads/{id}/edit` — **the same page the user is already on**
-— and it carries 18 top-level `const`/`let` declarations in a classic inline
-script (`app/templates/ads/form.html:311-339`: `IMAGE_BASE_URL`,
-`THUMB_KEY_PREFIX`, `MAX_IMAGES`, `TEXT_LIMIT`, `TEXT_WARN_AT`, `CAPTION_LIMIT`,
-`UPLOAD_*_ERROR`, `imagePaths`, `adForm`, `mediaStrip`, `imageInputs`,
-`fileInput`, `errorBox`, `counter`, `textArea`, `addTile`). Those already exist in
-the global lexical environment from the first page load. Re-running the script
-throws at instantiation time, before a single statement executes:
-
-```
-SyntaxError: Identifier 'IMAGE_BASE_URL' has already been declared
-```
-
-(verified: `vm.runInThisContext` of the same source twice — first ok, second
-throws.)
-
-**Observable result:** after deleting the last schedule from the ad editor, the
-page appears to reload but the editor's entire client layer is dead — no image
-upload, no character counter, no remove-image interception, no add-tile
-management — until the user performs a hard reload. The only signal is one line in
-the console. This directly contradicts the milestone acceptance signal the phase
-leans on throughout (`app/pages/schedules.py:1066`,
-`app/templates/ads/partials/sched_delete_response.html`: "ответ 200 И ЧИСТАЯ
-КОНСОЛЬ").
-
-The project already knew this hazard: `app/templates/includes/htmx_error_banner.html`
-guards its own re-execution with `document.body.dataset.htmxFailureWired`,
-precisely because body swaps re-run scripts. The editor's script was not given the
-same treatment when this phase made it a swap destination.
-
-**Fix (pick one, but pick one before shipping):**
-
-1. Make the editor script re-entrant — the smallest change, and consistent with
-   the guard already used by `htmx_error_banner.html`:
-
-```html
-<script>
-(function () {
-  const IMAGE_BASE_URL = {{ s3_public_url() | tojson }};
-  /* ... the rest of the existing body, unchanged ... */
-})();
-</script>
-```
-
-   An IIFE removes every global lexical binding, so re-execution is a no-op
-   collision-wise and re-binds the DOM handlers to the freshly swapped nodes —
-   which is what the swap actually needs.
-
-2. Or keep the schedule-delete empty-editor path on a full navigation
-   (`HX-Redirect`, or leave the branch on `RedirectResponse`) so the document is
-   genuinely reloaded. This is cheaper but leaves the landmine armed for the next
-   route that redirects into the editor.
-
-Add a gate that fails when a template reachable as an `HX-Location` destination
-contains a top-level `const`/`let`/`class` inside an inline `<script>`; today
-`ads/form.html` (18 declarations) and `accounts/connect_tg_user.html` are the only
-two files with that shape, so the gate is cheap and exact.
-
----
-
-## Warnings
-
-### WR-01: The panel's `htmx:after-request` handler is still un-scoped, and this phase multiplied its blast radius from 1 site to 18 without narrowing it
-
-**File:** `app/templates/components/modal.html:679`, `:247-281`
-
-**Issue:**
-The prior `WR-04` was closed by an inventory that reads the *text* of every block
-call and reddens a slot carrying an `hx-*` attribute
-(`test_no_confirm_panel_slot_carries_a_request_of_its_own`). The handler itself was
-deliberately left un-narrowed (`:268-273`), and the file states the reason: the
-expression is load-bearing for criterion 3.
-
-Two things make this a live warning rather than a settled decision:
-
-1. The file itself concedes the mitigation covers only half the hole
-   (`:275-281`): a request raised **programmatically** from inside the slot — an
-   `htmx.ajax()` call, or an Alpine handler — is not distinguishable by the
-   inventory "ВОВСЕ". That half is unguarded by anything.
-2. The same phase (D-14/D-15, `:416-436`) made `hx-post` and the after-request
-   handler **unconditional for all 18 confirm sites**. Before this phase exactly
-   one site carried them. The defect's reach therefore grew 18× in the same commit
-   range in which its narrowing was deferred to a `WINDOWS.md` entry.
-
-Concretely: any htmx exchange that bubbles `htmx:afterRequest` to the panel form
-sets `sending = false` and, on success, calls `hide()` — closing a destructive
-confirmation panel out from under the user mid-decision, on any of 18 screens.
-
-**Fix:** Narrow the handler to the form's own exchange. The cheapest form that does
-not touch the criterion-3 expression's shape is an identity check on the event
-target, added as a leading guard:
-
-```html
-x-on:htmx:after-request="if ($event.target !== $el) return; sending = false; if (...) hide()"
-```
-
-If that is genuinely blocked by the criterion-3 gate's teeth, then extend the
-inventory's predicate to also reject `hx-` *free* request initiation in slots
-(`htmx.ajax`, `x-on:*` calling into htmx) rather than only the attribute prefix, so
-the conceded half is at least detectable.
-
----
-
-### WR-02: `sched_delete_response.html`'s three OOB nodes claim membership in a machine-checked register that contains none of them
-
-**File:** `app/pages/schedules.py:1066-1068`, `app/templates/ads/partials/sched_delete_response.html:40-45`, `tests/test_pages/test_account_groups.py:4897-4933`
-
-**Issue:**
-Both the handler docstring and the response template state that the idle-path
-console-error cost is "уже назван поимённо перечнем `OOB_TARGET_EXCEPTIONS` с
-назначенной Фазой 15" and that this phase "НАСЛЕДУЕТ" it.
-
-The register contains exactly two entries, and both are group-screen nodes:
-
-```python
-OOB_TARGET_EXCEPTIONS = {
-    "group-row-{group_id}": ...,   # app/templates/account_groups/partials/delete_response.html
-    "group-del-{group_id}": ...,   # same file
-}
-OOB_TARGET_EXCEPTIONS_DECLARED = 2
-```
-
-Neither `sched-{id}`, nor `sched-del-{id}`, nor `#sched-count` appears anywhere in
-it, and `test_the_number_of_oob_target_exceptions_is_the_declared_one` pins the
-count at 2 — so an attempt to enrol the new nodes would have reddened, and no such
-attempt was made. The three new no-target-capable nodes shipped outside the exact
-register that exists to prevent that.
-
-The imported reasoning also does not transfer for the third node. The group-side
-comment justifies *excluding* the counter with "область `id="account-groups-count"`
-в документе есть всегда" (`:4889-4891`). The schedule counter's wrapper is
-**conditional** — `app/templates/ads/form.html:213` puts `<div id="sched-count">`
-inside `{% if editor.schedules %}` — so on the cross-ad path the phase itself
-documents (document open on ad A, request naming ad B), an editor A with zero
-schedules has no `#sched-count` target at all, producing a third
-`htmx:oobErrorNoTarget` the register does not account for.
-
-**Fix:** Either enrol the three nodes and bump the declared count —
-
-```python
-OOB_TARGET_EXCEPTIONS = {
-    ...,
-    "sched-{schedule_id}":     OobTargetException(where_printed=".../sched_delete_response.html", ...),
-    "sched-del-{schedule_id}": OobTargetException(...),
-    "sched-count":             OobTargetException(reason="цель условна: обёртка стоит внутри {% if editor.schedules %}", ...),
-}
-OOB_TARGET_EXCEPTIONS_DECLARED = 5
-```
-
-— or correct both prose claims to say the schedule nodes are *not* in the register
-and name where their exception is recorded instead. Leaving a false pointer to a
-gated register is the failure mode the register was built to stop. The register
-also currently lives in `tests/test_pages/test_account_groups.py`, which makes it
-structurally invisible to schedule-side reviewers; moving it to a shared module
-would remove the incentive to skip enrolment.
-
----
-
-### WR-03: The focus landing region is guaranteed empty on the very path it was chosen for
-
-**File:** `app/templates/components/modal.html:665`, `app/templates/includes/notice_area.html:95-112`, `:133`
-
-**Issue:**
-`land()` moves focus to `#notice` when the opener has left the document. On the
-fragment path — the path the region was explicitly selected for — the phase's own
-measurement (`notice_area.html:105-110`) is that the region is **always empty**:
-`D-03` forbids a success notice, and neither fragment response of the phase carries
-a notice code. So a keyboard or screen-reader user who confirms a deletion has
-focus programmatically moved into an empty `role="status" aria-live="polite"`
-container and receives no announcement whatsoever that the action completed. The
-same user previously got a full page navigation, which at least re-announced the
-document.
-
-This is honestly recorded rather than hidden, which is why it is a warning and not
-a blocker — but it is shipped behaviour on 18 confirm sites, and the record
-("Фокус приезжает в осмысленное МЕСТО, но не в осмысленный ТЕКСТ") describes a
-regression in announcement, not a neutral trade.
-
-**Fix:** Give the landing an announcement rather than only a location. The cheapest
-option that does not reopen `D-03` (no visual banner on success) is a
-visually-hidden live message written by the same OOB channel:
-
-```html
-<div id="notice" role="status" aria-live="polite" tabindex="-1">
-  ...
-  <span class="visually-hidden" data-announce></span>
+```jinja
+{# ads/partials/sched_delete_response.html #}
+<div hx-swap-oob="innerHTML:#sched-count-{{ ad_id }}">
+  {% include "ads/includes/sched_count_rule.html" %}
 </div>
 ```
 
-and have `sched_delete_response.html` / the group delete response set
-`data-announce` text ("Расписание удалено") via the existing OOB mechanism. If that
-is out of scope, the deferral should name the *announcement* gap specifically
-rather than only the transition-transport gap currently assigned to `GATE-09`.
+с соответствующим `id="sched-count-{{ ad.id }}"` в `ads/form.html` и передачей
+`ad_id` в рендер фрагмента. Узел, чью цель документ не разрешил, снимается и
+даёт строку в консоли — то есть ЛОЖНОЕ число заменяется на уже принятый
+перечнем `OOB_TARGET_EXCEPTIONS` шум. Если правка отложена, из докстринга
+`_fragment` и из шапки шаблона должна уйти формулировка «предмет — ЗАПИСЬ, а не
+поведение»: она неверна.
 
----
+### WR-03: отказ валидации новых псевдонимов уходит сырым JSON мимо слоя ответа
 
-### WR-04: Destructive user-facing routes converted in this phase carry no origin guard, contradicting the doctrine this same phase asserts in `admin.py`
+**Файл:** `app/pages/schedules.py:85-91`, `:805`, `:894`, `:1022`
+**Класс:** WARNING
 
-**File:** `app/pages/ads.py:722-760`, `app/pages/accounts.py:993-1021`, `app/pages/schedules.py:951-965`
+**Проблема.** `ScheduleIdPath`, `AdIdForm` и `AccountIdForm` отдают отказ
+средствами FastAPI, то есть `422` с телом `{"detail": [...]}`. Проверено
+косвенно: `test_no_schedule_route_answers_with_a_handler_failure_on_an_out_of_range_identifier`
+ожидает у всех пяти входов `VALIDATION_REFUSAL`.
 
-**Issue:**
-`admin.py`, edited in this phase, states the project's rule verbatim
-(`app/pages/admin.py:1849-1868`):
+Это лучше прежней пятисотки, но противоречит двум объявленным инвариантам самой
+фазы:
 
-> "…и без сверки источника единственным, что стоит между сторонней страницей и
-> этим действием, остаётся умолчание `samesite="lax"` — одна политика браузера
-> там, где проект в трёх соседних местах требует явной серверной проверки."
+* G-2 («форму ответа выбирает слой ответа, а не обработчик») — здесь форму
+  выбирает фреймворк ДО обработчика, и `respond()` в этой ветке не участвует
+  вовсе;
+* прецедент, который проект уже назвал дефектом в `app/pages/accounts.py:958-961`:
+  «пользователь, отправивший обычную HTML-форму, получал `{"detail": ...}` —
+  сырой JSON вместо страницы».
 
-Four admin routes and three money/retry forms follow it. Meanwhile the three
-user-facing destructive routes reworked by this same phase — delete ad, delete
-messenger account, delete schedule — have no `is_same_origin` check in any branch.
-All three are irreversible and all three now sit behind the same confirm panel.
+На пути htmx следствие мягче, но тоже названо неверно: `422` не несёт
+`HX-Location`, ветвь закрытия панели не срабатывает, панель остаётся открытой
+без объяснения (кода реестра в ответе нет).
 
-The exposure is genuinely reduced by `samesite="lax"` on the session cookie
-(`app/pages/auth.py:89-94`), which is why this is a warning and not a blocker: a
-cross-site `POST` will not carry the cookie in current browsers. But that is
-exactly the argument `admin.py` rejects for its own routes, in a docstring written
-during this phase. The asymmetry is now self-contradictory in the same commit
-range, which is the condition `CR-02 ревизии фазы 6` was raised under for
-`admin_delete_user`.
+Достижимость из интерфейса — нулевая (идентификаторы приходят из разметки,
+`account_id` шлётся радиокнопками и при снятом выборе не шлётся вовсе), поэтому
+это WARNING, а не блокер.
 
-**Fix:** Apply the same guard, in the same position (after auth, before any read):
+**Исправление.** Либо оставить границу и записать изъятие ЯВНО (в реестре
+изъятий фазы, с фазой-снимателем — по форме `OFFSET_CURSOR_EXCEPTIONS`), назвав
+`422 JSON` принятой формой отказа для рукотворного запроса; либо перенести
+границу внутрь обработчика тем же приёмом, что у `_ad_id_from_form`, и отвечать
+через `respond()`:
+
+```python
+@router.post("/schedules/{schedule_id}/delete")
+async def schedules_delete(request: Request, schedule_id: int, ...):
+    if not 1 <= schedule_id <= ID_MAX:
+        return await respond(request, redirect="/schedules")
+```
+
+Молчаливое умолчание — худший из трёх вариантов, потому что оно читается как
+исполненный инвариант.
+
+### WR-04: приземление фокуса ведёт в заведомо пустую live-область
+
+**Файл:** `app/templates/components/modal.html:665`, `app/templates/includes/notice_area.html:135`
+**Класс:** WARNING
+
+**Проблема.**
+
+```js
+land(back) { if (back && back.isConnected) { back.focus(); return; }
+             const home = document.getElementById('notice'); if (home) home.focus(); }
+```
+
+Площадкой выбрана `<div id="notice" role="status" aria-live="polite"
+tabindex="-1">`. Собственная запись фазы (шапка `notice_area.html`) измерила
+три факта, из которых следует, что на ФРАГМЕНТНОМ пути — том самом, для
+которого площадка и выбиралась, — область ПУСТА ВСЕГДА: плашки на успех нет
+(D-03), ни один из двух фрагментных ответов кода уведомления не несёт.
+
+То есть после подтверждённого удаления фокус уезжает в пустой безымянный
+контейнер: скринридер не объявляет ничего (нечего), у элемента нет доступного
+имени, а обход по Tab начинается с шелла. Плюс к этому фокусировка
+`role="status"`/`aria-live` области — известный анти-паттерн: часть
+скринридеров при получении фокуса перечитывает регион, часть молчит, и
+поведение расходится между рантаймами.
+
+Это НЕ регрессия относительно Фазы 9 (там фокус падал на `body`), но и
+объявленной целью — «фокус приезжает в осмысленное место» — результат не
+является.
+
+**Исправление.** Дать площадке доступное имя и вынести её из live-региона, либо
+приземлять на заголовок раздела:
+
+```html
+<h2 id="notice-landing" tabindex="-1" class="sr-only">Результат действия</h2>
+<div id="notice" role="status" aria-live="polite">…</div>
+```
+
+и в `land()` целиться в `#notice-landing`. Если правка откладывается —
+перенести пункт в `.planning/WINDOWS.md` с фазой-снимателем, а из шапки
+`modal.html` убрать утверждение о том, что пункт 1 «ПЛОЩАДКА ВЫБРАНА» исполнен
+без остатка.
+
+### WR-05: гейт целей перехода читает только 12 именованных файлов, а рантайм исполняет весь `<body>`
+
+**Файл:** `tests/test_pages/test_hx_location_destinations.py:333-346`, `:651-670`
+**Класс:** WARNING
+
+**Проблема.** Правило
+`test_no_transition_destination_declares_a_top_level_binding_inline` разбирает
+ИСХОДНИК файла шаблона-цели:
+
+```python
+source = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
+for line, keyword, binding in _top_level_bindings_of_template(source):
+```
+
+Но `HX-Location` подменяет содержимое `<body>` ЦЕЛИКОМ и исполняет ВСЕ узлы
+сценария подменённого тела — включая инлайн-скрипты из `base.html` и из
+`{% include %}`-партиалов (`includes/htmx_config.html`,
+`includes/htmx_error_banner.html`, и любых будущих). Ни `{% extends %}`, ни
+`{% include %}` разборщик не разворачивает.
+
+Проверено прогоном разборщика по всем шаблонам с инлайн-скриптами: сегодня шелл
+чист (`base.html`, `auth_base.html`, оба `includes/*` дают пустой список),
+поэтому активного дефекта нет. Но гейт заявлен как «ни один экран-цель не несёт
+объявлений верхнего уровня», а на деле проверяет 12 файлов из ~5 участвующих в
+сборке каждого из них: `const` в `base.html` убил бы клиентский слой ВСЕХ
+двенадцати целей, и гейт остался бы зелёным.
+
+Смежное: `_page_modules()` (`:523`) обходит `PAGES_DIR.glob("*.py")` —
+НЕрекурсивно, тогда как соседние гейты проекта обходят дерево рекурсивно именно
+затем, чтобы файл в новом подкаталоге не выпал молча. И `_address_forms`
+возвращает пустое множество для нераспознанного выражения `redirect=`, из-за
+чего такой вызов не сопоставляется ни одному шаблону и в
+`test_every_transition_destination_has_a_declared_template` не участвует.
+
+**Исправление.** Разбирать РЕНДЕР, а не исходник — тем же приёмом, каким это
+делает `editor_markup` в том же файле (фикстура уже отдаёт отрисованную
+разметку экрана редактора). Для остальных целей достаточно дописать в разбор
+раскрытие `extends`/`include`:
+
+```python
+def _template_chain(template: str) -> set[str]:
+    """Файл, его база и все включаемые — то, что рантайм исполнит вместе."""
+```
+
+и прогонять `_top_level_bindings_of_template` по каждому. Обход
+`PAGES_DIR.rglob("*.py")` и `assert forms, f"{mod}:{line}: адрес приземления не
+распознан"` закрывают две смежные щели.
+
+### WR-06: поведенческий гарнир панели исполняет `$nextTick` синхронно — утверждения о ПОРЯДКЕ гарниром не проверяются
+
+**Файл:** `tests/test_templates/test_components.py:2010`, `:2214-2222`
+**Класс:** WARNING
+
+**Проблема.** Гарнир строит объект клиентского состояния и подменяет отложенный
+вызов немедленным:
+
+```js
+panel.$nextTick = function (fn) { fn(); };
+```
+
+Между тем всё исправление `WR-07`/гейпа 1 держится на УТВЕРЖДЕНИЯХ О ПОРЯДКЕ,
+выписанных в шапке `modal.html:517-528`: «внеполосное снятие происходит
+СИНХРОННО внутри свопа», «событие завершения запроса летит В ТОЙ ЖЕ ЗАДАЧЕ»,
+«рантайм клиентского состояния сносит компонент МИКРОЗАДАЧЕЙ ПОЗЖЕ». Ни одно из
+трёх гарниром не воспроизводится: сценарии зовут `hide()` и `destroy()` руками,
+в выбранном автором порядке, а отложенность приземления снята подменой. Правило
+`test_the_rule_names_which_branch_closed_the_panel_on_both_transports`
+утверждает ИМЯ отработавшей ветви — но на порядке, заданном самим сценарием.
+
+Сопутствующее расхождение записи: комментарий в `scenarioFocusAfterTeardown`
+(`:2221-2222`) до сих пор дословно повторяет формулировку, которую шапка
+`modal.html:506-511` помечает как ОПРОВЕРГНУТУЮ рантаймом:
+
+```js
+// ⚠️ `hide()` НЕ ЗОВЁТСЯ ВОВСЕ — И В ЭТОМ ВЕСЬ СЦЕНАРИЙ. На фрагментном
+// пути событие после запроса приходит ПОСЛЕ свопа, то есть после того, как
+// внеполосный узел уже снял панель вместе с её формой.
+```
+
+Читатель, зашедший в суиту первой, унесёт опровергнутую версию — при том что
+собственная идиома проекта (D-30/D-32) требует помечать такие места, а не
+оставлять их без отметки.
+
+**Исправление.** Дописать в `scenarioFocusAfterTeardown` пометку «ОПРОВЕРГНУТО,
+верная формулировка — шапка `components/modal.html`» и назвать сценарий тем, чем
+он является (ЗАЩИТНАЯ ветвь сноса ОТКРЫТОЙ панели). Границу гарнира — «порядок
+задач рантайма не воспроизводится» — выписать в докстринге `_run_modal_lifecycle`
+рядом с уже названными границами, чтобы зелень не читалась шире предмета.
+
+### WR-07: пользовательские маршруты удаления по-прежнему без гарда происхождения, тогда как административные его несут
+
+**Файл:** `app/pages/accounts.py:1017-1021`, `app/pages/ads.py:751-760`, `app/pages/schedules.py:1019-1032`
+**Класс:** WARNING
+
+**Проблема.** Фаза сделала все 18 мест подтверждения htmx-отправками и правила
+три из этих обработчиков. При этом `is_same_origin(request)` стоит на
+административных изменяющих маршрутах (`admin_restart_worker`, `admin_drop_task`,
+`admin_delete_user`, `admin_impersonate`) и на повторе отправки
+(`history_retry`), но НЕ стоит на `accounts_delete`, `ads_delete`,
+`schedules_delete` и `account_groups_delete` — то есть ровно на необратимом
+удалении пользовательских данных.
+
+Единственное, что стоит между сторонней страницей и этими действиями, —
+умолчание `samesite="lax"` (`app/pages/auth.py:93`). Довод, которым фаза 6
+закрывала ту же асимметрию у `admin_delete_user`, применим здесь дословно:
+«одна политика браузера там, где проект в трёх соседних местах требует явной
+серверной проверки». Асимметрия самопротиворечива: обработчики правились этой
+фазой, гард не добавлен заодно — тот же сценарий, который проект уже разбирал
+под именем `CR-02` ревизии Фазы 6.
+
+**Исправление.** Тот же гард, в той же позиции (после проверки прав, до любого
+чтения):
 
 ```python
 if not is_same_origin(request):
     return Response(status_code=403)
 ```
 
-in `ads_delete`, `accounts_delete` and `schedules_delete`. If the decision is to
-*not* extend it, record the asymmetry as a named exception with its lifting
-condition, the way `OFFSET_CURSOR_EXCEPTIONS` records the response-shape
-exceptions — so the next reader sees a decision rather than an omission.
+Гейт полноты у проекта уже есть для админки
+(`test_every_mutating_admin_route_checks_the_origin`); распространить его на
+`app/pages/*` целиком — либо, если решение «пользовательские удаления живут под
+`samesite=lax`» принимается сознательно, записать его в реестр принятых рисков
+с фазой-снимателем, как это сделано для `OFFSET_CURSOR_EXCEPTIONS`.
 
----
+### WR-08: индекс отчётов верификации молча перезаписывается при совпадении номеров фаз между вехами
 
-### WR-05: `_expanded_from_form` remains unbounded on the invariant `_ad_id_from_form`'s correctness argument now rests on
+**Файл:** `tests/test_planning/test_requirement_completion_follows_verification.py:159-184`
+**Класс:** WARNING
 
-**File:** `app/pages/schedules.py:202-225`, `:334-338`
-
-**Issue:**
-`_ad_id_from_form`'s docstring, point (б) (`:274-280`), states the distinction that
-justifies bounding one helper and not the other:
-
-> "Результат `_expanded_from_form` уезжает ТОЛЬКО в строку адреса (`?sched=N`) и
-> до базы не доходит ни на одном пути, поэтому там ограничения ТИПА достаточно."
-
-That is true today — `expanded_id` is compared against a Python set in
-`app/pages/ads.py:363-365`, never bound into SQL. But nothing enforces it. Both
-helpers now feed the *same* shared builder `_editor_url` (`:310-339`), introduced
-by this phase specifically so that "адрес… СОБРАН ОДНИМ КОДОМ". A future caller
-that passes `schedule_id` into a lookup — or an `ads.py` refactor that resolves
-`sched` by query instead of by set membership — reinstates `CR-01` exactly, and no
-test would go red: `tests/test_pages/test_editor_schedules.py` has no
-out-of-range case for `keep_sched`.
-
-**Fix:** Bound it too. The cost is one line and the argument the docstring has to
-carry drops from a cross-module invariant to a local fact:
+**Проблема.**
 
 ```python
-def _expanded_from_form(form_data) -> int | None:
-    try:
-        value = int(form_data.get("keep_sched"))
-    except (TypeError, ValueError):
-        return None
-    return value if 1 <= value <= ID_MAX else None
+for path in sorted(root.rglob("*-VERIFICATION.md")):
+    ...
+    index[phase] = VerificationReport(phase=phase, ...)
 ```
 
-Alternatively, if the asymmetry is deliberate, guard the claim: a test that asserts
-`Schedule.id` is never compared against the result of `_expanded_from_form`
-anywhere in `app/pages/`.
+Ключ — только номер фазы. Обход намеренно рекурсивный и захватывает архив
+(`.planning/milestones/…`), но нумерация фаз В КАЖДОЙ ВЕХЕ НАЧИНАЕТСЯ ЗАНОВО:
+после архивации v2.1 и старта v2.2 в дереве окажутся два `01-VERIFICATION.md`,
+и последний по сортировке ПУТИ молча вытеснит первый. С этого момента
+завершённое требование старой вехи будет сверяться с вердиктом ЧУЖОЙ фазы —
+несущее правило продолжит зеленеть, ничего не проверяя.
 
----
+Сегодня дубликатов нет (проверено: 13 отчётов, все имена уникальны), поэтому
+это WARNING, а не блокер, — но событие наступит по расписанию проекта, а не
+по случайности.
 
-### WR-06: The origin refusal on four admin routes is now reported to the user as a transient server failure with a "retry" instruction
-
-**File:** `app/pages/admin.py:904,1100,1739,1867`, `app/templates/includes/htmx_error_banner.html`
-
-**Issue:**
-Making `hx-post` unconditional routed the four admin confirm panels through htmx.
-Their origin guard still returns a bare `Response(status_code=403)`. On the htmx
-path a 403 is classified `error: true` by the project's `responseHandling`
-(`app/templates/includes/htmx_config.html`), which fires `htmx:responseError`,
-which unhides the global banner:
-
-> "Действие не выполнено. Попробуйте ещё раз через минуту."
-
-For a *security* refusal that will never succeed on retry, this is the wrong
-message: it invites a retry loop and, because the panel deliberately stays open on
-failure (`D-12`), the user is left with an armed confirm button and an instruction
-to press it again. Before this phase the same refusal produced a plain 403 document
-— unfriendly, but not misleading.
-
-The banner also never re-hides once shown, so a single refusal poisons every
-subsequent screen until a full reload.
-
-**Fix:** Distinguish the refusal from a server fault at the transport, e.g. return
-the refusal through the response layer with a registered notice code rather than a
-bare status —
+**Исправление.** Ключевать по вехе + фазе и утверждать отсутствие коллизий:
 
 ```python
-if not is_same_origin(request):
-    logger.warning("cross_origin_refused", path=request.url.path)
-    return await respond(request, redirect=location, notice=notices.CROSS_ORIGIN_REFUSED)
+key = (_milestone_of(path), phase)
+assert key not in index, (
+    f"два отчёта верификации на один ключ {key}: {index[key].path} и {path} — "
+    "индекс молча вытеснил бы один другим, и сверка шла бы с чужим вердиктом"
+)
 ```
 
-— or, if the current "чужому источнику причина отказа не сообщается" stance must
-hold (it should: the message would be a signal to the attacker's page), then at
-minimum re-hide the banner on the next successful exchange so one refusal does not
-persist across the session:
+Клетка таблицы состояний при этом обязана называть веху либо выводить её из
+раздела документа; пока этого нет — хотя бы утверждать уникальность и падать
+громко.
 
-```js
-document.body.addEventListener('htmx:afterRequest', function (event) {
-  if (event.detail && event.detail.successful) {
-    var server = document.getElementById('htmx-failure-server');
-    if (server) { server.setAttribute('hidden', ''); }
-  }
-});
-```
+## Info
+
+### IN-01: неиспользуемый импорт `pytest`
+
+**Файл:** `tests/test_templates/test_components.py:18`
+**Проблема:** `import pytest` не используется ни одним правилом модуля (снято
+`ruff --select F401`). Мёртвый импорт в файле, чья дисциплина строится на
+«ничего лишнего в охвате», читается как признак того, что часть правил была
+удалена.
+**Исправление:** снять строку.
+
+### IN-02: результат первого запроса присваивается и не используется
+
+**Файл:** `tests/test_pages/test_confirm_delete_transport.py:1935`
+**Проблема:** `first = await client.post(...)` — имя не читается ни разу
+(`ruff --select F841`). Запрос нужен ради состояния «строка уже удалена»,
+но имя создаёт впечатление, что ответ будет сличаться, и следующий читатель
+потратит время на поиск утверждения о нём.
+**Исправление:** `await client.post(...)` без присваивания, с однострочным
+комментарием «запрос ради состояния, ответ не предмет».
+
+### IN-03: латентная ловушка сборки адреса с кодом исхода при наличии якоря
+
+**Файл:** `app/pages/htmx.py:285-301` (потребитель — `app/pages/schedules.py:400-406`)
+**Проблема:** `_with_notice` выбирает разделитель по наличию `?`, но якоря
+(`#sched-N`) не учитывает. `_editor_url` умеет возвращать
+`/ads/{id}/edit?sched=N#sched-N`; сегодня такой адрес в `respond()` не
+попадает (в `schedules_delete` `schedule_id=None`), но первый же вызов
+`respond(..., redirect=_editor_url(..., schedule_id), notice=...)` соберёт
+`…#sched-N&notice=…`, где код уедет внутрь фрагмента и плашка не нарисуется.
+**Исправление:** вставлять параметр ПЕРЕД якорем — расщеплять адрес по `#` и
+собирать обратно; либо запретить якорь в `_local_path` явным отказом.
+
+### IN-04: объём комментариев в правленых файлах превысил объём кода на порядок, включая явно опровергнутые слои
+
+**Файл:** `app/templates/components/modal.html` (690 строк, из них ~655 —
+комментарий на 34 строки разметки), `app/pages/schedules.py:272-366`
+(докстринг `_ad_id_from_form` — 95 строк на 6 строк тела, с пунктами (а)–(е),
+где (г) помечен «ОПРОВЕРГНУТО», а (д) его заменяет)
+**Проблема:** идиома «опровергнутое не вычёркивается» (D-30/D-32) — записанное
+решение проекта, и как таковое дефектом не является. Но в этой фазе она достигла
+точки, где одно место несёт три поколения формулировок, и определить ДЕЙСТВУЮЩУЮ
+можно только полным чтением файла: `modal.html` содержит и «ПРИЗЕМЛЕНИЕ ЖИВЁТ В
+ОБЕИХ ВЕТВЯХ… Это утверждение ВЕРНО», и следующим абзацем «АТРИБУЦИЯ ЭТИХ ДВУХ
+ВЕТВЕЙ… ОПРОВЕРГНУТА РАНТАЙМОМ». Стоимость ошибки чтения здесь измерена самой
+фазой — гейп 1 верификации возник ровно из расхождения записи с рантаймом.
+**Исправление:** ввести машинно читаемую разметку слоёв — например, префикс
+`[ДЕЙСТВУЕТ]` / `[ОПРОВЕРГНУТО <план>]` на каждом абзаце-утверждении, с
+правилом, требующим, чтобы у каждого опровергнутого абзаца существовал
+действующий преемник. Это сохраняет летопись и снимает необходимость
+восстанавливать порядок поколений глазом.
 
 ---
 
-_Reviewed: 2026-09-03T22:51:14Z_
-_Reviewer: Claude (gsd-code-reviewer)_
-_Depth: standard_
-_HEAD: 0ea886d — diff base: 576cef07_
+_Ревизия: 2026-09-04_
+_Ревизор: Claude (gsd-code-reviewer)_
+_Глубина: standard_
