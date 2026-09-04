@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import AD_STATUS_PUBLISHED
 from app.pages.common import templates
+from app.pages.schedules import ID_MAX
 from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
@@ -2075,4 +2076,75 @@ async def test_no_schedule_route_answers_with_a_handler_failure_on_an_out_of_ran
         "граница отвергла ГОДНУЮ величину — она отвергает не то, что объявила: "
         + "; ".join(f"{name} = {code}" for name, code in sorted(refused_alive.items()))
         + f". Все снятые исходы: {sorted(alive.items())}"
+    )
+
+
+# --- СМЕЖНОСТЬ ГРАНИЦЫ: ОБЕ СТОРОНЫ, И ОНИ РАЗЛИЧНЫ --------------------------
+#
+# Ребро `adjacency` зонда покрытия по FORM-06 разрешается ЗДЕСЬ. Граница,
+# проверенная только ИЗНУТРИ диапазона, зеленела бы на помощнике, не
+# отвергающем ничего; проверенная только СНАРУЖИ — на помощнике, отвергающем
+# всё. Замеряется ровно СТЫК: последняя допустимая величина и первая
+# недопустимая.
+#
+# ⚠️ ВЕЛИЧИНА ЧИТАЕТСЯ ИЗ ПРИЛОЖЕНИЯ ВВОЗОМ, А НЕ ВЫПИСЫВАЕТСЯ ЛИТЕРАЛОМ.
+# Вторая копия числа разошлась бы с первой молча при первой же правке, и правило
+# начало бы утверждать о числе, которого в приложении нет.
+
+# Заведомо несуществующий идентификатор ВНУТРИ диапазона. Нужен эталоном формы
+# ответа: величина границы есть ЗАКОННЫЙ идентификатор, которого в базе нет, и
+# ожидание для неё формулируется КАК СОВПАДЕНИЕ с ответом на такой же
+# несуществующий, а не буквенным кодом. Правило, ожидающее код буквой,
+# разъехалось бы с продуктом при первой правке формы ответа на отсутствующую
+# запись.
+MISSING_INSIDE_RANGE = 999_999
+
+# Маршрут тумблера — самый короткий из трёх с идентификатором пути: ни тела
+# формы, ни ветвления по признаку возврата.
+ADJACENCY_ROUTE = "/schedules/{value}/toggle"
+
+
+async def _response_shape(client: AsyncClient, value) -> tuple[int, str | None]:
+    """ФОРМА ответа маршрута тумблера: код и адрес приземления.
+
+    Форма — пара, а не один код: две ветви маршрута отвечают одним кодом 302 и
+    различаются адресом, и утверждение по одному коду прошло бы на обеих.
+    """
+    response = await client.post(
+        ADJACENCY_ROUTE.format(value=value),
+        content=_form([]),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    return response.status_code, response.headers.get("location")
+
+
+@pytest.mark.asyncio
+async def test_the_column_bound_admits_its_own_value_and_refuses_the_next_one(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Величина границы принимается, величина на единицу больше — отвергается."""
+    reference = await _response_shape(authed_client, MISSING_INSIDE_RANGE)
+    at_bound = await _response_shape(authed_client, ID_MAX)
+    past_bound = await _response_shape(authed_client, ID_MAX + 1)
+
+    assert at_bound == reference, (
+        "величина, РАВНАЯ верхней границе колонки, отвергнута — граница "
+        "отвергает годное, и «отказ валидации, а не 500» держалось бы ценой "
+        f"сломанного продукта. На границе снято {at_bound}, на несуществующем "
+        f"идентификаторе внутри диапазона — {reference}. Разошлась ВНУТРЕННЯЯ "
+        "сторона границы"
+    )
+    assert past_bound[0] == VALIDATION_REFUSAL, (
+        "величина НА ЕДИНИЦУ БОЛЬШЕ верхней границы колонки принята: снято "
+        f"{past_bound}, ожидался отказ валидации {VALIDATION_REFUSAL}. "
+        f"На самой границе снято {at_bound}. Разошлась ВНЕШНЯЯ сторона границы"
+    )
+
+    # АНТИВАКУУМ СМЕЖНОСТИ. Помощник, отвечающий одинаково на обе соседние
+    # величины, зеленел бы на любом из двух ожиданий ПО ОТДЕЛЬНОСТИ.
+    assert at_bound != past_bound, (
+        "две СОСЕДНИЕ величины дали ОДИН исход "
+        f"({at_bound}) — стык границы не замерен ничем: правило прошло бы и на "
+        "помощнике, не отвергающем ничего, и на помощнике, отвергающем всё"
     )
