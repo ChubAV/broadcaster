@@ -372,6 +372,121 @@ def test_the_verification_index_is_built_by_walking_the_whole_record_tree():
 # --- две записи одного факта: флажок в теле файла и клетка таблицы ------------------
 
 
+_FLAG_RE = re.compile(
+    r"^- \[(?P<mark>[ x])\] \*\*(?P<name>[A-Z0-9]+-\d+)\*\*", re.M
+)
+
+NO_CELL = "нет клетки"
+NO_FLAG = "нет флажка"
+VALUES_DIVERGE = "значения разошлись"
+
+
+def _requirement_flags(text: str) -> dict[str, bool]:
+    """Флажки требований в теле записи: «имя → заполнен ли».
+
+    ИСХОДНИК приходит параметром — тем же приёмом, что у разборщика клеток, и по
+    той же причине: без него отрицательный контроль был бы невыразим.
+
+    Разбор ведётся ПО ФОРМЕ СТРОКИ флажка, а не по тексту требования: текст
+    требований в этом проекте объёмен и правится (одни только летописи чисел
+    занимают абзацы), и правило, привязанное к нему, отключат вместе со свойством.
+    """
+    return {
+        match.group("name"): match.group("mark") == "x"
+        for match in _FLAG_RE.finditer(text)
+    }
+
+
+@dataclass(frozen=True)
+class Disagreement:
+    """Одно несогласие двух записей одного факта."""
+
+    requirement: str
+    flag: bool | None
+    cell: str | None
+
+    def __str__(self) -> str:
+        flag = (
+            "флажка нет"
+            if self.flag is None
+            else ("флажок ЗАПОЛНЕН" if self.flag else "флажок ПУСТ")
+        )
+        cell = "клетки нет" if self.cell is None else f"клетка `{self.cell}`"
+        return f"`{self.requirement}`: {flag}, {cell}"
+
+
+def flag_cell_disagreements(text: str) -> dict[str, list[Disagreement]]:
+    """ТРИ множества несогласий, названные РАЗДЕЛЬНО.
+
+    Вселенная — строки таблицы, несущие клетку фазы, то есть требования вехи v2.1.
+    Строки без фазы отложены к следующей вехе самой записью и флажка не несут по
+    решению; законность такой клетки стережёт отдельное правило, поэтому сузить
+    вселенную стиранием фазы не выйдет молча.
+    """
+    flags = _requirement_flags(text)
+    cells = {
+        row.name: row.status
+        for row in _requirement_rows(text)
+        if row.phase is not None
+    }
+
+    disagreements: dict[str, list[Disagreement]] = {
+        NO_CELL: [],
+        NO_FLAG: [],
+        VALUES_DIVERGE: [],
+    }
+    for name in sorted(set(flags) | set(cells)):
+        flag = flags.get(name)
+        cell = cells.get(name)
+        if cell is None:
+            disagreements[NO_CELL].append(Disagreement(name, flag, None))
+        elif flag is None:
+            disagreements[NO_FLAG].append(Disagreement(name, None, cell))
+        elif flag != (cell == COMPLETED_STATUS):
+            disagreements[VALUES_DIVERGE].append(Disagreement(name, flag, cell))
+    return disagreements
+
+
+def _disagreement_report(disagreements: dict[str, list[Disagreement]]) -> str:
+    """Отказ печатает ВСЕ несогласия сразу и называет каждое множество своим именем.
+
+    Пустое множество не печатается вовсе: иначе читатель ищет событие, которого не
+    было.
+    """
+    parts = []
+    for kind, items in disagreements.items():
+        if not items:
+            continue
+        parts.append(f"{kind}: " + "; ".join(str(item) for item in items))
+    return "\n".join(parts)
+
+
+def _with_flag(text: str, requirement: str, *, checked: bool) -> str:
+    """Копия записи с подменённым флажком ОДНОГО требования. Файл дерева не правится."""
+    pattern = re.compile(
+        rf"^- \[[ x]\] (\*\*{re.escape(requirement)}\*\*)", re.M
+    )
+    mark = "x" if checked else " "
+    doctored, count = pattern.subn(lambda m: f"- [{mark}] {m.group(1)}", text)
+    assert count == 1, (
+        f"в записи ожидался ровно один флажок `{requirement}`, найдено {count}"
+    )
+    return doctored
+
+
+def _without_row(text: str, requirement: str) -> str:
+    """Копия записи БЕЗ строки таблицы одного требования. Файл дерева не правится."""
+    pattern = re.compile(
+        rf"^\|\s*{re.escape(requirement)}\s*\|[^|]*\|[^|]*\|[ \t]*\n", re.M
+    )
+    doctored, count = pattern.subn("", text)
+    assert count == 1, (
+        f"в записи ожидалась ровно одна строка `{requirement}`, найдено {count}"
+    )
+    return doctored
+
+
+
 def test_the_flag_and_the_status_cell_of_every_requirement_agree():
     """ДВА МЕСТА ОДНОГО ФАКТА ГОВОРЯТ ОДНО.
 
@@ -389,8 +504,8 @@ def test_the_flag_and_the_status_cell_of_every_requirement_agree():
     отдельное правило выше — иначе вселенную можно было бы сузить стиранием фазы.
     """
     text = REQUIREMENTS_PATH.read_text(encoding="utf-8")
-    disagreements = flag_cell_disagreements(text)  # noqa: F821
-    assert not any(disagreements.values()), _disagreement_report(disagreements)  # noqa: F821
+    disagreements = flag_cell_disagreements(text)
+    assert not any(disagreements.values()), _disagreement_report(disagreements)
 
 
 def test_control_negative_a_disagreeing_flag_reddens_the_agreement_rule():
@@ -400,18 +515,18 @@ def test_control_negative_a_disagreeing_flag_reddens_the_agreement_rule():
     заполнен только флажок, обязана покраснеть с названным требованием.
     """
     original = REQUIREMENTS_PATH.read_text(encoding="utf-8")
-    assert not any(flag_cell_disagreements(original).values()), (  # noqa: F821
+    assert not any(flag_cell_disagreements(original).values()), (
         "положительный контроль: на непрáвленой записи правило обязано быть зелено"
     )
 
-    doctored = _with_flag(original, "FORM-01", checked=True)  # noqa: F821
-    disagreements = flag_cell_disagreements(doctored)  # noqa: F821
+    doctored = _with_flag(original, "FORM-01", checked=True)
+    disagreements = flag_cell_disagreements(doctored)
 
-    assert {item.requirement for item in disagreements["значения разошлись"]} == {
+    assert {item.requirement for item in disagreements[VALUES_DIVERGE]} == {
         "FORM-01"
-    }, _disagreement_report(disagreements)  # noqa: F821
-    assert not disagreements["нет клетки"] and not disagreements["нет флажка"]
-    message = _disagreement_report(disagreements)  # noqa: F821
+    }, _disagreement_report(disagreements)
+    assert not disagreements[NO_CELL] and not disagreements[NO_FLAG]
+    message = _disagreement_report(disagreements)
     assert "FORM-01" in message, message
 
 
@@ -421,23 +536,23 @@ def test_control_negative_the_three_kinds_of_disagreement_are_named_apart():
     «нет клетки», «нет флажка» и «значения разошлись» — РАЗНЫЕ события, и слитый
     отказ заставил бы следующего читателя разбирать, какое из трёх случилось.
     """
-    doctored = _without_row(  # noqa: F821
-        _with_flag(  # noqa: F821
+    doctored = _without_row(
+        _with_flag(
             REQUIREMENTS_PATH.read_text(encoding="utf-8"), "FORM-01", checked=True
         ),
         "QUAL-04",
     )
-    disagreements = flag_cell_disagreements(doctored)  # noqa: F821
+    disagreements = flag_cell_disagreements(doctored)
 
-    assert {item.requirement for item in disagreements["нет клетки"]} == {"QUAL-04"}
-    assert {item.requirement for item in disagreements["значения разошлись"]} == {
+    assert {item.requirement for item in disagreements[NO_CELL]} == {"QUAL-04"}
+    assert {item.requirement for item in disagreements[VALUES_DIVERGE]} == {
         "FORM-01"
     }
-    assert not disagreements["нет флажка"]
+    assert not disagreements[NO_FLAG]
 
-    message = _disagreement_report(disagreements)  # noqa: F821
-    assert "нет клетки" in message and "значения разошлись" in message, message
-    assert "нет флажка" not in message, (
+    message = _disagreement_report(disagreements)
+    assert NO_CELL in message and VALUES_DIVERGE in message, message
+    assert NO_FLAG not in message, (
         "пустое множество в отказ не печатается — иначе читатель ищет событие, "
         f"которого не было: {message}"
     )
