@@ -367,3 +367,77 @@ def test_the_verification_index_is_built_by_walking_the_whole_record_tree():
         "в индексе нет ни одного отчёта архивной фазы — значит обход выродился в "
         "чтение одного каталога, и переезд фазы в архив выключил бы правило молча"
     )
+
+
+# --- две записи одного факта: флажок в теле файла и клетка таблицы ------------------
+
+
+def test_the_flag_and_the_status_cell_of_every_requirement_agree():
+    """ДВА МЕСТА ОДНОГО ФАКТА ГОВОРЯТ ОДНО.
+
+    ⚠️ ЧЕГО ЭТО ПРАВИЛО НЕ УТВЕРЖДАЕТ. Оно НЕ утверждает, что ЛЮБОЕ из двух
+    значений ВЕРНО: два согласных места могут быть согласно неверными, и именно так
+    предмет и был заведён — коммит `0ea886d` поставил ОБЕ отметки разом, поэтому
+    друг друга они не поймали. Утверждение о ВЕРНОСТИ значения принадлежит несущему
+    правилу выше (`…_before_its_phase_verification_passed`), которое сверяет клетку
+    с вердиктом отчёта. Настоящее правило ловит ДРУГОЙ случай: когда поедет ОДНО из
+    двух. Разделение предметов записано здесь, а не оставлено читателю.
+
+    Вселенная правила — строки, несущие клетку фазы, то есть требования вехи v2.1.
+    Строки без фазы отложены к следующей вехе САМОЙ ЗАПИСЬЮ и флажка не несут по
+    решению; что клетка без фазы законна только у отложенной строки, стережёт
+    отдельное правило выше — иначе вселенную можно было бы сузить стиранием фазы.
+    """
+    text = REQUIREMENTS_PATH.read_text(encoding="utf-8")
+    disagreements = flag_cell_disagreements(text)  # noqa: F821
+    assert not any(disagreements.values()), _disagreement_report(disagreements)  # noqa: F821
+
+
+def test_control_negative_a_disagreeing_flag_reddens_the_agreement_rule():
+    """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ: флажок заполнен, клетка — нет.
+
+    `FORM-01` на дереве читается незавершённым ОБОИМИ местами. Копия, в которой
+    заполнен только флажок, обязана покраснеть с названным требованием.
+    """
+    original = REQUIREMENTS_PATH.read_text(encoding="utf-8")
+    assert not any(flag_cell_disagreements(original).values()), (  # noqa: F821
+        "положительный контроль: на непрáвленой записи правило обязано быть зелено"
+    )
+
+    doctored = _with_flag(original, "FORM-01", checked=True)  # noqa: F821
+    disagreements = flag_cell_disagreements(doctored)  # noqa: F821
+
+    assert {item.requirement for item in disagreements["значения разошлись"]} == {
+        "FORM-01"
+    }, _disagreement_report(disagreements)  # noqa: F821
+    assert not disagreements["нет клетки"] and not disagreements["нет флажка"]
+    message = _disagreement_report(disagreements)  # noqa: F821
+    assert "FORM-01" in message, message
+
+
+def test_control_negative_the_three_kinds_of_disagreement_are_named_apart():
+    """ТРИ МНОЖЕСТВА НЕСОГЛАСИЙ РАЗДЕЛЬНЫ.
+
+    «нет клетки», «нет флажка» и «значения разошлись» — РАЗНЫЕ события, и слитый
+    отказ заставил бы следующего читателя разбирать, какое из трёх случилось.
+    """
+    doctored = _without_row(  # noqa: F821
+        _with_flag(  # noqa: F821
+            REQUIREMENTS_PATH.read_text(encoding="utf-8"), "FORM-01", checked=True
+        ),
+        "QUAL-04",
+    )
+    disagreements = flag_cell_disagreements(doctored)  # noqa: F821
+
+    assert {item.requirement for item in disagreements["нет клетки"]} == {"QUAL-04"}
+    assert {item.requirement for item in disagreements["значения разошлись"]} == {
+        "FORM-01"
+    }
+    assert not disagreements["нет флажка"]
+
+    message = _disagreement_report(disagreements)  # noqa: F821
+    assert "нет клетки" in message and "значения разошлись" in message, message
+    assert "нет флажка" not in message, (
+        "пустое множество в отказ не печатается — иначе читатель ищет событие, "
+        f"которого не было: {message}"
+    )
