@@ -21,6 +21,7 @@ tests/test_pages/test_editor_schedules.py -q` завершается с кодо
 
 import re
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlencode
 
 import pytest
@@ -1902,4 +1903,176 @@ def test_control_negative_a_conditional_removal_node_reddens_the_gate():
         "правило присутствия обоих узлов НЕ ПОКРАСНЕЛО на подделке: ветвь по "
         "факту удаления прошла бы в дерево незамеченной, и НАЛИЧИЕ узла стало "
         "бы признаком того, что удаление состоялось"
+    )
+
+
+# =============================================================================
+# ГРАНИЦА ВЕЛИЧИНЫ ИДЕНТИФИКАТОРА — ПЯТЬ ВХОДОВ ФАЙЛА ОДНИМ ОТОБРАЖЕНИЕМ
+# (CR-01 унаследованный, CR-02 новый; отчёт верификации Фазы 10, третий круг)
+# =============================================================================
+#
+# ПРЕДМЕТ — ТОТ ЖЕ ИНВАРИАНТ, ЧТО У T-02-24 / T-02-25, НА ОСИ ВЕЛИЧИНЫ, А НЕ
+# ТИПА: «прямой POST мимо браузера обязан давать отказ валидации, а не 500»
+# (шапка этого модуля). Коэрция `int` ограничивает ТИП и пропускает число любой
+# величины; значение вне диапазона колонки доезжает до драйвера БД и роняет
+# запрос (`OverflowError` на SQLite суиты, `DataError` вне int32 на PostgreSQL
+# боевого стенда) — то есть даёт ровно ту пятисотку, которую модуль себе
+# запретил.
+#
+# ⚠️ ПЕРЕЧНЕМ, А НЕ ПЯТЬЮ ПРАВИЛАМИ, И ЭТО НЕСУЩЕЕ РЕШЕНИЕ. Правка, закрывшая
+# один вход из пяти, уже была принята за закрытие блокера — дважды. Правило с
+# ранним отказом показало бы одну несогласную строку из пяти, и следующий круг
+# чинил бы вход за входом, воспроизводя ровно ту форму отказа, которой фаза
+# провалена третьим кругом.
+
+
+class _RouteInput(NamedTuple):
+    """Один вход маршрута, по которому величина идентификатора доезжает до SQL.
+
+    `url` и `body` — ШАБЛОНЫ: `{value}` подставляется испытуемой величиной,
+    `{ad_id}` — ЖИВЫМ идентификатором объявления. Живой идентификатор в теле
+    обязателен там, где маршрут читает его сам: иначе случай проверял бы отказ
+    по ЧУЖОМУ входу, а не по тому, который назван его именем.
+
+    `live` называет, какая ЖИВАЯ величина подставляется в антивакууме, — без
+    неё правило зеленело бы на границе, отвергающей и годное тоже.
+    """
+
+    name: str
+    carrier: str
+    url: str
+    body: tuple[tuple[str, str], ...]
+    live: str
+
+
+# Величина ВНЕ диапазона колонки идентификатора. Берётся СТРОКОЙ из двадцати
+# пяти девяток — тем же способом, каким её берёт обход транспортов
+# (tests/test_pages/test_confirm_delete_transport.py, UNUSABLE_AD_ID_VALUES).
+# Приведение к числу на стороне правила спрятало бы предмет: предмет — именно
+# то, что ДО приведения на стороне приложения значение доезжает до драйвера.
+OUT_OF_COLUMN_RANGE = "9" * 25
+
+# Форма ответа на негодную величину — отказ ВАЛИДАЦИИ, то есть ровно то, что
+# модуль правил редактора себе и объявил.
+VALIDATION_REFUSAL = 422
+
+# Пять входов файла `app/pages/schedules.py`, доезжающих до сравнения SQL.
+# Перечень взят из отчёта верификации третьего круга ДОСЛОВНО: три
+# идентификатора пути (`CR-02`) и два поля формы маршрута создания (`CR-01`,
+# унаследованный незакрытым).
+UNBOUNDED_ROUTE_CASES: tuple[_RouteInput, ...] = (
+    _RouteInput(
+        name="delete/path:schedule_id",
+        carrier="адрес запроса",
+        url="/schedules/{value}/delete",
+        body=(),
+        live="schedule",
+    ),
+    _RouteInput(
+        name="edit/path:schedule_id",
+        carrier="адрес запроса",
+        url="/schedules/{value}/edit",
+        body=(("ad_id", "{ad_id}"),),
+        live="schedule",
+    ),
+    _RouteInput(
+        name="toggle/path:schedule_id",
+        carrier="адрес запроса",
+        url="/schedules/{value}/toggle",
+        body=(),
+        live="schedule",
+    ),
+    _RouteInput(
+        name="new/form:ad_id",
+        carrier="тело формы",
+        url="/schedules/new",
+        body=(("ad_id", "{value}"),),
+        live="ad",
+    ),
+    _RouteInput(
+        name="new/form:account_id",
+        carrier="тело формы",
+        url="/schedules/new",
+        body=(("ad_id", "{ad_id}"), ("account_id", "{value}")),
+        live="account",
+    ),
+)
+
+
+async def _post_route_input(
+    client: AsyncClient, case: _RouteInput, value: str, ad_id: int
+):
+    """Прямой POST мимо браузера по одному входу перечня.
+
+    Тело собирается СЫРОЙ строкой (`_form`), а не отображением: величина из
+    двадцати пяти девяток в отображении потребовала бы приведения, и первое же
+    приведение спрятало бы предмет (записанное основание соседнего обхода).
+    """
+    return await client.post(
+        case.url.format(value=value),
+        content=_form(
+            [(key, tmpl.format(value=value, ad_id=ad_id)) for key, tmpl in case.body]
+        ),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_schedule_route_answers_with_a_handler_failure_on_an_out_of_range_identifier(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Ни один из ПЯТИ входов файла не роняет обработчик величиной вне диапазона.
+
+    Отображение сличается ЦЕЛИКОМ, и текст отказа называет ВСЕ несогласные
+    строки: правило, останавливающееся на первой, чинилось бы по одному входу
+    за круг.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+
+    seen = {}
+    for case in UNBOUNDED_ROUTE_CASES:
+        response = await _post_route_input(
+            authed_client, case, OUT_OF_COLUMN_RANGE, ad.id
+        )
+        seen[case.name] = response.status_code
+
+    disagreed = {
+        name: code for name, code in seen.items() if code != VALIDATION_REFUSAL
+    }
+    assert not disagreed, (
+        "величина вне диапазона колонки доехала до обработчика (снято → "
+        "ожидалось "
+        f"{VALIDATION_REFUSAL}): "
+        + "; ".join(f"{name} = {code}" for name, code in sorted(disagreed.items()))
+        + ". Предмет — инвариант этого модуля: прямой POST мимо браузера обязан "
+        "давать отказ валидации, а не 500 (T-02-24, T-02-25). Несогласных "
+        f"строк {len(disagreed)} из {len(UNBOUNDED_ROUTE_CASES)}"
+    )
+
+    # АНТИВАКУУМ. Без него зелёное не значит ничего: помощник, отвергающий ВСЁ,
+    # дал бы те же пять отказов валидации и объявил бы себя границей.
+    alive = {}
+    for case in UNBOUNDED_ROUTE_CASES:
+        if case.live == "schedule":
+            live_value = (await _seed_schedule(db_session, ad.id, account.id)).id
+        elif case.live == "ad":
+            live_value = ad.id
+        else:
+            live_value = account.id
+        response = await _post_route_input(
+            authed_client, case, str(live_value), ad.id
+        )
+        alive[case.name] = response.status_code
+
+    refused_alive = {
+        name: code
+        for name, code in alive.items()
+        if code == VALIDATION_REFUSAL or code >= 500
+    }
+    assert not refused_alive, (
+        "граница отвергла ГОДНУЮ величину — она отвергает не то, что объявила: "
+        + "; ".join(f"{name} = {code}" for name, code in sorted(refused_alive.items()))
+        + f". Все снятые исходы: {sorted(alive.items())}"
     )
