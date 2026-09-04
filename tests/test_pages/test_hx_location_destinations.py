@@ -27,6 +27,7 @@
 обхода `10-UAT.md` и закрывается глазом, а не этим файлом.
 """
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -281,3 +282,481 @@ async def test_a_reinstated_top_level_binding_reddens_the_double_execution_rule(
         "отказ мутанта не называет имени столкнувшегося объявления: получено "
         f"{verdict['second']['message']!r}"
     )
+
+
+# --- ЗАДАЧА 2: МНОЖЕСТВО ЦЕЛЕЙ ЗАГОЛОВКА ПЕРЕХОДА И ФОРМА ИХ СКРИПТОВ --------
+
+# ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА (план 10-13), а не
+# посчитано в уме и не взято из текста плана. Летопись числа:
+#   — ЧТО СЧИТАЕТСЯ: вызовы `respond(...)` в страничных модулях `app/pages/`,
+#     У КОТОРЫХ НЕ ЗАДАН `fragment`. Ветвление `respond` (app/pages/htmx.py:305)
+#     и есть определение множества: заголовок перехода отдаётся РОВНО тогда,
+#     когда фрагмент не задан. Вызов с фрагментом на пути разметки отдаёт
+#     фрагмент и целью перехода не является — правило, посчитавшее все вызовы
+#     подряд, утверждало бы о множестве, которого нет.
+#   — ЧЕМ ИЗМЕРЕНО: разбором ИСХОДНИКА В ДЕРЕВО (`ast`), а не грепом. Дерево
+#     вырезает комментарии и докстринги СТРУКТУРНО, а не вычитанием образцов:
+#     кодовая база проекта несёт абзацы-обоснования, свободно называющие и имя
+#     функции, и имя её аргумента, — и счёт по прозе краснел бы на правку
+#     документации, а хуже того, позволял бы комментарию ЗАМЕНИТЬ собой
+#     исчезнувший вызов (записанное основание `_strip_comments`,
+#     tests/test_templates/test_htmx_inventory.py).
+#   — КАКИМ ПЛАНОМ: 10-13, третья партия закрытия гейпов Фазы 10.
+#   — ПОСТАВЛЕНО ПРОГОНОМ: `вызовов слоя ответа БЕЗ фрагмента найдено 32, а
+#     объявлено 0` (покрасневшее правило, до записи числа).
+HX_LOCATION_DESTINATION_CALLS_DECLARED = 32
+
+# Модуль, где `respond` ОБЪЯВЛЕН, из обхода исключён: его собственные вызовы
+# принадлежат слою письма, а не страничному обработчику.
+RESPONSE_LAYER_MODULE = "htmx.py"
+
+# ⚠️ СБОРЩИКИ АДРЕСА ОБЪЯВЛЕНЫ ПОИМЁННО, И ЭТО ТОТ ЖЕ ПРИЁМ, ЧТО У ОБЪЯВЛЕННОГО
+# ЧИСЛА. Адрес приземления не всегда литерал: часть вызовов подаёт переменную,
+# собранную помощником. Помощник, встреченный обходом и ЗДЕСЬ НЕ ОБЪЯВЛЕННЫЙ,
+# краснит прогон — иначе новый сборщик адреса привёз бы новый экран-цель молча.
+# Формы сняты чтением `return` каждого помощника.
+ADDRESS_BUILDERS = {
+    # app/pages/account_groups.py:68 — с фильтром и без него адрес один и тот же
+    # экран; строка запроса ниже отбрасывается приведением.
+    "_screen_url": ("/accounts/{}/groups",),
+    # app/pages/schedules.py:378 — с признаком возврата в редактор и без него.
+    "_editor_url": ("/ads/{}/edit", "/schedules"),
+}
+
+# ⚠️ СООТВЕТСТВИЕ «АДРЕС ПРИЗЕМЛЕНИЯ → ШАБЛОН, ЕГО ОТРИСОВЫВАЮЩИЙ». Перечень
+# обязан НАКРЫВАТЬ все адреса, найденные счётом: адрес без сопоставленного
+# шаблона краснит прогон, иначе перечень объявлял бы себя полным, не будучи им.
+# Адреса, собираемые из значений (идентификатор объявления, аккаунта,
+# пользователя), приведены к ФОРМЕ адреса: подставляемое значение заменено на
+# `{}`, строка запроса и якорь отброшены — экран определяется путём, а не
+# параметрами.
+HX_LOCATION_DESTINATION_TEMPLATES = {
+    "/login": "auth/login.html",
+    "/dashboard": "dashboard.html",
+    "/ads": "ads/list.html",
+    "/ads/{}/edit": "ads/form.html",
+    "/schedules": "schedules/list.html",
+    "/accounts": "accounts/list.html",
+    "/accounts/{}/groups": "account_groups/list.html",
+    "/history": "history/list.html",
+    "/admin/users": "admin/users.html",
+    "/admin/users/{}": "admin/user_detail.html",
+    "/admin/workers": "admin/workers.html",
+    "/admin/queue": "admin/queue.html",
+}
+
+# ⚠️ ИЗЪЯТИЕ РОВНО ОДНО, И ОНО С ОСНОВАНИЕМ НА ЗАПИСЬ, А НЕ МОЛЧАНИЕМ. Перечень
+# без обоснований превращается в список того, до чего не дошли руки (форма,
+# принятая планом 10-06). Основание каждой записи утверждается правилом
+# непустоты ниже.
+TOP_LEVEL_BINDING_EXEMPT_TEMPLATES = {
+    "accounts/connect_tg_user.html": (
+        "Экран несёт ТУ ЖЕ ФОРМУ, что и редактор (два объявления верхнего уровня "
+        "в инлайн-скрипте, `let currentSessionId` и `let pollInterval`), но целью "
+        "заголовка перехода НЕ ЯВЛЯЕТСЯ — ни один вызов слоя ответа на него не "
+        "приземляет, и это ИЗМЕРЕНО счётом выше, а не предположено (утверждается "
+        "правилом `test_the_connect_screen_is_not_a_transition_destination_today`). "
+        "Вслепую он не правится: его функции достижимы ИЗ АТРИБУТОВ РАЗМЕТКИ — "
+        "`onclick=\"startQR()\"`, `onclick=\"refreshQR()\"`, `onclick=\"submit2FA()\"` "
+        "(app/templates/accounts/connect_tg_user.html:32,44,59), — и обёртка убрала "
+        "бы их из области имён документа, сломав три работающие кнопки ради "
+        "зелёного правила. Починка требует снятия трёх вызовов из атрибутов "
+        "разметки и потому принадлежит фазе, которая сделает экран целью."
+    ),
+}
+
+# ⚠️ ПРЕДМЕТ — ФОРМЫ, ДАЮЩИЕ РАННЮЮ ОШИБКУ ЯЗЫКА ПРИ ПОВТОРНОМ ОБЪЯВЛЕНИИ, И
+# ТОЛЬКО ОНИ. `var` и `function` на верхнем уровне ПЕРЕОБЪЯВЛЯЮТСЯ БЕЗ ОШИБКИ
+# (они var-областные, и второе исполнение просто переписывает связь), поэтому
+# скрипт из-за них не падает и предметом этого правила они не являются. Внесение
+# их сюда сделало бы правило шире поведения, а читатель понёс бы дальше широкую
+# версию.
+TOP_LEVEL_BINDING_KEYWORDS = ("const", "let", "class")
+
+_BINDING_RE = re.compile(
+    r"(?<![\w$.])(" + "|".join(TOP_LEVEL_BINDING_KEYWORDS) + r")\s+([A-Za-z_$][\w$]*)"
+)
+
+
+def _strip_js_comments(source: str) -> str:
+    """Исходник JS без комментариев обоих родов, длина и переводы строк целы.
+
+    ⚠️ ВЫРЕЗАНИЕ ЕСТЬ НЕСУЩЕЕ РЕШЕНИЕ ПРАВИЛА, А НЕ УДОБСТВО РАЗБОРА — то же
+    основание, по которому вырезает `_strip_comments` гейта инвентаря. Абзац
+    обоснования, называющий ЗАПРЕЩЁННУЮ ФОРМУ, отменял бы правило сам собой:
+    оно краснело бы на прозе о том, что оно же и охраняет. Что вырезание
+    работает, ПОКАЗАНО прогоном (`test_the_static_rule_does_not_cancel_itself`),
+    а не заявлено здесь.
+
+    Замена идёт ПРОБЕЛАМИ, а не удалением: номера строк в сообщении об отказе
+    обязаны совпадать с номерами строк исходника, иначе читатель получит
+    «где-то есть» вместо предмета.
+
+    Разбор СОСТОЯНИЕМ СТРОКОВОГО ЛИТЕРАЛА, а не образцом: `//` внутри строки
+    (`'https://…'`) комментарием не является, и вырезание по образцу съело бы
+    хвост строки вместе с половиной выражения.
+    """
+    out = []
+    i, n = 0, len(source)
+    quote = None
+    while i < n:
+        c = source[i]
+        if quote is not None:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(source[i + 1])
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in "'\"`":
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and source[i + 1] == "/":
+            while i < n and source[i] != "\n":
+                out.append(" ")
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and source[i + 1] == "*":
+            while i < n and not (source[i] == "*" and i + 1 < n and source[i + 1] == "/"):
+                out.append("\n" if source[i] == "\n" else " ")
+                i += 1
+            out.append("  ")
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _blank_string_literals(source: str) -> str:
+    """Исходник, у которого СОДЕРЖИМОЕ строковых литералов заменено пробелами.
+
+    Нужно ровно для одного: считать уровень вложенности скобок. Фигурная скобка
+    внутри строки или шаблонного литерала скобкой кода не является, и счёт по
+    сырому тексту объявил бы верхний уровень там, где его нет. Длина и переводы
+    строк сохраняются — номера строк в отказе обязаны остаться верными.
+    """
+    out = list(source)
+    i, n = 0, len(source)
+    quote = None
+    while i < n:
+        c = source[i]
+        if quote is None:
+            if c in "'\"`":
+                quote = c
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            out[i] = " "
+            if source[i + 1] != "\n":
+                out[i + 1] = " "
+            i += 2
+            continue
+        if c == quote:
+            quote = None
+            i += 1
+            continue
+        if c != "\n":
+            out[i] = " "
+        i += 1
+    return "".join(out)
+
+
+def _top_level_bindings(script_body: str) -> list[tuple[int, str, str]]:
+    """Объявления верхнего уровня тела скрипта: `(строка, ключевое слово, имя)`.
+
+    ⚠️ ВЕРХНИЙ УРОВЕНЬ ЕСТЬ НУЛЕВАЯ ВЛОЖЕННОСТЬ СКОБОК, А НЕ НУЛЕВОЙ ОТСТУП.
+    Отступ есть форма записи и от неё зависеть нельзя: обёртка, не сдвинувшая
+    тело отступом (ровно та, что заведена этим планом в `ads/form.html` и до
+    него — в `includes/htmx_error_banner.html`), оставила бы правило красным,
+    хотя предмета в ней уже нет. Считается И КРУГЛАЯ вложенность: `for (const x
+    of …)` на верхнем уровне объявляет связь, областью которой является ЦИКЛ, а
+    не область имён документа, — столкновения при втором исполнении она не даёт.
+    """
+    body = _blank_string_literals(_strip_js_comments(script_body))
+    depth_curly = 0
+    depth_paren = 0
+    depth_at = []
+    for ch in body:
+        depth_at.append((depth_curly, depth_paren))
+        if ch == "{":
+            depth_curly += 1
+        elif ch == "}":
+            depth_curly -= 1
+        elif ch == "(":
+            depth_paren += 1
+        elif ch == ")":
+            depth_paren -= 1
+
+    found = []
+    for match in _BINDING_RE.finditer(body):
+        curly, paren = depth_at[match.start()]
+        if curly != 0 or paren != 0:
+            continue
+        line = body.count("\n", 0, match.start()) + 1
+        found.append((line, match.group(1), match.group(2)))
+    return found
+
+
+def _top_level_bindings_of_template(source: str) -> list[tuple[int, str, str]]:
+    """Объявления верхнего уровня во ВСЕХ инлайн-скриптах поданного шаблона.
+
+    Номер строки приводится к строке ШАБЛОНА, а не тела скрипта: читателю нужен
+    предмет в файле, который он откроет.
+    """
+    from tests.test_templates.test_htmx_markup_gates import _strip_comments
+
+    cleaned = _strip_comments(source)
+    findings = []
+    for match in INLINE_SCRIPT_RE.finditer(cleaned):
+        offset = cleaned.count("\n", 0, match.start(1))
+        for line, keyword, name in _top_level_bindings(match.group(1)):
+            findings.append((offset + line, keyword, name))
+    return findings
+
+
+def _page_modules() -> list[tuple[str, str]]:
+    """Страничные модули парами «имя файла — исходник», без слоя письма."""
+    return [
+        (path.name, path.read_text(encoding="utf-8"))
+        for path in sorted(PAGES_DIR.glob("*.py"))
+        if path.name != RESPONSE_LAYER_MODULE and not path.name.startswith("__")
+    ]
+
+
+def _address_forms(node, scope: dict) -> set[str]:
+    """Формы адреса, к которым приводится выражение аргумента `redirect=`."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {node.value}
+    if isinstance(node, ast.JoinedStr):
+        forms = {""}
+        for piece in node.values:
+            if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
+                tails = {piece.value}
+            elif isinstance(piece, ast.FormattedValue):
+                tails = _address_forms(piece.value, scope) or {"{}"}
+            else:  # pragma: no cover — иных узлов у f-строки не бывает
+                tails = {"{}"}
+            forms = {head + tail for head in forms for tail in tails}
+        return forms
+    if isinstance(node, ast.Name):
+        return set().union(*(_address_forms(v, scope) for v in scope.get(node.id, []))) if scope.get(node.id) else set()
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        builder = node.func.id
+        assert builder in ADDRESS_BUILDERS, (
+            f"адрес приземления собирает помощник `{builder}`, которого нет в "
+            "ADDRESS_BUILDERS. Необъявленный сборщик привёз бы новый экран-цель "
+            "молча — объявите его формы адреса, сняв их с `return` помощника"
+        )
+        return set(ADDRESS_BUILDERS[builder])
+    return set()
+
+
+def _normalize_address(address: str) -> str:
+    """Адрес, приведённый к ФОРМЕ: без строки запроса и без якоря.
+
+    Экран определяется ПУТЁМ: `?result=…` и `#sched-…` меняют то, ЧТО экран
+    покажет, но не то, КАКОЙ это экран и какой у него клиентский слой.
+    """
+    return address.split("?", 1)[0].split("#", 1)[0]
+
+
+def _transition_destination_calls() -> list[tuple[str, int, set[str]]]:
+    """Вызовы слоя ответа, отдающие ЗАГОЛОВОК ПЕРЕХОДА.
+
+    Возвращает `(модуль, строка, формы адреса приземления)` для каждого вызова
+    `respond(...)`, У КОТОРОГО НЕ ЗАДАН `fragment`.
+    """
+    calls = []
+    for name, source in _page_modules():
+        tree = ast.parse(source, filename=name)
+        for function in ast.walk(tree):
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            scope: dict[str, list] = {}
+            for node in ast.walk(function):
+                if isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            scope.setdefault(target.id, []).append(node.value)
+            for node in ast.walk(function):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                    continue
+                if node.func.id != "respond":
+                    continue
+                if any(keyword.arg == "fragment" for keyword in node.keywords):
+                    continue
+                redirect = next(
+                    (kw.value for kw in node.keywords if kw.arg == "redirect"), None
+                )
+                assert redirect is not None, (
+                    f"{name}:{node.lineno}: вызов слоя ответа без `redirect=` — "
+                    "адрес приземления неизвестен, и цель перехода не выводится"
+                )
+                calls.append(
+                    (name, node.lineno, {
+                        _normalize_address(form)
+                        for form in _address_forms(redirect, scope)
+                    })
+                )
+    return calls
+
+
+def test_the_number_of_transition_answering_calls_is_declared():
+    """Число вызовов, отдающих заголовок перехода, ОБЪЯВЛЕНО и стережётся.
+
+    ⚠️ ПРЕДМЕТ — МОЛЧАЛИВЫЙ ПРИЕЗД НОВОГО ЭКРАНА-ЦЕЛИ. Правило, стерегущее
+    только ИЗВЕСТНЫЕ цели, слепо к новой — ровно та форма отказа, которой фаза
+    провалена третьим кругом. Рост числа означает, что появился вызов, чей
+    экран приземления никто на переисполнение не проверял; убыль — что цель
+    исчезла, и перечень ниже сторожит то, чего уже нет.
+    """
+    calls = _transition_destination_calls()
+    listing = "\n".join(f"  {mod}:{line} → {sorted(forms)}" for mod, line, forms in calls)
+    assert len(calls) == HX_LOCATION_DESTINATION_CALLS_DECLARED, (
+        f"вызовов слоя ответа БЕЗ фрагмента найдено {len(calls)}, а объявлено "
+        f"{HX_LOCATION_DESTINATION_CALLS_DECLARED}. Найденное:\n{listing}"
+    )
+
+
+def test_every_transition_destination_has_a_declared_template():
+    """Перечень целей ПОЛОН относительно счёта.
+
+    Адрес без сопоставленного шаблона краснит прогон: перечень, не накрывающий
+    счёт, объявлял бы себя полным, не будучи им, и статическое правило ниже
+    молча не проверило бы новый экран.
+    """
+    found = {form for _, _, forms in _transition_destination_calls() for form in forms}
+    missing = sorted(found - set(HX_LOCATION_DESTINATION_TEMPLATES))
+    assert not missing, (
+        f"адреса приземления без сопоставленного шаблона: {missing}. Пока адрес "
+        "не сопоставлен шаблону, экран-цель никем не проверен на переисполнение"
+    )
+    stale = sorted(set(HX_LOCATION_DESTINATION_TEMPLATES) - found)
+    assert not stale, (
+        f"в перечне целей стоят адреса, которых счёт больше не находит: {stale}. "
+        "Правило сторожило бы экран, целью перехода уже не являющийся"
+    )
+    for address, template in sorted(HX_LOCATION_DESTINATION_TEMPLATES.items()):
+        assert (TEMPLATES_DIR / template).is_file(), (
+            f"адресу {address} сопоставлен шаблон {template}, которого в дереве нет"
+        )
+
+
+def test_no_transition_destination_declares_a_top_level_binding_inline():
+    """НЕСУЩЕЕ СТАТИЧЕСКОЕ ПРАВИЛО: цель перехода не несёт объявлений верхнего уровня.
+
+    Утверждается ФОРМА ИСХОДНИКА целей. Что рантайм браузера ведёт себя по
+    установленной цепи — не утверждается ничем машинным (см. докстринг модуля).
+    """
+    offenders = []
+    for address, template in sorted(HX_LOCATION_DESTINATION_TEMPLATES.items()):
+        if template in TOP_LEVEL_BINDING_EXEMPT_TEMPLATES:
+            continue
+        source = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
+        for line, keyword, binding in _top_level_bindings_of_template(source):
+            offenders.append(f"  {template}:{line}: {keyword} {binding} (цель {address})")
+    assert not offenders, (
+        "экраны-цели заголовка перехода несут объявления верхнего уровня в "
+        "инлайн-скрипте; второе исполнение падает РАННЕЙ ошибкой языка и "
+        "убивает клиентский слой экрана целиком:\n" + "\n".join(offenders)
+    )
+
+
+def test_a_reinstated_top_level_binding_reddens_the_static_rule():
+    """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ статического разбора: зубы показаны, а не заявлены.
+
+    Разборщику подаётся КОПИЯ исходника экрана редактора с возвращённым
+    объявлением верхнего уровня. Копия в памяти; файл дерева не правится.
+    """
+    template = HX_LOCATION_DESTINATION_TEMPLATES["/ads/{}/edit"]
+    source = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
+    assert not _top_level_bindings_of_template(source), (
+        "исходник дерева обязан быть чист — иначе контроль ниже ничего не доказывает"
+    )
+    mutant = source.replace(
+        "<script>\n(function () {",
+        "<script>\nconst REINSTATED_TOP_LEVEL = 1;\n(function () {",
+        1,
+    )
+    assert mutant != source, "мутация не применилась — образец обёртки разъехался"
+    findings = _top_level_bindings_of_template(mutant)
+    assert findings, (
+        "копия исходника с ВОЗВРАЩЁННЫМ объявлением верхнего уровня прошла "
+        "разбор — значит статическое правило зубов не имеет"
+    )
+    lines = [line for line, _, _ in findings]
+    names = [name for _, _, name in findings]
+    assert "REINSTATED_TOP_LEVEL" in names, (
+        f"отказ не называет ИМЕНИ возвращённого объявления: получено {findings}"
+    )
+    assert all(line > 0 for line in lines), (
+        f"отказ не называет номера строки: получено {findings}"
+    )
+
+
+def test_the_static_rule_does_not_cancel_itself():
+    """ПРАВИЛО НЕ САМООТМЕНЯЕТСЯ: комментарий, называющий запрещённую форму, инертен.
+
+    Разборщику подаётся исходник, в который добавлена СТРОКА КОММЕНТАРИЯ,
+    называющая ровно ту форму, которую правило запрещает. Вердикт обязан не
+    измениться — иначе абзац обоснования отменял бы правило сам собой, и
+    кодовая база проекта, несущая такие абзацы почти в каждом месте, красила бы
+    прогон прозой.
+    """
+    template = HX_LOCATION_DESTINATION_TEMPLATES["/ads/{}/edit"]
+    source = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
+    before = _top_level_bindings_of_template(source)
+    with_prose = source.replace(
+        "<script>\n(function () {",
+        "<script>\n// ЗАПРЕЩЁННАЯ ФОРМА, НАЗВАННАЯ ПРОЗОЙ: const IMAGE_BASE_URL = 1;\n"
+        "/* и второй род комментария: let pollInterval = null; */\n(function () {",
+        1,
+    )
+    assert with_prose != source, "проза не добавилась — образец обёртки разъехался"
+    after = _top_level_bindings_of_template(with_prose)
+    assert after == before, (
+        "вердикт правила изменился от ДОБАВЛЕННОГО КОММЕНТАРИЯ: было "
+        f"{before}, стало {after}. Правило считает прозу и отменяет себя само"
+    )
+
+
+def test_every_exempt_template_carries_a_non_empty_rationale():
+    """У каждой записи перечня изъятий основание НЕПУСТО.
+
+    Перечень без обоснований превращается в список того, до чего не дошли руки
+    (форма, принятая планом 10-06): читатель следующей фазы не отличит
+    «решено и записано почему» от «забыли».
+    """
+    assert TOP_LEVEL_BINDING_EXEMPT_TEMPLATES, (
+        "перечень изъятий пуст — правило непустоты стало бы вакуумным"
+    )
+    for template, rationale in sorted(TOP_LEVEL_BINDING_EXEMPT_TEMPLATES.items()):
+        assert (TEMPLATES_DIR / template).is_file(), (
+            f"изъят шаблон {template}, которого в дереве нет"
+        )
+        assert rationale and rationale.strip(), (
+            f"изъятие {template} не несёт основания — изъятие без основания есть "
+            "не решение, а умолчание"
+        )
+
+
+def test_the_connect_screen_is_not_a_transition_destination_today():
+    """Основание изъятия ИЗМЕРЕНО, а не объявлено.
+
+    Экран подключения изъят ровно потому, что целью заголовка перехода он не
+    является. Как только вызов слоя ответа приземлит на него, это правило
+    покраснеет — и изъятие придётся пересматривать, а не наследовать молча.
+    """
+    destinations = set(HX_LOCATION_DESTINATION_TEMPLATES.values())
+    for template in sorted(TOP_LEVEL_BINDING_EXEMPT_TEMPLATES):
+        assert template not in destinations, (
+            f"шаблон {template} стои́т и в перечне ЦЕЛЕЙ, и в перечне ИЗЪЯТИЙ: "
+            "изъятие сделало бы цель непроверенной молча. Основание изъятия "
+            "(«целью перехода не является») больше не верно — пересмотрите его"
+        )
