@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 10
 current_phase_name: Рычаг `components/modal.html`
 status: executing
-stopped_at: Completed 10-13-PLAN.md
-last_updated: "2026-09-04T14:45:06.611Z"
+stopped_at: Completed 10-14-PLAN.md
+last_updated: "2026-09-04T15:52:57.021Z"
 last_activity: 2026-09-04
 last_activity_desc: Phase 10 execution started
-state_head: 03220fe2e2fa74aba6022eb2102bd04cbc797f36
+state_head: 8db16c4ca6ad28007fdee7b6038375392dbdfe46
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 54
-  completed_plans: 51
+  completed_plans: 52
   percent: 33
 ---
 
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
-Plan: 3 of 16
+Plan: 4 of 16
 Total Plans in Phase: 16
 Completed Plans in Phase: 20
 Status: Ready to execute
@@ -101,6 +101,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 10 P11 | 52 min | 3 tasks | 3 files |
 | Phase 10 P12 | 63 min | 3 tasks | 2 files |
 | Phase 10 P13 | 54 min | 2 tasks | 2 files |
+| Phase 10 P14 | 1h 3m | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -176,6 +177,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 10]: Имя константы приведено к уже записанному основанию: _AD_ID_MAX → ID_MAX. Прежнее имя НЕ БЫЛО ОШИБКОЙ — оно точно называло единственный вход, который тогда ограничивался, и пережило появление ещё четырёх — Расхождение имени с основанием (основание называло предметом КОЛОНКУ, имя — ОБЪЯВЛЕНИЕ) есть половина причины, по которой граница осталась стоять на одном входе из пяти
 - [Phase 10]: ТРИ типа-псевдонима ограниченного идентификатора, а не один: ScheduleIdPath (адрес запроса), AdIdForm (обязательное поле формы), AccountIdForm (необязательное поле формы) — Общей остаётся ВЕЛИЧИНА — единственное место, которого требует отчёт; различается СПОСОБ ПЕРЕДАЧИ, а он есть свойство МАРШРУТА. Один псевдоним на все входы вернул бы выбор транспорта в каждую сигнатуру либо молча принял бы поле формы там, где ожидается адрес
 - [Phase 10]: Распоряжение негодной величиной различается ПО РОЛИ значения: обязательный вход маршрута отвечает отказом валидации 422, необязательное поле КОНТЕКСТА экрана по-прежнему ОТБРАСЫВАЕТСЯ без потери действия — Решение плана 10-08 не отменяется: испорченное поле контекста не повод потерять само действие, а третья форма ответа, различимая по величине поля, вернула бы карту занятых идентификаторов (T-10-07)
+- [Phase 10]: Регламент записи требований получил ПРИНУЖДЕНИЕ: правило `tests/test_planning/test_requirement_completion_follows_verification.py` краснит прогон, если требование помечено завершённым без вердикта `passed` отчёта верификации своей фазы — Правило существовало прозой («условие перевода — вердикт `passed` повторной верификации»), принуждения не имело, и ровно поэтому коммит `0ea886d` пометил `FORM-06` при живом блокере `CR-01`; поймал это следующий круг верификации, а не прогон. Прецедент формы — `test_state_progress_matches_roadmap.py`.
 
 ### Pending Todos
 
@@ -354,8 +356,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-04T14:45:06.208Z
-Stopped at: Completed 10-13-PLAN.md
+Last session: 2026-09-04T15:52:40.646Z
+Stopped at: Completed 10-14-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
