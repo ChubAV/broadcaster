@@ -679,6 +679,70 @@ def test_control_two_reports_of_one_number_in_one_milestone_fail_loudly(tmp_path
     assert "91-synthetic" in message and "91-dvoynik" in message, message
 
 
+def test_the_milestone_of_the_record_is_derived_and_non_empty():
+    """ВЫВОД ВЕХИ ЗАПИСИ НЕ ВЫРОЖДАЕТСЯ — ТРИ УТВЕРЖДЕНИЯ, И ТРЕТЬЕ НЕСУЩЕЕ.
+
+    Метка разобрана; метка НЕПУСТА; и в индексе ЖИВОГО дерева есть ХОТЯ БЫ ОДИН
+    отчёт, к которому эта метка приводит. Без третьей части правило зеленело бы
+    ВАКУУМОМ: разобранная, но ни с чем не совпавшая метка даёт индексу ноль
+    попаданий, несущее правило не находит НИ ОДНОГО нарушения — и не находит его
+    потому, что не сверяет НИЧЕГО.
+    """
+    text = REQUIREMENTS_PATH.read_text(encoding="utf-8")
+
+    milestone = _record_milestone(text)
+    assert milestone, "веха записи разобралась в ПУСТУЮ метку"
+
+    index = _verification_status_by_milestone_and_phase(PLANNING_ROOT)
+    label = _lookup_milestone_label(milestone, index)
+    found = [key for key in index if key[0] == label]
+    assert found, (
+        f"веха записи `{milestone}` привела к метке расположения `{label}`, а "
+        f"отчётов с этой меткой в индексе живого дерева НЕТ НИ ОДНОГО — несущее "
+        f"правило зеленело бы ВАКУУМОМ: завершённые строки сверялись бы не с чем. "
+        f"Ключи индекса: {sorted(index)}"
+    )
+
+
+def test_control_a_record_of_another_milestone_looks_up_another_report(tmp_path):
+    """ЗУБЫ ВЫВОДА ВЕХИ — ДВУМЯ ПОЛОВИНАМИ, И ОБЕ НЕСУЩИЕ.
+
+    Синтетический корень держит отчёт ОДНОГО номера в ДВУХ вехах с РАЗНЫМИ
+    вердиктами. Подаётся одна и та же завершённая строка, и меняется ТОЛЬКО
+    заголовок записи.
+
+    (а) заголовок называет АРХИВНУЮ веху корня — найден вердикт ЕЁ отчёта;
+    (б) заголовок называет другую веху — запись читается как ДЕЙСТВУЮЩАЯ, и найден
+        вердикт отчёта, лежащего в каталоге фаз.
+
+    ⚠️ ОДНОЙ ПОЛОВИНЫ НЕ ХВАТИЛО БЫ: контроль, показавший только (а), зеленел бы и
+    на поиске, ИГНОРИРУЮЩЕМ веху вовсе, — потому что при одном ключе искать больше
+    негде.
+    """
+    root = _fake_planning_root(tmp_path, {"91": "gaps_found"})
+    _fake_planning_root(tmp_path, {"91": PASSED_VERDICT}, milestone="v9.9")
+
+    rows = [("SYN-01", "Phase 91", COMPLETED_STATUS)]
+
+    # (а) ЗАГОЛОВОК НАЗЫВАЕТ АРХИВНУЮ ВЕХУ КОРНЯ.
+    archived_text = _synthetic_requirements(rows, milestone="v9.9")
+    assert len(_requirement_rows(archived_text)) == len(rows), (
+        "синтетическая запись дала не столько строк, сколько подано троек — "
+        "разборщик прочёл бы пустой вход, и контроль зеленел бы ВАКУУМОМ"
+    )
+    assert _record_milestone(archived_text) == "v9.9"
+    from_archive = premature_completions(archived_text, root)
+    assert not from_archive, _report(from_archive)
+
+    # (б) ЗАГОЛОВОК НАЗЫВАЕТ ДРУГУЮ ВЕХУ — ЗАПИСЬ ЧИТАЕТСЯ КАК ДЕЙСТВУЮЩАЯ.
+    current_text = _synthetic_requirements(rows, milestone="v9.8")
+    assert _record_milestone(current_text) == "v9.8"
+    from_current = premature_completions(current_text, root)
+
+    assert len(from_current) == 1, _report(from_current)
+    assert from_current[0].verdict == "gaps_found", _report(from_current)
+
+
 # --- две записи одного факта: флажок в теле файла и клетка таблицы ------------------
 
 
