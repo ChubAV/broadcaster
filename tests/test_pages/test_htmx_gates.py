@@ -2336,3 +2336,603 @@ def test_control_negative_an_undeclared_fragment_handler_reddens_the_gate(tmp_pa
         "ПОДМЕНА ПРОТЕКЛА ЗА ГРАНИЦУ КОНТРОЛЯ: свежее чтение боевого дерева "
         "вернуло подменённый модуль"
     )
+
+
+# =============================================================================
+# ЗАЯВЛЕННОЕ РАСХОЖДЕНИЕ ФОРМЫ ОТКАЗА ВАЛИДАЦИИ С D-01 — `WR-03`
+#
+# ⚠️ РАСХОЖДЕНИЕ, А НЕ ИЗЪЯТИЕ, И РАЗНИЦА ЗДЕСЬ НЕ В СЛОВЕ. D-01 —
+# ЗАПЕРТОЕ решение владельца («форма ответа выбирается ПО КЛАССУ ДЕЙСТВИЯ»).
+# Единственный прецедент изъятия из него, D-08, назван в записи решений фазы
+# «ИМЕНОВАННЫМ ИЗЪЯТИЕМ ИЗ D-01» и записан ВЛАДЕЛЬЦЕМ на этапе обсуждения, с
+# измеренным основанием. Из ФОРМЫ прецедента следует АВТОРСТВО: изъятие из
+# запертого решения чеканит владелец, а не план и не исполнитель. Поэтому
+# настоящий перечень объявляет РАСХОЖДЕНИЕ — факт, что форму отказа на семи
+# входах выбирает фреймворк, а не слой ответа, — и несёт у каждой записи
+# СОСТОЯНИЕ РЕШЕНИЯ «ЖДЁТ ВЛАДЕЛЬЦА». Само решение передано владельцу окном
+# реестра `.planning/WINDOWS.md` по форме окон 34 и 47.
+#
+# ⚠️ МАШИННЫЙ ГЕЙТ ОТ ЭТОГО НЕ СЛАБЕЕТ, И В ЭТОМ ВЕСЬ СМЫСЛ РАЗВЕДЕНИЯ. Ревизия
+# четвёртого круга назвала молчаливое умолчание ХУДШИМ из трёх исходов, «потому
+# что оно читается как исполненный инвариант». Перечень расхождения запрещает
+# молчание ровно так же, как запрещал бы перечень изъятия: вход, у которого
+# граница величины стои́т на уровне фреймворка и который здесь не назван,
+# краснит прогон с именем. ОТЛОЖЕНО РЕШЕНИЕ О ЛЕГИТИМНОСТИ РАСХОЖДЕНИЯ, А НЕ
+# ЕГО ВИДИМОСТЬ.
+#
+# ⚠️ ГРАНИЦА ВНУТРЬ ОБРАБОТЧИКОВ ЗДЕСЬ НЕ ПЕРЕНОСИТСЯ, И ЭТО ОСНОВАНИЕ, А НЕ
+# ОТГОВОРКА. План 10-12 свёл эту границу к ОДНОМУ владельцу на все входы ради
+# закрытия блокеров `CR-01` и `CR-02` (летопись имени `ID_MAX` —
+# `app/pages/schedules.py:63-72`). Перенос внутрь обработчиков развёл бы одно
+# правило на семь мест, то есть закрыл бы находку ценой возврата предмета, ради
+# которого предыдущая партия существовала.
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class _ValidationRefusalDivergence:
+    """Одно заявленное РАСХОЖДЕНИЕ формы отказа валидации с D-01.
+
+    Пять полей, и ни одно не служебное: ВХОД (что именно расходится),
+    ПСЕВДОНИМ границы (чем расхождение сделано), ОБОСНОВАНИЕ (цена и
+    достижимость), УСЛОВИЕ СНЯТИЯ (когда расхождение исчезнет) и СОСТОЯНИЕ
+    РЕШЕНИЯ (кто и чем признал расхождение законным — либо что оно ещё никем не
+    признано).
+    """
+
+    entry: str
+    alias: str
+    reason: str
+    lifting_condition: str
+    decision_state: str
+
+
+# ⚠️ СОСТОЯНИЕ РЕШЕНИЯ ПО УМОЛЧАНИЮ — ЖДУЩЕЕ, И ОНО ЗДЕСЬ ЕДИНСТВЕННОЕ. Строка
+# вынесена константой не ради краткости, а ради правила авторства ниже: оно
+# сличает состояние записи ИМЕННО с этой строкой, и запись, переведённая в
+# «решено» правкой одного поля, обязана назвать, ЧЕМ решена.
+DECISION_WAITS_FOR_THE_OWNER = "ЖДЁТ ВЛАДЕЛЬЦА"
+
+# ⚠️ ФАЗА-СНИМАТЕЛЬ ВЗЯТА ИЗ РОАДМАПА, А НЕ НАЗНАЧЕНА ПЛАНОМ. Критерий 3 Фазы 11
+# («Массовый перевод разделов письма») говорит дословно: «ошибка валидации
+# возвращает 422, перерисовывает форму и возвращает введённое эхом», а порядок
+# внутри той фазы ставит `schedules` ПЕРВЫМ. То есть перенос границы внутрь
+# обработчиков осмыслен ровно вместе с массовым переводом маршрутов на слой
+# ответа, и порознь эти две работы смысла не имеют: граница, перенесённая одна,
+# развела бы одно правило на семь мест, ничего не дав взамен.
+#
+# ⚠️ ЭТО НЕ ТО ЖЕ, ЧТО РЕШЕНИЕ ОБ ИЗЪЯТИИ, И ДВА АДРЕСАТА ЗДЕСЬ РАЗНЫЕ. Фаза 11
+# снимает РАСХОЖДЕНИЕ работой; вопрос же, законно ли расхождение до тех пор —
+# то есть объявить ли его ИМЕНОВАННЫМ ИЗЪЯТИЕМ ИЗ D-01 по прецеденту D-08, —
+# фазы-владельца НЕ ИМЕЕТ и иметь не может: изъятие из запертого решения
+# владельца принадлежит владельцу (форма окон 34 и 47).
+LIFTING_CONDITION_VALIDATION_REFUSAL = (
+    "расхождение снимается только вместе с переносом границы величины внутрь "
+    "обработчиков, а перенос осмыслен только вместе с массовым переводом "
+    "маршрутов на слой ответа — Фаза 11 «Массовый перевод разделов письма», "
+    "критерий 3 роадмапа, порядок внутри фазы ставит `schedules` первым; "
+    "порознь эти две работы смысла не имеют"
+)
+
+# Цена, названная ДВУМЯ СЛЕДСТВИЯМИ, а не словом «хуже». Общая у всех записей,
+# потому что она есть свойство ФОРМЫ отказа, а не отдельного входа.
+_REFUSAL_PRICE = (
+    "ЦЕНА НАЗВАНА ДВУМЯ СЛЕДСТВИЯМИ: (1) тело отказа НЕ ЕСТЬ СТРАНИЦА — "
+    "отправитель обычной формы получает `{\"detail\": [...]}`, ровно ту форму, "
+    "которую проект уже назвал дефектом у `app/pages/accounts.py`; (2) на пути "
+    "разметочного рантайма код отказа НЕ НЕСЁТ ЗАГОЛОВКА ПЕРЕХОДА, ветвь "
+    "закрытия панели не срабатывает, и панель остаётся открытой без "
+    "объяснения — кода реестра в ответе нет"
+)
+
+
+VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
+    _ValidationRefusalDivergence(
+        entry="app/pages/schedules.py::POST /schedules/new → форма ad_id",
+        alias="AdIdForm",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, И ЭТО ИЗМЕРЕНО ЧТЕНИЕМ "
+            "РАЗМЕТКИ, А НЕ ПЕРЕПИСАНО ИЗ РЕВИЗИИ: значение приезжает скрытым "
+            "полем `value=\"{{ ad.id }}\"` (`app/templates/ads/form.html:242`), "
+            "то есть собирается сервером, и через интерфейс не редактируется "
+            "ничем"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry="app/pages/schedules.py::POST /schedules/new → форма account_id",
+        alias="AccountIdForm",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "поле шлётся скрытым `value=\"{{ editor.accounts[0].id }}\"` ТОЛЬКО "
+            "при единственном аккаунте (`app/templates/ads/form.html:247`), а "
+            "при нескольких не шлётся ВОВСЕ — псевдоним допускает отсутствие "
+            "значения, и отсутствие есть законное состояние (`account_id` "
+            "nullable, issue #35)"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry=(
+            "app/pages/schedules.py::POST /schedules/{schedule_id}/edit → "
+            "адрес schedule_id"
+        ),
+        alias="ScheduleIdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "идентификатор стои́т в АДРЕСЕ формы "
+            "`action=\"/schedules/{{ s.id }}/edit\"` "
+            "(`app/templates/ads/includes/sched_card.html:156`) и собирается "
+            "сервером из живой строки"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry=(
+            "app/pages/schedules.py::POST /schedules/{schedule_id}/toggle → "
+            "адрес schedule_id"
+        ),
+        alias="ScheduleIdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "идентификатор стои́т в АДРЕСЕ формы переключения "
+            "(`app/templates/ads/includes/sched_card.html:122` и "
+            "`app/templates/schedules/includes/schedule_row.html:81`), и обе "
+            "копии собираются сервером"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry=(
+            "app/pages/schedules.py::POST /schedules/{schedule_id}/delete → "
+            "адрес schedule_id"
+        ),
+        alias="ScheduleIdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "идентификатор стои́т в АДРЕСЕ формы удаления "
+            "(`app/templates/ads/includes/sched_card.html:255`) и в аргументе "
+            "`action` панели подтверждения (там же, `:276`)"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+)
+
+# ⚠️ ЧИСЛО ОБЪЯВЛЕНО, А НЕ ВЫВЕДЕНО ИЗ ДЛИНЫ ПЕРЕЧНЯ САМОГО ПО СЕБЕ. Молча
+# выросший перечень означает, что расхождение ПРИНЯЛИ, не назвав его решением;
+# молча похудевший — что расхождение сняли при НЕТРОНУТОЙ границе, то есть
+# запись разошлась с кодом в ту сторону, в которую удобно.
+#
+# ЛЕТОПИСЬ ЧИСЛА:
+#   0 → 5, Фаза 10, план 10-22, задача 1: перечень заведён по отчёту
+#   верификации, назвавшему ПЯТЬ входов.
+VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 5
+
+
+def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
+    """Входы POST-обработчиков, чья граница величины стои́т НА УРОВНЕ ФРЕЙМВОРКА.
+
+    Возвращается отображение «ВХОД → ПСЕВДОНИМ (либо `inline`)». Ключ склеен из
+    модуля, маршрута, способа передачи и имени параметра: два разных параметра
+    одного маршрута — ДВА РАЗНЫХ ВХОДА, и склеивание их в один есть ровно та
+    ошибка счёта, которую этот перечень заводился исправить.
+
+    ⚠️ ПРЕДМЕТ ЗАМЕРА — POST-ОБРАБОТЧИКИ, И ГРАНИЦА ОХВАТА НАЗВАНА, А НЕ
+    ПОДРАЗУМЕВАЕТСЯ. Обход берёт объявления `Path(...)` и `Form(...)`,
+    несущие `ge=` либо `le=`, — в обеих формах записи: через псевдоним
+    (`Annotated[int, Form(ge=1, le=ID_MAX)]`, вынесенный в модуль) и ВСТРОЕННУЮ,
+    чтобы будущий обработчик, вписавший границу прямо в сигнатуру, попал в
+    охват сам, а не ждал, пока о нём вспомнят.
+    Постраничные `Query(offset=..., limit=...)` в охват НЕ входят по двум
+    названным основаниям: они стоят на GET-маршрутах, а предмет расхождения —
+    контракт формы ответа POST-обработчика (G-2); и величина порции не есть
+    ИДЕНТИФИКАТОР, отказ по ней ничего не говорит о владении строкой.
+    """
+    bounders = {"Path", "Form"}
+
+    def bounded_call(node: ast.AST) -> str | None:
+        if not isinstance(node, ast.Call):
+            return None
+        func = node.func
+        name = (
+            func.id
+            if isinstance(func, ast.Name)
+            else func.attr
+            if isinstance(func, ast.Attribute)
+            else None
+        )
+        if name not in bounders:
+            return None
+        keywords = {keyword.arg for keyword in node.keywords}
+        return name if ("le" in keywords or "ge" in keywords) else None
+
+    def bounded_annotation(annotation: ast.AST | None) -> str | None:
+        if not isinstance(annotation, ast.Subscript):
+            return None
+        if not (
+            isinstance(annotation.value, ast.Name)
+            and annotation.value.id == "Annotated"
+        ):
+            return None
+        parts = (
+            annotation.slice.elts
+            if isinstance(annotation.slice, ast.Tuple)
+            else [annotation.slice]
+        )
+        for part in parts:
+            found = bounded_call(part)
+            if found:
+                return found
+        return None
+
+    inputs: dict[str, str] = {}
+
+    for module, text in sources.items():
+        tree = _parse(module, text)
+
+        aliases: dict[str, str] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+                continue
+            carrier = bounded_annotation(node.value)
+            if carrier:
+                aliases[node.targets[0].id] = carrier
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+
+            routes = [
+                decorator.args[0].value
+                for decorator in node.decorator_list
+                if _declares_post(decorator)
+                and decorator.args
+                and isinstance(decorator.args[0], ast.Constant)
+            ]
+            if not routes:
+                continue
+
+            arguments = node.args
+            positional = list(arguments.posonlyargs) + list(arguments.args)
+            every = positional + list(arguments.kwonlyargs)
+
+            defaults: dict[str, ast.AST] = {}
+            for argument, default in zip(
+                arguments.kwonlyargs, arguments.kw_defaults
+            ):
+                if default is not None:
+                    defaults[argument.arg] = default
+            if arguments.defaults:
+                for argument, default in zip(
+                    positional[len(positional) - len(arguments.defaults) :],
+                    arguments.defaults,
+                ):
+                    defaults[argument.arg] = default
+
+            for argument in every:
+                carrier: str | None = None
+                alias = "inline"
+
+                annotation = argument.annotation
+                if isinstance(annotation, ast.Name) and annotation.id in aliases:
+                    carrier, alias = aliases[annotation.id], annotation.id
+                elif annotation is not None:
+                    carrier = bounded_annotation(annotation)
+                if carrier is None and argument.arg in defaults:
+                    carrier = bounded_call(defaults[argument.arg])
+
+                if carrier is None:
+                    continue
+
+                how = "адрес" if carrier == "Path" else "форма"
+                for route in routes:
+                    inputs[f"{module}::POST {route} → {how} {argument.arg}"] = alias
+
+    return inputs
+
+
+def _validation_refusal_completeness_complaints(
+    divergences: tuple[_ValidationRefusalDivergence, ...],
+    sources: dict[str, str] | None = None,
+) -> list[str]:
+    """Жалобы правила ПОЛНОТЫ — на ПОДАННЫЙ перечень, а не на модульный.
+
+    Перечень приходит параметром ровно затем, чтобы контроль зубов мог подать
+    УКОРОЧЕННУЮ копию и увидеть, что правило её заметило. Приём взят у контроля
+    перечня осей (`tests/test_pages/test_confirm_delete_transport.py`).
+    """
+    measured = _framework_bounded_post_inputs(
+        _pages_sources() if sources is None else sources
+    )
+    declared = {divergence.entry: divergence.alias for divergence in divergences}
+
+    complaints: list[str] = []
+    for entry in sorted(set(measured) - set(declared)):
+        complaints.append(
+            f"НАЙДЕН ЗАМЕРОМ, НО НЕ ОБЪЯВЛЕН: {entry} (псевдоним "
+            f"{measured[entry]})"
+        )
+    for entry in sorted(set(declared) - set(measured)):
+        complaints.append(f"ОБЪЯВЛЕН, НО ЗАМЕРОМ НЕ НАЙДЕН: {entry}")
+    for entry in sorted(set(declared) & set(measured)):
+        if declared[entry] != measured[entry]:
+            complaints.append(
+                f"ПСЕВДОНИМ РАЗОШЁЛСЯ С ЗАМЕРОМ: {entry} объявлен как "
+                f"{declared[entry]!r}, а измерен как {measured[entry]!r}"
+            )
+    return complaints
+
+
+def _validation_refusal_rationale_complaints(
+    divergences: tuple[_ValidationRefusalDivergence, ...],
+) -> list[str]:
+    """Жалобы правила ОБОСНОВАНИЙ — на ПОДАННЫЙ перечень.
+
+    Перечень без обоснований есть список того, до чего не дошли руки, и
+    отличить его от заявленного расхождения нельзя ничем, кроме этих трёх
+    непустых полей.
+    """
+    complaints: list[str] = []
+
+    for divergence in divergences:
+        where = divergence.entry or "(запись без входа)"
+
+        if not divergence.entry.strip():
+            complaints.append(
+                "запись расхождения не называет ВХОДА — обоснование, стоящее "
+                "ни на чём, неотличимо от отсутствующего"
+            )
+        if not divergence.alias.strip():
+            complaints.append(
+                f"расхождение «{where}» не называет ПСЕВДОНИМА границы: "
+                "читатель не найдёт места, которым расхождение сделано"
+            )
+        if not divergence.reason.strip():
+            complaints.append(
+                f"расхождение «{where}» объявлено БЕЗ ОБОСНОВАНИЯ — перечень "
+                "без обоснований есть список того, до чего не дошли руки"
+            )
+        if not divergence.decision_state.strip():
+            complaints.append(
+                f"расхождение «{where}» не несёт СОСТОЯНИЯ РЕШЕНИЯ: молчащее "
+                "состояние читается как решённое, а решения не было"
+            )
+        if not divergence.lifting_condition.strip():
+            complaints.append(
+                f"расхождение «{where}» не называет УСЛОВИЯ СНЯТИЯ — через "
+                "фазу оно станет неотличимо от недоделки"
+            )
+        elif "Фаза 11" not in divergence.lifting_condition:
+            complaints.append(
+                f"расхождение «{where}» не называет ФАЗЫ-СНИМАТЕЛЯ. Фаза взята "
+                "ИЗ РОАДМАПА (Фаза 11, критерий 3), а не назначена планом; "
+                "условие снятия, потерявшее её имя, оставляет перечень без "
+                "адресата"
+            )
+        if _REFUSAL_PRICE.split(":")[0] not in divergence.reason:
+            complaints.append(
+                f"обоснование расхождения «{where}» не называет ЦЕНЫ ДВУМЯ "
+                "СЛЕДСТВИЯМИ: обоснование без цены превращает заявленное "
+                "расхождение обратно в умолчание"
+            )
+
+    return complaints
+
+
+_DECISION_REFERENCE = re.compile(r"\bD-\d{2}\b|\bокн[оа]\s+№?\s*\d+")
+
+
+def _validation_refusal_authorship_complaints(
+    divergences: tuple[_ValidationRefusalDivergence, ...],
+) -> list[str]:
+    """Жалобы правила АВТОРСТВА — на ПОДАННЫЙ перечень.
+
+    Запись, объявившая себя РЕШЁННОЙ, обязана называть, ЧЕМ решена:
+    идентификатором решения владельца по форме `D-NN` либо номером закрытого
+    окна реестра.
+    """
+    complaints: list[str] = []
+
+    for divergence in divergences:
+        state = divergence.decision_state.strip()
+        if not state or state == DECISION_WAITS_FOR_THE_OWNER:
+            continue
+        if not _DECISION_REFERENCE.search(state):
+            complaints.append(
+                f"расхождение «{divergence.entry}» объявлено РЕШЁННЫМ "
+                f"({state!r}), но не называет, ЧЕМ решено"
+            )
+
+    return complaints
+
+
+def test_the_number_of_validation_refusal_divergences_is_declared():
+    """Число расхождений формы отказа равно ОБЪЯВЛЕННОМУ.
+
+    ⚠️ ЧТО ЗНАЧИТ КАЖДОЕ ИЗ ДВУХ НАПРАВЛЕНИЙ РАСХОЖДЕНИЯ, И ПОЧЕМУ ОБА ПЛОХИ.
+    Молча ВЫРОСШИЙ перечень означает принятое-но-неназванное расхождение: вход
+    добавили, форму отказа ему выбрал фреймворк, и запись об этом появилась
+    задним числом — то есть ровно то молчание, которое ревизия назвала худшим
+    из трёх исходов. Молча ПОХУДЕВШИЙ означает снятое расхождение при НЕТРОНУТОЙ
+    границе: код остался прежним, а запись объявила инвариант исполненным.
+    """
+    assert (
+        len(VALIDATION_REFUSAL_DIVERGENCES)
+        == VALIDATION_REFUSAL_DIVERGENCES_DECLARED
+    ), (
+        f"расхождений формы отказа валидации стало "
+        f"{len(VALIDATION_REFUSAL_DIVERGENCES)}, а объявлено "
+        f"{VALIDATION_REFUSAL_DIVERGENCES_DECLARED}. Рост означает, что "
+        "расхождение приняли, не назвав его решением; падение — что "
+        "расхождение сняли, не тронув границы, то есть объявили инвариант "
+        "исполненным при неизменившемся коде"
+    )
+
+
+def test_every_framework_bounded_input_is_declared_as_a_divergence():
+    """ПОЛНОТА ПО ЗАМЕРУ: каждый вход с границей на уровне фреймворка объявлен.
+
+    ⚠️ БЕЗ ЭТОГО ПРАВИЛА ЧИСЛО ВЫШЕ СЛИЧАЛО БЫ ДВЕ СТРОКИ ОДНОГО ФАЙЛА. Предмет
+    даёт числу именно это правило: перечень стои́т на ЗАМЕРЕ страничного слоя, а
+    не на памяти читателя и не на отчёте верификации. Вход, заведённый будущей
+    фазой с границей на уровне фреймворка и здесь не названный, краснит прогон
+    С ИМЕНЕМ — молча проехавший получил бы форму отказа от фреймворка, и
+    следующий читатель принял бы молчание за исполненный D-01.
+    """
+    complaints = _validation_refusal_completeness_complaints(
+        VALIDATION_REFUSAL_DIVERGENCES
+    )
+
+    assert not complaints, (
+        "ПЕРЕЧЕНЬ РАСХОЖДЕНИЙ РАЗОШЁЛСЯ С ЗАМЕРОМ СТРАНИЧНОГО СЛОЯ:\n  "
+        + "\n  ".join(complaints)
+        + "\n\nВход, у которого граница величины идентификатора стои́т на уровне "
+        "фреймворка, обязан быть либо переведён на границу внутри обработчика "
+        "с ответом через слой ответа, либо ОБЪЯВЛЕН здесь расхождением — с "
+        "ценой, условием снятия и состоянием решения. Ни тем ни другим он "
+        "быть не может: молчаливое умолчание читается как исполненный D-01"
+    )
+
+
+def test_every_validation_refusal_divergence_carries_a_non_empty_rationale():
+    """У КАЖДОГО расхождения непусты все пять полей, и цена названа.
+
+    ⚠️ ПОЧЕМУ ПРОВЕРЯЕТСЯ ИМЕННО НЕПУСТОТА, А НЕ КРАСОТА ТЕКСТА. Перечень,
+    записи которого молчат об основании, ничем не отличается от списка «сюда не
+    дошли руки»: обе формы зелены, и обе оставляют следующего читателя без
+    знания, ПРИНЯТО расхождение или ПРОСМОТРЕНО.
+
+    ФАЗА-СНИМАТЕЛЬ ЗДЕСЬ ТРЕБУЕТСЯ ИМЕНЕМ, ПОТОМУ ЧТО ОНА ЕСТЬ В РОАДМАПЕ.
+    Фаза 11 названа критерием 3 роадмапа дословно, и потому правило вправе
+    требовать её имени. Требуй оно имени фазы, которой в роадмапе нет, — план
+    сочинил бы назначение, а сочинённое назначение хуже отсутствующего: за ним
+    никто не придёт, и никто об этом не узнает.
+    """
+    complaints = _validation_refusal_rationale_complaints(
+        VALIDATION_REFUSAL_DIVERGENCES
+    )
+
+    assert not complaints, (
+        "ЗАПИСЬ РАСХОЖДЕНИЯ ОКАЗАЛАСЬ НЕПОЛНОЙ:\n  " + "\n  ".join(complaints)
+    )
+
+
+def test_no_divergence_claims_a_decision_the_owner_did_not_make():
+    """Запись, объявившая себя РЕШЁННОЙ, обязана назвать, ЧЕМ решена.
+
+    ⚠️ ЭТО ПРАВИЛО СТЕРЕЖЁТ НЕ КОД, А ГРАНИЦУ ПОЛНОМОЧИЙ, и оно единственное,
+    чем следующий круг не превратит «ЖДЁТ ВЛАДЕЛЬЦА» в «решено» правкой одной
+    строки.
+
+    D-01 есть ЗАПЕРТОЕ решение владельца: «форма ответа выбирается ПО КЛАССУ
+    ДЕЙСТВИЯ». Единственный прецедент изъятия из него — D-08 — назван в записи
+    решений фазы «ИМЕНОВАННЫМ ИЗЪЯТИЕМ ИЗ D-01» и записан ВЛАДЕЛЬЦЕМ на этапе
+    обсуждения, с измеренным основанием. Изъятие, дочеканенное планом либо
+    исполнителем, есть ПРИСВОЕНИЕ ЧУЖОГО АВТОРСТВА, и следующий читатель принял
+    бы его за решение владельца, потому что отличить одно от другого в записи
+    было бы нечем.
+
+    Поэтому «решено» принимается ровно двумя формами: идентификатором решения
+    владельца (`D-NN`) либо номером ЗАКРЫТОГО окна реестра. Ответ владельца,
+    пришедший до исполнения, этой формой записывается и правилом принимается;
+    сочинить его за владельца правило не даёт.
+    """
+    complaints = _validation_refusal_authorship_complaints(
+        VALIDATION_REFUSAL_DIVERGENCES
+    )
+
+    assert not complaints, (
+        "РЕШЕНИЕ ОБЪЯВЛЕНО БЕЗ ССЫЛКИ НА ТОГО, КТО ЕГО ПРИНЯЛ:\n  "
+        + "\n  ".join(complaints)
+        + f"\n\nСостояние, отличное от {DECISION_WAITS_FOR_THE_OWNER!r}, "
+        "обязано называть идентификатор решения владельца по форме `D-NN` "
+        "либо номер закрытого окна реестра `.planning/WINDOWS.md`. Изъятие из "
+        "запертого D-01 чеканит ВЛАДЕЛЕЦ — прецедент D-08 записан им самим на "
+        "этапе обсуждения"
+    )
+
+
+def test_control_a_shortened_exception_list_reddens_the_completeness_rule():
+    """ЗУБЫ ПРАВИЛА ПОЛНОТЫ — УКОРОЧЕННЫМ ПЕРЕЧНЕМ, А НЕ ПРОЗОЙ.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ПРАВИЛО ПОЛНОТЫ ЗЕЛЕНЕЛО БЫ И НА ЗАМЕРЕ, ВОЗВРАЩАЮЩЕМ
+    ПУСТО. Контроль подаёт правилу КОПИЮ перечня без одной записи и показывает,
+    что правило краснеет И НАЗЫВАЕТ пропущенный вход поимённо. Копия живёт в
+    памяти; боевой перечень не правится ни на символ.
+    """
+    assert len(VALIDATION_REFUSAL_DIVERGENCES) >= 2, (
+        "контроль требует минимум двух записей: на одной укорачивать нечего"
+    )
+
+    dropped = VALIDATION_REFUSAL_DIVERGENCES[0]
+    shortened = VALIDATION_REFUSAL_DIVERGENCES[1:]
+
+    complaints = _validation_refusal_completeness_complaints(shortened)
+
+    assert complaints, (
+        f"перечень БЕЗ записи «{dropped.entry}» не вызвал ни одной жалобы — "
+        "значит правило полноты читает НЕ поданный перечень, и оно зеленело бы "
+        "на любом"
+    )
+    assert any(dropped.entry in complaint for complaint in complaints), (
+        f"правило полноты покраснело, но НЕ НАЗВАЛО пропущенный вход "
+        f"«{dropped.entry}». Отказ, не называющий места, чинится перебором, а "
+        f"перебором чинят не то. Сказано было: {complaints}"
+    )
+
+    assert not _validation_refusal_completeness_complaints(
+        VALIDATION_REFUSAL_DIVERGENCES
+    ), (
+        "ПОДМЕНА ПРОТЕКЛА ЗА ГРАНИЦУ КОНТРОЛЯ: боевой перечень после контроля "
+        "перестал сходиться с замером"
+    )
+
+
+def test_control_an_empty_rationale_reddens_the_rationale_rule():
+    """ЗУБЫ ПРАВИЛА ОБОСНОВАНИЙ — ОПУСТОШЁННЫМ ПОЛЕМ, А НЕ ПРОЗОЙ.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ПРАВИЛО ОБОСНОВАНИЙ ЗЕЛЕНЕЛО БЫ НА ПЕРЕЧНЕ, У
+    КОТОРОГО ОБОСНОВАНИЯ ПУСТЫ ВСЕ. Контроль опустошает обоснование ОДНОЙ
+    записи копии и показывает, что правило краснеет и называет именно её.
+    """
+    victim = VALIDATION_REFUSAL_DIVERGENCES[0]
+    emptied = (
+        _ValidationRefusalDivergence(
+            entry=victim.entry,
+            alias=victim.alias,
+            reason="   ",
+            lifting_condition=victim.lifting_condition,
+            decision_state=victim.decision_state,
+        ),
+    ) + VALIDATION_REFUSAL_DIVERGENCES[1:]
+
+    complaints = _validation_refusal_rationale_complaints(emptied)
+
+    assert complaints, (
+        f"запись «{victim.entry}» с ПУСТЫМ обоснованием прошла правило "
+        "обоснований — значит правило читает не поданный перечень, и список "
+        "того, до чего не дошли руки, засчитался бы заявленным расхождением"
+    )
+    assert any(victim.entry in complaint for complaint in complaints), (
+        f"правило обоснований покраснело, но НЕ НАЗВАЛО запись «{victim.entry}» "
+        f"поимённо. Сказано было: {complaints}"
+    )
+
+    assert not _validation_refusal_rationale_complaints(
+        VALIDATION_REFUSAL_DIVERGENCES
+    ), (
+        "ПОДМЕНА ПРОТЕКЛА ЗА ГРАНИЦУ КОНТРОЛЯ: боевой перечень после контроля "
+        "перестал проходить правило обоснований"
+    )
