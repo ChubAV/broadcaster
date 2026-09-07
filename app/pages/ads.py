@@ -1,4 +1,13 @@
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +20,12 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
-from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.pages.common import (
+    check_is_admin,
+    get_user_from_cookie,
+    is_same_origin,
+    templates,
+)
 # `respond` ввозится ТОЙ ЖЕ строкой, что и признак: второе объявление ввоза из
 # слоя ответа в одном модуле было бы вторым местом, куда смотрят, решая форму
 # ответа, — а решение здесь одно и приходит из одного места (план 10-03).
@@ -750,6 +764,15 @@ async def ads_delete(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return await respond(request, redirect="/login")
+
+    # СВЕРКА ИСТОЧНИКА — ПОСЛЕ ПРАВ И ДО ЛЮБОГО ОБРАЩЕНИЯ К БАЗЕ (`WR-07`,
+    # ревизия 2026-09-04; прецедент — `CR-02` ревизии Фазы 6). Асимметрия
+    # закрыта решением, а не совпадением: соседние административные маршруты
+    # несут эту же сверку, а необратимое удаление данных пользователя не несло
+    # ничего, кроме умолчания браузера, которого продукт не выставляет.
+    if not is_same_origin(request):
+        return Response(status_code=403)
+
     result = await db.execute(
         select(Ad).where(Ad.id == ad_id, Ad.user_id == user.id)
     )

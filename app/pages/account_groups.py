@@ -14,7 +14,7 @@ tests/test_pages/test_account_groups.py.
 
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,7 +27,12 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
-from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.pages.common import (
+    check_is_admin,
+    get_user_from_cookie,
+    is_same_origin,
+    templates,
+)
 from app.pages.htmx import respond
 from app.repositories.schedule import ScheduleRepository
 
@@ -677,6 +682,14 @@ async def account_groups_delete(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return await respond(request, redirect="/login")
+
+    # СВЕРКА ИСТОЧНИКА — ПОСЛЕ ПРАВ И ДО ЛЮБОГО ОБРАЩЕНИЯ К БАЗЕ (`WR-07`,
+    # ревизия 2026-09-04; прецедент — `CR-02` ревизии Фазы 6). Она стои́т ВЫШЕ
+    # тройного `WHERE`: отказ по происхождению не имеет права стать признаком
+    # существования строки, а неотличимость четырёх случаев ниже собирается из
+    # `group_id` пути и этой веткой не задевается.
+    if not is_same_origin(request):
+        return Response(status_code=403)
 
     # ТОТ ЖЕ ТРОЙНОЙ WHERE, что у тумблера: свою группу можно адресовать через
     # свой ЖЕ, но другой аккаунт, и одной проверки владельца не хватает

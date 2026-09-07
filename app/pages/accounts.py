@@ -2,7 +2,7 @@ import base64
 import io
 
 import qrcode
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
@@ -35,7 +35,12 @@ from app.messengers.telegram_user import (
 from app.messengers.base import MessengerFetchError
 from app.messengers.max import MaxMessenger
 from app.messengers.whatsapp import WhatsAppMessenger
-from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.pages.common import (
+    check_is_admin,
+    get_user_from_cookie,
+    is_same_origin,
+    templates,
+)
 # Первый вызов слоя ответа в этом модуле (план 10-03). До него слой звали только
 # из модуля групп аккаунта; адрес деградации у `respond` объявлен ОБЯЗАТЕЛЬНЫМ
 # ключевым аргументом, поэтому обработчик, забывший путь без JavaScript, не
@@ -1017,5 +1022,14 @@ async def accounts_delete(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return await respond(request, redirect="/login")
+
+    # СВЕРКА ИСТОЧНИКА — ПОСЛЕ ПРАВ И ДО ЛЮБОГО ОБРАЩЕНИЯ К БАЗЕ (`WR-07`,
+    # ревизия 2026-09-04; прецедент — `CR-02` ревизии Фазы 6, закрывшей ту же
+    # асимметрию у административного удаления пользователя). Чужому источнику
+    # причина отказа не сообщается, и отказ по происхождению не имеет права
+    # стать признаком существования строки.
+    if not is_same_origin(request):
+        return Response(status_code=403)
+
     await delete_account(db, user.id, account_id)
     return await respond(request, redirect="/accounts")

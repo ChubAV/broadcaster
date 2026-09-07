@@ -2,7 +2,7 @@ import re
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Form, Path, Query, Request
+from fastapi import APIRouter, Depends, Form, Path, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +17,12 @@ from app.models.schedule import Schedule
 from app.services.schedule_rules import is_schedule_complete
 from app.services.schedule_service import compute_next_run_at
 from app.pages import notices
-from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.pages.common import (
+    check_is_admin,
+    get_user_from_cookie,
+    is_same_origin,
+    templates,
+)
 from app.pages.htmx import respond
 
 # Определение полноты живёт в НЕЙТРАЛЬНОМ модуле, от которого зависят и этот
@@ -1053,6 +1058,13 @@ async def schedules_delete(
         # незаметно пройденный редирект и целый документ входа, подставленный в
         # область свопа.
         return await respond(request, redirect="/login")
+
+    # СВЕРКА ИСТОЧНИКА — ПОСЛЕ ПРАВ И ДО ЛЮБОГО ОБРАЩЕНИЯ К БАЗЕ (`WR-07`,
+    # ревизия 2026-09-04; прецедент — `CR-02` ревизии Фазы 6). Отказ по
+    # происхождению не имеет права стать признаком существования строки, поэтому
+    # он стои́т ВЫШЕ выборки, а не рядом с ответом.
+    if not is_same_origin(request):
+        return Response(status_code=403)
 
     result = await db.execute(
         select(Schedule)
