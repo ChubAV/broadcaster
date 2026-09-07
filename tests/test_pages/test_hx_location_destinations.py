@@ -726,6 +726,152 @@ def test_the_static_rule_does_not_cancel_itself():
     )
 
 
+# --- ЗАДАЧА 3 (план 10-19): ГЕЙТ ЧИТАЕТ ЦЕПЬ ШАБЛОНА, А НЕ ОДИН ФАЙЛ ---------
+
+# ⚠️ СИНТЕТИЧЕСКАЯ ЦЕПЬ ЖИВЁТ В ПАМЯТИ, И ФАЙЛЫ ДЕРЕВА НЕ ПРАВЯТСЯ — приём взят
+# у `test_a_reinstated_top_level_binding_reddens_the_static_rule`. Форма звеньев
+# снята ЧТЕНИЕМ живых шаблонов проекта: `{% extends "…" %}` первой строкой,
+# `{% include "…" %}` в `<head>` и в теле, имена в двойных кавычках.
+#
+# Оба объявления цепи сидят ВНУТРИ немедленно вызываемой функции, то есть на
+# верхнем уровне их нет: чистая половина контроля обязана давать НОЛЬ находок,
+# иначе контроль не отличал бы работу от красноты всегда.
+SYNTHETIC_SHELL_CHAIN = {
+    "synthetic/target.html": (
+        '{% extends "synthetic/base.html" %}\n'
+        "{% block content %}\n"
+        "<script>\n(function () { const inner = 1; })();\n</script>\n"
+        "{% endblock %}\n"
+    ),
+    "synthetic/base.html": (
+        "<html><head>\n"
+        '{% include "synthetic/includes/config.html" %}\n'
+        "</head><body>{% block content %}{% endblock %}</body></html>\n"
+    ),
+    "synthetic/includes/config.html": (
+        "<script>\n(function () { const cfg = 1; })();\n</script>\n"
+    ),
+}
+
+# Объявление верхнего уровня, которое контроль сажает в БАЗУ — не в файл цели.
+SHELL_LEVEL_BINDING_MARKUP = "<script>\nconst SHELL_LEVEL_BINDING = 1;\n</script>\n"
+
+
+def test_control_a_top_level_binding_in_the_shell_reddens_the_chain_rule():
+    """ГЛАВНОЕ ДОКАЗАТЕЛЬСТВО: разбор видит объявление в БАЗЕ, а не только в цели.
+
+    Заголовок перехода подменяет содержимое тела ЦЕЛИКОМ и исполняет ВСЕ узлы
+    сценария подменённого тела — включая инлайн-скрипты базового шаблона и
+    включаемых партиалов. Разбор ОДНОГО файла цели этого не видит: `const` в
+    `base.html` убил бы клиентский слой ВСЕХ двенадцати целей, а гейт остался бы
+    зелёным — дословный возврат регрессии, на которую фаза потратила круг.
+
+    ⚠️ КОНТРОЛЬ ДВУХПОЛОВИННЫЙ, И ВТОРАЯ ПОЛОВИНА ОБЯЗАТЕЛЬНА. Та же цепь БЕЗ
+    посаженного объявления обязана давать НОЛЬ находок: без неё контроль не
+    отличал бы работу правила от красноты всегда.
+    """
+    clean = dict(SYNTHETIC_SHELL_CHAIN)
+    assert not _top_level_bindings_of_chain(
+        "synthetic/target.html", clean.__getitem__
+    ), (
+        "чистая половина контроля дала находки — значит контроль краснит всегда "
+        "и о посаженном объявлении не утверждает ничего"
+    )
+
+    planted = dict(SYNTHETIC_SHELL_CHAIN)
+    planted["synthetic/base.html"] = planted["synthetic/base.html"].replace(
+        "<html><head>\n", "<html><head>\n" + SHELL_LEVEL_BINDING_MARKUP, 1
+    )
+    assert planted["synthetic/base.html"] != SYNTHETIC_SHELL_CHAIN[
+        "synthetic/base.html"
+    ], "мутация не применилась — образец базы разъехался"
+
+    findings = _top_level_bindings_of_chain(
+        "synthetic/target.html", planted.__getitem__
+    )
+    assert findings, (
+        "объявление верхнего уровня, посаженное в БАЗУ цели, разбором не найдено "
+        "— гейт по-прежнему читает один файл, а рантайм исполняет всю цепь"
+    )
+    links = [link for link, _, _, _ in findings]
+    names = [name for _, _, _, name in findings]
+    lines = [line for _, line, _, _ in findings]
+    assert "synthetic/base.html" in links, (
+        f"отказ не называет ИМЕНИ БАЗОВОГО файла: получено {findings}. Читатель "
+        "обязан узнать, В КАКОМ звене цепи сидит объявление, а не только какая "
+        "цель им отравлена"
+    )
+    assert "SHELL_LEVEL_BINDING" in names, (
+        f"отказ не называет ИМЕНИ посаженного объявления: получено {findings}"
+    )
+    assert all(line > 0 for line in lines), (
+        f"отказ не называет номера строки: получено {findings}"
+    )
+
+
+def test_the_template_chain_terminates_on_mutually_including_templates():
+    """ЦИКЛЫ НЕВЫРАЗИМЫ: взаимное включение не даёт бесконечного обхода.
+
+    Правило, висящее на взаимном включении, отключат — и вместе с ним отключат
+    охват, ради которого оно заведено. Разворот обязан вести множеством уже
+    посещённых звеньев.
+    """
+    ring = {
+        "synthetic/ring_a.html": '{% include "synthetic/ring_b.html" %}\n',
+        "synthetic/ring_b.html": '{% include "synthetic/ring_a.html" %}\n',
+    }
+    chain = _template_chain("synthetic/ring_a.html", ring.__getitem__)
+    assert chain == set(ring), (
+        f"обход взаимно включающих шаблонов дал {sorted(chain)}, а обязан дать "
+        f"{sorted(ring)} — ровно два звена, и ни одного повтора"
+    )
+
+
+def test_a_missing_chain_link_reddens_the_chain_assembly_loudly():
+    """ОТСУТСТВУЮЩЕЕ ЗВЕНО КРАСНИТ ГРОМКО И С ИМЕНЕМ.
+
+    Молча пропущенное звено вернуло бы ровно ту слепую зону, ради которой цепь и
+    заводится: читатель получил бы зелёное правило, не разобравшее половину того,
+    что исполнит рантайм.
+    """
+    broken = {"synthetic/orphan.html": '{% extends "synthetic/absent.html" %}\n'}
+    with pytest.raises(AssertionError) as failure:
+        _template_chain("synthetic/orphan.html", broken.__getitem__)
+    message = str(failure.value)
+    assert "synthetic/absent.html" in message, (
+        f"отказ не называет ИМЕНИ отсутствующего звена: получено {message!r}"
+    )
+    assert "synthetic/orphan.html" in message, (
+        f"отказ не называет звена, которое на отсутствующее ссылается: {message!r}"
+    )
+
+
+def test_an_unrecognised_landing_address_reddens_the_transition_scan():
+    """НЕРАСПОЗНАННЫЙ АДРЕС КРАСНИТ, А НЕ ВЫПАДАЕТ ИЗ СОПОСТАВЛЕНИЯ.
+
+    Вызов, для которого разборщик не вывел ни одной формы адреса, прежде просто
+    не участвовал в сопоставлении с перечнем целей: молча выпавший вызов
+    неотличим от вызова, у которого цели нет, и новый экран-цель приезжал бы
+    незамеченным.
+    """
+    synthetic = [
+        (
+            "synthetic_page.py",
+            "def view(request):\n"
+            "    return respond(request, redirect=PREFIX + tail())\n",
+        )
+    ]
+    with pytest.raises(AssertionError) as failure:
+        _transition_destination_calls(synthetic)
+    message = str(failure.value)
+    assert "synthetic_page.py" in message, (
+        f"отказ не называет ИМЕНИ модуля: получено {message!r}"
+    )
+    assert ":2" in message, (
+        f"отказ не называет НОМЕРА СТРОКИ вызова: получено {message!r}"
+    )
+
+
 def test_every_exempt_template_carries_a_non_empty_rationale():
     """У каждой записи перечня изъятий основание НЕПУСТО.
 
