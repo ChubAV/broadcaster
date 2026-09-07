@@ -15,8 +15,6 @@ from html import unescape
 from pathlib import Path
 from typing import NamedTuple
 
-import pytest
-
 from app.pages import notices as app_notices
 from app.pages.common import templates
 from tests.conftest import run_node_script

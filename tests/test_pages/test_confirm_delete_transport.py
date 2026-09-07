@@ -1932,7 +1932,9 @@ async def test_control_negative_a_shifted_identifier_reddens_the_sameness_check(
     )
 
     with arranged.context():
-        first = await client.post(
+        # Запрос ради СОСТОЯНИЯ «строка уже удалена», ответ предметом правила не
+        # является: сличаются ответы ПОВТОРА и КОНТРОЛЯ, а не первого удаления.
+        await client.post(
             arranged.url,
             data=arranged.data,
             headers=HTMX_HEADERS,
