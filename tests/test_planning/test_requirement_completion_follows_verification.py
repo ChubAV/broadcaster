@@ -43,6 +43,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PLANNING_ROOT = PROJECT_ROOT / ".planning"
 REQUIREMENTS_PATH = PLANNING_ROOT / "REQUIREMENTS.md"
@@ -525,6 +527,49 @@ def test_the_verification_index_is_built_by_walking_the_whole_record_tree():
         "в индексе нет ни одного отчёта архивной фазы — значит обход выродился в "
         "чтение одного каталога, и переезд фазы в архив выключил бы правило молча"
     )
+
+
+def test_control_two_reports_of_one_number_in_different_milestones_coexist(tmp_path):
+    """ЗУБЫ КЛЮЧА-ПАРЫ: один номер в ДВУХ вехах даёт ДВА ключа, а не один.
+
+    Синтетическое дерево двух вех: отчёт номера `91` лежит в каталоге фаз
+    (расположение действующей вехи) И в каталоге архивной вехи. Ключ, состоящий из
+    ОДНОГО номера, свёл бы их в один и молча оставил бы в индексе последний по
+    обходу; с этого мгновения завершённая строка сверялась бы с вердиктом ЧУЖОЙ
+    фазы, а несущее правило продолжало бы зеленеть.
+
+    ⚠️ ВЕРДИКТЫ ЗАДАНЫ РАЗНЫМИ НАМЕРЕННО: при равных вердиктах контроль не отличил
+    бы два ключа от одного — он зеленел бы и на индексе, потерявшем один отчёт.
+    """
+    root = _fake_planning_root(tmp_path, {"91": "gaps_found"})
+    _fake_planning_root(tmp_path, {"91": PASSED_VERDICT}, milestone="v9.9")
+
+    index = _verification_status_by_milestone_and_phase(root)
+
+    assert set(index) == {(CURRENT_MILESTONE, "91"), ("v9.9", "91")}, sorted(index)
+    current = index[(CURRENT_MILESTONE, "91")]
+    archived = index[("v9.9", "91")]
+    assert current.verdict != archived.verdict, (
+        "вердикты двух вех совпали — контроль не отличил бы два ключа от одного"
+    )
+    assert current.milestone == CURRENT_MILESTONE and archived.milestone == "v9.9"
+
+
+def test_control_two_reports_of_one_number_in_one_milestone_fail_loudly(tmp_path):
+    """ЗУБЫ ГРОМКОГО ОТКАЗА: два отчёта одного номера в ОДНОЙ вехе краснят сборку.
+
+    Столкновение ключей НЕ разрешается ни «последним по сортировке», ни «первым»:
+    молчаливое разрешение и есть предмет находки. Сборка обязана ПАДАТЬ и называть
+    ОБА пути, оставляя решение человеку.
+    """
+    root = _fake_planning_root(tmp_path, {"91": "gaps_found"})
+    _fake_planning_root(tmp_path, {"91": PASSED_VERDICT}, slug="dvoynik")
+
+    with pytest.raises(AssertionError) as raised:
+        _verification_status_by_milestone_and_phase(root)
+
+    message = str(raised.value)
+    assert "91-synthetic" in message and "91-dvoynik" in message, message
 
 
 # --- две записи одного факта: флажок в теле файла и клетка таблицы ------------------
