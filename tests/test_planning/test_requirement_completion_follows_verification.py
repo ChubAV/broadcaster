@@ -289,6 +289,74 @@ def test_a_row_without_a_phase_is_declared_deferred_by_the_record_itself():
 # --- зубы: изменённая копия записи, а не правка файла дерева ------------------------
 
 
+def _fake_planning_root(tmp_path: Path, verdicts: dict[str, str | None]) -> Path:
+    """Синтетический корень записи: «номер фазы → вердикт», `None` — отчёта НЕТ ВОВСЕ.
+
+    ЗАЧЕМ КОРЕНЬ СИНТЕТИЧЕСКИЙ. Предмет отрицательного контроля обязан задаваться
+    САМИМ КОНТРОЛЕМ, а не состоянием проекта на день прогона. Контроль, питающийся
+    живым деревом, зеленеет ровно при том условии, что его фаза НЕ достигла цели:
+    как только вердикт её отчёта станет `passed`, утверждение о вердикте упадёт, и
+    чинить его придётся правкой утверждения — а это через круг превращает модуль в
+    тест, «который принято подгонять», то есть ровно в тот класс отказа, который
+    сам файл осуждает в своей шапке.
+
+    Отчёты раскладываются ПО ПОДКАТАЛОГАМ, а не плоско: индекс
+    `_verification_status_by_phase` собирается РЕКУРСИВНЫМ обходом (`rglob`), и
+    плоский корень не проверял бы того обхода, ради которого правило написано.
+    Тело отчёта открывается ТОЙ ЖЕ оградой frontmatter, какую читает
+    `_report_verdict`, — иначе синтетика молча давала бы вердикт `None`, и контроль
+    зеленел бы не на том, на чём думает.
+    """
+    for phase, verdict in verdicts.items():
+        if verdict is None:
+            continue
+        directory = tmp_path / "phases" / f"{phase}-synthetic"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f"{phase}-VERIFICATION.md").write_text(
+            "\n".join(
+                [
+                    _FRONTMATTER_FENCE,
+                    f"phase: {phase}-synthetic",
+                    f"status: {verdict}",
+                    _FRONTMATTER_FENCE,
+                    "",
+                    "Проза синтетического отчёта, которой правило не читает вовсе.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+    return tmp_path
+
+
+def _synthetic_requirements(rows) -> str:
+    """Синтетическая запись требований из троек «имя, клетка фазы, состояние».
+
+    ФОРМА СТРОКИ СНЯТА С `_ROW_RE` И С ЖИВОЙ ЗАПИСИ, а не взята из памяти:
+    разборщик требует ровно ТРЁХ столбцов и конца строки сразу после третьего
+    разделителя. Шапка таблицы и заголовок добавлены ради того, чтобы синтетика
+    читалась записью, а не голым перечнем; разбору они безразличны — имя строки
+    требуется формы `[A-Z0-9]+-\\d+`, которой ни одна строка шапки не отвечает.
+
+    Что синтетика ДЕЙСТВИТЕЛЬНО разобралась, утверждается ВНУТРИ каждого контроля
+    сличением числа строк с числом поданных троек: сборка, молча давшая пустой
+    вход, оставила бы контроль зеленеть ВАКУУМОМ.
+    """
+    lines = [
+        "# Синтетическая запись требований",
+        "",
+        "## Traceability",
+        "",
+        "| Требование | Фаза | Состояние |",
+        "|---|---|---|",
+    ]
+    lines += [
+        f"| {name} | {phase_cell} | {status} |" for name, phase_cell, status in rows
+    ]
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _with_status(text: str, requirement: str, status: str) -> str:
     """Копия записи с подменённой клеткой ОДНОГО требования. Файл дерева не правится."""
     pattern = re.compile(
@@ -301,30 +369,70 @@ def _with_status(text: str, requirement: str, status: str) -> str:
     return doctored
 
 
-def test_control_negative_a_premature_completion_reddens_the_rule():
-    """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ: воспроизведение самого события `0ea886d`.
+def test_control_negative_a_premature_completion_reddens_the_rule(tmp_path):
+    """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ: то же событие `0ea886d`, но НА СИНТЕТИКЕ.
 
-    `FORM-06` принадлежит Фазе 10, чей отчёт несёт `gaps_found`. Копия, где эта
-    клетка помечена завершённой, ОБЯЗАНА покраснеть, и отказ обязан назвать
-    требование, фазу и вердикт отчёта.
+    ОБА входа `premature_completions` задаются САМИМ КОНТРОЛЕМ: запись собрана
+    `_synthetic_requirements`, корень — `_fake_planning_root`. Прежняя форма читала
+    ЖИВОЕ дерево и утверждала его сегодняшний вердикт (`gaps_found`) дословно, то
+    есть зеленела ровно при том условии, что Фаза 10 НЕ достигла цели.
+
+    ⚠️ ОСНОВАНИЕ ВЫБОРА ИМЁН, А НЕ ПРОИЗВОЛ. Номер фазы `91` взят из диапазона,
+    которого у проекта нет и роадмап его не планирует, поэтому столкновение
+    синтетики с реальной фазой невыразимо. Префикс `SYN` не совпадает ни с одним
+    префиксом реестра требований (`FORM`, `FOUND`, `GATE`, `QUAL`, `PAY`, `FETCH`,
+    `EDIT`, `UPLD`, `E2E`), поэтому синтетическую строку нельзя принять за живую.
+
+    ПОЛОЖИТЕЛЬНЫЙ КОНТРОЛЬ НА ЖИВОЙ ЗАПИСИ ИЗ ЭТОЙ ФУНКЦИИ УБРАН НАМЕРЕННО: его
+    предмет дословно совпадал с несущим правилом
+    `test_no_requirement_is_marked_complete_before_its_phase_verification_passed`,
+    которое живого дерева не покидает. Его место занял СИНТЕТИЧЕСКИЙ положительный
+    контроль — `test_control_a_passed_verdict_in_the_synthetic_root_empties_the_finding`.
     """
-    original = REQUIREMENTS_PATH.read_text(encoding="utf-8")
-    assert not premature_completions(original, PLANNING_ROOT), (
-        "положительный контроль: на непрáвленой записи правило обязано быть зелено, "
-        "иначе отрицательный контроль не отличал бы работу от красноты всегда"
+    rows = [("SYN-01", "Phase 91", COMPLETED_STATUS)]
+    text = _synthetic_requirements(rows)
+    assert len(_requirement_rows(text)) == len(rows), (
+        "синтетическая запись дала не столько строк, сколько подано троек — "
+        "разборщик прочёл бы пустой вход, и контроль зеленел бы ВАКУУМОМ"
     )
 
-    doctored = _with_status(original, "FORM-06", COMPLETED_STATUS)
-    premature = premature_completions(doctored, PLANNING_ROOT)
+    premature = premature_completions(
+        text, _fake_planning_root(tmp_path, {"91": "gaps_found"})
+    )
 
     assert len(premature) == 1, _report(premature)
     only = premature[0]
-    assert only.requirement == "FORM-06"
+    assert only.requirement == "SYN-01"
     assert only.verdict == "gaps_found"
     message = str(only)
-    assert "FORM-06" in message and "Phase 10" in message and "gaps_found" in message, (
+    assert "SYN-01" in message and "Phase 91" in message and "gaps_found" in message, (
         f"отказ обязан называть требование, фазу и вердикт отчёта: {message}"
     )
+
+
+def test_control_a_passed_verdict_in_the_synthetic_root_empties_the_finding(tmp_path):
+    """ЗУБЫ ПЕРВОГО ОТРИЦАТЕЛЬНОГО КОНТРОЛЯ — МУТАЦИЕЙ ВХОДА, А НЕ ЗАЯВЛЕНИЕМ.
+
+    Та же синтетическая запись и тот же синтетический корень, что у контроля выше,
+    но вердикт фазы `91` подменён на `PASSED_VERDICT`.
+
+    ЧТО ДОКАЗЫВАЕТ МУТАЦИЯ: находка рождена ВЕРДИКТОМ ПОДАННОГО КОРНЯ, а не самим
+    присутствием завершённой строки в записи. Без этой половины синтетика заменила
+    бы вшитое состояние НЕПРОВЕРЕННЫМ — а это хуже, потому что незаметно: контроль
+    зеленел бы и на разборщике, возвращающем находку ВСЕГДА.
+    """
+    rows = [("SYN-01", "Phase 91", COMPLETED_STATUS)]
+    text = _synthetic_requirements(rows)
+    assert len(_requirement_rows(text)) == len(rows), (
+        "синтетическая запись дала не столько строк, сколько подано троек — "
+        "разборщик прочёл бы пустой вход, и контроль зеленел бы ВАКУУМОМ"
+    )
+
+    premature = premature_completions(
+        text, _fake_planning_root(tmp_path, {"91": PASSED_VERDICT})
+    )
+
+    assert not premature, _report(premature)
 
 
 def test_control_negative_two_premature_completions_are_both_named():
