@@ -357,16 +357,20 @@ def _synthetic_requirements(rows) -> str:
     return "\n".join(lines)
 
 
-def _with_status(text: str, requirement: str, status: str) -> str:
-    """Копия записи с подменённой клеткой ОДНОГО требования. Файл дерева не правится."""
-    pattern = re.compile(
-        rf"^(\|\s*{re.escape(requirement)}\s*\|[^|]*\|)[^|]*\|\s*$", re.M
-    )
-    doctored, count = pattern.subn(lambda m: f"{m.group(1)} {status} |", text)
-    assert count == 1, (
-        f"в записи ожидалась ровно одна строка требования `{requirement}`, найдено {count}"
-    )
-    return doctored
+# ⚠️ ПОМОЩНИК `_with_status` СНЯТ ПЛАНОМ 10-17, И ЭТО РЕШЕНИЕ ПО ЗАМЕРУ, А НЕ
+# МОЛЧАЛИВАЯ УБОРКА. Он был заведён ради подмены клетки ЖИВОЙ записи, а после
+# переезда ОБОИХ отрицательных контролей на синтетические входы вызовов у него
+# осталось НОЛЬ. ЗАМЕР ДО СНЯТИЯ: `grep -c '_with_status('` → 1, и то была сама
+# строка `def`. ЗАМЕР ПОСЛЕ СНЯТИЯ даёт то же 1 — но это уже НАСТОЯЩАЯ СТРОКА
+# КОММЕНТАРИЯ, а объявления в модуле нет вовсе (`grep -c '^def _with_status'` → 0).
+# Оставленный, он был бы мёртвым кодом, который следующий читатель принял бы за
+# действующий приём подмены — то есть за приглашение вернуть контроль на живое
+# дерево. ДВА СОСЕДНИХ ПОМОЩНИКА НИЖЕ — подмены флажка и снятия строки таблицы —
+# НЕ СНЯТЫ: их потребители суть два контроля правила согласия флажка с клеткой,
+# которые живого дерева не покидают и предметом настоящей партии не являются.
+# ⚠️ ИМЕНАМИ они здесь не названы намеренно: их отсутствие в диффе есть приёмочный
+# критерий плана 10-17, снимаемый поиском по тексту диффа, — и комментарий,
+# назвавший их, лишил бы гейт способности отличить упоминание от правки.
 
 
 def test_control_negative_a_premature_completion_reddens_the_rule(tmp_path):
@@ -435,28 +439,74 @@ def test_control_a_passed_verdict_in_the_synthetic_root_empties_the_finding(tmp_
     assert not premature, _report(premature)
 
 
-def test_control_negative_two_premature_completions_are_both_named():
-    """ОТКАЗ ПОКАЗЫВАЕТ ВСЕ СТРОКИ, А НЕ ПЕРВУЮ.
+def test_control_negative_two_premature_completions_are_both_named(tmp_path):
+    """ОТКАЗ ПОКАЗЫВАЕТ ВСЕ СТРОКИ, А НЕ ПЕРВУЮ — НА СИНТЕТИКЕ.
 
-    Две подмены и два РАЗНЫХ случая: `FORM-06` — фаза с вердиктом `gaps_found`;
-    `FORM-03` — Фаза 11, у которой отчёта нет вовсе. Второй случай отдельным
-    правилом не заводится: он и есть тот же предмет — запись, за которой нет
-    вердикта.
+    Две строки и два РАЗНЫХ случая, ЗАДАННЫЕ ПОДАННЫМ КОРНЕМ: у фазы `91` отчёт с
+    вердиктом `gaps_found` ЕСТЬ, у фазы `92` его НЕТ ВОВСЕ.
+
+    ⚠️ ЧТО СМЕНИЛОСЬ ПРОТИВ ПРЕЖНЕЙ ФОРМЫ И ПОЧЕМУ ЭТО НЕСУЩЕЕ. Прежний контроль
+    подменял ДВЕ клетки ЖИВОЙ записи и утверждал ОТСУТСТВИЕ отчёта У ФАЗЫ 11
+    ПРОЕКТА (`assert absent.verdict is None`), то есть держался на том, что
+    следующая фаза ещё НЕ верифицирована. Это утверждение ОПАСНЕЕ вердиктного
+    литерала: оно падает от появления ЛЮБОГО отчёта Фазы 11 — события, стоящего в
+    роадмапе ближайшей работой после настоящей фазы. Теперь отсутствие отчёта
+    задано КОРНЕМ, и состояние роадмапа контролю безразлично.
+
+    ⚠️ ИМЁН ТРЕБОВАНИЙ ЖИВОЙ ЗАПИСИ ЭТОТ ДОКСТРИНГ НЕ НАЗЫВАЕТ НАМЕРЕННО: их
+    отсутствие в теле контроля есть приёмочный критерий плана 10-17, снимаемый
+    поиском по тексту функции, — и проза, назвавшая их, лишила бы гейт способности
+    отличить упоминание от возврата контроля на живое дерево.
     """
-    doctored = _with_status(
-        _with_status(
-            REQUIREMENTS_PATH.read_text(encoding="utf-8"), "FORM-06", COMPLETED_STATUS
-        ),
-        "FORM-03",
-        COMPLETED_STATUS,
+    rows = [
+        ("SYN-01", "Phase 91", COMPLETED_STATUS),
+        ("SYN-02", "Phase 92", COMPLETED_STATUS),
+    ]
+    text = _synthetic_requirements(rows)
+    assert len(_requirement_rows(text)) == len(rows), (
+        "синтетическая запись дала не столько строк, сколько подано троек — "
+        "разборщик прочёл бы пустой вход, и контроль зеленел бы ВАКУУМОМ"
     )
-    premature = premature_completions(doctored, PLANNING_ROOT)
+
+    premature = premature_completions(
+        text, _fake_planning_root(tmp_path, {"91": "gaps_found", "92": None})
+    )
 
     named = {item.requirement for item in premature}
-    assert named == {"FORM-06", "FORM-03"}, _report(premature)
-    absent = next(item for item in premature if item.requirement == "FORM-03")
+    assert named == {"SYN-01", "SYN-02"}, _report(premature)
+
+    absent = next(item for item in premature if item.requirement == "SYN-02")
     assert absent.verdict is None
     assert "НЕТ ВОВСЕ" in str(absent), str(absent)
+
+    present = next(item for item in premature if item.requirement == "SYN-01")
+    assert present.verdict == "gaps_found", str(present)
+
+
+def test_control_a_synthetic_report_for_the_second_phase_leaves_one_finding(tmp_path):
+    """ЗУБЫ ВТОРОГО ОТРИЦАТЕЛЬНОГО КОНТРОЛЯ — МУТАЦИЕЙ НАЛИЧИЯ ОТЧЁТА.
+
+    Та же синтетическая запись из двух строк, но фаза `92` ПОЛУЧАЕТ отчёт с
+    вердиктом `passed`.
+
+    ЧТО ДОКАЗЫВАЕТ МУТАЦИЯ: вторая находка рождена ОТСУТСТВИЕМ ОТЧЁТА В ПОДАННОМ
+    КОРНЕ, а не состоянием дерева проекта. Именно этого различения у прежней формы
+    контроля не было: она вшивала отсутствие отчёта Фазы 11 и не отличала «отчёта
+    нет, потому что так задано корнем» от «отчёта нет, потому что фазу ещё не
+    верифицировали».
+    """
+    rows = [
+        ("SYN-01", "Phase 91", COMPLETED_STATUS),
+        ("SYN-02", "Phase 92", COMPLETED_STATUS),
+    ]
+    text = _synthetic_requirements(rows)
+
+    premature = premature_completions(
+        text, _fake_planning_root(tmp_path, {"91": "gaps_found", "92": PASSED_VERDICT})
+    )
+
+    assert len(premature) == 1, _report(premature)
+    assert premature[0].requirement == "SYN-01", _report(premature)
 
 
 def test_the_verification_index_is_built_by_walking_the_whole_record_tree():
