@@ -65,12 +65,12 @@ PASSED_VERDICT = "passed"
 # ниже, дословно: «строк таблицы состояний в `.planning/REQUIREMENTS.md` найдено 44,
 # а объявлено 0». ЧЕМ ИЗМЕРЕНО — самим разборщиком `_requirement_rows` на записи
 # дерева, а не счётом глазом. КАКИМ ПЛАНОМ — 10-14 (2026-09-04, Фаза 10).
-# ⚠️ ОРИЕНТИР ПЛАНА — 41 — И РАСХОЖДЕНИЕ ОБЪЯСНЕНО: 41 есть число требований ВЕХИ
-# v2.1, и ровно столько строк несут клетку фазы. Таблица держит СВЕРХ них ТРИ
-# строки, заведённые 2026-08-29 и объявленные отложенными к вехе v2.2 (`EDIT-01`,
-# `UPLD-01`, `E2E-01`), — их клетка фазы читается `— (v2.2)`. Ориентир не был
-# ошибкой: он верно называл вселенную v2.1, но не число СТРОК таблицы, а стережётся
-# здесь именно число строк.
+# ⚠️ ОРИЕНТИР ПЛАНА — 41 — И РАСХОЖДЕНИЕ ОБЪЯСНЕНО: 41 есть число требований
+# ДЕЙСТВУЮЩЕЙ ВЕХИ, и ровно столько строк несут клетку фазы. Таблица держит СВЕРХ них
+# ТРИ строки, заведённые 2026-08-29 и объявленные отложенными к СЛЕДУЮЩЕЙ вехе
+# (`EDIT-01`, `UPLD-01`, `E2E-01`), — их клетка фазы имени фазы не несёт. Ориентир не
+# был ошибкой: он верно называл вселенную действующей вехи, но не число СТРОК
+# таблицы, а стережётся здесь именно число строк.
 REQUIREMENT_ROWS_DECLARED = 44
 
 _ROW_RE = re.compile(
@@ -81,6 +81,27 @@ _PHASE_RE = re.compile(r"Phase\s+(?P<number>\d+(?:\.\d+)?)")
 _VERIFICATION_FILE_RE = re.compile(r"^(?P<number>\d+(?:\.\d+)?)-VERIFICATION\.md$")
 _STATUS_FIELD_RE = re.compile(r"^status:\s*(?P<value>[^\s#]+)\s*$")
 _FRONTMATTER_FENCE = "---"
+
+# СОГЛАШЕНИЕ О РАСПОЛОЖЕНИИ ЗАПИСИ, СНЯТОЕ ЗАМЕРОМ ПО ДЕРЕВУ 2026-09-07, а не взятое
+# из памяти. Обойдены все 13 файлов `*-VERIFICATION.md` под `.planning/`:
+#   • отчёт ДЕЙСТВУЮЩЕЙ вехи — `.planning/phases/<NN-слог>/<NN>-VERIFICATION.md`
+#     (найдено 4: фазы 07, 08, 09, 10). ИМЕНИ ВЕХИ В ПУТИ НЕТ ВОВСЕ;
+#   • отчёт АРХИВНОЙ вехи — `.planning/milestones/<веха>-phases/<NN-слог>/…`
+#     (найдено 7: фазы 01…06 и 05.1, каталог вехи — `v2.0-phases`);
+#   • отчёт БЫСТРОЙ РАБОТЫ — `.planning/quick/<слог>/<слог>-VERIFICATION.md`
+#     (найдено 2). Номера фазы его имя не несёт, и в индекс он не попадает —
+#     основание записано докстрингом сборки индекса ниже.
+MILESTONES_DIR_NAME = "milestones"
+_ARCHIVE_MILESTONE_DIR_RE = re.compile(r"^(?P<milestone>.+)-phases$")
+
+# МЕТКА РАСПОЛОЖЕНИЯ, А НЕ ИМЯ ВЕХИ, И ЭТО РАЗЛИЧЕНИЕ НЕСУЩЕЕ. Отчёты действующей
+# вехи лежат в каталоге фаз, имени вехи в их пути нет, поэтому вывести это имя из
+# пути НЕЧЕМ — и вписывать его сюда литералом ЗАПРЕЩЕНО: константа с именем вехи
+# устарела бы в день её закрытия, то есть правило пришлось бы чинить подгонкой
+# утверждения под сегодняшнее дерево — ровно тем движением, против которого написан
+# весь этот модуль. Метка означает «та веха, чьи фазы лежат в каталоге фаз», и
+# значением взята строка, каталогом вехи быть не могущая.
+CURRENT_MILESTONE = "«действующая веха»"
 
 
 def _normalised_phase(number: str) -> str:
@@ -133,8 +154,13 @@ def _requirement_rows(text: str) -> list[RequirementRow]:
 
 @dataclass(frozen=True)
 class VerificationReport:
-    """Вердикт отчёта верификации одной фазы и путь, которым он найден."""
+    """Вердикт отчёта верификации одной фазы ОДНОЙ вехи и путь, которым он найден.
 
+    Веха — половина ключа индекса: номер фазы уникален ВНУТРИ вехи, а обход индекса
+    рекурсивен и захватывает архив, поэтому одного номера ключом мало.
+    """
+
+    milestone: str
     phase: str
     verdict: str | None
     path: Path
@@ -142,6 +168,30 @@ class VerificationReport:
     @property
     def has_passed(self) -> bool:
         return self.verdict == PASSED_VERDICT
+
+
+def _report_milestone(path: Path, root: Path) -> str:
+    """Веха отчёта, выведенная ИЗ ЕГО ПУТИ по соглашению о расположении записи.
+
+    Отчёт под `<корень>/milestones/<веха>-phases/…` принадлежит НАЗВАННОЙ вехе, и
+    имя берётся из каталога. Всякий другой отчёт лежит в каталоге фаз действующей
+    вехи и получает МЕТКУ `CURRENT_MILESTONE`, а не имя: имени вехи в его пути нет
+    вовсе, и вписанное сюда оно устарело бы в день закрытия вехи.
+
+    Путь ВНЕ поданного корня разбору не подлежит и получает ту же метку: корень
+    приходит параметром, и синтетическое дерево контроля обязано читаться тем же
+    разбором, что и живое.
+    """
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return CURRENT_MILESTONE
+    parts = relative.parts
+    if len(parts) >= 2 and parts[0] == MILESTONES_DIR_NAME:
+        named = _ARCHIVE_MILESTONE_DIR_RE.match(parts[1])
+        if named:
+            return named.group("milestone")
+    return CURRENT_MILESTONE
 
 
 def _report_verdict(text: str) -> str | None:
@@ -158,8 +208,10 @@ def _report_verdict(text: str) -> str | None:
     return None
 
 
-def _verification_status_by_phase(root: Path) -> dict[str, VerificationReport]:
-    """Индекс вердиктов по номеру фазы, собранный ОБХОДОМ ВСЕГО дерева записи.
+def _verification_status_by_milestone_and_phase(
+    root: Path,
+) -> dict[tuple[str, str], VerificationReport]:
+    """Индекс вердиктов по паре «веха, фаза», собранный ОБХОДОМ ВСЕГО дерева записи.
 
     Обход, а не чтение одного каталога: переезд фазы в архив
     (`.planning/milestones/…`) не имеет права молча выключить правило — отчёт
@@ -171,14 +223,38 @@ def _verification_status_by_phase(root: Path) -> dict[str, VerificationReport]:
     несёт номер у всех нумерованных фаз и только у них. Второй, независимый способ
     разошёлся бы с первым молча. Отчёт без номера в имени в индекс НЕ ПОПАДАЕТ: он
     принадлежит не фазе, а быстрой работе, и таблица состояний на него не ссылается.
+
+    КЛЮЧ — ПАРА, А НЕ НОМЕР, и основание в том же обходе: номер фазы уникален ВНУТРИ
+    вехи, потому что нумерация каждой вехи ведётся своя, а обход намеренно захватывает
+    архив. Ключ из одного номера свёл бы отчёты РАЗНЫХ вех в один и молча оставил бы
+    последний по обходу — с этого мгновения завершённая строка требования сверялась бы
+    с вердиктом ЧУЖОЙ фазы, а несущее правило продолжало бы зеленеть.
+
+    СТОЛКНОВЕНИЕ КЛЮЧЕЙ — ГРОМКИЙ ОТКАЗ ВНУТРИ СБОРКИ, а не возврат признака и не
+    выбор «последнего по сортировке»: молчаливое разрешение и есть предмет находки, а
+    признак, который потребитель может не прочитать, есть то же молчаливое разрешение
+    под другим именем. Решение оставляется человеку, и отказ называет ОБА пути.
     """
-    index: dict[str, VerificationReport] = {}
+    index: dict[tuple[str, str], VerificationReport] = {}
     for path in sorted(root.rglob("*-VERIFICATION.md")):
         named = _VERIFICATION_FILE_RE.match(path.name)
         if not named:
             continue
         phase = _normalised_phase(named.group("number"))
-        index[phase] = VerificationReport(
+        key = (_report_milestone(path, root), phase)
+        clash = index.get(key)
+        if clash is not None:
+            raise AssertionError(
+                f"два отчёта верификации на один ключ «веха, фаза» {key}:\n"
+                f"  {clash.path}\n"
+                f"  {path}\n"
+                f"индекс МОЛЧА вытеснил бы один отчёт другим, и завершённая строка "
+                f"требования сверялась бы с вердиктом ЧУЖОЙ фазы. Разрешать это "
+                f"выбором «последнего по обходу» нельзя: решение принадлежит человеку "
+                f"— либо один из отчётов лежит не там, либо веха выведена неверно"
+            )
+        index[key] = VerificationReport(
+            milestone=key[0],
             phase=phase,
             verdict=_report_verdict(path.read_text(encoding="utf-8")),
             path=path,
@@ -210,7 +286,10 @@ class PrematureCompletion:
 
 
 def premature_completions(
-    requirements_text: str, planning_root: Path
+    requirements_text: str,
+    planning_root: Path,
+    *,
+    milestone: str = CURRENT_MILESTONE,
 ) -> list[PrematureCompletion]:
     """ВСЕ несогласные строки одним списком, а не первая.
 
@@ -220,13 +299,20 @@ def premature_completions(
     Строки, НЕ помеченные завершёнными, не судятся вовсе. Отсутствие отчёта у
     ЗАВЕРШЁННОЙ строки — тот же случай, а не оправдание: запись, за которой нет
     вердикта, и есть предмет.
+
+    ВЕХА ПРИХОДИТ ОДНИМ ЯВНЫМ ПАРАМЕТРОМ, и выбор назван здесь, а не оставлен
+    читателю: индекс ключуется парой, поэтому вехой строки надо откуда-то
+    располагать, а ВТОРОЙ источник вехи внутри этой функции разошёлся бы с первым
+    при первой же правке — то же основание, которым модуль объясняет параметризацию
+    своих входов. Умолчание — метка расположения действующей вехи: запись живого
+    дерева и есть запись действующей вехи.
     """
-    reports = _verification_status_by_phase(planning_root)
+    reports = _verification_status_by_milestone_and_phase(planning_root)
     premature: list[PrematureCompletion] = []
     for row in _requirement_rows(requirements_text):
         if not row.is_completed:
             continue
-        report = reports.get(row.phase) if row.phase is not None else None
+        report = reports.get((milestone, row.phase)) if row.phase is not None else None
         if report is not None and report.has_passed:
             continue
         premature.append(
@@ -291,7 +377,13 @@ def test_a_row_without_a_phase_is_declared_deferred_by_the_record_itself():
 # --- зубы: изменённая копия записи, а не правка файла дерева ------------------------
 
 
-def _fake_planning_root(tmp_path: Path, verdicts: dict[str, str | None]) -> Path:
+def _fake_planning_root(
+    tmp_path: Path,
+    verdicts: dict[str, str | None],
+    *,
+    milestone: str = CURRENT_MILESTONE,
+    slug: str = "synthetic",
+) -> Path:
     """Синтетический корень записи: «номер фазы → вердикт», `None` — отчёта НЕТ ВОВСЕ.
 
     ЗАЧЕМ КОРЕНЬ СИНТЕТИЧЕСКИЙ. Предмет отрицательного контроля обязан задаваться
@@ -303,16 +395,31 @@ def _fake_planning_root(tmp_path: Path, verdicts: dict[str, str | None]) -> Path
     сам файл осуждает в своей шапке.
 
     Отчёты раскладываются ПО ПОДКАТАЛОГАМ, а не плоско: индекс
-    `_verification_status_by_phase` собирается РЕКУРСИВНЫМ обходом (`rglob`), и
+    `_verification_status_by_milestone_and_phase` собирается РЕКУРСИВНЫМ обходом, и
     плоский корень не проверял бы того обхода, ради которого правило написано.
     Тело отчёта открывается ТОЙ ЖЕ оградой frontmatter, какую читает
     `_report_verdict`, — иначе синтетика молча давала бы вердикт `None`, и контроль
     зеленел бы не на том, на чём думает.
+
+    ВЕХА И СЛОГ КАТАЛОГА — ИМЕНОВАННЫЕ ПАРАМЕТРЫ С УМОЛЧАНИЯМИ, И УМОЛЧАНИЯ ВЫБРАНЫ
+    ТАК, ЧТОБЫ НИ ОДИН ПРЕЖНИЙ КОНТРОЛЬ НЕ ПРАВИЛСЯ: без них сборка раскладывает
+    отчёты ровно туда же, куда раскладывала. Сборка ДОБАВЛЯЮЩАЯ, а не замещающая, —
+    повторный вызов на том же `tmp_path` кладёт в дерево ещё отчёты, и этим
+    выражается дерево ДВУХ вех, а равно и столкновение двух отчётов одного номера
+    ВНУТРИ одной вехи (тот же номер, другой слог каталога).
+
+    РАСКЛАДКА ПОВТОРЯЕТ СОГЛАШЕНИЕ ЖИВОГО ДЕРЕВА, снятое замером: отчёт действующей
+    вехи — под `phases/`, отчёт названной вехи — под `milestones/<веха>-phases/`.
+    Синтетика, разложенная иначе, читалась бы не тем разбором, что живая запись.
     """
+    if milestone == CURRENT_MILESTONE:
+        milestone_root = tmp_path / "phases"
+    else:
+        milestone_root = tmp_path / MILESTONES_DIR_NAME / f"{milestone}-phases"
     for phase, verdict in verdicts.items():
         if verdict is None:
             continue
-        directory = tmp_path / "phases" / f"{phase}-synthetic"
+        directory = milestone_root / f"{phase}-{slug}"
         directory.mkdir(parents=True, exist_ok=True)
         (directory / f"{phase}-VERIFICATION.md").write_text(
             "\n".join(
@@ -517,7 +624,7 @@ def test_the_verification_index_is_built_by_walking_the_whole_record_tree():
     Пустой либо однокаталожный индекс зеленел бы ВАКУУМОМ: завершённые строки
     сверялись бы не с чем.
     """
-    index = _verification_status_by_phase(PLANNING_ROOT)
+    index = _verification_status_by_milestone_and_phase(PLANNING_ROOT)
     assert index, "индекс отчётов пуст — правилу не с чем сверяться"
 
     archived = [
@@ -621,7 +728,8 @@ class Disagreement:
 def flag_cell_disagreements(text: str) -> dict[str, list[Disagreement]]:
     """ТРИ множества несогласий, названные РАЗДЕЛЬНО.
 
-    Вселенная — строки таблицы, несущие клетку фазы, то есть требования вехи v2.1.
+    Вселенная — строки таблицы, несущие клетку фазы, то есть требования действующей
+    вехи.
     Строки без фазы отложены к следующей вехе самой записью и флажка не несут по
     решению; законность такой клетки стережёт отдельное правило, поэтому сузить
     вселенную стиранием фазы не выйдет молча.
@@ -701,7 +809,8 @@ def test_the_flag_and_the_status_cell_of_every_requirement_agree():
     с вердиктом отчёта. Настоящее правило ловит ДРУГОЙ случай: когда поедет ОДНО из
     двух. Разделение предметов записано здесь, а не оставлено читателю.
 
-    Вселенная правила — строки, несущие клетку фазы, то есть требования вехи v2.1.
+    Вселенная правила — строки, несущие клетку фазы, то есть требования действующей
+    вехи.
     Строки без фазы отложены к следующей вехе САМОЙ ЗАПИСЬЮ и флажка не несут по
     решению; что клетка без фазы законна только у отложенной строки, стережёт
     отдельное правило выше — иначе вселенную можно было бы сузить стиранием фазы.
