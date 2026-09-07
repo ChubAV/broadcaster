@@ -34,6 +34,7 @@ from app.pages.htmx import (
     HX_REQUEST_HEADER,
     NOTICE_QUERY_KEY,
     HtmxRefusal,
+    _with_notice,
     is_htmx,
     location_response,
     refuse,
@@ -466,6 +467,73 @@ async def test_the_outcome_code_is_appended_to_the_degraded_address(notice_regis
     )
     assert with_query.headers["location"] == (
         f"/ads/5/edit?tab=schedule&{NOTICE_QUERY_KEY}={KNOWN_NOTICE}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_outcome_code_is_placed_before_the_anchor(notice_registry):
+    """Код исхода встаёт ПЕРЕД якорем, а не внутрь фрагмента (`IN-03`).
+
+    Якорь НЕ ЕСТЬ часть строки запроса. Параметр, поставленный после него,
+    уезжает ВНУТРЬ фрагмента: приземлившаяся страница такого кода не видит и
+    плашку не рисует, не сказав об этом ни слова. Разделитель поэтому выбирается
+    по наличию `?` В ЧАСТИ ДО ЯКОРЯ, а не во всём адресе.
+
+    ⚠️ ОЖИДАНИЯ ВЫПИСАНЫ ПОСИМВОЛЬНО, А НЕ ВХОЖДЕНИЕМ ПОДСТРОКИ. Предмет здесь —
+    ПОРЯДОК частей адреса, и правило, проверяющее вхождение, зеленело бы на обоих
+    порядках сразу, то есть не проверяло бы ровно того, ради чего заведено.
+
+    ⚠️ ДВА ПЕРВЫХ СЛУЧАЯ — АДРЕС БЕЗ ЯКОРЯ — СТОЯТ ЗДЕСЬ НАМЕРЕННО: правка
+    обязана быть невидимой там, где менять поведение не просили.
+    """
+    code = f"{NOTICE_QUERY_KEY}={KNOWN_NOTICE}"
+    cases = (
+        ("/profile", f"/profile?{code}"),
+        ("/ads/5/edit?tab=schedule", f"/ads/5/edit?tab=schedule&{code}"),
+        ("/ads/5/edit#sched-7", f"/ads/5/edit?{code}#sched-7"),
+        ("/ads/5/edit?sched=7#sched-7", f"/ads/5/edit?sched=7&{code}#sched-7"),
+    )
+
+    for redirect, expected in cases:
+        response = await respond(_request(), redirect=redirect, notice=KNOWN_NOTICE)
+        assert response.headers["location"] == expected, (
+            f"адрес приземления собран не тем порядком частей: из {redirect!r} "
+            f"получено {response.headers['location']!r}, ожидалось {expected!r}"
+        )
+
+
+def test_control_negative_an_anchor_unaware_assembly_puts_the_code_inside_the_fragment():
+    """ЧТО ДОКАЗЫВАЕТ: ПРЕЖНЯЯ форма сборки уводила код ВНУТРЬ фрагмента.
+
+    ⚠️ ПРЕЖНЯЯ ФОРМА ЖИВЁТ ВНУТРИ ЭТОГО КОНТРОЛЯ, А НЕ В БОЕВОМ МОДУЛЕ. Контроль
+    обязан ПОКАЗАТЬ, что было бы, а не заставлять читателя это воображать: без
+    него утверждение соседнего правила читалось бы как вкусовое предпочтение
+    порядка частей адреса.
+
+    Зубы у контроля настоящие: он сверяет живую сборку с прежней и краснеет,
+    если живая к прежней вернётся.
+    """
+    code = f"{NOTICE_QUERY_KEY}={KNOWN_NOTICE}"
+    redirect = "/ads/5/edit?sched=7#sched-7"
+
+    # ПРЕЖНЯЯ ФОРМА: разделитель выбирается по наличию `?` во ВСЁМ адресе.
+    separator = "&" if "?" in redirect else "?"
+    anchor_unaware = f"{redirect}{separator}{code}"
+
+    assert anchor_unaware == f"/ads/5/edit?sched=7#sched-7&{code}"
+    assert anchor_unaware.split("#", 1)[1] == f"sched-7&{code}", (
+        "прежняя форма перестала уводить код внутрь фрагмента — контроль "
+        "показывает не тот отказ, ради которого заведён"
+    )
+
+    live = _with_notice(redirect, KNOWN_NOTICE)
+
+    assert live != anchor_unaware, (
+        "живая сборка адреса вернулась к прежней форме: код исхода снова уезжает "
+        "внутрь фрагмента, и плашка на пришедшем экране не нарисуется"
+    )
+    assert live.split("#", 1)[1] == "sched-7", (
+        f"якорь перестал быть последней частью адреса: {live!r}"
     )
 
 
