@@ -2475,6 +2475,45 @@ VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
     ),
     _ValidationRefusalDivergence(
         entry=(
+            "app/pages/schedules.py::POST /schedules/{schedule_id}/edit → "
+            "форма ad_id"
+        ),
+        alias="AdIdForm",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "значение приезжает скрытым полем `value=\"{{ ad.id }}\"` "
+            "(`app/templates/ads/includes/sched_card.html:157`), то есть "
+            "собирается сервером из объявления ОТКРЫТОГО экрана. "
+            "⚠️ ЭТОГО ВХОДА ОТЧЁТ ВЕРИФИКАЦИИ НЕ НАЗЫВАЛ: он считал ИСХОДЫ "
+            "пяти запросов и маршрут правки посчитал ОДИН РАЗ — через "
+            "идентификатор адреса, — тогда как маршрут несёт ТРИ ограниченных "
+            "параметра. Перечень стои́т на ЗАМЕРЕ, и потому входов семь, а не "
+            "пять"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry=(
+            "app/pages/schedules.py::POST /schedules/{schedule_id}/edit → "
+            "форма account_id"
+        ),
+        alias="AccountIdForm",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "значение шлётся РАДИОКНОПКАМИ `value=\"{{ acc.id }}\"` "
+            "(`app/templates/ads/includes/sched_card.html:170`), а при снятом "
+            "выборе не шлётся вовсе. "
+            "⚠️ ЭТОГО ВХОДА ОТЧЁТ ВЕРИФИКАЦИИ НЕ НАЗЫВАЛ — по тому же счёту "
+            "ИСХОДОВ вместо ВХОДОВ, что и у соседней записи маршрута правки"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry=(
             "app/pages/schedules.py::POST /schedules/{schedule_id}/toggle → "
             "адрес schedule_id"
         ),
@@ -2514,9 +2553,21 @@ VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
 # запись разошлась с кодом в ту сторону, в которую удобно.
 #
 # ЛЕТОПИСЬ ЧИСЛА:
-#   0 → 5, Фаза 10, план 10-22, задача 1: перечень заведён по отчёту
-#   верификации, назвавшему ПЯТЬ входов.
-VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 5
+#   0 → 7, Фаза 10, план 10-22, задача 1: перечень заведён ЗАМЕРОМ
+#   страничного слоя (разбор дерева `app/pages/*.py`, параметры
+#   POST-обработчиков с границей `Path()`/`Form()`, несущей `ge=`/`le=`).
+#   ⚠️ ЗАМЕР РАЗОШЁЛСЯ С ОТЧЁТОМ ВЕРИФИКАЦИИ, И ЗАПИСАН ЗАМЕР. Отчёт
+#   четвёртого круга (`WR-03`) называл ПЯТЬ, и столько же перечисляет
+#   `UNBOUNDED_ROUTE_CASES` (`tests/test_pages/test_editor_schedules.py:1963`):
+#   «delete/path:schedule_id», «edit/path:schedule_id», «toggle/path:schedule_id»,
+#   «new/form:ad_id», «new/form:account_id». Это ИСХОДЫ ПЯТИ ЗАПРОСОВ, по одному
+#   ограниченному параметру на запрос. ВХОДОВ же СЕМЬ: маршрут правки
+#   `POST /schedules/{schedule_id}/edit` несёт ТРИ ограниченных параметра
+#   (`schedule_id`, `ad_id`, `account_id`), а обход того правила подаёт ему
+#   негодную величину только в адрес, посылая в теле ЖИВОЙ `ad_id`. Два входа —
+#   `edit/форма ad_id` и `edit/форма account_id` — не назывались нигде, и
+#   перечень, переписанный из отчёта, унаследовал бы ровно эту слепоту.
+VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 7
 
 
 def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
