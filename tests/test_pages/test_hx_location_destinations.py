@@ -520,11 +520,129 @@ def _top_level_bindings_of_template(source: str) -> list[tuple[int, str, str]]:
     return findings
 
 
+# ⚠️ ФОРМЫ СНЯТЫ ЧТЕНИЕМ ЖИВЫХ ШАБЛОНОВ ПРОЕКТА, А НЕ ИЗ ПАМЯТИ О JINJA ВООБЩЕ.
+# Замер по всему дереву `app/templates/`: 29 наследований (`{% extends %}`) и 15
+# включений (`{% include %}`), ВСЕ — с именем строковым литералом в двойных
+# кавычках; включения встречаются и в `<head>`, и внутри блоков, и внутри
+# `{% with %}`. Форма с минусом-подрезкой (`{%- include … -%}`) в дереве есть
+# (`account_groups/list.html:69`), поэтому подрезка учтена образцом.
+TEMPLATE_EXTENDS_RE = re.compile(r"{%-?\s*extends\s+[\"']([^\"']+)[\"']")
+TEMPLATE_INCLUDE_RE = re.compile(r"{%-?\s*include\s+[\"']([^\"']+)[\"']")
+
+
+def _template_source(name: str) -> str:
+    """Исходник шаблона дерева по его имени.
+
+    Отсутствие файла поднимается ИСКЛЮЧЕНИЕМ, а не возвращается пустотой:
+    громкость обеспечивает сборка цепи, и вид отказа у неё один и тот же для
+    дерева и для синтетической копии.
+    """
+    return (TEMPLATES_DIR / name).read_text(encoding="utf-8")
+
+
+def _template_chain(name: str, read=_template_source) -> set[str]:
+    """Звенья, которые рантайм исполнит ВМЕСТЕ с поданным шаблоном.
+
+    Множество: сам файл, его база (разворачивается транзитивно, пока база есть)
+    и все включаемые. ⚠️ ПРЕДМЕТ — РАНТАЙМ ПОДМЕНЫ ТЕЛА. Заголовок перехода
+    подменяет содержимое `<body>` ЦЕЛИКОМ и исполняет ВСЕ узлы сценария
+    подменённого тела: инлайн-скрипты базового шаблона и включаемых партиалов
+    исполняются наравне со скриптом самого экрана. Разбор ОДНОГО файла цели, с
+    которого правило начиналось, читал бы один файл из пяти-девяти, участвующих
+    в сборке каждой цели.
+
+    ⚠️ ПОРЯДОК ЗВЕНЬЕВ ЗНАЧЕНИЯ НЕ ИМЕЕТ, И ВОЗВРАЩАЕТСЯ ИМЕННО МНОЖЕСТВО:
+    правило судит СОСТАВ исполняемого, а не последовательность сборки. Порядок
+    сборки шаблонизатором здесь не утверждается и утверждаться этим приёмом не
+    может.
+
+    ⚠️ ЦИКЛЫ НЕВЫРАЗИМЫ ПО ПОСТРОЕНИЮ: разворот ведётся множеством уже
+    посещённых. Взаимное включение дало бы бесконечный обход, а висящее правило
+    отключат вместе со всем охватом, ради которого оно заведено (показано
+    `test_the_template_chain_terminates_on_mutually_including_templates`).
+
+    ⚠️ ГРАНИЦА ЦЕПИ НАЗЫВАЕТСЯ ЗДЕСЬ ПРЯМО. В цепь входят `{% extends %}` и
+    `{% include %}` — формы, вставляющие ЧУЖОЕ ТЕЛО в документ. Макросы,
+    подключаемые `{% from … import … %}`, в цепь НЕ входят: макрос вставляет в
+    документ не файл, а результат СВОЕГО ВЫЗОВА, и файл, чей макрос не позван,
+    рантайм не исполняет вовсе. Замер 2026-09-07: ни один файл
+    `app/templates/components/` и ни один файл `*/includes/`, подключаемый
+    макросом, инлайн-скрипта не несёт — то есть сегодня эта граница ничего от
+    правила не прячет. Появится скрипт в макросе — границу придётся
+    пересматривать, и она названа здесь ровно затем, чтобы это заметили.
+
+    Разбор идёт по исходнику БЕЗ комментариев: `{% include %}` внутри `{# … #}`
+    есть проза о подключении (`includes/htmx_config.html:119`,
+    `includes/notice_area.html:132`), а не подключение, и счёт по сырому тексту
+    завёл бы в цепь звенья, которых рантайм не исполняет.
+    """
+    from tests.test_templates.test_htmx_markup_gates import _strip_comments
+
+    seen: set[str] = set()
+    pending: list[tuple[str, str | None]] = [(name, None)]
+    while pending:
+        current, referrer = pending.pop()
+        if current in seen:
+            continue
+        try:
+            source = read(current)
+        except (FileNotFoundError, KeyError) as absent:
+            raise AssertionError(
+                f"звена цепи шаблона `{current}` в дереве нет, а на него "
+                f"ссылается `{referrer or current}`. Молча пропущенное звено "
+                "вернуло бы ровно ту слепую зону, ради которой цепь и собирается"
+            ) from absent
+        seen.add(current)
+        cleaned = _strip_comments(source)
+        for pattern in (TEMPLATE_EXTENDS_RE, TEMPLATE_INCLUDE_RE):
+            for match in pattern.finditer(cleaned):
+                pending.append((match.group(1), current))
+    return seen
+
+
+def _top_level_bindings_of_chain(
+    name: str, read=_template_source
+) -> list[tuple[str, int, str, str]]:
+    """Объявления верхнего уровня по ВСЕЙ цепи: `(звено, строка, слово, имя)`.
+
+    Звено называется ПЕРВЫМ элементом: читатель обязан узнать, В КАКОМ файле
+    сидит объявление, а не только какая цель им отравлена.
+
+    ⚠️ ИЗЪЯТИЯ ДЕЙСТВУЮТ ПОФАЙЛОВО, А НЕ ПОЦЕПОЧНО: изъят конкретный файл, а не
+    всё, что его включает. Изъятие, снимающее с проверки целую цепь, сняло бы
+    вместе с ней и шелл, общий у всех двенадцати целей.
+
+    Исходник звена читается ТЕМ ЖЕ `read`, которым собрана цепь: контроль
+    подаёт синтетическую копию в памяти, и разборщик, зашитый на дерево, сделал
+    бы зубы правила незаявляемыми иначе как словами.
+    """
+    findings = []
+    for link in sorted(_template_chain(name, read)):
+        if link in TOP_LEVEL_BINDING_EXEMPT_TEMPLATES:
+            continue
+        for line, keyword, binding in _top_level_bindings_of_template(read(link)):
+            findings.append((link, line, keyword, binding))
+    return findings
+
+
 def _page_modules() -> list[tuple[str, str]]:
-    """Страничные модули парами «имя файла — исходник», без слоя письма."""
+    """Страничные модули парами «путь от каталога — исходник», без слоя письма.
+
+    ⚠️ ОБХОД РЕКУРСИВЕН, И ЭТО НЕСУЩЕЕ РЕШЕНИЕ, А НЕ УБОРКА. Нерекурсивный обход
+    (`glob`) роняет модуль, положенный в подкаталог `app/pages/`, МОЛЧА: вместе
+    с ним из счёта уходят его вызовы слоя ответа, и новый экран-цель приезжает
+    незамеченным — ровно та форма отказа, которой фаза провалена третьим кругом.
+    Замер 2026-09-07: подкаталогов в `app/pages/` сегодня нет, и число модулей
+    от правки не изменилось (14 до, 14 после). Предмет в том, что модуль в
+    подкаталоге ВЫПАДЕТ молча, а не в том, что он уже выпал.
+
+    Имя звена — путь ОТ каталога страниц, а не голое имя файла: при рекурсивном
+    обходе два модуля в разных подкаталогах могут звать себя одинаково, и отказ,
+    называющий голое имя, отправил бы читателя не в тот файл.
+    """
     return [
-        (path.name, path.read_text(encoding="utf-8"))
-        for path in sorted(PAGES_DIR.glob("*.py"))
+        (path.relative_to(PAGES_DIR).as_posix(), path.read_text(encoding="utf-8"))
+        for path in sorted(PAGES_DIR.rglob("*.py"))
         if path.name != RESPONSE_LAYER_MODULE and not path.name.startswith("__")
     ]
 
@@ -566,14 +684,22 @@ def _normalize_address(address: str) -> str:
     return address.split("?", 1)[0].split("#", 1)[0]
 
 
-def _transition_destination_calls() -> list[tuple[str, int, set[str]]]:
+def _transition_destination_calls(
+    modules: list[tuple[str, str]] | None = None,
+) -> list[tuple[str, int, set[str]]]:
     """Вызовы слоя ответа, отдающие ЗАГОЛОВОК ПЕРЕХОДА.
 
     Возвращает `(модуль, строка, формы адреса приземления)` для каждого вызова
     `respond(...)`, У КОТОРОГО НЕ ЗАДАН `fragment`.
+
+    Модули принимаются ПАРАМЕТРОМ, а не берутся только из дерева, и это то же
+    несущее решение, по которому разметку принимает параметром
+    `_inline_script_bodies`: группа контроля обязана подать СИНТЕТИЧЕСКИЙ
+    исходник, и разборщик, зашитый на единственный источник, сделал бы зубы
+    правила незаявляемыми иначе как словами.
     """
     calls = []
-    for name, source in _page_modules():
+    for name, source in (_page_modules() if modules is None else modules):
         tree = ast.parse(source, filename=name)
         for function in ast.walk(tree):
             if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -598,12 +724,20 @@ def _transition_destination_calls() -> list[tuple[str, int, set[str]]]:
                     f"{name}:{node.lineno}: вызов слоя ответа без `redirect=` — "
                     "адрес приземления неизвестен, и цель перехода не выводится"
                 )
-                calls.append(
-                    (name, node.lineno, {
-                        _normalize_address(form)
-                        for form in _address_forms(redirect, scope)
-                    })
+                forms = {
+                    _normalize_address(form)
+                    for form in _address_forms(redirect, scope)
+                }
+                assert forms, (
+                    f"{name}:{node.lineno}: форму выражения `redirect=` разборщик "
+                    "не распознал, и ни одного адреса приземления из неё не "
+                    "вывел. Молча выпавший вызов неотличим от вызова, у которого "
+                    "цели нет: он не участвует в сопоставлении с перечнем целей, "
+                    "и новый экран-цель приезжает незамеченным. Расширьте "
+                    "`_address_forms` под встреченную форму либо соберите адрес "
+                    "объявленным помощником из `ADDRESS_BUILDERS`"
                 )
+                calls.append((name, node.lineno, forms))
     return calls
 
 
@@ -649,22 +783,44 @@ def test_every_transition_destination_has_a_declared_template():
 
 
 def test_no_transition_destination_declares_a_top_level_binding_inline():
-    """НЕСУЩЕЕ СТАТИЧЕСКОЕ ПРАВИЛО: цель перехода не несёт объявлений верхнего уровня.
+    """НЕСУЩЕЕ СТАТИЧЕСКОЕ ПРАВИЛО: ЦЕПЬ цели не несёт объявлений верхнего уровня.
 
-    Утверждается ФОРМА ИСХОДНИКА целей. Что рантайм браузера ведёт себя по
-    установленной цепи — не утверждается ничем машинным (см. докстринг модуля).
+    Утверждается ФОРМА ИСХОДНИКА того, что рантайм исполнит ВМЕСТЕ: файла цели,
+    его базы и всех включаемых. Разбор одного файла цели, с которого правило
+    начиналось, оставлял бы `const` в `base.html` незамеченным — а он убил бы
+    клиентский слой ВСЕХ двенадцати целей разом (план 10-19, находка `WR-05`).
+    Что рантайм браузера ведёт себя по установленной цепи — не утверждается
+    ничем машинным (см. докстринг модуля).
     """
     offenders = []
+    chain_sizes = {}
     for address, template in sorted(HX_LOCATION_DESTINATION_TEMPLATES.items()):
-        if template in TOP_LEVEL_BINDING_EXEMPT_TEMPLATES:
-            continue
-        source = (TEMPLATES_DIR / template).read_text(encoding="utf-8")
-        for line, keyword, binding in _top_level_bindings_of_template(source):
-            offenders.append(f"  {template}:{line}: {keyword} {binding} (цель {address})")
+        chain_sizes[address] = len(_template_chain(template))
+        for link, line, keyword, binding in _top_level_bindings_of_chain(template):
+            offenders.append(
+                f"  {link}:{line}: {keyword} {binding} "
+                f"(цель {address}, шаблон {template})"
+            )
+
+    # ⚠️ НЕПУСТОТА ЦЕПИ ПРОВЕРЯЕТСЯ ПЕРВОЙ, И ЭТО НЕСУЩЕЕ РЕШЕНИЕ. Разборщик, не
+    # разобравший ни одного `extends`, вернул бы цепь из одного звена — прежний
+    # охват, — и правило зеленело бы МОЛЧА, ничего о шелле не утверждая.
+    degenerate = sorted(
+        f"  цель {address}: звеньев {size}"
+        for address, size in chain_sizes.items()
+        if size < 2
+    )
+    assert not degenerate, (
+        "цепь шаблона выродилась до одного звена — разборщик не развернул ни "
+        "базы, ни включений, и правило вернулось к охвату ОДНОГО файла молча:\n"
+        + "\n".join(degenerate)
+    )
+
     assert not offenders, (
-        "экраны-цели заголовка перехода несут объявления верхнего уровня в "
-        "инлайн-скрипте; второе исполнение падает РАННЕЙ ошибкой языка и "
-        "убивает клиентский слой экрана целиком:\n" + "\n".join(offenders)
+        "цепь экрана-цели заголовка перехода несёт объявления верхнего уровня в "
+        "инлайн-скрипте; рантайм подмены тела исполняет узлы сценария ВСЕЙ цепи, "
+        "второе исполнение падает РАННЕЙ ошибкой языка и убивает клиентский слой "
+        "экрана целиком:\n" + "\n".join(offenders)
     )
 
 
