@@ -9,14 +9,26 @@
 равно вернёт 200. Прямой рендер с пустым контекстом ловит это сразу.
 """
 
+import ast
 import json
 import re
 from html import unescape
 from pathlib import Path
 from typing import NamedTuple
 
+import pytest
+
 from app.pages import notices as app_notices
 from app.pages.common import templates
+
+# ⚠️ ИМЯ ЗАГОЛОВКА ПЕРЕХОДА БЕРЁТСЯ ИМПОРТОМ ИЗ ОБЪЯВЛЯЮЩЕГО ЕГО МОДУЛЯ, А НЕ
+# НАБИРАЕТСЯ СТРОКОЙ. Литерал, набранный здесь руками, пережил бы переименование
+# константы МОЛЧА: разбор перестал бы находить место сборки, антивакуум покраснел
+# бы не тем текстом, а до его правки правило было бы вакуумно-зелёным. Модуль
+# берётся ЦЕЛИКОМ вдобавок к константе — им разрешаются имена, приехавшие в
+# чужой исходник импортом (см. `_resolvable_string_names`).
+from app.pages import htmx as app_htmx
+from app.pages.htmx import HX_LOCATION_HEADER
 from tests.conftest import run_node_script
 
 # ⚠️ ТРИ ЧИСЛА КРИТЕРИЯ 3 ВЕХИ БЕРУТСЯ ИМПОРТОМ ИЗ ОБЪЯВЛЯЮЩИХ ИХ МОДУЛЕЙ, А НЕ
@@ -4353,4 +4365,344 @@ def test_control_negative_a_new_vendored_script_reddens_the_gate(tmp_path):
     # Граница контроля: боевой каталог подменой не тронут.
     assert _vendored_js_files() == set(VENDORED_JS_FILES), (
         "ПОДМЕНА ПРОТЕКЛА ЗА ГРАНИЦУ КОНТРОЛЯ: боевой каталог сценариев изменён"
+    )
+
+
+# =============================================================================
+# СТЕРЕГУЩЕЕ ПРАВИЛО ПОМЕТКИ ВТОРОЙ ВЕТВИ УСЛОВИЯ ЗАКРЫТИЯ ПАНЕЛИ
+# (Фаза 10, план 10-27, IN-02 ПЯТОГО круга ревизии)
+# =============================================================================
+#
+# ⚠️ ЧТО ЭТО ПРАВИЛО СТЕРЕЖЁТ, И ЧЕГО ОНО НЕ СТЕРЕЖЁТ. Оно стережёт СОГЛАСИЕ
+# ПОМЕТКИ С ДЕРЕВОМ, а не продуктовое решение. Пометка стои́т в
+# `app/templates/components/modal.html` над открывающим тегом формы панели и
+# цитирует ЗАМЕР: мест сборки ответа с заголовком перехода — одно, статус — 204.
+# Пометка без стерегущего правила есть в точности тот класс записи, за который
+# фаза получила круги 3, 4 и 5: утверждение, верное в день записи, переживающее
+# своё дерево и читаемое следующим как исполненный инвариант.
+#
+# ⚠️ ПОЧЕМУ ПРАВИЛО НЕ УТВЕРЖДАЕТ «СТАТУС ЛЕЖИТ В УСПЕШНОМ ДИАПАЗОНЕ», ХОТЯ 204
+# В НЁМ ЛЕЖИТ. Такое утверждение стерегло бы НЕ ТО. Замер вендоренного рантайма
+# (`app/static/js/htmx.min.js`, htmx 2.0.10): ветка заголовка перехода в
+# обработчике ответа `Vn` стои́т на смещении 47067 и кончается ранним возвратом,
+# а ЕДИНСТВЕННОЕ в бандле присваивание признака успешности — на смещении 48145,
+# то есть ПОСЛЕ него. До диапазона исполнение на этом пути НЕ ДОХОДИТ ВОВСЕ, и
+# признак есть `undefined`, а не `false`. Диапазон здесь ни на что не влияет;
+# влияет ЦИТАТА статуса в пометке — её правило и сличает с деревом.
+#
+# ⚠️ ПРАВИЛО НЕ СУДИТ О ТОМ, ДОЛЖЕН ЛИ ПРОЕКТ ЗАВОДИТЬ ОТКАЗ С ПЕРЕХОДОМ. Оно
+# краснеет ровно тогда, когда пометка разошлась с деревом, и отправляет читателя
+# править ПОМЕТКУ.
+
+# --- ОБЪЯВЛЕННЫЕ ЧИСЛА -------------------------------------------------------
+#
+# ЛЕТОПИСЬ: измерено разбором дерева `app/**/*.py` по AST 2026-09-08 планом
+# 10-27 (`transition_response_assemblies` ниже — тот же разборщик, которым
+# меряет правило). Найдено ОДНО место — `Response(status_code=204,
+# headers={HX_LOCATION_HEADER: …})` внутри `location_response()`
+# (`app/pages/htmx.py`). Мест ВЫЗОВА этой сборки два (`respond()` там же и
+# `htmx_refusal_handler` в `app/main.py`), но собирают ответ они не сами —
+# число ниже считает СБОРКУ, а не вызов.
+#
+# ЧТО ОЗНАЧАЕТ ДВИЖЕНИЕ ЧИСЛА В КАЖДУЮ СТОРОНУ:
+#   вверх — в дереве появилась ВТОРАЯ сборка ответа с заголовком перехода;
+#           замер пометки снят с другого дерева, и решение о втором дизъюнкте
+#           обязано быть принято заново;
+#   вниз  — сборка ушла или разборщик её потерял; пометка цитирует место,
+#           которого нет.
+TRANSITION_ASSEMBLY_PLACES = 1
+
+# ЛЕТОПИСЬ: тот же замер того же дня тем же планом. 204 ставится ОДНИМ местом,
+# поэтому у всех ответов перехода проекта статус один. Обоснование самого
+# статуса записано докстрингом `location_response()` (204 не имеет тела ПО
+# ОПРЕДЕЛЕНИЮ) и этим правилом не пересматривается — правило лишь сличает
+# цитату пометки с деревом.
+TRANSITION_RESPONSE_STATUS = 204
+
+APP_DIR = Path(__file__).resolve().parents[2] / "app"
+
+
+class TransitionAssembly(NamedTuple):
+    """Одно место сборки ответа, несущего заголовок перехода."""
+
+    module: str
+    line: int
+    status: int | None
+    form: str
+
+
+def _resolvable_string_names(tree: ast.Module) -> dict[str, str]:
+    """Имена исходника, разрешимые в СТРОКУ: модульные константы плюс импорты.
+
+    ⚠️ БЕЗ РАЗРЕШЕНИЯ ИМЁН РАЗБОР ЛОВИЛ БЫ ТОЛЬКО ЛИТЕРАЛ. Боевое место сборки
+    пишет `headers={HX_LOCATION_HEADER: …}` — имя, а не строку; разборщик,
+    умеющий только строки, нашёл бы НОЛЬ мест и покраснел бы антивакуумом на
+    исправном дереве.
+    """
+    names: dict[str, str] = {}
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names[target.id] = node.value.value
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("pages.htmx"):
+            for alias in node.names:
+                value = getattr(app_htmx, alias.name, None)
+                if isinstance(value, str):
+                    names[alias.asname or alias.name] = value
+    return names
+
+
+def _is_transition_header_key(node: ast.expr, names: dict[str, str]) -> bool:
+    """Ключ словаря заголовков есть заголовок перехода — в любой из трёх форм.
+
+    Сличение регистронезависимое: имена заголовков регистром не различаются, и
+    правило, различающее их регистром, краснело бы на написании, а не на сути.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value.lower() == HX_LOCATION_HEADER.lower()
+    if isinstance(node, ast.Name):
+        return names.get(node.id, "").lower() == HX_LOCATION_HEADER.lower()
+    if isinstance(node, ast.Attribute):
+        resolved = getattr(app_htmx, node.attr, None)
+        return isinstance(resolved, str) and resolved.lower() == HX_LOCATION_HEADER.lower()
+    return False
+
+
+def transition_response_assemblies(sources: dict[str, str]) -> list[TransitionAssembly]:
+    """Места сборки ответа с заголовком перехода — ПО ДЕРЕВУ, а не по строкам.
+
+    ⚠️ ИСХОДНИКИ ПРИХОДЯТ ПАРАМЕТРОМ, И ЭТО НЕСУЩЕЕ. Без параметра зубы правила
+    пришлось бы ЗАЯВЛЯТЬ вместо того, чтобы их ПОКАЗЫВАТЬ, а боевой файл
+    пришлось бы править ради доказательства. Приём взят у действующих контролей
+    фазы (`tests/test_pages/test_origin_guard_on_destructive_routes.py`).
+
+    ⚠️ РАЗБОР ПО ДЕРЕВУ, А НЕ ПОСТРОЧНЫЙ. Построчный поиск имени заголовка
+    считал бы его вхождения в докстрингах и комментариях слоя ответа — их там
+    несколько, — то есть ОБЪЯСНЕНИЕ роняло бы УТВЕРЖДЕНИЕ.
+
+    Узнаются ДВЕ формы сборки: именованный аргумент заголовков в вызове и
+    присваивание в заголовки уже готового ответа. Вторая от первой не отличается
+    ничем, кроме видимости для наивного разборщика, — то есть место, написанное
+    ею, выпало бы из обхода МОЛЧА.
+    """
+    found: list[TransitionAssembly] = []
+    for module, source in sorted(sources.items()):
+        tree = ast.parse(source)
+        names = _resolvable_string_names(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                header_dicts = [
+                    kw.value
+                    for kw in node.keywords
+                    if kw.arg == "headers" and isinstance(kw.value, ast.Dict)
+                ]
+                carries = any(
+                    key is not None and _is_transition_header_key(key, names)
+                    for header_dict in header_dicts
+                    for key in header_dict.keys
+                )
+                if not carries:
+                    continue
+                status: int | None = None
+                for kw in node.keywords:
+                    if (
+                        kw.arg in ("status_code", "status")
+                        and isinstance(kw.value, ast.Constant)
+                        and isinstance(kw.value.value, int)
+                    ):
+                        status = kw.value.value
+                if (
+                    status is None
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, int)
+                ):
+                    status = node.args[0].value
+                found.append(
+                    TransitionAssembly(
+                        module, node.lineno, status, "именованный аргумент заголовков"
+                    )
+                )
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Subscript) and _is_transition_header_key(
+                        target.slice, names
+                    ):
+                        found.append(
+                            TransitionAssembly(
+                                module,
+                                node.lineno,
+                                None,
+                                "присваивание в заголовки готового ответа",
+                            )
+                        )
+    return found
+
+
+def _app_python_sources() -> dict[str, str]:
+    """Пары «путь относительно корня проекта → ТЕКСТ исходника», весь `app/`."""
+    root = APP_DIR.parent
+    return {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(APP_DIR.rglob("*.py"))
+    }
+
+
+def check_transition_assemblies(sources: dict[str, str]) -> list[TransitionAssembly]:
+    """Три утверждения о поданном дереве. Вынесены сюда РАДИ КОНТРОЛЕЙ.
+
+    Правило ниже зовёт эту функцию боевым деревом, отрицательные контроли —
+    подменёнными копиями. Второго экземпляра текстов отказа не заводится,
+    поэтому контроль доказывает зубы ТОГО ЖЕ текста, который увидит читатель.
+    """
+    found = transition_response_assemblies(sources)
+
+    # АНТИВАКУУМ: сломавшийся разборщик возвращает пустое множество, и зелёный
+    # цвет сломанного разборщика посимвольно совпадает с зелёным цветом
+    # соблюдённого правила. Без этого утверждения правило зеленело бы навсегда,
+    # ничего не стерегя.
+    assert found, (
+        "АНТИВАКУУМ: разбор дерева `app/` не нашёл НИ ОДНОГО места сборки "
+        "ответа с заголовком перехода. Такого дерева у проекта нет — значит "
+        "сломался сам разборщик, и правило перестало отличать соблюдение от "
+        "поломки"
+    )
+
+    listing = "; ".join(
+        f"{a.module}:{a.line} ({a.form}, статус {a.status})" for a in found
+    )
+    assert len(found) == TRANSITION_ASSEMBLY_PLACES, (
+        "СОБЫТИЕ (А): ЧИСЛО МЕСТ СБОРКИ ОТВЕТА С ЗАГОЛОВКОМ ПЕРЕХОДА РАЗОШЛОСЬ "
+        f"С ОБЪЯВЛЕННЫМ — найдено {len(found)}, объявлено "
+        f"{TRANSITION_ASSEMBLY_PLACES}: {listing}.\n"
+        "Замер, на который опирается пометка второй ветви условия закрытия "
+        "панели, СНЯТ С ДРУГОГО ДЕРЕВА. РЕШЕНИЕ О ВТОРОМ ДИЗЪЮНКТЕ ОБЯЗАНО БЫТЬ "
+        "ПРИНЯТО ЗАНОВО: новое место могло завести форму ответа, которой у "
+        "проекта не было"
+    )
+
+    wrong = [a for a in found if a.status != TRANSITION_RESPONSE_STATUS]
+    assert not wrong, (
+        "СОБЫТИЕ (Б): СТАТУС МЕСТА СБОРКИ РАЗОШЁЛСЯ С ОБЪЯВЛЕННЫМ — объявлено "
+        f"{TRANSITION_RESPONSE_STATUS}, найдено: "
+        + "; ".join(f"{a.module}:{a.line} → {a.status}" for a in wrong)
+        + ".\nПОМЕТКА РЫЧАГА СТАЛА НЕВЕРНОЙ. Комментарий над открывающим тегом "
+        "формы панели в app/templates/components/modal.html цитирует статус "
+        f"{TRANSITION_RESPONSE_STATUS} как замер дерева, и цитата разошлась с "
+        "деревом. ПРАВИТЬ ПОМЕТКУ, а не это правило"
+    )
+    return found
+
+
+def test_the_transition_response_is_assembled_in_one_declared_place():
+    """НЕСУЩЕЕ: замер, который цитирует пометка рычага, СХОДИТСЯ С ДЕРЕВОМ.
+
+    Пометка второй ветви условия закрытия панели
+    (`app/templates/components/modal.html`, над открывающим тегом формы)
+    цитирует два числа: мест сборки ответа с заголовком перехода — одно, статус
+    — 204. Оба сличаются здесь с деревом разбором по AST, а не принимаются на
+    веру.
+
+    ⚠️ ДВА СОБЫТИЯ РАЗОШЛИСЬ ДВУМЯ ТЕКСТАМИ СОЗНАТЕЛЬНО. Один текст на два
+    разных события лгал бы в одном из них: (а) появилось новое место сборки —
+    решение о втором дизъюнкте принимается заново; (б) статус существующего
+    места уехал — цитата пометки стала неверной, и править надо пометку.
+    """
+    found = check_transition_assemblies(_app_python_sources())
+
+    assert [a.status for a in found] == [TRANSITION_RESPONSE_STATUS], (
+        f"замер дерева разошёлся с объявленным составом статусов: {found}"
+    )
+
+
+def test_control_negative_a_changed_transition_status_reddens_the_rule():
+    """ЧТО ДОКАЗЫВАЕТ: правило выше КРАСНЕЕТ событием (Б) на подменённом статусе.
+
+    ⚠️ ПОДМЕНА ЖИВЁТ В КОПИИ ИСХОДНИКА В ПАМЯТИ. Боевой файл контроль не
+    трогает: правило принимает исходники параметром именно ради этого.
+    """
+    sources = _app_python_sources()
+    mutated = dict(sources)
+    mutated["app/pages/htmx.py"] = sources["app/pages/htmx.py"].replace(
+        f"status_code={TRANSITION_RESPONSE_STATUS}, headers={{HX_LOCATION_HEADER",
+        "status_code=400, headers={HX_LOCATION_HEADER",
+    )
+    assert mutated["app/pages/htmx.py"] != sources["app/pages/htmx.py"], (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: форма сборки в слое ответа изменилась, и "
+        "контроль ниже доказывал бы не зубы правила, а промах контроля"
+    )
+
+    with pytest.raises(AssertionError) as raised:
+        check_transition_assemblies(mutated)
+
+    message = str(raised.value)
+    assert "СОБЫТИЕ (Б)" in message, (
+        "правило покраснело НЕ ТЕМ событием: подменён статус, а текст отказа "
+        f"говорит о другом; текст: {message!r}"
+    )
+    assert "app/templates/components/modal.html" in message, (
+        "текст события (Б) не называет файла рычага — поймавший красное пойдёт "
+        f"ИСКАТЬ пометку вместо того, чтобы её править; текст: {message!r}"
+    )
+
+    # Граница контроля: боевое дерево подменой не тронуто.
+    check_transition_assemblies(_app_python_sources())
+
+
+def test_control_negative_a_second_transition_assembly_reddens_the_rule():
+    """ЧТО ДОКАЗЫВАЕТ: правило КРАСНЕЕТ событием (А) на втором месте сборки.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ СЧЁТ МЕСТ БЫЛ БЫ ЗЕЛЁНЫМ ПО ПОСТРОЕНИЮ: разборщик,
+    видящий ровно одну форму записи, пропустил бы вторую МОЛЧА. Подмена кладёт
+    в копию дерева второе место, написанное тем же именем константы.
+    """
+    sources = _app_python_sources()
+    intruder = "app/pages/some_future_phase.py"
+    sources[intruder] = (
+        "from fastapi import Response\n"
+        "from app.pages.htmx import HX_LOCATION_HEADER\n"
+        "\n"
+        "def refuse_with_a_transition():\n"
+        "    return Response(status_code=409, headers={HX_LOCATION_HEADER: '/ads'})\n"
+    )
+
+    with pytest.raises(AssertionError) as raised:
+        check_transition_assemblies(sources)
+
+    message = str(raised.value)
+    assert "СОБЫТИЕ (А)" in message, (
+        "правило покраснело НЕ ТЕМ событием: добавлено место сборки, а текст "
+        f"отказа говорит о другом; текст: {message!r}"
+    )
+    assert intruder in message, (
+        f"текст события (А) не называет найденных мест ПОИМЁННО: {message!r}"
+    )
+    assert "СОБЫТИЕ (Б)" not in message, (
+        "два события слиплись в один текст — один из них он описывает ложно: "
+        f"{message!r}"
+    )
+
+
+def test_control_negative_an_empty_transition_scan_cannot_go_green():
+    """ЧТО ДОКАЗЫВАЕТ: правило ПАДАЕТ на пустом множестве найденных мест.
+
+    Сломавшийся разбор не имеет права зеленеть: он зеленел бы навсегда, ничего
+    не стерегя, и пометка рычага пережила бы своё дерево незамеченной.
+    """
+    with pytest.raises(AssertionError) as raised:
+        check_transition_assemblies({})
+
+    message = str(raised.value)
+    assert "АНТИВАКУУМ" in message, (
+        f"пустое множество покраснело не антивакуумом, а чем-то ещё: {message!r}"
+    )
+    assert "СОБЫТИЕ" not in message, (
+        "пустое множество покраснело текстом события расхождения — читатель "
+        f"пойдёт править дерево вместо разборщика: {message!r}"
     )
