@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 51
+open_count: 54
 waived_count: 1
 fixed_count: 6
-total_count: 58
-last_updated: 2026-09-08T10:29:53.220Z
+total_count: 61
+last_updated: 2026-09-08T12:43:57.274Z
 ---
 
 # Broken Windows Ledger
@@ -73,6 +73,9 @@ last_updated: 2026-09-08T10:29:53.220Z
 | 56 | 10 | deviation | .planning/phases/10-rychag-components-modal-html/10-26-PLAN.md |  | Критерий приёмки задачи 2 плана 10-26 требует grep -l pytestmark tests/test_planning/*.py \| wc -l == 4; замер даёт 5, потому что __init__.py УПОМИНАЕТ токен в прозе — по прямому указанию шага (3) того же плана. Два указания плана противоречат друг другу: команда считает упоминания, а не пометки. Прозу НЕ правил (вычёркивание слова ради счётчика есть подгонка замера); замер исправлен на grep -lE '^pytestmark = pytest.mark.planning$' tests/test_planning/test_*.py -> 4 при 4 модулях правил, плюс независимое доказательство: -m 'not planning' собирает НОЛЬ путей внутри tests/test_planning/. Правки требует ТЕКСТ КРИТЕРИЯ; решает владелец | open |  | 2026-09-08T09:36:42.106Z |  |
 | 57 | 10 | deviation | .planning/phases/10-rychag-components-modal-html/10-27-PLAN.md |  | ПОСЫЛКА ПЛАНА 10-27 И ВЫВОД IN-02 ПЯТОГО КРУГА ОПРОВЕРГНУТЫ ЗАМЕРОМ. План утверждал, что вторая ветвь условия закрытия панели МЕРТВА (204 в успешном диапазоне -> закрывает первый дизъюнкт). Замер вендоренного htmx 2.0.10: ветка заголовка перехода в Vn кончается ранним возвратом на смещении 47067, единственное присваивание e.successful стоит на 48145 — до диапазона исполнение НЕ ДОХОДИТ, признак есть undefined. Вторая ветвь ЖИВАЯ и закрывает панель на 16 из 18 мест; мёртв ПЕРВЫЙ дизъюнкт. Подтверждено двумя действующими правилами с плана 10-05. Оба исхода IN-02 неприменимы: удаление — регрессия на 16 местах, пометка подстраховкой — ложь в рычаге. Пометка написана по замеру, правило перенацелено со «статуса в успешном диапазоне» на «цитата статуса сходится с деревом». Правки требует ТЕКСТ ПЛАНА (must_haves.truths[0], objective, behavior задач 1 и 2) и запись IN-02 в 10-REVIEW.md; решает владелец | open |  | 2026-09-08T10:29:46.496Z |  |
 | 58 | 10 | deviation | .planning/phases/10-rychag-components-modal-html/10-27-PLAN.md |  | Задача 1 плана 10-27 называет форму комментария шаблонизатора '{#- … -#}'. Замер: закрывающий маркер с дефисом снимает пробельные символы после комментария, то есть перевод строки с отступом перед открывающим тегом формы — отданная разметка восемнадцати мест подтверждения изменилась бы ('</h2><form' вместо '</h2>\\n    <form'). Отгружена форма '{#- … #}': байтовое равенство отданной разметки проверено (2721 == 2721, посимвольное равенство True). Правки требует ТЕКСТ ПЛАНА, а не дерево; решает владелец | open |  | 2026-09-08T10:29:53.220Z |  |
+| 59 | 10 | deviation | .planning/phases/10-rychag-components-modal-html/10-28-PLAN.md |  | План 10-28: две команды <verify> целились в несуществующие модули суиты (tests/test_pages/test_accounts.py, tests/test_pages/test_ads.py) — замена измерена и записана в сводку | open |  | 2026-09-08T12:43:47.313Z |  |
+| 60 | 10 | deviation | .planning/phases/10-rychag-components-modal-html/10-28-PLAN.md |  | План 10-28: внутриплановый долг правила полноты реестра краснит ДВА узла, а не один — снятого плановыми командами test_every_framework_bounded_input_is_declared_as_a_divergence мало, тот же долг несёт контроль зубов test_control_a_shortened_exception_list_reddens_the_completeness_rule; оба зелены после задачи 3 | open |  | 2026-09-08T12:43:56.810Z |  |
+| 61 | 10 | deviation | app/pages/ads.py |  | НАХОДКА плана 10-28: признак раскрытого расписания (sched) до сравнения по колонке НЕ ДОЕЗЖАЕТ — сличается с уже загруженным составом расписаний в памяти; параметр закрыт по ОБЪЯВЛЕННОМУ предмету, а не по прослеженному пути | open |  | 2026-09-08T12:43:57.274Z |  |
 
 ````json
 [
@@ -770,6 +773,42 @@ last_updated: 2026-09-08T10:29:53.220Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-08T10:29:53.220Z",
+    "resolved_at": null
+  },
+  {
+    "id": 59,
+    "kind": "deviation",
+    "phase": "10",
+    "file": ".planning/phases/10-rychag-components-modal-html/10-28-PLAN.md",
+    "line": null,
+    "description": "План 10-28: две команды <verify> целились в несуществующие модули суиты (tests/test_pages/test_accounts.py, tests/test_pages/test_ads.py) — замена измерена и записана в сводку",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T12:43:47.313Z",
+    "resolved_at": null
+  },
+  {
+    "id": 60,
+    "kind": "deviation",
+    "phase": "10",
+    "file": ".planning/phases/10-rychag-components-modal-html/10-28-PLAN.md",
+    "line": null,
+    "description": "План 10-28: внутриплановый долг правила полноты реестра краснит ДВА узла, а не один — снятого плановыми командами test_every_framework_bounded_input_is_declared_as_a_divergence мало, тот же долг несёт контроль зубов test_control_a_shortened_exception_list_reddens_the_completeness_rule; оба зелены после задачи 3",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T12:43:56.810Z",
+    "resolved_at": null
+  },
+  {
+    "id": 61,
+    "kind": "deviation",
+    "phase": "10",
+    "file": "app/pages/ads.py",
+    "line": null,
+    "description": "НАХОДКА плана 10-28: признак раскрытого расписания (sched) до сравнения по колонке НЕ ДОЕЗЖАЕТ — сличается с уже загруженным составом расписаний в памяти; параметр закрыт по ОБЪЯВЛЕННОМУ предмету, а не по прослеженному пути",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T12:43:57.274Z",
     "resolved_at": null
   }
 ]
