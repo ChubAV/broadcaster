@@ -488,3 +488,11 @@ None — внешних сервисов план не касается.
 ---
 *Phase: 10-rychag-components-modal-html*
 *Completed: 2026-09-08*
+
+## Self-Check: PASSED
+
+- Файлы на диске: `app/templates/components/modal.html`, `tests/test_templates/test_components.py`,
+  `.planning/phases/10-rychag-components-modal-html/10-27-SUMMARY.md` — все FOUND.
+- Коммиты в истории: `9ec3f1d`, `ccb7af4`, `9e10508` — все FOUND.
+- Все `<acceptance_criteria>` обеих задач перепрогнаны; `<verification>` плана перепрогнана целиком
+  (широкий прогон `2849 passed, 1 deselected` за `0:34:57`).
