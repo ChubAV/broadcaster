@@ -85,7 +85,7 @@ coverage:
         ref: "tests/test_pages/test_htmx_gates.py#test_every_framework_bounded_input_is_declared_as_a_divergence"
         status: pass
       - kind: unit
-        ref: "tests/test_pages/test_htmx_gates.py#test_the_number_of_declared_validation_refusal_divergences_is_the_declared_one"
+        ref: "tests/test_pages/test_htmx_gates.py#test_the_number_of_validation_refusal_divergences_is_declared"
         status: pass
     human_judgment: false
   - id: D5
@@ -398,3 +398,7 @@ None — внешних служб план не трогает, зависим�
 - Три изменённых файла на месте (`app/pages/admin.py`, `tests/test_pages/test_identifier_bounds.py`, `tests/test_pages/test_htmx_gates.py`).
 - Три коммита задач найдены в истории: `dc9f84f`, `a5eb19d`, `3022a44`.
 - Все команды `<verify>` обеих задач прогнаны; исходы приведены числами в разделе «Прогоны верификации».
+
+### Правка самопроверки
+
+**Ссылка `coverage.D4` была вписана с НЕСУЩЕСТВУЮЩИМ именем правила** (`test_the_number_of_declared_validation_refusal_divergences_is_the_declared_one`) и исправлена на действительное — `test_the_number_of_validation_refusal_divergences_is_declared`. Найдено сличением всех шести ссылок `coverage` с деревом (`grep` по объявлениям `def test_`): остальные пять существуют. Ссылка на несуществующее правило есть ровно тот класс вакуума, за которым эта партия и следит: она зелена «по построению», потому что мерить ей нечего.
