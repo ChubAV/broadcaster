@@ -23,7 +23,7 @@ affects: [10-29, 10-30, 10-31, 10-32, Фаза 11]
 actuals:
   tokens: 13333
   tasks: 3
-  commits: 5
+  commits: 6
 
 tech-stack:
   added: []
@@ -501,3 +501,7 @@ None — внешней конфигурации не требуется.
 ---
 *Phase: 10-rychag-components-modal-html*
 *Completed: 2026-09-08*
+
+## Self-Check: PASSED
+
+Все изменённые файлы существуют на диске; все шесть коммитов (`dc2f01e`, `8877135`, `42f9943`, `caa5e10`, `8c745df`, `81356d3`) найдены в истории.
