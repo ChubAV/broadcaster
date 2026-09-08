@@ -545,6 +545,55 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="account_id",
         live="account",
     ),
+    # --- app/pages/ads.py: два идентификатора пути и признак раскрытого расписания ---
+    #
+    # ⚠️ УДАЛЕНИЯ ОБЪЯВЛЕНИЯ ЗДЕСЬ НЕТ, И ЭТО НЕ ПРОПУСК. Оно закрыто планом
+    # 10-24 и проведено насквозь СОБСТВЕННЫМИ правилами этого же модуля выше
+    # (`_delete_outcome`). Вторая строка матрицы на тот же вход не добавила бы
+    # ни одного наблюдения и увела бы счёт входов плана.
+    _BoundedEntry(
+        key="app/pages/ads.py::GET /ads/{ad_id}/edit → адрес ad_id",
+        method="GET",
+        address="/ads/{value}/edit",
+        parameter="ad_id",
+        live="ad",
+    ),
+    _BoundedEntry(
+        # ⚠️ ВТОРОЙ ИДЕНТИФИКАТОР, ПРИЕХАВШИЙ ПАРАМЕТРОМ ЗАПРОСА. Основание, по
+        # которому он закрыт, ОТЛИЧАЕТСЯ от основания курсора выше, и разница
+        # названа здесь, а не сглажена: курсор ДОЕЗЖАЕТ до сравнения по колонке,
+        # а этот признак — НЕ ДОЕЗЖАЕТ (он сличается с уже загруженным составом
+        # расписаний в памяти, `app/pages/ads.py`, `_editor_context`). Закрыт он
+        # по ОБЪЯВЛЕННОМУ предмету: параметр объявлен идентификатором
+        # расписания, а идентификаторы этого проекта лежат в диапазоне колонки.
+        key="app/pages/ads.py::GET /ads/{ad_id}/edit → запрос sched",
+        method="GET",
+        address="/ads/{ad}/edit?sched={value}",
+        parameter="sched",
+        live="schedule",
+    ),
+    _BoundedEntry(
+        key="app/pages/ads.py::POST /ads/{ad_id}/edit → адрес ad_id",
+        method="POST",
+        address="/ads/{value}/edit",
+        parameter="ad_id",
+        live="ad",
+    ),
+    # --- app/pages/history.py: два идентификатора пути ---
+    _BoundedEntry(
+        key="app/pages/history.py::GET /history/{log_id} → адрес log_id",
+        method="GET",
+        address="/history/{value}",
+        parameter="log_id",
+        live="log",
+    ),
+    _BoundedEntry(
+        key="app/pages/history.py::POST /history/{log_id}/retry → адрес log_id",
+        method="POST",
+        address="/history/{value}/retry",
+        parameter="log_id",
+        live="log",
+    ),
 )
 
 
@@ -760,4 +809,40 @@ async def test_every_bounded_input_still_admits_a_live_value(
         "ГРАНИЦА ОТВЕРГЛА ЖИВУЮ ВЕЛИЧИНУ либо уронила на ней обработчик — она "
         f"отвергает не то, что объявила. Несогласных строк {len(disagreed)} из "
         f"{len(BOUNDED_ENTRIES)}:\n  " + "\n  ".join(disagreed)
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_editor_without_the_schedule_flag_is_not_a_validation_refusal(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ПУСТОЕ значение признака раскрытого расписания остаётся ЗАКОННЫМ.
+
+    ⚠️ БЕЗ ЭТОГО ПРАВИЛА ГРАНИЦА, ПОСТАВЛЕННАЯ НА ПРИЗНАК, БЫЛА БЫ НЕОТЛИЧИМА
+    ОТ ЗАПРЕТА ОТКРЫВАТЬ РЕДАКТОР. Расписание может быть НЕ ВЫБРАНО — это
+    основное состояние экрана, а не край: ссылка на редактор БЕЗ параметра
+    стои́т в разметке карточки расписания (`app/templates/ads/includes/
+    sched_card.html`) ровно для свёртывания открытой карточки. Граница величины
+    к ОТСУТСТВИЮ значения не применяется, и правило это наблюдает, а не
+    подразумевает.
+    """
+    live = await _seed_live_row_set(db_session)
+
+    outcome = await _entry_outcome(
+        authed_client,
+        _BoundedEntry(
+            key="контроль пустого признака",
+            method="GET",
+            address="/ads/{ad}/edit",
+            parameter="sched",
+            live="schedule",
+        ),
+        f"/ads/{live['ad']}/edit",
+    )
+
+    assert outcome != VALIDATION_REFUSAL and not outcome.startswith("5"), (
+        "редактор БЕЗ признака раскрытого расписания ответил отказом валидации "
+        f"либо отказом обработчика (снято → {outcome!r}). Пустое значение есть "
+        "законное состояние: расписание может быть не выбрано, и граница "
+        "ВЕЛИЧИНЫ к ОТСУТСТВИЮ значения не применяется"
     )
