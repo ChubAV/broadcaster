@@ -43,6 +43,13 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
+# Предмет модуля — ЗАПИСЬ проекта, а не его продукт. Основание маркера, его
+# граница годности и запрет выключать каталог — `tests/test_planning/__init__.py`;
+# само имя объявлено хуком в `tests/conftest.py`.
+pytestmark = pytest.mark.planning
+
 TREE_ROOT = Path(__file__).resolve().parents[2]
 RECORD_ROOT = TREE_ROOT / ".planning"
 

@@ -45,6 +45,11 @@ from pathlib import Path
 
 import pytest
 
+# Предмет модуля — ЗАПИСЬ проекта, а не его продукт. Основание маркера, его
+# граница годности и запрет выключать каталог — `tests/test_planning/__init__.py`;
+# само имя объявлено хуком в `tests/conftest.py`.
+pytestmark = pytest.mark.planning
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PLANNING_ROOT = PROJECT_ROOT / ".planning"
 REQUIREMENTS_PATH = PLANNING_ROOT / "REQUIREMENTS.md"

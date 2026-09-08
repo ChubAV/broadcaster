@@ -40,7 +40,13 @@ ROADMAP объявлен единственным ИСТОЧНИКОМ счёт�
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
 import yaml
+
+# Предмет модуля — ЗАПИСЬ проекта, а не его продукт. Основание маркера, его
+# граница годности и запрет выключать каталог — `tests/test_planning/__init__.py`;
+# само имя объявлено хуком в `tests/conftest.py`.
+pytestmark = pytest.mark.planning
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ROADMAP_PATH = PROJECT_ROOT / ".planning" / "ROADMAP.md"

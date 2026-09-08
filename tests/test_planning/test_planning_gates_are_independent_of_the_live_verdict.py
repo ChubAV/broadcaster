@@ -44,6 +44,13 @@ import ast
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
+# Предмет модуля — ЗАПИСЬ проекта, а не его продукт. Основание маркера, его
+# граница годности и запрет выключать каталог — `tests/test_planning/__init__.py`;
+# само имя объявлено хуком в `tests/conftest.py`.
+pytestmark = pytest.mark.planning
+
 PLANNING_GATES_DIR = Path(__file__).resolve().parent
 
 # Имена, которыми модуль каталога адресует ЖИВОЕ дерево записи. Перечень снят
