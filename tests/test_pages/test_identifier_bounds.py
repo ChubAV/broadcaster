@@ -16,6 +16,7 @@
 
 import ast
 import pathlib
+import re
 import uuid
 from dataclasses import dataclass
 
@@ -1074,3 +1075,915 @@ async def test_the_editor_without_the_schedule_flag_is_not_a_validation_refusal(
         "законное состояние: расписание может быть не выбрано, и граница "
         "ВЕЛИЧИНЫ к ОТСУТСТВИЮ значения не применяется"
     )
+
+
+# =============================================================================
+# ГЕЙТ ПОЛНОТЫ ГРАНИЦЫ ПО ВСЕМУ КАТАЛОГУ СТРАНИЧНОГО СЛОЯ
+# =============================================================================
+#
+# ПРЕДМЕТ ЭТОГО РАЗДЕЛА — СЛЕДУЮЩИЙ ВХОД, А НЕ СЕГОДНЯШНИЕ. Матрица выше
+# стережёт РОВНО ТЕ входы, которые в неё внесены руками: маршрут, добавленный
+# завтра с неограниченным идентификатором, оставит её зелёной — она о нём не
+# знает. Ревизия пятого круга (`CR-01`, вторая половина предписания) просит
+# «widen the gate so the next unbounded input cannot appear silently»: заменить
+# перечень РАЗБОРОМ КАТАЛОГА, то есть краснеть В МОМЕНТ ВВЕДЕНИЯ входа, а не
+# следующим кругом верификации.
+#
+# ⚠️ РАЗБОР ДЕРЕВА, А НЕ СТРОК. Построчный поиск считал бы вхождение имени в
+# докстринг и в комментарий — то есть объяснение роняло бы утверждение, — и
+# ломался бы от переноса декоратора на вторую строку. Форма взята целиком у
+# `tests/test_pages/test_origin_guard_on_destructive_routes.py`: реестр,
+# собранный ЧТЕНИЕМ, объявленное число вселенной, объявленное число изъятий,
+# замыкающее требование «каждый найденный», антивакуум и отрицательные контроли,
+# доказывающие, что правило КРАСНЕЕТ.
+#
+# ⚠️ ВСТРЕЧНАЯ ОТСЫЛКА К ИНВАРИАНТУ МОДУЛЯ РАСПИСАНИЙ. Этот раздел НЕ ЗАМЕНЯЕТ
+# и не поглощает правил `tests/test_pages/test_editor_schedules.py`, и предметы
+# у них РАЗНЫЕ:
+#   — `test_no_schedule_route_answers_with_a_handler_failure_on_an_out_of_range_identifier`
+#     наблюдает ПОВЕДЕНИЕ пяти РЕАЛЬНЫХ запросов, доезжающих до отказа
+#     валидации, — включая порядок в теле; статическая проверка сигнатуры этого
+#     не наблюдает и наблюдать не может, она наблюдает ОБЪЯВЛЕНИЕ;
+#   — `test_every_identifier_input_of_the_schedule_routes_carries_the_shared_bound`
+#     стережёт ИНВАРИАНТ, объявленный шапкой ТОГО модуля («прямой POST мимо
+#     браузера обязан давать отказ валидации, а не 500»), и вселенная у него —
+#     один файл;
+#   — правила ниже стерегут свойство ПРОЕКТА: ни один вход ни одного модуля
+#     страничного слоя не появится без границы.
+# Ни одно из трёх не выводится из другого, и снос любого ради «неповторения»
+# заменил бы наблюдение объявлением либо инвариант модуля — свойством проекта.
+
+CATALOGUE_DIRECTORY = APP_DIRECTORY / "pages"
+
+# ПРИЗНАК ИДЕНТИФИКАТОРА В ИМЕНИ: `id` целиком либо хвост `_id`. `valid`, `paid`
+# и прочие слова, кончающиеся теми же двумя буквами, признаком НЕ являются —
+# иначе правило судило бы о параметрах, к идентификаторам отношения не имеющих.
+# Выражение перенесено дословно из `_IDENTIFIER_PARAM`
+# (`tests/test_pages/test_editor_schedules.py`): две копии ОДНОГО признака
+# разошлись бы молча.
+_IDENTIFIER_NAME_MARK = re.compile(r"(?:^id|_id)$")
+
+# ⚠️ ВСЕЛЕННАЯ НАЗВАНА ДВУМЯ ПРИЗНАКАМИ, И ЭТО ЗАМЕР, А НЕ ОСТОРОЖНОСТЬ. Каждый
+# признак ПОРОЗНЬ пропускает то, что накрывает второй:
+#   — ПРИЗНАК АДРЕСА (имя параметра стои́т местозаполнителем в пути маршрута)
+#     машинно чёток и не зависит от того, как параметр назвали. Но он один НЕ
+#     НАКРЫЛ БЫ курсор постраничного вывода групп (`after_id`,
+#     `app/pages/account_groups.py`), закрытый планом 10-28: тот приезжает
+#     ПАРАМЕТРОМ ЗАПРОСА и в пути не стоит;
+#   — ПРИЗНАК ИМЕНИ (окончание на `id`/`_id`) накрывает курсор. Но он один НЕ
+#     НАКРЫЛ БЫ идентификатор пути, названный будущей фазой иначе, — а имя
+#     параметра есть выбор автора, тогда как местозаполнитель пути есть
+#     объявленный контракт маршрута.
+# Ни один вход не обязан удовлетворять ОБОИМ: вселенная есть ОБЪЕДИНЕНИЕ.
+
+# ИЗЪЯТИЕ ВЕЛИЧИН ПОСТРАНИЧНОГО ВЫВОДА — ЗАПИСЬ С ОБОСНОВАНИЕМ, А НЕ ОТСУТСТВИЕ
+# В РАЗБОРЕ.
+#
+# ОСНОВАНИЕ ВЗЯТО У ДЕЙСТВУЮЩЕГО ГЕЙТА ДОСЛОВНО: смещение и размер порции НЕ
+# ЕСТЬ идентификатор, они не уезжают операндом сравнения по колонке
+# идентификатора, и отказ по ним не говорит ничего о ВЛАДЕНИИ строкой. Граница
+# у них своя и по своему основанию (`le=100` у размера порции — защита от
+# выдачи, а не от переполнения колонки), и требовать от них границы
+# ИДЕНТИФИКАТОРА значило бы требовать неверного числа.
+#
+# ⚠️ ИЗЪЯТИЕ ОБЪЯВЛЕНО ЗАПИСЬЮ ИМЕННО ЗАТЕМ, ЧТОБЫ ЧИТАТЕЛЬ УЗНАЛ О НЁМ ИЗ
+# ОБЪЯВЛЕНИЯ, А НЕ ИЗ РАЗБОРА. Правило, молча не смотрящее на часть параметров,
+# имеет слепую зону, о которой известно только тому, кто прочёл его код.
+PAGINATION_EXCLUSION_NAMES = frozenset({"offset", "limit"})
+
+# ЛЕТОПИСЬ ЧИСЛА ИЗЪЯТЫХ ВЕЛИЧИН ПОСТРАНИЧНОГО ВЫВОДА:
+#   0 → 13, Фаза 10, план 10-30, задача 1. Замер разбором каталога: по одной
+#   величине у `account_groups.py`, по паре у `accounts.py`, `ads.py` и
+#   `schedules.py`, три у `admin.py` и три у `history.py`. Число движется — это
+#   решение о том, что добавленная величина ДЕЙСТВИТЕЛЬНО есть постраничный
+#   вывод, а не идентификатор, названный коротким именем.
+PAGINATION_EXCLUSION_DECLARED = 13
+
+# ЛЕТОПИСЬ ЧИСЛА ВСЕЛЕННОЙ — ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА:
+#   0 → 35, Фаза 10, план 10-30, задача 1. ЗАВЕДОМО НЕВЕРНОЕ ЧИСЛО (`0`)
+#   вписано ПЕРВЫМ, замер `35` прочитан из текста отказа. Число, вписанное по
+#   итогу ЗЕЛЁНОГО прогона, равнялось бы тому, что есть, ПО ПОСТРОЕНИЮ и не
+#   стерегло бы ничего.
+#
+#   ⚠️ ЗАМЕР СЛИЧЁН С СУММОЙ ЗАКРЫТОГО, И СЛАГАЕМЫЕ НАЗВАНЫ. Партия закрыла
+#   ДВАДЦАТЬ ДЕВЯТЬ входов: 1 (план 10-24) + 17 (план 10-28) + 11 (план 10-29).
+#   Один из семнадцати — признак раскрытого расписания редактора (`sched`) — во
+#   вселенную НЕ ВХОДИТ: он вне обоих её признаков и живёт записью ПРИЛОЖЕНИЯ,
+#   будучи закрытым. Остаётся 28. Модуль расписаний закрыт РАНЬШЕ партии, планом
+#   10-12: отчёт третьего круга назвал ПЯТЬ ВХОДОВ, но считал их МАРШРУТАМИ, а
+#   вселенная считает ПАРАМЕТРАМИ — тех же шести маршрутов параметров СЕМЬ
+#   (`schedules_create` несёт два, `schedules_update` — три). 28 + 7 = 35.
+#   Расхождения с суммой закрытого НЕТ; расходятся ЕДИНИЦЫ СЧЁТА, и обе названы.
+CATALOGUE_UNIVERSE_DECLARED = 35
+
+# ЛЕТОПИСЬ ЧИСЛА ЗАПИСЕЙ ПРИЛОЖЕНИЯ — то же основание, тот же приём:
+#   0 → 10, Фаза 10, план 10-30, задача 1. Ориентир планировщика знал ОДНОГО
+#   кандидата (`sched`); замер дал ДЕСЯТЬ, и расхождение названо поимённо в
+#   комментарии к самому перечню. Пустое приложение тоже было бы законным — но
+#   тогда ноль стоял бы здесь ЯВНО: именованный ноль стережёт появление первой
+#   записи, отсутствующее объявление — нет.
+CATALOGUE_APPENDIX_DECLARED = 10
+
+# ЧИСЛО КОРНЕВЫХ ПСЕВДОНИМОВ НЕЙТРАЛЬНОГО МОДУЛЯ. Перечень узнаваемых имён
+# СОБИРАЕТСЯ ЧТЕНИЕМ `app/pages/identifiers.py`, а не выписывается здесь второй
+# копией: выписанный перечень разошёлся бы с модулем молча — ровно тем способом,
+# каким прежде расходилась сама граница. Число объявлено затем, чтобы
+# ИСЧЕЗНОВЕНИЕ псевдонима из нейтрального модуля (то есть потеря узнаваемости
+# половины входов) краснело здесь, а не зеленело пустым перечнем.
+BOUNDED_ALIAS_ROOTS_DECLARED = 3
+
+
+@dataclass(frozen=True)
+class _AppendixEntry:
+    """Вход, НЕ ПОКРЫТЫЙ НИ ОДНИМ признаком вселенной, — названный поимённо.
+
+    ⚠️ ПРИЛОЖЕНИЕ ЕСТЬ ЕДИНСТВЕННОЕ, ЧЕМ НЕПОКРЫТЫЙ ВХОД НЕ ВЫПАДАЕТ МОЛЧА.
+    Правило, объявляющее полноту по двум признакам, имеет слепую зону — вход,
+    не попавший ни под один. Слепая зона, о которой не объявлено, есть
+    утверждение полноты, которое утверждает меньше, чем говорит (предмет
+    `WR-05`).
+
+    Поля: `key` — тот же ключ, каким вход назван замером; `reason` —
+    ОБОСНОВАНИЕ, почему вход вне вселенной; `removal` — УСЛОВИЕ СНЯТИЯ записи;
+    `verdict` — `"safe"` либо `"open"`; `observed` — СНЯТЫЙ исход.
+
+    ⚠️ `verdict` РАЗВОДИТ ДВЕ РАЗНЫЕ ВЕЩИ, КОТОРЫЕ ОДНО СЛОВО «ПРИЛОЖЕНИЕ»
+    СКЛЕИЛО БЫ В ОДНУ. `safe` — вход, которому граница ИДЕНТИФИКАТОРА не нужна
+    по существу (величина не есть целое колонки идентификатора). `open` — вход,
+    которому она НУЖНА и у которого её НЕТ: отказ обработчика на нём
+    ВОСПРОИЗВЕДЁН и записан в `observed`. Запись `open` НЕ ЕСТЬ разрешение —
+    она есть НАЗВАННЫЙ ДОЛГ: без неё дефект был бы не «принят», а невидим.
+    """
+
+    key: str
+    reason: str
+    removal: str
+    verdict: str
+    observed: str
+
+
+# ⚠️ СОДЕРЖИМОЕ ПРИЛОЖЕНИЯ СНЯТО ЗАМЕРОМ, А НЕ ВЫВЕДЕНО ИЗ ОЖИДАНИЯ. Ориентир
+# планировщика знал ОДНОГО кандидата — признак раскрытого расписания редактора.
+# Замер по каталогу дал ДЕСЯТЬ, и девять из них — параметры, объявленные
+# СТРОКОЙ и приводимые к целому ВНУТРИ обработчика: признак «объявлен целым»
+# их не видит. ШЕСТЬ ИЗ ЭТИХ ДЕВЯТИ ДОЕЗЖАЮТ ДО СРАВНЕНИЯ ПО КОЛОНКЕ БЕЗ
+# ГРАНИЦЫ, и отказ обработчика на них ВОСПРОИЗВЕДЁН (`observed`). Это находка
+# настоящего плана, а не принятое решение: правка `app/` настоящему плану
+# запрещена его собственным составом (`files_modified`), и запись здесь есть
+# способ, которым долг назван, а не способ, которым он списан.
+CATALOGUE_APPENDIX: tuple[_AppendixEntry, ...] = (
+    _AppendixEntry(
+        key="app/pages/ads.py::GET /ads/{ad_id}/edit → sched",
+        reason=(
+            "объявлен целым и ограничен ВСТРОЕННОЙ записью "
+            "(`Query(None, ge=1, le=ID_MAX)`, план 10-28), но имя его на признак "
+            "идентификатора не оканчивается и местозаполнителем пути не стои́т — "
+            "то есть он вне ОБОИХ признаков вселенной, будучи закрытым"
+        ),
+        removal="переименование параметра в оканчивающийся на признак идентификатора",
+        verdict="safe",
+        observed="GET /ads/1/edit?sched=99999999999999999999999999 → 422",
+    ),
+    _AppendixEntry(
+        key="app/pages/accounts.py::GET /accounts/connect/tg_user/qr-status → session_id",
+        reason=(
+            "величина есть ключ сессии авторизации Telegram, объявленный СТРОКОЙ "
+            "и остающийся строкой: он не есть целое колонки идентификатора и "
+            "операндом сравнения по ней не уезжает"
+        ),
+        removal="перевод ключа сессии на целочисленную колонку",
+        verdict="safe",
+        observed="строка остаётся строкой; сравнения по колонке идентификатора нет",
+    ),
+    _AppendixEntry(
+        key="app/pages/admin.py::POST /queue/{account_id}/drop → task_id",
+        reason=(
+            "величина есть идентификатор задачи очереди Celery — строка, "
+            "сравниваемая со строками очереди, а не целое колонки"
+        ),
+        removal="перевод идентификатора задачи на целочисленную колонку",
+        verdict="safe",
+        observed="строка остаётся строкой; сравнения по колонке идентификатора нет",
+    ),
+    _AppendixEntry(
+        key="app/pages/groups.py::GET /groups; GET /groups/{deep_link:path} → deep_link",
+        reason=(
+            "местозаполнитель пути ЕСТЬ, но величина объявлена строкой и строкой "
+            "остаётся: это непрозрачный токен приглашения, а не целое колонки"
+        ),
+        removal="перевод адреса на целочисленный идентификатор группы",
+        verdict="safe",
+        observed="GET /groups/xxxxxxxx… → 302",
+    ),
+    _AppendixEntry(
+        key="app/pages/ads.py::POST /ads/new → ad_id",
+        reason=(
+            "ОБЪЯВЛЕН СТРОКОЙ (`str | None = Form(None)`) и приводится к целому "
+            "ВНУТРИ обработчика (`int(ad_id)`, `app/pages/ads.py`), после чего "
+            "уезжает операндом сравнения по колонке (`Ad.id == requested_id`). "
+            "Признак «объявлен целым» его НЕ ВИДИТ — граница на границе "
+            "приложения отсутствует"
+        ),
+        removal=(
+            "объявление параметра ограниченным псевдонимом либо постановка "
+            "границы величины до сравнения по колонке"
+        ),
+        verdict="open",
+        observed=(
+            "POST /ads/new с полем ad_id=99999999999999999999999999 → 500 "
+            "(OverflowError, app/pages/ads.py:629), снято 2026-09-08"
+        ),
+    ),
+    _AppendixEntry(
+        key="app/pages/history.py::GET /history → account_id",
+        reason=(
+            "ОБЪЯВЛЕН СТРОКОЙ (`str | None = Query(default=None)`) и приводится "
+            "к целому помощником `parse_account_id` БЕЗ границы, после чего "
+            "уезжает в условие фильтра по колонке идентификатора аккаунта"
+        ),
+        removal="постановка границы величины в `parse_account_id` либо в сигнатуре",
+        verdict="open",
+        observed=(
+            "GET /history?account_id=99999999999999999999999999 → 500 "
+            "(OverflowError, app/pages/history.py:1057), снято 2026-09-08"
+        ),
+    ),
+    _AppendixEntry(
+        key="app/pages/history.py::GET /history/partial → account_id",
+        reason="то же основание, что у `GET /history`: строка, приводимая `parse_account_id` без границы",
+        removal="постановка границы величины в `parse_account_id` либо в сигнатуре",
+        verdict="open",
+        observed=(
+            "GET /history/partial?account_id=99999999999999999999999999 → 500 "
+            "(OverflowError, app/pages/history.py:586), снято 2026-09-08"
+        ),
+    ),
+    _AppendixEntry(
+        key="app/pages/history.py::GET /history/export → account_id",
+        reason="то же основание: строка, приводимая `parse_account_id` без границы",
+        removal="постановка границы величины в `parse_account_id` либо в сигнатуре",
+        verdict="open",
+        observed=(
+            "GET /history/export?account_id=99999999999999999999999999 → 500, "
+            "снято 2026-09-08"
+        ),
+    ),
+    _AppendixEntry(
+        key="app/pages/admin.py::GET /users/{user_id}/history → account_id",
+        reason=(
+            "то же основание: строка, приводимая ТЕМ ЖЕ `parse_account_id` "
+            "(админка зовёт помощника через границу модуля) без границы"
+        ),
+        removal="постановка границы величины в `parse_account_id` либо в сигнатуре",
+        verdict="open",
+        observed=(
+            "GET /admin/users/1/history?account_id=99999999999999999999999999 → 500, "
+            "снято 2026-09-08"
+        ),
+    ),
+    _AppendixEntry(
+        key="app/pages/admin.py::GET /users/{user_id}/history/partial → account_id",
+        reason="то же основание: строка, приводимая `parse_account_id` без границы",
+        removal="постановка границы величины в `parse_account_id` либо в сигнатуре",
+        verdict="open",
+        observed=(
+            "GET /admin/users/1/history/partial?account_id=99999999999999999999999999 "
+            "→ 500, снято 2026-09-08"
+        ),
+    ),
+)
+
+
+# =============================================================================
+# Разборщики каталога. ИСХОДНИКИ ПРИХОДЯТ ПАРАМЕТРОМ
+# =============================================================================
+#
+# ⚠️ ПОДАЧА ИСХОДНИКОВ ПАРАМЕТРОМ ОБЯЗАТЕЛЬНА, А НЕ УДОБНА. Без неё зубы правила
+# пришлось бы ЗАЯВЛЯТЬ, а боевой файл — ПРАВИТЬ ради доказательства: подмена
+# живёт строкой в памяти, и разборщику подаётся она. Приём и его основание
+# взяты у `destructive_route_handlers`
+# (`tests/test_pages/test_origin_guard_on_destructive_routes.py`).
+
+_HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
+_ROUTE_PLACEHOLDER = re.compile(r"\{([^}:]+)")
+
+
+def _catalogue_sources() -> dict[str, str]:
+    """Пары «относительный путь → ТЕКСТ модуля» по каталогу страничного слоя."""
+    root = APP_DIRECTORY.parent
+    return {
+        str(path.relative_to(root)): path.read_text(encoding="utf-8")
+        for path in sorted(CATALOGUE_DIRECTORY.glob("*.py"))
+    }
+
+
+def _module_level_assignments(tree: ast.AST):
+    """Пары «имя → значение» модульных присваиваний. Только верхний уровень."""
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    yield target.id, node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.value is not None:
+                yield node.target.id, node.value
+
+
+def _is_the_identifier_bound(node: ast.AST) -> bool:
+    """Указывает ли узел на ВЕЛИЧИНУ границы идентификатора, а не на любую другую.
+
+    Имя `ID_MAX` либо тот же литерал. Ограничение `le=100` у размера порции под
+    признак НЕ ПОПАДАЕТ — иначе правило считало бы границей ЛЮБОЕ ограничение
+    сверху и зеленело бы на числе, которое к колонке идентификатора отношения не
+    имеет.
+    """
+    if isinstance(node, ast.Name):
+        return node.id == "ID_MAX"
+    return isinstance(node, ast.Constant) and node.value == ID_MAX
+
+
+def _annotated_metadata(annotation: ast.AST) -> list[ast.AST]:
+    """Метаданные `Annotated[...]` — всё, кроме первого элемента."""
+    if not isinstance(annotation, ast.Subscript):
+        return []
+    head = annotation.value
+    name = getattr(head, "id", None) or getattr(head, "attr", None)
+    if name != "Annotated":
+        return []
+    sliced = annotation.slice
+    if isinstance(sliced, ast.Tuple):
+        return list(sliced.elts[1:])
+    return []
+
+
+def _call_declares_the_bound(node: ast.AST) -> bool:
+    """Несёт ли вызов объявителя (`Path`/`Form`/`Query`) верхнюю границу колонки."""
+    if not isinstance(node, ast.Call):
+        return False
+    return any(
+        keyword.arg == "le" and _is_the_identifier_bound(keyword.value)
+        for keyword in node.keywords
+    )
+
+
+def bounded_alias_names(app_sources: dict[str, str]) -> frozenset[str]:
+    """Имена, которыми ОГРАНИЧЕННАЯ величина приезжает в сигнатуру.
+
+    ⚠️ ПЕРЕЧЕНЬ СОБИРАЕТСЯ ЧТЕНИЕМ, А НЕ ВЫПИСЫВАЕТСЯ. Корни берутся из
+    НЕЙТРАЛЬНОГО МОДУЛЯ (`app/pages/identifiers.py`) — это те его модульные
+    имена, чьё объявление есть `Annotated[...]` с верхней границей колонки.
+    Выписанная здесь вторая копия перечня разошлась бы с модулем МОЛЧА, а
+    молчаливое расхождение границы с местом её объявления — ровно тот дефект,
+    ради которого нейтральный модуль и заводился.
+
+    ⚠️ РАЗРЕШЕНИЕ ГОНИТСЯ ДО НЕПОДВИЖНОЙ ТОЧКИ ПО ВСЕМУ `app/`, А НЕ НА ОДИН
+    ШАГ. Потребитель вправе завести СВОЁ имя (`app/pages/schedules.py`:
+    `ScheduleIdPath = IdPath`), а следующая фаза — имя от этого имени. Разбор,
+    видящий только корни, объявил бы семь закрытых входов модуля расписаний
+    неограниченными; разбор на один шаг — промолчал бы о втором звене. Ровно на
+    этом сломался первый сбор плана 10-24: он был слеп к границе, приезжающей
+    ИМПОРТОМ, и мерил ПУСТУЮ вселенную.
+    """
+    roots: set[str] = set()
+    owner_tree = ast.parse(app_sources[BOUND_OWNER])
+    for name, value in _module_level_assignments(owner_tree):
+        if any(_call_declares_the_bound(meta) for meta in _annotated_metadata(value)):
+            roots.add(name)
+
+    known = set(roots)
+    trees = {module: ast.parse(text) for module, text in sorted(app_sources.items())}
+    while True:
+        grown = set(known)
+        for _module, tree in trees.items():
+            for name, value in _module_level_assignments(tree):
+                if isinstance(value, ast.Name) and value.id in known:
+                    grown.add(name)
+        if grown == known:
+            return frozenset(known)
+        known = grown
+
+
+def bounded_alias_roots(app_sources: dict[str, str]) -> frozenset[str]:
+    """Корневые псевдонимы НЕЙТРАЛЬНОГО модуля — без перенятых имён потребителей."""
+    owner_tree = ast.parse(app_sources[BOUND_OWNER])
+    return frozenset(
+        name
+        for name, value in _module_level_assignments(owner_tree)
+        if any(_call_declares_the_bound(meta) for meta in _annotated_metadata(value))
+    )
+
+
+def _route_declarations(handler: ast.AST) -> list[tuple[str, str]]:
+    """Пары «метод → путь», объявленные декораторами обработчика.
+
+    Узнаются ОБЕ формы объявления маршрута: именованный метод и общая
+    (`api_route(..., methods=[...])`). Вторая от первой не отличается ничем,
+    кроме видимости для наивного разборщика, — маршрут, написанный ею, выпал бы
+    из обхода МОЛЧА. Имя объекта роутера НЕ ПРОВЕРЯЕТСЯ: роутер, заведённый
+    будущей фазой, выпал бы из обхода по имени, а не по существу.
+    """
+    declarations: list[tuple[str, str]] = []
+    for decorator in handler.decorator_list:
+        if not isinstance(decorator, ast.Call):
+            continue
+        func = decorator.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if not decorator.args:
+            continue
+        path = decorator.args[0]
+        if not (isinstance(path, ast.Constant) and isinstance(path.value, str)):
+            continue
+        if func.attr in _HTTP_METHODS:
+            declarations.append((func.attr.upper(), path.value))
+        elif func.attr == "api_route":
+            for keyword in decorator.keywords:
+                if keyword.arg != "methods":
+                    continue
+                if not isinstance(keyword.value, (ast.List, ast.Tuple, ast.Set)):
+                    continue
+                for element in keyword.value.elts:
+                    if isinstance(element, ast.Constant) and isinstance(element.value, str):
+                        declarations.append((element.value.upper(), path.value))
+    return declarations
+
+
+@dataclass(frozen=True)
+class _CatalogueParameter:
+    """Один параметр одного обработчика маршрута, снятый разбором дерева."""
+
+    key: str
+    module: str
+    handler: str
+    routes: tuple[str, ...]
+    name: str
+    annotation: str
+    in_path: bool
+    named_like_identifier: bool
+    declared_integer: bool
+    carries_the_bound: bool
+
+
+def _declares_an_integer(annotation: ast.AST | None, aliases: frozenset[str]) -> bool:
+    """Объявлен ли параметр ЦЕЛЫМ — с учётом псевдонимов, разрешённых по дереву."""
+    if annotation is None:
+        return False
+    if isinstance(annotation, ast.Name) and annotation.id in aliases:
+        return True
+    node = annotation
+    if isinstance(node, ast.Subscript):
+        head = node.value
+        name = getattr(head, "id", None) or getattr(head, "attr", None)
+        if name == "Annotated":
+            sliced = node.slice
+            node = sliced.elts[0] if isinstance(sliced, ast.Tuple) else sliced
+    if isinstance(node, ast.Name) and node.id in aliases:
+        return True
+    source = ast.unparse(node)
+    parts = {
+        piece.strip()
+        for piece in source.replace("Optional[", "").replace("]", "|").split("|")
+        if piece.strip()
+    }
+    return "int" in parts and parts <= {"int", "None"}
+
+
+def _carries_the_bound(
+    annotation: ast.AST | None, default: ast.AST | None, aliases: frozenset[str]
+) -> bool:
+    """Несёт ли параметр границу — ПСЕВДОНИМОМ либо ВСТРОЕННОЙ записью.
+
+    Две формы, а не одна, и это ЗАМЕР: курсор постраничного вывода групп
+    (`after_id`) объявлен встроенной записью `Query(None, ge=1, le=ID_MAX)`, а
+    не псевдонимом, — правило, знающее только псевдонимы, объявило бы закрытый
+    вход неограниченным и было бы починено ослаблением.
+    """
+    if isinstance(annotation, ast.Name) and annotation.id in aliases:
+        return True
+    if annotation is not None:
+        if any(_call_declares_the_bound(meta) for meta in _annotated_metadata(annotation)):
+            return True
+        inner = annotation
+        if isinstance(inner, ast.Subscript):
+            head = inner.value
+            name = getattr(head, "id", None) or getattr(head, "attr", None)
+            if name == "Annotated":
+                sliced = inner.slice
+                first = sliced.elts[0] if isinstance(sliced, ast.Tuple) else sliced
+                if isinstance(first, ast.Name) and first.id in aliases:
+                    return True
+    return _call_declares_the_bound(default) if default is not None else False
+
+
+def catalogue_parameters(
+    sources: dict[str, str], aliases: frozenset[str]
+) -> list[_CatalogueParameter]:
+    """ВСЕ параметры ВСЕХ обработчиков маршрутов каталога — по дереву разбора."""
+    found: list[_CatalogueParameter] = []
+    for module, text in sorted(sources.items()):
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as error:  # модуль обязан РОНЯТЬ правило, а не выпадать
+            raise AssertionError(
+                f"модуль {module} не разобрался в дерево ({error}) — охват, тихо "
+                "потерявший файл, утверждает не то, что обещает"
+            ) from error
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            routes = _route_declarations(node)
+            if not routes:
+                continue
+            placeholders: set[str] = set()
+            for _method, path in routes:
+                placeholders |= set(_ROUTE_PLACEHOLDER.findall(path))
+            printed = tuple(f"{method} {path}" for method, path in routes)
+
+            args = node.args
+            positional = list(args.posonlyargs) + list(args.args)
+            defaults: dict[str, ast.AST | None] = {}
+            padding = len(positional) - len(args.defaults)
+            for index, argument in enumerate(positional):
+                defaults[argument.arg] = (
+                    args.defaults[index - padding] if index >= padding else None
+                )
+            for argument, default in zip(args.kwonlyargs, args.kw_defaults):
+                defaults[argument.arg] = default
+
+            for argument in positional + list(args.kwonlyargs):
+                found.append(
+                    _CatalogueParameter(
+                        key=f"{module}::{'; '.join(printed)} → {argument.arg}",
+                        module=module,
+                        handler=node.name,
+                        routes=printed,
+                        name=argument.arg,
+                        annotation=(
+                            ast.unparse(argument.annotation)
+                            if argument.annotation is not None
+                            else ""
+                        ),
+                        in_path=argument.arg in placeholders,
+                        named_like_identifier=bool(
+                            _IDENTIFIER_NAME_MARK.search(argument.arg)
+                        ),
+                        declared_integer=_declares_an_integer(argument.annotation, aliases),
+                        carries_the_bound=_carries_the_bound(
+                            argument.annotation, defaults.get(argument.arg), aliases
+                        ),
+                    )
+                )
+    return found
+
+
+def _is_watched(parameter: _CatalogueParameter) -> bool:
+    """Попадает ли параметр ПОД НАБЛЮДЕНИЕ этого раздела вообще.
+
+    ⚠️ НАБЛЮДАЕМОЕ МНОЖЕСТВО ШИРЕ ВСЕЛЕННОЙ НАМЕРЕННО, И ЭТО ЗАМЕР. Вселенная
+    требует объявления ЦЕЛЫМ; но параметр, объявленный СТРОКОЙ и приводимый к
+    целому внутри обработчика, доезжает до сравнения по колонке ровно так же —
+    ЗАМЕРЕНО на шести маршрутах (см. записи `open` приложения). Если бы
+    наблюдаемое множество равнялось вселенной, эти шесть не попали бы ни во
+    вселенную, ни в приложение и выпали бы МОЛЧА — то есть правило объявляло бы
+    полноту, имея слепую зону, и повторяло бы предмет `WR-05` на другой оси.
+    """
+    return (
+        parameter.in_path
+        or parameter.named_like_identifier
+        or parameter.declared_integer
+    )
+
+
+def catalogue_universe(
+    sources: dict[str, str], aliases: frozenset[str]
+) -> list[_CatalogueParameter]:
+    """ВСЕЛЕННАЯ: объявлен целым И (стоит в пути ЛИБО назван идентификатором)."""
+    return [
+        parameter
+        for parameter in catalogue_parameters(sources, aliases)
+        if parameter.declared_integer
+        and (parameter.in_path or parameter.named_like_identifier)
+        and parameter.name not in PAGINATION_EXCLUSION_NAMES
+    ]
+
+
+def catalogue_pagination(
+    sources: dict[str, str], aliases: frozenset[str]
+) -> list[_CatalogueParameter]:
+    """ИЗЪЯТИЕ: величины постраничного вывода, объявленные целым."""
+    return [
+        parameter
+        for parameter in catalogue_parameters(sources, aliases)
+        if parameter.declared_integer and parameter.name in PAGINATION_EXCLUSION_NAMES
+    ]
+
+
+def catalogue_appendix(
+    sources: dict[str, str], aliases: frozenset[str]
+) -> list[_CatalogueParameter]:
+    """ПРИЛОЖЕНИЕ: наблюдаемое минус вселенная минус изъятие."""
+    universe = {parameter.key for parameter in catalogue_universe(sources, aliases)}
+    pagination = {parameter.key for parameter in catalogue_pagination(sources, aliases)}
+    return [
+        parameter
+        for parameter in catalogue_parameters(sources, aliases)
+        if _is_watched(parameter)
+        and parameter.key not in universe
+        and parameter.key not in pagination
+    ]
+
+
+def unbounded_universe_entries(
+    sources: dict[str, str], aliases: frozenset[str]
+) -> list[_CatalogueParameter]:
+    """Входы вселенной, НЕ несущие границы."""
+    return [
+        parameter
+        for parameter in catalogue_universe(sources, aliases)
+        if not parameter.carries_the_bound
+    ]
+
+
+# =============================================================================
+# Утверждения. ВЫНЕСЕНЫ ФУНКЦИЯМИ, ЧТОБЫ ИХ МОЖНО БЫЛО ПРОГНАТЬ НА ПОДМЕНЕ
+# =============================================================================
+
+
+def assert_the_universe_is_declared(
+    sources: dict[str, str], aliases: frozenset[str]
+) -> None:
+    """ТЕКСТ ОТКАЗА (б): объявленное число вселенной разошлось с замером.
+
+    ⚠️ ДВА ТЕКСТА ОТКАЗА РАЗВЕДЕНЫ, А НЕ СЛИТЫ В ОДИН. Один текст на два
+    события лгал бы в одном из них: «число разошлось» ведёт к ОБЪЯВЛЕНИЮ и к
+    решению о том, что вход добавлен законно, тогда как «вход без границы»
+    ведёт к СИГНАТУРЕ и к псевдониму, которым вход надо объявить. Читатель,
+    получивший не тот текст, пошёл бы чинить не то место.
+    """
+    assert len(sources) > 0, (
+        f"в каталоге {CATALOGUE_DIRECTORY} не разобрано НИ ОДНОГО модуля — "
+        "правило полноты ниже зеленеет ВАКУУМОМ: утверждение «каждый найденный "
+        "ограничен» истинно и для ПУСТОГО множества найденных"
+    )
+
+    universe = catalogue_universe(sources, aliases)
+    assert len(universe) > 0, (
+        f"по всему каталогу {CATALOGUE_DIRECTORY} не найдено НИ ОДНОГО параметра "
+        "вселенной (признаки: объявлен целым И стои́т местозаполнителем пути либо "
+        "оканчивается на `id`/`_id`) — разбор декораторов либо разрешение "
+        "псевдонимов перестало их узнавать, и правило полноты стало вечно зелёным"
+    )
+
+    assert len(universe) == CATALOGUE_UNIVERSE_DECLARED, (
+        f"параметров вселенной найдено {len(universe)}, объявлено "
+        f"{CATALOGUE_UNIVERSE_DECLARED}. Найденное: "
+        f"{sorted(parameter.key for parameter in universe)}. ЧИСЛО ВЫРОСЛО — в "
+        "страничный слой добавлен вход того же класса, и решение о его границе "
+        "обязано быть принято ЯВНО, а число исправлено вместе с ним. ЧИСЛО "
+        "УПАЛО — вход снят ЛИБО перестал узнаваться разбором (переименован "
+        "каталог, сменилась форма объявления маршрута, уехал псевдоним "
+        "границы), и во втором случае правило полноты ниже стало зелёным, "
+        "перестав стеречь"
+    )
+
+    appendix_declared = {entry.key for entry in CATALOGUE_APPENDIX}
+    appendix_found = {
+        parameter.key for parameter in catalogue_appendix(sources, aliases)
+    }
+    assert appendix_found == appendix_declared, (
+        "ПРИЛОЖЕНИЕ РАЗОШЛОСЬ С ЗАМЕРОМ. Найдено и не заявлено: "
+        f"{sorted(appendix_found - appendix_declared)}; заявлено и не найдено: "
+        f"{sorted(appendix_declared - appendix_found)}. Вход, не покрытый ни "
+        "одним признаком вселенной и не внесённый в приложение, ВЫПАЛ БЫ МОЛЧА "
+        "— то есть правило объявляло бы полноту, имея слепую зону"
+    )
+
+    assert len(CATALOGUE_APPENDIX) == CATALOGUE_APPENDIX_DECLARED, (
+        f"записей приложения {len(CATALOGUE_APPENDIX)}, объявлено "
+        f"{CATALOGUE_APPENDIX_DECLARED}"
+    )
+
+    pagination = catalogue_pagination(sources, aliases)
+    assert len(pagination) == PAGINATION_EXCLUSION_DECLARED, (
+        f"величин постраничного вывода найдено {len(pagination)}, объявлено "
+        f"{PAGINATION_EXCLUSION_DECLARED}: "
+        f"{sorted(parameter.key for parameter in pagination)}. Изъятие есть "
+        "ЗАПИСЬ С ОБОСНОВАНИЕМ, а не отсутствие в разборе: добавленная величина "
+        "обязана быть ДЕЙСТВИТЕЛЬНО постраничным выводом, а не идентификатором, "
+        "названным коротким именем"
+    )
+
+
+def assert_every_universe_entry_carries_the_bound(
+    sources: dict[str, str], aliases: frozenset[str]
+) -> None:
+    """ТЕКСТ ОТКАЗА (а): найден вход вселенной без границы."""
+    missing = unbounded_universe_entries(sources, aliases)
+    assert missing == [], (
+        "ВХОД СТРАНИЧНОГО СЛОЯ ОБЪЯВЛЕН ИДЕНТИФИКАТОРОМ БЕЗ ОБЩЕЙ ГРАНИЦЫ: "
+        + "; ".join(
+            f"{parameter.module} :: {' / '.join(parameter.routes)} :: "
+            f"{parameter.handler}({parameter.name}: "
+            f"{parameter.annotation or 'без объявления'})"
+            for parameter in sorted(missing, key=lambda item: item.key)
+        )
+        + f". Объявите параметр псевдонимом нейтрального модуля {BOUND_OWNER} "
+        "(`IdPath` для адреса, `IdForm` для обязательного поля формы, "
+        "`OptionalIdForm` для необязательного) либо поставьте границу "
+        "встроенной записью `Query(..., ge=1, le=ID_MAX)`. Величина вне "
+        "диапазона колонки уезжает операндом сравнения по ней и роняет "
+        "обработчик отказом драйвера — `500` там, где обязан быть отказ "
+        "валидации (`CR-01`, пятый круг ревизии)"
+    )
+
+
+# =============================================================================
+# Правила
+# =============================================================================
+
+
+def test_the_catalogue_universe_is_declared_by_a_number():
+    """Вселенная правила полноты ОБЪЯВЛЕНА ЧИСЛОМ — вместе с изъятием и приложением.
+
+    ⚠️ ЭТО НЕ ДУБЛИРОВАНИЕ СЛЕДУЮЩЕГО ПРАВИЛА, А ЕГО ОПОРА. «Каждый найденный
+    ограничен» — утверждение, истинное и для ПУСТОГО множества найденных:
+    сломайся разбор декораторов, переименуйся каталог или уедь псевдоним
+    границы — и правило полноты зеленело бы навсегда, ничего не стерегя. Ровно
+    так сломался первый сбор плана 10-24, слепой к границе, приезжающей
+    импортом.
+    """
+    sources = _catalogue_sources()
+    aliases = bounded_alias_names(_app_sources())
+    assert_the_universe_is_declared(sources, aliases)
+
+
+def test_every_identifier_parameter_of_the_catalogue_carries_the_bound():
+    """КАЖДЫЙ идентификатор КАЖДОГО модуля страничного слоя несёт общую границу.
+
+    Предмет — СЛЕДУЮЩИЙ вход, а не сегодняшние: правило краснеет В МОМЕНТ
+    ВВЕДЕНИЯ неограниченного идентификатора и называет его модулем, маршрутом и
+    именем параметра. Матрица входов выше о завтрашнем маршруте не знает и
+    останется на нём зелёной.
+    """
+    sources = _catalogue_sources()
+    aliases = bounded_alias_names(_app_sources())
+    assert_every_universe_entry_carries_the_bound(sources, aliases)
+
+
+def test_the_recognised_bound_aliases_come_from_a_single_place():
+    """Перечень узнаваемых имён СОБРАН ЧТЕНИЕМ нейтрального модуля, а не выписан.
+
+    Выписанная копия перечня разошлась бы с модулем МОЛЧА, и правило полноты
+    объявило бы неограниченными входы, закрытые псевдонимом, которого оно не
+    узнаёт, — то есть было бы починено ОСЛАБЛЕНИЕМ.
+    """
+    app_sources = _app_sources()
+    roots = bounded_alias_roots(app_sources)
+
+    assert len(roots) == BOUNDED_ALIAS_ROOTS_DECLARED, (
+        f"корневых псевдонимов границы в {BOUND_OWNER} найдено {len(roots)} "
+        f"({sorted(roots)}), объявлено {BOUNDED_ALIAS_ROOTS_DECLARED}. "
+        "Псевдоним ИСЧЕЗ — половина входов перестала узнаваться, и правило "
+        "полноты объявит их неограниченными; псевдоним ДОБАВЛЕН — это решение о "
+        "новом способе передачи, а не правка числа"
+    )
+
+    resolved = bounded_alias_names(app_sources)
+    assert roots <= resolved, "разрешение псевдонимов потеряло собственные корни"
+    assert len(resolved) > len(roots), (
+        f"разрешение псевдонимов не нашло НИ ОДНОГО перенятого имени "
+        f"({sorted(resolved)}) — а `app/pages/schedules.py` заводит свои "
+        "(`ScheduleIdPath`, `AdIdForm`, `AccountIdForm`). Разбор, слепой к "
+        "границе, приезжающей ИМПОРТОМ, объявил бы семь закрытых входов модуля "
+        "расписаний неограниченными: ровно так мерил ПУСТУЮ вселенную первый "
+        "сбор плана 10-24"
+    )
+
+
+def test_every_appendix_entry_is_still_outside_the_universe():
+    """ЗАПИСЬ ПРИЛОЖЕНИЯ НЕ ПЕРЕЖИВЁТ СВОЕГО ОСНОВАНИЯ.
+
+    Запись, чей вход стал покрыт признаком вселенной, есть изъятие, потерявшее
+    предмет: она молча выводила бы вход из-под правила полноты. Проверяется
+    также, что каждая запись `open` несёт СНЯТЫЙ исход, — иначе названный долг
+    был бы неотличим от догадки.
+    """
+    assert CATALOGUE_APPENDIX, (
+        "приложение пусто, а число его записей объявлено ненулевым — правило "
+        "зеленеет вакуумом"
+    )
+
+    sources = _catalogue_sources()
+    aliases = bounded_alias_names(_app_sources())
+    universe = {parameter.key for parameter in catalogue_universe(sources, aliases)}
+
+    for entry in CATALOGUE_APPENDIX:
+        assert entry.key not in universe, (
+            f"запись приложения {entry.key!r} ПОПАЛА ВО ВСЕЛЕННУЮ — основание "
+            f"({entry.reason}) исчерпано, и запись обязана быть снята, иначе "
+            "она молча выводит вход из-под правила полноты"
+        )
+        assert entry.verdict in {"safe", "open"}, (
+            f"запись приложения {entry.key!r} несёт неизвестный вердикт "
+            f"{entry.verdict!r}"
+        )
+        assert entry.reason and entry.removal, (
+            f"запись приложения {entry.key!r} без обоснования либо без условия "
+            "снятия — изъятие без основания неотличимо от пропуска"
+        )
+        if entry.verdict == "open":
+            assert "→" in entry.observed and "500" in entry.observed, (
+                f"запись приложения {entry.key!r} объявлена ОТКРЫТЫМ ДОЛГОМ, но "
+                "снятого исхода не несёт: названный долг обязан стоять на "
+                f"замере, а не на догадке (снято: {entry.observed!r})"
+            )
+
+
+# =============================================================================
+# Контроли: у правил выше есть ЗУБЫ
+# =============================================================================
+#
+# Боевые файлы НЕ ПРАВЯТСЯ ни одним контролем: подмена живёт строкой в памяти, и
+# разборщику подаётся она.
+
+_SYNTHETIC_UNBOUNDED_IDENTIFIER = '''
+from fastapi import APIRouter, Request
+from app.pages.identifiers import IdPath
+
+router = APIRouter()
+
+
+@router.post("/widgets/{widget_id}/delete")
+async def widgets_delete(request: Request, widget_id: int):
+    """Идентификатор пути БЕЗ границы — синтетический тридцатый вход."""
+    return None
+
+
+@router.post("/gadgets/{gadget_id}/delete")
+async def gadgets_delete(request: Request, gadget_id: IdPath):
+    """Соседний вход С границей: правило обязано назвать ПЕРВЫЙ, а не оба."""
+    return None
+'''
+
+
+def test_control_a_synthetic_unbounded_identifier_reddens_the_catalogue_rule():
+    """ЧТО ДОКАЗЫВАЕТ: правило КРАСНЕЕТ на неограниченном входе и НАЗЫВАЕТ его.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ПРАВИЛО БЫЛО БЫ ЗЕЛЕНО ПО ПОСТРОЕНИЮ, а обнаружилось
+    бы это в тот единственный день, когда оно пропустит настоящий неограниченный
+    вход.
+    """
+    aliases = bounded_alias_names(_app_sources())
+    sources = {"app/pages/widgets.py": _SYNTHETIC_UNBOUNDED_IDENTIFIER}
+
+    universe = catalogue_universe(sources, aliases)
+    assert {parameter.name for parameter in universe} == {"widget_id", "gadget_id"}, (
+        "разборщик не собрал вселенную синтетического модуля: "
+        f"{sorted(parameter.key for parameter in universe)} — контроль проверял "
+        "бы дерево, в котором испытуемого входа нет, и доказывал бы меньше, чем "
+        "утверждает"
+    )
+
+    missing = unbounded_universe_entries(sources, aliases)
+    assert [parameter.name for parameter in missing] == ["widget_id"], (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО НЕОГРАНИЧЕННОГО ВХОДА либо назвало вместе с ним "
+        f"ограниченный: {sorted(parameter.key for parameter in missing)}"
+    )
+
+    with pytest.raises(AssertionError) as complaint:
+        assert_every_universe_entry_carries_the_bound(sources, aliases)
+
+    text = str(complaint.value)
+    for expected in ("app/pages/widgets.py", "POST /widgets/{widget_id}/delete", "widget_id"):
+        assert expected in text, (
+            f"текст отказа не называет {expected!r} — читатель, поймавший "
+            "красное, не найдёт входа, о котором оно: " + text
+        )
+    assert "gadget_id" not in text, (
+        "текст отказа назвал ОГРАНИЧЕННЫЙ соседний вход — правило чинили бы не "
+        "там: " + text
+    )
+
+
+def test_control_an_empty_catalogue_reddens_the_universe_rule():
+    """ЧТО ДОКАЗЫВАЕТ: АНТИВАКУУМ работает — пустая вселенная даёт КРАСНЫЙ.
+
+    Утверждение «каждый найденный ограничен» истинно и для ПУСТОГО множества
+    найденных. Без этого контроля переименование каталога или смена формы
+    объявления маршрута дали бы ВЕЧНО ЗЕЛЁНОЕ правило, и обнаружилось бы это
+    следующим отказом обработчика на бою.
+    """
+    aliases = bounded_alias_names(_app_sources())
+
+    with pytest.raises(AssertionError) as no_modules:
+        assert_the_universe_is_declared({}, aliases)
+    assert "не разобрано НИ ОДНОГО модуля" in str(no_modules.value)
+
+    with pytest.raises(AssertionError) as no_parameters:
+        assert_the_universe_is_declared({"app/pages/empty.py": "x = 1\n"}, aliases)
+    assert "не найдено НИ ОДНОГО параметра вселенной" in str(no_parameters.value)
+
+    # И правило полноты на том же пустом наборе МОЛЧИТ — что и есть причина, по
+    # которой объявленное число стои́т рядом с ним, а не вместо него.
+    assert unbounded_universe_entries({}, aliases) == []
