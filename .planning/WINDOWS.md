@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 54
+open_count: 55
 waived_count: 1
 fixed_count: 6
-total_count: 61
-last_updated: 2026-09-08T12:43:57.274Z
+total_count: 62
+last_updated: 2026-09-08T15:25:47.589Z
 ---
 
 # Broken Windows Ledger
@@ -76,6 +76,7 @@ last_updated: 2026-09-08T12:43:57.274Z
 | 59 | 10 | deviation | .planning/phases/10-rychag-components-modal-html/10-28-PLAN.md |  | План 10-28: две команды <verify> целились в несуществующие модули суиты (tests/test_pages/test_accounts.py, tests/test_pages/test_ads.py) — замена измерена и записана в сводку | open |  | 2026-09-08T12:43:47.313Z |  |
 | 60 | 10 | deviation | .planning/phases/10-rychag-components-modal-html/10-28-PLAN.md |  | План 10-28: внутриплановый долг правила полноты реестра краснит ДВА узла, а не один — снятого плановыми командами test_every_framework_bounded_input_is_declared_as_a_divergence мало, тот же долг несёт контроль зубов test_control_a_shortened_exception_list_reddens_the_completeness_rule; оба зелены после задачи 3 | open |  | 2026-09-08T12:43:56.810Z |  |
 | 61 | 10 | deviation | app/pages/ads.py |  | НАХОДКА плана 10-28: признак раскрытого расписания (sched) до сравнения по колонке НЕ ДОЕЗЖАЕТ — сличается с уже загруженным составом расписаний в памяти; параметр закрыт по ОБЪЯВЛЕННОМУ предмету, а не по прослеженному пути | open |  | 2026-09-08T12:43:57.274Z |  |
+| 62 | 10 | deviation | tests/test_pages/test_htmx_gates.py |  | План 10-29 ПОВТОРИЛ находку окна 60 (план 10-28): внутриплановый долг правила полноты реестра краснит ДВА узла, а не один — снятого плановой командой test_every_framework_bounded_input_is_declared_as_a_divergence мало, тот же долг несёт контроль зубов test_control_a_shortened_exception_list_reddens_the_completeness_rule. Находка 10-28 в текст плана 10-29 не перенесена; оба узла зелены после задачи 2 | open |  | 2026-09-08T15:25:47.589Z |  |
 
 ````json
 [
@@ -809,6 +810,18 @@ last_updated: 2026-09-08T12:43:57.274Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-08T12:43:57.274Z",
+    "resolved_at": null
+  },
+  {
+    "id": 62,
+    "kind": "deviation",
+    "phase": "10",
+    "file": "tests/test_pages/test_htmx_gates.py",
+    "line": null,
+    "description": "План 10-29 ПОВТОРИЛ находку окна 60 (план 10-28): внутриплановый долг правила полноты реестра краснит ДВА узла, а не один — снятого плановой командой test_every_framework_bounded_input_is_declared_as_a_divergence мало, тот же долг несёт контроль зубов test_control_a_shortened_exception_list_reddens_the_completeness_rule. Находка 10-28 в текст плана 10-29 не перенесена; оба узла зелены после задачи 2",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-08T15:25:47.589Z",
     "resolved_at": null
   }
 ]
