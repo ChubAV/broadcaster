@@ -2628,10 +2628,39 @@ def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
 
     inputs: dict[str, str] = {}
 
-    for module, text in sources.items():
-        tree = _parse(module, text)
+    # ⚠️ ПСЕВДОНИМЫ РАЗРЕШАЮТСЯ ПО ВСЕМУ ДЕРЕВУ `app/`, А НЕ ВНУТРИ ОДНОГО
+    # МОДУЛЯ, И ЭТО ЗАМЕР, А НЕ РАСШИРЕНИЕ ОХВАТА. Охват ВХОДОВ не менялся: он
+    # по-прежнему есть POST-обработчики поданных исходников. Менялось то, ГДЕ
+    # разборщик ищет ОБЪЯВЛЕНИЕ псевдонима, которым вход ограничен.
+    #
+    # ОСНОВАНИЕ СНЯТО ПРОГОНОМ, А НЕ ВЫВЕДЕНО. Прежняя редакция собирала таблицу
+    # псевдонимов ВНУТРИ модуля, и это было верно ровно до тех пор, пока
+    # величина объявлялась в том же файле, где стояли её потребители. План 10-24
+    # перенёс объявление в нейтральный модуль (`app/pages/identifiers.py`), три
+    # псевдонима страничного модуля расписаний стали ИМЕНОВАННЫМИ ПСЕВДОНИМАМИ
+    # общих, и замер по прежней редакции дал НОЛЬ входов при семи объявленных:
+    # ограничение, приехавшее ВВОЗОМ, разборщик не видел вовсе.
+    #
+    # ЦЕНА ПРЕЖНЕЙ РЕДАКЦИИ НАЗВАНА ДВУМЯ СЛЕДСТВИЯМИ: (1) семь действующих
+    # записей реестра стали бы жалобами «ОБЪЯВЛЕН, НО ЗАМЕРОМ НЕ НАЙДЕН», то
+    # есть правило полноты покраснело бы на ВЕРНОМ дереве; (2) что хуже,
+    # измеренная вселенная стала бы ПУСТОЙ, и в направлении «найден замером, но
+    # не объявлен» правило зеленело бы вакуумом навсегда — любой будущий
+    # обработчик, ограниченный общим псевдонимом, остался бы для него невидим.
+    alias_sources = {**_app_sources(), **sources}
+    trees = {module: _parse(module, text) for module, text in sources.items()}
+    alias_trees = {
+        module: trees.get(module) or _parse(module, text)
+        for module, text in alias_sources.items()
+    }
 
-        aliases: dict[str, str] = {}
+    def module_key(dotted: str) -> str:
+        """Точечное имя модуля → ключ охвата (`app.pages.x` → `app/pages/x.py`)."""
+        return dotted.replace(".", "/") + ".py"
+
+    aliases_by_module: dict[str, dict[str, str]] = {}
+    for module, tree in alias_trees.items():
+        local: dict[str, str] = {}
         for node in ast.walk(tree):
             if not isinstance(node, ast.Assign):
                 continue
@@ -2639,7 +2668,43 @@ def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
                 continue
             carrier = bounded_annotation(node.value)
             if carrier:
-                aliases[node.targets[0].id] = carrier
+                local[node.targets[0].id] = carrier
+        aliases_by_module[module] = local
+
+    # НЕПОДВИЖНАЯ ТОЧКА, А НЕ ОДИН ПРОХОД: ввоз ввезённого имени — законная
+    # цепочка (нейтральный модуль → страничный → соседний страничный), и один
+    # проход разрешил бы её только при удачном порядке файлов.
+    changed = True
+    while changed:
+        changed = False
+        for module, tree in alias_trees.items():
+            local = aliases_by_module[module]
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    exported = aliases_by_module.get(module_key(node.module))
+                    if not exported:
+                        continue
+                    for imported in node.names:
+                        carrier = exported.get(imported.name)
+                        name = imported.asname or imported.name
+                        if carrier and local.get(name) != carrier:
+                            local[name] = carrier
+                            changed = True
+                elif isinstance(node, ast.Assign):
+                    if len(node.targets) != 1:
+                        continue
+                    target, value = node.targets[0], node.value
+                    if not isinstance(target, ast.Name):
+                        continue
+                    if not isinstance(value, ast.Name):
+                        continue
+                    carrier = local.get(value.id)
+                    if carrier and local.get(target.id) != carrier:
+                        local[target.id] = carrier
+                        changed = True
+
+    for module, tree in trees.items():
+        aliases = aliases_by_module[module]
 
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):

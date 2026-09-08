@@ -14,6 +14,9 @@
 реестра `.planning/WINDOWS.md`, и оно остаётся открытым.
 """
 
+import ast
+import pathlib
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -231,4 +234,170 @@ async def test_a_repeated_refused_request_is_indistinguishable_from_the_first(
         f"первый — {first.status_code} / {first.content!r}; "
         f"второй — {second.status_code} / {second.content!r}. Граница обязана "
         "быть чистой функцией запроса и состояния между вызовами не держать"
+    )
+
+
+# =============================================================================
+# ЕДИНСТВЕННОСТЬ ОБЪЯВЛЕНИЯ ГРАНИЦЫ ВО ВСЁМ `app/`
+#
+# Правило есть МАШИННОЕ ПРИНУЖДЕНИЕ решения `promote` плана 10-24: величина
+# повышена в первичное представление и объявлена ОДИН раз, а прежнее частное
+# понижено до именованных псевдонимов. Ветвь `add-alongside` отвергнута с
+# названным последствием — вторая копия числа в соседнем файле разошлась бы с
+# первой МОЛЧА, и это ровно тот класс отказа, за который фаза получила круги
+# ревизии 3, 4 и 5. Отвергнутое решение, за которым не стои́т правила, есть
+# намерение, а не решение.
+#
+# ⚠️ ПРЕДМЕТ ПРАВИЛА — ЕДИНСТВЕННОСТЬ, А НЕ ВЕРНОСТЬ ВЕЛИЧИНЫ, И ЭТО НАЗВАНО, А
+# НЕ ОБОЙДЕНО. Искомая величина берётся ВВОЗОМ у самого приложения, поэтому
+# правка `ID_MAX` на неверное число правило зелёным оставит: оно скажет лишь,
+# что объявление по-прежнему ОДНО. Верность величины держат основания у
+# объявления (граница колонки int4) и сквозное правило маршрута выше, где
+# `ID_MAX + 1` обязан отвергаться, а `ID_MAX` — нет.
+# =============================================================================
+
+APP_DIRECTORY = pathlib.Path(__file__).resolve().parents[2] / "app"
+
+# Владелец величины. Назван ПУТЁМ, а не «каким-нибудь одним местом»: правило,
+# требующее лишь единственности, зеленело бы и на объявлении, уехавшем обратно
+# в страничный модуль, — то есть на откате переезда, ради которого заведено.
+BOUND_OWNER = "app/pages/identifiers.py"
+
+
+def _app_sources() -> dict[str, str]:
+    """Пары «относительный путь → ТЕКСТ модуля» по всему дереву `app/`.
+
+    Обход РЕКУРСИВНЫЙ: файл, положенный будущей фазой в новый подкаталог,
+    обязан попасть в охват сам, а не ждать, пока кто-то вспомнит про его
+    каталог (форма взята у `_read_directory`, `tests/test_pages/test_htmx_gates.py`).
+    """
+    root = APP_DIRECTORY.parent
+    return {
+        str(path.relative_to(root)): path.read_text(encoding="utf-8")
+        for path in sorted(APP_DIRECTORY.glob("**/*.py"))
+    }
+
+
+def _bound_declarations(sources: dict[str, str], bound: int) -> list[str]:
+    """Места, где ВЕЛИЧИНА границы объявлена целочисленной константой.
+
+    ⚠️ ПРАВИЛО ЧИТАЕТ ДЕРЕВО РАЗБОРА, А НЕ СТРОКИ. Построчный поиск считал бы
+    вхождение числа в КОММЕНТАРИЙ и в ДОКСТРИНГ — то есть объяснение роняло бы
+    утверждение, а комментарий, повторяющий искомое, мог бы заменить собой
+    пропавшее объявление. Ловушка не гипотетическая: `app/pages/schedules.py`
+    несёт число прозой ровно затем, чтобы объяснить, почему копии числа там
+    больше нет. Основание перенесено дословно из `_strip_comments`
+    (`tests/test_pages/test_editor_schedules.py`), где та же ловушка уже стоила
+    суите константы, знавшей текст документации наизусть.
+
+    Возвращаются ВСЕ найденные места, а не первое: правило, называющее одно,
+    чинилось бы по одному файлу за круг.
+    """
+    places: list[str] = []
+    for module, text in sorted(sources.items()):
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as error:  # модуль обязан РОНЯТЬ правило, а не выпадать
+            raise AssertionError(
+                f"модуль {module} не разобрался в дерево ({error}) — охват, тихо "
+                "потерявший файл, утверждает не то, что обещает"
+            ) from error
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign):
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if not isinstance(value, ast.Constant):
+                continue
+            # `bool` — подкласс `int`, и без этой строки `True` сравнивался бы с
+            # числом как число.
+            if isinstance(value.value, bool) or not isinstance(value.value, int):
+                continue
+            if value.value != bound:
+                continue
+            for target in targets:
+                name = getattr(target, "id", None) or ast.dump(target)
+                places.append(f"{module}:{node.lineno} → {name}")
+    return places
+
+
+def test_the_identifier_bound_is_declared_exactly_once_in_the_whole_app():
+    """Величина границы объявлена во всём `app/` РОВНО ОДИН РАЗ, и владелец назван."""
+    places = _bound_declarations(_app_sources(), ID_MAX)
+
+    # Номер строки владельца в утверждение НЕ ЗАШИТ: он есть свойство файла, а
+    # не правила, и первая же вставка абзаца выше объявления красила бы прогон
+    # сообщением о расползшейся границе — то есть правило начало бы врать о
+    # своём предмете.
+    assert len(places) == 1 and places[0].startswith(f"{BOUND_OWNER}:"), (
+        f"объявлений величины границы ({ID_MAX}) во всём `app/` не одно, а "
+        f"{len(places)}, либо владелец её не `{BOUND_OWNER}`. НАЙДЕНЫ ВСЕ "
+        f"места: {places}. Вторая копия числа расходится с первой МОЛЧА при "
+        "первой же правке колонки — ровно тот класс отказа (`запись шире "
+        "дерева`), за который фаза получила круги ревизии 3, 4 и 5. Величина "
+        f"объявляется в `{BOUND_OWNER}`, а потребители ввозят её оттуда"
+    )
+
+
+def test_control_negative_a_second_declaration_reddens_the_uniqueness_rule():
+    """ЗУБЫ ПРАВИЛА ПОКАЗАНЫ, А НЕ ЗАЯВЛЕНЫ.
+
+    Правилу подаётся ИЗМЕНЁННАЯ КОПИЯ дерева, в которой та же величина
+    объявлена ВТОРОЙ раз в соседнем модуле. Копия собирается в памяти — файл
+    дерева не правится ни байтом. Без наблюдённого перехода цвета правило
+    неотличимо от вакуумно-зелёного (записанный опыт окна 29).
+    """
+    sources = _app_sources()
+
+    honest = _bound_declarations(sources, ID_MAX)
+    # Первый предохранитель: на НАСТОЯЩЕМ дереве правило зелено, иначе контроль
+    # сравнивал бы подделку с уже сломанным образцом.
+    assert len(honest) == 1, (
+        f"на настоящем дереве правило уже красно: {honest}"
+    )
+
+    victim = "app/pages/schedules.py"
+    assert victim in sources, f"модуль подделки исчез из дерева: {victim}"
+    forged = dict(sources)
+    forged[victim] = sources[victim] + f"\n_SECOND_COPY_OF_THE_BOUND = {ID_MAX}\n"
+
+    broken = _bound_declarations(forged, ID_MAX)
+    assert len(broken) == 2 and any(
+        place.startswith(f"{victim}:") for place in broken
+    ), (
+        "правило НЕ ЗАМЕТИЛО второго объявления той же величины в соседнем "
+        f"модуле: {broken}. Копия числа прошла бы в дерево незамеченной"
+    )
+    assert any(place.startswith(f"{BOUND_OWNER}:") for place in broken), (
+        "подделка вытеснила из находок владельца величины — контроль "
+        f"доказывал бы не то свойство, которое объявил: {broken}"
+    )
+
+
+def test_control_the_uniqueness_rule_does_not_read_prose():
+    """ПРАВИЛО НЕ САМООТМЕНЯЕТСЯ: комментарий не есть объявление.
+
+    В копию модуля дописывается СТРОКА КОММЕНТАРИЯ и ДОКСТРИНГ, дословно
+    несущие искомое число. Находки обязаны не измениться: правило, читающее
+    прозу, краснело бы на правку документации и зеленело бы на документацию,
+    повторяющую искомое.
+    """
+    sources = _app_sources()
+    honest = _bound_declarations(sources, ID_MAX)
+
+    victim = "app/pages/schedules.py"
+    forged = dict(sources)
+    forged[victim] = (
+        sources[victim]
+        + f"\n# Прежняя копия величины была {ID_MAX}, и её здесь больше нет.\n"
+        + f'\n_PROSE = """величина {ID_MAX} названа здесь прозой"""\n'
+    )
+
+    assert _bound_declarations(forged, ID_MAX) == honest, (
+        "правило прочло ПРОЗУ как объявление: комментарий и докстринг, "
+        "называющие число, изменили находки. Объяснение не имеет права ронять "
+        f"утверждение (найдено на подделке: {_bound_declarations(forged, ID_MAX)})"
     )
