@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 10
 current_phase_name: Рычаг `components/modal.html`
 status: executing
-stopped_at: Completed 10-26-PLAN.md
-last_updated: "2026-09-08T09:37:33.028Z"
+stopped_at: Completed 10-27-PLAN.md
+last_updated: "2026-09-08T10:30:28.058Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 10 execution started
-state_head: a0167a840ab45859152ccda443c6dcf707fdb27d
+state_head: 998a3e7673eb6501ef01cc047f67b1ec136f367b
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 70
-  completed_plans: 64
+  completed_plans: 65
   percent: 33
 ---
 
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
-Plan: 4 of 32
+Plan: 5 of 32
 Total Plans in Phase: 32
 Completed Plans in Phase: 20
 Status: Ready to execute
@@ -107,6 +107,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 10 P24 | 1h 23m | 3 tasks | 5 files |
 | Phase 10 P25 | 44 min | 3 tasks | 2 files |
 | Phase 10 P26 | 21 min | 2 tasks | 7 files |
+| Phase 10 P27 | 47 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -194,6 +195,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 10]: Маркер planning объявлен хуком pytest_configure в tests/conftest.py, а НЕ разделом [tool.pytest.ini_options]: раздела у проекта нет вовсе, и его появление сделало бы pyproject.toml якорем rootdir, изменив поведение всей суиты ради регистрации одного имени (план 10-26)
 - [Phase 10]: Граница годности маркера записана В ДВУХ МЕСТАХ дерева (tests/conftest.py и tests/test_planning/__init__.py): маркер есть инструмент РАЗБОРА, а не разрешение не прогонять — каталог держит единственное принуждение регламента отметок требований и единственную защиту обхода от самозаверения (план 10-26)
 - [Phase 10]: Планы ВОЛНЫ 1 фазы 10 отбирают продуктовую суиту ПУТЁМ (--ignore=tests/test_planning), а не маркером: отбор по отрицанию ещё не объявленного имени НЕ ПАДАЕТ — он молча собирает другое множество и даёт зелёный. Планы последующих волн пользуются -m 'not planning' свободно (план 10-26)
+- [Phase 10]: Пометка написана ПО ЗАМЕРУ, а не по букве плана: замер опроверг вывод IN-02 пятого круга — вторая ветвь условия закрытия панели ЖИВАЯ и закрывает панель на 16 из 18 мест подтверждения, мёртв ПЕРВЫЙ дизъюнкт
+- [Phase 10]: Оба исхода, предложенных IN-02, неприменимы: удаление терма — регрессия на 16 местах из 18, пометка подстраховкой — заведомо неверное утверждение в рычаге фазы. Терм на месте, поведение восемнадцати мест не тронуто
+- [Phase 10]: Правило стережёт СОГЛАСИЕ ЦИТАТЫ ПОМЕТКИ С ДЕРЕВОМ, а не попадание статуса в успешный диапазон: диапазон на пути перехода не применяется вовсе, ранний возврат стоит до него
 
 ### Pending Todos
 
@@ -372,8 +376,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-08T09:36:50.281Z
-Stopped at: Completed 10-26-PLAN.md
+Last session: 2026-09-08T10:30:01.135Z
+Stopped at: Completed 10-27-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
