@@ -16,6 +16,7 @@
 
 import ast
 import pathlib
+from dataclasses import dataclass
 
 import pytest
 from httpx import AsyncClient
@@ -24,7 +25,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import AD_STATUS_PUBLISHED
 from app.models.ad import Ad
+from app.models.messenger_account import MessengerAccount
+from app.models.schedule import Schedule
+from app.models.send_log import SendLog
 from app.models.user import User
+from app.pages.history import STATUS_OK
+from tests.conftest import seed_group
 
 # ⚠️ ГРАНИЦА ВВОЗИТСЯ У ПРИЛОЖЕНИЯ, А НЕ ВЫПИСЫВАЕТСЯ ЛИТЕРАЛОМ. Вторая копия
 # числа разошлась бы с первой молча при первой же правке колонки, и правило
@@ -400,4 +406,358 @@ def test_control_the_uniqueness_rule_does_not_read_prose():
         "правило прочло ПРОЗУ как объявление: комментарий и докстринг, "
         "называющие число, изменили находки. Объяснение не имеет права ронять "
         f"утверждение (найдено на подделке: {_bound_declarations(forged, ID_MAX)})"
+    )
+
+
+# =============================================================================
+# МАТРИЦА ВХОДОВ ПРОДУКТОВЫХ МОДУЛЕЙ — «ВХОД → СНЯТЫЙ КОД»
+#
+# ⚠️ МАТРИЦА, А НЕ ОБРАЗЕЦ, И ЭТО ЕДИНСТВЕННОЕ, ЧЕМ «ЗАКРЫТО НА ОДНОМ МАРШРУТЕ»
+# НЕ ПРОЧИТАЕТСЯ КАК «ЗАКРЫТО НА ВСЕХ». План 10-24 провёл насквозь ОДИН вход
+# (`POST /ads/{ad_id}/delete`), и зелёный того правила говорил ровно об одном
+# входе. Пятый круг ревизии (`CR-01`) предъявил ВОСПРОИЗВЕДЁННЫЕ отказы ещё на
+# пяти маршрутах: граница стояла там, куда смотрели, и молчала там, куда не
+# смотрели. Правило, сличающее отображение ЦЕЛИКОМ и называющее ВСЕ несогласные
+# строки, чинится одним кругом; правило, останавливающееся на первой, чинилось
+# бы по одному входу за круг — ровно тот способ, которым фаза потратила круги
+# ревизии 3, 4 и 5.
+#
+# ⚠️ ГРАНИЦА НАБЛЮДЕНИЯ ТА ЖЕ, ЧТО У ПРАВИЛ ВЫШЕ, И ПОВТОРЯЕТСЯ ЗДЕСЬ, А НЕ
+# ОСТАВЛЯЕТСЯ ЧИТАТЕЛЮ: наблюдается отказ на ГРАНИЦЕ ПРИЛОЖЕНИЯ, до драйвера.
+# Поведения боевого PostgreSQL на НЕОГРАНИЧЕННОМ входе матрица не наблюдает и
+# наблюдать не может — предмет окна 39 реестра `.planning/WINDOWS.md`.
+# =============================================================================
+
+
+@dataclass(frozen=True)
+class _BoundedEntry:
+    """Один ЗАКРЫТЫЙ ВХОД матрицы.
+
+    ВХОД, а не маршрут: маршрут с двумя идентификаторами даёт ДВА входа, и
+    склеивание их в один есть ровно та ошибка счёта, которую соседний реестр
+    расхождения заводился исправить (`tests/test_pages/test_htmx_gates.py`,
+    летопись числа 0 → 7).
+
+    Поля: `key` — человекочитаемое имя входа, по форме совпадающее с ключом
+    реестра расхождения там, где вход есть вход POST-обработчика; `method` —
+    способ обращения; `address` — адрес с местозаполнителем `{value}` на месте
+    ИСПЫТУЕМОЙ величины и с живыми полями посева на местах ПРОЧИХ; `parameter` —
+    имя испытуемого параметра; `live` — ключ посева, из которого берётся ЖИВАЯ
+    величина для антивакуума.
+    """
+
+    key: str
+    method: str
+    address: str
+    parameter: str
+    live: str
+
+
+BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
+    # --- app/pages/account_groups.py: семь идентификаторов пути и курсор ---
+    _BoundedEntry(
+        key="app/pages/account_groups.py::GET /accounts/{account_id}/groups → адрес account_id",
+        method="GET",
+        address="/accounts/{value}/groups",
+        parameter="account_id",
+        live="account",
+    ),
+    _BoundedEntry(
+        key="app/pages/account_groups.py::GET /accounts/{account_id}/groups/partial → адрес account_id",
+        method="GET",
+        address="/accounts/{value}/groups/partial",
+        parameter="account_id",
+        live="account",
+    ),
+    _BoundedEntry(
+        # ⚠️ ИДЕНТИФИКАТОР, ПРИЕХАВШИЙ ПАРАМЕТРОМ ЗАПРОСА, А НЕ АДРЕСОМ. Курсор
+        # уезжает операндом сравнения SQL по колонке идентификатора
+        # (`Group.id > after_id`, `app/pages/account_groups.py`), то есть его
+        # граница есть граница КОЛОНКИ. Разведение входов по СПОСОБУ ПЕРЕДАЧИ
+        # было бы разведением по внешнему признаку.
+        key="app/pages/account_groups.py::GET /accounts/{account_id}/groups/partial → запрос after_id",
+        method="GET",
+        address="/accounts/{account}/groups/partial?after_id={value}",
+        parameter="after_id",
+        live="group",
+    ),
+    _BoundedEntry(
+        key="app/pages/account_groups.py::GET /accounts/{account_id}/groups/sync-status → адрес account_id",
+        method="GET",
+        address="/accounts/{value}/groups/sync-status",
+        parameter="account_id",
+        live="account",
+    ),
+    _BoundedEntry(
+        key="app/pages/account_groups.py::POST /accounts/{account_id}/groups/{group_id}/toggle → адрес account_id",
+        method="POST",
+        address="/accounts/{value}/groups/{group}/toggle",
+        parameter="account_id",
+        live="account",
+    ),
+    _BoundedEntry(
+        key="app/pages/account_groups.py::POST /accounts/{account_id}/groups/{group_id}/toggle → адрес group_id",
+        method="POST",
+        address="/accounts/{account}/groups/{value}/toggle",
+        parameter="group_id",
+        live="group",
+    ),
+    _BoundedEntry(
+        key="app/pages/account_groups.py::POST /accounts/{account_id}/groups/{group_id}/delete → адрес account_id",
+        method="POST",
+        address="/accounts/{value}/groups/{group}/delete",
+        parameter="account_id",
+        live="account",
+    ),
+    _BoundedEntry(
+        key="app/pages/account_groups.py::POST /accounts/{account_id}/groups/{group_id}/delete → адрес group_id",
+        method="POST",
+        address="/accounts/{account}/groups/{value}/delete",
+        parameter="group_id",
+        live="group",
+    ),
+    # --- app/pages/accounts.py: четыре идентификатора пути ---
+    _BoundedEntry(
+        key="app/pages/accounts.py::GET /accounts/{account_id}/sync-status → адрес account_id",
+        method="GET",
+        address="/accounts/{value}/sync-status",
+        parameter="account_id",
+        live="account",
+    ),
+    _BoundedEntry(
+        key="app/pages/accounts.py::POST /accounts/{account_id}/retry-sync → адрес account_id",
+        method="POST",
+        address="/accounts/{value}/retry-sync",
+        parameter="account_id",
+        live="account",
+    ),
+    _BoundedEntry(
+        key="app/pages/accounts.py::POST /accounts/{account_id}/sync-groups → адрес account_id",
+        method="POST",
+        address="/accounts/{value}/sync-groups",
+        parameter="account_id",
+        live="account",
+    ),
+    _BoundedEntry(
+        key="app/pages/accounts.py::POST /accounts/{account_id}/delete → адрес account_id",
+        method="POST",
+        address="/accounts/{value}/delete",
+        parameter="account_id",
+        live="account",
+    ),
+)
+
+
+# Три величины ВНЕ диапазона колонки. Каждая взята по СВОЕМУ основанию, а не для
+# числа: `ABOVE_THE_COLUMN` — соседняя граница, до правки тихо неотличимая от
+# годной; `BEYOND_ANY_DRIVER` — величина, роняющая сам драйвер; `BELOW_THE_DOMAIN`
+# — величина ниже домена автоинкремента.
+REFUSED_VALUES: tuple[str, ...] = (
+    ABOVE_THE_COLUMN,
+    BEYOND_ANY_DRIVER,
+    BELOW_THE_DOMAIN,
+)
+
+
+async def _seed_live_row_set(db: AsyncSession) -> dict[str, int]:
+    """ЖИВОЙ набор строк пользователя фикстуры входа — по одной на сущность.
+
+    Возвращается отображение «имя сущности → её идентификатор»: именно из него
+    матрица берёт ЖИВЫЕ величины для антивакуума и живые поля адреса на местах
+    НЕиспытуемых параметров.
+
+    ⚠️ СОСТОЯНИЕ АККАУНТА `syncing` — ВЫБОР ВЕТКИ, А НЕ УКРАШЕНИЕ ПОСЕВА, и
+    названо здесь, а не оставлено читателю. Живой запуск синхронизации
+    (`POST /accounts/{id}/sync-groups`) на аккаунте в состоянии `active` пошёл бы
+    в НАСТОЯЩИЙ мессенджер: суита получила бы сетевой вызов, а исход правила
+    стал бы зависеть от того, чего у суиты нет. Состояние `syncing` уводит
+    обработчик в ступень первую гарда повторного запуска — переход на экран
+    групп, — то есть живая величина ДОЕЗЖАЕТ ДО ТЕЛА обработчика, а тело
+    возвращается детерминированно. Предмет антивакуума — ДОПУЩЕНА ли живая
+    величина границей, и он наблюдается полностью; что тело делает дальше —
+    предмет собственных суит этих модулей, и они прогоняются отдельно.
+
+    ⚠️ ТИП АККАУНТА `tg_user` — ТОТ ЖЕ ВЫБОР ВЕТКИ ПО ТОМУ ЖЕ ОСНОВАНИЮ: повтор
+    синхронизации (`POST /accounts/{id}/retry-sync`) принимает только `wa` и
+    `max` и на `tg_user` возвращает переход, не обращаясь ни к какому мосту.
+
+    ⚠️ ЗАПИСЬ ЖУРНАЛА ПОСЕЯНА УСПЕШНОЙ по тому же основанию: повтор успешной
+    отправки возвращает переход ДО обращения к брокеру очереди. Повтор
+    НЕуспешной ушёл бы в `celery.send_task`, то есть к внешней системе.
+    """
+    user = (
+        await db.execute(select(User).where(User.email == "testuser@test.com"))
+    ).scalar_one()
+
+    account = MessengerAccount(
+        user_id=user.id,
+        type="tg_user",
+        credentials="сессия посева",
+        status="syncing",
+    )
+    db.add(account)
+    await db.commit()
+    await db.refresh(account)
+
+    group = await seed_group(db, account.id)
+
+    ad = Ad(
+        user_id=user.id,
+        title="Объявление для матрицы",
+        text="Текст объявления",
+        images=[],
+        status=AD_STATUS_PUBLISHED,
+    )
+    db.add(ad)
+    await db.commit()
+    await db.refresh(ad)
+
+    schedule = Schedule(
+        ad_id=ad.id,
+        account_id=account.id,
+        group_ids=[group.id],
+        days_of_week=[1],
+        times_of_day=["10:00"],
+    )
+    db.add(schedule)
+    await db.commit()
+    await db.refresh(schedule)
+
+    log = SendLog(
+        user_id=user.id,
+        ad_id=ad.id,
+        group_id=group.id,
+        status=STATUS_OK,
+    )
+    db.add(log)
+    await db.commit()
+    await db.refresh(log)
+
+    return {
+        "account": account.id,
+        "group": group.id,
+        "ad": ad.id,
+        "schedule": schedule.id,
+        "log": log.id,
+    }
+
+
+async def _entry_outcome(
+    client: AsyncClient, entry: _BoundedEntry, address: str
+) -> str:
+    """СНЯТЫЙ КОД одного обращения по одному адресу — строкой.
+
+    ⚠️ ВЕЛИЧИНА УЖЕ ПОДСТАВЛЕНА В АДРЕС ФОРМАТИРОВАНИЕМ СТРОКИ, А НЕ
+    ПРИВЕДЕНИЕМ К ЦЕЛОМУ — по тому же основанию, что и у `_delete_ad` выше:
+    величина в двадцать шесть знаков в приведении потеряла бы ровно то свойство,
+    ради которого взята.
+    """
+    if entry.method == "POST":
+        response = await client.post(
+            address, content="", headers=FORM_HEADERS, follow_redirects=False
+        )
+    else:
+        response = await client.get(address, follow_redirects=False)
+    return str(response.status_code)
+
+
+@pytest.mark.asyncio
+async def test_every_bounded_input_refuses_a_value_outside_the_column(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """КАЖДЫЙ вход матрицы отвечает отказом ВАЛИДАЦИИ на величине вне диапазона.
+
+    Отображение сличается ЦЕЛИКОМ, и текст отказа называет ВСЕ несогласные
+    строки со снятыми кодами.
+    """
+    live = await _seed_live_row_set(db_session)
+
+    disagreed: list[str] = []
+    for entry in BOUNDED_ENTRIES:
+        for value in REFUSED_VALUES:
+            address = entry.address.format(value=value, **live)
+            code = await _entry_outcome(authed_client, entry, address)
+            if code != VALIDATION_REFUSAL:
+                disagreed.append(
+                    f"{entry.key} ← {value} = {code} "
+                    f"(ожидалось {VALIDATION_REFUSAL}; {entry.method} {address})"
+                )
+
+    assert not disagreed, (
+        "ГРАНИЦА ВЕЛИЧИНЫ ИДЕНТИФИКАТОРА СТОИ́Т НЕ НА ВСЕХ ВХОДАХ. Несогласных "
+        f"строк {len(disagreed)} из "
+        f"{len(BOUNDED_ENTRIES) * len(REFUSED_VALUES)}:\n  "
+        + "\n  ".join(disagreed)
+        + "\n\nВеличина вне диапазона колонки обязана отвергаться ДО тела "
+        "обработчика на КАЖДОМ входе, а не на том, куда смотрели (`CR-01` "
+        "пятого круга ревизии)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_every_bounded_input_admits_the_value_at_the_column(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """СМЕЖНОСТЬ, ВТОРАЯ СТОРОНА СТЫКА — НА КАЖДОМ ВХОДЕ, А НЕ НА ОБРАЗЦЕ.
+
+    Величина, РАВНАЯ границе, в диапазоне колонки лежит, и отвергать её граница
+    права не имеет. Без этого правила помощник, отвергающий ВСЁ, дал бы зелёный
+    прогон правила выше и границей не был бы.
+    """
+    live = await _seed_live_row_set(db_session)
+
+    disagreed: list[str] = []
+    for entry in BOUNDED_ENTRIES:
+        address = entry.address.format(value=AT_THE_COLUMN, **live)
+        code = await _entry_outcome(authed_client, entry, address)
+        if code == VALIDATION_REFUSAL or code.startswith("5"):
+            disagreed.append(
+                f"{entry.key} ← {AT_THE_COLUMN} = {code} "
+                f"({entry.method} {address})"
+            )
+
+    assert not disagreed, (
+        "ГРАНИЦА ОТВЕРГЛА ВЕЛИЧИНУ, ЛЕЖАЩУЮ В ДИАПАЗОНЕ КОЛОНКИ, либо уронила "
+        f"на ней обработчик. Несогласных строк {len(disagreed)} из "
+        f"{len(BOUNDED_ENTRIES)}:\n  " + "\n  ".join(disagreed)
+    )
+
+
+@pytest.mark.asyncio
+async def test_every_bounded_input_still_admits_a_live_value(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """АНТИВАКУУМ ПО ВСЕМУ ПЕРЕЧНЮ, А НЕ ПО ОДНОЙ СТРОКЕ.
+
+    Правило, отвергающее ВСЁ, дало бы тот же зелёный на правилах отказа выше.
+    Здесь на КАЖДЫЙ вход подаётся ЖИВАЯ посеянная величина, и её исход обязан не
+    быть ни отказом валидации, ни отказом обработчика.
+
+    ⚠️ ПОСЕВ СВЕЖИЙ НА КАЖДЫЙ ВХОД, И ЭТО НЕ ОСТОРОЖНОСТЬ. Четыре входа перечня
+    НЕОБРАТИМЫ (удаление аккаунта и удаление группы), и общий посев сделал бы
+    исход входов, идущих следом, зависимым от ПОРЯДКА перечня — то есть правило
+    начало бы утверждать о порядке, а не о границе.
+    """
+    disagreed: list[str] = []
+    live_values_run = 0
+
+    for entry in BOUNDED_ENTRIES:
+        live = await _seed_live_row_set(db_session)
+        address = entry.address.format(value=live[entry.live], **live)
+        code = await _entry_outcome(authed_client, entry, address)
+        live_values_run += 1
+        if code == VALIDATION_REFUSAL or code.startswith("5"):
+            disagreed.append(
+                f"{entry.key} ← живая величина {live[entry.live]} = {code} "
+                f"({entry.method} {address})"
+            )
+
+    assert live_values_run == len(BOUNDED_ENTRIES), (
+        f"живых величин прогнано {live_values_run}, а входов "
+        f"{len(BOUNDED_ENTRIES)} — антивакуум прогнан не по всему перечню"
+    )
+    assert not disagreed, (
+        "ГРАНИЦА ОТВЕРГЛА ЖИВУЮ ВЕЛИЧИНУ либо уронила на ней обработчик — она "
+        f"отвергает не то, что объявила. Несогласных строк {len(disagreed)} из "
+        f"{len(BOUNDED_ENTRIES)}:\n  " + "\n  ".join(disagreed)
     )
