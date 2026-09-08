@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 10
 current_phase_name: Рычаг `components/modal.html`
 status: executing
-stopped_at: Completed 10-31-PLAN.md
-last_updated: "2026-09-08T18:15:49.780Z"
+stopped_at: Completed 10-32-PLAN.md
+last_updated: "2026-09-08T19:28:25.316Z"
 last_activity: 2026-09-08
 last_activity_desc: Phase 10 execution started
-state_head: 3ad98ed30dd4dc4fe1a11955f14329e3706e333f
+state_head: 7e5b06dee66fdf2c6d74a477818f6017f3480450
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 70
-  completed_plans: 69
+  completed_plans: 70
   percent: 33
 ---
 
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
-Plan: 9 of 32
+Plan: 10 of 32
 Total Plans in Phase: 32
 Completed Plans in Phase: 20
 Status: Ready to execute
@@ -112,6 +112,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 10 P29 | 2h 5m | 2 tasks | 3 files |
 | Phase 10 P30 | 1h 2m | 3 tasks | 4 files |
 | Phase 10 P31 | 54 min | 3 tasks | 4 files |
+| Phase 10 P32 | 1h 7m | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -213,6 +214,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 10]: Условие снятия РАЗВЕДЕНО НА ДВУХ АДРЕСАТОВ машинно: правило требует в тексте И «Фаза 11» (адресат работы), И «ВЛАДЕЛЬЦУ» (адресат решения о форме); условие, назвавшее только фазу, читалось бы как назначенное решение
 - [Phase 10]: Проверка статуса в приклейке поставлена ПЕРВОЙ по измеренному основанию: ответ 204 не несёт заголовка типа содержимого вовсе, и проверка типа, стоя выше, назвала бы не ту причину
 - [Phase 10]: Механизм внеполосного кода исхода НЕ УДАЛЁН как неиспользуемый: сужение утверждения о механизме и его удаление — разные действия (0 удалённых строк кода)
+- [Phase 10]: Пятая копия снятого утверждения ищется по ПРЕДМЕТУ, а не по совпадению слов: близкая находка записывается отдельно с замером, иначе строгий вердикт покупается умолчанием
+- [Phase 10]: Правка ПОЛОВИНЫ вхождений одного утверждения отклоняется с замером числа вхождений: полупочиненное состояние есть тот же дефект, ради снятия которого правка затевалась
+- [Phase 10]: Сведение записей об опровергнутом сохраняет ПРЕДМЕТ, а не ТЕКСТ, и проверяется ДВУМЯ числами сразу — строк меньше, названных предметов больше
 
 ### Pending Todos
 
@@ -391,8 +395,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-08T18:15:08.759Z
-Stopped at: Completed 10-31-PLAN.md
+Last session: 2026-09-08T19:28:13.096Z
+Stopped at: Completed 10-32-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
