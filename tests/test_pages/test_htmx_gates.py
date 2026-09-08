@@ -2566,6 +2566,194 @@ VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
         lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
         decision_state=DECISION_WAITS_FOR_THE_OWNER,
     ),
+    # =========================================================================
+    # ДЕВЯТЬ ЗАПИСЕЙ ПЯТОЙ ПАРТИИ, ПЛАН 10-28, ЗАДАЧИ 1 И 2.
+    #
+    # ⚠️ КЛЮЧИ СНЯТЫ ПРОГОНОМ ЗАМЕРА, А НЕ НАБРАНЫ ПО ПАМЯТИ. Ключ, набранный по
+    # памяти, разошёлся бы со сравнением множеств и уронил бы правило полноты
+    # жалобой «ОБЪЯВЛЕН, НО ЗАМЕРОМ НЕ НАЙДЕН» — то есть правило покраснело бы
+    # на ВЕРНОМ дереве.
+    #
+    # ⚠️ ДОСТИЖИМОСТЬ У КАЖДОЙ ЗАПИСИ СВОЯ, И ОБЩЕГО ОБОСНОВАНИЯ НА ДЕВЯТЬ ЗДЕСЬ
+    # НЕТ НАМЕРЕННО: достижимость есть свойство ВХОДА, и одно обоснование на
+    # девять сказало бы о девяти входах одно, не измерив ни одного. Общей
+    # остаётся ЦЕНА — она есть свойство ФОРМЫ отказа.
+    #
+    # ⚠️ ДВА ИДЕНТИФИКАТОРА ОДНОГО МАРШРУТА ДЕЛЯТ СТРОКУ РАЗМЕТКИ ПО ПОСТРОЕНИЮ,
+    # И ЭТО ЗАМЕР, А НЕ КОПИЯ ОБОСНОВАНИЯ. Тумблер и удаление группы несут ДВА
+    # входа каждый, но адрес у маршрута ОДИН, и оба идентификатора едут в нём
+    # рядом. Обоснования этих пар называют РАЗНЫЕ СЕГМЕНТЫ одного адреса и
+    # разный источник величины (идентификатор аккаунта приходит из контекста
+    # ЭКРАНА, идентификатор группы — из ОТРИСОВАННОЙ СТРОКИ), и различие
+    # измерено чтением разметки, а не назначено ради непохожести.
+    # =========================================================================
+    _ValidationRefusalDivergence(
+        entry=(
+            "app/pages/account_groups.py::POST "
+            "/accounts/{account_id}/groups/{group_id}/toggle → адрес account_id"
+        ),
+        alias="IdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "величина занимает ПЕРВЫЙ сегмент адреса формы тумблера "
+            "(`{% call form_wrapper(action='/accounts/' ~ account_id ~ "
+            "'/groups/' ~ group.id ~ '/toggle'`, "
+            "`app/templates/account_groups/includes/group_row.html:193`) и "
+            "приезжает из КОНТЕКСТА ЭКРАНА — сервер положил в него тот же "
+            "`account_id`, по которому отрисовал страницу, — а не из "
+            "отрисованной строки. Через интерфейс не редактируется ничем"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry=(
+            "app/pages/account_groups.py::POST "
+            "/accounts/{account_id}/groups/{group_id}/toggle → адрес group_id"
+        ),
+        alias="IdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "величина занимает ТРЕТИЙ сегмент того же адреса "
+            "(`~ group.id ~ '/toggle'`, "
+            "`app/templates/account_groups/includes/group_row.html:193`) и "
+            "приезжает из ОТРИСОВАННОЙ СТРОКИ — `group.id` живой строки выдачи, "
+            "— а не из контекста экрана. Строка разметки у этой пары входов "
+            "ОДНА, потому что адрес у маршрута один; источник величины РАЗНЫЙ, и "
+            "это и есть причина, по которой входов два, а не один"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry=(
+            "app/pages/account_groups.py::POST "
+            "/accounts/{account_id}/groups/{group_id}/delete → адрес account_id"
+        ),
+        alias="IdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "величина занимает ПЕРВЫЙ сегмент адреса, и мест этих ДВА — "
+            "форма-триггер удаления "
+            "(`app/templates/account_groups/includes/group_row.html:234`) и "
+            "аргумент `action` панели подтверждения (там же, `:370`). Оба "
+            "собираются сервером из `account_id` контекста экрана"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry=(
+            "app/pages/account_groups.py::POST "
+            "/accounts/{account_id}/groups/{group_id}/delete → адрес group_id"
+        ),
+        alias="IdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "величина занимает ТРЕТИЙ сегмент тех же двух адресов "
+            "(`{{ group.id }}` формы-триггера, "
+            "`app/templates/account_groups/includes/group_row.html:234`; "
+            "`~ group.id ~` панели подтверждения, там же `:370`) и приезжает из "
+            "ОТРИСОВАННОЙ СТРОКИ выдачи. ⚠️ ИМЕННО НА ЭТОМ ВХОДЕ РЕВИЗИЯ "
+            "НАЗВАЛА ГАРД ПРОИСХОЖДЕНИЯ НЕДОСТИЖИМЫМ: приведение к целому "
+            "удавалось, и отказ случался позже, уже в слое доступа к данным"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry=(
+            "app/pages/accounts.py::POST /accounts/{account_id}/delete → "
+            "адрес account_id"
+        ),
+        alias="IdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "величина приезжает АДРЕСОМ, и мест этих ЧЕТЫРЕ в одной только "
+            "копии порции — три формы-триггера по трём состояниям карточки "
+            "(`app/templates/accounts/partial_cards.html:59`, `:87`, `:116`) и "
+            "аргумент `action` панели подтверждения (там же, `:138`). Все "
+            "собираются сервером из `account.id` живой строки"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry=(
+            "app/pages/accounts.py::POST /accounts/{account_id}/retry-sync → "
+            "адрес account_id"
+        ),
+        alias="IdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "величина стои́т в адресе формы повтора синхронизации "
+            "(`app/templates/accounts/partial_cards.html:84`), и форма эта "
+            "отрисовывается ТОЛЬКО в состоянии `sync_failed` — то есть "
+            "показывается не всегда, но собирается сервером из `account.id` "
+            "всегда, когда показана"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry=(
+            "app/pages/accounts.py::POST /accounts/{account_id}/sync-groups → "
+            "адрес account_id"
+        ),
+        alias="IdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "величина стои́т в адресе формы запуска синхронизации на ЭКРАНЕ "
+            "ГРУПП, а не в карточке аккаунта "
+            "(`app/templates/account_groups/list.html:85`), и приезжает из "
+            "`account_id` контекста экрана. ⚠️ ЭТО ЕДИНСТВЕННАЯ ИЗ ДЕВЯТИ "
+            "ЗАПИСЕЙ, ЧЬЯ РАЗМЕТКА ЛЕЖИТ НЕ В ТОМ КАТАЛОГЕ, ЧТО ЕЁ ОБРАБОТЧИК: "
+            "обработчик — в модуле аккаунтов, разметка — в шаблонах групп "
+            "аккаунта, и найдена она ЗАМЕРОМ, а не по соседству имени"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry="app/pages/ads.py::POST /ads/{ad_id}/edit → адрес ad_id",
+        alias="IdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "величина стои́т в АДРЕСЕ ДЕЙСТВИЯ формы редактора и продублирована "
+            "атрибутом отправки слоя письма — обе строки собираются одним и тем "
+            "же выражением с `ad.id` (`app/templates/ads/form.html:71` и `:72`). "
+            "⚠️ РАЗМЕТКИ КАРТОЧКИ СПИСКА ЗДЕСЬ НЕТ, И ЭТО ЗАМЕР: карточка "
+            "(`app/templates/ads/includes/ad_card.html:109`) ведёт в редактор "
+            "ССЫЛКОЙ, то есть ЧТЕНИЕМ, и POST-входа не порождает"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
+    _ValidationRefusalDivergence(
+        entry="app/pages/history.py::POST /history/{log_id}/retry → адрес log_id",
+        alias="IdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
+            "величина стои́т в адресе формы-триггера повтора "
+            "(`app/templates/history/includes/history_card.html:162`) и в "
+            "аргументе `action` панели подтверждения (там же, `:175`); обе "
+            "собираются сервером из `log_id` отрисованной записи. ⚠️ ЭТО "
+            "ЕДИНСТВЕННЫЙ ИЗ ДЕВЯТИ ВХОДОВ, ЧЕЙ МАРШРУТ ЗАПРЕЩЁН ПОД ЧУЖОЙ "
+            "ЛИЧНОСТЬЮ (D-22): отказ валидации фреймворка встаёт ДО зависимости "
+            "запрета, и порядок этот проверен матрицей, а не выведен"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
 )
 
 # ⚠️ ЧИСЛО ОБЪЯВЛЕНО, А НЕ ВЫВЕДЕНО ИЗ ДЛИНЫ ПЕРЕЧНЯ САМОГО ПО СЕБЕ. Молча
@@ -2598,7 +2786,34 @@ VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
 #   ⚠️ ЧИСЛО СДВИНЕТСЯ ЕЩЁ ДВАЖДЫ В ЭТОЙ ЖЕ ПАРТИИ, и предупреждение стои́т
 #   здесь, чтобы следующий читатель не принял середину за итог: план 10-28
 #   заводит записи 9…17, план 10-29 — 18…23.
-VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 8
+#
+#   8 → 17, Фаза 10, ПЯТАЯ партия, план 10-28, задачи 1 и 2: ограничены ДЕВЯТЬ
+#   входов POST-обработчиков в ЧЕТЫРЁХ продуктовых страничных модулях —
+#   `app/pages/account_groups.py` (тумблер и удаление группы, по ДВА
+#   идентификатора адреса на каждом), `app/pages/accounts.py` (удаление
+#   аккаунта, повтор синхронизации, синхронизация групп), `app/pages/ads.py`
+#   (правка объявления) и `app/pages/history.py` (повтор отправки).
+#   ⚠️ ДЕВЯТЬ, А НЕ ШЕСТЬ, И РАЗНИЦА ЕСТЬ СЧЁТ ВХОДОВ, А НЕ ИСХОДОВ: ревизия
+#   воспроизвела отказ на ШЕСТИ маршрутах, но два из них несут по ДВА
+#   ограниченных идентификатора адреса, а один (удаление объявления) закрыт
+#   планом 10-24 и здесь не считается. Тот же способ счёта, которым перечень
+#   вырос до семи вместо пяти на первом же круге.
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА, А НЕ ВЫЧИТАНИЕМ В УМЕ:
+#   девять ключей сняты прогоном замера как разность «измеренные минус
+#   объявленные», вписаны дословно, и правило числа предъявило `17 == 8` до
+#   сдвига.
+#   ⚠️ ЧИСЛО СДВИНЕТСЯ ЕЩЁ ОДИН РАЗ В ЭТОЙ ЖЕ ПАРТИИ: план 10-29 закрывает
+#   административный модуль, у которого СВОЙ гейт полноты со своим объявленным
+#   числом, и потому он разведён с настоящим планом.
+#
+#   ⚠️ ЧТО В ЭТОТ РОСТ НЕ ВОШЛО, НАЗВАНО ЗДЕСЬ, А НЕ ОСТАВЛЕНО ЧИТАТЕЛЮ. План
+#   10-28 ограничил СЕМНАДЦАТЬ входов, а реестр вырос на ДЕВЯТЬ: восемь
+#   остальных стоят на GET-маршрутах либо приезжают параметром запроса
+#   (`after_id` постраничного вывода групп, `sched` редактора объявления), а
+#   предмет ЭТОГО перечня — контракт формы ответа POST-обработчика (G-2), и
+#   граница охвата замера названа у самого замера. Их граница от этого не
+#   слабее — она просто не есть расхождение с D-01.
+VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 17
 
 
 def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
