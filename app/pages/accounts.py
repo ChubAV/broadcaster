@@ -46,6 +46,7 @@ from app.pages.common import (
 # ключевым аргументом, поэтому обработчик, забывший путь без JavaScript, не
 # собирается как вызов.
 from app.pages.htmx import respond
+from app.pages.identifiers import IdPath
 
 # Разметка ответов опроса статуса подключения живёт в шаблоне, а не в строках
 # обработчика (План 08). До этого она собиралась конкатенацией и несла
@@ -678,7 +679,7 @@ async def accounts_connect_max_status(
 @router.get("/accounts/{account_id}/sync-status", response_class=HTMLResponse)
 async def accounts_sync_status(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     # D-15: параметр компоновки принимается и игнорируется — см. app/pages/ads.py
     layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -712,7 +713,7 @@ async def accounts_sync_status(
 @router.post("/accounts/{account_id}/retry-sync")
 async def accounts_retry_sync(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -784,7 +785,7 @@ def _release_sync_slot(account_id: int) -> None:
 @router.post("/accounts/{account_id}/sync-groups")
 async def accounts_sync_groups(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -994,7 +995,7 @@ async def accounts_sync_groups(
 @router.post("/accounts/{account_id}/delete")
 async def accounts_delete(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
