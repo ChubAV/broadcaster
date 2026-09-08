@@ -96,6 +96,22 @@ from app.models.subscription import Subscription
 from app.pages import notices
 from app.pages.auth import set_session_cookie
 from app.pages.common import is_same_origin, templates
+# ⚠️ ГРАНИЦА ВЕЛИЧИНЫ ИДЕНТИФИКАТОРА ВВОЗИТСЯ, А НЕ ОБЪЯВЛЯЕТСЯ ЗДЕСЬ. Своя
+# копия числа в самом привилегированном модуле продукта разошлась бы с общей
+# МОЛЧА при первой же правке колонки — ровно тот класс отказа, за который фаза
+# получила круги ревизии 3, 4 и 5; единственность объявления во всём `app/`
+# держит `test_the_identifier_bound_is_declared_exactly_once_in_the_whole_app`.
+#
+# ⚠️ ГРАНИЦА НУЖНА ЗДЕСЬ ПО ТОМУ ЖЕ ОСНОВАНИЮ, ПО КОТОРОМУ НУЖЕН ГАРД
+# ПРОИСХОЖДЕНИЯ, И ЭТО НЕ АНАЛОГИЯ. Гарды этого модуля — сверка источника и
+# проверка административных прав — стоят В ТЕЛЕ обработчика, а на величине вне
+# диапазона колонки управление до тела НЕ ДОХОДИТ: приведение к целому удаётся,
+# отказ случается позже, уже в SQLAlchemy. То есть по оси ВЕЛИЧИНЫ здесь жила
+# ровно та асимметрия, которую ревизия Фазы 6 (`CR-02`) закрыла по оси
+# ИСТОЧНИКА. С границей на сигнатуре запрос отвергается ДО тела, и порядок
+# «сначала граница, потом права, потом источник» перестаёт зависеть от того,
+# что написано выше в функции.
+from app.pages.identifiers import IdPath
 # Первый вызов слоя ответа в этом модуле (план 10-03). Адрес деградации у
 # `respond` объявлен ОБЯЗАТЕЛЬНЫМ ключевым аргументом: обработчик, забывший путь
 # без JavaScript, не собирается как вызов.
@@ -870,7 +886,7 @@ async def _workers_view(db: AsyncSession) -> dict:
 @router.post("/workers/{account_id}/restart")
 async def admin_restart_worker(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1068,7 +1084,7 @@ async def admin_queue(
 @router.post("/queue/{account_id}/drop")
 async def admin_drop_task(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     task_id: str = Form(...),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -1303,7 +1319,7 @@ async def admin_payments(
 @router.get("/users/{user_id}", response_class=HTMLResponse)
 async def admin_user_detail(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -1352,7 +1368,7 @@ async def admin_user_detail(
 @router.get("/users/{user_id}/history", response_class=HTMLResponse)
 async def admin_user_history(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     status: str | None = Query(default=None),
     messenger: str | None = Query(default=None),
     account_id: str | None = Query(default=None),
@@ -1461,7 +1477,7 @@ async def admin_user_history(
 @router.get("/users/{user_id}/history/partial", response_class=HTMLResponse)
 async def admin_user_history_partial(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     status: str | None = Query(default=None),
     messenger: str | None = Query(default=None),
     account_id: str | None = Query(default=None),
@@ -1548,8 +1564,8 @@ async def admin_user_history_partial(
 @router.get("/users/{user_id}/history/{log_id}", response_class=HTMLResponse)
 async def admin_user_history_detail(
     request: Request,
-    user_id: int,
-    log_id: int,
+    user_id: IdPath,
+    log_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1580,7 +1596,7 @@ async def admin_user_history_detail(
 @router.post("/users/{user_id}/unlimited")
 async def admin_toggle_free_access(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     _under_another_identity: None = Depends(forbid_when_impersonating),
@@ -1682,7 +1698,7 @@ async def admin_toggle_free_access(
 @router.post("/users/{user_id}/impersonate")
 async def admin_impersonate(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -1795,7 +1811,7 @@ async def admin_impersonate(
 @router.post("/users/{user_id}/block")
 async def admin_toggle_block(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1840,7 +1856,7 @@ async def admin_toggle_block(
 @router.post("/users/{user_id}/delete")
 async def admin_delete_user(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     _under_another_identity: None = Depends(forbid_when_impersonating),
