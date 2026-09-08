@@ -16,6 +16,7 @@
 
 import ast
 import pathlib
+import uuid
 from dataclasses import dataclass
 
 import pytest
@@ -39,6 +40,16 @@ from tests.conftest import seed_group
 from app.pages.identifiers import ID_MAX
 
 FORM_HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}
+
+# ⚠️ ПАРОЛЬ ОДИН НА ОБЕ ЛИЧНОСТИ, И ЭТО СВОЙСТВО ФИКСТУР, А НЕ ДОПУЩЕНИЕ:
+# `authed_client` и `admin_client` (`tests/conftest.py`) заводят своих
+# пользователей одним и тем же паролем. Вторая копия строки здесь разошлась бы
+# с ними молча, и вход перестал бы удаваться ровно тогда, когда фикстуру
+# поправят.
+IDENTITY_PASSWORD = "testpass123"
+
+# Почта обычной личности — та же, по которой посев ищет пользователя фикстуры.
+USER_IDENTITY_EMAIL = "testuser@test.com"
 
 # Форма ответа на негодную величину — отказ ВАЛИДАЦИИ.
 VALIDATION_REFUSAL = "422"
@@ -444,6 +455,22 @@ class _BoundedEntry:
     ИСПЫТУЕМОЙ величины и с живыми полями посева на местах ПРОЧИХ; `parameter` —
     имя испытуемого параметра; `live` — ключ посева, из которого берётся ЖИВАЯ
     величина для антивакуума.
+
+    ⚠️ `identity` — ЛИЧНОСТЬ, ПОД КОТОРОЙ ИДЁТ ОБРАЩЕНИЕ, И ОНА ЕСТЬ ПОЛЕ ВХОДА,
+    А НЕ ФИКСТУРА ПРАВИЛА. Административные входы закрыты `require_admin`, и
+    обращение к ним из-под обычного пользователя упёрлось бы в проверку ПРАВ:
+    исход перестал бы говорить о границе ВЕЛИЧИНЫ и начал бы говорить о правах.
+    Две личности живут в ОДНОЙ матрице, а не в двух: предмет у них один —
+    граница величины идентификатора, — и разведение по личности было бы
+    разведением по внешнему признаку ровно так же, как разведение по способу
+    передачи (записанное основание курсора постраничного вывода выше).
+
+    ⚠️ `body` — ТЕЛО POST-ЗАПРОСА, И ОНО НЕ УКРАШЕНИЕ. Вход, у которого есть
+    ОБЯЗАТЕЛЬНОЕ поле формы (снятие задачи из очереди несёт `task_id`), на
+    пустом теле отвечает отказом валидации ЗА ОТСУТСТВИЕ ПОЛЯ — то есть строка
+    матрицы зеленела бы, не сказав ни слова о границе идентификатора, а
+    антивакуум на живой величине краснел бы по той же причине. Поле подаётся
+    затем, чтобы отказ мог прийти РОВНО от границы.
     """
 
     key: str
@@ -451,6 +478,8 @@ class _BoundedEntry:
     address: str
     parameter: str
     live: str
+    identity: str = "user"
+    body: str = ""
 
 
 BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
@@ -594,6 +623,118 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="log_id",
         live="log",
     ),
+    # --- app/pages/admin.py: одиннадцать идентификаторов пути ---
+    #
+    # ⚠️ САМАЯ ПРИВИЛЕГИРОВАННАЯ ПОВЕРХНОСТЬ ПРОЕКТА, И ОНА ЗАКРЫВАЕТСЯ ТОЙ ЖЕ
+    # ГРАНИЦЕЙ, ЧТО И ПРОДУКТОВАЯ, А НЕ СВОЕЙ. Ревизия эти маршруты своим
+    # клиентом не прогоняла — но объявление первичного ключа у них то же
+    # (`app/models/user.py`, `app/models/send_log.py` — `Mapped[int]` без
+    # расширенной разрядности), механизм отказа тот же, и основание, по
+    # которому закрыты продуктовые входы, применимо к ним слово в слово.
+    #
+    # ⚠️ У ШЕСТИ ИЗМЕНЯЮЩИХ ВХОДОВ ГАРД ПРОИСХОЖДЕНИЯ СТОИ́Т В ТЕЛЕ, И НА
+    # НЕГОДНОЙ ВЕЛИЧИНЕ ДО НЕГО НЕ ДОХОДИЛО. Ровно та же асимметрия по оси
+    # ВЕЛИЧИНЫ, какую ревизия Фазы 6 (`CR-02`) закрыла по оси ИСТОЧНИКА:
+    # приведение к целому удавалось, отказ случался позже — уже в SQLAlchemy, —
+    # и порядок «сначала граница, потом права, потом источник» зависел от того,
+    # что написано выше в функции. С границей на сигнатуре он не зависит.
+    _BoundedEntry(
+        key="app/pages/admin.py::POST /admin/workers/{account_id}/restart → адрес account_id",
+        method="POST",
+        address="/admin/workers/{value}/restart",
+        parameter="account_id",
+        live="account",
+        identity="admin",
+    ),
+    _BoundedEntry(
+        # ⚠️ ТЕЛО ПОДАЁТСЯ, И ЭТО ЗАМЕР, А НЕ ОСТОРОЖНОСТЬ: обработчик несёт
+        # обязательное поле формы `task_id`, и на пустом теле отказ валидации
+        # пришёл бы ЗА ОТСУТСТВИЕ ПОЛЯ — строка матрицы зеленела бы, не сказав
+        # ни слова о границе идентификатора.
+        key="app/pages/admin.py::POST /admin/queue/{account_id}/drop → адрес account_id",
+        method="POST",
+        address="/admin/queue/{value}/drop",
+        parameter="account_id",
+        live="account",
+        identity="admin",
+        body="task_id=задача-посева",
+    ),
+    _BoundedEntry(
+        key="app/pages/admin.py::GET /admin/users/{user_id} → адрес user_id",
+        method="GET",
+        address="/admin/users/{value}",
+        parameter="user_id",
+        live="target",
+        identity="admin",
+    ),
+    _BoundedEntry(
+        key="app/pages/admin.py::GET /admin/users/{user_id}/history → адрес user_id",
+        method="GET",
+        address="/admin/users/{value}/history",
+        parameter="user_id",
+        live="target",
+        identity="admin",
+    ),
+    _BoundedEntry(
+        key="app/pages/admin.py::GET /admin/users/{user_id}/history/partial → адрес user_id",
+        method="GET",
+        address="/admin/users/{value}/history/partial",
+        parameter="user_id",
+        live="target",
+        identity="admin",
+    ),
+    _BoundedEntry(
+        # ⚠️ МАРШРУТ КАРТОЧКИ ЗАПИСИ ЖУРНАЛА ДАЁТ ДВА ВХОДА, А НЕ ОДИН, и обе
+        # строки стоят рядом намеренно: склеивание маршрута с двумя
+        # идентификаторами в один вход есть ровно та ошибка счёта, которую
+        # соседний реестр расхождения заводился исправить.
+        key="app/pages/admin.py::GET /admin/users/{user_id}/history/{log_id} → адрес user_id",
+        method="GET",
+        address="/admin/users/{value}/history/{target_log}",
+        parameter="user_id",
+        live="target",
+        identity="admin",
+    ),
+    _BoundedEntry(
+        key="app/pages/admin.py::GET /admin/users/{user_id}/history/{log_id} → адрес log_id",
+        method="GET",
+        address="/admin/users/{target}/history/{value}",
+        parameter="log_id",
+        live="target_log",
+        identity="admin",
+    ),
+    _BoundedEntry(
+        key="app/pages/admin.py::POST /admin/users/{user_id}/unlimited → адрес user_id",
+        method="POST",
+        address="/admin/users/{value}/unlimited",
+        parameter="user_id",
+        live="target",
+        identity="admin",
+    ),
+    _BoundedEntry(
+        key="app/pages/admin.py::POST /admin/users/{user_id}/impersonate → адрес user_id",
+        method="POST",
+        address="/admin/users/{value}/impersonate",
+        parameter="user_id",
+        live="target",
+        identity="admin",
+    ),
+    _BoundedEntry(
+        key="app/pages/admin.py::POST /admin/users/{user_id}/block → адрес user_id",
+        method="POST",
+        address="/admin/users/{value}/block",
+        parameter="user_id",
+        live="target",
+        identity="admin",
+    ),
+    _BoundedEntry(
+        key="app/pages/admin.py::POST /admin/users/{user_id}/delete → адрес user_id",
+        method="POST",
+        address="/admin/users/{value}/delete",
+        parameter="user_id",
+        live="target",
+        identity="admin",
+    ),
 )
 
 
@@ -682,13 +823,70 @@ async def _seed_live_row_set(db: AsyncSession) -> dict[str, int]:
     await db.commit()
     await db.refresh(log)
 
+    # ⚠️ ОТДЕЛЬНЫЙ ПОЛЬЗОВАТЕЛЬ-ЦЕЛЬ ДЛЯ АДМИНСКИХ ВХОДОВ, И ЭТО МИТИГАЦИЯ, А НЕ
+    # АККУРАТНОСТЬ (T-10-29-05). Два входа админского перечня НЕОБРАТИМЫ и
+    # действуют НАД ЛИЧНОСТЬЮ: удаление пользователя стирает учётную запись
+    # целиком, вход под пользователем перевыписывает cookie. Прогон, подавший
+    # им саму АДМИНИСТРАТИВНУЮ личность, оставил бы следующие строки матрицы
+    # без личности вовсе — и покрасил бы их отказом ПРАВ, то есть дал бы ложный
+    # красный о границе величины. Цель посеяна своя, и почта у неё уникальная:
+    # посев зовётся ПО РАЗУ НА ВХОД, и вторая цель с той же почтой уронила бы
+    # уникальность колонки.
+    target = User(
+        email=f"target-{uuid.uuid4().hex[:12]}@test.com",
+        password_hash="ХЕШ-ЦЕЛИ-АДМИНСКИХ-ВХОДОВ",
+        name="Цель админских входов",
+    )
+    db.add(target)
+    await db.commit()
+    await db.refresh(target)
+
+    # Запись журнала ЦЕЛИ, а не пользователя фикстуры: карточка записи
+    # административного журнала сличает `log.user_id` с идентификатором из
+    # адреса, и чужая запись увела бы живую величину в переход «не его запись»
+    # — то есть антивакуум перестал бы наблюдать тело обработчика.
+    target_log = SendLog(
+        user_id=target.id,
+        ad_id=ad.id,
+        group_id=group.id,
+        status=STATUS_OK,
+    )
+    db.add(target_log)
+    await db.commit()
+    await db.refresh(target_log)
+
     return {
         "account": account.id,
         "group": group.id,
         "ad": ad.id,
         "schedule": schedule.id,
         "log": log.id,
+        "target": target.id,
+        "target_log": target_log.id,
     }
+
+
+async def _assume(client: AsyncClient, identity: str, admin_email: str) -> None:
+    """Взять ЛИЧНОСТЬ, под которой пойдёт следующее обращение матрицы.
+
+    ⚠️ ВХОД ВЫПОЛНЯЕТСЯ ЯВНО, А НЕ ЗАКАЗЫВАЕТСЯ ФИКСТУРОЙ, И ЭТО ЗАМЕР
+    УСТРОЙСТВА ФИКСТУР, А НЕ ПРЕДПОЧТЕНИЕ. `authed_client` и `admin_client`
+    (`tests/conftest.py`) возвращают ОДИН И ТОТ ЖЕ объект клиента: они
+    различаются только тем, чью cookie оставили на нём последней. Правило,
+    заказавшее обе фикстуры и положившееся на порядок их разрешения, утверждало
+    бы о порядке фикстур, а не о границе; правило, заказавшее одну, гоняло бы
+    половину матрицы под чужой личностью.
+
+    ⚠️ ВХОД НУЖЕН И ПОСЛЕ КАЖДОГО ЖИВОГО ПРОГОНА ВХОДА ПОД ПОЛЬЗОВАТЕЛЕМ:
+    удавшаяся имперсонация перевыписывает ту же cookie на личность цели, и
+    следующая строка матрицы пошла бы уже не от администратора.
+    """
+    email = admin_email if identity == "admin" else USER_IDENTITY_EMAIL
+    await client.post(
+        "/login",
+        data={"email": email, "password": IDENTITY_PASSWORD},
+        follow_redirects=False,
+    )
 
 
 async def _entry_outcome(
@@ -703,7 +901,7 @@ async def _entry_outcome(
     """
     if entry.method == "POST":
         response = await client.post(
-            address, content="", headers=FORM_HEADERS, follow_redirects=False
+            address, content=entry.body, headers=FORM_HEADERS, follow_redirects=False
         )
     else:
         response = await client.get(address, follow_redirects=False)
@@ -712,20 +910,32 @@ async def _entry_outcome(
 
 @pytest.mark.asyncio
 async def test_every_bounded_input_refuses_a_value_outside_the_column(
-    authed_client: AsyncClient, db_session: AsyncSession
+    authed_client: AsyncClient,
+    admin_client: AsyncClient,
+    test_settings,
+    db_session: AsyncSession,
 ):
     """КАЖДЫЙ вход матрицы отвечает отказом ВАЛИДАЦИИ на величине вне диапазона.
 
     Отображение сличается ЦЕЛИКОМ, и текст отказа называет ВСЕ несогласные
     строки со снятыми кодами.
+
+    ⚠️ ОБЕ ФИКСТУРЫ ЗАКАЗАНЫ РАДИ ЗАВЕДЕНИЯ ОБЕИХ УЧЁТНЫХ ЗАПИСЕЙ, А ДЕЙСТВУЮЩАЯ
+    ЛИЧНОСТЬ БЕРЁТСЯ ЯВНО (`_assume`): объект клиента у них ОДИН, и полагаться
+    на порядок их разрешения значило бы утверждать о порядке фикстур.
     """
     live = await _seed_live_row_set(db_session)
+    client = authed_client
+    assumed: str | None = None
 
     disagreed: list[str] = []
     for entry in BOUNDED_ENTRIES:
+        if entry.identity != assumed:
+            await _assume(client, entry.identity, test_settings.admin_email)
+            assumed = entry.identity
         for value in REFUSED_VALUES:
             address = entry.address.format(value=value, **live)
-            code = await _entry_outcome(authed_client, entry, address)
+            code = await _entry_outcome(client, entry, address)
             if code != VALIDATION_REFUSAL:
                 disagreed.append(
                     f"{entry.key} ← {value} = {code} "
@@ -745,7 +955,10 @@ async def test_every_bounded_input_refuses_a_value_outside_the_column(
 
 @pytest.mark.asyncio
 async def test_every_bounded_input_admits_the_value_at_the_column(
-    authed_client: AsyncClient, db_session: AsyncSession
+    authed_client: AsyncClient,
+    admin_client: AsyncClient,
+    test_settings,
+    db_session: AsyncSession,
 ):
     """СМЕЖНОСТЬ, ВТОРАЯ СТОРОНА СТЫКА — НА КАЖДОМ ВХОДЕ, А НЕ НА ОБРАЗЦЕ.
 
@@ -754,11 +967,16 @@ async def test_every_bounded_input_admits_the_value_at_the_column(
     прогон правила выше и границей не был бы.
     """
     live = await _seed_live_row_set(db_session)
+    client = authed_client
+    assumed: str | None = None
 
     disagreed: list[str] = []
     for entry in BOUNDED_ENTRIES:
+        if entry.identity != assumed:
+            await _assume(client, entry.identity, test_settings.admin_email)
+            assumed = entry.identity
         address = entry.address.format(value=AT_THE_COLUMN, **live)
-        code = await _entry_outcome(authed_client, entry, address)
+        code = await _entry_outcome(client, entry, address)
         if code == VALIDATION_REFUSAL or code.startswith("5"):
             disagreed.append(
                 f"{entry.key} ← {AT_THE_COLUMN} = {code} "
@@ -774,7 +992,10 @@ async def test_every_bounded_input_admits_the_value_at_the_column(
 
 @pytest.mark.asyncio
 async def test_every_bounded_input_still_admits_a_live_value(
-    authed_client: AsyncClient, db_session: AsyncSession
+    authed_client: AsyncClient,
+    admin_client: AsyncClient,
+    test_settings,
+    db_session: AsyncSession,
 ):
     """АНТИВАКУУМ ПО ВСЕМУ ПЕРЕЧНЮ, А НЕ ПО ОДНОЙ СТРОКЕ.
 
@@ -789,11 +1010,18 @@ async def test_every_bounded_input_still_admits_a_live_value(
     """
     disagreed: list[str] = []
     live_values_run = 0
+    client = authed_client
 
     for entry in BOUNDED_ENTRIES:
+        # ⚠️ ЛИЧНОСТЬ БЕРЁТСЯ ЗАНОВО ПЕРЕД КАЖДЫМ ВХОДОМ, А НЕ ПРИ СМЕНЕ ГРУППЫ,
+        # И ЭТО НЕ ИЗБЫТОЧНОСТЬ. Правило подаёт ЖИВЫЕ величины, а среди входов
+        # есть тот, чьё УДАВШЕЕСЯ тело перевыписывает cookie на личность цели
+        # (вход под пользователем). Проверка «личность та же, что была
+        # заказана» здесь солгала бы: заказана — та же, действует — чужая.
+        await _assume(client, entry.identity, test_settings.admin_email)
         live = await _seed_live_row_set(db_session)
         address = entry.address.format(value=live[entry.live], **live)
-        code = await _entry_outcome(authed_client, entry, address)
+        code = await _entry_outcome(client, entry, address)
         live_values_run += 1
         if code == VALIDATION_REFUSAL or code.startswith("5"):
             disagreed.append(
