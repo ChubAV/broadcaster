@@ -1,8 +1,8 @@
 ---
 phase: 10-rychag-components-modal-html
-reviewed: 2026-09-07T20:45:00Z
+reviewed: 2026-09-08T21:40:00Z
 depth: standard
-files_reviewed: 35
+files_reviewed: 42
 files_reviewed_list:
   - app/pages/account_groups.py
   - app/pages/accounts.py
@@ -11,6 +11,7 @@ files_reviewed_list:
   - app/pages/common.py
   - app/pages/history.py
   - app/pages/htmx.py
+  - app/pages/identifiers.py
   - app/pages/schedules.py
   - app/templates/account_groups/includes/group_row.html
   - app/templates/accounts/list.html
@@ -24,569 +25,723 @@ files_reviewed_list:
   - app/templates/components/modal.html
   - app/templates/history/includes/history_card.html
   - app/templates/includes/notice_area.html
+  - tests/conftest.py
   - tests/test_pages/test_confirm_delete_transport.py
   - tests/test_pages/test_editor_schedules.py
   - tests/test_pages/test_history_retry.py
   - tests/test_pages/test_htmx_gates.py
   - tests/test_pages/test_htmx_response_layer.py
   - tests/test_pages/test_hx_location_destinations.py
+  - tests/test_pages/test_identifier_bounds.py
   - tests/test_pages/test_impersonation.py
   - tests/test_pages/test_notices_channel.py
   - tests/test_pages/test_origin_guard_on_destructive_routes.py
+  - tests/test_planning/__init__.py
   - tests/test_planning/test_planning_gates_are_independent_of_the_live_verdict.py
   - tests/test_planning/test_requirement_completion_follows_verification.py
+  - tests/test_planning/test_state_progress_matches_roadmap.py
   - tests/test_planning/test_the_walkthrough_cannot_self_certify.py
   - tests/test_templates/test_components.py
   - tests/test_templates/test_htmx_inventory.py
   - tests/test_templates/test_htmx_markup_gates.py
+  - tests/test_templates/test_walkthrough_anchors.py
 findings:
   critical: 1
-  warning: 7
+  warning: 6
   info: 4
-  total: 12
+  total: 11
 status: issues_found
 ---
 
-# Phase 10: Code Review Report (fifth round)
+# Фаза 10: отчёт ревизии кода (ШЕСТОЙ круг)
 
-**Reviewed:** 2026-09-07
-**Depth:** standard
-**Files Reviewed:** 35 (8 page-layer modules, 12 templates, 15 suite modules)
-**Status:** issues_found
+**Дата:** 2026-09-08
+**Глубина:** standard
+**Файлов просмотрено:** 42 (9 модулей страничного слоя, 12 шаблонов, 21 модуль суиты)
+**Статус:** issues_found
 
 ## Summary
 
-The fourth batch (plans 10-17…10-23) does what it says on the four routes it
-names: `is_same_origin` now stands on `accounts_delete`, `account_groups_delete`,
-`ads_delete` and `schedules_delete`; `ID_MAX` bounds five inputs of
-`app/pages/schedules.py`; `_editor_url` takes a computed predicate instead of
-re-reading `return_to`; the `#sched-count` markup has one source.
+Заявленные предметы партии закрыты и перепроверены ЗАМЕРОМ, а не прочтением:
 
-The review therefore went after two things: what the batch **generalised to one
-module and did not generalise to its siblings**, and what the record asserts that
-the code does not execute. Both produced findings.
+* `app/pages/identifiers.py` — величина границы объявлена во всём `app/` ровно
+  один раз (`ast`-обход дерева подтверждает: единственное присваивание
+  `2147483647` стои́т в этом файле);
+* 36 POST-обработчиков страничного слоя, гард происхождения зовут ровно 13 —
+  число, записанное в докстринге `is_same_origin`, сошлось с деревом; все шесть
+  изменяющих маршрутов админки гард несут;
+* «два отсутствия сложились в совпадение» в `is_same_origin` закрыто явной
+  проверкой `origin_host is not None` — второго экземпляра этого класса в
+  изменённом коде не нашлось (проверены `check_is_admin`, `email_is_admin`,
+  `actor_of`, `_ownership_verdict`, тройной `WHERE` экрана групп,
+  `retry_availability`, `_thumb_image_url`);
+* приклейка внеполосного блока к ответу без тела закрыта третьим инвариантом
+  (`_STATUSES_WITHOUT_BODY`), и правило проверяет ОБЕ стороны;
+* все 18 мест подтверждения приземляются на маршруты, ПЕРЕВЕДЁННЫЕ на слой
+  ответа, — ни одна панель с безусловным `hx-post` не бьёт в необращённый
+  обработчик, отвечающий `302` (проверено перечислением всех вызовов `modal(`);
+  `admin_toggle_block` и `admin_toggle_free_access` панелей не имеют, и их
+  обычные формы остаются формами;
+* скрипты слоя письма и клиентского состояния стоят в `<head>`, поэтому своп
+  тела по `HX-Location` их не переисполняет; единственный инлайн-скрипт с
+  объявлениями верхнего уровня на экране-цели обёрнут (`ads/form.html`), а
+  единственный необёрнутый (`accounts/connect_tg_user.html`) целью перехода не
+  является и изъят ИМЕНОВАННО;
+* прогон трёх партий правил (`tests/test_planning`, `tests/test_templates`,
+  `test_htmx_gates`, `test_identifier_bounds`, `test_hx_location_destinations`,
+  `test_origin_guard_on_destructive_routes`, `test_confirm_delete_transport`,
+  `test_editor_schedules`, `test_impersonation`, `test_notices_channel`,
+  `test_history_retry`, `test_htmx_response_layer`) — **603 зелёных**;
+* ссылок на несуществующие имена правил в изменённых файлах НЕТ (сверено
+  автоматически: каждое `test_*`-имя из `app/**` разрешается в живую функцию
+  суиты либо в существующий модуль).
 
-The headline is CR-01, which is **reproduced, not inferred**: the identical
-"out-of-range identifier answers with a handler failure" defect the phase closed
-as `CR-01`/`CR-02` on `schedules.py` is still live on the other three confirmed
-deletion routes, on the group toggle and on the ad editor POST. On production
-PostgreSQL the threshold is 2 147 483 648 — far below the value the suite's
-SQLite tolerates — so the suite cannot see the production failure even if a case
-were added naively.
+Поэтому ревизия шла по двум осям, где партия могла ослабнуть: (1) чего фаза
+НЕ ограничила за пределами объявленной вселенной гейта и (2) где ЗАПИСЬ этой же
+партии расходится с деревом. Обе оси дали находки.
 
-Recorded closures (`WR-03` validation-refusal transport, `WR-04` empty landing
-region, `WR-02`/`WR-05` static `#sched-count` target, the guard's admitted
-no-header boundary) are **not** re-reported. Where I dispute a recorded decision
-it is labelled as a challenge (WR-04, WR-05 below).
+Головная находка — `CR-01` — не о фазе: это авторизационный провал мастера
+подключения Telegram, живущий в `app/pages/accounts.py` и попавший в обзор
+вместе с файлом. Он не создан этой фазой и её критериями не покрыт, но правило
+ревизии «не подтверждать, что работа сделана» требует его назвать: сеанс QR-входа
+не привязан к пользователю НИ В ОДНОМ месте, а его идентификатор ездит строкой
+запроса.
+
+Записанные закрытия НЕ переоткрываются: мёртвый первый дизъюнкт условия закрытия
+панели (замер плана 10-27), `500` на шести маршрутах через `parse_account_id` и
+`int(ad_id)` (`CATALOGUE_APPENDIX`, вердикт `open`), флаг `sched`, цена
+внеполосных узлов на холостом пути, названная граница гарда «без обоих
+заголовков» — всё это прочитано, сверено и оставлено как есть.
 
 ---
 
 ## Critical Issues
 
-### CR-01: Out-of-range identifiers still answer 500 on three of four deletion routes — the phase generalised the fix to one module only
+### CR-01: сеанс QR-входа Telegram не привязан к пользователю, а его идентификатор ездит строкой запроса
 
-**Files:**
-- `app/pages/ads.py:735` (`ads_delete`, `ad_id: int`)
-- `app/pages/accounts.py:997` (`accounts_delete`, `account_id: int`)
-- `app/pages/account_groups.py:595-596` (`account_groups_delete`, `account_id: int`, `group_id: int`)
-- `app/pages/account_groups.py:423-424` (`account_groups_toggle`)
-- `app/pages/ads.py` (`ads_update`, `POST /ads/{ad_id}/edit`)
-- `app/pages/history.py` (`history_retry`, `POST /history/{log_id}/retry`)
-- Gate scope: `tests/test_pages/test_editor_schedules.py:2023` (`UNBOUNDED_ROUTE_CASES` — schedules only)
+**Файлы:**
+- `app/pages/accounts.py:253-264` (`accounts_connect_tg_user_qr_status`, `session_id: str = Query(...)`)
+- `app/pages/accounts.py:267-286` (`accounts_connect_tg_user_refresh_qr`)
+- `app/pages/accounts.py:289-326` (`accounts_connect_tg_user_verify_2fa`)
+- `app/pages/accounts.py:329-358` (`accounts_connect_tg_user_complete`)
+- `app/messengers/telegram_user.py:54-74, 100-112, 137-153, 155-167` (реестр
+  `_qr_sessions`, ключ — только токен)
 
 **Issue:**
 
-`app/pages/schedules.py:73-96` declares `ID_MAX = 2_147_483_647` with an explicit,
-correct rationale: the value is the **upper bound of the identifier COLUMN**, the
-three models involved (`Ad`, `Schedule`, `MessengerAccount`) all declare the same
-plain `Mapped[int]` primary key, and a value outside it "cannot belong to any row
-on either of the project's two drivers"; letting it reach the driver ends in
-HTTP 500 on a well-formed POST.
+Четыре маршрута мастера подключения Telegram спрашивают ТОЛЬКО «пришёл ли
+вообще кто-то» (`if not user: return {"error": ...}`) и НЕ спрашивают, тот ли
+это пользователь, который сеанс завёл. Сам реестр сеансов
+(`_qr_sessions` в `app/messengers/telegram_user.py`) хранится в памяти процесса
+и ключуется одним лишь токеном: поля владельца у `QRAuthState` нет вовсе.
 
-Every word of that rationale applies verbatim to `Ad.id`, `MessengerAccount.id`,
-`Group.id` and `SendLog.id` on the sibling routes — and none of them is bounded.
-The phase's own plan 10-18 grouped exactly these four handlers into one family
-("маршруты подтверждённого удаления пользовательских данных") for the origin
-guard, then plan 10-12 bounded one member of that family and left the other three.
+Следствие полное, а не частичное. `complete_auth(session_id)` возвращает
+`session_string` — сохранённую сессию Telethon, то есть ПОЛНЫЙ доступ к
+аккаунту Telegram, — и обработчик `:349-356` кладёт её в `MessengerAccount`
+**вызывающего**:
 
-Measured on the current tree (cookie-authed page client, in-memory SQLite):
-
-```
-POST /ads/99999999999999999999999999/delete                  -> 500
-POST /accounts/99999999999999999999999999/delete             -> 500
-POST /accounts/1/groups/99999999999999999999999999/delete    -> 500
-POST /accounts/1/groups/99999999999999999999999999/toggle    -> 500
-POST /schedules/99999999999999999999999999/delete            -> 422   <- bounded
-POST /history/99999999999999999999999999/retry               -> 500
-POST /ads/99999999999999999999999999/edit                    -> 500
+```python
+session_string = await complete_auth(session_id)
+...
+account = MessengerAccount(
+    user_id=user.id,          # ← ВЫЗЫВАЮЩЕГО, а не того, кто сканировал QR
+    type="tg_user",
+    credentials=session_string,
+    status="active",
+)
 ```
 
-Underlying cause confirmed directly:
+Тот же путь короче через `verify-2fa`: `submit_2fa(session_id, password)`
+подписывает сеанс паролем и `:317-324` привязывает результат к вызывающему.
 
-```
->>> await db.execute(select(Ad).where(Ad.id == 99999999999999999999999999))
-RAISED: OverflowError  Python int too large to convert to SQLite INTEGER
-```
+**Предусловие названо честно:** токен — `uuid.uuid4().hex[:16]`, то есть 64 бита
+случайности от `os.urandom`, и перебором он не берётся. Дефект — не
+перебираемость, а ОТСУТСТВИЕ ПРИВЯЗКИ, из-за которой утечка токена
+превращается в захват аккаунта. Утечка при этом не гипотетическая: `session_id`
+едет **строкой запроса** GET-маршрута (`/accounts/connect/tg_user/qr-status?session_id=…`),
+который страница опрашивает циклически, — то есть штатно оседает в журнале
+доступа nginx, в журналах обратного прокси и в заголовке `Referer` при любом
+исходящем переходе с этой страницы. Значение, дающее полный доступ к чужому
+Telegram, обязано ездить телом либо серверным состоянием, а не адресом.
 
-**Production is strictly worse than the test bed.** The primary keys are
-`INTEGER` (int4) on PostgreSQL, so `2147483648` — a value SQLite accepts
-silently — raises `DataError: integer out of range` in asyncpg and ends in the
-same 500. A regression case written against the suite's SQLite would have to use
-a value above 2^63 to go red, i.e. the suite cannot observe the production
-boundary at all. This is precisely why `ID_MAX` was pinned to the *column*
-bound in `schedules.py`, and precisely why the same constant must guard the
-siblings.
-
-Additionally, the guard that *is* present is downstream of the crash on
-`account_groups_delete`: the origin refusal at `account_groups.py:691` is never
-reached for an out-of-range `group_id`, because FastAPI's `int` coercion succeeds
-and the failure happens later in SQLAlchemy — an unauthenticated-origin caller
-can therefore still drive the route to a 500.
+Это ровно та ось, по которой ревизия Фазы 6 (`CR-02`) уже закрывала
+асимметрию административных маршрутов: соседние маршруты этого же файла
+проверяют владение запросом (`accounts_sync_status` зовёт
+`get_sync_status_view(db, user.id, account_id)`; `accounts_retry_sync` и
+`accounts_sync_groups` несут `MessengerAccount.user_id == user.id`), а мастер
+подключения не проверяет ничего.
 
 **Fix:**
 
-Move the bound and its three aliases out of `app/pages/schedules.py` into a
-neutral module (both the page layer and any future JSON route depend on it, it
-depends on neither), then apply them at the application boundary on every page
-route that takes an identifier:
+Привязать сеанс к субъекту в момент создания и сверять привязку на каждом из
+четырёх входов; идентификатор убрать из адреса.
 
 ```python
-# app/pages/identifiers.py  (new, neutral)
-from typing import Annotated
-from fastapi import Form, Path
+# app/messengers/telegram_user.py
+@dataclass
+class QRAuthState:
+    ...
+    owner_user_id: int          # ← НОВОЕ ПОЛЕ
 
-# Верхняя граница КОЛОНКИ идентификатора (int4) — одна на проект, а не на файл.
-ID_MAX = 2_147_483_647
+async def start_qr_auth(api_id: int, api_hash: str, owner_user_id: int) -> tuple[str, str]:
+    ...
+    state = QRAuthState(client=client, qr_login=qr_login, owner_user_id=owner_user_id)
 
-IdPath = Annotated[int, Path(ge=1, le=ID_MAX)]
-IdForm = Annotated[int, Form(ge=1, le=ID_MAX)]
-OptionalIdForm = Annotated[int | None, Form(ge=1, le=ID_MAX)]
+def _owned(session_id: str, user_id: int) -> QRAuthState | None:
+    """Сеанс СВОЙ или None. «Нет сеанса» и «чужой сеанс» дают ОДИН исход —
+    иначе ответ становится картой занятых токенов."""
+    state = _qr_sessions.get(session_id)
+    if state is None or state.owner_user_id != user_id:
+        return None
+    return state
 ```
 
 ```python
-# app/pages/ads.py
-async def ads_delete(request: Request, ad_id: IdPath, ...):
-
-# app/pages/accounts.py
-async def accounts_delete(request: Request, account_id: IdPath, ...):
-
-# app/pages/account_groups.py
-async def account_groups_delete(request: Request, account_id: IdPath, group_id: IdPath, ...):
-async def account_groups_toggle(request: Request, account_id: IdPath, group_id: IdPath, ...):
+# app/pages/accounts.py — каждый из четырёх маршрутов
+state = _owned(session_id, user.id)
+if state is None:
+    return {"status": "expired"}     # тот же ответ, что и у истёкшего
 ```
 
-Then widen the gate so the next unbounded input cannot appear silently. Today
-`test_no_schedule_route_answers_with_a_handler_failure_on_an_out_of_range_identifier`
-iterates a hand-written five-entry list scoped to one module; replace the list
-with an `ast` walk of the whole of `app/pages/`, in the shape the phase already
-uses in `test_origin_guard_on_destructive_routes.py`:
+и перевести опрос статуса на `POST` с телом либо на путь
+`/accounts/connect/tg_user/qr-status` БЕЗ параметра — сеанс у пользователя
+единственный, и сервер находит его по `user.id` сам:
 
-> every route handler in `app/pages/` that declares an `int`-typed path
-> parameter must declare it through the bounded alias; the count of such
-> parameters is asserted against a declared number so a broken parser greens on
-> the empty set.
-
-Note that `ID_MAX`'s own docstring already claims the bound covers "все три
-идентификатора, участвующие в маршрутах этого файла" — leave that wording alone
-but delete the implication (carried by the `CR-02` retraction block at
-`schedules.py:340-357`) that the *route family* is closed: it is closed for one
-of its four members.
+```python
+@router.get("/accounts/connect/tg_user/qr-status")
+async def accounts_connect_tg_user_qr_status(request, db, settings):
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return {"status": "error", "error": "Не авторизован"}
+    return get_qr_status_for_owner(user.id)   # токена в адресе больше нет
+```
 
 ---
 
 ## Warnings
 
-### WR-01: `history.py` still carries the consumer count that `common.py` retracted by measurement in this same batch
+### WR-01: запись `app/pages/schedules.py:28` опровергается строкой 352 того же файла
 
-**File:** `app/pages/history.py:913-916`
+**Файл:** `app/pages/schedules.py:26-34`, опровергается `app/pages/schedules.py:352`
 
-**Issue:** The batch's plan 10-18 explicitly retracted the "three consumers" claim
-in `app/pages/common.py:707-717`, naming the measurement:
+**Issue:**
 
-> ЗАМЕР (2026-09-05, `grep -rn 'is_same_origin' app/`) дал ЧЕТЫРЕ
-> файла-потребителя и ДЕВЯТЬ мест вызова … план 10-18 … довёл число до ВОСЬМИ
-> файлов и тринадцати мест вызова
+Комментарий над ввозом утверждает дословно:
 
-The identical claim survives untouched three files away, inside a function this
-phase edited:
+> `⚠️ ID_MAX ВВОЗИТСЯ И НЕ ЗОВЁТСЯ В ЭТОМ ФАЙЛЕ НИ РАЗУ, И ЭТО НАМЕРЕННО.`
+> `Имя обязано остаться доступным ПО ПРЕЖНЕМУ ПУТИ: два модуля суиты ввозят его отсюда`
 
-```python
-# app/pages/history.py:913-916
-# Гард источника — ОБЩИЙ на проект (app/pages/common.py). Здесь он жил
-# приватной копией с плана 04-10: тогда потребитель был один. С появлением
-# форм оплаты потребителей стало три, и копия правила означала бы, что
-# правку одного гарда придётся не забыть повторить в другом.
-```
-
-Re-measured on the current tree: **8 files, 13 call sites** —
-`accounts.py:1031`, `account_groups.py:691`, `ads.py:773`, `billing.py:305`,
-`admin.py:903/1100/1637/1738/1819/1867`, `auth.py:476`, `history.py:917`,
-`schedules.py:1066`. The comment is off by a factor of four. This is the phase's
-own declared defect class (the record asserting more than the code carries), left
-in place by the very plan that retracted its twin.
-
-**Fix:** replace the count with the pointer the retraction already established —
-the two gates hold completeness, not a list:
+Замер по файлу (`grep -n ID_MAX app/pages/schedules.py`) даёт вхождение в
+ИСПОЛНЯЕМОМ коде:
 
 ```python
-# Гард источника — ОБЩИЙ на проект (app/pages/common.py). Здесь он жил
-# приватной копией с плана 04-10; копия снята планом 05-04. Числа
-# потребителей здесь НЕ ведутся — их держат гейты полноты, названные в
-# докстринге самого гарда: перечень, который надо не забыть исправить,
-# забывают (доказано этой самой строкой, разошедшейся вчетверо).
+# app/pages/schedules.py:348-354
+    try:
+        value = int(form_data.get("ad_id"))
+    except (TypeError, ValueError):
+        return None
+    if value < 1 or value > ID_MAX:      # ← ВЫЗОВ, которого «нет ни разу»
+        return None
+    return value
 ```
 
-### WR-02: the four new guard blocks claim "before any database access" while two reads have already happened
-
-**Files:** `app/pages/accounts.py:1025-1030`, `app/pages/ads.py:767-772`,
-`app/pages/account_groups.py:686-690`, `app/pages/schedules.py:1060-1065`
-
-**Issue:** All four carry the same header, verbatim:
-
-> СВЕРКА ИСТОЧНИКА — ПОСЛЕ ПРАВ И ДО ЛЮБОГО ОБРАЩЕНИЯ К БАЗЕ
-
-The guard runs after `get_user_from_cookie(...)`, which issues `db.get(User, sub)`
-(`app/pages/common.py:574`) and, when a token carries an actor, a second
-`db.get(User, actor_id)` (`common.py:579`). So a cross-origin POST with a stolen
-cookie still costs one or two primary-key reads before it is refused. The
-*intended* claim ("before the target row is read") is true and worth keeping; the
-written claim is false, and it is replicated four times, which is exactly how the
-`is_same_origin` consumer list drifted in the first place.
-
-**Fix:** state the true boundary and stop repeating it four times — put it once
-next to `is_same_origin` and reference it:
-
-```python
-# СВЕРКА ИСТОЧНИКА — ПОСЛЕ ПРАВ И ДО ЧТЕНИЯ ЦЕЛЕВОЙ СТРОКИ. Чтение субъекта
-# (и действующего лица) к этому моменту уже произошло внутри
-# get_user_from_cookie: сверка стоит выше ВЫБОРКИ ПРЕДМЕТА, а не выше базы
-# вообще. Отказ по происхождению не имеет права стать признаком
-# существования строки.
-```
-
-### WR-03: the new gate justifies itself with a false statement about the project's cookie policy
-
-**File:** `tests/test_pages/test_origin_guard_on_destructive_routes.py:310-320`
-(docstring of `test_every_destructive_route_checks_the_origin`)
-
-**Issue:** The rationale reads:
-
-> …одна политика браузера без единого рубежа за ней … **Правило продукта не
-> имеет права зависеть от умолчания, которое продукт не выставляет и не
-> проверяет.**
-
-The product *does* set it, explicitly and in one place:
-
-```python
-# app/pages/auth.py:88-95
-return {
-    ...
-    "samesite": "lax",
-    "secure": settings.cookie_secure,
-}
-```
-
-`_session_cookie_attrs` is the single source for both `set_session_cookie` and
-`clear_session_cookie`, so `SameSite=Lax` is a declared product attribute, not a
-browser default the project is riding on. The conclusion (defence in depth is
-still right) survives; the stated *fact* does not, and it is the load-bearing
-sentence of the gate that admits requests carrying neither header. A reader who
-believes the docstring will over-estimate what the guard buys.
+Цена не косметическая. Запись объявляет ввоз ЧИСТО ТРАНЗИТНЫМ, то есть
+удаляемым без последствий, как только суита перестанет ввозить имя отсюда.
+Следующий читатель, доверившись ей и сняв ввоз при уборке транзитных имён,
+уронит `_ad_id_from_form` на `NameError` — на маршруте подтверждённого удаления
+расписания, то есть в проде, а не на прогоне. Это ровно класс «запись шире
+дерева», за который фаза получила круги 3, 4 и 5, — только здесь запись УЖЕ
+неверна на момент отгрузки.
 
 **Fix:**
 
-```
-⚠️ ПОЧЕМУ ЭТОГО НЕ ЗАМЕНЯЕТ `samesite="lax"`. Признак ВЫСТАВЛЕН продуктом
-явно и в одном месте (`app/pages/auth.py`, `_session_cookie_attrs`), и
-межсайтовый POST он действительно не пропускает. Довод гарда — не
-«умолчание не выставлено», а ГЛУБИНА: политика cookie есть ОДИН рубеж, она
-снимается сменой набора атрибутов в одной строке и не различает
-одноимённый источник иной схемы или иного порта, который эта функция
-пропускает по записанному решению. Серверная сверка есть второй рубеж, а не
-замена первому.
-```
-
-### WR-04: gate G-2 is blind to the response the batch introduced — `Response(status_code=403)` is a second, unrecorded response decision inside converted handlers
-
-**Files:** `tests/test_pages/test_htmx_gates.py:650-679` (`_builds_own_redirect`),
-`app/pages/htmx.py:1-9` (module docstring), the four guard sites listed in WR-02
-
-**Issue:** `app/pages/htmx.py` opens with
-
-> Слой ответа: **единственное место, где приложение решает, ЧЕМ отвечать.**
-
-and G-2 (`test_no_converted_handler_builds_its_own_redirect`) exists to keep that
-true: "у переведённого обработчика НЕ остаётся второго решения о форме ответа".
-
-Its detector only recognises `RedirectResponse(...)`, `status_code=302` and
-`status.HTTP_302_*`. The batch added, inside four handlers that are on the
-response layer, a raw
+Привести запись к дереву и назвать оба основания ввоза:
 
 ```python
-return Response(status_code=403)
+# ГРАНИЦА ВЕЛИЧИНЫ ИДЕНТИФИКАТОРА ВВОЗИТСЯ, А НЕ ОБЪЯВЛЯЕТСЯ ЗДЕСЬ (план 10-24).
+#
+# ⚠️ У ВВОЗА `ID_MAX` ДВА ОСНОВАНИЯ, И ПЕРВОЕ — ИСПОЛНЯЕМОЕ. Величина ЗОВЁТСЯ
+# в `_ad_id_from_form` (:352): необязательное поле контекста ограничивается
+# ВЕЛИЧИНОЙ вручную, потому что псевдоним формы к нему неприменим —
+# отбрасывание, а не отказ (разбор — докстринг помощника). Второе основание —
+# сохранённый вход: два модуля суиты ввозят имя по прежнему пути
+# (`tests/test_pages/test_editor_schedules.py:35`,
+# `tests/test_pages/test_confirm_delete_transport.py:117`).
+from app.pages.identifiers import ID_MAX, IdForm, IdPath, OptionalIdForm
 ```
 
-which is a second, independent decision about the response form, invisible to the
-gate. Behaviourally the consequence is small but real: on the htmx transport an
-empty 403 is not swapped by the runtime, `x-on:htmx:after-request` sees
-`successful === false` and leaves the confirmation panel open with no message —
-the human sees a dead button. That transport-shaped divergence is the same class
-the response layer was built to abolish.
+и завести правило, которое красит расхождение автоматически, — по образцу
+`test_the_identifier_bound_is_declared_exactly_once_in_the_whole_app`: обход
+`ast` по модулю, утверждающий, что имя, объявленное комментарием НЕЗВАННЫМ,
+действительно не встречается ни в одном `ast.Name` вне блока ввоза.
 
-This is **not** covered by the recorded `WR-03` closure: that registry
-(`VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 7`,
-`tests/test_pages/test_htmx_gates.py:2570`) is scoped to *framework validation
-refusals*, and an application-authored 403 is not one.
+---
 
-**Fix (pick one, but pick explicitly):**
+### WR-02: два файла одной партии по-разному отвечают на вопрос «всегда ли существует `#sched-count`»
 
-1. Widen the detector so the gate can see it, and add the four sites to a named
-   divergence registry with grounds, in the same shape as the validation-refusal
-   registry:
+**Файлы:**
+- `app/templates/ads/partials/sched_delete_response.html:56-62` (новый файл партии)
+- `app/templates/ads/form.html:202-219` (правленный той же партией)
+
+**Issue:**
+
+Новый файл ответа удаления утверждает без оговорок:
+
+> `Поэтому обёртка в ads/form.html существует всегда, а сюда приезжает только её содержимое.`
+
+Правленный той же партией `ads/form.html` утверждает обратное — и утверждает
+ЯВНО, отдельным абзацем:
+
+> `⚠️ ОБЁРТКА СТОИТ ВНУТРИ УСЛОВИЯ «РАСПИСАНИЯ ЕСТЬ», И ЭТО ВЫПОЛНЕНИЕ D-12 ПРИ НАЗВАННОЙ ГРАНИЦЕ, А НЕ ОТСТУПЛЕНИЕ ОТ НЕГО.`
+
+Дерево подтверждает второе: `<div id="sched-count">` стои́т внутри `{%- if ad %}`
+и внутри `{%- if editor.schedules %}` (`ads/form.html:202`, сам узел — `:219`).
+
+Поведенческого отказа сегодня нет, и это перепроверено, а не предположено:
+ветка фрагмента `schedules_delete` требует `returns_to_editor` И
+`_ad_has_a_schedule(...)`, а форма удаления существует только внутри
+отрисованного `sched_card`, то есть на экране, где обёртка уже стои́т. Дефект
+здесь ЗАПИСНОЙ: два места одного факта говорят разное, одно из них ложно, и
+именно ложное — то, на которое сошлётся автор СЛЕДУЮЩЕГО внеполосного узла,
+целящегося в `#sched-count`. Проект сам объявил такое расхождение классом
+отказа (`WR-01` того же круга: «две копии одного основания расходятся молча»),
+и здесь копии разошлись в пределах одной партии.
+
+**Fix:**
+
+Свести к одному утверждению — сузить запись нового файла до измеренного, а не
+дублировать основание:
+
+```jinja
+{#- ⚠️ УЗЕЛ ЛИНЕЙКИ ВКЛЮЧАЕТСЯ, А НЕ КОПИРУЕТСЯ, И ПОДМЕНЯЕТСЯ У НЕЁ
+    СОДЕРЖИМОЕ, А НЕ УЗЕЛ (D-12 Фазы 9). Подмена узла унесла бы область
+    `#sched-count` из документа…
+    ОБЛАСТЬ ЖИВЁТ РОВНО ТАМ, ГДЕ ЖИВЁТ ЭТОТ ОТВЕТ, И ГРАНИЦА ЗАПИСАНА ОДИН РАЗ —
+    в `ads/form.html` (абзац «⚠️ ОБЁРТКА СТОИТ ВНУТРИ УСЛОВИЯ „РАСПИСАНИЯ ЕСТЬ“»).
+    Здесь она НЕ ПОВТОРЯЕТСЯ: вторая копия границы разошлась бы с первой молча. -#}
+```
+
+---
+
+### WR-03: измеренные ссылки на строки протухли в трёх местах — читатель приземляется в прозу
+
+**Файлы:**
+- `app/pages/htmx.py:321-322` (докстринг `_glue_notice`)
+- `app/pages/htmx.py:432-434` (докстринг `respond`)
+- `app/templates/components/modal.html:720-723`
+
+**Issue:**
+
+Файлы этой партии ссылаются на строки ЧИСЛОМ и называют ссылки ЗАМЕРОМ. Три
+ссылки числу не соответствуют:
+
+| Где | Сказано | На самом деле | Что стои́т по указанному номеру |
+|---|---|---|---|
+| `htmx.py:321`, `htmx.py:433` | `app/pages/account_groups.py:836` | `:839` | конец докстринга `_fragment`, не вызов |
+| `modal.html:721` | «обращение к `HX_LOCATION_HEADER` на **:148**» | `:169` | текст `ValueError` про latin-1 внутри `_local_path` |
+| `modal.html:723` | «`respond()` там же (**:375**)» | `:475` | проза докстринга `_with_notice` |
+
+Замер, которым это снято:
+
+```
+$ grep -n "fragment=_fragment" app/pages/*.py
+app/pages/account_groups.py:599 …
+app/pages/account_groups.py:839 …
+app/pages/schedules.py:1240 …
+$ grep -n "HX_LOCATION_HEADER\|location_response" app/pages/htmx.py app/main.py
+app/main.py:226:        return location_response(exc.location)     # ← верно
+app/pages/htmx.py:169:        status_code=204, headers={HX_LOCATION_HEADER: …}
+app/pages/htmx.py:475:        return location_response(_with_notice(redirect, notice))
+```
+
+Цена в том, что `modal.html:764-769` объявляет эту пометку СТЕРЕЖЁННОЙ:
+
+> `⚠️ ЭТА ПОМЕТКА НЕ ИМЕЕТ ПРАВА ПЕРЕЖИТЬ СВОЮ ИСТИННОСТЬ… Её стережёт правило test_the_transition_response_is_assembled_in_one_declared_place`
+
+Правило сличает ЧИСЛО мест сборки и СТАТУС, а номера строк не читает вовсе —
+то есть половина пометки объявлена стерегомой, будучи нестерегомой, и уже
+протухла. Это тот же класс, что `WR-02` пятого круга («перечень, который надо
+не забыть исправить, ЗАБЫВАЮТ»), только предмет — не перечень, а координата.
+
+**Fix:**
+
+Номера строк из прозы убрать, оставив имена конструкций (они переживают сдвиг
+файла), либо расширить стерегущее правило до координат:
 
 ```python
-def _builds_own_response(function: ast.AST) -> bool:
-    for node in ast.walk(function):
-        if isinstance(node, ast.Call):
-            name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", None)
-            if name in {"RedirectResponse", "Response", "JSONResponse", "PlainTextResponse"}:
-                return True
-    return False
+# tests/test_templates/test_components.py — расширение существующего правила
+CITED_ANCHORS = (
+    ("app/pages/htmx.py", "HX_LOCATION_HEADER: "),
+    ("app/pages/htmx.py", "return location_response("),
+    ("app/main.py", "return location_response(exc.location)"),
+    ("app/pages/account_groups.py", "fragment=_fragment"),
+)
+
+def test_every_line_number_cited_by_the_lever_points_at_what_it_names():
+    """Координата, названная ЗАМЕРОМ, обязана указывать на названную конструкцию."""
+    for path, needle in CITED_ANCHORS:
+        for lineno in cited_line_numbers(MODAL_HEADER + HTMX_DOCSTRINGS, path):
+            assert needle in read_line(path, lineno), (
+                f"{path}:{lineno} не несёт {needle!r} — ссылка протухла"
+            )
 ```
 
-2. Or route the refusal through the layer so there is genuinely one exit, e.g.
-   `raise HtmxRefusal(...)` / `respond(request, redirect=..., notice=...)` with a
-   registry code for "источник запроса не подтверждён".
+---
 
-Silently keeping both the "single place" claim and four exits that bypass it is
-the option to avoid.
+### WR-04: те же неограниченные идентификаторы живут в `app/routes/`, и вселенная гейта этого не объявляет
 
-### WR-05 (challenge to a recorded decision): the CSRF guard's universe is `/delete` + admin; 23 of 36 mutating page routes are covered by neither the guard nor any completeness gate
+**Файлы:**
+- `app/routes/ads.py:77` (`get_ad`), `:90` (`update_ad`), `:116` (`delete_ad`)
+- `app/routes/accounts.py:56` (`delete_account`), `:73` (`get_account_status`)
+- `app/routes/schedules.py:157` (`update_schedule`), `:218` (`delete_schedule`), `:234` (`toggle_schedule`)
+- Вселенная гейта: `tests/test_pages/test_identifier_bounds.py:1116`
+  (`CATALOGUE_DIRECTORY = APP_DIRECTORY / "pages"`, обход `glob("*.py")`)
 
-**Files:** `app/pages/common.py:695-751` (the "РАМКИ" and "ГЕЙТОВ ПОЛНОТЫ ТЕПЕРЬ
-ДВА" paragraphs), `tests/test_pages/test_origin_guard_on_destructive_routes.py:38-40`
+**Issue:**
 
-**Issue:** I am not re-reporting the guard's admitted no-header boundary. I am
-challenging the *completeness claim* the batch wrote around it.
-
-`is_same_origin`'s docstring states its subject as "изменяющий запрос" and cites
-ASVS L1 V4.2.2 — protection of **state-changing** requests — then says
-completeness is held by two machine gates. Measured universes of those gates:
-
-* `test_every_mutating_admin_route_checks_the_origin` — all mutating routes of `app/pages/admin.py`;
-* `test_every_destructive_route_checks_the_origin` — POST + path suffix exactly `/delete`, admin module exempted.
-
-Their union covers 13 of the 36 POST handlers the sibling gate itself counts
-(`POST_HANDLERS = 36`, `test_htmx_gates.py:153`). The 23 outside include:
-
-| route | effect of a forged cross-site POST |
-|---|---|
-| `POST /ads/{ad_id}/edit` | rewrites the body/images of an ad that is then broadcast to the user's groups |
-| `POST /schedules/{schedule_id}/toggle` | arms or disarms a broadcast |
-| `POST /schedules/{schedule_id}/edit`, `/schedules/new` | rewrites/creates a broadcast schedule |
-| `POST /accounts/{id}/groups/{gid}/toggle` | changes which groups receive ads |
-| `POST /accounts/{id}/sync-groups`, `/retry-sync` | drives messenger side effects |
-| `POST /profile` | rewrites profile fields |
-
-Rewriting the content that gets broadcast is not obviously less serious than
-deleting it, yet the `/delete` suffix is what decides membership. `SameSite=Lax`
-(WR-03) does carry these today — which is why this is a WARNING and not a
-BLOCKER — but that is exactly the single-rubicon argument the batch rejected for
-the four routes it did guard. The record as written ("полноту держат ДВА
-МАШИННЫХ ГЕЙТА") reads, against a docstring whose declared subject is *all*
-state-changing requests, as though the surface were closed. It is closed for
-`/delete` + admin.
-
-**Fix:** either widen the second gate's criterion from "path ends in `/delete`"
-to "handler is a POST route in `app/pages/` that commits" (with a named,
-counted exemption list for the auth/registration routes, which cannot carry the
-guard), or — cheaper and honest — bound the claim in `common.py`:
-
-```
-⚠️ ГРАНИЦА ВСЕЛЕННЫХ ОБОИХ ГЕЙТОВ НАЗВАНА ЧИСЛОМ. Вместе они накрывают 13
-изменяющих маршрутов страничного слоя из 36 (замер `ast` по `app/pages/`,
-2026-09-07): ВСЕ изменяющие админки и POST-маршруты с путём на `/delete`.
-Остальные 23 — правка объявления, тумблеры расписания и группы, синхронизация,
-профиль, вход и регистрация — серверного рубежа НЕ несут и держатся
-`samesite="lax"`. Это принятое состояние вехи 2.1, а не свойство полноты:
-перевод «правило продукта не зависит от одной политики браузера» на них
-отложен фазой N с основанием X.
-```
-
-### WR-06: the out-of-band notice path (`_glue_notice` / `_notice_oob`) has no production caller, while `respond()`'s docstring presents it as a closed guarantee
-
-**File:** `app/pages/htmx.py:209-283`, `app/pages/htmx.py:355-361`
-
-**Issue:** `respond()` declares:
-
-> ⚠️ КОД ИСХОДА ДОЕЗЖАЕТ И НА ВЕТКЕ ФРАГМЕНТА — ВНЕПОЛОСНЫМ БЛОКОМ … **Граница
-> закрыта** … Без этого исход действия был бы виден только тому, кто получил
-> редирект, — то есть каналом пользовался бы лишь один из двух транспортов.
-
-Measured: every call in `app/` that passes `fragment=` passes `notice=None`
-(`account_groups.py:589`, `account_groups.py:826`, `schedules.py:1263`), and no
-call passes both. `_glue_notice`, `_notice_oob`, `NOTICE_OOB_TEMPLATE` and
-`app/templates/includes/notice_oob.html` are reachable from the test suite only.
-So the sentence describes a capability, not a behaviour: on the fragment
-transport the outcome channel is used by zero handlers, and "граница закрыта" is
-false as a statement about the running product.
-
-Two secondary defects in the same block, both currently unreachable but both
-waiting for the first real caller:
-
-* `_glue_notice` does not check the status code. A fragment answering `204`/`304`
-  would get a body appended and a `content-length` header, producing a protocol
-  violation rather than a loud failure. The function is careful about media type
-  and about recomputing length — status is the third invariant of the same rule.
-* `response.body = ...` mutates a response object the caller may already have
-  registered background tasks or headers on; it is safe today only because all
-  three fragment builders return a freshly constructed `HTMLResponse`.
-
-**Fix:** narrow the claim to what runs, and keep the mechanism honest:
-
-```
-⚠️ КОД ИСХОДА СПОСОБЕН ДОЕХАТЬ И НА ВЕТКЕ ФРАГМЕНТА — ВНЕПОЛОСНЫМ БЛОКОМ, НО
-СЕГОДНЯ ЭТИМ НЕ ПОЛЬЗУЕТСЯ НИ ОДИН ОБРАБОТЧИК: все три фрагментных вызова
-подают `notice=None` (D-03, плашки на успех нет). Механизм заведён и покрыт
-суитой заранее; ПОВЕДЕНИЕМ он станет с первым фрагментом, несущим отказ.
-```
-
-and add the status guard next to the media-type guard in `_glue_notice`:
+Восемь идентификаторов пути JSON-API объявлены голым `int` и уезжают операндом
+сравнения по колонке тем же путём, каким уезжали закрытые входы страничного
+слоя:
 
 ```python
-if response.status_code in (204, 205, 304) or response.status_code < 200:
-    raise ValueError(
-        "внеполосный блок нельзя приклеить к ответу без тела по определению "
-        f"статуса ({response.status_code}): ответ ушёл бы с телом, которого "
-        "его статус запрещает"
+# app/routes/ads.py:75-83
+@router.get("/{ad_id}", response_model=AdResponse)
+async def get_ad(ad_id: int, user_id: int = Depends(get_current_user_id), db=...):
+    ad = await repo.get_by_id_and_user(ad_id, user_id)   # WHERE Ad.id == ad_id
+```
+
+Механизм отказа подтверждён на драйвере суиты:
+
+```
+$ python3 -c "import sqlite3; sqlite3.connect(':memory:').execute('select 1 where 1 = ?', (10**26,))"
+OverflowError: Python int too large to convert to SQLite INTEGER
+```
+
+на PostgreSQL порог ниже (`DataError` вне диапазона int32), то есть в проде
+разрыв шире.
+
+Дефект не в самом факте — это давний код, и фаза его не заводила. Дефект в
+том, что ВСЕЛЕННАЯ обоих принуждений нигде не объявлена ЧИСЛОМ и не оговорена
+изъятием. `test_every_identifier_parameter_of_the_catalogue_carries_the_bound`
+обходит только `app/pages/*.py`; `CATALOGUE_APPENDIX` (10 записей с вердиктом
+`open`) тоже целиком про страничный слой. При этом
+`app/pages/identifiers.py:1` объявляет предмет словами
+«ГРАНИЦА ВЕЛИЧИНЫ ИДЕНТИФИКАТОРА — ОДНА НА ВЕСЬ ПРОЕКТ», а
+`app/pages/admin.py:99` называет единственность держащим правилом
+«во всём `app/`». Читатель, пришедший от этих двух записей, заключит, что
+проект закрыт целиком, — и заключит неверно на восьми входах.
+
+Это ровно та форма, которую сам проект уже потребовал от гарда происхождения
+(`common.py:781-816`: «ГРАНИЦА ВСЕЛЕННЫХ ОБОИХ ГЕЙТОВ НАЗВАНА ЧИСЛОМ, А НЕ
+СЛОВОМ „ПОЛНОТА“»), — здесь той же формы нет.
+
+**Fix:**
+
+Либо закрыть входы тем же псевдонимом (правка механическая, восемь сигнатур):
+
+```python
+from app.pages.identifiers import IdPath
+
+@router.get("/{ad_id}", response_model=AdResponse)
+async def get_ad(ad_id: IdPath, ...):
+```
+
+либо — если владелец решает отложить — назвать границу вселенной ЧИСЛОМ рядом
+с гейтом, по образцу, который проект уже принял:
+
+```python
+# tests/test_pages/test_identifier_bounds.py
+# ⚠️ ВСЕЛЕННАЯ ГЕЙТА — `app/pages/*.py`, И ЭТО ГРАНИЦА, А НЕ ПОЛНОТА.
+# ЗАМЕР 2026-09-08: идентификаторов пути в `app/routes/` — ВОСЕМЬ, границы не
+# несёт НИ ОДИН. Вход JSON-API закрыт токеном, а не cookie, и перевод его —
+# предмет отдельной фазы; число стережёт правило ниже и падает на пустом
+# множестве.
+API_UNBOUNDED_IDENTIFIERS_DECLARED = 8
+
+def test_the_boundary_of_the_catalogue_universe_is_declared_by_number():
+    found = identifier_parameters(_read_directory(APP_DIRECTORY / "routes"))
+    assert found, "обход маршрутов API выродился — правило зеленело бы ВАКУУМОМ"
+    unbounded = [p for p in found if not p.carries_the_bound]
+    assert len(unbounded) == API_UNBOUNDED_IDENTIFIERS_DECLARED, ...
+```
+
+---
+
+### WR-05: текст исключения внешней системы доезжает до пользователя — там же, где соседний обработчик этого файла запрещает это прямо
+
+**Файл:** `app/pages/accounts.py:244-245`, `:421-422`, `:605-606`
+(запрет, который они нарушают, — `app/pages/accounts.py:925-937`)
+
+**Issue:**
+
+Три места собирают сообщение пользователю из `str(e)` необъявленного
+исключения:
+
+```python
+# :244-245  — уезжает JSON-ответом в браузер
+except Exception as e:
+    return {"error": f"Ошибка запуска QR авторизации: {e}"}
+
+# :421-422  — уезжает в контекст шаблона connect_wa.html и печатается
+except Exception as e:
+    error = f"Ошибка подключения к WA Bridge: {e}"
+
+# :605-606  — то же для MAX
+except Exception as e:
+    error = f"Ошибка подключения к MAX: {e}"
+```
+
+Соседний широкий `except` ЭТОГО ЖЕ ФАЙЛА (`:925-937`) объявляет ровно обратное
+правило и объясняет почему:
+
+> `На аккаунт пишется СВОЙ текст, а не str(e): сюда долетает что угодно, включая IntegrityError с полным SQL и значениями параметров, а шаблон печатает error пользователю дословно (T-03-17).`
+
+Сюда «что угодно» долетает такое же: конструктор адаптера и свойство
+`bridge_url` бросают `RuntimeError` с адресом моста, `httpx` — с полным URL
+(включая всё, что в нём стоит), Telethon — с внутренними путями. XSS здесь нет
+(автоэкранирование Jinja цело, `|safe` в дереве шаблонов НОЛЬ — проверено), но
+раскрытие внутренней топологии есть, и правило, которому оно противоречит,
+записано в тридцати строках ниже по тому же файлу.
+
+**Fix:**
+
+Взять форму у соседа: свой текст на экран, исходный — в журнал с `exc_info`.
+
+```python
+# app/pages/accounts.py, все три места
+except Exception as e:
+    import structlog
+    structlog.get_logger().error(
+        "tg_qr_start_failed", user_id=user.id, error=str(e), exc_info=True
     )
+    return {"error": UNEXPECTED_FAILURE_MESSAGE}   # уже ввезён в этот файл
 ```
 
-### WR-07: the new planning gates couple `just test` to `.planning/*.md` and to template anchors
+(`UNEXPECTED_FAILURE_MESSAGE` ввозится файлом на `:18` и используется на `:946`
+— второй константы заводить не нужно.)
 
-**Files:** `tests/test_planning/test_the_walkthrough_cannot_self_certify.py:45-52,
-696-762`, `tests/test_planning/test_planning_gates_are_independent_of_the_live_verdict.py`,
-`tests/test_planning/test_requirement_completion_follows_verification.py`
+---
 
-**Issue:** ~2 200 lines of new suite code assert over `.planning/` markdown and,
-in `test_every_walkthrough_anchor_exists_in_its_source_template`, over
-`app/templates`. Two concrete coupling consequences:
+### WR-06: перечень каналов в `accounts_sync_groups` существует в двух экземплярах, и второй молча даёт `UnboundLocalError`
 
-* `WALKTHROUGH_ANCHORS_DECLARED = 20`: renaming a DOM id or a CSS hook in
-  `app/templates` reddens a **planning-document** gate. A frontend change and a
-  documentation change are now the same failure, and the failure names the wrong
-  artefact.
-* `MARKED_FORM_EXEMPT_DECLARED = 11`, `DECLARED_COUNT_EXEMPT_DECLARED = 12`,
-  `TERMINAL_STATES_DECLARED = 2`, `WALKTHROUGH_ANCHORS_DECLARED = 20`: four
-  hand-maintained counts over documents that the workflow edits routinely, so
-  the product suite goes red on ordinary bookkeeping. That is the pressure that
-  gets a whole directory added to `--ignore`, taking the real gates with it.
+**Файл:** `app/pages/accounts.py:811-812` и `:891-909`, отказ приземляется на `:953`
 
-This is a maintainability judgement, not a correctness one — the project does
-treat planning artefacts as source. But the anchor rule in particular reaches
-*out of* `.planning/` into product templates, which none of the other planning
-gates do.
+**Issue:**
 
-**Fix:** move `test_every_walkthrough_anchor_exists_in_its_source_template` out
-of `tests/test_planning/` into `tests/test_templates/`, where a template rename
-reddening it names the artefact the reader actually changed; and mark the
-`tests/test_planning/` package with a pytest marker (`@pytest.mark.planning`)
-so the product suite and the record suite can be run and diagnosed separately
-without either being deleted.
+Допустимые каналы перечислены дважды и в разных формах:
+
+```python
+# :811 — ГАРД, перечень кортежем
+if account.type not in ("tg_user", "wa", "max"):
+    return RedirectResponse(url=account_groups_url, status_code=302)
+...
+# :892-909 — ВЕТВЛЕНИЕ, тот же перечень цепочкой if/elif/elif БЕЗ else
+    if account.type == "tg_user":
+        fetched_groups = await messenger.get_groups(); messenger_type = "tg_user"
+    elif account.type == "wa":
+        ...
+    elif account.type == "max":
+        ...
+```
+
+Сегодня копии согласованы, поэтому отказа нет. Но канал, добавленный в гард и
+забытый в цепочке (правка в двух местах, разнесённых на 80 строк), оставит
+`fetched_groups` и `messenger_type` НЕПРИВЯЗАННЫМИ, и `UnboundLocalError`
+поднимется на `:953`:
+
+```python
+await apply_group_resync(db, account, fetched_groups, messenger_type=messenger_type)
+```
+
+— то есть УЖЕ ЗА ПРЕДЕЛАМИ внутреннего `try/except`, который кончается на
+`:948`. Результат — `500` вместо красной плашки на аккаунте, ровно то, что
+широкий `except` этого обработчика заведён не допускать (`:926-931`:
+«Сузить блок … означало бы вернуть на экран стек-трейс там, где раньше была
+красная плашка»). Заявка при этом освободится (`finally` на `:991`), но
+пользователь получит стек вместо сводки — на маршруте, чей докстринг обещает
+обратное.
+
+**Fix:**
+
+Свести перечень к одному объявлению и сделать невыразимой ветку без адаптера:
+
+```python
+# перечень ОДИН, и он же строит адаптер
+SYNC_ADAPTERS = {
+    "tg_user": lambda account, settings: TelegramUserMessenger(
+        session_string=account.credentials,
+        api_id=settings.telegram_api_id,
+        api_hash=settings.telegram_api_hash,
+    ),
+    "wa": lambda account, settings: WhatsAppMessenger(session_id=str(account.id)),
+    "max": lambda account, settings: MaxMessenger(session_id=str(account.id)),
+}
+
+build = SYNC_ADAPTERS.get(account.type)
+if build is None:                       # гард и ветвление — одно множество
+    return RedirectResponse(url=account_groups_url, status_code=302)
+...
+messenger = build(account, settings)
+fetched_groups = await messenger.get_groups()
+messenger_type = account.type
+```
 
 ---
 
 ## Info
 
-### IN-01: `is_same_origin` compares `None == None` when both sides are hostless
+### IN-01: второй экземпляр порога предупреждения счётчика — литерал `0.9` в разметке
 
-**File:** `app/pages/common.py:753-759`
+**Файл:** `app/templates/ads/form.html:356` (`const TEXT_WARN_AT = {{ (editor.text_limit * 0.9) | round | int | tojson }};`),
+первый экземпляр — `app/pages/ads.py:55` (`TEXT_WARN_RATIO = 0.9`)
 
-`urlsplit("null").hostname` is `None` (browsers send `Origin: null` from
-sandboxed iframes, `data:` documents and some cross-origin redirect chains). If
-`request.url.hostname` were also `None` — no `Host` header and no `server` in the
-ASGI scope — the comparison yields `True` and the request is admitted through the
-`Origin` branch rather than through the documented no-header branch. Not
-reachable behind the project's nginx, but it is a silent widening of a boundary
-the module documents precisely.
+**Issue:** сервер уже кладёт готовое значение в контекст
+(`editor.text_warn_at`, `app/pages/ads.py:403`), и серверная отрисовка счётчика
+им пользуется (`ads/form.html:98`), а JS его игнорирует и пересчитывает по
+собственному литералу (`:356`, читается на `:386`). Правка `TEXT_WARN_RATIO` в Python оставит клиент на 0.9
+молча — и разойдутся ровно две поверхности одного счётчика. Дефект
+унаследованный, этой партией не заведён.
 
-**Fix:**
+**Fix:** отдать в JS то же значение, что уже посчитано сервером:
+`const TEXT_WARN_AT = {{ editor.text_warn_at | tojson }};` — и снять из JS ветку
+`imagePaths.length ? CAPTION_LIMIT : TEXT_WARN_AT`, заменив её пересчётом на
+стороне сервера при следующем ответе автосохранения (либо оставив обе величины,
+но взяв обе из контекста, а не из литерала).
+
+---
+
+### IN-02: выражение-оператор с отброшенным значением читается как мёртвый код
+
+**Файл:** `app/pages/htmx.py:477-480`
+
+**Issue:** проверка адреса на ветке фрагмента выполнена голым вызовом, значение
+которого отбрасывается:
 
 ```python
-origin = request.headers.get("origin")
-if origin:
-    origin_host = urlsplit(origin).hostname
-    return origin_host is not None and origin_host == request.url.hostname
+    # Адрес деградации проверяется ДАЖЕ НА ВЕТКЕ ФРАГМЕНТА, где он никуда не уезжает…
+    _with_notice(redirect, notice)
 ```
 
-### IN-02: dead disjunct in the modal's after-request handler
+Намерение объяснено комментарием, но форма — та, которую любой линтер и любой
+«уборщик мёртвого кода» снимет первой, и снятие пройдёт зелёным, если правила
+суиты меряют только исходы `respond()` на годных адресах.
 
-**File:** `app/templates/components/modal.html:716`
+**Fix:** сделать намерение выразимым в самой строке и закрепить его правилом,
+красящим снятие:
 
+```python
+    # Возвращаемое значение здесь НЕ НУЖНО — нужен ОТКАЗ на негодном адресе.
+    _assert_local(redirect, notice)   # тонкая обёртка над `_with_notice`, имя называет предмет
 ```
-if ($event.detail.successful || ($event.detail.xhr && $event.detail.xhr.getResponseHeader('HX-Location'))) hide()
+
+плюс правило `test_a_fragment_branch_still_refuses_a_hostile_degradation_address`
+(вызов `respond` с `fragment=…` и внешним `redirect=` обязан поднять
+`ValueError`).
+
+---
+
+### IN-03: числа изъятий обхода считаются по всему `.planning/` и краснеют от штатного продвижения проекта
+
+**Файл:** `tests/test_planning/test_the_walkthrough_cannot_self_certify.py:55, 67, 300-326`
+
+**Issue:** `MARKED_FORM_EXEMPT_DECLARED = 11` и
+`DECLARED_COUNT_EXEMPT_DECLARED = 12` — разности между числом ВСЕХ файлов
+`.planning/**/*UAT*.md` и числом попавших во вселенную. Любая следующая фаза,
+заведшая свой `NN-UAT.md` без таблиц отметок (нормальное состояние
+свежесозданного артефакта), поднимет обе разности и покрасит правило,
+не сказав ничего о продукте. Правило само это признаёт («ВЫРОСШЕЕ изъятие — это
+либо новый артефакт другой эпохи…»), то есть цена принята; но принята она
+молча в том смысле, что артефакт-нарушитель ещё не существует, а красный прогон
+уже назначен.
+
+**Fix:** считать изъятие ПОИМЁННО, а не разностью, — тогда новый артефакт
+краснит только если он ОБЪЯВИЛ себя закрытым:
+
+```python
+MARKED_FORM_EXEMPT: frozenset[str] = frozenset({
+    ".planning/phases/01-…/01-UAT.md",   # эпоха до таблиц отметок
+    ...
+})
+def test_the_declared_vocabularies_and_exemptions_agree():
+    exempt = {name for name, _ in sources} - {name for name, _ in marked_walkthroughs(sources)}
+    assert exempt == MARKED_FORM_EXEMPT, (
+        f"изъятие разошлось с деревом; лишние: {sorted(exempt - MARKED_FORM_EXEMPT)}, "
+        f"пропавшие: {sorted(MARKED_FORM_EXEMPT - exempt)}"
+    )
 ```
 
-The runtime marks 2xx/3xx — including the `204` that `location_response()`
-returns — as `successful`, so the second disjunct can only fire on a 4xx/5xx that
-also carries `HX-Location`, which nothing in the tree produces. The extra term
-reads as though the 204 transition path needed special handling; it does not.
-Either delete it or annotate it as a deliberate belt-and-braces for a future
-refusal-with-redirect.
+---
 
-### IN-03: `is_same_origin` is 7 lines of code under 86 lines of docstring, six of which are retraction chains
+### IN-04: реестр якорей обхода проверяет только половину связи
 
-**File:** `app/pages/common.py:666-759`
+**Файл:** `tests/test_templates/test_walkthrough_anchors.py:57-129, 169-182`
 
-The D-30/D-32 "record, do not erase" idiom is sound, but this docstring now
-contains three separate paragraphs about the *same* retracted consumer list
-(`⚠️ РАМКИ`, `⚠️ ПРЕЖНЕЕ ПЕРЕЧИСЛЕНИЕ…`, `⚠️ ПЕРЕЧЕНЬ ПОТРЕБИТЕЛЕЙ ЗДЕСЬ БОЛЬШЕ НЕ
-ВЕДЁТСЯ`), two of which say the same thing with different wording. WR-01 shows
-the practical cost: a reader who has to hold three overlapping retractions in
-mind is exactly the reader who misses the fourth copy living in another file.
-Consider collapsing superseded retractions of one predicate into a single dated
-entry once the finding that produced them is closed.
+**Issue:** правило утверждает, что каждый якорь ЕСТЬ в шаблоне-источнике, и
+делает это честно (отрицательный контроль показан на обеих ветвях). Но поле
+`step` — «шаг 1.8», «шаг 3.4» — не сверяется НИ С ЧЕМ: файл обхода
+(`.planning/phases/10-…/10-UAT.md`) правилом не читается вовсе. Перенумерация
+шагов обхода оставит реестр зелёным, а ссылки — указывающими в никуда; это тот
+же класс, что `WR-03` выше, только координата не строчная, а шаговая.
 
-### IN-04: `_ad_id_from_form`'s docstring carries two live retractions of its own paragraphs
+**Fix:** замкнуть вторую половину связи тем же обходом, которым
+`test_the_walkthrough_cannot_self_certify.py` уже разбирает шапки и разделы:
 
-**File:** `app/pages/schedules.py:277-380`
-
-103 lines of docstring over 6 lines of code, containing `(г) ⚠️⚠️ ОПРОВЕРГНУТО
-(CR-02)` inside a list whose item `(д)` corrects it, plus a separate `⚠️⚠️
-ОПРОВЕРГНУТО (CR-01)` near the top that forward-references "верная формулировка в
-конце докстринга". A reader has to hold two corrections and their ordering to
-learn one fact: the helper bounds a context field, not the route. Same
-observation as IN-03 — the idiom is right, the accumulation is now costing more
-than it records.
+```python
+def test_every_anchor_names_a_step_that_the_walkthrough_declares():
+    declared = walkthrough_step_ids(WALKTHROUGH_PATH.read_text(encoding="utf-8"))
+    assert declared, "шагов в обходе не найдено — правило зеленело бы ВАКУУМОМ"
+    orphans = sorted({a.step for a in WALKTHROUGH_ANCHORS} - declared)
+    assert not orphans, f"якоря ссылаются на шаги, которых в обходе нет: {orphans}"
+```
 
 ---
 
 ## Verified and not reported
 
-For the record, so the next round does not re-litigate them:
+Просмотрено, сверено с деревом, отказа не найдено — перечислено, чтобы
+следующий круг не проходил по этим местам заново:
 
-* Ownership scoping on all four deletion routes is correct — `delete_account`
-  filters on `MessengerAccount.user_id`, `ads_delete` on `Ad.user_id`,
-  `account_groups_delete` keeps the triple `WHERE`, `schedules_delete` joins
-  `Ad.user_id`; `_ad_has_a_schedule` and `_ad_schedule_count` both scope by
-  `Ad.user_id`, so the `WR-02` counter case cannot cross a privilege boundary.
-* `_local_path` correctly rejects scheme-relative, backslash, control-character
-  and non-ASCII redirect targets on both transports, including the anchor-aware
-  `_with_notice` path added by this batch.
-* The `modal(id=...)` attribute-name contract holds: all 14 call sites pass
-  server-chosen integers, including `queue_drop_modal_id` (`queue-drop-{id}-{index}`).
-* `body=ad.title` and the `parts | join(' · ')` panel body are attribute/text
-  positions under Jinja autoescape — no XSS.
-* The `destroy()` / `hide()` focus-return pair is correct for the OOB-delete
-  path: htmx swaps before `htmx:afterRequest`, so the panel's listener is already
-  gone and Alpine's `destroy()` is what actually lands focus.
-* The `is_same_origin` no-header admission, the raw-body validation refusal
-  (`WR-03`), the always-empty landing region (`WR-04`) and the static
-  `#sched-count` target (`WR-02`/`WR-05`) are recorded closures and are not
-  re-reported.
+* **Гард происхождения.** `is_same_origin` (`common.py:826-833`) — три ветви,
+  явная проверка `origin_host is not None`; 13 площадок вызова, 36 POST-ов
+  страничного слоя, шесть изменяющих маршрутов админки покрыты все.
+* **`_local_path`.** Схема, протокол-относительный адрес, обратная косая,
+  управляющие символы, не-ASCII — отвергаются; значение в текст ошибки не
+  подставляется.
+* **Приклейка.** Порядок трёх забот (статус → тип → длина) верен; пересчёт
+  `content-length` через `MutableHeaders` действует; правило проверяет обе
+  стороны.
+* **Панель подтверждения.** Все 18 мест приземляются на переведённые
+  обработчики; `hx-swap="none"` + `HX-Location` даёт своп тела, а не тихую
+  потерю ответа; выражение `x-on:htmx:after-request` синтаксически корректно и
+  под правилом Alpine `rightSideSafeExpression` исполняется как два оператора;
+  три пути ухода панели гейтованы признаком отправки.
+* **Ключ панели.** Все `modal(id=…)` собираются из серверных величин
+  (первичные ключи, `loop.index0`); значения из тела очереди в имя атрибута не
+  попадают.
+* **Экранирование.** `|safe` в `app/templates/**` — ноль; `data-diag`
+  диагностического блока читается через `dataset`, а не через `eval`;
+  `tojson` применён ко всем подстановкам в JS-контекст.
+* **Своп тела по `HX-Location`.** `htmx` и `alpine` подключены в `<head>` и
+  переисполнению не подлежат; `htmx_error_banner.html` защищён признаком на
+  `document.body`, переживающим своп `innerHTML`; единственный необёрнутый
+  инлайн-скрипт с `let` верхнего уровня целью перехода не является и изъят
+  ИМЕНОВАННО с воспроизводимым основанием.
+* **Имперсонация.** Cookie ставится на объект, ВОЗВРАЩЁННЫЙ слоем ответа;
+  `require_admin` читает права по действующему лицу; три необратимых/денежных
+  маршрута закрыты `forbid_when_impersonating`.
+* **Суита.** 603 правила изменённых модулей зелёные; тестов без утверждений
+  нет (три кандидата делегируют в помощники с утверждениями); `skip` — ноль;
+  вселенные всех обходов защищены проверкой непустоты; отрицательные контроли
+  есть у каждого несущего правила, которое зелено первым прогоном.
+
+Записанные открытыми и НЕ переоткрытые: `CATALOGUE_APPENDIX` (10 записей,
+вердикт `open`), мёртвый первый дизъюнкт условия закрытия панели,
+`OOB_TARGET_EXCEPTIONS`, `OWN_RESPONSE_EXITS` (9 записей, «ЖДЁТ ВЛАДЕЛЬЦА»),
+цена третьего внеполосного узла (`WR-05`/`WR-02` прежних кругов), названная
+граница гарда «без обоих заголовков».
 
 ---
 
-_Reviewed: 2026-09-07_
+_Reviewed: 2026-09-08T21:40:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
