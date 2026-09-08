@@ -2545,6 +2545,27 @@ VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
         lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
         decision_state=DECISION_WAITS_FOR_THE_OWNER,
     ),
+    _ValidationRefusalDivergence(
+        entry="app/pages/ads.py::POST /ads/{ad_id}/delete \u2192 \u0430\u0434\u0440\u0435\u0441 ad_id",
+        alias="IdPath",
+        reason=(
+            _REFUSAL_PRICE
+            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, И ЭТО ИЗМЕРЕНО ЧТЕНИЕМ "
+            "РАЗМЕТКИ, А НЕ ПЕРЕПИСАНО ИЗ РЕВИЗИИ: величина приезжает АДРЕСОМ, "
+            "и мест этих ЧЕТЫРЕ — форма-триггер и аргумент `action` панели "
+            "подтверждения в карточке списка "
+            "(`app/templates/ads/includes/ad_card.html:116` и `:138`) и та же "
+            "пара в редакторе объявления (`app/templates/ads/form.html:292` и "
+            "`:299`). Все четыре собираются СЕРВЕРОМ из `ad.id` живой строки, "
+            "и через интерфейс величина не редактируется ничем. "
+            "⚠️ ПСЕВДОНИМ ЗДЕСЬ ОБЩИЙ, А НЕ ИМЕННОЙ ПСЕВДОНИМ ФАЙЛА, и это "
+            "отличие от прежних семи записей: с плана 10-24 величина объявлена "
+            "ОДИН раз на проект в `app/pages/identifiers.py`, и модуль "
+            "объявлений ввозит `IdPath` оттуда, своего имени ей не давая"
+        ),
+        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
+        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+    ),
 )
 
 # ⚠️ ЧИСЛО ОБЪЯВЛЕНО, А НЕ ВЫВЕДЕНО ИЗ ДЛИНЫ ПЕРЕЧНЯ САМОГО ПО СЕБЕ. Молча
@@ -2567,7 +2588,17 @@ VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
 #   негодную величину только в адрес, посылая в теле ЖИВОЙ `ad_id`. Два входа —
 #   `edit/форма ad_id` и `edit/форма account_id` — не назывались нигде, и
 #   перечень, переписанный из отчёта, унаследовал бы ровно эту слепоту.
-VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 7
+#
+#   7 → 8, Фаза 10, ПЯТАЯ партия, план 10-24, задача 1: ограничен вход `ad_id`
+#   маршрута `POST /ads/{ad_id}/delete` (`app/pages/ads.py`) — ПЕРВЫЙ
+#   ограниченный вход за пределами страничного модуля расписаний. ЭТО РОСТ, А
+#   НЕ ОШИБКА ПРЕЖНЕГО ЗНАЧЕНИЯ: семь были ВЕРНЫ для состава входов ДО пятой
+#   партии, перечень стои́т на ЗАМЕРЕ, а замер этого входа не находил по той
+#   простой причине, что входа не было.
+#   ⚠️ ЧИСЛО СДВИНЕТСЯ ЕЩЁ ДВАЖДЫ В ЭТОЙ ЖЕ ПАРТИИ, и предупреждение стои́т
+#   здесь, чтобы следующий читатель не принял середину за итог: план 10-28
+#   заводит записи 9…17, план 10-29 — 18…23.
+VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 8
 
 
 def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
