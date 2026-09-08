@@ -51,6 +51,7 @@ from app.pages.common import (
 # у него ОБЯЗАТЕЛЬНЫМ ключевым аргументом, а код исхода едет ПАРАМЕТРОМ — адрес с
 # кодом собирает сам слой, и второй сборки его в этом файле не остаётся.
 from app.pages.htmx import respond
+from app.pages.identifiers import IdPath
 from app.services.billing_cache import check_access_cached
 
 logger = structlog.get_logger(__name__)
@@ -792,7 +793,7 @@ async def history_export(
 @router.get("/history/{log_id}", response_class=HTMLResponse)
 async def history_detail(
     request: Request,
-    log_id: int,
+    log_id: IdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -829,7 +830,7 @@ async def history_detail(
 @router.post("/history/{log_id}/retry")
 async def history_retry(
     request: Request,
-    log_id: int,
+    log_id: IdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _under_another_identity: None = Depends(
