@@ -3895,3 +3895,63 @@ def test_control_a_containment_property_on_an_ancestor_reddens(tmp_path):
     assert "container-type" in findings[0], (
         f"отказ не назвал свойство: {findings[0]}"
     )
+
+
+def test_control_an_ancestor_layer_split_across_two_blocks_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило читает объявления предка ПО ПРЕДКУ, а не по блоку.
+
+    ⚠️ ОБХОД ВОСПРОИЗВЕДЁН РЕВИЗИЕЙ ИСПОЛНЕНИЕМ (`WR-06`, седьмой круг) И
+    ДОСТИЖИМ БЕЗ ЕДИНОГО СВОЙСТВА ИЗ ПЕРЕЧНЕЙ. Свойства одного элемента в CSS
+    живут в разных блоках сплошь и рядом, тем более что разборщик уплощает
+    медиазапросы (`_css_rules`): медиазапросная добавка становится отдельным
+    равноправным блоком. Слой в одном блоке плюс небазовое положение в другом
+    блоке ТОГО ЖЕ предка дают предку собственный контекст наложения — подъём
+    запирается внутри него, а поблочное чтение обоих объявлений не видит.
+
+    ⚠️ ГРАНИЦА УТВЕРЖДЕНИЯ О СЕЛЕКТОРАХ НАЗВАНА: у обёртки шелла оба блока
+    несут ОДИН И ТОТ ЖЕ текст селектора (внутри медиазапроса и вне его), поэтому
+    проверка ниже доказывает, что отказ НАЗЫВАЕТ источники, а не что он их
+    РАЗЛИЧАЕТ. Различение блоков одного селектора — предмет рантайма браузера,
+    а не разбора текста.
+    """
+    path = _app_css_path()
+    rules = _css_rules_of(path)
+
+    split: tuple[str, tuple[tuple[str, str, str], ...]] | None = None
+    for ancestor in FAILURE_BANNER_ANCESTORS:
+        targeted = tuple(rule for rule in rules if ancestor in _selector_targets(rule[0]))
+        if len(targeted) >= 2:
+            split = (ancestor, targeted[:2])
+            break
+    assert split is not None, (
+        "в таблице нет предка, объявленного ДВУМЯ блоками, — обход разнесением "
+        "нечем воспроизвести; либо таблица переписана, либо разбор селекторов "
+        "сломан, и в обоих случаях этот контроль перестал что-либо доказывать"
+    )
+    ancestor, (layer_rule, position_rule) = split
+
+    source = _stylesheet_source(path)
+    poisoned = _stylesheet_with_extra_declaration(source, layer_rule[2], "z-index: 3")
+    poisoned = _stylesheet_with_extra_declaration(
+        poisoned, position_rule[2], "position: relative"
+    )
+
+    findings = _ancestor_trap_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+    assert len(findings) == 1, (
+        f"ПРАВИЛО НЕ СВЯЗАЛО СЛОЙ ПРЕДКА `{ancestor}`, ОБЪЯВЛЕННЫЙ В ОДНОМ "
+        "БЛОКЕ, С ЕГО ЖЕ НЕБАЗОВЫМ ПОЛОЖЕНИЕМ ИЗ ДРУГОГО БЛОКА, или назвало "
+        f"расхождение дважды: находок {len(findings)} — {findings}"
+    )
+    assert ancestor in findings[0], (
+        f"отказ не назвал предка: {findings[0]}"
+    )
+    assert LAYER_PROPERTY in findings[0] and "relative" in findings[0], (
+        f"отказ не назвал ни свойства слоя, ни положения, при котором оно "
+        f"заводит контекст наложения: {findings[0]}"
+    )
+    for selector in (layer_rule[0], position_rule[0]):
+        assert selector in findings[0], (
+            f"отказ не назвал блок-источник `{selector}` — человек, получивший "
+            f"отказ, пошёл бы искать его глазами по всей таблице: {findings[0]}"
+        )
