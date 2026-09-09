@@ -696,7 +696,12 @@
        open: false,
        opener: null,
        sending: false,
-       show() { this.sending = false; this.opener = document.activeElement; this.open = true; document.documentElement.classList.add('is-modal-open'); this.$nextTick(() => this.$refs.cancel.focus()); },
+       show() { this.sending = false; this.opener = document.activeElement; this.open = true; document.documentElement.classList.add('is-modal-open');
+                /* Подъём выносит поверх диалога только отказ ЭТОГО диалога.
+                   Заготовка, снятая прежним отказом, к текущему действию отношения
+                   не имеет и утверждала бы о нём неправду. */
+                ['htmx-failure-server', 'htmx-failure-network'].forEach(function (id) { var node = document.getElementById(id); if (node) { node.setAttribute('hidden', ''); } });
+                this.$nextTick(() => this.$refs.cancel.focus()); },
        hide() { if (!this.open) return; this.open = false; document.documentElement.classList.remove('is-modal-open'); const back = this.opener; this.opener = null; this.$nextTick(() => this.land(back)); },
        destroy() { if (this.open) { this.open = false; document.documentElement.classList.remove('is-modal-open'); this.land(this.opener); } },
        land(back) { if (back && back.isConnected) { back.focus(); return; } const home = document.getElementById('notice'); if (home) home.focus(); },

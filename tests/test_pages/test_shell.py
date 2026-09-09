@@ -2561,30 +2561,60 @@ def test_failure_banner_has_single_source():
     ИСТОЧНИКА: без него зелёная пара была бы совместима с двумя литеральными
     копиями сценария в двух шеллах, то есть ровно с тем вариантом, который D-01
     отверг.
+
+    ⚠️ ПРЕЖНЯЯ ФОРМА МЕМБЕРШИПА СУЖЕНА, А НЕ СНЯТА (план 10-35, находка `CR-01`
+    седьмого круга; идиома D-30/D-32 `.planning/STATE.md`). Она объявляла
+    владельцем ЛЮБОЙ шаблон, где встречается строка идентификатора заготовки, —
+    то есть считала ЧИТАТЕЛЯ источником. Читатель у заготовок теперь есть и
+    заведён нарочно: рычаг `components/modal.html` СНИМАЕТ обе заготовки при
+    открытии панели, иначе подъём выносит поверх диалога отказ, к этому диалогу
+    отношения не имеющий. Посылка прежней формы верна — двух источников быть не
+    должно; неверен был её ПРИЗНАК источника. Поэтому предмет утверждается
+    ПРЯМО и ДВАЖДЫ, а не по упоминанию имени: (1) РАЗМЕТКА — объявление
+    `id="…"`; (2) СЦЕНАРИЙ — файл, который И называет заготовку литералом, И
+    регистрирует обработчик. Литеральная копия сценария в другом шелле несёт
+    обе половины и краснит гейт ровно как прежде; рычаг не несёт ни одной.
     """
     templates_dir = PROJECT_ROOT / "app" / "templates"
 
-    owners = {
-        path.relative_to(templates_dir).as_posix()
+    sources = {
+        path.relative_to(templates_dir).as_posix(): _without_comments(
+            path.read_text(encoding="utf-8")
+        )
         for path in sorted(templates_dir.rglob("*.html"))
-        if FAILURE_BANNER_IDS[0]
-        in _without_comments(path.read_text(encoding="utf-8"))
+    }
+    assert sources, (
+        "шаблонов в дереве не найдено ВОВСЕ — три утверждения ниже прошли бы по "
+        "пустому перечню и объявили зелёным отсутствие проверки"
+    )
+
+    owners = {
+        rel for rel, text in sources.items()
+        if f'id="{FAILURE_BANNER_IDS[0]}"' in text
     }
     assert owners == {FAILURE_BANNER_OWNER}, (
-        "разметка заготовок плашек перестала быть единственной в шаблонах:\n"
+        "РАЗМЕТКА заготовок плашек перестала быть единственной в шаблонах:\n"
         f"  найдено:  {sorted(owners)}\n"
         f"  ожидался: [{FAILURE_BANNER_OWNER}]"
     )
 
+    wired = {
+        rel for rel, text in sources.items()
+        if "addEventListener" in text
+        and any(f"'{banner_id}'" in text for banner_id in FAILURE_BANNER_IDS)
+    }
+    assert wired == {FAILURE_BANNER_OWNER}, (
+        "СЦЕНАРИЙ заготовок плашек перестал быть единственным в шаблонах — "
+        "файл называет заготовку литералом И регистрирует обработчик:\n"
+        f"  найдено:  {sorted(wired)}\n"
+        f"  ожидался: [{FAILURE_BANNER_OWNER}]"
+    )
+
     found = {}
-    for path in sorted(templates_dir.rglob("*.html")):
-        count = len(
-            _FAILURE_BANNER_INCLUDE_RE.findall(
-                _without_comments(path.read_text(encoding="utf-8"))
-            )
-        )
+    for rel, text in sources.items():
+        count = len(_FAILURE_BANNER_INCLUDE_RE.findall(text))
         if count:
-            found[path.relative_to(templates_dir).as_posix()] = count
+            found[rel] = count
 
     expected = {shell: 1 for shell in FAILURE_BANNER_SHELLS}
     assert found == expected, (
