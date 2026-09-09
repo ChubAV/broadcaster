@@ -3767,3 +3767,97 @@ def test_control_a_transforming_ancestor_reddens(tmp_path):
     assert prop in findings[0], (
         f"отказ не назвал свойство: {findings[0]}"
     )
+
+
+def _stylesheet_with_extra_declaration(source: str, raw: str, declaration: str) -> str:
+    """Исходник таблицы, в котором ОДНОМУ блоку дописано ОДНО объявление.
+
+    Подмена идёт по ДОСЛОВНОМУ куску блока, а не по нормализованному селектору:
+    подгонять доктóривание под разбор было бы подгонкой, а по дословному куску
+    подмена либо срабатывает, либо контроль краснеет на самой подмене. Форма
+    вынута из `test_control_a_transforming_ancestor_reddens` дословно, а не
+    придумана заново: три контроля ниже повторяли бы её слово в слово, и
+    четвёртая копия одних и тех же трёх утверждений разошлась бы с остальными
+    при первой же правке.
+
+    Возвращается ТЕКСТ, а не путь: контролю, доктóрящему ДВА блока (обход
+    разнесением, `WR-06`), нужно подать выход первой подмены на вход второй.
+    """
+    assert source.count(raw) == 1, (
+        "блок встречается в исходнике не один раз — подстановка задела бы не "
+        f"тот блок: {raw[:80]!r}"
+    )
+    assert raw.rstrip().endswith("}"), (
+        "разбор вернул блок без закрывающей скобки — дописывать свойство некуда"
+    )
+    poisoned = source.replace(raw, raw.rstrip()[:-1] + f" {declaration}; }}")
+    assert poisoned != source, "подмена не сработала — якорь замены не найден"
+    return poisoned
+
+
+def test_control_an_individual_transform_on_an_ancestor_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило видит ИНДИВИДУАЛЬНУЮ трансформацию на предке.
+
+    ⚠️ ОБХОД ВОСПРОИЗВЕДЁН РЕВИЗИЕЙ ИСПОЛНЕНИЕМ (`WR-05`, седьмой круг):
+    `[data-body] { translate: 0 10px; }` на боевой таблице давало НОЛЬ находок.
+    `translate`, `rotate` и `scale` из CSS Transforms Level 2 есть та же
+    трансформация, разложенная по осям: содержащий блок для фиксированного
+    потомка они порождают ровно так же, как `transform`, и отгружены во всех
+    вечнозелёных браузерах. Перечень, собранный по свойствам, известным автору,
+    а не по спецификации, пропускал их молча.
+    """
+    path = _app_css_path()
+
+    targeted = [rule for rule in _css_rules_of(path) if _selector_targets(rule[0])]
+    assert targeted, "блоков предков в настоящей таблице нет — доктóрить нечего"
+    selector, _body, raw = targeted[0]
+
+    poisoned = _stylesheet_with_extra_declaration(
+        _stylesheet_source(path), raw, "translate: 0 10px"
+    )
+    findings = _ancestor_trap_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+    assert len(findings) == 1, (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО ИНДИВИДУАЛЬНУЮ ТРАНСФОРМАЦИЮ `translate`, "
+        f"ДОПИСАННУЮ ПРЕДКУ `{selector}`, или назвало расхождение дважды: "
+        f"находок {len(findings)} — {findings}"
+    )
+    assert selector in findings[0], (
+        f"отказ не назвал селектор предка: {findings[0]}"
+    )
+    assert "translate" in findings[0], (
+        f"отказ не назвал свойство: {findings[0]}"
+    )
+
+
+def test_control_a_containment_property_on_an_ancestor_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило видит свойство КОНТЕЙНЕРИЗАЦИИ на предке.
+
+    ⚠️ ВТОРОЙ ОБХОД, ВОСПРОИЗВЕДЁННЫЙ РЕВИЗИЕЙ ИСПОЛНЕНИЕМ (`WR-05`):
+    `[data-body] { container-type: inline-size; }` давало НОЛЬ находок.
+    `container-type` и `content-visibility` объявляют элемент границей размера
+    или отрисовки, и для фиксированного потомка следствие то же самое, что у
+    `contain`, который в перечне был: содержащим блоком становится предок.
+    """
+    path = _app_css_path()
+
+    targeted = [rule for rule in _css_rules_of(path) if _selector_targets(rule[0])]
+    assert targeted, "блоков предков в настоящей таблице нет — доктóрить нечего"
+    selector, _body, raw = targeted[0]
+
+    poisoned = _stylesheet_with_extra_declaration(
+        _stylesheet_source(path), raw, "container-type: inline-size"
+    )
+    findings = _ancestor_trap_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+    assert len(findings) == 1, (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО СВОЙСТВО КОНТЕЙНЕРИЗАЦИИ `container-type`, "
+        f"ДОПИСАННОЕ ПРЕДКУ `{selector}`, или назвало расхождение дважды: "
+        f"находок {len(findings)} — {findings}"
+    )
+    assert selector in findings[0], (
+        f"отказ не назвал селектор предка: {findings[0]}"
+    )
+    assert "container-type" in findings[0], (
+        f"отказ не назвал свойство: {findings[0]}"
+    )
