@@ -3600,6 +3600,9 @@ def test_control_a_lever_that_names_the_flag_only_in_prose_reddens(tmp_path):
 # приехать транзитом).
 FAILURE_BANNER_ANCESTORS = ("[data-shell]", "[data-main]", "[data-body]")
 
+# Имя предка «тело документа» — одно место сборки на весь модуль.
+DOCUMENT_BODY_ANCESTOR = "body"
+
 # ГРУППА 1 — СВОЙСТВА, ОТНИМАЮЩИЕ У ФИКСИРОВАННОГО ПОТОМКА ОКНО. Любое из них,
 # объявленное предку, делает СОДЕРЖАЩИМ БЛОКОМ для `position: fixed` сам предок:
 # плашка перестаёт позиционироваться по окну и начинает — по прямоугольнику
@@ -4062,3 +4065,45 @@ def test_ancestor_declarations_merge_every_block_that_targets_the_ancestor():
             f"{sorted(expected - set(declarations[ancestor]))} потеряно — "
             "сборка читает не все целящиеся блоки либо нормализует имена дважды"
         )
+
+
+def test_control_a_filter_on_the_document_body_ancestor_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: вселенная предков доходит до ОКНА, а не до обёртки шелла.
+
+    ⚠️ ОБХОД ВОСПРОИЗВЕДЁН РЕВИЗИЕЙ ИСПОЛНЕНИЕМ (`WR-07`, седьмой круг):
+    `body { filter: blur(0px); margin: 0; }` на боевой таблице давало НОЛЬ
+    находок. Между обёрткой шелла и окном стои́т ещё тело документа, и ЭТА ЖЕ
+    таблица его стилизует — причём правилом ТОГО ЖЕ состояния, что и подъём
+    (`.is-modal-open body { overflow: hidden; }` стои́т строкой выше блока
+    подъёма). Именно туда потянется следующая правка, а гейт туда не смотрел:
+    `filter` на теле документа отнимает у подъёма окно ЦЕЛИКОМ.
+    """
+    path = _app_css_path()
+
+    targeted = [
+        rule for rule in _css_rules_of(path)
+        if DOCUMENT_BODY_ANCESTOR in _selector_targets(rule[0])
+    ]
+    assert targeted, (
+        f"блоков предка `{DOCUMENT_BODY_ANCESTOR}` в таблице нет — либо тело "
+        "документа не внесено во вселенную, либо сличение простой части "
+        "сломано; в обоих случаях доктóрить нечего"
+    )
+    selector, _body, raw = targeted[0]
+
+    poisoned = _stylesheet_with_extra_declaration(
+        _stylesheet_source(path), raw, "filter: blur(0px)"
+    )
+    findings = _ancestor_trap_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+    assert len(findings) == 1, (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО СВОЙСТВО `filter`, ДОПИСАННОЕ ТЕЛУ ДОКУМЕНТА "
+        f"БЛОКОМ `{selector}`, или назвало расхождение дважды: находок "
+        f"{len(findings)} — {findings}"
+    )
+    assert DOCUMENT_BODY_ANCESTOR in findings[0], (
+        f"отказ не назвал тело документа: {findings[0]}"
+    )
+    assert "filter" in findings[0], (
+        f"отказ не назвал свойство: {findings[0]}"
+    )
