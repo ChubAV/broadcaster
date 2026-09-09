@@ -7,6 +7,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -3681,38 +3682,100 @@ def _selector_targets(selector: str) -> tuple[str, ...]:
     return tuple(hits)
 
 
+class _AncestorDeclaration(NamedTuple):
+    """Объявленное предку значение свойства И селектор блока, из которого оно пришло.
+
+    ⚠️ СЕЛЕКТОР ХРАНИТСЯ ВМЕСТЕ СО ЗНАЧЕНИЕМ НЕ ДЛЯ ПОЛНОТЫ, А РАДИ ТЕКСТА
+    ОТКАЗА. Карта собирается ПО ПРЕДКУ, и без источника отказ назвал бы предка,
+    но не назвал бы, ГДЕ править: человек, получивший «у обёртки тела слой при
+    небазовом положении», пошёл бы искать блоки глазами по 2600 строкам.
+    """
+
+    value: str
+    selector: str
+
+
+def _ancestor_declarations(
+    rules: tuple[tuple[str, str, str], ...],
+) -> dict[str, dict[str, _AncestorDeclaration]]:
+    """Карта «предок → свойство → последнее значение» по ВСЕМ целящимся блокам.
+
+    ⚠️ ЗАЧЕМ СБОРКА ИДЁТ ПО ПРЕДКУ, А НЕ ПО БЛОКУ (`WR-06`, седьмой круг).
+    Поблочное чтение брало положение из ТОГО ЖЕ блока, что и слой, а свойства
+    одного элемента в CSS живут в разных блоках сплошь и рядом — тем более что
+    `_css_rules` уплощает медиазапросы, и медиазапросная добавка становится
+    отдельным равноправным блоком. Слой в одном блоке плюс небазовое положение
+    в другом давали предку собственный контекст наложения при зелёном гейте, и
+    этот обход достижим БЕЗ единого свойства из перечней.
+
+    ⚠️ ГРАНИЦА РАЗБОРА НАЗВАНА ЗДЕСЬ, А НЕ ОСТАВЛЕНА СЛЕДУЮЩЕМУ ЧИТАТЕЛЮ: карта
+    берёт ПОСЛЕДНЕЕ ПО ПОРЯДКУ В ФАЙЛЕ, а браузер применяет каскад с учётом ещё
+    и специфичности и веса, — «последнее в файле» и «действующее в браузере»
+    совпадают не всегда. Граница принята сознательно, ровно как уплощение
+    медиазапросов этажом выше, и расхождение с каскадом наблюдаемо только
+    рантаймом браузера, а не разбором текста.
+
+    Функция принимает УЖЕ РАЗОБРАННЫЕ правила, а не путь: так она не читает
+    файла второй раз, и её можно позвать на доктóренной копии.
+    """
+    declarations: dict[str, dict[str, _AncestorDeclaration]] = {}
+    for selector, body, _raw in rules:
+        targets = _selector_targets(selector)
+        if not targets:
+            continue
+        for prop, value in _css_declarations(body):
+            # Вендорный префикс снимается ОДИН РАЗ — при укладке в карту, а не
+            # при каждом чтении: иначе одно и то же свойство лежало бы в карте
+            # дважды, под префиксным именем и без него.
+            name = _CSS_VENDOR_PREFIX_RE.sub("", prop)
+            for target in targets:
+                declarations.setdefault(target, {})[name] = _AncestorDeclaration(
+                    value, selector
+                )
+    return declarations
+
+
 def _ancestor_trap_findings(path: Path) -> tuple[str, ...]:
-    """Расхождения чистоты цепи предков. Пусто — ни один предок подъём не запирает."""
+    """Расхождения чистоты цепи предков. Пусто — ни один предок подъём не запирает.
+
+    Расхождение считается НА СВОЙСТВО ПРЕДКА, а не на блок: одно и то же
+    свойство, объявленное предку дважды, есть ОДНО расхождение, и два сообщения
+    о нём сказали бы одно дважды.
+    """
     findings: list[str] = []
     consequence = (
         "поднятая плашка позиционируется внутри предка, а не по окну, и глазом "
         "это неотличимо от работающего подъёма"
     )
-    for selector, body, _raw in _css_rules_of(path):
-        targets = _selector_targets(selector)
-        if not targets:
-            continue
-        position = _css_value(body, "position") or "static"
-        for prop, value in _css_declarations(body):
-            name = _CSS_VENDOR_PREFIX_RE.sub("", prop)
+    declarations = _ancestor_declarations(_css_rules_of(path))
+    for ancestor in FAILURE_BANNER_ANCESTORS:
+        declared = declarations.get(ancestor, {})
+        position = declared.get("position")
+        position_value = position.value if position is not None else "static"
+        for name, declaration in declared.items():
             if name in CONTAINING_BLOCK_PROPERTIES:
                 findings.append(
-                    f"`{selector}` (предок {', '.join(targets)}): свойство "
-                    f"`{prop}: {value}` делает предка СОДЕРЖАЩИМ БЛОКОМ для "
-                    f"фиксированного потомка — {consequence}"
+                    f"предок {ancestor} (объявлен блоком "
+                    f"`{declaration.selector}`): свойство "
+                    f"`{name}: {declaration.value}` делает предка СОДЕРЖАЩИМ "
+                    f"БЛОКОМ для фиксированного потомка — {consequence}"
                 )
             elif name in STACKING_CONTEXT_PROPERTIES:
                 findings.append(
-                    f"`{selector}` (предок {', '.join(targets)}): свойство "
-                    f"`{prop}: {value}` заводит предку СОБСТВЕННЫЙ КОНТЕКСТ "
-                    f"НАЛОЖЕНИЯ — слой плашки перестаёт сравниваться со слоем "
-                    f"панели; {consequence}"
+                    f"предок {ancestor} (объявлен блоком "
+                    f"`{declaration.selector}`): свойство "
+                    f"`{name}: {declaration.value}` заводит предку СОБСТВЕННЫЙ "
+                    f"КОНТЕКСТ НАЛОЖЕНИЯ — слой плашки перестаёт сравниваться "
+                    f"со слоем панели; {consequence}"
                 )
-            elif name == LAYER_PROPERTY and position != "static":
+            elif name == LAYER_PROPERTY and position_value != "static":
                 findings.append(
-                    f"`{selector}` (предок {', '.join(targets)}): свойство "
-                    f"`{prop}: {value}` при `position: {position}` заводит "
-                    f"предку СОБСТВЕННЫЙ КОНТЕКСТ НАЛОЖЕНИЯ — {consequence}"
+                    f"предок {ancestor} (слой объявлен блоком "
+                    f"`{declaration.selector}`, положение — блоком "
+                    f"`{position.selector}`): свойство "
+                    f"`{name}: {declaration.value}` при "
+                    f"`position: {position_value}` заводит предку СОБСТВЕННЫЙ "
+                    f"КОНТЕКСТ НАЛОЖЕНИЯ — {consequence}"
                 )
     return tuple(findings)
 
@@ -3954,4 +4017,48 @@ def test_control_an_ancestor_layer_split_across_two_blocks_reddens(tmp_path):
         assert selector in findings[0], (
             f"отказ не назвал блок-источник `{selector}` — человек, получивший "
             f"отказ, пошёл бы искать его глазами по всей таблице: {findings[0]}"
+        )
+
+
+def test_ancestor_declarations_merge_every_block_that_targets_the_ancestor():
+    """Карта предка собрана из ВСЕХ целящихся в него блоков, а не из одного.
+
+    ⚠️ ЗАМЕР, ИЗ-ЗА КОТОРОГО ЭТО ПРАВИЛО СФОРМУЛИРОВАНО ОБЪЕДИНЕНИЕМ, А НЕ
+    СЧЁТОМ, И ЭТО НАЗВАНО, А НЕ СГЛАЖЕНО. План требовал «сравнить число свойств
+    карты с числом свойств одного блока», но на СЕГОДНЯШНЕЙ таблице у обёртки
+    шелла два блока (вне медиазапроса и внутри него), и перечень свойств
+    второго целиком вложен в перечень первого: `grid-template-columns` есть в
+    обоих. Числа поэтому совпадают, и счётом слияние НЕ ДОКАЗЫВАЕТСЯ — счёт
+    зеленел бы и на поблочном чтении. Слияние доказывает поведением
+    `test_control_an_ancestor_layer_split_across_two_blocks_reddens`, а это
+    правило стережёт структурную половину: ни одно свойство ни одного целящегося
+    блока из карты не пропало.
+    """
+    rules = _css_rules_of(_app_css_path())
+    declarations = _ancestor_declarations(rules)
+
+    assert declarations, (
+        "карта предков ПУСТА — правила ниже зеленели бы вакуумом"
+    )
+
+    multi_block = {
+        ancestor: [rule for rule in rules if ancestor in _selector_targets(rule[0])]
+        for ancestor in declarations
+    }
+    assert any(len(blocks) >= 2 for blocks in multi_block.values()), (
+        "ни один предок не объявлен двумя блоками — слиянию нечего слить, и "
+        "правило перестало отличать сборку по предку от сборки по блоку"
+    )
+
+    for ancestor, blocks in multi_block.items():
+        expected = {
+            _CSS_VENDOR_PREFIX_RE.sub("", prop)
+            for _selector, body, _raw in blocks
+            for prop, _value in _css_declarations(body)
+        }
+        assert set(declarations[ancestor]) == expected, (
+            f"карта предка `{ancestor}` разошлась с объединением его блоков: в "
+            f"карте {sorted(set(declarations[ancestor]) - expected)} лишних и "
+            f"{sorted(expected - set(declarations[ancestor]))} потеряно — "
+            "сборка читает не все целящиеся блоки либо нормализует имена дважды"
         )
