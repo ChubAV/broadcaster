@@ -3072,12 +3072,18 @@ def test_the_failure_banner_is_declared_above_the_panel_while_it_is_open():
         "сличать слой подъёма не с чем, и правило зеленело бы вакуумом"
     )
 
+    # ⚠️ ГЛАГОЛ, А НЕ ИМЯ, И ПО ДЕ-КОММЕНТИРОВАННОМУ ИСХОДНИКУ (WR-08 седьмого
+    # круга). Предикат живёт отдельной функцией `_lever_raises_the_scroll_lock`
+    # в группе снятия заготовок ниже: правило читает КОНСТАНТНЫЙ путь боевого
+    # дерева, и без выноса его зубы пришлось бы заявлять вместо того, чтобы
+    # показывать на доктóренной копии.
     lever = _stylesheet_source(_modal_lever_path())
-    assert MODAL_SCROLL_LOCK_FLAG in lever, (
+    assert _lever_raises_the_scroll_lock(lever), (
         f"components/modal.html: рычаг перестал поднимать признак "
-        f"`{MODAL_SCROLL_LOCK_FLAG}` — подъём плашки ключáется на признак, "
-        "которого больше никто не ставит, и заготовки молча вернулись под "
-        "панель (Р-3, шаг 4.4)"
+        f"`{MODAL_SCROLL_LOCK_FLAG}` ГЛАГОЛОМ (имя, оставшееся в прозе, "
+        "признака не ставит) — подъём плашки ключáется на признак, которого "
+        "больше никто не ставит, и заготовки молча вернулись под панель "
+        "(Р-3, шаг 4.4)"
     )
 
     findings = _banner_elevation_findings(path)
@@ -3360,6 +3366,201 @@ def test_the_lever_clears_both_failure_banners_when_the_panel_opens():
         "отказа, и подъём выносит поверх диалога отказ, к этому диалогу "
         "отношения не имеющий:\n"
         + "\n".join(f"  — {line}" for line in findings)
+    )
+
+
+def _lever_raises_the_scroll_lock(source: str) -> bool:
+    """Рычаг ПОДНИМАЕТ признак блокировки прокрутки — по ГЛАГОЛУ, не по имени.
+
+    ⚠️ ЗАЧЕМ ЭТО ФУНКЦИЯ, А НЕ СТРОКА ВНУТРИ ПРАВИЛА (WR-08 седьмого круга).
+    Правило порядка слоёв читает КОНСТАНТНЫЙ путь боевого дерева, поэтому
+    показать его зубы на доктóренной копии внутри самого правила нечем — их
+    пришлось бы ЗАЯВЛЯТЬ. Функция принимает ИСХОДНИК, и контроль сличает её на
+    обеих копиях: настоящей и той, где глагол снят, а объясняющая проза с именем
+    признака оставлена.
+
+    ⚠️ ПОЧЕМУ ГЛАГОЛ, А НЕ ИМЯ. Прежняя форма (`MODAL_SCROLL_LOCK_FLAG in
+    lever`) зеленела от ЛЮБОГО вхождения имени, включая упоминание в
+    комментарии, — а перед макросом рычага лежит 693 строки прозы. Рычаг, у
+    которого постановка класса снята, а абзац оставлен, проходил антивакуумную
+    половину правила: то есть именно та половина, ради которой она заведена, не
+    держала. Имя признака в выражение НЕ ВЫПИСЫВАЕТСЯ — оно собирается вокруг
+    константы, иначе правка признака разошлась бы с правилом молча.
+    """
+    text = _JS_BLOCK_COMMENT_RE.sub("", _without_comments(source))
+    return f"classList.add('{MODAL_SCROLL_LOCK_FLAG}')" in text
+
+
+def _scratch_lever(tmp_path, text: str) -> Path:
+    """Доктóренная копия рычага панели во временном каталоге.
+
+    Подмена идёт по-настоящему через файловую систему, а не строкой в памяти:
+    так контроль проверяет ТОТ ЖЕ путь чтения, которым правило ходит по боевому
+    дереву. Имя файла берётся последним элементом `MODAL_LEVER_RELATIVE`, а не
+    выписывается второй раз. Форма скопирована у `_scratch_stylesheet` (:2826).
+
+    Каталог создаётся: доктóриваний в одном контроле ДВА, и каждому нужен свой
+    подкаталог, иначе второе перезаписало бы копию первого и сличало бы не то.
+    """
+    scratch = tmp_path / MODAL_LEVER_RELATIVE[-1]
+    scratch.parent.mkdir(parents=True, exist_ok=True)
+    scratch.write_text(text, encoding="utf-8")
+    return scratch
+
+
+def _lever_clearing_chunk(source: str) -> str:
+    """ДОСЛОВНАЯ строка рычага, снимающая заготовки. Якорь обоих доктóриваний.
+
+    Выводится из исходника, а не выписывается литералом: выписанный кусок
+    разошёлся бы с рычагом при первой же его правке — молча и с зелёным
+    контролем, что хуже красного.
+    """
+    verb = f"setAttribute('{FAILURE_BANNER_HIDDEN_ATTR}'"
+    hits = [
+        line for line in source.splitlines(keepends=True)
+        if verb in line and all(banner_id in line for banner_id in FAILURE_BANNER_IDS)
+    ]
+    assert len(hits) == 1, (
+        f"строк рычага, снимающих ОБЕ заготовки, {len(hits)}, а не одна — "
+        "доктóрить нечего либо подмена задела бы не то место"
+    )
+    return hits[0]
+
+
+def test_control_a_lever_that_keeps_a_stale_banner_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило видит возврат дефекта `CR-01` в ОБЕИХ его формах.
+
+    ⚠️ ДОКТÓРИВАНИЙ ДВА, И ВТОРОЕ НЕ ИЗБЫТОЧНО. Первое СНИМАЕТ снятие целиком —
+    это дословный возврат к дереву до правки. Второе ПЕРЕНОСИТ его в тело метода
+    закрытия: идентификаторы остаются в файле, и правило, считающее файл целиком,
+    зеленело бы на поведении, ОБРАТНОМ предмету — заготовка, снятая при закрытии,
+    поверх открытой панели стои́т ровно так же.
+
+    ⚠️ ПОЛОЖИТЕЛЬНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ: непрáвленый рычаг даёт НОЛЬ находок.
+    Без неё контроль был бы совместим с разбором, находящим расхождения всегда.
+    """
+    original = _stylesheet_source(_modal_lever_path())
+
+    assert _lever_clearing_findings(_modal_lever_path()) == (), (
+        "на настоящем рычаге правило снятия уже красно — доктóривание ниже "
+        "доказывало бы красноту того, что и так красно"
+    )
+
+    raw = _lever_clearing_chunk(original)
+    assert original.count(raw) == 1, (
+        "строка снятия встречается в исходнике не один раз — подмена задела бы "
+        "не то место"
+    )
+
+    # (1) СНЯТИЕ ВЫРЕЗАНО — дословный возврат к дереву до правки рычага.
+    excised = original.replace(raw, "")
+    assert excised != original, "вырезание не сработало — якорь замены не найден"
+
+    findings = _lever_clearing_findings(_scratch_lever(tmp_path / "excised", excised))
+    assert len(findings) == len(FAILURE_BANNER_IDS), (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО ВЫРЕЗАННОЕ СНЯТИЕ или назвало не все заготовки: "
+        f"находок {len(findings)} при {len(FAILURE_BANNER_IDS)} заготовках — "
+        f"{findings}"
+    )
+    joined = "\n".join(findings)
+    for banner_id in FAILURE_BANNER_IDS:
+        assert banner_id in joined, (
+            f"отказ не назвал заготовку #{banner_id} — читатель отказа не узнает, "
+            f"какая из двух осталась поверх панели: {joined}"
+        )
+
+    # (2) СНЯТИЕ ПЕРЕНЕСЕНО В ТЕЛО МЕТОДА ЗАКРЫТИЯ — граница предмета правила.
+    closing = re.compile(
+        r"(?<![\w$])" + re.escape(MODAL_CLOSE_METHOD) + r"\s*\(\s*\)\s*\{"
+    ).search(excised)
+    assert closing is not None, (
+        f"объявления метода `{MODAL_CLOSE_METHOD}()` в рычаге нет — переносить "
+        "снятие некуда, и вторая половина контроля ничего не доказала бы"
+    )
+    relocated = excised[:closing.end()] + " " + raw.strip() + excised[closing.end():]
+    assert relocated != excised, "перенос не сработал — якорь вставки не найден"
+    for banner_id in FAILURE_BANNER_IDS:
+        assert banner_id in relocated, (
+            f"после переноса заготовки #{banner_id} в файле нет — контроль "
+            "доказывал бы удаление, а не перенос"
+        )
+
+    findings = _lever_clearing_findings(_scratch_lever(tmp_path / "moved", relocated))
+    assert len(findings) == len(FAILURE_BANNER_IDS), (
+        "ПРАВИЛО ЗАЗЕЛЕНЕЛО НА СНЯТИИ, ПЕРЕНЕСЁННОМ В ЗАКРЫТИЕ, — оно считает "
+        f"файл целиком, а не тело метода `{MODAL_OPEN_METHOD}()`: находок "
+        f"{len(findings)} при {len(FAILURE_BANNER_IDS)} заготовках — {findings}"
+    )
+
+    # (3) ИДЕНТИФИКАТОРЫ ОСТАВЛЕНЫ ТОЛЬКО В ПРОЗЕ КОММЕНТАРИЯ. Перед макросом
+    # рычага лежит 693 строки прозы, и разбор по подстроке зеленел бы от одного
+    # УПОМИНАНИЯ — то есть учил бы правку удалять прозу (07-REVIEW.md IN-02).
+    prosed = (
+        "{#- Заготовки " + ", ".join(FAILURE_BANNER_IDS)
+        + " снимаются рычагом при открытии панели: абзац оставлен нарочно, "
+        "снятие вырезано. -#}\n" + excised
+    )
+    prosed_body = _lever_show_body(prosed)
+    for banner_id in FAILURE_BANNER_IDS:
+        assert banner_id in prosed, (
+            f"заготовки #{banner_id} нет в доктóренном исходнике — контроль "
+            "доказывал бы отсутствие упоминания, а не его безвредность"
+        )
+        assert banner_id not in prosed_body, (
+            f"РАЗБОР ВЕРНУЛ #{banner_id}, СТОЯЩИЙ ТОЛЬКО В ПРОЗЕ: тело метода "
+            f"`{MODAL_OPEN_METHOD}()` читается ВМЕСТЕ С КОММЕНТАРИЯМИ, и правило "
+            "зеленело бы от абзаца, а не от поведения"
+        )
+
+    findings = _lever_clearing_findings(_scratch_lever(tmp_path / "prose", prosed))
+    assert len(findings) == len(FAILURE_BANNER_IDS), (
+        "ПРАВИЛО ЗАЗЕЛЕНЕЛО НА УПОМИНАНИИ ЗАГОТОВОК В ПРОЗЕ: находок "
+        f"{len(findings)} при {len(FAILURE_BANNER_IDS)} заготовках — {findings}"
+    )
+
+
+def test_control_a_lever_that_names_the_flag_only_in_prose_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: антивакуумная половина больше не зеленеет от прозы (WR-08).
+
+    ⚠️ ЧТО ИМЕННО ПОКАЗАНО ИСПОЛНЕНИЕМ, А НЕ ЗАЯВЛЕНО. Доктóренная копия рычага
+    несёт имя признака в комментарии и НЕ несёт глагола его постановки. Прежняя
+    форма утверждения (`имя in исходник`) на ней ЗЕЛЕНА — это утверждается здесь
+    же, чтобы разница между двумя формами была видна числом, а не описанием.
+    Новая форма на ней КРАСНА.
+    """
+    original = _stylesheet_source(_modal_lever_path())
+
+    assert _lever_raises_the_scroll_lock(original), (
+        f"настоящий рычаг не поднимает признак `{MODAL_SCROLL_LOCK_FLAG}` "
+        "глаголом — доктóрить нечего, и контроль ничего не доказал бы"
+    )
+
+    verb = f"classList.add('{MODAL_SCROLL_LOCK_FLAG}')"
+    assert original.count(verb) == 1, (
+        f"глагол `{verb}` встречается в рычаге {original.count(verb)} раз, а не "
+        "один — снятие задело бы не то место"
+    )
+
+    prose = (
+        "{#- Признак " + MODAL_SCROLL_LOCK_FLAG + " поднимается рычагом панели: "
+        "абзац оставлен нарочно, глагол снят. -#}\n"
+    )
+    poisoned = prose + original.replace(verb, "")
+    assert poisoned != original, "снятие глагола не сработало — якорь не найден"
+
+    scratch = _scratch_lever(tmp_path, poisoned)
+    doctored = _stylesheet_source(scratch)
+
+    assert MODAL_SCROLL_LOCK_FLAG in doctored, (
+        "ПРЕЖНЯЯ ФОРМА УТВЕРЖДЕНИЯ НА ДОКТÓРЕННОЙ КОПИИ КРАСНА — контроль "
+        "перестал воспроизводить `WR-08`, и разница между формами больше не "
+        "показана"
+    )
+    assert not _lever_raises_the_scroll_lock(doctored), (
+        "НОВАЯ ФОРМА ЗАЗЕЛЕНЕЛА НА РЫЧАГЕ БЕЗ ГЛАГОЛА: антивакуумная половина "
+        "правила подъёма по-прежнему держится на прозе, и подъём плашки "
+        f"ключáется на признак `{MODAL_SCROLL_LOCK_FLAG}`, которого больше никто "
+        "не ставит (WR-08)"
     )
 
 
