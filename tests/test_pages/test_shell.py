@@ -3058,11 +3058,19 @@ def test_the_failure_banner_is_declared_above_the_panel_while_it_is_open():
 
 
 def test_control_a_banner_layer_below_the_panel_reddens(tmp_path):
-    """ЧТО ДОКАЗЫВАЕТ: правило видит слой подъёма, опущенный до слоя панели.
+    """ЧТО ДОКАЗЫВАЕТ: правило видит слой подъёма, опущенный до панели и ниже.
 
-    ⚠️ ЧИСЛА В КОНТРОЛЕ ТОЖЕ НЕ ВЫПИСАНЫ. Оба слоя читаются из настоящей
-    таблицы, и подстановка делает из первого второй. Выписанное здесь число
-    разошлось бы с таблицей ровно так же, как выписанное в самом правиле.
+    ⚠️ ДОКТÓРИВАНИЙ ДВА, И ВТОРОЕ НЕ ИЗБЫТОЧНО. Первое опускает слой подъёма
+    РОВНО ДО слоя панели: это граница между `<` и `<=`, и без неё правило,
+    сличающее слои нестрого, зеленело бы на равенстве — а при равных слоях
+    порядок отрисовки решает порядок в документе, то есть «выше» перестаёт быть
+    утверждением. Второе опускает слой СТРОГО НИЖЕ: только на нём числа
+    различны, и требование «отказ называет ОБА» имеет зубы.
+
+    ⚠️ ЧИСЛА В КОНТРОЛЕ НЕ ВЫПИСАНЫ НИ ОДНО. Оба слоя читаются из настоящей
+    таблицы, а подстановка выводится из прочитанного арифметикой. Выписанное
+    здесь число разошлось бы с таблицей ровно так же, как выписанное в самом
+    правиле.
     """
     path = _app_css_path()
 
@@ -3081,30 +3089,39 @@ def test_control_a_banner_layer_below_the_panel_reddens(tmp_path):
         "один из двух слоёв в настоящей таблице не число — подстановка была бы "
         "молчаливой"
     )
+    assert layer > panel_layer, (
+        "в настоящей таблице слой подъёма НЕ выше слоя панели — опускать нечего, "
+        "и контроль доказывал бы отсутствие того, чего и так нет"
+    )
 
     original = _stylesheet_source(path)
     assert original.count(raw) == 1, (
         "блок подъёма встречается в исходнике не один раз — подстановка задела "
         "бы не тот блок"
     )
-    poisoned = original.replace(raw, raw.replace(
-        f"z-index: {layer}", f"z-index: {panel_layer}"
-    ))
-    assert poisoned != original, "подмена не сработала — якорь замены не найден"
 
-    findings = _banner_elevation_findings(_scratch_stylesheet(tmp_path, poisoned))
+    for dropped in (panel_layer, panel_layer - 1):
+        poisoned = original.replace(raw, raw.replace(
+            f"z-index: {layer}", f"z-index: {dropped}"
+        ))
+        assert poisoned != original, (
+            f"подмена слоя на {dropped} не сработала — якорь замены не найден"
+        )
 
-    assert len(findings) == 1, (
-        "ПРАВИЛО НЕ ЗАМЕТИЛО ОПУЩЕННЫЙ СЛОЙ или назвало расхождение дважды: "
-        f"находок {len(findings)} — {findings}"
-    )
-    assert str(layer) in findings[0] and str(panel_layer) in findings[0], (
-        "отказ не назвал ОБА числа — читатель отказа не узнает, какой слой "
-        f"править: {findings[0]}"
-    )
-    assert selector in findings[0], (
-        f"отказ не назвал селектор блока подъёма: {findings[0]}"
-    )
+        findings = _banner_elevation_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+        assert len(findings) == 1, (
+            f"ПРАВИЛО НЕ ЗАМЕТИЛО СЛОЙ ПОДЪЁМА {dropped} ПРИ СЛОЕ ПАНЕЛИ "
+            f"{panel_layer} или назвало расхождение дважды: находок "
+            f"{len(findings)} — {findings}"
+        )
+        assert selector in findings[0], (
+            f"отказ не назвал селектор блока подъёма: {findings[0]}"
+        )
+        assert str(dropped) in findings[0] and str(panel_layer) in findings[0], (
+            "отказ не назвал ОБА числа — читатель отказа не узнает, какой слой "
+            f"править: {findings[0]}"
+        )
 
 
 def test_control_a_banner_without_an_elevation_rule_reddens(tmp_path):
