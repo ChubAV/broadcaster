@@ -2742,3 +2742,405 @@ def test_control_positive_the_untouched_banner_keeps_the_gates_green():
         "гейт различения краснеет на неизменённом файле — отрицательные "
         "контроли выше ничего не доказывают"
     )
+
+
+# --- Слой плашки отказа при открытой панели (Р-3, обход 2026-09-09) ----------
+#
+# ⚠️ ЧТО ИЗМЕРЕНО ОБХОДОМ, И ЧИСЛА ЗДЕСЬ ИЗ ЗАМЕРА, А НЕ ИЗ ПАМЯТИ О НЁМ. Шаг
+# 4.4 обхода 2026-09-09 (ad_id=51, sched-143, режим Offline) записал шестью
+# величинами: текст плашки обрыва связи в документе ЕСТЬ и верен, но сама
+# плашка лежит в обычном потоке (`position: static`, `z-index: auto`) на 322 px
+# ВЫШЕ окна (`top: -322`, `bottom: -259` при `scrollY: 418`), под панелью
+# (`position: fixed`, `z-index: 60`, `top: 0`, высота 1267 — во всё окно);
+# верхним узлом в точке плашки стои́т `DIV.modal__overlay` внутри диалога
+# `sched-del-143`, а прокрутка корня снята `overflow: hidden` — доскроллить
+# до плашки НЕЛЬЗЯ. Следствие для человека названо без смягчения: он нажал
+# «Удалить» без связи, панель СОЗНАТЕЛЬНО осталась открытой (D-12), кнопка
+# снова нажимаема — и ни одного объяснения, почему ничего не произошло, ему не
+# показано. Единственное объяснение существует в документе и недостижимо ни
+# глазом, ни прокруткой.
+#
+# ⚠️ ЧЕГО ЭТА ГРУППА НЕ ДОКАЗЫВАЕТ, И ГРАНИЦА НАЗВАНА ЗДЕСЬ, А НЕ ОСТАВЛЕНА
+# СЛЕДУЮЩЕМУ ЧИТАТЕЛЮ. Правила ниже утверждают ОБЪЯВЛЕНИЕ слоя в таблице стилей
+# и ПОРЯДОК объявленных слоёв. Они НЕ утверждают, что браузер НАРИСОВАЛ плашку
+# поверх панели: суита не исполняет ни строчки CSS, рантайма наложения у неё
+# нет, и контекст наложения заводят правила на предках, а не эта таблица.
+# Отрисовка остаётся шагу 4.4 ручного обхода `10-UAT.md`, и объявлять его
+# пройденным по зелени этих правил — ошибка, названная заранее.
+#
+# ⚠️ РАЗБОР ТАБЛИЦЫ ИДЁТ ПО ПАРАМ «СПИСОК СЕЛЕКТОРОВ + БЛОК ОБЪЯВЛЕНИЙ», И
+# ВЛОЖЕННЫЕ ПРАВИЛА МЕДИАЗАПРОСОВ РАЗБИРАЮТСЯ КАК ОБЫЧНЫЕ БЛОКИ СО СВОИМИ
+# СЕЛЕКТОРАМИ. Свойство названо прямо: `@media`, `@supports` и прочие
+# группирующие правила не становятся отдельной сущностью разбора — их тело
+# раскрывается, и правила внутри встают в общий перечень наравне с внешними.
+# Следствие принято сознательно: правило, объявленное только внутри
+# медиазапроса, для разбора неотличимо от объявленного снаружи, и утверждения
+# ниже говорят «в таблице объявлено», а не «объявлено безусловно».
+
+APP_CSS_RELATIVE = ("app", "static", "css", "app.css")
+
+# Исходник рычага панели. Нужен ровно затем, чтобы сличить с ним имя признака
+# блокировки прокрутки: подъём ключáется на ТОТ ЖЕ признак, который поднимает
+# сама панель, и панель, перестав его поднимать, роняет правило — а не тихо
+# забирает у плашки подъём.
+MODAL_LEVER_RELATIVE = ("app", "templates", "components", "modal.html")
+
+# Селектор блока, объявляющего слой панели подтверждения. ⚠️ ЧИСЛО СЛОЯ ЗДЕСЬ НЕ
+# ВЫПИСАНО И НЕ БУДЕТ — ни это, ни число слоя подъёма. Правило СЛИЧАЕТ два слоя,
+# прочитанных из таблицы, и не знает наперёд ни одного из них: выписанное число
+# разошлось бы с таблицей молча при первой же правке любого из двух слоёв.
+MODAL_PANEL_SELECTOR = ".modal"
+
+# Признак блокировки прокрутки, на который ключáется подъём. ЗАМЕРЕН ПО РЫЧАГУ
+# (`components/modal.html`, `show()` поднимает его на корневом узле, `hide()` и
+# `destroy()` снимают), а не взят из памяти, и правило сличает его с исходником
+# рычага отдельным утверждением.
+MODAL_SCROLL_LOCK_FLAG = "is-modal-open"
+
+_CSS_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _app_css_path() -> Path:
+    """Путь боевой таблицы стилей — единственное место, где он собирается."""
+    return PROJECT_ROOT.joinpath(*APP_CSS_RELATIVE)
+
+
+def _modal_lever_path() -> Path:
+    """Путь исходника рычага панели."""
+    return PROJECT_ROOT.joinpath(*MODAL_LEVER_RELATIVE)
+
+
+def _stylesheet_source(path: Path) -> str:
+    """Исходник таблицы стилей ПО НАЗВАННОМУ ПУТИ, а не по константе модуля.
+
+    Параметр здесь и есть то, что делает группу контроля возможной: утверждения
+    ниже суть «в таблице объявлено то-то», и у таких утверждений есть свой
+    способ соврать — разбор, читающий не тот файл или раскрывающий блоки
+    неверно, зеленеет на чём угодно. Функция, принимающая путь, позволяет подать
+    правилу доктóренную копию во временном каталоге и потребовать красноты.
+    Форма наследуется у `_failure_banner_source` выше, а не изобретается.
+    """
+    return path.read_text(encoding="utf-8")
+
+
+def _scratch_stylesheet(tmp_path, text: str) -> Path:
+    """Доктóренная копия таблицы стилей во временном каталоге.
+
+    Подмена идёт по-настоящему через файловую систему, а не строкой в памяти:
+    так контроль проверяет ТОТ ЖЕ путь чтения, которым правило ходит по боевому
+    дереву. Форма скопирована у `_scratch_banner`.
+    """
+    scratch = tmp_path / APP_CSS_RELATIVE[-1]
+    scratch.write_text(text, encoding="utf-8")
+    return scratch
+
+
+def _css_rules(source: str) -> tuple[tuple[str, str, str], ...]:
+    """Тройки «селекторы, тело объявлений, исходный кусок» из таблицы стилей.
+
+    Комментарии вырезаются до разбора: блок, «объявленный» в комментарии,
+    зеленил бы правило после того, как настоящий блок был бы снят, — ровно тот
+    урок, что оставлен помощником `_without_comments` этажом выше.
+
+    Группирующие правила (`@media`, `@supports`) раскрываются рекурсивно: их
+    тело разбирается тем же проходом, и правила внутри встают в общий перечень.
+    Свойство названо и в шапке группы: следствие принято сознательно.
+
+    Третий элемент тройки — ИСХОДНЫЙ кусок текста, дословно. Он нужен
+    отрицательным контролям: доктóрить блок подстановкой по нормализованному
+    селектору было бы подгонкой, а по дословному куску подмена либо срабатывает,
+    либо контроль краснеет на самой подмене.
+    """
+    text = _CSS_COMMENT_RE.sub("", source)
+    found: list[tuple[str, str, str]] = []
+
+    def walk(chunk: str) -> None:
+        depth = 0
+        prelude_start = 0
+        body_start = 0
+        rule_start = 0
+        prelude = ""
+        for index, symbol in enumerate(chunk):
+            if symbol == "{":
+                if depth == 0:
+                    rule_start = prelude_start
+                    prelude = " ".join(chunk[prelude_start:index].split())
+                    body_start = index + 1
+                depth += 1
+            elif symbol == "}":
+                depth -= 1
+                if depth == 0:
+                    body = chunk[body_start:index]
+                    if prelude.startswith("@"):
+                        walk(body)
+                    else:
+                        found.append((prelude, body, chunk[rule_start:index + 1].strip()))
+                    prelude_start = index + 1
+
+    walk(text)
+    return tuple(found)
+
+
+def _css_rules_of(path: Path) -> tuple[tuple[str, str, str], ...]:
+    """Правила таблицы стилей по названному пути."""
+    return _css_rules(_stylesheet_source(path))
+
+
+def _css_declarations(body: str) -> tuple[tuple[str, str], ...]:
+    """Пары «свойство, значение» блока объявлений, приведённые к нижнему регистру.
+
+    `!important` снимается со значения: предмет утверждений — объявленная
+    величина, а не её вес в каскаде.
+    """
+    pairs: list[tuple[str, str]] = []
+    for chunk in body.split(";"):
+        if ":" not in chunk:
+            continue
+        name, value = chunk.split(":", 1)
+        pairs.append((
+            name.strip().lower(),
+            value.replace("!important", "").strip().lower(),
+        ))
+    return tuple(pairs)
+
+
+def _css_value(body: str, prop: str) -> str | None:
+    """Последнее объявленное значение свойства в блоке, или None."""
+    seen = None
+    for name, value in _css_declarations(body):
+        if name == prop:
+            seen = value
+    return seen
+
+
+def _css_layer(body: str) -> int | None:
+    """Числовой слой блока. None — слой не объявлен или объявлен не числом."""
+    raw = _css_value(body, "z-index")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _css_is_out_of_flow(body: str) -> bool:
+    """Объявляет ли блок положение ВНЕ ПОТОКА по отношению к окну."""
+    return _css_value(body, "position") == "fixed"
+
+
+def _banner_elevation_rules(path: Path) -> tuple[tuple[str, str, str], ...]:
+    """Блоки подъёма: селектор несёт И признак блокировки, И идентификатор заготовки."""
+    return tuple(
+        rule for rule in _css_rules_of(path)
+        if MODAL_SCROLL_LOCK_FLAG in rule[0]
+        and any(f"#{banner_id}" in rule[0] for banner_id in FAILURE_BANNER_IDS)
+    )
+
+
+def _banner_elevation_findings(path: Path) -> tuple[str, ...]:
+    """Расхождения порядка слоёв. Пусто — плашка объявлена выше панели.
+
+    ⚠️ ПОЧЕМУ НАХОДКИ СЧИТАЮТСЯ ПО-РАЗНОМУ ДЛЯ ДВУХ РОДОВ РАСХОЖДЕНИЙ. Отсутствие
+    блока — расхождение НА КАЖДУЮ ЗАГОТОВКУ: заготовок две, и оставшаяся без
+    подъёма остаётся недостижимой независимо от соседки. Низкий слой —
+    расхождение НА БЛОК: блок один на обе, и два одинаковых сообщения о нём
+    сказали бы одно и то же дважды. Оба числа слоёв называются в сообщении.
+    """
+    findings: list[str] = []
+    rules = _css_rules_of(path)
+
+    panel = [rule for rule in rules if rule[0] == MODAL_PANEL_SELECTOR]
+    if len(panel) != 1:
+        return (
+            f"блоков селектора панели `{MODAL_PANEL_SELECTOR}` в таблице "
+            f"{len(panel)}, а не один — сличать слой подъёма не с чем",
+        )
+    panel_layer = _css_layer(panel[0][1])
+    if panel_layer is None:
+        return (
+            f"блок `{MODAL_PANEL_SELECTOR}` не объявляет числового слоя — "
+            "сличать слой подъёма не с чем",
+        )
+
+    blocks: dict[str, tuple[str, list[str]]] = {}
+    for banner_id in FAILURE_BANNER_IDS:
+        hits = [rule for rule in rules
+                if MODAL_SCROLL_LOCK_FLAG in rule[0] and f"#{banner_id}" in rule[0]]
+        if len(hits) != 1:
+            findings.append(
+                f"#{banner_id}: блоков подъёма с признаком "
+                f"`{MODAL_SCROLL_LOCK_FLAG}` в таблице {len(hits)}, а не один — "
+                "заготовка остаётся в потоке под панелью, и человеку не показано "
+                "ни одного объяснения отказа (Р-3, шаг 4.4)"
+            )
+            continue
+        selector, body, _raw = hits[0]
+        blocks.setdefault(selector, (body, []))[1].append(banner_id)
+
+    for selector, (body, banner_ids) in blocks.items():
+        if not _css_is_out_of_flow(body):
+            findings.append(
+                f"`{selector}`: блок подъёма не объявляет положения вне потока "
+                f"(заготовки {', '.join(banner_ids)}) — плашка остаётся в потоке "
+                "документа и уезжает выше окна вместе с ним"
+            )
+        layer = _css_layer(body)
+        if layer is None:
+            findings.append(
+                f"`{selector}`: блок подъёма не объявляет числового слоя "
+                f"(заготовки {', '.join(banner_ids)}) — сравнивать с панелью "
+                "нечего, и плашка остаётся под ней"
+            )
+        elif layer <= panel_layer:
+            findings.append(
+                f"`{selector}`: слой подъёма {layer}, слой панели "
+                f"{panel_layer} — плашка объявлена НЕ ВЫШЕ панели (заготовки "
+                f"{', '.join(banner_ids)}); человек, нажавший кнопку без связи, "
+                "снова не увидит объяснения отказа"
+            )
+
+    return tuple(findings)
+
+
+def test_the_failure_banner_is_declared_above_the_panel_while_it_is_open():
+    """Обе заготовки объявлены вне потока и слоем выше панели при её открытии.
+
+    ⚠️ АНТИВАКУУМНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ. Без неё правило зеленело бы на
+    таблице, где слоёв нет ВОВСЕ: «подъём выше панели» неотличимо от «панели с
+    её слоем в таблице нет». Поэтому сперва утверждается, что блок селектора
+    панели существует ровно один, объявляет положение вне потока и ЧИСЛОВОЙ
+    слой, — и только потом с этим слоем что-либо сличается.
+
+    ⚠️ ВТОРАЯ ПОЛОВИНА АНТИВАКУУМА — КЛЮЧ ПОДЪЁМА. Имя признака блокировки
+    прокрутки сличается с исходником рычага панели: подъём ключáется на ТОТ ЖЕ
+    признак, который поднимает сама панель. Панель, перестав его поднимать,
+    роняет ЭТО правило — а не тихо забирает у плашки подъём.
+
+    ⚠️ НИ ОДНО ЧИСЛО СЛОЯ В ПРАВИЛЕ НЕ ВЫПИСАНО. Оба читаются из таблицы и
+    сличаются между собой, поэтому правка любого из двух слоёв не может
+    разойтись с правилом молча.
+    """
+    path = _app_css_path()
+    rules = _css_rules_of(path)
+
+    panel = [rule for rule in rules if rule[0] == MODAL_PANEL_SELECTOR]
+    assert len(panel) == 1, (
+        f"app.css: блоков селектора `{MODAL_PANEL_SELECTOR}` в таблице "
+        f"{len(panel)}, а не один — правило о порядке слоёв сличало бы слой "
+        "подъёма неизвестно с чем"
+    )
+    panel_body = panel[0][1]
+    assert _css_is_out_of_flow(panel_body), (
+        f"app.css: блок `{MODAL_PANEL_SELECTOR}` перестал объявлять положение "
+        "вне потока — предмет сравнения исчез, и утверждение «плашка выше "
+        "панели» стало бы утверждением ни о чём"
+    )
+    panel_layer = _css_layer(panel_body)
+    assert panel_layer is not None, (
+        f"app.css: блок `{MODAL_PANEL_SELECTOR}` не объявляет ЧИСЛОВОГО слоя — "
+        "сличать слой подъёма не с чем, и правило зеленело бы вакуумом"
+    )
+
+    lever = _stylesheet_source(_modal_lever_path())
+    assert MODAL_SCROLL_LOCK_FLAG in lever, (
+        f"components/modal.html: рычаг перестал поднимать признак "
+        f"`{MODAL_SCROLL_LOCK_FLAG}` — подъём плашки ключáется на признак, "
+        "которого больше никто не ставит, и заготовки молча вернулись под "
+        "панель (Р-3, шаг 4.4)"
+    )
+
+    findings = _banner_elevation_findings(path)
+    assert findings == (), (
+        "app.css: плашка отказа объявлена НЕ выше панели подтверждения:\n"
+        + "\n".join(f"  — {line}" for line in findings)
+    )
+
+
+def test_control_a_banner_layer_below_the_panel_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило видит слой подъёма, опущенный до слоя панели.
+
+    ⚠️ ЧИСЛА В КОНТРОЛЕ ТОЖЕ НЕ ВЫПИСАНЫ. Оба слоя читаются из настоящей
+    таблицы, и подстановка делает из первого второй. Выписанное здесь число
+    разошлось бы с таблицей ровно так же, как выписанное в самом правиле.
+    """
+    path = _app_css_path()
+
+    elevation = _banner_elevation_rules(path)
+    assert len(elevation) == 1, (
+        f"блоков подъёма в настоящей таблице {len(elevation)}, а не один — "
+        "доктóрить нечего, и контроль ничего не доказал бы"
+    )
+    selector, body, raw = elevation[0]
+
+    panel = [rule for rule in _css_rules_of(path) if rule[0] == MODAL_PANEL_SELECTOR]
+    assert len(panel) == 1, "блока панели в настоящей таблице нет — доктóрить нечего"
+    panel_layer = _css_layer(panel[0][1])
+    layer = _css_layer(body)
+    assert panel_layer is not None and layer is not None, (
+        "один из двух слоёв в настоящей таблице не число — подстановка была бы "
+        "молчаливой"
+    )
+
+    original = _stylesheet_source(path)
+    assert original.count(raw) == 1, (
+        "блок подъёма встречается в исходнике не один раз — подстановка задела "
+        "бы не тот блок"
+    )
+    poisoned = original.replace(raw, raw.replace(
+        f"z-index: {layer}", f"z-index: {panel_layer}"
+    ))
+    assert poisoned != original, "подмена не сработала — якорь замены не найден"
+
+    findings = _banner_elevation_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+    assert len(findings) == 1, (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО ОПУЩЕННЫЙ СЛОЙ или назвало расхождение дважды: "
+        f"находок {len(findings)} — {findings}"
+    )
+    assert str(layer) in findings[0] and str(panel_layer) in findings[0], (
+        "отказ не назвал ОБА числа — читатель отказа не узнает, какой слой "
+        f"править: {findings[0]}"
+    )
+    assert selector in findings[0], (
+        f"отказ не назвал селектор блока подъёма: {findings[0]}"
+    )
+
+
+def test_control_a_banner_without_an_elevation_rule_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило краснеет на КАЖДУЮ заготовку, лишённую подъёма.
+
+    Снятый целиком блок подъёма возвращает обе заготовки ровно в то состояние,
+    которое обход измерил на шаге 4.4, — и правило обязано назвать обе, а не
+    одну: заготовка, оставшаяся без подъёма, недостижима независимо от соседки.
+    """
+    path = _app_css_path()
+
+    elevation = _banner_elevation_rules(path)
+    assert len(elevation) == 1, (
+        f"блоков подъёма в настоящей таблице {len(elevation)}, а не один — "
+        "снимать нечего, и контроль ничего не доказал бы"
+    )
+    raw = elevation[0][2]
+
+    original = _stylesheet_source(path)
+    assert original.count(raw) == 1, (
+        "блок подъёма встречается в исходнике не один раз — снятие задело бы "
+        "не тот блок"
+    )
+    poisoned = original.replace(raw, "")
+    assert poisoned != original, "снятие не сработало — якорь замены не найден"
+
+    findings = _banner_elevation_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+    assert len(findings) == len(FAILURE_BANNER_IDS), (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО СНЯТЫЙ БЛОК ПОДЪЁМА или назвало не все заготовки: "
+        f"находок {len(findings)} при {len(FAILURE_BANNER_IDS)} заготовках — "
+        f"{findings}"
+    )
+    joined = "\n".join(findings)
+    for banner_id in FAILURE_BANNER_IDS:
+        assert banner_id in joined, (
+            f"отказ не назвал заготовку #{banner_id} — читатель отказа не "
+            f"узнает, какая из двух осталась под панелью: {joined}"
+        )
