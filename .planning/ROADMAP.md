@@ -542,7 +542,7 @@ in-memory SQLite через `ASGITransport` без процесса и порт�
 | 7. Обновление htmx до 2.0.10 | v2.1 | 7/7 | Complete    | 2026-08-28 |
 | 8. Фундамент, гейты, денежный потолок | v2.1 | 11/11 | Complete    | 2026-08-29 |
 | 9. Пилот `account_groups` | v2.1 | 20/20 | Complete   | 2026-09-02 |
-| 10. Рычаг `modal.html` | v2.1 | 32/32 | In Progress|  |
+| 10. Рычаг `modal.html` | v2.1 | 32/34 | In Progress|  |
 | 11. Массовый перевод разделов | v2.1 | 0/TBD | Not started | - |
 | 12. Загрузка изображений | v2.1 | 0/TBD | Not started | - |
 | 13. QR-мастер Telegram | v2.1 | 0/TBD | Not started | - |
