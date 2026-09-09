@@ -36,6 +36,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 # ⚠️ КОРЕНЬ РАЗМЕТКИ ВЫЧИСЛЕН ОТ СОБСТВЕННОГО ПУТИ ЭТОГО ФАЙЛА И ЗАПИСАН В ФОРМЕ,
 # ДЕЙСТВУЮЩЕЙ В ЭТОМ КАТАЛОГЕ (`test_ads_form_security.py`, `test_htmx_inventory.py`,
 # `test_components.py` — все три объявляют ровно так), а не перенесён выражением с
@@ -346,3 +348,181 @@ def test_control_a_missing_anchor_is_named_by_the_rule():
     absent_file = missing_anchors((nowhere,))
     assert len(absent_file) == 1, _report(absent_file)
     assert absent_file[0].reason == NO_SOURCE_FILE, str(absent_file[0])
+
+
+# --- конъюнкция несущего счёта шага 1.2: признак роли живёт на узле с идентификатором ---
+#
+# ЗАЧЕМ ОТДЕЛЬНОЕ ПРАВИЛО, ЕСЛИ ОБА ПРИЗНАКА УЖЕ В РЕЕСТРЕ. Реестр ведёт НЕЗАВИСИМЫЕ
+# подстрочные поиски по файлам и конъюнкцию выразить НЕ УМЕЕТ. Несущий счёт шага 1.2
+# держится тем, что префикс идентификатора и признак роли диалога стоя́т НА ОДНОМ
+# УЗЛЕ. Правдоподобная правка доступности — перенос `role="dialog"`/`aria-modal` с
+# корня `.modal` на `.modal__panel` — обнулит счёт шага 1.2, а ОБЕ записи реестра
+# останутся зелёными: литерал из файла никуда не денется. ИСТОЧНИК: `WR-01` седьмого
+# круга ревизии кода Фазы 10 (`10-REVIEW.md`, 2026-09-09), план 10-36.
+
+# ⚠️ ИМЯ ФАЙЛА РЫЧАГА — ОДНИМ ОБЪЯВЛЕНИЕМ. В реестре выше оно выписано пять раз;
+# шестая копия в исполняемом коде правила разошлась бы с первыми пятью МОЛЧА.
+MODAL_LEVER_SOURCE = "components/modal.html"
+
+MODAL_TAG_START = '<div class="modal"'
+MODAL_ID_MARKER = 'id="{{ id }}"'
+MODAL_ROLE_MARKER = 'role="dialog"'
+
+# Несущий счёт шага 1.2 обхода — дословно то, что человек набирает в консоли.
+STEP_1_2_COUNT = '[id^="sched-del-"][role="dialog"]'
+
+# ⚠️ ДВА ОСНОВАНИЯ ОТКАЗА РАЗБОРЩИКА НАЗВАНЫ РАЗНЫМИ ТЕКСТАМИ — та же доктрина, что
+# у `NO_SOURCE_FILE` и `NO_ANCHOR_IN_FILE`: слитый отказ заставил бы следующего
+# читателя разбирать, какое из двух событий случилось.
+TAG_START_NOT_UNIQUE = "литерал начала открывающего тега рычага встречается не РОВНО ОДИН раз"
+TAG_NOT_CLOSED = "открывающий тег рычага не замкнут"
+
+ID_LEFT_THE_TAG = (
+    "подстановки идентификатора нет в открывающем теге рычага: несущий счёт шага 1.2 "
+    f"`{STEP_1_2_COUNT}` вернёт 0 на живой разметке"
+)
+ROLE_LEFT_THE_TAG = (
+    "признак роли диалога УЕХАЛ с узла, несущего идентификатор: несущий счёт шага 1.2 "
+    f"`{STEP_1_2_COUNT}` вернёт 0 на живой разметке, и человек на приёмке запишет "
+    "расхождение ПРОДУКТА там, где сломана КОНЪЮНКЦИЯ"
+)
+
+
+class ModalTagNotParsed(Exception):
+    """Открывающий тег рычага не разобран, и основание названо своим текстом."""
+
+
+def _lever_source() -> str:
+    """Исходник рычага одним чтением. Читается ТОЛЬКО на чтение — дерево не правится."""
+    return (TEMPLATES_DIR / MODAL_LEVER_SOURCE).read_text(encoding="utf-8")
+
+
+def _naive_first_bracket_tag(source: str) -> str:
+    """НАИВНЫЙ разбор — до ПЕРВОЙ закрывающей скобки, без учёта кавычек.
+
+    ⚠️ ЭТО НЕ РАБОЧИЙ РАЗБОРЩИК, А ПРЕДМЕТ КОНТРОЛЯ. Ровно так разбирает пример
+    починки, приведённый ревизией (`10-REVIEW.md`, `WR-01`), и ровно этим он на
+    сегодняшнем дереве теряет признак роли диалога.
+    """
+    start = source.index(MODAL_TAG_START)
+    return source[start : source.index(">", start) + 1]
+
+
+def _modal_opening_tag(source: str) -> str:
+    """⚠️ ЗАГОТОВКА КРАСНОЙ ФАЗЫ — НАИВНЫЙ РАЗБОР, ЗАМЕНЯЕМЫЙ ЗЕЛЁНОЙ."""
+    if source.count(MODAL_TAG_START) != 1:
+        raise ModalTagNotParsed(
+            f"{TAG_START_NOT_UNIQUE}: вхождений {source.count(MODAL_TAG_START)}"
+        )
+    return _naive_first_bracket_tag(source)
+
+
+def dialog_role_findings(source: str) -> list[str]:
+    """Расхождения конъюнкции — ВСЕ, а не первое, и НА ПРИЗНАК, а не на файл.
+
+    ИСХОДНИК ПРИХОДИТ ПАРАМЕТРОМ по той же причине, по какой параметром приходит
+    реестр у `missing_anchors`: без параметра контроль зубов был бы невыразим, и
+    зубы правила пришлось бы ЗАЯВЛЯТЬ вместо того, чтобы их ПОКАЗЫВАТЬ.
+
+    Ушедший идентификатор и ушедшая роль ломают счёт ПО-РАЗНОМУ, и слитое
+    сообщение назвало бы одно вместо двух.
+    """
+    tag = _modal_opening_tag(source)
+    findings: list[str] = []
+    if MODAL_ID_MARKER not in tag:
+        findings.append(ID_LEFT_THE_TAG)
+    if MODAL_ROLE_MARKER not in tag:
+        findings.append(ROLE_LEFT_THE_TAG)
+    return findings
+
+
+def test_the_dialog_role_lives_on_the_node_that_carries_the_id():
+    """НЕСУЩИЙ СЧЁТ ШАГА 1.2 ДЕРЖИТСЯ КОНЪЮНКЦИЕЙ, И ОНА НА ОДНОМ УЗЛЕ."""
+    # АНТИВАКУУМНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ: без неё правило зеленело бы на пустом
+    # исходнике и на неразобранном теге — то есть на собственной поломке.
+    source = _lever_source()
+    assert source.strip(), "исходник рычага пуст — правило зеленело бы ВАКУУМОМ"
+
+    tag = _modal_opening_tag(source)
+    assert tag.strip(), "открывающий тег рычага пуст — правило зеленело бы ВАКУУМОМ"
+
+    findings = dialog_role_findings(source)
+    assert not findings, (
+        "конъюнкция несущего счёта шага 1.2 разошлась по узлам:\n"
+        + _report(findings)
+        + "\n\n⚠️ ЭТО РЕГРЕССИЯ ПРОДУКТА, А НЕ ПРАВИЛА: реестр якорей останется "
+        "ЗЕЛЁНЫМ (литерал из файла никуда не делся), а шаг 1.2 обхода вернёт 0, и "
+        "узнает об этом только человек за клавиатурой. Дописать признак в шаблон "
+        "РАДИ ЗЕЛЕНИ ПРАВИЛА нельзя — это подгонка кода под тест"
+    )
+
+
+def test_control_the_dialog_role_moved_off_the_id_node_reddens():
+    """ЗУБЫ ПРАВИЛА КОНЪЮНКЦИИ — НА ДОКТÓРЕННОЙ В ПАМЯТИ КОПИИ ИСХОДНИКА.
+
+    (б) непрáвленый исходник — расхождений ноль; (а) признак роли перенесён с корня
+    `.modal` на узел панели — расхождение РОВНО ОДНО, и в его тексте назван шаг 1.2.
+
+    Файлы разметки при этом не правятся: подмена живёт В ПАМЯТИ, потому что предмет
+    контроля обязан задаваться САМИМ контролем.
+    """
+    source = _lever_source()
+
+    # (б) ПОЛОЖИТЕЛЬНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ: без неё половина (а) не отличала бы
+    # работу правила от разборщика, находящего нарушение ВСЕГДА.
+    assert not dialog_role_findings(source), _report(dialog_role_findings(source))
+
+    # (а) ПЕРЕНОС ПРИЗНАКА РОЛИ НА ПАНЕЛЬ — ПРАВДОПОДОБНАЯ ПРАВКА ДОСТУПНОСТИ.
+    root_role = 'role="dialog" aria-modal="true" '
+    panel_tag = '<div class="modal__panel"'
+    assert source.count(root_role) == 1, "дословный кусок переноса перестал быть единственным"
+    assert source.count(panel_tag) == 1, "узел панели перестал быть единственным"
+
+    doctored = source.replace(root_role, "", 1).replace(
+        panel_tag, panel_tag + " " + root_role.strip(), 1
+    )
+    # ⚠️ ПОДМЕНА, НЕ НАШЕДШАЯ ЯКОРЯ, ОСТАВИЛА БЫ КОНТРОЛЬ ЗЕЛЁНЫМ НА НЕИЗМЕНЁННОМ
+    # ИСХОДНИКЕ — вакуум, зеркальный тому, против которого контроль заведён.
+    assert doctored != source, "подмена не сработала: контроль проверял бы исходник"
+    assert MODAL_ROLE_MARKER in doctored, "признак роли ПОТЕРЯН, а не ПЕРЕНЕСЁН"
+
+    findings = dialog_role_findings(doctored)
+    assert len(findings) == 1, _report(findings)
+    assert "1.2" in findings[0], findings[0]
+
+
+def test_control_a_naive_first_bracket_scan_would_misread_this_markup():
+    """ОСНОВАНИЕ УЧЁТА КАВЫЧЕК ЗАПИСАНО ИСПОЛНЕНИЕМ, А НЕ ПРОЗОЙ.
+
+    ⚠️ ЭТО НЕ ИЗБЫТОЧНЫЙ КОНТРОЛЬ. Без него следующий читатель снимет учёт кавычек
+    как «лишнюю сложность», и правило начнёт краснеть на РАБОТАЮЩЕЙ разметке — то
+    есть потребует чинить продукт там, где сломан разборщик.
+    """
+    source = _lever_source()
+
+    naive = _naive_first_bracket_tag(source)
+    assert MODAL_ROLE_MARKER not in naive, (
+        "наивный разбор ВНЕЗАПНО находит признак роли: разметка рычага изменилась "
+        "так, что основание сложного разбора ОТПАЛО. ⚠️ ТОГДА ПРАВИТСЯ ЭТОТ КОНТРОЛЬ "
+        "ВМЕСТЕ С КОММЕНТАРИЕМ НАД РАЗБОРЩИКОМ, А НЕ РАЗБОРЩИК"
+    )
+
+    tag = _modal_opening_tag(source)
+    assert MODAL_ID_MARKER in tag and MODAL_ROLE_MARKER in tag, (
+        "разбор с учётом кавычек потерял один из признаков — правило конъюнкции "
+        "краснело бы на работающей разметке"
+    )
+    assert len(tag) > len(naive), "кусок разборщика не длиннее наивного"
+
+
+def test_control_the_parser_names_two_different_reasons():
+    """ДВА ОСНОВАНИЯ ОТКАЗА РАЗБОРЩИКА РАЗЛИЧИМЫ — ДВУМЯ ВЫЗОВАМИ НА СИНТЕТИКЕ."""
+    with pytest.raises(ModalTagNotParsed) as absent:
+        _modal_opening_tag("<p>ни одного открывающего тега рычага</p>")
+    assert TAG_START_NOT_UNIQUE in str(absent.value), str(absent.value)
+
+    with pytest.raises(ModalTagNotParsed) as unclosed:
+        _modal_opening_tag('<div class="modal" id="x" x-data="a > b"')
+    assert TAG_NOT_CLOSED in str(unclosed.value), str(unclosed.value)
+
+    assert TAG_START_NOT_UNIQUE != TAG_NOT_CLOSED
