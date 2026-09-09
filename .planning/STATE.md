@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 10
 current_phase_name: Рычаг `components/modal.html`
 status: executing
-stopped_at: Completed 10-33-PLAN.md
-last_updated: "2026-09-09T14:01:10.321Z"
+stopped_at: Completed 10-34-PLAN.md
+last_updated: "2026-09-09T15:44:32.208Z"
 last_activity: 2026-09-09
 last_activity_desc: Phase 10 execution started
-state_head: f27b0e8b00df6c1b06da8146a3c5dee5ab64a36c
+state_head: fb57601063af8e894b57ffee4a4ea54160f25599
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 72
-  completed_plans: 70
+  completed_plans: 71
   percent: 33
 ---
 
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
-Plan: 2 of 34
+Plan: 3 of 34
 Total Plans in Phase: 34
 Completed Plans in Phase: 20
 Status: Ready to execute
@@ -114,6 +114,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 10 P31 | 54 min | 3 tasks | 4 files |
 | Phase 10 P32 | 1h 7m | 3 tasks | 7 files |
 | Phase 10 P33 | 1h 40m | 3 tasks | 3 files |
+| Phase 10 P34 | 45 min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -218,6 +219,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 10]: Пятая копия снятого утверждения ищется по ПРЕДМЕТУ, а не по совпадению слов: близкая находка записывается отдельно с замером, иначе строгий вердикт покупается умолчанием
 - [Phase 10]: Правка ПОЛОВИНЫ вхождений одного утверждения отклоняется с замером числа вхождений: полупочиненное состояние есть тот же дефект, ради снятия которого правка затевалась
 - [Phase 10]: Сведение записей об опровергнутом сохраняет ПРЕДМЕТ, а не ТЕКСТ, и проверяется ДВУМЯ числами сразу — строк меньше, названных предметов больше
+- [Phase 10]: Несущий счёт проверки 1 обхода 10-UAT.md исправлен на `[id^="sched-del-"][role="dialog"]` в четырёх местах при ДОСЛОВНО перенесённых ожидаемых числах: правился ИНСТРУМЕНТ, а не ожидание. — `3`, `3` и `2`, `2` и `1`, `4 − N` и `3 − N` были ВЕРНЫМИ числами при неверном способе их снять — панелей было ровно три и тогда. Сдвинутое число означало бы подгонку ожидания под наблюдение.
+- [Phase 10]: Команда посева артефакта обхода исправлена как ТЕКСТ и НЕ ЗАПУЩЕНА: `"%02d:00"` вместо `"0%d:00"`. — Три самостоятельно достаточных основания: рабочее дерево и прод смотрят в ОДНУ базу (замер `walkthrough.environment`); разрешение человека на прогон 2026-09-09 дано присутствующему за клавиатурой при `workflow.live_dom_uat: false` и автономным исполнителем не наследуется; годность исправленного выражения уже доказана замером Р-2 на последних двух стендах обхода.
+- [Phase 10]: `FORM-06` НЕ отмечено выполненным, хотя `requirements.ready-ids` вернул `1/1`. — Артефакт обхода держит прямой запрет пунктом 3 своего регламента: `FORM-06` переводится в завершённое ТОЛЬКО после прохождения обхода И повторной верификации. Шаг 4.4 обхода ПРОВАЛЕН, в таблице прослеживаемости стои́т `Gaps Found`, и отметка `Complete`, поставленная планом, была бы самозаверением.
 
 ### Pending Todos
 
@@ -396,8 +400,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-09T14:01:08.806Z
-Stopped at: Completed 10-33-PLAN.md
+Last session: 2026-09-09T15:43:42.163Z
+Stopped at: Completed 10-34-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
