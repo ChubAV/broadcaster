@@ -1944,6 +1944,8 @@ const AFTER_REQUEST = payload.after_request;
 const LANDING_ID = payload.landing_id;
 const LANDING_PRESENT = payload.landing_present;
 const DISMISSAL = payload.dismissal;
+const BANNER_IDS = payload.banner_ids;
+const HIDDEN_ATTR = payload.hidden_attr;
 
 function makeClassList() {
   const own = new Set();
@@ -1975,16 +1977,41 @@ let attempted = [];
 // молча остаётся там, где был. Стаб, записывающий имя независимо от присутствия,
 // имитировал бы успех там, где в браузере не происходит ничего, и правила ниже
 // зеленели бы на сегодняшнем дефекте.
+//
+// ⚠️ СУМКА АТРИБУТОВ ПРИБАВЛЕНА ПЛАНОМ 10-41, И ВЕДЁТ ОНА СЕБЯ КАК В БРАУЗЕРЕ,
+// А НЕ КАК УДОБНО. Три вещи названы фактом, потому что каждая из них, сделанная
+// иначе, дала бы ЗЕЛЁНОЕ правило на дефектном рычаге:
+//   [1] постановка есть ПРИСВОЕНИЕ, а не переключение: второй вызов на том же
+//       узле обязан оставить признак стоя́щим, иначе снятие двух заготовок
+//       одним перебором «снимало» бы и обратно ставило;
+//   [2] вопрос о наличии спрашивает КЛЮЧ, а не истинность значения: признак
+//       скрытости несёт ПУСТОЕ значение (`setAttribute('hidden', '')`), и
+//       проверка на истинность зеленела бы НАОБОРОТ — на снятой заготовке
+//       отвечала бы «не снята»;
+//   [3] сумка — объектный литерал БЕЗ ПРОТОТИПА: имя атрибута, совпавшее с
+//       именем метода прототипа объекта, иначе отвечало бы «есть» всегда.
+//
+// ⚠️ ВСЕ ЗАВЕДЁННЫЕ УЗЛЫ СКЛАДЫВАЮТСЯ В РЕЕСТР, И ЭТО НУЖНО `reset()`. Сценарий,
+// прочитавший признак, оставшийся от предыдущего прогона, зеленел бы ПРОШЛЫМ.
+const allNodes = [];
 function makeNode(name, connected) {
-  return {
+  const node = {
     name: name,
     isConnected: connected,
+    attrs: Object.create(null),
+    setAttribute(attr, value) { this.attrs[attr] = value; },
+    removeAttribute(attr) { delete this.attrs[attr]; },
+    hasAttribute(attr) {
+      return Object.prototype.hasOwnProperty.call(this.attrs, attr);
+    },
     focus() {
       attempted.push(name);
       if (!this.isConnected) { return; }
       focused = name;
     }
   };
+  allNodes.push(node);
+  return node;
 }
 
 const documentElement = { classList: makeClassList() };
@@ -1994,6 +2021,15 @@ const documentElement = { classList: makeClassList() };
 const landing = makeNode('landing', true);
 const body = makeNode('body', true);
 
+// Узлы заготовок плашки отказа — по одному на объявленный идентификатор.
+// ⚠️ ПУСТОЙ ПЕРЕЧЕНЬ ОСТАВЛЯЕТ РАЗРЕШЕНИЕ ИДЕНТИФИКАТОРОВ ПОБАЙТОВО ПРЕЖНИМ, и
+// это ОБЯЗАТЕЛЬСТВО, а не следствие: восемь действующих сценариев подают
+// умолчание и обязаны дать те же вердикты, что до прибавки.
+const banners = Object.create(null);
+for (const bannerId of BANNER_IDS) {
+  banners[bannerId] = makeNode('banner:' + bannerId, true);
+}
+
 globalThis.document = {
   documentElement: documentElement,
   activeElement: body,
@@ -2001,8 +2037,14 @@ globalThis.document = {
   // ИДЕНТИФИКАТОР. Стаб, отдающий узел на ЛЮБОЙ идентификатор, зеленел бы и на
   // панели, приземляющейся куда попало; отсутствие площадки выражается
   // признаком LANDING_PRESENT и служит отрицательным контролем.
+  //
+  // ⚠️ ПОРЯДОК ВЕТВЕЙ НЕСУЩИЙ (план 10-41): площадка приземления разрешается
+  // ПЕРВОЙ и дословно прежней ветвью, заготовки — второй. Обратный порядок
+  // сделал бы прибавку заметной для восьми действующих сценариев, чей перечень
+  // заготовок пуст, — то есть нарушил бы обязательство умолчания.
   getElementById(id) {
     if (LANDING_PRESENT && id === LANDING_ID) { return landing; }
+    if (Object.prototype.hasOwnProperty.call(banners, id)) { return banners[id]; }
     return null;
   }
 };
@@ -2012,6 +2054,9 @@ function reset() {
   focused = null;
   attempted = [];
   document.activeElement = body;
+  // Сумки атрибутов ВСЕХ заведённых узлов обнуляются вместе с остальным
+  // состоянием: признак, переживший прогон, зеленил бы следующий прошлым.
+  for (const node of allNodes) { node.attrs = Object.create(null); }
 }
 function locked() { return documentElement.classList.contains(LOCK); }
 
@@ -2434,10 +2479,48 @@ function scenarioDismissal() {
   return Object.assign({}, runs[1], { repeat_matches: same });
 }
 
+// --- СНЯТИЕ ЗАГОТОВОК ПЛАШКИ ОТКАЗА ПРИ ОТКРЫТИИ ПАНЕЛИ (план 10-41) --------
+//
+// ⚠️ ЗАЧЕМ ЭТО СЦЕНАРИЙ ИСПОЛНЕНИЯ, А НЕ ДВА ПОДСТРОЧНЫХ ПОИСКА. Конъюнкция
+// «глагол применён К ЭТОЙ заготовке» подстрокой НЕВЫРАЗИМА ПО ПОСТРОЕНИЮ: в
+// рычаге связь «идентификатор → цель глагола» проходит через перебор массива
+// (`forEach`), то есть она есть связь ИСПОЛНЕНИЯ, а не соседства литералов.
+// Подстрочная форма правила (`_lever_clearing_findings` в модуле шелла) на теле,
+// где обе заготовки НАЗВАНЫ, а признак поставлен площадке приземления, даёт НОЛЬ
+// находок и проходит зелёной — замер восьмого круга ревизии (`CR-01`).
+//
+// ⚠️ ВЕРДИКТ НАЗЫВАЕТ ПО КАЖДОЙ ЗАГОТОВКЕ ОТДЕЛЬНО, А НЕ ОБЩИМ БУЛЕВЫМ. Общее
+// «снято» не отличило бы «снялась одна из двух» от «снялись обе», а именно это
+// различие и есть форма (C) матрицы мутаций.
+//
+// ⚠️ ПОЛЕ `registered` ОТДАЁТ ТО, ЧТО ГАРНИР ЗАВЁЛ НА САМОМ ДЕЛЕ, А НЕ ЭХО
+// ПАВЛОАДА. Без него «заготовка не снята» неотличимо от «узла заготовки не
+// существует, и снимать было нечего»: разрешение идентификатора отдало бы
+// пустоту, рычаг честно ничего не сделал бы, и правило краснело бы ВСЕГДА.
+function scenarioBannerClearing() {
+  reset();
+  const panel = build();
+  panel.show();
+  const cleared = Object.create(null);
+  for (const bannerId of Object.keys(banners)) {
+    cleared[bannerId] = banners[bannerId].hasAttribute(HIDDEN_ATTR);
+  }
+  return {
+    raised: locked(),
+    cleared: cleared,
+    landing_hidden: landing.hasAttribute(HIDDEN_ATTR),
+    registered: Object.keys(banners),
+    has_destroy: null,
+    still_locked_after_teardown: null,
+    repeat_matches: null
+  };
+}
+
 const SCENARIOS = {
   raise: scenarioRaise,
   teardown: scenarioTeardown,
   sibling: scenarioSibling,
+  banner_clearing: scenarioBannerClearing,
   focus_after_hide: scenarioFocusAfterHide,
   focus_after_teardown: scenarioFocusAfterTeardown,
   focus_untouched_by_closed_sibling: scenarioFocusSibling,
@@ -2699,6 +2782,7 @@ def _run_modal_lifecycle(
     event_shape: str = "",
     dismissal: str = "",
     sending: bool = False,
+    banner_ids: tuple[str, ...] = (),
 ) -> dict:
     """Исполнить сценарий жизненного цикла панели в интерпретаторе JS.
 
@@ -2762,7 +2846,30 @@ def _run_modal_lifecycle(
     НЕ ЧИНИТЬ, А ЛОМАТЬ. Гарнир существует ради свойств, наблюдаемых БЕЗ
     рантайма, и переписанный он перестал бы отвечать за то, за что отвечает
     сегодня. Названа ГРАНИЦА, а не снята.
+
+    ⚠️ ШЕСТОЙ ВХОД ПРИБАВЛЕН ПЛАНОМ 10-41 ТОЙ ЖЕ ФОРМОЙ И С ТЕМ ЖЕ
+    ОБЯЗАТЕЛЬСТВОМ: ``banner_ids`` называет идентификаторы заготовок плашки
+    отказа и нужен ТОЛЬКО сценарию снятия заготовок; умолчание оставляет все
+    восемь действующих сценариев байт-в-байт прежними. Неизменность их вердиктов
+    утверждена ЗАМЕРОМ, а не обещанием: прогон всего модуля ДО правки дал
+    ``84 passed``, ПОСЛЕ — ``88 passed`` (те же 84 плюс четыре новых правила
+    плана 10-41).
+
+    ⚠️ ИМЯ ПРИЗНАКА СКРЫТОСТИ ЕДЕТ В ПАВЛОАДЕ КЛЮЧОМ, А НЕ ВХОДОМ ФУНКЦИИ, И
+    ВВОЗИТСЯ ОНО ЛЕНИВО. Гарниру нужно ЧЕМ спрашивать сумку атрибутов, но
+    величина эта — свойство заготовок, а не решение вызывающего, и вторым входом
+    она дала бы каждому вызову повод её переопределить. Ввоз идёт ВНУТРИ функции
+    и ТОЛЬКО при непустом перечне: в ``tests/test_pages/test_shell.py`` на уровне
+    модуля стои́т утверждение, срабатывание которого роняет СБОР файла целиком
+    (`REVIEW-8/IN-01`, владелец — план 10-45), и безусловный ввоз перенёс бы этот
+    отказ на восемь сценариев, к заготовкам отношения не имеющих.
     """
+    hidden_attr = ""
+    if banner_ids:
+        from tests.test_pages.test_shell import FAILURE_BANNER_HIDDEN_ATTR
+
+        hidden_attr = FAILURE_BANNER_HIDDEN_ATTR
+
     payload = json.dumps(
         {
             "expression": expression,
@@ -2774,6 +2881,8 @@ def _run_modal_lifecycle(
             "event_shape": event_shape,
             "dismissal": dismissal,
             "sending": sending,
+            "banner_ids": list(banner_ids),
+            "hidden_attr": hidden_attr,
         }
     )
     assert MODAL_LIFECYCLE_HARNESS.count("__PAYLOAD__") == 1, (
@@ -4128,6 +4237,438 @@ def test_the_focus_landing_is_declared_once_and_called_twice():
     assert "isConnected" in expression, (
         "ветвление возврата фокуса не спрашивает присутствия открывателя в "
         f"документе: {expression!r}"
+    )
+
+
+# --- СНЯТИЕ ЗАГОТОВОК ПЛАШКИ ОТКАЗА ПРИ ОТКРЫТИИ ПАНЕЛИ (план 10-41, CR-01) --
+#
+# ⚠️ ЗАЧЕМ ЭТА ГРУППА ЗАВЕДЕНА ЗДЕСЬ, А НЕ ДОПИСАНА К ПОДСТРОЧНОЙ В МОДУЛЕ
+# ШЕЛЛА. Предмет группы — КОНЪЮНКЦИЯ «признак скрытости поставлен ИМЕННО ЭТОЙ
+# заготовке». Подстрокой она невыразима ПО ПОСТРОЕНИЮ: связь «идентификатор →
+# цель глагола» проходит в рычаге через перебор массива, то есть она есть связь
+# ИСПОЛНЕНИЯ, а не соседства литералов. Разборщика JS в дереве нет и заводить
+# его нельзя, зато живой канал исполнения (`MODAL_LIFECYCLE_HARNESS`) в этом
+# модуле уже стои́т — и группа встаёт к нему, а не к подстроке.
+#
+# ⚠️ ПОДСТРОЧНОЕ ПРАВИЛО В МОДУЛЕ ШЕЛЛА НЕ УДАЛЕНО И УДАЛЯТЬСЯ НЕ ДОЛЖНО. Оно
+# осталось АНТИВАКУУМНЫМ слоем: объявление метода есть, тело непусто, глагол в
+# теле присутствует, проза не считается. Конъюнкции оно НЕ утверждает — и прямо
+# называет это правило своим адресом.
+
+
+def _failure_banner_names() -> tuple[tuple[str, ...], str]:
+    """Перечень заготовок и имя признака скрытости — ВВОЗОМ, а не второй копией.
+
+    ⚠️ ВЫПИСАННАЯ КОПИЯ РАЗОШЛАСЬ БЫ С ПЕРЕЧНЕМ МОЛЧА при первой же третьей
+    заготовке: правила ниже проверяли бы две из трёх и остались бы зелёными.
+    Владелец обеих величин — `tests/test_pages/test_shell.py`, там они замерены
+    по включаемому файлу заготовок, и второго их экземпляра здесь не заводится.
+
+    ⚠️ ВВОЗ ВНУТРИ ФУНКЦИИ, А НЕ НА УРОВНЕ МОДУЛЯ, И ПРИЧИНА ЗАМЕРЕНА. В
+    `test_shell.py` на уровне модуля стои́т утверждение, срабатывание которого
+    роняет СБОР файла целиком; модульный ввоз перенёс бы этот отказ и на
+    настоящий файл — то есть расхождение в ЧУЖОМ модуле гасило бы 88 правил
+    здесь. Находка `REVIEW-8/IN-01` предметом плана 10-41 не является, её
+    владелец — план 10-45. Форма ввоза — живая идиома проекта
+    (`_auth_shell_template_source` в том же `test_shell.py` ввозит
+    `_template_source` ровно так).
+    """
+    from tests.test_pages.test_shell import (
+        FAILURE_BANNER_HIDDEN_ATTR,
+        FAILURE_BANNER_IDS,
+    )
+
+    return FAILURE_BANNER_IDS, FAILURE_BANNER_HIDDEN_ATTR
+
+
+def _banner_clearing_verdict(expression: str) -> dict:
+    """Вердикт ИСПОЛНЕНИЯ метода открытия по каждой заготовке и по площадке.
+
+    Поля вердикта: ``cleared`` — карта «идентификатор заготовки → несёт ли ОНА
+    признак скрытости ПОСЛЕ вызова метода открытия»; ``landing_hidden`` — то же
+    у площадки приземления фокуса; ``registered`` — какие узлы заготовок гарнир
+    завёл на самом деле; ``raised`` — поднялся ли признак блокировки прокрутки,
+    то есть отработал ли метод открытия вообще.
+    """
+    banner_ids, _hidden_attr = _failure_banner_names()
+    return _run_modal_lifecycle(expression, "banner_clearing", banner_ids=banner_ids)
+
+
+# Разрешение узла по ПЕРЕМЕННОЙ, а не по строковому литералу. Ровно это и есть
+# связь исполнения: аргумент разрешения — имя перебираемой величины, и подстрока
+# о ней ничего сказать не может.
+_CLEARING_LOOKUP_RE = re.compile(r"getElementById\(\s*([A-Za-z_$][\w$]*)\s*\)")
+
+
+def _clearing_chunk(expression: str) -> str:
+    """ДОСЛОВНАЯ строка выражения, снимающая заготовки. Якорь всех доктóриваний.
+
+    Выводится ИЗ выражения, а не выписывается литералом, — по той же причине и
+    той же формой, что `_lever_clearing_chunk` (tests/test_pages/test_shell.py):
+    выписанный кусок разошёлся бы с рычагом при первой же его правке молча и с
+    зелёным контролем, что хуже красного.
+    """
+    banner_ids, hidden_attr = _failure_banner_names()
+    verb = f"setAttribute('{hidden_attr}'"
+    hits = [
+        line for line in expression.splitlines(keepends=True)
+        if verb in line and all(banner_id in line for banner_id in banner_ids)
+    ]
+    assert len(hits) == 1, (
+        f"строк выражения, снимающих ОБЕ заготовки, {len(hits)}, а не одна — "
+        "доктóрить нечего либо подмена задела бы не то место"
+    )
+    return hits[0]
+
+
+def _banner_id_array(banner_ids: tuple[str, ...]) -> str:
+    """Перечень идентификаторов ровно той формой, какой его несёт рычаг."""
+    return "[" + ", ".join(f"'{banner_id}'" for banner_id in banner_ids) + "]"
+
+
+def _xdata_with_clearing_dropped(expression: str) -> str:
+    """ФОРМА (A): снятие ВЫРЕЗАНО целиком — дословный возврат к дереву до правки.
+
+    ⚠️ ДВОЙНОЙ ПРЕДОХРАНИТЕЛЬ ПОДСТАНОВКИ НАСЛЕДУЕТСЯ У `_xdata_with_dead_teardown`
+    и по той же причине: подстановка обязана доказать, что она что-то изменила, и
+    что изменила ИМЕННО ТО.
+    """
+    chunk = _clearing_chunk(expression)
+    assert expression.count(chunk) == 1, (
+        "строка снятия встречается в выражении не один раз — вырезание задело "
+        "бы не то место"
+    )
+    dropped = expression.replace(chunk, "")
+    assert dropped != expression, "вырезание не сработало — якорь замены не найден"
+    assert chunk not in dropped, (
+        "строка снятия осталась в доктóренном выражении — форма (A) не "
+        "воспроизведена"
+    )
+    return dropped
+
+
+def _xdata_with_clearing_retargeted(expression: str) -> str:
+    """ФОРМА (B): обе заготовки НАЗВАНЫ, а глагол применён к площадке приземления.
+
+    ⚠️ ЭТО РАЗЛИЧАЮЩАЯ МУТАЦИЯ ПАРТИИ. Перечень идентификаторов остаётся в теле
+    метода дословно, глагол постановки признака остаётся в теле дословно — и
+    ровно поэтому подстрочная форма правила даёт на ней НОЛЬ находок. Меняется
+    ОДНО: аргумент разрешения узла перестаёт быть перебираемой величиной и
+    становится идентификатором площадки приземления.
+    """
+    banner_ids, _hidden_attr = _failure_banner_names()
+    chunk = _clearing_chunk(expression)
+    lookups = _CLEARING_LOOKUP_RE.findall(chunk)
+    assert len(lookups) == 1, (
+        f"разрешений узла ПО ПЕРЕМЕННОЙ в строке снятия {len(lookups)}, а не "
+        "одно — перенацеливание задело бы не то место либо рычаг перестал "
+        "разрешать узел через перебор, и вся эта группа стережёт не то"
+    )
+    retargeted_chunk = _CLEARING_LOOKUP_RE.sub(
+        f"getElementById('{FOCUS_LANDING_ID}')", chunk, count=1
+    )
+    assert retargeted_chunk != chunk, "перенацеливание не сработало"
+    assert expression.count(chunk) == 1, (
+        "строка снятия встречается в выражении не один раз — подмена задела бы "
+        "не то место"
+    )
+    retargeted = expression.replace(chunk, retargeted_chunk)
+    for banner_id in banner_ids:
+        assert banner_id in retargeted, (
+            f"после перенацеливания заготовки #{banner_id} в выражении нет — "
+            "контроль доказывал бы удаление, а не форму (B)"
+        )
+    return retargeted
+
+
+def _xdata_with_one_banner_cleared(expression: str) -> str:
+    """ФОРМА (C): снимается ОДНА заготовка, вторая лишь названа литералом.
+
+    Второй идентификатор переносится в строковый литерал, в переборе НЕ
+    участвующий: в теле метода он присутствует, снятия не получает. Подстрочная
+    форма правила даёт на ней ОДНУ находку и потому её видит; здесь она нужна
+    ради ДРУГОГО — арифметика расхождений обязана считаться НА ЗАГОТОВКУ и
+    называть ИМЕННО оставшуюся.
+    """
+    banner_ids, _hidden_attr = _failure_banner_names()
+    assert len(banner_ids) >= 2, (
+        f"заготовок объявлено {len(banner_ids)} — форма (C) «снята одна из "
+        "двух» на таком перечне невыразима, и контроль доказывал бы не то"
+    )
+    kept, *left_behind = banner_ids
+    chunk = _clearing_chunk(expression)
+    full_array = _banner_id_array(banner_ids)
+    assert chunk.count(full_array) == 1, (
+        f"перечня идентификаторов `{full_array}` в строке снятия "
+        f"{chunk.count(full_array)} вхождений, а не одно — подмена задела бы "
+        "не то место"
+    )
+    indent = chunk[: len(chunk) - len(chunk.lstrip())]
+    stale = (
+        indent
+        + "var staleBannerIds = "
+        + _banner_id_array(tuple(left_behind))
+        + ";\n"
+    )
+    partial_chunk = chunk.replace(full_array, _banner_id_array((kept,))) + stale
+    partial = expression.replace(chunk, partial_chunk)
+    assert partial != expression, "подстановка ничего не изменила"
+    for banner_id in banner_ids:
+        assert banner_id in partial, (
+            f"после подстановки заготовки #{banner_id} в выражении нет — "
+            "контроль доказывал бы удаление, а не форму (C)"
+        )
+    return partial
+
+
+def _xdata_with_clearing_in_a_line_comment(expression: str) -> str:
+    """ФОРМА (D): снятие спрятано в СТРОЧНЫЙ комментарий JS внутри выражения.
+
+    ⚠️ ЭТУ ФОРМУ ПОДСТРОЧНАЯ АНТИПРОЗАИЧЕСКАЯ ПОЛОВИНА ПРОПУСКАЛА (`REVIEW-8/WR-03`):
+    вырезались блочный комментарий JS и комментарий Jinja, а строчный — нет.
+    Здесь она непроходима ПО ПОСТРОЕНИЮ: комментарий не исполняется, и зазеленеть
+    правилу на нём нечем — вырезать его не требуется вовсе.
+    """
+    banner_ids, hidden_attr = _failure_banner_names()
+    chunk = _clearing_chunk(expression)
+    indent = chunk[: len(chunk) - len(chunk.lstrip())]
+    commented_chunk = indent + "// " + chunk.strip() + "\n"
+    assert "\n" not in chunk.strip(), (
+        "строка снятия многострочна — предваривший её строчный комментарий "
+        "погасил бы только первую строку, и форма (D) не воспроизвелась бы"
+    )
+    commented = expression.replace(chunk, commented_chunk)
+    assert commented != expression, "закомментирование не сработало"
+    verb = f"setAttribute('{hidden_attr}'"
+    assert verb in commented, (
+        "глагол снятия пропал из доктóренного выражения — контроль доказывал бы "
+        "его удаление, а не безвредность комментария"
+    )
+    for banner_id in banner_ids:
+        assert banner_id in commented, (
+            f"заготовки #{banner_id} нет в доктóренном выражении — контроль "
+            "доказывал бы удаление, а не форму (D)"
+        )
+    return commented
+
+
+def test_the_lever_clears_both_failure_banners_by_execution():
+    """Рычаг ставит признак скрытости КАЖДОЙ заготовке — утверждено ИСПОЛНЕНИЕМ.
+
+    ⚠️ ЧЕМ ЭТО ПРАВИЛО ОТЛИЧАЕТСЯ ОТ ПОДСТРОЧНОГО, И ОТЛИЧИЕ ЕСТЬ ВЕСЬ СМЫСЛ ЕГО
+    СУЩЕСТВОВАНИЯ. Подстрочное (`_lever_clearing_findings`,
+    tests/test_pages/test_shell.py) ведёт по телу метода ДВА НЕЗАВИСИМЫХ поиска:
+    «заготовка названа» и «глагол присутствует». Конъюнкцию «глагол применён К
+    ЭТОЙ заготовке» такая форма не выражает, и тело, где обе заготовки лишь
+    названы, а признак поставлен площадке приземления, проходит её ЗЕЛЁНЫМ (ноль
+    находок — замер восьмого круга ревизии, `CR-01`). Здесь метод открытия
+    ИСПОЛНЯЕТСЯ, и вердикт спрашивается У КАЖДОГО УЗЛА отдельно.
+
+    ⚠️ АНТИВАКУУМНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ и утверждает ЧЕТЫРЕ вещи, потому что
+    вакуум здесь возможен четырьмя способами: пустой перечень заготовок, пустое
+    выражение, незаведённые узлы (разрешение отдало бы пустоту, и «не снято»
+    стало бы неотличимо от «нечего снимать») и неотработавший метод открытия.
+
+    ⚠️ ЧТО ИМЕННО СТЕРЕЖЁТСЯ. Не отрисовка браузером — ИСПОЛНЕНИЕ метода
+    открытия в интерпретаторе JS. Отрисовка остаётся шагу 4.4 ручного обхода
+    `10-UAT.md`, и объявлять его пройденным по зелени этого правила НЕЛЬЗЯ.
+    """
+    banner_ids, hidden_attr = _failure_banner_names()
+    assert banner_ids, (
+        "перечень заготовок плашки пуст — правило ниже прошло бы по нулю "
+        "элементов и объявило зелёным отсутствие проверки"
+    )
+
+    expression = _modal_xdata_expression(_modal_block())
+    assert expression.strip(), (
+        "выражение x-data рычага пусто — исполнять нечего, и правило зеленело "
+        "бы вакуумом"
+    )
+
+    verdict = _banner_clearing_verdict(expression)
+
+    assert set(verdict["registered"]) == set(banner_ids), (
+        "ГАРНИР ЗАВЁЛ НЕ ТЕ УЗЛЫ ЗАГОТОВОК: объявлено "
+        f"{sorted(banner_ids)}, заведено {sorted(verdict['registered'])} — "
+        "разрешение идентификатора отдало бы пустоту, и «заготовка не снята» "
+        "было бы неотличимо от «снимать было нечего»"
+    )
+    assert verdict["raised"] is True, (
+        "после вызова метода открытия признака блокировки прокрутки на "
+        "документе нет — метод не отработал вовсе, и утверждения о снятии "
+        f"заготовок доказывали бы ровно ничего; вердикт: {verdict}"
+    )
+
+    findings: list[str] = []
+    for banner_id in banner_ids:
+        if verdict["cleared"].get(banner_id) is not True:
+            findings.append(
+                f"#{banner_id}: ПОСЛЕ вызова метода открытия признака "
+                f"`{hidden_attr}` у этой заготовки НЕТ — отказ, случившийся ДО "
+                "открытия панели, поднимается над кнопкой необратимого удаления "
+                "и утверждает о ТЕКУЩЕМ действии неправду (CR-01)"
+            )
+    if verdict["landing_hidden"] is not False:
+        findings.append(
+            f"#{FOCUS_LANDING_ID}: признак `{hidden_attr}` получила ПЛОЩАДКА "
+            "ПРИЗЕМЛЕНИЯ ФОКУСА — глагол применён НЕ ТОЙ ЦЕЛИ. Это форма (B) "
+            "матрицы мутаций девятого круга: перечень заготовок в теле метода "
+            "назван, глагол в теле присутствует, и подстрочная форма правила "
+            "даёт на таком теле НОЛЬ находок. Заодно площадка приземления "
+            "получает скрытость и перестаёт принимать фокус"
+        )
+
+    assert not findings, (
+        "components/modal.html: ИСПОЛНЕНИЕ метода открытия НЕ снимает заготовки "
+        "плашки отказа так, как объявлено:\n"
+        + "\n".join(f"  — {line}" for line in findings)
+        + f"\nвердикт: {verdict}"
+    )
+
+
+def test_control_a_lever_that_targets_the_wrong_node_reddens():
+    """ЧТО ДОКАЗЫВАЕТ: форма (B) матрицы мутаций КРАСНИТ правило исполнением.
+
+    ⚠️ ЭТО РАЗЛИЧАЮЩИЙ СЛУЧАЙ ПАРТИИ, И РАЗНИЦА НАЗЫВАЕТСЯ ЧИСЛОМ, А НЕ
+    ОПИСАНИЕМ. Доктóренное выражение НАЗЫВАЕТ обе заготовки в перечне
+    идентификаторов, а признак скрытости ставит площадке приземления фокуса.
+    Подстрочная форма правила (`_lever_clearing_findings`,
+    tests/test_pages/test_shell.py) на этой самой мутации даёт НОЛЬ находок и
+    ПРОХОДИТ ЗЕЛЁНОЙ — замер восьмого круга ревизии, находка `CR-01`, и гэп
+    `V9-01` девятого круга верификации. Правило, исполняющее метод открытия,
+    краснеет на ней ОТДЕЛЬНЫМ отказом о площадке приземления.
+
+    ⚠️ ПОЛОЖИТЕЛЬНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ: непрáвленое выражение даёт исправный
+    вердикт. Без неё контроль был бы совместим с правилом, находящим
+    расхождение всегда.
+    """
+    expression = _modal_xdata_expression(_modal_block())
+    banner_ids, _hidden_attr = _failure_banner_names()
+
+    healthy = _banner_clearing_verdict(expression)
+    assert all(healthy["cleared"][banner_id] for banner_id in banner_ids), (
+        "на НЕПРÁВЛЕНОМ выражении снятие уже не сходится — доктóривание ниже "
+        f"доказывало бы красноту того, что и так красно; вердикт: {healthy}"
+    )
+    assert healthy["landing_hidden"] is False, (
+        "непрáвленый рычаг ставит признак скрытости площадке приземления — "
+        f"контроль ниже не отличил бы мутацию от боевого дерева: {healthy}"
+    )
+
+    verdict = _banner_clearing_verdict(_xdata_with_clearing_retargeted(expression))
+
+    for banner_id in banner_ids:
+        assert verdict["cleared"][banner_id] is False, (
+            f"ПРАВИЛО ЗАЗЕЛЕНЕЛО НА ФОРМЕ (B): заготовка #{banner_id} объявлена "
+            "снятой, хотя глагол применён к площадке приземления, а не к ней — "
+            f"конъюнкция снова не выражена; вердикт: {verdict}"
+        )
+    assert verdict["landing_hidden"] is True, (
+        "доктóривание НЕ ПЕРЕНАЦЕЛИЛО глагол: площадка приземления признака "
+        "скрытости не получила, и форма (B) не воспроизведена — контроль "
+        f"доказывал бы форму (A); вердикт: {verdict}"
+    )
+
+
+def test_control_a_lever_whose_clearing_is_dropped_or_partial_reddens():
+    """ЧТО ДОКАЗЫВАЕТ: формы (A) и (C) матрицы мутаций КРАСНЯТ правило.
+
+    ⚠️ ДВЕ ФОРМЫ ЖИВУТ В ОДНОМ КОНТРОЛЕ ДВУМЯ ПОЛОВИНАМИ, И ВТОРАЯ НЕ ИЗБЫТОЧНА.
+    Первая (A) доказывает, что ВЫРЕЗАННОЕ снятие видно вовсе. Вторая (C)
+    доказывает ДРУГОЕ: расхождение считается НА ЗАГОТОВКУ, и отказ называет
+    ИМЕННО ту, что осталась, — правило, объявляющее «не снято» разом для обеих,
+    прошло бы первую половину и провалило бы вторую.
+
+    ⚠️ ПОЛОЖИТЕЛЬНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ: непрáвленое выражение даёт исправный
+    вердикт. Без неё контроль был бы совместим с правилом, находящим
+    расхождение всегда.
+    """
+    expression = _modal_xdata_expression(_modal_block())
+    banner_ids, _hidden_attr = _failure_banner_names()
+
+    healthy = _banner_clearing_verdict(expression)
+    assert all(healthy["cleared"][banner_id] for banner_id in banner_ids), (
+        "на НЕПРÁВЛЕНОМ выражении снятие уже не сходится — доктóривания ниже "
+        f"доказывали бы красноту того, что и так красно; вердикт: {healthy}"
+    )
+
+    # (A) СНЯТИЕ ВЫРЕЗАНО — дословный возврат к дереву до правки рычага.
+    dropped = _banner_clearing_verdict(_xdata_with_clearing_dropped(expression))
+    for banner_id in banner_ids:
+        assert dropped["cleared"][banner_id] is False, (
+            "ПРАВИЛО НЕ ЗАМЕТИЛО ВЫРЕЗАННОЕ СНЯТИЕ: заготовка "
+            f"#{banner_id} объявлена снятой на выражении, где снятия нет "
+            f"вовсе; вердикт: {dropped}"
+        )
+    assert dropped["landing_hidden"] is False, (
+        "на выражении с ВЫРЕЗАННЫМ снятием площадка приземления получила "
+        "признак скрытости — вырезание задело не то место, и форма (A) не "
+        f"воспроизведена; вердикт: {dropped}"
+    )
+
+    # (C) СНИМАЕТСЯ ОДНА ЗАГОТОВКА, ВТОРАЯ ТОЛЬКО НАЗВАНА ЛИТЕРАЛОМ.
+    kept, *left_behind = banner_ids
+    partial = _banner_clearing_verdict(_xdata_with_one_banner_cleared(expression))
+    assert partial["cleared"][kept] is True, (
+        f"заготовка #{kept} осталась в переборе, но снятой не объявлена — "
+        "доктóривание формы (C) задело не то место, и контроль сличал бы не "
+        f"ту мутацию; вердикт: {partial}"
+    )
+    for banner_id in left_behind:
+        assert partial["cleared"][banner_id] is False, (
+            "ПРАВИЛО ЗАЗЕЛЕНЕЛО НА ЗАГОТОВКЕ, ВЫНЕСЕННОЙ ИЗ ПЕРЕБОРА: "
+            f"#{banner_id} названа в теле метода строковым литералом и признака "
+            "скрытости не получает, а вердикт объявляет её снятой — расхождение "
+            f"считается не НА ЗАГОТОВКУ; вердикт: {partial}"
+        )
+    assert sum(1 for v in partial["cleared"].values() if v is True) == 1, (
+        "снятой оказалась не РОВНО одна заготовка — форма (C) не "
+        f"воспроизведена; вердикт: {partial}"
+    )
+
+
+def test_control_a_lever_that_clears_only_in_a_line_comment_reddens():
+    """ЧТО ДОКАЗЫВАЕТ: форма (D) — снятие в СТРОЧНОМ комментарии JS — краснит.
+
+    ⚠️ ИМЕННО ЭТА ФОРМА ПРОХОДИТ ЗЕЛЁНОЙ У АНТИПРОЗАИЧЕСКОЙ ПОЛОВИНЫ
+    ПОДСТРОЧНОГО ПРАВИЛА, И ЭТО ЗАМЕР, А НЕ ОПАСЕНИЕ. Разбор тела метода в
+    модуле шелла вырезал блочный комментарий JS и комментарий Jinja, а СТРОЧНЫЙ
+    (`// …`) — нет; тело же метода живёт в МНОГОСТРОЧНОМ значении атрибута
+    `x-data`, где `//` есть законный комментарий. Копия рычага, где снятие
+    вырезано, а вместо него дописана одна строка комментария, называющая обе
+    заготовки и глагол, давала подстрочному правилу НОЛЬ находок
+    (`REVIEW-8/WR-03`). Половину эту чинит план 10-41 задачей 2; здесь форма (D)
+    непроходима ПО ПОСТРОЕНИЮ — комментарий не исполняется, и зазеленеть на нём
+    нечем, вырезать его не требуется вовсе.
+
+    ⚠️ ПОЛОЖИТЕЛЬНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ.
+    """
+    expression = _modal_xdata_expression(_modal_block())
+    banner_ids, hidden_attr = _failure_banner_names()
+
+    healthy = _banner_clearing_verdict(expression)
+    assert all(healthy["cleared"][banner_id] for banner_id in banner_ids), (
+        "на НЕПРÁВЛЕНОМ выражении снятие уже не сходится — доктóривание ниже "
+        f"доказывало бы красноту того, что и так красно; вердикт: {healthy}"
+    )
+
+    commented_expression = _xdata_with_clearing_in_a_line_comment(expression)
+    verdict = _banner_clearing_verdict(commented_expression)
+
+    for banner_id in banner_ids:
+        assert verdict["cleared"][banner_id] is False, (
+            "ПРАВИЛО ЗАЗЕЛЕНЕЛО НА СНЯТИИ, СПРЯТАННОМ В СТРОЧНЫЙ КОММЕНТАРИЙ: "
+            f"заготовка #{banner_id} объявлена снятой, хотя строка снятия не "
+            f"исполняется вовсе; вердикт: {verdict}"
+        )
+    assert verdict["landing_hidden"] is False, (
+        "на закомментированном снятии площадка приземления получила признак "
+        f"скрытости — закомментировано не то место; вердикт: {verdict}"
+    )
+    assert f"setAttribute('{hidden_attr}'" in commented_expression, (
+        "ГЛАГОЛ ПРОПАЛ ИЗ ДОКТÓРЕННОГО ВЫРАЖЕНИЯ — контроль доказывал бы его "
+        "удаление, а не безвредность строчного комментария, и разница между "
+        "двумя формами правила больше не показана"
     )
 
 
