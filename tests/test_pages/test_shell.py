@@ -3711,6 +3711,11 @@ def test_control_a_lever_that_names_the_flag_only_in_prose_reddens(tmp_path):
 # 2026-09-09: из семи наследников `auth_base.html` рычаг `components/modal.html`
 # зовут НОЛЬ, и ни один из семи не включает ничего, через что рычаг мог бы
 # приехать транзитом).
+# ⚠️ ЗАМЕР ВЫШЕ БОЛЬШЕ НЕ ДЕРЖИТСЯ НА СЛОВЕ, И ЭТО ЕДИНСТВЕННОЕ, ЧТО В НЁМ
+# ИЗМЕНИЛОСЬ (`WR-09`, план 10-38): его считает правило
+# `test_no_auth_shell_template_reaches_the_modal_lever` в конце этого модуля, и
+# первая же панель подтверждения, приехавшая в тот шелл, краснит прогон, а не
+# отключает подъём молча.
 # Имя предка «тело документа» — одно место сборки на весь модуль.
 DOCUMENT_BODY_ANCESTOR = "body"
 
@@ -4508,6 +4513,236 @@ TEMPLATE_MACRO_IMPORT_RE = re.compile(
 )
 
 
+def _auth_shell_template_source(name: str) -> str:
+    """Исходник шаблона дерева по его имени.
+
+    Чтение делегируется `_template_source` плана 10-19 — межкаталожным импортом,
+    живой идиомой этого проекта (`test_hx_location_destinations` ровно так же
+    берёт `_strip_comments` у `test_htmx_markup_gates`). Своей копии чтения
+    здесь не заводится: отсутствие файла обязано подниматься ОДНИМ и тем же
+    исключением у обоих сборщиков, иначе громкий отказ на отсутствующее звено
+    выглядел бы по-разному в зависимости от того, кто спрашивал.
+    """
+    from tests.test_pages.test_hx_location_destinations import _template_source
+
+    return _template_source(name)
+
+
+def _template_reader_with(name: str, source: str):
+    """Читатель дерева, подменяющий ОДИН файл поданным текстом.
+
+    Форма параметра `read` наследуется у `_template_chain` плана 10-19 и нужна
+    ровно затем, чтобы отрицательный контроль доктóрил КОПИЮ в памяти, а не
+    живой шаблон: подключение рычага, дописанное в дерево, завело бы панель
+    подтверждения на экране входа ради зелени контроля.
+    """
+
+    def read(current: str) -> str:
+        return source if current == name else _auth_shell_template_source(current)
+
+    return read
+
+
+def _auth_shell_heirs() -> tuple[str, ...]:
+    """Наследники корня шелла авторизации — ЧТЕНИЕМ ДЕРЕВА, а не списком.
+
+    ⚠️ ВЫПИСАТЬ СЕМЬ СЕГОДНЯШНИХ ИМЁН БЫЛО БЫ ОТКАЗОМ, А НЕ ЭКОНОМИЕЙ: восьмой
+    экран входа, добавленный без правки суиты, остался бы вне правила — то есть
+    правило стало бы у́же дерева ровно в тот момент, когда его надо шире. Это тот
+    же класс, за который фаза уже получила круги ревизии.
+
+    ⚠️ НАСЛЕДОВАНИЕ БЕРЁТСЯ ТРАНЗИТИВНО (неподвижной точкой), А НЕ ОДНИМ
+    ШАГОМ. Сегодня все семь наследуют корню напрямую, и разницы нет; экран,
+    наследующий ДРУГОМУ экрану входа, при однушаговом сборе выпал бы из
+    множества и остался бы вне правила молча.
+
+    Разбор идёт по де-комментированному исходнику: наследование, упомянутое в
+    прозе комментария, наследованием не является.
+    """
+    from tests.test_pages.test_hx_location_destinations import TEMPLATE_EXTENDS_RE
+    from tests.test_templates.test_htmx_markup_gates import _strip_comments
+
+    root = PROJECT_ROOT.joinpath(*_TEMPLATES_ROOT_RELATIVE)
+    bases: dict[str, set[str]] = {}
+    for path in sorted(root.rglob("*.html")):
+        cleaned = _strip_comments(path.read_text(encoding="utf-8"))
+        bases[path.relative_to(root).as_posix()] = {
+            hit.group(1) for hit in TEMPLATE_EXTENDS_RE.finditer(cleaned)
+        }
+
+    heirs: set[str] = set()
+    while True:
+        grown = {
+            name for name, parents in bases.items()
+            if parents & ({AUTH_SHELL_ROOT} | heirs)
+        }
+        if grown == heirs:
+            return tuple(sorted(heirs))
+        heirs = grown
+
+
+def _template_graph_from(name: str, read=None, referrers=None) -> set[str]:
+    """Файлы, ОТКУДА поданный шаблон может позвать разметку, по ТРЁМ родам рёбер.
+
+    Наследование, включение И ПОДКЛЮЧЕНИЕ МАКРОСА. Возвращается множество имён,
+    достижимых из поданного; необязательный `referrers` заполняется картой
+    «звено → кто на него сослался», по которой отказ восстанавливает ПУТЬ
+    достижимости, а не только факт.
+
+    ⚠️ ЧЕМ ЭТА ФУНКЦИЯ НЕ ЯВЛЯЕТСЯ — `_template_chain` ПЛАНА 10-19, И ЭТО НЕ
+    ВТОРАЯ КОПИЯ ОДНОГО ПРЕДМЕТА. Предмет того сборщика — «что рантайм ИСПОЛНИТ
+    при подмене тела», и подключение макроса он изымает С ОСНОВАНИЕМ: макрос
+    вставляет в документ не файл, а результат СВОЕГО ВЫЗОВА, и файл, чей макрос
+    не позван, рантайм не исполняет вовсе. Предмет здешней функции ДРУГОЙ —
+    «откуда файл может быть ПОЗВАН», и для него ребро подключения несущее.
+    Следствие прямое и проверяемое: рычаг `components/modal.html` подключается
+    ИМЕННО подключением макроса, во всех своих потребителях, поэтому правило,
+    построенное на цепи плана 10-19, было бы ВАКУУМНО ЗЕЛЁНЫМ при любой
+    разметке — рычаг не нашёлся бы ни в одной цепи. Две функции стоя́т на двух
+    РАЗНЫХ вопросах; сведение их в одну ради единственности источника даёт
+    именно этот вакуум.
+
+    ⚠️ ЦИКЛЫ НЕВЫРАЗИМЫ ПО ПОСТРОЕНИЮ: обход ведётся множеством уже посещённых.
+    Взаимное подключение дало бы бесконечный обход, а висящее правило отключат
+    вместе со всем охватом, ради которого оно заведено.
+
+    Отсутствующее звено поднимает ГРОМКИЙ отказ, называющий и звено, и
+    ссылающийся файл, — форма наследуется у `_template_chain`: молча пропущенное
+    звено вернуло бы ровно ту слепую зону, ради которой граф и собирается.
+    """
+    from tests.test_pages.test_hx_location_destinations import (
+        TEMPLATE_EXTENDS_RE,
+        TEMPLATE_INCLUDE_RE,
+    )
+    from tests.test_templates.test_htmx_markup_gates import _strip_comments
+
+    if read is None:
+        read = _auth_shell_template_source
+    if referrers is None:
+        referrers = {}
+
+    seen: set[str] = set()
+    pending: list[tuple[str, str | None]] = [(name, None)]
+    while pending:
+        current, referrer = pending.pop()
+        if current in seen:
+            continue
+        try:
+            source = read(current)
+        except (FileNotFoundError, KeyError) as absent:
+            raise AssertionError(
+                f"звена `{current}` в дереве разметки нет, а на него ссылается "
+                f"`{referrer or current}`. Молча пропущенное звено вернуло бы "
+                "ровно ту слепую зону, ради которой граф и собирается"
+            ) from absent
+        seen.add(current)
+        referrers.setdefault(current, referrer)
+        cleaned = _strip_comments(source)
+        for pattern in (
+            TEMPLATE_EXTENDS_RE,
+            TEMPLATE_INCLUDE_RE,
+            TEMPLATE_MACRO_IMPORT_RE,
+        ):
+            for match in pattern.finditer(cleaned):
+                pending.append((match.group(1), current))
+    return seen
+
+
+def _template_reach_path(referrers: dict, origin: str, target: str) -> str:
+    """Путь достижимости от начала обхода до звена — по карте ссылок.
+
+    Читателю отказа нужен не факт, а ЗВЕНО, которое он пойдёт снимать: без пути
+    он получил бы «рычаг достижим из login.html» и пошёл бы искать подключение
+    глазами по всей цепи включений.
+    """
+    chain = [target]
+    while chain[-1] != origin:
+        parent = referrers.get(chain[-1])
+        if parent is None:
+            break
+        chain.append(parent)
+    return " → ".join(reversed(chain))
+
+
+def _auth_shell_lever_findings(read=None) -> tuple[str, ...]:
+    """Расхождения достижимости рычага из шелла авторизации. Пусто — не достижим.
+
+    Расхождение считается НА ФАЙЛ, из которого рычаг достижим: корень шелла и
+    каждый его наследник разбираются отдельно, потому что чинить придётся именно
+    тот файл, чьё ребро привело к рычагу.
+    """
+    findings: list[str] = []
+    for origin in (AUTH_SHELL_ROOT, *_auth_shell_heirs()):
+        referrers: dict[str, str | None] = {}
+        graph = _template_graph_from(origin, read=read, referrers=referrers)
+        if MODAL_LEVER_TEMPLATE not in graph:
+            continue
+        findings.append(
+            f"`{origin}`: рычаг `{MODAL_LEVER_TEMPLATE}` достижим — путь "
+            f"{_template_reach_path(referrers, origin, MODAL_LEVER_TEMPLATE)}. "
+            "Панель подтверждения в шелле авторизации поднимет признак "
+            "блокировки прокрутки там, где карточка `.auth-card` во время "
+            "анимации порождает СОДЕРЖАЩИЙ БЛОК, и подъём заготовок плашки "
+            "молча перестанет работать при обоих зелёных правилах. ПОЧИНОК ДВЕ, "
+            "и выбирать между ними человеку: либо панель из этого шелла УБРАТЬ, "
+            "либо цепь шелла авторизации ВНЕСТИ во вселенную предков "
+            "`FAILURE_BANNER_ANCESTORS` и разобраться с анимацией карточки — "
+            "последнее покраснеет на живой анимации и потребует её снять"
+        )
+    return tuple(findings)
+
+
+def test_no_auth_shell_template_reaches_the_modal_lever():
+    """Ни корень шелла авторизации, ни его наследники рычага панели не зовут.
+
+    ⚠️ ЧТО ИМЕННО ЗАКРЕПЛЯЕТ ЭТО ПРАВИЛО (`WR-09`). Вторая граница вселенной
+    предков — изъятие цепи `[data-auth-shell]` → `.auth-card` — стои́т на замере
+    «панелей подтверждения в том шелле нет ни одной». Замер верен, у изъятия
+    своё записанное основание, и правило его НЕ ОТМЕНЯЕТ: оно делает замер
+    опровержимым громко. До него первая панель подтверждения на экране входа
+    прошла бы при обоих зелёных правилах.
+
+    ⚠️ АНТИВАКУУМНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ И ЕЁ ТРИ. Предмет правила есть
+    ОТСУТСТВИЕ достижимости, а такое утверждение зеленеет само собой на пустом
+    множестве наследников, в дереве без рычага и — самое тихое из трёх — при
+    образце ребра подключения макроса, переставшем совпадать с разметкой.
+    Последнее сличается ПРЯМЫМ ЗАМЕРОМ: граф корня обязан быть СТРОГО ШИРЕ цепи
+    рантайма `_template_chain` плана 10-19, и разница есть ровно то, что даёт
+    третье ребро. Сегодня она непуста и без единой правки продукта — шелл
+    авторизации подключает макросом заготовку сообщения, — то есть различие
+    предметов двух сборщиков не заявлено прозой, а показано числом.
+    """
+    heirs = _auth_shell_heirs()
+    assert heirs, (
+        f"наследников корня `{AUTH_SHELL_ROOT}` в дереве разметки НОЛЬ — "
+        "утверждение об отсутствии рычага на пустом множестве зеленеет само "
+        "собой; либо шелл авторизации переписан, либо разбор наследования "
+        "сломан, и в обоих случаях правило ниже не проверяет ничего"
+    )
+    assert _modal_lever_path().exists(), (
+        f"рычага `{MODAL_LEVER_TEMPLATE}` в дереве нет — «не достижим» стало бы "
+        "утверждением ни о чём, и правило зеленело бы вакуумом"
+    )
+
+    from tests.test_pages.test_hx_location_destinations import _template_chain
+
+    macro_only = _template_graph_from(AUTH_SHELL_ROOT) - _template_chain(AUTH_SHELL_ROOT)
+    assert macro_only, (
+        f"граф корня `{AUTH_SHELL_ROOT}` СОВПАЛ с цепью рантайма плана 10-19 — "
+        "ребро подключения макроса не дало ни одного нового звена. Либо образец "
+        "ребра перестал совпадать с разметкой, либо шелл перестал подключать "
+        "макросы; в первом случае правило ниже зеленело бы ВАКУУМОМ при любой "
+        "разметке, потому что рычаг подключается ИМЕННО подключением макроса"
+    )
+
+    findings = _auth_shell_lever_findings()
+    assert findings == (), (
+        f"РЫЧАГ ПАНЕЛИ ДОСТИЖИМ ИЗ ШЕЛЛА АВТОРИЗАЦИИ (корень плюс "
+        f"{len(heirs)} наследников):\n"
+        + "\n".join(f"  — {line}" for line in findings)
+    )
+
+
 def test_control_an_auth_template_that_imports_the_lever_reddens():
     """ЧТО ДОКАЗЫВАЕТ: правило краснеет, когда рычаг приезжает в шелл авторизации.
 
@@ -4547,3 +4782,12 @@ def test_control_an_auth_template_that_imports_the_lever_reddens():
     assert MODAL_LEVER_TEMPLATE in findings[0], (
         f"отказ не назвал сам рычаг: {findings[0]}"
     )
+    assert f"{victim} → " in findings[0], (
+        "отказ не назвал ПУТЬ достижимости, а только факт — человек, получивший "
+        f"его, пошёл бы искать звено глазами по всей цепи: {findings[0]}"
+    )
+    for repair in ("УБРАТЬ", "ВНЕСТИ"):
+        assert repair in findings[0], (
+            f"отказ не назвал починку «{repair}» — читатель остаётся перед "
+            f"выбором, которого не видит: {findings[0]}"
+        )
