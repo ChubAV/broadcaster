@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 61
+open_count: 62
 waived_count: 1
 fixed_count: 9
-total_count: 71
-last_updated: 2026-09-10T13:17:57.204Z
+total_count: 72
+last_updated: 2026-09-10T14:31:31.820Z
 ---
 
 # Broken Windows Ledger
@@ -86,6 +86,7 @@ last_updated: 2026-09-10T13:17:57.204Z
 | 69 | 10 | unmet-truth | tests/test_pages/test_shell.py |  | Истина плана 10-38 «описка в имени внутри группы свойств больше не проходит зелёной» НЕ достигнута и не достижима параметризацией: контроль и гейт читают одну константу — прогон с опиской isolation → isolatiom оставил весь отбор зелёным. Граница названа в докстринге test_control_a_trapping_ancestor_reddens; владелец состава перечней — план 10-37. | fixed |  | 2026-09-10T04:49:36.431Z | 2026-09-10T12:57:25.801Z |
 | 70 | 10 | unmet-truth | .planning/phases/10-rychag-components-modal-html/deferred-items.md |  | Истина плана 10-39 «ПОВТОРНОЕ ИСПОЛНЕНИЕ ПРАВОК НЕОТЛИЧИМО ОТ ПЕРВОГО» достигнута ДВУМЯ правками из ТРЁХ, и третья названа. Замер 2026-09-10: якоря задач 1 и 2 после правки НЕ сохранились (счёт вхождений 0 у обоих) — повторная правка 10-UAT.md отказала бы и записи не удвоила. Задача 3 внесла раздел «## План 10-39» БЕЗ якоря, дописыванием в конец deferred-items.md, и второй прогон дал бы ВТОРОЙ такой раздел: счёт подразделов вырос бы с 11 до 16. Латентно: план исполняется один раз, и раздел в файле сегодня один. Владелец — следующий круг закрытия гэпов Фазы 10 либо владелец формы файла: у deferred-items.md нет ни якоря конца перечня, ни правила единственности раздела на план. | open |  | 2026-09-10T05:42:24.124Z |  |
 | 71 | 10 | deviation | tests/test_templates/test_components.py |  | 10-41: gsd_run check tdd-red-evidence разбирает TAP и на выводе pytest даёт INVALID_RED (zero_tests_discovered) даже на настоящем красном прогоне — гейт RED в этом проекте структурно неприменим | open |  | 2026-09-10T11:33:50.075Z |  |
+| 72 | 10 | deviation | .planning/STATE.md |  | progress.completed_plans переписывается обратно командами state record-metric/add-decision/record-session — поле правится ПОСЛЕДНИМ действием перед коммитом, иначе зелень снята с состояния, которого к коммиту не будет (третье срабатывание: 10-41, 10-43, 10-44) | open |  | 2026-09-10T14:31:31.820Z |  |
 
 ````json
 [
@@ -939,6 +940,18 @@ last_updated: 2026-09-10T13:17:57.204Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-10T11:33:50.075Z",
+    "resolved_at": null
+  },
+  {
+    "id": 72,
+    "kind": "deviation",
+    "phase": "10",
+    "file": ".planning/STATE.md",
+    "line": null,
+    "description": "progress.completed_plans переписывается обратно командами state record-metric/add-decision/record-session — поле правится ПОСЛЕДНИМ действием перед коммитом, иначе зелень снята с состояния, которого к коммиту не будет (третье срабатывание: 10-41, 10-43, 10-44)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-10T14:31:31.820Z",
     "resolved_at": null
   }
 ]
