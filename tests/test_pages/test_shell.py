@@ -2094,6 +2094,58 @@ _FAILURE_BANNER_INCLUDE_RE = re.compile(
 )
 
 
+def _declares_banner_id(text: str, banner_id: str) -> bool:
+    """Текст ОБЪЯВЛЯЕТ признак идентификатора со значением, равным имени заготовки."""
+    return f'id="{banner_id}"' in text
+
+
+def _names_banner_literally(text: str, banner_id: str) -> bool:
+    """Текст называет заготовку СТРОКОВЫМ ЛИТЕРАЛОМ."""
+    return f"'{banner_id}'" in text
+
+
+def _failure_banner_template_sources() -> dict[str, str]:
+    """Де-комментированные исходники ВСЕХ шаблонов дерева по относительным именам.
+
+    Вынесено из тела гейта единственности источника отдельной функцией по той же
+    причине и той же формой, что параметр пути у `_lever_clearing_findings`:
+    отрицательный контроль обязан подать отбору СВОЮ карту (с дописанным вторым
+    источником), а не править живое дерево. Дописать второй сценарий в
+    `app/templates/` ради зелени контроля значило бы завести второй обработчик
+    в продукте.
+    """
+    templates_dir = PROJECT_ROOT / "app" / "templates"
+    return {
+        path.relative_to(templates_dir).as_posix(): _without_comments(
+            path.read_text(encoding="utf-8")
+        )
+        for path in sorted(templates_dir.rglob("*.html"))
+    }
+
+
+def _banner_markup_owners(sources: dict[str, str]) -> set[str]:
+    """РАЗМЕТОЧНАЯ половина отбора владельцев: кто ОБЪЯВЛЯЕТ идентификатор заготовки."""
+    return {
+        rel for rel, text in sources.items()
+        if any(_declares_banner_id(text, banner_id) for banner_id in FAILURE_BANNER_IDS)
+    }
+
+
+def _banner_script_owners(sources: dict[str, str]) -> set[str]:
+    """СЦЕНАРНАЯ половина отбора владельцев: кто И называет заготовку, И вешает обработчик.
+
+    Конъюнкция — предмет этой половины, и она НЕ ослабляется: читатель заготовок
+    у продукта есть и заведён нарочно (рычаг `components/modal.html` снимает обе
+    заготовки при открытии панели), а источником его делает именно регистрация
+    обработчика, которой у рычага нет.
+    """
+    return {
+        rel for rel, text in sources.items()
+        if "addEventListener" in text
+        and any(_names_banner_literally(text, banner_id) for banner_id in FAILURE_BANNER_IDS)
+    }
+
+
 def _failure_banner_path() -> Path:
     """Путь настоящего включения — единственное место, где он собирается."""
     return PROJECT_ROOT / "app" / "templates" / FAILURE_BANNER_OWNER
@@ -2576,34 +2628,20 @@ def test_failure_banner_has_single_source():
     регистрирует обработчик. Литеральная копия сценария в другом шелле несёт
     обе половины и краснит гейт ровно как прежде; рычаг не несёт ни одной.
     """
-    templates_dir = PROJECT_ROOT / "app" / "templates"
-
-    sources = {
-        path.relative_to(templates_dir).as_posix(): _without_comments(
-            path.read_text(encoding="utf-8")
-        )
-        for path in sorted(templates_dir.rglob("*.html"))
-    }
+    sources = _failure_banner_template_sources()
     assert sources, (
         "шаблонов в дереве не найдено ВОВСЕ — три утверждения ниже прошли бы по "
         "пустому перечню и объявили зелёным отсутствие проверки"
     )
 
-    owners = {
-        rel for rel, text in sources.items()
-        if f'id="{FAILURE_BANNER_IDS[0]}"' in text
-    }
+    owners = _banner_markup_owners(sources)
     assert owners == {FAILURE_BANNER_OWNER}, (
         "РАЗМЕТКА заготовок плашек перестала быть единственной в шаблонах:\n"
         f"  найдено:  {sorted(owners)}\n"
         f"  ожидался: [{FAILURE_BANNER_OWNER}]"
     )
 
-    wired = {
-        rel for rel, text in sources.items()
-        if "addEventListener" in text
-        and any(f"'{banner_id}'" in text for banner_id in FAILURE_BANNER_IDS)
-    }
+    wired = _banner_script_owners(sources)
     assert wired == {FAILURE_BANNER_OWNER}, (
         "СЦЕНАРИЙ заготовок плашек перестал быть единственным в шаблонах — "
         "файл называет заготовку литералом И регистрирует обработчик:\n"
@@ -2623,6 +2661,91 @@ def test_failure_banner_has_single_source():
         "шеллов:\n"
         f"  найдено:   {found}\n"
         f"  ожидалось: {expected}"
+    )
+
+
+# Второй источник контроля квотонезависимости — имя, которого в дереве нет.
+_SECOND_SCRIPT_TEMPLATE = "auth/second_script.html"
+
+
+def test_control_a_second_script_with_the_other_quote_reddens_the_single_source_gate():
+    """ЧТО ДОКАЗЫВАЕТ: обе половины гейта видят второй источник ЛЮБЫМ родом кавычек.
+
+    ⚠️ ЗУБЫ ГЕЙТА ЖИВУТ ТОЛЬКО ЗДЕСЬ (`REVIEW-8/WR-01`). Предмет гейта —
+    ЕДИНСТВЕННОСТЬ источника, и «красного до правки» у него не существует: в
+    дереве сегодня один владелец. Сужение плана 10-35 выписало обе половины С
+    КАВЫЧКАМИ — разметочную с двойными, сценарную с одинарными, — и второй
+    источник, набранный НЕ ТОЙ кавычкой, проходил обе. То есть гейт, заведённый
+    против второго источника, второй источник и пропускал.
+
+    ⚠️ ДЕРЕВО НЕ ПРАВИТСЯ НИ БАЙТОМ: карта шаблонов доктóрится В ПАМЯТИ. Второй
+    обработчик, дописанный в живой шаблон ради зелени контроля, дал бы человеку
+    ровно ту удвоенную реакцию, которую отверг D-01.
+
+    ⚠️ ТРИ СЛУЧАЯ, А НЕ ОДИН: сценарий с другим родом кавычек, разметка с другим
+    родом кавычек и разметка БЕЗ кавычек. Последняя законна в HTML и потому
+    входит в предмет: значение признака без пробелов кавычек не требует.
+    """
+    sources = _failure_banner_template_sources()
+    assert sources, (
+        "шаблонов в дереве не найдено ВОВСЕ — доктóрить нечего, и контроль "
+        "ничего не доказал бы"
+    )
+    assert _SECOND_SCRIPT_TEMPLATE not in sources, (
+        f"имя `{_SECOND_SCRIPT_TEMPLATE}` В ДЕРЕВЕ УЖЕ ЕСТЬ — доктóривание "
+        "затёрло бы живой шаблон, и контроль проверял бы не то"
+    )
+
+    banner_id = FAILURE_BANNER_IDS[0]
+    other_banner_id = FAILURE_BANNER_IDS[-1]
+
+    script_with_double_quotes = (
+        "<script>\n"
+        "  document.body.addEventListener('htmx:sendError', function () {\n"
+        f'    var node = document.getElementById("{other_banner_id}");\n'
+        "    if (node) { node.removeAttribute('hidden'); }\n"
+        "  });\n"
+        "</script>\n"
+    )
+    doctored = dict(sources, **{_SECOND_SCRIPT_TEMPLATE: script_with_double_quotes})
+    assert _banner_script_owners(doctored) == {
+        FAILURE_BANNER_OWNER,
+        _SECOND_SCRIPT_TEMPLATE,
+    }, (
+        "СЦЕНАРНАЯ ПОЛОВИНА ГЕЙТА ПРОПУСТИЛА ВТОРОЙ ОБРАБОТЧИК, обратившийся к "
+        f"заготовке #{other_banner_id} ДВОЙНЫМИ кавычками: "
+        f"{sorted(_banner_script_owners(doctored))}. Отбор зависит от рода "
+        "кавычек, а предмет гейта есть ИСТОЧНИК, а не его набор"
+    )
+
+    for case, markup in (
+        (
+            "ОДИНАРНЫЕ кавычки",
+            f"<div id='{banner_id}' hidden>вторая копия заготовки</div>\n",
+        ),
+        (
+            "БЕЗ кавычек",
+            f"<div id={banner_id} hidden>вторая копия заготовки</div>\n",
+        ),
+    ):
+        doctored = dict(sources, **{_SECOND_SCRIPT_TEMPLATE: markup})
+        assert _banner_markup_owners(doctored) == {
+            FAILURE_BANNER_OWNER,
+            _SECOND_SCRIPT_TEMPLATE,
+        }, (
+            "РАЗМЕТОЧНАЯ ПОЛОВИНА ГЕЙТА ПРОПУСТИЛА ВТОРОЕ ОБЪЯВЛЕНИЕ "
+            f"идентификатора #{banner_id}, набранное {case}: "
+            f"{sorted(_banner_markup_owners(doctored))}"
+        )
+
+    assert MODAL_LEVER_TEMPLATE not in (
+        _banner_markup_owners(sources) | _banner_script_owners(sources)
+    ), (
+        f"рычаг `{MODAL_LEVER_TEMPLATE}` ВОШЁЛ во множество владельцев заготовок "
+        "после расширения предикатов — он ЧИТАТЕЛЬ заготовок, а не их источник: "
+        "снимает обе при открытии панели и ни одного обработчика не вешает. "
+        "Прежняя форма мембершипа считала читателя источником, и это уже "
+        "исправлялось однажды (`CR-01` седьмого круга)"
     )
 
 
