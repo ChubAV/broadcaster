@@ -4,11 +4,11 @@ milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 10
 current_phase_name: Рычаг `components/modal.html`
-status: executing
-stopped_at: Completed 10-39-PLAN.md
+status: gaps_found
+stopped_at: Verification round 9 — gaps_found (8/14)
 last_updated: "2026-09-10T05:36:41.338Z"
 last_activity: 2026-09-10
-last_activity_desc: Phase 10 — план 10-39 закрыт; седьмая партия закрытия гэпов исполнена целиком (10-35…10-40)
+last_activity_desc: Phase 10 — verification round 9 closed with gaps_found (8/14); goal achieved, six non-product gaps open
 state_head: 7442f89897fd38b6cc13219426cbb358596ead01
 progress:
   total_phases: 9
@@ -35,12 +35,12 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
+Phase: 10 (Рычаг `components/modal.html`) — GAPS FOUND
 Plan: 40 of 40 — все сорок планов фазы имеют сводки
 Total Plans in Phase: 40
 Completed Plans in Phase: 40
-Status: Executing — СЕДЬМАЯ ПАРТИЯ ЗАКРЫТИЯ ГЭПОВ ИСПОЛНЕНА ЦЕЛИКОМ (10-35, 10-36, 10-37, 10-40, 10-38, 10-39). ⚠️ Требование `FORM-06` отметки завершённости НЕ ПОЛУЧАЕТ: правило `test_no_requirement_is_marked_complete_before_its_phase_verification_passed` требует прежде `passed` у верификации фазы. Следующий вход — `/gsd-verify-work 10`
-Last activity: 2026-09-10 — Phase 10 execution: волна 3 закрыта, план 10-39 закрыт (блок гэпов, шаг 2.8, пять замечаний в перечень отложенного)
+Status: Gaps Found — СЕДЬМАЯ ПАРТИЯ ЗАКРЫТИЯ ГЭПОВ ИСПОЛНЕНА ЦЕЛИКОМ (10-35, 10-36, 10-37, 10-40, 10-38, 10-39); верификация ДЕВЯТОГО круга от 2026-09-10 — `gaps_found`, 8/14. ⚠️ ЦЕЛЬ ФАЗЫ ДОСТИГНУТА: группа A (четыре критерия роадмапа и восемь перенесённых истин) — 8/8, и вторая половина цели «после N удалений не остаётся N мёртвых диалогов» ВПЕРВЫЕ наблюдена в браузере. Открыты ШЕСТЬ гэпов, и НИ ОДИН из них не в продукте: `V9-01` и `V9-02` — два блокера ВОСЬМОГО круга ревизии (`_lever_clearing_findings` не связывает два подстрочных поиска; строгое сличение простой части селектора сняло покрытие квалифицированных предков); `V9-03`/`V9-04`/`V9-06` — окна 68, 69 и 70, то есть истины планов партии, объявленные недостигнутыми САМИМИ планами; `V9-05` — `10-SECURITY.md` не существует при `security_enforcement: true`, и этого не назвал ни один из девяти кругов. ⚠️ Требование `FORM-06` отметки завершённости НЕ ПОЛУЧАЕТ: правило `test_no_requirement_is_marked_complete_before_its_phase_verification_passed` требует прежде `passed` у верификации фазы, а вердикт — `gaps_found`; откат правки планом 10-39 был верен. Следующий вход — `/gsd-plan-phase 10 --gaps`
+Last activity: 2026-09-10 — Phase 10: верификация девятого круга закрыта вердиктом `gaps_found` (8/14)
 
 Progress: [████████████████████] 38/38 plans ([███░░░░░░░] 33%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
 
