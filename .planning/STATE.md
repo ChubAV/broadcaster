@@ -4,12 +4,12 @@ milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 10
 current_phase_name: Рычаг `components/modal.html`
-status: verifying
-stopped_at: Completed 10-45-PLAN.md
-last_updated: "2026-09-10T19:14:05.478Z"
+status: human_needed
+stopped_at: Verification round 10 — human_needed (14/14 must-haves); four items belong to a human
+last_updated: "2026-09-10T21:16:51.657Z"
 last_activity: 2026-09-10
 last_activity_desc: Phase 10 execution started
-state_head: 5a543000016e5fc387013529f1935aa96acbe0a0
+state_head: 160c472b7dd30aace1f0faa6aa07868f8a17148e
 progress:
   total_phases: 9
   completed_phases: 3
@@ -39,7 +39,7 @@ Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
 Plan: 47 of 47 — ⚠️ ЧИСЛО СВЕДЕНО СО СКВОЗНОЙ НУМЕРАЦИЕЙ И БОЛЬШЕ РУКОЙ НЕ ПРАВИТСЯ: после ручной выправки при исполнении плана 10-41 `state advance-plan` ведёт счётчик от верного значения. ⚠️ ВОСЬМАЯ ПАРТИЯ ЗАКРЫТИЯ ГЭПОВ ИСПОЛНЕНА ЦЕЛИКОМ: план 10-45 (волна 4) был последним неисполненным, и `advance-plan` вернул `last_plan`. Следующий вход — `/gsd-verify-work 10`, а НЕ следующий план: вердикт фазы остаётся `gaps_found`, и требование `FORM-06` не отмечено выполненным ни одним планом партии
 Total Plans in Phase: 47
 Completed Plans in Phase: 47
-Status: Phase complete — ready for verification
+Status: Верификация ДЕСЯТОГО круга проведена — вердикт `human_needed`, 14/14 must-haves, шесть гэпов девятого круга (`V9-01`…`V9-06`) закрыты и перепроверены исполнением. Фаза НЕ закрыта: очередь у человека — четыре пункта перечня Human Verification (шаг 4.4 обхода, шаг 2.8, подпись человека на приёмке обхода 2026-09-09, решение о 200 неразрешённых запретах). Следующий вход — `/gsd-verify-work 10`, а НЕ партия закрытия гэпов: закрывать машиной нечего
 Last activity: 2026-09-10 — Phase 10: план 10-45 исполнен, партия закрыта (шесть находок восьмого круга в модуле шелла: род кавычек перестал решать, кто владеет заготовками; вторая форма подключения макроса стала видимым ребром графа; состав наследников стал входом, и «восьмой экран входа» показан исполнением; утверждение уровня модуля переехало в именованное правило; счёт объявлений перестал держаться одним символом `;`, а счёт вложенности узнал строковые литералы JS. Ни одной правки продукта; правило прозы роадмапа сработало ТРЕТИЙ раз — впервые в ЧУЖОМ плане)
 
 Progress: [████████████████████] 38/38 plans ([███░░░░░░░] 33%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
@@ -435,7 +435,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ## Session Continuity
 
 Last session: 2026-09-10T19:14:04.853Z
-Stopped at: Completed 10-45-PLAN.md
+Stopped at: Verification round 10 — human_needed (14/14 must-haves); four items belong to a human
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
