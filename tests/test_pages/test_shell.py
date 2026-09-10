@@ -4596,109 +4596,17 @@ def test_no_ancestor_of_the_failure_banner_traps_the_fixed_layer():
 _NON_STATIC_POSITION = "relative"
 
 
-@pytest.mark.parametrize(
-    "declaration, expected_fragment",
-    (
-        # Представитель ГРУППЫ 1 (содержащий блок) — берётся ИНДЕКСОМ в перечне.
-        # ⚠️ ИМЯ СЛУЧАЯ НАРОЧНО НЕ НЕСЁТ НИ ОДНОГО ИМЕНИ СВОЙСТВА ИЗ ПЕРЕЧНЕЙ
-        # (`contain` есть в группе 1): счёт литералов по телу контроля должен
-        # давать НОЛЬ, иначе следующий читатель, увидев имя свойства в ярлыке
-        # случая, решит, что литералы здесь допустимы, и выпишет следующий.
-        pytest.param(
-            f"{CONTAINING_BLOCK_PROPERTIES[0]}: matrix(1, 0, 0, 1, 0, 0)",
-            "СОДЕРЖАЩИМ БЛОКОМ",
-            id="holding-block-group",
-        ),
-        # Представитель ГРУППЫ 2 (контекст наложения) — тоже индексом. Фрагмент
-        # взят ТОТ, которого нет в ветви слоя: обе ветви говорят «СОБСТВЕННЫЙ
-        # КОНТЕКСТ НАЛОЖЕНИЯ», и сличение по этим словам не различило бы их.
-        pytest.param(
-            f"{STACKING_CONTEXT_PROPERTIES[0]}: isolate",
-            "слой плашки перестаёт сравниваться",
-            id="stacking-context-group",
-        ),
-        # Ветвь слоя с СОСТАВНЫМ условием: оба свойства объявляются ОДНИМ
-        # доктóриванием, и фрагмент требует, чтобы сработала именно она.
-        pytest.param(
-            f"position: {_NON_STATIC_POSITION}; {LAYER_PROPERTY}: 3",
-            f"при `position: {_NON_STATIC_POSITION}`",
-            id="layer-at-a-non-static-position",
-        ),
-    ),
-)
-def test_control_a_trapping_ancestor_reddens(tmp_path, declaration, expected_fragment):
-    """ЧТО ДОКАЗЫВАЕТ: исполняется КАЖДАЯ из трёх ветвей гейта, а не одна из трёх.
-
-    ⚠️ ПОРЯДОК ЗДЕСЬ ОБРАТЕН ПРАВИЛУ ПОРЯДКА СЛОЁВ, И ЭТО НАЗВАНО ПРЯМО.
-    Предмет правила выше — ОТСУТСТВИЕ свойства, и «красного до правки» у него не
-    существует: чинить нечего, сегодня ни один предок ничего запрещённого не
-    объявляет. Зубы ему даёт ТОЛЬКО этот контроль — без него правило неотличимо
-    от разборщика, не находящего ничего никогда.
-
-    ⚠️ ПОЧЕМУ КОНТРОЛЬ СТАЛ ПАРАМЕТРИЗОВАННЫМ (`WR-04`, седьмой круг ревизии).
-    `_ancestor_trap_findings` ветвится ТРИЖДЫ — группа содержащего блока, группа
-    контекста наложения и отдельная ветвь слоя с составным условием по
-    положению, — а прежний контроль доктóрил РОВНО первый элемент ПЕРВОЙ группы.
-    Две ветви из трёх не исполнялись ни одним правилом партии: описка в имени
-    внутри группы контекста наложения и инверсия условия положения проходили
-    зелёными, а зелёный прогон читался как проверка всех трёх.
-
-    ⚠️ КАЖДЫЙ СЛУЧАЙ СЛИЧАЕТ НЕ ТОЛЬКО ЧИСЛО НАХОДОК, НО И ФРАГМЕНТ, НАЗЫВАЮЩИЙ
-    СРАБОТАВШУЮ ВЕТВЬ. Без второй половины свойство, по описке отправленное не в
-    ту ветвь, дало бы ровно одну находку — и контроль, считающий только находки,
-    прошёл бы зелёным на неверно названном следствии.
-
-    ⚠️ ГРАНИЦА ПАРАМЕТРИЗАЦИИ — ЗАМЕР, СНЯТЫЙ ИСПОЛНЕНИЕМ, А НЕ ОГОВОРКА.
-    Контроль перебирает ПРЕДСТАВИТЕЛЯ группы, а не каждое её имя, и доказывает
-    он РОВНО ОДНО: ветвь достижима и называет СВОЁ следствие, а не соседкино.
-    Чего он НЕ доказывает — состава перечней, и мера этого проверена прогоном
-    (план 10-38): описка `isolation` → `isolatiom`, внесённая прямо в
-    `STACKING_CONTEXT_PROPERTIES`, оставила ВЕСЬ отбор зелёным, включая случай
-    `stacking-context-group`. Причина не в выборе представителя, а в том, что
-    контроль и гейт читают ОДНУ константу: доктóривание пишет в копию таблицы то
-    самое испорченное имя, и гейт исправно его находит. Перебор всех
-    восемнадцати имён этого НЕ изменил бы — по той же причине. Единственное, что
-    изменило бы, — литеральная копия имён в контроле, и она ЗАПРЕЩЕНА ниже как
-    отказ похуже: копия разошлась бы с перечнем МОЛЧА при первом же пополнении,
-    тогда как здешний остаток назван и лежит на виду. Состав перечней —
-    предмет ЧУЖОГО плана (10-37) и стережётся основанием, записанным у каждой
-    группы, а не этим контролем.
-
-    ⚠️ ПРЕДСТАВИТЕЛИ БЕРУТСЯ ИНДЕКСОМ В ПЕРЕЧНЯХ, А НЕ ВЫПИСЫВАЮТСЯ ЛИТЕРАЛАМИ.
-    Перечни пополнены планом 10-37 (6 → 11 и 3 → 7) и будут пополняться дальше;
-    контроль, выписавший имена словами, разошёлся бы со следующим пополнением
-    МОЛЧА — тот же класс отказа, что «вторая копия числа разошлась с первой».
-    ЗНАЧЕНИЕ при этом подобрано под СЕГОДНЯШНЕГО представителя и осмысленно
-    именно для него: предмет утверждения — ИМЯ свойства, разбора значений гейт
-    не ведёт вовсе, и перестановка перечня оставит контроль верным по существу.
-
-    Предка правит доктóренная копия, а не дерево: подгонять боевую таблицу под
-    правило запрещено, и настоящие предки не тронуты ни на символ.
-    """
-    path = _app_css_path()
-
-    targeted = [rule for rule in _css_rules_of(path) if _selector_targets(rule[0])]
-    assert targeted, "блоков предков в настоящей таблице нет — доктóрить нечего"
-    selector, _body, raw = targeted[0]
-
-    poisoned = _stylesheet_with_extra_declaration(
-        _stylesheet_source(path), raw, declaration
-    )
-    findings = _ancestor_trap_findings(_scratch_stylesheet(tmp_path, poisoned))
-
-    assert len(findings) == 1, (
-        f"ПРАВИЛО НЕ ЗАМЕТИЛО ОБЪЯВЛЕНИЕ `{declaration}`, ДОПИСАННОЕ ПРЕДКУ "
-        f"`{selector}`, или назвало расхождение дважды: находок "
-        f"{len(findings)} — {findings}"
-    )
-    assert selector in findings[0], (
-        f"отказ не назвал селектор предка: {findings[0]}"
-    )
-    assert expected_fragment in findings[0], (
-        f"СРАБОТАЛА НЕ ТА ВЕТВЬ ГЕЙТА: доктóривание `{declaration}` обязано было "
-        f"поднять ветвь, чей отказ несёт фрагмент {expected_fragment!r}, а "
-        f"поднялась другая — {findings[0]}"
-    )
+# ⚠️ `test_control_a_trapping_ancestor_reddens` СНЯТ ЗДЕСЬ ПЛАНОМ 10-42, И ЭТО
+# НАЗВАНО, А НЕ СДЕЛАНО МОЛЧА. Он перебирал ПРЕДСТАВИТЕЛЯ каждой из трёх групп,
+# взятого ИНДЕКСОМ в том же перечне, который проверяет гейт, и стал ЧАСТНЫМ
+# СЛУЧАЕМ `test_control_every_canon_case_reddens_on_its_trapping_value`: тот
+# перебирает ВЕСЬ канон, сличает фрагмент СВОЕЙ ветви И ОТСУТСТВИЕ ЧУЖИХ и
+# доктóрит случай свойства слоя вместе с небазовым положением — то есть делает
+# всё, что делал прежний, и по девятнадцати именам вместо трёх. ОСНОВАНИЕ ЕГО
+# ДОКСТРИНГА НЕ ПОТЕРЯНО: и довод `WR-04` (три ветви, а не одна), и замер плана
+# 10-38 (описка `isolation` → `isolatiom` оставила весь отбор зелёным — окно 69)
+# приведены в докстринге правила-преемника, а состав перечней стережёт теперь
+# `test_the_trap_canon_and_the_gate_lists_agree`.
 
 
 def test_control_a_layer_on_an_in_flow_ancestor_does_not_redden(tmp_path):
@@ -4752,31 +4660,195 @@ def test_control_a_layer_on_an_in_flow_ancestor_does_not_redden(tmp_path):
     )
 
 
-# ⚠️ ВРЕМЕННАЯ ТАБЛИЦА ЗАДАЧИ 2 ПЛАНА 10-42: «свойство → начальное значение →
-# ловящее значение». Задача 3 того же плана превращает её в КАНОН с группой и
-# фрагментом отказа; до тех пор она несёт ровно те две колонки, которыми
-# спрашивается разбор ЗНАЧЕНИЯ.
-_INITIAL_VALUE_PROBES = (
-    ("transform", "none", "matrix(1, 0, 0, 1, 0, 0)"),
-    ("perspective", "none", "400px"),
-    ("filter", "none", "blur(2px)"),
-    ("backdrop-filter", "none", "blur(2px)"),
-    ("contain", "none", "paint"),
-    ("will-change", "color", "transform"),
-    ("translate", "none", "0 10px"),
-    ("rotate", "none", "45deg"),
-    ("scale", "none", "1.5"),
-    ("container-type", "normal", "inline-size"),
-    ("content-visibility", "visible", "auto"),
-    ("isolation", "auto", "isolate"),
-    ("mix-blend-mode", "normal", "multiply"),
-    ("opacity", "1", "0.99"),
-    ("transform-style", "flat", "preserve-3d"),
-    ("clip-path", "none", "inset(0)"),
-    ("mask", "none", "linear-gradient(#000, #000)"),
-    ("view-transition-name", "none", "panel-shell"),
-    ("z-index", "auto", "3"),
+# Имена трёх групп гейта. Одно место сборки на весь модуль: две копии слова
+# разошлись бы при первой же правке, и правило согласия сличало бы группу с
+# опечаткой в её названии.
+CONTAINING_BLOCK_GROUP = "содержащий блок"
+STACKING_CONTEXT_GROUP = "контекст наложения"
+LAYER_GROUP = "слой при небазовом положении"
+
+
+class AncestorTrapCase(NamedTuple):
+    """Одна запись КАНОНА ловушек цепи предков.
+
+    `prop` — имя свойства; `group` — группа, в которую его обязан уложить гейт;
+    `inert` — начальное значение, ничего не объявляющее; `trapping` — значение,
+    заводящее названное следствие; `fragment` — короткая строка, которая обязана
+    стоя́ть в тексте отказа ЭТОЙ ветви и не стоя́ть в тексте соседних.
+    """
+
+    prop: str
+    group: str
+    inert: str
+    trapping: str
+    fragment: str
+
+
+# ⚠️ ФРАГМЕНТЫ ВЫПИСАНЫ ЛИТЕРАЛАМИ, А НЕ СРЕЗАНЫ С КОНСТАНТ ТЕКСТОВ ОТКАЗА, И ЭТО
+# НЕСУЩЕЕ. Срез, вычисленный из текста отказа, сличал бы текст с самим собой и
+# остался бы истинным при ЛЮБОЙ правке текста — в том числе такой, что снова
+# сделает тексты ветвей неразличимыми. Формулировка взята дословно у плана 10-43
+# намеренно: запрет вывода ожидания из проверяемого есть ОДНА доктрина партии, и
+# выражаться в двух планах по-разному она не имеет права.
+_CONTAINING_BLOCK_FRAGMENT = "СОДЕРЖАЩИМ БЛОКОМ"
+_STACKING_CONTEXT_FRAGMENT = "слой плашки перестаёт сравниваться"
+_LAYER_FRAGMENT = "при `position: relative`"
+
+# КАНОН ЛОВУШЕК ЦЕПИ ПРЕДКОВ — НЕЗАВИСИМО ВЫПИСАННЫЙ ИСТОЧНИК ОЖИДАНИЙ.
+#
+# ⚠️ ОН ВЫПИСАН, А НЕ ВЫВЕДЕН, И В ЭТОМ ВЕСЬ ЕГО СМЫСЛ. НИ ОДНО его поле не
+# вычисляется НИ ИЗ `CONTAINING_BLOCK_PROPERTIES`, НИ ИЗ
+# `STACKING_CONTEXT_PROPERTIES`, НИ ИЗ `LAYER_PROPERTY`, НИ ИЗ
+# `INERT_DECLARED_VALUES`, НИ ИЗ КОНСТАНТ ТЕКСТОВ ОТКАЗА — ни срезом, ни
+# форматированием, ни поиском подстроки. Источник, вычисленный из проверяемого,
+# есть ВТОРОЕ ИМЯ проверяемого, и правило поверх него зеленело бы по построению:
+# ровно тот класс отказа, за который фаза получила окно 69 `.planning/WINDOWS.md`.
+#
+# ⚠️ ДОВОД ПЛАНА 10-38 ПРОТИВ ЛИТЕРАЛЬНОЙ КОПИИ ОСТАЁТСЯ ВЕРНЫМ И ЗАКРЫВАЕТСЯ
+# ЗДЕСЬ, А НЕ ОТМЕНЯЕТСЯ. Он звучал так: «копия разошлась бы с перечнем МОЛЧА при
+# первом же пополнении». Посылка верна; снимается не она, а её МОЛЧАЛИВОСТЬ —
+# `test_the_trap_canon_and_the_gate_lists_agree` делает расхождение ГРОМКИМ с
+# ОБЕИХ сторон, и осознанное пополнение отличимо от описки по тому, правится ли
+# оно в двух местах или в одном.
+ANCESTOR_TRAP_CANON = (
+    AncestorTrapCase("transform", CONTAINING_BLOCK_GROUP, "none",
+                     "matrix(1, 0, 0, 1, 0, 0)", _CONTAINING_BLOCK_FRAGMENT),
+    AncestorTrapCase("perspective", CONTAINING_BLOCK_GROUP, "none",
+                     "400px", _CONTAINING_BLOCK_FRAGMENT),
+    AncestorTrapCase("filter", CONTAINING_BLOCK_GROUP, "none",
+                     "blur(2px)", _CONTAINING_BLOCK_FRAGMENT),
+    AncestorTrapCase("backdrop-filter", CONTAINING_BLOCK_GROUP, "none",
+                     "blur(2px)", _CONTAINING_BLOCK_FRAGMENT),
+    AncestorTrapCase("contain", CONTAINING_BLOCK_GROUP, "none",
+                     "paint", _CONTAINING_BLOCK_FRAGMENT),
+    AncestorTrapCase("will-change", CONTAINING_BLOCK_GROUP, "color",
+                     "transform", _CONTAINING_BLOCK_FRAGMENT),
+    AncestorTrapCase("translate", CONTAINING_BLOCK_GROUP, "none",
+                     "0 10px", _CONTAINING_BLOCK_FRAGMENT),
+    AncestorTrapCase("rotate", CONTAINING_BLOCK_GROUP, "none",
+                     "45deg", _CONTAINING_BLOCK_FRAGMENT),
+    AncestorTrapCase("scale", CONTAINING_BLOCK_GROUP, "none",
+                     "1.5", _CONTAINING_BLOCK_FRAGMENT),
+    AncestorTrapCase("container-type", CONTAINING_BLOCK_GROUP, "normal",
+                     "inline-size", _CONTAINING_BLOCK_FRAGMENT),
+    AncestorTrapCase("content-visibility", CONTAINING_BLOCK_GROUP, "visible",
+                     "auto", _CONTAINING_BLOCK_FRAGMENT),
+    AncestorTrapCase("isolation", STACKING_CONTEXT_GROUP, "auto",
+                     "isolate", _STACKING_CONTEXT_FRAGMENT),
+    AncestorTrapCase("mix-blend-mode", STACKING_CONTEXT_GROUP, "normal",
+                     "multiply", _STACKING_CONTEXT_FRAGMENT),
+    AncestorTrapCase("opacity", STACKING_CONTEXT_GROUP, "1",
+                     "0.99", _STACKING_CONTEXT_FRAGMENT),
+    AncestorTrapCase("transform-style", STACKING_CONTEXT_GROUP, "flat",
+                     "preserve-3d", _STACKING_CONTEXT_FRAGMENT),
+    AncestorTrapCase("clip-path", STACKING_CONTEXT_GROUP, "none",
+                     "inset(0)", _STACKING_CONTEXT_FRAGMENT),
+    AncestorTrapCase("mask", STACKING_CONTEXT_GROUP, "none",
+                     "linear-gradient(#000, #000)", _STACKING_CONTEXT_FRAGMENT),
+    AncestorTrapCase("view-transition-name", STACKING_CONTEXT_GROUP, "none",
+                     "panel-shell", _STACKING_CONTEXT_FRAGMENT),
+    AncestorTrapCase("z-index", LAYER_GROUP, "auto", "3", _LAYER_FRAGMENT),
 )
+
+# ЛЕТОПИСЬ ЧИСЛА: 19 (первое объявление). ОТКУДА ВЗЯЛОСЬ — перечни гейта на
+# 2026-09-10 несут одиннадцать имён группы содержащего блока, семь имён группы
+# контекста наложения и одно имя свойства слоя. ЧЕМ ИЗМЕРЕНО — ЧТЕНИЕМ
+# спецификации по каждому имени и подбором двух значений (начального и ловящего)
+# отдельно, а не пересчётом перечней: канон, посчитанный по перечням, был бы их
+# вторым именем. КАКИМ ПЛАНОМ — 10-42 (2026-09-10, восьмая партия закрытия гэпов
+# Фазы 10). ⚠️ МОЛЧА ПОХУДЕВШИЙ КАНОН означает, что имя сняли, не тронув гейта;
+# молча выросший — что имя внесли, не назвав ни группы, ни двух его значений.
+# Форма «объявленное число плюс летопись» наследована у
+# `WALKTHROUGH_ANCHORS_DECLARED`, а не изобретена.
+ANCESTOR_TRAP_CANON_DECLARED = 19
+
+# Различные фрагменты канона. Собираются ИЗ КАНОНА — то есть из литералов, — а не
+# из текстов отказа гейта: смысл множества в том, чтобы сличать отказ со стороны,
+# ему ВНЕШНЕЙ.
+_ANCESTOR_TRAP_FRAGMENTS = tuple(
+    dict.fromkeys(case.fragment for case in ANCESTOR_TRAP_CANON)
+)
+
+
+def _canon_agreement_findings(
+    containing: tuple[str, ...],
+    stacking: tuple[str, ...],
+    layer: str,
+    inert: dict[str, tuple[str, ...]],
+) -> tuple[str, ...]:
+    """Расхождения КАНОНА с перечнями гейта. Пусто — два источника согласны.
+
+    Расхождения четырёх родов, и у каждого свой текст: имя канона отсутствует в
+    перечнях гейта; имя перечня гейта отсутствует в каноне; группа канона не та,
+    в которую имя уложено гейтом; начальное значение канона гейт бездейственным
+    НЕ ПРИЗНАЁТ.
+
+    ⚠️ ЧЕТВЁРТЫЙ РОД СПРАШИВАЕТ ПРЕДИКАТ, А НЕ ЧИТАЕТ КАРТУ ЛИТЕРАЛЬНО, И ЭТО
+    НАЗВАНО, А НЕ РЕШЕНО МОЛЧА. У свойства намерения бездейственность есть
+    ПРЕДИКАТ, а не перечень (граница (2) карты), и в `INERT_DECLARED_VALUES` его
+    нет вовсе: буквальное сличение с картой объявило бы расхождением ровно то
+    место, где карта устроена иначе НАРОЧНО. Спрашивается поэтому один и тот же
+    вопрос на все девятнадцать имён — «признаёт ли ГЕЙТ начальное значение
+    КАНОНА бездейственным», — и оба источника при этом остаются разными:
+    величина `inert` выписана в каноне, а судит о ней гейт.
+
+    ⚠️ ТЕКСТ КАЖДОГО ОТКАЗА НАЗЫВАЕТ ОБЕ ПОЧИНКИ ПРЯМО. Читатель, получивший
+    расхождение, не должен выбирать вслепую между «имя добавлено осознанно» и
+    «имя набрано с опиской»: первое чинится ВНЕСЕНИЕМ В ОБА МЕСТА, второе —
+    правкой ОДНОЙ стороны, и разница между ними видна только автору правки.
+    """
+    findings: list[str] = []
+    both_fixes = (
+        "ПОЧИНОК ДВЕ, И ВЫБИРАЕТ АВТОР ПРАВКИ: если имя внесено ОСОЗНАННО — "
+        "внести его В ОБА места (канон и перечень гейта); если это ОПИСКА — "
+        "починить ОДНУ сторону"
+    )
+
+    def gate_group(name: str) -> str | None:
+        if name in containing:
+            return CONTAINING_BLOCK_GROUP
+        if name in stacking:
+            return STACKING_CONTEXT_GROUP
+        if name == layer:
+            return LAYER_GROUP
+        return None
+
+    canon_props = {case.prop for case in ANCESTOR_TRAP_CANON}
+
+    for case in ANCESTOR_TRAP_CANON:
+        group = gate_group(case.prop)
+        if group is None:
+            findings.append(
+                f"имя канона `{case.prop}` (группа «{case.group}») НЕ НАЙДЕНО ни "
+                f"в одном перечне гейта — ловушка этого имени гейту НЕВИДИМА, и "
+                f"объявление `{case.prop}: {case.trapping}`, дописанное предку, "
+                f"пройдёт зелёным. {both_fixes}"
+            )
+        elif group != case.group:
+            findings.append(
+                f"имя `{case.prop}` уложено гейтом в группу «{group}», а канон "
+                f"называет «{case.group}» — отказ гейта назовёт НЕ ТО СЛЕДСТВИЕ, "
+                f"и читатель починит не то. {both_fixes}"
+            )
+        if not _declaration_is_inert(
+            case.prop, case.inert, inert, containing, stacking
+        ):
+            findings.append(
+                f"начальное значение `{case.prop}: {case.inert}`, выписанное "
+                f"каноном, гейт бездейственным НЕ ПРИЗНАЁТ — то есть гейт "
+                f"краснеет на объявлении, НИЧЕГО НЕ ДЕЛАЮЩЕМ, и учит первого же "
+                f"читателя себя обходить. {both_fixes}"
+            )
+
+    for name in (*containing, *stacking, layer):
+        if name not in canon_props:
+            findings.append(
+                f"имя перечня гейта `{name}` НЕ НАЙДЕНО в каноне — у него не "
+                f"названо ни группы, ни начального, ни ловящего значения, и ни "
+                f"один контроль его не исполняет. {both_fixes}"
+            )
+
+    return tuple(findings)
 
 
 def _first_targeted_rule() -> tuple[str, str, str]:
@@ -4789,12 +4861,24 @@ def _first_targeted_rule() -> tuple[str, str, str]:
 
 
 @pytest.mark.parametrize(
-    "prop, inert",
-    tuple((row[0], row[1]) for row in _INITIAL_VALUE_PROBES),
-    ids=tuple(row[0] for row in _INITIAL_VALUE_PROBES),
+    "case",
+    ANCESTOR_TRAP_CANON,
+    ids=tuple(case.prop for case in ANCESTOR_TRAP_CANON),
 )
-def test_control_an_initial_value_declaration_is_not_a_finding(tmp_path, prop, inert):
+def test_control_no_canon_case_reddens_on_its_inert_value(tmp_path, case):
     """ЧТО ДОКАЗЫВАЕТ: объявление свойства с ЕГО НАЧАЛЬНЫМ значением — не находка.
+
+    ⚠️ НЕЦИКЛИЧНОСТЬ ЭТОГО ПРАВИЛА — ДВУМЯ ФРАЗАМИ, И ВТОРАЯ ОБЯЗАТЕЛЬНА.
+    ОЖИДАНИЕ БЕРЁТСЯ ИЗ КАНОНА, а гейт читает СВОИ перечни: источники РАЗНЫЕ, и
+    расхождение между ними есть предмет ОТДЕЛЬНОГО правила
+    (`test_the_trap_canon_and_the_gate_lists_agree`). ФРАГМЕНТ, с которым
+    сличается текст отказа, ВЫПИСАН ЛИТЕРАЛОМ, а не срезан с этого текста, —
+    иначе правило сличало бы текст с самим собой и пережило бы правку, снова
+    сделавшую тексты ветвей неразличимыми.
+
+    ⚠️ ПЕРЕБИРАЕТСЯ ВЕСЬ КАНОН, А НЕ ПРЕДСТАВИТЕЛЬ ГРУППЫ: у представителя
+    доказуемо лишь то, что ветвь достижима, а состав перечней остаётся
+    непроверенным (замер плана 10-38 — окно 69).
 
     ⚠️ ЗАМЕР ДО ПРАВКИ, СНЯТЫЙ ИСПОЛНЕНИЕМ (`WR-02`, восьмой круг ревизии):
     ВОСЕМНАДЦАТЬ имён из девятнадцати давали по ОДНОЙ находке на своём начальном
@@ -4810,14 +4894,19 @@ def test_control_an_initial_value_declaration_is_not_a_finding(tmp_path, prop, i
     был сделан, для восемнадцати имён нет.
     """
     selector, _body, raw = _first_targeted_rule()
+    declaration = (
+        f"position: {_NON_STATIC_POSITION}; {case.prop}: {case.inert}"
+        if case.group == LAYER_GROUP
+        else f"{case.prop}: {case.inert}"
+    )
 
     poisoned = _stylesheet_with_extra_declaration(
-        _stylesheet_source(_app_css_path()), raw, f"{prop}: {inert}"
+        _stylesheet_source(_app_css_path()), raw, declaration
     )
     findings = _ancestor_trap_findings(_scratch_stylesheet(tmp_path, poisoned))
 
     assert findings == (), (
-        f"ГЕЙТ ПОКРАСНЕЛ НА ОБЪЯВЛЕНИИ `{prop}: {inert}`, ДОПИСАННОМ ПРЕДКУ "
+        f"ГЕЙТ ПОКРАСНЕЛ НА ОБЪЯВЛЕНИИ `{declaration}`, ДОПИСАННОМ ПРЕДКУ "
         f"`{selector}`, — то есть на НАЧАЛЬНОМ значении свойства, которое ни "
         "содержащего блока, ни контекста наложения не порождает. Гейт ветвится "
         "ПО ИМЕНИ и значения не разбирает (`WR-02`):\n"
@@ -4826,12 +4915,39 @@ def test_control_an_initial_value_declaration_is_not_a_finding(tmp_path, prop, i
 
 
 @pytest.mark.parametrize(
-    "prop, trapping",
-    tuple((row[0], row[2]) for row in _INITIAL_VALUE_PROBES),
-    ids=tuple(row[0] for row in _INITIAL_VALUE_PROBES),
+    "case",
+    ANCESTOR_TRAP_CANON,
+    ids=tuple(case.prop for case in ANCESTOR_TRAP_CANON),
 )
-def test_control_a_trapping_value_declaration_is_one_finding(tmp_path, prop, trapping):
-    """ЧТО ДОКАЗЫВАЕТ: разбор значения не проглотил ЛОВЯЩЕЕ значение ни у одного имени.
+def test_control_every_canon_case_reddens_on_its_trapping_value(tmp_path, case):
+    """ЧТО ДОКАЗЫВАЕТ: каждое имя канона краснит СВОЮ ветвь на СВОЁМ значении.
+
+    ⚠️ НЕЦИКЛИЧНОСТЬ ЭТОГО ПРАВИЛА — ДВУМЯ ФРАЗАМИ, И ВТОРАЯ ОБЯЗАТЕЛЬНА.
+    ОЖИДАНИЕ БЕРЁТСЯ ИЗ КАНОНА, а гейт читает СВОИ перечни: источники РАЗНЫЕ, и
+    расхождение между ними есть предмет ОТДЕЛЬНОГО правила
+    (`test_the_trap_canon_and_the_gate_lists_agree`). ФРАГМЕНТ, с которым
+    сличается текст отказа, ВЫПИСАН ЛИТЕРАЛОМ, а не срезан с этого текста, —
+    иначе правило сличало бы текст с самим собой и пережило бы правку, снова
+    сделавшую тексты ветвей неразличимыми.
+
+    ⚠️ ЭТО ПРАВИЛО ЗАМЕНИЛО СОБОЙ `test_control_a_trapping_ancestor_reddens`, И
+    ОСНОВАНИЕ ЗАМЕНЫ НАСЛЕДУЕТСЯ ИЗ ЕГО ДОКСТРИНГА, А НЕ ТЕРЯЕТСЯ. Тот перебирал
+    ПРЕДСТАВИТЕЛЯ каждой из трёх групп, взятого ИНДЕКСОМ в том же перечне,
+    который проверяет гейт, и доказывал РОВНО ОДНО: ветвь достижима и называет
+    СВОЁ следствие, а не соседкино (`WR-04`, седьмой круг). Чего он не
+    доказывал — состава перечней, и мера этого снята исполнением (план 10-38):
+    описка `isolation` → `isolatiom` оставила ВЕСЬ отбор зелёным. Здешний перебор
+    идёт по ВСЕМУ канону, а состав перечней стережёт правило согласия — то есть
+    прежний контроль стал ЧАСТНЫМ СЛУЧАЕМ этого и снят, а не забыт.
+
+    ⚠️ СЛИЧАЕТСЯ НЕ ТОЛЬКО СВОЙ ФРАГМЕНТ, НО И ОТСУТСТВИЕ ЧУЖИХ. Без второй
+    половины свойство, по описке отправленное не в ту ветвь, дало бы ровно одну
+    находку — и контроль, считающий только находки, прошёл бы зелёным на неверно
+    названном следствии.
+
+    ⚠️ СЛУЧАЙ СВОЙСТВА СЛОЯ ДОКТÓРИТСЯ ВМЕСТЕ С НЕБАЗОВЫМ ПОЛОЖЕНИЕМ: его
+    условие СОСТАВНОЕ, и без второй половины ветвь не срабатывает вовсе — тогда
+    контроль замерил бы карве-аут, а не ловушку.
 
     ⚠️ ЭТО ВТОРАЯ ПОЛОВИНА ПРАВКИ `WR-02`, И БЕЗ НЕЁ ПЕРВАЯ БЕССМЫСЛЕННА.
     Предикат бездейственности, возвращающий истину ВСЕГДА, зеленит перебор
@@ -4845,9 +4961,9 @@ def test_control_a_trapping_value_declaration_is_one_finding(tmp_path, prop, tra
     """
     selector, _body, raw = _first_targeted_rule()
     declaration = (
-        f"position: {_NON_STATIC_POSITION}; {prop}: {trapping}"
-        if prop == LAYER_PROPERTY
-        else f"{prop}: {trapping}"
+        f"position: {_NON_STATIC_POSITION}; {case.prop}: {case.trapping}"
+        if case.group == LAYER_GROUP
+        else f"{case.prop}: {case.trapping}"
     )
 
     poisoned = _stylesheet_with_extra_declaration(
@@ -4862,8 +4978,167 @@ def test_control_a_trapping_value_declaration_is_one_finding(tmp_path, prop, tra
     assert selector in findings[0], (
         f"отказ не назвал селектор предка: {findings[0]}"
     )
-    assert prop in findings[0], (
-        f"отказ не назвал свойство `{prop}`: {findings[0]}"
+    assert case.prop in findings[0], (
+        f"отказ не назвал свойство `{case.prop}`: {findings[0]}"
+    )
+    assert case.fragment in findings[0], (
+        f"СРАБОТАЛА НЕ ТА ВЕТВЬ ГЕЙТА: доктóривание `{declaration}` обязано было "
+        f"поднять ветвь группы «{case.group}», чей отказ несёт фрагмент "
+        f"{case.fragment!r}, а поднялась другая — {findings[0]}"
+    )
+    for other in _ANCESTOR_TRAP_FRAGMENTS:
+        if other == case.fragment:
+            continue
+        assert other not in findings[0], (
+            f"отказ ветви группы «{case.group}» несёт фрагмент СОСЕДНЕЙ ветви "
+            f"{other!r} — сличение по фрагменту перестало различать ветви, и "
+            f"свойство, отправленное не в ту группу, пройдёт зелёным: "
+            f"{findings[0]}"
+        )
+
+
+def test_the_trap_canon_and_the_gate_lists_agree():
+    """Канон и перечни гейта согласны — расхождение ГРОМКОЕ с обеих сторон.
+
+    ⚠️ НЕЦИКЛИЧНОСТЬ ЭТОГО ПРАВИЛА — ДВУМЯ ФРАЗАМИ, И ВТОРАЯ ОБЯЗАТЕЛЬНА.
+    ОЖИДАНИЕ БЕРЁТСЯ ИЗ КАНОНА, выписанного независимо, а гейт читает СВОИ
+    перечни: источники РАЗНЫЕ, и предмет ЭТОГО правила есть ровно расхождение
+    между ними. ФРАГМЕНТЫ, с которыми сличаются тексты отказа двух соседних
+    правил, ВЫПИСАНЫ ЛИТЕРАЛАМИ, а не срезаны с этих текстов, — иначе они
+    сличали бы текст с самим собой и пережили бы правку, снова сделавшую тексты
+    ветвей неразличимыми; поэтому их взаимная различность утверждается ЗДЕСЬ, а
+    не подразумевается.
+
+    ⚠️ АНТИВАКУУМ ИДЁТ ПЕРВЫМ. Предмет правила есть ОТСУТСТВИЕ расхождений, а
+    такое утверждение зеленеет само собой на пустом каноне и на пустых перечнях.
+    Поэтому сперва утверждается, что канон непуст и равен ОБЪЯВЛЕННОМУ числу,
+    что перечни гейта непусты и что три фрагмента различны, — и только потом,
+    что расхождений между источниками нет.
+    """
+    assert len(ANCESTOR_TRAP_CANON) == ANCESTOR_TRAP_CANON_DECLARED, (
+        f"записей в каноне {len(ANCESTOR_TRAP_CANON)}, а объявлено "
+        f"{ANCESTOR_TRAP_CANON_DECLARED}. ПОХУДЕВШИЙ канон означает, что имя "
+        f"СНЯЛИ, не тронув гейта; ВЫРОСШИЙ — что имя внесли, не назвав ни группы, "
+        f"ни двух его значений. Осознанная правка приводит ОБЪЯВЛЕННОЕ ЧИСЛО и "
+        f"дописывает летопись"
+    )
+    assert CONTAINING_BLOCK_PROPERTIES and STACKING_CONTEXT_PROPERTIES, (
+        "перечни гейта ПУСТЫ — правило о согласии двух источников на пустом "
+        "источнике зеленеет само собой"
+    )
+    assert len({case.prop for case in ANCESTOR_TRAP_CANON}) == len(
+        ANCESTOR_TRAP_CANON
+    ), "в каноне повторяется имя свойства — одно имя описано дважды"
+    assert len(_ANCESTOR_TRAP_FRAGMENTS) == 3, (
+        f"различных фрагментов в каноне {len(_ANCESTOR_TRAP_FRAGMENTS)}, а ветвей "
+        f"у гейта три: {_ANCESTOR_TRAP_FRAGMENTS}"
+    )
+    for fragment in _ANCESTOR_TRAP_FRAGMENTS:
+        for other in _ANCESTOR_TRAP_FRAGMENTS:
+            assert other == fragment or other not in fragment, (
+                f"фрагмент {other!r} есть ПОДСТРОКА фрагмента {fragment!r} — "
+                "сличение по фрагментам перестало различать ветви"
+            )
+    assert _NON_STATIC_POSITION == "relative", (
+        f"положение доктóривания стало `{_NON_STATIC_POSITION}`, а фрагмент "
+        f"ветви слоя выписан литералом {_LAYER_FRAGMENT!r} — две копии одного "
+        "слова разошлись, и сличение по фрагменту зеленело бы на отказе, "
+        "которого нет"
+    )
+
+    findings = _canon_agreement_findings(
+        CONTAINING_BLOCK_PROPERTIES,
+        STACKING_CONTEXT_PROPERTIES,
+        LAYER_PROPERTY,
+        INERT_DECLARED_VALUES,
+    )
+    assert findings == (), (
+        "КАНОН И ПЕРЕЧНИ ГЕЙТА РАЗОШЛИСЬ:\n"
+        + "\n".join(f"  — {line}" for line in findings)
+    )
+
+
+def test_control_a_typo_inside_a_group_list_leaves_the_trap_unseen_and_reddens_the_agreement(
+    tmp_path,
+):
+    """ЧТО ДОКАЗЫВАЕТ: описка в перечне гейта делает ловушку НЕВИДИМОЙ — исполнением.
+
+    ⚠️ ЭТО ОПРОВЕРЖЕНИЕ ЗАМЕРА ПЛАНА 10-38, А НЕ ПОВТОРЕНИЕ ЕГО ПРОЗОЙ. Тот
+    прогон снят исполнением: описка `isolation` → `isolatiom`, внесённая прямо в
+    `STACKING_CONTEXT_PROPERTIES`, оставила ВЕСЬ отбор ЗЕЛЁНЫМ, включая случай
+    `stacking-context-group` параметризованного контроля. Причина не в выборе
+    представителя: контроль и гейт читали ОДНУ константу, доктóривание писало в
+    копию таблицы ТО САМОЕ испорченное имя, и гейт исправно его находил. Окно 69
+    `.planning/WINDOWS.md` открыто ровно этим.
+
+    ⚠️ ЧТО ИМЕННО ЗДЕСЬ ПОКАЗАНО, А НЕ ЗАЯВЛЕНО, И ПОЧЕМУ ПОЛОВИН ТРИ.
+    (а) на НАСТОЯЩИХ перечнях правило согласия пусто — без этой половины две
+    следующие зеленели бы и на правиле, краснеющем всегда;
+    (б) на испорченном перечне правило согласия даёт РОВНО ДВЕ находки, и вместе
+    они называют ОБЕ стороны расхождения — имя канона и имя перечня гейта;
+    (в) гейт, позванный С ТЕМ ЖЕ испорченным перечнем на таблице, где предку
+    дописано ЛОВЯЩЕЕ значение испорченного имени, даёт НОЛЬ находок. Это и есть
+    предъявление цикличности: ловушка невидима ГЕЙТУ, и ловит её ТОЛЬКО правило
+    согласия.
+    """
+    corrupted_case = next(
+        case for case in ANCESTOR_TRAP_CANON if case.group == STACKING_CONTEXT_GROUP
+    )
+    typo = corrupted_case.prop[:-1] + ("m" if corrupted_case.prop[-1] != "m" else "n")
+    assert typo != corrupted_case.prop, "порча имени не сработала"
+    corrupted = tuple(
+        typo if name == corrupted_case.prop else name
+        for name in STACKING_CONTEXT_PROPERTIES
+    )
+    assert typo in corrupted and corrupted_case.prop not in corrupted, (
+        "испорченный перечень не отличается от настоящего — контроль ниже "
+        "доказывал бы согласие правила с самим собой"
+    )
+
+    assert _canon_agreement_findings(
+        CONTAINING_BLOCK_PROPERTIES,
+        STACKING_CONTEXT_PROPERTIES,
+        LAYER_PROPERTY,
+        INERT_DECLARED_VALUES,
+    ) == (), (
+        "правило согласия красно на НАСТОЯЩИХ перечнях — половины (б) и (в) ниже "
+        "доказывали бы красноту того, что и так красно"
+    )
+
+    disagreement = _canon_agreement_findings(
+        CONTAINING_BLOCK_PROPERTIES, corrupted, LAYER_PROPERTY, INERT_DECLARED_VALUES
+    )
+    assert len(disagreement) == 2, (
+        f"ОПИСКА `{corrupted_case.prop}` → `{typo}` ДАЛА НЕ ДВЕ НАХОДКИ, А "
+        f"{len(disagreement)}: расхождение здесь ДВУСТОРОННЕЕ — имени канона нет "
+        f"в перечне гейта, и имени перечня гейта нет в каноне: {disagreement}"
+    )
+    assert any(corrupted_case.prop in line for line in disagreement), (
+        f"ни одна находка не назвала имя КАНОНА `{corrupted_case.prop}`: "
+        f"{disagreement}"
+    )
+    assert any(typo in line for line in disagreement), (
+        f"ни одна находка не назвала имя ПЕРЕЧНЯ ГЕЙТА `{typo}`: {disagreement}"
+    )
+
+    selector, _body, raw = _first_targeted_rule()
+    poisoned = _stylesheet_with_extra_declaration(
+        _stylesheet_source(_app_css_path()),
+        raw,
+        f"{corrupted_case.prop}: {corrupted_case.trapping}",
+    )
+    unseen = _ancestor_trap_findings(
+        _scratch_stylesheet(tmp_path, poisoned),
+        CONTAINING_BLOCK_PROPERTIES,
+        corrupted,
+        LAYER_PROPERTY,
+        INERT_DECLARED_VALUES,
+    )
+    assert unseen == (), (
+        f"ГЕЙТ С ИСПОРЧЕННЫМ ПЕРЕЧНЕМ ВСЁ РАВНО НАШЁЛ "
+        f"`{corrupted_case.prop}: {corrupted_case.trapping}` У ПРЕДКА "
+        f"`{selector}` — значит, испорченный перечень до гейта не доехал, и "
+        f"половина (в) ничего не предъявила: {unseen}"
     )
 
 
@@ -4963,8 +5238,10 @@ def _stylesheet_with_extra_declaration(source: str, raw: str, declaration: str) 
     четвёртая копия одних и тех же трёх утверждений разошлась бы с остальными
     при первой же правке. ⚠️ ИМЯ ТОГО КОНТРОЛЯ БОЛЬШЕ НЕ ЖИВЁТ В ФАЙЛЕ: он стал
     параметризованным `test_control_a_trapping_ancestor_reddens` (`WR-04`,
-    седьмой круг) и зовёт эту функцию наравне с тремя соседями — форма вернулась
-    туда, откуда была вынута.
+    седьмой круг), а тот, в свой черёд, снят планом 10-42 в пользу перебора
+    ВСЕГО канона (`test_control_every_canon_case_reddens_on_its_trapping_value`)
+    — форма вернулась туда, откуда была вынута, и зовут её теперь все контроли
+    группы, включая оба перебора канона.
 
     Возвращается ТЕКСТ, а не путь: контролю, доктóрящему ДВА блока (обход
     разнесением, `WR-06`), нужно подать выход первой подмены на вход второй.
