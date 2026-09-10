@@ -55,6 +55,23 @@ REASON_ANCHOR_MISSING = "якоря конца перечня нет"
 REASON_ANCHOR_DUPLICATED = "якорь конца перечня встречается более одного раза"
 
 
+def _anchor_lines(text: str) -> list[int]:
+    """Номера строк, СОСТОЯЩИХ из якоря целиком.
+
+    ⚠️ СЧЁТ ИДЁТ ПО ОТДЕЛЬНОЙ СТРОКЕ, А НЕ ПО ВХОЖДЕНИЮ ПОДСТРОКИ, И ЭТО НЕСУЩЕЕ.
+    Шапка файла отложенного ОБЯЗАНА называть якорь дословно — иначе автор правки
+    узнаёт о правиле только из отказа прогона. Подстрочный счёт объявил бы это
+    упоминание вторым якорём, то есть краснел бы на самом объявлении правила.
+    Точкой внесения служит строка, состоящая из якоря целиком; упоминание внутри
+    прозы точкой внесения не является и ею не притворяется.
+    """
+    return [
+        number
+        for number, line in enumerate(text.splitlines(), start=1)
+        if line.strip() == DEFERRED_END_ANCHOR
+    ]
+
+
 @dataclass(frozen=True)
 class Finding:
     """Одно расхождение: основание и подробность, называющая ЧИСЛА, а не ощущение."""
@@ -99,8 +116,8 @@ def deferred_items_findings(text: str, *, anchor_required: bool = True) -> list[
                 )
             )
 
-    anchors = text.count(DEFERRED_END_ANCHOR)
-    if anchors == 0:
+    anchors = _anchor_lines(text)
+    if not anchors:
         if anchor_required:
             findings.append(
                 Finding(
@@ -112,14 +129,16 @@ def deferred_items_findings(text: str, *, anchor_required: bool = True) -> list[
                     ),
                 )
             )
-    elif anchors > 1:
+    elif len(anchors) > 1:
         findings.append(
             Finding(
                 reason=REASON_ANCHOR_DUPLICATED,
                 detail=(
-                    f"якорь `{DEFERRED_END_ANCHOR}` встречается {anchors} раза — "
-                    "точка внесения перестала быть единственной, и два прогона "
-                    "разойдутся по разным точкам"
+                    f"якорь `{DEFERRED_END_ANCHOR}` стои́т отдельной строкой "
+                    f"{len(anchors)} раза — строки "
+                    f"{', '.join(str(item) for item in anchors)}; точка внесения "
+                    "перестала быть единственной, и два прогона разойдутся по "
+                    "разным точкам"
                 ),
             )
         )
@@ -205,6 +224,16 @@ def test_the_anchor_closes_every_live_deferred_file():
         assert lines[-1].strip() == DEFERRED_END_ANCHOR, (
             f"{path.relative_to(PROJECT_ROOT)}: последний содержательный элемент — "
             f"«{lines[-1].strip()}», а обязан быть якорем `{DEFERRED_END_ANCHOR}`"
+        )
+
+        # Проза шапки обязана называть якорь ДОСЛОВНО: правило, известное только
+        # прогону, автор правки узнаёт из отказа, а не до него. Упоминание сверх
+        # самой точки внесения — то есть вхождений строго больше одного.
+        raw = path.read_text(encoding="utf-8")
+        assert raw.count(DEFERRED_END_ANCHOR) > len(_anchor_lines(raw)), (
+            f"{path.relative_to(PROJECT_ROOT)}: якорь стои́т, но шапка файла его не "
+            "называет — правило внесения ПЕРЕД якорем нигде не объявлено, и автор "
+            "правки узнает о нём только из отказа прогона"
         )
 
 
