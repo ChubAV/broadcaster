@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 10
 current_phase_name: Рычаг `components/modal.html`
 status: executing
-stopped_at: Completed 10-40-PLAN.md
-last_updated: "2026-09-10T00:00:00.000Z"
+stopped_at: Completed 10-38-PLAN.md
+last_updated: "2026-09-10T04:45:13.250Z"
 last_activity: 2026-09-10
-last_activity_desc: Phase 10 execution started
-state_head: 672d3ece4cf6fb839d0bd18c9c80815019605a07
+last_activity_desc: Phase 10 — план 10-38 закрыт (WR-04, WR-09)
+state_head: 2bfa658cd9011f4142c80f7d58b147e82bb5dc44
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 78
-  completed_plans: 76
+  completed_plans: 77
   percent: 33
 ---
 
@@ -36,11 +36,11 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
-Plan: 38 of 40
+Plan: 39 of 40
 Total Plans in Phase: 40
-Completed Plans in Phase: 38
-Status: Executing — седьмая партия закрытия гэпов, волны 1 и 2 закрыты (10-35, 10-36, 10-37, 10-40); остаются 10-38 и 10-39 волны 3
-Last activity: 2026-09-10 — Phase 10 execution: waves 1-2 of the gap-closure batch complete
+Completed Plans in Phase: 39
+Status: Executing — седьмая партия закрытия гэпов, волны 1 и 2 закрыты (10-35, 10-36, 10-37, 10-40), в волне 3 закрыт 10-38; остаётся 10-39
+Last activity: 2026-09-10 — Phase 10 execution: волна 3 начата, план 10-38 закрыт (WR-04, WR-09)
 
 Progress: [████████████████████] 38/38 plans ([███░░░░░░░] 33%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
 
@@ -119,6 +119,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 10 P36 | 92 min | 2 tasks | 1 files |
 | Phase 10 P37 | 27 min | 3 tasks | 1 files |
 | Phase 10 P40 | 21 min | 2 tasks | 1 files |
+| Phase 10 P38 | 31 min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -409,8 +410,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-10T00:00:00.000Z
-Stopped at: Completed 10-40-PLAN.md
+Last session: 2026-09-10T04:45:12.553Z
+Stopped at: Completed 10-38-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
