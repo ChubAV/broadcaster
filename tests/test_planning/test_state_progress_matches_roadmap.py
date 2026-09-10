@@ -37,6 +37,7 @@ ROADMAP объявлен единственным ИСТОЧНИКОМ счёт�
 и вместе с ним отключается свойство.
 """
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -98,6 +99,108 @@ def roadmap_totals(text: str) -> tuple[int, int]:
     executed = sum(pair[0] for pair in per_phase.values())
     total = sum(pair[1] for pair in per_phase.values())
     return executed, total
+
+
+# Строка перечня планов раздела фазы. Форм в роадмапе НЕСКОЛЬКО, и опознаётся
+# РОВНО ОДНА — «N планов, из них M исполнено». Остальные («7 планов — 3 исходных
+# …», «11/11 plans executed …», «TBD») пропускаются МОЛЧА, и молчание это
+# названо числом в антивакуумной половине правила, а не оставлено на догадку:
+# правило, не нашедшее ни одной прозы опознаваемой формы, зеленело бы само собой —
+# то есть ровно тогда, когда форма прозы сменилась целиком.
+PLANS_PROSE_PREFIX = "**Plans**"
+_PLANS_PROSE_RE = re.compile(
+    r"(?P<total>\d+)\s+планов,\s+из\s+них\s+(?P<executed>\d+)\s+исполнено"
+)
+
+
+def roadmap_plan_prose(text: str) -> dict[str, tuple[int, int]]:
+    """Карта «раздел фазы → пара чисел ПРОЗЫ» — «исполнено / всего».
+
+    Читается ТОЛЬКО строка перечня планов раздела и ТОЛЬКО опознаваемая форма.
+    Раздел, чья строка написана иначе либо отсутствует, в карту не попадает
+    вовсе — это НЕ ноль: ноль означал бы «проза объявила ноль планов», и смешение
+    этих двух вещей изъяло бы раздел из правила молча.
+    """
+    prose: dict[str, tuple[int, int]] = {}
+    section: str | None = None
+
+    for line in text.splitlines():
+        if line.startswith(PHASE_SECTION_PREFIX):
+            section = line[len(PHASE_SECTION_PREFIX) :].strip()
+            continue
+        if section is None or not line.startswith(PLANS_PROSE_PREFIX):
+            continue
+        match = _PLANS_PROSE_RE.search(line)
+        if match is not None:
+            prose.setdefault(
+                section,
+                (int(match.group("executed")), int(match.group("total"))),
+            )
+
+    return prose
+
+
+@dataclass(frozen=True)
+class ProseDivergence:
+    """Расхождение ПРОЗЫ раздела с его ОТМЕТКАМИ: раздел, что сказано, что отмечено.
+
+    ⚠️ ПОЧЕМУ ЭТО СОСЕДНИЙ ТИП, А НЕ `Divergence`, И РАЗНИЦА НАЗЫВАЕТСЯ. Поля те
+    же по смыслу — величина, выведенное, записанное, — но `Divergence` называет
+    ПОЛЕ frontmatter `.planning/STATE.md`, а у прозаической строки роадмапа поля
+    нет вовсе и файл другой. Переиспользование положило бы в сообщение об отказе
+    ЧУЖОЕ имя файла, и следующий автор «починил» бы не тот документ. Сверх того
+    здесь обязателен РАЗДЕЛ: расхождений может быть несколько, и без имени
+    раздела они неразличимы.
+    """
+
+    section: str
+    quantity: str
+    prose: int
+    marks: int
+
+    def __str__(self) -> str:
+        return (
+            f"раздел `{PHASE_SECTION_PREFIX}{self.section}` файла "
+            f"`.planning/ROADMAP.md`: проза строки `{PLANS_PROSE_PREFIX}` говорит "
+            f"{self.prose} ({self.quantity}), а ОТМЕТОК перечня — {self.marks}; "
+            "привести надо ПРОЗУ, потому что источником счёта планов объявлены "
+            "отметки, и действующий гейт читает именно их"
+        )
+
+
+def prose_divergence(roadmap_text: str) -> list[ProseDivergence]:
+    """Расхождения прозы с отметками ПО ВСЕМ разделам. Пустой список — согласие.
+
+    ⚠️ ЧИСЛО ИСПОЛНЕННЫХ В ПРОЗЕ СЛИЧАЕТСЯ С ЧИСЛОМ ОТМЕТОК, А НЕ СО ЧИСЛОМ
+    СВОДОК. Сводка есть свидетельство завершения, а отметку ставит оркестратор;
+    сличение с иным источником краснело бы на состоянии оркестратора, а не на
+    расхождении записи, — и правило чинили бы правкой не того документа.
+    """
+    marks = roadmap_plan_counts(roadmap_text)
+    prose = roadmap_plan_prose(roadmap_text)
+
+    divergences: list[ProseDivergence] = []
+    for section, (prose_executed, prose_total) in prose.items():
+        marks_executed, marks_total = marks.get(section, (0, 0))
+        if prose_total != marks_total:
+            divergences.append(
+                ProseDivergence(
+                    section=section,
+                    quantity="всего планов",
+                    prose=prose_total,
+                    marks=marks_total,
+                )
+            )
+        if prose_executed != marks_executed:
+            divergences.append(
+                ProseDivergence(
+                    section=section,
+                    quantity="исполнено планов",
+                    prose=prose_executed,
+                    marks=marks_executed,
+                )
+            )
+    return divergences
 
 
 def _frontmatter(text: str) -> str:
@@ -188,6 +291,47 @@ def test_the_machine_readable_progress_is_derived_from_the_roadmap():
         STATE_PATH.read_text(encoding="utf-8"),
     )
     assert not divergences, _report(divergences)
+
+
+def test_the_prose_plan_counts_agree_with_the_marks():
+    """ПРОЗА О ЧИСЛЕ ПЛАНОВ РАВНА ОТМЕТКАМ СВОЕГО РАЗДЕЛА.
+
+    ЗАЧЕМ ОТДЕЛЬНОЕ ПРАВИЛО ПРИ ЖИВОМ ГЕЙТЕ ВЫШЕ. Действующий гейт читает ОТМЕТКИ
+    и прозы не видит ПО ПОСТРОЕНИЮ — и ровно поэтому строка `**Plans**` Фазы 10
+    прожила устаревшей целую партию, объявляя «40 планов, из них 34 исполнено»
+    при сорока отметках. Собственная идиома фазы («прежнее значение не было
+    ошибкой — оно устарело») САМА устарела на ту партию, которая её дописывала.
+    Пока принуждения нет, расхождение прозы с деревом ловит только круг ревизии.
+
+    ⚠️ АНТИВАКУУМНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ И НАЗЫВАЕТ ЧИСЛА. Разделов фаз найдено
+    не ноль; разделов с прозой опознаваемой формы — не ноль; число опознанных и
+    число пропущенных названо в тексте утверждения. Без этого правило зеленело бы
+    на роадмапе, где форма прозы сменилась целиком, — то есть ровно тогда, когда
+    оно нужнее всего.
+    """
+    roadmap_text = ROADMAP_PATH.read_text(encoding="utf-8")
+
+    sections = roadmap_plan_counts(roadmap_text)
+    assert sections, (
+        "в `.planning/ROADMAP.md` не найдено ни одного раздела "
+        f"`{PHASE_SECTION_PREFIX}` — разбор прочёл бы пустоту, и правило зеленело "
+        "бы ВАКУУМОМ"
+    )
+
+    prose = roadmap_plan_prose(roadmap_text)
+    skipped = len(sections) - len(prose)
+    assert prose, (
+        f"разделов фаз найдено {len(sections)}, из них с прозой опознаваемой формы "
+        f"«N планов, из них M исполнено» — 0, пропущено {skipped}: форма прозы "
+        "сменилась целиком, и сличать стало нечего. Правило обязано покраснеть "
+        "ЗДЕСЬ, а не зазеленеть впустую"
+    )
+
+    divergences = prose_divergence(roadmap_text)
+    assert not divergences, (
+        f"опознано разделов с прозой: {len(prose)}, пропущено: {skipped}.\n"
+        + "\n".join(str(item) for item in divergences)
+    )
 
 
 # --- зубы: синтетические пары, а не правка настоящих файлов -------------------------
@@ -302,3 +446,88 @@ def test_a_phase_without_a_plan_list_is_counted_as_empty():
     counts = roadmap_plan_counts(_SYNTHETIC_ROADMAP_OF_THE_ROUND_SEVEN_TREE)
     empty = [pair for pair in counts.values() if pair == (0, 0)]
     assert empty, "раздел без перечня планов обязан быть отобран и посчитан пустым"
+
+
+# --- зубы правила согласия прозы с отметками ---------------------------------------
+
+# ⚠️ НЕЦИКЛИЧНОСТЬ. Оба текста ниже выписаны ЛИТЕРАЛАМИ целиком и не строятся из
+# `.planning/ROADMAP.md`: контроль, собирающий негодный вход из проверяемого,
+# доказывал бы согласие правила с самим собой. Ожидания в контролях тоже
+# литеральные и из живого роадмапа не выводятся.
+
+_SYNTHETIC_ROADMAP_WHOSE_PROSE_LAGS = """# Синтетический roadmap
+
+### Phase 1: Синтетическая фаза с прозой
+
+**Plans**: 3 планов, из них 1 исполнено
+
+- [x] СИНТ-1-PLAN.md — исполненный план
+- [x] СИНТ-2-PLAN.md — исполненный план
+- [ ] СИНТ-3-PLAN.md — запланированный план
+
+### Phase 2: Фаза с прозой иной формы
+
+**Plans**: 11/11 plans executed в 4 волнах
+"""
+
+_SYNTHETIC_ROADMAP_WITHOUT_RECOGNISABLE_PROSE = """# Синтетический roadmap
+
+### Phase 1: Фаза с прозой иной формы
+
+**Plans**: 7 планов — 3 исходных плюс 4 плана закрытия разрывов
+
+- [x] СИНТ-1-PLAN.md — исполненный план
+- [ ] СИНТ-2-PLAN.md — запланированный план
+
+### Phase 2: Фаза без перечня планов
+
+**Plans**: TBD
+"""
+
+
+def test_the_prose_helper_catches_a_stale_prose_line():
+    """Негативный контроль 1: проза отстала от отметок — ровно одна находка с ОБОИМИ числами.
+
+    Дословный класс предупреждения восьмого круга: отметок два, проза говорит
+    одно. Числа стоя́т ТОЛЬКО в литеральном тексте выше и в ожиданиях здесь.
+    """
+    divergences = prose_divergence(_SYNTHETIC_ROADMAP_WHOSE_PROSE_LAGS)
+
+    assert len(divergences) == 1, "\n".join(str(item) for item in divergences)
+    only = divergences[0]
+    assert only.section == "1: Синтетическая фаза с прозой"
+    assert only.prose == 1 and only.marks == 2, str(only)
+    message = str(only)
+    assert "1" in message and "2" in message, (
+        f"сообщение обязано называть ОБА числа: {message}"
+    )
+    assert "ROADMAP.md" in message, (
+        f"сообщение обязано называть файл, который надо привести: {message}"
+    )
+    assert "Синтетическая фаза с прозой" in message, (
+        f"сообщение обязано называть РАЗДЕЛ — иначе находки неразличимы: {message}"
+    )
+
+
+def test_the_prose_helper_finds_nothing_when_no_prose_is_recognised():
+    """Негативный контроль 2: прозы опознаваемой формы нет — сличать НЕЧЕГО, и это ловит вакуум.
+
+    Правило само по себе даёт пустоту (расхождений нет, потому что нет и входа);
+    краснеть обязана АНТИВАКУУМНАЯ половина. Здесь показано ОБА факта разом:
+    карта прозы пуста при непустой карте отметок.
+    """
+    text = _SYNTHETIC_ROADMAP_WITHOUT_RECOGNISABLE_PROSE
+
+    assert roadmap_plan_counts(text), (
+        "разделы фаз в синтетике есть — иначе контроль показывал бы не вакуум "
+        "прозы, а вакуум разбора"
+    )
+    assert roadmap_plan_prose(text) == {}, (
+        "ни одна из двух форм синтетики не имеет права быть опознанной: "
+        "«7 планов — 3 исходных …» и «TBD»"
+    )
+    assert prose_divergence(text) == [], (
+        "без опознанной прозы расхождений нет ПО ПОСТРОЕНИЮ — именно поэтому "
+        "пустая карта прозы обязана краснить антивакуумную половину гейта, а не "
+        "проходить его зелёной"
+    )
