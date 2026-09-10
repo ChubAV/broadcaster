@@ -6151,3 +6151,103 @@ def test_control_an_auth_template_that_imports_the_lever_reddens():
             f"отказ не назвал починку «{repair}» — читатель остаётся перед "
             f"выбором, которого не видит: {findings[0]}"
         )
+
+
+def test_control_an_auth_template_that_imports_the_lever_with_an_alias_reddens():
+    """ЧТО ДОКАЗЫВАЕТ: правило видит ВТОРУЮ форму подключения макроса.
+
+    ⚠️ ФОРМ ПОДКЛЮЧЕНИЯ У JINJA ДВЕ, И ОБРАЗЕЦ ЗНАЛ ОДНУ (`REVIEW-8/WR-04`).
+    `{% import "components/modal.html" as m %}` приводит рычаг в шелл РОВНО ТАК
+    ЖЕ, как `{% from … import modal %}`: вызов идёт через имя модуля
+    (`m.modal(...)`), а файл при этом позван. Воспроизведено исполнением на
+    доктóренной копии наследника: форма `from` давала ОДНУ находку, форма
+    `import … as` — НОЛЬ.
+
+    ⚠️ АНТИВАКУУМНАЯ ПОЛОВИНА ЭТОГО КОНТРОЛЯ — СОСЕДНИЙ КОНТРОЛЬ. Он доктóрит
+    ТОТ ЖЕ файл ТОЙ ЖЕ формой вызова, отличаясь только родом ребра, и красен
+    сегодня же. Пара делает находку отличимой от «правило не находит ничего
+    никогда».
+
+    ⚠️ ДЕРЕВО НЕ ПРАВИТСЯ НИ БАЙТОМ: читатель подаётся параметром, копия живёт в
+    памяти. Основание — в докстринге `_template_reader_with`, второй копией не
+    переписывается.
+    """
+    heirs = _auth_shell_heirs()
+    assert heirs, (
+        f"наследников `{AUTH_SHELL_ROOT}` в дереве НЕТ — доктóрить нечего, и "
+        "контроль ничего не доказал бы"
+    )
+    victim = heirs[0]
+
+    doctored = (
+        _auth_shell_template_source(victim)
+        + f'\n{{% import "{MODAL_LEVER_TEMPLATE}" as lever %}}\n'
+    )
+    findings = _auth_shell_lever_findings(
+        read=_template_reader_with(victim, doctored)
+    )
+
+    assert len(findings) == 1, (
+        f"ПРАВИЛО НЕ ЗАМЕТИЛО ПОДКЛЮЧЕНИЕ РЫЧАГА `{MODAL_LEVER_TEMPLATE}` "
+        f"ФОРМОЙ С ПЕРЕИМЕНОВАНИЕМ МОДУЛЯ В НАСЛЕДНИКЕ `{victim}` или назвало "
+        f"расхождение не один раз: находок {len(findings)} — {findings}"
+    )
+    assert victim in findings[0], (
+        f"отказ не назвал файл, из которого рычаг достижим: {findings[0]}"
+    )
+    assert MODAL_LEVER_TEMPLATE in findings[0], (
+        f"отказ не назвал сам рычаг: {findings[0]}"
+    )
+    assert f"{victim} → " in findings[0], (
+        "отказ не назвал ПУТЬ достижимости, а только факт: " + findings[0]
+    )
+
+
+# Имя ВОСЬМОГО экрана входа — того самого, которым докстринг сборщика
+# наследников оправдывает чтение дерева. В дереве его нет и быть не должно.
+_EIGHTH_AUTH_SCREEN = "auth/eighth_screen.html"
+
+
+def test_control_a_new_auth_heir_that_reaches_the_lever_reddens():
+    """ЧТО ДОКАЗЫВАЕТ: правило видит НОВЫЙ экран входа, добавленный без правки суиты.
+
+    ⚠️ ЭТО И ЕСТЬ СЦЕНАРИЙ, КОТОРЫМ ДОКСТРИНГ `_auth_shell_heirs` ОПРАВДЫВАЕТ
+    ЧТЕНИЕ ДЕРЕВА ВМЕСТО СПИСКА ИМЁН (`REVIEW-8/WR-07`). До настоящего контроля
+    он был ОБЕЩАНИЕМ: `_auth_shell_lever_findings(read=…)` пробрасывал
+    подменённого читателя в сборщик ГРАФА, а сборщик НАСЛЕДНИКОВ читал дерево
+    напрямую и параметра не принимал. Следствие измерено исполнением: читатель,
+    отдающий текст восьмого экрана, давал НОЛЬ находок — доктóрить можно было
+    только СУЩЕСТВУЮЩИЙ шаблон.
+
+    ⚠️ ПОДМЕНЯЕТСЯ И СОСТАВ НАСЛЕДНИКОВ, И ЧИТАТЕЛЬ, потому что восьмого экрана
+    в дереве нет: без состава имён его неоткуда взять, без читателя — нечего
+    прочесть. Дерево при этом не правится ни байтом.
+    """
+    names = _template_tree_names()
+    assert names, (
+        "имён шаблонов в дереве НОЛЬ — доктóрить нечего, и контроль ничего не "
+        "доказал бы"
+    )
+    assert _EIGHTH_AUTH_SCREEN not in names, (
+        f"имя `{_EIGHTH_AUTH_SCREEN}` В ДЕРЕВЕ УЖЕ ЕСТЬ — доктóривание затёрло "
+        "бы живой шаблон, и контроль проверял бы не то"
+    )
+
+    newborn = (
+        f'{{% extends "{AUTH_SHELL_ROOT}" %}}\n'
+        f'{{% from "{MODAL_LEVER_TEMPLATE}" import modal %}}\n'
+    )
+    findings = _auth_shell_lever_findings(
+        read=_template_reader_with(_EIGHTH_AUTH_SCREEN, newborn),
+        names=(*names, _EIGHTH_AUTH_SCREEN),
+    )
+
+    assert len(findings) == 1, (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО НОВОГО НАСЛЕДНИКА КОРНЯ ШЕЛЛА АВТОРИЗАЦИИ, "
+        f"ПРИВОДЯЩЕГО РЫЧАГ `{MODAL_LEVER_TEMPLATE}`, или назвало расхождение "
+        f"не один раз: находок {len(findings)} — {findings}"
+    )
+    assert _EIGHTH_AUTH_SCREEN in findings[0], (
+        "отказ не назвал НОВЫЙ экран входа — состав наследников по-прежнему "
+        f"берётся с диска: {findings[0]}"
+    )
