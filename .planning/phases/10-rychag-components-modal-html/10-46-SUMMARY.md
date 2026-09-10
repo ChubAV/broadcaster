@@ -146,7 +146,9 @@ coverage:
 actuals:
   tokens: 4500
   tasks: 3
-  commits: 5
+  commits: 8
+  # ЗАМЕР: git rev-list --count 77b3011..HEAD после коммита трекинга. Пять коммитов
+  # задач (два RED, три GREEN) плюс сводка, самопроверка и трекинг.
   plan_head_before: 77b301198baf12c50ba1dff44b33b38256ecba2a
 
 duration: 1h 20m
