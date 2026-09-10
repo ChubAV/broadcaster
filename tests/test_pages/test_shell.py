@@ -4038,6 +4038,13 @@ FAILURE_BANNER_ANCESTORS = {
 #   — свойства контейнеризации (`container-type`, `content-visibility`)
 #     объявляют элемент границей размера или отрисовки, и следствие для
 #     фиксированного потомка то же, что у `contain`, который здесь уже был.
+#
+# ⚠️ ГЕЙТ БОЛЬШЕ НЕ ВЕТВИТСЯ ПО ОДНОМУ ИМЕНИ (`WR-02`/`V9-04`, 2026-09-10, план
+# 10-42). Прежняя запись — «предмет утверждения — ИМЯ свойства, разбора значений
+# гейт не ведёт вовсе» — приведена ДОСЛОВНО и помечена опровергнутой у
+# `INERT_DECLARED_VALUES` вместе с замером (18 красных из 19 начальных значений)
+# и всеми тремя границами разбора значения. Имя из ЭТОГО перечня становится
+# находкой только тогда, когда его значение бездейственным не является.
 CONTAINING_BLOCK_PROPERTIES = (
     "transform", "perspective", "filter", "backdrop-filter", "contain",
     "will-change",
@@ -4063,6 +4070,11 @@ CONTAINING_BLOCK_PROPERTIES = (
 # небазовом положении) НЕСУЩИЙ: свойство, попавшее бы в обе группы, называлось
 # бы ПЕРВЫМ эффектом. `clip-path` и `mask` содержащего блока для фиксированного
 # потомка НЕ порождают (в отличие от `filter`), поэтому стоя́т именно здесь.
+#
+# ⚠️ ГЕЙТ БОЛЬШЕ НЕ ВЕТВИТСЯ ПО ОДНОМУ ИМЕНИ, И ТО ЖЕ ВЕРНО ЗДЕСЬ: `isolation:
+# auto`, `mix-blend-mode: normal`, `opacity: 1` и `clip-path: none` находкой не
+# являются. Опровергнутая запись, замер и три границы — у
+# `INERT_DECLARED_VALUES` (`WR-02`/`V9-04`, 2026-09-10, план 10-42).
 STACKING_CONTEXT_PROPERTIES = (
     "isolation", "mix-blend-mode", "opacity",
     "transform-style", "clip-path", "mask", "view-transition-name",
@@ -4072,7 +4084,123 @@ STACKING_CONTEXT_PROPERTIES = (
 # от обычного потока. Оно вынесено из группы 2 отдельно ровно поэтому: правило,
 # краснеющее на `z-index`, объявленный узлу в обычном потоке, краснело бы на
 # объявление, ничего не делающее, — и учило бы правку не объявлять, а обходить.
+#
+# ⚠️ У НЕГО ТЕПЕРЬ ДВЕ ПОЛОВИНЫ КАРВЕ-АУТА, А НЕ ОДНА (план 10-42): к «слой при
+# базовом положении» добавилось «НАЧАЛЬНОЕ значение слоя при ЛЮБОМ положении» —
+# `z-index: auto` не заводит контекста наложения и при `position: relative`.
+# Обе утверждаются исполнением: `test_control_a_layer_on_an_in_flow_ancestor_
+# does_not_redden` и `test_control_the_layer_initial_value_is_a_finding_at_no_
+# position`.
 LAYER_PROPERTY = "z-index"
+
+# Свойство НАМЕРЕНИЯ. Стои́т отдельным именем потому, что его бездейственность
+# есть ПРЕДИКАТ, а не перечень: предмет его значения — ИМЯ другого свойства.
+INTENT_PROPERTY = "will-change"
+
+# КАРТА БЕЗДЕЙСТВЕННЫХ ЗНАЧЕНИЙ: «свойство → значения, ничего не объявляющие».
+# Собрана из НАЧАЛЬНЫХ значений свойств; значения набраны в нижнем регистре,
+# потому что `_css_declarations` уже приводит к нему и имя, и значение, и вторая
+# нормализация здесь была бы второй копией одного решения.
+#
+# ⚠️ ЗАЧЕМ ОНА ЗАВЕДЕНА, И ЧТО ИМЕННО ОПРОВЕРГНУТО (идиома D-30/D-32). Прежняя
+# запись жила у отрицательного контроля перечней и звучала дословно так:
+#
+#     «ЗНАЧЕНИЕ при этом подобрано под СЕГОДНЯШНЕГО представителя и осмысленно
+#     именно для него: предмет утверждения — ИМЯ свойства, разбора значений гейт
+#     не ведёт вовсе, и перестановка перечня оставит контроль верным по
+#     существу.»
+#
+# ЧЕМ ОПРОВЕРГНУТА: `REVIEW-8/WR-02` (восьмой круг ревизии) и `V9-04` (девятый
+# круг верификации). КОГДА: 2026-09-10. ЗАМЕР, СНЯТЫЙ ИСПОЛНЕНИЕМ: объявление
+# КАЖДОГО имени с ЕГО НАЧАЛЬНЫМ значением, дописанное целящемуся блоку, давало
+# по ОДНОЙ находке у ВОСЕМНАДЦАТИ имён из девятнадцати (исключение — свойство
+# слоя, чьё условие составное). Правило, краснеющее на объявлении, НИЧЕГО НЕ
+# ДЕЛАЮЩЕМ, учит первого же читателя обходить себя вместо того, чтобы
+# соблюдать. ЧЕМ ЗАКРЫТО: этой картой плюс предикатом `_declaration_is_inert`.
+#
+# ⚠️ ТРИ ГРАНИЦЫ КАРТЫ НАЗЫВАЮТСЯ ЗДЕСЬ ЦЕЛИКОМ, А НЕ СГЛАЖИВАЮТСЯ.
+#
+# (1) ЧАСТИЧНО ОГРАНИЧИВАЮЩИЕ ВЕЛИЧИНЫ НЕ РАЗБИРАЮТСЯ. `contain` бездейственен
+#     ТОЛЬКО при начальном значении: величина, объявляющая ограничение размера в
+#     одиночку (`contain: size`), содержащего блока для фиксированного потомка не
+#     порождает, но гейт этой тонкости НЕ разбирает и остаётся СТРОЖЕ
+#     спецификации. Это записано прозой, а не починено: строгость в эту сторону
+#     ложноотрицательных не даёт.
+#
+# (2) БЕЗДЕЙСТВЕННОСТЬ СВОЙСТВА НАМЕРЕНИЯ ЕСТЬ ПРЕДИКАТ, А НЕ ПЕРЕЧЕНЬ, И
+#     ПОЭТОМУ `will-change` В КАРТЕ ОТСУТСТВУЕТ. Предмет его значения — ИМЯ
+#     другого свойства, и бездейственных значений у него бесконечно много:
+#     бездейственно ЛЮБОЕ, не называющее ни одного имени групп 1 и 2. Ветвь
+#     написана отдельно в `_declaration_is_inert`.
+#
+# (3) ФОРМА ЗАПИСИ ЗНАЧЕНИЯ НЕ НОРМАЛИЗУЕТСЯ — И ЭТО ОСТАТОК `WR-02`, НАЗВАННЫЙ
+#     ГРАНИЦЕЙ, А НЕ ОСТАВЛЕННЫЙ МОЛЧАЛИВЫМ. Карта сличает значение ДОСЛОВНО, а у
+#     одного и того же начального значения бывает несколько эквивалентных
+#     записей. СЛЕДСТВИЕ НАЗЫВАЕТСЯ ПРЯМО И ЗАРАНЕЕ: `opacity: 1.0` и
+#     `opacity: 100%` при каноническом `1`, `scale: 1` и `rotate: 0deg` при
+#     каноническом `none` ПРОДОЛЖАТ краснить гейт И ПОСЛЕ закрытия `WR-02`. Это
+#     не упущение исполнения, а объявленная граница. Внесение трёх форм
+#     прозрачности (починка, предложенная ревизией) ОТВЕРГНУТО с основанием: оно
+#     закрыло бы ОДИН случай класса и оставило бы остальные ровно такими же
+#     молчаливыми, то есть ПЕРЕНЕСЛО бы границу, а не сняло её, — и растянуло бы
+#     поле канона с величины на перечень ради одного имени. Нормализация формы
+#     значения есть отдельная работа со своим предметом.
+#     ⚠️ ПРЯМОЙ ЗАПРЕТ СЛЕДУЮЩЕМУ ЧИТАТЕЛЮ: пополнять эту карту эквивалентными
+#     формами В ОДИНОЧКУ НЕЛЬЗЯ — правило согласия канона с перечнями гейта
+#     покраснеет, и покраснеет ПРАВИЛЬНО.
+INERT_DECLARED_VALUES = {
+    "transform": ("none",),
+    "perspective": ("none",),
+    "filter": ("none",),
+    "backdrop-filter": ("none",),
+    "contain": ("none",),
+    "translate": ("none",),
+    "rotate": ("none",),
+    "scale": ("none",),
+    "container-type": ("normal",),
+    "content-visibility": ("visible",),
+    "isolation": ("auto",),
+    "mix-blend-mode": ("normal",),
+    "opacity": ("1",),
+    "transform-style": ("flat",),
+    "clip-path": ("none",),
+    "mask": ("none",),
+    "view-transition-name": ("none",),
+    LAYER_PROPERTY: ("auto",),
+}
+
+
+def _declaration_is_inert(
+    prop: str,
+    value: str,
+    inert: dict[str, tuple[str, ...]] = INERT_DECLARED_VALUES,
+    containing: tuple[str, ...] = CONTAINING_BLOCK_PROPERTIES,
+    stacking: tuple[str, ...] = STACKING_CONTEXT_PROPERTIES,
+) -> bool:
+    """Ничего ли объявляет объявление `prop: value` — предикат бездейственности.
+
+    Вес каскада снимается, значение подрезается: предмет утверждения —
+    объявленная величина, а не её место в каскаде. Форма снятия та же, что в
+    `_css_declarations`, потому что предикат зовут и НА СЫРОМ значении тоже.
+
+    ⚠️ ВЕТВЬ СВОЙСТВА НАМЕРЕНИЯ ОТДЕЛЬНАЯ, И ОСНОВАНИЕ ЕЁ — НЕ УДОБСТВО.
+    У всех прочих имён бездейственное значение ОДНО (начальное), и перечнем оно
+    выражается. У `will-change` предмет значения есть ИМЯ ДРУГОГО СВОЙСТВА:
+    бездейственно любое значение, не называющее ни одного имени групп 1 и 2
+    (кроме самого свойства намерения), — `will-change: color` находкой не
+    является, `will-change: transform` является.
+
+    ⚠️ ПЕРЕЧНИ И КАРТА ПРИХОДЯТ ПАРАМЕТРАМИ, А НЕ ЧИТАЮТСЯ КОНСТАНТАМИ МОДУЛЯ:
+    без этого контроль зубов невыразим, и «описка в перечне оставляет ловушку
+    ненайденной» пришлось бы ЗАЯВЛЯТЬ вместо того, чтобы ПОКАЗЫВАТЬ. Форма
+    наследована у `_lever_clearing_findings` дословно, а не изобретена.
+    """
+    cleaned = value.replace("!important", "").strip().lower()
+    if prop == INTENT_PROPERTY:
+        named = {chunk.strip() for chunk in cleaned.split(",")}
+        return not (named & (set(containing) | set(stacking)) - {INTENT_PROPERTY})
+    return cleaned in inert.get(prop, ())
+
 
 _CSS_VENDOR_PREFIX_RE = re.compile(r"^-(?:webkit|moz|ms|o)-")
 
@@ -4344,12 +4472,35 @@ def _ancestor_declarations(
     return declarations
 
 
-def _ancestor_trap_findings(path: Path) -> tuple[str, ...]:
+def _ancestor_trap_findings(
+    path: Path,
+    containing: tuple[str, ...] = CONTAINING_BLOCK_PROPERTIES,
+    stacking: tuple[str, ...] = STACKING_CONTEXT_PROPERTIES,
+    layer: str = LAYER_PROPERTY,
+    inert: dict[str, tuple[str, ...]] = INERT_DECLARED_VALUES,
+) -> tuple[str, ...]:
     """Расхождения чистоты цепи предков. Пусто — ни один предок подъём не запирает.
 
     Расхождение считается НА СВОЙСТВО ПРЕДКА, а не на блок: одно и то же
     свойство, объявленное предку дважды, есть ОДНО расхождение, и два сообщения
     о нём сказали бы одно дважды.
+
+    ⚠️ ГЕЙТ СПРАШИВАЕТ ПРЕДИКАТ БЕЗДЕЙСТВЕННОСТИ ДО ТОГО, КАК СОБРАТЬ НАХОДКУ, И
+    ЭТО ПРАВКА `WR-02`/`V9-04` (2026-09-10, план 10-42). Объявление свойства с
+    ЕГО НАЧАЛЬНЫМ значением находкой не является ни в одной из трёх ветвей.
+    Границы разбора значения названы у `INERT_DECLARED_VALUES` целиком — все три.
+
+    ⚠️ ПОРЯДОК ВЕТВЕЙ НЕСУЩИЙ И НЕ МЕНЯЕТСЯ: содержащий блок → контекст
+    наложения → слой при небазовом положении. Свойство, попавшее бы в обе
+    группы, обязано называться ПЕРВЫМ эффектом, и перестановка назвала бы не тот.
+
+    ⚠️ ПЕРЕЧНИ, ИМЯ СВОЙСТВА СЛОЯ И КАРТА БЕЗДЕЙСТВЕННЫХ ЗНАЧЕНИЙ ПРИХОДЯТ
+    ПАРАМЕТРАМИ, А НЕ ЧИТАЮТСЯ КОНСТАНТАМИ МОДУЛЯ. Умолчания — сегодняшние
+    константы, и все действующие вызовы остались побайтово прежними. Основание
+    ровно то же, что у параметра пути в `_lever_clearing_findings`: без него
+    контроль зубов невыразим, и «описка в перечне оставляет ловушку
+    ненайденной» пришлось бы ЗАЯВЛЯТЬ вместо того, чтобы ПОКАЗЫВАТЬ. Именно этим
+    закрывается окно 69 `.planning/WINDOWS.md`.
     """
     findings: list[str] = []
     consequence = (
@@ -4362,14 +4513,18 @@ def _ancestor_trap_findings(path: Path) -> tuple[str, ...]:
         position = declared.get("position")
         position_value = position.value if position is not None else "static"
         for name, declaration in declared.items():
-            if name in CONTAINING_BLOCK_PROPERTIES:
+            if _declaration_is_inert(
+                name, declaration.value, inert, containing, stacking
+            ):
+                continue
+            if name in containing:
                 findings.append(
                     f"предок {ancestor} (объявлен блоком "
                     f"`{declaration.selector}`): свойство "
                     f"`{name}: {declaration.value}` делает предка СОДЕРЖАЩИМ "
                     f"БЛОКОМ для фиксированного потомка — {consequence}"
                 )
-            elif name in STACKING_CONTEXT_PROPERTIES:
+            elif name in stacking:
                 findings.append(
                     f"предок {ancestor} (объявлен блоком "
                     f"`{declaration.selector}`): свойство "
@@ -4377,7 +4532,7 @@ def _ancestor_trap_findings(path: Path) -> tuple[str, ...]:
                     f"КОНТЕКСТ НАЛОЖЕНИЯ — слой плашки перестаёт сравниваться "
                     f"со слоем панели; {consequence}"
                 )
-            elif name == LAYER_PROPERTY and position_value != "static":
+            elif name == layer and position_value != "static":
                 findings.append(
                     f"предок {ancestor} (слой объявлен блоком "
                     f"`{declaration.selector}`, положение — блоком "
@@ -4595,6 +4750,206 @@ def test_control_a_layer_on_an_in_flow_ancestor_does_not_redden(tmp_path):
         "учит правку ОБХОДИТЬ объявление вместо того, чтобы его не делать:\n"
         + "\n".join(f"  — {line}" for line in findings)
     )
+
+
+# ⚠️ ВРЕМЕННАЯ ТАБЛИЦА ЗАДАЧИ 2 ПЛАНА 10-42: «свойство → начальное значение →
+# ловящее значение». Задача 3 того же плана превращает её в КАНОН с группой и
+# фрагментом отказа; до тех пор она несёт ровно те две колонки, которыми
+# спрашивается разбор ЗНАЧЕНИЯ.
+_INITIAL_VALUE_PROBES = (
+    ("transform", "none", "matrix(1, 0, 0, 1, 0, 0)"),
+    ("perspective", "none", "400px"),
+    ("filter", "none", "blur(2px)"),
+    ("backdrop-filter", "none", "blur(2px)"),
+    ("contain", "none", "paint"),
+    ("will-change", "color", "transform"),
+    ("translate", "none", "0 10px"),
+    ("rotate", "none", "45deg"),
+    ("scale", "none", "1.5"),
+    ("container-type", "normal", "inline-size"),
+    ("content-visibility", "visible", "auto"),
+    ("isolation", "auto", "isolate"),
+    ("mix-blend-mode", "normal", "multiply"),
+    ("opacity", "1", "0.99"),
+    ("transform-style", "flat", "preserve-3d"),
+    ("clip-path", "none", "inset(0)"),
+    ("mask", "none", "linear-gradient(#000, #000)"),
+    ("view-transition-name", "none", "panel-shell"),
+    ("z-index", "auto", "3"),
+)
+
+
+def _first_targeted_rule() -> tuple[str, str, str]:
+    """Первый блок боевой таблицы, целящийся в предка, — одно место сборки."""
+    targeted = [
+        rule for rule in _css_rules_of(_app_css_path()) if _selector_targets(rule[0])
+    ]
+    assert targeted, "блоков предков в настоящей таблице нет — доктóрить нечего"
+    return targeted[0]
+
+
+@pytest.mark.parametrize(
+    "prop, inert",
+    tuple((row[0], row[1]) for row in _INITIAL_VALUE_PROBES),
+    ids=tuple(row[0] for row in _INITIAL_VALUE_PROBES),
+)
+def test_control_an_initial_value_declaration_is_not_a_finding(tmp_path, prop, inert):
+    """ЧТО ДОКАЗЫВАЕТ: объявление свойства с ЕГО НАЧАЛЬНЫМ значением — не находка.
+
+    ⚠️ ЗАМЕР ДО ПРАВКИ, СНЯТЫЙ ИСПОЛНЕНИЕМ (`WR-02`, восьмой круг ревизии):
+    ВОСЕМНАДЦАТЬ имён из девятнадцати давали по ОДНОЙ находке на своём начальном
+    значении. Исключение одно — свойство слоя: его условие СОСТАВНОЕ, и на блоке
+    базового положения ветвь не срабатывает вовсе. Ревизия назвала поимённо
+    ДЕСЯТЬ имён; перебор ВСЕХ начальных значений даёт восемнадцать.
+
+    ⚠️ ПОЧЕМУ ЭТО НЕ «КОНТРОЛЬ НА ЗЕЛЁНОЕ». Правило, краснеющее на объявлении,
+    НИЧЕГО НЕ ДЕЛАЮЩЕМ, учит первого же читателя обходить себя вместо того,
+    чтобы соблюдать: он выключит гейт вместе со свойством. Ровно ради этого
+    класса заведён карве-аут слоя в обычном потоке
+    (`test_control_a_layer_on_an_in_flow_ancestor_does_not_redden`) — для слоя он
+    был сделан, для восемнадцати имён нет.
+    """
+    selector, _body, raw = _first_targeted_rule()
+
+    poisoned = _stylesheet_with_extra_declaration(
+        _stylesheet_source(_app_css_path()), raw, f"{prop}: {inert}"
+    )
+    findings = _ancestor_trap_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+    assert findings == (), (
+        f"ГЕЙТ ПОКРАСНЕЛ НА ОБЪЯВЛЕНИИ `{prop}: {inert}`, ДОПИСАННОМ ПРЕДКУ "
+        f"`{selector}`, — то есть на НАЧАЛЬНОМ значении свойства, которое ни "
+        "содержащего блока, ни контекста наложения не порождает. Гейт ветвится "
+        "ПО ИМЕНИ и значения не разбирает (`WR-02`):\n"
+        + "\n".join(f"  — {line}" for line in findings)
+    )
+
+
+@pytest.mark.parametrize(
+    "prop, trapping",
+    tuple((row[0], row[2]) for row in _INITIAL_VALUE_PROBES),
+    ids=tuple(row[0] for row in _INITIAL_VALUE_PROBES),
+)
+def test_control_a_trapping_value_declaration_is_one_finding(tmp_path, prop, trapping):
+    """ЧТО ДОКАЗЫВАЕТ: разбор значения не проглотил ЛОВЯЩЕЕ значение ни у одного имени.
+
+    ⚠️ ЭТО ВТОРАЯ ПОЛОВИНА ПРАВКИ `WR-02`, И БЕЗ НЕЁ ПЕРВАЯ БЕССМЫСЛЕННА.
+    Предикат бездейственности, возвращающий истину ВСЕГДА, зеленит перебор
+    начальных значений целиком и выключает гейт вместе с ним. Здесь у каждого из
+    девятнадцати имён спрашивается значение, заводящее НАЗВАННОЕ следствие, и
+    требуется РОВНО ОДНА находка.
+
+    ⚠️ СЛУЧАЙ СВОЙСТВА СЛОЯ ДОКТÓРИТСЯ ВМЕСТЕ С НЕБАЗОВЫМ ПОЛОЖЕНИЕМ: его
+    условие СОСТАВНОЕ, и без второй половины ветвь не срабатывает вовсе — тогда
+    контроль замерил бы карве-аут, а не ловушку.
+    """
+    selector, _body, raw = _first_targeted_rule()
+    declaration = (
+        f"position: {_NON_STATIC_POSITION}; {prop}: {trapping}"
+        if prop == LAYER_PROPERTY
+        else f"{prop}: {trapping}"
+    )
+
+    poisoned = _stylesheet_with_extra_declaration(
+        _stylesheet_source(_app_css_path()), raw, declaration
+    )
+    findings = _ancestor_trap_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+    assert len(findings) == 1, (
+        f"ГЕЙТ НЕ ЗАМЕТИЛ `{declaration}`, ДОПИСАННОЕ ПРЕДКУ `{selector}`, ЛИБО "
+        f"НАЗВАЛ РАСХОЖДЕНИЕ ДВАЖДЫ: находок {len(findings)} — {findings}"
+    )
+    assert selector in findings[0], (
+        f"отказ не назвал селектор предка: {findings[0]}"
+    )
+    assert prop in findings[0], (
+        f"отказ не назвал свойство `{prop}`: {findings[0]}"
+    )
+
+
+def test_control_the_intent_property_is_read_by_the_names_in_its_value(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: бездейственность свойства намерения есть ПРЕДИКАТ, а не перечень.
+
+    Обе стороны утверждаются здесь, и порядок несущ: сперва значение, НЕ
+    называющее ни одного имени групп 1 и 2 (`will-change: color`), — находкой не
+    является; затем значение, называющее имя свойства трансформации, —
+    является. Контроль, утверждающий одну сторону, зеленел бы и на предикате,
+    возвращающем истину всегда.
+    """
+    selector, _body, raw = _first_targeted_rule()
+    source = _stylesheet_source(_app_css_path())
+
+    harmless_dir = tmp_path / "harmless"
+    harmless_dir.mkdir()
+    harmless = _ancestor_trap_findings(
+        _scratch_stylesheet(
+            harmless_dir,
+            _stylesheet_with_extra_declaration(
+                source, raw, f"{INTENT_PROPERTY}: color"
+            ),
+        )
+    )
+    assert harmless == (), (
+        f"ГЕЙТ ПОКРАСНЕЛ НА `{INTENT_PROPERTY}: color`, ДОПИСАННОМ ПРЕДКУ "
+        f"`{selector}`: имя `color` не принадлежит ни группе содержащего блока, "
+        f"ни группе контекста наложения, и объявление намерения о нём не "
+        f"порождает НИЧЕГО: {harmless}"
+    )
+
+    trapping_dir = tmp_path / "trapping"
+    trapping_dir.mkdir()
+    trapping = _ancestor_trap_findings(
+        _scratch_stylesheet(
+            trapping_dir,
+            _stylesheet_with_extra_declaration(
+                source, raw, f"{INTENT_PROPERTY}: {CONTAINING_BLOCK_PROPERTIES[0]}"
+            ),
+        )
+    )
+    assert len(trapping) == 1, (
+        f"ГЕЙТ НЕ ЗАМЕТИЛ `{INTENT_PROPERTY}: {CONTAINING_BLOCK_PROPERTIES[0]}` "
+        f"У ПРЕДКА `{selector}` ЛИБО НАЗВАЛ РАСХОЖДЕНИЕ ДВАЖДЫ: находок "
+        f"{len(trapping)}. Объявленное намерение трансформировать заводит "
+        f"содержащий блок ЗАРАНЕЕ — предикат бездейственности проглотил не то: "
+        f"{trapping}"
+    )
+
+
+def test_control_the_layer_initial_value_is_a_finding_at_no_position(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: начальное значение слоя не краснит НИ ПРИ КАКОМ положении.
+
+    ⚠️ ОБЕ ПОЛОВИНЫ СОСТАВНОГО УСЛОВИЯ ПРОВЕРЯЮТСЯ ЗДЕСЬ, И ВТОРАЯ — НОВАЯ.
+    Карве-аут `test_control_a_layer_on_an_in_flow_ancestor_does_not_redden`
+    закрывает случай «слой объявлен, положение базовое». Случай «слой объявлен
+    НАЧАЛЬНЫМ значением при НЕБАЗОВОМ положении» не закрывал никто: до правки
+    плана 10-42 гейт краснел на `z-index: auto`, то есть на объявлении, которое
+    ровно ничего не меняет — `auto` и есть значение по умолчанию.
+    """
+    selector, _body, raw = _first_targeted_rule()
+    source = _stylesheet_source(_app_css_path())
+
+    for folder, label, declaration in (
+        ("static", "базовое положение", f"{LAYER_PROPERTY}: auto"),
+        (
+            "non-static",
+            "небазовое положение",
+            f"position: {_NON_STATIC_POSITION}; {LAYER_PROPERTY}: auto",
+        ),
+    ):
+        scratch_dir = tmp_path / folder
+        scratch_dir.mkdir()
+        findings = _ancestor_trap_findings(
+            _scratch_stylesheet(
+                scratch_dir,
+                _stylesheet_with_extra_declaration(source, raw, declaration),
+            )
+        )
+        assert findings == (), (
+            f"ГЕЙТ ПОКРАСНЕЛ НА `{declaration}`, ДОПИСАННОМ ПРЕДКУ `{selector}` "
+            f"({label}): `auto` есть НАЧАЛЬНОЕ значение свойства слоя, и своего "
+            f"контекста наложения оно не заводит ни при каком положении:\n"
+            + "\n".join(f"  — {line}" for line in findings)
+        )
 
 
 def _stylesheet_with_extra_declaration(source: str, raw: str, declaration: str) -> str:
