@@ -125,10 +125,53 @@ async def create_schedule(
             detail="Group not found",
         )
 
-    next_run = compute_next_run_at(
-        days_of_week=data.days_of_week,
-        times_of_day=data.times_of_day,
-        tz_name=data.timezone,
+    # D-08 НА ВХОДЕ СОЗДАНИЯ — последнее место записи, которое оставалось вне
+    # общего правила полноты. Обновление и тумблер этого же файла свели к
+    # `is_schedule_complete` раньше (WR-05), а создание — нет, и дыра была ровно
+    # в пропущенном здесь `is_active`.
+    #
+    # ЧТО ПРОИСХОДИЛО. Аргумент `is_active` в вызов не передавался вовсе, поэтому
+    # `BaseRepository.create` строил модель с УМОЛЧАНИЕМ КОЛОНКИ — `default=True`
+    # (`app/models/schedule.py`). Рядом `compute_next_run_at` возвращает None на
+    # пустом списке дней или времён. Тело запроса с пустым `days_of_week` —
+    # законное по схеме, `CreateScheduleRequest` объявляет его `= []` и ничем не
+    # ограничивает — давало строку `is_active=true` при `next_run_at=NULL`.
+    #
+    # ПОЧЕМУ ЭТО НЕ «ПРОСТО НЕАККУРАТНОЕ ПОЛЕ». Такая строка МЕРТВА НАВСЕГДА и
+    # молча. Отбор к отправке фильтрует `is_active = true AND next_run_at <= now`,
+    # а `NULL <= now` в SQL не истинно никогда — строка не выбирается. Ветка же,
+    # которая `next_run_at` ПЕРЕСЧИТЫВАЕТ, живёт ВНУТРИ цикла по уже выбранным
+    # строкам (`app/application/scheduling/use_cases.py`), то есть на
+    # невыбираемой строке не выполняется тоже: самовосстановления нет. Ни
+    # ограничения в базе, ни чинящей задачи в проекте не существует, а сводка
+    # инцидентов ищет ПРОСРОЧЕННЫЕ (`next_run_at.is_not(None)`) и такую строку
+    # по построению не видит. Пользователю при этом показывается ВКЛЮЧЁННОЕ
+    # расписание, которое не отправит ничего и никогда.
+    #
+    # ПОЧЕМУ НЕ ОТКАЗ (422). Неполнота — законное промежуточное состояние, а не
+    # ошибка запроса: страничный создатель сохраняет неполное расписание
+    # выключенным, и обновление этого же JSON-API — тоже. Отказ здесь стал бы
+    # ТРЕТЬИМ поведением на одно правило.
+    #
+    # Согласованность двух правил держится по построению: `is_schedule_complete`
+    # требует непустых дней И времён, а `compute_next_run_at` возвращает None
+    # ровно на пустых днях ИЛИ временах — то есть под пройденной проверкой
+    # полноты момент запуска пустым не бывает. Расхождение впредь ловит
+    # tests/test_routes/test_schedules_api_create_completeness.py.
+    complete = is_schedule_complete(
+        data.account_id,
+        data.group_ids,
+        data.days_of_week,
+        data.times_of_day,
+    )
+    next_run = (
+        compute_next_run_at(
+            days_of_week=data.days_of_week,
+            times_of_day=data.times_of_day,
+            tz_name=data.timezone,
+        )
+        if complete
+        else None
     )
 
     schedule_repo = ScheduleRepository(db)
@@ -139,6 +182,7 @@ async def create_schedule(
         days_of_week=data.days_of_week,
         times_of_day=data.times_of_day,
         timezone=data.timezone,
+        is_active=complete,
         next_run_at=next_run,
     )
     return schedule
