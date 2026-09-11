@@ -2,7 +2,7 @@
 status: investigating
 trigger: "Расписание для Telegram не сработало в 17:30 по Москве (14:30 UTC); check_schedules выполняется, но возвращает due_count: 0."
 created: 2026-08-03
-updated: 2026-08-03T00:00:15Z
+updated: 2026-09-11T06:26:15Z
 audit_acknowledged:
   milestone: v2.0
   at: 2026-08-25
@@ -21,11 +21,30 @@ audit_acknowledged:
 
 ## Current Focus
 
-- hypothesis: The production schedule was either (A) not selected because its persisted is_active/next_run_at state failed the due predicate, or (B) selected and advanced but emitted no task because its account was absent/inactive, group_ids was empty, or the cached billing decision denied sending.
-- test: Run the read-only schedule/account/balance join supplied in the checkpoint for the affected 17:30 Moscow schedule, and read Redis key balance:<user_id> if present.
-- expecting: A next_run_at later than the missed occurrence together with zero tasks confirms selection plus suppression; an unchanged next_run_at at/before 14:30 UTC confirms the due query failed to return the row. The joined account/group/balance fields and Redis value discriminate the suppression branches.
-- next_action: Human action required: return the read-only SQL row and optional Redis balance cache value from production; do not apply a code fix until one branch is observed.
-- bug_class: bohrbug (leading classification; due_count=0 is deterministic for the persisted schedule at a known timestamp)
+- hypothesis: >-
+    SPLIT INTO TWO, because the production census of 2026-09-11 answered one question and
+    raised another. (1) FOR THE 2026-08-03 OCCURRENCE — UNDECIDABLE. Dispatch is healthy today
+    (34572 sends in 7 days, latest 2s before measurement), every account is active, no schedule
+    is overdue, and the 17:30 Moscow row of that day cannot be identified five weeks on. Neither
+    branch (A) nor (B) can be confirmed for that occurrence by any measurement still available.
+    (2) A LIVE DEFECT OF THE SAME SHAPE WAS FOUND WHILE LOOKING — sched=48 is is_active=true
+    with next_run_at=NULL and days_of_week=[]; compute_next_run_at returns None on an empty day
+    list, the due predicate never matches NULL, and the suppression branch that would recompute
+    next_run_at never runs because the row is never selected. The row is permanently dead while
+    the interface shows it active.
+- test: >-
+    For (2): confirm no constraint, repair job, or interface warning forbids or surfaces
+    `is_active = true AND next_run_at IS NULL`, and decide the owner's repair for sched=48.
+- expecting: >-
+    For (1): nothing further — the evidence is gone, and any root cause recorded for it would be
+    inference. For (2): a gate that makes the dead combination impossible or visible.
+- next_action: >-
+    OWNER DECISION, not investigation. Either close this session as not-reproducible and open a
+    fresh one scoped to the sched=48 class, or re-scope this session to that class. Separately,
+    sched=48 is a real production row that will never fire until its days_of_week is set.
+- bug_class: >-
+    (1) unclassifiable — no longer observable. (2) bohrbug — deterministic and permanent for any
+    row that reaches the state.
 - reasoning_checkpoint:
 - tdd_checkpoint:
 
@@ -113,6 +132,67 @@ audit_acknowledged:
 - timestamp: 2026-08-03T14:31:05Z
   observation: check_schedules logs now=2026-08-03T14:31:05+00:00 and due_count=0.
   implication: Failure occurs before dispatch to the Telegram queue.
+
+
+- timestamp: 2026-09-11T06:26:15Z
+  checked: >-
+    Read-only production census requested by the 2026-08-03 checkpoint, executed against the
+    live database (working tree and prod share one DATABASE_URL). 104 schedules joined to
+    messenger_accounts and ads; SendLog counted by age.
+  found: >-
+    DISPATCH IS HEALTHY TODAY. 147936 send-log rows total; 4851 in the last 24h, 34572 in the
+    last 7 days. The most recent row landed 2 seconds before the measurement (sched=43). Every
+    messenger_account is status=active (max 4, tg_user 4, wa 4) — the account-status suppression
+    sub-branch of hypothesis (B) does not hold on today's tree. Zero schedules are overdue
+    (is_active AND next_run_at <= now), and zero active schedules are cut by the
+    account/ad/group filter.
+  implication: >-
+    The originally reported symptom (due_count=0 while a schedule was believed active) is NOT
+    reproducible on today's tree by either branch as originally framed.
+
+- timestamp: 2026-09-11T06:26:15Z
+  checked: The specific 17:30 Europe/Moscow row named by the original report.
+  found: >-
+    Two schedules now carry a 17:3x time — sched=88 (times 09:00, 12:30, 14:30, 17:30, tz
+    Europe/Moscow, tg_user/active, 63 groups, next_run_at 2026-09-11T09:30Z) and sched=41
+    (17:33, tg_user/active, 18 groups, next_run_at 2026-09-11T07:45Z). BOTH are healthy and
+    advancing. Whether either IS the row from 2026-08-03 cannot be established: schedules carry
+    no creation stamp in this schema and five weeks have passed.
+  implication: >-
+    ⚠️ THE ORIGINAL INCIDENT'S EVIDENCE HAS EXPIRED. Branch (A) vs (B) cannot be discriminated
+    FOR THE 2026-08-03 OCCURRENCE by any measurement available today. Any root cause recorded
+    for that occurrence would be inference, not observation, and this session must not pretend
+    otherwise.
+
+- timestamp: 2026-09-11T06:26:15Z
+  checked: >-
+    Census cross-check of is_active against next_run_at, looking for rows the due predicate can
+    never select.
+  found: >-
+    ANOMALY, AND IT IS A LIVE INSTANCE OF BRANCH (A). next_run_at IS NULL on 40 rows while
+    is_active=False on 39 — exactly one row is ACTIVE with a NULL next_run_at: sched=48
+    (ad=14, acct=28 max/active, 1 group, times ['09:00','15:15'], tz Europe/Moscow) and
+    CRUCIALLY days_of_week=[] — an EMPTY day list.
+  implication: >-
+    This row can never be dispatched and can never repair itself. The due query filters
+    `is_active = true AND next_run_at <= now`; in SQL `NULL <= now` is never true, so the row is
+    never selected. Because it is never selected, the suppression branch of
+    collect_due_schedules — the only code path that RECOMPUTES next_run_at — never runs on it
+    either. The row is permanently and silently dead while the interface shows it as active.
+
+- timestamp: 2026-09-11T06:26:15Z
+  checked: app/services/schedule_service.py compute_next_run_at, by reading the source.
+  found: >-
+    `if not days_of_week or not times_of_day: return None` (lines 16-17). An empty day list
+    yields None, which is persisted to schedules.next_run_at.
+  implication: >-
+    MECHANISM IDENTIFIED for the sched=48 class: a schedule saved active with an empty
+    days_of_week gets next_run_at=NULL and falls out of the due predicate forever. The gap is
+    that nothing forbids the combination `is_active=true` + `next_run_at IS NULL`, and nothing
+    surfaces it — neither a constraint, nor a periodic repair, nor an interface warning.
+    ⚠️ THIS IS NOT PROOF THAT THE 2026-08-03 OCCURRENCE HAD THIS CAUSE: that row's
+    days_of_week/next_run_at at the time were never captured. It is a live defect of the same
+    SHAPE the session was hunting, found while looking for that one.
 
 ## Eliminated
 
