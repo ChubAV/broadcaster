@@ -1,4 +1,3 @@
-import re
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -13,7 +12,12 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
-from app.services.schedule_rules import is_schedule_complete
+from app.services.schedule_rules import (
+    DAY_OF_WEEK_MAX,
+    DAY_OF_WEEK_MIN,
+    is_schedule_complete,
+    is_valid_time_of_day,
+)
 from app.services.schedule_service import compute_next_run_at
 from app.pages import notices
 from app.pages.common import (
@@ -104,11 +108,15 @@ OWNERSHIP_ACCOUNT_DENIED = "account"
 # реестру. Довод «в адрес едет признак, а не текст» никуда не делся — он стал
 # свойством реестра, а не договорённостью двух файлов.
 
-# Формат значения времени: два числа через двоеточие в допустимых диапазонах.
-# Проверка стоит ДО вызова compute_next_run_at, который разбирает строку
-# `int(parts[0])` / `parts[1]` без всякой защиты: любое значение не этого
-# формата давало 500 на прямом POST мимо браузера (T-02-24, Pitfall 9).
-_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+# ⚠️ ФОРМАТ ВРЕМЕНИ И ГРАНИЦЫ ДНЯ ПЕРЕЕХАЛИ В `app/services/schedule_rules.py`.
+# Здесь они жили с T-02-24 и были ЕДИНСТВЕННЫМ местом, где проект вообще знал,
+# какие значения `compute_next_run_at` умеет исполнять, — а JSON-вход того же
+# продукта не знал этого вовсе и отвечал 500 на «abc» и мёртвой строкой на день
+# вне диапазона. Ровно тот класс, ради которого нейтральный модуль и заведён.
+#
+# ЧТО ОСТАЛОСЬ ЗДЕСЬ И ПОЧЕМУ. Страничная ПОЛИТИКА: негодное значение
+# отбрасывается, годные сохраняются (см. `_clean_times` / `_clean_ints`). Она
+# принадлежит форме, а не правилу, и наверх не уезжает.
 
 # Время, которым заполняется только что добавленная таблетка. Пустое значение
 # хранить нельзя: обработчик отбрасывает пустые строки, и «+ ВРЕМЯ» без JS не
@@ -216,7 +224,7 @@ def _clean_times(values: list[str]) -> list[str]:
     ValueError); отбрасывание, а не отказ, по той же причине: одно испорченное
     значение не повод потерять остальные.
     """
-    return [v for v in values if isinstance(v, str) and _TIME_RE.match(v.strip())]
+    return [v for v in values if isinstance(v, str) and is_valid_time_of_day(v.strip())]
 
 
 def _clean_ints(values: list[str], low: int | None = None, high: int | None = None) -> list[int]:
@@ -851,7 +859,9 @@ async def schedules_create(
     # Фильтрация ДО приведения типов и ДО вычисления следующего запуска:
     # клиентским данным в этой фазе не верят (D-13).
     group_ids = _clean_ints(form_data.getlist("group_ids"))
-    days_of_week = _clean_ints(form_data.getlist("days_of_week"), low=0, high=6)
+    days_of_week = _clean_ints(
+        form_data.getlist("days_of_week"), low=DAY_OF_WEEK_MIN, high=DAY_OF_WEEK_MAX
+    )
     times_of_day = _clean_times(form_data.getlist("times_of_day"))
 
     available = await _groups_of_account(db, user.id, account_id)
@@ -943,7 +953,9 @@ async def schedules_update(
 
     form_data = await request.form()
     group_ids = _clean_ints(form_data.getlist("group_ids"))
-    days_of_week = _clean_ints(form_data.getlist("days_of_week"), low=0, high=6)
+    days_of_week = _clean_ints(
+        form_data.getlist("days_of_week"), low=DAY_OF_WEEK_MIN, high=DAY_OF_WEEK_MAX
+    )
     times_of_day = _clean_times(form_data.getlist("times_of_day"))
 
     available = await _groups_of_account(db, user.id, account_id)

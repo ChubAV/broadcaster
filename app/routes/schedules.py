@@ -10,10 +10,82 @@ from app.dependencies import get_current_user_id, get_db
 from app.models.messenger_account import MessengerAccount
 from app.repositories.ad import AdRepository
 from app.repositories.schedule import ScheduleRepository
-from app.services.schedule_rules import is_schedule_complete, owned_group_ids
+from app.services.schedule_rules import (
+    DAY_OF_WEEK_MAX,
+    DAY_OF_WEEK_MIN,
+    is_schedule_complete,
+    is_valid_day_of_week,
+    is_valid_time_of_day,
+    owned_group_ids,
+)
 from app.services.schedule_service import compute_next_run_at
 
 router = APIRouter(prefix="/api/schedules", tags=["schedules"])
+
+
+# ─── ОБЛАСТЬ ЗНАЧЕНИЙ ДНЕЙ И ВРЕМЁН НА JSON-ВХОДЕ ───────────────────────────
+#
+# ⚠️ ЭТОГО НЕ БЫЛО ЗДЕСЬ ВОВСЕ, И ПОСЛЕДСТВИЯ БЫЛИ РАЗНЫЕ ПО ТЯЖЕСТИ.
+# Правило «какие значения система умеет исполнять» жило только на страничном
+# входе (`_TIME_RE`, `_clean_ints(low=0, high=6)`), а испорченное значение
+# отсюда доезжало прямо в `compute_next_run_at`:
+#
+#   - ВРЕМЯ ломало разбор — `int(parts[0])` / `parts[1]` идут без защиты, и
+#     «abc», «25:00», «12:99» давали 500. Строка при этом не писалась.
+#
+#   - ДЕНЬ ВНЕ ДИАПАЗОНА разбор ПРОХОДИЛ и потому был страшнее: список `[9]`
+#     НЕПУСТ, поэтому `is_schedule_complete` отвечал True, а
+#     `compute_next_run_at` не встречал девятого дня недели в своём окне
+#     day_offset 0..7 и возвращал None. Получалась строка `is_active=true` при
+#     `next_run_at=NULL` — В ТОЧНОСТИ форма промышленной строки sched=48, ЧЕРЕЗ
+#     ЭТОТ ЖЕ МАРШРУТ, уже после правки, которая его закрывала. Такая строка
+#     мертва навсегда и молча: отбор фильтрует `is_active AND next_run_at <= now`,
+#     а `NULL <= now` в SQL не истинно никогда, и пересчёт `next_run_at` идёт
+#     только по УЖЕ ВЫБРАННЫМ строкам. Обновление тем же путём УБИВАЛО живое
+#     расписание, а не только рождало мёртвое.
+#
+# ⚠️ ЗАЯВЛЕНИЕ ПРЕЖНЕЙ ПРАВКИ БЫЛО ШИРЕ ФАКТА. Комментарий ниже утверждал, что
+# согласованность правил держится по построению, ибо `compute_next_run_at`
+# возвращает None «ровно на пустых днях ИЛИ временах». Пустота — не единственное
+# такое условие. Теперь утверждение ВЕРНО, но лишь потому, что вход отсекает
+# значения не той области ДО расчёта; сам по себе, без этой отсечки, оно ложно.
+#
+# ПОЧЕМУ ОТКАЗ (422), А НА НЕПОЛНОТУ — НЕ ОТКАЗ. Это ответы на разные вопросы.
+# Неполное расписание — законное промежуточное состояние черновика, его
+# сохраняют выключенным и страница, и обновление этого же API. А «abc» — не
+# время, `9` — не день недели: такого состояния в предметной области нет вовсе.
+# Этот вход на испорченное ЗНАЧЕНИЕ ПОЛЯ отказывает с самого начала (незнакомый
+# `timezone`) и отказывает на явном null (CR-03) — здесь то же поведение, а не
+# третье.
+#
+# ПОЧЕМУ НЕ ОТБРАСЫВАНИЕ, КАК НА СТРАНИЦЕ. Форма шлёт повторяющиеся поля и не
+# умеет сказать, какое из них отброшено, — потому страница и отбрасывает.
+# JSON-клиент прислал ОДИН документ: сохранить его наполовину значило бы отдать
+# 201 на расписание, времена которого клиент не присылал.
+
+
+def _reject_out_of_range_days(values: list[int] | None) -> list[int] | None:
+    if values is None:
+        return values
+    bad = [value for value in values if not is_valid_day_of_week(value)]
+    if bad:
+        raise ValueError(
+            f"День недели вне диапазона {DAY_OF_WEEK_MIN}..{DAY_OF_WEEK_MAX} "
+            f"(0 — понедельник): {bad}"
+        )
+    return values
+
+
+def _reject_malformed_times(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return values
+    bad = [value for value in values if not is_valid_time_of_day(value)]
+    if bad:
+        raise ValueError(
+            f"Время должно быть в формате ЧЧ:ММ от 00:00 до 23:59 "
+            f"(час — двумя цифрами): {bad}"
+        )
+    return values
 
 
 class CreateScheduleRequest(BaseModel):
@@ -30,6 +102,16 @@ class CreateScheduleRequest(BaseModel):
         if v not in VALID_TIMEZONES:
             raise ValueError(f"Invalid timezone: {v}")
         return v
+
+    @field_validator("days_of_week")
+    @classmethod
+    def validate_days_of_week(cls, v: list[int]) -> list[int]:
+        return _reject_out_of_range_days(v)
+
+    @field_validator("times_of_day")
+    @classmethod
+    def validate_times_of_day(cls, v: list[str]) -> list[str]:
+        return _reject_malformed_times(v)
 
 
 class UpdateScheduleRequest(BaseModel):
@@ -61,6 +143,20 @@ class UpdateScheduleRequest(BaseModel):
         if v is not None and v not in VALID_TIMEZONES:
             raise ValueError(f"Invalid timezone: {v}")
         return v
+
+    # Валидаторы одного поля запускаются в ПОРЯДКЕ ОБЪЯВЛЕНИЯ, поэтому явный
+    # null отсекается выше и сюда доезжает либо список, либо отсутствие ключа.
+    # Проверка на None всё равно стоит: она не даёт порядку объявления стать
+    # несущей конструкцией, о которой знает только автор.
+    @field_validator("days_of_week")
+    @classmethod
+    def validate_days_of_week(cls, v: list[int] | None) -> list[int] | None:
+        return _reject_out_of_range_days(v)
+
+    @field_validator("times_of_day")
+    @classmethod
+    def validate_times_of_day(cls, v: list[str] | None) -> list[str] | None:
+        return _reject_malformed_times(v)
 
 
 class ScheduleResponse(BaseModel):
@@ -153,11 +249,23 @@ async def create_schedule(
     # выключенным, и обновление этого же JSON-API — тоже. Отказ здесь стал бы
     # ТРЕТЬИМ поведением на одно правило.
     #
-    # Согласованность двух правил держится по построению: `is_schedule_complete`
-    # требует непустых дней И времён, а `compute_next_run_at` возвращает None
-    # ровно на пустых днях ИЛИ временах — то есть под пройденной проверкой
-    # полноты момент запуска пустым не бывает. Расхождение впредь ловит
-    # tests/test_routes/test_schedules_api_create_completeness.py.
+    # ⚠️ СОГЛАСОВАННОСТЬ ДВУХ ПРАВИЛ — С ОГОВОРКОЙ, КОТОРОЙ ЗДЕСЬ РАНЬШЕ НЕ БЫЛО.
+    # Прежний текст этого абзаца утверждал, что согласованность держится по
+    # построению, ибо `compute_next_run_at` возвращает None «ровно на пустых днях
+    # ИЛИ временах». ЭТО БЫЛО НЕВЕРНО: функция возвращает None и на НЕПУСТОМ
+    # списке дней вне 0..6 — кандидатов в её окне не находится вовсе. То есть
+    # форма мёртвой строки оставалась достижима через этот самый маршрут и после
+    # правки, закрывавшей его.
+    #
+    # Утверждение верно СЕЙЧАС и держится не на самих правилах, а на том, что
+    # область значений отсечена ВЫШЕ — валидаторами `CreateScheduleRequest`
+    # (`_reject_out_of_range_days`, `_reject_malformed_times`), то есть ДО того,
+    # как значение доедет сюда. Расхождение впредь ловят
+    # tests/test_routes/test_schedules_api_create_completeness.py (полнота) и
+    # tests/test_routes/test_schedules_api_value_domain.py (область значений), а
+    # последним рубежом стоит ограничение СУБД
+    # `ck_schedules_active_requires_next_run` (ревизия 0022), потому что
+    # прикладная проверка делает состояние недостижимым, но не невозможным.
     complete = is_schedule_complete(
         data.account_id,
         data.group_ids,
