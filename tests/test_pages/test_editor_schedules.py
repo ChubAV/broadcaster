@@ -19,6 +19,7 @@ tests/test_pages/test_editor_schedules.py -q` завершается с кодо
   (T-02-24, T-02-25).
 """
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import re
@@ -29,7 +30,7 @@ from urllib.parse import urlencode
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import AD_STATUS_PUBLISHED
@@ -1515,7 +1516,20 @@ async def test_editor_delete_returns_oob_nodes(
     db_session: AsyncSession,
     owner: User,
 ):
-    """Ответ htmx-пути — ФРАГМЕНТ из трёх внеполосных узлов, а не документ."""
+    """Ответ htmx-пути — ФРАГМЕНТ из трёх внеполосных узлов, а не документ.
+
+    ⚠️ УЗЛОВ СТАЛО ЧЕТЫРЕ, И СТРОКА ВЫШЕ ОСТАВЛЕНА ДОСЛОВНО, А НЕ ВЫЧЕРКНУТА
+    (идиома D-30/D-32). Ошибкой она не была — она верна для дерева, на котором
+    писалась. ИСТОЧНИК РАСХОЖДЕНИЯ: план 10-50 добавил ЧЕТВЁРТЫЙ узел — сводку
+    объявления `#ad-summary` (гэп `G-10-6`, обход `walkthrough_3` от
+    2026-09-11).
+
+    ⚠️ УЗЛОВ СНЯТИЯ ПО-ПРЕЖНЕМУ ДВА, И ЧЕТВЁРТЫЙ УЗЕЛ ИХ ЧИСЛА НЕ СДВИНУЛ —
+    это утверждается ПРЯМО, а не выводится читателем из того, что правило
+    зелено. Снятие есть форма подмены (`hx-swap-oob="delete"`), и узлов этой
+    формы ровно два: карточка удалённого расписания и осиротевшая панель
+    подтверждения. Сводка приезжает подменой УЗЛА, а не снятием.
+    """
     ad = await _seed_ad(db_session, owner.id)
     account = await _seed_account(db_session, owner.id)
     schedule = await _seed_schedule(db_session, ad.id, account.id)
@@ -1538,10 +1552,26 @@ async def test_editor_delete_returns_oob_nodes(
     assert 'hx-swap-oob="innerHTML:#sched-count"' in body, (
         "линейка счётчика не приезжает подменой СОДЕРЖИМОГО долгоживущей области"
     )
+    assert f'id="{AD_SUMMARY_NODE_ID}"' in body, (
+        "узла сводки объявления в ответе нет — линейка списка и сводка "
+        "предпросмотра снова разойдутся до следующей полной загрузки (G-10-6)"
+    )
     removals = body.count('hx-swap-oob="delete"')
     assert removals == 2, (
         f"узлов снятия в ответе {removals}, ожидалось два (карточка и "
         f"осиротевшая панель): {body!r}"
+    )
+    nodes = _oob_nodes(body)
+    assert len(nodes) == 4, (
+        f"внеполосных узлов в ответе {len(nodes)} ({[n.identifier for n in nodes]}), "
+        f"ожидалось четыре: два снятия, линейка счётчика и сводка объявления: "
+        f"{body!r}"
+    )
+    assert [node.depth for node in nodes] == [0, 0, 0, 0], (
+        f"не все узлы ответа — прямые дети тела: "
+        f"{[(n.identifier, n.depth) for n in nodes]}. Вложенному узлу рантайм "
+        f"МОЛЧА снимает признак внеполосной подмены "
+        f"(`allowNestedOobSwaps: false`)"
     )
 
 
@@ -2824,4 +2854,294 @@ async def test_the_summary_node_is_a_top_level_child_of_the_response(
         f"признак внеполосной подмены (`allowNestedOobSwaps: false`): ответ "
         f"остаётся двухсотым, узел в теле присутствует, а на экране не "
         f"меняется ничего. Тело: {body!r}"
+    )
+
+
+# --- Фаза 10, план 10-50, задача 3: зубы четвёртого узла ----------------------
+#
+# ⚠️ ПРАВИЛА НИЖЕ УТВЕРЖДАЮТ ПОВЕДЕНИЕ И РАЗМЕТКУ ПОРОЗНЬ, И ГРАНИЦА МЕЖДУ НИМИ
+# НАЗЫВАЕТСЯ, А НЕ ПОДРАЗУМЕВАЕТСЯ. Единственность источника разметки —
+# свойство ДЕРЕВА (две копии разошлись бы молча); цена пути деградации и
+# неприкосновенность ветки перехода — свойства ИСПОЛНЕНИЯ, и предъявляются они
+# счётом запросов и телом ответа, а не вхождением подстроки.
+
+AD_SUMMARY_RULE_SOURCE = "ads/includes/summary.html"
+
+# Признаков ДВА, и второй — не осторожность, а измерение. Первый — ПОДПИСЬ
+# строки сводки; сама по себе она могла бы встретиться в прозе о сводке. Второй
+# — ИМЯ ВЕЛИЧИНЫ, которую сводка печатает: это КОНТРАКТ с контекстом редактора,
+# а не подпись, — переводу и правкам UI он не подлежит. Признаком считается
+# СОВПАДЕНИЕ ОБОИХ: подпись без величины — проза о сводке, величина без подписи
+# — соседний экран (`dashboard/includes/upcoming_row.html` печатает тот же
+# момент запуска СВОЕЙ разметкой; это другой экран и отдельное UI-ревью, и в
+# множество источников сводки объявления он НЕ ВХОДИТ).
+AD_SUMMARY_RULE_MARKERS = ("Ближайший запуск", "editor.next_run_at")
+
+# ⚠️ МЕСТ ВКЛЮЧЕНИЯ ТРИ, И ЧИСЛО ПОСТАВЛЕНО ЗАМЕРОМ ДЕРЕВА, А НЕ УНАСЛЕДОВАНО.
+# План 10-50 объявлял ДВА («при двух местах включения»), и это число было верно
+# ДО него в другом смысле: два места существовали до появления четвёртого узла
+# (страница редактора и ответ автосохранения). Настоящий план добавил ТРЕТЬЕ, и
+# перечень назван поимённо — правило, утверждающее число, которого в дереве нет,
+# краснело бы на верном дереве.
+AD_SUMMARY_RULE_USERS = (
+    "ads/form.html",
+    "ads/includes/autosave_response.html",
+    "ads/partials/sched_delete_response.html",
+)
+
+AD_SUMMARY_RULE_INCLUDE = re.compile(
+    r"\{%-?\s*include\s+['\"]" + re.escape(AD_SUMMARY_RULE_SOURCE) + r"['\"]"
+)
+
+JINJA_COMMENT_RE = re.compile(r"\{#.*?#\}", re.S)
+
+# Три запроса ОТЛОЖЕННОЙ СБОРКИ фрагмента, названные СИГНАТУРОЙ СВОЕГО SQL.
+#
+# ⚠️ ГРАНИЦА ПРАВИЛА НАЗЫВАЕТСЯ ЗДЕСЬ ЦЕЛИКОМ: оно считает запросы ОДНОГО
+# обработчика на ОДНОМ пути и не утверждает НИЧЕГО о числе запросов проекта
+# вообще. Наблюдение идёт по событию исполнения ORM ТОЙ ЖЕ сессии, которую
+# обработчик получает подменой зависимости, — то есть меряется ИСПОЛНЕНИЕ, а не
+# исходник: чтение, тихо переехавшее наружу отложенной сборки, обязано краснить
+# прогон, и обещанием `IN-03` быть перестало.
+#
+# ⚠️ СИГНАТУРА СЧЁТА СУЖЕНА ДО НАЧАЛА ЗАПРОСА, И ЭТО ЗАМЕР, А НЕ ОСТОРОЖНОСТЬ.
+# Первая форма («в тексте встречается `count(`») краснила правило на ВЕРНОМ
+# дереве: путь деградации исполняет счётчики боковой навигации шелла
+# (`count(*) AS ads, … AS schedules, … AS history`), к отложенной сборке
+# отношения не имеющие. Это тот же класс дефекта прибора, что расхождение Р-1
+# обхода — СЕЛЕКТОР ШИРЕ ПРЕДМЕТА, — и он назван здесь, потому что был
+# ИЗМЕРЕН на этом самом правиле, а не предположен.
+DEFERRED_READ_SIGNATURES = {
+    "счёт расписаний объявления": lambda sql: sql.startswith(
+        "SELECT count(schedules.id)"
+    ),
+    "строка объявления владельца": lambda sql: sql.startswith("SELECT ads."),
+    "ближайший момент запуска": lambda sql: sql.startswith(
+        "SELECT schedules.next_run_at"
+    ),
+}
+
+
+@contextmanager
+def _observed_statements(db: AsyncSession):
+    """Тексты запросов, ИСПОЛНЕННЫХ сессией внутри блока.
+
+    Наблюдатель снимается в `finally`: переживший свой блок, он считал бы
+    запросы соседнего правила и давал бы отказ, не относящийся к предмету.
+    """
+    seen: list[str] = []
+
+    def _record(state) -> None:
+        seen.append(str(state.statement))
+
+    event.listen(db.sync_session, "do_orm_execute", _record)
+    try:
+        yield seen
+    finally:
+        event.remove(db.sync_session, "do_orm_execute", _record)
+
+
+def _deferred_reads_in(statements: list[str]) -> set[str]:
+    """Имена тех отложенных чтений, чья сигнатура нашлась среди исполненных."""
+    return {
+        name
+        for name, matches in DEFERRED_READ_SIGNATURES.items()
+        if any(matches(sql) for sql in statements)
+    }
+
+
+def test_the_ad_summary_markup_has_exactly_one_source() -> None:
+    """Разметка сводки объявления существует РОВНО ОДНИМ источником.
+
+    Правило из двух половин, и убрать можно только обе сразу — форма взята у
+    `test_the_schedule_counter_markup_has_exactly_one_source`
+    (`tests/test_templates/test_htmx_markup_gates.py`) и по тому же основанию.
+
+    (i)  Файл, несущий разметку сводки собственным текстом, ровно один, и это
+         именно файл общего источника. Две копии расходятся МОЛЧА: статус
+         ответа останется двухсотым, консоль — чистой, и человек видел бы РАЗНОЕ
+         в зависимости от того, перезагрузил он страницу или удалил расписание,
+         — то есть РОВНО гэп `G-10-6`, только внесённый заново разметкой вместо
+         контекста.
+    (ii) АНТИВАКУУМНАЯ ПОЛОВИНА, И ОНА СТОИ́Т ПЕРВОЙ: включающих файлов НЕ НОЛЬ,
+         и каждый назван поимённо. Без неё «источник один» зеленело бы на
+         источнике, которого не включает никто: ноль копий — тоже «не больше
+         одной».
+    """
+    sources_by_template = {
+        path.relative_to(TEMPLATES_DIR).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(TEMPLATES_DIR.rglob("*.html"))
+    }
+
+    # --- АНТИВАКУУМ ПЕРВЫМ -------------------------------------------------
+    assert AD_SUMMARY_RULE_USERS, (
+        "перечень мест включения сводки ПУСТ — правило зелено вакуумом и "
+        "перестало отличать соблюдение от поломки"
+    )
+    not_including = [
+        user
+        for user in AD_SUMMARY_RULE_USERS
+        if user not in sources_by_template
+        or not AD_SUMMARY_RULE_INCLUDE.search(
+            JINJA_COMMENT_RE.sub("", sources_by_template[user])
+        )
+    ]
+    assert not not_including, (
+        f"место отрисовки сводки объявления не включает общий источник: "
+        f"{not_including} — половина (i) правила зелена и от того, что сводку "
+        f"сняли отовсюду, поэтому все точки отрисовки утверждаются поимённо"
+    )
+
+    sources = sorted(
+        rel
+        for rel, source in sources_by_template.items()
+        if all(
+            marker in JINJA_COMMENT_RE.sub("", source)
+            for marker in AD_SUMMARY_RULE_MARKERS
+        )
+    )
+    assert sources == [AD_SUMMARY_RULE_SOURCE], (
+        f"разметка сводки объявления найдена в файлах {sources}, а источник "
+        f"обязан быть один — {AD_SUMMARY_RULE_SOURCE!r}: пока копий больше "
+        f"одной, правка формулировки или состава строк в любой из них разводит "
+        f"СВОДКУ ПОСЛЕ УДАЛЕНИЯ СО СВОДКОЙ ПОСЛЕ ПЕРЕЗАГРУЗКИ, и разойдутся они "
+        f"МОЛЧА"
+    )
+
+
+# Признак запроса от слоя письма, ПИСЬМЕННО. Литерал стои́т здесь, а не берётся
+# у фикстуры `htmx_client`, по ИЗМЕРЕННОМУ основанию: фикстура ставит заголовок
+# в УМОЛЧАНИЯ КЛИЕНТА и возвращает ТОТ ЖЕ объект, что `authed_client`, — то есть
+# правило, запросившее обе фикстуры, получило бы признак htmx на ОБОИХ своих
+# запросах, и половина деградации мерила бы путь htmx (замер 2026-09-11: путь
+# «без htmx» ответил 200 с фрагментом). Форма перенята у
+# `tests/test_pages/test_confirm_delete_transport.py`, где литерал стои́т по
+# тому же основанию, что выписано у самой фикстуры: единственность, которую
+# держит веха, — единственность ЧТЕНИЯ признака приложением; здесь признак
+# ПИШЕТСЯ, и пишущая сторона — клиент.
+HTMX_HEADERS = {"HX-Request": "true"}
+
+
+@pytest.mark.asyncio
+async def test_the_degraded_path_runs_none_of_the_deferred_reads(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Цена пути деградации предъявляется СЧЁТОМ ЗАПРОСОВ, а не обещанием (IN-03).
+
+    Отложенная сборка фрагмента выросла с ОДНОГО запроса до ТРЁХ, и платит за
+    них ТОЛЬКО путь htmx с признаком возврата в редактор. Человек без
+    JavaScript получает прежнее перенаправление и не платит ни одним из трёх:
+    разметка, которая ему всё равно не уедет, не собирается вовсе.
+
+    ⚠️ ПОЛОЖИТЕЛЬНАЯ ПОЛОВИНА СТОИ́Т ПЕРВОЙ, И ОНА НЕ ГИГИЕНА. Без неё правило
+    зеленело бы на сигнатурах, не совпадающих НИ С ЧЕМ: пустое пересечение с
+    пустым множеством даёт зелёный цвет, посимвольно равный зелёному цвету
+    соблюдённого правила. Сначала предъявляется, что все три сигнатуры НАХОДЯТ
+    свои запросы, и только потом — что на соседнем пути они не находят ни
+    одного.
+
+    ⚠️ ГРАНИЦА: правило считает запросы ОДНОГО обработчика на ОДНОМ пути и не
+    утверждает ничего о числе запросов проекта вообще.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    on_htmx = await _seed_schedule(db_session, ad.id, account.id)
+    on_degraded = await _seed_schedule(db_session, ad.id, account.id)
+    # Третья строка держит ОБА запроса на фрагментной развилке: после двух
+    # удалений объявление обязано остаться непустым, иначе второй запрос ушёл бы
+    # в ветку перехода и мерил бы другую ветку, а не другой транспорт.
+    await _seed_schedule(db_session, ad.id, account.id)
+    body = _editor_delete_body(ad)
+
+    # --- ПОЛОЖИТЕЛЬНАЯ ПОЛОВИНА: НА ПУТИ HTMX ИСПОЛНЯЮТСЯ ВСЕ ТРИ ----------
+    with _observed_statements(db_session) as on_fragment_path:
+        fragment = await authed_client.post(
+            f"/schedules/{on_htmx.id}/delete",
+            content=body,
+            headers={**FORM_HEADERS, **HTMX_HEADERS},
+            follow_redirects=False,
+        )
+
+    assert fragment.status_code == 200, (
+        f"путь htmx ответил {fragment.status_code} вместо 200 — отложенной "
+        f"сборки не случилось, и мерить было нечего"
+    )
+    executed = _deferred_reads_in(on_fragment_path)
+    assert executed == set(DEFERRED_READ_SIGNATURES), (
+        f"на пути htmx исполнились не все чтения отложенной сборки: найдены "
+        f"{sorted(executed)}, объявлены {sorted(DEFERRED_READ_SIGNATURES)}. "
+        f"Сигнатура, не находящая своего запроса, делает вторую половину "
+        f"правила вакуумной: она ищет то, чего не находит нигде. Исполненные "
+        f"запросы: {on_fragment_path!r}"
+    )
+
+    # --- ПРЕДМЕТ: НА ПУТИ ДЕГРАДАЦИИ НЕ ИСПОЛНЯЕТСЯ НИ ОДНО ----------------
+    with _observed_statements(db_session) as on_degraded_path:
+        degraded = await authed_client.post(
+            f"/schedules/{on_degraded.id}/delete",
+            content=body,
+            headers=FORM_HEADERS,
+            follow_redirects=False,
+        )
+
+    assert degraded.status_code == 302, (
+        f"путь деградации ответил {degraded.status_code} вместо 302 — человек "
+        f"без JavaScript остался бы без ответа, и правило мерило бы не тот путь"
+    )
+    assert degraded.headers["location"] == f"/ads/{ad.id}/edit"
+    leaked = _deferred_reads_in(on_degraded_path)
+    assert leaked == set(), (
+        f"на пути БЕЗ заголовка htmx исполнились чтения отложенной сборки: "
+        f"{sorted(leaked)}. Это и есть `IN-03`, переставший держаться: человек "
+        f"без JavaScript платит запросами за разметку, которая ему НЕ УЕДЕТ "
+        f"вовсе. Исполненные запросы: {on_degraded_path!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_transition_branch_sends_no_summary_node(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Удаление ПОСЛЕДНЕГО расписания по-прежнему уходит в ветку перехода (D-04).
+
+    ⚠️ ПРАВИЛО НЕ ИЗБЫТОЧНО ПРИ ЖИВЫХ ПРАВИЛАХ ВЕТВЛЕНИЯ, И ОСНОВАНИЕ НАЗЫВАЕТСЯ
+    ПРЯМО. Настоящий план добавил в отложенную сборку два чтения и узел сводки,
+    и соблазн подать сводку «на всякий случай» и на переходной ветке — прямой.
+    Второй экземпляр пустого состояния запрещён решением D-04: ветка «расписаний
+    пока нет» живёт в `ads/form.html` в ОДНОМ экземпляре, и второй её отрисовкой
+    она разошлась бы с первой молча. Запрет обязан иметь зубы ИМЕННО СЕЙЧАС.
+
+    Опустевший редактор закрывается ПЕРЕХОДОМ: фрагмент не собирается вовсе,
+    узла сводки в ответе нет — и это объявленное поведение, а не дефект.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    only = await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        f"/schedules/{only.id}/delete",
+        content=_editor_delete_body(ad),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 204, (
+        f"удаление последнего расписания ответило {response.status_code} вместо "
+        f"204 — редактор перестал закрываться переходом, и пустое состояние "
+        f"обзавелось вторым экземпляром (D-04)"
+    )
+    assert response.headers.get("HX-Location") == f"/ads/{ad.id}/edit", (
+        f"заголовок перехода {response.headers.get('HX-Location')!r} не равен "
+        f"адресу редактора объявления"
+    )
+    assert response.text == "", (
+        f"у ответа 204 появилось тело — у этого статуса тела нет по "
+        f"определению: {response.text!r}"
+    )
+    assert _oob_node(response.text, AD_SUMMARY_NODE_ID) is None, (
+        "узел сводки приехал на ПЕРЕХОДНОЙ ветке, где тела нет вовсе"
     )
