@@ -29,11 +29,11 @@ from urllib.parse import urlencode
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import AD_STATUS_PUBLISHED
-from app.pages.common import templates
+from app.pages.common import format_datetime_for_user, templates
 from app.pages.schedules import ID_MAX
 from app.models.ad import Ad
 from app.models.group import Group
@@ -2452,4 +2452,376 @@ def test_control_the_signature_gate_does_not_read_its_own_documentation():
         "вердикт гейта изменился от ОДНОЙ строки комментария — гейт считает "
         f"прозу: {sorted(_bound_verdicts(commented).items())} против "
         f"{sorted(honest.items())}"
+    )
+
+
+# --- Фаза 10, план 10-50: сводка объявления во фрагментном ответе -------------
+#
+# ГЭП G-10-6, обход `walkthrough_3` от 2026-09-11, ДВА замера на разных стендах:
+# линейка списка «2 расписания» при сводке предпросмотра «РАСПИСАНИЯ 3» и на
+# сервере 2; линейка «1 расписание» при сводке «РАСПИСАНИЯ 2» и на сервере 1.
+# Настоящая перезагрузка каждый раз возвращала сводке верное число — то есть
+# расхождение живёт РОВНО до следующей полной загрузки.
+#
+# ⚠️ ЭТО НЕ ТО ЖЕ, ЧТО РАСХОЖДЕНИЕ ШАГА 2.8, И РАЗНИЦА НЕСУЩАЯ. Там экран
+# расходится с сервером ПОТОМУ ЧТО ОТВЕТ НЕ ДОЕХАЛ, и плашка об этом честно
+# предупреждает. Здесь ответ доехал, своп СОСТОЯЛСЯ и прошёл успешно — а два
+# числа ОДНОГО экрана противоречат друг другу, и ни одна плашка об этом не
+# говорит, потому что говорить ей не о чем: отказа не было.
+#
+# ⚠️ РАЗБОР ИДЁТ ПО ОБЛАСТИ ВНЕПОЛОСНОГО УЗЛА, А НЕ ПО ВХОЖДЕНИЮ ЧИСЛА В ТЕЛО.
+# Счёт числа по всему телу был бы негодным прибором: в теле стоя́т
+# идентификаторы вида `sched-{N}`, и первое же число пришло бы оттуда. Это тот
+# же класс дефекта прибора, что расхождение Р-1 обхода (селектор шире
+# предмета), и он назван здесь, а не воспроизведён.
+
+AD_SUMMARY_NODE_ID = "ad-summary"
+SCHED_COUNT_NODE_ID = "sched-count"
+
+# Элементы, у которых закрывающего тега не бывает: уровня вложенности они не
+# открывают. Без перечня скрытое поле, объявленное внеполосным блоком
+# (`<input … hx-swap-oob="true">`), навсегда оставило бы всё, что стоит после
+# него, «вложенным» — правило глубины краснело бы на работающем ответе (форма
+# перенята у `VOID_ELEMENTS` в tests/test_templates/test_htmx_markup_gates.py).
+_VOID_TAGS = frozenset(
+    {
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    }
+)
+
+_TAG_RE = re.compile(r"<(/?)\s*([a-zA-Z][\w:-]*)((?:[^<>\"']|\"[^\"]*\"|'[^']*')*)>")
+_OOB_ATTR_RE = re.compile(r'hx-swap-oob\s*=\s*"([^"]*)"')
+_ID_ATTR_RE = re.compile(r'(?<![-\w])id\s*=\s*"([^"]*)"')
+_KV_ROW_RE = re.compile(r'<div class="kv">(.*?)</div>', re.S)
+_KV_KEY_RE = re.compile(r'<span class="kv__k">(.*?)</span>', re.S)
+_KV_VALUE_RE = re.compile(r'<span class="kv__v[^"]*">(.*?)</span>', re.S)
+
+
+class _OobNode(NamedTuple):
+    """Внеполосный узел тела ответа: чем адресован, на какой глубине, что несёт."""
+
+    identifier: str
+    depth: int
+    inner: str
+
+
+def _oob_identifier(attrs: str) -> str | None:
+    """Чем узел адресует свою цель, или None — если узел не внеполосный.
+
+    Форм адресации ДВЕ, и обе живут в этом ответе: цель, названная СЕЛЕКТОРОМ
+    внутри значения признака (`innerHTML:#sched-count` — линейка счётчика), и
+    цель, названная СОБСТВЕННЫМ идентификатором узла (`id="ad-summary"` при
+    `hx-swap-oob="true"` — подмена самого узла). Разборщик, знающий только одну
+    форму, не нашёл бы половину узлов ответа и дал бы правилу вакуумную зелень.
+    """
+    oob = _OOB_ATTR_RE.search(attrs)
+    if oob is None:
+        return None
+    value = oob.group(1).strip()
+    if ":" in value:
+        return value.split(":", 1)[1].strip().lstrip("#")
+    ident = _ID_ATTR_RE.search(attrs)
+    return ident.group(1) if ident else ""
+
+
+def _oob_nodes(body: str) -> list[_OobNode]:
+    """Все внеполосные узлы тела вместе с ГЛУБИНОЙ каждого.
+
+    Глубина возвращается, а не отбрасывается, потому что она и есть предмет
+    отдельного правила: блок конфигурации несёт `allowNestedOobSwaps: false`, и
+    у ВЛОЖЕННОГО внеполосного узла рантайм МОЛЧА снимает признак — ни ошибки,
+    ни предупреждения, ни отличия в статусе. Разборщик, считающий только узлы
+    верхнего уровня, не отличил бы «узла нет» от «узел есть, но не свопается».
+    """
+    nodes: list[_OobNode] = []
+    stack: list[tuple[str, str | None, int, int]] = []
+    for match in _TAG_RE.finditer(body):
+        closing, tag, attrs = match.group(1), match.group(2).lower(), match.group(3)
+        if closing:
+            if stack and stack[-1][0] == tag:
+                _, identifier, depth, start = stack.pop()
+                if identifier is not None:
+                    nodes.append(_OobNode(identifier, depth, body[start : match.start()]))
+            continue
+        if tag in _VOID_TAGS or attrs.rstrip().endswith("/"):
+            # У пустого элемента области нет вовсе: скрытое поле, объявленное
+            # внеполосным блоком, несёт значение атрибутом, а не содержимым.
+            continue
+        stack.append((tag, _oob_identifier(attrs), len(stack), match.end()))
+    return nodes
+
+
+def _oob_node(body: str, node_id: str) -> _OobNode | None:
+    """Внеполосный узел, адресующий поданный идентификатор, или None."""
+    for node in _oob_nodes(body):
+        if node.identifier == node_id:
+            return node
+    return None
+
+
+def _oob_region(body: str, node_id: str) -> str | None:
+    """Область внеполосного узла по идентификатору его цели, или None."""
+    node = _oob_node(body, node_id)
+    return None if node is None else node.inner
+
+
+def _first_integer(text: str | None) -> int | None:
+    """Первое число, НАПЕЧАТАННОЕ в поданной области, или None.
+
+    Разметка вырезается до поиска: число, стоящее в атрибуте (`id="sched-7"`),
+    напечатанным не является, и прибор, его засчитавший, мерил бы разметку, а
+    не то, что видит человек.
+    """
+    if text is None:
+        return None
+    found = re.search(r"\d+", re.sub(r"<[^>]*>", " ", text))
+    return int(found.group(0)) if found else None
+
+
+def _summary_row(region: str, key: str) -> str | None:
+    """Значение строки сводки «ключ — значение» по её ключу, или None.
+
+    ⚠️ СТРОКА ВЫБИРАЕТСЯ ПО КЛЮЧУ, А НЕ ПО ПОРЯДКУ, И ЭТО РЕШЕНИЕ. Строк в
+    сводке четыре, и ДВЕ из них печатают числа («Вложения» и «Расписания»);
+    прибор, берущий первое число области, снял бы число ВЛОЖЕНИЙ и сличал бы с
+    линейкой расписаний его. Порядок строк свойством контракта не объявлен ни
+    одной записью проекта — утверждать его значило бы завести контракт, которого
+    нет, и чинить перестановку строк шаблона как регресс.
+    """
+    for raw in _KV_ROW_RE.findall(region):
+        found_key = _KV_KEY_RE.search(raw)
+        found_value = _KV_VALUE_RE.search(raw)
+        if found_key and found_value and found_key.group(1).strip() == key:
+            return found_value.group(1).strip()
+    return None
+
+
+async def _server_schedule_count(db: AsyncSession, ad_id: int) -> int:
+    """Счёт расписаний объявления ПРЯМЫМ запросом к тестовой базе.
+
+    Третий счёт правила согласия. Читается ЗАПРОСОМ, а не выводится из ответа:
+    ответ и есть предмет сличения, и выводить из него состояние базы значило бы
+    проверять утверждение самим утверждением.
+    """
+    db.expire_all()
+    return (
+        await db.execute(
+            select(func.count(Schedule.id)).where(Schedule.ad_id == ad_id)
+        )
+    ).scalar_one()
+
+
+@pytest.mark.asyncio
+async def test_the_ruler_and_the_summary_agree_after_a_fragment_delete(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """ТРИ счёта одного экрана согласны после ФРАГМЕНТНОГО удаления.
+
+    Сличаются число линейки списка, число сводки предпросмотра и счёт расписаний
+    объявления на сервере.
+
+    ⚠️ ТРЕТИЙ СЧЁТ НЕ ИЗБЫТОЧЕН, И ЕГО ОСНОВАНИЕ НАЗЫВАЕТСЯ ЗДЕСЬ, А НЕ
+    ПОДРАЗУМЕВАЕТСЯ. Два числа, приезжающие из ОДНОЙ переменной ответа,
+    СОГЛАСНЫ ВСЕГДА — в том числе когда оба неверны. Без серверного счёта
+    правило утверждало бы СОГЛАСИЕ, а не ВЕРНОСТЬ, и позеленело бы на ответе,
+    который печатает в обеих областях одно и то же чужое число.
+
+    ⚠️ ДВА РОДА ОТКАЗА РАЗЛИЧАЮТСЯ ПРАВИЛОМ, А НЕ ЧИТАТЕЛЕМ. «Узла сводки в
+    теле нет вовсе» и «числа в двух областях разошлись» суть РАЗНЫЕ отказы с
+    разными причинами: первый означает, что ответ этой области не шлёт, второй —
+    что шлёт, но из второго независимого чтения. Тексты отказов названы порознь.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    await _seed_schedule(db_session, ad.id, account.id)
+    await _seed_schedule(db_session, ad.id, account.id)
+    ad_id = ad.id
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete",
+        content=_editor_delete_body(ad),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert "<!DOCTYPE" not in response.text, (
+        "обработчик ответил документом — значит слой письма его не увидел и "
+        "фикстура прошла по редиректу"
+    )
+    body = response.text
+
+    # --- АНТИВАКУУМ ПЕРВЫМ: ОБЕ ОБЛАСТИ НАЙДЕНЫ И В КАЖДОЙ ЕСТЬ ЧИСЛО -------
+    # Область, не найденная разбором, дала бы отсутствующее равным
+    # отсутствующему, и сличение трёх счётов зеленело бы на ответе, не несущем
+    # ни одного из них.
+    ruler_region = _oob_region(body, SCHED_COUNT_NODE_ID)
+    assert ruler_region is not None, (
+        f"области линейки счётчика ({SCHED_COUNT_NODE_ID}) в теле ответа НЕТ — "
+        f"сличать нечего, и правило утверждало бы не о том предмете. Тело: "
+        f"{body!r}"
+    )
+    summary_region = _oob_region(body, AD_SUMMARY_NODE_ID)
+    assert summary_region is not None, (
+        f"ОБЛАСТИ СВОДКИ ОБЪЯВЛЕНИЯ ({AD_SUMMARY_NODE_ID}) В ТЕЛЕ ОТВЕТА НЕТ "
+        f"ВОВСЕ. Это НЕ расхождение чисел, а его причина: фрагментный ответ "
+        f"удаления этой области не шлёт, и сводка остаётся такой, какой её "
+        f"застала последняя полная загрузка страницы — то есть УСТАРЕВШЕЙ до "
+        f"следующей перезагрузки, всё это время глядя человеку в глаза "
+        f"(гэп G-10-6). Тело: {body!r}"
+    )
+
+    ruler_count = _first_integer(ruler_region)
+    assert ruler_count is not None, (
+        f"в области линейки счётчика не напечатано ни одного числа: "
+        f"{ruler_region!r}"
+    )
+    summary_cell = _summary_row(summary_region, "Расписания")
+    assert summary_cell is not None, (
+        f"в сводке нет строки «Расписания» — число, о котором говорит гэп, в "
+        f"области не напечатано вовсе: {summary_region!r}"
+    )
+    summary_count = _first_integer(summary_cell)
+    assert summary_count is not None, (
+        f"в строке «Расписания» сводки не напечатано числа: {summary_cell!r}"
+    )
+
+    # --- СЛИЧЕНИЕ ТРЁХ СЧЁТОВ ----------------------------------------------
+    on_server = await _server_schedule_count(db_session, ad_id)
+    assert (ruler_count, summary_count) == (on_server, on_server), (
+        f"два числа ОДНОГО экрана противоречат друг другу либо серверу: "
+        f"линейка списка {ruler_count}, сводка предпросмотра {summary_count}, "
+        f"на сервере {on_server}. Своп СОСТОЯЛСЯ и прошёл успешно, статус "
+        f"двухсотый, консоль чистая — признака отказа нет НИ ОДНОГО, и увидит "
+        f"расхождение только глаз, и только если смотреть на обе области сразу"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_summary_next_run_follows_the_delete(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Вторая строка сводки двигается вместе с числом, а не остаётся прежней.
+
+    ⚠️ ЗАЧЕМ ОТДЕЛЬНОЕ ПРАВИЛО. Гэп назван ЧИСЛОМ расписаний, но устаревает в
+    сводке НЕ ТОЛЬКО оно: строка «Ближайший запуск» читает ТОТ ЖЕ контекст
+    редактора и разошлась бы с сервером так же молча. Правило заводится сейчас
+    потому, что предмет ОБЩИЙ, а не потому, что дефект наблюдён обоими глазами.
+
+    Стенд: два расписания с РАЗНЫМИ моментами запуска; удаляется то, чей момент
+    БЛИЖЕ. Сводка ответа обязана назвать момент ОСТАВШЕГОСЯ расписания.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    sooner = await _seed_schedule(db_session, ad.id, account.id)
+    later = await _seed_schedule(db_session, ad.id, account.id)
+    # Моменты разводятся ПРЯМОЙ правкой строк: `_seed_schedule` ставит всем
+    # включённым строкам ОДИН момент, а правило о «ближайшем» на совпадающих
+    # моментах не отличало бы оставшуюся строку от удалённой.
+    sooner.next_run_at = datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc)
+    later.next_run_at = datetime(2026, 9, 20, 18, 30, tzinfo=timezone.utc)
+    await db_session.commit()
+    remaining_run_at = later.next_run_at
+
+    response = await htmx_client.post(
+        f"/schedules/{sooner.id}/delete",
+        content=_editor_delete_body(ad),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200
+    summary_region = _oob_region(response.text, AD_SUMMARY_NODE_ID)
+    assert summary_region is not None, (
+        f"области сводки объявления ({AD_SUMMARY_NODE_ID}) в теле ответа нет "
+        f"вовсе — вторая строка сводки устаревает вместе с первой, и по тому же "
+        f"основанию: ответ этой области не шлёт. Тело: {response.text!r}"
+    )
+    shown = _summary_row(summary_region, "Ближайший запуск")
+    assert shown is not None, (
+        f"в сводке нет строки «Ближайший запуск»: {summary_region!r}"
+    )
+
+    # Ожидание собирается ТЕМ ЖЕ помощником отображения времени, что и разметка:
+    # литерал разошёлся бы с зоной пользователя и краснил бы правило на чужом
+    # предмете (тот же приём, что `_rendered_counter_line` соседнего модуля).
+    expected = format_datetime_for_user(remaining_run_at, owner, "%d.%m %H:%M")
+    removed = format_datetime_for_user(
+        datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc), owner, "%d.%m %H:%M"
+    )
+    assert expected != removed, (
+        f"моменты удалённой и оставшейся строк отобразились ОДИНАКОВО "
+        f"({expected!r}) — сличение перестало различать строки, и вердикт "
+        f"правила был бы неотличим от вердикта на устаревшей сводке"
+    )
+    assert shown == expected, (
+        f"сводка называет ближайшим запуском {shown!r}, а после удаления "
+        f"ближайшей строки им стал {expected!r} (момент удалённой строки — "
+        f"{removed!r}). Вторая строка сводки осталась при значении, которого на "
+        f"сервере больше нет"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_summary_node_is_a_top_level_child_of_the_response(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Узел сводки — ПРЯМОЙ ребёнок тела ответа, а не вложенный узел.
+
+    Блок конфигурации несёт `allowNestedOobSwaps: false`
+    (`includes/htmx_config.html`): у ВЛОЖЕННОГО внеполосного узла рантайм МОЛЧА
+    снимает признак и не свопает ВОВСЕ — ни ошибки, ни предупреждения, ни
+    отличия в статусе. Ответ при этом остаётся двухсотым, тело — прежним, и
+    отличить «сводка приехала» от «сводка приехала и была выброшена» нельзя
+    ничем, кроме глаза на экране.
+
+    ⚠️ ПРАВИЛО ЧИТАЕТ ТЕЛО ОТВЕТА, А НЕ ШАБЛОН: предмет — то, что УЕХАЛО, а не
+    то, что набрано. Обёртка, появившаяся вокруг включения, в шаблоне ответа не
+    видна вовсе.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/delete",
+        content=_editor_delete_body(ad),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200
+    body = response.text
+
+    # --- АНТИВАКУУМ РАЗБОРЩИКА: ГЛУБИНА ИЗМЕРЯЕТСЯ, А НЕ ВОЗВРАЩАЕТСЯ НУЛЁМ --
+    # Разборщик, отдающий ноль ВСЕГДА, зеленил бы правило на любом теле. Зубы
+    # прибора показываются на СИНТЕТИКЕ: тот же узел, обёрнутый одним тегом,
+    # обязан измериться глубиной один.
+    wrapped = f'<div><div id="{AD_SUMMARY_NODE_ID}" hx-swap-oob="true">x</div></div>'
+    wrapped_node = _oob_node(wrapped, AD_SUMMARY_NODE_ID)
+    assert wrapped_node is not None and wrapped_node.depth == 1, (
+        f"разборщик не измерил глубину обёрнутого узла ({wrapped_node!r}) — "
+        f"его ноль на живом теле не означал бы ничего"
+    )
+
+    node = _oob_node(body, AD_SUMMARY_NODE_ID)
+    assert node is not None, (
+        f"узла сводки объявления ({AD_SUMMARY_NODE_ID}) в теле ответа нет "
+        f"вовсе. Тело: {body!r}"
+    )
+    assert node.depth == 0, (
+        f"узел сводки объявления стоит на глубине {node.depth}, а обязан быть "
+        f"ПРЯМЫМ ребёнком тела ответа. Вложенному узлу рантайм МОЛЧА снимает "
+        f"признак внеполосной подмены (`allowNestedOobSwaps: false`): ответ "
+        f"остаётся двухсотым, узел в теле присутствует, а на экране не "
+        f"меняется ничего. Тело: {body!r}"
     )
