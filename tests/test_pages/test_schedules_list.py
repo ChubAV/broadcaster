@@ -15,6 +15,8 @@
 вернёт 200), поэтому Задача 3 утверждает реальные строки, а не код ответа.
 """
 
+from datetime import datetime, timezone
+
 import contextlib
 import re
 from types import SimpleNamespace
@@ -111,6 +113,14 @@ async def _seed_schedule(
         times_of_day=times if times is not None else ["09:30"],
         timezone="UTC",
         is_active=is_active,
+        # Момент запуска ставится ТОЛЬКО включённой строке. Схема запрещает пару
+        # «включено + нет момента» (CHECK ck_schedules_active_requires_next_run),
+        # а приостановленной строке он не нужен и вреден: карточка печатает
+        # «следующий запуск» по одному лишь наличию значения, и выданный паузе
+        # момент менял бы разметку, к предмету этих тестов отношения не имеющую.
+        next_run_at=(
+            datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc) if is_active else None
+        ),
     )
     db.add(schedule)
     await db.commit()

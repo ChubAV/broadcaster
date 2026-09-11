@@ -19,6 +19,8 @@ tests/test_pages/test_editor_schedules.py -q` завершается с кодо
   (T-02-24, T-02-25).
 """
 
+from datetime import datetime, timezone
+
 import re
 from pathlib import Path
 from typing import NamedTuple
@@ -125,6 +127,14 @@ async def _seed_schedule(
         times_of_day=times if times is not None else ["09:00"],
         timezone="UTC",
         is_active=is_active,
+        # Момент запуска ставится ТОЛЬКО включённой строке. Схема запрещает пару
+        # «включено + нет момента» (CHECK ck_schedules_active_requires_next_run),
+        # а приостановленной строке он не нужен и вреден: карточка печатает
+        # «следующий запуск» по одному лишь наличию значения, и выданный паузе
+        # момент менял бы разметку, к предмету этих тестов отношения не имеющую.
+        next_run_at=(
+            datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc) if is_active else None
+        ),
     )
     db.add(schedule)
     await db.commit()

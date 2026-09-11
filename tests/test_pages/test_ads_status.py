@@ -19,6 +19,8 @@
    снятие колонки» остался, сменилось только место, где на него отвечают.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -77,6 +79,7 @@ async def _seed_schedule(db: AsyncSession, ad: Ad) -> Schedule:
         days_of_week=[0],
         times_of_day=["09:00"],
         timezone="UTC",
+        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
     )
     db.add(schedule)
     await db.commit()

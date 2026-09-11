@@ -61,6 +61,16 @@ Alembic под SQLite поднимает `NotImplementedError`. Это свой�
 `0019`: снимок описывает схему на ЕЁ момент, и держать здесь второй снимок
 `0018`, отличающийся одной колонкой платежей, значило бы завести второе описание
 той же схемы.
+
+⚠️ ПО ТОЙ ЖЕ ПРИЧИНЕ В СНИМКЕ ПОЯВИЛИСЬ `schedules`, `ads` И
+`messenger_accounts`. Ревизия `0022` вешает на `schedules` ограничение
+«включённое расписание обязано иметь момент запуска» и пересоздаёт таблицу
+batch-режимом, а `upgrade head` идёт ЧЕРЕЗ неё: без этих таблиц прогон обрывался
+бы на «no such table: schedules» — снова по причине, к предмету файла отношения
+не имеющей. ПРЕДМЕТ НЕ РАСШИРЕН: сверяются по-прежнему колонки ОДНОЙ таблицы
+`payments`. Ограничение `schedules` этот файл не проверяет и проверить не может —
+это делает `tests/test_migrations/test_0022_schedules_active_requires_next_run.py`,
+а здесь три таблицы лежат ровно ради проходимости очереди.
 """
 
 import sqlite3
@@ -146,6 +156,43 @@ CREATE TABLE payments (
     plan VARCHAR(50),
     switch_authorized BOOLEAN
 );
+
+-- Ниже — ради ПРОХОДИМОСТИ очереди, а не ради проверки: `0022` пересоздаёт
+-- `schedules`, а её внешним ключам нужно, на что ссылаться. Состав собран по
+-- `0001_initial_schema.py` (таблица и оба индекса), `0002_add_schedule_timezone.py`
+-- (`timezone`) и `0012_schedules_account_id_nullable_set_null.py` (`account_id`
+-- стал NULL-совместимым с `ON DELETE SET NULL`); между `0012` и `0019` таблицу
+-- не трогала ни одна ревизия. Из `ads` и `messenger_accounts` взяты только те
+-- колонки, без которых не создаётся сама таблица.
+CREATE TABLE ads (
+    id INTEGER NOT NULL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL,
+    text TEXT NOT NULL
+);
+
+CREATE TABLE messenger_accounts (
+    id INTEGER NOT NULL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type VARCHAR(20) NOT NULL,
+    credentials TEXT
+);
+
+CREATE TABLE schedules (
+    id INTEGER NOT NULL PRIMARY KEY,
+    ad_id INTEGER NOT NULL REFERENCES ads(id) ON DELETE CASCADE,
+    account_id INTEGER REFERENCES messenger_accounts(id) ON DELETE SET NULL,
+    group_ids JSON NOT NULL DEFAULT '[]',
+    days_of_week JSON NOT NULL DEFAULT '[]',
+    times_of_day JSON NOT NULL DEFAULT '[]',
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    next_run_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    timezone VARCHAR(50) NOT NULL DEFAULT 'UTC'
+);
+
+CREATE INDEX ix_schedules_is_active ON schedules (is_active);
+CREATE INDEX ix_schedules_next_run_at ON schedules (next_run_at);
 """
 
 

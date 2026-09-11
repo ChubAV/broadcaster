@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 from app.models.user import User
 from app.models.messenger_account import MessengerAccount
@@ -54,6 +56,7 @@ async def test_create_send_log(db_session):
         group_ids=[group.id],
         days_of_week=[1],
         times_of_day=["10:00"],
+        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
     )
     db_session.add(schedule)
     await db_session.commit()
@@ -134,6 +137,7 @@ async def test_send_log_with_error(db_session):
     schedule = Schedule(
         ad_id=ad.id,
         account_id=account.id,
+        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
     )
     db_session.add(schedule)
     await db_session.commit()

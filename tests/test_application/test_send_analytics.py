@@ -1055,7 +1055,25 @@ async def test_upcoming_sends_respects_the_limit(db_session):
 
 @pytest.mark.asyncio
 async def test_upcoming_sends_skips_inactive_and_unscheduled(db_session):
-    """Приостановленное расписание и расписание без next_run_at не выстрелят."""
+    """Приостановленное расписание и расписание без next_run_at не выстрелят.
+
+    ⚠️ ВТОРОЙ СЛУЧАЙ ПЕРЕПИСАН, И ПРИЧИНА СУЩЕСТВЕННАЯ. Прежде он сеял строку
+    ВКЛЮЧЁННОЙ и без момента запуска — то есть проверял, что блок не показывает
+    ту самую МЁРТВУЮ строку, которая пролежала на бою незамеченной (sched=48).
+    Проверка была верной, а вот сама строка оказалась состоянием, которого
+    существовать не должно: схема запрещает эту пару
+    (CHECK ck_schedules_active_requires_next_run, ревизия 0022), потому что
+    отбор к отправке не выберет её никогда и починить себя она не может.
+
+    Поэтому здесь теперь ВТОРОЕ ЗАКОННОЕ приостановленное состояние — без
+    момента запуска, — и обе законные пары «выключено» перечислены рядом.
+
+    ⚠️ ЧТО ЭТО ЗНАЧИТ ДЛЯ САМОГО ЗАПРОСА: условие `Schedule.next_run_at.isnot(None)`
+    в `upcoming_sends` перестало быть самостоятельно достижимым — под
+    `is_active.is_(True)` пустого момента теперь не бывает. Условие оставлено как
+    защита в глубину, но проверить его через базу больше нельзя, и притворяться,
+    будто этот тест его проверяет, было бы неправдой.
+    """
     user = await _user(db_session)
     await _seed_schedule(
         db_session,
@@ -1065,7 +1083,14 @@ async def test_upcoming_sends_skips_inactive_and_unscheduled(db_session):
         title="Пауза",
         seq="1",
     )
-    await _seed_schedule(db_session, user, next_run_at=None, title="Без слота", seq="2")
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=None,
+        is_active=False,
+        title="Без слота",
+        seq="2",
+    )
 
     items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
 

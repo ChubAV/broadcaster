@@ -58,6 +58,12 @@ async def test_update_business_metrics(db_session):
             days_of_week=[0, 1, 2],
             times_of_day=["09:00"],
             is_active=active,
+            # Момент запуска задан у ВСЕХ трёх, включая выключенную: схема
+            # запрещает пару «включено + нет момента» (CHECK
+            # ck_schedules_active_requires_next_run), а разные значения у
+            # включённых и выключенной строк завели бы в этой фикстуре второе
+            # различие сверх того одного, ради которого она и написана.
+            next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
         )
         db_session.add(schedule)
 

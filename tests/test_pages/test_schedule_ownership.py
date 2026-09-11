@@ -10,6 +10,8 @@
 `user_id`, и утверждается, что она не тронута, а новая не появилась.
 """
 
+from datetime import datetime, timezone
+
 from urllib.parse import urlencode
 
 import pytest
@@ -70,6 +72,7 @@ async def _seed_schedule(db_session: AsyncSession, ad_id: int, account_id: int) 
         days_of_week=[1],
         times_of_day=["09:00"],
         timezone="UTC",
+        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
     )
     db_session.add(schedule)
     await db_session.commit()

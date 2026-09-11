@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
@@ -34,6 +36,7 @@ async def test_schedule_eager_load_ad_and_account(db_session):
         days_of_week=[0, 1],
         times_of_day=["10:00"],
         is_active=True,
+        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
     )
     db_session.add(schedule)
     await db_session.commit()

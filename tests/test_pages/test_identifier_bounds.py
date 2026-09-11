@@ -14,6 +14,8 @@
 реестра `.planning/WINDOWS.md`, и оно остаётся открытым.
 """
 
+from datetime import datetime, timezone
+
 import ast
 import pathlib
 import re
@@ -809,6 +811,7 @@ async def _seed_live_row_set(db: AsyncSession) -> dict[str, int]:
         group_ids=[group.id],
         days_of_week=[1],
         times_of_day=["10:00"],
+        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
     )
     db.add(schedule)
     await db.commit()

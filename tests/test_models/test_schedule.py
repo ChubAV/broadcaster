@@ -91,9 +91,27 @@ async def test_schedule_default_values(db_session):
     await db_session.commit()
     await db_session.refresh(ad)
 
+    # ⚠️ МОМЕНТ ЗАПУСКА ЗАДАН ЗДЕСЬ НЕ ДЛЯ КРАСОТЫ, И ПРЕЖНЯЯ ВЕРСИЯ ЭТОГО ТЕСТА
+    # УТВЕРЖДАЛА РОВНО ТО, ЧТО СХЕМА ТЕПЕРЬ ЗАПРЕЩАЕТ.
+    #
+    # Она проверяла пару «`is_active` по умолчанию True» И «`next_run_at` пуст» —
+    # то есть описывала как нормальное состояние строку, которую отбор к отправке
+    # не выберет НИКОГДА (`NULL <= now` в SQL не истинно) и которая не сможет себя
+    # починить (пересчёт идёт только по выбранным строкам). Именно эта пара и
+    # пролежала на бою мёртвой (sched=48), и именно её запрещает
+    # CHECK ck_schedules_active_requires_next_run (ревизия 0022).
+    #
+    # ⚠️ УМОЛЧАНИЕ КОЛОНКИ ПРИ ЭТОМ НЕ ИЗМЕНИЛОСЬ И ПРОВЕРЯЕТСЯ НИЖЕ ПО-ПРЕЖНЕМУ:
+    # `is_active` НЕ ПЕРЕДАЁТСЯ и обязан прийти True. Это умолчание «в открытую»
+    # (fail-open) — вторая половина причины дефекта 7833844: пропущенный аргумент
+    # означал ВКЛЮЧЕНО, а не выключено. Само умолчание оставлено как есть, потому
+    # что теперь его цена — отказ базы на записи, а не мёртвая строка в таблице;
+    # отказ на попытке сохранить пару проверяет
+    # tests/test_models/test_schedule_active_requires_next_run.py.
     schedule = Schedule(
         ad_id=ad.id,
         account_id=account.id,
+        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
     )
     db_session.add(schedule)
     await db_session.commit()
@@ -103,7 +121,6 @@ async def test_schedule_default_values(db_session):
     assert schedule.days_of_week == []
     assert schedule.times_of_day == []
     assert schedule.is_active is True
-    assert schedule.next_run_at is None
 
 
 @pytest.mark.asyncio
@@ -124,7 +141,7 @@ async def test_schedule_timezone_default(db_session):
     await db_session.commit()
     await db_session.refresh(ad)
 
-    schedule = Schedule(ad_id=ad.id, account_id=account.id)
+    schedule = Schedule(ad_id=ad.id, account_id=account.id, next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc))
     db_session.add(schedule)
     await db_session.commit()
     await db_session.refresh(schedule)
@@ -150,7 +167,12 @@ async def test_schedule_timezone_custom(db_session):
     await db_session.commit()
     await db_session.refresh(ad)
 
-    schedule = Schedule(ad_id=ad.id, account_id=account.id, timezone="Europe/Moscow")
+    schedule = Schedule(
+        ad_id=ad.id,
+        account_id=account.id,
+        timezone="Europe/Moscow",
+        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
+    )
     db_session.add(schedule)
     await db_session.commit()
     await db_session.refresh(schedule)

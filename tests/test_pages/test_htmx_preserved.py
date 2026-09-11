@@ -140,6 +140,7 @@ async def _seed_section(db: AsyncSession, section: str) -> str:
                     days_of_week=[1],
                     times_of_day=["10:00"],
                     timezone="UTC",
+                    next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
                 )
                 for i in range(SEED_ROWS)
             ]
