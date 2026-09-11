@@ -58,10 +58,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
-from app.models.schedule import Schedule
+from app.models.schedule import ACTIVE_REQUIRES_NEXT_RUN_NAME, Schedule
 from app.models.user import User
 from app.services.schedule_service import compute_next_run_at
 
@@ -290,3 +291,200 @@ async def test_the_seeded_row_satisfies_todays_schema(db_session):
     for row in built:
         db_session.add(row)
     await db_session.commit()
+
+
+# --- Статическая половина: поля ограничений добываются, а не выписываются -------
+#
+# ⚠️ ЗАМЕР, ОПРЕДЕЛИВШИЙ ФОРМУ ЭТОЙ ПОЛОВИНЫ (2026-09-11, SQLAlchemy 2.0):
+# у `CheckConstraint`, заданного СТРОКОЙ условия, коллекция `.columns` ПУСТА —
+# движок не разбирает текст условия на колонки. Поэтому имена колонок, названных
+# таким ограничением, добываются СЛИЧЕНИЕМ текста условия со списком колонок САМОЙ
+# таблицы: обе стороны сличения приходят из модели, и выписанного имени колонки в
+# правиле нет ни одного. У `ForeignKeyConstraint`/`PrimaryKeyConstraint` коллекция
+# непуста и берётся как есть.
+
+
+def _columns_named_by(constraint, table) -> frozenset[str]:
+    """Имена колонок таблицы, названные ОДНИМ ограничением."""
+    named = frozenset(column.name for column in getattr(constraint, "columns", ()))
+    if named:
+        return named
+    sqltext = getattr(constraint, "sqltext", None)
+    if sqltext is None:
+        return frozenset()
+    condition = str(sqltext)
+    return frozenset(
+        name
+        for name in table.columns.keys()
+        if re.search(rf"\b{re.escape(name)}\b", condition)
+    )
+
+
+def constrained_columns() -> frozenset[str]:
+    """Имена колонок, названные ограничениями таблицы модели расписания.
+
+    ⚠️ ИЗ МНОЖЕСТВА ИЗЫМАЮТСЯ КОЛОНКИ, ЗНАЧЕНИЕ КОТОРЫХ ПИШЕТ САМА БАЗА, и
+    основание названо, а не умолчано: первичный ключ с автонумерацией назван
+    `PrimaryKeyConstraint`, но подать его ключом вызова писатель НЕ МОЖЕТ — правило,
+    требующее этого, требовало бы невозможного и краснело бы всегда. Признак
+    изъятия добывается у колонки (`primary_key` + `autoincrement`), а не выписан
+    именем.
+    """
+    table = Schedule.__table__
+    written_by_the_database = frozenset(
+        column.name
+        for column in table.columns
+        if column.primary_key and column.autoincrement
+    )
+    named: frozenset[str] = frozenset()
+    for constraint in table.constraints:
+        named |= _columns_named_by(constraint, table)
+    return named - written_by_the_database
+
+
+def uncovered_constraint_columns(text: str) -> frozenset[str]:
+    """Поля ограничений, НЕ названные ключами вызова `Schedule(...)` артефакта."""
+    _, keys = seed_schedule_loop(seed_program(text))
+    return constrained_columns() - keys
+
+
+def test_every_checked_column_is_named_by_the_seed_program():
+    """СТАТИЧЕСКАЯ ПОЛОВИНА: каждое поле ограничений названо командой посева.
+
+    ⚠️ ЗАЧЕМ ЭТА ПОЛОВИНА ПРИ ЖИВОЙ ПОВЕДЕНЧЕСКОЙ. Затем, что она краснеет на
+    ограничении, добавленном схеме ЗАВТРА на поле, которого команда не называет, —
+    даже если сегодняшние значения его случайно удовлетворяют. Поведенческая
+    половина (`test_the_seeded_row_satisfies_todays_schema`) ловит нарушение
+    СЕГОДНЯШНИХ значений, статическая — умолчание о НОВОМ поле. НИ ОДНА ИЗ ДВУХ НЕ
+    ПОКРЫВАЕТ ПРЕДМЕТА ДРУГОЙ, и граница между ними показана отрицательным
+    контролём ниже, а не заявлена.
+    """
+    constrained = constrained_columns()
+
+    # ⚠️ АНТИВАКУУМ ПЕРВЫМ, ДО ПОЛОЖИТЕЛЬНОГО УТВЕРЖДЕНИЯ: на модели без единого
+    # ограничения «все поля покрыты» неотличимо от «покрывать нечего».
+    assert constrained, (
+        "ограничения таблицы расписаний не назвали НИ ОДНОЙ колонки — покрывать "
+        "нечего, и зелёный вердикт утверждал бы пустоту"
+    )
+
+    uncovered = uncovered_constraint_columns(walkthrough_source())
+    assert not uncovered, (
+        "команда посева артефакта НЕ НАЗЫВАЕТ поля, названные ограничениями схемы: "
+        f"{sorted(uncovered)}. Схема отвергнет построенную строку либо примет её "
+        "случайно — и следующий обход упрётся в отказ, как упёрся walkthrough_3"
+    )
+
+
+# --- Отрицательный контроль ----------------------------------------------------
+#
+# ⚠️ ИМЯ ПОЛЯ И ОЖИДАНИЯ КОНТРОЛЯ ВЫПИСАНЫ ЗДЕСЬ ЛИТЕРАЛАМИ НАМЕРЕННО. Контроль,
+# вычисляющий ожидание из проверяемого источника, согласился бы с любой правкой
+# этого источника — то есть доказывал бы тождество, а не зубы правила.
+
+CONTROL_KEY = "next_run_at"
+
+
+def _doctored(text: str, transform) -> str:
+    """Копия текста артефакта В ПАМЯТИ с доктóренным вызовом `Schedule(...)`.
+
+    Настоящий файл НЕ ПРАВИТСЯ НИ НА СИМВОЛ: правится разобранное дерево, и
+    обратно в текст оно уходит печатью, а не записью на диск.
+    """
+    program = seed_program(text)
+    tree = ast.parse(program)
+    calls = [
+        call
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == SCHEDULE_CALL_NAME
+    ]
+    assert len(calls) == 1, (
+        f"вызовов {SCHEDULE_CALL_NAME}(...) в программе {len(calls)}, а не один — "
+        "доктóрить нечего, и контроль ничего не доказал бы"
+    )
+    assert any(keyword.arg == CONTROL_KEY for keyword in calls[0].keywords), (
+        f"ключа {CONTROL_KEY!r} в настоящем вызове нет — доктóривание доказывало "
+        "бы отсутствие того, чего и так нет"
+    )
+
+    transform(calls[0])
+    doctored_program = ast.unparse(tree)
+    assert doctored_program != program, "доктóривание не изменило программы"
+    assert text.count(program) == 1, (
+        "тело программы встречается в артефакте не один раз — подстановка задела "
+        "бы не тот блок"
+    )
+    return text.replace(program, doctored_program)
+
+
+def _without_the_key(call: ast.Call) -> None:
+    call.keywords = [k for k in call.keywords if k.arg != CONTROL_KEY]
+
+
+def _with_an_empty_key(call: ast.Call) -> None:
+    for keyword in call.keywords:
+        if keyword.arg == CONTROL_KEY:
+            keyword.value = ast.Constant(None)
+
+
+async def _refusal_of_todays_schema(session, text: str) -> str | None:
+    """Текст отказа базы на строках, построенных данным текстом, либо `None`.
+
+    Сессия откатывается ПЕРЕД посевом: предыдущее доктóривание могло оставить её
+    в оборванной транзакции, и второй контроль упал бы отказом ПРИБОРА.
+    """
+    await session.rollback()
+    ad_id, account_id = await seed_stand_owner(session)
+    rows = rows_built_by_the_seed_loop(seed_program(text), ad_id, account_id)
+    assert rows, "доктóренный цикл не построил ни одной строки — вставлять нечего"
+    for row in rows:
+        session.add(row)
+    try:
+        await session.commit()
+    except IntegrityError as refusal:
+        await session.rollback()
+        return str(refusal)
+    return None
+
+
+@pytest.mark.asyncio
+async def test_control_a_seed_program_without_the_next_run_reddens(db_session):
+    """ЧТО ДОКАЗЫВАЕТ: обе половины правила имеют зубы, и предметы у них РАЗНЫЕ.
+
+    ⚠️ ДОКТÓРИВАНИЙ ДВА, И ВТОРОЕ НЕ ИЗБЫТОЧНО. Первое изымает ключ момента
+    ЦЕЛИКОМ — так выглядела команда до плана 10-48, и краснеть обязаны ОБЕ
+    половины. Второе ключ НАЗЫВАЕТ, а значением оставляет пустое: статическая
+    половина здесь ЗЕЛЕНА (поле названо), а схема строку всё равно отвергает.
+    ЭТО И ЕСТЬ ГРАНИЦА МЕЖДУ «ПОЛЕ НАЗВАНО» И «СТРОКА ЗАКОННА»: без второго
+    доктóривания правило приняло бы починку, роняющую следующий обход ровно тем
+    же отказом, на котором остановился `walkthrough_3`.
+    """
+    text = walkthrough_source()
+
+    # Доктóривание (а): ключ изъят целиком → КРАСНЫ ОБЕ ПОЛОВИНЫ.
+    without = _doctored(text, _without_the_key)
+    assert uncovered_constraint_columns(without) == frozenset({CONTROL_KEY}), (
+        "статическая половина НЕ ЗАМЕТИЛА изъятого ключа момента: "
+        f"{sorted(uncovered_constraint_columns(without))}"
+    )
+    refusal = await _refusal_of_todays_schema(db_session, without)
+    assert refusal is not None and ACTIVE_REQUIRES_NEXT_RUN_NAME in refusal, (
+        "поведенческая половина ПРИНЯЛА строку без момента следующего запуска — "
+        f"отказ базы: {refusal!r}"
+    )
+
+    # Доктóривание (б): ключ назван, значение пустое → статическая ЗЕЛЕНА,
+    # поведенческая КРАСНА.
+    empty = _doctored(text, _with_an_empty_key)
+    assert uncovered_constraint_columns(empty) == frozenset(), (
+        "статическая половина покраснела на НАЗВАННОМ ключе — она судит о "
+        "названности поля, а не о законности значения: "
+        f"{sorted(uncovered_constraint_columns(empty))}"
+    )
+    refusal = await _refusal_of_todays_schema(db_session, empty)
+    assert refusal is not None and ACTIVE_REQUIRES_NEXT_RUN_NAME in refusal, (
+        "поведенческая половина ПРИНЯЛА строку с пустым моментом следующего "
+        f"запуска — починка, роняющая обход, прошла бы гейт; отказ базы: {refusal!r}"
+    )
