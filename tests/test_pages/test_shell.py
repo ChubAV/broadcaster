@@ -2814,6 +2814,160 @@ def test_a_failed_exchange_does_not_clear_the_failure_banner():
     )
 
 
+def _success_handler_bounds(source: str) -> tuple[int, int]:
+    """Границы блока ТРЕТЬЕГО обработчика в исходнике включения, по строкам.
+
+    ⚠️ ГРАНИЦЫ ВЫВОДЯТСЯ ИЗ ИСХОДНИКА, А НЕ ВЫПИСЫВАЮТСЯ ЧИСЛАМИ. Выписанные
+    номера строк разошлись бы с файлом при первой же его правке — молча и с
+    зелёным контролем, что хуже красного.
+
+    ⚠️ ПОЧЕМУ ВЫРЕЗАЕТСЯ БЛОК ЦЕЛИКОМ, А НЕ ОДНА СТРОКА РЕГИСТРАЦИИ. Соседний
+    контроль снятого обработчика (`…removed_send_error_handler…`) режет ровно
+    строку — и может себе это позволить: его предмет ЧИТАЕТ исходник и телу
+    обработчика не обязан быть синтаксически верным. Здесь исходник
+    ИСПОЛНЯЕТСЯ. Осиротевшее тело уронило бы разбор в интерпретаторе, гарнир
+    вернул бы ненулевой код, и правило упало бы ОТКАЗОМ ГАРНИРА — неотличимо от
+    отказа предмета, то есть контроль доказывал бы не то, что объявил.
+    """
+    lines = source.splitlines(keepends=True)
+    starts = [
+        i
+        for i, line in enumerate(lines)
+        if FAILURE_BANNER_SUCCESS_EVENT in line and "addEventListener" in line
+    ]
+    assert len(starts) == 1, (
+        f"строк, регистрирующих обработчик события `{FAILURE_BANNER_SUCCESS_EVENT}`, "
+        f"{len(starts)}, а не одна — доктóрить нечего либо подмена задела бы не то"
+    )
+    start = starts[0]
+    closer = "  });\n"
+    ends = [i for i in range(start + 1, len(lines)) if lines[i] == closer]
+    assert ends, (
+        "закрывающей строки блока обработчика не найдено — разборщик рассчитан "
+        "на отступ действующего сценария и разошёлся с ним"
+    )
+    return start, ends[0]
+
+
+def test_control_a_banner_script_without_the_success_handler_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило видит ОТСУТСТВИЕ своего предмета.
+
+    Копия сценария БЕЗ третьего обработчика — это дословный возврат к дереву до
+    правки, то есть ровно то состояние, в котором обход дважды наблюдал дефект.
+    Без этого контроля зелёное правило гашения было бы совместимо с гарниром,
+    который гасит заготовки САМ (например, сбрасывая узлы между рассылками), — и
+    «успех погасил» доказывалось бы ошибкой замера.
+
+    ⚠️ ПОЛОЖИТЕЛЬНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ: непрáвленый файл даёт ПОГАШЕННЫЕ
+    заготовки. Без неё контроль был бы совместим с гарниром, у которого
+    заготовки скрыты всегда.
+
+    ⚠️ НАСТОЯЩИЙ ФАЙЛ НЕ ПРАВИТСЯ НИ БАЙТОМ: копия кладётся во временный
+    каталог, форма наследуется у контроля накопления слушателей.
+    """
+    path = _failure_banner_path()
+    network = FAILURE_BANNER_IDS[1]
+    events = (_send_error_event(), _successful_exchange_event())
+
+    intact = _failure_banner_hidden_after(path, events)
+    assert all(intact[banner_id] for banner_id in FAILURE_BANNER_IDS), (
+        f"НА НЕПРÁВЛЕНОМ ФАЙЛЕ успех не погасил заготовок ({intact}) — "
+        "контроль ниже сличал бы доктóренную копию с деревом, которое и само "
+        "не держит предмета"
+    )
+
+    original = _failure_banner_source(path)
+    start, end = _success_handler_bounds(original)
+    lines = original.splitlines(keepends=True)
+    stripped = "".join(lines[:start] + lines[end + 1 :])
+
+    assert stripped != original, "подмена ничего не удалила — доктóрить нечего"
+    assert (
+        _failure_banner_script(_scratch_banner(tmp_path, stripped)).count(
+            "addEventListener"
+        )
+        == FAILURE_BANNER_HANDLERS_MEASURED - 1
+    ), (
+        "из копии исчез не ровно один обработчик: контроль перестал доказывать "
+        "отсутствие ТРЕТЬЕГО и стал доказывать пустоту"
+    )
+
+    without = _failure_banner_hidden_after(
+        _scratch_banner(tmp_path, stripped), events
+    )
+
+    assert without[network] is False, (
+        "КОПИЯ БЕЗ ТРЕТЬЕГО ОБРАБОТЧИКА ПОГАСИЛА ЗАГОТОВКУ: после успешного "
+        f"обмена состояние признака скрытости — {without}, а гасить в ней "
+        "нечем. Значит замер не измеряет гашение, и зелёное правило выше не "
+        "доказывает ничего"
+    )
+
+
+def test_control_a_banner_script_that_clears_on_any_completion_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило границы видит ПОДМЕНУ предмета.
+
+    ⚠️ ЭТОТ КОНТРОЛЬ НЕ ИЗБЫТОЧЕН ПРИ ПЕРВОМ, И РАЗНИЦА НЕСУЩАЯ. Первый
+    доказывает, что правило видит ОТСУТСТВИЕ гашения. Этот — что оно видит
+    гашение НЕ ПО ТОМУ ПРИЗНАКУ: разница между «гасить по успеху» и «гасить по
+    завершению» есть разница между работающим каналом видимости отказа и
+    каналом, который гасит СЕБЯ САМ. Без этого контроля правило зеленело бы на
+    сценарии, делающем человека слепым ровно там, где отказ и случился, — а
+    случился он на пути, где событие завершения приходит вместе с отказом.
+
+    ⚠️ ПОЛОЖИТЕЛЬНАЯ ПОЛОВИНА ИДЁТ ПЕРВОЙ: на непрáвленом файле завершение БЕЗ
+    признака успеха заготовку обрыва связи НЕ гасит.
+
+    ⚠️ ДОКТÓРИВАНИЕ СНИМАЕТ РОВНО РАННИЙ ВЫХОД, А НЕ ОБРАБОТЧИК. Снять
+    обработчик значило бы повторить первый контроль другими словами; предмет
+    здесь — ПРЕДИКАТ, и вырезается только он.
+    """
+    path = _failure_banner_path()
+    network = FAILURE_BANNER_IDS[1]
+    events = (_send_error_event(), _completed_exchange_without_success_event())
+
+    intact = _failure_banner_hidden_after(path, events)
+    assert intact[network] is False, (
+        f"НА НЕПРÁВЛЕНОМ ФАЙЛЕ завершение без признака успеха погасило "
+        f"заготовку #{network} ({intact}) — доктóрить нечего, предмет уже "
+        "сломан"
+    )
+
+    original = _failure_banner_source(path)
+    start, end = _success_handler_bounds(original)
+    lines = original.splitlines(keepends=True)
+    guard = [
+        i
+        for i in range(start, end + 1)
+        if FAILURE_BANNER_SUCCESS_FLAG in lines[i] and "return" in lines[i]
+    ]
+    assert len(guard) == 1, (
+        "строк раннего выхода по признаку успеха в блоке обработчика "
+        f"{len(guard)}, а не одна — вырезать нечего либо вырезано было бы не то"
+    )
+    unguarded = "".join(lines[: guard[0]] + lines[guard[0] + 1 :])
+
+    assert unguarded != original, "подмена ничего не удалила — доктóрить нечего"
+    scratch = _scratch_banner(tmp_path, unguarded)
+    assert (
+        _failure_banner_script(scratch).count("addEventListener")
+        == FAILURE_BANNER_HANDLERS_MEASURED
+    ), (
+        "из копии исчезли вызовы регистрации: контроль перестал доказывать "
+        "подмену предиката и стал доказывать отсутствие обработчика"
+    )
+
+    any_completion = _failure_banner_hidden_after(scratch, events)
+
+    assert any_completion[network] is True, (
+        "КОПИЯ БЕЗ РАННЕГО ВЫХОДА НЕ ПОГАСИЛА ЗАГОТОВКУ СОБСТВЕННЫМ ОТКАЗОМ: "
+        f"состояние признака скрытости — {any_completion}, ожидалось "
+        f"{{{network!r}: True}}. Значит правило границы зеленеет не предикатом, "
+        "и сценарий, гасящий плашку на ЛЮБОМ завершении обмена, прошёл бы мимо "
+        "него"
+    )
+
+
 def test_the_failure_banner_touches_no_markup_sink():
     """Сценарий не собирает разметку и не читает из ответа ничего лишнего.
 
