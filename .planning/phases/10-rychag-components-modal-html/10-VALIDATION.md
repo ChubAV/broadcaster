@@ -1,0 +1,107 @@
+---
+phase: "10"
+slug: "rychag-components-modal-html"
+# status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
+# audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
+status: validated
+nyquist_compliant: false
+wave_0_complete: true
+created: "2026-09-12"
+# ⚠️ АРТЕФАКТ РЕКОНСТРУИРОВАН СОСТОЯНИЕМ B (`10-VALIDATION.md` не существовал; 54 сводки были),
+# а не унаследован от планировщика. `nyquist_compliant: false` — НЕ недосмотр: четыре предмета
+# проверки закрыть машиной сегодня НЕЧЕМ, и основание перезамерено, а не прочитано (см. раздел
+# «Manual-Only Verifications»). Аудитор `gsd-nyquist-auditor` НЕ спавнился — решение владельца
+# 2026-09-12, ветвь «отметить manual-only».
+---
+
+# Phase 10 — Validation Strategy
+
+> Per-phase validation contract for feedback sampling during execution.
+
+---
+
+## Test Infrastructure
+
+| Property | Value |
+|----------|-------|
+| **Framework** | pytest 9.0.2 + pytest-asyncio 1.3.0 (`pyproject.toml:39-41`) |
+| **Config file** | `pyproject.toml` (нет ни `pytest.ini`, ни `jest.config.*`, ни `vitest.config.*`) |
+| **Quick run command** | `uv run pytest tests/test_templates/test_components.py -q` |
+| **Full suite command** | `just test` → `uv run pytest tests/ -v` |
+| **Estimated runtime** | ~0.4 s быстрый прогон; ~2367 s (39:27) полная суита — замерено 2026-09-12 на `16df128` |
+
+**⚠️ БРАУЗЕРНОГО ПРИВОДА НЕТ НИ ОДНОГО, И ЭТО ЗАМЕР, А НЕ ОЦЕНКА.** `grep -icE "playwright|selenium|puppeteer|splinter"` → `pyproject.toml: 0`, `tests/conftest.py: 0`; тот же образец по всему дереву (`tests/`, `app/`, `pyproject.toml`) не даёт НИ ОДНОГО файла. Движка раскладки в суите нет тоже. Это и есть основание всех четырёх записей раздела Manual-Only.
+
+---
+
+## Sampling Rate
+
+- **After every task commit:** `uv run pytest tests/test_templates/test_components.py -q`
+- **After every plan wave:** `just test`
+- **Before `/gsd-verify-work`:** полная суита зелена — замерено 2026-09-12: `3216 passed, 0 failed`, rc=0
+- **Max feedback latency:** ~0.4 s быстрый контур; полная суита выведена из контура обратной связи задачи по длительности
+
+---
+
+## Per-Task Verification Map
+
+Фаза несёт ОДНО требование (`FORM-06`) и ЧЕТЫРЕ критерия успеха роадмапа. Карта ведётся по КРИТЕРИЯМ, а не по 54 планам: критерий есть единица, которой верификатор выносит вердикт, и именно он сопоставим с правилом.
+
+| Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
+|---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
+| крит. 1 — 18 мест подтверждения через htmx одной правкой | 10-01…10-51 | 1-4 | FORM-06 | — | N/A | gate (инвентарь числом) | `uv run pytest tests/test_templates/test_components.py -q -k "modal_guard_is_inherited or modal_site_inventory"` | ✅ | ✅ green |
+| крит. 2а — присутствие OOB-узла `hx-swap-oob="delete"` | 10-02, 10-03 | 2 | FORM-06 | — | N/A | gate (разметка) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -q` | ✅ | ✅ green |
+| крит. 2б — ФАКТИЧЕСКОЕ снятие осиротевшей панели | 10-02 | 2 | FORM-06 | — | N/A | manual | — | ❌ нечем | ⬜ manual-only |
+| крит. 3 — новых строк JS фаза не добавляет | 10-49, 10-52 | 1 | FORM-06 | — | N/A | gate (пять утверждений, пятое — регистрации в телах `<script>`) | `uv run pytest tests/test_templates/test_components.py -q -k "criterion_three"` | ✅ | ✅ green (под ДВУМЯ отступлениями владельца) |
+| крит. 4 — 10 потребителей удаляют без JS | 10-01…10-51 | 1-4 | FORM-06 | — | N/A | gate (деградация, наследство Фазы 8) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_templates/test_components.py -q` | ✅ | ✅ green |
+| шаг 2.8 — прямоугольник плашки обрыва при рабочей прокрутке | 10-51, 10-54 | 2 | FORM-06 | — | N/A | manual | — | ❌ нечем | ⬜ manual-only |
+| шаг 4.4 — плашка аварии поверх открытой панели | 10-51, 10-54 | 2 | FORM-06 | — | N/A | manual | — | ❌ нечем | ⬜ manual-only |
+| приёмка — подпись человека на обходе | 10-54 | 2 | FORM-06 | — | N/A | manual | — | ❌ нечем | ⬜ manual-only |
+
+*Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+
+⚠️ **КРИТЕРИЙ 3 ЗЕЛЕНЕЕТ ПОД ОТСТУПЛЕНИЯМИ, И ЭТО НАЗВАНО, А НЕ УМОЛЧАНО.** В буквальной формулировке («новых строк JS фаза не добавляет») критерий деревом НЕ выполнен: фаза добавила 7 исполняемых строк в `app/templates/includes/htmx_error_banner.html` и 2 (IIFE) в `app/templates/ads/form.html`. Он засчитан ДВУМЯ подписанными записями `overrides` шапки `10-VERIFICATION.md` — `accept-reading` (`chubav`, 2026-09-09) и `extend-override` (`chubav`, 2026-09-12). Граница второй УЗКАЯ и на будущие регистрации в том же файле НЕ распространяется. Правило `test_criterion_three_holds_by_the_numbers` принуждает ЧИСЛО регистраций, а не границу отступления.
+
+---
+
+## Wave 0 Requirements
+
+Существующая инфраструктура покрывает все машинно достижимые требования фазы: pytest уже установлен, `tests/conftest.py` уже несёт общие фикстуры, отдельного контура заводить не потребовалось. Установок пакетных менеджеров партия закрытия гэпов не несла ни одной.
+
+*Wave 0 не требуется.*
+
+---
+
+## Manual-Only Verifications
+
+| Behavior | Requirement | Why Manual | Test Instructions |
+|----------|-------------|------------|-------------------|
+| Ответ ФАКТИЧЕСКИ снимает осиротевшую панель подтверждения вторым OOB-узлом | FORM-06 | Суита утверждает ПРИСУТСТВИЕ узла `hx-swap-oob="delete"` в ответе; СНЯТИЕ узла из документа выполняет рантайм htmx в браузере, которого в суите нет. Это единственный вывод исследования фазы, взятый из документации и не проверенный ни на чём (названо самим роадмапом, критерий 2). | `10-UAT.md`, пункт 4 перечня ручного обхода |
+| Прямоугольник плашки `htmx-failure-network` лежит В ОКНЕ при рабочем положении прокрутки | FORM-06 | Прямоугольник есть произведение РАСКЛАДКИ на ПОЛОЖЕНИЕ ПРОКРУТКИ. Движка раскладки в суите нет, браузерного привода нет (замер: 0 вхождений). Зелёное правило `test_the_failure_banner_lift_is_unconditional` утверждает ОБЪЯВЛЕНИЕ таблицы стилей — другой предмет; подмена одного другим уже стоила фазе записи 77 журнала окон. | `10-UAT.md:1224-1564`, шаг 2.8: оборвать связь на follow-up GET после удаления расписания при НЕНУЛЕВОМ `scrollY`, сообщить шесть величин (событие и статус запроса, четыре числа прямоугольника, само `scrollY`, способ позиционирования и слой, ответ `elementFromPoint`, глазной вердикт по снимку) |
+| Плашка аварии видна ПОВЕРХ открытой панели подтверждения, панель остаётся открытой | FORM-06 | То же основание. Замер 2026-09-11 (ДО плана 10-51) давал `z-index: 70` против `60`; после того как подъём стал БЕЗУСЛОВНЫМ, что нарисовал браузер, не наблюдал никто. Окно 76 называет цену: две одновременно показанные заготовки накрывают друг друга — теперь ВСЕГДА. | `10-UAT.md:1224-1564`, шаг 4.4: четыре величины (прямоугольники плашки и панели, их слои, `elementFromPoint` в точке плашки, осталась ли панель открытой и повторяемо ли действие) плюс ЧИСЛО видимых заготовок |
+| ПОДПИСЬ ЧЕЛОВЕКА на приёмке обхода | FORM-06 | Признаки шести проверок снимал АГЕНТ при `workflow.live_dom_uat: false`; шапка `10-UAT.md` несёт `status: partial`, а `tests/test_planning/test_the_walkthrough_cannot_self_certify.py` запрещает самозаверение прямо. Машина не вправе подписать собственную приёмку — это не вопрос инструмента. | `10-UAT.md`: принять отметки шести проверок с именем и датой, ЛИБО назвать поимённо требующие перепрохождения. Третьего исхода нет. **ЭТОЙ ПОДПИСЬЮ И НИЧЕМ ИНЫМ закрывается `FORM-06`.** |
+
+---
+
+## Validation Sign-Off
+
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies — четыре машинно достижимых критерия несут правила; четыре недостижимых названы поимённо выше с основанием
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references — Wave 0 не требуется, инфраструктура на месте
+- [x] No watch-mode flags — pytest одноразовый по построению
+- [x] Feedback latency < 1s на быстром контуре (замерено: 0.37 s)
+- [ ] `nyquist_compliant: true` set in frontmatter — **НЕ ставится**: четыре предмета закрываются человеком, и объявить фазу полностью автоматически проверяемой значило бы соврать
+
+**Approval:** pending — снимается подписью человека на приёмке `10-UAT.md`
+
+---
+
+## Validation Audit 2026-09-12
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 4 |
+| Resolved | 0 |
+| Escalated | 4 |
+
+Все четыре эскалированы в Manual-Only решением владельца 2026-09-12 (ветвь «отметить manual-only»): `gsd-nyquist-auditor` НЕ спавнился намеренно — без браузерного привода он либо вернул бы те же четыре обратно, либо написал бы правила на ОБЪЯВЛЕНИЕ вместо ПРЯМОУГОЛЬНИКА, то есть повторил бы подмену, за которую фаза уже заплатила записью 77 журнала окон.
