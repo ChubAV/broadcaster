@@ -353,11 +353,33 @@ async def update_schedule(
         schedule.is_active = False
         schedule.next_run_at = None
     elif schedule.is_active:
-        schedule.next_run_at = compute_next_run_at(
+        # ⚠️ ТОТ ЖЕ НЕПОКРЫТЫЙ ВИД, ЧТО У ТУМБЛЕРА (CR-01). Патч, НЕ ТРОГАЮЩИЙ
+        # `days_of_week`, на включённой строке с днями вне `0..6` давал здесь
+        # `None` при `is_active = True` — и `db.commit()` уходил в
+        # `IntegrityError` ограничения `0022`, то есть в 500 на форменный
+        # запрос. Валидаторы входа этого не видят: испорченные дни приезжают ИЗ
+        # БАЗЫ, а не из патча.
+        next_run = compute_next_run_at(
             days_of_week=schedule.days_of_week,
             times_of_day=schedule.times_of_day,
             tz_name=schedule.timezone,
         )
+        if next_run is None:
+            # ОТКАЗ ЦЕЛИКОМ, А НЕ ВЫКЛЮЧЕНИЕ СТРОКИ. Тихо погасить чужое
+            # работающее расписание в ответ на патч соседнего поля — решение,
+            # которого клиент не просил и о котором не узнает; отказ же
+            # оставляет строку ровно там, где нашёл. Запись до этой точки не
+            # доходит: `commit()` ниже не выполняется, и сессия откатывается
+            # зависимостью `get_db`.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Дни или часы расписания заданы значениями, которых система "
+                    "исполнить не может — откройте расписание в редакторе "
+                    "объявления и сохраните дни и время заново"
+                ),
+            )
+        schedule.next_run_at = next_run
     else:
         schedule.next_run_at = None
 
@@ -421,17 +443,45 @@ async def toggle_schedule(
             detail="Сначала дозаполните расписание в редакторе объявления",
         )
 
-    schedule.is_active = not schedule.is_active
-
     if schedule.is_active:
-        # Recompute next_run_at when activating
-        schedule.next_run_at = compute_next_run_at(
+        # ПАУЗА не спрашивает ничего — довод дословно тот же, что у страничного
+        # тумблера: право остановить отправку не зависит ни от заполненности,
+        # ни от области значений.
+        schedule.is_active = False
+        schedule.next_run_at = None
+    else:
+        # ⚠️ МОМЕНТ СЧИТАЕТСЯ ДО СМЕНЫ СОСТОЯНИЯ, И ОТКАЗ ИДЁТ ПО ЕГО
+        # ОТСУТСТВИЮ, А НЕ ПО ПУСТОТЕ СПИСКОВ (CR-01, ревизия 2026-09-11).
+        # Прежний порядок включал расписание БЕЗУСЛОВНО и считал момент ПОСЛЕ,
+        # то есть сам строил пару «включено + нет момента», запрещённую
+        # ревизией `0022` в СХЕМЕ: `db.commit()` отвечал пятисоткой от
+        # `ck_schedules_active_requires_next_run`.
+        #
+        # ВАЛИДАТОРЫ ВХОДА СЮДА НЕ ПОМОГАЮТ ПО ПОСТРОЕНИЮ. Область значений
+        # закрыта на создании и обновлении — она смотрит на ПРИСЛАННОЕ; тумблер
+        # же читает дни из УЖЕ СОХРАНЁННОЙ строки, а такие строки после наката
+        # `0022` на бою лежат (накат их выключает и `days_of_week` не трогает).
+        next_run = compute_next_run_at(
             days_of_week=schedule.days_of_week,
             times_of_day=schedule.times_of_day,
             tz_name=schedule.timezone,
         )
-    else:
-        schedule.next_run_at = None
+        if next_run is None:
+            # ПОЛНОЕ ПО СОСТАВУ, НЕИСПОЛНИМОЕ ПО ЗНАЧЕНИЯМ — отдельный ответ и
+            # отдельный текст. Проверка полноты выше отвечает на вопрос «есть
+            # ли что отправлять», эта — «когда именно»; слить их в одну значило
+            # бы дать человеку совет, которого он не сможет выполнить.
+            # Строка остаётся выключенной: состояние не портится.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Дни или часы расписания заданы значениями, которых система "
+                    "исполнить не может — откройте расписание в редакторе "
+                    "объявления и сохраните дни и время заново"
+                ),
+            )
+        schedule.is_active = True
+        schedule.next_run_at = next_run
 
     await db.commit()
     await db.refresh(schedule)
