@@ -1,12 +1,22 @@
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import VALID_TIMEZONES
 from app.dependencies import get_current_user_id, get_db
+# ⚠️ ГРАНИЦА ВЕЛИЧИНЫ ВВОЗИТСЯ, А НЕ ВЫПИСЫВАЕТСЯ ЧИСЛОМ ЗАНОВО (WR-02, ревизия
+# 2026-09-11). Вторая копия разошлась бы с первой молча при первой же правке
+# колонки — ровно то расхождение, ради устранения которого константа и переехала
+# в собственный модуль. Модуль НЕЙТРАЛЕН (он не импортирует ни страничного
+# модуля, ни модели), поэтому зависимость JSON-слоя от него цикла не замыкает;
+# его путь остался страничным по летописи переезда, а предмет у него
+# ОБЩЕПРОЕКТНЫЙ, и с этой правкой у него появился первый потребитель вне
+# `app/pages/`.
+from app.pages.identifiers import ID_MAX, IdPath
 from app.models.messenger_account import MessengerAccount
 from app.repositories.ad import AdRepository
 from app.repositories.schedule import ScheduleRepository
@@ -21,6 +31,12 @@ from app.services.schedule_rules import (
 from app.services.schedule_service import compute_next_run_at
 
 router = APIRouter(prefix="/api/schedules", tags=["schedules"])
+
+# ⚠️ ГРАНИЦА СТОИ́Т НА ЭЛЕМЕНТЕ СПИСКА, А НЕ НА САМОМ ПОЛЕ. `group_ids` уезжает в
+# `Group.id.in_([...])`, то есть КАЖДЫЙ элемент становится операндом сравнения по
+# колонке; ограничение, наложенное на список целиком, не сказало бы о его
+# содержимом ничего.
+BoundedId = Annotated[int, Field(ge=1, le=ID_MAX)]
 
 
 # ─── ОБЛАСТЬ ЗНАЧЕНИЙ ДНЕЙ И ВРЕМЁН НА JSON-ВХОДЕ ───────────────────────────
@@ -89,9 +105,20 @@ def _reject_malformed_times(values: list[str] | None) -> list[str] | None:
 
 
 class CreateScheduleRequest(BaseModel):
-    ad_id: int
-    account_id: int
-    group_ids: list[int] = []
+    # ⚠️ ВЕЛИЧИНА ИДЕНТИФИКАТОРА ЗАКРЫТА НА ГРАНИЦЕ ПРИЛОЖЕНИЯ (WR-02).
+    # Голый `int` уезжал операндом сравнения по колонке — `Ad.id == 10**26` даёт
+    # `OverflowError` на SQLite и `DataError` вне диапазона int32 на PostgreSQL,
+    # и оба заканчиваются HTTP 500 на ФОРМЕННЫЙ запрос аутентифицированного
+    # пользователя. Это тот же класс `CR-01` пятого круга ревизии, ради которого
+    # заведён `ID_MAX`, и до этой правки он был закрыт у страничного слоя и
+    # открыт здесь.
+    #
+    # Нижняя граница — ЕДИНИЦА, а не ноль: идентификаторы автоинкремента
+    # начинаются с единицы, ни ноль, ни отрицательные в домене не лежат
+    # (основание записано у `app/pages/identifiers.py` и наследуется дословно).
+    ad_id: BoundedId
+    account_id: BoundedId
+    group_ids: list[BoundedId] = []
     days_of_week: list[int] = []
     times_of_day: list[str] = []
     timezone: str = "UTC"
@@ -115,7 +142,10 @@ class CreateScheduleRequest(BaseModel):
 
 
 class UpdateScheduleRequest(BaseModel):
-    group_ids: list[int] | None = None
+    # Та же граница на том же поле второго входа: правило, стоящее у создания и
+    # отсутствующее у обновления, расходится молча — записанный довод
+    # `app/services/schedule_rules.py`.
+    group_ids: list[BoundedId] | None = None
     days_of_week: list[int] | None = None
     times_of_day: list[str] | None = None
     timezone: str | None = None
@@ -307,7 +337,7 @@ async def list_schedules(
 
 @router.put("/{schedule_id}", response_model=ScheduleResponse)
 async def update_schedule(
-    schedule_id: int,
+    schedule_id: IdPath,
     data: UpdateScheduleRequest,
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
@@ -390,7 +420,7 @@ async def update_schedule(
 
 @router.delete("/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_schedule(
-    schedule_id: int,
+    schedule_id: IdPath,
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -406,7 +436,7 @@ async def delete_schedule(
 
 @router.post("/{schedule_id}/toggle", response_model=ScheduleResponse)
 async def toggle_schedule(
-    schedule_id: int,
+    schedule_id: IdPath,
     user_id: int = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
