@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 10
 current_phase_name: Рычаг `components/modal.html`
 status: executing
-stopped_at: Completed 10-54-PLAN.md
-last_updated: "2026-09-12T08:59:42.764Z"
+stopped_at: Completed 10-53-PLAN.md
+last_updated: "2026-09-12T13:49:44.524Z"
 last_activity: 2026-09-12
 last_activity_desc: Phase 10 execution started
-state_head: b9f168d82da0cf2c968d21b69a605bbf72163468
+state_head: 83d77af4a5b7f4bf0e0c9d5677fda568a840242f
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 92
-  completed_plans: 91
+  completed_plans: 92
   percent: 33
 ---
 
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
-Plan: 3 of 54
+Plan: 4 of 54
 Total Plans in Phase: 54
 Completed Plans in Phase: 51
 Status: Ready to execute
@@ -134,6 +134,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 10 P51 | 3h 05m | 3 tasks | 4 files |
 | Phase 10 P52 | 52 min | 3 tasks | 1 files |
 | Phase 10 P54 | 35 min | 2 tasks | 2 files |
+| Phase 10 P53 | 71 min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -279,6 +280,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 10]: D-54-2: ожидание шага 2.8 обхода сформулировано через НЕЗАВИСИМОСТЬ прямоугольника плашки от положения прокрутки, а не через одно число `top`, и процедура ТРЕБУЕТ ненулевого `scrollY`, приведённого числом — Оба исхода 2026-09-11 ВЕРНЫ каждый для своего замера: `{top: 96}` при прокрутке у верхнего края и `{top: -701}` при `scrollY: 797`. Признак зависит от ПРОКРУТКИ, и один положительный замер его не закрывает — замер при нуле не снимает признака вовсе
 - [Phase 10]: D-54-3: тело программы посева стенда в приписку НЕ переписано — правило `test_the_walkthrough_stand_is_seedable.py` утверждает `text.count(program) == 1` и краснеет на второй копии; названы РАЗДЕЛ и ШАГ единственной команды, а уборка и счёт приведены дословно — Требование плана «команды приводятся ДОСЛОВНО» и машинный инвариант единственности противоречат прямо; противоречие снято ЗАМЕРОМ (прогон дал FAILED ровно на вписанной второй копии), а не выбором по вкусу. Довод тождествен доктрине самого плана: вторая копия разошлась бы с первой молча
 - [Phase 10]: D-54-6: `requirements-completed` сводки плана 10-54 оставлено ПУСТЫМ при `requirements: [FORM-06]` в шапке плана — требование закрывается ПОДПИСЬЮ ЧЕЛОВЕКА на приёмке обхода, и отметка его сводкой была бы самозаверением — Ради запрета этого живут `test_the_walkthrough_cannot_self_certify.py` и `test_no_requirement_is_marked_complete_before_its_phase_verification_passed`. Прецедент — сводка плана 10-51 той же фазы
+- [Phase 10]: D-37 — ветвь `extend-override` (останов задачи 1 плана 10-53, `gate="blocking-human"`, `one-way`): область действующего отступления по критерию 3 РАСШИРЕНА второй записью блока `overrides` шапки `10-VERIFICATION.md`, называющей ТРЕТИЙ файл (`app/templates/includes/htmx_error_banner.html`) и ТРЕТЬЮ сущность (регистрацию `htmx:afterRequest` на узле тела документа, `:227-233`, коммит `4e24d61`) поимённо. Принял `chubav` 2026-09-12. ⚠️ ОБЛАСТЬ СУЖЕНА СЛОВАМИ ВЛАДЕЛЬЦА И ЗАПИСАНА МАШИННО ЧИТАЕМО: поле `covers` покрывает ТОЛЬКО ЭТУ регистрацию; БУДУЩИЕ регистрации в том же файле ею НЕ покрыты, требуют НОВОГО решения владельца и обязаны покраснить пятое утверждение гейта критерия 3 (заведено планом 10-52). Запись несёт сверх формы 2026-09-09 два поля: `price` — ссылку на запись 74 журнала окон (успешный ФОНОВЫЙ обмен гасит непрочитанный настоящий отказ; `T-10-49-05`, `accept`), и `enforced_by` — имя пятого утверждения гейта с путём модуля. Ветвь `criterion-stands-violated` НЕ выбрана, второй записи журнала окон не заводится. ⚠️ `overrides_applied: 0` и `status: gaps_found` планом НЕ СДВИНУТЫ: поле есть счёт КРУГА, а не счёт записей, и засчитывает запись СЛЕДУЮЩИЙ круг верификации, а не план. Цена расширения названа в самой записи: граница «новая сущность против правки существующей» растянута ВТОРЫМ частным разрешением, и читателю роадмапа для понимания критерия 3 нужно прочесть теперь ДВЕ записи блока.
 
 ### Pending Todos
 
@@ -459,8 +461,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-12T08:59:26.263Z
-Stopped at: Completed 10-54-PLAN.md
+Last session: 2026-09-12T13:48:23.583Z
+Stopped at: Completed 10-53-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
