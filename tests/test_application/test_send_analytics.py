@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import event, select
+from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.analytics.send_analytics import (
@@ -1054,8 +1054,19 @@ async def test_upcoming_sends_respects_the_limit(db_session):
 
 
 @pytest.mark.asyncio
-async def test_upcoming_sends_skips_inactive_and_unscheduled(db_session):
-    """Приостановленное расписание и расписание без next_run_at не выстрелят.
+async def test_upcoming_sends_skips_both_paused_shapes(db_session):
+    """ОБЕ ЗАКОННЫЕ ФОРМЫ ПАУЗЫ не выстрелят — и обе здесь ВЫКЛЮЧЕННЫЕ.
+
+    ⚠️ ИМЯ ПРАВИЛА СМЕНЕНО ВСЛЕД ЗА ЕГО ПРЕДМЕТОМ (WR-03, ревизия 2026-09-11).
+    Прежнее — `..._skips_inactive_and_unscheduled` — обещало покрытие ДВУХ
+    РАЗНЫХ условий запроса, тогда как оба случая стали проверять ОДНО:
+    `is_active.is_(True)`. Имя, обещающее больше, чем правило делает, — это
+    отложенный ложный зелёный: удалившего условие `next_run_at.isnot(None)`
+    завтра не покраснило бы ничто, а имя утверждало бы обратное.
+
+    Условие `isnot(None)` закрыто ОТДЕЛЬНЫМ правилом —
+    `test_upcoming_sends_skips_the_shape_the_schema_now_forbids`, — и закрыто
+    честно: посевом запрещённой пары в обход ограничения.
 
     ⚠️ ВТОРОЙ СЛУЧАЙ ПЕРЕПИСАН, И ПРИЧИНА СУЩЕСТВЕННАЯ. Прежде он сеял строку
     ВКЛЮЧЁННОЙ и без момента запуска — то есть проверял, что блок не показывает
@@ -1069,10 +1080,10 @@ async def test_upcoming_sends_skips_inactive_and_unscheduled(db_session):
     момента запуска, — и обе законные пары «выключено» перечислены рядом.
 
     ⚠️ ЧТО ЭТО ЗНАЧИТ ДЛЯ САМОГО ЗАПРОСА: условие `Schedule.next_run_at.isnot(None)`
-    в `upcoming_sends` перестало быть самостоятельно достижимым — под
-    `is_active.is_(True)` пустого момента теперь не бывает. Условие оставлено как
-    защита в глубину, но проверить его через базу больше нельзя, и притворяться,
-    будто этот тест его проверяет, было бы неправдой.
+    в `upcoming_sends` перестало быть достижимым ЧЕРЕЗ ОБЫЧНУЮ ЗАПИСЬ — под
+    `is_active.is_(True)` пустого момента ORM больше не запишет. Оно осталось
+    защитой в глубину, и притворяться, будто ЭТОТ тест его проверяет, было бы
+    неправдой; проверяет его сосед, сеющий запрещённую пару в обход ограничения.
     """
     user = await _user(db_session)
     await _seed_schedule(
@@ -1095,6 +1106,85 @@ async def test_upcoming_sends_skips_inactive_and_unscheduled(db_session):
     items = await upcoming_sends(db_session, user_id=user.id, now=NOW)
 
     assert items == []
+
+
+@pytest.mark.asyncio
+async def test_upcoming_sends_skips_the_shape_the_schema_now_forbids(db_session):
+    """Условие `next_run_at IS NOT NULL` имеет зубы — ЗАМЕРОМ, а не заявлением.
+
+    ⚠️ ЗАЧЕМ ПРАВИЛО, ЕСЛИ СХЕМА ЭТУ ПАРУ ЗАПРЕЩАЕТ. Ограничение
+    `ck_schedules_active_requires_next_run` (ревизия `0022`) делает пару
+    «включено + нет момента» НЕДОСТИЖИМОЙ ЧЕРЕЗ ПРИЛОЖЕНИЕ — но именно эта
+    строка (`sched=48`) пролежала на бою мёртвой с 10 августа, и условие запроса
+    заводилось против НЕЁ. Убрать условие «раз схема и так не пустит» значит
+    поставить корректность блока в зависимость от того, что ограничение
+    накачено ВЕЗДЕ и НИКОГДА не будет снято откатом: `downgrade()` ревизии
+    `0022` снимает его штатно, а прямой psql на бою обходит и его.
+
+    ⚠️ КАК СЕЕТСЯ ЗАПРЕЩЁННАЯ ПАРА. `PRAGMA ignore_check_constraints = ON` —
+    временное снятие проверок на ОДНОМ соединении SQLite, ровно на одну вставку
+    сырым SQL, с немедленным возвратом в `OFF`. ORM здесь не годится по
+    построению: модель несёт то же ограничение, и посев упал бы отказом
+    ПРИБОРА. Снятие обязано быть возвращено в том же тесте — иначе следующее
+    правило в том же соединении проверяло бы схему БЕЗ ограничений, то есть
+    зеленело бы вакуумом.
+
+    Предмет замера ОДИН: строку с пустым моментом блок не показывает, даже
+    когда она ВКЛЮЧЕНА. Это и есть условие `isnot(None)`, и ничьё другое:
+    `is_active.is_(True)` на такой строке ИСТИННО и отсеять её не может.
+    """
+    user = await _user(db_session)
+    # Идентификатор снимается СРАЗУ: `commit()` и `expire_all()` ниже сбрасывают
+    # загруженные атрибуты, и обращение к `user.id` после них ушло бы в ленивую
+    # подгрузку вне greenlet-а — отказ ПРИБОРА, выданный за отказ предмета.
+    user_id = user.id
+    # Законная строка-спутник: она доказывает, что блок В ПРИНЦИПЕ отвечает
+    # содержимым. Без неё пустой ответ объяснялся бы чем угодно — например
+    # сломанным посевом владельца.
+    await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=2),
+        title="Законная",
+        seq="1",
+    )
+    donor = await _seed_schedule(
+        db_session,
+        user,
+        next_run_at=NOW + timedelta(hours=1),
+        title="Мёртвая",
+        seq="2",
+    )
+    donor_id = donor.id
+
+    # Строка доводится до ЗАПРЕЩЁННОЙ формы сырым UPDATE со снятыми проверками.
+    await db_session.execute(text("PRAGMA ignore_check_constraints = ON"))
+    try:
+        await db_session.execute(
+            text("UPDATE schedules SET next_run_at = NULL WHERE id = :sid"),
+            {"sid": donor_id},
+        )
+        await db_session.commit()
+    finally:
+        # ВОЗВРАТ БЕЗУСЛОВЕН. Оставленное снятие протекло бы в соседние правила
+        # того же соединения и сделало бы их зелёными вакуумом.
+        await db_session.execute(text("PRAGMA ignore_check_constraints = OFF"))
+
+    db_session.expire_all()
+    poisoned = (
+        await db_session.execute(select(Schedule).where(Schedule.id == donor_id))
+    ).scalar_one()
+    assert poisoned.is_active is True and poisoned.next_run_at is None, (
+        "посев не построил запрещённой пары — правило проверяло бы не то, ради "
+        "чего заведено"
+    )
+
+    items = await upcoming_sends(db_session, user_id=user_id, now=NOW)
+
+    assert [item.ad_title for item in items] == ["Законная"], (
+        "блок показал МЁРТВУЮ строку (включена, момента нет) — условие "
+        f"`next_run_at IS NOT NULL` не работает: {[i.ad_title for i in items]}"
+    )
 
 
 @pytest.mark.asyncio
