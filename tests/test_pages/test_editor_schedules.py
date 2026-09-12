@@ -740,6 +740,55 @@ async def test_malformed_time_does_not_crash_and_is_dropped(
 
 
 @pytest.mark.asyncio
+async def test_a_time_padded_with_spaces_is_stored_trimmed(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """WR-01: сохраняется ТО, ЧТО ПРОВЕРЕНО, а не то, что пришло.
+
+    `_clean_times` сверял `v.strip()`, а в список кладёл `v`. Значение
+    `" 09:00 "` проходило проверку и ложилось в `times_of_day` С ПРОБЕЛАМИ.
+
+    ⚠️ ПОЧЕМУ ЭТО НЕ КОСМЕТИКА. Значение печатается в разметку редактора как
+    есть — `<input class="time-pill__input" type="time" value=" 09:00 ">`, — а
+    `type="time"` значение с пробелами НЕ ПРИНИМАЕТ: поле показывается ПУСТЫМ, и
+    при следующем сохранении время молча теряется. `compute_next_run_at` при
+    этом отрабатывает (`int(" 09")` пробелы терпит), поэтому расхождение не
+    поднимает НИ ОДНОГО признака — оно наблюдаемо только здесь.
+
+    Сверх того рождались два написания одного времени, которых `TIME_OF_DAY_RE`
+    избегает требованием двух цифр часа: второе определение формата.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    group = await _seed_group(db_session, owner.id, account.id)
+
+    response = await authed_client.post(
+        "/schedules/new",
+        content=_form(
+            [
+                ("ad_id", str(ad.id)),
+                ("account_id", str(account.id)),
+                ("group_ids", str(group.id)),
+                ("days_of_week", "1"),
+                ("times_of_day", " 09:00 "),
+                ("times_of_day", "\t18:30"),
+                ("timezone", "UTC"),
+            ]
+        ),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code < 500, response.status_code
+    created = await _all_schedules(db_session)
+    assert len(created) == 1
+    assert created[0].times_of_day == ["09:00", "18:30"], (
+        "сохранено НЕОБРЕЗАННОЕ значение — редактор покажет пустое поле, и "
+        f"время потеряется при следующем сохранении: {created[0].times_of_day!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_non_numeric_group_and_day_values_do_not_crash(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
