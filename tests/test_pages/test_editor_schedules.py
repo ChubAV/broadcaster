@@ -441,6 +441,54 @@ async def test_delete_from_editor_returns_to_the_editor_and_removes_the_schedule
 
 
 @pytest.mark.asyncio
+async def test_an_unreadable_body_leaves_the_schedule_in_place(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """WR-07: удаление не имеет права коммититься ДО разбора тела запроса.
+
+    `await request.form()` — единственное место, где тело вообще разбирается, и
+    оно МОЖЕТ поднять исключение: негодный `multipart`, обрыв тела, превышение
+    лимита частей. Пока `commit()` стоял ВЫШЕ этого разбора, человек получал 500,
+    А СТРОКИ УЖЕ НЕ БЫЛО — то есть отказ, неотличимый от «ничего не произошло»,
+    при уже выполненной записи.
+
+    ⚠️ ПРЕДМЕТ ПРАВИЛА — ПОРЯДОК «РАЗБОР ТЕЛА → ЗАПИСЬ», А НЕ КОД ОТВЕТА.
+    `MultipartParseError` остаётся необработанной и доезжает до общего
+    обработчика приложения: разбор тела — граница фреймворка, одна на все
+    маршруты проекта, и чинить её в этом обработчике значило бы завести
+    частное правило там, где нужно общее. Утверждается ровно то, что обработчик
+    обязан гарантировать сам: НЕУДАВШИЙСЯ запрос НЕ УДАЛИЛ строку.
+
+    Негодность тела здесь ЗАМЕРЕНА, а не предположена: `python_multipart`
+    отвечает на это тело `MultipartParseError: Expected boundary character 45,
+    got 103 at index 2`.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+    schedule_id = schedule.id
+
+    response = await authed_client.post(
+        f"/schedules/{schedule_id}/delete",
+        content=b"garbage-not-multipart",
+        headers={"Content-Type": "multipart/form-data; boundary=BOUND"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code >= 400, (
+        f"запрос с нечитаемым телом объявлен УСПЕШНЫМ ({response.status_code}) — "
+        "тело негодно, и правило ниже проверяло бы не то, ради чего заведено"
+    )
+
+    db_session.expire_all()
+    survivors = await _all_schedules(db_session)
+    assert [row.id for row in survivors] == [schedule_id], (
+        "запрос с нечитаемым телом УДАЛИЛ расписание: запись прошла раньше "
+        "разбора тела, и человек получил отказ над уже исчезнувшей строкой"
+    )
+
+
+@pytest.mark.asyncio
 async def test_return_value_never_reaches_the_redirect_verbatim(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
