@@ -38,6 +38,7 @@ from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.user import User
 from app.pages.dashboard_feed import FEED_POLL_SECONDS
+from tests.conftest import a_future_run_moment
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
 
@@ -140,7 +141,7 @@ async def _seed_section(db: AsyncSession, section: str) -> str:
                     days_of_week=[1],
                     times_of_day=["10:00"],
                     timezone="UTC",
-                    next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
+                    next_run_at=a_future_run_moment(),
                 )
                 for i in range(SEED_ROWS)
             ]

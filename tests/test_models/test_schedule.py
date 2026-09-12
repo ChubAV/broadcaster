@@ -5,6 +5,7 @@ from app.models.user import User
 from app.models.messenger_account import MessengerAccount
 from app.models.ad import Ad
 from app.models.schedule import Schedule
+from tests.conftest import a_future_run_moment
 
 
 @pytest.mark.asyncio
@@ -111,7 +112,7 @@ async def test_schedule_default_values(db_session):
     schedule = Schedule(
         ad_id=ad.id,
         account_id=account.id,
-        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
+        next_run_at=a_future_run_moment(),
     )
     db_session.add(schedule)
     await db_session.commit()
@@ -141,7 +142,7 @@ async def test_schedule_timezone_default(db_session):
     await db_session.commit()
     await db_session.refresh(ad)
 
-    schedule = Schedule(ad_id=ad.id, account_id=account.id, next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc))
+    schedule = Schedule(ad_id=ad.id, account_id=account.id, next_run_at=a_future_run_moment())
     db_session.add(schedule)
     await db_session.commit()
     await db_session.refresh(schedule)
@@ -171,7 +172,7 @@ async def test_schedule_timezone_custom(db_session):
         ad_id=ad.id,
         account_id=account.id,
         timezone="Europe/Moscow",
-        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
+        next_run_at=a_future_run_moment(),
     )
     db_session.add(schedule)
     await db_session.commit()

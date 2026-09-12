@@ -32,6 +32,7 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
+from tests.conftest import a_future_run_moment
 
 BLOCKED_HINT = "Возобновить нельзя: расписание не заполнено"
 
@@ -96,7 +97,7 @@ async def _seed_poisoned_schedule(
         # «следующий запуск» по одному лишь наличию значения, и выданный паузе
         # момент менял бы разметку, к предмету этих тестов отношения не имеющую.
         next_run_at=(
-            datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc) if is_active else None
+            a_future_run_moment() if is_active else None
         ),
     )
     db.add(schedule)

@@ -31,6 +31,7 @@ from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
+from tests.conftest import a_future_run_moment
 
 DRAFT_BADGE = "Черновик"
 PUBLISHED_BADGE = "Опубликовано"
@@ -79,7 +80,7 @@ async def _seed_schedule(db: AsyncSession, ad: Ad) -> Schedule:
         days_of_week=[0],
         times_of_day=["09:00"],
         timezone="UTC",
-        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
+        next_run_at=a_future_run_moment(),
     )
     db.add(schedule)
     await db.commit()

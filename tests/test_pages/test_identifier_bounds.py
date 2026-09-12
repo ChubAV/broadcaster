@@ -34,7 +34,7 @@ from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.user import User
 from app.pages.history import STATUS_OK
-from tests.conftest import seed_group
+from tests.conftest import a_future_run_moment, seed_group
 
 # ⚠️ ГРАНИЦА ВВОЗИТСЯ У ПРИЛОЖЕНИЯ, А НЕ ВЫПИСЫВАЕТСЯ ЛИТЕРАЛОМ. Вторая копия
 # числа разошлась бы с первой молча при первой же правке колонки, и правило
@@ -811,7 +811,7 @@ async def _seed_live_row_set(db: AsyncSession) -> dict[str, int]:
         group_ids=[group.id],
         days_of_week=[1],
         times_of_day=["10:00"],
-        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
+        next_run_at=a_future_run_moment(),
     )
     db.add(schedule)
     await db.commit()

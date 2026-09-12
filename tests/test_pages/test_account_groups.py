@@ -43,6 +43,7 @@ from app.models.user import User
 # сеют 35 строк литералом — они писались до появления курсорных утверждений и
 # переписывать их эта задача не обязана.
 from app.pages.account_groups import PAGE_SIZE
+from tests.conftest import a_future_run_moment
 
 # Якорь строки списка. Утверждать порядок по именам групп нельзя: у двух групп
 # с одинаковым именем они совпадают, а различить нужно именно строки.
@@ -156,7 +157,7 @@ async def _seed_schedule(
         times_of_day=["09:30"],
         timezone="UTC",
         is_active=True,
-        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
+        next_run_at=a_future_run_moment(),
     )
     db.add(schedule)
     await db.commit()
@@ -1111,7 +1112,7 @@ async def test_schedule_count_ignores_foreign_schedules(
             days_of_week=[1],
             times_of_day=["10:00"],
             timezone="UTC",
-            next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
+            next_run_at=a_future_run_moment(),
         )
     )
     await db_session.commit()

@@ -39,6 +39,7 @@ from app.pages.schedules import (
     _clean_choice,
     _group_names_for,
 )
+from tests.conftest import a_future_run_moment
 
 # Запрос к таблице групп в журнале выполненных операторов. Имя таблицы может
 # прийти в кавычках (groups — зарезервированное слово в части диалектов),
@@ -119,7 +120,7 @@ async def _seed_schedule(
         # «следующий запуск» по одному лишь наличию значения, и выданный паузе
         # момент менял бы разметку, к предмету этих тестов отношения не имеющую.
         next_run_at=(
-            datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc) if is_active else None
+            a_future_run_moment() if is_active else None
         ),
     )
     db.add(schedule)

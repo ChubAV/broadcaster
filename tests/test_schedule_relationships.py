@@ -8,6 +8,7 @@ from app.models.schedule import Schedule
 from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
 from app.models.user import User
+from tests.conftest import a_future_run_moment
 
 
 @pytest.mark.asyncio
@@ -36,7 +37,7 @@ async def test_schedule_eager_load_ad_and_account(db_session):
         days_of_week=[0, 1],
         times_of_day=["10:00"],
         is_active=True,
-        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
+        next_run_at=a_future_run_moment(),
     )
     db_session.add(schedule)
     await db_session.commit()

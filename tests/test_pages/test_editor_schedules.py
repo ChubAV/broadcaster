@@ -41,6 +41,7 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
+from tests.conftest import a_future_run_moment
 
 FORM_HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -134,7 +135,7 @@ async def _seed_schedule(
         # «следующий запуск» по одному лишь наличию значения, и выданный паузе
         # момент менял бы разметку, к предмету этих тестов отношения не имеющую.
         next_run_at=(
-            datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc) if is_active else None
+            a_future_run_moment() if is_active else None
         ),
     )
     db.add(schedule)
@@ -2852,8 +2853,14 @@ async def test_the_summary_next_run_follows_the_delete(
     # Моменты разводятся ПРЯМОЙ правкой строк: `_seed_schedule` ставит всем
     # включённым строкам ОДИН момент, а правило о «ближайшем» на совпадающих
     # моментах не отличало бы оставшуюся строку от удалённой.
-    sooner.next_run_at = datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc)
-    later.next_run_at = datetime(2026, 9, 20, 18, 30, tzinfo=timezone.utc)
+    # ⚠️ МОМЕНТ УДАЛЯЕМОЙ СТРОКИ СНИМАЕТСЯ В ИМЯ, А НЕ ВЫЧИСЛЯЕТСЯ ДВАЖДЫ
+    # (WR-08). Ниже он нужен ВТОРОЙ раз — для отображения момента УДАЛЁННОЙ
+    # строки, — и два независимых вызова относительного помощника разошлись бы
+    # на границе минуты: отказ ПРИБОРА, редкий ровно настолько, чтобы его
+    # разбирали как дефект предмета.
+    removed_run_at = a_future_run_moment(1)
+    sooner.next_run_at = removed_run_at
+    later.next_run_at = a_future_run_moment(9)
     await db_session.commit()
     remaining_run_at = later.next_run_at
 
@@ -2879,9 +2886,7 @@ async def test_the_summary_next_run_follows_the_delete(
     # литерал разошёлся бы с зоной пользователя и краснил бы правило на чужом
     # предмете (тот же приём, что `_rendered_counter_line` соседнего модуля).
     expected = format_datetime_for_user(remaining_run_at, owner, "%d.%m %H:%M")
-    removed = format_datetime_for_user(
-        datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc), owner, "%d.%m %H:%M"
-    )
+    removed = format_datetime_for_user(removed_run_at, owner, "%d.%m %H:%M")
     assert expected != removed, (
         f"моменты удалённой и оставшейся строк отобразились ОДИНАКОВО "
         f"({expected!r}) — сличение перестало различать строки, и вердикт "

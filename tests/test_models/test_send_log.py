@@ -7,6 +7,7 @@ from app.models.ad import Ad
 from app.models.group import Group
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
+from tests.conftest import a_future_run_moment
 
 
 @pytest.mark.asyncio
@@ -56,7 +57,7 @@ async def test_create_send_log(db_session):
         group_ids=[group.id],
         days_of_week=[1],
         times_of_day=["10:00"],
-        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
+        next_run_at=a_future_run_moment(),
     )
     db_session.add(schedule)
     await db_session.commit()
@@ -137,7 +138,7 @@ async def test_send_log_with_error(db_session):
     schedule = Schedule(
         ad_id=ad.id,
         account_id=account.id,
-        next_run_at=datetime(2026, 9, 12, 6, 0, tzinfo=timezone.utc),
+        next_run_at=a_future_run_moment(),
     )
     db_session.add(schedule)
     await db_session.commit()
