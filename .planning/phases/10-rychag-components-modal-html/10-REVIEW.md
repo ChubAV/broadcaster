@@ -1,23 +1,18 @@
 ---
 phase: 10-rychag-components-modal-html
-reviewed: 2026-09-11T19:40:00Z
+reviewed: 2026-09-12T09:40:00Z
 depth: standard
-files_reviewed: 31
+files_reviewed: 26
 files_reviewed_list:
   - alembic/versions/0022_schedules_active_requires_next_run.py
-  - app/models/schedule.py
+  - app/pages/identifiers.py
+  - app/pages/notices.py
   - app/pages/schedules.py
   - app/routes/schedules.py
-  - app/services/schedule_rules.py
-  - app/static/css/app.css
-  - app/templates/ads/partials/sched_delete_response.html
-  - app/templates/includes/htmx_error_banner.html
+  - tests/conftest.py
   - tests/test_application/test_send_analytics.py
   - tests/test_metrics.py
-  - tests/test_migrations/test_0022_schedules_active_requires_next_run.py
-  - tests/test_migrations/test_model_matches_head.py
   - tests/test_models/test_schedule.py
-  - tests/test_models/test_schedule_active_requires_next_run.py
   - tests/test_models/test_send_log.py
   - tests/test_pages/test_account_groups.py
   - tests/test_pages/test_ads_status.py
@@ -25,434 +20,536 @@ files_reviewed_list:
   - tests/test_pages/test_editor_schedules.py
   - tests/test_pages/test_htmx_preserved.py
   - tests/test_pages/test_identifier_bounds.py
+  - tests/test_pages/test_notices_registry.py
   - tests/test_pages/test_responsive_markup.py
   - tests/test_pages/test_schedule_ownership.py
   - tests/test_pages/test_schedules_list.py
   - tests/test_pages/test_schedules_poisoned_row.py
-  - tests/test_pages/test_shell.py
   - tests/test_planning/test_the_walkthrough_stand_is_seedable.py
-  - tests/test_routes/test_schedules_api_create_completeness.py
-  - tests/test_routes/test_schedules_api_value_domain.py
+  - tests/test_routes/test_schedules_api_identifier_bounds.py
   - tests/test_schedule_relationships.py
-  - tests/test_templates/test_htmx_markup_gates.py
+  - tests/test_schedules_out_of_domain_resume.py
+  - tests/test_templates/test_components.py
 findings:
   critical: 1
-  warning: 8
-  info: 3
+  warning: 6
+  info: 5
   total: 12
 status: issues_found
 ---
 
-# Фаза 10: отчёт ревизии кода
+# Фаза 10: отчёт ревизии кода (круг седьмой, инкрементальный)
 
-**Проверено:** 2026-09-11T19:40:00Z
+**Проверено:** 2026-09-12T09:40:00Z
 **Глубина:** standard
-**Файлов проверено:** 31
+**Файлов проверено:** 26
 **Состояние:** issues_found
 
 ## Summary
 
-Проверены два пласта: девять файлов четырёх новейших планов (10-48…10-51) и двадцать
-два файла, изменившихся после предыдущего отчёта ревизии (`5832701`) — работа по
-ограничению `ck_schedules_active_requires_next_run` и отладочный круг
-`telegram-schedule-not-due`.
+Предмет круга — то, что изменилось ПОСЛЕ коммита ревизии `255b5da`: девять правок
+находок прошлого отчёта (`aa516a2`, `0094e3d`, `a16fb43`, `d5c023d`, `8e85f83`,
+`68244dd`, `3616321`, `0f766f2`, `ae11338`) и четыре плана десятой партии
+(10-52…10-54).
 
-Качество ревизии `0022`, её тестового модуля и правил безусловности подъёма плашки —
-высокое: границы названы, у правил есть отрицательные контроли, вакуумные зелёности
-закрыты антивакуумными половинами.
+**Проверка прошлых находок — все девять закрыты по предмету.**
 
-⚠️ СУИТА ЗЕЛЁНАЯ ЦЕЛИКОМ, И ЭТО ЗАМЕР, А НЕ ВПЕЧАТЛЕНИЕ: `uv run pytest tests/ -q` —
-**3182 passed, 974 warnings in 2295.26s (0:38:15)**, код выхода 0 (прогон 2026-09-11).
-Прицельный прогон по предмету ограничения
-(`tests/test_migrations tests/test_models tests/test_routes/test_schedules_api_* tests/test_schedule_relationships.py`)
-— **294 passed**. Зелень ОБОИХ прогонов есть свидетельство В ПОЛЬЗУ находки `CR-01`,
-а не против неё: блокер живёт на дереве, которое проходит все 3182 правила без
-единого красного, — то есть ни одно правило суиты не сеет строку с днями вне
-диапазона и не жмёт на ней тумблер. «Тесты проходят» здесь означает «этот вход не
-измеряется», а не «этот вход исправен».
+| находка | закрыта | замер |
+|---|---|---|
+| CR-01 (тумблер роняет 500) | частично — см. `CR-01` ниже | оба тумблера и `update_schedule` считают момент ДО смены состояния; `tests/test_schedules_out_of_domain_resume.py` — 6 passed |
+| WR-01 `_clean_times` | да | сохраняется `trimmed`, правило `test_a_time_padded_with_spaces_is_stored_trimmed` зелено |
+| WR-02 величина идентификаторов | да, но гейт без зубов — см. `WR-01` ниже | `BoundedId`/`IdPath` на всех пяти входах; 19 правил нового модуля зелены |
+| WR-03 `isnot(None)` | да | заведено `test_upcoming_sends_skips_the_shape_the_schema_now_forbids`, сеющее запрещённую пару в обход CHECK |
+| WR-04 `exec` | да | `__builtins__` подаётся явно, контроль-зуб требует `NameError` — 6 passed |
+| WR-05 характеризующее правило | да | переименовано + `pytest.mark.characterisation`, маркер зарегистрирован в `conftest` |
+| WR-06 шапка `0022` | да | следствие решения названо целиком, назван и отсутствующий второй замер |
+| WR-07 порядок разбора тела | да | `form()` стои́т выше `commit()`; правило на негодном `multipart` зелено |
+| WR-08 жёсткая дата | да по предмету, с новой ценой — см. `WR-04` ниже | 21 вхождение заменено `a_future_run_moment()` в 13 модулях |
 
-Тем не менее правка закрыла инвариант на входах создания и обновления и **оставила
-открытым единственный вход, через который восстанавливают ровно те строки, которые
-ревизия `0022` выключает**. Восстановительный путь, объявленный в шапке самой ревизии
-(«человек дозаполняет расписание в редакторе, жмёт тумблер»), в половине «жмёт
-тумблер» отвечает пятисоткой. Это воспроизведено исполнением, а не прочитано.
+Прицельные прогоны (исполнением, не чтением):
+`tests/test_schedules_out_of_domain_resume.py tests/test_routes/test_schedules_api_identifier_bounds.py tests/test_pages/test_notices_registry.py` — **39 passed**;
+`tests/test_pages/test_editor_schedules.py tests/test_application/test_send_analytics.py` — **119 passed**;
+`tests/test_metrics.py tests/test_models tests/test_schedule_relationships.py tests/test_pages/test_schedules_*.py tests/test_pages/test_schedule_ownership.py tests/test_pages/test_ads_status.py` — **124 passed**;
+гейт критерия 3 (`-k "criterion_three or handler_registration or vendored_script"`) — **4 passed**;
+`tests/test_planning/test_the_walkthrough_stand_is_seedable.py` — **6 passed**.
 
-Сверх того: область значений закрыта на JSON-входе для дней и времён, но не для
-идентификаторов того же входа — класс `CR-01` пятого круга (500 вместо 422) остаётся
-открытым для `app/routes/`, и ни один гейт полноты его не видит: каталог
-`test_identifier_bounds.py` разбирает только `app/pages/`.
+Зелень этих прогонов есть свидетельство В ПОЛЬЗУ блокера ниже, а не против него:
+блокер живёт на классе входов, который ни одно правило суиты не сеет.
+
+Главный итог круга: **правка `CR-01` закрыла ОДНУ из двух форм отказа расчёта.**
+`compute_next_run_at` на испорченной СОХРАНЁННОЙ строке не только возвращает
+`None` — она ещё и ПОДНИМАЕТ ИСКЛЮЧЕНИЕ на пяти замеренных формах значений, и
+эта половина осталась незакрытой во всех трёх обработчиках, которые правка
+трогала. Сверх того гейт полноты, заведённый правкой `WR-02`, ЗЕЛЁН ПРИ
+ОБЕЗОРУЖЕННОМ РАЗБОРЩИКЕ — это измерено мутацией, а не предположено.
 
 ## Structural Findings (fallow)
 
-Структурный пре-проход к задаче не приложен — блок `<structural_findings>` в задании
-отсутствует. Раздел оставлен пустым намеренно, чтобы отличать «структурного
+Структурный пре-проход к задаче не приложен — блока `<structural_findings>` в
+задании нет. Раздел оставлен пустым намеренно, чтобы отличать «структурного
 субстрата не подавали» от «структурных находок нет».
 
 ## Narrative Findings (AI reviewer)
 
 ## Critical Issues
 
-### CR-01: Тумблер на строке с днями вне диапазона роняет ответ пятисоткой — и это ровно тот класс строк, который выключает ревизия 0022
+### CR-01: правка закрыла `None`, но не ИСКЛЮЧЕНИЕ — те же три обработчика по-прежнему отвечают пятисоткой на испорченной сохранённой строке
 
 **Файлы:**
-`app/pages/schedules.py:1086-1095`, `app/routes/schedules.py:424-436`
-(тот же непокрытый вид — `app/routes/schedules.py:352-360`, ветка `elif schedule.is_active:`)
+`app/pages/schedules.py:1135-1148` (страничный тумблер),
+`app/routes/schedules.py:494-514` (тумблер JSON-API),
+`app/routes/schedules.py:392-412` (частичное обновление),
+граница правила: `tests/test_schedules_out_of_domain_resume.py:26-30`
 
-**Проблема.**
-Оба тумблера включают расписание БЕЗУСЛОВНО, а `next_run_at` считают ПОСЛЕ:
-
-```python
-schedule.is_active = not schedule.is_active
-if schedule.is_active:
-    schedule.next_run_at = compute_next_run_at(...)   # ← может вернуть None
-...
-await db.commit()                                     # ← CHECK падает здесь
-```
-
-`compute_next_run_at` возвращает `None` не только на пустых списках. На НЕПУСТОМ
-списке дней вне `0..6` кандидатов в окне `day_offset 0..7` не находится вовсе — это
-названо прямо и самим планом (`app/routes/schedules.py:230-247`), и правилом
-`test_completeness_implies_a_computable_next_run`, которое честно ограничено ОБЛАСТЬЮ
-ЗНАЧЕНИЙ. Но входная отсечка стои́т только на создании и обновлении; ТУМБЛЕР читает
-`days_of_week` из УЖЕ СОХРАНЁННОЙ строки и не отсекает ничего.
-
-`is_schedule_complete([9], ["10:00"])` → `True` (список непуст), значит ни страничный
-`resume_blocked`, ни `HTTP 400` JSON-входа не срабатывают. Получается
-`is_active = True` при `next_run_at = NULL` — пара, которую ревизия `0022` запрещает
-в схеме. `db.commit()` поднимает `IntegrityError`, её ловит только общий
-`@app.exception_handler(Exception)` (`app/main.py:248`), и человек получает 500.
-
-**Воспроизведено исполнением** (не прочитано):
-
-```
-complete? True
-next_run: None
-COMMIT FAILED: IntegrityError (sqlite3.IntegrityError)
-  CHECK constraint failed: ck_schedules_active_requires_next_run
-[SQL: UPDATE schedules SET is_active=? WHERE schedules.id = ?]
-```
-
-**Почему это блокер, а не предупреждение.** Достижимость не гипотетическая: форма
-мёртвой строки `sched=48` по разбору самого проекта родилась ИМЕННО из дня вне
-диапазона на JSON-входе. Ревизия `0022` такие строки ВЫКЛЮЧАЕТ, а `days_of_week` и
-`times_of_day` НЕ ТРОГАЕТ — это записано её продуктовым решением. То есть после наката
-на бою лежат выключенные строки с днями вне диапазона, и единственное действие,
-которым владелец попробует их вернуть, — тумблер карточки — отвечает пятисоткой. До
-`0022` то же действие тихо писало мёртвую строку; после `0022` оно отказывает громко,
-но БЕЗ объяснения и БЕЗ пути восстановления. Ни одно правило суиты этого не ловит:
-ПОЛНЫЙ прогон — 3182 passed, код выхода 0.
-
-Тот же непокрытый вид у `update_schedule` (`app/routes/schedules.py:352-360`): патч,
-не трогающий `days_of_week`, на строке с испорченными днями и `is_active=True` уходит
-в тот же `IntegrityError`.
-
-**Fix.** Считать момент ДО смены состояния и отказывать по ОТСУТСТВИЮ момента, а не
-по пустоте списков:
+**Проблема.** Все три места правлены по одному образцу:
 
 ```python
-# app/routes/schedules.py — toggle_schedule
-if not schedule.is_active:
-    if not is_schedule_complete(...):
-        raise HTTPException(400, detail="Сначала дозаполните расписание в редакторе объявления")
-    next_run = compute_next_run_at(
-        days_of_week=schedule.days_of_week,
-        times_of_day=schedule.times_of_day,
-        tz_name=schedule.timezone,
-    )
-    if next_run is None:
-        # Полное по составу, но неисполнимое по значениям: дни/времена вне
-        # области. Строка остаётся выключенной — состояние не портится.
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Значения дней или времён расписания вне допустимой области — "
-                   "откройте расписание в редакторе и сохраните заново",
+next_run = compute_next_run_at(
+    days_of_week=schedule.days_of_week,
+    times_of_day=schedule.times_of_day,
+    tz_name=schedule.timezone,
+)
+if next_run is None:        # ← закрыт РОВНО ОДИН исход
+    raise HTTPException(400, ...)
+```
+
+Отказ опознаётся ТОЛЬКО по значению `None`. Но `compute_next_run_at`
+(`app/services/schedule_service.py:25-28`) разбирает время
+`time(int(parts[0]), int(parts[1]))` БЕЗ ЗАЩИТЫ, а зону — `ZoneInfo(tz_name)`
+тоже без защиты. **Замер исполнением** (`uv run python`, дерево `ea410f4`):
+
+```
+[1] ['abc']    UTC          -> RAISES ValueError  invalid literal for int(): 'abc'
+[1] ['25:00']  UTC          -> RAISES ValueError  hour must be in 0..23
+[1] ['9']      UTC          -> RAISES IndexError  list index out of range
+[1] [9]        UTC          -> RAISES AttributeError 'int' has no attribute 'split'
+[1] ['10:00']  Mars/Phobos  -> RAISES ZoneInfoNotFoundError
+['1'] ['10:00'] UTC         -> None          ← ЕДИНСТВЕННЫЙ закрытый правкой исход
+```
+
+То есть из шести замеренных форм испорченной сохранённой строки правка закрывает
+ОДНУ. На остальных пяти исключение проходит мимо `if next_run is None`, уходит в
+общий `@app.exception_handler(Exception)` (`app/main.py:248`) и даёт **HTTP 500
+без объяснения и без пути восстановления** — дословно тот исход, который отчёт
+прошлого круга назвал блокером, а шапка ревизии `0022`
+(`alembic/versions/0022_schedules_active_requires_next_run.py:56-63`) теперь
+объявляет ИСПРАВЛЕННЫМ: «Теперь оба тумблера и частичное обновление JSON-API
+считают момент ДО смены состояния и отказывают ОБЪЯСНИМО». Утверждение шире
+факта — ровно тот класс записи, который проект в других местах помечает
+опровергнутым.
+
+**Достижимость — названа честно, а не преувеличена.** Сегодняшние входы такую
+строку РОДИТЬ не дают: страничный `_clean_times` отбрасывает негодное,
+`_reject_malformed_times`/`validate_timezone` отвечают 422, а на создании расчёт
+идёт ДО записи. Источники остаются ДВА, и оба названы самим проектом:
+
+1. Шапка ревизии `0022:65-70` утверждает прямо, что колонка **законно содержит**
+   «`null`, и элементы не-числа (строки, испорченные до фикса CR-03)», — и
+   именно поэтому второй замер в накат не внесён. Если это верно для
+   `days_of_week`, для `times_of_day` оно верно тем же основанием, а элемент
+   не-строка в `times_of_day` даёт `AttributeError`, а не `None`.
+2. Довод, которым обосновано само существование ограничения `0022:15-19`:
+   «прямой psql, ручной UPDATE на бою, миграция данных и любой будущий восьмой
+   писатель обходят все семь разом». Обработчик, доверяющий чистоте
+   СОХРАНЁННЫХ значений, стоит на допущении, которое эта же ревизия объявляет
+   несостоятельным.
+
+Гейта на это нет: новый модуль `tests/test_schedules_out_of_domain_resume.py`
+объявляет своей границей ровно `None`-исход («Предмет — ОТКАЗ ПО ОТСУТСТВИЮ
+МОМЕНТА», `:26-30`), и ни одно из 3182 правил суиты не сеет строку с
+испорченным ВРЕМЕНЕМ и не жмёт на ней тумблер.
+
+**Fix.** Опознавать отказ расчёта ПО СОБЫТИЮ, а не по одному его значению, —
+одним помощником на все три места:
+
+```python
+# app/services/schedule_rules.py (или рядом с compute_next_run_at)
+def next_run_or_none(schedule) -> datetime | None:
+    """Момент запуска сохранённой строки либо None, если ЗНАЧЕНИЯ неисполнимы.
+
+    Исключение и пустой результат — ОДИН исход для вызывающего: строка
+    неисполнима по значениям. Разделять их значило бы отдать ему разбор
+    внутренностей вычислителя.
+    """
+    try:
+        return compute_next_run_at(
+            days_of_week=schedule.days_of_week or [],
+            times_of_day=schedule.times_of_day or [],
+            tz_name=schedule.timezone,
         )
-    schedule.is_active = True
-    schedule.next_run_at = next_run
-else:
-    schedule.is_active = False
-    schedule.next_run_at = None
+    except (ValueError, TypeError, IndexError, AttributeError, ZoneInfoNotFoundError):
+        return None
 ```
 
-Зеркальная правка — в `app/pages/schedules.py:1086-1095` (с плашкой через
-`notices`, а не `HTTPException`) и в `update_schedule`. К правке обязано прийти
-правило, сеющее строку с `days_of_week=[9]` и требующее от тумблера ОТКАЗА, а не
-пятисотки; сегодня такого правила нет ни одного.
+и во всех трёх обработчиках заменить прямой вызов на `next_run_or_none(schedule)`
+(текст отказа и код ответа не меняются — исход для человека тот же).
 
-Отдельно стои́т рассмотреть разовую ревизию данных (или расширение `0022`),
-приводящую `days_of_week`/`times_of_day` к области значений: без неё ограничение
-стои́т над данными, которые его нарушат при первом же включении (см. WR-06).
+К правке обязаны прийти правила, сеющие строку с `times_of_day=["abc"]`,
+`["25:00"]` и `[9]` и требующие от ОБОИХ тумблеров и от `update_schedule`
+ОТКАЗА, а не пятисотки; сегодня таких правил нет ни одного. Шапку `0022:56-63`
+при этом надо привести к факту: сейчас она обещает больше, чем стои́т.
 
 ## Warnings
 
-### WR-01: `_clean_times` сверяет обрезанное значение, а СОХРАНЯЕТ необрезанное
+### WR-01: отрицательный контроль гейта границ ДУБЛИРУЕТ его логику вместо того, чтобы вызвать его, — гейт зелен при обезоруженном разборщике (ИЗМЕРЕНО)
 
-**Файлы:** `app/pages/schedules.py:228`, `app/services/schedule_rules.py:70-84`,
-`app/templates/ads/includes/sched_card.html:235`
+**Файл:** `tests/test_routes/test_schedules_api_identifier_bounds.py:368-401`
+(`_unbounded_identifiers`), `:420-434` (гейт), `:437-467` (контроль)
 
-**Проблема.**
-
-```python
-return [v for v in values if isinstance(v, str) and is_valid_time_of_day(v.strip())]
-```
-
-Проверяется `v.strip()`, в список попадает `v`. Значение `" 09:00 "` проходит и
-ложится в `times_of_day` С ПРОБЕЛАМИ. Дальше оно печатается в разметку как есть —
-`<input class="time-pill__input" type="time" value=" 09:00 ">`, — а `type="time"` с
-пробелами значение не принимает: поле в редакторе показывается ПУСТЫМ, и при
-следующем сохранении время молча теряется. `compute_next_run_at` при этом отработает
-(`int(" 09")` пробелы терпит), поэтому расхождение не поднимет ни одного признака.
-
-Это прямо противоречит договору, записанному у `is_valid_time_of_day`: «обрезку делает
-вызывающий, если ему это нужно». Вызывающий обрезку ДЕЛАЕТ — но только для ответа
-«годится ли», и не применяет её к тому, что сохраняет. Сверх того рождаются два
-написания одного времени, которых `TIME_OF_DAY_RE` как раз и избегает требованием
-двух цифр часа.
-
-**Fix.**
+**Проблема.** Гейт полноты вызывает `_unbounded_identifiers()`. Контроль-зуб
+`test_control_negative_the_catalogue_gate_reddens_on_a_bare_int` эту функцию **не
+вызывает ни разу** — он собирает СВОЙ список нарушителей отдельным генератором,
+повторяющим ветку (а) разборщика:
 
 ```python
-def _clean_times(values: list[str]) -> list[str]:
-    cleaned = []
-    for v in values:
-        if not isinstance(v, str):
-            continue
-        trimmed = v.strip()
-        if is_valid_time_of_day(trimmed):
-            cleaned.append(trimmed)   # сохраняется ТО, что проверено
-    return cleaned
+offenders = [
+    f"{node.name}.{statement.target.id}"
+    for node in ast.walk(tree) ...          # ← копия логики, не вызов
+]
+assert "CreateScheduleRequest.ad_id" in offenders
 ```
 
-### WR-02: на JSON-входе расписаний закрыта область значений дней и времён, но не ВЕЛИЧИНА идентификаторов — 500 вместо 422
-
-**Файл:** `app/routes/schedules.py:92-94`, `:118`, `:310`, `:371`, `:387`
-
-**Проблема.** План закрыл `days_of_week`/`times_of_day` валидаторами, а
-`ad_id: int`, `account_id: int`, `group_ids: list[int]` и путевой `schedule_id: int`
-остались без верхней границы. Величина за пределами колонки уезжает операндом
-сравнения по ней:
+Значит контроль доказывает зубы СВОЕЙ КОПИИ, а не гейта. **Замер мутацией**
+(тело `_unbounded_identifiers` подменено на `return []`, модуль исполнен через
+`ast`-подмену без правки дерева):
 
 ```
-Ad.id == 99999999999999999999999999     -> OverflowError: Python int too large to convert to SQLite INTEGER
-Group.id.in_([99999999999999999999999999]) -> OverflowError: то же
+BOTH GREEN with _unbounded_identifiers disarmed
+-> negative control has no teeth over the gate
 ```
 
-(замер исполнением; на PostgreSQL это `DataError` вне диапазона `int32` — так же
-записано в `app/pages/identifiers.py`). Итог — HTTP 500 на форменный запрос
-аутентифицированного пользователя, то есть ровно тот класс `CR-01` пятого круга,
-ради которого заведён `ID_MAX`.
+То есть разборщик, переставший видеть что бы то ни было, оставляет **и гейт, и
+его контроль зелёными**. Это ровно тот класс «зелёный по построению», против
+которого контроль заведён, и он названо-обещанное свойство шапки модуля
+(«Отказ ЛОВИТ НОВОЕ, а не подтверждает старое») не держит.
 
-Гейт полноты его не видит по построению: `test_identifier_bounds.py` собирает
-вселенную из `app/pages/` (`_catalogue_sources`), и `app/routes/` во вселенную не
-входит НИ ОДНИМ входом. То есть поверхность закрыта там, куда смотрит гейт, и
-открыта там, куда он не смотрит, — повторение той самой ошибки, которую летопись
-`ID_MAX` описывает как причину переезда константы.
-
-**Fix.** Ввезти границу в схемы и сигнатуры JSON-входа:
+**Fix.** Подавать доктóренный источник САМОМУ разборщику, а не его копии:
 
 ```python
-from pydantic import Field
-from app.pages.identifiers import ID_MAX   # либо вынести ID_MAX в нейтральный app/constants.py
+def _unbounded_identifiers(source: str | None = None) -> list[str]:
+    tree = ast.parse(source if source is not None
+                     else ROUTES_MODULE.read_text(encoding="utf-8"))
+    ...
 
-class CreateScheduleRequest(BaseModel):
-    ad_id: int = Field(ge=1, le=ID_MAX)
-    account_id: int = Field(ge=1, le=ID_MAX)
-    group_ids: list[int] = Field(default_factory=list)   # + валидатор на элементы
-
-async def toggle_schedule(schedule_id: int = Path(ge=1, le=ID_MAX), ...)
+def test_control_negative_the_catalogue_gate_reddens_on_a_bare_int():
+    doctored = ROUTES_MODULE.read_text(encoding="utf-8").replace(
+        "    ad_id: BoundedId", "    ad_id: int", 1
+    )
+    assert doctored != ROUTES_MODULE.read_text(encoding="utf-8"), "доктóривание не сработало"
+    assert "CreateScheduleRequest.ad_id" in _unbounded_identifiers(doctored)
+    assert _unbounded_identifiers() == [], "боевой источник тронут контролем"
 ```
 
-и расширить вселенную гейта каталога на `app/routes/` (либо завести второй гейт с
-явно названной границей вселенной, как это уже сделано для админки).
+Тот же разбор приложúм к ветке (б) (параметры обработчиков): её сегодня не
+покрывает НИ ОДИН контроль — удаление всей ветки `if isinstance(node, (ast.FunctionDef, …))`
+не покраснит ничего.
 
-### WR-03: «unscheduled»-половина правила `upcoming_sends` стала копией «inactive»-половины — имя обещает покрытие, которого больше нет
+### WR-02: текст отказа выписан ЛИТЕРАЛОМ дважды в одном файле, а третья его редакция живёт в закрытом реестре
 
-**Файл:** `tests/test_application/test_send_analytics.py:1057-1093`
+**Файлы:** `app/routes/schedules.py:404-411` и `:505-512` (две дословные копии),
+`app/pages/notices.py:233-240` (третья, ИНАЯ формулировка)
 
-**Проблема.** Второй случай `test_upcoming_sends_skips_inactive_and_unscheduled`
-теперь сеет строку `is_active=False, next_run_at=None` — то есть ВТОРУЮ выключенную
-строку. Первый случай — тоже выключенная. Условие `Schedule.next_run_at.isnot(None)`
-(`app/application/analytics/send_analytics.py:581`), ради которого половина и
-существовала, стало неисполнимым через базу, и докстринг это честно признаёт. Но имя
-правила осталось прежним, а условие в продукте — незакрытым ни одним замером:
-удалившего его завтра не покраснит ничто.
+**Проблема.** Один исход — «полное по составу, неисполнимое по значениям» —
+получил ТРИ независимых носителя слов:
 
-**Fix.** Развести предметы: половину «выключенное» оставить здесь, а условие
-`isnot(None)` закрыть на уровне ЗАПРОСА, минуя ORM-ограничение, — например
-`sa.text("INSERT INTO schedules …")` с временно снятым CHECK на SQLite, либо
-прямым юнит-правилом на скомпилированный `WHERE` (`str(stmt.compile())` содержит
-`next_run_at IS NOT NULL`). Если ни то ни другое не принимается — переименовать
-правило в `test_upcoming_sends_skips_both_paused_shapes` и записать снятое условие
-отдельной строкой реестра открытых окон.
+```
+routes:407-410  "Дни или часы расписания заданы значениями, которых система
+                 исполнить не может — откройте расписание в редакторе
+                 объявления и сохраните дни и время заново"
+routes:508-511  ← ТОТ ЖЕ ТЕКСТ, выписанный второй раз
+notices:235-239 "Дни или часы ЭТОГО расписания … Откройте расписание в редакторе
+                 объявления, выберите дни и время заново и сохраните — после
+                 этого включение сработает."
+```
 
-### WR-04: `exec()` кода из `.planning/*.md`, и объявленная граница пространства имён неверна
+Это прямо противоречит доктрине, записанной в этих же файлах: `notices.py:1-8`
+объявляет себя «единственным владельцем слов, которыми продукт сообщает
+пользователю ИСХОД ЕГО ДЕЙСТВИЯ», а `routes/schedules.py:11-18` обосновывает
+ввоз `ID_MAX` тем, что «вторая копия разошлась бы с первой молча при первой же
+правке». Здесь копий три, две из них уже РАЗОШЛИСЬ (страничный человек и
+JSON-клиент читают разные слова об одном исходе), и машинного сторожа нет:
+единственная проверка — `assert "редактор" in response.json()["detail"].lower()`
+(`tests/test_schedules_out_of_domain_resume.py:193`), которая переживёт любую
+правку обеих копий.
 
-**Файл:** `tests/test_planning/test_the_walkthrough_stand_is_seedable.py:200-212`
-
-**Проблема.** Модуль исполняет узел цикла, вынутый регулярками из `10-UAT.md`.
-Шапка утверждает: «Выдаются РОВНО ЧЕТЫРЕ имени и ничего сверх». Это неверно:
-`exec(code, namespace)` при отсутствии ключа `__builtins__` в словаре ПОДСТАВЛЯЕТ
-настоящий модуль встроенных имён. Тело цикла в артефакте имеет полный доступ к
-`__import__`, `open`, `eval` и через них ко всему интерпретатору и файловой системе
-прогона. Граница, названная «несущей» и «держащейся сборкой, а не комментарием»,
-фактически не поставлена.
-
-Достижимость сегодня низкая (артефакт лежит в том же дереве и проходит ту же
-ревизию, что исходники), поэтому это WARNING, а не BLOCKER. Но запись, описывающая
-границу ШИРЕ факта, — ровно тот класс, который проект в других местах помечает
-опровергнутым.
-
-**Fix.** Закрыть пространство имён явно и поправить шапку:
+**Fix.** Завести константу текста рядом с реестром и ввозить её обеими
+сторонами, как уже сделано с `ID_MAX`:
 
 ```python
-namespace = {
-    "__builtins__": {},          # либо узкий словарь разрешённых имён
-    "Schedule": Schedule,
-    "compute_next_run_at": compute_next_run_at,
-    "ad": SimpleNamespace(id=ad_id),
-    "acc": SimpleNamespace(id=account_id),
-    "s": _Sink(),
-}
+# app/pages/notices.py
+SCHEDULE_VALUES_OUT_OF_DOMAIN_DETAIL = (
+    "Дни или часы расписания заданы значениями, которых система исполнить "
+    "не может — откройте расписание в редакторе объявления и сохраните дни "
+    "и время заново"
+)
+
+# app/routes/schedules.py — оба места
+from app.pages.notices import SCHEDULE_VALUES_OUT_OF_DOMAIN_DETAIL
+raise HTTPException(400, detail=SCHEDULE_VALUES_OUT_OF_DOMAIN_DETAIL)
 ```
 
-и добавить контроль-зуб: доктóренная копия раздела с `__import__('os')` в теле цикла
-обязана краснеть `NameError`, а не исполняться.
+Если расхождение формулировок между слоями решено намеренно — оно обязано быть
+ЗАПИСАНО решением и закреплено правилом, сверяющим обе строки посимвольно, как
+это уже сделано гейтом переноса реестра.
 
-### WR-05: четвёртый внеполосный узел удваивает известное расхождение «число чужого объявления в чужом документе»
+### WR-03: отказ страничного тумблера теряет ИМЯ строки и разворот возврата — человек приходит в редактор, где неизвестно, какую карточку чинить
 
-**Файлы:** `app/pages/schedules.py:1140-1146`, `:1341-1361`,
-`app/templates/ads/partials/sched_delete_response.html:134`, `:143`
+**Файлы:** `app/pages/schedules.py:1140-1148`, `:658-671`
+(`_editor_error_redirect`), `:443-448` (`_editor_url`),
+`app/templates/schedules/includes/schedule_row.html:81-86`
 
-**Проблема.** Цели `#sched-count` и `#ad-summary` адресованы СТАТИЧЕСКИ, а числа
-считаются по `ad_id`, снятому с НАЙДЕННОЙ строки (либо с поля формы). Запрос,
-называющий адресом расписание объявления B, а полем контекста — экран объявления A,
-ставит в документ A числа объявления B. До плана 10-50 так уезжало одно число
-(линейка); теперь уезжают ТРИ — линейка, «Расписания» сводки и «Ближайший запуск», —
-и все они переживают запрос до перезагрузки.
-
-Границы привилегий это не пересекает (обе выборки скоуплены `Ad.user_id`), и решение
-отложить правку записано владельцем. Претензия ревизии к другому: расхождение
-РАСШИРЕНО новым планом, а зелёное правило
-`test_the_counter_node_belongs_to_the_ad_named_by_the_request`
-(`tests/test_pages/test_confirm_delete_transport.py`) утверждает сегодняшнее
-поведение НОРМОЙ. Правило, закрепляющее известный дефект как норму, при следующей
-попытке починки покраснеет и будет прочитано как регресс.
-
-**Fix.** Либо адресовать узлы по объявлению (`hx-swap-oob="innerHTML:#sched-count-{{ ad.id }}"`
-и `id="ad-summary-{{ ad.id }}"`), либо — минимум до правки — переименовать правило в
-`test_the_counter_node_is_characterised_as_belonging_to_the_ad_named_by_the_request`
-и пометить его характеризующим (`pytest.mark.characterisation`), чтобы зелёный цвет
-не читался как утверждение о ПРАВИЛЬНОСТИ.
-
-### WR-06: ревизия 0022 запрещает состояние, но не чинит данные, которые его порождают
-
-**Файл:** `alembic/versions/0022_schedules_active_requires_next_run.py:192-210`
-
-**Проблема.** Накат выключает нарушителей и — по записанному решению — не трогает
-`days_of_week`/`times_of_day`. Решение обосновано («угадать задуманные дни —
-фабрикация»), и с этим спорить нечего. Но следствие названо неполно: после наката
-остаются строки, ПОЛНЫЕ по `is_schedule_complete` и НЕИСПОЛНИМЫЕ по значениям, и
-единственный интерфейсный путь к ним — тумблер — отвечает пятисоткой (CR-01). То
-есть выключение не есть «точка восстановления», как утверждает шапка, пока тумблер
-не научится отказывать по отсутствию момента.
-
-**Fix.** Либо закрыть CR-01 (тогда шапку дополнить: восстановление идёт ЧЕРЕЗ
-редактор, а тумблер на непочиненной строке отказывает объяснимо), либо добавить в
-`upgrade()` второй замер — сколько выключенных строк несут дни вне `0..6` — и
-записать это число в тот же журнал наката, рядом с числом выключенных. Число в
-журнале превращает «неизвестно, сколько таких строк» в замер, а сегодня владелец
-после наката не узнает этого ниоткуда.
-
-### WR-07: удаление коммитится ДО чтения тела формы
-
-**Файл:** `app/pages/schedules.py:1141-1149`
-
-**Проблема.**
+**Проблема.** Успешный тумблер возвращает человека через `_editor_redirect` →
+`_editor_url(returns_to_editor, ad_id, schedule_id)`, то есть на
+`/ads/{ad}/edit?sched={id}#sched-{id}` (карточка развёрнута, прокрутка доведена)
+ЛИБО на `/schedules`, если признака возврата не было. Отказ идёт другим путём:
 
 ```python
-if schedule:
-    await db.delete(schedule)
-    await db.commit()
-form_data = await request.form()
+return _editor_error_redirect(schedule.ad_id, notices.SCHEDULE_VALUES_OUT_OF_DOMAIN)
+# -> "/ads/{ad_id}/edit?notice=..."   ← ни sched, ни якоря, ни признака возврата
 ```
 
-`await request.form()` — единственное место, где тело запроса разбирается, и оно
-может поднять исключение (обрыв тела, негодный `multipart`, превышение лимита
-частей). К этому моменту удаление УЖЕ зафиксировано: человек получит 500, а строки
-не будет. Ветка отказа при этом неотличима от «ничего не произошло».
+Два следствия, и оба наблюдаемы:
 
-**Fix.** Читать форму сразу после сверки источника, до выборки и удаления:
+1. **Плашка называет действие, которое адрес не поддерживает.** Текст реестра
+   (`notices.py:235-239`) говорит «Откройте расписание в редакторе объявления,
+   выберите дни и время заново». У объявления расписаний может быть несколько
+   (`_ad_has_a_schedule`, сводка `#sched-count` считает их числом), а адрес
+   отказа НЕ несёт `?sched={id}#sched-{id}` — человеку не сказано, какую из
+   карточек он только что не смог включить.
+2. **Разворот возврата игнорируется.** Форма тумблера на сводном списке
+   (`schedule_row.html:81`) поля `return_to` не шлёт вовсе, поэтому успех
+   возвращает человека на `/schedules`, а отказ уносит его на ЧУЖОЙ экран —
+   редактор объявления. Смена экрана по отказу решением нигде не записана.
+
+**Fix.** Собрать адрес отказа тем же кодом, что и адрес успеха, добавив к нему
+код исхода:
+
+```python
+def _editor_error_redirect(ad_id: int, notice: str, schedule_id: int | None = None):
+    url = _editor_url(returns_to_editor=True, ad_id=ad_id, schedule_id=schedule_id)
+    sep = "&" if "?" in url else "?"
+    return RedirectResponse(url=f"{url}{sep}notice={notice}", status_code=302)
+
+# вызов тумблера
+return _editor_error_redirect(
+    schedule.ad_id, notices.SCHEDULE_VALUES_OUT_OF_DOMAIN, schedule_id
+)
+```
+
+и дописать к правилу `test_page_toggle_refuses_a_row_whose_days_are_out_of_domain`
+утверждение о присутствии `sched={id}` в `Location` — сегодня оно проверяет
+только `notice=`.
+
+### WR-04: `a_future_run_moment()` снял жёсткую дату, но заодно снял ВОСПРОИЗВОДИМОСТЬ, и один комментарий стал неверен на месте
+
+**Файлы:** `tests/conftest.py:243-265`, `tests/test_metrics.py:54-69`,
+`tests/test_pages/test_htmx_preserved.py:136-147`
+
+**Проблема.** Помощник возвращает `datetime.now(timezone.utc) + timedelta(days=days)`
+— значение, РАЗНОЕ при каждом вызове и при каждом прогоне. Предмет `WR-08`
+(«фикстура, молча меняющая смысл») закрыт, но вместе с ним потеряны два свойства,
+которых литерал не терял:
+
+1. **Соседние строки перестали быть одинаковыми там, где это было предметом.**
+   `tests/test_metrics.py:54-69` сеет три расписания в цикле, и комментарий прямо
+   над полем утверждает: «разные значения у включённых и выключенной строк завели
+   бы в этой фикстуре ВТОРОЕ различие сверх того одного, ради которого она и
+   написана». После правки каждая из трёх строк получает СВОЙ момент (вызов на
+   каждой итерации) — то есть комментарий описывает фикстуру, которой больше нет.
+   Тот же вид у `test_htmx_preserved.py:136-147`, где список собирается
+   генератором на `SEED_ROWS` строк.
+2. **Отказ перестал воспроизводиться теми же данными.** Покрасневшее правило,
+   чей посев зависит от часа и минуты прогона, разбирается уже не как дефект
+   фикстуры — это дословно та цена, которую докстринг помощника назначает
+   ЛИТЕРАЛУ. Открытое окно 79 журнала `.planning/WINDOWS.md` показывает, что
+   недетерминированность по времени суток в этой суите — не гипотеза.
+
+**Fix.** Развести два предмета, которые помощник сегодня смешивает:
+
+```python
+def a_future_run_moment(days: int = 1, *, shared: datetime | None = None) -> datetime:
+    """…"""
+    base = shared or datetime.now(timezone.utc)
+    return base + timedelta(days=days)
+```
+
+и в местах, где ОДИНАКОВОСТЬ строк есть предмет фикстуры (`test_metrics.py`,
+`test_htmx_preserved.py`), снять момент в имя ДО цикла и подать одно значение
+всем строкам — ровно тем приёмом, который уже применён в
+`test_editor_schedules.py:2856-2862` (`removed_run_at`). Комментарий
+`test_metrics.py:63-67` привести к факту либо восстановить свойство, которое он
+описывает.
+
+### WR-05: `FAILURE_BANNER_HANDLERS_MEASURED` обслуживает ДВЕ РАЗНЫЕ величины — «единственный источник» связал несвязанное
+
+**Файлы:** `tests/test_templates/test_components.py:4990-5028`
+(`_declared_script_handler_registrations`), `tests/test_pages/test_shell.py:2308-2311`,
+`:2596-2612`
+
+**Проблема.** Константа объявлена и потребляется как ЧИСЛО РЕГИСТРАЦИЙ,
+выполненных сценарием В РАНТАЙМЕ: `test_shell.py:2599` сверяет с ней результат
+исполнения сценария в Node (`_failure_banner_registration_count(path, runs=1)`).
+Новый гейт критерия 3 ввозит её же как ЧИСЛО ТЕКСТОВЫХ ВХОЖДЕНИЙ в телах
+`<script>`, причём по ДВУМ формам сразу:
+
+```python
+HANDLER_REGISTRATION_FORMS = (
+    re.compile(r"\.addEventListener\s*\("),
+    re.compile(r"\.on[a-z]{2,}\s*=(?!=)"),   # ← этой формы понятие «замера» не знает
+)
+```
+
+Сегодня обе величины равны трём, и совпадение выдано за единственность
+источника. Но величины независимы по построению: регистрация в ЦИКЛЕ даёт одно
+текстовое вхождение и три рантаймовых; присваивание `el.onclick = …` даёт
+текстовое вхождение и НЕ участвует в замере `test_shell`. В день первого
+расхождения правка константы под один модуль **покраснит другой** — и отказ
+назовёт не тот предмет: `test_shell` скажет «сценарий вешает не то число
+обработчиков», хотя изменилось только написание.
+
+**Fix.** Объявить ДВА имени с разными предметами и назвать связь между ними
+проверкой, а не общей константой:
+
+```python
+# tests/test_pages/test_shell.py
+FAILURE_BANNER_HANDLERS_MEASURED = 3        # РАНТАЙМ: столько слушателей повисло
+FAILURE_BANNER_REGISTRATION_SITES = 3       # ТЕКСТ: столько мест регистрации в файле
+
+def test_the_two_measures_of_the_banner_agree_today():
+    """Совпадение двух ЧИСЕЛ — утверждение, а не устройство двух правил."""
+    assert FAILURE_BANNER_HANDLERS_MEASURED == FAILURE_BANNER_REGISTRATION_SITES
+```
+
+Гейт критерия 3 ввозит `FAILURE_BANNER_REGISTRATION_SITES`; расхождение впредь
+краснит ОДНО правило, названное по предмету.
+
+### WR-06: три изменяющих POST страничного модуля расписаний не сверяют происхождение, а гейт полноты по построению их не видит
+
+**Файлы:** `app/pages/schedules.py:900` (`schedules_create`), `:994`
+(`schedules_update`), `:1077` (`schedules_toggle`) — против `:1163`
+(`schedules_delete`, сверка есть);
+`tests/test_pages/test_origin_guard_on_destructive_routes.py:58-59`
+
+**Проблема.** Разбор исходника (AST, дерево `ea410f4`) даёт:
+
+```
+schedules_create   POST /schedules/new              origin_check=False
+schedules_update   POST /schedules/{id}/edit        origin_check=False
+schedules_toggle   POST /schedules/{id}/toggle      origin_check=False
+schedules_delete   POST /schedules/{id}/delete      origin_check=True
+```
+
+Докстринг `is_same_origin` (`app/pages/common.py:692-699`) называет требование
+дословно: «ASVS L1 (V4.2.2) требует защиты ИЗМЕНЯЮЩИХ СОСТОЯНИЕ запросов от
+межсайтовой подделки». Тумблер меняет состояние отправки рекламы, создание и
+правка пишут строки — все три под это требование подпадают. Гейт полноты,
+который должен был бы это ловить, собирает вселенную по суффиксу пути
+`DESTRUCTIVE_PATH_SUFFIX = "/delete"` (`:59`), поэтому три маршрута выпадают из
+неё МОЛЧА — тот же способ, которым `app/routes/` выпал из вселенной гейта
+идентификаторов (`WR-02` прошлого круга).
+
+**Достижимость названа честно и она СЕГОДНЯ НИЗКАЯ.** Cookie сессии выставляется
+с `samesite=lax` (`app/pages/auth.py::_session_cookie_attrs`, замер записан
+окном 53 журнала), и межсайтовая форменная отправка cookie не понесёт. Поэтому
+это WARNING, а не BLOCKER. Но глубина защиты у четырёх соседних маршрутов
+РАЗНАЯ без записанного решения, а единственная опора трёх из них — умолчание
+cookie, о котором ни одно правило этих маршрутов не говорит; снятие или смена
+`samesite` откроет их все разом и не покраснит ничего.
+
+**Fix.** Либо поставить сверку на все изменяющие POST модуля:
 
 ```python
 if not is_same_origin(request):
     return Response(status_code=403)
-form_data = await request.form()          # тело разобрано ДО записи
-result = await db.execute(select(Schedule)...)
 ```
 
-Порядок «сверка источника → разбор тела → запись» заодно снимает вопрос о том,
-читается ли тело у отвергнутого по происхождению запроса.
-
-### WR-08: жёсткая дата `datetime(2026, 9, 12, 6, 0)` размножена по девяти тестовым модулям
-
-**Файлы:** `tests/test_metrics.py:66`, `tests/test_models/test_send_log.py:59`, `:140`,
-`tests/test_pages/test_account_groups.py:159`, `:1114`,
-`tests/test_pages/test_ads_status.py:82`, `tests/test_pages/test_htmx_preserved.py:143`,
-`tests/test_pages/test_responsive_markup.py:137`, `:676`, `:4575`,
-`tests/test_pages/test_schedule_ownership.py:75`, `tests/test_pages/test_schedules_list.py:122`,
-`tests/test_pages/test_schedules_poisoned_row.py:99`, `tests/test_schedule_relationships.py:39`
-
-**Проблема.** Один и тот же литерал вписан четырнадцать раз без имени. Дата стои́т
-на СУТКИ позже дня правки и уже завтра станет прошлым. Части продукта относительны
-к «сейчас»: `app/application/admin/incidents.py:666-669` считает ПРОСРОЧЕННЫМИ строки
-с `next_run_at < beat_cutoff`, `upcoming_sends` сортирует по тому же полю. Сегодня
-фикстуры означают «будущий слот», завтра — «просроченный». Ни один из этих модулей
-на этом не краснеет ПОКА, но смысл фикстуры меняется молча, а молча меняющаяся
-фикстура — это отложенный ложный зелёный или ложный красный.
-
-**Fix.** Один общий помощник в `tests/conftest.py`, относительный к «сейчас», и
-имя, которое называет предмет:
-
-```python
-def a_future_run_moment(days: int = 1) -> datetime:
-    """Момент запуска, который ОСТАЁТСЯ будущим при любом дне прогона."""
-    return datetime.now(timezone.utc) + timedelta(days=days)
-```
+либо расширить вселенную гейта с суффикса `/delete` на «POST-маршруты
+страничного слоя» и внести три изъятия ПОИМЁННО с записанным основанием — форма,
+которую проект уже применяет для `DESTRUCTIVE_ROUTE_OWNERSHIP_EXEMPTIONS`.
 
 ## Info
 
-### IN-01: `OOB_BLOCKS = 9` → `13` — число выросло на четыре одной правкой
+### IN-01: восемь тестовых модулей остались с мёртвыми импортами `datetime`/`timezone`
 
-**Файл:** `tests/test_templates/test_htmx_markup_gates.py`
+**Файлы:** `tests/test_models/test_send_log.py:1`,
+`tests/test_schedule_relationships.py:1`, `tests/test_pages/test_ads_status.py:22`,
+`tests/test_pages/test_schedule_ownership.py:13`,
+`tests/test_pages/test_schedules_list.py:18`,
+`tests/test_pages/test_schedules_poisoned_row.py:23`,
+`tests/test_pages/test_identifier_bounds.py:17`,
+`tests/test_pages/test_editor_schedules.py`
 
-Инвентарь внеполосных блоков поднят числом без разбивки «какие именно четыре файла
-добавились». Перечень в правиле есть, но диффом видно только число. Предложение:
-печатать в отказе РАЗНИЦУ множеств (какие файлы пришли, какие ушли), а не только
-два числа, — тогда следующий сдвиг читается без раскопок истории.
+Замена литерала на `a_future_run_moment()` убрала последнее употребление обоих
+имён; импорт остался. Замер — разбором AST всех тринадцати тронутых модулей: в
+восьми `datetime` и `timezone` не читаются ни разу. Линтера в проекте нет
+(`pyproject.toml` не объявляет ни ruff, ни flake8), поэтому машинного сторожа у
+этого класса тоже нет. Предложение: снять импорты; если линтер заводить не
+планируется — хотя бы вместе с этой партией.
 
-### IN-02: успешный ФОНОВЫЙ обмен гасит непрочитанный настоящий отказ
+### IN-02: `a_future_run_moment` подшит под заголовок «Посев групп» и перехватил последнюю строку чужого обоснования
 
-**Файл:** `app/templates/includes/htmx_error_banner.html:227-233`
+**Файл:** `tests/conftest.py:226-268`
 
-Третий обработчик гасит обе заготовки по признаку успеха ЛЮБОГО обмена — включая
-сентинель подгрузки, автосохранение и опрос. Цена названа в докстринге прямо и
-принята владельцем; здесь она отмечается лишь как незакрытое ничем машинным окно:
-суита JS не исполняет в браузере, и наблюдаемо оно только рантаймом. Кандидат в
-реестр окон, если ещё не записан.
+Функция вставлена ВНУТРЬ секции `# --- Посев групп ---`, и абзац, объясняющий,
+почему помощник посева групп живёт функцией модуля, теперь заканчивается строкой
+«Импортируется как `from tests.conftest import a_future_run_moment`» — то есть
+обоснование одного предмета подписано именем другого. Ниже идёт вторая строка
+«Импортируется как `seed_group`», уже верная. Предложение: вынести помощник в
+собственную секцию `# --- Моменты запуска ---` над секцией посева групп и
+вернуть перехваченную строку её абзацу.
 
-### IN-03: две заготовки плашки накрывают друг друга при одновременном показе
+### IN-03: `notices.has_code()` не имеет ни одного потребителя в продукте
 
-**Файл:** `app/static/css/app.css:1188-1198`
+**Файл:** `app/pages/notices.py:305-307`
 
-`#htmx-failure-server` и `#htmx-failure-network` объявлены одним блоком с общими
-`top: 12px` и `z-index: 70`: показанные одновременно, они встают в одну точку, и
-вторая закрывает первую. Названо самим блоком как `T-10-51-04` / `accept`; отмечено
-здесь, чтобы находка не потерялась между кругами. Дешёвое закрытие — сместить второй
-на высоту первого (`#htmx-failure-network { top: 84px; }`) либо собрать обе в один
-стек-контейнер.
+Единственные вызовы — четыре утверждения `tests/test_pages/test_notices_registry.py:201-221`.
+В `app/` функция не вызывается нигде; шаблоны пользуются глобалью `notice_for`.
+Это не новая правка (вход существовал до партии), но модуль в предмете круга.
+Предложение: либо снять вход, либо назвать в докстринге будущего потребителя —
+«отдельный вход для тех, кому запись не нужна» сегодня описывает пустое
+множество.
+
+### IN-04: снятие `PRAGMA ignore_check_constraints` стои́т после `commit()` и при отказе посева маскирует ПЕРВИЧНУЮ ошибку
+
+**Файл:** `tests/test_application/test_send_analytics.py:1161-1171`
+
+```python
+await db_session.execute(text("PRAGMA ignore_check_constraints = ON"))
+try:
+    await db_session.execute(text("UPDATE schedules SET next_run_at = NULL ..."))
+    await db_session.commit()
+finally:
+    await db_session.execute(text("PRAGMA ignore_check_constraints = OFF"))
+```
+
+Если `UPDATE` или `commit()` поднимут отказ, сессия остаётся в неоткатанном
+состоянии, и `execute` в `finally` поднимет `PendingRollbackError` — она и
+станет видимым отказом, а первичная причина уедет в `__context__`. Замысел
+(«ВОЗВРАТ БЕЗУСЛОВЕН») при этом сохраняется: движок пересоздаётся на каждый
+тест, так что снятие за границу правила не течёт. Предложение: `await
+db_session.rollback()` первой строкой `finally` либо снятие через отдельное
+соединение движка.
+
+### IN-05: два названных, но ничем не стерегомых допущения разборщиков
+
+**Файлы:** `tests/test_templates/test_components.py:4852-4900`
+(`_strip_js_comments`), `tests/test_planning/test_the_walkthrough_stand_is_seedable.py:118-168`
+(`ALLOWED_BUILTINS`)
+
+1. `_strip_js_comments` не различает литерал регулярного выражения (`/…/g`) — косая
+   внутри него читается началом комментария. Граница названа в докстринге честно
+   («в дереве на 2026-09-12 таких литералов НОЛЬ»), но замера, который покраснеет
+   в день появления первого, нет: сегодня это молчаливое занижение числа
+   регистраций, то есть ложный зелёный пятого утверждения. Дешёвое закрытие —
+   правило, требующее НОЛЯ вхождений `/…/[gimsuy]*` в телах блоков, с отказом,
+   называющим файл.
+2. `ALLOWED_BUILTINS` собирается через модульную переменную `__builtins__` с
+   разбором «словарь или модуль» — деталь реализации CPython, не часть языка.
+   `import builtins` и `getattr(builtins, name)` дают то же множество без ветки
+   и без зависимости от того, как модуль был загружен.
 
 ---
 
-_Reviewed: 2026-09-11T19:40:00Z_
+_Reviewed: 2026-09-12T09:40:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
