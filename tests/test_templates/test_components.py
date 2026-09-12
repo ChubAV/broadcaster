@@ -12,6 +12,7 @@
 import ast
 import json
 import re
+import shutil
 from html import unescape
 from pathlib import Path
 from typing import NamedTuple
@@ -40,6 +41,7 @@ from tests.conftest import run_node_script
 from tests.test_templates.test_htmx_inventory import _strip_comments
 from tests.test_templates.test_htmx_markup_gates import (
     CLIENT_STATE_NODES,
+    _all_templates as _all_templates_under,
     _client_state_sites,
 )
 from tests.test_templates.test_htmx_markup_security import INLINE_HANDLER_ATTR
@@ -5206,6 +5208,177 @@ def test_control_negative_a_new_vendored_script_reddens_the_gate(tmp_path):
     # Граница контроля: боевой каталог подменой не тронут.
     assert _vendored_js_files() == set(VENDORED_JS_FILES), (
         "ПОДМЕНА ПРОТЕКЛА ЗА ГРАНИЦУ КОНТРОЛЯ: боевой каталог сценариев изменён"
+    )
+
+
+# --- ЗУБЫ ПЯТОГО УТВЕРЖДЕНИЯ: ДВА ОТРИЦАТЕЛЬНЫХ КОНТРОЛЯ --------------------
+#
+# ⚠️ БЕЗ НИХ ПЯТОЕ УТВЕРЖДЕНИЕ БЫЛО БЫ ЗЕЛЁНЫМ ПО ПОСТРОЕНИЮ. Сломанный обход
+# тел блоков (не тот тег, не тот каталог, потерянный закрывающий тег) даёт
+# ПУСТОЙ перечень, а пустой перестаёт сходиться с объявленным только в тот день,
+# когда объявление тоже опустошат. Ровно этот класс уже назван у контроля
+# каталога вендоренных сценариев выше, и форма здесь наследуется дословно: три
+# утверждения — подмена приземлилась, правило её видит, БОЕВОЕ дерево не тронуто.
+#
+# ⚠️ ДВА КОНТРОЛЯ, А НЕ ОДИН, И ВТОРОЙ НЕ ИЗБЫТОЧЕН ПРИ ПЕРВОМ. Первый
+# доказывает, что правило видит движение ЧИСЛА у ИЗВЕСТНОГО файла; второй — что
+# оно видит ПОЯВЛЕНИЕ файла. Правило, отбирающее только объявленные ключи,
+# прошло бы первый и провалило бы предмет: следующая фаза положит сценарий в
+# НОВЫЙ шаблон, а не в старый.
+
+CONTROL_PLANTED_REGISTRATIONS = 1
+
+CONTROL_INVENTED_TEMPLATE = "controls/a-template-the-control-invented.html"
+
+
+def _templates_copy(tmp_path: Path) -> Path:
+    """Копия боевого каталога шаблонов во временном каталоге.
+
+    Граница контроля начинается ЗДЕСЬ: подмена пишется в копию, боевое дерево
+    читается только на чтение. Третье утверждение каждого контроля ниже эту
+    границу ПРОВЕРЯЕТ, а не декларирует, — контроль, протёкший за неё, правил бы
+    предмет, который меряет, и оба контроля стали бы зелёными по построению.
+    """
+    scratch = tmp_path / "templates"
+    shutil.copytree(TEMPLATES_DIR, scratch)
+    return scratch
+
+
+def test_control_negative_a_new_handler_registration_reddens_the_gate(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: пятое утверждение краснеет на ЛИШНЕЙ регистрации.
+
+    ⚠️ ПОДСАЖИВАЕТСЯ РЕГИСТРАЦИЯ НА ПРОИЗВОЛЬНОЕ ИМЯ СОБЫТИЯ, А НЕ КОПИЯ
+    ТРЕТЬЕГО ОБРАБОТЧИКА. Правило обязано краснеть на РЕГИСТРАЦИЮ КАК ТАКОВУЮ, а
+    не на одно знакомое имя события: иначе следующая правка заведёт слушателя
+    другого события, и правило промолчит ровно так же, как промолчали четыре
+    утверждения на `htmx:afterRequest`.
+
+    ⚠️ ОЖИДАНИЕ ВЫПИСАНО ЛИТЕРАЛОМ (`CONTROL_PLANTED_REGISTRATIONS` — ровно одна
+    подсаженная регистрация), а не вычислено из измерения: вычисленное ожидание
+    сходится с измеренным ВСЕГДА, включая день, когда оба неверны.
+    """
+    scratch = _templates_copy(tmp_path)
+    declared = _declared_script_handler_registrations()
+
+    # Копия БЕЗ подмены: правило её ОТПУСКАЕТ. Без этого замера утверждения ниже
+    # доказывали бы не зубы правила, а то, что копия отличается от дерева.
+    pristine = _script_handler_registrations(_all_templates_under(scratch))
+    assert pristine == declared, (
+        "КОПИЯ КАТАЛОГА РАЗОШЛАСЬ С ОБЪЯВЛЕНИЕМ ДО ВСЯКОЙ ПОДМЕНЫ: "
+        f"{pristine} против {declared}. Контроль ниже мерял бы изъян копирования"
+    )
+
+    banner = scratch / FAILURE_BANNER_TEMPLATE
+    source = banner.read_text(encoding="utf-8")
+    assert source.count("</script>") == 1, (
+        "ФОРМА ПОДМЕНЫ РАЗОШЛАСЬ С ФАЙЛОМ: в заготовках ожидался ОДИН "
+        f"закрывающий тег, найдено {source.count('</script>')}"
+    )
+    banner.write_text(
+        source.replace(
+            "</script>",
+            "  document.body.addEventListener("
+            "'a-control-invented-this-event-name', function () { return; });\n"
+            "</script>",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    measured = _script_handler_registrations(_all_templates_under(scratch))
+
+    # 1. Подмена ПРИЗЕМЛИЛАСЬ: ровно одна регистрация сверх прежнего.
+    assert (
+        measured.get(FAILURE_BANNER_TEMPLATE)
+        == declared[FAILURE_BANNER_TEMPLATE] + CONTROL_PLANTED_REGISTRATIONS
+    ), (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: разборщик не увидел подсаженной регистрации "
+        f"({measured.get(FAILURE_BANNER_TEMPLATE)} против объявленных "
+        f"{declared[FAILURE_BANNER_TEMPLATE]} плюс {CONTROL_PLANTED_REGISTRATIONS}), "
+        "и утверждение ниже доказывало бы промах контроля, а не зубы правила"
+    )
+
+    # 2. Правило ВИДИТ расхождение и называет ФАЙЛ — ровно тем сличением,
+    # которым сличает пятое утверждение гейта.
+    diverged = sorted(
+        rel
+        for rel in set(measured) | set(declared)
+        if measured.get(rel) != declared.get(rel)
+    )
+    assert diverged == [FAILURE_BANNER_TEMPLATE], (
+        "ПЯТОЕ УТВЕРЖДЕНИЕ НЕ ЗАМЕТИЛО ЛИШНЕЙ РЕГИСТРАЦИИ В ТЕЛЕ БЛОКА "
+        f"СЦЕНАРИЯ: разошлись {diverged}. Критерий 3 закрывался бы заявлением, "
+        "а не измерением, и новая строка JS приехала бы в проект молча — ровно "
+        "как приехала 2026-09-11 коммитом `4e24d61`"
+    )
+
+    # 3. ГРАНИЦА КОНТРОЛЯ: боевое дерево подменой не тронуто.
+    assert _script_handler_registrations(_all_templates()) == declared, (
+        "ПОДМЕНА ПРОТЕКЛА ЗА ГРАНИЦУ КОНТРОЛЯ: боевой каталог шаблонов изменён"
+    )
+
+
+def test_control_negative_a_new_template_with_a_handler_registration_reddens_the_gate(
+    tmp_path,
+):
+    """ЧТО ДОКАЗЫВАЕТ: пятое утверждение краснеет на НОВОМ файле с регистрацией.
+
+    Файл приходит в измеренный перечень НОВЫМ КЛЮЧОМ, и разница множеств
+    называет его поимённо — а не растворяет в итоговом числе. Ровно этого не
+    делает находка ревизии `IN-03` (инвентарь поднят числом, отказ печатает два
+    итога), и повторять её класс в правиле, заводимом ПРОТИВ молчаливых
+    движений, было бы платой за собственный урок.
+
+    ⚠️ ОЖИДАНИЯ ВЫПИСАНЫ ЛИТЕРАЛАМИ: имя подсаженного файла и число регистраций
+    в нём (`CONTROL_PLANTED_REGISTRATIONS`).
+
+    ⚠️ В ИМЕНИ СТОИ́Т `handler_registration`, И ЭТО НЕ УКРАШЕНИЕ. Отбор гейта
+    партии — `-k "criterion_three or handler_registration or vendored_script"` —
+    требует собрать ЧЕТЫРЕ правила; имя без этой подстроки в отбор не попало бы,
+    и цвет настоящего контроля не мерялся бы НИЧЕМ. Правило, чья краснота
+    никем не читается, есть то же вакуумное принуждение, против которого
+    заводится пятое утверждение.
+    """
+    scratch = _templates_copy(tmp_path)
+    declared = _declared_script_handler_registrations()
+
+    invented = scratch / CONTROL_INVENTED_TEMPLATE
+    invented.parent.mkdir(parents=True, exist_ok=True)
+    invented.write_text(
+        "<div id=\"a-node-the-control-invented\"></div>\n"
+        "<script>\n"
+        "  document.body.addEventListener("
+        "'a-control-invented-this-event-name', function () { return; });\n"
+        "</script>\n",
+        encoding="utf-8",
+    )
+
+    measured = _script_handler_registrations(_all_templates_under(scratch))
+
+    # 1. Подмена ПРИЗЕМЛИЛАСЬ: новый файл попал в перечень НОВЫМ ключом.
+    assert measured.get(CONTROL_INVENTED_TEMPLATE) == CONTROL_PLANTED_REGISTRATIONS, (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: обход не увидел НОВОГО шаблона с блоком "
+        f"сценария ({measured.get(CONTROL_INVENTED_TEMPLATE)} против "
+        f"{CONTROL_PLANTED_REGISTRATIONS}), и утверждение ниже доказывало бы "
+        "промах контроля"
+    )
+
+    # 2. Правило ВИДИТ появление файла и называет ЕГО, а не итог.
+    appeared = sorted(set(measured) - set(declared))
+    assert appeared == [CONTROL_INVENTED_TEMPLATE], (
+        "ПЯТОЕ УТВЕРЖДЕНИЕ НЕ ЗАМЕТИЛО НОВОГО ШАБЛОНА С РЕГИСТРАЦИЕЙ: "
+        f"появившиеся {appeared}. Правило, отбирающее только ОБЪЯВЛЕННЫЕ ключи, "
+        "прошло бы контроль лишней регистрации и провалило бы предмет: сценарий "
+        "следующей фазы ляжет в НОВЫЙ шаблон, а не в старый"
+    )
+
+    # 3. ГРАНИЦА КОНТРОЛЯ: боевое дерево подменой не тронуто.
+    assert _script_handler_registrations(_all_templates()) == declared, (
+        "ПОДМЕНА ПРОТЕКЛА ЗА ГРАНИЦУ КОНТРОЛЯ: боевой каталог шаблонов изменён"
+    )
+    assert not (TEMPLATES_DIR / CONTROL_INVENTED_TEMPLATE).exists(), (
+        "ПОДМЕНА ПРОТЕКЛА ЗА ГРАНИЦУ КОНТРОЛЯ: выдуманный контролем шаблон "
+        "приземлился в БОЕВОЕ дерево"
     )
 
 
