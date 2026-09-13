@@ -29,6 +29,24 @@
 не проверяется и не дублируется. Проверяется ровно то, чего не видел никто: ПО
 СОСТАВУ ПОЛНАЯ, ПО ЗНАЧЕНИЯМ НЕИСПОЛНИМАЯ строка.
 
+⚠️ ГРАНИЦА, ОБЪЯВЛЕННАЯ ВЫШЕ, БЫЛА ВЕРНА ДЛЯ СВОЕГО ДЕРЕВА И ПЕРЕРОСЛА ЕГО
+(идиома D-30/D-32; прежний абзац оставлен дословно и не вычёркивается). Она
+объявляла предметом ОТКАЗ ПО ОТСУТСТВИЮ МОМЕНТА — и честно называла ровно то,
+что на своём дереве было закрыто: исход `None`. Опровергнута она ПЕРЕЗАМЕРОМ
+ИСПОЛНЕНИЕМ (двенадцатый круг верификации, 2026-09-12, дерево `16df128`):
+`compute_next_run_at` сообщает о неисполнимости сохранённой строки ДВУМЯ
+способами, и `None` — лишь ОДИН из шести измеренных исходов. На пяти остальных
+формах он поднимает ИСКЛЮЧЕНИЕ, которое проходит мимо сличения `if next_run is
+None`, доезжает до общего обработчика `app/main.py` и даёт человеку пятисотку
+без объяснения.
+
+ГРАНИЦА ТЕПЕРЬ: ШЕСТЬ ФОРМ неисполнимой СОХРАНЁННОЙ строки × ТРИ входа,
+объявленные ПЕРЕЧНЕМ (`MALFORMED_STORED_FORMS`), а не списком отдельных правил.
+Перечень несущий: форма, добавленная в него, автоматически становится
+требованием ко ВСЕМ трём входам — иначе следующая форма закроется на одном
+входе и останется открытой на двух, то есть повторится ровно тот дефект,
+который этот файл и закрывает.
+
 ⚠️ ПОЧЕМУ ФАЙЛ ЛЕЖИТ В КОРНЕ `tests/`, А НЕ В `test_pages/` ИЛИ `test_routes/`.
 Дефект ОДИН, а входов у него ТРИ: страничный тумблер, тумблер JSON-API и
 частичное обновление JSON-API. Разложить их по каталогам значило бы развести
@@ -181,6 +199,17 @@ LEGAL_STORED_FORM = MalformedStoredForm(
 # и «вернул None» различались в ПЕЧАТИ отказа, оставаясь ОДНИМ исходом для
 # вызывающего.
 RAISED = object()
+
+# ТЕКСТ ОТКАЗА ОБОИХ JSON-ВХОДОВ, ВЫПИСАННЫЙ ЗДЕСЬ ОДИН РАЗ. Он НЕ ввозится из
+# обработчика намеренно: ожидание, добытое из предмета проверки, согласилось бы
+# с любой его правкой — включая ту, которая отняла бы у человека путь
+# восстановления. Здесь текст объявлен ОЖИДАНИЕМ, и расхождение с деревом
+# краснеет, а не подстраивается.
+UNRUNNABLE_VALUES_DETAIL = (
+    "Дни или часы расписания заданы значениями, которых система "
+    "исполнить не может — откройте расписание в редакторе "
+    "объявления и сохраните дни и время заново"
+)
 
 
 async def _user(db: AsyncSession) -> User:
@@ -372,6 +401,45 @@ async def _press_page_toggle(
     )
 
 
+async def _press_api_toggle(
+    client: AsyncClient, auth_headers: dict, schedule_id: int
+) -> tuple[int | None, str, object]:
+    """ОДНО нажатие тумблера JSON-API: код, ПЕЧАТЬ полученного и тело ответа.
+
+    Довод о печати дословно тот же, что у страничного помощника: утверждение
+    «правило покраснело» без ПОЛУЧЕННОГО значения не отличает измеренный отказ
+    от ошибки сбора и описки в отборе.
+    """
+    try:
+        response = await client.post(
+            f"/api/schedules/{schedule_id}/toggle", headers=auth_headers
+        )
+    except Exception as exc:  # noqa: BLE001 — здесь ловится ЗАМЕР, а не политика
+        return None, f"исключение {type(exc).__name__}: {exc}", None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    return response.status_code, f"код ответа {response.status_code}", payload
+
+
+async def _press_api_patch(
+    client: AsyncClient, auth_headers: dict, schedule_id: int, body: dict
+) -> tuple[int | None, str, object]:
+    """ОДИН частичный патч JSON-API: код, ПЕЧАТЬ полученного и тело ответа."""
+    try:
+        response = await client.put(
+            f"/api/schedules/{schedule_id}", json=body, headers=auth_headers
+        )
+    except Exception as exc:  # noqa: BLE001 — здесь ловится ЗАМЕР, а не политика
+        return None, f"исключение {type(exc).__name__}: {exc}", None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    return response.status_code, f"код ответа {response.status_code}", payload
+
+
 def _snapshot(row: Schedule) -> tuple:
     """Пять полей строки, которых отказ не имеет права коснуться."""
     return (
@@ -410,7 +478,14 @@ def test_the_seeded_shape_is_complete_and_yet_has_no_moment():
     ), "день вне 0..6 внезапно дал момент запуска — расхождение исчезло"
 
 
-def test_the_calculator_reports_unrunnability_two_ways_and_the_helper_one():
+@pytest.mark.parametrize(
+    "form",
+    MALFORMED_STORED_FORMS,
+    ids=[form.label for form in MALFORMED_STORED_FORMS],
+)
+def test_the_calculator_reports_unrunnability_two_ways_and_the_helper_one(
+    form: MalformedStoredForm,
+):
     """ДВА способа сообщить о неисполнимости у вычислителя — ОДИН у помощника.
 
     Предмет — договор, а не внутренности. `compute_next_run_at` отвечает на
@@ -423,7 +498,6 @@ def test_the_calculator_reports_unrunnability_two_ways_and_the_helper_one():
     бы внутренности вычислителя и краснел бы на всякой их правке, ничего не
     говоря о договоре. Полученное ПЕЧАТАЕТСЯ, свойство УТВЕРЖДАЕТСЯ.
     """
-    form = MALFORMED_STORED_FORMS_BY_LABEL["times-abc"]
     value, printed = _calculator_outcome(form)
 
     assert value is RAISED or value is None, (
@@ -674,4 +748,209 @@ async def test_control_a_legal_row_is_still_switched_on(
     )
     assert row.next_run_at is not None, (
         "законная строка включилась без момента запуска"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ВЕСЬ ПЕРЕЧЕНЬ ФОРМ × ТРИ ВХОДА
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# ⚠️ ПОЧЕМУ ПАРАМЕТРИЗАЦИЯ, А НЕ ПЯТНАДЦАТЬ КОПИЙ ПРАВИЛА. Пятнадцать копий
+# разъехались бы при первой же правке — и это ровно тот класс расхождения, ради
+# устранения которого существует сам модуль `app/services/schedule_rules.py`
+# («правило, живущее на одном входе и отсутствующее на другом, расходится
+# молча»). Здесь перечень форм есть ЕДИНСТВЕННОЕ место, где форма объявляется,
+# и потому новая форма приходит сразу ко всем трём входам.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "form",
+    MALFORMED_STORED_FORMS,
+    ids=[form.label for form in MALFORMED_STORED_FORMS],
+)
+async def test_api_toggle_refuses_every_malformed_stored_form(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict,
+    form: MalformedStoredForm,
+):
+    """Тумблер JSON-API отказывает 400 на КАЖДОЙ форме, а не на одной из шести.
+
+    До правки пять форм из шести уходили мимо сличения `if next_run is None` в
+    общий обработчик и отвечали пятисоткой — то есть отказом БЕЗ ОБЪЯСНЕНИЯ на
+    единственном действии, которым владелец возвращает строку, выключенную
+    накатом `0022`.
+    """
+    schedule_id, _ = await _seed_out_of_domain_schedule(
+        db_session, is_active=False, form=form
+    )
+    before = _snapshot(await _reload(db_session, schedule_id))
+
+    status_code, printed, payload = await _press_api_toggle(
+        client, auth_headers, schedule_id
+    )
+
+    assert status_code == 400, (
+        f"включение строки формы «{form.description}» дало {printed}, а не "
+        f"отказ 400 (вычислитель на этой форме отвечает: {form.measured})"
+    )
+    assert payload["detail"] == UNRUNNABLE_VALUES_DETAIL, (
+        f"текст отказа сдвинулся: получено {payload['detail']!r} — предмет "
+        "правки был СПОСОБ опознавания, а не редакция отказа"
+    )
+    assert _snapshot(await _reload(db_session, schedule_id)) == before, (
+        f"отвергнутое включение на форме «{form.description}» тронуло строку"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "form",
+    MALFORMED_STORED_FORMS,
+    ids=[form.label for form in MALFORMED_STORED_FORMS],
+)
+async def test_api_update_refuses_a_patch_on_every_malformed_stored_form(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict,
+    form: MalformedStoredForm,
+):
+    """Патч ПОСТОРОННЕГО поля на ВКЛЮЧЁННОЙ строке отказывает ЦЕЛИКОМ.
+
+    Патч трогает `group_ids` тем же значением, что уже лежит в строке, — то
+    есть воспроизводит ровно тот вход, который назвала ревизия: «патч, НЕ
+    ТРОГАЮЩИЙ испорченных полей». Испорченные значения приезжают ИЗ БАЗЫ, и
+    валидаторы входа сюда не помогают по построению.
+
+    ⚠️ ОТКАЗ ЦЕЛИКОМ, А НЕ ТИХОЕ ВЫКЛЮЧЕНИЕ. Погасить чужое работающее
+    расписание в ответ на патч соседнего поля — решение, которого клиент не
+    просил и о котором не узнает.
+    """
+    schedule_id, _ = await _seed_out_of_domain_schedule(
+        db_session, is_active=True, form=form
+    )
+    before_row = await _reload(db_session, schedule_id)
+    before = _snapshot(before_row)
+    untouched_patch = {"group_ids": list(before_row.group_ids or [])}
+
+    status_code, printed, payload = await _press_api_patch(
+        client, auth_headers, schedule_id, untouched_patch
+    )
+
+    assert status_code == 400, (
+        f"патч включённой строки формы «{form.description}» дал {printed}, а "
+        f"не отказ 400 (вычислитель отвечает: {form.measured})"
+    )
+    assert payload["detail"] == UNRUNNABLE_VALUES_DETAIL, (
+        f"текст отказа сдвинулся: получено {payload['detail']!r}"
+    )
+    after_row = await _reload(db_session, schedule_id)
+    assert _snapshot(after_row) == before, (
+        f"отвергнутый патч на форме «{form.description}» тронул строку — "
+        "частичная запись хуже отказа целиком"
+    )
+    assert after_row.is_active is True, (
+        "отказ тихо выключил чужое работающее расписание"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "form",
+    MALFORMED_STORED_FORMS,
+    ids=[form.label for form in MALFORMED_STORED_FORMS],
+)
+async def test_api_toggle_still_pauses_every_malformed_stored_form(
+    client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict,
+    form: MalformedStoredForm,
+):
+    """АНТИВАКУУМНАЯ ПОЛОВИНА JSON-входа на ВСЕХ шести формах.
+
+    Без неё «починка», отказывающая на ЛЮБОМ обращении к неисполнимой строке,
+    осталась бы зелёной, а человек потерял бы единственное действие, которым он
+    эту строку гасит.
+    """
+    schedule_id, _ = await _seed_out_of_domain_schedule(
+        db_session, is_active=True, form=form
+    )
+
+    status_code, printed, _payload = await _press_api_toggle(
+        client, auth_headers, schedule_id
+    )
+
+    assert status_code == 200, (
+        f"пауза на форме «{form.description}» дала {printed} — отказ по "
+        "неисполнимости съел право остановить отправку"
+    )
+    row = await _reload(db_session, schedule_id)
+    assert row.is_active is False, "пауза не сохранилась"
+    assert row.next_run_at is None, "пауза оставила момент запуска"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "form",
+    MALFORMED_STORED_FORMS,
+    ids=[form.label for form in MALFORMED_STORED_FORMS],
+)
+async def test_page_toggle_still_pauses_every_malformed_stored_form(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    form: MalformedStoredForm,
+):
+    """АНТИВАКУУМНАЯ ПОЛОВИНА страничного входа — довод тот же, что у API."""
+    schedule_id, ad_id = await _seed_out_of_domain_schedule(
+        db_session, is_active=True, form=form
+    )
+
+    status_code, printed, location = await _press_page_toggle(
+        authed_client, schedule_id, ad_id
+    )
+
+    assert status_code == 302, (
+        f"страничная пауза на форме «{form.description}» дала {printed}, а не "
+        "переход"
+    )
+    assert "notice=" not in location, "успешная пауза принесла код отказа"
+    row = await _reload(db_session, schedule_id)
+    assert row.is_active is False, "пауза не сохранилась"
+    assert row.next_run_at is None, "пауза оставила момент запуска"
+
+
+@pytest.mark.asyncio
+async def test_a_second_press_on_an_unrunnable_row_refuses_identically(
+    client: AsyncClient, db_session: AsyncSession, auth_headers: dict
+):
+    """РЕБРО `idempotency` ТРЕБОВАНИЯ FORM-06, РАЗРЕШЁННОЕ ЗАМЕРОМ.
+
+    Ребро пришло из детерминированного зонда и закрывается здесь явным
+    критерием: два последовательных нажатия на одной неисполнимой строке дают
+    ТОТ ЖЕ код ответа, а строка после ВТОРОГО нажатия равна снимку, снятому ДО
+    первого. Это же утверждение закрывает ребро `concurrency`: отказ происходит
+    ДО любой смены состояния, `commit()` на ветви отказа не достигается, и
+    сессия откатывается зависимостью `get_db`.
+    """
+    form = MALFORMED_STORED_FORMS_BY_LABEL["times-abc"]
+    schedule_id, _ = await _seed_out_of_domain_schedule(
+        db_session, is_active=False, form=form
+    )
+    before = _snapshot(await _reload(db_session, schedule_id))
+
+    first_code, first_printed, _first = await _press_api_toggle(
+        client, auth_headers, schedule_id
+    )
+    second_code, second_printed, _second = await _press_api_toggle(
+        client, auth_headers, schedule_id
+    )
+
+    assert first_code == 400, f"первое нажатие дало {first_printed}, а не 400"
+    assert second_code == first_code, (
+        f"второе нажатие дало {second_printed}, а первое — {first_printed}: "
+        "повторное обращение к неисполнимой строке перестало быть идемпотентным"
+    )
+    assert _snapshot(await _reload(db_session, schedule_id)) == before, (
+        "строка после двух отказов не равна себе до первого нажатия"
     )
