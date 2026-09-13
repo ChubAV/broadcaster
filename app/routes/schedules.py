@@ -26,6 +26,7 @@ from app.services.schedule_rules import (
     is_schedule_complete,
     is_valid_day_of_week,
     is_valid_time_of_day,
+    next_run_or_none,
     owned_group_ids,
 )
 from app.services.schedule_service import compute_next_run_at
@@ -389,11 +390,14 @@ async def update_schedule(
         # `IntegrityError` ограничения `0022`, то есть в 500 на форменный
         # запрос. Валидаторы входа этого не видят: испорченные дни приезжают ИЗ
         # БАЗЫ, а не из патча.
-        next_run = compute_next_run_at(
-            days_of_week=schedule.days_of_week,
-            times_of_day=schedule.times_of_day,
-            tz_name=schedule.timezone,
-        )
+        #
+        # ⚠️ ОТКАЗ РАСЧЁТА ОПОЗНАЁТСЯ ПО СОБЫТИЮ, А НЕ ПО ОДНОМУ ЕГО ЗНАЧЕНИЮ
+        # (CR-01, перезамер 2026-09-12): на пяти формах из шести вычислитель
+        # сообщает о неисполнимости ИСКЛЮЧЕНИЕМ, оно проходило мимо сличения с
+        # `None` и давало пятисотку. Помощник `next_run_or_none` сводит оба
+        # способа сказать «нет» к одному ответу; текст отказа и код ниже не
+        # сдвинуты ни на символ.
+        next_run = next_run_or_none(schedule)
         if next_run is None:
             # ОТКАЗ ЦЕЛИКОМ, А НЕ ВЫКЛЮЧЕНИЕ СТРОКИ. Тихо погасить чужое
             # работающее расписание в ответ на патч соседнего поля — решение,
@@ -491,11 +495,13 @@ async def toggle_schedule(
         # закрыта на создании и обновлении — она смотрит на ПРИСЛАННОЕ; тумблер
         # же читает дни из УЖЕ СОХРАНЁННОЙ строки, а такие строки после наката
         # `0022` на бою лежат (накат их выключает и `days_of_week` не трогает).
-        next_run = compute_next_run_at(
-            days_of_week=schedule.days_of_week,
-            times_of_day=schedule.times_of_day,
-            tz_name=schedule.timezone,
-        )
+        #
+        # ⚠️ ОТКАЗ РАСЧЁТА ОПОЗНАЁТСЯ ПО СОБЫТИЮ, А НЕ ПО ОДНОМУ ЕГО ЗНАЧЕНИЮ
+        # (CR-01, перезамер 2026-09-12): исключение вычислителя проходило мимо
+        # сличения с `None` и доезжало до общего обработчика `app/main.py`.
+        # Помощник `next_run_or_none` сводит оба способа сказать «нет» к одному
+        # ответу; текст отказа и код ниже не сдвинуты ни на символ.
+        next_run = next_run_or_none(schedule)
         if next_run is None:
             # ПОЛНОЕ ПО СОСТАВУ, НЕИСПОЛНИМОЕ ПО ЗНАЧЕНИЯМ — отдельный ответ и
             # отдельный текст. Проверка полноты выше отвечает на вопрос «есть
