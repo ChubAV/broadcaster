@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 10
 current_phase_name: Рычаг `components/modal.html`
 status: executing
-stopped_at: Completed 10-55-PLAN.md
-last_updated: "2026-09-13T08:03:59.576Z"
+stopped_at: Completed 10-56-PLAN.md
+last_updated: "2026-09-13T10:01:11.688Z"
 last_activity: 2026-09-13
 last_activity_desc: Phase 10 execution started
-state_head: 7f177dfdc8c4d23a93e34f319981bbb9a7bc1d2f
+state_head: f83ef7f4b715e9e9288fcbf031ac05b86eae85b0
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 95
-  completed_plans: 93
+  completed_plans: 94
   percent: 33
 ---
 
@@ -36,10 +36,10 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
-Plan: 56 of 57
+Plan: 57 of 57
 Total Plans in Phase: 57
 Completed Plans in Phase: 55
-Status: Executing Phase 10
+Status: Ready to execute
 Last activity: 2026-09-13 — Phase 10 execution started
 Last activity: 2026-09-11 — Phase 10: план 10-51 исполнен (RED→GREEN замерен переходом цвета правила безусловности подъёма — `1 failed, 229 deselected` при rc=1 с отказом, печатающим полученный селектор `.is-modal-open #htmx-failure-server, .is-modal-open #htmx-failure-network`, → `1 passed` при rc=0; улика проверена прибором `RED_EVIDENCE_OK`; модуль шелла `230 passed` при пороге сбора 223, полная суита `3182 passed`, rc=0, 38:20; продукт тронут ДВУМЯ строками преамбулы `app/static/css/app.css` — величины блока подъёма, правило блокировки прокрутки, рычаг и заготовки не тронуты)
 Progress: [████████████████████] 38/38 plans ([███░░░░░░░] 33%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
@@ -136,6 +136,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 10 P54 | 35 min | 2 tasks | 2 files |
 | Phase 10 P53 | 71 min | 2 tasks | 3 files |
 | Phase 10 P55 | 16 min | 3 tasks | 6 files |
+| Phase 10 P56 | 67 min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -285,6 +286,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 10]: Защита от неисполнимой СОХРАНЁННОЙ строки поставлена ПОМОЩНИКОМ `next_run_or_none` рядом с `compute_next_run_at`, а не `try` внутри вычислителя — Внутри вычислителя `None` означает «моментов нет», и этот смысл утверждают правила `tests/test_services/test_schedule_service.py`; `try` внутри отнял бы у планировщика `app/worker/` возможность отличать пустое расписание от испорченного. Дифф `schedule_service.py` от базы плана ПУСТ.
 - [Phase 10]: Перечень ловимых классов помощника закрыт ПЯТЬЮ именами замера; огульный перехват всех исключений запрещён — `ValueError`, `TypeError`, `IndexError`, `AttributeError`, `ZoneInfoNotFoundError` — замер шести форм двенадцатого круга. Огульный перехват проглотил бы отказ СУБД, отказ сети и ошибку программиста, превратив пятисотку с объяснением в четырёхсотку без него.
 - [Phase 10]: Шесть форм неисполнимой строки объявлены ПЕРЕЧНЕМ `MALFORMED_STORED_FORMS`, из которого параметризуются правила всех трёх входов — Форма, добавленная в перечень, автоматически становится требованием ко ВСЕМ трём входам. Пятнадцать копий правил разъехались бы при первой правке — это ровно тот класс расхождения, ради которого существует модуль `schedule_rules`.
+- [Phase 10]: Стопка двух заготовок сделана КЛАССОМ на существующих узлах плюс свойством-величиной, а НЕ элементом-обёрткой: обёртка встала бы предком вне объявленной вселенной FAILURE_BANNER_ANCESTORS, и правило чистоты цепи продолжало бы ЗЕЛЕНЕТЬ, смотря на ЧАСТЬ цепи — ослабление СЛЕПОТОЙ дороже открытой красноты (план 10-56)
+- [Phase 10]: Смещение второй заготовки идёт через свойство-величину, а не через второе объявление положения по классу: объявление по классу проиграло бы объявлению по идентификатору по весу селектора МОЛЧА — таблица выглядела бы верной, а прямоугольник остался бы один (план 10-56)
+- [Phase 10]: Шаг стопки объявлен числом, а его ДОСТАТОЧНОСТЬ проверяет правило, считающее минимум из объявлений .alert и --fs-md той же таблицы: ожидание, выписанное целиком, согласилось бы с любой правкой отступов плашки и молча перестало бы хватать (план 10-56)
+- [Phase 10]: FORM-06 настоящим планом НЕ отмечен и 10-UAT.md не тронут ни символом: правка ОБЕСЦЕНИВАЕТ шаги 2.8 и 4.4 обхода, и это записано СЛЕДСТВИЕМ в самом файле заготовок, а не закрыто задачей — прямоугольника машина не видит (план 10-56)
 
 ### Pending Todos
 
@@ -465,8 +470,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-13T08:03:25.295Z
-Stopped at: Completed 10-55-PLAN.md
+Last session: 2026-09-13T09:59:53.936Z
+Stopped at: Completed 10-56-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
