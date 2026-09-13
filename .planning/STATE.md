@@ -38,7 +38,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
 Plan: 57 of 57
 Total Plans in Phase: 57
-Completed Plans in Phase: 55
+Completed Plans in Phase: 56
 Status: Ready to execute
 Last activity: 2026-09-13 — Phase 10 execution started
 Last activity: 2026-09-11 — Phase 10: план 10-51 исполнен (RED→GREEN замерен переходом цвета правила безусловности подъёма — `1 failed, 229 deselected` при rc=1 с отказом, печатающим полученный селектор `.is-modal-open #htmx-failure-server, .is-modal-open #htmx-failure-network`, → `1 passed` при rc=0; улика проверена прибором `RED_EVIDENCE_OK`; модуль шелла `230 passed` при пороге сбора 223, полная суита `3182 passed`, rc=0, 38:20; продукт тронут ДВУМЯ строками преамбулы `app/static/css/app.css` — величины блока подъёма, правило блокировки прокрутки, рычаг и заготовки не тронуты)
