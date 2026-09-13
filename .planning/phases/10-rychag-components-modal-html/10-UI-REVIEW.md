@@ -1,111 +1,192 @@
 ---
 phase: 10-rychag-components-modal-html
-audited: 2026-09-12
+audited: 2026-09-13
 baseline: abstract 6-pillar standards (no UI-SPEC.md for this phase)
 screenshots: not_captured
-score: 15/24
+score: 16/24
+supersedes: "аудит 2026-09-12, 15/24"
 ---
 
-# Phase 10 — UI Review
+# Phase 10 — UI Review (перезамер после партии 10-55 / 10-56 / 10-57)
 
-**Audited:** 2026-09-12
-**Baseline:** abstract 6-pillar standards — **there is no UI-SPEC.md for this phase**, so no declared spacing scale, type ramp or 60/30/10 split exists to audit against. Every finding below is measured against house tokens actually present in `app/static/css/app.css` and against general UX standards, not against a contract.
-**Screenshots:** **NOT CAPTURED.** No dev server responded on ports 3000 / 5173 / 8080 / 8000 (all `000`), and the repository has no browser driver at all (`playwright|selenium|puppeteer|splinter` → 0 occurrences tree-wide). **This audit is code-only.** Three behaviours of this phase are RECTANGLES, not declarations, and they remain owed to a human observer — they are named in "Owed to a human" below and are NOT scored as if seen.
+**Дата:** 2026-09-13
+**База сличения:** абстрактные 6 столпов — **UI-SPEC.md у этой фазы НЕТ**, поэтому ни объявленной шкалы отступов, ни объявленной лестницы кегля, ни объявленного разделения 60/30/10 в природе не существует. Всё ниже мерено против ТОКЕНОВ, фактически живущих в `app/static/css/app.css`, и против общих правил UX — не против контракта. Прежний отчёт говорил ровно это, и перезамер его не отменяет.
 
----
+**Снимков экрана НЕТ.** Замеры, а не предположения:
 
-## Pillar Scores
+```
+$ for p in 3000 5173 8080 8000; do curl -s -o /dev/null -m 2 -w '%{http_code}' http://localhost:$p; done
+000  000  000  000
 
-| Pillar | Score | Key Finding |
-|--------|-------|-------------|
-| 1. Copywriting | 3/4 | Dialog copy is specific and consequence-bearing in 6 consumers, but two pass a bare identifier as `body`, and the failure banner promises a recovery time it cannot know |
-| 2. Visuals | 2/4 | The two failure banners are declared at the SAME `top`/`z-index` — when both are shown one hides the other by construction (app.css:1188-1197) |
-| 3. Color | 3/4 | Entirely token-driven except four hand-written `rgba(8, 8, 11, …)` literals; error-banner contrast never measured |
-| 4. Typography | 3/4 | Only two sizes on the new surface, but a dialog title at 15px over 13px body is a 1.15× ratio — the weakest possible hierarchy |
-| 5. Spacing | 2/4 | The project has NO spacing token at all (`--space*` → 0 hits); this phase added five more raw literals (22/20/14/12/9px) to that vacuum |
-| 6. Experience Design | 2/4 | The failure banner has no dismiss control and is cleared ONLY by a later *successful* htmx request — on a screen with no further htmx it stays over the viewport for the rest of the session |
+$ grep -rniE "playwright|selenium|puppeteer|splinter" --include="*.py" --include="*.toml" --include="*.json" --include="*.lock" . | grep -v ".planning/"
+tests/test_pages/test_shell.py:4239:    ни одного (замер `playwright|selenium|puppeteer|splinter` → 0 вхождений по
+```
 
-**Overall: 15/24**
+Единственное вхождение — ПРОЗА докстринга, то есть браузерного привода в дереве нет ни одного. `workflow.live_dom_uat` человеком в сеансе не открыт. **Аудит кодовый.** Всё, чей предмет — ПРЯМОУГОЛЬНИК, вынесено в раздел «Долг человеку» и НЕ засчитано как увиденное. Окно 77 записывает, чем подмена объявления прямоугольником уже обошлась фазе; настоящий отчёт эту запись не ослабляет.
 
 ---
 
-## Owed to a human — not scored, not assumed
+## Что изменилось против отчёта 2026-09-12 — проверено, а не принято на веру
 
-These cannot be settled by reading code, and nothing below treats them as passing:
-1. **Rectangle of the network-failure banner at working scroll position** (walkthrough step 2.8). Only the declaration `position: fixed; top: 12px; z-index: 70` is verifiable here.
-2. **Failure banner stacking over an open confirm panel** (step 4.4). `.modal` is `z-index: 60`, banner is `70` — ordering is declared, painting is not.
-3. **Acceptance signature.** `10-UAT.md` is `status: partial`; both walkthrough blocks were taken by an agent, not by a human on acceptance.
+| Прежняя находка | Вердикт перезамера |
+|---|---|
+| **`UI-1` — у плашки нет выхода** (BLOCKER) | **ЗАКРЫТА.** Орган снятия есть в обоих узлах, и возврат плашки на новом отказе тоже есть — обе половины на дереве |
+| **`UI-2` — две плашки в одном прямоугольнике** (BLOCKER) | **ЗАКРЫТА ПО ОБЪЯВЛЕНИЯМ.** Гарантированного наложения больше нет. Прямоугольник по-прежнему не наблюдён никем |
+| `UI-3` — плашки не оповещают вспомогательные технологии | **ЖИВА И СТАЛА ХУЖЕ** — см. находку 3 |
+| `UI-4` — тела диалогов расходятся | **ЖИВА, БЕЗ ИЗМЕНЕНИЙ** — замер ниже |
+| `UI-5` — `422` гасится молча на пути без подмены | **ЖИВА, БЕЗ ИЗМЕНЕНИЙ** — замер ниже |
+| `UI-6` — у диалога нет `aria-describedby` | **ЖИВА, БЕЗ ИЗМЕНЕНИЙ** — `grep -c aria-describedby modal.html` → **0** |
+| `UI-7` — дыра возврата фокуса | **ЖИВА, БЕЗ ИЗМЕНЕНИЙ** — проза `modal.html:22-30` на месте дословно |
 
-The CSS block itself states this boundary at app.css:1170-1177, and window 77 already records that asserting a stylesheet DECLARATION is not the same subject as a rendered RECTANGLE. That record is correct and this audit does not weaken it.
-
----
-
-## Top 3 Priority Fixes
-
-1. **BLOCKER — the failure banner has no exit.** `app/templates/includes/htmx_error_banner.html:227-233` un-hides on failure and re-hides only inside `htmx:afterRequest` guarded by `if (!event.detail.successful) return;`. A user who hits a network drop on a screen that issues no further htmx request (or issues only failing ones) keeps a fixed, full-width rectangle pinned over the top of every screen until reload — the exact cost app.css:1225-1233 named for the unconditional lift, only partly paid by the third handler. *Fix:* add a close button inside each banner wrapper (`<button type="button" class="btn btn--ghost" aria-label="Скрыть сообщение">`) that sets `hidden`, and additionally auto-hide `#htmx-failure-network` on the next `htmx:beforeRequest` so a retry visibly clears the prior failure.
-
-2. **BLOCKER — two banners occupy one rectangle.** `#htmx-failure-server` and `#htmx-failure-network` share `top: 12px; left: 0; right: 0; z-index: 70; width: min(560px, …); margin: auto` (app.css:1188-1197). Nothing offsets the second. A server error followed by a send error shows both, and the later one in DOM order paints over the earlier — the user loses one of two distinct recovery instructions. Window 76 recorded the overlap; the styling still does not fix it. *Fix:* wrap both in one `position: fixed` flex-column stack with `gap: 8px` and make the two children `position: static` inside it, so N banners stack instead of superimpose.
-
-3. **WARNING — failure banners are not announced.** `notice_area.html:135-136` does this correctly: persistent containers carrying `role="status" aria-live="polite"` / `role="alert" aria-live="assertive"` into which content is injected. The failure banners do the opposite: the `role="alert"` node (from `components/alert.html:10`) is present in the DOM from page load inside a plain `<div hidden>`, and only the wrapper's `hidden` attribute is toggled. Toggling visibility of a pre-existing alert node is not a reliable announcement trigger for assistive tech. A blind user gets no signal that their delete failed. *Fix:* give the wrappers `aria-live="assertive"` and inject/clear the alert's text content rather than toggling `hidden` on a pre-rendered node — mirroring the pattern this phase's own `notice_area.html` already uses.
+Ни одна из пяти отложенных не устарела и ни одна не «рассосалась». Две из них (`UI-3`, `UI-5`) настоящим перезамером признаны СТОЯЩИМИ ВЫШЕ в очереди, чем их положение в `deferred-items.md` предполагает.
 
 ---
 
-## Further findings (the list does not stop at three)
+## Столпы
 
-4. **WARNING — dialog bodies are inconsistent across the 10 consumers.** Six pass a consequence sentence; two pass an identifier. `ads/form.html:301` passes `body=ad.title`; `accounts/list.html:190` passes `body=label ~ ' #' ~ account.id`. Compare `admin/workers.html:57` ("Задача, которую воркер уже взял в работу, будет потеряна…") and `history/includes/history_card.html:177` ("Отправка в группу необратима и списывает сообщение с баланса"). Destroying an ad — which takes its schedules with it — is the case that most needs the consequence sentence and is the one that gets only a title echo.
-5. **WARNING — `422` is swallowed silently on a `hx-swap="none"` path.** `htmx_error_banner.html:218` returns early on status 422, while the modal form posts with `hx-swap="none"` (`components/modal.html:807`). Any 422 reaching a modal-submitted form produces: no swap, no banner, no notice — the panel simply sits there after a click. The early return is deliberate for form re-render paths, but it is unguarded against the swap-less path.
-6. **WARNING — no `aria-describedby` on the dialog.** `components/modal.html:715` sets `aria-labelledby="{{ id }}-title"` but never associates `.modal__text` (`:808`), so the consequence prose in six consumers is not part of the dialog's accessible description.
-7. **INFO — focus return has a named hole, already documented not fixed.** `components/modal.html:22-30` records that on the htmx group-delete path the panel is removed out-of-band rather than hidden, `hide()` never runs, and focus lands on `<body>`. Honestly disclosed; still a keyboard-user defect shipped by this phase.
+| Столп | Балл | Ключевая находка |
+|---|---|---|
+| 1. Copywriting | 3/4 | Тексты плашек не тронуты ни на символ; два органа снятия несут ОДНО И ТО ЖЕ доступное имя «Скрыть сообщение» и различить их нечем |
+| 2. Visuals | 3/4 | Гарантированное наложение снято стопкой 96px — но коробка органа снятия по объявлениям налезает на текстовую коробку плашки, а снятие первой плашки оставляет зазор в 96px (окно 82) |
+| 3. Color | 3/4 | Новые блоки полностью токенные (улучшение); четыре `rgba(8,8,11,…)` на месте; контраст `×` на танте `--danger` не мерен ничем |
+| 4. Typography | 3/4 | На новом органе один кегль `--fs-md`, но `line-height: 24px` литералом вместо отношения; заголовок панели 15px над телом 13px остаётся шагом 1.15× |
+| 5. Spacing | 2/4 | Шкалы отступов у проекта по-прежнему НЕТ (`--space*` → 0); партия добавила ещё пять литералов, включая `6px` — вне ритма 8/9px, который она же назвала своим в арифметике 10-56 |
+| 6. Experience Design | 2/4 | `UI-1` закрыт вместе со своей регрессией, но `UI-5` (щелчок → ни подмены, ни плашки, ни уведомления) остаётся живым отказом задачи, а `UI-3` и `UI-7` живы |
+
+**Итого: 16/24** (было 15/24).
 
 ---
 
-## Detailed Findings
+## Долг человеку — не засчитано и не предположено
 
-### Pillar 1: Copywriting (3/4)
-Strong overall and clearly deliberate. Titles are questions naming the object ("Удалить объявление?", "Перезапустить воркер?", "Войти под пользователем?"), confirm labels echo the title's verb rather than reading "OK" ("Удалить", "Перезапустить", "Повторить", "Войти"), and the default cancel is "Отмена" (`modal.html:693`). Generic-label greps find no "OK"/"Submit"/"Готово" in the confirm slot of any of the 10 consumers.
+1. **ПРЯМОУГОЛЬНИК плашки при рабочем положении прокрутки** (шаг 2.8 обхода). Верифицируемо здесь только объявление `position: fixed; top: var(--failure-banner-top, 12px); z-index: 70`.
+2. **ДВА прямоугольника при двух одновременных авариях** (шаг 4.4). Стопка объявлена — нарисованное не наблюдал никто. Шаг 4.4 прибавил предмет: ЧИСЛО ВИДИМЫХ ЗАГОТОВОК.
+3. **Работа органа снятия мышью и с клавиатуры** — в том числе видно ли, что `×` вообще нажимаем.
+4. **Находка 2 ниже (налегание коробок) в её РИСОВАННОЙ части.** Арифметика коробок из объявлений приведена; попадает ли под `×` глиф текста — прямоугольник.
+5. **Контраст `×` и контраст текста плашки** на подложке `color-mix(in oklab, var(--danger) 10%, transparent)` над `var(--surface)`.
+6. **Подпись человека на приёмке `10-UAT.md`.** `FORM-06` не закрыт, и настоящий отчёт его не закрывает.
 
-Deductions: finding 4 above (two consumers pass an identifier where every other passes a consequence). And `htmx_error_banner.html:213` — "Действие не выполнено. Попробуйте ещё раз через минуту." — states a wait duration the client cannot know and names no action, while its sibling at `:214` is a 180-character three-sentence paragraph. The pair is neither consistent in length nor in specificity.
+Окна журнала 77 и 81 держат этот долг машинно; отчёт их дублирует, а не заменяет.
 
-### Pillar 2: Visuals (2/4)
-Focal structure inside the panel is sound: overlay at `rgba(8,8,11,.72)` with `backdrop-filter: blur(6px)` (app.css:1199-1202), panel `min(420px, 100%)` with a `rise .2s` entry animation, actions right-aligned with `flex-wrap: wrap` (app.css:1216) so the two buttons survive a narrow viewport. No icon-only controls were introduced — every trigger is a labelled `<button>`/form submit.
+---
 
-The score is held at 2 by finding 2 (banner superimposition is guaranteed by the declarations, not merely possible) plus the unverifiable interaction of `z-70` banner with the `z-60` centred panel on short viewports — the panel is `place-items: center` inside 20px padding, so on a short viewport its top edge can reach the banner's 12px band. Whether it does is a rectangle, and rectangles are owed to a human.
+## Три приоритетные починки
 
-### Pillar 3: Color (3/4)
-Accent use is disciplined: every semantic colour routes through tokens with `color-mix(in oklab, …)` (app.css:849-852), and surfaces use `var(--surface)`, `var(--border)`, `var(--danger)`. Grep of the two phase templates for `#hex`/`rgb(` returns zero — no hardcoded colour entered the markup.
+1. **BLOCKER — `UI-5` жив и есть отказ ЗАДАЧИ, а не косметика.** `htmx_error_banner.html:281` возвращается рано при `status === 422`, а форма панели отправляется с `hx-swap="none"` (`components/modal.html:807`). Всякий `422`, доехавший до формы, отправленной ИЗ ПАНЕЛИ, даёт: ни подмены, ни плашки, ни уведомления — панель просто стои́т после щелчка, и человек нажимает второй раз. Это ровно тот класс, против которого стои́т `QUAL-01`. Отложено записью `## План 10-57` `deferred-items.md` с владельцем «следующий круг» — но по цене для человека оно стои́т выше четырёх своих соседей по разделу. *Починка:* сузить ранний выход до путей перерисовки формы — пропускать `422` дальше, когда у инициатора обмена `hx-swap` равен `none`.
 
-Deduction: `rgba(8, 8, 11, …)` appears 4 times in app.css as raw literals, two of them in this phase's own surface (panel shadow app.css:1207, overlay app.css:1201) and one in the banner shadow (app.css:1197) — the same near-black expressed three times instead of once as a token. Additionally, `.alert--error` sets `color: var(--danger)` on a 10%-danger tint, and the banner then re-parents it onto `background: var(--surface)` (app.css:1194) — a background swap that no contrast measurement in this phase covers.
+2. **BLOCKER — коробка органа снятия налегает на текстовую коробку плашки, и это АРИФМЕТИКА ОБЪЯВЛЕНИЙ, а не догадка.** `.banner-dismiss` объявлен `position: absolute; top: 6px; right: 6px; width: 24px; height: 24px` (`app.css:1318-1326`) — то есть занимает полосу от 6px до **30px** от правого края заготовки. `.alert` объявляет `padding: 11px 14px; border: 1px solid` (`app.css:844-848`), то есть его СОДЕРЖИМОЕ обрывается в **15px** от того же края. Ни одного объявления, резервирующего место под орган, в таблице нет:
 
-### Pillar 4: Typography (3/4)
-The new surface uses exactly two sizes and two weights: `--fs-xl` (15px) / weight 600 for `.modal__title` (app.css:1213), `--fs-md` (13px) / normal for `.modal__text` (app.css:1215) and `.alert` (app.css:846). That is well inside the ≤4 sizes / ≤2 weights bar, and `letter-spacing: -.015em` on the title is consistent with `.brand-name` house style.
+   ```
+   $ grep -n "failure-stack .alert\|failure-stack > .alert\|padding-right\|padding-inline-end" app/static/css/app.css
+   (пусто)
+   ```
 
-Deduction: 15px over 13px is a 1.15× step. For the single most important line in a destructive-confirmation dialog that is the weakest hierarchy the house ramp can express, when `--fs-2xl` (16px) and `--fs-h1` (22px) are both available and unused here. On a 13px body the title reads as emphasised body text, not as a heading.
+   По горизонтали коробки перекрываются на **15px**, по вертикали — коробка органа `[6, 30]` против коробки первой строки `[12, 31.5]` (11px padding + 1px рамка, высота строки 1.5 × `--fs-md` 13px = 19.5px), то есть на **18px**. Текст плашки обрыва связи — 180 знаков при объявленной ширине `min(560px, calc(100% - 24px))`: первая строка ЗАПОЛНЯЕТ поле набора, и её хвост приходится ровно в эту область. Сам план 10-56 посчитал то же самое с другой стороны («55 знаков при кегле 13px → две строки»). *Починка:* `.failure-stack .alert { padding-right: 36px; }` — одно объявление, ни один блок подъёма и ни один блок стопки не тронут, разбор ролей `_stack_blocks` не задет.
 
-### Pillar 5: Spacing (2/4)
-There is **no spacing scale in this project** — `grep -- '--space'` over app.css returns nothing; only `--r-*` (radius) and `--fs-*` (size) tokens exist. Every spacing value is a literal. This phase added: `.modal { padding: 20px }` (app.css:943), `.modal__panel { gap: 14px; padding: 22px }` (app.css:1205-1206), `.modal__form { gap: 14px }` (app.css:1214), `.modal__actions { gap: 9px }` (app.css:1216), banner `top: 12px` + `calc(100% - 24px)` (app.css:1190-1193), `.alert { padding: 11px 14px }` (app.css:845).
+3. **BLOCKER — `UI-3` жив, и ветвь `A` его УХУДШИЛА, хотя починкой не притворялась.** Узел `role="alert"` по-прежнему стои́т в документе с загрузки внутри скрытой обёртки (`components/alert.html:10`), и переключается только атрибут скрытости обёртки — надёжным поводом к оповещению это не является. Сводка 10-57 честно пишет, что орган снятия `UI-3` «НЕ ЧИНИТ НИ НА СИМВОЛ», и это верно. Но перезамер добавляет то, чего запись не знала: орган снятия — **`<input type="checkbox">`**, и вспомогательная техника объявит его «Скрыть сообщение, флажок, не отмечен». Роль названа неверно (WCAG 4.1.2): человек слышит флажок там, где ему дали кнопку закрытия. Сверх того **оба органа несут ОДНО доступное имя**:
 
-That is 20 / 22 / 14 / 12 / 11 / 9 px inside one component — six values from no system, where 22 and 20 differ by 2px for no expressed reason and the action-row gap (9) is unique in the file. The component is internally readable but contributes six more un-tokenised literals to a codebase that already cannot answer "what is one unit of space here". Score 2 reflects the absence of any scale to audit against plus the phase's net addition to the problem, not a claim that any single value is wrong.
+   ```
+   $ grep -c 'aria-label="Скрыть сообщение"' app/templates/includes/htmx_error_banner.html
+   2
+   ```
 
-### Pillar 6: Experience Design (2/4)
-What is present and correct: busy state (`x-bind:disabled="sending"`, `x-bind:aria-busy="sending"`, `hx-disabled-elt`, `hx-indicator="find .form-busy"` — `modal.html:807,810,813`), double-submit guard on `x-on:submit` (`:806`), `x-cloak` to prevent flash, Escape and overlay-click close both gated by `if (sending) return` (`:713,716`), a real focus trap (`x-on:keydown.tab.prevent="trap($event)"`, `:714`), initial focus deliberately on Cancel so Enter cannot confirm a delete (`:717` panel + `x-ref="cancel"`), body scroll lock via `is-modal-open` (app.css:961-964), and a `destroy()` path so out-of-band panel removal also releases the lock. That is a genuinely careful destructive-confirmation flow.
+   При двух одновременных авариях в порядке обхода стоя́т два неразличимых «Скрыть сообщение», и какое из двух сообщений убирает каждый — не сказано ничем. *Починка (дешёвая половина, не трогающая ветвь `A`):* развести имена — `aria-label="Скрыть сообщение об ошибке сервера"` и `aria-label="Скрыть сообщение о разрыве связи"`, и добавить `role="button"` на оба органа. Дорогая половина (впрыск содержимого вместо переключения скрытости по образцу `notice_area.html:135-136`) остаётся `UI-3` и требует решения владельца.
 
-What holds the score at 2: finding 1 (no dismiss; clears only on a subsequent *successful* request — a stuck full-width overlay is a task-blocking outcome, not a cosmetic one), finding 2 (one of two recovery messages is unreadable when both fire), finding 3 (no reliable announcement to assistive tech for the failure path specifically — the success/notice path got this right in the same phase), finding 5 (a swap-less 422 produces no user-visible response at all), and finding 7 (documented focus loss to `<body>` on the group-delete htmx path).
+---
 
-Note on scope: the phase's single open gap (`CR-01`, exception paths of `compute_next_run_at`) is a backend defect and is deliberately NOT counted against any pillar here.
+## Дальнейшие находки — перечень не обрывается на трёх
+
+4. **WARNING — окно 82 подтверждено чтением объявлений, и оно ЖИВОЕ.** Блок «нет дыры» ключáется на АТРИБУТ: `.failure-stack[hidden] + .failure-stack { --failure-banner-top: 12px }` (`app.css:1266-1268`). Орган снятия атрибута не ставит — он скрывает свою заготовку объявлением `.failure-stack:has(> .banner-dismiss:checked) { display: none }` (`:1330`). Снятый узел остаётся СОСЕДОМ, поэтому `.failure-stack + .failure-stack` продолжает матчиться, а `[hidden]`-сброс — нет: вторая заготовка стои́т на `calc(12px + 96px)`, и над ней пустые 96px. Запись окна 82 формулирует цену верно («косметический зазор, ни одна плашка не теряется»), и перезамер её подтверждает, а не оспаривает. Основание неправки тоже проверено и признаётся честным: обе формы починки красят правила стопки 10-56 за ФОРМУ, а не за дефект. *Но:* существует третья форма, разбора ролей не трогающая — привести признак снятия к тому же АТРИБУТУ, на котором ключáется сброс. Она есть ветвь `B` и требует решения владельца; отчёт её называет, а не предписывает.
+
+5. **WARNING — путь деградации органа снятия молчалив.** Скрытие целиком держится на `:has()` (`app.css:1330`). Там, где `:has()` не поддержан, орган остаётся видимым, `::before` рисует `×` всегда (`:1327`), и нажатие переключает состояние, не меняя НИЧЕГО на экране — инертный элемент управления без единого признака инертности. Проект в других местах держит парные правила `*_degrades_without_htmx`, то есть идиома «назвать путь деградации» у него своя. Здесь путь не назван ни правилом, ни прозой. *Починка:* `@supports not selector(:has(*)) { .banner-dismiss { display: none } }` — орган исчезает там, где он не работает, и человек не получает обещания, которого таблица не держит.
+
+6. **WARNING — `UI-4` жив дословно, и его худший случай тот же.** Замер на сегодняшнем дереве: `ads/form.html:301` передаёт `body=ad.title`; `accounts/list.html:190` — `body=label ~ ' #' ~ account.id`; `admin/workers.html:57` — предложение о последствии. Удаление объявления, уносящее с собой его расписания, по-прежнему получает эхо заголовка вместо предложения о последствии.
+
+7. **WARNING — `UI-6` и `UI-7` живы без единого символа изменений.** `grep -c "aria-describedby" components/modal.html` → **0** при живом `aria-labelledby="{{ id }}-title"` (`:715`) и живом `.modal__text` (`:808`): проза последствия, которую передают шесть потребителей, в доступное описание диалога не входит. Дыра возврата фокуса на пути внеполосного снятия панели (`modal.html:22-30`) раскрыта прозой честно и не починена — дефект для человека с клавиатурой, отгруженный этой фазой.
+
+8. **INFO — текст плашки сервера по-прежнему обещает срок, которого клиент знать не может.** «Действие не выполнено. Попробуйте ещё раз через минуту.» (`htmx_error_banner.html:276`) против 180-знакового соседа на `:277`. Партия текстов не трогала НАМЕРЕННО (план 10-56 замерил «изменённых строк сценария 0»), и это верное решение — переформулировка смешала бы два изменения в одном. Находка остаётся открытой.
+
+---
+
+## Подробно по столпам
+
+### Столп 1: Copywriting (3/4)
+
+Копия панели подтверждения не тронута этой партией и остаётся сильной: заголовки — вопросы, называющие объект; подписи подтверждения повторяют глагол заголовка, а не читаются «OK»; умолчание отмены — «Отмена» (`modal.html:693`). Греп по обобщённым подписям в слоте подтверждения десяти потребителей находок не даёт.
+
+Вычеты: находка 6 (два потребителя из десяти передают опознаватель вместо последствия), находка 8 (обещанный срок и разнобой длин двух плашек) и НОВОЕ — находка 3 в её второй половине: два органа снятия с одним и тем же доступным именем. Доступное имя есть КОПИЯ, и здесь она ровно та, против которой стои́т идиома проекта «вторая копия разошлась бы с первой молча» — только разойтись ей нечем, потому что различать нечего с самого начала.
+
+### Столп 2: Visuals (3/4) — единственный столп, поднявшийся
+
+Поднялся по настоящему основанию, а не по мягкости: прежний балл 2 держался утверждением «наложение ГАРАНТИРОВАНО объявлениями». Это утверждение больше не истинно. Стопка объявлена тремя блоками с разведёнными весами селектора:
+
+```
+  base   `.failure-stack`                          → 12px                                  (вес 1)
+  offset `.failure-stack + .failure-stack`         → calc(12px + var(--failure-stack-step)) (вес 2)
+  reset  `.failure-stack[hidden] + .failure-stack` → 12px                                  (вес 3)
+```
+
+Вес сброса СТРОГО выше веса смещения, поэтому порядок блоков в файле исхода не решает — это верная форма, и она именно та, которой прошлый отчёт НЕ предлагал. Предложенная им обёртка `position: fixed` с детьми `position: static` действительно ослепила бы правило чистоты цепи предков (`FAILURE_BANNER_ANCESTORS`), и отказ от неё в пользу класса плюс свойства-величины — правильное решение. Отчёт это признаёт прямо: рекомендация 2 прошлого круга была хуже исполненного.
+
+Балл держится на 3, а не выше, по трём причинам: находка 2 (коробка органа налегает на коробку текста — по объявлениям, без единого компенсирующего отступа), находка 4 (зазор 96px при снятии первой заготовки), и то, что ПРЯМОУГОЛЬНИК так и не наблюдён никем. Четыре балла столп получить не может, пока ни один человек не видел ни одной из двух поверхностей после правки.
+
+### Столп 3: Color (3/4)
+
+Дисциплина новых блоков безупречна и это ЗАМЕР: в блоках `1255-1332` нет ни одного шестнадцатеричного литерала и ни одного `rgb(` — только `var(--text-tertiary)`, `var(--text)`, `var(--focus-ring)`, `transparent`. Партия добавила 62 строки таблицы стилей и НИ ОДНОГО нового сырого цвета.
+
+Вычеты — прежние и неподвинутые: `rgba(8, 8, 11, …)` встречается **4** раза сырым литералом, из них тень блока подъёма (`app.css:1197`) и подложка панели — тот же почти-чёрный, выписанный трижды вместо одного токена. Сверх того партия завела НОВУЮ неизмеренную пару контраста: `×` цветом `--text-tertiary` (`#7a7a88`) поверх `.alert--error`, чья подложка есть `color-mix(in oklab, var(--danger) 10%, transparent)` поверх `--surface` (`#0e0e14`). Против чистого `--surface` пара даёт около 4.55:1 — то есть ЕДВА проходит порог 4.5:1 для текста ниже 18.66px, а глиф объявлен кеглем `--fs-md` = 13px. Над танте порог может быть не пройден, и ни одно правило фазы этого не считает. Вынесено в долг человеку пунктом 5.
+
+### Столп 4: Typography (3/4)
+
+Новая поверхность кегля не разводит: `×` объявлен `font-size: var(--fs-md)` (`app.css:1327`) — тот же 13px, что и тело плашки. Токенов кегля в проекте девять, в ходу все девять; на поверхности ПАНЕЛИ — ровно два (`--fs-xl` 15px для заголовка, `--fs-md` 13px для тела), что внутри планки «≤4 кегля».
+
+Вычеты прежние и один новый. Прежний: 15px над 13px есть шаг **1.15×** — самая слабая иерархия, какую домашняя лестница способна выразить, при неиспользованных `--fs-2xl` (16px) и `--fs-h1` (22px). На теле 13px заголовок читается как выделенный текст, а не как заголовок. Новый: `.banner-dismiss` объявляет `line-height: 24px` числом с единицей, тогда как соседний `.alert` объявляет `line-height: 1.5` отношением. Величина подобрана под высоту коробки (24px) и разойдётся с ней молча, если коробку когда-нибудь тронут — то есть это то же «две копии одного числа», за которое фаза уже платила записью `IN-04`.
+
+### Столп 5: Spacing (2/4) — не двинулся, и партия добавила к предмету
+
+Шкалы отступов у проекта НЕТ:
+
+```
+$ grep -c -- "--space" app/static/css/app.css
+0
+```
+
+Существуют только `--r-*` (радиус) и `--fs-*` (кегль). Каждый отступ — литерал. Литералы, добавленные ЭТОЙ партией в блоках `1255-1332`:
+
+```
+  3 × 24px    3 × 12px    2 × 6px    2 × 2px    1 × 96px
+```
+
+Из них `96px` — единственный, у которого есть ЛЕТОПИСЬ ЗАМЕРА, и это делает ему честь: план 10-56 посчитал минимум 90.5px из объявлений `.alert` и `--fs-md` ТОЙ ЖЕ таблицы и завёл правило, краснеющее при правке отступов плашки. Это образцовая форма, и отчёт называет её лучшей из всего, что фаза сделала с отступами.
+
+Тем острее остальные. `6px` (`top: 6px; right: 6px` органа снятия) — величина, НЕ ПРИНАДЛЕЖАЩАЯ ни одному ритму файла, и назвала это сама же партия: арифметика 10-56 объявляет «зазор 8px — МЕНЬШАЯ ИЗ ДВУХ СОСЕДНИХ величин вертикального ритма таблицы (8px и 9px); шкалы отступов у проекта нет вовсе». Через один план та же партия внесла третью величину, о ритме ничего не говорящую. Балл 2 отражает и отсутствие шкалы, к которой можно апеллировать, и чистое приращение партии к этой пустоте — не утверждение, что какая-то одна величина неверна.
+
+### Столп 6: Experience Design (2/4) — не двинулся, и основание сменилось
+
+Что закрыто и закрыто хорошо: у показанной плашки появился ВЫХОД, и — что важнее — партия сама предвидела регрессию, которую наивная починка внесла бы. Без сброса состояния органа «снял один раз» означало бы «больше не узнаю ни об одной аварии до перезагрузки» — тишина хуже пришпиленного прямоугольника. Две строки в телах двух УЖЕ СУЩЕСТВУЮЩИХ обработчиков закрывают ровно это, и текст отказа правила возврата (`10-57-SUMMARY.md`, 2.2) называет цену дословно. Форма — флажок без регистрации обработчика — выбрана владельцем на останове `blocking-human`, записана третьей записью `overrides` с областью `узко`, и ни одно из пяти чисел гейта критерия 3 не сдвинуто. Это дисциплинированная работа, и отчёт её не переоценивает в другую сторону.
+
+Что держит балл на 2 — четыре живых дефекта, каждый проверен на сегодняшнем дереве:
+
+- **`UI-5`** (находка 1) — щелчок по подтверждению, получивший `422`, даёт человеку АБСОЛЮТНУЮ ТИШИНУ: ни подмены, ни плашки, ни уведомления. Это отказ завершения задачи, а не деградация качества, и один такой дефект не даёт столпу подняться выше 2 независимо от того, что вокруг него сделано хорошо.
+- **`UI-3`** (находка 3) — незрячий человек не получает сигнала об отказе, а теперь ещё и встречает орган с неверно названной ролью и неразличимым именем.
+- **`UI-7`** — фокус уезжает на тело документа на пути внеполосного снятия панели; обход по Tab начинается сначала.
+- **находка 5** — инертный орган управления без признака инертности там, где `:has()` не поддержан.
+
+Что в этом столпе по-прежнему сделано правильно и не должно потеряться в перечне: состояние занятости (`x-bind:disabled`, `x-bind:aria-busy`, `hx-disabled-elt`, `hx-indicator`), защита от второй отправки, `x-cloak`, Escape и щелчок по подложке — оба под `if (sending) return`, настоящая ловушка фокуса, начальный фокус НАМЕРЕННО на «Отмена», блокировка прокрутки тела с путём `destroy()`. Это по-прежнему аккуратный поток подтверждения необратимого действия.
 
 ---
 
 ## Registry Safety
-Skipped — `components.json` is absent; this is a Jinja2/Alpine/htmx surface with no shadcn registry. No registry section applies.
+
+Не применимо: `components.json` отсутствует, реестра shadcn у проекта нет — поверхность Jinja2 / Alpine / htmx. Раздел заведён, чтобы молчание не читалось как пропуск.
 
 ---
 
-## Files Audited
-- `app/templates/components/modal.html` (818 lines; markup at 693-818)
+## Файлы, прочитанные при перезамере
+
+- `app/templates/includes/htmx_error_banner.html` (324 строки; разметка `:276-277`, сценарий `:278-298`)
+- `app/static/css/app.css` (блок подъёма `:1188-1198`, стопка `:1259-1268`, орган снятия `:1318-1330`, `.alert` `:844-852`, токены `:26-86`)
+- `app/templates/components/modal.html` (`:22-30`, `:693`, `:715`, `:807-813`)
 - `app/templates/components/alert.html`
-- `app/templates/includes/htmx_error_banner.html` (235 lines; markup/script at 213-235)
-- `app/templates/includes/notice_area.html` (135-136)
-- `app/static/css/app.css` (844-852, 941-964, 1170-1216, 2016-2023)
-- `app/templates/ads/partials/sched_delete_response.html`
-- `app/templates/ads/form.html`, `app/templates/accounts/list.html`, `app/templates/accounts/partial_cards.html`, `app/templates/accounts/partials/sync_status_card.html`, `app/templates/account_groups/includes/group_row.html`, `app/templates/ads/includes/sched_card.html`, `app/templates/ads/includes/ad_card.html`, `app/templates/admin/user_detail.html`, `app/templates/admin/workers.html`, `app/templates/admin/queue.html`, `app/templates/admin/includes/queue_row.html`, `app/templates/admin/includes/worker_row.html`, `app/templates/history/includes/history_card.html`
-- Planning inputs: `10-VERIFICATION.md`, `10-UAT.md`, `10-REVIEW.md`, all 54 `10-NN-PLAN.md` frontmatter blocks
+- `app/templates/ads/form.html:301`, `app/templates/accounts/list.html:190`, `app/templates/admin/workers.html:57`
+- Записи: `10-CONTEXT.md`, `10-55-SUMMARY.md`, `10-56-SUMMARY.md`, `10-57-SUMMARY.md`, `deferred-items.md`, `.planning/WINDOWS.md` (окна 76, 77, 78, 81, 82, 83), прежний `10-UI-REVIEW.md` от 2026-09-12
