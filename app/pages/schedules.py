@@ -18,6 +18,7 @@ from app.services.schedule_rules import (
     DAY_OF_WEEK_MIN,
     is_schedule_complete,
     is_valid_time_of_day,
+    next_run_or_none,
 )
 from app.services.schedule_service import compute_next_run_at
 from app.pages import notices
@@ -1132,11 +1133,15 @@ async def schedules_toggle(
             # строки и по записанному решению НЕ ТРОГАЕТ `days_of_week` —
             # значит после наката они лежат на бою, и тумблер есть
             # ЕДИНСТВЕННОЕ действие, которым владелец пробует их вернуть.
-            next_run = compute_next_run_at(
-                days_of_week=schedule.days_of_week,
-                times_of_day=schedule.times_of_day,
-                tz_name=schedule.timezone,
-            )
+            #
+            # ⚠️ ОТКАЗ РАСЧЁТА ОПОЗНАЁТСЯ ПО СОБЫТИЮ, А НЕ ПО ОДНОМУ ЕГО
+            # ЗНАЧЕНИЮ (CR-01, перезамер 2026-09-12): на пяти формах из шести
+            # вычислитель сообщает о неисполнимости ИСКЛЮЧЕНИЕМ, оно проходило
+            # мимо сличения с `None` и давало человеку пятисотку. Помощник
+            # `next_run_or_none` сводит оба способа сказать «нет» к одному
+            # ответу; текст отказа и форма возврата ниже не сдвинуты ни на
+            # символ — изменился СПОСОБ опознавания, а не исход для человека.
+            next_run = next_run_or_none(schedule)
             if next_run is None:
                 # Строка НЕ ТРОГАЕТСЯ ВОВСЕ: отказ обязан оставить её ровно
                 # там, где нашёл, — выключенной и целой. Путь восстановления

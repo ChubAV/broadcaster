@@ -21,11 +21,19 @@ JSON-API писал их дословно, CR-02 / T-02G-06).
 """
 
 import re
+from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfoNotFoundError
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.group import Group
+from app.services.schedule_service import compute_next_run_at
+
+if TYPE_CHECKING:  # pragma: no cover — только для аннотации
+    from datetime import datetime
+
+    from app.models.schedule import Schedule
 
 # Границы дня недели. Те же, что у `datetime.date.weekday()` — 0 понедельник,
 # 6 воскресенье, — и та же пара чисел, которую страничный слой передавал в
@@ -119,3 +127,64 @@ async def owned_group_ids(
         )
     )
     return set(rows.scalars().all())
+
+
+# Классы, которыми `compute_next_run_at` сообщает о неисполнимости СОХРАНЁННЫХ
+# значений. Перечень есть ЗАМЕР шести форм (перезамер двенадцатого круга
+# верификации, 2026-09-12, дерево `16df128`), а не догадка:
+#
+#   times_of_day=['abc']   → ValueError     (int('abc'))
+#   times_of_day=['25:00'] → ValueError     (hour must be in 0..23)
+#   times_of_day=['9']     → IndexError     (parts[1] отсутствует)
+#   times_of_day=[9]       → AttributeError (у int нет .split)
+#   timezone='Mars/Phobos' → ZoneInfoNotFoundError
+#   days_of_week=['1']     → None           (единственная форма без исключения)
+#
+# `TypeError` стои́т здесь тем же основанием: `days_of_week`/`times_of_day`
+# приезжают из JSON-колонки и не обязаны быть списками вовсе.
+UNRUNNABLE_STORED_VALUE_ERRORS = (
+    ValueError,
+    TypeError,
+    IndexError,
+    AttributeError,
+    ZoneInfoNotFoundError,
+)
+
+
+def next_run_or_none(schedule: "Schedule") -> "datetime | None":
+    """Момент запуска СОХРАНЁННОЙ строки либо `None`, если значения неисполнимы.
+
+    ⚠️ ИСКЛЮЧЕНИЕ И ПУСТОЙ РЕЗУЛЬТАТ СУТЬ ОДИН ИСХОД ДЛЯ ВЫЗЫВАЮЩЕГО — «строка
+    неисполнима по значениям». Вычислитель сообщает об этом ДВУМЯ способами:
+    значением `None` на одних формах и исключением на других. Обработчику отдан
+    РОВНО ОДИН вопрос — «есть ли момент», — и разделять два способа сказать
+    «нет» значило бы поручить ему разбор внутренностей вычислителя. Ровно на
+    этом разделении и стоял дефект `CR-01`: сличение `if next_run is None` жило
+    во всех трёх обработчиках, а исключение проходило мимо него до общего
+    обработчика `app/main.py` и оборачивалось пятисоткой без объяснения и без
+    пути восстановления.
+
+    ⚠️ ПОЧЕМУ ЗАЩИТА СТОИ́Т ЗДЕСЬ, А НЕ ВНУТРИ `compute_next_run_at`. Там `None`
+    означает «моментов нет», и этот смысл УТВЕРЖДАЮТ правила
+    `tests/test_services/test_schedule_service.py`. Внесённый внутрь вычислителя
+    `try` превратил бы `None` в «что-то пошло не так» и отнял бы у восьмого
+    вызывающего — планировщика `app/worker/` — возможность отличать пустое
+    расписание от испорченного. Помощник стои́т РЯДОМ с вычислителем и меняет не
+    его договор, а договор ВЫЗЫВАЮЩЕГО ОБРАБОТЧИКА.
+
+    ⚠️ ГРАНИЦА. Перечень `UNRUNNABLE_STORED_VALUE_ERRORS` закрыт пятью именами
+    замера, и огульный перехват ВСЕХ исключений здесь ЗАПРЕЩЁН: он проглотил бы
+    отказ СУБД, отказ сети и ошибку программиста — то есть превратил бы
+    пятисотку с объяснением в четырёхсотку без него. Запрет проверяется грепом
+    по телу модуля, поэтому имя запрещённой конструкции здесь и не набирается. Помощник закрывает путь СОХРАНЁННЫХ
+    значений и НЕ ЗАМЕНЯЕТ отсечку входов создания и обновления: та по-прежнему
+    не даёт РОДИТЬ такую строку через API.
+    """
+    try:
+        return compute_next_run_at(
+            days_of_week=schedule.days_of_week or [],
+            times_of_day=schedule.times_of_day or [],
+            tz_name=schedule.timezone,
+        )
+    except UNRUNNABLE_STORED_VALUE_ERRORS:
+        return None
