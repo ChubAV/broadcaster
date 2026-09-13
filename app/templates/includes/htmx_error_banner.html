@@ -210,8 +210,8 @@
 
    Подключение: {% include "includes/htmx_error_banner.html" %} #}
 {% from "components/alert.html" import alert %}
-<div id="htmx-failure-server" hidden>{{ alert('Действие не выполнено. Попробуйте ещё раз через минуту.', 'error') }}</div>
-<div id="htmx-failure-network" hidden>{{ alert('Запрос не дошёл до сервера. Проверьте соединение и попробуйте ещё раз. Показанное на экране могло разойтись с тем, что записано на сервере: обновите страницу, чтобы увидеть настоящее состояние.', 'error') }}</div>
+<div id="htmx-failure-server" class="failure-stack" hidden>{{ alert('Действие не выполнено. Попробуйте ещё раз через минуту.', 'error') }}</div>
+<div id="htmx-failure-network" class="failure-stack" hidden>{{ alert('Запрос не дошёл до сервера. Проверьте соединение и попробуйте ещё раз. Показанное на экране могло разойтись с тем, что записано на сервере: обновите страницу, чтобы увидеть настоящее состояние.', 'error') }}</div>
 <script>
   if (!document.body.dataset.htmxFailureWired) {
   document.body.dataset.htmxFailureWired = '1';
