@@ -4177,6 +4177,551 @@ def test_the_two_failure_banners_do_not_share_one_rectangle():
     )
 
 
+# --- ДОСТАТОЧНОСТЬ ШАГА И ОТСУТСТВИЕ ДЫРЫ (план 10-56) ----------------------
+#
+# ⚠️ ДВА ЧИСЛА НИЖЕ — ЕДИНСТВЕННЫЕ, КОТОРЫЕ ПРАВИЛО ДОСТАТОЧНОСТИ ЗНАЕТ САМО;
+# ВСЕ ОСТАЛЬНЫЕ ОНО ЧИТАЕТ ИЗ ТАБЛИЦЫ. Основание прямое: ожидаемый шаг,
+# выписанный ЦЕЛИКОМ, согласился бы с любой правкой `.alert` — увеличили отступ
+# плашки, и шаг МОЛЧА перестал бы хватать. Правило заводится ровно против этого.
+#
+# ЛЕТОПИСЬ ЗАМЕРА ЧИСЛА СТРОК (2026-09-13). Самое узкое ОБЪЯВЛЕННОЕ рабочее окно
+# таблицы — медиазапрос 400px. Ширина плашки там `min(560px, 400px − 24px)` =
+# 376px; поле набора = 376 − 28 (отступы) − 2 (рамка) = 346px. Текст плашки
+# ОТКАЗА СЕРВЕРА («Действие не выполнено. Попробуйте ещё раз через минуту.») —
+# 55 знаков при кегле 13px, то есть ДВЕ строки. Взято ТРИ: третья есть ЗАПАС на
+# правку редакции, и запас НАЗВАН, а не спрятан в округлении итога.
+FAILURE_BANNER_STACK_LINES = 3
+
+# Зазор между двумя плашками. Замер — вертикальный ритм таблицы: соседние
+# величины промежутков в ней 8px и 9px (шкалы отступов у проекта НЕТ вовсе,
+# `--space*` → 0 вхождений, замер UI-ревизии 2026-09-12, Pillar 5). Взята
+# МЕНЬШАЯ: зазор входит в НИЖНЮЮ границу достаточности, и завышать его значило
+# бы завышать порог, который правило принуждает.
+FAILURE_BANNER_STACK_GAP_PX = 8
+
+# Селектор блока плашки — единственный источник величин её высоты.
+ALERT_SELECTOR = ".alert"
+
+# Код ответа, которым поднимается заготовка ОТКАЗА СЕРВЕРА в правиле
+# идемпотентности. Отличие его от кода валидации утверждается ИСПОЛНЕНИЕМ, а не
+# предполагается: сравнявшись с `VALIDATION_STATUS`, он увёл бы сценарий в
+# ранний выход, и правило зеленело бы на НЕПОКАЗАННОЙ заготовке.
+FAILURE_BANNER_SERVER_ERROR_STATUS = 500
+
+_CSS_PX_RE = re.compile(r"^(-?\d+(?:\.\d+)?)px$")
+_CSS_VAR_NAME_RE = re.compile(r"var\(\s*(--[\w-]+)")
+
+# Простые селекторы преамбулы для подсчёта ВЕСА.
+#
+# ⚠️ ГРАНИЦА СЧЁТА НАЗЫВАЕТСЯ ЗДЕСЬ, А НЕ ОСТАВЛЯЕТСЯ ЧИТАТЕЛЮ: считаются классы,
+# идентификаторы, признаки и псевдоклассы; ИМЕНА ЭЛЕМЕНТОВ не считаются. Три
+# блока стопки имён элементов не несут (утверждается исполнением правила ниже), а
+# в каскаде имя элемента лежит в САМОМ НИЗКОМ разряде и класс перебить не может —
+# поэтому его пропуск способен только ЗАНИЗИТЬ вес, но не завысить, и сличение
+# «вес снятия строго выше веса смещения» от этого не может сказать «выше» там,
+# где каскад говорит «ниже».
+_SIMPLE_SELECTOR_RE = re.compile(r"[.#]\w[\w-]*|\[[^\]]*\]|:{1,2}[\w-]+")
+
+
+def _css_px(value: str | None) -> float | None:
+    """Величина в пикселях из объявленного значения, или None."""
+    if value is None:
+        return None
+    hit = _CSS_PX_RE.match(value.strip())
+    return float(hit.group(1)) if hit else None
+
+
+def _css_custom_property(path: Path, name: str) -> str | None:
+    """ПОСЛЕДНЕЕ объявление свойства-величины во всей таблице, или None.
+
+    Читается ТАБЛИЦА, а не память: кегль и шаг живут объявлениями, и вторая их
+    копия в модуле правил разошлась бы с оригиналом молча.
+    """
+    seen = None
+    for _selector, body, _raw in _css_rules_of(path):
+        value = _css_value(body, name)
+        if value is not None:
+            seen = value
+    return seen
+
+
+def _selector_weight(selector: str) -> int:
+    """Число простых селекторов преамбулы. Границы счёта — у `_SIMPLE_SELECTOR_RE`."""
+    return len(_SIMPLE_SELECTOR_RE.findall(selector))
+
+
+def _alert_box_metrics(path: Path) -> tuple[dict[str, float], tuple[str, ...]]:
+    """Слагаемые высоты плашки, СНЯТЫЕ С ТАБЛИЦЫ, и расхождения их снятия.
+
+    Возвращается пара: карта «имя слагаемого → величина» и перечень расхождений.
+    Непустой перечень означает, что снять величину НЕ УДАЛОСЬ, — и правило
+    достаточности обязано покраснеть НА ЭТОМ, а не считать порог из половины
+    чисел. Без этой половины правило зеленело бы на таблице, где блока `.alert`
+    нет ВОВСЕ: «шага хватает» было бы неотличимо от «считать было не из чего».
+    """
+    findings: list[str] = []
+    rules = [rule for rule in _css_rules_of(path) if rule[0] == ALERT_SELECTOR]
+    if len(rules) != 1:
+        return {}, (
+            f"блоков селектора `{ALERT_SELECTOR}` в таблице {len(rules)}, а не "
+            "один — высоту плашки считать не из чего, и порог достаточности "
+            "остался бы невычисленным",
+        )
+
+    body = rules[0][1]
+    padding = _css_value(body, "padding")
+    border = _css_value(body, "border")
+    line_height = _css_value(body, "line-height")
+    font_size = _css_value(body, "font-size")
+
+    metrics: dict[str, float] = {}
+
+    vertical_padding = _css_px(padding.split()[0]) if padding else None
+    if vertical_padding is None:
+        findings.append(
+            f"`{ALERT_SELECTOR}`: вертикальный отступ не снимается — получено "
+            f"`padding: {padding}`"
+        )
+    else:
+        metrics["отступ сверху и снизу (padding × 2)"] = vertical_padding * 2
+
+    border_width = _css_px(border.split()[0]) if border else None
+    if border_width is None:
+        findings.append(
+            f"`{ALERT_SELECTOR}`: толщина рамки не снимается — получено "
+            f"`border: {border}`"
+        )
+    else:
+        metrics["рамка сверху и снизу (border × 2)"] = border_width * 2
+
+    resolved_font = font_size
+    if resolved_font is not None:
+        reference = _CSS_VAR_NAME_RE.search(resolved_font)
+        if reference is not None:
+            resolved_font = _css_custom_property(path, reference.group(1))
+    font_px = _css_px(resolved_font)
+    try:
+        leading = float(line_height) if line_height is not None else None
+    except ValueError:
+        leading = None
+
+    if font_px is None or leading is None:
+        findings.append(
+            f"`{ALERT_SELECTOR}`: строка не снимается — получено "
+            f"`font-size: {font_size}` (разрешено в `{resolved_font}`), "
+            f"`line-height: {line_height}`"
+        )
+    else:
+        metrics[
+            f"{FAILURE_BANNER_STACK_LINES} строки "
+            f"(line-height {leading} × font-size {font_px}px)"
+        ] = leading * font_px * FAILURE_BANNER_STACK_LINES
+
+    metrics[f"зазор между плашками ({FAILURE_BANNER_STACK_GAP_PX}px)"] = float(
+        FAILURE_BANNER_STACK_GAP_PX
+    )
+
+    return metrics, tuple(findings)
+
+
+def _stack_step_findings(path: Path) -> tuple[str, ...]:
+    """Расхождения ДОСТАТОЧНОСТИ шага. Пусто — объявленный шаг не меньше нужного.
+
+    ⚠️ ОТКАЗ ПЕЧАТАЕТ НЕ ДВА ИТОГА, А ВСЕ СЛАГАЕМЫЕ С ИХ ИМЕНАМИ, И ЭТО ЧАСТЬ
+    ПРАВИЛА, А НЕ СЛОГ. Отказ, называющий только «объявлено X, нужно Y», сказал
+    бы, что числа разошлись, и НЕ сказал бы, где искать причину. Это класс
+    находки ревизии `IN-03`, и повторить его в правиле, заводимом ПРОТИВ
+    молчаливых движений величин, значило бы платить за собственный урок.
+    """
+    metrics, problems = _alert_box_metrics(path)
+    if problems:
+        return problems
+
+    minimum = sum(metrics.values())
+
+    declared_raw = _css_custom_property(path, FAILURE_BANNER_STEP_PROPERTY)
+    declared = _css_px(declared_raw)
+    if declared is None:
+        return (
+            f"шаг стопки `{FAILURE_BANNER_STEP_PROPERTY}` в таблице не объявлен "
+            f"величиной в пикселях — получено `{declared_raw}`; посчитанный "
+            f"минимум {minimum}px сличать не с чем",
+        )
+
+    if declared < minimum:
+        addends = "\n".join(
+            f"      + {name}: {value}px" for name, value in metrics.items()
+        )
+        return (
+            "ШАГ СТОПКИ МЕНЬШЕ НАИМЕНЬШЕГО ДОСТАТОЧНОГО — вторая плашка налезает "
+            "на первую:\n"
+            f"      объявлено:  {FAILURE_BANNER_STEP_PROPERTY}: {declared}px\n"
+            f"      посчитано:  {minimum}px, и вот из чего:\n"
+            f"{addends}\n"
+            "      следствие: при самой высокой первой плашке вторая ложится "
+            "поверх её нижних строк, и человек снова теряет часть одной из двух "
+            "инструкций восстановления",
+        )
+
+    return ()
+
+
+def test_the_stack_step_clears_the_tallest_first_banner():
+    """Шаг стопки не меньше наибольшей мыслимой высоты ПЕРВОЙ заготовки.
+
+    ⚠️ ПОЧЕМУ ПРАВИЛО СЧИТАЕТ, А НЕ СЛИЧАЕТ С ВЫПИСАННЫМ ЧИСЛОМ. Ожидание,
+    выписанное целиком, согласилось бы с любой правкой `.alert`: увеличили
+    отступ плашки — шаг молча перестал бы хватать, а правило осталось бы
+    зелёным. Здесь из модуля приходят ДВА числа (расчётное число строк и зазор),
+    и у обоих летопись замера стои́т у константы; ВСЁ остальное читается из той
+    же таблицы, которую правило и проверяет.
+
+    ⚠️ ГРАНИЦА ДОКАЗАННОГО: правило утверждает ОБЪЯВЛЕНИЯ. Что браузер нарисовал
+    две НЕПЕРЕКРЫТЫЕ плашки, оно не утверждает и утверждать не вправе — высота
+    есть произведение раскладки на перенос строк, движка раскладки в суите нет
+    ни одного. Отрисовка остаётся шагу 4.4 ручного обхода.
+    """
+    findings = _stack_step_findings(_app_css_path())
+
+    assert findings == (), "app.css:\n" + "\n".join(
+        f"  — {line}" for line in findings
+    )
+
+
+def _stack_hole_findings(path: Path) -> tuple[str, ...]:
+    """Расхождения ОТСУТСТВИЯ ДЫРЫ. Пусто — одна показанная плашка стои́т в базе.
+
+    Утверждаются ДВЕ вещи, и вторая не избыточна:
+      (а) в таблице есть блок, адресующий узел класса ЗА соседним узлом того же
+          класса С ПРИЗНАКОМ СКРЫТИЯ, и он объявляет величине БАЗОВОЕ значение;
+      (б) вес его селектора СТРОГО ВЫШЕ веса блока смещения — то есть исход не
+          зависит от ПОРЯДКА объявлений в файле.
+    Без (б) правка, переставившая блоки местами, оставила бы правило зелёным, а
+    ДЫРУ — вернувшейся: человек с обрывом связи получил бы плашку, отъехавшую от
+    края экрана без причины.
+    """
+    findings: list[str] = []
+    blocks = _stack_blocks(path)
+
+    if not blocks["base"]:
+        return (
+            f"блока по классу `.{FAILURE_BANNER_STACK_CLASS}`, объявляющего "
+            "БАЗОВУЮ величину, в таблице нет — сличать снятие смещения не с чем",
+        )
+    base_selector, base_value, _base_raw = blocks["base"][0]
+
+    if not blocks["reset"]:
+        findings.append(
+            "БЛОКА, СНИМАЮЩЕГО СМЕЩЕНИЕ У ВТОРОЙ ЗАГОТОВКИ ПРИ СКРЫТОЙ ПЕРВОЙ, "
+            "В ТАБЛИЦЕ НЕТ НИ ОДНОГО:\n"
+            "      получено:  блоков класса с признаком у левого узла 0\n"
+            f"      ожидалось: блок, объявляющий "
+            f"`{FAILURE_BANNER_OFFSET_PROPERTY}: {base_value}`\n"
+            "      следствие: когда первая заготовка скрыта, вторая стои́т под "
+            "ПУСТЫМ местом первой — человек с обрывом связи получает плашку, "
+            "отъехавшую от края экрана без причины (ДЫРА)"
+        )
+    else:
+        reset_selector, reset_value, _reset_raw = blocks["reset"][0]
+        if reset_value != base_value:
+            findings.append(
+                "БЛОК СНЯТИЯ СМЕЩЕНИЯ ОБЪЯВЛЯЕТ НЕ БАЗОВОЕ ЗНАЧЕНИЕ:\n"
+                f"      базовое (`{base_selector}`): {base_value}\n"
+                f"      снятие  (`{reset_selector}`): {reset_value}\n"
+                "      следствие: при скрытой первой заготовке вторая стои́т не "
+                "там, где стояла бы ОДНА — ДЫРА осталась, только другой высоты"
+            )
+        if blocks["offset"]:
+            offset_selector, _offset_value, _offset_raw = blocks["offset"][0]
+            reset_weight = _selector_weight(reset_selector)
+            offset_weight = _selector_weight(offset_selector)
+            if reset_weight <= offset_weight:
+                findings.append(
+                    "ВЕС БЛОКА СНЯТИЯ НЕ ВЫШЕ ВЕСА БЛОКА СМЕЩЕНИЯ — исход решает "
+                    "ПОРЯДОК объявлений в файле:\n"
+                    f"      снятие   (`{reset_selector}`): вес {reset_weight}\n"
+                    f"      смещение (`{offset_selector}`): вес {offset_weight}\n"
+                    "      следствие: первая же перестановка блоков возвращает "
+                    "ДЫРУ, не тронув ни одного значения"
+                )
+
+    return tuple(findings)
+
+
+def test_a_single_shown_banner_keeps_the_base_offset():
+    """Одна показанная заготовка стои́т в БАЗОВОМ положении — дыры нет.
+
+    ⚠️ ВТОРОЕ УТВЕРЖДЕНИЕ (о весе) НЕ ИЗБЫТОЧНО: без него правка, переставившая
+    два блока местами, оставила бы правило зелёным, а дыру — вернувшейся. Веса
+    печатаются в отказе оба, а границы их подсчёта названы у `_SIMPLE_SELECTOR_RE`.
+    """
+    findings = _stack_hole_findings(_app_css_path())
+
+    assert findings == (), "app.css:\n" + "\n".join(
+        f"  — {line}" for line in findings
+    )
+
+
+# --- ТРИ ОТРИЦАТЕЛЬНЫХ КОНТРОЛЯ СТОПКИ ---------------------------------------
+#
+# ⚠️ КАЖДЫЙ ВЫЗЫВАЕТ САМУ ФУНКЦИЮ НАХОДОК ГЕЙТА, А НЕ ПОВТОРЯЕТ ЕЁ ЛОГИКУ, И ЭТО
+# ПРЯМОЕ ИСПОЛНЕНИЕ НАХОДКИ `WR-01` ДЕЙСТВУЮЩЕЙ РЕВИЗИИ: контроль, собирающий
+# расхождение СВОИМ выражением по тем же помощникам, остаётся ЗЕЛЁНЫМ при
+# обезоруженном гейте — и оба уже названных случая этого класса в проекте есть.
+# Снять правило из модуля и оставить контроль зелёным здесь поэтому невозможно:
+# имя функции находок стои́т в теле контроля, и её исчезновение роняет прогон.
+#
+# ⚠️ ФОРМА НАСЛЕДУЕТСЯ У ТРЁХ ДЕЙСТВУЮЩИХ КОНТРОЛЕЙ ПОДЪЁМА ЦЕЛИКОМ: доктóренная
+# копия таблицы во ВРЕМЕННОМ каталоге, подстановка по ДОСЛОВНОМУ куску исходника
+# (через `_css_rule_block`, а не по нормализованному селектору — `REVIEW-8/WR-05`),
+# три утверждения подряд — подмена ПРИЗЕМЛИЛАСЬ, гейт её ВИДИТ и назвал
+# полученные величины, БОЕВАЯ таблица не тронута.
+
+
+def test_control_a_stack_step_below_the_tallest_banner_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило видит шаг, опущенный НИЖЕ посчитанного минимума.
+
+    ⚠️ ЧИСЛО ПОДСТАНОВКИ НЕ ВЫПИСАНО: оно ВЫВЕДЕНО из минимума, прочитанного из
+    настоящей таблицы. Выписанное здесь число разошлось бы с таблицей ровно так
+    же, как выписанное в самом правиле, — и контроль доказывал бы своё
+    расхождение вместо зубов гейта.
+    """
+    path = _app_css_path()
+
+    metrics, problems = _alert_box_metrics(path)
+    assert problems == (), (
+        f"величины `{ALERT_SELECTOR}` в настоящей таблице не снимаются — "
+        f"порог считать не из чего: {problems}"
+    )
+    minimum = sum(metrics.values())
+
+    declared_raw = _css_custom_property(path, FAILURE_BANNER_STEP_PROPERTY)
+    declared = _css_px(declared_raw)
+    assert declared is not None and declared >= minimum, (
+        f"в настоящей таблице шаг ({declared_raw}) УЖЕ меньше посчитанного "
+        f"минимума ({minimum}px) — опускать нечего, и правило обязано было бы "
+        "краснеть на боевой таблице, а оно зелено"
+    )
+
+    blocks = _stack_blocks(path)
+    assert len(blocks["base"]) == 1, (
+        f"базовых блоков стопки в настоящей таблице {len(blocks['base'])}, а не "
+        "один — доктóрить нечего"
+    )
+    block = _css_rule_block(blocks["base"][0][2])
+    original = _stylesheet_source(path)
+    assert original.count(block) == 1, (
+        "базовый блок стопки встречается в исходнике не один раз — подстановка "
+        "задела бы не тот блок"
+    )
+    declaration = f"{FAILURE_BANNER_STEP_PROPERTY}: {declared_raw}"
+    assert block.count(declaration) == 1, (
+        f"объявлений шага в блоке {block.count(declaration)}, а не одно — "
+        "подстановка была бы молчаливой"
+    )
+
+    short = minimum - 1
+    poisoned = original.replace(block, block.replace(
+        declaration, f"{FAILURE_BANNER_STEP_PROPERTY}: {short}px"
+    ))
+    assert poisoned != original, (
+        f"подмена шага на {short}px не сработала — якорь замены не найден"
+    )
+
+    findings = _stack_step_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+    assert len(findings) == 1, (
+        f"ПРАВИЛО НЕ ЗАМЕТИЛО ШАГ {short}px ПРИ МИНИМУМЕ {minimum}px или "
+        f"назвало расхождение дважды: находок {len(findings)} — {findings}"
+    )
+    assert f"{short}px" in findings[0] and f"{minimum}px" in findings[0], (
+        "отказ не назвал ОБА числа — читатель отказа не узнает, насколько "
+        f"поднимать шаг: {findings[0]}"
+    )
+    for name in metrics:
+        assert name in findings[0], (
+            f"отказ не назвал слагаемое «{name}» — читатель узнал бы, что числа "
+            f"разошлись, и не узнал бы, где искать: {findings[0]}"
+        )
+
+    assert _stylesheet_source(path) == original, (
+        "НАСТОЯЩАЯ ТАБЛИЦА ИЗМЕНИЛАСЬ ПОСЛЕ КОНТРОЛЯ — доктóривание ушло в "
+        "боевое дерево вместо копии"
+    )
+
+
+def test_control_two_banners_at_the_same_offset_redden(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило видит вторую заготовку, приведённую к базе.
+
+    Это РОВНО дерево до плана 10-56, выраженное числами: обе величины равны,
+    значит обе заготовки объявлены в одном прямоугольнике. Отказ обязан
+    напечатать ОБА полученных значения — иначе читатель не отличит «смещение
+    исчезло» от «смещение уменьшилось».
+    """
+    path = _app_css_path()
+
+    blocks = _stack_blocks(path)
+    assert len(blocks["base"]) == 1 and len(blocks["offset"]) == 1, (
+        f"блоков базы {len(blocks['base'])}, блоков смещения "
+        f"{len(blocks['offset'])} — доктóрить нечего"
+    )
+    _base_selector, base_value, _base_raw = blocks["base"][0]
+    _offset_selector, offset_value, offset_raw = blocks["offset"][0]
+    assert offset_value != base_value, (
+        "в настоящей таблице величины УЖЕ равны — приводить нечего, и правило "
+        "обязано было бы краснеть на боевой таблице, а оно зелено"
+    )
+
+    block = _css_rule_block(offset_raw)
+    original = _stylesheet_source(path)
+    assert original.count(block) == 1, (
+        "блок смещения встречается в исходнике не один раз — подстановка задела "
+        "бы не тот блок"
+    )
+    declaration = f"{FAILURE_BANNER_OFFSET_PROPERTY}: {offset_value}"
+    assert block.count(declaration) == 1, (
+        f"объявлений величины в блоке смещения {block.count(declaration)}, а не "
+        "одно — подстановка была бы молчаливой"
+    )
+
+    poisoned = original.replace(block, block.replace(
+        declaration, f"{FAILURE_BANNER_OFFSET_PROPERTY}: {base_value}"
+    ))
+    assert poisoned != original, "подмена смещения не сработала — якорь не найден"
+
+    findings = _banner_stacking_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+    assert len(findings) == 1, (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО РАВЕНСТВА ДВУХ ВЕЛИЧИН или назвало расхождение "
+        f"дважды: находок {len(findings)} — {findings}"
+    )
+    assert findings[0].count(base_value) >= 2, (
+        "отказ напечатал полученные величины не ОБЕ — читатель отказа не узнает, "
+        f"что именно совпало: {findings[0]}"
+    )
+
+    assert _stylesheet_source(path) == original, (
+        "НАСТОЯЩАЯ ТАБЛИЦА ИЗМЕНИЛАСЬ ПОСЛЕ КОНТРОЛЯ — доктóривание ушло в "
+        "боевое дерево вместо копии"
+    )
+
+
+def test_control_a_missing_hidden_sibling_rule_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило видит снятый блок снятия смещения — то есть ДЫРУ.
+
+    Снятый целиком блок возвращает вторую заготовку ровно в то состояние, в
+    котором она стояла бы ПОД ПУСТЫМ МЕСТОМ первой: человек с обрывом связи
+    получил бы плашку, отъехавшую от края экрана без причины.
+    """
+    path = _app_css_path()
+
+    blocks = _stack_blocks(path)
+    assert len(blocks["reset"]) == 1, (
+        f"блоков снятия смещения в настоящей таблице {len(blocks['reset'])}, а "
+        "не один — снимать нечего, и контроль доказывал бы отсутствие того, "
+        "чего и так нет"
+    )
+    block = _css_rule_block(blocks["reset"][0][2])
+
+    original = _stylesheet_source(path)
+    assert original.count(block) == 1, (
+        "блок снятия встречается в исходнике не один раз — снятие задело бы не "
+        "тот блок"
+    )
+    poisoned = original.replace(block, "")
+    assert poisoned != original, "снятие не сработало — якорь замены не найден"
+
+    findings = _stack_hole_findings(_scratch_stylesheet(tmp_path, poisoned))
+
+    assert len(findings) == 1, (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО СНЯТЫЙ БЛОК СНЯТИЯ СМЕЩЕНИЯ или назвало "
+        f"расхождение дважды: находок {len(findings)} — {findings}"
+    )
+    assert "ДЫРА" in findings[0], (
+        f"отказ не назвал предмет расхождения словом: {findings[0]}"
+    )
+
+    assert _stylesheet_source(path) == original, (
+        "НАСТОЯЩАЯ ТАБЛИЦА ИЗМЕНИЛАСЬ ПОСЛЕ КОНТРОЛЯ — доктóривание ушло в "
+        "боевое дерево вместо копии"
+    )
+
+
+def _server_error_event() -> dict:
+    """Отказ ОТВЕТА с кодом, отличным от кода валидации.
+
+    Имя берётся из `FAILURE_BANNER_EVENTS` ПОЗИЦИЕЙ: перечень объявлен так, что
+    первый его элемент есть отказ ответа, и вторая копия имени в модуле
+    разъехалась бы с перечнем молча.
+    """
+    return {
+        "name": FAILURE_BANNER_EVENTS[0],
+        "detail": {"xhr": {"status": FAILURE_BANNER_SERVER_ERROR_STATUS}},
+    }
+
+
+def test_a_second_failure_of_the_same_kind_shows_one_banner():
+    """ПОВЕДЕНЧЕСКОЕ: два отказа ОДНОГО РОДА подряд дают ОДНУ заготовку.
+
+    ⚠️ ЭТО РАЗРЕШЕНИЕ РЕБРА `idempotency` ТРЕБОВАНИЯ FORM-06 ЯВНЫМ КРИТЕРИЕМ, А
+    НЕ ОГОВОРКОЙ. Ребро пришло из детерминированного зонда, и закрывается оно
+    ЗАМЕРОМ. Свойство держится тем, что разметка приходит с сервера ЗАРАНЕЕ
+    ОТРИСОВАННОЙ, а сценарию остаётся одно действие — снять признак скрытия;
+    ровно это здесь и утверждается.
+
+    ⚠️ АНТИВАКУУМНОЕ УТВЕРЖДЕНИЕ СТОИ́Т ПЕРВЫМ. Без него правило зеленело бы на
+    сценарии, не показывающем НИЧЕГО: после двух событий ноль показанных узлов
+    равен нулю после одного, и «показана одна» было бы неотличимо от «не
+    показано ни одной».
+
+    ⚠️ ЧЕГО ПРАВИЛО НЕ ДОКАЗЫВАЕТ: что браузер нарисовал ОДИН прямоугольник.
+    Узлы здесь — стабы с настоящим состоянием признака скрытости, движка
+    раскладки нет. Отрисовка остаётся шагам 2.8 и 4.4 ручного обхода.
+    """
+    path = _failure_banner_path()
+
+    assert FAILURE_BANNER_SERVER_ERROR_STATUS != int(VALIDATION_STATUS), (
+        f"код отказа контроля ({FAILURE_BANNER_SERVER_ERROR_STATUS}) совпал с "
+        f"кодом валидации ({VALIDATION_STATUS}) — сценарий уходил бы в ранний "
+        "выход, и правило зеленело бы на НЕПОКАЗАННОЙ заготовке"
+    )
+
+    once = _failure_banner_hidden_after(path, (_server_error_event(),))
+    shown_once = [
+        banner_id for banner_id, hidden in once.items() if not hidden
+    ]
+    assert shown_once == [FAILURE_BANNER_IDS[0]], (
+        f"{FAILURE_BANNER_OWNER}: ОДИН отказ сервера показал {shown_once}, а "
+        f"ожидалась ровно заготовка #{FAILURE_BANNER_IDS[0]} — мерить "
+        "идемпотентность было бы не на чем"
+    )
+
+    twice = _failure_banner_hidden_after(
+        path, (_server_error_event(), _server_error_event())
+    )
+    shown_twice = [
+        banner_id for banner_id, hidden in twice.items() if not hidden
+    ]
+    assert shown_twice == shown_once, (
+        f"{FAILURE_BANNER_OWNER}: ВТОРОЙ отказ того же рода изменил перечень "
+        f"показанных заготовок: после одного {shown_once}, после двух "
+        f"{shown_twice}"
+    )
+
+    source = _failure_banner_source(path)
+    for banner_id in FAILURE_BANNER_IDS:
+        seen = source.count(f'id="{banner_id}"')
+        assert seen == 1, (
+            f"{FAILURE_BANNER_OWNER}: узлов заготовки #{banner_id} в разметке "
+            f"{seen}, а не один — второй отказ показал бы ВТОРОЙ узел"
+        )
+    assert _failure_banner_markup_sinks(path) == (), (
+        f"{FAILURE_BANNER_OWNER}: в файле появился сток разметки — сценарий "
+        "получил способ СОЗДАТЬ узел, и число заготовок перестало быть "
+        "свойством разметки"
+    )
+
+
 # Признак-предок, которым доктóрится копия таблицы в контроле возврата
 # условности. ⚠️ ОН ПОСТОРОННИЙ НАРОЧНО, И ЭТО ГЛАВНОЕ В КОНТРОЛЕ: подать сюда
 # `is-modal-open` значило бы доказать, что правило узнаёт ОДНО ЗНАКОМОЕ ИМЯ.
