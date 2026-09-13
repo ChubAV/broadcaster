@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 10
 current_phase_name: Рычаг `components/modal.html`
 status: executing
-stopped_at: Completed 10-53-PLAN.md
-last_updated: "2026-09-12T13:49:44.524Z"
-last_activity: 2026-09-12
+stopped_at: Completed 10-55-PLAN.md
+last_updated: "2026-09-13T08:03:59.576Z"
+last_activity: 2026-09-13
 last_activity_desc: Phase 10 execution started
-state_head: 83d77af4a5b7f4bf0e0c9d5677fda568a840242f
+state_head: 7f177dfdc8c4d23a93e34f319981bbb9a7bc1d2f
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 95
-  completed_plans: 92
+  completed_plans: 93
   percent: 33
 ---
 
@@ -36,11 +36,11 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
-Plan: 4 of 54
+Plan: 56 of 57
 Total Plans in Phase: 57
-Completed Plans in Phase: 51
-Status: Ready to execute
-Last activity: 2026-09-12 — Phase 10 execution started
+Completed Plans in Phase: 55
+Status: Executing Phase 10
+Last activity: 2026-09-13 — Phase 10 execution started
 Last activity: 2026-09-11 — Phase 10: план 10-51 исполнен (RED→GREEN замерен переходом цвета правила безусловности подъёма — `1 failed, 229 deselected` при rc=1 с отказом, печатающим полученный селектор `.is-modal-open #htmx-failure-server, .is-modal-open #htmx-failure-network`, → `1 passed` при rc=0; улика проверена прибором `RED_EVIDENCE_OK`; модуль шелла `230 passed` при пороге сбора 223, полная суита `3182 passed`, rc=0, 38:20; продукт тронут ДВУМЯ строками преамбулы `app/static/css/app.css` — величины блока подъёма, правило блокировки прокрутки, рычаг и заготовки не тронуты)
 Progress: [████████████████████] 38/38 plans ([███░░░░░░░] 33%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
 
@@ -135,6 +135,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 10 P52 | 52 min | 3 tasks | 1 files |
 | Phase 10 P54 | 35 min | 2 tasks | 2 files |
 | Phase 10 P53 | 71 min | 2 tasks | 3 files |
+| Phase 10 P55 | 16 min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -281,6 +282,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 10]: D-54-3: тело программы посева стенда в приписку НЕ переписано — правило `test_the_walkthrough_stand_is_seedable.py` утверждает `text.count(program) == 1` и краснеет на второй копии; названы РАЗДЕЛ и ШАГ единственной команды, а уборка и счёт приведены дословно — Требование плана «команды приводятся ДОСЛОВНО» и машинный инвариант единственности противоречат прямо; противоречие снято ЗАМЕРОМ (прогон дал FAILED ровно на вписанной второй копии), а не выбором по вкусу. Довод тождествен доктрине самого плана: вторая копия разошлась бы с первой молча
 - [Phase 10]: D-54-6: `requirements-completed` сводки плана 10-54 оставлено ПУСТЫМ при `requirements: [FORM-06]` в шапке плана — требование закрывается ПОДПИСЬЮ ЧЕЛОВЕКА на приёмке обхода, и отметка его сводкой была бы самозаверением — Ради запрета этого живут `test_the_walkthrough_cannot_self_certify.py` и `test_no_requirement_is_marked_complete_before_its_phase_verification_passed`. Прецедент — сводка плана 10-51 той же фазы
 - [Phase 10]: D-37 — ветвь `extend-override` (останов задачи 1 плана 10-53, `gate="blocking-human"`, `one-way`): область действующего отступления по критерию 3 РАСШИРЕНА второй записью блока `overrides` шапки `10-VERIFICATION.md`, называющей ТРЕТИЙ файл (`app/templates/includes/htmx_error_banner.html`) и ТРЕТЬЮ сущность (регистрацию `htmx:afterRequest` на узле тела документа, `:227-233`, коммит `4e24d61`) поимённо. Принял `chubav` 2026-09-12. ⚠️ ОБЛАСТЬ СУЖЕНА СЛОВАМИ ВЛАДЕЛЬЦА И ЗАПИСАНА МАШИННО ЧИТАЕМО: поле `covers` покрывает ТОЛЬКО ЭТУ регистрацию; БУДУЩИЕ регистрации в том же файле ею НЕ покрыты, требуют НОВОГО решения владельца и обязаны покраснить пятое утверждение гейта критерия 3 (заведено планом 10-52). Запись несёт сверх формы 2026-09-09 два поля: `price` — ссылку на запись 74 журнала окон (успешный ФОНОВЫЙ обмен гасит непрочитанный настоящий отказ; `T-10-49-05`, `accept`), и `enforced_by` — имя пятого утверждения гейта с путём модуля. Ветвь `criterion-stands-violated` НЕ выбрана, второй записи журнала окон не заводится. ⚠️ `overrides_applied: 0` и `status: gaps_found` планом НЕ СДВИНУТЫ: поле есть счёт КРУГА, а не счёт записей, и засчитывает запись СЛЕДУЮЩИЙ круг верификации, а не план. Цена расширения названа в самой записи: граница «новая сущность против правки существующей» растянута ВТОРЫМ частным разрешением, и читателю роадмапа для понимания критерия 3 нужно прочесть теперь ДВЕ записи блока.
+- [Phase 10]: Защита от неисполнимой СОХРАНЁННОЙ строки поставлена ПОМОЩНИКОМ `next_run_or_none` рядом с `compute_next_run_at`, а не `try` внутри вычислителя — Внутри вычислителя `None` означает «моментов нет», и этот смысл утверждают правила `tests/test_services/test_schedule_service.py`; `try` внутри отнял бы у планировщика `app/worker/` возможность отличать пустое расписание от испорченного. Дифф `schedule_service.py` от базы плана ПУСТ.
+- [Phase 10]: Перечень ловимых классов помощника закрыт ПЯТЬЮ именами замера; огульный перехват всех исключений запрещён — `ValueError`, `TypeError`, `IndexError`, `AttributeError`, `ZoneInfoNotFoundError` — замер шести форм двенадцатого круга. Огульный перехват проглотил бы отказ СУБД, отказ сети и ошибку программиста, превратив пятисотку с объяснением в четырёхсотку без него.
+- [Phase 10]: Шесть форм неисполнимой строки объявлены ПЕРЕЧНЕМ `MALFORMED_STORED_FORMS`, из которого параметризуются правила всех трёх входов — Форма, добавленная в перечень, автоматически становится требованием ко ВСЕМ трём входам. Пятнадцать копий правил разъехались бы при первой правке — это ровно тот класс расхождения, ради которого существует модуль `schedule_rules`.
 
 ### Pending Todos
 
@@ -461,8 +465,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-12T13:48:23.583Z
-Stopped at: Completed 10-53-PLAN.md
+Last session: 2026-09-13T08:03:25.295Z
+Stopped at: Completed 10-55-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
