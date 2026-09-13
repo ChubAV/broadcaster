@@ -2418,14 +2418,53 @@ FAILURE_BANNER_SUCCESS_FLAG = "successful"
 # ⚠️ ИМЕНА ЗАГОТОВОК ГАРНИР ПОЛУЧАЕТ ПАРАМЕТРОМ ИЗ FAILURE_BANNER_IDS, а не
 # выписывает второй копией: разъехавшись с перечнем, копия проверяла бы узлы,
 # которых в документе нет, и зеленела бы на пустоте.
+# Орган СНЯТИЯ заготовки (план 10-57, находка UI-1 ревизии 2026-09-12). Три
+# имени ниже суть ОЖИДАНИЯ, выписанные здесь, а не выбранные из проверяемого
+# файла: ожидание, добытое из предмета проверки, согласилось бы с любой его
+# правкой — в том числе с правкой, снимающей орган начисто.
+#
+# ⚠️ ИМЯ КЛАССА ВЫБРАНО ТАК, ЧТОБЫ ОНО НЕ СОДЕРЖАЛО НИ ОДНОГО ИДЕНТИФИКАТОРА
+# ЗАГОТОВКИ ПОДСТРОКОЙ, И ЭТО НЕСУЩЕЕ СВОЙСТВО, А НЕ ВКУС — ровно то же
+# основание, что у `FAILURE_BANNER_STACK_CLASS`: `_selector_lifts_banner`
+# отбирает блоки подъёма по вхождению адреса заготовки в селектор, и класс,
+# несущий такой адрес, покрасил бы пять действующих правил подъёма за ФОРМУ
+# правки.
+FAILURE_BANNER_DISMISS_CLASS = "banner-dismiss"
+
+# Доступное имя органа снятия — по-русски, как и обе плашки.
+FAILURE_BANNER_DISMISS_LABEL = "Скрыть сообщение"
+
+# Идентификаторы органов снятия, ПОЗИЦИОННО парные `FAILURE_BANNER_IDS`.
+#
+# ⚠️ ЭТО НЕ ИДЕНТИФИКАТОРЫ ЗАГОТОВОК, И РАЗЛИЧИЕ НЕСУЩЕЕ: `_selector_lifts_banner`
+# и `_assert_both_banners_delivered` ищут `#htmx-failure-server` и
+# `id="htmx-failure-server"` — с решёткой и с кавычкой соответственно, — поэтому
+# имя с суффиксом ни в один из двух отборов не попадает. ⚠️ И ПОТОМУ ЖЕ ТАБЛИЦА
+# СТИЛЕЙ ЭТИХ ИМЁН НЕ ЗНАЕТ ВОВСЕ: селектор `#htmx-failure-server-close` НЕС бы
+# подстроку `#htmx-failure-server` и попал бы в отбор блоков подъёма — пять
+# действующих правил покраснели бы за форму правки. Таблица адресует орган
+# КЛАССОМ, сценарий — идентификатором, и это два разных крючка по замеру, а не
+# по небрежности.
+FAILURE_BANNER_DISMISS_IDS = (
+    "htmx-failure-server-close",
+    "htmx-failure-network-close",
+)
+
+FAILURE_BANNER_DISMISS_CONTROLS = dict(
+    zip(FAILURE_BANNER_IDS, FAILURE_BANNER_DISMISS_IDS)
+)
+
 FAILURE_BANNER_DISPATCH_HARNESS = """
 'use strict';
 const SOURCE = __SOURCE__;
 const IDS = __IDS__;
+const CONTROLS = __CONTROLS__;
+const DISMISSED = __DISMISSED__;
 const EVENTS = __EVENTS__;
 const HIDDEN = __HIDDEN__;
 const listeners = {};
 const banners = {};
+const controls = {};
 IDS.forEach(function (id) {
   const attrs = {};
   attrs[HIDDEN] = '';
@@ -2437,6 +2476,7 @@ IDS.forEach(function (id) {
       return Object.prototype.hasOwnProperty.call(attrs, name);
     }
   };
+  controls[CONTROLS[id]] = { checked: DISMISSED };
 });
 const body = {
   dataset: {},
@@ -2448,7 +2488,9 @@ const body = {
 globalThis.document = {
   body: body,
   getElementById: function (id) {
-    return Object.prototype.hasOwnProperty.call(banners, id) ? banners[id] : null;
+    if (Object.prototype.hasOwnProperty.call(banners, id)) { return banners[id]; }
+    if (Object.prototype.hasOwnProperty.call(controls, id)) { return controls[id]; }
+    return null;
   }
 };
 const script = new Function(SOURCE);
@@ -2461,8 +2503,14 @@ EVENTS.forEach(function (item) {
   });
 });
 const hidden = {};
-IDS.forEach(function (id) { hidden[id] = banners[id].hasAttribute(HIDDEN); });
-process.stdout.write(JSON.stringify({ hidden: hidden, delivered: delivered }));
+const dismissed = {};
+IDS.forEach(function (id) {
+  hidden[id] = banners[id].hasAttribute(HIDDEN);
+  dismissed[id] = controls[CONTROLS[id]].checked;
+});
+process.stdout.write(JSON.stringify({
+  hidden: hidden, dismissed: dismissed, delivered: delivered
+}));
 """
 
 
@@ -2495,8 +2543,22 @@ def _completed_exchange_without_success_event() -> dict:
     return {"name": FAILURE_BANNER_SUCCESS_EVENT, "detail": {}}
 
 
-def _failure_banner_hidden_after(path: Path, events: tuple[dict, ...]) -> dict:
-    """Состояние признака скрытости КАЖДОЙ заготовки после поданных событий.
+def _failure_banner_state_after(
+    path: Path, events: tuple[dict, ...], dismissed: bool = False
+) -> dict:
+    """ПОЛНОЕ состояние стенда после поданных событий: скрытость И орган снятия.
+
+    ``dismissed`` — НАЧАЛЬНОЕ состояние органа снятия у ОБЕИХ заготовок, то есть
+    «человек уже убрал прочитанное сообщение». Предмет правила возврата (план
+    10-57) выражается ТОЛЬКО через него: без начального состояния «снято»
+    отличить сценарий, сбрасывающий орган, от сценария, не знающего о нём вовсе,
+    нечем — оба оставили бы орган в исходном положении.
+
+    ⚠️ ГРАНИЦА ДОКАЗАННОГО НАЗВАНА ЗДЕСЬ, А НЕ ОСТАВЛЕНА ЧИТАТЕЛЮ. Гарнир
+    выставляет признак скрытости у обеих заготовок ДО рассылки, поэтому половина
+    «признак скрытия снят» в правиле возврата есть СПУТНИК, а не предмет: она
+    зеленела бы и на дереве до правки. Предмет — половина «состояние органа
+    снятия сброшено», и она на дереве до правки КРАСНА.
 
     Исполняется исходник ПО НАЗВАННОМУ ПУТИ — ровно затем, чтобы контроль мог
     подать доктóренную копию и потребовать красноты (та же причина, что у
@@ -2507,10 +2569,25 @@ def _failure_banner_hidden_after(path: Path, events: tuple[dict, ...]) -> dict:
             "__SOURCE__", json.dumps(_failure_banner_script(path))
         )
         .replace("__IDS__", json.dumps(list(FAILURE_BANNER_IDS)))
+        .replace("__CONTROLS__", json.dumps(FAILURE_BANNER_DISMISS_CONTROLS))
+        .replace("__DISMISSED__", json.dumps(bool(dismissed)))
         .replace("__EVENTS__", json.dumps(list(events)))
         .replace("__HIDDEN__", json.dumps(FAILURE_BANNER_HIDDEN_ATTR))
     )
-    return run_node_script(harness)["hidden"]
+    return run_node_script(harness)
+
+
+def _failure_banner_hidden_after(path: Path, events: tuple[dict, ...]) -> dict:
+    """Состояние признака скрытости КАЖДОЙ заготовки после поданных событий.
+
+    ⚠️ ФУНКЦИЯ СОХРАНЕНА ПРИ ЗАВЕДЁННОЙ РЯДОМ `_failure_banner_state_after`, И
+    ЭТО НЕ ДУБЛЬ (идиома D-30/D-32). Шесть действующих правил гашения читают
+    ровно скрытость и ровно её утверждают; расширив их вход до полного состояния
+    стенда, правка переписала бы шесть тел ради одного нового предмета. Здесь
+    остаётся ПРОЕКЦИЯ полного состояния на прежнее, и орган снятия начинается
+    в исходном положении — том, в котором его видели все прежние правила.
+    """
+    return _failure_banner_state_after(path, events)["hidden"]
 
 
 def _assert_both_banners_delivered(html: str, shell: str) -> None:
@@ -8108,4 +8185,368 @@ def test_control_a_new_auth_heir_that_reaches_the_lever_reddens():
     assert _EIGHTH_AUTH_SCREEN in findings[0], (
         "отказ не назвал НОВЫЙ экран входа — состав наследников по-прежнему "
         f"берётся с диска: {findings[0]}"
+    )
+
+
+# --- ВЫХОД У ПЛАШКИ ОТКАЗА: ОРГАН СНЯТИЯ (план 10-57, находка UI-1) ----------
+#
+# ⚠️ ЧТО ЗАМЕРЕНО И ЗАЧЕМ ГРУППА ЗАВЕДЕНА. Плашка отказа гасла ТОЛЬКО от
+# следующего УСПЕШНОГО обмена: третий обработчик начинается с раннего выхода по
+# отсутствию признака успеха. На экране, который больше не делает ни одного
+# удавшегося обмена, пришпиленный к верху прямоугольник во всю ширину оставался
+# до перезагрузки страницы. Это первый блокер UI-ревизии 2026-09-12 («Top 3
+# Priority Fixes», пункт 1) и главное, чем держалась её оценка Pillar 6 (2/4):
+# «a stuck full-width overlay is a task-blocking outcome, not a cosmetic one».
+#
+# ⚠️ ЦЕНА ФОРМЫ ПРАВКИ ПРИНЯТА ВЛАДЕЛЬЦЕМ, А НЕ ВЫБРАНА ИСПОЛНИТЕЛЕМ: ответ на
+# останов задачи 1 плана 10-57 назвал ветвь `A` («снятие без регистрации») и
+# область записи `узко`. Отсюда и форма: орган снятия — настоящий элемент
+# управления, состояние которого переключает БРАУЗЕР, скрытие снятой заготовки
+# выражено объявлением таблицы стилей, а возврат плашки на новом отказе обеспечен
+# ДВУМЯ строками в телах ДВУХ УЖЕ СУЩЕСТВУЮЩИХ обработчиков. Ни одной новой
+# регистрации не заведено: все пять чисел гейта критерия 3 остались на месте.
+#
+# ⚠️ ГРАНИЦА ДОКАЗАННОГО НАЗЫВАЕТСЯ ЗДЕСЬ, А НЕ ОСТАВЛЯЕТСЯ ЧИТАТЕЛЮ. Правила
+# ниже утверждают ОБЪЯВЛЕНИЯ таблицы стилей, РАЗМЕТКУ включения и ИСПОЛНЕНИЕ
+# сценария на стабах узлов. Они НЕ утверждают, что браузер убрал прямоугольник по
+# щелчку мышью или по нажатию пробела: движка раскладки в суите нет, браузерного
+# привода нет ни одного. Это остаётся шагам 2.8 и 4.4 ручного обхода, и объявлять
+# их пройденными по зелени этих правил НЕЛЬЗЯ — окно 77 `.planning/WINDOWS.md`
+# записывает, чем такая подмена уже обошлась фазе.
+
+_DISMISS_TAG_RE = re.compile(r"<input\b[^>]*>")
+
+
+def _failure_banner_node_line(path: Path, banner_id: str) -> str:
+    """Строка исходника, несущая узел названной заготовки. Регистр СОХРАНЁН.
+
+    ⚠️ ЧЕМ ОТЛИЧНА ОТ `_network_banner_line`, И ПОЧЕМУ ФУНКЦИИ ДВЕ. Та приводит
+    строку к НИЖНЕМУ регистру: её предмет — основы слов о расхождении экрана с
+    сервером, и регистр там помеха. Здесь предмет — доступное имя органа снятия
+    по-русски и имя признака разметки, и приведение регистра сделало бы
+    сличение с ожиданием сличением другого текста.
+
+    Путь параметром — по той же причине, что у `_failure_banner_source`.
+    """
+    for line in _failure_banner_source(path).splitlines():
+        if f'id="{banner_id}"' in line:
+            return line
+    return ""
+
+
+def _dismiss_control_findings(path: Path) -> tuple[str, ...]:
+    """Расхождения ОРГАНА СНЯТИЯ. Пусто — орган есть у каждой заготовки.
+
+    Проверяется ЧЕТЫРЕ свойства, и каждое печатает ПОЛУЧЕННОЕ:
+      (а) орган внутри узла заготовки ровно один;
+      (б) он есть настоящий элемент управления (признак вида — флажок), то есть
+          попадает в порядок обхода с клавиатуры САМ, без приписанного числа;
+      (в) у него есть доступное имя — иначе вспомогательные технологии назовут
+          его «флажок» и ничем больше;
+      (г) числа порядка обхода на нём НЕТ: приписанное число переупорядочило бы
+          обход всей страницы, и цена эта берётся не здесь.
+    Плюс пятое: идентификатор органа равен объявленному — им сценарий находит
+    орган, и разойдясь, он находил бы НИЧЕГО молча.
+    """
+    findings: list[str] = []
+    for banner_id in FAILURE_BANNER_IDS:
+        line = _failure_banner_node_line(path, banner_id)
+        if not line:
+            findings.append(
+                f"#{banner_id}: строки узла заготовки в исходнике НЕТ ВОВСЕ — "
+                "разбирать орган снятия не у чего"
+            )
+            continue
+        tags = [
+            tag
+            for tag in _DISMISS_TAG_RE.findall(line)
+            if FAILURE_BANNER_DISMISS_CLASS in tag
+        ]
+        if len(tags) != 1:
+            findings.append(
+                f"#{banner_id}: органов снятия (класс "
+                f"`{FAILURE_BANNER_DISMISS_CLASS}`) найдено {len(tags)}, "
+                "ожидался РОВНО ОДИН\n"
+                f"      получено: {line.strip()}\n"
+                "      следствие: у показанной плашки нет выхода — на экране, "
+                "который больше не делает удавшихся обменов, прямоугольник "
+                "остаётся до перезагрузки страницы (UI-1)"
+            )
+            continue
+        tag = tags[0]
+        if 'type="checkbox"' not in tag:
+            findings.append(
+                f"#{banner_id}: орган снятия НЕ есть элемент управления, "
+                "состояние которого переключает браузер\n"
+                f"      получено:  {tag}\n"
+                '      ожидалось: признак вида `type="checkbox"`\n'
+                "      следствие: узел без роли в порядок обхода с клавиатуры "
+                "не попадает, и человек с клавиатурой выхода не получает"
+            )
+        if f'aria-label="{FAILURE_BANNER_DISMISS_LABEL}"' not in tag:
+            findings.append(
+                f"#{banner_id}: у органа снятия НЕТ доступного имени "
+                f"`{FAILURE_BANNER_DISMISS_LABEL}`\n"
+                f"      получено:  {tag}\n"
+                "      следствие: вспомогательные технологии назовут его "
+                "«флажок» и ничем больше"
+            )
+        if "tabindex" in tag:
+            findings.append(
+                f"#{banner_id}: органу снятия приписано число порядка обхода\n"
+                f"      получено:  {tag}\n"
+                "      ожидалось: порядок обхода по умолчанию\n"
+                "      следствие: приписанное число переупорядочивает обход "
+                "ВСЕЙ страницы, и цена эта берётся не здесь"
+            )
+        control_id = FAILURE_BANNER_DISMISS_CONTROLS[banner_id]
+        if f'id="{control_id}"' not in tag:
+            findings.append(
+                f"#{banner_id}: идентификатор органа снятия разошёлся с "
+                f"объявленным `{control_id}`\n"
+                f"      получено:  {tag}\n"
+                "      следствие: сценарий находит орган ПО ЭТОМУ имени, и "
+                "разойдясь, он находил бы НИЧЕГО — молча, при зелёной разметке"
+            )
+    return tuple(findings)
+
+
+def test_every_failure_banner_carries_a_dismiss_control():
+    """У КАЖДОЙ заготовки внутри есть орган снятия, достижимый с клавиатуры.
+
+    ⚠️ ЧТО ПРАВИЛО ДОКАЗЫВАЕТ, А ЧТО НЕТ. Оно доказывает, что орган ОБЪЯВЛЕН в
+    разметке включения — настоящим элементом управления, с доступным именем и
+    без приписанного числа порядка обхода. Оно НЕ доказывает, что браузер убрал
+    прямоугольник по нажатию: отрисовка есть произведение раскладки на положение
+    прокрутки, и она остаётся шагам 2.8 и 4.4 ручного обхода.
+
+    Зубы правила показаны контролем
+    `test_control_a_banner_without_a_dismiss_control_reddens`, а не заявлены.
+    """
+    findings = _dismiss_control_findings(_failure_banner_path())
+
+    assert findings == (), f"{FAILURE_BANNER_OWNER}:\n" + "\n".join(
+        f"  — {line}" for line in findings
+    )
+
+
+def _banner_hiding_rules(path: Path) -> tuple[tuple[str, str, str], ...]:
+    """Блоки таблицы, ДОСТИГАЮЩИЕ узла заготовки и объявляющие способ отображения.
+
+    Отбор идёт по ДВУМ адресам разом — по идентификатору заготовки и по классу
+    стопки, — потому что предмет двух правил ниже есть ВСЯКИЙ блок, способный
+    перебить атрибут скрытия, а не блок какой-то одной формы. Отбор по одному
+    адресу оставил бы второй способ достать заготовку невидимым.
+    """
+    found: list[tuple[str, str, str]] = []
+    for selector, body, raw in _css_rules_of(path):
+        if _css_value(body, "display") is None:
+            continue
+        reaches = f".{FAILURE_BANNER_STACK_CLASS}" in selector or any(
+            _selector_lifts_banner(selector, banner_id)
+            for banner_id in FAILURE_BANNER_IDS
+        )
+        if reaches:
+            found.append((selector, body, raw))
+    return tuple(found)
+
+
+def _dismiss_scope_findings(path: Path) -> tuple[str, ...]:
+    """Расхождения ОБЛАСТИ снятия. Пусто — снимается ОДНА заготовка, не обе.
+
+    ⚠️ ЭТО РАЗРЕШЕНИЕ РЕБРА `concurrency` ТРЕБОВАНИЯ FORM-06 ЯВНЫМ КРИТЕРИЕМ, А
+    НЕ ОГОВОРКОЙ: при двух одновременных авариях человек снимает ПРОЧИТАННОЕ и
+    оставляет НЕПРОЧИТАННОЕ. Селектор, адресующий всех носителей класса стопки,
+    унёс бы вторую плашку вместе с первой — и унёс бы ровно ту инструкцию
+    восстановления, которую человек как раз собирался прочитать.
+    """
+    rules = _banner_hiding_rules(path)
+    if len(rules) != 1:
+        return (
+            f"блоков, достигающих узла заготовки и объявляющих способ "
+            f"отображения, в таблице {len(rules)}, а не один — разбирать "
+            "область снятия не у чего:\n"
+            + "\n".join(f"      получено: `{selector}`" for selector, _b, _r in rules),
+        )
+
+    selector, _body, _raw = rules[0]
+    condition = (
+        ":has(" in selector
+        and FAILURE_BANNER_DISMISS_CLASS in selector
+        and ":checked" in selector
+    )
+    if not condition:
+        return (
+            "БЛОК СКРЫТИЯ АДРЕСУЕТ НЕ ТУ ЗАГОТОВКУ, ЧЕЙ ОРГАН ПРИВЕДЁН В "
+            "ДЕЙСТВИЕ:\n"
+            f"      получено:  `{selector}`\n"
+            f"      ожидалось: условие по состоянию вложенного органа "
+            f"(`:has(… .{FAILURE_BANNER_DISMISS_CLASS}:checked)`)\n"
+            "      следствие: снятие одной плашки уносит ВТОРУЮ, и человек "
+            "теряет инструкцию, которую собирался прочитать (ребро "
+            "`concurrency` требования FORM-06)",
+        )
+
+    return ()
+
+
+def test_dismissing_one_banner_leaves_the_other_shown():
+    """Скрытие адресует ЗАГОТОВКУ С ПРИВЕДЁННЫМ ОРГАНОМ, а не обе разом.
+
+    ⚠️ ГРАНИЦА ДОКАЗАННОГО: правило утверждает ОБЛАСТЬ СЕЛЕКТОРА таблицы, а не
+    то, что браузер оставил вторую плашку на экране. Второе остаётся шагу 4.4
+    ручного обхода, которому настоящая партия прибавила предмет — ЧИСЛО ВИДИМЫХ
+    ЗАГОТОВОК.
+    """
+    findings = _dismiss_scope_findings(_app_css_path())
+
+    assert findings == (), "app.css:\n" + "\n".join(
+        f"  — {line}" for line in findings
+    )
+
+
+def _banner_display_value_findings(path: Path) -> tuple[str, ...]:
+    """Значения способа отображения у блоков, достигающих узла заготовки.
+
+    Пусто — единственное встречающееся значение «нет». Любое иное перебило бы
+    атрибут скрытия и дало бы ДВЕ ПУСТЫЕ ПОДЛОЖКИ на каждом экране проекта.
+
+    ⚠️ ЭТО РАСШИРЕНИЕ ЗУБОВ ПУНКТА (д) ПРОЗЫ ТАБЛИЦЫ, А НЕ ЕГО ОСЛАБЛЕНИЕ.
+    Действующее правило `test_the_failure_banner_lift_declares_no_display_mode`
+    стережёт БЛОК ПОДЪЁМА и требует, чтобы способа отображения в нём не было
+    ВОВСЕ; настоящая функция стережёт ВСЕ блоки, достигающие заготовки, и
+    допускает ровно одно значение. Оба остаются в силе: блок подъёма по-прежнему
+    не объявляет способа отображения НИ В КАКОМ ВИДЕ, а блок скрытия снятой
+    заготовки объявляет его значением, которое способно только ДОБАВИТЬ
+    скрытости и не способно её отнять.
+    """
+    findings: list[str] = []
+    for selector, body, _raw in _banner_hiding_rules(path):
+        for prop, value in _css_declarations(body):
+            if prop != "display" or value == "none":
+                continue
+            findings.append(
+                f"`{selector}`: способ отображения объявлен ПОКАЗЫВАЮЩИМ "
+                "значением\n"
+                f"      получено:  display: {value}\n"
+                "      ожидалось: display: none\n"
+                "      следствие: объявление автора перебивает атрибут "
+                "скрытия, и человек получает ДВЕ ПУСТЫЕ ПОДЛОЖКИ на каждом "
+                "экране проекта — цена, названная пунктом (д) прозы таблицы"
+            )
+    return tuple(findings)
+
+
+def test_no_banner_rule_declares_a_display_mode_that_shows():
+    """Единственное значение способа отображения у заготовок — «нет»."""
+    findings = _banner_display_value_findings(_app_css_path())
+
+    assert findings == (), "app.css:\n" + "\n".join(
+        f"  — {line}" for line in findings
+    )
+
+
+def test_a_dismissed_banner_returns_on_the_next_failure():
+    """СНЯТАЯ человеком плашка возвращается на НОВОМ отказе того же рода.
+
+    ⚠️ ЭТО ЧЕТВЁРТЫЙ МАСТ-ХЭВ ПЛАНА 10-57, И ОН ЗАПРЕЩАЕТ ИСХОД ХУДШИЙ, ЧЕМ
+    ИСХОДНЫЙ ДЕФЕКТ: «снял один раз и больше не увижу никогда» есть ТИШИНА
+    вместо пришпиленного прямоугольника, и тишина дороже. Ветвь `A`, названная
+    владельцем, платит за возврат ДВУМЯ строками в телах ДВУХ УЖЕ СУЩЕСТВУЮЩИХ
+    обработчиков — по одной на обработчик.
+
+    ⚠️ ЧТО ЗДЕСЬ ПРЕДМЕТ, А ЧТО СПУТНИК. Предмет — СБРОС состояния органа
+    снятия: без него человек, убравший сообщение, не узнал бы ни об одной
+    следующей аварии. Снятие признака скрытия есть спутник: гарнир выставляет
+    его до рассылки, и эта половина зеленела бы и на дереве до правки.
+    Утверждаются ОБЕ, и роль каждой названа, чтобы следующий читатель не принял
+    спутник за предмет.
+    """
+    path = _failure_banner_path()
+
+    for banner_id, event in (
+        (FAILURE_BANNER_IDS[0], _server_error_event()),
+        (FAILURE_BANNER_IDS[1], _send_error_event()),
+    ):
+        state = _failure_banner_state_after(path, (event,), dismissed=True)
+        assert state["dismissed"][banner_id] is False, (
+            f"#{banner_id}: состояние органа снятия НЕ СБРОШЕНО новым отказом\n"
+            f"      получено:  снято={state['dismissed'][banner_id]}, "
+            f"скрыто={state['hidden'][banner_id]}\n"
+            "      ожидалось: снято=False\n"
+            "      следствие: человек, убравший прочитанное сообщение, больше "
+            "НЕ УЗНАЕТ НИ ОБ ОДНОЙ аварии этого рода до перезагрузки страницы "
+            "— тишина вместо пришпиленного прямоугольника, то есть регрессия "
+            "ХУЖЕ исходного дефекта"
+        )
+        assert state["hidden"][banner_id] is False, (
+            f"#{banner_id}: признак скрытия НЕ СНЯТ новым отказом\n"
+            f"      получено:  скрыто={state['hidden'][banner_id]}\n"
+            "      ожидалось: скрыто=False"
+        )
+
+
+def test_control_a_banner_without_a_dismiss_control_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило органа снятия краснеет на заготовке БЕЗ органа.
+
+    Контроль ВЫЗЫВАЕТ ту же функцию находок, которую вызывает правило, а не
+    повторяет её логику своим выражением: контроль, повторяющий логику гейта,
+    остаётся зелёным при ОБЕЗОРУЖЕННОМ гейте (находка `WR-01`).
+    """
+    source = _failure_banner_source(_failure_banner_path())
+    line = _failure_banner_node_line(_failure_banner_path(), FAILURE_BANNER_IDS[1])
+    tags = [
+        tag
+        for tag in _DISMISS_TAG_RE.findall(line)
+        if FAILURE_BANNER_DISMISS_CLASS in tag
+    ]
+    assert len(tags) == 1, (
+        "ДОКТÓРИВАТЬ НЕЧЕГО: органа снятия у заготовки обрыва связи в боевом "
+        f"дереве найдено {len(tags)}, а не один — контроль зеленел бы на "
+        "пустоте"
+    )
+
+    scratch = _scratch_banner(tmp_path, source.replace(tags[0], "", 1))
+    findings = _dismiss_control_findings(scratch)
+
+    assert findings, (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО ЗАГОТОВКИ БЕЗ ОРГАНА СНЯТИЯ — оно зеленеет на "
+        "плашке, у которой нет выхода"
+    )
+    assert any(FAILURE_BANNER_IDS[1] in finding for finding in findings), (
+        "отказ не назвал заготовку, у которой органа не стало: "
+        f"{findings}"
+    )
+
+
+def test_control_a_showing_display_mode_on_a_banner_rule_reddens(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: правило значений краснеет на ПОКАЗЫВАЮЩЕМ способе отображения.
+
+    Подстановка идёт по ДОСЛОВНОМУ куску боевой таблицы, а сличение — ТОЙ ЖЕ
+    функцией находок, которую вызывает правило.
+    """
+    path = _app_css_path()
+    rules = _banner_hiding_rules(path)
+    assert len(rules) == 1, (
+        "ДОКТÓРИВАТЬ НЕЧЕГО: блоков, достигающих узла заготовки и объявляющих "
+        f"способ отображения, в боевой таблице {len(rules)}, а не один"
+    )
+
+    _selector, _body, raw = rules[0]
+    source = _stylesheet_source(path)
+    assert source.count(raw) == 1, (
+        f"дословный кусок блока скрытия встречается в таблице "
+        f"{source.count(raw)} раз(а), а не один — подстановка была бы "
+        "молчаливой"
+    )
+
+    doctored = source.replace(raw, raw.replace("none", "block"), 1)
+    findings = _banner_display_value_findings(_scratch_stylesheet(tmp_path, doctored))
+
+    assert findings, (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО ПОКАЗЫВАЮЩЕГО СПОСОБА ОТОБРАЖЕНИЯ У ЗАГОТОВКИ — "
+        "оно зеленеет на таблице, дающей две пустые подложки на каждом экране"
+    )
+    assert any("block" in finding for finding in findings), (
+        f"отказ не напечатал ПОЛУЧЕННОГО значения: {findings}"
     )
