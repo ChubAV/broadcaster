@@ -12,7 +12,7 @@ state_head: b419cea91df83526c0371dceccb70a222bd101ae
 progress:
   total_phases: 9
   completed_phases: 4
-  total_plans: 106
+  total_plans: 108
   completed_plans: 95
   percent: 44
 ---
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 Phase: 11 — Массовый перевод разделов письма
 Plan: Not started
-Total Plans in Phase: TBD — Фаза 11 не спланирована
+Total Plans in Phase: 13
 Completed Plans in Phase: 0
 Status: Ready to plan — Фаза 10 закрыта 2026-09-14, Фаза 11 не начата
 Last activity: 2026-09-14
