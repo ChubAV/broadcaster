@@ -4,12 +4,11 @@ milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 11
 current_phase_name: Массовый перевод разделов письма
-status: planning
+status: "Phase 10 shipped — PR #48"
 stopped_at: Phase 10 complete, ready to plan Phase 11
-last_updated: "2026-09-14T11:09:58.803Z"
+last_updated: "2026-09-14T12:19:01.242Z"
 last_activity: 2026-09-14
-last_activity_desc: Phase 10 complete, transitioned to Phase 11
-state_head: fcc20a3e7b48e7b3e50ed1670caaa7bb4b3a61d2
+state_head: 91fb1ba6c08ef76a3197140c837418be2d313473
 progress:
   total_phases: 9
   completed_phases: 4
@@ -40,7 +39,7 @@ Plan: Not started
 Total Plans in Phase: TBD — Фаза 11 не спланирована
 Completed Plans in Phase: 0
 Status: Ready to plan — Фаза 10 закрыта 2026-09-14, Фаза 11 не начата
-Last activity: 2026-09-14 — Phase 10 complete, transitioned to Phase 11
+Last activity: 2026-09-14
 Last activity (устарело, предмет — закрытая Фаза 10; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-11 — Phase 10: план 10-51 исполнен (RED→GREEN замерен переходом цвета правила безусловности подъёма — `1 failed, 229 deselected` при rc=1 с отказом, печатающим полученный селектор `.is-modal-open #htmx-failure-server, .is-modal-open #htmx-failure-network`, → `1 passed` при rc=0; улика проверена прибором `RED_EVIDENCE_OK`; модуль шелла `230 passed` при пороге сбора 223, полная суита `3182 passed`, rc=0, 38:20; продукт тронут ДВУМЯ строками преамбулы `app/static/css/app.css` — величины блока подъёма, правило блокировки прокрутки, рычаг и заготовки не тронуты)
 Progress: [████████████████████] 38/38 plans ([████░░░░░░] 44%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
 
@@ -470,7 +469,7 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Ready to plan
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Phase 10 shipped — PR #48
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
