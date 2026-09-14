@@ -30,6 +30,7 @@ from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.pages.common import templates
+from tests.conftest import a_future_run_moment
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
 
@@ -134,6 +135,7 @@ async def _seed_schedule(
         days_of_week=[0, 2, 4],
         times_of_day=["09:30"],
         timezone="UTC",
+        next_run_at=a_future_run_moment(),
     )
     db.add(schedule)
     await db.commit()
@@ -672,6 +674,7 @@ async def test_schedules_toggle_route_unchanged(
     foreign = Schedule(
         ad_id=foreign_ad.id, account_id=None, group_ids=[],
         days_of_week=[1], times_of_day=["10:00"], timezone="UTC",
+        next_run_at=a_future_run_moment(),
     )
     db_session.add(foreign)
     await db_session.commit()
@@ -4570,6 +4573,7 @@ async def _seed_editor_schedule(db: AsyncSession) -> tuple[Ad, Schedule]:
         days_of_week=[0, 2, 4],
         times_of_day=["09:30"],
         timezone="UTC",
+        next_run_at=a_future_run_moment(),
     )
     db.add(schedule)
     await db.commit()

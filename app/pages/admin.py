@@ -96,6 +96,26 @@ from app.models.subscription import Subscription
 from app.pages import notices
 from app.pages.auth import set_session_cookie
 from app.pages.common import is_same_origin, templates
+# ⚠️ ГРАНИЦА ВЕЛИЧИНЫ ИДЕНТИФИКАТОРА ВВОЗИТСЯ, А НЕ ОБЪЯВЛЯЕТСЯ ЗДЕСЬ. Своя
+# копия числа в самом привилегированном модуле продукта разошлась бы с общей
+# МОЛЧА при первой же правке колонки — ровно тот класс отказа, за который фаза
+# получила круги ревизии 3, 4 и 5; единственность объявления во всём `app/`
+# держит `test_the_identifier_bound_is_declared_exactly_once_in_the_whole_app`.
+#
+# ⚠️ ГРАНИЦА НУЖНА ЗДЕСЬ ПО ТОМУ ЖЕ ОСНОВАНИЮ, ПО КОТОРОМУ НУЖЕН ГАРД
+# ПРОИСХОЖДЕНИЯ, И ЭТО НЕ АНАЛОГИЯ. Гарды этого модуля — сверка источника и
+# проверка административных прав — стоят В ТЕЛЕ обработчика, а на величине вне
+# диапазона колонки управление до тела НЕ ДОХОДИТ: приведение к целому удаётся,
+# отказ случается позже, уже в SQLAlchemy. То есть по оси ВЕЛИЧИНЫ здесь жила
+# ровно та асимметрия, которую ревизия Фазы 6 (`CR-02`) закрыла по оси
+# ИСТОЧНИКА. С границей на сигнатуре запрос отвергается ДО тела, и порядок
+# «сначала граница, потом права, потом источник» перестаёт зависеть от того,
+# что написано выше в функции.
+from app.pages.identifiers import IdPath
+# Первый вызов слоя ответа в этом модуле (план 10-03). Адрес деградации у
+# `respond` объявлен ОБЯЗАТЕЛЬНЫМ ключевым аргументом: обработчик, забывший путь
+# без JavaScript, не собирается как вызов.
+from app.pages.htmx import respond
 from app.services import max_container_manager, wa_container_manager
 from app.services.auth_service import (
     IMPERSONATION_EXPIRE_MINUTES,
@@ -866,7 +886,7 @@ async def _workers_view(db: AsyncSession) -> dict:
 @router.post("/workers/{account_id}/restart")
 async def admin_restart_worker(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -911,7 +931,7 @@ async def admin_restart_worker(
             admin_user_id=admin.id,
             account_id=account_id,
         )
-        return RedirectResponse(url=location, status_code=302)
+        return await respond(request, redirect=location)
 
     manager = WORKER_RESTART_MANAGERS.get(account.type)
     if manager is None:
@@ -923,7 +943,9 @@ async def admin_restart_worker(
             account_id=account.id,
             channel=account.type,
         )
-        return RedirectResponse(url=f"{location}?notice={notices.WORKER_NO_CONTAINER}", status_code=302)
+        return await respond(
+            request, redirect=location, notice=notices.WORKER_NO_CONTAINER
+        )
 
     try:
         # ⚠️ В ОТДЕЛЬНОМ ПОТОКЕ, А НЕ ПРЯМО В ЦИКЛЕ СОБЫТИЙ. Менеджер синхронен и
@@ -942,7 +964,9 @@ async def admin_restart_worker(
             channel=account.type,
             error=str(e),
         )
-        return RedirectResponse(url=f"{location}?notice={notices.WORKER_RESTART_FAILED}", status_code=302)
+        return await respond(
+            request, redirect=location, notice=notices.WORKER_RESTART_FAILED
+        )
 
     # Привилегированная операция над ЧУЖОЙ сущностью обязана оставлять след, и
     # форма следа в проекте уже есть (`free_access_toggled`): именованный ключ,
@@ -953,7 +977,7 @@ async def admin_restart_worker(
         account_id=account.id,
         channel=account.type,
     )
-    return RedirectResponse(url=location, status_code=302)
+    return await respond(request, redirect=location)
 
 
 @router.get("/queue", response_class=HTMLResponse)
@@ -1060,7 +1084,7 @@ async def admin_queue(
 @router.post("/queue/{account_id}/drop")
 async def admin_drop_task(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     task_id: str = Form(...),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -1107,9 +1131,18 @@ async def admin_drop_task(
             account_id=account_id,
             channel=account.type if account else None,
         )
-        return RedirectResponse(
-            url=f"{location}?result=unknown_account", status_code=302
-        )
+        # ⚠️ КЛЮЧ ИСХОДА ЕДЕТ ЧАСТЬЮ СТРОКИ АДРЕСА, А КОД РЕЕСТРА НЕ ПЕРЕДАЁТСЯ,
+        # И ЭТО РЕШЕНИЕ, А НЕ НЕДОСМОТР (D-07). Этот ключ — ШЕСТОЙ частный
+        # микро-контракт адресной строки, уцелевший после свода Фазы 8: в
+        # пятёрку, названную сводом, он не входил, у него своё место отрисовки на
+        # странице подраздела и свой закрытый словарь исходов. Переданный
+        # параметром кода, он уронил бы вызов на незарегистрированном коде — то
+        # есть свод пришлось бы делать здесь и мимоходом.
+        # ⚠️ КЛЮЧ НЕ СЧИТАЕТСЯ СВЕДЁННЫМ. Свод отдан Фазе 11, разделу
+        # администрирования; Фаза 10 остаётся рычагом, а не уборкой канала
+        # уведомлений. Без этой строки следующий читатель принял бы умолчание за
+        # завершённую работу.
+        return await respond(request, redirect=f"{location}?result=unknown_account")
 
     outcome = await drop_task(
         account.type, account.id, task_id, QUEUE_READ_LIMIT
@@ -1124,9 +1157,7 @@ async def admin_drop_task(
             task_id=task_id,
             outcome=outcome,
         )
-        return RedirectResponse(
-            url=f"{location}?result={outcome}", status_code=302
-        )
+        return await respond(request, redirect=f"{location}?result={outcome}")
 
     # Привилегированная операция над ЧУЖОЙ сущностью обязана оставлять след, и
     # форма следа в проекте уже есть (`worker_restarted`): именованный ключ, все
@@ -1139,9 +1170,7 @@ async def admin_drop_task(
         channel=account.type,
         task_id=task_id,
     )
-    return RedirectResponse(
-        url=f"{location}?result={DROP_REMOVED}", status_code=302
-    )
+    return await respond(request, redirect=f"{location}?result={DROP_REMOVED}")
 
 
 @router.get("/logs", response_class=HTMLResponse)
@@ -1290,7 +1319,7 @@ async def admin_payments(
 @router.get("/users/{user_id}", response_class=HTMLResponse)
 async def admin_user_detail(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -1339,7 +1368,7 @@ async def admin_user_detail(
 @router.get("/users/{user_id}/history", response_class=HTMLResponse)
 async def admin_user_history(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     status: str | None = Query(default=None),
     messenger: str | None = Query(default=None),
     account_id: str | None = Query(default=None),
@@ -1448,7 +1477,7 @@ async def admin_user_history(
 @router.get("/users/{user_id}/history/partial", response_class=HTMLResponse)
 async def admin_user_history_partial(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     status: str | None = Query(default=None),
     messenger: str | None = Query(default=None),
     account_id: str | None = Query(default=None),
@@ -1535,8 +1564,8 @@ async def admin_user_history_partial(
 @router.get("/users/{user_id}/history/{log_id}", response_class=HTMLResponse)
 async def admin_user_history_detail(
     request: Request,
-    user_id: int,
-    log_id: int,
+    user_id: IdPath,
+    log_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1567,7 +1596,7 @@ async def admin_user_history_detail(
 @router.post("/users/{user_id}/unlimited")
 async def admin_toggle_free_access(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     _under_another_identity: None = Depends(forbid_when_impersonating),
@@ -1669,7 +1698,7 @@ async def admin_toggle_free_access(
 @router.post("/users/{user_id}/impersonate")
 async def admin_impersonate(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -1736,11 +1765,11 @@ async def admin_impersonate(
             admin_user_id=admin.id,
             target_user_id=user_id,
         )
-        return RedirectResponse(url="/admin/users", status_code=302)
+        return await respond(request, redirect="/admin/users")
 
     if target_user.id == admin.id:
         logger.warning("impersonation_self_refused", admin_user_id=admin.id)
-        return RedirectResponse(url=f"/admin/users/{user_id}", status_code=302)
+        return await respond(request, redirect=f"/admin/users/{user_id}")
 
     token = create_access_token(
         target_user.id,
@@ -1749,10 +1778,20 @@ async def admin_impersonate(
         actor_id=admin.id,
     )
 
+    # ⚠️ ПОРЯДОК ЗДЕСЬ НЕСУЩИЙ: СНАЧАЛА БЕРЁТСЯ РЕЗУЛЬТАТ СЛОЯ ОТВЕТА, И ТОЛЬКО
+    # ПОТОМ НА ЭТОТ ЖЕ ОБЪЕКТ НАВЕШИВАЕТСЯ COOKIE. Ветка перехода собирает НОВЫЙ
+    # ответ со статусом 204; cookie, навешенная на отдельно собранное
+    # перенаправление, не уехала бы никуда — и отказ был бы МОЛЧАЛИВЫМ: браузер
+    # ушёл бы по заголовку перехода, администратор остался бы собой, а экран
+    # выглядел бы так, будто вход состоялся. Тест, проверяющий ТОЛЬКО заголовок
+    # перехода, остался бы при этом зелёным, поэтому пара утверждений написана
+    # ТРОЙНОЙ (`tests/test_pages/test_impersonation.py`): заголовок, cookie и
+    # ФАКТИЧЕСКАЯ смена лица следующим запросом.
+    #
     # ЕДИНСТВЕННАЯ ФУНКЦИЯ УСТАНОВКИ (план 06-02). Собственный `set_cookie`
     # здесь означал бы второй набор атрибутов рядом с первым, и возврат,
     # ходящий через ту же функцию, не сопоставил бы с ним свою перезапись.
-    response = RedirectResponse(url="/dashboard", status_code=302)
+    response = await respond(request, redirect="/dashboard")
     set_session_cookie(response, token, settings)
 
     # СЛЕД ОБЯЗАТЕЛЕН И НАЗЫВАЕТ ОБОИХ (D-24). Это единственная операция
@@ -1772,7 +1811,7 @@ async def admin_impersonate(
 @router.post("/users/{user_id}/block")
 async def admin_toggle_block(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1817,7 +1856,7 @@ async def admin_toggle_block(
 @router.post("/users/{user_id}/delete")
 async def admin_delete_user(
     request: Request,
-    user_id: int,
+    user_id: IdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     _under_another_identity: None = Depends(forbid_when_impersonating),
@@ -1846,15 +1885,13 @@ async def admin_delete_user(
 
     target_user = await db.get(User, user_id)
     if not target_user:
-        return RedirectResponse(url="/admin/users", status_code=302)
+        return await respond(request, redirect="/admin/users")
 
     # Don't allow admin to delete themselves
     if target_user.id == admin.id:
-        return RedirectResponse(
-            url=f"/admin/users/{user_id}", status_code=302
-        )
+        return await respond(request, redirect=f"/admin/users/{user_id}")
 
     await db.delete(target_user)
     await db.commit()
 
-    return RedirectResponse(url="/admin/users", status_code=302)
+    return await respond(request, redirect="/admin/users")

@@ -14,7 +14,7 @@ tests/test_pages/test_account_groups.py.
 
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,8 +27,14 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
-from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.pages.common import (
+    check_is_admin,
+    get_user_from_cookie,
+    is_same_origin,
+    templates,
+)
 from app.pages.htmx import respond
+from app.pages.identifiers import ID_MAX, IdPath
 from app.repositories.schedule import ScheduleRepository
 
 router = APIRouter(tags=["pages"])
@@ -201,7 +207,7 @@ async def _group_counts(
 @router.get("/accounts/{account_id}/groups", response_class=HTMLResponse)
 async def account_groups_page(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     search: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -278,8 +284,17 @@ async def account_groups_page(
 @router.get("/accounts/{account_id}/groups/partial", response_class=HTMLResponse)
 async def account_groups_partial(
     request: Request,
-    account_id: int,
-    after_id: int | None = Query(None, ge=1),
+    account_id: IdPath,
+    # ⚠️ КУРСОР ЕСТЬ ИДЕНТИФИКАТОР, И ЕГО ВЕРХНЯЯ ГРАНИЦА ЕСТЬ ГРАНИЦА
+    # КОЛОНКИ, А НЕ УДОБСТВО. Значение уезжает ОПЕРАНДОМ СРАВНЕНИЯ SQL по
+    # колонке идентификатора (`Group.id > after_id` ниже по телу) — ровно тем
+    # же путём, каким уезжает идентификатор адреса. Закрыть входы адреса и
+    # оставить этот значило бы развести их по СПОСОБУ ПЕРЕДАЧИ, то есть по
+    # внешнему признаку. Нижняя граница стояла здесь и раньше; план 10-28
+    # добавил ВЕРХНЮЮ, той же величиной `ID_MAX`, и форму записи параметра не
+    # менял: переписывание её ради единообразия увеличило бы дифф, ничего не
+    # дав.
+    after_id: int | None = Query(None, ge=1, le=ID_MAX),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
     search: str | None = Query(None),
     # D-15: параметр компоновки принимается и игнорируется — см. app/pages/ads.py
@@ -367,7 +382,7 @@ async def account_groups_partial(
 @router.get("/accounts/{account_id}/groups/sync-status", response_class=HTMLResponse)
 async def account_groups_sync_status(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     # D-15: параметр компоновки принимается и игнорируется — см. app/pages/ads.py
     layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -415,8 +430,8 @@ async def account_groups_sync_status(
 @router.post("/accounts/{account_id}/groups/{group_id}/toggle")
 async def account_groups_toggle(
     request: Request,
-    account_id: int,
-    group_id: int,
+    account_id: IdPath,
+    group_id: IdPath,
     is_active: str | None = Form(None),
     search: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
@@ -587,8 +602,8 @@ async def account_groups_toggle(
 @router.post("/accounts/{account_id}/groups/{group_id}/delete")
 async def account_groups_delete(
     request: Request,
-    account_id: int,
-    group_id: int,
+    account_id: IdPath,
+    group_id: IdPath,
     search: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -677,6 +692,17 @@ async def account_groups_delete(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return await respond(request, redirect="/login")
+
+    # СВЕРКА ИСТОЧНИКА (`WR-07`, ревизия 2026-09-04; прецедент — `CR-02` ревизии
+    # Фазы 6). ГДЕ ОНА СТОИ́Т — сказано ОДИН РАЗ НА ПРОЕКТ, константой
+    # `ORIGIN_CHECK_BOUNDARY` (`app/pages/common.py`, канон заведён планом
+    # 10-25); текст канона здесь НЕ ПОВТОРЯЕТСЯ, площадка переведена на ССЫЛКУ
+    # планом 10-32 (`WR-02`, ревизия 2026-09-07). Она стои́т ВЫШЕ тройного
+    # `WHERE`: отказ по происхождению не имеет права стать признаком
+    # существования строки, а неотличимость четырёх случаев ниже собирается из
+    # `group_id` пути и этой веткой не задевается.
+    if not is_same_origin(request):
+        return Response(status_code=403)
 
     # ТОТ ЖЕ ТРОЙНОЙ WHERE, что у тумблера: свою группу можно адресовать через
     # свой ЖЕ, но другой аккаунт, и одной проверки владельца не хватает

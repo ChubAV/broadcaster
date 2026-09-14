@@ -47,6 +47,11 @@ from app.pages.common import (
     is_same_origin,
     templates,
 )
+# Первый вызов слоя ответа в этом модуле (план 10-03): адрес деградации объявлен
+# у него ОБЯЗАТЕЛЬНЫМ ключевым аргументом, а код исхода едет ПАРАМЕТРОМ — адрес с
+# кодом собирает сам слой, и второй сборки его в этом файле не остаётся.
+from app.pages.htmx import respond
+from app.pages.identifiers import IdPath
 from app.services.billing_cache import check_access_cached
 
 logger = structlog.get_logger(__name__)
@@ -788,7 +793,7 @@ async def history_export(
 @router.get("/history/{log_id}", response_class=HTMLResponse)
 async def history_detail(
     request: Request,
-    log_id: int,
+    log_id: IdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -825,7 +830,7 @@ async def history_detail(
 @router.post("/history/{log_id}/retry")
 async def history_retry(
     request: Request,
-    log_id: int,
+    log_id: IdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _under_another_identity: None = Depends(
@@ -888,27 +893,59 @@ async def history_retry(
 
     ОТВЕТ — ПЕРЕНАПРАВЛЕНИЕ. Оно же закрывает повтор по обновлению страницы и
     по кнопке возврата браузера.
+
+    ⚠️ ФОРМУ ОТВЕТА РЕШАЕТ СЛОЙ ОТВЕТА, А НЕ ЭТОТ ОБРАБОТЧИК (план 10-03).
+    Человеку без JavaScript уезжает прежнее перенаправление на прежний адрес; на
+    запрос от слоя письма уходит переход на ТОТ ЖЕ адрес с ТЕМ ЖЕ кодом исхода.
+    Код едет ПАРАМЕТРОМ, а не приклеивается к строке адреса руками: сборка
+    адреса с кодом на проект одна, и второй в этом файле не осталось. Новых
+    кодов перевод не завёл — все четыре выдаются там же, где выдавались.
+
+    ⚠️ СЕРВЕРНОЕ УДЕРЖАНИЕ СТОИТ ДО РАЗВИЛКИ ТРАНСПОРТА И ПЕРЕЖИВАЕТ ОБЕ ЕЁ
+    ВЕТКИ. Всё, что сказано выше про окно, остаётся верным дословно: фаза меняет
+    ФОРМУ ОТВЕТА, а не предикат и не момент, в который окно армируется. Защита от
+    второго нажатия по-прежнему держится окном, а не панелью подтверждения — и
+    тем более не признаком запроса.
     """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
-    # Гард источника — ОБЩИЙ на проект (app/pages/common.py). Здесь он жил
-    # приватной копией с плана 04-10: тогда потребитель был один. С появлением
-    # форм оплаты потребителей стало три, и копия правила означала бы, что
-    # правку одного гарда придётся не забыть повторить в другом.
+    # Гард источника — ОБЩИЙ на проект (`is_same_origin`, `app/pages/common.py`).
+    # ЛЕТОПИСЬ ПЛОЩАДКИ: здесь гард жил ПРИВАТНОЙ КОПИЕЙ с плана 04-10, когда
+    # потребитель был один; копия снята планом 05-04 — забытая половина двух
+    # экземпляров выглядела бы работающей.
+    #
+    # ⚠️ ЧИСЕЛ ПОТРЕБИТЕЛЕЙ ЗДЕСЬ НЕ ВЕДУТ (`WR-01`, ревизия 2026-09-07; снято
+    # планом 10-32; идиома D-30/D-32 — сведение, а не стирание). ЧТО СТОЯЛО:
+    # «с появлением форм оплаты потребителей стало три». ЭТО НЕ ОШИБКА АВТОРА:
+    # запись была ВЕРНА для состава потребителей на момент своей записи и
+    # пережила появление остальных — ошиблась ФОРМА записи, а не тот, кто её
+    # писал. ЧЕМ ОПРОВЕРГНУТА: замер 2026-09-08 разбором `app/` дал ВОСЕМЬ
+    # файлов-потребителей и ТРИНАДЦАТЬ мест вызова, то есть снятая строка
+    # разошлась с деревом ВЧЕТВЕРО по файлам (2 → 8) и в 4,3 раза по местам
+    # вызова (3 → 13). ПОЧЕМУ ЧИСЕЛ НЕ ВЕДУТ ВООБЩЕ: перечень, который надо не
+    # забыть исправить, ЗАБЫВАЮТ, и доказано это САМОЙ ЭТОЙ СТРОКОЙ — она
+    # пережила опровержение своего близнеца в `app/pages/common.py`, снятого
+    # планом 10-18 на три файла дальше, внутри функции, которую та же фаза
+    # правила. ЧТО ДЕРЖИТ ПОЛНОТУ ВМЕСТО ПЕРЕЧНЯ: два машинных гейта, читающих
+    # ИСХОДНИК и названных поимённо докстрингом самого гарда (абзац «⚠️ РАМКИ» в
+    # `app/pages/common.py`); маршрут без вызова гарда роняет прогон вместо
+    # того, чтобы оказаться открытым по умолчанию. Имена гейтов здесь НЕ
+    # ПОВТОРЯЮТСЯ намеренно: вторая копия имени есть вторая запись, которую
+    # придётся не забыть править, — ровно тот дефект, который снимает эта правка.
     if not is_same_origin(request):
         return Response(status_code=403)
 
     log = await db.get(SendLog, log_id)
     if not log or log.user_id != user.id:
-        return RedirectResponse(url="/history", status_code=302)
+        return await respond(request, redirect="/history")
 
     if log.status == STATUS_OK:
-        return RedirectResponse(url="/history", status_code=302)
+        return await respond(request, redirect="/history")
 
     if not _claim_retry_slot(log.id):
-        return RedirectResponse(url=f"/history?notice={notices.RETRY_BUSY}", status_code=302)
+        return await respond(request, redirect="/history", notice=notices.RETRY_BUSY)
 
     # Признак постановки. Удержание снимается ТОЛЬКО когда задача в очередь не
     # ушла: на успешном пути окно обязано пережить ответ, иначе второе
@@ -955,11 +992,15 @@ async def history_retry(
             or not account
             or account.status != "active"
         ):
-            return RedirectResponse(url=f"/history?notice={notices.RETRY_GONE}", status_code=302)
+            return await respond(
+                request, redirect="/history", notice=notices.RETRY_GONE
+            )
 
         allowed, _reason = await check_access_cached(db, user.id, "send")
         if not allowed:
-            return RedirectResponse(url=f"/history?notice={notices.RETRY_ACCESS_CLOSED}", status_code=302)
+            return await respond(
+                request, redirect="/history", notice=notices.RETRY_ACCESS_CLOSED
+            )
 
         # Импорт ЛОКАЛЬНЫЙ и обязан таким остаться: именно он позволяет
         # подменить модуль очереди в тесте. Поднятый на уровень модуля, он
@@ -995,7 +1036,7 @@ async def history_retry(
         if not queued:
             _release_retry_slot(log.id)
 
-    return RedirectResponse(url=f"/history?notice={notices.RETRY_QUEUED}", status_code=302)
+    return await respond(request, redirect="/history", notice=notices.RETRY_QUEUED)
 
 
 @router.get("/history", response_class=HTMLResponse)

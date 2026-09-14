@@ -1,4 +1,13 @@
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,8 +20,22 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
-from app.pages.common import check_is_admin, get_user_from_cookie, templates
-from app.pages.htmx import is_htmx
+from app.pages.common import (
+    check_is_admin,
+    get_user_from_cookie,
+    is_same_origin,
+    templates,
+)
+# `respond` ввозится ТОЙ ЖЕ строкой, что и признак: второе объявление ввоза из
+# слоя ответа в одном модуле было бы вторым местом, куда смотрят, решая форму
+# ответа, — а решение здесь одно и приходит из одного места (план 10-03).
+from app.pages.htmx import is_htmx, respond
+# ГРАНИЦА ВЕЛИЧИНЫ ИДЕНТИФИКАТОРА ВВОЗИТСЯ, А НЕ ПОВТОРЯЕТСЯ ЗДЕСЬ ЧИСЛОМ.
+# Величина есть свойство КОЛОНКИ, общее всем таблицам проекта, и живёт она в
+# одном месте — `app/pages/identifiers.py`. Вторая копия числа в этом файле
+# разошлась бы с первой молча при первой же правке колонки (`CR-01` пятого
+# круга ревизии — ровно тот класс отказа, который фаза закрывает).
+from app.pages.identifiers import ID_MAX, IdPath
 # Форма ключа вложения и правило владения им живут в НЕЙТРАЛЬНОМ модуле: от него
 # зависят оба слоя, а он — ни от одного из них (WR-04). Прежние имена остаются
 # доступными здесь, поэтому точки вызова в этом файле не переписываются.
@@ -635,12 +658,34 @@ async def ads_create(
 @router.get("/ads/{ad_id}/edit", response_class=HTMLResponse)
 async def ads_edit(
     request: Request,
-    ad_id: int,
+    ad_id: IdPath,
     # Какая карточка расписания отрендерена развёрнутой. Это базовый путь
     # разворачивания без JavaScript (UI-SPEC §Interaction Contract): ссылка на
     # редактор с этим параметром, сервер рендерит указанную карточку
     # развёрнутой, остальные — свёрнутыми.
-    sched: int | None = Query(None),
+    #
+    # ⚠️ ОБЕ ГРАНИЦЫ ДОБАВЛЕНЫ ПЛАНОМ 10-28, ПОТОМУ ЧТО НЕ БЫЛО НИ ОДНОЙ, И
+    # ОСНОВАНИЕ У НИХ — ОБЪЯВЛЕННЫЙ ПРЕДМЕТ ПАРАМЕТРА, А НЕ ПРОСЛЕЖЕННЫЙ ПУТЬ.
+    # Параметр объявлен ИДЕНТИФИКАТОРОМ РАСПИСАНИЯ, а идентификаторы этого
+    # проекта лежат в диапазоне колонки (`app/models/schedule.py` — тот же
+    # `Mapped[int]` без указания расширенной разрядности).
+    #
+    # ⚠️ РАЗНИЦА С КУРСОРОМ ПОСТРАНИЧНОГО ВЫВОДА ГРУПП НАЗВАНА ЗДЕСЬ, А НЕ
+    # СГЛАЖЕНА. Курсор (`app/pages/account_groups.py`) ДОЕЗЖАЕТ до сравнения
+    # по колонке (`Group.id > after_id`), и его граница есть граница колонки
+    # по ПРОСЛЕЖЕННОМУ пути. Это значение до сравнения по колонке НЕ
+    # ДОЕЗЖАЕТ: оно уходит в `_editor_context` под именем
+    # `selected_schedule_id` и сличается там с УЖЕ ЗАГРУЖЕННЫМ составом
+    # расписаний объявления в памяти (`expanded_id not in {s.id for s in
+    # schedules}`), то есть операндом SQL не становится ни на одной ветке.
+    # Закрыт он всё равно — по объявленному предмету, — и разница записана,
+    # потому что молчаливое закрытие «на всякий случай» есть запись шире
+    # дерева.
+    #
+    # ⚠️ ПУСТОЕ ЗНАЧЕНИЕ ОСТАЁТСЯ ЗАКОННЫМ СОСТОЯНИЕМ: расписание может быть
+    # не выбрано, и это основной случай экрана, а не край. Граница ВЕЛИЧИНЫ к
+    # ОТСУТСТВИЮ значения не применяется.
+    sched: int | None = Query(None, ge=1, le=ID_MAX),
     # ⚠️ ПРИЗНАКА ОТКАЗА РАСПИСАНИЯ У ЭТОГО ОБРАБОТЧИКА БОЛЬШЕ НЕТ. Отказ по
     # данным при ПОДТВЕРЖДЁННО своём объявлении по-прежнему возвращает человека
     # сюда и по-прежнему обязан сказать, почему сохранение не состоялось
@@ -674,7 +719,7 @@ async def ads_edit(
 @router.post("/ads/{ad_id}/edit", response_class=HTMLResponse)
 async def ads_update(
     request: Request,
-    ad_id: int,
+    ad_id: IdPath,
     title: str = Form(""),
     text: str = Form(""),
     # Имя параметра — НЕ `status`: модуль ответов FastAPI импортирован в этот
@@ -715,13 +760,51 @@ async def ads_update(
 @router.post("/ads/{ad_id}/delete")
 async def ads_delete(
     request: Request,
-    ad_id: int,
+    ad_id: IdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Удаление объявления. Необратимо.
+
+    ⚠️ ОДИН МАРШРУТ ОБСЛУЖИВАЕТ ДВА МЕСТА ПОДТВЕРЖДЕНИЯ, И ЭТО ИЗМЕРЕНО, А НЕ
+    предположено: карточка в списке объявлений и панель в редакторе объявления
+    шлют один и тот же адрес. Оба уходят ОДНОЙ веткой перехода, и основания у
+    них РАЗНЫЕ, хотя ответ один:
+
+      * панель редактора принадлежала бы переходу и БЕЗ всякого изъятия —
+        действие уводит с экрана, экрана после него нет;
+      * карточка списка убирает строку с ОСТАЮЩЕГОСЯ экрана, то есть по классу
+        действия принадлежала бы фрагментному пути, и в ветку перехода уходит по
+        ОБЪЯВЛЕННОМУ ИЗЪЯТИЮ: обе копии разметки порции раздела просят следующую
+        порцию СМЕЩЁННЫМ курсором, и фрагментное удаление сдвинуло бы список —
+        следующая порция пропустила бы ровно одну карточку.
+
+    Изъятие записано перечнем с обоснованием, фазой-снимателем и условием снятия
+    (`OFFSET_CURSOR_EXCEPTIONS` в `tests/test_pages/test_htmx_gates.py`).
+    Совпадение ответа у двух мест — следствие совпадения оснований, а не
+    компромисс между ними.
+
+    ⚠️ СОБСТВЕННОГО ОТВЕТА-ПЕРЕНАПРАВЛЕНИЯ ЗДЕСЬ НЕТ НИ В ОДНОЙ ВЕТКЕ, ВКЛЮЧАЯ
+    «НЕТ СЕССИИ» (G-2). Ограничение владельца остаётся ВНУТРИ запроса: «нет
+    такой записи» и «запись чужая» дают один исход, и ответ обоих неотличим от
+    успешного.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
+
+    # СВЕРКА ИСТОЧНИКА (`WR-07`, ревизия 2026-09-04; прецедент — `CR-02` ревизии
+    # Фазы 6). ГДЕ ОНА СТОИ́Т — сказано ОДИН РАЗ НА ПРОЕКТ, константой
+    # `ORIGIN_CHECK_BOUNDARY` (`app/pages/common.py`, канон заведён планом
+    # 10-25); текст канона здесь НЕ ПОВТОРЯЕТСЯ, площадка переведена на ССЫЛКУ
+    # планом 10-32 (`WR-02`, ревизия 2026-09-07). Асимметрия закрыта решением, а
+    # не совпадением: соседние административные маршруты несут эту же сверку, а
+    # необратимое удаление данных пользователя не несло ничего, кроме умолчания
+    # браузера, которого продукт не выставляет. Отказ по происхождению не имеет
+    # права стать признаком существования строки.
+    if not is_same_origin(request):
+        return Response(status_code=403)
+
     result = await db.execute(
         select(Ad).where(Ad.id == ad_id, Ad.user_id == user.id)
     )
@@ -729,4 +812,4 @@ async def ads_delete(
     if ad:
         await db.delete(ad)
         await db.commit()
-    return RedirectResponse(url="/ads", status_code=302)
+    return await respond(request, redirect="/ads")

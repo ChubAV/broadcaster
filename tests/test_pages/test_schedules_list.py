@@ -15,6 +15,8 @@
 вернёт 200), поэтому Задача 3 утверждает реальные строки, а не код ответа.
 """
 
+from datetime import datetime, timezone
+
 import contextlib
 import re
 from types import SimpleNamespace
@@ -37,6 +39,7 @@ from app.pages.schedules import (
     _clean_choice,
     _group_names_for,
 )
+from tests.conftest import a_future_run_moment
 
 # Запрос к таблице групп в журнале выполненных операторов. Имя таблицы может
 # прийти в кавычках (groups — зарезервированное слово в части диалектов),
@@ -111,6 +114,14 @@ async def _seed_schedule(
         times_of_day=times if times is not None else ["09:30"],
         timezone="UTC",
         is_active=is_active,
+        # Момент запуска ставится ТОЛЬКО включённой строке. Схема запрещает пару
+        # «включено + нет момента» (CHECK ck_schedules_active_requires_next_run),
+        # а приостановленной строке он не нужен и вреден: карточка печатает
+        # «следующий запуск» по одному лишь наличию значения, и выданный паузе
+        # момент менял бы разметку, к предмету этих тестов отношения не имеющую.
+        next_run_at=(
+            a_future_run_moment() if is_active else None
+        ),
     )
     db.add(schedule)
     await db.commit()

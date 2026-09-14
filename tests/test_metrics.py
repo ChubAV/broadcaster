@@ -8,6 +8,7 @@ from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.models.user import User
+from tests.conftest import a_future_run_moment
 
 
 @pytest.mark.asyncio
@@ -58,6 +59,12 @@ async def test_update_business_metrics(db_session):
             days_of_week=[0, 1, 2],
             times_of_day=["09:00"],
             is_active=active,
+            # Момент запуска задан у ВСЕХ трёх, включая выключенную: схема
+            # запрещает пару «включено + нет момента» (CHECK
+            # ck_schedules_active_requires_next_run), а разные значения у
+            # включённых и выключенной строк завели бы в этой фикстуре второе
+            # различие сверх того одного, ради которого она и написана.
+            next_run_at=a_future_run_moment(),
         )
         db_session.add(schedule)
 

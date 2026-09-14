@@ -20,6 +20,8 @@ D-08): None фальсивен как пустой список, поэтому 
 422 на входе.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -30,6 +32,7 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
+from tests.conftest import a_future_run_moment
 
 BLOCKED_HINT = "Возобновить нельзя: расписание не заполнено"
 
@@ -88,6 +91,14 @@ async def _seed_poisoned_schedule(
         times_of_day=["09:30"],
         timezone="UTC",
         is_active=is_active,
+        # Момент запуска ставится ТОЛЬКО включённой строке. Схема запрещает пару
+        # «включено + нет момента» (CHECK ck_schedules_active_requires_next_run),
+        # а приостановленной строке он не нужен и вреден: карточка печатает
+        # «следующий запуск» по одному лишь наличию значения, и выданный паузе
+        # момент менял бы разметку, к предмету этих тестов отношения не имеющую.
+        next_run_at=(
+            a_future_run_moment() if is_active else None
+        ),
     )
     db.add(schedule)
     await db.commit()

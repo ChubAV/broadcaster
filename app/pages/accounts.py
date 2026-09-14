@@ -2,7 +2,7 @@ import base64
 import io
 
 import qrcode
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
@@ -35,7 +35,18 @@ from app.messengers.telegram_user import (
 from app.messengers.base import MessengerFetchError
 from app.messengers.max import MaxMessenger
 from app.messengers.whatsapp import WhatsAppMessenger
-from app.pages.common import check_is_admin, get_user_from_cookie, templates
+from app.pages.common import (
+    check_is_admin,
+    get_user_from_cookie,
+    is_same_origin,
+    templates,
+)
+# Первый вызов слоя ответа в этом модуле (план 10-03). До него слой звали только
+# из модуля групп аккаунта; адрес деградации у `respond` объявлен ОБЯЗАТЕЛЬНЫМ
+# ключевым аргументом, поэтому обработчик, забывший путь без JavaScript, не
+# собирается как вызов.
+from app.pages.htmx import respond
+from app.pages.identifiers import IdPath
 
 # Разметка ответов опроса статуса подключения живёт в шаблоне, а не в строках
 # обработчика (План 08). До этого она собиралась конкатенацией и несла
@@ -668,7 +679,7 @@ async def accounts_connect_max_status(
 @router.get("/accounts/{account_id}/sync-status", response_class=HTMLResponse)
 async def accounts_sync_status(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     # D-15: параметр компоновки принимается и игнорируется — см. app/pages/ads.py
     layout: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
@@ -702,7 +713,7 @@ async def accounts_sync_status(
 @router.post("/accounts/{account_id}/retry-sync")
 async def accounts_retry_sync(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -774,7 +785,7 @@ def _release_sync_slot(account_id: int) -> None:
 @router.post("/accounts/{account_id}/sync-groups")
 async def accounts_sync_groups(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -984,12 +995,45 @@ async def accounts_sync_groups(
 @router.post("/accounts/{account_id}/delete")
 async def accounts_delete(
     request: Request,
-    account_id: int,
+    account_id: IdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Удаление аккаунта мессенджера из карточки списка. Необратимо.
+
+    ⚠️ ФОРМА ОТВЕТА — ПЕРЕХОД, И ЭТО ОБЪЯВЛЕННОЕ ИЗЪЯТИЕ, А НЕ КЛАСС ДЕЙСТВИЯ.
+    Действие убирает строку с экрана, который ОСТАЁТСЯ, то есть по правилу
+    выбора формы ответа принадлежало бы фрагментному пути. Основание изъятия
+    ИЗМЕРЕНО: обе копии разметки порции раздела просят следующую порцию
+    СМЕЩЁННЫМ курсором, и фрагментное удаление сдвинуло бы список — следующая
+    порция пропустила бы ровно одну карточку. Изъятие записано перечнем с
+    обоснованием, фазой-снимателем и условием снятия
+    (`OFFSET_CURSOR_EXCEPTIONS` в `tests/test_pages/test_htmx_gates.py`), а не
+    оставлено умолчанием: снять его можно ТОЛЬКО вместе с переводом курсора на
+    ключ последней строки.
+
+    ⚠️ СОБСТВЕННОГО ОТВЕТА-ПЕРЕНАПРАВЛЕНИЯ ЗДЕСЬ НЕТ НИ В ОДНОЙ ВЕТКЕ, ВКЛЮЧАЯ
+    «НЕТ СЕССИИ» (G-2): два решения об одной форме ответа означают, что какое из
+    них исполнится, решает ветка, — то есть путь деградации снова перестаёт быть
+    обязательным. Форма 302 при этом не теряется, её строит сам слой ответа.
+
+    Код исхода на успехе НЕ выдаётся (D-03): исчезнувшая карточка и есть ответ,
+    а плашка на каждый успех превратила бы обратную связь в шум.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
+
+    # СВЕРКА ИСТОЧНИКА (`WR-07`, ревизия 2026-09-04; прецедент — `CR-02` ревизии
+    # Фазы 6, закрывшей ту же
+    # асимметрию у административного удаления пользователя). ГДЕ ОНА СТОИ́Т — сказано ОДИН РАЗ НА ПРОЕКТ, константой
+    # `ORIGIN_CHECK_BOUNDARY` (`app/pages/common.py`, канон заведён планом
+    # 10-25); текст канона здесь НЕ ПОВТОРЯЕТСЯ, площадка переведена на ССЫЛКУ
+    # планом 10-32 (`WR-02`, ревизия 2026-09-07). Чужому источнику причина
+    # отказа не сообщается, и отказ по происхождению не имеет права стать
+    # признаком существования строки.
+    if not is_same_origin(request):
+        return Response(status_code=403)
+
     await delete_account(db, user.id, account_id)
-    return RedirectResponse(url="/accounts", status_code=302)
+    return await respond(request, redirect="/accounts")
