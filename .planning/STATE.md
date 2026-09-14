@@ -2,20 +2,20 @@
 gsd_state_version: "1.0"
 milestone: v2.1
 milestone_name: HTMX-first
-current_phase: 10
-current_phase_name: Рычаг `components/modal.html`
-status: verifying
-stopped_at: Completed 10-57-PLAN.md
-last_updated: "2026-09-13T14:16:30.650Z"
-last_activity: 2026-09-13
-last_activity_desc: Phase 10 execution started
-state_head: 67e1e9ef2d2e07d2262d57a09bd61b3abac0f2ae
+current_phase: 11
+current_phase_name: Массовый перевод разделов письма
+status: planning
+stopped_at: Phase 10 complete, ready to plan Phase 11
+last_updated: "2026-09-14T11:09:58.803Z"
+last_activity: 2026-09-14
+last_activity_desc: Phase 10 complete, transitioned to Phase 11
+state_head: fcc20a3e7b48e7b3e50ed1670caaa7bb4b3a61d2
 progress:
   total_phases: 9
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 95
   completed_plans: 95
-  percent: 33
+  percent: 44
 ---
 
 # Project State
@@ -35,14 +35,14 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 10 (Рычаг `components/modal.html`) — EXECUTING
-Plan: 57 of 57
-Total Plans in Phase: 57
-Completed Plans in Phase: 57
-Status: Phase complete — ready for verification
-Last activity: 2026-09-13 — Phase 10 execution started
-Last activity: 2026-09-11 — Phase 10: план 10-51 исполнен (RED→GREEN замерен переходом цвета правила безусловности подъёма — `1 failed, 229 deselected` при rc=1 с отказом, печатающим полученный селектор `.is-modal-open #htmx-failure-server, .is-modal-open #htmx-failure-network`, → `1 passed` при rc=0; улика проверена прибором `RED_EVIDENCE_OK`; модуль шелла `230 passed` при пороге сбора 223, полная суита `3182 passed`, rc=0, 38:20; продукт тронут ДВУМЯ строками преамбулы `app/static/css/app.css` — величины блока подъёма, правило блокировки прокрутки, рычаг и заготовки не тронуты)
-Progress: [████████████████████] 38/38 plans ([███░░░░░░░] 33%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
+Phase: 11 — Массовый перевод разделов письма
+Plan: Not started
+Total Plans in Phase: TBD — Фаза 11 не спланирована
+Completed Plans in Phase: 0
+Status: Ready to plan — Фаза 10 закрыта 2026-09-14, Фаза 11 не начата
+Last activity: 2026-09-14 — Phase 10 complete, transitioned to Phase 11
+Last activity (устарело, предмет — закрытая Фаза 10; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-11 — Phase 10: план 10-51 исполнен (RED→GREEN замерен переходом цвета правила безусловности подъёма — `1 failed, 229 deselected` при rc=1 с отказом, печатающим полученный селектор `.is-modal-open #htmx-failure-server, .is-modal-open #htmx-failure-network`, → `1 passed` при rc=0; улика проверена прибором `RED_EVIDENCE_OK`; модуль шелла `230 passed` при пороге сбора 223, полная суита `3182 passed`, rc=0, 38:20; продукт тронут ДВУМЯ строками преамбулы `app/static/css/app.css` — величины блока подъёма, правило блокировки прокрутки, рычаг и заготовки не тронуты)
+Progress: [████████████████████] 38/38 plans ([████░░░░░░] 44%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
 
 ✅ **Фаза 09 ЗАКРЫТА и ОТГРУЖЕНА (PR #47, 2026-09-02).** Все двадцать планов имеют сводки, суита зелена (2649 passed), проведены ЧЕТЫРЕ круга ручного обхода (последний — 2026-09-02, Chrome / macOS), верификация `passed` 18/18 круга 5, `09-SECURITY.md` несёт `threats_open: 0`.
 
@@ -61,7 +61,7 @@ Progress: [████████████████████] 38/38 p
 
 **Velocity:**
 
-- Total plans completed: 88 (milestone v2.0) — ⚠️ прежнее значение 70 расходилось с суммой по фазам (13+15+12+12+30+14+14 = 110) и с frontmatter `progress.completed_plans: 110`; исправлено при закрытии вехи
+- Total plans completed: 145 (milestone v2.0) — ⚠️ прежнее значение 70 расходилось с суммой по фазам (13+15+12+12+30+14+14 = 110) и с frontmatter `progress.completed_plans: 110`; исправлено при закрытии вехи
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -78,6 +78,7 @@ Progress: [████████████████████] 38/38 p
 | 05 | 30 | - | - |
 | 07 | 7 | - | - |
 | 08 | 11 | - | - |
+| 10 | 57 | - | - |
 
 **Recent Trend:**
 
@@ -469,13 +470,13 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 ⚠️ **Восемь записей `deferred_items` подтверждены ПРАВКОЙ ФАЙЛОВ, а не CLI-писателем.**
 `audit-open acknowledge` отказал всем одиннадцати вызовам с `unsupported_heading_shape`:
 файлы `deferred-items.md` этого проекта используют heading-delimited форму (#3457),
-которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** resolved`
+которую писатель не поддерживает. В каждую запись вписано поле `- **Status:** Ready to plan
 — тот же маркер, который писатель поставил бы сам.
 
 ## Session Continuity
 
 Last session: 2026-09-13T14:15:45.720Z
-Stopped at: Completed 10-57-PLAN.md
+Stopped at: Phase 10 complete, ready to plan Phase 11
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
