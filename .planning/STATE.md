@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 11
 current_phase_name: Массовый перевод разделов письма
 status: executing
-stopped_at: Completed 11-02-PLAN.md
-last_updated: "2026-09-15T20:48:05.261Z"
+stopped_at: Completed 11-03-PLAN.md
+last_updated: "2026-09-15T22:23:33.892Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 11 execution started
-state_head: e0ddf0cbf341c31d83a44288139f44fc6f748b4d
+state_head: c8ab8c4841c50751c46b58f44289282b8112000a
 progress:
   total_phases: 9
   completed_phases: 4
   total_plans: 115
-  completed_plans: 97
+  completed_plans: 98
   percent: 44
 ---
 
@@ -36,9 +36,9 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 11 (Массовый перевод разделов письма) — EXECUTING
-Plan: 3 of 20
+Plan: 4 of 20
 Total Plans in Phase: 20
-Completed Plans in Phase: 2
+Completed Plans in Phase: 3
 Status: Ready to execute
 Last activity: 2026-09-15 — Phase 11 execution started
 Last activity (устарело, предмет — закрытая Фаза 10; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-11 — Phase 10: план 10-51 исполнен (RED→GREEN замерен переходом цвета правила безусловности подъёма — `1 failed, 229 deselected` при rc=1 с отказом, печатающим полученный селектор `.is-modal-open #htmx-failure-server, .is-modal-open #htmx-failure-network`, → `1 passed` при rc=0; улика проверена прибором `RED_EVIDENCE_OK`; модуль шелла `230 passed` при пороге сбора 223, полная суита `3182 passed`, rc=0, 38:20; продукт тронут ДВУМЯ строками преамбулы `app/static/css/app.css` — величины блока подъёма, правило блокировки прокрутки, рычаг и заготовки не тронуты)
@@ -141,6 +141,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 10 P57 | 48 min | 3 tasks | 6 files |
 | Phase 11 P01 | 1h 13m | 2 tasks | 9 files |
 | Phase 11 P02 | 29 min | 2 tasks | 7 files |
+| Phase 11 P03 | 29 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -303,6 +304,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 11]: Phase 11 P02: catalogue rule requires the first read of a POST-alias parameter to be an id_in_column argument; POST alias allowed only on POST-only routes
 - [Phase 11]: Phase 11 P02: _ownership_verdict takes ad_usable/account_usable flags computed by the handler; out-of-column values ride the not-found/foreign branch without a query
 - [Phase 11]: Phase 11 P02: window 51 VALIDATION_REFUSAL_DIVERGENCES_DECLARED 23 -> 16, seven schedules entries lifted by work
+- [Phase 11]: 11-03: schedules_toggle summary-list branch answers a transition to /schedules without a fragment; the row fragment belongs to plan 11-04
+- [Phase 11]: 11-03: card toggle form takes empty blocking target and this:drop sync by the DIV-09-02 precedent under D-11, recorded as a second form_wrapper caller in DISABLED_ELT_EXCEPTIONS
+- [Phase 11]: 11-03: editor tests read the label.toggle node by its for attribute because form_wrapper prints the toggle path twice
 
 ### Pending Todos
 
@@ -483,8 +487,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-15T20:48:04.646Z
-Stopped at: Completed 11-02-PLAN.md
+Last session: 2026-09-15T22:23:33.386Z
+Stopped at: Completed 11-03-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.

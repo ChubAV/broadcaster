@@ -217,3 +217,9 @@ None - no external service configuration required.
 ---
 *Phase: 11-massovyy-perevod-razdelov-pisma*
 *Completed: 2026-09-15*
+
+## Self-Check: PASSED
+
+- All seven modified files and this SUMMARY exist on disk.
+- Commits `7bd0cb1`, `39adcdc`, `05240b2`, `c8ab8c4` exist.
+- Records: after the checkbox flip, ROADMAP prose (3 of 20) and STATE edits, `uv run pytest tests/test_planning/ -q` gave 44 passed. FORM-03 stays Pending in REQUIREMENTS.md, because phase 11 verification has not passed.
