@@ -308,6 +308,79 @@ async def test_schedule_edit_over_htmx_swaps_only_its_card(
 
 
 @pytest.mark.asyncio
+async def test_schedule_edit_over_htmx_refreshes_the_summary_and_the_panel_text(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Ответ правки обновляет сводку объявления и ТЕКСТ панели подтверждения.
+
+    Панель удаления стоит снаружи подменяемой карточки и после правки осталась
+    бы спрашивать про прежние дни и группы. Ответ несёт два верхнеуровневых
+    внеполосных узла: `#ad-summary` (подмена узла) и подмену СОДЕРЖИМОГО абзаца
+    текста панели по постоянному id `sched-del-N-text` — корень панели с
+    состоянием Alpine целью не становится (D-12(б)). Текст, приехавший
+    внеполосно, и текст полной страницы после перезагрузки — ОДНА величина.
+    """
+    from tests.test_pages.test_confirm_delete_transport import _oob_node_ids
+
+    day_names = templates.env.get_template(
+        "schedules/includes/schedule_row.html"
+    ).module.DAY_NAMES
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id, days=[0])
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/edit",
+        content=_form(
+            [
+                ("ad_id", str(ad.id)),
+                ("account_id", str(account.id)),
+                ("days_of_week", "0"),
+                ("days_of_week", "1"),
+                ("times_of_day", "09:00"),
+                ("timezone", "UTC"),
+                ("return_to", "editor"),
+            ]
+        ),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200, response.status_code
+    body = response.text
+    oob_ids = _oob_node_ids(body)
+    assert "ad-summary" in oob_ids, f"узла сводки нет среди внеполосных: {oob_ids}"
+    assert f"#sched-del-{schedule.id}-text" in oob_ids, (
+        f"узла текста панели нет среди внеполосных: {oob_ids}"
+    )
+    assert f'id="sched-del-{schedule.id}"' not in body, (
+        "корень панели подтверждения стал целью либо приехал в теле"
+    )
+
+    panel_node = re.search(
+        rf'<div hx-swap-oob="innerHTML:#sched-del-{schedule.id}-text">(.*?)</div>',
+        body,
+        re.S,
+    )
+    assert panel_node, body[-600:]
+    oob_text = panel_node.group(1)
+    assert f"{day_names[0]} {day_names[1]}" in oob_text, oob_text
+
+    htmx_client.headers.pop("HX-Request")
+    page = await htmx_client.get(f"/ads/{ad.id}/edit")
+    assert page.status_code == 200
+    page_text = re.search(
+        rf'<p class="modal__text" id="sched-del-{schedule.id}-text">(.*?)</p>',
+        page.text,
+        re.S,
+    )
+    assert page_text, "у абзаца текста панели нет постоянного id"
+    assert page_text.group(1) == oob_text, (
+        f"внеполосный текст {oob_text!r} разошёлся с полной страницей "
+        f"{page_text.group(1)!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_toggle_from_editor_returns_to_the_editor(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
