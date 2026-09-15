@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 11
 current_phase_name: Массовый перевод разделов письма
 status: executing
-stopped_at: Phase 11 context gathered
-last_updated: "2026-09-15T18:02:24.240Z"
+stopped_at: Completed 11-01-PLAN.md
+last_updated: "2026-09-15T19:18:37.582Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 11 execution started
-state_head: 11b4a286df3f235198a7428479406e77614877a3
+state_head: 42ad11a1b2ff3ebc9fe71037bed4cd9da535f26d
 progress:
   total_phases: 9
   completed_phases: 4
   total_plans: 115
-  completed_plans: 95
+  completed_plans: 96
   percent: 44
 ---
 
@@ -36,10 +36,10 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 11 (Массовый перевод разделов письма) — EXECUTING
-Plan: 1 of 20
+Plan: 2 of 20
 Total Plans in Phase: 20
-Completed Plans in Phase: 0
-Status: Executing Phase 11
+Completed Plans in Phase: 1
+Status: Ready to execute
 Last activity: 2026-09-15 — Phase 11 execution started
 Last activity (устарело, предмет — закрытая Фаза 10; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-11 — Phase 10: план 10-51 исполнен (RED→GREEN замерен переходом цвета правила безусловности подъёма — `1 failed, 229 deselected` при rc=1 с отказом, печатающим полученный селектор `.is-modal-open #htmx-failure-server, .is-modal-open #htmx-failure-network`, → `1 passed` при rc=0; улика проверена прибором `RED_EVIDENCE_OK`; модуль шелла `230 passed` при пороге сбора 223, полная суита `3182 passed`, rc=0, 38:20; продукт тронут ДВУМЯ строками преамбулы `app/static/css/app.css` — величины блока подъёма, правило блокировки прокрутки, рычаг и заготовки не тронуты)
 Progress: [████████████████████] 38/38 plans ([████░░░░░░] 44%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
@@ -139,6 +139,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 10 P55 | 16 min | 3 tasks | 6 files |
 | Phase 10 P56 | 67 min | 3 tasks | 3 files |
 | Phase 10 P57 | 48 min | 3 tasks | 6 files |
+| Phase 11 P01 | 1h 13m | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -295,6 +296,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 10]: Форма ВЫХОДА у плашки отказа выбрана ОТВЕТОМ ВЛАДЕЛЬЦА (ветвь `A` — «снятие без регистрации», область записи `узко`), а не замером исполнителя: орган снятия есть элемент управления, состояние которого переключает браузер, скрытие выражено объявлением таблицы стилей, и ни одно из пяти чисел гейта критерия 3 не сдвинуто — Кнопка с обработчиком — форма, предложенная UI-ревизией ДОСЛОВНО, — есть ветвь `B`: она немедленно покраснила бы пятое утверждение гейта критерия 3 и потребовала бы сдвига объявленного числа плюс четвёртого имени события. Цена по критерию 3 принадлежит тому, кто вправе её принять, и машина не вправе выбрать за владельца. Запись — третья в блоке `overrides` `10-VERIFICATION.md`, `accepted_branch: dismiss-control-plus-reset`
 - [Phase 10]: Орган снятия адресуется ДВУМЯ РАЗНЫМИ крючками по замеру: таблица стилей — КЛАССОМ (`.banner-dismiss`), сценарий — ИДЕНТИФИКАТОРОМ (`htmx-failure-*-close`) — Селектор `#htmx-failure-server-close` нёс бы подстроку `#htmx-failure-server`, попал бы в отбор `_selector_lifts_banner` и покрасил бы ПЯТЬ действующих правил подъёма за ФОРМУ правки; имя класса в сценарии сдвинуло бы `grep -c "banner-dismiss"` по разметке с 2 на 4, то есть сломало бы собственный акцептанс плана. Оба основания выписаны в комментарии рядом с константами, чтобы следующий читатель не «починил» расхождение
 - [Phase 10]: Зазор стопки при снятии ПЕРВОЙ заготовки НЕ ПОЧИНЕН и записан окном 82 журнала, а не умолчан — Блок «отсутствия дыры» плана 10-56 ключáется на АТРИБУТ скрытия, а орган снятия атрибута не ставит — ставить его означало бы ветвь `B`. Обе мыслимые формы починки правят РАЗБОР РОЛЕЙ `_stack_blocks`: четвёртый блок с `--failure-banner-top` попадает в роль смещения (две части селектора без признака в скобках), а расширение селектора роли `reset` запятой разбивает разбор на три части и оставляет роль пустой. То есть починка есть предмет отдельного плана, а не строка в этом
+- [Phase 11]: Phase 11 / 11-01: schedules_update over htmx returns only the card article plus OOB #ad-summary and innerHTML:#sched-del-N-text; the confirmation panel root never rides in the body or becomes a target
+- [Phase 11]: Phase 11 / 11-01: GATE-02 pairs live in one parametrized module tests/test_pages/test_htmx_post_pairs.py; the closure counts a handler as covered by POST_PAIR_CASES or CONFIRMED_DELETE_ROUTES, so Phase 10 confirm-delete pairs are not duplicated
 
 ### Pending Todos
 
@@ -475,9 +478,9 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-14T14:16:08.927Z
-Stopped at: Phase 11 context gathered
-Resume file: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-CONTEXT.md
+Last session: 2026-09-15T19:18:20.380Z
+Stopped at: Completed 11-01-PLAN.md
+Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
 

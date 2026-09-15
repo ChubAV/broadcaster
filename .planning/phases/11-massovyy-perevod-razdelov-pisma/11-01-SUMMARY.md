@@ -268,3 +268,8 @@ None — no external service configuration required.
 ---
 *Phase: 11-massovyy-perevod-razdelov-pisma*
 *Completed: 2026-09-15*
+
+## Self-Check: PASSED
+
+- FOUND: app/templates/ads/partials/sched_card_response.html, tests/test_pages/test_htmx_post_pairs.py, app/pages/schedules.py, app/templates/ads/includes/sched_card.html, app/templates/components/modal.html, this SUMMARY
+- FOUND commits: 95c0aa9, 5348f64, ff0f0cc, 3045b37, 42ad11a
