@@ -263,6 +263,51 @@ async def test_update_from_editor_returns_to_the_editor(
 
 
 @pytest.mark.asyncio
+async def test_schedule_edit_over_htmx_swaps_only_its_card(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Правка на транспорте htmx отвечает фрагментом СВОЕЙ карточки (FORM-03, D-02).
+
+    Первым узлом тела стоит сама карточка — цель `outerHTML` формы правки; она
+    приезжает раскрытой (раскрытие — серверное состояние, D-12(а)), и корня
+    панели подтверждения удаления в теле НЕТ: панель живёт снаружи карточки, и
+    подмена карточки, принёсшая вторую панель, задвоила бы её в документе.
+    Путь без htmx стережёт `test_update_from_editor_returns_to_the_editor` выше.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/edit",
+        content=_form(
+            [
+                ("ad_id", str(ad.id)),
+                ("account_id", str(account.id)),
+                ("days_of_week", "1"),
+                ("times_of_day", "18:30"),
+                ("timezone", "UTC"),
+                ("return_to", "editor"),
+            ]
+        ),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200, response.status_code
+    body = response.text
+    assert "<!DOCTYPE" not in body, "слою письма приехал целый документ"
+    assert body.lstrip().startswith(
+        f'<article data-sched-card id="sched-{schedule.id}">'
+    ), body[:200]
+    assert f'action="/schedules/{schedule.id}/edit"' in body, (
+        "форма правки отсутствует — карточка приехала свёрнутой"
+    )
+    assert f'id="sched-del-{schedule.id}"' not in body, (
+        "корень панели подтверждения приехал в теле подмены карточки"
+    )
+
+
+@pytest.mark.asyncio
 async def test_toggle_from_editor_returns_to_the_editor(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
