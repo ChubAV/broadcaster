@@ -805,7 +805,13 @@
     <form class="modal__form" method="post" action="{{ action }}"
           x-on:submit="if (sending) { $event.preventDefault(); return; } sending = true"
           x-on:htmx:after-request="sending = false; if ($event.detail.successful || ($event.detail.xhr &amp;&amp; $event.detail.xhr.getResponseHeader('HX-Location'))) hide()" hx-post="{{ action }}" hx-swap="none" hx-disabled-elt="find button[type=submit]" hx-indicator="find .form-busy">
-      {%- if body %}<p class="modal__text">{{ body }}</p>{% endif %}
+      {#- ⚠️ У АБЗАЦА ТЕКСТА ПОСТОЯННЫЙ id `{id}-text` (Фаза 11, план 11-01).
+          Текст панели — долгоживущая область: панель стоит СНАРУЖИ подменяемой
+          карточки и переживает сколько угодно ответов её правки, поэтому ответ
+          подменяет СОДЕРЖИМОЕ абзаца по постоянному id (D-12 Фазы 9), а не узел.
+          Так внеполосная подмена никогда не касается корня панели, несущего
+          состояние Alpine (D-12(б) Фазы 11). -#}
+      {%- if body %}<p class="modal__text" id="{{ id }}-text">{{ body }}</p>{% endif %}
       {%- if caller is defined %}{{ caller() }}{% endif %}
       <span class="form-busy" aria-hidden="true"></span>
       <div class="modal__actions">
