@@ -272,5 +272,6 @@ None - no external service configuration required.
 
 - All 11 files named in `key-files` exist on disk (1 created, 10 modified), verified with `[ -f ]`.
 - All five commits exist: `8646d5d`, `b8e6de6`, `052afb3`, `0729eca`, `5cb11b9`.
-- `commits: 5` is MEASURED, not narrated: `git rev-list --count 3c68187..HEAD` over the persisted plan ledger.
-- Records (ROADMAP checkbox and prose, STATE) and `tests/test_planning/` are handled in the metadata step that follows this file.
+- `commits: 5` is MEASURED, not narrated, and the two figures are stated apart so neither is read as the other. FIVE is the count of this plan's TASK commits — `git rev-list --count 3c68187..HEAD` over the persisted plan ledger at the moment this file was written, before any docs commit existed. SEVEN is what the same command returns AFTER the close-out, because the SUMMARY commit (`e466585`) and the metadata commit (`e052d99`) land inside the same ledger range. `actuals.commits` keeps the task-commit figure, matching the `## Task Commits` list above and the sibling plan 11-03 (`commits: 3` with two further docs commits in its own range).
+- Records: ROADMAP checkbox, progress row **and prose** (3 → 4, the count the verb leaves behind) and STATE position/metric/decisions/session are done; `progress.completed_plans` was left at the verb-derived 99 because `tests/test_planning/` was RUN after every record edit and returned 44 passed — the value is confirmed by the gate, not assumed.
+- REQUIREMENTS.md is deliberately untouched: FORM-03 and the other six phase-11 IDs stay `Pending` until phase verification passes.
