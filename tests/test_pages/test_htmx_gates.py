@@ -2391,6 +2391,13 @@ def test_control_negative_an_undeclared_fragment_handler_reddens_the_gate(tmp_pa
 # `app/pages/schedules.py:63-72`). Перенос внутрь обработчиков развёл бы одно
 # правило на семь мест, то есть закрыл бы находку ценой возврата предмета, ради
 # которого предыдущая партия существовала.
+#
+# ⚠️ ПОКОЛЕНИЕ АБЗАЦА ВЫШЕ (Фаза 11, план 11-02, решение D-07; абзац не
+# стирается — идиома D-30/D-32). Основание ОПРОВЕРГНУТО для модуля расписаний:
+# граница перенесена внутрь обработчиков, но ЧИСЛО осталось одно — в
+# `app/pages/identifiers.py`, — а разведение «на семь мест» не случилось, потому
+# что мест проверки ОДНО: помощник `id_in_column`. Семь записей модуля
+# расписаний сняты из перечня РАБОТОЙ, и замер их больше не находит.
 # =============================================================================
 
 
@@ -2452,124 +2459,6 @@ _REFUSAL_PRICE = (
 
 
 VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
-    _ValidationRefusalDivergence(
-        entry="app/pages/schedules.py::POST /schedules/new → форма ad_id",
-        alias="AdIdForm",
-        reason=(
-            _REFUSAL_PRICE
-            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, И ЭТО ИЗМЕРЕНО ЧТЕНИЕМ "
-            "РАЗМЕТКИ, А НЕ ПЕРЕПИСАНО ИЗ РЕВИЗИИ: значение приезжает скрытым "
-            "полем `value=\"{{ ad.id }}\"` (`app/templates/ads/form.html:242`), "
-            "то есть собирается сервером, и через интерфейс не редактируется "
-            "ничем"
-        ),
-        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
-    ),
-    _ValidationRefusalDivergence(
-        entry="app/pages/schedules.py::POST /schedules/new → форма account_id",
-        alias="AccountIdForm",
-        reason=(
-            _REFUSAL_PRICE
-            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
-            "поле шлётся скрытым `value=\"{{ editor.accounts[0].id }}\"` ТОЛЬКО "
-            "при единственном аккаунте (`app/templates/ads/form.html:247`), а "
-            "при нескольких не шлётся ВОВСЕ — псевдоним допускает отсутствие "
-            "значения, и отсутствие есть законное состояние (`account_id` "
-            "nullable, issue #35)"
-        ),
-        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
-    ),
-    _ValidationRefusalDivergence(
-        entry=(
-            "app/pages/schedules.py::POST /schedules/{schedule_id}/edit → "
-            "адрес schedule_id"
-        ),
-        alias="ScheduleIdPath",
-        reason=(
-            _REFUSAL_PRICE
-            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
-            "идентификатор стои́т в АДРЕСЕ формы "
-            "`action=\"/schedules/{{ s.id }}/edit\"` "
-            "(`app/templates/ads/includes/sched_card.html:156`) и собирается "
-            "сервером из живой строки"
-        ),
-        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
-    ),
-    _ValidationRefusalDivergence(
-        entry=(
-            "app/pages/schedules.py::POST /schedules/{schedule_id}/edit → "
-            "форма ad_id"
-        ),
-        alias="AdIdForm",
-        reason=(
-            _REFUSAL_PRICE
-            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
-            "значение приезжает скрытым полем `value=\"{{ ad.id }}\"` "
-            "(`app/templates/ads/includes/sched_card.html:157`), то есть "
-            "собирается сервером из объявления ОТКРЫТОГО экрана. "
-            "⚠️ ЭТОГО ВХОДА ОТЧЁТ ВЕРИФИКАЦИИ НЕ НАЗЫВАЛ: он считал ИСХОДЫ "
-            "пяти запросов и маршрут правки посчитал ОДИН РАЗ — через "
-            "идентификатор адреса, — тогда как маршрут несёт ТРИ ограниченных "
-            "параметра. Перечень стои́т на ЗАМЕРЕ, и потому входов семь, а не "
-            "пять"
-        ),
-        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
-    ),
-    _ValidationRefusalDivergence(
-        entry=(
-            "app/pages/schedules.py::POST /schedules/{schedule_id}/edit → "
-            "форма account_id"
-        ),
-        alias="AccountIdForm",
-        reason=(
-            _REFUSAL_PRICE
-            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
-            "значение шлётся РАДИОКНОПКАМИ `value=\"{{ acc.id }}\"` "
-            "(`app/templates/ads/includes/sched_card.html:170`), а при снятом "
-            "выборе не шлётся вовсе. "
-            "⚠️ ЭТОГО ВХОДА ОТЧЁТ ВЕРИФИКАЦИИ НЕ НАЗЫВАЛ — по тому же счёту "
-            "ИСХОДОВ вместо ВХОДОВ, что и у соседней записи маршрута правки"
-        ),
-        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
-    ),
-    _ValidationRefusalDivergence(
-        entry=(
-            "app/pages/schedules.py::POST /schedules/{schedule_id}/toggle → "
-            "адрес schedule_id"
-        ),
-        alias="ScheduleIdPath",
-        reason=(
-            _REFUSAL_PRICE
-            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
-            "идентификатор стои́т в АДРЕСЕ формы переключения "
-            "(`app/templates/ads/includes/sched_card.html:122` и "
-            "`app/templates/schedules/includes/schedule_row.html:81`), и обе "
-            "копии собираются сервером"
-        ),
-        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
-    ),
-    _ValidationRefusalDivergence(
-        entry=(
-            "app/pages/schedules.py::POST /schedules/{schedule_id}/delete → "
-            "адрес schedule_id"
-        ),
-        alias="ScheduleIdPath",
-        reason=(
-            _REFUSAL_PRICE
-            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
-            "идентификатор стои́т в АДРЕСЕ формы удаления "
-            "(`app/templates/ads/includes/sched_card.html:255`) и в аргументе "
-            "`action` панели подтверждения (там же, `:276`)"
-        ),
-        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
-    ),
     _ValidationRefusalDivergence(
         entry="app/pages/ads.py::POST /ads/{ad_id}/delete \u2192 \u0430\u0434\u0440\u0435\u0441 ad_id",
         alias="IdPath",
@@ -3003,7 +2892,23 @@ VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
 #   предмет ЭТОГО перечня — контракт формы ответа POST-обработчика (G-2), и
 #   граница охвата замера названа у самого замера. Их граница от этого не
 #   слабее — она просто не есть расхождение с D-01.
-VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 23
+#
+#   23 → 16, Фаза 11, план 11-02, задача 2: семь входов модуля расписаний сняты
+#   РАБОТОЙ (D-07), замер их больше не находит. Граница величины уехала внутрь
+#   четырёх обработчиков (`id_in_column`, `app/pages/identifiers.py`), псевдонимы
+#   модуля стали POST-псевдонимами без `ge=`/`le=`, и
+#   `_framework_bounded_post_inputs` перестал их видеть.
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШИХ ПРАВИЛ, А НЕ ВЫЧИТАНИЕМ В УМЕ. После
+#   перевода обработчиков правило полноты
+#   `test_every_framework_bounded_input_is_declared_as_a_divergence` предъявило
+#   СЕМЬ жалоб «ОБЪЯВЛЕН, НО ЗАМЕРОМ НЕ НАЙДЕН: app/pages/schedules.py::…»
+#   (создание — форма `ad_id` и `account_id`; правка — адрес `schedule_id`, форма
+#   `ad_id` и `account_id`; тумблер и удаление — адрес `schedule_id`); записи
+#   сняты по этим ключам, и правило числа предъявило «расхождений формы отказа
+#   валидации стало 16, а объявлено 23» до сдвига.
+#   ⚠️ `LIFTING_CONDITION_VALIDATION_REFUSAL` НЕ ПРАВИТСЯ: он называет Фазу 11 и
+#   остаётся верным для шестнадцати записей, которые снимут следующие планы фазы.
+VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 16
 
 
 def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:

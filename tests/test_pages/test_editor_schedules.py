@@ -2427,17 +2427,24 @@ ADJACENCY_ROUTE = "/schedules/{value}/toggle"
 
 @contextmanager
 def _schedule_statement_log(db_session: AsyncSession):
-    """Операторы SQL над таблицей расписаний, выполненные за время блока.
+    """Операторы SQL, ищущие строку расписания ПО ИДЕНТИФИКАТОРУ, за время блока.
 
     Слушатель вешается на СИНХРОННЫЙ движок за асинхронным (приём
     `_statement_log`, `tests/test_pages/test_schedules_list.py`) и снимается в
     `finally`, иначе следующий тест наследовал бы чужой слушатель.
+
+    ⚠️ ПРИЗНАК — СРАВНЕНИЕ ПО КОЛОНКЕ ИДЕНТИФИКАТОРА, А НЕ ИМЯ ТАБЛИЦЫ, И ЭТО
+    ЗАМЕР. Первая редакция ловила любое вхождение слова `schedules` и поймала
+    запрос счётчиков навигации (`… AS schedules`), который исполняется на ЛЮБОМ
+    запросе вошедшего и величины идентификатора не касается вовсе. Предмет
+    стыка — уехала ли величина операндом сравнения по колонке, и признак снят
+    ровно с него.
     """
     engine = db_session.bind.sync_engine
     seen: list[str] = []
 
     def _before(conn, cursor, statement, parameters, context, executemany):
-        if "schedules" in statement:
+        if "schedules.id = " in statement:
             seen.append(statement)
 
     event.listen(engine, "before_cursor_execute", _before)

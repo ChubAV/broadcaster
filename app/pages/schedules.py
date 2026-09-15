@@ -58,7 +58,22 @@ from app.pages.htmx import respond
 # транзитных имён. Читатель, снявший его по этому разрешению, уронил бы
 # `_ad_id_from_form()` на отсутствующем имени — то есть разбор идентификатора на
 # маршруте ПОДТВЕРЖДЁННОГО УДАЛЕНИЯ расписания, в проде.
-from app.pages.identifiers import ID_MAX, IdForm, IdPath, OptionalIdForm
+#
+# ⚠️ ПОКОЛЕНИЕ (решение D-07 Фазы 11, план 11-02). ПЕРВАЯ ПОЛОВИНА ОСНОВАНИЯ ВЫШЕ
+# ИСЧЕРПАНА: `_ad_id_from_form()` сверяется с колонкой помощником `id_in_column`,
+# и в исполняемом коде этого файла `ID_MAX` не зовётся больше НИ РАЗУ. ВТОРАЯ
+# ПОЛОВИНА ДЕЙСТВУЕТ: два модуля суиты по-прежнему ввозят имя отсюда, и ввоз
+# сохранён ради них — снимать его можно только вместе с переводом их ввоза на
+# `app/pages/identifiers.py`. Ограниченные псевдонимы `IdPath`/`IdForm`/
+# `OptionalIdForm` из ввоза сняты: их потребители в этом файле переведены на
+# POST-псевдонимы.
+from app.pages.identifiers import (
+    ID_MAX,  # noqa: F401 — сохранённый вход для двух модулей суиты (см. выше)
+    OptionalPostIdForm,
+    PostIdForm,
+    PostIdPath,
+    id_in_column,
+)
 
 # Определение полноты живёт в НЕЙТРАЛЬНОМ модуле, от которого зависят и этот
 # слой, и JSON-API: определение одно на оба входа (D-08, WR-05). Локальное имя
@@ -95,9 +110,19 @@ RETURN_TO_EDITOR = "editor"
 # самостоятельные объявления: собственная копия ЧИСЛА границы в соседнем
 # файле разошлась бы с первой молча — тот самый класс отказа, за который фаза
 # получила круги ревизии 3, 4 и 5.
-ScheduleIdPath = IdPath
-AdIdForm = IdForm
-AccountIdForm = OptionalIdForm
+#
+# ⚠️ ПОКОЛЕНИЕ (решение D-07 Фазы 11, план 11-02; абзацы выше не стираются —
+# идиома D-30/D-32). Три имени теперь псевдонимы POST-ПСЕВДОНИМОВ БЕЗ ГРАНИЦЫ
+# ФРЕЙМВОРКА: все маршруты файла, их несущие, — POST, и форму отказа на величине
+# вне колонки выбирает класс действия, а не фреймворк. Граница не ослаблена, а
+# перенесена: первое чтение каждого параметра в теле обработчика — аргумент
+# `id_in_column`, стоящий ДО любого запроса, и величина вне колонки идёт ТОЙ ЖЕ
+# веткой, что «записи нет / запись чужая». Утверждение «граница стоит на
+# границе приложения» для этих входов ОПРОВЕРГНУТО; ЧИСЛО по-прежнему живёт
+# одно — в `app/pages/identifiers.py`.
+ScheduleIdPath = PostIdPath
+AdIdForm = PostIdForm
+AccountIdForm = OptionalPostIdForm
 
 # Исход проверки владения. Их ТРИ, а не два, потому что отказ по аккаунту и
 # отказ по объявлению — разные события: в первом объявление ПОДТВЕРЖДЕНО своим,
@@ -401,7 +426,10 @@ def _ad_id_from_form(form_data) -> int | None:
         value = int(form_data.get("ad_id"))
     except (TypeError, ValueError):
         return None
-    if value < 1 or value > ID_MAX:
+    # Сверка с колонкой — тем же помощником, что и у обязательных входов
+    # маршрутов (D-07 Фазы 11: один на проект); прежде здесь стояла своя сверка
+    # с `ID_MAX`, и две формы одной проверки разошлись бы молча.
+    if not id_in_column(value):
         return None
     return value
 
@@ -629,7 +657,13 @@ async def _owns_ad(db: AsyncSession, user_id: int, ad_id: int) -> bool:
 
 
 async def _ownership_verdict(
-    db: AsyncSession, user_id: int, ad_id: int, account_id: int | None
+    db: AsyncSession,
+    user_id: int,
+    ad_id: int,
+    account_id: int | None,
+    *,
+    ad_usable: bool = True,
+    account_usable: bool = True,
 ) -> str:
     """Владение объявлением и аккаунтом мессенджера — с РАЗЛИЧИМЫМ исходом.
 
@@ -643,10 +677,22 @@ async def _ownership_verdict(
     `account_id` в схеме nullable с `ON DELETE SET NULL` (issue #35): пустое
     значение — законное состояние отвязанного расписания, поэтому проверка
     владения применяется только к непустому значению.
+
+    ⚠️ ПРИЗНАКИ ГОДНОСТИ ВЕЛИЧИНЫ (D-07 Фазы 11, план 11-02). `ad_usable` и
+    `account_usable` вычисляет ОБРАБОТЧИК помощником `id_in_column` первым
+    использованием параметра; здесь они только выбирают исход. Негодное
+    объявление даёт отказ по объявлению БЕЗ запроса; негодный аккаунт — отказ по
+    аккаунту ПОСЛЕ подтверждения своего объявления, и тоже без запроса по
+    аккаунту: величина вне колонки не уходит ни в одну выборку, а исход тот же,
+    что у чужого аккаунта.
     """
+    if not ad_usable:
+        return OWNERSHIP_AD_DENIED
     if not await _owns_ad(db, user_id, ad_id):
         return OWNERSHIP_AD_DENIED
 
+    if not account_usable:
+        return OWNERSHIP_ACCOUNT_DENIED
     if account_id is None:
         return OWNERSHIP_OK
 
@@ -920,6 +966,13 @@ async def schedules_create(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРОВ (D-07 Фазы 11, план
+    # 11-02). Признаки вычисляются ДО любого запроса и уезжают в вердикт владения:
+    # негодное объявление — ветка чужого объявления, негодный аккаунт — ветка
+    # недоступного аккаунта, и ни одна величина вне колонки в выборку не уходит.
+    ad_usable = id_in_column(ad_id)
+    account_usable = id_in_column(account_id, optional=True)
+
     # Владение объявлением и аккаунтом проверяется запросом, а не последующим
     # `if`, — по образцу проверки групп ниже. `Schedule` не имеет собственного
     # `user_id`, поэтому пришедшие формой `ad_id` и `account_id` задают не только
@@ -934,7 +987,14 @@ async def schedules_create(
     # чего. Своё объявление при недоступном аккаунте — возврат в этот самый
     # редактор с объяснением: отказ по данным не имеет права быть навигацией,
     # уносящей набранные группы, дни и времена без единого слова (WR-07).
-    verdict = await _ownership_verdict(db, user.id, ad_id, account_id)
+    verdict = await _ownership_verdict(
+        db,
+        user.id,
+        ad_id,
+        account_id,
+        ad_usable=ad_usable,
+        account_usable=account_usable,
+    )
     if verdict == OWNERSHIP_AD_DENIED:
         return RedirectResponse(url="/schedules", status_code=302)
     if verdict == OWNERSHIP_ACCOUNT_DENIED:
@@ -1026,12 +1086,22 @@ async def schedules_update(
     if not user:
         return await respond(request, redirect="/login")
 
-    result = await db.execute(
-        select(Schedule)
-        .join(Ad, Schedule.ad_id == Ad.id)
-        .where(Schedule.id == schedule_id, Ad.user_id == user.id)
-    )
-    schedule = result.scalar_one_or_none()
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ТРЁХ ПАРАМЕТРОВ (D-07 Фазы 11,
+    # план 11-02). Идентификатор расписания вне колонки не ищется вовсе и идёт
+    # ТОЙ ЖЕ веткой «записи нет», что и отсутствующий: строки с ним нет ни на
+    # одном драйвере, а выборка с ним на PostgreSQL дала бы `DataError`.
+    schedule_usable = id_in_column(schedule_id)
+    ad_usable = id_in_column(ad_id)
+    account_usable = id_in_column(account_id, optional=True)
+
+    schedule = None
+    if schedule_usable:
+        result = await db.execute(
+            select(Schedule)
+            .join(Ad, Schedule.ad_id == Ad.id)
+            .where(Schedule.id == schedule_id, Ad.user_id == user.id)
+        )
+        schedule = result.scalar_one_or_none()
     if not schedule:
         # Записи нет ЛИБО она чужая — исход один, различить их отсюда нельзя и
         # не нужно. Но если объявление из тела подтверждено своим, пользователя
@@ -1039,7 +1109,8 @@ async def schedules_update(
         # сообщает ничего, а правки перестают исчезать молча (WR-07).
         # Адрес строится из ПОДТВЕРЖДЁННОГО `ad_id`, код — константа закрытого
         # реестра (T-02-23, T-08-27); склейку кода с адресом делает слой ответа.
-        if await _owns_ad(db, user.id, ad_id):
+        # Негодное объявление в выборку не уходит: ветка сводного списка.
+        if ad_usable and await _owns_ad(db, user.id, ad_id):
             return await respond(
                 request,
                 redirect=f"/ads/{ad_id}/edit",
@@ -1051,7 +1122,14 @@ async def schedules_update(
     # приходят формой заново: без этой проверки своё расписание переставляется на
     # чужое объявление и чужой аккаунт (CR-01). Проверка стоит до первой записи
     # в модель, иначе отказ оставил бы запись частично изменённой.
-    verdict = await _ownership_verdict(db, user.id, ad_id, account_id)
+    verdict = await _ownership_verdict(
+        db,
+        user.id,
+        ad_id,
+        account_id,
+        ad_usable=ad_usable,
+        account_usable=account_usable,
+    )
     if verdict == OWNERSHIP_AD_DENIED:
         return await respond(request, redirect="/schedules")
     if verdict == OWNERSHIP_ACCOUNT_DENIED:
@@ -1168,12 +1246,16 @@ async def schedules_toggle(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
-    result = await db.execute(
-        select(Schedule)
-        .join(Ad, Schedule.ad_id == Ad.id)
-        .where(Schedule.id == schedule_id, Ad.user_id == user.id)
-    )
-    schedule = result.scalar_one_or_none()
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ (D-07 Фазы 11, план 11-02):
+    # идентификатор вне колонки не ищется и идёт веткой «расписание не найдено».
+    schedule = None
+    if id_in_column(schedule_id):
+        result = await db.execute(
+            select(Schedule)
+            .join(Ad, Schedule.ad_id == Ad.id)
+            .where(Schedule.id == schedule_id, Ad.user_id == user.id)
+        )
+        schedule = result.scalar_one_or_none()
     # issue #35 и D-08: НЕПОЛНОЕ расписание нельзя возобновить, пока пользователь
     # не дозаполнит его в редакторе объявления. Отвязанное после удаления
     # аккаунта — частный случай той же неполноты. Пауза активного не
@@ -1285,12 +1367,19 @@ async def schedules_delete(
     # происхождению: не читается, потому что сверка стои́т выше.
     form_data = await request.form()
 
-    result = await db.execute(
-        select(Schedule)
-        .join(Ad, Schedule.ad_id == Ad.id)
-        .where(Schedule.id == schedule_id, Ad.user_id == user.id)
-    )
-    schedule = result.scalar_one_or_none()
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ (D-07 Фазы 11, план 11-02). Она
+    # стоит НИЖЕ сверки источника и разбора тела (их порядок записан выше и не
+    # меняется) и ВЫШЕ выборки: идентификатор вне колонки не ищется и идёт веткой
+    # «строки нет». Узлы снятия фрагмента строятся из целого пути, как для
+    # любого отсутствующего идентификатора (T-10-01).
+    schedule = None
+    if id_in_column(schedule_id):
+        result = await db.execute(
+            select(Schedule)
+            .join(Ad, Schedule.ad_id == Ad.id)
+            .where(Schedule.id == schedule_id, Ad.user_id == user.id)
+        )
+        schedule = result.scalar_one_or_none()
     # Идентификатор объявления снимается ДО удаления: после него читать его уже
     # не с чего, а адрес возврата строится именно из него.
     ad_id = schedule.ad_id if schedule else None
