@@ -22,6 +22,11 @@ from app.services.schedule_rules import (
 )
 from app.services.schedule_service import compute_next_run_at
 from app.pages import notices
+# Контекст редактора ввозится у модуля объявлений, а не собирается здесь второй
+# выборкой: карточка после подмены и после перезагрузки обязаны приходить из
+# одного источника. Цикла импорта нет — `app/pages/ads.py` модуля расписаний не
+# импортирует (замерено при переводе правки, план 11-01).
+from app.pages.ads import _editor_context
 from app.pages.common import (
     check_is_admin,
     get_user_from_cookie,
@@ -1002,9 +1007,24 @@ async def schedules_update(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Правка расписания в редакторе объявления — на слое ответа (Фаза 11, план 11-01).
+
+    ⚠️ СОБСТВЕННОГО ПЕРЕНАПРАВЛЕНИЯ У ОБРАБОТЧИКА НЕТ НИ В ОДНОЙ ВЕТКЕ (G-2).
+    Форму ответа выбирает слой письма: без htmx человек получает прежнее
+    перенаправление на прежний адрес, с htmx — фрагмент карточки (карточка
+    остаётся на экране) либо заголовок перехода (исход уводит с экрана, D-06).
+    Имена прежних помощников-перенаправлений здесь НЕ набраны: их отсутствие в
+    теле обработчика проверяется грепом, и докстринг, назвавший их дословно,
+    удовлетворил бы греп сам.
+
+    Выборка со связью `Ad.user_id` и вердикт владения стоят ДО развилки
+    транспорта и не меняются: заголовок запроса меняет только ФОРМУ ответа, но
+    не то, что человеку позволено (T-11-01). То, ЧТО обработчик пишет в базу,
+    переводом не тронуто ни на символ.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
     result = await db.execute(
         select(Schedule)
@@ -1017,9 +1037,15 @@ async def schedules_update(
         # не нужно. Но если объявление из тела подтверждено своим, пользователя
         # можно вернуть в ЕГО редактор с объяснением: о чужих записях это не
         # сообщает ничего, а правки перестают исчезать молча (WR-07).
+        # Адрес строится из ПОДТВЕРЖДЁННОГО `ad_id`, код — константа закрытого
+        # реестра (T-02-23, T-08-27); склейку кода с адресом делает слой ответа.
         if await _owns_ad(db, user.id, ad_id):
-            return _editor_error_redirect(ad_id, notices.SCHEDULE_AD_MISSING)
-        return RedirectResponse(url="/schedules", status_code=302)
+            return await respond(
+                request,
+                redirect=f"/ads/{ad_id}/edit",
+                notice=notices.SCHEDULE_AD_MISSING,
+            )
+        return await respond(request, redirect="/schedules")
 
     # Владение самим расписанием проверено выше, но `ad_id` и `account_id`
     # приходят формой заново: без этой проверки своё расписание переставляется на
@@ -1027,9 +1053,13 @@ async def schedules_update(
     # в модель, иначе отказ оставил бы запись частично изменённой.
     verdict = await _ownership_verdict(db, user.id, ad_id, account_id)
     if verdict == OWNERSHIP_AD_DENIED:
-        return RedirectResponse(url="/schedules", status_code=302)
+        return await respond(request, redirect="/schedules")
     if verdict == OWNERSHIP_ACCOUNT_DENIED:
-        return _editor_error_redirect(ad_id, notices.SCHEDULE_ACCOUNT_GONE)
+        return await respond(
+            request,
+            redirect=f"/ads/{ad_id}/edit",
+            notice=notices.SCHEDULE_ACCOUNT_GONE,
+        )
 
     form_data = await request.form()
     group_ids = _clean_ints(form_data.getlist("group_ids"))
@@ -1071,7 +1101,60 @@ async def schedules_update(
             else None
         )
     await db.commit()
-    return _editor_redirect(form_data, ad_id, schedule_id)
+
+    # ПРИЗНАК ВОЗВРАТА ЧИТАЕТСЯ ОДИН РАЗ и участвует в обоих решениях — в сборке
+    # адреса и в выборе формы ответа (то же выражение, что у удаления, `WR-01`).
+    returns_to_editor = form_data.get("return_to") == RETURN_TO_EDITOR
+    screen_url = _editor_url(returns_to_editor, ad_id, schedule_id)
+
+    if not returns_to_editor:
+        # На сводном списке карточки редактора нет: фрагменту некуда
+        # приземлиться — то же основание, что у ветки `WR-01` удаления.
+        return await respond(request, redirect=screen_url)
+
+    async def _fragment() -> HTMLResponse:
+        """Подменённая карточка расписания — первым узлом тела.
+
+        ⚠️ ФУНКЦИЯ НУЛЬАРНАЯ И АСИНХРОННАЯ (IN-03): слой ответа делает `await
+        fragment()`, и на пути без htmx разметка не собирается вовсе — выборки
+        контекста редактора там не выполняются.
+
+        ⚠️ КОНТЕКСТ БЕРЁТСЯ У `_editor_context` ОДНОЙ ВЫБОРКОЙ НА ВСЕ ПОЛЯ — тем
+        же кодом, что рисует полную страницу редактора: карточка после подмены и
+        карточка после перезагрузки обязаны приходить из одного источника.
+        Объект карточки — строка из этой выборки, а не `schedule` выше: после
+        `commit()` его атрибуты могут быть истёкшими.
+
+        ⚠️ КОРНЯ ПАНЕЛИ ПОДТВЕРЖДЕНИЯ В ТЕЛЕ НЕТ И БЫТЬ НЕ МОЖЕТ (Landmine
+        CONTEXT фазы). Панель стоит СНАРУЖИ карточки; цель подмены — карточка
+        `#sched-N`, и вторая панель, приехавшая в теле, задвоилась бы в
+        документе с живой ловушкой фокуса.
+
+        ⚠️ КАРТОЧКА ПРИЕЗЖАЕТ РАСКРЫТОЙ: путь деградации приземляет человека с
+        `?sched=N`, то есть правленая карточка раскрыта (D-12(а) — раскрытие есть
+        серверное состояние, а не Alpine).
+        """
+        ad = await _ad_row(db, user.id, ad_id)
+        editor = await _editor_context(db, ad, settings, user, schedule_id)
+        card = next(s for s in editor["schedules"] if s.id == schedule_id)
+        return HTMLResponse(
+            templates.env.get_template(
+                "ads/partials/sched_card_response.html"
+            ).render(
+                s=card,
+                ad=ad,
+                accounts=editor["accounts"],
+                groups=editor["groups"],
+                user=user,
+                expanded_id=editor["expanded_schedule_id"],
+                inactive_group_ids=editor["inactive_group_ids"],
+                editor=editor,
+            )
+        )
+
+    # `notice` НЕ передаётся: плашки на успешное сохранение нет — исход виден
+    # подменённой карточкой (D-03 Фазы 10, REQUIREMENTS Out of Scope).
+    return await respond(request, redirect=screen_url, fragment=_fragment)
 
 
 @router.post("/schedules/{schedule_id}/toggle")

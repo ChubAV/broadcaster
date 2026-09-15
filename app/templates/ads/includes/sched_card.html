@@ -37,6 +37,7 @@
 
 {% from "components/badge.html" import badge %}
 {% from "components/button.html" import button %}
+{% from "components/form_wrapper.html" import form_wrapper %}
 {% from "components/modal.html" import modal %}
 {% from "components/toggle.html" import toggle %}
 {% from "components/empty_state.html" import empty_state %}
@@ -61,7 +62,31 @@
 {{- {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'}.get(account.type, account.type) }} #{{ account.id -}}
 {%- endmacro %}
 
-{% macro sched_card(s, ad, accounts, groups, user, expanded_id=none, inactive_group_ids=none) -%}
+{#- ТЕКСТ ЧАСТЕЙ ПОДТВЕРЖДЕНИЯ — ЕДИНСТВЕННЫЙ ИСТОЧНИК (план 11-01). Строка
+    печатается ТРИЖДЫ: сводкой в шапке карточки, телом панели подтверждения
+    удаления и (задача 2 плана) внеполосным узлом ответа правки. Три копии
+    вычисления разошлись бы молча, и панель спрашивала бы про удалённые дни и
+    группы. Только ЗАПОЛНЕННЫЕ части, соединённые разделителем: пустые сегменты
+    между разделителями («· · ·») недопустимы (UI-SPEC E12). -#}
+{% macro sched_card_panel_text(s, accounts) -%}
+{%- set account = (accounts | selectattr('id', 'equalto', s.account_id) | list | first) if s.account_id else none -%}
+{%- set chosen = s.group_ids or [] -%}
+{%- set day_labels = [] -%}
+{%- for d in (s.days_of_week or [])|sort %}{% set _ = day_labels.append(DAY_NAMES.get(d, d)) %}{% endfor -%}
+{%- set parts = [] -%}
+{%- if account %}{% set _ = parts.append(account_label(account) | trim) %}{% endif -%}
+{%- if chosen %}{% set _ = parts.append(chosen | length ~ ' групп') %}{% endif -%}
+{%- if day_labels %}{% set _ = parts.append(day_labels | join(' ')) %}{% endif -%}
+{%- if s.times_of_day %}{% set _ = parts.append(s.times_of_day | join(', ')) %}{% endif -%}
+{{- parts | join(' · ') if parts else 'Не заполнено' -}}
+{%- endmacro %}
+
+{#- СТАТЬЯ КАРТОЧКИ БЕЗ ПАНЕЛИ ПОДТВЕРЖДЕНИЯ (план 11-01). Отдельный макрос
+    нужен ответу правки: цель его подмены — `#sched-N`, а панель живёт СНАРУЖИ
+    статьи, и ответ, принёсший её вторично, задвоил бы её в документе.
+    `sched_card` ниже собирается из этого макроса и панели, поэтому разметка
+    редактора не сдвигается. -#}
+{% macro sched_card_article(s, ad, accounts, groups, user, expanded_id=none, inactive_group_ids=none) -%}
 {%- set account = (accounts | selectattr('id', 'equalto', s.account_id) | list | first) if s.account_id else none -%}
 {#- Разворот ВЫВОДИТСЯ из идентификатора развёрнутой карточки, а не приходит
     вторым параметром рядом с ним: два параметра об одном факте способны
@@ -84,8 +109,6 @@
     включая выключенные-но-выбранные строки. -#}
 {%- set chosen_shown = [] -%}
 {%- for g in account_groups %}{% if g.id in chosen %}{% set _ = chosen_shown.append(g.id) %}{% endif %}{% endfor -%}
-{%- set day_labels = [] -%}
-{%- for d in (s.days_of_week or [])|sort %}{% set _ = day_labels.append(DAY_NAMES.get(d, d)) %}{% endfor -%}
 {#- Неполнота ОДНА и та же на сервере и в разметке: аккаунт, хотя бы одна
     группа, хотя бы один день и хотя бы одно время (D-08). Второе определение
     разъехалось бы с серверным, и пользователь видел бы бейдж на расписании,
@@ -102,18 +125,14 @@
     не теоретическое: удаление единственной группы вычищает идентификатор из
     `Schedule.group_ids`, не трогая `is_active`. -#}
 {%- set resume_blocked = not s.is_active and not complete -%}
-{#- Части подтверждения удаления: только ЗАПОЛНЕННЫЕ, соединённые разделителем.
-    Пустые сегменты между разделителями («· · ·») недопустимы (UI-SPEC E12). -#}
-{%- set parts = [] -%}
-{%- if account %}{% set _ = parts.append(account_label(account) | trim) %}{% endif -%}
-{%- if chosen %}{% set _ = parts.append(chosen | length ~ ' групп') %}{% endif -%}
-{%- if day_labels %}{% set _ = parts.append(day_labels | join(' ')) %}{% endif -%}
-{%- if s.times_of_day %}{% set _ = parts.append(s.times_of_day | join(', ')) %}{% endif -%}
+{#- Сводка шапки — ТА ЖЕ строка, что тело панели подтверждения: одна величина
+    макроса `sched_card_panel_text`, а не второе вычисление частей. -#}
+{%- set panel_text = sched_card_panel_text(s, accounts) -%}
 <article data-sched-card id="sched-{{ s.id }}">
   <header class="sched-card__head">
     <span class="sched-card__sum">
       {%- if account %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
-      <span title="{{ parts | join(' · ') if parts else 'Не заполнено' }}">{{ parts | join(' · ') if parts else 'Не заполнено' }}</span>
+      <span title="{{ panel_text }}">{{ panel_text }}</span>
     </span>
     {%- if not complete %}{{ badge('Не заполнено', 'warning') }}{% endif %}
     {#- Событие change всплывает от флажка к форме, поэтому перехват висит на
@@ -152,8 +171,15 @@
     {# Форма сохранения расписания. Имена полей — ЖЁСТКИЙ контракт с
        app/pages/schedules.py: ad_id, account_id, group_ids, days_of_week,
        times_of_day, timezone. Расхождение здесь не уронит страницу — оно молча
-       перестанет сохранять расписание. #}
-    <form method="post" action="/schedules/{{ s.id }}/edit">
+       перестанет сохранять расписание.
+
+       ⚠️ ФОРМА ИДЁТ ЧЕРЕЗ `form_wrapper` (план 11-01, D-02): цель подмены —
+       сама карточка `#sched-N` способом `outerHTML`, ответ правки отдаёт её
+       фрагментом. Именованные кнопки отправки внутри не тронуты: слой письма
+       шлёт значение нажатой кнопки так же, как браузер без него. ⚠️ G-11:
+       `sched-N` — параметрическая цель подмены при внеполосном снятии той же
+       карточки ответом удаления; разрешение Фазы 9 записано у самого правила. #}
+    {% call form_wrapper(action='/schedules/' ~ s.id ~ '/edit', target='#sched-' ~ s.id, swap='outerHTML') %}
       <input type="hidden" name="ad_id" value="{{ ad.id }}">
       <input type="hidden" name="return_to" value="editor">
       {# Таймзона приходит из профиля и ЗДЕСЬ НЕ ВЫБИРАЕТСЯ: одно расписание с
@@ -248,7 +274,7 @@
       <div class="sched-card__actions">
         {{ button('СОХРАНИТЬ РАСПИСАНИЕ', variant='primary', name='save_schedule', value='1', icon='check') }}
       </div>
-    </form>
+    {% endcall %}
 
     {#- Форма удаления — СОСЕД формы сохранения, а не её потомок. Перехват висит
         на самой форме: без Alpine она уходит POST-ом на прежний маршрут. -#}
@@ -267,6 +293,10 @@
   </div>
   {%- endif %}
 </article>
+{%- endmacro %}
+
+{% macro sched_card(s, ad, accounts, groups, user, expanded_id=none, inactive_group_ids=none) -%}
+{{- sched_card_article(s, ad, accounts, groups, user, expanded_id=expanded_id, inactive_group_ids=inactive_group_ids) -}}
 {#- Панель подтверждения стоит РЯДОМ с карточкой, а не внутри неё: панель
     позиционируется фиксированно, а внутри карточки она стала бы её блоком.
     Тело перечисляет только ЗАПОЛНЕННЫЕ части и экранируется Jinja — разметка в
@@ -275,7 +305,7 @@
               title='Удалить расписание?',
               action='/schedules/' ~ s.id ~ '/delete',
               confirm_label='Удалить',
-              body=parts | join(' · ') if parts else 'Не заполнено') %}
+              body=sched_card_panel_text(s, accounts)) %}
   {#- Блочный вызов — штатный слот скрытых полей макроса: без признака возврата
       подтверждённое удаление увело бы пользователя на сводный список. -#}
   <input type="hidden" name="return_to" value="editor">

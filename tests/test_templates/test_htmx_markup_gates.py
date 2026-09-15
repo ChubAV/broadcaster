@@ -1391,7 +1391,12 @@ class HiddenCallers(NamedTuple):
 MACRO_DEFINITION_SITES_CALLERS: dict[str, HiddenCallers] = {
     "components/form_wrapper.html": HiddenCallers(
         macro="form_wrapper",
-        callers=("account_groups/includes/group_row.html",),
+        callers=(
+            "account_groups/includes/group_row.html",
+            # Фаза 11, план 11-01: форма правки карточки расписания в редакторе
+            # объявления (цель подмены — сама карточка `#sched-N`).
+            "ads/includes/sched_card.html",
+        ),
         reason=(
             "ФОРМА ТУМБЛЕРА ЭКРАНА ГРУПП — единственный сегодняшний вызывающий "
             "макроса-обёртки. Адрес передаёт он, и проверяется адрес ЗДЕСЬ, а не "
@@ -1443,7 +1448,14 @@ MACRO_DEFINITION_SITES_CALLERS: dict[str, HiddenCallers] = {
 # файлов панели подтверждения). Фаза 10 (FORM-06), переносящая проверку адреса
 # на вызывающих окончательно и опустошающая перечень мест, обязана это число
 # пересмотреть вместе с ним.
-MACRO_DEFINITION_SITES_CALLERS_DECLARED = 11
+#
+# 11 → 12, Фаза 11, план 11-01: форма правки карточки расписания в редакторе
+# объявления пошла через макрос-обёртку. ПОСТАВЛЕНО ПРОГОНОМ покрасневшего
+# `test_the_number_of_hidden_callers_is_the_declared_one`, дословно:
+# `объявленные вызывающие разошлись с измеренными: {'components/form_wrapper.html':
+# "объявлено ('account_groups/includes/group_row.html',), измерено
+# ('account_groups/includes/group_row.html', 'ads/includes/sched_card.html')"}`.
+MACRO_DEFINITION_SITES_CALLERS_DECLARED = 12
 
 # ⚠️ ТО ЖЕ ДЛЯ ПЕРЕЧНЯ ПАРАМЕТРИЧЕСКИХ ЦЕЛЕЙ ПОДМЕНЫ. Записей там одна, и её
 # число объявлено; число ВЫЗЫВАЮЩИХ, за этой записью скрытых, до плана 09-07 не
@@ -1452,7 +1464,13 @@ MACRO_DEFINITION_SITES_CALLERS_DECLARED = 11
 #
 # ЛЕТОПИСЬ: 0 → 1, Фаза 9, план 09-07 (форма тумблера экрана групп). Фаза 10
 # обязана пересмотреть вместе с самим перечнем.
-PARAMETRIC_SWAP_TARGETS_CALLERS_DECLARED = 1
+#
+# 1 → 2, Фаза 11, план 11-01: форма правки карточки расписания в редакторе
+# объявления (цель `#sched-N`; разрешение G-11 записано у записи перечня).
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего
+# `test_the_number_of_hidden_callers_is_the_declared_one`, дословно: `за перечнем
+# параметрических целей подмены спрятано вызывающих 2, объявлено 1`.
+PARAMETRIC_SWAP_TARGETS_CALLERS_DECLARED = 2
 
 
 def _balanced_call_arguments(source: str, macro: str) -> list[str]:
@@ -2185,8 +2203,21 @@ TARGET_ARGUMENT = "target"
 PARAMETRIC_SWAP_TARGETS: dict[str, ParametricTarget] = {
     "components/form_wrapper.html": ParametricTarget(
         macro="form_wrapper",
-        callers=("account_groups/includes/group_row.html",),
+        callers=(
+            "account_groups/includes/group_row.html",
+            "ads/includes/sched_card.html",
+        ),
         reason=(
+            "⚠️ ВТОРОЙ ВЫЗЫВАЮЩИЙ — ФОРМА ПРАВКИ КАРТОЧКИ РАСПИСАНИЯ (Фаза 11, "
+            "план 11-01), и столкновение G-11 у неё разрешено ТОЙ ЖЕ формой, что "
+            "у тумблера группы ниже. Цель правки — `#sched-{{ s.id }}` способом "
+            "`outerHTML`, а внеполосное СНЯТИЕ карточки с тем же идентификатором "
+            "живёт в ответе УДАЛЕНИЯ расписания "
+            "(`ads/partials/sched_delete_response.html`), который идёт через панель "
+            "подтверждения с `hx-swap=\"none\"` и основного свопа не имеет. Это "
+            "РАЗНЫЕ ответы, а не две подмены одного: ответ правки внеполосного узла "
+            "`#sched-N` не несёт, ответ удаления не подменяет карточку основным "
+            "свопом. Правило двух ролей не снимается. "
             "ЦЕЛЬ ПРИХОДИТ ПАРАМЕТРОМ МАКРОСА-ОБЁРТКИ И В МНОЖЕСТВО ЛИТЕРАЛЬНЫХ "
             "ЦЕЛЕЙ НЕ ПОПАДАЕТ. Разборщик читает файл, в котором атрибут "
             "написан текстом, а здесь он написан выражением `{{ target }}` — "
@@ -3591,7 +3622,13 @@ def _offenders_unreachable_blocking_target(
 # ЛЕТОПИСЬ: 0 → 1, Фаза 9, план 09-10 (форма тумблера экрана групп —
 # единственный сегодняшний блочный вызов макроса-обёртки). Фаза 10 (FORM-06)
 # доводит число вызовов до сорока семи, и это число двигается вместе с ними.
-UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED = 1
+#
+# 1 → 2, Фаза 11, план 11-01: форма правки карточки расписания в редакторе
+# объявления — второй блочный вызов обёртки; её цель блокировки — умолчание
+# макроса, и кнопки отправки лежат в слоте формы. ПОСТАВЛЕНО ПРОГОНОМ
+# покрасневшего `test_no_caller_declares_a_blocking_target_its_form_cannot_have`,
+# дословно: `блоков вызова макроса-обёртки разобрано 2, объявлено 1`.
+UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED = 2
 
 # Опора подстановки, доказывающей зубы правила В ЕГО СОБСТВЕННОМ ТЕЛЕ. Выбрана
 # ЗА УНИКАЛЬНОСТЬ в строке группы аккаунта: `_tree_with` требует ровно одного
