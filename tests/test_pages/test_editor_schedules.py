@@ -539,6 +539,103 @@ async def test_a_malformed_expansion_field_is_dropped_instead_of_crashing(
     assert (await _reload(db_session, schedule.id)).is_active is False
 
 
+# --- Фаза 11, план 11-03: тумблер расписания на слое ответа -------------------
+#
+# Тумблер в редакторе на htmx отвечает КАРТОЧКОЙ `#sched-N` (D-02), и раскрытие
+# в ней берётся из скрытого поля разворота, а не из идентификатора нажатой
+# карточки (D-12(а)). Путь без htmx остаётся прежним перенаправлением.
+
+HTMX_FORM_HEADERS = {**FORM_HEADERS, "HX-Request": "true"}
+
+
+@pytest.mark.asyncio
+async def test_schedule_toggle_over_htmx_keeps_the_expanded_neighbour(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Раскрыта A, нажат тумблер B: во фрагменте B СВЁРНУТА, путь деградации — на A.
+
+    Фрагмент несёт ровно карточку B: A на экране не трогается (цель подмены —
+    `#sched-B`), и раскрытой она остаётся потому, что её не подменяют. Свёрнутость
+    B утверждается отсутствием формы сохранения — её рисует только раскрытая
+    карточка.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    group = await _seed_group(db_session, owner.id, account.id)
+    first = await _seed_schedule(db_session, ad.id, account.id, group_ids=[group.id])
+    second = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[group.id], times=["21:00"]
+    )
+    body = _form([("return_to", "editor"), ("keep_sched", str(first.id))])
+
+    degraded = await authed_client.post(
+        f"/schedules/{second.id}/toggle",
+        content=body,
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    assert degraded.status_code == 302
+    assert degraded.headers["location"] == (
+        f"/ads/{ad.id}/edit?sched={first.id}#sched-{first.id}"
+    )
+    assert (await _reload(db_session, second.id)).is_active is False
+
+    response = await authed_client.post(
+        f"/schedules/{second.id}/toggle",
+        content=body,
+        headers=HTMX_FORM_HEADERS,
+        follow_redirects=False,
+    )
+    assert response.status_code == 200, (
+        f"тумблер на htmx ответил {response.status_code} вместо фрагмента карточки"
+    )
+    assert "<!DOCTYPE" not in response.text, "слою письма приехал целый документ"
+    assert f'id="sched-{second.id}"' in response.text, "во фрагменте нет карточки B"
+    assert f'id="sched-{first.id}"' not in response.text, (
+        "фрагмент принёс соседнюю карточку — цель подмены одна"
+    )
+    assert f'action="/schedules/{second.id}/edit"' not in response.text, (
+        "карточка B РАЗВЕРНУЛАСЬ от нажатия собственного тумблера"
+    )
+    assert (await _reload(db_session, second.id)).is_active is True
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_resume_over_htmx_returns_the_unchanged_card(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Неполное выключенное расписание: фрагмент несёт СЕРВЕРНОЕ состояние.
+
+    Браузер переключает флажок оптимистично; ответ, не несущий флажка без
+    `checked`, оставил бы на экране «включено» при выключенной строке (D-11,
+    D-13/D-16 Фазы 9).
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id, is_active=False)
+
+    response = await authed_client.post(
+        f"/schedules/{schedule.id}/toggle",
+        content=_form([("return_to", "editor"), ("is_active", "1")]),
+        headers=HTMX_FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200, (
+        f"заблокированное возобновление на htmx ответило {response.status_code} "
+        "вместо карточки"
+    )
+    toggle_input = re.search(
+        rf'<input[^>]*id="sched-toggle-{schedule.id}"[^>]*>', response.text
+    )
+    assert toggle_input, "во фрагменте нет флажка тумблера карточки"
+    assert "checked" not in toggle_input.group(0), (
+        "флажок во фрагменте включён, а расписание выключено — ответ повторил "
+        "оптимистичное состояние браузера"
+    )
+    assert (await _reload(db_session, schedule.id)).is_active is False
+
+
 @pytest.mark.asyncio
 async def test_delete_from_editor_returns_to_the_editor_and_removes_the_schedule(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User

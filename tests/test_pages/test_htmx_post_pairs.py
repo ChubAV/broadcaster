@@ -65,6 +65,7 @@ from tests.test_pages.test_confirm_delete_transport import (
 from tests.test_pages.test_editor_schedules import (
     _seed_account as _seed_editor_account,
     _seed_ad as _seed_editor_ad,
+    _seed_group as _seed_editor_group,
     _seed_schedule,
 )
 from tests.test_pages.test_htmx_gates import _pages_sources, _post_handlers
@@ -202,6 +203,60 @@ async def _arrange_edit_without_marker(client, db, settings, identity) -> _Arran
 
 
 # =============================================================================
+# Посев: тумблер расписания (Фаза 11, план 11-03)
+# =============================================================================
+
+SCHEDULES_TOGGLE = "app/pages/schedules.py::schedules_toggle"
+
+
+async def _arrange_toggle_editor_success(client, db, settings, identity) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    ad, _, schedule = await _seed_editor_schedule(db, user.id)
+    return _Arranged(
+        url=f"/schedules/{schedule.id}/toggle",
+        data={"return_to": "editor"},
+        landing_args={"ad_id": ad.id, "schedule_id": schedule.id},
+    )
+
+
+async def _arrange_toggle_out_of_domain(client, db, settings, identity) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    ad = await _seed_editor_ad(db, user.id)
+    account = await _seed_editor_account(db, user.id)
+    group = await _seed_editor_group(db, user.id, account.id)
+    # По составу полное, по значениям неисполнимое: день `9` не день недели
+    # (CR-01). Возобновление отказывает кодом реестра.
+    schedule = await _seed_schedule(
+        db,
+        ad.id,
+        account.id,
+        group_ids=[group.id],
+        days=[9],
+        times=["10:00"],
+        is_active=False,
+    )
+    return _Arranged(
+        url=f"/schedules/{schedule.id}/toggle",
+        data={"return_to": "editor"},
+        landing_args={"ad_id": ad.id},
+    )
+
+
+async def _arrange_toggle_missing(client, db, settings, identity) -> _Arranged:
+    return _Arranged(
+        url=f"/schedules/{MISSING_SCHEDULE_ID}/toggle",
+        data={"return_to": "editor"},
+    )
+
+
+async def _arrange_toggle_from_list(client, db, settings, identity) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    _, _, schedule = await _seed_editor_schedule(db, user.id)
+    # Строка сводного списка признака возврата не шлёт.
+    return _Arranged(url=f"/schedules/{schedule.id}/toggle", data={})
+
+
+# =============================================================================
 # Посев: тумблер группы аккаунта (Фаза 9)
 # =============================================================================
 
@@ -280,6 +335,44 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/schedules",
         transport=LOCATION,
     ),
+    # Фаза 11, план 11-03. Тумблер расписания: в редакторе карточка подменяет
+    # саму себя с серверным состоянием (D-02, D-11).
+    _PairCase(
+        key=SCHEDULES_TOGGLE,
+        name="тумблер расписания — успех в редакторе",
+        identity="user",
+        arrange=_arrange_toggle_editor_success,
+        landing="/ads/{ad_id}/edit",
+        transport=FRAGMENT,
+        fragment_mark='id="sched-{schedule_id}"',
+    ),
+    # Исход уводит с экрана тем же кодом реестра, что и без htmx (D-06).
+    _PairCase(
+        key=SCHEDULES_TOGGLE,
+        name="тумблер расписания — значения вне области",
+        identity="user",
+        arrange=_arrange_toggle_out_of_domain,
+        landing="/ads/{ad_id}/edit?notice=" + notices.SCHEDULE_VALUES_OUT_OF_DOMAIN,
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=SCHEDULES_TOGGLE,
+        name="тумблер расписания — расписания нет",
+        identity="user",
+        arrange=_arrange_toggle_missing,
+        landing="/schedules",
+        transport=LOCATION,
+    ),
+    # Строка сводного списка: фрагмент строки приносит план 11-04, до него —
+    # переход на тот же адрес, что уезжает 302.
+    _PairCase(
+        key=SCHEDULES_TOGGLE,
+        name="тумблер расписания — со сводного списка",
+        identity="user",
+        arrange=_arrange_toggle_from_list,
+        landing="/schedules",
+        transport=LOCATION,
+    ),
     # Фаза 9, план 09-01, заведено планом 11-01. Первый фрагментный обработчик
     # вехи; в `CONFIRMED_DELETE_ROUTES` его нет (за панелью подтверждения он не
     # стоит), и без этой записи замыкание называет его непокрытым.
@@ -299,7 +392,10 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   в редакторе объявления и успех тумблера группы аккаунта.
 #   6 → 7, Фаза 11, план 11-02: правка с идентификатором расписания вне колонки
 #   (D-07) — та же ветка, что у отсутствующего расписания.
-POST_PAIR_CASES_DECLARED = 7
+#   7 → 11, Фаза 11, план 11-03: четыре исхода переключения расписания — успех
+#   в редакторе (фрагмент), значения вне области, расписания нет и строка
+#   сводного списка (переход).
+POST_PAIR_CASES_DECLARED = 11
 
 
 def _case_id(case: _PairCase) -> str:
