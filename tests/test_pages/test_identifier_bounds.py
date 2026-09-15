@@ -21,6 +21,7 @@ import pathlib
 import re
 import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 
 import pytest
 from httpx import AsyncClient
@@ -1195,6 +1196,21 @@ CATALOGUE_APPENDIX_DECLARED = 10
 # половины входов) краснело здесь, а не зеленело пустым перечнем.
 BOUNDED_ALIAS_ROOTS_DECLARED = 3
 
+# ЧИСЛО КОРНЕВЫХ POST-ПСЕВДОНИМОВ НЕЙТРАЛЬНОГО МОДУЛЯ — псевдонимов БЕЗ границы
+# фреймворка (`PostIdPath`, `PostIdForm`, `OptionalPostIdForm`), заведённых
+# решением D-07 Фазы 11 (план 11-02). Перечень СОБИРАЕТСЯ ЧТЕНИЕМ того же
+# модуля, что и перечень ограниченных, и по той же причине: выписанная копия
+# разошлась бы с модулем молча. Исчезновение псевдонима краснеет здесь, а не
+# зеленеет пустым перечнем — правило «проверка первым использованием» на пустом
+# перечне не стерегло бы ни одного входа.
+#
+# ЛЕТОПИСЬ: 0 → 3, Фаза 11, план 11-02, задача 1.
+POST_ALIAS_ROOTS_DECLARED = 3
+
+# ЕДИНСТВЕННЫЙ ПОМОЩНИК ПРОВЕРКИ ВНУТРИ ОБРАБОТЧИКА (D-07: один на проект).
+# Имя стоит константой затем, чтобы разбор и текст отказа называли одно и то же.
+FIRST_USE_CHECK_HELPER = "id_in_column"
+
 
 @dataclass(frozen=True)
 class _AppendixEntry:
@@ -1476,6 +1492,121 @@ def bounded_alias_roots(app_sources: dict[str, str]) -> frozenset[str]:
     )
 
 
+_DECLARATORS = frozenset({"Path", "Form", "Query"})
+
+
+def _is_an_unbounded_declarator(node: ast.AST) -> bool:
+    """Вызов объявителя (`Path`/`Form`/`Query`) БЕЗ `ge=`/`le=` — признак POST-псевдонима."""
+    if not isinstance(node, ast.Call):
+        return False
+    name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+    if name not in _DECLARATORS:
+        return False
+    return not any(keyword.arg in {"ge", "le"} for keyword in node.keywords)
+
+
+def post_alias_roots(app_sources: dict[str, str]) -> frozenset[str]:
+    """Корневые POST-псевдонимы НЕЙТРАЛЬНОГО модуля: `Annotated[...]` с объявителем без границы.
+
+    ⚠️ ПРИЗНАК — ОТСУТСТВИЕ ГРАНИЦЫ У ОБЪЯВИТЕЛЯ, А НЕ ИМЯ. Узнавание по префиксу
+    `Post` зеленело бы на псевдониме, который кто-то назвал иначе, и краснело бы
+    на ограниченном, названном «Post…» по ошибке; предмет правила — есть ли у
+    величины граница фреймворка, и признак снят ровно с него.
+    """
+    owner_tree = ast.parse(app_sources[BOUND_OWNER])
+    roots: set[str] = set()
+    for name, value in _module_level_assignments(owner_tree):
+        metadata = _annotated_metadata(value)
+        if any(_call_declares_the_bound(meta) for meta in metadata):
+            continue
+        if any(_is_an_unbounded_declarator(meta) for meta in metadata):
+            roots.add(name)
+    return frozenset(roots)
+
+
+def post_alias_names(app_sources: dict[str, str]) -> frozenset[str]:
+    """POST-псевдонимы с перенятыми именами потребителей — до неподвижной точки по `app/`.
+
+    Разрешение то же, что у `bounded_alias_names`, и по той же причине:
+    потребитель вправе завести своё имя (`ScheduleIdPath = PostIdPath`), и
+    разбор, видящий только корни, выронил бы его входы из вселенной.
+    """
+    known = set(post_alias_roots(app_sources))
+    trees = {module: ast.parse(text) for module, text in sorted(app_sources.items())}
+    while True:
+        grown = set(known)
+        for _module, tree in trees.items():
+            for name, value in _module_level_assignments(tree):
+                if isinstance(value, ast.Name) and value.id in known:
+                    grown.add(name)
+        if grown == known:
+            return frozenset(known)
+        known = grown
+
+
+@lru_cache(maxsize=1)
+def _real_post_alias_names() -> frozenset[str]:
+    """POST-псевдонимы НАСТОЯЩЕГО дерева — для разборов, которым их не подали явно."""
+    return post_alias_names(_app_sources())
+
+
+def _names_an_alias(annotation: ast.AST | None, names: frozenset[str]) -> bool:
+    """Объявлен ли параметр одним из имён — голым именем либо первым элементом `Annotated`."""
+    if annotation is None:
+        return False
+    if isinstance(annotation, ast.Name):
+        return annotation.id in names
+    if isinstance(annotation, ast.Subscript):
+        head = annotation.value
+        if (getattr(head, "id", None) or getattr(head, "attr", None)) == "Annotated":
+            sliced = annotation.slice
+            first = sliced.elts[0] if isinstance(sliced, ast.Tuple) else sliced
+            return isinstance(first, ast.Name) and first.id in names
+    return False
+
+
+def _first_use_is_checked(handler: ast.AST, name: str) -> bool:
+    """Первое по ТЕКСТУ чтение имени в теле обработчика — аргумент `id_in_column`?
+
+    ⚠️ ПОРЯДОК — ПОЗИЦИЯ В ИСХОДНИКЕ (строка, столбец), А НЕ ПОРЯДОК ОБХОДА
+    `ast.walk`: тот идёт вширь и поставил бы операнд вложенного `select` позже
+    вызова помощника, стоящего ниже по тексту. Чтение, которого нет вовсе,
+    проверкой НЕ считается: вход без проверки есть вход без границы, даже если
+    сегодня он в запрос не уходит — завтрашняя строка отправит его туда молча.
+
+    ⚠️ НАЗВАННАЯ ГРАНИЦА ПРИЗНАКА. Позиция в тексте совпадает с порядком
+    исполнения для последовательных операторов, но не для условного выражения
+    (`a if id_in_column(x) else b` исполняет условие раньше, чем стоящее левее
+    `a`). Форма «проверка отдельным оператором в начале тела» признаком
+    принимается всегда; условное выражение, где операнд запроса стоит левее
+    проверки, признак объявит нарушением — ложный красный, а не ложный зелёный.
+    """
+    parents: dict[int, ast.AST] = {}
+    loads: list[ast.Name] = []
+    for statement in getattr(handler, "body", []):
+        for node in ast.walk(statement):
+            for child in ast.iter_child_nodes(node):
+                parents[id(child)] = node
+            if (
+                isinstance(node, ast.Name)
+                and node.id == name
+                and isinstance(node.ctx, ast.Load)
+            ):
+                loads.append(node)
+    if not loads:
+        return False
+    first = min(loads, key=lambda node: (node.lineno, node.col_offset))
+    parent = parents.get(id(first))
+    if not isinstance(parent, ast.Call):
+        return False
+    callee = getattr(parent.func, "id", None) or getattr(parent.func, "attr", None)
+    if callee != FIRST_USE_CHECK_HELPER:
+        return False
+    return any(argument is first for argument in parent.args) or any(
+        keyword.value is first for keyword in parent.keywords
+    )
+
+
 def _route_declarations(handler: ast.AST) -> list[tuple[str, str]]:
     """Пары «метод → путь», объявленные декораторами обработчика.
 
@@ -1525,6 +1656,12 @@ class _CatalogueParameter:
     named_like_identifier: bool
     declared_integer: bool
     carries_the_bound: bool
+    # Поля D-07 (Фаза 11, план 11-02): объявлен ли параметр POST-псевдонимом,
+    # объявлены ли у обработчика ТОЛЬКО маршруты POST, и стоит ли проверка
+    # первым использованием параметра в теле.
+    post_alias: bool = False
+    post_only: bool = False
+    first_use_checked: bool = False
 
 
 def _declares_an_integer(annotation: ast.AST | None, aliases: frozenset[str]) -> bool:
@@ -1579,9 +1716,20 @@ def _carries_the_bound(
 
 
 def catalogue_parameters(
-    sources: dict[str, str], aliases: frozenset[str]
+    sources: dict[str, str],
+    aliases: frozenset[str],
+    post_aliases: frozenset[str] | None = None,
 ) -> list[_CatalogueParameter]:
-    """ВСЕ параметры ВСЕХ обработчиков маршрутов каталога — по дереву разбора."""
+    """ВСЕ параметры ВСЕХ обработчиков маршрутов каталога — по дереву разбора.
+
+    ⚠️ POST-ПСЕВДОНИМ ОБЪЯВЛЯЕТ ЦЕЛОЕ (D-07, план 11-02). Без этого вход,
+    переведённый на псевдоним без границы фреймворка, выпал бы из вселенной в
+    приложение — и число вселенной сдвинулось бы от перевода, которого оно не
+    касается. Не поданный явно перечень берётся с настоящего дерева.
+    """
+    if post_aliases is None:
+        post_aliases = _real_post_alias_names()
+    integer_aliases = aliases | post_aliases
     found: list[_CatalogueParameter] = []
     for module, text in sorted(sources.items()):
         try:
@@ -1602,6 +1750,7 @@ def catalogue_parameters(
             for _method, path in routes:
                 placeholders |= set(_ROUTE_PLACEHOLDER.findall(path))
             printed = tuple(f"{method} {path}" for method, path in routes)
+            post_only = all(method == "POST" for method, _path in routes)
 
             args = node.args
             positional = list(args.posonlyargs) + list(args.args)
@@ -1631,10 +1780,15 @@ def catalogue_parameters(
                         named_like_identifier=bool(
                             _IDENTIFIER_NAME_MARK.search(argument.arg)
                         ),
-                        declared_integer=_declares_an_integer(argument.annotation, aliases),
+                        declared_integer=_declares_an_integer(
+                            argument.annotation, integer_aliases
+                        ),
                         carries_the_bound=_carries_the_bound(
                             argument.annotation, defaults.get(argument.arg), aliases
                         ),
+                        post_alias=_names_an_alias(argument.annotation, post_aliases),
+                        post_only=post_only,
+                        first_use_checked=_first_use_is_checked(node, argument.arg),
                     )
                 )
     return found
@@ -1659,12 +1813,14 @@ def _is_watched(parameter: _CatalogueParameter) -> bool:
 
 
 def catalogue_universe(
-    sources: dict[str, str], aliases: frozenset[str]
+    sources: dict[str, str],
+    aliases: frozenset[str],
+    post_aliases: frozenset[str] | None = None,
 ) -> list[_CatalogueParameter]:
     """ВСЕЛЕННАЯ: объявлен целым И (стоит в пути ЛИБО назван идентификатором)."""
     return [
         parameter
-        for parameter in catalogue_parameters(sources, aliases)
+        for parameter in catalogue_parameters(sources, aliases, post_aliases)
         if parameter.declared_integer
         and (parameter.in_path or parameter.named_like_identifier)
         and parameter.name not in PAGINATION_EXCLUSION_NAMES
@@ -1698,14 +1854,78 @@ def catalogue_appendix(
 
 
 def unbounded_universe_entries(
-    sources: dict[str, str], aliases: frozenset[str]
+    sources: dict[str, str],
+    aliases: frozenset[str],
+    post_aliases: frozenset[str] | None = None,
 ) -> list[_CatalogueParameter]:
-    """Входы вселенной, НЕ несущие границы."""
+    """Входы вселенной, НЕ несущие границы.
+
+    ⚠️ ПОКОЛЕНИЕ (Фаза 11, план 11-02, решение D-07). Прежде предметом было
+    «граница ОБЪЯВЛЕНА в сигнатуре» у КАЖДОГО входа. Для POST-входа,
+    объявленного POST-псевдонимом на обработчике только с маршрутами POST,
+    судьёй теперь служит `unchecked_post_identifier_entries` (проверка первым
+    использованием), и этот перечень его не повторяет. Всё остальное — GET,
+    POST-псевдоним на не-POST маршруте, голое `int` на POST — судится здесь
+    как прежде.
+    """
     return [
         parameter
-        for parameter in catalogue_universe(sources, aliases)
+        for parameter in catalogue_universe(sources, aliases, post_aliases)
         if not parameter.carries_the_bound
+        and not (parameter.post_alias and parameter.post_only)
     ]
+
+
+def unchecked_post_identifier_entries(
+    sources: dict[str, str],
+    aliases: frozenset[str],
+    post_aliases: frozenset[str] | None = None,
+) -> list[tuple[_CatalogueParameter, str]]:
+    """POST-псевдонимы вселенной, судимые правилом «проверка первым использованием».
+
+    Два нарушения и два текста: псевдоним без границы на маршруте не-POST
+    (у GET нет формы отказа по классу действия — RESEARCH OQ4, ограниченный
+    псевдоним там обязателен), и первое чтение параметра, не являющееся
+    аргументом `id_in_column` (величина уходит в запрос раньше проверки —
+    Landmine CONTEXT Фазы 11).
+    """
+    found: list[tuple[_CatalogueParameter, str]] = []
+    for parameter in catalogue_universe(sources, aliases, post_aliases):
+        if not parameter.post_alias:
+            continue
+        if not parameter.post_only:
+            found.append((parameter, "POST-псевдоним без границы на маршруте не-POST"))
+        elif not parameter.first_use_checked:
+            found.append(
+                (
+                    parameter,
+                    f"первое чтение параметра не есть аргумент `{FIRST_USE_CHECK_HELPER}`",
+                )
+            )
+    return found
+
+
+def assert_every_post_identifier_is_checked_before_its_first_use(
+    sources: dict[str, str],
+    aliases: frozenset[str],
+    post_aliases: frozenset[str] | None = None,
+) -> None:
+    """ТЕКСТ ОТКАЗА (в): POST-вход без границы фреймворка не проверен первым использованием."""
+    found = unchecked_post_identifier_entries(sources, aliases, post_aliases)
+    assert found == [], (
+        "POST-ВХОД СТРАНИЧНОГО СЛОЯ БЕЗ ГРАНИЦЫ ФРЕЙМВОРКА НЕ ПРОВЕРЕН ДО ПЕРВОГО "
+        "ИСПОЛЬЗОВАНИЯ: "
+        + "; ".join(
+            f"{parameter.module} :: {' / '.join(parameter.routes)} :: "
+            f"{parameter.handler}({parameter.name}: {parameter.annotation}) — {reason}"
+            for parameter, reason in sorted(found, key=lambda item: item[0].key)
+        )
+        + f". Первое чтение параметра обязано быть аргументом `{FIRST_USE_CHECK_HELPER}` "
+        f"из {BOUND_OWNER}, стоящим ДО любого запроса (D-07 Фазы 11): величина вне "
+        "колонки, ушедшая операндом сравнения, роняет обработчик отказом драйвера "
+        "(`500` на PostgreSQL). На маршруте не-POST объявите параметр ограниченным "
+        "псевдонимом (`IdPath`/`IdForm`/`OptionalIdForm`)"
+    )
 
 
 # =============================================================================
@@ -1864,6 +2084,37 @@ def test_the_recognised_bound_aliases_come_from_a_single_place():
     )
 
 
+def test_every_post_identifier_is_checked_before_its_first_use():
+    """КАЖДЫЙ POST-вход на псевдониме без границы проверен ПЕРВЫМ использованием.
+
+    ⚠️ ПОКОЛЕНИЕ ПРЕДМЕТА (Фаза 11, план 11-02, решение D-07). Прежде правило
+    полноты требовало от КАЖДОГО идентификатора «объявления в сигнатуре»: граница
+    `ge=`/`le=` стояла в аннотации, и форму отказа выбирал фреймворк
+    (`{"detail": …}` без заголовка перехода) — ровно расхождение с D-01,
+    записанное окном 51. Для POST-входов предмет сменился на «объявление ЛИБО
+    проверка первым использованием»: граница уезжает внутрь обработчика, но
+    ослабнуть не вправе — проверка обязана стоять ДО того, как величина уйдёт в
+    запрос. GET-входы судятся прежним правилом без изменений.
+
+    Антивакуум — число корневых POST-псевдонимов: на пустом перечне правило
+    молчало бы по построению.
+    """
+    app_sources = _app_sources()
+    roots = post_alias_roots(app_sources)
+    assert len(roots) == POST_ALIAS_ROOTS_DECLARED, (
+        f"корневых POST-псевдонимов в {BOUND_OWNER} найдено {len(roots)} "
+        f"({sorted(roots)}), объявлено {POST_ALIAS_ROOTS_DECLARED}. Псевдоним ИСЧЕЗ "
+        "— входы на нём перестали узнаваться целыми и выпали из вселенной; "
+        "псевдоним ДОБАВЛЕН — это решение о новом способе передачи, а не правка числа"
+    )
+
+    sources = _catalogue_sources()
+    aliases = bounded_alias_names(app_sources)
+    assert_every_post_identifier_is_checked_before_its_first_use(
+        sources, aliases, post_alias_names(app_sources)
+    )
+
+
 def test_every_appendix_entry_is_still_outside_the_universe():
     """ЗАПИСЬ ПРИЛОЖЕНИЯ НЕ ПЕРЕЖИВЁТ СВОЕГО ОСНОВАНИЯ.
 
@@ -1990,3 +2241,133 @@ def test_control_an_empty_catalogue_reddens_the_universe_rule():
     # И правило полноты на том же пустом наборе МОЛЧИТ — что и есть причина, по
     # которой объявленное число стои́т рядом с ним, а не вместо него.
     assert unbounded_universe_entries({}, aliases) == []
+
+
+# Контроли правила «проверка первым использованием» (Фаза 11, план 11-02, D-07).
+
+_SYNTHETIC_POST_IDENTIFIER_CHECKS = '''
+from fastapi import APIRouter, Request
+from sqlalchemy import select
+from app.pages.identifiers import OptionalPostIdForm, PostIdPath, id_in_column
+
+router = APIRouter()
+
+
+@router.post("/widgets/{widget_id}/delete")
+async def widgets_delete(request: Request, widget_id: PostIdPath):
+    """Проверка НИЖЕ первого использования: величина уже ушла в запрос."""
+    await session.execute(select(Widget).where(Widget.id == widget_id))
+    if not id_in_column(widget_id):
+        return None
+    return None
+
+
+@router.post("/gadgets/{gadget_id}/delete")
+async def gadgets_delete(
+    request: Request, gadget_id: PostIdPath, owner_id: OptionalPostIdForm = None
+):
+    """Проверка ПЕРВЫМ использованием у обоих входов: правило обязано промолчать."""
+    if not id_in_column(gadget_id) or not id_in_column(owner_id, optional=True):
+        return None
+    await session.execute(
+        select(Gadget).where(Gadget.id == gadget_id, Gadget.owner_id == owner_id)
+    )
+    return None
+'''
+
+_SYNTHETIC_POST_ALIAS_ON_A_GET_ROUTE = '''
+from fastapi import APIRouter, Request
+from app.pages.identifiers import PostIdPath, id_in_column
+
+router = APIRouter()
+
+
+@router.get("/widgets/{widget_id}")
+async def widgets_show(request: Request, widget_id: PostIdPath):
+    """POST-псевдоним на GET — даже при проверке первым использованием."""
+    if not id_in_column(widget_id):
+        return None
+    return None
+'''
+
+
+def _post_aliases_for_controls() -> tuple[frozenset[str], frozenset[str]]:
+    app_sources = _app_sources()
+    return bounded_alias_names(app_sources), post_alias_names(app_sources)
+
+
+def test_control_a_check_below_the_first_use_reddens_the_catalogue_rule():
+    """ЧТО ДОКАЗЫВАЕТ: проверка НИЖЕ `select` краснеет и НАЗЫВАЕТ вход; проверка первой — нет.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ перенос границы внутрь обработчика мог бы ОСЛАБИТЬ
+    защиту от переполнения колонки незаметно: вызов помощника присутствовал бы,
+    но стоял бы после запроса, и `500` на PostgreSQL вернулся бы на зелёной суите.
+    """
+    aliases, post_aliases = _post_aliases_for_controls()
+    sources = {"app/pages/widgets.py": _SYNTHETIC_POST_IDENTIFIER_CHECKS}
+
+    universe = catalogue_universe(sources, aliases, post_aliases)
+    assert {parameter.name for parameter in universe} == {
+        "widget_id",
+        "gadget_id",
+        "owner_id",
+    }, (
+        "разборщик не узнал POST-псевдонимы целыми: "
+        f"{sorted(parameter.key for parameter in universe)} — контроль проверял бы "
+        "дерево, в котором испытуемых входов нет"
+    )
+
+    found = unchecked_post_identifier_entries(sources, aliases, post_aliases)
+    assert [parameter.name for parameter, _reason in found] == ["widget_id"], (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО ПРОВЕРКИ НИЖЕ ПЕРВОГО ИСПОЛЬЗОВАНИЯ либо назвало "
+        f"проверенные входы: {sorted(parameter.key for parameter, _reason in found)}"
+    )
+    assert unbounded_universe_entries(sources, aliases, post_aliases) == [], (
+        "прежнее правило полноты судит POST-вход на POST-псевдониме повторно — "
+        "у одного нарушения было бы два текста, ведущих в разные места"
+    )
+
+    with pytest.raises(AssertionError) as complaint:
+        assert_every_post_identifier_is_checked_before_its_first_use(
+            sources, aliases, post_aliases
+        )
+    text = str(complaint.value)
+    for expected in (
+        "app/pages/widgets.py",
+        "POST /widgets/{widget_id}/delete",
+        "widget_id",
+        FIRST_USE_CHECK_HELPER,
+    ):
+        assert expected in text, f"текст отказа не называет {expected!r}: {text}"
+    assert "gadget_id" not in text and "owner_id" not in text, (
+        "текст отказа назвал входы, проверенные первым использованием: " + text
+    )
+
+
+def test_control_a_post_alias_on_a_get_route_reddens_the_catalogue_rule():
+    """ЧТО ДОКАЗЫВАЕТ: псевдоним без границы допустим ТОЛЬКО на POST.
+
+    У GET нет формы отказа по классу действия (RESEARCH OQ4), и граница там
+    остаётся объявлением в сигнатуре; перевод GET-входа на POST-псевдоним снял бы
+    её молча — даже при проверке первым использованием.
+    """
+    aliases, post_aliases = _post_aliases_for_controls()
+    sources = {"app/pages/widgets.py": _SYNTHETIC_POST_ALIAS_ON_A_GET_ROUTE}
+
+    found = unchecked_post_identifier_entries(sources, aliases, post_aliases)
+    assert [parameter.name for parameter, _reason in found] == ["widget_id"], (
+        "ПРАВИЛО ПРОПУСТИЛО POST-ПСЕВДОНИМ НА GET: "
+        f"{sorted(parameter.key for parameter, _reason in found)}"
+    )
+    assert [
+        parameter.name
+        for parameter in unbounded_universe_entries(sources, aliases, post_aliases)
+    ] == ["widget_id"], "прежнее правило полноты обязано по-прежнему видеть GET-вход без границы"
+
+    with pytest.raises(AssertionError) as complaint:
+        assert_every_post_identifier_is_checked_before_its_first_use(
+            sources, aliases, post_aliases
+        )
+    text = str(complaint.value)
+    for expected in ("app/pages/widgets.py", "GET /widgets/{widget_id}", "не-POST"):
+        assert expected in text, f"текст отказа не называет {expected!r}: {text}"
