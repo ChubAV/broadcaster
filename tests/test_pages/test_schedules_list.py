@@ -886,3 +886,92 @@ async def test_toggling_does_not_move_the_card(
         after_html.index(f'id="schedule-toggle-{middle.id}"') :
     ].split(">", 1)[0]
     assert "checked" not in toggle, "тумблер показывает состояние, которого нет в базе"
+
+
+# =============================================================================
+# План 11-04: КЛЮЧЕВОЙ КУРСОР СВОДНОГО СПИСКА (D-11)
+# =============================================================================
+#
+# Основание — CR-01 Фазы 9, воспроизведённый на этом экране. Смещённый курсор
+# отсчитывает ПОРЯДКОВЫЙ НОМЕР по СЕГОДНЯШНЕЙ выдаче; фрагментный тумблер под
+# фильтром состояния выводит строку ИЗ выдачи, выдача сдвигается на единицу, и
+# порция по адресу, снятому ДО нажатия, пропускает ровно одну строку. Ключевой
+# курсор считает от ИДЕНТИФИКАТОРА последней отрисованной строки, и сдвиг
+# выдачи его не двигает — класс отказа становится НЕВЫРАЗИМЫМ формой контракта,
+# а не ловится сверкой.
+
+# Сентинел бесконечной прокрутки — единственный `hx-get`, ведущий на порцию
+# этого раздела.
+SENTINEL_RE = re.compile(r'hx-get="([^"]*/schedules/partial\?[^"]*)"')
+
+
+def _sentinel_url(html: str) -> str:
+    """Адрес следующей порции — ТОТ, КОТОРЫЙ ДАЛА СТРАНИЦА, а не собранный тестом.
+
+    Тест, собирающий адрес сам, знает форму курсора наизусть: на смене формы он
+    покраснел бы «нет смещения», то есть обвинил бы ФОРМУ вместо разорванной
+    цепочки. Ровно это основание записано у `test_infinite_scroll_chain`
+    (tests/test_pages/test_htmx_preserved.py, план 09-13), и здесь оно то же.
+    """
+    urls = SENTINEL_RE.findall(html)
+    assert urls, "сентинела бесконечной прокрутки нет на странице"
+    return urls[-1]
+
+
+@pytest.mark.asyncio
+async def test_the_next_portion_does_not_skip_a_row_after_a_toggle_under_the_state_filter(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-11: тумблер под фильтром состояния не съедает строку следующей порции.
+
+    ⚠️ АДРЕС ПОРЦИИ СНИМАЕТСЯ ДО НАЖАТИЯ, И ЭТО НЕ УДОБСТВО ТЕСТА, А ТО, КАК
+    ДЕРЖИТ ЕГО БРАУЗЕР. Сентинел отрисован ПЕРВОЙ порцией и переживает нажатие:
+    человек, поставивший строку на паузу и докрутивший до низа, уходит на сервер
+    по адресу, вычисленному до того, как выдача сдвинулась.
+
+    Предмет теста — КУРСОР, а не форма ответа тумблера: запись паузы исполняется
+    при любом ответе, поэтому утверждается состояние в базе, а не код ответа.
+    """
+    ad = await _seed_ad(db_session, title="Объявление под фильтром состояния")
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа под фильтром состояния")
+    seeded = [
+        (
+            await _seed_schedule(
+                db_session, ad, account, group_ids=[group.id], is_active=True
+            )
+        ).id
+        for _ in range(PAGE_SIZE + 5)
+    ]
+
+    first = await authed_client.get("/schedules?state=active")
+    assert first.status_code == 200
+    assert _card_ids(first.text) == seeded[:PAGE_SIZE], (
+        "первая порция под фильтром отдана не по порядку"
+    )
+    sentinel = _sentinel_url(first.text)
+
+    # Пауза строки ИЗ ПЕРВОЙ порции запросом со сводного списка (признака
+    # возврата строка не шлёт): под фильтром `active` строка выходит из выдачи.
+    paused_id = seeded[0]
+    response = await authed_client.post(
+        f"/schedules/{paused_id}/toggle",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 204), (
+        f"тумблер со сводного списка ответил {response.status_code} слою письма"
+    )
+    paused_row = await db_session.get(Schedule, paused_id)
+    await db_session.refresh(paused_row)
+    assert paused_row.is_active is False, "тумблер не поставил строку на паузу"
+
+    rest = await authed_client.get(sentinel)
+    assert rest.status_code == 200
+
+    assert _card_ids(rest.text) == seeded[PAGE_SIZE:], (
+        "следующая порция потеряла строку: курсор отсчитывает СМЕЩЕНИЕ по "
+        "выдаче, из которой тумблер вывел строку первой порции — дословно CR-01 "
+        "Фазы 9 (D-11). Ключевой курсор считает от идентификатора последней "
+        "отрисованной строки и сдвигом выдачи не двигается"
+    )
