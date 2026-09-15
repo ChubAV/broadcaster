@@ -1242,9 +1242,40 @@ async def schedules_toggle(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Переключение расписания — на слое ответа (Фаза 11, план 11-03).
+
+    ⚠️ СОБСТВЕННОГО ПЕРЕНАПРАВЛЕНИЯ У ОБРАБОТЧИКА НЕТ НИ В ОДНОЙ ВЕТКЕ (G-2).
+    Имена прежних помощников-перенаправлений здесь НЕ набраны — по основанию,
+    записанному у правки: их отсутствие в теле проверяется грепом.
+
+    ЭКРАНОВ ДВА, И УЗНАЁТСЯ ЭКРАН ПРИЗНАКОМ ВОЗВРАТА (D-02). Редактор шлёт его,
+    строка сводного списка — нет. В редакторе ответ на htmx — карточка `#sched-N`
+    с СЕРВЕРНЫМ состоянием; на сводном списке — переход на тот же адрес, что
+    уезжает перенаправлением: фрагмент строки вместе с её разметкой приносит
+    план 11-04, а до него форма строки запросов htmx не шлёт.
+
+    ⚠️ ЗАБЛОКИРОВАННОЕ ВОЗОБНОВЛЕНИЕ ОТДАЁТ КАРТОЧКУ, А НЕ МОЛЧАНИЕ (D-11,
+    D-13/D-16 Фазы 9). Браузер переключает флажок оптимистично, и только ответ с
+    неизменённым состоянием возвращает его на место.
+
+    Признак экрана выбирает ТОЛЬКО форму ответа, но не право на запись: выборка
+    со связью `Ad.user_id` стоит до развилки и не меняется (T-11-07). Признак
+    сравнивается с константой, адрес из строки формы не собирается (T-11-08).
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
+
+    # ⚠️ ТЕЛО РАЗБИРАЕТСЯ ДО ЕДИНОЙ ЗАПИСИ — основание `WR-07` у удаления:
+    # разбор может поднять исключение, и пятисотка после выполненной записи
+    # неотличима от «ничего не произошло». Прежде форма читалась ПОСЛЕ коммита.
+    form_data = await request.form()
+    # ПРИЗНАК ЭКРАНА ЧИТАЕТСЯ ОДИН РАЗ и участвует в обоих решениях — в сборке
+    # адреса и в выборе формы ответа (то же выражение, что у правки и удаления).
+    returns_to_editor = form_data.get("return_to") == RETURN_TO_EDITOR
+    # Возврат несёт разворот, БЫВШИЙ до нажатия, а не идентификатор нажатой
+    # карточки: тумблер меняет состояние расписания и ничего больше.
+    expanded = _expanded_from_form(form_data)
 
     # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ (D-07 Фазы 11, план 11-02):
     # идентификатор вне колонки не ищется и идёт веткой «расписание не найдено».
@@ -1313,20 +1344,66 @@ async def schedules_toggle(
                 # называет плашка (`notices`), а не пустой возврат: человек
                 # нажал тумблер, и «ничего не произошло» без слов неотличимо от
                 # поломки кнопки.
-                return _editor_error_redirect(
-                    schedule.ad_id, notices.SCHEDULE_VALUES_OUT_OF_DOMAIN
+                #
+                # Исход уводит с экрана (D-06): код реестра едет адресом на обоих
+                # транспортах, склейку кода с адресом делает слой ответа.
+                return await respond(
+                    request,
+                    redirect=f"/ads/{schedule.ad_id}/edit",
+                    notice=notices.SCHEDULE_VALUES_OUT_OF_DOMAIN,
                 )
             schedule.is_active = True
             schedule.next_run_at = next_run
+        # Идентификатор объявления снимается ДО коммита: после него атрибуты
+        # записи могут быть истёкшими.
+        ad_id = schedule.ad_id
         await db.commit()
-    form_data = await request.form()
-    # Возврат несёт разворот, БЫВШИЙ до нажатия, а не идентификатор нажатой
-    # карточки: тумблер меняет состояние расписания и ничего больше.
-    return _editor_redirect(
-        form_data,
-        schedule.ad_id if schedule else None,
-        _expanded_from_form(form_data),
-    )
+    else:
+        ad_id = schedule.ad_id if schedule else None
+
+    if schedule is None:
+        # Записи нет ЛИБО она чужая — переход на сводный список на обоих
+        # транспортах, и различить эти два случая по ответу нельзя (D-11).
+        return await respond(request, redirect=_editor_url(returns_to_editor, None))
+
+    screen_url = _editor_url(returns_to_editor, ad_id, expanded)
+
+    if not returns_to_editor:
+        # Сводный список: карточки редактора там нет, фрагменту некуда
+        # приземлиться — фрагмент строки приносит план 11-04 (D-02).
+        return await respond(request, redirect=screen_url)
+
+    async def _fragment() -> HTMLResponse:
+        """Карточка расписания с серверным состоянием — первым узлом тела.
+
+        ⚠️ НУЛЬАРНАЯ И АСИНХРОННАЯ (IN-03): на пути без htmx разметка не
+        собирается и выборки контекста редактора не выполняются.
+
+        ⚠️ КОНТЕКСТ — `_editor_context`, тот же, что у правки (план 11-01), и
+        раскрытие берётся из ПРОВЕРЕННОГО им поля разворота: нажатая карточка
+        сама не разворачивается, раскрытая соседка не подменяется вовсе, потому
+        что цель подмены — `#sched-N` нажатой (D-12(а)). Объект карточки — строка
+        этой выборки, а не `schedule` выше.
+        """
+        ad = await _ad_row(db, user.id, ad_id)
+        editor = await _editor_context(db, ad, settings, user, expanded)
+        card = next(s for s in editor["schedules"] if s.id == schedule_id)
+        return HTMLResponse(
+            templates.env.get_template(
+                "ads/partials/sched_card_response.html"
+            ).render(
+                s=card,
+                ad=ad,
+                accounts=editor["accounts"],
+                groups=editor["groups"],
+                user=user,
+                expanded_id=editor["expanded_schedule_id"],
+                inactive_group_ids=editor["inactive_group_ids"],
+                editor=editor,
+            )
+        )
+
+    return await respond(request, redirect=screen_url, fragment=_fragment)
 
 
 @router.post("/schedules/{schedule_id}/delete")
