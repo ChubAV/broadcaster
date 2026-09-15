@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 11
 current_phase_name: Массовый перевод разделов письма
 status: executing
-stopped_at: Completed 11-03-PLAN.md
-last_updated: "2026-09-15T22:23:33.892Z"
+stopped_at: Completed 11-04-PLAN.md
+last_updated: "2026-09-15T23:55:19.150Z"
 last_activity: 2026-09-15
 last_activity_desc: Phase 11 execution started
-state_head: c8ab8c4841c50751c46b58f44289282b8112000a
+state_head: e466585832a6d9b7f22a6dba6dfd2feefbc3da3d
 progress:
   total_phases: 9
   completed_phases: 4
   total_plans: 115
-  completed_plans: 98
+  completed_plans: 99
   percent: 44
 ---
 
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 11 (Массовый перевод разделов письма) — EXECUTING
-Plan: 4 of 20
+Plan: 5 of 20
 Total Plans in Phase: 20
 Completed Plans in Phase: 3
 Status: Ready to execute
@@ -142,6 +142,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 11 P01 | 1h 13m | 2 tasks | 9 files |
 | Phase 11 P02 | 29 min | 2 tasks | 7 files |
 | Phase 11 P03 | 29 min | 2 tasks | 7 files |
+| Phase 11 P04 | 47 min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -307,6 +308,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 11]: 11-03: schedules_toggle summary-list branch answers a transition to /schedules without a fragment; the row fragment belongs to plan 11-04
 - [Phase 11]: 11-03: card toggle form takes empty blocking target and this:drop sync by the DIV-09-02 precedent under D-11, recorded as a second form_wrapper caller in DISABLED_ELT_EXCEPTIONS
 - [Phase 11]: 11-03: editor tests read the label.toggle node by its for attribute because form_wrapper prints the toggle path twice
+- [Phase 11]: 11-04: курсор /schedules/partial переведён на КЛЮЧ последней отрисованной строки — класс отказа CR-01 Фазы 9 стал невыразим формой контракта, а не ловится сверкой; курсор приземлился ДО фрагмента строки, как предписывает D-11
+- [Phase 11]: 11-04: ветка сводного списка тумблера отвечает строкой своего экрана с серверным состоянием; линейка total намеренно НЕ перерисовывается до перезагрузки — названная цена того, что переключённая под фильтром строка не исчезает из-под руки
+- [Phase 11]: 11-04: гейт подписи модуля расписаний признал ВСТРОЕННУЮ границу второй формой (как уже принято гейтом каталога), а курсор НЕ выведен изъятием — его величина подконтрольна отправителю; признание закреплено новым контролем на ПОЛОВИНУ границы
 
 ### Pending Todos
 
@@ -487,8 +491,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-15T22:23:33.386Z
-Stopped at: Completed 11-03-PLAN.md
+Last session: 2026-09-15T23:55:18.587Z
+Stopped at: Completed 11-04-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
