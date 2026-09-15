@@ -1323,6 +1323,25 @@ async def test_user_without_accounts_is_offered_to_connect_one(
     assert 'href="/accounts"' in html
 
 
+def _toggle_markup(html: str, schedule_id: int) -> str:
+    """Разметка тумблера карточки — узел `label.toggle` по его `for`.
+
+    ⚠️ ПРИБОР СМЕНЁН ПЛАНОМ 11-03, И ЭТО НЕ ПРАВКА ПОД РЕАЛИЗАЦИЮ. Прежде
+    разметка бралась срезом за ПЕРВЫМ вхождением адреса маршрута. Форма
+    тумблера перешла на макрос-обёртку, и адрес печатается ДВАЖДЫ подряд —
+    в `action` и в атрибуте отправки слоя письма, — поэтому срез попадал
+    между ними и содержал одну строку `" hx-post="`. Узел берётся по
+    идентификатору тумблера: его же ищет возврат фокуса (QUAL-06).
+    """
+    match = re.search(
+        rf'<label class="toggle" for="sched-toggle-{schedule_id}"[^>]*>.*?</label>',
+        html,
+        re.S,
+    )
+    assert match, f"тумблера карточки {schedule_id} в разметке нет"
+    return match.group(0)
+
+
 @pytest.mark.asyncio
 async def test_account_without_groups_says_so(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
@@ -1338,7 +1357,7 @@ async def test_account_without_groups_says_so(
 
     assert "У выбранного аккаунта нет подключённых групп" in html
     # Тумблер неполного ВЫКЛЮЧЕННОГО расписания недоступен (D-08)
-    assert "disabled" in html.split(f"/schedules/{schedule.id}/toggle")[1][:400]
+    assert "disabled" in _toggle_markup(html, schedule.id)
 
 
 @pytest.mark.asyncio
@@ -1367,7 +1386,7 @@ async def test_active_incomplete_schedule_can_still_be_paused_from_the_editor(
 
     html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
 
-    toggle_markup = html.split(f"/schedules/{schedule.id}/toggle")[1][:400]
+    toggle_markup = _toggle_markup(html, schedule.id)
     assert "disabled" not in toggle_markup, (
         "активное неполное расписание нельзя поставить на паузу из редактора"
     )

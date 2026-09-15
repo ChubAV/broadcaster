@@ -2807,7 +2807,10 @@ class DisabledEltException(NamedTuple):
 
 DISABLED_ELT_EXCEPTIONS: dict[str, DisabledEltException] = {
     "components/form_wrapper.html": DisabledEltException(
-        callers=("account_groups/includes/group_row.html",),
+        callers=(
+            "account_groups/includes/group_row.html",
+            "ads/includes/sched_card.html",
+        ),
         reason=(
             "ЗНАЧЕНИЕ НА МЕСТЕ ПАРАМЕТРИЧЕСКОЕ ПО ПОСТРОЕНИЮ, А ЕДИНСТВЕННЫЙ "
             "ПЕРЕОПРЕДЕЛЯЮЩИЙ ВЫЗЫВАЮЩИЙ ПЕРЕДАЁТ СЮДА ПУСТУЮ ЦЕЛЬ. "
@@ -2855,7 +2858,14 @@ DISABLED_ELT_EXCEPTIONS: dict[str, DisabledEltException] = {
             "макросом. Запрет Фазы 8 прочитан по исходнику ДО правки "
             "(допущение A4): запрещено слово 'queue', отмена названа "
             "незадетой прямым текстом, правило применяется только к пяти "
-            "маршрутам периметра, и тумблера среди них нет."
+            "маршрутам периметра, и тумблера среди них нет. "
+            "⚠️ ЛЕТОПИСЬ: ВТОРОЙ ВЫЗЫВАЮЩИЙ — ФАЗА 11, ПЛАН 11-03. Форма "
+            "тумблера карточки расписания 'ads/includes/sched_card.html' "
+            "передаёт ту же пустую цель блокировки и ту же отбрасывающую "
+            "синхронизацию hx-sync='this:drop' — по прецеденту DIV-09-02, "
+            "взятому решением D-11 Фазы 11: основание то же (флажок тумблера "
+            "есть элемент, на который QUAL-06 возвращает фокус), и второго "
+            "решения владельца не требуется."
         ),
     ),
     "ads/form.html": DisabledEltException(
@@ -3645,7 +3655,14 @@ def _offenders_unreachable_blocking_target(
 # макроса, и кнопки отправки лежат в слоте формы. ПОСТАВЛЕНО ПРОГОНОМ
 # покрасневшего `test_no_caller_declares_a_blocking_target_its_form_cannot_have`,
 # дословно: `блоков вызова макроса-обёртки разобрано 2, объявлено 1`.
-UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED = 2
+#
+# 2 → 3, Фаза 11, план 11-03: форма тумблера карточки расписания в редакторе
+# объявления — третий блочный вызов обёртки; цель блокировки пустая (запись
+# вызывающего в `DISABLED_ELT_EXCEPTIONS`, D-11), поэтому накрывать ей нечего.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего
+# `test_no_caller_declares_a_blocking_target_its_form_cannot_have`, дословно:
+# `блоков вызова макроса-обёртки разобрано 3, объявлено 2`.
+UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED = 3
 
 # Опора подстановки, доказывающей зубы правила В ЕГО СОБСТВЕННОМ ТЕЛЕ. Выбрана
 # ЗА УНИКАЛЬНОСТЬ в строке группы аккаунта: `_tree_with` требует ровно одного
