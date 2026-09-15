@@ -2257,21 +2257,52 @@ UNBOUNDED_ROUTE_CASES: tuple[_RouteInput, ...] = (
 
 
 async def _post_route_input(
-    client: AsyncClient, case: _RouteInput, value: str, ad_id: int
+    client: AsyncClient, case: _RouteInput, value: str, ad_id: int, *, htmx: bool = False
 ):
     """Прямой POST мимо браузера по одному входу перечня.
 
     Тело собирается СЫРОЙ строкой (`_form`), а не отображением: величина из
     двадцати пяти девяток в отображении потребовала бы приведения, и первое же
     приведение спрятало бы предмет (записанное основание соседнего обхода).
+
+    `htmx` ставит признак слоя письма на ЭТОТ запрос, а не на общий клиент:
+    половина деградации не имеет права молча стать половиной htmx.
     """
+    headers = {**FORM_HEADERS, "HX-Request": "true"} if htmx else FORM_HEADERS
     return await client.post(
         case.url.format(value=value),
         content=_form(
             [(key, tmpl.format(value=value, ad_id=ad_id)) for key, tmpl in case.body]
         ),
-        headers=FORM_HEADERS,
+        headers=headers,
         follow_redirects=False,
+    )
+
+
+# Величины ВНЕ колонки, на которых маршрут обязан ответить веткой «записи нет».
+# Три, и у каждой своё основание: соседняя с границей (`ID_MAX + 1`, до D-07 —
+# отказ валидации, на SQLite суиты НЕ роняющая драйвер), двадцать пять девяток
+# (прежний предмет правила) и двадцать шесть знаков (величина, роняющая сам
+# драйвер, — критерий плана 11-02).
+OUT_OF_COLUMN_VALUES: tuple[str, ...] = (
+    str(ID_MAX + 1),
+    OUT_OF_COLUMN_RANGE,
+    "9" * 26,
+)
+
+# ЭТАЛОН ВЕТКИ: несуществующий идентификатор ВНУТРИ колонки. Ожидание для
+# величины вне колонки формулируется СОВПАДЕНИЕМ с ответом на него, а не
+# буквенным адресом: «та же ветка» (D-07) есть равенство исходов, и правило,
+# знающее адрес буквой, разъехалось бы с продуктом при первой правке ветки.
+MISSING_IN_COLUMN = "999999"
+
+
+def _branch_shape(response) -> tuple[int, str | None, str | None]:
+    """Форма исхода: код, адрес перенаправления и заголовок перехода."""
+    return (
+        response.status_code,
+        response.headers.get("location"),
+        response.headers.get("HX-Location"),
     )
 
 
@@ -2280,6 +2311,14 @@ async def test_no_schedule_route_answers_with_a_handler_failure_on_an_out_of_ran
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
     """Ни один из ПЯТИ входов файла не роняет обработчик величиной вне диапазона.
+
+    ⚠️ ПОКОЛЕНИЕ ОЖИДАНИЯ (Фаза 11, план 11-02, решение D-07). Прежде правило
+    ожидало на каждом входе ОТКАЗ ВАЛИДАЦИИ (`422`): граница стояла в аннотации,
+    и форму отказа выбирал фреймворк. D-07 перенёс границу внутрь обработчика, и
+    величина вне колонки идёт ТОЙ ЖЕ веткой, что «записи нет / запись чужая»
+    этого входа. Ожидание теперь — РАВЕНСТВО исхода исходу на несуществующем
+    идентификаторе внутри колонки, на ОБОИХ транспортах: без htmx это `302` с
+    адресом, с htmx — та же ветка своим транспортом. Предмет «не 500» остаётся.
 
     Отображение сличается ЦЕЛИКОМ, и текст отказа называет ВСЕ несогласные
     строки: правило, останавливающееся на первой, чинилось бы по одному входу
@@ -2300,24 +2339,38 @@ async def test_no_schedule_route_answers_with_a_handler_failure_on_an_out_of_ran
     ad = await _seed_ad(db_session, owner.id)
     account = await _seed_account(db_session, owner.id)
 
-    seen = {}
+    disagreed: list[str] = []
+    rows = 0
     for case in UNBOUNDED_ROUTE_CASES:
-        response = await _post_route_input(
-            authed_client, case, OUT_OF_COLUMN_RANGE, ad.id
-        )
-        seen[case.name] = response.status_code
+        for htmx in (False, True):
+            transport = "htmx" if htmx else "без htmx"
+            reference = _branch_shape(
+                await _post_route_input(
+                    authed_client, case, MISSING_IN_COLUMN, ad.id, htmx=htmx
+                )
+            )
+            for value in OUT_OF_COLUMN_VALUES:
+                observed = _branch_shape(
+                    await _post_route_input(authed_client, case, value, ad.id, htmx=htmx)
+                )
+                rows += 1
+                if observed != reference or (
+                    not htmx and (observed[0] != 302 or not observed[1])
+                ):
+                    disagreed.append(
+                        f"{case.name} [{transport}] ← {value[:12]}… = {observed}, "
+                        f"ветка «записи нет» = {reference}"
+                    )
 
-    disagreed = {
-        name: code for name, code in seen.items() if code != VALIDATION_REFUSAL
-    }
+    assert rows == len(UNBOUNDED_ROUTE_CASES) * 2 * len(OUT_OF_COLUMN_VALUES)
     assert not disagreed, (
-        "величина вне диапазона колонки доехала до обработчика (снято → "
-        "ожидалось "
-        f"{VALIDATION_REFUSAL}): "
-        + "; ".join(f"{name} = {code}" for name, code in sorted(disagreed.items()))
-        + ". Предмет — инвариант этого модуля: прямой POST мимо браузера обязан "
-        "давать отказ валидации, а не 500 (T-02-24, T-02-25). Несогласных "
-        f"строк {len(disagreed)} из {len(UNBOUNDED_ROUTE_CASES)}"
+        "величина вне диапазона колонки НЕ ПОШЛА веткой «записи нет / запись "
+        "чужая» своего входа (D-07 Фазы 11): "
+        + "; ".join(disagreed)
+        + ". Предмет — инвариант этого модуля в поколении D-07: прямой POST мимо "
+        "браузера не роняет обработчик и не выдаёт отказом валидации, что "
+        "величина лежит вне колонки (T-02-24, T-02-25, T-11-05). Несогласных "
+        f"строк {len(disagreed)} из {rows}"
     )
 
     # АНТИВАКУУМ. Без него зелёное не значит ничего: помощник, отвергающий ВСЁ,
@@ -2372,6 +2425,28 @@ MISSING_INSIDE_RANGE = 999_999
 ADJACENCY_ROUTE = "/schedules/{value}/toggle"
 
 
+@contextmanager
+def _schedule_statement_log(db_session: AsyncSession):
+    """Операторы SQL над таблицей расписаний, выполненные за время блока.
+
+    Слушатель вешается на СИНХРОННЫЙ движок за асинхронным (приём
+    `_statement_log`, `tests/test_pages/test_schedules_list.py`) и снимается в
+    `finally`, иначе следующий тест наследовал бы чужой слушатель.
+    """
+    engine = db_session.bind.sync_engine
+    seen: list[str] = []
+
+    def _before(conn, cursor, statement, parameters, context, executemany):
+        if "schedules" in statement:
+            seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _before)
+    try:
+        yield seen
+    finally:
+        event.remove(engine, "before_cursor_execute", _before)
+
+
 async def _response_shape(client: AsyncClient, value) -> tuple[int, str | None]:
     """ФОРМА ответа маршрута тумблера: код и адрес приземления.
 
@@ -2391,10 +2466,22 @@ async def _response_shape(client: AsyncClient, value) -> tuple[int, str | None]:
 async def test_the_column_bound_admits_its_own_value_and_refuses_the_next_one(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
-    """Величина границы принимается, величина на единицу больше — отвергается."""
+    """Величина границы доходит до выборки, величина на единицу больше — нет.
+
+    ⚠️ ПОКОЛЕНИЕ (Фаза 11, план 11-02, решение D-07). Прежде внешняя сторона
+    стыка утверждалась КОДОМ: `ID_MAX + 1` давал отказ валидации, и антивакуум
+    требовал, чтобы две соседние величины дали РАЗНЫЕ исходы. D-07 делает исходы
+    РАВНЫМИ по построению — величина вне колонки идёт веткой «записи нет», и
+    различимость исхода была бы ровно тем, что T-11-05 запрещает. Стык теперь
+    наблюдается там, где он и живёт: у величины границы выборка по расписаниям
+    ВЫПОЛНЯЕТСЯ, у величины на единицу больше — НЕ выполняется ни одного
+    оператора над таблицей расписаний.
+    """
     reference = await _response_shape(authed_client, MISSING_INSIDE_RANGE)
-    at_bound = await _response_shape(authed_client, ID_MAX)
-    past_bound = await _response_shape(authed_client, ID_MAX + 1)
+    with _schedule_statement_log(db_session) as at_bound_statements:
+        at_bound = await _response_shape(authed_client, ID_MAX)
+    with _schedule_statement_log(db_session) as past_bound_statements:
+        past_bound = await _response_shape(authed_client, ID_MAX + 1)
 
     assert at_bound == reference, (
         "величина, РАВНАЯ верхней границе колонки, отвергнута — граница "
@@ -2403,18 +2490,24 @@ async def test_the_column_bound_admits_its_own_value_and_refuses_the_next_one(
         f"идентификаторе внутри диапазона — {reference}. Разошлась ВНУТРЕННЯЯ "
         "сторона границы"
     )
-    assert past_bound[0] == VALIDATION_REFUSAL, (
-        "величина НА ЕДИНИЦУ БОЛЬШЕ верхней границы колонки принята: снято "
-        f"{past_bound}, ожидался отказ валидации {VALIDATION_REFUSAL}. "
-        f"На самой границе снято {at_bound}. Разошлась ВНЕШНЯЯ сторона границы"
+    assert past_bound == reference, (
+        "величина НА ЕДИНИЦУ БОЛЬШЕ верхней границы колонки ушла НЕ веткой "
+        f"«записи нет»: снято {past_bound}, ветка «записи нет» — {reference} "
+        "(D-07 Фазы 11). Разошлась ВНЕШНЯЯ сторона границы"
     )
 
-    # АНТИВАКУУМ СМЕЖНОСТИ. Помощник, отвечающий одинаково на обе соседние
-    # величины, зеленел бы на любом из двух ожиданий ПО ОТДЕЛЬНОСТИ.
-    assert at_bound != past_bound, (
-        "две СОСЕДНИЕ величины дали ОДИН исход "
-        f"({at_bound}) — стык границы не замерен ничем: правило прошло бы и на "
-        "помощнике, не отвергающем ничего, и на помощнике, отвергающем всё"
+    # АНТИВАКУУМ СМЕЖНОСТИ — ПО ЗАПРОСАМ, А НЕ ПО КОДУ. Помощник, не отвергающий
+    # ничего, отправил бы `ID_MAX + 1` в выборку; помощник, отвергающий всё, не
+    # отправил бы в неё и `ID_MAX`.
+    assert at_bound_statements, (
+        "на величине границы не выполнено НИ ОДНОГО оператора над расписаниями — "
+        "либо граница отвергает годное, либо журнал операторов не видит запросов "
+        "приложения и правило ниже зеленело бы вакуумом"
+    )
+    assert not past_bound_statements, (
+        "величина на единицу больше границы ДОЕХАЛА ДО ЗАПРОСА: "
+        f"{past_bound_statements} — проверка стоит ниже первого использования, и "
+        "на PostgreSQL этот запрос даёт `DataError` (Landmine CONTEXT Фазы 11)"
     )
 
 

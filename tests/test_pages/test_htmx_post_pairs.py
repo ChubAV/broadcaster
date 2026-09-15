@@ -48,6 +48,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.pages import notices
+from app.pages.identifiers import ID_MAX
 from tests.test_pages.test_account_groups import (
     _seed_account as _seed_groups_account,
     _seed_group as _seed_account_group,
@@ -102,6 +103,8 @@ class _PairCase:
 
 SCHEDULES_UPDATE = "app/pages/schedules.py::schedules_update"
 MISSING_SCHEDULE_ID = 987654
+# Первая величина вне колонки идентификатора — 2147483648 (Фаза 11, план 11-02).
+OUT_OF_COLUMN_SCHEDULE_ID = ID_MAX + 1
 
 
 async def _seed_editor_schedule(db: AsyncSession, user_id: int):
@@ -141,6 +144,22 @@ async def _arrange_edit_missing_schedule(client, db, settings, identity) -> _Arr
     account = await _seed_editor_account(db, user.id)
     return _Arranged(
         url=f"/schedules/{MISSING_SCHEDULE_ID}/edit",
+        data=_edit_body(ad.id, account.id),
+        landing_args={"ad_id": ad.id},
+    )
+
+
+async def _arrange_edit_out_of_column_schedule(
+    client, db, settings, identity
+) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    # Объявление СВОЁ, идентификатор расписания лежит ВНЕ колонки (Фаза 11,
+    # план 11-02, D-07): величина идёт той же веткой, что и отсутствующее
+    # расписание, — посимвольно тем же адресом приземления.
+    ad = await _seed_editor_ad(db, user.id)
+    account = await _seed_editor_account(db, user.id)
+    return _Arranged(
+        url=f"/schedules/{OUT_OF_COLUMN_SCHEDULE_ID}/edit",
         data=_edit_body(ad.id, account.id),
         landing_args={"ad_id": ad.id},
     )
@@ -224,6 +243,17 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/ads/{ad_id}/edit?notice=" + notices.SCHEDULE_AD_MISSING,
         transport=LOCATION,
     ),
+    # Фаза 11, план 11-02 (D-07). Идентификатор вне колонки — та же ветка, что у
+    # отсутствующего расписания: неразличимость «вне диапазона» и «нет строки»
+    # (T-11-05) утверждается посимвольным равенством адреса приземления.
+    _PairCase(
+        key=SCHEDULES_UPDATE,
+        name="правка расписания — идентификатор вне колонки при своём объявлении",
+        identity="user",
+        arrange=_arrange_edit_out_of_column_schedule,
+        landing="/ads/{ad_id}/edit?notice=" + notices.SCHEDULE_AD_MISSING,
+        transport=LOCATION,
+    ),
     _PairCase(
         key=SCHEDULES_UPDATE,
         name="правка расписания — объявление чужое",
@@ -267,7 +297,9 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
 #   0 → 6, Фаза 11, план 11-01: реестр заведён — пять исходов правки расписания
 #   в редакторе объявления и успех тумблера группы аккаунта.
-POST_PAIR_CASES_DECLARED = 6
+#   6 → 7, Фаза 11, план 11-02: правка с идентификатором расписания вне колонки
+#   (D-07) — та же ветка, что у отсутствующего расписания.
+POST_PAIR_CASES_DECLARED = 7
 
 
 def _case_id(case: _PairCase) -> str:
