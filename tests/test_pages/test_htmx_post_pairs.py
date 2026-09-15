@@ -252,8 +252,14 @@ async def _arrange_toggle_missing(client, db, settings, identity) -> _Arranged:
 async def _arrange_toggle_from_list(client, db, settings, identity) -> _Arranged:
     user = await _current_user(db, identity, settings)
     _, _, schedule = await _seed_editor_schedule(db, user.id)
-    # Строка сводного списка признака возврата не шлёт.
-    return _Arranged(url=f"/schedules/{schedule.id}/toggle", data={})
+    # Строка сводного списка признака возврата не шлёт. Идентификатор уезжает в
+    # `landing_args` затем, что метку фрагмента (строку своего экрана) можно
+    # назвать только после посева.
+    return _Arranged(
+        url=f"/schedules/{schedule.id}/toggle",
+        data={},
+        landing_args={"schedule_id": schedule.id},
+    )
 
 
 # =============================================================================
@@ -363,15 +369,22 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/schedules",
         transport=LOCATION,
     ),
-    # Строка сводного списка: фрагмент строки приносит план 11-04, до него —
-    # переход на тот же адрес, что уезжает 302.
+    # Фаза 11, план 11-04 (D-02, D-11). Строка сводного списка подменяет САМУ
+    # СЕБЯ: экран остаётся, и цель у фрагмента на нём есть — сама строка.
+    # ⚠️ ВЕТКА СМЕНИЛА КЛАСС, А НЕ ЗАВЕЛАСЬ ЗАНОВО: планом 11-03 этот же случай
+    # стоял переходом (`LOCATION`), потому что разметки строки под фрагмент ещё
+    # не было и приземляться ответу было некуда. Адрес деградации при этом не
+    # сдвинулся ни на символ — половина без признака по-прежнему 302 на
+    # `/schedules`, и именно её неподвижность доказывает, что сменилась ФОРМА
+    # ОТВЕТА, а не поведение действия.
     _PairCase(
         key=SCHEDULES_TOGGLE,
         name="тумблер расписания — со сводного списка",
         identity="user",
         arrange=_arrange_toggle_from_list,
         landing="/schedules",
-        transport=LOCATION,
+        transport=FRAGMENT,
+        fragment_mark='id="schedule-row-{schedule_id}"',
     ),
     # Фаза 9, план 09-01, заведено планом 11-01. Первый фрагментный обработчик
     # вехи; в `CONFIRMED_DELETE_ROUTES` его нет (за панелью подтверждения он не

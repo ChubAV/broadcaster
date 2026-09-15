@@ -981,3 +981,124 @@ async def test_the_next_portion_does_not_skip_a_row_after_a_toggle_under_the_sta
         "Фазы 9 (D-11). Ключевой курсор считает от идентификатора последней "
         "отрисованной строки и сдвигом выдачи не двигается"
     )
+
+
+# =============================================================================
+# План 11-04, задача 2: ТУМБЛЕР СВОДНОГО СПИСКА ОТВЕЧАЕТ СВОЕЙ СТРОКОЙ (D-02)
+# =============================================================================
+#
+# Экранов у тумблера ДВА, и узнаётся экран признаком возврата: редактор шлёт
+# его, строка сводного списка — нет. Ответ обязан подменять ровно строку ТОГО
+# экрана, откуда пришла форма, и всегда показывать СЕРВЕРНОЕ состояние.
+
+# Узел строки ответа — первый верхнеуровневый узел тела (`schedule_row`).
+ROW_ARTICLE = '<article class="sched-item" id="schedule-row-{schedule_id}">'
+
+
+def _row_toggle_markup(html: str, schedule_id: int) -> str:
+    """Разметка тумблера строки — узел `label.toggle` по его `for`.
+
+    Узел берётся по идентификатору тумблера, а не срезом за адресом маршрута:
+    форма строки идёт через макрос-обёртку, и адрес печатается ДВАЖДЫ подряд —
+    в `action` и в атрибуте отправки слоя письма, — поэтому срез попал бы между
+    ними (прибор плана 11-03, `tests/test_pages/test_editor_schedules.py`).
+    """
+    match = re.search(
+        rf'<label class="toggle" for="schedule-toggle-{schedule_id}"[^>]*>.*?</label>',
+        html,
+        re.S,
+    )
+    assert match, f"тумблера строки {schedule_id} в разметке нет"
+    return match.group(0)
+
+
+@pytest.mark.asyncio
+async def test_the_list_toggle_answers_with_its_own_row_over_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Со сводного списка ответ — СТРОКА этого экрана, а не карточка редактора.
+
+    Признака возврата строка не шлёт, и по его отсутствию обработчик выбирает
+    форму ответа (D-02). Фрагмент редактора, приехавший сюда, приземлиться не
+    смог бы: цели `#sched-N` на сводном списке нет вовсе.
+
+    Путь деградации проверяется на ВТОРОЙ строке: первая половина уже сменила
+    состояние, и переиспользованная строка проверяла бы не тот исход.
+    """
+    ad = await _seed_ad(db_session, title="Объявление строки списка")
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа строки списка")
+    schedule = await _seed_schedule(
+        db_session, ad, account, group_ids=[group.id], is_active=True
+    )
+    degraded_row = await _seed_schedule(
+        db_session, ad, account, group_ids=[group.id], is_active=True
+    )
+
+    response = await authed_client.post(
+        f"/schedules/{schedule.id}/toggle",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200, (
+        f"слою письма ответили {response.status_code} вместо 200 со строкой"
+    )
+    assert "<!DOCTYPE" not in response.text, (
+        "слою письма приехал ЦЕЛЫЙ ДОКУМЕНТ — обработчик ответил переходом"
+    )
+    assert response.text.lstrip().startswith(
+        ROW_ARTICLE.format(schedule_id=schedule.id)
+    ), (
+        "первый верхнеуровневый узел тела — не строка своего экрана: "
+        f"{response.text.lstrip()[:200]!r}"
+    )
+    await db_session.refresh(schedule)
+    assert schedule.is_active is False, "тумблер не поставил строку на паузу"
+    assert "checked" not in _row_toggle_markup(response.text, schedule.id), (
+        "строка ответа показывает состояние, которого нет в базе"
+    )
+
+    # Путь деградации не тронут: без признака — прежнее перенаправление.
+    without = await authed_client.post(
+        f"/schedules/{degraded_row.id}/toggle", follow_redirects=False
+    )
+    assert without.status_code == 302
+    assert without.headers["location"] == "/schedules"
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_resume_from_the_list_returns_the_row_unchanged(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Фрагмент строки ВСЕГДА отражает сервер (D-11, D-13/D-16 Фазы 9).
+
+    Неполное расписание возобновить нельзя, и браузер уже переключил флажок
+    ОПТИМИСТИЧНО. Молчание оставило бы человека с включённым на вид тумблером
+    выключенной строки; строка в прежнем состоянии возвращает флажок на место.
+    """
+    ad = await _seed_ad(db_session, title="Неполное расписание сводного списка")
+    schedule = await _seed_schedule(db_session, ad, account=None, is_active=False)
+
+    response = await authed_client.post(
+        f"/schedules/{schedule.id}/toggle",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200, (
+        f"заблокированное возобновление ответило {response.status_code} вместо "
+        "строки с серверным состоянием"
+    )
+    assert response.text.lstrip().startswith(
+        ROW_ARTICLE.format(schedule_id=schedule.id)
+    ), "ответ не начинается со строки своего экрана"
+    await db_session.refresh(schedule)
+    assert schedule.is_active is False, "сервер принял возобновление неполного"
+
+    toggle = _row_toggle_markup(response.text, schedule.id)
+    assert "checked" not in toggle, (
+        "оптимистично переключённый флажок не встал обратно: строка ответа "
+        "показывает состояние, которого сервер не принял"
+    )
+    assert "disabled" in toggle, "тумблер неполного расписания доступен к нажатию"
