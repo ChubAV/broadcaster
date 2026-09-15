@@ -813,7 +813,13 @@ def _build_schedule_items(result, user, tz, group_names=None):
 @router.get("/schedules/partial", response_class=HTMLResponse)
 async def schedules_partial(
     request: Request,
-    offset: int = Query(0, ge=0),
+    # ⚠️ КУРСОР ЕСТЬ ИДЕНТИФИКАТОР, И ЕГО ВЕРХНЯЯ ГРАНИЦА ЕСТЬ ГРАНИЦА КОЛОНКИ,
+    # А НЕ УДОБСТВО. Значение уезжает ОПЕРАНДОМ СРАВНЕНИЯ SQL по колонке
+    # идентификатора (`Schedule.id > after_id` ниже по телу) — ровно тем же
+    # путём, каким уезжает идентификатор адреса. Форма записи взята у соседнего
+    # раздела дословно (`app/pages/account_groups.py::account_groups_partial`):
+    # две формы одной границы разъехались бы молча.
+    after_id: int | None = Query(None, ge=1, le=ID_MAX),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
     channel: str | None = Query(None),
     state: str | None = Query(None),
@@ -835,9 +841,29 @@ async def schedules_partial(
     time_ids = await _time_matching_ids(db, user.id, search) if search else []
 
     query = _apply_filters(_summary_query(user.id), channel, state, search, time_ids)
-    result = await db.execute(
-        query.order_by(Schedule.id).offset(offset).limit(limit + 1)
-    )
+
+    # КЛЮЧЕВОЙ КУРСОР ВМЕСТО СМЕЩЕНИЯ (D-11 Фазы 11; ветвь `keyset`, выбранная
+    # владельцем в плане 09-13 для ТОГО ЖЕ класса отказа). Порция добирает
+    # строки СТРОГО БОЛЬШЕ ключа последней отрисованной, а не пропускает
+    # объявленное клиентом число строк.
+    #
+    # ⚠️ ОСНОВАНИЕ СНЯТО С ЭКРАНА, А НЕ ИЗ АНАЛОГИИ: список фильтруется по
+    # состоянию, и фрагментный тумблер под этим фильтром ВЫВОДИТ строку из
+    # выдачи. Смещение отсчитывает порядковый номер по СЕГОДНЯШНЕЙ выдаче,
+    # поэтому следующая порция по адресу, вычисленному ДО нажатия, пропускала
+    # ровно одну строку — дословно CR-01 Фазы 9. Ключ сдвигом выдачи не
+    # двигается, и класс отказа становится НЕВЫРАЗИМЫМ формой контракта.
+    #
+    # Сортировка по `Schedule.id` объявлена ниже и является ПРЕДУСЛОВИЕМ этой
+    # формы: сравнение по ключу без порядка по тому же ключу теряло бы строки.
+    #
+    # ⚠️ ПОДДЕЛАННЫЙ КЛЮЧ СУЖАЕТ ВЫБОРКУ, НО НЕ ОТМЕНЯЕТ ОГРАНИЧЕНИЯ ВЛАДЕЛЬЦЕМ
+    # (форма T-09-13-01): связка `Ad.user_id` стои́т в `_summary_query` и этой
+    # веткой не трогается — клиент двигает СВОЙ СОБСТВЕННЫЙ документ и чужих
+    # строк не открывает.
+    if after_id is not None:
+        query = query.where(Schedule.id > after_id)
+    result = await db.execute(query.order_by(Schedule.id).limit(limit + 1))
     rows = list(result)
     has_next = len(rows) > limit
     page = rows[:limit]
@@ -850,7 +876,10 @@ async def schedules_partial(
             "user": user,
             "schedules": schedules,
             "has_next": has_next,
-            "next_offset": offset + limit,
+            # Ключ ПОСЛЕДНЕЙ ОТРИСОВАННОЙ строки, а не следующий порядковый
+            # номер: строки — кортежи выдачи, поэтому идентификатор берётся у
+            # `page[-1].Schedule`, а не у самой строки кортежа.
+            "next_after_id": page[-1].Schedule.id if page else None,
             "filter_params": _filter_params(channel, state, search),
         },
     )
@@ -905,7 +934,10 @@ async def schedules_list(
             "is_admin": check_is_admin(user, settings),
             "schedules": schedules,
             "has_next": has_next,
-            "next_offset": PAGE_SIZE,
+            # Ключ последней строки ПЕРВОЙ страницы — тот же смысл и тот же
+            # способ, что у порции выше (D-11). Прежде здесь стоял размер
+            # страницы: он был верен ровно до первого тумблера под фильтром.
+            "next_after_id": page[-1].Schedule.id if page else None,
             "active_page": "schedules",
             "total": total,
             "filters_active": filters_active,
