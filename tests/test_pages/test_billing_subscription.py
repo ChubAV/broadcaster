@@ -399,3 +399,78 @@ async def test_the_billing_page_renders_one_real_form_without_a_single_field(
     assert "<input" not in form, f"в форме покупки появилось поле: {form}"
     for gone in ('value="free"', 'value="basic"', 'value="pro"'):
         assert gone not in body, f"витрина тарифов вернулась на экран: {gone}"
+
+
+# --- План 11-15: оформление доступа на htmx — ТРОЙНАЯ пара (FORM-05, D-09) ---
+#
+# ⚠️ АДРЕС ТРОЙНОЙ ПАРЫ — НА ДОКУМЕНТИРОВАННОМ ХОСТЕ, А `CONFIRMATION_URL` ВЫШЕ
+# НЕ ТРОНУТ, И АСИММЕТРИЯ ЗДЕСЬ НАМЕРЕННАЯ. Хоста `yookassa.ru` в
+# документированных адресах подтверждения нет (Находка C RESEARCH Фазы 11), и
+# путь htmx его отвергнет. Тесты без признака htmx продолжают стоять на прежнем
+# адресе, потому что путь 302 хоста не проверяет: переписать их ожидания значило
+# бы спрятать ровно ту асимметрию, которую запись `SAFE_BY_NAME` называет.
+DOCUMENTED_CONFIRMATION_URL = (
+    "https://yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a"
+)
+FOREIGN_CONFIRMATION_URL = "https://evil.example/checkout/payments/v2/contract?orderId=2c85a"
+HTMX_REQUEST = {"HX-Request": "true"}
+
+
+async def _subscribe_with_confirmation(client: AsyncClient, url: str, *, htmx: bool):
+    """Нажатие кнопки с подменой `create_payment` В ОБРАБОТЧИКЕ.
+
+    Подменяется имя, которым обработчик зовёт сервис: предмет тройной пары —
+    развилка транспорта ПОСЛЕ создания платежа, а не само создание (потолок
+    незакрытых намерений стерегут соседние тесты и реестр пар на настоящем
+    сервисе).
+    """
+    with patch(
+        "app.pages.billing.create_payment",
+        AsyncMock(return_value={"confirmation_url": url, "payment_id": 1}),
+    ):
+        return await client.post(
+            "/billing/subscribe",
+            data={},
+            headers={**SAME_ORIGIN, **(HTMX_REQUEST if htmx else {})},
+            follow_redirects=False,
+        )
+
+
+@pytest.mark.asyncio
+async def test_subscription_over_htmx_answers_the_triple_pair(authed_client: AsyncClient):
+    """Без признака — 302; с признаком — 204 и `HX-Redirect`; чужой хост — переход с кодом.
+
+    ⚠️ УТВЕРЖДАЕТСЯ ЗАГОЛОВОК, А НЕ ТОЛЬКО СТАТУС (урок cookie D-05 Фазы 10):
+    тест кода 204 зелен и тогда, когда заголовок записан на выброшенный объект.
+    ⚠️ `HX-Location` В УСПЕШНОМ ОТВЕТЕ НЕТ: слой письма читает его первым, и
+    межсайтовый XHR по нему заблокировал бы `selfRequestsOnly` (Находка A).
+    """
+    without = await _subscribe_with_confirmation(
+        authed_client, DOCUMENTED_CONFIRMATION_URL, htmx=False
+    )
+    assert without.status_code == 302
+    assert without.headers["location"] == DOCUMENTED_CONFIRMATION_URL
+
+    over_htmx = await _subscribe_with_confirmation(
+        authed_client, DOCUMENTED_CONFIRMATION_URL, htmx=True
+    )
+    assert over_htmx.status_code == 204, (
+        f"оформление на htmx ответило {over_htmx.status_code} — перенаправление 302 "
+        "слой письма прошёл бы прозрачно XHR-запросом на чужой сайт"
+    )
+    assert over_htmx.headers.get("HX-Redirect") == DOCUMENTED_CONFIRMATION_URL, (
+        "ответ не несёт адреса подтверждения в заголовке увода — человек останется "
+        "на /billing, а платёж уже заведён"
+    )
+    assert "HX-Location" not in over_htmx.headers
+    assert over_htmx.content == b""
+
+    foreign = await _subscribe_with_confirmation(
+        authed_client, FOREIGN_CONFIRMATION_URL, htmx=True
+    )
+    assert foreign.status_code == 204
+    assert "HX-Redirect" not in foreign.headers, (
+        "адрес чужого хоста доехал до заголовка увода — открытый редирект"
+    )
+    assert foreign.headers.get("HX-Location") == "/billing?notice=payment_failed"
+    assert foreign.content == b""

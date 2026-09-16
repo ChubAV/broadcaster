@@ -40,16 +40,19 @@
 завести второй источник одного утверждения. Покрытыми считаются ключи ЭТОГО
 реестра и ключи того.
 """
+import contextlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ad import Ad
+from app.models.payment import Payment
 from app.models.schedule import Schedule
 from app.models.subscription import Subscription
 from app.pages import notices
@@ -571,6 +574,114 @@ async def _arrange_free_access_missing(client, db, settings, identity) -> _Arran
 
 
 # =============================================================================
+# Посев: оформление доступа с уходом на страницу ЮKassa (Фаза 11, план 11-15)
+# =============================================================================
+
+SUBSCRIBE_TO_PLAN = "app/pages/billing.py::subscribe_to_plan"
+
+# Адрес подтверждения на ДОКУМЕНТИРОВАННОМ хосте (Находка C RESEARCH Фазы 11):
+# все официальные примеры `confirmation_url` — на `yoomoney.ru`. Прежние фикстуры
+# суиты на `yookassa.ru` путь htmx отвергнет, а путь 302 — нет; пары стоят на
+# документированном хосте, чтобы обе половины утверждали ОДИН адрес.
+YOOMONEY_CONFIRMATION_URL = "https://yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a"
+
+
+def _yookassa_network(*, failing: bool = False):
+    """Фабрика подмены СЕТИ ЮKassa — единственной подменённой части пути.
+
+    ⚠️ СЕРВИС СОЗДАНИЯ ПЛАТЕЖА НЕ ПОДМЕНЯЕТСЯ, И ЭТО ПРЕДМЕТ, А НЕ ВКУС. Потолок
+    незакрытых намерений (PAY-01) живёт ВНУТРИ создания платежа; пара, подменившая
+    сервис, проверяла бы транспорт мимо денежного ограничения, которое перевод
+    обязан не ослабить.
+    """
+
+    @contextlib.contextmanager
+    def _context():
+        settings = MagicMock()
+        settings.yookassa_shop_id = "shop123"
+        settings.yookassa_secret_key = "secret"
+        settings.yookassa_return_url = "http://test/billing"
+        settings.app_name = "Broadcaster"
+        payment = MagicMock()
+        payment.id = "yoo_pair"
+        payment.confirmation = MagicMock()
+        payment.confirmation.confirmation_url = YOOMONEY_CONFIRMATION_URL
+        sdk = (
+            patch(
+                "app.services.payment_service.YooPayment.create",
+                side_effect=RuntimeError("сеть ЮKassa недоступна"),
+            )
+            if failing
+            else patch(
+                "app.services.payment_service.YooPayment.create", return_value=payment
+            )
+        )
+        with patch(
+            "app.services.payment_service.get_settings", return_value=settings
+        ), sdk:
+            yield
+
+    return _context
+
+
+async def _without_payments(db: AsyncSession, identity: str, settings) -> None:
+    """Снять платежи СВОЕГО пользователя перед половиной пары.
+
+    Первая половина успешного случая заводит незакрытое намерение, и вторая,
+    пришедшая на это состояние, упёрлась бы в потолок — то есть проверяла бы не
+    тот исход, который названа проверять (шапка модуля: обе половины на свежем
+    состоянии).
+    """
+    user = await _current_user(db, identity, settings)
+    await db.execute(delete(Payment).where(Payment.user_id == user.id))
+    await db.commit()
+
+
+async def _arrange_subscribe_success(client, db, settings, identity) -> _Arranged:
+    await _without_payments(db, identity, settings)
+    return _Arranged(url="/billing/subscribe", context=_yookassa_network())
+
+
+async def _arrange_subscribe_disabled(client, db, settings, identity) -> _Arranged:
+    await _without_payments(db, identity, settings)
+
+    @contextlib.contextmanager
+    def _payments_off():
+        settings.yookassa_enabled = False
+        try:
+            yield
+        finally:
+            settings.yookassa_enabled = True
+
+    return _Arranged(url="/billing/subscribe", context=_payments_off)
+
+
+async def _arrange_subscribe_pending(client, db, settings, identity) -> _Arranged:
+    """Незакрытое намерение заводится НАСТОЯЩИМ нажатием, а не вставкой строки.
+
+    Вставка строки мимо сервиса утверждала бы форму схемы, а не то, что второе
+    нажатие через форму упирается в потолок.
+    """
+    await _without_payments(db, identity, settings)
+    with _yookassa_network()():
+        first = await client.post("/billing/subscribe", follow_redirects=False)
+    assert first.status_code == 302, "первое нажатие не завело намерения оплаты"
+    return _Arranged(url="/billing/subscribe", context=_yookassa_network())
+
+
+async def _arrange_subscribe_failing(client, db, settings, identity) -> _Arranged:
+    await _without_payments(db, identity, settings)
+    return _Arranged(url="/billing/subscribe", context=_yookassa_network(failing=True))
+
+
+async def _arrange_subscribe_without_session(
+    client, db, settings, identity
+) -> _Arranged:
+    client.cookies.clear()
+    return _Arranged(url="/billing/subscribe", context=_yookassa_network())
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -870,6 +981,51 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/admin/users",
         transport=LOCATION,
     ),
+    # Фаза 11, план 11-15. Оформление доступа: ПЕРВЫЙ случай ветки EXTERNAL.
+    # Успех уводит С САЙТА на страницу подтверждения ЮKassa заголовком
+    # `HX-Redirect` — не `HX-Location`, который `selfRequestsOnly` заблокировал
+    # бы на чужом хосте (D-09, Находка A).
+    _PairCase(
+        key=SUBSCRIBE_TO_PLAN,
+        name="оформление доступа — успех",
+        identity="user",
+        arrange=_arrange_subscribe_success,
+        landing=YOOMONEY_CONFIRMATION_URL,
+        transport=EXTERNAL,
+    ),
+    # Отказы оплаты уходят переходом на /billing с прежним кодом реестра.
+    _PairCase(
+        key=SUBSCRIBE_TO_PLAN,
+        name="оформление доступа — платежи выключены",
+        identity="user",
+        arrange=_arrange_subscribe_disabled,
+        landing="/billing?notice=" + notices.PAYMENT_DISABLED,
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=SUBSCRIBE_TO_PLAN,
+        name="оформление доступа — незакрытое намерение",
+        identity="user",
+        arrange=_arrange_subscribe_pending,
+        landing="/billing?notice=" + notices.PAYMENT_PENDING,
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=SUBSCRIBE_TO_PLAN,
+        name="оформление доступа — сбой создания",
+        identity="user",
+        arrange=_arrange_subscribe_failing,
+        landing="/billing?notice=" + notices.PAYMENT_FAILED,
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=SUBSCRIBE_TO_PLAN,
+        name="оформление доступа — нет сессии",
+        identity="user",
+        arrange=_arrange_subscribe_without_session,
+        landing="/login",
+        transport=LOCATION,
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -996,9 +1152,23 @@ async def test_every_pair_case_answers_both_transports(
         return
 
     assert case.transport is EXTERNAL, f"{case.name}: неизвестная ветка {case.transport!r}"
-    assert with_layer.status_code == 204
-    assert with_layer.headers.get("HX-Redirect") == expected
-    assert with_layer.content == b""
+    # ⚠️ ВЕТКА ПОЛУЧИЛА ПРЕДМЕТ ПЛАНОМ 11-15 И ВМЕСТЕ С НИМ — УТВЕРЖДЕНИЕ ОБ
+    # ОТСУТСТВИИ `HX-Location`. Слой письма читает его ПЕРВЫМ (Находка A): ответ с
+    # обоими заголовками ушёл бы межсайтовым XHR, и `selfRequestsOnly` молча
+    # оставил бы человека на месте при заведённом платеже.
+    assert with_layer.status_code == 204, (
+        f"{case.name}: слою письма ответили {with_layer.status_code} вместо 204"
+    )
+    assert with_layer.headers.get("HX-Redirect") == expected, (
+        f"{case.name}: заголовок внешнего перехода "
+        f"{with_layer.headers.get('HX-Redirect')!r} не совпал с адресом "
+        f"деградации {expected!r} ПОСИМВОЛЬНО"
+    )
+    assert "HX-Location" not in with_layer.headers, (
+        f"{case.name}: ответ несёт ОБА заголовка перехода — слой письма уйдёт по "
+        "HX-Location, и межсайтовый XHR будет заблокирован"
+    )
+    assert with_layer.content == b"", f"{case.name}: у ответа 204 появилось тело"
 
 
 # =============================================================================
