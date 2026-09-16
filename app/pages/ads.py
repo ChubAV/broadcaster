@@ -35,7 +35,7 @@ from app.pages.htmx import is_htmx, respond
 # одном месте — `app/pages/identifiers.py`. Вторая копия числа в этом файле
 # разошлась бы с первой молча при первой же правке колонки (`CR-01` пятого
 # круга ревизии — ровно тот класс отказа, который фаза закрывает).
-from app.pages.identifiers import ID_MAX, IdPath
+from app.pages.identifiers import ID_MAX, IdPath, PostIdPath, id_in_column
 # Форма ключа вложения и правило владения им живут в НЕЙТРАЛЬНОМ модуле: от него
 # зависят оба слоя, а он — ни от одного из них (WR-04). Прежние имена остаются
 # доступными здесь, поэтому точки вызова в этом файле не переписываются.
@@ -800,7 +800,14 @@ async def ads_edit(
 @router.post("/ads/{ad_id}/edit", response_class=HTMLResponse)
 async def ads_update(
     request: Request,
-    ad_id: IdPath,
+    # POST-ПСЕВДОНИМ БЕЗ ГРАНИЦЫ ФРЕЙМВОРКА (D-07 Фазы 11, план 11-06). Пока
+    # `ge=`/`le=` стояли здесь, форму отказа на величине вне колонки выбирал
+    # ФРЕЙМВОРК — `422` с телом `{"detail": …}` и без заголовка перехода, то
+    # есть расхождение с D-01, записанное окном 51. Граница уехала внутрь
+    # обработчика первым использованием параметра (`id_in_column` ниже), и
+    # ослабления в этом нет: строки с таким идентификатором нет ни на одном
+    # драйвере, и величина по-прежнему НЕ УЕЗЖАЕТ в запрос.
+    ad_id: PostIdPath,
     title: str = Form(""),
     text: str = Form(""),
     # Имя параметра — НЕ `status`: модуль ответов FastAPI импортирован в этот
@@ -825,6 +832,15 @@ async def ads_update(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return await respond(request, redirect="/login")
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11).
+    # Проверка стои́т ДО выборки, и это не стиль: величина вне диапазона колонки,
+    # ушедшая операндом сравнения по ней, роняет обработчик отказом драйвера
+    # (`OverflowError` на SQLite суиты, `DataError` на боевом PostgreSQL) —
+    # `500` там, где обязан быть ответ действия. Ветка та же, что у «записи нет
+    # / запись чужая»: различить неразличимое значило бы выдать карту занятых
+    # идентификаторов перебором по адресу.
+    if not id_in_column(ad_id):
+        return await respond(request, redirect="/ads")
     # Владение внутри запроса, а не последующим `if`: «нет такой записи» и
     # «запись чужая» дают один исход, и ветку невозможно забыть (T-02-21).
     result = await db.execute(
@@ -846,7 +862,9 @@ async def ads_update(
 @router.post("/ads/{ad_id}/delete")
 async def ads_delete(
     request: Request,
-    ad_id: IdPath,
+    # POST-псевдоним без границы фреймворка — то же решение и то же основание,
+    # что у правки выше (D-07 Фазы 11, план 11-06).
+    ad_id: PostIdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -890,6 +908,15 @@ async def ads_delete(
     # права стать признаком существования строки.
     if not is_same_origin(request):
         return Response(status_code=403)
+
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11).
+    # ⚠️ СТОИ́Т НИЖЕ СВЕРКИ ИСТОЧНИКА, И ПОРЯДОК ЭТОТ СОХРАНЁН, А НЕ ВЫБРАН
+    # ЗАНОВО: сверка происхождения не читает идентификатора вовсе, а отказ по
+    # ней не имеет права стать признаком существования строки. Величина вне
+    # колонки уходит той же веткой, что и отсутствующая строка, — ответ обоих
+    # неотличим и от успешного удаления (T-10-07).
+    if not id_in_column(ad_id):
+        return await respond(request, redirect="/ads")
 
     result = await db.execute(
         select(Ad).where(Ad.id == ad_id, Ad.user_id == user.id)
