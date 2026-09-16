@@ -233,6 +233,121 @@ async def test_create_without_the_editor_marker_still_goes_to_the_summary_list(
 
 
 @pytest.mark.asyncio
+async def test_schedule_create_over_htmx_appends_the_card_to_the_list(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Создание при НЕПУСТОМ списке отдаёт карточку для вставки В КОНЕЦ (FORM-07, D-05).
+
+    Верхним узлом тела стоит САМА карточка — та же разметка, что печатает полная
+    страница, — и приезжает она РАСКРЫТОЙ: сегодня путь деградации приземляет
+    человека с `?sched=N`, и подмена обязана давать тот же экран. Панель
+    подтверждения едет ВМЕСТЕ с ней, потому что на полной странице обе
+    принадлежат контейнеру `#sched-list`: ответ, принёсший статью без панели,
+    дал бы карточку, кнопка удаления которой не открывает ничего.
+
+    ⚠️ ЛИНЕЙКА И СВОДКА СЛИЧАЮТСЯ С ПОЛНОЙ СТРАНИЦЕЙ, А НЕ С ОЖИДАЕМЫМ ТЕКСТОМ.
+    Утверждение «в линейке написано „2 расписания“» зеленело бы на собственной
+    копии формулировки; предмет же в том, что линейка ПОСЛЕ СОЗДАНИЯ и линейка
+    ПОСЛЕ ПЕРЕЗАГРУЗКИ — одна величина, собранная одним источником разметки.
+    """
+    from tests.test_pages.test_confirm_delete_transport import _oob_node_ids
+
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        "/schedules/new",
+        content=_form(
+            [
+                ("ad_id", str(ad.id)),
+                ("account_id", str(account.id)),
+                ("return_to", "editor"),
+            ]
+        ),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200, response.status_code
+    body = response.text
+    assert "<!DOCTYPE" not in body, "слою письма приехал целый документ"
+
+    created = await _all_schedules(db_session)
+    assert len(created) == 2, [s.id for s in created]
+    new_id = created[-1].id
+
+    assert body.lstrip().startswith(
+        f'<article data-sched-card id="sched-{new_id}">'
+    ), body[:200]
+    assert f'action="/schedules/{new_id}/edit"' in body, (
+        "новая карточка приехала свёрнутой — формы правки в ней нет"
+    )
+    assert f'id="sched-del-{new_id}"' in body, (
+        "панель подтверждения новой карточки не приехала: на полной странице "
+        "она принадлежит тому же контейнеру, что и статья"
+    )
+
+    oob_ids = _oob_node_ids(body)
+    assert "#sched-count" in oob_ids, f"узла линейки нет среди внеполосных: {oob_ids}"
+    assert "ad-summary" in oob_ids, f"узла сводки нет среди внеполосных: {oob_ids}"
+
+    rule = re.search(
+        r'<div hx-swap-oob="innerHTML:#sched-count">(.*?)</div>', body, re.S
+    )
+    assert rule, body[-800:]
+
+    htmx_client.headers.pop("HX-Request")
+    page = await htmx_client.get(f"/ads/{ad.id}/edit")
+    assert page.status_code == 200
+    page_rule = re.search(r'<div id="sched-count">(.*?)</div>', page.text, re.S)
+    assert page_rule, "обёртки линейки на полной странице нет"
+    assert page_rule.group(1).strip() == rule.group(1).strip(), (
+        f"линейка после создания {rule.group(1)!r} разошлась с линейкой после "
+        f"перезагрузки {page_rule.group(1)!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_first_schedule_over_htmx_lands_by_a_location_header(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """«Было ноль» приземляет ПЕРЕХОДОМ, а не фрагментом (D-05).
+
+    При пустом списке контейнера в документе нет вовсе (ветка пустого
+    состояния), и фрагменту некуда приземлиться: ответ уходит 204 с заголовком
+    перехода на ТОТ ЖЕ адрес, что уезжает 302 без htmx. Второго механизма
+    отрисовки пустого и непустого состояния фаза не заводит — идиома D-09
+    Фазы 9 в обратную сторону.
+
+    Посимвольное равенство адресов обоих транспортов утверждает пара модуля
+    `tests/test_pages/test_htmx_post_pairs.py`; здесь утверждается форма ответа.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+
+    response = await htmx_client.post(
+        "/schedules/new",
+        content=_form(
+            [
+                ("ad_id", str(ad.id)),
+                ("account_id", str(account.id)),
+                ("return_to", "editor"),
+            ]
+        ),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 204, response.status_code
+    created = await _all_schedules(db_session)
+    assert len(created) == 1, [s.id for s in created]
+    new_id = created[0].id
+    assert response.headers.get("HX-Location") == (
+        f"/ads/{ad.id}/edit?sched={new_id}#sched-{new_id}"
+    ), response.headers.get("HX-Location")
+    assert response.content == b"", "у ответа 204 появилось тело"
+
+
+@pytest.mark.asyncio
 async def test_update_from_editor_returns_to_the_editor(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):

@@ -45,8 +45,10 @@ from typing import Awaitable, Callable
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.schedule import Schedule
 from app.pages import notices
 from app.pages.identifiers import ID_MAX
 from tests.test_pages.test_account_groups import (
@@ -83,6 +85,16 @@ class _PairCase:
     `landing` и `fragment_mark` — строки формата над `_Arranged.landing_args`:
     идентификаторы появляются только после посева, а посев у каждой половины
     свой.
+
+    ⚠️ `resolve_after` СУЩЕСТВУЕТ ДЛЯ СОЗДАЮЩИХ ДЕЙСТВИЙ, И ЭТО НЕ УДОБСТВО
+    (Фаза 11, план 11-05). У правки и тумблера идентификатор строки известен
+    ПОСЕВОМ, то есть до запроса. У СОЗДАНИЯ его не существует до запроса вовсе:
+    строку заводит сам запрос, и адрес приземления называет её идентификатор.
+    Предсказывать его сложением единицы к посеянному значило бы утверждать
+    поведение автоинкремента драйвера вместо поведения обработчика — правило
+    краснело бы на смене драйвера и зеленело бы на неверном адресе, совпавшем с
+    предсказанием. Поэтому подстановки адреса ДОБИРАЮТСЯ ИЗ БАЗЫ ПОСЛЕ запроса,
+    и обе половины добирают их независимо, каждая на своём состоянии.
     """
 
     key: str
@@ -92,6 +104,7 @@ class _PairCase:
     landing: str
     transport: str
     fragment_mark: str | None = None
+    resolve_after: Callable[[AsyncSession, _Arranged], Awaitable[dict]] | None = None
 
     @property
     def handler(self) -> str:
@@ -263,6 +276,89 @@ async def _arrange_toggle_from_list(client, db, settings, identity) -> _Arranged
 
 
 # =============================================================================
+# Посев: создание расписания в редакторе объявления (Фаза 11, план 11-05)
+# =============================================================================
+
+SCHEDULES_CREATE = "app/pages/schedules.py::schedules_create"
+
+
+def _create_body(ad_id: int, account_id: int, *, to_editor: bool = True) -> dict:
+    body = {"ad_id": str(ad_id), "account_id": str(account_id)}
+    if to_editor:
+        body["return_to"] = "editor"
+    return body
+
+
+async def _created_schedule_of_the_ad(db: AsyncSession, arranged: _Arranged) -> dict:
+    """Идентификатор строки, заведённой ЭТОЙ половиной пары.
+
+    Выборка скоуплена объявлением ИЗ ТЕЛА ФОРМЫ и берёт последнюю строку по
+    возрастанию идентификатора — то есть ровно ту, которую создал запрос этой
+    половины. Соседняя половина сеет СВОЁ объявление, поэтому две половины друг
+    друга не видят и порядок их исполнения на результат не влияет.
+    """
+    ad_id = int(arranged.data["ad_id"])
+    row = (
+        await db.execute(
+            select(Schedule)
+            .where(Schedule.ad_id == ad_id)
+            .order_by(Schedule.id.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    return {"schedule_id": row.id} if row is not None else {}
+
+
+async def _arrange_create_into_a_list(client, db, settings, identity) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    # Список НЕ пуст: контейнер на экране есть, и новой карточке есть куда
+    # приземлиться (D-05).
+    ad, account, _ = await _seed_editor_schedule(db, user.id)
+    return _Arranged(
+        url="/schedules/new",
+        data=_create_body(ad.id, account.id),
+        landing_args={"ad_id": ad.id},
+    )
+
+
+async def _arrange_create_the_first_one(client, db, settings, identity) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    # Расписаний нет: контейнера в документе нет вовсе, и ответ уходит переходом.
+    ad = await _seed_editor_ad(db, user.id)
+    account = await _seed_editor_account(db, user.id)
+    return _Arranged(
+        url="/schedules/new",
+        data=_create_body(ad.id, account.id),
+        landing_args={"ad_id": ad.id},
+    )
+
+
+async def _arrange_create_on_a_foreign_ad(client, db, settings, identity) -> _Arranged:
+    await _current_user(db, identity, settings)
+    stranger = await _foreign_user(db)
+    foreign_ad = await _seed_editor_ad(db, stranger.id, title="Чужое объявление")
+    foreign_account = await _seed_editor_account(db, stranger.id)
+    return _Arranged(
+        url="/schedules/new",
+        data=_create_body(foreign_ad.id, foreign_account.id),
+    )
+
+
+async def _arrange_create_with_account_gone(client, db, settings, identity) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    ad = await _seed_editor_ad(db, user.id)
+    # Объявление своё, аккаунт в теле формы — чужой: вердикт владения отказывает
+    # по аккаунту, и человека возвращают в ЕГО редактор с объяснением.
+    stranger = await _foreign_user(db)
+    foreign_account = await _seed_editor_account(db, stranger.id)
+    return _Arranged(
+        url="/schedules/new",
+        data=_create_body(ad.id, foreign_account.id),
+        landing_args={"ad_id": ad.id},
+    )
+
+
+# =============================================================================
 # Посев: тумблер группы аккаунта (Фаза 9)
 # =============================================================================
 
@@ -386,6 +482,46 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         transport=FRAGMENT,
         fragment_mark='id="schedule-row-{schedule_id}"',
     ),
+    # Фаза 11, план 11-05. Создание расписания: карточка ВСТАВЛЯЕТСЯ в список
+    # редактора, контейнер не перерисовывается (D-05, FORM-07).
+    _PairCase(
+        key=SCHEDULES_CREATE,
+        name="создание расписания — в непустой список",
+        identity="user",
+        arrange=_arrange_create_into_a_list,
+        landing="/ads/{ad_id}/edit?sched={schedule_id}#sched-{schedule_id}",
+        transport=FRAGMENT,
+        fragment_mark='id="sched-{schedule_id}"',
+        resolve_after=_created_schedule_of_the_ad,
+    ),
+    # ⚠️ «БЫЛО НОЛЬ» — ПЕРЕХОД, И ЭТО НЕ ОТСТУПЛЕНИЕ ОТ ФРАГМЕНТНОГО КЛАССА, А
+    # ЕГО ГРАНИЦА: при пустом списке контейнера в документе нет вовсе, и
+    # приземляться фрагменту некуда (D-05). Адрес — тот же, посимвольно.
+    _PairCase(
+        key=SCHEDULES_CREATE,
+        name="создание расписания — было ноль",
+        identity="user",
+        arrange=_arrange_create_the_first_one,
+        landing="/ads/{ad_id}/edit?sched={schedule_id}#sched-{schedule_id}",
+        transport=LOCATION,
+        resolve_after=_created_schedule_of_the_ad,
+    ),
+    _PairCase(
+        key=SCHEDULES_CREATE,
+        name="создание расписания — объявление чужое",
+        identity="user",
+        arrange=_arrange_create_on_a_foreign_ad,
+        landing="/schedules",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=SCHEDULES_CREATE,
+        name="создание расписания — аккаунт недоступен",
+        identity="user",
+        arrange=_arrange_create_with_account_gone,
+        landing="/ads/{ad_id}/edit?notice=" + notices.SCHEDULE_ACCOUNT_GONE,
+        transport=LOCATION,
+    ),
     # Фаза 9, план 09-01, заведено планом 11-01. Первый фрагментный обработчик
     # вехи; в `CONFIRMED_DELETE_ROUTES` его нет (за панелью подтверждения он не
     # стоит), и без этой записи замыкание называет его непокрытым.
@@ -408,11 +544,28 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   7 → 11, Фаза 11, план 11-03: четыре исхода переключения расписания — успех
 #   в редакторе (фрагмент), значения вне области, расписания нет и строка
 #   сводного списка (переход).
-POST_PAIR_CASES_DECLARED = 11
+#   11 → 15, Фаза 11, план 11-05: четыре исхода СОЗДАНИЯ расписания — вставка в
+#   непустой список (фрагмент), «было ноль», чужое объявление и недоступный
+#   аккаунт (переход).
+POST_PAIR_CASES_DECLARED = 15
 
 
 def _case_id(case: _PairCase) -> str:
     return f"{case.handler}-{case.name}"
+
+
+async def _landing_args(
+    case: _PairCase, db: AsyncSession, arranged: _Arranged
+) -> dict:
+    """Подстановки адреса приземления, добранные ПОСЛЕ запроса, если случай просит.
+
+    Случай без `resolve_after` отдаёт подстановки посева неизменными — то есть
+    одиннадцать прежних записей проходят этот помощник байт-в-байт тем же
+    словарём, каким пользовались до него.
+    """
+    if case.resolve_after is None:
+        return arranged.landing_args
+    return {**arranged.landing_args, **await case.resolve_after(db, arranged)}
 
 
 # =============================================================================
@@ -429,11 +582,13 @@ async def test_every_pair_case_answers_both_transports(
     await _identify(client, case.identity, test_settings)
 
     degraded = await case.arrange(client, db_session, test_settings, case.identity)
-    expected = case.landing.format(**degraded.landing_args)
     with degraded.context():
         without = await client.post(
             degraded.url, data=degraded.data, follow_redirects=False
         )
+    # Подстановки добираются ПОСЛЕ запроса: у создающего действия строки, чей
+    # идентификатор называет адрес, до запроса не существует (см. `_PairCase`).
+    expected = case.landing.format(**await _landing_args(case, db_session, degraded))
     assert without.status_code == 302, (
         f"{case.name}: путь деградации ответил {without.status_code} вместо 302"
     )
@@ -443,7 +598,6 @@ async def test_every_pair_case_answers_both_transports(
     )
 
     arranged = await case.arrange(client, db_session, test_settings, case.identity)
-    expected = case.landing.format(**arranged.landing_args)
     with arranged.context():
         with_layer = await client.post(
             arranged.url,
@@ -451,6 +605,8 @@ async def test_every_pair_case_answers_both_transports(
             headers=HTMX_HEADERS,
             follow_redirects=True,
         )
+    landing_args = await _landing_args(case, db_session, arranged)
+    expected = case.landing.format(**landing_args)
 
     assert DOCUMENT_MARK not in with_layer.text, (
         f"{case.name}: слою письма приехал ЦЕЛЫЙ ДОКУМЕНТ — обработчик ответил "
@@ -461,7 +617,7 @@ async def test_every_pair_case_answers_both_transports(
         assert with_layer.status_code == 200, (
             f"{case.name}: фрагментный путь ответил {with_layer.status_code} вместо 200"
         )
-        mark = case.fragment_mark.format(**arranged.landing_args)
+        mark = case.fragment_mark.format(**landing_args)
         assert mark in with_layer.text, (
             f"{case.name}: во фрагменте нет метки {mark!r}"
         )
