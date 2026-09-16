@@ -480,9 +480,24 @@ def test_the_reason_codes_of_the_handlers_are_exactly_the_known_set():
     ничем и давала кнопку, вернувшую ту же страницу без единого слова; опечатка
     в имени константы падает на импорте модуля. Поэтому обход собирает ИМЕНА
     констант реестра, использованные в адресах раздела.
+
+    ⚠️ ПОКОЛЕНИЕ ОБХОДА (Фаза 11, план 11-15). Адрес с кодом больше не
+    собирается обработчиком: он подаёт слою ответа адрес `/billing` и код
+    ОТДЕЛЬНЫМИ аргументами (`respond(redirect="/billing", notice=…)`), а провал
+    проверки хоста третьего выхода — парой `fallback="/billing",
+    fallback_notice=…`. Прежнее выражение по литералу `/billing?notice={…}` на
+    таком дереве нашло бы ПУСТОЕ множество и краснело бы по причине, к предмету
+    отношения не имеющей. Множество ожидаемых кодов НЕ ТРОНУТО: перевод меняет
+    транспорт, а не то, какие причины раздел называет.
     """
     source = BILLING_PY.read_text(encoding="utf-8")
-    used = set(re.findall(r"/billing\?notice=\{notices\.([A-Z_]+)\}", source))
+    used = set(
+        re.findall(r'redirect="/billing",\s*notice=notices\.([A-Z_]+)', source)
+    ) | set(
+        re.findall(
+            r'fallback="/billing",\s*fallback_notice=notices\.([A-Z_]+)', source
+        )
+    )
 
     assert used == {
         "PAYMENT_FAILED",
