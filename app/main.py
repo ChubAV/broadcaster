@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request as FastAPIRequest
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -22,7 +23,11 @@ from app.dependencies import (
 from app.infrastructure.uow import create_uow_factory
 from app.middleware import RequestIdMiddleware
 from app.pages.common import bind_image_url_globals
-from app.pages.htmx import HtmxRefusal, location_response
+from app.pages.htmx import (
+    HtmxRefusal,
+    location_response,
+    malformed_request_response,
+)
 from app.routes.auth import router as auth_router
 from app.routes.ads import router as ads_router
 from app.routes.uploads import router as uploads_router
@@ -224,6 +229,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # записывается только то, что он доехал до человека новым транспортом.
         logger.info("htmx_refusal", path=request.url.path)
         return location_response(exc.location)
+
+    # ОТКАЗ ВАЛИДАЦИИ ФРЕЙМВОРКА, АДРЕСОВАННЫЙ СЛОЮ ПИСЬМА, ОБЕЗВРЕЖИВАЕТСЯ
+    # ЗДЕСЬ (T-07-13, план 11-07). Тело такого отказа собирает не приложение, и
+    # в поле ввода оно дословно повторяет присланное пользователем значение;
+    # правило `422` блока конфигурации с плана 11-09 подменяет таким телом
+    # содержимое страницы, а `allowScriptTags`/`allowEval` остаются умолчаниями
+    # артефакта. Смягчение обязано стоять ДО возврата свопа, иначе существует
+    # дерево, на котором сток открыт.
+    #
+    # ⚠️ ЧТО ЭТОТ ОБРАБОТЧИК НЕ МЕНЯЕТ, НАЗВАНО ПРЯМО. Путь БЕЗ признака htmx
+    # получает ответ фреймворка байт-в-байт прежним — форма отказа человеку без
+    # JavaScript не трогается. JSON-API `app/routes/` не трогается НИ НА ОДНОМ
+    # транспорте (D-07): регистрация висит на приложении целиком, своих
+    # обработчиков исключений у роутера нет, поэтому ветвь выбирается ВТОРЫМ
+    # признаком — принадлежностью сорвавшегося обработчика пакету `app.pages`.
+    # Ветвь по одному заголовку превратила бы запрос к JSON-API с заголовком
+    # htmx в пустой 400 и сломала бы контракт 422 другого транспорта.
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        request: FastAPIRequest, exc: RequestValidationError
+    ):
+        return await malformed_request_response(request, exc)
 
     @app.exception_handler(NotFoundError)
     async def not_found_handler(request: FastAPIRequest, exc: NotFoundError):
