@@ -1,0 +1,39 @@
+{#- Содержимое плитки доступа карточки пользователя в админке.
+
+   ЕДИНСТВЕННЫЙ ИСТОЧНИК разметки состояния доступа на карточке: его включает
+   страница (`admin/user_detail.html`, первая плитка `data-metrics`), и его же
+   обязан включать ответ тумблера бесплатного доступа (план 11-13). Выдача и
+   снятие льготы меняют ровно то, что печатает эта плитка, поэтому фрагмент,
+   собранный из второй копии, показал бы ЧУЖОЕ состояние не тем, что на странице
+   после F5 (D-02 Фазы 11).
+
+   Это ВКЛЮЧАЕМЫЙ шаблон, а не макрос: он получает контекст вызывающего. Читает:
+     * `target_access` — вид доступа открытой карточки (`_access_view`
+       обработчика `admin_user_detail`): `is_comped`, `open`, `days_left`,
+       `expires_at`;
+     * `user` — вошедшего администратора: дата печатается в ЕГО поясе через
+       глобал `format_datetime_for_user` (правило P-2), своего `strftime` нет.
+
+   Сама карточка плитки (`card_open`/`card_close`) остаётся на странице: вынесено
+   СОДЕРЖИМОЕ. Обоснование формы значения (крупное число, знак бесконечности у
+   льготы, дата отдельной строкой и её отсутствие у льготы, UI-контракт E5)
+   записано у места включения.
+
+   Вынесен дословно (план 11-11): постоянного `id`, атрибутов htmx и обёрток
+   здесь нет, и вывод страницы от выноса не изменился ни на байт. Отступы строк
+   ниже сохранены с прежнего места — они попадают в вывод.
+
+   Включение: {% include "admin/includes/user_access_tile.html" %} -#}
+{%- from "components/mono.html" import mono -%}
+{{ mono('Доступ', 'muted', upper=true) }}
+        {%- if target_access.get('is_comped') %}
+        <span data-metric-value>∞</span>
+        {%- elif target_access.get('open') %}
+        <span data-metric-value>{{ target_access.get('days_left') }}</span>
+        {{ mono('до ' ~ format_datetime_for_user(target_access.get('expires_at'), user), 'muted') }}
+        {%- else %}
+        <span data-metric-value>—</span>
+        {%- if target_access.get('expires_at') %}
+        {{ mono('закрыт ' ~ format_datetime_for_user(target_access.get('expires_at'), user), 'danger') }}
+        {%- endif %}
+        {%- endif %}

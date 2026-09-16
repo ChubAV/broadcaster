@@ -897,7 +897,13 @@ ROW_DELETE_SITES = (
         1,
     ),
     RowDeleteSite("ads/includes/ad_card.html", r"/ads/[^\"]+/delete", 1),
-    RowDeleteSite("admin/user_detail.html", r"/admin/users/[^\"]+/delete", 1),
+    # План 11-11 ПЕРЕНЁС это место, а не снял и не добавил: форма-триггер
+    # удаления переехала со страницы карточки во включаемый шаблон блока
+    # «Действия» дословно (D-02 Фазы 11), панель осталась на странице. Число
+    # мест прежнее; сменился только файл, где форма написана.
+    RowDeleteSite(
+        "admin/includes/user_actions.html", r"/admin/users/[^\"]+/delete", 1
+    ),
 )
 
 ROW_DELETE_PLACES = 12
