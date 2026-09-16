@@ -799,7 +799,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         live="account",
         identity="admin",
         body="task_id=задача-посева",
-        outside="302 /admin/queue?result=unknown_account",
+        outside="302 /admin/queue?notice=queue_drop_no_queue",
     ),
     _BoundedEntry(
         key="app/pages/admin.py::GET /admin/users/{user_id} → адрес user_id",

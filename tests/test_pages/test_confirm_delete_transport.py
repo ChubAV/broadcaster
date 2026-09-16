@@ -962,43 +962,47 @@ CONFIRMED_DELETE_ROUTES: tuple[_Route, ...] = (
         name="снятие задачи из очереди отправки",
         identity="admin",
         htmx_form=LOCATION,
-        # ⚠️ КЛЮЧ ИСХОДА ЗДЕСЬ НЕ `notice`, И ЭТО ИЗМЕРЕННЫЙ ФАКТ, А НЕ ОПЕЧАТКА.
-        # У подраздела очереди свой частный ключ адресной строки со своим местом
-        # отрисовки; в реестр кодов он НЕ сведён, и сводить его здесь запрещено
-        # (D-07). Обход утверждает адрес ПОСИМВОЛЬНО именно поэтому: сведение,
-        # сделанное мимоходом, покраснело бы здесь, а не на живом экране.
+        # ⚠️ КЛЮЧ ИСХОДА ЗДЕСЬ — `notice`, КАК У СОСЕДЕЙ, И ЭТО СВОД, А НЕ МИМОХОД
+        # (Фаза 11, план 11-14, D-10). ПРЕЖНЯЯ ЗАПИСЬ НЕ ВЫЧЁРКНУТА, А ПОМЕЧЕНА
+        # УСТАРЕВШЕЙ: здесь стояло «КЛЮЧ ИСХОДА ЗДЕСЬ НЕ `notice`… в реестр кодов
+        # он НЕ сведён, и сводить его здесь запрещено (D-07)». Она была верна для
+        # дерева Фазы 10: у подраздела очереди жил свой частный ключ адресной
+        # строки со своим местом отрисовки. Свод, отданный решением D-07 Фазе 11,
+        # сделан планом 11-14 отдельно и целиком — четыре кода закрытого реестра.
+        # Обход утверждает адрес ПОСИМВОЛЬНО по-прежнему: возврат частного ключа
+        # покраснел бы здесь, а не на живом экране.
         outcomes=(
             _Outcome(
                 name="задача-снята",
                 arrange=_arrange_drop_removed,
                 landing="/admin/queue",
-                outcome_key="result",
-                outcome_code=DROP_REMOVED,
+                outcome_key="notice",
+                outcome_code="queue_drop_removed",
             ),
             _Outcome(
                 name="задача-уже-ушла",
                 arrange=_arrange_drop_missing,
                 landing="/admin/queue",
-                outcome_key="result",
-                outcome_code=DROP_MISSING,
+                outcome_key="notice",
+                outcome_code="queue_drop_missing",
             ),
             _Outcome(
                 name="очередь-недоступна",
                 arrange=_arrange_drop_unavailable,
                 landing="/admin/queue",
-                outcome_key="result",
-                outcome_code=DROP_UNAVAILABLE,
+                outcome_key="notice",
+                outcome_code="queue_drop_unavailable",
             ),
             _Outcome(
                 name="у-аккаунта-нет-очереди",
                 arrange=_arrange_drop_unknown_account,
                 landing="/admin/queue",
-                outcome_key="result",
-                outcome_code="unknown_account",
+                outcome_key="notice",
+                outcome_code="queue_drop_no_queue",
             ),
         ),
         missing_identifier=_arrange_missing_queue_account,
-        missing_identifier_landing="/admin/queue?result=unknown_account",
+        missing_identifier_landing="/admin/queue?notice=queue_drop_no_queue",
     ),
     _Route(
         key="app/pages/admin.py::admin_delete_user",
@@ -3434,9 +3438,10 @@ REPEAT_EXEMPT_ROUTES: dict[str, str] = {
     ),
     "app/pages/admin.py::admin_drop_task": (
         "адресуемая ПУТЁМ строка — аккаунт — не уничтожается вовсе; снимается "
-        "задача, названная ТЕЛОМ формы. Закрытый словарь исходов подраздела "
-        "ОБЯЗАН различать «снял» (`drop_removed`) и «её уже не было» "
-        "(`drop_missing`): обработчик записывает дословно, что молчаливый успех "
+        "задача, названная ТЕЛОМ формы. Исходы снятия — коды закрытого реестра "
+        "уведомлений, и они ОБЯЗАНЫ различать «снял» (`queue_drop_removed`) и "
+        "«её уже не было» (`queue_drop_missing`): обработчик записывает "
+        "дословно, что молчаливый успех "
         "был бы ХУЖЕ отказа — администратор решил бы, что снял отправку, "
         "которой не касался"
     ),

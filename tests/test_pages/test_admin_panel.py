@@ -1338,6 +1338,48 @@ async def test_dropping_a_queue_task_removes_exactly_one_and_comes_back(
 
 
 @pytest.mark.asyncio
+async def test_a_dropped_queue_task_is_announced_by_the_shell_notice_area(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Исход снятия задачи едет КОДОМ реестра и рисуется областью шелла (D-10).
+
+    ⚠️ ПРОВЕРЯЕТСЯ ВСЯ ЛИНИЯ, А НЕ ОДИН АДРЕС. Код в адресе без слов на
+    приземлённом экране — та же молчащая кнопка, ради которой исход и назван
+    словами: администратор снимает чужую отправку и по результату решает, идти
+    ли на сервер руками.
+
+    ⚠️ ВТОРАЯ ПОЛОВИНА — ПРО СНЯТОЕ. Частный ключ адресной строки подраздела и
+    его собственное место отрисовки сняты планом 11-14; страница, открытая по
+    старому ключу, обязана не рисовать НИЧЕГО. Иначе у одного исхода снова два
+    владельца, и правка одного расходится со вторым молча.
+    """
+    from tests.conftest import notice_areas
+
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis({key: [_queue_task("drop-me")]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        response = await admin_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        assert response.headers["location"] == "/admin/queue?notice=queue_drop_removed"
+
+        landed = (await admin_client.get(response.headers["location"])).text
+        by_old_key = (await admin_client.get("/admin/queue?result=removed")).text
+
+    assert "Задача снята из очереди" in notice_areas(landed), (
+        "код исхода приехал в адрес, а область уведомлений шелла промолчала"
+    )
+    assert "Задача снята из очереди" not in by_old_key, (
+        "страница очереди по-прежнему читает снятый частный ключ исхода"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dropping_a_queue_task_is_refused_to_an_outsider(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
