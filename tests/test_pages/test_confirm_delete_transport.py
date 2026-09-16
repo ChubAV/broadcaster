@@ -115,12 +115,7 @@ from app.pages import notices
 # колонки, и отбор величины «вне диапазона» молча стал бы отбором величины
 # «вне числа, которое когда-то было границей». Владелец величины — план 10-12.
 from app.pages.schedules import ID_MAX
-from app.services.ops_state import (
-    DROP_MISSING,
-    DROP_REMOVED,
-    DROP_UNAVAILABLE,
-    queue_key,
-)
+from app.services.ops_state import queue_key
 
 # ⚠️ ДВОЙНИКИ И ПОСЕВ ВВОЗЯТСЯ, А НЕ ПЕРЕПИСЫВАЮТСЯ. Двойник очереди держит
 # списки по-настоящему, а посев записи журнала заводит целую тройку сущностей;
@@ -977,28 +972,28 @@ CONFIRMED_DELETE_ROUTES: tuple[_Route, ...] = (
                 arrange=_arrange_drop_removed,
                 landing="/admin/queue",
                 outcome_key="notice",
-                outcome_code="queue_drop_removed",
+                outcome_code=notices.QUEUE_DROP_REMOVED,
             ),
             _Outcome(
                 name="задача-уже-ушла",
                 arrange=_arrange_drop_missing,
                 landing="/admin/queue",
                 outcome_key="notice",
-                outcome_code="queue_drop_missing",
+                outcome_code=notices.QUEUE_DROP_MISSING,
             ),
             _Outcome(
                 name="очередь-недоступна",
                 arrange=_arrange_drop_unavailable,
                 landing="/admin/queue",
                 outcome_key="notice",
-                outcome_code="queue_drop_unavailable",
+                outcome_code=notices.QUEUE_DROP_UNAVAILABLE,
             ),
             _Outcome(
                 name="у-аккаунта-нет-очереди",
                 arrange=_arrange_drop_unknown_account,
                 landing="/admin/queue",
                 outcome_key="notice",
-                outcome_code="queue_drop_no_queue",
+                outcome_code=notices.QUEUE_DROP_NO_QUEUE,
             ),
         ),
         missing_identifier=_arrange_missing_queue_account,
