@@ -41,6 +41,7 @@
 реестра и ключи того.
 """
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
 import pytest
@@ -50,6 +51,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ad import Ad
 from app.models.schedule import Schedule
+from app.models.subscription import Subscription
 from app.pages import notices
 from app.pages.identifiers import ID_MAX
 from tests.test_pages.test_account_groups import (
@@ -527,6 +529,48 @@ async def _arrange_block_self(client, db, settings, identity) -> _Arranged:
 
 
 # =============================================================================
+# Посев: бесплатный доступ из карточки пользователя (Фаза 11, план 11-13)
+# =============================================================================
+
+ADMIN_TOGGLE_FREE_ACCESS = "app/pages/admin.py::admin_toggle_free_access"
+
+
+async def _arrange_free_access_toggle(client, db, settings, identity) -> _Arranged:
+    """СВОЙ пользователь со СВОЕЙ активной строкой подписки у каждой половины.
+
+    ⚠️ СТРОКА ПОДПИСКИ ЗАВОДИТСЯ ЗДЕСЬ ЯВНО: `_seed_victim` её не заводит, а
+    без строки тумблер уходит веткой «строки подписки нет» — переходом, и успех
+    фрагментом не проверялся бы вовсе.
+    """
+    target = await _seed_victim(db)
+    db.add(
+        Subscription(
+            user_id=target.id,
+            expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+            is_active=True,
+            has_free_access=False,
+        )
+    )
+    await db.commit()
+    return _Arranged(
+        url=f"/admin/users/{target.id}/unlimited", landing_args={"user_id": target.id}
+    )
+
+
+async def _arrange_free_access_without_subscription(
+    client, db, settings, identity
+) -> _Arranged:
+    target = await _seed_victim(db)
+    return _Arranged(
+        url=f"/admin/users/{target.id}/unlimited", landing_args={"user_id": target.id}
+    )
+
+
+async def _arrange_free_access_missing(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url=f"/admin/users/{MISSING_USER_ID}/unlimited")
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -795,6 +839,37 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/admin/users/{user_id}",
         transport=LOCATION,
     ),
+    # Фаза 11, план 11-13. Бесплатный доступ из карточки пользователя: тот же
+    # шаблон ответа, что у блокировки (D-02). Метка — адрес формы бесплатного
+    # доступа: она стоит в ОСНОВНОМ теле, то есть доказывает, что приехал блок
+    # действий.
+    _PairCase(
+        key=ADMIN_TOGGLE_FREE_ACCESS,
+        name="бесплатный доступ — успех",
+        identity="admin",
+        arrange=_arrange_free_access_toggle,
+        landing="/admin/users/{user_id}",
+        transport=FRAGMENT,
+        fragment_mark='action="/admin/users/{user_id}/unlimited"',
+    ),
+    # «Строки подписки нет» (FORM-04): карточка существует, но действие не
+    # состоялось, и тумблер уводит на неё же — переходом, тем же адресом, что 302.
+    _PairCase(
+        key=ADMIN_TOGGLE_FREE_ACCESS,
+        name="бесплатный доступ — строки подписки нет",
+        identity="admin",
+        arrange=_arrange_free_access_without_subscription,
+        landing="/admin/users/{user_id}",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=ADMIN_TOGGLE_FREE_ACCESS,
+        name="бесплатный доступ — пользователя нет",
+        identity="admin",
+        arrange=_arrange_free_access_missing,
+        landing="/admin/users",
+        transport=LOCATION,
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -828,7 +903,12 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   доступа), пользователя нет, идентификатор вне колонки (D-07) и «нельзя
 #   заблокировать себя» (переход).
 #   ПОСТАВЛЕНО ПРОГОНОМ: `случаев пар в реестре 25, объявлено 21`.
-POST_PAIR_CASES_DECLARED = 25
+#   25 → 28, Фаза 11, план 11-13: три исхода ВЫДАЧИ И СНЯТИЯ БЕСПЛАТНОГО
+#   ДОСТУПА из карточки пользователя — успех (фрагмент блока действий с
+#   внеполосными бейджем и плиткой доступа), «строки подписки нет» и
+#   «пользователя нет» (переход).
+#   ПОСТАВЛЕНО ПРОГОНОМ: `случаев пар в реестре 28, объявлено 25`.
+POST_PAIR_CASES_DECLARED = 28
 
 
 def _case_id(case: _PairCase) -> str:
