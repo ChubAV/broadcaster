@@ -1534,6 +1534,62 @@ async def test_section_caption_is_declined(
 
 
 @pytest.mark.asyncio
+def _create_form_tag(html: str) -> str:
+    """Открывающий тег формы создания расписания — как он ушёл в браузер."""
+    match = re.search(r'<form[^>]*action="/schedules/new"[^>]*>', html)
+    assert match, "формы создания расписания на экране нет"
+    return match.group(0)
+
+
+@pytest.mark.asyncio
+async def test_the_create_form_targets_the_list_only_when_the_list_exists(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Цель вставки объявляется ТОЛЬКО когда контейнер существует (D-05, план 11-05).
+
+    ⚠️ ПРЕДМЕТ — НЕ АККУРАТНОСТЬ РАЗМЕТКИ, А РАБОТОСПОСОБНОСТЬ КНОПКИ, И ПОЙМАТЬ
+    ЕГО МОЖНО ТОЛЬКО ЗДЕСЬ. Вендоренный htmx 2.0.10 разрешает цель ДО отправки
+    запроса и, не найдя её, поднимает `htmx:targetError` и ВОЗВРАЩАЕТСЯ, не
+    послав запрос вовсе (`issueAjaxRequest`, app/static/js/htmx.min.js). При нуле
+    расписаний контейнера в документе нет — он живёт внутри условия «расписания
+    есть», — поэтому безусловная цель означала бы кнопку «+ ДОБАВИТЬ ПЕРВОЕ»,
+    которая при живом JS НЕ ДЕЛАЕТ НИЧЕГО и не сообщает об этом ни статусом, ни
+    консолью. Транспорт ASGI не исполняет ни строчки JS, поэтому ни один
+    запросный тест такого отказа не увидит: предъявляется он счётом атрибутов
+    самой формы.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+
+    empty = await authed_client.get(f"/ads/{ad.id}/edit")
+    assert empty.status_code == 200
+    assert 'id="sched-list"' not in empty.text, (
+        "контейнер списка отрисован на редакторе БЕЗ расписаний — основание "
+        "ветки «было ноль» исчезло, и два состояния снова рисует не один "
+        "механизм"
+    )
+    empty_form = _create_form_tag(empty.text)
+    assert "hx-target" not in empty_form, (
+        f"форма создания объявила цель подмены на ПУСТОМ редакторе: "
+        f"{empty_form!r} — рантайм не найдёт её и не пошлёт запрос вовсе"
+    )
+    assert 'hx-swap="none"' in empty_form, empty_form
+
+    await _seed_schedule(db_session, ad.id, account.id)
+    filled = await authed_client.get(f"/ads/{ad.id}/edit")
+    assert filled.status_code == 200
+    assert 'data-sched-list id="sched-list"' in filled.text, (
+        "постоянного контейнера вставки на непустом редакторе нет"
+    )
+    filled_form = _create_form_tag(filled.text)
+    assert 'hx-target="#sched-list"' in filled_form, filled_form
+    assert 'hx-swap="beforeend"' in filled_form, (
+        f"способ вставки не `beforeend`: {filled_form!r} — карточка встала бы не "
+        f"в конец списка, и после F5 её место сменилось бы"
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_schedule_form_preselects_a_single_account(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
