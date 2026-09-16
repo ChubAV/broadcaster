@@ -1393,6 +1393,10 @@ MACRO_DEFINITION_SITES_CALLERS: dict[str, HiddenCallers] = {
         macro="form_wrapper",
         callers=(
             "account_groups/includes/group_row.html",
+            # Фаза 11, план 11-12: форма тумблера блокировки в карточке
+            # пользователя (цель подмены — постоянная обёртка `#user-actions`
+            # страницы карточки, способ — подмена СОДЕРЖИМОГО).
+            "admin/includes/user_actions.html",
             # Фаза 11, план 11-05: форма СОЗДАНИЯ расписания в редакторе
             # объявления (цель — постоянный контейнер списка `#sched-list`,
             # способ `beforeend`; при нуле расписаний цель не печатается вовсе).
@@ -1495,7 +1499,25 @@ MACRO_DEFINITION_SITES_CALLERS: dict[str, HiddenCallers] = {
 # 'ads/includes/sched_card.html', 'includes/profile_settings.html',
 # 'schedules/includes/schedule_row.html')"} — за исключением появилась либо
 # исчезла форма, и решения об этом никто не принимал».
-MACRO_DEFINITION_SITES_CALLERS_DECLARED = 15
+#
+# 15 → 16, Фаза 11, план 11-12: форма ТУМБЛЕРА БЛОКИРОВКИ в карточке
+# пользователя пошла через макрос-обёртку. Прибавка ИМЕННО ОДИН, и форма
+# названа: 'admin/includes/user_actions.html'. ⚠️ ЭТО ПЕРВАЯ ФОРМА РАЗДЕЛА
+# АДМИНИСТРИРОВАНИЯ НА ОБЁРТКЕ; соседняя форма бесплатного доступа в том же
+# файле остаётся голой до плана 11-13.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего
+# `test_the_number_of_hidden_callers_is_the_declared_one`, дословно:
+# «объявленные вызывающие разошлись с измеренными:
+# {'components/form_wrapper.html': "объявлено ('account_groups/includes/group_row.html',
+# 'ads/form.html', 'ads/includes/sched_card.html', 'includes/profile_settings.html',
+# 'schedules/includes/schedule_row.html'), измерено
+# ('account_groups/includes/group_row.html', 'admin/includes/user_actions.html',
+# 'ads/form.html', 'ads/includes/sched_card.html', 'includes/profile_settings.html',
+# 'schedules/includes/schedule_row.html')"} — за исключением появилась либо
+# исчезла форма, и решения об этом никто не принимал». После записи кортежа, с
+# числом ещё прежним, тот же прогон сказал: «за перечнем мест определения
+# макросов спрятано вызывающих 16, объявлено 15».
+MACRO_DEFINITION_SITES_CALLERS_DECLARED = 16
 
 # ⚠️ ТО ЖЕ ДЛЯ ПЕРЕЧНЯ ПАРАМЕТРИЧЕСКИХ ЦЕЛЕЙ ПОДМЕНЫ. Записей там одна, и её
 # число объявлено; число ВЫЗЫВАЮЩИХ, за этой записью скрытых, до плана 09-07 не
@@ -1553,7 +1575,25 @@ MACRO_DEFINITION_SITES_CALLERS_DECLARED = 15
 # ['account_groups/includes/group_row.html', 'ads/form.html',
 # 'ads/includes/sched_card.html', 'includes/profile_settings.html',
 # 'schedules/includes/schedule_row.html']».
-PARAMETRIC_SWAP_TARGETS_CALLERS_DECLARED = 5
+#
+# 5 → 6, Фаза 11, план 11-12: форма ТУМБЛЕРА БЛОКИРОВКИ в карточке пользователя
+# (цель — постоянная обёртка `#user-actions`, способ — подмена СОДЕРЖИМОГО).
+# ⚠️ СТОЛКНОВЕНИЯ G-11 У НЕЁ НЕТ, и это ЗАМЕР: внеполосные узлы ответа целятся в
+# `#user-block-badge` и `#user-access-tile`, а не в цель формы.
+# ⚠️ ЦЕЛЬ У ЭТОГО ВЫЗЫВАЮЩЕГО БЕЗУСЛОВНА: обёртка печатается карточкой всегда.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего
+# `test_every_declared_parametric_caller_actually_calls_the_macro`, дословно:
+# «множество вызывающих записи разошлось с измеренным:
+# {'components/form_wrapper.html': "объявленные вызывающие
+# ['account_groups/includes/group_row.html', 'ads/form.html',
+# 'ads/includes/sched_card.html', 'includes/profile_settings.html',
+# 'schedules/includes/schedule_row.html'] разошлись с измеренными
+# ['account_groups/includes/group_row.html', 'admin/includes/user_actions.html',
+# 'ads/form.html', 'ads/includes/sched_card.html', 'includes/profile_settings.html',
+# 'schedules/includes/schedule_row.html']"}». С записанным кортежем и прежним
+# числом `test_the_number_of_hidden_callers_is_the_declared_one` сказал: «за
+# перечнем параметрических целей подмены спрятано вызывающих 6, объявлено 5».
+PARAMETRIC_SWAP_TARGETS_CALLERS_DECLARED = 6
 
 
 def _balanced_call_arguments(source: str, macro: str) -> list[str]:
@@ -2342,12 +2382,27 @@ PARAMETRIC_SWAP_TARGETS: dict[str, ParametricTarget] = {
         macro="form_wrapper",
         callers=(
             "account_groups/includes/group_row.html",
+            "admin/includes/user_actions.html",
             "ads/form.html",
             "ads/includes/sched_card.html",
             "includes/profile_settings.html",
             "schedules/includes/schedule_row.html",
         ),
         reason=(
+            "⚠️ ШЕСТОЙ ВЫЗЫВАЮЩИЙ — ТУМБЛЕР БЛОКИРОВКИ В КАРТОЧКЕ ПОЛЬЗОВАТЕЛЯ "
+            "(Фаза 11, план 11-12). Цель — постоянная обёртка `#user-actions` "
+            "страницы `admin/user_detail.html`, способ — подмена СОДЕРЖИМОГО "
+            "(D-12 Фазы 9): обёртка переживает сколько угодно нажатий. Ответ "
+            "несёт ещё два внеполосных узла — бейдж блокировки и плитку "
+            "доступа, — и оба целятся в ДРУГИЕ идентификаторы. "
+            "⚠️ СТОЛКНОВЕНИЯ G-11 У НЕЁ НЕТ, и это ЗАМЕР: внеполосного узла с "
+            "идентификатором `user-actions` в дереве не существует, у величины "
+            "ровно одна роль. "
+            "⚠️ ПАНЕЛИ ПОДТВЕРЖДЕНИЯ ВХОДА ПОД ПОЛЬЗОВАТЕЛЕМ И УДАЛЕНИЯ СТОЯТ ВНЕ "
+            "ЦЕЛИ: их собирает страница ниже блока действий, а в подменяемом "
+            "содержимом остаются только формы-триггеры с голым `x-data`. "
+            "Соседняя форма бесплатного доступа в том же файле на обёртку НЕ "
+            "переведена — её обработчик переводит план 11-13. "
             "⚠️ ПЯТЫЙ ВЫЗЫВАЮЩИЙ — ФОРМА НАСТРОЕК ПРОФИЛЯ (Фаза 11, план "
             "11-10). Цель — постоянная обёртка `#profile-settings`, способ — "
             "подмена СОДЕРЖИМОГО (D-12 Фазы 9): обёртка живёт в СТРАНИЦЕ и "
@@ -3868,7 +3923,18 @@ def _offenders_unreachable_blocking_target(
 # `блоков вызова макроса-обёртки разобрано 6, объявлено 5 — либо вызов появился
 # и решения о нём никто не принимал, либо разборщик перестал их находить, и
 # правило ниже утверждает пустоту`.
-UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED = 6
+#
+# 6 → 7, Фаза 11, план 11-12: форма ТУМБЛЕРА БЛОКИРОВКИ в карточке пользователя
+# — седьмой блочный вызов обёртки. ⚠️ ЦЕЛЬ БЛОКИРОВКИ У НЕЁ ОБЩАЯ, А НЕ ПУСТАЯ:
+# в слоте стои́т НАСТОЯЩАЯ кнопка отправки («Заблокировать»/«Разблокировать»),
+# клиентский слой её не снимает, и умолчание на её форме достижимо. Записи в
+# перечне исключений цели блокировки вызывающий не требует.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего
+# `test_no_caller_declares_a_blocking_target_its_form_cannot_have`, дословно:
+# `блоков вызова макроса-обёртки разобрано 7, объявлено 6 — либо вызов появился
+# и решения о нём никто не принимал, либо разборщик перестал их находить, и
+# правило ниже утверждает пустоту`.
+UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED = 7
 
 # Опора подстановки, доказывающей зубы правила В ЕГО СОБСТВЕННОМ ТЕЛЕ. Выбрана
 # ЗА УНИКАЛЬНОСТЬ в строке группы аккаунта: `_tree_with` требует ровно одного
