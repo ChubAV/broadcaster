@@ -604,6 +604,154 @@ async def test_an_external_address_never_reaches_the_degraded_path():
             await respond(_request(), redirect=hostile)
 
 
+# --- Третий выход: переход на ВНЕШНИЙ адрес (D-09, план 11-15) -----------------
+#
+# ⚠️ ВЫХОД БЕРЁТСЯ АТРИБУТОМ МОДУЛЯ, А НЕ ИМПОРТОМ В ШАПКЕ ФАЙЛА. Импорт
+# отсутствующего имени уронил бы СБОР всего файла, и отказ назывался бы ошибкой
+# сбора, а не утверждением о поведении; здесь его отсутствие есть проваленное
+# утверждение с именем правила.
+
+# Адрес подтверждения на ДОКУМЕНТИРОВАННОМ хосте (Находка C RESEARCH): все
+# официальные примеры `confirmation_url` ЮKassa — на `yoomoney.ru`. Выписан
+# строкой, а не взят из проверяемого модуля, по доктрине файла.
+CONFIRMATION_URL = "https://yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a"
+
+# Хвост адреса, по которому видно, что в журнал уехал ПОЛНЫЙ адрес: номер
+# заказа есть ровно то, чего журнал отвергнутого адреса нести не должен.
+ORDER_MARK = "orderId=2c85a"
+
+PAYMENT_FAILED_LOCATION = "/billing?notice=payment_failed"
+
+# Адреса, которые НЕ ИМЕЮТ ПРАВА доехать до заголовка увода с сайта. Каждое
+# написание — отдельный случай: список известных подделок есть ровно то, что
+# проверка обязана отвергнуть поимённо, а не «в среднем».
+OFF_THE_HOST_SET = {
+    "scheme-http": "http://yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "suffix-dash": "https://evil-yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "prefix-glued": "https://evilyoomoney.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "suffix-domain-com": "https://yoomoney.ru.evil.com/checkout/payments/v2/contract?orderId=2c85a",
+    "suffix-domain-example": "https://yoomoney.ru.evil.example/checkout?orderId=2c85a",
+    "undocumented-yookassa": "https://yookassa.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "userinfo-user": "https://user@yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "userinfo-host-before-at": "https://yoomoney.ru@evil.example/checkout?orderId=2c85a",
+    "userinfo-empty": "https://@yoomoney.ru/checkout?orderId=2c85a",
+    "backslash-before-at": "https://evil.example\\@yoomoney.ru/checkout?orderId=2c85a",
+    "port-explicit": "https://yoomoney.ru:8443/checkout/payments/v2/contract?orderId=2c85a",
+    "port-default": "https://yoomoney.ru:443/checkout?orderId=2c85a",
+    "scheme-relative": "//yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "relative-path": "/checkout/payments/v2/contract?orderId=2c85a",
+    "control-crlf": "https://yoomoney.ru/checkout?orderId=2c85a\r\nSet-Cookie: a=b",
+    "non-ascii-path": "https://yoomoney.ru/checkout/оплата?orderId=2c85a",
+    "non-ascii-host": "https://yооmoney.ru/checkout?orderId=2c85a",
+    "empty": "",
+}
+
+
+def _third_exit():
+    from app.pages import htmx
+
+    exit_ = getattr(htmx, "redirect_external", None)
+    assert exit_ is not None, (
+        "третьего выхода слоя ответа нет: переход на внешний адрес некому "
+        "отдать, и форма оплаты на htmx либо ломается, либо уходит мимо проверки"
+    )
+    return exit_
+
+
+def _rejections(caplog) -> list[dict]:
+    return [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict)
+        and record.msg.get("event") == "payment_confirmation_url_rejected"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_external_address_leaves_by_the_redirect_header_only(notice_registry):
+    """На htmx внешний адрес уезжает ОДНИМ заголовком `HX-Redirect`, без тела.
+
+    ⚠️ УТВЕРЖДАЕТСЯ САМ ЗАГОЛОВОК, А НЕ ТОЛЬКО СТАТУС (урок cookie D-05 Фазы 10):
+    правило, проверяющее 204, зеленело бы при заголовке, записанном на
+    выброшенный объект. ⚠️ `HX-Location` В ОТВЕТЕ НЕТ: слой письма читает его
+    ПЕРВЫМ (Находка A), и ответ с обоими заголовками ушёл бы по нему — то есть
+    межсайтовым XHR, который `selfRequestsOnly` молча заблокирует.
+
+    Без признака htmx — прежнее перенаправление на ЛЮБОЙ адрес: путь без
+    JavaScript не меняется и хоста не проверяет (асимметрия записана в
+    `SAFE_BY_NAME`).
+    """
+    redirect_external = _third_exit()
+
+    over_htmx = await redirect_external(
+        _request({HX_REQUEST_HEADER: "true"}),
+        url=CONFIRMATION_URL,
+        fallback="/billing",
+        fallback_notice="payment_failed",
+    )
+
+    assert over_htmx.status_code == 204
+    assert over_htmx.headers.get("HX-Redirect") == CONFIRMATION_URL, (
+        "ответ htmx не несёт адреса подтверждения в заголовке увода — браузер "
+        "останется на странице оплаты, а платёж уже заведён"
+    )
+    assert "HX-Location" not in over_htmx.headers, (
+        "ответ несёт ОБА заголовка перехода — слой письма уйдёт по HX-Location "
+        "межсайтовым XHR, и selfRequestsOnly его заблокирует"
+    )
+    assert over_htmx.body == b""
+
+    for url in (CONFIRMATION_URL, "https://yookassa.ru/checkout/payments/2c85a"):
+        bare = await redirect_external(
+            _request(), url=url, fallback="/billing", fallback_notice="payment_failed"
+        )
+        assert bare.status_code == 302
+        assert bare.headers["location"] == url
+        assert "HX-Redirect" not in bare.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hostile", list(OFF_THE_HOST_SET.values()), ids=list(OFF_THE_HOST_SET)
+)
+async def test_a_confirmation_address_off_the_closed_host_set_never_reaches_the_header(
+    hostile, notice_registry, caplog
+):
+    """Адрес вне закрытого множества хостов в заголовок увода НЕ попадает.
+
+    Провал проверки — переход на `/billing` с кодом `payment_failed` и запись
+    журнала, называющая ХОСТ и не несущая полного адреса (T-11-25: номер заказа
+    в журнале не нужен никому, кроме того, кто журнал читает не по праву).
+    """
+    redirect_external = _third_exit()
+
+    with caplog.at_level("INFO", logger="app.pages.htmx"):
+        response = await redirect_external(
+            _request({HX_REQUEST_HEADER: "true"}),
+            url=hostile,
+            fallback="/billing",
+            fallback_notice="payment_failed",
+        )
+
+    assert response.status_code == 204
+    assert "HX-Redirect" not in response.headers, (
+        f"адрес вне закрытого множества хостов доехал до заголовка увода: {hostile!r}"
+    )
+    assert response.headers.get("HX-Location") == PAYMENT_FAILED_LOCATION
+    assert response.body == b""
+
+    entries = _rejections(caplog)
+    assert len(entries) == 1, (
+        "отвергнутый адрес подтверждения не оставил записи "
+        f"`payment_confirmation_url_rejected`: {[r.msg for r in caplog.records]}"
+    )
+    assert "host" in entries[0], "журнал отвергнутого адреса не называет хост"
+    if hostile:
+        assert hostile not in repr(entries[0]) and ORDER_MARK not in repr(entries[0]), (
+            "журнал отвергнутого адреса несёт полный адрес вместе с номером заказа"
+        )
+
+
 # --- Приклейка внеполосного блока: ТРЕТИЙ инвариант — СТАТУС ------------------
 #
 # ⚠️ ПРАВИЛО СТОИТ ЗДЕСЬ, А НЕ РЯДОМ С ОСТАЛЬНЫМИ ПРАВИЛАМИ ПРИКЛЕЙКИ, И
