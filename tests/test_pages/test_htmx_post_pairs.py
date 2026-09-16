@@ -65,6 +65,7 @@ from tests.test_pages.test_confirm_delete_transport import (
     _current_user,
     _foreign_user,
     _identify,
+    _seed_victim,
     _user_of,
 )
 from tests.test_pages.test_editor_schedules import (
@@ -492,6 +493,40 @@ async def _arrange_profile_without_session(client, db, settings, identity) -> _A
 
 
 # =============================================================================
+# Посев: блокировка пользователя из его карточки (Фаза 11, план 11-12)
+# =============================================================================
+
+ADMIN_TOGGLE_BLOCK = "app/pages/admin.py::admin_toggle_block"
+MISSING_USER_ID = 987654
+# Первая величина вне колонки идентификатора — 2147483648 (D-07).
+OUT_OF_COLUMN_USER_ID = ID_MAX + 1
+
+
+async def _arrange_block_toggle(client, db, settings, identity) -> _Arranged:
+    """СВОЯ строка у каждой половины: вторая половина не должна снимать блокировку,
+    поставленную первой, — иначе обе половины проверяли бы разные исходы."""
+    target = await _seed_victim(db)
+    return _Arranged(
+        url=f"/admin/users/{target.id}/block", landing_args={"user_id": target.id}
+    )
+
+
+async def _arrange_block_missing(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url=f"/admin/users/{MISSING_USER_ID}/block")
+
+
+async def _arrange_block_out_of_column(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url=f"/admin/users/{OUT_OF_COLUMN_USER_ID}/block")
+
+
+async def _arrange_block_self(client, db, settings, identity) -> _Arranged:
+    admin = await _current_user(db, identity, settings)
+    return _Arranged(
+        url=f"/admin/users/{admin.id}/block", landing_args={"user_id": admin.id}
+    )
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -720,6 +755,46 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/login",
         transport=LOCATION,
     ),
+    # Фаза 11, план 11-12. Блокировка пользователя из его карточки: экран
+    # ОСТАЁТСЯ, подменяется содержимое блока действий, а бейдж и плитка доступа
+    # приезжают внеполосно (D-02). Метка — адрес формы блокировки: она стоит в
+    # ОСНОВНОМ теле, то есть доказывает, что приехал блок действий.
+    _PairCase(
+        key=ADMIN_TOGGLE_BLOCK,
+        name="блокировка пользователя — успех",
+        identity="admin",
+        arrange=_arrange_block_toggle,
+        landing="/admin/users/{user_id}",
+        transport=FRAGMENT,
+        fragment_mark='action="/admin/users/{user_id}/block"',
+    ),
+    # Исходы вне экрана (D-02): карточки несуществующего пользователя нет, и
+    # приземляться фрагменту некуда. Адрес — тот же, что уезжает 302.
+    _PairCase(
+        key=ADMIN_TOGGLE_BLOCK,
+        name="блокировка пользователя — пользователя нет",
+        identity="admin",
+        arrange=_arrange_block_missing,
+        landing="/admin/users",
+        transport=LOCATION,
+    ),
+    # D-07: величина вне колонки — та же ветка, что у несуществующей строки.
+    _PairCase(
+        key=ADMIN_TOGGLE_BLOCK,
+        name="блокировка пользователя — идентификатор вне колонки",
+        identity="admin",
+        arrange=_arrange_block_out_of_column,
+        landing="/admin/users",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=ADMIN_TOGGLE_BLOCK,
+        name="блокировка пользователя — нельзя заблокировать себя",
+        identity="admin",
+        arrange=_arrange_block_self,
+        landing="/admin/users/{user_id}",
+        transport=LOCATION,
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -748,7 +823,12 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   утверждать не тот код. Обе её половины утверждены поимённо в
 #   `tests/test_pages/test_profile.py`.
 #   ПОСТАВЛЕНО ПРОГОНОМ: `случаев пар в реестре 21, объявлено 19`.
-POST_PAIR_CASES_DECLARED = 21
+#   21 → 25, Фаза 11, план 11-12: четыре исхода БЛОКИРОВКИ ПОЛЬЗОВАТЕЛЯ ИЗ ЕГО
+#   КАРТОЧКИ — успех (фрагмент блока действий с внеполосными бейджем и плиткой
+#   доступа), пользователя нет, идентификатор вне колонки (D-07) и «нельзя
+#   заблокировать себя» (переход).
+#   ПОСТАВЛЕНО ПРОГОНОМ: `случаев пар в реестре 25, объявлено 21`.
+POST_PAIR_CASES_DECLARED = 25
 
 
 def _case_id(case: _PairCase) -> str:
