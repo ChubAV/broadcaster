@@ -48,6 +48,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.ad import Ad
 from app.models.schedule import Schedule
 from app.pages import notices
 from app.pages.identifiers import ID_MAX
@@ -59,10 +60,12 @@ from tests.test_pages.test_confirm_delete_transport import (
     CONFIRMED_DELETE_ROUTES,
     DOCUMENT_MARK,
     HTMX_HEADERS,
+    USER_EMAIL,
     _Arranged,
     _current_user,
     _foreign_user,
     _identify,
+    _user_of,
 )
 from tests.test_pages.test_editor_schedules import (
     _seed_account as _seed_editor_account,
@@ -359,6 +362,75 @@ async def _arrange_create_with_account_gone(client, db, settings, identity) -> _
 
 
 # =============================================================================
+# Посев: черновик объявления и его правка (Фаза 11, план 11-06)
+# =============================================================================
+
+ADS_CREATE = "app/pages/ads.py::ads_create"
+ADS_UPDATE = "app/pages/ads.py::ads_update"
+
+# Идентификатор, которого в базе нет. Величина ГОДНАЯ — она лежит в диапазоне
+# колонки, и ветка, которой она уходит, есть «записи нет / запись чужая», а не
+# отказ по величине: различать эти два случая ответом запрещено (T-02-21).
+MISSING_AD_ID = 876543
+
+
+def _editor_body(title: str = "Заголовок из пары") -> dict:
+    """Тело формы редактора: только поля содержания.
+
+    Кнопки «Сохранить» здесь нет намеренно — именованная кнопка отправки
+    ПУБЛИКУЕТ объявление и уводит человека в список, то есть меняет и адрес
+    приземления, и класс действия. Предмет этих случаев — автосохранение,
+    оставляющее человека в редакторе.
+    """
+    return {"title": title, "text": "Текст объявления из пары транспортов"}
+
+
+async def _newest_ad_of_the_owner(db: AsyncSession, arranged: _Arranged) -> dict:
+    """Идентификатор объявления, заведённого ЭТОЙ половиной пары.
+
+    Основание то же, что у `_created_schedule_of_the_ad` выше: строки,
+    создаваемой запросом, до запроса не существует, и предсказывать её
+    идентификатор сложением единицы значило бы утверждать поведение
+    автоинкремента драйвера. Выборка скоуплена ВЛАДЕЛЬЦЕМ (личность пары —
+    `user`) и берёт последнюю строку по возрастанию идентификатора: половины
+    исполняются последовательно, и каждая добирает подстановки сразу после
+    своего запроса.
+    """
+    owner = await _user_of(db, USER_EMAIL)
+    row = (
+        await db.execute(
+            select(Ad)
+            .where(Ad.user_id == owner.id)
+            .order_by(Ad.id.desc())
+            .limit(1)
+        )
+    ).scalars().first()
+    return {"ad_id": row.id} if row is not None else {}
+
+
+async def _arrange_ad_create(client, db, settings, identity) -> _Arranged:
+    # Записи нет: черновик заводит САМ запрос (D-03), поэтому подстановки адреса
+    # добираются после него.
+    await _current_user(db, identity, settings)
+    return _Arranged(url="/ads/new", data=_editor_body())
+
+
+async def _arrange_ad_update_own(client, db, settings, identity) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    ad = await _seed_editor_ad(db, user.id)
+    return _Arranged(
+        url=f"/ads/{ad.id}/edit",
+        data=_editor_body("Правка своего объявления"),
+        landing_args={"ad_id": ad.id},
+    )
+
+
+async def _arrange_ad_update_missing(client, db, settings, identity) -> _Arranged:
+    await _current_user(db, identity, settings)
+    return _Arranged(url=f"/ads/{MISSING_AD_ID}/edit", data=_editor_body())
+
+
+# =============================================================================
 # Посев: тумблер группы аккаунта (Фаза 9)
 # =============================================================================
 
@@ -522,6 +594,41 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/ads/{ad_id}/edit?notice=" + notices.SCHEDULE_ACCOUNT_GONE,
         transport=LOCATION,
     ),
+    # Фаза 11, план 11-06. Черновик объявления и его правка: ответ автосохранения
+    # приезжает внеполосными узлами, форма не перерисовывается (D-02, D-13).
+    # ⚠️ МЕТКА ФРАГМЕНТА — РАМКА ПРЕДПРОСМОТРА, А НЕ КАРТОЧКА СПИСКА: у этого
+    # ответа основного места подмены нет вовсе (`hx-swap="none"` формы), и всё
+    # приезжает внеполосно. Метка выбрана из трёх внеполосных узлов ответа как
+    # тот, что несёт СОДЕРЖАНИЕ записи, а не состояние индикатора.
+    _PairCase(
+        key=ADS_CREATE,
+        name="создание черновика объявления — автосохранением",
+        identity="user",
+        arrange=_arrange_ad_create,
+        landing="/ads/{ad_id}/edit",
+        transport=FRAGMENT,
+        fragment_mark='id="ad-preview"',
+        resolve_after=_newest_ad_of_the_owner,
+    ),
+    _PairCase(
+        key=ADS_UPDATE,
+        name="правка объявления по адресу — своё",
+        identity="user",
+        arrange=_arrange_ad_update_own,
+        landing="/ads/{ad_id}/edit",
+        transport=FRAGMENT,
+        fragment_mark='id="ad-preview"',
+    ),
+    # Исход уводит с экрана: редактора несуществующего объявления не бывает, и
+    # приземляться фрагменту некуда. Адрес тот же, что уезжает 302 сегодня.
+    _PairCase(
+        key=ADS_UPDATE,
+        name="правка объявления по адресу — объявления нет",
+        identity="user",
+        arrange=_arrange_ad_update_missing,
+        landing="/ads",
+        transport=LOCATION,
+    ),
     # Фаза 9, план 09-01, заведено планом 11-01. Первый фрагментный обработчик
     # вехи; в `CONFIRMED_DELETE_ROUTES` его нет (за панелью подтверждения он не
     # стоит), и без этой записи замыкание называет его непокрытым.
@@ -547,7 +654,10 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   11 → 15, Фаза 11, план 11-05: четыре исхода СОЗДАНИЯ расписания — вставка в
 #   непустой список (фрагмент), «было ноль», чужое объявление и недоступный
 #   аккаунт (переход).
-POST_PAIR_CASES_DECLARED = 15
+#   15 → 18, Фаза 11, план 11-06, задача 1: три исхода модуля ОБЪЯВЛЕНИЙ —
+#   создание черновика автосохранением и правка своего (фрагмент), правка
+#   несуществующего (переход).
+POST_PAIR_CASES_DECLARED = 18
 
 
 def _case_id(case: _PairCase) -> str:
