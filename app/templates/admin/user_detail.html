@@ -50,7 +50,15 @@
       {{ avatar(target_user.name, size=44) }}
       <div data-identity-meta>
         {{- mono(target_user.email, 'bright') -}}
-        {%- include "admin/includes/user_block_badge.html" -%}
+        {#- ПОСТОЯННАЯ ОБЁРТКА БЕЙДЖА (Фаза 11, план 11-12, D-02, D-03). Её
+            СОДЕРЖИМОЕ подменяет внеполосный узел ответа тумблера блокировки
+            (`admin/partials/user_actions_response.html`), поэтому обёртка
+            существует ВСЕГДА — и у незаблокированного, где она пуста: область,
+            которой нет в документе, не получила бы бейдж после первого нажатия.
+            Пустая обёртка не занимает места в колонке личности: правило
+            `display: contents` в `app.css` делает флекс-элементом сам бейдж, а
+            не обёртку, и лишнего зазора под адресом нет. -#}
+        <span id="user-block-badge">{%- include "admin/includes/user_block_badge.html" -%}</span>
       </div>
     </div>
     <div data-metrics>
@@ -75,7 +83,11 @@
           Формат даты — только через глобал зоны пользователя (правило P-2);
           своего `strftime` у этой строки нет. -#}
       {{ card_open() }}
+        {#- Постоянная обёртка плитки (план 11-12): её СОДЕРЖИМОЕ подменяет
+            внеполосный узел ответа тумблера. Карточка плитки остаётся снаружи. -#}
+        <div id="user-access-tile">
         {% include "admin/includes/user_access_tile.html" %}
+        </div>
       {{ card_close() }}
       {{ card_open() }}
         {{ mono('Объявления', 'muted', upper=true) }}
@@ -119,7 +131,11 @@
   {% endif %}
 
   {{ card_open(title='Действия') }}
-    <div data-actions>
+    {#- ПОСТОЯННЫЙ `id` БЛОКА ДЕЙСТВИЙ (Фаза 11, план 11-12, D-02, D-03): форма
+        тумблера блокировки подменяет СОДЕРЖИМОЕ этого узла (`innerHTML`), и узел
+        переживает сколько угодно ответов. Панели подтверждения входа и удаления
+        стоят НИЖЕ, вне узла, и подменой не задеваются. -#}
+    <div data-actions id="user-actions">
       {%- include "admin/includes/user_actions.html" %}
     </div>
   {{ card_close() }}

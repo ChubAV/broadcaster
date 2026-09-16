@@ -1866,20 +1866,46 @@ async def admin_toggle_block(
     # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
     user_usable = id_in_column(user_id)
     target_user = await db.get(User, user_id) if user_usable else None
+    # ИСХОДЫ ВНЕ ЭКРАНА — ПЕРЕХОДОМ (Фаза 11, план 11-12, D-02). Карточки
+    # несуществующего пользователя нет, и фрагменту некуда приземлиться; на
+    # htmx-пути слой ответа отдаёт 204 + `HX-Location` на ТОТ ЖЕ адрес, что
+    # уезжает 302 без htmx.
     if not target_user:
-        return RedirectResponse(url="/admin/users", status_code=302)
+        return await respond(request, redirect="/admin/users")
 
     # Don't allow admin to block themselves
     if target_user.id == admin.id:
-        return RedirectResponse(
-            url=f"/admin/users/{user_id}", status_code=302
-        )
+        return await respond(request, redirect=f"/admin/users/{user_id}")
 
     target_user.is_blocked = not target_user.is_blocked
     await db.commit()
 
-    return RedirectResponse(
-        url=f"/admin/users/{user_id}", status_code=302
+    async def _fragment() -> HTMLResponse:
+        """Содержимое блока действий плюс внеполосные бейдж и плитка доступа.
+
+        ⚠️ ФУНКЦИЯ НУЛЬАРНАЯ И АСИНХРОННАЯ: слой ответа делает `await
+        fragment()`. Отложенность несущая — на пути без htmx выборка подписки и
+        сборка разметки не выполняются вовсе.
+
+        ⚠️ ВИД ДОСТУПА СОБИРАЕТСЯ ТЕМИ ЖЕ ФУНКЦИЯМИ, ЧТО У `admin_user_detail`
+        (`_active_subscriptions_by_user` + `_access_view`), и под тем же КЛЮЧОМ
+        `target_access`: плитка, собранная вторым путём, после нажатия показала
+        бы не то, что покажет F5. Ключ `user` — ВОШЕДШИЙ АДМИНИСТРАТОР (пояс даты
+        в плитке), ровно как в контексте страницы.
+        """
+        subscriptions = await _active_subscriptions_by_user(db, [target_user.id])
+        access = _access_view(
+            subscriptions.get(target_user.id), datetime.now(timezone.utc)
+        )
+        html = templates.env.get_template(
+            "admin/partials/user_actions_response.html"
+        ).render(target_user=target_user, target_access=access, user=admin)
+        return HTMLResponse(html)
+
+    # `notice` НЕ передаётся: исход виден в самой подписи тумблера, в бейдже и в
+    # плитке — ровно так, как его показывал редирект на карточку.
+    return await respond(
+        request, redirect=f"/admin/users/{user_id}", fragment=_fragment
     )
 
 
