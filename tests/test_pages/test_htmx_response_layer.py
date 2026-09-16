@@ -647,6 +647,9 @@ OFF_THE_HOST_SET = {
 }
 
 
+from structlog.testing import capture_logs  # noqa: E402
+
+
 def _third_exit():
     from app.pages import htmx
 
@@ -658,12 +661,11 @@ def _third_exit():
     return exit_
 
 
-def _rejections(caplog) -> list[dict]:
+def _rejections(captured: list[dict]) -> list[dict]:
     return [
-        record.msg
-        for record in caplog.records
-        if isinstance(record.msg, dict)
-        and record.msg.get("event") == "payment_confirmation_url_rejected"
+        entry
+        for entry in captured
+        if entry.get("event") == "payment_confirmation_url_rejected"
     ]
 
 
@@ -715,17 +717,24 @@ async def test_an_external_address_leaves_by_the_redirect_header_only(notice_reg
     "hostile", list(OFF_THE_HOST_SET.values()), ids=list(OFF_THE_HOST_SET)
 )
 async def test_a_confirmation_address_off_the_closed_host_set_never_reaches_the_header(
-    hostile, notice_registry, caplog
+    hostile, notice_registry
 ):
     """Адрес вне закрытого множества хостов в заголовок увода НЕ попадает.
 
     Провал проверки — переход на `/billing` с кодом `payment_failed` и запись
     журнала, называющая ХОСТ и не несущая полного адреса (T-11-25: номер заказа
     в журнале не нужен никому, кроме того, кто журнал читает не по праву).
+
+    ⚠️ ЗАПИСЬ СНИМАЕТСЯ `capture_logs`, А НЕ `caplog`, И ЭТО ОБРАТНЫЙ СЛУЧАЙ
+    ДОВОДА `tests/test_admin.py`. Там логгер — модульный прокси, связанный до
+    подмены, и `capture_logs` его не видит. Здесь выход берёт логгер ВНУТРИ
+    вызова, прокси связывается уже под подменой; а `caplog` пуст, потому что
+    вывод structlog в stdlib настраивает сборка приложения, которой у прямого
+    вызова выхода нет.
     """
     redirect_external = _third_exit()
 
-    with caplog.at_level("INFO", logger="app.pages.htmx"):
+    with capture_logs() as captured:
         response = await redirect_external(
             _request({HX_REQUEST_HEADER: "true"}),
             url=hostile,
@@ -740,10 +749,10 @@ async def test_a_confirmation_address_off_the_closed_host_set_never_reaches_the_
     assert response.headers.get("HX-Location") == PAYMENT_FAILED_LOCATION
     assert response.body == b""
 
-    entries = _rejections(caplog)
+    entries = _rejections(captured)
     assert len(entries) == 1, (
         "отвергнутый адрес подтверждения не оставил записи "
-        f"`payment_confirmation_url_rejected`: {[r.msg for r in caplog.records]}"
+        f"`payment_confirmation_url_rejected`: {captured}"
     )
     assert "host" in entries[0], "журнал отвергнутого адреса не называет хост"
     if hostile:
