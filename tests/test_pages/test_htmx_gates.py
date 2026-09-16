@@ -207,7 +207,6 @@ NOT_YET_CONVERTED: frozenset[str] = frozenset(
         "app/pages/accounts.py::accounts_connect_max_start",
         "app/pages/accounts.py::accounts_retry_sync",
         "app/pages/accounts.py::accounts_sync_groups",
-        "app/pages/admin.py::admin_toggle_free_access",
         "app/pages/auth.py::login_submit",
         "app/pages/auth.py::register_send_code",
         "app/pages/auth.py::register_verify",
@@ -416,7 +415,20 @@ NOT_YET_CONVERTED: frozenset[str] = frozenset(
 #   `число непереведённых обработчиков стало 19, а в файле записано 20. ЕСЛИ
 #   ЧИСЛО УПАЛО — ЭТО ПРОГРЕСС ВЕХИ, а не поломка` / `assert 19 == 20`. Тем же
 #   прогоном покраснел `test_the_three_sets_do_not_overlap`.
-NOT_YET_CONVERTED_COUNT = 19
+#
+#   19 → 18, Фаза 11, план 11-13. ИСТОЧНИК ДВИЖЕНИЯ: ВЫДАЧА И СНЯТИЕ
+#   БЕСПЛАТНОГО ДОСТУПА из карточки пользователя переведены на слой ответа —
+#   второй тумблер карточки отвечает ТЕМ ЖЕ фрагментом блока действий, что
+#   блокировка, с плиткой доступа, собранной после сброса кэша вердикта.
+#   ⚠️ Имя обработчика набрано СЛОВАМИ, а не ключом перечня, по той же причине,
+#   что у записей выше: снятие ключа проверяется грепом по этому файлу.
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА. Вывод
+#   `test_the_backlog_matches_the_declared_count` после перевода, дословно:
+#   `число непереведённых обработчиков стало 18, а в файле записано 19. ЕСЛИ
+#   ЧИСЛО УПАЛО — ЭТО ПРОГРЕСС ВЕХИ, а не поломка` / `assert 18 == 19`. Тем же
+#   прогоном `test_the_three_sets_do_not_overlap` сказал: `обработчик
+#   ФАКТИЧЕСКИ переведён на слой ответа, но остался в перечне отставания`.
+NOT_YET_CONVERTED_COUNT = 18
 
 
 # =============================================================================
@@ -1508,6 +1520,13 @@ FRAGMENT_RESPONSE_HANDLERS: frozenset[str] = frozenset(
         # ОТДАЁТ ПЕРЕХОДОМ, а отказ по источнику — собственным голым 403
         # (изъятие D-08, запись `OWN_RESPONSE_EXITS`).
         "app/pages/admin.py::admin_toggle_block",
+        # Фаза 11, план 11-13. Выдача и снятие бесплатного доступа из карточки
+        # пользователя: ТОТ ЖЕ ответ, что у блокировки (одна сборка
+        # `_user_actions_response`, один шаблон), и плитка доступа в нём
+        # собирается ПОСЛЕ сброса кэша вердикта. «Пользователя нет» и «строки
+        # подписки нет» тот же обработчик отдаёт ПЕРЕХОДОМ, отказ по источнику —
+        # голым 403 (изъятие D-08).
+        "app/pages/admin.py::admin_toggle_free_access",
     }
 )
 
@@ -1587,7 +1606,17 @@ FRAGMENT_RESPONSE_HANDLERS: frozenset[str] = frozenset(
 #   `test_the_number_of_fragment_response_handlers_is_the_declared_one` после
 #   перевода, дословно: `обработчиков, отдающих фрагмент, найдено 10, объявлено 9`
 #   / `assert 10 == 9`.
-FRAGMENT_RESPONSE_HANDLERS_DECLARED = 10
+#
+#   10 → 11, Фаза 11, план 11-13. ИСТОЧНИК ДВИЖЕНИЯ: ВЫДАЧА И СНЯТИЕ
+#   БЕСПЛАТНОГО ДОСТУПА из карточки пользователя стали одиннадцатым
+#   обработчиком, отдающим фрагмент, — вторым в разделе администрирования.
+#   ⚠️ Имя набрано СЛОВАМИ. Счётчик отставания тем же обработчиком опустился
+#   19 → 18.
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА. Вывод
+#   `test_the_number_of_fragment_response_handlers_is_the_declared_one` после
+#   перевода, дословно: `обработчиков, отдающих фрагмент, найдено 11, объявлено
+#   10` / `assert 11 == 10`.
+FRAGMENT_RESPONSE_HANDLERS_DECLARED = 11
 
 
 def _hands_a_fragment(function: ast.AST) -> bool:
@@ -2614,6 +2643,20 @@ DECISION_WAITS_FOR_THE_OWNER = "ЖДЁТ ВЛАДЕЛЬЦА"
 # принявшего. Записи, стоящие в этом состоянии, — ТОЛЬКО те, которые D-08
 # перечисляет поимённо; присвоить его записи, которой D-08 не называет, значило
 # бы дочеканить решение за владельца.
+#
+# ⚠️ ВТОРОЕ ПОКОЛЕНИЕ ГРАНИЦЫ (Фаза 11, план 11-13). Абзац выше не стёрт: он
+# верен, и граница «только записи, которые D-08 называет» остаётся. Уточнено,
+# КАКИЕ записи D-08 называет. Его текст дословно: «Голый `Response(status_code=403)`
+# на провале `is_same_origin` ОСТАЁТСЯ и объявляется именованным изъятием. К
+# девяти записям `OWN_RESPONSE_EXITS` добавляются три обработчика этой фазы». То
+# есть предмет решения — ФОРМА отказа по источнику для ВСЕГО реестра: девять
+# прежних записей названы им как множество («к девяти записям»), три новых —
+# поимённо. План 11-12 перевёл в это состояние одну запись; план 11-13 переводит
+# девять прежних и вторую из трёх новых. Третью (`subscribe_to_plan`) приземлит
+# её собственный план. Обработчик, которого D-08 не называет ни множеством, ни
+# именем (`stop_impersonation` — Фаза 14), в это состояние НЕ ставится.
+# ⚠️ D-08 ЗАКРЫВАЕТ ЧАСТЬ «РЕШЕНИЕ О ФОРМЕ» ОКНА 63, А НЕ ОКНО: машинный гейт
+# продолжает считать выходы, и окно 63 реестра остаётся открытым.
 DECISION_OWNER_D08 = (
     "РЕШЕНО ВЛАДЕЛЬЦЕМ: решение владельца 2026-09-14, `11-CONTEXT.md` D-08 — "
     "голый 403 на провале сверки источника остаётся именованным изъятием"
@@ -3813,6 +3856,16 @@ LIFTING_CONDITION_OWN_RESPONSE = (
     "решение о форме ответа, запертое D-01, и принадлежит оно ВЛАДЕЛЬЦУ, а не "
     "фазе — прецедент изъятия D-08 записан владельцем, прецедент разведения "
     "двух адресатов — окно 51 реестра"
+    # ⚠️ ВТОРОЕ ПОКОЛЕНИЕ УСЛОВИЯ (Фаза 11, план 11-13). Первое не стёрто: оно
+    # было верно на своё время — вопрос о форме принадлежал ВЛАДЕЛЬЦУ и ждал
+    # его. Дописано, чем он решён. Поколение стои́т в КОНЦЕ строки, чтобы
+    # правило обоснований по-прежнему находило в ней «Фаза 11» и «ВЛАДЕЛЬЦУ».
+    + ". ⚠️ ВТОРОЕ ПОКОЛЕНИЕ (Фаза 11, план 11-13): вопрос о ФОРМЕ решён "
+    "владельцем 2026-09-14 (`11-CONTEXT.md` D-08) — голый 403 на провале "
+    "сверки источника остаётся ИМЕНОВАННЫМ ИЗЪЯТИЕМ; выход остаётся записью "
+    "этого реестра, и машинный гейт продолжает считать выходы. Прежняя "
+    "формулировка «принадлежит ВЛАДЕЛЬЦУ, а не фазе» верна на своё время и не "
+    "стёрта: решение принял именно владелец"
 )
 
 # Цена, названная ТРЕМЯ СЛЕДСТВИЯМИ, а не словом «хуже». Общая у всех записей,
@@ -3883,7 +3936,7 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
             "остальных четырёх, — и отличим он именно отсутствием фрагмента"
         ),
         lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+        decision_state=DECISION_OWNER_D08,
     ),
     _OwnResponseExit(
         entry="app/pages/accounts.py::accounts_delete",
@@ -3900,7 +3953,7 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
             "обработчика есть, просто не редирект"
         ),
         lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+        decision_state=DECISION_OWNER_D08,
     ),
     _OwnResponseExit(
         entry="app/pages/admin.py::admin_restart_worker",
@@ -3916,7 +3969,7 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
             "одним и тем же отсутствием сообщения"
         ),
         lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+        decision_state=DECISION_OWNER_D08,
     ),
     _OwnResponseExit(
         entry="app/pages/admin.py::admin_drop_task",
@@ -3932,7 +3985,7 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
             "как «снятие не сработало по существу», а не как отказ транспорта"
         ),
         lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+        decision_state=DECISION_OWNER_D08,
     ),
     _OwnResponseExit(
         entry="app/pages/admin.py::admin_impersonate",
@@ -3949,7 +4002,7 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
             "равна цене прочих восьми"
         ),
         lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+        decision_state=DECISION_OWNER_D08,
     ),
     _OwnResponseExit(
         entry="app/pages/admin.py::admin_delete_user",
@@ -3964,7 +4017,7 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
             "то есть запись реестра стои́т на прецеденте, а не рядом с ним"
         ),
         lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+        decision_state=DECISION_OWNER_D08,
     ),
     # Фаза 11, план 11-12. ПЕРВАЯ запись реестра, стоящая в РЕШЁННОМ состоянии,
     # и решил её ВЛАДЕЛЕЦ (D-08 Фазы 11), а не план: D-08 называет этот
@@ -3997,6 +4050,40 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
         lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
         decision_state=DECISION_OWNER_D08,
     ),
+    # Фаза 11, план 11-13. ВТОРАЯ из трёх записей, которые D-08 называет
+    # поимённо: тумблер бесплатного доступа переведён на слой ответа и вошёл во
+    # вселенную перечня со своим голым 403.
+    _OwnResponseExit(
+        entry="app/pages/admin.py::admin_toggle_free_access",
+        kind="Response(status_code=403)",
+        reason=(
+            _OWN_RESPONSE_PRICE
+            + ". "
+            + _OWN_RESPONSE_ORIGIN_GUARD
+            + ". ⚠️ СВОЁ У ЭТОГО ВХОДА: маршрут `POST /users/{user_id}/unlimited` — "
+            "ТУМБЛЕР, раздающий ПЛАТНОЕ благо чужой учётной записи, а не "
+            "действие за панелью подтверждения, и потому следствие (2) цены к "
+            "нему не прикладывается: панели, которая осталась бы открытой, у "
+            "него нет. Отказ стои́т ДО выборки строки подписки и ДО сброса кэша "
+            "вердикта: поддельный запрос не меняет ни льготы, ни кэша. "
+            "ОСНОВАНИЕ ОСТАВИТЬ ГОЛЫЙ 403 — НЕДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НА "
+            "htmx-ПУТИ (решение владельца D-08): браузер на страницах "
+            "приложения сам ставит `Sec-Fetch-Site: same-origin`; "
+            "`selfRequestsOnly: true` блока конфигурации не даёт htmx уйти на "
+            "чужой адрес; поддельная форма со стороннего сайта приходит ПОЛНОЙ "
+            "НАВИГАЦИЕЙ, без признака слоя письма, и получает тот же 403, что и "
+            "до перевода, — атакующему объяснять незачем. ЦЕНА СЛОВАМИ: при "
+            "редком сбое заголовков у прокси администратор, нажавший тумблер, "
+            "получит общую плашку «Действие не выполнено. Попробуйте ещё раз "
+            "через минуту.» — неверный совет, потому что повтор даст тот же "
+            "отказ; подпись кнопки и плитка доступа останутся прежними. "
+            "Отвергнуто владельцем: отказ через слой ответа с новым кодом "
+            "уведомления и переходом — новый код реестра и смена пути без JS с "
+            "403 на редирект"
+        ),
+        lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
+        decision_state=DECISION_OWNER_D08,
+    ),
     _OwnResponseExit(
         entry="app/pages/ads.py::ads_delete",
         kind="Response(status_code=403)",
@@ -4011,7 +4098,7 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
             "исчезнувшей карточки, ни сообщения о том, почему она осталась"
         ),
         lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+        decision_state=DECISION_OWNER_D08,
     ),
     _OwnResponseExit(
         entry="app/pages/history.py::history_retry",
@@ -4028,7 +4115,7 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
             "которому окно к тому времени может уже позволить отправку"
         ),
         lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+        decision_state=DECISION_OWNER_D08,
     ),
     _OwnResponseExit(
         entry="app/pages/schedules.py::schedules_delete",
@@ -4045,7 +4132,7 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
             "остальные две формы"
         ),
         lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
+        decision_state=DECISION_OWNER_D08,
     ),
 )
 
@@ -4090,7 +4177,24 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
 #   (вид Response(status_code=403))`; после записи
 #   `test_the_number_of_own_response_exits_is_declared` — `собственных выходов
 #   переведённых обработчиков объявлено 10, а число говорит 9`.
-OWN_RESPONSE_EXITS_DECLARED = 10
+#
+#   10 → 11, Фаза 11, план 11-13. ИСТОЧНИК ДВИЖЕНИЯ: ВЫДАЧА И СНЯТИЕ
+#   БЕСПЛАТНОГО ДОСТУПА из карточки пользователя переведены на слой ответа и
+#   ВОШЛИ во вселенную перечня со своим голым 403 — второй из четырёх,
+#   названных в первой записи летописи. ⚠️ Имя набрано СЛОВАМИ.
+#   ⚠️ ТЕМ ЖЕ ПЛАНОМ ВСЕ ДЕВЯТЬ ПРЕЖНИХ ЗАПИСЕЙ ПЕРЕВЕДЕНЫ ИЗ «ЖДЁТ ВЛАДЕЛЬЦА» В
+#   `DECISION_OWNER_D08`: решение владельца D-08 называет их множеством («к
+#   девяти записям `OWN_RESPONSE_EXITS`») и закрывает для всего реестра вопрос о
+#   ФОРМЕ отказа по источнику. Число записей от этого не двинулось; двинулось
+#   только их состояние. Окно 63 реестра остаётся открытым — D-08 закрывает его
+#   часть «решение о форме», а не счёт выходов.
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА. После перевода, ДО
+#   записи, `test_every_own_response_exit_of_a_converted_handler_is_declared`
+#   сказал дословно: `НАЙДЕН ЗАМЕРОМ, НО НЕ ОБЪЯВЛЕН:
+#   app/pages/admin.py::admin_toggle_free_access (вид Response(status_code=403))`;
+#   после записи `test_the_number_of_own_response_exits_is_declared` —
+#   `собственных выходов переведённых обработчиков объявлено 11, а число говорит 10`.
+OWN_RESPONSE_EXITS_DECLARED = 11
 
 
 def _own_response_completeness_complaints(

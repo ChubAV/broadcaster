@@ -1605,6 +1605,39 @@ async def admin_user_history_detail(
     )
 
 
+async def _user_actions_response(
+    db: AsyncSession, target_user: User, admin: User
+) -> HTMLResponse:
+    """Ответ ОБОИХ тумблеров карточки пользователя: блок действий плюс внеполосные
+    бейдж блокировки и плитка доступа (Фаза 11, планы 11-12 и 11-13, D-02).
+
+    ⚠️ ОДНА СБОРКА НА ДВА ТУМБЛЕРА, И ЭТО НЕ ЭКОНОМИЯ СТРОК. Блокировка и
+    бесплатный доступ подменяют ОДНУ И ТУ ЖЕ область (`#user-actions`) и
+    печатают одно и то же состояние в трёх местах; ответ, собранный вторым
+    путём, после нажатия одного тумблера показал бы подпись соседнего не такой,
+    какой её покажет F5. Шаблон тоже один:
+    `admin/partials/user_actions_response.html`.
+
+    ⚠️ ВИД ДОСТУПА СОБИРАЕТСЯ ТЕМИ ЖЕ ФУНКЦИЯМИ, ЧТО У `admin_user_detail`
+    (`_active_subscriptions_by_user` + `_access_view`), и под тем же КЛЮЧОМ
+    `target_access`: плитка, собранная вторым путём, после нажатия показала бы
+    не то, что покажет F5. Ключ `user` — ВОШЕДШИЙ АДМИНИСТРАТОР (пояс даты в
+    плитке), ровно как в контексте страницы.
+
+    ⚠️ ПОРЯДОК ОТНОСИТЕЛЬНО СБРОСА КЭША ВЕРДИКТА — ЗАБОТА ВЫЗЫВАЮЩЕГО. Функция
+    зовётся из ленивого сборщика фрагмента, который слой ответа исполняет
+    последним; тумблер бесплатного доступа сбрасывает кэш ДО вызова слоя.
+    """
+    subscriptions = await _active_subscriptions_by_user(db, [target_user.id])
+    access = _access_view(
+        subscriptions.get(target_user.id), datetime.now(timezone.utc)
+    )
+    html = templates.env.get_template(
+        "admin/partials/user_actions_response.html"
+    ).render(target_user=target_user, target_access=access, user=admin)
+    return HTMLResponse(html)
+
+
 @router.post("/users/{user_id}/unlimited")
 async def admin_toggle_free_access(
     request: Request,
@@ -1672,8 +1705,12 @@ async def admin_toggle_free_access(
     # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
     user_usable = id_in_column(user_id)
     target_user = await db.get(User, user_id) if user_usable else None
+    # ИСХОДЫ ВНЕ ЭКРАНА — ПЕРЕХОДОМ (Фаза 11, план 11-13, D-02, FORM-04).
+    # Карточки несуществующего пользователя нет, и фрагменту некуда
+    # приземлиться; на htmx-пути слой ответа отдаёт 204 + `HX-Location` на ТОТ
+    # ЖЕ адрес, что уезжает 302 без htmx.
     if not target_user:
-        return RedirectResponse(url="/admin/users", status_code=302)
+        return await respond(request, redirect="/admin/users")
 
     location = f"/admin/users/{user_id}"
 
@@ -1696,7 +1733,10 @@ async def admin_toggle_free_access(
             admin_user_id=admin.id,
             target_user_id=target_user.id,
         )
-        return RedirectResponse(url=location, status_code=302)
+        # Действие не состоялось, и фрагмента «после действия» нет: переходом
+        # на ту же карточку, где видны закрытый доступ и отсутствие льготы
+        # (план 11-13, FORM-04). Журнал стои́т ПЕРЕД ответом на обоих путях.
+        return await respond(request, redirect=location)
 
     subscription.has_free_access = not subscription.has_free_access
     await db.commit()
@@ -1708,9 +1748,27 @@ async def admin_toggle_free_access(
         has_free_access=subscription.has_free_access,
     )
 
+    # ⚠️ СБРОС КЭША ВЕРДИКТА — ДО ОТВЕТА, А ФРАГМЕНТ СОБИРАЕТСЯ ЛЕНИВО ВНУТРИ
+    # СЛОЯ, ТО ЕСТЬ ПОСЛЕ СБРОСА (Фаза 11, план 11-13, T-11-20). Вердикт доступа
+    # кэшируется до минуты; фрагмент, собранный раньше сброса, закрепил бы в
+    # ответе состояние, которого после нажатия уже нет. Переставить эти две
+    # строки местами — значит собрать плитку до сброса: порядок стережёт
+    # `test_free_access_fragment_is_assembled_after_the_access_cache_is_dropped`.
     await invalidate_access_cache(target_user.id)
 
-    return RedirectResponse(url=location, status_code=302)
+    async def _fragment() -> HTMLResponse:
+        """Тот же ответ, что у тумблера блокировки: блок действий плюс внеполосные
+        бейдж и плитка доступа (`_user_actions_response`).
+
+        ⚠️ ФУНКЦИЯ НУЛЬАРНАЯ И АСИНХРОННАЯ, И ОТЛОЖЕННОСТЬ НЕСУЩАЯ: слой ответа
+        зовёт её ПОСЛЕ того, как управление прошло сброс кэша выше, а на пути
+        без htmx не зовёт вовсе.
+        """
+        return await _user_actions_response(db, target_user, admin)
+
+    # `notice` НЕ передаётся: исход виден в подписи тумблера и в плитке доступа
+    # — ровно так, как его показывал редирект на карточку.
+    return await respond(request, redirect=location, fragment=_fragment)
 
 
 @router.post("/users/{user_id}/impersonate")
@@ -1887,20 +1945,11 @@ async def admin_toggle_block(
         fragment()`. Отложенность несущая — на пути без htmx выборка подписки и
         сборка разметки не выполняются вовсе.
 
-        ⚠️ ВИД ДОСТУПА СОБИРАЕТСЯ ТЕМИ ЖЕ ФУНКЦИЯМИ, ЧТО У `admin_user_detail`
-        (`_active_subscriptions_by_user` + `_access_view`), и под тем же КЛЮЧОМ
-        `target_access`: плитка, собранная вторым путём, после нажатия показала
-        бы не то, что покажет F5. Ключ `user` — ВОШЕДШИЙ АДМИНИСТРАТОР (пояс даты
-        в плитке), ровно как в контексте страницы.
+        ⚠️ ТЕЛО ВЫНЕСЕНО В `_user_actions_response` (план 11-13), И АБЗАЦ О ВИДЕ
+        ДОСТУПА ПЕРЕЕХАЛ ТУДА ЖЕ: тот же ответ собирает тумблер бесплатного
+        доступа, и две копии сборки разошлись бы молча.
         """
-        subscriptions = await _active_subscriptions_by_user(db, [target_user.id])
-        access = _access_view(
-            subscriptions.get(target_user.id), datetime.now(timezone.utc)
-        )
-        html = templates.env.get_template(
-            "admin/partials/user_actions_response.html"
-        ).render(target_user=target_user, target_access=access, user=admin)
-        return HTMLResponse(html)
+        return await _user_actions_response(db, target_user, admin)
 
     # `notice` НЕ передаётся: исход виден в самой подписи тумблера, в бейдже и в
     # плитке — ровно так, как его показывал редирект на карточку.
