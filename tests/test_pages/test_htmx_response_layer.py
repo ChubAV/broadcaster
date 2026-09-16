@@ -667,3 +667,140 @@ def test_the_glue_refuses_a_response_whose_status_forbids_a_body(notice_registry
     assert int(glued.headers["content-length"]) == len(glued.body), (
         "заголовок длины тела не пересчитан после приклейки на обычном статусе"
     )
+
+
+# --- ВЫХОД ОТКАЗА ВАЛИДАЦИИ: ВЕТВЬ БЕРЁТСЯ ДВУМЯ ПРИЗНАКАМИ (T-07-13, D-07) ---
+#
+# ⚠️ ПРАВИЛА НИЖЕ ПОДАЮТ ВЫХОДУ ИСКЛЮЧЕНИЕ НАПРЯМУЮ, МИНУЯ ПРИЛОЖЕНИЕ, И ЭТО
+# РАЗДЕЛЕНИЕ ПРЕДМЕТА, А НЕ ЭКОНОМИЯ. Поведение МАРШРУТОВ проверяет обход
+# `tests/test_pages/test_htmx_validation_sink.py`; предмет здешних правил — САМ
+# ВЫХОД как помощник слоя ответа. Через приложение недостижим ровно тот вход,
+# ради которого выход и написан осторожно: исключение с местом ошибки `body` и
+# `query` у ОДНОГО И ТОГО ЖЕ обработчика, плюс запрос вовсе БЕЗ обработчика в
+# области видимости.
+#
+# ⚠️ ОБРАБОТЧИКИ БЕРУТСЯ НАСТОЯЩИЕ, А НЕ ПОДДЕЛЬНЫЕ. Признак читает
+# `__module__` обработчика; заглушка с пририсованным `__module__` утверждала бы
+# о самой себе, и переезд модуля страниц такое правило пережило бы молча.
+from app.pages.schedules import schedules_create  # noqa: E402
+from app.routes.schedules import toggle_schedule  # noqa: E402
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+
+# Три МЕСТА ошибки разбора. Выход обязан отвечать одинаково на все три, потому
+# что `exc.errors()` он не читает вовсе.
+VALIDATION_ERROR_PLACES = ("path", "body", "query")
+
+FRAMEWORK_VALIDATION_STATUS = 422
+EMPTY_BAD_REQUEST_STATUS = 400
+
+
+def _validation_error(place: str) -> RequestValidationError:
+    """Отказ разбора с названным МЕСТОМ ошибки."""
+    return RequestValidationError(
+        [
+            {
+                "type": "int_parsing",
+                "loc": (place, "identifier"),
+                "msg": "Input should be a valid integer",
+                "input": "not-a-number",
+            }
+        ]
+    )
+
+
+def _request_for(endpoint, headers: dict[str, str] | None = None) -> Request:
+    """Запрос, чья область видимости несёт сорвавшийся обработчик.
+
+    Ключ обработчика выставляется маршрутом ДО разбора параметров — замерено на
+    FastAPI 0.129.0 / Starlette 0.52.1 для отказов пути, тела и строки запроса.
+    `endpoint=None` воспроизводит запрос, у которого обработчика нет вовсе.
+    """
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("test", 80),
+        "path": "/",
+        "root_path": "",
+        "query_string": b"",
+        "headers": [
+            (name.lower().encode("latin-1"), value.encode("latin-1"))
+            for name, value in (headers or {}).items()
+        ],
+    }
+    if endpoint is not None:
+        scope["endpoint"] = endpoint
+    return Request(scope)
+
+
+@pytest.mark.asyncio
+async def test_the_validation_sink_is_empty_for_the_page_layer_over_htmx():
+    """Страничный слой + признак htmx → пустой 400 при ЛЮБОМ месте ошибки.
+
+    Места перебираются ВСЕ ТРИ одним правилом: ветвь, начавшая зависеть от
+    места ошибки, обязана краснеть, а не проходить на том месте, которое
+    автор правки проверил рукой.
+    """
+    from app.pages.htmx import malformed_request_response
+
+    disagreed = {}
+    for place in VALIDATION_ERROR_PLACES:
+        response = await malformed_request_response(
+            _request_for(schedules_create, {HX_REQUEST_HEADER: "true"}),
+            _validation_error(place),
+        )
+        if response.status_code != EMPTY_BAD_REQUEST_STATUS or response.body != b"":
+            disagreed[place] = (response.status_code, response.body[:120])
+
+    assert not disagreed, (
+        "выход отказа валидации обязан отвечать ПУСТЫМ "
+        f"{EMPTY_BAD_REQUEST_STATUS} на пути htmx у страничного слоя при любом "
+        "месте ошибки, а разошлись: "
+        + "; ".join(
+            f"{place} = код {code}, тело {body!r}"
+            for place, (code, body) in sorted(disagreed.items())
+        )
+        + ". Тело здесь есть СТОК: с плана 11-09 правило 422 свопает его в DOM"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_validation_sink_keeps_the_framework_answer_everywhere_else():
+    """Три прочие ветви отдают ОТВЕТ ФРЕЙМВОРКА — и это предмет, а не фон.
+
+    ⚠️ БЕЗ ЭТОГО ПРАВИЛА ПРЕДЫДУЩЕЕ УДОВЛЕТВОРЯЛОСЬ БЫ ВЫХОДОМ, ОТВЕЧАЮЩИМ
+    ПУСТЫМ 400 ВСЕГДА, — то есть смягчение стока оплачивалось бы сломанным
+    контрактом JSON-API (D-07) и немым отказом человеку без JavaScript.
+
+    Ветвей ровно три, и каждая отрицает СВОЮ половину признака: чужой пакет при
+    живом признаке htmx, свой пакет без признака, и отсутствие обработчика
+    вовсе.
+    """
+    from app.pages.htmx import malformed_request_response
+
+    branches = {
+        "JSON-API под заголовком htmx": _request_for(
+            toggle_schedule, {HX_REQUEST_HEADER: "true"}
+        ),
+        "страничный слой БЕЗ признака htmx": _request_for(schedules_create),
+        "обработчика в области видимости нет": _request_for(
+            None, {HX_REQUEST_HEADER: "true"}
+        ),
+    }
+
+    disagreed = {}
+    for name, request in branches.items():
+        response = await malformed_request_response(request, _validation_error("path"))
+        if response.status_code != FRAMEWORK_VALIDATION_STATUS or not response.body:
+            disagreed[name] = (response.status_code, response.body[:120])
+
+    assert not disagreed, (
+        "ветвь, обязанная отдать ответ фреймворка, его не отдала: "
+        + "; ".join(
+            f"{name} = код {code}, тело {body!r}"
+            for name, (code, body) in sorted(disagreed.items())
+        )
+        + f". Ожидался {FRAMEWORK_VALIDATION_STATUS} с телом — контракт "
+        "JSON-API и путь деградации этим выходом не трогаются (D-07)"
+    )
