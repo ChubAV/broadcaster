@@ -111,7 +111,7 @@ from app.pages.common import is_same_origin, templates
 # ИСТОЧНИКА. С границей на сигнатуре запрос отвергается ДО тела, и порядок
 # «сначала граница, потом права, потом источник» перестаёт зависеть от того,
 # что написано выше в функции.
-from app.pages.identifiers import IdPath
+from app.pages.identifiers import IdPath, PostIdPath, id_in_column
 # Первый вызов слоя ответа в этом модуле (план 10-03). Адрес деградации у
 # `respond` объявлен ОБЯЗАТЕЛЬНЫМ ключевым аргументом: обработчик, забывший путь
 # без JavaScript, не собирается как вызов.
@@ -886,7 +886,7 @@ async def _workers_view(db: AsyncSession) -> dict:
 @router.post("/workers/{account_id}/restart")
 async def admin_restart_worker(
     request: Request,
-    account_id: IdPath,
+    account_id: PostIdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -924,7 +924,13 @@ async def admin_restart_worker(
 
     location = "/admin/workers"
 
-    account = await db.get(MessengerAccount, account_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    account_usable = id_in_column(account_id)
+    account = await db.get(MessengerAccount, account_id) if account_usable else None
     if account is None:
         logger.warning(
             "worker_restart_unknown_account",
@@ -1084,7 +1090,7 @@ async def admin_queue(
 @router.post("/queue/{account_id}/drop")
 async def admin_drop_task(
     request: Request,
-    account_id: IdPath,
+    account_id: PostIdPath,
     task_id: str = Form(...),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -1120,7 +1126,13 @@ async def admin_drop_task(
 
     location = "/admin/queue"
 
-    account = await db.get(MessengerAccount, account_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    account_usable = id_in_column(account_id)
+    account = await db.get(MessengerAccount, account_id) if account_usable else None
     known = {channel["key"] for channel in QUEUE_CHANNELS}
     if account is None or account.type not in known:
         # Молчаливый успех был бы хуже отказа: администратор решил бы, что снял
@@ -1596,7 +1608,7 @@ async def admin_user_history_detail(
 @router.post("/users/{user_id}/unlimited")
 async def admin_toggle_free_access(
     request: Request,
-    user_id: IdPath,
+    user_id: PostIdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     _under_another_identity: None = Depends(forbid_when_impersonating),
@@ -1653,7 +1665,13 @@ async def admin_toggle_free_access(
     if not is_same_origin(request):
         return Response(status_code=403)
 
-    target_user = await db.get(User, user_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    user_usable = id_in_column(user_id)
+    target_user = await db.get(User, user_id) if user_usable else None
     if not target_user:
         return RedirectResponse(url="/admin/users", status_code=302)
 
@@ -1698,7 +1716,7 @@ async def admin_toggle_free_access(
 @router.post("/users/{user_id}/impersonate")
 async def admin_impersonate(
     request: Request,
-    user_id: IdPath,
+    user_id: PostIdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -1758,7 +1776,13 @@ async def admin_impersonate(
         # изменяющих маршрутов.
         return Response(status_code=403)
 
-    target_user = await db.get(User, user_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    user_usable = id_in_column(user_id)
+    target_user = await db.get(User, user_id) if user_usable else None
     if target_user is None:
         logger.warning(
             "impersonation_unknown_user",
@@ -1811,7 +1835,7 @@ async def admin_impersonate(
 @router.post("/users/{user_id}/block")
 async def admin_toggle_block(
     request: Request,
-    user_id: IdPath,
+    user_id: PostIdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1835,7 +1859,13 @@ async def admin_toggle_block(
     if not is_same_origin(request):
         return Response(status_code=403)
 
-    target_user = await db.get(User, user_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    user_usable = id_in_column(user_id)
+    target_user = await db.get(User, user_id) if user_usable else None
     if not target_user:
         return RedirectResponse(url="/admin/users", status_code=302)
 
@@ -1856,7 +1886,7 @@ async def admin_toggle_block(
 @router.post("/users/{user_id}/delete")
 async def admin_delete_user(
     request: Request,
-    user_id: IdPath,
+    user_id: PostIdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     _under_another_identity: None = Depends(forbid_when_impersonating),
@@ -1883,7 +1913,13 @@ async def admin_delete_user(
     if not is_same_origin(request):
         return Response(status_code=403)
 
-    target_user = await db.get(User, user_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    user_usable = id_in_column(user_id)
+    target_user = await db.get(User, user_id) if user_usable else None
     if not target_user:
         return await respond(request, redirect="/admin/users")
 
