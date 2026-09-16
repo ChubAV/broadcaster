@@ -44,7 +44,7 @@ import contextlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -682,6 +682,69 @@ async def _arrange_subscribe_without_session(
 
 
 # =============================================================================
+# Посев: повторная синхронизация групп аккаунта (Фаза 11, план 11-16)
+# =============================================================================
+
+ACCOUNTS_RETRY_SYNC = "app/pages/accounts.py::accounts_retry_sync"
+MISSING_ACCOUNT_ID = 987654
+
+
+@contextlib.contextmanager
+def _retry_sync_bridge():
+    """Подмена МОСТА и очереди — внешних границ повторной синхронизации.
+
+    Обработчик зовёт мост мессенджера и ставит фоновую задачу; ни того, ни
+    другого в прогоне нет. Подмена стоит и на исходах «не найден» и «нет
+    сессии»: ответ, дошедший до моста там, где не должен, прошёл бы молча без
+    неё только в том случае, если бы мост был настоящим — а он в прогоне
+    недоступен и уронил бы случай не по его предмету.
+    """
+    with patch("app.pages.accounts.WhatsAppMessenger") as messenger, patch.dict(
+        "sys.modules", {"app.worker.celery_app": MagicMock()}
+    ):
+        messenger.return_value.retry_sync = AsyncMock(return_value={"status": "ok"})
+        yield
+
+
+async def _arrange_retry_sync(client, db, settings, identity) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    account = await _seed_groups_account(db, "wa", user_id=user.id)
+    account.status = "sync_failed"
+    await db.commit()
+    return _Arranged(
+        url=f"/accounts/{account.id}/retry-sync",
+        context=_retry_sync_bridge,
+        landing_args={"account_id": account.id},
+    )
+
+
+async def _arrange_retry_sync_missing(client, db, settings, identity) -> _Arranged:
+    return _Arranged(
+        url=f"/accounts/{MISSING_ACCOUNT_ID}/retry-sync", context=_retry_sync_bridge
+    )
+
+
+async def _arrange_retry_sync_foreign(client, db, settings, identity) -> _Arranged:
+    """Чужой аккаунт идёт ТОЙ ЖЕ веткой, что несуществующий (T-11-29)."""
+    stranger = await _foreign_user(db)
+    account = await _seed_groups_account(db, "wa", user_id=stranger.id)
+    return _Arranged(
+        url=f"/accounts/{account.id}/retry-sync", context=_retry_sync_bridge
+    )
+
+
+async def _arrange_retry_sync_without_session(
+    client, db, settings, identity
+) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    account = await _seed_groups_account(db, "wa", user_id=user.id)
+    client.cookies.clear()
+    return _Arranged(
+        url=f"/accounts/{account.id}/retry-sync", context=_retry_sync_bridge
+    )
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -1023,6 +1086,41 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         name="оформление доступа — нет сессии",
         identity="user",
         arrange=_arrange_subscribe_without_session,
+        landing="/login",
+        transport=LOCATION,
+    ),
+    # Фаза 11, план 11-16. Повторная синхронизация групп аккаунта: действие
+    # НАВИГАЦИОННОЕ (D-02) — нажатие уводит на экран групп, и все исходы идут
+    # переходом, посимвольно на адреса 302.
+    _PairCase(
+        key=ACCOUNTS_RETRY_SYNC,
+        name="повторная синхронизация — успех",
+        identity="user",
+        arrange=_arrange_retry_sync,
+        landing="/accounts/{account_id}/groups",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=ACCOUNTS_RETRY_SYNC,
+        name="повторная синхронизация — аккаунта нет",
+        identity="user",
+        arrange=_arrange_retry_sync_missing,
+        landing="/accounts",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=ACCOUNTS_RETRY_SYNC,
+        name="повторная синхронизация — аккаунт чужой",
+        identity="user",
+        arrange=_arrange_retry_sync_foreign,
+        landing="/accounts",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=ACCOUNTS_RETRY_SYNC,
+        name="повторная синхронизация — нет сессии",
+        identity="user",
+        arrange=_arrange_retry_sync_without_session,
         landing="/login",
         transport=LOCATION,
     ),
