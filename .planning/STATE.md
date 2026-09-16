@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 11
 current_phase_name: Массовый перевод разделов письма
 status: executing
-stopped_at: Completed 11-04-PLAN.md
-last_updated: "2026-09-15T23:55:19.150Z"
-last_activity: 2026-09-15
-last_activity_desc: Phase 11 execution started
+stopped_at: Completed 11-05-PLAN.md
+last_updated: "2026-09-16T05:07:08Z"
+last_activity: 2026-09-16
+last_activity_desc: "11-05 исполнен: создание расписания на слое ответа"
 state_head: e466585832a6d9b7f22a6dba6dfd2feefbc3da3d
 progress:
   total_phases: 9
   completed_phases: 4
   total_plans: 115
-  completed_plans: 99
+  completed_plans: 100
   percent: 44
 ---
 
@@ -36,11 +36,11 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 11 (Массовый перевод разделов письма) — EXECUTING
-Plan: 5 of 20
+Plan: 6 of 20
 Total Plans in Phase: 20
-Completed Plans in Phase: 3
+Completed Plans in Phase: 5
 Status: Ready to execute
-Last activity: 2026-09-15 — Phase 11 execution started
+Last activity: 2026-09-16 — 11-05 исполнен: создание расписания на слое ответа
 Last activity (устарело, предмет — закрытая Фаза 10; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-11 — Phase 10: план 10-51 исполнен (RED→GREEN замерен переходом цвета правила безусловности подъёма — `1 failed, 229 deselected` при rc=1 с отказом, печатающим полученный селектор `.is-modal-open #htmx-failure-server, .is-modal-open #htmx-failure-network`, → `1 passed` при rc=0; улика проверена прибором `RED_EVIDENCE_OK`; модуль шелла `230 passed` при пороге сбора 223, полная суита `3182 passed`, rc=0, 38:20; продукт тронут ДВУМЯ строками преамбулы `app/static/css/app.css` — величины блока подъёма, правило блокировки прокрутки, рычаг и заготовки не тронуты)
 Progress: [████████████████████] 38/38 plans ([████░░░░░░] 44%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8 и 9); Фазы 10…15 ещё не спланированы. По фазам вехи: **3/9 (33%)** — Фаза 09 ЗАСЧИТАНА: верификация `passed` 18/18 от 2026-09-02.
 
@@ -143,6 +143,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 11 P02 | 29 min | 2 tasks | 7 files |
 | Phase 11 P03 | 29 min | 2 tasks | 7 files |
 | Phase 11 P04 | 47 min | 2 tasks | 11 files |
+| Phase 11 P05 | 1h 19m | 2 tasks | 9 files |
 
 ## Accumulated Context
 
