@@ -582,6 +582,18 @@ class _BoundedEntry:
     матрицы зеленела бы, не сказав ни слова о границе идентификатора, а
     антивакуум на живой величине краснел бы по той же причине. Поле подаётся
     затем, чтобы отказ мог прийти РОВНО от границы.
+
+    ⚠️ `outside` — ИСХОД НА ВЕЛИЧИНЕ ВНЕ КОЛОНКИ, И У ВХОДА НА POST-ПСЕВДОНИМЕ
+    ОН НЕ `422` (решение D-07 Фазы 11). Граница такого входа стои́т ВНУТРИ
+    обработчика (`id_in_column`), и величина вне колонки идёт ВЕТКОЙ «ЗАПИСИ НЕТ»
+    этого обработчика — кодом и адресом перехода пути деградации, склеенными
+    через пробел (`"302 /admin/users"`). Строка при этом остаётся в матрице, а
+    не снимается, как снимал её план 11-06: наблюдается тот же предмет (величина
+    не роняет обработчик и не доезжает до выборки), сменилась только ФОРМА
+    ответа. Адрес перехода деградации сохраняется последующими переводами
+    транспорта (планы 11-12…11-14 трогают путь htmx), поэтому строка не
+    переписывается при каждом из них. По умолчанию — `422`: вход с границей на
+    сигнатуре.
     """
 
     key: str
@@ -591,6 +603,7 @@ class _BoundedEntry:
     live: str
     identity: str = "user"
     body: str = ""
+    outside: str = VALIDATION_REFUSAL
 
 
 BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
@@ -756,6 +769,15 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
     # приведение к целому удавалось, отказ случался позже — уже в SQLAlchemy, —
     # и порядок «сначала граница, потом права, потом источник» зависел от того,
     # что написано выше в функции. С границей на сигнатуре он не зависит.
+    #
+    # ⚠️ ПОКОЛЕНИЕ АБЗАЦА ВЫШЕ (идиома D-30/D-32 — не стирается). Для ШЕСТИ
+    # изменяющих входов «граница на сигнатуре» ОПРОВЕРГНУТА решением D-07 Фазы 11
+    # (план 11-11): граница уехала внутрь обработчиков, первым использованием
+    # параметра ПОСЛЕ сверки источника (она идентификатора не читает) и ДО первой
+    # выборки. Порядок «кто пришёл → откуда → над кем» от этого не ослаб, а стал
+    # тем, что написано в теле: права — зависимостью, источник — первой строкой,
+    # величина — второй. Исход на величине вне колонки — ветка «записи нет»
+    # (`outside`), и отличить её от несуществующей строки нельзя по построению.
     _BoundedEntry(
         key="app/pages/admin.py::POST /admin/workers/{account_id}/restart → адрес account_id",
         method="POST",
@@ -763,6 +785,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="account_id",
         live="account",
         identity="admin",
+        outside="302 /admin/workers",
     ),
     _BoundedEntry(
         # ⚠️ ТЕЛО ПОДАЁТСЯ, И ЭТО ЗАМЕР, А НЕ ОСТОРОЖНОСТЬ: обработчик несёт
@@ -776,6 +799,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         live="account",
         identity="admin",
         body="task_id=задача-посева",
+        outside="302 /admin/queue?result=unknown_account",
     ),
     _BoundedEntry(
         key="app/pages/admin.py::GET /admin/users/{user_id} → адрес user_id",
@@ -828,6 +852,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="user_id",
         live="target",
         identity="admin",
+        outside="302 /admin/users",
     ),
     _BoundedEntry(
         key="app/pages/admin.py::POST /admin/users/{user_id}/impersonate → адрес user_id",
@@ -836,6 +861,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="user_id",
         live="target",
         identity="admin",
+        outside="302 /admin/users",
     ),
     _BoundedEntry(
         key="app/pages/admin.py::POST /admin/users/{user_id}/block → адрес user_id",
@@ -844,6 +870,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="user_id",
         live="target",
         identity="admin",
+        outside="302 /admin/users",
     ),
     _BoundedEntry(
         key="app/pages/admin.py::POST /admin/users/{user_id}/delete → адрес user_id",
@@ -852,6 +879,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="user_id",
         live="target",
         identity="admin",
+        outside="302 /admin/users",
     ),
 )
 
@@ -1009,9 +1037,17 @@ async def _assume(client: AsyncClient, identity: str, admin_email: str) -> None:
 
 
 async def _entry_outcome(
-    client: AsyncClient, entry: _BoundedEntry, address: str
+    client: AsyncClient,
+    entry: _BoundedEntry,
+    address: str,
+    *,
+    with_location: bool = False,
 ) -> str:
     """СНЯТЫЙ КОД одного обращения по одному адресу — строкой.
+
+    С `with_location` к коду через пробел приклеивается заголовок перехода —
+    форма поля `outside` входа на POST-псевдониме (D-07 Фазы 11): код 302 сам по
+    себе не отличил бы ветку «записи нет» от ветки успеха.
 
     ⚠️ ВЕЛИЧИНА УЖЕ ПОДСТАВЛЕНА В АДРЕС ФОРМАТИРОВАНИЕМ СТРОКИ, А НЕ
     ПРИВЕДЕНИЕМ К ЦЕЛОМУ — по тому же основанию, что и у `_delete_ad` выше:
@@ -1024,6 +1060,8 @@ async def _entry_outcome(
         )
     else:
         response = await client.get(address, follow_redirects=False)
+    if with_location:
+        return f"{response.status_code} {response.headers.get('location', '')}".rstrip()
     return str(response.status_code)
 
 
@@ -1034,10 +1072,16 @@ async def test_every_bounded_input_refuses_a_value_outside_the_column(
     test_settings,
     db_session: AsyncSession,
 ):
-    """КАЖДЫЙ вход матрицы отвечает отказом ВАЛИДАЦИИ на величине вне диапазона.
+    """КАЖДЫЙ вход матрицы отвечает объявленным исходом на величине вне диапазона.
 
     Отображение сличается ЦЕЛИКОМ, и текст отказа называет ВСЕ несогласные
     строки со снятыми кодами.
+
+    ⚠️ ПОКОЛЕНИЕ (идиома D-30/D-32). До плана 11-11 объявленный исход у КАЖДОГО
+    входа был отказом ВАЛИДАЦИИ. Теперь он есть поле входа `outside`: `422` у
+    границы на сигнатуре и ветка «записи нет» у POST-псевдонима (D-07 Фазы 11).
+    Предмет правила прежний — величина вне колонки не роняет обработчик и
+    исход её объявлен, а не случаен.
 
     ⚠️ ОБЕ ФИКСТУРЫ ЗАКАЗАНЫ РАДИ ЗАВЕДЕНИЯ ОБЕИХ УЧЁТНЫХ ЗАПИСЕЙ, А ДЕЙСТВУЮЩАЯ
     ЛИЧНОСТЬ БЕРЁТСЯ ЯВНО (`_assume`): объект клиента у них ОДИН, и полагаться
@@ -1054,11 +1098,16 @@ async def test_every_bounded_input_refuses_a_value_outside_the_column(
             assumed = entry.identity
         for value in REFUSED_VALUES:
             address = entry.address.format(value=value, **live)
-            code = await _entry_outcome(client, entry, address)
-            if code != VALIDATION_REFUSAL:
+            code = await _entry_outcome(
+                client,
+                entry,
+                address,
+                with_location=entry.outside != VALIDATION_REFUSAL,
+            )
+            if code != entry.outside:
                 disagreed.append(
                     f"{entry.key} ← {value} = {code} "
-                    f"(ожидалось {VALIDATION_REFUSAL}; {entry.method} {address})"
+                    f"(ожидалось {entry.outside}; {entry.method} {address})"
                 )
 
     assert not disagreed, (
@@ -1084,6 +1133,14 @@ async def test_every_bounded_input_admits_the_value_at_the_column(
     Величина, РАВНАЯ границе, в диапазоне колонки лежит, и отвергать её граница
     права не имеет. Без этого правила помощник, отвергающий ВСЁ, дал бы зелёный
     прогон правила выше и границей не был бы.
+
+    ⚠️ У ВХОДОВ НА POST-ПСЕВДОНИМЕ ЭТО ПРАВИЛО СМЕЖНОСТИ НЕ РАЗЛИЧАЕТ, И ЭТО
+    СВОЙСТВО D-07, А НЕ ПРОПУСК. Величина у границы строки не находит, величина за
+    границей идёт ТОЙ ЖЕ веткой «записи нет» — исходы равны по построению (то же
+    записано планом 11-02 у модуля расписаний). Для них правило утверждает
+    меньшее — «у границы не 422 и не 500»; что проверка стои́т ДО выборки,
+    стережёт разбор дерева
+    `test_every_post_identifier_is_checked_before_its_first_use`.
     """
     live = await _seed_live_row_set(db_session)
     client = authed_client
