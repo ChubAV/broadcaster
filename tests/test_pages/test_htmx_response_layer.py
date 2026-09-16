@@ -25,7 +25,7 @@ import types
 
 import pytest
 from fastapi import HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
@@ -804,3 +804,123 @@ async def test_the_validation_sink_keeps_the_framework_answer_everywhere_else():
         + f". Ожидался {FRAMEWORK_VALIDATION_STATUS} с телом — контракт "
         "JSON-API и путь деградации этим выходом не трогаются (D-07)"
     )
+
+
+# --- ВЫХОД ОШИБКИ ПОЛЯ: ОДИН СТАТУС, ДВА ТЕЛА (FORM-08, D-06) ----------------
+#
+# ⚠️ ПРЕДМЕТ ЗДЕСЬ — САМ ВЫХОД, А МАРШРУТОВ, ЕГО ЗОВУЩИХ, В ЭТОМ ПЛАНЕ НЕТ
+# ВОВСЕ, И ЭТО НЕ ПРОБЕЛ ПОКРЫТИЯ. Своп правилу 422 возвращает план 11-09
+# ОДНОВРЕМЕННО с первым маршрутом, отдающим этот код с АВТОРСКИМ фрагментом;
+# до тех пор выход обязан существовать и быть проверенным, но недостижимым из
+# продукта. Правило ниже поэтому зовёт его НАПРЯМУЮ — той же формой, что и
+# правила выхода отказа валидации выше.
+#
+# ⚠️ СБОРЩИКИ ЗДЕСЬ НУЛЬАРНЫЕ И ASYNC — по форме `fragment=` у `respond()`.
+# Невыбранный сборщик не зовётся вовсе, и это утверждается СПИСКОМ ВЫЗОВОВ, а
+# не отсутствием его тела в ответе: сборщик страницы, позванный впустую, собрал
+# бы целый документ на каждой ошибке поля — то есть заплатил бы за ответ,
+# который никуда не едет.
+
+FIELD_ERROR_STATUS = 422
+
+# Тела двух транспортов РАЗЛИЧИМЫ посимвольно: одинаковые тела прошли бы
+# правило при любой из двух веток, то есть не отличали бы выбранного сборщика
+# от невыбранного.
+FIELD_ERROR_PAGE_BODY = "<!DOCTYPE html><html><body>страница целиком</body></html>"
+FIELD_ERROR_FRAGMENT_BODY = '<form data-form><span class="field__error">не тот пояс</span></form>'
+
+
+@pytest.mark.asyncio
+async def test_a_field_error_answers_422_with_the_page_without_htmx_and_the_fragment_with_it():
+    """Ошибка ПОЛЯ: один статус на оба транспорта, тело — по способу прихода.
+
+    ⚠️ СТАТУС ОДИН И ТОТ ЖЕ НА ОБОИХ ПУТЯХ, А ТЕЛО РАЗНОЕ, И ЭТО НЕСУЩЕЕ
+    СВОЙСТВО. Человек без JavaScript обязан получить СТРАНИЦУ — ошибка поля не
+    есть исход действия, и перенаправлять его некуда: он остаётся на форме,
+    которую заполнял. Человек со слоем письма получает ФРАГМЕНТ той же формы,
+    потому что подменяется область формы, а не документ.
+
+    ⚠️ ОТВЕТ СОБИРАЕТСЯ СВЕЖИЙ, А НЕ ПРАВИТСЯ ЧУЖОЙ. Сборщик отдаёт свой объект
+    ответа со своим статусом (200 — он собирает разметку, а не решает об
+    исходе); подмена статуса прямо на нём означала бы, что выход правит объект,
+    которым не владеет, — ровно та граница, о которой предупреждает докстринг
+    приклейки внеполосного блока. Свежесть утверждается тождеством объектов, а
+    не совпадением тел.
+
+    ⚠️ НЕВЫБРАННЫЙ СБОРЩИК НЕ ЗОВЁТСЯ. Утверждается списком состоявшихся
+    вызовов: выход, зовущий оба и возвращающий один, прошёл бы проверку тел, но
+    собирал бы целый документ на каждой ошибке поля.
+    """
+    from app.pages.htmx import respond_field_error
+
+    called: list[str] = []
+    built: dict[str, Response] = {}
+
+    async def page() -> Response:
+        called.append("page")
+        built["page"] = HTMLResponse(FIELD_ERROR_PAGE_BODY, status_code=200)
+        return built["page"]
+
+    async def fragment() -> Response:
+        called.append("fragment")
+        built["fragment"] = HTMLResponse(FIELD_ERROR_FRAGMENT_BODY, status_code=200)
+        return built["fragment"]
+
+    # --- без признака htmx: полный документ -----------------------------------
+    called.clear()
+    bare = await respond_field_error(_request(), page=page, fragment=fragment)
+
+    assert bare.status_code == FIELD_ERROR_STATUS, (
+        f"путь без htmx ответил {bare.status_code}, а ошибка заполнения обязана "
+        f"приезжать {FIELD_ERROR_STATUS} на ОБОИХ транспортах"
+    )
+    assert bare.body.decode() == FIELD_ERROR_PAGE_BODY, (
+        f"телом ответа без htmx приехало {bare.body[:120]!r}, а ожидался сбор "
+        "страницы целиком: человеку без JavaScript возвращают форму, которую он "
+        "заполнял, а не фрагмент без шелла"
+    )
+    assert called == ["page"], (
+        f"состоявшиеся вызовы сборщиков — {called}, а ожидался ровно один: "
+        "невыбранный сборщик собирал бы разметку, которая никуда не поедет"
+    )
+    assert bare is not built["page"], (
+        "выход вернул ОБЪЕКТ СБОРЩИКА, подменив ему статус на месте: выход "
+        "правит ответ, которым не владеет"
+    )
+
+    # --- с признаком htmx: фрагмент формы -------------------------------------
+    called.clear()
+    over_htmx = await respond_field_error(
+        _request({HX_REQUEST_HEADER: "true"}), page=page, fragment=fragment
+    )
+
+    assert over_htmx.status_code == FIELD_ERROR_STATUS, (
+        f"путь htmx ответил {over_htmx.status_code}, а правило {FIELD_ERROR_STATUS} "
+        "блока конфигурации ждёт именно этот код"
+    )
+    assert over_htmx.body.decode() == FIELD_ERROR_FRAGMENT_BODY, (
+        f"телом ответа htmx приехало {over_htmx.body[:120]!r}, а ожидался "
+        "фрагмент формы: целый документ слой письма подставил бы в область "
+        "свопа страницей внутри страницы"
+    )
+    assert called == ["fragment"], (
+        f"состоявшиеся вызовы сборщиков — {called}, а ожидался ровно один"
+    )
+    assert over_htmx is not built["fragment"], (
+        "выход вернул ОБЪЕКТ СБОРЩИКА, подменив ему статус на месте"
+    )
+
+    # --- форма ответа: свежий HTMLResponse без фоновой задачи ------------------
+    for name, response in (("без htmx", bare), ("htmx", over_htmx)):
+        assert isinstance(response, HTMLResponse), (
+            f"{name}: ответ собран не `HTMLResponse` ({type(response).__name__})"
+        )
+        assert "text/html" in response.headers["content-type"].lower(), (
+            f"{name}: тип содержимого {response.headers.get('content-type')!r} — "
+            "тело ошибки поля есть разметка, и объявлено оно должно быть так же"
+        )
+        assert response.background is None, (
+            f"{name}: на ответе висит фоновая задача — свежесобранный ответ "
+            "чужих задач нести не может, и её появление означало бы, что выход "
+            "отдал объект сборщика"
+        )
