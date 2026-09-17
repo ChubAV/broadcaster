@@ -249,3 +249,8 @@ REFACTOR-коммита у задачи 2 нет: после GREEN чистит�
 ---
 *Phase: 11-massovyy-perevod-razdelov-pisma*
 *Completed: 2026-09-17*
+
+## Self-Check: PASSED
+
+- FOUND: `app/templates/accounts/includes/max_connect_step.html`, `tests/test_pages/test_max_connect_transport.py`, `11-18-SUMMARY.md`
+- FOUND: `2c25159`, `49e1379`, `7ef10a0`, `48763b1`
