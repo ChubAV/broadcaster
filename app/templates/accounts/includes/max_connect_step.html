@@ -1,0 +1,76 @@
+{# Шаг мастера подключения MAX — ЕДИНСТВЕННЫЙ источник разметки шага.
+
+   Включаемый шаблон, а не макрос: контекст вызывающего приходит сам. Читаются
+   `connected`, `step`, `qr_code` и `error`. Рисуют шаг отсюда и страница
+   `accounts/connect_max.html`, и фрагменты ответа старта подключения (план
+   11-18): разойтись странице и фрагменту негде, потому что второго места
+   разметки шага нет.
+
+   ⚠️ АЛЕРТ ОШИБКИ ЖИВЁТ ЗДЕСЬ, А НЕ НА СТРАНИЦЕ, И СТОИТ ВНЕ КАРТОЧКИ — ровно
+   там, где стоял. Фрагмент ответа обязан нести ошибку подключения сам, иначе
+   ответ с ошибкой перерисовал бы шаг без её текста. Карточка при этом
+   открывается и закрывается тоже здесь: промежуток между алертом и карточкой
+   держит flex-колонка `.connect-shell` страницы, и перенос алерта внутрь
+   карточки сдвинул бы его в тело карточки.
+
+   Подключение: {% include "accounts/includes/max_connect_step.html" %} #}
+{% from "components/card.html" import card_open, card_close %}
+{% from "components/button.html" import button, link_button %}
+{% from "components/badge.html" import badge %}
+{% from "components/alert.html" import alert %}
+{% from "components/field.html" import field %}
+
+  {% if error %}{{ alert(error) }}{% endif %}
+
+  {{ card_open() }}
+  {% if connected %}
+  <div class="connect-step connect-step--center">
+    {{ badge('Подключено', 'success') }}
+    <p class="connect-step__text">Ваш аккаунт MAX готов к использованию.</p>
+    {{ link_button('К аккаунтам', '/accounts') }}
+  </div>
+
+  {% elif step == "phone" %}
+  <div class="connect-step">
+    <p class="connect-step__text">Введите номер телефона, привязанный к вашему аккаунту MAX</p>
+    {#- Контракт формы перенесён дословно: метод, маршрут, имя поля и защита от
+        повторной отправки. Ошибка здесь означает, что аккаунт не подключится,
+        а страница при этом вернёт 200 (T-06-03). Номер телефона живёт только в
+        этом поле: в заголовок страницы и в атрибуты он не переносится
+        (T-06-02). -#}
+    <form class="connect-step__form" method="POST" action="/accounts/connect/max/start"
+          onsubmit="var b=this.querySelector('button');if(b.disabled)return false;b.disabled=true;b.querySelector('.btn__label').textContent='Подключение…';">
+      {{ field(name="phone", label='Номер телефона', type='tel', placeholder='+7 999 123-45-67', required=true, autocomplete='tel') }}
+      {{ button('Продолжить', variant='primary', extra_class='btn--block') }}
+    </form>
+  </div>
+
+  {% elif step == "qr" and qr_code %}
+  <div class="connect-step connect-step--center">
+    <p class="connect-step__text">Отсканируйте QR-код в приложении MAX</p>
+    {#- ЯКОРЬ ЗАМЕНЫ. Идентификатор max-status и запрос статуса подключения стоят
+        на ОДНОМ элементе: ответ заменяет его СОДЕРЖИМОЕ. Перенос идентификатора
+        на соседний или дочерний элемент рвёт обновление молча. Опрос объявлен в
+        этом файле дважды: здесь и в ветке ожидания QR-кода ниже. -#}
+    <div id="max-status" hx-get="/accounts/connect/max/status" hx-trigger="every 3s" hx-swap="innerHTML">
+      {#- QR-код показывается ровно здесь и ровно столько, сколько открыт экран
+          (T-06-02). -#}
+      <div class="connect-qr"><img src="{{ qr_code }}" alt="MAX QR-код"></div>
+      <p class="connect-step__text">Ожидание сканирования...</p>
+    </div>
+  </div>
+
+  {% elif step == "qr" %}
+  <div class="connect-step connect-step--center">
+    <p class="connect-step__text">Загрузка QR-кода...</p>
+    <div id="max-status" hx-get="/accounts/connect/max/status" hx-trigger="every 3s" hx-swap="innerHTML">
+      <p class="connect-step__text">Ожидание QR-кода...</p>
+    </div>
+  </div>
+
+  {% else %}
+  <div class="connect-step connect-step--center">
+    <p class="connect-step__text">Ожидание...</p>
+  </div>
+  {% endif %}
+  {{ card_close() }}

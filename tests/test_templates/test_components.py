@@ -811,7 +811,9 @@ BROWSER_DIALOG_RE = re.compile(r"(?<!\w)confirm\s*\(")
 # ПОДТВЕРЖДЕНИЯ усилением, а не поблажкой: новый встроенный обработчик где
 # угодно краснеет, даже если диалога в нём нет (T-13-07).
 INLINE_SUBMIT_HANDLER = "onsubmit"
-KNOWN_SUBMIT_HANDLER_FILES = frozenset({"accounts/connect_max.html"})
+# План 11-18: обработчик переехал дословно со страницы accounts/connect_max.html
+# во включаемый шаг мастера MAX — файл сменился, обработчик тот же.
+KNOWN_SUBMIT_HANDLER_FILES = frozenset({"accounts/includes/max_connect_step.html"})
 INLINE_SUBMIT_HANDLER_RE = re.compile(rf'{INLINE_SUBMIT_HANDLER}\s*=\s*"([^"]*)"')
 
 # Массовые действия списка групп были ЕДИНСТВЕННЫМ местом, где кнопка действия

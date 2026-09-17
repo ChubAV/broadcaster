@@ -48,8 +48,10 @@ class HxGetSite(NamedTuple):
     Три файла несут по ДВА места: ``accounts/list.html`` и
     ``accounts/partial_cards.html`` — одно ``revealed`` и одно ``every 5s``
     (разные механизмы, поэтому файл стоит в двух перечнях по одному месту), а
-    ``accounts/connect_wa.html`` и ``accounts/connect_max.html`` — по ДВА места
-    ``every 3s`` в одном файле каждый (ветки состояния подключения). Порог
+    ``accounts/connect_wa.html`` и ``accounts/includes/max_connect_step.html``
+    — по ДВА места ``every 3s`` в одном файле каждый (ветки состояния
+    подключения; шаг мастера MAX вынесен со страницы ``accounts/connect_max.html``
+    во включаемый шаблон планом 11-18 дословно, места переехали вместе с ним). Порог
     «хотя бы одно» растворил бы потерю одной из двух веток подключения: экран
     остался бы зелёным, опрашивая состояние только в одной из них.
     """
@@ -146,8 +148,10 @@ REVEALED_PLACES = 11
 # Шесть шаблонов, восемь мест: два экрана подключения несут по два места каждый
 # (ветки состояния), и обход обязан увидеть оба.
 POLL_SITES = (
-    HxGetSite("accounts/connect_max.html", 2),
+    # План 11-18: оба места экрана MAX переехали дословно со страницы
+    # accounts/connect_max.html во включаемый шаг мастера — число не двинулось.
     HxGetSite("accounts/connect_wa.html", 2),
+    HxGetSite("accounts/includes/max_connect_step.html", 2),
     HxGetSite("accounts/list.html", 1),
     HxGetSite("accounts/partial_cards.html", 1),
     HxGetSite("admin/workers.html", 1),
@@ -857,12 +861,12 @@ POLLING_FRAGMENTS = 10
 # становится местом, куда кладут всё, о чём не подумали (форма — с
 # tests/test_pages/test_impersonation_gate.py).
 PERMANENT_POLLS: dict[str, str] = {
-    "accounts/connect_max.html#0": (
+    "accounts/includes/max_connect_step.html#0": (
         "экран подключения MAX, ветка ожидания: состояние подключения "
         "опрашивается, пока человек держит экран открытым. Завершения у ветки "
         "нет — человек уходит со страницы, а не дожидается признака"
     ),
-    "accounts/connect_max.html#1": (
+    "accounts/includes/max_connect_step.html#1": (
         "экран подключения MAX, ВТОРАЯ ветка состояния. Тег совпадает с "
         "предыдущим посимвольно и остаётся отдельной записью: потеря одной из "
         "двух веток оставила бы экран зелёным, опрашивая состояние только в "
