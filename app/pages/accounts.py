@@ -796,9 +796,26 @@ async def accounts_sync_groups(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Синхронизация состава групп аккаунта прямо в запросе.
+
+    Фаза 11, план 11-17 (FORM-04, D-02): действие НАВИГАЦИОННОЕ — состав групп
+    заменяется целиком, и нажатие уводит на экран групп аккаунта. Все выходы идут
+    слоем ответа: без htmx — 302, с htmx — 204 и `HX-Location` на тот же адрес
+    посимвольно.
+
+    ⚠️ ЗАЯВКА `_SYNC_IN_FLIGHT` ОСВОБОЖДАЕТСЯ НА КАЖДОМ ВЫХОДЕ ПОСЛЕ ЕЁ ЗАНЯТИЯ
+    (Pitfall 8, T-11-28). Поэтому КАЖДЫЙ `return await respond(...)` после
+    `_claim_sync_slot` стоит ВНУТРИ внешнего `try`, чей `finally` освобождает, и
+    сборка ответа до входа в `try` не выносится: выход, минующий `finally`,
+    запер бы аккаунт до перезапуска процесса. Выходы ДО занятия (нет сессии,
+    аккаунта нет, тип не поддержан, статус `syncing`, заявка уже занята) заявку
+    не брали и не освобождают — иначе отказанный запрос снял бы чужую заявку.
+    Оба свойства стерегут тесты `test_sync_groups_over_htmx_*` в
+    `tests/test_routes/test_sync_groups.py` поведением, а не только кодом ответа.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
     result = await db.execute(
         select(MessengerAccount).where(
@@ -811,12 +828,12 @@ async def accounts_sync_groups(
     # собственный аккаунт пользователя, уводит на список аккаунтов. Все
     # остальные ветки возвращают пользователя туда, откуда он нажал кнопку.
     if not account:
-        return RedirectResponse(url="/accounts", status_code=302)
+        return await respond(request, redirect="/accounts")
 
     account_groups_url = f"/accounts/{account_id}/groups"
 
     if account.type not in ("tg_user", "wa", "max"):
-        return RedirectResponse(url=account_groups_url, status_code=302)
+        return await respond(request, redirect=account_groups_url)
 
     # Guard повторного запуска, ступень ПЕРВАЯ — поверх ФОНОВЫХ путей.
     #
@@ -827,7 +844,7 @@ async def accounts_sync_groups(
     # закрывает и закрыть не может: два одновременных POST-а для tg_user оба
     # читают `active` и оба проходят. Его закрывает ступень вторая.
     if account.status == "syncing":
-        return RedirectResponse(url=account_groups_url, status_code=302)
+        return await respond(request, redirect=account_groups_url)
 
     # Guard повторного запуска, ступень ВТОРАЯ — внутрипроцессная заявка.
     #
@@ -877,7 +894,7 @@ async def accounts_sync_groups(
     # uq_groups_account_external (ревизия 0015) и ветка IntegrityError ниже:
     # они исключают дублирующие СТРОКИ, но не дублирующий внешний запрос.
     if not _claim_sync_slot(account_id):
-        return RedirectResponse(url=account_groups_url, status_code=302)
+        return await respond(request, redirect=account_groups_url)
 
     # ВСЁ, что ниже занятия заявки, обёрнуто внешним `try`: заявка обязана
     # освобождаться на КАЖДОМ выходе обработчика — успешном возврате, узком
@@ -927,7 +944,7 @@ async def accounts_sync_groups(
             # Пишется сообщение исключения, а не строка подключения (T-03-17).
             await record_sync_failure(db, account, str(e) or e.__class__.__name__)
             await db.commit()
-            return RedirectResponse(url=account_groups_url, status_code=302)
+            return await respond(request, redirect=account_groups_url)
 
         except Exception as e:
             # Широкий except СОХРАНЁН намеренно и стоит ПОСЛЕ узкого: отказ на
@@ -952,7 +969,7 @@ async def accounts_sync_groups(
             )
             await record_sync_failure(db, account, UNEXPECTED_FAILURE_MESSAGE)
             await db.commit()
-            return RedirectResponse(url=account_groups_url, status_code=302)
+            return await respond(request, redirect=account_groups_url)
 
         # Состав групп считает единственная реализация переинвентаризации —
         # та же, что у обеих фоновых задач (D-10, D-11, D-12). Транзакцией
@@ -994,7 +1011,7 @@ async def accounts_sync_groups(
                     db, account, "Синхронизация уже выполнялась — откройте экран заново"
                 )
                 await db.commit()
-        return RedirectResponse(url=account_groups_url, status_code=302)
+        return await respond(request, redirect=account_groups_url)
     finally:
         _release_sync_slot(account_id)
 

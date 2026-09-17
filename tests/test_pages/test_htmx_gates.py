@@ -219,7 +219,6 @@ NOT_YET_CONVERTED: frozenset[str] = frozenset(
         "app/pages/accounts.py::accounts_connect_tg_user_verify_2fa",
         "app/pages/accounts.py::accounts_connect_tg_user_complete",
         "app/pages/accounts.py::accounts_connect_max_start",
-        "app/pages/accounts.py::accounts_sync_groups",
         "app/pages/auth.py::login_submit",
         "app/pages/auth.py::register_send_code",
         "app/pages/auth.py::register_verify",
@@ -475,7 +474,24 @@ NOT_YET_CONVERTED: frozenset[str] = frozenset(
 #   прогоном `test_the_three_sets_do_not_overlap` сказал: `обработчик
 #   ФАКТИЧЕСКИ переведён на слой ответа, но остался в перечне отставания:
 #   ['app/pages/accounts.py::accounts_retry_sync']`.
-NOT_YET_CONVERTED_COUNT = 16
+#
+#   16 → 15, Фаза 11, план 11-17. ИСТОЧНИК ДВИЖЕНИЯ: СИНХРОНИЗАЦИЯ ГРУПП
+#   АККАУНТА переведена на слой ответа — второе и последнее навигационное
+#   действие синхронизации в разделе аккаунтов. Все восемь выходов — нет
+#   сессии, аккаунта нет, тип не поддержан, статус syncing, заявка занята,
+#   отказ моста, неожиданное исключение и финальный (успех либо конфликт
+#   уникальности) — уходят переходом; выходы после занятия внутрипроцессной
+#   заявки остаются внутри внешнего try, освобождающего её в finally.
+#   ⚠️ Имя обработчика набрано СЛОВАМИ, а не ключом перечня, по той же причине,
+#   что у записей выше.
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА. Вывод
+#   `test_the_backlog_matches_the_declared_count` после перевода, дословно:
+#   `число непереведённых обработчиков стало 15, а в файле записано 16. ЕСЛИ
+#   ЧИСЛО УПАЛО — ЭТО ПРОГРЕСС ВЕХИ, а не поломка` / `assert 15 == 16`. Тем же
+#   прогоном `test_the_three_sets_do_not_overlap` сказал: `обработчик
+#   ФАКТИЧЕСКИ переведён на слой ответа, но остался в перечне отставания:
+#   ['app/pages/accounts.py::accounts_sync_groups']`.
+NOT_YET_CONVERTED_COUNT = 15
 
 
 # =============================================================================
