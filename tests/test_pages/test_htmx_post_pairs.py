@@ -807,6 +807,46 @@ async def _arrange_sync_groups_missing(client, db, settings, identity) -> _Arran
 
 
 # =============================================================================
+# Посев: старт подключения MAX (Фаза 11, план 11-18)
+# =============================================================================
+
+ACCOUNTS_CONNECT_MAX_START = "app/pages/accounts.py::accounts_connect_max_start"
+
+
+def _max_start_bridge():
+    """Фабрика подмены моста MAX и пятисекундного ожидания.
+
+    Помощник взят из модуля транспорта MAX, а не набран здесь вторым
+    экземпляром: две подмены одной границы разошлись бы молча. Фабрика, а не
+    готовый менеджер, — по основанию `_Arranged.context`.
+    """
+    from tests.test_pages.test_max_connect_transport import max_bridge
+
+    return max_bridge()
+
+
+async def _arrange_max_start(client, db, settings, identity) -> _Arranged:
+    """Непустой телефон СВОЕГО пользователя — сеять нечего, форма самодостаточна."""
+    await _current_user(db, identity, settings)
+    return _Arranged(
+        url="/accounts/connect/max/start",
+        data={"phone": "+79990001122"},
+        context=_max_start_bridge,
+    )
+
+
+async def _arrange_max_start_without_session(
+    client, db, settings, identity
+) -> _Arranged:
+    client.cookies.clear()
+    return _Arranged(
+        url="/accounts/connect/max/start",
+        data={"phone": "+79990001122"},
+        context=_max_start_bridge,
+    )
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -1221,6 +1261,29 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         identity="user",
         arrange=_arrange_sync_groups_missing,
         landing="/accounts",
+        transport=LOCATION,
+    ),
+    # Фаза 11, план 11-18. Старт подключения MAX: экран мастера ОСТАЁТСЯ, и
+    # подменяется содержимое контейнера шага (D-02). Метка — узел опроса статуса:
+    # без него QR виден, но подключение не завершается. Путь без htmx
+    # приземляется на `/accounts` — адрес выбран измерением (докстринг
+    # обработчика). Ветка пустого телефона отвечает 422 на обоих транспортах и в
+    # этот реестр не входит — по границе обхода, записанной у случаев профиля.
+    _PairCase(
+        key=ACCOUNTS_CONNECT_MAX_START,
+        name="старт подключения MAX — успех",
+        identity="user",
+        arrange=_arrange_max_start,
+        landing="/accounts",
+        transport=FRAGMENT,
+        fragment_mark='id="max-status"',
+    ),
+    _PairCase(
+        key=ACCOUNTS_CONNECT_MAX_START,
+        name="старт подключения MAX — нет сессии",
+        identity="user",
+        arrange=_arrange_max_start_without_session,
+        landing="/login",
         transport=LOCATION,
     ),
 )
