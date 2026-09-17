@@ -1,9 +1,9 @@
 ---
-status: partial
+status: diagnosed
 phase: 11-massovyy-perevod-razdelov-pisma
 source: [11-VERIFICATION.md]
 started: 2026-09-17T09:14:11Z
-updated: 2026-09-17T16:25:15Z
+updated: 2026-09-17T16:33:36Z
 checks_declared: 7
 # ⚠️ ФОРМА ТЕКУЩЕЙ ЭПОХИ, А НЕ ТОЛЬКО ШАБЛОН GSD. Разделы `Current Test`/`Tests`/`Summary`/`Gaps`
 # ведёт `/gsd-verify-work`; разделы «Проверка N» с таблицами отметок ставят артефакт ПОД
@@ -138,5 +138,25 @@ blocked: 0
   reason: "Agent measured (owner delegated: «шестую тоже проверь сам»): extra space under the button in all three forms — profile 21 px, schedule edit sched-101 24 px, MAX phone step 18.5 px (MAX markup rendered from the template and injected into the live page, since /accounts/connect/max redirects while MAX #29 is active). Taking .form-busy out of flow removes exactly that space."
   severity: cosmetic
   test: 6
-  artifacts: []  # Filled by diagnosis
-  missing: []    # Filled by diagnosis
+  root_cause: "components/form_wrapper.html always prints <span class=\"form-busy\"> as the last IN-FLOW child of every wrapped form (after a whitespace node), and the base rule .form-busy (app.css:2154) gives it an 8x8 display:inline-block box hidden only by opacity/visibility — the box keeps its layout space, nothing takes it out of flow. In a block form whose content is a flex column (profile [data-form], MAX .connect-step__form) it opens an anonymous line box under the column (21 / 18.5 px); in a flex-column form (schedule edit form, gap 16) it is an 8 px flex item plus one gap (24 px); in flex action rows it widens each wrapped form by ~12 px, making gaps uneven. Harmless in Phase 9 (one inline-flex toggle caller); Phase 11 moved 13 more forms onto the macro and 11-10/11-18 moved the column from <form> to an inner div."
+  artifacts:
+    - path: "app/templates/components/form_wrapper.html"
+      issue: "busy span always an in-flow last child of the form, whitespace before it"
+    - path: "app/static/css/app.css"
+      issue: ".form-busy (2154-2160) is an 8x8 inline-block box hidden by visibility/opacity only; no out-of-flow rule"
+    - path: "app/templates/includes/profile_settings.html"
+      issue: "column layout on inner [data-form], form itself is block — exposes the line box (21 px)"
+    - path: "app/templates/accounts/includes/max_connect_step.html"
+      issue: "column layout on inner .connect-step__form — same line box (18.5 px)"
+    - path: "app/templates/ads/includes/sched_card.html"
+      issue: "edit form (line 210) is a flex column with gap 16 — span adds 8 px item + 16 px gap (24 px); toggle form (167) in .sched-card__head widened ~12 px"
+    - path: "app/templates/components/modal.html"
+      issue: "prints its own .form-busy span in flex-column .modal__form (gap 14) — ~22 px in all 18 confirmation panels; caught by any global .form-busy fix (owner decision: height of an accepted panel)"
+  missing:
+    - "Take the busy indicator out of flow once, in the macro/CSS rather than per caller: positioning context on the wrapped form plus an absolutely positioned dot with explicit offsets, kept inside the form box (.card has overflow:hidden)"
+    - "Keep the base .form-busy rule as the only rule with that exact selector and keep display:inline-block in it (test_the_indicator_class_is_self_sufficient reads the last matching rule); scope any new rule, e.g. form > .form-busy"
+    - "Keep both transition strings, the .form-busy.htmx-request selector, the verbatim span markup in form_wrapper.html and modal.html, WRAPPER_QUALITY_ATTRS appearing once, 16 component files, and the schedule edit form's flex column with gap 16"
+    - "If a class is added to the wrapper's <form>, update the allowed-quality-difference reason «имя класса формы» (test_every_allowed_quality_difference_carries_a_reason)"
+    - "Preserve accepted observations: dot beside the group-row toggle (09-UAT 6.1.2) and inside the modal panel (10-UAT 3.5)"
+    - "Row/header call sites with uneven gaps: admin/includes/user_actions.html:70,83; accounts/list.html:133; accounts/partial_cards.html:87; accounts/partials/sync_status_card.html:109; account_groups/list.html:104; ads/includes/sched_card.html:167; schedules/includes/schedule_row.html:106"
+  debug_session: ".planning/debug/form-busy-extra-space-under-buttons.md"
