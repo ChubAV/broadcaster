@@ -251,3 +251,9 @@ None - no external service configuration required.
 ---
 *Phase: 11-massovyy-perevod-razdelov-pisma*
 *Completed: 2026-09-17*
+
+## Self-Check: PASSED
+
+- Файлы на месте: `app/pages/account_groups.py`, `app/pages/history.py`, `tests/test_pages/test_htmx_gates.py`, SUMMARY.
+- Коммиты найдены: `e092c5b`, `f837a83`, `705c782`, `146d96c`, `a936dfc` (SUMMARY).
+- `git rev-list --count 56e9348..146d96c` = 4 (задачные коммиты); `tests/test_planning/` после правок STATE/ROADMAP: 44 passed.
