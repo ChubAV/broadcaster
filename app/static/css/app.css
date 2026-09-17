@@ -2631,8 +2631,12 @@ a.chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px
    несёт ФОРМА (data-syncing), а не свой класс кнопки: состояние принадлежит
    действию, а не оформлению, и правило переживает смену варианта кнопки.
    Анимация повторяет @keyframes orbit раздела 2 — второго вращения не
-   заводится. */
-[data-acct-head] form[data-syncing] .btn__icon {
+   заводится.
+   ⚠️ ПОКОЛЕНИЕ (Фаза 11, план 11-17): признак переехал с тега формы на её
+   ОБЁРТКУ — тег печатает макрос-обёртка htmx-формы, и атрибутов вызывающего он
+   не принимает. Селектор поэтому адресуется носителем признака без имени тега;
+   состояние по-прежнему принадлежит действию, а не кнопке. */
+[data-acct-head] [data-syncing] .btn__icon {
   animation: orbit 1.4s linear infinite;
 }
 
@@ -2727,7 +2731,7 @@ a.chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px
    выполнение синхронизации несут подпись кнопки, строка идентичности и блок
    статуса. Отключение движения не отнимает ни одного носителя состояния. */
 @media (prefers-reduced-motion: reduce) {
-  [data-acct-head] form[data-syncing] .btn__icon { animation: none !important; }
+  [data-acct-head] [data-syncing] .btn__icon { animation: none !important; }
 }
 
 /* --------------------------------------------------------------------------
