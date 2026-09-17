@@ -46,7 +46,7 @@ from app.pages.common import (
 # ключевым аргументом, поэтому обработчик, забывший путь без JavaScript, не
 # собирается как вызов.
 from app.pages.htmx import respond
-from app.pages.identifiers import IdPath
+from app.pages.identifiers import IdPath, PostIdPath, id_in_column
 
 # Разметка ответов опроса статуса подключения живёт в шаблоне, а не в строках
 # обработчика (План 08). До этого она собиралась конкатенацией и несла
@@ -713,7 +713,7 @@ async def accounts_sync_status(
 @router.post("/accounts/{account_id}/retry-sync")
 async def accounts_retry_sync(
     request: Request,
-    account_id: IdPath,
+    account_id: PostIdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -729,14 +729,23 @@ async def accounts_retry_sync(
     if not user:
         return await respond(request, redirect="/login")
 
-    result = await db.execute(
-        select(MessengerAccount).where(
-            MessengerAccount.id == account_id,
-            MessengerAccount.user_id == user.id,
-            MessengerAccount.type.in_(["wa", "max"]),
+    # ГРАНИЦА ИДЕНТИФИКАТОРА — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (Фаза 11, план
+    # 11-17, D-07). Параметр объявлен POST-псевдонимом без границы на сигнатуре:
+    # отказ валидации фреймворка отвечал бы телом `{"detail": …}` без заголовка
+    # перехода, в обход слоя ответа. Проверка стоит ДО первой выборки: величина
+    # вне колонки, ушедшая операндом запроса, роняет обработчик отказом драйвера
+    # (`DataError` на боевом PostgreSQL). Ветка та же, что у несуществующего либо
+    # чужого аккаунта.
+    account = None
+    if id_in_column(account_id):
+        result = await db.execute(
+            select(MessengerAccount).where(
+                MessengerAccount.id == account_id,
+                MessengerAccount.user_id == user.id,
+                MessengerAccount.type.in_(["wa", "max"]),
+            )
         )
-    )
-    account = result.scalar_one_or_none()
+        account = result.scalar_one_or_none()
     if not account:
         return await respond(request, redirect="/accounts")
 
@@ -792,7 +801,7 @@ def _release_sync_slot(account_id: int) -> None:
 @router.post("/accounts/{account_id}/sync-groups")
 async def accounts_sync_groups(
     request: Request,
-    account_id: IdPath,
+    account_id: PostIdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -817,13 +826,24 @@ async def accounts_sync_groups(
     if not user:
         return await respond(request, redirect="/login")
 
-    result = await db.execute(
-        select(MessengerAccount).where(
-            MessengerAccount.id == account_id,
-            MessengerAccount.user_id == user.id,
+    # ГРАНИЦА ИДЕНТИФИКАТОРА — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (Фаза 11, план
+    # 11-17, D-07). Параметр объявлен POST-псевдонимом без границы на сигнатуре:
+    # отказ валидации фреймворка отвечал бы телом `{"detail": …}` без заголовка
+    # перехода, в обход слоя ответа. Проверка стоит ДО первой выборки: величина
+    # вне колонки, ушедшая операндом запроса, роняет обработчик отказом драйвера
+    # (`DataError` на боевом PostgreSQL). Ветка та же, что у несуществующего либо
+    # чужого аккаунта.
+    # ⚠️ И ДО ЗАНЯТИЯ ЗАЯВКИ `_SYNC_IN_FLIGHT` ниже: негодная величина уходит
+    # веткой «аккаунта нет», не взяв заявки, и освобождать ей нечего.
+    account = None
+    if id_in_column(account_id):
+        result = await db.execute(
+            select(MessengerAccount).where(
+                MessengerAccount.id == account_id,
+                MessengerAccount.user_id == user.id,
+            )
         )
-    )
-    account = result.scalar_one_or_none()
+        account = result.scalar_one_or_none()
     # Адрес несуществующего экрана предлагать нечему: аккаунт, не разрешённый в
     # собственный аккаунт пользователя, уводит на список аккаунтов. Все
     # остальные ветки возвращают пользователя туда, откуда он нажал кнопку.
@@ -1019,7 +1039,7 @@ async def accounts_sync_groups(
 @router.post("/accounts/{account_id}/delete")
 async def accounts_delete(
     request: Request,
-    account_id: IdPath,
+    account_id: PostIdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -1059,5 +1079,10 @@ async def accounts_delete(
     if not is_same_origin(request):
         return Response(status_code=403)
 
-    await delete_account(db, user.id, account_id)
+    # ГРАНИЦА ИДЕНТИФИКАТОРА — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА, ПОСЛЕ СВЕРКИ
+    # ИСТОЧНИКА (она идентификатора не читает) и ДО удаления (Фаза 11, план 11-17,
+    # D-07). Величина вне колонки ничего не удаляет и уходит тем же переходом на
+    # список аккаунтов, что несуществующий либо чужой аккаунт: удалять нечего.
+    if id_in_column(account_id):
+        await delete_account(db, user.id, account_id)
     return await respond(request, redirect="/accounts")

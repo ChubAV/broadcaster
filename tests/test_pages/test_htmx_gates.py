@@ -2887,62 +2887,6 @@ VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
         lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
         decision_state=DECISION_WAITS_FOR_THE_OWNER,
     ),
-    _ValidationRefusalDivergence(
-        entry=(
-            "app/pages/accounts.py::POST /accounts/{account_id}/delete → "
-            "адрес account_id"
-        ),
-        alias="IdPath",
-        reason=(
-            _REFUSAL_PRICE
-            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
-            "величина приезжает АДРЕСОМ, и мест этих ЧЕТЫРЕ в одной только "
-            "копии порции — три формы-триггера по трём состояниям карточки "
-            "(`app/templates/accounts/partial_cards.html:59`, `:87`, `:116`) и "
-            "аргумент `action` панели подтверждения (там же, `:138`). Все "
-            "собираются сервером из `account.id` живой строки"
-        ),
-        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
-    ),
-    _ValidationRefusalDivergence(
-        entry=(
-            "app/pages/accounts.py::POST /accounts/{account_id}/retry-sync → "
-            "адрес account_id"
-        ),
-        alias="IdPath",
-        reason=(
-            _REFUSAL_PRICE
-            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
-            "величина стои́т в адресе формы повтора синхронизации "
-            "(`app/templates/accounts/partial_cards.html:84`), и форма эта "
-            "отрисовывается ТОЛЬКО в состоянии `sync_failed` — то есть "
-            "показывается не всегда, но собирается сервером из `account.id` "
-            "всегда, когда показана"
-        ),
-        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
-    ),
-    _ValidationRefusalDivergence(
-        entry=(
-            "app/pages/accounts.py::POST /accounts/{account_id}/sync-groups → "
-            "адрес account_id"
-        ),
-        alias="IdPath",
-        reason=(
-            _REFUSAL_PRICE
-            + ". ДОСТИЖИМОСТЬ ИЗ ИНТЕРФЕЙСА НУЛЕВАЯ, ИЗМЕРЕНО ЧТЕНИЕМ РАЗМЕТКИ: "
-            "величина стои́т в адресе формы запуска синхронизации на ЭКРАНЕ "
-            "ГРУПП, а не в карточке аккаунта "
-            "(`app/templates/account_groups/list.html:85`), и приезжает из "
-            "`account_id` контекста экрана. ⚠️ ЭТО ЕДИНСТВЕННАЯ ИЗ ДЕВЯТИ "
-            "ЗАПИСЕЙ, ЧЬЯ РАЗМЕТКА ЛЕЖИТ НЕ В ТОМ КАТАЛОГЕ, ЧТО ЕЁ ОБРАБОТЧИК: "
-            "обработчик — в модуле аккаунтов, разметка — в шаблонах групп "
-            "аккаунта, и найдена она ЗАМЕРОМ, а не по соседству имени"
-        ),
-        lifting_condition=LIFTING_CONDITION_VALIDATION_REFUSAL,
-        decision_state=DECISION_WAITS_FOR_THE_OWNER,
-    ),
     # ⚠️ ЗАПИСИ ПРАВКИ ОБЪЯВЛЕНИЯ ЗДЕСЬ БОЛЬШЕ НЕТ — снята тем же планом 11-06 и
     # по тому же основанию, что запись удаления выше: граница величины уехала
     # внутрь обработчика, и замер входа больше не находит.
@@ -3124,7 +3068,30 @@ VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
 #   сдвига числа.
 #   ⚠️ ОСТАЛОСЬ ВОСЕМЬ (`account_groups` ×4, `accounts` ×3, `history` ×1), и
 #   `LIFTING_CONDITION_VALIDATION_REFUSAL` верен для них без правки.
-VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 8
+#
+#   8 → 5, Фаза 11, план 11-17, задача 3: ТРИ входа модуля АККАУНТОВ сняты
+#   РАБОТОЙ (D-07) — адрес `account_id` удаления аккаунта, повторной
+#   синхронизации и синхронизации групп. Все три обработчика перешли на
+#   `PostIdPath`; первое использование параметра в каждом — аргумент
+#   `id_in_column`: у удаления ПОСЛЕ сверки источника (она идентификатора не
+#   читает), у синхронизации групп ДО занятия внутрипроцессной заявки, у всех —
+#   до первой выборки. Величина вне колонки идёт веткой «аккаунта нет» — переход
+#   на `/accounts`, тот же, что у несуществующего либо чужого аккаунта.
+#   Поведение наблюдается строками матрицы
+#   `tests/test_pages/test_identifier_bounds.py` (поле `outside`) и случаем пар
+#   «повторная синхронизация — идентификатор вне колонки».
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА, направление привычное:
+#   обработчики переведены ПЕРВЫМИ, при нетронутом перечне, и правило полноты
+#   `test_every_framework_bounded_input_is_declared_as_a_divergence` предъявило
+#   три жалобы дословно — «ОБЪЯВЛЕН, НО ЗАМЕРОМ НЕ НАЙДЕН:
+#   app/pages/accounts.py::POST /accounts/{account_id}/delete → адрес
+#   account_id», такую же для `/sync-groups` и третью (свёрнутую выводом) для
+#   `/retry-sync`. Записи сняты по этим ключам, и правило числа на перечне без
+#   них, но при прежнем числе, предъявило дословно «расхождений формы отказа
+#   валидации стало 5, а объявлено 8» / `assert 5 == 8` — до сдвига числа.
+#   ⚠️ ОСТАЛОСЬ ПЯТЬ (`account_groups` ×4, `history` ×1), и
+#   `LIFTING_CONDITION_VALIDATION_REFUSAL` верен для них без правки.
+VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 5
 
 
 def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
