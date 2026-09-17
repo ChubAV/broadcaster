@@ -79,6 +79,7 @@ from tests.test_pages.test_editor_schedules import (
     _seed_group as _seed_editor_group,
     _seed_schedule,
 )
+from tests.test_pages.test_history_retry import _retry_env
 from tests.test_pages.test_htmx_gates import _pages_sources, _post_handlers
 
 # Ожидаемая форма ответа на транспорте htmx.
@@ -457,6 +458,74 @@ async def _arrange_group_toggle(client, db, settings, identity) -> _Arranged:
         url=f"/accounts/{account.id}/groups/{group.id}/toggle",
         data={"is_active": "on"},
         landing_args={"account_id": account.id, "group_id": group.id},
+    )
+
+
+# Фаза 11, план 11-19 (D-07). Величина вне колонки на входах групп аккаунта и
+# повтора отправки идёт веткой «нет» своего обработчика: у тумблера и удаления
+# это ветка «тройной `WHERE` не нашёл строки» с адресом из `account_id` пути,
+# у повтора — «записи нет». Неотличимость от отсутствующей и чужой строки
+# утверждена целиком (статус, заголовок, тело) в
+# `tests/test_pages/test_account_groups.py` и `tests/test_pages/test_history_retry.py`.
+OUT_OF_COLUMN_ID = ID_MAX + 1
+ACCOUNT_GROUPS_DELETE = "app/pages/account_groups.py::account_groups_delete"
+HISTORY_RETRY = "app/pages/history.py::history_retry"
+
+
+async def _arrange_group_toggle_group_out_of_column(
+    client, db, settings, identity
+) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    account = await _seed_groups_account(db, "wa", user_id=user.id)
+    return _Arranged(
+        url=f"/accounts/{account.id}/groups/{OUT_OF_COLUMN_ID}/toggle",
+        data={"is_active": "on"},
+        landing_args={"account_id": account.id},
+    )
+
+
+async def _arrange_group_toggle_account_out_of_column(
+    client, db, settings, identity
+) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    account = await _seed_groups_account(db, "wa", user_id=user.id)
+    group = await _seed_account_group(db, account, "Группа пары", user_id=user.id)
+    return _Arranged(
+        url=f"/accounts/{OUT_OF_COLUMN_ID}/groups/{group.id}/toggle",
+        data={"is_active": "on"},
+    )
+
+
+async def _arrange_group_delete_group_out_of_column(
+    client, db, settings, identity
+) -> _Arranged:
+    """Живая группа остаётся в выдаче — ветка фрагмента, как у несуществующей."""
+    user = await _current_user(db, identity, settings)
+    account = await _seed_groups_account(db, "wa", user_id=user.id)
+    await _seed_account_group(db, account, "Живая", user_id=user.id)
+    return _Arranged(
+        url=f"/accounts/{account.id}/groups/{OUT_OF_COLUMN_ID}/delete",
+        data={"search": ""},
+        landing_args={"account_id": account.id},
+    )
+
+
+async def _arrange_group_delete_account_out_of_column(
+    client, db, settings, identity
+) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    account = await _seed_groups_account(db, "wa", user_id=user.id)
+    group = await _seed_account_group(db, account, "Живая", user_id=user.id)
+    return _Arranged(
+        url=f"/accounts/{OUT_OF_COLUMN_ID}/groups/{group.id}/delete",
+        data={"search": ""},
+    )
+
+
+async def _arrange_retry_out_of_column(client, db, settings, identity) -> _Arranged:
+    return _Arranged(
+        url=f"/history/{OUT_OF_COLUMN_ID}/retry",
+        context=lambda: _retry_env(allowed=True),
     )
 
 
@@ -1053,6 +1122,49 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         transport=FRAGMENT,
         fragment_mark='id="group-row-{group_id}"',
     ),
+    # Фаза 11, план 11-19 (D-07): четыре входа групп аккаунта вне колонки —
+    # ветка «нет» обработчика, а не отказ валидации фреймворка.
+    _PairCase(
+        key="app/pages/account_groups.py::account_groups_toggle",
+        name="тумблер группы аккаунта — группа вне колонки",
+        identity="user",
+        arrange=_arrange_group_toggle_group_out_of_column,
+        landing="/accounts/{account_id}/groups",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key="app/pages/account_groups.py::account_groups_toggle",
+        name="тумблер группы аккаунта — аккаунт вне колонки",
+        identity="user",
+        arrange=_arrange_group_toggle_account_out_of_column,
+        landing=f"/accounts/{OUT_OF_COLUMN_ID}/groups",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=ACCOUNT_GROUPS_DELETE,
+        name="удаление группы аккаунта — группа вне колонки",
+        identity="user",
+        arrange=_arrange_group_delete_group_out_of_column,
+        landing="/accounts/{account_id}/groups",
+        transport=FRAGMENT,
+        fragment_mark=f'id="group-row-{OUT_OF_COLUMN_ID}"',
+    ),
+    _PairCase(
+        key=ACCOUNT_GROUPS_DELETE,
+        name="удаление группы аккаунта — аккаунт вне колонки",
+        identity="user",
+        arrange=_arrange_group_delete_account_out_of_column,
+        landing=f"/accounts/{OUT_OF_COLUMN_ID}/groups",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=HISTORY_RETRY,
+        name="повтор отправки — запись вне колонки",
+        identity="user",
+        arrange=_arrange_retry_out_of_column,
+        landing="/history",
+        transport=LOCATION,
+    ),
     # Фаза 11, план 11-09. Сохранение часового пояса: экран ОСТАЁТСЯ, подмена
     # приезжает в форму настроек, а код исхода — внеполосным блоком ТЕМ ЖЕ
     # ответом. Первый в вехе фрагмент, несущий код исхода: до него приклейка
@@ -1351,6 +1463,13 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   `tests/test_pages/test_max_connect_transport.py` — по границе обхода,
 #   записанной у случаев профиля.
 #   ПОСТАВЛЕНО ПРОГОНОМ: `случаев пар в реестре 43, объявлено 41`.
+#   43 → 48, Фаза 11, план 11-19 (D-07): ПЯТЬ входов вне колонки — тумблер
+#   группы (группа и аккаунт, переход на экран групп по `account_id` пути),
+#   удаление группы (группа — фрагмент снятия, как у несуществующей при
+#   непустой выдаче; аккаунт — переход) и повтор отправки (переход на
+#   `/history`). Все пять до плана отвечали `422` фреймворка на обоих
+#   транспортах.
+#   ПОСТАВЛЕНО ПРОГОНОМ: `случаев пар в реестре 48, объявлено 43`.
 POST_PAIR_CASES_DECLARED = 43
 
 

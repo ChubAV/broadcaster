@@ -43,6 +43,7 @@ from app.models.user import User
 from app.pages import history as history_module
 from app.pages import notices
 from app.pages.history import RETRY_TASK_NAME
+from app.pages.identifiers import ID_MAX
 
 HISTORY_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "history.py"
 # Гард источника живёт ЗДЕСЬ, а не в модуле раздела: с планом 05-04 у правила
@@ -2003,3 +2004,67 @@ async def test_availability_names_the_draft_ad_and_the_switched_off_group(
 
     assert verdict[log_draft.id] == RETRY_REASON_AD_DRAFT
     assert verdict[log_off_group.id] == RETRY_REASON_GROUP_OFF
+
+
+# =============================================================================
+# ИДЕНТИФИКАТОР ВНЕ КОЛОНКИ — ВЕТКА «ЗАПИСИ НЕТ» (Фаза 11, план 11-19, D-07)
+# =============================================================================
+
+
+async def _observe_retry(client: AsyncClient, url: str) -> tuple:
+    """Наблюдение ОБОИХ транспортов одного адреса повтора — целиком.
+
+    Сравнивается не код, а всё, что видит клиент: статус, адрес перехода и тело
+    на пути деградации; статус, заголовок перехода и тело на слое письма.
+    """
+    degraded = await client.post(url, headers=SAME_ORIGIN, follow_redirects=False)
+    htmx = await client.post(
+        url,
+        headers={**SAME_ORIGIN, "HX-Request": "true"},
+        follow_redirects=False,
+    )
+    return (
+        (degraded.status_code, degraded.headers.get("location"), degraded.content),
+        (htmx.status_code, htmx.headers.get("HX-Location"), htmx.content),
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_out_of_column_is_indistinguishable_from_missing_and_foreign(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Величина вне колонки, несуществующая и ЧУЖАЯ запись неотличимы на ОБОИХ
+    транспортах (D-04 Фазы 9, D-07 Фазы 11; T-11-39).
+
+    До плана 11-19 величину вне колонки отвергал фреймворк отказом валидации —
+    `422` с телом `{"detail": …}`, то есть ответ, отличимый от «записи нет» по
+    коду, телу и отсутствию заголовка перехода. Теперь первым использованием
+    `log_id` стоит `id_in_column`, и ложный результат идёт той же веткой, что
+    отсутствующая либо чужая запись: переход на `/history`. Повтор при этом не
+    ставится и слот удержания не армируется — ни на одном из трёх адресов.
+    """
+    other = await _seed_other_user(db_session)
+    foreign = await _seed_retryable(db_session, other.id)
+
+    addresses = {
+        "вне колонки": f"/history/{ID_MAX + 1}/retry",
+        "записи нет": "/history/987654/retry",
+        "запись чужая": f"/history/{foreign.id}/retry",
+    }
+
+    with _retry_env() as env:
+        observed = {
+            name: await _observe_retry(authed_client, url)
+            for name, url in addresses.items()
+        }
+
+    expected = ((302, "/history", b""), (204, "/history", b""))
+    distinct = {name: seen for name, seen in observed.items() if seen != expected}
+    assert not distinct, (
+        "ПОВТОР РАЗЛИЧАЕТ «ВНЕ КОЛОНКИ», «ЗАПИСИ НЕТ» И «ЗАПИСЬ ЧУЖАЯ»: ожидалось "
+        f"{expected} у всех трёх, отличились {distinct}"
+    )
+    assert env.queued == [], "повтор ушёл в очередь с негодного адреса"
+    assert not history_module._RETRY_IN_FLIGHT, (
+        "слот удержания армирован запросом, до записи не дошедшим"
+    )

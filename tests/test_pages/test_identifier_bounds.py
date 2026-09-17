@@ -608,6 +608,16 @@ class _BoundedEntry:
 
 BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
     # --- app/pages/account_groups.py: семь идентификаторов пути и курсор ---
+    #
+    # ⚠️ ЧЕТЫРЕ ИЗМЕНЯЮЩИХ ВХОДА ЗДЕСЬ — НА POST-ПСЕВДОНИМЕ (Фаза 11, план 11-19,
+    # D-07). У тумблера и удаления НЕТ ветки «аккаунта нет»: ветка «нет» у обоих
+    # одна — тройной `WHERE` не нашёл строки, — и адрес её собирается из
+    # `account_id` ПУТИ (`_screen_url`). Поэтому `outside` несёт подстановку
+    # `{value}`: величина вне колонки приземляется ровно туда, куда приземлился
+    # бы несуществующий аккаунт с той же записью адреса, — посимвольно, а не
+    # «на список аккаунтов», который выдал бы ветку различием заголовка. У
+    # удаления с живым аккаунтом негодный `group_id` идёт той же дорогой, что
+    # несуществующая группа: выдача не опустела, путь деградации — 302 на экран.
     _BoundedEntry(
         key="app/pages/account_groups.py::GET /accounts/{account_id}/groups → адрес account_id",
         method="GET",
@@ -647,6 +657,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{value}/groups/{group}/toggle",
         parameter="account_id",
         live="account",
+        outside="302 /accounts/{value}/groups",
     ),
     _BoundedEntry(
         key="app/pages/account_groups.py::POST /accounts/{account_id}/groups/{group_id}/toggle → адрес group_id",
@@ -654,6 +665,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{account}/groups/{value}/toggle",
         parameter="group_id",
         live="group",
+        outside="302 /accounts/{account}/groups",
     ),
     _BoundedEntry(
         key="app/pages/account_groups.py::POST /accounts/{account_id}/groups/{group_id}/delete → адрес account_id",
@@ -661,6 +673,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{value}/groups/{group}/delete",
         parameter="account_id",
         live="account",
+        outside="302 /accounts/{value}/groups",
     ),
     _BoundedEntry(
         key="app/pages/account_groups.py::POST /accounts/{account_id}/groups/{group_id}/delete → адрес group_id",
@@ -668,6 +681,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{account}/groups/{value}/delete",
         parameter="group_id",
         live="group",
+        outside="302 /accounts/{account}/groups",
     ),
     # --- app/pages/accounts.py: четыре идентификатора пути ---
     #
@@ -751,6 +765,8 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
     # («правка объявления по адресу — идентификатор вне колонки»). Тем же
     # способом план 11-02 снял отсюда семь входов модуля расписаний.
     # --- app/pages/history.py: два идентификатора пути ---
+    # Повтор отправки — на POST-псевдониме (Фаза 11, план 11-19, D-07): величина
+    # вне колонки идёт веткой «записи нет» — переход на `/history`.
     _BoundedEntry(
         key="app/pages/history.py::GET /history/{log_id} → адрес log_id",
         method="GET",
@@ -764,6 +780,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/history/{value}/retry",
         parameter="log_id",
         live="log",
+        outside="302 /history",
     ),
     # --- app/pages/admin.py: одиннадцать идентификаторов пути ---
     #
@@ -1115,10 +1132,13 @@ async def test_every_bounded_input_refuses_a_value_outside_the_column(
                 address,
                 with_location=entry.outside != VALIDATION_REFUSAL,
             )
-            if code != entry.outside:
+            # Подстановки `outside` — те же, что у адреса: ветка «нет», чей
+            # адрес собран из пути, приземляется на адрес с ТОЙ ЖЕ величиной.
+            expected = entry.outside.format(value=value, **live)
+            if code != expected:
                 disagreed.append(
                     f"{entry.key} ← {value} = {code} "
-                    f"(ожидалось {entry.outside}; {entry.method} {address})"
+                    f"(ожидалось {expected}; {entry.method} {address})"
                 )
 
     assert not disagreed, (

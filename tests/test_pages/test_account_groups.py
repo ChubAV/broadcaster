@@ -43,6 +43,7 @@ from app.models.user import User
 # сеют 35 строк литералом — они писались до появления курсорных утверждений и
 # переписывать их эта задача не обязана.
 from app.pages.account_groups import PAGE_SIZE
+from app.pages.identifiers import ID_MAX
 from tests.conftest import a_future_run_moment
 
 # Якорь строки списка. Утверждать порядок по именам групп нельзя: у двух групп
@@ -6417,3 +6418,191 @@ async def test_the_portion_route_never_answers_a_happy_request_with_a_redirect(
     assert _row_ids(response.text) == [group.id for group in seeded[30:]], (
         "порция отдала не продолжение списка"
     )
+
+
+# =============================================================================
+# ИДЕНТИФИКАТОР ВНЕ КОЛОНКИ — ВЕТКА «НЕТ» ТУМБЛЕРА И УДАЛЕНИЯ
+# (Фаза 11, план 11-19, D-07; неотличимость D-04/D-13 Фазы 9, T-11-39)
+# =============================================================================
+#
+# ⚠️ У ОБОИХ ОБРАБОТЧИКОВ ВЕТКА «НЕТ» ОДНА — ТРОЙНОЙ `WHERE` НЕ НАШЁЛ СТРОКИ, —
+# И АДРЕС ЕЁ СОБИРАЕТСЯ ИЗ `account_id` ПУТИ. Поэтому величина вне колонки на
+# месте группы обязана дать ПОСИМВОЛЬНО тот же ответ, что несуществующая и чужая
+# группа того же аккаунта, а на месте аккаунта — тот же ответ, что
+# несуществующий аккаунт, с точностью до самой величины в адресе. До плана 11-19
+# её отвергал фреймворк: `422` с телом `{"detail": …}` и без заголовка перехода.
+
+OUT_OF_COLUMN_ID = ID_MAX + 1
+MISSING_ROW_ID = 987654
+HTMX_REQUEST = {"HX-Request": "true"}
+
+
+async def _observe_both_transports(
+    client: AsyncClient, url: str, data: dict, *, path_value: int | None = None
+) -> tuple:
+    """Всё, что видит клиент на обоих транспортах одного адреса.
+
+    `path_value` — величина пути, которой ответ ВПРАВЕ отличаться: тело удаления
+    собирается из `group_id` пути, адрес приземления — из `account_id` пути.
+    Она заменяется меткой, и сравниваются формы, а не числа.
+    """
+    degraded = await client.post(url, data=data, follow_redirects=False)
+    htmx = await client.post(
+        url, data=data, headers=HTMX_REQUEST, follow_redirects=False
+    )
+
+    def normal(text: str | None) -> str | None:
+        if text is None or path_value is None:
+            return text
+        # Только МЕСТА, куда величина пути попадает по построению: узлы снятия
+        # и адрес экрана. Замена «любого такого числа» задела бы счётчики.
+        return re.sub(
+            rf"(group-(?:row|del)-|/accounts/){path_value}(?!\d)",
+            r"\1<ПУТЬ>",
+            text,
+        )
+
+    return (
+        (
+            degraded.status_code,
+            normal(degraded.headers.get("location")),
+            normal(degraded.text),
+        ),
+        (
+            htmx.status_code,
+            normal(htmx.headers.get("HX-Location")),
+            normal(htmx.text),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_toggle_out_of_column_is_indistinguishable_from_missing_and_foreign(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Тумблер: вне колонки ≡ группы нет ≡ группа чужая; аккаунт вне колонки ≡
+    аккаунта нет. Оба транспорта, чужая строка не тронута."""
+    account = await _seed_account(db_session)
+    own = await _seed_group(db_session, account, "Своя")
+    stranger = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=stranger.id)
+    foreign = await _seed_group(
+        db_session, foreign_account, "Чужая", user_id=stranger.id, is_active=False
+    )
+    data = {"is_active": "on"}
+
+    by_group = {
+        "группа вне колонки": await _observe_both_transports(
+            authed_client,
+            f"/accounts/{account.id}/groups/{OUT_OF_COLUMN_ID}/toggle",
+            data,
+        ),
+        "группы нет": await _observe_both_transports(
+            authed_client,
+            f"/accounts/{account.id}/groups/{MISSING_ROW_ID}/toggle",
+            data,
+        ),
+        "группа чужая": await _observe_both_transports(
+            authed_client, f"/accounts/{account.id}/groups/{foreign.id}/toggle", data
+        ),
+    }
+    landing = f"/accounts/{account.id}/groups"
+    expected = ((302, landing, ""), (204, landing, ""))
+    distinct = {name: seen for name, seen in by_group.items() if seen != expected}
+    assert not distinct, (
+        f"ТУМБЛЕР РАЗЛИЧАЕТ ВЕТКУ «ГРУППЫ НЕТ»: ожидалось {expected}, отличились "
+        f"{distinct}"
+    )
+
+    by_account = {
+        "аккаунт вне колонки": await _observe_both_transports(
+            authed_client,
+            f"/accounts/{OUT_OF_COLUMN_ID}/groups/{own.id}/toggle",
+            data,
+            path_value=OUT_OF_COLUMN_ID,
+        ),
+        "аккаунта нет": await _observe_both_transports(
+            authed_client,
+            f"/accounts/{MISSING_ROW_ID}/groups/{own.id}/toggle",
+            data,
+            path_value=MISSING_ROW_ID,
+        ),
+    }
+    landing = "/accounts/<ПУТЬ>/groups"
+    expected = ((302, landing, ""), (204, landing, ""))
+    distinct = {name: seen for name, seen in by_account.items() if seen != expected}
+    assert not distinct, (
+        f"ТУМБЛЕР РАЗЛИЧАЕТ ВЕТКУ «АККАУНТА НЕТ»: ожидалось {expected}, отличились "
+        f"{distinct}"
+    )
+
+    db_session.expire_all()
+    assert (await db_session.get(Group, foreign.id)).is_active is False, (
+        "чужая группа переключена"
+    )
+    assert (await db_session.get(Group, own.id)).is_active is True
+
+
+@pytest.mark.asyncio
+async def test_delete_out_of_column_is_indistinguishable_from_missing_and_foreign(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Удаление: группа вне колонки ≡ группы нет ≡ группа чужая (фрагмент с
+    узлами снятия из целого пути, D-04-A); аккаунт вне колонки ≡ аккаунта нет.
+    Оба транспорта, ни одна живая строка не удалена."""
+    account = await _seed_account(db_session)
+    own = await _seed_group(db_session, account, "Своя")
+    stranger = await _seed_foreign_user(db_session)
+    foreign_account = await _seed_account(db_session, user_id=stranger.id)
+    foreign = await _seed_group(
+        db_session, foreign_account, "Чужая", user_id=stranger.id
+    )
+    data = {"search": ""}
+
+    by_group = {
+        name: await _observe_both_transports(
+            authed_client,
+            f"/accounts/{account.id}/groups/{value}/delete",
+            data,
+            path_value=value,
+        )
+        for name, value in (
+            ("группа вне колонки", OUT_OF_COLUMN_ID),
+            ("группы нет", MISSING_ROW_ID),
+            ("группа чужая", foreign.id),
+        )
+    }
+    reference = by_group["группы нет"]
+    assert reference[0][:2] == (302, f"/accounts/{account.id}/groups")
+    assert reference[1][0] == 200 and 'id="group-row-<ПУТЬ>"' in reference[1][2], (
+        f"ветка «группы нет» перестала быть фрагментом снятия: {reference[1][:2]}"
+    )
+    distinct = {name: seen for name, seen in by_group.items() if seen != reference}
+    assert not distinct, (
+        "УДАЛЕНИЕ РАЗЛИЧАЕТ ВЕТКУ «ГРУППЫ НЕТ»: ответ «группы нет» "
+        f"{reference[0][:2]}/{reference[1][:2]}, отличились {list(distinct)}"
+    )
+
+    by_account = {
+        name: await _observe_both_transports(
+            authed_client,
+            f"/accounts/{value}/groups/{own.id}/delete",
+            data,
+            path_value=value,
+        )
+        for name, value in (
+            ("аккаунт вне колонки", OUT_OF_COLUMN_ID),
+            ("аккаунта нет", MISSING_ROW_ID),
+        )
+    }
+    landing = "/accounts/<ПУТЬ>/groups"
+    expected = ((302, landing, ""), (204, landing, ""))
+    distinct = {name: seen for name, seen in by_account.items() if seen != expected}
+    assert not distinct, (
+        f"УДАЛЕНИЕ РАЗЛИЧАЕТ ВЕТКУ «АККАУНТА НЕТ»: ожидалось {expected}, "
+        f"отличились {distinct}"
+    )
+
+    db_session.expire_all()
+    assert await db_session.get(Group, own.id) is not None, "своя группа удалена"
+    assert await db_session.get(Group, foreign.id) is not None, "чужая группа удалена"
