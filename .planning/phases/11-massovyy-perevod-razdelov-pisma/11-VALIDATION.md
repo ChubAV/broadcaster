@@ -69,6 +69,7 @@ validated: "2026-09-17"
 | 11-20-T3 | 20 | 20 | D-07 (окно 51), D-08 (окно 63) | T-11-35 | окно 51 `fixed` командой реестра; окно 63 остаётся `open`, частичное решение D-08 записано летописью в `ROADMAP.md`; флажки и клетки состояний не тронуты | gate | `uv run pytest tests/test_planning/ -q` | ✅ | ✅ green |
 | 11-04-T1 | 04 | 4 | D-11 | T-11-09 | keyset `/schedules/partial`: тумблер под фильтром не теряет строку | integration | `uv run pytest tests/test_pages/test_schedules_list.py -q -k "does_not_skip_a_row"` | тест — 11-04-T1 | ✅ green |
 | 11-06-T1 | 06 | 6 | D-13 | T-11-11 | `HX-Push-Url: /ads/{id}/edit` на создании переживает переезд на `respond()` | integration | `uv run pytest tests/test_pages/test_ads_editor.py -q -k "push_url_header_after_the_move"` | тест — 11-06-T1 | ✅ green |
+| 11-21-T1, 11-21-T2 | 21 | 1 (партия закрытия гэпов) | FORM-03, FORM-04, FORM-08 (`G-11-6`) | T-11-42 (перехват нажатия), T-11-43, T-11-44, T-11-45 | индикатор формы обёртки не занимает места в потоке: область задаёт класс, печатаемый ТОЛЬКО макросом `form_wrapper`; `pointer-events: none` — нажатие по углу органа доходит до него; панель подтверждения печатает тот же узел и под область НЕ попадает (её ~22 px приняты решением владельца 1, 10-UAT 3.5) | gate | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_templates/test_components.py -q` | 4 гейта — 11-21-T1/T2 | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -160,3 +161,43 @@ validated: "2026-09-17"
 
 **Ручные проверки не изменились:** четыре строки раздела Manual-Only остаются ручными по природе
 (внешний сервис, браузер, история). Окно 87 фиксирует, что UAT перехода в ЮKassa ещё не проведён.
+
+---
+
+## Validation Audit 2026-09-17 (партия закрытия гэпов, план 11-21)
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+**Основание.** Дерево `fa2b766` (пост-слияночный гейт оркестратора `/gsd-execute-phase 11 --gaps-only`).
+Предыдущий аудит снят на `05963ea` — ДО существования плана 11-21, и его «0 гэпов» ошибкой не было:
+оно верно для состава фазы до первой партии закрытия гэпов.
+
+- **Гэпов не заведено, потому что поведение приехало с гейтами, а не без них.** Задачи 11-21-T1 и
+  11-21-T2 — обе `tdd="true"`, и обе предъявили КРАСНОЕ до зелёного: T1 замером
+  (`2 failed` → `2 passed`, `check tdd-red-evidence` → `RED_EVIDENCE_OK`), T2 — двумя мутантами
+  (селектор без области; класс области на теге панели), каждый из которых красит ровно свой гейт.
+  Классификация строки карты — COVERED, а не MISSING: чинить нечего, недоставало ЗАПИСИ.
+- **Невакуумность команды строки** (`--collect-only -k "indicator_scope or layout_footprint or
+  outside_the_indicator_scope or accepted_place"`): `4/171 tests collected` — выборка не пуста, и
+  четыре имени соответствуют поведению строки
+  (`test_the_reported_profile_form_carries_the_indicator_scope`,
+  `test_a_wrapped_form_gives_its_indicator_no_layout_footprint`,
+  `test_the_panel_form_stays_outside_the_indicator_scope`,
+  `test_the_confirmation_panel_indicator_keeps_its_accepted_place`).
+  Полный прогон обоих файлов: `171 passed in 12.04s`.
+- **Числа реестров, сверенные планом:** `pointer-events: none;` 1 → 2; базовое правило `.form-busy`
+  по-прежнему ровно 1; контроль числа файлов 24; `PANEL_QUALITY_DIFFERENCES_ALLOWED` = 2;
+  `IN_FLOW_INDICATOR_EXCEPTIONS_DECLARED` = 1 (точка строки группы — объявленное исключение).
+- **Полная суита оркестратора ПОСЛЕ коммитов трекинга:** `2 failed, 3408 passed in 2233.49s`; оба
+  отказа — в `tests/test_planning/` и внесены самим шагом трекинга (преждевременные отметки
+  FORM-03/04/08 и проза `**Plans**` 20 при 21 отметке), исправлены в `fa2b766`, после чего
+  `tests/test_planning/` — `44 passed`. В `app/` и `tests/` отказов нет ни одного.
+
+**Ручное остаётся ручным:** пункт 5a проверки 6 `11-UAT.md` (точка над углом органа — перенос ряда и
+тумблер шапки 40 px в положении «вкл») НАБЛЮДЕНИЕМ НЕ СНЯТ и записан открытой записью
+`unrun-verify` в `.planning/WINDOWS.md`. Гейт доказывает ОТСУТСТВИЕ СЛЕДА В ПОТОКЕ и проходимость
+нажатия, но не то, что 8 px не накрывают подпись — это предмет глаза, а не утверждения.
