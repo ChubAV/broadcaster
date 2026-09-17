@@ -745,6 +745,59 @@ async def _arrange_retry_sync_without_session(
 
 
 # =============================================================================
+# Посев: синхронизация групп аккаунта (Фаза 11, план 11-17)
+# =============================================================================
+
+ACCOUNTS_SYNC_GROUPS = "app/pages/accounts.py::accounts_sync_groups"
+
+
+@contextlib.contextmanager
+def _sync_groups_bridge():
+    """Подмена МОСТА — внешней границы синхронизации групп.
+
+    Обработчик получает состав групп синхронно, прямо в запросе; мост в прогоне
+    недоступен. Подмена стоит и на исходах, до моста не доходящих: ответ,
+    дошедший до него там, где не должен, уронил бы случай не по его предмету.
+    """
+    with patch("app.pages.accounts.WhatsAppMessenger") as messenger:
+        messenger.return_value.get_groups = AsyncMock(
+            return_value=[{"id": "pair@g.us", "name": "Группа пары"}]
+        )
+        yield
+
+
+async def _arrange_sync_groups(client, db, settings, identity) -> _Arranged:
+    user = await _current_user(db, identity, settings)
+    account = await _seed_groups_account(db, "wa", user_id=user.id)
+    return _Arranged(
+        url=f"/accounts/{account.id}/sync-groups",
+        context=_sync_groups_bridge,
+        landing_args={"account_id": account.id},
+    )
+
+
+async def _arrange_sync_groups_already_syncing(
+    client, db, settings, identity
+) -> _Arranged:
+    """Первая ступень guard: фоновая синхронизация уже идёт — тот же экран."""
+    user = await _current_user(db, identity, settings)
+    account = await _seed_groups_account(db, "wa", user_id=user.id)
+    account.status = "syncing"
+    await db.commit()
+    return _Arranged(
+        url=f"/accounts/{account.id}/sync-groups",
+        context=_sync_groups_bridge,
+        landing_args={"account_id": account.id},
+    )
+
+
+async def _arrange_sync_groups_missing(client, db, settings, identity) -> _Arranged:
+    return _Arranged(
+        url=f"/accounts/{MISSING_ACCOUNT_ID}/sync-groups", context=_sync_groups_bridge
+    )
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -1122,6 +1175,33 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         identity="user",
         arrange=_arrange_retry_sync_without_session,
         landing="/login",
+        transport=LOCATION,
+    ),
+    # Фаза 11, план 11-17. Синхронизация групп аккаунта: действие НАВИГАЦИОННОЕ
+    # (D-02) — состав групп заменяется целиком, и все исходы идут переходом,
+    # посимвольно на адреса 302.
+    _PairCase(
+        key=ACCOUNTS_SYNC_GROUPS,
+        name="синхронизация групп — успех",
+        identity="user",
+        arrange=_arrange_sync_groups,
+        landing="/accounts/{account_id}/groups",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=ACCOUNTS_SYNC_GROUPS,
+        name="синхронизация групп — уже идёт",
+        identity="user",
+        arrange=_arrange_sync_groups_already_syncing,
+        landing="/accounts/{account_id}/groups",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=ACCOUNTS_SYNC_GROUPS,
+        name="синхронизация групп — аккаунта нет",
+        identity="user",
+        arrange=_arrange_sync_groups_missing,
+        landing="/accounts",
         transport=LOCATION,
     ),
 )
