@@ -40,17 +40,24 @@
 завести второй источник одного утверждения. Покрытыми считаются ключи ЭТОГО
 реестра и ключи того.
 """
+import ast
 import contextlib
+import io
+import re
+import tokenize
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.routing import APIRoute
 from httpx import AsyncClient
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.main import create_app
 from app.models.ad import Ad
 from app.models.payment import Payment
 from app.models.schedule import Schedule
@@ -80,7 +87,13 @@ from tests.test_pages.test_editor_schedules import (
     _seed_schedule,
 )
 from tests.test_pages.test_history_retry import _retry_env
-from tests.test_pages.test_htmx_gates import _pages_sources, _post_handlers
+from tests.test_pages.test_htmx_gates import (
+    NOT_YET_CONVERTED,
+    PROJECT_ROOT,
+    _converted,
+    _pages_sources,
+    _post_handlers,
+)
 
 # Ожидаемая форма ответа на транспорте htmx.
 FRAGMENT = "ожидается 200 и фрагмент"
@@ -1603,10 +1616,19 @@ def _closure_complaints(
     """
     handlers = _post_handlers(_pages_sources() if sources is None else sources)
     converted = {key for key, handler in handlers.items() if handler.calls_respond}
-    covered = {case.key for case in cases} | {
+    return sorted(converted - _covered(cases))
+
+
+def _covered(cases: tuple[_PairCase, ...]) -> set[str]:
+    """Обработчики, у которых пара ЕСТЬ: ключи этого реестра и реестра Фазы 10.
+
+    Одно определение на замыкание и на обход утверждений 302 (план 11-20): две
+    копии множества «покрытых» разошлись бы молча, и обход признавал бы пару,
+    которой замыкание не видит.
+    """
+    return {case.key for case in cases} | {
         route.key for route in CONFIRMED_DELETE_ROUTES
     }
-    return sorted(converted - covered)
 
 
 def test_every_converted_handler_has_a_pair():
@@ -1625,4 +1647,369 @@ def test_control_a_handler_without_a_case_reddens_the_closure():
     assert len(stripped) < len(POST_PAIR_CASES), "контроль ничего не снял"
     assert SCHEDULES_UPDATE in _closure_complaints(stripped), (
         "замыкание не заметило обработчика без единого случая — правило вакуумно"
+    )
+
+
+# =============================================================================
+# ОБХОД УТВЕРЖДЕНИЙ 302 (Фаза 11, план 11-20, D-14)
+# =============================================================================
+#
+# ЗАЧЕМ ОБХОД ПОВЕРХ ЗАМЫКАНИЯ. Замыкание выше говорит «у обработчика есть хотя бы
+# одна пара». Оно молчит о том, что в суите стоят утверждения 302 о том же
+# обработчике, и о том, у какого обработчика такие утверждения есть, а пары нет:
+# обработчик мог бы попасть в множество переведённых мимо обхода `respond`
+# (псевдоним импорта — названная граница гейтов), а утверждения 302 о нём остались
+# бы стеречь путь деградации без второй половины. Обход читает дерево `tests/`
+# РАЗБОРОМ, приписывает каждое утверждение `status_code == 302` о POST-запросе
+# обработчику по ТАБЛИЦЕ МАРШРУТОВ ПРИЛОЖЕНИЯ и требует пары у каждого
+# переведённого.
+#
+# ВСЕЛЕННАЯ (D-14). Утверждения `status_code == 302` на POST-запросах к
+# POST-обработчикам `app/pages/`, идущим через `respond()`. Вне её: редиректы
+# GET-страниц (вход, гейт доступа) и обработчики, ещё стоящие в
+# `NOT_YET_CONVERTED`. ⚠️ ОБРАБОТЧИКИ ФАЗ 13–14 ВОЙДУТ В СЧЁТ САМИ, покидая
+# перечень: правило числа покраснеет — это ДВИЖЕНИЕ, а не регрессия, и число
+# ставится прогоном его отказа.
+#
+# ⚠️ НЕРАЗОБРАННОЕ НЕ ВЫПАДАЕТ МОЛЧА. Утверждение, чей запрос обход не приписал
+# маршруту (адрес собран выражением, статус снят кортежем, ответ лежит в словаре),
+# не исчезает из охвата: оно либо названо в `UNATTRIBUTED_302_ASSERTIONS` с
+# обработчиками, которые называет читатель, либо краснит правило пар поимённо.
+
+
+def _post_302_assertions(
+    tests_root: Path,
+    route_table: tuple[tuple[str, str], ...],
+    *,
+    exclude: frozenset[str] = frozenset(),
+) -> "_Traversal":
+    """RED (план 11-20, задача 1): обход ещё не написан."""
+    return _Traversal(visited=0, records=())
+
+
+PAIRS_MODULE = "tests/test_pages/test_htmx_post_pairs.py"
+TESTS_ROOT = PROJECT_ROOT / "tests"
+
+
+@dataclass(frozen=True)
+class _Post302:
+    """Одно утверждение 302 о POST-запросе (либо о запросе, который обход не разобрал)."""
+
+    file: str
+    line: int
+    function: str
+    handler: str | None
+    reason: str | None = None
+
+    @property
+    def place(self) -> str:
+        return f"{self.file}:{self.line}"
+
+    @property
+    def owner(self) -> str:
+        return f"{self.file}::{self.function}"
+
+
+@dataclass(frozen=True)
+class _Traversal:
+    """Итог обхода: сколько сравнений 302 встречено и какие из них — о POST."""
+
+    visited: int
+    records: tuple[_Post302, ...]
+
+
+@dataclass(frozen=True)
+class _Unattributed:
+    """Утверждение, которое обход не приписал маршруту, и обработчики по чтению."""
+
+    handlers: tuple[str, ...]
+    reason: str
+
+
+UNATTRIBUTED_302_ASSERTIONS: dict[str, _Unattributed] = {}
+
+
+def _post_route_table(app) -> tuple[tuple[str, str], ...]:
+    """Пары «путь маршрута → ключ обработчика» у POST-маршрутов ПРИЛОЖЕНИЯ.
+
+    Префиксы роутеров учитывает само приложение: путь берётся у собранного
+    маршрута, а не у декоратора. Ключ — та же форма `модуль::функция`, что у
+    гейтов; расхождение формы правило пар ловит сличением с `_post_handlers`.
+    """
+    table = []
+    for route in app.routes:
+        if isinstance(route, APIRoute) and "POST" in route.methods:
+            endpoint = route.endpoint
+            module = endpoint.__module__.replace(".", "/") + ".py"
+            table.append((route.path, f"{module}::{endpoint.__name__}"))
+    return tuple(table)
+
+
+def _lexical_302_comparisons(
+    tests_root: Path, *, exclude: frozenset[str] = frozenset()
+) -> int:
+    """НЕЗАВИСИМЫЙ счёт: лексемы `status_code == 302` вне строк и комментариев.
+
+    Второй инструмент намеренно не знает дерева разбора: обход, ослепший к форме
+    записи, разойдётся с ним числом, а не совпадёт молча.
+    """
+    base = tests_root.parent
+    count = 0
+    skipped = {tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT}
+    for path in sorted(tests_root.rglob("*.py")):
+        if path.relative_to(base).as_posix() in exclude:
+            continue
+        text = path.read_text(encoding="utf-8")
+        tokens = [
+            token
+            for token in tokenize.generate_tokens(io.StringIO(text).readline)
+            if token.type not in skipped
+        ]
+        for first, second, third in zip(tokens, tokens[1:], tokens[2:]):
+            if (
+                first.type == tokenize.NAME
+                and first.string == "status_code"
+                and second.string == "=="
+                and third.type == tokenize.NUMBER
+                and third.string == "302"
+            ):
+                count += 1
+    return count
+
+
+def _in_universe(
+    traversal: _Traversal, converted: set[str], not_yet: frozenset[str]
+) -> tuple[_Post302, ...]:
+    """Записи вселенной D-14: обработчик переведён и не стоит в отставании."""
+    return tuple(
+        record
+        for record in traversal.records
+        if record.handler in converted and record.handler not in not_yet
+    )
+
+
+def _pairing_complaints(
+    traversal: _Traversal,
+    cases: tuple[_PairCase, ...],
+    *,
+    converted: set[str],
+    not_yet: frozenset[str],
+    unattributed: dict[str, _Unattributed],
+) -> list[str]:
+    """Жалобы правила пар: «файл:строка → обработчик» и неразобранные поимённо."""
+    covered = _covered(cases)
+    complaints = [
+        f"{record.place} → {record.handler}: утверждение 302 есть, пары нет"
+        for record in _in_universe(traversal, converted, not_yet)
+        if record.handler not in covered
+    ]
+
+    unresolved = [record for record in traversal.records if record.handler is None]
+    owners = {record.owner for record in unresolved}
+    complaints += [
+        f"{record.place} ({record.function}): обработчик не назван — {record.reason}"
+        for record in unresolved
+        if record.owner not in unattributed
+    ]
+    complaints += [
+        f"{owner}: запись `UNATTRIBUTED_302_ASSERTIONS` стоит, а неразобранного "
+        "утверждения в функции нет"
+        for owner in sorted(set(unattributed) - owners)
+    ]
+    complaints += [
+        f"{owner} → {handler}: утверждение 302 названо читателем, пары нет"
+        for owner, entry in sorted(unattributed.items())
+        for handler in entry.handlers
+        if handler in converted and handler not in not_yet and handler not in covered
+    ]
+    return complaints
+
+
+def _number_complaints(
+    traversal: _Traversal, *, independent: int, counted: int, declared: int
+) -> list[str]:
+    """Жалобы правила числа — одна проверка на правило и на его контроль."""
+    complaints = []
+    if traversal.visited == 0:
+        complaints.append(
+            "обход не встретил ни одного сравнения `status_code == 302` — корень "
+            "тестов пуст или разбор ослеп, и правило пар зеленеет вакуумно"
+        )
+    if traversal.visited != independent:
+        complaints.append(
+            f"обход разобрал {traversal.visited} сравнений `status_code == 302`, "
+            f"счёт по лексемам даёт {independent} — форма записи ушла из-под обхода"
+        )
+    if counted != declared:
+        complaints.append(
+            f"утверждений 302 о переведённых обработчиках {counted}, объявлено "
+            f"{declared}. Поставьте число ПРОГОНОМ этого отказа"
+        )
+    return complaints
+
+
+# Утверждения `status_code == 302` о POST-запросах к переведённым обработчикам
+# страничного слоя, СНЯТЫЕ ОБХОДОМ дерева `tests/` (без этого модуля).
+PAIRED_302_ASSERTIONS_DECLARED = 0
+
+
+def _routes(settings) -> tuple[tuple[str, str], ...]:
+    return _post_route_table(create_app(settings=settings))
+
+
+@pytest.mark.asyncio
+async def test_every_302_assertion_on_a_converted_handler_is_paired(test_settings):
+    """Каждое утверждение 302 о переведённом обработчике имеет пару; жалоба — файл:строка."""
+    route_table = _routes(test_settings)
+    pages_keys = {key for _, key in route_table if key.startswith("app/pages/")}
+    assert pages_keys == set(_post_handlers(_pages_sources())), (
+        "ключи таблицы маршрутов приложения разошлись с ключами обхода гейтов — "
+        "утверждение приписывалось бы не тому обработчику"
+    )
+    traversal = _post_302_assertions(
+        TESTS_ROOT, route_table, exclude=frozenset({PAIRS_MODULE})
+    )
+    complaints = _pairing_complaints(
+        traversal,
+        POST_PAIR_CASES,
+        converted=_converted(_pages_sources()),
+        not_yet=NOT_YET_CONVERTED,
+        unattributed=UNATTRIBUTED_302_ASSERTIONS,
+    )
+    assert not complaints, "утверждения 302 без пары:\n  " + "\n  ".join(complaints)
+
+
+@pytest.mark.asyncio
+async def test_the_number_of_paired_302_assertions_is_the_declared_one(test_settings):
+    """Число утверждений вселенной D-14 равно объявленному; обход не вакуумен."""
+    exclude = frozenset({PAIRS_MODULE})
+    traversal = _post_302_assertions(TESTS_ROOT, _routes(test_settings), exclude=exclude)
+    counted = len(
+        _in_universe(traversal, _converted(_pages_sources()), NOT_YET_CONVERTED)
+    )
+    complaints = _number_complaints(
+        traversal,
+        independent=_lexical_302_comparisons(TESTS_ROOT, exclude=exclude),
+        counted=counted,
+        declared=PAIRED_302_ASSERTIONS_DECLARED,
+    )
+    assert not complaints, "\n".join(complaints)
+
+
+def _synthetic_root(tmp_path: Path, name: str, text: str) -> Path:
+    root = tmp_path / "tests"
+    root.mkdir()
+    (root / name).write_text(text, encoding="utf-8")
+    return root
+
+
+def _line_of(text: str, fragment: str) -> int:
+    return next(
+        number
+        for number, line in enumerate(text.splitlines(), start=1)
+        if fragment in line
+    )
+
+
+SYNTHETIC_UNPAIRED = '''
+async def test_synthetic_schedule_edit(client):
+    schedule_id = 1
+    resp = await client.post(f"/schedules/{schedule_id}/edit", data={})
+    assert resp.status_code == 302
+'''
+
+
+@pytest.mark.asyncio
+async def test_control_an_unpaired_302_assertion_reddens_the_traversal(
+    tmp_path, test_settings
+):
+    """Отрицательный контроль: 302 о правке расписания без её случаев — жалоба с файлом и строкой."""
+    root = _synthetic_root(tmp_path, "test_synthetic_unpaired.py", SYNTHETIC_UNPAIRED)
+    traversal = _post_302_assertions(root, _routes(test_settings))
+    converted = _converted(_pages_sources())
+    stripped = tuple(case for case in POST_PAIR_CASES if case.key != SCHEDULES_UPDATE)
+    assert len(stripped) < len(POST_PAIR_CASES), "контроль ничего не снял"
+
+    complaints = _pairing_complaints(
+        traversal, stripped, converted=converted, not_yet=NOT_YET_CONVERTED, unattributed={}
+    )
+    place = (
+        "tests/test_synthetic_unpaired.py:"
+        f"{_line_of(SYNTHETIC_UNPAIRED, 'assert resp.status_code == 302')}"
+    )
+    assert any(
+        complaint.startswith(place) and SCHEDULES_UPDATE in complaint
+        for complaint in complaints
+    ), f"обход не назвал непарное утверждение {place}: {complaints}"
+
+    assert not _pairing_complaints(
+        traversal,
+        POST_PAIR_CASES,
+        converted=converted,
+        not_yet=NOT_YET_CONVERTED,
+        unattributed={},
+    ), "с полным реестром жалоба осталась — краснит не отсутствие пары"
+
+
+SYNTHETIC_OUT_OF_COUNT = '''
+async def test_synthetic_page_redirect(client):
+    resp = await client.get("/ads")
+    assert resp.status_code == 302
+
+
+async def test_synthetic_unconverted_login(client):
+    resp = await client.post("/login", data={})
+    assert resp.status_code == 302
+
+
+async def test_synthetic_reassigned_to_a_page(client):
+    resp = await client.post("/schedules/1/toggle", data={})
+    resp = await client.get("/schedules")
+    assert resp.status_code == 302
+
+
+async def test_synthetic_converted_toggle(client):
+    schedule_id = 1
+    resp = await client.post(f"/schedules/{schedule_id}/toggle?keep=1", data={})
+    assert resp.status_code == 302
+'''
+
+
+@pytest.mark.asyncio
+async def test_control_a_get_or_unconverted_302_stays_out_of_the_count(
+    tmp_path, test_settings
+):
+    """GET и обработчик из `NOT_YET_CONVERTED` в счёт не входят; переведённый — входит."""
+    root = _synthetic_root(tmp_path, "test_synthetic_out.py", SYNTHETIC_OUT_OF_COUNT)
+    traversal = _post_302_assertions(root, _routes(test_settings))
+    converted = _converted(_pages_sources())
+
+    assert traversal.visited == 4, f"обход встретил {traversal.visited} сравнений из 4"
+    assert [record.handler for record in traversal.records] == [
+        "app/pages/auth.py::login_submit",
+        SCHEDULES_TOGGLE,
+    ], f"POST-записи обхода: {traversal.records}"
+
+    counted = _in_universe(traversal, converted, NOT_YET_CONVERTED)
+    assert [record.handler for record in counted] == [SCHEDULES_TOGGLE], (
+        f"в счёт вошло не ровно утверждение о переведённом тумблере: {counted}"
+    )
+    assert not _in_universe(
+        traversal, converted, NOT_YET_CONVERTED | {SCHEDULES_TOGGLE}
+    ), "обработчик, возвращённый в отставание, остался в счёте"
+
+
+@pytest.mark.asyncio
+async def test_control_an_empty_tests_root_reddens_the_number_rule(
+    tmp_path, test_settings
+):
+    """Пустой корень тестов — правило числа краснеет даже при объявленном нуле."""
+    root = tmp_path / "tests"
+    root.mkdir()
+    traversal = _post_302_assertions(root, _routes(test_settings))
+    complaints = _number_complaints(
+        traversal, independent=_lexical_302_comparisons(root), counted=0, declared=0
+    )
+    assert any("не встретил ни одного" in complaint for complaint in complaints), (
+        f"пустой корень прошёл правило числа: {complaints}"
     )
