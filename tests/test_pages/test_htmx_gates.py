@@ -3146,7 +3146,9 @@ VALIDATION_REFUSAL_DIVERGENCES: tuple[_ValidationRefusalDivergence, ...] = (
 VALIDATION_REFUSAL_DIVERGENCES_DECLARED = 5
 
 
-def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
+def _framework_bound_scan(
+    sources: dict[str, str],
+) -> tuple[dict[str, str], set[str]]:
     """Входы POST-обработчиков, чья граница величины стои́т НА УРОВНЕ ФРЕЙМВОРКА.
 
     Возвращается отображение «ВХОД → ПСЕВДОНИМ (либо `inline`)». Ключ склеен из
@@ -3164,6 +3166,11 @@ def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
     названным основаниям: они стоят на GET-маршрутах, а предмет расхождения —
     контракт формы ответа POST-обработчика (G-2); и величина порции не есть
     ИДЕНТИФИКАТОР, отказ по ней ничего не говорит о владении строкой.
+
+    ⚠️ ВТОРОЙ ВОЗВРАТ — МНОЖЕСТВО ОБОЙДЁННЫХ ОБРАБОТЧИКОВ (`модуль::функция`,
+    план 11-19). Пустой реестр окна 51 утверждает «границ фреймворка нет», и
+    это утверждение неотличимо от «замер ничего не обошёл», пока обход не
+    предъявлен. Множество сличается с независимым обходом `_post_handlers`.
     """
     bounders = {"Path", "Form"}
 
@@ -3203,6 +3210,7 @@ def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
         return None
 
     inputs: dict[str, str] = {}
+    visited: set[str] = set()
 
     # ⚠️ ПСЕВДОНИМЫ РАЗРЕШАЮТСЯ ПО ВСЕМУ ДЕРЕВУ `app/`, А НЕ ВНУТРИ ОДНОГО
     # МОДУЛЯ, И ЭТО ЗАМЕР, А НЕ РАСШИРЕНИЕ ОХВАТА. Охват ВХОДОВ не менялся: он
@@ -3295,6 +3303,7 @@ def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
             ]
             if not routes:
                 continue
+            visited.add(f"{module}::{node.name}")
 
             arguments = node.args
             positional = list(arguments.posonlyargs) + list(arguments.args)
@@ -3332,17 +3341,32 @@ def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
                 for route in routes:
                     inputs[f"{module}::POST {route} → {how} {argument.arg}"] = alias
 
-    return inputs
+    return inputs, visited
+
+
+def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
+    """Замер окна 51: «ВХОД → ПСЕВДОНИМ» — первый возврат `_framework_bound_scan`."""
+    return _framework_bound_scan(sources)[0]
 
 
 def _framework_bound_visited_handlers(sources: dict[str, str]) -> set[str]:
     """Обработчики, которые замер границ ОБОШЁЛ (`модуль::функция`)."""
-    return set()
+    return _framework_bound_scan(sources)[1]
 
 
 def _framework_bound_complaints(sources: dict[str, str]) -> list[str]:
-    """Жалобы правила ПУСТОТЫ: по одной на вход с границей фреймворка."""
-    return []
+    """Жалобы правила ПУСТОТЫ: по одной на вход с границей фреймворка.
+
+    Разбор — тот же, что у замера реестра окна 51 (`_framework_bound_scan`), без
+    второго разборщика: правило пустоты и правило полноты не могут разойтись в
+    том, ЧТО считать границей. Жалоба называет вход поимённо — модуль, маршрут,
+    способ передачи, имя параметра — и псевдоним, которым граница сделана.
+    """
+    return [
+        f"ВХОД POST-ОБРАБОТЧИКА НЕСЁТ ГРАНИЦУ ФРЕЙМВОРКА: {entry} (псевдоним "
+        f"{alias})"
+        for entry, alias in sorted(_framework_bounded_post_inputs(sources).items())
+    ]
 
 
 def _validation_refusal_completeness_complaints(
