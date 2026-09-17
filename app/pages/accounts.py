@@ -45,7 +45,7 @@ from app.pages.common import (
 # из модуля групп аккаунта; адрес деградации у `respond` объявлен ОБЯЗАТЕЛЬНЫМ
 # ключевым аргументом, поэтому обработчик, забывший путь без JavaScript, не
 # собирается как вызов.
-from app.pages.htmx import respond
+from app.pages.htmx import respond, respond_field_error
 from app.pages.identifiers import IdPath, PostIdPath, id_in_column
 
 # Разметка ответов опроса статуса подключения живёт в шаблоне, а не в строках
@@ -538,32 +538,101 @@ async def accounts_connect_max_page(
     )
 
 
+MAX_CONNECT_STEP_TEMPLATE = "accounts/includes/max_connect_step.html"
+MAX_EMPTY_PHONE_ERROR = "Введите номер телефона"
+
+
+def _max_step_markup(
+    *,
+    step: str,
+    qr_code: str | None = None,
+    error: str | None = None,
+    phone: str = "",
+) -> str:
+    """Содержимое контейнера шага мастера MAX, собранное ОКРУЖЕНИЕМ ШАБЛОНОВ.
+
+    ⚠️ ФОРМА ВЗЯТА У `app/pages/profile.py` И ОСНОВАНИЕ ТО ЖЕ: шаблон шага
+    берётся из окружения и рендерится, а не склеивается строкой. Разметка шага
+    объявлена ОДИН раз, включаемым шаблоном, которым рисуется и страница
+    мастера, — вторая копия здесь разошлась бы с первой молча.
+
+    ⚠️ ЭКРАНИРОВАНИЕ ОБЕСПЕЧИВАЕТ ОКРУЖЕНИЕ, А НЕ ЭТОТ ПОМОЩНИК (T-11-31). В
+    отличие от часового пояса профиля, номер телефона — свободный текст, и на
+    ветке ошибки он ПОПАДАЕТ в документ: безопасность здесь держится
+    автоэкранированием макроса поля, а не недостижимостью. Значение уезжает в
+    шаблон параметром и ни на одном шаге не объявляется готовой разметкой.
+    """
+    return templates.env.get_template(MAX_CONNECT_STEP_TEMPLATE).render(
+        connected=False, step=step, qr_code=qr_code, error=error, phone=phone
+    )
+
+
 @router.post("/accounts/connect/max/start", response_class=HTMLResponse)
 async def accounts_connect_max_start(
     request: Request,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    """Receive phone, create account, start session, show QR."""
+    """Receive phone, create account, start session, show QR.
+
+    ⚠️ НА СЛОЕ ОТВЕТА С ПЛАНА 11-18 — ПОСЛЕДНИЙ ОБРАБОТЧИК ФАЗЫ 11 (FORM-03).
+    На htmx старт отвечает 200 и СОДЕРЖИМЫМ контейнера шага мастера
+    (`#max-connect-step`): шаг QR с узлом опроса статуса либо шаг с ошибкой
+    подключения (D-02). «Нет сессии» уходит переходом на `/login`.
+
+    ⚠️ ПУСТОЙ ТЕЛЕФОН — ВТОРОЙ И ПОСЛЕДНИЙ АВТОРСКИЙ 422 ФАЗЫ (FORM-08, D-06).
+    Номер из одних пробелов отвечает 422 на обоих транспортах: без htmx —
+    страницей мастера, на htmx — фрагментом шага телефона; оба несут текст
+    ошибки и ПРИСЛАННОЕ значение в поле. Новых проверок номера не заводится:
+    ошибка ровно та, что была. Поле читается из тела формы самим обработчиком, а
+    не сигнатурой, поэтому и ОТСУТСТВУЮЩЕЕ поле идёт этой же веткой, а не
+    отказом валидации фреймворка.
+
+    ⚠️ АДРЕС ДЕГРАДАЦИИ УСПЕХА — `/accounts`, И ОН ВЫБРАН ИЗМЕРЕНИЕМ (решение
+    планировщика, обратимое). Прежде путь без JavaScript получал страницу QR
+    прямо в ответ на POST. Прочитано по коду: подключение завершает ТОЛЬКО опрос
+    htmx `accounts_connect_max_status` — без JavaScript мастер не завершался и
+    раньше, — а GET `/accounts/connect/max` удаляет аккаунты в статусе
+    `connecting`, то есть приземление на мастер уничтожило бы только что
+    заведённую запись. Экран аккаунтов показывает аккаунт любого статуса, и
+    запись там видна. Ни одной работавшей возможности приземление не отнимает.
+
+    ⚠️ ПЯТИСЕКУНДНОЕ ОЖИДАНИЕ СОХРАНЕНО. Мосту нужно время между стартом сессии
+    и выдачей QR; поэтому запрос длится не меньше пяти секунд, и блокировка
+    кнопки с индикатором ожидания видны на каждом нажатии.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
     form = await request.form()
-    phone = (form.get("phone") or "").strip()
+    submitted = form.get("phone") or ""
+    phone = submitted.strip()
 
     if not phone:
-        return templates.TemplateResponse(
-            "accounts/connect_max.html",
-            {
-                "request": request,
-                "user": user,
-                "is_admin": check_is_admin(user, settings),
-                "active_page": "accounts",
-                "step": "phone",
-                "error": "Введите номер телефона",
-            },
-        )
+
+        async def _page() -> HTMLResponse:
+            """Страница мастера с ошибкой поля — путь деградации ошибки заполнения."""
+            return templates.TemplateResponse(
+                "accounts/connect_max.html",
+                {
+                    "request": request,
+                    "user": user,
+                    "is_admin": check_is_admin(user, settings),
+                    "active_page": "accounts",
+                    "step": "phone",
+                    "error": MAX_EMPTY_PHONE_ERROR,
+                    "phone": submitted,
+                },
+            )
+
+        async def _fragment() -> HTMLResponse:
+            """Тот же включаемый шаг с тем же контекстом — без шелла."""
+            return HTMLResponse(
+                _max_step_markup(step="phone", error=MAX_EMPTY_PHONE_ERROR, phone=submitted)
+            )
+
+        return await respond_field_error(request, page=_page, fragment=_fragment)
 
     # Reuse existing "connecting" MAX account or create a new one
     result = await db.execute(
@@ -605,20 +674,11 @@ async def accounts_connect_max_start(
     except Exception as e:
         error = f"Ошибка подключения к MAX: {e}"
 
-    return templates.TemplateResponse(
-        "accounts/connect_max.html",
-        {
-            "request": request,
-            "user": user,
-            "is_admin": check_is_admin(user, settings),
-            "active_page": "accounts",
-            "step": "qr",
-            "qr_code": qr_code,
-            "connected": False,
-            "error": error,
-            "account_id": account.id,
-        },
-    )
+    async def _step() -> HTMLResponse:
+        """Шаг QR (или шаг с ошибкой подключения) — содержимое контейнера шага."""
+        return HTMLResponse(_max_step_markup(step="qr", qr_code=qr_code, error=error))
+
+    return await respond(request, redirect="/accounts", fragment=_step)
 
 
 @router.get("/accounts/connect/max/status", response_class=HTMLResponse)

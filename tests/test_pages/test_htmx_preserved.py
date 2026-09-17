@@ -419,13 +419,18 @@ async def test_swap_anchors_present(authed_client: AsyncClient, db_session: Asyn
 
     # Экран подключения MAX: якорь появляется на шаге QR, а он достигается
     # отправкой формы с телефоном — GET отдаёт шаг ввода номера.
+    # ⚠️ ОТПРАВКА ИДЁТ С ПРИЗНАКОМ htmx (план 11-18). Шаг QR приезжает теперь
+    # фрагментом контейнера шага мастера; без признака старт приземляет 302 на
+    # экран аккаунтов, и якоря в теле ответа нет по построению.
     with patch("app.pages.accounts.MaxMessenger") as MockMax:
         instance = MockMax.return_value
         instance.start_session = AsyncMock(side_effect=RuntimeError("bridge offline"))
         instance.get_qr = AsyncMock(return_value={})
         max_html = (
             await authed_client.post(
-                "/accounts/connect/max/start", data={"phone": "+79991234567"}
+                "/accounts/connect/max/start",
+                data={"phone": "+79991234567"},
+                headers={"HX-Request": "true"},
             )
         ).text
     assert re.search(r'id="max-status"[^>]*hx-get="', max_html), (

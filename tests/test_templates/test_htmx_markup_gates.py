@@ -1398,6 +1398,12 @@ MACRO_DEFINITION_SITES_CALLERS: dict[str, HiddenCallers] = {
             # всегда переход на экран групп либо на /accounts (D-02, D-12(в)).
             # Признак идущей синхронизации стоит на обёртке формы, не на теге.
             "account_groups/list.html",
+            # Фаза 11, план 11-18: форма ТЕЛЕФОНА мастера подключения MAX (цель
+            # подмены — постоянный контейнер шага `#max-connect-step` страницы
+            # мастера, способ — подмена СОДЕРЖИМОГО; успех и 422 приезжают в
+            # одну цель). Шаблон мастера карточкой аккаунта не является, и
+            # D-12(в) его не касается.
+            "accounts/includes/max_connect_step.html",
             # Фаза 11, план 11-16: форма ПОВТОРНОЙ СИНХРОНИЗАЦИИ групп аккаунта в
             # трёх копиях разметки карточки аккаунта (страница, порция прокрутки,
             # ответ опроса статуса) — БЕЗ цели подмены (`hx-swap="none"`): ответ
@@ -1569,7 +1575,20 @@ MACRO_DEFINITION_SITES_CALLERS: dict[str, HiddenCallers] = {
 # ('account_groups/includes/group_row.html', 'account_groups/list.html',
 # 'accounts/list.html', …)»; после записи кортежа, с числом ещё прежним, — «за
 # перечнем мест определения макросов спрятано вызывающих 21, объявлено 20».
-MACRO_DEFINITION_SITES_CALLERS_DECLARED = 21
+#
+# 21 → 22, Фаза 11, план 11-18: форма ТЕЛЕФОНА мастера подключения MAX пошла
+# через макрос-обёртку с целью подмены — постоянным контейнером шага
+# `#max-connect-step`: 'accounts/includes/max_connect_step.html'. ⚠️ ЭТО
+# ПОСЛЕДНЯЯ ФОРМА ФАЗЫ 11 НА ОБЁРТКЕ, и в прежнем виде она несла ЕДИНСТВЕННЫЙ в
+# проекте встроенный обработчик отправки — снят тем же переездом.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего
+# `test_the_number_of_hidden_callers_is_the_declared_one`: до записи кортежа —
+# «объявленные вызывающие разошлись с измеренными: … измерено
+# ('account_groups/includes/group_row.html', 'account_groups/list.html',
+# 'accounts/includes/max_connect_step.html', 'accounts/list.html', …)»; после
+# записи кортежа, с числом ещё прежним, — «за перечнем мест определения
+# макросов спрятано вызывающих 22, объявлено 21».
+MACRO_DEFINITION_SITES_CALLERS_DECLARED = 22
 
 # ⚠️ ТО ЖЕ ДЛЯ ПЕРЕЧНЯ ПАРАМЕТРИЧЕСКИХ ЦЕЛЕЙ ПОДМЕНЫ. Записей там одна, и её
 # число объявлено; число ВЫЗЫВАЮЩИХ, за этой записью скрытых, до плана 09-07 не
@@ -1645,7 +1664,28 @@ MACRO_DEFINITION_SITES_CALLERS_DECLARED = 21
 # 'schedules/includes/schedule_row.html']"}». С записанным кортежем и прежним
 # числом `test_the_number_of_hidden_callers_is_the_declared_one` сказал: «за
 # перечнем параметрических целей подмены спрятано вызывающих 6, объявлено 5».
-PARAMETRIC_SWAP_TARGETS_CALLERS_DECLARED = 6
+#
+# 6 → 7, Фаза 11, план 11-18: форма ТЕЛЕФОНА мастера подключения MAX (цель —
+# постоянный контейнер шага `#max-connect-step`, способ — подмена СОДЕРЖИМОГО).
+# ⚠️ ТРИ СНИМАЕМЫХ ПРАВИЛА ПРОВЕРЕНЫ ЗАМЕРОМ, А НЕ ПОЛОЖЕНЫ: G-9 — узел с этим
+# идентификатором печатает страница мастера безусловно
+# (`accounts/connect_max.html`); G-11 — внеполосного узла с ним в дереве нет;
+# G-12 — признака клиентского состояния нет ни на цели, ни внутри неё (в обоих
+# файлах шага ноль вхождений).
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего
+# `test_every_declared_parametric_caller_actually_calls_the_macro`, дословно:
+# «множество вызывающих записи разошлось с измеренным:
+# {'components/form_wrapper.html': "объявленные вызывающие
+# ['account_groups/includes/group_row.html', 'admin/includes/user_actions.html',
+# 'ads/form.html', 'ads/includes/sched_card.html', 'includes/profile_settings.html',
+# 'schedules/includes/schedule_row.html'] разошлись с измеренными
+# ['account_groups/includes/group_row.html', 'accounts/includes/max_connect_step.html',
+# 'admin/includes/user_actions.html', 'ads/form.html', 'ads/includes/sched_card.html',
+# 'includes/profile_settings.html', 'schedules/includes/schedule_row.html']"}». С
+# записанным кортежем и прежним числом `test_the_number_of_hidden_callers_is_the_declared_one`
+# сказал: «за перечнем параметрических целей подмены спрятано вызывающих 7,
+# объявлено 6».
+PARAMETRIC_SWAP_TARGETS_CALLERS_DECLARED = 7
 
 
 def _balanced_call_arguments(source: str, macro: str) -> list[str]:
@@ -2434,6 +2474,7 @@ PARAMETRIC_SWAP_TARGETS: dict[str, ParametricTarget] = {
         macro="form_wrapper",
         callers=(
             "account_groups/includes/group_row.html",
+            "accounts/includes/max_connect_step.html",
             "admin/includes/user_actions.html",
             "ads/form.html",
             "ads/includes/sched_card.html",
@@ -2441,6 +2482,20 @@ PARAMETRIC_SWAP_TARGETS: dict[str, ParametricTarget] = {
             "schedules/includes/schedule_row.html",
         ),
         reason=(
+            "⚠️ СЕДЬМОЙ ВЫЗЫВАЮЩИЙ — ФОРМА ТЕЛЕФОНА МАСТЕРА ПОДКЛЮЧЕНИЯ MAX "
+            "(Фаза 11, план 11-18). Цель — постоянный контейнер шага "
+            "`#max-connect-step` страницы `accounts/connect_max.html`, способ — "
+            "подмена СОДЕРЖИМОГО: контейнер живёт в СТРАНИЦЕ и переживает ответ "
+            "шага QR, ответ отказа моста и ответ ошибки поля. "
+            "⚠️ ЦЕЛЬ ОДНА НА УСПЕХ И НА 422 — ровно как у формы настроек "
+            "профиля, — и перечень точечных заголовков ответа поэтому остаётся "
+            "пустым. Идентификатор стоит на самой колонке `.connect-shell`, а не "
+            "на обёртке внутри карточки: в подменяемое содержимое обязан входить "
+            "алерт ошибки, а он стоит вне карточки. "
+            "⚠️ СТОЛКНОВЕНИЯ G-11 У НЕЁ НЕТ, и это ЗАМЕР: внеполосного узла с "
+            "идентификатором `max-connect-step` в дереве не существует, у "
+            "величины ровно одна роль. Узлы опроса `#max-status` лежат ВНУТРИ "
+            "цели и подменяют собственное содержимое, а не цель. "
             "⚠️ ШЕСТОЙ ВЫЗЫВАЮЩИЙ — ТУМБЛЕР БЛОКИРОВКИ В КАРТОЧКЕ ПОЛЬЗОВАТЕЛЯ "
             "(Фаза 11, план 11-12). Цель — постоянная обёртка `#user-actions` "
             "страницы `admin/user_detail.html`, способ — подмена СОДЕРЖИМОГО "
@@ -4046,7 +4101,20 @@ def _offenders_unreachable_blocking_target(
 # `блоков вызова макроса-обёртки разобрано 13, объявлено 12 — либо вызов появился
 # и решения о нём никто не принимал, либо разборщик перестал их находить, и
 # правило ниже утверждает пустоту`.
-UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED = 13
+#
+# 13 → 14, Фаза 11, план 11-18: форма ТЕЛЕФОНА мастера подключения MAX — один
+# блочный вызов обёртки. ⚠️ ЦЕЛЬ БЛОКИРОВКИ ОБЩАЯ, А НЕ ПУСТАЯ: в слоте стои́т
+# НАСТОЯЩАЯ кнопка отправки «Продолжить» (компонент кнопки печатает
+# `type="submit"`), клиентский слой её не снимает, и умолчание достижимо. Именно
+# оно заменило снятый встроенный обработчик отправки: старт длится не меньше
+# пяти секунд, и второе нажатие за это время гасится блокировкой. Записи в
+# перечне исключений цели блокировки вызов не требует.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего
+# `test_no_caller_declares_a_blocking_target_its_form_cannot_have`, дословно:
+# `блоков вызова макроса-обёртки разобрано 14, объявлено 13 — либо вызов появился
+# и решения о нём никто не принимал, либо разборщик перестал их находить, и
+# правило ниже утверждает пустоту`.
+UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED = 14
 
 # Опора подстановки, доказывающей зубы правила В ЕГО СОБСТВЕННОМ ТЕЛЕ. Выбрана
 # ЗА УНИКАЛЬНОСТЬ в строке группы аккаунта: `_tree_with` требует ровно одного
