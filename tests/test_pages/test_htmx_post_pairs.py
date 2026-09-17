@@ -23,7 +23,15 @@
 ⚠️ СУЩЕСТВУЮЩИЕ УТВЕРЖДЕНИЯ 302 СУИТЫ НЕ ТРОГАЮТСЯ. Они остаются в своих файлах
 и продолжают стеречь путь деградации; этот модуль добавляет к ним ВТОРУЮ
 половину, а не переписывает первую. Обход, сличающий каждое такое утверждение с
-парой, — предмет плана 11-20.
+парой, стоит в конце модуля (план 11-20): утверждение 302 о переведённом
+обработчике без пары краснит правило с файлом и строкой, а число таких
+утверждений объявлено `PAIRED_302_ASSERTIONS_DECLARED` и поставлено прогоном.
+
+ВСЕЛЕННАЯ ОБХОДА (D-14). Утверждения `status_code == 302` на POST-запросах к
+POST-обработчикам `app/pages/`, идущим через `respond()`. Редиректы GET-страниц
+(вход, гейт доступа) вне её; обработчики, ещё стоящие в `NOT_YET_CONVERTED`, вне
+её и ВОЙДУТ В СЧЁТ АВТОМАТИЧЕСКИ, когда Фазы 13–14 снимут их из перечня: правило
+числа покраснеет — это движение, а не регрессия.
 
 ⚠️ ОБЕ ПОЛОВИНЫ НА СВЕЖЕМ СОСТОЯНИИ. Правка меняет строку; вторая половина,
 пришедшая на уже изменённое состояние, проверяла бы не тот исход, который
@@ -1677,14 +1685,350 @@ def test_control_a_handler_without_a_case_reddens_the_closure():
 # обработчиками, которые называет читатель, либо краснит правило пар поимённо.
 
 
+_PLACEHOLDER = "{}"
+_FORMAT_FIELD = re.compile(r"\{[^{}]*\}")
+_OTHER_METHODS = frozenset({"get", "put", "patch", "delete", "head", "options"})
+_RESOLUTION_DEPTH = 6
+_FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+@dataclass(frozen=True)
+class _Scope:
+    """Функция и её окружение: объемлющая функция и имена модуля."""
+
+    function: ast.AST
+    parent: "_Scope | None"
+    module: dict[str, ast.AST]
+    # Параметры помощника, связанные аргументами вызова, — с областью вызывающего.
+    arguments: tuple[tuple[str, ast.AST, "_Scope"], ...] = ()
+
+
+@dataclass(frozen=True)
+class _Request:
+    """Что выражение отправляет: POST (с формой адреса), иной метод или неизвестно."""
+
+    kind: str  # "post" | "other" | "unresolved"
+    shape: str | None = None
+    reason: str | None = None
+
+
+def _own_nodes(function: ast.AST):
+    """Узлы тела функции БЕЗ тел вложенных функций (сами объявления отдаются)."""
+    stack = list(ast.iter_child_nodes(function))
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (*_FUNCTIONS, ast.Lambda, ast.ClassDef)):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+
+
+def _module_names(tree: ast.Module) -> dict[str, ast.AST]:
+    """Имена верхнего уровня модуля: объявления функций и значения присваиваний."""
+    names: dict[str, ast.AST] = {}
+    for node in tree.body:
+        if isinstance(node, _FUNCTIONS):
+            names[node.name] = node
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    names[target.id] = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.value is not None:
+                names[node.target.id] = node.value
+    return names
+
+
+def _function_scopes(tree: ast.Module) -> list[_Scope]:
+    module = _module_names(tree)
+    scopes: list[_Scope] = []
+
+    def visit(node: ast.AST, parent: _Scope | None) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, _FUNCTIONS):
+                scope = _Scope(child, parent, module)
+                scopes.append(scope)
+                visit(child, scope)
+            else:
+                visit(child, parent)
+
+    visit(tree, None)
+    return scopes
+
+
+def _lookup(
+    name: str, scope: _Scope, line: int | None, *, module_level: bool = True
+) -> tuple[ast.AST, _Scope] | None:
+    """Последняя привязка имени до строки: своя функция → объемлющие → модуль.
+
+    Отдаётся значение присваивания или объявление функции вместе с областью, в
+    которой его выражение читается дальше.
+    """
+    current: _Scope | None = scope
+    bound_line = line
+    while current is not None:
+        found: tuple[int, ast.AST, _Scope] | None = None
+        for node in _own_nodes(current.function):
+            if isinstance(node, _FUNCTIONS) and node.name == name:
+                candidate = (node.lineno, node, _Scope(node, current, current.module))
+            elif isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == name
+                for target in node.targets
+            ):
+                candidate = (node.lineno, node.value, current)
+            else:
+                continue
+            if bound_line is not None and candidate[0] >= bound_line:
+                continue
+            if found is None or candidate[0] >= found[0]:
+                found = candidate
+        if found is not None:
+            return found[1], found[2]
+        for parameter, argument, caller in current.arguments:
+            if parameter == name:
+                return argument, caller
+        current, bound_line = current.parent, None
+
+    if not module_level or name not in scope.module:
+        return None
+    value = scope.module[name]
+    if isinstance(value, _FUNCTIONS):
+        return value, _Scope(value, None, scope.module)
+    # Значение верхнего уровня читается в области БЕЗ локальных имён.
+    return value, _Scope(ast.Module(body=[], type_ignores=[]), None, scope.module)
+
+
+def _called(
+    function: ast.AST, call: ast.Call, definition: _Scope, caller: _Scope
+) -> _Scope:
+    """Область помощника, чьи параметры связаны аргументами ЭТОГО вызова.
+
+    Помощник вида `_post(client, "/billing/subscribe", …)` отдаёт адрес
+    параметром: без связывания обход видел бы у него «адрес собран выражением» и
+    терял бы утверждение, которое прочесть можно.
+    """
+    parameters = [argument.arg for argument in (*function.args.posonlyargs, *function.args.args)]
+    bound = [
+        (parameter, argument, caller)
+        for parameter, argument in zip(parameters, call.args)
+        if not isinstance(argument, ast.Starred)
+    ]
+    bound += [
+        (keyword.arg, keyword.value, caller)
+        for keyword in call.keywords
+        if keyword.arg is not None
+    ]
+    return _Scope(function, definition.parent, definition.module, tuple(bound))
+
+
+def _returns(function: ast.AST) -> list[ast.Return]:
+    return [
+        node
+        for node in _own_nodes(function)
+        if isinstance(node, ast.Return) and node.value is not None
+    ]
+
+
+def _normalized(address: str) -> str:
+    return address.split("?", 1)[0].split("#", 1)[0]
+
+
+def _shape(node: ast.AST, scope: _Scope, line: int, depth: int = 0) -> str | None:
+    """Форма адреса: литералы как есть, подстановки — местозаполнитель `{}`."""
+    if depth > _RESOLUTION_DEPTH:
+        return None
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return _normalized(_FORMAT_FIELD.sub(_PLACEHOLDER, node.value))
+    if isinstance(node, ast.JoinedStr):
+        joined = "".join(
+            part.value if isinstance(part, ast.Constant) else _PLACEHOLDER
+            for part in node.values
+        )
+        return _normalized(joined)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _shape(node.left, scope, line, depth + 1)
+        right = _shape(node.right, scope, line, depth + 1)
+        return None if left is None or right is None else _normalized(left + right)
+    if isinstance(node, ast.Name):
+        bound = _lookup(node.id, scope, line)
+        if bound is None or isinstance(bound[0], _FUNCTIONS):
+            return None
+        value, inner = bound
+        return _shape(value, inner, getattr(value, "lineno", line) + 1, depth + 1)
+    if isinstance(node, ast.Call):
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == "format":
+            return _shape(func.value, scope, line, depth + 1)
+        if isinstance(func, ast.Name):
+            bound = _lookup(func.id, scope, line)
+            if bound is None or not isinstance(bound[0], _FUNCTIONS):
+                return None
+            inner = _called(bound[0], node, bound[1], scope)
+            shapes = {
+                _shape(ret.value, inner, ret.lineno, depth + 1)
+                for ret in _returns(bound[0])
+            }
+            if len(shapes) == 1:
+                return shapes.pop()
+    return None
+
+
+def _request(expr: ast.AST, scope: _Scope, line: int, depth: int = 0) -> _Request:
+    """Какой запрос отправляет выражение — с разбором помощников по их `return`."""
+    if depth > _RESOLUTION_DEPTH:
+        return _Request("unresolved", reason="глубина разбора помощников исчерпана")
+    if isinstance(expr, ast.Await):
+        expr = expr.value
+    if not isinstance(expr, ast.Call):
+        return _Request("unresolved", reason="ответ связан не вызовом")
+
+    func = expr.func
+    if isinstance(func, ast.Attribute):
+        if func.attr in _OTHER_METHODS:
+            return _Request("other")
+        if func.attr != "post":
+            return _Request("unresolved", reason=f"вызов метода `{func.attr}`")
+        address = expr.args[0] if expr.args else next(
+            (keyword.value for keyword in expr.keywords if keyword.arg == "url"), None
+        )
+        if address is None:
+            return _Request("unresolved", reason="у POST нет адреса")
+        shape = _shape(address, scope, expr.lineno)
+        if shape is None:
+            return _Request("unresolved", reason="адрес POST собран выражением")
+        return _Request("post", shape=shape)
+
+    if not isinstance(func, ast.Name):
+        return _Request("unresolved", reason="вызов не по имени")
+    bound = _lookup(func.id, scope, line)
+    if bound is None or not isinstance(bound[0], _FUNCTIONS):
+        return _Request("unresolved", reason=f"вызов `{func.id}` вне модуля")
+    inner = _called(bound[0], expr, bound[1], scope)
+    outcomes = {
+        _request(ret.value, inner, ret.lineno, depth + 1)
+        for ret in _returns(bound[0])
+    }
+    if not outcomes:
+        return _Request("unresolved", reason=f"помощник `{func.id}` ничего не возвращает")
+    if len(outcomes) == 1:
+        return outcomes.pop()
+    return _Request("unresolved", reason=f"помощник `{func.id}` отвечает разными запросами")
+
+
+def _segment_matches(address: str, route: str) -> int | None:
+    """Посегментное сличение формы адреса с путём маршрута; число «угаданных» сегментов."""
+    left = address.strip("/").split("/")
+    right = route.strip("/").split("/")
+    if len(left) != len(right):
+        return None
+    guessed = 0
+    for given, declared in zip(left, right):
+        parameter = declared.startswith("{") and declared.endswith("}")
+        if _PLACEHOLDER in given:
+            if not parameter:
+                return None
+            continue
+        if parameter:
+            guessed += 1
+        elif given != declared:
+            return None
+    return guessed
+
+
+def _route_of(
+    shape: str, route_table: tuple[tuple[str, str], ...]
+) -> tuple[str | None, str | None]:
+    candidates = sorted(
+        (guessed, key)
+        for path, key in route_table
+        if (guessed := _segment_matches(shape, path)) is not None
+    )
+    if not candidates:
+        return None, f"адрес `{shape}` не совпал ни с одним POST-маршрутом"
+    best = {key for guessed, key in candidates if guessed == candidates[0][0]}
+    if len(best) > 1:
+        return None, f"адрес `{shape}` совпал с несколькими маршрутами: {sorted(best)}"
+    return best.pop(), None
+
+
+def _302_subjects(test: ast.AST):
+    """Подлежащие сравнений `<x>.status_code == 302` (и голого `status_code == 302`)."""
+    if isinstance(test, ast.BoolOp):
+        for value in test.values:
+            yield from _302_subjects(value)
+        return
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and isinstance(test.comparators[0], ast.Constant)
+        and type(test.comparators[0].value) is int
+        and test.comparators[0].value == 302
+    ):
+        return
+    left = test.left
+    if isinstance(left, ast.Attribute) and left.attr == "status_code":
+        yield left.value
+    elif isinstance(left, ast.Name) and left.id == "status_code":
+        yield None
+
+
 def _post_302_assertions(
     tests_root: Path,
     route_table: tuple[tuple[str, str], ...],
     *,
     exclude: frozenset[str] = frozenset(),
 ) -> "_Traversal":
-    """RED (план 11-20, задача 1): обход ещё не написан."""
-    return _Traversal(visited=0, records=())
+    """Каждое утверждение 302 дерева тестов, отнесённое к POST либо не разобранное.
+
+    Подлежащее утверждения — имя, связанное ПОСЛЕДНИМ предшествующим
+    присваиванием в своей функции (или объемлющей). Связь с иным методом (`get`
+    и соседи) выводит утверждение из записей; POST приписывается маршруту
+    таблицы; всё, что обход прочесть не смог, остаётся записью без обработчика —
+    с причиной, а не выпадает.
+    """
+    base = tests_root.parent
+    visited = 0
+    records: list[_Post302] = []
+
+    for path in sorted(tests_root.rglob("*.py")):
+        relative = path.relative_to(base).as_posix()
+        if relative in exclude:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
+        for scope in _function_scopes(tree):
+            asserts = sorted(
+                (node for node in _own_nodes(scope.function) if isinstance(node, ast.Assert)),
+                key=lambda node: (node.lineno, node.col_offset),
+            )
+            for node in asserts:
+                for subject in _302_subjects(node.test):
+                    visited += 1
+
+                    def unresolved(reason: str) -> _Post302:
+                        return _Post302(relative, node.lineno, scope.function.name, None, reason)
+
+                    if not isinstance(subject, ast.Name):
+                        records.append(unresolved("статус снят не с именованного ответа"))
+                        continue
+                    bound = _lookup(subject.id, scope, node.lineno, module_level=False)
+                    if bound is None or isinstance(bound[0], _FUNCTIONS):
+                        records.append(
+                            unresolved(f"имя `{subject.id}` не связано присваиванием")
+                        )
+                        continue
+                    request = _request(bound[0], bound[1], node.lineno)
+                    if request.kind == "other":
+                        continue
+                    if request.kind == "unresolved":
+                        records.append(unresolved(request.reason))
+                        continue
+                    handler, reason = _route_of(request.shape, route_table)
+                    records.append(
+                        _Post302(relative, node.lineno, scope.function.name, handler, reason)
+                    )
+
+    return _Traversal(visited=visited, records=tuple(records))
 
 
 PAIRS_MODULE = "tests/test_pages/test_htmx_post_pairs.py"
@@ -1726,7 +2070,63 @@ class _Unattributed:
     reason: str
 
 
-UNATTRIBUTED_302_ASSERTIONS: dict[str, _Unattributed] = {}
+# Утверждения 302, которые обход НЕ приписал маршруту, — поимённо, с обработчиками,
+# которые называет читатель. Правило пар требует пары и у названных; запись без
+# неразобранного утверждения в функции краснит правило (перечень не копит мёртвых
+# строк). Снято прогоном плана 11-20: двенадцать утверждений в десяти функциях.
+_CONFIRM = "tests/test_pages/test_confirm_delete_transport.py"
+UNATTRIBUTED_302_ASSERTIONS: dict[str, _Unattributed] = {
+    f"{_CONFIRM}::test_every_confirmed_delete_route_answers_both_transports": _Unattributed(
+        tuple(route.key for route in CONFIRMED_DELETE_ROUTES),
+        "половина деградации САМОГО реестра пар Фазы 10: адрес — `degraded.url` "
+        "случая, обработчики — ключи `CONFIRMED_DELETE_ROUTES`",
+    ),
+    f"{_CONFIRM}::test_the_branch_without_a_session_answers_both_transports": _Unattributed(
+        tuple(route.key for route in CONFIRMED_DELETE_ROUTES if route.session_landing),
+        "ветка «нет сессии» реестра Фазы 10: адрес — `arranged.url` случая",
+    ),
+    f"{_CONFIRM}::test_the_emptied_listing_branch_of_the_account_group_route_answers_both_transports": _Unattributed(
+        ("app/pages/account_groups.py::account_groups_delete",),
+        "опустевшая выдача удаления группы: адрес — `url` посева реестра Фазы 10",
+    ),
+    f"{_CONFIRM}::test_the_fragment_branch_needs_the_editor_flag": _Unattributed(
+        ("app/pages/schedules.py::schedules_delete",),
+        "фрагментная ветка удаления расписания: адрес — `url` посева реестра Фазы 10",
+    ),
+    "tests/test_pages/test_htmx_response_layer.py::test_a_full_reload_gets_a_redirect_with_the_outcome_in_the_address": _Unattributed(
+        (),
+        "не HTTP-запрос: прямой вызов `respond` — утверждение о самом слое ответа",
+    ),
+    "tests/test_pages/test_htmx_response_layer.py::test_an_external_address_leaves_by_the_redirect_header_only": _Unattributed(
+        (),
+        "не HTTP-запрос: прямой вызов `redirect_external` — утверждение о слое ответа",
+    ),
+    "tests/test_pages/test_notices_surface.py::test_without_the_htmx_flag_the_fragment_is_never_built": _Unattributed(
+        (),
+        "не HTTP-запрос: прямой вызов `respond` — утверждение о приклейке уведомления",
+    ),
+    "tests/test_routes/test_sync_groups.py::test_second_sync_during_a_running_sync_does_not_reach_the_messenger": _Unattributed(
+        ("app/pages/accounts.py::accounts_sync_groups",),
+        "вложенный POST на `/accounts/{id}/sync-groups` из подменённого адаптера, "
+        "ответ лежит в словаре `nested`",
+    ),
+    "tests/test_routes/test_sync_groups.py::test_sync_slot_is_per_account": _Unattributed(
+        ("app/pages/accounts.py::accounts_sync_groups",),
+        "вложенный POST на `/accounts/{id}/sync-groups`, ответ лежит в словаре `nested`",
+    ),
+    "tests/test_schedules_out_of_domain_resume.py::test_page_toggle_refuses_a_row_whose_times_are_malformed": _Unattributed(
+        ("app/pages/schedules.py::schedules_toggle",),
+        "код снят кортежем `_press_page_toggle` (POST `/schedules/{id}/toggle`)",
+    ),
+    "tests/test_schedules_out_of_domain_resume.py::test_control_a_legal_row_is_still_switched_on": _Unattributed(
+        ("app/pages/schedules.py::schedules_toggle",),
+        "код снят кортежем `_press_page_toggle` (POST `/schedules/{id}/toggle`)",
+    ),
+    "tests/test_schedules_out_of_domain_resume.py::test_page_toggle_still_pauses_every_malformed_stored_form": _Unattributed(
+        ("app/pages/schedules.py::schedules_toggle",),
+        "код снят кортежем `_press_page_toggle` (POST `/schedules/{id}/toggle`)",
+    ),
+}
 
 
 def _post_route_table(app) -> tuple[tuple[str, str], ...]:
@@ -1850,7 +2250,23 @@ def _number_complaints(
 
 # Утверждения `status_code == 302` о POST-запросах к переведённым обработчикам
 # страничного слоя, СНЯТЫЕ ОБХОДОМ дерева `tests/` (без этого модуля).
-PAIRED_302_ASSERTIONS_DECLARED = 0
+#
+# ЛЕТОПИСЬ ЧИСЛА (форма D-17 Фазы 10: прогнозы не вычёркиваются, а называются).
+#   «160» — прогноз разведки 2026-08-26 о ВСЕЙ вехе (критерий 4 роадмапа).
+#   «около 136» (`11-CONTEXT.md`, D-14) и 157 (`11-RESEARCH.md`, функции с `.post(`)
+#   — эвристические замеры 2026-09-14 РАЗНЫХ единиц счёта: вхождения текста и
+#   функции, а не утверждения, приписанные маршруту.
+#   Ни один прогноз не был ошибкой — они устарели: объявлено число, которое
+#   СНИМАЕТ ОБХОД этого правила, а не выводится из них.
+#   0 → 158, Фаза 11, план 11-20. ПОСТАВЛЕНО ПРОГОНОМ: `утверждений 302 о
+#   переведённых обработчиках 158, объявлено 0`. На дереве прогона: сравнений
+#   `status_code == 302` 206 (обход и счёт по лексемам совпали), из них о POST —
+#   184; вне вселенной 14 (обработчики `auth.py` из `NOT_YET_CONVERTED`: вход 7,
+#   завершение регистрации 4, возврат из-под личности 2, смена пароля 1) и 12
+#   неразобранных, названных в `UNATTRIBUTED_302_ASSERTIONS`.
+#   ⚠️ ЧИСЛО ДВИНЕТСЯ САМО, когда Фазы 13–14 снимут обработчики из
+#   `NOT_YET_CONVERTED`: это движение, а не регрессия.
+PAIRED_302_ASSERTIONS_DECLARED = 158
 
 
 def _routes(settings) -> tuple[tuple[str, str], ...]:
