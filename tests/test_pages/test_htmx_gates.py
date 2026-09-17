@@ -3335,6 +3335,16 @@ def _framework_bounded_post_inputs(sources: dict[str, str]) -> dict[str, str]:
     return inputs
 
 
+def _framework_bound_visited_handlers(sources: dict[str, str]) -> set[str]:
+    """Обработчики, которые замер границ ОБОШЁЛ (`модуль::функция`)."""
+    return set()
+
+
+def _framework_bound_complaints(sources: dict[str, str]) -> list[str]:
+    """Жалобы правила ПУСТОТЫ: по одной на вход с границей фреймворка."""
+    return []
+
+
 def _validation_refusal_completeness_complaints(
     divergences: tuple[_ValidationRefusalDivergence, ...],
     sources: dict[str, str] | None = None,
@@ -3556,144 +3566,330 @@ def test_no_divergence_claims_a_decision_the_owner_did_not_make():
     )
 
 
-def test_control_a_shortened_exception_list_reddens_the_completeness_rule():
-    """ЗУБЫ ПРАВИЛА ПОЛНОТЫ — УКОРОЧЕННЫМ ПЕРЕЧНЕМ, А НЕ ПРОЗОЙ.
+# =============================================================================
+# КОНТРОЛИ РЕЕСТРА ОКНА 51 — НА СИНТЕТИЧЕСКИХ ВХОДАХ И ЗАПИСЯХ
+#
+# ⚠️ ПОКОЛЕНИЕ КОНТРОЛЕЙ (Фаза 11, план 11-19, задача 1; идиома D-30/D-32 —
+# прежние редакции не стёрты из летописи, а названы здесь). Контроли полноты
+# (укороченный перечень; все записи одного модуля — прежде шесть записей
+# административного модуля, после плана 11-11 самый населённый модуль) и
+# контроль обоснований ОПИРАЛИСЬ НА БОЕВЫЕ ЗАПИСИ реестра: роняли первую запись,
+# записи модуля, опустошали обоснование первой. План 11-19 переводит их на
+# СИНТЕТИЧЕСКИЕ входы и записи, потому что реестр пустеет задачей 2: на пустом
+# перечне уронить нечего, и контроль в прежней редакции либо упал бы на
+# предусловии, либо — хуже — зазеленел бы вакуумом (память проекта «RED-гейт
+# зеленеет вакуумом»).
+#
+# ⚠️ КАЖДЫЙ КОНТРОЛЬ СНАЧАЛА ПРОГОНЯЕТСЯ НА ЗАВЕДОМО ПРАВИЛЬНОЙ СИНТЕТИЧЕСКОЙ
+# ПАРЕ, и она обязана молчать. Без этой половины контроль доказывал бы только
+# «правило умеет краснеть», а правило, краснеющее всегда, прошло бы его тоже.
+#
+# ⚠️ СИНТЕТИЧЕСКИЙ МОДУЛЬ ПОДАЁТСЯ ОДИН, БЕЗ БОЕВОГО ДЕРЕВА. Боевое дерево
+# читается разборщиком ТОЛЬКО ради разрешения ввезённых псевдонимов
+# (`app/pages/identifiers.py`); ни один вход боевого обработчика в замер
+# контроля не попадает, и потому ни одна жалоба не может прийти от живой
+# записи.
+# =============================================================================
 
-    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ПРАВИЛО ПОЛНОТЫ ЗЕЛЕНЕЛО БЫ И НА ЗАМЕРЕ, ВОЗВРАЩАЮЩЕМ
-    ПУСТО. Контроль подаёт правилу КОПИЮ перечня без одной записи и показывает,
-    что правило краснеет И НАЗЫВАЕТ пропущенный вход поимённо. Копия живёт в
-    памяти; боевой перечень не правится ни на символ.
+SYNTHETIC_BOUND_MODULE = "app/pages/synthetic_window_51.py"
+SYNTHETIC_SECOND_MODULE = "app/pages/synthetic_window_51_second.py"
+SYNTHETIC_ROUTE = "/synthetic/{thing_id}/act"
+SYNTHETIC_PAIR_ROUTE = "/synthetic/{owner_id}/things/{thing_id}/act"
+
+
+def _synthetic_post_module(route: str, parameters: str) -> str:
+    """Текст синтетического страничного модуля с ОДНИМ POST-обработчиком.
+
+    Ввоз псевдонимов идёт тем же путём, что у боевых модулей, — из
+    `app.pages.identifiers`: граница, приехавшая ввозом, есть ровно тот случай,
+    на котором разборщик уже однажды слеп (план 10-24).
     """
-    assert len(VALIDATION_REFUSAL_DIVERGENCES) >= 2, (
-        "контроль требует минимум двух записей: на одной укорачивать нечего"
+    return (
+        "from typing import Annotated\n"
+        "\n"
+        "from fastapi import APIRouter, Path, Request\n"
+        "\n"
+        "from app.pages.identifiers import IdPath, PostIdPath\n"
+        "\n"
+        "router = APIRouter()\n"
+        "\n"
+        "\n"
+        f'@router.post("{route}")\n'
+        f"async def synthetic_act(request: Request, {parameters}):\n"
+        "    return None\n"
     )
 
-    dropped = VALIDATION_REFUSAL_DIVERGENCES[0]
-    shortened = VALIDATION_REFUSAL_DIVERGENCES[1:]
 
-    complaints = _validation_refusal_completeness_complaints(shortened)
+def _synthetic_entry(module: str, route: str, parameter: str) -> str:
+    """Ключ входа ровно в той форме, в которой его склеивает замер."""
+    return f"{module}::POST {route} → адрес {parameter}"
 
-    assert complaints, (
-        f"перечень БЕЗ записи «{dropped.entry}» не вызвал ни одной жалобы — "
-        "значит правило полноты читает НЕ поданный перечень, и оно зеленело бы "
-        "на любом"
+
+def _synthetic_divergence(
+    entry: str, alias: str, **fields: str
+) -> _ValidationRefusalDivergence:
+    """ЗАВЕДОМО ПРАВИЛЬНАЯ синтетическая запись — поля подменяются по имени."""
+    values = {
+        "entry": entry,
+        "alias": alias,
+        "reason": _REFUSAL_PRICE + ". СИНТЕТИЧЕСКАЯ ЗАПИСЬ КОНТРОЛЯ ЗУБОВ",
+        "lifting_condition": LIFTING_CONDITION_VALIDATION_REFUSAL,
+        "decision_state": DECISION_WAITS_FOR_THE_OWNER,
+    }
+    values.update(fields)
+    return _ValidationRefusalDivergence(**values)
+
+
+def _assert_the_synthetic_module_was_walked(sources: dict[str, str]) -> None:
+    """ПОДМЕНА ПРИЗЕМЛИЛАСЬ, И ЗАМЕР ЕЁ ОБОШЁЛ — иначе молчание ничего не значит.
+
+    Множество обойдённых замером обработчиков сличается с НЕЗАВИСИМЫМ обходом
+    `_post_handlers` (разборщик гейта G-1): замер, ослепший на синтетическом
+    модуле, дал бы пустые жалобы по построению, и контроль «жалоб нет» доказывал
+    бы промах, а не правило.
+    """
+    independent = set(_post_handlers(sources))
+    visited = _framework_bound_visited_handlers(sources)
+    assert independent, (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: независимый обход не нашёл в синтетическом "
+        "модуле ни одного POST-обработчика"
     )
-    assert any(dropped.entry in complaint for complaint in complaints), (
-        f"правило полноты покраснело, но НЕ НАЗВАЛО пропущенный вход "
-        f"«{dropped.entry}». Отказ, не называющий места, чинится перебором, а "
-        f"перебором чинят не то. Сказано было: {complaints}"
+    assert visited == independent, (
+        "ЗАМЕР ГРАНИЦ ОБОШЁЛ НЕ ТЕ ОБРАБОТЧИКИ, ЧТО НЕЗАВИСИМЫЙ ОБХОД: "
+        f"замер {sorted(visited)}, независимый обход {sorted(independent)}"
     )
 
-    assert not _validation_refusal_completeness_complaints(
-        VALIDATION_REFUSAL_DIVERGENCES
+
+def test_control_a_synthetic_bounded_input_reddens_the_emptiness_rule(tmp_path):
+    """ЗУБЫ ПРАВИЛА ПУСТОТЫ — СИНТЕТИЧЕСКИМ ВХОДОМ С ГРАНИЦЕЙ, А НЕ ПРОЗОЙ.
+
+    ⚠️ ПРАВИЛО ПУСТОТЫ ЗЕЛЕНО НА ЛЮБОМ ЗАМЕРЕ, ВОЗВРАЩАЮЩЕМ ПУСТО. Этот контроль —
+    единственное, что отличает «на страничном слое не осталось границ
+    фреймворка» от «замер перестал их видеть». Он подаёт помощнику
+    `_framework_bound_complaints` синтетический модуль в ДВУХ записях границы —
+    встроенной (`Path(ge=1)`) и ввезённой (GET-псевдоним `IdPath`, поставленный
+    на POST, — ровно та ошибка, которую следующий обработчик сделает первой), —
+    и показывает, что вход назван ПОИМЁННО: модуль, маршрут, имя параметра,
+    псевдоним. Тот же обработчик на `PostIdPath` жалоб не даёт.
+    """
+    entry = _synthetic_entry(SYNTHETIC_BOUND_MODULE, SYNTHETIC_ROUTE, "thing_id")
+
+    for parameters, alias in (
+        ("thing_id: Annotated[int, Path(ge=1)]", "inline"),
+        ("thing_id: IdPath", "IdPath"),
+    ):
+        sources = _sources_with(
+            tmp_path,
+            {},
+            SYNTHETIC_BOUND_MODULE,
+            _synthetic_post_module(SYNTHETIC_ROUTE, parameters),
+        )
+        _assert_the_synthetic_module_was_walked(sources)
+
+        complaints = _framework_bound_complaints(sources)
+
+        assert len(complaints) == 1, (
+            f"синтетический вход с границей фреймворка ({parameters}) дал "
+            f"{len(complaints)} жалоб вместо одной — правило пустоты его не "
+            f"видит, и следующая граница фреймворка на POST проехала бы молча. "
+            f"Сказано было: {complaints}"
+        )
+        assert entry in complaints[0] and f"псевдоним {alias}" in complaints[0], (
+            f"правило пустоты покраснело, но НЕ НАЗВАЛО вход «{entry}» с "
+            f"псевдонимом {alias!r} поимённо. Сказано было: {complaints}"
+        )
+
+    unbounded = _sources_with(
+        tmp_path,
+        {},
+        SYNTHETIC_BOUND_MODULE,
+        _synthetic_post_module(SYNTHETIC_ROUTE, "thing_id: PostIdPath"),
+    )
+    _assert_the_synthetic_module_was_walked(unbounded)
+    assert _framework_bound_complaints(unbounded) == [], (
+        "синтетический вход БЕЗ границы фреймворка (`PostIdPath`) дал жалобу — "
+        "правило пустоты краснеет на правильном обработчике и потому не "
+        "отличает нарушение от нормы"
+    )
+
+
+def test_control_a_shortened_exception_list_reddens_the_completeness_rule(tmp_path):
+    """ЗУБЫ ПРАВИЛА ПОЛНОТЫ — УКОРОЧЕННЫМ СИНТЕТИЧЕСКИМ ПЕРЕЧНЕМ, В ОБЕ СТОРОНЫ.
+
+    ⚠️ ПОКОЛЕНИЕ (план 11-19): контроль опирался на боевые записи реестра —
+    ронял первую из них; план 11-19 переводит его на синтетические, потому что
+    реестр пустеет задачей 2. Предмет прежний: правило читает ПОДАННЫЙ перечень
+    и называет расхождение поимённо — и в направлении «замер нашёл, перечень
+    молчит», и в обратном «перечень называет, замер не находит».
+    """
+    entry = _synthetic_entry(SYNTHETIC_BOUND_MODULE, SYNTHETIC_ROUTE, "thing_id")
+    bounded = _sources_with(
+        tmp_path,
+        {},
+        SYNTHETIC_BOUND_MODULE,
+        _synthetic_post_module(SYNTHETIC_ROUTE, "thing_id: IdPath"),
+    )
+    _assert_the_synthetic_module_was_walked(bounded)
+    record = _synthetic_divergence(entry, "IdPath")
+
+    assert _validation_refusal_completeness_complaints((record,), bounded) == [], (
+        "АНТИВАКУУМ НЕ ПРОШЁЛ: заведомо правильная пара «вход с границей + его "
+        "запись» дала жалобы — правило краснеет на верном перечне"
+    )
+
+    missing = _validation_refusal_completeness_complaints((), bounded)
+    assert missing and any(
+        "НАЙДЕН ЗАМЕРОМ, НО НЕ ОБЪЯВЛЕН" in complaint and entry in complaint
+        for complaint in missing
     ), (
-        "ПОДМЕНА ПРОТЕКЛА ЗА ГРАНИЦУ КОНТРОЛЯ: боевой перечень после контроля "
-        "перестал сходиться с замером"
+        f"перечень БЕЗ записи «{entry}» не вызвал поимённой жалобы — значит "
+        f"правило полноты читает НЕ поданный перечень. Сказано было: {missing}"
+    )
+
+    unbounded = _sources_with(
+        tmp_path,
+        {},
+        SYNTHETIC_BOUND_MODULE,
+        _synthetic_post_module(SYNTHETIC_ROUTE, "thing_id: PostIdPath"),
+    )
+    stale = _validation_refusal_completeness_complaints((record,), unbounded)
+    assert stale and any(
+        "ОБЪЯВЛЕН, НО ЗАМЕРОМ НЕ НАЙДЕН" in complaint and entry in complaint
+        for complaint in stale
+    ), (
+        f"запись «{entry}» при снятой границе не вызвала поимённой жалобы — "
+        "расхождение, снятое работой, осталось бы в перечне мёртвой записью. "
+        f"Сказано было: {stale}"
     )
 
 
-# ⚠️ ПОКОЛЕНИЕ КОНТРОЛЯ (идиома D-30/D-32). Контроль заводился планом 10-29 на
-# ШЕСТИ записях административного модуля (`ADMIN_PAGES_MODULE`, отбор по
-# владельцу, число шесть). План 11-11 снял эти записи РАБОТОЙ (D-07), и контроль
-# в прежней редакции потерял предмет: отбирать стало нечего. Его ПРЕДМЕТ при этом
-# не устарел — правило, видящее один модуль и слепое к другому, прошло бы
-# контроль первой записи молча, — поэтому контроль не снят, а ПЕРЕНАЦЕЛЕН: модуль
-# выбирается ЗАМЕРОМ перечня (у кого записей больше всех), а не назначается
-# именем. Назначенное имя пришлось бы править каждым планом, снимающим модуль
-# целиком; выбор по замеру держится, пока хоть у одного модуля записей больше
-# одной.
-def _divergence_module(divergence: _ValidationRefusalDivergence) -> str:
-    return divergence.entry.split("::", 1)[0]
-
-
-def test_control_dropping_a_whole_module_reddens_the_completeness_rule():
+def test_control_dropping_a_whole_module_reddens_the_completeness_rule(tmp_path):
     """ЗУБЫ ПРАВИЛА ПОЛНОТЫ НА ВСЕХ ЗАПИСЯХ ОДНОГО МОДУЛЯ, А НЕ НА ОДНОЙ.
 
-    ⚠️ КОНТРОЛЬ ВЫШЕ РОНЯЕТ ПЕРВУЮ ЗАПИСЬ ПЕРЕЧНЯ, И ЭТОГО МАЛО. Правило,
-    научившееся видеть один модуль и ослепшее на другой, прошло бы его молча —
-    а замер разрешает псевдонимы по всему дереву `app/`, то есть ровно тот
-    механизм, который план 10-28 уже ловил на слепоте (прежняя редакция
-    разборщика давала НОЛЬ входов при семи объявленных).
-
-    Копия перечня живёт в памяти; боевой перечень не правится ни на символ.
+    ⚠️ ПОКОЛЕНИЕ (план 11-19): контроль опирался на боевые записи реестра —
+    сначала на шесть записей административного модуля (план 10-29), затем на
+    самый населённый модуль (план 11-11); план 11-19 переводит его на
+    синтетические, потому что реестр пустеет задачей 2. Предмет прежний:
+    правило, видящее один модуль и слепое к другому, прошло бы контроль одной
+    записи молча. Синтетических модулей ДВА; у первого два входа одного
+    маршрута (два параметра — два входа), у второго один. Сняты записи первого —
+    названы оба его входа, и ни одной жалобы на второй.
     """
-    by_module: dict[str, list[_ValidationRefusalDivergence]] = {}
-    for divergence in VALIDATION_REFUSAL_DIVERGENCES:
-        by_module.setdefault(_divergence_module(divergence), []).append(divergence)
-    assert by_module, "перечень пуст — контролю не на чем показать зубы"
-
-    module, dropped = max(by_module.items(), key=lambda item: len(item[1]))
-    assert len(dropped) >= 2, (
-        f"у самого населённого модуля ({module}) записей {len(dropped)} — на "
-        "одной записи контроль совпал бы с контролем первой записи выше и "
-        "ничего сверх него не доказал бы"
+    first_owner = _synthetic_entry(
+        SYNTHETIC_BOUND_MODULE, SYNTHETIC_PAIR_ROUTE, "owner_id"
     )
+    first_thing = _synthetic_entry(
+        SYNTHETIC_BOUND_MODULE, SYNTHETIC_PAIR_ROUTE, "thing_id"
+    )
+    second = _synthetic_entry(SYNTHETIC_SECOND_MODULE, SYNTHETIC_ROUTE, "thing_id")
+
+    sources = _sources_with(
+        tmp_path,
+        _sources_with(
+            tmp_path,
+            {},
+            SYNTHETIC_BOUND_MODULE,
+            _synthetic_post_module(
+                SYNTHETIC_PAIR_ROUTE, "owner_id: IdPath, thing_id: IdPath"
+            ),
+        ),
+        SYNTHETIC_SECOND_MODULE,
+        _synthetic_post_module(SYNTHETIC_ROUTE, "thing_id: Annotated[int, Path(le=9)]"),
+    )
+    _assert_the_synthetic_module_was_walked(sources)
+    assert len(_framework_bound_visited_handlers(sources)) == 2
+
+    full = (
+        _synthetic_divergence(first_owner, "IdPath"),
+        _synthetic_divergence(first_thing, "IdPath"),
+        _synthetic_divergence(second, "inline"),
+    )
+    assert _validation_refusal_completeness_complaints(full, sources) == [], (
+        "АНТИВАКУУМ НЕ ПРОШЁЛ: полный синтетический перечень двух модулей дал "
+        "жалобы — правило краснеет на верном перечне"
+    )
+
     shortened = tuple(
         divergence
-        for divergence in VALIDATION_REFUSAL_DIVERGENCES
-        if _divergence_module(divergence) != module
+        for divergence in full
+        if not divergence.entry.startswith(SYNTHETIC_BOUND_MODULE + "::")
     )
-
-    complaints = _validation_refusal_completeness_complaints(shortened)
-
-    assert complaints, (
-        f"перечень БЕЗ {len(dropped)} записей модуля {module} не вызвал НИ ОДНОЙ "
-        "жалобы — значит правило полноты этих входов не видит вовсе"
-    )
+    complaints = _validation_refusal_completeness_complaints(shortened, sources)
 
     unnamed = [
-        divergence.entry
-        for divergence in dropped
-        if not any(divergence.entry in complaint for complaint in complaints)
+        entry
+        for entry in (first_owner, first_thing)
+        if not any(entry in complaint for complaint in complaints)
     ]
     assert not unnamed, (
-        "правило полноты покраснело, но НЕ НАЗВАЛО поимённо все пропущенные "
-        f"входы. Не названы: {unnamed}. Сказано было: {complaints}"
+        "правило полноты НЕ НАЗВАЛО поимённо все входы снятого модуля. Не "
+        f"названы: {unnamed}. Сказано было: {complaints}"
     )
-
-    assert not _validation_refusal_completeness_complaints(
-        VALIDATION_REFUSAL_DIVERGENCES
-    ), (
-        "ПОДМЕНА ПРОТЕКЛА ЗА ГРАНИЦУ КОНТРОЛЯ: боевой перечень после контроля "
-        "перестал сходиться с замером"
+    assert not any(second in complaint for complaint in complaints), (
+        f"правило полноты пожаловалось на вход второго модуля «{second}», чья "
+        f"запись на месте. Сказано было: {complaints}"
     )
 
 
 def test_control_an_empty_rationale_reddens_the_rationale_rule():
-    """ЗУБЫ ПРАВИЛА ОБОСНОВАНИЙ — ОПУСТОШЁННЫМ ПОЛЕМ, А НЕ ПРОЗОЙ.
+    """ЗУБЫ ПРАВИЛА ОБОСНОВАНИЙ — ОПУСТОШЁННЫМ ПОЛЕМ СИНТЕТИЧЕСКОЙ ЗАПИСИ.
 
-    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ПРАВИЛО ОБОСНОВАНИЙ ЗЕЛЕНЕЛО БЫ НА ПЕРЕЧНЕ, У
-    КОТОРОГО ОБОСНОВАНИЯ ПУСТЫ ВСЕ. Контроль опустошает обоснование ОДНОЙ
-    записи копии и показывает, что правило краснеет и называет именно её.
+    ⚠️ ПОКОЛЕНИЕ (план 11-19): контроль опирался на боевые записи реестра —
+    опустошал обоснование первой из них; план 11-19 переводит его на
+    синтетические, потому что реестр пустеет задачей 2.
     """
-    victim = VALIDATION_REFUSAL_DIVERGENCES[0]
-    emptied = (
-        _ValidationRefusalDivergence(
-            entry=victim.entry,
-            alias=victim.alias,
-            reason="   ",
-            lifting_condition=victim.lifting_condition,
-            decision_state=victim.decision_state,
-        ),
-    ) + VALIDATION_REFUSAL_DIVERGENCES[1:]
+    entry = _synthetic_entry(SYNTHETIC_BOUND_MODULE, SYNTHETIC_ROUTE, "thing_id")
+    sound = _synthetic_divergence(entry, "IdPath")
 
-    complaints = _validation_refusal_rationale_complaints(emptied)
-
-    assert complaints, (
-        f"запись «{victim.entry}» с ПУСТЫМ обоснованием прошла правило "
-        "обоснований — значит правило читает не поданный перечень, и список "
-        "того, до чего не дошли руки, засчитался бы заявленным расхождением"
-    )
-    assert any(victim.entry in complaint for complaint in complaints), (
-        f"правило обоснований покраснело, но НЕ НАЗВАЛО запись «{victim.entry}» "
-        f"поимённо. Сказано было: {complaints}"
+    assert _validation_refusal_rationale_complaints((sound,)) == [], (
+        "АНТИВАКУУМ НЕ ПРОШЁЛ: заведомо правильная синтетическая запись дала "
+        "жалобы правила обоснований"
     )
 
-    assert not _validation_refusal_rationale_complaints(
-        VALIDATION_REFUSAL_DIVERGENCES
+    complaints = _validation_refusal_rationale_complaints(
+        (_synthetic_divergence(entry, "IdPath", reason="   "),)
+    )
+    assert any(
+        entry in complaint and "БЕЗ ОБОСНОВАНИЯ" in complaint
+        for complaint in complaints
     ), (
-        "ПОДМЕНА ПРОТЕКЛА ЗА ГРАНИЦУ КОНТРОЛЯ: боевой перечень после контроля "
-        "перестал проходить правило обоснований"
+        f"запись «{entry}» с ПУСТЫМ обоснованием не названа поимённо — список "
+        "того, до чего не дошли руки, засчитался бы заявленным расхождением. "
+        f"Сказано было: {complaints}"
+    )
+
+
+def test_control_a_self_minted_decision_reddens_the_divergence_authorship_rule():
+    """ЗУБЫ ПРАВИЛА АВТОРСТВА — СИНТЕТИЧЕСКОЙ ЗАПИСЬЮ, «РЕШЁННОЙ» БЕЗ ССЫЛКИ.
+
+    Заведён планом 11-19 на синтетической записи: пока реестр нёс только
+    записи в состоянии ожидания, правило авторства пропускало их все по
+    построению, и его зубы не были показаны ничем.
+    """
+    entry = _synthetic_entry(SYNTHETIC_BOUND_MODULE, SYNTHETIC_ROUTE, "thing_id")
+
+    for state in (
+        DECISION_WAITS_FOR_THE_OWNER,
+        DECISION_OWNER_D08,
+        "решено: окно 51 закрыто работой",
+    ):
+        assert _validation_refusal_authorship_complaints(
+            (_synthetic_divergence(entry, "IdPath", decision_state=state),)
+        ) == [], (
+            f"АНТИВАКУУМ НЕ ПРОШЁЛ: состояние {state!r} законной формы дало "
+            "жалобу правила авторства"
+        )
+
+    complaints = _validation_refusal_authorship_complaints(
+        (
+            _synthetic_divergence(
+                entry, "IdPath", decision_state="решено, форма законна"
+            ),
+        )
+    )
+    assert len(complaints) == 1 and entry in complaints[0], (
+        f"запись «{entry}», объявившая себя решённой без `D-NN` и без номера "
+        f"окна, не названа поимённо. Сказано было: {complaints}"
     )
 
 
