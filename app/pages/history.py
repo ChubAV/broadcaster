@@ -51,7 +51,7 @@ from app.pages.common import (
 # у него ОБЯЗАТЕЛЬНЫМ ключевым аргументом, а код исхода едет ПАРАМЕТРОМ — адрес с
 # кодом собирает сам слой, и второй сборки его в этом файле не остаётся.
 from app.pages.htmx import respond
-from app.pages.identifiers import IdPath
+from app.pages.identifiers import IdPath, PostIdPath, id_in_column
 from app.services.billing_cache import check_access_cached
 
 logger = structlog.get_logger(__name__)
@@ -830,7 +830,7 @@ async def history_detail(
 @router.post("/history/{log_id}/retry")
 async def history_retry(
     request: Request,
-    log_id: IdPath,
+    log_id: PostIdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
     _under_another_identity: None = Depends(
@@ -937,7 +937,15 @@ async def history_retry(
     if not is_same_origin(request):
         return Response(status_code=403)
 
-    log = await db.get(SendLog, log_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ `log_id`, после сверки источника
+    # и ДО чтения записи (Фаза 11, план 11-19, D-07). Ложный результат идёт
+    # веткой «записи нет»: той же, что несуществующая и чужая запись, с тем же
+    # адресом — повтор не ставится, слот удержания не армируется. До плана
+    # величину вне колонки отвергал фреймворк `422`, и ответ отличался от «записи
+    # нет» кодом, телом и отсутствием заголовка перехода.
+    log = None
+    if id_in_column(log_id):
+        log = await db.get(SendLog, log_id)
     if not log or log.user_id != user.id:
         return await respond(request, redirect="/history")
 

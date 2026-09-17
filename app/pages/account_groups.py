@@ -34,7 +34,7 @@ from app.pages.common import (
     templates,
 )
 from app.pages.htmx import respond
-from app.pages.identifiers import ID_MAX, IdPath
+from app.pages.identifiers import ID_MAX, IdPath, PostIdPath, id_in_column
 from app.repositories.schedule import ScheduleRepository
 
 router = APIRouter(tags=["pages"])
@@ -430,8 +430,8 @@ async def account_groups_sync_status(
 @router.post("/accounts/{account_id}/groups/{group_id}/toggle")
 async def account_groups_toggle(
     request: Request,
-    account_id: IdPath,
-    group_id: IdPath,
+    account_id: PostIdPath,
+    group_id: PostIdPath,
     is_active: str | None = Form(None),
     search: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
@@ -460,6 +460,16 @@ async def account_groups_toggle(
     user = await get_user_from_cookie(request, db, settings)
     if not user:
         return await respond(request, redirect="/login")
+
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ОБОИХ ИДЕНТИФИКАТОРОВ (Фаза 11,
+    # план 11-19, D-07). Сверки источника у тумблера нет, поэтому проверка стоит
+    # сразу за гардом входа и ДО первой выборки: величина вне колонки, ушедшая
+    # операндом тройного `WHERE`, роняла бы запрос драйвером (`500` на
+    # PostgreSQL). Ложный результат НЕ заводит своей ветки — он идёт веткой
+    # «группы нет» ниже, с тем же адресом из `account_id` пути: строки с таким
+    # идентификатором нет ни на одном драйвере, и отдельный ответ различил бы
+    # неразличимое (D-13, T-9-02).
+    ids_in_column = id_in_column(account_id) and id_in_column(group_id)
 
     # СТРОКА ПОИСКА ПРИХОДИТ ТЕЛОМ ФОРМЫ и проходит тот же `_clean_search`, что
     # и на странице, и у обработчика удаления (CR-02, план 09-18). До этого
@@ -491,14 +501,16 @@ async def account_groups_toggle(
     # ТРОЙНОЙ WHERE. Проверка владельца одна не закрывает вход: свою группу
     # можно адресовать через свой ЖЕ, но другой аккаунт, и связка «группа
     # принадлежит именно этому аккаунту» перестала бы удерживаться (T-03-02).
-    result = await db.execute(
-        select(Group).where(
-            Group.id == group_id,
-            Group.user_id == user.id,
-            Group.account_id == account_id,
+    group = None
+    if ids_in_column:
+        result = await db.execute(
+            select(Group).where(
+                Group.id == group_id,
+                Group.user_id == user.id,
+                Group.account_id == account_id,
+            )
         )
-    )
-    group = result.scalar_one_or_none()
+        group = result.scalar_one_or_none()
     if group is None:
         # ЧУЖАЯ И НЕСУЩЕСТВУЮЩАЯ ГРУППА ИДУТ ОДНОЙ ВЕТКОЙ И ОСТАЮТСЯ
         # НЕОТЛИЧИМЫМИ (D-13, T-9-02). Различимый отказ сообщал бы, какие
@@ -602,8 +614,8 @@ async def account_groups_toggle(
 @router.post("/accounts/{account_id}/groups/{group_id}/delete")
 async def account_groups_delete(
     request: Request,
-    account_id: IdPath,
-    group_id: IdPath,
+    account_id: PostIdPath,
+    group_id: PostIdPath,
     search: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -704,17 +716,29 @@ async def account_groups_delete(
     if not is_same_origin(request):
         return Response(status_code=403)
 
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ОБОИХ ИДЕНТИФИКАТОРОВ, ПОСЛЕ
+    # СВЕРКИ ИСТОЧНИКА (она идентификаторов не читает) и ДО первой выборки
+    # (Фаза 11, план 11-19, D-07). Своих веток у ложного результата нет:
+    # негодный `group_id` при годном аккаунте идёт как несуществующая группа —
+    # удалять нечего, ответ собирается из `group_id` пути (D-04-A); негодный
+    # `account_id` идёт как несуществующий аккаунт — выдача пуста, переход на
+    # экран, собранный из пути. Ни одна из двух величин не уходит в запрос.
+    account_in_column = id_in_column(account_id)
+    group_in_column = id_in_column(group_id)
+
     # ТОТ ЖЕ ТРОЙНОЙ WHERE, что у тумблера: свою группу можно адресовать через
     # свой ЖЕ, но другой аккаунт, и одной проверки владельца не хватает
     # (T-03-20).
-    result = await db.execute(
-        select(Group).where(
-            Group.id == group_id,
-            Group.user_id == user.id,
-            Group.account_id == account_id,
+    group = None
+    if account_in_column and group_in_column:
+        result = await db.execute(
+            select(Group).where(
+                Group.id == group_id,
+                Group.user_id == user.id,
+                Group.account_id == account_id,
+            )
         )
-    )
-    group = result.scalar_one_or_none()
+        group = result.scalar_one_or_none()
 
     if group:
         # Чистка расписаний — ГОТОВЫМ методом репозитория: он учитывает
@@ -756,7 +780,11 @@ async def account_groups_delete(
     # фильтр там, где путь htmx его сохраняет.
     screen_url = _screen_url(account_id, term)
 
-    if not await _current_listing_has_a_row(db, user.id, account_id, term):
+    # Аккаунт вне колонки выдачи не имеет ни на одном драйвере — ответ тот же,
+    # что у опустевшей выдачи несуществующего аккаунта, без запроса.
+    if not account_in_column or not await _current_listing_has_a_row(
+        db, user.id, account_id, term
+    ):
         # ТЕКУЩАЯ ВЫДАЧА ОПУСТЕЛА — ЗАКРЫВАЕТСЯ ПЕРЕХОДОМ, А НЕ ВТОРОЙ
         # ОТРИСОВКОЙ ПУСТОГО СОСТОЯНИЯ (D-09). Фрагмента нет, поэтому слой
         # отвечает 302 без htmx и 204 с заголовком перехода — с ним. Три

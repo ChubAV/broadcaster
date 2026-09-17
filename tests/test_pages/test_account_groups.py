@@ -6489,6 +6489,9 @@ async def test_toggle_out_of_column_is_indistinguishable_from_missing_and_foreig
     foreign = await _seed_group(
         db_session, foreign_account, "Чужая", user_id=stranger.id, is_active=False
     )
+    # Идентификаторы сняты ДО запросов: после `expire_all` чтение атрибута
+    # строки ушло бы ленивой загрузкой вне асинхронного контекста.
+    own_id, foreign_id = own.id, foreign.id
     data = {"is_active": "on"}
 
     by_group = {
@@ -6537,10 +6540,18 @@ async def test_toggle_out_of_column_is_indistinguishable_from_missing_and_foreig
     )
 
     db_session.expire_all()
-    assert (await db_session.get(Group, foreign.id)).is_active is False, (
-        "чужая группа переключена"
+    states = dict(
+        (
+            await db_session.execute(
+                select(Group.id, Group.is_active).where(
+                    Group.id.in_([own_id, foreign_id])
+                )
+            )
+        ).all()
     )
-    assert (await db_session.get(Group, own.id)).is_active is True
+    assert states == {own_id: True, foreign_id: False}, (
+        f"тумблер с негодного адреса тронул строку: {states}"
+    )
 
 
 @pytest.mark.asyncio
@@ -6557,6 +6568,7 @@ async def test_delete_out_of_column_is_indistinguishable_from_missing_and_foreig
     foreign = await _seed_group(
         db_session, foreign_account, "Чужая", user_id=stranger.id
     )
+    own_id, foreign_id = own.id, foreign.id
     data = {"search": ""}
 
     by_group = {
@@ -6604,5 +6616,13 @@ async def test_delete_out_of_column_is_indistinguishable_from_missing_and_foreig
     )
 
     db_session.expire_all()
-    assert await db_session.get(Group, own.id) is not None, "своя группа удалена"
-    assert await db_session.get(Group, foreign.id) is not None, "чужая группа удалена"
+    surviving = set(
+        (
+            await db_session.execute(
+                select(Group.id).where(Group.id.in_([own_id, foreign_id]))
+            )
+        ).scalars()
+    )
+    assert surviving == {own_id, foreign_id}, (
+        f"удаление с негодного адреса удалило строку: уцелели {surviving}"
+    )

@@ -1470,7 +1470,7 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   `/history`). Все пять до плана отвечали `422` фреймворка на обоих
 #   транспортах.
 #   ПОСТАВЛЕНО ПРОГОНОМ: `случаев пар в реестре 48, объявлено 43`.
-POST_PAIR_CASES_DECLARED = 43
+POST_PAIR_CASES_DECLARED = 48
 
 
 def _case_id(case: _PairCase) -> str:
