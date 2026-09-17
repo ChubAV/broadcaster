@@ -1,4 +1,5 @@
 {% from "components/button.html" import button, link_button %}
+{% from "components/form_wrapper.html" import form_wrapper %}
 {% from "components/mono.html" import mono %}
 {% from "components/modal.html" import modal %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
@@ -81,9 +82,11 @@
   </div>
   <div class="acct-card__actions">
     {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
-    <form method="POST" action="/accounts/{{ account.id }}/retry-sync">
+    {#- Фаза 11, план 11-16 (D-02, D-12(в)): обёртка без цели подмены — ответ
+        всегда переход на экран групп; копия правится в месте. -#}
+    {% call form_wrapper(action='/accounts/' ~ account.id ~ '/retry-sync') %}
       {{- button('Повторить', variant='ghost', icon='refresh', title='Повторить синхронизацию') -}}
-    </form>
+    {% endcall %}
     <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
