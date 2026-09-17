@@ -717,10 +717,17 @@ async def accounts_retry_sync(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    """Retry failed group sync."""
+    """Повторный запуск упавшей синхронизации групп.
+
+    Фаза 11, план 11-16 (FORM-04, D-02): действие НАВИГАЦИОННОЕ — нажатие уводит
+    на экран групп аккаунта, и все три выхода идут слоем ответа. Без htmx — 302,
+    с htmx — 204 и `HX-Location` на тот же адрес посимвольно. Заявки на
+    синхронизацию (`_SYNC_IN_FLIGHT`) этот вход не занимает, поэтому освобождать
+    на выходах нечего.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
     result = await db.execute(
         select(MessengerAccount).where(
@@ -731,7 +738,7 @@ async def accounts_retry_sync(
     )
     account = result.scalar_one_or_none()
     if not account:
-        return RedirectResponse(url="/accounts", status_code=302)
+        return await respond(request, redirect="/accounts")
 
     session_id = str(account.id)
     if account.type == "max":
@@ -749,7 +756,7 @@ async def accounts_retry_sync(
     celery.send_task(task_name, args=[account.id])
 
     # Повторный запуск нажимают с экрана групп аккаунта — туда же и возвращаем.
-    return RedirectResponse(url=f"/accounts/{account_id}/groups", status_code=302)
+    return await respond(request, redirect=f"/accounts/{account_id}/groups")
 
 
 # Аккаунты, синхронизация которых идёт прямо сейчас в ЭТОМ процессе. Реестр —
