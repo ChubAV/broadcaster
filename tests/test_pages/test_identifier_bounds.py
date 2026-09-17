@@ -670,6 +670,14 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         live="group",
     ),
     # --- app/pages/accounts.py: четыре идентификатора пути ---
+    #
+    # ⚠️ ТРИ ИЗМЕНЯЮЩИХ ВХОДА ЗДЕСЬ — НА POST-ПСЕВДОНИМЕ (Фаза 11, план 11-17,
+    # D-07): граница уехала внутрь обработчиков первым использованием параметра
+    # (у удаления — после сверки источника, она идентификатора не читает; у
+    # синхронизации групп — ДО занятия внутрипроцессной заявки). Исход на величине
+    # вне колонки — ветка «аккаунта нет» каждого (`outside`, переход на список
+    # аккаунтов), и отличить её от несуществующей строки нельзя по построению.
+    # Опрос статуса остаётся GET с границей на сигнатуре.
     _BoundedEntry(
         key="app/pages/accounts.py::GET /accounts/{account_id}/sync-status → адрес account_id",
         method="GET",
@@ -683,6 +691,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{value}/retry-sync",
         parameter="account_id",
         live="account",
+        outside="302 /accounts",
     ),
     _BoundedEntry(
         key="app/pages/accounts.py::POST /accounts/{account_id}/sync-groups → адрес account_id",
@@ -690,6 +699,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{value}/sync-groups",
         parameter="account_id",
         live="account",
+        outside="302 /accounts",
     ),
     _BoundedEntry(
         key="app/pages/accounts.py::POST /accounts/{account_id}/delete → адрес account_id",
@@ -697,6 +707,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{value}/delete",
         parameter="account_id",
         live="account",
+        outside="302 /accounts",
     ),
     # --- app/pages/ads.py: два идентификатора пути и признак раскрытого расписания ---
     #

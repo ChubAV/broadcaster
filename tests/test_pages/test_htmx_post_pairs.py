@@ -733,6 +733,15 @@ async def _arrange_retry_sync_foreign(client, db, settings, identity) -> _Arrang
     )
 
 
+async def _arrange_retry_sync_out_of_column(
+    client, db, settings, identity
+) -> _Arranged:
+    """Величина вне колонки идёт ТОЙ ЖЕ веткой, что несуществующий аккаунт (D-07)."""
+    return _Arranged(
+        url=f"/accounts/{ID_MAX + 1}/retry-sync", context=_retry_sync_bridge
+    )
+
+
 async def _arrange_retry_sync_without_session(
     client, db, settings, identity
 ) -> _Arranged:
@@ -1166,6 +1175,16 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         name="повторная синхронизация — аккаунт чужой",
         identity="user",
         arrange=_arrange_retry_sync_foreign,
+        landing="/accounts",
+        transport=LOCATION,
+    ),
+    # Фаза 11, план 11-17 (D-07): идентификатор вне колонки — ветка «аккаунта
+    # нет», а не отказ валидации фреймворка.
+    _PairCase(
+        key=ACCOUNTS_RETRY_SYNC,
+        name="повторная синхронизация — идентификатор вне колонки",
+        identity="user",
+        arrange=_arrange_retry_sync_out_of_column,
         landing="/accounts",
         transport=LOCATION,
     ),
