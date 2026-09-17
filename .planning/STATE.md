@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 11
 current_phase_name: Массовый перевод разделов письма
 status: executing
-stopped_at: Completed 11-15-PLAN.md
-last_updated: "2026-09-16T23:25:00Z"
-last_activity: 2026-09-16
-last_activity_desc: "11-15 исполнен: оформление доступа на htmx уходит на страницу ЮKassa третьим выходом слоя ответа `redirect_external` — `HX-Redirect` только после проверки хоста по закрытому множеству {yoomoney.ru}; отказы и провал проверки — переход на /billing с кодом; без htmx прежний 302; голый 403 объявлен изъятием D-08; ручной UAT критерия 2 открыт"
+stopped_at: Completed 11-16-PLAN.md
+last_updated: "2026-09-17T00:45:00Z"
+last_activity: 2026-09-17
+last_activity_desc: "11-16 исполнен: повторная синхронизация групп аккаунта на слое ответа — на htmx 204 + `HX-Location` на экран групп (успех), `/accounts` (нет либо чужой) и `/login`, без htmx прежний 302; три несведённые копии формы на `form_wrapper` без цели подмены; 17 → 16"
 state_head: e466585832a6d9b7f22a6dba6dfd2feefbc3da3d
 progress:
   total_phases: 9
   completed_phases: 4
   total_plans: 115
-  completed_plans: 110
+  completed_plans: 111
   percent: 44
 ---
 
@@ -36,11 +36,12 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 11 (Массовый перевод разделов письма) — EXECUTING
-Plan: 16 of 20
+Plan: 17 of 20
 Total Plans in Phase: 20
-Completed Plans in Phase: 15
+Completed Plans in Phase: 16
 Status: Ready to execute
-Last activity: 2026-09-16 — 11-15 исполнен: денежный маршрут переведён на слой ответа. Третий выход `redirect_external` (`app/pages/htmx.py`) пишет `HX-Redirect` ТОЛЬКО на адрес, прошедший `_confirmation_url`: схема https, хост точным сравнением из `YOOKASSA_CONFIRMATION_HOSTS = frozenset({"yoomoney.ru"})` (константа, не настройка — OQ3), без порта, без `@` в узле, без обратной косой, ASCII, без управляющих; 18 написаний подделки — отдельные случаи. Провал — журнал `payment_confirmation_url_rejected` с хостом без адреса и `respond(/billing, payment_failed)`; без htmx прежний 302 без проверки (асимметрия в `SAFE_BY_NAME`). `subscribe_to_plan`: отказы на `respond()`, успех на `redirect_external`, `RedirectResponse` в обработчике 0, голый 403 — запись `OWN_RESPONSE_EXITS` в `DECISION_OWNER_D08`; форма на `form_wrapper` без цели и без `hx-sync`, `data-plan-cta` на обёртке. Пары на документированном хосте через настоящий `create_payment` (потолок PAY-01 вторым нажатием); фикстуры `yookassa.ru` путей без htmx не тронуты. Числа прогонами: записи заголовков 2 → 3, `SAFE_BY_NAME` 1 → 2, собственные выходы 11 → 12, отставание 18 → 17, пары 28 → 33, вызовы перехода 56 → 60 (+`/billing`), вызывающие обёртки 16 → 17, блоки 8 → 9, места записи кода 4 → 1 (последнее найдено полным прогоном исполнителя: 1 failed, 3320 passed). ⚠️ Ручной UAT критерия 2 (фактический хост `confirmation_url` на тестовом ключе) НЕ проведён — окно 87, до слияния
+Last activity: 2026-09-17 — 11-16 исполнен: раздел `accounts` открыт первым из двух навигационных действий синхронизации. `accounts_retry_sync` отвечает `await respond(request, redirect=…)` на всех трёх выходах — «нет сессии» `/login`, «аккаунта нет» (чужой и не `wa`/`max` той же веткой, T-11-29) `/accounts`, успех `/accounts/{id}/groups`; порядок работы (мост, статус `syncing`, отправка задачи Celery) до ответа не сдвинут, `RedirectResponse` в обработчике 0. Заявку `_SYNC_IN_FLIGHT` этот вход не занимает (проверено по коду — её берёт только `accounts_sync_groups`, план 11-17), поэтому выходу `HX-Location` освобождать нечего. Три копии формы (`accounts/list.html`, `partial_cards.html`, `partials/sync_status_card.html`) — `form_wrapper` без цели (`hx-swap="none"`), в макрос не сведены (D-12(в)); сохранность атрибутов ЗАМЕРЕНА рендером трёх адресов до и после: у старой формы только `action` и `method`, потерь нет, кнопка байт в байт та же. Числа прогонами: отставание 17 → 16, пары 33 → 37 (четвёртый случай «аккаунт чужой» сверх §behavior), вызовы перехода 60 → 63, скрытые вызывающие обёртки 17 → 20, блоки вызова обёртки 9 → 12. RED `RED_EVIDENCE_OK` (7 tests, 6 failures). Широкий прогон pages/routes/messengers: `1 failed, 2178 passed` — единственный отказ известное ночное окно админ-обзора
+Last activity (устарело, предмет — план 11-15; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-16 — 11-15 исполнен: денежный маршрут переведён на слой ответа. Третий выход `redirect_external` (`app/pages/htmx.py`) пишет `HX-Redirect` ТОЛЬКО на адрес, прошедший `_confirmation_url`: схема https, хост точным сравнением из `YOOKASSA_CONFIRMATION_HOSTS = frozenset({"yoomoney.ru"})` (константа, не настройка — OQ3), без порта, без `@` в узле, без обратной косой, ASCII, без управляющих; 18 написаний подделки — отдельные случаи. Провал — журнал `payment_confirmation_url_rejected` с хостом без адреса и `respond(/billing, payment_failed)`; без htmx прежний 302 без проверки (асимметрия в `SAFE_BY_NAME`). `subscribe_to_plan`: отказы на `respond()`, успех на `redirect_external`, `RedirectResponse` в обработчике 0, голый 403 — запись `OWN_RESPONSE_EXITS` в `DECISION_OWNER_D08`; форма на `form_wrapper` без цели и без `hx-sync`, `data-plan-cta` на обёртке. Пары на документированном хосте через настоящий `create_payment` (потолок PAY-01 вторым нажатием); фикстуры `yookassa.ru` путей без htmx не тронуты. Числа прогонами: записи заголовков 2 → 3, `SAFE_BY_NAME` 1 → 2, собственные выходы 11 → 12, отставание 18 → 17, пары 28 → 33, вызовы перехода 56 → 60 (+`/billing`), вызывающие обёртки 16 → 17, блоки 8 → 9, места записи кода 4 → 1 (последнее найдено полным прогоном исполнителя: 1 failed, 3320 passed). ⚠️ Ручной UAT критерия 2 (фактический хост `confirmation_url` на тестовом ключе) НЕ проведён — окно 87, до слияния
 Last activity (устарело, предмет — план 11-14; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-16 — 11-14 исполнен: шестой частный микро-контракт адресной строки сведён в `?notice=` (D-10). Четыре исхода снятия задачи из очереди — коды `QUEUE_DROP_REMOVED/MISSING/UNAVAILABLE/NO_QUEUE` в `app/pages/notices.py` с текстами и вариантами, перенесёнными посимвольно; `admin_drop_task` отвечает `respond(notice=…)` на всех трёх выходах, включая ветку идентификатора вне колонки плана 11-11; `QUEUE_DROP_RESULTS`, параметр исхода `admin_queue` и место отрисовки в `admin/queue.html` сняты; транспорт остался переходом, `queue_row.html` не тронут. `?result=` в `app/`: 3 → 0 под `RETIRED_QUERY_KEYS` (5 → 6) с отрицательным контролем на новом ключе; RED гейта замерен на дереве до перевода во временном рабочем каталоге (`1 failed, 5 passed`, RED_EVIDENCE_OK). Записи с поколениями: комментарий `billing.py` (реестров было ЧЕТЫРЕ), пункт §Active `PROJECT.md` закрыт, шапка `includes/notice_area.html` и `PANEL_REFUSAL_CODES` (панель очереди выдаёт три кода отказа, два — предупреждения, едут в площадку; новый перечень `PANEL_POLITE_REFUSAL_CODES`). Числа прогонами: записей реестра 15 → 19, `MOVED_TEXTS` 11 → 15. Полный прогон 3340 passed
 Last activity (устарело, предмет — план 11-13; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-16 — 11-13 исполнен: `admin_toggle_free_access` переведён на слой ответа — второй фрагментный обработчик раздела `admin`. На htmx успех отвечает 200 ТЕМ ЖЕ ответом, что блокировка: сборка вынесена в модульную `_user_actions_response`, которую зовут оба тумблера, шаблон `admin/partials/user_actions_response.html` один. `invalidate_access_cache` стоит ДО вызова слоя, фрагмент ленивый; порядок стережёт `test_free_access_fragment_is_assembled_after_the_access_cache_is_dropped` журналом вызовов — мутант «сборка до сброса» краснит его (`['access_view', 'invalidate:2']`), а тест одного значения `∞` на том же мутанте зеленел (плитка читает строку подписки, не кэш). «Пользователя нет» и «строки подписки нет» — 204 + `HX-Location`; без htmx прежний 302. Голый 403 не тронут; запись `OWN_RESPONSE_EXITS` в `DECISION_OWNER_D08`, девять прежних записей переведены туда же по тексту D-08 («к девяти записям»); окно 63 остаётся открытым. Поколения: `LIFTING_CONDITION_OWN_RESPONSE`, граница `DECISION_OWNER_D08`, докстринг `app/pages/htmx.py` (одиннадцать выходов). Форма бесплатного доступа на `form_wrapper(target='#user-actions', swap='innerHTML')`. Числа прогонами: 19 → 18, 10 → 11, 10 → 11, 54 → 56, пары 25 → 28, блоки обёртки 7 → 8
 Last activity (устарело, предмет — план 11-12; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-16 — 11-12 исполнен: `admin_toggle_block` переведён на слой ответа — первый фрагментный обработчик раздела `admin`. На htmx успех отвечает 200 с содержимым `#user-actions` (подпись тумблера по новому состоянию) и двумя внеполосными узлами `innerHTML:#user-block-badge` и `innerHTML:#user-access-tile`, собранными включением тех же шаблонов плана 11-11; «пользователя нет», вне колонки и «себя» — 204 + `HX-Location`; без htmx прежний 302. Страница получила три постоянные обёртки (пустой бейдж — `display: contents`). Голый 403 остался (D-08 владельца) и объявлен записью `OWN_RESPONSE_EXITS` в состоянии `DECISION_OWNER_D08`; `_OWN_RESPONSE_PRICE` получил второе поколение — «плашка не рисуется» опровергнуто (пропускается только 422). Форма блокировки на `form_wrapper(target='#user-actions', swap='innerHTML')`; форма бесплатного доступа ждёт плана 11-13. Числа прогонами: 20 → 19, 9 → 10, 9 → 10, 52 → 54, OOB 17 → 19, пары 21 → 25, вызывающие обёртки 15 → 16, параметрические 5 → 6, блоки обёртки 6 → 7
@@ -162,6 +163,7 @@ Progress: [████████████████████] 38/38 p
 | Phase 11 P13 | 34 min | 2 tasks | 8 files |
 | Phase 11 P14 | 57 min | 2 tasks | 13 files |
 | Phase 11 P15 | 67 min | 2 tasks | 11 files |
+| Phase 11 P16 | 46 min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -373,6 +375,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 11]: 11-15: проверка хоста адреса подтверждения отвергает ЛЮБОЙ `@` в узле (включая пустые данные пользователя) и обратную косую черту сверх перечня плана — `urlsplit` и браузер читают `https://evil.example\@yoomoney.ru` по-разному
 - [Phase 11]: 11-15: асимметрия проверки принята и записана в `SAFE_BY_NAME`: путь без htmx отвечает прежним 302 на адрес SDK без проверки хоста; фикстуры `yookassa.ru` тестов без htmx не тронуты, пары оплаты — на `yoomoney.ru`
 - [Phase 11]: 11-15: пары оформления доступа идут через НАСТОЯЩИЙ `create_payment` с подменой только сети ЮKassa — незакрытое намерение заводится первым нажатием, и потолок PAY-01 проверяется тем же прогоном
+- [Phase 11]: 11-16: повторная синхронизация групп — навигационное действие (D-02): все три выхода `respond(redirect=…)`, на htmx 204 + `HX-Location` посимвольно на адреса 302; заявку `_SYNC_IN_FLIGHT` вход не занимает (проверено по коду), освобождать на выходах нечего
+- [Phase 11]: 11-16: три копии формы повторной синхронизации на `form_wrapper` без цели, в макрос не сведены (D-12(в)); сохранность атрибутов замерена рендером до/после — у старой формы только `action` и `method`, переносить на обёртку-предка нечего
+- [Phase 11]: 11-16: реестр пар получил четвёртый случай «аккаунт чужой» сверх трёх §behavior — край назван edge_coverage_fallback плана, T-11-29 требует неразличимости с «не найден» на обоих транспортах
 
 ### Pending Todos
 
@@ -553,8 +558,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-16T23:25:00Z
-Stopped at: Completed 11-15-PLAN.md
+Last session: 2026-09-17T00:45:00Z
+Stopped at: Completed 11-16-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
