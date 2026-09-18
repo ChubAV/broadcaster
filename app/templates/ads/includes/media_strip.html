@@ -31,7 +31,14 @@
    Ожидаемые переменные: `image_keys` (итоговый список ключей), `refusals`
    (список отказов с полями `display_name` и `reason`), `max_images`. #}
 {% from "components/thumb.html" import thumb %}
-<div id="media-tray" data-media>
+{#- ⚠️ ПОРЯДОК АТРИБУТОВ ЗДЕСЬ — КОНТРАКТ, А НЕ ВКУС (Фаза 12, план 12-03).
+    Правило `test_editor_tile_asks_for_the_thumbnail_and_declares_a_fallback`
+    режет разметку ЛИТЕРАЛОМ `<div data-media`, и признак обязан стоять ПЕРВЫМ
+    атрибутом тега. До плана 12-03 литерал находился в `ads/form.html`, где
+    полоса была набрана руками; после переезда находиться ему негде, кроме как
+    здесь. Переставить `id` вперёд значит покрасить правило плитки, ничего по
+    существу не изменив. -#}
+<div data-media id="media-tray">
   {#- Строка отказа обязана быть НЕ блоком: правило
       `test_editor_tile_asks_for_the_thumbnail_and_declares_a_fallback` режет
       разметку по ПЕРВОМУ закрытию блока после признака `data-media`, и блочная

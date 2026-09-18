@@ -6312,7 +6312,17 @@ CSS_WRAPPED_INDICATOR_RULE_OPEN = ".form-wrapper > .form-busy {"
 # только в нём.
 PANEL_FORM_TAG_OPEN = '<form class="modal__form" method="post"'
 
-FORM_OPEN = '<form id="ad-form"\n          method="post"\n'
+# ⚠️ ОТСТУП АТРИБУТОВ ФОРМЫ РЕДАКТОРА — ЧАСТЬ ОБРАЗЦА ПОДСТАНОВКИ, И ПОТОМУ
+# ОБЪЯВЛЕН ОДИН РАЗ (Фаза 12, план 12-03). Обе опоры ниже — НЕ регулярные
+# выражения, а точные строки: контроль обязан менять ровно то место, что имел в
+# виду автор, и утверждает это счётом вхождений (`occurrences == 1`). План 12-03
+# перенёс тег формы ВНУТРЬ `data-form` (форма загрузки обязана стоять её
+# соседом), отступ вырос с десяти пробелов до шестнадцати, и обе опоры перестали
+# находиться — прогон назвал это дословно: «образец подстановки встречается в
+# ads/form.html 0 раз(а), а не один». Две копии числа пробелов разъехались бы
+# МОЛЧА при следующем таком переезде, поэтому копия здесь одна.
+FORM_ATTR_INDENT = "\n" + " " * 16
+FORM_OPEN = '<form id="ad-form"' + FORM_ATTR_INDENT + 'method="post"\n'
 FORM_CLOSE = 'hx-swap="none">'
 EDITOR_ACTION = "action=\"{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}\""
 EDITOR_POST = "hx-post=\"{{ '/ads/' ~ ad.id ~ '/edit' if ad else '/ads/new' }}\""
@@ -6393,7 +6403,7 @@ def test_control_negative_a_place_without_a_declared_swap_reddens_the_gate(
     tmp_path: Path,
 ) -> None:
     """Место отправки без цели и без явного отсутствия подмены."""
-    root = _tree_with(tmp_path, Substitution(FORM, '\n          ' + FORM_CLOSE, ">"))
+    root = _tree_with(tmp_path, Substitution(FORM, FORM_ATTR_INDENT + FORM_CLOSE, ">"))
     assert _offenders_swap_is_declared(_all_templates(root)), (
         "место отправки осталось без цели и без явного отсутствия подмены, и "
         "G-7 этого не заметил — умолчание рантайма съело бы собственную форму"
