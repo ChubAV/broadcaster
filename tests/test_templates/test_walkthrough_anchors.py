@@ -228,8 +228,27 @@ WALKTHROUGH_ANCHORS: tuple[Anchor, ...] = (
         note="поле текста",
     ),
     Anchor("#text-counter", 'id="text-counter"', "ads/form.html", "1.14"),
-    Anchor(".media-tile__remove", "media-tile__remove", "ads/form.html", "1.15"),
-    Anchor("#file-input", 'id="file-input"', "ads/form.html", "1.15"),
+    # ⚠️ ДВЕ ЗАПИСИ НИЖЕ ПЕРЕЕХАЛИ, А НЕ ПОЯВИЛИСЬ И НЕ ИСЧЕЗЛИ (Фаза 12, план
+    # 12-03), и НЕПОДВИЖНОСТЬ ОБЪЯВЛЕННОГО ЧИСЛА ЗАПИСАНА, А НЕ ПОДРАЗУМЕВАЕТСЯ:
+    # `WALKTHROUGH_ANCHORS_DECLARED` остаётся 21, потому что наблюдаемых мест
+    # обхода столько же — сменился ФАЙЛ-ИСТОЧНИК, а не состав наблюдения.
+    # Кнопка убирания вложения печатается теперь единственным источником разметки
+    # полосы (`ads/includes/media_strip.html`), файловое поле — формой загрузки
+    # (`ads/includes/media_upload_form.html`); в `ads/form.html` не осталось ни
+    # того, ни другого, и запись, оставленная на прежнем файле, краснела бы
+    # ПРАВИЛОМ СУЩЕСТВОВАНИЯ ЯКОРЯ.
+    Anchor(
+        ".media-tile__remove",
+        "media-tile__remove",
+        "ads/includes/media_strip.html",
+        "1.15",
+    ),
+    Anchor(
+        "#file-input",
+        'id="file-input"',
+        "ads/includes/media_upload_form.html",
+        "1.15",
+    ),
     Anchor(
         ".modal__panel",
         "modal__panel",
