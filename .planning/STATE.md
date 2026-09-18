@@ -4,17 +4,17 @@ milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 12
 current_phase_name: Загрузка изображений без `fetch()`
-status: "Phase 11 shipped — PR #49"
-stopped_at: Phase 12 context gathered
-last_updated: "2026-09-18T16:04:01.669Z"
+status: executing
+stopped_at: Completed 12-01-PLAN.md
+last_updated: "2026-09-18T18:15:06.049Z"
 last_activity: 2026-09-18
-last_activity_desc: Phase 12 planning complete
-state_head: 25cfb8bf4cf7c0c64799eacb72acf099a4828e36
+last_activity_desc: Phase 12 execution started
+state_head: 71c378855ceacbcbb4c84e4946ba7229b92f0a96
 progress:
   total_phases: 9
   completed_phases: 5
   total_plans: 121
-  completed_plans: 116
+  completed_plans: 117
   percent: 56
 ---
 
@@ -35,12 +35,12 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 12 (Загрузка изображений без `fetch()`) — READY TO EXECUTE
-Plan: Not started
+Phase: 12 (Загрузка изображений без `fetch()`) — EXECUTING
+Plan: 2 of 5
 Total Plans in Phase: 5
 Completed Plans in Phase: 21
-Status: Phase 11 shipped — PR #49
-Last activity: 2026-09-18 — Phase 12 planning complete
+Status: Ready to execute
+Last activity: 2026-09-18 — Phase 12 execution started
 Last activity (устарело, предмет — план 11-21; строка восстановлена обходом `/gsd-verify-work 11` по идиоме D-30/D-32 — её затёрло закрытие фазы `phase.complete`): 2026-09-17 — 11-21 исполнен: гэп G-11-6 закрыт ОДНИМ местом. Скрытый индикатор `.form-busy` форм обёртки выведен из потока: макрос печатает литерал класса области `form-wrapper` сразу после адреса запроса, стили дают форме обёртки контекст позиционирования и кладут её индикатор в правый нижний угол коробки формы нулевыми смещениями, прозрачным для указателя (T-11-42: у тумблеров расписания цель блокировки пустая). Четырнадцать вызывающих не тронуты (D-14). Область задаёт ТРЕТЬЕ имя — не класс индикатора и не селектор поиска, — потому что панель подтверждения печатает ДОСЛОВНО тот же узел: её ~22 px приняты (10-UAT 3.5), и решение владельца 1 от 2026-09-17 вывело панели из объёма. Неподвижность панели ДОКАЗАНА: `test_the_confirmation_panel_indicator_keeps_its_accepted_place` с тремя подстановками (селектор без области, класс области на теге панели, позиция в базовом правиле) плюс два мутанта рабочей копии — А «2 failed, 2 passed» с отказом, назвавшим `form > .form-busy`, Б «2 failed, 2 passed» с отказом, назвавшим класс области в теге панели; `components/modal.html` не тронут ни на символ, порцелан после возврата пуст. Точка строки группы ОСТАЛАСЬ рядом с тумблером — второе исключение объёма и решение владельца 3, объявленное ОДНОЙ записью `IN_FLOW_INDICATOR_EXCEPTIONS` с обоснованием и числом `= 1`. Обоснование различия «имя класса формы» и абзац раздела сличения получили ПОКОЛЕНИЕ (D-30/D-32): прежний текст «обёртка класса формы не знает вовсе» верен для дерева до 11-21 и не вычёркивается. Числа не сдвинуты: базовое правило `.form-busy` одно, `PANEL_QUALITY_DIFFERENCES_ALLOWED = 2`, контролей файла 24; `pointer-events: none;` 1 → 2. RED задачи 1 замерен прогоном («2 failed», оба отказа — отказы утверждений, `RED_EVIDENCE_OK`), GREEN — «2 passed». Полный прогон БЕЗ отбора маркером: **3410 passed, 0 failed** (37:48) — ночное окно админ-обзора не сработало (прогон вне 00:00–05:00 UTC). ⚠️ Наблюдение проверки 6 `11-UAT.md` НЕ снято: оно за человеком в `/gsd-verify-work 11`, и таблица отметки оставлена пустой.
 Last activity (устарело, предмет — план 11-20; строка восстановлена планом 11-21 по идиоме D-30/D-32 — её затёрла переустановка позиции перед партией закрытия гэпов): 2026-09-17 — 11-20 исполнен: GATE-02 закрыт числом ОБХОДА. `_post_302_assertions` разбирает дерево `tests/`, приписывает каждое утверждение `status_code == 302` о POST обработчику по таблице маршрутов собранного приложения и требует пары у каждого переведённого; `PAIRED_302_ASSERTIONS_DECLARED = 158`, 12 неразобранных поимённо в `UNATTRIBUTED_302_ASSERTIONS`. Докстринги `app/pages/htmx.py` перемерены (`15 1`). Летописи у критериев 1, 3, 4, 5, у FORM-03/FORM-04 и GATE-02; окно 51 `fixed`, окно 63 `open` с летописью D-08. Полная суита 3406 passed.
 Last activity (устарело, предмет — план 11-19; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-17 — 11-19 исполнен: окно 51 закрыто РАБОТОЙ. `account_groups_toggle`/`account_groups_delete` (оба идентификатора пути) и `history_retry` на `PostIdPath`; `id_in_column` первым использованием до первой выборки; вне колонки — ветка «строки нет» с адресом из `account_id` пути у групп и «записи нет» (`/history`) у повтора. `VALIDATION_REFUSAL_DIVERGENCES_DECLARED` 5 → 0; `test_no_page_post_input_keeps_a_framework_bound` сличает обход замера с `_post_handlers` и `POST_HANDLERS = 36`, синтетический вход с границей краснит помощник поимённо. Контроли реестра на синтетических входах (задача 1 до опустения). Реестр пар 43 → 48. Окно 51 в `.planning/WINDOWS.md` оставлено `open` для команды реестра плана 11-20.
@@ -176,6 +176,7 @@ Progress: [████████████████████] 116/116
 | Phase 11 P19 | 67 min | 2 tasks | 7 files |
 | Phase 11 P20 | 56 min | 3 tasks | 5 files |
 | Phase 11 P21 | 63 min | 2 tasks | 4 files |
+| Phase 12 P01 | 1h 44m | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -402,6 +403,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 11]: 11-20: GATE-02 = 158 поставлено прогоном обхода утверждений 302 (приписывание по `create_app().routes`); «160», «около 136» и 157 записаны прогнозами, пережитыми обходом
 - [Phase 11]: 11-20: неразобранные обходом утверждения 302 не выпадают молча — перечень `UNATTRIBUTED_302_ASSERTIONS` по функциям с обработчиками, которые тоже обязаны иметь пару; мёртвая запись краснит
 - [Phase 11]: 11-20: окно 63 остаётся `open` — D-08 закрыл только часть «решение о форме»; частичное решение записано летописью у Фазы 11 в ROADMAP, а не `waive`/`fixed`
+- [Phase 12]: Целевым тестом улики RED выбран тест гейта доступа: он покраснел утверждением о поведении (404 вместо 204), тогда как два соседних краснели импортом ещё не существующего модуля — сбой загрузки не есть доказательство отсутствия поведения (#3770)
+- [Phase 12]: Имя файлового поля объявлено ОДИН раз в app/services/image_upload.py и доезжает до разметки глобалом upload_field; в тестовом модуле оно названо литералом, потому что ввезённая константа утверждала бы имя саму о себе
 
 ### Pending Todos
 
@@ -582,9 +585,9 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-18T14:26:21.745Z
-Stopped at: Phase 12 context gathered
-Resume file: /source/broadcaster/.planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-CONTEXT.md
+Last session: 2026-09-18T18:14:43.001Z
+Stopped at: Completed 12-01-PLAN.md
+Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
 
