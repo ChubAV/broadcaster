@@ -5,10 +5,10 @@ milestone_name: HTMX-first
 current_phase: 12
 current_phase_name: Загрузка изображений без `fetch()`
 status: "Phase 11 shipped — PR #49"
-stopped_at: Phase 11 complete, ready to plan Phase 12
-last_updated: "2026-09-18T11:10:40.266Z"
+stopped_at: Phase 12 context gathered
+last_updated: "2026-09-18T14:26:22.388Z"
 last_activity: 2026-09-18
-state_head: 1cd4468d23d9acd007679b2cf953e7239b22635e
+state_head: f2bd336b1a17b218799d7ed924994ed8205fd49d
 progress:
   total_phases: 9
   completed_phases: 5
@@ -581,9 +581,9 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-18
-Stopped at: Phase 11 complete, ready to plan Phase 12
-Resume file: None
+Last session: 2026-09-18T14:26:21.745Z
+Stopped at: Phase 12 context gathered
+Resume file: /source/broadcaster/.planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-CONTEXT.md
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
 
