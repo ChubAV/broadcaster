@@ -4,7 +4,7 @@ slug: "zagruzka-izobrazheniy-bez-fetch"
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
 # audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: "2026-09-18"
 ---
@@ -13,26 +13,40 @@ created: "2026-09-18"
 
 > Per-phase validation contract for feedback sampling during execution.
 
+Источник — `12-RESEARCH.md` §Validation Architecture, §Environment Availability и §Security Domain.
+Времена прогонов ниже **измерены на сегодняшнем дереве 2026-09-18**, а не оценены.
+
 ---
 
 ## Test Infrastructure
 
 | Property | Value |
 |----------|-------|
-| **Framework** | {pytest 7.x / jest 29.x / vitest / go test / other} |
-| **Config file** | {path or "none — Wave 0 installs"} |
-| **Quick run command** | `{quick command}` |
-| **Full suite command** | `{full command}` |
-| **Estimated runtime** | ~{N} seconds |
+| **Framework** | pytest 9.0.2 + pytest-asyncio ≥1.3.0 [VERIFIED: pyproject.toml:39-41] |
+| **Config file** | `pyproject.toml` (секция зависимостей); фикстуры — `tests/conftest.py` (`client`, `authed_client`, `htmx_client`, `db_session`) |
+| **Quick run command** | `uv run pytest <файл> -q -p no:randomly` |
+| **Full suite command** | `uv run pytest tests/ -q` (рецепт `just test`) |
+| **Estimated runtime** | быстрый прогон одного модуля — **~4 с** (измерено: `test_ads_form_security.py` → `5 passed in 0.03s`, 3.66 с настенного времени; почти всё — запуск интерпретатора и импорт приложения). Полный прогон — **> 600 с**: 3410 собранных тестов (сбор 6.03 с), прогон не уложился в десятиминутный предел замера |
+
+⚠️ **`-p no:randomly` применяется целенаправленно**, а не по привычке: известна нестабильность
+порядка исполнения (`.planning/todos/pending/full-suite-ads-editor-order-pollution.md`,
+`test_image_base_url_comes_from_app_settings`), и фаза трогает ровно ту область. Проверять **и** в
+одиночном, **и** в полном прогоне (G-10) — иначе своё покраснение неотличимо от чужого.
 
 ---
 
 ## Sampling Rate
 
-- **After every task commit:** Run `{quick run command}`
-- **After every plan wave:** Run `{full suite command}`
-- **Before `/gsd-verify-work`:** Full suite must be green
-- **Max feedback latency:** {N} seconds
+- **After every task commit:** `uv run pytest <затронутый файл> -q -p no:randomly` — **~4–15 с**.
+- **After every plan wave:** `uv run pytest tests/ -q`, затем `uv run python -m compileall -q app main.py tests`,
+  затем `graphify update .`.
+- **Before `/gsd-verify-work`:** полный прогон зелёный **и** повторный прогон затронутых модулей
+  **поодиночке** (G-10).
+- **Max feedback latency:** **~15 с** на задачу.
+  ⚠️ **Полный прогон единицей обратной связи НЕ является** и на роль «после каждого коммита» не
+  годится: он занимает больше десяти минут (измерено), то есть в двести раз дольше быстрого. Это
+  инструмент слияния волны и приёмки фазы. Задача, у которой быстрого прогона нет, обратной связи
+  не имеет вовсе — такой задачи в фазе нет (см. карту ниже).
 
 ---
 
@@ -40,39 +54,83 @@ created: "2026-09-18"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 12-01-01 | 01 | 1 | REQ-{XX} | T-12-01 / — | {expected secure behavior or "N/A"} | unit | `{command}` | ✅ / ❌ W0 | ⬜ pending |
+| 12-01-01 | 01 | 1 | FETCH-01 | T-12-01, T-12-02, T-12-03, T-12-04 | тип по первым байтам (присланный заголовок авторитета не имеет); имя нормализовано `safe_filename`; тело читается порциями с прерыванием на первом превышении; число частей ограничено явно | integration (tracer, TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py tests/test_pages/test_access_gate.py tests/test_pages/test_impersonation_gate.py -q -p no:randomly` | ❌ W0 — создаётся этой же задачей (RED) | ⬜ pending |
+| 12-01-02 | 01 | 1 | FETCH-01 | T-12-04 | файловая часть не носит имени `images` (WR-03); недостижимая цель блокировки не объявляется, отступление записано поимённо | unit (гейт разметки) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_templates/test_components.py -q -p no:randomly` | ✅ | ⬜ pending |
+| 12-02-01 | 02 | 1 | FETCH-01 | T-12-07, T-12-08 | предел тела задан ЯВНО в ОБОИХ шаблонах; вывод из отсутствия директивы не делается (A1) | config-gate (grep) | `grep -c 'client_max_body_size 64M' nginx/nginx.conf.template && grep -c 'client_max_body_size 64M' nginx/nginx-http.conf.template` | ✅ | ⬜ pending |
+| 12-02-02 | 02 | 1 | FETCH-01 | T-12-07 | расхождение потолка прокси с потолком приложения краснеет МАШИННО, а не держится дисциплиной читателя | unit (TDD) | `uv run pytest tests/test_nginx_body_limit.py -q -p no:randomly` | ❌ W0 — создаётся этой же задачей (RED) | ⬜ pending |
+| 12-03-01 | 03 | 2 | FETCH-01 | T-12-10 | клиентской сборки разметки в редакторе нет ВОВСЕ — утверждение гейта CR-01 инвертировано на более сильное, а не ослаблено | unit (гейт, TDD) | `uv run pytest tests/test_templates/test_ads_form_security.py tests/test_templates/test_htmx_inventory.py tests/test_templates/test_walkthrough_anchors.py -q -p no:randomly` | ✅ | ⬜ pending |
+| 12-03-02 | 03 | 2 | FETCH-01 | T-12-09, T-12-11 | идентификатор не бывает целью подмены и внеполосной целью разом (G-11); имя на плитке — нормализованное из сохранённого ключа и живёт в подсказке | unit + integration (TDD) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_pages/test_ads_editor.py -q -p no:randomly` | ✅ | ⬜ pending |
+| 12-04-01 | 04 | 3 | FETCH-01 | T-12-12, T-12-13, T-12-14, T-12-16 | чужой ключ во фрагмент не переиздаётся; список длиннее потолка отвергается; имя отвергнутого файла нормализовано ДО шаблона (автоэкранирования мало) | integration (TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ (создан задачей 12-01-01) | ⬜ pending |
+| 12-04-02 | 04 | 3 | FETCH-01 | T-12-15 | правый операнд записи заголовка `HX-*` — ASCII-литерал; число мест записи выписано отдельной константой | unit (гейт, TDD) | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ | ⬜ pending |
+| 12-05-01 | 05 | 4 | FETCH-01 | T-12-01, T-12-02, T-12-03 | утверждения о распознавании типа, нормализации имени, приведении расширения и порядке отказов не теряются вместе со снятым модулем | unit (TDD, переезд) | `uv run pytest tests/test_services/test_image_upload.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ❌ W0 — создаётся этой же задачей | ⬜ pending |
+| 12-05-02 | 05 | 4 | FETCH-01 | T-12-17, T-12-18, T-12-19 | все ТРИ перечня гейтов отражают решение о поверхности; маршрут, не попавший ни в одно множество, роняет гейт по построению | unit (гейт) | `uv run pytest tests/test_pages/test_access_gate.py tests/test_pages/test_impersonation_gate.py tests/test_templates/test_htmx_markup_gates.py -q -p no:randomly` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+
+**Непрерывность выборки:** ни одной задачи без `<automated>`; трёх подряд задач без машинной
+проверки в фазе нет по построению — каждая из десяти несёт свою команду.
 
 ---
 
 ## Wave 0 Requirements
 
-- [ ] `{tests/test_file.py}` — stubs for REQ-{XX}
-- [ ] `{tests/conftest.py}` — shared fixtures
-- [ ] `{framework install}` — if no framework detected
+**Отдельной волны 0 у фазы нет, и это решение, а не пропуск.** Каждый недостающий тестовый файл
+заводится ВНУТРИ той TDD-задачи, которой он нужен, как её RED-половина — вынести их в отдельную
+волну значило бы завести файл раньше предмета, который он утверждает.
 
-*If none: "Existing infrastructure covers all phase requirements."*
+- [ ] `tests/test_pages/test_ads_image_upload.py` — заводит задача **12-01-01** (RED сквозного среза:
+      пара htmx/без-htmx, фрагмент полосы, гейт доступа). Пополняют 12-04-01, 12-04-02, 12-05-01.
+- [ ] `tests/test_nginx_body_limit.py` — заводит задача **12-02-02** (RED: оба шаблона, покрытие
+      потолка приложения, совпадение значений, контроль зубов на понижённом значении).
+- [ ] `tests/test_services/test_image_upload.py` — заводит задача **12-05-01** (переезд утверждений
+      о сервисе из снимаемых 1099 строк `tests/test_routes/test_uploads.py`, G-8).
+- [x] Установка фреймворка **не требуется**: pytest 9.0.2 и pytest-asyncio уже в дереве, суита
+      собирает 3410 тестов (измерено).
+
+**Правила уже существующие, которые фаза ПЕРЕВОДИТ вместе с предметом** (не Wave 0, но их
+покраснение ожидаемо и запланировано): инверсия `test_ads_form_uses_property_assignment` (G-2),
+перенацеливание `test_ads_form_hidden_input_contract_kept`, замена `EDITOR_SCRIPT_MARKER` (G-6),
+снятие `test_editor_javascript_carries_the_thumbnail_prefix` и правила про чтение причины из тела
+ответа (D-12), правка импорта в `tests/test_pages/test_ads_editor.py` (G-8).
+
+⚠️ **Инвентарные числа** (`MANUAL_FETCH_PLACES`, `OOB_BLOCKS`, `HX_HEADER_WRITES`,
+`DISABLED_ELT_EXCEPTIONS_DECLARED`, `HX_POST_PLACES`) ставятся **ПРОГОНОМ покрасневшего правила**, а
+не вычитанием в уме — дисциплина летописи `test_htmx_markup_gates.py` (D-13).
 
 ---
 
 ## Manual-Only Verifications
 
+Две проверки, у которых машинного эквивалента НЕТ ВОВСЕ. Обе обязаны попасть в `12-UAT.md`
+отдельными строками: без записи они останутся незакрытыми дефектами при зелёной суите.
+
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| {behavior} | REQ-{XX} | {reason} | {steps} |
+| Партия из десяти снимков по 4–5 МБ доезжает до приложения, а не получает 413 от обратного прокси | FETCH-01 (критерий 2) | **nginx в среде разработки отсутствует** (§Environment Availability); ни один тест суиты не читает собранный конфиг, а правка шаблона в гите боевой предел САМА ПО СЕБЕ не двигает — нужно переразвёртывание. `tests/test_nginx_body_limit.py` доказывает согласие ИСХОДНИКА шаблона с настройками, но не то, что боевой nginx перезапущен | После `just prod-deploy` (или переразвёртывания nginx) открыть редактор объявления и выбрать десять снимков по 4–5 МБ **разом**. Ожидается: все десять прикрепились; `just prod-logs nginx` не содержит `413`; общая плашка «Действие не выполнено. Попробуйте ещё раз через минуту.» не поднималась. **Записать отдельно, что переразвёртывание выполнено** — иначе проверен старый предел |
+| Признак «идёт запрос» (`hx-indicator`) виден человеку на время загрузки | FETCH-01 (критерий 4) | Критерий объявлен ручным самим ROADMAP; браузер в среде отсутствует; порог видимости задан `transition-delay` в `app.css:2193-2214`, то есть свойство ГЛАЗА и времени, а не состояния DOM — присутствие класса `htmx-request` машинно проверяемо, «человек увидел» — нет | В редакторе выбрать файл: на время запроса виден признак `.form-busy`, после ответа он гаснет, плитка появляется без перезагрузки страницы. Там же нажать «×» на вложении: плитка исчезает после круга к серверу, набранный текст не теряется, страница не перезагружается (D-10 — цена названа: удаление перестало быть мгновенным) |
 
-*If none: "All phase behaviors have automated verification."*
+**Не manual-only, но входят в обход** — у этих поведений машинная проверка ЕСТЬ, и ручной проход их
+дублирует глазами, а не заменяет: черновик, создаваемый первой картинкой на `/ads/new`
+(`test_a_successful_upload_asks_the_ad_form_to_save`, 12-04-02); пять файлов на два свободных места
+(`test_ceiling_takes_the_free_slots_and_refuses_the_rest`, 12-04-01); строка отказа на каждый
+отвергнутый файл (12-04-01).
+
+**Решение владельца, а не проверка** — в `12-UAT.md` отдельным пунктом: допущение о
+конкурентности, оставленное ОТКРЫТЫМ планом 12-04 (§flagged_assumptions) — оборванная партия
+оставляет объекты-сироты, две одновременные партии считают свободные места из своих снимков.
+Принять как есть либо завести предметом отдельной фазы.
 
 ---
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < {N}s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies — все десять задач несут команду;
+      три файла, которых ещё нет, создаются RED-половиной своей же задачи
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references — три файла названы поимённо с задачей-заводчиком
+- [x] No watch-mode flags — ни одна команда не содержит `--watch`
+- [x] Feedback latency < 15s на задачу (измерено: ~4 с на модуль)
+      ⚠️ полный прогон > 600 с и единицей обратной связи не служит
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** {pending / approved YYYY-MM-DD}
+**Approval:** pending
