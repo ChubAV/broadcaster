@@ -1,3 +1,5 @@
+import contextlib
+
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -1000,5 +1002,229 @@ async def test_slot_is_released_after_an_integrity_conflict(sync_setup):
     _, result = await _account_result(session_factory, account_id)
     assert result["error"] is None
     assert result["found"] == 1
+
+
+# --- Фаза 11, план 11-17: синхронизация групп на слое ответа (FORM-04, D-02) ---
+#
+# Действие НАВИГАЦИОННОЕ: синхронизация заменяет список групп целиком, и
+# нажатие уводит на экран групп аккаунта. Слою письма уходит 204 с
+# `HX-Location` на ТОТ ЖЕ адрес, что без htmx уезжает 302.
+#
+# ⚠️ ПРЕДМЕТ ЗДЕСЬ НЕ ТОЛЬКО ФОРМА ОТВЕТА, НО И ЗАЯВКА `_SYNC_IN_FLIGHT`
+# (Pitfall 8, угроза T-11-28). Выход htmx, собранный ДО внешнего `try` или
+# минующий его `finally`, оставил бы аккаунт «занятым» до перезапуска процесса.
+# Тест, проверяющий только `204` и заголовок, на такой утечке ЗЕЛЕНЕЕТ —
+# поэтому каждый исход ниже доказывает освобождение ПОВЕДЕНИЕМ: следующая
+# синхронизация того же аккаунта обязана дойти до мессенджера.
+
+HTMX = {"HX-Request": "true"}
+SYNC_OUTCOMES = ("успех", "отказ моста", "неожиданное исключение", "конфликт уникальности")
+
+
+@contextlib.contextmanager
+def _sync_outcome(outcome: str):
+    """Доводит обработчик до выхода `outcome`; отдаёт подменённый класс адаптера."""
+    from app.messengers.base import MessengerFetchError
+
+    with contextlib.ExitStack() as stack:
+        messenger = stack.enter_context(patch("app.pages.accounts.TelegramUserMessenger"))
+        if outcome == "успех":
+            messenger.return_value.get_groups = AsyncMock(
+                return_value=[{"id": "g-1", "name": "Первая"}]
+            )
+        elif outcome == "отказ моста":
+            messenger.return_value.get_groups = AsyncMock(
+                side_effect=MessengerFetchError("мост не ответил")
+            )
+        elif outcome == "неожиданное исключение":
+            messenger.return_value.get_groups = AsyncMock(
+                side_effect=RuntimeError("сессия Telegram протухла")
+            )
+        else:
+            assert outcome == "конфликт уникальности", outcome
+            messenger.return_value.get_groups = AsyncMock(
+                return_value=[{"id": "g-1", "name": "Первая"}]
+            )
+
+            async def _duplicate(session, account, fetched, *, messenger_type):
+                session.add(
+                    Group(
+                        user_id=account.user_id,
+                        account_id=account.id,
+                        messenger_type=messenger_type,
+                        group_external_id="g-1",
+                        name="Дубль",
+                    )
+                )
+
+            stack.enter_context(patch("app.pages.accounts.apply_group_resync", _duplicate))
+        yield messenger
+
+
+# Что ОБЯЗАН записать на аккаунт каждый исход: так тест доказывает, что ветка
+# ФАКТИЧЕСКИ пройдена, а не что ответ совпал случайно.
+_EXPECTED_ERROR = {
+    "успех": None,
+    "отказ моста": "мост не ответил",
+    "неожиданное исключение": UNEXPECTED_FAILURE_MESSAGE,
+    "конфликт уникальности": "Синхронизация уже выполнялась — откройте экран заново",
+}
+
+
+@pytest.mark.parametrize("outcome", SYNC_OUTCOMES)
+@pytest.mark.asyncio
+async def test_sync_groups_over_htmx_releases_the_claim_on_every_exit(
+    sync_setup, outcome
+):
+    """Каждый выход ПОСЛЕ занятия заявки: 204 + `HX-Location` и свободная заявка."""
+    from app.pages import accounts as accounts_page
+
+    client, session_factory = sync_setup
+    await _login(client)
+    groups_url = None
+    try:
+        # Путь деградации: прежний 302 на тот же адрес, заявка свободна.
+        degraded_id = await _make_account(session_factory)
+        await _add_group(session_factory, degraded_id, "g-1", "Первая")
+        with _sync_outcome(outcome):
+            without = await client.post(
+                f"/accounts/{degraded_id}/sync-groups", follow_redirects=False
+            )
+        assert without.status_code == 302, outcome
+        assert without.headers["location"] == f"/accounts/{degraded_id}/groups"
+        assert degraded_id not in accounts_page._SYNC_IN_FLIGHT, (
+            f"{outcome}: путь деградации оставил заявку занятой"
+        )
+
+        account_id = await _make_account(session_factory)
+        await _add_group(session_factory, account_id, "g-1", "Первая")
+        groups_url = f"/accounts/{account_id}/groups"
+        with _sync_outcome(outcome) as messenger:
+            resp = await client.post(
+                f"/accounts/{account_id}/sync-groups",
+                headers=HTMX,
+                follow_redirects=False,
+            )
+        assert messenger.call_count == 1, f"{outcome}: обработчик не дошёл до мессенджера"
+        assert resp.status_code == 204, f"{outcome}: {resp.status_code} {resp.text[:200]}"
+        assert resp.headers.get("HX-Location") == groups_url
+        assert "location" not in resp.headers, f"{outcome}: слою письма ушло перенаправление"
+        assert resp.content == b""
+
+        # Ветка пройдена на самом деле — у неё свой след на аккаунте.
+        _, result = await _account_result(session_factory, account_id)
+        assert result is not None, f"{outcome}: на аккаунт не легло ничего"
+        expected_error = _EXPECTED_ERROR[outcome]
+        if expected_error is None:
+            assert result["error"] is None
+        else:
+            assert expected_error in (result["error"] or ""), (
+                f"{outcome}: ветка не пройдена — на аккаунте {result['error']!r}"
+            )
+
+        # Заявка освобождена — сначала по реестру, затем ПОВЕДЕНИЕМ.
+        assert account_id not in accounts_page._SYNC_IN_FLIGHT, (
+            f"{outcome}: htmx-выход оставил заявку занятой — аккаунт заперт до "
+            "перезапуска процесса"
+        )
+        with _sync_outcome("успех") as again:
+            follow_up = await client.post(
+                f"/accounts/{account_id}/sync-groups",
+                headers=HTMX,
+                follow_redirects=False,
+            )
+        assert again.call_count == 1, (
+            f"{outcome}: следующая синхронизация не дошла до мессенджера — "
+            "заявка осталась занятой после htmx-выхода"
+        )
+        assert follow_up.status_code == 204
+        assert follow_up.headers.get("HX-Location") == groups_url
+        _, result = await _account_result(session_factory, account_id)
+        assert result["error"] is None and result["found"] == 1
+    finally:
+        # Утечка одного случая не имеет права ронять соседние тесты процесса.
+        accounts_page._SYNC_IN_FLIGHT.clear()
+
+
+@pytest.mark.asyncio
+async def test_sync_groups_over_htmx_busy_claim_is_not_released_by_the_refused_request(
+    sync_setup,
+):
+    """Выход «заявка занята» стоит ДО занятия и чужую заявку не освобождает.
+
+    Отказанный запрос заявку не брал; освободи он её — идущая синхронизация
+    потеряла бы защиту, и третий запрос прошёл бы в мессенджер параллельно.
+    """
+    from app.pages import accounts as accounts_page
+
+    client, session_factory = sync_setup
+    await _login(client)
+    account_id = await _make_account(session_factory)
+    try:
+        accounts_page._SYNC_IN_FLIGHT.add(account_id)
+        for headers, follow in ((HTMX, "htmx"), ({}, "без htmx")):
+            with patch("app.pages.accounts.TelegramUserMessenger") as messenger:
+                resp = await client.post(
+                    f"/accounts/{account_id}/sync-groups",
+                    headers=headers,
+                    follow_redirects=False,
+                )
+            messenger.assert_not_called()
+            if headers:
+                assert resp.status_code == 204, resp.status_code
+                assert resp.headers.get("HX-Location") == f"/accounts/{account_id}/groups"
+            else:
+                assert resp.status_code == 302
+                assert resp.headers["location"] == f"/accounts/{account_id}/groups"
+            assert account_id in accounts_page._SYNC_IN_FLIGHT, (
+                f"{follow}: отказанный запрос освободил ЧУЖУЮ заявку"
+            )
+    finally:
+        accounts_page._SYNC_IN_FLIGHT.clear()
+
+
+@pytest.mark.parametrize(
+    "exit_name", ("нет сессии", "аккаунта нет", "тип не поддержан", "статус syncing")
+)
+@pytest.mark.asyncio
+async def test_sync_groups_over_htmx_exits_before_the_claim(sync_setup, exit_name):
+    """Выходы ДО заявки: переход на обоих транспортах, заявка не тронута."""
+    from app.pages import accounts as accounts_page
+
+    client, session_factory = sync_setup
+    await _login(client)
+    if exit_name == "аккаунта нет":
+        account_id, landing = 987654, "/accounts"
+    else:
+        type_ = "tg_bot" if exit_name == "тип не поддержан" else "tg_user"
+        status = "syncing" if exit_name == "статус syncing" else "active"
+        account_id = await _make_account(session_factory, type_=type_, status=status)
+        landing = f"/accounts/{account_id}/groups"
+    if exit_name == "нет сессии":
+        landing = "/login"
+
+    try:
+        for headers in ({}, HTMX):
+            if exit_name == "нет сессии":
+                client.cookies.clear()
+            with patch("app.pages.accounts.TelegramUserMessenger") as messenger:
+                resp = await client.post(
+                    f"/accounts/{account_id}/sync-groups",
+                    headers=headers,
+                    follow_redirects=False,
+                )
+            messenger.assert_not_called()
+            if headers:
+                assert resp.status_code == 204, f"{exit_name}: {resp.status_code}"
+                assert resp.headers.get("HX-Location") == landing
+                assert resp.content == b""
+            else:
+                assert resp.status_code == 302
+                assert resp.headers["location"] == landing
+            assert not accounts_page._SYNC_IN_FLIGHT, (
+                f"{exit_name}: выход до заявки оставил запись в реестре"
+            )
+    finally:
+        accounts_page._SYNC_IN_FLIGHT.clear()
 
 

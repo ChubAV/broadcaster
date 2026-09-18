@@ -45,8 +45,8 @@ from app.pages.common import (
 # из модуля групп аккаунта; адрес деградации у `respond` объявлен ОБЯЗАТЕЛЬНЫМ
 # ключевым аргументом, поэтому обработчик, забывший путь без JavaScript, не
 # собирается как вызов.
-from app.pages.htmx import respond
-from app.pages.identifiers import IdPath
+from app.pages.htmx import respond, respond_field_error
+from app.pages.identifiers import IdPath, PostIdPath, id_in_column
 
 # Разметка ответов опроса статуса подключения живёт в шаблоне, а не в строках
 # обработчика (План 08). До этого она собиралась конкатенацией и несла
@@ -538,32 +538,101 @@ async def accounts_connect_max_page(
     )
 
 
+MAX_CONNECT_STEP_TEMPLATE = "accounts/includes/max_connect_step.html"
+MAX_EMPTY_PHONE_ERROR = "Введите номер телефона"
+
+
+def _max_step_markup(
+    *,
+    step: str,
+    qr_code: str | None = None,
+    error: str | None = None,
+    phone: str = "",
+) -> str:
+    """Содержимое контейнера шага мастера MAX, собранное ОКРУЖЕНИЕМ ШАБЛОНОВ.
+
+    ⚠️ ФОРМА ВЗЯТА У `app/pages/profile.py` И ОСНОВАНИЕ ТО ЖЕ: шаблон шага
+    берётся из окружения и рендерится, а не склеивается строкой. Разметка шага
+    объявлена ОДИН раз, включаемым шаблоном, которым рисуется и страница
+    мастера, — вторая копия здесь разошлась бы с первой молча.
+
+    ⚠️ ЭКРАНИРОВАНИЕ ОБЕСПЕЧИВАЕТ ОКРУЖЕНИЕ, А НЕ ЭТОТ ПОМОЩНИК (T-11-31). В
+    отличие от часового пояса профиля, номер телефона — свободный текст, и на
+    ветке ошибки он ПОПАДАЕТ в документ: безопасность здесь держится
+    автоэкранированием макроса поля, а не недостижимостью. Значение уезжает в
+    шаблон параметром и ни на одном шаге не объявляется готовой разметкой.
+    """
+    return templates.env.get_template(MAX_CONNECT_STEP_TEMPLATE).render(
+        connected=False, step=step, qr_code=qr_code, error=error, phone=phone
+    )
+
+
 @router.post("/accounts/connect/max/start", response_class=HTMLResponse)
 async def accounts_connect_max_start(
     request: Request,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    """Receive phone, create account, start session, show QR."""
+    """Receive phone, create account, start session, show QR.
+
+    ⚠️ НА СЛОЕ ОТВЕТА С ПЛАНА 11-18 — ПОСЛЕДНИЙ ОБРАБОТЧИК ФАЗЫ 11 (FORM-03).
+    На htmx старт отвечает 200 и СОДЕРЖИМЫМ контейнера шага мастера
+    (`#max-connect-step`): шаг QR с узлом опроса статуса либо шаг с ошибкой
+    подключения (D-02). «Нет сессии» уходит переходом на `/login`.
+
+    ⚠️ ПУСТОЙ ТЕЛЕФОН — ВТОРОЙ И ПОСЛЕДНИЙ АВТОРСКИЙ 422 ФАЗЫ (FORM-08, D-06).
+    Номер из одних пробелов отвечает 422 на обоих транспортах: без htmx —
+    страницей мастера, на htmx — фрагментом шага телефона; оба несут текст
+    ошибки и ПРИСЛАННОЕ значение в поле. Новых проверок номера не заводится:
+    ошибка ровно та, что была. Поле читается из тела формы самим обработчиком, а
+    не сигнатурой, поэтому и ОТСУТСТВУЮЩЕЕ поле идёт этой же веткой, а не
+    отказом валидации фреймворка.
+
+    ⚠️ АДРЕС ДЕГРАДАЦИИ УСПЕХА — `/accounts`, И ОН ВЫБРАН ИЗМЕРЕНИЕМ (решение
+    планировщика, обратимое). Прежде путь без JavaScript получал страницу QR
+    прямо в ответ на POST. Прочитано по коду: подключение завершает ТОЛЬКО опрос
+    htmx `accounts_connect_max_status` — без JavaScript мастер не завершался и
+    раньше, — а GET `/accounts/connect/max` удаляет аккаунты в статусе
+    `connecting`, то есть приземление на мастер уничтожило бы только что
+    заведённую запись. Экран аккаунтов показывает аккаунт любого статуса, и
+    запись там видна. Ни одной работавшей возможности приземление не отнимает.
+
+    ⚠️ ПЯТИСЕКУНДНОЕ ОЖИДАНИЕ СОХРАНЕНО. Мосту нужно время между стартом сессии
+    и выдачей QR; поэтому запрос длится не меньше пяти секунд, и блокировка
+    кнопки с индикатором ожидания видны на каждом нажатии.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
     form = await request.form()
-    phone = (form.get("phone") or "").strip()
+    submitted = form.get("phone") or ""
+    phone = submitted.strip()
 
     if not phone:
-        return templates.TemplateResponse(
-            "accounts/connect_max.html",
-            {
-                "request": request,
-                "user": user,
-                "is_admin": check_is_admin(user, settings),
-                "active_page": "accounts",
-                "step": "phone",
-                "error": "Введите номер телефона",
-            },
-        )
+
+        async def _page() -> HTMLResponse:
+            """Страница мастера с ошибкой поля — путь деградации ошибки заполнения."""
+            return templates.TemplateResponse(
+                "accounts/connect_max.html",
+                {
+                    "request": request,
+                    "user": user,
+                    "is_admin": check_is_admin(user, settings),
+                    "active_page": "accounts",
+                    "step": "phone",
+                    "error": MAX_EMPTY_PHONE_ERROR,
+                    "phone": submitted,
+                },
+            )
+
+        async def _fragment() -> HTMLResponse:
+            """Тот же включаемый шаг с тем же контекстом — без шелла."""
+            return HTMLResponse(
+                _max_step_markup(step="phone", error=MAX_EMPTY_PHONE_ERROR, phone=submitted)
+            )
+
+        return await respond_field_error(request, page=_page, fragment=_fragment)
 
     # Reuse existing "connecting" MAX account or create a new one
     result = await db.execute(
@@ -605,20 +674,11 @@ async def accounts_connect_max_start(
     except Exception as e:
         error = f"Ошибка подключения к MAX: {e}"
 
-    return templates.TemplateResponse(
-        "accounts/connect_max.html",
-        {
-            "request": request,
-            "user": user,
-            "is_admin": check_is_admin(user, settings),
-            "active_page": "accounts",
-            "step": "qr",
-            "qr_code": qr_code,
-            "connected": False,
-            "error": error,
-            "account_id": account.id,
-        },
-    )
+    async def _step() -> HTMLResponse:
+        """Шаг QR (или шаг с ошибкой подключения) — содержимое контейнера шага."""
+        return HTMLResponse(_max_step_markup(step="qr", qr_code=qr_code, error=error))
+
+    return await respond(request, redirect="/accounts", fragment=_step)
 
 
 @router.get("/accounts/connect/max/status", response_class=HTMLResponse)
@@ -713,25 +773,41 @@ async def accounts_sync_status(
 @router.post("/accounts/{account_id}/retry-sync")
 async def accounts_retry_sync(
     request: Request,
-    account_id: IdPath,
+    account_id: PostIdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    """Retry failed group sync."""
+    """Повторный запуск упавшей синхронизации групп.
+
+    Фаза 11, план 11-16 (FORM-04, D-02): действие НАВИГАЦИОННОЕ — нажатие уводит
+    на экран групп аккаунта, и все три выхода идут слоем ответа. Без htmx — 302,
+    с htmx — 204 и `HX-Location` на тот же адрес посимвольно. Заявки на
+    синхронизацию (`_SYNC_IN_FLIGHT`) этот вход не занимает, поэтому освобождать
+    на выходах нечего.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
-    result = await db.execute(
-        select(MessengerAccount).where(
-            MessengerAccount.id == account_id,
-            MessengerAccount.user_id == user.id,
-            MessengerAccount.type.in_(["wa", "max"]),
+    # ГРАНИЦА ИДЕНТИФИКАТОРА — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (Фаза 11, план
+    # 11-17, D-07). Параметр объявлен POST-псевдонимом без границы на сигнатуре:
+    # отказ валидации фреймворка отвечал бы телом `{"detail": …}` без заголовка
+    # перехода, в обход слоя ответа. Проверка стоит ДО первой выборки: величина
+    # вне колонки, ушедшая операндом запроса, роняет обработчик отказом драйвера
+    # (`DataError` на боевом PostgreSQL). Ветка та же, что у несуществующего либо
+    # чужого аккаунта.
+    account = None
+    if id_in_column(account_id):
+        result = await db.execute(
+            select(MessengerAccount).where(
+                MessengerAccount.id == account_id,
+                MessengerAccount.user_id == user.id,
+                MessengerAccount.type.in_(["wa", "max"]),
+            )
         )
-    )
-    account = result.scalar_one_or_none()
+        account = result.scalar_one_or_none()
     if not account:
-        return RedirectResponse(url="/accounts", status_code=302)
+        return await respond(request, redirect="/accounts")
 
     session_id = str(account.id)
     if account.type == "max":
@@ -749,7 +825,7 @@ async def accounts_retry_sync(
     celery.send_task(task_name, args=[account.id])
 
     # Повторный запуск нажимают с экрана групп аккаунта — туда же и возвращаем.
-    return RedirectResponse(url=f"/accounts/{account_id}/groups", status_code=302)
+    return await respond(request, redirect=f"/accounts/{account_id}/groups")
 
 
 # Аккаунты, синхронизация которых идёт прямо сейчас в ЭТОМ процессе. Реестр —
@@ -785,31 +861,59 @@ def _release_sync_slot(account_id: int) -> None:
 @router.post("/accounts/{account_id}/sync-groups")
 async def accounts_sync_groups(
     request: Request,
-    account_id: IdPath,
+    account_id: PostIdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Синхронизация состава групп аккаунта прямо в запросе.
+
+    Фаза 11, план 11-17 (FORM-04, D-02): действие НАВИГАЦИОННОЕ — состав групп
+    заменяется целиком, и нажатие уводит на экран групп аккаунта. Все выходы идут
+    слоем ответа: без htmx — 302, с htmx — 204 и `HX-Location` на тот же адрес
+    посимвольно.
+
+    ⚠️ ЗАЯВКА `_SYNC_IN_FLIGHT` ОСВОБОЖДАЕТСЯ НА КАЖДОМ ВЫХОДЕ ПОСЛЕ ЕЁ ЗАНЯТИЯ
+    (Pitfall 8, T-11-28). Поэтому КАЖДЫЙ `return await respond(...)` после
+    `_claim_sync_slot` стоит ВНУТРИ внешнего `try`, чей `finally` освобождает, и
+    сборка ответа до входа в `try` не выносится: выход, минующий `finally`,
+    запер бы аккаунт до перезапуска процесса. Выходы ДО занятия (нет сессии,
+    аккаунта нет, тип не поддержан, статус `syncing`, заявка уже занята) заявку
+    не брали и не освобождают — иначе отказанный запрос снял бы чужую заявку.
+    Оба свойства стерегут тесты `test_sync_groups_over_htmx_*` в
+    `tests/test_routes/test_sync_groups.py` поведением, а не только кодом ответа.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
-    result = await db.execute(
-        select(MessengerAccount).where(
-            MessengerAccount.id == account_id,
-            MessengerAccount.user_id == user.id,
+    # ГРАНИЦА ИДЕНТИФИКАТОРА — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (Фаза 11, план
+    # 11-17, D-07). Параметр объявлен POST-псевдонимом без границы на сигнатуре:
+    # отказ валидации фреймворка отвечал бы телом `{"detail": …}` без заголовка
+    # перехода, в обход слоя ответа. Проверка стоит ДО первой выборки: величина
+    # вне колонки, ушедшая операндом запроса, роняет обработчик отказом драйвера
+    # (`DataError` на боевом PostgreSQL). Ветка та же, что у несуществующего либо
+    # чужого аккаунта.
+    # ⚠️ И ДО ЗАНЯТИЯ ЗАЯВКИ `_SYNC_IN_FLIGHT` ниже: негодная величина уходит
+    # веткой «аккаунта нет», не взяв заявки, и освобождать ей нечего.
+    account = None
+    if id_in_column(account_id):
+        result = await db.execute(
+            select(MessengerAccount).where(
+                MessengerAccount.id == account_id,
+                MessengerAccount.user_id == user.id,
+            )
         )
-    )
-    account = result.scalar_one_or_none()
+        account = result.scalar_one_or_none()
     # Адрес несуществующего экрана предлагать нечему: аккаунт, не разрешённый в
     # собственный аккаунт пользователя, уводит на список аккаунтов. Все
     # остальные ветки возвращают пользователя туда, откуда он нажал кнопку.
     if not account:
-        return RedirectResponse(url="/accounts", status_code=302)
+        return await respond(request, redirect="/accounts")
 
     account_groups_url = f"/accounts/{account_id}/groups"
 
     if account.type not in ("tg_user", "wa", "max"):
-        return RedirectResponse(url=account_groups_url, status_code=302)
+        return await respond(request, redirect=account_groups_url)
 
     # Guard повторного запуска, ступень ПЕРВАЯ — поверх ФОНОВЫХ путей.
     #
@@ -820,7 +924,7 @@ async def accounts_sync_groups(
     # закрывает и закрыть не может: два одновременных POST-а для tg_user оба
     # читают `active` и оба проходят. Его закрывает ступень вторая.
     if account.status == "syncing":
-        return RedirectResponse(url=account_groups_url, status_code=302)
+        return await respond(request, redirect=account_groups_url)
 
     # Guard повторного запуска, ступень ВТОРАЯ — внутрипроцессная заявка.
     #
@@ -870,7 +974,7 @@ async def accounts_sync_groups(
     # uq_groups_account_external (ревизия 0015) и ветка IntegrityError ниже:
     # они исключают дублирующие СТРОКИ, но не дублирующий внешний запрос.
     if not _claim_sync_slot(account_id):
-        return RedirectResponse(url=account_groups_url, status_code=302)
+        return await respond(request, redirect=account_groups_url)
 
     # ВСЁ, что ниже занятия заявки, обёрнуто внешним `try`: заявка обязана
     # освобождаться на КАЖДОМ выходе обработчика — успешном возврате, узком
@@ -920,7 +1024,7 @@ async def accounts_sync_groups(
             # Пишется сообщение исключения, а не строка подключения (T-03-17).
             await record_sync_failure(db, account, str(e) or e.__class__.__name__)
             await db.commit()
-            return RedirectResponse(url=account_groups_url, status_code=302)
+            return await respond(request, redirect=account_groups_url)
 
         except Exception as e:
             # Широкий except СОХРАНЁН намеренно и стоит ПОСЛЕ узкого: отказ на
@@ -945,7 +1049,7 @@ async def accounts_sync_groups(
             )
             await record_sync_failure(db, account, UNEXPECTED_FAILURE_MESSAGE)
             await db.commit()
-            return RedirectResponse(url=account_groups_url, status_code=302)
+            return await respond(request, redirect=account_groups_url)
 
         # Состав групп считает единственная реализация переинвентаризации —
         # та же, что у обеих фоновых задач (D-10, D-11, D-12). Транзакцией
@@ -987,7 +1091,7 @@ async def accounts_sync_groups(
                     db, account, "Синхронизация уже выполнялась — откройте экран заново"
                 )
                 await db.commit()
-        return RedirectResponse(url=account_groups_url, status_code=302)
+        return await respond(request, redirect=account_groups_url)
     finally:
         _release_sync_slot(account_id)
 
@@ -995,7 +1099,7 @@ async def accounts_sync_groups(
 @router.post("/accounts/{account_id}/delete")
 async def accounts_delete(
     request: Request,
-    account_id: IdPath,
+    account_id: PostIdPath,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
@@ -1035,5 +1139,10 @@ async def accounts_delete(
     if not is_same_origin(request):
         return Response(status_code=403)
 
-    await delete_account(db, user.id, account_id)
+    # ГРАНИЦА ИДЕНТИФИКАТОРА — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА, ПОСЛЕ СВЕРКИ
+    # ИСТОЧНИКА (она идентификатора не читает) и ДО удаления (Фаза 11, план 11-17,
+    # D-07). Величина вне колонки ничего не удаляет и уходит тем же переходом на
+    # список аккаунтов, что несуществующий либо чужой аккаунт: удалять нечего.
+    if id_in_column(account_id):
+        await delete_account(db, user.id, account_id)
     return await respond(request, redirect="/accounts")

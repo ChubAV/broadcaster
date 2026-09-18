@@ -38,6 +38,11 @@
    переносить было нечего, — и текст отказа включить расписание с
    неисполнимыми значениями тоже НОВЫЙ: до правки CR-01 этот исход отвечал
    пятисоткой и слов не имел вовсе.
+   ⚠️ ПРЕЖНЯЯ РЕДАКЦИЯ ГРАНИЦЫ НЕ ВЫЧЁРКНУТА, А ПОЛУЧАЕТ ПОКОЛЕНИЕ (Фаза 11,
+   план 11-14, D-10): «одиннадцать из пятнадцати» было верно для дерева Фазы 8.
+   Планом 11-14 из частного словаря исходов снятия задачи на Python переехали
+   ещё ЧЕТЫРЕ строки, и гейт переноса держит теперь ПЯТНАДЦАТЬ строк из
+   девятнадцати; четыре не покрытые им — те же четыре, что названы выше.
 """
 
 import ast
@@ -93,6 +98,12 @@ DECLARED_CODES = frozenset(
         "password_reset_done",
         "profile_saved",
         "impersonation_forbidden",
+        # Фаза 11, план 11-14, D-10: четыре исхода снятия задачи из очереди —
+        # ЗАМЕЩАЮТ частный словарь подраздела, а не добавляют сообщений.
+        "queue_drop_removed",
+        "queue_drop_missing",
+        "queue_drop_unavailable",
+        "queue_drop_no_queue",
     }
 )
 
@@ -149,6 +160,27 @@ MOVED_TEXTS: dict[str, str] = {
     "schedule_ad_missing": (
         "Аккаунт или объявление недоступны. Обновите страницу и попробуйте снова."
     ),
+    # ЧЕТЫРЕ СТРОКИ ФАЗЫ 11, ПЛАН 11-14 (D-10) — копии, снятые с частного
+    # словаря исходов снятия задачи в `app/pages/admin.py` ДО его снятия. Число
+    # перенесённых строк поэтому 11 → 15; довод копии тот же, что абзацем выше:
+    # источник снимается этим же планом.
+    "queue_drop_removed": "Задача снята из очереди",
+    "queue_drop_missing": "Задача уже ушла из очереди — снимать нечего",
+    "queue_drop_unavailable": (
+        "Не удалось снять задачу: Redis не отвечает, а очередь хранится только "
+        "в нём"
+    ),
+    "queue_drop_no_queue": "Снимать нечего: у этого аккаунта нет своей очереди задач",
+}
+
+# ВАРИАНТЫ ЧЕТЫРЁХ ПЕРЕНЕСЁННЫХ ИСХОДОВ ОЧЕРЕДИ — тоже копии с источника. Для
+# них вариант переносится вместе с текстом (D-10: «тот же вариант оформления»),
+# и смена варианта сменила бы и тон, и роль, которую макрос выводит из него.
+MOVED_QUEUE_DROP_VARIANTS: dict[str, str] = {
+    "queue_drop_removed": "success",
+    "queue_drop_missing": "warning",
+    "queue_drop_unavailable": "error",
+    "queue_drop_no_queue": "warning",
 }
 
 
@@ -226,15 +258,24 @@ def test_the_access_redirect_flag_is_not_a_notice_code() -> None:
 
 
 def test_every_code_is_distinct_and_the_index_loses_nothing() -> None:
-    """Четырнадцать записей дают четырнадцать ключей — ни одна не потерялась.
+    """Записей столько же, сколько ключей, — ни одна не потерялась.
 
     Неравенство здесь означало бы молчаливую перезапись: две записи с одним
     кодом схлопнулись бы в одну, и решение о второй не принимал бы никто.
+
+    ЛЕТОПИСЬ ЧИСЛА. ⚠️ Прежняя первая строка докстринга называла ЧЕТЫРНАДЦАТЬ
+    записей при утверждённых пятнадцати — она отстала от числа ещё до плана
+    11-14 (пятнадцатой стала запись отказа включить расписание, CR-01) и
+    исправлена здесь, а не молча.
+      15 → 19, Фаза 11, план 11-14, D-10: четыре исхода снятия задачи из
+      очереди переехали в реестр из частного словаря подраздела. Число
+      поставлено прогоном покрасневшего правила — «записей в реестре 19,
+      ожидалось 15», — а не вычитанием.
     """
     codes = [record.code for record in notices.NOTICES]
 
-    assert len(codes) == 15, f"записей в реестре {len(codes)}, ожидалось 15"
-    assert len(set(codes)) == 15, (
+    assert len(codes) == 19, f"записей в реестре {len(codes)}, ожидалось 19"
+    assert len(set(codes)) == 19, (
         "коды записей не различны: "
         + ", ".join(sorted({code for code in codes if codes.count(code) > 1}))
     )
@@ -311,7 +352,9 @@ def test_the_registry_carries_every_declared_code() -> None:
 
 
 def test_every_moved_text_matches_its_source_character_for_character() -> None:
-    """Одиннадцать перенесённых текстов совпадают с источниками посимвольно.
+    """Перенесённые тексты совпадают с источниками посимвольно.
+
+    Строк пятнадцать: одиннадцать переноса Фазы 8 и четыре плана 11-14.
 
     ⚠️ ЭТО ГЕЙТ ПЕРЕНОСА, А НЕ ГЕЙТ КАЧЕСТВА ТЕКСТА. Он не судит формулировку;
     он утверждает, что консолидация её НЕ ТРОГАЛА. Правка текста остаётся
@@ -321,6 +364,22 @@ def test_every_moved_text_matches_its_source_character_for_character() -> None:
     failures = _move_gate_failures(notices.NOTICES)
 
     assert not failures, "перенос переписал тексты:\n" + "\n".join(failures)
+
+
+def test_the_moved_queue_drop_outcomes_keep_their_variants() -> None:
+    """Четыре исхода снятия задачи переехали с тем же вариантом (план 11-14)."""
+    by_code = {record.code: record for record in notices.NOTICES}
+
+    drifted = {
+        code: (by_code[code].variant if code in by_code else None, expected)
+        for code, expected in MOVED_QUEUE_DROP_VARIANTS.items()
+        if code not in by_code or by_code[code].variant != expected
+    }
+
+    assert not drifted, (
+        f"вариант перенесённого исхода очереди разошёлся с источником "
+        f"(код: (сейчас, было)): {drifted}"
+    )
 
 
 def test_the_registry_module_imports_no_page_module() -> None:

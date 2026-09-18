@@ -208,6 +208,81 @@ async def test_retry_sync_resets_status(sync_setup):
 
 
 @pytest.mark.asyncio
+async def test_retry_sync_over_htmx_lands_by_a_location_header(sync_setup):
+    """Повторная синхронизация уводит на экран групп на ОБОИХ транспортах (FORM-04, D-02).
+
+    Фаза 11, план 11-16. Действие навигационное: его нажимают, чтобы попасть на
+    экран групп аккаунта, — фрагменту здесь приземляться некуда. Слою письма
+    уходит 204 с `HX-Location` на ТОТ ЖЕ адрес, что без htmx уезжает 302.
+
+    ⚠️ ПОРЯДОК РАБОТЫ НЕ МЕНЯЕТСЯ, И ЭТО ПРЕДМЕТ, А НЕ ФОН: мост, запись статуса
+    `syncing` и отправка фоновой задачи стоят ДО ответа на htmx-половине — ответ
+    204 без поставленной задачи оставил бы карточку в `syncing` навсегда.
+    Каждая половина идёт на СВОЁМ аккаунте: вторая, пришедшая на уже
+    `syncing`, не отличила бы свою запись статуса от чужой.
+    """
+    client, session_factory = sync_setup
+    await _login(client)
+
+    async def _seed_failed() -> int:
+        async with session_factory() as session:
+            from app.models.user import User
+
+            user = (await session.execute(select(User))).scalar_one()
+            account = MessengerAccount(
+                user_id=user.id,
+                type="wa",
+                credentials="wa-session",
+                status="sync_failed",
+            )
+            session.add(account)
+            await session.commit()
+            return account.id
+
+    async def _status_of(account_id: int) -> str:
+        async with session_factory() as session:
+            return (
+                await session.execute(
+                    select(MessengerAccount.status).where(
+                        MessengerAccount.id == account_id
+                    )
+                )
+            ).scalar_one()
+
+    degraded_id = await _seed_failed()
+    with patch("app.pages.accounts.WhatsAppMessenger") as MockMessenger:
+        MockMessenger.return_value.retry_sync = AsyncMock(return_value={"status": "ok"})
+        with patch.dict(sys.modules, {"app.worker.celery_app": MagicMock()}):
+            without = await client.post(
+                f"/accounts/{degraded_id}/retry-sync", follow_redirects=False
+            )
+    assert without.status_code == 302
+    assert without.headers["location"] == f"/accounts/{degraded_id}/groups"
+
+    account_id = await _seed_failed()
+    celery_module = MagicMock()
+    with patch("app.pages.accounts.WhatsAppMessenger") as MockMessenger:
+        instance = MockMessenger.return_value
+        instance.retry_sync = AsyncMock(return_value={"status": "ok"})
+        with patch.dict(sys.modules, {"app.worker.celery_app": celery_module}):
+            resp = await client.post(
+                f"/accounts/{account_id}/retry-sync",
+                headers={"HX-Request": "true"},
+                follow_redirects=False,
+            )
+
+    assert resp.status_code == 204, resp.text
+    assert resp.headers.get("HX-Location") == f"/accounts/{account_id}/groups"
+    assert "location" not in resp.headers, "слою письма ушло перенаправление"
+    assert resp.content == b""
+    instance.retry_sync.assert_called_once()
+    celery_module.celery.send_task.assert_called_once_with(
+        "app.worker.tasks.sync_wa_groups", args=[account_id]
+    )
+    assert await _status_of(account_id) == "syncing"
+
+
+@pytest.mark.asyncio
 async def test_sync_status_empty_for_other_statuses(sync_setup):
     """Account with status other than syncing/active/sync_failed returns empty."""
     client, session_factory = sync_setup

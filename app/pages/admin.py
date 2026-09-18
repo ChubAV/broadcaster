@@ -111,7 +111,7 @@ from app.pages.common import is_same_origin, templates
 # ИСТОЧНИКА. С границей на сигнатуре запрос отвергается ДО тела, и порядок
 # «сначала граница, потом права, потом источник» перестаёт зависеть от того,
 # что написано выше в функции.
-from app.pages.identifiers import IdPath
+from app.pages.identifiers import IdPath, PostIdPath, id_in_column
 # Первый вызов слоя ответа в этом модуле (план 10-03). Адрес деградации у
 # `respond` объявлен ОБЯЗАТЕЛЬНЫМ ключевым аргументом: обработчик, забывший путь
 # без JavaScript, не собирается как вызов.
@@ -295,28 +295,25 @@ QUEUE_CHANNELS: tuple[dict[str, str], ...] = (
 # уверенный ноль отправок.
 QUEUE_TELEGRAM_CHANNEL = "tg_user"
 
-# ЗАКРЫТОЕ МНОЖЕСТВО ИСХОДОВ СНЯТИЯ ЗАДАЧИ, И СЛОВА ЖИВУТ ЗДЕСЬ, А НЕ В
-# РАЗМЕТКЕ — по той же форме, что у отказов перезапуска выше.
+# ИСХОД СНЯТИЯ ЗАДАЧИ → КОД ЗАКРЫТОГО РЕЕСТРА УВЕДОМЛЕНИЙ (Фаза 11, план 11-14,
+# D-10).
 #
-# ⚠️ ОТСУТСТВИЕ ЗАДАЧИ — ТОЖЕ ИСХОД, И ОН НАЗЫВАЕТСЯ СЛОВАМИ. Задача могла уйти
-# из очереди сама, пока администратор читал экран; молчаливый возврат на ту же
-# страницу он прочитал бы как «кнопка сломана» — и пошёл бы жать её снова.
+# ⚠️ СЛОВ ЗДЕСЬ БОЛЬШЕ НЕТ, И ЭТО СВОД, А НЕ ПОТЕРЯ. До плана 11-14 здесь жил
+# частный словарь «исход → текст, вариант» со своим ключом адресной строки и
+# своим местом отрисовки на странице подраздела — шестой частный микро-контракт,
+# в свод Фазы 8 не входивший. Тексты переехали посимвольно в
+# `app/pages/notices.py` (там же — довод «отсутствие задачи тоже исход»), а
+# рисует их общая область уведомлений шелла. Здесь остаётся только отображение
+# исхода СЕРВИСА в код: словарь исходов сервиса и множество кодов реестра —
+# разные множества, и склеивать их одним литералом значило бы снова завести
+# вторую копию.
 #
-# ⚠️ ПАРАМЕТР АДРЕСНОЙ СТРОКИ — КЛЮЧ, А НЕ ТЕКСТ. Владелец ссылки не может ни
-# выбрать чужую формулировку, ни подставить свою: неизвестный ключ не рисует
-# ничего.
-QUEUE_DROP_RESULTS: dict[str, tuple[str, str]] = {
-    DROP_REMOVED: ("Задача снята из очереди", "success"),
-    DROP_MISSING: ("Задача уже ушла из очереди — снимать нечего", "warning"),
-    DROP_UNAVAILABLE: (
-        "Не удалось снять задачу: Redis не отвечает, а очередь хранится только "
-        "в нём",
-        "error",
-    ),
-    "unknown_account": (
-        "Снимать нечего: у этого аккаунта нет своей очереди задач",
-        "warning",
-    ),
+# Исхода «у аккаунта нет очереди» в отображении нет намеренно: сервис его не
+# выдаёт, это ветка обработчика ДО обращения к сервису, и код она называет сама.
+QUEUE_DROP_NOTICE_CODES: dict[str, str] = {
+    DROP_REMOVED: notices.QUEUE_DROP_REMOVED,
+    DROP_MISSING: notices.QUEUE_DROP_MISSING,
+    DROP_UNAVAILABLE: notices.QUEUE_DROP_UNAVAILABLE,
 }
 
 # ПОТОЛОК ЧТЕНИЯ НА ОДНУ ОЧЕРЕДЬ — НА ЕДИНИЦУ БОЛЬШЕ ПОТОЛКА ПОКАЗА.
@@ -886,7 +883,7 @@ async def _workers_view(db: AsyncSession) -> dict:
 @router.post("/workers/{account_id}/restart")
 async def admin_restart_worker(
     request: Request,
-    account_id: IdPath,
+    account_id: PostIdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -924,7 +921,13 @@ async def admin_restart_worker(
 
     location = "/admin/workers"
 
-    account = await db.get(MessengerAccount, account_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    account_usable = id_in_column(account_id)
+    account = await db.get(MessengerAccount, account_id) if account_usable else None
     if account is None:
         logger.warning(
             "worker_restart_unknown_account",
@@ -983,7 +986,6 @@ async def admin_restart_worker(
 @router.get("/queue", response_class=HTMLResponse)
 async def admin_queue(
     request: Request,
-    result: str | None = Query(None),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1062,7 +1064,8 @@ async def admin_queue(
         entry["rows"] for block in blocks for entry in block["accounts"]
     )
 
-    drop_result = QUEUE_DROP_RESULTS.get(result or "")
+    # Исход снятия задачи страница НЕ читает: его код приезжает параметром
+    # `notice` и рисуется общей областью уведомлений шелла (D-10, план 11-14).
     return templates.TemplateResponse(
         "admin/queue.html",
         {
@@ -1076,7 +1079,6 @@ async def admin_queue(
             "queue_row_cap": QUEUE_ROW_CAP,
             "redis_unavailable": unavailable,
             "has_rows": has_rows,
-            "drop_result": drop_result,
         },
     )
 
@@ -1084,7 +1086,7 @@ async def admin_queue(
 @router.post("/queue/{account_id}/drop")
 async def admin_drop_task(
     request: Request,
-    account_id: IdPath,
+    account_id: PostIdPath,
     task_id: str = Form(...),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -1120,7 +1122,13 @@ async def admin_drop_task(
 
     location = "/admin/queue"
 
-    account = await db.get(MessengerAccount, account_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    account_usable = id_in_column(account_id)
+    account = await db.get(MessengerAccount, account_id) if account_usable else None
     known = {channel["key"] for channel in QUEUE_CHANNELS}
     if account is None or account.type not in known:
         # Молчаливый успех был бы хуже отказа: администратор решил бы, что снял
@@ -1131,18 +1139,25 @@ async def admin_drop_task(
             account_id=account_id,
             channel=account.type if account else None,
         )
-        # ⚠️ КЛЮЧ ИСХОДА ЕДЕТ ЧАСТЬЮ СТРОКИ АДРЕСА, А КОД РЕЕСТРА НЕ ПЕРЕДАЁТСЯ,
-        # И ЭТО РЕШЕНИЕ, А НЕ НЕДОСМОТР (D-07). Этот ключ — ШЕСТОЙ частный
-        # микро-контракт адресной строки, уцелевший после свода Фазы 8: в
-        # пятёрку, названную сводом, он не входил, у него своё место отрисовки на
-        # странице подраздела и свой закрытый словарь исходов. Переданный
-        # параметром кода, он уронил бы вызов на незарегистрированном коде — то
-        # есть свод пришлось бы делать здесь и мимоходом.
-        # ⚠️ КЛЮЧ НЕ СЧИТАЕТСЯ СВЕДЁННЫМ. Свод отдан Фазе 11, разделу
-        # администрирования; Фаза 10 остаётся рычагом, а не уборкой канала
-        # уведомлений. Без этой строки следующий читатель принял бы умолчание за
-        # завершённую работу.
-        return await respond(request, redirect=f"{location}?result=unknown_account")
+        # ⚠️ ИСХОД ЕДЕТ КОДОМ ЗАКРЫТОГО РЕЕСТРА — ПАРАМЕТРОМ СЛОЯ ОТВЕТА, А АДРЕС
+        # С КОДОМ СОБИРАЕТ ЕДИНСТВЕННАЯ НА ПРОЕКТ СБОРКА (Фаза 11, план 11-14,
+        # D-10).
+        # ПРЕЖНЯЯ ЗАПИСЬ НЕ ВЫЧЁРКНУТА, А ПОЛУЧАЕТ ПОКОЛЕНИЕ. Здесь стояло: «КЛЮЧ
+        # ИСХОДА ЕДЕТ ЧАСТЬЮ СТРОКИ АДРЕСА, А КОД РЕЕСТРА НЕ ПЕРЕДАЁТСЯ, И ЭТО
+        # РЕШЕНИЕ, А НЕ НЕДОСМОТР (D-07). Этот ключ — ШЕСТОЙ частный
+        # микро-контракт адресной строки, уцелевший после свода Фазы 8 […]
+        # КЛЮЧ НЕ СЧИТАЕТСЯ СВЕДЁННЫМ. Свод отдан Фазе 11, разделу
+        # администрирования». Запись была верна для дерева Фазы 10.
+        # ЧЕМ СВЕДЁН: планом 11-14 — отдельным планом, а не мимоходом. Частный
+        # словарь исходов, ключ адресной строки и место отрисовки на странице
+        # подраздела сняты; четыре исхода стали кодами реестра с посимвольно
+        # перенесёнными текстами, а снятое написание ключа держит на нуле гейт
+        # снятых написаний (`tests/test_pages/test_notices_channel.py`).
+        # ⚠️ ТРАНСПОРТ ОСТАЁТСЯ ПЕРЕХОДОМ (D-06/D-09 Фазы 10): ключ панели очереди
+        # — ПОЗИЦИЯ строки (WR-04), и фрагментного ответа у снятия задачи нет.
+        return await respond(
+            request, redirect=location, notice=notices.QUEUE_DROP_NO_QUEUE
+        )
 
     outcome = await drop_task(
         account.type, account.id, task_id, QUEUE_READ_LIMIT
@@ -1157,7 +1172,9 @@ async def admin_drop_task(
             task_id=task_id,
             outcome=outcome,
         )
-        return await respond(request, redirect=f"{location}?result={outcome}")
+        return await respond(
+            request, redirect=location, notice=QUEUE_DROP_NOTICE_CODES[outcome]
+        )
 
     # Привилегированная операция над ЧУЖОЙ сущностью обязана оставлять след, и
     # форма следа в проекте уже есть (`worker_restarted`): именованный ключ, все
@@ -1170,7 +1187,9 @@ async def admin_drop_task(
         channel=account.type,
         task_id=task_id,
     )
-    return await respond(request, redirect=f"{location}?result={DROP_REMOVED}")
+    return await respond(
+        request, redirect=location, notice=notices.QUEUE_DROP_REMOVED
+    )
 
 
 @router.get("/logs", response_class=HTMLResponse)
@@ -1593,10 +1612,43 @@ async def admin_user_history_detail(
     )
 
 
+async def _user_actions_response(
+    db: AsyncSession, target_user: User, admin: User
+) -> HTMLResponse:
+    """Ответ ОБОИХ тумблеров карточки пользователя: блок действий плюс внеполосные
+    бейдж блокировки и плитка доступа (Фаза 11, планы 11-12 и 11-13, D-02).
+
+    ⚠️ ОДНА СБОРКА НА ДВА ТУМБЛЕРА, И ЭТО НЕ ЭКОНОМИЯ СТРОК. Блокировка и
+    бесплатный доступ подменяют ОДНУ И ТУ ЖЕ область (`#user-actions`) и
+    печатают одно и то же состояние в трёх местах; ответ, собранный вторым
+    путём, после нажатия одного тумблера показал бы подпись соседнего не такой,
+    какой её покажет F5. Шаблон тоже один:
+    `admin/partials/user_actions_response.html`.
+
+    ⚠️ ВИД ДОСТУПА СОБИРАЕТСЯ ТЕМИ ЖЕ ФУНКЦИЯМИ, ЧТО У `admin_user_detail`
+    (`_active_subscriptions_by_user` + `_access_view`), и под тем же КЛЮЧОМ
+    `target_access`: плитка, собранная вторым путём, после нажатия показала бы
+    не то, что покажет F5. Ключ `user` — ВОШЕДШИЙ АДМИНИСТРАТОР (пояс даты в
+    плитке), ровно как в контексте страницы.
+
+    ⚠️ ПОРЯДОК ОТНОСИТЕЛЬНО СБРОСА КЭША ВЕРДИКТА — ЗАБОТА ВЫЗЫВАЮЩЕГО. Функция
+    зовётся из ленивого сборщика фрагмента, который слой ответа исполняет
+    последним; тумблер бесплатного доступа сбрасывает кэш ДО вызова слоя.
+    """
+    subscriptions = await _active_subscriptions_by_user(db, [target_user.id])
+    access = _access_view(
+        subscriptions.get(target_user.id), datetime.now(timezone.utc)
+    )
+    html = templates.env.get_template(
+        "admin/partials/user_actions_response.html"
+    ).render(target_user=target_user, target_access=access, user=admin)
+    return HTMLResponse(html)
+
+
 @router.post("/users/{user_id}/unlimited")
 async def admin_toggle_free_access(
     request: Request,
-    user_id: IdPath,
+    user_id: PostIdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     _under_another_identity: None = Depends(forbid_when_impersonating),
@@ -1653,9 +1705,19 @@ async def admin_toggle_free_access(
     if not is_same_origin(request):
         return Response(status_code=403)
 
-    target_user = await db.get(User, user_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    user_usable = id_in_column(user_id)
+    target_user = await db.get(User, user_id) if user_usable else None
+    # ИСХОДЫ ВНЕ ЭКРАНА — ПЕРЕХОДОМ (Фаза 11, план 11-13, D-02, FORM-04).
+    # Карточки несуществующего пользователя нет, и фрагменту некуда
+    # приземлиться; на htmx-пути слой ответа отдаёт 204 + `HX-Location` на ТОТ
+    # ЖЕ адрес, что уезжает 302 без htmx.
     if not target_user:
-        return RedirectResponse(url="/admin/users", status_code=302)
+        return await respond(request, redirect="/admin/users")
 
     location = f"/admin/users/{user_id}"
 
@@ -1678,7 +1740,10 @@ async def admin_toggle_free_access(
             admin_user_id=admin.id,
             target_user_id=target_user.id,
         )
-        return RedirectResponse(url=location, status_code=302)
+        # Действие не состоялось, и фрагмента «после действия» нет: переходом
+        # на ту же карточку, где видны закрытый доступ и отсутствие льготы
+        # (план 11-13, FORM-04). Журнал стои́т ПЕРЕД ответом на обоих путях.
+        return await respond(request, redirect=location)
 
     subscription.has_free_access = not subscription.has_free_access
     await db.commit()
@@ -1690,15 +1755,33 @@ async def admin_toggle_free_access(
         has_free_access=subscription.has_free_access,
     )
 
+    # ⚠️ СБРОС КЭША ВЕРДИКТА — ДО ОТВЕТА, А ФРАГМЕНТ СОБИРАЕТСЯ ЛЕНИВО ВНУТРИ
+    # СЛОЯ, ТО ЕСТЬ ПОСЛЕ СБРОСА (Фаза 11, план 11-13, T-11-20). Вердикт доступа
+    # кэшируется до минуты; фрагмент, собранный раньше сброса, закрепил бы в
+    # ответе состояние, которого после нажатия уже нет. Переставить эти две
+    # строки местами — значит собрать плитку до сброса: порядок стережёт
+    # `test_free_access_fragment_is_assembled_after_the_access_cache_is_dropped`.
     await invalidate_access_cache(target_user.id)
 
-    return RedirectResponse(url=location, status_code=302)
+    async def _fragment() -> HTMLResponse:
+        """Тот же ответ, что у тумблера блокировки: блок действий плюс внеполосные
+        бейдж и плитка доступа (`_user_actions_response`).
+
+        ⚠️ ФУНКЦИЯ НУЛЬАРНАЯ И АСИНХРОННАЯ, И ОТЛОЖЕННОСТЬ НЕСУЩАЯ: слой ответа
+        зовёт её ПОСЛЕ того, как управление прошло сброс кэша выше, а на пути
+        без htmx не зовёт вовсе.
+        """
+        return await _user_actions_response(db, target_user, admin)
+
+    # `notice` НЕ передаётся: исход виден в подписи тумблера и в плитке доступа
+    # — ровно так, как его показывал редирект на карточку.
+    return await respond(request, redirect=location, fragment=_fragment)
 
 
 @router.post("/users/{user_id}/impersonate")
 async def admin_impersonate(
     request: Request,
-    user_id: IdPath,
+    user_id: PostIdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -1758,7 +1841,13 @@ async def admin_impersonate(
         # изменяющих маршрутов.
         return Response(status_code=403)
 
-    target_user = await db.get(User, user_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    user_usable = id_in_column(user_id)
+    target_user = await db.get(User, user_id) if user_usable else None
     if target_user is None:
         logger.warning(
             "impersonation_unknown_user",
@@ -1811,7 +1900,7 @@ async def admin_impersonate(
 @router.post("/users/{user_id}/block")
 async def admin_toggle_block(
     request: Request,
-    user_id: IdPath,
+    user_id: PostIdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1835,28 +1924,51 @@ async def admin_toggle_block(
     if not is_same_origin(request):
         return Response(status_code=403)
 
-    target_user = await db.get(User, user_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    user_usable = id_in_column(user_id)
+    target_user = await db.get(User, user_id) if user_usable else None
+    # ИСХОДЫ ВНЕ ЭКРАНА — ПЕРЕХОДОМ (Фаза 11, план 11-12, D-02). Карточки
+    # несуществующего пользователя нет, и фрагменту некуда приземлиться; на
+    # htmx-пути слой ответа отдаёт 204 + `HX-Location` на ТОТ ЖЕ адрес, что
+    # уезжает 302 без htmx.
     if not target_user:
-        return RedirectResponse(url="/admin/users", status_code=302)
+        return await respond(request, redirect="/admin/users")
 
     # Don't allow admin to block themselves
     if target_user.id == admin.id:
-        return RedirectResponse(
-            url=f"/admin/users/{user_id}", status_code=302
-        )
+        return await respond(request, redirect=f"/admin/users/{user_id}")
 
     target_user.is_blocked = not target_user.is_blocked
     await db.commit()
 
-    return RedirectResponse(
-        url=f"/admin/users/{user_id}", status_code=302
+    async def _fragment() -> HTMLResponse:
+        """Содержимое блока действий плюс внеполосные бейдж и плитка доступа.
+
+        ⚠️ ФУНКЦИЯ НУЛЬАРНАЯ И АСИНХРОННАЯ: слой ответа делает `await
+        fragment()`. Отложенность несущая — на пути без htmx выборка подписки и
+        сборка разметки не выполняются вовсе.
+
+        ⚠️ ТЕЛО ВЫНЕСЕНО В `_user_actions_response` (план 11-13), И АБЗАЦ О ВИДЕ
+        ДОСТУПА ПЕРЕЕХАЛ ТУДА ЖЕ: тот же ответ собирает тумблер бесплатного
+        доступа, и две копии сборки разошлись бы молча.
+        """
+        return await _user_actions_response(db, target_user, admin)
+
+    # `notice` НЕ передаётся: исход виден в самой подписи тумблера, в бейдже и в
+    # плитке — ровно так, как его показывал редирект на карточку.
+    return await respond(
+        request, redirect=f"/admin/users/{user_id}", fragment=_fragment
     )
 
 
 @router.post("/users/{user_id}/delete")
 async def admin_delete_user(
     request: Request,
-    user_id: IdPath,
+    user_id: PostIdPath,
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
     _under_another_identity: None = Depends(forbid_when_impersonating),
@@ -1883,7 +1995,13 @@ async def admin_delete_user(
     if not is_same_origin(request):
         return Response(status_code=403)
 
-    target_user = await db.get(User, user_id)
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРА (D-07 Фазы 11, план
+    # 11-11). Стои́т ПОСЛЕ сверки источника (она идентификатора не читает) и ДО
+    # первой выборки: величина вне колонки, ушедшая операндом запроса, роняет
+    # обработчик отказом драйвера (`DataError` на боевом PostgreSQL) — `500` там,
+    # где обязан быть ответ действия. Ветка та же, что у несуществующей строки.
+    user_usable = id_in_column(user_id)
+    target_user = await db.get(User, user_id) if user_usable else None
     if not target_user:
         return await respond(request, redirect="/admin/users")
 

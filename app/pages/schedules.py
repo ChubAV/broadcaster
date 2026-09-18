@@ -22,6 +22,11 @@ from app.services.schedule_rules import (
 )
 from app.services.schedule_service import compute_next_run_at
 from app.pages import notices
+# Контекст редактора ввозится у модуля объявлений, а не собирается здесь второй
+# выборкой: карточка после подмены и после перезагрузки обязаны приходить из
+# одного источника. Цикла импорта нет — `app/pages/ads.py` модуля расписаний не
+# импортирует (замерено при переводе правки, план 11-01).
+from app.pages.ads import _editor_context
 from app.pages.common import (
     check_is_admin,
     get_user_from_cookie,
@@ -53,7 +58,22 @@ from app.pages.htmx import respond
 # транзитных имён. Читатель, снявший его по этому разрешению, уронил бы
 # `_ad_id_from_form()` на отсутствующем имени — то есть разбор идентификатора на
 # маршруте ПОДТВЕРЖДЁННОГО УДАЛЕНИЯ расписания, в проде.
-from app.pages.identifiers import ID_MAX, IdForm, IdPath, OptionalIdForm
+#
+# ⚠️ ПОКОЛЕНИЕ (решение D-07 Фазы 11, план 11-02). ПЕРВАЯ ПОЛОВИНА ОСНОВАНИЯ ВЫШЕ
+# ИСЧЕРПАНА: `_ad_id_from_form()` сверяется с колонкой помощником `id_in_column`,
+# и в исполняемом коде этого файла `ID_MAX` не зовётся больше НИ РАЗУ. ВТОРАЯ
+# ПОЛОВИНА ДЕЙСТВУЕТ: два модуля суиты по-прежнему ввозят имя отсюда, и ввоз
+# сохранён ради них — снимать его можно только вместе с переводом их ввоза на
+# `app/pages/identifiers.py`. Ограниченные псевдонимы `IdPath`/`IdForm`/
+# `OptionalIdForm` из ввоза сняты: их потребители в этом файле переведены на
+# POST-псевдонимы.
+from app.pages.identifiers import (
+    ID_MAX,  # noqa: F401 — сохранённый вход для двух модулей суиты (см. выше)
+    OptionalPostIdForm,
+    PostIdForm,
+    PostIdPath,
+    id_in_column,
+)
 
 # Определение полноты живёт в НЕЙТРАЛЬНОМ модуле, от которого зависят и этот
 # слой, и JSON-API: определение одно на оба входа (D-08, WR-05). Локальное имя
@@ -90,9 +110,19 @@ RETURN_TO_EDITOR = "editor"
 # самостоятельные объявления: собственная копия ЧИСЛА границы в соседнем
 # файле разошлась бы с первой молча — тот самый класс отказа, за который фаза
 # получила круги ревизии 3, 4 и 5.
-ScheduleIdPath = IdPath
-AdIdForm = IdForm
-AccountIdForm = OptionalIdForm
+#
+# ⚠️ ПОКОЛЕНИЕ (решение D-07 Фазы 11, план 11-02; абзацы выше не стираются —
+# идиома D-30/D-32). Три имени теперь псевдонимы POST-ПСЕВДОНИМОВ БЕЗ ГРАНИЦЫ
+# ФРЕЙМВОРКА: все маршруты файла, их несущие, — POST, и форму отказа на величине
+# вне колонки выбирает класс действия, а не фреймворк. Граница не ослаблена, а
+# перенесена: первое чтение каждого параметра в теле обработчика — аргумент
+# `id_in_column`, стоящий ДО любого запроса, и величина вне колонки идёт ТОЙ ЖЕ
+# веткой, что «записи нет / запись чужая». Утверждение «граница стоит на
+# границе приложения» для этих входов ОПРОВЕРГНУТО; ЧИСЛО по-прежнему живёт
+# одно — в `app/pages/identifiers.py`.
+ScheduleIdPath = PostIdPath
+AdIdForm = PostIdForm
+AccountIdForm = OptionalPostIdForm
 
 # Исход проверки владения. Их ТРИ, а не два, потому что отказ по аккаунту и
 # отказ по объявлению — разные события: в первом объявление ПОДТВЕРЖДЕНО своим,
@@ -396,7 +426,10 @@ def _ad_id_from_form(form_data) -> int | None:
         value = int(form_data.get("ad_id"))
     except (TypeError, ValueError):
         return None
-    if value < 1 or value > ID_MAX:
+    # Сверка с колонкой — тем же помощником, что и у обязательных входов
+    # маршрутов (D-07 Фазы 11: один на проект); прежде здесь стояла своя сверка
+    # с `ID_MAX`, и две формы одной проверки разошлись бы молча.
+    if not id_in_column(value):
         return None
     return value
 
@@ -440,6 +473,16 @@ def _editor_url(
 
     Без признака поведение прежнее — сводный список: сводная страница
     продолжает работать ровно так, как работала.
+
+    ⚠️ ПОКОЛЕНИЕ ТРЕТЬЕ (Фаза 11, планы 11-01…11-05). Прежняя редакция говорила
+    о ТРЁХ ВЫЗЫВАЮЩИХ, одевавших этот адрес в перенаправление; она была верна
+    для дерева, на котором писалась, и потому не вычёркивается (идиома
+    D-30/D-32). ДЕЙСТВУЮЩЕЕ УТВЕРЖДЕНИЕ: правка, тумблер и создание расписания
+    переведены на слой ответа, одевать адрес в перенаправление больше некому, и
+    сама функция отдаёт СТРОКУ обоим транспортам — путь деградации получает её
+    перенаправлением слоя ответа, путь htmx — заголовком перехода. Свойство «оба
+    адреса собраны ОДНИМ кодом» от этого не ослабло, а усилилось: теперь их
+    собирает не только один код, но и один вызов.
     """
     if returns_to_editor and ad_id is not None:
         url = f"/ads/{ad_id}/edit"
@@ -447,28 +490,6 @@ def _editor_url(
             url += f"?sched={schedule_id}#sched-{schedule_id}"
         return url
     return "/schedules"
-
-
-def _editor_redirect(form_data, ad_id: int | None, schedule_id: int | None = None):
-    """Куда вернуть пользователя после правки расписания.
-
-    ⚠️ АДРЕС ЗДЕСЬ БОЛЬШЕ НЕ СОБИРАЕТСЯ: он живёт в `_editor_url`, и эта функция
-    только одевает его в перенаправление (план 10-01). Три вызывающих —
-    создание, правка и тумблер расписания — не тронуты ни на символ: они
-    остаются на прежнем пути деградации, потому что на слой ответа их переводит
-    не эта фаза.
-
-    Довод T-02-23 переехал в докстринг `_editor_url` и остался верным дословно.
-
-    ⚠️ ПРИЗНАК ВОЗВРАТА ВЫЧИСЛЯЕТСЯ ЗДЕСЬ И УЕЗЖАЕТ В СБОРКУ АДРЕСА ПАРАМЕТРОМ
-    (`WR-01`, ревизия 2026-09-04). Выражение — то же самое, каким его считает
-    обработчик удаления, и литерал значения второй раз не выписывается: он
-    берётся у константы признака, объявленной в модуле ровно один раз.
-    """
-    returns_to_editor = form_data.get("return_to") == RETURN_TO_EDITOR
-    return RedirectResponse(
-        url=_editor_url(returns_to_editor, ad_id, schedule_id), status_code=302
-    )
 
 
 async def _ad_has_a_schedule(db: AsyncSession, user_id: int, ad_id: int | None) -> bool:
@@ -500,10 +521,27 @@ async def _ad_has_a_schedule(db: AsyncSession, user_id: int, ad_id: int | None) 
 async def _ad_schedule_count(db: AsyncSession, user_id: int, ad_id: int | None) -> int:
     """Число расписаний объявления ВЛАДЕЛЬЦА — то, которое печатает линейка.
 
-    Скоуп тот же и по той же причине, что у предиката выше. Функция исполняется
-    ТОЛЬКО внутри отложенной сборки фрагмента (IN-03): на ветке перехода
-    разметка не собирается вовсе, и запрос, чей результат немедленно
-    выбрасывается, там не нужен.
+    Скоуп тот же и по той же причине, что у предиката выше.
+
+    ⚠️ ПРЕЖНЯЯ ФОРМУЛИРОВКА ОПРОВЕРГНУТА И ОСТАВЛЕНА НАЗВАННОЙ, А НЕ СТЁРТОЙ
+    (идиома D-30/D-32). Она гласила: «Функция исполняется ТОЛЬКО внутри
+    отложенной сборки фрагмента (IN-03): на ветке перехода разметка не
+    собирается вовсе, и запрос, чей результат немедленно выбрасывается, там не
+    нужен». Утверждение было верно, пока вызывающий был один — удаление
+    расписания.
+
+    ЧЕМ ОПРОВЕРГНУТА: планом 11-05. У СОЗДАНИЯ расписания этот счёт выбирает
+    саму форму ответа — единица означает «было ноль», то есть отсутствие
+    контейнера вставки на экране, — и потому стоит ДО слоя ответа и исполняется
+    на ОБОИХ транспортах. Спросить позже нельзя: отложенная сборка зовётся уже
+    после того, как фрагмент выбран.
+
+    ⚠️ ГРАНИЦА IN-03 ПРИ ЭТОМ НЕ СДВИНУЛАСЬ, И ЭТО ЗАМЕР, А НЕ УСПОКОЕНИЕ.
+    Правило `test_the_degraded_path_runs_none_of_the_deferred_reads`
+    (tests/test_pages/test_editor_schedules.py) считает запросы ОДНОГО
+    обработчика — УДАЛЕНИЯ — на одном пути, и у него эта функция по-прежнему
+    исполняется только внутри отложенной сборки. Цена нового вызывающего названа
+    у него самого: один счётный запрос на пути деградации создания.
     """
     if ad_id is None:
         return 0
@@ -624,7 +662,13 @@ async def _owns_ad(db: AsyncSession, user_id: int, ad_id: int) -> bool:
 
 
 async def _ownership_verdict(
-    db: AsyncSession, user_id: int, ad_id: int, account_id: int | None
+    db: AsyncSession,
+    user_id: int,
+    ad_id: int,
+    account_id: int | None,
+    *,
+    ad_usable: bool = True,
+    account_usable: bool = True,
 ) -> str:
     """Владение объявлением и аккаунтом мессенджера — с РАЗЛИЧИМЫМ исходом.
 
@@ -638,10 +682,22 @@ async def _ownership_verdict(
     `account_id` в схеме nullable с `ON DELETE SET NULL` (issue #35): пустое
     значение — законное состояние отвязанного расписания, поэтому проверка
     владения применяется только к непустому значению.
+
+    ⚠️ ПРИЗНАКИ ГОДНОСТИ ВЕЛИЧИНЫ (D-07 Фазы 11, план 11-02). `ad_usable` и
+    `account_usable` вычисляет ОБРАБОТЧИК помощником `id_in_column` первым
+    использованием параметра; здесь они только выбирают исход. Негодное
+    объявление даёт отказ по объявлению БЕЗ запроса; негодный аккаунт — отказ по
+    аккаунту ПОСЛЕ подтверждения своего объявления, и тоже без запроса по
+    аккаунту: величина вне колонки не уходит ни в одну выборку, а исход тот же,
+    что у чужого аккаунта.
     """
+    if not ad_usable:
+        return OWNERSHIP_AD_DENIED
     if not await _owns_ad(db, user_id, ad_id):
         return OWNERSHIP_AD_DENIED
 
+    if not account_usable:
+        return OWNERSHIP_ACCOUNT_DENIED
     if account_id is None:
         return OWNERSHIP_OK
 
@@ -654,22 +710,6 @@ async def _ownership_verdict(
         )
     ).scalar_one_or_none()
     return OWNERSHIP_OK if own_account is not None else OWNERSHIP_ACCOUNT_DENIED
-
-
-def _editor_error_redirect(ad_id: int, notice: str) -> RedirectResponse:
-    """Вернуть пользователя В РЕДАКТОР своего объявления с кодом исхода.
-
-    Адрес строится из `ad_id` ПОДТВЕРЖДЁННОЙ записи — тем же способом, что и в
-    `_editor_redirect`: значение поля формы в адрес не попадает ни при каких
-    условиях (T-02-23).
-
-    ⚠️ СВОБОДНОГО ЗНАЧЕНИЯ В АДРЕСЕ НЕ ОСТАЛОСЬ ВОВСЕ (T-08-27). Прежде сюда
-    приезжала строка-признак, и «она всегда из перечня выше» держалось
-    дисциплиной вызывающих. Теперь оба вызывающих подают КОНСТАНТУ ЗАКРЫТОГО
-    РЕЕСТРА, а сам код сверяется реестром на стороне отрисовки: незнакомое
-    значение не рисует ничего.
-    """
-    return RedirectResponse(url=f"/ads/{ad_id}/edit?notice={notice}", status_code=302)
 
 
 def _summary_query(user_id: int):
@@ -762,7 +802,13 @@ def _build_schedule_items(result, user, tz, group_names=None):
 @router.get("/schedules/partial", response_class=HTMLResponse)
 async def schedules_partial(
     request: Request,
-    offset: int = Query(0, ge=0),
+    # ⚠️ КУРСОР ЕСТЬ ИДЕНТИФИКАТОР, И ЕГО ВЕРХНЯЯ ГРАНИЦА ЕСТЬ ГРАНИЦА КОЛОНКИ,
+    # А НЕ УДОБСТВО. Значение уезжает ОПЕРАНДОМ СРАВНЕНИЯ SQL по колонке
+    # идентификатора (`Schedule.id > after_id` ниже по телу) — ровно тем же
+    # путём, каким уезжает идентификатор адреса. Форма записи взята у соседнего
+    # раздела дословно (`app/pages/account_groups.py::account_groups_partial`):
+    # две формы одной границы разъехались бы молча.
+    after_id: int | None = Query(None, ge=1, le=ID_MAX),
     limit: int = Query(PAGE_SIZE, ge=1, le=100),
     channel: str | None = Query(None),
     state: str | None = Query(None),
@@ -784,9 +830,29 @@ async def schedules_partial(
     time_ids = await _time_matching_ids(db, user.id, search) if search else []
 
     query = _apply_filters(_summary_query(user.id), channel, state, search, time_ids)
-    result = await db.execute(
-        query.order_by(Schedule.id).offset(offset).limit(limit + 1)
-    )
+
+    # КЛЮЧЕВОЙ КУРСОР ВМЕСТО СМЕЩЕНИЯ (D-11 Фазы 11; ветвь `keyset`, выбранная
+    # владельцем в плане 09-13 для ТОГО ЖЕ класса отказа). Порция добирает
+    # строки СТРОГО БОЛЬШЕ ключа последней отрисованной, а не пропускает
+    # объявленное клиентом число строк.
+    #
+    # ⚠️ ОСНОВАНИЕ СНЯТО С ЭКРАНА, А НЕ ИЗ АНАЛОГИИ: список фильтруется по
+    # состоянию, и фрагментный тумблер под этим фильтром ВЫВОДИТ строку из
+    # выдачи. Смещение отсчитывает порядковый номер по СЕГОДНЯШНЕЙ выдаче,
+    # поэтому следующая порция по адресу, вычисленному ДО нажатия, пропускала
+    # ровно одну строку — дословно CR-01 Фазы 9. Ключ сдвигом выдачи не
+    # двигается, и класс отказа становится НЕВЫРАЗИМЫМ формой контракта.
+    #
+    # Сортировка по `Schedule.id` объявлена ниже и является ПРЕДУСЛОВИЕМ этой
+    # формы: сравнение по ключу без порядка по тому же ключу теряло бы строки.
+    #
+    # ⚠️ ПОДДЕЛАННЫЙ КЛЮЧ СУЖАЕТ ВЫБОРКУ, НО НЕ ОТМЕНЯЕТ ОГРАНИЧЕНИЯ ВЛАДЕЛЬЦЕМ
+    # (форма T-09-13-01): связка `Ad.user_id` стои́т в `_summary_query` и этой
+    # веткой не трогается — клиент двигает СВОЙ СОБСТВЕННЫЙ документ и чужих
+    # строк не открывает.
+    if after_id is not None:
+        query = query.where(Schedule.id > after_id)
+    result = await db.execute(query.order_by(Schedule.id).limit(limit + 1))
     rows = list(result)
     has_next = len(rows) > limit
     page = rows[:limit]
@@ -799,7 +865,10 @@ async def schedules_partial(
             "user": user,
             "schedules": schedules,
             "has_next": has_next,
-            "next_offset": offset + limit,
+            # Ключ ПОСЛЕДНЕЙ ОТРИСОВАННОЙ строки, а не следующий порядковый
+            # номер: строки — кортежи выдачи, поэтому идентификатор берётся у
+            # `page[-1].Schedule`, а не у самой строки кортежа.
+            "next_after_id": page[-1].Schedule.id if page else None,
             "filter_params": _filter_params(channel, state, search),
         },
     )
@@ -854,7 +923,10 @@ async def schedules_list(
             "is_admin": check_is_admin(user, settings),
             "schedules": schedules,
             "has_next": has_next,
-            "next_offset": PAGE_SIZE,
+            # Ключ последней строки ПЕРВОЙ страницы — тот же смысл и тот же
+            # способ, что у порции выше (D-11). Прежде здесь стоял размер
+            # страницы: он был верен ровно до первого тумблера под фильтром.
+            "next_after_id": page[-1].Schedule.id if page else None,
             "active_page": "schedules",
             "total": total,
             "filters_active": filters_active,
@@ -911,9 +983,38 @@ async def schedules_create(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Создание расписания в редакторе объявления — на слое ответа (Фаза 11, план 11-05).
+
+    ⚠️ СОБСТВЕННОГО ПЕРЕНАПРАВЛЕНИЯ У ОБРАБОТЧИКА НЕТ НИ В ОДНОЙ ВЕТКЕ (G-2).
+    Форму ответа выбирает слой письма: без htmx человек получает прежнее
+    перенаправление на прежний адрес, с htmx — либо карточку для вставки в
+    список (действие оставляет экран), либо заголовок перехода (D-02, D-05).
+    Имена прежних помощников-перенаправлений здесь НЕ набраны: их отсутствие в
+    модуле проверяется грепом, и докстринг, назвавший их дословно, удовлетворил
+    бы греп сам.
+
+    ⚠️ РАЗВИЛКА ФОРМЫ ОТВЕТА СТОИТ НА «БЫЛО НОЛЬ», А НЕ НА ТРАНСПОРТЕ. При
+    пустом до этого запроса списке контейнера вставки в документе нет вовсе
+    (ветка пустого состояния `ads/form.html`), и фрагменту некуда приземлиться —
+    такой исход уезжает переходом на ТОТ ЖЕ адрес, что и путь деградации (D-05).
+    Признак htmx обработчик не читает: его читает слой ответа, и единственность
+    этого чтения — свойство вехи.
+
+    Вердикт владения стоит ДО записи и ДО развилки транспорта и не меняется:
+    заголовок запроса меняет только ФОРМУ ответа, но не то, что человеку
+    позволено (T-11-10). То, ЧТО обработчик пишет в базу, переводом не тронуто
+    ни на символ.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
+
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ПАРАМЕТРОВ (D-07 Фазы 11, план
+    # 11-02). Признаки вычисляются ДО любого запроса и уезжают в вердикт владения:
+    # негодное объявление — ветка чужого объявления, негодный аккаунт — ветка
+    # недоступного аккаунта, и ни одна величина вне колонки в выборку не уходит.
+    ad_usable = id_in_column(ad_id)
+    account_usable = id_in_column(account_id, optional=True)
 
     # Владение объявлением и аккаунтом проверяется запросом, а не последующим
     # `if`, — по образцу проверки групп ниже. `Schedule` не имеет собственного
@@ -929,11 +1030,25 @@ async def schedules_create(
     # чего. Своё объявление при недоступном аккаунте — возврат в этот самый
     # редактор с объяснением: отказ по данным не имеет права быть навигацией,
     # уносящей набранные группы, дни и времена без единого слова (WR-07).
-    verdict = await _ownership_verdict(db, user.id, ad_id, account_id)
+    verdict = await _ownership_verdict(
+        db,
+        user.id,
+        ad_id,
+        account_id,
+        ad_usable=ad_usable,
+        account_usable=account_usable,
+    )
     if verdict == OWNERSHIP_AD_DENIED:
-        return RedirectResponse(url="/schedules", status_code=302)
+        return await respond(request, redirect="/schedules")
     if verdict == OWNERSHIP_ACCOUNT_DENIED:
-        return _editor_error_redirect(ad_id, notices.SCHEDULE_ACCOUNT_GONE)
+        # Адрес строится из ПОДТВЕРЖДЁННОГО `ad_id`, код — константа закрытого
+        # реестра (T-02-23, T-08-27); склейку кода с адресом делает слой ответа,
+        # и второй сборки адреса с кодом в проекте не остаётся.
+        return await respond(
+            request,
+            redirect=f"/ads/{ad_id}/edit",
+            notice=notices.SCHEDULE_ACCOUNT_GONE,
+        )
 
     form_data = await request.form()
     # Фильтрация ДО приведения типов и ДО вычисления следующего запуска:
@@ -988,7 +1103,78 @@ async def schedules_create(
     db.add(schedule)
     await db.commit()
     await db.refresh(schedule)
-    return _editor_redirect(form_data, ad_id, schedule.id)
+
+    # ПРИЗНАК ВОЗВРАТА ЧИТАЕТСЯ ОДИН РАЗ и участвует в обоих решениях — в сборке
+    # адреса и в выборе формы ответа (то же выражение, что у правки, `WR-01`).
+    returns_to_editor = form_data.get("return_to") == RETURN_TO_EDITOR
+    if not returns_to_editor:
+        # На сводном списке карточек редактора нет: фрагменту некуда
+        # приземлиться — то же основание, что у ветки `WR-01` удаления.
+        return await respond(request, redirect="/schedules")
+
+    screen_url = _editor_url(True, ad_id, schedule.id)
+
+    # ЧИСЛО ПОСЛЕ ЗАПИСИ РЕШАЕТ ФОРМУ ОТВЕТА: единица означает «было ноль».
+    # ⚠️ ЗАПРОС ИСПОЛНЯЕТСЯ НА ОБОИХ ТРАНСПОРТАХ, И ЭТО НАЗВАННАЯ ЦЕНА, А НЕ
+    # НЕДОСМОТР. Развилка стоит ДО слоя ответа, потому что решает она не «как
+    # отвечать», а «есть ли на экране контейнер вставки»; спросить об этом
+    # позже, внутри отложенной сборки, нельзя — сборка зовётся только тогда,
+    # когда фрагмент уже выбран. Прочесть же признак htmx здесь значило бы
+    # завести ВТОРОЕ чтение признака в приложении, а единственность этого
+    # чтения — свойство вехи. Цена — один счётный запрос на пути деградации.
+    schedules_count = await _ad_schedule_count(db, user.id, ad_id)
+    if schedules_count == 1:
+        # «БЫЛО НОЛЬ» — ПЕРЕХОД (D-05). Контейнера `#sched-list` в документе нет
+        # вовсе: он живёт внутри условия «расписания есть», а пустой редактор
+        # печатает пустое состояние. Ответ фрагментом приехал бы в никуда, и
+        # рантайм не отправил бы запрос вовсе; поэтому пустое и непустое
+        # состояние по-прежнему рисует ОДИН механизм — полная страница.
+        return await respond(request, redirect=screen_url)
+
+    async def _fragment() -> HTMLResponse:
+        """Новая карточка расписания — для вставки в КОНЕЦ списка редактора.
+
+        ⚠️ ФУНКЦИЯ НУЛЬАРНАЯ И АСИНХРОННАЯ (IN-03): слой ответа делает `await
+        fragment()`, и на пути без htmx разметка не собирается вовсе — выборки
+        контекста редактора там не выполняются.
+
+        ⚠️ КОНТЕКСТ БЕРЁТСЯ У `_editor_context` ОДНОЙ ВЫБОРКОЙ НА ВСЕ ПОЛЯ — тем
+        же кодом, что рисует полную страницу редактора: карточка после вставки и
+        карточка после перезагрузки обязаны приходить из одного источника.
+        Объект карточки — строка из этой выборки, а не `schedule` выше: после
+        `commit()` его атрибуты могут быть истёкшими.
+
+        ⚠️ ЛИНЕЙКА И СВОДКА ПОЛУЧАЮТ ОДНУ ВЕЛИЧИНУ — `schedules_count` контекста
+        редактора. Второй счёт для линейки разошёлся бы со сводкой молча, и
+        человек видел бы в них РАЗНЫЕ числа до перезагрузки (гэп `G-10-6`).
+
+        ⚠️ КАРТОЧКА ПРИЕЗЖАЕТ РАСКРЫТОЙ: путь деградации приземляет человека с
+        `?sched=N`, то есть новая карточка раскрыта (D-12(а) — раскрытие есть
+        серверное состояние, а не Alpine). Панель подтверждения едет ВМЕСТЕ с
+        ней, потому что на полной странице обе принадлежат контейнеру списка.
+        """
+        ad = await _ad_row(db, user.id, ad_id)
+        editor = await _editor_context(db, ad, settings, user, schedule.id)
+        card = next(s for s in editor["schedules"] if s.id == schedule.id)
+        return HTMLResponse(
+            templates.env.get_template(
+                "ads/partials/sched_create_response.html"
+            ).render(
+                s=card,
+                ad=ad,
+                accounts=editor["accounts"],
+                groups=editor["groups"],
+                user=user,
+                expanded_id=editor["expanded_schedule_id"],
+                inactive_group_ids=editor["inactive_group_ids"],
+                schedules_count=editor["schedules_count"],
+                editor=editor,
+            )
+        )
+
+    # `notice` НЕ передаётся: плашки на успешное создание нет — исход виден
+    # появившейся карточкой (D-03 Фазы 10, REQUIREMENTS Out of Scope).
+    return await respond(request, redirect=screen_url, fragment=_fragment)
 
 
 @router.post("/schedules/{schedule_id}/edit")
@@ -1002,34 +1188,77 @@ async def schedules_update(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Правка расписания в редакторе объявления — на слое ответа (Фаза 11, план 11-01).
+
+    ⚠️ СОБСТВЕННОГО ПЕРЕНАПРАВЛЕНИЯ У ОБРАБОТЧИКА НЕТ НИ В ОДНОЙ ВЕТКЕ (G-2).
+    Форму ответа выбирает слой письма: без htmx человек получает прежнее
+    перенаправление на прежний адрес, с htmx — фрагмент карточки (карточка
+    остаётся на экране) либо заголовок перехода (исход уводит с экрана, D-06).
+    Имена прежних помощников-перенаправлений здесь НЕ набраны: их отсутствие в
+    теле обработчика проверяется грепом, и докстринг, назвавший их дословно,
+    удовлетворил бы греп сам.
+
+    Выборка со связью `Ad.user_id` и вердикт владения стоят ДО развилки
+    транспорта и не меняются: заголовок запроса меняет только ФОРМУ ответа, но
+    не то, что человеку позволено (T-11-01). То, ЧТО обработчик пишет в базу,
+    переводом не тронуто ни на символ.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
-    result = await db.execute(
-        select(Schedule)
-        .join(Ad, Schedule.ad_id == Ad.id)
-        .where(Schedule.id == schedule_id, Ad.user_id == user.id)
-    )
-    schedule = result.scalar_one_or_none()
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ ТРЁХ ПАРАМЕТРОВ (D-07 Фазы 11,
+    # план 11-02). Идентификатор расписания вне колонки не ищется вовсе и идёт
+    # ТОЙ ЖЕ веткой «записи нет», что и отсутствующий: строки с ним нет ни на
+    # одном драйвере, а выборка с ним на PostgreSQL дала бы `DataError`.
+    schedule_usable = id_in_column(schedule_id)
+    ad_usable = id_in_column(ad_id)
+    account_usable = id_in_column(account_id, optional=True)
+
+    schedule = None
+    if schedule_usable:
+        result = await db.execute(
+            select(Schedule)
+            .join(Ad, Schedule.ad_id == Ad.id)
+            .where(Schedule.id == schedule_id, Ad.user_id == user.id)
+        )
+        schedule = result.scalar_one_or_none()
     if not schedule:
         # Записи нет ЛИБО она чужая — исход один, различить их отсюда нельзя и
         # не нужно. Но если объявление из тела подтверждено своим, пользователя
         # можно вернуть в ЕГО редактор с объяснением: о чужих записях это не
         # сообщает ничего, а правки перестают исчезать молча (WR-07).
-        if await _owns_ad(db, user.id, ad_id):
-            return _editor_error_redirect(ad_id, notices.SCHEDULE_AD_MISSING)
-        return RedirectResponse(url="/schedules", status_code=302)
+        # Адрес строится из ПОДТВЕРЖДЁННОГО `ad_id`, код — константа закрытого
+        # реестра (T-02-23, T-08-27); склейку кода с адресом делает слой ответа.
+        # Негодное объявление в выборку не уходит: ветка сводного списка.
+        if ad_usable and await _owns_ad(db, user.id, ad_id):
+            return await respond(
+                request,
+                redirect=f"/ads/{ad_id}/edit",
+                notice=notices.SCHEDULE_AD_MISSING,
+            )
+        return await respond(request, redirect="/schedules")
 
     # Владение самим расписанием проверено выше, но `ad_id` и `account_id`
     # приходят формой заново: без этой проверки своё расписание переставляется на
     # чужое объявление и чужой аккаунт (CR-01). Проверка стоит до первой записи
     # в модель, иначе отказ оставил бы запись частично изменённой.
-    verdict = await _ownership_verdict(db, user.id, ad_id, account_id)
+    verdict = await _ownership_verdict(
+        db,
+        user.id,
+        ad_id,
+        account_id,
+        ad_usable=ad_usable,
+        account_usable=account_usable,
+    )
     if verdict == OWNERSHIP_AD_DENIED:
-        return RedirectResponse(url="/schedules", status_code=302)
+        return await respond(request, redirect="/schedules")
     if verdict == OWNERSHIP_ACCOUNT_DENIED:
-        return _editor_error_redirect(ad_id, notices.SCHEDULE_ACCOUNT_GONE)
+        return await respond(
+            request,
+            redirect=f"/ads/{ad_id}/edit",
+            notice=notices.SCHEDULE_ACCOUNT_GONE,
+        )
 
     form_data = await request.form()
     group_ids = _clean_ints(form_data.getlist("group_ids"))
@@ -1071,7 +1300,60 @@ async def schedules_update(
             else None
         )
     await db.commit()
-    return _editor_redirect(form_data, ad_id, schedule_id)
+
+    # ПРИЗНАК ВОЗВРАТА ЧИТАЕТСЯ ОДИН РАЗ и участвует в обоих решениях — в сборке
+    # адреса и в выборе формы ответа (то же выражение, что у удаления, `WR-01`).
+    returns_to_editor = form_data.get("return_to") == RETURN_TO_EDITOR
+    screen_url = _editor_url(returns_to_editor, ad_id, schedule_id)
+
+    if not returns_to_editor:
+        # На сводном списке карточки редактора нет: фрагменту некуда
+        # приземлиться — то же основание, что у ветки `WR-01` удаления.
+        return await respond(request, redirect=screen_url)
+
+    async def _fragment() -> HTMLResponse:
+        """Подменённая карточка расписания — первым узлом тела.
+
+        ⚠️ ФУНКЦИЯ НУЛЬАРНАЯ И АСИНХРОННАЯ (IN-03): слой ответа делает `await
+        fragment()`, и на пути без htmx разметка не собирается вовсе — выборки
+        контекста редактора там не выполняются.
+
+        ⚠️ КОНТЕКСТ БЕРЁТСЯ У `_editor_context` ОДНОЙ ВЫБОРКОЙ НА ВСЕ ПОЛЯ — тем
+        же кодом, что рисует полную страницу редактора: карточка после подмены и
+        карточка после перезагрузки обязаны приходить из одного источника.
+        Объект карточки — строка из этой выборки, а не `schedule` выше: после
+        `commit()` его атрибуты могут быть истёкшими.
+
+        ⚠️ КОРНЯ ПАНЕЛИ ПОДТВЕРЖДЕНИЯ В ТЕЛЕ НЕТ И БЫТЬ НЕ МОЖЕТ (Landmine
+        CONTEXT фазы). Панель стоит СНАРУЖИ карточки; цель подмены — карточка
+        `#sched-N`, и вторая панель, приехавшая в теле, задвоилась бы в
+        документе с живой ловушкой фокуса.
+
+        ⚠️ КАРТОЧКА ПРИЕЗЖАЕТ РАСКРЫТОЙ: путь деградации приземляет человека с
+        `?sched=N`, то есть правленая карточка раскрыта (D-12(а) — раскрытие есть
+        серверное состояние, а не Alpine).
+        """
+        ad = await _ad_row(db, user.id, ad_id)
+        editor = await _editor_context(db, ad, settings, user, schedule_id)
+        card = next(s for s in editor["schedules"] if s.id == schedule_id)
+        return HTMLResponse(
+            templates.env.get_template(
+                "ads/partials/sched_card_response.html"
+            ).render(
+                s=card,
+                ad=ad,
+                accounts=editor["accounts"],
+                groups=editor["groups"],
+                user=user,
+                expanded_id=editor["expanded_schedule_id"],
+                inactive_group_ids=editor["inactive_group_ids"],
+                editor=editor,
+            )
+        )
+
+    # `notice` НЕ передаётся: плашки на успешное сохранение нет — исход виден
+    # подменённой карточкой (D-03 Фазы 10, REQUIREMENTS Out of Scope).
+    return await respond(request, redirect=screen_url, fragment=_fragment)
 
 
 @router.post("/schedules/{schedule_id}/toggle")
@@ -1081,16 +1363,59 @@ async def schedules_toggle(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Переключение расписания — на слое ответа (Фаза 11, план 11-03).
+
+    ⚠️ СОБСТВЕННОГО ПЕРЕНАПРАВЛЕНИЯ У ОБРАБОТЧИКА НЕТ НИ В ОДНОЙ ВЕТКЕ (G-2).
+    Имена прежних помощников-перенаправлений здесь НЕ набраны — по основанию,
+    записанному у правки: их отсутствие в теле проверяется грепом.
+
+    ЭКРАНОВ ДВА, И УЗНАЁТСЯ ЭКРАН ПРИЗНАКОМ ВОЗВРАТА (D-02). Редактор шлёт его,
+    строка сводного списка — нет. В редакторе ответ на htmx — карточка `#sched-N`
+    с СЕРВЕРНЫМ состоянием; на сводном списке — СТРОКА `#schedule-row-N`, тоже с
+    серверным состоянием. Обе ветки отдают фрагмент ТОГО экрана, откуда пришла
+    форма, и перепутать их нельзя: цели чужого экрана в документе нет.
+
+    ⚠️ ПРЕЖНЯЯ РЕДАКЦИЯ АБЗАЦА ОПРОВЕРГНУТА И ОСТАВЛЕНА НАЗВАННОЙ, А НЕ СТЁРТОЙ
+    (идиома D-30/D-32). Она гласила: «на сводном списке — переход на тот же
+    адрес, что уезжает перенаправлением: фрагмент строки вместе с её разметкой
+    приносит план 11-04, а до него форма строки запросов htmx не шлёт». Это было
+    верно ДЛЯ СВОЕГО ДЕРЕВА — плана 11-03, где разметки строки под фрагмент ещё
+    не существовало; план 11-04 завёл её вместе с курсором, и обещание
+    исполнено. Адрес деградации при этом не сдвинулся ни на символ.
+
+    ⚠️ ЗАБЛОКИРОВАННОЕ ВОЗОБНОВЛЕНИЕ ОТДАЁТ КАРТОЧКУ, А НЕ МОЛЧАНИЕ (D-11,
+    D-13/D-16 Фазы 9). Браузер переключает флажок оптимистично, и только ответ с
+    неизменённым состоянием возвращает его на место.
+
+    Признак экрана выбирает ТОЛЬКО форму ответа, но не право на запись: выборка
+    со связью `Ad.user_id` стоит до развилки и не меняется (T-11-07). Признак
+    сравнивается с константой, адрес из строки формы не собирается (T-11-08).
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
-    result = await db.execute(
-        select(Schedule)
-        .join(Ad, Schedule.ad_id == Ad.id)
-        .where(Schedule.id == schedule_id, Ad.user_id == user.id)
-    )
-    schedule = result.scalar_one_or_none()
+    # ⚠️ ТЕЛО РАЗБИРАЕТСЯ ДО ЕДИНОЙ ЗАПИСИ — основание `WR-07` у удаления:
+    # разбор может поднять исключение, и пятисотка после выполненной записи
+    # неотличима от «ничего не произошло». Прежде форма читалась ПОСЛЕ коммита.
+    form_data = await request.form()
+    # ПРИЗНАК ЭКРАНА ЧИТАЕТСЯ ОДИН РАЗ и участвует в обоих решениях — в сборке
+    # адреса и в выборе формы ответа (то же выражение, что у правки и удаления).
+    returns_to_editor = form_data.get("return_to") == RETURN_TO_EDITOR
+    # Возврат несёт разворот, БЫВШИЙ до нажатия, а не идентификатор нажатой
+    # карточки: тумблер меняет состояние расписания и ничего больше.
+    expanded = _expanded_from_form(form_data)
+
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ (D-07 Фазы 11, план 11-02):
+    # идентификатор вне колонки не ищется и идёт веткой «расписание не найдено».
+    schedule = None
+    if id_in_column(schedule_id):
+        result = await db.execute(
+            select(Schedule)
+            .join(Ad, Schedule.ad_id == Ad.id)
+            .where(Schedule.id == schedule_id, Ad.user_id == user.id)
+        )
+        schedule = result.scalar_one_or_none()
     # issue #35 и D-08: НЕПОЛНОЕ расписание нельзя возобновить, пока пользователь
     # не дозаполнит его в редакторе объявления. Отвязанное после удаления
     # аккаунта — частный случай той же неполноты. Пауза активного не
@@ -1148,20 +1473,105 @@ async def schedules_toggle(
                 # называет плашка (`notices`), а не пустой возврат: человек
                 # нажал тумблер, и «ничего не произошло» без слов неотличимо от
                 # поломки кнопки.
-                return _editor_error_redirect(
-                    schedule.ad_id, notices.SCHEDULE_VALUES_OUT_OF_DOMAIN
+                #
+                # Исход уводит с экрана (D-06): код реестра едет адресом на обоих
+                # транспортах, склейку кода с адресом делает слой ответа.
+                return await respond(
+                    request,
+                    redirect=f"/ads/{schedule.ad_id}/edit",
+                    notice=notices.SCHEDULE_VALUES_OUT_OF_DOMAIN,
                 )
             schedule.is_active = True
             schedule.next_run_at = next_run
+        # Идентификатор объявления снимается ДО коммита: после него атрибуты
+        # записи могут быть истёкшими.
+        ad_id = schedule.ad_id
         await db.commit()
-    form_data = await request.form()
-    # Возврат несёт разворот, БЫВШИЙ до нажатия, а не идентификатор нажатой
-    # карточки: тумблер меняет состояние расписания и ничего больше.
-    return _editor_redirect(
-        form_data,
-        schedule.ad_id if schedule else None,
-        _expanded_from_form(form_data),
-    )
+    else:
+        ad_id = schedule.ad_id if schedule else None
+
+    if schedule is None:
+        # Записи нет ЛИБО она чужая — переход на сводный список на обоих
+        # транспортах, и различить эти два случая по ответу нельзя (D-11).
+        return await respond(request, redirect=_editor_url(returns_to_editor, None))
+
+    screen_url = _editor_url(returns_to_editor, ad_id, expanded)
+
+    if not returns_to_editor:
+
+        async def _row_fragment() -> HTMLResponse:
+            """Строка СВОДНОГО СПИСКА с серверным состоянием — одним узлом тела.
+
+            ⚠️ НУЛЬАРНАЯ И АСИНХРОННАЯ (IN-03): на пути без htmx разметка не
+            собирается и выборки этой ветки не выполняются вовсе.
+
+            ⚠️ ЭЛЕМЕНТ СТРОИТСЯ ТЕМИ ЖЕ ФУНКЦИЯМИ, ЧТО И САМ СПИСОК, — тот же
+            каркас выдачи, то же разрешение имён групп, тот же сборщик
+            элементов. Второй формы элемента не заводится: строка после подмены
+            и строка после перезагрузки обязаны приходить из одного источника,
+            а разошлись бы они МОЛЧА — обе остались бы валидной разметкой.
+
+            ⚠️ СТРОКА ПЕРЕЧИТЫВАЕТСЯ, А НЕ БЕРЁТСЯ ИЗ `schedule` ВЫШЕ: после
+            `commit()` атрибуты записи могут быть истёкшими, а выдача сводного
+            списка несёт сверх самой записи название объявления, его состояние
+            и тип мессенджера.
+
+            ⚠️ ОГРАНИЧЕНИЕ ВЛАДЕЛЬЦЕМ СТОИ́Т В САМОМ ЗАПРОСЕ (`_summary_query`
+            со связкой `Ad.user_id`), а не проверяется здесь заново: чужая
+            строка не собралась бы даже при подделанном идентификаторе
+            (T-11-39).
+            """
+            tz_name = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
+            row = (
+                await db.execute(
+                    _summary_query(user.id).where(Schedule.id == schedule_id)
+                )
+            ).first()
+            group_names = await _group_names_for(db, user.id, [row.Schedule])
+            item = _build_schedule_items(
+                [row], user, ZoneInfo(tz_name), group_names
+            )[0]
+            return HTMLResponse(
+                templates.env.get_template(
+                    "schedules/partials/schedule_row_response.html"
+                ).render(item=item, user=user)
+            )
+
+        # `notice` НЕ передаётся: плашки на успешное переключение нет — исход
+        # виден подменённой строкой (D-03 Фазы 10).
+        return await respond(request, redirect=screen_url, fragment=_row_fragment)
+
+    async def _fragment() -> HTMLResponse:
+        """Карточка расписания с серверным состоянием — первым узлом тела.
+
+        ⚠️ НУЛЬАРНАЯ И АСИНХРОННАЯ (IN-03): на пути без htmx разметка не
+        собирается и выборки контекста редактора не выполняются.
+
+        ⚠️ КОНТЕКСТ — `_editor_context`, тот же, что у правки (план 11-01), и
+        раскрытие берётся из ПРОВЕРЕННОГО им поля разворота: нажатая карточка
+        сама не разворачивается, раскрытая соседка не подменяется вовсе, потому
+        что цель подмены — `#sched-N` нажатой (D-12(а)). Объект карточки — строка
+        этой выборки, а не `schedule` выше.
+        """
+        ad = await _ad_row(db, user.id, ad_id)
+        editor = await _editor_context(db, ad, settings, user, expanded)
+        card = next(s for s in editor["schedules"] if s.id == schedule_id)
+        return HTMLResponse(
+            templates.env.get_template(
+                "ads/partials/sched_card_response.html"
+            ).render(
+                s=card,
+                ad=ad,
+                accounts=editor["accounts"],
+                groups=editor["groups"],
+                user=user,
+                expanded_id=editor["expanded_schedule_id"],
+                inactive_group_ids=editor["inactive_group_ids"],
+                editor=editor,
+            )
+        )
+
+    return await respond(request, redirect=screen_url, fragment=_fragment)
 
 
 @router.post("/schedules/{schedule_id}/delete")
@@ -1202,12 +1612,19 @@ async def schedules_delete(
     # происхождению: не читается, потому что сверка стои́т выше.
     form_data = await request.form()
 
-    result = await db.execute(
-        select(Schedule)
-        .join(Ad, Schedule.ad_id == Ad.id)
-        .where(Schedule.id == schedule_id, Ad.user_id == user.id)
-    )
-    schedule = result.scalar_one_or_none()
+    # ГРАНИЦА ВЕЛИЧИНЫ — ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ (D-07 Фазы 11, план 11-02). Она
+    # стоит НИЖЕ сверки источника и разбора тела (их порядок записан выше и не
+    # меняется) и ВЫШЕ выборки: идентификатор вне колонки не ищется и идёт веткой
+    # «строки нет». Узлы снятия фрагмента строятся из целого пути, как для
+    # любого отсутствующего идентификатора (T-10-01).
+    schedule = None
+    if id_in_column(schedule_id):
+        result = await db.execute(
+            select(Schedule)
+            .join(Ad, Schedule.ad_id == Ad.id)
+            .where(Schedule.id == schedule_id, Ad.user_id == user.id)
+        )
+        schedule = result.scalar_one_or_none()
     # Идентификатор объявления снимается ДО удаления: после него читать его уже
     # не с чего, а адрес возврата строится именно из него.
     ad_id = schedule.ad_id if schedule else None

@@ -5,6 +5,7 @@
 {% from "components/badge.html" import badge %}
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/mono.html" import mono %}
+{% from "components/form_wrapper.html" import form_wrapper %}
 {% from "billing/includes/payment_row.html" import payment_row %}
 
 {% block title %}Подписка — Broadcaster{% endblock %}
@@ -106,12 +107,23 @@
         покупателю нечего (T-05.1-22). Атрибут формы ОБЯЗАТЕЛЕН — на нём висит
         единственное правило нажимаемой высоты, и потерять его значит молча
         вернуть кнопку к 33px. При выключенных платежах гаснет КНОПКА, а не
-        витрина: цена и дата остаются, экран без них читался бы поломкой. -#}
+        витрина: цена и дата остаются, экран без них читался бы поломкой.
+        ⚠️ ПОКОЛЕНИЕ (Фаза 11, план 11-15): форма собирается `form_wrapper` БЕЗ
+        цели — ответ всегда переход (на страницу ЮKassa заголовком увода либо на
+        /billing с кодом). Макрос дополнительных атрибутов не принимает, поэтому
+        атрибут нажимаемой высоты переехал с тега формы на её ЕДИНСТВЕННУЮ
+        обёртку-предок: правило таблицы стилей адресует кнопку через предка и
+        держит высоту без правки. Имя атрибута в этом комментарии не набрано
+        намеренно — правило разметки считает его вхождения в шаблоне. Синхронизации очередью здесь нет и не будет
+        (PAY-02): повторное нажатие гасит `hx-disabled-elt` макроса, а второе
+        намерение оплаты отвергает потолок сервиса. -#}
     {% if not panel[3] %}{{ mono('Оплата не требуется', 'ok') }}
     {% elif payments_enabled %}
-    <form method="post" action="/billing/subscribe" data-plan-cta>
+    <div data-plan-cta>
+      {% call form_wrapper(action='/billing/subscribe') %}
       <button class="btn btn--primary" type="submit"><span class="btn__label">{{ panel[3] }}</span></button>
-    </form>
+      {% endcall %}
+    </div>
     {% else %}{{ mono('Оплатить доступ можно через администратора', 'warn') }}
     {% endif %}
   </div>

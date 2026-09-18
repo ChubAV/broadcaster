@@ -21,6 +21,7 @@ import pathlib
 import re
 import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 
 import pytest
 from httpx import AsyncClient
@@ -83,12 +84,34 @@ BELOW_THE_DOMAIN = "0"
 # одной величине за круг; и оно же обязано нести ОБЕ стороны стыка — граница,
 # проверенная только снаружи диапазона, зеленела бы на помощнике, отвергающем
 # ВСЁ, и границей не была бы.
+#
+# ⚠️ ПОКОЛЕНИЕ ОТОБРАЖЕНИЯ (Фаза 11, план 11-06, решение D-07; прежняя редакция
+# не стирается — идиома D-30/D-32). Здесь стояло три `VALIDATION_REFUSAL` и один
+# `MISSING_ROW_REDIRECT`, и это было ВЕРНО для дерева, на котором писалось:
+# граница величины стояла в аннотации (`IdPath`), и форму отказа выбирал
+# ФРЕЙМВОРК. ОПРОВЕРГНУТО работой: граница уехала ВНУТРЬ обработчика
+# (`id_in_column`), и величина вне колонки идёт ТОЙ ЖЕ веткой, что «записи нет /
+# запись чужая», — потому что строки с таким идентификатором нет ни на одном
+# драйвере, и сказать о ней что-либо ещё значило бы РАЗЛИЧИТЬ НЕРАЗЛИЧИМОЕ
+# (идиома неотличимости D-04 Фазы 9).
+#
+# ⚠️ ЧЕМ ТЕПЕРЬ ДЕРЖИТСЯ СТЫК, РАЗ КОД У ВСЕХ ЧЕТЫРЁХ ОДИН. Отображение с
+# ОДИНАКОВЫМ исходом на все величины само по себе границей не является: его
+# удовлетворил бы и обработчик, отвергающий ВСЁ. Стык держит АНТИВАКУУМ ниже
+# (`test_ads_delete_still_removes_a_live_advert_of_its_owner`): на ЖИВОЙ
+# величине объявление обязано ИСЧЕЗНУТЬ. Пара «все негодные → одна ветка» плюс
+# «годная → удаление» и есть проверка обеих сторон; прежде вторую сторону
+# называл `AT_THE_COLUMN`, теперь — живая строка.
 EXPECTED_OUTCOMES: dict[str, str] = {
-    ABOVE_THE_COLUMN: VALIDATION_REFUSAL,
-    BEYOND_ANY_DRIVER: VALIDATION_REFUSAL,
+    ABOVE_THE_COLUMN: MISSING_ROW_REDIRECT,
+    BEYOND_ANY_DRIVER: MISSING_ROW_REDIRECT,
     AT_THE_COLUMN: MISSING_ROW_REDIRECT,
-    BELOW_THE_DOMAIN: VALIDATION_REFUSAL,
+    BELOW_THE_DOMAIN: MISSING_ROW_REDIRECT,
 }
+
+# Форма ответа слою письма на ту же ветку: переход заголовком, тела нет (D-01).
+MISSING_ROW_LOCATION = "204"
+ADS_SCREEN = "/ads"
 
 
 async def _seed_owner_ad(db: AsyncSession) -> Ad:
@@ -136,6 +159,22 @@ async def _delete_ad(client: AsyncClient, value: str):
     )
 
 
+async def _delete_ad_over_the_write_layer(client: AsyncClient, value: str):
+    """Тот же запрос удаления, но С ПРИЗНАКОМ слоя письма.
+
+    ⚠️ ПЕРЕНАПРАВЛЕНИЯМ НЕ СЛЕДУЕМ, И ЭТО ЧАСТЬ ПРЕДМЕТА: пройденное прозрачно
+    перенаправление пришло бы сюда кодом 200 и телом чужого документа, то есть
+    спрятало бы ровно ту разницу, ради которой правило написано (основание
+    перенесено из шапки `tests/test_pages/test_htmx_post_pairs.py`).
+    """
+    return await client.post(
+        f"/ads/{value}/delete",
+        content="",
+        headers={**FORM_HEADERS, "HX-Request": "true"},
+        follow_redirects=False,
+    )
+
+
 async def _delete_outcome(client: AsyncClient, value: str) -> str:
     """СНЯТЫЙ КОД одного запроса удаления по одной величине — строкой.
 
@@ -146,37 +185,97 @@ async def _delete_outcome(client: AsyncClient, value: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_ads_delete_refuses_a_value_no_driver_can_hold_with_a_validation_refusal(
+async def test_ads_delete_sends_a_value_no_driver_can_hold_down_the_missing_row_branch(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
-    """Пункт 2 `<behavior>`: величина из двадцати шести девяток даёт `422`.
+    """Пункт 2 `<behavior>`: величина из двадцати шести девяток идёт веткой «нет строки».
 
-    ДО правки тот же запрос давал отказ ОБРАБОТЧИКА — это наблюдается прогоном,
-    а не предполагается.
+    ⚠️ ПОКОЛЕНИЕ ПРЕДМЕТА (Фаза 11, план 11-06, D-07). Прежде это правило носило
+    имя, объявлявшее предметом отказ ВАЛИДАЦИИ, и требовало `422`; требование
+    было ВЕРНО для дерева, на котором писалось: граница стояла в аннотации, и
+    форму отказа выбирал фреймворк. Имя переписано вместе с предметом — файл не
+    должен врать о том, что наблюдает. ⚠️ Прежнее имя здесь НЕ НАБРАНО дословно
+    намеренно: его отсутствие в файле проверяется грепом, и летопись, набравшая
+    его, удовлетворила бы греп сама — та же причина, по которой соседние реестры
+    называют снятые ключи словами.
+
+    ТРИ ПОКОЛЕНИЯ ОДНОГО ОТКАЗА РАЗВЕДЕНЫ, И ИСТОЧНИК У КАЖДОГО НАЗВАН — иначе
+    чужая запись читалась бы как собственный замер. До плана 10-24 тот же запрос
+    ронял ОБРАБОТЧИКА (`500`): это ЛЕТОПИСЬ (отчёт пятого круга ревизии,
+    `CR-01`), а НЕ прогон настоящего плана. С плана 10-24 он отвечал отказом
+    ВАЛИДАЦИИ (`422`) — а вот это снято ЗДЕСЬ, покрасневшим правилом настоящего
+    плана, дословно: `снято → '422'; ожидалось → '302'`. С настоящего плана
+    отвечает так же, как на несуществующий идентификатор.
+
+    Предмет не ослаблен, а СМЕЩЁН: «не 500» остаётся несущим (величина не имеет
+    права уехать операндом сравнения по колонке), а форма отказа перестала быть
+    выбором фреймворка и стала веткой обработчика.
     """
     await _seed_owner_ad(db_session)
 
     outcome = await _delete_outcome(authed_client, BEYOND_ANY_DRIVER)
 
-    assert outcome == VALIDATION_REFUSAL, (
-        "величина, не влезающая ни в один драйвер, доехала до тела обработчика "
-        f"(снято → {outcome!r}; ожидалось → {VALIDATION_REFUSAL!r}). Предмет — "
-        "граница ПРИЛОЖЕНИЯ: значение вне диапазона колонки обязано "
-        "отвергаться ДО тела обработчика, а не ронять запрос драйвером "
-        "(`CR-01` пятого круга ревизии)"
+    assert outcome == MISSING_ROW_REDIRECT, (
+        "величина, не влезающая ни в один драйвер, ответила не веткой «нет "
+        f"строки» (снято → {outcome!r}; ожидалось → {MISSING_ROW_REDIRECT!r}). "
+        "Предмет — проверка ПЕРВЫМ ИСПОЛЬЗОВАНИЕМ (D-07): значение вне "
+        "диапазона колонки обязано уходить той же веткой, что и несуществующий "
+        "идентификатор, и НЕ уезжать в запрос (отказ `500` от драйвера — "
+        "`CR-01` пятого круга ревизии — остаётся запрещённым)"
     )
 
 
 @pytest.mark.asyncio
-async def test_ads_delete_draws_the_column_boundary_on_both_of_its_sides(
+async def test_ads_delete_over_the_write_layer_lands_by_a_location_header(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Та же ветка на транспорте htmx: 204, заголовок перехода, пустое тело.
+
+    ⚠️ ПРАВИЛО ЗАВЕДЕНО НАСТОЯЩИМ ПЛАНОМ, И БЕЗ НЕГО ПЕРЕНОС ГРАНИЦЫ БЫЛ БЫ
+    ПРОВЕРЕН ВПОЛОВИНУ. Пока величину отвергал фреймворк, у отказа не было ни
+    заголовка перехода, ни возможности его получить — ровно расхождение с D-01,
+    записанное окном 51. Теперь величина доходит до тела, и ответ обязан быть
+    ПОСИМВОЛЬНО тем же, что у несуществующей строки, на ОБОИХ транспортах:
+    ответ, различимый по величине, выдавал бы карту занятых идентификаторов
+    перебором (T-10-07).
+    """
+    await _seed_owner_ad(db_session)
+
+    for value in (ABOVE_THE_COLUMN, BEYOND_ANY_DRIVER):
+        response = await _delete_ad_over_the_write_layer(authed_client, value)
+
+        assert str(response.status_code) == MISSING_ROW_LOCATION, (
+            f"величина {value} на транспорте htmx ответила "
+            f"{response.status_code}, а не {MISSING_ROW_LOCATION}: отказ "
+            "валидации фреймворка заголовка перехода не несёт, и панель "
+            "подтверждения осталась бы открытой без объяснения"
+        )
+        assert response.headers.get("HX-Location") == ADS_SCREEN, (
+            f"величина {value}: заголовок перехода "
+            f"{response.headers.get('HX-Location')!r} не совпал с адресом "
+            f"деградации {ADS_SCREEN!r}"
+        )
+        assert response.content == b"", (
+            f"величина {value}: у ответа 204 появилось тело"
+        )
+
+
+@pytest.mark.asyncio
+async def test_ads_delete_answers_every_unusable_value_as_it_answers_a_missing_row(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
     """СКВОЗНОЕ правило одного маршрута: отображение сличается ЦЕЛИКОМ.
 
-    Четыре величины и обе стороны стыка: `ID_MAX` годной величиной не
-    отвергается, `ID_MAX + 1` отвергается. Правило, отвергающее ВСЁ, дало бы
-    зелёный на трёх строках из четырёх и покраснело бы на четвёртой — именно
-    поэтому строка границы стои́т в том же отображении, а не в соседнем правиле.
+    ⚠️ ПОКОЛЕНИЕ ИМЕНИ И ПРЕДМЕТА (Фаза 11, план 11-06, D-07). Правило звалось
+    `…_draws_the_column_boundary_on_both_of_its_sides` и наблюдало РАЗНЫЕ коды по
+    разные стороны границы — верно для дерева, где отказ ставил фреймворк.
+    Сегодня обе стороны отвечают ОДИНАКОВО, и имя, обещающее видимую границу,
+    врало бы о предмете: наблюдается теперь НЕОТЛИЧИМОСТЬ.
+
+    Четыре величины сличаются одним отображением, потому что правило,
+    останавливающееся на первой несогласной, чинилось бы по одной величине за
+    круг. Вторую сторону стыка держит антивакуум ниже: помощник, отвергающий
+    ВСЁ, удовлетворил бы это правило и провалил бы тот.
     """
     await _seed_owner_ad(db_session)
 
@@ -210,6 +309,15 @@ async def test_ads_delete_still_removes_a_live_advert_of_its_owner(
     Граница, отвергающая ВСЁ, дала бы те же три отказа валидации и объявила бы
     себя границей. Здесь подаётся ЖИВАЯ величина, и объявление обязано
     исчезнуть.
+
+    ⚠️ ЦЕНА ЭТОГО ПРАВИЛА ВЫРОСЛА (Фаза 11, план 11-06, D-07), и абзац выше
+    оставлен дословно, потому что он верен: он назвал предмет, а не число.
+    Прежде вторую сторону стыка держали ДВА правила — это и строка `AT_THE_COLUMN`
+    отображения, отвечавшая ИНЫМ кодом, чем три соседние. Теперь все четыре
+    негодные величины отвечают ОДИНАКОВО, и отображение само по себе границей
+    быть перестало: его удовлетворил бы обработчик, отвечающий «нет строки» на
+    ВСЁ, включая живое объявление владельца. Единственное, что отличает границу
+    от такого обработчика, — исчезнувшая строка ниже.
     """
     ad = await _seed_owner_ad(db_session)
 
@@ -474,6 +582,18 @@ class _BoundedEntry:
     матрицы зеленела бы, не сказав ни слова о границе идентификатора, а
     антивакуум на живой величине краснел бы по той же причине. Поле подаётся
     затем, чтобы отказ мог прийти РОВНО от границы.
+
+    ⚠️ `outside` — ИСХОД НА ВЕЛИЧИНЕ ВНЕ КОЛОНКИ, И У ВХОДА НА POST-ПСЕВДОНИМЕ
+    ОН НЕ `422` (решение D-07 Фазы 11). Граница такого входа стои́т ВНУТРИ
+    обработчика (`id_in_column`), и величина вне колонки идёт ВЕТКОЙ «ЗАПИСИ НЕТ»
+    этого обработчика — кодом и адресом перехода пути деградации, склеенными
+    через пробел (`"302 /admin/users"`). Строка при этом остаётся в матрице, а
+    не снимается, как снимал её план 11-06: наблюдается тот же предмет (величина
+    не роняет обработчик и не доезжает до выборки), сменилась только ФОРМА
+    ответа. Адрес перехода деградации сохраняется последующими переводами
+    транспорта (планы 11-12…11-14 трогают путь htmx), поэтому строка не
+    переписывается при каждом из них. По умолчанию — `422`: вход с границей на
+    сигнатуре.
     """
 
     key: str
@@ -483,10 +603,21 @@ class _BoundedEntry:
     live: str
     identity: str = "user"
     body: str = ""
+    outside: str = VALIDATION_REFUSAL
 
 
 BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
     # --- app/pages/account_groups.py: семь идентификаторов пути и курсор ---
+    #
+    # ⚠️ ЧЕТЫРЕ ИЗМЕНЯЮЩИХ ВХОДА ЗДЕСЬ — НА POST-ПСЕВДОНИМЕ (Фаза 11, план 11-19,
+    # D-07). У тумблера и удаления НЕТ ветки «аккаунта нет»: ветка «нет» у обоих
+    # одна — тройной `WHERE` не нашёл строки, — и адрес её собирается из
+    # `account_id` ПУТИ (`_screen_url`). Поэтому `outside` несёт подстановку
+    # `{value}`: величина вне колонки приземляется ровно туда, куда приземлился
+    # бы несуществующий аккаунт с той же записью адреса, — посимвольно, а не
+    # «на список аккаунтов», который выдал бы ветку различием заголовка. У
+    # удаления с живым аккаунтом негодный `group_id` идёт той же дорогой, что
+    # несуществующая группа: выдача не опустела, путь деградации — 302 на экран.
     _BoundedEntry(
         key="app/pages/account_groups.py::GET /accounts/{account_id}/groups → адрес account_id",
         method="GET",
@@ -526,6 +657,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{value}/groups/{group}/toggle",
         parameter="account_id",
         live="account",
+        outside="302 /accounts/{value}/groups",
     ),
     _BoundedEntry(
         key="app/pages/account_groups.py::POST /accounts/{account_id}/groups/{group_id}/toggle → адрес group_id",
@@ -533,6 +665,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{account}/groups/{value}/toggle",
         parameter="group_id",
         live="group",
+        outside="302 /accounts/{account}/groups",
     ),
     _BoundedEntry(
         key="app/pages/account_groups.py::POST /accounts/{account_id}/groups/{group_id}/delete → адрес account_id",
@@ -540,6 +673,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{value}/groups/{group}/delete",
         parameter="account_id",
         live="account",
+        outside="302 /accounts/{value}/groups",
     ),
     _BoundedEntry(
         key="app/pages/account_groups.py::POST /accounts/{account_id}/groups/{group_id}/delete → адрес group_id",
@@ -547,8 +681,17 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{account}/groups/{value}/delete",
         parameter="group_id",
         live="group",
+        outside="302 /accounts/{account}/groups",
     ),
     # --- app/pages/accounts.py: четыре идентификатора пути ---
+    #
+    # ⚠️ ТРИ ИЗМЕНЯЮЩИХ ВХОДА ЗДЕСЬ — НА POST-ПСЕВДОНИМЕ (Фаза 11, план 11-17,
+    # D-07): граница уехала внутрь обработчиков первым использованием параметра
+    # (у удаления — после сверки источника, она идентификатора не читает; у
+    # синхронизации групп — ДО занятия внутрипроцессной заявки). Исход на величине
+    # вне колонки — ветка «аккаунта нет» каждого (`outside`, переход на список
+    # аккаунтов), и отличить её от несуществующей строки нельзя по построению.
+    # Опрос статуса остаётся GET с границей на сигнатуре.
     _BoundedEntry(
         key="app/pages/accounts.py::GET /accounts/{account_id}/sync-status → адрес account_id",
         method="GET",
@@ -562,6 +705,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{value}/retry-sync",
         parameter="account_id",
         live="account",
+        outside="302 /accounts",
     ),
     _BoundedEntry(
         key="app/pages/accounts.py::POST /accounts/{account_id}/sync-groups → адрес account_id",
@@ -569,6 +713,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{value}/sync-groups",
         parameter="account_id",
         live="account",
+        outside="302 /accounts",
     ),
     _BoundedEntry(
         key="app/pages/accounts.py::POST /accounts/{account_id}/delete → адрес account_id",
@@ -576,6 +721,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/accounts/{value}/delete",
         parameter="account_id",
         live="account",
+        outside="302 /accounts",
     ),
     # --- app/pages/ads.py: два идентификатора пути и признак раскрытого расписания ---
     #
@@ -604,14 +750,23 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="sched",
         live="schedule",
     ),
-    _BoundedEntry(
-        key="app/pages/ads.py::POST /ads/{ad_id}/edit → адрес ad_id",
-        method="POST",
-        address="/ads/{value}/edit",
-        parameter="ad_id",
-        live="ad",
-    ),
+    # ⚠️ ПРАВКИ ОБЪЯВЛЕНИЯ (`POST /ads/{ad_id}/edit`) ЗДЕСЬ БОЛЬШЕ НЕТ, И ЭТО
+    # СНЯТИЕ РАБОТОЙ, А НЕ ПРОПУСК (Фаза 11, план 11-06, D-07). Матрица наблюдает
+    # входы, чью негодную величину отвергает ГРАНИЦА ПРИЛОЖЕНИЯ отказом
+    # ВАЛИДАЦИИ; у этого входа граница уехала ВНУТРЬ обработчика
+    # (`id_in_column`), и негодная величина идёт теперь веткой «объявления нет»
+    # — 302 на путь деградации, 204 с заголовком перехода на слое письма.
+    # Оставленная строка требовала бы от входа `422`, то есть краснела бы на
+    # ВЕРНОМ дереве и чинилась бы возвратом границы в аннотацию.
+    # ⚠️ ГДЕ ЭТОТ ВХОД НАБЛЮДАЕТСЯ ТЕПЕРЬ, НАЗВАНО, А НЕ ОСТАВЛЕНО ЧИТАТЕЛЮ:
+    # статически — правилом «проверка первым использованием» ниже
+    # (`test_every_post_identifier_is_checked_before_its_first_use`), поведением
+    # — парой транспортов `tests/test_pages/test_htmx_post_pairs.py`
+    # («правка объявления по адресу — идентификатор вне колонки»). Тем же
+    # способом план 11-02 снял отсюда семь входов модуля расписаний.
     # --- app/pages/history.py: два идентификатора пути ---
+    # Повтор отправки — на POST-псевдониме (Фаза 11, план 11-19, D-07): величина
+    # вне колонки идёт веткой «записи нет» — переход на `/history`.
     _BoundedEntry(
         key="app/pages/history.py::GET /history/{log_id} → адрес log_id",
         method="GET",
@@ -625,6 +780,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         address="/history/{value}/retry",
         parameter="log_id",
         live="log",
+        outside="302 /history",
     ),
     # --- app/pages/admin.py: одиннадцать идентификаторов пути ---
     #
@@ -641,6 +797,15 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
     # приведение к целому удавалось, отказ случался позже — уже в SQLAlchemy, —
     # и порядок «сначала граница, потом права, потом источник» зависел от того,
     # что написано выше в функции. С границей на сигнатуре он не зависит.
+    #
+    # ⚠️ ПОКОЛЕНИЕ АБЗАЦА ВЫШЕ (идиома D-30/D-32 — не стирается). Для ШЕСТИ
+    # изменяющих входов «граница на сигнатуре» ОПРОВЕРГНУТА решением D-07 Фазы 11
+    # (план 11-11): граница уехала внутрь обработчиков, первым использованием
+    # параметра ПОСЛЕ сверки источника (она идентификатора не читает) и ДО первой
+    # выборки. Порядок «кто пришёл → откуда → над кем» от этого не ослаб, а стал
+    # тем, что написано в теле: права — зависимостью, источник — первой строкой,
+    # величина — второй. Исход на величине вне колонки — ветка «записи нет»
+    # (`outside`), и отличить её от несуществующей строки нельзя по построению.
     _BoundedEntry(
         key="app/pages/admin.py::POST /admin/workers/{account_id}/restart → адрес account_id",
         method="POST",
@@ -648,6 +813,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="account_id",
         live="account",
         identity="admin",
+        outside="302 /admin/workers",
     ),
     _BoundedEntry(
         # ⚠️ ТЕЛО ПОДАЁТСЯ, И ЭТО ЗАМЕР, А НЕ ОСТОРОЖНОСТЬ: обработчик несёт
@@ -661,6 +827,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         live="account",
         identity="admin",
         body="task_id=задача-посева",
+        outside="302 /admin/queue?notice=queue_drop_no_queue",
     ),
     _BoundedEntry(
         key="app/pages/admin.py::GET /admin/users/{user_id} → адрес user_id",
@@ -713,6 +880,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="user_id",
         live="target",
         identity="admin",
+        outside="302 /admin/users",
     ),
     _BoundedEntry(
         key="app/pages/admin.py::POST /admin/users/{user_id}/impersonate → адрес user_id",
@@ -721,6 +889,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="user_id",
         live="target",
         identity="admin",
+        outside="302 /admin/users",
     ),
     _BoundedEntry(
         key="app/pages/admin.py::POST /admin/users/{user_id}/block → адрес user_id",
@@ -729,6 +898,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="user_id",
         live="target",
         identity="admin",
+        outside="302 /admin/users",
     ),
     _BoundedEntry(
         key="app/pages/admin.py::POST /admin/users/{user_id}/delete → адрес user_id",
@@ -737,6 +907,7 @@ BOUNDED_ENTRIES: tuple[_BoundedEntry, ...] = (
         parameter="user_id",
         live="target",
         identity="admin",
+        outside="302 /admin/users",
     ),
 )
 
@@ -894,9 +1065,17 @@ async def _assume(client: AsyncClient, identity: str, admin_email: str) -> None:
 
 
 async def _entry_outcome(
-    client: AsyncClient, entry: _BoundedEntry, address: str
+    client: AsyncClient,
+    entry: _BoundedEntry,
+    address: str,
+    *,
+    with_location: bool = False,
 ) -> str:
     """СНЯТЫЙ КОД одного обращения по одному адресу — строкой.
+
+    С `with_location` к коду через пробел приклеивается заголовок перехода —
+    форма поля `outside` входа на POST-псевдониме (D-07 Фазы 11): код 302 сам по
+    себе не отличил бы ветку «записи нет» от ветки успеха.
 
     ⚠️ ВЕЛИЧИНА УЖЕ ПОДСТАВЛЕНА В АДРЕС ФОРМАТИРОВАНИЕМ СТРОКИ, А НЕ
     ПРИВЕДЕНИЕМ К ЦЕЛОМУ — по тому же основанию, что и у `_delete_ad` выше:
@@ -909,6 +1088,8 @@ async def _entry_outcome(
         )
     else:
         response = await client.get(address, follow_redirects=False)
+    if with_location:
+        return f"{response.status_code} {response.headers.get('location', '')}".rstrip()
     return str(response.status_code)
 
 
@@ -919,10 +1100,16 @@ async def test_every_bounded_input_refuses_a_value_outside_the_column(
     test_settings,
     db_session: AsyncSession,
 ):
-    """КАЖДЫЙ вход матрицы отвечает отказом ВАЛИДАЦИИ на величине вне диапазона.
+    """КАЖДЫЙ вход матрицы отвечает объявленным исходом на величине вне диапазона.
 
     Отображение сличается ЦЕЛИКОМ, и текст отказа называет ВСЕ несогласные
     строки со снятыми кодами.
+
+    ⚠️ ПОКОЛЕНИЕ (идиома D-30/D-32). До плана 11-11 объявленный исход у КАЖДОГО
+    входа был отказом ВАЛИДАЦИИ. Теперь он есть поле входа `outside`: `422` у
+    границы на сигнатуре и ветка «записи нет» у POST-псевдонима (D-07 Фазы 11).
+    Предмет правила прежний — величина вне колонки не роняет обработчик и
+    исход её объявлен, а не случаен.
 
     ⚠️ ОБЕ ФИКСТУРЫ ЗАКАЗАНЫ РАДИ ЗАВЕДЕНИЯ ОБЕИХ УЧЁТНЫХ ЗАПИСЕЙ, А ДЕЙСТВУЮЩАЯ
     ЛИЧНОСТЬ БЕРЁТСЯ ЯВНО (`_assume`): объект клиента у них ОДИН, и полагаться
@@ -939,11 +1126,19 @@ async def test_every_bounded_input_refuses_a_value_outside_the_column(
             assumed = entry.identity
         for value in REFUSED_VALUES:
             address = entry.address.format(value=value, **live)
-            code = await _entry_outcome(client, entry, address)
-            if code != VALIDATION_REFUSAL:
+            code = await _entry_outcome(
+                client,
+                entry,
+                address,
+                with_location=entry.outside != VALIDATION_REFUSAL,
+            )
+            # Подстановки `outside` — те же, что у адреса: ветка «нет», чей
+            # адрес собран из пути, приземляется на адрес с ТОЙ ЖЕ величиной.
+            expected = entry.outside.format(value=value, **live)
+            if code != expected:
                 disagreed.append(
                     f"{entry.key} ← {value} = {code} "
-                    f"(ожидалось {VALIDATION_REFUSAL}; {entry.method} {address})"
+                    f"(ожидалось {expected}; {entry.method} {address})"
                 )
 
     assert not disagreed, (
@@ -969,6 +1164,14 @@ async def test_every_bounded_input_admits_the_value_at_the_column(
     Величина, РАВНАЯ границе, в диапазоне колонки лежит, и отвергать её граница
     права не имеет. Без этого правила помощник, отвергающий ВСЁ, дал бы зелёный
     прогон правила выше и границей не был бы.
+
+    ⚠️ У ВХОДОВ НА POST-ПСЕВДОНИМЕ ЭТО ПРАВИЛО СМЕЖНОСТИ НЕ РАЗЛИЧАЕТ, И ЭТО
+    СВОЙСТВО D-07, А НЕ ПРОПУСК. Величина у границы строки не находит, величина за
+    границей идёт ТОЙ ЖЕ веткой «записи нет» — исходы равны по построению (то же
+    записано планом 11-02 у модуля расписаний). Для них правило утверждает
+    меньшее — «у границы не 422 и не 500»; что проверка стои́т ДО выборки,
+    стережёт разбор дерева
+    `test_every_post_identifier_is_checked_before_its_first_use`.
     """
     live = await _seed_live_row_set(db_session)
     client = authed_client
@@ -1160,7 +1363,24 @@ PAGINATION_EXCLUSION_NAMES = frozenset({"offset", "limit"})
 #   `schedules.py`, три у `admin.py` и три у `history.py`. Число движется — это
 #   решение о том, что добавленная величина ДЕЙСТВИТЕЛЬНО есть постраничный
 #   вывод, а не идентификатор, названный коротким именем.
-PAGINATION_EXCLUSION_DECLARED = 13
+#
+#   13 → 12, Фаза 11, план 11-04, задача 1 (решение D-11). ИСТОЧНИК ДВИЖЕНИЯ:
+#   у модуля расписаний осталась ОДНА величина постраничного вывода вместо пары
+#   — курсор порции сводного списка стал КЛЮЧЕВЫМ, смещение ушло из сигнатуры
+#   вовсе, а размер порции (`limit`) остался на месте и под тем же изъятием.
+#
+#   ⚠️ ЭТО ПАДЕНИЕ — ПРОГРЕСС, А НЕ ПОТЕРЯ РАЗБОРА, и различить их обязан
+#   читатель: ушедшая величина не перестала узнаваться, она ПЕРЕЕХАЛА во
+#   вселенную под собственным именем (`after_id`, запись летописи
+#   `CATALOGUE_UNIVERSE_DECLARED` 35 → 36 ниже). Сумма двух множеств по модулю
+#   расписаний не изменилась: минус одно изъятие, плюс один вход вселенной.
+#
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА, А НЕ ВЫЧИТАНИЕМ ЕДИНИЦЫ
+#   В УМЕ. Отказ назвал дословно: «величин постраничного вывода найдено 12,
+#   объявлено 13» — и перечислил все двенадцать поимённо, среди них
+#   `app/pages/schedules.py::GET /schedules/partial → limit` и НИ ОДНОГО
+#   смещения этого модуля.
+PAGINATION_EXCLUSION_DECLARED = 12
 
 # ЛЕТОПИСЬ ЧИСЛА ВСЕЛЕННОЙ — ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА:
 #   0 → 35, Фаза 10, план 10-30, задача 1. ЗАВЕДОМО НЕВЕРНОЕ ЧИСЛО (`0`)
@@ -1177,7 +1397,21 @@ PAGINATION_EXCLUSION_DECLARED = 13
 #   вселенная считает ПАРАМЕТРАМИ — тех же шести маршрутов параметров СЕМЬ
 #   (`schedules_create` несёт два, `schedules_update` — три). 28 + 7 = 35.
 #   Расхождения с суммой закрытого НЕТ; расходятся ЕДИНИЦЫ СЧЁТА, и обе названы.
-CATALOGUE_UNIVERSE_DECLARED = 35
+#
+#   35 → 36, Фаза 11, план 11-04, задача 1 (решение D-11). ИСТОЧНИК ДВИЖЕНИЯ:
+#   курсор порции сводного списка расписаний стал КЛЮЧЕВЫМ. Смещение ушло из
+#   сигнатуры вовсе, а ключ последней отрисованной строки ВОШЁЛ во вселенную:
+#   он объявлен целым, назван идентификатором и несёт границу ВСТРОЕННОЙ
+#   записью `Query(None, ge=1, le=ID_MAX)` — той же формой, что его близнец на
+#   экране групп аккаунта, потому что уезжает он тем же путём (операндом
+#   сравнения по колонке идентификатора). Прибавка ИМЕННО ОДИН, и вход назван:
+#   `app/pages/schedules.py::GET /schedules/partial → after_id`.
+#
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА, А НЕ СЛОЖЕНИЕМ В УМЕ.
+#   `test_the_catalogue_universe_is_declared_by_a_number` назвал в отказе
+#   дословно: «параметров вселенной найдено 36, объявлено 35» — и перечислил
+#   все тридцать шесть входов поимённо.
+CATALOGUE_UNIVERSE_DECLARED = 36
 
 # ЛЕТОПИСЬ ЧИСЛА ЗАПИСЕЙ ПРИЛОЖЕНИЯ — то же основание, тот же приём:
 #   0 → 10, Фаза 10, план 10-30, задача 1. Ориентир планировщика знал ОДНОГО
@@ -1194,6 +1428,21 @@ CATALOGUE_APPENDIX_DECLARED = 10
 # ИСЧЕЗНОВЕНИЕ псевдонима из нейтрального модуля (то есть потеря узнаваемости
 # половины входов) краснело здесь, а не зеленело пустым перечнем.
 BOUNDED_ALIAS_ROOTS_DECLARED = 3
+
+# ЧИСЛО КОРНЕВЫХ POST-ПСЕВДОНИМОВ НЕЙТРАЛЬНОГО МОДУЛЯ — псевдонимов БЕЗ границы
+# фреймворка (`PostIdPath`, `PostIdForm`, `OptionalPostIdForm`), заведённых
+# решением D-07 Фазы 11 (план 11-02). Перечень СОБИРАЕТСЯ ЧТЕНИЕМ того же
+# модуля, что и перечень ограниченных, и по той же причине: выписанная копия
+# разошлась бы с модулем молча. Исчезновение псевдонима краснеет здесь, а не
+# зеленеет пустым перечнем — правило «проверка первым использованием» на пустом
+# перечне не стерегло бы ни одного входа.
+#
+# ЛЕТОПИСЬ: 0 → 3, Фаза 11, план 11-02, задача 1.
+POST_ALIAS_ROOTS_DECLARED = 3
+
+# ЕДИНСТВЕННЫЙ ПОМОЩНИК ПРОВЕРКИ ВНУТРИ ОБРАБОТЧИКА (D-07: один на проект).
+# Имя стоит константой затем, чтобы разбор и текст отказа называли одно и то же.
+FIRST_USE_CHECK_HELPER = "id_in_column"
 
 
 @dataclass(frozen=True)
@@ -1476,6 +1725,121 @@ def bounded_alias_roots(app_sources: dict[str, str]) -> frozenset[str]:
     )
 
 
+_DECLARATORS = frozenset({"Path", "Form", "Query"})
+
+
+def _is_an_unbounded_declarator(node: ast.AST) -> bool:
+    """Вызов объявителя (`Path`/`Form`/`Query`) БЕЗ `ge=`/`le=` — признак POST-псевдонима."""
+    if not isinstance(node, ast.Call):
+        return False
+    name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+    if name not in _DECLARATORS:
+        return False
+    return not any(keyword.arg in {"ge", "le"} for keyword in node.keywords)
+
+
+def post_alias_roots(app_sources: dict[str, str]) -> frozenset[str]:
+    """Корневые POST-псевдонимы НЕЙТРАЛЬНОГО модуля: `Annotated[...]` с объявителем без границы.
+
+    ⚠️ ПРИЗНАК — ОТСУТСТВИЕ ГРАНИЦЫ У ОБЪЯВИТЕЛЯ, А НЕ ИМЯ. Узнавание по префиксу
+    `Post` зеленело бы на псевдониме, который кто-то назвал иначе, и краснело бы
+    на ограниченном, названном «Post…» по ошибке; предмет правила — есть ли у
+    величины граница фреймворка, и признак снят ровно с него.
+    """
+    owner_tree = ast.parse(app_sources[BOUND_OWNER])
+    roots: set[str] = set()
+    for name, value in _module_level_assignments(owner_tree):
+        metadata = _annotated_metadata(value)
+        if any(_call_declares_the_bound(meta) for meta in metadata):
+            continue
+        if any(_is_an_unbounded_declarator(meta) for meta in metadata):
+            roots.add(name)
+    return frozenset(roots)
+
+
+def post_alias_names(app_sources: dict[str, str]) -> frozenset[str]:
+    """POST-псевдонимы с перенятыми именами потребителей — до неподвижной точки по `app/`.
+
+    Разрешение то же, что у `bounded_alias_names`, и по той же причине:
+    потребитель вправе завести своё имя (`ScheduleIdPath = PostIdPath`), и
+    разбор, видящий только корни, выронил бы его входы из вселенной.
+    """
+    known = set(post_alias_roots(app_sources))
+    trees = {module: ast.parse(text) for module, text in sorted(app_sources.items())}
+    while True:
+        grown = set(known)
+        for _module, tree in trees.items():
+            for name, value in _module_level_assignments(tree):
+                if isinstance(value, ast.Name) and value.id in known:
+                    grown.add(name)
+        if grown == known:
+            return frozenset(known)
+        known = grown
+
+
+@lru_cache(maxsize=1)
+def _real_post_alias_names() -> frozenset[str]:
+    """POST-псевдонимы НАСТОЯЩЕГО дерева — для разборов, которым их не подали явно."""
+    return post_alias_names(_app_sources())
+
+
+def _names_an_alias(annotation: ast.AST | None, names: frozenset[str]) -> bool:
+    """Объявлен ли параметр одним из имён — голым именем либо первым элементом `Annotated`."""
+    if annotation is None:
+        return False
+    if isinstance(annotation, ast.Name):
+        return annotation.id in names
+    if isinstance(annotation, ast.Subscript):
+        head = annotation.value
+        if (getattr(head, "id", None) or getattr(head, "attr", None)) == "Annotated":
+            sliced = annotation.slice
+            first = sliced.elts[0] if isinstance(sliced, ast.Tuple) else sliced
+            return isinstance(first, ast.Name) and first.id in names
+    return False
+
+
+def _first_use_is_checked(handler: ast.AST, name: str) -> bool:
+    """Первое по ТЕКСТУ чтение имени в теле обработчика — аргумент `id_in_column`?
+
+    ⚠️ ПОРЯДОК — ПОЗИЦИЯ В ИСХОДНИКЕ (строка, столбец), А НЕ ПОРЯДОК ОБХОДА
+    `ast.walk`: тот идёт вширь и поставил бы операнд вложенного `select` позже
+    вызова помощника, стоящего ниже по тексту. Чтение, которого нет вовсе,
+    проверкой НЕ считается: вход без проверки есть вход без границы, даже если
+    сегодня он в запрос не уходит — завтрашняя строка отправит его туда молча.
+
+    ⚠️ НАЗВАННАЯ ГРАНИЦА ПРИЗНАКА. Позиция в тексте совпадает с порядком
+    исполнения для последовательных операторов, но не для условного выражения
+    (`a if id_in_column(x) else b` исполняет условие раньше, чем стоящее левее
+    `a`). Форма «проверка отдельным оператором в начале тела» признаком
+    принимается всегда; условное выражение, где операнд запроса стоит левее
+    проверки, признак объявит нарушением — ложный красный, а не ложный зелёный.
+    """
+    parents: dict[int, ast.AST] = {}
+    loads: list[ast.Name] = []
+    for statement in getattr(handler, "body", []):
+        for node in ast.walk(statement):
+            for child in ast.iter_child_nodes(node):
+                parents[id(child)] = node
+            if (
+                isinstance(node, ast.Name)
+                and node.id == name
+                and isinstance(node.ctx, ast.Load)
+            ):
+                loads.append(node)
+    if not loads:
+        return False
+    first = min(loads, key=lambda node: (node.lineno, node.col_offset))
+    parent = parents.get(id(first))
+    if not isinstance(parent, ast.Call):
+        return False
+    callee = getattr(parent.func, "id", None) or getattr(parent.func, "attr", None)
+    if callee != FIRST_USE_CHECK_HELPER:
+        return False
+    return any(argument is first for argument in parent.args) or any(
+        keyword.value is first for keyword in parent.keywords
+    )
+
+
 def _route_declarations(handler: ast.AST) -> list[tuple[str, str]]:
     """Пары «метод → путь», объявленные декораторами обработчика.
 
@@ -1525,6 +1889,12 @@ class _CatalogueParameter:
     named_like_identifier: bool
     declared_integer: bool
     carries_the_bound: bool
+    # Поля D-07 (Фаза 11, план 11-02): объявлен ли параметр POST-псевдонимом,
+    # объявлены ли у обработчика ТОЛЬКО маршруты POST, и стоит ли проверка
+    # первым использованием параметра в теле.
+    post_alias: bool = False
+    post_only: bool = False
+    first_use_checked: bool = False
 
 
 def _declares_an_integer(annotation: ast.AST | None, aliases: frozenset[str]) -> bool:
@@ -1579,9 +1949,20 @@ def _carries_the_bound(
 
 
 def catalogue_parameters(
-    sources: dict[str, str], aliases: frozenset[str]
+    sources: dict[str, str],
+    aliases: frozenset[str],
+    post_aliases: frozenset[str] | None = None,
 ) -> list[_CatalogueParameter]:
-    """ВСЕ параметры ВСЕХ обработчиков маршрутов каталога — по дереву разбора."""
+    """ВСЕ параметры ВСЕХ обработчиков маршрутов каталога — по дереву разбора.
+
+    ⚠️ POST-ПСЕВДОНИМ ОБЪЯВЛЯЕТ ЦЕЛОЕ (D-07, план 11-02). Без этого вход,
+    переведённый на псевдоним без границы фреймворка, выпал бы из вселенной в
+    приложение — и число вселенной сдвинулось бы от перевода, которого оно не
+    касается. Не поданный явно перечень берётся с настоящего дерева.
+    """
+    if post_aliases is None:
+        post_aliases = _real_post_alias_names()
+    integer_aliases = aliases | post_aliases
     found: list[_CatalogueParameter] = []
     for module, text in sorted(sources.items()):
         try:
@@ -1602,6 +1983,7 @@ def catalogue_parameters(
             for _method, path in routes:
                 placeholders |= set(_ROUTE_PLACEHOLDER.findall(path))
             printed = tuple(f"{method} {path}" for method, path in routes)
+            post_only = all(method == "POST" for method, _path in routes)
 
             args = node.args
             positional = list(args.posonlyargs) + list(args.args)
@@ -1631,10 +2013,15 @@ def catalogue_parameters(
                         named_like_identifier=bool(
                             _IDENTIFIER_NAME_MARK.search(argument.arg)
                         ),
-                        declared_integer=_declares_an_integer(argument.annotation, aliases),
+                        declared_integer=_declares_an_integer(
+                            argument.annotation, integer_aliases
+                        ),
                         carries_the_bound=_carries_the_bound(
                             argument.annotation, defaults.get(argument.arg), aliases
                         ),
+                        post_alias=_names_an_alias(argument.annotation, post_aliases),
+                        post_only=post_only,
+                        first_use_checked=_first_use_is_checked(node, argument.arg),
                     )
                 )
     return found
@@ -1659,12 +2046,14 @@ def _is_watched(parameter: _CatalogueParameter) -> bool:
 
 
 def catalogue_universe(
-    sources: dict[str, str], aliases: frozenset[str]
+    sources: dict[str, str],
+    aliases: frozenset[str],
+    post_aliases: frozenset[str] | None = None,
 ) -> list[_CatalogueParameter]:
     """ВСЕЛЕННАЯ: объявлен целым И (стоит в пути ЛИБО назван идентификатором)."""
     return [
         parameter
-        for parameter in catalogue_parameters(sources, aliases)
+        for parameter in catalogue_parameters(sources, aliases, post_aliases)
         if parameter.declared_integer
         and (parameter.in_path or parameter.named_like_identifier)
         and parameter.name not in PAGINATION_EXCLUSION_NAMES
@@ -1698,14 +2087,78 @@ def catalogue_appendix(
 
 
 def unbounded_universe_entries(
-    sources: dict[str, str], aliases: frozenset[str]
+    sources: dict[str, str],
+    aliases: frozenset[str],
+    post_aliases: frozenset[str] | None = None,
 ) -> list[_CatalogueParameter]:
-    """Входы вселенной, НЕ несущие границы."""
+    """Входы вселенной, НЕ несущие границы.
+
+    ⚠️ ПОКОЛЕНИЕ (Фаза 11, план 11-02, решение D-07). Прежде предметом было
+    «граница ОБЪЯВЛЕНА в сигнатуре» у КАЖДОГО входа. Для POST-входа,
+    объявленного POST-псевдонимом на обработчике только с маршрутами POST,
+    судьёй теперь служит `unchecked_post_identifier_entries` (проверка первым
+    использованием), и этот перечень его не повторяет. Всё остальное — GET,
+    POST-псевдоним на не-POST маршруте, голое `int` на POST — судится здесь
+    как прежде.
+    """
     return [
         parameter
-        for parameter in catalogue_universe(sources, aliases)
+        for parameter in catalogue_universe(sources, aliases, post_aliases)
         if not parameter.carries_the_bound
+        and not (parameter.post_alias and parameter.post_only)
     ]
+
+
+def unchecked_post_identifier_entries(
+    sources: dict[str, str],
+    aliases: frozenset[str],
+    post_aliases: frozenset[str] | None = None,
+) -> list[tuple[_CatalogueParameter, str]]:
+    """POST-псевдонимы вселенной, судимые правилом «проверка первым использованием».
+
+    Два нарушения и два текста: псевдоним без границы на маршруте не-POST
+    (у GET нет формы отказа по классу действия — RESEARCH OQ4, ограниченный
+    псевдоним там обязателен), и первое чтение параметра, не являющееся
+    аргументом `id_in_column` (величина уходит в запрос раньше проверки —
+    Landmine CONTEXT Фазы 11).
+    """
+    found: list[tuple[_CatalogueParameter, str]] = []
+    for parameter in catalogue_universe(sources, aliases, post_aliases):
+        if not parameter.post_alias:
+            continue
+        if not parameter.post_only:
+            found.append((parameter, "POST-псевдоним без границы на маршруте не-POST"))
+        elif not parameter.first_use_checked:
+            found.append(
+                (
+                    parameter,
+                    f"первое чтение параметра не есть аргумент `{FIRST_USE_CHECK_HELPER}`",
+                )
+            )
+    return found
+
+
+def assert_every_post_identifier_is_checked_before_its_first_use(
+    sources: dict[str, str],
+    aliases: frozenset[str],
+    post_aliases: frozenset[str] | None = None,
+) -> None:
+    """ТЕКСТ ОТКАЗА (в): POST-вход без границы фреймворка не проверен первым использованием."""
+    found = unchecked_post_identifier_entries(sources, aliases, post_aliases)
+    assert found == [], (
+        "POST-ВХОД СТРАНИЧНОГО СЛОЯ БЕЗ ГРАНИЦЫ ФРЕЙМВОРКА НЕ ПРОВЕРЕН ДО ПЕРВОГО "
+        "ИСПОЛЬЗОВАНИЯ: "
+        + "; ".join(
+            f"{parameter.module} :: {' / '.join(parameter.routes)} :: "
+            f"{parameter.handler}({parameter.name}: {parameter.annotation}) — {reason}"
+            for parameter, reason in sorted(found, key=lambda item: item[0].key)
+        )
+        + f". Первое чтение параметра обязано быть аргументом `{FIRST_USE_CHECK_HELPER}` "
+        f"из {BOUND_OWNER}, стоящим ДО любого запроса (D-07 Фазы 11): величина вне "
+        "колонки, ушедшая операндом сравнения, роняет обработчик отказом драйвера "
+        "(`500` на PostgreSQL). На маршруте не-POST объявите параметр ограниченным "
+        "псевдонимом (`IdPath`/`IdForm`/`OptionalIdForm`)"
+    )
 
 
 # =============================================================================
@@ -1854,13 +2307,57 @@ def test_the_recognised_bound_aliases_come_from_a_single_place():
 
     resolved = bounded_alias_names(app_sources)
     assert roots <= resolved, "разрешение псевдонимов потеряло собственные корни"
-    assert len(resolved) > len(roots), (
-        f"разрешение псевдонимов не нашло НИ ОДНОГО перенятого имени "
-        f"({sorted(resolved)}) — а `app/pages/schedules.py` заводит свои "
-        "(`ScheduleIdPath`, `AdIdForm`, `AccountIdForm`). Разбор, слепой к "
-        "границе, приезжающей ИМПОРТОМ, объявил бы семь закрытых входов модуля "
-        "расписаний неограниченными: ровно так мерил ПУСТУЮ вселенную первый "
-        "сбор плана 10-24"
+
+    # ⚠️ ПОКОЛЕНИЕ АНТИВАКУУМА (Фаза 11, план 11-02, решение D-07). Прежде
+    # перенятые имена модуля расписаний (`ScheduleIdPath`, `AdIdForm`,
+    # `AccountIdForm`) разрешались ОГРАНИЧЕННЫМИ псевдонимами, и антивакуум
+    # требовал, чтобы разрешение ограниченных нашло хотя бы одно перенятое имя.
+    # D-07 перевёл эти имена на POST-псевдонимы, и потребителей, перенимающих
+    # ОГРАНИЧЕННЫЙ псевдоним своим именем, в дереве не осталось. Предмет
+    # антивакуума — слепота разбора к имени, приехавшему ИМПОРТОМ, — от этого не
+    # исчез: он переехал к разрешению POST-псевдонимов, по которому те же семь
+    # входов остаются во вселенной.
+    post_roots = post_alias_roots(app_sources)
+    post_resolved = post_alias_names(app_sources)
+    inherited = (resolved - roots) | (post_resolved - post_roots)
+    assert {"ScheduleIdPath", "AdIdForm", "AccountIdForm"} <= inherited, (
+        f"разрешение псевдонимов не нашло перенятых имён модуля расписаний "
+        f"(найдено перенятых: {sorted(inherited)}) — а `app/pages/schedules.py` "
+        "заводит свои (`ScheduleIdPath`, `AdIdForm`, `AccountIdForm`). Разбор, "
+        "слепой к имени, приезжающему ИМПОРТОМ, выронил бы семь входов модуля "
+        "расписаний из вселенной: ровно так мерил ПУСТУЮ вселенную первый сбор "
+        "плана 10-24"
+    )
+
+
+def test_every_post_identifier_is_checked_before_its_first_use():
+    """КАЖДЫЙ POST-вход на псевдониме без границы проверен ПЕРВЫМ использованием.
+
+    ⚠️ ПОКОЛЕНИЕ ПРЕДМЕТА (Фаза 11, план 11-02, решение D-07). Прежде правило
+    полноты требовало от КАЖДОГО идентификатора «объявления в сигнатуре»: граница
+    `ge=`/`le=` стояла в аннотации, и форму отказа выбирал фреймворк
+    (`{"detail": …}` без заголовка перехода) — ровно расхождение с D-01,
+    записанное окном 51. Для POST-входов предмет сменился на «объявление ЛИБО
+    проверка первым использованием»: граница уезжает внутрь обработчика, но
+    ослабнуть не вправе — проверка обязана стоять ДО того, как величина уйдёт в
+    запрос. GET-входы судятся прежним правилом без изменений.
+
+    Антивакуум — число корневых POST-псевдонимов: на пустом перечне правило
+    молчало бы по построению.
+    """
+    app_sources = _app_sources()
+    roots = post_alias_roots(app_sources)
+    assert len(roots) == POST_ALIAS_ROOTS_DECLARED, (
+        f"корневых POST-псевдонимов в {BOUND_OWNER} найдено {len(roots)} "
+        f"({sorted(roots)}), объявлено {POST_ALIAS_ROOTS_DECLARED}. Псевдоним ИСЧЕЗ "
+        "— входы на нём перестали узнаваться целыми и выпали из вселенной; "
+        "псевдоним ДОБАВЛЕН — это решение о новом способе передачи, а не правка числа"
+    )
+
+    sources = _catalogue_sources()
+    aliases = bounded_alias_names(app_sources)
+    assert_every_post_identifier_is_checked_before_its_first_use(
+        sources, aliases, post_alias_names(app_sources)
     )
 
 
@@ -1990,3 +2487,133 @@ def test_control_an_empty_catalogue_reddens_the_universe_rule():
     # И правило полноты на том же пустом наборе МОЛЧИТ — что и есть причина, по
     # которой объявленное число стои́т рядом с ним, а не вместо него.
     assert unbounded_universe_entries({}, aliases) == []
+
+
+# Контроли правила «проверка первым использованием» (Фаза 11, план 11-02, D-07).
+
+_SYNTHETIC_POST_IDENTIFIER_CHECKS = '''
+from fastapi import APIRouter, Request
+from sqlalchemy import select
+from app.pages.identifiers import OptionalPostIdForm, PostIdPath, id_in_column
+
+router = APIRouter()
+
+
+@router.post("/widgets/{widget_id}/delete")
+async def widgets_delete(request: Request, widget_id: PostIdPath):
+    """Проверка НИЖЕ первого использования: величина уже ушла в запрос."""
+    await session.execute(select(Widget).where(Widget.id == widget_id))
+    if not id_in_column(widget_id):
+        return None
+    return None
+
+
+@router.post("/gadgets/{gadget_id}/delete")
+async def gadgets_delete(
+    request: Request, gadget_id: PostIdPath, owner_id: OptionalPostIdForm = None
+):
+    """Проверка ПЕРВЫМ использованием у обоих входов: правило обязано промолчать."""
+    if not id_in_column(gadget_id) or not id_in_column(owner_id, optional=True):
+        return None
+    await session.execute(
+        select(Gadget).where(Gadget.id == gadget_id, Gadget.owner_id == owner_id)
+    )
+    return None
+'''
+
+_SYNTHETIC_POST_ALIAS_ON_A_GET_ROUTE = '''
+from fastapi import APIRouter, Request
+from app.pages.identifiers import PostIdPath, id_in_column
+
+router = APIRouter()
+
+
+@router.get("/widgets/{widget_id}")
+async def widgets_show(request: Request, widget_id: PostIdPath):
+    """POST-псевдоним на GET — даже при проверке первым использованием."""
+    if not id_in_column(widget_id):
+        return None
+    return None
+'''
+
+
+def _post_aliases_for_controls() -> tuple[frozenset[str], frozenset[str]]:
+    app_sources = _app_sources()
+    return bounded_alias_names(app_sources), post_alias_names(app_sources)
+
+
+def test_control_a_check_below_the_first_use_reddens_the_catalogue_rule():
+    """ЧТО ДОКАЗЫВАЕТ: проверка НИЖЕ `select` краснеет и НАЗЫВАЕТ вход; проверка первой — нет.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ перенос границы внутрь обработчика мог бы ОСЛАБИТЬ
+    защиту от переполнения колонки незаметно: вызов помощника присутствовал бы,
+    но стоял бы после запроса, и `500` на PostgreSQL вернулся бы на зелёной суите.
+    """
+    aliases, post_aliases = _post_aliases_for_controls()
+    sources = {"app/pages/widgets.py": _SYNTHETIC_POST_IDENTIFIER_CHECKS}
+
+    universe = catalogue_universe(sources, aliases, post_aliases)
+    assert {parameter.name for parameter in universe} == {
+        "widget_id",
+        "gadget_id",
+        "owner_id",
+    }, (
+        "разборщик не узнал POST-псевдонимы целыми: "
+        f"{sorted(parameter.key for parameter in universe)} — контроль проверял бы "
+        "дерево, в котором испытуемых входов нет"
+    )
+
+    found = unchecked_post_identifier_entries(sources, aliases, post_aliases)
+    assert [parameter.name for parameter, _reason in found] == ["widget_id"], (
+        "ПРАВИЛО НЕ ЗАМЕТИЛО ПРОВЕРКИ НИЖЕ ПЕРВОГО ИСПОЛЬЗОВАНИЯ либо назвало "
+        f"проверенные входы: {sorted(parameter.key for parameter, _reason in found)}"
+    )
+    assert unbounded_universe_entries(sources, aliases, post_aliases) == [], (
+        "прежнее правило полноты судит POST-вход на POST-псевдониме повторно — "
+        "у одного нарушения было бы два текста, ведущих в разные места"
+    )
+
+    with pytest.raises(AssertionError) as complaint:
+        assert_every_post_identifier_is_checked_before_its_first_use(
+            sources, aliases, post_aliases
+        )
+    text = str(complaint.value)
+    for expected in (
+        "app/pages/widgets.py",
+        "POST /widgets/{widget_id}/delete",
+        "widget_id",
+        FIRST_USE_CHECK_HELPER,
+    ):
+        assert expected in text, f"текст отказа не называет {expected!r}: {text}"
+    assert "gadget_id" not in text and "owner_id" not in text, (
+        "текст отказа назвал входы, проверенные первым использованием: " + text
+    )
+
+
+def test_control_a_post_alias_on_a_get_route_reddens_the_catalogue_rule():
+    """ЧТО ДОКАЗЫВАЕТ: псевдоним без границы допустим ТОЛЬКО на POST.
+
+    У GET нет формы отказа по классу действия (RESEARCH OQ4), и граница там
+    остаётся объявлением в сигнатуре; перевод GET-входа на POST-псевдоним снял бы
+    её молча — даже при проверке первым использованием.
+    """
+    aliases, post_aliases = _post_aliases_for_controls()
+    sources = {"app/pages/widgets.py": _SYNTHETIC_POST_ALIAS_ON_A_GET_ROUTE}
+
+    found = unchecked_post_identifier_entries(sources, aliases, post_aliases)
+    assert [parameter.name for parameter, _reason in found] == ["widget_id"], (
+        "ПРАВИЛО ПРОПУСТИЛО POST-ПСЕВДОНИМ НА GET: "
+        f"{sorted(parameter.key for parameter, _reason in found)}"
+    )
+    assert [
+        parameter.name
+        for parameter in unbounded_universe_entries(sources, aliases, post_aliases)
+    ] == ["widget_id"], "прежнее правило полноты обязано по-прежнему видеть GET-вход без границы"
+
+    with pytest.raises(AssertionError) as complaint:
+        assert_every_post_identifier_is_checked_before_its_first_use(
+            sources, aliases, post_aliases
+        )
+    text = str(complaint.value)
+    for expected in ("app/pages/widgets.py", "GET /widgets/{widget_id}", "не-POST"):
+        assert expected in text, f"текст отказа не называет {expected!r}: {text}"

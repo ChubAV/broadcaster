@@ -1338,6 +1338,48 @@ async def test_dropping_a_queue_task_removes_exactly_one_and_comes_back(
 
 
 @pytest.mark.asyncio
+async def test_a_dropped_queue_task_is_announced_by_the_shell_notice_area(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Исход снятия задачи едет КОДОМ реестра и рисуется областью шелла (D-10).
+
+    ⚠️ ПРОВЕРЯЕТСЯ ВСЯ ЛИНИЯ, А НЕ ОДИН АДРЕС. Код в адресе без слов на
+    приземлённом экране — та же молчащая кнопка, ради которой исход и назван
+    словами: администратор снимает чужую отправку и по результату решает, идти
+    ли на сервер руками.
+
+    ⚠️ ВТОРАЯ ПОЛОВИНА — ПРО СНЯТОЕ. Частный ключ адресной строки подраздела и
+    его собственное место отрисовки сняты планом 11-14; страница, открытая по
+    старому ключу, обязана не рисовать НИЧЕГО. Иначе у одного исхода снова два
+    владельца, и правка одного расходится со вторым молча.
+    """
+    from tests.conftest import notice_areas
+
+    account = await _seed_account(db_session, account_type="wa")
+    key = f"wa:queue:{account.id}"
+    client = _FakeQueuePageRedis({key: [_queue_task("drop-me")]})
+
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        response = await admin_client.post(
+            QUEUE_DROP_URL.format(account_id=account.id),
+            data={"task_id": "drop-me"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        assert response.headers["location"] == "/admin/queue?notice=queue_drop_removed"
+
+        landed = (await admin_client.get(response.headers["location"])).text
+        by_old_key = (await admin_client.get("/admin/queue?result=removed")).text
+
+    assert "Задача снята из очереди" in notice_areas(landed), (
+        "код исхода приехал в адрес, а область уведомлений шелла промолчала"
+    )
+    assert "Задача снята из очереди" not in by_old_key, (
+        "страница очереди по-прежнему читает снятый частный ключ исхода"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dropping_a_queue_task_is_refused_to_an_outsider(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
@@ -2885,6 +2927,258 @@ async def test_the_destructive_admin_actions_still_work_from_the_own_page(
     assert target.is_blocked is True, (
         "блокировка со своей страницы не состоялась: отказ пришёл молча, "
         "кодом редиректа"
+    )
+
+
+@pytest.mark.asyncio
+async def test_block_toggle_over_htmx_refreshes_every_place_of_the_state(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Блокировка на слое письма обновляет ВСЕ места страницы, печатающие состояние.
+
+    Фаза 11, план 11-12 (FORM-03, D-02). Тумблер — правка на месте над ЧУЖОЙ
+    учётной записью, и признак блокировки напечатан на карточке ДВАЖДЫ: подписью
+    кнопки в блоке действий и бейджем в строке личности. Ответ, обновивший одно
+    из двух, показал бы администратору две противоречащие подписи.
+
+    ⚠️ ОСНОВНОЕ ТЕЛО — СОДЕРЖИМОЕ БЛОКА ДЕЙСТВИЙ (`innerHTML` по `#user-actions`),
+    И ПОТОМУ ВСЁ ДО ПЕРВОГО ВНЕПОЛОСНОГО УЗЛА ЕСТЬ БЛОК ДЕЙСТВИЙ. Бейдж и плитка
+    доступа приезжают внеполосными узлами со ЗНАЧЕНИЕМ подмены `innerHTML:#…`:
+    их обёртки на странице обязаны пережить сколько угодно ответов.
+
+    ⚠️ ПАНЕЛЕЙ ПОДТВЕРЖДЕНИЯ В ОТВЕТЕ НЕТ И БЫТЬ НЕ ДОЛЖНО. Панели входа под
+    пользователем и удаления стоят на странице ВНЕ блока действий; приедь они с
+    ответом, десяток нажатий оставил бы в документе десяток живых диалогов.
+
+    ⚠️ ВТОРАЯ ПОЛОВИНА — ПУТЬ ДЕГРАДАЦИИ: без признака тот же адрес отвечает
+    прежним 302 на карточку, и действие совершается (обратно — разблокирует).
+    """
+    from app.models.user import User
+
+    target_id = await _seed_plain_user(admin_client, db_session)
+
+    response = await admin_client.post(
+        f"/admin/users/{target_id}/block",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 200, (
+        f"блокировка на слое письма ответила {response.status_code} вместо 200 — "
+        "обработчик всё ещё решает форму ответа сам"
+    )
+    body = response.text
+    assert "<!DOCTYPE" not in body, (
+        "слою письма приехал ЦЕЛЫЙ ДОКУМЕНТ вместо содержимого блока действий"
+    )
+
+    badge_marker = 'hx-swap-oob="innerHTML:#user-block-badge"'
+    tile_marker = 'hx-swap-oob="innerHTML:#user-access-tile"'
+    assert badge_marker in body, (
+        "в ответе нет внеполосного узла бейджа блокировки — строка личности "
+        "продолжит показывать прежнее состояние"
+    )
+    assert tile_marker in body, "в ответе нет внеполосного узла плитки доступа"
+    assert body.count(badge_marker) == 1 and body.count(tile_marker) == 1, (
+        "внеполосные узлы задвоились"
+    )
+
+    first_oob = body.index("hx-swap-oob")
+    actions = body[:first_oob]
+    assert f'action="/admin/users/{target_id}/block"' in actions, (
+        "основное тело ответа не начинается с блока действий: формы блокировки "
+        "до первого внеполосного узла нет"
+    )
+    assert "Разблокировать" in actions and "Заблокировать" not in actions, (
+        "подпись тумблера в блоке действий не совпала с НОВЫМ состоянием "
+        "(пользователь заблокирован — кнопка обязана предлагать «Разблокировать»)"
+    )
+
+    badge_at = body.index(badge_marker)
+    tile_at = body.index(tile_marker)
+    badge_node = body[badge_at:tile_at] if badge_at < tile_at else body[badge_at:]
+    assert "Заблокирован" in badge_node, (
+        "внеполосный узел бейджа приехал без бейджа «Заблокирован»"
+    )
+    tile_node = body[tile_at:badge_at] if tile_at < badge_at else body[tile_at:]
+    assert "Доступ" in tile_node, "внеполосный узел плитки приехал без плитки доступа"
+
+    assert 'role="dialog"' not in body, (
+        "с ответом тумблера приехала ПАНЕЛЬ ПОДТВЕРЖДЕНИЯ — после десятка нажатий "
+        "в документе копились бы живые диалоги"
+    )
+
+    db_session.expire_all()
+    target = await db_session.get(User, target_id)
+    assert target.is_blocked is True, "блокировка на слое письма не состоялась"
+
+    degraded = await admin_client.post(
+        f"/admin/users/{target_id}/block", follow_redirects=False
+    )
+    assert degraded.status_code == 302, (
+        f"путь деградации ответил {degraded.status_code} вместо прежнего 302"
+    )
+    assert degraded.headers["location"] == f"/admin/users/{target_id}"
+    db_session.expire_all()
+    target = await db_session.get(User, target_id)
+    assert target.is_blocked is False, "разблокировка без htmx не состоялась"
+
+
+@pytest.mark.asyncio
+async def test_free_access_toggle_over_htmx_refreshes_the_access_tile(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Бесплатный доступ на слое письма обновляет подпись тумблера И плитку доступа.
+
+    Фаза 11, план 11-13 (FORM-03, D-02). Второй тумблер карточки отвечает ТЕМ
+    ЖЕ шаблоном ответа, что блокировка (`admin/partials/user_actions_response.html`):
+    основное тело — содержимое `#user-actions`, бейдж и плитка — внеполосно.
+
+    ⚠️ ПРЕДМЕТ — ПЛИТКА, А НЕ ТОЛЬКО ПОДПИСЬ. Выдача льготы меняет ровно то, что
+    печатает плитка доступа: после нажатия она обязана показывать `∞`. Подпись
+    кнопки без плитки дала бы администратору две противоречащие друг другу
+    области одной карточки.
+
+    ⚠️ ВТОРАЯ ПОЛОВИНА — ПУТЬ ДЕГРАДАЦИИ: без признака тот же адрес отвечает
+    прежним 302 на карточку, и действие совершается (обратно — снимает льготу).
+    """
+    from sqlalchemy import select
+
+    from app.models.subscription import Subscription
+
+    target_id = await _seed_plain_user(admin_client, db_session)
+
+    async def _row() -> Subscription:
+        db_session.expire_all()
+        return (
+            await db_session.execute(
+                select(Subscription).where(
+                    Subscription.user_id == target_id,
+                    Subscription.is_active.is_(True),
+                )
+            )
+        ).scalar_one()
+
+    assert (await _row()).has_free_access is False, (
+        "посев не удался: у цели уже есть льгота, и выдача проверяла бы снятие"
+    )
+
+    response = await admin_client.post(
+        f"/admin/users/{target_id}/unlimited",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 200, (
+        f"выдача бесплатного доступа на слое письма ответила "
+        f"{response.status_code} вместо 200 — обработчик всё ещё решает форму "
+        "ответа сам"
+    )
+    body = response.text
+    assert "<!DOCTYPE" not in body, (
+        "слою письма приехал ЦЕЛЫЙ ДОКУМЕНТ вместо содержимого блока действий"
+    )
+
+    tile_marker = 'hx-swap-oob="innerHTML:#user-access-tile"'
+    badge_marker = 'hx-swap-oob="innerHTML:#user-block-badge"'
+    assert body.count(tile_marker) == 1, (
+        "в ответе нет РОВНО ОДНОГО внеполосного узла плитки доступа — плитка "
+        "продолжит показывать прежнее состояние доступа"
+    )
+    assert body.count(badge_marker) == 1, (
+        "ответ бесплатного доступа собран не тем шаблоном, что у блокировки: "
+        "внеполосного узла бейджа нет или он задвоился"
+    )
+
+    first_oob = body.index("hx-swap-oob")
+    actions = body[:first_oob]
+    assert f'action="/admin/users/{target_id}/unlimited"' in actions, (
+        "основное тело ответа не начинается с блока действий: формы бесплатного "
+        "доступа до первого внеполосного узла нет"
+    )
+    assert "Снять бесплатный доступ" in actions and (
+        "Выдать бесплатный доступ" not in actions
+    ), (
+        "подпись тумблера в блоке действий не совпала с НОВЫМ состоянием "
+        "(льгота выдана — кнопка обязана предлагать «Снять бесплатный доступ»)"
+    )
+
+    tile_at = body.index(tile_marker)
+    badge_at = body.index(badge_marker)
+    tile_node = body[tile_at:badge_at] if tile_at < badge_at else body[tile_at:]
+    assert "<span data-metric-value>∞</span>" in tile_node, (
+        "внеполосная плитка доступа не показывает `∞` сразу после выдачи льготы "
+        "— администратор видит прежний вердикт"
+    )
+
+    assert 'role="dialog"' not in body, (
+        "с ответом тумблера приехала ПАНЕЛЬ ПОДТВЕРЖДЕНИЯ — после десятка нажатий "
+        "в документе копились бы живые диалоги"
+    )
+    assert (await _row()).has_free_access is True, (
+        "выдача бесплатного доступа на слое письма не состоялась"
+    )
+
+    degraded = await admin_client.post(
+        f"/admin/users/{target_id}/unlimited", follow_redirects=False
+    )
+    assert degraded.status_code == 302, (
+        f"путь деградации ответил {degraded.status_code} вместо прежнего 302"
+    )
+    assert degraded.headers["location"] == f"/admin/users/{target_id}"
+    assert (await _row()).has_free_access is False, (
+        "снятие бесплатного доступа без htmx не состоялось"
+    )
+
+
+@pytest.mark.asyncio
+async def test_free_access_fragment_is_assembled_after_the_access_cache_is_dropped(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """ПОРЯДОК: вид доступа для плитки собирается ПОСЛЕ сброса кэша вердикта.
+
+    Фаза 11, план 11-13 (T-11-20). Вердикт доступа кэшируется до минуты
+    (`app/services/billing_cache.py`); фрагмент, собранный ДО сброса, закрепил
+    бы в ответе состояние, которого после нажатия уже нет.
+
+    ⚠️ УТВЕРЖДАЕТСЯ ПОРЯДОК ВЫЗОВОВ, А НЕ ТОЛЬКО ЗНАЧЕНИЕ В ПЛИТКЕ, И ЭТО НЕ
+    ПЕРЕСТРАХОВКА. Redis в суите не поднят, а сама плитка сегодня читает строку
+    подписки через `_access_view`, а не кэш: тест по одному значению `∞`
+    зеленел бы и при сборке ДО сброса. Поэтому оба события пишутся в один
+    журнал подменой имён модуля `app.pages.admin`, и правило краснеет, если
+    сборку вида доступа поставить раньше сброса.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    import app.pages.admin as admin_module
+
+    target_id = await _seed_plain_user(admin_client, db_session)
+    events: list[str] = []
+    original_access_view = admin_module._access_view
+
+    async def _record_invalidation(user_id: int) -> None:
+        events.append(f"invalidate:{user_id}")
+
+    def _record_access_view(*args, **kwargs):
+        events.append("access_view")
+        return original_access_view(*args, **kwargs)
+
+    with patch(
+        "app.pages.admin.invalidate_access_cache",
+        new=AsyncMock(side_effect=_record_invalidation),
+    ), patch("app.pages.admin._access_view", new=_record_access_view):
+        response = await admin_client.post(
+            f"/admin/users/{target_id}/unlimited",
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 200, (
+        f"выдача на слое письма ответила {response.status_code} вместо 200 — "
+        "фрагмента нет, и порядку сборки нечего утверждать"
+    )
+    assert events == [f"invalidate:{target_id}", "access_view"], (
+        "вид доступа для плитки собран НЕ ПОСЛЕ сброса кэша вердикта: журнал "
+        f"событий {events!r}. Фрагмент, собранный до сброса, показывает "
+        "администратору состояние, которого после нажатия уже нет"
     )
 
 

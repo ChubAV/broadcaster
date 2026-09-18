@@ -5,6 +5,7 @@
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/field.html" import field %}
 {% from "components/filters.html" import filters %}
+{% from "components/form_wrapper.html" import form_wrapper %}
 {% from "components/mono.html" import mono %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 {% from "account_groups/includes/group_row.html" import group_row %}
@@ -80,15 +81,34 @@
       Кнопка при выполнении НЕ отключается: повторную отправку отклоняет guard
       `status == 'syncing'` на стороне обработчика. Отключение выглядело бы
       защитой, но ею не является — форму можно отправить и без страницы, а вот
-      пользователь, у которого статус завис, лишился бы способа повторить. -#}
+      пользователь, у которого статус завис, лишился бы способа повторить.
+
+      ⚠️ ПОКОЛЕНИЕ АБЗАЦА ВЫШЕ (Фаза 11, план 11-17; идиома D-30/D-32 — не
+      стирается). Форма идёт через обёртку `form_wrapper`, и цель блокировки
+      обёртки (умолчание — сама кнопка отправки) ВЫКЛЮЧАЕТ кнопку, но ТОЛЬКО на
+      время запроса: по его окончании кнопка снова доступна. Статусом `syncing`
+      кнопка по-прежнему не отключается, повторную отправку по-прежнему отклоняет
+      серверный guard (обе его ступени), и зависший статус способа повторить не
+      отнимает. Блокировка на время запроса — клиентское удобство, а не защита
+      (PAY-02).
+
+      Цели подмены у обёртки НЕТ (`hx-swap="none"`, D-02, D-12(в)): синхронизация
+      заменяет состав групп целиком, и ответ — всегда переход на этот же экран
+      либо на список аккаунтов, а не правка на месте.
+
+      Признак идущей синхронизации (`data-syncing`) стоит на ОБЁРТКЕ формы, а не
+      на теге формы: тег печатает макрос, и собственных атрибутов вызывающему он
+      не принимает. Правила таблицы стилей адресуются обёрткой. -#}
   <div class="acct-head__actions">
-    <form method="POST" action="/accounts/{{ account_id }}/sync-groups"{% if account.status == 'syncing' %} data-syncing{% endif %}>
+    <div{% if account.status == 'syncing' %} data-syncing{% endif %}>
+      {%- call form_wrapper(action='/accounts/' ~ account_id ~ '/sync-groups') %}
       {%- if account.status == 'syncing' %}
       {{- button('Синхронизация…', variant='primary', icon='refresh') -}}
       {%- else %}
       {{- button('Синхронизировать всё', variant='primary', icon='refresh') -}}
       {%- endif %}
-    </form>
+      {%- endcall %}
+    </div>
     {{- link_button('К аккаунтам', '/accounts', variant='ghost') -}}
   </div>
 </div>

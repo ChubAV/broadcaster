@@ -25,7 +25,7 @@ import types
 
 import pytest
 from fastapi import HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
@@ -604,6 +604,163 @@ async def test_an_external_address_never_reaches_the_degraded_path():
             await respond(_request(), redirect=hostile)
 
 
+# --- Третий выход: переход на ВНЕШНИЙ адрес (D-09, план 11-15) -----------------
+#
+# ⚠️ ВЫХОД БЕРЁТСЯ АТРИБУТОМ МОДУЛЯ, А НЕ ИМПОРТОМ В ШАПКЕ ФАЙЛА. Импорт
+# отсутствующего имени уронил бы СБОР всего файла, и отказ назывался бы ошибкой
+# сбора, а не утверждением о поведении; здесь его отсутствие есть проваленное
+# утверждение с именем правила.
+
+# Адрес подтверждения на ДОКУМЕНТИРОВАННОМ хосте (Находка C RESEARCH): все
+# официальные примеры `confirmation_url` ЮKassa — на `yoomoney.ru`. Выписан
+# строкой, а не взят из проверяемого модуля, по доктрине файла.
+CONFIRMATION_URL = "https://yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a"
+
+# Хвост адреса, по которому видно, что в журнал уехал ПОЛНЫЙ адрес: номер
+# заказа есть ровно то, чего журнал отвергнутого адреса нести не должен.
+ORDER_MARK = "orderId=2c85a"
+
+PAYMENT_FAILED_LOCATION = "/billing?notice=payment_failed"
+
+# Адреса, которые НЕ ИМЕЮТ ПРАВА доехать до заголовка увода с сайта. Каждое
+# написание — отдельный случай: список известных подделок есть ровно то, что
+# проверка обязана отвергнуть поимённо, а не «в среднем».
+OFF_THE_HOST_SET = {
+    "scheme-http": "http://yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "suffix-dash": "https://evil-yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "prefix-glued": "https://evilyoomoney.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "suffix-domain-com": "https://yoomoney.ru.evil.com/checkout/payments/v2/contract?orderId=2c85a",
+    "suffix-domain-example": "https://yoomoney.ru.evil.example/checkout?orderId=2c85a",
+    "undocumented-yookassa": "https://yookassa.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "userinfo-user": "https://user@yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "userinfo-host-before-at": "https://yoomoney.ru@evil.example/checkout?orderId=2c85a",
+    "userinfo-empty": "https://@yoomoney.ru/checkout?orderId=2c85a",
+    "backslash-before-at": "https://evil.example\\@yoomoney.ru/checkout?orderId=2c85a",
+    "port-explicit": "https://yoomoney.ru:8443/checkout/payments/v2/contract?orderId=2c85a",
+    "port-default": "https://yoomoney.ru:443/checkout?orderId=2c85a",
+    "scheme-relative": "//yoomoney.ru/checkout/payments/v2/contract?orderId=2c85a",
+    "relative-path": "/checkout/payments/v2/contract?orderId=2c85a",
+    "control-crlf": "https://yoomoney.ru/checkout?orderId=2c85a\r\nSet-Cookie: a=b",
+    "non-ascii-path": "https://yoomoney.ru/checkout/оплата?orderId=2c85a",
+    "non-ascii-host": "https://yооmoney.ru/checkout?orderId=2c85a",
+    "empty": "",
+}
+
+
+from structlog.testing import capture_logs  # noqa: E402
+
+
+def _third_exit():
+    from app.pages import htmx
+
+    exit_ = getattr(htmx, "redirect_external", None)
+    assert exit_ is not None, (
+        "третьего выхода слоя ответа нет: переход на внешний адрес некому "
+        "отдать, и форма оплаты на htmx либо ломается, либо уходит мимо проверки"
+    )
+    return exit_
+
+
+def _rejections(captured: list[dict]) -> list[dict]:
+    return [
+        entry
+        for entry in captured
+        if entry.get("event") == "payment_confirmation_url_rejected"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_an_external_address_leaves_by_the_redirect_header_only(notice_registry):
+    """На htmx внешний адрес уезжает ОДНИМ заголовком `HX-Redirect`, без тела.
+
+    ⚠️ УТВЕРЖДАЕТСЯ САМ ЗАГОЛОВОК, А НЕ ТОЛЬКО СТАТУС (урок cookie D-05 Фазы 10):
+    правило, проверяющее 204, зеленело бы при заголовке, записанном на
+    выброшенный объект. ⚠️ `HX-Location` В ОТВЕТЕ НЕТ: слой письма читает его
+    ПЕРВЫМ (Находка A), и ответ с обоими заголовками ушёл бы по нему — то есть
+    межсайтовым XHR, который `selfRequestsOnly` молча заблокирует.
+
+    Без признака htmx — прежнее перенаправление на ЛЮБОЙ адрес: путь без
+    JavaScript не меняется и хоста не проверяет (асимметрия записана в
+    `SAFE_BY_NAME`).
+    """
+    redirect_external = _third_exit()
+
+    over_htmx = await redirect_external(
+        _request({HX_REQUEST_HEADER: "true"}),
+        url=CONFIRMATION_URL,
+        fallback="/billing",
+        fallback_notice="payment_failed",
+    )
+
+    assert over_htmx.status_code == 204
+    assert over_htmx.headers.get("HX-Redirect") == CONFIRMATION_URL, (
+        "ответ htmx не несёт адреса подтверждения в заголовке увода — браузер "
+        "останется на странице оплаты, а платёж уже заведён"
+    )
+    assert "HX-Location" not in over_htmx.headers, (
+        "ответ несёт ОБА заголовка перехода — слой письма уйдёт по HX-Location "
+        "межсайтовым XHR, и selfRequestsOnly его заблокирует"
+    )
+    assert over_htmx.body == b""
+
+    for url in (CONFIRMATION_URL, "https://yookassa.ru/checkout/payments/2c85a"):
+        bare = await redirect_external(
+            _request(), url=url, fallback="/billing", fallback_notice="payment_failed"
+        )
+        assert bare.status_code == 302
+        assert bare.headers["location"] == url
+        assert "HX-Redirect" not in bare.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hostile", list(OFF_THE_HOST_SET.values()), ids=list(OFF_THE_HOST_SET)
+)
+async def test_a_confirmation_address_off_the_closed_host_set_never_reaches_the_header(
+    hostile, notice_registry
+):
+    """Адрес вне закрытого множества хостов в заголовок увода НЕ попадает.
+
+    Провал проверки — переход на `/billing` с кодом `payment_failed` и запись
+    журнала, называющая ХОСТ и не несущая полного адреса (T-11-25: номер заказа
+    в журнале не нужен никому, кроме того, кто журнал читает не по праву).
+
+    ⚠️ ЗАПИСЬ СНИМАЕТСЯ `capture_logs`, А НЕ `caplog`, И ЭТО ОБРАТНЫЙ СЛУЧАЙ
+    ДОВОДА `tests/test_admin.py`. Там логгер — модульный прокси, связанный до
+    подмены, и `capture_logs` его не видит. Здесь выход берёт логгер ВНУТРИ
+    вызова, прокси связывается уже под подменой; а `caplog` пуст, потому что
+    вывод structlog в stdlib настраивает сборка приложения, которой у прямого
+    вызова выхода нет.
+    """
+    redirect_external = _third_exit()
+
+    with capture_logs() as captured:
+        response = await redirect_external(
+            _request({HX_REQUEST_HEADER: "true"}),
+            url=hostile,
+            fallback="/billing",
+            fallback_notice="payment_failed",
+        )
+
+    assert response.status_code == 204
+    assert "HX-Redirect" not in response.headers, (
+        f"адрес вне закрытого множества хостов доехал до заголовка увода: {hostile!r}"
+    )
+    assert response.headers.get("HX-Location") == PAYMENT_FAILED_LOCATION
+    assert response.body == b""
+
+    entries = _rejections(captured)
+    assert len(entries) == 1, (
+        "отвергнутый адрес подтверждения не оставил записи "
+        f"`payment_confirmation_url_rejected`: {captured}"
+    )
+    assert "host" in entries[0], "журнал отвергнутого адреса не называет хост"
+    if hostile:
+        assert hostile not in repr(entries[0]) and ORDER_MARK not in repr(entries[0]), (
+            "журнал отвергнутого адреса несёт полный адрес вместе с номером заказа"
+        )
+
+
 # --- Приклейка внеполосного блока: ТРЕТИЙ инвариант — СТАТУС ------------------
 #
 # ⚠️ ПРАВИЛО СТОИТ ЗДЕСЬ, А НЕ РЯДОМ С ОСТАЛЬНЫМИ ПРАВИЛАМИ ПРИКЛЕЙКИ, И
@@ -667,3 +824,260 @@ def test_the_glue_refuses_a_response_whose_status_forbids_a_body(notice_registry
     assert int(glued.headers["content-length"]) == len(glued.body), (
         "заголовок длины тела не пересчитан после приклейки на обычном статусе"
     )
+
+
+# --- ВЫХОД ОТКАЗА ВАЛИДАЦИИ: ВЕТВЬ БЕРЁТСЯ ДВУМЯ ПРИЗНАКАМИ (T-07-13, D-07) ---
+#
+# ⚠️ ПРАВИЛА НИЖЕ ПОДАЮТ ВЫХОДУ ИСКЛЮЧЕНИЕ НАПРЯМУЮ, МИНУЯ ПРИЛОЖЕНИЕ, И ЭТО
+# РАЗДЕЛЕНИЕ ПРЕДМЕТА, А НЕ ЭКОНОМИЯ. Поведение МАРШРУТОВ проверяет обход
+# `tests/test_pages/test_htmx_validation_sink.py`; предмет здешних правил — САМ
+# ВЫХОД как помощник слоя ответа. Через приложение недостижим ровно тот вход,
+# ради которого выход и написан осторожно: исключение с местом ошибки `body` и
+# `query` у ОДНОГО И ТОГО ЖЕ обработчика, плюс запрос вовсе БЕЗ обработчика в
+# области видимости.
+#
+# ⚠️ ОБРАБОТЧИКИ БЕРУТСЯ НАСТОЯЩИЕ, А НЕ ПОДДЕЛЬНЫЕ. Признак читает
+# `__module__` обработчика; заглушка с пририсованным `__module__` утверждала бы
+# о самой себе, и переезд модуля страниц такое правило пережило бы молча.
+from app.pages.schedules import schedules_create  # noqa: E402
+from app.routes.schedules import toggle_schedule  # noqa: E402
+from fastapi.exceptions import RequestValidationError  # noqa: E402
+
+# Три МЕСТА ошибки разбора. Выход обязан отвечать одинаково на все три, потому
+# что `exc.errors()` он не читает вовсе.
+VALIDATION_ERROR_PLACES = ("path", "body", "query")
+
+FRAMEWORK_VALIDATION_STATUS = 422
+EMPTY_BAD_REQUEST_STATUS = 400
+
+
+def _validation_error(place: str) -> RequestValidationError:
+    """Отказ разбора с названным МЕСТОМ ошибки."""
+    return RequestValidationError(
+        [
+            {
+                "type": "int_parsing",
+                "loc": (place, "identifier"),
+                "msg": "Input should be a valid integer",
+                "input": "not-a-number",
+            }
+        ]
+    )
+
+
+def _request_for(endpoint, headers: dict[str, str] | None = None) -> Request:
+    """Запрос, чья область видимости несёт сорвавшийся обработчик.
+
+    Ключ обработчика выставляется маршрутом ДО разбора параметров — замерено на
+    FastAPI 0.129.0 / Starlette 0.52.1 для отказов пути, тела и строки запроса.
+    `endpoint=None` воспроизводит запрос, у которого обработчика нет вовсе.
+    """
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("test", 80),
+        "path": "/",
+        "root_path": "",
+        "query_string": b"",
+        "headers": [
+            (name.lower().encode("latin-1"), value.encode("latin-1"))
+            for name, value in (headers or {}).items()
+        ],
+    }
+    if endpoint is not None:
+        scope["endpoint"] = endpoint
+    return Request(scope)
+
+
+@pytest.mark.asyncio
+async def test_the_validation_sink_is_empty_for_the_page_layer_over_htmx():
+    """Страничный слой + признак htmx → пустой 400 при ЛЮБОМ месте ошибки.
+
+    Места перебираются ВСЕ ТРИ одним правилом: ветвь, начавшая зависеть от
+    места ошибки, обязана краснеть, а не проходить на том месте, которое
+    автор правки проверил рукой.
+    """
+    from app.pages.htmx import malformed_request_response
+
+    disagreed = {}
+    for place in VALIDATION_ERROR_PLACES:
+        response = await malformed_request_response(
+            _request_for(schedules_create, {HX_REQUEST_HEADER: "true"}),
+            _validation_error(place),
+        )
+        if response.status_code != EMPTY_BAD_REQUEST_STATUS or response.body != b"":
+            disagreed[place] = (response.status_code, response.body[:120])
+
+    assert not disagreed, (
+        "выход отказа валидации обязан отвечать ПУСТЫМ "
+        f"{EMPTY_BAD_REQUEST_STATUS} на пути htmx у страничного слоя при любом "
+        "месте ошибки, а разошлись: "
+        + "; ".join(
+            f"{place} = код {code}, тело {body!r}"
+            for place, (code, body) in sorted(disagreed.items())
+        )
+        + ". Тело здесь есть СТОК: с плана 11-09 правило 422 свопает его в DOM"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_validation_sink_keeps_the_framework_answer_everywhere_else():
+    """Три прочие ветви отдают ОТВЕТ ФРЕЙМВОРКА — и это предмет, а не фон.
+
+    ⚠️ БЕЗ ЭТОГО ПРАВИЛА ПРЕДЫДУЩЕЕ УДОВЛЕТВОРЯЛОСЬ БЫ ВЫХОДОМ, ОТВЕЧАЮЩИМ
+    ПУСТЫМ 400 ВСЕГДА, — то есть смягчение стока оплачивалось бы сломанным
+    контрактом JSON-API (D-07) и немым отказом человеку без JavaScript.
+
+    Ветвей ровно три, и каждая отрицает СВОЮ половину признака: чужой пакет при
+    живом признаке htmx, свой пакет без признака, и отсутствие обработчика
+    вовсе.
+    """
+    from app.pages.htmx import malformed_request_response
+
+    branches = {
+        "JSON-API под заголовком htmx": _request_for(
+            toggle_schedule, {HX_REQUEST_HEADER: "true"}
+        ),
+        "страничный слой БЕЗ признака htmx": _request_for(schedules_create),
+        "обработчика в области видимости нет": _request_for(
+            None, {HX_REQUEST_HEADER: "true"}
+        ),
+    }
+
+    disagreed = {}
+    for name, request in branches.items():
+        response = await malformed_request_response(request, _validation_error("path"))
+        if response.status_code != FRAMEWORK_VALIDATION_STATUS or not response.body:
+            disagreed[name] = (response.status_code, response.body[:120])
+
+    assert not disagreed, (
+        "ветвь, обязанная отдать ответ фреймворка, его не отдала: "
+        + "; ".join(
+            f"{name} = код {code}, тело {body!r}"
+            for name, (code, body) in sorted(disagreed.items())
+        )
+        + f". Ожидался {FRAMEWORK_VALIDATION_STATUS} с телом — контракт "
+        "JSON-API и путь деградации этим выходом не трогаются (D-07)"
+    )
+
+
+# --- ВЫХОД ОШИБКИ ПОЛЯ: ОДИН СТАТУС, ДВА ТЕЛА (FORM-08, D-06) ----------------
+#
+# ⚠️ ПРЕДМЕТ ЗДЕСЬ — САМ ВЫХОД, А МАРШРУТОВ, ЕГО ЗОВУЩИХ, В ЭТОМ ПЛАНЕ НЕТ
+# ВОВСЕ, И ЭТО НЕ ПРОБЕЛ ПОКРЫТИЯ. Своп правилу 422 возвращает план 11-09
+# ОДНОВРЕМЕННО с первым маршрутом, отдающим этот код с АВТОРСКИМ фрагментом;
+# до тех пор выход обязан существовать и быть проверенным, но недостижимым из
+# продукта. Правило ниже поэтому зовёт его НАПРЯМУЮ — той же формой, что и
+# правила выхода отказа валидации выше.
+#
+# ⚠️ СБОРЩИКИ ЗДЕСЬ НУЛЬАРНЫЕ И ASYNC — по форме `fragment=` у `respond()`.
+# Невыбранный сборщик не зовётся вовсе, и это утверждается СПИСКОМ ВЫЗОВОВ, а
+# не отсутствием его тела в ответе: сборщик страницы, позванный впустую, собрал
+# бы целый документ на каждой ошибке поля — то есть заплатил бы за ответ,
+# который никуда не едет.
+
+FIELD_ERROR_STATUS = 422
+
+# Тела двух транспортов РАЗЛИЧИМЫ посимвольно: одинаковые тела прошли бы
+# правило при любой из двух веток, то есть не отличали бы выбранного сборщика
+# от невыбранного.
+FIELD_ERROR_PAGE_BODY = "<!DOCTYPE html><html><body>страница целиком</body></html>"
+FIELD_ERROR_FRAGMENT_BODY = '<form data-form><span class="field__error">не тот пояс</span></form>'
+
+
+@pytest.mark.asyncio
+async def test_a_field_error_answers_422_with_the_page_without_htmx_and_the_fragment_with_it():
+    """Ошибка ПОЛЯ: один статус на оба транспорта, тело — по способу прихода.
+
+    ⚠️ СТАТУС ОДИН И ТОТ ЖЕ НА ОБОИХ ПУТЯХ, А ТЕЛО РАЗНОЕ, И ЭТО НЕСУЩЕЕ
+    СВОЙСТВО. Человек без JavaScript обязан получить СТРАНИЦУ — ошибка поля не
+    есть исход действия, и перенаправлять его некуда: он остаётся на форме,
+    которую заполнял. Человек со слоем письма получает ФРАГМЕНТ той же формы,
+    потому что подменяется область формы, а не документ.
+
+    ⚠️ ОТВЕТ СОБИРАЕТСЯ СВЕЖИЙ, А НЕ ПРАВИТСЯ ЧУЖОЙ. Сборщик отдаёт свой объект
+    ответа со своим статусом (200 — он собирает разметку, а не решает об
+    исходе); подмена статуса прямо на нём означала бы, что выход правит объект,
+    которым не владеет, — ровно та граница, о которой предупреждает докстринг
+    приклейки внеполосного блока. Свежесть утверждается тождеством объектов, а
+    не совпадением тел.
+
+    ⚠️ НЕВЫБРАННЫЙ СБОРЩИК НЕ ЗОВЁТСЯ. Утверждается списком состоявшихся
+    вызовов: выход, зовущий оба и возвращающий один, прошёл бы проверку тел, но
+    собирал бы целый документ на каждой ошибке поля.
+    """
+    from app.pages.htmx import respond_field_error
+
+    called: list[str] = []
+    built: dict[str, Response] = {}
+
+    async def page() -> Response:
+        called.append("page")
+        built["page"] = HTMLResponse(FIELD_ERROR_PAGE_BODY, status_code=200)
+        return built["page"]
+
+    async def fragment() -> Response:
+        called.append("fragment")
+        built["fragment"] = HTMLResponse(FIELD_ERROR_FRAGMENT_BODY, status_code=200)
+        return built["fragment"]
+
+    # --- без признака htmx: полный документ -----------------------------------
+    called.clear()
+    bare = await respond_field_error(_request(), page=page, fragment=fragment)
+
+    assert bare.status_code == FIELD_ERROR_STATUS, (
+        f"путь без htmx ответил {bare.status_code}, а ошибка заполнения обязана "
+        f"приезжать {FIELD_ERROR_STATUS} на ОБОИХ транспортах"
+    )
+    assert bare.body.decode() == FIELD_ERROR_PAGE_BODY, (
+        f"телом ответа без htmx приехало {bare.body[:120]!r}, а ожидался сбор "
+        "страницы целиком: человеку без JavaScript возвращают форму, которую он "
+        "заполнял, а не фрагмент без шелла"
+    )
+    assert called == ["page"], (
+        f"состоявшиеся вызовы сборщиков — {called}, а ожидался ровно один: "
+        "невыбранный сборщик собирал бы разметку, которая никуда не поедет"
+    )
+    assert bare is not built["page"], (
+        "выход вернул ОБЪЕКТ СБОРЩИКА, подменив ему статус на месте: выход "
+        "правит ответ, которым не владеет"
+    )
+
+    # --- с признаком htmx: фрагмент формы -------------------------------------
+    called.clear()
+    over_htmx = await respond_field_error(
+        _request({HX_REQUEST_HEADER: "true"}), page=page, fragment=fragment
+    )
+
+    assert over_htmx.status_code == FIELD_ERROR_STATUS, (
+        f"путь htmx ответил {over_htmx.status_code}, а правило {FIELD_ERROR_STATUS} "
+        "блока конфигурации ждёт именно этот код"
+    )
+    assert over_htmx.body.decode() == FIELD_ERROR_FRAGMENT_BODY, (
+        f"телом ответа htmx приехало {over_htmx.body[:120]!r}, а ожидался "
+        "фрагмент формы: целый документ слой письма подставил бы в область "
+        "свопа страницей внутри страницы"
+    )
+    assert called == ["fragment"], (
+        f"состоявшиеся вызовы сборщиков — {called}, а ожидался ровно один"
+    )
+    assert over_htmx is not built["fragment"], (
+        "выход вернул ОБЪЕКТ СБОРЩИКА, подменив ему статус на месте"
+    )
+
+    # --- форма ответа: свежий HTMLResponse без фоновой задачи ------------------
+    for name, response in (("без htmx", bare), ("htmx", over_htmx)):
+        assert isinstance(response, HTMLResponse), (
+            f"{name}: ответ собран не `HTMLResponse` ({type(response).__name__})"
+        )
+        assert "text/html" in response.headers["content-type"].lower(), (
+            f"{name}: тип содержимого {response.headers.get('content-type')!r} — "
+            "тело ошибки поля есть разметка, и объявлено оно должно быть так же"
+        )
+        assert response.background is None, (
+            f"{name}: на ответе висит фоновая задача — свежесобранный ответ "
+            "чужих задач нести не может, и её появление означало бы, что выход "
+            "отдал объект сборщика"
+        )

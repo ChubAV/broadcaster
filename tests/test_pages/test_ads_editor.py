@@ -487,6 +487,95 @@ async def test_autosave_creates_draft_and_pushes_edit_url(
 
 
 @pytest.mark.asyncio
+async def test_created_draft_keeps_the_push_url_header_after_the_move_to_the_response_layer(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-13 Фазы 11: заголовок истории переживает переезд на слой ответа.
+
+    ⚠️ ПРЕДМЕТ — ЗАГОЛОВОК НА ВОЗВРАЩАЕМОМ ОТВЕТЕ, А НЕ КОД ОБРАБОТЧИКА.
+    Утверждение снимается с `response.headers`, потому что предмет вопроса —
+    что доезжает до БРАУЗЕРА. Прочтение исходника сказало бы, что заголовок
+    где-то ставится, и промолчало бы о том, на ТОТ ли объект: сборщик фрагмента
+    вправе построить один ответ, а вернуть другой, и подмена адреса тихо
+    пропала бы. Цена потери названа величиной: следующее автосохранение ушло бы
+    на `/ads/new` со СТАРЫМ (пустым) скрытым полем и завело бы ВТОРОЙ черновик.
+
+    ⚠️ НАБЛЮДЕНИЕ D-13 ЗАПИСАНО ЗДЕСЬ ЦЕЛИКОМ, ПОТОМУ ЧТО ОНО ЕСТЬ ПРЕДМЕТ
+    ПУНКТА РОАДМАПА О СОВМЕСТНОМ ПОВЕДЕНИИ. Атрибут разметки `hx-push-url` фаза
+    не ставит НИ НА ОДНУ форму (решение по каждой форме — QUAL-04, Фаза 15),
+    поэтому совместного поведения атрибута и заголовка в проекте сегодня НЕТ:
+    адрес в строке меняет только заголовок. Приоритет их, если атрибут появится,
+    измерен по вендоренному рантайму (htmx 2.0.10, функция `Mn`): заголовок
+    ответа читается ПЕРВЫМ, атрибут — только при его отсутствии. Проверять это
+    сегодня нечем и незачем — второй стороны совмещения не существует, — и
+    именно это отсутствие здесь записано, а не выведено.
+
+    Четыре утверждения, и ни одно не выводится из остальных: заголовок на
+    ПЕРВОМ сохранении есть; на ВТОРОМ (когда запись уже создана) его НЕТ —
+    иначе адрес переписывался бы на каждом нажатии клавиши; без htmx первое
+    сохранение по-прежнему 302 в редактор, а «Сохранить» — 302 в список.
+    """
+    owner_id = (await _user(db_session)).id
+
+    first = await authed_client.post(
+        "/ads/new",
+        content=form_body(title="Черновик слоя ответа", text="Набранный текст"),
+        headers=HX_HEADERS,
+        follow_redirects=False,
+    )
+    assert first.status_code == 200
+    created = await _only_ad(db_session, owner_id)
+    assert first.headers.get("HX-Push-Url") == f"/ads/{created.id}/edit", (
+        "заголовок истории НЕ приехал на ответе создания черновика: адрес в "
+        "строке остался бы `/ads/new`, и следующее автосохранение завело бы "
+        f"второй черновик (снято: {first.headers.get('HX-Push-Url')!r})"
+    )
+
+    second = await authed_client.post(
+        "/ads/new",
+        content=form_body(
+            title="Второй вариант",
+            text="Набранный текст",
+            extra=[("ad_id", str(created.id))],
+        ),
+        headers=HX_HEADERS,
+        follow_redirects=False,
+    )
+    assert second.status_code == 200
+    assert "HX-Push-Url" not in second.headers, (
+        "заголовок истории приехал на ОБНОВЛЕНИИ: адрес в строке уже верен, и "
+        "повторная запись истории плодила бы состояния браузера на каждом "
+        f"срабатывании автосохранения (снято: {second.headers.get('HX-Push-Url')!r})"
+    )
+
+    # Путь без JavaScript не тронут переездом ни одним из двух своих исходов.
+    degraded_first = await authed_client.post(
+        "/ads/new",
+        content=form_body(title="Черновик без JavaScript", text="Текст"),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    assert degraded_first.status_code == 302
+    degraded_ad = (
+        await db_session.execute(
+            select(Ad).where(Ad.user_id == owner_id).order_by(Ad.id.desc())
+        )
+    ).scalars().first()
+    assert degraded_first.headers["location"] == f"/ads/{degraded_ad.id}/edit"
+
+    saved = await authed_client.post(
+        f"/ads/{degraded_ad.id}/edit",
+        content=form_body(
+            title="Черновик без JavaScript", text="Текст", extra=[("save", "1")]
+        ),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    assert saved.status_code == 302
+    assert saved.headers["location"] == "/ads"
+
+
+@pytest.mark.asyncio
 async def test_autosave_response_carries_no_form(
     authed_client: AsyncClient, db_session: AsyncSession
 ):

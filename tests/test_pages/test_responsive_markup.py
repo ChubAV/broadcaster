@@ -1166,11 +1166,15 @@ async def test_accounts_connect_max_form_contract(
     """
     html = (await authed_client.get("/accounts/connect/max")).text
 
+    # ⚠️ РЕГИСТР ЗНАЧЕНИЯ МЕТОДА НЕ ЧАСТЬ КОНТРАКТА (план 11-18). Форму печатает
+    # теперь макрос-обёртка, и значение метода у него набрано строчными; для
+    # браузера значение атрибута метода регистронезависимо, и глагол отправки
+    # остаётся POST. Контракт — маршрут, глагол и имя поля — не ослаблен.
     assert 'name="phone"' in html
     assert 'action="/accounts/connect/max/start"' in html
     assert re.search(r'<form[^>]*method="POST"[^>]*action="/accounts/connect/max/start"'
                      r'|<form[^>]*action="/accounts/connect/max/start"[^>]*method="POST"',
-                     html), "форма подключения MAX потеряла маршрут или метод"
+                     html, re.IGNORECASE), "форма подключения MAX потеряла маршрут или метод"
 
 
 # --- План 11: подтверждение удаления аккаунта панелью дизайн-системы (SC-3) --

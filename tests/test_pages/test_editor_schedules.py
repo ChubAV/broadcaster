@@ -233,6 +233,121 @@ async def test_create_without_the_editor_marker_still_goes_to_the_summary_list(
 
 
 @pytest.mark.asyncio
+async def test_schedule_create_over_htmx_appends_the_card_to_the_list(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Создание при НЕПУСТОМ списке отдаёт карточку для вставки В КОНЕЦ (FORM-07, D-05).
+
+    Верхним узлом тела стоит САМА карточка — та же разметка, что печатает полная
+    страница, — и приезжает она РАСКРЫТОЙ: сегодня путь деградации приземляет
+    человека с `?sched=N`, и подмена обязана давать тот же экран. Панель
+    подтверждения едет ВМЕСТЕ с ней, потому что на полной странице обе
+    принадлежат контейнеру `#sched-list`: ответ, принёсший статью без панели,
+    дал бы карточку, кнопка удаления которой не открывает ничего.
+
+    ⚠️ ЛИНЕЙКА И СВОДКА СЛИЧАЮТСЯ С ПОЛНОЙ СТРАНИЦЕЙ, А НЕ С ОЖИДАЕМЫМ ТЕКСТОМ.
+    Утверждение «в линейке написано „2 расписания“» зеленело бы на собственной
+    копии формулировки; предмет же в том, что линейка ПОСЛЕ СОЗДАНИЯ и линейка
+    ПОСЛЕ ПЕРЕЗАГРУЗКИ — одна величина, собранная одним источником разметки.
+    """
+    from tests.test_pages.test_confirm_delete_transport import _oob_node_ids
+
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        "/schedules/new",
+        content=_form(
+            [
+                ("ad_id", str(ad.id)),
+                ("account_id", str(account.id)),
+                ("return_to", "editor"),
+            ]
+        ),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200, response.status_code
+    body = response.text
+    assert "<!DOCTYPE" not in body, "слою письма приехал целый документ"
+
+    created = await _all_schedules(db_session)
+    assert len(created) == 2, [s.id for s in created]
+    new_id = created[-1].id
+
+    assert body.lstrip().startswith(
+        f'<article data-sched-card id="sched-{new_id}">'
+    ), body[:200]
+    assert f'action="/schedules/{new_id}/edit"' in body, (
+        "новая карточка приехала свёрнутой — формы правки в ней нет"
+    )
+    assert f'id="sched-del-{new_id}"' in body, (
+        "панель подтверждения новой карточки не приехала: на полной странице "
+        "она принадлежит тому же контейнеру, что и статья"
+    )
+
+    oob_ids = _oob_node_ids(body)
+    assert "#sched-count" in oob_ids, f"узла линейки нет среди внеполосных: {oob_ids}"
+    assert "ad-summary" in oob_ids, f"узла сводки нет среди внеполосных: {oob_ids}"
+
+    rule = re.search(
+        r'<div hx-swap-oob="innerHTML:#sched-count">(.*?)</div>', body, re.S
+    )
+    assert rule, body[-800:]
+
+    htmx_client.headers.pop("HX-Request")
+    page = await htmx_client.get(f"/ads/{ad.id}/edit")
+    assert page.status_code == 200
+    page_rule = re.search(r'<div id="sched-count">(.*?)</div>', page.text, re.S)
+    assert page_rule, "обёртки линейки на полной странице нет"
+    assert page_rule.group(1).strip() == rule.group(1).strip(), (
+        f"линейка после создания {rule.group(1)!r} разошлась с линейкой после "
+        f"перезагрузки {page_rule.group(1)!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_first_schedule_over_htmx_lands_by_a_location_header(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """«Было ноль» приземляет ПЕРЕХОДОМ, а не фрагментом (D-05).
+
+    При пустом списке контейнера в документе нет вовсе (ветка пустого
+    состояния), и фрагменту некуда приземлиться: ответ уходит 204 с заголовком
+    перехода на ТОТ ЖЕ адрес, что уезжает 302 без htmx. Второго механизма
+    отрисовки пустого и непустого состояния фаза не заводит — идиома D-09
+    Фазы 9 в обратную сторону.
+
+    Посимвольное равенство адресов обоих транспортов утверждает пара модуля
+    `tests/test_pages/test_htmx_post_pairs.py`; здесь утверждается форма ответа.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+
+    response = await htmx_client.post(
+        "/schedules/new",
+        content=_form(
+            [
+                ("ad_id", str(ad.id)),
+                ("account_id", str(account.id)),
+                ("return_to", "editor"),
+            ]
+        ),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 204, response.status_code
+    created = await _all_schedules(db_session)
+    assert len(created) == 1, [s.id for s in created]
+    new_id = created[0].id
+    assert response.headers.get("HX-Location") == (
+        f"/ads/{ad.id}/edit?sched={new_id}#sched-{new_id}"
+    ), response.headers.get("HX-Location")
+    assert response.content == b"", "у ответа 204 появилось тело"
+
+
+@pytest.mark.asyncio
 async def test_update_from_editor_returns_to_the_editor(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
@@ -260,6 +375,124 @@ async def test_update_from_editor_returns_to_the_editor(
     location = response.headers["location"]
     assert location.startswith(f"/ads/{ad.id}/edit"), location
     assert f"sched={schedule.id}" in location, location
+
+
+@pytest.mark.asyncio
+async def test_schedule_edit_over_htmx_swaps_only_its_card(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Правка на транспорте htmx отвечает фрагментом СВОЕЙ карточки (FORM-03, D-02).
+
+    Первым узлом тела стоит сама карточка — цель `outerHTML` формы правки; она
+    приезжает раскрытой (раскрытие — серверное состояние, D-12(а)), и корня
+    панели подтверждения удаления в теле НЕТ: панель живёт снаружи карточки, и
+    подмена карточки, принёсшая вторую панель, задвоила бы её в документе.
+    Путь без htmx стережёт `test_update_from_editor_returns_to_the_editor` выше.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id)
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/edit",
+        content=_form(
+            [
+                ("ad_id", str(ad.id)),
+                ("account_id", str(account.id)),
+                ("days_of_week", "1"),
+                ("times_of_day", "18:30"),
+                ("timezone", "UTC"),
+                ("return_to", "editor"),
+            ]
+        ),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200, response.status_code
+    body = response.text
+    assert "<!DOCTYPE" not in body, "слою письма приехал целый документ"
+    assert body.lstrip().startswith(
+        f'<article data-sched-card id="sched-{schedule.id}">'
+    ), body[:200]
+    assert f'action="/schedules/{schedule.id}/edit"' in body, (
+        "форма правки отсутствует — карточка приехала свёрнутой"
+    )
+    assert f'id="sched-del-{schedule.id}"' not in body, (
+        "корень панели подтверждения приехал в теле подмены карточки"
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedule_edit_over_htmx_refreshes_the_summary_and_the_panel_text(
+    authed_client: AsyncClient, htmx_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Ответ правки обновляет сводку объявления и ТЕКСТ панели подтверждения.
+
+    Панель удаления стоит снаружи подменяемой карточки и после правки осталась
+    бы спрашивать про прежние дни и группы. Ответ несёт два верхнеуровневых
+    внеполосных узла: `#ad-summary` (подмена узла) и подмену СОДЕРЖИМОГО абзаца
+    текста панели по постоянному id `sched-del-N-text` — корень панели с
+    состоянием Alpine целью не становится (D-12(б)). Текст, приехавший
+    внеполосно, и текст полной страницы после перезагрузки — ОДНА величина.
+    """
+    from tests.test_pages.test_confirm_delete_transport import _oob_node_ids
+
+    day_names = templates.env.get_template(
+        "schedules/includes/schedule_row.html"
+    ).module.DAY_NAMES
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id, days=[0])
+
+    response = await htmx_client.post(
+        f"/schedules/{schedule.id}/edit",
+        content=_form(
+            [
+                ("ad_id", str(ad.id)),
+                ("account_id", str(account.id)),
+                ("days_of_week", "0"),
+                ("days_of_week", "1"),
+                ("times_of_day", "09:00"),
+                ("timezone", "UTC"),
+                ("return_to", "editor"),
+            ]
+        ),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200, response.status_code
+    body = response.text
+    oob_ids = _oob_node_ids(body)
+    assert "ad-summary" in oob_ids, f"узла сводки нет среди внеполосных: {oob_ids}"
+    assert f"#sched-del-{schedule.id}-text" in oob_ids, (
+        f"узла текста панели нет среди внеполосных: {oob_ids}"
+    )
+    assert f'id="sched-del-{schedule.id}"' not in body, (
+        "корень панели подтверждения стал целью либо приехал в теле"
+    )
+
+    panel_node = re.search(
+        rf'<div hx-swap-oob="innerHTML:#sched-del-{schedule.id}-text">(.*?)</div>',
+        body,
+        re.S,
+    )
+    assert panel_node, body[-600:]
+    oob_text = panel_node.group(1)
+    assert f"{day_names[0]} {day_names[1]}" in oob_text, oob_text
+
+    htmx_client.headers.pop("HX-Request")
+    page = await htmx_client.get(f"/ads/{ad.id}/edit")
+    assert page.status_code == 200
+    page_text = re.search(
+        rf'<p class="modal__text" id="sched-del-{schedule.id}-text">(.*?)</p>',
+        page.text,
+        re.S,
+    )
+    assert page_text, "у абзаца текста панели нет постоянного id"
+    assert page_text.group(1) == oob_text, (
+        f"внеполосный текст {oob_text!r} разошёлся с полной страницей "
+        f"{page_text.group(1)!r}"
+    )
 
 
 @pytest.mark.asyncio
@@ -418,6 +651,103 @@ async def test_a_malformed_expansion_field_is_dropped_instead_of_crashing(
 
     assert response.status_code == 302, "мусор в поле разворота уронил обработчик"
     assert response.headers["location"] == f"/ads/{ad.id}/edit"
+    assert (await _reload(db_session, schedule.id)).is_active is False
+
+
+# --- Фаза 11, план 11-03: тумблер расписания на слое ответа -------------------
+#
+# Тумблер в редакторе на htmx отвечает КАРТОЧКОЙ `#sched-N` (D-02), и раскрытие
+# в ней берётся из скрытого поля разворота, а не из идентификатора нажатой
+# карточки (D-12(а)). Путь без htmx остаётся прежним перенаправлением.
+
+HTMX_FORM_HEADERS = {**FORM_HEADERS, "HX-Request": "true"}
+
+
+@pytest.mark.asyncio
+async def test_schedule_toggle_over_htmx_keeps_the_expanded_neighbour(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Раскрыта A, нажат тумблер B: во фрагменте B СВЁРНУТА, путь деградации — на A.
+
+    Фрагмент несёт ровно карточку B: A на экране не трогается (цель подмены —
+    `#sched-B`), и раскрытой она остаётся потому, что её не подменяют. Свёрнутость
+    B утверждается отсутствием формы сохранения — её рисует только раскрытая
+    карточка.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    group = await _seed_group(db_session, owner.id, account.id)
+    first = await _seed_schedule(db_session, ad.id, account.id, group_ids=[group.id])
+    second = await _seed_schedule(
+        db_session, ad.id, account.id, group_ids=[group.id], times=["21:00"]
+    )
+    body = _form([("return_to", "editor"), ("keep_sched", str(first.id))])
+
+    degraded = await authed_client.post(
+        f"/schedules/{second.id}/toggle",
+        content=body,
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+    assert degraded.status_code == 302
+    assert degraded.headers["location"] == (
+        f"/ads/{ad.id}/edit?sched={first.id}#sched-{first.id}"
+    )
+    assert (await _reload(db_session, second.id)).is_active is False
+
+    response = await authed_client.post(
+        f"/schedules/{second.id}/toggle",
+        content=body,
+        headers=HTMX_FORM_HEADERS,
+        follow_redirects=False,
+    )
+    assert response.status_code == 200, (
+        f"тумблер на htmx ответил {response.status_code} вместо фрагмента карточки"
+    )
+    assert "<!DOCTYPE" not in response.text, "слою письма приехал целый документ"
+    assert f'id="sched-{second.id}"' in response.text, "во фрагменте нет карточки B"
+    assert f'id="sched-{first.id}"' not in response.text, (
+        "фрагмент принёс соседнюю карточку — цель подмены одна"
+    )
+    assert f'action="/schedules/{second.id}/edit"' not in response.text, (
+        "карточка B РАЗВЕРНУЛАСЬ от нажатия собственного тумблера"
+    )
+    assert (await _reload(db_session, second.id)).is_active is True
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_resume_over_htmx_returns_the_unchanged_card(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Неполное выключенное расписание: фрагмент несёт СЕРВЕРНОЕ состояние.
+
+    Браузер переключает флажок оптимистично; ответ, не несущий флажка без
+    `checked`, оставил бы на экране «включено» при выключенной строке (D-11,
+    D-13/D-16 Фазы 9).
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id, is_active=False)
+
+    response = await authed_client.post(
+        f"/schedules/{schedule.id}/toggle",
+        content=_form([("return_to", "editor"), ("is_active", "1")]),
+        headers=HTMX_FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200, (
+        f"заблокированное возобновление на htmx ответило {response.status_code} "
+        "вместо карточки"
+    )
+    toggle_input = re.search(
+        rf'<input[^>]*id="sched-toggle-{schedule.id}"[^>]*>', response.text
+    )
+    assert toggle_input, "во фрагменте нет флажка тумблера карточки"
+    assert "checked" not in toggle_input.group(0), (
+        "флажок во фрагменте включён, а расписание выключено — ответ повторил "
+        "оптимистичное состояние браузера"
+    )
     assert (await _reload(db_session, schedule.id)).is_active is False
 
 
@@ -1108,6 +1438,25 @@ async def test_user_without_accounts_is_offered_to_connect_one(
     assert 'href="/accounts"' in html
 
 
+def _toggle_markup(html: str, schedule_id: int) -> str:
+    """Разметка тумблера карточки — узел `label.toggle` по его `for`.
+
+    ⚠️ ПРИБОР СМЕНЁН ПЛАНОМ 11-03, И ЭТО НЕ ПРАВКА ПОД РЕАЛИЗАЦИЮ. Прежде
+    разметка бралась срезом за ПЕРВЫМ вхождением адреса маршрута. Форма
+    тумблера перешла на макрос-обёртку, и адрес печатается ДВАЖДЫ подряд —
+    в `action` и в атрибуте отправки слоя письма, — поэтому срез попадал
+    между ними и содержал одну строку `" hx-post="`. Узел берётся по
+    идентификатору тумблера: его же ищет возврат фокуса (QUAL-06).
+    """
+    match = re.search(
+        rf'<label class="toggle" for="sched-toggle-{schedule_id}"[^>]*>.*?</label>',
+        html,
+        re.S,
+    )
+    assert match, f"тумблера карточки {schedule_id} в разметке нет"
+    return match.group(0)
+
+
 @pytest.mark.asyncio
 async def test_account_without_groups_says_so(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
@@ -1123,7 +1472,7 @@ async def test_account_without_groups_says_so(
 
     assert "У выбранного аккаунта нет подключённых групп" in html
     # Тумблер неполного ВЫКЛЮЧЕННОГО расписания недоступен (D-08)
-    assert "disabled" in html.split(f"/schedules/{schedule.id}/toggle")[1][:400]
+    assert "disabled" in _toggle_markup(html, schedule.id)
 
 
 @pytest.mark.asyncio
@@ -1152,7 +1501,7 @@ async def test_active_incomplete_schedule_can_still_be_paused_from_the_editor(
 
     html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
 
-    toggle_markup = html.split(f"/schedules/{schedule.id}/toggle")[1][:400]
+    toggle_markup = _toggle_markup(html, schedule.id)
     assert "disabled" not in toggle_markup, (
         "активное неполное расписание нельзя поставить на паузу из редактора"
     )
@@ -1182,6 +1531,62 @@ async def test_section_caption_is_declined(
     html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
 
     assert expected in html, f"подпись секции не склонена для {count}"
+
+
+@pytest.mark.asyncio
+def _create_form_tag(html: str) -> str:
+    """Открывающий тег формы создания расписания — как он ушёл в браузер."""
+    match = re.search(r'<form[^>]*action="/schedules/new"[^>]*>', html)
+    assert match, "формы создания расписания на экране нет"
+    return match.group(0)
+
+
+@pytest.mark.asyncio
+async def test_the_create_form_targets_the_list_only_when_the_list_exists(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Цель вставки объявляется ТОЛЬКО когда контейнер существует (D-05, план 11-05).
+
+    ⚠️ ПРЕДМЕТ — НЕ АККУРАТНОСТЬ РАЗМЕТКИ, А РАБОТОСПОСОБНОСТЬ КНОПКИ, И ПОЙМАТЬ
+    ЕГО МОЖНО ТОЛЬКО ЗДЕСЬ. Вендоренный htmx 2.0.10 разрешает цель ДО отправки
+    запроса и, не найдя её, поднимает `htmx:targetError` и ВОЗВРАЩАЕТСЯ, не
+    послав запрос вовсе (`issueAjaxRequest`, app/static/js/htmx.min.js). При нуле
+    расписаний контейнера в документе нет — он живёт внутри условия «расписания
+    есть», — поэтому безусловная цель означала бы кнопку «+ ДОБАВИТЬ ПЕРВОЕ»,
+    которая при живом JS НЕ ДЕЛАЕТ НИЧЕГО и не сообщает об этом ни статусом, ни
+    консолью. Транспорт ASGI не исполняет ни строчки JS, поэтому ни один
+    запросный тест такого отказа не увидит: предъявляется он счётом атрибутов
+    самой формы.
+    """
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+
+    empty = await authed_client.get(f"/ads/{ad.id}/edit")
+    assert empty.status_code == 200
+    assert 'id="sched-list"' not in empty.text, (
+        "контейнер списка отрисован на редакторе БЕЗ расписаний — основание "
+        "ветки «было ноль» исчезло, и два состояния снова рисует не один "
+        "механизм"
+    )
+    empty_form = _create_form_tag(empty.text)
+    assert "hx-target" not in empty_form, (
+        f"форма создания объявила цель подмены на ПУСТОМ редакторе: "
+        f"{empty_form!r} — рантайм не найдёт её и не пошлёт запрос вовсе"
+    )
+    assert 'hx-swap="none"' in empty_form, empty_form
+
+    await _seed_schedule(db_session, ad.id, account.id)
+    filled = await authed_client.get(f"/ads/{ad.id}/edit")
+    assert filled.status_code == 200
+    assert 'data-sched-list id="sched-list"' in filled.text, (
+        "постоянного контейнера вставки на непустом редакторе нет"
+    )
+    filled_form = _create_form_tag(filled.text)
+    assert 'hx-target="#sched-list"' in filled_form, filled_form
+    assert 'hx-swap="beforeend"' in filled_form, (
+        f"способ вставки не `beforeend`: {filled_form!r} — карточка встала бы не "
+        f"в конец списка, и после F5 её место сменилось бы"
+    )
 
 
 @pytest.mark.asyncio
@@ -2139,21 +2544,52 @@ UNBOUNDED_ROUTE_CASES: tuple[_RouteInput, ...] = (
 
 
 async def _post_route_input(
-    client: AsyncClient, case: _RouteInput, value: str, ad_id: int
+    client: AsyncClient, case: _RouteInput, value: str, ad_id: int, *, htmx: bool = False
 ):
     """Прямой POST мимо браузера по одному входу перечня.
 
     Тело собирается СЫРОЙ строкой (`_form`), а не отображением: величина из
     двадцати пяти девяток в отображении потребовала бы приведения, и первое же
     приведение спрятало бы предмет (записанное основание соседнего обхода).
+
+    `htmx` ставит признак слоя письма на ЭТОТ запрос, а не на общий клиент:
+    половина деградации не имеет права молча стать половиной htmx.
     """
+    headers = {**FORM_HEADERS, "HX-Request": "true"} if htmx else FORM_HEADERS
     return await client.post(
         case.url.format(value=value),
         content=_form(
             [(key, tmpl.format(value=value, ad_id=ad_id)) for key, tmpl in case.body]
         ),
-        headers=FORM_HEADERS,
+        headers=headers,
         follow_redirects=False,
+    )
+
+
+# Величины ВНЕ колонки, на которых маршрут обязан ответить веткой «записи нет».
+# Три, и у каждой своё основание: соседняя с границей (`ID_MAX + 1`, до D-07 —
+# отказ валидации, на SQLite суиты НЕ роняющая драйвер), двадцать пять девяток
+# (прежний предмет правила) и двадцать шесть знаков (величина, роняющая сам
+# драйвер, — критерий плана 11-02).
+OUT_OF_COLUMN_VALUES: tuple[str, ...] = (
+    str(ID_MAX + 1),
+    OUT_OF_COLUMN_RANGE,
+    "9" * 26,
+)
+
+# ЭТАЛОН ВЕТКИ: несуществующий идентификатор ВНУТРИ колонки. Ожидание для
+# величины вне колонки формулируется СОВПАДЕНИЕМ с ответом на него, а не
+# буквенным адресом: «та же ветка» (D-07) есть равенство исходов, и правило,
+# знающее адрес буквой, разъехалось бы с продуктом при первой правке ветки.
+MISSING_IN_COLUMN = "999999"
+
+
+def _branch_shape(response) -> tuple[int, str | None, str | None]:
+    """Форма исхода: код, адрес перенаправления и заголовок перехода."""
+    return (
+        response.status_code,
+        response.headers.get("location"),
+        response.headers.get("HX-Location"),
     )
 
 
@@ -2162,6 +2598,14 @@ async def test_no_schedule_route_answers_with_a_handler_failure_on_an_out_of_ran
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
     """Ни один из ПЯТИ входов файла не роняет обработчик величиной вне диапазона.
+
+    ⚠️ ПОКОЛЕНИЕ ОЖИДАНИЯ (Фаза 11, план 11-02, решение D-07). Прежде правило
+    ожидало на каждом входе ОТКАЗ ВАЛИДАЦИИ (`422`): граница стояла в аннотации,
+    и форму отказа выбирал фреймворк. D-07 перенёс границу внутрь обработчика, и
+    величина вне колонки идёт ТОЙ ЖЕ веткой, что «записи нет / запись чужая»
+    этого входа. Ожидание теперь — РАВЕНСТВО исхода исходу на несуществующем
+    идентификаторе внутри колонки, на ОБОИХ транспортах: без htmx это `302` с
+    адресом, с htmx — та же ветка своим транспортом. Предмет «не 500» остаётся.
 
     Отображение сличается ЦЕЛИКОМ, и текст отказа называет ВСЕ несогласные
     строки: правило, останавливающееся на первой, чинилось бы по одному входу
@@ -2182,24 +2626,38 @@ async def test_no_schedule_route_answers_with_a_handler_failure_on_an_out_of_ran
     ad = await _seed_ad(db_session, owner.id)
     account = await _seed_account(db_session, owner.id)
 
-    seen = {}
+    disagreed: list[str] = []
+    rows = 0
     for case in UNBOUNDED_ROUTE_CASES:
-        response = await _post_route_input(
-            authed_client, case, OUT_OF_COLUMN_RANGE, ad.id
-        )
-        seen[case.name] = response.status_code
+        for htmx in (False, True):
+            transport = "htmx" if htmx else "без htmx"
+            reference = _branch_shape(
+                await _post_route_input(
+                    authed_client, case, MISSING_IN_COLUMN, ad.id, htmx=htmx
+                )
+            )
+            for value in OUT_OF_COLUMN_VALUES:
+                observed = _branch_shape(
+                    await _post_route_input(authed_client, case, value, ad.id, htmx=htmx)
+                )
+                rows += 1
+                if observed != reference or (
+                    not htmx and (observed[0] != 302 or not observed[1])
+                ):
+                    disagreed.append(
+                        f"{case.name} [{transport}] ← {value[:12]}… = {observed}, "
+                        f"ветка «записи нет» = {reference}"
+                    )
 
-    disagreed = {
-        name: code for name, code in seen.items() if code != VALIDATION_REFUSAL
-    }
+    assert rows == len(UNBOUNDED_ROUTE_CASES) * 2 * len(OUT_OF_COLUMN_VALUES)
     assert not disagreed, (
-        "величина вне диапазона колонки доехала до обработчика (снято → "
-        "ожидалось "
-        f"{VALIDATION_REFUSAL}): "
-        + "; ".join(f"{name} = {code}" for name, code in sorted(disagreed.items()))
-        + ". Предмет — инвариант этого модуля: прямой POST мимо браузера обязан "
-        "давать отказ валидации, а не 500 (T-02-24, T-02-25). Несогласных "
-        f"строк {len(disagreed)} из {len(UNBOUNDED_ROUTE_CASES)}"
+        "величина вне диапазона колонки НЕ ПОШЛА веткой «записи нет / запись "
+        "чужая» своего входа (D-07 Фазы 11): "
+        + "; ".join(disagreed)
+        + ". Предмет — инвариант этого модуля в поколении D-07: прямой POST мимо "
+        "браузера не роняет обработчик и не выдаёт отказом валидации, что "
+        "величина лежит вне колонки (T-02-24, T-02-25, T-11-05). Несогласных "
+        f"строк {len(disagreed)} из {rows}"
     )
 
     # АНТИВАКУУМ. Без него зелёное не значит ничего: помощник, отвергающий ВСЁ,
@@ -2254,6 +2712,35 @@ MISSING_INSIDE_RANGE = 999_999
 ADJACENCY_ROUTE = "/schedules/{value}/toggle"
 
 
+@contextmanager
+def _schedule_statement_log(db_session: AsyncSession):
+    """Операторы SQL, ищущие строку расписания ПО ИДЕНТИФИКАТОРУ, за время блока.
+
+    Слушатель вешается на СИНХРОННЫЙ движок за асинхронным (приём
+    `_statement_log`, `tests/test_pages/test_schedules_list.py`) и снимается в
+    `finally`, иначе следующий тест наследовал бы чужой слушатель.
+
+    ⚠️ ПРИЗНАК — СРАВНЕНИЕ ПО КОЛОНКЕ ИДЕНТИФИКАТОРА, А НЕ ИМЯ ТАБЛИЦЫ, И ЭТО
+    ЗАМЕР. Первая редакция ловила любое вхождение слова `schedules` и поймала
+    запрос счётчиков навигации (`… AS schedules`), который исполняется на ЛЮБОМ
+    запросе вошедшего и величины идентификатора не касается вовсе. Предмет
+    стыка — уехала ли величина операндом сравнения по колонке, и признак снят
+    ровно с него.
+    """
+    engine = db_session.bind.sync_engine
+    seen: list[str] = []
+
+    def _before(conn, cursor, statement, parameters, context, executemany):
+        if "schedules.id = " in statement:
+            seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", _before)
+    try:
+        yield seen
+    finally:
+        event.remove(engine, "before_cursor_execute", _before)
+
+
 async def _response_shape(client: AsyncClient, value) -> tuple[int, str | None]:
     """ФОРМА ответа маршрута тумблера: код и адрес приземления.
 
@@ -2273,10 +2760,22 @@ async def _response_shape(client: AsyncClient, value) -> tuple[int, str | None]:
 async def test_the_column_bound_admits_its_own_value_and_refuses_the_next_one(
     authed_client: AsyncClient, db_session: AsyncSession, owner: User
 ):
-    """Величина границы принимается, величина на единицу больше — отвергается."""
+    """Величина границы доходит до выборки, величина на единицу больше — нет.
+
+    ⚠️ ПОКОЛЕНИЕ (Фаза 11, план 11-02, решение D-07). Прежде внешняя сторона
+    стыка утверждалась КОДОМ: `ID_MAX + 1` давал отказ валидации, и антивакуум
+    требовал, чтобы две соседние величины дали РАЗНЫЕ исходы. D-07 делает исходы
+    РАВНЫМИ по построению — величина вне колонки идёт веткой «записи нет», и
+    различимость исхода была бы ровно тем, что T-11-05 запрещает. Стык теперь
+    наблюдается там, где он и живёт: у величины границы выборка по расписаниям
+    ВЫПОЛНЯЕТСЯ, у величины на единицу больше — НЕ выполняется ни одного
+    оператора над таблицей расписаний.
+    """
     reference = await _response_shape(authed_client, MISSING_INSIDE_RANGE)
-    at_bound = await _response_shape(authed_client, ID_MAX)
-    past_bound = await _response_shape(authed_client, ID_MAX + 1)
+    with _schedule_statement_log(db_session) as at_bound_statements:
+        at_bound = await _response_shape(authed_client, ID_MAX)
+    with _schedule_statement_log(db_session) as past_bound_statements:
+        past_bound = await _response_shape(authed_client, ID_MAX + 1)
 
     assert at_bound == reference, (
         "величина, РАВНАЯ верхней границе колонки, отвергнута — граница "
@@ -2285,18 +2784,24 @@ async def test_the_column_bound_admits_its_own_value_and_refuses_the_next_one(
         f"идентификаторе внутри диапазона — {reference}. Разошлась ВНУТРЕННЯЯ "
         "сторона границы"
     )
-    assert past_bound[0] == VALIDATION_REFUSAL, (
-        "величина НА ЕДИНИЦУ БОЛЬШЕ верхней границы колонки принята: снято "
-        f"{past_bound}, ожидался отказ валидации {VALIDATION_REFUSAL}. "
-        f"На самой границе снято {at_bound}. Разошлась ВНЕШНЯЯ сторона границы"
+    assert past_bound == reference, (
+        "величина НА ЕДИНИЦУ БОЛЬШЕ верхней границы колонки ушла НЕ веткой "
+        f"«записи нет»: снято {past_bound}, ветка «записи нет» — {reference} "
+        "(D-07 Фазы 11). Разошлась ВНЕШНЯЯ сторона границы"
     )
 
-    # АНТИВАКУУМ СМЕЖНОСТИ. Помощник, отвечающий одинаково на обе соседние
-    # величины, зеленел бы на любом из двух ожиданий ПО ОТДЕЛЬНОСТИ.
-    assert at_bound != past_bound, (
-        "две СОСЕДНИЕ величины дали ОДИН исход "
-        f"({at_bound}) — стык границы не замерен ничем: правило прошло бы и на "
-        "помощнике, не отвергающем ничего, и на помощнике, отвергающем всё"
+    # АНТИВАКУУМ СМЕЖНОСТИ — ПО ЗАПРОСАМ, А НЕ ПО КОДУ. Помощник, не отвергающий
+    # ничего, отправил бы `ID_MAX + 1` в выборку; помощник, отвергающий всё, не
+    # отправил бы в неё и `ID_MAX`.
+    assert at_bound_statements, (
+        "на величине границы не выполнено НИ ОДНОГО оператора над расписаниями — "
+        "либо граница отвергает годное, либо журнал операторов не видит запросов "
+        "приложения и правило ниже зеленело бы вакуумом"
+    )
+    assert not past_bound_statements, (
+        "величина на единицу больше границы ДОЕХАЛА ДО ЗАПРОСА: "
+        f"{past_bound_statements} — проверка стоит ниже первого использования, и "
+        "на PostgreSQL этот запрос даёт `DataError` (Landmine CONTEXT Фазы 11)"
     )
 
 
@@ -2316,6 +2821,30 @@ SCHEDULES_MODULE = Path(__file__).resolve().parents[2] / "app" / "pages" / "sche
 # Три псевдонима общей границы (app/pages/schedules.py). Идентификатор маршрута,
 # объявленный НЕ через них, границы не несёт.
 BOUND_ALIASES = ("ScheduleIdPath", "AdIdForm", "AccountIdForm")
+
+# ВТОРАЯ ФОРМА ГРАНИЦЫ — ВСТРОЕННАЯ ЗАПИСЬ, И ЭТО ЗАМЕР, А НЕ ПОБЛАЖКА
+# (Фаза 11, план 11-04).
+#
+# ПОЧЕМУ ФОРМ ДВЕ. Все три псевдонима выше построены на `Path()` и `Form()` —
+# то есть на входах МАРШРУТА и ТЕЛА. Курсор порции есть параметр СТРОКИ ЗАПРОСА
+# (`Query`), и псевдонима этой формы у проекта нет вовсе: соседний раздел
+# объявляет свой курсор ровно так же, встроенной записью
+# (`app/pages/account_groups.py::account_groups_partial`). Правило, знающее
+# только псевдонимы, объявило бы ограниченный вход НЕограниченным и потребовало
+# бы от него псевдонима, которого не существует.
+#
+# ⚠️ ЭТО НЕ ОСЛАБЛЕНИЕ ПРАВИЛА, И ГРАНИЦА РАЗЛИЧИЯ НАЗВАНА. Предмет модуля —
+# «величина вне диапазона колонки не доедет до драйвера БД» (T-02-24, T-02-25),
+# а не «в сигнатуре набрано одно из трёх имён». Встроенная запись этот предмет
+# удовлетворяет ПОЛНОСТЬЮ: обе половины диапазона стоя́т на самом входе. Голое
+# `int` по-прежнему краснеет, и это показано отрицательными контролями ниже —
+# их ДВА: на голое целое и на ПОЛОВИНУ встроенной границы.
+#
+# ЭТА ЖЕ ПАРА ФОРМ УЖЕ ПРИЗНАНА ПРОЕКТОМ: `_carries_the_bound` гейта каталога
+# (`tests/test_pages/test_identifier_bounds.py`) принимает псевдоним ЛИБО
+# встроенную запись, и по тому же основанию — курсор постраничного вывода.
+# Здешнее правило приводится к той же паре, а не заводит третью трактовку.
+INLINE_BOUND_MARKS = ("ge=1", "le=ID_MAX")
 
 # Признак идентификатора в имени параметра: `id` целиком либо хвост `_id`.
 # `valid`, `paid` и прочие слова, кончающиеся на те же две буквы, признаком не
@@ -2362,7 +2891,27 @@ SIGNATURE_GATE_EXEMPTIONS: dict[str, str] = {}
 # означает НОВЫЙ вход того же класса, и решение о его границе принимается тогда,
 # а не обнаруживается кругом верификации; падение — что вход исчез из сигнатуры
 # и правило поведения выше стережёт величину, которой в маршруте больше нет.
-BOUNDED_ROUTE_INPUTS_DECLARED = 7
+#
+# 7 → 8, Фаза 11, план 11-04 (решение D-11).
+#
+# ⚠️ ПОСЫЛКА АБЗАЦА ВЫШЕ ОПРОВЕРГНУТА И ОСТАВЛЕНА НАЗВАННОЙ, А НЕ СТЁРТОЙ
+# (идиома D-30/D-32). Она гласила: «Маршруты `schedules_partial` и
+# `schedules_list` идентификаторов в сигнатурах не несут вовсе и в счёт не
+# входят». Это было верно ДЛЯ СВОЕГО ДЕРЕВА — плана 10-12, где порция листалась
+# СМЕЩЕНИЕМ, а смещение идентификатором не является. План 11-04 перевёл курсор
+# на КЛЮЧ последней отрисованной строки (CR-01 Фазы 9), и у `schedules_partial`
+# впервые появился вход, чьё имя несёт признак идентификатора. `schedules_list`
+# по-прежнему не несёт ни одного — половина посылки в силе.
+#
+# ИСТОЧНИК ДВИЖЕНИЯ, НАЗВАННЫЙ ВХОДОМ: `schedules_partial.after_id`. Границу он
+# несёт ВСТРОЕННОЙ записью, а не псевдонимом, — основание записано у
+# `INLINE_BOUND_MARKS`, и вход остаётся ВНУТРИ счёта, а не выводится изъятием:
+# величина его подконтрольна отправителю, то есть критерию перечня изъятий он не
+# удовлетворяет.
+#
+# ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА, А НЕ СЛОЖЕНИЕМ В УМЕ:
+# «ограниченных входов маршрутов 8, а объявлено 7» — и перечислило все восемь.
+BOUNDED_ROUTE_INPUTS_DECLARED = 8
 
 
 def _strip_comments(source: str) -> str:
@@ -2446,15 +2995,32 @@ def _identifier_inputs(signature: str) -> dict[str, str]:
     return inputs
 
 
+def _carries_inline_bound(annotation: str) -> bool:
+    """Несёт ли объявление ВСТРОЕННУЮ границу — ОБЕ её половины сразу.
+
+    ⚠️ ТРЕБУЮТСЯ ОБЕ ПОЛОВИНЫ, И ЭТО НЕСУЩЕЕ УСЛОВИЕ. Одна лишь нижняя граница
+    (`ge=1`) не защищает ни от чего: величина ВЫШЕ диапазона колонки и есть та,
+    что доезжает до драйвера и даёт пятисотку. Правило, принявшее половину,
+    зеленело бы ровно на том входе, ради которого написано.
+    """
+    return all(mark in annotation for mark in INLINE_BOUND_MARKS)
+
+
 def _bound_verdicts(source: str) -> dict[str, bool]:
-    """Отображение «обработчик.параметр → несёт ли общую границу»."""
+    """Отображение «обработчик.параметр → несёт ли общую границу».
+
+    Граница засчитывается в ДВУХ формах — псевдонимом либо встроенной записью
+    (основание записано у `INLINE_BOUND_MARKS`).
+    """
     verdicts: dict[str, bool] = {}
     for handler, signature in _route_signature_sources(source).items():
         for name, annotation in _identifier_inputs(signature).items():
             key = f"{handler}.{name}"
             if key in SIGNATURE_GATE_EXEMPTIONS:
                 continue
-            verdicts[key] = any(alias in annotation for alias in BOUND_ALIASES)
+            verdicts[key] = any(
+                alias in annotation for alias in BOUND_ALIASES
+            ) or _carries_inline_bound(annotation)
     return verdicts
 
 
@@ -2514,6 +3080,52 @@ def test_every_identifier_input_of_the_schedule_routes_carries_the_shared_bound(
     assert not stale, (
         f"изъятия пережили свои параметры: {stale}. Изъятие без предмета — "
         "запись о том, до чего не дошли руки, а не решение"
+    )
+
+
+def test_control_negative_half_an_inline_bound_reddens_the_signature_gate():
+    """ЗУБЫ ВТОРОЙ ФОРМЫ ГРАНИЦЫ ПОКАЗАНЫ ОТДЕЛЬНО (Фаза 11, план 11-04).
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ПРИЗНАНИЕ ВСТРОЕННОЙ ЗАПИСИ БЫЛО БЫ ДЫРОЙ, А НЕ
+    ЗАМЕРОМ. Соседний контроль доказывает, что краснеет ГОЛОЕ целое, — но он
+    ничего не говорит о том, краснеет ли встроенная запись, у которой есть
+    только нижняя половина диапазона. Именно ВЕРХНЯЯ половина и защищает от
+    величины, доезжающей до драйвера БД, поэтому правило, принимающее
+    `Query(None, ge=1)`, зеленело бы на том самом входе, ради которого написано.
+
+    Подделка идёт в памяти: у курсора порции снимается верхняя граница, и
+    утверждается, что гейт назвал ИМЕННО этот вход. Файл дерева не правится ни
+    байтом.
+    """
+    source = SCHEDULES_MODULE.read_text(encoding="utf-8")
+
+    honest = _bound_verdicts(source)
+    assert all(honest.values()), (
+        f"на настоящем исходнике гейт уже красен: {sorted(honest.items())}"
+    )
+
+    forged_declaration = "after_id: int | None = Query(None, ge=1, le=ID_MAX)"
+    assert source.count(forged_declaration) == 1, (
+        "объявление курсора порции встречается в исходнике не единожды "
+        f"({source.count(forged_declaration)}) — подстановка контроля перестала "
+        "быть однозначной"
+    )
+    forged = source.replace(
+        forged_declaration, "after_id: int | None = Query(None, ge=1)", 1
+    )
+    assert forged != source, "подстановка контроля ничего не изменила"
+
+    broken = _bound_verdicts(forged)
+    unbounded = sorted(key for key, carries in broken.items() if not carries)
+    assert unbounded == ["schedules_partial.after_id"], (
+        "гейт НЕ ПОКРАСНЕЛ на встроенной границе, потерявшей верхнюю половину: "
+        f"{sorted(broken.items())}. Величина выше диапазона колонки прошла бы в "
+        "дерево незамеченной"
+    )
+    assert len(broken) == len(honest), (
+        "подделка изменила ЧИСЛО входов, а не только их вердикт — контроль "
+        f"доказывал бы не то свойство, которое объявил: {len(broken)} против "
+        f"{len(honest)}"
     )
 
 
@@ -2985,10 +3597,21 @@ AD_SUMMARY_RULE_MARKERS = ("Ближайший запуск", "editor.next_run_a
 # (страница редактора и ответ автосохранения). Настоящий план добавил ТРЕТЬЕ, и
 # перечень назван поимённо — правило, утверждающее число, которого в дереве нет,
 # краснело бы на верном дереве.
+#
+# ⚠️ ПЕРЕЧЕНЬ ПЕРЕЗАМЕРЕН ПЛАНОМ 11-05, И РАСХОЖДЕНИЕ НАЗВАНО, А НЕ ИСПРАВЛЕНО
+# МОЛЧА. Замер дерева дал ПЯТЬ мест включения, а объявлено было три: план 11-01
+# завёл ответ ПРАВКИ расписания (`ads/partials/sched_card_response.html`),
+# включающий сводку, и в этот перечень его не внёс. Правило от этого не
+# краснело — оно утверждает, что каждый ОБЪЯВЛЕННЫЙ потребитель включает общий
+# источник, а не что объявлены все, — то есть пропуск был невидим по
+# построению. Обе недостающие записи внесены здесь: ответ правки (11-01) и
+# ответ СОЗДАНИЯ (11-05).
 AD_SUMMARY_RULE_USERS = (
     "ads/form.html",
     "ads/includes/autosave_response.html",
     "ads/partials/sched_delete_response.html",
+    "ads/partials/sched_card_response.html",
+    "ads/partials/sched_create_response.html",
 )
 
 AD_SUMMARY_RULE_INCLUDE = re.compile(

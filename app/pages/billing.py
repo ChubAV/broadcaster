@@ -17,6 +17,7 @@ from app.services.payment_service import (
     create_payment,
 )
 from app.pages import notices
+from app.pages.htmx import redirect_external, respond
 from app.pages.common import (
     check_is_admin,
     get_user_from_cookie,
@@ -93,6 +94,16 @@ ACCESS_CLOSED_NOTICES = {
 # Три частных реестра — этот, реестр исхода повтора и реестр отказа перезапуска
 # воркера — держали одно правило тремя копиями; правка одной из них молча
 # расходилась с двумя другими. Копий не осталось ни одной.
+#
+# ⚠️ АБЗАЦ ВЫШЕ УСТАРЕЛ И УТВЕРЖДАЛ БОЛЬШЕ СДЕЛАННОГО — ОН НАЗВАН, А НЕ СТЁРТ
+# (UAT 08, пункт 9). Частных реестров было ЧЕТЫРЕ, а не три: четвёртый — исходов
+# снятия задачи на странице очереди админки, со своим ключом адресной строки и
+# своим местом отрисовки. Он заведён Фазой 6 и в свод Фазы 8 не входил, поэтому
+# «копий не осталось ни одной» на дереве Фазы 8 было неправдой.
+# ЧЕМ ЗАКРЫТО: планом 11-14 (D-10) четыре исхода очереди переехали в тот же
+# закрытый реестр посимвольно, частный словарь и его место отрисовки сняты, а
+# снятое написание ключа держит на нуле гейт снятых написаний. С плана 11-14
+# копий действительно не осталось ни одной.
 
 
 # ПРАВИЛО ДОСТУПА ОБЪЯВЛЕНО В `app/application/billing/`, А МОДУЛЬ ЕГО ТОЛЬКО
@@ -293,10 +304,18 @@ async def subscribe_to_plan(
     СРОК ДОСТУПА ЭТОТ ОБРАБОТЧИК НЕ ТРОГАЕТ. Он создаёт намерение оплатить;
     оплату подтверждает только вебхук (D-05). Обработчика возврата с ЮKassa в
     проекте нет намеренно: редирект браузера происходит и при отказе от оплаты.
+
+    ⚠️ ФОРМУ ОТВЕТА РЕШАЕТ СЛОЙ ОТВЕТА (Фаза 11, план 11-15, FORM-05). Отказы
+    уходят `respond()` на `/billing` с прежним кодом реестра; успех — ТРЕТЬИМ
+    выходом `redirect_external`, потому что адрес подтверждения ВНЕШНИЙ и в
+    `redirect=` не принимается (D-09). Развилка транспорта стоит ПОСЛЕ создания
+    платежа: потолок незакрытых намерений (PAY-01) живёт внутри создания и
+    переводом не затронут. Без признака htmx ответ — прежний 302 на тот же адрес.
+    Голый 403 сверки источника — объявленное изъятие D-08.
     """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return RedirectResponse(url="/login", status_code=302)
+        return await respond(request, redirect="/login")
 
     # СВЕРКА ИСТОЧНИКА ОСТАЁТСЯ 403 БЕЗ ПРИЧИНЫ. Чужому источнику причина
     # отказа не сообщается: межсайтовый запрос не имеет права узнать даже,
@@ -306,7 +325,7 @@ async def subscribe_to_plan(
         return Response(status_code=403)
 
     if not settings.yookassa_enabled:
-        return RedirectResponse(url=f"/billing?notice={notices.PAYMENT_DISABLED}", status_code=302)
+        return await respond(request, redirect="/billing", notice=notices.PAYMENT_DISABLED)
 
     try:
         result = await create_payment(
@@ -343,10 +362,18 @@ async def subscribe_to_plan(
         # Потолок живёт ВНУТРИ создания платежа и своим шагом обработчика не
         # становится: второе место, где решается один вопрос, — ровно та
         # конструкция, за которую раздел получил два раунда правок.
-        return RedirectResponse(url=f"/billing?notice={notices.PAYMENT_PENDING}", status_code=302)
+        return await respond(request, redirect="/billing", notice=notices.PAYMENT_PENDING)
     except PaymentCreationError:
         # Текст исключения СЮДА НЕ ПРИХОДИТ И НЕ НУЖЕН: он уже записан журналом
         # сервиса ключом `payment_create_failed`. На экран уезжает КОД причины,
         # а слова к нему принадлежат закрытому реестру (T-05-47).
-        return RedirectResponse(url=f"/billing?notice={notices.PAYMENT_FAILED}", status_code=302)
-    return RedirectResponse(url=result["confirmation_url"], status_code=302)
+        return await respond(request, redirect="/billing", notice=notices.PAYMENT_FAILED)
+    # Адрес подтверждения ВНЕШНИЙ: на htmx он уходит заголовком увода только
+    # после проверки хоста по закрытому множеству, а провал проверки уводит на
+    # /billing с тем же кодом, что сбой создания (D-09, Находка C).
+    return await redirect_external(
+        request,
+        url=result["confirmation_url"],
+        fallback="/billing",
+        fallback_notice=notices.PAYMENT_FAILED,
+    )

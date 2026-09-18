@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "components/avatar.html" import avatar %}
 {% from "components/badge.html" import badge %}
-{% from "components/button.html" import button, link_button %}
+{% from "components/button.html" import link_button %}
 {% from "components/card.html" import card_open, card_close %}
 {% from "components/modal.html" import modal %}
 {% from "components/mono.html" import mono %}
@@ -50,7 +50,15 @@
       {{ avatar(target_user.name, size=44) }}
       <div data-identity-meta>
         {{- mono(target_user.email, 'bright') -}}
-        {%- if target_user.is_blocked %}{{ badge('Заблокирован', 'danger') }}{% endif -%}
+        {#- ПОСТОЯННАЯ ОБЁРТКА БЕЙДЖА (Фаза 11, план 11-12, D-02, D-03). Её
+            СОДЕРЖИМОЕ подменяет внеполосный узел ответа тумблера блокировки
+            (`admin/partials/user_actions_response.html`), поэтому обёртка
+            существует ВСЕГДА — и у незаблокированного, где она пуста: область,
+            которой нет в документе, не получила бы бейдж после первого нажатия.
+            Пустая обёртка не занимает места в колонке личности: правило
+            `display: contents` в `app.css` делает флекс-элементом сам бейдж, а
+            не обёртку, и лишнего зазора под адресом нет. -#}
+        <span id="user-block-badge">{%- include "admin/includes/user_block_badge.html" -%}</span>
       </div>
     </div>
     <div data-metrics>
@@ -75,18 +83,11 @@
           Формат даты — только через глобал зоны пользователя (правило P-2);
           своего `strftime` у этой строки нет. -#}
       {{ card_open() }}
-        {{ mono('Доступ', 'muted', upper=true) }}
-        {%- if target_access.get('is_comped') %}
-        <span data-metric-value>∞</span>
-        {%- elif target_access.get('open') %}
-        <span data-metric-value>{{ target_access.get('days_left') }}</span>
-        {{ mono('до ' ~ format_datetime_for_user(target_access.get('expires_at'), user), 'muted') }}
-        {%- else %}
-        <span data-metric-value>—</span>
-        {%- if target_access.get('expires_at') %}
-        {{ mono('закрыт ' ~ format_datetime_for_user(target_access.get('expires_at'), user), 'danger') }}
-        {%- endif %}
-        {%- endif %}
+        {#- Постоянная обёртка плитки (план 11-12): её СОДЕРЖИМОЕ подменяет
+            внеполосный узел ответа тумблера. Карточка плитки остаётся снаружи. -#}
+        <div id="user-access-tile">
+        {% include "admin/includes/user_access_tile.html" %}
+        </div>
       {{ card_close() }}
       {{ card_open() }}
         {{ mono('Объявления', 'muted', upper=true) }}
@@ -130,52 +131,12 @@
   {% endif %}
 
   {{ card_open(title='Действия') }}
-    <div data-actions>
-      {#- ТУМБЛЕР БЕСПЛАТНОГО ДОСТУПА. Маршрут, метод и адрес — ПРЕЖНИЕ: план
-          `05.1-09` переиспользовал вход снятого тумблера, сменив ему хранилище
-          и подписи. Подписи НАЗЫВАЮТ ДЕЙСТВИЕ, а не состояние («Выдать» /
-          «Снять»), как и у соседней пары блокировки: кнопка, подписанная
-          состоянием, читается как переключатель, у которого непонятно, что
-          случится по нажатию.
-
-          ПОДТВЕРЖДЕНИЯ НЕТ, И ЭТО РЕШЕНИЕ (UI-контракт E5). Тумблер обратим и
-          данных не разрушает: снятая льгота возвращается тем же нажатием. У
-          соседнего тумблера блокировки подтверждения тоже нет — модалка здесь
-          стоит ровно у одного действия, необратимого (удаление). -#}
-      <form method="post" action="/admin/users/{{ target_user.id }}/unlimited">
-        {%- if target_access.get('is_comped') %}{{ button('Снять бесплатный доступ', variant='ghost') }}
-        {%- else %}{{ button('Выдать бесплатный доступ', variant='ghost') }}{% endif -%}
-      </form>
-      <form method="post" action="/admin/users/{{ target_user.id }}/block">
-        {%- if target_user.is_blocked %}{{ button('Разблокировать', variant='ghost') }}
-        {%- else %}{{ button('Заблокировать', variant='ghost') }}{% endif -%}
-      </form>
-      {#- ВХОД ПОД ПОЛЬЗОВАТЕЛЕМ (ADMIN-06). Триггер — НАСТОЯЩАЯ форма POST, а
-          не кнопка-триггер вне формы: без поднявшегося Alpine кнопка вне формы
-          не делает ничего, и на карточке не осталось бы ни одного пути войти
-          (тот же довод, что у удаления, — План 12, WR-04).
-
-          ПОДТВЕРЖДЕНИЕ ЗДЕСЬ ЕСТЬ, в отличие от обоих соседних тумблеров, и
-          это решение по существу, а не разнобой. Тумблеры обратимы одним
-          нажатием и данных не меняют; вход под пользователем переводит все
-          последующие действия администратора в чужую учётную запись — от
-          синхронизации групп до всего, что он нажмёт по дороге. Начальный
-          фокус панели стоит на «Отмене», поэтому по Enter вход не срабатывает. -#}
-      <form method="post" action="/admin/users/{{ target_user.id }}/impersonate"
-            x-data x-on:submit.prevent="$dispatch('modal-open-user-imp-{{ target_user.id }}')">
-        {{ button('Войти под пользователем', variant='ghost') }}
-      </form>
-      {#- Подтверждение удаления — модалка Плана 02 вместо браузерного диалога:
-          начальный фокус стоит на «Отмене», поэтому по Enter удаление не
-          срабатывает. Маршрут и метод формы прежние.
-          Триггер — НАСТОЯЩАЯ форма, а не кнопка-триггер вне формы (План 12,
-          WR-04): кнопка вне формы не делает без Alpine ничего, а форма панели
-          остаётся скрытой навсегда, и на карточке не остаётся ни одного пути
-          удалить пользователя. Имя события и идентификатор панели не менялись. -#}
-      <form method="post" action="/admin/users/{{ target_user.id }}/delete"
-            x-data x-on:submit.prevent="$dispatch('modal-open-user-del-{{ target_user.id }}')">
-        <button type="submit" class="btn btn--danger"><span class="btn__label">Удалить</span></button>
-      </form>
+    {#- ПОСТОЯННЫЙ `id` БЛОКА ДЕЙСТВИЙ (Фаза 11, план 11-12, D-02, D-03): форма
+        тумблера блокировки подменяет СОДЕРЖИМОЕ этого узла (`innerHTML`), и узел
+        переживает сколько угодно ответов. Панели подтверждения входа и удаления
+        стоят НИЖЕ, вне узла, и подменой не задеваются. -#}
+    <div data-actions id="user-actions">
+      {%- include "admin/includes/user_actions.html" %}
     </div>
   {{ card_close() }}
 

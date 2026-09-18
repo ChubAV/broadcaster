@@ -793,11 +793,22 @@ async def test_card_order_is_stable_across_reloads_and_pages(
     """Порядок задан явно и стабилен: порция прокрутки не дублирует и не теряет.
 
     Без ЯВНОЙ сортировки порядок строк — свойство плана запроса, а не контракта.
-    Стоит ему поплыть между двумя запросами, и бесконечная прокрутка,
-    работающая смещением, покажет одну карточку дважды, а другую не покажет
-    вовсе: смещение 30 отсчитывается уже по ДРУГОЙ последовательности.
-    Расписания посеяны неразличимыми по данным намеренно — тогда единственное,
-    что может задавать порядок, это сортировка по идентификатору.
+    Стоит ему поплыть между двумя запросами, и бесконечная прокрутка покажет
+    одну карточку дважды, а другую не покажет вовсе. Расписания посеяны
+    неразличимыми по данным намеренно — тогда единственное, что может задавать
+    порядок, это сортировка по идентификатору.
+
+    ⚠️ ПРЕЖНЯЯ РЕДАКЦИЯ АБЗАЦА ОСТАВЛЕНА НАЗВАННОЙ, А НЕ СТЁРТОЙ (идиома
+    D-30/D-32). Она говорила «смещение 30 отсчитывается уже по ДРУГОЙ
+    последовательности» — довод был верен ДЛЯ СВОЕЙ ФОРМЫ курсора и снят вместе
+    с ней планом 11-04 (D-11). Предмет правила не изменился: сортировка
+    утверждается как свойство ВЫПОЛНЕННОГО запроса на обоих входах.
+
+    ⚠️ АДРЕС ПОРЦИИ БОЛЬШЕ НЕ СОБИРАЕТСЯ ТЕСТОМ. Собранный тестом, он знал бы
+    форму курсора наизусть: на ключевом курсоре `?offset=30` попал бы в
+    НЕИЗВЕСТНЫЙ маршруту параметр, тот молча вернул бы ПЕРВУЮ страницу, и тест
+    сообщил бы о порядке вместо разорванной цепочки (то же основание, что у
+    `test_infinite_scroll_chain`, план 09-13).
     """
     ad = await _seed_ad(db_session, title="Объявление длинного списка")
     account = await _seed_account(db_session)
@@ -812,15 +823,10 @@ async def test_card_order_is_stable_across_reloads_and_pages(
     ]
 
     with _statement_log(db_session) as page_statements:
-        first_page = _card_ids((await authed_client.get("/schedules")).text)
+        first_html = (await authed_client.get("/schedules")).text
+    first_page = _card_ids(first_html)
     with _statement_log(db_session) as chunk_statements:
-        chunk = _card_ids(
-            (
-                await authed_client.get(
-                    f"/schedules/partial?offset={PAGE_SIZE}&limit={PAGE_SIZE}"
-                )
-            ).text
-        )
+        chunk = _card_ids((await authed_client.get(_sentinel_url(first_html))).text)
 
     # Совпадение порядка с посевом само по себе доказывает мало: без ORDER BY
     # SQLite всё равно вернул бы строки в порядке rowid, и утверждение было бы
@@ -886,3 +892,213 @@ async def test_toggling_does_not_move_the_card(
         after_html.index(f'id="schedule-toggle-{middle.id}"') :
     ].split(">", 1)[0]
     assert "checked" not in toggle, "тумблер показывает состояние, которого нет в базе"
+
+
+# =============================================================================
+# План 11-04: КЛЮЧЕВОЙ КУРСОР СВОДНОГО СПИСКА (D-11)
+# =============================================================================
+#
+# Основание — CR-01 Фазы 9, воспроизведённый на этом экране. Смещённый курсор
+# отсчитывает ПОРЯДКОВЫЙ НОМЕР по СЕГОДНЯШНЕЙ выдаче; фрагментный тумблер под
+# фильтром состояния выводит строку ИЗ выдачи, выдача сдвигается на единицу, и
+# порция по адресу, снятому ДО нажатия, пропускает ровно одну строку. Ключевой
+# курсор считает от ИДЕНТИФИКАТОРА последней отрисованной строки, и сдвиг
+# выдачи его не двигает — класс отказа становится НЕВЫРАЗИМЫМ формой контракта,
+# а не ловится сверкой.
+
+# Сентинел бесконечной прокрутки — единственный `hx-get`, ведущий на порцию
+# этого раздела.
+SENTINEL_RE = re.compile(r'hx-get="([^"]*/schedules/partial\?[^"]*)"')
+
+
+def _sentinel_url(html: str) -> str:
+    """Адрес следующей порции — ТОТ, КОТОРЫЙ ДАЛА СТРАНИЦА, а не собранный тестом.
+
+    Тест, собирающий адрес сам, знает форму курсора наизусть: на смене формы он
+    покраснел бы «нет смещения», то есть обвинил бы ФОРМУ вместо разорванной
+    цепочки. Ровно это основание записано у `test_infinite_scroll_chain`
+    (tests/test_pages/test_htmx_preserved.py, план 09-13), и здесь оно то же.
+    """
+    urls = SENTINEL_RE.findall(html)
+    assert urls, "сентинела бесконечной прокрутки нет на странице"
+    return urls[-1]
+
+
+@pytest.mark.asyncio
+async def test_the_next_portion_does_not_skip_a_row_after_a_toggle_under_the_state_filter(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-11: тумблер под фильтром состояния не съедает строку следующей порции.
+
+    ⚠️ АДРЕС ПОРЦИИ СНИМАЕТСЯ ДО НАЖАТИЯ, И ЭТО НЕ УДОБСТВО ТЕСТА, А ТО, КАК
+    ДЕРЖИТ ЕГО БРАУЗЕР. Сентинел отрисован ПЕРВОЙ порцией и переживает нажатие:
+    человек, поставивший строку на паузу и докрутивший до низа, уходит на сервер
+    по адресу, вычисленному до того, как выдача сдвинулась.
+
+    Предмет теста — КУРСОР, а не форма ответа тумблера: запись паузы исполняется
+    при любом ответе, поэтому утверждается состояние в базе, а не код ответа.
+    """
+    ad = await _seed_ad(db_session, title="Объявление под фильтром состояния")
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа под фильтром состояния")
+    seeded = [
+        (
+            await _seed_schedule(
+                db_session, ad, account, group_ids=[group.id], is_active=True
+            )
+        ).id
+        for _ in range(PAGE_SIZE + 5)
+    ]
+
+    first = await authed_client.get("/schedules?state=active")
+    assert first.status_code == 200
+    assert _card_ids(first.text) == seeded[:PAGE_SIZE], (
+        "первая порция под фильтром отдана не по порядку"
+    )
+    sentinel = _sentinel_url(first.text)
+
+    # Пауза строки ИЗ ПЕРВОЙ порции запросом со сводного списка (признака
+    # возврата строка не шлёт): под фильтром `active` строка выходит из выдачи.
+    paused_id = seeded[0]
+    response = await authed_client.post(
+        f"/schedules/{paused_id}/toggle",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 204), (
+        f"тумблер со сводного списка ответил {response.status_code} слою письма"
+    )
+    paused_row = await db_session.get(Schedule, paused_id)
+    await db_session.refresh(paused_row)
+    assert paused_row.is_active is False, "тумблер не поставил строку на паузу"
+
+    rest = await authed_client.get(sentinel)
+    assert rest.status_code == 200
+
+    assert _card_ids(rest.text) == seeded[PAGE_SIZE:], (
+        "следующая порция потеряла строку: курсор отсчитывает СМЕЩЕНИЕ по "
+        "выдаче, из которой тумблер вывел строку первой порции — дословно CR-01 "
+        "Фазы 9 (D-11). Ключевой курсор считает от идентификатора последней "
+        "отрисованной строки и сдвигом выдачи не двигается"
+    )
+
+
+# =============================================================================
+# План 11-04, задача 2: ТУМБЛЕР СВОДНОГО СПИСКА ОТВЕЧАЕТ СВОЕЙ СТРОКОЙ (D-02)
+# =============================================================================
+#
+# Экранов у тумблера ДВА, и узнаётся экран признаком возврата: редактор шлёт
+# его, строка сводного списка — нет. Ответ обязан подменять ровно строку ТОГО
+# экрана, откуда пришла форма, и всегда показывать СЕРВЕРНОЕ состояние.
+
+# Узел строки ответа — первый верхнеуровневый узел тела (`schedule_row`).
+ROW_ARTICLE = '<article class="sched-item" id="schedule-row-{schedule_id}">'
+
+
+def _row_toggle_markup(html: str, schedule_id: int) -> str:
+    """Разметка тумблера строки — узел `label.toggle` по его `for`.
+
+    Узел берётся по идентификатору тумблера, а не срезом за адресом маршрута:
+    форма строки идёт через макрос-обёртку, и адрес печатается ДВАЖДЫ подряд —
+    в `action` и в атрибуте отправки слоя письма, — поэтому срез попал бы между
+    ними (прибор плана 11-03, `tests/test_pages/test_editor_schedules.py`).
+    """
+    match = re.search(
+        rf'<label class="toggle" for="schedule-toggle-{schedule_id}"[^>]*>.*?</label>',
+        html,
+        re.S,
+    )
+    assert match, f"тумблера строки {schedule_id} в разметке нет"
+    return match.group(0)
+
+
+@pytest.mark.asyncio
+async def test_the_list_toggle_answers_with_its_own_row_over_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Со сводного списка ответ — СТРОКА этого экрана, а не карточка редактора.
+
+    Признака возврата строка не шлёт, и по его отсутствию обработчик выбирает
+    форму ответа (D-02). Фрагмент редактора, приехавший сюда, приземлиться не
+    смог бы: цели `#sched-N` на сводном списке нет вовсе.
+
+    Путь деградации проверяется на ВТОРОЙ строке: первая половина уже сменила
+    состояние, и переиспользованная строка проверяла бы не тот исход.
+    """
+    ad = await _seed_ad(db_session, title="Объявление строки списка")
+    account = await _seed_account(db_session)
+    group = await _seed_group(db_session, account, "Группа строки списка")
+    schedule = await _seed_schedule(
+        db_session, ad, account, group_ids=[group.id], is_active=True
+    )
+    degraded_row = await _seed_schedule(
+        db_session, ad, account, group_ids=[group.id], is_active=True
+    )
+
+    response = await authed_client.post(
+        f"/schedules/{schedule.id}/toggle",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200, (
+        f"слою письма ответили {response.status_code} вместо 200 со строкой"
+    )
+    assert "<!DOCTYPE" not in response.text, (
+        "слою письма приехал ЦЕЛЫЙ ДОКУМЕНТ — обработчик ответил переходом"
+    )
+    assert response.text.lstrip().startswith(
+        ROW_ARTICLE.format(schedule_id=schedule.id)
+    ), (
+        "первый верхнеуровневый узел тела — не строка своего экрана: "
+        f"{response.text.lstrip()[:200]!r}"
+    )
+    await db_session.refresh(schedule)
+    assert schedule.is_active is False, "тумблер не поставил строку на паузу"
+    assert "checked" not in _row_toggle_markup(response.text, schedule.id), (
+        "строка ответа показывает состояние, которого нет в базе"
+    )
+
+    # Путь деградации не тронут: без признака — прежнее перенаправление.
+    without = await authed_client.post(
+        f"/schedules/{degraded_row.id}/toggle", follow_redirects=False
+    )
+    assert without.status_code == 302
+    assert without.headers["location"] == "/schedules"
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_resume_from_the_list_returns_the_row_unchanged(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Фрагмент строки ВСЕГДА отражает сервер (D-11, D-13/D-16 Фазы 9).
+
+    Неполное расписание возобновить нельзя, и браузер уже переключил флажок
+    ОПТИМИСТИЧНО. Молчание оставило бы человека с включённым на вид тумблером
+    выключенной строки; строка в прежнем состоянии возвращает флажок на место.
+    """
+    ad = await _seed_ad(db_session, title="Неполное расписание сводного списка")
+    schedule = await _seed_schedule(db_session, ad, account=None, is_active=False)
+
+    response = await authed_client.post(
+        f"/schedules/{schedule.id}/toggle",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200, (
+        f"заблокированное возобновление ответило {response.status_code} вместо "
+        "строки с серверным состоянием"
+    )
+    assert response.text.lstrip().startswith(
+        ROW_ARTICLE.format(schedule_id=schedule.id)
+    ), "ответ не начинается со строки своего экрана"
+    await db_session.refresh(schedule)
+    assert schedule.is_active is False, "сервер принял возобновление неполного"
+
+    toggle = _row_toggle_markup(response.text, schedule.id)
+    assert "checked" not in toggle, (
+        "оптимистично переключённый флажок не встал обратно: строка ответа "
+        "показывает состояние, которого сервер не принял"
+    )
+    assert "disabled" in toggle, "тумблер неполного расписания доступен к нажатию"
