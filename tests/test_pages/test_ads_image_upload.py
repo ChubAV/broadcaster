@@ -55,6 +55,16 @@ REFUSAL_ROW = re.compile(
     r'<p class="alert alert--error" role="alert">(.*?)</p>', re.DOTALL
 )
 
+# Заголовок события ответа и имя события. Оба названы ЛИТЕРАЛАМИ по тому же
+# основанию, что и имя файлового поля выше: тест проверяет КОНТРАКТ, который
+# получает браузер, а ввезённая из приложения константа утверждала бы имя саму о
+# себе и зеленела бы ровно тогда, когда разметка со старым именем перестала бы
+# слушать. Значение ASCII: кириллица в значении заголовка роняет ответ
+# пятисоткой, и запрет вехи на тосты через заголовок события адресован ТЕКСТАМ
+# для человека, а не именам событий.
+EVENT_HEADER = "HX-Trigger-After-Swap"
+UPLOAD_EVENT = "ads-image-attached"
+
 # Разделитель имени и причины в строке отказа. Имя нормализовано и потому не
 # может содержать этого сочетания; причина — может, поэтому деление идёт по
 # ПЕРВОМУ вхождению, а не по последнему.
@@ -73,6 +83,19 @@ def refusal_rows(html: str) -> list[tuple[str, str]]:
         left, separator, right = row.partition(NAME_REASON_SEPARATOR)
         rows.append((left, right) if separator else ("", left))
     return rows
+
+
+def _attr_value(html: str, anchor: str, attr: str) -> str:
+    """Значение атрибута элемента, опознанного по подстроке `anchor`.
+
+    Разбор строкой — тот же приём, что применяют соседние файлы тестов страниц
+    (`tests/test_pages/test_ads_editor.py`): новой зависимости разбора HTML ради
+    одного атрибута не заводится. Отсутствие элемента или атрибута поднимает
+    ValueError — тест падает, а не молча меряет пустоту.
+    """
+    start = html.index(anchor)
+    opened = html.index(f'{attr}="', start) + len(attr) + 2
+    return html[opened : html.index('"', opened)]
 
 
 def image_key(user_id: int, name: str = "photo.png") -> str:
@@ -563,3 +586,94 @@ async def test_oversized_beats_unsupported(
     assert "JPEG" not in reason, (
         f"причина отказа {reason!r} про форматы, а не про размер"
     )
+
+
+# --- черновик после удачной загрузки -----------------------------------------
+#
+# Сегодня черновик на `/ads/new` создаёт ПЕРВАЯ загруженная картинка: клиентский
+# обработчик загрузки после успеха поднимал событие на форме объявления. Со
+# снятием этого кода вызов исчезает, и человек, прикрепивший картинку и не
+# набравший ни символа, терял бы её при обновлении страницы. Всплытие события
+# формы ЗАГРУЗКИ до формы объявления не долетает — они СОСЕДИ, а не родитель и
+# потомок, — поэтому связь восстанавливается заголовком ответа и слушателем.
+
+
+@pytest.mark.asyncio
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_a_successful_upload_asks_the_ad_form_to_save(
+    mock_s3, authed_client: AsyncClient, htmx_client: AsyncClient
+):
+    """Удачная загрузка просит форму объявления сохраниться — заголовком ответа.
+
+    ⚠️ ЗАГОЛОВОК ИМЕННО «ПОСЛЕ ПОДМЕНЫ», И РАЗНИЦА НАБЛЮДАЕМА. Обычный
+    заголовок события поднимает его ДО подмены — форма объявления
+    сериализовалась бы в момент, когда новых скрытых полей в документе ещё нет,
+    и первое же автосохранение сохранило бы объявление БЕЗ только что
+    загруженной картинки. Ровно та потеря работы, ради предотвращения которой
+    механизм и заводится.
+    """
+    response = await htmx_client.post(
+        "/ads/images",
+        files=[
+            (UPLOAD_FIELD, ("cat.png", make_real_png_with_alpha_bytes(), "image/png"))
+        ],
+    )
+
+    assert response.status_code == 200
+    assert response.headers.get(EVENT_HEADER) == UPLOAD_EVENT, (
+        f"ответ удачной загрузки несёт {response.headers.get(EVENT_HEADER)!r} "
+        f"вместо {UPLOAD_EVENT!r} в заголовке события после подмены: человек, "
+        "прикрепивший картинку на /ads/new и не набравший ни символа, потеряет "
+        "её при обновлении страницы — черновика не создастся"
+    )
+
+
+@pytest.mark.asyncio
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_a_fully_refused_upload_asks_for_nothing(
+    mock_s3, authed_client: AsyncClient, htmx_client: AsyncClient
+):
+    """Принято НОЛЬ файлов — заголовка события в ответе нет.
+
+    Сохранять нечего: состояние вложений не изменилось. Лишний круг к серверу
+    стоил бы человеку и ожидания, и записи в журнал — за работу, которой не
+    было.
+    """
+    response = await htmx_client.post(
+        "/ads/images",
+        files=[(UPLOAD_FIELD, ("sticker.webp", make_webp_bytes(), "image/webp"))],
+    )
+
+    assert response.status_code == 200
+    assert EVENT_HEADER not in response.headers, (
+        "ответ, не принявший ни одного файла, всё равно просит форму "
+        "сохраниться: круг к серверу делается за работу, которой не было"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_ad_form_listens_for_the_upload_event(authed_client: AsyncClient):
+    """Форма объявления слушает событие загрузки ОТ ТЕЛА ДОКУМЕНТА.
+
+    ⚠️ «ОТ ТЕЛА ДОКУМЕНТА» — НЕ УКРАШЕНИЕ, А ЕДИНСТВЕННЫЙ РАБОТАЮЩИЙ АДРЕС.
+    Событие поднимается на узле, ПОСЛАВШЕМ запрос, — на форме загрузки, — и
+    всплывает по дереву документа. Форма загрузки форме объявления СОСЕД, а не
+    потомок, поэтому обычное всплытие до неё не долетает.
+
+    Прочие условия отправки и очередь наложения проверяются здесь же: перевод
+    списка условий на новую строку легко уносит соседнее условие молча.
+    """
+    page = await authed_client.get("/ads/new")
+
+    assert page.status_code == 200
+    trigger = _attr_value(page.text, 'id="ad-form"', "hx-trigger")
+
+    assert f"{UPLOAD_EVENT} from:body" in trigger, (
+        f"перечень условий отправки формы объявления — {trigger!r}: события "
+        "загрузки в нём нет, и удачная загрузка черновика не создаст"
+    )
+    for kept in ("submit", "keyup changed delay:2s", "change delay:2s"):
+        assert kept in trigger, (
+            f"условие {kept!r} исчезло из перечня {trigger!r}: вместе с ним "
+            "исчезает автосохранение, ради которого форма и написана"
+        )
