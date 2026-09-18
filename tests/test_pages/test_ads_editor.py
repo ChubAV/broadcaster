@@ -612,6 +612,57 @@ async def test_autosave_response_updates_three_blocks(
 
 
 @pytest.mark.asyncio
+async def test_autosave_response_carries_the_media_tray(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-10 Фазы 12: убранное вложение обязано исчезнуть С ЭКРАНА, а не только из базы.
+
+    Кнопка «×» — именованная кнопка отправки ФОРМЫ ОБЪЯВЛЕНИЯ (перехват снят
+    планом 12-03), а форма несёт ``hx-swap="none"``: своего места подмены у
+    ответа нет вовсе, и всё обновление приезжает внеполосно. Полосы вложений
+    среди внеполосных блоков не было — значит ключ уходил бы из базы, а плитка
+    оставалась бы на экране до перезагрузки. Правило требует, чтобы ответ
+    автосохранения приносил УЗЕЛ ПОЛОСЫ с признаком внеполосной подмены.
+
+    ⚠️ УЗЕЛ ИМЕННО ``#media-tray``, А НЕ ``#media-strip``, И ЭТО НЕ ДЕТАЛЬ.
+    ``#media-strip`` — постоянная обёртка и ЦЕЛЬ ПОДМЕНЫ формы загрузки; один
+    идентификатор в двух ролях уронил бы правило «цель подмены и внеполосная
+    цель — разные идентификаторы» (G-11 Фазы 9), и уронил бы справедливо.
+
+    Скрытое поле ключа проверяется вместе с узлом: полоса без него обновила бы
+    картинку и потеряла бы СОСТОЯНИЕ — следующая отправка формы ушла бы без
+    вложений, то есть тихо их отцепила.
+    """
+    owner_id = (await _user(db_session)).id
+    key = image_key(owner_id, "p0.jpg")
+    ad = await _seed_ad(db_session, title="С вложением", images=[key])
+
+    response = await authed_client.post(
+        f"/ads/{ad.id}/edit",
+        content=form_body(title="С вложением", text="Текст", images=[key]),
+        headers=HX_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'id="media-tray"' in html, (
+        "ответ автосохранения не принёс узла полосы вложений: убранная кнопкой "
+        "«×» плитка останется на экране, хотя ключ из базы уже ушёл"
+    )
+    open_tag = html[html.index("<div", html.rindex("<div", 0, html.index('id="media-tray"'))) :]
+    open_tag = open_tag[: open_tag.index(">")]
+    assert "hx-swap-oob" in open_tag, (
+        f"узел полосы приехал БЕЗ признака внеполосной подмены: {open_tag!r} — "
+        "места подмены у ответа нет, и узел без признака не приедет никуда"
+    )
+    assert 'name="images"' in html and f'value="{key}"' in html, (
+        "внеполосная полоса пришла без скрытого поля ключа: следующая отправка "
+        "формы ушла бы БЕЗ вложений и отцепила бы их молча"
+    )
+
+
+@pytest.mark.asyncio
 async def test_plain_post_without_htmx_redirects(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
