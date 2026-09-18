@@ -1,0 +1,58 @@
+{
+  "contract": "1.0.0",
+  "flavor": "core",
+  "milestone": "v2.1 — HTMX-first",
+  "phases": [
+    {
+      "number": "7",
+      "name": "Обновление htmx до 2.0.10",
+      "status": "complete"
+    },
+    {
+      "number": "8",
+      "name": "Фундамент, гейты, денежный потолок",
+      "status": "complete"
+    },
+    {
+      "number": "9",
+      "name": "Пилот `account_groups`",
+      "status": "complete"
+    },
+    {
+      "number": "10",
+      "name": "Рычаг `modal.html`",
+      "status": "complete"
+    },
+    {
+      "number": "11",
+      "name": "Массовый перевод разделов",
+      "status": "complete"
+    },
+    {
+      "number": "12",
+      "name": "Загрузка изображений",
+      "status": "pending"
+    },
+    {
+      "number": "13",
+      "name": "QR-мастер Telegram",
+      "status": "pending"
+    },
+    {
+      "number": "14",
+      "name": "Авторизация",
+      "status": "pending"
+    },
+    {
+      "number": "15",
+      "name": "Упрочнение и сводный обход",
+      "status": "pending"
+    }
+  ],
+  "next": {
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step (plan phase 12)",
+    "reason": "Phase 12 of 9 — needs a plan"
+  },
+  "updated_at": "2026-09-18T10:58:46.685Z"
+}
