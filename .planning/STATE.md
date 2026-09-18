@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 12
 current_phase_name: Загрузка изображений без `fetch()`
 status: executing
-stopped_at: Completed 12-01-PLAN.md
-last_updated: "2026-09-18T18:15:06.049Z"
+stopped_at: Completed 12-02-PLAN.md
+last_updated: "2026-09-18T19:05:54.453Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 12 execution started
-state_head: 71c378855ceacbcbb4c84e4946ba7229b92f0a96
+state_head: 00efe9be68b4c403f13fbd676c83a74cdeb5bd50
 progress:
   total_phases: 9
   completed_phases: 5
   total_plans: 121
-  completed_plans: 117
+  completed_plans: 118
   percent: 56
 ---
 
@@ -36,7 +36,7 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 12 (Загрузка изображений без `fetch()`) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Total Plans in Phase: 5
 Completed Plans in Phase: 21
 Status: Ready to execute
@@ -177,6 +177,7 @@ Progress: [████████████████████] 116/116
 | Phase 11 P20 | 56 min | 3 tasks | 5 files |
 | Phase 11 P21 | 63 min | 2 tasks | 4 files |
 | Phase 12 P01 | 1h 44m | 2 tasks | 13 files |
+| Phase 12 P02 | 45 min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -405,6 +406,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 11]: 11-20: окно 63 остаётся `open` — D-08 закрыл только часть «решение о форме»; частичное решение записано летописью у Фазы 11 в ROADMAP, а не `waive`/`fixed`
 - [Phase 12]: Целевым тестом улики RED выбран тест гейта доступа: он покраснел утверждением о поведении (404 вместо 204), тогда как два соседних краснели импортом ещё не существующего модуля — сбой загрузки не есть доказательство отсутствия поведения (#3770)
 - [Phase 12]: Имя файлового поля объявлено ОДИН раз в app/services/image_upload.py и доезжает до разметки глобалом upload_field; в тестовом модуле оно названо литералом, потому что ввезённая константа утверждала бы имя саму о себе
+- [Phase 12]: Фаза 12, план 12-02: задача 1 закоммичена как chore(12-02), а не feat — правка шаблонов конфига есть chore по таблице типов, и это же единственный тип, при котором рантайм-гейт TDD не срабатывает проверкой «feat раньше test». Тип выбран по таблице; совпадение с требованием гейта — следствие, а не подгонка
+- [Phase 12]: Фаза 12, план 12-02: RED задачи 2 замерен на дереве ДО задачи 1 во временном каталоге сессии (идиома плана 11-14) — в готовом дереве модуль зеленеет сразу, и объявить это RED-фазой значило бы объявить измеренным то, что не исполнялось
+- [Phase 12]: Фаза 12, план 12-02: ожидание берётся из Settings(_env_file=None, database_url=..., secret_key=...), а не из голого Settings() — боевой .env разработчика в тест протекать не должен (защита conftest.py), а два обязательных поля умолчаний не имеют и уронили бы сбор модуля там, где .env нет
+- [Phase 12]: Фаза 12, план 12-02: правило разбирает исходник шаблона БЕЗ строк-комментариев — закомментированная директива предела не задаёт, но совпадению регулярного выражения неотличима от действующей
 
 ### Pending Todos
 
@@ -585,8 +590,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-18T18:14:43.001Z
-Stopped at: Completed 12-01-PLAN.md
+Last session: 2026-09-18T19:05:33.873Z
+Stopped at: Completed 12-02-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.

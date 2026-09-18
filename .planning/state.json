@@ -31,7 +31,7 @@
     {
       "number": "12",
       "name": "Загрузка изображений",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "13",
@@ -54,5 +54,5 @@
     "label": "Advance to the next step",
     "reason": "Phase 12 of 9 · 56% · executing"
   },
-  "updated_at": "2026-09-18T18:14:40.385Z"
+  "updated_at": "2026-09-18T19:05:31.217Z"
 }
