@@ -1,9 +1,42 @@
 ---
-status: diagnosed
+status: resolved
 trigger: "UAT gap G-11-6 (Phase 11, test 6): extra vertical gap under form buttons from hidden .form-busy"
 created: 2026-09-17T17:00:00Z
-updated: 2026-09-17T17:30:00Z
+updated: 2026-09-18T10:40:00Z
+resolved_by: "Plan 11-21 (ec33c8e RED, 810eaa7 GREEN, bf3cb65 gates); rendering re-observed and accepted by the owner in /gsd-verify-work 11 round 2, 2026-09-18"
 ---
+
+## Resolution — rendering observed 2026-09-18
+
+Fix shipped by plan 11-21 (`.form-wrapper { position: relative }` + `.form-wrapper > .form-busy
+{ position: absolute; right: 0; bottom: 0; pointer-events: none }`, scoped so the base `.form-busy`
+rule stays the only one with that exact selector). Stand freshness was checked BEFORE measuring:
+`app.css?v=12346d8c0f1f` on broadcaster.all-torgi.ru carries both rules and the group-row exception.
+
+**Measured after the fix (Chrome, chrome-devtools MCP, 1440×900; method: form height with and
+without the indicator node in the DOM):** profile 111 px (was 132), schedule edit form 369 px
+(was +24), MAX phone step 111 px (was 129.5) — delta 0 in every case.
+
+**Two of the three blind spots recorded above are now closed by direct measurement, not derivation:**
+
+- *Horizontal flex-row effects (~12 px), previously "derived from CSS reading, not measured":*
+  measured. Admin action row `/admin/users/2` — gaps 9, 9, 9 px, wrapped-form width delta 0;
+  `/schedules` — seven `sched-item__head` rows, gaps 12, 12 px each, width delta 0.
+- *Modal panel 22 px, previously "derived, not measured":* measured. `/accounts/5/delete` panel form
+  is `modal__form`, NOT `form-wrapper`, so the scoped rule does not reach it; the indicator stays
+  `position: static` and the panel is 89.14 px against 67.14 px without it — exactly the 22 px
+  (8 px item + 14 px gap) accepted by owner decision 1 / 10-UAT 3.5. Unchanged, as intended.
+- *MAX step, still a reconstruction:* `/accounts/connect/max` redirects while MAX #29 is active, so
+  the step was rendered from `accounts/includes/max_connect_step.html` by the project's Jinja and
+  injected into a live page with production CSS. Same limitation as the original diagnosis.
+
+**One consequence the diagnosis did not predict:** with the indicator pinned to the form box's
+bottom-right corner, its 8×8 box fully overlaps the wrapped button's bounding box and sits on the
+`border-radius: 99px` pill edge, cutting a visible notch out of the button silhouette. Clicks are
+unaffected — `pointer-events: none` holds, and a 4×4 `elementFromPoint` grid over the dot area was
+byte-identical with and without the dot in the DOM. The owner was shown this, together with the
+2.6:1 contrast of the dot on the filled CTA (below the WCAG 1.4.11 3:1 floor), and accepted both in
+`11-UAT.md` tests 6 and 8.
 
 ## Current Focus
 
