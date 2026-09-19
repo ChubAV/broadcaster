@@ -2,9 +2,9 @@
 schema_version: 1
 open_count: 76
 waived_count: 2
-fixed_count: 20
-total_count: 98
-last_updated: 2026-09-19T10:21:51.385Z
+fixed_count: 21
+total_count: 99
+last_updated: 2026-09-19T10:48:08.772Z
 ---
 
 # Broken Windows Ledger
@@ -113,6 +113,7 @@ last_updated: 2026-09-19T10:21:51.385Z
 | 96 | 12 | deviation | app/templates/ads/includes/media_upload_form.html |  | D-16: при hx-sync=this:queue last третий быстрый выбор файлов вытесняет второй — файлы среднего выбора не уходят вовсе (принятое допущение, deferred-items.md) | open |  | 2026-09-19T09:39:36.084Z |  |
 | 97 | 12 | deviation | app/pages/ads.py |  | D-17: объекты-сироты при обрыве партии и межвкладочный счёт свободных мест — принятое допущение (deferred-items.md, источник IN-05) | open |  | 2026-09-19T09:39:39.599Z |  |
 | 98 | 12 | deviation | tests/test_pages/test_htmx_gates.py |  | Три правки сверх двух плановых в задаче 3: HX_HEADER_WRITES 4->5 и два контроля, сравнивавших боевое чтение перечня точечных заголовков с ПУСТЫМ словарём | fixed |  | 2026-09-19T10:21:29.006Z | 2026-09-19T10:21:51.385Z |
+| 99 | 12 | deviation | tests/test_pages/test_htmx_gates.py |  | План 12-10 не называет этот модуль в files_modified: вызов гарды источника завёл собственный выход Response(403) у уже переведённого обработчика, и гейт OWN_RESPONSE_EXITS потребовал записи с новым состоянием решения (D-15) — D-08 этой записи не называет | fixed |  | 2026-09-19T10:47:53.255Z | 2026-09-19T10:48:08.772Z |
 
 ````json
 [
@@ -1305,6 +1306,19 @@ last_updated: 2026-09-19T10:21:51.385Z
     "reason": "",
     "recorded_at": "2026-09-19T10:21:29.006Z",
     "resolved_at": "2026-09-19T10:21:51.385Z",
+    "milestone": "v2.1"
+  },
+  {
+    "id": 99,
+    "kind": "deviation",
+    "phase": "12",
+    "file": "tests/test_pages/test_htmx_gates.py",
+    "line": null,
+    "description": "План 12-10 не называет этот модуль в files_modified: вызов гарды источника завёл собственный выход Response(403) у уже переведённого обработчика, и гейт OWN_RESPONSE_EXITS потребовал записи с новым состоянием решения (D-15) — D-08 этой записи не называет",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-19T10:47:53.255Z",
+    "resolved_at": "2026-09-19T10:48:08.772Z",
     "milestone": "v2.1"
   }
 ]
