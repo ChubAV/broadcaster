@@ -2141,14 +2141,25 @@ async def test_the_overview_errors_tile_takes_the_rolling_day_and_its_delta(
 
 
 @pytest.mark.asyncio
-async def test_the_overview_error_number_matches_the_users_own_dashboard(
+async def test_the_overview_error_number_counts_every_kind_of_failure_and_no_success(
     admin_client: AsyncClient, db_session: AsyncSession
 ):
-    """Число ошибок «Обзора» совпадает с числом на дашборде того же человека.
+    """Плитка ошибок «Обзора» считает КАЖДЫЙ вид отказа и НИ ОДНОЙ удачи.
 
-    ⚠️ ЭТО И ЕСТЬ ПРИЧИНА, ПО КОТОРОЙ ОКНО СУТОЧНОЕ, А НЕ ЧАСОВОЕ ИЗ МАКЕТА.
-    Часовое окно дало бы администратору и пользователю разные числа об одном и
-    том же периоде, и оба считали бы своё верным.
+    Отказ отправки и отвалившийся аккаунт — два разных статуса и одна величина
+    для читателя: оба суть «не доехало». Удача рядом с ними посеяна затем, чтобы
+    число не оказалось простым счётчиком всех записей за сутки.
+
+    ⚠️ ТРЕБОВАНИЕ РАВЕНСТВА ЭТОГО ЧИСЛА С ПЛИТКОЙ ДАШБОРДА СНЯТО НАМЕРЕННО
+    (решение владельца 2026-09-19, летопись битых окон 14/27/79/85/93). Две
+    плитки считают РАЗНЫЕ окна: «Обзор» — скользящие сутки, дашборд — календарные
+    сутки таймзоны читателя. Равны они лишь часть суток, и правило,
+    утверждавшее равенство, краснело от ЧАСА ПРОГОНА между 00:00 и 05:00 UTC
+    шесть фаз подряд, а к утру зеленело само — ложным зелёным. Не возвращайте
+    это утверждение сюда: если равенство двух окон нужно как свойство продукта,
+    оно требует решения, какое из окон уступает (D-02/D-40), и правки
+    приложения, а не правила. Посевы ниже намеренно лежат внутри скользящих
+    суток при ЛЮБОМ часе прогона.
     """
     admin = await _admin_user(db_session)
     now = datetime.now(timezone.utc)
@@ -2164,9 +2175,7 @@ async def test_the_overview_error_number_matches_the_users_own_dashboard(
     await _seed_send(db_session, admin.id, sent_at=now - timedelta(hours=1))
 
     overview = (await admin_client.get(OVERVIEW_URL)).text
-    dashboard = (await admin_client.get("/dashboard")).text
 
-    assert _tile_value(overview, TILE_ERRORS) == _tile_value(dashboard, "Ошибок")
     assert _tile_value(overview, TILE_ERRORS) == "2"
 
 
