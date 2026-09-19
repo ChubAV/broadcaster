@@ -83,6 +83,41 @@ def thumb_key(key: str) -> str:
     return f"{THUMB_KEY_PREFIX}{key}"
 
 
+def partition_own_image_keys(
+    values: list[str], user_id: int
+) -> tuple[list[str], list[str]]:
+    """Разделить присланные значения на СВОИ и виновные, сохранив порядок.
+
+    ⚠️ ЕДИНСТВЕННОЕ МЕСТО В ДЕРЕВЕ, ГДЕ РЕШАЕТСЯ ВОПРОС «МОЙ ЛИ ЭТО КЛЮЧ».
+    Через эту функцию выражена и ``own_image_keys``: второго написания сравнения
+    в проекте нет намеренно (D-07). Два авторитета по принадлежности разошлись
+    бы молча и оставили бы дыру ровно там, где её не проверяли (Hyrum).
+
+    ЗАЧЕМ НУЖНА РАЗДЕЛЯЮЩАЯ ФОРМА, а не только отказ. У двух вызывающих разные
+    вопросы. Сохранение объявления решает, что записать в базу, и обязано
+    ОТКАЗАТЬ целиком: частичная запись превратила бы попытку подмены в
+    «успешное сохранение без картинки». Маршрут загрузки решает, что показать на
+    экране, — и «всё или ничего» там значит СТИРАНИЕ: полоса вложений есть
+    единственный источник списка ключей в документе, и пустой ответ выносит из
+    него скрытые поля вместе с законными. Ему нужно «что подтверждено, то
+    остаётся на экране», а отвергается только виновное.
+
+    Порядок каждой половины — исходный: порядок ключей есть порядок отправки.
+    """
+    own: list[str] = []
+    offending: list[str] = []
+    for value in values:
+        match = _IMAGE_KEY_PATTERN.fullmatch(value)
+        # Префикс сравнивается как СТРОКА: приведение группы к целому принимало
+        # бы `007/…` за `7/…`, то есть допускало бы ключ, которого маршрут
+        # загрузки для этого вызывающего никогда не порождал.
+        if match is None or match.group(1) != str(user_id):
+            offending.append(value)
+        else:
+            own.append(value)
+    return own, offending
+
+
 def own_image_keys(values: list[str], user_id: int, max_images: int) -> list[str]:
     """Проверить, что каждый ключ вложения принадлежит вызывающему.
 
@@ -108,15 +143,16 @@ def own_image_keys(values: list[str], user_id: int, max_images: int) -> list[str
             ),
         )
 
-    for value in values:
-        match = _IMAGE_KEY_PATTERN.fullmatch(value)
-        # Префикс сравнивается как СТРОКА: приведение группы к целому принимало
-        # бы `007/…` за `7/…`, то есть допускало бы ключ, которого маршрут
-        # загрузки для этого вызывающего никогда не порождал.
-        if match is None or match.group(1) != str(user_id):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=INACCESSIBLE_IMAGE_MESSAGE,
-            )
+    # Предикат принадлежности берётся у ``partition_own_image_keys`` и вторым
+    # разом здесь не пишется (D-07). Поведение этой функции при этом не
+    # сдвинуто ни на символ: первое же виновное значение даёт тот же отказ 400 с
+    # тем же текстом, а при пустом ``offending`` подтверждённое подмножество
+    # совпадает с входом целиком и в исходном порядке.
+    own, offending = partition_own_image_keys(values, user_id)
+    if offending:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=INACCESSIBLE_IMAGE_MESSAGE,
+        )
 
-    return list(values)
+    return own
