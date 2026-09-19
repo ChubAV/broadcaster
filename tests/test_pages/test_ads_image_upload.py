@@ -765,6 +765,87 @@ async def test_the_keys_that_survive_a_refusal_are_the_ones_the_next_save_persis
 
 @pytest.mark.asyncio
 @patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_a_refusal_row_survives_the_autosave_the_same_response_triggers(
+    mock_s3,
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    owner: User,
+    db_session: AsyncSession,
+):
+    """Гап 2: строка отказа обязана пережить круг, который ЭТОТ ЖЕ ответ и заказывает.
+
+    ⚠️ КРУГ ЗАМКНУТ САМИМ ОТВЕТОМ ЗАГРУЗКИ, И ПОТОМУ ЭТО НЕ РЕДКИЙ СЛУЧАЙ, А
+    САМЫЙ ЧАСТЫЙ ПУТЬ. Ответ смешанной партии несёт
+    ``HX-Trigger-After-Swap: ads-image-attached``; форма объявления слушает это
+    событие ``from:body`` и немедленно уходит автосохранением — ровно тем
+    запросом, который здесь и подаётся вторым. Если ответ автосохранения принесёт
+    внеполосный ``#media-tray``, подмена заменит узел ЦЕЛИКОМ и сотрёт строку
+    отказа, за которую D-04 заплатил лживым кодом 200: человек не успеет
+    прочитать, КАКОЙ его файл не подошёл и почему. Выбранный им файл исчезнет
+    МОЛЧА — ровно тот запрет, который фаза держит.
+
+    Правило рендерит ДВА ФРАГМЕНТА ДРУГ ПРОТИВ ДРУГА: ответ загрузки
+    разбирается на строки отказа и скрытые поля, и ровно эти ключи уходят
+    следующим запросом в редактор. Порознь оба обработчика зелены — дефект
+    живёт на стыке, и правил на стык в суите до Фазы 12 не было ни одного.
+    """
+    # Идентификатор снимается ДО истечения сессии: после `expire_all` обращение
+    # к полю посеянного объекта уехало бы ленивой подгрузкой в синхронном
+    # контексте и уронило бы тест отказом драйвера вместо утверждения.
+    ad_id = (await _seed_ad(db_session, owner.id)).id
+
+    upload = await htmx_client.post(
+        "/ads/images",
+        files=[
+            (UPLOAD_FIELD, ("cat.png", make_real_png_with_alpha_bytes(), "image/png")),
+            (UPLOAD_FIELD, ("sticker.webp", make_webp_bytes(), "image/webp")),
+        ],
+    )
+    assert upload.status_code == 200, (
+        f"загрузка ответила {upload.status_code} вместо фрагмента полосы"
+    )
+
+    rows = refusal_rows(upload.text)
+    assert len(rows) == 1, (
+        f"строк отказа в ответе загрузки {len(rows)} вместо одной: {rows} — "
+        "дальше нечему переживать круг, и правило измеряло бы пустоту"
+    )
+    attached = HIDDEN_KEY_FIELD.findall(upload.text)
+    assert len(attached) == 1, (
+        f"годный файл партии не прикреплён: скрытых полей {len(attached)} — "
+        f"{attached}"
+    )
+
+    # Тот самый запрос, который поднимает слушатель `ads-image-attached`:
+    # скрытые поля берутся ИЗ ОТВЕТА, а `remove_image` не подаётся — состав
+    # вложений этим запросом не меняется.
+    saved = await htmx_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(images=attached),
+        headers=HX_HEADERS,
+    )
+    assert saved.status_code == 200, (
+        f"автосохранение ответило {saved.status_code}: ключ, только что выданный "
+        "загрузкой, не принят сверкой владения на сохранении"
+    )
+    assert 'id="media-tray"' not in saved.text, (
+        "ответ автосохранения принёс узел полосы: внеполосная подмена заменит "
+        "её целиком и унесёт с экрана строку отказа, которую человек не успел "
+        "прочитать — выбранный им файл пропадёт МОЛЧА"
+    )
+
+    db_session.expire_all()
+    stored = (
+        await db_session.execute(select(Ad).where(Ad.id == ad_id))
+    ).scalar_one()
+    assert stored.images == attached, (
+        f"в базе {stored.images} вместо {attached}: ключ принятого файла не "
+        "доехал до записи объявления"
+    )
+
+
+@pytest.mark.asyncio
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
 async def test_a_rejected_name_is_normalised_before_it_is_shown(
     mock_s3, authed_client: AsyncClient, htmx_client: AsyncClient
 ):
