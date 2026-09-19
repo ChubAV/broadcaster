@@ -480,6 +480,80 @@ async def test_ceiling_takes_the_free_slots_and_refuses_the_rest(
 
 @pytest.mark.asyncio
 @patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_own_keys_over_the_ceiling_are_not_erased_by_a_new_batch(
+    mock_s3,
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    owner: User,
+    test_settings,
+):
+    """Потолок управляет НОВЫМИ файлами и не трогает УЖЕ прикреплённые.
+
+    ⚠️ ДОСТИЖИМОСТЬ БЕЗ НАПАДАЮЩЕГО, И НАЗВАНА ОНА ПОИМЁННО: `max_images_per_ad`,
+    опущенный ниже числа вложений живого объявления. Одиннадцать СВОИХ
+    синтаксически годных ключей при потолке десять — не подделка, а обычное
+    состояние после смены настройки, и стирать его сервер права не имеет.
+
+    Потолок при этом не ослаблен: свободных мест ноль, и каждая присланная
+    часть получает свою строку про потолок, не доезжая до хранилища. Настоящей
+    квотой остаётся отказ по длине на СОХРАНЕНИИ — там решается, что записать в
+    базу, и отказать там обязательно.
+    """
+    test_settings.max_images_per_ad = 10
+    attached = [image_key(owner.id, f"old{index}.png") for index in range(11)]
+
+    response = await htmx_client.post(
+        "/ads/images",
+        data={"images": attached},
+        files=[
+            (UPLOAD_FIELD, ("cat.png", make_real_png_with_alpha_bytes(), "image/png"))
+        ],
+    )
+
+    assert response.status_code == 200, (
+        f"партия при потолке ниже числа прикреплённых получила "
+        f"{response.status_code}: подмены не будет, и человек не прочтёт причину"
+    )
+
+    keys = HIDDEN_KEY_FIELD.findall(response.text)
+    assert len(keys) == 11, (
+        f"во фрагменте {len(keys)} скрытых полей вместо одиннадцати: понижение "
+        "настройки потолка отцепило от объявления вложения, которые человек "
+        "прикрепил раньше и видит на экране"
+    )
+    assert keys == attached, (
+        f"ключи переехали во фрагмент не в прежнем порядке: {keys} вместо "
+        f"{attached} — порядок ключей есть порядок отправки"
+    )
+
+    rows = refusal_rows(response.text)
+    assert [name for name, _ in rows] == ["cat.png"], (
+        f"строки отказа называют {[name for name, _ in rows]} вместо одного "
+        "присланного файла: человек не узнает, что именно не прикрепилось"
+    )
+    assert "10" in rows[0][1], (
+        f"причина отказа {rows[0][1]!r} не называет числа мест — человек не "
+        "знает, сколько вложений удалить"
+    )
+
+    assert mock_s3.call_count == 0, (
+        f"в хранилище ушло {mock_s3.call_count} записей при нуле свободных мест: "
+        "тело части прочитано ради результата, которому заведомо некуда деться"
+    )
+    assert EVENT_HEADER not in response.headers, (
+        "ответ, не принявший ни одного файла, всё равно просит форму "
+        "сохраниться: круг к серверу делается за работу, которой не было"
+    )
+
+    add_tile = response.text[response.text.index("media-tile--add") :].split(">", 1)[0]
+    assert " hidden" in add_tile, (
+        f"плитка «+ ФАЙЛ» ({add_tile!r}) осталась видимой при исчерпанном "
+        "потолке: человек выберет файлы, которых сервер всё равно не примет"
+    )
+
+
+@pytest.mark.asyncio
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
 async def test_every_outcome_answers_two_hundred(
     mock_s3, authed_client: AsyncClient, htmx_client: AsyncClient
 ):
