@@ -21,6 +21,7 @@
 import io
 import re
 from unittest.mock import AsyncMock, patch
+from urllib.parse import urlencode
 from uuid import uuid4
 
 import pytest
@@ -30,6 +31,7 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.ad import Ad
 from app.models.user import User
 
 # Имя файлового поля составного запроса — см. абзац в шапке модуля.
@@ -108,6 +110,46 @@ def image_key(user_id: int, name: str = "photo.png") -> str:
     return f"{user_id}/{uuid4().hex}_{name}"
 
 
+# --- форма запроса к редактору объявления ------------------------------------
+#
+# Повторена ЗДЕСЬ ПО МЕСТУ, а не ввезена из модуля тестов редактора: тестовый
+# модуль не библиотека, и импорт одного из другого связал бы два файла порядком
+# сборки и превратил бы вспомогательную функцию в неявный публичный контракт
+# (тот же довод записан в шапке построителей изображений ниже).
+#
+# Нужна форма затем, что одно из правил этого модуля сводит ДВА обработчика:
+# ответ загрузки разбирается на скрытые поля, и ровно они уходят следующим
+# запросом в редактор. Порознь оба обработчика зелены — теряется работа человека
+# именно на стыке.
+FORM_HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}
+HX_HEADERS = {**FORM_HEADERS, "HX-Request": "true"}
+
+
+def form_body(
+    title: str = "Осенний завоз",
+    text: str = "Полный текст объявления про осенний завоз",
+    images: list[str] | None = None,
+) -> str:
+    fields: list[tuple[str, str]] = [("title", title), ("text", text)]
+    fields += [("images", value) for value in images or []]
+    return urlencode(fields)
+
+
+async def _seed_ad(
+    db: AsyncSession, user_id: int, images: list[str] | None = None
+) -> Ad:
+    ad = Ad(
+        user_id=user_id,
+        title="Осенний завоз",
+        text="Полный текст объявления про осенний завоз",
+        images=images or [],
+    )
+    db.add(ad)
+    await db.commit()
+    await db.refresh(ad)
+    return ad
+
+
 @pytest_asyncio.fixture
 async def owner(db_session: AsyncSession) -> User:
     """Пользователь, под которым ходит `authed_client`.
@@ -124,10 +166,16 @@ async def owner(db_session: AsyncSession) -> User:
 
 # --- построители настоящих изображений ---------------------------------------
 #
-# Скопированы из `tests/test_routes/test_uploads.py:103-151` намеренно, а не
-# ввезены оттуда: тестовый модуль не библиотека, и импорт одного из другого
-# связал бы два файла порядком сборки и превратил бы вспомогательную функцию в
-# неявный публичный контракт (тот же довод записан в самом источнике).
+# Скопированы из суиты снятого JSON-входа загрузки намеренно, а не ввезены
+# оттуда: тестовый модуль не библиотека, и импорт одного из другого связал бы
+# два файла порядком сборки и превратил бы вспомогательную функцию в неявный
+# публичный контракт (тот же довод был записан в самом источнике).
+#
+# ⚠️ ИСТОЧНИК НАЗВАН СЛОВАМИ, А НЕ ПУТЁМ С НОМЕРАМИ СТРОК (находка IN-01).
+# Прежде здесь стоял типизированный путь к модулю тестов того входа; сам модуль
+# снят планом 12-05 ЦЕЛИКОМ, и путь указывал в пустоту. Дословно он не
+# набирается и летописью: приёмочный обход находки ищет снятое имя по дереву
+# `tests/`, и упоминание удовлетворило бы обход само.
 _TILE_EDGE = 64
 
 
@@ -518,6 +566,126 @@ async def test_a_foreign_key_is_not_echoed_back(
     assert mock_s3.call_count == 0, (
         f"в хранилище ушло {mock_s3.call_count} записей при подделанном ключе: "
         "файловые части прочитаны и сохранены, то есть появились сироты"
+    )
+
+
+@pytest.mark.asyncio
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_an_own_key_survives_a_foreign_key_in_the_same_batch(
+    mock_s3, authed_client: AsyncClient, htmx_client: AsyncClient, owner: User
+):
+    """Смешанная партия: СВОЙ ключ остаётся, чужой отвергнут (гап 1, CR-02).
+
+    Сосед правила выше, а не его переписывание. То правило утверждает, что
+    чужое значение во фрагмент не переиздаётся; здесь утверждается вторая
+    половина того же свойства — что отказ чужому не уносит с экрана СВОЁ.
+
+    Почему это потеря РАБОТЫ, а не косметика: полоса вложений после плана 12-03
+    есть ЕДИНСТВЕННЫЙ источник списка ключей в документе, и подмена её
+    содержимого выносит все скрытые поля. Пустая полоса в ответе означает, что
+    следующее автосохранение — одно нажатие клавиши — запишет объявление БЕЗ
+    вложений.
+    """
+    mine = image_key(owner.id, "mine.png")
+    foreign = image_key(owner.id + 1, "stolen.png")
+
+    response = await htmx_client.post(
+        "/ads/images",
+        data={"images": [mine, foreign]},
+        files=[
+            (UPLOAD_FIELD, ("cat.png", make_real_png_with_alpha_bytes(), "image/png"))
+        ],
+    )
+
+    assert response.status_code == 200, (
+        f"смешанная партия получила {response.status_code} вместо фрагмента: "
+        "подмены не будет, и человек не прочтёт, что случилось"
+    )
+
+    keys = HIDDEN_KEY_FIELD.findall(response.text)
+    assert keys == [mine], (
+        f"во фрагменте скрытые поля {keys} вместо [{mine!r}]: законное вложение "
+        "отцеплено заодно с подделанным, и следующее сохранение запишет "
+        "объявление без него"
+    )
+    assert foreign not in response.text, (
+        "чужой ключ вернулся во фрагменте: сервер переиздал в разметку то, "
+        "владения чем никто не подтверждал"
+    )
+
+    rows = refusal_rows(response.text)
+    assert len(rows) == 1, (
+        f"строк отказа {len(rows)} вместо одной: {rows}"
+    )
+    assert "недоступно" in rows[0][1], (
+        f"причина отказа {rows[0][1]!r} не говорит о недоступном вложении"
+    )
+
+    assert mock_s3.call_count == 0, (
+        f"в хранилище ушло {mock_s3.call_count} записей при подделанном ключе в "
+        "партии: работа ради запроса, признанного подделанным, всё-таки сделана"
+    )
+
+
+@pytest.mark.asyncio
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_the_keys_that_survive_a_refusal_are_the_ones_the_next_save_persists(
+    mock_s3,
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    owner: User,
+    db_session: AsyncSession,
+):
+    """Правило на ДВА обработчика: что пережило отказ, то и доезжает до базы.
+
+    ⚠️ ТАКОГО ПРАВИЛА В СУИТЕ НЕ БЫЛО НИ ОДНОГО, И ИМЕННО ПОЭТОМУ ДЕФЕКТ ПРОШЁЛ
+    ЗЕЛЁНЫМ. Порознь оба обработчика безупречны: загрузка отвечает 200 с
+    фрагментом, сохранение честно пишет то, что пришло формой. Теряется работа
+    человека РОВНО НА СТЫКЕ — фрагмент приходит без скрытых полей, форма
+    объявления сериализует ноль вложений, и `ad.images` становится пустым.
+
+    Поэтому ключи не подставляются в запрос сохранения «правильными», а
+    ВЫНИМАЮТСЯ из ответа загрузки: тест обязан отправить то, что отправит
+    браузер, а не то, что приложение считает правильным.
+    """
+    mine = image_key(owner.id, "mine.png")
+    foreign = image_key(owner.id + 1, "stolen.png")
+    # Идентификатор снимается ДО истечения сессии: после `expire_all` обращение
+    # к полю посеянного объекта уехало бы ленивой подгрузкой в синхронном
+    # контексте и уронило бы тест отказом драйвера вместо утверждения.
+    ad_id = (await _seed_ad(db_session, owner.id, images=[mine])).id
+
+    upload = await htmx_client.post(
+        "/ads/images",
+        data={"images": [mine, foreign]},
+        files=[
+            (UPLOAD_FIELD, ("cat.png", make_real_png_with_alpha_bytes(), "image/png"))
+        ],
+    )
+    assert upload.status_code == 200, (
+        f"загрузка ответила {upload.status_code} вместо фрагмента полосы"
+    )
+
+    survived = HIDDEN_KEY_FIELD.findall(upload.text)
+
+    saved = await htmx_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(images=survived),
+        headers=HX_HEADERS,
+    )
+    assert saved.status_code == 200, (
+        f"сохранение объявления ответило {saved.status_code}: скрытые поля, "
+        "пережившие отказ, не приняты сверкой владения на сохранении"
+    )
+
+    db_session.expire_all()
+    stored = (
+        await db_session.execute(select(Ad).where(Ad.id == ad_id))
+    ).scalar_one()
+    assert stored.images == [mine], (
+        f"в базе осталось {stored.images} вместо [{mine!r}]: одно автосохранение "
+        "после неудачной попытки загрузки стёрло вложение, которое человек "
+        "прикрепил раньше и видел на экране"
     )
 
 
