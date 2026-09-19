@@ -7338,3 +7338,60 @@ def test_both_editor_forms_declare_the_same_overlay_strategy() -> None:
     divergence = _overlay_strategy_divergence(dict(_all_templates()))
 
     assert divergence is None, divergence
+
+
+def test_control_negative_a_diverged_overlay_strategy_reddens_the_gate(
+    tmp_path: Path,
+) -> None:
+    """ЗУБЫ ПРАВИЛА РАВЕНСТВА: расхождение обязано КРАСНИТЬ с ОБЕИХ сторон.
+
+    ⚠️ ЖИВОЕ ДЕРЕВО НЕ ПРАВИТСЯ: подставляется ВРЕМЕННАЯ копия существующим
+    `_tree_with`, он же требует ровно одного вхождения образца. Подстановок две
+    — по одной на каждую сторону равенства: правило, замечающее расхождение
+    только в одной из двух записей свойства, держало бы половину границы и
+    молчало бы о второй.
+
+    Контроль отдельно утверждает, что на живом дереве расхождения НЕТ: без
+    этого он был бы зелен по построению — например, на правиле, краснеющем
+    всегда.
+    """
+    assert _overlay_strategy_divergence(dict(_all_templates())) is None, (
+        "на живом дереве стратегии наложения уже разошлись — контроль "
+        "доказывал бы не подстановку, а сегодняшний дефект"
+    )
+
+    diverged_upload = _overlay_strategy_divergence(
+        dict(
+            _all_templates(
+                _tree_with(
+                    tmp_path / "upload",
+                    Substitution(
+                        UPLOAD_FORM, "sync='this:queue last'", "sync='this:drop'"
+                    ),
+                )
+            )
+        )
+    )
+    assert diverged_upload is not None and "this:drop" in diverged_upload, (
+        "стратегия наложения формы ЗАГРУЗКИ подменена, а правило этого НЕ "
+        f"ЗАМЕТИЛО: {diverged_upload!r} — значит зубов у него нет со стороны "
+        "аргумента вызова, и его зелёный цвет на живом дереве не означает ничего"
+    )
+
+    diverged_form = _overlay_strategy_divergence(
+        dict(
+            _all_templates(
+                _tree_with(
+                    tmp_path / "form",
+                    Substitution(
+                        FORM, 'hx-sync="this:queue last"', 'hx-sync="this:drop"'
+                    ),
+                )
+            )
+        )
+    )
+    assert diverged_form is not None and "this:drop" in diverged_form, (
+        "стратегия наложения формы ОБЪЯВЛЕНИЯ подменена, а правило этого НЕ "
+        f"ЗАМЕТИЛО: {diverged_form!r} — значит зубов у него нет со стороны "
+        "литерала разметки"
+    )
