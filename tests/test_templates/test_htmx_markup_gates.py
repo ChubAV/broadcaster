@@ -7210,3 +7210,131 @@ def test_control_negative_a_diverged_quality_property_reddens_the_gate(
         "контроль покрасил правило НЕ ТЕМ свойством, которое подменял — "
         f"подстановка бьёт не туда: {diverged}"
     )
+
+
+# --- РАВЕНСТВО СТРАТЕГИИ НАЛОЖЕНИЯ ДВУХ ФОРМ РЕДАКТОРА -----------------------
+#
+# Фаза 12, план 12-07, гап 3 верификации и находка WR-04 ревью.
+#
+# ⚠️ ПРАВИЛО ЧИТАЕТ ДВА РАЗНЫХ СПОСОБА ЗАПИСИ ОДНОГО СВОЙСТВА, И ЭТО НЕ
+# УСЛОЖНЕНИЕ, А ПРЕДМЕТ. Форма объявления написана руками и несёт `hx-sync`
+# ЛИТЕРАЛОМ; форма загрузки собрана макросом-обёрткой, который печатает
+# `hx-sync="{{ sync }}"` — литерала в её файле нет вовсе, значение приходит
+# АРГУМЕНТОМ вызова. Правило, читающее только литералы, не увидело бы вторую
+# сторону и было бы зелено ПО ПОСТРОЕНИЮ.
+#
+# ЗАЧЕМ РАВЕНСТВО ВООБЩЕ. Очередь `hx-sync` действует на ЭЛЕМЕНТ, а формы — два
+# РАЗНЫХ элемента: очередь одной на другую не распространяется. Пока у формы
+# загрузки очереди не было, второй быстрый выбор файлов давал ДВА летящих
+# запроса, каждый со своим снимком скрытых ключей; второй ответ подменой
+# `innerHTML` уносил ключи первого, объекты оставались в хранилище сиротами, а
+# человек видел МЕНЬШЕ плиток, чем выбрал файлов, и без единого сообщения.
+#
+# ОСТАТОК НАЗВАН, А НЕ СКРЫТ: при вытесняющей очереди `this:queue last` третий
+# быстрый выбор вытесняет из очереди второй, и файлы второго выбора не уходят
+# вовсе. Стратегия взята решением владельца D-16 поимённо; остаток записан
+# допущением в `deferred-items.md` фазы.
+UPLOAD_FORM = "ads/includes/media_upload_form.html"
+FORM_WRAPPER_MACRO = "form_wrapper"
+SYNC_ARGUMENT = "sync"
+SYNC_ATTRIBUTE = "hx-sync"
+AD_FORM_ANCHOR = 'id="ad-form"'
+
+HX_SYNC_TAG = _tag_pattern(SYNC_ATTRIBUTE)
+HX_SYNC_VALUE = _value_pattern(SYNC_ATTRIBUTE)
+
+
+def _unquoted(expression: str | None) -> str | None:
+    """Литерал в кавычках любого вида — без кавычек; всё прочее — None.
+
+    Вычисляемое выражение возвращается как None НАМЕРЕННО: правило обязано
+    сказать «здесь не литерал» вслух, а не угадывать значение, которое знает
+    только шаблонизатор во время рендера.
+    """
+    if expression is None:
+        return None
+    value = expression.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return None
+
+
+def _ad_form_overlay_strategy(sources: dict[str, str]) -> str | None:
+    """Стратегия наложения ФОРМЫ ОБЪЯВЛЕНИЯ — литерал `hx-sync` тега `#ad-form`.
+
+    Тег опознаётся по идентификатору, а не по порядку в файле: форма
+    объявления — не единственный тег своего шаблона, и правило, взявшее первый
+    попавшийся `hx-sync`, меряло бы соседа.
+    """
+    source = sources.get(FORM)
+    if source is None:
+        return None
+    for tag in HX_SYNC_TAG.findall(_strip_comments(source)):
+        if AD_FORM_ANCHOR in tag:
+            return _attr_value(tag, HX_SYNC_VALUE)
+    return None
+
+
+def _upload_form_overlay_strategy(sources: dict[str, str]) -> str | None:
+    """Стратегия наложения ФОРМЫ ЗАГРУЗКИ — аргумент `sync` вызова обёртки.
+
+    Разбор ограничен скобками вызова существующим `_balanced_call_arguments`:
+    поиск имени параметра по всему файлу подобрал бы значение АТРИБУТА соседней
+    разметки, и правило сверяло бы смесь двух разных записей.
+    """
+    source = sources.get(UPLOAD_FORM)
+    if source is None:
+        return None
+    for arguments in _balanced_call_arguments(source, FORM_WRAPPER_MACRO):
+        expression = _named_argument_expression(arguments, SYNC_ARGUMENT)
+        if expression is not None:
+            return _unquoted(expression)
+    return None
+
+
+def _overlay_strategy_divergence(sources: dict[str, str]) -> str | None:
+    """Расхождение стратегий наложения двух форм редактора — или None.
+
+    Возвращается ГОТОВОЕ объяснение, а не пара значений: отсутствующая сторона
+    и разошедшиеся значения — разные неисправности, и сообщение обязано
+    называть именно ту, что случилась.
+    """
+    declared = _ad_form_overlay_strategy(sources)
+    passed = _upload_form_overlay_strategy(sources)
+
+    if declared is None:
+        return (
+            f"у формы объявления ({FORM}) стратегии наложения нет: атрибута "
+            f"{SYNC_ATTRIBUTE!r} на теге {AD_FORM_ANCHOR} не найдено — сверять "
+            f"не с чем, и правило было бы зелено по построению"
+        )
+    if passed is None:
+        return (
+            f"у формы загрузки ({UPLOAD_FORM}) стратегии наложения нет: "
+            f"аргумента {SYNC_ARGUMENT!r} в вызове {FORM_WRAPPER_MACRO} не "
+            f"передано (либо передано не литералом). Форма загрузки и форма "
+            f"объявления — РАЗНЫЕ элементы, очередь одной на другую не "
+            f"распространяется: второй быстрый выбор файлов даст два летящих "
+            f"запроса, и ответ второго унесёт ключи первого. Человек увидит "
+            f"меньше плиток, чем выбрал файлов, БЕЗ сообщения"
+        )
+    if declared != passed:
+        return (
+            f"стратегии наложения разошлись: форма объявления объявляет "
+            f"{declared!r}, форма загрузки — {passed!r}. Пока они не равны, "
+            f"два запроса одного человека идут по разным правилам, и плитки "
+            f"пропадают с экрана БЕЗ сообщения"
+        )
+    return None
+
+
+def test_both_editor_forms_declare_the_same_overlay_strategy() -> None:
+    """D-16 Фазы 12: форма загрузки объявляет ТУ ЖЕ стратегию, что форма объявления.
+
+    Две формы редактора — разные элементы, и очередь `hx-sync` действует на
+    элемент. Равенство поэтому держится ПРАВИЛОМ, а не совпадением: значение,
+    поправленное у одной стороны и забытое у другой, красит этот тест.
+    """
+    divergence = _overlay_strategy_divergence(dict(_all_templates()))
+
+    assert divergence is None, divergence
