@@ -207,8 +207,7 @@ broadcaster/
 │   │   ├── groups.py
 │   │   ├── schedules.py
 │   │   ├── history.py
-│   │   ├── billing.py
-│   │   └── uploads.py
+│   │   └── billing.py
 │   ├── pages/                 # Server-rendered HTML pages
 │   │   ├── common.py          # Shared utilities (get_user_from_cookie)
 │   │   ├── auth.py
@@ -322,6 +321,12 @@ Adds: **nginx** (80/443), **certbot** (Let's Encrypt SSL)
 | GET | `/api/history/stats` | Статистика |
 | GET | `/api/billing/plan` | Текущий план, лимиты и использование |
 | GET | `/api/billing/plans` | Тарифные планы |
-| POST | `/api/uploads/image` | Загрузка изображения |
 | GET | `/health` | Health check |
 | GET | `/metrics` | Prometheus metrics |
+
+**Загрузка изображения объявления живёт не здесь.** Её вход переехал из слоя
+JSON-API на страничный — `POST /ads/images` — и отвечает **фрагментом разметки**
+(полоса вложений целиком), а не JSON. Переезд сделан Фазой 12 вместе с переводом
+прикрепления файла на htmx: отказ файлу приезжает человеку строкой в той же
+полосе, а доступ закрывает пер-роутерная зависимость страничного слоя. Прежний
+адрес в слое JSON-API снят целиком и внешних потребителей не имел.
