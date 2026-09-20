@@ -857,10 +857,13 @@ async def test_a_marked_key_does_not_come_back_through_a_stale_snapshot(
     owner_id = (await _user(db_session)).id
     kept = image_key(owner_id, "p0.jpg")
     dropped = image_key(owner_id, "p1.jpg")
-    ad = await _seed_ad(db_session, title="С вложением", images=[kept, dropped])
+    # Идентификатор снимается ДО истечения сессии: после `expire_all` обращение
+    # к полю посеянного объекта уехало бы ленивой подгрузкой в синхронном
+    # контексте и уронило бы правило отказом драйвера вместо утверждения.
+    ad_id = (await _seed_ad(db_session, title="С вложением", images=[kept, dropped])).id
 
     removal = await authed_client.post(
-        f"/ads/{ad.id}/edit",
+        f"/ads/{ad_id}/edit",
         content=form_body(
             title="С вложением",
             text="Текст",
@@ -880,7 +883,7 @@ async def test_a_marked_key_does_not_come_back_through_a_stale_snapshot(
     mark = removal_marks(removal.text)[0]
 
     db_session.expire_all()
-    stored = (await db_session.execute(select(Ad).where(Ad.id == ad.id))).scalar_one()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
     assert stored.images == [kept], (
         f"после убирания в базе {stored.images} вместо [{kept!r}]: дальше мерить "
         "воскресение нечему"
@@ -889,7 +892,7 @@ async def test_a_marked_key_does_not_come_back_through_a_stale_snapshot(
     # ВТОРОЕ сохранение — то самое, которое заказывает заголовок ответа
     # загрузки: снимок СТАРЫЙ (оба ключа), метка ПЕРЕЖИЛА подмену.
     resurrection = await authed_client.post(
-        f"/ads/{ad.id}/edit",
+        f"/ads/{ad_id}/edit",
         content=form_body(
             title="С вложением",
             text="Текст",
@@ -902,7 +905,7 @@ async def test_a_marked_key_does_not_come_back_through_a_stale_snapshot(
 
     assert resurrection.status_code == 200
     db_session.expire_all()
-    stored = (await db_session.execute(select(Ad).where(Ad.id == ad.id))).scalar_one()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
     assert stored.images == [kept], (
         f"в базе {stored.images} вместо [{kept!r}]: убранное человеком вложение "
         "воскресло отстающим снимком — удаление, которое он СДЕЛАЛ, отменено "
@@ -933,10 +936,12 @@ async def test_a_mark_is_subtracted_before_the_ownership_check(
     owner_id = (await _user(db_session)).id
     limit = test_settings.max_images_per_ad
     keys = [image_key(owner_id, f"p{i}.jpg") for i in range(limit + 1)]
-    ad = await _seed_ad(db_session, title="На потолке", images=[])
+    # Идентификатор снимается ДО истечения сессии — по той же причине, что и у
+    # соседнего правила выше.
+    ad_id = (await _seed_ad(db_session, title="На потолке", images=[])).id
 
     response = await authed_client.post(
-        f"/ads/{ad.id}/edit",
+        f"/ads/{ad_id}/edit",
         content=form_body(
             title="На потолке",
             text="Текст",
@@ -955,7 +960,7 @@ async def test_a_mark_is_subtracted_before_the_ownership_check(
     )
 
     db_session.expire_all()
-    stored = (await db_session.execute(select(Ad).where(Ad.id == ad.id))).scalar_one()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
     assert stored.images == keys[1:], (
         f"в базе {stored.images} вместо {keys[1:]}: снимок длиной на единицу "
         "больше потолка, из которого один ключ ПОМЕЧЕН, обязан сохраниться — "
