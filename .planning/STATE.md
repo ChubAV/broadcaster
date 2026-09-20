@@ -6,10 +6,10 @@ current_phase: 12
 current_phase_name: Загрузка изображений без `fetch()`
 status: executing
 stopped_at: Completed 12-10-PLAN.md
-last_updated: "2026-09-19T10:51:43.162Z"
+last_updated: "2026-09-20T04:58:15.768Z"
 last_activity: 2026-09-19
 last_activity_desc: Phase 12 execution started
-state_head: f149030c916a0529089a1cb34f9453d9ccdd3e2b
+state_head: 907de6d2f196c59e74b467f3eeb91b4f6a2e707a
 progress:
   total_phases: 9
   completed_phases: 5
@@ -35,9 +35,9 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 12 (Загрузка изображений без `fetch()`) — EXECUTING
+Phase: 12 (Загрузка изображений без `fetch()`) — READY TO EXECUTE
 Plan: 10 of 10
-Total Plans in Phase: 10
+Total Plans in Phase: 13
 Completed Plans in Phase: 6
 Status: Ready to execute
 Last activity: 2026-09-19 — 12-07 исполнен: гапы 2 и 3 верификации и находки CR-01/WR-04 закрыты РАБОТОЙ по решениям владельца D-16 и D-17. Ответ автосохранения перестал перерисовывать полосу вложений БЕЗ НУЖДЫ: `_autosave_response` принял `repaint_media` с ЛОЖНЫМ умолчанием, `_save_from_editor` ставит признак по ФАКТУ убирания ключа (а не по присутствию поля `remove_image`), включение полосы в `autosave_response.html` обёрнуто условием. Круг замкнут самим ответом загрузки — её заголовок `HX-Trigger-After-Swap: ads-image-attached` поднимает слушатель формы объявления, — и потому строка отказа смешанной партии не доживала до второго взгляда на экран: D-04 платил лживым кодом 200 впустую. Покупка плана 12-03 не потеряна — правило `test_autosave_response_carries_the_media_tray` ПЕРЕНАЦЕЛЕНО на путь убирания (три утверждения дословно, летопись в докстринге), а не ослаблено. Форма загрузки получила `sync='this:queue last'` — ту же стратегию наложения, что форма объявления; равенство держит НОВОЕ правило, читающее ДВА РАЗНЫХ способа записи одного свойства (литерал `hx-sync` тега `#ad-form` против аргумента вызова макроса-обёртки), с контролем зубов подстановкой `this:drop` с ОБЕИХ сторон. Запрет Фазы 8 на слово `queue` прочитан ПО ИСХОДНИКУ до правки: он проведён по маршрутам ДЕНЕЖНОГО периметра, и форма редактора объявлений названа там законным носителем очереди прямым текстом; `app/pages/ads.py` постановок задач и создания платежей не содержит. Впервые в суите заведены правила, рендерящие ДВА ФРАГМЕНТА ДРУГ ПРОТИВ ДРУГА по гапу 2: `test_a_refusal_row_survives_the_autosave_the_same_response_triggers` подаёт смешанную партию на `/ads/images`, вынимает из ответа строки отказа и скрытые поля и шлёт ровно их в `POST /ads/{id}/edit`. Кромка `concurrency` пробника на FETCH-01 закрыта НАЗВАННЫМ допущением (D-17): две записи `accepted-assumption` в `deferred-items.md` — объекты-сироты с межвкладочным счётом свободных мест (источник IN-05, настоящая квота — `own_image_keys` на сохранении) и потеря СРЕДНЕГО выбора файлов вытесняющей очередью (остаток выбранной D-16 стратегии). Обе улики RED замерены прогоном и проверены прибором (`RED_EVIDENCE_OK`, `target_test_failed`). Регрессия: `tests/test_pages` + `tests/test_templates` **2050 passed, 0 failed** (32:42), `tests/test_services` + `tests/test_routes` + `tests/test_planning` **618 passed**; инвентарь внеполосных блоков не сдвинулся. FETCH-01 по-прежнему НЕ отмечен — требование объявлено и планами 12-08…12-10.
