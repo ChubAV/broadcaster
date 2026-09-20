@@ -88,6 +88,15 @@ HIDDEN_KEY_FIELD = re.compile(
     r'<input type="hidden" name="images" value="([^"]+)" form="ad-form">'
 )
 
+# Вычитающая метка убирания (Фаза 12, план 12-12). Имя поля названо ЛИТЕРАЛОМ по
+# тому же основанию, что и имя поля вложений выше: это КОНТРАКТ между ответом
+# убирания, документом и разбором сохранения. Образец свой, в этом модуле —
+# перекрёстных ввозов помощников между модулями тестов здесь нет.
+REMOVAL_MARK_FIELD_NAME = "removed_images"
+REMOVAL_MARK_FIELD = re.compile(
+    r'<input type="hidden" name="removed_images" value="([^"]+)">'
+)
+
 # Строка отказа во фрагменте полосы: у КАЖДОГО отвергнутого файла своя (D-05).
 # Разбор строкой, а не разборщиком HTML: новой зависимости ради одного абзаца в
 # суите не заводится — тот же приём применяют соседние файлы тестов страниц.
@@ -1052,9 +1061,14 @@ async def test_order_ii_a_stored_key_is_not_carried_out_by_the_removal(
     который его запрос видел, и узла, где живут чужие ключи, не трогает.
 
     ⚠️ ПОРЯДОК I (ответ загрузки приходит ПОСЛЕДНИМ) ЭТИМ ПРАВИЛОМ НЕ
-    ЗАМЕРЯЕТСЯ И ОСТАЁТСЯ ОТКРЫТЫМ: его закрывает план 12-12 вычитающей меткой.
-    Названо здесь затем, чтобы зелёное правило не прочиталось как «гап закрыт
-    целиком».
+    ЗАМЕРЯЕТСЯ, И МЕРЯЕТ ЕГО СОСЕД ПО ИМЕНИ:
+    ``test_order_i_a_removed_key_does_not_come_back_when_the_upload_lands_last``
+    (ниже в этом же файле, план 12-12). ПАРА МЕРЯЕТ СУДЬБУ КЛЮЧА НА ОБОИХ
+    ЧЕРЕДОВАНИЯХ, а не равенство строк стратегий наложения, и это требование
+    решения владельца **D-19** дословно. Читателю, нашедшему одно правило,
+    указатель обязан немедленно дать второе: порознь каждое зелено при
+    незакрытой второй развязке — ровно та слепота, из-за которой прошли три
+    предыдущих дефекта фазы.
     """
     key_a = image_key(owner.id, "a.png")
     key_b = image_key(owner.id, "b.png")
@@ -1116,6 +1130,122 @@ async def test_order_ii_a_stored_key_is_not_carried_out_by_the_removal(
     assert mock_s3.call_count == 2, (
         f"в хранилище ушло {mock_s3.call_count} записей вместо двух (объект и "
         "миниатюра): без записанного объекта правило не меряет СИРОТУ"
+    )
+
+
+@pytest.mark.asyncio
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_order_i_a_removed_key_does_not_come_back_when_the_upload_lands_last(
+    mock_s3,
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    owner: User,
+    db_session: AsyncSession,
+):
+    """ПОРЯДОК I зонда WR-07: убранный ключ не воскресает, когда загрузка последняя.
+
+    ⚠️ ЭТО ЗОНД ВЕРИФИКАТОРА, ПЕРЕНЕСЁННЫЙ В СУИТУ ПО ШАГАМ, А НЕ ВЫДУМКА.
+    Замер дословно: ``deleted key A resurrected in db: True``. Человек выбрал
+    крупный файл; пока загрузка летела, нажал «×» на первой плитке. Ответ
+    загрузки пришёл ПОСЛЕДНИМ и подменой содержимого полосы переиздал в документ
+    снимок скрытых полей, снятый ДО убирания: плитка убранного ключа вернулась
+    на экран, а автосохранение, заказанное заголовком ТОГО ЖЕ ответа
+    (``HX-Trigger-After-Swap: ads-image-attached``), записало её обратно в
+    ``ad.images``. Удаление, которое человек СДЕЛАЛ, отменено молча.
+
+    ⚠️ ШАГ (4) НЕ ВЫДУМАН, И ОБЕ ЕГО ВЕЛИЧИНЫ ПРИХОДЯТ ОТ СЕРВЕРА. Снимок из
+    ТРЁХ ключей берётся из ответа шага (2) — это ровно то, что ответ загрузки
+    переиздаёт в документ. Метка берётся из ответа шага (3) — это ровно то, чего
+    подмена содержимого полосы НЕ уносит, потому что узел меток лежит внутри
+    формы объявления и ВНЕ цели подмены. Подставь тест обе величины от себя — и
+    он мерил бы собственную формулировку, а не механизм.
+
+    ⚠️ ВТОРАЯ ПРИЧИНА, ПО КОТОРОЙ ПРАВИЛО СУЩЕСТВУЕТ: ПОРОЗНЬ ОБА ОБРАБОТЧИКА
+    ЗЕЛЕНЫ. Загрузка отдаёт верный фрагмент, сохранение честно пишет присланное
+    — теряется работа человека РОВНО НА СТЫКЕ. Правил на стык в суите до Фазы 12
+    не было ни одного, и ровно поэтому три предыдущих дефекта фазы прошли
+    зелёными.
+
+    Правило противоположного порядка —
+    ``test_order_ii_a_stored_key_is_not_carried_out_by_the_removal`` (выше в
+    этом же файле). Пара меряет СУДЬБУ КЛЮЧА на обоих чередованиях, а не
+    равенство строк стратегий наложения (**D-19**).
+    """
+    key_a = image_key(owner.id, "a.png")
+    key_b = image_key(owner.id, "b.png")
+    ad_id = (await _seed_ad(db_session, owner.id, images=[key_a, key_b])).id
+
+    # (2) ЗАГРУЗКА со снимком `[A, B]`: её ответ и есть тот снимок, который
+    # переиздаётся в документ, когда она приходит последней.
+    upload = await htmx_client.post(
+        "/ads/images",
+        data={"images": [key_a, key_b]},
+        files=[
+            (UPLOAD_FIELD, ("c.png", make_real_png_with_alpha_bytes(), "image/png"))
+        ],
+    )
+    assert upload.status_code == 200, (
+        f"загрузка ответила {upload.status_code} вместо фрагмента полосы"
+    )
+    reissued = HIDDEN_KEY_FIELD.findall(upload.text)
+    assert len(reissued) == 3 and reissued[:2] == [key_a, key_b], (
+        f"фрагмент загрузки несёт {reissued} вместо трёх ключей `[A, B, C]`: "
+        "переиздавать в документ нечего, и правило измеряло бы пустоту"
+    )
+    key_c = reissued[2]
+
+    # (3) УБИРАНИЕ со снимком `[A, B]` — запрос, который уходит кнопкой «×».
+    removal = await htmx_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(images=[key_a, key_b], extra=[("remove_image", key_a)]),
+        headers=HX_HEADERS,
+    )
+    assert removal.status_code == 200, (
+        f"убирание ответило {removal.status_code}: круг к серверу не состоялся, "
+        "и наложения измерить нечем"
+    )
+    marks = REMOVAL_MARK_FIELD.findall(removal.text)
+    assert marks == [key_a], (
+        f"ответ убирания принёс метки {marks} вместо `[A]`: документу нечем "
+        "помнить действие человека, и переизданный снимок вернёт ключ в базу"
+    )
+
+    db_session.expire_all()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
+    assert stored.images == [key_b], (
+        f"после убирания в базе {stored.images} вместо `[B]`: дальше мерить "
+        "воскресение нечему"
+    )
+
+    # (4) АВТОСОХРАНЕНИЕ, которое заказывает заголовок ответа загрузки: снимок —
+    # то, что ответ загрузки ПЕРЕИЗДАЛ; метка — то, что подмена НЕ унесла.
+    autosave = await htmx_client.post(
+        f"/ads/{ad_id}/edit",
+        content=form_body(
+            images=reissued, extra=[(REMOVAL_MARK_FIELD_NAME, marks[0])]
+        ),
+        headers=HX_HEADERS,
+    )
+    assert autosave.status_code == 200, (
+        f"автосохранение ответило {autosave.status_code}: круг, который "
+        "заказывает сам ответ загрузки, не состоялся"
+    )
+
+    db_session.expire_all()
+    stored = (await db_session.execute(select(Ad).where(Ad.id == ad_id))).scalar_one()
+    assert stored.images == [key_b, key_c], (
+        f"в базе {stored.images} вместо `[B, C]`: либо убранный человеком ключ "
+        "воскрес отстающим снимком (удаление отменено молча), либо принятый "
+        "загрузкой ключ потерян (объект остался сиротой) — зонд WR-07, ПОРЯДОК I"
+    )
+    assert key_a not in stored.images, (
+        f"убранный ключ `A` вернулся в базу: {stored.images} — ровно замер "
+        "верификатора `deleted key A resurrected in db: True`"
+    )
+    assert media_dom_id(key_a) in removed_dom_ids(autosave.text), (
+        f"к снятию названы {removed_dom_ids(autosave.text)}: воскресшая чужой "
+        f"гонкой плитка {media_dom_id(key_a)!r} осталась на экране, и человек "
+        "смотрит на плитку, за которой нет ключа"
     )
 
 
