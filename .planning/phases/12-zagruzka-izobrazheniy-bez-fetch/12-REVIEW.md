@@ -1,139 +1,193 @@
 ---
 phase: 12-zagruzka-izobrazheniy-bez-fetch
-reviewed: 2026-09-19T11:40:12Z
+reviewed: 2026-09-20T09:12:40Z
 depth: standard
-files_reviewed: 16
+files_reviewed: 10
 files_reviewed_list:
   - app/pages/ads.py
+  - app/pages/common.py
   - app/services/image_keys.py
-  - app/services/image_upload.py
+  - app/templates/ads/form.html
   - app/templates/ads/includes/autosave_response.html
-  - app/templates/ads/includes/media_refusals.html
+  - app/templates/ads/includes/media_add_tile.html
   - app/templates/ads/includes/media_strip.html
-  - app/templates/ads/includes/media_upload_form.html
-  - tests/test_nginx_body_limit.py
   - tests/test_pages/test_ads_editor.py
   - tests/test_pages/test_ads_image_upload.py
-  - tests/test_pages/test_htmx_gates.py
-  - tests/test_pages/test_origin_guard_on_destructive_routes.py
-  - tests/test_services/test_image_keys.py
-  - tests/test_services/test_images.py
   - tests/test_templates/test_htmx_markup_gates.py
 findings:
   critical: 0
   warning: 3
-  info: 9
-  total: 12
+  info: 11
+  total: 14
 status: issues_found
 ---
 
-# Phase 12: Code Review Report (re-review after gap-closure plans 12-06…12-10)
+# Phase 12: Code Review Report (re-review after gap-closure plans 12-11…12-13)
 
-**Reviewed:** 2026-09-19T11:40:12Z
+**Reviewed:** 2026-09-20T09:12:40Z
 **Depth:** standard
-**Files Reviewed:** 16
+**Files Reviewed:** 10
 **Status:** issues_found
 
 ## Summary
 
-This is a **re-review** that overwrites the 2026-09-19T00:00:00Z artifact (14 findings: 2 critical,
-6 warning, 6 info). Every prior finding is dispositioned below — eight verified **closed** against
-current source, six carried forward **open**. Two new warnings and four new info items are added.
+Это **инкрементальная ревизия** второй партии закрытия гапов (планы 12-11, 12-12, 12-13),
+переписывающая артефакт 2026-09-19T11:40:12Z. Все двенадцать прежних находок
+дисположены ниже поимённо: **две закрыты** (WR-07 — с названным остатком, WR-08),
+**одна закрыта снятием предмета** (IN-02), **девять несутся открытыми**. Добавляются два
+новых предупреждения и три новых info.
 
-Both shipping blockers are genuinely fixed, and fixed at the right seam rather than papered over:
+Целевой прогон: `test_ads_editor.py test_ads_image_upload.py test_htmx_markup_gates.py` —
+**156 passed**.
 
-* **CR-01** — the autosave that the upload response itself orders no longer repaints the tray.
-  `repaint_media` (`app/pages/ads.py:451`) defaults to `False` and is set true by exactly one
-  caller, and only when a key was actually removed (`ads.py:619-621, 681`); the include is
-  conditional (`autosave_response.html:60-65`). Two regressions now render the two fragments
-  against each other (`test_ads_image_upload.py:887`, `test_ads_editor.py:690`) — the exact
-  cross-handler rule whose absence let the defect ship.
-* **CR-02** — the ownership refusal answers with the **confirmed subset**, not an empty strip
-  (`ads.py:1009-1011`, `partition_own_image_keys`). Verified by test at `:767` (`keys == [mine]`).
+**Оба порядка зонда WR-07 закрыты, и закрыты на правильном шве.** Я проверял не
+формулировки, а судьбу ключа:
 
-The suite additions are **not vacuous**. I checked the measuring rules specifically:
-`test_nginx_body_limit.py:213` mutates a copy in memory and asserts the rule reddens;
-`test_origin_guard_on_destructive_routes.py:925` asserts the AST walk complains on an empty
-corpus; `test_htmx_markup_gates.py:7345` substitutes `this:drop` on **both** sides of the
-overlay-strategy equality; `test_htmx_gates.py:5150` declares the single `HX-Reswap` use by a key
-taken from a reddened run. `test_ads_image_upload.py:413` measures `mock_s3.call_count == 0` on
-both guard branches, which is what proves the origin check sits *above* the work rather than
-merely returning 403. Targeted run: `test_ads_image_upload.py test_ads_editor.py test_image_keys.py
-test_nginx_body_limit.py` — **76 passed**.
+* **ПОРЯДОК II** — ответ убирания больше не несёт узла полосы вовсе. `media_gone` строится
+  из ОДНОГО убранного ключа плюс воскресших (`ads.py:769-771`), печатается циклом
+  верхнеуровневых блоков `hx-swap-oob="delete"` (`autosave_response.html:87-89`), а
+  скрытое поле ключа переехало ВНУТРЬ плитки (`media_strip.html:115`) — то есть
+  снятие узла уносит и поле, а не оставляет в документе состояние без картинки.
+  Проверено по факту, а не по слову: `resurrected ∩ image_list = ∅` и
+  `removed ∉ image_list` по построению (`ads.py:663, 686-688`), значит блок снятия
+  физически не может унести плитку живого ключа. Регрессия — `test_order_ii…:1157`
+  (`stored.images == [B]` при `mock_s3.call_count == 2` и `key_c not in removal.text`).
+* **ПОРЯДОК I** — вычитающая метка лежит внутри `#ad-form` и ВНЕ `#media-strip`
+  (`form.html:216` против `form.html:240`), поэтому переиздание снимка ответом загрузки
+  её не уносит; вычитание стои́т ДО `own_image_keys` (`ads.py:663-668`). Условие
+  расположения снято машинным правилом с настоящим разбором вложенности `div`
+  (`test_htmx_markup_gates.py:7530`, `_div_block_extent`), поведение — двумя правилами
+  порядков плюс `test_a_marked_key_does_not_come_back_through_a_stale_snapshot:828`.
 
-What the gap closure did **not** reach, and what this review adds:
+**Инварианты партии я проверял по источнику, и четыре из пяти держатся:**
 
-1. `hx-sync="this:queue last"` was put on the upload form, and a machine gate now holds it equal to
-   the ad form's. But `this:` scopes a queue to **one element**, and these are two sibling forms —
-   so the ad form's `×`-removal autosave and an in-flight upload still interleave, and the
-   `repaint_media` gate is *open* on exactly that path (WR-07). The gate's own failure message
-   claims equality prevents "плитки пропадают с экрана БЕЗ сообщения"; equality does not prevent it
-   across forms.
-2. The ownership-refusal branch skips the file loop entirely, so on the *non-attacker* reachability
-   named as residual (б) the user's entire freshly picked batch is discarded with no message naming
-   a single file (WR-08). The suite enshrines this at `:715` and `:767`.
+1. **Анти-подделка на ветви отказа по ключу.** Новый цикл (`ads.py:1191-1199`) читает
+   РОВНО `part.filename` и вызывает `safe_filename` — ни `.read()`, ни `store_upload`,
+   ни одного обращения к `app/services/s3.py`. `mock_s3.call_count == 0` утверждается
+   на обеих новых ветвях (`test_ads_image_upload.py:930, 1000`). `safe_filename` снимает
+   `None` (`image_upload.py:276-286`). Инвариант держится.
+2. **Метка только вычитает.** `subtracted = [v for v in snapshot if v not in removal_marks]`
+   — результат есть ПОДМНОЖЕСТВО присланного снимка, и каждый оставшийся элемент
+   по-прежнему проходит `own_image_keys` (`ads.py:663-668`). Ввести ключ полем
+   `removed_images` нельзя ни одним написанием; имя поля не равно `images`, и это
+   замерено из ответа (`test_ads_editor.py:1046-1057`). Побочный эффект назван честно:
+   помеченный ЧУЖОЙ ключ вычитается ДО сверки и потому не даёт 400 — но и в `ad.images`
+   не попадает, то есть отказ пропадает, а дыра не открывается.
+3. **Гард источника на `POST /ads/{ad_id}/edit`.** Профиль риска `removed_images` НЕ
+   меняет, и это вывод, а не допущение: межсайтовая форма уже сегодня способна отправить
+   `images` ПУСТЫМ и обнулить `ad.images` целиком — вычитающее поле не добавляет к этому
+   ничего. Практическая достижимость ограничена политикой куки `samesite="lax"`
+   (`app/pages/auth.py:93`), которая простой межсайтовый POST куки лишает. Остаётся
+   пред-существующая запись IN-10.
+4. **Рост дописки и устаревшая метка.** Метка печатается ТОЛЬКО при `media_changed`
+   (`ads.py:772`), а `media_changed` ложно для уже помеченного ключа (он вычтен и в
+   `image_list` не лежит) — значит дубля метки не бывает ни на одном круге. Ключ
+   неповторим по построению (`{user_id}/{uuid4hex}_{имя}`), поэтому устаревшая метка не
+   может вычесть заново прикреплённое. Рост — ровно одно поле на одно убирание за жизнь
+   страницы; см. IN-11.
+5. **`media_dom_id`.** Хеш берётся от ключа целиком, поэтому оба формата (сегодняшний и
+   легаси) обслуживаются ОДНИМ правилом без частных случаев; 64 бита усечения внутри
+   одного документа неисчерпаемы. Зато **единственность идентификатора нигде не
+   обеспечена** — см. **WR-10**.
 
-All three review-driven behaviour changes agree on strip semantics and I could not break them:
-key-check refusal / ceiling / per-file storage failure all **REPLACE** `#media-strip` from
-`request-snapshot ∩ own-keys` plus newly stored keys; only the part-count branch **APPENDS**
-(`HX-Reswap: beforeend`), correctly, because it never parsed a single `images` field.
+**Проверка механики рантайма, а не обещания шаблона.** Я сверил способ `beforeend` по
+вендоренному `app/static/js/htmx.min.js` 2.0.10: `oobSwap` при не-`outerHTML` стиле
+передаёт в своп САМ клонированный элемент, а `insertNodesBefore` вставляет его
+`childNodes` — то есть `<input>` уезжает в `#media-tombstones`, а обёртка `<div>`
+отбрасывается. Комментарий `autosave_response.html:98-99` описывает рантайм ВЕРНО. Тем же
+чтением найден и предмет WR-10: цель снятия резолвится через `querySelectorAll`, то есть
+одно объявление `delete` уносит ВСЕ совпавшие узлы, а не первый.
+
+**Суита. Заявление «ни одно правило не ослаблено» я проверял на трёх осях, и оно
+подтверждается — с двумя оговорками.**
+
+* `test_ads_editor.py` — замена ГЕНУИННО сильнее на своей оси: `html.count('name="images"') == 0`
+  запрещает поле вложений В ЛЮБОМ написании, тогда как прежнее `'id="media-tray"' in html`
+  требовало лишь присутствия узла. Ось, которая действительно исчезла — «ключ не
+  встречается в ответе как ПРОИЗВОЛЬНАЯ ПОДСТРОКА», — не брошена рассуждением: её
+  подхватывает `test_the_removal_mark_is_the_only_place_the_removed_key_comes_back:972`
+  тремя утверждениями (`html.count(dropped) == 1`, `dropped not in _MARK_FIELD_TAG.sub("", html)`,
+  имя поля прочитано ИЗ ОТВЕТА). Обещание, данное докстрингом 12-11 («на дереве после
+  этого плана второго правила ещё нет»), исполнено следующим планом партии. Оговорки —
+  IN-12 и IN-13.
+* `test_ads_image_upload.py` — `len(rows) == len(picked) + 1` строго сильнее `len(rows) == 1`:
+  прежняя форма меряла МОЛЧАНИЕ и объявляла его правильным. К счёту добавлены
+  `sorted(named) == sorted(picked)` (имена именно тех файлов) и сохранённый
+  `mock_s3.call_count == 0`. Ни одна прежняя ось не снята.
+* `test_htmx_markup_gates.py` — оба новых правила читают ТЕЛО без комментариев
+  (`_strip_comments`, :365-372), то есть не зеленеют от собственной прозы;
+  `_div_block_extent` считает вложенность парами тегов, а не берёт первый `</div>`.
+  Правил, которые не могут покраснеть, среди новых я не нашёл: `OOB_BLOCKS = 22` и
+  `CONDITIONAL_OOB_TEMPLATES` держат парный контроль (атрибуты против тегов) и имеют
+  контрольные негативы. Урок трёх прошлых дефектов фазы применён — в том числе вынос
+  `>=` из открывающего тега (`media_add_tile.html:46-54`), где ошибка разбора названа
+  замером покрасневшего правила, а не догадкой.
+
+Чего партия НЕ достигла и что эта ревизия добавляет:
+
+1. Новый код **повторил класс IN-02 в собственном шве**: `media_strip.html:127` передаёт
+   включаемой плитке одну переменную из трёх объявленных, две остальные достаются
+   наследованием области видимости — и это в файле, чья шапка ПРЯМО объявляет отказ от
+   наследования (WR-09).
+2. Адресное снятие сделало **единственность идентификатора плитки несущим свойством**, а
+   обеспечивать её нечем: дубль ключа в `ad.images` даёт два узла с одним `id`, и одно
+   объявление `delete` уносит ОБА (WR-10).
 
 ## Structural Findings (fallow)
 
-No structural pre-pass was supplied with this review invocation.
+Структурного предпрохода с этим вызовом ревизии не подано.
 
 ## Narrative Findings (AI reviewer)
 
-### Disposition of prior findings
+### Диспозиция прежних находок
 
-| ID | State | Evidence |
+| ID | Состояние | Улика |
 |---|---|---|
-| CR-01 | **closed** (12-07) | `ads.py:451,486,619-621,681`; `autosave_response.html:60-65`; regressions `test_ads_image_upload.py:887`, `test_ads_editor.py:690,723` |
-| CR-02 | **closed** (12-06) | `ads.py:1009-1011,1016,1043-1045`; regression `test_ads_image_upload.py:767` (`keys == [mine]`) — residual (б) carried below |
-| WR-01 | **closed** as comment-truthfulness (12-10) | `image_upload.py:366-394`; `ads.py:886-895,1113-1126` now name the proxy ceiling as the only pre-read bound |
-| WR-02 | **open** | still server-scoped; carried below |
-| WR-03 | **closed** (12-10) | `ads.py:877-878`, after auth `:860`, before parse `:931`; idiom matches `ads_delete` `:1412-1413`; test `:413` asserts `call_count == 0` |
-| WR-04 | **closed for the named case** (12-07) | `media_upload_form.html:64`; gate `test_htmx_markup_gates.py:7331` with two-sided teeth — residual D-16/D-17 carried; cross-form case becomes WR-07 |
-| WR-05 | **closed** (12-08) | `ads.py:1165-1180`; test `:1109` (`keys == 1`, `call_count == 3`) |
-| WR-06 | **closed** (12-09) | `ads.py:22,930-980`; `media_refusals.html`; registry `test_htmx_gates.py:5133-5150`; test `:1220` incl. scope control at `:1326` |
-| IN-01 | **closed** (12-06 + 12-10) | `grep -rn "test_uploads\|routes/uploads" tests/` returns **nothing**; only survivor is a past-tense provenance line in `image_upload.py:10` |
-| IN-02 | **open** | carried below |
-| IN-03 | **open** | carried below |
-| IN-04 | **open** | carried below |
-| IN-05 | **open** (accepted assumption) | carried below |
-| IN-06 | **open** | carried below |
+| WR-02 | **open** | `nginx/*.conf.template` этой партией не тронуты; ниже |
+| WR-07 | **closed с названным остатком** (12-11 + 12-12) | `ads.py:663-668, 769-772`; `autosave_response.html:87-89, 109-111`; `media_strip.html:115`; `form.html:216`; регрессии `test_ads_image_upload.py:1157` (ПОРЯДОК II), `test_ads_editor.py:828` (ПОРЯДОК I); гейты `test_htmx_markup_gates.py:7530, 7574`. Остаток — ниже |
+| WR-08 | **closed** (12-13) | `ads.py:1191-1199` (цикл именованных отказов, ни одного обращения к хранилищу); тесты `test_ads_image_upload.py:911-930` и `:984-1000` (`len(rows) == len(picked) + 1`, `sorted(named) == sorted(picked)`, `mock_s3.call_count == 0`) |
+| IN-02 | **closed-by-removal** | Включение полосы снято из `autosave_response.html` вместе с признаком `oob` на ней (`media_strip.html:14-32`). Наследовать признак стало НЕКОМУ: `{% set oob = true %}` (`autosave_response.html:77`) читает один `autosave.html` в той же строке, а плитка добавления получает значение явной областью (`:136`). ⚠️ КЛАСС находки при этом воспроизведён в новом коде — см. WR-09 |
+| IN-03 | **open** | `ads.py:610` и `ads.py:1022` — `await request.form(...)` без `async with` и без `close()`; ниже |
+| IN-04 | **open** | `ads.py:1412-1414` — не-htmx POST делает всю партию и отдаёт 302; ниже |
+| IN-05 | **open** (принятое допущение) | `ads.py:1271` не изменён ни на символ; ниже |
+| IN-06 | **open** | 12-11 вынес плитку в свой файл и разметку её не изменил: `media_add_tile.html:55` — по-прежнему голый `<label for="file-input">`, `media_upload_form.html` — по-прежнему `<input … hidden>`; ниже |
+| IN-07 | **open** | `ads.py:1063` — `HX-Reswap: beforeend` без снятия прежней строки; ниже |
+| IN-08 | **open, и предмет РАЗМНОЖИЛСЯ** | `ads.py:1192-1193` повторяет `ads.py:1303-1304`; ниже |
+| IN-09 | **open** | `ads.py:1343-1348` — `detail=str(exc.detail)` над константой; ниже |
+| IN-10 | **open (не переосматривалась)** | `test_origin_guard_on_destructive_routes.py:729` — `ORIGIN_GUARD_CALL_SITES_MEASURED = 14`, файл партией не тронут |
 
-**Named residuals kept on the record (documented, not defects of this batch):**
+**Остаток, оставленный на записи закрытием WR-07 (документирован, не дефект партии):**
 
-* **R-1 / 12-06 (б)** — a key already in `Ad.images` that fails today's `_IMAGE_KEY_PATTERN` is
-  still detached and gets a nameless refusal row (`ads.py:1065-1079`). This is the reachability
-  that makes WR-08 below matter without an attacker.
-* **R-2 / 12-07 D-17** — an aborted batch orphans objects; two tabs count free slots from their own
-  snapshots (`ads.py:1081-1096`).
-* **R-3 / 12-07 D-16** — under `this:queue last`, a third rapid file pick evicts the second
-  (`media_upload_form.html:37-43`).
-* **R-4 / 12-08** — a client-aborted batch is not reached by the per-file `except HTTPException`
-  (`ClientDisconnect` is not an `HTTPException`; it propagates out of the loop at `ads.py:1166`).
+* **R-5 / 12-11 ПОРЯДОК II** — ответ загрузки, пришедший последним, ПЕРЕПЕЧАТЫВАЕТ в
+  документ плитку уже убранного ключа (снимок он нёс старый, а меток `hx-include`
+  не собирает — `media_upload_form.html`, `include="#media-strip input[name='images']"`).
+  Плитка живёт до следующего автосохранения, которое снимает её блоком по перечню
+  `resurrected`. В базу ключ при этом не возвращается — метка вычитает его раньше. То
+  есть цена закрытия названа честно: КРАТКОЕ мелькание плитки взамен молчаливой потери.
+  Правильность здесь держится на `hx-sync="this:queue last"` формы объявления
+  (`form.html:154`): без неё автосохранение, заказанное заголовком ответа загрузки,
+  ушло бы ПАРАЛЛЕЛЬНО летящему убиранию и унесло бы старый снимок без метки.
+  Отвергнутая владельцем общая очередь двух форм (а) на эту опору не влияет.
 
 ---
 
 ## Warnings
 
-### WR-02: The 64M body ceiling is still server-wide, not scoped to the upload route (carried open)
+### WR-02: Потолок тела 64M по-прежнему на весь сервер, а не на маршрут загрузки (несётся открытой)
 
 **File:** `nginx/nginx.conf.template:82`, `nginx/nginx-http.conf.template:42`
 
-**Issue:** Unchanged since the first review. `client_max_body_size 64M;` sits in the `server`
-block, so every endpoint — including unauthenticated ones, since the proxy decides before the app
-does — accepts a 64 MB body to serve one route. The formula the comment derives
-(`max_images_per_ad × max_image_size_mb`) applies to `/ads/images` alone. No gap plan claimed it.
+**Issue:** Без изменений с первой ревизии и с прошлой. `client_max_body_size 64M;` стои́т в
+блоке `server`, поэтому 64 МБ тела принимает КАЖДАЯ точка входа — включая
+неаутентифицированные, ибо прокси решает раньше приложения, — ради одного маршрута
+`/ads/images`. Формула, выведенная комментарием (`max_images_per_ad × max_image_size_mb`),
+относится только к нему. Владелец вынес находку ЗА рамку партии явно (D-20 называет
+остающееся поимённо), поэтому она остаётся записью, а не долгом партии.
 
-**New in this review:** the fix is now actively **cemented by a test**.
-`tests/test_nginx_body_limit.py:164` asserts `len(declared) == 1` per template
-("объявлений потолка тела запроса N, а нужно ровно одно"), and `_declared_ceilings`
-(`:93-98`) has no notion of which block a value belongs to. Adding a scoped
-`location = /ads/images { client_max_body_size 64M; }` under a tighter server default would
-therefore redden the suite. Anyone fixing WR-02 must fix the rule in the same commit.
+Отдельно повторяю предупреждение прошлой ревизии, потому что оно не потеряло силы:
+починка **зацементирована правилом**. `tests/test_nginx_body_limit.py:164` требует
+`len(declared) == 1` на шаблон, а `_declared_ceilings` (`:93-98`) не знает, какому блоку
+значение принадлежит. Добавленный `location = /ads/images { … }` покраснит суиту.
 
 **Fix:**
 
@@ -143,218 +197,218 @@ client_max_body_size 20M;
 location = /ads/images {
     client_max_body_size 64M;
     proxy_pass http://app:8000;
-    # ...same proxy headers as the generic location...
+    # ...те же proxy-заголовки, что у общего location...
 }
 ```
 
-and teach `_declared_ceilings` to return `(block, bytes)` pairs, asserting "exactly one *server*
-declaration, and the `/ads/images` location declaration ≥ `max_images_per_ad × max_image_size_mb`"
-instead of "exactly one declaration in the file".
+и научить `_declared_ceilings` возвращать пары `(блок, байты)`, утверждая «ровно одно
+объявление в `server` И объявление в `/ads/images` не меньше
+`max_images_per_ad × max_image_size_mb`» вместо «ровно одно объявление в файле».
 
-### WR-07: A `×` removal that overlaps an in-flight upload resurrects the deleted attachment or drops the fresh one (new)
+### WR-09: Полоса передаёт включаемой плитке одну переменную из трёх объявленных — в файле, который отказ от наследования объявляет своим свойством (новая)
 
-**File:** `app/templates/ads/includes/media_upload_form.html:64`, `app/templates/ads/form.html:110-117`,
-`app/pages/ads.py:619-621,681`, `app/pages/ads.py:1009-1011,1188-1203`
+**File:** `app/templates/ads/includes/media_strip.html:124-129`, `app/templates/ads/includes/media_add_tile.html:16-20,28-34,54`
 
-**Issue:** 12-07 closed the *upload-vs-upload* race with `hx-sync="this:queue last"` and holds it
-equal to the ad form's strategy with a machine gate. But `this:` scopes an htmx queue to **that
-element**, and the upload form and `#ad-form` are deliberately siblings — the include's own comment
-(г) says so: «очередь одной на другую не распространяется». The `repaint_media` gate that closed
-CR-01 is, by construction, **open** on the removal path (`media_changed == True`), which is exactly
-the ad-form request that can be in flight beside an upload. Neither response carries a version
-token, and both rewrite overlapping regions:
-
-Starting DOM hidden fields `[A, B]`.
-
-1. User picks file C → `POST /ads/images` in flight, carrying `images=A,B`.
-2. User clicks `×` on A → `POST /ads/{id}/edit` with `images=A,B`, `remove_image=A` →
-   `media_changed` true → commit `ad.images=[B]` → OOB `#media-tray` rendered from the DB as `[B]`.
-
-* Removal response lands **last**: the tray becomes `[B]`. Key C is stored in S3 but its hidden
-  field is gone from the document, so it is an **orphan object and lost work** — the user watched a
-  tile appear and then vanish, with no message.
-* Upload response lands **last**: the tray becomes `[A, B, C]`. A is **resurrected in the DOM**, and
-  the `HX-Trigger-After-Swap: ads-image-attached` autosave that the same response orders
-  (`ads.py:1233-1234`) writes A straight back into `ad.images`. The user's deletion is silently
-  undone.
-
-The window is not microscopic: an upload holds the request open for decode + resize + two S3 round
-trips. This is classified **WARNING** rather than BLOCKER only because it needs an interleaving,
-whereas CR-01/CR-02 fired on a single-user, single-action path.
-
-Note also that the gate's failure text (`test_htmx_markup_gates.py:7318-7331`) justifies equality by
-"плитки пропадают с экрана БЕЗ сообщения" — equality of two `this:`-scoped strategies does not buy
-that property across two elements. The record over-claims what the gate measures.
-
-**Fix:** make the two forms share one queue, and make the removal repaint safe against a
-concurrently-arriving upload. Smallest correct change is a shared sync group plus rendering the
-removal repaint from the union of DB state and the request snapshot:
+**Issue:** `media_add_tile.html` объявляет контракт из трёх имён — `attached_count`,
+`max_images`, `oob` — и шапка его говорит буквально: «ЗНАЧЕНИЯ ПЕРЕДАЮТСЯ ВЫЗЫВАЮЩИМ
+ЯВНО (`{% with %}`), А НЕ НАСЛЕДУЮТСЯ ОБЛАСТЬЮ ВИДИМОСТИ… Именно наследование и есть
+хрупкость, названная находкой `IN-02`». Второй вызывающий исполняет это дословно
+(`autosave_response.html:136` передаёт все три). Первый — нет:
 
 ```jinja
-{# media_upload_form.html and form.html: one named group, not `this:` #}
-sync='#media-strip:queue last'
+{%- with attached_count = image_keys | length %}
+{%- include "ads/includes/media_add_tile.html" %}
+{%- endwith %}
 ```
+
+`max_images` сюда приходит НАСЛЕДОВАНИЕМ — из `{%- set max_images = editor.max_images %}`
+страницы (`form.html:243`) или из словаря контекста сборщика фрагмента
+(`ads.py:1370-1378`). Комментарий рядом (`media_strip.html:124-126`) утверждает явную
+передачу и оговаривает только `oob`, то есть **описывает файл точнее, чем файл себя
+ведёт** — ровно тот разрыв между прозой и кодом, который эта фаза ловит трижды.
+
+Отказ не тихий, и это единственное смягчающее: `at_ceiling = attached_count >= max_images`
+(`media_add_tile.html:54`) над `jinja2.Undefined` поднимает `UndefinedError` — замерено
+прямым прогоном, а не предположено, — то есть третий вызывающий получит 500 на экране
+редактора, а не молча скрытую плитку. Но 500 приедет ТОЛЬКО когда страницу откроют, а не
+на правке шаблона, и ни одно правило суиты этого не сторожит: гейт условных внеполосных
+блоков считает `CONDITIONAL_OOB_TEMPLATES` и до контракта переменных не доходит.
+
+**Fix:** довести первого вызывающего до объявленного контракта — одна строка, ноль
+изменений поведения:
+
+```jinja
+{%- with attached_count = image_keys | length, max_images = max_images %}
+{%- include "ads/includes/media_add_tile.html" %}
+{%- endwith %}
+```
+
+и, если запись должна пережить следующую правку, снять с контракта машинное
+утверждение — правило, которое рендерит `media_strip.html` с контекстом БЕЗ `max_images`
+и требует `UndefinedError`, по форме контрольных негативов
+`tests/test_templates/test_htmx_markup_gates.py:6537+`.
+
+### WR-10: Единственность идентификатора плитки стала несущей, а обеспечивать её нечем — дубль ключа даёт одно снятие на ДВА узла и молча отцепляет уцелевший (новая)
+
+**File:** `app/services/image_keys.py:129-161,164-201`, `app/pages/ads.py:663-668,686-688,769-771`, `app/templates/ads/includes/media_strip.html:91`
+
+**Issue:** План 12-11 сделал `media_dom_id(key)` адресом узла, а план 12-12 — адресом
+снятия. Оба места печатают его вызовом одной функции, и это верно. Но у механизма
+появилось НОВОЕ предусловие, которого прежняя перерисовка полосы целиком не требовала:
+**ключ в `ad.images` обязан быть уникальным**. Не обеспечивает этого ни одно место дерева:
+
+* `partition_own_image_keys` сохраняет порядок И повторы (`image_keys.py:150-161`);
+* `own_image_keys` считает длину и предикат, но не различность (`image_keys.py:180-201`);
+* `_save_from_editor` дедуплицирует РОВНО ОДНО место — `resurrected`
+  (`dict.fromkeys(snapshot)`, `ads.py:652`), — а `subtracted`, из которого и получается
+  `ad.images`, повторы проносит насквозь (`ads.py:663`).
+
+Замерено зондом на дереве: объявление, посеянное с `images=[dup, dup]`, отдаёт страницу
+редактора с **двумя** узлами `id="media-item-c246ee810e6fa1cd"`.
+
+Исход при убирании такого ключа расходится с базой в сторону ПОТЕРИ. Сервер убирает
+ровно одно вхождение (`image_list.remove(removed)`, `ads.py:688`) и называет к снятию
+ОДИН идентификатор (`media_gone = [removed]`). Рантайм же резолвит цель снятия через
+`querySelectorAll` (`app/static/js/htmx.min.js`, `He` → `m(...)` →
+`u.querySelectorAll(e)`) и обходит ВСЕ совпадения, то есть уносит ОБЕ плитки вместе с
+обоими скрытыми полями. База после коммита — `[dup]`, документ — пусто; следующее
+автосохранение (одно нажатие клавиши) записывает `ad.images = []`. Пользователь видел
+плитку, нажал «×» один раз, а лишился двух вложений — без единой строки.
+
+Достижимость честно ограничена: через интерфейс дубль не возникает (ключ несёт
+`uuid4().hex`, снимок собирается из DOM, где поле одно на плитку), и нужен запрос,
+составленный руками с того же источника. Поэтому это **WARNING**, а не блокер. Но
+классифицирую именно так, а не как info: цена — молчаливая потеря вложения, ровно тот
+исход, ради устранения которого заведена вся партия, и держится сегодня отсутствие
+дубля на СЛУЧАЕ, а не на правиле.
+
+**Fix:** сделать различность свойством предиката, а не удачи — в единственном месте,
+где решается «мой ли ключ», чтобы второму написанию неоткуда было взяться:
 
 ```python
-# ads.py::_save_from_editor — the repaint must not claim authority over keys
-# that a concurrent upload has stored but this request never saw.
-response = await _autosave_response(
-    request, db, settings, user, saved, repaint_media=media_changed
-)
+# app/services/image_keys.py::partition_own_image_keys
+own: list[str] = []
+offending: list[str] = []
+seen: set[str] = set()
+for value in values:
+    match = _IMAGE_KEY_PATTERN.fullmatch(value)
+    if match is None or match.group(1) != str(user_id):
+        offending.append(value)
+        continue
+    # Повтор отбрасывается, а не отвергает партию: он не подделка, а следствие
+    # кривого клиента — но ДВА узла с одним идентификатором делают адресное
+    # снятие (план 12-11) неоднозначным, и одно объявление `delete` унесло бы оба.
+    if value in seen:
+        continue
+    seen.add(value)
+    own.append(value)
 ```
 
-If a shared group is rejected (it also serialises text autosaves behind uploads), then at minimum
-gate the removal repaint on "no upload in flight" with an `hx-sync` group on the ad form's
-`remove_image` submit, and record the residual the way D-16/D-17 were recorded.
-
-### WR-08: The ownership refusal silently discards the entire freshly picked batch (new)
-
-**File:** `app/pages/ads.py:1016-1045` (branch), `app/pages/ads.py:1046-1186` (skipped `else`)
-
-**Issue:** When any hidden `images` value fails `partition_own_image_keys`, the handler appends one
-nameless row and takes the `if` branch — **the whole file loop is skipped**. The files the user just
-selected are never read, never stored, and **never mentioned**: the single row says «Одно из
-вложений недоступно. Обновите страницу и добавьте изображение заново», which speaks about a *key*,
-not about the five photos that just disappeared from the file dialog. `attached` stays `False`, so
-no autosave, no event, no second signal of any kind.
-
-For a forged request this is correct and deliberate ("работа ради запроса, уже признанного
-подделанным, НЕ делается"). But the branch is reachable **without an attacker** — that is exactly
-residual R-1: a key predating filename normalisation, sitting in `Ad.images`, arrives in the hidden
-fields and fails today's pattern. In that state the user does not have a forged request; they have
-a legacy attachment. Every upload attempt they make from then on is a silent no-op until they
-happen to reload the page. The suite enshrines the behaviour at `:715-762` and `:767-820`
-(`mock_s3.call_count == 0` with a valid `cat.png` in the batch), so nothing will notice.
-
-The strip *is* rewritten authoritatively on this branch, so it is also the branch that answers with
-an "authoritative-looking but incomplete" state in the sense the phase set out to avoid: the
-document now believes the batch never happened.
-
-**Fix:** separate "this value is not yours" from "therefore nothing else in the request counts".
-Refuse the offending values, then still refuse each *file* by name so the user learns their files
-did not land:
-
-```python
-if offending or len(string_images) != len(raw_images):
-    refusals.append(Rejected(display_name="", reason=INACCESSIBLE_IMAGE_MESSAGE))
-    # Файлы партии в хранилище не идут — но человек обязан прочесть, что они
-    # НЕ прикрепились, иначе отказ по ключу молча съедает его выбор.
-    for part in form_data.getlist(UPLOAD_FILE_FIELD):
-        if isinstance(part, str):
-            continue
-        refusals.append(
-            Rejected(display_name=safe_filename(part.filename),
-                     reason=INACCESSIBLE_IMAGE_MESSAGE)
-        )
-```
-
-and extend `test_an_own_key_survives_a_foreign_key_in_the_same_batch` to assert the batch's files
-are each named (`mock_s3.call_count == 0` stays, so the anti-orphan property is preserved).
+и снять утверждение правилом: посеять `images=[dup, dup]`, убрать ключ и потребовать
+`stored.images == []` при `len(removed_dom_ids(html)) == 1` — либо, если владелец выберет
+отказ вместо отбрасывания, потребовать 400. Любой из двух исходов лучше сегодняшнего,
+потому что сегодняшний зависит от того, сколько узлов найдёт `querySelectorAll`.
 
 ## Info
 
-### IN-02: `oob` still reaches the strip by inheriting a variable set for a different include (carried open)
+### IN-03: Разобранная форма по-прежнему никогда не закрывается (несётся открытой)
 
-**File:** `app/templates/ads/includes/autosave_response.html:55,60-65`
+**File:** `app/pages/ads.py:610`, `app/pages/ads.py:1022-1024`
 
-**Issue:** `{% set oob = true %}` is written for `ads/includes/autosave.html`; `media_strip.html`
-picks it up only because it is included later in the same scope. Reordering the two includes
-silently drops `hx-swap-oob` from the tray — the failure mode is "the removed tile stays on screen",
-the bug 12-03 fixed. 12-07 made the include *conditional*, which adds a second way to reason wrong
-about it, and the template now documents the fragility (`:46-49`) as an owner-deferred open item.
-Documented ≠ fixed.
+**Issue:** `await request.form(...)` без `async with` и без `await form_data.close()`.
+FastAPI регистрирует закрывающий колбэк только для обработчиков, ОБЪЯВЛЯЮЩИХ поле тела, а
+ни один из этих двух его не объявляет — то есть временные файлы (до `MAX_UPLOAD_PARTS`
+на запрос) освобождаются подсчётом ссылок, а не детерминированно. Партия предмета не
+тронула. Замечу новое соседство: ветвь отказа по ключу (`ads.py:1191-1199`) части
+ПЕРЕБИРАЕТ, но не читает, поэтому их временные файлы живут до сборки мусора ровно так же.
 
-**Fix:** `{% with oob = true %}{% include ... %}{% endwith %}` around each include, or pass the flag
-per include.
+**Fix:** `async with request.form(max_files=…, max_fields=…) as form_data:` с телом цикла
+внутри блока; `except StarletteHTTPException` обязан остаться СНАРУЖИ `async with`.
 
-### IN-03: The parsed form is still never closed (carried open)
+### IN-04: Путь без JavaScript по-прежнему делает всю загрузку и выбрасывает ключи (несётся открытой)
 
-**File:** `app/pages/ads.py:931-933`, `app/pages/ads.py:574`
+**File:** `app/pages/ads.py:1412-1414`, `app/pages/htmx.py`
 
-**Issue:** `await request.form(...)` used bare — no `async with`, no `await form_data.close()`.
-FastAPI only registers the close callback for endpoints that *declare* a body field, and neither of
-these does, so the spooled temp files (now up to `MAX_UPLOAD_PARTS = 64` per request) rely on
-refcount collection rather than deterministic release.
+**Issue:** Не-htmx POST проходит весь цикл (декодирование плюс две записи в хранилище на
+принятый файл), после чего `respond()` отдаёт 302 на `/ads/new`, где полоса рисуется из
+`ad.images`. Каждый принятый ключ теряется, каждый записанный объект становится сиротой.
+Гард источника закрывает межсайтовую достижимость, но не одноисточниковый curl или
+скрипт. У ветви отказа по числу частей форма та же (`ads.py:1069-1071`).
 
-**Fix:** `async with request.form(max_files=..., max_fields=...) as form_data:` with the batch loop
-inside the block. Note the `except StarletteHTTPException` must stay outside the `async with`.
+**Fix:** отвергать не-htmx транспорт ДО работы либо проводить ключи дальше. Комментарий
+недостаточен там, где цена платится хранилищем.
 
-### IN-04: The no-JavaScript path still performs the whole upload and throws the keys away (carried open)
+### IN-05: Счёт свободных мест по-прежнему выводится из клиентского состояния (несётся открытой, принятое допущение)
 
-**File:** `app/pages/ads.py:1237-1239`, `app/pages/htmx.py:830-831`
+**File:** `app/pages/ads.py:1271`
 
-**Issue:** A non-htmx POST runs the full batch (decode + two S3 writes per accepted file) and then
-`respond()` returns 302 to `/ads/new`, where the strip renders from `ad.images`. Every accepted key
-is discarded and every stored object becomes an orphan. The new origin guard closes the *cross-site*
-reachability but not a same-origin scripted or curl POST, and the parts-refusal branch has the same
-shape (`:978-980`).
+**Issue:** `free = max(0, settings.max_images_per_ad - len(image_keys))`, где `image_keys`
+приходит из скрытых полей запроса. Запрос без поля `images` получает полный потолок
+каждый раз. Настоящий предел живёт на сохранении и живёт правильно (`own_image_keys`).
+Допущение записано `accepted-assumption` в `deferred-items.md`, строка партией не
+изменена ни на символ, и комментарий над ней это утверждает прямо (`ads.py:1256-1270`).
 
-**Fix:** refuse the non-htmx transport before doing the work, or carry the keys through. A comment
-is not sufficient when the cost is paid in storage.
+**Fix (если рост хранилища когда-нибудь станет предметом):** квота на объекты/байты
+пользователя на границе сервиса.
 
-### IN-05: The free-slot ceiling is still derived from client state (carried open, accepted assumption)
+### IN-06: У элемента прикрепления по-прежнему нет клавиатурного пути; стиль фокуса по-прежнему мёртв (несётся открытой)
 
-**File:** `app/pages/ads.py:1096`
+**File:** `app/templates/ads/includes/media_add_tile.html:55`, `app/templates/ads/includes/media_upload_form.html` (поле файла), `app/static/css/app.css:2071`
 
-**Issue:** `free = max(0, settings.max_images_per_ad - len(image_keys))` where `image_keys` comes
-from the request's hidden fields. A request that omits `images` gets the full ceiling every time, so
-an authenticated user can write unbounded objects into their own prefix by repeating the call. The
-real per-ad limit is enforced at save time by `own_image_keys`, correctly. 12-07 recorded this as
-`accepted-assumption` in `deferred-items.md` and annotated the line (`:1081-1095`) rather than
-changing it — which is the right handling of a named assumption, so this stays Info.
+**Issue:** Проверено против правки 12-11 прямо, потому что вынос плитки в свой файл был
+поводом усомниться. Разметка переехала ПОБАЙТОВО: единственный триггер — `<label
+for="file-input">`, а само поле по-прежнему несёт `hidden` (`display:none`). Ярлык не
+фокусируем, поле вне порядка обхода, значит «+ ФАЙЛ» не достижима клавиатурой, а
+`.media-tile--add:focus-visible` не может совпасть никогда.
 
-**Fix (if storage growth ever matters):** a per-user object/byte quota at the service boundary.
+**Fix:** визуально-скрытый образец (`position:absolute; width:1px; height:1px;
+clip-path:inset(50%)`) вместо `hidden`, и стиль `.media-tile--add:has(+ input:focus-visible)`.
 
-### IN-06: The attach control still has no keyboard path; its focus style is still dead CSS (carried open)
+### IN-07: Повторные отказы по числу частей накапливают дубли строк (несётся открытой)
 
-**File:** `app/templates/ads/includes/media_upload_form.html:79`, `app/templates/ads/includes/media_strip.html:92`, `app/static/css/app.css:2071`
+**File:** `app/pages/ads.py:1063`, `app/templates/ads/includes/media_refusals.html`
 
-**Issue:** The only trigger is `<label for="file-input">` and the input still carries `hidden`
-(`display:none`). Labels are not focusable and a `display:none` input is out of the tab order, so
-"+ ФАЙЛ" cannot be reached or activated by keyboard. `.media-tile--add:focus-visible` can never
-match. Verified unchanged in this batch.
+**Issue:** Ветвь числа частей отвечает `HX-Reswap: beforeend`, то есть ДОПИСЫВАЕТ строку в
+`#media-strip`. Снимает её только следующий ответ загрузки, подменяющий `innerHTML`.
+Уронивший папку дважды получает две одинаковые строки. Комментарий обработчика
+(`ads.py:1009-1010`) обещает «снимается строка сама», что верно лишь для следующей
+УДАЧНОЙ загрузки. Партия ветви не касалась.
 
-**Fix:** use the visually-hidden pattern (`position:absolute; width:1px; height:1px;
-clip-path:inset(50%)`) instead of `hidden`, and style `.media-tile--add:has(+ input:focus-visible)`.
+**Fix:** рисовать строку в отдельного соседа `#media-refusals` со свопом `innerHTML`, либо
+записать накопление там, где пишется заголовок `beforeend`.
 
-### IN-07: Repeated part-count refusals accumulate duplicate rows (new)
+### IN-08: Строковая часть под файловым именем по-прежнему отбрасывается молча — и теперь в ДВУХ местах (несётся открытой, предмет размножился)
 
-**File:** `app/pages/ads.py:972`, `app/templates/ads/includes/media_refusals.html:41-43`
+**File:** `app/pages/ads.py:1192-1193` и `app/pages/ads.py:1303-1304` против `app/pages/ads.py:1107`
 
-**Issue:** The part-count branch answers with `HX-Reswap: beforeend`, so its row is *appended* to
-`#media-strip`. Nothing removes it except a later `/ads/images` response that swaps `innerHTML`.
-A user who drops an over-large folder twice in a row gets two identical rows; the autosave's OOB
-`#media-tray` repaint does not clear them (by design — they are siblings of the tray). The handler's
-own comment claims "снимается строка сама", which is true only for the *next successful* upload.
+**Issue:** `if isinstance(part, str): continue` роняет не-файловую часть под
+`UPLOAD_FILE_FIELD` без единого слова, тогда как зеркальный случай — ФАЙЛОВАЯ часть под
+`images` — отвергается намеренно, с доводом, выписанным дважды.
 
-**Fix:** either render the row into a dedicated `#media-refusals` sibling swapped `innerHTML`
-(which also makes the row's lifetime readable from the markup), or note the accumulation where the
-`beforeend` header is written so the next reader does not mistake it for self-clearing.
+Партия попросила оценить, достаточно ли комментария. **Оцениваю: комментарий честен, но
+цена починки выросла вдвое.** Абзац `ads.py:1183-1186` называет находку по идентификатору,
+говорит, что правкой она не чинится, и ссылается на рамку владельца — то есть повтор НЕ
+выдаётся за одобрение, и запрет плана 12-09 на молчаливое расширение рамки соблюдён.
+Однако места стало два, и будущая починка обязана тронуть оба; разойдись они, клиент,
+приславший текстовую часть под файловым полем, получал бы РАЗНЫЙ исход в зависимости от
+того, прошёл ли его ключ сверку, — то есть дефект не просто сохранён, а стал
+разъезжаемым. Оснований поднимать оценку выше info не вижу: достижимость по-прежнему
+ограничена сломанным или враждебным клиентом.
 
-### IN-08: A string-valued part named `files` is silently skipped, while a file part named `images` is refused (new)
+**Fix:** обойтись с ней так же, как с зеркальным случаем, — одной строкой отказа на
+часть, — или записать у обоих `continue` причину намеренной асимметрии. Если остаётся
+запись, пусть второй комментарий ссылается на первый, чтобы разъезд был заметен грепом.
 
-**File:** `app/pages/ads.py:1128-1129` vs `app/pages/ads.py:1016`
+### IN-09: Журнал аварии хранилища по-прежнему записывает константу и теряет ошибку драйвера (несётся открытой)
 
-**Issue:** `if isinstance(part, str): continue` drops non-file parts under `UPLOAD_FILE_FIELD`
-without a word, whereas the mirror case — a *file* part under `images` — is deliberately refused
-rather than dropped, with the rationale written out twice ("молча выброшенная часть превратила бы
-кривой запрос в «успешную загрузку без картинки»"). A request whose file field arrives as a text
-part therefore gets a 200, an unchanged strip, and no refusal row — precisely the outcome the
-sibling branch exists to prevent. Impact is confined to a broken or hostile client.
+**File:** `app/pages/ads.py:1343-1348`, `app/services/image_upload.py`
 
-**Fix:** treat it the same way, or record why the asymmetry is intended at the `continue`.
-
-### IN-09: The storage-failure log records a constant and drops the driver error from the structured fields (new)
-
-**File:** `app/pages/ads.py:1168-1173`, `app/services/image_upload.py:487-491`
-
-**Issue:** `store_upload` replaces the real exception with `HTTPException(502, detail="Failed to
-upload image to storage")` and raises it **without `from exc`**, so `detail` is a constant. The
-caller then logs `detail=str(exc.detail)` — a fixed English string in every record, carrying zero
-diagnostic value. The bucket name / endpoint / driver error the comment at `image_upload.py:161-165`
-says is "адресована ЖУРНАЛУ" survives only inside `exc_info`'s implicit `__context__` chain, and
-only because the re-raise happens inside the `except` block. Neither the failing key nor the
-filename is logged at all.
+**Issue:** `store_upload` подменяет настоящее исключение на
+`HTTPException(502, detail="Failed to upload image to storage")` и поднимает его БЕЗ
+`from exc`, поэтому `detail` — константа. Вызывающий пишет `detail=str(exc.detail)`, то
+есть одну и ту же английскую строку в каждой записи. Ни ключ, ни имя файла не
+журналируются вовсе; имя бакета и ошибка драйвера выживают только внутри неявной цепочки
+`__context__` через `exc_info`.
 
 **Fix:**
 
@@ -368,29 +422,101 @@ except Exception as exc:
 ```
 
 ```python
-# ads.py — log what identifies the failure, not the constant
+# ads.py — журналировать то, что опознаёт отказ, а не константу
 logger.warning("upload_storage_failed", user_id=user.id,
                filename=safe_filename(part.filename), exc_info=True)
 ```
 
-### IN-10: The only machine gate over the new origin guard is a count, and the guard sits outside both gate universes (new)
+### IN-10: Единственный машинный гейт над гардом источника — счёт, и сам гард лежит вне обеих вселенных (несётся открытой, не переосматривалась)
 
-**File:** `tests/test_pages/test_origin_guard_on_destructive_routes.py:729,736-752`
+**File:** `tests/test_pages/test_origin_guard_on_destructive_routes.py:729,874-884`
 
-**Issue:** `ORIGIN_GUARD_CALL_SITES_MEASURED = 14` moved with the D-15 decision, and the file states
-honestly that `ads_images_upload` joins the four routes that carry the guard while lying in neither
-gate's universe — "снятый с любого из них гард не покраснит ничего". Concretely: delete
-`ads.py:877-878` and add a guard call anywhere else and this gate stays green; the behavioural test
-(`test_ads_image_upload.py:413`) is then the sole protection. That is adequate today, but it means
-the phase's newest security decision rests on one test rather than on the structural gate the
-docstring of `is_same_origin` points readers to.
+**Issue:** `ORIGIN_GUARD_CALL_SITES_MEASURED = 14` на месте, файл партией не тронут.
+Снятый с `ads_images_upload` гард не покраснит ни один гейт, пока число мест остаётся
+прежним; единственная настоящая защита — поведенческое правило
+`test_ads_image_upload.py:413` (`mock_s3.call_count == 0`). Достаточно сегодня, но
+новейшее решение безопасности фазы держится на одном тесте, а не на структурном гейте.
 
-**Fix:** no code change required. If D-15 is to be durable, widen the second gate's universe from
-"confirmed-deletion path suffix" to "routes that write to object storage", or add
-`ads.py::ads_images_upload` to an explicit `MUST_GUARD` set checked by name rather than by count.
+**Fix:** кода не требует. Расширить вселенную второго гейта с «суффикс пути
+подтверждённого удаления» до «маршруты, пишущие в объектное хранилище», либо завести
+явное множество `MUST_GUARD`, сверяемое ПО ИМЕНИ, а не по счёту.
+
+### IN-11: Вычитающие метки не снимаются никогда, и память эта принадлежит ОДНОМУ документу (новая)
+
+**File:** `app/templates/ads/form.html:216`, `app/templates/ads/includes/autosave_response.html:109-111`, `app/pages/ads.py:626-630`
+
+**Issue:** Две названные стороны одного свойства — и обе следствия правильного решения,
+поэтому info, а не warning.
+
+*(а) Рост.* `#media-tombstones` наполняется только дописками и не опустошается ничем,
+кроме перезагрузки страницы. Каждое убирание добавляет поле, и КАЖДОЕ автосохранение
+(дебаунс 2 с при наборе) увозит их все. Дубля при этом не бывает — я проверял:
+`media_changed` ложно для уже помеченного ключа, потому что вычитание убирает его из
+`image_list` до сверки (`ads.py:663, 686`), — то есть рост строго линеен по числу
+РАЗНЫХ убираний за жизнь страницы и в обычной работе мал. Отказа разбора он не вызовет:
+форма редактора уходит `x-www-form-urlencoded`, а у этого парсера Starlette предела полей
+нет вовсе (`max_fields` объявлен, но доезжает только до многочастного разбора).
+
+*(б) Область памяти.* Метка живёт в ДОКУМЕНТЕ, поэтому ПОРЯДОК I закрыт ровно в пределах
+одной вкладки. Вторая открытая вкладка того же объявления меток не имеет и, автосохранив
+свой отстающий снимок, вернёт убранный ключ в `ad.images`. Это ровно то допущение, которое
+D-17 уже держит на записи, но держит НАЗВАННЫМ в двух других следствиях («объекты-сироты
+при обрыве партии» и «межвкладочный счёт свободных мест»); третье — «убранное вложение
+воскресает соседней вкладкой» — не названо нигде, а после 12-12 оно стало ЕДИНСТВЕННЫМ
+оставшимся путём воскресения и потому заслуживает своей строки.
+
+**Fix:** кода не требует. Дописать (б) третьим следствием к записи D-17 в
+`deferred-items.md`, чтобы «не названо» не путалось с «не проверяли». Если рост (а)
+когда-нибудь станет предметом — снимать метку ответом, который подтвердил, что ключа нет
+ни в снимке, ни в базе.
+
+### IN-12: Два утверждения в новых правилах не могут покраснеть (новая)
+
+**File:** `tests/test_pages/test_ads_editor.py:817-822`, `tests/test_pages/test_ads_editor.py:1051-1057`
+
+**Issue:** Обоим предшествует утверждение, которое делает их истинность безусловной —
+то есть они документируют, но не меряют.
+
+1. `assert dropped not in HIDDEN_KEY_FIELD.findall(html)` стои́т ПОСЛЕ
+   `assert html.count('name="images"') == 0`. Образец `HIDDEN_KEY_FIELD` требует
+   `name="images"`, значит при нулевом счёте `findall` пуст по построению, и
+   утверждение ложным стать не может ни на одном дереве.
+2. `assert mark_name.group(1) == REMOVAL_MARK_FIELD_NAME != "images"` — правая половина
+   цепочки сравнивает ДВА литерала самого файла теста (`"removed_images" != "images"`) и к
+   приложению не обращается вовсе. Мысль она выражает верную и важную (T-12-12-02), но
+   измеряет её левая половина, а правая — константа.
+
+Это не тот класс, что подводил фазу трижды (правило, зелёное от собственной прозы): обе
+строки стоят рядом с настоящими измерителями и ничьё место не занимают. Но при чтении
+суиты они выглядят охраной, которой не являются, и при будущей правке кто-нибудь
+поверит им вместо соседа.
+
+**Fix:** свести каждое к одному утверждению — либо снять избыточную строку, либо
+переписать её в форму, которая ПЕРЕЖИВЁТ соседа: например, вместо (2) прочитать имя поля
+метки из ответа и сравнить его с именем поля вложений, прочитанным ОТТУДА ЖЕ.
+
+### IN-13: Перечень названных файлов собирается словарём, и одинаковые имена в партии схлопываются (новая)
+
+**File:** `tests/test_pages/test_ads_image_upload.py:921-928`, `:993-999`
+
+**Issue:** Оба новых правила 12-13 строят
+`named = {name: reason for name, reason in rows if name != ""}` и утверждают
+`sorted(named) == sorted(picked)`. Ключ словаря схлопывает повторы, поэтому ось «каждый
+файл назван СВОЕЙ строкой» на партии из двух одноимённых файлов измерялась бы как «имя
+встретилось хотя бы раз». Сегодня это безразлично — фикстуры дают `["cat.png"]` и
+`["cat.png", "dog.png"]`, а счёт `len(rows) == len(picked) + 1` рядом держит
+количественную половину, — но человек кладёт в диалог два файла с одним именем из разных
+папок регулярно, и правило, расширенное на такую партию, промолчало бы.
+
+**Fix:** собирать список пар и сравнивать мультимножества:
+
+```python
+named = [(name, reason) for name, reason in rows if name != ""]
+assert sorted(name for name, _ in named) == sorted(picked)
+```
 
 ---
 
-_Reviewed: 2026-09-19T11:40:12Z_
+_Reviewed: 2026-09-20T09:12:40Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
