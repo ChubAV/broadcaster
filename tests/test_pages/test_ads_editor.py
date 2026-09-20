@@ -1542,6 +1542,85 @@ async def test_editor_hides_add_tile_at_the_limit(
     assert "media-tile--add hidden" in html or "media-tile--add\" hidden" in html
 
 
+def _add_tile_tag(html: str) -> str:
+    """Открывающий тег плитки добавления — И ТОЛЬКО ОН (Фаза 12, план 12-11).
+
+    ⚠️ СРЕЗ ТЕГА, А НЕ ПОИСК ПО ВСЕМУ ОТВЕТУ, И ЭТО НЕСУЩЕЕ ТРЕБОВАНИЕ.
+    Признак скрытости встречается в документе и у ДРУГИХ элементов; утверждение
+    «`hidden` в ответе нет» было бы про чужую разметку и краснело бы (или, хуже,
+    зеленело) на предмете, которого не касается. Спрашивается РОВНО одно: несёт
+    ли признак скрытости САМА плитка добавления.
+
+    Разбор строкой — тот же приём, что применяют соседние помощники модуля.
+    Отсутствие элемента поднимает ValueError: тест падает, а не молча меряет
+    пустоту.
+    """
+    anchor = html.index('id="media-add-tile"')
+    return html[html.rindex("<", 0, anchor) : html.index(">", anchor) + 1]
+
+
+@pytest.mark.asyncio
+async def test_a_removal_at_the_ceiling_brings_the_add_tile_back(
+    authed_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Убирание на потолке возвращает «+ ФАЙЛ» БЕЗ перезагрузки страницы.
+
+    ⚠️ ПЛИТКА ПОТЕРЯЛА СВОЕГО ОБНОВИТЕЛЯ ВМЕСТЕ С ПЕРЕРИСОВКОЙ ПОЛОСЫ, И ЭТО
+    СЛЕДСТВИЕ ЗАДАЧИ 1, А НЕ ПРЕДСУЩЕСТВУЮЩИЙ ДЕФЕКТ (план 12-11). Прежде
+    ответ убирания подменял узел полосы ЦЕЛИКОМ — и плитка добавления, живущая
+    в том же узле, приезжала заново вместе с ним. Теперь ответ уносит РОВНО
+    убранную плитку и чужого не трогает; значит «+ ФАЙЛ» обязана приехать СВОИМ
+    блоком, иначе на потолке она осталась бы скрытой навсегда: человек убрал
+    вложение, место освободилось, а выбрать следующий файл нечем до перезагрузки
+    страницы.
+
+    Скрытость проверяется СРЕЗОМ ТЕГА — основание у помощника выше.
+    """
+    owner_id = (await _user(db_session)).id
+    keys = [
+        image_key(owner_id, f"p{index}.jpg")
+        for index in range(test_settings.max_images_per_ad)
+    ]
+    ad = await _seed_ad(db_session, title="Полный комплект", images=keys)
+
+    page = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+    # Идентификатор спрашивается ОТДЕЛЬНЫМ утверждением и ДО среза тега:
+    # помощник среза падает громко (ValueError), а громкое падение — не то же
+    # самое, что названная причина. Читателю покраснения нужна причина.
+    assert 'id="media-add-tile"' in page, (
+        "страница печатает плитку добавления БЕЗ идентификатора: адресовать её "
+        "отдельным блоком ответа нечем, и после убирания на потолке она "
+        "осталась бы скрытой до перезагрузки"
+    )
+    assert "hidden" in _add_tile_tag(page), (
+        f"на потолке страница печатает плитку добавления ВИДИМОЙ: "
+        f"{_add_tile_tag(page)!r} — правило измеряло бы возврат того, что и не "
+        "уходило"
+    )
+
+    response = await authed_client.post(
+        f"/ads/{ad.id}/edit",
+        content=form_body(
+            title="Полный комплект",
+            text="Текст",
+            images=keys,
+            extra=[("remove_image", keys[0])],
+        ),
+        headers=HX_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    assert 'id="media-add-tile"' in response.text, (
+        "ответ убирания не принёс плитку добавления: место освободилось, а "
+        "выбрать следующий файл человек сможет только перезагрузив страницу"
+    )
+    assert "hidden" not in _add_tile_tag(response.text), (
+        f"плитка добавления приехала СКРЫТОЙ: {_add_tile_tag(response.text)!r} "
+        "— она врёт о потолке, которого после убирания уже нет"
+    )
+
+
 @pytest.mark.asyncio
 async def test_attachment_remove_is_a_named_submit_inside_the_form(
     authed_client: AsyncClient, db_session: AsyncSession
