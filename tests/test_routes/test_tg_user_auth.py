@@ -4,8 +4,14 @@
 13-01 переводит старт и опрос на слой ответа, снимает маршрут завершения (D-01:
 аккаунт сохраняет сам запрос опроса, первым увидевший «отсканировано») и снимает
 скрипт страницы целиком (D-12). JSON-контракты старта, опроса и завершения НЕ
-удалены молча, а переписаны на фрагменты ниже; JSON-тесты обновления кода и
-пароля 2FA остаются, пока их обработчики не переведены (планы 13-02, 13-03).
+удалены молча, а переписаны на фрагменты ниже. План 13-02 переводит `verify-2fa`
+и снимает его JSON-тесты: их предмет переписан правилами шага пароля и двух
+гонок ниже. JSON-тесты обновления кода остаются до плана 13-03.
+
+⚠️ ОДНО СКАНИРОВАНИЕ — ОДИН АККАУНТ, И ЭТО ДОКАЗЫВАЕТСЯ ГОНКОЙ, А НЕ ОБЕЩАНИЕМ
+(D-01, RESEARCH §Pitfall 3). Мест сохранения два — опрос, увидевший успех, и
+верный пароль 2FA; оба правила гонки идут на НАСТОЯЩЕМ `complete_auth`, и каждый
+запрос получает СВОЮ сессию базы (фикстура `race_client`).
 
 ⚠️ ТРАСЕР ИДЁТ НА НАСТОЯЩЕМ СЛОЕ СЕССИЙ. Подменяется только клиент Telethon;
 `start_qr_auth`, фоновое ожидание сканирования и `complete_auth` — настоящие,
@@ -31,7 +37,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import Settings
@@ -56,6 +62,16 @@ SESSION_EXPIRED = "Сессия авторизации истекла. Начн�
 AUTH_FAILED = "Ошибка авторизации"
 START_AGAIN_FORM = 'hx-post="/accounts/connect/tg_user/start-qr"'
 EXPORTED_SESSION = "exported-session"
+
+VERIFY_URL = "/accounts/connect/tg_user/verify-2fa"
+VERIFY_FORM = f'hx-post="{VERIFY_URL}"'
+WRONG_PASSWORD = "Неверный пароль 2FA."
+EMPTY_PASSWORD = "Введите пароль"
+PASSWORD_2FA_SESSION = "session-2fa"
+# Присланный пароль нарочно ни на что в разметке не похож: его появление в теле
+# ответа — эхо, а не совпадение с текстом шаблона (D-08, T-06-02).
+SUBMITTED_PASSWORD = "Zx9-пароль-qW7"
+PASSWORD_INPUT = re.compile(r'<input[^>]*\bname="password"[^>]*>')
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -107,6 +123,103 @@ def _seed_state(session_id: str, *, status: str, error: str | None = None,
     _qr_sessions[session_id] = QRAuthState(
         client=client, status=status, error=error, session_string=session_string
     )
+
+
+def _seed_2fa_state(session_id: str, *, sign_in=None) -> MagicMock:
+    """Настоящее состояние `needs_2fa` с клиентом Telethon, чей вход подменён.
+
+    Клиент — `AsyncMock`, но его `session` — синхронный `MagicMock`: у
+    `AsyncMock` вызов `session.save()` вернул бы корутину, и в аккаунт уехала бы
+    не строка сессии. `submit_2fa` и `complete_auth` остаются настоящими.
+    """
+    client = AsyncMock()
+    client.session = MagicMock()
+    client.session.save.return_value = PASSWORD_2FA_SESSION
+    client.sign_in = sign_in if sign_in is not None else AsyncMock()
+    _qr_sessions[session_id] = QRAuthState(client=client, status="needs_2fa")
+    return client
+
+
+def _raises_password_hash_invalid() -> AsyncMock:
+    """Вход с паролем, который Telegram отвергает: настоящая ошибка Telethon."""
+    from telethon.errors import PasswordHashInvalidError
+
+    return AsyncMock(side_effect=PasswordHashInvalidError(request=None))
+
+
+def _password_input(body: str) -> str:
+    """Тег поля пароля — единственный во фрагменте шага."""
+    found = PASSWORD_INPUT.findall(body)
+    assert len(found) == 1, (
+        f"полей пароля во фрагменте {len(found)} вместо одного — человеку с 2FA "
+        "некуда ввести пароль"
+    )
+    return found[0]
+
+
+def _assert_the_password_field_is_empty(body: str) -> None:
+    """Поле пароля приходит ПУСТЫМ, а присланный пароль нигде не эхается (D-08).
+
+    Макрос `field` печатает атрибут `value` всегда; пустой он — и есть «поле
+    без значения». Присланная строка ищется во ВСЁМ теле, а не только в поле:
+    перенос пароля в любой другой атрибут — та же утечка (T-06-02).
+    """
+    tag = _password_input(body)
+    value = re.search(r'\bvalue="([^"]*)"', tag)
+    assert value is None or value.group(1) == "", (
+        f"поле пароля пришло со значением {value.group(1)!r} — пароль эхается (D-08)"
+    )
+    assert SUBMITTED_PASSWORD not in body, "присланный пароль вернулся в теле ответа (D-08)"
+
+
+async def _count_tg_accounts(factory: async_sessionmaker) -> int:
+    async with factory() as session:
+        result = await session.execute(
+            select(func.count()).select_from(MessengerAccount).where(
+                MessengerAccount.type == "tg_user"
+            )
+        )
+        return result.scalar_one()
+
+
+@pytest_asyncio.fixture
+async def race_client(tmp_path, test_settings: Settings):
+    """Клиент, у которого КАЖДЫЙ запрос получает СВОЮ сессию базы (D-01).
+
+    ⚠️ ОБЩАЯ СЕССИЯ ФИКСТУРЫ `db_session` ЗДЕСЬ НЕ ГОДИТСЯ. Два конкурентных
+    запроса делили бы один `AsyncSession`, чего SQLAlchemy не допускает: правило
+    гонки краснело бы по чужой причине (отказ сессии, а не второй аккаунт) либо
+    сериализовалось бы на её блокировке и зеленело вакуумом. Поэтому движок
+    стоит на ВРЕМЕННОМ ФАЙЛЕ — база в памяти у каждого соединения своя, — и
+    `get_db` отдаёт новую сессию на каждый запрос, как в эксплуатации.
+    """
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'race.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    app = create_app(settings=test_settings)
+
+    async def per_request_session():
+        async with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = per_request_session
+    app.dependency_overrides[get_settings] = lambda: test_settings
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/api/auth/register", json={
+            "email": "racer@test.com", "password": "testpass123", "name": "Racer",
+        })
+        await client.post(
+            "/login",
+            data={"email": "racer@test.com", "password": "testpass123"},
+            follow_redirects=False,
+        )
+        yield client, factory
+
+    await engine.dispose()
 
 
 async def _current_user(db: AsyncSession) -> User:
@@ -409,6 +522,318 @@ async def test_the_complete_route_and_the_get_poll_are_gone(authed_client: Async
     )
 
 
+# --- Шаг пароля 2FA (план 13-02; D-08, D-09) --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_polling_needs_2fa_answers_the_password_step(authed_client: AsyncClient):
+    """Опрос в `needs_2fa` — шаг пароля без опросчика: опрос остановлен ответом.
+
+    Шаг пароля — форма `verify-2fa` со скрытым `session_id` в постоянный якорь и
+    полем `password` с `required` без значения. Триггера в ответе нет: вечный
+    опрос стёр бы экран пароля через 3 с (RESEARCH §Pitfall 1).
+    """
+    _seed_state("sid-needs-2fa", status="needs_2fa")
+
+    response = await authed_client.post(
+        POLL_URL, data={"session_id": "sid-needs-2fa"}, headers=HTMX_HEADERS
+    )
+
+    assert response.status_code == 200, f"опрос в needs_2fa ответил {response.status_code}"
+    body = response.text
+    assert 'name="password"' in body, (
+        "опрос в needs_2fa не показал поле пароля — человек с 2FA не подключится"
+    )
+    tag = _password_input(body)
+    assert re.search(r"\srequired\b", tag), "поле пароля не обязательно — пустой пароль уйдёт"
+    assert 'type="password"' in tag, "поле пароля показывает вводимое открытым текстом"
+    assert 'id="password"' in tag, (
+        "у поля пароля нет постоянного id — после подмены 422 фокус не вернётся (QUAL-06)"
+    )
+    _assert_the_password_field_is_empty(body)
+    assert VERIFY_FORM in body, "шаг пароля не шлёт форму на verify-2fa"
+    assert 'hx-target="#tg-connect-step"' in body, "форма пароля не целится в постоянный якорь"
+    assert 'name="session_id" value="sid-needs-2fa"' in body, (
+        "в форме пароля нет скрытого session_id — подтверждать нечего"
+    )
+    assert "hx-trigger" not in body, "шаг пароля продолжает опрос — экран сотрётся"
+    assert "Подтвердить" in body, "кнопка шага пароля не подписана"
+    assert "двухфакторная аутентификация" in body, "шаг пароля не объясняет, что спрашивает"
+    assert DOCUMENT_MARK not in body, "опрос вернул целый документ вместо шага"
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_password_answers_422_at_the_field_without_echo(authed_client: AsyncClient):
+    """Неверный пароль — 422 и шаг пароля с ошибкой у поля; пароль не эхается (D-08).
+
+    Отказ поднимает НАСТОЯЩИЙ `submit_2fa` из настоящей ошибки Telethon: так
+    измеряется дословный текст «Неверный пароль 2FA.», а не подставленный тестом.
+    """
+    _seed_2fa_state("sid-wrong", sign_in=_raises_password_hash_invalid())
+
+    over_htmx = await authed_client.post(
+        VERIFY_URL,
+        data={"session_id": "sid-wrong", "password": SUBMITTED_PASSWORD},
+        headers=HTMX_HEADERS,
+    )
+
+    assert over_htmx.status_code == 422, (
+        f"неверный пароль на htmx ответил {over_htmx.status_code} вместо 422"
+    )
+    assert WRONG_PASSWORD in over_htmx.text, "текст «Неверный пароль 2FA.» не дошёл до человека"
+    assert 'class="field__error"' in over_htmx.text, "ошибка пароля стоит не у поля"
+    _assert_the_password_field_is_empty(over_htmx.text)
+    assert "hx-trigger" not in over_htmx.text, "ответ неверного пароля запустил опрос"
+    assert 'name="session_id" value="sid-wrong"' in over_htmx.text, (
+        "после неверного пароля форма потеряла session_id — повторить нечем"
+    )
+    assert DOCUMENT_MARK not in over_htmx.text, "ошибка пароля на htmx вернула целый документ"
+    assert "sid-wrong" in _qr_sessions, "неверный пароль уничтожил сессию — повторить нельзя"
+
+    plain = await authed_client.post(
+        VERIFY_URL, data={"session_id": "sid-wrong", "password": SUBMITTED_PASSWORD}
+    )
+    assert plain.status_code == 422, f"неверный пароль без JS ответил {plain.status_code}"
+    assert WRONG_PASSWORD in plain.text, "страница мастера без JS не несёт ошибку пароля"
+    assert ANCHOR_ID in plain.text, "без JS ошибка пароля пришла не страницей мастера"
+    _assert_the_password_field_is_empty(plain.text)
+
+
+@pytest.mark.asyncio
+async def test_an_empty_password_answers_422_with_the_client_text(authed_client: AsyncClient):
+    """Пустой и отсутствующий пароль — 422 «Введите пароль»; Telegram не зовётся (D-08)."""
+    _seed_2fa_state("sid-empty")
+
+    with patch("app.pages.accounts.submit_2fa", new_callable=AsyncMock) as submitted:
+        blank = await authed_client.post(
+            VERIFY_URL, data={"session_id": "sid-empty", "password": "   "}, headers=HTMX_HEADERS
+        )
+        missing = await authed_client.post(
+            VERIFY_URL, data={"session_id": "sid-empty"}, headers=HTMX_HEADERS
+        )
+        plain = await authed_client.post(
+            VERIFY_URL, data={"session_id": "sid-empty", "password": ""}
+        )
+
+    for name, response in (("пробелы", blank), ("нет поля", missing), ("без JS", plain)):
+        assert response.status_code == 422, f"пустой пароль ({name}) ответил {response.status_code}"
+        assert EMPTY_PASSWORD in response.text, f"пустой пароль ({name}) без «Введите пароль»"
+        assert "hx-trigger" not in response.text, f"пустой пароль ({name}) запустил опрос"
+    assert ANCHOR_ID in plain.text, "без JS пустой пароль пришёл не страницей мастера"
+    submitted.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_right_password_saves_one_account_from_complete_auth(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Верный пароль — «Подключено» и ровно один аккаунт со строкой сессии (D-01, D-07)."""
+    client = _seed_2fa_state("sid-right")
+
+    response = await authed_client.post(
+        VERIFY_URL,
+        data={"session_id": "sid-right", "password": SUBMITTED_PASSWORD},
+        headers=HTMX_HEADERS,
+    )
+
+    assert response.status_code == 200, f"верный пароль ответил {response.status_code}"
+    assert "Подключено" in response.text, "после верного пароля человек не увидел «Подключено»"
+    assert "hx-trigger" not in response.text, "ответ «Подключено» продолжает опрос"
+    assert "HX-Location" not in response.headers, "«Подключено» уводит со страницы (D-07)"
+    assert SUBMITTED_PASSWORD not in response.text, "пароль вернулся в ответе «Подключено»"
+    client.sign_in.assert_awaited_once_with(password=SUBMITTED_PASSWORD)
+
+    accounts = await _tg_accounts(db_session)
+    assert len(accounts) == 1, f"верный пароль сохранил {len(accounts)} аккаунтов вместо одного"
+    assert accounts[0].credentials == PASSWORD_2FA_SESSION, (
+        "аккаунт сохранён не со строкой сессии Telethon"
+    )
+    assert accounts[0].status == "active", f"аккаунт сохранён в статусе {accounts[0].status!r}"
+    assert "sid-right" not in _qr_sessions, "сессия мастера пережила сохранение аккаунта"
+
+
+@pytest.mark.asyncio
+async def test_a_telethon_failure_on_the_password_step_is_a_fragment(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Иная ошибка Telethon — шаг ошибки с «Начать заново», не 500 (D-09, Pitfall 5).
+
+    500 здесь поднял бы общий баннер отказа вместо шага. Запись журнала об
+    отказе не несёт пароля (T-13-05).
+    """
+    _seed_2fa_state("sid-flood", sign_in=AsyncMock(side_effect=Exception("FloodWait 30")))
+
+    with patch("structlog.get_logger") as get_logger:
+        response = await authed_client.post(
+            VERIFY_URL,
+            data={"session_id": "sid-flood", "password": SUBMITTED_PASSWORD},
+            headers=HTMX_HEADERS,
+        )
+
+    assert response.status_code == 200, (
+        f"ошибка Telethon на шаге пароля ответила {response.status_code} вместо 200"
+    )
+    assert AUTH_FAILED in response.text, "ошибка Telethon не показала «Ошибка авторизации»"
+    assert START_AGAIN_FORM in response.text, "после ошибки Telethon нечем начать заново"
+    assert "hx-trigger" not in response.text, "ответ ошибки продолжает опрос"
+    assert SUBMITTED_PASSWORD not in response.text, "пароль вернулся в ответе ошибки"
+    assert get_logger.return_value.error.called or get_logger.return_value.warning.called, (
+        "ошибка Telethon на шаге пароля не записана в журнал"
+    )
+    assert SUBMITTED_PASSWORD not in repr(get_logger.mock_calls), "пароль попал в журнал"
+    assert await _tg_accounts(db_session) == [], "ошибка Telethon сохранила аккаунт"
+
+
+@pytest.mark.asyncio
+async def test_verify_2fa_degrades_and_requires_a_session(authed_client: AsyncClient):
+    """Без JS — на страницу мастера; без входа — на `/login`; чужая сессия — шаг ошибки.
+
+    Адреса стоят литералом первым аргументом `.post(…)` в этой же функции: по
+    ним обход утверждений 302 модуля пар называет обработчик (D-10, D-11).
+    """
+    _seed_2fa_state("sid-nojs-2fa")
+    plain = await authed_client.post(
+        "/accounts/connect/tg_user/verify-2fa",
+        data={"session_id": "sid-nojs-2fa", "password": SUBMITTED_PASSWORD},
+    )
+    assert plain.status_code == 302, f"верный пароль без JS ответил {plain.status_code} вместо 302"
+    assert plain.headers["location"] == "/accounts/connect/tg_user", (
+        f"верный пароль без JS приземлил на {plain.headers['location']!r}"
+    )
+
+    unknown = await authed_client.post(
+        VERIFY_URL,
+        data={"session_id": "no-such-session", "password": SUBMITTED_PASSWORD},
+        headers=HTMX_HEADERS,
+    )
+    assert unknown.status_code == 200, f"неизвестная сессия ответила {unknown.status_code}"
+    assert SESSION_EXPIRED in unknown.text, "неизвестная сессия не сказала, что сессия истекла"
+    assert START_AGAIN_FORM in unknown.text, "после неизвестной сессии нечем начать заново"
+
+    authed_client.cookies.clear()
+    over_htmx = await authed_client.post(
+        "/accounts/connect/tg_user/verify-2fa",
+        data={"session_id": "x", "password": SUBMITTED_PASSWORD},
+        headers=HTMX_HEADERS,
+    )
+    assert over_htmx.status_code == 204, f"verify-2fa без входа на htmx ответил {over_htmx.status_code}"
+    assert over_htmx.headers.get("HX-Location") == "/login", "verify-2fa без входа не уводит на /login"
+    no_session = await authed_client.post(
+        "/accounts/connect/tg_user/verify-2fa",
+        data={"session_id": "x", "password": SUBMITTED_PASSWORD},
+    )
+    assert no_session.status_code == 302, f"verify-2fa без входа без JS ответил {no_session.status_code}"
+    assert no_session.headers["location"] == "/login", (
+        f"verify-2fa без входа без JS приземлил на {no_session.headers['location']!r}"
+    )
+
+
+# --- Ровно один аккаунт на сканирование под гонкой (D-01, Pitfall 3) --------
+
+
+@pytest.mark.asyncio
+async def test_two_concurrent_password_submits_save_one_account(race_client):
+    """Два конкурентных верных пароля — ОДИН аккаунт; строка берётся из `complete_auth`.
+
+    ⚠️ ВХОД С ПАРОЛЕМ — ТОЧКА ВСТРЕЧИ ДВУХ ЗАПРОСОВ. Каждый вызов `sign_in` ждёт,
+    пока в него войдёт второй (с потолком ожидания), и отдаёт управление: так оба
+    запроса гарантированно проходят `submit_2fa` до того, как любой из них снимет
+    сессию. Обработчик, берущий строку для записи из `submit_2fa`, дал бы здесь
+    ДВА аккаунта (замер мутанта — в SUMMARY плана 13-02); настоящий
+    `complete_auth` снимает сессию `pop` до первого ожидания, и второму
+    достаётся пустота.
+    """
+    client, factory = race_client
+    both_inside = asyncio.Event()
+    entered = 0
+
+    async def sign_in(password):
+        nonlocal entered
+        entered += 1
+        if entered >= 2:
+            both_inside.set()
+        try:
+            await asyncio.wait_for(both_inside.wait(), timeout=2)
+        except asyncio.TimeoutError:
+            pass
+        await asyncio.sleep(0)
+
+    _seed_2fa_state("sid-race-2fa", sign_in=AsyncMock(side_effect=sign_in))
+
+    responses = await asyncio.gather(*(
+        client.post(
+            VERIFY_URL,
+            data={"session_id": "sid-race-2fa", "password": SUBMITTED_PASSWORD},
+            headers=HTMX_HEADERS,
+        )
+        for _ in range(2)
+    ))
+
+    assert entered == 2, (
+        f"в вход с паролем вошли {entered} запросов из двух — гонка не состоялась, "
+        "и правило зеленело бы вакуумом"
+    )
+    assert await _count_tg_accounts(factory) == 1, (
+        "два конкурентных верных пароля сохранили не один аккаунт — одно сканирование, "
+        "два аккаунта (RESEARCH §Pitfall 3)"
+    )
+    connected = [r for r in responses if "Подключено" in r.text]
+    assert len(connected) == 1, f"«Подключено» получили {len(connected)} ответов из двух"
+    for response in responses:
+        assert response.status_code == 200, f"ответ гонки {response.status_code} вместо 200"
+        assert "hx-trigger" not in response.text, "ответ гонки продолжает опрос"
+
+
+@pytest.mark.asyncio
+async def test_two_concurrent_polls_after_success_save_one_account(race_client):
+    """Два конкурентных опроса после успеха — ОДИН аккаунт; `complete_auth` настоящий."""
+    client, factory = race_client
+    tg_client = MagicMock()
+
+    async def disconnect():
+        await asyncio.sleep(0)
+
+    tg_client.disconnect = AsyncMock(side_effect=disconnect)
+    _qr_sessions["sid-race-poll"] = QRAuthState(
+        client=tg_client, status="success", session_string=EXPORTED_SESSION
+    )
+
+    responses = await asyncio.gather(*(
+        client.post(POLL_URL, data={"session_id": "sid-race-poll"}, headers=HTMX_HEADERS)
+        for _ in range(2)
+    ))
+
+    assert await _count_tg_accounts(factory) == 1, (
+        "два конкурентных опроса после успеха сохранили не один аккаунт (D-01)"
+    )
+    connected = [r for r in responses if "Подключено" in r.text]
+    assert len(connected) == 1, f"«Подключено» получили {len(connected)} ответов из двух"
+    for response in responses:
+        assert response.status_code == 200, f"ответ гонки {response.status_code} вместо 200"
+        assert "hx-trigger" not in response.text, "ответ гонки продолжает опрос"
+
+
+@pytest.mark.asyncio
+async def test_a_second_poll_after_success_does_not_save_again(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Второй опрос тем же `session_id` после «Подключено» — шаг ошибки, аккаунт один."""
+    _seed_state("sid-twice", status="success", session_string=EXPORTED_SESSION)
+
+    first = await authed_client.post(
+        POLL_URL, data={"session_id": "sid-twice"}, headers=HTMX_HEADERS
+    )
+    second = await authed_client.post(
+        POLL_URL, data={"session_id": "sid-twice"}, headers=HTMX_HEADERS
+    )
+
+    assert "Подключено" in first.text, "первый опрос после успеха не показал «Подключено»"
+    assert second.status_code == 200, f"второй опрос ответил {second.status_code}"
+    assert "Подключено" not in second.text, "второй опрос снова показал «Подключено»"
+    assert START_AGAIN_FORM in second.text, "второй опрос не предложил начать заново"
+    assert len(await _tg_accounts(db_session)) == 1, "второй опрос сохранил аккаунт ещё раз"
+
+
 # --- Реестр останова опроса (критерий 2) ------------------------------------
 
 
@@ -421,6 +846,9 @@ class _PollingCase:
     route: str
     seed: Callable[[pytest.MonkeyPatch, Settings], dict]
     polls: bool
+    # Ошибка поля шага пароля отвечает 422 (D-08): её тело подменяет якорь
+    # правилом блока конфигурации так же, как 200, и обязано не нести триггер.
+    status: int = 200
 
 
 def _seed_start_success(monkeypatch, settings):
@@ -458,8 +886,33 @@ def _seed_poll_error(monkeypatch, settings):
     return {"session_id": "sid-error"}
 
 
-# Планы 13-02 и 13-03 дописывают свои записи (шаг пароля, код истёк),
-# план 13-05 замыкает реестр.
+def _seed_poll_needs_2fa(monkeypatch, settings):
+    _seed_state("sid-needs-2fa", status="needs_2fa")
+    return {"session_id": "sid-needs-2fa"}
+
+
+def _seed_verify_success(monkeypatch, settings):
+    _seed_2fa_state("sid-2fa-right")
+    return {"session_id": "sid-2fa-right", "password": SUBMITTED_PASSWORD}
+
+
+def _seed_verify_wrong(monkeypatch, settings):
+    _seed_2fa_state("sid-2fa-wrong", sign_in=_raises_password_hash_invalid())
+    return {"session_id": "sid-2fa-wrong", "password": SUBMITTED_PASSWORD}
+
+
+def _seed_verify_empty(monkeypatch, settings):
+    _seed_2fa_state("sid-2fa-empty")
+    return {"session_id": "sid-2fa-empty", "password": ""}
+
+
+def _seed_verify_telethon_failure(monkeypatch, settings):
+    _seed_2fa_state("sid-2fa-flood", sign_in=AsyncMock(side_effect=Exception("FloodWait 30")))
+    return {"session_id": "sid-2fa-flood", "password": SUBMITTED_PASSWORD}
+
+
+# План 13-02 дописал шаг пароля (опрос в `needs_2fa` и четыре исхода
+# `verify-2fa`); план 13-03 допишет «код истёк», план 13-05 замыкает реестр.
 POLLING_CASES: tuple[_PollingCase, ...] = (
     _PollingCase("start-waiting", "старт — QR и опросчик", START_URL, _seed_start_success, True),
     _PollingCase("start-not-configured", "старт — API не настроен", START_URL, _seed_start_not_configured, False),
@@ -467,6 +920,11 @@ POLLING_CASES: tuple[_PollingCase, ...] = (
     _PollingCase("poll-success", "опрос — успех, «Подключено»", POLL_URL, _seed_poll_success, False),
     _PollingCase("poll-unknown", "опрос — неизвестная сессия", POLL_URL, _seed_poll_unknown, False),
     _PollingCase("poll-error", "опрос — ошибка Telethon", POLL_URL, _seed_poll_error, False),
+    _PollingCase("poll-needs-2fa", "опрос — шаг пароля 2FA", POLL_URL, _seed_poll_needs_2fa, False),
+    _PollingCase("verify-success", "пароль 2FA — «Подключено»", VERIFY_URL, _seed_verify_success, False),
+    _PollingCase("verify-wrong", "пароль 2FA — неверный, 422", VERIFY_URL, _seed_verify_wrong, False, 422),
+    _PollingCase("verify-empty", "пароль 2FA — пустой, 422", VERIFY_URL, _seed_verify_empty, False, 422),
+    _PollingCase("verify-telethon", "пароль 2FA — ошибка Telethon", VERIFY_URL, _seed_verify_telethon_failure, False),
 )
 
 
@@ -488,11 +946,13 @@ async def test_polling_stops_by_a_response_without_trigger(
     test_settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Триггер опроса несёт ТОЛЬКО ответ ожидания; любой иной 200 его не несёт."""
+    """Триггер опроса несёт ТОЛЬКО ответ ожидания; любой иной ответ с телом его не несёт."""
     data = case.seed(monkeypatch, test_settings)
     response = await authed_client.post(case.route, data=data, headers=HTMX_HEADERS)
 
-    assert response.status_code == 200, f"{case.name}: ответ {response.status_code} вместо 200"
+    assert response.status_code == case.status, (
+        f"{case.name}: ответ {response.status_code} вместо {case.status}"
+    )
     if case.polls:
         assert POLL_TRIGGER in response.text, f"{case.name}: опрос не запущен — экран замрёт на QR"
     else:
@@ -501,12 +961,12 @@ async def test_polling_stops_by_a_response_without_trigger(
         )
 
 
-# --- JSON-контракты обновления кода и пароля 2FA (до планов 13-02, 13-03) ---
+# --- JSON-контракты обновления кода (до плана 13-03) -----------------------
 
 
 @pytest_asyncio.fixture
 async def auth_setup():
-    """Отдельное приложение для ещё не переведённых `refresh-qr` / `verify-2fa`."""
+    """Отдельное приложение для ещё не переведённого `refresh-qr` (план 13-03)."""
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -552,50 +1012,6 @@ async def auth_setup():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_verify_2fa_success_creates_account(auth_setup):
-    client, session_factory = auth_setup
-
-    with patch("app.pages.accounts.submit_2fa", new_callable=AsyncMock) as mock_2fa:
-        mock_2fa.return_value = "session_string_2fa"
-
-        with patch("app.pages.accounts.complete_auth", new_callable=AsyncMock) as mock_complete:
-            mock_complete.return_value = "session_string_2fa"
-
-            resp = await client.post(
-                "/accounts/connect/tg_user/verify-2fa",
-                content='{"session_id": "test_session", "password": "my2fapass"}',
-                headers={"Content-Type": "application/json"},
-            )
-
-    data = resp.json()
-    assert data["status"] == "success"
-
-    async with session_factory() as session:
-        result = await session.execute(select(MessengerAccount))
-        account = result.scalar_one()
-        assert account.credentials == "session_string_2fa"
-        assert account.status == "active"
-
-
-@pytest.mark.asyncio
-async def test_verify_2fa_wrong_password_returns_error(auth_setup):
-    client, _ = auth_setup
-
-    with patch("app.pages.accounts.submit_2fa", new_callable=AsyncMock) as mock_2fa:
-        mock_2fa.side_effect = ValueError("Неверный пароль 2FA.")
-
-        resp = await client.post(
-            "/accounts/connect/tg_user/verify-2fa",
-            content='{"session_id": "test_session", "password": "wrongpass"}',
-            headers={"Content-Type": "application/json"},
-        )
-
-    data = resp.json()
-    assert "error" in data
-    assert "Неверный пароль" in data["error"]
 
 
 @pytest.mark.asyncio
