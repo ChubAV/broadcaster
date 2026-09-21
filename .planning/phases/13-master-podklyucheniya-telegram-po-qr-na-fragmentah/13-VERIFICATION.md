@@ -34,7 +34,7 @@ covered_files:
   - tests/test_templates/test_htmx_markup_gates.py
   - tests/test_templates/test_htmx_markup_security.py
 
-covered_digest: "v1:sha256:152df17c6043e72976a7d24220782888a13f2421b7ca0b4a10dee3ca85aa1720"
+covered_digest: "v1:sha256:04d907e0f2a5ad9c18fc5b4f3335816ea87300aff69ec187157dab0670724416"
 behavior_unverified: 0
 overrides_applied: 0
 deferred: # owner-named deferrals, not later-phase coverage — neither item is claimed by any later phase
@@ -413,3 +413,20 @@ _Verifier: Claude (gsd-verifier)_
 «Findings Disposition» (в том числе визуальные регрессии фазы UI-1/UI-2/UI-3, WR-04, WR-02) и две
 отсрочки владельца (IN-03, UI-17) остаются в прежнем виде; перевод любой из них в гап — решение
 владельца, отдельное от вердикта.
+
+### Пересчёт отпечатка покрытых входов после закрытия фазы
+
+`gsd_run query phase.complete 13` правит `.planning/REQUIREMENTS.md`, а она входит в
+`covered_files` — отчёт немедленно прочитался `stale`. Отпечаток пересчитан, **вердикт не тронут**:
+счёт остался 31/32, ни одна истина заново не мерялась; `status`, `score`, `verified` и
+`covered_files` не правились.
+
+Изменение покрытых файлов сверено по `git diff --stat bff29f7a -- <28 файлов covered_files>` ДО
+пересчёта и состоит РОВНО из бухгалтерии самого перехода: один файл, `.planning/REQUIREMENTS.md`,
+`FETCH-02` — `[ ]` → `[x]` и строка прослеживаемости `Pending` → `Complete`. Существа верификации
+оно не трогает, поэтому пересчёт законен.
+
+Значение получено прямым вызовом `computeCoveredDigest(findProjectRoot(phaseDir), covered_files)`
+из `gsd-core/bin/lib/verification.cjs` над ПОЛНЫМ списком шапки (28 путей), а не вербом
+`verification.fingerprint`, который молча теряет первый переданный путь (дефект записан в
+`12-VERIFICATION.md`): `v1:sha256:152df17c…` → `v1:sha256:04d907e0…`.
