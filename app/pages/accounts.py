@@ -236,6 +236,8 @@ TG_SESSION_EXPIRED_MESSAGE = "Сессия авторизации истекла
 # Текст клиентской проверки страницы мастера до Фазы 13, дословно (D-08): после
 # снятия скрипта пустой пароль ловят `required` у поля и сервер этим же текстом.
 TG_EMPTY_PASSWORD_MESSAGE = "Введите пароль"
+# Текст отказа обновления кода JSON-обработчика до Фазы 13, дословно (D-09).
+TG_REFRESH_FAILED_MESSAGE = "Не удалось обновить QR. Начните заново."
 
 
 def _tg_step_markup(
@@ -427,26 +429,59 @@ async def accounts_connect_tg_user_qr_status(
     return await respond(request, redirect="/accounts/connect/tg_user", fragment=_step)
 
 
-@router.post("/accounts/connect/tg_user/refresh-qr")
+@router.post("/accounts/connect/tg_user/refresh-qr", response_class=HTMLResponse)
 async def accounts_connect_tg_user_refresh_qr(
     request: Request,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """«Обновить QR-код»: новый код и возобновлённый опрос — по кнопке, не сам.
+
+    ⚠️ НА СЛОЕ ОТВЕТА С ПЛАНА 13-03 (FETCH-02). Каждый исход — содержимое якоря
+    `#tg-connect-step`: шаг ожидания с новым QR и тем же опросчиком (D-02) либо
+    шаг ошибки с «Начать заново» (D-09). «Нет сессии входа» уходит переходом на
+    `/login` (D-10). JSON этот обработчик больше не отдаёт — последний
+    JSON-обработчик мастера снят.
+
+    ⚠️ ОБНОВЛЕНИЕ — КНОПКА, А НЕ АВТОМАТ (D-02, решение владельца): забытая
+    вкладка не должна продолжать обращаться к Telegram. Шаг «код истёк» опроса
+    не несёт, и опрос возобновляет только ответ этого обработчика.
+
+    ⚠️ ДВА СРОКА (D-03). Истёк токен QR (~30 с) — сессия жива, код пересоздаётся.
+    Истекла сессия целиком (`QR_SESSION_TTL`) — «Сессия авторизации истекла»,
+    и `refresh_qr` код не пересоздаёт. Из иного статуса, чем «код истёк»,
+    обновлять нечего — прежний текст отказа, сессия не тронута.
+
+    ⚠️ ПОЛЕ ЧИТАЕТСЯ ИЗ ТЕЛА ФОРМЫ, А НЕ СИГНАТУРОЙ (RESEARCH §Pitfall 8).
+
+    ⚠️ ПУТЬ ДЕГРАДАЦИИ — СТРАНИЦА МАСТЕРА (D-11): мастер работает только с
+    JavaScript и сегодня; без него каждый исход приземляет на страницу мастера.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return {"error": "Не авторизован"}
+        return await respond(request, redirect="/login")
 
-    data = await request.json()
-    session_id = data.get("session_id")
-    if not session_id:
-        return {"error": "session_id required"}
+    form = await request.form()
+    session_id = str(form.get("session_id") or "")
+    status = get_qr_status(session_id)["status"]
 
-    new_url = await refresh_qr(session_id)
-    if not new_url:
-        return {"error": "Не удалось обновить QR. Начните заново."}
+    step = "error"
+    error: str | None = TG_REFRESH_FAILED_MESSAGE
+    qr_code: str | None = None
+    if status == "expired":
+        error = TG_SESSION_EXPIRED_MESSAGE
+    elif status == "qr_expired":
+        new_url = await refresh_qr(session_id)
+        if new_url:
+            step, error, qr_code = "waiting", None, _generate_qr_base64(new_url)
 
-    return {"qr_image": _generate_qr_base64(new_url)}
+    async def _step() -> HTMLResponse:
+        """Шаг ожидания с новым QR и опросчиком либо шаг ошибки."""
+        return HTMLResponse(
+            _tg_step_markup(step=step, session_id=session_id, qr_code=qr_code, error=error)
+        )
+
+    return await respond(request, redirect="/accounts/connect/tg_user", fragment=_step)
 
 
 @router.post("/accounts/connect/tg_user/verify-2fa", response_class=HTMLResponse)

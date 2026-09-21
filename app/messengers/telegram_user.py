@@ -126,6 +126,16 @@ async def refresh_qr(session_id: str) -> str | None:
     state = _qr_sessions.get(session_id)
     if not state or not state.qr_login:
         return None
+    # Пересоздание пускается ТОЛЬКО из «код истёк» (D-03): подделанный запрос
+    # из `success` или `needs_2fa` иначе вернул бы сессию в `waiting` и стёр бы
+    # готовый вход (RESEARCH §Pattern 4).
+    if state.status != "qr_expired":
+        return None
+    # Устаревшая сессия не оживает (RESEARCH §Pitfall 2): чистка по сроку
+    # зовётся только из `start_qr_auth`. 300 с отсчитываются от ПОСЛЕДНЕГО
+    # выпуска кода, потому что `created_at` сбрасывается ниже.
+    if time.time() - state.created_at > QR_SESSION_TTL:
+        return None
 
     try:
         await state.qr_login.recreate()
