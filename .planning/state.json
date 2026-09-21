@@ -31,7 +31,7 @@
     {
       "number": "12",
       "name": "Загрузка изображений",
-      "status": "in_progress"
+      "status": "complete"
     },
     {
       "number": "13",
@@ -51,8 +51,8 @@
   ],
   "next": {
     "command": "/gsd:progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 12 of 9 · 56% · executing"
+    "label": "Advance to the next step (plan phase 13)",
+    "reason": "Phase 13 of 9 — needs a plan"
   },
-  "updated_at": "2026-09-20T22:34:55.841Z"
+  "updated_at": "2026-09-21T08:18:06.304Z"
 }
