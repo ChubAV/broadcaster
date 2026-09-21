@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 13
 current_phase_name: Мастер подключения Telegram по QR на фрагментах
 status: executing
-stopped_at: Completed 13-02-PLAN.md
-last_updated: "2026-09-21T13:24:26.866Z"
+stopped_at: Completed 13-03-PLAN.md
+last_updated: "2026-09-21T14:28:12.372Z"
 last_activity: 2026-09-21
-last_activity_desc: 13-02 executed (2FA password step and save races)
-state_head: 52d488a0be376a5cb72cd99d970157db42f2806c
+last_activity_desc: 13-03 executed (expired QR code as a status, refresh-qr on fragments)
+state_head: 95e6891c86b92d3006b0308f4786998af1a56769
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 135
-  completed_plans: 131
+  completed_plans: 132
   percent: 67
 ---
 
@@ -45,13 +45,14 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 13 (Мастер подключения Telegram по QR на фрагментах) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Total Plans in Phase: 6
-Completed Plans in Phase: 2
+Completed Plans in Phase: 3
 Status: Ready to execute
 ⚠️ Две строки выше исправлены вручную при закрытии Фазы 12: `phase.complete` оставил в них числа
 ПРОШЛОЙ фазы (13 планов / 6 исполненных), то есть счёт Фазы 12, подписанный именем Фазы 13.
-Last activity: 2026-09-21 — 13-02 исполнен: шаг пароля 2FA мастера Telegram на фрагментах — опрос в `needs_2fa` отвечает шагом пароля без опросчика; `verify-2fa` на `respond()`/`respond_field_error()`, неверный и пустой пароль — 422 у поля без эха; аккаунт пишется из результата `complete_auth` через `_save_tg_account`, две гонки (два `verify-2fa`, два опроса после успеха) дают один аккаунт, мутант «строка из `submit_2fa`» даёт два; шесть перечней сдвинуты прогоном (один — `UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED` 17 → 18 — планом не назван); гейты волны 357 passed. FETCH-02 не отмечен — соседи 13-03…13-06 без сводок.
+Last activity: 2026-09-21 — 13-03 исполнен: «код истёк» ожил. Таймаут `QRLogin.wait()` (токен QR ~30 с) в `_wait_for_qr` — статус `qr_expired` без текста ошибки и без `logger.error` с трассировкой (D-03, доказано на настоящем `QRLogin`); опрос отвечает шагом «QR-код истёк. Обновите его, чтобы продолжить.» с кнопкой «Обновить QR-код» без опросчика (D-02, автообновления нет); `refresh_qr` пересоздаёт код только из `qr_expired` и только в сроке `QR_SESSION_TTL` (Pitfall 2); `refresh-qr` на `respond()` — новый QR и тот же опросчик, JSON у мастера не осталось; перечни прогоном: отставание 11 → 10 (сводная летопись Фазы 13: 14 → 10), фрагментных 16 → 17, пар 56 → 58, утверждений 302 165 → 167, переходов 76 → 77, блоков обёртки 18 → 19 (вне списка файлов плана). Гейты волны — 370 passed.
+Last activity (устарело, предмет — план 13-02; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-03): 2026-09-21 — 13-02 исполнен: шаг пароля 2FA мастера Telegram на фрагментах — опрос в `needs_2fa` отвечает шагом пароля без опросчика; `verify-2fa` на `respond()`/`respond_field_error()`, неверный и пустой пароль — 422 у поля без эха; аккаунт пишется из результата `complete_auth` через `_save_tg_account`, две гонки (два `verify-2fa`, два опроса после успеха) дают один аккаунт, мутант «строка из `submit_2fa`» даёт два; шесть перечней сдвинуты прогоном (один — `UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED` 17 → 18 — планом не назван); гейты волны 357 passed. FETCH-02 не отмечен — соседи 13-03…13-06 без сводок.
 Last activity (устарело, предмет — план 13-01; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-02): 2026-09-21 — 13-01 исполнен (трасер фазы): мастер Telegram по QR на фрагментах за постоянным якорем `#tg-connect-step`; опросчик — форма внутри фрагмента ожидания (поправка D-05), опрос стал POST и сам сохраняет аккаунт (D-01), маршрут `complete` и сценарий страницы сняты (D-12); девять перечней гейтов сдвинуты прогоном; полный набор 3459 passed. FETCH-02 не отмечен — соседи 13-02…13-06 без сводок.
 Last activity (устарело, предмет — открытие исполнения фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-01): 2026-09-21 — Phase 13 execution started
 Last activity (устарело, предмет — завершение планирования фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её затёр `state.begin-phase` при открытии исполнения): 2026-09-21 — Phase 13 planning complete
@@ -208,6 +209,7 @@ Progress: [████████████████████] 116/116
 | Phase 12 P13 | 22 min | 2 tasks | 3 files |
 | Phase 13 P01 | 1h 4m | 3 tasks | 11 files |
 | Phase 13 P02 | 22 min | 2 tasks | 7 files |
+| Phase 13 P03 | 19 min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -476,6 +478,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 13]: 13-02: verify-2fa writes the account from complete_auth's result through _save_tg_account — a request that loses the race gets the error step; two concurrent submits save one account (mutant that writes submit_2fa's return value saves two)
 - [Phase 13]: 13-02: other Telethon errors on the password step answer the error fragment with «Начать заново», not 500; the log record carries only the exception type, never the password
 - [Phase 13]: 13-02: UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED 17 -> 18 (not named by the plan): the password form is a third form_wrapper block and keeps the default blocking target on its real submit button
+- [Phase 13]: 13-03: a timeout of QRLogin.wait() (QR token, ~30 s) sets status qr_expired with no error text and no logger.error traceback; the session (300 s) stays alive and the poll answers «QR-код истёк» with an «Обновить QR-код» button, no auto-refresh (D-02, D-03)
+- [Phase 13]: 13-03: refresh_qr recreates the code only from qr_expired and only within QR_SESSION_TTL; otherwise None with no recreate and no status change, so an outdated session is not revived and a finished login cannot be reset (Pitfall 2, T-13-12)
+- [Phase 13]: 13-03: refresh-qr runs on respond(): expired -> «Сессия авторизации истекла», other status -> «Не удалось обновить QR. Начните заново.», success -> waiting step with the new QR and the same poller; the wizard has no JSON handler left and NOT_YET_CONVERTED holds no wizard key (11 -> 10)
+- [Phase 13]: 13-03: UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED 18 -> 19 (outside the plan's files): the refresh form of the qr_expired step keeps the default blocking target because it has a real submit button
 
 ### Pending Todos
 
@@ -656,8 +662,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-21T13:24:26.234Z
-Stopped at: Completed 13-02-PLAN.md
+Last session: 2026-09-21T14:28:11.806Z
+Stopped at: Completed 13-03-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.

@@ -239,7 +239,6 @@ The acceptance diffs for the `# Messenger adapter` section (class `TelegramUserM
 
 ## Intentional interim windows (named by the plan, not stubs)
 - `refresh-qr` for an unknown session answers «Сессия авторизации истекла. Начните заново.», because `get_qr_status` returns `expired` for a missing session. Plan 13-04 separates «not found» from «expired» and adds the ownership check. The pair case uses a structural mark (the start-again form) so that text change will not break it.
-- `app/messengers/telegram_user.py:1` still carries the pre-phase `import structlog` pattern, and `verify-2fa` logs through a local import. Neither was touched.
 
 ## Threat Flags
 
