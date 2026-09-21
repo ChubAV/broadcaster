@@ -1177,6 +1177,89 @@ async def test_the_wizard_binds_the_session_to_the_impersonated_subject(
     )
 
 
+@pytest.mark.asyncio
+async def test_a_foreign_refresh_is_answered_as_unknown_and_leaves_no_trace(
+    authed_client: AsyncClient, owner_id: int
+):
+    """Чужой «Обновить QR-код» — ответ неизвестной сессии; код владельца не пересоздан.
+
+    Затем владелец обновляет сам и получает шаг ожидания с новым QR (D-02, D-04).
+    """
+    code = _seed_expired_code("sid-foreign-refresh", owner=owner_id, age=100)
+    victim = _qr_sessions["sid-foreign-refresh"]
+    issued_at = victim.created_at
+
+    await _sign_in_as(authed_client, FOREIGN_EMAIL, register=True)
+    foreign = await authed_client.post(
+        REFRESH_URL, data={"session_id": "sid-foreign-refresh"}, headers=HTMX_HEADERS
+    )
+    unknown = await authed_client.post(
+        REFRESH_URL, data={"session_id": _unknown_session_id()}, headers=HTMX_HEADERS
+    )
+
+    _same_answer(foreign, unknown)
+    assert SESSION_NOT_FOUND in foreign.text, "чужая сессия не ответила «не найдена»"
+    assert not code.recreate.await_count, "посторонний пересоздал код чужой сессии (D-04)"
+    assert _qr_sessions.get("sid-foreign-refresh") is victim, "чужое обновление сняло сессию"
+    assert victim.status == "qr_expired", f"чужое обновление сменило статус на {victim.status!r}"
+    assert victim.created_at == issued_at, "чужое обновление сбросило срок сессии владельца"
+    assert victim._wait_task is None, "чужое обновление запустило ожидание сканирования"
+
+    await _sign_in_as(authed_client, OWNER_EMAIL)
+    refreshed = await authed_client.post(
+        REFRESH_URL, data={"session_id": "sid-foreign-refresh"}, headers=HTMX_HEADERS
+    )
+    assert code.recreate.await_count == 1, "владелец после чужого запроса не обновил код"
+    assert "data:image/png;base64," in refreshed.text, "владелец не получил новый QR"
+    assert refreshed.text.count(POLL_TRIGGER) == 1, "после обновления владельцем нет опроса"
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_password_is_answered_as_unknown_and_leaves_no_trace(
+    authed_client: AsyncClient, db_session: AsyncSession, owner_id: int
+):
+    """Чужой пароль 2FA — ответ неизвестной сессии; в Telegram он не уходит.
+
+    Затем владелец вводит верный пароль и доходит до «Подключено» с аккаунтом
+    на себя (D-04).
+    """
+    client = _seed_2fa_state("sid-foreign-2fa", owner=owner_id)
+    victim = _qr_sessions["sid-foreign-2fa"]
+
+    await _sign_in_as(authed_client, FOREIGN_EMAIL, register=True)
+    foreign = await authed_client.post(
+        VERIFY_URL,
+        data={"session_id": "sid-foreign-2fa", "password": SUBMITTED_PASSWORD},
+        headers=HTMX_HEADERS,
+    )
+    unknown = await authed_client.post(
+        VERIFY_URL,
+        data={"session_id": _unknown_session_id(), "password": SUBMITTED_PASSWORD},
+        headers=HTMX_HEADERS,
+    )
+
+    _same_answer(foreign, unknown)
+    assert SESSION_NOT_FOUND in foreign.text, "чужая сессия не ответила «не найдена»"
+    assert not client.sign_in.await_count, (
+        "пароль постороннего ушёл в Telegram на чужой сессии (D-04)"
+    )
+    assert _qr_sessions.get("sid-foreign-2fa") is victim, "чужой пароль снял сессию владельца"
+    assert victim.status == "needs_2fa", f"чужой пароль сменил статус на {victim.status!r}"
+    assert await _tg_accounts(db_session) == [], "чужой пароль сохранил аккаунт"
+
+    await _sign_in_as(authed_client, OWNER_EMAIL)
+    connected = await authed_client.post(
+        VERIFY_URL,
+        data={"session_id": "sid-foreign-2fa", "password": SUBMITTED_PASSWORD},
+        headers=HTMX_HEADERS,
+    )
+    assert "Подключено" in connected.text, "владелец после чужого пароля не дошёл до «Подключено»"
+    accounts = await _tg_accounts(db_session)
+    assert [a.user_id for a in accounts] == [owner_id], (
+        f"аккаунты на {[a.user_id for a in accounts]!r} вместо одного на владельца {owner_id}"
+    )
+
+
 # --- Ровно один аккаунт на сканирование под гонкой (D-01, Pitfall 3) --------
 
 
@@ -1369,6 +1452,18 @@ def _seed_refresh_not_expired(monkeypatch, settings, owner):
     return {"session_id": "sid-refresh-waiting"}
 
 
+def _seed_refresh_foreign(monkeypatch, settings, owner):
+    # Чужая сессия с истёкшим кодом: владелец — другой пользователь (D-04).
+    _seed_expired_code("sid-refresh-foreign", owner=owner + 1)
+    return {"session_id": "sid-refresh-foreign"}
+
+
+def _seed_verify_foreign(monkeypatch, settings, owner):
+    # Чужая сессия в `needs_2fa`: владелец — другой пользователь (D-04).
+    _seed_2fa_state("sid-2fa-foreign", owner=owner + 1)
+    return {"session_id": "sid-2fa-foreign", "password": SUBMITTED_PASSWORD}
+
+
 def _seed_refresh_unknown(monkeypatch, settings, owner):
     return {"session_id": "no-such-session"}
 
@@ -1410,10 +1505,12 @@ POLLING_CASES: tuple[_PollingCase, ...] = (
     _PollingCase("refresh-outdated", "обновление — сессия старше срока", REFRESH_URL, _seed_refresh_outdated, False),
     _PollingCase("refresh-not-expired", "обновление — код не истёк", REFRESH_URL, _seed_refresh_not_expired, False),
     _PollingCase("refresh-unknown", "обновление — неизвестная сессия", REFRESH_URL, _seed_refresh_unknown, False),
+    _PollingCase("refresh-foreign", "обновление — чужая сессия, «не найдена»", REFRESH_URL, _seed_refresh_foreign, False),
     _PollingCase("verify-success", "пароль 2FA — «Подключено»", VERIFY_URL, _seed_verify_success, False),
     _PollingCase("verify-wrong", "пароль 2FA — неверный, 422", VERIFY_URL, _seed_verify_wrong, False, 422),
     _PollingCase("verify-empty", "пароль 2FA — пустой, 422", VERIFY_URL, _seed_verify_empty, False, 422),
     _PollingCase("verify-telethon", "пароль 2FA — ошибка Telethon", VERIFY_URL, _seed_verify_telethon_failure, False),
+    _PollingCase("verify-foreign", "пароль 2FA — чужая сессия, «не найдена»", VERIFY_URL, _seed_verify_foreign, False),
 )
 
 

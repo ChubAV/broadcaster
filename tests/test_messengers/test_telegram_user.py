@@ -748,6 +748,65 @@ def test_a_late_scan_is_still_a_success():
 
 
 @pytest.mark.asyncio
+async def test_a_foreign_refresh_changes_nothing():
+    """Чужой `refresh_qr` — None; код не пересоздан, сессия владельца та же (D-04).
+
+    Иначе посторонний пересоздавал бы код жертвы, сбрасывал её срок и
+    перезапускал ожидание сканирования — чужой QR на чужом экране.
+    """
+    code = _ExpiredCodeDouble()
+    issued_at = time.time() - 100
+    wait_task = MagicMock()
+    state = QRAuthState(
+        client=MagicMock(), user_id=OWNER, qr_login=code, status="qr_expired",
+        created_at=issued_at,
+    )
+    state._wait_task = wait_task
+    _qr_sessions["sid-foreign-renew"] = state
+    try:
+        result = await refresh_qr("sid-foreign-renew", STRANGER)
+
+        assert not code.recreate.await_count, (
+            "`recreate` не ожидался: посторонний пересоздал код чужой сессии (D-04)"
+        )
+        assert result is None, f"чужой refresh_qr вернул {result!r} вместо None"
+        assert state.status == "qr_expired", f"чужой refresh_qr сменил статус на {state.status!r}"
+        assert state.created_at == issued_at, "чужой refresh_qr сбросил срок сессии владельца"
+        assert state._wait_task is wait_task, "чужой refresh_qr подменил задачу ожидания"
+        assert not wait_task.cancel.called, "чужой refresh_qr отменил ожидание владельца"
+    finally:
+        # Без проверки владельца `refresh_qr` запустил бы настоящую задачу
+        # ожидания — её отменяют внутри цикла событий теста.
+        if not isinstance(state._wait_task, MagicMock):
+            await _cancel_wait_task(state)
+        _qr_sessions.pop("sid-foreign-renew", None)
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_password_is_never_submitted():
+    """Чужой `submit_2fa` — отказ «Сессия истекла»; пароль в Telegram не уходит (D-04)."""
+    client = AsyncMock()
+    client.session = MagicMock()
+    client.session.save.return_value = "owner-session"
+    state = QRAuthState(client=client, user_id=OWNER, status="needs_2fa")
+    _qr_sessions["sid-foreign-2fa"] = state
+    try:
+        with pytest.raises(RuntimeError) as refused:
+            await submit_2fa("sid-foreign-2fa", STRANGER, "x")
+
+        assert str(refused.value) == "Сессия авторизации истекла. Начните заново.", (
+            f"чужой submit_2fa отказал текстом {str(refused.value)!r}"
+        )
+        assert not client.sign_in.await_count, (
+            "`sign_in` не ожидался: пароль постороннего ушёл в Telegram на чужой сессии (D-04)"
+        )
+        assert state.status == "needs_2fa", f"чужой submit_2fa сменил статус на {state.status!r}"
+        assert state.session_string is None, "чужой submit_2fa записал строку сессии"
+    finally:
+        _qr_sessions.pop("sid-foreign-2fa", None)
+
+
+@pytest.mark.asyncio
 async def test_get_groups_logs_error_on_failure(messenger, caplog):
     """Протухшая сессия Telethon — отказ, а не аккаунт без единой группы.
 
