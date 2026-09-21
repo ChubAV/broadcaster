@@ -70,7 +70,7 @@ covered_files:
   - "tests/test_templates/test_htmx_markup_gates.py"
   - "tests/test_templates/test_walkthrough_anchors.py"
 
-covered_digest: "v1:sha256:df131a0db6cae419f063c4be1886a4282bf0a294a5cc7ca901c71dd633681eb2"
+covered_digest: "v1:sha256:eefe6880fcdaeb28c43b8b9013aa2c8b8f51f897fce22f3abbd76452924dffbf"
 behavior_unverified: 3
 overrides_applied: 0
 decision_coverage:
@@ -665,3 +665,27 @@ _Verifier: Claude (gsd-verifier)_
   § Unregistered Flags).
 - **Запись 92** `.planning/WINDOWS.md` (боевой предел прокси) — обход закрыл её ПО СУЩЕСТВУ
   наблюдением человека, но реестр ведётся отдельным действием, и до него запись остаётся `open`.
+
+### Пересчёт отпечатка покрытых входов после закрытия фазы
+
+`gsd_run query phase.complete 12` правит `.planning/REQUIREMENTS.md`, а она входит в
+`covered_files` — отчёт немедленно прочитался `stale`, и переход отказал сам себе. Отпечаток
+пересчитан, **вердикт не тронут**: счёт остался 41/44, ни одна истина заново не мерялась.
+
+Изменение покрытых файлов сверено глазами по `git diff` ДО пересчёта и состоит РОВНО из
+бухгалтерии самого перехода: `FETCH-01` — `[ ]` → `[x]` и строка прослеживаемости
+`Gaps Found` → `Complete`. Существа верификации оно не трогает, поэтому пересчёт законен.
+
+⚠️ **ДЕФЕКТ ИНСТРУМЕНТА, НАЗВАННЫЙ ЗДЕСЬ, ЧТОБЫ СЛЕДУЮЩИЙ НЕ ПОТЕРЯЛ НА НЁМ ЧАС.** Штатный верб
+`gsd_run query verification.fingerprint <пути…>` **молча отбрасывает ПЕРВЫЙ переданный путь**:
+на списке из 64 файлов он вернул `covered_files` длиной **63** (потерялась `.planning/REQUIREMENTS.md`,
+стоявшая первой) и отпечаток `v1:sha256:8c308c09…`, который проверяющему НЕ РАВЕН — тот считает по
+всем 64 из шапки. Записанное значение получено прямым вызовом
+`computeCoveredDigest(findProjectRoot(phaseDir), covered_files)` из
+`gsd-core/bin/lib/verification.cjs` над ПОЛНЫМ списком шапки:
+`v1:sha256:eefe6880…`. Проверено: `verification.status` → `passed`,
+`phase uat-passed 12 --require-verification` → `passed: true`, блокеров нет.
+
+Сортировка тут ни при чём: `computeCoveredDigest` (строка 220) сам зовёт
+`canonicalizeCoveredFiles`, то есть и верб, и проверяющий сортируют одинаково. Расходятся они
+СОСТАВОМ списка, а не его порядком.
