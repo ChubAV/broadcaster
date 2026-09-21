@@ -325,8 +325,9 @@ def _unknown_session_id() -> str:
 def _same_answer(foreign, unknown) -> None:
     """Ответ на чужую сессию ПОБАЙТНО равен ответу на неизвестную (D-04).
 
-    Сравниваются код, тело и заголовки, кроме даты: поиск подстроки пропустил
-    бы различие в разметке, раскрывающее существование чужой сессии.
+    Сравниваются код, тело и заголовки, кроме даты и идентификатора запроса
+    (оба свои у КАЖДОГО ответа): поиск подстроки пропустил бы различие в
+    разметке, раскрывающее существование чужой сессии.
     """
     assert foreign.status_code == unknown.status_code, (
         f"код ответа на чужую сессию {foreign.status_code}, на неизвестную "
@@ -338,7 +339,10 @@ def _same_answer(foreign, unknown) -> None:
     )
 
     def _headers(response):
-        return {k: v for k, v in response.headers.items() if k.lower() != "date"}
+        return {
+            k: v for k, v in response.headers.items()
+            if k.lower() not in {"date", "x-request-id"}
+        }
 
     assert _headers(foreign) == _headers(unknown), (
         "заголовки ответа на чужую сессию отличаются от ответа на неизвестную (D-04)"

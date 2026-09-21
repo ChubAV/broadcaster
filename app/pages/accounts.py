@@ -233,6 +233,10 @@ TG_CONNECT_STEP_TEMPLATE = "accounts/includes/tg_connect_step.html"
 TG_API_NOT_CONFIGURED_MESSAGE = "Telegram API не настроен. Обратитесь к администратору."
 TG_AUTH_FAILED_MESSAGE = "Ошибка авторизации"
 TG_SESSION_EXPIRED_MESSAGE = "Сессия авторизации истекла. Начните заново."
+# Неизвестная ИЛИ чужая сессия (D-04, план 13-04): один текст и один фрагмент,
+# поэтому существование чужой сессии не раскрывается. «Истекла» видит только
+# владелец — слой сессий проверяет владельца раньше срока.
+TG_SESSION_NOT_FOUND_MESSAGE = "Сессия подключения не найдена. Начните заново."
 # Текст клиентской проверки страницы мастера до Фазы 13, дословно (D-08): после
 # снятия скрипта пустой пароль ловят `required` у поля и сервер этим же текстом.
 TG_EMPTY_PASSWORD_MESSAGE = "Введите пароль"
@@ -324,9 +328,13 @@ async def accounts_connect_tg_user_start_qr(
         )
 
     try:
+        # Сессия привязывается к тому, кто её начал (D-04): `user` — субъект,
+        # которого вернул `get_user_from_cookie`, и под имперсонацией тоже;
+        # на него же `_save_tg_account` запишет аккаунт.
         session_id, login_url = await start_qr_auth(
             api_id=settings.telegram_api_id,
             api_hash=settings.telegram_api_hash,
+            user_id=user.id,
         )
     except Exception as e:
         start_error = f"Ошибка запуска QR авторизации: {e}"
@@ -384,7 +392,7 @@ async def accounts_connect_tg_user_qr_status(
 
     form = await request.form()
     session_id = str(form.get("session_id") or "")
-    state = get_qr_status(session_id)
+    state = get_qr_status(session_id, user.id)
     status = state["status"]
 
     if status == "waiting":
@@ -400,12 +408,16 @@ async def accounts_connect_tg_user_qr_status(
     step = "error"
     error: str | None = TG_AUTH_FAILED_MESSAGE
     if status == "success":
-        session_string = await complete_auth(session_id)
+        session_string = await complete_auth(session_id, user.id)
         if session_string:
             await _save_tg_account(db, user, session_string)
             step, error = "connected", None
         else:
-            error = TG_SESSION_EXPIRED_MESSAGE
+            # Проигравший гонку: сессию снял другой запрос того же владельца.
+            error = TG_SESSION_NOT_FOUND_MESSAGE
+    elif status == "gone":
+        # Неизвестная ИЛИ чужая сессия — один ответ (D-04).
+        error = TG_SESSION_NOT_FOUND_MESSAGE
     elif status == "expired":
         error = TG_SESSION_EXPIRED_MESSAGE
     elif status == "error":
@@ -463,15 +475,18 @@ async def accounts_connect_tg_user_refresh_qr(
 
     form = await request.form()
     session_id = str(form.get("session_id") or "")
-    status = get_qr_status(session_id)["status"]
+    status = get_qr_status(session_id, user.id)["status"]
 
     step = "error"
     error: str | None = TG_REFRESH_FAILED_MESSAGE
     qr_code: str | None = None
-    if status == "expired":
+    if status == "gone":
+        # Неизвестная ИЛИ чужая сессия — один ответ (D-04).
+        error = TG_SESSION_NOT_FOUND_MESSAGE
+    elif status == "expired":
         error = TG_SESSION_EXPIRED_MESSAGE
     elif status == "qr_expired":
-        new_url = await refresh_qr(session_id)
+        new_url = await refresh_qr(session_id, user.id)
         if new_url:
             step, error, qr_code = "waiting", None, _generate_qr_base64(new_url)
 
@@ -536,12 +551,15 @@ async def accounts_connect_tg_user_verify_2fa(
     if not password.strip():
         password_error = TG_EMPTY_PASSWORD_MESSAGE
     else:
-        status = get_qr_status(session_id)["status"]
-        if status == "expired":
+        status = get_qr_status(session_id, user.id)["status"]
+        if status == "gone":
+            # Неизвестная ИЛИ чужая сессия — один ответ (D-04).
+            error = TG_SESSION_NOT_FOUND_MESSAGE
+        elif status == "expired":
             error = TG_SESSION_EXPIRED_MESSAGE
         elif status == "needs_2fa":
             try:
-                await submit_2fa(session_id, password)
+                await submit_2fa(session_id, user.id, password)
             except ValueError as e:
                 # «Неверный пароль 2FA.» дословно — у поля (D-08, D-09).
                 password_error = str(e)
@@ -553,14 +571,13 @@ async def accounts_connect_tg_user_verify_2fa(
                     "tg_verify_2fa_error", error_type=type(e).__name__
                 )
             else:
-                session_string = await complete_auth(session_id)
+                session_string = await complete_auth(session_id, user.id)
                 if session_string:
                     await _save_tg_account(db, user, session_string)
                     step, error = "connected", None
                 else:
-                    # Проигравший гонку: сессию снял другой запрос. План 13-04
-                    # сменит текст на «не найдена».
-                    error = TG_SESSION_EXPIRED_MESSAGE
+                    # Проигравший гонку: сессию снял другой запрос.
+                    error = TG_SESSION_NOT_FOUND_MESSAGE
         # Любой иной статус — «Ошибка авторизации»: подтверждать пароль нечего.
 
     if password_error is not None:
