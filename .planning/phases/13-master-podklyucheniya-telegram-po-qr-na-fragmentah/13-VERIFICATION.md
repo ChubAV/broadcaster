@@ -34,7 +34,7 @@ covered_files:
   - tests/test_templates/test_htmx_markup_gates.py
   - tests/test_templates/test_htmx_markup_security.py
 
-covered_digest: "v1:sha256:04d907e0f2a5ad9c18fc5b4f3335816ea87300aff69ec187157dab0670724416"
+covered_digest: "v1:sha256:0e9da87d16a12f09ae221a56ad3c6af20dd9c50988419fdc0513d4c1da972390"
 behavior_unverified: 0
 overrides_applied: 0
 deferred: # owner-named deferrals, not later-phase coverage — neither item is claimed by any later phase
@@ -430,3 +430,39 @@ _Verifier: Claude (gsd-verifier)_
 из `gsd-core/bin/lib/verification.cjs` над ПОЛНЫМ списком шапки (28 путей), а не вербом
 `verification.fingerprint`, который молча теряет первый переданный путь (дефект записан в
 `12-VERIFICATION.md`): `v1:sha256:152df17c…` → `v1:sha256:04d907e0…`.
+
+### Пересчёт отпечатка после быстрой задачи 260921-qvt — по явному разрешению владельца
+
+⚠️ **ЭТО НЕ ПЕРЕСЧЁТ ПО БУХГАЛТЕРИИ, И ГРАНИЦА НАЗВАНА ЗДЕСЬ.** В отличие от пересчёта выше, покрытый
+вход изменился КОДОМ: быстрая задача `260921-qvt` (2026-09-21, коммиты `85e84ca3`, `aaaee309`)
+правила `app/templates/accounts/includes/tg_connect_step.html`. Верификатор этот шаблон после правки
+НЕ перемерял. Вердикт `passed` 31/32 держится здесь на ПОДТВЕРЖДЕНИИ ВЛАДЕЛЬЦА, данном 2026-09-21 на
+прямой выбор «повторная проверка верификатором / владелец подтверждает сам» — выбран второй вариант.
+`status`, `score`, `verified`, `covered_files` и блоки шапки (`advisory`, `deferred`,
+`human_verification`) не правились.
+
+**Что изменилось во входах — измерено, а не пересказано.** `git diff --stat ab72d228..HEAD` по 28
+путям `covered_files` — ОДИН файл, `tg_connect_step.html` (+24/−6). Прежнее значение отпечатка
+`v1:sha256:04d907e0…` воспроизведено той же функцией `computeCoveredDigest` над деревом `ab72d228`
+(выгрузка `git archive` по тем же 28 путям) байт в байт, поэтому новое значение
+`v1:sha256:0e9da87d…` отличается от прежнего ТОЛЬКО этой правкой шаблона. `app/static/css/app.css` и
+новый `tests/test_templates/test_tg_connect_step_layout.py` в `covered_files` не входят.
+
+**Что это за правка.** Ровно рекомендации этого отчёта UI-1 и UI-3 (UI-2 — одним правилом `app.css`):
+на шаге пароля поле и ряд действий обёрнуты во внутреннюю колонку `div.connect-step__form` (приём
+шага телефона мастера MAX — то исправление, которое отчёт сам советовал «before or with the UAT»);
+в ряды действий шагов старта/ошибки и `qr_expired` добавлена подпись
+`<span class="connect-step__busy">Загрузка...</span>`, которую показывает только CSS по атрибуту
+`disabled` кнопки отправки. Скрипта, обработчиков и атрибута `hidden` не добавлено; опросчик шага
+ожидания, `POLLING_CASES` и вызовы `form_wrapper` не тронуты.
+
+**Чем правка проверена (машиной, после последнего кодового коммита):** новая регрессия — 10 проверок,
+каждая сперва красная на своём утверждении (RED записан в SUMMARY задачи); маршрутные тесты мастера
+вместе с ней — 66 passed, перепрогнано оркестратором, включая
+`test_the_wizard_page_carries_no_client_script` (критерий 1); набор из восьми файлов гейтов разметки и
+слоя ответа — 390 passed; `test_shell.py` — 245 passed; `tests/test_planning/` — 44 passed. Живой
+взгляд на вёрстку в браузере НЕ снят — он за владельцем (пункт D4 `260921-qvt-SUMMARY.md`,
+`human_judgment: true`).
+
+**Рекомендации UI-1, UI-2, UI-3** закрыты этой задачей по существу; их записи в `advisory` шапки не
+переписывались — история отчёта сохраняется, закрытие названо здесь.
