@@ -362,21 +362,33 @@ async def test_the_wizard_degrades_to_its_page_without_js(authed_client: AsyncCl
 
 @pytest.mark.asyncio
 async def test_the_wizard_without_a_session_goes_to_login(client: AsyncClient):
-    """Без сессии входа — на `/login` на обоих транспортах, без JSON (D-10)."""
-    for url in (START_URL, POLL_URL):
-        over_htmx = await client.post(url, data={"session_id": "x"}, headers=HTMX_HEADERS)
+    """Без сессии входа — на `/login` на обоих транспортах, без JSON (D-10).
+
+    Адреса стоят литералом первым аргументом `.post(…)`: по ним обход
+    утверждений 302 модуля пар называет обработчик.
+    """
+    start_htmx = await client.post("/accounts/connect/tg_user/start-qr", headers=HTMX_HEADERS)
+    poll_htmx = await client.post(
+        "/accounts/connect/tg_user/qr-status", data={"session_id": "x"}, headers=HTMX_HEADERS
+    )
+    for name, over_htmx in (("старт", start_htmx), ("опрос", poll_htmx)):
         assert over_htmx.status_code == 204, (
-            f"{url} без входа на htmx ответил {over_htmx.status_code} вместо 204"
+            f"{name} без входа на htmx ответил {over_htmx.status_code} вместо 204"
         )
         assert over_htmx.headers.get("HX-Location") == "/login", (
-            f"{url} без входа на htmx не уводит на /login"
+            f"{name} без входа на htmx не уводит на /login"
         )
 
-        plain = await client.post(url, data={"session_id": "x"})
-        assert plain.status_code == 302, f"{url} без входа без JS ответил {plain.status_code}"
-        assert plain.headers["location"] == "/login", (
-            f"{url} без входа без JS приземлил на {plain.headers['location']!r}"
-        )
+    start_plain = await client.post("/accounts/connect/tg_user/start-qr")
+    assert start_plain.status_code == 302, f"старт без входа без JS ответил {start_plain.status_code}"
+    assert start_plain.headers["location"] == "/login", (
+        f"старт без входа без JS приземлил на {start_plain.headers['location']!r}"
+    )
+    poll_plain = await client.post("/accounts/connect/tg_user/qr-status", data={"session_id": "x"})
+    assert poll_plain.status_code == 302, f"опрос без входа без JS ответил {poll_plain.status_code}"
+    assert poll_plain.headers["location"] == "/login", (
+        f"опрос без входа без JS приземлил на {poll_plain.headers['location']!r}"
+    )
 
 
 @pytest.mark.asyncio
