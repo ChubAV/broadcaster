@@ -24,6 +24,12 @@ from app.messengers.telegram_user import (
 )
 
 
+# Владелец и посторонний QR-сессии (D-04): сессия принадлежит тому, кто её
+# начал, и каждая функция слоя сверяет её с текущим пользователем.
+OWNER = 7
+STRANGER = 8
+
+
 @pytest.fixture
 def messenger():
     with patch("app.messengers.telegram_user.TelegramClient") as MockClient, \
@@ -348,7 +354,7 @@ async def test_start_qr_auth():
         mock_client.qr_login = AsyncMock(return_value=mock_qr_login)
         MockClient.return_value = mock_client
 
-        session_id, url = await start_qr_auth(api_id=12345, api_hash="test_hash")
+        session_id, url = await start_qr_auth(api_id=12345, api_hash="test_hash", user_id=OWNER)
 
     assert session_id is not None
     assert url == "tg://login?token=abc123"
@@ -358,16 +364,19 @@ async def test_start_qr_auth():
 
 
 def test_get_qr_status_missing():
-    result = get_qr_status("nonexistent")
-    assert result["status"] == "expired"
+    result = get_qr_status("nonexistent", OWNER)
+    assert result["status"] == "gone", (
+        "неизвестная сессия отвечает не «не найдена» — различие «истекла / не найдена» "
+        "видит только владелец (D-04)"
+    )
 
 
 def test_get_qr_status_waiting():
     import time
     _qr_sessions["test123"] = QRAuthState(
-        client=AsyncMock(), status="waiting", created_at=time.time()
+        client=AsyncMock(), user_id=OWNER, status="waiting", created_at=time.time()
     )
-    result = get_qr_status("test123")
+    result = get_qr_status("test123", OWNER)
     assert result["status"] == "waiting"
     _qr_sessions.pop("test123", None)
 
@@ -375,7 +384,7 @@ def test_get_qr_status_waiting():
 @pytest.mark.asyncio
 async def test_submit_2fa_expired():
     with pytest.raises(RuntimeError, match="Сессия авторизации истекла"):
-        await submit_2fa("nonexistent", "password")
+        await submit_2fa("nonexistent", OWNER, "password")
 
 
 @pytest.mark.asyncio
@@ -383,16 +392,16 @@ async def test_complete_auth():
     mock_client = AsyncMock()
     mock_client.disconnect = AsyncMock()
     _qr_sessions["complete_test"] = QRAuthState(
-        client=mock_client, session_string="saved_session_123", status="success"
+        client=mock_client, user_id=OWNER, session_string="saved_session_123", status="success"
     )
-    result = await complete_auth("complete_test")
+    result = await complete_auth("complete_test", OWNER)
     assert result == "saved_session_123"
     assert "complete_test" not in _qr_sessions
 
 
 def test_cleanup_qr_session():
     mock_client = AsyncMock()
-    _qr_sessions["cleanup_test"] = QRAuthState(client=mock_client)
+    _qr_sessions["cleanup_test"] = QRAuthState(client=mock_client, user_id=OWNER)
     cleanup_qr_session("cleanup_test")
     assert "cleanup_test" not in _qr_sessions
 
@@ -441,7 +450,9 @@ async def test_an_expired_qr_token_is_a_status_not_an_error():
     истёк» с кнопкой, а не «Ошибка авторизации» без выхода.
     """
     client = _telethon_client_stub()
-    state = QRAuthState(client=client, qr_login=_real_qr_login(client, expires_in=0.05))
+    state = QRAuthState(
+        client=client, user_id=OWNER, qr_login=_real_qr_login(client, expires_in=0.05)
+    )
     _qr_sessions["sid-token-expired"] = state
     try:
         with patch("app.messengers.telegram_user.logger") as module_logger:
@@ -459,7 +470,7 @@ async def test_an_expired_qr_token_is_a_status_not_an_error():
             "нормальное истечение кода записано в журнал как ошибка: "
             f"{module_logger.error.call_args!r}"
         )
-        assert get_qr_status("sid-token-expired") == {"status": "qr_expired"}, (
+        assert get_qr_status("sid-token-expired", OWNER) == {"status": "qr_expired"}, (
             "опрос не узнает, что код истёк"
         )
     finally:
@@ -501,11 +512,12 @@ async def test_refresh_qr_recreates_only_an_expired_code():
     code = _ExpiredCodeDouble()
     issued_at = time.time() - 100
     state = QRAuthState(
-        client=MagicMock(), qr_login=code, status="qr_expired", created_at=issued_at
+        client=MagicMock(), user_id=OWNER, qr_login=code, status="qr_expired",
+        created_at=issued_at,
     )
     _qr_sessions["sid-renew"] = state
     try:
-        url = await refresh_qr("sid-renew")
+        url = await refresh_qr("sid-renew", OWNER)
 
         assert code.recreate.await_count == 1, (
             f"`recreate` ожидан {code.recreate.await_count} раз вместо одного — "
@@ -523,10 +535,10 @@ async def test_refresh_qr_recreates_only_an_expired_code():
 
     for status in ("waiting", "needs_2fa", "success"):
         other = _ExpiredCodeDouble()
-        live = QRAuthState(client=MagicMock(), qr_login=other, status=status)
+        live = QRAuthState(client=MagicMock(), user_id=OWNER, qr_login=other, status=status)
         _qr_sessions["sid-live"] = live
         try:
-            result = await refresh_qr("sid-live")
+            result = await refresh_qr("sid-live", OWNER)
 
             assert not other.recreate.await_count, (
                 f"`recreate` не ожидался из статуса {status!r} — готовый вход стёрт "
@@ -553,13 +565,14 @@ async def test_refresh_qr_does_not_revive_an_outdated_session():
     code = _ExpiredCodeDouble()
     state = QRAuthState(
         client=MagicMock(),
+        user_id=OWNER,
         qr_login=code,
         status="qr_expired",
         created_at=time.time() - QR_SESSION_TTL - 1,
     )
     _qr_sessions["sid-outdated"] = state
     try:
-        result = await refresh_qr("sid-outdated")
+        result = await refresh_qr("sid-outdated", OWNER)
 
         assert not code.recreate.await_count, (
             "`recreate` не ожидался: сессия старше срока ожила новым кодом (Pitfall 2)"
@@ -569,6 +582,169 @@ async def test_refresh_qr_does_not_revive_an_outdated_session():
     finally:
         await _cancel_wait_task(state)
         _qr_sessions.pop("sid-outdated", None)
+
+
+# --- Сессия принадлежит тому, кто её начал (Фаза 13, план 13-04; D-04) --------
+#
+# ⚠️ ПРОВЕРКА ВЛАДЕЛЬЦА — ЕДИНСТВЕННАЯ ЗАЩИТА ОТ СОХРАНЕНИЯ ЧУЖОГО АККАУНТА.
+# `session_id` пишется в журнал (`qr_auth_error`, `qr_refresh_error`), поэтому
+# знать чужой `session_id` может любой читатель журнала. Правила ниже меряют
+# слой сессий: чужая сессия для него — то же, что отсутствующая, и чужой вызов
+# не трогает её ни снятием, ни отменой ожидания.
+
+
+class _WaitForever:
+    """Код Telethon, чьё ожидание сканирования живёт до отмены."""
+
+    def __init__(self):
+        self.url = "tg://login?token=owned"
+        self._never = asyncio.Event()
+
+    async def wait(self, timeout=None):
+        await self._never.wait()
+
+
+@pytest.mark.asyncio
+async def test_a_session_is_owned_by_the_user_who_started_it():
+    """Настоящий `start_qr_auth` пишет владельца в состояние сессии (D-04)."""
+    with patch("app.messengers.telegram_user.TelegramClient") as MockClient:
+        mock_client = AsyncMock()
+        mock_client.qr_login = AsyncMock(return_value=_WaitForever())
+        MockClient.return_value = mock_client
+
+        session_id, _ = await start_qr_auth(api_id=12345, api_hash="test_hash", user_id=OWNER)
+
+    try:
+        assert _qr_sessions[session_id].user_id == OWNER, (
+            f"сессия записана на {_qr_sessions[session_id].user_id!r} вместо начавшего "
+            "её пользователя — чужой запрос нечем отличить от своего (D-04)"
+        )
+    finally:
+        await _cancel_wait_task(_qr_sessions[session_id])
+        _qr_sessions.pop(session_id, None)
+
+
+def test_a_foreign_user_sees_no_session():
+    """Чужая сессия для слоя — отсутствующая: `gone`, как у неизвестной (D-04)."""
+    _qr_sessions["sid-owned"] = QRAuthState(
+        client=MagicMock(), user_id=OWNER, status="success", session_string="s"
+    )
+    try:
+        assert get_qr_status("sid-owned", STRANGER) == {"status": "gone"}, (
+            "посторонний узнал статус чужой сессии — её существование раскрыто (D-04)"
+        )
+        assert get_qr_status("sid-no-such", STRANGER) == {"status": "gone"}, (
+            "неизвестная сессия отвечает иначе, чем чужая"
+        )
+        assert get_qr_status("sid-owned", OWNER) == {"status": "success"}, (
+            "владелец не видит статуса своей сессии"
+        )
+    finally:
+        _qr_sessions.pop("sid-owned", None)
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_complete_leaves_the_session_alone():
+    """Чужой `complete_auth` — None; сессия, её ожидание и клиент не тронуты (D-04)."""
+    client = MagicMock()
+    client.disconnect = AsyncMock()
+    wait_task = MagicMock()
+    state = QRAuthState(
+        client=client, user_id=OWNER, status="success", session_string="owner-session"
+    )
+    state._wait_task = wait_task
+    _qr_sessions["sid-victim"] = state
+    try:
+        assert await complete_auth("sid-victim", STRANGER) is None, (
+            "посторонний получил строку чужой сессии Telegram (D-04)"
+        )
+        assert "sid-victim" in _qr_sessions, "чужой вызов снял сессию владельца (D-04)"
+        assert not wait_task.cancel.called, "чужой вызов отменил ожидание сканирования владельца"
+        assert not client.disconnect.await_count, "чужой вызов отключил клиента владельца"
+
+        assert await complete_auth("sid-victim", OWNER) == "owner-session", (
+            "владелец после чужого вызова не получил строку своей сессии"
+        )
+        assert "sid-victim" not in _qr_sessions, "сессия пережила завершение владельцем"
+    finally:
+        _qr_sessions.pop("sid-victim", None)
+
+
+@pytest.mark.asyncio
+async def test_complete_auth_takes_only_a_successful_session():
+    """`complete_auth` вне `success` — None, сессия цела (D-01).
+
+    Правило «звать только при успехе» закреплено слоем: вызов в ином статусе
+    молча уничтожал бы живую сессию.
+    """
+    client = MagicMock()
+    client.disconnect = AsyncMock()
+    _qr_sessions["sid-still-waiting"] = QRAuthState(client=client, user_id=OWNER, status="waiting")
+    try:
+        assert await complete_auth("sid-still-waiting", OWNER) is None, (
+            "complete_auth в ожидании вернул строку сессии"
+        )
+        assert "sid-still-waiting" in _qr_sessions, (
+            "complete_auth в ожидании снял живую сессию — сканирование потеряно (D-01)"
+        )
+        assert not client.disconnect.await_count, "complete_auth в ожидании отключил клиента"
+    finally:
+        _qr_sessions.pop("sid-still-waiting", None)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_completes_yield_one_session_string():
+    """Два конкурентных `complete_auth` владельца — одна строка сессии (D-01).
+
+    Проверка владельца стоит перед `pop` без ожидания между ними: точка
+    переключения в `disconnect` отдаёт управление второму вызову уже ПОСЛЕ
+    снятия, и ему достаётся пустота.
+    """
+    client = MagicMock()
+
+    async def disconnect():
+        await asyncio.sleep(0)
+
+    client.disconnect = AsyncMock(side_effect=disconnect)
+    _qr_sessions["sid-race"] = QRAuthState(
+        client=client, user_id=OWNER, status="success", session_string="one-scan"
+    )
+    try:
+        results = await asyncio.gather(
+            complete_auth("sid-race", OWNER), complete_auth("sid-race", OWNER)
+        )
+        assert [r for r in results if r] == ["one-scan"], (
+            f"два конкурентных завершения дали {results!r} — одно сканирование, "
+            "два аккаунта (D-01)"
+        )
+    finally:
+        _qr_sessions.pop("sid-race", None)
+
+
+def test_a_late_scan_is_still_a_success():
+    """Сканирование, завершённое после срока, но до чистки, — успех (Pitfall 10).
+
+    Срок не меняется (D-13): сканирование на 299-й секунде не должно стать
+    «истекло» на 301-й. Та же давность в ожидании — «истекло».
+    """
+    late = time.time() - QR_SESSION_TTL - 5
+    _qr_sessions["sid-late"] = QRAuthState(
+        client=MagicMock(), user_id=OWNER, status="success", session_string="s",
+        created_at=late,
+    )
+    _qr_sessions["sid-stale"] = QRAuthState(
+        client=MagicMock(), user_id=OWNER, status="waiting", created_at=late
+    )
+    try:
+        assert get_qr_status("sid-late", OWNER) == {"status": "success"}, (
+            "отсканированная сессия после срока ответила «истекло» — вход потерян"
+        )
+        assert get_qr_status("sid-stale", OWNER) == {"status": "expired"}, (
+            "ожидание старше срока не истекло"
+        )
+    finally:
+        _qr_sessions.pop("sid-late", None)
+        _qr_sessions.pop("sid-stale", None)
 
 
 @pytest.mark.asyncio

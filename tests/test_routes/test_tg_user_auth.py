@@ -24,6 +24,11 @@
 отправит форма-опросчик браузера; подставленное тестом значение доказало бы
 обработчик, но не канал.
 
+⚠️ СЕССИЯ ПРИНАДЛЕЖИТ ТОМУ, КТО ЕЁ НАЧАЛ (план 13-04, D-04). До плана проверки
+владения не было: любой вошедший, зная чужой `session_id` (он пишется в журнал),
+сохранял чужой Telegram себе. Каждый посев поэтому несёт владельца, а правила
+«чужая сессия» сравнивают ответ на неё с ответом на неизвестную ПОБАЙТНО.
+
 ⚠️ ОПРОС ОСТАНАВЛИВАЕТСЯ ОТВЕТОМ, И ЭТО ДОКАЗЫВАЕТСЯ ОТРИСОВАННЫМИ ОТВЕТАМИ.
 Гейт опросов инвентаря шаблонов видит только расписание, написанное в теге
 литералом; опросчик мастера рождён макросом-обёрткой, и его останов держит
@@ -33,6 +38,7 @@ import asyncio
 import datetime
 import re
 import time
+import uuid
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Callable
@@ -53,6 +59,7 @@ from app.messengers.telegram_user import QR_SESSION_TTL, QRAuthState, _qr_sessio
 from app.models.messenger_account import MessengerAccount
 from app.models.user import User
 from tests.test_pages.test_confirm_delete_transport import DOCUMENT_MARK, HTMX_HEADERS
+from tests.test_pages.test_impersonation import _enter, _seed_target, _user
 
 WIZARD_URL = "/accounts/connect/tg_user"
 START_URL = "/accounts/connect/tg_user/start-qr"
@@ -64,6 +71,9 @@ SESSION_FIELD = re.compile(r'name="session_id" value="([^"]+)"')
 API_NOT_CONFIGURED = "Telegram API не настроен. Обратитесь к администратору."
 START_FAILED = "Ошибка запуска QR авторизации: Connection failed"
 SESSION_EXPIRED = "Сессия авторизации истекла. Начните заново."
+# Неизвестная ИЛИ чужая сессия (план 13-04, D-04): существование чужой сессии не
+# раскрывается, различие «истекла / не найдена» видит только владелец.
+SESSION_NOT_FOUND = "Сессия подключения не найдена. Начните заново."
 AUTH_FAILED = "Ошибка авторизации"
 START_AGAIN_FORM = 'hx-post="/accounts/connect/tg_user/start-qr"'
 EXPORTED_SESSION = "exported-session"
@@ -126,13 +136,14 @@ def _telethon_client_factory(scanned: asyncio.Event):
     return factory
 
 
-def _seed_state(session_id: str, *, status: str, error: str | None = None,
+def _seed_state(session_id: str, *, owner: int, status: str, error: str | None = None,
                 session_string: str | None = None) -> None:
-    """Настоящее состояние сессии мастера в словаре слоя сессий."""
+    """Настоящее состояние сессии мастера в словаре слоя сессий, с владельцем (D-04)."""
     client = MagicMock()
     client.disconnect = AsyncMock()
     _qr_sessions[session_id] = QRAuthState(
-        client=client, status=status, error=error, session_string=session_string
+        client=client, user_id=owner, status=status, error=error,
+        session_string=session_string,
     )
 
 
@@ -152,19 +163,20 @@ class _RenewableCode:
         await self._never.wait()
 
 
-def _seed_expired_code(session_id: str, *, status: str = "qr_expired",
+def _seed_expired_code(session_id: str, *, owner: int, status: str = "qr_expired",
                        age: float = 0.0) -> _RenewableCode:
     """Настоящее состояние сессии с кодом, который `refresh_qr` может пересоздать."""
     code = _RenewableCode()
     client = MagicMock()
     client.disconnect = AsyncMock()
     _qr_sessions[session_id] = QRAuthState(
-        client=client, qr_login=code, status=status, created_at=time.time() - age
+        client=client, user_id=owner, qr_login=code, status=status,
+        created_at=time.time() - age,
     )
     return code
 
 
-def _seed_2fa_state(session_id: str, *, sign_in=None) -> MagicMock:
+def _seed_2fa_state(session_id: str, *, owner: int, sign_in=None) -> MagicMock:
     """Настоящее состояние `needs_2fa` с клиентом Telethon, чей вход подменён.
 
     Клиент — `AsyncMock`, но его `session` — синхронный `MagicMock`: у
@@ -175,7 +187,7 @@ def _seed_2fa_state(session_id: str, *, sign_in=None) -> MagicMock:
     client.session = MagicMock()
     client.session.save.return_value = PASSWORD_2FA_SESSION
     client.sign_in = sign_in if sign_in is not None else AsyncMock()
-    _qr_sessions[session_id] = QRAuthState(client=client, status="needs_2fa")
+    _qr_sessions[session_id] = QRAuthState(client=client, user_id=owner, status="needs_2fa")
     return client
 
 
@@ -209,6 +221,13 @@ def _assert_the_password_field_is_empty(body: str) -> None:
         f"поле пароля пришло со значением {value.group(1)!r} — пароль эхается (D-08)"
     )
     assert SUBMITTED_PASSWORD not in body, "присланный пароль вернулся в теле ответа (D-08)"
+
+
+async def _racer_id(factory: async_sessionmaker) -> int:
+    """Владелец сессий гонки — пользователь фикстуры `race_client` (D-04)."""
+    async with factory() as session:
+        result = await session.execute(select(User.id).where(User.email == "racer@test.com"))
+        return result.scalar_one()
 
 
 async def _count_tg_accounts(factory: async_sessionmaker) -> int:
@@ -264,6 +283,66 @@ async def race_client(tmp_path, test_settings: Settings):
 async def _current_user(db: AsyncSession) -> User:
     result = await db.execute(select(User).where(User.email == "testuser@test.com"))
     return result.scalar_one()
+
+
+@pytest_asyncio.fixture
+async def owner_id(authed_client: AsyncClient, db_session: AsyncSession) -> int:
+    """Идентификатор вошедшего пользователя — владельца посеянных сессий (D-04).
+
+    Сессия мастера принадлежит тому, кто её начал; посев на чужого владельца
+    отвечал бы «не найдена», и правило про свой исход краснело бы по чужой
+    причине.
+    """
+    return (await _current_user(db_session)).id
+
+
+FOREIGN_EMAIL = "stranger@test.com"
+OWNER_EMAIL = "testuser@test.com"
+PASSWORD = "testpass123"
+
+
+async def _sign_in_as(client: AsyncClient, email: str, *, register: bool = False) -> None:
+    """Вход ТЕМ ЖЕ клиентом под другим пользователем: cookie входа подменяется."""
+    if register:
+        registered = await client.post("/api/auth/register", json={
+            "email": email, "password": PASSWORD, "name": "Чужой",
+        })
+        assert registered.status_code == 201, (
+            f"второй пользователь не зарегистрирован ({registered.status_code}) — "
+            "правило про чужую сессию проверяло бы владельца"
+        )
+    signed = await client.post(
+        "/login", data={"email": email, "password": PASSWORD}, follow_redirects=False
+    )
+    assert signed.status_code == 302, f"вход под {email} не состоялся ({signed.status_code})"
+
+
+def _unknown_session_id() -> str:
+    """Случайный `session_id` той же формы, что выдаёт слой сессий."""
+    return uuid.uuid4().hex[:16]
+
+
+def _same_answer(foreign, unknown) -> None:
+    """Ответ на чужую сессию ПОБАЙТНО равен ответу на неизвестную (D-04).
+
+    Сравниваются код, тело и заголовки, кроме даты: поиск подстроки пропустил
+    бы различие в разметке, раскрывающее существование чужой сессии.
+    """
+    assert foreign.status_code == unknown.status_code, (
+        f"код ответа на чужую сессию {foreign.status_code}, на неизвестную "
+        f"{unknown.status_code} — существование сессии раскрыто (D-04)"
+    )
+    assert foreign.content == unknown.content, (
+        "тело ответа на чужую сессию отличается от ответа на неизвестную — "
+        "существование сессии раскрыто (D-04)"
+    )
+
+    def _headers(response):
+        return {k: v for k, v in response.headers.items() if k.lower() != "date"}
+
+    assert _headers(foreign) == _headers(unknown), (
+        "заголовки ответа на чужую сессию отличаются от ответа на неизвестную (D-04)"
+    )
 
 
 async def _tg_accounts(db: AsyncSession) -> list[MessengerAccount]:
@@ -424,23 +503,28 @@ async def test_the_wizard_page_carries_no_client_script(authed_client: AsyncClie
 
 @pytest.mark.asyncio
 async def test_polling_an_unknown_session_offers_to_start_again(authed_client: AsyncClient):
-    """Неизвестная сессия — алерт и форма старта, без триггера (D-09)."""
+    """Неизвестная сессия — «не найдена», алерт и форма старта, без триггера (D-04, D-09)."""
     response = await authed_client.post(
         POLL_URL, data={"session_id": "no-such-session"}, headers=HTMX_HEADERS
     )
 
     assert response.status_code == 200, f"опрос неизвестной сессии ответил {response.status_code}"
-    assert SESSION_EXPIRED in response.text, "человек не узнал, что сессия истекла"
-    assert START_AGAIN_FORM in response.text, "после истёкшей сессии нечем начать заново"
+    assert SESSION_NOT_FOUND in response.text, "человек не узнал, что сессия не найдена"
+    assert SESSION_EXPIRED not in response.text, (
+        "неизвестная сессия названа истёкшей — «истекла» видит только владелец (D-04)"
+    )
+    assert START_AGAIN_FORM in response.text, "после ненайденной сессии нечем начать заново"
     assert "Начать заново" in response.text, "кнопка «Начать заново» не подписана"
     assert "hx-trigger" not in response.text, "ответ отказа продолжает опрос"
 
 
 @pytest.mark.asyncio
-async def test_polling_an_errored_session_shows_the_error(authed_client: AsyncClient):
+async def test_polling_an_errored_session_shows_the_error(
+    authed_client: AsyncClient, owner_id: int
+):
     """Статус `error` — текст ошибки либо «Ошибка авторизации»; опрос остановлен."""
-    _seed_state("sid-error-text", status="error", error="FloodWait 30")
-    _seed_state("sid-error-bare", status="error")
+    _seed_state("sid-error-text", owner=owner_id, status="error", error="FloodWait 30")
+    _seed_state("sid-error-bare", owner=owner_id, status="error")
 
     with_text = await authed_client.post(
         POLL_URL, data={"session_id": "sid-error-text"}, headers=HTMX_HEADERS
@@ -565,13 +649,13 @@ async def test_the_complete_route_and_the_get_poll_are_gone(authed_client: Async
 
 
 @pytest.mark.asyncio
-async def test_polling_an_expired_code_offers_a_refresh(authed_client: AsyncClient):
+async def test_polling_an_expired_code_offers_a_refresh(authed_client: AsyncClient, owner_id: int):
     """Опрос в `qr_expired` — шаг «код истёк» с кнопкой обновления, опрос остановлен.
 
     Автоматического обновления нет (D-02, решение владельца): забытая вкладка
     не должна продолжать обращаться к Telegram, поэтому в ответе нет триггера.
     """
-    _seed_state("sid-qr-expired", status="qr_expired")
+    _seed_state("sid-qr-expired", owner=owner_id, status="qr_expired")
 
     response = await authed_client.post(
         POLL_URL, data={"session_id": "sid-qr-expired"}, headers=HTMX_HEADERS
@@ -601,7 +685,9 @@ async def test_polling_an_expired_code_offers_a_refresh(authed_client: AsyncClie
 
 
 @pytest.mark.asyncio
-async def test_refreshing_an_expired_code_resumes_polling(authed_client: AsyncClient):
+async def test_refreshing_an_expired_code_resumes_polling(
+    authed_client: AsyncClient, owner_id: int
+):
     """Сквозной срез: код истёк → «Обновить QR-код» → новый код и опрос (D-02, D-03).
 
     ⚠️ ИСТЕЧЕНИЕ ВОСПРОИЗВОДИТСЯ НАСТОЯЩИМ `QRLogin` И НАСТОЯЩИМ `_wait_for_qr`
@@ -621,7 +707,7 @@ async def test_refreshing_an_expired_code_resumes_polling(authed_client: AsyncCl
         token=b"old",
         expires=datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=0.05),
     )
-    state = QRAuthState(client=client, qr_login=code)
+    state = QRAuthState(client=client, user_id=owner_id, qr_login=code)
     _qr_sessions["sid-renew"] = state
     state._wait_task = asyncio.create_task(_wait_for_qr("sid-renew"))
     await asyncio.wait_for(asyncio.shield(state._wait_task), timeout=2)
@@ -672,9 +758,11 @@ async def test_refreshing_an_expired_code_resumes_polling(authed_client: AsyncCl
 
 
 @pytest.mark.asyncio
-async def test_refreshing_an_outdated_session_says_it_expired(authed_client: AsyncClient):
+async def test_refreshing_an_outdated_session_says_it_expired(
+    authed_client: AsyncClient, owner_id: int
+):
     """Сессия старше срока — «Сессия истекла», форма старта; код не пересоздаётся (D-03)."""
-    code = _seed_expired_code("sid-outdated", age=QR_SESSION_TTL + 1)
+    code = _seed_expired_code("sid-outdated", owner=owner_id, age=QR_SESSION_TTL + 1)
 
     response = await authed_client.post(
         REFRESH_URL, data={"session_id": "sid-outdated"}, headers=HTMX_HEADERS
@@ -690,9 +778,11 @@ async def test_refreshing_an_outdated_session_says_it_expired(authed_client: Asy
 
 
 @pytest.mark.asyncio
-async def test_refreshing_a_non_expired_code_is_refused(authed_client: AsyncClient):
+async def test_refreshing_a_non_expired_code_is_refused(
+    authed_client: AsyncClient, owner_id: int
+):
     """Код не истёк — отказ прежним текстом, сессия не тронута (D-03, D-09)."""
-    code = _seed_expired_code("sid-still-waiting", status="waiting")
+    code = _seed_expired_code("sid-still-waiting", owner=owner_id, status="waiting")
 
     response = await authed_client.post(
         REFRESH_URL, data={"session_id": "sid-still-waiting"}, headers=HTMX_HEADERS
@@ -707,13 +797,13 @@ async def test_refreshing_a_non_expired_code_is_refused(authed_client: AsyncClie
 
 
 @pytest.mark.asyncio
-async def test_refresh_degrades_and_requires_a_session(authed_client: AsyncClient):
+async def test_refresh_degrades_and_requires_a_session(authed_client: AsyncClient, owner_id: int):
     """Без JS — на страницу мастера; без входа — на `/login`; чужая сессия — шаг ошибки.
 
     Адреса стоят литералом первым аргументом `.post(…)` в этой же функции: по
     ним обход утверждений 302 модуля пар называет обработчик (D-10, D-11).
     """
-    _seed_expired_code("sid-nojs-refresh")
+    _seed_expired_code("sid-nojs-refresh", owner=owner_id)
     plain = await authed_client.post(
         "/accounts/connect/tg_user/refresh-qr", data={"session_id": "sid-nojs-refresh"}
     )
@@ -726,7 +816,7 @@ async def test_refresh_degrades_and_requires_a_session(authed_client: AsyncClien
         REFRESH_URL, data={"session_id": "no-such-session"}, headers=HTMX_HEADERS
     )
     assert unknown.status_code == 200, f"неизвестная сессия ответила {unknown.status_code}"
-    assert SESSION_EXPIRED in unknown.text, "неизвестная сессия не сказала, что сессия истекла"
+    assert SESSION_NOT_FOUND in unknown.text, "неизвестная сессия не сказала, что не найдена"
     assert START_AGAIN_FORM in unknown.text, "после неизвестной сессии нечем начать заново"
 
     authed_client.cookies.clear()
@@ -748,14 +838,16 @@ async def test_refresh_degrades_and_requires_a_session(authed_client: AsyncClien
 
 
 @pytest.mark.asyncio
-async def test_polling_needs_2fa_answers_the_password_step(authed_client: AsyncClient):
+async def test_polling_needs_2fa_answers_the_password_step(
+    authed_client: AsyncClient, owner_id: int
+):
     """Опрос в `needs_2fa` — шаг пароля без опросчика: опрос остановлен ответом.
 
     Шаг пароля — форма `verify-2fa` со скрытым `session_id` в постоянный якорь и
     полем `password` с `required` без значения. Триггера в ответе нет: вечный
     опрос стёр бы экран пароля через 3 с (RESEARCH §Pitfall 1).
     """
-    _seed_state("sid-needs-2fa", status="needs_2fa")
+    _seed_state("sid-needs-2fa", owner=owner_id, status="needs_2fa")
 
     response = await authed_client.post(
         POLL_URL, data={"session_id": "sid-needs-2fa"}, headers=HTMX_HEADERS
@@ -785,13 +877,15 @@ async def test_polling_needs_2fa_answers_the_password_step(authed_client: AsyncC
 
 
 @pytest.mark.asyncio
-async def test_a_wrong_password_answers_422_at_the_field_without_echo(authed_client: AsyncClient):
+async def test_a_wrong_password_answers_422_at_the_field_without_echo(
+    authed_client: AsyncClient, owner_id: int
+):
     """Неверный пароль — 422 и шаг пароля с ошибкой у поля; пароль не эхается (D-08).
 
     Отказ поднимает НАСТОЯЩИЙ `submit_2fa` из настоящей ошибки Telethon: так
     измеряется дословный текст «Неверный пароль 2FA.», а не подставленный тестом.
     """
-    _seed_2fa_state("sid-wrong", sign_in=_raises_password_hash_invalid())
+    _seed_2fa_state("sid-wrong", owner=owner_id, sign_in=_raises_password_hash_invalid())
 
     over_htmx = await authed_client.post(
         VERIFY_URL,
@@ -822,9 +916,11 @@ async def test_a_wrong_password_answers_422_at_the_field_without_echo(authed_cli
 
 
 @pytest.mark.asyncio
-async def test_an_empty_password_answers_422_with_the_client_text(authed_client: AsyncClient):
+async def test_an_empty_password_answers_422_with_the_client_text(
+    authed_client: AsyncClient, owner_id: int
+):
     """Пустой и отсутствующий пароль — 422 «Введите пароль»; Telegram не зовётся (D-08)."""
-    _seed_2fa_state("sid-empty")
+    _seed_2fa_state("sid-empty", owner=owner_id)
 
     with patch("app.pages.accounts.submit_2fa", new_callable=AsyncMock) as submitted:
         blank = await authed_client.post(
@@ -852,10 +948,10 @@ async def test_an_empty_password_answers_422_with_the_client_text(authed_client:
 
 @pytest.mark.asyncio
 async def test_a_right_password_saves_one_account_from_complete_auth(
-    authed_client: AsyncClient, db_session: AsyncSession
+    authed_client: AsyncClient, db_session: AsyncSession, owner_id: int
 ):
     """Верный пароль — «Подключено» и ровно один аккаунт со строкой сессии (D-01, D-07)."""
-    client = _seed_2fa_state("sid-right")
+    client = _seed_2fa_state("sid-right", owner=owner_id)
 
     response = await authed_client.post(
         VERIFY_URL,
@@ -881,14 +977,16 @@ async def test_a_right_password_saves_one_account_from_complete_auth(
 
 @pytest.mark.asyncio
 async def test_a_telethon_failure_on_the_password_step_is_a_fragment(
-    authed_client: AsyncClient, db_session: AsyncSession
+    authed_client: AsyncClient, db_session: AsyncSession, owner_id: int
 ):
     """Иная ошибка Telethon — шаг ошибки с «Начать заново», не 500 (D-09, Pitfall 5).
 
     500 здесь поднял бы общий баннер отказа вместо шага. Запись журнала об
     отказе не несёт пароля (T-13-05).
     """
-    _seed_2fa_state("sid-flood", sign_in=AsyncMock(side_effect=Exception("FloodWait 30")))
+    _seed_2fa_state(
+        "sid-flood", owner=owner_id, sign_in=AsyncMock(side_effect=Exception("FloodWait 30"))
+    )
 
     with patch("structlog.get_logger") as get_logger:
         response = await authed_client.post(
@@ -912,13 +1010,13 @@ async def test_a_telethon_failure_on_the_password_step_is_a_fragment(
 
 
 @pytest.mark.asyncio
-async def test_verify_2fa_degrades_and_requires_a_session(authed_client: AsyncClient):
+async def test_verify_2fa_degrades_and_requires_a_session(authed_client: AsyncClient, owner_id: int):
     """Без JS — на страницу мастера; без входа — на `/login`; чужая сессия — шаг ошибки.
 
     Адреса стоят литералом первым аргументом `.post(…)` в этой же функции: по
     ним обход утверждений 302 модуля пар называет обработчик (D-10, D-11).
     """
-    _seed_2fa_state("sid-nojs-2fa")
+    _seed_2fa_state("sid-nojs-2fa", owner=owner_id)
     plain = await authed_client.post(
         "/accounts/connect/tg_user/verify-2fa",
         data={"session_id": "sid-nojs-2fa", "password": SUBMITTED_PASSWORD},
@@ -934,7 +1032,7 @@ async def test_verify_2fa_degrades_and_requires_a_session(authed_client: AsyncCl
         headers=HTMX_HEADERS,
     )
     assert unknown.status_code == 200, f"неизвестная сессия ответила {unknown.status_code}"
-    assert SESSION_EXPIRED in unknown.text, "неизвестная сессия не сказала, что сессия истекла"
+    assert SESSION_NOT_FOUND in unknown.text, "неизвестная сессия не сказала, что не найдена"
     assert START_AGAIN_FORM in unknown.text, "после неизвестной сессии нечем начать заново"
 
     authed_client.cookies.clear()
@@ -955,6 +1053,126 @@ async def test_verify_2fa_degrades_and_requires_a_session(authed_client: AsyncCl
     )
 
 
+# --- Чужая сессия — как неизвестная, и без следа (план 13-04, D-04) ---------
+
+
+async def _start_as_the_current_user(client: AsyncClient) -> tuple[str, asyncio.Event]:
+    """НАСТОЯЩИЙ старт мастера текущим пользователем; подменён только Telethon.
+
+    Сессия заводится `start_qr_auth`, а не посевом состояния: так владелец
+    записывается тем же путём, что в эксплуатации, а `session_id` берётся из
+    скрытого поля фрагмента ожидания (D-06).
+    """
+    scanned = asyncio.Event()
+    with patch(
+        "app.messengers.telegram_user.TelegramClient",
+        new=_telethon_client_factory(scanned),
+    ):
+        started = await client.post(START_URL, headers=HTMX_HEADERS)
+    assert started.status_code == 200, f"старт ответил {started.status_code}"
+    found = SESSION_FIELD.search(started.text)
+    assert found, "во фрагменте ожидания нет скрытого поля session_id"
+    return found.group(1), scanned
+
+
+async def _until_scanned(session_id: str, scanned: asyncio.Event) -> None:
+    scanned.set()
+    for _ in range(100):
+        if _qr_sessions[session_id].status == "success":
+            break
+        await asyncio.sleep(0)
+    assert _qr_sessions[session_id].status == "success", (
+        "фоновое ожидание сканирования не дошло до успеха — подмена Telethon не сработала"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_poll_is_answered_as_unknown_and_leaves_no_trace(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Чужой опрос сессии в `success` — ответ неизвестной сессии; сессия владельца цела.
+
+    Без проверки владения посторонний с чужим `session_id` сохранял чужой
+    Telegram СЕБЕ (D-04). Сессия заводится настоящим стартом владельца; затем
+    тем же клиентом входит посторонний и опрашивает её. После этого владелец
+    опрашивает сам и доходит до «Подключено» с аккаунтом на себя.
+    """
+    owner = await _current_user(db_session)
+    session_id, scanned = await _start_as_the_current_user(authed_client)
+    await _until_scanned(session_id, scanned)
+    victim = _qr_sessions[session_id]
+
+    await _sign_in_as(authed_client, FOREIGN_EMAIL, register=True)
+    foreign = await authed_client.post(
+        POLL_URL, data={"session_id": session_id}, headers=HTMX_HEADERS
+    )
+
+    stolen = await _tg_accounts(db_session)
+    assert stolen == [], (
+        f"посторонний опросом чужой сессии сохранил {len(stolen)} аккаунт(ов) — "
+        "чужой Telegram записан не на владельца (D-04)"
+    )
+    unknown = await authed_client.post(
+        POLL_URL, data={"session_id": _unknown_session_id()}, headers=HTMX_HEADERS
+    )
+    _same_answer(foreign, unknown)
+    assert SESSION_NOT_FOUND in foreign.text, "чужая сессия не ответила «не найдена»"
+    assert "hx-trigger" not in foreign.text, "ответ на чужую сессию продолжает опрос"
+
+    assert _qr_sessions.get(session_id) is victim, "чужой опрос снял сессию владельца (D-04)"
+    assert victim.status == "success", f"чужой опрос сменил статус на {victim.status!r}"
+    assert victim.session_string == EXPORTED_SESSION, "чужой опрос тронул строку сессии"
+    assert not victim.client.disconnect.await_count, (
+        "чужой опрос отключил клиента Telegram владельца"
+    )
+
+    await _sign_in_as(authed_client, OWNER_EMAIL)
+    connected = await authed_client.post(
+        POLL_URL, data={"session_id": session_id}, headers=HTMX_HEADERS
+    )
+    assert "Подключено" in connected.text, (
+        "владелец после чужого опроса не дошёл до «Подключено»"
+    )
+    accounts = await _tg_accounts(db_session)
+    assert [a.user_id for a in accounts] == [owner.id], (
+        f"после чужого опроса аккаунты на {[a.user_id for a in accounts]!r} вместо "
+        f"одного на владельца {owner.id}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_wizard_binds_the_session_to_the_impersonated_subject(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings: Settings
+):
+    """Под имперсонацией сессия и аккаунт — на СУБЪЕКТА, не на администратора (D-04).
+
+    `get_user_from_cookie` возвращает субъекта (`payload["sub"]`), администратор
+    висит атрибутом. Привязка к администратору отвергла бы собственный опрос
+    субъекта либо записала бы его Telegram на администратора.
+    """
+    admin = await _user(db_session, test_settings.admin_email)
+    target_id = await _seed_target(admin_client, db_session)
+    assert target_id != admin.id, "субъект совпал с администратором — правило вакуумно"
+    await _enter(admin_client, target_id)
+
+    session_id, scanned = await _start_as_the_current_user(admin_client)
+    assert _qr_sessions[session_id].user_id == target_id, (
+        f"сессия под имперсонацией записана на {_qr_sessions[session_id].user_id!r} "
+        f"вместо субъекта {target_id} (D-04)"
+    )
+
+    await _until_scanned(session_id, scanned)
+    connected = await admin_client.post(
+        POLL_URL, data={"session_id": session_id}, headers=HTMX_HEADERS
+    )
+    assert "Подключено" in connected.text, "опрос под имперсонацией не дошёл до «Подключено»"
+    accounts = await _tg_accounts(db_session)
+    assert [a.user_id for a in accounts] == [target_id], (
+        f"аккаунт под имперсонацией записан на {[a.user_id for a in accounts]!r} "
+        f"вместо субъекта {target_id}"
+    )
+
+
 # --- Ровно один аккаунт на сканирование под гонкой (D-01, Pitfall 3) --------
 
 
@@ -971,6 +1189,7 @@ async def test_two_concurrent_password_submits_save_one_account(race_client):
     достаётся пустота.
     """
     client, factory = race_client
+    racer = await _racer_id(factory)
     both_inside = asyncio.Event()
     entered = 0
 
@@ -985,7 +1204,7 @@ async def test_two_concurrent_password_submits_save_one_account(race_client):
             pass
         await asyncio.sleep(0)
 
-    _seed_2fa_state("sid-race-2fa", sign_in=AsyncMock(side_effect=sign_in))
+    _seed_2fa_state("sid-race-2fa", owner=racer, sign_in=AsyncMock(side_effect=sign_in))
 
     responses = await asyncio.gather(*(
         client.post(
@@ -1015,6 +1234,7 @@ async def test_two_concurrent_password_submits_save_one_account(race_client):
 async def test_two_concurrent_polls_after_success_save_one_account(race_client):
     """Два конкурентных опроса после успеха — ОДИН аккаунт; `complete_auth` настоящий."""
     client, factory = race_client
+    racer = await _racer_id(factory)
     tg_client = MagicMock()
 
     async def disconnect():
@@ -1022,7 +1242,7 @@ async def test_two_concurrent_polls_after_success_save_one_account(race_client):
 
     tg_client.disconnect = AsyncMock(side_effect=disconnect)
     _qr_sessions["sid-race-poll"] = QRAuthState(
-        client=tg_client, status="success", session_string=EXPORTED_SESSION
+        client=tg_client, user_id=racer, status="success", session_string=EXPORTED_SESSION
     )
 
     responses = await asyncio.gather(*(
@@ -1042,10 +1262,10 @@ async def test_two_concurrent_polls_after_success_save_one_account(race_client):
 
 @pytest.mark.asyncio
 async def test_a_second_poll_after_success_does_not_save_again(
-    authed_client: AsyncClient, db_session: AsyncSession
+    authed_client: AsyncClient, db_session: AsyncSession, owner_id: int
 ):
     """Второй опрос тем же `session_id` после «Подключено» — шаг ошибки, аккаунт один."""
-    _seed_state("sid-twice", status="success", session_string=EXPORTED_SESSION)
+    _seed_state("sid-twice", owner=owner_id, status="success", session_string=EXPORTED_SESSION)
 
     first = await authed_client.post(
         POLL_URL, data={"session_id": "sid-twice"}, headers=HTMX_HEADERS
@@ -1071,14 +1291,15 @@ class _PollingCase:
     slug: str
     name: str
     route: str
-    seed: Callable[[pytest.MonkeyPatch, Settings], dict]
+    # Посев получает владельца — вошедшего пользователя (D-04, план 13-04).
+    seed: Callable[[pytest.MonkeyPatch, Settings, int], dict]
     polls: bool
     # Ошибка поля шага пароля отвечает 422 (D-08): её тело подменяет якорь
     # правилом блока конфигурации так же, как 200, и обязано не нести триггер.
     status: int = 200
 
 
-def _seed_start_success(monkeypatch, settings):
+def _seed_start_success(monkeypatch, settings, owner):
     monkeypatch.setattr(
         "app.pages.accounts.start_qr_auth",
         AsyncMock(return_value=("sid-registry", "tg://login?token=registry")),
@@ -1086,12 +1307,12 @@ def _seed_start_success(monkeypatch, settings):
     return {}
 
 
-def _seed_start_not_configured(monkeypatch, settings):
+def _seed_start_not_configured(monkeypatch, settings, owner):
     monkeypatch.setattr(settings, "telegram_api_id", 0)
     return {}
 
 
-def _seed_start_exception(monkeypatch, settings):
+def _seed_start_exception(monkeypatch, settings, owner):
     monkeypatch.setattr(
         "app.pages.accounts.start_qr_auth",
         AsyncMock(side_effect=Exception("Connection failed")),
@@ -1099,72 +1320,78 @@ def _seed_start_exception(monkeypatch, settings):
     return {}
 
 
-def _seed_poll_success(monkeypatch, settings):
-    _seed_state("sid-success", status="success", session_string=EXPORTED_SESSION)
+def _seed_poll_success(monkeypatch, settings, owner):
+    _seed_state("sid-success", owner=owner, status="success", session_string=EXPORTED_SESSION)
     return {"session_id": "sid-success"}
 
 
-def _seed_poll_unknown(monkeypatch, settings):
+def _seed_poll_unknown(monkeypatch, settings, owner):
     return {"session_id": "no-such-session"}
 
 
-def _seed_poll_error(monkeypatch, settings):
-    _seed_state("sid-error", status="error", error="FloodWait 30")
+def _seed_poll_error(monkeypatch, settings, owner):
+    _seed_state("sid-error", owner=owner, status="error", error="FloodWait 30")
     return {"session_id": "sid-error"}
 
 
-def _seed_poll_needs_2fa(monkeypatch, settings):
-    _seed_state("sid-needs-2fa", status="needs_2fa")
+def _seed_poll_needs_2fa(monkeypatch, settings, owner):
+    _seed_state("sid-needs-2fa", owner=owner, status="needs_2fa")
     return {"session_id": "sid-needs-2fa"}
 
 
-def _seed_poll_qr_expired(monkeypatch, settings):
-    _seed_state("sid-qr-expired", status="qr_expired")
+def _seed_poll_qr_expired(monkeypatch, settings, owner):
+    _seed_state("sid-qr-expired", owner=owner, status="qr_expired")
     return {"session_id": "sid-qr-expired"}
 
 
-def _seed_refresh_success(monkeypatch, settings):
-    _seed_expired_code("sid-refresh")
+def _seed_poll_foreign(monkeypatch, settings, owner):
+    # Чужая сессия в `success`: владелец — другой пользователь (D-04).
+    _seed_state("sid-foreign", owner=owner + 1, status="success", session_string=EXPORTED_SESSION)
+    return {"session_id": "sid-foreign"}
+
+
+def _seed_refresh_success(monkeypatch, settings, owner):
+    _seed_expired_code("sid-refresh", owner=owner)
     return {"session_id": "sid-refresh"}
 
 
-def _seed_refresh_outdated(monkeypatch, settings):
-    _seed_expired_code("sid-refresh-outdated", age=QR_SESSION_TTL + 1)
+def _seed_refresh_outdated(monkeypatch, settings, owner):
+    _seed_expired_code("sid-refresh-outdated", owner=owner, age=QR_SESSION_TTL + 1)
     return {"session_id": "sid-refresh-outdated"}
 
 
-def _seed_refresh_not_expired(monkeypatch, settings):
-    _seed_expired_code("sid-refresh-waiting", status="waiting")
+def _seed_refresh_not_expired(monkeypatch, settings, owner):
+    _seed_expired_code("sid-refresh-waiting", owner=owner, status="waiting")
     return {"session_id": "sid-refresh-waiting"}
 
 
-def _seed_refresh_unknown(monkeypatch, settings):
+def _seed_refresh_unknown(monkeypatch, settings, owner):
     return {"session_id": "no-such-session"}
 
 
-def _seed_verify_success(monkeypatch, settings):
-    _seed_2fa_state("sid-2fa-right")
+def _seed_verify_success(monkeypatch, settings, owner):
+    _seed_2fa_state("sid-2fa-right", owner=owner)
     return {"session_id": "sid-2fa-right", "password": SUBMITTED_PASSWORD}
 
 
-def _seed_verify_wrong(monkeypatch, settings):
-    _seed_2fa_state("sid-2fa-wrong", sign_in=_raises_password_hash_invalid())
+def _seed_verify_wrong(monkeypatch, settings, owner):
+    _seed_2fa_state("sid-2fa-wrong", owner=owner, sign_in=_raises_password_hash_invalid())
     return {"session_id": "sid-2fa-wrong", "password": SUBMITTED_PASSWORD}
 
 
-def _seed_verify_empty(monkeypatch, settings):
-    _seed_2fa_state("sid-2fa-empty")
+def _seed_verify_empty(monkeypatch, settings, owner):
+    _seed_2fa_state("sid-2fa-empty", owner=owner)
     return {"session_id": "sid-2fa-empty", "password": ""}
 
 
-def _seed_verify_telethon_failure(monkeypatch, settings):
-    _seed_2fa_state("sid-2fa-flood", sign_in=AsyncMock(side_effect=Exception("FloodWait 30")))
+def _seed_verify_telethon_failure(monkeypatch, settings, owner):
+    _seed_2fa_state("sid-2fa-flood", owner=owner, sign_in=AsyncMock(side_effect=Exception("FloodWait 30")))
     return {"session_id": "sid-2fa-flood", "password": SUBMITTED_PASSWORD}
 
 
 # План 13-02 дописал шаг пароля (опрос в `needs_2fa` и четыре исхода
-# `verify-2fa`); план 13-03 дописал «код истёк» и исходы `refresh-qr`, план
-# 13-05 замыкает реестр.
+# `verify-2fa`); план 13-03 дописал «код истёк» и исходы `refresh-qr`; план
+# 13-04 дописал чужие сессии; план 13-05 замыкает реестр.
 POLLING_CASES: tuple[_PollingCase, ...] = (
     _PollingCase("start-waiting", "старт — QR и опросчик", START_URL, _seed_start_success, True),
     _PollingCase("start-not-configured", "старт — API не настроен", START_URL, _seed_start_not_configured, False),
@@ -1174,6 +1401,7 @@ POLLING_CASES: tuple[_PollingCase, ...] = (
     _PollingCase("poll-error", "опрос — ошибка Telethon", POLL_URL, _seed_poll_error, False),
     _PollingCase("poll-needs-2fa", "опрос — шаг пароля 2FA", POLL_URL, _seed_poll_needs_2fa, False),
     _PollingCase("poll-qr-expired", "опрос — код истёк, кнопка обновления", POLL_URL, _seed_poll_qr_expired, False),
+    _PollingCase("poll-foreign", "опрос — чужая сессия, «не найдена»", POLL_URL, _seed_poll_foreign, False),
     _PollingCase("refresh-success", "обновление — новый код и опросчик", REFRESH_URL, _seed_refresh_success, True),
     _PollingCase("refresh-outdated", "обновление — сессия старше срока", REFRESH_URL, _seed_refresh_outdated, False),
     _PollingCase("refresh-not-expired", "обновление — код не истёк", REFRESH_URL, _seed_refresh_not_expired, False),
@@ -1202,9 +1430,10 @@ async def test_polling_stops_by_a_response_without_trigger(
     authed_client: AsyncClient,
     test_settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
+    owner_id: int,
 ):
     """Триггер опроса несёт ТОЛЬКО ответ ожидания; любой иной ответ с телом его не несёт."""
-    data = case.seed(monkeypatch, test_settings)
+    data = case.seed(monkeypatch, test_settings, owner_id)
     response = await authed_client.post(case.route, data=data, headers=HTMX_HEADERS)
 
     assert response.status_code == case.status, (
