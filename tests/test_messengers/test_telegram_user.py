@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +18,9 @@ from app.messengers.telegram_user import (
     cleanup_qr_session,
     _qr_sessions,
     _wait_for_qr,
+    QR_SESSION_TTL,
     QRAuthState,
+    refresh_qr,
 )
 
 
@@ -461,6 +464,111 @@ async def test_an_expired_qr_token_is_a_status_not_an_error():
         )
     finally:
         _qr_sessions.pop("sid-token-expired", None)
+
+
+# --- «Обновить QR-код» — только из «код истёк» и только в сроке (D-03) -------
+
+
+class _ExpiredCodeDouble:
+    """Объект кода Telethon для правил `refresh_qr`: `recreate` и адрес кода.
+
+    `wait()` ждёт вечно — новая задача ожидания, которую запускает
+    `refresh_qr`, должна жить до отмены, а не завершаться сама.
+    """
+
+    def __init__(self):
+        self.recreate = AsyncMock()
+        self.url = "tg://login?token=renewed"
+        self._never = asyncio.Event()
+
+    async def wait(self, timeout=None):
+        await self._never.wait()
+
+
+async def _cancel_wait_task(state: QRAuthState) -> None:
+    if state._wait_task:
+        state._wait_task.cancel()
+        await asyncio.gather(state._wait_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_refresh_qr_recreates_only_an_expired_code():
+    """Пересоздание пускается ТОЛЬКО из `qr_expired` (D-03, RESEARCH §Pattern 4).
+
+    Подделанный запрос из `success` или `needs_2fa` иначе вернул бы сессию в
+    `waiting` и стёр бы готовый вход; из `waiting` — выпустил бы лишний код.
+    """
+    code = _ExpiredCodeDouble()
+    issued_at = time.time() - 100
+    state = QRAuthState(
+        client=MagicMock(), qr_login=code, status="qr_expired", created_at=issued_at
+    )
+    _qr_sessions["sid-renew"] = state
+    try:
+        url = await refresh_qr("sid-renew")
+
+        assert code.recreate.await_count == 1, (
+            f"`recreate` ожидан {code.recreate.await_count} раз вместо одного — "
+            "истёкший код не обновлён"
+        )
+        assert url == "tg://login?token=renewed", f"refresh_qr вернул {url!r} вместо адреса кода"
+        assert state.status == "waiting", f"после обновления статус {state.status!r}"
+        assert state.created_at > issued_at, "срок сессии не отсчитывается от нового кода"
+        assert state._wait_task is not None and not state._wait_task.done(), (
+            "новая задача ожидания сканирования не запущена — новый код не отсканировать"
+        )
+    finally:
+        await _cancel_wait_task(state)
+        _qr_sessions.pop("sid-renew", None)
+
+    for status in ("waiting", "needs_2fa", "success"):
+        other = _ExpiredCodeDouble()
+        live = QRAuthState(client=MagicMock(), qr_login=other, status=status)
+        _qr_sessions["sid-live"] = live
+        try:
+            result = await refresh_qr("sid-live")
+
+            assert not other.recreate.await_count, (
+                f"`recreate` не ожидался из статуса {status!r} — готовый вход стёрт "
+                "подделанным запросом (D-03)"
+            )
+            assert result is None, f"refresh_qr из {status!r} вернул {result!r} вместо None"
+            assert live.status == status, (
+                f"refresh_qr сменил статус {status!r} на {live.status!r}"
+            )
+            assert live._wait_task is None, f"refresh_qr из {status!r} запустил ожидание"
+        finally:
+            await _cancel_wait_task(live)
+            _qr_sessions.pop("sid-live", None)
+
+
+@pytest.mark.asyncio
+async def test_refresh_qr_does_not_revive_an_outdated_session():
+    """Сессия старше `QR_SESSION_TTL` не оживает (RESEARCH §Pitfall 2).
+
+    Чистка по сроку зовётся только из `start_qr_auth`, поэтому устаревшая
+    сессия может лежать в памяти; без проверки срока «Обновить QR-код» через
+    10 минут простоя выдал бы новый код вместо «Сессия истекла».
+    """
+    code = _ExpiredCodeDouble()
+    state = QRAuthState(
+        client=MagicMock(),
+        qr_login=code,
+        status="qr_expired",
+        created_at=time.time() - QR_SESSION_TTL - 1,
+    )
+    _qr_sessions["sid-outdated"] = state
+    try:
+        result = await refresh_qr("sid-outdated")
+
+        assert not code.recreate.await_count, (
+            "`recreate` не ожидался: сессия старше срока ожила новым кодом (Pitfall 2)"
+        )
+        assert result is None, f"refresh_qr устаревшей сессии вернул {result!r} вместо None"
+        assert state.status == "qr_expired", f"статус устаревшей сессии сменился на {state.status!r}"
+    finally:
+        await _cancel_wait_task(state)
+        _qr_sessions.pop("sid-outdated", None)
 
 
 @pytest.mark.asyncio

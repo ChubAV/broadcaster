@@ -6,7 +6,8 @@
 скрипт страницы целиком (D-12). JSON-контракты старта, опроса и завершения НЕ
 удалены молча, а переписаны на фрагменты ниже. План 13-02 переводит `verify-2fa`
 и снимает его JSON-тесты: их предмет переписан правилами шага пароля и двух
-гонок ниже. JSON-тесты обновления кода остаются до плана 13-03.
+гонок ниже. План 13-03 переводит `refresh-qr` и снимает последние JSON-тесты
+мастера: их предмет переписан правилами «код истёк» и «Обновить QR-код» ниже.
 
 ⚠️ ОДНО СКАНИРОВАНИЕ — ОДИН АККАУНТ, И ЭТО ДОКАЗЫВАЕТСЯ ГОНКОЙ, А НЕ ОБЕЩАНИЕМ
 (D-01, RESEARCH §Pitfall 3). Мест сохранения два — опрос, увидевший успех, и
@@ -29,8 +30,11 @@
 реестр `POLLING_CASES` с правилом `test_polling_stops_by_a_response_without_trigger`.
 """
 import asyncio
+import datetime
 import re
+import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -39,12 +43,13 @@ import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from telethon.tl.custom.qrlogin import QRLogin
 
 from app.config import Settings
 from app.database import Base
 from app.dependencies import get_db, get_settings
 from app.main import create_app
-from app.messengers.telegram_user import QRAuthState, _qr_sessions
+from app.messengers.telegram_user import QR_SESSION_TTL, QRAuthState, _qr_sessions, _wait_for_qr
 from app.models.messenger_account import MessengerAccount
 from app.models.user import User
 from tests.test_pages.test_confirm_delete_transport import DOCUMENT_MARK, HTMX_HEADERS
@@ -77,6 +82,7 @@ REFRESH_URL = "/accounts/connect/tg_user/refresh-qr"
 REFRESH_FORM = f'hx-post="{REFRESH_URL}"'
 QR_EXPIRED_TEXT = "QR-код истёк. Обновите его, чтобы продолжить."
 REFRESH_BUTTON = "Обновить QR-код"
+REFRESH_FAILED = "Не удалось обновить QR. Начните заново."
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -128,6 +134,34 @@ def _seed_state(session_id: str, *, status: str, error: str | None = None,
     _qr_sessions[session_id] = QRAuthState(
         client=client, status=status, error=error, session_string=session_string
     )
+
+
+class _RenewableCode:
+    """Объект кода Telethon для исходов `refresh-qr`: `recreate` и адрес кода.
+
+    `wait()` ждёт вечно: задача ожидания, запущенная `refresh_qr`, живёт до
+    отмены автоматической фикстурой модуля.
+    """
+
+    def __init__(self):
+        self.recreate = AsyncMock()
+        self.url = "tg://login?token=renewed"
+        self._never = asyncio.Event()
+
+    async def wait(self, timeout=None):
+        await self._never.wait()
+
+
+def _seed_expired_code(session_id: str, *, status: str = "qr_expired",
+                       age: float = 0.0) -> _RenewableCode:
+    """Настоящее состояние сессии с кодом, который `refresh_qr` может пересоздать."""
+    code = _RenewableCode()
+    client = MagicMock()
+    client.disconnect = AsyncMock()
+    _qr_sessions[session_id] = QRAuthState(
+        client=client, qr_login=code, status=status, created_at=time.time() - age
+    )
+    return code
 
 
 def _seed_2fa_state(session_id: str, *, sign_in=None) -> MagicMock:
@@ -566,6 +600,150 @@ async def test_polling_an_expired_code_offers_a_refresh(authed_client: AsyncClie
     )
 
 
+@pytest.mark.asyncio
+async def test_refreshing_an_expired_code_resumes_polling(authed_client: AsyncClient):
+    """Сквозной срез: код истёк → «Обновить QR-код» → новый код и опрос (D-02, D-03).
+
+    ⚠️ ИСТЕЧЕНИЕ ВОСПРОИЗВОДИТСЯ НАСТОЯЩИМ `QRLogin` И НАСТОЯЩИМ `_wait_for_qr`
+    (CONTEXT §Landmines): таймаут `wait()` поднимается сам, а не ставится
+    статусом. Клиент Telethon — заглушка, чей вызов (`ExportLoginToken` внутри
+    `recreate`) отдаёт новый токен со сроком 30 с.
+    """
+    client = AsyncMock()
+    client.add_event_handler = MagicMock()
+    client.remove_event_handler = MagicMock()
+    client.return_value = SimpleNamespace(
+        token=b"new",
+        expires=datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=30),
+    )
+    code = QRLogin(client, [])
+    code._resp = SimpleNamespace(
+        token=b"old",
+        expires=datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=0.05),
+    )
+    state = QRAuthState(client=client, qr_login=code)
+    _qr_sessions["sid-renew"] = state
+    state._wait_task = asyncio.create_task(_wait_for_qr("sid-renew"))
+    await asyncio.wait_for(asyncio.shield(state._wait_task), timeout=2)
+    assert state.status == "qr_expired", (
+        f"настоящий таймаут кода дал статус {state.status!r} вместо «код истёк»"
+    )
+
+    expired = await authed_client.post(
+        POLL_URL, data={"session_id": "sid-renew"}, headers=HTMX_HEADERS
+    )
+    assert expired.status_code == 200 and QR_EXPIRED_TEXT in expired.text, (
+        "опрос после истечения кода не показал «QR-код истёк»"
+    )
+    assert "hx-trigger" not in expired.text, "шаг «код истёк» продолжает опрос (D-02)"
+    found = SESSION_FIELD.search(expired.text)
+    assert found, "форма обновления не несёт session_id — обновлять нечего"
+
+    refreshed = await authed_client.post(
+        REFRESH_URL, data={"session_id": found.group(1)}, headers=HTMX_HEADERS
+    )
+
+    assert refreshed.status_code == 200, (
+        f"«Обновить QR-код» ответил {refreshed.status_code} вместо 200"
+    )
+    body = refreshed.text
+    assert DOCUMENT_MARK not in body, "обновление вернуло целый документ вместо шага"
+    assert "data:image/png;base64," in body, "после обновления нет нового QR-кода"
+    assert body.count(POLL_TRIGGER) == 1, (
+        f"после обновления {body.count(POLL_TRIGGER)} опросчиков вместо одного — "
+        "новый код отсканируют, но экран не узнает (D-02)"
+    )
+    again = SESSION_FIELD.search(body)
+    assert again and again.group(1) == "sid-renew", (
+        "шаг ожидания после обновления потерял session_id — опросу нечего слать"
+    )
+    assert client.await_count == 1, (
+        f"новый токен запрошен у Telegram {client.await_count} раз вместо одного"
+    )
+    assert state.qr_login.token == b"new", "код не пересоздан — показан старый токен"
+
+    polled = await authed_client.post(
+        POLL_URL, data={"session_id": "sid-renew"}, headers=HTMX_HEADERS
+    )
+    assert polled.status_code == 204, (
+        f"опрос после обновления ответил {polled.status_code} вместо 204 — "
+        "ожидание сканирования не возобновилось"
+    )
+
+
+@pytest.mark.asyncio
+async def test_refreshing_an_outdated_session_says_it_expired(authed_client: AsyncClient):
+    """Сессия старше срока — «Сессия истекла», форма старта; код не пересоздаётся (D-03)."""
+    code = _seed_expired_code("sid-outdated", age=QR_SESSION_TTL + 1)
+
+    response = await authed_client.post(
+        REFRESH_URL, data={"session_id": "sid-outdated"}, headers=HTMX_HEADERS
+    )
+
+    assert response.status_code == 200, f"обновление устаревшей сессии ответило {response.status_code}"
+    assert SESSION_EXPIRED in response.text, (
+        "устаревшая сессия не сказала, что истекла, — человек обновлял бы мёртвую сессию"
+    )
+    assert START_AGAIN_FORM in response.text, "после истёкшей сессии нечем начать заново"
+    assert "hx-trigger" not in response.text, "ответ истёкшей сессии запустил опрос"
+    assert not code.recreate.await_count, "устаревшая сессия ожила новым кодом (Pitfall 2)"
+
+
+@pytest.mark.asyncio
+async def test_refreshing_a_non_expired_code_is_refused(authed_client: AsyncClient):
+    """Код не истёк — отказ прежним текстом, сессия не тронута (D-03, D-09)."""
+    code = _seed_expired_code("sid-still-waiting", status="waiting")
+
+    response = await authed_client.post(
+        REFRESH_URL, data={"session_id": "sid-still-waiting"}, headers=HTMX_HEADERS
+    )
+
+    assert response.status_code == 200, f"обновление живого кода ответило {response.status_code}"
+    assert REFRESH_FAILED in response.text, "отказ обновления не показал прежний текст дословно"
+    assert START_AGAIN_FORM in response.text, "после отказа обновления нечем начать заново"
+    assert "hx-trigger" not in response.text, "отказ обновления запустил опрос"
+    assert not code.recreate.await_count, "живой код пересоздан подделанным запросом"
+    assert _qr_sessions["sid-still-waiting"].status == "waiting", "отказ сменил статус сессии"
+
+
+@pytest.mark.asyncio
+async def test_refresh_degrades_and_requires_a_session(authed_client: AsyncClient):
+    """Без JS — на страницу мастера; без входа — на `/login`; чужая сессия — шаг ошибки.
+
+    Адреса стоят литералом первым аргументом `.post(…)` в этой же функции: по
+    ним обход утверждений 302 модуля пар называет обработчик (D-10, D-11).
+    """
+    _seed_expired_code("sid-nojs-refresh")
+    plain = await authed_client.post(
+        "/accounts/connect/tg_user/refresh-qr", data={"session_id": "sid-nojs-refresh"}
+    )
+    assert plain.status_code == 302, f"обновление без JS ответило {plain.status_code} вместо 302"
+    assert plain.headers["location"] == "/accounts/connect/tg_user", (
+        f"обновление без JS приземлило на {plain.headers['location']!r}"
+    )
+
+    unknown = await authed_client.post(
+        REFRESH_URL, data={"session_id": "no-such-session"}, headers=HTMX_HEADERS
+    )
+    assert unknown.status_code == 200, f"неизвестная сессия ответила {unknown.status_code}"
+    assert SESSION_EXPIRED in unknown.text, "неизвестная сессия не сказала, что сессия истекла"
+    assert START_AGAIN_FORM in unknown.text, "после неизвестной сессии нечем начать заново"
+
+    authed_client.cookies.clear()
+    over_htmx = await authed_client.post(
+        "/accounts/connect/tg_user/refresh-qr", data={"session_id": "x"}, headers=HTMX_HEADERS
+    )
+    assert over_htmx.status_code == 204, f"refresh-qr без входа на htmx ответил {over_htmx.status_code}"
+    assert over_htmx.headers.get("HX-Location") == "/login", "refresh-qr без входа не уводит на /login"
+    no_session = await authed_client.post(
+        "/accounts/connect/tg_user/refresh-qr", data={"session_id": "x"}
+    )
+    assert no_session.status_code == 302, f"refresh-qr без входа без JS ответил {no_session.status_code}"
+    assert no_session.headers["location"] == "/login", (
+        f"refresh-qr без входа без JS приземлил на {no_session.headers['location']!r}"
+    )
+
+
 # --- Шаг пароля 2FA (план 13-02; D-08, D-09) --------------------------------
 
 
@@ -945,6 +1123,25 @@ def _seed_poll_qr_expired(monkeypatch, settings):
     return {"session_id": "sid-qr-expired"}
 
 
+def _seed_refresh_success(monkeypatch, settings):
+    _seed_expired_code("sid-refresh")
+    return {"session_id": "sid-refresh"}
+
+
+def _seed_refresh_outdated(monkeypatch, settings):
+    _seed_expired_code("sid-refresh-outdated", age=QR_SESSION_TTL + 1)
+    return {"session_id": "sid-refresh-outdated"}
+
+
+def _seed_refresh_not_expired(monkeypatch, settings):
+    _seed_expired_code("sid-refresh-waiting", status="waiting")
+    return {"session_id": "sid-refresh-waiting"}
+
+
+def _seed_refresh_unknown(monkeypatch, settings):
+    return {"session_id": "no-such-session"}
+
+
 def _seed_verify_success(monkeypatch, settings):
     _seed_2fa_state("sid-2fa-right")
     return {"session_id": "sid-2fa-right", "password": SUBMITTED_PASSWORD}
@@ -977,6 +1174,10 @@ POLLING_CASES: tuple[_PollingCase, ...] = (
     _PollingCase("poll-error", "опрос — ошибка Telethon", POLL_URL, _seed_poll_error, False),
     _PollingCase("poll-needs-2fa", "опрос — шаг пароля 2FA", POLL_URL, _seed_poll_needs_2fa, False),
     _PollingCase("poll-qr-expired", "опрос — код истёк, кнопка обновления", POLL_URL, _seed_poll_qr_expired, False),
+    _PollingCase("refresh-success", "обновление — новый код и опросчик", REFRESH_URL, _seed_refresh_success, True),
+    _PollingCase("refresh-outdated", "обновление — сессия старше срока", REFRESH_URL, _seed_refresh_outdated, False),
+    _PollingCase("refresh-not-expired", "обновление — код не истёк", REFRESH_URL, _seed_refresh_not_expired, False),
+    _PollingCase("refresh-unknown", "обновление — неизвестная сессия", REFRESH_URL, _seed_refresh_unknown, False),
     _PollingCase("verify-success", "пароль 2FA — «Подключено»", VERIFY_URL, _seed_verify_success, False),
     _PollingCase("verify-wrong", "пароль 2FA — неверный, 422", VERIFY_URL, _seed_verify_wrong, False, 422),
     _PollingCase("verify-empty", "пароль 2FA — пустой, 422", VERIFY_URL, _seed_verify_empty, False, 422),
@@ -1015,91 +1216,3 @@ async def test_polling_stops_by_a_response_without_trigger(
         assert "hx-trigger" not in response.text, (
             f"{case.name}: ответ несёт триггер — опрос не остановится"
         )
-
-
-# --- JSON-контракты обновления кода (до плана 13-03) -----------------------
-
-
-@pytest_asyncio.fixture
-async def auth_setup():
-    """Отдельное приложение для ещё не переведённого `refresh-qr` (план 13-03)."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    session_factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False
-    )
-    settings = Settings(
-        _env_file=None,
-        database_url="sqlite+aiosqlite:///:memory:",
-        redis_url="redis://localhost:6379/0",
-        secret_key="test-secret",
-        telegram_api_id=12345,
-        telegram_api_hash="test_api_hash",
-    )
-    app = create_app(settings=settings)
-
-    async def override_db():
-        async with session_factory() as session:
-            yield session
-
-    app.dependency_overrides[get_db] = override_db
-    app.dependency_overrides[get_settings] = lambda: settings
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport, base_url="http://test", follow_redirects=False
-    ) as client:
-        async with AsyncClient(
-            transport=transport, base_url="http://test", follow_redirects=True
-        ) as reg_client:
-            await reg_client.post("/api/auth/register", json={
-                "email": "tgauth@test.com", "password": "pass123", "name": "TG User",
-            })
-            await reg_client.post("/login", data={"email": "tgauth@test.com", "password": "pass123"})
-            cookies = reg_client.cookies
-
-        for name, value in cookies.items():
-            client.cookies.set(name, value)
-
-        yield client, session_factory
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-    await engine.dispose()
-
-
-@pytest.mark.asyncio
-async def test_refresh_qr_returns_new_image(auth_setup):
-    client, _ = auth_setup
-
-    with patch("app.pages.accounts.refresh_qr", new_callable=AsyncMock) as mock_refresh:
-        mock_refresh.return_value = "tg://login?token=newtoken"
-
-        resp = await client.post(
-            "/accounts/connect/tg_user/refresh-qr",
-            content='{"session_id": "test_session"}',
-            headers={"Content-Type": "application/json"},
-        )
-
-    data = resp.json()
-    assert "qr_image" in data
-    assert data["qr_image"].startswith("data:image/png;base64,")
-
-
-@pytest.mark.asyncio
-async def test_refresh_qr_failure_returns_error(auth_setup):
-    client, _ = auth_setup
-
-    with patch("app.pages.accounts.refresh_qr", new_callable=AsyncMock) as mock_refresh:
-        mock_refresh.return_value = None
-
-        resp = await client.post(
-            "/accounts/connect/tg_user/refresh-qr",
-            content='{"session_id": "test_session"}',
-            headers={"Content-Type": "application/json"},
-        )
-
-    data = resp.json()
-    assert "error" in data
