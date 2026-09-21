@@ -3,10 +3,12 @@ phase: "12"
 slug: "zagruzka-izobrazheniy-bez-fetch"
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
 # audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
-status: draft
+status: validated
 nyquist_compliant: true
-wave_0_complete: false
+wave_0_complete: true
 created: "2026-09-18"
+validated: "2026-09-21"
+validated_by: "/gsd-validate-phase 12 — замер объединением команд карты"
 ---
 
 # Phase 12 — Validation Strategy
@@ -117,16 +119,16 @@ created: "2026-09-18"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 12-01-01 | 01 | 1 | FETCH-01 | T-12-01, T-12-02, T-12-03, T-12-04 | тип по первым байтам (присланный заголовок авторитета не имеет); имя нормализовано `safe_filename`; тело читается порциями с прерыванием на первом превышении; число частей ограничено явно | integration (tracer, TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py tests/test_pages/test_access_gate.py tests/test_pages/test_impersonation_gate.py -q -p no:randomly` | ❌ W0 — создаётся этой же задачей (RED) | ⬜ pending |
-| 12-01-02 | 01 | 1 | FETCH-01 | T-12-04 | файловая часть не носит имени `images` (WR-03); недостижимая цель блокировки не объявляется, отступление записано поимённо | unit (гейт разметки) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_templates/test_components.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-02-01 | 02 | 1 | FETCH-01 | T-12-07, T-12-08 | предел тела задан ЯВНО в ОБОИХ шаблонах; вывод из отсутствия директивы не делается (A1) | config-gate (grep) | `grep -c 'client_max_body_size 64M' nginx/nginx.conf.template && grep -c 'client_max_body_size 64M' nginx/nginx-http.conf.template` | ✅ | ⬜ pending |
-| 12-02-02 | 02 | 1 | FETCH-01 | T-12-07 | расхождение потолка прокси с потолком приложения краснеет МАШИННО, а не держится дисциплиной читателя | unit (TDD) | `uv run pytest tests/test_nginx_body_limit.py -q -p no:randomly` | ❌ W0 — создаётся этой же задачей (RED) | ⬜ pending |
-| 12-03-01 | 03 | 2 | FETCH-01 | T-12-10 | клиентской сборки разметки в редакторе нет ВОВСЕ — утверждение гейта CR-01 инвертировано на более сильное, а не ослаблено | unit (гейт, TDD) | `uv run pytest tests/test_templates/test_ads_form_security.py tests/test_templates/test_htmx_inventory.py tests/test_templates/test_walkthrough_anchors.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-03-02 | 03 | 2 | FETCH-01 | T-12-09, T-12-11 | идентификатор не бывает целью подмены и внеполосной целью разом (G-11); имя на плитке — нормализованное из сохранённого ключа и живёт в подсказке | unit + integration (TDD) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_pages/test_ads_editor.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-04-01 | 04 | 3 | FETCH-01 | T-12-12, T-12-13, T-12-14, T-12-16 | чужой ключ во фрагмент не переиздаётся; список длиннее потолка отвергается; имя отвергнутого файла нормализовано ДО шаблона (автоэкранирования мало) | integration (TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ (создан задачей 12-01-01) | ⬜ pending |
-| 12-04-02 | 04 | 3 | FETCH-01 | T-12-15 | правый операнд записи заголовка `HX-*` — ASCII-литерал; число мест записи выписано отдельной константой | unit (гейт, TDD) | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-05-01 | 05 | 4 | FETCH-01 | T-12-01, T-12-02, T-12-03 | утверждения о распознавании типа, нормализации имени, приведении расширения и порядке отказов не теряются вместе со снятым модулем | unit (TDD, переезд) | `uv run pytest tests/test_services/test_image_upload.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ❌ W0 — создаётся этой же задачей | ⬜ pending |
-| 12-05-02 | 05 | 4 | FETCH-01 | T-12-17, T-12-18, T-12-19 | все ТРИ перечня гейтов отражают решение о поверхности; маршрут, не попавший ни в одно множество, роняет гейт по построению | unit (гейт) | `uv run pytest tests/test_pages/test_access_gate.py tests/test_pages/test_impersonation_gate.py tests/test_templates/test_htmx_markup_gates.py -q -p no:randomly` | ✅ | ⬜ pending |
+| 12-01-01 | 01 | 1 | FETCH-01 | T-12-01, T-12-02, T-12-03, T-12-04 | тип по первым байтам (присланный заголовок авторитета не имеет); имя нормализовано `safe_filename`; тело читается порциями с прерыванием на первом превышении; число частей ограничено явно | integration (tracer, TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py tests/test_pages/test_access_gate.py tests/test_pages/test_impersonation_gate.py -q -p no:randomly` | ✅ заведён своей задачей (был ❌ W0/RED) | ✅ green |
+| 12-01-02 | 01 | 1 | FETCH-01 | T-12-04 | файловая часть не носит имени `images` (WR-03); недостижимая цель блокировки не объявляется, отступление записано поимённо | unit (гейт разметки) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_templates/test_components.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-02-01 | 02 | 1 | FETCH-01 | T-12-07, T-12-08 | предел тела задан ЯВНО в ОБОИХ шаблонах; вывод из отсутствия директивы не делается (A1) | config-gate (grep) | `grep -c 'client_max_body_size 64M' nginx/nginx.conf.template && grep -c 'client_max_body_size 64M' nginx/nginx-http.conf.template` | ✅ | ✅ green |
+| 12-02-02 | 02 | 1 | FETCH-01 | T-12-07 | расхождение потолка прокси с потолком приложения краснеет МАШИННО, а не держится дисциплиной читателя | unit (TDD) | `uv run pytest tests/test_nginx_body_limit.py -q -p no:randomly` | ✅ заведён своей задачей (был ❌ W0/RED) | ✅ green |
+| 12-03-01 | 03 | 2 | FETCH-01 | T-12-10 | клиентской сборки разметки в редакторе нет ВОВСЕ — утверждение гейта CR-01 инвертировано на более сильное, а не ослаблено | unit (гейт, TDD) | `uv run pytest tests/test_templates/test_ads_form_security.py tests/test_templates/test_htmx_inventory.py tests/test_templates/test_walkthrough_anchors.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-03-02 | 03 | 2 | FETCH-01 | T-12-09, T-12-11 | идентификатор не бывает целью подмены и внеполосной целью разом (G-11); имя на плитке — нормализованное из сохранённого ключа и живёт в подсказке | unit + integration (TDD) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_pages/test_ads_editor.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-04-01 | 04 | 3 | FETCH-01 | T-12-12, T-12-13, T-12-14, T-12-16 | чужой ключ во фрагмент не переиздаётся; список длиннее потолка отвергается; имя отвергнутого файла нормализовано ДО шаблона (автоэкранирования мало) | integration (TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ (создан задачей 12-01-01) | ✅ green |
+| 12-04-02 | 04 | 3 | FETCH-01 | T-12-15 | правый операнд записи заголовка `HX-*` — ASCII-литерал; число мест записи выписано отдельной константой | unit (гейт, TDD) | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-05-01 | 05 | 4 | FETCH-01 | T-12-01, T-12-02, T-12-03 | утверждения о распознавании типа, нормализации имени, приведении расширения и порядке отказов не теряются вместе со снятым модулем | unit (TDD, переезд) | `uv run pytest tests/test_services/test_image_upload.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ заведён своей задачей (был ❌ W0) | ✅ green |
+| 12-05-02 | 05 | 4 | FETCH-01 | T-12-17, T-12-18, T-12-19 | все ТРИ перечня гейтов отражают решение о поверхности; маршрут, не попавший ни в одно множество, роняет гейт по построению | unit (гейт) | `uv run pytest tests/test_pages/test_access_gate.py tests/test_pages/test_impersonation_gate.py tests/test_templates/test_htmx_markup_gates.py -q -p no:randomly` | ✅ | ✅ green |
 
 ### Партия закрытия пробелов 12-06…12-10 (после верификации, `gap_closure: true`)
 
@@ -136,19 +138,19 @@ created: "2026-09-18"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 12-06-01 | 06 | 1 | FETCH-01 | T-12-06-01, T-12-06-02, T-12-06-03, T-12-06-04 | чужой ключ во фрагмент не переиздаётся, а СВОЙ переживает его в той же партии; при негодном значении файловые части не читаются и в хранилище не пишутся (`mock_s3.call_count == 0`); причина отказа — константа закрытого набора | integration (tracer, TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py tests/test_services/test_image_keys.py tests/test_pages/test_ads_editor.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-06-02 | 06 | 1 | FETCH-01 | T-12-06-03 | потолок управляет числом ПРИНИМАЕМЫХ файлов и не стирает уже прикреплённые; отказ по длине на сохранении (`own_image_keys`) не ослаблен ни на символ | integration (TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py -q -k "ceiling or over_the_ceiling"` | ✅ | ⬜ pending |
-| 12-07-01 | 07 | 2 | FETCH-01 | T-12-07-01, T-12-07-03 | внеполосная перерисовка полосы становится исключением, которое надо заслужить: ответ, не менявший состава вложений, узла `#media-tray` не несёт, и причина отказа остаётся читаемой человеку | integration + unit (TDD) | `uv run pytest tests/test_pages/test_ads_editor.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-07-02 | 07 | 2 | FETCH-01 | T-12-07-02 | две формы редактора несут ОДНУ стратегию наложения; равенство держит правило, а не совпадение — два летящих составных запроса на одного человека больше не возникают | unit (гейт разметки, TDD) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_templates/test_components.py -q` | ✅ | ⬜ pending |
-| 12-07-03 | 07 | 2 | FETCH-01 | T-12-07-04 | принятый риск (объекты-сироты при обрыве, межвкладочный счёт свободных мест) существует ЗАПИСЬЮ с названным воздействием и идентификатором решения владельца, а не молчанием (D-17, D-16) | unit (гейт планирования) | `uv run pytest tests/test_planning/ -q` | ✅ | ⬜ pending |
-| 12-08-01 | 08 | 3 | FETCH-01 | T-12-08-01, T-12-08-02, T-12-08-03 | авария хранилища становится отказом ПО ФАЙЛУ: подробность исключения уходит в журнал, человеку — константа закрытого набора; плитки для незаписанного объекта не появляется | integration (TDD) | `uv run pytest tests/test_services/test_image_upload.py -q` | ✅ | ⬜ pending |
-| 12-08-02 | 08 | 3 | FETCH-01 | T-12-08-02, T-12-08-03 | замеряющее правило инвертируется ВВЕРХ вместе с предметом: четыре утверждения вместо одного, и `mock_s3.call_count == 3` меряет, что послабление P-7 на сжатую версию не расползлось | integration (TDD, инверсия правила) | `uv run pytest tests/test_pages/test_ads_image_upload.py::test_a_storage_failure_becomes_a_row_and_keeps_the_accepted_keys -q` | ✅ | ⬜ pending |
-| 12-09-01 | 09 | 4 | FETCH-01 | T-12-09-03 | разметка строки отказа существует ОДНИМ источником, и оба ограничения переезжают дословно: строка не блок; имя печатается уже нормализованным сервисом (одного автоэкранирования против имени в четыре тысячи символов мало) | unit (шаблон, бесследный переезд) | `uv run pytest tests/test_pages/test_ads_editor.py tests/test_pages/test_ads_image_upload.py tests/test_templates/test_components.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-09-02 | 09 | 4 | FETCH-01 | T-12-09-01, T-12-09-02, T-12-09-03 | предел `MAX_UPLOAD_PARTS` не ослаблен — меняется только ФОРМА отказа; ответ ДОПИСЫВАЕТ строку и не подменяет содержимое цели, поэтому скрытые поля ключей остаются в документе | integration (TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py::test_too_many_parts_is_a_readable_row_not_json -q` | ✅ | ⬜ pending |
-| 12-09-03 | 09 | 4 | FETCH-01 | T-12-09-04 | применение точечного заголовка объявлено ПОИМЁННО, число перечня поставлено прогоном покрасневшего правила (D-13), отрицательный контроль перечня сохранён | unit (гейт, TDD) | `uv run pytest tests/test_pages/test_htmx_gates.py -q` | ✅ | ⬜ pending |
-| 12-10-01 | 10 | 5 | FETCH-01 | T-12-10-01, T-12-10-02, T-12-10-05 | сверка источника стои́т ПОСЛЕ прав и ДО разбора тела (ASVS L1 V4.2.2, D-15); отказ 403 без тела; `mock_s3.call_count == 0` доказывает, что работа не сделана ДО отказа | integration + unit (гейт, TDD) | `uv run pytest tests/test_pages/test_origin_guard_on_destructive_routes.py -q` | ✅ | ⬜ pending |
-| 12-10-02 | 10 | 5 | FETCH-01 | T-12-10-03, T-12-10-04 | комментарий, утверждающий несуществующий рубеж, опаснее отсутствия комментария: обе записи приведены к действительной границе, прежние названы снятыми | unit (правка комментариев, контроль поведения) | `uv run pytest tests/test_services/test_image_upload.py tests/test_pages/test_ads_image_upload.py tests/test_nginx_body_limit.py -q` | ✅ | ⬜ pending |
-| 12-10-03 | 10 | 5 | FETCH-01 | — (гигиена ссылок, угрозы не несёт) | ни одна строка суиты не указывает на модуль, снятый этой же фазой; снятый путь НЕ набирается дословно — приёмочный обход ищет его по дереву `tests/` и был бы удовлетворён летописью сам | unit (гигиена ссылок) | `uv run pytest tests/test_nginx_body_limit.py tests/test_services/test_images.py tests/test_services/test_image_upload.py -q` | ✅ | ⬜ pending |
+| 12-06-01 | 06 | 1 | FETCH-01 | T-12-06-01, T-12-06-02, T-12-06-03, T-12-06-04 | чужой ключ во фрагмент не переиздаётся, а СВОЙ переживает его в той же партии; при негодном значении файловые части не читаются и в хранилище не пишутся (`mock_s3.call_count == 0`); причина отказа — константа закрытого набора | integration (tracer, TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py tests/test_services/test_image_keys.py tests/test_pages/test_ads_editor.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-06-02 | 06 | 1 | FETCH-01 | T-12-06-03 | потолок управляет числом ПРИНИМАЕМЫХ файлов и не стирает уже прикреплённые; отказ по длине на сохранении (`own_image_keys`) не ослаблен ни на символ | integration (TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py -q -k "ceiling or over_the_ceiling"` | ✅ | ✅ green |
+| 12-07-01 | 07 | 2 | FETCH-01 | T-12-07-01, T-12-07-03 | внеполосная перерисовка полосы становится исключением, которое надо заслужить: ответ, не менявший состава вложений, узла `#media-tray` не несёт, и причина отказа остаётся читаемой человеку | integration + unit (TDD) | `uv run pytest tests/test_pages/test_ads_editor.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-07-02 | 07 | 2 | FETCH-01 | T-12-07-02 | две формы редактора несут ОДНУ стратегию наложения; равенство держит правило, а не совпадение — два летящих составных запроса на одного человека больше не возникают | unit (гейт разметки, TDD) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_templates/test_components.py -q` | ✅ | ✅ green |
+| 12-07-03 | 07 | 2 | FETCH-01 | T-12-07-04 | принятый риск (объекты-сироты при обрыве, межвкладочный счёт свободных мест) существует ЗАПИСЬЮ с названным воздействием и идентификатором решения владельца, а не молчанием (D-17, D-16) | unit (гейт планирования) | `uv run pytest tests/test_planning/ -q` | ✅ | ✅ green |
+| 12-08-01 | 08 | 3 | FETCH-01 | T-12-08-01, T-12-08-02, T-12-08-03 | авария хранилища становится отказом ПО ФАЙЛУ: подробность исключения уходит в журнал, человеку — константа закрытого набора; плитки для незаписанного объекта не появляется | integration (TDD) | `uv run pytest tests/test_services/test_image_upload.py -q` | ✅ | ✅ green |
+| 12-08-02 | 08 | 3 | FETCH-01 | T-12-08-02, T-12-08-03 | замеряющее правило инвертируется ВВЕРХ вместе с предметом: четыре утверждения вместо одного, и `mock_s3.call_count == 3` меряет, что послабление P-7 на сжатую версию не расползлось | integration (TDD, инверсия правила) | `uv run pytest tests/test_pages/test_ads_image_upload.py::test_a_storage_failure_becomes_a_row_and_keeps_the_accepted_keys -q` | ✅ | ✅ green |
+| 12-09-01 | 09 | 4 | FETCH-01 | T-12-09-03 | разметка строки отказа существует ОДНИМ источником, и оба ограничения переезжают дословно: строка не блок; имя печатается уже нормализованным сервисом (одного автоэкранирования против имени в четыре тысячи символов мало) | unit (шаблон, бесследный переезд) | `uv run pytest tests/test_pages/test_ads_editor.py tests/test_pages/test_ads_image_upload.py tests/test_templates/test_components.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-09-02 | 09 | 4 | FETCH-01 | T-12-09-01, T-12-09-02, T-12-09-03 | предел `MAX_UPLOAD_PARTS` не ослаблен — меняется только ФОРМА отказа; ответ ДОПИСЫВАЕТ строку и не подменяет содержимое цели, поэтому скрытые поля ключей остаются в документе | integration (TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py::test_too_many_parts_is_a_readable_row_not_json -q` | ✅ | ✅ green |
+| 12-09-03 | 09 | 4 | FETCH-01 | T-12-09-04 | применение точечного заголовка объявлено ПОИМЁННО, число перечня поставлено прогоном покрасневшего правила (D-13), отрицательный контроль перечня сохранён | unit (гейт, TDD) | `uv run pytest tests/test_pages/test_htmx_gates.py -q` | ✅ | ✅ green |
+| 12-10-01 | 10 | 5 | FETCH-01 | T-12-10-01, T-12-10-02, T-12-10-05 | сверка источника стои́т ПОСЛЕ прав и ДО разбора тела (ASVS L1 V4.2.2, D-15); отказ 403 без тела; `mock_s3.call_count == 0` доказывает, что работа не сделана ДО отказа | integration + unit (гейт, TDD) | `uv run pytest tests/test_pages/test_origin_guard_on_destructive_routes.py -q` | ✅ | ✅ green |
+| 12-10-02 | 10 | 5 | FETCH-01 | T-12-10-03, T-12-10-04 | комментарий, утверждающий несуществующий рубеж, опаснее отсутствия комментария: обе записи приведены к действительной границе, прежние названы снятыми | unit (правка комментариев, контроль поведения) | `uv run pytest tests/test_services/test_image_upload.py tests/test_pages/test_ads_image_upload.py tests/test_nginx_body_limit.py -q` | ✅ | ✅ green |
+| 12-10-03 | 10 | 5 | FETCH-01 | — (гигиена ссылок, угрозы не несёт) | ни одна строка суиты не указывает на модуль, снятый этой же фазой; снятый путь НЕ набирается дословно — приёмочный обход ищет его по дереву `tests/` и был бы удовлетворён летописью сам | unit (гигиена ссылок) | `uv run pytest tests/test_nginx_body_limit.py tests/test_services/test_images.py tests/test_services/test_image_upload.py -q` | ✅ | ✅ green |
 
 ### Вторая партия закрытия 12-11…12-13 (после ре-верификации, `gap_closure: true`)
 
@@ -166,13 +168,13 @@ created: "2026-09-18"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 12-11-01 | 11 | 1 | FETCH-01 | T-12-11-01, T-12-11-02, T-12-11-03 | ответ убирания адресует РОВНО тот ключ, который его запрос видел, и узла с чужими ключами и строками отказа не подменяет; идентификатор узла — хеш фиксированной длины, сырой ключ в атрибут разметки не попадает; рубеж владения не сдвинут (`own_image_keys` остаётся единственным предикатом) | integration (tracer, TDD) | `uv run pytest tests/test_pages/test_ads_editor.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-11-02 | 11 | 1 | FETCH-01 | T-12-11-04 | разметка плитки выбора файла печатается из ЕДИНСТВЕННОГО источника (две копии разошлись бы молча); отставание её счёта от базы даёт ГРОМКИЙ отказ по потолку с именем файла, а не потерю ключа — плитка есть управляющий элемент, а не состояние | integration + unit (TDD) | `uv run pytest tests/test_pages/test_ads_editor.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-12-01 | 12 | 2 | FETCH-01 | T-12-12-01, T-12-12-02, T-12-12-04, T-12-12-05 | помеченный ключ вычитается ДО сверки владения, поэтому воскресший чужой гонкой ключ не переполняет потолок; поле меток только ВЫЧИТАЕТ и второго места, решающего «мой ли ключ», не заводит (D-07); возврат ключа в ответ ограничен вычитающей меткой, и ограничение ЗАМЕРЕНО правилом, а не обещано | integration (TDD) | `uv run pytest tests/test_pages/test_ads_editor.py tests/test_pages/test_ads_image_ownership.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-12-02 | 12 | 2 | FETCH-01 | T-12-12-01, T-12-12-05 | судьба ключа меряется на ОБОИХ чередованиях названными правилами, каждое из которых поднимает два обработчика; условие, на котором держится ПОРЯДОК I (узел меток вне цели подмены формы загрузки), замеряется, а не подразумевается; гейт равенства стратегий наложения обещает ровно то, что доказывает | integration + unit (гейт разметки, TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py tests/test_templates/test_htmx_markup_gates.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-12-03 | 12 | 2 | FETCH-01 | T-12-12-06 | остатки ВЫБРАННОГО механизма (жизнь метки равна жизни страницы, мелькание воскресшей плитки один круг, отставание плитки добавления от базы) существуют ЗАПИСЬЮ с названным воздействием и идентификатором D-19, а не молчанием; это НЕ запись гапа 3 допущением — вариант (б) владелец отверг | unit (гейт планирования) | `uv run pytest tests/test_planning -q` | ✅ | ⬜ pending |
-| 12-13-01 | 13 | 3 | FETCH-01 | T-12-13-01, T-12-13-02, T-12-13-03, T-12-13-04 | каждый ФАЙЛ отвергнутой по чужому ключу партии назван своей строкой, имя проходит `safe_filename` ДО шаблона (одного автоэкранирования мало, D-05); `mock_s3.call_count == 0` на ветви не сдвинут ни одним правилом — громкость отказа не куплена ни одной записью в хранилище | integration (TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 12-13-02 | 13 | 3 | FETCH-01 | T-12-13-05 | комментарий ветви не обещает исхода, которого больше нет (прежняя редакция названа, а не стёрта); достижимость ветви ключом старого образца существует записью `accepted-assumption` с названным воздействием, а не догадкой следующего читателя | unit (гейт планирования, контроль поведения) | `uv run pytest tests/test_planning -q` | ✅ | ⬜ pending |
+| 12-11-01 | 11 | 1 | FETCH-01 | T-12-11-01, T-12-11-02, T-12-11-03 | ответ убирания адресует РОВНО тот ключ, который его запрос видел, и узла с чужими ключами и строками отказа не подменяет; идентификатор узла — хеш фиксированной длины, сырой ключ в атрибут разметки не попадает; рубеж владения не сдвинут (`own_image_keys` остаётся единственным предикатом) | integration (tracer, TDD) | `uv run pytest tests/test_pages/test_ads_editor.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-11-02 | 11 | 1 | FETCH-01 | T-12-11-04 | разметка плитки выбора файла печатается из ЕДИНСТВЕННОГО источника (две копии разошлись бы молча); отставание её счёта от базы даёт ГРОМКИЙ отказ по потолку с именем файла, а не потерю ключа — плитка есть управляющий элемент, а не состояние | integration + unit (TDD) | `uv run pytest tests/test_pages/test_ads_editor.py tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-12-01 | 12 | 2 | FETCH-01 | T-12-12-01, T-12-12-02, T-12-12-04, T-12-12-05 | помеченный ключ вычитается ДО сверки владения, поэтому воскресший чужой гонкой ключ не переполняет потолок; поле меток только ВЫЧИТАЕТ и второго места, решающего «мой ли ключ», не заводит (D-07); возврат ключа в ответ ограничен вычитающей меткой, и ограничение ЗАМЕРЕНО правилом, а не обещано | integration (TDD) | `uv run pytest tests/test_pages/test_ads_editor.py tests/test_pages/test_ads_image_ownership.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-12-02 | 12 | 2 | FETCH-01 | T-12-12-01, T-12-12-05 | судьба ключа меряется на ОБОИХ чередованиях названными правилами, каждое из которых поднимает два обработчика; условие, на котором держится ПОРЯДОК I (узел меток вне цели подмены формы загрузки), замеряется, а не подразумевается; гейт равенства стратегий наложения обещает ровно то, что доказывает | integration + unit (гейт разметки, TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py tests/test_templates/test_htmx_markup_gates.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-12-03 | 12 | 2 | FETCH-01 | T-12-12-06 | остатки ВЫБРАННОГО механизма (жизнь метки равна жизни страницы, мелькание воскресшей плитки один круг, отставание плитки добавления от базы) существуют ЗАПИСЬЮ с названным воздействием и идентификатором D-19, а не молчанием; это НЕ запись гапа 3 допущением — вариант (б) владелец отверг | unit (гейт планирования) | `uv run pytest tests/test_planning -q` | ✅ | ✅ green |
+| 12-13-01 | 13 | 3 | FETCH-01 | T-12-13-01, T-12-13-02, T-12-13-03, T-12-13-04 | каждый ФАЙЛ отвергнутой по чужому ключу партии назван своей строкой, имя проходит `safe_filename` ДО шаблона (одного автоэкранирования мало, D-05); `mock_s3.call_count == 0` на ветви не сдвинут ни одним правилом — громкость отказа не куплена ни одной записью в хранилище | integration (TDD) | `uv run pytest tests/test_pages/test_ads_image_upload.py -q -p no:randomly` | ✅ | ✅ green |
+| 12-13-02 | 13 | 3 | FETCH-01 | T-12-13-05 | комментарий ветви не обещает исхода, которого больше нет (прежняя редакция названа, а не стёрта); достижимость ветви ключом старого образца существует записью `accepted-assumption` с названным воздействием, а не догадкой следующего читателя | unit (гейт планирования, контроль поведения) | `uv run pytest tests/test_planning -q` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -200,11 +202,11 @@ created: "2026-09-18"
 заводится ВНУТРИ той TDD-задачи, которой он нужен, как её RED-половина — вынести их в отдельную
 волну значило бы завести файл раньше предмета, который он утверждает.
 
-- [ ] `tests/test_pages/test_ads_image_upload.py` — заводит задача **12-01-01** (RED сквозного среза:
+- [x] `tests/test_pages/test_ads_image_upload.py` — заводит задача **12-01-01** (RED сквозного среза:
       пара htmx/без-htmx, фрагмент полосы, гейт доступа). Пополняют 12-04-01, 12-04-02, 12-05-01.
-- [ ] `tests/test_nginx_body_limit.py` — заводит задача **12-02-02** (RED: оба шаблона, покрытие
+- [x] `tests/test_nginx_body_limit.py` — заводит задача **12-02-02** (RED: оба шаблона, покрытие
       потолка приложения, совпадение значений, контроль зубов на понижённом значении).
-- [ ] `tests/test_services/test_image_upload.py` — заводит задача **12-05-01** (переезд утверждений
+- [x] `tests/test_services/test_image_upload.py` — заводит задача **12-05-01** (переезд утверждений
       о сервисе из снимаемых 1099 строк `tests/test_routes/test_uploads.py`, G-8).
 - [x] Установка фреймворка **не требуется**: pytest 9.0.2 и pytest-asyncio уже в дереве, суита
       собирает 3410 тестов (измерено).
@@ -321,3 +323,55 @@ created: "2026-09-18"
 - [x] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** pending
+
+---
+
+## Validation Audit 2026-09-21
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+**Что было пробелом и что им НЕ было.** Пробелом фазы было НЕ отсутствие проверок — столбец
+`File Exists` стоял ✅ у всех тридцати задач, непрерывность выборки держалась по построению, — а
+то, что столбец `Status` у всех ТРИДЦАТИ оставался `⬜ pending`: карта была засеяна планировщиком
+(`status: draft`) и после исполнения фазы ни разу не замерялась. Правило `audit-milestone §5.5`
+(#2117) различает NOT-VALIDATED (`draft`) и PARTIAL (`validated` + `nyquist_compliant: false`)
+именно ради этого различия, и до настоящего аудита фаза числилась NOT-VALIDATED.
+
+**Чем замерено.** Объединением ВСЕХ команд карты одним прогоном — 17 модулей, `-p no:randomly`:
+
+```
+uv run pytest -q -p no:randomly \
+  tests/test_pages/{test_ads_image_upload,test_access_gate,test_impersonation_gate,test_ads_editor,
+                    test_htmx_gates,test_origin_guard_on_destructive_routes,test_ads_image_ownership}.py \
+  tests/test_templates/{test_htmx_markup_gates,test_components,test_ads_form_security,
+                        test_htmx_inventory,test_walkthrough_anchors}.py \
+  tests/test_services/{test_image_upload,test_image_keys,test_images}.py \
+  tests/test_nginx_body_limit.py tests/test_planning/
+→ 552 passed, 0 failed, 188.89s
+```
+
+Конфиг-гейт задачи 12-02-01 замерен отдельно, как он и объявлен (`grep`, не pytest):
+`client_max_body_size 64M` найден в `nginx/nginx.conf.template` и `nginx/nginx-http.conf.template`
+по одному разу каждый, код выхода 0.
+
+⚠️ **ГРАНИЦА ЗАМЕРА, НАЗВАННАЯ ДО ВЫВОДА.** Прогон был ОБЪЕДИНЕНИЕМ КОМАНД КАРТЫ, а не полной
+суитой (`just test`). Поэтому предсуществующая зависимость от порядка исполнения —
+`test_image_base_url_comes_from_app_settings`, `.planning/todos/pending/full-suite-ads-editor-order-pollution.md`,
+запись 1 `.planning/WINDOWS.md` — в этом охвате НЕ ПОДНИМАЛАСЬ и настоящим прогоном не опровергнута.
+Она фазе 12 не принадлежит (замерено контрольным прогоном ещё в фазе 06) и в пробелы фазы не
+записана, но и объявлять её снятой этот прогон права не имеет.
+
+**Три файла волны 0 существуют на дереве** (замер `ls`, а не память):
+`tests/test_pages/test_ads_image_upload.py` (120 175 Б),
+`tests/test_services/test_image_upload.py` (53 543 Б),
+`tests/test_nginx_body_limit.py` (14 919 Б). Каждый заведён RED-половиной своей задачи — 12-01-01,
+12-05-01 и 12-02-02 соответственно, — а не отдельной волной, как и решала карта.
+
+**Ручные проверки остаются ручными.** Две строки раздела «Manual-Only Verifications» машинного
+эквивалента не получили и получить не могли: боевой предел обратного прокси и видимость признака
+`hx-indicator`. Обе прошли ЧЕЛОВЕКОМ в обходе `12-UAT.md` 2026-09-21 (проверки 2 и 1), и закрыты они
+отметками обхода, а не настоящим прогоном.
