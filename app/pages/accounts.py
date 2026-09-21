@@ -412,11 +412,16 @@ async def accounts_connect_tg_user_qr_status(
         # Шаг пароля (план 13-02). Опросчика в нём нет: ответ 200 без него
         # останавливает опрос, и экран пароля не сотрётся через 3 с.
         step, error = "password", None
+    elif status == "qr_expired":
+        # Токен QR истёк, сессия жива (план 13-03, D-03): шаг «код истёк» с
+        # кнопкой обновления. Опросчика в нём нет — опрос остановлен, и
+        # автоматического обновления нет (D-02).
+        step, error = "qr_expired", None
     # Любой иной статус, которого машина не знает, — шаг ошибки с
     # «Ошибкой авторизации».
 
     async def _step() -> HTMLResponse:
-        """Шаг «Подключено», шаг пароля либо шаг ошибки — ответ без опросчика."""
+        """«Подключено», шаг пароля, «код истёк» либо шаг ошибки — без опросчика."""
         return HTMLResponse(_tg_step_markup(step=step, session_id=session_id, error=error))
 
     return await respond(request, redirect="/accounts/connect/tg_user", fragment=_step)

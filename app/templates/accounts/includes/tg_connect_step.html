@@ -5,7 +5,7 @@
    обработчиков мастера (Фаза 13): разойтись странице и фрагменту негде, потому
    что второго места разметки шага нет. Читаются `step` (в плане 13-01 —
    `start`, `waiting`, `connected`, `error`; шаг пароля `password` дописал план
-   13-02, шаг истёкшего кода допишет план 13-03), `session_id`, `qr_code`,
+   13-02, шаг истёкшего кода `qr_expired` — план 13-03), `session_id`, `qr_code`,
    `error` и `password_error`.
 
    ⚠️ МЕХАНИЗМ ОСТАНОВКИ ОПРОСА. Команды «стоп» у опроса нет: он прекращается
@@ -63,6 +63,25 @@
     <div class="connect-step__actions">
       {{ link_button('Отмена', '/accounts', variant='ghost') }}
     </div>
+  </div>
+
+  {% elif step == "qr_expired" %}
+  <div class="connect-step connect-step--center">
+    {#- Истёкший QR на этом шаге НЕ показывается: ответ опроса адреса кода не
+        несёт, а мёртвый код приглашал бы к бесполезному сканированию. Токен
+        живёт ~30 с, сессия — 300 с, поэтому «код истёк» — не ошибка, а шаг с
+        кнопкой (D-03). Опросчика здесь нет: автоматического обновления нет
+        (D-02, решение владельца) — забытая вкладка не продолжает обращаться к
+        Telegram; опрос возобновляет ответ кнопки — шаг ожидания с новым кодом.
+        Цель блокировки — умолчание обёртки, кнопка отправки. -#}
+    <p class="connect-step__text">QR-код истёк. Обновите его, чтобы продолжить.</p>
+    {% call form_wrapper(action='/accounts/connect/tg_user/refresh-qr', target='#tg-connect-step', swap='innerHTML') %}
+      <input type="hidden" name="session_id" value="{{ session_id }}">
+      <div class="connect-step__actions">
+        {{ button('Обновить QR-код') }}
+        {{ link_button('Отмена', '/accounts', variant='ghost') }}
+      </div>
+    {% endcall %}
   </div>
 
   {% elif step == "password" %}

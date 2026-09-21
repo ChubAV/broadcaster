@@ -32,7 +32,7 @@ QR_SESSION_TTL = 300  # 5 minutes
 class QRAuthState:
     client: TelegramClient
     qr_login: object | None = None
-    status: str = "waiting"  # waiting | needs_2fa | success | error
+    status: str = "waiting"  # waiting | qr_expired | needs_2fa | success | error
     session_string: str | None = None
     error: str | None = None
     created_at: float = field(default_factory=time.time)
@@ -87,6 +87,15 @@ async def _wait_for_qr(session_id: str) -> None:
         state.status = "success"
     except asyncio.CancelledError:
         pass
+    except asyncio.TimeoutError:
+        # Токен QR живёт ~30 с (`expires` Telegram), а сессия — QR_SESSION_TTL
+        # (300 с): это разные сроки. Таймаут `wait()` значит «код истёк», сессия
+        # жива и обновляется кнопкой через `refresh_qr` — это статус, а не
+        # ошибка, и в журнал ошибок с трассировкой он не пишется (D-03). На
+        # Python 3.12 `asyncio.TimeoutError is TimeoutError` — ветка ловит оба
+        # имени. `SessionPasswordNeededError` приходит ПОСЛЕ события, а не из
+        # таймаута, и остаётся в общей ветке ниже.
+        state.status = "qr_expired"
     except Exception as e:
         err_name = type(e).__name__
         if "SessionPasswordNeeded" in err_name or "SessionPasswordNeededError" in err_name:
