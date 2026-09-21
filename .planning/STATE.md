@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 13
 current_phase_name: Мастер подключения Telegram по QR на фрагментах
 status: executing
-stopped_at: Completed 13-03-PLAN.md
-last_updated: "2026-09-21T14:28:12.372Z"
+stopped_at: Completed 13-04-PLAN.md
+last_updated: "2026-09-21T15:29:06.835Z"
 last_activity: 2026-09-21
-last_activity_desc: 13-03 executed (expired QR code as a status, refresh-qr on fragments)
-state_head: 95e6891c86b92d3006b0308f4786998af1a56769
+last_activity_desc: 13-04 executed (QR session ownership, a foreign session_id is answered as an unknown one)
+state_head: ab0dd1715a48fecf44687e9de2006b7b9c8b43f5
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 135
-  completed_plans: 132
+  completed_plans: 133
   percent: 67
 ---
 
@@ -45,13 +45,14 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 13 (Мастер подключения Telegram по QR на фрагментах) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Total Plans in Phase: 6
-Completed Plans in Phase: 3
+Completed Plans in Phase: 4
 Status: Ready to execute
 ⚠️ Две строки выше исправлены вручную при закрытии Фазы 12: `phase.complete` оставил в них числа
 ПРОШЛОЙ фазы (13 планов / 6 исполненных), то есть счёт Фазы 12, подписанный именем Фазы 13.
-Last activity: 2026-09-21 — 13-03 исполнен: «код истёк» ожил. Таймаут `QRLogin.wait()` (токен QR ~30 с) в `_wait_for_qr` — статус `qr_expired` без текста ошибки и без `logger.error` с трассировкой (D-03, доказано на настоящем `QRLogin`); опрос отвечает шагом «QR-код истёк. Обновите его, чтобы продолжить.» с кнопкой «Обновить QR-код» без опросчика (D-02, автообновления нет); `refresh_qr` пересоздаёт код только из `qr_expired` и только в сроке `QR_SESSION_TTL` (Pitfall 2); `refresh-qr` на `respond()` — новый QR и тот же опросчик, JSON у мастера не осталось; перечни прогоном: отставание 11 → 10 (сводная летопись Фазы 13: 14 → 10), фрагментных 16 → 17, пар 56 → 58, утверждений 302 165 → 167, переходов 76 → 77, блоков обёртки 18 → 19 (вне списка файлов плана). Гейты волны — 370 passed.
+Last activity: 2026-09-21 — 13-04 исполнен: проверка владения QR-сессией заведена (D-04; её не было). `QRAuthState.user_id` обязателен без умолчания, под имперсонацией — субъект (`payload["sub"]`), на него же пишется аккаунт; `_owned` — единственное чтение состояния в `get_qr_status`, `refresh_qr`, `submit_2fa`, `complete_auth`, чужая сессия для слоя — отсутствующая (`gone`); чужой `session_id` на опросе, `refresh-qr` и `verify-2fa` получает ответ, побайтно равный ответу на неизвестный («Сессия подключения не найдена. Начните заново.»), сессия владельца не тронута, и владелец доходит до «Подключено»; `complete_auth` снимает сессию только владельца и только в `success`, без `await` между проверкой и `pop` (обе гонки 13-02 зелены, утверждения не менялись); успех отдаётся раньше проверки срока (Pitfall 10). Слой сессий — в пределах D-13. Ни один перечень не сдвинулся; гейты волны — 385 passed. FETCH-02 не отмечен — соседи 13-05, 13-06 без сводок.
+Last activity (устарело, предмет — план 13-03; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-04): 2026-09-21 — 13-03 исполнен: «код истёк» ожил. Таймаут `QRLogin.wait()` (токен QR ~30 с) в `_wait_for_qr` — статус `qr_expired` без текста ошибки и без `logger.error` с трассировкой (D-03, доказано на настоящем `QRLogin`); опрос отвечает шагом «QR-код истёк. Обновите его, чтобы продолжить.» с кнопкой «Обновить QR-код» без опросчика (D-02, автообновления нет); `refresh_qr` пересоздаёт код только из `qr_expired` и только в сроке `QR_SESSION_TTL` (Pitfall 2); `refresh-qr` на `respond()` — новый QR и тот же опросчик, JSON у мастера не осталось; перечни прогоном: отставание 11 → 10 (сводная летопись Фазы 13: 14 → 10), фрагментных 16 → 17, пар 56 → 58, утверждений 302 165 → 167, переходов 76 → 77, блоков обёртки 18 → 19 (вне списка файлов плана). Гейты волны — 370 passed.
 Last activity (устарело, предмет — план 13-02; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-03): 2026-09-21 — 13-02 исполнен: шаг пароля 2FA мастера Telegram на фрагментах — опрос в `needs_2fa` отвечает шагом пароля без опросчика; `verify-2fa` на `respond()`/`respond_field_error()`, неверный и пустой пароль — 422 у поля без эха; аккаунт пишется из результата `complete_auth` через `_save_tg_account`, две гонки (два `verify-2fa`, два опроса после успеха) дают один аккаунт, мутант «строка из `submit_2fa`» даёт два; шесть перечней сдвинуты прогоном (один — `UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED` 17 → 18 — планом не назван); гейты волны 357 passed. FETCH-02 не отмечен — соседи 13-03…13-06 без сводок.
 Last activity (устарело, предмет — план 13-01; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-02): 2026-09-21 — 13-01 исполнен (трасер фазы): мастер Telegram по QR на фрагментах за постоянным якорем `#tg-connect-step`; опросчик — форма внутри фрагмента ожидания (поправка D-05), опрос стал POST и сам сохраняет аккаунт (D-01), маршрут `complete` и сценарий страницы сняты (D-12); девять перечней гейтов сдвинуты прогоном; полный набор 3459 passed. FETCH-02 не отмечен — соседи 13-02…13-06 без сводок.
 Last activity (устарело, предмет — открытие исполнения фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-01): 2026-09-21 — Phase 13 execution started
@@ -210,6 +211,7 @@ Progress: [████████████████████] 116/116
 | Phase 13 P01 | 1h 4m | 3 tasks | 11 files |
 | Phase 13 P02 | 22 min | 2 tasks | 7 files |
 | Phase 13 P03 | 19 min | 3 tasks | 9 files |
+| Phase 13 P04 | 16min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -482,6 +484,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 13]: 13-03: refresh_qr recreates the code only from qr_expired and only within QR_SESSION_TTL; otherwise None with no recreate and no status change, so an outdated session is not revived and a finished login cannot be reset (Pitfall 2, T-13-12)
 - [Phase 13]: 13-03: refresh-qr runs on respond(): expired -> «Сессия авторизации истекла», other status -> «Не удалось обновить QR. Начните заново.», success -> waiting step with the new QR and the same poller; the wizard has no JSON handler left and NOT_YET_CONVERTED holds no wizard key (11 -> 10)
 - [Phase 13]: 13-03: UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED 18 -> 19 (outside the plan's files): the refresh form of the qr_expired step keeps the default blocking target because it has a real submit button
+- [Phase 13]: Phase 13-04: a QR session belongs to the user who started it; QRAuthState.user_id is required with no default, and under impersonation it is the subject (payload sub), the same user the account is saved on (D-04)
+- [Phase 13]: Phase 13-04: an unknown or foreign session_id gets status gone and one byte-equal answer on poll, refresh-qr and verify-2fa («Сессия подключения не найдена. Начните заново.»); only the owner's outdated session answers «Сессия авторизации истекла», because the owner check runs before the TTL check (D-03, D-04)
+- [Phase 13]: Phase 13-04: complete_auth returns None and touches nothing unless the caller owns the session and it is in success; owner check and pop have no await between them, so one scan still gives one account (D-01)
+- [Phase 13]: Phase 13-04: get_qr_status reports success before the TTL check, so a scan finished after QR_SESSION_TTL but before cleanup is not lost as expired (Pitfall 10; the TTL itself is unchanged, D-13)
 
 ### Pending Todos
 
@@ -662,8 +668,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-21T14:28:11.806Z
-Stopped at: Completed 13-03-PLAN.md
+Last session: 2026-09-21T15:29:06.227Z
+Stopped at: Completed 13-04-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
