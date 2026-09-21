@@ -615,11 +615,16 @@ async def test_an_empty_password_answers_422_with_the_client_text(authed_client:
             VERIFY_URL, data={"session_id": "sid-empty", "password": ""}
         )
 
-    for name, response in (("пробелы", blank), ("нет поля", missing), ("без JS", plain)):
+    # Шелл страницы несёт свои триггеры вне мастера — у пути без JS
+    # проверяется содержимое мастера от постоянного якоря.
+    for name, response, body in (
+        ("пробелы", blank, blank.text),
+        ("нет поля", missing, missing.text),
+        ("без JS", plain, _content_of_the_wizard(plain.text)),
+    ):
         assert response.status_code == 422, f"пустой пароль ({name}) ответил {response.status_code}"
-        assert EMPTY_PASSWORD in response.text, f"пустой пароль ({name}) без «Введите пароль»"
-        assert "hx-trigger" not in response.text, f"пустой пароль ({name}) запустил опрос"
-    assert ANCHOR_ID in plain.text, "без JS пустой пароль пришёл не страницей мастера"
+        assert EMPTY_PASSWORD in body, f"пустой пароль ({name}) без «Введите пароль»"
+        assert "hx-trigger" not in body, f"пустой пароль ({name}) запустил опрос"
     submitted.assert_not_awaited()
 
 

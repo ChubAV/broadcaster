@@ -233,6 +233,9 @@ TG_CONNECT_STEP_TEMPLATE = "accounts/includes/tg_connect_step.html"
 TG_API_NOT_CONFIGURED_MESSAGE = "Telegram API не настроен. Обратитесь к администратору."
 TG_AUTH_FAILED_MESSAGE = "Ошибка авторизации"
 TG_SESSION_EXPIRED_MESSAGE = "Сессия авторизации истекла. Начните заново."
+# Текст клиентской проверки страницы мастера до Фазы 13, дословно (D-08): после
+# снятия скрипта пустой пароль ловят `required` у поля и сервер этим же текстом.
+TG_EMPTY_PASSWORD_MESSAGE = "Введите пароль"
 
 
 def _tg_step_markup(
@@ -405,12 +408,16 @@ async def accounts_connect_tg_user_qr_status(
         error = TG_SESSION_EXPIRED_MESSAGE
     elif status == "error":
         error = state.get("error") or TG_AUTH_FAILED_MESSAGE
-    # Любой иной статус (до плана 13-02 — `needs_2fa`) — шаг ошибки с
-    # «Ошибкой авторизации»: шаг пароля заводит план 13-02.
+    elif status == "needs_2fa":
+        # Шаг пароля (план 13-02). Опросчика в нём нет: ответ 200 без него
+        # останавливает опрос, и экран пароля не сотрётся через 3 с.
+        step, error = "password", None
+    # Любой иной статус, которого машина не знает, — шаг ошибки с
+    # «Ошибкой авторизации».
 
     async def _step() -> HTMLResponse:
-        """Шаг «Подключено» либо шаг ошибки — ответ без формы-опросчика."""
-        return HTMLResponse(_tg_step_markup(step=step, error=error))
+        """Шаг «Подключено», шаг пароля либо шаг ошибки — ответ без опросчика."""
+        return HTMLResponse(_tg_step_markup(step=step, session_id=session_id, error=error))
 
     return await respond(request, redirect="/accounts/connect/tg_user", fragment=_step)
 
@@ -437,44 +444,118 @@ async def accounts_connect_tg_user_refresh_qr(
     return {"qr_image": _generate_qr_base64(new_url)}
 
 
-@router.post("/accounts/connect/tg_user/verify-2fa")
+@router.post("/accounts/connect/tg_user/verify-2fa", response_class=HTMLResponse)
 async def accounts_connect_tg_user_verify_2fa(
     request: Request,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Пароль двухфакторной защиты — и сохранение аккаунта, когда он верен.
+
+    ⚠️ НА СЛОЕ ОТВЕТА С ПЛАНА 13-02 (FETCH-02). Каждый исход — содержимое якоря
+    `#tg-connect-step`: «Подключено», шаг пароля с ошибкой у поля либо шаг
+    ошибки с «Начать заново» (D-09). «Нет сессии входа» уходит переходом на
+    `/login` (D-10). JSON этот обработчик больше не отдаёт.
+
+    ⚠️ ПАРОЛЬ НЕ ЭХАЕТСЯ (D-08, T-06-02). Неверный и пустой пароль отвечают 422
+    шагом пароля с ошибкой у поля на обоих транспортах; в контекст шаблона
+    пароль не кладётся ни на странице, ни во фрагменте, поле приходит пустым.
+    Запись журнала об отказе Telethon несёт только тип исключения.
+
+    ⚠️ СТРОКА СЕССИИ ДЛЯ ЗАПИСИ БЕРЁТСЯ ИЗ РЕЗУЛЬТАТА `complete_auth`, А НЕ ИЗ
+    `submit_2fa` (RESEARCH §Pitfall 3). `complete_auth` снимает сессию `pop` до
+    первого ожидания, поэтому из двух конкурентных подтверждений строку
+    получает ровно один запрос; второй получает пустоту и отвечает шагом
+    ошибки. Возврат `submit_2fa` для записи не годится: его получают ОБА
+    запроса, и одно сканирование дало бы два аккаунта. Запись — общий помощник
+    `_save_tg_account`, тот же, что у опроса (D-01).
+
+    ⚠️ ИНАЯ ОШИБКА TELETHON — ФРАГМЕНТ, А НЕ 500 (RESEARCH §Pitfall 5). `submit_2fa`
+    ловит только отказ пароля; сеть, FloodWait и прочее поднялись бы 500, а 500
+    на этом месте поднимает общий баннер отказа вместо шага.
+
+    ⚠️ ПОЛЯ ЧИТАЮТСЯ ИЗ ТЕЛА ФОРМЫ, А НЕ СИГНАТУРОЙ (RESEARCH §Pitfall 8):
+    отсутствующее поле идёт авторским шагом, а не отказом валидации фреймворка.
+
+    ⚠️ ПУТЬ ДЕГРАДАЦИИ — СТРАНИЦА МАСТЕРА (D-11): исходы переходят на неё, а
+    ошибка поля отвечает ею же с кодом 422. Мастер без JavaScript не работал и
+    не работает — без опроса до этого шага не дойти.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return {"error": "Не авторизован"}
+        return await respond(request, redirect="/login")
 
-    data = await request.json()
-    session_id = data.get("session_id")
-    password = data.get("password")
+    form = await request.form()
+    session_id = str(form.get("session_id") or "")
+    password = str(form.get("password") or "")
 
-    if not session_id or not password:
-        return {"error": "session_id и password обязательны"}
+    step = "error"
+    error: str | None = TG_AUTH_FAILED_MESSAGE
+    password_error: str | None = None
 
-    try:
-        session_string = await submit_2fa(session_id, password)
-    except ValueError as e:
-        return {"error": str(e)}
-    except RuntimeError as e:
-        return {"error": str(e)}
+    if not password.strip():
+        password_error = TG_EMPTY_PASSWORD_MESSAGE
+    else:
+        status = get_qr_status(session_id)["status"]
+        if status == "expired":
+            error = TG_SESSION_EXPIRED_MESSAGE
+        elif status == "needs_2fa":
+            try:
+                await submit_2fa(session_id, password)
+            except ValueError as e:
+                # «Неверный пароль 2FA.» дословно — у поля (D-08, D-09).
+                password_error = str(e)
+            except RuntimeError as e:
+                error = str(e)
+            except Exception as e:
+                import structlog
+                structlog.get_logger().error(
+                    "tg_verify_2fa_error", error_type=type(e).__name__
+                )
+            else:
+                session_string = await complete_auth(session_id)
+                if session_string:
+                    await _save_tg_account(db, user, session_string)
+                    step, error = "connected", None
+                else:
+                    # Проигравший гонку: сессию снял другой запрос. План 13-04
+                    # сменит текст на «не найдена».
+                    error = TG_SESSION_EXPIRED_MESSAGE
+        # Любой иной статус — «Ошибка авторизации»: подтверждать пароль нечего.
 
-    # Clean up auth client
-    await complete_auth(session_id)
+    if password_error is not None:
+        field_error = password_error
 
-    # Create MessengerAccount
-    account = MessengerAccount(
-        user_id=user.id,
-        type="tg_user",
-        credentials=session_string,
-        status="active",
-    )
-    db.add(account)
-    await db.commit()
+        async def _page() -> HTMLResponse:
+            """Страница мастера с шагом пароля и ошибкой у поля — путь без JS."""
+            return templates.TemplateResponse(
+                "accounts/connect_tg_user.html",
+                {
+                    "request": request,
+                    "user": user,
+                    "is_admin": check_is_admin(user, settings),
+                    "active_page": "accounts",
+                    "step": "password",
+                    "session_id": session_id,
+                    "password_error": field_error,
+                },
+            )
 
-    return {"status": "success"}
+        async def _fragment() -> HTMLResponse:
+            """Тот же шаг пароля с ошибкой у поля — содержимое якоря."""
+            return HTMLResponse(
+                _tg_step_markup(
+                    step="password", session_id=session_id, password_error=field_error
+                )
+            )
+
+        return await respond_field_error(request, page=_page, fragment=_fragment)
+
+    async def _step() -> HTMLResponse:
+        """Шаг «Подключено» либо шаг ошибки с «Начать заново»."""
+        return HTMLResponse(_tg_step_markup(step=step, error=error))
+
+    return await respond(request, redirect="/accounts/connect/tg_user", fragment=_step)
 
 
 @router.get("/accounts/connect/wa", response_class=HTMLResponse)

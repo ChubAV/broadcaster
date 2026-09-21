@@ -4,8 +4,9 @@
    шаг отсюда и страница `accounts/connect_tg_user.html`, и фрагменты ответов
    обработчиков мастера (Фаза 13): разойтись странице и фрагменту негде, потому
    что второго места разметки шага нет. Читаются `step` (в плане 13-01 —
-   `start`, `waiting`, `connected`, `error`; шаги кода и пароля дописывают
-   планы 13-02 и 13-03), `session_id`, `qr_code`, `error` и `password_error`.
+   `start`, `waiting`, `connected`, `error`; шаг пароля `password` дописал план
+   13-02, шаг истёкшего кода допишет план 13-03), `session_id`, `qr_code`,
+   `error` и `password_error`.
 
    ⚠️ МЕХАНИЗМ ОСТАНОВКИ ОПРОСА. Команды «стоп» у опроса нет: он прекращается
    тем, что очередной ответ 200 приходит БЕЗ формы-опросчика. Опросчик живёт
@@ -62,6 +63,32 @@
     <div class="connect-step__actions">
       {{ link_button('Отмена', '/accounts', variant='ghost') }}
     </div>
+  </div>
+
+  {% elif step == "password" %}
+  <div class="connect-step">
+    <p class="connect-step__text">
+      У вашего аккаунта включена двухфакторная аутентификация. Введите пароль.
+    </p>
+    {#- Пароль двухфакторной защиты живёт только в этом поле: он не переносится
+        в элементы, переживающие перезагрузку страницы, и не дублируется в
+        атрибуты (T-06-02). Значения у поля НЕТ ни на одном ответе, включая 422:
+        пароль в ответ не возвращается, поле приходит пустым (D-08), и в контекст
+        шаблона обработчик его не кладёт.
+        Ошибка поля — у формы (D-12 Фазы 8), 422 подменяет эту же цель правилом
+        блока конфигурации. Постоянный `id` поля возвращает на него фокус после
+        подмены (QUAL-06). Цель блокировки — умолчание обёртки, кнопка отправки:
+        защита от двойного нажатия на клиенте; на сервере её держит `pop` в
+        `complete_auth` (RESEARCH §Pitfall 3). -#}
+    {% call form_wrapper(action='/accounts/connect/tg_user/verify-2fa', target='#tg-connect-step', swap='innerHTML') %}
+      <input type="hidden" name="session_id" value="{{ session_id }}">
+      {{ field(name="password", label='Пароль 2FA', type='password', id='password', required=true,
+               placeholder='Пароль двухфакторной аутентификации', autocomplete='off',
+               error=password_error) }}
+      <div class="connect-step__actions">
+        {{ button('Подтвердить') }}
+      </div>
+    {% endcall %}
   </div>
 
   {% elif step == "connected" %}
