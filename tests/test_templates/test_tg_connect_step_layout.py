@@ -166,3 +166,69 @@ def test_a_centered_step_centers_the_actions_nested_in_its_form():
         "растянутой формы остаётся у левого края (UI-2)"
     )
     assert _declaration(body, "justify-content") == "center"
+
+
+BUSY_CLASS = "connect-step__busy"
+BUSY_TEXT = "Загрузка..."
+BUSY_SHOWN_SELECTOR = '.connect-step__actions > button[type="submit"][disabled] ~ .connect-step__busy'
+
+
+@pytest.mark.parametrize(("step", "error"), [("start", None), ("error", "Ошибка"), ("qr_expired", None)])
+def test_start_and_refresh_show_a_busy_label_while_the_button_is_disabled(step, error):
+    """UI-3: подпись «Загрузка...» стоит после кнопки отправки, которую htmx отключает."""
+    root = _tree(step=step, session_id="s", error=error)
+    form = _step_form(root)
+    assert form.attrs.get("hx-disabled-elt") == "find button[type=submit]", (
+        "подпись держится на `disabled` кнопки отправки — форма обязана сохранить "
+        "умолчание цели блокировки обёртки"
+    )
+    rows = form.find_all("div", "connect-step__actions")
+    assert len(rows) == 1
+    kids = rows[0].children
+
+    buttons = [i for i, k in enumerate(kids) if k.tag == "button" and k.attrs.get("type") == "submit"]
+    labels = [i for i, k in enumerate(kids) if k.tag == "span" and BUSY_CLASS in k.classes]
+    assert len(buttons) == 1, "в ряду действий нет кнопки отправки"
+    assert len(labels) == 1, f"в ряду действий нет ровно одной span.{BUSY_CLASS} (UI-3)"
+    assert kids[labels[0]].text.strip() == BUSY_TEXT
+    assert labels[0] > buttons[0], (
+        "подпись обязана стоять ПОСЛЕ кнопки: комбинатор последующего соседа "
+        "находит только более поздних соседей"
+    )
+    assert len(root.find_all(cls=BUSY_CLASS)) == 1, "во всей отрисовке шага подпись одна"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"step": "password", "session_id": "s"},
+        {"step": "waiting", "session_id": "s", "qr_code": "data:image/png;base64,AA"},
+        {"step": "connected"},
+    ],
+    ids=["password", "waiting", "connected"],
+)
+def test_no_other_step_carries_the_busy_label(kwargs):
+    """Объём UI-3: подпись только у старта/ошибки и обновления QR."""
+    assert BUSY_CLASS not in _tg_step_markup(**kwargs)
+
+
+def test_the_busy_label_is_keyed_on_the_disabled_button_not_on_the_form():
+    """UI-3: показ держит `disabled` кнопки, а не класс запроса рантайма."""
+    resting = _rule(f".{BUSY_CLASS}")
+    assert resting is not None, f"нет базового правила `.{BUSY_CLASS}`"
+    assert _declaration(resting, "display") == "none"
+    assert _declaration(resting, "font-size") == "var(--fs-md)"
+    assert _declaration(resting, "color") == "var(--text-secondary)"
+
+    shown = _rule(BUSY_SHOWN_SELECTOR)
+    assert shown is not None, f"нет правила показа `{BUSY_SHOWN_SELECTOR}`"
+    assert _declaration(shown, "display") == "inline"
+
+    # Класс запроса рантайма садится на узел индикатора обёртки, а не на форму:
+    # правило по нему не сработало бы никогда.
+    offenders = [
+        selector
+        for selector, _ in _css_rules(_app_css())
+        if f".{BUSY_CLASS}" in selector and "htmx-request" in selector
+    ]
+    assert offenders == [], f"селекторы подписи завязаны на класс запроса: {offenders}"

@@ -80,6 +80,7 @@
       <div class="connect-step__actions">
         {{ button('Обновить QR-код') }}
         {{ link_button('Отмена', '/accounts', variant='ghost') }}
+        <span class="connect-step__busy">Загрузка...</span>
       </div>
     {% endcall %}
   </div>
@@ -135,10 +136,18 @@
       Нажмите кнопку, чтобы получить QR-код. Отсканируйте его в приложении Telegram
       (Настройки &rarr; Устройства &rarr; Подключить устройство).
     </p>
+    {#- ПОДПИСЬ «Загрузка...» (UI-3). (1) Её показывают стили, пока htmx держит
+        кнопку отправки отключённой, — это цель блокировки обёртки по умолчанию.
+        Поэтому форма обязана сохранить умолчание цели блокировки, а подпись —
+        стоять ПОСЛЕ кнопки: правило находит её как последующего соседа.
+        (2) Скрипта нет, и он не нужен (D-11, D-12). (3) Текст — прежняя подпись
+        снятого скрипта страницы, возвращённая дословно (D-09). Та же подпись
+        стоит в ряду шага «код истёк». -#}
     {% call form_wrapper(action='/accounts/connect/tg_user/start-qr', target='#tg-connect-step', swap='innerHTML') %}
     <div class="connect-step__actions">
       {{ button('Начать подключение' if step == "start" else 'Начать заново') }}
       {{ link_button('Отмена', '/accounts', variant='ghost') }}
+      <span class="connect-step__busy">Загрузка...</span>
     </div>
     {% endcall %}
   </div>
