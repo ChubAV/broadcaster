@@ -10,7 +10,12 @@
 import pytest
 from fastapi import HTTPException
 
-from app.services.image_keys import THUMB_KEY_PREFIX, own_image_keys, thumb_key
+from app.services.image_keys import (
+    THUMB_KEY_PREFIX,
+    own_image_keys,
+    partition_own_image_keys,
+    thumb_key,
+)
 
 VALID_KEY = "7/" + "a" * 32 + "_photo.jpg"
 
@@ -54,3 +59,36 @@ def test_a_thumbnail_key_is_not_a_storable_attachment():
 def test_the_source_key_is_still_accepted():
     """Парный тест: без него предыдущий зеленел бы при отказе ЛЮБОМУ ключу."""
     assert own_image_keys([VALID_KEY], user_id=7, max_images=10) == [VALID_KEY]
+
+
+def test_partition_keeps_order_and_separates_the_foreign():
+    """Разделяющая форма предиката: «что подтверждено» и «что виновно», по порядку.
+
+    Разделение нужно ОДНОМУ вызывающему — маршруту загрузки: ему отвечать не
+    «всё или ничего», а полосой вложений, и подтверждённое подмножество обязано
+    остаться на экране. Отказ на сохранении при этом не смягчается ни на символ:
+    его по-прежнему поднимает ``own_image_keys``, выраженная через ЭТОТ же
+    предикат.
+
+    Порядок утверждается отдельно от состава, потому что порядок ключей есть
+    порядок отправки: перестановка тихо поменяла бы человеку порядок картинок в
+    рассылке.
+    """
+    own_first = "7/" + "b" * 32 + "_one.png"
+    own_second = "7/" + "c" * 32 + "_two.png"
+    foreign = "8/" + "d" * 32 + "_stolen.png"
+    malformed = "7/нетокен_three.png"
+
+    own, offending = partition_own_image_keys(
+        [own_first, foreign, own_second, malformed], user_id=7
+    )
+
+    assert own == [own_first, own_second], (
+        f"подтверждённое подмножество {own} не совпало с двумя своими ключами в "
+        "исходном порядке: человек получит на экране не те вложения и не в том "
+        "порядке, в каком они уйдут в рассылку"
+    )
+    assert offending == [foreign, malformed], (
+        f"виновные значения {offending} не совпали с чужим и синтаксически "
+        "негодным: либо чужой ключ признан своим, либо своё вложение отцеплено"
+    )

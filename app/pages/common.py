@@ -27,7 +27,8 @@ from app.models.subscription import Subscription
 from app.models.user import User
 from app.pages.notices import notice_for
 from app.services.auth_service import actor_id as token_actor_id, decode_access_token
-from app.services.image_keys import THUMB_KEY_PREFIX, thumb_key
+from app.services.image_keys import THUMB_KEY_PREFIX, media_dom_id, thumb_key
+from app.services.image_upload import UPLOAD_FILE_FIELD
 from app.services.s3 import get_image_url
 
 _templates_dir = Path(__file__).resolve().parent.parent / "templates"
@@ -282,6 +283,30 @@ templates.env.globals["AD_STATUS_PUBLISHED"] = AD_STATUS_PUBLISHED
 # `app/services/image_keys.py`, что и серверная сборка, и render-тест это
 # закрепляет.
 templates.env.globals["THUMB_KEY_PREFIX"] = THUMB_KEY_PREFIX
+
+# Имя файлового поля формы загрузки доезжает до разметки тем же способом и по той
+# же причине: значение — модульная константа, конструирования Settings здесь не
+# происходит, поэтому глобал ставится на импорте, а НЕ в
+# _bind_image_url_globals — там живёт только то, что зависит от настроек.
+#
+# Значение ввозится, а не повторяется литералом: единственное объявление имени
+# живёт в `app/services/image_upload.py`, и оттуда же его читает обработчик,
+# разбирающий составной запрос. Второе написание разошлось бы с первым молча —
+# браузер посылал бы поле под одним именем, а сервер искал бы под другим, и
+# человек видел бы загрузку, которая «ничего не делает».
+templates.env.globals["upload_field"] = UPLOAD_FILE_FIELD
+
+# Правило производства идентификатора узла плитки вложения доезжает до разметки
+# тем же способом и по той же причине, что и две записи выше: значение зависит
+# только от ключа, конструирования Settings здесь не происходит, поэтому глобал
+# ставится на импорте, а НЕ в _bind_image_url_globals.
+#
+# ⚠️ ПЕЧАТАЮЩИХ МЕСТ У ЭТОГО ИДЕНТИФИКАТОРА ДВА (Фаза 12, план 12-11, D-19):
+# плитка полосы и блок АДРЕСНОГО СНЯТИЯ ответа убирания. Глобал — и есть
+# механизм, которым два места связаны ОДНОЙ функцией: разойдись написания,
+# ответ убирания целился бы в узел, которого нет, рантайм промолчал бы, и
+# плитка осталась бы на экране без единого признака отказа.
+templates.env.globals["media_dom_id"] = media_dom_id
 
 # Подписи каналов доезжают до шаблонов тем же способом и по той же причине:
 # строка перечня воркеров — МАКРОС, а импортированным макросам Jinja контекст

@@ -30,7 +30,6 @@ from app.pages.htmx import (
 )
 from app.routes.auth import router as auth_router
 from app.routes.ads import router as ads_router
-from app.routes.uploads import router as uploads_router
 from app.routes.accounts import router as accounts_router
 from app.routes.schedules import router as schedules_router
 from app.routes.history import router as history_router
@@ -121,13 +120,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             Depends(get_current_user_id_with_access),
         ],
     )
-    app.include_router(
-        uploads_router,
-        dependencies=[
-            Depends(get_current_user_id_active),
-            Depends(get_current_user_id_with_access),
-        ],
-    )
+    #
+    # ⚠️ РОУТЕР ЗАГРУЗКИ ИЗОБРАЖЕНИЙ СНЯТ ОТСЮДА ВМЕСТЕ СО СВОИМ МОДУЛЕМ (Фаза 12,
+    # план 12-05, D-03). Обработчик загрузки переехал на СТРАНИЧНУЮ поверхность и
+    # живёт внутри `ads_router` выше (D-01), то есть закрывается пер-роутерной
+    # зависимостью `app/pages/__init__.py`, а не парой зависимостей этой сборки.
+    # Требование «истёкший доступ загрузку закрывает» выполняется ДРУГИМ
+    # механизмом, а не отменяется, и оба перечня
+    # `tests/test_pages/test_access_gate.py` правлены тем же коммитом.
     app.include_router(
         accounts_router,
         dependencies=[

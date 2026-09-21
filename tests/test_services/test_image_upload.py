@@ -1,34 +1,65 @@
+"""Не-транспортная половина загрузки: распознавание, нормализация, запись объекта.
+
+Утверждения переехали сюда из суиты снятого JSON-входа загрузки (Фаза 12, план
+12-05, G-8). Переезд — не переписывание: каждое утверждение сохранило СВОЙ
+предмет, своё имя и своё адресное сообщение; изменился только вход, через который
+оно подано. Прежде предметом был HTTP-запрос к исчезнувшему адресу, теперь —
+`store_upload` и три чистые функции рядом с ним. Утверждения О МАРШРУТЕ (коды,
+фрагмент, владение ключом) уехали в `tests/test_pages/test_ads_image_upload.py`.
+
+Форма модуля взята у соседа по каталогу `test_image_keys.py`: чистые утверждения,
+без клиентских фикстур, ожидания на ИМПОРТИРОВАННЫХ именах сервиса. Тест на
+литерале сравнивал бы модуль сам с собой и зеленел бы ровно тогда, когда человек
+получал бы не тот текст, что здесь написан.
+
+⚠️ ЗАПИСЬ ОБЪЕКТА ПОДМЕНЯЕТСЯ ПО АДРЕСУ `app.services.image_upload.upload_file_to_s3`.
+Цель патча привязана к ИМЕНИ МОДУЛЯ, и промах даёт `AttributeError`, а не
+осмысленный отказ (G-8) — переезд имени обязан ронять этот файл вслух.
+"""
+
 import io
 import re
 
 import pytest
-import pytest_asyncio
-from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
 from fastapi import UploadFile as FastAPIUploadFile
-from httpx import AsyncClient, ASGITransport
 from PIL import Image
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from unittest.mock import AsyncMock, patch
 
 from app.config import Settings
-from app.dependencies import get_db, get_settings
-from app.main import create_app
 from app.services.image_keys import own_image_keys, thumb_key
 from app.services.images import DELIVERY_MAX_EDGE, MAX_DECODED_PIXELS
-from app.routes.uploads import (
+from app.services.image_upload import (
     _IMAGE_SIGNATURES,
+    Accepted,
     FALLBACK_FILENAME,
     MAX_FILENAME_LENGTH,
     OVERSIZED_IMAGE_MESSAGE,
     UNSUPPORTED_IMAGE_MESSAGE,
+    UPLOAD_CHUNK_SIZE,
+    Rejected,
     retarget_extension,
     safe_filename,
     sniff_image,
+    store_upload,
 )
 
+# Владелец, под чьим идентификатором строится ключ объекта. Значение любое
+# положительное: сервис его не проверяет — проверку владения делает
+# `own_image_keys` при сохранении объявления, — но первым звеном ключа он идёт, и
+# утверждения о форме ключа его читают.
+OWNER_ID = 7
 
-@pytest_asyncio.fixture
-async def upload_settings():
+
+@pytest.fixture
+def upload_settings() -> Settings:
+    """Настройки с заполненными параметрами хранилища.
+
+    Тот же набор, что получал снятый вход: сервис передаёт эти значения в запись
+    объекта, и утверждения о бакете их читают. `_env_file=None` обязателен —
+    иначе фикстура наследует боевые S3-параметры рабочего каталога.
+    """
     return Settings(
         _env_file=None,
         database_url="sqlite+aiosqlite:///:memory:",
@@ -42,30 +73,19 @@ async def upload_settings():
     )
 
 
-@pytest_asyncio.fixture
-async def upload_client(db_session, upload_settings):
-    app = create_app(settings=upload_settings)
-    app.dependency_overrides[get_db] = lambda: db_session
-    app.dependency_overrides[get_settings] = lambda: upload_settings
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as c:
-        yield c
+def an_upload(
+    content: bytes,
+    filename: str | None = "photo.png",
+    cls: type[StarletteUploadFile] = StarletteUploadFile,
+) -> StarletteUploadFile:
+    """Файловая часть составного запроса ровно того рода, что приходит сервису.
 
-
-@pytest_asyncio.fixture
-async def upload_auth_headers(upload_client):
-    """Register a user and return auth headers for the upload client."""
-    await upload_client.post("/api/auth/register", json={
-        "email": "uploader@test.com",
-        "password": "testpass123",
-        "name": "Upload User",
-    })
-    resp = await upload_client.post("/api/auth/login", json={
-        "email": "uploader@test.com",
-        "password": "testpass123",
-    })
-    token = resp.json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    Класс параметрический намеренно: в сервис приезжает то, что собрал разбор
+    составного запроса, и разбор этот отдаёт БАЗОВЫЙ класс, тогда как объявление
+    обработчика типизировано подклассом FastAPI. Утверждение об объёме чтения
+    ниже меряет оба, а не предполагает один — см. его докстринг.
+    """
+    return cls(file=io.BytesIO(content), filename=filename, size=len(content))
 
 
 def make_png_bytes():
@@ -91,16 +111,16 @@ def make_jpeg_bytes():
     """Минимальные байты, начинающиеся с сигнатуры JPEG (SOI + APP0).
 
     ⚠️ Эти байты НЕ ДЕКОДИРУЮТСЯ. Для проверок ``sniff_image`` этого хватало —
-    там читаются первые три байта, — но с issue #40 обработчик изображение
-    ещё и открывает, поэтому по HTTP-пути такой вход означает отказ, а не
-    приём. Построитель сохранён и получил СВОЙ тест
-    (``test_upload_rejects_signature_without_a_decodable_image``): «сигнатура
-    верна, картинки нет» — отдельный класс входа, и терять его нельзя.
+    там читаются первые три байта, — но с issue #40 приём изображение ещё и
+    открывает, поэтому такой вход означает отказ, а не приём. Построитель
+    сохранён и получил СВОЙ тест
+    (``test_store_upload_rejects_signature_without_a_decodable_image``):
+    «сигнатура верна, картинки нет» — отдельный класс входа, и терять его нельзя.
     """
     return b"\xff\xd8\xff\xe0" + b"\x00\x10JFIF\x00" + b"\x00" * 16
 
 
-# --- issue #40: НАСТОЯЩИЕ изображения для HTTP-пути ---------------------------
+# --- issue #40: НАСТОЯЩИЕ изображения для пути приёма -------------------------
 #
 # Построители живут ЗДЕСЬ, а не импортируются из tests/test_services/test_images.py,
 # намеренно: тестовый модуль не библиотека, и импорт одного из другого связал бы
@@ -210,8 +230,8 @@ SVG_BYTES = (
 # Клиентское имя файла в составном запросе полностью подконтрольно отправителю и
 # участвует в построении ключа объекта хранилища. Без нормализации сегменты пути
 # в имени выводят ключ за префикс пользователя, то есть в чужую область того же
-# хранилища. Функция проверяется напрямую, без HTTP: у неё определённые вход и
-# выход, и классы входов проверяются каждый отдельно.
+# хранилища. Функция проверяется напрямую: у неё определённые вход и выход, и
+# классы входов проверяются каждый отдельно.
 
 SAFE_FILENAME_CHARS = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -256,24 +276,21 @@ def test_safe_filename_truncates():
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_upload_key_stays_inside_user_prefix(
-    mock_s3, upload_client, upload_auth_headers
-):
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_store_upload_key_stays_inside_user_prefix(mock_s3, upload_settings):
     """Ключ объекта не выходит за префикс пользователя ни при каком имени файла."""
-    png_bytes = make_real_png_bytes()
     hostile = '../../evil x" onerror="alert(1)>.png'
 
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": (hostile, png_bytes, "image/png")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_real_png_bytes(), hostile),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
-    key = response.json()["path"]
+    assert isinstance(result, Accepted), result
+    key = result.key
     assert re.fullmatch(r"\d+/[0-9a-f]{32}_[A-Za-z0-9._-]+", key), key
-    # Ключ, ушедший в хранилище, — тот же самый, что вернулся клиенту.
+    # Ключ, ушедший в хранилище, — тот же самый, что вернул сервис.
     #
     # ⚠️ Утверждение снимается с ПЕРВОГО вызова, а не с последнего (issue #40).
     # `call_args` — это последний вызов, а последним теперь идёт МИНИАТЮРА, и её
@@ -284,15 +301,15 @@ async def test_upload_key_stays_inside_user_prefix(
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_upload_valid_image(mock_s3, upload_client, upload_auth_headers):
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_store_upload_accepts_a_valid_image(mock_s3, upload_settings):
     """Приём картинки: два объекта в хранилище, и ни один не равен присланному.
 
     ⚠️ ДВА ПРЕЖНИХ УТВЕРЖДЕНИЯ ОТМЕНЕНЫ СОЗНАТЕЛЬНО (issue #40), и заменены, а
     не выброшены:
 
     * ``call_kwargs["content"] == png_bytes`` утверждало БАЙТОВОЕ РАВЕНСТВО
-      сохранённого присланному. Ровно это правило и отменяет задача: оригинал не
+      сохранённого присланному. Ровно это правило и отменила задача: оригинал не
       хранится ни под каким ключом (D-2), в бакет уходит пережатая версия.
       Замена утверждает то, что теперь истинно и ценно: сохранённое всё ещё
       РАЗБИРАЕТСЯ в изображение, то есть пережатие картинку не испортило.
@@ -307,15 +324,14 @@ async def test_upload_valid_image(mock_s3, upload_client, upload_auth_headers):
     """
     png_bytes = make_real_png_bytes()
 
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("test_image.png", png_bytes, "image/png")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(png_bytes, "test_image.png"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
-    assert response.status_code == 200
-    data = response.json()
-    assert "path" in data
-    assert "test_image" in data["path"]
+
+    assert isinstance(result, Accepted), result
+    assert "test_image" in result.key
 
     assert mock_s3.call_count == 2, "сохранены не оба объекта: сжатая версия и миниатюра"
     call_kwargs = mock_s3.call_args_list[0].kwargs
@@ -326,58 +342,18 @@ async def test_upload_valid_image(mock_s3, upload_client, upload_auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_upload_non_image_file(upload_client, upload_auth_headers):
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("document.txt", b"hello world", "text/plain")},
-        headers=upload_auth_headers,
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_store_upload_rejects_a_plain_text_file(mock_s3, upload_settings):
+    """Текстовый файл отвергается, и в хранилище не уходит ничего."""
+    result = await store_upload(
+        an_upload(b"hello world", "document.txt"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
-    assert response.status_code == 400
 
-
-@pytest.mark.asyncio
-async def test_upload_unauthenticated(upload_client):
-    png_bytes = make_png_bytes()
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("test.png", png_bytes, "image/png")},
-    )
-    assert response.status_code == 401
-
-
-@pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_upload_image_with_cookie_auth(mock_s3, upload_client):
-    """Upload should work with cookie-based auth (used by web UI).
-
-    ⚠️ Утверждение о ключе снято с имени файла БЕЗ РАСШИРЕНИЯ (issue #40).
-    Прежнее ``"cookie_image.png" in path`` перестало быть истинным не потому,
-    что имя потерялось, а потому, что PNG без настоящей альфы сохраняется JPEG
-    ом и расширение в ключе приводится к сохранённому формату (P-5). Проверяемое
-    свойство — «имя файла доезжает до ключа» — сохранено целиком; из него убрана
-    ровно та часть, которую задача изменила намеренно.
-    """
-    await upload_client.post("/api/auth/register", json={
-        "email": "cookie@test.com",
-        "password": "testpass123",
-        "name": "Cookie User",
-    })
-    resp = await upload_client.post("/api/auth/login", json={
-        "email": "cookie@test.com",
-        "password": "testpass123",
-    })
-    token = resp.json()["access_token"]
-    upload_client.cookies.set("access_token", token)
-
-    png_bytes = make_real_png_bytes()
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("cookie_image.png", png_bytes, "image/png")},
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert "path" in data
-    assert "cookie_image" in data["path"]
+    assert isinstance(result, Rejected), result
+    assert result.reason == UNSUPPORTED_IMAGE_MESSAGE
+    mock_s3.assert_not_called()
 
 
 # --- CR-02: тип изображения определяется по содержимому ------------------------
@@ -424,7 +400,7 @@ def test_sniff_image_rejects_non_images(content):
 #
 # Отказ здесь наступает по причине, не имеющей отношения к CR-02: на входе
 # честные, корректные изображения. Разбор по мессенджерам — в комментарии над
-# ``_IMAGE_SIGNATURES`` в ``app/routes/uploads.py``.
+# таблицей сигнатур самого сервиса приёма загрузки.
 
 
 @pytest.mark.parametrize(
@@ -482,24 +458,26 @@ def test_supported_formats_and_refusal_text_stay_in_step():
     ],
     ids=["png-opaque", "png-alpha", "jpeg"],
 )
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_upload_accepts_each_supported_format(
-    mock_s3, make_bytes, expected, upload_client, upload_auth_headers
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_store_upload_accepts_each_supported_format(
+    mock_s3, make_bytes, expected, upload_settings
 ):
     """Оба поддерживаемых формата принимаются по содержимому.
 
     ⚠️ Параметризация переведена на НАСТОЯЩИЕ изображения (issue #40): прежняя
     шла через ``make_jpeg_bytes``, который декодироваться не может вовсе, и
-    после этой задачи меряла бы отказ вместо приёма.
+    после той задачи меряла бы отказ вместо приёма.
+
+    Имя части заведомо не описывает содержимого — приём должен опираться на
+    первые байты, а не на клиентское имя и не на присланный заголовок типа.
     """
-    response = await upload_client.post(
-        "/api/uploads/image",
-        # Заголовок типа заведомо неверный: приём должен опираться на содержимое.
-        files={"file": ("payload.bin", make_bytes(), "application/octet-stream")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_bytes(), "payload.bin"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
+    assert isinstance(result, Accepted), result
     # Оба объекта уходят с одним типом: правило формата у них общее (P-6).
     assert [call.kwargs["content_type"] for call in mock_s3.call_args_list] == [
         expected,
@@ -517,67 +495,64 @@ async def test_upload_accepts_each_supported_format(
     ],
     ids=["gif87a", "gif89a", "webp"],
 )
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_upload_rejects_formats_no_messenger_can_send(
-    mock_s3, make_bytes, upload_client, upload_auth_headers
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_store_upload_rejects_formats_no_messenger_can_send(
+    mock_s3, make_bytes, upload_settings
 ):
-    """Issue #39: отказ наступает на ЗАГРУЗКЕ и до обращения к хранилищу.
+    """Issue #39: отказ наступает на ПРИЁМЕ и до обращения к хранилищу.
 
-    Заголовок типа заведомо неверный: отказ, как и приём, опирается на
-    содержимое, а не на слово клиента. ``assert_not_called`` обязателен — один
-    лишь код 400 доказывает мало, его возвращает и превышение размера; смысл
-    правки в том, что такой файл в хранилище не попадает вовсе.
+    ``assert_not_called`` обязателен — одна лишь форма отказа доказывает мало,
+    её возвращает и превышение размера; смысл правки в том, что такой файл в
+    хранилище не попадает вовсе.
     """
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("payload.bin", make_bytes(), "application/octet-stream")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_bytes(), "payload.bin"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == UNSUPPORTED_IMAGE_MESSAGE
+    assert isinstance(result, Rejected), result
+    assert result.reason == UNSUPPORTED_IMAGE_MESSAGE
     mock_s3.assert_not_called()
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_upload_rejects_svg_declared_as_png(
-    mock_s3, upload_client, upload_auth_headers
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_store_upload_rejects_svg_whatever_the_name_claims(
+    mock_s3, upload_settings
 ):
-    """CR-02: SVG с заголовком ``image/png`` отклоняется и в хранилище не уходит."""
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("logo.png", SVG_BYTES, "image/png")},
-        headers=upload_auth_headers,
+    """CR-02: SVG под именем PNG отклоняется и в хранилище не уходит."""
+    result = await store_upload(
+        an_upload(SVG_BYTES, "logo.png"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 400
-    assert "JPEG" in response.json()["detail"]
+    assert isinstance(result, Rejected), result
+    assert "JPEG" in result.reason
     mock_s3.assert_not_called()
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_upload_rejects_non_image_declared_as_image(
-    mock_s3, upload_client, upload_auth_headers
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_store_upload_rejects_non_image_under_an_image_name(
+    mock_s3, upload_settings
 ):
-    """Произвольные байты не проходят ни под каким заголовком типа."""
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("payload.jpg", b"not an image at all", "image/jpeg")},
-        headers=upload_auth_headers,
+    """Произвольные байты не проходят ни под каким именем файла."""
+    result = await store_upload(
+        an_upload(b"not an image at all", "payload.jpg"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 400
+    assert isinstance(result, Rejected), result
     mock_s3.assert_not_called()
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_upload_stores_sniffed_content_type_not_client_header(
-    mock_s3, upload_client, upload_auth_headers
-):
-    """В хранилище уходит распознанный тип, а не присланный клиентом.
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_store_upload_stores_the_sniffed_content_type(mock_s3, upload_settings):
+    """В хранилище уходит распознанный тип, а не заявленный именем файла.
 
     Иначе объект лёг бы в S3 с подконтрольным отправителю ``Content-Type`` и
     отдавался бы браузеру с ним же — вектор CR-02 сохранился бы на выдаче.
@@ -587,16 +562,15 @@ async def test_upload_stores_sniffed_content_type_not_client_header(
     даже усилилось: прежде тип брался от РАСПОЗНАННОГО содержимого, теперь — от
     ФАКТИЧЕСКИ СОХРАНЁННЫХ байтов, которые произведены самим приложением. Это
     строго у́же прежнего: подконтрольного отправителю значения на этом пути не
-    остаётся ни на одном шаге. Заголовок ``image/svg+xml`` в запросе — прежний,
-    и он по-прежнему не влияет ни на что.
+    остаётся ни на одном шаге.
     """
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("real.png", make_real_png_bytes(), "image/svg+xml")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_real_png_bytes(), "real.png"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
+    assert isinstance(result, Accepted), result
     assert mock_s3.call_args_list[0].kwargs["content_type"] == "image/jpeg"
     assert "svg" not in mock_s3.call_args_list[0].kwargs["content_type"]
 
@@ -609,18 +583,16 @@ async def test_upload_stores_sniffed_content_type_not_client_header(
 # заставлял ASGI-воркер удерживать в памяти тело произвольного размера, и путь
 # отказа платил ту же цену.
 #
-# Утверждать один лишь код 400 на превышении бесполезно — он возвращается и на
-# дефектном коде. Измеряется поэтому ОБЪЁМ ЧТЕНИЯ.
+# Утверждать одну лишь форму отказа на превышении бесполезно — её возвращает и
+# дефектный код. Измеряется поэтому ОБЪЁМ ЧТЕНИЯ.
 
 
-@pytest_asyncio.fixture
-async def oversize_settings(upload_settings):
+@pytest.fixture
+def oversize_settings(upload_settings) -> Settings:
     """Настройки загрузки с пределом размера 1 МБ.
 
-    Тот же объект, что получает приложение и обработчик: `upload_client` и
-    `upload_auth_headers` зависят от той же фикстуры. Дефолтные 5 МБ заставили
-    бы держать в тесте лишние мегабайты; предел берётся из настроек, а не из
-    литерала, поэтому понизить его достаточно здесь.
+    Дефолтные 5 МБ заставили бы держать в тесте лишние мегабайты; предел берётся
+    из настроек, а не из литерала, поэтому понизить его достаточно здесь.
     """
     upload_settings.max_image_size_mb = 1
     return upload_settings
@@ -641,19 +613,19 @@ _NO_SIZE_ARGUMENT = object()
 
 
 def test_read_measurement_targets_the_class_the_handler_receives():
-    """Обёртка чтения накладывается на ТОТ класс, что приходит в обработчик.
+    """Обёртка чтения накладывается на ТОТ класс, что приходит в сервис.
 
     `fastapi.UploadFile` в установленной версии — НЕ тот же класс, а подкласс
     `starlette.datastructures.UploadFile`, и он переопределяет ``read``,
-    передавая размер в базовый метод ЯВНО. Приди в обработчик экземпляр
-    подкласса, вызов ``await file.read()`` без аргумента дошёл бы до обёртки уже
-    с ``size=-1``, и утверждение «обработчик не читал без ограничения размера»
+    передавая размер в базовый метод ЯВНО. Приди в сервис экземпляр подкласса,
+    вызов ``await file.read()`` без аргумента дошёл бы до обёртки уже с
+    ``size=-1``, и утверждение «сервис не читал без ограничения размера»
     перестало бы что-либо измерять, оставшись зелёным при полностью
     забуференном теле.
 
     Поэтому обёртка кладётся на БАЗОВЫЙ класс — его метод в конечном счёте
-    вызывают оба, — а то, что в обработчик приходит именно базовый, не
-    предполагается, а измеряется в ``test_oversized_upload_is_not_buffered_whole``.
+    вызывают оба, — а то, что оба класса меряются, обеспечено параметризацией
+    ``test_oversized_body_is_not_buffered_whole``.
     """
     assert issubclass(FastAPIUploadFile, StarletteUploadFile)
 
@@ -683,34 +655,42 @@ def recorded_reads(monkeypatch):
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_oversized_upload_is_not_buffered_whole(
-    mock_s3, oversize_settings, upload_client, upload_auth_headers, recorded_reads
+@pytest.mark.parametrize(
+    "upload_class",
+    [StarletteUploadFile, FastAPIUploadFile],
+    ids=["starlette-base", "fastapi-subclass"],
+)
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_oversized_body_is_not_buffered_whole(
+    mock_s3, upload_class, oversize_settings, recorded_reads
 ):
-    """Превышение предела ПРЕРЫВАЕТ чтение, а не проверяется после него."""
+    """Превышение предела ПРЕРЫВАЕТ чтение, а не проверяется после него.
+
+    ⚠️ ОБА КЛАССА МЕРЯЮТСЯ, А НЕ ОДИН, И ЭТО НЕ ИЗЛИШЕСТВО. Разбор составного
+    запроса отдаёт БАЗОВЫЙ класс, а объявление обработчика типизировано
+    подклассом FastAPI, который передаёт размер в базовый метод явно. Мерь тест
+    только базовый — и «аргумента не было» осталось бы различимым, но лишь для
+    того класса, который в сервис приезжает СЕГОДНЯ; мерь только подкласс — и
+    различать стало бы нечего вовсе (см. докстринг
+    ``test_read_measurement_targets_the_class_the_handler_receives``).
+    """
     max_bytes = oversize_settings.max_image_size_mb * 1024 * 1024
     body = make_oversized_png_bytes(3 * 1024 * 1024)
 
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("big.png", body, "image/png")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(body, "big.png", cls=upload_class),
+        user_id=OWNER_ID,
+        settings=oversize_settings,
     )
 
-    assert response.status_code == 400
-    assert "File size exceeds" in response.json()["detail"]
+    assert isinstance(result, Rejected), result
+    assert "File size exceeds" in result.reason
     mock_s3.assert_not_called()
 
-    assert recorded_reads, "обработчик не прочитал ни байта — измерять нечего"
-    # «Аргумента не было» различимо только у базового класса: подкласс FastAPI
-    # передаёт размер в базовый метод явно. Факт измеряется, а не предполагается.
-    assert {cls for _, _, cls in recorded_reads} == {StarletteUploadFile}, (
-        "чтение пришло не от того класса, на который наложена обёртка — "
-        "различить «без аргумента» и «read(-1)» больше нельзя"
-    )
+    assert recorded_reads, "сервис не прочитал ни байта — измерять нечего"
     requested = [size for size, _, _ in recorded_reads]
     assert None not in requested, (
-        "обработчик запросил содержимое БЕЗ ограничения размера: всё тело "
+        "сервис запросил содержимое БЕЗ ограничения размера: всё тело "
         f"оказалось в памяти (запрошенные размеры: {requested})"
     )
     total = sum(length for _, length, _ in recorded_reads)
@@ -719,37 +699,40 @@ async def test_oversized_upload_is_not_buffered_whole(
     assert total <= max_bytes + max(requested), (
         f"прочитано {total} байт при пределе {max_bytes}: чтение не прервалось"
     )
+    assert set(requested) == {UPLOAD_CHUNK_SIZE}, (
+        f"порции запрошены размерами {sorted(set(requested))} вместо объявленного "
+        f"{UPLOAD_CHUNK_SIZE}: размер порции перестал быть тем, что объявлен"
+    )
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_oversized_upload_is_refused_with_size_message(
-    mock_s3, oversize_settings, upload_client, upload_auth_headers
-):
-    """Страж формулировки: текст и код отказа по размеру не меняются.
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_oversized_body_is_refused_with_size_message(mock_s3, oversize_settings):
+    """Страж формулировки: текст отказа по размеру не меняется.
 
     Зелен и до правки, и после: он закрепляет ответ, а не воспроизводит дефект.
     Дефект — в объёме чтения, и его меряет тест выше.
     """
     body = make_oversized_png_bytes(3 * 1024 * 1024)
 
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("big.png", body, "image/png")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(body, "big.png"),
+        user_id=OWNER_ID,
+        settings=oversize_settings,
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == (
+    assert isinstance(result, Rejected), result
+    assert result.reason == (
         f"File size exceeds {oversize_settings.max_image_size_mb}MB limit"
     )
+    assert result.display_name == "big.png"
     mock_s3.assert_not_called()
 
 
 # --- Issue #40: сжатие на входе и миниатюра для интерфейса ---------------------
 #
-# Одна загрузка перестала быть одним объектом. Проверяется поэтому не «ответ
-# 200», а СОСТАВ обращений к хранилищу: что объектов ровно два, что первый —
+# Одна загрузка перестала быть одним объектом. Проверяется поэтому не форма
+# результата, а СОСТАВ обращений к хранилищу: что объектов ровно два, что первый —
 # пережатая версия под возвращённым ключом, что второй — миниатюра под ключом с
 # приставкой, и что присланных байтов нет ни в одном из них.
 
@@ -798,7 +781,7 @@ def test_retarget_extension_falls_back_on_a_bare_extension():
     """Имя, состоящее из одного расширения, не оставляет пустой основы.
 
     Пустая основа дала бы ключ, оканчивающийся на подчёркивание с расширением
-    сразу за ним, — форма, которой маршрут загрузки никогда не порождал.
+    сразу за ним, — форма, которой приём загрузки никогда не порождал.
     """
     assert retarget_extension(".png", ".jpg") == f"{FALLBACK_FILENAME}.jpg"
 
@@ -807,53 +790,44 @@ def test_retarget_extension_falls_back_on_a_bare_extension():
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_upload_stores_exactly_the_delivery_image_and_its_thumbnail(
-    mock_s3, upload_client, upload_auth_headers
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_store_upload_stores_exactly_the_delivery_image_and_its_thumbnail(
+    mock_s3, upload_settings
 ):
     """Ровно два объекта: сжатая версия под ключом и миниатюра под приставкой."""
-    payload = make_real_jpeg_bytes((4000, 3000))
-
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("photo.jpg", payload, "image/jpeg")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_real_jpeg_bytes((4000, 3000)), "photo.jpg"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
-    key = response.json()["path"]
+    assert isinstance(result, Accepted), result
 
     assert mock_s3.call_count == 2
     delivery, thumbnail = mock_s3.call_args_list
-    assert delivery.kwargs["key"] == key
-    assert thumbnail.kwargs["key"] == thumb_key(key)
+    assert delivery.kwargs["key"] == result.key
+    assert thumbnail.kwargs["key"] == thumb_key(result.key)
     assert _decode(thumbnail.kwargs["content"]).size[0] <= DELIVERY_MAX_EDGE
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_stored_image_is_reduced_to_the_delivery_limit(
-    mock_s3, upload_client, upload_auth_headers
-):
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_stored_image_is_reduced_to_the_delivery_limit(mock_s3, upload_settings):
     """Снимок 4000x3000 доезжает до бакета с длинной стороной 1920 (D-3)."""
-    payload = make_real_jpeg_bytes((4000, 3000))
-
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("photo.jpg", payload, "image/jpeg")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_real_jpeg_bytes((4000, 3000)), "photo.jpg"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
+    assert isinstance(result, Accepted), result
     stored = mock_s3.call_args_list[0].kwargs["content"]
     assert _decode(stored).size == (DELIVERY_MAX_EDGE, 1440)
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_original_bytes_reach_no_object_at_all(
-    mock_s3, upload_client, upload_auth_headers
-):
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_original_bytes_reach_no_object_at_all(mock_s3, upload_settings):
     """Оригинал не хранится ни под каким ключом (D-2).
 
     Утверждение идёт по ОБОИМ вызовам: «первый не равен присланному» оставило бы
@@ -862,13 +836,13 @@ async def test_original_bytes_reach_no_object_at_all(
     """
     payload = make_real_jpeg_bytes((4000, 3000))
 
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("photo.jpg", payload, "image/jpeg")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(payload, "photo.jpg"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
+    assert isinstance(result, Accepted), result
     stored = [call.kwargs["content"] for call in mock_s3.call_args_list]
     assert payload not in stored
     assert all(len(content) < len(payload) for content in stored)
@@ -878,48 +852,44 @@ async def test_original_bytes_reach_no_object_at_all(
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_returned_key_still_passes_the_ownership_check(
-    mock_s3, upload_client, upload_auth_headers
-):
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_returned_key_still_passes_the_ownership_check(mock_s3, upload_settings):
     """Ключ после смены формата всё ещё проходит ``own_image_keys`` (T-Q40-03).
 
     Это и есть цена, которую задача обязана НЕ заплатить: приведи она расширение
-    неаккуратно, эндпоинт возвращал бы ключ, который сохранение объявления
+    неаккуратно, приём возвращал бы ключ, который сохранение объявления
     отвергает, — загрузка «удалась», а прикрепить результат нельзя.
     """
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("photo.png", make_real_png_bytes(), "image/png")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_real_png_bytes(), "photo.png"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
-    key = response.json()["path"]
-    user_id = int(key.split("/", 1)[0])
+    assert isinstance(result, Accepted), result
+    user_id = int(result.key.split("/", 1)[0])
 
-    assert own_image_keys([key], user_id, 10) == [key]
+    assert own_image_keys([result.key], user_id, 10) == [result.key]
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
 async def test_the_thumbnail_key_is_refused_by_the_ownership_check(
-    mock_s3, upload_client, upload_auth_headers
+    mock_s3, upload_settings
 ):
     """T-Q40-04: миниатюру нельзя прикрепить к объявлению как вложение.
 
     Ключ берётся из ФАКТИЧЕСКОГО второго обращения к хранилищу, а не строится в
-    теле теста: иначе проверялось бы правило, а не то, что маршрут ему следует.
+    теле теста: иначе проверялось бы правило, а не то, что приём ему следует.
     """
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("photo.png", make_real_png_bytes(), "image/png")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_real_png_bytes(), "photo.png"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
-    key = response.json()["path"]
-    user_id = int(key.split("/", 1)[0])
+    assert isinstance(result, Accepted), result
+    user_id = int(result.key.split("/", 1)[0])
     thumbnail_key = mock_s3.call_args_list[1].kwargs["key"]
 
     with pytest.raises(HTTPException) as exc_info:
@@ -927,88 +897,84 @@ async def test_the_thumbnail_key_is_refused_by_the_ownership_check(
     assert exc_info.value.status_code == 400
 
 
-# --- D-4 и P-5 на HTTP-пути ----------------------------------------------------
+# --- D-4 и P-5 на пути приёма --------------------------------------------------
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
 async def test_png_without_alpha_is_stored_as_jpeg_with_a_jpg_key(
-    mock_s3, upload_client, upload_auth_headers
+    mock_s3, upload_settings
 ):
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("photo.png", make_real_png_bytes(), "image/png")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_real_png_bytes(), "photo.png"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
-    assert response.json()["path"].endswith(".jpg")
+    assert isinstance(result, Accepted), result
+    assert result.key.endswith(".jpg")
     assert _decode(mock_s3.call_args_list[0].kwargs["content"]).format == "JPEG"
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_png_with_alpha_is_stored_as_png(
-    mock_s3, upload_client, upload_auth_headers
-):
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("logo.png", make_real_png_with_alpha_bytes(), "image/png")},
-        headers=upload_auth_headers,
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_png_with_alpha_is_stored_as_png(mock_s3, upload_settings):
+    result = await store_upload(
+        an_upload(make_real_png_with_alpha_bytes(), "logo.png"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
-    assert response.json()["path"].endswith(".png")
+    assert isinstance(result, Accepted), result
+    assert result.key.endswith(".png")
     assert _decode(mock_s3.call_args_list[0].kwargs["content"]).format == "PNG"
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_jpeg_key_extension_is_normalised(
-    mock_s3, upload_client, upload_auth_headers
-):
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_jpeg_key_extension_is_normalised(mock_s3, upload_settings):
     """``photo.jpeg`` даёт ключ на ``.jpg`` — приведение БЕЗУСЛОВНО (P-5).
 
     Формат при этом не менялся: инвариант «расширение ключа описывает байты» не
     делает исключения для случая, когда байты остались прежнего формата, иначе
     форм ключа стало бы две.
     """
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("photo.jpeg", make_real_jpeg_bytes((600, 400)), "image/jpeg")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_real_jpeg_bytes((600, 400)), "photo.jpeg"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
-    assert response.json()["path"].endswith(".jpg")
+    assert isinstance(result, Accepted), result
+    assert result.key.endswith(".jpg")
 
 
 # --- T-Q40-01: отказ по потолку числа точек -----------------------------------
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_upload_rejects_a_decompression_bomb_before_touching_storage(
-    mock_s3, upload_client, upload_auth_headers
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_store_upload_rejects_a_decompression_bomb_before_touching_storage(
+    mock_s3, upload_settings
 ):
-    """Крошечный файл с огромными заявленными размерами отвергается 400.
+    """Крошечный файл с огромными заявленными размерами отвергается.
 
-    ``assert_not_called`` обязателен: один лишь код 400 доказывает мало — его
-    возвращает и превышение размера тела, — а смысл потолка в том, что такой
+    ``assert_not_called`` обязателен: одна лишь форма отказа доказывает мало —
+    её возвращает и превышение размера тела, — а смысл потолка в том, что такой
     файл не декодируется и в хранилище не попадает вовсе.
     """
     payload = make_declared_huge_png_bytes(8000, 8000)
     assert 8000 * 8000 > MAX_DECODED_PIXELS
     assert len(payload) < 1024, "тело перестало быть крошечным — это уже не бомба"
 
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("bomb.png", payload, "image/png")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(payload, "bomb.png"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == OVERSIZED_IMAGE_MESSAGE
+    assert isinstance(result, Rejected), result
+    assert result.reason == OVERSIZED_IMAGE_MESSAGE
     mock_s3.assert_not_called()
 
 
@@ -1016,7 +982,7 @@ def test_the_pixel_ceiling_message_does_not_talk_about_formats():
     """Отказ по числу точек называет СВОЮ причину (P-9).
 
     Файл корректен, и совет «выберите другой формат» был бы советом мимо
-    причины — ровно тот класс неправды, из-за которого в шапке ``uploads.py``
+    причины — ровно тот класс неправды, из-за которого в шапке сервиса приёма
     написан абзац про WebP.
     """
     assert OVERSIZED_IMAGE_MESSAGE != UNSUPPORTED_IMAGE_MESSAGE
@@ -1026,35 +992,33 @@ def test_the_pixel_ceiling_message_does_not_talk_about_formats():
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_upload_rejects_signature_without_a_decodable_image(
-    mock_s3, upload_client, upload_auth_headers
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_store_upload_rejects_signature_without_a_decodable_image(
+    mock_s3, upload_settings
 ):
-    """Сигнатура верна, картинки нет — отказ 400 и пустое хранилище.
+    """Сигнатура верна, картинки нет — отказ и пустое хранилище.
 
     Вход — ``make_jpeg_bytes()``, тот самый построитель, которым до issue #40
     доказывался ПРИЁМ. Класс входа никуда не делся, изменился ответ на него:
     распознавание по первым байтам такой файл пропускает, а декодер — нет.
     """
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("photo.jpg", make_jpeg_bytes(), "image/jpeg")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_jpeg_bytes(), "photo.jpg"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == UNSUPPORTED_IMAGE_MESSAGE
+    assert isinstance(result, Rejected), result
+    assert result.reason == UNSUPPORTED_IMAGE_MESSAGE
     mock_s3.assert_not_called()
 
 
-# --- P-7: провал миниатюры запрос не проваливает -------------------------------
+# --- P-7: провал миниатюры приём не проваливает --------------------------------
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_thumbnail_failure_leaves_the_upload_successful(
-    mock_s3, upload_client, upload_auth_headers
-):
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_thumbnail_failure_leaves_the_upload_accepted(mock_s3, upload_settings):
     """Не сохранилась миниатюра — загрузка всё равно удалась (P-7).
 
     Миниатюра нужна для СКОРОСТИ показа, а не для отправки. Обратное решение
@@ -1065,35 +1029,39 @@ async def test_thumbnail_failure_leaves_the_upload_successful(
     """
     mock_s3.side_effect = [None, RuntimeError("bucket refused the thumbnail")]
 
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("photo.png", make_real_png_bytes(), "image/png")},
-        headers=upload_auth_headers,
+    result = await store_upload(
+        an_upload(make_real_png_bytes(), "photo.png"),
+        user_id=OWNER_ID,
+        settings=upload_settings,
     )
 
-    assert response.status_code == 200
-    assert response.json()["path"]
+    assert isinstance(result, Accepted), result
+    assert result.key
     assert mock_s3.call_count == 2
 
 
 @pytest.mark.asyncio
-@patch("app.routes.uploads.upload_file_to_s3", new_callable=AsyncMock)
-async def test_delivery_failure_still_answers_bad_gateway(
-    mock_s3, upload_client, upload_auth_headers
-):
-    """Провал сжатой версии — по-прежнему 502, и миниатюра не пишется.
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_delivery_failure_raises_bad_gateway(mock_s3, upload_settings):
+    """Провал сжатой версии — исключение 502, и миниатюра не пишется.
 
     Парный к предыдущему: без него послабление для миниатюры со временем
-    расползлось бы на оба объекта, и пользователь получал бы 200 на загрузку,
+    расползлось бы на оба объекта, и пользователь получал бы удачную загрузку,
     которой в хранилище нет.
+
+    ⚠️ ФОРМА ЗДЕСЬ ИСКЛЮЧЕНИЕ, А НЕ ``Rejected``, И ЭТО РЕШЕНИЕ СЕРВИСА: провал
+    записи есть отказ ИНФРАСТРУКТУРЫ, а не отказ файлу, и строка «ваш файл не
+    подошёл» сказала бы человеку неправду. Что видит на этом человек по HTTP —
+    предмет утверждения в суите маршрута.
     """
     mock_s3.side_effect = RuntimeError("bucket is down")
 
-    response = await upload_client.post(
-        "/api/uploads/image",
-        files={"file": ("photo.png", make_real_png_bytes(), "image/png")},
-        headers=upload_auth_headers,
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        await store_upload(
+            an_upload(make_real_png_bytes(), "photo.png"),
+            user_id=OWNER_ID,
+            settings=upload_settings,
+        )
 
-    assert response.status_code == 502
+    assert exc_info.value.status_code == 502
     assert mock_s3.call_count == 1
