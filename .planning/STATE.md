@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 13
 current_phase_name: Мастер подключения Telegram по QR на фрагментах
 status: executing
-stopped_at: Completed 13-01-PLAN.md
-last_updated: "2026-09-21T12:19:04.838Z"
+stopped_at: Completed 13-02-PLAN.md
+last_updated: "2026-09-21T13:24:26.866Z"
 last_activity: 2026-09-21
-last_activity_desc: 13-01 executed (tracer slice of phase 13)
-state_head: 58331a73ea0b4bcbbd7756dfb0c063bca2def856
+last_activity_desc: 13-02 executed (2FA password step and save races)
+state_head: 52d488a0be376a5cb72cd99d970157db42f2806c
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 135
-  completed_plans: 130
+  completed_plans: 131
   percent: 67
 ---
 
@@ -45,13 +45,14 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 ## Current Position
 
 Phase: 13 (Мастер подключения Telegram по QR на фрагментах) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Total Plans in Phase: 6
-Completed Plans in Phase: 1
+Completed Plans in Phase: 2
 Status: Ready to execute
 ⚠️ Две строки выше исправлены вручную при закрытии Фазы 12: `phase.complete` оставил в них числа
 ПРОШЛОЙ фазы (13 планов / 6 исполненных), то есть счёт Фазы 12, подписанный именем Фазы 13.
-Last activity: 2026-09-21 — 13-01 исполнен (трасер фазы): мастер Telegram по QR на фрагментах за постоянным якорем `#tg-connect-step`; опросчик — форма внутри фрагмента ожидания (поправка D-05), опрос стал POST и сам сохраняет аккаунт (D-01), маршрут `complete` и сценарий страницы сняты (D-12); девять перечней гейтов сдвинуты прогоном; полный набор 3459 passed. FETCH-02 не отмечен — соседи 13-02…13-06 без сводок.
+Last activity: 2026-09-21 — 13-02 исполнен: шаг пароля 2FA мастера Telegram на фрагментах — опрос в `needs_2fa` отвечает шагом пароля без опросчика; `verify-2fa` на `respond()`/`respond_field_error()`, неверный и пустой пароль — 422 у поля без эха; аккаунт пишется из результата `complete_auth` через `_save_tg_account`, две гонки (два `verify-2fa`, два опроса после успеха) дают один аккаунт, мутант «строка из `submit_2fa`» даёт два; шесть перечней сдвинуты прогоном (один — `UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED` 17 → 18 — планом не назван); гейты волны 357 passed. FETCH-02 не отмечен — соседи 13-03…13-06 без сводок.
+Last activity (устарело, предмет — план 13-01; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-02): 2026-09-21 — 13-01 исполнен (трасер фазы): мастер Telegram по QR на фрагментах за постоянным якорем `#tg-connect-step`; опросчик — форма внутри фрагмента ожидания (поправка D-05), опрос стал POST и сам сохраняет аккаунт (D-01), маршрут `complete` и сценарий страницы сняты (D-12); девять перечней гейтов сдвинуты прогоном; полный набор 3459 passed. FETCH-02 не отмечен — соседи 13-02…13-06 без сводок.
 Last activity (устарело, предмет — открытие исполнения фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-01): 2026-09-21 — Phase 13 execution started
 Last activity (устарело, предмет — завершение планирования фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её затёр `state.begin-phase` при открытии исполнения): 2026-09-21 — Phase 13 planning complete
 Last activity (устарело, предмет — план 12-06; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-19 — 12-06 исполнен: гап 1 верификации (критерий 2 ROADMAP) и находка CR-02 закрыты РАБОТОЙ. Ветвь отказа сверки ключей `ads_images_upload` перестала отвечать авторитетно выглядящей ПУСТОЙ полосой и отвечает ПОДТВЕРЖДЁННЫМ подмножеством: `partition_own_image_keys` (`app/services/image_keys.py`) — единственный предикат принадлежности в дереве (грепом по `app/`: одно вхождение `match.group(1) != str(user_id)`), через него выражена и `own_image_keys`, поведение которой не сдвинуто ни на символ (отказ по длине первым, тот же `INACCESSIBLE_IMAGE_MESSAGE`, тот же список). Зонд А верификатора инвертирован: смешанная партия «свой + чужой» отдаёт свой ключ скрытым полем, чужого в тексте ответа нет, строка отказа одна, `mock_s3.call_count == 0` (T-12-06-02 жив). Зонд Б инвертирован: 11 своих законных ключей при потолке 10 остаются все одиннадцать, входящий файл получает `upload_limit_message(10)`, плитка «+ ФАЙЛ» скрыта, заголовка события нет; `free = max(0, …)` записывает разделение полномочий — потолок управляет НОВЫМИ файлами, а не судьбой прикреплённых. ⚠️ RED задачи 2 оказался НЕОЖИДАННО ЗЕЛЁНЫМ и РАССЛЕДОВАН: поведение приехало задачей 1 (разделяющий предикат снял с пути загрузки отказ по длине), поэтому коммит `refactor`, а непустота правила ДОКАЗАНА мутантом — восстановление прежнего отказа краснит его дословным «во фрагменте 0 скрытых полей вместо одиннадцати» при зелёном соседе про свободные места, порцелан после возврата пуст. Впервые в суите заведено правило на ДВА обработчика: ответ загрузки разбирается на скрытые поля, ровно они уходят в `POST /ads/{id}/edit`, `Ad.images` перечитывается — порознь оба обработчика были зелены, и работа терялась на стыке. Остаток (б) второго `missing` гапа НАЗВАН, а не закрыт (комментарий у расчёта свободных мест; `Ad.images` в срезе обработчика 0 → 1). RED задачи 1 замерен прогоном («2 failed, 14 passed», оба отказа — отказы утверждений, прибор дал `RED_EVIDENCE_OK`), GREEN — «22 passed». Регрессия: `tests/test_pages` **1824 passed, 0 failed** (32:19), `tests/test_services` + `tests/test_routes` **574 passed**. FETCH-01 НЕ отмечен: `requirements.ready-ids` даёт 0/1 — требование объявлено и планами 12-07…12-10.
@@ -206,6 +207,7 @@ Progress: [████████████████████] 116/116
 | Phase 12 P12 | 26 min | 3 tasks | 7 files |
 | Phase 12 P13 | 22 min | 2 tasks | 3 files |
 | Phase 13 P01 | 1h 4m | 3 tasks | 11 files |
+| Phase 13 P02 | 22 min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -471,6 +473,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 13]: Фаза 13, план 13-01: поправка D-05 построена — якорь #tg-connect-step на странице без триггера, опросчик — форма form_wrapper внутри фрагмента ожидания с явной целью в якорь; любой ответ 200 снимает опросчик, опрос останавливается ответом.
 - [Phase 13]: Фаза 13, план 13-01: запись приложения каталога идентификаторов для session_id опроса TG СНЯТА, а не переключена на POST (10 → 9, прогоном): ключ читается из тела формы, каталог наблюдает только параметры сигнатуры.
 - [Phase 13]: Фаза 13, план 13-01: UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED 15 → 17 (перечень, не названный планом): в шаге два блока вызова обёртки — форма старта на общем умолчании цели блокировки, опросчик с пустой целью и записью в DISABLED_ELT_EXCEPTIONS.
+- [Phase 13]: 13-02: verify-2fa writes the account from complete_auth's result through _save_tg_account — a request that loses the race gets the error step; two concurrent submits save one account (mutant that writes submit_2fa's return value saves two)
+- [Phase 13]: 13-02: other Telethon errors on the password step answer the error fragment with «Начать заново», not 500; the log record carries only the exception type, never the password
+- [Phase 13]: 13-02: UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED 17 -> 18 (not named by the plan): the password form is a third form_wrapper block and keeps the default blocking target on its real submit button
 
 ### Pending Todos
 
@@ -651,8 +656,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-21T12:18:55.237Z
-Stopped at: Completed 13-01-PLAN.md
+Last session: 2026-09-21T13:24:26.234Z
+Stopped at: Completed 13-02-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
