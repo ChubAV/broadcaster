@@ -3,9 +3,9 @@ phase: "13"
 slug: "master-podklyucheniya-telegram-po-qr-na-fragmentah"
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
 # audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: "2026-09-21"
 ---
 
@@ -56,20 +56,20 @@ created: "2026-09-21"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 13-01-01 | 01 | 1 | FETCH-02 | T-13-04, T-13-06, T-13-07, T-13-09 | опрос останавливается ответом; аккаунт сохраняет только опрос, увидевший `success`; `session_id` не в адресе; тексты — автоэкранированием | tracer (e2e маршрутов на настоящем слое сессий) | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ переписывается | ⬜ pending |
-| 13-01-02 | 01 | 1 | FETCH-02 | T-13-10 | подключение под имперсонацией разрешено поимённо с причиной | gate (перечни слоя ответа) | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_impersonation_gate.py tests/test_pages/test_identifier_bounds.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 13-01-03 | 01 | 1 | FETCH-02 | T-13-07 | слепота гейта опросов к опросчику из макроса измерена и записана | gate (перечни разметки) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_templates/test_htmx_inventory.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 13-02-01 | 02 | 2 | FETCH-02 | T-13-04, T-13-05, T-13-08 | пароль 2FA не эхается; два конкурентных сохранения дают один аккаунт; ошибка Telethon — фрагмент, не 500 | unit + concurrency (`asyncio.gather`, сессия базы на запрос) | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 13-02-02 | 02 | 2 | FETCH-02 | — | N/A | gate | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 13-03-01 | 03 | 3 | FETCH-02 | T-13-15 | нормальное истечение кода не пишет `logger.error` с `session_id` и трассировкой | unit на настоящем `QRLogin` | `uv run pytest tests/test_messengers/test_telegram_user.py -q -p no:randomly -k "expired"` | ✅ | ⬜ pending |
-| 13-03-02 | 03 | 3 | FETCH-02 | T-13-12, T-13-07 | устаревшая сессия не оживает; пересоздание только из `qr_expired`; обновление только кнопкой | unit + e2e маршрутов | `uv run pytest tests/test_messengers/test_telegram_user.py tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 13-03-03 | 03 | 3 | FETCH-02 | — | N/A | gate | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 13-04-01 | 04 | 4 | FETCH-02 | T-13-01, T-13-02, T-13-03, T-13-10 | чужой опрос отвечает как неизвестный побайтно и не трогает сессию владельца; привязка к субъекту имперсонации | unit + маршруты | `uv run pytest tests/test_messengers/test_telegram_user.py tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 13-04-02 | 04 | 4 | FETCH-02 | T-13-01, T-13-02, T-13-03 | чужие `refresh-qr` и `verify-2fa` отвергнуты без `recreate`/`sign_in` | unit + маршруты | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly -k "foreign"` | ✅ | ⬜ pending |
-| 13-05-01 | 05 | 5 | FETCH-02 | T-13-07 | каждая ветка шага достигнута; у каждого опроса есть терминальная пара; контроли краснят | gate + отрицательные контроли | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly -k "polling or control"` | ✅ | ⬜ pending |
-| 13-05-02 | 05 | 5 | FETCH-02 | T-13-16 | возврат сценария на экран подключения краснит правило о предмете | gate | `uv run pytest tests/test_pages/test_hx_location_destinations.py tests/test_templates/test_htmx_markup_security.py tests/test_templates/test_components.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 13-06-01 | 06 | 5 | FETCH-02 | T-13-17 | критерии не переписаны, летописи стоят | records | `uv run pytest tests/test_planning -q` | ✅ | ⬜ pending |
-| 13-06-02 | 06 | 5 | FETCH-02 | T-13-18 | FETCH-02 не отмечен выполненным до верификации | records | `uv run pytest tests/test_planning -q -k "requirement or flag_and_the_status"` | ✅ | ⬜ pending |
+| 13-01-01 | 01 | 1 | FETCH-02 | T-13-04, T-13-06, T-13-07, T-13-09 | опрос останавливается ответом; аккаунт сохраняет только опрос, увидевший `success`; `session_id` не в адресе; тексты — автоэкранированием | tracer (e2e маршрутов на настоящем слое сессий) | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ переписывается | ✅ green |
+| 13-01-02 | 01 | 1 | FETCH-02 | T-13-10 | подключение под имперсонацией разрешено поимённо с причиной | gate (перечни слоя ответа) | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_impersonation_gate.py tests/test_pages/test_identifier_bounds.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ✅ green |
+| 13-01-03 | 01 | 1 | FETCH-02 | T-13-07 | слепота гейта опросов к опросчику из макроса измерена и записана | gate (перечни разметки) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_templates/test_htmx_inventory.py -q -p no:randomly` | ✅ | ✅ green |
+| 13-02-01 | 02 | 2 | FETCH-02 | T-13-04, T-13-05, T-13-08 | пароль 2FA не эхается; два конкурентных сохранения дают один аккаунт; ошибка Telethon — фрагмент, не 500 | unit + concurrency (`asyncio.gather`, сессия базы на запрос) | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ✅ green |
+| 13-02-02 | 02 | 2 | FETCH-02 | — | N/A | gate | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ✅ green |
+| 13-03-01 | 03 | 3 | FETCH-02 | T-13-15 | нормальное истечение кода не пишет `logger.error` с `session_id` и трассировкой | unit на настоящем `QRLogin` | `uv run pytest tests/test_messengers/test_telegram_user.py -q -p no:randomly -k "expired"` | ✅ | ✅ green |
+| 13-03-02 | 03 | 3 | FETCH-02 | T-13-12, T-13-07 | устаревшая сессия не оживает; пересоздание только из `qr_expired`; обновление только кнопкой | unit + e2e маршрутов | `uv run pytest tests/test_messengers/test_telegram_user.py tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ✅ green |
+| 13-03-03 | 03 | 3 | FETCH-02 | — | N/A | gate | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ✅ green |
+| 13-04-01 | 04 | 4 | FETCH-02 | T-13-01, T-13-02, T-13-03, T-13-10 | чужой опрос отвечает как неизвестный побайтно и не трогает сессию владельца; привязка к субъекту имперсонации | unit + маршруты | `uv run pytest tests/test_messengers/test_telegram_user.py tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ✅ green |
+| 13-04-02 | 04 | 4 | FETCH-02 | T-13-01, T-13-02, T-13-03 | чужие `refresh-qr` и `verify-2fa` отвергнуты без `recreate`/`sign_in` | unit + маршруты | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly -k "foreign"` | ✅ | ✅ green |
+| 13-05-01 | 05 | 5 | FETCH-02 | T-13-07 | каждая ветка шага достигнута; у каждого опроса есть терминальная пара; контроли краснят | gate + отрицательные контроли | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly -k "polling or control"` | ✅ | ✅ green |
+| 13-05-02 | 05 | 5 | FETCH-02 | T-13-16 | возврат сценария на экран подключения краснит правило о предмете | gate | `uv run pytest tests/test_pages/test_hx_location_destinations.py tests/test_templates/test_htmx_markup_security.py tests/test_templates/test_components.py -q -p no:randomly` | ✅ | ✅ green |
+| 13-06-01 | 06 | 5 | FETCH-02 | T-13-17 | критерии не переписаны, летописи стоят | records | `uv run pytest tests/test_planning -q` | ✅ | ✅ green |
+| 13-06-02 | 06 | 5 | FETCH-02 | T-13-18 | FETCH-02 не отмечен выполненным до верификации | records | `uv run pytest tests/test_planning -q -k "requirement or flag_and_the_status"` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -94,8 +94,8 @@ created: "2026-09-21"
 начинается с RED своего поведения (TDD-режим). Заготовки, которых сегодня нет и которые заводит
 план, их создающий:
 
-- [ ] `tests/test_routes/test_tg_user_auth.py` — переписывается на фикстуры `tests/conftest.py`; реестр `POLLING_CASES` и правило останова опроса (13-01); фикстура отдельной сессии базы на запрос для гонок (13-02); замыкание и контроли (13-05)
-- [ ] `tests/test_messengers/test_telegram_user.py` — тест D-03 на настоящем `QRLogin` (13-03); правила владения и гонка `complete_auth` (13-04)
+- [x] `tests/test_routes/test_tg_user_auth.py` — переписывается на фикстуры `tests/conftest.py`; реестр `POLLING_CASES` и правило останова опроса (13-01); фикстура отдельной сессии базы на запрос для гонок (13-02); замыкание и контроли (13-05)
+- [x] `tests/test_messengers/test_telegram_user.py` — тест D-03 на настоящем `QRLogin` (13-03); правила владения и гонка `complete_auth` (13-04)
 
 *Existing infrastructure covers the framework; the rows above are created by their plans' RED steps.*
 
@@ -124,6 +124,54 @@ end-of-phase` — чекпоинтов внутри планов нет, обх�
 - [x] Wave 0 covers all MISSING references
 - [x] No watch-mode flags
 - [x] Feedback latency < 180s
-- [ ] `nyquist_compliant: true` set in frontmatter — выставляет `/gsd-validate-phase` по замеру
+- [x] `nyquist_compliant: true` set in frontmatter — выставлен `/gsd-validate-phase 13` по замеру 2026-09-21 (раздел аудита ниже)
 
-**Approval:** pending
+**Approval:** validated 2026-09-21 (`/gsd-validate-phase 13`, прогон из `/gsd-execute-phase 13`)
+
+---
+
+## Validation Audit 2026-09-21
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+**Замер, а не перенос статусов из сводок.** Все 14 строк карты сверены прогоном их команд на дереве
+`e5c1288c` (после всех шести планов), с `-p no:randomly`; у каждого отбора `-k` число отобранных
+ненулевое — зелень не вакуумная:
+
+| Строки карты | Команда (сокращённо) | Итог |
+|--------------|----------------------|------|
+| 13-01-01, 13-02-01 | `tests/test_routes/test_tg_user_auth.py` | 56 passed |
+| 13-01-02 (надмножество 13-02-02, 13-03-03) | пять файлов гейтов слоя ответа | 166 passed |
+| 13-01-03 | `test_htmx_markup_gates.py` + `test_htmx_inventory.py` | 102 passed |
+| 13-03-01 | `test_telegram_user.py -k expired` | 3 passed, 31 deselected |
+| 13-03-02, 13-04-01 | `test_telegram_user.py` + `test_tg_user_auth.py` | 90 passed |
+| 13-04-02 | `test_tg_user_auth.py -k foreign` | 6 passed, 50 deselected |
+| 13-05-01 | `test_tg_user_auth.py -k "polling or control"` | 34 passed, 22 deselected |
+| 13-05-02 | `test_hx_location_destinations.py` + `test_htmx_markup_security.py` + `test_components.py` | 119 passed |
+| 13-06-01 | `tests/test_planning` | 44 passed |
+| 13-06-02 | `tests/test_planning -k "requirement or flag_and_the_status"` | 16 passed, 28 deselected |
+
+Правила, названные таблицей «Требование → тест», существуют в дереве поимённо (проверено грепом
+определений): `test_the_wizard_page_carries_no_client_script`,
+`test_the_complete_route_and_the_get_poll_are_gone`, `test_polling_stops_by_a_response_without_trigger`
+(`tests/test_routes/test_tg_user_auth.py`), `test_concurrent_completes_yield_one_session_string`
+(`tests/test_messengers/test_telegram_user.py`); отбор `-k concurrent` модуля мастера — 2 правила.
+
+**Полный прогон после каждой волны** (пост-слияночный гейт оркестратора, `just test`, без отбора
+маркером): 3459 → 3473 → 3486 → 3501 → **3511 passed, 0 failed** (волна 5, 39:02, HEAD `e5c1288c`).
+⚠️ Оценка «~36 мин» в §Test Infrastructure не была ошибкой — она устарела: перемер этой фазы даёт
+39:02–39:43 на пяти прогонах; строка выше не правится по идиоме D-30/D-32.
+
+**TDD-гейт конца фазы в этой фазе НЕ вакуумен:** планы 13-01…13-04 объявлены `type: tdd`, и
+`tdd.review-checkpoint` отчитался `tddPlans: 4, violations: 0` (RED и GREEN найдены в истории у
+каждого). План 13-05 — `type: execute` с задачей `tdd="true"`: гейт его не видит, улика — в
+`13-05-SUMMARY.md` (правила зелены на живом дереве с первого прогона, раскрыто; непустота доказана
+мутантами продукта).
+
+**Manual-Only не сдвинут:** четыре проверки критерия 4 над живой сессией Telethon остаются за
+человеком — автоматизировать их нельзя (сервер Telegram не подменяем), и аудит их в «покрытые» не
+переводит.
