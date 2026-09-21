@@ -150,8 +150,10 @@ def get_qr_status(session_id: str, user_id: int) -> dict:
 
 
 async def refresh_qr(session_id: str, user_id: int) -> str | None:
-    """Recreate QR if expired. Returns new login_url or None."""
-    state = _qr_sessions.get(session_id)
+    """Recreate the caller's own expired QR. Returns new login_url or None."""
+    # Владелец — первым (D-04): чужой запрос не пересоздаёт код, не сбрасывает
+    # срок и не трогает задачу ожидания.
+    state = _owned(session_id, user_id)
     if not state or not state.qr_login:
         return None
     # Пересоздание пускается ТОЛЬКО из «код истёк» (D-03): подделанный запрос
@@ -182,8 +184,9 @@ async def refresh_qr(session_id: str, user_id: int) -> str | None:
 
 
 async def submit_2fa(session_id: str, user_id: int, password: str) -> str:
-    """Submit 2FA password. Returns session_string on success."""
-    state = _qr_sessions.get(session_id)
+    """Submit 2FA password for the caller's own session. Returns session_string on success."""
+    # Владелец — ДО `sign_in` (D-04): пароль постороннего в Telegram не уходит.
+    state = _owned(session_id, user_id)
     if not state:
         raise RuntimeError("Сессия авторизации истекла. Начните заново.")
 
