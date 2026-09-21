@@ -1,9 +1,10 @@
 ---
 phase: 13-master-podklyucheniya-telegram-po-qr-na-fragmentah
 verified: 2026-09-21T17:40:19Z
-status: human_needed
+status: passed
 score: 31/32 must-haves verified
 covered_files:
+
   - .planning/REQUIREMENTS.md
   - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-01-PLAN.md
   - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-01-SUMMARY.md
@@ -32,10 +33,12 @@ covered_files:
   - tests/test_templates/test_htmx_inventory.py
   - tests/test_templates/test_htmx_markup_gates.py
   - tests/test_templates/test_htmx_markup_security.py
+
 covered_digest: "v1:sha256:152df17c6043e72976a7d24220782888a13f2421b7ca0b4a10dee3ca85aa1720"
 behavior_unverified: 0
 overrides_applied: 0
 deferred: # owner-named deferrals, not later-phase coverage — neither item is claimed by any later phase
+
   - truth: "IN-03 — abandoned QR sessions keep a connected (possibly authorized) Telethon client"
     addressed_in: "владелец"
     evidence: "13-CONTEXT.md §Deferred Ideas: «Закрытие Telethon-клиента при уходе со страницы / «Отмене» — сегодня клиент живёт до чистки по сроку. Отдельная работа.»; D-13 bounds the session-layer edit; pre-existing (reviewer agrees)"
@@ -43,6 +46,7 @@ deferred: # owner-named deferrals, not later-phase coverage — neither item is 
     addressed_in: "владелец"
     evidence: "13-CONTEXT.md §Landmines: «Текст переезжает дословно, решение о нём — не предмет фазы»; D-09 moved refusal texts verbatim"
 advisory:
+
   - finding: "WR-01 — refresh_qr «only from qr_expired» guard is check-then-await; two concurrent owner refreshes both call recreate()"
     category: other
     reason: "Real under concurrency (telegram_user.py:162-178: status flips to waiting only after `await recreate()`). Reachable only by the session OWNER (two tabs on one session_id, replay, no-JS resubmit); htmx `hx-disabled-elt` covers the single tab. Worst case: the rendered QR is the earlier of two tokens. Does not defeat criteria 2/3/4. Fix: claim the transition synchronously before the await (reviewer's patch), map the interim status to 204."
@@ -128,6 +132,7 @@ advisory:
     reason: "Carried verbatim from the pre-phase template; `current-password` would be better."
     evidence_status: "git show 344dc789"
 human_verification:
+
   - test: "Criterion 4a — scan without 2FA: open /accounts/connect/tg_user, «Начать подключение», scan in Telegram (Настройки → Устройства → Подключить устройство)"
     expected: "QR appears without reload; screen switches to «Подключено» by itself; one tg_user account on the list; uvicorn log shows no further POST …/qr-status after «Подключено»"
     why_human: "Needs a real Telegram account and phone; the Telegram server is not substitutable; live browser requires owner consent (workflow.live_dom_uat: false)"
@@ -319,26 +324,31 @@ Locked decisions D-02, D-07, D-08, D-09, D-11 and D-13 were treated as intended 
 ## Human Verification Required
 
 ### 1. Criterion 4a: scan without 2FA
+
 **Test:** open `/accounts/connect/tg_user`, press «Начать подключение», then scan with the phone (Настройки → Устройства → Подключить устройство).
 **Expected:** «Подключено» appears by itself; one account is created; the uvicorn log shows no further `POST …/qr-status` afterwards.
 **Why human:** needs a real Telegram account; the server can't be substituted; the live browser needs owner consent.
 
 ### 2. Criterion 4b: 2FA account
+
 **Test:** enter a wrong password, then the right one.
 **Expected:** «Неверный пароль 2FA.» appears at the field with the field empty, then «Подключено» with one account.
 **Why human:** needs a live Telethon session with a 2FA password.
 
 ### 3. Criterion 4c: expired code + UI-5
+
 **Test:** don't scan for ≥ ~30 s, then press «Обновить QR-код» and scan the new code.
 **Expected:** the «QR-код истёк» step appears by itself; the refresh brings a new QR and polling resumes; the scan connects. Also judge whether the card-height jump on this step is acceptable (UI-5).
 **Why human:** Telegram sets the token lifetime; the visual judgement needs a live look.
 
 ### 4. Criterion 4d: whole-session expiry
+
 **Test:** stay on «код истёк» for ≥ 270 s, then press refresh.
 **Expected:** «Сессия авторизации истекла. Начните заново.»
 **Why human:** needs real elapsed session time.
 
 ### 5. Prohibitions P1–P8
+
 **Test:** review the verdict table above.
 **Expected:** each verdict is accepted, or the one that fails is named.
 **Why human:** there is no wired enforcement, so the verifier's reading is not authoritative.
@@ -346,6 +356,7 @@ Locked decisions D-02, D-07, D-08, D-09, D-11 and D-13 were treated as intended 
 ## Gaps Summary
 
 There are none. The phase goal is achieved in the codebase:
+
 - Four wizard routes answer HTML step fragments through `respond()`, from one include behind a permanent anchor.
 - `complete` is removed, and the poll is a POST that saves the account itself.
 - There is no script, `setInterval`, `fetch(`, JSON or `hidden` toggling left.
@@ -355,6 +366,7 @@ There are none. The phase goal is achieved in the codebase:
 What remains is a human item, not a gap: the live criterion-4 UAT, plus one visual judgement (UI-5) and confirmation of the eight prohibition verdicts.
 
 Of the 21 advisories, the ones most worth acting on before or with the UAT:
+
 - **UI-1/UI-2/UI-3:** visual regressions this phase introduced. All three are cheap CSS or markup fixes.
 - **WR-04:** strengthen the two route race tests so they actually discriminate.
 - **WR-02:** narrow the timeout classification.
@@ -365,3 +377,39 @@ None of them blocks the phase goal. The owner decides whether any becomes a gap-
 
 _Verified: 2026-09-21T17:40:19Z_
 _Verifier: Claude (gsd-verifier)_
+
+---
+
+## Канонизация вердикта 2026-09-21: `human_needed` → `passed`
+
+Вердикт переведён НЕ пересчётом истин и НЕ повторным прогоном верификатора: счёт остался
+**31/32**, и ни одна истина заново не мерялась. Переведены ровно те причины, которые отчёт выше
+называл своими словами, — **живой сценарий критерия 4, визуальное суждение UI-5 и восемь
+запретов P1–P8**. Все три — пункты ручного обхода, решений владельца вне обхода отчёт не ждал:
+гапов ноль, 21 рекомендация помечена как не блокирующая цель.
+
+**Что закрыло причину.** `13-UAT.md` 2026-09-21: `status: complete`, пять ответов `pass`, ноль
+расхождений, ноль гапов, **все пять таблиц отметок заполнены**. Правило
+`tests/test_planning/test_the_walkthrough_cannot_self_certify.py` зелено при сошедшихся трёх счётах
+(`declared=5`, `sections=5`, `tables=5`, `filled=5`); каталог `tests/test_planning/` — 44 passed.
+Обход шёл на живом стенде с реальными аккаунтами Telegram (Александр, Chrome 152 / macOS 15).
+
+⚠️ **РАЗНИЦА ДВУХ ФОРМ ЗАКРЫТИЯ, НАЗВАННАЯ ЗДЕСЬ, А НЕ ТОЛЬКО В ОБХОДЕ.**
+
+| Пункты | Чем закрыты |
+|---|---|
+| 3 (UI-5), 5 (P1–P8) | ДОСЛОВНЫМИ словами владельца: «по высоте меня все устраивает»; `pass` на явный список P1–P8, отвергнутых нет |
+| 1, 2, 4 и шаги 3.1, 3.3, 3.4 | ПОДТВЕРЖДЕНИЕМ личного наблюдения владельца на прямой вопрос приёмки: «все было на живом стенде с реальными аккаунтами telegram». Дословного описания признака нет — в клетках стоит подтверждение наблюдения, а не его описание |
+
+Без дословного значения осталась, в частности, обязательная клетка 1.4 (нет новых
+`POST …/qr-status` в журнале uvicorn после «Подключено»); названо поимённо в ключе `unrecorded`
+шапки обхода.
+
+**Свежесть вердикта сверена ДО перевода.** `git diff --stat bff29f7a..HEAD` по списку
+`covered_files` пуст — ни один покрытый вход не менялся с момента вердикта; `verification.status`
+до перевода читался `human_needed`, а не `stale`. Отпечаток не пересчитывался.
+
+**Что этой канонизацией НЕ закрыто и закрыто быть не могло:** 21 рекомендация раздела
+«Findings Disposition» (в том числе визуальные регрессии фазы UI-1/UI-2/UI-3, WR-04, WR-02) и две
+отсрочки владельца (IN-03, UI-17) остаются в прежнем виде; перевод любой из них в гап — решение
+владельца, отдельное от вердикта.
