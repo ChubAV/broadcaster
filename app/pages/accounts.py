@@ -219,22 +219,104 @@ async def accounts_connect_tg_user_page(
         return RedirectResponse(url="/login", status_code=302)
     return templates.TemplateResponse(
         "accounts/connect_tg_user.html",
-        {"request": request, "user": user, "is_admin": check_is_admin(user, settings), "active_page": "accounts"},
+        {
+            "request": request,
+            "user": user,
+            "is_admin": check_is_admin(user, settings),
+            "active_page": "accounts",
+            "step": "start",
+        },
     )
 
 
-@router.post("/accounts/connect/tg_user/start-qr")
+TG_CONNECT_STEP_TEMPLATE = "accounts/includes/tg_connect_step.html"
+TG_API_NOT_CONFIGURED_MESSAGE = "Telegram API не настроен. Обратитесь к администратору."
+TG_AUTH_FAILED_MESSAGE = "Ошибка авторизации"
+TG_SESSION_EXPIRED_MESSAGE = "Сессия авторизации истекла. Начните заново."
+
+
+def _tg_step_markup(
+    *,
+    step: str,
+    session_id: str | None = None,
+    qr_code: str | None = None,
+    error: str | None = None,
+    password_error: str | None = None,
+) -> str:
+    """Содержимое якоря шага мастера Telegram, собранное ОКРУЖЕНИЕМ ШАБЛОНОВ.
+
+    ⚠️ ФОРМА ВЗЯТА У `_max_step_markup` И ОСНОВАНИЕ ТО ЖЕ: шаблон шага берётся
+    из окружения и рендерится, а не склеивается строкой. Разметка шага объявлена
+    ОДИН раз, включаемым шаблоном, которым рисуется и страница мастера, — вторая
+    копия здесь разошлась бы с первой молча.
+
+    ⚠️ ЭКРАНИРОВАНИЕ ОБЕСПЕЧИВАЕТ ОКРУЖЕНИЕ, А НЕ ЭТОТ ПОМОЩНИК (T-13-06). Текст
+    исключения старта и текст ошибки Telethon попадают в документ; безопасность
+    держится автоэкранированием, значения уезжают в шаблон параметрами и ни на
+    одном шаге не объявляются готовой разметкой.
+    """
+    return templates.env.get_template(TG_CONNECT_STEP_TEMPLATE).render(
+        step=step,
+        session_id=session_id,
+        qr_code=qr_code,
+        error=error,
+        password_error=password_error,
+    )
+
+
+async def _save_tg_account(db: AsyncSession, user, session_string: str) -> None:
+    """ЕДИНСТВЕННОЕ место записи аккаунта Telegram, подключённого по QR.
+
+    Мест, где мастер сохраняет аккаунт, два: опрос, первым увидевший
+    «отсканировано» (D-01), и подтверждение пароля 2FA (план 13-02). Одинаковая
+    запись двух мест сведена сюда, иначе они разойдутся (CONTEXT §Integration
+    Points). Строка сессии берётся из результата `complete_auth`, который снимает
+    сессию до первого ожидания, — поэтому одно сканирование даёт один аккаунт.
+    """
+    db.add(
+        MessengerAccount(
+            user_id=user.id,
+            type="tg_user",
+            credentials=session_string,
+            status="active",
+        )
+    )
+    await db.commit()
+
+
+@router.post("/accounts/connect/tg_user/start-qr", response_class=HTMLResponse)
 async def accounts_connect_tg_user_start_qr(
     request: Request,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Старт QR-входа: на htmx — шаг ожидания с QR и формой-опросчиком.
+
+    ⚠️ НА СЛОЕ ОТВЕТА С ПЛАНА 13-01 (FETCH-02). Каждый исход — содержимое
+    якоря `#tg-connect-step`: шаг ожидания либо шаг ошибки с «Начать заново»
+    (D-09; тексты отказа переехали дословно). «Нет сессии» уходит переходом на
+    `/login` (D-10). JSON этот обработчик больше не отдаёт.
+
+    ⚠️ БЕЗ JAVASCRIPT СТАРТ ЗАВОДИТ КЛИЕНТА TELETHON, ЖИВУЩЕГО ДО ЧИСТКИ ПО СРОКУ
+    (RESEARCH §Pitfall 9), и приземляет на страницу мастера (D-11). Так было и
+    раньше: мастер без JavaScript не работал и не работает. Ветвление по
+    признаку htmx здесь запрещено (G-1/G-2) — транспорт выбирает слой ответа.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return {"error": "Не авторизован"}
+        return await respond(request, redirect="/login")
 
     if not settings.telegram_api_id or not settings.telegram_api_hash:
-        return {"error": "Telegram API не настроен. Обратитесь к администратору."}
+
+        async def _not_configured() -> HTMLResponse:
+            """Шаг ошибки: API Telegram не настроен."""
+            return HTMLResponse(
+                _tg_step_markup(step="error", error=TG_API_NOT_CONFIGURED_MESSAGE)
+            )
+
+        return await respond(
+            request, redirect="/accounts/connect/tg_user", fragment=_not_configured
+        )
 
     try:
         session_id, login_url = await start_qr_auth(
@@ -242,26 +324,95 @@ async def accounts_connect_tg_user_start_qr(
             api_hash=settings.telegram_api_hash,
         )
     except Exception as e:
-        return {"error": f"Ошибка запуска QR авторизации: {e}"}
+        start_error = f"Ошибка запуска QR авторизации: {e}"
 
-    return {
-        "session_id": session_id,
-        "qr_image": _generate_qr_base64(login_url),
-    }
+        async def _start_failed() -> HTMLResponse:
+            """Шаг ошибки: старт QR-входа отказал."""
+            return HTMLResponse(_tg_step_markup(step="error", error=start_error))
+
+        return await respond(
+            request, redirect="/accounts/connect/tg_user", fragment=_start_failed
+        )
+
+    qr_code = _generate_qr_base64(login_url)
+
+    async def _waiting() -> HTMLResponse:
+        """Шаг ожидания: QR и форма-опросчик со скрытым `session_id`."""
+        return HTMLResponse(
+            _tg_step_markup(step="waiting", session_id=session_id, qr_code=qr_code)
+        )
+
+    return await respond(request, redirect="/accounts/connect/tg_user", fragment=_waiting)
 
 
-@router.get("/accounts/connect/tg_user/qr-status")
+@router.post("/accounts/connect/tg_user/qr-status", response_class=HTMLResponse)
 async def accounts_connect_tg_user_qr_status(
     request: Request,
-    session_id: str = Query(...),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Опрос статуса QR-входа — и сохранение аккаунта, когда код отсканирован.
+
+    ⚠️ ОПРОС ПИШЕТ В БАЗУ, ПОЭТОМУ ОН POST (D-01, решение владельца). Отдельного
+    маршрута завершения больше нет: запрос опроса, первым увидевший успех, зовёт
+    `complete_auth`, сохраняет аккаунт и отвечает шагом «Подключено» без
+    опросчика — опрос остановлен ответом. `complete_auth` зовётся ТОЛЬКО на
+    успехе: он снимает сессию до проверки строки, и вызов в ином статусе молча
+    уничтожил бы живую сессию. Остаточное окно (вкладку закрыли между
+    сканированием и следующим опросом, до ~3 с) принято владельцем.
+
+    ⚠️ ОЖИДАНИЕ ОТВЕЧАЕТ 204. Подмена не трогает документ: QR и фокус остаются на
+    месте, форма-опросчик жива и шлёт снова. Сборщик подан слою ИМЕНЕМ
+    (RESEARCH §Pattern 6), поэтому его ответ — не собственный выход обработчика.
+
+    ⚠️ ПОЛЕ ЧИТАЕТСЯ ИЗ ТЕЛА ФОРМЫ, А НЕ СИГНАТУРОЙ (RESEARCH §Pitfall 8):
+    отсутствующее поле идёт авторским шагом ошибки, а не отказом валидации
+    фреймворка. Идентификатор сессии в адрес запроса не попадает (D-06).
+
+    ⚠️ ПУТЬ ДЕГРАДАЦИИ — СТРАНИЦА МАСТЕРА (D-11). Мастер работает только с
+    JavaScript и сегодня; без него каждый POST приземляет на страницу мастера.
+    Документная запись критерия 5 — план 13-06.
+    """
     user = await get_user_from_cookie(request, db, settings)
     if not user:
-        return {"status": "error", "error": "Не авторизован"}
+        return await respond(request, redirect="/login")
 
-    return get_qr_status(session_id)
+    form = await request.form()
+    session_id = str(form.get("session_id") or "")
+    state = get_qr_status(session_id)
+    status = state["status"]
+
+    if status == "waiting":
+
+        async def _unchanged() -> Response:
+            """Ожидание: документ не трогается, опросчик жив."""
+            return Response(status_code=204)
+
+        return await respond(
+            request, redirect="/accounts/connect/tg_user", fragment=_unchanged
+        )
+
+    step = "error"
+    error: str | None = TG_AUTH_FAILED_MESSAGE
+    if status == "success":
+        session_string = await complete_auth(session_id)
+        if session_string:
+            await _save_tg_account(db, user, session_string)
+            step, error = "connected", None
+        else:
+            error = TG_SESSION_EXPIRED_MESSAGE
+    elif status == "expired":
+        error = TG_SESSION_EXPIRED_MESSAGE
+    elif status == "error":
+        error = state.get("error") or TG_AUTH_FAILED_MESSAGE
+    # Любой иной статус (до плана 13-02 — `needs_2fa`) — шаг ошибки с
+    # «Ошибкой авторизации»: шаг пароля заводит план 13-02.
+
+    async def _step() -> HTMLResponse:
+        """Шаг «Подключено» либо шаг ошибки — ответ без формы-опросчика."""
+        return HTMLResponse(_tg_step_markup(step=step, error=error))
+
+    return await respond(request, redirect="/accounts/connect/tg_user", fragment=_step)
 
 
 @router.post("/accounts/connect/tg_user/refresh-qr")
@@ -312,38 +463,6 @@ async def accounts_connect_tg_user_verify_2fa(
 
     # Clean up auth client
     await complete_auth(session_id)
-
-    # Create MessengerAccount
-    account = MessengerAccount(
-        user_id=user.id,
-        type="tg_user",
-        credentials=session_string,
-        status="active",
-    )
-    db.add(account)
-    await db.commit()
-
-    return {"status": "success"}
-
-
-@router.post("/accounts/connect/tg_user/complete")
-async def accounts_connect_tg_user_complete(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-):
-    user = await get_user_from_cookie(request, db, settings)
-    if not user:
-        return {"error": "Не авторизован"}
-
-    data = await request.json()
-    session_id = data.get("session_id")
-    if not session_id:
-        return {"error": "session_id required"}
-
-    session_string = await complete_auth(session_id)
-    if not session_string:
-        return {"error": "Сессия не найдена или авторизация не завершена."}
 
     # Create MessengerAccount
     account = MessengerAccount(
