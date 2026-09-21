@@ -1055,6 +1055,40 @@ async def _arrange_tg_verify_2fa_without_session(
 
 
 # =============================================================================
+# Посев: обновление QR-кода мастера Telegram (Фаза 13, план 13-03)
+# =============================================================================
+
+ACCOUNTS_CONNECT_TG_USER_REFRESH_QR = "app/pages/accounts.py::accounts_connect_tg_user_refresh_qr"
+
+
+async def _arrange_tg_refresh_qr_unknown_session(
+    client, db, settings, identity
+) -> _Arranged:
+    """Обновление кода НЕИЗВЕСТНОЙ сессии — ветка, отвечающая фрагментом.
+
+    Сессии нет, поэтому до Telethon запрос не доходит: ответ — шаг ошибки с
+    формой старта заново, это и есть метка случая. Успех (шаг ожидания с новым
+    QR) требует живой сессии в памяти процесса с объектом кода Telethon и
+    утверждён поимённо в `tests/test_routes/test_tg_user_auth.py`.
+    """
+    await _current_user(db, identity, settings)
+    return _Arranged(
+        url="/accounts/connect/tg_user/refresh-qr",
+        data={"session_id": TG_WIZARD_UNKNOWN_SESSION},
+    )
+
+
+async def _arrange_tg_refresh_qr_without_session(
+    client, db, settings, identity
+) -> _Arranged:
+    client.cookies.clear()
+    return _Arranged(
+        url="/accounts/connect/tg_user/refresh-qr",
+        data={"session_id": TG_WIZARD_UNKNOWN_SESSION},
+    )
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -1633,6 +1667,28 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/login",
         transport=LOCATION,
     ),
+    # Фаза 13, план 13-03. Обновление QR-кода мастера Telegram: подменяется
+    # содержимое того же постоянного якоря шага; путь без htmx приземляется на
+    # страницу мастера (D-11). Метка структурная — форма старта заново, по тому
+    # же основанию, что у опроса и пароля неизвестной сессии (текст сменит план
+    # 13-04).
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_REFRESH_QR,
+        name="обновление QR-кода Telegram — неизвестная сессия",
+        identity="user",
+        arrange=_arrange_tg_refresh_qr_unknown_session,
+        landing="/accounts/connect/tg_user",
+        transport=FRAGMENT,
+        fragment_mark='hx-post="/accounts/connect/tg_user/start-qr"',
+    ),
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_REFRESH_QR,
+        name="обновление QR-кода Telegram — нет сессии",
+        identity="user",
+        arrange=_arrange_tg_refresh_qr_without_session,
+        landing="/login",
+        transport=LOCATION,
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -1734,7 +1790,17 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   случаев профиля и мастера MAX.
 #   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 13, план 13-02): `случаев пар в реестре 56,
 #   объявлено 54`.
-POST_PAIR_CASES_DECLARED = 56
+#   56 → 58, Фаза 13, план 13-03: два исхода ОБНОВЛЕНИЯ QR-КОДА мастера
+#   Telegram — неизвестная сессия (фрагмент шага ошибки, метка — форма старта
+#   заново) и «нет сессии» (переход на экран входа).
+#   ⚠️ ВЕТКА УСПЕХА В РЕЕСТР НЕ ВХОДИТ, И ЭТО ГРАНИЦА ПОСЕВА, А НЕ ПРОПУСК: ей
+#   нужна живая сессия в памяти процесса с объектом кода Telethon. Её ответ
+#   (новый QR и ровно один опросчик) утверждён поимённо сквозным правилом
+#   `test_refreshing_an_expired_code_resumes_polling` в
+#   `tests/test_routes/test_tg_user_auth.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 13, план 13-03): `случаев пар в реестре 58,
+#   объявлено 56`.
+POST_PAIR_CASES_DECLARED = 58
 
 
 def _case_id(case: _PairCase) -> str:
@@ -2535,7 +2601,17 @@ def _number_complaints(
 # первым аргументом `.post(…)`, как у записей плана 13-01.
 # ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
 # переведённых обработчиках 165, объявлено 163`.
-PAIRED_302_ASSERTIONS_DECLARED = 165
+#
+# 165 → 167, Фаза 13, план 13-03: два утверждения 302 об обновлении QR-кода
+# мастера Telegram в `tests/test_routes/test_tg_user_auth.py`
+# (`test_refresh_degrades_and_requires_a_session`) — обновление без JavaScript
+# приземляется на страницу мастера, запрос без сессии входа — на `/login`.
+# Обработчик стал переведённым, и его утверждения вошли во вселенную правила;
+# пары у него — два случая реестра выше. Адреса набраны литералом первым
+# аргументом `.post(…)`, как у записей планов 13-01 и 13-02.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 167, объявлено 165`.
+PAIRED_302_ASSERTIONS_DECLARED = 167
 
 
 def _routes(settings) -> tuple[tuple[str, str], ...]:
