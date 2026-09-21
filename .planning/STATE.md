@@ -2,39 +2,48 @@
 gsd_state_version: "1.0"
 milestone: v2.1
 milestone_name: HTMX-first
-current_phase: 13
-current_phase_name: Мастер подключения Telegram по QR на фрагментах
-status: "Phase 12 shipped — PR #50"
-stopped_at: Phase 12 complete, ready to plan Phase 13
-last_updated: "2026-09-21T08:29:23.149Z"
+current_phase: 14
+current_phase_name: Авторизация на htmx
+status: "Phase 13 shipped — PR #52"
+stopped_at: Phase 13 complete, ready to plan Phase 14
+last_updated: "2026-09-21T20:15:11.039Z"
 last_activity: 2026-09-21
-state_head: cd7ad4ed065792cacab7bf87dee8875779ceb967
+state_head: a8152440ad0c5ac5b97f43115c9aa84346130b2a
 progress:
   total_phases: 9
-  completed_phases: 6
-  total_plans: 129
-  completed_plans: 129
-  percent: 67
+  completed_phases: 7
+  total_plans: 135
+  completed_plans: 135
+  percent: 78
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-08-29)
+See: .planning/PROJECT.md (updated 2026-09-21)
 
 **Core value:** Надёжно выполнять периодические рекламные рассылки в группы нескольких мессенджеров по заданному пользователем расписанию.
-**Current focus:** Phase 13 — Мастер подключения Telegram по QR на фрагментах
+**Current focus:** Phase 14 — Авторизация на htmx
 
 **Пройдено в вехе v2.1: Фазы 7 и 8** (18 планов). Фаза 8 закрыта 2026-08-29 — 11/11 планов, верификация `passed`, UAT 9/9, `threats_open: 0`.
 
 **Нумерация фаз вехи v2.1 — 7…15.** Веха v2.0 закончилась Фазой 6, и отсчёт продолжается, а не начинается заново. Это отличие от v2.0, которая сознательно начала с 1 (фазы v1.0 были ретроспективной документацией уже отгруженной системы, а не выполненными GSD-фазами).
 
-**Следующий вход:** `/gsd-discuss-phase 13`. (Поколение D-30/D-32: прежняя редакция строки звала
-`/gsd-discuss-phase 9` и была верна для дерева до закрытия Фаз 9–12; она не вычёркивается, а заменена
-действующим входом.)
+**Следующий вход:** `/gsd-ship 13`, затем `/gsd-discuss-phase 14`. (Поколение D-30/D-32: редакция
+`/gsd-execute-phase 13` была верна до закрытия Фазы 13 2026-09-21; редакция `/gsd-plan-phase 13` была
+верна до планирования Фазы 13 2026-09-21 — 6 планов в 5 волнах, проверка планов пройдена со второй
+итерации; редакция `/gsd-discuss-phase 13` — до сбора контекста Фазы 13 2026-09-21, а редакция
+`/gsd-discuss-phase 9` — до закрытия Фаз 9–12; все три не вычёркиваются, а заменены действующим входом.)
 
-**Пройдено в вехе v2.1: Фазы 7, 8, 9, 10, 11, 12** (129 планов, 6 из 9 фаз, 67%). Фаза 12 закрыта
+**Пройдено в вехе v2.1: Фазы 7, 8, 9, 10, 11, 12, 13** (135 планов, 7 из 9 фаз, 78%). Фаза 13 закрыта
+2026-09-21 — 6/6 планов, верификация `passed` (31/32, ноль гапов), обход 5/5 на живом стенде с
+реальными аккаунтами Telegram при пяти заполненных отметках, `threats_open: 0`, Nyquist `validated`
+(14/14 задач зелены). Этой фазой сняты последние пять ручных `fetch()` вехи — из шести не осталось
+ни одного (`grep 'fetch(' app/templates/ app/static/js` = 0).
+
+**Прежняя редакция строки (поколение, предмет — состояние до закрытия Фазы 13):** Пройдено в вехе
+v2.1: Фазы 7, 8, 9, 10, 11, 12 (129 планов, 6 из 9 фаз, 67%). Фаза 12 закрыта
 2026-09-21 — 13/13 планов, верификация `passed` (41/44, ноль проваленных), обход 8/8 при восьми
 заполненных отметках, `threats_open: 0` (57 угроз), Nyquist `validated` (30/30 задач зелены).
 
@@ -42,14 +51,26 @@ See: .planning/PROJECT.md (updated 2026-08-29)
 
 ## Current Position
 
-Phase: 13 — Мастер подключения Telegram по QR на фрагментах
+Phase: 14 — Авторизация на htmx
 Plan: Not started
-Total Plans in Phase: 0 (фаза не планировалась — каталога `.planning/phases/13-*` на диске нет)
+Total Plans in Phase: 0 (фаза не планировалась — каталога `.planning/phases/14-*` на диске нет)
 Completed Plans in Phase: 0
-Status: Phase 12 shipped — PR #50
+Status: Phase 13 shipped — PR #52
 ⚠️ Две строки выше исправлены вручную при закрытии Фазы 12: `phase.complete` оставил в них числа
 ПРОШЛОЙ фазы (13 планов / 6 исполненных), то есть счёт Фазы 12, подписанный именем Фазы 13.
-Last activity: 2026-09-21
+⚠️ То же повторилось при закрытии Фазы 13 (2026-09-21): верб оставил «6 / 6» — счёт Фазы 13 под
+именем Фазы 14; исправлено вручную тем же способом.
+Last activity: 2026-09-21 — Phase 13 shipped — PR #52
+Last activity (устарело, предмет — быстрая задача 260921-qvt; строка восстановлена по идиоме D-30/D-32 — её затёр верб `state.update` при отгрузке): 2026-09-21 - Completed quick task 260921-qvt: Поправить визуальные регрессии мастера Telegram по QR (UI-1, UI-2, UI-3)
+Last activity (устарело, предмет — закрытие Фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменила быстрая задача 260921-qvt): 2026-09-21 — Phase 13 complete, transitioned to Phase 14
+Last activity (устарело, предмет — план 13-06; строка восстановлена обходом `/gsd-verify-work 13` по идиоме D-30/D-32 — её затёрло закрытие фазы `phase.complete`): 2026-09-21 — 13-06 исполнен: записи фазы приведены к сделанному без переписывания текстов. В `.planning/ROADMAP.md` у Фазы 13 стоят летописи критериев 1 (четыре маршрута на фрагментах, `complete` снят по D-01, опрос GET → POST), 2 (опросчик внутри фрагмента ожидания, критерий держится правилом на отрисованных ответах — гейт разметки слеп к опросчику из макроса), 3 (проверка владения ЗАВЕДЕНА — посылка «сохранена» была ложной, а не устаревшей, D-04) и 5 (замер базы: `<form` в странице до фазы — `0`, D-11); в `.planning/REQUIREMENTS.md` — летопись FETCH-02. FETCH-02 НЕ отмечен: `ready-ids` сообщил готовность, отметка ждёт верификации фазы. Все 6 планов исполнены.
+Last activity (устарело, предмет — план 13-05; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-06): 2026-09-21 — 13-05 исполнен: гейт критерия 2 замкнут по ВЕТКАМ шаблона шага. Ветки читаются из текста `tg_connect_step.html` (литералы `step`, перечисления `step in (…)`, ветка по умолчанию цепочки — `error`) с антивакуумом в шесть веток; каждая ветка имеет метку `STEP_MARKS` и запись `POLLING_CASES` (дописана запись страницы мастера — путь к `start`), каждая запись утверждает РОВНО метку своей ветки, у каждого фрагмента с опросом есть терминальная пара (обобщение `test_sync_polling_stops`); шесть отрицательных контролей на синтетике, непустота правил измерена мутантами шаблона в рабочей копии (правила зелены на прибытии — раскрыто). `TOP_LEVEL_BINDING_EXEMPT_TEMPLATES` — именованный ноль (`…_DECLARED = 0`), правило о предмете: на цепи экрана подключения ноль объявлений верхнего уровня; летописи Фазы 13 с замером в прозе R-08-02 и докстринге `_strip_js_comments`. Продукт не тронут, ни один перечень не сдвинулся; гейты волны — 395 passed. FETCH-02 не отмечен — сосед 13-06 без сводки.
+Last activity (устарело, предмет — план 13-04; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-05): 2026-09-21 — 13-04 исполнен: проверка владения QR-сессией заведена (D-04; её не было). `QRAuthState.user_id` обязателен без умолчания, под имперсонацией — субъект (`payload["sub"]`), на него же пишется аккаунт; `_owned` — единственное чтение состояния в `get_qr_status`, `refresh_qr`, `submit_2fa`, `complete_auth`, чужая сессия для слоя — отсутствующая (`gone`); чужой `session_id` на опросе, `refresh-qr` и `verify-2fa` получает ответ, побайтно равный ответу на неизвестный («Сессия подключения не найдена. Начните заново.»), сессия владельца не тронута, и владелец доходит до «Подключено»; `complete_auth` снимает сессию только владельца и только в `success`, без `await` между проверкой и `pop` (обе гонки 13-02 зелены, утверждения не менялись); успех отдаётся раньше проверки срока (Pitfall 10). Слой сессий — в пределах D-13. Ни один перечень не сдвинулся; гейты волны — 385 passed. FETCH-02 не отмечен — соседи 13-05, 13-06 без сводок.
+Last activity (устарело, предмет — план 13-03; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-04): 2026-09-21 — 13-03 исполнен: «код истёк» ожил. Таймаут `QRLogin.wait()` (токен QR ~30 с) в `_wait_for_qr` — статус `qr_expired` без текста ошибки и без `logger.error` с трассировкой (D-03, доказано на настоящем `QRLogin`); опрос отвечает шагом «QR-код истёк. Обновите его, чтобы продолжить.» с кнопкой «Обновить QR-код» без опросчика (D-02, автообновления нет); `refresh_qr` пересоздаёт код только из `qr_expired` и только в сроке `QR_SESSION_TTL` (Pitfall 2); `refresh-qr` на `respond()` — новый QR и тот же опросчик, JSON у мастера не осталось; перечни прогоном: отставание 11 → 10 (сводная летопись Фазы 13: 14 → 10), фрагментных 16 → 17, пар 56 → 58, утверждений 302 165 → 167, переходов 76 → 77, блоков обёртки 18 → 19 (вне списка файлов плана). Гейты волны — 370 passed.
+Last activity (устарело, предмет — план 13-02; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-03): 2026-09-21 — 13-02 исполнен: шаг пароля 2FA мастера Telegram на фрагментах — опрос в `needs_2fa` отвечает шагом пароля без опросчика; `verify-2fa` на `respond()`/`respond_field_error()`, неверный и пустой пароль — 422 у поля без эха; аккаунт пишется из результата `complete_auth` через `_save_tg_account`, две гонки (два `verify-2fa`, два опроса после успеха) дают один аккаунт, мутант «строка из `submit_2fa`» даёт два; шесть перечней сдвинуты прогоном (один — `UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED` 17 → 18 — планом не назван); гейты волны 357 passed. FETCH-02 не отмечен — соседи 13-03…13-06 без сводок.
+Last activity (устарело, предмет — план 13-01; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-02): 2026-09-21 — 13-01 исполнен (трасер фазы): мастер Telegram по QR на фрагментах за постоянным якорем `#tg-connect-step`; опросчик — форма внутри фрагмента ожидания (поправка D-05), опрос стал POST и сам сохраняет аккаунт (D-01), маршрут `complete` и сценарий страницы сняты (D-12); девять перечней гейтов сдвинуты прогоном; полный набор 3459 passed. FETCH-02 не отмечен — соседи 13-02…13-06 без сводок.
+Last activity (устарело, предмет — открытие исполнения фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило исполнение плана 13-01): 2026-09-21 — Phase 13 execution started
+Last activity (устарело, предмет — завершение планирования фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её затёр `state.begin-phase` при открытии исполнения): 2026-09-21 — Phase 13 planning complete
 Last activity (устарело, предмет — план 12-06; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-19 — 12-06 исполнен: гап 1 верификации (критерий 2 ROADMAP) и находка CR-02 закрыты РАБОТОЙ. Ветвь отказа сверки ключей `ads_images_upload` перестала отвечать авторитетно выглядящей ПУСТОЙ полосой и отвечает ПОДТВЕРЖДЁННЫМ подмножеством: `partition_own_image_keys` (`app/services/image_keys.py`) — единственный предикат принадлежности в дереве (грепом по `app/`: одно вхождение `match.group(1) != str(user_id)`), через него выражена и `own_image_keys`, поведение которой не сдвинуто ни на символ (отказ по длине первым, тот же `INACCESSIBLE_IMAGE_MESSAGE`, тот же список). Зонд А верификатора инвертирован: смешанная партия «свой + чужой» отдаёт свой ключ скрытым полем, чужого в тексте ответа нет, строка отказа одна, `mock_s3.call_count == 0` (T-12-06-02 жив). Зонд Б инвертирован: 11 своих законных ключей при потолке 10 остаются все одиннадцать, входящий файл получает `upload_limit_message(10)`, плитка «+ ФАЙЛ» скрыта, заголовка события нет; `free = max(0, …)` записывает разделение полномочий — потолок управляет НОВЫМИ файлами, а не судьбой прикреплённых. ⚠️ RED задачи 2 оказался НЕОЖИДАННО ЗЕЛЁНЫМ и РАССЛЕДОВАН: поведение приехало задачей 1 (разделяющий предикат снял с пути загрузки отказ по длине), поэтому коммит `refactor`, а непустота правила ДОКАЗАНА мутантом — восстановление прежнего отказа краснит его дословным «во фрагменте 0 скрытых полей вместо одиннадцати» при зелёном соседе про свободные места, порцелан после возврата пуст. Впервые в суите заведено правило на ДВА обработчика: ответ загрузки разбирается на скрытые поля, ровно они уходят в `POST /ads/{id}/edit`, `Ad.images` перечитывается — порознь оба обработчика были зелены, и работа терялась на стыке. Остаток (б) второго `missing` гапа НАЗВАН, а не закрыт (комментарий у расчёта свободных мест; `Ad.images` в срезе обработчика 0 → 1). RED задачи 1 замерен прогоном («2 failed, 14 passed», оба отказа — отказы утверждений, прибор дал `RED_EVIDENCE_OK`), GREEN — «22 passed». Регрессия: `tests/test_pages` **1824 passed, 0 failed** (32:19), `tests/test_services` + `tests/test_routes` **574 passed**. FETCH-01 НЕ отмечен: `requirements.ready-ids` даёт 0/1 — требование объявлено и планами 12-07…12-10.
 Last activity (устарело, предмет — открытие исполнения фазы 12; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-19 — Phase 12 execution started
 Last activity (устарело, предмет — план 11-21; строка восстановлена обходом `/gsd-verify-work 11` по идиоме D-30/D-32 — её затёрло закрытие фазы `phase.complete`): 2026-09-17 — 11-21 исполнен: гэп G-11-6 закрыт ОДНИМ местом. Скрытый индикатор `.form-busy` форм обёртки выведен из потока: макрос печатает литерал класса области `form-wrapper` сразу после адреса запроса, стили дают форме обёртки контекст позиционирования и кладут её индикатор в правый нижний угол коробки формы нулевыми смещениями, прозрачным для указателя (T-11-42: у тумблеров расписания цель блокировки пустая). Четырнадцать вызывающих не тронуты (D-14). Область задаёт ТРЕТЬЕ имя — не класс индикатора и не селектор поиска, — потому что панель подтверждения печатает ДОСЛОВНО тот же узел: её ~22 px приняты (10-UAT 3.5), и решение владельца 1 от 2026-09-17 вывело панели из объёма. Неподвижность панели ДОКАЗАНА: `test_the_confirmation_panel_indicator_keeps_its_accepted_place` с тремя подстановками (селектор без области, класс области на теге панели, позиция в базовом правиле) плюс два мутанта рабочей копии — А «2 failed, 2 passed» с отказом, назвавшим `form > .form-busy`, Б «2 failed, 2 passed» с отказом, назвавшим класс области в теге панели; `components/modal.html` не тронут ни на символ, порцелан после возврата пуст. Точка строки группы ОСТАЛАСЬ рядом с тумблером — второе исключение объёма и решение владельца 3, объявленное ОДНОЙ записью `IN_FLOW_INDICATOR_EXCEPTIONS` с обоснованием и числом `= 1`. Обоснование различия «имя класса формы» и абзац раздела сличения получили ПОКОЛЕНИЕ (D-30/D-32): прежний текст «обёртка класса формы не знает вовсе» верен для дерева до 11-21 и не вычёркивается. Числа не сдвинуты: базовое правило `.form-busy` одно, `PANEL_QUALITY_DIFFERENCES_ALLOWED = 2`, контролей файла 24; `pointer-events: none;` 1 → 2. RED задачи 1 замерен прогоном («2 failed», оба отказа — отказы утверждений, `RED_EVIDENCE_OK`), GREEN — «2 passed». Полный прогон БЕЗ отбора маркером: **3410 passed, 0 failed** (37:48) — ночное окно админ-обзора не сработало (прогон вне 00:00–05:00 UTC). ⚠️ Наблюдение проверки 6 `11-UAT.md` НЕ снято: оно за человеком в `/gsd-verify-work 11`, и таблица отметки оставлена пустой.
@@ -68,7 +89,7 @@ Last activity (устарело, предмет — план 11-09; строка
 Last activity (устарело, предмет — план 11-08; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-16 — 11-08 исполнен: слой ответа получил `respond_field_error` — ЕДИНСТВЕННЫЙ литерал 422 приложения (`SERVER_SIDE_VALIDATION_RESPONSES` 1 → 2 поставлено покрасневшим прогоном); маршрутов, его зовущих, нет ни одного, и правило 422 по-прежнему `"swap": false` — своп приземляет план 11-09 ОДНИМ коммитом с первым вызывающим. Настройки профиля вынесены в `includes/profile_settings.html` — один источник формы для страницы и обоих будущих фрагментов, ошибка поля переехала от карточки К ФОРМЕ (D-12 Фазы 8), обработчик не тронут
 Last activity (устарело, предмет — план 11-07; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-16 — 11-07 исполнен: смягчение T-07-13 приземлилось ОТДЕЛЬНЫМ планом ДО возврата свопа (коммит `cc72871`); отказ валидации страничного слоя на пути htmx — пустой 400 при любом месте ошибки, JSON-API байт-в-байт прежний на обоих транспортах
 Last activity (устарело, предмет — закрытая Фаза 10; строка НЕ вычёркивается по идиоме D-30/D-32): 2026-09-11 — Phase 10: план 10-51 исполнен (RED→GREEN замерен переходом цвета правила безусловности подъёма — `1 failed, 229 deselected` при rc=1 с отказом, печатающим полученный селектор `.is-modal-open #htmx-failure-server, .is-modal-open #htmx-failure-network`, → `1 passed` при rc=0; улика проверена прибором `RED_EVIDENCE_OK`; модуль шелла `230 passed` при пороге сбора 223, полная суита `3182 passed`, rc=0, 38:20; продукт тронут ДВУМЯ строками преамбулы `app/static/css/app.css` — величины блока подъёма, правило блокировки прокрутки, рычаг и заготовки не тронуты)
-Progress: [████████████████████] 116/116 plans ([███████░░░] 67%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8, 9, 10 и 11); Фазы 12…15 ещё не спланированы. По фазам вехи: **5/9 (56%)** — Фаза 11 ЗАСЧИТАНА 2026-09-18: верификация `passed`, обход 8/8 при восьми заполненных отметках, `threats_open: 0`, Nyquist `validated`.
+Progress: [████████████████████] 116/116 plans ([████████░░] 78%) — счёт идёт по СПЛАНИРОВАННЫМ планам (Фазы 7, 8, 9, 10 и 11); Фазы 12…15 ещё не спланированы. По фазам вехи: **5/9 (56%)** — Фаза 11 ЗАСЧИТАНА 2026-09-18: верификация `passed`, обход 8/8 при восьми заполненных отметках, `threats_open: 0`, Nyquist `validated`.
 
 ✅ **Фаза 09 ЗАКРЫТА и ОТГРУЖЕНА (PR #47, 2026-09-02).** Все двадцать планов имеют сводки, суита зелена (2649 passed), проведены ЧЕТЫРЕ круга ручного обхода (последний — 2026-09-02, Chrome / macOS), верификация `passed` 18/18 круга 5, `09-SECURITY.md` несёт `threats_open: 0`.
 
@@ -87,7 +108,7 @@ Progress: [████████████████████] 116/116
 
 **Velocity:**
 
-- Total plans completed: 179 (milestone v2.0) — ⚠️ прежнее значение 70 расходилось с суммой по фазам (13+15+12+12+30+14+14 = 110) и с frontmatter `progress.completed_plans: 110`; исправлено при закрытии вехи
+- Total plans completed: 185 (milestone v2.0) — ⚠️ прежнее значение 70 расходилось с суммой по фазам (13+15+12+12+30+14+14 = 110) и с frontmatter `progress.completed_plans: 110`; исправлено при закрытии вехи
 - Average duration: N/A
 - Total execution time: N/A
 
@@ -107,6 +128,7 @@ Progress: [████████████████████] 116/116
 | 10 | 57 | - | - |
 | 11 | 21 | - | - |
 | 12 | 13 | - | - |
+| 13 | 6 | - | - |
 
 **Recent Trend:**
 
@@ -201,6 +223,12 @@ Progress: [████████████████████] 116/116
 | Phase 12 P11 | 62min | 2 tasks | 9 files |
 | Phase 12 P12 | 26 min | 3 tasks | 7 files |
 | Phase 12 P13 | 22 min | 2 tasks | 3 files |
+| Phase 13 P01 | 1h 4m | 3 tasks | 11 files |
+| Phase 13 P02 | 22 min | 2 tasks | 7 files |
+| Phase 13 P03 | 19 min | 3 tasks | 9 files |
+| Phase 13 P04 | 16min | 2 tasks | 4 files |
+| Phase 13 P05 | 14min | 2 tasks | 4 files |
+| Phase 13 P06 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -463,6 +491,26 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 12]: Громкость отказа не куплена ни одной записью в хранилище: новый цикл читает только имена частей — Запрет плана 12-06 держится тремя правилами с утверждением о нуле обращений к хранилищу; ни одно из них не тронуто ни на символ.
 - [Phase 12]: Правила, закреплявшие безымянный отказ, инвертированы ВВЕРХ с летописью, а не ослаблены — «Строк отказа одна» было верно для своего дерева и зелено на дефекте. Число выросло до «число выбранных файлов плюс одна безымянная», и рост числа есть рост того, что правило доказывает.
 - [Phase 12]: Остаток «б» (ключ старого образца в Ad.images) записан допущением, а не починен — Три причины не чинить остаток (расширение образца сняло бы рубеж владения; маршрут привязан к пользователю, а не к черновику, D-02; перенос данных вне рамки) остаются в силе. Партия изменила ГРОМКОСТЬ исхода, а не достижимость состояния.
+- [Phase 13]: Фаза 13, план 13-01: поправка D-05 построена — якорь #tg-connect-step на странице без триггера, опросчик — форма form_wrapper внутри фрагмента ожидания с явной целью в якорь; любой ответ 200 снимает опросчик, опрос останавливается ответом.
+- [Phase 13]: Фаза 13, план 13-01: запись приложения каталога идентификаторов для session_id опроса TG СНЯТА, а не переключена на POST (10 → 9, прогоном): ключ читается из тела формы, каталог наблюдает только параметры сигнатуры.
+- [Phase 13]: Фаза 13, план 13-01: UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED 15 → 17 (перечень, не названный планом): в шаге два блока вызова обёртки — форма старта на общем умолчании цели блокировки, опросчик с пустой целью и записью в DISABLED_ELT_EXCEPTIONS.
+- [Phase 13]: 13-02: verify-2fa writes the account from complete_auth's result through _save_tg_account — a request that loses the race gets the error step; two concurrent submits save one account (mutant that writes submit_2fa's return value saves two)
+- [Phase 13]: 13-02: other Telethon errors on the password step answer the error fragment with «Начать заново», not 500; the log record carries only the exception type, never the password
+- [Phase 13]: 13-02: UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED 17 -> 18 (not named by the plan): the password form is a third form_wrapper block and keeps the default blocking target on its real submit button
+- [Phase 13]: 13-03: a timeout of QRLogin.wait() (QR token, ~30 s) sets status qr_expired with no error text and no logger.error traceback; the session (300 s) stays alive and the poll answers «QR-код истёк» with an «Обновить QR-код» button, no auto-refresh (D-02, D-03)
+- [Phase 13]: 13-03: refresh_qr recreates the code only from qr_expired and only within QR_SESSION_TTL; otherwise None with no recreate and no status change, so an outdated session is not revived and a finished login cannot be reset (Pitfall 2, T-13-12)
+- [Phase 13]: 13-03: refresh-qr runs on respond(): expired -> «Сессия авторизации истекла», other status -> «Не удалось обновить QR. Начните заново.», success -> waiting step with the new QR and the same poller; the wizard has no JSON handler left and NOT_YET_CONVERTED holds no wizard key (11 -> 10)
+- [Phase 13]: 13-03: UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED 18 -> 19 (outside the plan's files): the refresh form of the qr_expired step keeps the default blocking target because it has a real submit button
+- [Phase 13]: Phase 13-04: a QR session belongs to the user who started it; QRAuthState.user_id is required with no default, and under impersonation it is the subject (payload sub), the same user the account is saved on (D-04)
+- [Phase 13]: Phase 13-04: an unknown or foreign session_id gets status gone and one byte-equal answer on poll, refresh-qr and verify-2fa («Сессия подключения не найдена. Начните заново.»); only the owner's outdated session answers «Сессия авторизации истекла», because the owner check runs before the TTL check (D-03, D-04)
+- [Phase 13]: Phase 13-04: complete_auth returns None and touches nothing unless the caller owns the session and it is in success; owner check and pop have no await between them, so one scan still gives one account (D-01)
+- [Phase 13]: Phase 13-04: get_qr_status reports success before the TTL check, so a scan finished after QR_SESSION_TTL but before cleanup is not lost as expired (Pitfall 10; the TTL itself is unchanged, D-13)
+- [Phase 13]: Phase 13-05: the criterion-2 polling gate is closed by template branch: branches are read from tg_connect_step.html (step literals, step-in enumerations, and the step chain's else fall-through as error) with a six-branch anti-vacuum, and every branch has a STEP_MARKS mark and at least one POLLING_CASES row; a new branch without a row is named (T-13-07)
+- [Phase 13]: Phase 13-05: each POLLING_CASES row declares its branch and the response must carry exactly that branch's mark; every polling fragment must have a terminal pair (a 200 qr-status POST without trigger); each rule runs on parameters and has a negative control on synthetic input, and non-vacuity was measured by working-copy mutants of the template (the rules were green on the live tree, disclosed)
+- [Phase 13]: Phase 13-05: TOP_LEVEL_BINDING_EXEMPT_TEMPLATES is a named zero (TOP_LEVEL_BINDING_EXEMPTIONS_DECLARED = 0); the non-emptiness rule became equality with the declared number, and the vacuous connect-screen loop became a subject rule: the connect screen's chain declares zero top-level bindings (Pitfall 4, T-13-16)
+- [Phase 13]: Phase 13-05: components/thumb.html onerror is named in the R-08-02 prose as outside its subject; counting plain event attributes in an inventory is left to Phase 15
+- [Phase 13]: Phase 13-06: the criterion-3 and FETCH-02 chronicles call the premise «сохранена» FALSE from the start, not outdated — formula «ПОСЫЛКА НЕ УСТАРЕЛА — ОНА БЫЛА ЛОЖНОЙ» instead of the D-30/D-32 «не была ошибкой — устарела» (D-04)
+- [Phase 13]: Phase 13-06: FETCH-02 stays [ ] / Pending although requirements.ready-ids reports it ready — the mark follows phase verification (plan must-have, test_requirement_completion_follows_verification.py)
 
 ### Pending Todos
 
@@ -570,6 +618,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 | 260826-m5w | issue 44: на /ads/{id}/edit сжимаются и обрезаются иконки мессенджеров в шапке карточки расписания | 2026-08-26 | 41769e6 |  | [260826-m5w-posmotri-issue-44-i-isprav-problemmy-ver](./quick/260826-m5w-posmotri-issue-44-i-isprav-problemmy-ver/) |
 | 260826-mwo | на /ads/{id}/edit тумблер включения/выключения расписания сворачивал/разворачивал карточки — редирект переписывал `?sched=` | 2026-08-26 | 2111a9f |  | [260826-mwo-na-stranitse-redaktirovaniya-obyavleniya](./quick/260826-mwo-na-stranitse-redaktirovaniya-obyavleniya/) |
 | 260826-ojg | issue 45: на /ads/{id}/edit подблоки развёрнутой карточки расписания слипались — обёртка-форма гасила промежуток тела карточки | 2026-08-26 | 12f5302 |  | [260826-ojg-posmotri-issue-45-i-isprav-problemmy-ver](./quick/260826-ojg-posmotri-issue-45-i-isprav-problemmy-ver/) |
+| 260921-qvt | Поправить визуальные регрессии мастера Telegram по QR (UI-1, UI-2, UI-3): шаг пароля 2FA — поле и «Подтвердить» во внутренней колонке `connect-step__form` (14px); шаг «код истёк» — ряд действий по центру; старт и обновление QR — подпись «Загрузка...» по отключённой кнопке отправки, без скрипта | 2026-09-21 | aaaee309 |  | [260921-qvt-popravit-vizualnye-regressii-mastera-tel](./quick/260921-qvt-popravit-vizualnye-regressii-mastera-tel/) |
 
 ## Deferred Items
 
@@ -643,8 +692,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-21T08:30:00Z
-Stopped at: Phase 12 complete and CLOSED (обход, безопасность, Nyquist, вердикт `passed`, переход выполнен); ready to plan Phase 13
+Last session: 2026-09-21T19:20:00Z
+Stopped at: Phase 13 complete and CLOSED (обход 5/5, безопасность, Nyquist, вердикт `passed`, переход выполнен); ready to plan Phase 14
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
@@ -652,6 +701,27 @@ Resume file: None
 **Отклонение диспатча, принятое владельцем 2026-09-02:** задача 3 доисполняется субагентом БЕЗ `isolation="worktree"`, работающим в СУЩЕСТВУЮЩЕМ worktree `agent-a217c9b7b59eb5230`. Основание: гейт `executor-isolation-dispatch` требует `isolation="worktree"` для `gsd-executor`, но свежий worktree форкается от `bb9113e`, где нет ни `2f9875f`, ни заведённого им тест-файла (+396) — гринить было бы нечего. Обе записанные развилки `.continue-here.md` при этом соблюдены: основное дерево не трогается, SUMMARY со `status: halted` в ветку фазы не сливается.
 
 ## Operator Next Steps
+
+⚠️ **ПОКОЛЕНИЕ D-30/D-32, установлено при закрытии Фазы 13 (2026-09-21).** Блок Фазы 12 ниже НЕ
+вычёркивается: его пункт 0 исполнен (Фаза 13 спланирована, исполнена и закрыта), пункты 0a…0c живы.
+Действующий вход и то, что Фаза 13 оставила открытым:
+
+0. **Отгрузить Фазу 13: `/gsd-ship 13`**, затем **спланировать Фазу 14: `/gsd-discuss-phase 14`** —
+   «Авторизация на htmx». Каталога фазы на диске нет, CONTEXT.md не собран.
+0a. **Рекомендации Фазы 13 — решение владельца 2026-09-21: фаза закрыта, они НЕ переведены в гапы.**
+   Визуальные регрессии фазы UI-1 (0 px между полем пароля и «Подтвердить»), UI-2 (кнопки шага
+   «код истёк» прижаты влево), UI-3 (пропала метка «Загрузка...») — дешёвые правки CSS/разметки,
+   предложены отдельной быстрой задачей `/gsd-quick` до отгрузки — ✅ ИСПРАВЛЕНЫ быстрой задачей
+   `260921-qvt` 2026-09-21 (коммиты `85e84ca3`, `aaaee309`; живой взгляд в браузере — за владельцем,
+   пункт D4 её SUMMARY). Рядом, тоже не блокирующие цель:
+   WR-04 (два маршрутных теста гонки не различают мутанта — свойство держит модульное правило),
+   WR-02 (таймаут после сканирования классифицируется как «код истёк»), WR-01, WR-03, IN-01, IN-02.
+   Подробности — `13-VERIFICATION.md` §Findings Disposition и ключ `advisory`.
+0b. **Две отсрочки владельца Фазы 13:** IN-03 (брошенная QR-сессия держит подключённый клиент
+   Telethon до чистки по сроку) и UI-17 (сырой текст исключения в «Ошибка запуска QR авторизации»).
+   Ни одна поздняя фаза их не берёт — `13-VERIFICATION.md` ключ `deferred`.
+
+**Блок закрытия Фазы 12 (поколение, предмет — состояние после Фазы 12):**
 
 ⚠️ **ПОКОЛЕНИЕ D-30/D-32, установлено при закрытии Фазы 12 (2026-09-21).** Перечень ниже писался
 ПЕРЕД Фазой 9 и по большей части исполнен: Фазы 9, 10, 11 и 12 закрыты. Он НЕ вычёркивается —

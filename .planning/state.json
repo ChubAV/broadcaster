@@ -36,7 +36,7 @@
     {
       "number": "13",
       "name": "QR-мастер Telegram",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "14",
@@ -51,8 +51,8 @@
   ],
   "next": {
     "command": "/gsd:progress --next",
-    "label": "Advance to the next step (plan phase 13)",
-    "reason": "Phase 13 of 9 — needs a plan"
+    "label": "Advance to the next step (plan phase 14)",
+    "reason": "Phase 14 of 9 — needs a plan"
   },
-  "updated_at": "2026-09-21T08:18:06.304Z"
+  "updated_at": "2026-09-21T19:17:40.226Z"
 }

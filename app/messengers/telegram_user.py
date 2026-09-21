@@ -31,8 +31,11 @@ QR_SESSION_TTL = 300  # 5 minutes
 @dataclass
 class QRAuthState:
     client: TelegramClient
+    # Владелец сессии — пользователь, начавший её (D-04). Обязателен и без
+    # умолчания: сессию без владельца создать нельзя.
+    user_id: int
     qr_login: object | None = None
-    status: str = "waiting"  # waiting | needs_2fa | success | error
+    status: str = "waiting"  # waiting | qr_expired | needs_2fa | success | error
     session_string: str | None = None
     error: str | None = None
     created_at: float = field(default_factory=time.time)
@@ -51,8 +54,8 @@ def _cleanup_expired_sessions() -> None:
             state._wait_task.cancel()
 
 
-async def start_qr_auth(api_id: int, api_hash: str) -> tuple[str, str]:
-    """Start QR auth flow. Returns (session_id, login_url for QR)."""
+async def start_qr_auth(api_id: int, api_hash: str, user_id: int) -> tuple[str, str]:
+    """Start QR auth flow for `user_id`. Returns (session_id, login_url for QR)."""
     _cleanup_expired_sessions()
 
     session_id = uuid.uuid4().hex[:16]
@@ -65,7 +68,7 @@ async def start_qr_auth(api_id: int, api_hash: str) -> tuple[str, str]:
         await client.disconnect()
         raise RuntimeError(f"Failed to start QR login: {e}") from e
 
-    state = QRAuthState(client=client, qr_login=qr_login)
+    state = QRAuthState(client=client, user_id=user_id, qr_login=qr_login)
     _qr_sessions[session_id] = state
 
     # Start background task to wait for scan
@@ -87,6 +90,15 @@ async def _wait_for_qr(session_id: str) -> None:
         state.status = "success"
     except asyncio.CancelledError:
         pass
+    except asyncio.TimeoutError:
+        # Токен QR живёт ~30 с (`expires` Telegram), а сессия — QR_SESSION_TTL
+        # (300 с): это разные сроки. Таймаут `wait()` значит «код истёк», сессия
+        # жива и обновляется кнопкой через `refresh_qr` — это статус, а не
+        # ошибка, и в журнал ошибок с трассировкой он не пишется (D-03). На
+        # Python 3.12 `asyncio.TimeoutError is TimeoutError` — ветка ловит оба
+        # имени. `SessionPasswordNeededError` приходит ПОСЛЕ события, а не из
+        # таймаута, и остаётся в общей ветке ниже.
+        state.status = "qr_expired"
     except Exception as e:
         err_name = type(e).__name__
         if "SessionPasswordNeeded" in err_name or "SessionPasswordNeededError" in err_name:
@@ -97,11 +109,36 @@ async def _wait_for_qr(session_id: str) -> None:
             logger.error("qr_auth_error", session_id=session_id, error=str(e), exc_info=True)
 
 
-def get_qr_status(session_id: str) -> dict:
-    """Get current QR auth status."""
+# ⚠️ ПРОВЕРКА ВЛАДЕЛЬЦА — ЕДИНСТВЕННАЯ ЗАЩИТА ОТ СОХРАНЕНИЯ ЧУЖОГО АККАУНТА
+# TELEGRAM СЕБЕ (D-04). `session_id` пишется в журнал (`qr_auth_error`,
+# `qr_refresh_error`), так что знать чужой `session_id` может любой читатель
+# журнала. Поэтому каждая функция слоя ниже читает состояние ТОЛЬКО через
+# `_owned`, и проверка стоит ДО любой мутации (`pop`, `cancel`, `recreate`,
+# `sign_in`, смена статуса): чужая сессия для слоя — то же, что отсутствующая,
+# и чужой запрос не оставляет на ней следа.
+def _owned(session_id: str, user_id: int) -> QRAuthState | None:
+    """Состояние сессии, если она есть И принадлежит `user_id`; иначе None."""
     state = _qr_sessions.get(session_id)
+    if state is None or state.user_id != user_id:
+        return None
+    return state
+
+
+def get_qr_status(session_id: str, user_id: int) -> dict:
+    """Get current QR auth status of the caller's own session.
+
+    `gone` — сессии нет ИЛИ она чужая: существование чужой сессии не
+    раскрывается (D-04), и различие «истекла / не найдена» видит только
+    владелец, потому что владелец проверяется раньше срока.
+    """
+    state = _owned(session_id, user_id)
     if not state:
-        return {"status": "expired"}
+        return {"status": "gone"}
+
+    # Успех — раньше срока (RESEARCH §Pitfall 10): сканирование на 299-й
+    # секунде не становится «истекло» на 301-й. Сам срок не меняется (D-13).
+    if state.status == "success":
+        return {"status": "success"}
 
     if time.time() - state.created_at > QR_SESSION_TTL:
         return {"status": "expired"}
@@ -112,10 +149,22 @@ def get_qr_status(session_id: str) -> dict:
     return result
 
 
-async def refresh_qr(session_id: str) -> str | None:
-    """Recreate QR if expired. Returns new login_url or None."""
-    state = _qr_sessions.get(session_id)
+async def refresh_qr(session_id: str, user_id: int) -> str | None:
+    """Recreate the caller's own expired QR. Returns new login_url or None."""
+    # Владелец — первым (D-04): чужой запрос не пересоздаёт код, не сбрасывает
+    # срок и не трогает задачу ожидания.
+    state = _owned(session_id, user_id)
     if not state or not state.qr_login:
+        return None
+    # Пересоздание пускается ТОЛЬКО из «код истёк» (D-03): подделанный запрос
+    # из `success` или `needs_2fa` иначе вернул бы сессию в `waiting` и стёр бы
+    # готовый вход (RESEARCH §Pattern 4).
+    if state.status != "qr_expired":
+        return None
+    # Устаревшая сессия не оживает (RESEARCH §Pitfall 2): чистка по сроку
+    # зовётся только из `start_qr_auth`. 300 с отсчитываются от ПОСЛЕДНЕГО
+    # выпуска кода, потому что `created_at` сбрасывается ниже.
+    if time.time() - state.created_at > QR_SESSION_TTL:
         return None
 
     try:
@@ -134,9 +183,10 @@ async def refresh_qr(session_id: str) -> str | None:
         return None
 
 
-async def submit_2fa(session_id: str, password: str) -> str:
-    """Submit 2FA password. Returns session_string on success."""
-    state = _qr_sessions.get(session_id)
+async def submit_2fa(session_id: str, user_id: int, password: str) -> str:
+    """Submit 2FA password for the caller's own session. Returns session_string on success."""
+    # Владелец — ДО `sign_in` (D-04): пароль постороннего в Telegram не уходит.
+    state = _owned(session_id, user_id)
     if not state:
         raise RuntimeError("Сессия авторизации истекла. Начните заново.")
 
@@ -152,11 +202,21 @@ async def submit_2fa(session_id: str, password: str) -> str:
     return state.session_string
 
 
-async def complete_auth(session_id: str) -> str | None:
-    """Get session string and clean up. Returns session_string or None."""
-    state = _qr_sessions.pop(session_id, None)
-    if not state:
+async def complete_auth(session_id: str, user_id: int) -> str | None:
+    """Get session string of the caller's own successful session and clean up.
+
+    Returns session_string or None. Чужая сессия и сессия не в `success` — None,
+    и сессия не тронута (D-04; D-01: вызов в ином статусе молча уничтожал бы
+    живую сессию).
+
+    ⚠️ МЕЖДУ ПРОВЕРКОЙ И `pop` НЕТ `await` (RESEARCH §Pattern 3): из двух
+    конкурентных вызовов владельца состояние снимает ровно один — одно
+    сканирование, один аккаунт.
+    """
+    state = _owned(session_id, user_id)
+    if not state or state.status != "success":
         return None
+    _qr_sessions.pop(session_id, None)
 
     if state._wait_task:
         state._wait_task.cancel()

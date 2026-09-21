@@ -964,6 +964,131 @@ async def _arrange_image_upload_without_session(
 
 
 # =============================================================================
+# Посев: старт подключения Telegram по QR (Фаза 13, план 13-01)
+# =============================================================================
+
+ACCOUNTS_CONNECT_TG_USER_START_QR = "app/pages/accounts.py::accounts_connect_tg_user_start_qr"
+ACCOUNTS_CONNECT_TG_USER_QR_STATUS = "app/pages/accounts.py::accounts_connect_tg_user_qr_status"
+TG_WIZARD_UNKNOWN_SESSION = "no-such-session"
+
+
+def _tg_start_qr_auth():
+    """Фабрика подмены старта QR-входа Telethon в страничном слое.
+
+    Подменяется `start_qr_auth`, импортированный модулем страниц: клиента
+    Telethon, живущего до чистки по сроку, половины пары не заводят. Фабрика, а
+    не готовый менеджер, — по основанию `_Arranged.context`.
+    """
+    return patch(
+        "app.pages.accounts.start_qr_auth",
+        new=AsyncMock(return_value=("sid-pair", "tg://login?token=pair")),
+    )
+
+
+async def _arrange_tg_start_qr(client, db, settings, identity) -> _Arranged:
+    """Старт СВОЕГО пользователя — форма без полей, старт подменён."""
+    await _current_user(db, identity, settings)
+    return _Arranged(url="/accounts/connect/tg_user/start-qr", context=_tg_start_qr_auth)
+
+
+async def _arrange_tg_start_qr_without_session(
+    client, db, settings, identity
+) -> _Arranged:
+    client.cookies.clear()
+    return _Arranged(url="/accounts/connect/tg_user/start-qr", context=_tg_start_qr_auth)
+
+
+async def _arrange_tg_poll_unknown_session(client, db, settings, identity) -> _Arranged:
+    """Опрос НЕИЗВЕСТНОЙ сессии — ветка, отвечающая фрагментом.
+
+    ⚠️ ВЕТКА ОЖИДАНИЯ В РЕЕСТР НЕ ГОДИТСЯ (RESEARCH §Pitfall 7): она отвечает 204
+    без тела, а половина `FRAGMENT` ждёт 200 и фрагмент. Неизвестная сессия
+    отвечает шагом ошибки с формой старта заново — это и есть метка случая.
+    """
+    await _current_user(db, identity, settings)
+    return _Arranged(
+        url="/accounts/connect/tg_user/qr-status",
+        data={"session_id": TG_WIZARD_UNKNOWN_SESSION},
+    )
+
+
+async def _arrange_tg_poll_without_session(client, db, settings, identity) -> _Arranged:
+    client.cookies.clear()
+    return _Arranged(
+        url="/accounts/connect/tg_user/qr-status",
+        data={"session_id": TG_WIZARD_UNKNOWN_SESSION},
+    )
+
+
+# =============================================================================
+# Посев: подтверждение пароля 2FA мастера Telegram (Фаза 13, план 13-02)
+# =============================================================================
+
+ACCOUNTS_CONNECT_TG_USER_VERIFY_2FA = "app/pages/accounts.py::accounts_connect_tg_user_verify_2fa"
+# Пароль непустой: пустой отвечает 422 на обоих транспортах и в реестр не входит.
+TG_WIZARD_PAIR_PASSWORD = "pair-password"
+
+
+async def _arrange_tg_verify_2fa_unknown_session(
+    client, db, settings, identity
+) -> _Arranged:
+    """Подтверждение пароля НЕИЗВЕСТНОЙ сессии — ветка, отвечающая фрагментом.
+
+    Сессии нет, поэтому до Telethon запрос не доходит: ответ — шаг ошибки с
+    формой старта заново, это и есть метка случая.
+    """
+    await _current_user(db, identity, settings)
+    return _Arranged(
+        url="/accounts/connect/tg_user/verify-2fa",
+        data={"session_id": TG_WIZARD_UNKNOWN_SESSION, "password": TG_WIZARD_PAIR_PASSWORD},
+    )
+
+
+async def _arrange_tg_verify_2fa_without_session(
+    client, db, settings, identity
+) -> _Arranged:
+    client.cookies.clear()
+    return _Arranged(
+        url="/accounts/connect/tg_user/verify-2fa",
+        data={"session_id": TG_WIZARD_UNKNOWN_SESSION, "password": TG_WIZARD_PAIR_PASSWORD},
+    )
+
+
+# =============================================================================
+# Посев: обновление QR-кода мастера Telegram (Фаза 13, план 13-03)
+# =============================================================================
+
+ACCOUNTS_CONNECT_TG_USER_REFRESH_QR = "app/pages/accounts.py::accounts_connect_tg_user_refresh_qr"
+
+
+async def _arrange_tg_refresh_qr_unknown_session(
+    client, db, settings, identity
+) -> _Arranged:
+    """Обновление кода НЕИЗВЕСТНОЙ сессии — ветка, отвечающая фрагментом.
+
+    Сессии нет, поэтому до Telethon запрос не доходит: ответ — шаг ошибки с
+    формой старта заново, это и есть метка случая. Успех (шаг ожидания с новым
+    QR) требует живой сессии в памяти процесса с объектом кода Telethon и
+    утверждён поимённо в `tests/test_routes/test_tg_user_auth.py`.
+    """
+    await _current_user(db, identity, settings)
+    return _Arranged(
+        url="/accounts/connect/tg_user/refresh-qr",
+        data={"session_id": TG_WIZARD_UNKNOWN_SESSION},
+    )
+
+
+async def _arrange_tg_refresh_qr_without_session(
+    client, db, settings, identity
+) -> _Arranged:
+    client.cookies.clear()
+    return _Arranged(
+        url="/accounts/connect/tg_user/refresh-qr",
+        data={"session_id": TG_WIZARD_UNKNOWN_SESSION},
+    )
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -1476,6 +1601,94 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/login",
         transport=LOCATION,
     ),
+    # Фаза 13, план 13-01. Старт QR-входа и опрос статуса мастера Telegram:
+    # экран мастера ОСТАЁТСЯ, подменяется содержимое постоянного якоря шага.
+    # Путь без htmx на каждом исходе приземляется на страницу мастера (D-11).
+    # ⚠️ МЕТКИ СТРУКТУРНЫЕ, А НЕ ТЕКСТОВЫЕ: текст отказа неизвестной сессии
+    # сменит план 13-04 («не найдена» против «истекла»), а форма старта заново
+    # останется. Метка старта — расписание опроса: без него QR виден, но экран
+    # никогда не узнает о сканировании.
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_START_QR,
+        name="старт QR-входа Telegram — успех",
+        identity="user",
+        arrange=_arrange_tg_start_qr,
+        landing="/accounts/connect/tg_user",
+        transport=FRAGMENT,
+        fragment_mark='hx-trigger="every 3s"',
+    ),
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_START_QR,
+        name="старт QR-входа Telegram — нет сессии",
+        identity="user",
+        arrange=_arrange_tg_start_qr_without_session,
+        landing="/login",
+        transport=LOCATION,
+    ),
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_QR_STATUS,
+        name="опрос QR-входа Telegram — неизвестная сессия",
+        identity="user",
+        arrange=_arrange_tg_poll_unknown_session,
+        landing="/accounts/connect/tg_user",
+        transport=FRAGMENT,
+        fragment_mark='hx-post="/accounts/connect/tg_user/start-qr"',
+    ),
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_QR_STATUS,
+        name="опрос QR-входа Telegram — нет сессии",
+        identity="user",
+        arrange=_arrange_tg_poll_without_session,
+        landing="/login",
+        transport=LOCATION,
+    ),
+    # Фаза 13, план 13-02. Подтверждение пароля 2FA мастера Telegram: подменяется
+    # содержимое того же постоянного якоря шага; путь без htmx приземляется на
+    # страницу мастера (D-11). Метка структурная — форма старта заново, по тому
+    # же основанию, что у опроса неизвестной сессии (текст сменит план 13-04).
+    # Ветка неверного и пустого пароля отвечает 422 на обоих транспортах и в
+    # этот реестр не входит — по границе обхода, записанной у случаев профиля и
+    # мастера MAX; обе её стороны утверждены поимённо в
+    # `tests/test_routes/test_tg_user_auth.py`.
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_VERIFY_2FA,
+        name="пароль 2FA Telegram — неизвестная сессия",
+        identity="user",
+        arrange=_arrange_tg_verify_2fa_unknown_session,
+        landing="/accounts/connect/tg_user",
+        transport=FRAGMENT,
+        fragment_mark='hx-post="/accounts/connect/tg_user/start-qr"',
+    ),
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_VERIFY_2FA,
+        name="пароль 2FA Telegram — нет сессии",
+        identity="user",
+        arrange=_arrange_tg_verify_2fa_without_session,
+        landing="/login",
+        transport=LOCATION,
+    ),
+    # Фаза 13, план 13-03. Обновление QR-кода мастера Telegram: подменяется
+    # содержимое того же постоянного якоря шага; путь без htmx приземляется на
+    # страницу мастера (D-11). Метка структурная — форма старта заново, по тому
+    # же основанию, что у опроса и пароля неизвестной сессии (текст сменит план
+    # 13-04).
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_REFRESH_QR,
+        name="обновление QR-кода Telegram — неизвестная сессия",
+        identity="user",
+        arrange=_arrange_tg_refresh_qr_unknown_session,
+        landing="/accounts/connect/tg_user",
+        transport=FRAGMENT,
+        fragment_mark='hx-post="/accounts/connect/tg_user/start-qr"',
+    ),
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_REFRESH_QR,
+        name="обновление QR-кода Telegram — нет сессии",
+        identity="user",
+        arrange=_arrange_tg_refresh_qr_without_session,
+        landing="/login",
+        transport=LOCATION,
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -1557,7 +1770,37 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   `tests/test_pages/test_ads_image_upload.py` — по той же границе, что записана
 #   у случаев профиля и мастера MAX.
 #   ПОСТАВЛЕНО ПРОГОНОМ: `случаев пар в реестре 50, объявлено 48`.
-POST_PAIR_CASES_DECLARED = 50
+#   50 → 54, Фаза 13, план 13-01: четыре исхода МАСТЕРА TELEGRAM ПО QR — старт
+#   (фрагмент шага ожидания, метка — расписание опроса) и старт без сессии
+#   (переход на экран входа); опрос НЕИЗВЕСТНОЙ сессии (фрагмент шага ошибки,
+#   метка — форма старта заново) и опрос без сессии (переход на экран входа).
+#   ⚠️ ВЕТКА ОЖИДАНИЯ ОПРОСА В РЕЕСТР НЕ ВХОДИТ, И ЭТО ГРАНИЦА ФОРМЫ, А НЕ
+#   ПРОПУСК (RESEARCH §Pitfall 7): она отвечает 204 без тела, а половина
+#   фрагмента ждёт 200. Её ответ утверждён поимённо трасером в
+#   `tests/test_routes/test_tg_user_auth.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 13, план 13-01): `случаев пар в реестре 54,
+#   объявлено 50`.
+#   54 → 56, Фаза 13, план 13-02: два исхода ПОДТВЕРЖДЕНИЯ ПАРОЛЯ 2FA мастера
+#   Telegram — неизвестная сессия (фрагмент шага ошибки, метка — форма старта
+#   заново) и «нет сессии» (переход на экран входа).
+#   ⚠️ ВЕТКА НЕВЕРНОГО И ПУСТОГО ПАРОЛЯ В РЕЕСТР НЕ ВХОДИТ, И ЭТО ГРАНИЦА
+#   ОБХОДА, А НЕ ПРОПУСК: она отвечает 422 на обоих транспортах, а половины пары
+#   ждут 200 и 302. Обе её стороны утверждены поимённо в
+#   `tests/test_routes/test_tg_user_auth.py` — по той же границе, что записана у
+#   случаев профиля и мастера MAX.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 13, план 13-02): `случаев пар в реестре 56,
+#   объявлено 54`.
+#   56 → 58, Фаза 13, план 13-03: два исхода ОБНОВЛЕНИЯ QR-КОДА мастера
+#   Telegram — неизвестная сессия (фрагмент шага ошибки, метка — форма старта
+#   заново) и «нет сессии» (переход на экран входа).
+#   ⚠️ ВЕТКА УСПЕХА В РЕЕСТР НЕ ВХОДИТ, И ЭТО ГРАНИЦА ПОСЕВА, А НЕ ПРОПУСК: ей
+#   нужна живая сессия в памяти процесса с объектом кода Telethon. Её ответ
+#   (новый QR и ровно один опросчик) утверждён поимённо сквозным правилом
+#   `test_refreshing_an_expired_code_resumes_polling` в
+#   `tests/test_routes/test_tg_user_auth.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 13, план 13-03): `случаев пар в реестре 58,
+#   объявлено 56`.
+POST_PAIR_CASES_DECLARED = 58
 
 
 def _case_id(case: _PairCase) -> str:
@@ -2337,7 +2580,38 @@ def _number_complaints(
 # `tests/test_pages/test_ads_image_upload.py` — половина деградации новой пары.
 # ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
 # переведённых обработчиках 159, объявлено 158`.
-PAIRED_302_ASSERTIONS_DECLARED = 159
+#
+# 159 → 163, Фаза 13, план 13-01: четыре утверждения 302 модуля мастера
+# Telegram `tests/test_routes/test_tg_user_auth.py` — старт и опрос без
+# JavaScript приземляются на страницу мастера (два), старт и опрос без сессии
+# входа — на `/login` (два). Обработчики стали переведёнными, и их утверждения
+# вошли во вселенную правила; пары у обоих — случаи реестра выше. Адреса в этих
+# функциях набраны литералом первым аргументом `.post(…)`: собранный выражением
+# адрес обход не называл (первый прогон сказал `обработчик не назван — адрес
+# POST собран выражением`, и тест переписан на литералы).
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 163, объявлено 159`.
+#
+# 163 → 165, Фаза 13, план 13-02: два утверждения 302 о подтверждении пароля
+# 2FA мастера Telegram в `tests/test_routes/test_tg_user_auth.py`
+# (`test_verify_2fa_degrades_and_requires_a_session`) — верный пароль без
+# JavaScript приземляется на страницу мастера, запрос без сессии входа — на
+# `/login`. Обработчик стал переведённым, и его утверждения вошли во вселенную
+# правила; пары у него — два случая реестра выше. Адреса набраны литералом
+# первым аргументом `.post(…)`, как у записей плана 13-01.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 165, объявлено 163`.
+#
+# 165 → 167, Фаза 13, план 13-03: два утверждения 302 об обновлении QR-кода
+# мастера Telegram в `tests/test_routes/test_tg_user_auth.py`
+# (`test_refresh_degrades_and_requires_a_session`) — обновление без JavaScript
+# приземляется на страницу мастера, запрос без сессии входа — на `/login`.
+# Обработчик стал переведённым, и его утверждения вошли во вселенную правила;
+# пары у него — два случая реестра выше. Адреса набраны литералом первым
+# аргументом `.post(…)`, как у записей планов 13-01 и 13-02.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 167, объявлено 165`.
+PAIRED_302_ASSERTIONS_DECLARED = 167
 
 
 def _routes(settings) -> tuple[tuple[str, str], ...]:
