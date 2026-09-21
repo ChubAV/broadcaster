@@ -33,6 +33,9 @@
 Гейт опросов инвентаря шаблонов видит только расписание, написанное в теге
 литералом; опросчик мастера рождён макросом-обёрткой, и его останов держит
 реестр `POLLING_CASES` с правилом `test_polling_stops_by_a_response_without_trigger`.
+План 13-05 ЗАМКНУЛ реестр по веткам шаблона шага (блок гейта в конце модуля):
+новая ветка шаблона без записи краснит правило, и у каждого правила гейта есть
+отрицательный контроль на синтетике.
 """
 import asyncio
 import datetime
@@ -58,6 +61,7 @@ from app.main import create_app
 from app.messengers.telegram_user import QR_SESSION_TTL, QRAuthState, _qr_sessions, _wait_for_qr
 from app.models.messenger_account import MessengerAccount
 from app.models.user import User
+from app.pages.accounts import TG_CONNECT_STEP_TEMPLATE, _tg_step_markup, templates
 from tests.test_pages.test_confirm_delete_transport import DOCUMENT_MARK, HTMX_HEADERS
 from tests.test_pages.test_impersonation import _enter, _seed_target, _user
 
@@ -1368,12 +1372,191 @@ async def test_a_second_poll_after_success_does_not_save_again(
     assert len(await _tg_accounts(db_session)) == 1, "второй опрос сохранил аккаунт ещё раз"
 
 
-# --- Реестр останова опроса (критерий 2) ------------------------------------
+# --- ГЕЙТ КРИТЕРИЯ 2: останов опроса ответом, замкнутый по веткам шаблона ----
+#
+# ЧТО ЭТО. Обобщение `test_sync_polling_stops` / `..._continues_while_syncing`
+# (`tests/test_pages/test_htmx_preserved.py`) на мастер Telegram (критерий 2
+# ROADMAP, D-05): у КАЖДОГО фрагмента с `hx-trigger="every "` есть парный ответ
+# без него, и любой иной ответ с телом триггера не несёт. Команды «стоп» у
+# опроса нет, поэтому пара — не формальность: без терминального ответа опрос
+# вечен на каждой открытой вкладке (T-13-07).
+#
+# ПОЧЕМУ ГЕЙТ ЖИВЁТ ЗДЕСЬ, А НЕ В `tests/test_templates/test_htmx_inventory.py`.
+# Гейт опросов инвентаря ищет расписание `every` в ТЕГАХ исходника шаблона. У
+# формы из макроса-обёртки в теге стоит `hx-trigger="{{ trigger }}"`, а
+# `'every 3s'` живёт в аргументе `{% call %}` вне тега: опросчик мастера тому
+# гейту НЕВИДИМ. План 13-01 измерил это прогоном (RESEARCH §Инвентарь, строка
+# 19; допущение A2 подтвердилось: `POLLING_FRAGMENTS` не сдвинулся при
+# добавленном опросчике). Критерий 2 поэтому держится только правилами ниже,
+# над ОТРИСОВАННЫМИ ответами.
+#
+# ПОПРАВКА D-05 (RESEARCH §Pitfall 1). Посылка D-05 «идентификатор якоря и
+# запрос опроса на одном элементе» дала бы вечный опрос: элемент с расписанием
+# переживает подмену своего содержимого. Опросчик — дочерняя форма фрагмента
+# ожидания с целью в якорь, и сторож «якорь внутри фрагмента» ниже краснеет,
+# если якорь с опросом вернётся во фрагмент.
+#
+# ЗАМЫКАНИЕ (план 13-05). Реестр `POLLING_CASES` планы 13-01…13-04 наращивали
+# по СОСТОЯНИЯМ; здесь он замыкается по ВЕТКАМ ШАБЛОНА: ветки читаются из текста
+# `tg_connect_step.html`, каждая обязана иметь метку в `STEP_MARKS` и хотя бы
+# одну запись, а каждая запись подтверждает свою ветку меткой в ответе. Новая
+# ветка шаблона без записи краснит правило — проверяются не только известные
+# ветки. Правила исполняются на ПАРАМЕТРАХ (текст ответа, реестр, текст
+# шаблона), чтобы отрицательные контроли звали ТУ ЖЕ функцию, а не её копию
+# (форма `_closure_complaints` в `test_htmx_post_pairs.py`).
+
+
+# Структурная метка каждой ветки шага: строка, которую несёт ответ этой ветки и
+# не несёт ответ никакой другой. Старт и ошибка — одна ветка шаблона с двумя
+# подписями кнопки, поэтому метки у них — подписи.
+STEP_MARKS: dict[str, str] = {
+    "start": "Начать подключение",
+    "error": "Начать заново",
+    "waiting": POLL_TRIGGER,
+    "qr_expired": REFRESH_FORM,
+    "password": 'name="password"',
+    "connected": "Подключено",
+}
+
+# Ветка, в которую шаблон падает по `{% else %}` цепочки шага. Литерала
+# сравнения у неё нет: обработчики передают `step="error"`, и шаблон
+# различает старт и ошибку встроенным `if step == "start"` внутри этой ветки.
+FALLBACK_STEP = "error"
+
+# Антивакуум разбора веток: на дату плана 13-05 шаблон несёт шесть веток
+# (четыре литерала цепочки, литерал `start` внутри ветки по умолчанию и сама
+# ветка по умолчанию). Меньше — значит разбор ослеп, а не ветки исчезли.
+TEMPLATE_STEP_BRANCHES_MIN = 6
+
+_JINJA_COMMENT = re.compile(r"\{#.*?#\}", re.S)
+_JINJA_CONDITION_TAG = re.compile(r"\{%-?\s*(if|elif|else|endif)\b(.*?)-?%\}", re.S)
+_STEP_EQUALS = re.compile(r"""\bstep\s*==\s*["']([^"']+)["']""")
+_STEP_IN = re.compile(r"""\bstep\s+in\s+[(\[]([^)\]]*)[)\]]""")
+_QUOTED = re.compile(r"""["']([^"']+)["']""")
+
+
+def _step_template_text() -> str:
+    """Исходник шаблона шага — того самого, который рендерят обработчики."""
+    return templates.env.loader.get_source(templates.env, TG_CONNECT_STEP_TEMPLATE)[0]
+
+
+def _steps_named_in(condition: str) -> set[str]:
+    """Ветки, которые называет одно условие: `step == "…"` и перечисление `step in (…)`."""
+    steps = set(_STEP_EQUALS.findall(condition))
+    for listed in _STEP_IN.findall(condition):
+        steps |= set(_QUOTED.findall(listed))
+    return steps
+
+
+def _template_steps(template_text: str) -> set[str]:
+    """Ветки шага, прочитанные из текста шаблона.
+
+    Литералы сравнения `step` в любом месте шаблона (условия цепочки, встроенные
+    условия, перечисления в одном условии) плюс ветка по умолчанию, если у
+    цепочки, открытой условием по `step`, есть `{% else %}`: в неё приходит всё,
+    что не названо литералом, — сегодня это `error`.
+    """
+    text = _JINJA_COMMENT.sub("", template_text)
+    steps = _steps_named_in(text)
+    depth = 0
+    step_chains: list[int] = []
+    for keyword, condition in _JINJA_CONDITION_TAG.findall(text):
+        if keyword == "if":
+            depth += 1
+            if _steps_named_in(condition):
+                step_chains.append(depth)
+        elif keyword == "endif":
+            if step_chains and step_chains[-1] == depth:
+                step_chains.pop()
+            depth -= 1
+        elif keyword == "else" and step_chains and step_chains[-1] == depth:
+            steps.add(FALLBACK_STEP)
+    return steps
+
+
+def _unreached_steps(template_text: str, cases) -> list[str]:
+    """Жалобы замыкания: ветки шаблона без метки или без записи реестра.
+
+    Текст шаблона и реестр приходят параметром — контроль ниже зовёт ЭТУ функцию
+    с синтетическим шаблоном.
+    """
+    steps = _template_steps(template_text)
+    if not steps:
+        return ["разбор веток не нашёл ни одной — правило замыкания ослепло"]
+    complaints = []
+    if len(steps) < TEMPLATE_STEP_BRANCHES_MIN:
+        complaints.append(
+            f"разбор веток нашёл {len(steps)} ({sorted(steps)}), а не меньше "
+            f"{TEMPLATE_STEP_BRANCHES_MIN} — разбор ослеп"
+        )
+    unmarked = sorted(steps - STEP_MARKS.keys())
+    if unmarked:
+        complaints.append(f"ветки шаблона без метки в STEP_MARKS: {unmarked}")
+    stale = sorted(STEP_MARKS.keys() - steps)
+    if stale:
+        complaints.append(f"метки STEP_MARKS для веток, которых в шаблоне нет: {stale}")
+    unreached = sorted(steps - {case.step for case in cases})
+    if unreached:
+        complaints.append(
+            f"ветки шаблона, которых не достигает ни одна запись POLLING_CASES: {unreached}"
+        )
+    return complaints
+
+
+def _steps_marked(text: str) -> set[str]:
+    """Ветки, чьи метки несёт ответ."""
+    return {step for step, mark in STEP_MARKS.items() if mark in text}
+
+
+def _polling_violations(text: str, *, polls: bool, step: str) -> list[str]:
+    """Жалобы на один ответ: триггер не там или ответ не той ветки."""
+    complaints = []
+    if polls:
+        if text.count(POLL_TRIGGER) != 1:
+            complaints.append(
+                f"опросчиков {text.count(POLL_TRIGGER)} вместо одного — экран замрёт на QR"
+            )
+    elif "hx-trigger" in text:
+        complaints.append("ответ несёт триггер — опрос не остановится")
+    marked = _steps_marked(text)
+    if marked != {step}:
+        complaints.append(
+            f"ответ несёт метки веток {sorted(marked)} вместо ровно ветки {step!r}"
+        )
+    return complaints
+
+
+def _anchor_in_fragment(text: str) -> bool:
+    """Фрагмент несёт идентификатор постоянного якоря — опрос переживёт свой ответ."""
+    return ANCHOR_ID in text
+
+
+def _pairing_violations(cases) -> list[str]:
+    """Записи с опросом, у которых нет терминальной пары на маршруте опроса.
+
+    Опросчик шлёт `POST` на адрес опроса; пара фрагмента с триггером — запись
+    этого маршрута, отвечающая 200 без триггера.
+    """
+    polling = [case for case in cases if case.polls]
+    if not polling:
+        return ["в реестре нет ни одной записи с опросом — пара вакуумна"]
+    terminal = [
+        case for case in cases
+        if case.route == POLL_URL and case.method == "POST" and case.status == 200
+        and not case.polls
+    ]
+    if terminal:
+        return []
+    return [
+        f"{case.slug}: фрагмент с опросом без терминальной пары на {POLL_URL} "
+        "(200 без триггера) — останов не доказан"
+        for case in polling
+    ]
 
 
 @dataclass(frozen=True)
 class _PollingCase:
-    """Запись реестра: исход обработчика мастера и ждём ли от него опроса."""
+    """Запись реестра: исход мастера, ветка шага, которую он рисует, и ждём ли опроса."""
 
     slug: str
     name: str
@@ -1381,9 +1564,17 @@ class _PollingCase:
     # Посев получает владельца — вошедшего пользователя (D-04, план 13-04).
     seed: Callable[[pytest.MonkeyPatch, Settings, int], dict]
     polls: bool
+    # Ветка шаблона шага, которую рисует ответ (план 13-05): ключ `STEP_MARKS`.
+    step: str
     # Ошибка поля шага пароля отвечает 422 (D-08): её тело подменяет якорь
     # правилом блока конфигурации так же, как 200, и обязано не нести триггер.
     status: int = 200
+    # Страница мастера (GET) — единственный путь к ветке `start` (план 13-05).
+    method: str = "POST"
+
+
+def _seed_page(monkeypatch, settings, owner):
+    return {}
 
 
 def _seed_start_success(monkeypatch, settings, owner):
@@ -1490,27 +1681,30 @@ def _seed_verify_telethon_failure(monkeypatch, settings, owner):
 
 # План 13-02 дописал шаг пароля (опрос в `needs_2fa` и четыре исхода
 # `verify-2fa`); план 13-03 дописал «код истёк» и исходы `refresh-qr`; план
-# 13-04 дописал чужие сессии; план 13-05 замыкает реестр.
+# 13-04 дописал чужие сессии; план 13-05 замкнул реестр по веткам шаблона: каждая
+# запись объявила ветку, которую рисует, и дописана запись страницы мастера —
+# единственный путь к ветке `start`.
 POLLING_CASES: tuple[_PollingCase, ...] = (
-    _PollingCase("start-waiting", "старт — QR и опросчик", START_URL, _seed_start_success, True),
-    _PollingCase("start-not-configured", "старт — API не настроен", START_URL, _seed_start_not_configured, False),
-    _PollingCase("start-exception", "старт — исключение Telethon", START_URL, _seed_start_exception, False),
-    _PollingCase("poll-success", "опрос — успех, «Подключено»", POLL_URL, _seed_poll_success, False),
-    _PollingCase("poll-unknown", "опрос — неизвестная сессия", POLL_URL, _seed_poll_unknown, False),
-    _PollingCase("poll-error", "опрос — ошибка Telethon", POLL_URL, _seed_poll_error, False),
-    _PollingCase("poll-needs-2fa", "опрос — шаг пароля 2FA", POLL_URL, _seed_poll_needs_2fa, False),
-    _PollingCase("poll-qr-expired", "опрос — код истёк, кнопка обновления", POLL_URL, _seed_poll_qr_expired, False),
-    _PollingCase("poll-foreign", "опрос — чужая сессия, «не найдена»", POLL_URL, _seed_poll_foreign, False),
-    _PollingCase("refresh-success", "обновление — новый код и опросчик", REFRESH_URL, _seed_refresh_success, True),
-    _PollingCase("refresh-outdated", "обновление — сессия старше срока", REFRESH_URL, _seed_refresh_outdated, False),
-    _PollingCase("refresh-not-expired", "обновление — код не истёк", REFRESH_URL, _seed_refresh_not_expired, False),
-    _PollingCase("refresh-unknown", "обновление — неизвестная сессия", REFRESH_URL, _seed_refresh_unknown, False),
-    _PollingCase("refresh-foreign", "обновление — чужая сессия, «не найдена»", REFRESH_URL, _seed_refresh_foreign, False),
-    _PollingCase("verify-success", "пароль 2FA — «Подключено»", VERIFY_URL, _seed_verify_success, False),
-    _PollingCase("verify-wrong", "пароль 2FA — неверный, 422", VERIFY_URL, _seed_verify_wrong, False, 422),
-    _PollingCase("verify-empty", "пароль 2FA — пустой, 422", VERIFY_URL, _seed_verify_empty, False, 422),
-    _PollingCase("verify-telethon", "пароль 2FA — ошибка Telethon", VERIFY_URL, _seed_verify_telethon_failure, False),
-    _PollingCase("verify-foreign", "пароль 2FA — чужая сессия, «не найдена»", VERIFY_URL, _seed_verify_foreign, False),
+    _PollingCase("page-start", "страница мастера — старт", WIZARD_URL, _seed_page, False, "start", method="GET"),
+    _PollingCase("start-waiting", "старт — QR и опросчик", START_URL, _seed_start_success, True, "waiting"),
+    _PollingCase("start-not-configured", "старт — API не настроен", START_URL, _seed_start_not_configured, False, "error"),
+    _PollingCase("start-exception", "старт — исключение Telethon", START_URL, _seed_start_exception, False, "error"),
+    _PollingCase("poll-success", "опрос — успех, «Подключено»", POLL_URL, _seed_poll_success, False, "connected"),
+    _PollingCase("poll-unknown", "опрос — неизвестная сессия", POLL_URL, _seed_poll_unknown, False, "error"),
+    _PollingCase("poll-error", "опрос — ошибка Telethon", POLL_URL, _seed_poll_error, False, "error"),
+    _PollingCase("poll-needs-2fa", "опрос — шаг пароля 2FA", POLL_URL, _seed_poll_needs_2fa, False, "password"),
+    _PollingCase("poll-qr-expired", "опрос — код истёк, кнопка обновления", POLL_URL, _seed_poll_qr_expired, False, "qr_expired"),
+    _PollingCase("poll-foreign", "опрос — чужая сессия, «не найдена»", POLL_URL, _seed_poll_foreign, False, "error"),
+    _PollingCase("refresh-success", "обновление — новый код и опросчик", REFRESH_URL, _seed_refresh_success, True, "waiting"),
+    _PollingCase("refresh-outdated", "обновление — сессия старше срока", REFRESH_URL, _seed_refresh_outdated, False, "error"),
+    _PollingCase("refresh-not-expired", "обновление — код не истёк", REFRESH_URL, _seed_refresh_not_expired, False, "error"),
+    _PollingCase("refresh-unknown", "обновление — неизвестная сессия", REFRESH_URL, _seed_refresh_unknown, False, "error"),
+    _PollingCase("refresh-foreign", "обновление — чужая сессия, «не найдена»", REFRESH_URL, _seed_refresh_foreign, False, "error"),
+    _PollingCase("verify-success", "пароль 2FA — «Подключено»", VERIFY_URL, _seed_verify_success, False, "connected"),
+    _PollingCase("verify-wrong", "пароль 2FA — неверный, 422", VERIFY_URL, _seed_verify_wrong, False, "password", status=422),
+    _PollingCase("verify-empty", "пароль 2FA — пустой, 422", VERIFY_URL, _seed_verify_empty, False, "password", status=422),
+    _PollingCase("verify-telethon", "пароль 2FA — ошибка Telethon", VERIFY_URL, _seed_verify_telethon_failure, False, "error"),
+    _PollingCase("verify-foreign", "пароль 2FA — чужая сессия, «не найдена»", VERIFY_URL, _seed_verify_foreign, False, "error"),
 )
 
 
@@ -1524,6 +1718,26 @@ def test_the_polling_registry_holds_both_sides_of_the_pair():
     )
 
 
+def test_every_wizard_step_is_reached_by_a_polling_case():
+    """ЗАМЫКАНИЕ: каждая ветка шаблона шага имеет метку и хотя бы одну запись.
+
+    Ветки читаются из текста шаблона, а не перечисляются здесь: новая ветка —
+    например, шаг кода из SMS — краснит правило, пока у неё нет записи, и
+    потому не уйдёт в поставку без пары (T-13-07).
+    """
+    complaints = _unreached_steps(_step_template_text(), POLLING_CASES)
+    assert not complaints, (
+        f"реестр `POLLING_CASES` не замкнут по веткам `{TG_CONNECT_STEP_TEMPLATE}`:\n  "
+        + "\n  ".join(complaints)
+    )
+
+
+def test_every_polling_fragment_has_a_terminal_pair():
+    """ПАРА: у каждого фрагмента с опросом есть ответ опроса 200 без триггера."""
+    complaints = _pairing_violations(POLLING_CASES)
+    assert not complaints, "\n  ".join(["пара опроса не замкнута:", *complaints])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("case", POLLING_CASES, ids=[c.slug for c in POLLING_CASES])
 async def test_polling_stops_by_a_response_without_trigger(
@@ -1533,16 +1747,128 @@ async def test_polling_stops_by_a_response_without_trigger(
     monkeypatch: pytest.MonkeyPatch,
     owner_id: int,
 ):
-    """Триггер опроса несёт ТОЛЬКО ответ ожидания; любой иной ответ с телом его не несёт."""
+    """Триггер опроса несёт ТОЛЬКО ответ ожидания; любой иной ответ с телом его не несёт.
+
+    Каждая запись подтверждает свою ветку шага меткой ответа — иначе запись
+    «достигает» ветки только на словах. Фрагмент ответа не несёт якоря
+    (поправка D-05).
+    """
     data = case.seed(monkeypatch, test_settings, owner_id)
-    response = await authed_client.post(case.route, data=data, headers=HTMX_HEADERS)
+    if case.method == "GET":
+        response = await authed_client.get(case.route)
+    else:
+        response = await authed_client.post(case.route, data=data, headers=HTMX_HEADERS)
 
     assert response.status_code == case.status, (
         f"{case.name}: ответ {response.status_code} вместо {case.status}"
     )
-    if case.polls:
-        assert POLL_TRIGGER in response.text, f"{case.name}: опрос не запущен — экран замрёт на QR"
+    if case.method == "GET":
+        # Страница: шелл несёт свои триггеры вне мастера; предмет — мастер.
+        text = _content_of_the_wizard(response.text)
     else:
-        assert "hx-trigger" not in response.text, (
-            f"{case.name}: ответ несёт триггер — опрос не остановится"
+        text = response.text
+        assert not _anchor_in_fragment(text), (
+            f"{case.name}: фрагмент несёт идентификатор якоря — опрос переживёт свой "
+            "ответ и не остановится (поправка D-05)"
         )
+    complaints = _polling_violations(text, polls=case.polls, step=case.step)
+    assert not complaints, f"{case.name}:\n  " + "\n  ".join(complaints)
+
+
+# --- Отрицательные контроли гейта: каждый зовёт ТУ ЖЕ функцию правила ---------
+
+
+def test_control_a_terminal_fragment_with_a_trigger_reddens_the_rule():
+    """Терминальный фрагмент «Подключено» с расписанием опроса — правило краснеет."""
+    connected = _tg_step_markup(step="connected")
+    assert not _polling_violations(connected, polls=False, step="connected"), (
+        "чистый фрагмент «Подключено» уже нарушает правило — контроль ничего не докажет"
+    )
+    mutant = connected.replace(
+        '<div class="connect-step connect-step--center">',
+        '<div class="connect-step connect-step--center" hx-trigger="every 3s">',
+    )
+    assert mutant != connected, "подмена не нашла, куда вписать триггер"
+    complaints = _polling_violations(mutant, polls=False, step="connected")
+    assert any("не остановится" in complaint for complaint in complaints), (
+        f"терминальный фрагмент с триггером прошёл правило — правило вакуумно: {complaints}"
+    )
+
+
+def test_control_a_response_of_another_branch_reddens_the_mark_rule():
+    """Запись, объявившая не ту ветку, краснеет: метка ответа ветку не подтвердила."""
+    error = _tg_step_markup(step="error", error=AUTH_FAILED)
+    assert not _polling_violations(error, polls=False, step="error"), (
+        "чистый фрагмент ошибки уже нарушает правило — контроль ничего не докажет"
+    )
+    complaints = _polling_violations(error, polls=False, step="connected")
+    assert any("вместо ровно ветки 'connected'" in complaint for complaint in complaints), (
+        f"ответ ветки ошибки прошёл как «Подключено» — метка ветки не проверяется: {complaints}"
+    )
+
+
+def test_control_a_registry_without_terminal_polls_reddens_the_pair_rule():
+    """Реестр без терминальных записей опроса — правило пары называет опросчики."""
+    stripped = tuple(
+        case for case in POLLING_CASES if not (case.route == POLL_URL and not case.polls)
+    )
+    assert len(stripped) < len(POLLING_CASES), "контроль ничего не снял"
+    assert any(case.polls for case in stripped), "контроль снял и опросчики — пара вакуумна"
+    complaints = _pairing_violations(stripped)
+    assert {"start-waiting", "refresh-success"} <= {c.split(":")[0] for c in complaints}, (
+        f"правило пары не назвало опросчики без терминальной пары — правило вакуумно: {complaints}"
+    )
+    assert _pairing_violations(()) == [
+        "в реестре нет ни одной записи с опросом — пара вакуумна"
+    ], "пустой реестр прошёл правило пары"
+
+
+def test_control_the_anchor_inside_a_fragment_reddens_the_guard():
+    """Фрагмент ожидания, обёрнутый якорем с опросом, — сторож краснеет (поправка D-05)."""
+    waiting = _tg_step_markup(step="waiting", session_id="sid-control", qr_code="data:image/png;base64,AA")
+    assert not _anchor_in_fragment(waiting), (
+        "чистый фрагмент ожидания уже несёт якорь — контроль ничего не докажет"
+    )
+    mutant = f'<div class="connect-shell" {ANCHOR_ID}>{waiting}</div>'
+    assert _anchor_in_fragment(mutant), (
+        "фрагмент с якорём внутри прошёл сторож — вечный опрос не будет пойман"
+    )
+
+
+def test_control_a_template_branch_without_a_case_is_named():
+    """Синтетический шаблон с лишней веткой — замыкание называет её поимённо."""
+    template = _step_template_text()
+    assert not _unreached_steps(template, POLLING_CASES), (
+        "настоящий шаблон уже не замкнут — контроль ничего не докажет"
+    )
+    anchor = '{% elif step == "connected" %}'
+    assert anchor in template, "в шаблоне нет ветки «Подключено» — подмене некуда встать"
+
+    extra = template.replace(anchor, '{% elif step == "sms_code" %}<p>Код</p>\n  ' + anchor)
+    complaints = _unreached_steps(extra, POLLING_CASES)
+    assert any("sms_code" in c and "ни одна запись" in c for c in complaints), (
+        f"ветка без записи прошла замыкание — правило вакуумно: {complaints}"
+    )
+
+    listed = template.replace(anchor, '{% elif step in ("sms_code", "email_code") %}<p>Код</p>\n  ' + anchor)
+    complaints = _unreached_steps(listed, POLLING_CASES)
+    assert any("'email_code'" in c and "'sms_code'" in c for c in complaints), (
+        f"перечисление в одном условии прочитано не как две ветки: {complaints}"
+    )
+
+    without_fallback = template.replace("{% else %}", "{% elif step == \"start\" %}")
+    complaints = _unreached_steps(without_fallback, POLLING_CASES)
+    assert any("'error'" in c for c in complaints), (
+        f"цепочка без ветки по умолчанию не сняла ветку ошибки из разбора: {complaints}"
+    )
+
+
+def test_control_a_blind_branch_parse_is_named():
+    """Разбор, не нашедший веток, краснеет словами, а не зеленеет вакуумом."""
+    assert _unreached_steps("", POLLING_CASES) == [
+        "разбор веток не нашёл ни одной — правило замыкания ослепло"
+    ]
+    few = '{% if step == "waiting" %}a{% elif step == "connected" %}b{% endif %}'
+    assert any("разбор ослеп" in c for c in _unreached_steps(few, POLLING_CASES)), (
+        "разбор, нашедший две ветки из шести, прошёл антивакуум"
+    )
