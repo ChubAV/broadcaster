@@ -1931,6 +1931,11 @@ a:hover { color: var(--accent-link-hover); }
 .connect-step > .field, .connect-step > form { align-self: stretch; }
 .connect-step__text { margin: 0; font-size: var(--fs-md); color: var(--text-secondary); }
 .connect-step__actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* Центрированный шаг центрирует свои flex-предметы, но форма шага растянута
+   правилом `.connect-step > form` выше, поэтому ряд действий внутри формы
+   начинался у левого края (UI-2, шаг «код истёк»). Правило центрирует ряд
+   внутри растянутой формы и так же защищает любой будущий центрированный шаг. */
+.connect-step--center .connect-step__actions { justify-content: center; }
 .connect-step__form { display: flex; flex-direction: column; gap: 14px; align-items: stretch; }
 
 /* Блок QR-кода. Ширина ограничена самим изображением: QR обязан остаться

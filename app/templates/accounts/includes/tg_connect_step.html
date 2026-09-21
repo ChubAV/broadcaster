@@ -98,14 +98,23 @@
         блока конфигурации. Постоянный `id` поля возвращает на него фокус после
         подмены (QUAL-06). Цель блокировки — умолчание обёртки, кнопка отправки:
         защита от двойного нажатия на клиенте; на сервере её держит `pop` в
-        `complete_auth` (RESEARCH §Pitfall 3). -#}
+        `complete_auth` (RESEARCH §Pitfall 3).
+
+        ⚠️ КОРОБКУ ВЫКЛАДКИ ДАЁТ ВНУТРЕННИЙ УЗЕЛ, А НЕ ТЕГ ФОРМЫ. Тег формы
+        печатает макрос-обёртка, и у её класса одно правило — контекст
+        позиционирования для индикатора. Промежуток колонки шага до детей формы
+        поэтому не доходит, и поле вставало вплотную к кнопке (UI-1). Внутренняя
+        колонка возвращает промежуток шага — тот же приём, что у шага телефона
+        мастера MAX. -#}
     {% call form_wrapper(action='/accounts/connect/tg_user/verify-2fa', target='#tg-connect-step', swap='innerHTML') %}
       <input type="hidden" name="session_id" value="{{ session_id }}">
-      {{ field(name="password", label='Пароль 2FA', type='password', id='password', required=true,
-               placeholder='Пароль двухфакторной аутентификации', autocomplete='off',
-               error=password_error) }}
-      <div class="connect-step__actions">
-        {{ button('Подтвердить') }}
+      <div class="connect-step__form">
+        {{ field(name="password", label='Пароль 2FA', type='password', id='password', required=true,
+                 placeholder='Пароль двухфакторной аутентификации', autocomplete='off',
+                 error=password_error) }}
+        <div class="connect-step__actions">
+          {{ button('Подтвердить') }}
+        </div>
       </div>
     {% endcall %}
   </div>
