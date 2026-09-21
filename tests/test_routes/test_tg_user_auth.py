@@ -73,6 +73,11 @@ PASSWORD_2FA_SESSION = "session-2fa"
 SUBMITTED_PASSWORD = "Zx9-пароль-qW7"
 PASSWORD_INPUT = re.compile(r'<input[^>]*\bname="password"[^>]*>')
 
+REFRESH_URL = "/accounts/connect/tg_user/refresh-qr"
+REFRESH_FORM = f'hx-post="{REFRESH_URL}"'
+QR_EXPIRED_TEXT = "QR-код истёк. Обновите его, чтобы продолжить."
+REFRESH_BUTTON = "Обновить QR-код"
+
 
 @pytest_asyncio.fixture(autouse=True)
 async def _no_qr_session_outlives_its_test():
@@ -522,6 +527,45 @@ async def test_the_complete_route_and_the_get_poll_are_gone(authed_client: Async
     )
 
 
+# --- «Код истёк» и «Обновить QR-код» (план 13-03; D-02, D-03) ---------------
+
+
+@pytest.mark.asyncio
+async def test_polling_an_expired_code_offers_a_refresh(authed_client: AsyncClient):
+    """Опрос в `qr_expired` — шаг «код истёк» с кнопкой обновления, опрос остановлен.
+
+    Автоматического обновления нет (D-02, решение владельца): забытая вкладка
+    не должна продолжать обращаться к Telegram, поэтому в ответе нет триггера.
+    """
+    _seed_state("sid-qr-expired", status="qr_expired")
+
+    response = await authed_client.post(
+        POLL_URL, data={"session_id": "sid-qr-expired"}, headers=HTMX_HEADERS
+    )
+
+    assert response.status_code == 200, f"опрос истёкшего кода ответил {response.status_code}"
+    body = response.text
+    assert QR_EXPIRED_TEXT in body, (
+        "человек не узнал, что QR-код истёк, — через ~30 с он видит тупик (D-03)"
+    )
+    assert body.count(REFRESH_FORM) == 1, (
+        f"форм обновления кода {body.count(REFRESH_FORM)} вместо одной — "
+        "истёкший код нечем обновить (D-02)"
+    )
+    assert REFRESH_BUTTON in body, "кнопка «Обновить QR-код» не подписана"
+    found = SESSION_FIELD.search(body)
+    assert found and found.group(1) == "sid-qr-expired", (
+        "форма обновления не несёт session_id скрытым полем — обновлять нечего (D-06)"
+    )
+    assert 'hx-target="#tg-connect-step"' in body, "ответ обновления некуда приземлить"
+    assert "hx-trigger" not in body, (
+        "шаг «код истёк» продолжает опрос — забытая вкладка обращалась бы к Telegram (D-02)"
+    )
+    assert "data:image/png;base64," not in body, (
+        "на шаге «код истёк» показан мёртвый QR — он приглашает к бесполезному сканированию"
+    )
+
+
 # --- Шаг пароля 2FA (план 13-02; D-08, D-09) --------------------------------
 
 
@@ -896,6 +940,11 @@ def _seed_poll_needs_2fa(monkeypatch, settings):
     return {"session_id": "sid-needs-2fa"}
 
 
+def _seed_poll_qr_expired(monkeypatch, settings):
+    _seed_state("sid-qr-expired", status="qr_expired")
+    return {"session_id": "sid-qr-expired"}
+
+
 def _seed_verify_success(monkeypatch, settings):
     _seed_2fa_state("sid-2fa-right")
     return {"session_id": "sid-2fa-right", "password": SUBMITTED_PASSWORD}
@@ -917,7 +966,8 @@ def _seed_verify_telethon_failure(monkeypatch, settings):
 
 
 # План 13-02 дописал шаг пароля (опрос в `needs_2fa` и четыре исхода
-# `verify-2fa`); план 13-03 допишет «код истёк», план 13-05 замыкает реестр.
+# `verify-2fa`); план 13-03 дописал «код истёк» и исходы `refresh-qr`, план
+# 13-05 замыкает реестр.
 POLLING_CASES: tuple[_PollingCase, ...] = (
     _PollingCase("start-waiting", "старт — QR и опросчик", START_URL, _seed_start_success, True),
     _PollingCase("start-not-configured", "старт — API не настроен", START_URL, _seed_start_not_configured, False),
@@ -926,6 +976,7 @@ POLLING_CASES: tuple[_PollingCase, ...] = (
     _PollingCase("poll-unknown", "опрос — неизвестная сессия", POLL_URL, _seed_poll_unknown, False),
     _PollingCase("poll-error", "опрос — ошибка Telethon", POLL_URL, _seed_poll_error, False),
     _PollingCase("poll-needs-2fa", "опрос — шаг пароля 2FA", POLL_URL, _seed_poll_needs_2fa, False),
+    _PollingCase("poll-qr-expired", "опрос — код истёк, кнопка обновления", POLL_URL, _seed_poll_qr_expired, False),
     _PollingCase("verify-success", "пароль 2FA — «Подключено»", VERIFY_URL, _seed_verify_success, False),
     _PollingCase("verify-wrong", "пароль 2FA — неверный, 422", VERIFY_URL, _seed_verify_wrong, False, 422),
     _PollingCase("verify-empty", "пароль 2FA — пустой, 422", VERIFY_URL, _seed_verify_empty, False, 422),

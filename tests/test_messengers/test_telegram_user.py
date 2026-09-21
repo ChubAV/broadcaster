@@ -1,6 +1,11 @@
+import asyncio
+import datetime
+from types import SimpleNamespace
+
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from telethon.errors import ForbiddenError, PeerIdInvalidError
+from telethon.tl.custom.qrlogin import QRLogin
 from app.messengers.base import MessengerFetchError
 from app.messengers.telegram_user import (
     PEER_UNREACHABLE_MESSAGE,
@@ -11,6 +16,7 @@ from app.messengers.telegram_user import (
     complete_auth,
     cleanup_qr_session,
     _qr_sessions,
+    _wait_for_qr,
     QRAuthState,
 )
 
@@ -390,6 +396,71 @@ def test_cleanup_qr_session():
 
 def test_cleanup_qr_session_nonexistent():
     cleanup_qr_session("does_not_exist")  # Should not raise
+
+
+# --- «Код истёк» — статус, а не ошибка (Фаза 13, план 13-03; D-03) ---------
+
+
+def _telethon_client_stub() -> MagicMock:
+    """Клиент Telethon для НАСТОЯЩЕГО `QRLogin`: обработчики событий синхронны.
+
+    `QRLogin.wait()` вешает обработчик `UpdateLoginToken` и снимает его в
+    `finally` — у настоящего клиента оба вызова синхронные, у заглушки тоже.
+    Вызов клиента (запрос `ExportLoginToken` в `recreate`) — корутина.
+    """
+    client = MagicMock()
+    client.add_event_handler = MagicMock()
+    client.remove_event_handler = MagicMock()
+    client.disconnect = AsyncMock()
+    return client
+
+
+def _real_qr_login(client, *, expires_in: float, token: bytes = b"x") -> QRLogin:
+    """НАСТОЯЩИЙ `QRLogin` с ответом токена, истекающим через `expires_in` с."""
+    qr_login = QRLogin(client, [])
+    qr_login._resp = SimpleNamespace(
+        expires=datetime.datetime.now(tz=datetime.timezone.utc)
+        + datetime.timedelta(seconds=expires_in),
+        token=token,
+    )
+    return qr_login
+
+
+@pytest.mark.asyncio
+async def test_an_expired_qr_token_is_a_status_not_an_error():
+    """Таймаут `QRLogin.wait()` — статус `qr_expired`, без ошибки и трассировки (D-03).
+
+    ⚠️ ТАЙМАУТ ВОСПРОИЗВОДИТСЯ НАСТОЯЩИМ `QRLogin`, А НЕ ПОДМЕНОЙ `wait()`
+    (CONTEXT §Landmines). `wait()` сам считает таймаут как `expires − now` и
+    поднимает `asyncio.TimeoutError` из `wait_for` — ровно то, что через ~30 с
+    получает эксплуатация. Правило, ставящее `status` напрямую, зеленело бы
+    вакуумом. Токен QR живёт ~30 с, сессия — 300 с: истёкший токен — «код
+    истёк» с кнопкой, а не «Ошибка авторизации» без выхода.
+    """
+    client = _telethon_client_stub()
+    state = QRAuthState(client=client, qr_login=_real_qr_login(client, expires_in=0.05))
+    _qr_sessions["sid-token-expired"] = state
+    try:
+        with patch("app.messengers.telegram_user.logger") as module_logger:
+            await _wait_for_qr("sid-token-expired")
+
+        assert client.add_event_handler.called, (
+            "настоящий `QRLogin.wait()` не вешал обработчик — таймаут не воспроизведён"
+        )
+        assert state.status == "qr_expired", (
+            f"истёкший токен QR дал status={state.status!r} error={state.error!r} "
+            "вместо «код истёк» — человек увидит «Ошибку авторизации» без выхода (D-03)"
+        )
+        assert not state.error, f"истёкший токен QR записал ошибку {state.error!r}"
+        assert not module_logger.error.called, (
+            "нормальное истечение кода записано в журнал как ошибка: "
+            f"{module_logger.error.call_args!r}"
+        )
+        assert get_qr_status("sid-token-expired") == {"status": "qr_expired"}, (
+            "опрос не узнает, что код истёк"
+        )
+    finally:
+        _qr_sessions.pop("sid-token-expired", None)
 
 
 @pytest.mark.asyncio
