@@ -1021,6 +1021,40 @@ async def _arrange_tg_poll_without_session(client, db, settings, identity) -> _A
 
 
 # =============================================================================
+# Посев: подтверждение пароля 2FA мастера Telegram (Фаза 13, план 13-02)
+# =============================================================================
+
+ACCOUNTS_CONNECT_TG_USER_VERIFY_2FA = "app/pages/accounts.py::accounts_connect_tg_user_verify_2fa"
+# Пароль непустой: пустой отвечает 422 на обоих транспортах и в реестр не входит.
+TG_WIZARD_PAIR_PASSWORD = "pair-password"
+
+
+async def _arrange_tg_verify_2fa_unknown_session(
+    client, db, settings, identity
+) -> _Arranged:
+    """Подтверждение пароля НЕИЗВЕСТНОЙ сессии — ветка, отвечающая фрагментом.
+
+    Сессии нет, поэтому до Telethon запрос не доходит: ответ — шаг ошибки с
+    формой старта заново, это и есть метка случая.
+    """
+    await _current_user(db, identity, settings)
+    return _Arranged(
+        url="/accounts/connect/tg_user/verify-2fa",
+        data={"session_id": TG_WIZARD_UNKNOWN_SESSION, "password": TG_WIZARD_PAIR_PASSWORD},
+    )
+
+
+async def _arrange_tg_verify_2fa_without_session(
+    client, db, settings, identity
+) -> _Arranged:
+    client.cookies.clear()
+    return _Arranged(
+        url="/accounts/connect/tg_user/verify-2fa",
+        data={"session_id": TG_WIZARD_UNKNOWN_SESSION, "password": TG_WIZARD_PAIR_PASSWORD},
+    )
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -1574,6 +1608,31 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/login",
         transport=LOCATION,
     ),
+    # Фаза 13, план 13-02. Подтверждение пароля 2FA мастера Telegram: подменяется
+    # содержимое того же постоянного якоря шага; путь без htmx приземляется на
+    # страницу мастера (D-11). Метка структурная — форма старта заново, по тому
+    # же основанию, что у опроса неизвестной сессии (текст сменит план 13-04).
+    # Ветка неверного и пустого пароля отвечает 422 на обоих транспортах и в
+    # этот реестр не входит — по границе обхода, записанной у случаев профиля и
+    # мастера MAX; обе её стороны утверждены поимённо в
+    # `tests/test_routes/test_tg_user_auth.py`.
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_VERIFY_2FA,
+        name="пароль 2FA Telegram — неизвестная сессия",
+        identity="user",
+        arrange=_arrange_tg_verify_2fa_unknown_session,
+        landing="/accounts/connect/tg_user",
+        transport=FRAGMENT,
+        fragment_mark='hx-post="/accounts/connect/tg_user/start-qr"',
+    ),
+    _PairCase(
+        key=ACCOUNTS_CONNECT_TG_USER_VERIFY_2FA,
+        name="пароль 2FA Telegram — нет сессии",
+        identity="user",
+        arrange=_arrange_tg_verify_2fa_without_session,
+        landing="/login",
+        transport=LOCATION,
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -1665,7 +1724,17 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   `tests/test_routes/test_tg_user_auth.py`.
 #   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 13, план 13-01): `случаев пар в реестре 54,
 #   объявлено 50`.
-POST_PAIR_CASES_DECLARED = 54
+#   54 → 56, Фаза 13, план 13-02: два исхода ПОДТВЕРЖДЕНИЯ ПАРОЛЯ 2FA мастера
+#   Telegram — неизвестная сессия (фрагмент шага ошибки, метка — форма старта
+#   заново) и «нет сессии» (переход на экран входа).
+#   ⚠️ ВЕТКА НЕВЕРНОГО И ПУСТОГО ПАРОЛЯ В РЕЕСТР НЕ ВХОДИТ, И ЭТО ГРАНИЦА
+#   ОБХОДА, А НЕ ПРОПУСК: она отвечает 422 на обоих транспортах, а половины пары
+#   ждут 200 и 302. Обе её стороны утверждены поимённо в
+#   `tests/test_routes/test_tg_user_auth.py` — по той же границе, что записана у
+#   случаев профиля и мастера MAX.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 13, план 13-02): `случаев пар в реестре 56,
+#   объявлено 54`.
+POST_PAIR_CASES_DECLARED = 56
 
 
 def _case_id(case: _PairCase) -> str:
@@ -2456,7 +2525,17 @@ def _number_complaints(
 # POST собран выражением`, и тест переписан на литералы).
 # ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
 # переведённых обработчиках 163, объявлено 159`.
-PAIRED_302_ASSERTIONS_DECLARED = 163
+#
+# 163 → 165, Фаза 13, план 13-02: два утверждения 302 о подтверждении пароля
+# 2FA мастера Telegram в `tests/test_routes/test_tg_user_auth.py`
+# (`test_verify_2fa_degrades_and_requires_a_session`) — верный пароль без
+# JavaScript приземляется на страницу мастера, запрос без сессии входа — на
+# `/login`. Обработчик стал переведённым, и его утверждения вошли во вселенную
+# правила; пары у него — два случая реестра выше. Адреса набраны литералом
+# первым аргументом `.post(…)`, как у записей плана 13-01.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 165, объявлено 163`.
+PAIRED_302_ASSERTIONS_DECLARED = 165
 
 
 def _routes(settings) -> tuple[tuple[str, str], ...]:
