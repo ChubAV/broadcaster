@@ -22,7 +22,7 @@ affects: [14-verification, 15-uprochnenie]
 actuals:
   tokens: 13400
   tasks: 2
-  commits: 3
+  commits: 4
 
 tech-stack:
   added: []
@@ -111,7 +111,7 @@ duration: 50min
 completed: 2026-09-22
 status: complete
 plan_head_before: cb9654f5047893f21a1866a17d9f8039fa378b71
-commits: 3
+commits: 4
 ---
 
 # Phase 14 Plan 07: Летописи записей, окно 63 замером, артефакт ручного обхода — Summary
@@ -139,7 +139,9 @@ commits: 3
 1. **Задача 1: летописи критериев 2 и 3, строки Research, SIGN-03 и рамки вехи** — `94ecef3d` (docs)
 2. **Задача 2: окно 63 замером и командой реестра; артефакт ручного обхода** — `5079ab7e` (docs)
 
-**Plan metadata:** `docs(14-07)` с этим файлом; STATE/ROADMAP/state.json — отдельным коммитом записи.
+**Plan metadata:** `fee350ac` (docs — этот файл); трекинг STATE/ROADMAP/state.json — `2673b3a7`.
+
+**`commits: 4` ИЗМЕРЕНО, а не рассказано:** `git rev-list --count cb9654f5..HEAD` = `4` на коммите трекинга, в который довложен и этот раздел (аменд собственного неотправленного коммита). База `plan_head_before` записана во frontmatter тем же прибором, которым её прочтёт `/gsd-verify-work`.
 
 _План `type: execute`, обе задачи — записи. `task.is-behavior-adding` для них ложно (ни одного исходного файла вне `.planning/`), поэтому пары `test(14-07)` → `feat(14-07)` не изготовлялось: RED на прозе был бы вакуумом._
 
@@ -247,3 +249,12 @@ None — внешних служб план не настраивает. Пре�
 ---
 *Phase: 14-avtorizatsiya-na-htmx*
 *Completed: 2026-09-22*
+
+## Self-Check: PASSED
+
+- Созданные файлы на диске: `14-UAT.md` — FOUND; `14-07-SUMMARY.md` — FOUND.
+- Коммиты в истории: `94ecef3d` — FOUND; `5079ab7e` — FOUND; `fee350ac` — FOUND; `2673b3a7` — FOUND.
+- Число коммитов плана измерено: `git rev-list --count cb9654f5..HEAD` = `4`.
+- Требования не отмечены: `grep -n 'SIGN-0' .planning/REQUIREMENTS.md` — три `- [ ]` и три `| Phase 14 | Pending |`.
+- Цепь истории цела: `grep -c 'Last activity' .planning/STATE.md` = `38` (было 37 + одна новая); `git diff` STATE.md прочитан построчно, ни одной перенесённой строки верб не потерял и не переписал внутри цитат.
+- `uv run pytest tests/test_planning -q` — 44 passed после задачи 1, после задачи 2 и после правок трекинга.
