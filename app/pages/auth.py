@@ -147,6 +147,12 @@ AUTH_SCREENS: dict[str, AuthScreen] = {
         step="auth/includes/register_verify_step.html",
         title="Подтверждение email — Broadcaster",
     ),
+    # Фаза 14, план 14-03: экран имени и пароля.
+    "register_complete": AuthScreen(
+        page="auth/register_complete.html",
+        step="auth/includes/register_complete_step.html",
+        title="Завершение регистрации — Broadcaster",
+    ),
 }
 
 
@@ -349,13 +355,24 @@ async def register_verify(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Подтверждение кода регистрации — на выходах слоя ответа (Фаза 14, план 14-03).
+
+    ⚠️ НЕВЕРНЫЙ КОД НЕ СТИРАЕТ НАБРАННОЕ (D-03, D-04). Кода нет, код истёк,
+    попытки кончились или код не тот — 422: человек остаётся на экране кода,
+    набранный код стоит в поле, прежний токен — скрытым полем. Устаревшая
+    ссылка — 200: экран сменился на начало регистрации. Успех — 200: экран
+    имени и пароля с подтверждённым токеном.
+
+    Решения обработчика прежние (D-15): запрос кода, счёт попыток и его запись
+    ДО ответа, лимит пять, срок и тексты не меняются — эхо счёта не трогает.
+    """
     # Decode token to get email
     payload = decode_verification_token(token, settings.secret_key)
     if not payload:
-        return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "Ссылка устарела. Начните регистрацию заново."},
+        page, fragment = _screen_builders(
+            request, "register", error="Ссылка устарела. Начните регистрацию заново."
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     # Find latest non-expired, non-verified code for this email
@@ -375,29 +392,29 @@ async def register_verify(
     code_record = result.scalar_one_or_none()
 
     if not code_record:
-        return templates.TemplateResponse(
-            "auth/register_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Код истёк или превышено число попыток. Отправьте код заново.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "register_verify",
+            email=email,
+            token=token,
+            code=code,
+            error="Код истёк или превышено число попыток. Отправьте код заново.",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     if code_record.code != code.strip():
         code_record.attempts += 1
         await db.commit()
         remaining = CODE_MAX_ATTEMPTS - code_record.attempts
-        return templates.TemplateResponse(
-            "auth/register_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": f"Неверный код. Осталось попыток: {remaining}",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "register_verify",
+            email=email,
+            token=token,
+            code=code,
+            error=f"Неверный код. Осталось попыток: {remaining}",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     # Mark as verified
     code_record.verified_at = now
@@ -405,10 +422,10 @@ async def register_verify(
 
     # Issue verified token
     verified_token = create_verification_token(email, settings.secret_key, verified=True)
-    return templates.TemplateResponse(
-        "auth/register_complete.html",
-        {"request": request, "email": email, "token": verified_token},
+    page, fragment = _screen_builders(
+        request, "register_complete", email=email, token=verified_token
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 @router.post("/register/resend-code", response_class=HTMLResponse)
@@ -508,28 +525,54 @@ async def register_complete(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Завершение регистрации — на выходах слоя ответа (Фаза 14, план 14-03).
+
+    ⚠️ КОРОТКИЙ ПАРОЛЬ — 422 С ИМЕНЕМ В ПОЛЕ И БЕЗ ПАРОЛЯ (D-03, D-04): человек
+    остаётся на экране завершения, пароль в контекст экрана не передаётся
+    вовсе (сборщики его и не примут), токен — новый подтверждённый, как
+    сегодня.
+
+    ⚠️ АДРЕС, ЗАНЯТЫЙ К ЗАВЕРШЕНИЮ, — 200, А НЕ 422 (критерий D-03, RESEARCH
+    §Карта выходов, Open Question 3). Перечень 422 в D-03 называет «адрес уже
+    зарегистрирован», но критерий самого D-03 — остаётся ли человек на ТОМ ЖЕ
+    экране. Здесь экран меняется на начало регистрации, значит это смена
+    экрана. У шага адреса (`register_send_code`) тот же текст — 422: экран там
+    тот же.
+
+    ⚠️ УСПЕХ — ПОЛНАЯ ЗАГРУЗКА (D-10): без признака htmx 302, с ним 204 и
+    заголовок полной перезагрузки. Cookie ставится на ТОТ ЖЕ объект, который
+    вернул выход слоя, — на отдельно собранном ответе она не уехала бы никуда.
+
+    Решения обработчика прежние (D-15): порядок «пользователь → пробный срок →
+    cookie» (D-B), тексты и набор атрибутов cookie не меняются.
+    """
     payload = decode_verification_token(token, settings.secret_key)
     if not payload or not payload.get("verified") or payload.get("purpose") != "email_verification":
-        return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "Ссылка устарела. Начните регистрацию заново."},
+        page, fragment = _screen_builders(
+            request, "register", error="Ссылка устарела. Начните регистрацию заново."
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     # Double-check email not taken
     existing = await db.execute(select(User).where(User.email == email))
     if existing.scalar_one_or_none():
-        return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "Этот email уже зарегистрирован"},
+        page, fragment = _screen_builders(
+            request, "register", error="Этот email уже зарегистрирован"
         )
+        return await respond_screen(request, page=page, fragment=fragment)
 
     if len(password) < 6:
         verified_token = create_verification_token(email, settings.secret_key, verified=True)
-        return templates.TemplateResponse(
-            "auth/register_complete.html",
-            {"request": request, "email": email, "token": verified_token, "error": "Пароль должен быть не менее 6 символов"},
+        page, fragment = _screen_builders(
+            request,
+            "register_complete",
+            email=email,
+            token=verified_token,
+            name=name,
+            error="Пароль должен быть не менее 6 символов",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     user = User(email=email, password_hash=hash_password(password), name=name)
     db.add(user)
@@ -548,7 +591,7 @@ async def register_complete(
     await db.commit()
 
     access_token = create_access_token(user.id, settings.secret_key)
-    response = RedirectResponse(url="/dashboard", status_code=302)
+    response = await redirect_internal(request, redirect="/dashboard")
     set_session_cookie(response, access_token, settings)
     return response
 
