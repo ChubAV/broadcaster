@@ -25,7 +25,7 @@ from app.services.email_service import send_verification_email, send_password_re
 from app.services.subscription_service import start_trial
 from app.pages import notices
 from app.pages.common import is_same_origin, templates
-from app.pages.htmx import redirect_internal, respond_field_error
+from app.pages.htmx import redirect_internal, respond_field_error, respond_screen
 
 logger = structlog.get_logger(__name__)
 
@@ -135,6 +135,17 @@ AUTH_SCREENS: dict[str, AuthScreen] = {
         page="auth/login.html",
         step="auth/includes/login_step.html",
         title="Вход — Broadcaster",
+    ),
+    # Фаза 14, план 14-02: начало регистрации и экран кода.
+    "register": AuthScreen(
+        page="auth/register.html",
+        step="auth/includes/register_step.html",
+        title="Регистрация — Broadcaster",
+    ),
+    "register_verify": AuthScreen(
+        page="auth/register_verify.html",
+        step="auth/includes/register_verify_step.html",
+        title="Подтверждение email — Broadcaster",
     ),
 }
 
@@ -249,13 +260,26 @@ async def register_send_code(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Шаг адреса регистрации — на выходах слоя ответа (Фаза 14, план 14-02).
+
+    ⚠️ КРИТЕРИЙ КОДА — ЭКРАН, А НЕ ТЕКСТ (D-03). 422 — человек остаётся на ТОМ
+    ЖЕ экране (адрес занят: экран начала с адресом в поле); 200 — экран
+    сменился (код отправлен или «код уже отправлен»: экран кода).
+
+    ⚠️ ЭКРАН КОДА ПРИЕЗЖАЕТ ЦЕЛИКОМ В ПОСТОЯННЫЙ ЯКОРЬ (D-06): обе его формы
+    несут подписанный токен скрытым полем, и путь без JavaScript получает
+    страницу прямо в ответ на POST — токен в адрес не кладётся (D-08).
+
+    Решения обработчика прежние (D-15): запросы, минута между кодами, срок и
+    источник кода, отправка письма и тексты не меняются.
+    """
     # Check if email already registered
     existing = await db.execute(select(User).where(User.email == email))
     if existing.scalar_one_or_none():
-        return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "Этот email уже зарегистрирован", "email": email},
+        page, fragment = _screen_builders(
+            request, "register", error="Этот email уже зарегистрирован", email=email
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     # Rate limit: check last code sent to this email
     result = await db.execute(
@@ -269,15 +293,14 @@ async def register_send_code(
     now = datetime.now(timezone.utc)
     if last_code and (now - last_code.created_at.replace(tzinfo=timezone.utc)).total_seconds() < CODE_RESEND_COOLDOWN_SECONDS:
         token = create_verification_token(email, settings.secret_key)
-        return templates.TemplateResponse(
-            "auth/register_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Код уже отправлен. Подождите минуту перед повторной отправкой.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "register_verify",
+            email=email,
+            token=token,
+            error="Код уже отправлен. Подождите минуту перед повторной отправкой.",
         )
+        return await respond_screen(request, page=page, fragment=fragment)
 
     # Generate and save code
     code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
@@ -310,10 +333,10 @@ async def register_send_code(
 
     # Create token and show verify page
     token = create_verification_token(email, settings.secret_key)
-    return templates.TemplateResponse(
-        "auth/register_verify.html",
-        {"request": request, "email": email, "token": token},
+    page, fragment = _screen_builders(
+        request, "register_verify", email=email, token=token
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 # ---- Step 2: Verify code ----
@@ -395,12 +418,24 @@ async def register_resend_code(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Повтор кода регистрации — на выходах слоя ответа (Фаза 14, план 14-02).
+
+    ⚠️ КРИТЕРИЙ КОДА — ЭКРАН (D-03). Раньше минуты — 422: человек остаётся на
+    экране кода с присланным токеном. Устаревшая ссылка — 200: экран сменился
+    на начало регистрации. Успех — 200: экран кода с новым кодом.
+
+    ⚠️ ПОВТОР ВЫДАЁТ НОВЫЙ ТОКЕН, ПОЭТОМУ ПОДМЕНЯЕТСЯ ВЕСЬ ЯКОРЬ (D-06,
+    Landmine CONTEXT): подмена одной формы повтора оставила бы форму
+    подтверждения со старым токеном.
+
+    Решения обработчика прежние (D-15).
+    """
     payload = decode_verification_token(token, settings.secret_key)
     if not payload:
-        return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "Ссылка устарела. Начните регистрацию заново."},
+        page, fragment = _screen_builders(
+            request, "register", error="Ссылка устарела. Начните регистрацию заново."
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     # Rate limit check
@@ -414,15 +449,14 @@ async def register_resend_code(
     last_code = result.scalar_one_or_none()
     now = datetime.now(timezone.utc)
     if last_code and (now - last_code.created_at.replace(tzinfo=timezone.utc)).total_seconds() < CODE_RESEND_COOLDOWN_SECONDS:
-        return templates.TemplateResponse(
-            "auth/register_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Подождите минуту перед повторной отправкой.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "register_verify",
+            email=email,
+            token=token,
+            error="Подождите минуту перед повторной отправкой.",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     # Generate new code
     code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
@@ -453,15 +487,14 @@ async def register_resend_code(
         logger.error("verification_email_send_failed", email=email, error=str(e))
 
     new_token = create_verification_token(email, settings.secret_key)
-    return templates.TemplateResponse(
-        "auth/register_verify.html",
-        {
-            "request": request,
-            "email": email,
-            "token": new_token,
-            "success": "Новый код отправлен на вашу почту.",
-        },
+    page, fragment = _screen_builders(
+        request,
+        "register_verify",
+        email=email,
+        token=new_token,
+        success="Новый код отправлен на вашу почту.",
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 # ---- Step 3: Complete registration ----

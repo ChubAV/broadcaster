@@ -1,0 +1,31 @@
+{# Экран начала регистрации — ЕДИНСТВЕННЫЙ источник его разметки (Фаза 14, план 14-02).
+
+   Включаемый шаблон, а не макрос: контекст вызывающего приходит сам. Читаются
+   `error` (занятый адрес или устаревшая ссылка) и `email` — присланный адрес,
+   который ответ ошибки возвращает в поле. Рисуют экран отсюда и страница
+   `auth/register.html`, и ответ-фрагмент (`auth/includes/step_response.html`):
+   второго места разметки экрана нет.
+
+   ⚠️ АДРЕСНАЯ СТРОКА НЕ МЕНЯЕТСЯ (D-08, решение Фазы 15): у экрана нет своего
+   адреса, и форма его в историю не кладёт.
+
+   Импорт: {% include "auth/includes/register_step.html" %} #}
+{% from "components/field.html" import field %}
+{% from "components/button.html" import button %}
+{% from "components/alert.html" import alert %}
+{% from "components/form_wrapper.html" import form_wrapper %}
+<p class="auth-subtitle">Создайте аккаунт</p>
+{% if error %}{{ alert(error) }}{% endif %}
+{#- ⚠️ ФОРМУ ПЕЧАТАЕТ МАКРОС-ОБЁРТКА (D-09), ЦЕЛЬ — ПОСТОЯННЫЙ ЯКОРЬ ШЕЛЛА. Экран
+    кода (200) или ошибка занятого адреса (422) приезжают в якорь целым экраном.
+    Без JavaScript форма отправляется, как и прежде, настоящим POST.
+    ⚠️ КОРОБКУ ВЫКЛАДКИ ДАЁТ ВНУТРЕННИЙ УЗЕЛ, А НЕ ТЕГ ФОРМЫ: тег печатает макрос
+    со своим классом (приём `accounts/includes/max_connect_step.html`). -#}
+{% call form_wrapper(action='/register/send-code', target='#auth-step', swap='innerHTML') %}
+<div class="auth-form">
+  {{ field(name="email", label='Email', type='email', value=email or '', required=true, autocomplete='email', placeholder='you@example.com') }}
+  {{ button('Отправить код', extra_class='btn--block') }}
+</div>
+{% endcall %}
+
+<p class="auth-foot">Уже есть аккаунт? <a href="/login">Войти</a></p>

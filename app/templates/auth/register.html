@@ -1,16 +1,3 @@
 {% extends "auth_base.html" %}
-{% from "components/field.html" import field %}
-{% from "components/button.html" import button %}
-{% from "components/alert.html" import alert %}
 {% block title %}Регистрация — Broadcaster{% endblock %}
-{% block auth_subtitle %}Создайте аккаунт{% endblock %}
-{% block content %}
-{% if error %}{{ alert(error) }}{% endif %}
-
-<form class="auth-form" method="post" action="/register/send-code">
-  {{ field(name="email", label='Email', type='email', value=email|default('', true), required=true, autocomplete='email', placeholder='you@example.com') }}
-  {{ button('Отправить код', extra_class='btn--block') }}
-</form>
-
-<p class="auth-foot">Уже есть аккаунт? <a href="/login">Войти</a></p>
-{% endblock %}
+{% block content %}{% include "auth/includes/register_step.html" %}{% endblock %}
