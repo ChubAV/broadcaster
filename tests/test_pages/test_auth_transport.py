@@ -1107,6 +1107,8 @@ async def test_both_code_forms_ride_the_anchor_and_drop_a_second_request(
 # ⚠️ ФОРМА ПОДТВЕРЖДЕНИЯ КОДА ВОССТАНОВЛЕНИЯ — ПОКА ОБЫЧНАЯ ФОРМА (окно до плана
 # 14-05): её обработчик ещё отвечает готовыми страницами. Здесь утверждается
 # только, что она отправляется настоящим POST.
+# Окно закрыто планом 14-05: форма рождена макросом-обёрткой, и настоящий POST
+# она по-прежнему несёт — утверждение ниже остаётся верным и после перевода.
 #
 # ⚠️ ОТКАЗ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ НЕ ПЕРЕДЕЛЫВАЕТСЯ (D-13): зависимость отказа уже
 # отвечает двумя транспортами; правило ниже закрепляет её половину htmx на двух
@@ -1424,3 +1426,468 @@ async def test_the_first_recovery_steps_are_refused_under_another_identity_on_bo
         "под чужой личностью заведён код восстановления — письмо ушло бы на почту "
         "пользователя"
     )
+
+
+# --- Восстановление: «код → новый пароль → вход с уведомлением» (Фаза 14, план 14-05)
+#
+# ⚠️ ТО ЖЕ УСТРОЙСТВО, ЧТО У РЕГИСТРАЦИИ (план 14-03): неверный код и короткий
+# пароль — 422 на том же экране с набранным, КРОМЕ пароля (D-03, D-04); смена
+# экрана — 200; успех — полная загрузка на `/login` с кодом исхода, который
+# рисует область уведомления шелла ВНЕ якоря (D-10, FOUND-05, Pitfall 5).
+#
+# ⚠️ COOKIE СЕССИИ СМЕНА ПАРОЛЯ НЕ ВЫДАЁТ: человек входит новым паролем сам.
+
+FORGOT_RESET_TITLE = "<title>Новый пароль — Broadcaster</title>"
+RESET_DONE_TEXT = "Пароль успешно изменён. Войдите с новым паролем."
+RESET_DONE_LANDING = "/login?notice=password_reset_done"
+VANISHED_USER_ERROR = "Пользователь не найден."
+NEW_PASSWORD = "fresh-pass-456"
+SUBTITLE = re.compile(r'<p class="auth-subtitle">([^<]*)</p>')
+
+
+async def _seed_recovery_code(
+    db_session: AsyncSession, email: str, *, attempts: int = 0
+) -> None:
+    """Живой код восстановления `SEEDED_CODE` с заданным счётом попыток."""
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        EmailVerificationCode(
+            email=email,
+            code=SEEDED_CODE,
+            purpose="password_reset",
+            expires_at=now + timedelta(minutes=10),
+            attempts=attempts,
+        )
+    )
+    await db_session.commit()
+
+
+def _verified_reset_token(email: str, secret_key: str) -> str:
+    return create_verification_token(
+        email, secret_key, verified=True, purpose="password_reset"
+    )
+
+
+def _is_verified_reset_token(token: str, secret_key: str) -> bool:
+    payload = decode_verification_token(token, secret_key)
+    return bool(
+        payload
+        and payload.get("verified")
+        and payload.get("purpose") == "password_reset"
+    )
+
+
+def _no_session_cookie_at_all(response) -> bool:
+    """Ни одного заголовка `set-cookie` с cookie сессии — ни с значением, ни снятия."""
+    return all(
+        "access_token" not in raw for raw in response.headers.get_list("set-cookie")
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_short_new_password_answers_422_without_echo_on_both_transports(
+    client: AsyncClient, test_settings
+):
+    """Короткий новый пароль — 422, текст прежний, пароля в теле нет, новый токен (D-03, D-04)."""
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        email = f"reset-short-{'htmx' if headers else 'bare'}@test.com"
+        await _register(client, email)
+        client.cookies.clear()
+
+        response = await client.post(
+            "/forgot-password/reset",
+            data={
+                "token": _verified_reset_token(email, test_settings.secret_key),
+                "password": SHORT_PASSWORD,
+            },
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 422, (
+            f"короткий новый пароль ({transport}) ответил не 422: человек остаётся "
+            "на экране нового пароля, и правило 422 блока конфигурации обязано "
+            "перерисовать его"
+        )
+        assert SHORT_PASSWORD_ERROR in response.text, (
+            f"короткий новый пароль ({transport}) не назван прежними словами"
+        )
+        assert SHORT_PASSWORD not in response.text, (
+            f"присланный пароль ({transport}) вернулся в ответ (D-04)"
+        )
+        tokens = TOKEN_FIELD.findall(response.text)
+        assert len(tokens) == 1 and _is_verified_reset_token(
+            tokens[0], test_settings.secret_key
+        ), f"экран нового пароля ({transport}) несёт не один подтверждённый токен"
+        if headers:
+            assert DOCUMENT_MARK not in response.text, "слою письма приехал целый документ"
+            assert response.text.lstrip().startswith(FORGOT_RESET_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана нового пароля"
+            )
+        else:
+            assert DOCUMENT_MARK in response.text, (
+                "человеку без JavaScript приехал фрагмент вместо страницы"
+            )
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_recovery_code_keeps_the_typed_code_and_answers_422(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Неверный код — 422, «Осталось попыток: 4», код в поле; исчерпанный — 422 (D-03, D-15)."""
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        suffix = "htmx" if headers else "bare"
+
+        email = f"reset-wrong-{suffix}@test.com"
+        await _seed_recovery_code(db_session, email)
+        token = _reset_token(email, test_settings.secret_key)
+        wrong = await client.post(
+            "/forgot-password/verify",
+            data={"token": token, "code": TYPED_CODE},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert wrong.status_code == 422, (
+            f"неверный код восстановления ({transport}) ответил {wrong.status_code} "
+            "вместо 422 — человек остаётся на экране кода"
+        )
+        assert WRONG_CODE_ERROR in wrong.text, (
+            f"неверный код ({transport}) не назван прежними словами с прежним счётом"
+        )
+        assert f'value="{TYPED_CODE}"' in wrong.text, (
+            f"набранный код ({transport}) не вернулся в поле — ошибка стёрла набранное"
+        )
+        assert f'name="token" value="{token}"' in wrong.text, (
+            f"присланный токен ({transport}) не вернулся скрытым полем"
+        )
+
+        email = f"reset-exhausted-{suffix}@test.com"
+        await _seed_recovery_code(db_session, email, attempts=5)
+        token = _reset_token(email, test_settings.secret_key)
+        exhausted = await client.post(
+            "/forgot-password/verify",
+            data={"token": token, "code": SEEDED_CODE},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert exhausted.status_code == 422, (
+            f"исчерпанный код ({transport}) ответил {exhausted.status_code} вместо 422"
+        )
+        assert EXHAUSTED_CODE_ERROR in exhausted.text, (
+            f"исчерпанный код ({transport}) не назван прежними словами"
+        )
+        assert f'value="{SEEDED_CODE}"' in exhausted.text, (
+            f"набранный код ({transport}) не вернулся в поле"
+        )
+
+        for response in (wrong, exhausted):
+            if headers:
+                assert DOCUMENT_MARK not in response.text, "слою письма приехал целый документ"
+                assert response.text.lstrip().startswith(FORGOT_VERIFY_TITLE), (
+                    "первый узел фрагмента — не `<title>` экрана кода восстановления"
+                )
+            else:
+                assert DOCUMENT_MARK in response.text, (
+                    "человеку без JavaScript приехал фрагмент вместо страницы"
+                )
+
+
+@pytest.mark.asyncio
+async def test_a_right_recovery_code_opens_the_new_password_screen(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Верный код — 200 и экран нового пароля с подтверждённым токеном (D-03, D-06)."""
+    email = "reset-right-bare@test.com"
+    await _seed_recovery_code(db_session, email)
+    without = await client.post(
+        "/forgot-password/verify",
+        data={"token": _reset_token(email, test_settings.secret_key), "code": SEEDED_CODE},
+        follow_redirects=False,
+    )
+    assert without.status_code == 200, (
+        f"верный код без htmx ответил {without.status_code} вместо 200"
+    )
+    assert DOCUMENT_MARK in without.text, "путь без htmx получил не страницу"
+    assert 'action="/forgot-password/reset"' in without.text, (
+        "на экране нет формы нового пароля"
+    )
+
+    email = "reset-right-htmx@test.com"
+    await _seed_recovery_code(db_session, email)
+    over_htmx = await client.post(
+        "/forgot-password/verify",
+        data={"token": _reset_token(email, test_settings.secret_key), "code": SEEDED_CODE},
+        headers=HTMX_HEADERS,
+        follow_redirects=False,
+    )
+    assert over_htmx.status_code == 200, (
+        f"верный код на htmx ответил {over_htmx.status_code} вместо 200"
+    )
+    assert DOCUMENT_MARK not in over_htmx.text, "слою письма приехал целый документ"
+    assert over_htmx.text.lstrip().startswith(FORGOT_RESET_TITLE), (
+        "первый узел фрагмента — не `<title>` экрана нового пароля"
+    )
+    assert 'hx-post="/forgot-password/reset"' in over_htmx.text, (
+        "форма нового пароля во фрагменте рождена не макросом-обёрткой"
+    )
+    tokens = TOKEN_FIELD.findall(over_htmx.text)
+    assert len(tokens) == 1 and _is_verified_reset_token(
+        tokens[0], test_settings.secret_key
+    ), "экран нового пароля несёт не один подтверждённый токен скрытым полем"
+    for header in NAVIGATION_HEADERS:
+        assert header not in over_htmx.headers, (
+            f"смена экрана несёт заголовок перехода {header} (D-08)"
+        )
+
+
+@pytest.mark.asyncio
+async def test_stale_recovery_links_return_to_the_start_with_200(client: AsyncClient):
+    """Негодный токен на подтверждении и новом пароле — 200 и экран начала (D-03)."""
+    for path, payload in (
+        ("/forgot-password/verify", {"token": "x", "code": SEEDED_CODE}),
+        ("/forgot-password/reset", {"token": "x", "password": NEW_PASSWORD}),
+    ):
+        for headers in ({}, HTMX_HEADERS):
+            transport = "htmx" if headers else "без htmx"
+            response = await client.post(
+                path, data=payload, headers=headers, follow_redirects=False
+            )
+            assert response.status_code == 200, (
+                f"{path}: устаревшая ссылка ({transport}) ответила "
+                f"{response.status_code} вместо 200"
+            )
+            assert RESET_STALE_LINK in response.text, (
+                f"{path}: устаревшая ссылка ({transport}) не названа прежними словами"
+            )
+            assert 'action="/forgot-password/send-code"' in response.text, (
+                f"{path}: устаревшая ссылка ({transport}) вернула не на начало"
+            )
+            assert NEW_PASSWORD not in response.text, (
+                f"{path}: присланный пароль ({transport}) вернулся в ответ (D-04)"
+            )
+            if headers:
+                assert response.text.lstrip().startswith(FORGOT_TITLE), (
+                    f"{path}: первый узел фрагмента — не `<title>` экрана начала"
+                )
+
+
+@pytest.mark.asyncio
+async def test_a_vanished_user_returns_to_the_start_of_recovery_with_200(
+    client: AsyncClient, test_settings
+):
+    """Подтверждённый токен на адрес без пользователя — 200 и экран начала (D-03)."""
+    token = _verified_reset_token("reset-vanished@test.com", test_settings.secret_key)
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        response = await client.post(
+            "/forgot-password/reset",
+            data={"token": token, "password": NEW_PASSWORD},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 200, (
+            f"исчезнувший пользователь ({transport}) ответил {response.status_code} "
+            "вместо 200 — экран сменился на начало восстановления"
+        )
+        assert VANISHED_USER_ERROR in response.text, (
+            f"исчезнувший пользователь ({transport}) не назван прежними словами"
+        )
+        assert NEW_PASSWORD not in response.text, (
+            f"присланный пароль ({transport}) вернулся в ответ (D-04)"
+        )
+        if headers:
+            assert response.text.lstrip().startswith(FORGOT_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана начала восстановления"
+            )
+
+
+@pytest.mark.asyncio
+async def test_a_new_password_leaves_for_the_login_by_a_full_load_with_the_notice(
+    client: AsyncClient, test_settings
+):
+    """Новый пароль — 302 / 204 + `HX-Redirect` на `/login` с кодом исхода (D-10, FOUND-05).
+
+    Cookie сессии смена пароля не выдаёт ни на одном транспорте; исход рисует
+    область уведомления шелла ДО якоря, и вход новым паролем проходит.
+    """
+    email = "reset-done@test.com"
+    await _register(client, email)
+    client.cookies.clear()
+    token = _verified_reset_token(email, test_settings.secret_key)
+
+    without = await client.post(
+        "/forgot-password/reset",
+        data={"token": token, "password": NEW_PASSWORD},
+        follow_redirects=False,
+    )
+    assert without.status_code == 302, (
+        f"новый пароль без htmx ответил {without.status_code} вместо прежнего 302"
+    )
+    assert without.headers.get("location") == RESET_DONE_LANDING, (
+        "новый пароль без htmx увёл не на вход с кодом исхода"
+    )
+    assert _no_session_cookie_at_all(without), (
+        "смена пароля без htmx тронула cookie сессии"
+    )
+
+    over_htmx = await client.post(
+        "/forgot-password/reset",
+        data={"token": token, "password": NEW_PASSWORD},
+        headers=HTMX_HEADERS,
+        follow_redirects=False,
+    )
+    assert over_htmx.status_code == 204, (
+        f"новый пароль на htmx ответил {over_htmx.status_code} вместо 204"
+    )
+    assert over_htmx.headers.get("HX-Redirect") == RESET_DONE_LANDING, (
+        "новый пароль на htmx ушёл не заголовком полной перезагрузки на вход"
+    )
+    assert "HX-Location" not in over_htmx.headers, (
+        "новый пароль на htmx несёт заголовок частичного перехода (D-10)"
+    )
+    assert over_htmx.content == b"", "у ответа полной перезагрузки есть тело"
+    assert _no_session_cookie_at_all(over_htmx), (
+        "смена пароля на htmx тронула cookie сессии"
+    )
+
+    landing = await client.get(RESET_DONE_LANDING)
+    assert landing.status_code == 200, f"страница входа ответила {landing.status_code}"
+    assert RESET_DONE_TEXT in landing.text, (
+        "исход смены пароля не нарисован: код не доехал до человека"
+    )
+    assert landing.text.index(RESET_DONE_TEXT) < landing.text.index(STEP_ANCHOR), (
+        "исход смены пароля рисуется внутри якоря и сотрётся первой ошибкой входа"
+    )
+
+    login = await client.post(
+        "/login",
+        data={"email": email, "password": NEW_PASSWORD},
+        follow_redirects=False,
+    )
+    assert login.status_code == 302 and login.headers.get("location") == "/dashboard", (
+        "вход новым паролем не прошёл — пароль молча не сменился"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_last_recovery_steps_are_refused_under_another_identity_on_both_transports(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Под чужой личностью подтверждение и новый пароль закрыты на ОБОИХ транспортах (D-13, D-22).
+
+    Токены годные намеренно: отказ обязан стоять ДО их разбора, а не случиться
+    потому, что ссылка устарела. Пароль пользователя не меняется.
+    """
+    from tests.test_pages.test_impersonation import TARGET_EMAIL, _enter, _seed_target
+
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    async def _hash() -> str:
+        return (
+            await db_session.execute(
+                select(User.password_hash).where(User.email == TARGET_EMAIL)
+            )
+        ).scalar_one()
+
+    before = await _hash()
+    await _seed_recovery_code(db_session, TARGET_EMAIL)
+
+    for path, payload in (
+        (
+            "/forgot-password/verify",
+            {"token": _reset_token(TARGET_EMAIL, test_settings.secret_key), "code": SEEDED_CODE},
+        ),
+        (
+            "/forgot-password/reset",
+            {
+                "token": _verified_reset_token(TARGET_EMAIL, test_settings.secret_key),
+                "password": NEW_PASSWORD,
+            },
+        ),
+    ):
+        bare = await admin_client.post(path, data=payload, follow_redirects=False)
+        assert bare.status_code == 403, (
+            f"{path} без htmx ответил {bare.status_code} под чужой личностью — "
+            "администратор может сменить пароль пользователя"
+        )
+
+        over_htmx = await admin_client.post(
+            path, data=payload, headers=HTMX_HEADERS, follow_redirects=False
+        )
+        assert over_htmx.status_code == 204, (
+            f"{path} на htmx ответил {over_htmx.status_code} под чужой личностью "
+            "вместо 204 — отказ пришёл бы телом в якорь"
+        )
+        assert over_htmx.headers.get("HX-Location") == IMPERSONATION_REFUSED_LOCATION, (
+            f"{path} на htmx ведёт отказ не на домашний экран с кодом отказа"
+        )
+        assert over_htmx.content == b"", f"{path} на htmx несёт тело отказа"
+
+    assert await _hash() == before, (
+        "под чужой личностью пароль пользователя сменился — захват учётной записи"
+    )
+
+
+@pytest.mark.asyncio
+async def test_both_recovery_code_forms_ride_the_anchor_and_drop_a_second_request(
+    client: AsyncClient,
+):
+    """Обе формы экрана кода восстановления — макросом в якорь, второй запрос отбрасывается."""
+    email = "reset-two-forms@test.com"
+    await _register(client, email)
+    client.cookies.clear()
+    page = await client.post(
+        "/forgot-password/send-code", data={"email": email}, follow_redirects=False
+    )
+    assert page.status_code == 200, f"шаг адреса ответил {page.status_code}"
+
+    for action in ("/forgot-password/verify", "/forgot-password/resend-code"):
+        found = re.search(rf'<form[^>]*action="{action}"[^>]*>', page.text)
+        assert found is not None, f"на экране кода нет формы {action}"
+        tag = found.group(0)
+        assert f'hx-post="{action}"' in tag, f"форма {action} рождена не макросом-обёрткой"
+        assert STEP_TARGET in tag, f"форма {action} целится не в якорь шага"
+        assert 'hx-swap="innerHTML"' in tag, f"форма {action} подменяет не СОДЕРЖИМОЕ якоря"
+        assert 'hx-sync="closest #auth-step:drop"' in tag, (
+            f"форма {action} не отбрасывает второй запрос, пока летит первый"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_shell_leaves_the_subtitle_to_every_screen(client: AsyncClient):
+    """Шелл без переходного блока подзаголовка: его печатает каждый экран сам (D-06).
+
+    Реестр экранов обязан накрывать ровно все страницы второго шелла: иначе
+    правило «ни одна страница блок не объявляет» было бы зелено вакуумом для
+    страницы, которой в реестре нет.
+    """
+    from app.pages.auth import AUTH_SCREENS
+
+    shell = (TEMPLATES_DIR / "auth_base.html").read_text(encoding="utf-8")
+    assert "auth_subtitle" not in shell, (
+        "в шелле остался переходный блок подзаголовка — подмена якоря оставит "
+        "подзаголовок прошлого шага"
+    )
+    pages = sorted((TEMPLATES_DIR / "auth").glob("*.html"))
+    assert len(pages) == 7, f"страниц второго шелла {len(pages)}, а экранов семь"
+    for page in pages:
+        assert "auth_subtitle" not in page.read_text(encoding="utf-8"), (
+            f"страница {page.name} объявляет переходный блок подзаголовка"
+        )
+    assert len(AUTH_SCREENS) == 7, f"в реестре экранов {len(AUTH_SCREENS)} записей, а не семь"
+    assert {screen.page for screen in AUTH_SCREENS.values()} == {
+        f"auth/{page.name}" for page in pages
+    }, "реестр экранов не накрывает ровно все страницы второго шелла"
+
+    for path in ("/login", "/register", "/forgot-password"):
+        response = await client.get(path)
+        assert response.status_code == 200, f"{path} ответил {response.status_code}"
+        assert response.text.count('class="auth-subtitle"') == 1, (
+            f"на {path} не ровно один подзаголовок"
+        )
+        subtitles = SUBTITLE.findall(response.text)
+        assert len(subtitles) == 1 and subtitles[0].strip(), (
+            f"подзаголовок {path} пуст — его печатает не экран"
+        )
