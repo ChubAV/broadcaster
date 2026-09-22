@@ -41,7 +41,7 @@
     {
       "number": "14",
       "name": "Авторизация",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "15",
@@ -54,5 +54,5 @@
     "label": "Advance to the next step",
     "reason": "Phase 14 of 9 · 78% · executing"
   },
-  "updated_at": "2026-09-22T11:54:47.621Z"
+  "updated_at": "2026-09-22T13:19:19.957Z"
 }

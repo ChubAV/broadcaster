@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 14
 current_phase_name: Авторизация на htmx
 status: executing
-stopped_at: Completed 14-01-PLAN.md
-last_updated: "2026-09-22T11:55:04.017Z"
+stopped_at: Completed 14-02-PLAN.md
+last_updated: "2026-09-22T13:19:34.960Z"
 last_activity: 2026-09-22
-last_activity_desc: Plan 14-01 complete
-state_head: 3985e27bd571069745d6d6846b306c2046afae7e
+last_activity_desc: Plan 14-02 complete
+state_head: 6c1581a8daa2c7006d95cf3bf8abb2ac78a24fd0
 progress:
   total_phases: 9
   completed_phases: 7
   total_plans: 142
-  completed_plans: 136
+  completed_plans: 137
   percent: 78
 ---
 
@@ -55,15 +55,16 @@ v2.1: Фазы 7, 8, 9, 10, 11, 12 (129 планов, 6 из 9 фаз, 67%). Ф�
 ## Current Position
 
 Phase: 14 (Авторизация на htmx) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 Total Plans in Phase: 7
-Completed Plans in Phase: 1
+Completed Plans in Phase: 2
 Status: Ready to execute
 ⚠️ Две строки выше исправлены вручную при закрытии Фазы 12: `phase.complete` оставил в них числа
 ПРОШЛОЙ фазы (13 планов / 6 исполненных), то есть счёт Фазы 12, подписанный именем Фазы 13.
 ⚠️ То же повторилось при закрытии Фазы 13 (2026-09-21): верб оставил «6 / 6» — счёт Фазы 13 под
 именем Фазы 14; исправлено вручную тем же способом.
-Last activity: 2026-09-22 — Plan 14-01 complete (трасер входа: `redirect_internal`, якорь `#auth-step`, `login_submit` на выходах слоя; полный прогон 3541 passed); следующий — 14-02
+Last activity: 2026-09-22 — Plan 14-02 complete (регистрация «почта → экран кода» и повтор кода: выход смены экрана `respond_screen`, 422 на том же экране и 200 при смене; прогон гейтов волны 400 passed, смежные модули 667 passed); следующий — 14-03
+Last activity (устарело, предмет — завершение плана 14-01; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило завершение плана 14-02): 2026-09-22 — Plan 14-01 complete (трасер входа: `redirect_internal`, якорь `#auth-step`, `login_submit` на выходах слоя; полный прогон 3541 passed); следующий — 14-02
 Last activity (устарело, предмет — старт исполнения Фазы 14; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило завершение плана 14-01): 2026-09-22 — Phase 14 execution started
 Last activity (устарело, предмет — планирование Фазы 14; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменил старт исполнения Фазы 14; восстановлена вручную — верб `state.begin-phase` её затёр): 2026-09-22 — Phase 14 спланирована: 7 планов в 7 волнах (14-01 — трасер входа; 14-02…14-06 — перевод путей регистрации, восстановления и возврата из-под чужой личности, все `type: tdd`; 14-07 — летописи, окно 63, `14-UAT.md`). Проверка планов: 0 блокеров, 2 предупреждения `scope_sanity` (размер 14-01 и 14-02) — перерасход принят владельцем как есть.
 Last activity (устарело, предмет — отгрузка Фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило планирование Фазы 14): 2026-09-21 — Phase 13 shipped — PR #52
@@ -236,6 +237,7 @@ Progress: [████████████████████] 116/116
 | Phase 13 P05 | 14min | 2 tasks | 4 files |
 | Phase 13 P06 | 2min | 2 tasks | 2 files |
 | Phase 14 P01 | 73 min | 3 tasks | 14 files |
+| Phase 14 P02 | 39 min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -521,6 +523,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 14]: Фаза 14, план 14-01: выход полной перезагрузки — отдельная функция redirect_internal (302 без htmx, 204 + HX-Redirect с ним), cookie ставит вызывающий на возвращённый объект
 - [Phase 14]: Фаза 14, план 14-01: постоянный якорь #auth-step стоит ПОСЛЕ областей уведомления; визуальный порядок задаёт CSS (display: contents + order)
 - [Phase 14]: Фаза 14, план 14-01: гейты узнают переведённым обработчик по имени из закрытого семейства RESPONSE_LAYER_EXITS; DEGRADATION_MARKERS разметочного гейта пополнен теми же выходами
+- [Phase 14]: 14-02: выход смены экрана — отдельная функция respond_screen (200 на обоих транспортах) с общим телом _respond_by_transport, а не параметр кода у respond_field_error: гейты различают выходы по имени
+- [Phase 14]: 14-02: _hands_a_fragment засчитывает фрагмент у respond_screen, но не у respond_field_error — фрагмент ошибки поля есть та же форма, а не смена экрана
+- [Phase 14]: 14-02: экран кода — форма повтора через form_wrapper в #auth-step (innerHTML, перерисовка обеих форм одним токеном); форма подтверждения остаётся обычным POST до 14-03
 
 ### Pending Todos
 
@@ -702,8 +707,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-22T11:55:03.354Z
-Stopped at: Completed 14-01-PLAN.md
+Last session: 2026-09-22T13:19:34.306Z
+Stopped at: Completed 14-02-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
