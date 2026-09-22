@@ -33,9 +33,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
 from app.models.email_verification import EmailVerificationCode
+from app.models.subscription import Subscription
 from app.models.user import User
 from app.pages.auth import BLOCKED_LOGIN_ERROR
-from app.services.auth_service import create_verification_token
+from app.services.auth_service import (
+    create_verification_token,
+    decode_verification_token,
+)
 
 HTMX_HEADERS = {"HX-Request": "true"}
 DOCUMENT_MARK = "<!DOCTYPE"
@@ -653,7 +657,12 @@ async def test_resending_with_a_stale_link_returns_to_the_start_of_registration(
 async def test_the_code_screen_carries_the_resend_form_into_the_anchor(
     client: AsyncClient,
 ):
-    """Форма повтора — макросом в якорь; форма подтверждения — обычная до 14-03."""
+    """Форма повтора — макросом в якорь; форма подтверждения — настоящим POST.
+
+    Фаза 14, план 14-03: форма подтверждения тоже рождена макросом (правило
+    `test_both_code_forms_ride_the_anchor_and_drop_a_second_request`); здесь
+    остаётся утверждение о пути без JavaScript — тег по-прежнему шлёт POST.
+    """
     page = await client.post(
         "/register/send-code",
         data={"email": "forms@test.com"},
@@ -676,3 +685,414 @@ async def test_the_code_screen_carries_the_resend_form_into_the_anchor(
     assert 'method="post" action="/register/verify"' in verify.group(0), (
         "форма подтверждения отправляется не настоящим POST"
     )
+
+
+# --- Регистрация: «код → имя и пароль → кабинет» (Фаза 14, план 14-03) ---------
+#
+# ⚠️ НЕВЕРНЫЙ КОД БОЛЬШЕ НЕ СТИРАЕТ НАБРАННОЕ (D-03, D-04): 422 на ТОМ ЖЕ экране,
+# код — в `value=`, прежний токен — скрытым полем. Счёт попыток прежний (D-15):
+# каждая половина берёт СВОЙ адрес, иначе вторая увидела бы на попытку меньше.
+#
+# ⚠️ ЗАВЕРШЕНИЕ — ПОЛНАЯ ЗАГРУЗКА С COOKIE НА ТОМ ЖЕ ОТВЕТЕ (D-10, Pitfall 4):
+# правило, проверяющее один заголовок, зеленело бы при входе, который молча не
+# состоялся, поэтому за ним стоит `GET /dashboard`.
+
+REGISTER_COMPLETE_TITLE = "<title>Завершение регистрации — Broadcaster</title>"
+TYPED_CODE = "654321"
+SEEDED_CODE = "123456"
+WRONG_CODE_ERROR = "Неверный код. Осталось попыток: 4"
+EXHAUSTED_CODE_ERROR = "Код истёк или превышено число попыток. Отправьте код заново."
+SHORT_PASSWORD_ERROR = "Пароль должен быть не менее 6 символов"
+# Пять знаков и `!`: такого символа нет в алфавите подписанного токена, и
+# совпасть со случайным куском разметки строке негде.
+SHORT_PASSWORD = "p9!zq"
+
+
+async def _seed_verify_code(
+    db_session: AsyncSession, email: str, *, attempts: int = 0
+) -> None:
+    """Живой код регистрации `SEEDED_CODE` с заданным счётом попыток."""
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        EmailVerificationCode(
+            email=email,
+            code=SEEDED_CODE,
+            purpose="registration",
+            expires_at=now + timedelta(minutes=10),
+            attempts=attempts,
+        )
+    )
+    await db_session.commit()
+
+
+def _token_is_verified(token: str, secret_key: str) -> bool:
+    payload = decode_verification_token(token, secret_key)
+    return bool(payload and payload.get("verified"))
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_code_keeps_the_typed_code_and_answers_422_on_both_transports(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Неверный код — 422, «Осталось попыток: 4», код в поле, прежний токен (D-03, D-04)."""
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        email = f"wrong-code-{'htmx' if headers else 'bare'}@test.com"
+        await _seed_verify_code(db_session, email)
+        token = create_verification_token(email, test_settings.secret_key)
+
+        response = await client.post(
+            "/register/verify",
+            data={"token": token, "code": TYPED_CODE},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 422, (
+            f"неверный код ({transport}) ответил не 422: человек остаётся на экране "
+            "кода, и правило 422 блока конфигурации обязано перерисовать его"
+        )
+        assert WRONG_CODE_ERROR in response.text, (
+            f"неверный код ({transport}) не назван прежними словами с прежним счётом"
+        )
+        assert f'value="{TYPED_CODE}"' in response.text, (
+            f"набранный код ({transport}) не вернулся в поле — ошибка стёрла набранное"
+        )
+        assert f'name="token" value="{token}"' in response.text, (
+            f"присланный токен ({transport}) не вернулся скрытым полем"
+        )
+        if headers:
+            assert DOCUMENT_MARK not in response.text, "слою письма приехал целый документ"
+            assert response.text.lstrip().startswith(REGISTER_VERIFY_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана кода"
+            )
+        else:
+            assert DOCUMENT_MARK in response.text, (
+                "человеку без JavaScript приехал фрагмент вместо страницы"
+            )
+
+
+@pytest.mark.asyncio
+async def test_an_exhausted_code_answers_422_with_the_typed_code(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Попытки кончились — 422, прежний текст, код в поле (D-03, D-15)."""
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        email = f"exhausted-{'htmx' if headers else 'bare'}@test.com"
+        await _seed_verify_code(db_session, email, attempts=5)
+        token = create_verification_token(email, test_settings.secret_key)
+
+        response = await client.post(
+            "/register/verify",
+            data={"token": token, "code": SEEDED_CODE},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 422, (
+            f"исчерпанный код ({transport}) ответил {response.status_code} вместо 422"
+        )
+        assert EXHAUSTED_CODE_ERROR in response.text, (
+            f"исчерпанный код ({transport}) не назван прежними словами"
+        )
+        assert f'value="{SEEDED_CODE}"' in response.text, (
+            f"набранный код ({transport}) не вернулся в поле"
+        )
+        assert f'name="token" value="{token}"' in response.text, (
+            f"присланный токен ({transport}) не вернулся скрытым полем"
+        )
+        if headers:
+            assert response.text.lstrip().startswith(REGISTER_VERIFY_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана кода"
+            )
+
+
+@pytest.mark.asyncio
+async def test_a_right_code_opens_the_name_and_password_screen_on_both_transports(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Верный код — 200 и экран имени и пароля с подтверждённым токеном (D-03, D-06)."""
+    email = "right-code-bare@test.com"
+    await _seed_verify_code(db_session, email)
+    token = create_verification_token(email, test_settings.secret_key)
+    without = await client.post(
+        "/register/verify",
+        data={"token": token, "code": SEEDED_CODE},
+        follow_redirects=False,
+    )
+    assert without.status_code == 200, (
+        f"верный код без htmx ответил {without.status_code} вместо 200"
+    )
+    assert DOCUMENT_MARK in without.text, "путь без htmx получил не страницу"
+    assert 'action="/register/complete"' in without.text, (
+        "на экране нет формы завершения регистрации"
+    )
+
+    email = "right-code-htmx@test.com"
+    await _seed_verify_code(db_session, email)
+    token = create_verification_token(email, test_settings.secret_key)
+    over_htmx = await client.post(
+        "/register/verify",
+        data={"token": token, "code": SEEDED_CODE},
+        headers=HTMX_HEADERS,
+        follow_redirects=False,
+    )
+    assert over_htmx.status_code == 200, (
+        f"верный код на htmx ответил {over_htmx.status_code} вместо 200"
+    )
+    assert DOCUMENT_MARK not in over_htmx.text, "слою письма приехал целый документ"
+    assert over_htmx.text.lstrip().startswith(REGISTER_COMPLETE_TITLE), (
+        "первый узел фрагмента — не `<title>` экрана завершения"
+    )
+    assert 'hx-post="/register/complete"' in over_htmx.text, (
+        "форма завершения во фрагменте рождена не макросом-обёрткой"
+    )
+    tokens = TOKEN_FIELD.findall(over_htmx.text)
+    assert len(tokens) == 1 and _token_is_verified(tokens[0], test_settings.secret_key), (
+        "экран завершения несёт не один подтверждённый токен скрытым полем"
+    )
+    for header in NAVIGATION_HEADERS:
+        assert header not in over_htmx.headers, (
+            f"смена экрана несёт заголовок перехода {header} (D-08)"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_stale_link_on_the_code_step_returns_to_the_start_of_registration(
+    client: AsyncClient,
+):
+    """Негодный токен на шаге кода — 200 и экран начала регистрации (D-03)."""
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        response = await client.post(
+            "/register/verify",
+            data={"token": "x", "code": SEEDED_CODE},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 200, (
+            f"устаревшая ссылка ({transport}) ответила {response.status_code} вместо 200"
+        )
+        assert STALE_LINK in response.text, (
+            f"устаревшая ссылка ({transport}) не названа прежними словами"
+        )
+        assert 'action="/register/send-code"' in response.text, (
+            f"устаревшая ссылка ({transport}) вернула не на начало регистрации"
+        )
+        if headers:
+            assert response.text.lstrip().startswith(REGISTER_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана регистрации"
+            )
+
+
+@pytest.mark.asyncio
+async def test_a_hostile_code_and_name_come_back_escaped(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Враждебные код и имя — экранированными в `value=`, сырыми никогда (D-04, T-14-03)."""
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        email = f"hostile-code-{'htmx' if headers else 'bare'}@test.com"
+        await _seed_verify_code(db_session, email)
+        token = create_verification_token(email, test_settings.secret_key)
+
+        code_step = await client.post(
+            "/register/verify",
+            data={"token": token, "code": HOSTILE},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert HOSTILE not in code_step.text, (
+            f"враждебный код ({transport}) вернулся сырым — эхо без экранирования"
+        )
+        assert f'value="{HOSTILE_ESCAPED}"' in code_step.text, (
+            f"враждебный код ({transport}) не вернулся экранированным в поле"
+        )
+
+        verified = create_verification_token(
+            email, test_settings.secret_key, verified=True
+        )
+        name_step = await client.post(
+            "/register/complete",
+            data={"token": verified, "name": HOSTILE, "password": SHORT_PASSWORD},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert HOSTILE not in name_step.text, (
+            f"враждебное имя ({transport}) вернулось сырым — эхо без экранирования"
+        )
+        assert f'value="{HOSTILE_ESCAPED}"' in name_step.text, (
+            f"враждебное имя ({transport}) не вернулось экранированным в поле"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_short_password_keeps_the_name_and_answers_422_without_the_password(
+    client: AsyncClient, test_settings
+):
+    """Короткий пароль — 422, имя в поле, пароля в теле нет, новый подтверждённый токен."""
+    name = "Новичок"
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        email = f"short-{'htmx' if headers else 'bare'}@test.com"
+        verified = create_verification_token(
+            email, test_settings.secret_key, verified=True
+        )
+        response = await client.post(
+            "/register/complete",
+            data={"token": verified, "name": name, "password": SHORT_PASSWORD},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 422, (
+            f"короткий пароль ({transport}) ответил {response.status_code} вместо 422 — "
+            "человек остаётся на экране завершения"
+        )
+        assert SHORT_PASSWORD_ERROR in response.text, (
+            f"короткий пароль ({transport}) не назван прежними словами"
+        )
+        assert f'value="{name}"' in response.text, (
+            f"введённое имя ({transport}) не вернулось в поле"
+        )
+        assert SHORT_PASSWORD not in response.text, (
+            f"присланный пароль ({transport}) вернулся в ответ (D-04)"
+        )
+        tokens = TOKEN_FIELD.findall(response.text)
+        assert len(tokens) == 1 and _token_is_verified(tokens[0], test_settings.secret_key), (
+            f"экран завершения ({transport}) несёт не один подтверждённый токен"
+        )
+        if headers:
+            assert DOCUMENT_MARK not in response.text, "слою письма приехал целый документ"
+            assert response.text.lstrip().startswith(REGISTER_COMPLETE_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана завершения"
+            )
+        else:
+            assert DOCUMENT_MARK in response.text, (
+                "человеку без JavaScript приехал фрагмент вместо страницы"
+            )
+
+
+@pytest.mark.asyncio
+async def test_a_taken_address_at_completion_returns_to_the_start_with_200(
+    client: AsyncClient, test_settings
+):
+    """Адрес занят к завершению — 200 и экран начала (экран сменился: D-03, RESEARCH OQ 3)."""
+    email = "raced@test.com"
+    await _register(client, email)
+    client.cookies.clear()
+    verified = create_verification_token(email, test_settings.secret_key, verified=True)
+
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        response = await client.post(
+            "/register/complete",
+            data={"token": verified, "name": "Второй", "password": PASSWORD},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 200, (
+            f"занятый к завершению адрес ({transport}) ответил {response.status_code} "
+            "вместо 200 — экран сменился на начало регистрации"
+        )
+        assert TAKEN_EMAIL_ERROR in response.text, (
+            f"занятый адрес ({transport}) не назван прежними словами"
+        )
+        assert 'action="/register/send-code"' in response.text, (
+            f"занятый адрес ({transport}) вернул не на начало регистрации"
+        )
+        assert not _session_cookie_set(response), (
+            f"занятый адрес ({transport}) выдал cookie сессии"
+        )
+        if headers:
+            assert response.text.lstrip().startswith(REGISTER_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана регистрации"
+            )
+
+
+@pytest.mark.asyncio
+async def test_completing_registration_leaves_by_a_full_load_with_the_cookie_and_the_trial(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Завершение — 302 / 204 + `HX-Redirect`, cookie на том же ответе, пробный срок (D-10, D-B)."""
+    email = "complete-bare@test.com"
+    verified = create_verification_token(email, test_settings.secret_key, verified=True)
+    without = await client.post(
+        "/register/complete",
+        data={"token": verified, "name": "Без скрипта", "password": PASSWORD},
+        follow_redirects=False,
+    )
+    assert without.status_code == 302, (
+        f"завершение без htmx ответило {without.status_code} вместо прежнего 302"
+    )
+    assert without.headers.get("location") == "/dashboard", (
+        "завершение без htmx увело не в кабинет"
+    )
+    assert _session_cookie_set(without), "завершение без htmx не выдало cookie сессии"
+
+    client.cookies.clear()
+    email = "complete-htmx@test.com"
+    verified = create_verification_token(email, test_settings.secret_key, verified=True)
+    over_htmx = await client.post(
+        "/register/complete",
+        data={"token": verified, "name": "Со скриптом", "password": PASSWORD},
+        headers=HTMX_HEADERS,
+        follow_redirects=False,
+    )
+    assert over_htmx.status_code == 204, (
+        f"завершение на htmx ответило {over_htmx.status_code} вместо 204"
+    )
+    assert over_htmx.headers.get("HX-Redirect") == "/dashboard", (
+        "завершение на htmx ушло не заголовком полной перезагрузки на кабинет"
+    )
+    assert "HX-Location" not in over_htmx.headers, (
+        "завершение на htmx несёт заголовок частичного перехода (D-10)"
+    )
+    assert over_htmx.content == b"", "у ответа полной перезагрузки есть тело"
+    assert _session_cookie_set(over_htmx), (
+        "cookie сессии не стоит на ответе 204 — регистрация молча не вошла "
+        "(Landmine CONTEXT — cookie не на том объекте)"
+    )
+
+    user = (
+        await db_session.execute(select(User).where(User.email == email))
+    ).scalar_one()
+    rows = (
+        await db_session.execute(
+            select(Subscription).where(Subscription.user_id == user.id)
+        )
+    ).scalars().all()
+    assert len(rows) == 1, (
+        f"строк подписки у нового пользователя {len(rows)}, а пробный срок — одна (D-B)"
+    )
+
+    dashboard = await client.get("/dashboard", follow_redirects=False)
+    assert dashboard.status_code == 200, (
+        f"кабинет после регистрации ответил {dashboard.status_code}: заголовок "
+        "приехал, а вход или доступ молча не состоялись"
+    )
+    assert '<span class="user-name">Со скриптом</span>' in dashboard.text, (
+        "кабинет открылся не для того, кто зарегистрировался"
+    )
+
+
+@pytest.mark.asyncio
+async def test_both_code_forms_ride_the_anchor_and_drop_a_second_request(
+    client: AsyncClient,
+):
+    """Обе формы экрана кода — макросом в якорь, второй запрос отбрасывается (Pattern 5)."""
+    page = await client.post(
+        "/register/send-code",
+        data={"email": "two-forms@test.com"},
+        follow_redirects=False,
+    )
+    assert page.status_code == 200, f"шаг адреса ответил {page.status_code}"
+
+    for action in ("/register/verify", "/register/resend-code"):
+        found = re.search(rf'<form[^>]*action="{action}"[^>]*>', page.text)
+        assert found is not None, f"на экране кода нет формы {action}"
+        tag = found.group(0)
+        assert f'hx-post="{action}"' in tag, f"форма {action} рождена не макросом-обёрткой"
+        assert STEP_TARGET in tag, f"форма {action} целится не в якорь шага"
+        assert 'hx-swap="innerHTML"' in tag, f"форма {action} подменяет не СОДЕРЖИМОЕ якоря"
+        assert 'hx-sync="closest #auth-step:drop"' in tag, (
+            f"форма {action} не отбрасывает второй запрос, пока летит первый"
+        )
