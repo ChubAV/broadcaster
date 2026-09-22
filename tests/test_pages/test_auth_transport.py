@@ -1096,3 +1096,331 @@ async def test_both_code_forms_ride_the_anchor_and_drop_a_second_request(
         assert 'hx-sync="closest #auth-step:drop"' in tag, (
             f"форма {action} не отбрасывает второй запрос, пока летит первый"
         )
+
+
+# --- Восстановление: «почта → экран кода» и повтор кода (Фаза 14, план 14-04) ---
+#
+# ⚠️ ТО ЖЕ УСТРОЙСТВО, ЧТО У РЕГИСТРАЦИИ (план 14-02): смена экрана — 200,
+# ошибка на том же экране — 422 (D-03); экран кода приезжает в якорь целиком, и
+# обе его формы несут токен восстановления только скрытым полем (D-06, D-08).
+#
+# ⚠️ ФОРМА ПОДТВЕРЖДЕНИЯ КОДА ВОССТАНОВЛЕНИЯ — ПОКА ОБЫЧНАЯ ФОРМА (окно до плана
+# 14-05): её обработчик ещё отвечает готовыми страницами. Здесь утверждается
+# только, что она отправляется настоящим POST.
+#
+# ⚠️ ОТКАЗ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ НЕ ПЕРЕДЕЛЫВАЕТСЯ (D-13): зависимость отказа уже
+# отвечает двумя транспортами; правило ниже закрепляет её половину htmx на двух
+# переведённых шагах вместе с тем, что ни кода, ни письма не заводится.
+
+FORGOT_TITLE = "<title>Забыли пароль — Broadcaster</title>"
+FORGOT_VERIFY_TITLE = "<title>Код подтверждения — Broadcaster</title>"
+UNKNOWN_EMAIL_ERROR = "Пользователь с таким email не найден"
+RESET_STALE_LINK = "Ссылка устарела. Начните сброс пароля заново."
+IMPERSONATION_REFUSED_LOCATION = "/dashboard?notice=impersonation_forbidden"
+
+
+async def _seed_reset_code(
+    db_session: AsyncSession, email: str, *, age_seconds: int
+) -> None:
+    """Код восстановления, выданный `age_seconds` секунд назад."""
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        EmailVerificationCode(
+            email=email,
+            code="123456",
+            purpose="password_reset",
+            expires_at=now + timedelta(minutes=10),
+            created_at=now - timedelta(seconds=age_seconds),
+        )
+    )
+    await db_session.commit()
+
+
+def _reset_token(email: str, secret_key: str) -> str:
+    return create_verification_token(email, secret_key, purpose="password_reset")
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_email_keeps_the_address_and_answers_422_on_both_transports(
+    client: AsyncClient,
+):
+    """Неизвестный адрес — 422, прежний текст и адрес в поле на ОБОИХ транспортах.
+
+    Человек остаётся на экране начала восстановления с тем, что ввёл (D-03,
+    D-04); текст отказа — прежний (D-15).
+    """
+    email = "nobody-recovery@test.com"
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        response = await client.post(
+            "/forgot-password/send-code",
+            data={"email": email},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 422, (
+            f"неизвестный адрес ({transport}) ответил не 422: человек остаётся на "
+            "том же экране, и правило 422 блока конфигурации обязано перерисовать его"
+        )
+        assert UNKNOWN_EMAIL_ERROR in response.text, (
+            f"неизвестный адрес ({transport}) не назван прежними словами"
+        )
+        assert f'value="{email}"' in response.text, (
+            f"введённый адрес ({transport}) не вернулся в поле"
+        )
+        if headers:
+            assert DOCUMENT_MARK not in response.text, "слою письма приехал целый документ"
+            assert response.text.lstrip().startswith(FORGOT_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана начала восстановления"
+            )
+        else:
+            assert DOCUMENT_MARK in response.text, (
+                "человеку без JavaScript приехал фрагмент вместо страницы"
+            )
+
+
+@pytest.mark.asyncio
+async def test_the_recovery_email_step_answers_the_code_screen_on_both_transports(
+    client: AsyncClient,
+):
+    """Известный адрес — 200 и экран кода; токен скрытым полем, переходов нет.
+
+    Каждая половина берёт СВОЙ адрес: второй запрос на тот же адрес попал бы в
+    минуту между кодами и утверждал бы другой исход.
+    """
+    await _register(client, "recovery-bare@test.com")
+    await _register(client, "recovery-htmx@test.com")
+    client.cookies.clear()
+
+    without = await client.post(
+        "/forgot-password/send-code",
+        data={"email": "recovery-bare@test.com"},
+        follow_redirects=False,
+    )
+    assert without.status_code == 200, (
+        f"шаг адреса восстановления без htmx ответил {without.status_code} вместо "
+        "200 — путь без JavaScript обязан получить страницу кода прямо в ответ на POST"
+    )
+    assert DOCUMENT_MARK in without.text, "путь без htmx получил не страницу"
+    assert 'action="/forgot-password/verify"' in without.text, (
+        "на экране кода нет формы подтверждения"
+    )
+    assert 'name="token"' in without.text, "токен восстановления не едет скрытым полем"
+
+    over_htmx = await client.post(
+        "/forgot-password/send-code",
+        data={"email": "recovery-htmx@test.com"},
+        headers=HTMX_HEADERS,
+        follow_redirects=False,
+    )
+    assert over_htmx.status_code == 200, (
+        f"шаг адреса восстановления на htmx ответил {over_htmx.status_code} вместо 200"
+    )
+    assert DOCUMENT_MARK not in over_htmx.text, "слою письма приехал целый документ"
+    assert over_htmx.text.lstrip().startswith(FORGOT_VERIFY_TITLE), (
+        "первый узел фрагмента — не `<title>` экрана кода восстановления"
+    )
+    assert 'hx-post="/forgot-password/resend-code"' in over_htmx.text, (
+        "форма повтора во фрагменте рождена не макросом-обёрткой"
+    )
+    assert 'name="token"' in over_htmx.text, "токен восстановления не едет скрытым полем"
+    verify = re.search(r'<form[^>]*action="/forgot-password/verify"[^>]*>', over_htmx.text)
+    assert verify is not None, "во фрагменте нет формы подтверждения"
+    assert 'method="post" action="/forgot-password/verify"' in verify.group(0), (
+        "форма подтверждения отправляется не настоящим POST"
+    )
+    for header in NAVIGATION_HEADERS:
+        assert header not in over_htmx.headers, (
+            f"смена экрана несёт заголовок перехода {header} (D-08)"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_recovery_step_within_a_minute_lands_on_the_code_screen(
+    client: AsyncClient,
+):
+    """«Код уже отправлен» — 200 и экран кода с прежним текстом (D-03, D-15)."""
+    email = "recovery-repeat@test.com"
+    await _register(client, email)
+    client.cookies.clear()
+    first = await client.post("/forgot-password/send-code", data={"email": email})
+    assert first.status_code == 200, f"первый шаг адреса ответил {first.status_code}"
+
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        response = await client.post(
+            "/forgot-password/send-code",
+            data={"email": email},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 200, (
+            f"повтор шага адреса ({transport}) ответил {response.status_code} вместо 200"
+        )
+        assert CODE_ALREADY_SENT in response.text, (
+            f"повтор шага адреса ({transport}) не назван прежними словами"
+        )
+        assert 'name="token"' in response.text, (
+            f"экран кода ({transport}) пришёл без токена восстановления"
+        )
+        if headers:
+            assert response.text.lstrip().startswith(FORGOT_VERIFY_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана кода восстановления"
+            )
+
+
+@pytest.mark.asyncio
+async def test_resending_the_recovery_code_redraws_both_forms_with_one_token(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Повтор кода восстановления — 200 и ОБЕ формы с ОДНИМ токеном ответа (D-06).
+
+    Повтор выдаёт новый токен, поэтому подменяется весь якорь (Landmine
+    CONTEXT). Утверждается равенство двух полей, а не «токен сменился»: две
+    выдачи внутри одной секунды дают один и тот же токен.
+    """
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        email = f"recovery-resend-{'htmx' if headers else 'bare'}@test.com"
+        await _seed_reset_code(db_session, email, age_seconds=120)
+
+        response = await client.post(
+            "/forgot-password/resend-code",
+            data={"token": _reset_token(email, test_settings.secret_key)},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 200, (
+            f"повтор кода восстановления ({transport}) ответил "
+            f"{response.status_code} вместо 200"
+        )
+        assert RESEND_DONE in response.text, (
+            f"повтор кода восстановления ({transport}) не назван прежними словами"
+        )
+        tokens = TOKEN_FIELD.findall(response.text)
+        assert len(tokens) == 2, (
+            f"скрытых полей токена ({transport}) {len(tokens)}, а форм на экране кода две"
+        )
+        assert tokens[0] == tokens[1] and tokens[0], (
+            f"формы экрана кода ({transport}) несут разные токены — одна из них "
+            "осталась со старым"
+        )
+        if headers:
+            assert response.text.lstrip().startswith(FORGOT_VERIFY_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана кода восстановления"
+            )
+
+
+@pytest.mark.asyncio
+async def test_resending_the_recovery_code_within_a_minute_answers_422(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Повтор раньше минуты — 422 на экране кода с присланным токеном (D-03)."""
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        email = f"recovery-early-{'htmx' if headers else 'bare'}@test.com"
+        await _seed_reset_code(db_session, email, age_seconds=5)
+        token = _reset_token(email, test_settings.secret_key)
+
+        response = await client.post(
+            "/forgot-password/resend-code",
+            data={"token": token},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 422, (
+            f"повтор раньше минуты ({transport}) ответил {response.status_code} "
+            "вместо 422 — человек остаётся на экране кода"
+        )
+        assert RESEND_TOO_EARLY in response.text, (
+            f"повтор раньше минуты ({transport}) не назван прежними словами"
+        )
+        assert f'name="token" value="{token}"' in response.text, (
+            f"присланный токен ({transport}) не вернулся скрытым полем"
+        )
+        if headers:
+            assert response.text.lstrip().startswith(FORGOT_VERIFY_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана кода восстановления"
+            )
+
+
+@pytest.mark.asyncio
+async def test_resending_with_a_stale_recovery_link_returns_to_the_start(
+    client: AsyncClient,
+):
+    """Негодный токен — 200 и экран начала восстановления (D-03: «возврат на начало»)."""
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        response = await client.post(
+            "/forgot-password/resend-code",
+            data={"token": "x"},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 200, (
+            f"устаревшая ссылка ({transport}) ответила {response.status_code} вместо 200"
+        )
+        assert RESET_STALE_LINK in response.text, (
+            f"устаревшая ссылка ({transport}) не названа прежними словами"
+        )
+        if headers:
+            assert response.text.lstrip().startswith(FORGOT_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана начала восстановления"
+            )
+
+
+@pytest.mark.asyncio
+async def test_the_first_recovery_steps_are_refused_under_another_identity_on_both_transports(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Под чужой личностью оба переведённых шага закрыты на ОБОИХ транспортах (D-13, D-22).
+
+    Без признака htmx — 403, как сегодня; с ним — 204 и переход заголовком на
+    домашний экран с кодом отказа, без тела: тело `detail` слой письма никуда
+    не показывает. Ни кода восстановления, ни письма не заводится — иначе
+    захват учётной записи начался бы и остановился на полпути.
+    """
+    from tests.test_pages.test_impersonation import TARGET_EMAIL, _enter, _seed_target
+
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    async def _reset_codes() -> int:
+        rows = await db_session.execute(
+            select(EmailVerificationCode).where(
+                EmailVerificationCode.purpose == "password_reset"
+            )
+        )
+        return len(rows.scalars().all())
+
+    before = await _reset_codes()
+    # Годный токен восстановления: отказ обязан стоять ДО разбора токена, а не
+    # случиться потому, что ссылка устарела.
+    token = _reset_token(TARGET_EMAIL, test_settings.secret_key)
+
+    for path, payload in (
+        ("/forgot-password/send-code", {"email": TARGET_EMAIL}),
+        ("/forgot-password/resend-code", {"token": token}),
+    ):
+        bare = await admin_client.post(path, data=payload, follow_redirects=False)
+        assert bare.status_code == 403, (
+            f"{path} без htmx ответил {bare.status_code} под чужой личностью — "
+            "администратор может перехватить пароль пользователя"
+        )
+
+        over_htmx = await admin_client.post(
+            path, data=payload, headers=HTMX_HEADERS, follow_redirects=False
+        )
+        assert over_htmx.status_code == 204, (
+            f"{path} на htmx ответил {over_htmx.status_code} под чужой личностью "
+            "вместо 204 — отказ пришёл бы телом в якорь"
+        )
+        assert over_htmx.headers.get("HX-Location") == IMPERSONATION_REFUSED_LOCATION, (
+            f"{path} на htmx ведёт отказ не на домашний экран с кодом отказа"
+        )
+        assert over_htmx.content == b"", f"{path} на htmx несёт тело отказа"
+
+    assert await _reset_codes() == before, (
+        "под чужой личностью заведён код восстановления — письмо ушло бы на почту "
+        "пользователя"
+    )
