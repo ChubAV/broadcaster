@@ -5918,3 +5918,353 @@ def test_control_an_undeclared_retarget_header_reddens_the_registry(tmp_path):
         f"измерено {sorted(fresh)}, объявлено {sorted(RETARGET_RESWAP_USES)} — "
         "подстановка оставила след за своей границей"
     )
+
+
+# =============================================================================
+# ГЕЙТ КРИТЕРИЯ 3 ФАЗЫ 14: КТО УХОДИТ ПОЛНОЙ ПЕРЕЗАГРУЗКОЙ И КТО ВЫДАЁТ
+# ЗАГОЛОВОК ЧАСТИЧНОГО ПЕРЕХОДА (Фаза 14, план 14-06, D-11)
+# =============================================================================
+#
+# ТЕКСТ КРИТЕРИЯ 3 РОАДМАПА ДОСЛОВНО: «успех авторизации уходит `HX-Redirect`;
+# `HX-Location` применяется только для `/impersonation/stop`». Требование —
+# SIGN-03. До этого плана оно было НАБЛЮДЕНИЕМ: сверить его можно было только
+# чтением модуля, и первый же обработчик, ушедший не тем заголовком, стал бы
+# расхождением, о котором никто не узнал бы до ревизии. Здесь оно становится
+# ПРАВИЛОМ.
+#
+# ⚠️ ПРЕДМЕТ ПРАВИЛ НАЗВАН ТОЧНО, И ГРАНИЦА ОБЪЯВЛЕНА ПРЯМО, А НЕ ОСТАВЛЕНА
+# ЧИТАТЕЛЮ. Предмет — МОДУЛЬ АВТОРИЗАЦИИ (`app/pages/auth.py`) и выход полной
+# перезагрузки СТРАНИЧНОГО СЛОЯ. У буквального текста критерия есть ВТОРОЙ
+# ОТПРАВИТЕЛЬ `HX-Location`, и он живёт ВНЕ модуля авторизации: отказ
+# зависимости `forbid_when_impersonating` на четырёх шагах восстановления
+# пароля уходит `location_response` из обработчика `HtmxRefusal`
+# (`app/main.py`, `app/dependencies.py`, `IMPERSONATION_REFUSED_LOCATION`).
+# Этим правилом он НЕ ВИДИТСЯ ПО ПОСТРОЕНИЮ — не потому, что его прозевали, а
+# потому, что вселенная правила есть модуль авторизации. Решение D-13 Фазы 14
+# оставляет отказ как есть; летопись у критерия 3 и SIGN-03 ставит план 14-07
+# (RESEARCH Находка 6). Записано это здесь затем, чтобы следующий читатель не
+# принял зелёное правило за доказательство более широкого утверждения, чем то,
+# которое оно проверяет.
+
+# Имя выхода полной перезагрузки — ОДНО на весь гейт: вторая копия строки
+# разъехалась бы с первой молча.
+FULL_LOAD_CALL = "redirect_internal"
+
+AUTH_MODULE = "app/pages/auth.py"
+
+# ⚠️ ЧЕТЫРЕ ВЫЗЫВАЮЩИХ, И КАЖДЫЙ НАЗВАН РЕШЕНИЕМ, А НЕ ЗАМЕРОМ. Три первых —
+# успехи авторизации, которым D-10 предписал полную загрузку (вход, завершение
+# регистрации, новый пароль); четвёртый — единственная ветка возврата, уходящая
+# ЧЕРЕЗ ГРАНИЦУ ШЕЛЛОВ (D-12): экран входа живёт во втором шелле, и фрагментом
+# смену шелла не отдать. Перечень закрыт: пятый вызывающий означает решение о
+# форме ответа, принятое без записи.
+FULL_LOAD_HANDLERS = frozenset(
+    {
+        f"{AUTH_MODULE}::login_submit",
+        f"{AUTH_MODULE}::register_complete",
+        f"{AUTH_MODULE}::forgot_password_reset",
+        f"{AUTH_MODULE}::stop_impersonation",
+    }
+)
+
+# ⚠️ ЕДИНСТВЕННЫЙ ОТПРАВИТЕЛЬ ЗАГОЛОВКА ЧАСТИЧНОГО ПЕРЕХОДА В МОДУЛЕ
+# АВТОРИЗАЦИИ — И ЭТО РОВНО ТО, ЧТО ГОВОРИТ БУКВАЛЬНЫЙ ТЕКСТ КРИТЕРИЯ 3.
+AUTH_HX_LOCATION_HANDLERS = frozenset({f"{AUTH_MODULE}::stop_impersonation"})
+
+
+def _calls_named(node: ast.AST, name: str) -> list[ast.Call]:
+    """Вызовы имени `name` внутри узла — голым именем и через модуль.
+
+    Обе формы засчитываются намеренно: `redirect_internal(...)` и
+    `htmx.redirect_internal(...)` есть ОДИН И ТОТ ЖЕ выход, и разборщик,
+    знающий только первую, ослеп бы ровно на той форме, к которой проект
+    перешёл бы при первом конфликте имён.
+    """
+    found: list[ast.Call] = []
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        func = child.func
+        if isinstance(func, ast.Name) and func.id == name:
+            found.append(child)
+        elif isinstance(func, ast.Attribute) and func.attr == name:
+            found.append(child)
+    return found
+
+
+def _full_load_calls(sources: dict[str, str]) -> list[tuple[str, int, ast.Call]]:
+    """Все вызовы выхода полной перезагрузки в POST-обработчиках слоя.
+
+    Возвращается тройка «ключ обработчика, строка, узел вызова»: правилу
+    литерала нужен САМ узел, а не факт вызова, — иначе адрес, собранный
+    переменной, был бы неотличим от литерала.
+    """
+    found: list[tuple[str, int, ast.Call]] = []
+    for module, text in sources.items():
+        tree = _parse(module, text)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not any(_declares_post(decorator) for decorator in node.decorator_list):
+                continue
+            key = f"{module}::{node.name}"
+            for call in _calls_named(node, FULL_LOAD_CALL):
+                found.append((key, call.lineno, call))
+    return found
+
+
+def _full_load_callers(sources: dict[str, str]) -> set[str]:
+    """POST-обработчики страничного слоя, зовущие выход полной перезагрузки."""
+    return {key for key, _lineno, _call in _full_load_calls(sources)}
+
+
+def _hx_location_emitters(
+    sources: dict[str, str], module: str = AUTH_MODULE
+) -> set[str]:
+    """Функции модуля, способные выдать заголовок ЧАСТИЧНОГО перехода.
+
+    ⚠️ ДВЕ ФОРМЫ, И ОБЕ НАЗВАНЫ. Первая — главный выход слоя БЕЗ фрагмента:
+    `respond(...)`, которому фрагмент не подан, отвечает на пути htmx
+    заголовком `HX-Location`, а с поданным фрагментом — телом, и заголовка не
+    пишет вовсе. Именно поэтому предмет здесь — ОТСУТСТВИЕ именованного
+    аргумента фрагмента, а не сам вызов выхода. Вторая — прямая сборка
+    `location_response(...)`, которой заголовок пишется в одном месте слоя.
+
+    ⚠️ ВСЕЛЕННАЯ — ОДИН МОДУЛЬ, И ЭТО ГРАНИЦА, А НЕ УПУЩЕНИЕ: буквальный текст
+    критерия 3 говорит о `/impersonation/stop`, а второй отправитель заголовка
+    живёт вне модуля авторизации (шапка группы называет его поимённо).
+    """
+    text = sources.get(module)
+    if text is None:
+        return set()
+
+    emitters: set[str] = set()
+    tree = _parse(module, text)
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for call in _calls_named(node, "respond"):
+            if not any(keyword.arg == "fragment" for keyword in call.keywords):
+                emitters.add(f"{module}::{node.name}")
+        if _calls_named(node, "location_response"):
+            emitters.add(f"{module}::{node.name}")
+    return emitters
+
+
+def _local_literal_complaints(sources: dict[str, str]) -> list[str]:
+    """Жалобы правила ЛИТЕРАЛА: адрес полной перезагрузки — строка с `/`.
+
+    ⚠️ ПРЕДМЕТ — ОТКРЫТЫЙ РЕДИРЕКТ (T-14-01), А НЕ ОПРЯТНОСТЬ. Адрес,
+    приехавший переменной, рантайм-проверка `_local_path` отвергнет уже у
+    человека; правило требует, чтобы отвергать было НЕЧЕГО — чтобы негодный
+    адрес не собирался как исходник. Один ведущий слеш и не два: `//evil.example`
+    есть протокол-относительный адрес чужого сайта.
+    """
+    complaints: list[str] = []
+    for key, lineno, call in _full_load_calls(sources):
+        redirect = next(
+            (keyword.value for keyword in call.keywords if keyword.arg == "redirect"),
+            None,
+        )
+        where = f"{key} (строка {lineno})"
+        if redirect is None:
+            complaints.append(
+                f"{where}: у вызова выхода полной перезагрузки нет аргумента "
+                "`redirect=` — путь деградации не объявлен (FOUND-04)"
+            )
+            continue
+        if not (isinstance(redirect, ast.Constant) and isinstance(redirect.value, str)):
+            complaints.append(
+                f"{where}: адрес полной перезагрузки собран НЕ ЛИТЕРАЛОМ "
+                f"({type(redirect).__name__}) — открытый редирект закрыт только "
+                "рантайм-проверкой, то есть уже у человека"
+            )
+            continue
+        value = redirect.value
+        if not value.startswith("/") or value.startswith("//"):
+            complaints.append(
+                f"{where}: адрес {value!r} не есть локальный путь — один ведущий "
+                "слеш и не два (`//host` уводит на чужой сайт)"
+            )
+    return complaints
+
+
+def test_only_the_named_auth_handlers_leave_by_a_full_load():
+    """Выход полной перезагрузки зовут РОВНО четыре названных обработчика.
+
+    ⚠️ РАВЕНСТВО, А НЕ ВКЛЮЧЕНИЕ, И ОБА НАПРАВЛЕНИЯ ЗНАЧАТ РАЗНОЕ. Лишний
+    вызывающий означает решение о форме ответа, принятое без записи: обработчик
+    уводит человека полной загрузкой там, где фаза объявила переход внутри
+    шелла. Пропавший означает обратное — объявленный полной загрузкой успех
+    ушёл фрагментом, то есть новая cookie приехала к куску ЧУЖОГО шелла.
+    """
+    callers = _full_load_callers(_pages_sources())
+
+    assert callers, (
+        "вселенная правила ПУСТА: вызывающих выход полной перезагрузки не "
+        "найдено ни одного. Правило равенства на пустом замере доказывало бы "
+        "поломку разбора, а не исполненный критерий"
+    )
+    assert callers == set(FULL_LOAD_HANDLERS), (
+        "ВЫЗЫВАЮЩИЕ ВЫХОД ПОЛНОЙ ПЕРЕЗАГРУЗКИ РАЗОШЛИСЬ С ОБЪЯВЛЕННЫМИ "
+        "(критерий 3, SIGN-03):\n  лишние: "
+        + ", ".join(sorted(callers - set(FULL_LOAD_HANDLERS)) or ["—"])
+        + "\n  пропавшие: "
+        + ", ".join(sorted(set(FULL_LOAD_HANDLERS) - callers) or ["—"])
+    )
+
+
+def test_every_full_load_address_is_a_literal_local_path():
+    """Адрес каждой полной перезагрузки — ЛИТЕРАЛ локального пути (T-14-01)."""
+    sources = _pages_sources()
+
+    assert _full_load_calls(sources), (
+        "вселенная правила ПУСТА: вызовов выхода полной перезагрузки нет — "
+        "утверждение об их адресах зелено вакуумно"
+    )
+
+    complaints = _local_literal_complaints(sources)
+
+    assert not complaints, (
+        "АДРЕС ПОЛНОЙ ПЕРЕЗАГРУЗКИ СОБРАН НЕ ЛИТЕРАЛОМ ЛОКАЛЬНОГО ПУТИ:\n  "
+        + "\n  ".join(complaints)
+    )
+
+
+def test_hx_location_in_the_auth_module_belongs_to_the_return_only():
+    """`HX-Location` в модуле авторизации выдаёт ТОЛЬКО возврат (критерий 3).
+
+    ⚠️ ЧТО ИМЕННО ЗДЕСЬ СТЕРЕЖЁТСЯ. Успех входа и завершения регистрации ставит
+    cookie НОВОЙ ЛИЧНОСТИ; уйди он заголовком частичного перехода, новая cookie
+    приехала бы к документу, собранному ЧУЖИМ шеллом, и смена личности осталась
+    бы половинчатой. Возврат из-под чужой личности — единственное место модуля,
+    где переход внутри основного шелла ВЕРЕН: полоса имперсонации уезжает
+    вместе с содержимым `body`, а приземление лежит в том же шелле (D-12).
+    """
+    emitters = _hx_location_emitters(_pages_sources())
+
+    assert emitters, (
+        "вселенная правила ПУСТА: отправителей заголовка частичного перехода в "
+        "модуле авторизации не найдено ни одного — правило равенства зелено "
+        "вакуумно, и `stop_impersonation` мог потерять свой выход молча"
+    )
+    assert emitters == set(AUTH_HX_LOCATION_HANDLERS), (
+        "ОТПРАВИТЕЛИ `HX-Location` В МОДУЛЕ АВТОРИЗАЦИИ РАЗОШЛИСЬ С "
+        "ОБЪЯВЛЕННЫМИ (критерий 3, SIGN-03):\n  лишние: "
+        + ", ".join(sorted(emitters - set(AUTH_HX_LOCATION_HANDLERS)) or ["—"])
+        + "\n  пропавшие: "
+        + ", ".join(sorted(set(AUTH_HX_LOCATION_HANDLERS) - emitters) or ["—"])
+        + "\n\nГраница правила названа в шапке группы: второй отправитель "
+        "заголовка живёт ВНЕ модуля авторизации (отказ зависимости на шагах "
+        "восстановления) и этим правилом не виден по построению"
+    )
+
+
+def test_control_a_fifth_full_load_caller_reddens_the_criterion_three_gate(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: пятый вызывающий ломает равенство И НАЗЫВАЕТСЯ ПО ИМЕНИ.
+
+    Контроль ДВУХШАГОВЫЙ: сперва утверждается, что на НЕТРОНУТОМ дереве правило
+    зелено, и только потом — что подмена его роняет. Без первого шага контроль
+    зеленел бы и у правила, которое краснеет всегда.
+    """
+    untouched = _full_load_callers(_pages_sources())
+    assert untouched == set(FULL_LOAD_HANDLERS), (
+        "правило краснеет на неизменённом дереве — контроль доказывал бы зубы "
+        "сломанного гейта"
+    )
+
+    key = f"{AUTH_MODULE}::a_fifth_route_leaving_by_a_full_load"
+    addition = (
+        '\n\n@router.post("/login/a-fifth-route")\n'
+        "async def a_fifth_route_leaving_by_a_full_load(request: Request):\n"
+        '    return await redirect_internal(request, redirect="/dashboard")\n'
+    )
+    sources = _sources_with(
+        tmp_path, _pages_sources(), AUTH_MODULE, _pages_sources()[AUTH_MODULE] + addition
+    )
+
+    callers = _full_load_callers(sources)
+
+    assert key in callers, (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: разборщик не увидел синтетического "
+        "обработчика, и утверждение ниже проверяло бы нетронутое дерево"
+    )
+    assert callers != set(FULL_LOAD_HANDLERS), (
+        "пятый вызывающий выхода полной перезагрузки НЕ ПОКРАСНИЛ равенства — "
+        "решение о форме ответа можно принять без записи"
+    )
+    assert sorted(callers - set(FULL_LOAD_HANDLERS)) == [key], (
+        "отказ не называет ИМЕНИ лишнего вызывающего: читатель отказа узнал бы "
+        f"о расхождении, но не о его месте — {sorted(callers - set(FULL_LOAD_HANDLERS))}"
+    )
+
+
+def test_control_a_bare_respond_in_the_login_reddens_the_hx_location_gate(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: главный выход БЕЗ фрагмента у входа ломает равенство.
+
+    Это самая правдоподобная ошибка исполнения: успех входа отвечает
+    `respond(...)` вместо выхода полной перезагрузки — заголовок приезжает,
+    переход происходит, и пара, проверяющая только адрес приземления, остаётся
+    зелёной. Цена — cookie новой личности, приехавшая к куску чужого шелла.
+    """
+    assert _hx_location_emitters(_pages_sources()) == set(AUTH_HX_LOCATION_HANDLERS), (
+        "правило краснеет на неизменённом дереве"
+    )
+
+    original = _pages_sources()[AUTH_MODULE]
+    anchor = '    response = await redirect_internal(request, redirect="/dashboard")'
+    assert original.count(anchor) >= 1, (
+        "якорь подмены исчез из модуля авторизации — контроль подменял бы "
+        "ничего"
+    )
+    patched = original.replace(
+        anchor,
+        '    await respond(request, redirect="/dashboard")\n' + anchor,
+        1,
+    )
+    sources = _sources_with(tmp_path, _pages_sources(), AUTH_MODULE, patched)
+
+    emitters = _hx_location_emitters(sources)
+    key = f"{AUTH_MODULE}::login_submit"
+
+    assert key in emitters, (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ ТУДА, КУДА ЦЕЛИЛАСЬ: голый вызов главного "
+        f"выхода не засчитан входу — {sorted(emitters)}"
+    )
+    assert emitters != set(AUTH_HX_LOCATION_HANDLERS), (
+        "множество способных выдать `HX-Location` не выросло — правило слепо к "
+        "главному выходу без фрагмента"
+    )
+
+
+def test_control_a_computed_full_load_address_reddens_the_literal_rule(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: адрес полной перезагрузки ПЕРЕМЕННОЙ краснит правило.
+
+    Открытый редирект начинается ровно здесь: адрес, приехавший параметром
+    запроса, доживает до рантайм-проверки и падает уже у человека. Правило
+    требует, чтобы падать было нечему.
+    """
+    assert not _local_literal_complaints(_pages_sources()), (
+        "правило литерала краснеет на неизменённом дереве"
+    )
+
+    original = _pages_sources()[AUTH_MODULE]
+    anchor = 'redirect_internal(request, redirect="/dashboard")'
+    assert original.count(anchor) >= 1, "якорь подмены исчез из модуля авторизации"
+    patched = original.replace(
+        anchor, "redirect_internal(request, redirect=target)", 1
+    )
+    sources = _sources_with(tmp_path, _pages_sources(), AUTH_MODULE, patched)
+
+    complaints = _local_literal_complaints(sources)
+
+    assert complaints, (
+        "адрес, собранный ПЕРЕМЕННОЙ, не покраснил правила литерала — открытый "
+        "редирект закрыт только рантайм-проверкой"
+    )
+    assert any("собран НЕ ЛИТЕРАЛОМ" in complaint for complaint in complaints), (
+        f"жалоба не называет ПРИЧИНЫ расхождения: {complaints}"
+    )
+    assert any("login_submit" in complaint for complaint in complaints), (
+        f"жалоба не называет МЕСТА расхождения: {complaints}"
+    )
