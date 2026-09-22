@@ -23,6 +23,7 @@
 правила ошибки и смены шага.
 """
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -31,8 +32,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
+from app.models.email_verification import EmailVerificationCode
 from app.models.user import User
 from app.pages.auth import BLOCKED_LOGIN_ERROR
+from app.services.auth_service import create_verification_token
 
 HTMX_HEADERS = {"HX-Request": "true"}
 DOCUMENT_MARK = "<!DOCTYPE"
@@ -397,4 +400,279 @@ def test_the_screen_builders_refuse_a_password_in_the_context():
         _screen_builders(request, "login", password="секрет-123")
     assert "секрет-123" not in str(refused.value), (
         "текст отказа подставил сам пароль — он ушёл бы в журнал"
+    )
+
+
+# --- Регистрация: «почта → экран кода» и повтор кода (Фаза 14, план 14-02) -----
+#
+# ⚠️ СМЕНА ЭКРАНА — 200, ОШИБКА НА ТОМ ЖЕ ЭКРАНЕ — 422 (D-03). Критерий — не
+# текст отказа, а то, остаётся ли человек на экране, который заполнял.
+#
+# ⚠️ ПОДПИСАННЫЙ ТОКЕН ШАГА ЕДЕТ ТОЛЬКО СКРЫТЫМ ПОЛЕМ (D-08): у ответа смены
+# экрана нет ни одного заголовка перехода, иначе токен ушёл бы в адрес.
+
+REGISTER_TITLE = "<title>Регистрация — Broadcaster</title>"
+REGISTER_VERIFY_TITLE = "<title>Подтверждение email — Broadcaster</title>"
+TAKEN_EMAIL_ERROR = "Этот email уже зарегистрирован"
+CODE_ALREADY_SENT = "Код уже отправлен. Подождите минуту перед повторной отправкой."
+RESEND_TOO_EARLY = "Подождите минуту перед повторной отправкой."
+RESEND_DONE = "Новый код отправлен на вашу почту."
+STALE_LINK = "Ссылка устарела. Начните регистрацию заново."
+NAVIGATION_HEADERS = ("HX-Location", "HX-Redirect", "HX-Push-Url")
+TOKEN_FIELD = re.compile(r'name="token" value="([^"]*)"')
+
+
+async def _seed_code(db_session: AsyncSession, email: str, *, age_seconds: int) -> None:
+    """Код регистрации, выданный `age_seconds` секунд назад."""
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        EmailVerificationCode(
+            email=email,
+            code="123456",
+            purpose="registration",
+            expires_at=now + timedelta(minutes=10),
+            created_at=now - timedelta(seconds=age_seconds),
+        )
+    )
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_taken_email_keeps_the_address_and_answers_422_on_both_transports(
+    client: AsyncClient,
+):
+    """Занятый адрес — 422, прежний текст и адрес в поле на ОБОИХ транспортах.
+
+    Человек остаётся на экране начала регистрации с тем, что ввёл (D-03, D-04);
+    текст отказа — прежний (D-15).
+    """
+    email = "taken-transport@test.com"
+    await _register(client, email)
+    client.cookies.clear()
+
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        response = await client.post(
+            "/register/send-code",
+            data={"email": email},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 422, (
+            f"занятый адрес ({transport}) ответил не 422: человек остаётся на том "
+            "же экране, и правило 422 блока конфигурации обязано перерисовать его"
+        )
+        assert TAKEN_EMAIL_ERROR in response.text, (
+            f"занятый адрес ({transport}) не назван прежними словами"
+        )
+        assert f'value="{email}"' in response.text, (
+            f"введённый адрес ({transport}) не вернулся в поле"
+        )
+        if headers:
+            assert DOCUMENT_MARK not in response.text, "слою письма приехал целый документ"
+            assert response.text.lstrip().startswith(REGISTER_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана регистрации"
+            )
+        else:
+            assert DOCUMENT_MARK in response.text, (
+                "человеку без JavaScript приехал фрагмент вместо страницы"
+            )
+
+
+@pytest.mark.asyncio
+async def test_the_registration_email_step_answers_the_code_screen_on_both_transports(
+    client: AsyncClient,
+):
+    """Новый адрес — 200 и экран кода; токен скрытым полем, переходов нет.
+
+    Каждая половина берёт СВОЙ адрес: второй запрос на тот же адрес попал бы в
+    минуту между кодами и утверждал бы другой исход.
+    """
+    without = await client.post(
+        "/register/send-code",
+        data={"email": "step-bare@test.com"},
+        follow_redirects=False,
+    )
+    assert without.status_code == 200, (
+        f"шаг адреса без htmx ответил {without.status_code} вместо 200 — путь без "
+        "JavaScript обязан получить страницу кода прямо в ответ на POST"
+    )
+    assert DOCUMENT_MARK in without.text, "путь без htmx получил не страницу"
+    assert 'action="/register/verify"' in without.text, "на экране нет формы подтверждения"
+    assert 'name="token"' in without.text, "токен шага не едет скрытым полем"
+
+    over_htmx = await client.post(
+        "/register/send-code",
+        data={"email": "step-htmx@test.com"},
+        headers=HTMX_HEADERS,
+        follow_redirects=False,
+    )
+    assert over_htmx.status_code == 200, (
+        f"шаг адреса на htmx ответил {over_htmx.status_code} вместо 200"
+    )
+    assert DOCUMENT_MARK not in over_htmx.text, "слою письма приехал целый документ"
+    assert over_htmx.text.lstrip().startswith(REGISTER_VERIFY_TITLE), (
+        "первый узел фрагмента — не `<title>` экрана кода"
+    )
+    assert 'hx-post="/register/resend-code"' in over_htmx.text, (
+        "форма повтора во фрагменте рождена не макросом-обёрткой"
+    )
+    for header in NAVIGATION_HEADERS:
+        assert header not in over_htmx.headers, (
+            f"смена экрана несёт заголовок перехода {header} (D-08)"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_email_step_within_a_minute_lands_on_the_code_screen(
+    client: AsyncClient,
+):
+    """«Код уже отправлен» — 200 и экран кода с прежним текстом (D-03, D-15)."""
+    email = "repeat@test.com"
+    first = await client.post("/register/send-code", data={"email": email})
+    assert first.status_code == 200, f"первый шаг адреса ответил {first.status_code}"
+
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        response = await client.post(
+            "/register/send-code",
+            data={"email": email},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 200, (
+            f"повтор шага адреса ({transport}) ответил {response.status_code} вместо 200"
+        )
+        assert CODE_ALREADY_SENT in response.text, (
+            f"повтор шага адреса ({transport}) не назван прежними словами"
+        )
+        if headers:
+            assert response.text.lstrip().startswith(REGISTER_VERIFY_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана кода"
+            )
+
+
+@pytest.mark.asyncio
+async def test_resending_the_code_redraws_both_forms_with_one_token(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Повтор кода — 200 и ОБЕ формы экрана с ОДНИМ токеном ответа (D-06).
+
+    Повтор выдаёт новый токен, поэтому подменяется весь якорь: подмена одной
+    формы оставила бы форму подтверждения со старым (Landmine CONTEXT). Утверждается
+    равенство двух полей, а не «токен сменился»: две выдачи внутри одной секунды
+    дают один и тот же токен.
+    """
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        email = f"resend-{'htmx' if headers else 'bare'}@test.com"
+        await _seed_code(db_session, email, age_seconds=120)
+        token = create_verification_token(email, test_settings.secret_key)
+
+        response = await client.post(
+            "/register/resend-code",
+            data={"token": token},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 200, (
+            f"повтор кода ({transport}) ответил {response.status_code} вместо 200"
+        )
+        assert RESEND_DONE in response.text, (
+            f"повтор кода ({transport}) не назван прежними словами"
+        )
+        tokens = TOKEN_FIELD.findall(response.text)
+        assert len(tokens) == 2, (
+            f"скрытых полей токена ({transport}) {len(tokens)}, а форм на экране кода две"
+        )
+        assert tokens[0] == tokens[1] and tokens[0], (
+            f"формы экрана кода ({transport}) несут разные токены — одна из них "
+            "осталась со старым"
+        )
+        if headers:
+            assert response.text.lstrip().startswith(REGISTER_VERIFY_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана кода"
+            )
+
+
+@pytest.mark.asyncio
+async def test_resending_within_a_minute_answers_422_on_the_code_screen(
+    client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Повтор раньше минуты — 422 на экране кода с присланным токеном (D-03)."""
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        email = f"early-{'htmx' if headers else 'bare'}@test.com"
+        await _seed_code(db_session, email, age_seconds=5)
+        token = create_verification_token(email, test_settings.secret_key)
+
+        response = await client.post(
+            "/register/resend-code",
+            data={"token": token},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 422, (
+            f"повтор раньше минуты ({transport}) ответил {response.status_code} "
+            "вместо 422 — человек остаётся на экране кода"
+        )
+        assert RESEND_TOO_EARLY in response.text, (
+            f"повтор раньше минуты ({transport}) не назван прежними словами"
+        )
+        assert f'name="token" value="{token}"' in response.text, (
+            f"присланный токен ({transport}) не вернулся скрытым полем"
+        )
+
+
+@pytest.mark.asyncio
+async def test_resending_with_a_stale_link_returns_to_the_start_of_registration(
+    client: AsyncClient,
+):
+    """Негодный токен — 200 и экран начала регистрации (D-03: «возврат на начало»)."""
+    for headers in ({}, HTMX_HEADERS):
+        transport = "htmx" if headers else "без htmx"
+        response = await client.post(
+            "/register/resend-code",
+            data={"token": "x"},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 200, (
+            f"устаревшая ссылка ({transport}) ответила {response.status_code} вместо 200"
+        )
+        assert STALE_LINK in response.text, (
+            f"устаревшая ссылка ({transport}) не названа прежними словами"
+        )
+        if headers:
+            assert response.text.lstrip().startswith(REGISTER_TITLE), (
+                "первый узел фрагмента — не `<title>` экрана регистрации"
+            )
+
+
+@pytest.mark.asyncio
+async def test_the_code_screen_carries_the_resend_form_into_the_anchor(
+    client: AsyncClient,
+):
+    """Форма повтора — макросом в якорь; форма подтверждения — обычная до 14-03."""
+    page = await client.post(
+        "/register/send-code",
+        data={"email": "forms@test.com"},
+        follow_redirects=False,
+    )
+    assert page.status_code == 200, f"шаг адреса ответил {page.status_code}"
+
+    resend = re.search(r'<form[^>]*action="/register/resend-code"[^>]*>', page.text)
+    assert resend is not None, "на экране кода нет формы повтора"
+    tag = resend.group(0)
+    assert (
+        'method="post" action="/register/resend-code" hx-post="/register/resend-code"'
+        in tag
+    ), "форма повтора рождена не макросом-обёрткой"
+    assert STEP_TARGET in tag, "форма повтора целится не в якорь шага"
+    assert 'hx-swap="innerHTML"' in tag, "форма повтора подменяет не СОДЕРЖИМОЕ якоря"
+
+    verify = re.search(r'<form[^>]*action="/register/verify"[^>]*>', page.text)
+    assert verify is not None, "на экране кода нет формы подтверждения"
+    assert 'method="post" action="/register/verify"' in verify.group(0), (
+        "форма подтверждения отправляется не настоящим POST"
     )

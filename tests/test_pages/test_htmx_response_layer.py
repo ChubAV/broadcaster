@@ -1084,6 +1084,112 @@ async def test_a_field_error_answers_422_with_the_page_without_htmx_and_the_frag
         )
 
 
+# --- Выход СМЕНЫ ЭКРАНА (Фаза 14, план 14-02; RESEARCH Находка 1, D-03) --------
+#
+# ⚠️ СЕСТРА ВЫХОДА ОШИБКИ ПОЛЯ, А НЕ ЕГО ПАРАМЕТР. Тот же контракт — два
+# сборщика, зовётся ровно один, ответ свежий, — но код 200: человек перешёл на
+# СЛЕДУЮЩИЙ экран, а не остался на том же. Путь без JavaScript получает страницу
+# прямо в ответ на POST, потому что подписанный токен шага живёт только в
+# скрытом поле формы, и перенаправление на GET-страницу его потеряло бы (D-08).
+
+SCREEN_STATUS = 200
+
+
+@pytest.mark.asyncio
+async def test_a_screen_change_answers_200_with_the_page_without_htmx_and_the_fragment_with_it():
+    """Смена ЭКРАНА: 200 на обоих транспортах, тело — по способу прихода.
+
+    ⚠️ СТАТУС 200 НА ОБОИХ ПУТЯХ. Ошибкой это не является, и правило 422 блока
+    конфигурации здесь ни при чём; перенаправлением тоже — экран, на который
+    перешёл человек, несёт токен шага скрытым полем, и адреса у него нет.
+
+    ⚠️ НЕВЫБРАННЫЙ СБОРЩИК НЕ ЗОВЁТСЯ, А ОТВЕТ СОБИРАЕТСЯ СВЕЖИЙ — по той же
+    причине, что у выхода ошибки поля: выход не правит объект, которым не
+    владеет, и не собирает разметку, которая никуда не поедет.
+
+    ⚠️ ПОТОКОВЫЙ ОТВЕТ БЕЗ ТЕЛА — ОТКАЗ, А НЕ ПУСТОТА (T-14-15). Пересобрать его
+    с кодом нечем, а молча отданный пустой ответ стёр бы якорь шага.
+    """
+    from fastapi.responses import StreamingResponse
+
+    from app.pages.htmx import respond_screen
+
+    called: list[str] = []
+    built: dict[str, Response] = {}
+
+    async def page() -> Response:
+        called.append("page")
+        built["page"] = HTMLResponse(FIELD_ERROR_PAGE_BODY, status_code=201)
+        return built["page"]
+
+    async def fragment() -> Response:
+        called.append("fragment")
+        built["fragment"] = HTMLResponse(FIELD_ERROR_FRAGMENT_BODY, status_code=201)
+        return built["fragment"]
+
+    # --- без признака htmx: полный документ -----------------------------------
+    called.clear()
+    bare = await respond_screen(_request(), page=page, fragment=fragment)
+
+    assert bare.status_code == SCREEN_STATUS, (
+        f"путь без htmx ответил {bare.status_code}, а смена экрана обязана "
+        f"приезжать {SCREEN_STATUS} на ОБОИХ транспортах"
+    )
+    assert bare.body.decode() == FIELD_ERROR_PAGE_BODY, (
+        f"телом ответа без htmx приехало {bare.body[:120]!r}, а ожидалась "
+        "страница следующего экрана целиком"
+    )
+    assert called == ["page"], (
+        f"состоявшиеся вызовы сборщиков — {called}, а ожидался ровно один"
+    )
+    assert bare is not built["page"], (
+        "выход вернул ОБЪЕКТ СБОРЩИКА вместо свежего ответа"
+    )
+
+    # --- с признаком htmx: фрагмент экрана ------------------------------------
+    called.clear()
+    over_htmx = await respond_screen(
+        _request({HX_REQUEST_HEADER: "true"}), page=page, fragment=fragment
+    )
+
+    assert over_htmx.status_code == SCREEN_STATUS, (
+        f"путь htmx ответил {over_htmx.status_code} вместо {SCREEN_STATUS}"
+    )
+    assert over_htmx.body.decode() == FIELD_ERROR_FRAGMENT_BODY, (
+        f"телом ответа htmx приехало {over_htmx.body[:120]!r}, а ожидался "
+        "фрагмент экрана для постоянного якоря"
+    )
+    assert called == ["fragment"], (
+        f"состоявшиеся вызовы сборщиков — {called}, а ожидался ровно один"
+    )
+    assert over_htmx is not built["fragment"], (
+        "выход вернул ОБЪЕКТ СБОРЩИКА вместо свежего ответа"
+    )
+
+    for name, response in (("без htmx", bare), ("htmx", over_htmx)):
+        assert isinstance(response, HTMLResponse), (
+            f"{name}: ответ собран не `HTMLResponse` ({type(response).__name__})"
+        )
+        assert response.background is None, (
+            f"{name}: на ответе висит фоновая задача — выход отдал чужой объект"
+        )
+        for header in ("HX-Location", "HX-Redirect", "HX-Push-Url"):
+            assert header not in response.headers, (
+                f"{name}: смена экрана несёт заголовок перехода {header} — "
+                "токен шага ушёл бы в адрес (D-08)"
+            )
+
+    # --- потоковый ответ без собранного тела — отказ --------------------------
+    async def streaming() -> Response:
+        async def chunks():
+            yield b"x"
+
+        return StreamingResponse(chunks())
+
+    with pytest.raises(ValueError):
+        await respond_screen(_request(), page=streaming, fragment=streaming)
+
+
 # --- Выход полной перезагрузки на локальный адрес (Фаза 14, план 14-01, D-11) --
 #
 # ⚠️ УТВЕРЖДЕНИЯ О САМОМ ВЫХОДЕ, А НЕ О МАРШРУТЕ. Вызов прямой, без приложения:
