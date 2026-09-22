@@ -11,6 +11,7 @@
     верным, а не потому, что мешало. -#}
 {% from "components/badge.html" import badge %}
 {% from "components/mono.html" import mono %}
+{% from "components/form_wrapper.html" import form_wrapper %}
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -67,13 +68,28 @@
 
         ВОЗВРАТ — НАСТОЯЩАЯ ФОРМА POST, а не ссылка и не кнопка на клиенте:
         действие меняет состояние (перевыпуск токена и перезапись cookie), и
-        путь назад обязан работать без поднявшегося JS. -#}
+        путь назад обязан работать без поднявшегося JS.
+
+        ⚠️ ЛЕТОПИСЬ (Фаза 14, план 14-06, D-09, D-12): требование выше не
+        снято и не ослаблено — оно ИСПОЛНЯЕТСЯ ТЕПЕРЬ МАКРОСОМ. `method` и
+        `action` печатает `form_wrapper`, поэтому без поднявшегося JS форма
+        отправляется ровно так же, как до фазы; с поднявшимся — тем же
+        макросом печатается `hx-post`, и ответ приходит ЗАГОЛОВКОМ ПЕРЕХОДА.
+        ЦЕЛИ У ФОРМЫ НЕТ НАМЕРЕННО: любой исход возврата есть переход —
+        частичный внутри этого шелла (`/admin`, `/dashboard`) либо полная
+        загрузка через границу шеллов (`/login`), — подменять здесь нечего, и
+        макрос печатает `hx-swap="none"`. Класс прижатия вправо переехал с
+        тега формы на ОБЁРТКУ: тег печатает макрос, и своего класса у него
+        уже не будет, а правило `[data-impersonation] .impersonation-back` в
+        `app.css` от переезда не изменилось. -#}
     {% if impersonation %}
     <div data-impersonation class="alert alert--warning" role="status">
         <span class="impersonation-text">Вы работаете от имени пользователя {{ impersonation.get('subject_label') }}</span>
-        <form method="post" action="/impersonation/stop" class="impersonation-back">
+        <div class="impersonation-back">
+            {% call form_wrapper(action='/impersonation/stop') %}
             <button type="submit" class="btn btn--ghost">{{ mono('ВЕРНУТЬСЯ В АДМИНА', 'muted', upper=true) }}</button>
-        </form>
+            {% endcall %}
+        </div>
     </div>
     {% endif %}
     <div data-shell>

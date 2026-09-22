@@ -25,7 +25,12 @@ from app.services.email_service import send_verification_email, send_password_re
 from app.services.subscription_service import start_trial
 from app.pages import notices
 from app.pages.common import is_same_origin, templates
-from app.pages.htmx import redirect_internal, respond_field_error, respond_screen
+from app.pages.htmx import (
+    redirect_internal,
+    respond,
+    respond_field_error,
+    respond_screen,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -659,10 +664,43 @@ async def stop_impersonation(
     СРОК ВОЗВРАЩЁННОГО ТОКЕНА — ОБЫЧНЫЙ, а признака действующего лица в нём
     нет: это снова простой вход администратора в свою учётную запись, и
     короткий срок имперсонации к нему не относится.
+
+    ⚠️ ТРИ ВЕТКИ ВОЗВРАТА УХОДЯТ ДВУМЯ РАЗНЫМИ ЗАГОЛОВКАМИ ПЕРЕХОДА, И РАЗНИЦА
+    МЕЖДУ НИМИ — ГРАНИЦА ШЕЛЛОВ (Фаза 14, план 14-06, D-12). ДВЕ ветки —
+    успех на `/admin` и «действующего лица нет» на `/dashboard` — приземляются
+    в ОСНОВНОМ шелле, том же, в котором нарисована полоса возврата, и потому
+    уходят заголовком ЧАСТИЧНОГО перехода: рантайм подменяет содержимое `body`
+    целиком, полоса `[data-impersonation]` стоит внутри `body` и уезжает
+    вместе с ним, а `<title>` становится заголовком приземлившейся страницы
+    (RESEARCH Находка 5, вендоренный htmx 2.0.10). ТРЕТЬЯ — «действующего лица
+    больше нет либо оно закрыто» — уводит на экран входа, то есть во ВТОРОЙ
+    шелл (`auth_base.html`), и уходит ПОЛНОЙ ЗАГРУЗКОЙ: фрагментом смену шелла
+    не отдать, подменённым содержимым `body` чужой шелл не собрать. Это и есть
+    первая из двух оговорок к буквальному тексту критерия 3 фазы, и записана
+    она летописью, а не переписыванием критерия.
+
+    ⚠️ ПОРЯДОК «ОТВЕТ СЛОЯ → COOKIE НА ТОТ ЖЕ ОБЪЕКТ» НЕСУЩИЙ (прецедент
+    `admin_impersonate`, `app/pages/admin.py`). Ветка перехода собирает НОВЫЙ
+    ответ со статусом 204; cookie, навешенная на отдельно собранный редирект,
+    не уехала бы никуда — и отказ был бы МОЛЧАЛИВЫМ: браузер ушёл бы по
+    заголовку, а администратор остался бы под чужой личностью. Тест,
+    проверяющий ТОЛЬКО заголовок, остался бы при этом зелёным, поэтому пара
+    написана ТРОЙНОЙ (`tests/test_pages/test_impersonation.py`): заголовок,
+    cookie без признака действующего лица и ФАКТИЧЕСКИ открывшаяся админка.
     """
     if not is_same_origin(request):
         # Возврат — изменяющая операция (перевыпуск токена и перезапись
         # cookie), и гард у неё тот же, что у остальных изменяющих форм.
+        #
+        # ⚠️ ГОЛЫЙ 403 ОСТАЁТСЯ И ПОСЛЕ ПЕРЕВОДА НА СЛОЙ ОТВЕТА — ЭТО
+        # ИМЕНОВАННОЕ ИЗЪЯТИЕ, А НЕ НЕДОДЕЛКА (D-01 Фазы 14, решение владельца
+        # 2026-09-22; продление D-08 Фазы 11). Из интерфейса на пути htmx этот
+        # отказ недостижим: своя страница шлёт `same-origin`. Цена названа:
+        # при редком сбое заголовков у прокси человек увидит общую плашку
+        # «Действие не выполнено», а поддельная форма стороннего сайта
+        # получает ровно тот же 403, что и до фазы. Выход объявлен записью
+        # `OWN_RESPONSE_EXITS` (`tests/test_pages/test_htmx_gates.py`) в
+        # состоянии `DECISION_OWNER_D01_F14`.
         return Response(status_code=403)
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
@@ -671,7 +709,11 @@ async def stop_impersonation(
     if admin_id is None:
         # Действующего лица нет — возвращаться неоткуда. Человек уходит туда
         # же, откуда пришёл, и НИ ОДНОГО токена ему не выдаётся.
-        return RedirectResponse(url="/dashboard", status_code=302)
+        #
+        # Приземление — в ОСНОВНОМ шелле, поэтому уход идёт заголовком
+        # частичного перехода; путь деградации — прежнее перенаправление 302 на
+        # тот же адрес (Фаза 14, план 14-06, D-12).
+        return await respond(request, redirect="/dashboard")
 
     admin = await db.get(User, admin_id)
     if admin is None or admin.is_blocked:
@@ -694,11 +736,16 @@ async def stop_impersonation(
         # здесь заперло бы в чужой учётной записи ровно того, кого этот
         # обработчик обязан из неё вывести, — довод, уже выписанный в
         # докстринге выше.
-        response = RedirectResponse(url="/login", status_code=302)
+        #
+        # ⚠️ ЕДИНСТВЕННАЯ ВЕТКА ВОЗВРАТА, УХОДЯЩАЯ ПОЛНОЙ ЗАГРУЗКОЙ (Фаза 14,
+        # план 14-06, D-12): экран входа живёт во ВТОРОМ шелле, и подменённым
+        # содержимым `body` его не собрать. Cookie снимается на ВОЗВРАЩЁННОМ
+        # объекте — тем же набором атрибутов, каким она поставлена.
+        response = await redirect_internal(request, redirect="/login")
         clear_session_cookie(response, settings)
         return response
 
-    response = RedirectResponse(url="/admin", status_code=302)
+    response = await respond(request, redirect="/admin")
     set_session_cookie(
         response, create_access_token(admin.id, settings.secret_key), settings
     )
