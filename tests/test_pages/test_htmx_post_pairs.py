@@ -16,6 +16,7 @@
 | `FRAGMENT` — действие оставляет экран | 200, фрагмент несёт свою метку, `<!DOCTYPE` нет |
 | `LOCATION` — действие уводит с экрана | 204, `HX-Location` посимвольно равен адресу 302, тела нет |
 | `EXTERNAL` — переход на чужой сайт | 204, `HX-Redirect`, тела нет (первый случай — план 11-15) |
+| `FULL_LOAD` — полная перезагрузка на свой адрес | 204, `HX-Redirect` посимвольно равен адресу 302, тела нет (первый случай — вход, план 14-01) |
 
 Буквальное «с заголовком → 200 для всех» отвергнуто: оно противоречит
 отгруженной ветке перехода Фазы 8.
@@ -70,6 +71,8 @@ from app.models.ad import Ad
 from app.models.payment import Payment
 from app.models.schedule import Schedule
 from app.models.subscription import Subscription
+from app.models.user import User
+from app.services.auth_service import hash_password
 from app.pages import notices
 from app.pages.identifiers import ID_MAX
 from tests.test_pages.test_account_groups import (
@@ -107,6 +110,14 @@ from tests.test_pages.test_htmx_gates import (
 FRAGMENT = "ожидается 200 и фрагмент"
 LOCATION = "ожидается 204 и заголовок перехода"
 EXTERNAL = "ожидается 204 и заголовок внешнего перехода"
+# Фаза 14, план 14-01 (D-10): успех, меняющий личность или шелл, уходит полной
+# загрузкой на СВОЙ адрес — 204 и заголовок полной перезагрузки, а не частичного
+# перехода.
+FULL_LOAD = "ожидается 204 и заголовок полной перезагрузки"
+
+# Личность случая, который приходит БЕЗ сессии (Фаза 14, план 14-01): форма входа
+# открыта анониму, и вход под чужой учёткой до запроса проверял бы не тот путь.
+ANONYMOUS = "anonymous"
 
 
 @dataclass(frozen=True)
@@ -136,6 +147,10 @@ class _PairCase:
     transport: str
     fragment_mark: str | None = None
     resolve_after: Callable[[AsyncSession, _Arranged], Awaitable[dict]] | None = None
+    # ⚠️ Фаза 14, план 14-01 (D-10, Landmine CONTEXT): случай, чей успех ставит
+    # cookie сессии, утверждает её на ОБЕИХ половинах — заголовок перехода без
+    # cookie означал бы, что вход молча не состоялся.
+    sets_session_cookie: bool = False
 
     @property
     def handler(self) -> str:
@@ -1089,6 +1104,40 @@ async def _arrange_tg_refresh_qr_without_session(
 
 
 # =============================================================================
+# Вход страничной формой (Фаза 14, план 14-01)
+# =============================================================================
+
+AUTH_LOGIN_SUBMIT = "app/pages/auth.py::login_submit"
+PAIR_LOGIN_EMAIL = "pair-login@test.com"
+PAIR_LOGIN_PASSWORD = "pair-login-pass-123"
+
+
+async def _arrange_login_success(client, db, settings, identity) -> _Arranged:
+    """Верный пароль: пользователь заводится ORM один раз на обе половины.
+
+    Кабинет после входа здесь не открывается — предмет пары только форма
+    ответа и cookie, — поэтому пробный срок, который дала бы прикладная
+    регистрация, не нужен.
+    """
+    existing = (
+        await db.execute(select(User).where(User.email == PAIR_LOGIN_EMAIL))
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(
+            User(
+                email=PAIR_LOGIN_EMAIL,
+                password_hash=hash_password(PAIR_LOGIN_PASSWORD),
+                name="Пара входа",
+            )
+        )
+        await db.commit()
+    return _Arranged(
+        url="/login",
+        data={"email": PAIR_LOGIN_EMAIL, "password": PAIR_LOGIN_PASSWORD},
+    )
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -1689,6 +1738,23 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/login",
         transport=LOCATION,
     ),
+    # Фаза 14, план 14-01. Вход страничной формой: ПЕРВЫЙ случай ветки FULL_LOAD.
+    # Успех меняет личность и уходит полной загрузкой кабинета с cookie на том же
+    # ответе (D-10).
+    # ⚠️ ВЕТКА 422 (неверная пара, заблокированный) В РЕЕСТР НЕ ВХОДИТ, И ЭТО
+    # ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: она отвечает 422 на обоих транспортах, а
+    # половины пары ждут 302 и 204. Обе её стороны утверждены поимённо в
+    # `tests/test_pages/test_auth_transport.py` — по той же границе, что записана
+    # у случаев профиля и мастера MAX.
+    _PairCase(
+        key=AUTH_LOGIN_SUBMIT,
+        name="вход — верный пароль",
+        identity=ANONYMOUS,
+        arrange=_arrange_login_success,
+        landing="/dashboard",
+        transport=FULL_LOAD,
+        sets_session_cookie=True,
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -1800,11 +1866,28 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   `tests/test_routes/test_tg_user_auth.py`.
 #   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 13, план 13-03): `случаев пар в реестре 58,
 #   объявлено 56`.
-POST_PAIR_CASES_DECLARED = 58
+#   58 → 59, Фаза 14, план 14-01: успех ВХОДА страничной формой — первый случай
+#   ветки FULL_LOAD (204 и заголовок полной перезагрузки на кабинет) и первый
+#   случай, утверждающий cookie сессии на обеих половинах (D-10); личность —
+#   аноним.
+#   ⚠️ ВЕТКА 422 ВХОДА В РЕЕСТР НЕ ВХОДИТ, И ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК:
+#   обе её стороны утверждены поимённо в `tests/test_pages/test_auth_transport.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-01): `случаев пар в реестре 59,
+#   объявлено 58` / `assert 59 == 58`.
+POST_PAIR_CASES_DECLARED = 59
 
 
 def _case_id(case: _PairCase) -> str:
     return f"{case.handler}-{case.name}"
+
+
+def _sets_session_cookie(response) -> bool:
+    """Выставил ли ответ cookie сессии с НЕПУСТЫМ значением (Фаза 14, план 14-01)."""
+    for raw in response.headers.get_list("set-cookie"):
+        name, _, rest = raw.partition("=")
+        if name.strip() == "access_token" and rest.partition(";")[0].strip():
+            return True
+    return False
 
 
 async def _landing_args(
@@ -1832,7 +1915,10 @@ async def test_every_pair_case_answers_both_transports(
     case: _PairCase, client: AsyncClient, db_session: AsyncSession, test_settings
 ):
     """Без признака — 302 на адрес посимвольно; с признаком — форма по ветке."""
-    await _identify(client, case.identity, test_settings)
+    if case.identity == ANONYMOUS:
+        client.cookies.clear()
+    else:
+        await _identify(client, case.identity, test_settings)
 
     degraded = await case.arrange(client, db_session, test_settings, case.identity)
     with degraded.context():
@@ -1849,7 +1935,13 @@ async def test_every_pair_case_answers_both_transports(
         f"{case.name}: адрес деградации {without.headers['location']!r} не совпал "
         f"с ожидаемым {expected!r} ПОСИМВОЛЬНО"
     )
+    if case.sets_session_cookie:
+        assert _sets_session_cookie(without), (
+            f"{case.name}: путь деградации не выдал cookie сессии"
+        )
 
+    if case.identity == ANONYMOUS:
+        client.cookies.clear()
     arranged = await case.arrange(client, db_session, test_settings, case.identity)
     with arranged.context():
         with_layer = await client.post(
@@ -1885,6 +1977,30 @@ async def test_every_pair_case_answers_both_transports(
             f"не совпал с адресом деградации {expected!r}"
         )
         assert with_layer.content == b"", f"{case.name}: у ответа 204 появилось тело"
+        return
+
+    if case.transport is FULL_LOAD:
+        # Фаза 14, план 14-01 (D-10). Утверждается САМ заголовок и cookie на ЭТОМ
+        # ответе: заголовок без cookie — вход, молча не состоявшийся (Landmine
+        # CONTEXT), а 204 без заголовка — экран, который никуда не ушёл.
+        assert with_layer.status_code == 204, (
+            f"{case.name}: слою письма ответили {with_layer.status_code} вместо 204"
+        )
+        assert with_layer.headers.get("HX-Redirect") == expected, (
+            f"{case.name}: заголовок полной перезагрузки "
+            f"{with_layer.headers.get('HX-Redirect')!r} не совпал с адресом "
+            f"деградации {expected!r} ПОСИМВОЛЬНО"
+        )
+        assert "HX-Location" not in with_layer.headers, (
+            f"{case.name}: ответ несёт заголовок частичного перехода — смена "
+            "личности уехала бы XHR-подменой"
+        )
+        assert with_layer.content == b"", f"{case.name}: у ответа 204 появилось тело"
+        if case.sets_session_cookie:
+            assert _sets_session_cookie(with_layer), (
+                f"{case.name}: cookie сессии не стоит на ответе 204 — браузер уйдёт "
+                "по заголовку, а вход не состоится"
+            )
         return
 
     assert case.transport is EXTERNAL, f"{case.name}: неизвестная ветка {case.transport!r}"
@@ -2410,6 +2526,11 @@ UNATTRIBUTED_302_ASSERTIONS: dict[str, _Unattributed] = {
         (),
         "не HTTP-запрос: прямой вызов `redirect_external` — утверждение о слое ответа",
     ),
+    # Фаза 14, план 14-01.
+    "tests/test_pages/test_htmx_response_layer.py::test_an_internal_full_load_answers_302_without_htmx_and_204_with_the_redirect_header": _Unattributed(
+        (),
+        "не HTTP-запрос: прямой вызов `redirect_internal` — утверждение о слое ответа",
+    ),
     "tests/test_pages/test_notices_surface.py::test_without_the_htmx_flag_the_fragment_is_never_built": _Unattributed(
         (),
         "не HTTP-запрос: прямой вызов `respond` — утверждение о приклейке уведомления",
@@ -2611,7 +2732,22 @@ def _number_complaints(
 # аргументом `.post(…)`, как у записей планов 13-01 и 13-02.
 # ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
 # переведённых обработчиках 167, объявлено 165`.
-PAIRED_302_ASSERTIONS_DECLARED = 167
+#
+# 167 → 176, Фаза 14, план 14-01: вход страничной формой стал переведённым
+# (выход ошибки поля и выход полной перезагрузки, узнавание по семейству выходов
+# слоя — RESEARCH Находка 2), и девять утверждений 302 о нём вошли во
+# вселенную правила: восемь прежних — `test_blocked_user.py`,
+# `test_confirm_delete_transport.py` (помощник входа), два в
+# `test_cookie_flags.py`, два в `test_impersonation.py`, `test_password_reset.py`,
+# `tests/test_routes/test_tg_user_auth.py` — и одно новое, половина деградации
+# успеха в `tests/test_pages/test_auth_transport.py`. Прогноз планирования
+# «+8 прежних плюс новые» совпал с замером. Пара у всех — случай реестра выше.
+# Утверждение 302 прямого вызова выхода полной перезагрузки
+# (`test_htmx_response_layer.py`) в счёт не входит — оно названо в
+# `UNATTRIBUTED_302_ASSERTIONS` как утверждение о слое, а не о маршруте.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 176, объявлено 167`.
+PAIRED_302_ASSERTIONS_DECLARED = 176
 
 
 def _routes(settings) -> tuple[tuple[str, str], ...]:
@@ -2740,10 +2876,19 @@ async def test_synthetic_converted_toggle(client):
 async def test_control_a_get_or_unconverted_302_stays_out_of_the_count(
     tmp_path, test_settings
 ):
-    """GET и обработчик из `NOT_YET_CONVERTED` в счёт не входят; переведённый — входит."""
+    """GET и обработчик из отставания в счёт не входят; переведённый — входит.
+
+    ⚠️ ЛЕТОПИСЬ, Фаза 14, план 14-01. Прежняя редакция строила контроль на ЖИВОМ
+    отставании: вход стоял в `NOT_YET_CONVERTED` и был непереведённым членом
+    вселенной. Вход переведён, живое отставание этой фазой доходит до нуля
+    (D-14), и контроль на живом члене стал бы вакуумным — поэтому отставание
+    здесь СИНТЕТИЧЕСКОЕ: вход объявлен непереведённым параметром, а не
+    перечнем, и синтетический исходник прежний.
+    """
     root = _synthetic_root(tmp_path, "test_synthetic_out.py", SYNTHETIC_OUT_OF_COUNT)
     traversal = _post_302_assertions(root, _routes(test_settings))
-    converted = _converted(_pages_sources())
+    not_yet = frozenset({AUTH_LOGIN_SUBMIT})
+    converted = _converted(_pages_sources()) - not_yet
 
     assert traversal.visited == 4, f"обход встретил {traversal.visited} сравнений из 4"
     assert [record.handler for record in traversal.records] == [
@@ -2751,12 +2896,12 @@ async def test_control_a_get_or_unconverted_302_stays_out_of_the_count(
         SCHEDULES_TOGGLE,
     ], f"POST-записи обхода: {traversal.records}"
 
-    counted = _in_universe(traversal, converted, NOT_YET_CONVERTED)
+    counted = _in_universe(traversal, converted, not_yet)
     assert [record.handler for record in counted] == [SCHEDULES_TOGGLE], (
         f"в счёт вошло не ровно утверждение о переведённом тумблере: {counted}"
     )
     assert not _in_universe(
-        traversal, converted, NOT_YET_CONVERTED | {SCHEDULES_TOGGLE}
+        traversal, converted, not_yet | {SCHEDULES_TOGGLE}
     ), "обработчик, возвращённый в отставание, остался в счёте"
 
 

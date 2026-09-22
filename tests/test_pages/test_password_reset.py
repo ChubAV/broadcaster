@@ -179,7 +179,10 @@ async def test_complete_password_reset(
         "/login",
         data={"email": "reset@test.com", "password": "oldpassword"},
     )
-    assert response.status_code == 200
+    # Фаза 14, план 14-01, D-03: ошибка входа — 422, а не 200. Человек остаётся
+    # на экране входа, и код один на оба транспорта; прежнее 200 было верно для
+    # дерева, где ошибка отвечала готовой страницей.
+    assert response.status_code == 422
     assert "Неверный" in response.text
 
 
