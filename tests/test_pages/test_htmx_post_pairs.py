@@ -1198,6 +1198,71 @@ async def _arrange_register_resend_stale_link(client, db, settings, identity) ->
 
 
 # =============================================================================
+# Регистрация: подтверждение кода и завершение (Фаза 14, план 14-03)
+# =============================================================================
+
+AUTH_REGISTER_VERIFY = "app/pages/auth.py::register_verify"
+AUTH_REGISTER_COMPLETE = "app/pages/auth.py::register_complete"
+PAIR_REGISTER_PASSWORD = "pair-register-pass-123"
+
+
+async def _arrange_register_verify_right_code(client, db, settings, identity) -> _Arranged:
+    """Верный код: живой код и токен шага на СВОЙ адрес каждой половины.
+
+    Верный код помечается подтверждённым, и вторая половина на том же адресе
+    не нашла бы живого кода — то есть утверждала бы исход «код истёк».
+    """
+    email = _register_pair_email()
+    await _seed_registration_code(db, email, age_seconds=5)
+    token = create_verification_token(email, settings.secret_key)
+    return _Arranged(url="/register/verify", data={"token": token, "code": "123456"})
+
+
+async def _arrange_register_verify_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url="/register/verify", data={"token": "x", "code": "123456"})
+
+
+async def _arrange_register_complete_success(client, db, settings, identity) -> _Arranged:
+    """Успех завершения: подтверждённый токен на СВОЙ адрес каждой половины.
+
+    Первая половина заводит пользователя, и вторая на том же адресе попала бы на
+    занятый адрес — то есть утверждала бы другой исход, чем назван случай.
+    """
+    token = create_verification_token(
+        _register_pair_email(), settings.secret_key, verified=True
+    )
+    return _Arranged(
+        url="/register/complete",
+        data={"token": token, "name": "Пара регистрации", "password": PAIR_REGISTER_PASSWORD},
+    )
+
+
+async def _arrange_register_complete_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(
+        url="/register/complete",
+        data={"token": "x", "name": "Пара регистрации", "password": PAIR_REGISTER_PASSWORD},
+    )
+
+
+async def _arrange_register_complete_taken(client, db, settings, identity) -> _Arranged:
+    """Адрес занят к завершению: пользователь заведён ORM между шагами."""
+    email = _register_pair_email()
+    db.add(
+        User(
+            email=email,
+            password_hash=hash_password(PAIR_REGISTER_PASSWORD),
+            name="Успевший раньше",
+        )
+    )
+    await db.commit()
+    token = create_verification_token(email, settings.secret_key, verified=True)
+    return _Arranged(
+        url="/register/complete",
+        data={"token": token, "name": "Пара регистрации", "password": PAIR_REGISTER_PASSWORD},
+    )
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -1857,6 +1922,59 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         transport=SCREEN,
         fragment_mark='action="/register/send-code"',
     ),
+    # Фаза 14, план 14-03. Подтверждение кода и завершение регистрации. Смена
+    # экрана — ветка SCREEN (экран имени и пароля; возврат на начало при
+    # устаревшей ссылке и при адресе, занятом к завершению, — 200 по критерию
+    # D-03, RESEARCH Open Question 3). Успех завершения — ВТОРОЙ случай ветки
+    # FULL_LOAD: полная загрузка кабинета с cookie на том же ответе (D-10).
+    # ⚠️ ВЕТКА 422 (кода нет, истёк, исчерпан, неверный; короткий пароль) В
+    # РЕЕСТР НЕ ВХОДИТ, И ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: обе её стороны
+    # утверждены поимённо в `tests/test_pages/test_auth_transport.py`.
+    _PairCase(
+        key=AUTH_REGISTER_VERIFY,
+        name="подтверждение кода регистрации — верный код",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_verify_right_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/register/complete"',
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_VERIFY,
+        name="подтверждение кода регистрации — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_verify_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/register/send-code"',
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_COMPLETE,
+        name="завершение регистрации — успех",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_complete_success,
+        landing="/dashboard",
+        transport=FULL_LOAD,
+        sets_session_cookie=True,
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_COMPLETE,
+        name="завершение регистрации — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_complete_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/register/send-code"',
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_COMPLETE,
+        name="завершение регистрации — адрес занят",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_complete_taken,
+        landing="",
+        transport=SCREEN,
+        fragment_mark="Этот email уже зарегистрирован",
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -1985,7 +2103,20 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   `tests/test_pages/test_auth_transport.py`.
 #   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-02): `случаев пар в реестре 63,
 #   объявлено 59` / `assert 63 == 59`.
-POST_PAIR_CASES_DECLARED = 63
+#   63 → 68, Фаза 14, план 14-03: пять исходов РЕГИСТРАЦИИ. Подтверждение кода —
+#   верный код (экран имени и пароля) и устаревшая ссылка (экран начала);
+#   завершение — успех (ВТОРОЙ случай ветки FULL_LOAD: 204 и заголовок полной
+#   перезагрузки на кабинет, cookie на обеих половинах), устаревшая ссылка и
+#   адрес, занятый к завершению (оба — экран начала, 200 по критерию D-03).
+#   Личность — аноним. Посевы верного кода и успеха завершения берут СВОЙ адрес
+#   на каждую половину: вторая на том же адресе нашла бы код подтверждённым или
+#   адрес занятым.
+#   ⚠️ ВЕТКА 422 (код; короткий пароль) В РЕЕСТР НЕ ВХОДИТ, И ЭТО ГРАНИЦА
+#   ОБХОДА, А НЕ ПРОПУСК: обе её стороны утверждены поимённо в
+#   `tests/test_pages/test_auth_transport.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-03): `случаев пар в реестре 68,
+#   объявлено 63` / `assert 68 == 63`.
+POST_PAIR_CASES_DECLARED = 68
 
 
 def _case_id(case: _PairCase) -> str:
@@ -2897,7 +3028,20 @@ def _number_complaints(
 # пар перенесено внутрь ветвей, ждущих перенаправления, — прогон правила числа
 # после переноса и перевода зелен на прежнем 176
 # (`test_the_number_of_paired_302_assertions_is_the_declared_one` — passed).
-PAIRED_302_ASSERTIONS_DECLARED = 176
+#
+# 176 → 181, Фаза 14, план 14-03: завершение регистрации стало переведённым
+# (выход ошибки поля, выход смены экрана и выход полной перезагрузки) и получило
+# пары, и пять утверждений 302 о нём вошли во вселенную правила: четыре прежних —
+# `test_access_lifecycle.py` (помощник `_register_through_the_pages`),
+# `test_cookie_flags.py`, `test_registration.py`
+# (`test_complete_registration_creates_user`), `test_trial.py` — и одно новое,
+# половина деградации успеха в `tests/test_pages/test_auth_transport.py`.
+# Прогноз планирования «+4 прежних плюс новые» совпал с замером. Подтверждение
+# кода исхода 302 не имеет (смена экрана — 200, ошибка — 422) и числа не двигает.
+# Пара у всех — случай реестра выше.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 181, объявлено 176`.
+PAIRED_302_ASSERTIONS_DECLARED = 181
 
 
 def _routes(settings) -> tuple[tuple[str, str], ...]:

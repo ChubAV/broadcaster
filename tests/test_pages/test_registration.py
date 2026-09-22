@@ -117,7 +117,9 @@ async def test_verify_code_wrong(
         "/register/verify",
         data={"token": token, "code": "000000"},
     )
-    assert response.status_code == 200
+    # Фаза 14, план 14-03, D-03: неверный код оставляет человека на ТОМ ЖЕ
+    # экране кода — 422 на обоих транспортах (было 200). Проверка текста прежняя.
+    assert response.status_code == 422
     html = response.text
     assert "Неверный код" in html
 
