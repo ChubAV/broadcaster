@@ -1,5 +1,6 @@
 import secrets
 import structlog
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request, Response
@@ -24,6 +25,7 @@ from app.services.email_service import send_verification_email, send_password_re
 from app.services.subscription_service import start_trial
 from app.pages import notices
 from app.pages.common import is_same_origin, templates
+from app.pages.htmx import redirect_internal, respond_field_error
 
 logger = structlog.get_logger(__name__)
 
@@ -107,6 +109,83 @@ def clear_session_cookie(response: Response, settings: Settings) -> None:
     response.delete_cookie(key=SESSION_COOKIE_NAME, **_session_cookie_attrs(settings))
 
 
+# ⚠️ ОТВЕТ-ФРАГМЕНТ ЭКРАНА — ОДИН ШАБЛОН НА ВСЕ ЭКРАНЫ (Фаза 14, D-06, D-07).
+# Он несёт `<title>` экрана верхним узлом и включает разметку экрана — ту же,
+# что включает страница. Страницы этот шаблон не используют.
+AUTH_STEP_RESPONSE_TEMPLATE = "auth/includes/step_response.html"
+
+
+@dataclass(frozen=True)
+class AuthScreen:
+    """Экран второго шелла: страница, включаемая разметка и заголовок вкладки.
+
+    ⚠️ ЗАГОЛОВОК ФРАГМЕНТА — ЭТА ЗАПИСЬ, А ЗАГОЛОВОК СТРАНИЦЫ — БЛОК `title`
+    ЕЁ ШАБЛОНА (D-07). Двум записям одного текста негде разойтись незаметно:
+    их сличает правило суиты (`tests/test_pages/test_auth_transport.py`).
+    """
+
+    page: str
+    step: str
+    title: str
+
+
+# Реестр переведённых экранов. Прочие экраны дописывают планы 14-02…14-05.
+AUTH_SCREENS: dict[str, AuthScreen] = {
+    "login": AuthScreen(
+        page="auth/login.html",
+        step="auth/includes/login_step.html",
+        title="Вход — Broadcaster",
+    ),
+}
+
+
+def _screen_markup(screen: str, **context) -> str:
+    """Ответ-фрагмент экрана, собранный ОКРУЖЕНИЕМ ШАБЛОНОВ (форма `_max_step_markup`).
+
+    ⚠️ ОДНА РАЗМЕТКА НА СТРАНИЦУ И ФРАГМЕНТ (D-06): обёртка включает тот же
+    шаблон экрана, что и страница, — второй копии разметки нет, и разойтись
+    им негде. `<title>` берётся из одной записи реестра (D-07).
+
+    ⚠️ ЭКРАНИРОВАНИЕ — ОКРУЖЕНИЯ, А НЕ ЭТОГО ПОМОЩНИКА. Эхо введённого
+    уезжает в шаблон параметром; ни фильтра безопасной разметки, ни обёртки
+    готовой разметки на этом пути нет.
+    """
+    entry = AUTH_SCREENS[screen]
+    return templates.env.get_template(AUTH_STEP_RESPONSE_TEMPLATE).render(
+        screen_title=entry.title, screen_template=entry.step, **context
+    )
+
+
+def _screen_builders(request: Request, screen: str, **context):
+    """Пара сборщиков экрана — страница и фрагмент — для выходов слоя ответа.
+
+    Страничный отдаёт шаблон страницы тем же ответом-шаблоном, каким отвечает
+    её GET; фрагментный — обёртку ответа с `<title>` верхним узлом. Какой из
+    двух позвать, решает слой ответа по транспорту.
+
+    ⚠️ ПАРОЛЬ В КОНТЕКСТ ЭКРАНА НЕ ПЕРЕДАЁТСЯ НИКОГДА (D-04). Шаблон, получивший
+    пароль, мог бы однажды его напечатать, и это обнаружилось бы в чужом
+    ответе; отказ стоит здесь, у единственного входа в экран. Текст отказа
+    значения не подставляет — иначе пароль ушёл бы в журнал трассировкой.
+    """
+    if "password" in context:
+        raise ValueError(
+            "пароль не передаётся в контекст экрана авторизации: поле пароля "
+            "приходит пустым всегда (D-04)"
+        )
+    entry = AUTH_SCREENS[screen]
+
+    async def _page():
+        """Страница экрана — путь деградации."""
+        return templates.TemplateResponse(entry.page, {"request": request, **context})
+
+    async def _fragment():
+        """Ответ-фрагмент экрана — содержимое постоянного якоря шага."""
+        return HTMLResponse(_screen_markup(screen, **context))
+
+    return _page, _fragment
+
+
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     return templates.TemplateResponse("auth/login.html", {"request": request})
@@ -120,24 +199,38 @@ async def login_submit(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Вход страничной формой — на выходах слоя ответа (Фаза 14, план 14-01).
+
+    ⚠️ ОШИБКА — 422 НА ОБОИХ ТРАНСПОРТАХ С ЭХОМ EMAIL (D-03, D-04). Человек
+    остаётся на экране входа со своим email; пароль не возвращается никогда —
+    поле приходит пустым. Отказ заблокированному — тот же 422 со своими
+    словами и без cookie (D-05).
+
+    ⚠️ УСПЕХ — ПОЛНАЯ ЗАГРУЗКА (D-10): без признака htmx 302, с ним 204 и
+    заголовок полной перезагрузки. ПОРЯДОК НЕСУЩИЙ: сначала ответ слоя, потом
+    cookie на ТОТ ЖЕ объект — cookie на отдельно собранном ответе не уехала бы
+    никуда, и вход молча не состоялся бы.
+
+    Решения обработчика прежние (D-15): тексты, порядок «пароль → блокировка →
+    cookie» и набор атрибутов cookie не меняются.
+    """
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
+    error = None
     if not user or not verify_password(password, user.password_hash):
-        return templates.TemplateResponse(
-            "auth/login.html", {"request": request, "error": "Неверный email или пароль"}
-        )
+        error = "Неверный email или пароль"
     # Отказ стоит ДО выдачи cookie — первый из трёх путей блокировки (D-30).
     # До этой правки заблокированный входил СТРАНИЧНОЙ формой как ни в чём не
     # бывало: проверка `is_blocked` стояла только в JSON-маршруте входа, а
     # человек ходит сюда.
-    if user.is_blocked:
+    elif user.is_blocked:
         logger.warning("blocked_login_refused", user_id=user.id)
-        return templates.TemplateResponse(
-            "auth/login.html",
-            {"request": request, "error": BLOCKED_LOGIN_ERROR},
-        )
+        error = BLOCKED_LOGIN_ERROR
+    if error is not None:
+        page, fragment = _screen_builders(request, "login", error=error, email=email)
+        return await respond_field_error(request, page=page, fragment=fragment)
     token = create_access_token(user.id, settings.secret_key)
-    response = RedirectResponse(url="/dashboard", status_code=302)
+    response = await redirect_internal(request, redirect="/dashboard")
     set_session_cookie(response, token, settings)
     return response
 

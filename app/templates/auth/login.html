@@ -1,30 +1,3 @@
 {% extends "auth_base.html" %}
-{% from "components/field.html" import field %}
-{% from "components/button.html" import button %}
-{% from "components/alert.html" import alert %}
 {% block title %}Вход — Broadcaster{% endblock %}
-{% block auth_subtitle %}Войдите в аккаунт{% endblock %}
-{% block content %}
-{#- ⚠️ ЗДЕСЬ ОСТАЛАСЬ РОВНО ОДНА ПЛАШКА, И ГРАНИЦА МЕЖДУ ДВУМЯ ПРЕДМЕТАМИ
-   ПРОВЕДЕНА НАМЕРЕННО. `error` — ошибка ЗАПОЛНЕНИЯ формы: её рисует ОТВЕТ НА
-   POST, она относится к полям, которые человек только что набрал, и остаётся
-   у формы (FORM-08). Исход смены пароля приезжал сюда РЕДИРЕКТОМ, то есть был
-   исходом действия, а не ошибкой поля, — и уехал в общую область уведомления
-   шелла вместе с остальными одиннадцатью.
-
-   Вместе с ним снято и ЧТЕНИЕ ПАРАМЕТРА АДРЕСА ПРЯМО В РАЗМЕТКЕ: единственное
-   такое место на проекте. Разметка точкой принуждения не является — она только
-   рисует, — а решать по параметру, что показать человеку, обязан сервер. #}
-{% if error %}{{ alert(error) }}{% endif %}
-
-<form class="auth-form" method="post" action="/login">
-  {{ field(name="email", label='Email', type='email', required=true, autocomplete='email', placeholder='you@example.com') }}
-  {{ field(name="password", label='Пароль', type='password', required=true, autocomplete='current-password', placeholder='••••••••') }}
-  <div class="auth-form__row">
-    <a href="/forgot-password">Забыли пароль?</a>
-  </div>
-  {{ button('Войти', extra_class='btn--block') }}
-</form>
-
-<p class="auth-foot">Нет аккаунта? <a href="/register">Зарегистрироваться</a></p>
-{% endblock %}
+{% block content %}{% include "auth/includes/login_step.html" %}{% endblock %}
