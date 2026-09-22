@@ -5,10 +5,11 @@ milestone_name: HTMX-first
 current_phase: 14
 current_phase_name: Авторизация на htmx
 status: "Phase 13 shipped — PR #52"
-stopped_at: Phase 13 complete, ready to plan Phase 14
-last_updated: "2026-09-21T20:15:11.039Z"
+stopped_at: Phase 14 context gathered
+last_updated: "2026-09-22T07:53:27.378Z"
 last_activity: 2026-09-21
-state_head: a8152440ad0c5ac5b97f43115c9aa84346130b2a
+last_activity_desc: "Phase 13 shipped — PR #52"
+state_head: ca93bdf0e7b35bedac5c04b9881b1ea7270e7bc1
 progress:
   total_phases: 9
   completed_phases: 7
@@ -30,7 +31,9 @@ See: .planning/PROJECT.md (updated 2026-09-21)
 
 **Нумерация фаз вехи v2.1 — 7…15.** Веха v2.0 закончилась Фазой 6, и отсчёт продолжается, а не начинается заново. Это отличие от v2.0, которая сознательно начала с 1 (фазы v1.0 были ретроспективной документацией уже отгруженной системы, а не выполненными GSD-фазами).
 
-**Следующий вход:** `/gsd-ship 13`, затем `/gsd-discuss-phase 14`. (Поколение D-30/D-32: редакция
+**Следующий вход:** `/gsd-plan-phase 14` (с исследованием — ROADMAP требует его для Фазы 14; контекст
+собран 2026-09-22, `14-CONTEXT.md`). (Поколение D-30/D-32: редакция «`/gsd-ship 13`, затем
+`/gsd-discuss-phase 14`» была верна до сбора контекста Фазы 14 2026-09-22; редакция
 `/gsd-execute-phase 13` была верна до закрытия Фазы 13 2026-09-21; редакция `/gsd-plan-phase 13` была
 верна до планирования Фазы 13 2026-09-21 — 6 планов в 5 волнах, проверка планов пройдена со второй
 итерации; редакция `/gsd-discuss-phase 13` — до сбора контекста Фазы 13 2026-09-21, а редакция
@@ -692,9 +695,9 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-21T19:20:00Z
-Stopped at: Phase 13 complete and CLOSED (обход 5/5, безопасность, Nyquist, вердикт `passed`, переход выполнен); ready to plan Phase 14
-Resume file: None
+Last session: 2026-09-22T07:53:26.757Z
+Stopped at: Phase 14 context gathered
+Resume file: .planning/phases/14-avtorizatsiya-na-htmx/14-CONTEXT.md
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
 
