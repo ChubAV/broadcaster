@@ -1250,6 +1250,78 @@ async def _arrange_forgot_resend_stale_link(client, db, settings, identity) -> _
 
 
 # =============================================================================
+# Восстановление пароля: подтверждение кода и новый пароль (Фаза 14, план 14-05)
+# =============================================================================
+
+AUTH_FORGOT_VERIFY = "app/pages/auth.py::forgot_password_verify"
+AUTH_FORGOT_RESET = "app/pages/auth.py::forgot_password_reset"
+PAIR_FORGOT_NEW_PASSWORD = "pair-forgot-new-456"
+
+
+async def _arrange_forgot_verify_right_code(client, db, settings, identity) -> _Arranged:
+    """Верный код: живой код и токен восстановления на СВОЙ адрес каждой половины.
+
+    Верный код помечается подтверждённым, и вторая половина на том же адресе
+    не нашла бы живого кода — то есть утверждала бы исход «код истёк».
+    """
+    email = _forgot_pair_email()
+    now = datetime.now(timezone.utc)
+    db.add(
+        EmailVerificationCode(
+            email=email,
+            code="123456",
+            purpose="password_reset",
+            expires_at=now + timedelta(minutes=10),
+        )
+    )
+    await db.commit()
+    token = create_verification_token(email, settings.secret_key, purpose="password_reset")
+    return _Arranged(url="/forgot-password/verify", data={"token": token, "code": "123456"})
+
+
+async def _arrange_forgot_verify_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url="/forgot-password/verify", data={"token": "x", "code": "123456"})
+
+
+async def _arrange_forgot_reset_success(client, db, settings, identity) -> _Arranged:
+    """Успех нового пароля: пользователь и подтверждённый токен на СВОЙ адрес каждой половины."""
+    email = _forgot_pair_email()
+    db.add(
+        User(
+            email=email,
+            password_hash=hash_password(PAIR_FORGOT_PASSWORD),
+            name="Пара восстановления",
+        )
+    )
+    await db.commit()
+    token = create_verification_token(
+        email, settings.secret_key, verified=True, purpose="password_reset"
+    )
+    return _Arranged(
+        url="/forgot-password/reset",
+        data={"token": token, "password": PAIR_FORGOT_NEW_PASSWORD},
+    )
+
+
+async def _arrange_forgot_reset_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(
+        url="/forgot-password/reset",
+        data={"token": "x", "password": PAIR_FORGOT_NEW_PASSWORD},
+    )
+
+
+async def _arrange_forgot_reset_vanished_user(client, db, settings, identity) -> _Arranged:
+    """Подтверждённый токен на адрес, пользователя у которого нет."""
+    token = create_verification_token(
+        _forgot_pair_email(), settings.secret_key, verified=True, purpose="password_reset"
+    )
+    return _Arranged(
+        url="/forgot-password/reset",
+        data={"token": token, "password": PAIR_FORGOT_NEW_PASSWORD},
+    )
+
+
+# =============================================================================
 # Регистрация: подтверждение кода и завершение (Фаза 14, план 14-03)
 # =============================================================================
 
@@ -2065,6 +2137,59 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         transport=SCREEN,
         fragment_mark='action="/forgot-password/send-code"',
     ),
+    # Фаза 14, план 14-05. Подтверждение кода восстановления и новый пароль.
+    # Смена экрана — ветка SCREEN (экран нового пароля; возврат на начало
+    # восстановления при устаревшей ссылке и при исчезнувшем пользователе).
+    # Успех нового пароля — ТРЕТИЙ случай ветки FULL_LOAD: полная загрузка
+    # экрана входа с кодом исхода; cookie сессии он НЕ выдаёт (D-10).
+    # ⚠️ ВЕТКА 422 (кода нет, истёк, исчерпан, неверный; короткий пароль) И
+    # ОТКАЗ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ В РЕЕСТР НЕ ВХОДЯТ, И ЭТО ГРАНИЦА ОБХОДА, А НЕ
+    # ПРОПУСК: их стороны утверждены поимённо в
+    # `tests/test_pages/test_auth_transport.py`.
+    _PairCase(
+        key=AUTH_FORGOT_VERIFY,
+        name="подтверждение кода восстановления — верный код",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_verify_right_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/forgot-password/reset"',
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_VERIFY,
+        name="подтверждение кода восстановления — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_verify_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/forgot-password/send-code"',
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_RESET,
+        name="новый пароль — успех",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_reset_success,
+        landing="/login?notice=" + notices.PASSWORD_RESET_DONE,
+        transport=FULL_LOAD,
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_RESET,
+        name="новый пароль — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_reset_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/forgot-password/send-code"',
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_RESET,
+        name="новый пароль — пользователь не найден",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_reset_vanished_user,
+        landing="",
+        transport=SCREEN,
+        fragment_mark="Пользователь не найден.",
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -2216,7 +2341,20 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   утверждены поимённо в `tests/test_pages/test_auth_transport.py`.
 #   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-04): `случаев пар в реестре 71,
 #   объявлено 68. Поставьте число ПРОГОНОМ этого отказа`.
-POST_PAIR_CASES_DECLARED = 71
+#   71 → 76, Фаза 14, план 14-05: пять исходов ВОССТАНОВЛЕНИЯ ПАРОЛЯ.
+#   Подтверждение кода — верный код (экран нового пароля) и устаревшая ссылка
+#   (экран начала восстановления); новый пароль — успех (ТРЕТИЙ случай ветки
+#   FULL_LOAD: 204 и заголовок полной перезагрузки на экран входа с кодом исхода,
+#   cookie сессии НЕ выдаётся), устаревшая ссылка и исчезнувший пользователь (оба
+#   — экран начала, 200 по критерию D-03). Личность — аноним. Посевы верного кода
+#   и успеха берут СВОЙ адрес на каждую половину: вторая на том же адресе нашла
+#   бы код подтверждённым.
+#   ⚠️ ВЕТКА 422 (код; короткий пароль) И ОТКАЗ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ В РЕЕСТР НЕ
+#   ВХОДЯТ, И ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: их стороны утверждены поимённо в
+#   `tests/test_pages/test_auth_transport.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-05): `случаев пар в реестре 76,
+#   объявлено 71. Поставьте число ПРОГОНОМ этого отказа`.
+POST_PAIR_CASES_DECLARED = 76
 
 
 def _case_id(case: _PairCase) -> str:
@@ -3148,7 +3286,24 @@ def _number_complaints(
 # 200, ошибка на том же экране — 422, отказ под чужой личностью — 403 и 204.
 # Прогон после перевода и снятия ключей из отставания зелен на прежнем 181
 # (`test_the_number_of_paired_302_assertions_is_the_declared_one` — passed).
-PAIRED_302_ASSERTIONS_DECLARED = 181
+#
+# 181 → 184, Фаза 14, план 14-05: новый пароль стал переведённым (выход смены
+# экрана, выход ошибки поля и выход полной перезагрузки на экран входа с кодом
+# исхода) и получил пары, и два утверждения 302 о нём вошли во вселенную
+# правила: одно прежнее — `test_password_reset.py` (`test_complete_password_reset`)
+# — и одно новое, половина деградации успеха в
+# `tests/test_pages/test_auth_transport.py`
+# (`test_a_new_password_leaves_for_the_login_by_a_full_load_with_the_notice`).
+# ТРЕТЬЕ — не перевод, а новое правило о давно переведённом входе: тот же тест
+# утверждает 302 входа новым паролем, и во вселенную оно вошло вместе с правилом
+# (вход переведён планом 14-01). Разбор вселенной по записям: `test_auth_transport.py`
+# строки 1724 (новый пароль) и 1768 (вход), `test_password_reset.py` строка 165.
+# Прогноз планирования «+1 прежнее плюс новые» совпал с замером. Подтверждение
+# кода исхода 302 не имеет (смена экрана — 200, ошибка — 422) и числа не двигает.
+# Пара у всех — случай реестра выше.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 184, объявлено 181. Поставьте число ПРОГОНОМ этого отказа`.
+PAIRED_302_ASSERTIONS_DECLARED = 184
 
 
 def _routes(settings) -> tuple[tuple[str, str], ...]:

@@ -118,7 +118,9 @@ async def test_verify_wrong_code(
         "/forgot-password/verify",
         data={"token": token, "code": "000000"},
     )
-    assert response.status_code == 200
+    # Фаза 14, план 14-05, D-03: неверный код оставляет человека на ТОМ ЖЕ
+    # экране кода, поэтому ответ — 422 (было 200). Текст отказа прежний (D-15).
+    assert response.status_code == 422
     assert "Неверный код" in response.text
 
 
@@ -221,5 +223,7 @@ async def test_reset_short_password(
         "/forgot-password/reset",
         data={"token": verified_token, "password": "abc"},
     )
-    assert response.status_code == 200
+    # Фаза 14, план 14-05, D-03: короткий пароль оставляет человека на ТОМ ЖЕ
+    # экране нового пароля, поэтому ответ — 422 (было 200). Текст прежний (D-15).
+    assert response.status_code == 422
     assert "не менее 6 символов" in response.text
