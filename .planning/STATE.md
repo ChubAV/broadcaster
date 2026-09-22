@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 14
 current_phase_name: Авторизация на htmx
 status: executing
-stopped_at: Completed 14-02-PLAN.md
-last_updated: "2026-09-22T13:19:34.960Z"
+stopped_at: Completed 14-03-PLAN.md
+last_updated: "2026-09-22T14:37:51.515Z"
 last_activity: 2026-09-22
-last_activity_desc: Plan 14-02 complete
-state_head: 6c1581a8daa2c7006d95cf3bf8abb2ac78a24fd0
+last_activity_desc: Plan 14-03 complete
+state_head: 5081210b979179f8d1572d7e840ccf1f0d1a4c74
 progress:
   total_phases: 9
   completed_phases: 7
   total_plans: 142
-  completed_plans: 137
+  completed_plans: 138
   percent: 78
 ---
 
@@ -55,15 +55,16 @@ v2.1: Фазы 7, 8, 9, 10, 11, 12 (129 планов, 6 из 9 фаз, 67%). Ф�
 ## Current Position
 
 Phase: 14 (Авторизация на htmx) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 Total Plans in Phase: 7
-Completed Plans in Phase: 2
+Completed Plans in Phase: 3
 Status: Ready to execute
 ⚠️ Две строки выше исправлены вручную при закрытии Фазы 12: `phase.complete` оставил в них числа
 ПРОШЛОЙ фазы (13 планов / 6 исполненных), то есть счёт Фазы 12, подписанный именем Фазы 13.
 ⚠️ То же повторилось при закрытии Фазы 13 (2026-09-21): верб оставил «6 / 6» — счёт Фазы 13 под
 именем Фазы 14; исправлено вручную тем же способом.
-Last activity: 2026-09-22 — Plan 14-02 complete (регистрация «почта → экран кода» и повтор кода: выход смены экрана `respond_screen`, 422 на том же экране и 200 при смене; прогон гейтов волны 400 passed, смежные модули 667 passed); следующий — 14-03
+Last activity: 2026-09-22 — Plan 14-03 complete (регистрация «код → имя и пароль → кабинет»: неверный код и короткий пароль — 422 с эхом набранного, завершение — 302 / 204 + `HX-Redirect: /dashboard` с cookie после пробного срока, обе формы экрана кода на макросе с `hx-sync`; прогон гейтов волны 415 passed, смежные модули 836 passed); следующий — 14-04
+Last activity (устарело, предмет — завершение плана 14-02; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило завершение плана 14-03): 2026-09-22 — Plan 14-02 complete (регистрация «почта → экран кода» и повтор кода: выход смены экрана `respond_screen`, 422 на том же экране и 200 при смене; прогон гейтов волны 400 passed, смежные модули 667 passed); следующий — 14-03
 Last activity (устарело, предмет — завершение плана 14-01; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило завершение плана 14-02): 2026-09-22 — Plan 14-01 complete (трасер входа: `redirect_internal`, якорь `#auth-step`, `login_submit` на выходах слоя; полный прогон 3541 passed); следующий — 14-02
 Last activity (устарело, предмет — старт исполнения Фазы 14; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило завершение плана 14-01): 2026-09-22 — Phase 14 execution started
 Last activity (устарело, предмет — планирование Фазы 14; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменил старт исполнения Фазы 14; восстановлена вручную — верб `state.begin-phase` её затёр): 2026-09-22 — Phase 14 спланирована: 7 планов в 7 волнах (14-01 — трасер входа; 14-02…14-06 — перевод путей регистрации, восстановления и возврата из-под чужой личности, все `type: tdd`; 14-07 — летописи, окно 63, `14-UAT.md`). Проверка планов: 0 блокеров, 2 предупреждения `scope_sanity` (размер 14-01 и 14-02) — перерасход принят владельцем как есть.
@@ -238,6 +239,7 @@ Progress: [████████████████████] 116/116
 | Phase 13 P06 | 2min | 2 tasks | 2 files |
 | Phase 14 P01 | 73 min | 3 tasks | 14 files |
 | Phase 14 P02 | 39 min | 2 tasks | 12 files |
+| Phase 14 P03 | 34min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -526,6 +528,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 14]: 14-02: выход смены экрана — отдельная функция respond_screen (200 на обоих транспортах) с общим телом _respond_by_transport, а не параметр кода у respond_field_error: гейты различают выходы по имени
 - [Phase 14]: 14-02: _hands_a_fragment засчитывает фрагмент у respond_screen, но не у respond_field_error — фрагмент ошибки поля есть та же форма, а не смена экрана
 - [Phase 14]: 14-02: экран кода — форма повтора через form_wrapper в #auth-step (innerHTML, перерисовка обеих форм одним токеном); форма подтверждения остаётся обычным POST до 14-03
+- [Phase 14]: Фаза 14, план 14-03: адрес, занятый к завершению регистрации, отвечает 200 через respond_screen (экран сменился на начало — критерий D-03, RESEARCH Open Question 3), а не 422
+- [Phase 14]: Фаза 14, план 14-03: пароль не передаётся в контекст экрана завершения; 422 короткого пароля несёт email, новый подтверждённый токен, имя и текст (D-04)
+- [Phase 14]: Фаза 14, план 14-03: обе формы экрана кода синхронизированы hx-sync closest #auth-step:drop; цена — ответ повтора стирает недонабранный код — принята (RESEARCH Pitfall 10), include не используется
 
 ### Pending Todos
 
@@ -707,8 +712,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-22T13:19:34.306Z
-Stopped at: Completed 14-02-PLAN.md
+Last session: 2026-09-22T14:37:50.922Z
+Stopped at: Completed 14-03-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
