@@ -153,6 +153,17 @@ AUTH_SCREENS: dict[str, AuthScreen] = {
         step="auth/includes/register_complete_step.html",
         title="Завершение регистрации — Broadcaster",
     ),
+    # Фаза 14, план 14-04: начало восстановления пароля и экран его кода.
+    "forgot_password": AuthScreen(
+        page="auth/forgot_password.html",
+        step="auth/includes/forgot_password_step.html",
+        title="Забыли пароль — Broadcaster",
+    ),
+    "forgot_password_verify": AuthScreen(
+        page="auth/forgot_password_verify.html",
+        step="auth/includes/forgot_password_verify_step.html",
+        title="Код подтверждения — Broadcaster",
+    ),
 }
 
 
@@ -724,13 +735,33 @@ async def forgot_password_send_code(
     settings: Settings = Depends(get_settings),
     _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
+    """Шаг адреса восстановления — на выходах слоя ответа (Фаза 14, план 14-04).
+
+    ⚠️ КРИТЕРИЙ КОДА — ЭКРАН, А НЕ ТЕКСТ (D-03). 422 — человек остаётся на ТОМ
+    ЖЕ экране (адрес не найден: экран начала с адресом в поле); 200 — экран
+    сменился (код отправлен или «код уже отправлен»: экран кода).
+
+    ⚠️ ЭКРАН КОДА ПРИЕЗЖАЕТ ЦЕЛИКОМ В ПОСТОЯННЫЙ ЯКОРЬ (D-06): обе его формы
+    несут подписанный токен восстановления скрытым полем, и путь без
+    JavaScript получает страницу прямо в ответ на POST — токен в адрес не
+    кладётся (D-08).
+
+    ⚠️ ОТКАЗ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ — ЗАВИСИМОСТИ, И ОНА НЕ ТРОНУТА (D-13, D-22):
+    до тела обработчика запрос под чужой личностью не доходит вовсе.
+
+    Решения обработчика прежние (D-15): запросы, минута между кодами, срок и
+    источник кода, отправка письма и тексты не меняются.
+    """
     # Check if email exists
     existing = await db.execute(select(User).where(User.email == email))
     if not existing.scalar_one_or_none():
-        return templates.TemplateResponse(
-            "auth/forgot_password.html",
-            {"request": request, "error": "Пользователь с таким email не найден", "email": email},
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password",
+            error="Пользователь с таким email не найден",
+            email=email,
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     # Rate limit: check last code sent to this email for password_reset
     result = await db.execute(
@@ -746,15 +777,14 @@ async def forgot_password_send_code(
     now = datetime.now(timezone.utc)
     if last_code and (now - last_code.created_at.replace(tzinfo=timezone.utc)).total_seconds() < CODE_RESEND_COOLDOWN_SECONDS:
         token = create_verification_token(email, settings.secret_key, purpose="password_reset")
-        return templates.TemplateResponse(
-            "auth/forgot_password_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Код уже отправлен. Подождите минуту перед повторной отправкой.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password_verify",
+            email=email,
+            token=token,
+            error="Код уже отправлен. Подождите минуту перед повторной отправкой.",
         )
+        return await respond_screen(request, page=page, fragment=fragment)
 
     # Generate and save code
     code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
@@ -786,10 +816,10 @@ async def forgot_password_send_code(
         logger.error("password_reset_email_send_failed", email=email, error=str(e))
 
     token = create_verification_token(email, settings.secret_key, purpose="password_reset")
-    return templates.TemplateResponse(
-        "auth/forgot_password_verify.html",
-        {"request": request, "email": email, "token": token},
+    page, fragment = _screen_builders(
+        request, "forgot_password_verify", email=email, token=token
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 @router.post("/forgot-password/verify", response_class=HTMLResponse)
@@ -867,12 +897,27 @@ async def forgot_password_resend_code(
     settings: Settings = Depends(get_settings),
     _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
+    """Повтор кода восстановления — на выходах слоя ответа (Фаза 14, план 14-04).
+
+    ⚠️ КРИТЕРИЙ КОДА — ЭКРАН (D-03). Раньше минуты — 422: человек остаётся на
+    экране кода с присланным токеном. Устаревшая ссылка — 200: экран сменился
+    на начало восстановления. Успех — 200: экран кода с новым кодом.
+
+    ⚠️ ПОВТОР ВЫДАЁТ НОВЫЙ ТОКЕН, ПОЭТОМУ ПОДМЕНЯЕТСЯ ВЕСЬ ЯКОРЬ (D-06,
+    Landmine CONTEXT): подмена одной формы повтора оставила бы форму
+    подтверждения со старым токеном.
+
+    Отказ под чужой личностью — зависимости, она не тронута (D-13, D-22).
+    Решения обработчика прежние (D-15).
+    """
     payload = decode_verification_token(token, settings.secret_key)
     if not payload or payload.get("purpose") != "password_reset":
-        return templates.TemplateResponse(
-            "auth/forgot_password.html",
-            {"request": request, "error": "Ссылка устарела. Начните сброс пароля заново."},
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password",
+            error="Ссылка устарела. Начните сброс пароля заново.",
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     # Rate limit check
@@ -888,15 +933,14 @@ async def forgot_password_resend_code(
     last_code = result.scalar_one_or_none()
     now = datetime.now(timezone.utc)
     if last_code and (now - last_code.created_at.replace(tzinfo=timezone.utc)).total_seconds() < CODE_RESEND_COOLDOWN_SECONDS:
-        return templates.TemplateResponse(
-            "auth/forgot_password_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Подождите минуту перед повторной отправкой.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password_verify",
+            email=email,
+            token=token,
+            error="Подождите минуту перед повторной отправкой.",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
     verification = EmailVerificationCode(
@@ -926,15 +970,14 @@ async def forgot_password_resend_code(
         logger.error("password_reset_email_send_failed", email=email, error=str(e))
 
     new_token = create_verification_token(email, settings.secret_key, purpose="password_reset")
-    return templates.TemplateResponse(
-        "auth/forgot_password_verify.html",
-        {
-            "request": request,
-            "email": email,
-            "token": new_token,
-            "success": "Новый код отправлен на вашу почту.",
-        },
+    page, fragment = _screen_builders(
+        request,
+        "forgot_password_verify",
+        email=email,
+        token=new_token,
+        success="Новый код отправлен на вашу почту.",
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 @router.post("/forgot-password/reset", response_class=HTMLResponse)
