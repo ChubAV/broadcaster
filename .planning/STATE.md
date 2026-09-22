@@ -4,12 +4,12 @@ milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 14
 current_phase_name: Авторизация на htmx
-status: "Phase 14 planned — ready to execute"
+status: executing
 stopped_at: Phase 14 planned
-last_updated: "2026-09-22T09:21:13.752Z"
+last_updated: "2026-09-22T10:34:41.512Z"
 last_activity: 2026-09-22
-last_activity_desc: "Phase 14 planned — 7 plans in 7 waves"
-state_head: 6c6557f1386a18cca43d921b0afa6037f03701bd
+last_activity_desc: Phase 14 execution started
+state_head: f8697e5cd716a06c231c5d7a29a1dada1a1f3c4a
 progress:
   total_phases: 9
   completed_phases: 7
@@ -54,16 +54,17 @@ v2.1: Фазы 7, 8, 9, 10, 11, 12 (129 планов, 6 из 9 фаз, 67%). Ф�
 
 ## Current Position
 
-Phase: 14 (Авторизация на htmx) — READY TO EXECUTE
-Plan: Not started
+Phase: 14 (Авторизация на htmx) — EXECUTING
+Plan: 1 of 7
 Total Plans in Phase: 7
 Completed Plans in Phase: 0
-Status: Ready to execute
+Status: Executing Phase 14
 ⚠️ Две строки выше исправлены вручную при закрытии Фазы 12: `phase.complete` оставил в них числа
 ПРОШЛОЙ фазы (13 планов / 6 исполненных), то есть счёт Фазы 12, подписанный именем Фазы 13.
 ⚠️ То же повторилось при закрытии Фазы 13 (2026-09-21): верб оставил «6 / 6» — счёт Фазы 13 под
 именем Фазы 14; исправлено вручную тем же способом.
-Last activity: 2026-09-22 — Phase 14 спланирована: 7 планов в 7 волнах (14-01 — трасер входа; 14-02…14-06 — перевод путей регистрации, восстановления и возврата из-под чужой личности, все `type: tdd`; 14-07 — летописи, окно 63, `14-UAT.md`). Проверка планов: 0 блокеров, 2 предупреждения `scope_sanity` (размер 14-01 и 14-02) — перерасход принят владельцем как есть.
+Last activity: 2026-09-22 — Phase 14 execution started
+Last activity (устарело, предмет — планирование Фазы 14; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменил старт исполнения Фазы 14; восстановлена вручную — верб `state.begin-phase` её затёр): 2026-09-22 — Phase 14 спланирована: 7 планов в 7 волнах (14-01 — трасер входа; 14-02…14-06 — перевод путей регистрации, восстановления и возврата из-под чужой личности, все `type: tdd`; 14-07 — летописи, окно 63, `14-UAT.md`). Проверка планов: 0 блокеров, 2 предупреждения `scope_sanity` (размер 14-01 и 14-02) — перерасход принят владельцем как есть.
 Last activity (устарело, предмет — отгрузка Фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило планирование Фазы 14): 2026-09-21 — Phase 13 shipped — PR #52
 Last activity (устарело, предмет — быстрая задача 260921-qvt; строка восстановлена по идиоме D-30/D-32 — её затёр верб `state.update` при отгрузке): 2026-09-21 - Completed quick task 260921-qvt: Поправить визуальные регрессии мастера Telegram по QR (UI-1, UI-2, UI-3)
 Last activity (устарело, предмет — закрытие Фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменила быстрая задача 260921-qvt): 2026-09-21 — Phase 13 complete, transitioned to Phase 14
