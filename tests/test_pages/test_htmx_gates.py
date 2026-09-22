@@ -2610,6 +2610,90 @@ def test_control_negative_a_handler_that_left_the_response_layer_reddens_g1(tmp_
     )
 
 
+def _scratch_handler(tmp_path, name: str, body: str) -> tuple[dict[str, str], str]:
+    """Синтетический POST-обработчик в модуле подмены — исходники и его ключ."""
+    original = _pages_sources()[SCRATCH_MODULE]
+    addition = (
+        f'\n\n@router.post("/profile/{name.replace("_", "-")}")\n'
+        f"async def {name}(request: Request):\n"
+        f"    {body}\n"
+    )
+    sources = _sources_with(tmp_path, _pages_sources(), SCRATCH_MODULE, original + addition)
+    return sources, f"{SCRATCH_MODULE}::{name}"
+
+
+def test_control_a_handler_answering_only_by_a_full_load_is_converted(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: обработчик, зовущий ТОЛЬКО выход полной перезагрузки, переведён.
+
+    Фаза 14, план 14-01 (RESEARCH Находка 2): вход и два других успеха
+    авторизации отвечают выходом полной перезагрузки, а не главным выходом, —
+    узнавание по одному имени оставило бы их в отставании навсегда, и ноль
+    счётчика вехи был бы недостижим честно.
+    """
+    sources, key = _scratch_handler(
+        tmp_path,
+        "a_route_leaving_by_a_full_load",
+        'return await redirect_internal(request, redirect="/profile")',
+    )
+    assert key in _post_handlers(sources), (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: разборщик не увидел синтетического обработчика"
+    )
+    assert key in _converted(sources), (
+        "обработчик, отвечающий выходом полной перезагрузки, не признан "
+        "переведённым — семейство выходов слоя узнаётся не целиком"
+    )
+    assert key not in _backlog(sources), (
+        "обработчик на выходе слоя остался в отставании"
+    )
+
+
+def test_control_a_handler_answering_only_by_a_field_error_is_converted(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: обработчик, зовущий ТОЛЬКО выход ошибки поля, переведён.
+
+    Фаза 14, план 14-01: у выхода ошибки поля путь деградации — страница, и он
+    решает форму ответа так же, как главный выход; обработчик, у которого
+    других выходов нет, обязан считаться переведённым.
+    """
+    sources, key = _scratch_handler(
+        tmp_path,
+        "a_route_answering_a_field_error",
+        "return await respond_field_error(request, page=page, fragment=fragment)",
+    )
+    assert key in _post_handlers(sources), (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: разборщик не увидел синтетического обработчика"
+    )
+    assert key in _converted(sources), (
+        "обработчик, отвечающий выходом ошибки поля, не признан переведённым"
+    )
+    assert key not in _backlog(sources), (
+        "обработчик на выходе слоя остался в отставании"
+    )
+
+
+def test_control_a_lookalike_exit_name_does_not_convert_a_handler(tmp_path):
+    """ЧТО ДОКАЗЫВАЕТ: узнаётся ИМЯ выхода, а не приставка — похожее имя не переводит.
+
+    Без этого контроля расширение узнавания до семейства зеленело бы и на
+    сравнении по приставке: `respond_later(...)` выхода слоя не зовёт, пути
+    деградации не несёт, и обработчик с ним обязан остаться неклассифицированным.
+    """
+    sources, key = _scratch_handler(
+        tmp_path,
+        "a_route_with_a_lookalike_exit",
+        "return await respond_later(request)",
+    )
+    assert key in _post_handlers(sources), (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: разборщик не увидел синтетического обработчика"
+    )
+    assert key not in _converted(sources), (
+        "похожее имя засчитано выходом слоя — узнавание идёт по приставке"
+    )
+    assert key in _backlog(sources), "обработчик без выхода слоя выпал из отставания"
+    assert key in _unclassified(sources), (
+        "обработчик без выхода слоя не виден замыкающему утверждению полноты"
+    )
+
+
 def test_control_negative_a_converted_handler_with_its_own_redirect_reddens_g2(
     tmp_path,
 ):

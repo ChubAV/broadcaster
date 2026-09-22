@@ -37,6 +37,7 @@ from app.pages.htmx import (
     _with_notice,
     is_htmx,
     location_response,
+    redirect_internal,
     refuse,
     respond,
 )
@@ -1081,3 +1082,100 @@ async def test_a_field_error_answers_422_with_the_page_without_htmx_and_the_frag
             "чужих задач нести не может, и её появление означало бы, что выход "
             "отдал объект сборщика"
         )
+
+
+# --- Выход полной перезагрузки на локальный адрес (Фаза 14, план 14-01, D-11) --
+#
+# ⚠️ УТВЕРЖДЕНИЯ О САМОМ ВЫХОДЕ, А НЕ О МАРШРУТЕ. Вызов прямой, без приложения:
+# 302 здесь — ответ функции слоя, а не HTTP-запроса, и обход утверждений 302 пар
+# приписывать его маршруту не должен (запись `UNATTRIBUTED_302_ASSERTIONS` в
+# `tests/test_pages/test_htmx_post_pairs.py`). Поведение маршрутов, зовущих
+# выход, утверждено в `tests/test_pages/test_auth_transport.py`.
+
+FULL_LOAD_HOSTILE = {
+    "scheme": "https://evil.example/",
+    "scheme-relative": "//evil.example",
+    "backslash": "/\\evil",
+    "non-ascii": "/путь",
+    "control-crlf": "/login\r\nSet-Cookie: a=b",
+}
+
+
+@pytest.mark.asyncio
+async def test_an_internal_full_load_answers_302_without_htmx_and_204_with_the_redirect_header():
+    """Без признака htmx — прежний 302; с ним — 204 и ОДИН заголовок полной перезагрузки.
+
+    ⚠️ `HX-Location` В ОТВЕТЕ НЕТ: слой письма читает его ПЕРВЫМ (Находка 3
+    RESEARCH Фазы 14), и ответ с обоими заголовками ушёл бы XHR-подменой, а не
+    полной загрузкой — смена личности приехала бы куском чужого шелла.
+    """
+    bare = await redirect_internal(_request(), redirect="/dashboard")
+    assert bare.status_code == 302, f"путь без htmx ответил {bare.status_code} вместо 302"
+    assert bare.headers["location"] == "/dashboard"
+    assert "HX-Redirect" not in bare.headers, "путь без htmx несёт заголовок слоя письма"
+
+    over_htmx = await redirect_internal(
+        _request({HX_REQUEST_HEADER: "true"}), redirect="/dashboard"
+    )
+    assert over_htmx.status_code == 204, (
+        f"путь htmx ответил {over_htmx.status_code} вместо 204"
+    )
+    assert over_htmx.headers.get("HX-Redirect") == "/dashboard", (
+        "путь htmx не несёт адреса в заголовке полной перезагрузки"
+    )
+    assert "HX-Location" not in over_htmx.headers, (
+        "ответ несёт ОБА заголовка перехода — слой письма уйдёт XHR-подменой"
+    )
+    assert over_htmx.body == b"", "у ответа полной перезагрузки есть тело"
+
+
+@pytest.mark.asyncio
+async def test_an_internal_full_load_carries_the_outcome_code_in_the_address(
+    notice_registry,
+):
+    """Код исхода едет параметром адреса на ОБОИХ транспортах, латиницей (D-10)."""
+    from app.pages import notices
+
+    expected = "/login?notice=password_reset_done"
+    bare = await redirect_internal(
+        _request(), redirect="/login", notice=notices.PASSWORD_RESET_DONE
+    )
+    assert bare.headers["location"] == expected
+
+    over_htmx = await redirect_internal(
+        _request({HX_REQUEST_HEADER: "true"}),
+        redirect="/login",
+        notice=notices.PASSWORD_RESET_DONE,
+    )
+    assert over_htmx.headers.get("HX-Redirect") == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hostile", list(FULL_LOAD_HOSTILE.values()), ids=list(FULL_LOAD_HOSTILE)
+)
+async def test_an_internal_full_load_never_leaves_the_site_or_carries_unencodable_text(
+    hostile,
+):
+    """Внешний, протокол-относительный, кириллический и многострочный адрес — отказ.
+
+    Отказ на ОБОИХ транспортах (T-14-01, T-14-02): открытый редирект, инъекция
+    заголовка и пятисотка на кодировании закрыты одной проверкой локального
+    пути, общей с `respond()`.
+    """
+    for headers in (None, {HX_REQUEST_HEADER: "true"}):
+        with pytest.raises(ValueError):
+            await redirect_internal(_request(headers), redirect=hostile)
+
+
+@pytest.mark.asyncio
+async def test_an_unregistered_outcome_code_is_refused_by_the_internal_full_load(
+    notice_registry,
+):
+    """Незнакомый код исхода останавливает ответ на стороне ЗАПИСИ, на обоих транспортах."""
+    for headers in (None, {HX_REQUEST_HEADER: "true"}):
+        for hostile in (UNKNOWN_NOTICE, "", "password_reset_done "):
+            with pytest.raises(ValueError):
+                await redirect_internal(
+                    _request(headers), redirect="/login", notice=hostile
+                )
