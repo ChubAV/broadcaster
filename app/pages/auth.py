@@ -130,6 +130,7 @@ class AuthScreen:
 
 
 # Реестр переведённых экранов. Прочие экраны дописывают планы 14-02…14-05.
+# После плана 14-05 в реестре все семь экранов второго шелла.
 AUTH_SCREENS: dict[str, AuthScreen] = {
     "login": AuthScreen(
         page="auth/login.html",
@@ -163,6 +164,12 @@ AUTH_SCREENS: dict[str, AuthScreen] = {
         page="auth/forgot_password_verify.html",
         step="auth/includes/forgot_password_verify_step.html",
         title="Код подтверждения — Broadcaster",
+    ),
+    # Фаза 14, план 14-05: экран нового пароля — последний экран второго шелла.
+    "forgot_password_reset": AuthScreen(
+        page="auth/forgot_password_reset.html",
+        step="auth/includes/forgot_password_reset_step.html",
+        title="Новый пароль — Broadcaster",
     ),
 }
 
@@ -831,12 +838,26 @@ async def forgot_password_verify(
     settings: Settings = Depends(get_settings),
     _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
+    """Подтверждение кода восстановления — на выходах слоя ответа (Фаза 14, план 14-05).
+
+    ⚠️ НЕВЕРНЫЙ КОД НЕ СТИРАЕТ НАБРАННОЕ (D-03, D-04). Кода нет, код истёк,
+    попытки кончились или код не тот — 422: человек остаётся на экране кода,
+    набранный код стоит в поле, прежний токен — скрытым полем. Устаревшая
+    ссылка — 200: экран сменился на начало восстановления. Успех — 200: экран
+    нового пароля с подтверждённым токеном.
+
+    Отказ под чужой личностью — зависимости, она не тронута (D-13, D-22).
+    Решения обработчика прежние (D-15): запрос кода, счёт попыток и его запись
+    ДО ответа, лимит пять, срок и тексты не меняются — эхо счёта не трогает.
+    """
     payload = decode_verification_token(token, settings.secret_key)
     if not payload or payload.get("purpose") != "password_reset":
-        return templates.TemplateResponse(
-            "auth/forgot_password.html",
-            {"request": request, "error": "Ссылка устарела. Начните сброс пароля заново."},
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password",
+            error="Ссылка устарела. Начните сброс пароля заново.",
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     now = datetime.now(timezone.utc)
@@ -855,38 +876,38 @@ async def forgot_password_verify(
     code_record = result.scalar_one_or_none()
 
     if not code_record:
-        return templates.TemplateResponse(
-            "auth/forgot_password_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Код истёк или превышено число попыток. Отправьте код заново.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password_verify",
+            email=email,
+            token=token,
+            code=code,
+            error="Код истёк или превышено число попыток. Отправьте код заново.",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     if code_record.code != code.strip():
         code_record.attempts += 1
         await db.commit()
         remaining = CODE_MAX_ATTEMPTS - code_record.attempts
-        return templates.TemplateResponse(
-            "auth/forgot_password_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": f"Неверный код. Осталось попыток: {remaining}",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password_verify",
+            email=email,
+            token=token,
+            code=code,
+            error=f"Неверный код. Осталось попыток: {remaining}",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     code_record.verified_at = now
     await db.commit()
 
     verified_token = create_verification_token(email, settings.secret_key, verified=True, purpose="password_reset")
-    return templates.TemplateResponse(
-        "auth/forgot_password_reset.html",
-        {"request": request, "email": email, "token": verified_token},
+    page, fragment = _screen_builders(
+        request, "forgot_password_reset", email=email, token=verified_token
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 @router.post("/forgot-password/resend-code", response_class=HTMLResponse)
@@ -989,29 +1010,50 @@ async def forgot_password_reset(
     settings: Settings = Depends(get_settings),
     _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
+    """Новый пароль — на выходах слоя ответа (Фаза 14, план 14-05).
+
+    ⚠️ КОРОТКИЙ ПАРОЛЬ — 422 БЕЗ ПАРОЛЯ (D-03, D-04): человек остаётся на экране
+    нового пароля, пароль в контекст экрана не передаётся вовсе (сборщики его и
+    не примут), токен — новый подтверждённый, как сегодня. Устаревшая ссылка и
+    исчезнувший пользователь — 200: экран сменился на начало восстановления.
+
+    ⚠️ УСПЕХ — ПОЛНАЯ ЗАГРУЗКА НА ВХОД (D-10): без признака htmx 302, с ним 204
+    и заголовок полной перезагрузки на тот же адрес с кодом исхода. Cookie
+    сессии смена пароля не выдаёт: человек входит новым паролем сам.
+
+    Отказ под чужой личностью — зависимости, она не тронута (D-13, D-22).
+    Решения обработчика прежние (D-15): проверки, их порядок, хеш и тексты не
+    меняются.
+    """
     payload = decode_verification_token(token, settings.secret_key)
     if not payload or not payload.get("verified") or payload.get("purpose") != "password_reset":
-        return templates.TemplateResponse(
-            "auth/forgot_password.html",
-            {"request": request, "error": "Ссылка устарела. Начните сброс пароля заново."},
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password",
+            error="Ссылка устарела. Начните сброс пароля заново.",
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     # Find user
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     if not user:
-        return templates.TemplateResponse(
-            "auth/forgot_password.html",
-            {"request": request, "error": "Пользователь не найден."},
+        page, fragment = _screen_builders(
+            request, "forgot_password", error="Пользователь не найден."
         )
+        return await respond_screen(request, page=page, fragment=fragment)
 
     if len(password) < 6:
         verified_token = create_verification_token(email, settings.secret_key, verified=True, purpose="password_reset")
-        return templates.TemplateResponse(
-            "auth/forgot_password_reset.html",
-            {"request": request, "email": email, "token": verified_token, "error": "Пароль должен быть не менее 6 символов"},
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password_reset",
+            email=email,
+            token=verified_token,
+            error="Пароль должен быть не менее 6 символов",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     user.password_hash = hash_password(password)
     await db.commit()
@@ -1022,8 +1064,8 @@ async def forgot_password_reset(
     # слов. Не осталось ни того, ни другого: код выбирает запись реестра
     # (`app/pages/notices.py`), а рисует её общая область шелла — та же, что и
     # на всех остальных экранах обоих шеллов.
-    response = RedirectResponse(url=f"/login?notice={notices.PASSWORD_RESET_DONE}", status_code=302)
-    return response
+    # На пути htmx — полная загрузка тем же адресом (D-10).
+    return await redirect_internal(request, redirect="/login", notice=notices.PASSWORD_RESET_DONE)
 
 
 @router.get("/", response_class=HTMLResponse)
