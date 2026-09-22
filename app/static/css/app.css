@@ -1369,7 +1369,21 @@ a:hover { color: var(--accent-link-hover); }
   background: var(--surface); border: 1px solid var(--border);
   animation: rise .32s ease both;
 }
-.auth-brand { display: flex; align-items: center; justify-content: center; gap: 9px; }
+/* Постоянный якорь шага (Фаза 14, план 14-01, D-06). Две причины правил ниже.
+   1. `display: contents` — якорь не становится ОДНИМ флекс-элементом карточки:
+      его дети (подзаголовок, плашки, формы, нижние ссылки) остаются элементами
+      колонки и сохраняют промежутки `gap: 14px` (прецедент —
+      `[data-identity-meta] > #user-block-badge`).
+   2. `order` у бренда и подзаголовка — ПОРЯДОК DOM НЕСУЩИЙ: области
+      уведомления стоят РАНЬШЕ якоря, иначе первая же подмена стёрла бы код
+      исхода (RESEARCH Pitfall 5). Визуальный порядок задаёт CSS: подзаголовок
+      сразу под брендом, как до переноса, а пустые области уведомления — ниже
+      него; без этого между брендом и подзаголовком встали бы два пустых
+      флекс-элемента (около 28px). Правило `.auth-form` не меняется: класс
+      колонки стоит теперь на внутреннем узле формы. */
+.auth-step { display: contents; }
+.auth-brand { display: flex; align-items: center; justify-content: center; gap: 9px; order: -2; }
+.auth-card .auth-subtitle { order: -1; }
 .auth-brand__mark {
   width: 22px; height: 22px; border-radius: var(--r-sm); flex: none;
   background: var(--accent);

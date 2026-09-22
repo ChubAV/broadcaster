@@ -62,10 +62,9 @@
                 обработчиков у обоих шеллов один. -#}
             {% include "includes/htmx_error_banner.html" %}
             <div id="auth-step" class="auth-step">
-                {#- Абзац печатается, только если экран заполнил переходный блок:
-                    переведённый экран печатает подзаголовок сам, и пустой абзац
-                    шелла стал бы лишним элементом карточки со своим промежутком. -#}
-                {% if self.auth_subtitle() | trim %}<p class="auth-subtitle">{% block auth_subtitle %}{% endblock %}</p>{% endif %}
+                {#- Пустой абзац переведённого экрана скрывает правило
+                    `.auth-subtitle:empty` — промежутка карточки он не занимает. -#}
+                <p class="auth-subtitle">{% block auth_subtitle %}{% endblock %}</p>
                 {% block content %}{% endblock %}
             </div>
         </section>
