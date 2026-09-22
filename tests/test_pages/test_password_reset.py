@@ -38,7 +38,9 @@ async def test_send_code_unknown_email(client: AsyncClient):
         "/forgot-password/send-code",
         data={"email": "unknown@test.com"},
     )
-    assert response.status_code == 200
+    # Фаза 14, план 14-04, D-03: неизвестный адрес оставляет человека на ТОМ ЖЕ
+    # экране, поэтому ответ — 422 (было 200). Текст отказа прежний (D-15).
+    assert response.status_code == 422
     assert "не найден" in response.text
 
 

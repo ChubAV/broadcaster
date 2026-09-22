@@ -1198,6 +1198,58 @@ async def _arrange_register_resend_stale_link(client, db, settings, identity) ->
 
 
 # =============================================================================
+# Восстановление пароля: шаг адреса и повтор кода (Фаза 14, план 14-04)
+# =============================================================================
+
+AUTH_FORGOT_SEND_CODE = "app/pages/auth.py::forgot_password_send_code"
+AUTH_FORGOT_RESEND_CODE = "app/pages/auth.py::forgot_password_resend_code"
+PAIR_FORGOT_PASSWORD = "pair-forgot-pass-123"
+
+# ⚠️ ПОЛЬЗОВАТЕЛЬ ЗАВОДИТСЯ НА УНИКАЛЬНЫЙ АДРЕС КАЖДОГО ВЫЗОВА ПОСЕВА. Половин у
+# пары две, и вторая на том же адресе попала бы в минуту между кодами — то есть
+# утверждала бы «код уже отправлен», а не названный случаем исход.
+_FORGOT_PAIR_SEQUENCE = iter(range(1, 1_000_000))
+
+
+def _forgot_pair_email() -> str:
+    return f"pair-forgot-{next(_FORGOT_PAIR_SEQUENCE)}@test.com"
+
+
+async def _arrange_forgot_send_code(client, db, settings, identity) -> _Arranged:
+    email = _forgot_pair_email()
+    db.add(
+        User(
+            email=email,
+            password_hash=hash_password(PAIR_FORGOT_PASSWORD),
+            name="Пара восстановления",
+        )
+    )
+    await db.commit()
+    return _Arranged(url="/forgot-password/send-code", data={"email": email})
+
+
+async def _arrange_forgot_resend_code(client, db, settings, identity) -> _Arranged:
+    email = _forgot_pair_email()
+    now = datetime.now(timezone.utc)
+    db.add(
+        EmailVerificationCode(
+            email=email,
+            code="123456",
+            purpose="password_reset",
+            expires_at=now + timedelta(minutes=10),
+            created_at=now - timedelta(seconds=120),
+        )
+    )
+    await db.commit()
+    token = create_verification_token(email, settings.secret_key, purpose="password_reset")
+    return _Arranged(url="/forgot-password/resend-code", data={"token": token})
+
+
+async def _arrange_forgot_resend_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url="/forgot-password/resend-code", data={"token": "x"})
+
+
+# =============================================================================
 # Регистрация: подтверждение кода и завершение (Фаза 14, план 14-03)
 # =============================================================================
 
@@ -1975,6 +2027,44 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         transport=SCREEN,
         fragment_mark="Этот email уже зарегистрирован",
     ),
+    # Фаза 14, план 14-04. Шаг адреса восстановления пароля и повтор кода
+    # восстановления — ветка SCREEN: экран сменился, 200 на обоих транспортах
+    # (D-03), адреса у экрана нет, `landing` пуст.
+    # ⚠️ ВЕТКА 422 (неизвестный адрес; повтор раньше минуты) В РЕЕСТР НЕ ВХОДИТ, И
+    # ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: обе её стороны утверждены поимённо в
+    # `tests/test_pages/test_auth_transport.py`.
+    # ⚠️ ОТКАЗ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ В РЕЕСТР ТОЖЕ НЕ ВХОДИТ: его половины (403 без
+    # htmx; 204 и `HX-Location` на домашний экран с кодом отказа с ним)
+    # утверждены правилом
+    # `test_the_first_recovery_steps_are_refused_under_another_identity_on_both_transports`
+    # там же — вместе с тем, что кода восстановления не заводится.
+    _PairCase(
+        key=AUTH_FORGOT_SEND_CODE,
+        name="шаг адреса восстановления — код отправлен",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_send_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/forgot-password/verify"',
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_RESEND_CODE,
+        name="повтор кода восстановления — новый код",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_resend_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark="Новый код отправлен",
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_RESEND_CODE,
+        name="повтор кода восстановления — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_resend_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/forgot-password/send-code"',
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -2116,7 +2206,17 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   `tests/test_pages/test_auth_transport.py`.
 #   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-03): `случаев пар в реестре 68,
 #   объявлено 63` / `assert 68 == 63`.
-POST_PAIR_CASES_DECLARED = 68
+#   68 → 71, Фаза 14, план 14-04: три исхода ВОССТАНОВЛЕНИЯ ПАРОЛЯ, ветка
+#   SCREEN (200 и экран шага на обоих транспортах): шаг адреса — код отправлен;
+#   повтор кода — новый код и устаревшая ссылка (экран начала восстановления).
+#   Личность — аноним. Посев шага адреса заводит пользователя на СВОЙ адрес
+#   каждой половины: вторая на том же адресе попала бы в минуту между кодами.
+#   ⚠️ ВЕТКА 422 (неизвестный адрес; повтор раньше минуты) И ОТКАЗ ПОД ЧУЖОЙ
+#   ЛИЧНОСТЬЮ В РЕЕСТР НЕ ВХОДЯТ, И ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: их стороны
+#   утверждены поимённо в `tests/test_pages/test_auth_transport.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-04): `случаев пар в реестре 71,
+#   объявлено 68. Поставьте число ПРОГОНОМ этого отказа`.
+POST_PAIR_CASES_DECLARED = 71
 
 
 def _case_id(case: _PairCase) -> str:
@@ -3041,6 +3141,13 @@ def _number_complaints(
 # Пара у всех — случай реестра выше.
 # ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
 # переведённых обработчиках 181, объявлено 176`.
+#
+# 181 → 181, Фаза 14, план 14-04: ДВИЖЕНИЯ НЕТ, И ЭТО ЗАМЕР, А НЕ ПРОПУСК. Шаг
+# адреса восстановления пароля и повтор кода восстановления вошли во вселенную
+# правила переводом, но исхода 302 у них нет ни одного: смена экрана отвечает
+# 200, ошибка на том же экране — 422, отказ под чужой личностью — 403 и 204.
+# Прогон после перевода и снятия ключей из отставания зелен на прежнем 181
+# (`test_the_number_of_paired_302_assertions_is_the_declared_one` — passed).
 PAIRED_302_ASSERTIONS_DECLARED = 181
 
 
