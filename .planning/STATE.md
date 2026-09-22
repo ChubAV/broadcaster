@@ -4,12 +4,12 @@ milestone: v2.1
 milestone_name: HTMX-first
 current_phase: 14
 current_phase_name: Авторизация на htmx
-status: "Phase 13 shipped — PR #52"
-stopped_at: Phase 14 context gathered
-last_updated: "2026-09-22T07:53:27.378Z"
-last_activity: 2026-09-21
-last_activity_desc: "Phase 13 shipped — PR #52"
-state_head: ca93bdf0e7b35bedac5c04b9881b1ea7270e7bc1
+status: "Phase 14 planned — ready to execute"
+stopped_at: Phase 14 planned
+last_updated: "2026-09-22T09:21:13.752Z"
+last_activity: 2026-09-22
+last_activity_desc: "Phase 14 planned — 7 plans in 7 waves"
+state_head: 6c6557f1386a18cca43d921b0afa6037f03701bd
 progress:
   total_phases: 9
   completed_phases: 7
@@ -54,16 +54,17 @@ v2.1: Фазы 7, 8, 9, 10, 11, 12 (129 планов, 6 из 9 фаз, 67%). Ф�
 
 ## Current Position
 
-Phase: 14 — Авторизация на htmx
+Phase: 14 (Авторизация на htmx) — READY TO EXECUTE
 Plan: Not started
-Total Plans in Phase: 0 (фаза не планировалась — каталога `.planning/phases/14-*` на диске нет)
+Total Plans in Phase: 7
 Completed Plans in Phase: 0
-Status: Phase 13 shipped — PR #52
+Status: Ready to execute
 ⚠️ Две строки выше исправлены вручную при закрытии Фазы 12: `phase.complete` оставил в них числа
 ПРОШЛОЙ фазы (13 планов / 6 исполненных), то есть счёт Фазы 12, подписанный именем Фазы 13.
 ⚠️ То же повторилось при закрытии Фазы 13 (2026-09-21): верб оставил «6 / 6» — счёт Фазы 13 под
 именем Фазы 14; исправлено вручную тем же способом.
-Last activity: 2026-09-21 — Phase 13 shipped — PR #52
+Last activity: 2026-09-22 — Phase 14 спланирована: 7 планов в 7 волнах (14-01 — трасер входа; 14-02…14-06 — перевод путей регистрации, восстановления и возврата из-под чужой личности, все `type: tdd`; 14-07 — летописи, окно 63, `14-UAT.md`). Проверка планов: 0 блокеров, 2 предупреждения `scope_sanity` (размер 14-01 и 14-02) — перерасход принят владельцем как есть.
+Last activity (устарело, предмет — отгрузка Фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменило планирование Фазы 14): 2026-09-21 — Phase 13 shipped — PR #52
 Last activity (устарело, предмет — быстрая задача 260921-qvt; строка восстановлена по идиоме D-30/D-32 — её затёр верб `state.update` при отгрузке): 2026-09-21 - Completed quick task 260921-qvt: Поправить визуальные регрессии мастера Telegram по QR (UI-1, UI-2, UI-3)
 Last activity (устарело, предмет — закрытие Фазы 13; строка НЕ вычёркивается по идиоме D-30/D-32 — её сменила быстрая задача 260921-qvt): 2026-09-21 — Phase 13 complete, transitioned to Phase 14
 Last activity (устарело, предмет — план 13-06; строка восстановлена обходом `/gsd-verify-work 13` по идиоме D-30/D-32 — её затёрло закрытие фазы `phase.complete`): 2026-09-21 — 13-06 исполнен: записи фазы приведены к сделанному без переписывания текстов. В `.planning/ROADMAP.md` у Фазы 13 стоят летописи критериев 1 (четыре маршрута на фрагментах, `complete` снят по D-01, опрос GET → POST), 2 (опросчик внутри фрагмента ожидания, критерий держится правилом на отрисованных ответах — гейт разметки слеп к опросчику из макроса), 3 (проверка владения ЗАВЕДЕНА — посылка «сохранена» была ложной, а не устаревшей, D-04) и 5 (замер базы: `<form` в странице до фазы — `0`, D-11); в `.planning/REQUIREMENTS.md` — летопись FETCH-02. FETCH-02 НЕ отмечен: `ready-ids` сообщил готовность, отметка ждёт верификации фазы. Все 6 планов исполнены.
