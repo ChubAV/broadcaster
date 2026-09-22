@@ -17,6 +17,7 @@
 | `LOCATION` — действие уводит с экрана | 204, `HX-Location` посимвольно равен адресу 302, тела нет |
 | `EXTERNAL` — переход на чужой сайт | 204, `HX-Redirect`, тела нет (первый случай — план 11-15) |
 | `FULL_LOAD` — полная перезагрузка на свой адрес | 204, `HX-Redirect` посимвольно равен адресу 302, тела нет (первый случай — вход, план 14-01) |
+| `SCREEN` — смена экрана шага | 200, `<!DOCTYPE` нет, метка есть, первый узел — `<title>`; без htmx — 200 и страница с меткой вместо 302 (первые случаи — регистрация, план 14-02) |
 
 Буквальное «с заголовком → 200 для всех» отвергнуто: оно противоречит
 отгруженной ветке перехода Фазы 8.
@@ -68,11 +69,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.main import create_app
 from app.models.ad import Ad
+from app.models.email_verification import EmailVerificationCode
 from app.models.payment import Payment
 from app.models.schedule import Schedule
 from app.models.subscription import Subscription
 from app.models.user import User
-from app.services.auth_service import hash_password
+from app.services.auth_service import create_verification_token, hash_password
 from app.pages import notices
 from app.pages.identifiers import ID_MAX
 from tests.test_pages.test_account_groups import (
@@ -114,6 +116,11 @@ EXTERNAL = "ожидается 204 и заголовок внешнего пер
 # загрузкой на СВОЙ адрес — 204 и заголовок полной перезагрузки, а не частичного
 # перехода.
 FULL_LOAD = "ожидается 204 и заголовок полной перезагрузки"
+# Фаза 14, план 14-02 (D-03, RESEARCH Находка 1): смена ЭКРАНА шага, у которой
+# адреса нет — подписанный токен шага едет скрытым полем. Путь деградации здесь
+# не 302, а 200 и страница следующего экрана; путь htmx — 200 и фрагмент с
+# `<title>` верхним узлом.
+SCREEN = "ожидается 200 и экран шага на обоих транспортах"
 
 # Личность случая, который приходит БЕЗ сессии (Фаза 14, план 14-01): форма входа
 # открыта анониму, и вход под чужой учёткой до запроса проверял бы не тот путь.
@@ -1138,6 +1145,59 @@ async def _arrange_login_success(client, db, settings, identity) -> _Arranged:
 
 
 # =============================================================================
+# Регистрация: шаг адреса и повтор кода (Фаза 14, план 14-02)
+# =============================================================================
+
+AUTH_REGISTER_SEND_CODE = "app/pages/auth.py::register_send_code"
+AUTH_REGISTER_RESEND_CODE = "app/pages/auth.py::register_resend_code"
+
+# ⚠️ АДРЕС УНИКАЛЕН НА КАЖДЫЙ ВЫЗОВ ПОСЕВА. Половин у пары две, и вторая на том
+# же адресе попала бы в минуту между кодами — то есть утверждала бы другой исход,
+# чем назван случай.
+_REGISTER_PAIR_SEQUENCE = iter(range(1, 1_000_000))
+
+
+def _register_pair_email() -> str:
+    return f"pair-register-{next(_REGISTER_PAIR_SEQUENCE)}@test.com"
+
+
+async def _seed_registration_code(db: AsyncSession, email: str, *, age_seconds: int) -> None:
+    """Код регистрации, выданный `age_seconds` секунд назад."""
+    now = datetime.now(timezone.utc)
+    db.add(
+        EmailVerificationCode(
+            email=email,
+            code="123456",
+            purpose="registration",
+            expires_at=now + timedelta(minutes=10),
+            created_at=now - timedelta(seconds=age_seconds),
+        )
+    )
+    await db.commit()
+
+
+async def _arrange_register_send_code(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url="/register/send-code", data={"email": _register_pair_email()})
+
+
+async def _arrange_register_code_already_sent(client, db, settings, identity) -> _Arranged:
+    email = _register_pair_email()
+    await _seed_registration_code(db, email, age_seconds=5)
+    return _Arranged(url="/register/send-code", data={"email": email})
+
+
+async def _arrange_register_resend_code(client, db, settings, identity) -> _Arranged:
+    email = _register_pair_email()
+    await _seed_registration_code(db, email, age_seconds=120)
+    token = create_verification_token(email, settings.secret_key)
+    return _Arranged(url="/register/resend-code", data={"token": token})
+
+
+async def _arrange_register_resend_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url="/register/resend-code", data={"token": "x"})
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -1755,6 +1815,48 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         transport=FULL_LOAD,
         sets_session_cookie=True,
     ),
+    # Фаза 14, план 14-02. Шаг адреса регистрации и повтор кода: ПЕРВЫЕ случаи
+    # ветки SCREEN. Экран сменился — 200 на обоих транспортах (D-03), адреса у
+    # экрана нет, поэтому `landing` пуст: сличать заголовок перехода не с чем.
+    # ⚠️ ВЕТКА 422 (занятый адрес; повтор раньше минуты) В РЕЕСТР НЕ ВХОДИТ, И
+    # ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: обе её стороны утверждены поимённо в
+    # `tests/test_pages/test_auth_transport.py`.
+    _PairCase(
+        key=AUTH_REGISTER_SEND_CODE,
+        name="шаг адреса регистрации — код отправлен",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_send_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/register/verify"',
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_SEND_CODE,
+        name="шаг адреса регистрации — код уже отправлен",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_code_already_sent,
+        landing="",
+        transport=SCREEN,
+        fragment_mark="Код уже отправлен",
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_RESEND_CODE,
+        name="повтор кода регистрации — новый код",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_resend_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark="Новый код отправлен",
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_RESEND_CODE,
+        name="повтор кода регистрации — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_resend_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/register/send-code"',
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -1874,7 +1976,16 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   обе её стороны утверждены поимённо в `tests/test_pages/test_auth_transport.py`.
 #   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-01): `случаев пар в реестре 59,
 #   объявлено 58` / `assert 59 == 58`.
-POST_PAIR_CASES_DECLARED = 59
+#   59 → 63, Фаза 14, план 14-02: четыре исхода РЕГИСТРАЦИИ — ПЕРВЫЕ случаи
+#   ветки SCREEN (200 и экран шага на обоих транспортах): шаг адреса — код
+#   отправлен и «код уже отправлен»; повтор кода — новый код и устаревшая
+#   ссылка (экран начала регистрации). Личность — аноним.
+#   ⚠️ ВЕТКА 422 (занятый адрес; повтор раньше минуты) В РЕЕСТР НЕ ВХОДИТ, И ЭТО
+#   ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: обе её стороны утверждены поимённо в
+#   `tests/test_pages/test_auth_transport.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-02): `случаев пар в реестре 63,
+#   объявлено 59` / `assert 63 == 59`.
+POST_PAIR_CASES_DECLARED = 63
 
 
 def _case_id(case: _PairCase) -> str:
@@ -1928,13 +2039,30 @@ async def test_every_pair_case_answers_both_transports(
     # Подстановки добираются ПОСЛЕ запроса: у создающего действия строки, чей
     # идентификатор называет адрес, до запроса не существует (см. `_PairCase`).
     expected = case.landing.format(**await _landing_args(case, db_session, degraded))
-    assert without.status_code == 302, (
-        f"{case.name}: путь деградации ответил {without.status_code} вместо 302"
-    )
-    assert without.headers["location"] == expected, (
-        f"{case.name}: адрес деградации {without.headers['location']!r} не совпал "
-        f"с ожидаемым {expected!r} ПОСИМВОЛЬНО"
-    )
+    # ⚠️ Фаза 14, план 14-02: утверждение 302 перенесено ВНУТРЬ ветвей, ждущих
+    # перенаправления, — прежние случаи проходят его байт-в-байт тем же путём.
+    # Смена экрана перенаправления не ждёт: без признака htmx она отвечает 200 и
+    # страницей следующего экрана (D-03, RESEARCH Находка 1).
+    if case.transport is SCREEN:
+        assert without.status_code == 200, (
+            f"{case.name}: путь деградации смены экрана ответил "
+            f"{without.status_code} вместо 200 — токен шага потерялся бы на "
+            "перенаправлении"
+        )
+        assert DOCUMENT_MARK in without.text, (
+            f"{case.name}: путь деградации получил не страницу"
+        )
+        assert case.fragment_mark in without.text, (
+            f"{case.name}: на странице следующего экрана нет метки {case.fragment_mark!r}"
+        )
+    else:
+        assert without.status_code == 302, (
+            f"{case.name}: путь деградации ответил {without.status_code} вместо 302"
+        )
+        assert without.headers["location"] == expected, (
+            f"{case.name}: адрес деградации {without.headers['location']!r} не совпал "
+            f"с ожидаемым {expected!r} ПОСИМВОЛЬНО"
+        )
     if case.sets_session_cookie:
         assert _sets_session_cookie(without), (
             f"{case.name}: путь деградации не выдал cookie сессии"
@@ -1965,6 +2093,20 @@ async def test_every_pair_case_answers_both_transports(
         mark = case.fragment_mark.format(**landing_args)
         assert mark in with_layer.text, (
             f"{case.name}: во фрагменте нет метки {mark!r}"
+        )
+        return
+
+    if case.transport is SCREEN:
+        assert with_layer.status_code == 200, (
+            f"{case.name}: смена экрана на htmx ответила {with_layer.status_code} "
+            "вместо 200"
+        )
+        assert case.fragment_mark in with_layer.text, (
+            f"{case.name}: во фрагменте экрана нет метки {case.fragment_mark!r}"
+        )
+        assert with_layer.text.lstrip().startswith("<title>"), (
+            f"{case.name}: первый узел фрагмента экрана — не `<title>`: вкладка не "
+            "сменит заголовок"
         )
         return
 
@@ -2747,6 +2889,14 @@ def _number_complaints(
 # `UNATTRIBUTED_302_ASSERTIONS` как утверждение о слое, а не о маршруте.
 # ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
 # переведённых обработчиках 176, объявлено 167`.
+#
+# 176 → 176, Фаза 14, план 14-02: ДВИЖЕНИЯ НЕТ, И ЭТО ЗАМЕР, А НЕ ПРОПУСК. Шаг
+# адреса регистрации и повтор кода вошли во вселенную правила переводом, но
+# исхода 302 у них нет ни одного: смена экрана отвечает 200, ошибка на том же
+# экране — 422, и утверждений 302 о них в суите нет. Утверждение 302 драйвера
+# пар перенесено внутрь ветвей, ждущих перенаправления, — прогон правила числа
+# после переноса и перевода зелен на прежнем 176
+# (`test_the_number_of_paired_302_assertions_is_the_declared_one` — passed).
 PAIRED_302_ASSERTIONS_DECLARED = 176
 
 

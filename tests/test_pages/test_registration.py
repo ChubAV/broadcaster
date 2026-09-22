@@ -59,7 +59,9 @@ async def test_send_code_rejects_existing_email(
         "/register/send-code",
         data={"email": "existing@test.com"},
     )
-    assert response.status_code == 200
+    # Фаза 14, план 14-02, D-03: занятый адрес оставляет человека на ТОМ ЖЕ
+    # экране — 422 на обоих транспортах (было 200). Проверка текста прежняя.
+    assert response.status_code == 422
     html = response.text
     assert "уже зарегистрирован" in html
 

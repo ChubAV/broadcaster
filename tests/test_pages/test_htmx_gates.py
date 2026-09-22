@@ -121,6 +121,11 @@ RESPONSE_LAYER_MODULE = "app/pages/htmx.py"
 # Имя главного выхода обработчика.
 RESPONSE_CALL = "respond"
 
+# Имя выхода СМЕНЫ ЭКРАНА (Фаза 14, план 14-02): его фрагмент засчитывается
+# передачей фрагмента (`_hands_a_fragment`), а его сборщики — границей сборщика
+# (`_fragment_builder_names`).
+SCREEN_CHANGE_CALL = "respond_screen"
+
 # ЗАКРЫТОЕ семейство выходов слоя ответа, которыми обработчик отвечает
 # (Фаза 14, план 14-01, RESEARCH Находка 2). Каждый несёт путь деградации по
 # построению и решает форму ответа сам: главный выход, выход ошибки поля
@@ -133,8 +138,22 @@ RESPONSE_CALL = "respond"
 # семейства. ⚠️ УЗНАЁТСЯ ИМЯ, А НЕ ПРИСТАВКА: похожее имя (`respond_later`)
 # выхода слоя не зовёт, и контроль `test_control_a_lookalike_exit_name_does_not_convert_a_handler`
 # держит это зубами.
+#
+# ⚠️ Фаза 14, план 14-02: семейство пополнено выходом СМЕНЫ ЭКРАНА
+# `respond_screen` (RESEARCH Находка 1) — 200 на обоих транспортах, страница на
+# пути без JavaScript. Прежняя редакция абзаца выше («четыре выхода») не стёрта,
+# а пережита: она верна для дерева плана 14-01. Зубы пополнения держит контроль
+# `test_control_a_handler_answering_only_by_a_screen_change_is_converted_and_hands_a_fragment`;
+# до пополнения он краснел дословно: `обработчик, отвечающий выходом смены
+# экрана, не признан переведённым — семейство выходов слоя узнаётся не целиком`.
 RESPONSE_LAYER_EXITS = frozenset(
-    {"respond", "respond_field_error", "redirect_external", "redirect_internal"}
+    {
+        "respond",
+        "respond_field_error",
+        "respond_screen",
+        "redirect_external",
+        "redirect_internal",
+    }
 )
 
 # Имя заголовка признака запроса от слоя письма — и имя константы, которой оно
@@ -298,9 +317,9 @@ NOT_YET_CONVERTED: frozenset[str] = frozenset(
         # обновление QR-кода снято ПЕРЕВОДОМ — ключей мастера здесь больше нет.
         # ⚠️ Фаза 14, план 14-01: вход страничной формой снят ПЕРЕВОДОМ (летопись
         # числа ниже) — ключ убран, а не закомментирован.
-        "app/pages/auth.py::register_send_code",
+        # ⚠️ Фаза 14, план 14-02: шаг адреса регистрации и повтор кода сняты
+        # ПЕРЕВОДОМ (летопись числа ниже) — ключи убраны, а не закомментированы.
         "app/pages/auth.py::register_verify",
-        "app/pages/auth.py::register_resend_code",
         "app/pages/auth.py::register_complete",
         "app/pages/auth.py::stop_impersonation",
         "app/pages/auth.py::forgot_password_send_code",
@@ -684,7 +703,30 @@ NOT_YET_CONVERTED: frozenset[str] = frozenset(
 #   ['app/pages/auth.py::login_submit']`.
 #   ОСТАТОК В 9: четыре шага регистрации, выход из-под чужой личности и четыре
 #   шага восстановления пароля (планы 14-02…14-06).
-NOT_YET_CONVERTED_COUNT = 9
+#
+#   9 → 7, Фаза 14, план 14-02. ОДНО ДВИЖЕНИЕ — ПЕРЕВОД, ДВА ОБРАБОТЧИКА: шаг
+#   адреса регистрации и повтор кода регистрации отвечают через слой ответа.
+#   Ошибка на том же экране (занятый адрес; повтор раньше минуты) — выходом
+#   ошибки поля с кодом 422; смена экрана (экран кода, «код уже отправлен»,
+#   устаревшая ссылка на начало) — выходом смены экрана с кодом 200 на обоих
+#   транспортах (D-03). Прежние возвраты готовых страниц сняты целиком (D-14).
+#   ⚠️ ДВИЖЕНИЕ ЗАСЧИТАЛОСЬ ЕЩЁ ДО ПОПОЛНЕНИЯ СЕМЕЙСТВА `respond_screen`: оба
+#   обработчика зовут и выход ошибки поля, уже стоявший в семействе, — первый
+#   прогон после перевода (до правки перечней) дал то же `7`. Пополнение
+#   семейства нужно не этому числу, а обработчикам, отвечающим ТОЛЬКО сменой
+#   экрана, — их держит контроль
+#   `test_control_a_handler_answering_only_by_a_screen_change_is_converted_and_hands_a_fragment`.
+#   ⚠️ Имена обработчиков набраны СЛОВАМИ, а не ключами перечня.
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА. Вывод
+#   `test_the_backlog_matches_the_declared_count` после перевода, дословно:
+#   `число непереведённых обработчиков стало 7, а в файле записано 9. ЕСЛИ
+#   ЧИСЛО УПАЛО — ЭТО ПРОГРЕСС ВЕХИ, а не поломка` / `assert 7 == 9`. Тем же
+#   прогоном `test_the_three_sets_do_not_overlap` сказал: `обработчик
+#   ФАКТИЧЕСКИ переведён на слой ответа, но остался в перечне отставания:
+#   ['app/pages/auth.py::register_resend_code', 'app/pages/auth.py::register_send_code']`.
+#   ОСТАТОК В 7: подтверждение кода и завершение регистрации, выход из-под
+#   чужой личности и четыре шага восстановления пароля (планы 14-03…14-06).
+NOT_YET_CONVERTED_COUNT = 7
 
 
 # =============================================================================
@@ -1848,6 +1890,18 @@ FRAGMENT_RESPONSE_HANDLERS: frozenset[str] = frozenset(
         # ⚠️ «НЕТ СЕССИИ» ТОТ ЖЕ ОБРАБОТЧИК ОТДАЁТ ПЕРЕХОДОМ, поэтому признак и
         # здесь берётся разбором вызова, а не по имени шаблона ответа.
         "app/pages/ads.py::ads_images_upload",
+        # Фаза 14, план 14-02. Шаг адреса регистрации: экран кода (и «код уже
+        # отправлен») приезжает ЦЕЛИКОМ в постоянный якорь шага второго шелла
+        # выходом смены экрана — обе формы экрана с подписанным токеном. Ошибка
+        # занятого адреса — 422 тем же экраном начала.
+        # ⚠️ Соседний вход страничной формой (план 14-01) сюда НЕ входит: его
+        # ошибка — выход ошибки поля, а успех уходит полной загрузкой, то есть
+        # фрагмента смены экрана он не отдаёт.
+        "app/pages/auth.py::register_send_code",
+        # Фаза 14, план 14-02. Повтор кода регистрации: экран кода с НОВЫМ
+        # токеном подменяет ВЕСЬ якорь (D-06), устаревшая ссылка — экран начала
+        # регистрации. Повтор раньше минуты — 422 тем же экраном кода.
+        "app/pages/auth.py::register_resend_code",
     }
 )
 
@@ -1994,7 +2048,19 @@ FRAGMENT_RESPONSE_HANDLERS: frozenset[str] = frozenset(
 #   `test_the_number_of_fragment_response_handlers_is_the_declared_one` после
 #   перевода, дословно: `обработчиков, отдающих фрагмент, найдено 17, объявлено
 #   16`.
-FRAGMENT_RESPONSE_HANDLERS_DECLARED = 17
+#
+#   17 → 19, Фаза 14, план 14-02. ИСТОЧНИК ДВИЖЕНИЯ: ШАГ АДРЕСА РЕГИСТРАЦИИ И
+#   ПОВТОР КОДА РЕГИСТРАЦИИ стали восемнадцатым и девятнадцатым обработчиками,
+#   отдающими фрагмент, — оба подменяют содержимое постоянного якоря шага
+#   второго шелла выходом смены экрана. Движению предшествовало расширение
+#   признака `_hands_a_fragment` на этот выход (летопись в его докстринге).
+#   Счётчик отставания тем же переводом опустился 9 → 7: два счёта сошлись
+#   движением на два. ⚠️ Имена набраны СЛОВАМИ.
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА. Вывод
+#   `test_the_number_of_fragment_response_handlers_is_the_declared_one` после
+#   расширения признака, дословно: `обработчиков, отдающих фрагмент, найдено 19,
+#   объявлено 17` / `assert 19 == 17`.
+FRAGMENT_RESPONSE_HANDLERS_DECLARED = 19
 
 
 def _hands_a_fragment(function: ast.AST) -> bool:
@@ -2009,13 +2075,26 @@ def _hands_a_fragment(function: ast.AST) -> bool:
     `_builds_own_redirect`, — и ошибка здесь даёт обработчика, НЕ объявленного
     фрагментным, а не «разрешённого по умолчанию»: он не попадёт в найденное,
     число разойдётся с объявленным, и правило покраснеет.
+
+    ⚠️ ФАЗА 14, ПЛАН 14-02: ПЕРЕДАЧА ФРАГМЕНТА ЗАСЧИТЫВАЕТСЯ И У ВЫХОДА СМЕНЫ
+    ЭКРАНА `respond_screen`, И ПРЕЖНЯЯ РЕДАКЦИЯ НЕ СТЁРТА, А ПЕРЕЖИТА: «признак —
+    аргумент фрагмента у вызова ГЛАВНОГО выхода» верно для дерева, на котором
+    выход, отдающий 200 фрагментом, был один. Ответ смены экрана и есть
+    фрагмент в постоянный якорь шага — ровно как шаг мастеров MAX и Telegram, —
+    и обработчик, отвечающий им, числился бы ветвью перехода, которой он не
+    является. Выход ошибки поля сюда НЕ входит: его фрагмент — та же форма с
+    ошибкой, а не смена экрана, и решение о нём этим планом не принималось.
+    ЧЕМ ИЗМЕРЕНО: до расширения контроль
+    `test_control_a_handler_answering_only_by_a_screen_change_is_converted_and_hands_a_fragment`
+    краснел дословно: `передача фрагмента выходу смены экрана не засчитана`.
     """
+    fragment_exits = (RESPONSE_CALL, SCREEN_CHANGE_CALL)
     for node in ast.walk(function):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        is_response_call = (isinstance(func, ast.Name) and func.id == RESPONSE_CALL) or (
-            isinstance(func, ast.Attribute) and func.attr == RESPONSE_CALL
+        is_response_call = (isinstance(func, ast.Name) and func.id in fragment_exits) or (
+            isinstance(func, ast.Attribute) and func.attr in fragment_exits
         )
         if not is_response_call:
             continue
@@ -2745,6 +2824,61 @@ def test_control_a_handler_answering_only_by_a_field_error_is_converted(tmp_path
     )
     assert key not in _backlog(sources), (
         "обработчик на выходе слоя остался в отставании"
+    )
+
+
+def test_control_a_handler_answering_only_by_a_screen_change_is_converted_and_hands_a_fragment(
+    tmp_path,
+):
+    """ЧТО ДОКАЗЫВАЕТ: выход СМЕНЫ ЭКРАНА переводит обработчик и передаёт фрагмент.
+
+    Фаза 14, план 14-02 (RESEARCH Находка 1). Контроль ДВУХШАГОВЫЙ, и шаги
+    доказывают разное:
+
+      1. обработчик, зовущий ТОЛЬКО `respond_screen`, признан переведённым,
+         выпал из отставания и числится ОТДАЮЩИМ ФРАГМЕНТ — ответ смены экрана и
+         есть фрагмент в постоянный якорь шага, как шаг мастеров MAX и Telegram;
+      2. сборщики `page=`/`fragment=`, поданные этому выходу ИМЕНЕМ, не
+         объявляются собственными выходами обработчика — та же граница сборщика,
+         что у выхода ошибки поля (план 11-09).
+    """
+    sources, key = _scratch_handler(
+        tmp_path,
+        "a_route_changing_the_screen",
+        "return await respond_screen(request, page=page, fragment=fragment)",
+    )
+    assert key in _post_handlers(sources), (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: разборщик не увидел синтетического обработчика"
+    )
+    assert key in _converted(sources), (
+        "обработчик, отвечающий выходом смены экрана, не признан переведённым — "
+        "семейство выходов слоя узнаётся не целиком"
+    )
+    assert key not in _backlog(sources), "обработчик на выходе слоя остался в отставании"
+    assert key in _fragment_response_handlers(sources), (
+        "передача фрагмента выходу смены экрана не засчитана — экран, "
+        "подменяющий якорь шага, числился бы ветвью перехода"
+    )
+
+    sources, key = _scratch_handler(
+        tmp_path,
+        "a_route_changing_the_screen_with_builders",
+        "\n    ".join(
+            (
+                "async def _page():",
+                '    return HTMLResponse("<!DOCTYPE html>")',
+                "async def _fragment():",
+                '    return HTMLResponse("<p>шаг</p>")',
+                "return await respond_screen(request, page=_page, fragment=_fragment)",
+            )
+        ),
+    )
+    assert key in _post_handlers(sources), (
+        "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ: разборщик не увидел синтетического обработчика"
+    )
+    assert key not in _converted_with_own_response(sources), (
+        "сборщики, поданные выходу смены экрана именем, объявлены собственными "
+        f"выходами обработчика: {_converted_with_own_response(sources).get(key)}"
     )
 
 
@@ -4411,6 +4545,17 @@ def _fragment_builder_names(function: ast.AST) -> set[str]:
     (`fragment=_fragment`, `page=_page`). Лямбда и выражение не узнаются, и
     ошибка здесь безопасна ПО НАПРАВЛЕНИЮ: неузнанный сборщик останется в
     найденном, то есть потребует объявления записью, а не проедет молча.
+
+    ⚠️ ГРАНИЦА РАСШИРЕНА НА ВЫХОД СМЕНЫ ЭКРАНА — ФАЗА 14, ПЛАН 14-02, И ПРЕЖНЯЯ
+    РЕДАКЦИЯ НЕ СТЁРТА, А ПЕРЕЖИТА. Абзац о «четвёртом выходе» верен для дерева
+    плана 11-09. Планом 14-02 у слоя появился выход `respond_screen` — сестра
+    выхода ошибки поля с тем же общим телом, — и он берёт те же ДВА сборщика
+    (`FIELD_ERROR_BUILDER_ARGUMENTS`). Без расширения их сборки снова оказались
+    бы «собственными выходами» — та же ошибка, что план 11-09 чинил для выхода
+    ошибки поля. ЧЕМ ИЗМЕРЕНО: до расширения второй шаг контроля
+    `test_control_a_handler_answering_only_by_a_screen_change_is_converted_and_hands_a_fragment`
+    краснел дословно: `сборщики, поданные выходу смены экрана именем, объявлены
+    собственными выходами обработчика: HTMLResponse()`.
     """
     names: set[str] = set()
     for node in ast.walk(function):
@@ -4420,7 +4565,7 @@ def _fragment_builder_names(function: ast.AST) -> set[str]:
         called = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
         if called == RESPONSE_CALL:
             builder_arguments: tuple[str, ...] = (FRAGMENT_ARGUMENT,)
-        elif called == FIELD_ERROR_CALL:
+        elif called in (FIELD_ERROR_CALL, SCREEN_CHANGE_CALL):
             builder_arguments = FIELD_ERROR_BUILDER_ARGUMENTS
         else:
             continue
