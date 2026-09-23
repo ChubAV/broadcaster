@@ -1,9 +1,10 @@
 ---
 phase: 14-avtorizatsiya-na-htmx
 verified: 2026-09-23T08:15:00Z
-status: human_needed
+status: passed
 score: 12/13 must-haves verified
 covered_files:
+
   - ".planning/REQUIREMENTS.md"
   - ".planning/phases/14-avtorizatsiya-na-htmx/14-01-PLAN.md"
   - ".planning/phases/14-avtorizatsiya-na-htmx/14-01-SUMMARY.md"
@@ -50,17 +51,43 @@ covered_files:
   - "tests/test_pages/test_password_reset.py"
   - "tests/test_pages/test_registration.py"
   - "tests/test_templates/test_htmx_markup_gates.py"
-covered_digest: "v1:sha256:4ddf5b09ad09c182c9014118d99c9b67d47a70f7945a4c37244d284937f15d2b"
+
+covered_digest: "v1:sha256:740a47e9fa6e00d45fbac8f45def06dc68bc4bd009676eec70f19d5fd9bb5ee9"
+
+# Отпечаток ПЕРЕСЧИТАН 2026-09-23 ВТОРОЙ РАЗ — после закрытия фазы обходом
+# (`/gsd-verify-work 14`, 9/9, находок 0). Прежнее значение (…4ddf5b09…) ошибкой не
+# было: из 46 покрытых файлов изменился РОВНО один, `.planning/REQUIREMENTS.md`, и
+# правка в нём чисто учётная — `phase.complete` перевёл SIGN-01, SIGN-02 и SIGN-03 из
+# `[ ]` в `[x]` и из `Pending` в `Complete` в таблице прослеживаемости (6 строк,
+# `git diff .planning/REQUIREMENTS.md`). Пересчёт ДОКАЗАН воспроизведением: на старом
+# содержимом того же файла `computeCoveredDigest` по полному списку из 46 путей даёт
+# ровно …4ddf5b09…, после восстановления нового содержимого sha256 файла совпала
+# побайтово. Считано ТОЙ ЖЕ функцией, какой проверяющий меряет устаревание, и по
+# ПОЛНОМУ списку — верб `verification.fingerprint` молча теряет первый путь.
+# Граница поступка: тронут ТОЛЬКО отпечаток. `score`, `verified` и `covered_files`
+# не тронуты; `status` переведён в `passed` отдельным поступком канонизации —
+# верификация ждала ровно ручного обхода, и обход закрыт человеком 9 из 9.
+#
 # Отпечаток ПЕРЕСЧИТАН 2026-09-23 после `/gsd-secure-phase 14`. Прежнее значение
+
 # (…7ba78b7e…) ошибкой не было — оно устарело: из 46 покрытых файлов изменился РОВНО
+
 # один, `tests/test_pages/test_auth_transport.py`, и в нём — только докстрока правила
+
 # `test_a_new_password_leaves_for_the_login_by_a_full_load_with_the_notice` (летопись
+
 # CR-02 по решению владельца; строк кода вне докстроки изменено 0, доказано
+
 # `git diff 65b313bc..HEAD`). Граница поступка: пересчитан ТОЛЬКО отпечаток той же
+
 # функцией `computeCoveredDigest`, какой считает проверяющий устаревание; `status`,
+
 # `score`, `verified` и `covered_files` не тронуты — вердикт остаётся `human_needed`
+
 # и ждёт ручного обхода. Пересчёт есть арифметика над разрешённой правкой, а не
+
 # новое суждение верификатора.
+
 behavior_unverified: 0
 backstop_abstentions: 1
 overrides_applied: 0
@@ -69,6 +96,7 @@ decision_coverage:
   total: 15
   not_honored: []
 deferred:
+
   - truth: "23 `must_haves.prohibitions` across plans 14-01…14-07 stand at `status: flagged-unverified`, `verification: none` — no machine enforcement reads them"
     addressed_in: "Phase 15"
     evidence: "Phase 15 success criterion 6: «Запреты планов ПЕРЕПИСАНЫ ОДНИМ ПРИБОРОМ, и по каждому принято решение… Критерий закрыт, когда (а) в дереве есть ОДИН исполняемый прибор переписи… и (б) по каждому запрету его перечня стои́т ЛИБО предъявленное машинное принуждение, ЛИБО явное человеческое разрешение»"
@@ -76,6 +104,7 @@ deferred:
     addressed_in: "Owner-recorded deferral, 14-CONTEXT.md §Deferred Ideas (not a numbered later phase)"
     evidence: "14-CONTEXT.md §Deferred Ideas: «Проверка источника запроса на формах входа и регистрации. Сегодня у девяти форм `is_same_origin` нет, защита — только `SameSite=Lax`. Подделка входа… — отдельная работа по безопасности, не транспорт.» Also named out-of-boundary at 14-CONTEXT.md:32."
 escalations:
+
   - id: CR-02 / WR-07
     question: "Does the password-reset token replay belong in Phase 14's verdict or in a named follow-up?"
     verifier_recommendation: "Follow-up, with a named obligation recorded now — see §Escalation below."
@@ -83,6 +112,7 @@ escalations:
     status: awaiting_human_decision
 flagged_prohibitions: 23 # all `verification: none` / `status: flagged-unverified`; never counted green — deferred to Phase 15 SC6
 human_verification:
+
   - test: "Полный вход в браузере: открыть `/login`, ввести неверный пароль, затем верный"
     expected: "Неверный пароль перерисовывает карточку БЕЗ перезагрузки, email остаётся в поле, заголовок вкладки — «Вход — Broadcaster»; верный пароль уводит в кабинет ПОЛНОЙ загрузкой, cookie `access_token` сменилась"
     why_human: "Рантайм подмены htmx, заголовок вкладки и смена cookie сервером не измеряются — суита не исполняет JS ни строчки (ROADMAP критерий 4, D-02)"

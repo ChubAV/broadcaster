@@ -41,7 +41,7 @@
     {
       "number": "14",
       "name": "Авторизация",
-      "status": "in_progress"
+      "status": "complete"
     },
     {
       "number": "15",
@@ -51,8 +51,8 @@
   ],
   "next": {
     "command": "/gsd:progress --next",
-    "label": "Advance to the next step (verify)",
-    "reason": "Phase 14 of 9 · 78% · ready to verify"
+    "label": "Advance to the next step (plan phase 15)",
+    "reason": "Phase 15 of 9 — needs a plan"
   },
-  "updated_at": "2026-09-22T20:31:43.131Z"
+  "updated_at": "2026-09-23T15:31:51.551Z"
 }
