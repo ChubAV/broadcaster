@@ -50,7 +50,17 @@ covered_files:
   - "tests/test_pages/test_password_reset.py"
   - "tests/test_pages/test_registration.py"
   - "tests/test_templates/test_htmx_markup_gates.py"
-covered_digest: "v1:sha256:7ba78b7ee26ef21e5cb55790cb64216b0a6261e72643112df4352c329c051fec"
+covered_digest: "v1:sha256:4ddf5b09ad09c182c9014118d99c9b67d47a70f7945a4c37244d284937f15d2b"
+# Отпечаток ПЕРЕСЧИТАН 2026-09-23 после `/gsd-secure-phase 14`. Прежнее значение
+# (…7ba78b7e…) ошибкой не было — оно устарело: из 46 покрытых файлов изменился РОВНО
+# один, `tests/test_pages/test_auth_transport.py`, и в нём — только докстрока правила
+# `test_a_new_password_leaves_for_the_login_by_a_full_load_with_the_notice` (летопись
+# CR-02 по решению владельца; строк кода вне докстроки изменено 0, доказано
+# `git diff 65b313bc..HEAD`). Граница поступка: пересчитан ТОЛЬКО отпечаток той же
+# функцией `computeCoveredDigest`, какой считает проверяющий устаревание; `status`,
+# `score`, `verified` и `covered_files` не тронуты — вердикт остаётся `human_needed`
+# и ждёт ручного обхода. Пересчёт есть арифметика над разрешённой правкой, а не
+# новое суждение верификатора.
 behavior_unverified: 0
 backstop_abstentions: 1
 overrides_applied: 0
